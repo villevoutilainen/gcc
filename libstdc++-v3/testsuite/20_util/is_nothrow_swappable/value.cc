@@ -38,6 +38,7 @@ void test01()
   // Positive tests.
   static_assert(test_property<__is_swappable, int>(true), "");
   static_assert(test_property<__is_nothrow_swappable, int>(true), "");
+  static_assert(test_property<__is_nothrow_swappable, int[1]>(true), "");
   static_assert(test_property<__is_nothrow_swappable,
 		std::pair<int, int>>(true), "");
   static_assert(test_property<__is_nothrow_swappable,
@@ -53,6 +54,7 @@ void test01()
   // Negative tests.
   static_assert(test_property<__is_swappable, construct::DelCopy>(false), "");
   static_assert(test_property<__is_swappable, funny::F>(false), "");
+  static_assert(test_property<__is_swappable, funny::F[1]>(false), "");
   static_assert(test_property<__is_nothrow_swappable,
 		ThrowCopyConsClass>(false), "");
   static_assert(test_property<__is_nothrow_swappable,
