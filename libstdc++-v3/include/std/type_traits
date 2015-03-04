@@ -2586,10 +2586,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __b = _GLIBCXX_MOVE(__tmp);
     }
 
+#if __cplusplus >= 201103L
    namespace __is_swappable_impl {
-     template <typename _Tp>
-     struct __is_swappable;
+     template <typename _Tp, typename=void>
+     struct __is_swappable : public false_type
+     { };
    }
+#endif
+
   // _GLIBCXX_RESOLVE_LIB_DEFECTS
   // DR 809. std::swap should be overloaded for array types.
   /// Swap the contents of two arrays.
@@ -2612,20 +2616,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #if __cplusplus >= 201103L
   namespace __is_swappable_impl {
     using std::swap;
-    template <class _Tp>
-    struct __do_is_swappable_impl
-    {
-      template<typename _Up, typename = decltype(swap(declval<_Up&>(),
-                                                      declval<_Up&>()))>
-      static true_type __test(int);
-
-      template<typename>
-      static false_type __test(...);
-    };
 
     template <typename _Tp>
-    struct __is_swappable
-    : public decltype(__do_is_swappable_impl<_Tp>::template __test<_Tp>(0))
+    struct __is_swappable<_Tp, __void_t<decltype(swap(declval<_Tp&>(),
+                                                      declval<_Tp&>()))>>
+    : public true_type
     { };
   }
 
