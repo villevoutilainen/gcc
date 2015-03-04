@@ -26,11 +26,17 @@
 #include <queue>
 #include <stack>
 
+namespace funny {
+  struct F {};
+  void swap(F&, F&) = delete;
+}
 void test01()
 {
   using std::__is_nothrow_swappable;
+  using std::__is_swappable_impl::__is_swappable;
   using namespace __gnu_test;
   // Positive tests.
+  static_assert(test_property<__is_swappable, int>(true), "");
   static_assert(test_property<__is_nothrow_swappable, int>(true), "");
   static_assert(test_property<__is_nothrow_swappable,
 		std::pair<int, int>>(true), "");
@@ -45,6 +51,8 @@ void test01()
   static_assert(test_property<__is_nothrow_swappable,
 		std::stack<int>>(true), "");
   // Negative tests.
+  static_assert(test_property<__is_swappable, construct::DelCopy>(false), "");
+  static_assert(test_property<__is_swappable, funny::F>(false), "");
   static_assert(test_property<__is_nothrow_swappable,
 		ThrowCopyConsClass>(false), "");
   static_assert(test_property<__is_nothrow_swappable,

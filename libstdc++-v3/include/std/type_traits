@@ -2565,7 +2565,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
    *  @return   Nothing.
   */
   template<typename _Tp>
-    inline void
+    inline
+#if __cplusplus >= 201103L
+    typename enable_if<__and_<is_move_constructible<_Tp>,
+	            is_move_assignable<_Tp>>::value>::type
+#else
+    void
+#endif
     swap(_Tp& __a, _Tp& __b)
 #if __cplusplus >= 201103L
     noexcept(__and_<is_nothrow_move_constructible<_Tp>,
@@ -2584,7 +2590,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   // DR 809. std::swap should be overloaded for array types.
   /// Swap the contents of two arrays.
   template<typename _Tp, size_t _Nm>
-    inline void
+    inline
+#if __cplusplus >= 201103L
+    typename enable_if<__and_<is_move_constructible<_Tp>,
+	            is_move_assignable<_Tp>>::value>::type
+#else
+    void
+#endif
     swap(_Tp (&__a)[_Nm], _Tp (&__b)[_Nm])
 #if __cplusplus >= 201103L
     noexcept(noexcept(swap(*__a, *__b)))
@@ -2595,15 +2607,22 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
 #if __cplusplus >= 201103L
-  namespace __swappable_impl {
+  namespace __is_swappable_impl {
     using std::swap;
-    struct __dummy {__dummy(...);};
-    __dummy swap(__dummy, __dummy);
+    template <class _Tp>
+    struct __do_is_swappable_impl
+    {
+      template<typename _Up, typename = decltype(swap(declval<_Up&>(),
+                                                      declval<_Up&>()))>
+      static true_type __test(int);
+
+      template<typename>
+      static false_type __test(...);
+    };
+
     template <typename _Tp>
-    struct __swappable
-    : public __bool_constant<!is_same<decltype(swap(declval<_Tp&>(),
-                                                    declval<_Tp&>())),
-                                      __dummy>::value>
+    struct __is_swappable
+    : public decltype(__do_is_swappable_impl<_Tp>::template __test<_Tp>(0))
     { };
   }
 
@@ -2619,7 +2638,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template <typename _Tp>
     struct __is_nothrow_swappable
     : public __is_nothrow_swappable_impl<
-               __swappable_impl::__swappable<_Tp>::value, _Tp>
+               __is_swappable_impl::__is_swappable<_Tp>::value, _Tp>
     { };
 #endif
 

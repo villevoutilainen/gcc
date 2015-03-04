@@ -567,7 +567,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     stable_partition(_BIter, _BIter, _Predicate);
 
   template<typename _Tp> 
-    void 
+#if __cplusplus >= 201103L
+    typename enable_if<__and_<is_move_constructible<_Tp>,
+	            is_move_assignable<_Tp>>::value>::type
+#else
+    void
+#endif
     swap(_Tp&, _Tp&)
 #if __cplusplus >= 201103L
     noexcept(__and_<is_nothrow_move_constructible<_Tp>,
@@ -576,7 +581,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     ;
 
   template<typename _Tp, size_t _Nm>
+#if __cplusplus >= 201103L
+    typename enable_if<__and_<is_move_constructible<_Tp>,
+	            is_move_assignable<_Tp>>::value>::type
+#else
     void
+#endif
     swap(_Tp (&__a)[_Nm], _Tp (&__b)[_Nm])
 #if __cplusplus >= 201103L
     noexcept(noexcept(swap(*__a, *__b)))
