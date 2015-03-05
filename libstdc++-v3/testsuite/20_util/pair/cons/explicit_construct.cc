@@ -85,3 +85,24 @@ void test_arg_passing()
   f7(std::pair<int, int>{});
   f7(std::pair<long, long>{});
 }
+
+struct MoveOnly 
+{
+  MoveOnly() = default;
+  MoveOnly(MoveOnly&&) {}
+};
+
+struct ExplicitMoveOnly
+{
+  ExplicitMoveOnly() = default;
+  ExplicitMoveOnly(ExplicitMoveOnly&&) {}
+  explicit ExplicitMoveOnly(MoveOnly&&) {}
+};
+
+std::pair<int*, ExplicitMoveOnly> v14{0, MoveOnly{}};
+std::pair<ExplicitMoveOnly, int*> v15{MoveOnly{}, 0};
+
+std::pair<int*, ExplicitMoveOnly> v16 =
+  {0, MoveOnly{}}; // { dg-error "explicit" }
+std::pair<ExplicitMoveOnly, int*> v17 =
+  {MoveOnly{}, 0}; // { dg-error "explicit" }
