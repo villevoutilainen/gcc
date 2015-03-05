@@ -141,21 +141,21 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       /** Two objects may be passed to a @c pair constructor to be copied.  */
 #if __cplusplus < 201103L
-      _GLIBCXX_CONSTEXPR pair(const _T1& __a, const _T2& __b)
+      pair(const _T1& __a, const _T2& __b)
       : first(__a), second(__b) { }
 #else
       template<typename _U1 = _T1, typename _U2=_T2, typename
                 enable_if<_ConstructiblePair<_T1, _T2, _U1, _U2>()
                          && _ImplicitlyConvertiblePair<_T1, _T2, _U1, _U2>(),
                          bool>::type=true>
-      _GLIBCXX_CONSTEXPR pair(const _T1& __a, const _T2& __b)
+      constexpr pair(const _T1& __a, const _T2& __b)
       : first(__a), second(__b) { }
 
        template<typename _U1 = _T1, typename _U2=_T2, typename
 	       enable_if<_ConstructiblePair<_T1, _T2, _U1, _U2>()
                          && !_ImplicitlyConvertiblePair<_T1, _T2, _U1, _U2>(),
                          bool>::type=false>
-      explicit _GLIBCXX_CONSTEXPR pair(const _T1& __a, const _T2& __b)
+      explicit constexpr pair(const _T1& __a, const _T2& __b)
       : first(__a), second(__b) { }
 #endif
 
@@ -181,6 +181,47 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr pair(const pair&) = default;
       constexpr pair(pair&&) = default;
+
+      // DR 811.
+      template<class _U1, typename
+               enable_if<_ConstructiblePair<_T2, _T2, _T2, _T2>()
+                         && _MoveConstructiblePair<_T1, _T2, _U1, _T2>()
+                         && _ImplicitlyConvertiblePair<_T2, _T2, _T2, _T2>()
+                         && _ImplicitlyMoveConvertiblePair<_T1, _T2,
+							  _U1, _T2>(),
+                         bool>::type=true>
+       constexpr pair(_U1&& __x, const _T2& __y)
+       : first(std::forward<_U1>(__x)), second(__y) { }
+
+      template<class _U1, typename
+               enable_if<_ConstructiblePair<_T2, _T2, _T2, _T2>()
+                         && _MoveConstructiblePair<_T1, _T2, _U1, _T2>()
+                         && (!_ImplicitlyConvertiblePair<_T2, _T2, _T2, _T2>()
+                             || !_ImplicitlyMoveConvertiblePair<_T1, _T2,
+                                                                _U1, _T2>()),
+                         bool>::type=false>
+       explicit constexpr pair(_U1&& __x, const _T2& __y)
+       : first(std::forward<_U1>(__x)), second(__y) { }
+
+      template<class _U2, typename
+               enable_if<_ConstructiblePair<_T1, _T1, _T1, _T1>()
+                         && _MoveConstructiblePair<_T1, _T2, _T1, _U2>()
+                         && _ImplicitlyConvertiblePair<_T2, _T2, _T2, _T2>()
+                         && _ImplicitlyMoveConvertiblePair<_T1, _T2,
+                                                           _T1, _U2>(),
+                         bool>::type=true>
+       constexpr pair(const _T1& __x, _U2&& __y)
+       : first(__x), second(std::forward<_U2>(__y)) { }
+
+      template<class _U2, typename
+               enable_if<_ConstructiblePair<_T1, _T1, _T1, _T1>()
+                         && _MoveConstructiblePair<_T1, _T2, _T1, _U2>()
+                         && (!_ImplicitlyConvertiblePair<_T2, _T2, _T2, _T2>()
+                             || !_ImplicitlyMoveConvertiblePair<_T1, _T2,
+                                                                _T1, _U2>()),
+                         bool>::type=false>
+       explicit pair(const _T1& __x, _U2&& __y)
+       : first(__x), second(std::forward<_U2>(__y)) { }
 
       template<class _U1, class _U2, typename
 	       enable_if<_MoveConstructiblePair<_T1, _T2, _U1, _U2>()
