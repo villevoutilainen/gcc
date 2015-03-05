@@ -206,7 +206,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       template<class _U2, typename
                enable_if<_ConstructiblePair<_T1, _T1, _T1, _T1>()
                          && _MoveConstructiblePair<_T1, _T2, _T1, _U2>()
-                         && _ImplicitlyConvertiblePair<_T2, _T2, _T2, _T2>()
+                         && _ImplicitlyConvertiblePair<_T1, _T1, _T1, _T1>()
                          && _ImplicitlyMoveConvertiblePair<_T1, _T2,
                                                            _T1, _U2>(),
                          bool>::type=true>
@@ -216,7 +216,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       template<class _U2, typename
                enable_if<_ConstructiblePair<_T1, _T1, _T1, _T1>()
                          && _MoveConstructiblePair<_T1, _T2, _T1, _U2>()
-                         && (!_ImplicitlyConvertiblePair<_T2, _T2, _T2, _T2>()
+                         && (!_ImplicitlyConvertiblePair<_T1, _T1, _T1, _T1>()
                              || !_ImplicitlyMoveConvertiblePair<_T1, _T2,
                                                                 _T1, _U2>()),
                          bool>::type=false>
