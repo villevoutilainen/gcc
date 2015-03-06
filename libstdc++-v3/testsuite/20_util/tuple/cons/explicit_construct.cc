@@ -26,7 +26,9 @@ struct Explicit
   explicit Explicit(int) {}
 };
 
-std::tuple<int, int> f1() {return {1,2};}
+std::tuple<int> f1a() {return {1};}
+std::tuple<int, int> f1b() {return {1,2};}
+std::tuple<int, int, int> f1c() {return {1,2,3};}
 
 std::tuple<Explicit, Explicit> f2() {return {1,2};} // { dg-error "explicit" }
 
