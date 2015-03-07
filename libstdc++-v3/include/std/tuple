@@ -460,7 +460,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 
   // Concept utility functions
-  template <typename... _Elements>
+  template <bool sizes_match, typename... _Elements>
   struct _TC
   {
     template <typename... _UElements>
@@ -488,6 +488,34 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
   };
 
+  template <typename... _Elements>
+  struct _TC<false, _Elements...>
+  {
+    template <typename... _UElements>
+    static constexpr bool _ConstructibleTuple()
+    {
+      return false;
+    }
+
+    template <typename... _UElements>
+    static constexpr bool _ImplicitlyConvertibleTuple()
+    {
+      return false;
+    }
+
+    template <typename... _UElements>
+    static constexpr bool _MoveConstructibleTuple()
+    {
+      return false;
+    }
+
+    template <typename... _UElements>
+    static constexpr bool _ImplicitlyMoveConvertibleTuple()
+    {
+      return false;
+    }
+  };
+
   /// Primary class template, tuple
   template<typename... _Elements> 
     class tuple : public _Tuple_impl<0, _Elements...>
@@ -499,46 +527,52 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       : _Inherited() { }
 
       template<typename... _UElements, typename
-        enable_if<(sizeof...(_Elements) == sizeof...(_UElements))
-                  && __and_<is_same<const _Elements&,
+        enable_if<__and_<is_same<const _Elements&,
                                     const _UElements&>...>::value
-                  &&_TC<_Elements...>::template
-                    _ConstructibleTuple<_UElements...>()
-                  && _TC<_Elements...>::template
-                    _ImplicitlyConvertibleTuple<_UElements...>()
+                  && _TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                            _Elements...>::template
+                  _ConstructibleTuple<_UElements...>()
+                  && _TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                            _Elements...>::template
+                  _ImplicitlyConvertibleTuple<_UElements...>()
                   && (sizeof...(_Elements) >= 1),
         bool>::type=true>
       constexpr tuple(const _UElements&... __elements)
       : _Inherited(__elements...) { }
 
       template<typename... _UElements, typename
-        enable_if<(sizeof...(_Elements) == sizeof...(_UElements))
-                  && __and_<is_same<const _Elements&,
+        enable_if<__and_<is_same<const _Elements&,
                                     const _UElements&>...>::value
-                  &&_TC<_Elements...>::template
-                    _ConstructibleTuple<_UElements...>()
-                  && !_TC<_Elements...>::template
-                    _ImplicitlyConvertibleTuple<_UElements...>()
+                  && _TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                            _Elements...>::template
+                  _ConstructibleTuple<_UElements...>()
+                  && !_TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                            _Elements...>::template
+                  _ImplicitlyConvertibleTuple<_UElements...>()
                   && (sizeof...(_Elements) >= 1),
         bool>::type=false>
       explicit constexpr tuple(const _UElements&... __elements)
       : _Inherited(__elements...) { }
 
       template<typename... _UElements, typename
-        enable_if<_TC<_Elements...>::template
-                    _MoveConstructibleTuple<_UElements...>()
-                  && _TC<_Elements...>::template
-                    _ImplicitlyMoveConvertibleTuple<_UElements...>()
+        enable_if<_TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                         _Elements...>::template
+                  _MoveConstructibleTuple<_UElements...>()
+                  && _TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                           _Elements...>::template
+                  _ImplicitlyMoveConvertibleTuple<_UElements...>()
                   && (sizeof...(_Elements) >= 1),
         bool>::type=true>
         constexpr tuple(_UElements&&... __elements)
         : _Inherited(std::forward<_UElements>(__elements)...) { }
 
       template<typename... _UElements, typename
-        enable_if<_TC<_Elements...>::template
-                    _MoveConstructibleTuple<_UElements...>()
-                  && !_TC<_Elements...>::template
-                    _ImplicitlyMoveConvertibleTuple<_UElements...>()
+        enable_if<_TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                         _Elements...>::template
+                  _MoveConstructibleTuple<_UElements...>()
+                  && !_TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                           _Elements...>::template
+                  _ImplicitlyMoveConvertibleTuple<_UElements...>()
                   && (sizeof...(_Elements) >= 1),
         bool>::type=false>
         explicit constexpr tuple(_UElements&&... __elements)
@@ -549,9 +583,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr tuple(tuple&&) = default; 
 
       template<typename... _UElements, typename
-        enable_if<_TC<_Elements...>::template
-                    _ConstructibleTuple<_UElements...>()
-                  && _TC<_Elements...>::template
+        enable_if<_TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                         _Elements...>::template
+                  _ConstructibleTuple<_UElements...>()
+                  && _TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                           _Elements...>::template
                     _ImplicitlyConvertibleTuple<_UElements...>(),
         bool>::type=true>
         constexpr tuple(const tuple<_UElements...>& __in)
@@ -559,29 +595,35 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
         { }
 
       template<typename... _UElements, typename
-        enable_if<_TC<_Elements...>::template
-                    _ConstructibleTuple<_UElements...>()
-                  && !_TC<_Elements...>::template
-                    _ImplicitlyConvertibleTuple<_UElements...>(),
+        enable_if<_TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                         _Elements...>::template
+                  _ConstructibleTuple<_UElements...>()
+                  && !_TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                           _Elements...>::template
+                  _ImplicitlyConvertibleTuple<_UElements...>(),
         bool>::type=false>
         explicit constexpr tuple(const tuple<_UElements...>& __in)
         : _Inherited(static_cast<const _Tuple_impl<0, _UElements...>&>(__in))
         { }
 
       template<typename... _UElements, typename
-        enable_if<_TC<_Elements...>::template
-                    _MoveConstructibleTuple<_UElements...>()
-                  && _TC<_Elements...>::template
-                    _ImplicitlyMoveConvertibleTuple<_UElements...>(),
+        enable_if<_TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                         _Elements...>::template
+                  _MoveConstructibleTuple<_UElements...>()
+                  && _TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                           _Elements...>::template
+                  _ImplicitlyMoveConvertibleTuple<_UElements...>(),
         bool>::type=true>
         constexpr tuple(tuple<_UElements...>&& __in)
         : _Inherited(static_cast<_Tuple_impl<0, _UElements...>&&>(__in)) { }
 
       template<typename... _UElements, typename
-        enable_if<_TC<_Elements...>::template
-                    _MoveConstructibleTuple<_UElements...>()
-                  && !_TC<_Elements...>::template
-                    _ImplicitlyMoveConvertibleTuple<_UElements...>(),
+        enable_if<_TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                         _Elements...>::template
+                  _MoveConstructibleTuple<_UElements...>()
+                  && !_TC<(sizeof...(_Elements) == sizeof...(_UElements)),
+                           _Elements...>::template
+                  _ImplicitlyMoveConvertibleTuple<_UElements...>(),
         bool>::type=false>
         explicit constexpr tuple(tuple<_UElements...>&& __in)
         : _Inherited(static_cast<_Tuple_impl<0, _UElements...>&&>(__in)) { }
@@ -692,37 +734,37 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       : _Inherited() { }
 
       template<typename _U1=_T1, typename _U2=_T2, typename
-        enable_if<_TC<_T1, _T2>::template
+        enable_if<_TC<true, _T1, _T2>::template
                     _ConstructibleTuple<_U1, _U2>()
-                     && _TC<_T1, _T2>::template
-                     _ImplicitlyConvertibleTuple<_U1, _U2>(),
+                    && _TC<true, _T1, _T2>::template
+                    _ImplicitlyConvertibleTuple<_U1, _U2>(),
 	bool>::type = true>
         constexpr tuple(const _U1& __a1, const _U2& __a2)
         : _Inherited(__a1, __a2) { }
 
       template<typename _U1=_T1, typename _U2=_T2, typename
-        enable_if<_TC<_T1, _T2>::template
+        enable_if<_TC<true, _T1, _T2>::template
                     _ConstructibleTuple<_U1, _U2>()
-                     && !_TC<_T1, _T2>::template
-                     _ImplicitlyConvertibleTuple<_U1, _U2>(),
+                    && !_TC<true, _T1, _T2>::template
+                    _ImplicitlyConvertibleTuple<_U1, _U2>(),
 	bool>::type = false>
         explicit constexpr tuple(const _U1& __a1, const _U2& __a2)
         : _Inherited(__a1, __a2) { }
 
       template<typename _U1, typename _U2, typename
-        enable_if<_TC<_T1, _T2>::template
+        enable_if<_TC<true, _T1, _T2>::template
                     _MoveConstructibleTuple<_U1, _U2>()
-                     && _TC<_T1, _T2>::template
-                     _ImplicitlyMoveConvertibleTuple<_U1, _U2>(),
+                    && _TC<true, _T1, _T2>::template
+                    _ImplicitlyMoveConvertibleTuple<_U1, _U2>(),
 	bool>::type = true>
         constexpr tuple(_U1&& __a1, _U2&& __a2)
 	: _Inherited(std::forward<_U1>(__a1), std::forward<_U2>(__a2)) { }
 
       template<typename _U1, typename _U2, typename
-        enable_if<_TC<_T1, _T2>::template
+        enable_if<_TC<true,_T1, _T2>::template
                     _MoveConstructibleTuple<_U1, _U2>()
-                     && !_TC<_T1, _T2>::template
-                     _ImplicitlyMoveConvertibleTuple<_U1, _U2>(),
+                    && !_TC<true,_T1, _T2>::template
+                    _ImplicitlyMoveConvertibleTuple<_U1, _U2>(),
 	bool>::type = false>
         explicit constexpr tuple(_U1&& __a1, _U2&& __a2)
 	: _Inherited(std::forward<_U1>(__a1), std::forward<_U2>(__a2)) { }
@@ -732,37 +774,37 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr tuple(tuple&&) = default;
 
       template<typename _U1, typename _U2, typename
-        enable_if<_TC<_T1, _T2>::template
+        enable_if<_TC<true, _T1, _T2>::template
                     _ConstructibleTuple<_U1, _U2>()
-                     && _TC<_T1, _T2>::template
-                     _ImplicitlyConvertibleTuple<_U1, _U2>(),
+                    && _TC<true, _T1, _T2>::template
+                    _ImplicitlyConvertibleTuple<_U1, _U2>(),
 	bool>::type = true>
         constexpr tuple(const tuple<_U1, _U2>& __in)
 	: _Inherited(static_cast<const _Tuple_impl<0, _U1, _U2>&>(__in)) { }
 
       template<typename _U1, typename _U2, typename
-        enable_if<_TC<_T1, _T2>::template
+        enable_if<_TC<true, _T1, _T2>::template
                     _ConstructibleTuple<_U1, _U2>()
-                     && !_TC<_T1, _T2>::template
-                     _ImplicitlyConvertibleTuple<_U1, _U2>(),
+                    && !_TC<true, _T1, _T2>::template
+                    _ImplicitlyConvertibleTuple<_U1, _U2>(),
 	bool>::type = false>
         explicit constexpr tuple(const tuple<_U1, _U2>& __in)
 	: _Inherited(static_cast<const _Tuple_impl<0, _U1, _U2>&>(__in)) { }
 
       template<typename _U1, typename _U2, typename
-        enable_if<_TC<_T1, _T2>::template
+        enable_if<_TC<true, _T1, _T2>::template
                     _MoveConstructibleTuple<_U1, _U2>()
-                     && _TC<_T1, _T2>::template
-                     _ImplicitlyMoveConvertibleTuple<_U1, _U2>(),
+                    && _TC<true, _T1, _T2>::template
+                    _ImplicitlyMoveConvertibleTuple<_U1, _U2>(),
 	bool>::type = true>
         constexpr tuple(tuple<_U1, _U2>&& __in)
 	: _Inherited(static_cast<_Tuple_impl<0, _U1, _U2>&&>(__in)) { }
 
       template<typename _U1, typename _U2, typename
-        enable_if<_TC<_T1, _T2>::template
+        enable_if<_TC<true, _T1, _T2>::template
                     _MoveConstructibleTuple<_U1, _U2>()
-                     && !_TC<_T1, _T2>::template
-                     _ImplicitlyMoveConvertibleTuple<_U1, _U2>(),
+                    && !_TC<true, _T1, _T2>::template
+                    _ImplicitlyMoveConvertibleTuple<_U1, _U2>(),
 	bool>::type = false>
         explicit constexpr tuple(tuple<_U1, _U2>&& __in)
 	: _Inherited(static_cast<_Tuple_impl<0, _U1, _U2>&&>(__in)) { }

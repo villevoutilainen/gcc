@@ -30,9 +30,13 @@ std::tuple<int> f1a() {return {1};}
 std::tuple<int, int> f1b() {return {1,2};}
 std::tuple<int, int, int> f1c() {return {1,2,3};}
 
-std::tuple<Explicit, Explicit> f2() {return {1,2};} // { dg-error "explicit" }
+std::tuple<Explicit> f2_a() {return {1};} // { dg-error "explicit" }
+std::tuple<Explicit, Explicit> f2_b() {return {1,2};} // { dg-error "explicit" }
+std::tuple<Explicit, Explicit, Explicit> f2_c() {return {1,2,3};} // { dg-error "explicit" }
 
-std::tuple<long, long> f3() {return std::tuple<int, int>{1,2};}
+std::tuple<long> f3_a() {return std::tuple<int>{1};}
+std::tuple<long, long> f3_b() {return std::tuple<int, int>{1,2};}
+std::tuple<long, long, long> f3_c() {return std::tuple<int, int, int>{1,2,3};}
 
 std::tuple<Explicit, Explicit> f4()
 {
