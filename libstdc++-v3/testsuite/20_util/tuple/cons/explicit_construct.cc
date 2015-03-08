@@ -20,6 +20,7 @@
 
 #include <tuple>
 #include <utility>
+#include <memory>
 
 struct Explicit
 {
@@ -135,6 +136,70 @@ std::tuple<Explicit, Explicit> v23{v20};
 std::tuple<int, int> v24 = v20;
 std::tuple<long, long> v25 = v20;
 std::tuple<Explicit, Explicit> v26 = v20; // { dg-error "conversion" }
+
+std::tuple<int> v27_a{std::allocator_arg, std::allocator<int>{}, 1};
+std::tuple<int, int> v27_b{std::allocator_arg, std::allocator<int>{}, 1, 2};
+std::tuple<int, int, int> v27_c{std::allocator_arg, std::allocator<int>{}, 1,2,3};
+
+std::tuple<long> v28_a{std::allocator_arg, std::allocator<int>{}, 1};
+std::tuple<long, long> v28_b{std::allocator_arg, std::allocator<int>{}, 1, 2};
+std::tuple<long, long, long>
+  v28_c{std::allocator_arg, std::allocator<int>{}, 1,2,3};
+
+std::tuple<Explicit> v29_a{std::allocator_arg, std::allocator<int>{}, 1};
+std::tuple<Explicit, Explicit>
+  v29_b{std::allocator_arg, std::allocator<int>{}, 1, 2};
+std::tuple<Explicit, Explicit, Explicit>
+  v29_c{std::allocator_arg, std::allocator<int>{}, 1,2,3};
+
+std::tuple<int> v30_a = {std::allocator_arg, std::allocator<int>{}, 1};
+std::tuple<int, int> v30_b = {std::allocator_arg, std::allocator<int>{}, 1, 2};
+std::tuple<int, int, int> v30_c
+  = {std::allocator_arg, std::allocator<int>{}, 1,2,3};
+
+std::tuple<long> v31_a = {std::allocator_arg, std::allocator<int>{}, 1};
+std::tuple<long, long> v31_b = {std::allocator_arg, std::allocator<int>{}, 1, 2};
+std::tuple<long, long, long>
+  v31_c{std::allocator_arg, std::allocator<int>{}, 1,2,3};
+
+std::tuple<Explicit> v32_a
+  = {std::allocator_arg, std::allocator<int>{}, 1}; // { dg-error "explicit" }
+std::tuple<Explicit, Explicit> v32_b
+  = {std::allocator_arg, std::allocator<int>{}, 1, 2}; // { dg-error "explicit" }
+std::tuple<Explicit, Explicit, Explicit> v32_c
+  = {std::allocator_arg, std::allocator<int>{}, 1,2,3}; // { dg-error "explicit" }
+
+std::tuple<int, int> v33{std::allocator_arg, std::allocator<int>{},
+  std::pair<int, int>{1, 2}};
+
+std::tuple<long, long> v34{std::allocator_arg, std::allocator<int>{},
+  std::pair<int, int>{1, 2}};
+
+std::tuple<Explicit, Explicit>
+  v35{std::allocator_arg, std::allocator<int>{}, std::pair<int, int>{1, 2}};
+
+std::tuple<int, int> v36 = {std::allocator_arg, std::allocator<int>{},
+  std::pair<int, int>{1, 2}};
+
+std::tuple<long, long> v37 = {std::allocator_arg, std::allocator<int>{},
+  std::pair<int, int>{1, 2}};
+
+std::tuple<Explicit, Explicit> v38
+= {std::allocator_arg, std::allocator<int>{}, std::pair<int, int>{1, 2}}; // { dg-error "explicit" }
+
+std::tuple<int, int> v39{std::allocator_arg, std::allocator<int>{}, v20};
+
+std::tuple<long, long> v40{std::allocator_arg, std::allocator<int>{}, v20};
+
+std::tuple<Explicit, Explicit>
+  v41{std::allocator_arg, std::allocator<int>{}, v20};
+
+std::tuple<int, int> v42 = {std::allocator_arg, std::allocator<int>{}, v20};
+
+std::tuple<long, long> v43 = {std::allocator_arg, std::allocator<int>{}, v20};
+
+std::tuple<Explicit, Explicit> v44
+= {std::allocator_arg, std::allocator<int>{}, v20}; // { dg-error "explicit" }
 
 void f6_a(std::tuple<Explicit>) {}
 void f6_b(std::tuple<Explicit, Explicit>) {}
