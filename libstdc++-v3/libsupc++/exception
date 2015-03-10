@@ -126,6 +126,8 @@ namespace std
    */
   bool uncaught_exception() _GLIBCXX_USE_NOEXCEPT __attribute__ ((__pure__));
 
+  int uncaught_exceptions() _GLIBCXX_USE_NOEXCEPT __attribute__ ((__pure__));
+
   // @} group exceptions
 } // namespace std
 
