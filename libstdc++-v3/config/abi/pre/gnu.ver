@@ -178,7 +178,6 @@ GLIBCXX_3.4 {
 #     std::[A-Zu-z]*;
 #     std::underflow_error::u*;
 #     std::underflow_error::~u*;
-      std::uncaught_exception*;
       std::unexpected*;
       std::[A-Zv-z]*;
       std::_List_node_base::hook*;
@@ -1024,6 +1023,8 @@ GLIBCXX_3.4 {
     _ZNSt6locale5_Impl19_M_replace_categoryEPKS0_PKPKNS_2idE;
     _ZNSt6locale5_Impl21_M_replace_categoriesEPKS0_i;
 
+    # std::uncaught_exception()
+    _ZSt18uncaught_exceptionv;
   # DO NOT DELETE THIS LINE.  Port-specific symbols, if any, will be here.
 
   local:
@@ -1857,6 +1858,13 @@ GLIBCXX_3.4.21 {
 
 } GLIBCXX_3.4.20;
 
+GLIBCXX_3.4.22 {
+    extern "C++"
+    {
+      std::uncaught_exception*;
+    };
+
+} GLIBCXX_3.4.21;
 
 # Symbols in the support library (libsupc++) have their own tag.
 CXXABI_1.3 {
