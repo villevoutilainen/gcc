@@ -187,7 +187,7 @@ private:
     return std::less<typename common_type<typename add_pointer<_Tp>::type,
                                           typename add_pointer<_Up>::type
                                           >::type
-                    >(__p1.get(), __p2.get());
+                     >{}(__p1.get(), __p2.get());
   }
 
   template <class _Tp, class _Up>
