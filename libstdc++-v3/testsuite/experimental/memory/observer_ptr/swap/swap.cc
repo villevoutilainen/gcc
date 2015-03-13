@@ -29,7 +29,8 @@ struct D : B {};
 void test01()
 {
   observer_ptr<int> a, b;
-  a = b;
+  assert(a == b);
+  swap(a, b);
   assert(a == b);
 }
 
@@ -38,52 +39,29 @@ void test02()
   int x{};
   observer_ptr<int> a;
   observer_ptr<int> b{&x};
-  assert(a != b);
-  a = b;
-  assert(a == b);
+  assert(!a);
+  assert(b);
+  swap(a, b);
+  assert(a);
+  assert(!b);
 }
 
 void test03()
 {
-  int x{};
-  observer_ptr<const int> a;
-  observer_ptr<int> b{&x};
-  assert(a != b);
-  a = b;
-  assert(a == b);
+  int x[2]{1,2};
+  observer_ptr<int> a{&x[0]};
+  observer_ptr<int> b{&x[1]};
+  assert(*a == 1);
+  assert(*b == 2);
+  swap(a, b);
+  assert(*a == 2);
+  assert(*b == 1);
 }
 
-void test04()
-{
-  D x{};
-  observer_ptr<B> a;
-  observer_ptr<D> b{&x};
-  assert(a != b);
-  a = b;
-  assert(a == b);
-}
-
-constexpr bool test05_helper(observer_ptr<const int> a, 
-                             observer_ptr<const int> b)
-{
-  a = b;
-  return (a.get() == b.get());
-}
-
-void test05()
-{
-  static constexpr int x{};
-  constexpr observer_ptr<const int> a;
-  constexpr observer_ptr<const int> b{&x};
-  constexpr bool assigned = test05_helper(a, b);
-  assert(assigned);
-}
 
 int main()
 {
   test01();
   test02();
   test03();
-  test04();
-  test05();
 }
