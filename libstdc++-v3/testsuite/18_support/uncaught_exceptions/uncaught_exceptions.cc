@@ -19,6 +19,7 @@
 
 #include <cassert>
 #include <exception>
+#include <testsuite_hooks.h>
 
 struct UncaughtVerifier
 {
@@ -26,7 +27,7 @@ struct UncaughtVerifier
   UncaughtVerifier(int expected_count) : expected_count_(expected_count) {}
   ~UncaughtVerifier()
   {
-    assert(std::uncaught_exceptions() == expected_count_);
+    VERIFY(std::uncaught_exceptions() == expected_count_);
   }
 };
 
@@ -86,7 +87,7 @@ void test04()
     Transaction t{result};
   } catch(...) {
   }
-  assert(result);
+  VERIFY(result);
 }
 
 void test05()
@@ -97,7 +98,7 @@ void test05()
     throw 0;
   } catch(...) {
   }
-  assert(!result);
+  VERIFY(!result);
 }
 
 void test06()
@@ -119,8 +120,8 @@ void test06()
     throw 0;
   } catch(...) {
   }
-  assert(!result);
-  assert(result2);
+  VERIFY(!result);
+  VERIFY(result2);
 }
 
 void test07()
@@ -145,8 +146,8 @@ void test07()
     throw 0;
   } catch(...) {
   }
-  assert(!result);
-  assert(!result2);
+  VERIFY(!result);
+  VERIFY(!result2);
 }
 
 int main()
