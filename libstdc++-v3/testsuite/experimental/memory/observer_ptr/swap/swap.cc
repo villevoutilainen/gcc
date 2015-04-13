@@ -19,7 +19,7 @@
 // <http://www.gnu.org/licenses/>.
 
 #include <experimental/memory>
-#include <cassert>
+#include <testsuite_hooks.h>
 
 using std::experimental::observer_ptr;
 
@@ -29,9 +29,9 @@ struct D : B {};
 void test01()
 {
   observer_ptr<int> a, b;
-  assert(a == b);
+  VERIFY(a == b);
   swap(a, b);
-  assert(a == b);
+  VERIFY(a == b);
 }
 
 void test02()
@@ -39,11 +39,11 @@ void test02()
   int x{};
   observer_ptr<int> a;
   observer_ptr<int> b{&x};
-  assert(!a);
-  assert(b);
+  VERIFY(!a);
+  VERIFY(b);
   swap(a, b);
-  assert(a);
-  assert(!b);
+  VERIFY(a);
+  VERIFY(!b);
 }
 
 void test03()
@@ -51,11 +51,11 @@ void test03()
   int x[2]{1,2};
   observer_ptr<int> a{&x[0]};
   observer_ptr<int> b{&x[1]};
-  assert(*a == 1);
-  assert(*b == 2);
+  VERIFY(*a == 1);
+  VERIFY(*b == 2);
   swap(a, b);
-  assert(*a == 2);
-  assert(*b == 1);
+  VERIFY(*a == 2);
+  VERIFY(*b == 1);
 }
 
 

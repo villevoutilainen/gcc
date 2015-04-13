@@ -19,7 +19,7 @@
 // <http://www.gnu.org/licenses/>.
 
 #include <experimental/memory>
-#include <cassert>
+#include <testsuite_hooks.h>
 #include <utility>
 
 using std::experimental::observer_ptr;
@@ -30,9 +30,9 @@ struct D : B {};
 void test01()
 {
   observer_ptr<int> a;
-  assert(!a);
+  VERIFY(!a);
   observer_ptr<int> b{nullptr};
-  assert(!b);
+  VERIFY(!b);
 }
 
 void test02()
@@ -40,7 +40,7 @@ void test02()
   int x{};
   observer_ptr<int> a{&x};
   observer_ptr<int> b{a};
-  assert(a == b);
+  VERIFY(a == b);
 }
 
 void test03()
@@ -48,7 +48,7 @@ void test03()
   int x{};
   observer_ptr<int> a;
   observer_ptr<const int> b{a};
-  assert(a == b);
+  VERIFY(a == b);
 }
 
 void test04()
@@ -56,7 +56,7 @@ void test04()
   D x{};
   observer_ptr<D> a{&x};
   observer_ptr<B> b{a};
-  assert(a == b);
+  VERIFY(a == b);
 }
 
 void test05()
@@ -64,7 +64,7 @@ void test05()
   D x{};
   observer_ptr<D> a{&x};
   observer_ptr<B> b{std::move(a)};
-  assert(a == b);
+  VERIFY(a == b);
 }
 
 void test06()
@@ -72,13 +72,13 @@ void test06()
   static constexpr D x{};
   constexpr observer_ptr<const D> a{&x};
   constexpr observer_ptr<const B> b{std::move(a)};
-  assert(a == b);
+  VERIFY(a == b);
   constexpr observer_ptr<const B> c{a};
-  assert(a == b && a == c && b == c);
+  VERIFY(a == b && a == c && b == c);
   constexpr observer_ptr<int> d;
   constexpr observer_ptr<int> e{nullptr};
-  assert(!d);
-  assert(!e);
+  VERIFY(!d);
+  VERIFY(!e);
 }
 
 int main()

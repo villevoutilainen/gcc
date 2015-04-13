@@ -19,7 +19,7 @@
 // <http://www.gnu.org/licenses/>.
 
 #include <experimental/memory>
-#include <cassert>
+#include <testsuite_hooks.h>
 
 using std::experimental::observer_ptr;
 
@@ -30,7 +30,7 @@ void test01()
 {
   observer_ptr<int> a, b;
   a = b;
-  assert(a == b);
+  VERIFY(a == b);
 }
 
 void test02()
@@ -38,9 +38,9 @@ void test02()
   int x{};
   observer_ptr<int> a;
   observer_ptr<int> b{&x};
-  assert(a != b);
+  VERIFY(a != b);
   a = b;
-  assert(a == b);
+  VERIFY(a == b);
 }
 
 void test03()
@@ -48,9 +48,9 @@ void test03()
   int x{};
   observer_ptr<const int> a;
   observer_ptr<int> b{&x};
-  assert(a != b);
+  VERIFY(a != b);
   a = b;
-  assert(a == b);
+  VERIFY(a == b);
 }
 
 void test04()
@@ -58,9 +58,9 @@ void test04()
   D x{};
   observer_ptr<B> a;
   observer_ptr<D> b{&x};
-  assert(a != b);
+  VERIFY(a != b);
   a = b;
-  assert(a == b);
+  VERIFY(a == b);
 }
 
 constexpr bool test05_helper(observer_ptr<const int> a, 
@@ -76,7 +76,7 @@ void test05()
   constexpr observer_ptr<const int> a;
   constexpr observer_ptr<const int> b{&x};
   constexpr bool assigned = test05_helper(a, b);
-  assert(assigned);
+  VERIFY(assigned);
 }
 
 int main()

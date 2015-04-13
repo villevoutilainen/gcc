@@ -19,14 +19,14 @@
 // <http://www.gnu.org/licenses/>.
 
 #include <experimental/memory>
-#include <cassert>
+#include <testsuite_hooks.h>
 
 using std::experimental::observer_ptr;
 
 void test01()
 {
   observer_ptr<int> a, b;
-  assert(a == b);
+  VERIFY(a == b);
 }
 
 void test02()
@@ -34,11 +34,11 @@ void test02()
   int x[2]{};
   observer_ptr<int> a{&x[0]};
   observer_ptr<int> b{&x[1]};
-  assert(a != b);
-  assert(a < b);
-  assert(a <= b);
-  assert(b >= a);
-  assert(b > a);
+  VERIFY(a != b);
+  VERIFY(a < b);
+  VERIFY(a <= b);
+  VERIFY(b >= a);
+  VERIFY(b > a);
 }
 
 void test03()
@@ -46,7 +46,7 @@ void test03()
   int x{};
   observer_ptr<int> a{&x};
   observer_ptr<int> b{&x};
-  assert(a == b);
+  VERIFY(a == b);
 }
 
 void test04()
@@ -54,11 +54,11 @@ void test04()
   static constexpr int x[2]{};
   constexpr observer_ptr<const int> a{&x[0]};
   constexpr observer_ptr<const int> b{&x[1]};
-  assert(a != b);
-  assert(a < b);
-  assert(a <= b);
-  assert(b >= a);
-  assert(b > a);
+  VERIFY(a != b);
+  VERIFY(a < b);
+  VERIFY(a <= b);
+  VERIFY(b >= a);
+  VERIFY(b > a);
 }
 
 void test05()
@@ -66,7 +66,7 @@ void test05()
   static constexpr int x{};
   constexpr observer_ptr<const int> a{&x};
   constexpr observer_ptr<const int> b{&x};
-  assert(a == b);
+  VERIFY(a == b);
 }
 
 

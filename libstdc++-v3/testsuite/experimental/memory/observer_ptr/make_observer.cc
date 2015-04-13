@@ -19,7 +19,7 @@
 // <http://www.gnu.org/licenses/>.
 
 #include <experimental/memory>
-#include <cassert>
+#include <testsuite_hooks.h>
 
 int main()
 {
@@ -27,6 +27,6 @@ int main()
   auto o = std::experimental::make_observer(&i);
   static_assert( std::is_same<decltype(o),
                  std::experimental::observer_ptr<const int>>(), "" );
-  assert( o && *o == 42 );
-  assert( o.get() == &i );
+  VERIFY( o && *o == 42 );
+  VERIFY( o.get() == &i );
 }
