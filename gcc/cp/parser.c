@@ -12739,8 +12739,16 @@ cp_parser_mem_initializer_list (cp_parser* parser)
       /* If the next token is not a `,', we're done.  */
       if (cp_lexer_next_token_is_not (parser->lexer, CPP_COMMA))
 	break;
-      /* Consume the `,' token.  */
+      /* Otherwise, consume the `,' and keep going.  */
       cp_lexer_consume_token (parser->lexer);
+      /* If the next token is a `{', there is a trailing comma.  */
+      if (cp_lexer_next_token_is (parser->lexer, CPP_OPEN_BRACE))
+	{
+	  if (cxx_dialect < cxx1z && !in_system_header_at (input_location))
+	    pedwarn (input_location, OPT_Wpedantic,
+                     "comma at end of member initializer list");
+	  break;
+	}
     }
 
   /* Perform semantic analysis.  */
