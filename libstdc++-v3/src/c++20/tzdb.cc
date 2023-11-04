@@ -42,6 +42,7 @@
 
 #ifndef _AIX
 # include <cstdlib>   // getenv
+#include <mutex>
 #endif
 
 #if _GLIBCXX_HAVE_WINDOWS_H
@@ -705,7 +706,7 @@ namespace std::chrono
 	void decrement() { }
 
 	// Use a mutex to synchronize all access to the infos vector.
-	mutex infos_mutex;
+	std::mutex infos_mutex;
 
 	void lock() { infos_mutex.lock(); }
 	void unlock() { infos_mutex.unlock(); }
