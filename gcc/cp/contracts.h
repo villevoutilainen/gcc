@@ -296,6 +296,9 @@ extern void set_contract_functions		(tree, tree, tree);
 
 extern tree build_contract_check		(tree);
 
+extern tree constify_contract_access            (tree);
+extern tree view_as_const                       (tree);
+
 /* Return the first contract in ATTRS, or NULL_TREE if there are none.  */
 
 inline tree
