@@ -306,6 +306,7 @@ extern void set_contract_functions		(tree, tree, tree);
 extern tree build_contract_check		(tree);
 
 extern tree constify_contract_access		(tree);
+extern bool maybe_reject_param_in_postcondition (tree);
 extern tree view_as_const			(tree);
 extern tree maybe_contract_wrap_new_method_call	(tree, tree);
 extern void emit_contract_wrapper_func		();
