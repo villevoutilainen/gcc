@@ -247,6 +247,11 @@ enum contract_matching_context
 #define DECL_POST_FN(NODE) \
   (get_postcondition_function ((NODE)))
 
+/* For a FUNCTION_DECL of a guarded function, this holds the function decl
+   where caller contract checks are emitted.  */
+#define DECL_WRAPPER_FN(NODE) \
+  (get_contract_wrapper_function ((NODE)))
+
 /* True iff the FUNCTION_DECL is the pre function for a guarded function.  */
 #define DECL_IS_PRE_FN_P(NODE) \
   (DECL_ABSTRACT_ORIGIN (NODE) && DECL_PRE_FN (DECL_ABSTRACT_ORIGIN (NODE)) == NODE)
@@ -255,8 +260,16 @@ enum contract_matching_context
 #define DECL_IS_POST_FN_P(NODE) \
   (DECL_ABSTRACT_ORIGIN (NODE) && DECL_POST_FN (DECL_ABSTRACT_ORIGIN (NODE)) == NODE)
 
+<<<<<<< HEAD
 /* contracts.cc */
 extern void emit_assertion			(tree);
+=======
+/* True iff the FUNCTION_DECL is the caller contract wrapper function
+  for a guarded function.  */
+#define DECL_IS_WRAPPER_FN_P(NODE) \
+  (DECL_ABSTRACT_ORIGIN (NODE) && DECL_WRAPPER_FN (DECL_ABSTRACT_ORIGIN (NODE)) == NODE)
+
+>>>>>>> 0a9a45718d9 (does not compile)
 
 extern void remove_contract_attributes		(tree);
 extern bool all_attributes_are_contracts_p	(tree);
@@ -285,6 +298,7 @@ extern void defer_guarded_contract_match	(tree, tree, tree);
 
 extern tree get_precondition_function		(tree);
 extern tree get_postcondition_function		(tree);
+extern tree get_contract_wrapper_function	(tree);
 extern void start_function_contracts		(tree);
 extern void maybe_apply_function_contracts	(tree);
 extern void finish_function_contracts		(tree);
@@ -292,9 +306,10 @@ extern void set_contract_functions		(tree, tree, tree);
 
 extern tree build_contract_check		(tree);
 
-extern tree constify_contract_access            (tree);
-extern tree view_as_const                       (tree);
+extern tree constify_contract_access		(tree);
+extern tree view_as_const			(tree);
 extern tree maybe_contract_wrap_new_method_call	(tree, tree);
+extern void emit_contract_wrapper_func		();
 
 /* Return the first contract in ATTRS, or NULL_TREE if there are none.  */
 
