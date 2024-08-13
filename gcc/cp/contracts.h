@@ -308,7 +308,7 @@ extern tree build_contract_check		(tree);
 
 extern tree constify_contract_access		(tree);
 extern tree view_as_const			(tree);
-extern tree maybe_contract_wrap_new_method_call	(tree, tree);
+extern tree maybe_contract_wrap_new_method_call	(tree, vec<tree, va_gc> *, tree);
 extern void emit_contract_wrapper_func		();
 
 /* Return the first contract in ATTRS, or NULL_TREE if there are none.  */
