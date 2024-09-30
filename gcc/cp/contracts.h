@@ -263,11 +263,6 @@ enum contract_matching_context
 /* contracts.cc */
 extern void emit_assertion			(tree);
 
-/* True iff the FUNCTION_DECL is the caller contract wrapper function
-  for a guarded function.  */
-#define DECL_IS_WRAPPER_FN_P(NODE) \
-  (DECL_ABSTRACT_ORIGIN (NODE) && DECL_WRAPPER_FN (DECL_ABSTRACT_ORIGIN (NODE)) == NODE)
-
 extern void remove_contract_attributes		(tree);
 extern bool all_attributes_are_contracts_p	(tree);
 extern tree finish_contract_attribute		(tree, tree);
