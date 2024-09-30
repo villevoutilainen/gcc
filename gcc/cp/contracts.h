@@ -297,7 +297,7 @@ extern tree get_precondition_function		(tree);
 extern tree get_postcondition_function		(tree);
 extern tree get_contract_wrapper_function	(tree);
 
-extern void copy_and_remap_contracts		(tree, tree);
+extern void copy_and_remap_contracts		(tree, tree, bool);
 extern void start_function_contracts		(tree);
 extern void maybe_apply_function_contracts	(tree);
 extern void finish_function_contracts		(tree);
