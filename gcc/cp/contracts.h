@@ -359,6 +359,22 @@ set_contract_mutable (tree t, int mut)
   TREE_LANG_FLAG_4 (CONTRACT_CHECK (t)) = mut;
 }
 
+/* Returns the mutable flag of the node.  */
+
+inline int
+get_contract_const (const_tree t)
+{
+  return TREE_LANG_FLAG_5 (CONTRACT_CHECK (t));
+}
+
+/* Sets the mutable flag of the node.  */
+
+inline void
+set_contract_const (tree t, int mut)
+{
+  TREE_LANG_FLAG_5 (CONTRACT_CHECK (t)) = mut;
+}
+
 /* Will this contract be ignored.  */
 
 inline bool
