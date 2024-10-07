@@ -343,6 +343,21 @@ set_contract_semantic (tree t, contract_semantic semantic)
   TREE_LANG_FLAG_0 (t) = (semantic & 0x04) >> 2;
 }
 
+/* Returns the mutable flag of the node.  */
+
+inline int
+get_contract_mutable (const_tree t)
+{
+  return TREE_LANG_FLAG_4 (CONTRACT_CHECK (t));
+}
+
+/* Sets the mutable flag of the node.  */
+
+inline void
+set_contract_mutable (tree t, int mut)
+{
+  TREE_LANG_FLAG_4 (CONTRACT_CHECK (t)) = mut;
+}
 
 /* Will this contract be ignored.  */
 
