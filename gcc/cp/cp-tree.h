@@ -9124,6 +9124,91 @@ extern tree coro_get_ramp_function		(tree);
 
 extern tree co_await_get_resume_call		(tree await_expr);
 
+<<<<<<< HEAD
+=======
+
+/* contracts.cc */
+extern tree make_postcondition_variable		(cp_expr);
+extern tree make_postcondition_variable		(cp_expr, tree);
+extern tree grok_contract			(tree, tree, tree, cp_expr, location_t);
+extern tree finish_contract_condition		(cp_expr);
+extern tree constify_contract_access            (tree);
+extern bool maybe_reject_param_in_postcondition (tree);
+
+extern tree view_as_const                       (tree);
+extern tree maybe_contract_wrap_call	        (tree, tree);
+extern void emit_contract_wrapper_func          ();
+
+/* Return the first contract in ATTRS, or NULL_TREE if there are none.  */
+
+inline tree
+find_contract (tree attrs)
+{
+  while (attrs && !cxx_contract_attribute_p (attrs))
+    attrs = TREE_CHAIN (attrs);
+  return attrs;
+}
+
+inline void
+set_decl_contracts (tree decl, tree contract_attrs)
+{
+  remove_contract_attributes (decl);
+  DECL_ATTRIBUTES (decl) = chainon (DECL_ATTRIBUTES (decl), contract_attrs);
+}
+
+/* Returns the computed semantic of the node.  */
+
+inline contract_semantic
+get_contract_semantic (const_tree t)
+{
+  return (contract_semantic) (TREE_LANG_FLAG_3 (CONTRACT_CHECK (t))
+      | (TREE_LANG_FLAG_2 (t) << 1)
+      | (TREE_LANG_FLAG_0 ((t)) << 2));
+}
+
+/* Sets the computed semantic of the node.  */
+
+inline void
+set_contract_semantic (tree t, contract_semantic semantic)
+{
+  TREE_LANG_FLAG_3 (CONTRACT_CHECK (t)) = semantic & 0x01;
+  TREE_LANG_FLAG_2 (t) = (semantic & 0x02) >> 1;
+  TREE_LANG_FLAG_0 (t) = (semantic & 0x04) >> 2;
+}
+
+/* Returns the mutable flag of the node.  */
+
+inline int
+get_contract_mutable (const_tree t)
+{
+  return TREE_LANG_FLAG_4 (CONTRACT_CHECK (t));
+}
+
+/* Sets the mutable flag of the node.  */
+
+inline void
+set_contract_mutable (tree t, int mut)
+{
+  TREE_LANG_FLAG_4 (CONTRACT_CHECK (t)) = mut;
+}
+
+/* Returns the mutable flag of the node.  */
+
+inline int
+get_contract_const (const_tree t)
+{
+  return TREE_LANG_FLAG_5 (CONTRACT_CHECK (t));
+}
+
+/* Sets the mutable flag of the node.  */
+
+inline void
+set_contract_const (tree t, int mut)
+{
+  TREE_LANG_FLAG_5 (CONTRACT_CHECK (t)) = mut;
+}
+
+>>>>>>> 84d55eb3960 (wip)
 /* Inline bodies.  */
 
 inline tree
