@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2024 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -16,8 +16,10 @@
 // along with GCC; see the file COPYING3.  If not see
 // <http://www.gnu.org/licenses/>.
 
+#include "rust-ast-resolve-toplevel.h"
 #include "rust-ast-resolve-item.h"
 #include "rust-ast-resolve-stmt.h"
+#include "rust-ast-resolve-implitem.h"
 
 namespace Rust {
 namespace Resolver {
@@ -28,10 +30,30 @@ ResolveStmt::visit (AST::ExternBlock &extern_block)
   resolve_visibility (extern_block.get_visibility ());
   for (auto &item : extern_block.get_extern_items ())
     {
-      ResolveToplevelExternItem::go (item.get (),
-				     CanonicalPath::create_empty ());
-      ResolveExternItem::go (item.get (), prefix, canonical_prefix);
+      ResolveToplevelExternItem::go (*item, CanonicalPath::create_empty ());
+      ResolveExternItem::go (*item, prefix, canonical_prefix);
     }
+}
+
+void
+ResolveStmt::visit (AST::Trait &trait)
+{
+  ResolveTopLevel::go (trait, prefix, canonical_prefix);
+  ResolveItem::go (trait, prefix, canonical_prefix);
+}
+
+void
+ResolveStmt::visit (AST::InherentImpl &impl_block)
+{
+  ResolveTopLevel::go (impl_block, prefix, canonical_prefix);
+  ResolveItem::go (impl_block, prefix, canonical_prefix);
+}
+
+void
+ResolveStmt::visit (AST::TraitImpl &impl_block)
+{
+  ResolveTopLevel::go (impl_block, prefix, canonical_prefix);
+  ResolveItem::go (impl_block, prefix, canonical_prefix);
 }
 
 } // namespace Resolver

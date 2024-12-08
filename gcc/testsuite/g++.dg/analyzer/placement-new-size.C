@@ -1,7 +1,9 @@
 /* { dg-additional-options "-Wno-placement-new -Wno-analyzer-use-of-uninitialized-value" } */
+/* { dg-skip-if "requires hosted libstdc++ for stdlib malloc" { ! hostedlib } } */
 
 #include <new>
 #include <stdlib.h>
+#include <stdint.h>
 
 extern int get_buf_size ();
 

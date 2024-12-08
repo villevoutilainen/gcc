@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 2020-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 2020-2024, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -734,6 +734,15 @@ package body Gen_IL.Gen is
                      Type_Table (T).First := Type_Table (Children (1)).First;
                      Type_Table (T).Last  :=
                        Type_Table (Children (Last_Index (Children))).Last;
+
+                     --  We know that each abstract type has at least two
+                     --  children. The concrete types must be ordered so
+                     --  that each abstract type is a contiguous subrange.
+
+                     if Type_Table (T).First >= Type_Table (T).Last then
+                        raise Illegal with
+                          Image (T) & " children out of order";
+                     end if;
                   end;
 
                when Between_Abstract_Entity_And_Concrete_Node_Types =>
@@ -872,6 +881,7 @@ package body Gen_IL.Gen is
              | Uint
              | Uint_Subtype
              | Ureal
+             | Source_File_Index
              | Source_Ptr
              | Union_Id
              | Node_Id
@@ -1022,7 +1032,6 @@ package body Gen_IL.Gen is
       --  Start of processing for Compute_Field_Offsets
 
       begin
-
          --  Compute the number of types that have each field, weighted by the
          --  frequency of such nodes.
 

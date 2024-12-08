@@ -109,12 +109,28 @@ test_format_spec()
   VERIFY( ! is_format_string_for("{:#?}", "str") );
   VERIFY( ! is_format_string_for("{:#?}", 'c') );
 
+  // The 0 option is not valid for charT and bool.
+  VERIFY( ! is_format_string_for("{:0c}", 'c') );
+  VERIFY( ! is_format_string_for("{:0s}", true) );
+
+  // Dynamic width arg must be an integer type.
+  VERIFY( ! is_format_string_for("{:{}d}", 1, 1.5) );
+  VERIFY( ! is_format_string_for("{:{}d}", 1, true) );
+  VERIFY( ! is_format_string_for("{:{}d}", 1, "str") );
+  VERIFY( ! is_format_string_for("{:{}d}", 1, nullptr) );
+
   // Precision only valid for string and floating-point types.
   VERIFY( ! is_format_string_for("{:.3d}", 1) );
   VERIFY( ! is_format_string_for("{:3.3d}", 1) );
   VERIFY( is_format_string_for("{:3.3s}", "str") );
   VERIFY( ! is_format_string_for("{:3.3s}", 'c') );
   VERIFY( ! is_format_string_for("{:3.3p}", nullptr) );
+
+  // Dynamic precision arg must be an integer type.
+  VERIFY( ! is_format_string_for("{:.{}f}", 1.0, 1.5) );
+  VERIFY( ! is_format_string_for("{:.{}f}", 1.0, true) );
+  VERIFY( ! is_format_string_for("{:.{}f}", 1.0, "str") );
+  VERIFY( ! is_format_string_for("{:.{}f}", 1.0, nullptr) );
 
   // Invalid presentation types for integers.
   VERIFY( ! is_format_string_for("{:f}", 1) );
@@ -146,8 +162,9 @@ void
 test_pr110862()
 {
   try {
+    int i = 1;
     // PR libstdc++/110862 out-of-bounds read on invalid format string
-    (void) std::vformat("{0:{0}", std::make_format_args(1));
+    (void) std::vformat("{0:{0}", std::make_format_args(i));
     VERIFY( false );
   } catch (const std::format_error& e) {
     std::string_view what = e.what();
@@ -159,9 +176,11 @@ void
 test_pr110974()
 {
   try {
+    double d = 1.0;
+    int i = 1;
     // PR libstdc++/110974 out of bounds read on invalid format string "{:{}."
     std::string_view fmt{"{:{}.0", 5}; // "0" is not part of the format string.
-    (void) std::vformat(fmt, std::make_format_args(1.0, 1));
+    (void) std::vformat(fmt, std::make_format_args(d, i));
     VERIFY( false );
   } catch (const std::format_error& e) {
     std::string_view what = e.what();

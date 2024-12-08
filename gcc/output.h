@@ -1,6 +1,6 @@
 /* Declarations for insn-output.cc and other code to write to asm_out_file.
    These functions are defined in final.cc, and varasm.cc.
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -178,6 +178,14 @@ extern void assemble_asm (tree);
 /* Get the function's name from a decl, as described by its RTL.  */
 extern const char *get_fnname_from_decl (tree);
 
+/* Output function label, possibly with accompanying metadata.  No additional
+   code or data is output after the label.  */
+extern void assemble_function_label_raw (FILE *, const char *);
+
+/* Finish outputting function label.  Needs to be called when outputting
+   function label without using assemble_function_label_raw ().  */
+extern void assemble_function_label_final (void);
+
 /* Output assembler code for the constant pool of a function and associated
    with defining the name of the function.  DECL describes the function.
    NAME is the function's name.  For the constant pool, we use the current
@@ -329,6 +337,9 @@ extern rtx_insn *current_output_insn;
    This means that inconsistencies are the user's fault, so don't die.
    The precise value is the insn being output, to pass to error_for_asm.  */
 extern const rtx_insn *this_is_asm_operands;
+
+/* Number of operands of this insn, for an `asm' with operands.  */
+extern unsigned int insn_noperands;
 
 /* Carry information from ASM_DECLARE_OBJECT_NAME
    to ASM_FINISH_DECLARE_OBJECT.  */

@@ -1,6 +1,6 @@
 // Range access functions for containers -*- C++ -*-
 
-// Copyright (C) 2010-2023 Free Software Foundation, Inc.
+// Copyright (C) 2010-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -30,11 +30,9 @@
 #ifndef _GLIBCXX_RANGE_ACCESS_H
 #define _GLIBCXX_RANGE_ACCESS_H 1
 
+#ifdef _GLIBCXX_SYSHDR
 #pragma GCC system_header
-
-#define __glibcxx_want_nonmember_container_access
-#define __glibcxx_want_ssize
-#include <bits/version.h>
+#endif
 
 #if __cplusplus >= 201103L
 #include <initializer_list>
@@ -53,7 +51,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Container>
     [[__nodiscard__, __gnu__::__always_inline__]]
     inline _GLIBCXX17_CONSTEXPR auto
-    begin(_Container& __cont) -> decltype(__cont.begin())
+    begin(_Container& __cont) noexcept(noexcept(__cont.begin()))
+    -> decltype(__cont.begin())
     { return __cont.begin(); }
 
   /**
@@ -64,7 +63,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Container>
     [[__nodiscard__, __gnu__::__always_inline__]]
     inline _GLIBCXX17_CONSTEXPR auto
-    begin(const _Container& __cont) -> decltype(__cont.begin())
+    begin(const _Container& __cont) noexcept(noexcept(__cont.begin()))
+    -> decltype(__cont.begin())
     { return __cont.begin(); }
 
   /**
@@ -75,7 +75,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Container>
     [[__nodiscard__, __gnu__::__always_inline__]]
     inline _GLIBCXX17_CONSTEXPR auto
-    end(_Container& __cont) -> decltype(__cont.end())
+    end(_Container& __cont) noexcept(noexcept(__cont.end()))
+    -> decltype(__cont.end())
     { return __cont.end(); }
 
   /**
@@ -86,7 +87,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Container>
     [[__nodiscard__, __gnu__::__always_inline__]]
     inline _GLIBCXX17_CONSTEXPR auto
-    end(const _Container& __cont) -> decltype(__cont.end())
+    end(const _Container& __cont) noexcept(noexcept(__cont.end()))
+    -> decltype(__cont.end())
     { return __cont.end(); }
 
   /**
@@ -255,7 +257,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 #endif // C++14
 
-#ifdef __cpp_lib_nonmember_container_access // C++ >= 17
+#ifdef __glibcxx_nonmember_container_access // C++ >= 17
   /**
    *  @brief  Return the size of a container.
    *  @param  __cont  Container.
@@ -347,14 +349,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr const _Tp*
     data(initializer_list<_Tp> __il) noexcept
     { return __il.begin(); }
-#endif // __cpp_lib_nonmember_container_access
+#endif // __glibcxx_nonmember_container_access
 
-#ifdef __cpp_lib_ssize // C++ >= 20
+#ifdef __glibcxx_ssize // C++ >= 20
   template<typename _Container>
     [[nodiscard, __gnu__::__always_inline__]]
     constexpr auto
-    ssize(const _Container& __cont)
-    noexcept(noexcept(__cont.size()))
+    ssize(const _Container& __cont) noexcept(noexcept(__cont.size()))
     -> common_type_t<ptrdiff_t, make_signed_t<decltype(__cont.size())>>
     {
       using type = make_signed_t<decltype(__cont.size())>;
@@ -366,7 +367,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr ptrdiff_t
     ssize(const _Tp (&)[_Num]) noexcept
     { return _Num; }
-#endif // __cpp_lib_ssize
+#endif // __glibcxx_ssize
 _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace
 

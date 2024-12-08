@@ -1,5 +1,5 @@
 /* C++ modules.  Experimental!
-   Copyright (C) 2017-2023 Free Software Foundation, Inc.
+   Copyright (C) 2017-2024 Free Software Foundation, Inc.
    Written by Nathan Sidwell <nathan@acm.org> while at FaceBook
 
    This file is part of GCC.
@@ -27,10 +27,10 @@ along with GCC; see the file COPYING3.  If not see
 #define INCLUDE_STRING
 #define INCLUDE_VECTOR
 #define INCLUDE_MAP
-#define INCLUDE_MEMORY
 #include "system.h"
 
 #include "line-map.h"
+#include "rich-location.h"
 #include "diagnostic-core.h"
 #include "mapper-client.h"
 #include "intl.h"
@@ -267,7 +267,7 @@ module_client::open_module_client (location_t loc, const char *o,
 			  c = new module_client (fd, fd);
 		      }
 		  }
-		
+
 	      }
 	      break;
 	    }
@@ -296,7 +296,7 @@ module_client::open_module_client (location_t loc, const char *o,
 		  line = l;
 		errmsg = "reading";
 	      }
-	      
+
 	    close (fd);
 	  }
 	}

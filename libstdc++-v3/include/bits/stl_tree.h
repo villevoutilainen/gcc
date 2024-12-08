@@ -1,6 +1,6 @@
 // RB tree implementation -*- C++ -*-
 
-// Copyright (C) 2001-2023 Free Software Foundation, Inc.
+// Copyright (C) 2001-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -58,7 +58,9 @@
 #ifndef _STL_TREE_H
 #define _STL_TREE_H 1
 
+#ifdef _GLIBCXX_SYSHDR
 #pragma GCC system_header
+#endif
 
 #include <bits/stl_algobase.h>
 #include <bits/allocator.h>
@@ -71,9 +73,6 @@
 #if __cplusplus > 201402L
 # include <bits/node_handle.h>
 #endif
-
-#define __glibcxx_want_generic_associative_lookup
-#include <bits/version.h>
 
 namespace std _GLIBCXX_VISIBILITY(default)
 {
@@ -1434,7 +1433,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _M_move_assign(_Rb_tree&, false_type);
 #endif
 
-#if __cplusplus > 201402L
+#if __glibcxx_node_extract // >= C++17
     public:
       /// Re-insert an extracted node.
       insert_return_type
@@ -1452,7 +1451,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	      {
 		__ret.position
 		  = _M_insert_node(__res.first, __res.second, __nh._M_ptr);
-		__nh._M_ptr = nullptr;
+		__nh.release();
 		__ret.inserted = true;
 	      }
 	    else
@@ -1480,7 +1479,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	      __ret = _M_insert_node(__res.first, __res.second, __nh._M_ptr);
 	    else
 	      __ret = _M_insert_equal_lower_node(__nh._M_ptr);
-	    __nh._M_ptr = nullptr;
+	    __nh.release();
 	  }
 	return __ret;
       }
@@ -1499,7 +1498,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    if (__res.second)
 	      {
 		__ret = _M_insert_node(__res.first, __res.second, __nh._M_ptr);
-		__nh._M_ptr = nullptr;
+		__nh.release();
 	      }
 	    else
 	      __ret = iterator(__res.first);
@@ -1522,7 +1521,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	      __ret = _M_insert_node(__res.first, __res.second, __nh._M_ptr);
 	    else
 	      __ret = _M_insert_equal_lower_node(__nh._M_ptr);
-	    __nh._M_ptr = nullptr;
+	    __nh.release();
 	  }
 	return __ret;
       }
@@ -1598,7 +1597,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		}
 	    }
 	}
-#endif // C++17
+#endif // C++17 node_extract
 
       friend bool
       operator==(const _Rb_tree& __x, const _Rb_tree& __y)
@@ -2092,7 +2091,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  std::swap(this->_M_impl._M_node_count, __t._M_impl._M_node_count);
 	}
       // No need to swap header's color as it does not change.
-      std::swap(this->_M_impl._M_key_compare, __t._M_impl._M_key_compare);
+
+      using std::swap;
+      swap(this->_M_impl._M_key_compare, __t._M_impl._M_key_compare);
 
       _Alloc_traits::_S_on_swap(_M_get_Node_allocator(),
 				__t._M_get_Node_allocator());

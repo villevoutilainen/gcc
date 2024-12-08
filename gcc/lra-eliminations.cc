@@ -1,5 +1,5 @@
 /* Code for RTL register eliminations.
-   Copyright (C) 2010-2023 Free Software Foundation, Inc.
+   Copyright (C) 2010-2024 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
 This file is part of GCC.
@@ -666,6 +666,10 @@ lra_eliminate_regs_1 (rtx_insn *insn, rtx x, machine_mode mem_mode,
       return x;
 
     case CLOBBER:
+    case ASM_OPERANDS:
+      gcc_assert (insn && DEBUG_INSN_P (insn));
+      break;
+
     case SET:
       gcc_unreachable ();
 
@@ -965,7 +969,8 @@ eliminate_regs_in_insn (rtx_insn *insn, bool replace_p, bool first_p,
 	  if (! replace_p)
 	    {
 	      if (known_eq (update_sp_offset, 0))
-		offset += (ep->offset - ep->previous_offset);
+		offset += (!first_p
+			   ? ep->offset - ep->previous_offset : ep->offset);
 	      if (ep->to_rtx == stack_pointer_rtx)
 		{
 		  if (first_p)
@@ -1208,7 +1213,7 @@ update_reg_eliminate (bitmap insns_with_changed_offsets)
 	      if (lra_dump_file != NULL)
 		fprintf (lra_dump_file, "    Using elimination %d to %d now\n",
 			 ep1->from, ep1->to);
-	      lra_assert (known_eq (ep1->previous_offset, 0));
+	      lra_assert (known_eq (ep1->previous_offset, -1));
 	      ep1->previous_offset = ep->offset;
 	    }
 	  else
@@ -1279,7 +1284,7 @@ init_elim_table (void)
   for (ep = reg_eliminate, ep1 = reg_eliminate_1;
        ep < &reg_eliminate[NUM_ELIMINABLE_REGS]; ep++, ep1++)
     {
-      ep->offset = ep->previous_offset = 0;
+      ep->offset = ep->previous_offset = -1;
       ep->from = ep1->from;
       ep->to = ep1->to;
       value_p = (targetm.can_eliminate (ep->from, ep->to)

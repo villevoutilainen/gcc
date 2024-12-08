@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 2020-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 2020-2024, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -458,7 +458,6 @@ package Gen_IL.Internals is
       E_Generic_Function => 1292, -- (0.000) 41 slots
       E_Enumeration_Type => 1186, -- (0.000) 47 slots
       N_Enumeration_Type_Definition => 1169, -- (0.000) 6 slots
-      N_Unchecked_Expression => 1112, -- (0.000) 7 slots
       N_Op_Or => 1107, -- (0.000) 8 slots
       N_Designator => 1100, -- (0.000) 9 slots
       N_Formal_Discrete_Type_Definition => 1086, -- (0.000) 4 slots

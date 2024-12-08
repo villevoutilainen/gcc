@@ -3,7 +3,7 @@
    building RTL.  These routines are used both during actual parsing
    and during the instantiation of template functions.
 
-   Copyright (C) 1998-2023 Free Software Foundation, Inc.
+   Copyright (C) 1998-2024 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -44,7 +44,6 @@ build_lambda_expr (void)
   LAMBDA_EXPR_THIS_CAPTURE         (lambda) = NULL_TREE;
   LAMBDA_EXPR_REGEN_INFO           (lambda) = NULL_TREE;
   LAMBDA_EXPR_PENDING_PROXIES      (lambda) = NULL;
-  LAMBDA_EXPR_MUTABLE_P            (lambda) = false;
   return lambda;
 }
 
@@ -176,9 +175,7 @@ lambda_function (tree lambda)
   if (CLASSTYPE_TEMPLATE_INSTANTIATION (type)
       && !COMPLETE_OR_OPEN_TYPE_P (type))
     return NULL_TREE;
-  lambda = lookup_member (type, call_op_identifier,
-			  /*protect=*/0, /*want_type=*/false,
-			  tf_warning_or_error);
+  lambda = get_class_binding_direct (type, call_op_identifier);
   if (lambda)
     lambda = STRIP_TEMPLATE (get_first_fn (lambda));
   return lambda;
@@ -219,14 +216,15 @@ lambda_capture_field_type (tree expr, bool explicit_init_p,
   else if (explicit_init_p)
     {
       tree auto_node = make_auto ();
-      
+
       type = auto_node;
       if (by_reference_p)
 	/* Add the reference now, so deduction doesn't lose
 	   outermost CV qualifiers of EXPR.  */
 	type = build_reference_type (type);
       if (uses_parameter_packs (expr))
-	/* Stick with 'auto' even if the type could be deduced.  */;
+	/* Stick with 'auto' even if the type could be deduced.  */
+	TEMPLATE_TYPE_PARAMETER_PACK (auto_node) = true;
       else
 	type = do_auto_deduction (type, expr, auto_node);
     }
@@ -405,14 +403,20 @@ build_capture_proxy (tree member, tree init)
   fn = lambda_function (closure);
   lam = CLASSTYPE_LAMBDA_EXPR (closure);
 
+  object = DECL_ARGUMENTS (fn);
   /* The proxy variable forwards to the capture field.  */
-  object = build_fold_indirect_ref (DECL_ARGUMENTS (fn));
+  if (INDIRECT_TYPE_P (TREE_TYPE (object)))
+    object = build_fold_indirect_ref (object);
   object = finish_non_static_data_member (member, object, NULL_TREE);
   if (REFERENCE_REF_P (object))
     object = TREE_OPERAND (object, 0);
 
   /* Remove the __ inserted by add_capture.  */
-  name = get_identifier (IDENTIFIER_POINTER (DECL_NAME (member)) + 2);
+  if (IDENTIFIER_POINTER (DECL_NAME (member))[2] == '_'
+      && IDENTIFIER_POINTER (DECL_NAME (member))[3] == '.')
+    name = get_identifier ("_");
+  else
+    name = get_identifier (IDENTIFIER_POINTER (DECL_NAME (member)) + 2);
 
   type = lambda_proxy_type (object);
 
@@ -516,7 +520,7 @@ vla_capture_type (tree array_type)
 
 tree
 add_capture (tree lambda, tree id, tree orig_init, bool by_reference_p,
-	     bool explicit_init_p)
+	     bool explicit_init_p, unsigned *name_independent_cnt)
 {
   char *buf;
   tree type, member, name;
@@ -552,12 +556,14 @@ add_capture (tree lambda, tree id, tree orig_init, bool by_reference_p,
 				     integer_zero_node, tf_warning_or_error);
       initializer = build_constructor_va (init_list_type_node, 2,
 					  NULL_TREE, build_address (elt),
-					  NULL_TREE, array_type_nelts (type));
+					  NULL_TREE,
+					  array_type_nelts_minus_one (type));
       type = vla_capture_type (type);
     }
   else if (!dependent_type_p (type)
 	   && variably_modified_type_p (type, NULL_TREE))
     {
+      auto_diagnostic_group d;
       sorry ("capture of variably-modified type %qT that is not an N3639 array "
 	     "of runtime bound", type);
       if (TREE_CODE (type) == ARRAY_TYPE
@@ -596,6 +602,7 @@ add_capture (tree lambda, tree id, tree orig_init, bool by_reference_p,
 	  type = complete_type (type);
 	  if (!COMPLETE_TYPE_P (type))
 	    {
+	      auto_diagnostic_group d;
 	      error ("capture by copy of incomplete type %qT", type);
 	      cxx_incomplete_type_inform (type);
 	      return error_mark_node;
@@ -604,17 +611,44 @@ add_capture (tree lambda, tree id, tree orig_init, bool by_reference_p,
 					 TCTX_CAPTURE_BY_COPY, type))
 	    return error_mark_node;
 	}
+
+      if (cxx_dialect < cxx20)
+	{
+	  auto_diagnostic_group d;
+	  tree stripped_init = tree_strip_any_location_wrapper (initializer);
+	  if (DECL_DECOMPOSITION_P (stripped_init)
+	      && pedwarn (input_location, OPT_Wc__20_extensions,
+			  "captured structured bindings are a C++20 extension"))
+	    inform (DECL_SOURCE_LOCATION (stripped_init), "declared here");
+	}
     }
 
   /* Add __ to the beginning of the field name so that user code
      won't find the field with name lookup.  We can't just leave the name
      unset because template instantiation uses the name to find
      instantiated fields.  */
-  buf = (char *) alloca (IDENTIFIER_LENGTH (id) + 3);
-  buf[1] = buf[0] = '_';
-  memcpy (buf + 2, IDENTIFIER_POINTER (id),
-	  IDENTIFIER_LENGTH (id) + 1);
-  name = get_identifier (buf);
+  if (id_equal (id, "_") && name_independent_cnt)
+    {
+      if (*name_independent_cnt == 0)
+	name = get_identifier ("___");
+      else
+	{
+	  /* For 2nd and later name-independent capture use
+	     unique names.  */
+	  char buf2[5 + (HOST_BITS_PER_INT + 2) / 3];
+	  sprintf (buf2, "___.%u", *name_independent_cnt);
+	  name = get_identifier (buf2);
+	}
+      name_independent_cnt[0]++;
+    }
+  else
+    {
+      buf = XALLOCAVEC (char, IDENTIFIER_LENGTH (id) + 3);
+      buf[1] = buf[0] = '_';
+      memcpy (buf + 2, IDENTIFIER_POINTER (id),
+	      IDENTIFIER_LENGTH (id) + 1);
+      name = get_identifier (buf);
+    }
 
   if (variadic)
     {
@@ -718,7 +752,7 @@ add_default_capture (tree lambda_stack, tree id, tree initializer)
 			    (this_capture_p
 			     || (LAMBDA_EXPR_DEFAULT_CAPTURE_MODE (lambda)
 				 == CPLD_REFERENCE)),
-			    /*explicit_init_p=*/false);
+			    /*explicit_init_p=*/false, NULL);
       initializer = convert_from_reference (var);
 
       /* Warn about deprecated implicit capture of this via [=].  */
@@ -726,6 +760,7 @@ add_default_capture (tree lambda_stack, tree id, tree initializer)
 	  && this_capture_p
 	  && LAMBDA_EXPR_DEFAULT_CAPTURE_MODE (lambda) == CPLD_COPY)
 	{
+	  auto_diagnostic_group d;
 	  if (warning_at (LAMBDA_EXPR_LOCATION (lambda), OPT_Wdeprecated,
 			  "implicit capture of %qE via %<[=]%> is deprecated "
 			  "in C++20", this_identifier))
@@ -814,8 +849,9 @@ lambda_expr_this_capture (tree lambda, int add_capture_p)
 
 	  if (!LAMBDA_FUNCTION_P (containing_function))
 	    {
-	      /* We found a non-lambda function.  */
-	      if (DECL_NONSTATIC_MEMBER_FUNCTION_P (containing_function))
+	      /* We found a non-lambda function.
+		 There is no this pointer in xobj member functions.  */
+	      if (DECL_IOBJ_MEMBER_FUNCTION_P (containing_function))
 		/* First parameter is 'this'.  */
 		init = DECL_ARGUMENTS (containing_function);
 	      break;
@@ -949,7 +985,7 @@ maybe_generic_this_capture (tree object, tree fns)
 	for (lkp_iterator iter (fns); iter; ++iter)
 	  if (((!id_expr && TREE_CODE (*iter) != USING_DECL)
 	       || TREE_CODE (*iter) == TEMPLATE_DECL)
-	      && DECL_NONSTATIC_MEMBER_FUNCTION_P (*iter))
+	      && DECL_IOBJ_MEMBER_FUNCTION_P (*iter))
 	    {
 	      /* Found a non-static member.  Capture this.  */
 	      lambda_expr_this_capture (lam, /*maybe*/-1);
@@ -992,7 +1028,7 @@ nonlambda_method_basetype (void)
 
       tree fn = TYPE_CONTEXT (type);
       if (!fn || TREE_CODE (fn) != FUNCTION_DECL
-	  || !DECL_NONSTATIC_MEMBER_FUNCTION_P (fn))
+	  || !DECL_IOBJ_MEMBER_FUNCTION_P (fn))
 	/* No enclosing non-lambda method.  */
 	return NULL_TREE;
       if (!LAMBDA_FUNCTION_P (fn))
@@ -1527,7 +1563,7 @@ compare_lambda_template_head (tree tmpl_a, tree tmpl_b)
   // synthetic ones.
   int len_a = TREE_VEC_LENGTH (inner_a);
   int len_b = TREE_VEC_LENGTH (inner_b);
-  
+
   for (int ix = 0, len = MAX (len_a, len_b); ix != len; ix++)
     {
       tree parm_a = NULL_TREE;
@@ -1542,7 +1578,7 @@ compare_lambda_template_head (tree tmpl_a, tree tmpl_b)
 	  if (DECL_VIRTUAL_P (parm_a))
 	    parm_a = NULL_TREE;
 	}
-      
+
       tree parm_b = NULL_TREE;
       if (ix < len_b)
 	{
@@ -1575,7 +1611,7 @@ compare_lambda_template_head (tree tmpl_a, tree tmpl_b)
 	  if (!same_type_p (TREE_TYPE (parm_a), TREE_TYPE (parm_b)))
 	    return false;
 	}
-      else 
+      else
 	{
 	  if (TEMPLATE_TYPE_PARAMETER_PACK (TREE_TYPE (parm_a))
 	      != TEMPLATE_TYPE_PARAMETER_PACK (TREE_TYPE (parm_b)))
@@ -1619,7 +1655,7 @@ compare_lambda_sig (tree fn_a, tree fn_b)
     {
       if (!args_a || !args_b)
 	return false;
-      // This check also deals with differing varadicness
+      // This check also deals with differing variadicness
       if (!same_type_p (TREE_VALUE (args_a), TREE_VALUE (args_b)))
 	return false;
     }

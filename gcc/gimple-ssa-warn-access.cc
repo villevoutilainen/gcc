@@ -1,7 +1,7 @@
 /* Pass to detect and issue warnings for invalid accesses, including
    invalid or mismatched allocation/deallocation calls.
 
-   Copyright (C) 2020-2023 Free Software Foundation, Inc.
+   Copyright (C) 2020-2024 Free Software Foundation, Inc.
    Contributed by Martin Sebor <msebor@redhat.com>.
 
    This file is part of GCC.
@@ -55,6 +55,8 @@
 #include "demangle.h"
 #include "attr-fnspec.h"
 #include "pointer-query.h"
+#include "pretty-print-markup.h"
+#include "gcc-urlifier.h"
 
 /* Return true if tree node X has an associated location.  */
 
@@ -330,9 +332,9 @@ check_nul_terminated_array (GimpleOrTree expr, tree src, tree bound)
   wide_int bndrng[2];
   if (bound)
     {
-      Value_Range r (TREE_TYPE (bound));
+      int_range_max r (TREE_TYPE (bound));
 
-      get_global_range_query ()->range_of_expr (r, bound);
+      get_range_query (cfun)->range_of_expr (r, bound);
 
       if (r.undefined_p () || r.varying_p ())
 	return true;
@@ -606,7 +608,8 @@ maybe_warn_nonstring_arg (tree fndecl, GimpleOrTree exp)
 	{
 	  if (tree arrbnd = TYPE_DOMAIN (type))
 	    {
-	      if ((arrbnd = TYPE_MAX_VALUE (arrbnd)))
+	      if ((arrbnd = TYPE_MAX_VALUE (arrbnd))
+		  && TREE_CODE (arrbnd) == INTEGER_CST)
 		{
 		  asize = wi::to_offset (arrbnd) + 1;
 		  known_size = true;
@@ -1574,6 +1577,7 @@ fndecl_alloc_p (tree fndecl, bool all_alloc)
 	case BUILT_IN_ALIGNED_ALLOC:
 	case BUILT_IN_CALLOC:
 	case BUILT_IN_GOMP_ALLOC:
+	case BUILT_IN_GOMP_REALLOC:
 	case BUILT_IN_MALLOC:
 	case BUILT_IN_REALLOC:
 	case BUILT_IN_STRDUP:
@@ -1700,6 +1704,7 @@ new_delete_mismatch_p (const demangle_component &newc,
 
     case DEMANGLE_COMPONENT_FUNCTION_PARAM:
     case DEMANGLE_COMPONENT_TEMPLATE_PARAM:
+    case DEMANGLE_COMPONENT_UNNAMED_TYPE:
       return newc.u.s_number.number != delc.u.s_number.number;
 
     case DEMANGLE_COMPONENT_CHARACTER:
@@ -1760,7 +1765,7 @@ new_delete_mismatch_p (tree new_decl, tree delete_decl)
   void *np = NULL, *dp = NULL;
   demangle_component *ndc = cplus_demangle_v3_components (new_str, 0, &np);
   demangle_component *ddc = cplus_demangle_v3_components (del_str, 0, &dp);
-  bool mismatch = new_delete_mismatch_p (*ndc, *ddc);
+  bool mismatch = ndc && ddc && new_delete_mismatch_p (*ndc, *ddc);
   free (np);
   free (dp);
   return mismatch;
@@ -1801,9 +1806,20 @@ matching_alloc_calls_p (tree alloc_decl, tree dealloc_decl)
 	case BUILT_IN_ALLOCA_WITH_ALIGN:
 	  return false;
 
+	case BUILT_IN_GOMP_ALLOC:
+	case BUILT_IN_GOMP_REALLOC:
+	  if (DECL_IS_OPERATOR_DELETE_P (dealloc_decl))
+	    return false;
+
+	  if (fndecl_built_in_p (dealloc_decl, BUILT_IN_GOMP_FREE,
+					       BUILT_IN_GOMP_REALLOC))
+	    return true;
+
+	  alloc_dealloc_kind = alloc_kind_t::builtin;
+	  break;
+
 	case BUILT_IN_ALIGNED_ALLOC:
 	case BUILT_IN_CALLOC:
-	case BUILT_IN_GOMP_ALLOC:
 	case BUILT_IN_MALLOC:
 	case BUILT_IN_REALLOC:
 	case BUILT_IN_STRDUP:
@@ -1829,7 +1845,8 @@ matching_alloc_calls_p (tree alloc_decl, tree dealloc_decl)
   if (fndecl_built_in_p (dealloc_decl, BUILT_IN_NORMAL))
     {
       built_in_function dealloc_code = DECL_FUNCTION_CODE (dealloc_decl);
-      if (dealloc_code == BUILT_IN_REALLOC)
+      if (dealloc_code == BUILT_IN_REALLOC
+	  || dealloc_code == BUILT_IN_GOMP_REALLOC)
 	realloc_kind = alloc_kind_t::builtin;
 
       for (tree amats = DECL_ATTRIBUTES (alloc_decl);
@@ -1882,6 +1899,7 @@ matching_alloc_calls_p (tree alloc_decl, tree dealloc_decl)
 	    case BUILT_IN_ALIGNED_ALLOC:
 	    case BUILT_IN_CALLOC:
 	    case BUILT_IN_GOMP_ALLOC:
+	    case BUILT_IN_GOMP_REALLOC:
 	    case BUILT_IN_MALLOC:
 	    case BUILT_IN_REALLOC:
 	    case BUILT_IN_STRDUP:
@@ -2801,7 +2819,7 @@ memmodel_to_uhwi (tree ord, gimple *stmt, unsigned HOST_WIDE_INT *cstval)
     {
       /* Use the range query to determine constant values in the absence
 	 of constant propagation (such as at -O0).  */
-      Value_Range rng (TREE_TYPE (ord));
+      int_range_max rng (TREE_TYPE (ord));
       if (!get_range_query (cfun)->range_of_expr (rng, ord, stmt)
 	  || !rng.singleton_p (&ord))
 	return false;
@@ -2927,15 +2945,14 @@ pass_waccess::maybe_warn_memmodel (gimple *stmt, tree ord_sucs,
 	return false;
 
       /* Print a note with the valid memory models.  */
-      pretty_printer pp;
-      pp_show_color (&pp) = pp_show_color (global_dc->printer);
+      auto_vec<const char *> strings;
       for (unsigned i = 0; valid[i] != UCHAR_MAX; ++i)
 	{
 	  const char *modname = memory_models[valid[i]].modname;
-	  pp_printf (&pp, "%s%qs", i ? ", " : "", modname);
+	  strings.safe_push (modname);
 	}
-
-      inform (loc, "valid models are %s", pp_formatted_text (&pp));
+      pp_markup::comma_separated_quoted_strings e (strings);
+      inform (loc, "valid models are %e", &e);
       return true;
     }
 
@@ -2977,19 +2994,16 @@ pass_waccess::maybe_warn_memmodel (gimple *stmt, tree ord_sucs,
 
 	/* Print a note with the valid failure memory models which are
 	   those with a value less than or equal to the success mode.  */
-	char buf[120];
-	*buf = '\0';
+	auto_vec<const char *> strings;
 	for (unsigned i = 0;
 	     memory_models[i].modval <= memmodel_base (sucs); ++i)
 	  {
-	    if (*buf)
-	      strcat (buf, ", ");
-
 	    const char *modname = memory_models[valid[i]].modname;
-	    sprintf (buf + strlen (buf), "'%s'", modname);
+	    strings.safe_push (modname);
 	  }
+	pp_markup::comma_separated_quoted_strings e (strings);
 
-	inform (loc, "valid models are %s", buf);
+	inform (loc, "valid models are %e", &e);
 	return true;
       }
 
@@ -3272,7 +3286,7 @@ pass_waccess::check_builtin (gcall *stmt)
 	check_memop_access (stmt, dst, NULL_TREE, len);
 	return true;
       }
-	
+
     default:
       if (check_atomic_builtin (stmt))
 	return true;
@@ -3392,6 +3406,15 @@ pass_waccess::maybe_check_access_sizes (rdwr_map *rwm, tree fndecl, tree fntype,
       else
 	access_nelts = rwm->get (sizidx)->size;
 
+      /* If access_nelts is e.g. a PARM_DECL with larger precision than
+	 sizetype, such as __int128 or _BitInt(34123) parameters,
+	 cast it to sizetype.  */
+      if (access_nelts
+	  && INTEGRAL_TYPE_P (TREE_TYPE (access_nelts))
+	  && (TYPE_PRECISION (TREE_TYPE (access_nelts))
+	      > TYPE_PRECISION (sizetype)))
+	access_nelts = fold_convert (sizetype, access_nelts);
+
       /* Format the value or range to avoid an explosion of messages.  */
       char sizstr[80];
       tree sizrng[2] = { size_zero_node, build_all_ones_cst (sizetype) };
@@ -3477,41 +3500,18 @@ pass_waccess::maybe_check_access_sizes (rdwr_map *rwm, tree fndecl, tree fntype,
 
       if (integer_zerop (ptr))
 	{
-	  if (sizidx >= 0 && tree_int_cst_sgn (sizrng[0]) > 0)
+	  if (!access.second.internal_p
+	      && sizidx >= 0 && tree_int_cst_sgn (sizrng[0]) > 0)
 	    {
 	      /* Warn about null pointers with positive sizes.  This is
 		 different from also declaring the pointer argument with
 		 attribute nonnull when the function accepts null pointers
 		 only when the corresponding size is zero.  */
-	      if (access.second.internal_p)
-		{
-		  const std::string argtypestr
-		    = access.second.array_as_string (ptrtype);
-
-		  if (warning_at (loc, OPT_Wnonnull,
-				  "argument %i of variable length "
-				  "array %s is null but "
-				  "the corresponding bound argument "
-				  "%i value is %s",
-				  ptridx + 1, argtypestr.c_str (),
-				  sizidx + 1, sizstr))
-		    arg_warned = OPT_Wnonnull;
-		}
-	      else if (warning_at (loc, OPT_Wnonnull,
+	      if (warning_at (loc, OPT_Wnonnull,
 				   "argument %i is null but "
 				   "the corresponding size argument "
 				   "%i value is %s",
 				   ptridx + 1, sizidx + 1, sizstr))
-		arg_warned = OPT_Wnonnull;
-	    }
-	  else if (access_size && access.second.static_p)
-	    {
-	      /* Warn about null pointers for [static N] array arguments
-		 but do not warn for ordinary (i.e., nonstatic) arrays.  */
-	      if (warning_at (loc, OPT_Wnonnull,
-			      "argument %i to %<%T[static %E]%> "
-			      "is null where non-null expected",
-			      ptridx + 1, argtype, access_nelts))
 		arg_warned = OPT_Wnonnull;
 	    }
 
@@ -4212,7 +4212,7 @@ pass_waccess::check_pointer_uses (gimple *stmt, tree ptr,
 		 where the realloc call is known to have failed are valid.
 		 Ignore pointers that nothing is known about.  Those could
 		 have escaped along with their nullness.  */
-	      value_range vr;
+	      prange vr;
 	      if (m_ptr_qry.rvals->range_of_expr (vr, realloc_lhs, use_stmt))
 		{
 		  if (vr.zero_p ())
@@ -4373,7 +4373,7 @@ void
 pass_waccess::check_stmt (gimple *stmt)
 {
   if (m_check_dangling_p
-      && gimple_clobber_p (stmt, CLOBBER_EOL))
+      && gimple_clobber_p (stmt, CLOBBER_STORAGE_END))
     {
       /* Ignore clobber statements in blocks with exceptional edges.  */
       basic_block bb = gimple_bb (stmt);
@@ -4749,6 +4749,8 @@ pass_waccess::check_call_dangling (gcall *call)
 unsigned
 pass_waccess::execute (function *fun)
 {
+  auto_urlify_attributes sentinel;
+
   calculate_dominance_info (CDI_DOMINATORS);
   calculate_dominance_info (CDI_POST_DOMINATORS);
 

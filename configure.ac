@@ -133,7 +133,7 @@ build_tools="build-texinfo build-flex build-bison build-m4 build-fixincludes"
 
 # these libraries are used by various programs built for the host environment
 #f
-host_libs="intl libiberty opcodes bfd readline tcl tk itcl libgui zlib libbacktrace libcpp libcody libdecnumber gmp mpfr mpc isl libiconv libctf libsframe"
+host_libs="gettext libiberty opcodes bfd readline tcl tk itcl libgui zlib libbacktrace libcpp libcody libdecnumber gmp mpfr mpc isl libiconv libctf libsframe libgrust "
 
 # these tools are built for the host environment
 # Note, the powerpc-eabi build depends on sim occurring before gdb in order to
@@ -164,6 +164,7 @@ target_libraries="target-libgcc \
 		target-libada \
 		target-libgm2 \
 		target-libgo \
+		target-libgrust \
 		target-libphobos \
 		target-zlib"
 
@@ -363,7 +364,7 @@ case "${ENABLE_GOLD}" in
       # Check for target supported by gold.
       case "${target}" in
         i?86-*-* | x86_64-*-* | sparc*-*-* | powerpc*-*-* | arm*-*-* \
-        | aarch64*-*-* | tilegx*-*-* | mips*-*-* | s390*-*-* | loongarch*-*-*)
+        | aarch64*-*-* | tilegx*-*-* | mips*-*-* | s390*-*-*)
 	  configdirs="$configdirs gold"
 	  if test x${ENABLE_GOLD} = xdefault; then
 	    default_ld=gold
@@ -406,13 +407,14 @@ case "${ENABLE_LD}" in
 esac
 
 AC_ARG_ENABLE(gprofng,
-[AS_HELP_STRING([[--enable-gprofng[=ARG]]],
-		[build gprofng @<:@ARG={yes,no}@:>@])],
+[AS_HELP_STRING([[--disable-gprofng]], [do not build gprofng])],
 enable_gprofng=$enableval,
 enable_gprofng=yes)
 if test "$enable_gprofng" = "yes"; then
   case "${target}" in
-    x86_64-*-linux* | i?86-*-linux* | aarch64-*-linux*)
+    *-musl*)
+      ;;
+    x86_64-*-linux* | i?86-*-linux* | aarch64-*-linux* | riscv64-*-linux*)
     configdirs="$configdirs gprofng"
     ;;
   esac
@@ -891,6 +893,15 @@ case "${target}" in
   cris-*-* | crisv32-*-*)
     libgloss_dir=cris
     ;;
+  kvx-*-elf)
+    libgloss_dir=kvx-elf
+    ;;
+  kvx-*-mbr)
+    libgloss_dir=kvx-mbr
+    ;;
+  kvx-*-cos)
+    libgloss_dir=kvx-cos
+    ;;
   hppa*-*-*)
     libgloss_dir=pa
     ;;
@@ -990,6 +1001,13 @@ case "${target}" in
     ;;
 esac
 
+# The ARM simulator has been deprecated for all ARM targets.
+case "${target}" in
+  arm*-*-*)
+    noconfigdirs="$noconfigdirs sim"
+    ;;
+esac
+
 case "${target}" in
   *-*-chorusos)
     ;;
@@ -1001,7 +1019,7 @@ case "${target}" in
     ;;
   arm-*-darwin*)
     noconfigdirs="$noconfigdirs ld gas gdb gprof"
-    noconfigdirs="$noconfigdirs sim target-rda"
+    noconfigdirs="$noconfigdirs target-rda"
     ;;
   powerpc-*-darwin*)
     noconfigdirs="$noconfigdirs ld gas gdb gprof"
@@ -1184,6 +1202,9 @@ case "${target}" in
     ;;
   i[[3456789]]86-*-rdos*)
     noconfigdirs="$noconfigdirs gdb"
+    ;;
+  kvx-*-*)
+    noconfigdirs="$noconfigdirs gdb gdbserver sim"
     ;;
   mmix-*-*)
     noconfigdirs="$noconfigdirs gdb"
@@ -1410,6 +1431,7 @@ fi
 
 ACX_PROG_GNAT
 ACX_PROG_GDC
+ACX_PROG_CARGO
 ACX_PROG_CMP_IGNORE_INITIAL
 
 AC_ARG_ENABLE([bootstrap],
@@ -1455,16 +1477,16 @@ case "$have_compiler:$host:$target:$enable_bootstrap" in
     ;;
 esac
 
-# When bootstrapping with GCC, build stage 1 in C++11 mode to ensure that a
-# C++11 compiler can still start the bootstrap.  Otherwise, if building GCC,
-# require C++11 (or higher).
+# When bootstrapping with GCC, build stage 1 in C++14 mode to ensure that a
+# C++14 compiler can still start the bootstrap.  Otherwise, if building GCC,
+# require C++14 (or higher).
 if test "$enable_bootstrap:$GXX" = "yes:yes"; then
-  CXX="$CXX -std=c++11"
+  CXX="$CXX -std=c++14"
 elif test "$have_compiler" = yes; then
-  AX_CXX_COMPILE_STDCXX(11)
+  AX_CXX_COMPILE_STDCXX(14)
 
   if test "${build}" != "${host}"; then
-    AX_CXX_COMPILE_STDCXX(11, [], [], [_FOR_BUILD])
+    AX_CXX_COMPILE_STDCXX(14, [], [], [_FOR_BUILD])
   fi
 fi
 
@@ -1855,6 +1877,20 @@ AC_ARG_WITH(boot-ldflags,
  if test "$poststage1_libs" = ""; then
    poststage1_ldflags="-static-libstdc++ -static-libgcc"
  fi])
+case $target in
+  *-darwin2* | *-darwin1[[56789]]*)
+    # For these versions, we default to using embedded rpaths.
+    if test "x$enable_darwin_at_rpath" != "xno"; then
+      poststage1_ldflags="$poststage1_ldflags -nodefaultrpaths"
+    fi
+  ;;
+  *-darwin*)
+    # For these versions, we only use embedded rpaths on demand.
+    if test "x$enable_darwin_at_rpath" = "xyes"; then
+      poststage1_ldflags="$poststage1_ldflags -nodefaultrpaths"
+    fi
+  ;;
+esac
 AC_SUBST(poststage1_ldflags)
 
 # GCC GRAPHITE dependency isl.
@@ -2021,6 +2057,64 @@ fi
 
 AC_SUBST(PICFLAG)
 
+
+# Check for libgdiagnostics support.
+AC_MSG_CHECKING([whether to enable libgdiagnostics])
+AC_ARG_ENABLE(libgdiagnostics,
+[AS_HELP_STRING([--enable-libgdiagnostics],
+		[build libgdiagnostics shared library])],
+enable_libgdiagnostics=$enableval,
+enable_libgdiagnostics=no)
+
+if test x$enable_libgdiagnostics = xyes; then
+  # Disable libgdiagnostics if -enable-host-shared not specified
+  # but not if building for Mingw. All code in Windows
+  # is position independent code (PIC).
+  case $target in
+     *mingw*) ;;
+     *)
+       if test x$host_shared != xyes; then
+	 AC_MSG_ERROR([
+Enabling libgdiagnostics requires --enable-host-shared.
+
+--enable-host-shared typically slows the rest of the compiler down by
+a few %, so you must explicitly enable it.
+
+If you want to build both libgdiagnostics and the regular compiler, it is often
+best to do this via two separate configure/builds, in separate
+directories, to avoid imposing the performance cost of
+--enable-host-shared on the regular compiler.])
+       fi
+       ;;
+   esac
+fi
+AC_MSG_RESULT($enable_libgdiagnostics)
+AC_SUBST(enable_libgdiagnostics)
+
+
+# Rust requires -ldl and -lpthread if you are using an old glibc that does not include them by
+# default, so we check for them here
+# We are doing the test here and not in the gcc/configure to be able to nicely disable the
+# build of the Rust frontend in case a dep is missing.
+missing_rust_dynlibs=none
+
+save_LIBS="$LIBS"
+LIBS=
+AC_SEARCH_LIBS([dlopen], [dl])
+AC_SEARCH_LIBS([pthread_create], [pthread])
+CRAB1_LIBS="$LIBS"
+LIBS="$save_LIBS"
+
+if test "$ac_cv_search_dlopen" = no; then
+    missing_rust_dynlibs="libdl"
+fi
+
+if test "$ac_cv_search_pthread_create" = no; then
+    missing_rust_dynlibs="$missing_rust_dynlibs, libpthread"
+fi
+
+AC_SUBST(CRAB1_LIBS, "$CRAB1_LIBS")
+
 # If we are building PIC/PIE host executables, and we are building dependent
 # libs (e.g. GMP) in-tree those libs need to be configured to generate PIC
 # code.
@@ -2097,7 +2191,7 @@ if test -d ${srcdir}/gcc; then
         lang_requires_boot_languages=
         # set srcdir during sourcing lang_frag to the gcc dir.
         # Sadly overriding srcdir on the . line doesn't work in plain sh as it
-        # polutes this shell
+        # pollutes this shell
         saved_srcdir=${srcdir}
         srcdir=${srcdir}/gcc . ${lang_frag}
         srcdir=${saved_srcdir}
@@ -2258,6 +2352,25 @@ if test -d ${srcdir}/gcc; then
             ;;
         esac
 
+        # Disable Rust if we are missing some required C libraries for the Rust runtime.
+        case ${add_this_lang}:${language}:${missing_rust_dynlibs} in
+          *:rust:none)
+            # Nothing to do - we're not missing any C libraries
+            ;;
+          yes:rust:*)
+            AC_MSG_ERROR([some C libraries are required to build $language: $missing_rust_dynlibs])
+            add_this_lang=unsupported
+            ;;
+          all:rust:*)
+            AC_MSG_WARN([some C libraries are required to build $language: $missing_rust_dynlibs])
+            add_this_lang=unsupported
+            ;;
+          *:rust:*)
+            # Silently disable.
+            add_this_lang=unsupported
+            ;;
+        esac
+
         # Disable jit if -enable-host-shared not specified
         # but not if building for Mingw. All code in Windows
         # is position independent code (PIC).
@@ -2289,6 +2402,35 @@ directories, to avoid imposing the performance cost of
 	        esac
           ;;
         esac
+
+        # Pre-conditions to consider whether cargo being supported.
+        if test x"$have_cargo" = xyes \
+          && test x"$build" != x"$host"; then
+          # Until <https://github.com/Rust-GCC/gccrs/issues/2898>
+          # "'cargo' should build for the host system" is resolved:
+          AC_MSG_WARN([use of cargo not yet supported here in Canadian cross configurations])
+          have_cargo=no
+        else
+          # Assume that cargo-produced object files are compatible with what
+          # we're going to build here.
+          :
+        fi
+        # Disable Rust if cargo is unavailable.
+        case ${add_this_lang}:${language}:${have_cargo} in
+          yes:rust:no)
+            # Specifically requested language; tell them.
+            AC_MSG_ERROR([cargo is required to build $language])
+            ;;
+          all:rust:no)
+            AC_MSG_WARN([cargo is required to build $language])
+            add_this_lang=unsupported
+            ;;
+          *:rust:no)
+            # Silently disable.
+            add_this_lang=unsupported
+            ;;
+        esac
+
 
         # Disable a language that is unsupported by the target.
 	case "${add_this_lang}: $unsupported_languages " in
@@ -2454,6 +2596,17 @@ case ,${enable_languages}, in
     ;;
   *)
     noconfigdirs="$noconfigdirs target-libitm target-libsanitizer target-libvtv"
+    ;;
+esac
+
+case ,${enable_languages}, in
+  *,rust,*)
+    case " ${noconfigdirs} " in
+      *\ target-libstdc++-v3\ *)
+        # Disable target libgrust if we're not building target libstdc++.
+        noconfigdirs="$noconfigdirs target-libgrust"
+        ;;
+    esac
     ;;
 esac
 
@@ -2825,9 +2978,6 @@ case "${target}" in
   mips*-*-*linux* | mips*-*-gnu*)
     target_makefile_frag="config/mt-mips-gnu"
     ;;
-  nios2-*-elf*)
-    target_makefile_frag="config/mt-nios2-elf"
-    ;;
   *-*-linux-android*)
     target_makefile_frag="config/mt-android"
     ;;
@@ -3094,6 +3244,15 @@ case "$enable_bootstrap:$ENABLE_GOLD: $configdirs :,$stage1_languages," in
     ;;
 esac
 
+# Bootstrapping GCC requires libstdc++-v3 so error out if libstdc++ is disabled with bootstrapping
+# Note C++ is always enabled for stage1 now.
+case "$enable_bootstrap:${noconfigdirs}" in
+  yes:*target-libstdc++-v3*)
+    AC_MSG_ERROR([bootstrapping with --disable-libstdcxx is not supported])
+    ;;
+esac
+
+
 extrasub_build=
 for module in ${build_configdirs} ; do
   if test -z "${no_recursion}" \
@@ -3225,7 +3384,8 @@ AC_SUBST_FILE(serialization_dependencies)
 # files altogether, and which should be passed on to subconfigures.
 # Also strip program-prefix, program-suffix, and program-transform-name,
 # so that we can pass down a consistent program-transform-name.
-baseargs=
+hbaseargs=
+bbaseargs=
 tbaseargs=
 keep_next=no
 skip_next=no
@@ -3241,7 +3401,8 @@ do
       *\'*)
 	ac_arg=`echo "$ac_arg" | sed "s/'/'\\\\\\\\''/g"` ;;
     esac
-    baseargs="$baseargs '$ac_arg'"
+    hbaseargs="$hbaseargs '$ac_arg'"
+    bbaseargs="$bbaseargs '$ac_arg'"
     tbaseargs="$tbaseargs '$ac_arg'"
     keep_next=no
     continue
@@ -3265,6 +3426,7 @@ do
   esac
 
   skip_targ=no
+  skip_barg=no
   case $ac_arg in
 changequote(,)
   --with-* | --without-*)
@@ -3276,6 +3438,12 @@ changequote(,)
       ;;
     *[-_]lib)
       lib=`echo "$libopt" | sed 's,[-_]lib$,,'`
+      ;;
+    *[-_]prefix)
+      lib=`echo "$libopt" | sed 's,[-_]prefix$,,'`
+      ;;
+    *[-_]type)
+      lib=`echo "$libopt" | sed 's,[-_]type$,,'`
       ;;
     *)
       lib=$libopt
@@ -3293,6 +3461,11 @@ changequote([,])
         skip_targ=yes
       fi
       ;;
+    libintl | libiconv)
+      # We don't want libintl (and co.) in anything but the host arguments.
+      skip_targ=yes
+      skip_barg=yes
+      ;;
     esac
     ;;
   esac
@@ -3301,7 +3474,8 @@ changequote([,])
     --cache-file=/dev/null | \
     -cache-file=/dev/null )
       # Handled here to avoid the test to skip args below.
-      baseargs="$baseargs '$ac_arg'"
+      hbaseargs="$hbaseargs '$ac_arg'"
+      bbaseargs="$bbaseargs '$ac_arg'"
       tbaseargs="$tbaseargs '$ac_arg'"
       # Assert: $separate_arg should always be no.
       keep_next=$separate_arg
@@ -3332,7 +3506,10 @@ changequote([,])
 	*\'*)
 	  ac_arg=`echo "$ac_arg" | sed "s/'/'\\\\\\\\''/g"` ;;
       esac
-      baseargs="$baseargs '$ac_arg'"
+      hbaseargs="$hbaseargs '$ac_arg'"
+      if test X"$skip_barg" = Xno; then
+	bbaseargs="$bbaseargs '$ac_arg'"
+      fi
       if test X"$skip_targ" = Xno; then
         tbaseargs="$tbaseargs '$ac_arg'"
       fi
@@ -3347,7 +3524,8 @@ changequote([,])
 done
 # Remove the initial space we just introduced and, as these will be
 # expanded by make, quote '$'.
-baseargs=`echo "x$baseargs" | sed -e 's/^x *//' -e 's,\\$,$$,g'`
+hbaseargs=`echo "x$hbaseargs" | sed -e 's/^x *//' -e 's,\\$,$$,g'`
+bbaseargs=`echo "x$bbaseargs" | sed -e 's/^x *//' -e 's,\\$,$$,g'`
 
 # Add in --program-transform-name, after --program-prefix and
 # --program-suffix have been applied to it.  Autoconf has already
@@ -3361,18 +3539,22 @@ ${program_transform_name}
 EOF_SED
 gcc_transform_name=`cat conftestsed.out`
 rm -f conftestsed.out
-baseargs="$baseargs --program-transform-name='${gcc_transform_name}'"
+hbaseargs="$hbaseargs --program-transform-name='${gcc_transform_name}'"
+bbaseargs="$bbaseargs --program-transform-name='${gcc_transform_name}'"
 tbaseargs="$tbaseargs --program-transform-name='${gcc_transform_name}'"
 if test "$silent" = yes; then
-  baseargs="$baseargs --silent"
+  bbaseargs="$bbaseargs --silent"
+  hbaseargs="$hbaseargs --silent"
   tbaseargs="$tbaseargs --silent"
 fi
 
-baseargs="$baseargs --disable-option-checking"
+bbaseargs="$bbaseargs --disable-option-checking"
+hbaseargs="$hbaseargs --disable-option-checking"
 tbaseargs="$tbaseargs --disable-option-checking"
 
 if test "$enable_year2038" = no; then
-  baseargs="$baseargs --disable-year2038"
+  bbaseargs="$bbaseargs --disable-year2038"
+  hbaseargs="$hbaseargs --disable-year2038"
   tbaseargs="$tbaseargs --disable-year2038"
 fi
 
@@ -3389,7 +3571,7 @@ AC_ARG_VAR([target_configargs],
 # desired.  We can't even use the same cache file for all build-side
 # libraries, as they're compiled differently; some with C, some with
 # C++ or with different feature-enabling options.
-build_configargs="$build_configargs --cache-file=./config.cache ${baseargs}"
+build_configargs="$build_configargs --cache-file=./config.cache ${bbaseargs}"
 
 # For host modules, accept cache file option, or specification as blank.
 case "${cache_file}" in
@@ -3403,7 +3585,7 @@ esac
 
 # Host dirs don't like to share a cache file either, horribly enough.
 # This seems to be due to autoconf 2.5x stupidity.
-host_configargs="$host_configargs --cache-file=./config.cache ${extra_host_args} ${baseargs}"
+host_configargs="$host_configargs --cache-file=./config.cache ${extra_host_args} ${hbaseargs}"
 
 target_configargs="$target_configargs ${tbaseargs}"
 

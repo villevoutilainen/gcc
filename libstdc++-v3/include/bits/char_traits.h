@@ -1,6 +1,6 @@
 // Character Traits for use by standard string and iostream -*- C++ -*-
 
-// Copyright (C) 1997-2023 Free Software Foundation, Inc.
+// Copyright (C) 1997-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -34,7 +34,9 @@
 #ifndef _CHAR_TRAITS_H
 #define _CHAR_TRAITS_H 1
 
+#ifdef _GLIBCXX_SYSHDR
 #pragma GCC system_header
+#endif
 
 #include <bits/c++config.h>
 
@@ -60,9 +62,6 @@
 #ifndef _GLIBCXX_ALWAYS_INLINE
 # define _GLIBCXX_ALWAYS_INLINE inline __attribute__((__always_inline__))
 #endif
-
-#define __glibcxx_want_constexpr_char_traits
-#include <bits/version.h>
 
 namespace __gnu_cxx _GLIBCXX_VISIBILITY(default)
 {
@@ -108,7 +107,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
    *
    *  See https://gcc.gnu.org/onlinedocs/libstdc++/manual/strings.html#strings.string.character_types
    *  for advice on how to make use of this class for @a unusual character
-   *  types. Also, check out include/ext/pod_char_traits.h.  
+   *  types. Also, check out include/ext/pod_char_traits.h.
    */
   template<typename _CharT>
     struct char_traits
@@ -230,19 +229,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #if __cplusplus >= 202002L
       if (std::__is_constant_evaluated())
 	{
-	  if (__s1 == __s2) // unlikely, but saves a lot of work
-	    return __s1;
-	  const auto __end = __s2 + __n - 1;
-	  bool __overlap = false;
-	  for (std::size_t __i = 0; __i < __n - 1; ++__i)
-	    {
-	      if (__s1 + __i == __end)
-		{
-		  __overlap = true;
-		  break;
-		}
-	    }
-	  if (__overlap)
+	  // Use __builtin_constant_p to avoid comparing unrelated pointers.
+	  if (__builtin_constant_p(__s2 < __s1)
+		&& __s1 > __s2 && __s1 < (__s2 + __n))
 	    {
 	      do
 		{
@@ -664,10 +653,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	if (std::__is_constant_evaluated())
 	  return __gnu_cxx::char_traits<char_type>::length(__s);
 #endif
-	size_t __i = 0;
-	while (!eq(__s[__i], char_type()))
-	  ++__i;
-	return __i;
+	return __builtin_strlen((const char*)__s);
       }
 
       static _GLIBCXX17_CONSTEXPR const char_type*
@@ -959,7 +945,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       static _GLIBCXX20_CONSTEXPR char_type*
       copy(char_type* __s1, const char_type* __s2, size_t __n)
-      { 
+      {
 	if (__n == 0)
 	  return __s1;
 #if __cplusplus >= 202002L

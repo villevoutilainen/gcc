@@ -1,5 +1,5 @@
 /* Branch prediction routines for the GNU compiler.
-   Copyright (C) 2000-2023 Free Software Foundation, Inc.
+   Copyright (C) 2000-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -25,7 +25,6 @@ along with GCC; see the file COPYING3.  If not see
        Wu and Larus; MICRO-27.
    [3] "Corpus-based Static Branch Prediction"
        Calder, Grunwald, Lindsay, Martin, Mozer, and Zorn; PLDI '95.  */
-
 
 #include "config.h"
 #include "system.h"
@@ -205,7 +204,7 @@ maybe_hot_edge_p (edge e)
 
 /* Return true if COUNT is considered to be never executed in function FUN
    or if function FUN is considered so in the static profile.  */
-   
+
 static bool
 probably_never_executed (struct function *fun, profile_count count)
 {
@@ -516,6 +515,16 @@ struct edge_prediction {
    outgoing edges.  */
 
 static hash_map<const_basic_block, edge_prediction *> *bb_predictions;
+
+/* Global cache for expr_expected_value.  */
+
+struct expected_value
+{
+  tree val;
+  enum br_predictor predictor;
+  HOST_WIDE_INT probability;
+};
+static hash_map<int_hash<unsigned, 0>, expected_value> *ssa_expected_value;
 
 /* Return true if the one of outgoing edges is already predicted by
    PREDICTOR.  */
@@ -1545,7 +1554,7 @@ is_comparison_with_loop_invariant_p (gcond *stmt, class loop *loop,
   op0 = gimple_cond_lhs (stmt);
   op1 = gimple_cond_rhs (stmt);
 
-  if ((TREE_CODE (op0) != SSA_NAME && TREE_CODE (op0) != INTEGER_CST) 
+  if ((TREE_CODE (op0) != SSA_NAME && TREE_CODE (op0) != INTEGER_CST)
        || (TREE_CODE (op1) != SSA_NAME && TREE_CODE (op1) != INTEGER_CST))
     return false;
   if (!simple_iv (loop, loop_containing_stmt (stmt), op0, &iv0, true))
@@ -1979,7 +1988,7 @@ predict_loops (void)
 
       if (dump_file && (dump_flags & TDF_DETAILS))
 	fprintf (dump_file, "Predicting loop %i%s with %i exits.\n",
-		 loop->num, recursion ? " (with recursion)":"", n_exits);
+		 loop->num, recursion ? " (with recursion)" : "", n_exits);
       if (dump_file && (dump_flags & TDF_DETAILS)
 	  && max_loop_iterations_int (loop) >= 0)
 	{
@@ -2356,14 +2365,14 @@ guess_outgoing_edge_probabilities (basic_block bb)
   combine_predictions_for_insn (BB_END (bb), bb);
 }
 
-static tree expr_expected_value (tree, bitmap, enum br_predictor *predictor,
+static tree expr_expected_value (tree, enum br_predictor *predictor,
 				 HOST_WIDE_INT *probability);
 
 /* Helper function for expr_expected_value.  */
 
 static tree
 expr_expected_value_1 (tree type, tree op0, enum tree_code code,
-		       tree op1, bitmap visited, enum br_predictor *predictor,
+		       tree op1, enum br_predictor *predictor,
 		       HOST_WIDE_INT *probability)
 {
   gimple *def;
@@ -2401,48 +2410,98 @@ expr_expected_value_1 (tree type, tree op0, enum tree_code code,
       def = SSA_NAME_DEF_STMT (op0);
 
       /* If we were already here, break the infinite cycle.  */
-      if (!bitmap_set_bit (visited, SSA_NAME_VERSION (op0)))
-	return NULL;
+      bool existed_p;
+      expected_value *res
+	= &ssa_expected_value->get_or_insert (SSA_NAME_VERSION (op0),
+					      &existed_p);
+      if (existed_p)
+	{
+	  *probability = res->probability;
+	  *predictor = res->predictor;
+	  return res->val;
+	}
+      res->val = NULL_TREE;
+      res->predictor = *predictor;
+      res->probability = *probability;
 
-      if (gimple_code (def) == GIMPLE_PHI)
+      if (gphi *phi = dyn_cast <gphi *> (def))
 	{
 	  /* All the arguments of the PHI node must have the same constant
 	     length.  */
-	  int i, n = gimple_phi_num_args (def);
-	  tree val = NULL, new_val;
+	  int i, n = gimple_phi_num_args (phi);
+	  tree val = NULL;
+	  bool has_nonzero_edge = false;
+
+	  /* If we already proved that given edge is unlikely, we do not need
+	     to handle merging of the probabilities.  */
+	  for (i = 0; i < n && !has_nonzero_edge; i++)
+	    {
+	      tree arg = PHI_ARG_DEF (phi, i);
+	      if (arg == PHI_RESULT (phi))
+		continue;
+	      profile_count cnt = gimple_phi_arg_edge (phi, i)->count ();
+	      if (!cnt.initialized_p () || cnt.nonzero_p ())
+		has_nonzero_edge = true;
+	    }
 
 	  for (i = 0; i < n; i++)
 	    {
-	      tree arg = PHI_ARG_DEF (def, i);
+	      tree arg = PHI_ARG_DEF (phi, i);
 	      enum br_predictor predictor2;
 
-	      /* If this PHI has itself as an argument, we cannot
-		 determine the string length of this argument.  However,
-		 if we can find an expected constant value for the other
-		 PHI args then we can still be sure that this is
-		 likely a constant.  So be optimistic and just
-		 continue with the next argument.  */
-	      if (arg == PHI_RESULT (def))
+	      /* Skip self-referring parameters, since they does not change
+		 expected value.  */
+	      if (arg == PHI_RESULT (phi))
 		continue;
 
-	      HOST_WIDE_INT probability2;
-	      new_val = expr_expected_value (arg, visited, &predictor2,
-					     &probability2);
-
-	      /* It is difficult to combine value predictors.  Simply assume
-		 that later predictor is weaker and take its prediction.  */
-	      if (*predictor < predictor2)
+	      /* Skip edges which we already predicted as executing
+		 zero times.  */
+	      if (has_nonzero_edge)
 		{
-		  *predictor = predictor2;
-		  *probability = probability2;
+		  profile_count cnt = gimple_phi_arg_edge (phi, i)->count ();
+		  if (cnt.initialized_p () && !cnt.nonzero_p ())
+		    continue;
 		}
+	      HOST_WIDE_INT probability2;
+	      tree new_val = expr_expected_value (arg, &predictor2,
+						  &probability2);
+	      /* If we know nothing about value, give up.  */
 	      if (!new_val)
 		return NULL;
+
+	      /* If this is a first edge, trust its prediction.  */
 	      if (!val)
-		val = new_val;
-	      else if (!operand_equal_p (val, new_val, false))
+		{
+		  val = new_val;
+		  *predictor = predictor2;
+		  *probability = probability2;
+		  continue;
+		}
+	      /* If there are two different values, give up.  */
+	      if (!operand_equal_p (val, new_val, false))
 		return NULL;
+
+	      int p1 = get_predictor_value (*predictor, *probability);
+	      int p2 = get_predictor_value (predictor2, probability2);
+	      /* If both predictors agree, it does not matter from which
+		 edge we enter the basic block.  */
+	      if (*predictor == predictor2 && p1 == p2)
+		continue;
+	      /* The general case has no precise solution, since we do not
+		 know probabilities of incomming edges, yet.
+		 Still if value is predicted over all incomming edges, we
+		 can hope it will be indeed the case.  Conservatively
+		 downgrade prediction quality (so first match merging is not
+		 performed) and take least successful prediction.  */
+
+	      *predictor = PRED_COMBINED_VALUE_PREDICTIONS_PHI;
+	      *probability = MIN (p1, p2);
 	    }
+
+	  res = ssa_expected_value->get (SSA_NAME_VERSION (op0));
+	  res->val = val;
+	  res->predictor = *predictor;
+	  res->probability = *probability;
 	  return val;
 	}
       if (is_gimple_assign (def))
@@ -2450,11 +2509,19 @@ expr_expected_value_1 (tree type, tree op0, enum tree_code code,
 	  if (gimple_assign_lhs (def) != op0)
 	    return NULL;
 
-	  return expr_expected_value_1 (TREE_TYPE (gimple_assign_lhs (def)),
-					gimple_assign_rhs1 (def),
-					gimple_assign_rhs_code (def),
-					gimple_assign_rhs2 (def),
-					visited, predictor, probability);
+	  tree val = expr_expected_value_1 (TREE_TYPE (gimple_assign_lhs (def)),
+					    gimple_assign_rhs1 (def),
+					    gimple_assign_rhs_code (def),
+					    gimple_assign_rhs2 (def),
+					    predictor, probability);
+	  if (val)
+	    {
+	      res = ssa_expected_value->get (SSA_NAME_VERSION (op0));
+	      res->val = val;
+	      res->predictor = *predictor;
+	      res->probability = *probability;
+	    }
+	  return val;
 	}
 
       if (is_gimple_call (def))
@@ -2477,7 +2544,11 @@ expr_expected_value_1 (tree type, tree op0, enum tree_code code,
 		  if (*predictor == PRED_BUILTIN_EXPECT)
 		    *probability
 		      = HITRATE (param_builtin_expect_probability);
-		  return gimple_call_arg (def, 1);
+		  val = gimple_call_arg (def, 1);
+		  res->val = val;
+		  res->predictor = *predictor;
+		  res->probability = *probability;
+		  return val;
 		}
 	      return NULL;
 	    }
@@ -2490,7 +2561,11 @@ expr_expected_value_1 (tree type, tree op0, enum tree_code code,
 		 to value ranges.  This makes predictor to assume that
 		 malloc always returns (size_t)1 which is not the same
 		 as returning non-NULL.  */
-	      return fold_convert (type, boolean_true_node);
+	      tree val = fold_convert (type, boolean_true_node);
+	      res->val = val;
+	      res->predictor = *predictor;
+	      res->probability = *probability;
+	      return val;
 	    }
 
 	  if (DECL_BUILT_IN_CLASS (decl) == BUILT_IN_NORMAL)
@@ -2507,7 +2582,11 @@ expr_expected_value_1 (tree type, tree op0, enum tree_code code,
 		  *predictor = PRED_BUILTIN_EXPECT;
 		  *probability
 		    = HITRATE (param_builtin_expect_probability);
-		  return gimple_call_arg (def, 1);
+		  val = gimple_call_arg (def, 1);
+		  res->val = val;
+		  res->predictor = *predictor;
+		  res->probability = *probability;
+		  return val;
 		}
 	      case BUILT_IN_EXPECT_WITH_PROBABILITY:
 		{
@@ -2516,7 +2595,12 @@ expr_expected_value_1 (tree type, tree op0, enum tree_code code,
 		    return NULL;
 		  val = gimple_call_arg (def, 0);
 		  if (TREE_CONSTANT (val))
-		    return val;
+		    {
+		      res->val = val;
+		      res->predictor = *predictor;
+		      res->probability = *probability;
+		      return val;
+		    }
 		  /* Compute final probability as:
 		     probability * REG_BR_PROB_BASE.  */
 		  tree prob = gimple_call_arg (def, 2);
@@ -2545,7 +2629,11 @@ expr_expected_value_1 (tree type, tree op0, enum tree_code code,
 			      "probability %qE is outside "
 			      "the range [0.0, 1.0]", prob);
 
-		  return gimple_call_arg (def, 1);
+		  val = gimple_call_arg (def, 1);
+		  res->val = val;
+		  res->predictor = *predictor;
+		  res->probability = *probability;
+		  return val;
 		}
 
 	      case BUILT_IN_SYNC_BOOL_COMPARE_AND_SWAP_N:
@@ -2564,13 +2652,20 @@ expr_expected_value_1 (tree type, tree op0, enum tree_code code,
 		/* Assume that any given atomic operation has low contention,
 		   and thus the compare-and-swap operation succeeds.  */
 		*predictor = PRED_COMPARE_AND_SWAP;
+		res->val = boolean_true_node;
+		res->predictor = *predictor;
+		res->probability = *probability;
 		return boolean_true_node;
 	      case BUILT_IN_REALLOC:
+	      case BUILT_IN_GOMP_REALLOC:
 		if (predictor)
 		  *predictor = PRED_MALLOC_NONNULL;
 		/* FIXME: This is wrong and we need to convert the logic
 		   to value ranges.  */
-		return fold_convert (type, boolean_true_node);
+		res->val = fold_convert (type, boolean_true_node);
+		res->predictor = *predictor;
+		res->probability = *probability;
+		return res->val;
 	      default:
 		break;
 	    }
@@ -2584,27 +2679,38 @@ expr_expected_value_1 (tree type, tree op0, enum tree_code code,
       tree res;
       tree nop0 = op0;
       tree nop1 = op1;
+
+      /* First handle situation where single op is enough to determine final
+	 value.  In this case we can do better job by avoiding the prediction
+	 merging.  */
       if (TREE_CODE (op0) != INTEGER_CST)
 	{
 	  /* See if expected value of op0 is good enough to determine the result.  */
-	  nop0 = expr_expected_value (op0, visited, predictor, probability);
+	  nop0 = expr_expected_value (op0, predictor, probability);
 	  if (nop0
 	      && (res = fold_build2 (code, type, nop0, op1)) != NULL
 	      && TREE_CODE (res) == INTEGER_CST)
+	    /* We are now getting conservative probability.  Consider for
+	       example:
+	          op0 * op1
+	       If op0 is 0 with probability p, then we will ignore the
+	       posibility that op0 != 0 and op1 == 0.  It does not seem to be
+	       worthwhile to downgrade prediciton quality for this.  */
 	    return res;
 	  if (!nop0)
 	    nop0 = op0;
 	 }
-      enum br_predictor predictor2;
-      HOST_WIDE_INT probability2;
+      enum br_predictor predictor2 = PRED_UNCONDITIONAL;
+      HOST_WIDE_INT probability2 = -1;
       if (TREE_CODE (op1) != INTEGER_CST)
 	{
 	  /* See if expected value of op1 is good enough to determine the result.  */
-	  nop1 = expr_expected_value (op1, visited, &predictor2, &probability2);
+	  nop1 = expr_expected_value (op1, &predictor2, &probability2);
 	  if (nop1
 	      && (res = fold_build2 (code, type, op0, nop1)) != NULL
 	      && TREE_CODE (res) == INTEGER_CST)
 	    {
+	      /* Similarly as above we now get conservative probability.  */
 	      *predictor = predictor2;
 	      *probability = probability2;
 	      return res;
@@ -2612,24 +2718,40 @@ expr_expected_value_1 (tree type, tree op0, enum tree_code code,
 	  if (!nop1)
 	    nop1 = op1;
 	 }
+      /* We already checked if folding one of arguments to constant is good
+	 enough.  Consequently failing to fold both means that we will not
+	 succeed determining the value.  */
       if (nop0 == op0 || nop1 == op1)
 	return NULL;
       /* Finally see if we have two known values.  */
       res = fold_build2 (code, type, nop0, nop1);
-      if (TREE_CODE (res) == INTEGER_CST
-	  && TREE_CODE (nop0) == INTEGER_CST
-	  && TREE_CODE (nop1) == INTEGER_CST)
+      if (TREE_CODE (res) == INTEGER_CST)
 	{
-	  /* Combine binary predictions.  */
-	  if (*probability != -1 || probability2 != -1)
-	    {
-	      HOST_WIDE_INT p1 = get_predictor_value (*predictor, *probability);
-	      HOST_WIDE_INT p2 = get_predictor_value (predictor2, probability2);
-	      *probability = RDIV (p1 * p2, REG_BR_PROB_BASE);
-	    }
+	  HOST_WIDE_INT p1 = get_predictor_value (*predictor, *probability);
+	  HOST_WIDE_INT p2 = get_predictor_value (predictor2, probability2);
 
-	  if (predictor2 < *predictor)
-	    *predictor = predictor2;
+	  /* If one of predictions is sure, such as PRED_UNCONDITIONAL, we
+	     can ignore it.  */
+	  if (p2 == PROB_ALWAYS)
+	    return res;
+	  if (p1 == PROB_ALWAYS)
+	    {
+	      *predictor = predictor2;
+	      *probability = probability2;
+	      return res;
+	    }
+	  /* Combine binary predictions.
+	     Since we do not know about independence of predictors, we
+	     can not determine value precisely.  */
+	  *probability = RDIV (p1 * p2, REG_BR_PROB_BASE);
+	  /* If we no longer track useful information, give up.  */
+	  if (!*probability)
+	    return NULL;
+	  /* Otherwise mark that prediction is a result of combining
+	     different heuristics, since we do not want it to participate
+	     in first match merging.  It is no longer reliable since
+	     we do not know if the probabilities are indpenendet.  */
+	  *predictor = PRED_COMBINED_VALUE_PREDICTIONS;
 
 	  return res;
 	}
@@ -2638,7 +2760,7 @@ expr_expected_value_1 (tree type, tree op0, enum tree_code code,
   if (get_gimple_rhs_class (code) == GIMPLE_UNARY_RHS)
     {
       tree res;
-      op0 = expr_expected_value (op0, visited, predictor, probability);
+      op0 = expr_expected_value (op0, predictor, probability);
       if (!op0)
 	return NULL;
       res = fold_build1 (code, type, op0);
@@ -2658,8 +2780,7 @@ expr_expected_value_1 (tree type, tree op0, enum tree_code code,
    implementation.  */
 
 static tree
-expr_expected_value (tree expr, bitmap visited,
-		     enum br_predictor *predictor,
+expr_expected_value (tree expr, enum br_predictor *predictor,
 		     HOST_WIDE_INT *probability)
 {
   enum tree_code code;
@@ -2674,8 +2795,7 @@ expr_expected_value (tree expr, bitmap visited,
 
   extract_ops_from_tree (expr, &code, &op0, &op1);
   return expr_expected_value_1 (TREE_TYPE (expr),
-				op0, code, op1, visited, predictor,
-				probability);
+				op0, code, op1, predictor, probability);
 }
 
 
@@ -2689,6 +2809,8 @@ get_predictor_value (br_predictor predictor, HOST_WIDE_INT probability)
     {
     case PRED_BUILTIN_EXPECT:
     case PRED_BUILTIN_EXPECT_WITH_PROBABILITY:
+    case PRED_COMBINED_VALUE_PREDICTIONS_PHI:
+    case PRED_COMBINED_VALUE_PREDICTIONS:
       gcc_assert (probability != -1);
       return probability;
     default:
@@ -2717,8 +2839,7 @@ tree_predict_by_opcode (basic_block bb)
   if (gswitch *sw = dyn_cast <gswitch *> (stmt))
     {
       tree index = gimple_switch_index (sw);
-      tree val = expr_expected_value (index, auto_bitmap (),
-				      &predictor, &probability);
+      tree val = expr_expected_value (index, &predictor, &probability);
       if (val && TREE_CODE (val) == INTEGER_CST)
 	{
 	  edge e = find_taken_edge_switch_expr (sw, val);
@@ -2743,7 +2864,7 @@ tree_predict_by_opcode (basic_block bb)
   op1 = gimple_cond_rhs (stmt);
   cmp = gimple_cond_code (stmt);
   type = TREE_TYPE (op0);
-  val = expr_expected_value_1 (boolean_type_node, op0, cmp, op1, auto_bitmap (),
+  val = expr_expected_value_1 (boolean_type_node, op0, cmp, op1,
 			       &predictor, &probability);
   if (val && TREE_CODE (val) == INTEGER_CST)
     {
@@ -3151,6 +3272,8 @@ tree_estimate_probability (bool dry_run)
   determine_unlikely_bbs ();
 
   bb_predictions = new hash_map<const_basic_block, edge_prediction *>;
+  ssa_expected_value = new hash_map<int_hash<unsigned, 0>, expected_value>;
+
   tree_bb_level_predictions ();
   record_loop_exits ();
 
@@ -3168,6 +3291,8 @@ tree_estimate_probability (bool dry_run)
 
   delete bb_predictions;
   bb_predictions = NULL;
+  delete ssa_expected_value;
+  ssa_expected_value = NULL;
 
   if (!dry_run
       && profile_status_for_fn (cfun) != PROFILE_READ)
@@ -3181,12 +3306,15 @@ void
 tree_guess_outgoing_edge_probabilities (basic_block bb)
 {
   bb_predictions = new hash_map<const_basic_block, edge_prediction *>;
+  ssa_expected_value = new hash_map<int_hash<unsigned, 0>, expected_value>;
   tree_estimate_probability_bb (bb, true);
   combine_predictions_for_bb (bb, false);
   if (flag_checking)
     bb_predictions->traverse<void *, assert_is_empty> (NULL);
   delete bb_predictions;
   bb_predictions = NULL;
+  delete ssa_expected_value;
+  ssa_expected_value = NULL;
 }
 
 /* Filter function predicate that returns true for a edge predicate P
@@ -3438,7 +3566,7 @@ propagate_freq (basic_block head, bitmap tovisit,
 			     bb->index, cyclic_probability.to_double (),
 			     max_cyclic_prob.to_double (),
 			     frequency.to_double ());
-			
+
 		  cyclic_probability = max_cyclic_prob;
 		}
 	      else if (dump_file)
@@ -3600,7 +3728,7 @@ drop_profile (struct cgraph_node *node, profile_count call_count)
   for (e = node->indirect_calls; e; e = e->next_callee)
     e->count = gimple_bb (e->call_stmt)->count;
   node->count = ENTRY_BLOCK_PTR_FOR_FN (fn)->count;
-  
+
   profile_status_for_fn (fn)
       = (flag_guess_branch_prob ? PROFILE_GUESSED : PROFILE_ABSENT);
   node->frequency
@@ -3614,7 +3742,7 @@ drop_profile (struct cgraph_node *node, profile_count call_count)
    call counts going to 0-count functions, and drop the profile to guessed
    so that we can use the estimated probabilities and avoid optimizing only
    for size.
-   
+
    The other case where the profile may be missing is when the routine
    is not going to be emitted to the object file, e.g. for "extern template"
    class methods. Those will be marked DECL_EXTERNAL. Emit a warning in
@@ -3971,7 +4099,7 @@ estimate_bb_frequencies ()
 
   /* Scaling frequencies up to maximal profile count may result in
      frequent overflows especially when inlining loops.
-     Small scalling results in unnecesary precision loss.  Stay in
+     Small scaling results in unnecesary precision loss.  Stay in
      the half of the (exponential) range.  */
   freq_max = (sreal (1) << (profile_count::n_bits / 2)) / freq_max;
   if (freq_max < 16)
@@ -4146,7 +4274,7 @@ pass_profile::execute (function *fun)
      sreal iterations;
      for (auto loop : loops_list (cfun, LI_FROM_INNERMOST))
        if (expected_loop_iterations_by_profile (loop, &iterations))
-	 fprintf (dump_file, "Loop got predicted %d to iterate %f times.\n",
+	 fprintf (dump_file, "Loop %d got predicted to iterate %f times.\n",
 	   loop->num, iterations.to_double ());
    }
   return 0;
@@ -4529,7 +4657,7 @@ force_edge_cold (edge e, bool impossible)
 	  count_sum += e2->count ();
 	if (e2->probability.initialized_p ())
 	  prob_sum += e2->probability;
-	else 
+	else
 	  uninitialized_exit = true;
       }
 
@@ -4590,7 +4718,7 @@ force_edge_cold (edge e, bool impossible)
 		  }
 	      }
 	  /* FIXME: Implement RTL path.  */
-	  else 
+	  else
 	    found = true;
 	  if (!found)
 	    {

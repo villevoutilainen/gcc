@@ -1,5 +1,5 @@
 /* All matcher functions.
-   Copyright (C) 2003-2023 Free Software Foundation, Inc.
+   Copyright (C) 2003-2024 Free Software Foundation, Inc.
    Contributed by Steven Bosscher
 
 This file is part of GCC.
@@ -101,7 +101,7 @@ match gfc_match_call (void);
 /* We want to use this function to check for a common-block-name
    that can exist in a bind statement, so removed the "static"
    declaration of the function in match.cc. */
- 
+
 match gfc_match_common_name (char *name);
 
 match gfc_match_common (void);
@@ -172,6 +172,7 @@ match gfc_match_omp_do_simd (void);
 match gfc_match_omp_loop (void);
 match gfc_match_omp_error (void);
 match gfc_match_omp_flush (void);
+match gfc_match_omp_interop (void);
 match gfc_match_omp_masked (void);
 match gfc_match_omp_masked_taskloop (void);
 match gfc_match_omp_masked_taskloop_simd (void);
@@ -228,6 +229,8 @@ match gfc_match_omp_teams_distribute_parallel_do_simd (void);
 match gfc_match_omp_teams_distribute_simd (void);
 match gfc_match_omp_teams_loop (void);
 match gfc_match_omp_threadprivate (void);
+match gfc_match_omp_tile (void);
+match gfc_match_omp_unroll (void);
 match gfc_match_omp_workshare (void);
 match gfc_match_omp_end_critical (void);
 match gfc_match_omp_end_nowait (void);
@@ -300,7 +303,7 @@ match gfc_match_bind_c_stmt (void);
 match gfc_match_bind_c (gfc_symbol *, bool);
 
 /* primary.cc.  */
-match gfc_match_structure_constructor (gfc_symbol *, gfc_expr **);
+match gfc_match_structure_constructor (gfc_symbol *, gfc_symtree *, gfc_expr **);
 match gfc_match_variable (gfc_expr **, int);
 match gfc_match_equiv_variable (gfc_expr **);
 match gfc_match_actual_arglist (int, gfc_actual_arglist **, bool = false);
@@ -314,7 +317,8 @@ match gfc_match_init_expr (gfc_expr **);
 
 /* array.cc.  */
 match gfc_match_array_spec (gfc_array_spec **, bool, bool);
-match gfc_match_array_ref (gfc_array_ref *, gfc_array_spec *, int, int);
+match gfc_match_array_ref (gfc_array_ref *, gfc_array_spec *, int, int,
+			   bool = false);
 match gfc_match_array_constructor (gfc_expr **);
 
 /* interface.cc.  */

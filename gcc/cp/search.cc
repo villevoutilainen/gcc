@@ -1,6 +1,6 @@
 /* Breadth-first and depth-first routines for
    searching multiple-inheritance lattice for GNU C++.
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2024 Free Software Foundation, Inc.
    Contributed by Michael Tiemann (tiemann@cygnus.com)
 
 This file is part of GCC.
@@ -65,6 +65,7 @@ struct lookup_base_data_s
   bool repeated_base;	/* Whether there are repeated bases in the
 			    hierarchy.  */
   bool want_any;	/* Whether we want any matching binfo.  */
+  bool require_virtual;	/* Whether we require a virtual path.  */
 };
 
 /* Worker function for lookup_base.  See if we've found the desired
@@ -93,11 +94,18 @@ dfs_lookup_base (tree binfo, void *data_)
 
   if (SAME_BINFO_TYPE_P (BINFO_TYPE (binfo), data->base))
     {
+      const bool via_virtual
+	= binfo_via_virtual (binfo, data->t) != NULL_TREE;
+
+      if (data->require_virtual && !via_virtual)
+	/* Skip this result if we require virtual inheritance
+	   and this is not a virtual base.  */
+	return dfs_skip_bases;
+
       if (!data->binfo)
 	{
 	  data->binfo = binfo;
-	  data->via_virtual
-	    = binfo_via_virtual (data->binfo, data->t) != NULL_TREE;
+	  data->via_virtual = via_virtual;
 
 	  if (!data->repeated_base)
 	    /* If there are no repeated bases, we can stop now.  */
@@ -124,7 +132,7 @@ dfs_lookup_base (tree binfo, void *data_)
 	    }
 
 	  /* Prefer one via a non-virtual path.  */
-	  if (!binfo_via_virtual (binfo, data->t))
+	  if (!via_virtual)
 	    {
 	      data->binfo = binfo;
 	      data->via_virtual = false;
@@ -160,12 +168,16 @@ get_parent_with_private_access (tree decl, tree binfo)
 
   tree base_binfo = NULL_TREE;
 
-  /* Iterate through immediate parent classes.  */
+  /* Iterate through immediate parent classes.
+     Note that the base list might contain WILDCARD_TYPE_P types, that
+     should be ignored here.  */
   for (int i = 0; BINFO_BASE_ITERATE (binfo, i, base_binfo); i++)
     {
+      tree base_binfo_type = BINFO_TYPE (base_binfo);
       /* This parent had private access.  Therefore that's why BINFO can't
 	  access DECL.  */
-      if (access_in_type (BINFO_TYPE (base_binfo), decl) == ak_private)
+      if (RECORD_OR_UNION_TYPE_P (base_binfo_type)
+	  && access_in_type (base_binfo_type, decl) == ak_private)
 	return base_binfo;
     }
 
@@ -267,6 +279,7 @@ lookup_base (tree t, tree base, base_access access,
       data.repeated_base = (offset == -1) && CLASSTYPE_REPEATED_BASE_P (t);
       data.want_any = access == ba_any;
       data.offset = offset;
+      data.require_virtual = (access & ba_require_virtual);
 
       dfs_walk_once (t_binfo, dfs_lookup_base, NULL, &data);
       binfo = data.binfo;
@@ -1008,7 +1021,7 @@ shared_member_p (tree t)
 	    /* Conservatively assume a dependent using-declaration
 	       might resolve to a non-static member.  */
 	    return false;
-	  if (DECL_NONSTATIC_MEMBER_FUNCTION_P (decl))
+	  if (DECL_OBJECT_MEMBER_FUNCTION_P (decl))
 	    return false;
 	}
       return true;
@@ -1091,13 +1104,24 @@ lookup_field_r (tree binfo, void *data)
 	    }
 
 	  /* Add the new value.  */
-	  lfi->ambiguous = tree_cons (NULL_TREE, nval, lfi->ambiguous);
-	  TREE_TYPE (lfi->ambiguous) = error_mark_node;
+	  if (TREE_CODE (nval) == TREE_LIST)
+	    lfi->ambiguous = chainon (nval, lfi->ambiguous);
+	  else
+	    {
+	      lfi->ambiguous = tree_cons (NULL_TREE, nval, lfi->ambiguous);
+	      TREE_TYPE (lfi->ambiguous) = error_mark_node;
+	    }
 	}
     }
   else
     {
-      lfi->rval = nval;
+      if (TREE_CODE (nval) == TREE_LIST)
+	{
+	  lfi->ambiguous = chainon (nval, lfi->ambiguous);
+	  lfi->rval = TREE_VALUE (nval);
+	}
+      else
+	lfi->rval = nval;
       lfi->rval_binfo = binfo;
     }
 
@@ -1216,6 +1240,7 @@ lookup_member (tree xbasetype, tree name, int protect, bool want_type,
 	{
 	  if (complain & tf_error)
 	    {
+	      auto_diagnostic_group d;
 	      error ("request for member %qD is ambiguous", name);
 	      print_candidates (lfi.ambiguous);
 	    }
@@ -1231,14 +1256,14 @@ lookup_member (tree xbasetype, tree name, int protect, bool want_type,
   /* [class.access]
 
      In the case of overloaded function names, access control is
-     applied to the function selected by overloaded resolution.  
+     applied to the function selected by overloaded resolution.
 
      We cannot check here, even if RVAL is only a single non-static
      member function, since we do not know what the "this" pointer
      will be.  For:
 
         class A { protected: void f(); };
-        class B : public A { 
+        class B : public A {
           void g(A *p) {
             f(); // OK
             p->f(); // Not OK.
@@ -1253,7 +1278,7 @@ lookup_member (tree xbasetype, tree name, int protect, bool want_type,
       decl = strip_using_decl (decl);
       /* A dependent USING_DECL will be checked after tsubsting.  */
       if (TREE_CODE (decl) != USING_DECL
-	  && !DECL_NONSTATIC_MEMBER_FUNCTION_P (decl)
+	  && !DECL_IOBJ_MEMBER_FUNCTION_P (decl)
 	  && !perform_or_defer_access_check (basetype_path, decl, decl,
 					     complain, afi))
 	return error_mark_node;
@@ -1265,7 +1290,7 @@ lookup_member (tree xbasetype, tree name, int protect, bool want_type,
       && !dguide_name_p (name))
     rval = build_baselink (rval_binfo, basetype_path, rval,
 			   (IDENTIFIER_CONV_OP_P (name)
-			   ? TREE_TYPE (name): NULL_TREE));
+			    ? TREE_TYPE (name) : NULL_TREE));
   return rval;
 }
 
@@ -1726,7 +1751,7 @@ field_access_p (tree component_ref, tree field_decl, tree field_type)
     return false;
 
   tree ptr = STRIP_NOPS (TREE_OPERAND (indirect_ref, 0));
-  if (!is_this_parameter (ptr))
+  if (!is_object_parameter (ptr))
     return false;
 
   /* Must access the correct field.  */
@@ -1806,6 +1831,17 @@ reference_accessor_p (tree init_expr, tree field_decl, tree field_type,
   return true;
 }
 
+/* Return the class of the `this' or explicit object parameter of FN.  */
+
+static tree
+class_of_object_parm (const_tree fn)
+{
+  tree fntype = TREE_TYPE (fn);
+  if (DECL_XOBJ_MEMBER_FUNCTION_P (fn))
+    return non_reference (TREE_VALUE (TYPE_ARG_TYPES (fntype)));
+  return class_of_this_parm (fntype);
+}
+
 /* Return true if FN is an accessor method for FIELD_DECL.
    i.e. a method of the form { return FIELD; }, with no
    conversions.
@@ -1823,15 +1859,14 @@ field_accessor_p (tree fn, tree field_decl, bool const_p)
   if (TREE_CODE (field_decl) != FIELD_DECL)
     return false;
 
-  tree fntype = TREE_TYPE (fn);
-  if (TREE_CODE (fntype) != METHOD_TYPE)
+  if (!DECL_OBJECT_MEMBER_FUNCTION_P (fn))
     return false;
 
   /* If the field is accessed via a const "this" argument, verify
      that the "this" parameter is const.  */
   if (const_p)
     {
-      tree this_class = class_of_this_parm (fntype);
+      tree this_class = class_of_object_parm (fn);
       if (!TYPE_READONLY (this_class))
 	return false;
     }
@@ -1928,7 +1963,11 @@ locate_field_accessor (tree basetype_path, tree field_decl, bool const_p)
 }
 
 /* Check throw specifier of OVERRIDER is at least as strict as
-   the one of BASEFN.  */
+   the one of BASEFN.  This is due to [except.spec]: "If a virtual function
+   has a non-throwing exception specification, all declarations, including
+   the definition, of any function that overrides that virtual function in
+   any derived class shall have a non-throwing exception specification,
+   unless the overriding function is defined as deleted."  */
 
 bool
 maybe_check_overriding_exception_spec (tree overrider, tree basefn)
@@ -1938,7 +1977,10 @@ maybe_check_overriding_exception_spec (tree overrider, tree basefn)
   tree base_throw = TYPE_RAISES_EXCEPTIONS (TREE_TYPE (basefn));
   tree over_throw = TYPE_RAISES_EXCEPTIONS (TREE_TYPE (overrider));
 
-  if (DECL_INVALID_OVERRIDER_P (overrider))
+  if (DECL_INVALID_OVERRIDER_P (overrider)
+      /* CWG 1351 added the "unless the overriding function is defined as
+	 deleted" wording.  */
+      || DECL_DELETED_FN (overrider))
     return true;
 
   /* Can't check this yet.  Pretend this is fine and let
@@ -1946,6 +1988,17 @@ maybe_check_overriding_exception_spec (tree overrider, tree basefn)
   if (UNPARSED_NOEXCEPT_SPEC_P (base_throw)
       || UNPARSED_NOEXCEPT_SPEC_P (over_throw))
     return true;
+
+  /* We also have to defer checking when we're in a template and couldn't
+     instantiate & evaluate the noexcept to true/false.  */
+  if (processing_template_decl)
+    if ((base_throw
+	 && base_throw != noexcept_true_spec
+	 && base_throw != noexcept_false_spec)
+	|| (over_throw
+	    && over_throw != noexcept_true_spec
+	    && over_throw != noexcept_false_spec))
+      return true;
 
   if (!comp_except_specs (base_throw, over_throw, ce_derived))
     {
@@ -2212,10 +2265,13 @@ look_for_overrides_here (tree type, tree fndecl)
 	/* Not a virtual.  */;
       else if (DECL_CONTEXT (fn) != type)
 	/* Introduced with a using declaration.  */;
-      else if (DECL_STATIC_FUNCTION_P (fndecl))
+      else if (DECL_STATIC_FUNCTION_P (fndecl)
+	       || DECL_XOBJ_MEMBER_FUNCTION_P (fndecl))
 	{
 	  tree btypes = TYPE_ARG_TYPES (TREE_TYPE (fn));
 	  tree dtypes = TYPE_ARG_TYPES (TREE_TYPE (fndecl));
+	  dtypes = DECL_XOBJ_MEMBER_FUNCTION_P (fndecl) ? TREE_CHAIN (dtypes)
+							: dtypes;
 	  if (compparms (TREE_CHAIN (btypes), dtypes))
 	    return fn;
 	}
@@ -2242,6 +2298,15 @@ look_for_overrides_r (tree type, tree fndecl)
 	  auto_diagnostic_group d;
 	  error ("%q+#D cannot be declared", fndecl);
 	  error ("  since %q+#D declared in base class", fn);
+	}
+      else if (DECL_XOBJ_MEMBER_FUNCTION_P (fndecl))
+	{
+	  auto_diagnostic_group d;
+	  error_at (DECL_SOURCE_LOCATION (fndecl),
+		    "explicit object member function "
+		    "overrides virtual function");
+	  inform (DECL_SOURCE_LOCATION (fn),
+		  "virtual function declared here");
 	}
       else
 	{
@@ -2603,7 +2668,7 @@ lookup_conversions (tree type)
   lookup_conversions_r (TYPE_BINFO (type), 0, 0, NULL_TREE, NULL_TREE, &convs);
 
   tree list = NULL_TREE;
-  
+
   /* Flatten the list-of-lists */
   for (; convs; convs = TREE_CHAIN (convs))
     {

@@ -1,5 +1,5 @@
 /* Header for code translation functions
-   Copyright (C) 2002-2023 Free Software Foundation, Inc.
+   Copyright (C) 2002-2024 Free Software Foundation, Inc.
    Contributed by Paul Brook
 
 This file is part of GCC.
@@ -451,7 +451,9 @@ tree gfc_vptr_def_init_get (tree);
 tree gfc_vptr_copy_get (tree);
 tree gfc_vptr_final_get (tree);
 tree gfc_vptr_deallocate_get (tree);
-void gfc_reset_vptr (stmtblock_t *, gfc_expr *, tree = NULL_TREE);
+void gfc_reset_vptr (stmtblock_t *, gfc_expr *, tree = NULL_TREE,
+		     gfc_symbol * = nullptr);
+void gfc_class_set_vptr (stmtblock_t *, tree, tree);
 void gfc_reset_len (stmtblock_t *, gfc_expr *);
 tree gfc_get_class_from_gfc_expr (gfc_expr *);
 tree gfc_get_class_from_expr (tree);
@@ -462,8 +464,9 @@ bool gfc_add_comp_finalizer_call (stmtblock_t *, tree, gfc_component *, bool);
 void gfc_finalize_tree_expr (gfc_se *, gfc_symbol *, symbol_attribute, int);
 bool gfc_assignment_finalizer_call (gfc_se *, gfc_expr *, bool);
 
-void gfc_conv_derived_to_class (gfc_se *, gfc_expr *, gfc_typespec, tree, bool,
-				bool, tree *derived_array = NULL);
+void gfc_class_array_data_assign (stmtblock_t *, tree, tree, bool);
+void gfc_conv_derived_to_class (gfc_se *, gfc_expr *, gfc_symbol *fsym, tree,
+				bool, bool, const char *, tree * = nullptr);
 void gfc_conv_class_to_class (gfc_se *, gfc_expr *, gfc_typespec, bool, bool,
 			      bool, bool);
 
@@ -471,7 +474,8 @@ void gfc_conv_class_to_class (gfc_se *, gfc_expr *, gfc_typespec, bool, bool,
 void gfc_start_wrapped_block (gfc_wrapped_block* block, tree code);
 /* Add a pair of init/cleanup code to the block.  Each one might be a
    NULL_TREE if not required.  */
-void gfc_add_init_cleanup (gfc_wrapped_block* block, tree init, tree cleanup);
+void gfc_add_init_cleanup (gfc_wrapped_block* block, tree init, tree cleanup,
+			   bool back = false);
 /* Finalize the block, that is, create a single expression encapsulating the
    original code together with init and clean-up code.  */
 tree gfc_finish_wrapped_block (gfc_wrapped_block* block);
@@ -566,8 +570,9 @@ void gfc_conv_subref_array_arg (gfc_se *, gfc_expr *, int, sym_intent, bool,
 void gfc_conv_is_contiguous_expr (gfc_se *, gfc_expr *);
 
 /* Generate code for a scalar assignment.  */
-tree gfc_trans_scalar_assign (gfc_se *, gfc_se *, gfc_typespec, bool, bool,
-			      bool c = false);
+tree
+gfc_trans_scalar_assign (gfc_se *, gfc_se *, gfc_typespec, bool, bool,
+			 bool = false, bool = false);
 
 /* Translate COMMON blocks.  */
 void gfc_trans_common (gfc_namespace *);
@@ -684,10 +689,6 @@ void gfc_finish_decl_attrs (tree, symbol_attribute *);
 /* Allocate the lang-specific part of a decl node.  */
 void gfc_allocate_lang_decl (tree);
 
-/* Get the location suitable for the ME from a gfortran locus; required to get
-   the column number right.  */
-location_t gfc_get_location (locus *);
-
 /* Advance along a TREE_CHAIN.  */
 tree gfc_advance_chain (tree, int);
 
@@ -719,10 +720,7 @@ struct GTY((for_user)) module_htab_entry {
 struct module_htab_entry *gfc_find_module (const char *);
 void gfc_module_add_decl (struct module_htab_entry *, tree);
 
-/* Get and set the current location.  */
-void gfc_save_backend_locus (locus *);
-void gfc_set_backend_locus (locus *);
-void gfc_restore_backend_locus (locus *);
+void gfc_locus_from_location (locus *, location_t);
 
 /* Handle static constructor functions.  */
 extern GTY(()) tree gfc_static_ctors;
@@ -764,10 +762,14 @@ void gfc_allocate_using_caf_lib (stmtblock_t *, tree, tree, tree, tree, tree,
 
 /* Allocate memory for allocatable variables, with optional status variable.  */
 void gfc_allocate_allocatable (stmtblock_t*, tree, tree, tree, tree,
-			       tree, tree, tree, gfc_expr*, int);
+			       tree, tree, tree, gfc_expr*, int,
+			       tree = NULL_TREE, tree = NULL_TREE,
+			       tree = NULL_TREE);
 
 /* Allocate memory, with optional status variable.  */
-void gfc_allocate_using_malloc (stmtblock_t *, tree, tree, tree);
+void gfc_allocate_using_malloc (stmtblock_t *, tree, tree, tree,
+				tree = NULL_TREE, tree = NULL_TREE,
+				tree = NULL_TREE);
 
 /* Generate code to deallocate an array.  */
 tree gfc_deallocate_with_status (tree, tree, tree, tree, tree, bool,
@@ -817,6 +819,8 @@ struct array_descr_info;
 bool gfc_get_array_descr_info (const_tree, struct array_descr_info *);
 
 /* In trans-openmp.cc */
+tree gfc_omp_call_add_alloc (tree);
+tree gfc_omp_call_is_alloc (tree);
 bool gfc_omp_is_allocatable_or_ptr (const_tree);
 tree gfc_omp_check_optional_argument (tree, bool);
 tree gfc_omp_array_data (tree, bool);
@@ -863,6 +867,8 @@ extern GTY(()) tree gfor_fndecl_ctime;
 extern GTY(()) tree gfor_fndecl_fdate;
 extern GTY(()) tree gfor_fndecl_in_pack;
 extern GTY(()) tree gfor_fndecl_in_unpack;
+extern GTY(()) tree gfor_fndecl_in_pack_class;
+extern GTY(()) tree gfor_fndecl_in_unpack_class;
 extern GTY(()) tree gfor_fndecl_associated;
 extern GTY(()) tree gfor_fndecl_system_clock4;
 extern GTY(()) tree gfor_fndecl_system_clock8;
@@ -972,6 +978,7 @@ extern GTY(()) tree gfor_fndecl_is_contiguous0;
 /* Implemented in Fortran.  */
 extern GTY(()) tree gfor_fndecl_sc_kind;
 extern GTY(()) tree gfor_fndecl_si_kind;
+extern GTY(()) tree gfor_fndecl_sl_kind;
 extern GTY(()) tree gfor_fndecl_sr_kind;
 
 /* IEEE-related.  */

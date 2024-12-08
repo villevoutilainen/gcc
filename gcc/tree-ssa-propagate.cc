@@ -1,5 +1,5 @@
 /* Generic SSA value propagation engine.
-   Copyright (C) 2004-2023 Free Software Foundation, Inc.
+   Copyright (C) 2004-2024 Free Software Foundation, Inc.
    Contributed by Diego Novillo <dnovillo@redhat.com>
 
    This file is part of GCC.
@@ -85,7 +85,7 @@
 	    Blocks are added to this list if their incoming edges are
 	    found executable.
 
-	SSA_EDGE_WORKLIST contains the list of statements that we 
+	SSA_EDGE_WORKLIST contains the list of statements that we
 	    need to revisit.
 
    5- Simulation terminates when all three work lists are drained.
@@ -789,6 +789,10 @@ substitute_and_fold_dom_walker::before_dom_children (basic_block bb)
 		  fprintf (dump_file, "\n");
 		}
 	      bitmap_set_bit (dceworklist, SSA_NAME_VERSION (res));
+	      /* As this now constitutes a copy duplicate points-to
+		 and range info appropriately.  */
+	      if (TREE_CODE (sprime) == SSA_NAME)
+		maybe_duplicate_ssa_info_at_copy (res, sprime);
 	      continue;
 	    }
 	}
@@ -831,6 +835,10 @@ substitute_and_fold_dom_walker::before_dom_children (basic_block bb)
 		  fprintf (dump_file, "\n");
 		}
 	      bitmap_set_bit (dceworklist, SSA_NAME_VERSION (lhs));
+	      /* As this now constitutes a copy duplicate points-to
+		 and range info appropriately.  */
+	      if (TREE_CODE (sprime) == SSA_NAME)
+		maybe_duplicate_ssa_info_at_copy (lhs, sprime);
 	      continue;
 	    }
 	}

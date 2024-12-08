@@ -1,6 +1,6 @@
 // Definition of gcc4-compatible Copy-on-Write basic_string -*- C++ -*-
 
-// Copyright (C) 1997-2023 Free Software Foundation, Inc.
+// Copyright (C) 1997-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -35,9 +35,6 @@
 #if ! _GLIBCXX_USE_CXX11_ABI
 
 #include <ext/atomicity.h> // _Atomic_word, __is_single_threaded
-
-#define __glibcxx_want_constexpr_string
-#include <bits/version.h>
 
 namespace std _GLIBCXX_VISIBILITY(default)
 {
@@ -518,6 +515,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       basic_string()
 #if _GLIBCXX_FULLY_DYNAMIC_STRING == 0
       _GLIBCXX_NOEXCEPT
+#endif
+#if __cpp_concepts && __glibcxx_type_trait_variable_templates
+      requires is_default_constructible_v<_Alloc>
+#endif
+#if _GLIBCXX_FULLY_DYNAMIC_STRING == 0
       : _M_dataplus(_S_empty_rep()._M_refdata(), _Alloc())
 #else
       : _M_dataplus(_S_construct(size_type(), _CharT(), _Alloc()), _Alloc())
@@ -965,7 +967,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #pragma GCC diagnostic pop
 #endif
 
-#ifdef __cpp_lib_string_resize_and_overwrite // C++ >= 23
+#ifdef __glibcxx_string_resize_and_overwrite // C++ >= 23
       /** Resize the string and call a function to fill it.
        *
        * @param __n   The maximum size requested.
@@ -998,7 +1000,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       template<typename _Operation>
 	void
 	resize_and_overwrite(size_type __n, _Operation __op);
-#endif // __cpp_lib_string_resize_and_overwrite
+#endif // __glibcxx_string_resize_and_overwrite
 
 #if __cplusplus >= 201103L
       /// Non-standard version of resize_and_overwrite for C++11 and above.
@@ -2270,9 +2272,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *
        *  This is a pointer to the character sequence held by the string.
        *  Modifying the characters in the sequence is allowed.
+       *
+       *  The standard requires this function to be `noexcept` but for the
+       *  Copy-On-Write string implementation it can throw.  This function
+       *  allows modifying the string contents directly, which means we
+       *  must copy-on-write to unshare it, which requires allocating memory.
       */
       _CharT*
-      data() noexcept
+      data() noexcept(false)
       {
 	_M_leak();
 	return _M_data();
@@ -3754,11 +3761,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       return __n;
     }
 
-#ifdef __cpp_lib_string_resize_and_overwrite // C++ >= 23
+#ifdef __glibcxx_string_resize_and_overwrite // C++ >= 23
   template<typename _CharT, typename _Traits, typename _Alloc>
   template<typename _Operation>
     [[__gnu__::__always_inline__]]
-    void
+    inline void
     basic_string<_CharT, _Traits, _Alloc>::
     __resize_and_overwrite(const size_type __n, _Operation __op)
     { resize_and_overwrite<_Operation&>(__n, __op); }
@@ -3769,7 +3776,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Operation>
     void
     basic_string<_CharT, _Traits, _Alloc>::
-#ifdef __cpp_lib_string_resize_and_overwrite // C++ >= 23
+#ifdef __glibcxx_string_resize_and_overwrite // C++ >= 23
     resize_and_overwrite(const size_type __n, _Operation __op)
 #else
     __resize_and_overwrite(const size_type __n, _Operation __op)
@@ -3793,7 +3800,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       static_assert(__gnu_cxx::__is_integer_nonstrict<decltype(__r)>::__value,
 		    "resize_and_overwrite operation must return an integer");
 #endif
-      _GLIBCXX_DEBUG_ASSERT(__r >= 0 && __r <= __n);
+      _GLIBCXX_DEBUG_ASSERT(__r >= 0 && size_type(__r) <= __n);
       __term._M_r = size_type(__r);
       if (__term._M_r > __n)
 	__builtin_unreachable();

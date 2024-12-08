@@ -1,5 +1,5 @@
 /* Convert function calls to rtl insns, for GNU C compiler.
-   Copyright (C) 1989-2023 Free Software Foundation, Inc.
+   Copyright (C) 1989-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -848,7 +848,27 @@ flags_from_decl_or_type (const_tree exp)
 	    flags |= ECF_TM_PURE;
 	}
 
+      if (lookup_attribute ("expected_throw", DECL_ATTRIBUTES (exp)))
+	flags |= ECF_XTHROW;
+
       flags = special_function_p (exp, flags);
+
+      if ((flags & ECF_CONST) == 0
+	  && lookup_attribute ("unsequenced noptr",
+			       TYPE_ATTRIBUTES (TREE_TYPE (exp))))
+	{
+	  /* [[unsequenced]] with no pointers in arguments is like
+	     [[gnu::const]] without finite guarantee.  */
+	  flags |= ECF_CONST;
+	  if ((flags & ECF_PURE) == 0)
+	    flags |= ECF_LOOPING_CONST_OR_PURE;
+	}
+      if ((flags & (ECF_CONST | ECF_PURE)) == 0
+	  && lookup_attribute ("reproducible noptr",
+			       TYPE_ATTRIBUTES (TREE_TYPE (exp))))
+	/* [[reproducible]] with no pointers in arguments is like
+	   [[gnu::pure]] without finite guarantee.  */
+	flags |= ECF_PURE | ECF_LOOPING_CONST_OR_PURE;
     }
   else if (TYPE_P (exp))
     {
@@ -859,6 +879,17 @@ flags_from_decl_or_type (const_tree exp)
 	  && ((flags & ECF_CONST) != 0
 	      || lookup_attribute ("transaction_pure", TYPE_ATTRIBUTES (exp))))
 	flags |= ECF_TM_PURE;
+
+      if ((flags & ECF_CONST) == 0
+	  && lookup_attribute ("unsequenced noptr", TYPE_ATTRIBUTES (exp)))
+	/* [[unsequenced]] with no pointers in arguments is like
+	   [[gnu::const]] without finite guarantee.  */
+	flags |= ECF_CONST | ECF_LOOPING_CONST_OR_PURE;
+      if ((flags & ECF_CONST) == 0
+	  && lookup_attribute ("reproducible noptr", TYPE_ATTRIBUTES (exp)))
+	/* [[reproducible]] with no pointers in arguments is like
+	   [[gnu::pure]] without finite guarantee.  */
+	flags |= ECF_PURE | ECF_LOOPING_CONST_OR_PURE;
     }
   else
     gcc_unreachable ();
@@ -1246,6 +1277,7 @@ maybe_complain_about_tail_call (tree call_expr, const char *reason)
     return;
 
   error_at (EXPR_LOCATION (call_expr), "cannot tail-call: %s", reason);
+  CALL_EXPR_MUST_TAIL_CALL (call_expr) = 0;
 }
 
 /* Fill in ARGS_SIZE and ARGS array based on the parameters found in
@@ -1416,9 +1448,9 @@ initialize_argument_information (int num_actuals ATTRIBUTE_UNUSED,
 		{
 		  *may_tailcall = false;
 		  maybe_complain_about_tail_call (exp,
-						  "a callee-copied argument is"
-						  " stored in the current"
-						  " function's frame");
+						  _("a callee-copied argument is"
+						    " stored in the current"
+						    " function's frame"));
 		}
 
 	      args[i].tree_value = build_fold_addr_expr_loc (loc,
@@ -1485,8 +1517,8 @@ initialize_argument_information (int num_actuals ATTRIBUTE_UNUSED,
 	      type = TREE_TYPE (args[i].tree_value);
 	      *may_tailcall = false;
 	      maybe_complain_about_tail_call (exp,
-					      "argument must be passed"
-					      " by copying");
+					      _("argument must be passed"
+						" by copying"));
 	    }
 	  arg.pass_by_reference = true;
 	}
@@ -2499,12 +2531,13 @@ can_implement_as_sibling_call_p (tree exp,
 				 tree addr,
 				 const args_size &args_size)
 {
-  if (!targetm.have_sibcall_epilogue ())
+  if (!targetm.have_sibcall_epilogue ()
+      && !targetm.emit_epilogue_for_sibcall)
     {
       maybe_complain_about_tail_call
 	(exp,
-	 "machine description does not have"
-	 " a sibcall_epilogue instruction pattern");
+	 _("machine description does not have"
+	   " a sibcall_epilogue instruction pattern"));
       return false;
     }
 
@@ -2514,7 +2547,7 @@ can_implement_as_sibling_call_p (tree exp,
      sibling calls will return a structure.  */
   if (structure_value_addr != NULL_RTX)
     {
-      maybe_complain_about_tail_call (exp, "callee returns a structure");
+      maybe_complain_about_tail_call (exp, _("callee returns a structure"));
       return false;
     }
 
@@ -2523,8 +2556,8 @@ can_implement_as_sibling_call_p (tree exp,
   if (!targetm.function_ok_for_sibcall (fndecl, exp))
     {
       maybe_complain_about_tail_call (exp,
-				      "target is not able to optimize the"
-				      " call into a sibling call");
+				      _("target is not able to optimize the"
+					" call into a sibling call"));
       return false;
     }
 
@@ -2532,18 +2565,18 @@ can_implement_as_sibling_call_p (tree exp,
      optimized.  */
   if (flags & ECF_RETURNS_TWICE)
     {
-      maybe_complain_about_tail_call (exp, "callee returns twice");
+      maybe_complain_about_tail_call (exp, _("callee returns twice"));
       return false;
     }
   if (flags & ECF_NORETURN)
     {
-      maybe_complain_about_tail_call (exp, "callee does not return");
+      maybe_complain_about_tail_call (exp, _("callee does not return"));
       return false;
     }
 
   if (TYPE_VOLATILE (TREE_TYPE (TREE_TYPE (addr))))
     {
-      maybe_complain_about_tail_call (exp, "volatile function type");
+      maybe_complain_about_tail_call (exp, _("volatile function type"));
       return false;
     }
 
@@ -2562,7 +2595,7 @@ can_implement_as_sibling_call_p (tree exp,
      the argument areas are shared.  */
   if (fndecl && decl_function_context (fndecl) == current_function_decl)
     {
-      maybe_complain_about_tail_call (exp, "nested function");
+      maybe_complain_about_tail_call (exp, _("nested function"));
       return false;
     }
 
@@ -2574,8 +2607,8 @@ can_implement_as_sibling_call_p (tree exp,
 		crtl->args.size - crtl->args.pretend_args_size))
     {
       maybe_complain_about_tail_call (exp,
-				      "callee required more stack slots"
-				      " than the caller");
+				      _("callee required more stack slots"
+					" than the caller"));
       return false;
     }
 
@@ -2589,15 +2622,15 @@ can_implement_as_sibling_call_p (tree exp,
 						crtl->args.size)))
     {
       maybe_complain_about_tail_call (exp,
-				      "inconsistent number of"
-				      " popped arguments");
+				      _("inconsistent number of"
+					" popped arguments"));
       return false;
     }
 
   if (!lang_hooks.decls.ok_for_sibcall (fndecl))
     {
-      maybe_complain_about_tail_call (exp, "frontend does not support"
-					    " sibling call");
+      maybe_complain_about_tail_call (exp, _("frontend does not support"
+					     " sibling call"));
       return false;
     }
 
@@ -2646,7 +2679,13 @@ expand_call (tree exp, rtx target, int ignore)
   /* The type of the function being called.  */
   tree fntype;
   bool try_tail_call = CALL_EXPR_TAILCALL (exp);
-  bool must_tail_call = CALL_EXPR_MUST_TAIL_CALL (exp);
+  /* tree-tailcall decided not to do tail calls. Error for the musttail case,
+     unfortunately we don't know the reason so it's fairly vague.
+     When tree-tailcall reported an error it already cleared the flag,
+     so this shouldn't really happen unless the
+     the musttail pass gave up walking before finding the call.  */
+  if (!try_tail_call)
+      maybe_complain_about_tail_call (exp, _("other reasons"));
   int pass;
 
   /* Register in which non-BLKmode value will be returned,
@@ -2934,7 +2973,7 @@ expand_call (tree exp, rtx target, int ignore)
 	 /* Count the struct value address, if it is passed as a parm.  */
 	 + structure_value_addr_parm);
   else if (TYPE_NO_NAMED_ARGS_STDARG_P (funtype))
-    n_named_args = 0;
+    n_named_args = structure_value_addr_parm;
   else
     /* If we know nothing, treat all args as named.  */
     n_named_args = num_actuals;
@@ -2966,14 +3005,15 @@ expand_call (tree exp, rtx target, int ignore)
      we do not have any reliable way to pass unnamed args in
      registers, so we must force them into memory.  */
 
-  if (type_arg_types != 0
+  if ((type_arg_types != 0 || TYPE_NO_NAMED_ARGS_STDARG_P (funtype))
       && targetm.calls.strict_argument_naming (args_so_far))
     ;
   else if (type_arg_types != 0
 	   && ! targetm.calls.pretend_outgoing_varargs_named (args_so_far))
     /* Don't include the last named arg.  */
     --n_named_args;
-  else if (TYPE_NO_NAMED_ARGS_STDARG_P (funtype))
+  else if (TYPE_NO_NAMED_ARGS_STDARG_P (funtype)
+	   && ! targetm.calls.pretend_outgoing_varargs_named (args_so_far))
     n_named_args = 0;
   else
     /* Treat all args as named.  */
@@ -3017,10 +3057,21 @@ expand_call (tree exp, rtx target, int ignore)
      pushed these optimizations into -O2.  Don't try if we're already
      expanding a call, as that means we're an argument.  Don't try if
      there's cleanups, as we know there's code to follow the call.  */
-  if (currently_expanding_call++ != 0
-      || (!flag_optimize_sibling_calls && !CALL_FROM_THUNK_P (exp))
-      || args_size.var
-      || dbg_cnt (tail_call) == false)
+  if (currently_expanding_call++ != 0)
+    {
+      maybe_complain_about_tail_call (exp, _("inside another call"));
+      try_tail_call = 0;
+    }
+  if (!flag_optimize_sibling_calls
+	&& !CALL_FROM_THUNK_P (exp)
+	&& !CALL_EXPR_MUST_TAIL_CALL (exp))
+    try_tail_call = 0;
+  if (args_size.var)
+    {
+      maybe_complain_about_tail_call (exp, _("variable size arguments"));
+      try_tail_call = 0;
+    }
+  if (dbg_cnt (tail_call) == false)
     try_tail_call = 0;
 
   /* Workaround buggy C/C++ wrappers around Fortran routines with
@@ -3041,13 +3092,15 @@ expand_call (tree exp, rtx target, int ignore)
 	    if (MEM_P (*iter))
 	      {
 		try_tail_call = 0;
+		maybe_complain_about_tail_call (exp,
+				_("hidden string length argument passed on stack"));
 		break;
 	      }
 	}
 
   /* If the user has marked the function as requiring tail-call
      optimization, attempt it.  */
-  if (must_tail_call)
+  if (CALL_EXPR_MUST_TAIL_CALL (exp))
     try_tail_call = 1;
 
   /*  Rest of purposes for tail call optimizations to fail.  */
@@ -3088,9 +3141,9 @@ expand_call (tree exp, rtx target, int ignore)
 	{
 	  try_tail_call = 0;
 	  maybe_complain_about_tail_call (exp,
-					  "caller and callee disagree in"
-					  " promotion of function"
-					  " return value");
+					  _("caller and callee disagree in"
+					    " promotion of function"
+					    " return value"));
 	}
     }
 
@@ -3559,15 +3612,26 @@ expand_call (tree exp, rtx target, int ignore)
 		sibcall_failure = true;
 	    }
 
+      /* Set up the next argument register.  For sibling calls on machines
+	 with register windows this should be the incoming register.  */
+      if (pass == 0)
+	next_arg_reg = targetm.calls.function_incoming_arg
+	  (args_so_far, function_arg_info::end_marker ());
+      else
+	next_arg_reg = targetm.calls.function_arg
+	  (args_so_far, function_arg_info::end_marker ());
+
+      targetm.calls.start_call_args (args_so_far);
+
       bool any_regs = false;
       for (i = 0; i < num_actuals; i++)
 	if (args[i].reg != NULL_RTX)
 	  {
 	    any_regs = true;
-	    targetm.calls.call_args (args[i].reg, funtype);
+	    targetm.calls.call_args (args_so_far, args[i].reg, funtype);
 	  }
       if (!any_regs)
-	targetm.calls.call_args (pc_rtx, funtype);
+	targetm.calls.call_args (args_so_far, pc_rtx, funtype);
 
       /* Figure out the register where the value, if any, will come back.  */
       valreg = 0;
@@ -3629,15 +3693,6 @@ expand_call (tree exp, rtx target, int ignore)
       /* Save a pointer to the last insn before the call, so that we can
 	 later safely search backwards to find the CALL_INSN.  */
       before_call = get_last_insn ();
-
-      /* Set up next argument register.  For sibling calls on machines
-	 with register windows this should be the incoming register.  */
-      if (pass == 0)
-	next_arg_reg = targetm.calls.function_incoming_arg
-	  (args_so_far, function_arg_info::end_marker ());
-      else
-	next_arg_reg = targetm.calls.function_arg
-	  (args_so_far, function_arg_info::end_marker ());
 
       if (pass == 1 && (return_flags & ERF_RETURNS_ARG))
 	{
@@ -3937,7 +3992,7 @@ expand_call (tree exp, rtx target, int ignore)
       for (i = 0; i < num_actuals; ++i)
 	free (args[i].aligned_regs);
 
-      targetm.calls.end_call_args ();
+      targetm.calls.end_call_args (args_so_far);
 
       insns = get_insns ();
       end_sequence ();
@@ -3998,7 +4053,7 @@ expand_call (tree exp, rtx target, int ignore)
       if (try_tail_call)
 	/* Ideally we'd emit a message for all of the ways that it could
 	   have failed.  */
-	maybe_complain_about_tail_call (exp, "tail call production failed");
+	maybe_complain_about_tail_call (exp, _("tail call production failed"));
     }
 
   currently_expanding_call--;
@@ -4495,17 +4550,9 @@ emit_library_call_value_1 (int retval, rtx orgfun, rtx value,
     }
 #endif
 
-  /* When expanding a normal call, args are stored in push order,
-     which is the reverse of what we have here.  */
-  bool any_regs = false;
-  for (int i = nargs; i-- > 0; )
-    if (argvec[i].reg != NULL_RTX)
-      {
-	targetm.calls.call_args (argvec[i].reg, NULL_TREE);
-	any_regs = true;
-      }
-  if (!any_regs)
-    targetm.calls.call_args (pc_rtx, NULL_TREE);
+  rtx call_cookie
+    = targetm.calls.function_arg (args_so_far,
+				  function_arg_info::end_marker ());
 
   /* Push the args that need to be pushed.  */
 
@@ -4582,8 +4629,8 @@ emit_library_call_value_1 (int retval, rtx orgfun, rtx value,
 		}
 	    }
 
-	  emit_push_insn (val, mode, NULL_TREE, NULL_RTX, parm_align,
-			  partial, reg, 0, argblock,
+	  emit_push_insn (val, mode, lang_hooks.types.type_for_mode (mode, 0),
+			  NULL_RTX, parm_align, partial, reg, 0, argblock,
 			  (gen_int_mode
 			   (argvec[argnum].locate.offset.constant, Pmode)),
 			  reg_parm_stack_space,
@@ -4623,6 +4670,20 @@ emit_library_call_value_1 (int retval, rtx orgfun, rtx value,
 
   fun = prepare_call_address (NULL, fun, NULL, &call_fusage, 0, 0);
 
+  targetm.calls.start_call_args (args_so_far);
+
+  /* When expanding a normal call, args are stored in push order,
+     which is the reverse of what we have here.  */
+  bool any_regs = false;
+  for (int i = nargs; i-- > 0; )
+    if (argvec[i].reg != NULL_RTX)
+      {
+	targetm.calls.call_args (args_so_far, argvec[i].reg, NULL_TREE);
+	any_regs = true;
+      }
+  if (!any_regs)
+    targetm.calls.call_args (args_so_far, pc_rtx, NULL_TREE);
+
   /* Now load any reg parms into their regs.  */
 
   /* ARGNUM indexes the ARGVEC array in the order in which the arguments
@@ -4633,7 +4694,7 @@ emit_library_call_value_1 (int retval, rtx orgfun, rtx value,
       rtx val = argvec[argnum].value;
       rtx reg = argvec[argnum].reg;
       int partial = argvec[argnum].partial;
-      
+
       /* Handle calls that pass values in multiple non-contiguous
 	 locations.  The PA64 has examples of this for library calls.  */
       if (reg != 0 && GET_CODE (reg) == PARALLEL)
@@ -4729,10 +4790,7 @@ emit_library_call_value_1 (int retval, rtx orgfun, rtx value,
 	       get_identifier (XSTR (orgfun, 0)),
 	       build_function_type (tfom, NULL_TREE),
 	       original_args_size.constant, args_size.constant,
-	       struct_value_size,
-	       targetm.calls.function_arg (args_so_far,
-					   function_arg_info::end_marker ()),
-	       valreg,
+	       struct_value_size, call_cookie, valreg,
 	       old_inhibit_defer_pop + 1, call_fusage, flags, args_so_far);
 
   if (flag_ipa_ra)
@@ -4752,7 +4810,7 @@ emit_library_call_value_1 (int retval, rtx orgfun, rtx value,
       valreg = gen_rtx_REG (TYPE_MODE (tfom), REGNO (valreg));
     }
 
-  targetm.calls.end_call_args ();
+  targetm.calls.end_call_args (args_so_far);
 
   /* For calls to `setjmp', etc., inform function.cc:setjmp_warnings
      that it should complain if nonvolatile values are live.  For
@@ -5187,7 +5245,7 @@ store_one_arg (struct arg_data *arg, rtx argblock, int flags,
 		     they aren't really at the same location.  Check for
 		     this by making sure that the incoming size is the
 		     same as the outgoing size.  */
-		  if (maybe_ne (arg->locate.size.constant, size_val))
+		  if (partial != 0)
 		    sibcall_failure = true;
 		}
 	      else if (maybe_in_range_p (arg->locate.offset.constant,

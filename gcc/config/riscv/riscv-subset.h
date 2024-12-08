@@ -1,5 +1,5 @@
 /* Definition of data structure of RISC-V subset for GNU compiler.
-   Copyright (C) 2011-2023 Free Software Foundation, Inc.
+   Copyright (C) 2011-2024 Free Software Foundation, Inc.
    Contributed by Andrew Waterman (andrew@sifive.com).
    Based on MIPS target for GNU compiler.
 
@@ -21,6 +21,8 @@ along with GCC; see the file COPYING3.  If not see
 
 #ifndef GCC_RISCV_SUBSET_H
 #define GCC_RISCV_SUBSET_H
+
+#include "riscv-feature-bits.h"
 
 #define RISCV_DONT_CARE_VERSION -1
 
@@ -62,19 +64,28 @@ private:
   /* X-len of m_arch. */
   unsigned m_xlen;
 
+  /* Number of subsets. */
+  unsigned m_subset_num;
+
+  /* Allow adding the same extension more than once.  */
+  bool m_allow_adding_dup;
+
   riscv_subset_list (const char *, location_t);
 
   const char *parsing_subset_version (const char *, const char *, unsigned *,
 				      unsigned *, bool, bool *);
 
-  const char *parse_std_ext (const char *);
+  const char *parse_base_ext (const char *);
 
-  const char *parse_multiletter_ext (const char *, const char *,
-				     const char *);
+  const char *parse_single_std_ext (const char *, bool);
+
+  const char *parse_single_multiletter_ext (const char *, const char *,
+					    const char *, bool);
 
   void handle_implied_ext (const char *);
   bool check_implied_ext ();
   void handle_combine_ext ();
+  void check_conflict_ext ();
 
 public:
   ~riscv_subset_list ();
@@ -91,14 +102,31 @@ public:
 
   unsigned xlen () const {return m_xlen;};
 
+  riscv_subset_list *clone () const;
+
   static riscv_subset_list *parse (const char *, location_t);
+  const char *parse_single_ext (const char *, bool exact_single_p = true);
 
   const riscv_subset_t *begin () const {return m_head;};
   const riscv_subset_t *end () const {return NULL;};
 
   int match_score (riscv_subset_list *) const;
+
+  void set_loc (location_t);
+
+  void set_allow_adding_dup (bool v) { m_allow_adding_dup = v; }
+
+  void finalize ();
 };
 
-extern const riscv_subset_list *riscv_current_subset_list (void);
+extern const riscv_subset_list *riscv_cmdline_subset_list (void);
+extern void
+riscv_set_arch_by_subset_list (riscv_subset_list *, struct gcc_options *);
+extern bool riscv_minimal_hwprobe_feature_bits (const char *,
+						struct riscv_feature_bits *,
+						location_t);
+extern bool
+riscv_ext_is_subset (struct cl_target_option *, struct cl_target_option *);
+extern int riscv_x_target_flags_isa_mask (void);
 
 #endif /* ! GCC_RISCV_SUBSET_H */

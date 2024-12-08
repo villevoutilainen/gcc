@@ -1,6 +1,6 @@
 // Locale support -*- C++ -*-
 
-// Copyright (C) 2007-2023 Free Software Foundation, Inc.
+// Copyright (C) 2007-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -34,7 +34,12 @@
 #ifndef _LOCALE_CLASSES_TCC
 #define _LOCALE_CLASSES_TCC 1
 
+#ifdef _GLIBCXX_SYSHDR
 #pragma GCC system_header
+#endif
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wc++11-extensions" // extern template
+#pragma GCC diagnostic ignored "-Wvariadic-macros"
 
 namespace std _GLIBCXX_VISIBILITY(default)
 {
@@ -44,6 +49,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     locale::
     locale(const locale& __other, _Facet* __f)
     {
+      // _GLIBCXX_RESOLVE_LIB_DEFECTS
+      // 2295. Locale name when the provided Facet is a nullptr
+      if (__builtin_expect(!__f, 0))
+	{
+	  _M_impl = __other._M_impl;
+	  _M_impl->_M_add_reference();
+	  return;
+	}
+
       _M_impl = new _Impl(*__other._M_impl, 1);
 
       __try
@@ -62,6 +76,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     locale::
     combine(const locale& __other) const
     {
+#if __cpp_lib_type_trait_variable_templates // C++ >= 17
+      static_assert(__is_facet<_Facet>, "Template argument must be a facet");
+#endif
+
       _Impl* __tmp = new _Impl(*_M_impl, 1);
       __try
 	{
@@ -72,6 +90,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  __tmp->_M_remove_reference();
 	  __throw_exception_again;
 	}
+      delete[] __tmp->_M_names[0];
+      __tmp->_M_names[0] = 0;   // Unnamed.
       return locale(__tmp);
     }
 
@@ -87,6 +107,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 				__s2.data(), __s2.data() + __s2.length()) < 0);
     }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wc++17-extensions"
   template<typename _Facet>
     inline const _Facet*
     __try_use_facet(const locale& __loc) _GLIBCXX_NOTHROW
@@ -97,7 +119,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       // We know these standard facets are always installed in every locale
       // so dynamic_cast always succeeds, just use static_cast instead.
 #define _GLIBCXX_STD_FACET(...) \
-      if _GLIBCXX17_CONSTEXPR (__is_same(_Facet, __VA_ARGS__)) \
+      if _GLIBCXX_CONSTEXPR (__is_same(const _Facet, const __VA_ARGS__)) \
 	return static_cast<const _Facet*>(__facets[__i])
 
       _GLIBCXX_STD_FACET(ctype<char>);
@@ -145,6 +167,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       return static_cast<const _Facet*>(__facets[__i]);
 #endif
     }
+#pragma GCC diagnostic pop
 
   /**
    *  @brief  Test for the presence of a facet.
@@ -159,8 +182,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
    *  @return  true if @p __loc contains a facet of type _Facet, else false.
   */
   template<typename _Facet>
+    _GLIBCXX_NODISCARD
     inline bool
-    has_facet(const locale& __loc) throw()
+    has_facet(const locale& __loc) _GLIBCXX_USE_NOEXCEPT
     {
 #if __cplusplus >= 201103L
       static_assert(__is_base_of(locale::facet, _Facet),
@@ -188,6 +212,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdangling-reference"
   template<typename _Facet>
+    _GLIBCXX_NODISCARD
     inline const _Facet&
     use_facet(const locale& __loc)
     {
@@ -364,4 +389,5 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace std
 
+#pragma GCC diagnostic pop
 #endif

@@ -108,6 +108,13 @@ AM_PROG_LIBTOOL
 ACX_LT_HOST_FLAGS
 AC_SUBST(enable_shared)
 AC_SUBST(enable_static)
+AM_CONDITIONAL([ENABLE_DARWIN_AT_RPATH], [test x$enable_darwin_at_rpath = xyes])
+os_is_darwin=no
+case ${host_os} in
+  darwin*) os_is_darwin=yes ;;
+  *) ;;
+esac
+AM_CONDITIONAL([OS_IS_DARWIN], [test x${os_is_darwin} = xyes])
 
 if test "$enable_vtable_verify" = yes; then
   predep_objects_CXX="${predep_objects_CXX} ${glibcxx_builddir}/../libgcc/vtv_start.o"
@@ -369,7 +376,15 @@ dnl # rather than hardcoding that information.
       frexpl hypotl ldexpl log10l logl modfl powl sinhl sinl sqrtl
       tanhl tanl])
 
-    AC_DEFINE(HAVE_ICONV)
+    # Support for iconv in newlib is configurable.
+    AC_TRY_COMPILE([#include <newlib.h>], [
+      #ifndef _ICONV_ENABLED
+      #error
+      #endif], [ac_newlib_iconv_enabled=yes], [ac_newlib_iconv_enabled=no])
+    if test "$ac_newlib_iconv_enabled" = yes; then
+      AC_DEFINE(HAVE_ICONV)
+    fi
+
     AC_DEFINE(HAVE_MEMALIGN)
 
     case "${target}" in
@@ -393,6 +408,13 @@ dnl # rather than hardcoding that information.
         AC_DEFINE(HAVE_SYMLINK)
         AC_DEFINE(HAVE_TRUNCATE)
         AC_DEFINE(HAVE_USLEEP)
+
+        # These functions are defined in librtemscpu.  We don't use
+        # -qrtems during configure, so we don't link that in, and fail
+        # to find them.
+        glibcxx_cv_chdir=yes
+        glibcxx_cv_chmod=yes
+        glibcxx_cv_mkdir=yes
         ;;
     esac
   elif test "x$with_headers" != "xno"; then
@@ -532,7 +554,10 @@ AC_CHECK_HEADERS([fcntl.h sys/ioctl.h sys/socket.h sys/uio.h poll.h netdb.h arpa
 AC_CHECK_DECL(F_GETFL,,,[#include <fcntl.h>])
 AC_CHECK_DECL(F_SETFL,,,[#include <fcntl.h>])
 if test "$ac_cv_have_decl_F_GETFL$ac_cv_have_decl_F_SETFL" = yesyes ; then
-  AC_CHECK_DECL(O_NONBLOCK,,,[#include <fcntl.h>])
+  AC_CHECK_DECL(O_NONBLOCK,
+    AC_DEFINE(HAVE_O_NONBLOCK,1,[Define if O_NONBLOCK is defined in <fcntl.h>]),
+    [],
+    [#include <fcntl.h>])
 fi
 
 # For Transactional Memory TS
@@ -555,6 +580,9 @@ GLIBCXX_CHECK_INIT_PRIORITY
 
 # For __basic_file::native_handle()
 GLIBCXX_CHECK_FILEBUF_NATIVE_HANDLES
+
+# For std::text_encoding
+GLIBCXX_CHECK_TEXT_ENCODING
 
 # Define documentation rules conditionally.
 

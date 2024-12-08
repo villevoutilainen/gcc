@@ -1,5 +1,5 @@
 /* Target Code for R8C/M16C/M32C
-   Copyright (C) 2005-2023 Free Software Foundation, Inc.
+   Copyright (C) 2005-2024 Free Software Foundation, Inc.
    Contributed by Red Hat.
 
    This file is part of GCC.
@@ -873,7 +873,7 @@ m32c_matches_constraint_p (rtx value, int constraint)
 		    && A0_OR_PSEUDO (patternr[5])
 		    && GET_MODE (patternr[5]) == HImode)
 		|| RTX_IS ("ms")));
-  case CONSTRAINT_Sd:    
+  case CONSTRAINT_Sd:
     {
       /* This is the common "src/dest" address */
       rtx r;
@@ -2790,7 +2790,7 @@ m32c_print_operand (FILE * file, rtx x, int code)
 #undef TARGET_PRINT_OPERAND_PUNCT_VALID_P
 #define TARGET_PRINT_OPERAND_PUNCT_VALID_P m32c_print_operand_punct_valid_p
 
-static bool 
+static bool
 m32c_print_operand_punct_valid_p (unsigned char c)
 {
   if (c == '&' || c == '!')
@@ -2999,7 +2999,7 @@ current_function_special_page_vector (rtx x)
 
 #undef TARGET_ATTRIBUTE_TABLE
 #define TARGET_ATTRIBUTE_TABLE m32c_attribute_table
-static const struct attribute_spec m32c_attribute_table[] = {
+TARGET_GNU_ATTRIBUTES (m32c_attribute_table, {
   /* { name, min_len, max_len, decl_req, type_req, fn_type_req,
        affects_type_identity, handler, exclude } */
   { "interrupt", 0, 0, false, false, false, false, interrupt_handler, NULL },
@@ -3007,9 +3007,8 @@ static const struct attribute_spec m32c_attribute_table[] = {
   { "fast_interrupt", 0, 0, false, false, false, false,
     interrupt_handler, NULL },
   { "function_vector", 1, 1, true,  false, false, false,
-    function_vector_handler, NULL },
-  { NULL, 0, 0, false, false, false, false, NULL, NULL }
-};
+    function_vector_handler, NULL }
+});
 
 #undef TARGET_COMP_TYPE_ATTRIBUTES
 #define TARGET_COMP_TYPE_ATTRIBUTES m32c_comp_type_attributes
@@ -3037,7 +3036,7 @@ m32c_insert_attributes (tree node ATTRIBUTE_UNUSED,
 	{
 	  TREE_THIS_VOLATILE (node) = true;
 	}
-    }	
+    }
 }
 
 /* Hash table of pragma info.  */
@@ -3228,7 +3227,7 @@ m32c_immd_dbl_mov (rtx * operands ATTRIBUTE_UNUSED,
   /* ??? This relied on the now-defunct MEM_SCALAR and MEM_IN_STRUCT_P
      flags.  */
   return false;
-}  
+}
 
 /* Expanders */
 
@@ -4100,7 +4099,7 @@ m32c_emit_prologue (void)
 
   if (flag_stack_usage_info)
     current_function_static_stack_size = frame_size;
-  
+
   if (frame_size > 254)
     {
       extra_frame_size = frame_size - 254;
@@ -4501,6 +4500,9 @@ m32c_output_compare (rtx_insn *insn, rtx *operands)
 
 #undef TARGET_CAN_CHANGE_MODE_CLASS
 #define TARGET_CAN_CHANGE_MODE_CLASS m32c_can_change_mode_class
+
+#undef TARGET_DOCUMENTATION_NAME
+#define TARGET_DOCUMENTATION_NAME "M32C"
 
 /* The Global `targetm' Variable. */
 

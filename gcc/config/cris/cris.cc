@@ -1,5 +1,5 @@
 /* Definitions for GCC.  Part of the machine description for CRIS.
-   Copyright (C) 1998-2023 Free Software Foundation, Inc.
+   Copyright (C) 1998-2024 Free Software Foundation, Inc.
    Contributed by Axis Communications.  Written by Hans-Peter Nilsson.
 
 This file is part of GCC.
@@ -53,6 +53,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "builtins.h"
 #include "cfgrtl.h"
 #include "tree-pass.h"
+#include "opts.h"
 
 /* This file should be included last.  */
 #include "target-def.h"
@@ -152,9 +153,11 @@ static void cris_function_arg_advance (cumulative_args_t,
 				       const function_arg_info &);
 static rtx_insn *cris_md_asm_adjust (vec<rtx> &, vec<rtx> &,
 				     vec<machine_mode> &, vec<const char *> &,
-				     vec<rtx> &, HARD_REG_SET &, location_t);
+				     vec<rtx> &, vec<rtx> &,
+				     HARD_REG_SET &, location_t);
 
 static void cris_option_override (void);
+static void cris_option_override_after_change ();
 
 static bool cris_frame_pointer_required (void);
 
@@ -280,6 +283,8 @@ int cris_cpu_version = CRIS_DEFAULT_CPU_VERSION;
 
 #undef TARGET_OPTION_OVERRIDE
 #define TARGET_OPTION_OVERRIDE cris_option_override
+#undef TARGET_OVERRIDE_OPTIONS_AFTER_CHANGE
+#define TARGET_OVERRIDE_OPTIONS_AFTER_CHANGE cris_option_override_after_change
 
 #undef TARGET_ASM_TRAMPOLINE_TEMPLATE
 #define TARGET_ASM_TRAMPOLINE_TEMPLATE cris_asm_trampoline_template
@@ -1381,6 +1386,22 @@ cris_return_addr_rtx (int count, rtx frameaddr ATTRIBUTE_UNUSED)
     : NULL_RTX;
 }
 
+/* Setting the EH return return address is done by a *store* to a memory
+   address expressed as relative to "*incoming* args".  That store will
+   be optimized away, unless the MEM is marked as volatile.  N.B.: no
+   optimization opportunities are expected to be lost due to this hack;
+   __builtin_eh_return isn't called from elsewhere than the EH machinery
+   in libgcc.  */
+
+rtx
+cris_eh_return_handler_rtx ()
+{
+  rtx ret = cris_return_addr_rtx (0, NULL_RTX);
+  gcc_assert (MEM_P (ret));
+  MEM_VOLATILE_P (ret) = true;
+  return ret;
+}
+
 /* Accessor used in cris.md:return because cfun->machine isn't available
    there.  */
 
@@ -2258,7 +2279,7 @@ cris_side_effect_mode_ok (enum rtx_code code, rtx *ops,
 /* Queue an .ident string in the queue of top-level asm statements.
    If the front-end is done, we must be being called from toplev.cc.
    In that case, do nothing.  */
-void 
+void
 cris_asm_output_ident (const char *string)
 {
   if (symtab->state != PARSING)
@@ -2392,6 +2413,38 @@ cris_option_override (void)
 
   /* Set the per-function-data initializer.  */
   init_machine_status = cris_init_machine_status;
+
+  cris_option_override_after_change ();
+}
+
+/* The TARGET_OVERRIDE_OPTIONS_AFTER_CHANGE worker.
+
+   The CRIS port doesn't have any port-specific function attributes to
+   handle, but to keep attributes consistent across per-function changes
+   and not fail per-function optimization settings as exposed by
+   gcc.dg/ipa/iinline-attr.c, any OPTION_SET_P work need to be done
+   here, not in the TARGET_OPTION_OVERRIDE function.  This function then
+   instead needs to called from that function.  */
+
+static void
+cris_option_override_after_change ()
+{
+  /* The combine pass inserts extra copies of the incoming parameter
+     registers in make_more_copies, between the hard registers and
+     pseudo-registers holding the "original" copies.  When doing that,
+     it does not copy attributes from those original registers.  With
+     the late-combine pass, those extra copies are propagated into more
+     places than the original copies, and trips up LRA which doesn't see
+     e.g. REG_POINTER where it's expected.  This causes an ICE for
+     gcc.target/cris/rld-legit1.c.  That's a red flag, but also a very
+     special corner case.
+
+     A more valid reason is that coremark with -march=v10 -O2 regresses
+     by 2.6% @r15-2005-g13757e50ff0b compared to late-combined disabled.
+
+     Disable late-combine by default until that's fixed.  */
+  if (!OPTION_SET_P (flag_late_combine_instructions))
+    flag_late_combine_instructions = 0;
 }
 
 /* The TARGET_ASM_OUTPUT_MI_THUNK worker.  */
@@ -3544,7 +3597,7 @@ cris_promote_function_mode (const_tree type ATTRIBUTE_UNUSED,
   if (for_return == 1)
     return mode;
   return CRIS_PROMOTED_MODE (mode, *punsignedp, type);
-} 
+}
 
 /* Atomic types require alignment to be at least their "natural" size.  */
 
@@ -3646,7 +3699,8 @@ cris_function_arg_advance (cumulative_args_t ca_v,
 static rtx_insn *
 cris_md_asm_adjust (vec<rtx> &outputs, vec<rtx> &inputs,
 		    vec<machine_mode> & /*input_modes*/,
-		    vec<const char *> &constraints, vec<rtx> &clobbers,
+		    vec<const char *> &constraints,
+		    vec<rtx> &/*uses*/, vec<rtx> &clobbers,
 		    HARD_REG_SET &clobbered_regs, location_t /*loc*/)
 {
   /* For the time being, all asms clobber condition codes.

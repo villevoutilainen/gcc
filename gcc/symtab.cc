@@ -1,5 +1,5 @@
 /* Symbol table.
-   Copyright (C) 2012-2023 Free Software Foundation, Inc.
+   Copyright (C) 2012-2024 Free Software Foundation, Inc.
    Contributed by Jan Hubicka
 
 This file is part of GCC.
@@ -331,7 +331,7 @@ symbol_table::change_decl_assembler_name (tree decl, tree name)
 			      && IDENTIFIER_TRANSPARENT_ALIAS
 				     (DECL_ASSEMBLER_NAME (alias->decl)));
 
-		  TREE_CHAIN (DECL_ASSEMBLER_NAME (alias->decl)) = 
+		  TREE_CHAIN (DECL_ASSEMBLER_NAME (alias->decl)) =
 		    ultimate_transparent_alias_target
 			 (DECL_ASSEMBLER_NAME (node->decl));
 		}
@@ -1135,7 +1135,7 @@ symtab_node::verify_base (void)
       error ("node has invalid order %i", order);
       error_found = true;
     }
-   
+
   if (symtab->state != LTO_STREAMING)
     {
       hashed_node = symtab_node::get (decl);
@@ -1367,6 +1367,98 @@ symtab_node::verify (void)
 	internal_error ("symtab_node::verify failed");
       }
   timevar_pop (TV_CGRAPH_VERIFY);
+}
+
+/* Return true and set *DATA to true if NODE is an ifunc resolver.  */
+
+static bool
+check_ifunc_resolver (cgraph_node *node, void *data)
+{
+  if (node->ifunc_resolver)
+    {
+      bool *is_ifunc_resolver = (bool *) data;
+      *is_ifunc_resolver = true;
+      return true;
+    }
+  return false;
+}
+
+static bitmap ifunc_ref_map;
+
+/* Return true if any caller of NODE is an ifunc resolver.  */
+
+static bool
+is_caller_ifunc_resolver (cgraph_node *node)
+{
+  bool is_ifunc_resolver = false;
+
+  for (cgraph_edge *e = node->callers; e; e = e->next_caller)
+    {
+      /* Return true if caller is known to be an IFUNC resolver.  */
+      if (e->caller->called_by_ifunc_resolver)
+	return true;
+
+      /* Check for recursive call.  */
+      if (e->caller == node)
+	continue;
+
+      /* Skip if it has been visited.  */
+      unsigned int uid = e->caller->get_uid ();
+      if (!bitmap_set_bit (ifunc_ref_map, uid))
+	continue;
+
+      if (is_caller_ifunc_resolver (e->caller))
+	{
+	  /* Return true if caller is an IFUNC resolver.  */
+	  e->caller->called_by_ifunc_resolver = true;
+	  return true;
+	}
+
+      /* Check if caller's alias is an IFUNC resolver.  */
+      e->caller->call_for_symbol_and_aliases (check_ifunc_resolver,
+					      &is_ifunc_resolver,
+					      true);
+      if (is_ifunc_resolver)
+	{
+	  /* Return true if caller's alias is an IFUNC resolver.  */
+	  e->caller->called_by_ifunc_resolver = true;
+	  return true;
+	}
+    }
+
+  return false;
+}
+
+/* Check symbol table for callees of IFUNC resolvers.  */
+
+void
+symtab_node::check_ifunc_callee_symtab_nodes (void)
+{
+  symtab_node *node;
+
+  bitmap_obstack_initialize (NULL);
+  ifunc_ref_map = BITMAP_ALLOC (NULL);
+
+  FOR_EACH_SYMBOL (node)
+    {
+      cgraph_node *cnode = dyn_cast <cgraph_node *> (node);
+      if (!cnode)
+	continue;
+
+      unsigned int uid = cnode->get_uid ();
+      if (bitmap_bit_p (ifunc_ref_map, uid))
+	continue;
+      bitmap_set_bit (ifunc_ref_map, uid);
+
+      bool is_ifunc_resolver = false;
+      cnode->call_for_symbol_and_aliases (check_ifunc_resolver,
+					  &is_ifunc_resolver, true);
+      if (is_ifunc_resolver || is_caller_ifunc_resolver (cnode))
+	cnode->called_by_ifunc_resolver = true;
+    }
+
+  BITMAP_FREE (ifunc_ref_map);
+  bitmap_obstack_release (NULL);
 }
 
 /* Verify symbol table for internal consistency.  */
@@ -2133,7 +2225,7 @@ symtab_node::nonzero_address ()
 	     target is used only via the alias.
 	     We may walk references and look for strong use, but we do not know
 	     if this strong use will survive to final binary, so be
-	     conservative here.  
+	     conservative here.
 	     ??? Maybe we could do the lookup during late optimization that
 	     could be useful to eliminate the NULL pointer checks in LTO
 	     programs.  */
@@ -2188,7 +2280,7 @@ symtab_node::nonzero_address ()
 
 /* Return 0 if symbol is known to have different address than S2,
    Return 1 if symbol is known to have same address as S2,
-   return -1 otherwise.  
+   return -1 otherwise.
 
    If MEMORY_ACCESSED is true, assume that both memory pointer to THIS
    and S2 is going to be accessed.  This eliminates the situations when
@@ -2263,7 +2355,7 @@ symtab_node::equal_address_to (symtab_node *s2, bool memory_accessed)
 
   /* If we have a non-interposable definition of at least one of the symbols
      and the other symbol is different, we know other unit cannot interpose
-     it to the first symbol; all aliases of the definition needs to be 
+     it to the first symbol; all aliases of the definition needs to be
      present in the current unit.  */
   if (((really_binds_local1 || really_binds_local2)
       /* If we have both definitions and they are different, we know they
@@ -2458,7 +2550,7 @@ symtab_node::definition_alignment ()
 
 /* Return symbol used to separate symbol name from suffix.  */
 
-char 
+char
 symbol_table::symbol_suffix_separator ()
 {
 #ifndef NO_DOT_IN_LABEL

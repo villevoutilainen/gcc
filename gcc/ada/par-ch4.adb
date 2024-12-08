@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -217,6 +217,8 @@ package body Ch4 is
 
       Arg_List  : List_Id := No_List; -- kill junk warning
       Attr_Name : Name_Id := No_Name; -- kill junk warning
+
+      Error_Loc : Source_Ptr;
 
    begin
       --  Case of not a name
@@ -889,13 +891,16 @@ package body Ch4 is
          ("positional parameter association " &
            "not allowed after named one");
 
+      Error_Loc := Token_Ptr;
+
       Expr_Node := P_Expression_If_OK;
 
       --  Leaving the '>' in an association is not unusual, so suggest
       --  a possible fix.
 
       if Nkind (Expr_Node) = N_Op_Eq then
-         Error_Msg_N ("\maybe `='>` was intended", Expr_Node);
+         Error_Msg_Sloc := Sloc (Expr_Node);
+         Error_Msg ("\maybe `='>` was intended #", Error_Loc);
       end if;
 
       --  We go back to scanning out expressions, so that we do not get
@@ -1393,6 +1398,8 @@ package body Ch4 is
       Start_Token : constant Token_Type := Token;
       --  Used to prevent mismatches (...] and [...)
 
+      Saved_Delta_Aggregate_Flag : constant Boolean := Inside_Delta_Aggregate;
+
    --  Start of processing for P_Aggregate_Or_Paren_Expr
 
    begin
@@ -1497,6 +1504,7 @@ package body Ch4 is
             Scan; -- past WITH
             if Token = Tok_Delta then
                Scan; -- past DELTA
+               Inside_Delta_Aggregate := True;
                Aggregate_Node := New_Node (N_Delta_Aggregate, Lparen_Sloc);
                Set_Expression (Aggregate_Node, Expr_Node);
                Expr_Node := Empty;
@@ -1707,6 +1715,16 @@ package body Ch4 is
       end if;
 
       Set_Component_Associations (Aggregate_Node, Assoc_List);
+
+      --  Inside_Delta_Aggregate is only tested if Serious_Errors = 0, so
+      --  it is ok if we fail to restore the saved I_D_A value in an error
+      --  path. In particular, it is ok that we do not restore it if
+      --  Error_Resync is propagated. Earlier return statements (which return
+      --  without restoring the saved I_D_A value) should either be in error
+      --  paths or in paths where I_D_A could not have been modified.
+
+      Inside_Delta_Aggregate := Saved_Delta_Aggregate_Flag;
+
       return Aggregate_Node;
    end P_Aggregate_Or_Paren_Expr;
 
@@ -2519,6 +2537,109 @@ package body Ch4 is
          Expr_Form := EF_Simple;
       end if;
 
+      --  If all extensions are enabled and we have a deep delta aggregate
+      --  whose type is an array type with an element type that is a
+      --  record type, then we can encounter legal things like
+      --    with delta (Some_Index_Expression).Some_Component
+      --  where a parenthesized expression precedes a dot.
+      --  Similarly, if the element type is an array type then we can see
+      --    with delta (Some_Index_Expression)(Another_Index_Expression)
+      --  where a parenthesized expression precedes a left parenthesis.
+
+      if Token in Tok_Dot | Tok_Left_Paren
+        and then Prev_Token = Tok_Right_Paren
+        and then Serious_Errors_Detected = 0
+        and then Inside_Delta_Aggregate
+        and then All_Extensions_Allowed
+      then
+         if Token = Tok_Dot then
+            Node2 := New_Node (N_Selected_Component, Token_Ptr);
+            Scan; -- past dot
+            declare
+               Tail  : constant Node_Id := P_Simple_Expression;
+               --  remaining selectors occurring after the dot
+
+               Rover : Node_Id := Tail;
+               Prev  : Node_Id := Empty;
+            begin
+               --  If Tail already has a prefix, then we want to prepend
+               --  Node1 onto that prefix and then return Tail.
+               --  Otherwise, Tail should simply be an identifier so
+               --  we want to build a Selected_Component with Tail as the
+               --  selector name and return that.
+
+               Set_Prefix (Node2, Node1);
+
+               while Nkind (Rover)
+                       in N_Indexed_Component | N_Selected_Component loop
+                  Prev := Rover;
+                  Rover := Prefix (Rover);
+               end loop;
+
+               case Nkind (Prev) is
+                  when N_Selected_Component | N_Indexed_Component =>
+                     --  We've scanned a dot, so an identifier should follow
+                     if Nkind (Prefix (Prev)) = N_Identifier then
+                        Set_Selector_Name (Node2, Prefix (Prev));
+                        Set_Prefix (Prev, Node2);
+                        return Tail;
+                     end if;
+
+                  when N_Empty =>
+                     --  We've scanned a dot, so an identifier should follow
+                     if Nkind (Tail) = N_Identifier then
+                        Set_Selector_Name (Node2, Tail);
+                        return Node2;
+                     end if;
+
+                  when others =>
+                     null;
+               end case;
+
+               --  fall through to error case
+            end;
+         else
+            Node2 := New_Node (N_Indexed_Component, Token_Ptr);
+            declare
+               Tail  : constant Node_Id := P_Simple_Expression;
+               --  remaining selectors
+
+               Rover : Node_Id := Tail;
+               Prev  : Node_Id := Empty;
+            begin
+               --  If Tail already has a prefix, then we want to prepend
+               --  Node1 onto that prefix and then return Tail.
+               --  Otherwise, Tail should be an index expression and
+               --  we want to build an Indexed_Component with Tail as the
+               --  index value and return that.
+
+               Set_Prefix (Node2, Node1);
+
+               while Nkind (Rover)
+                       in N_Indexed_Component | N_Selected_Component loop
+                  Prev := Rover;
+                  Rover := Prefix (Rover);
+               end loop;
+
+               case Nkind (Prev) is
+                  when N_Selected_Component | N_Indexed_Component =>
+                     Set_Expressions (Node2, New_List (Prefix (Prev)));
+                     Set_Prefix (Prev, Node2);
+                     return Tail;
+
+                  when N_Empty =>
+                     Set_Expressions (Node2, New_List (Tail));
+                     return Node2;
+
+                  when others =>
+                     null;
+               end case;
+
+               --  fall through to error case
+            end;
+         end if;
+      end if;
+
       --  Come here at end of simple expression, where we do a couple of
       --  special checks to improve error recovery.
 
@@ -2529,8 +2650,8 @@ package body Ch4 is
       if Token = Tok_Dot then
          Error_Msg_SC ("prefix for selection is not a name");
 
-         --  If qualified expression, comment and continue, otherwise something
-         --  is pretty nasty so do an Error_Resync call.
+         --  If qualified expression, comment and continue, otherwise
+         --  something is pretty nasty so do an Error_Resync call.
 
          if Ada_Version < Ada_2012
            and then Nkind (Node1) = N_Qualified_Expression
@@ -2962,7 +3083,7 @@ package body Ch4 is
                   return P_Identifier;
                end if;
 
-            --  For [all | some]  indicates a quantified expression
+            --  Quantified expression or iterated component association
 
             when Tok_For =>
                if Token_Is_At_Start_Of_Line then
@@ -2982,9 +3103,18 @@ package body Ch4 is
                           ("quantified expression must be parenthesized",
                            Sloc (Node1));
                      end if;
+
+                  --  If no quantifier keyword, this is an iterated component
+                  --  in an aggregate or an ill-formed quantified expression.
+
                   else
                      Restore_Scan_State (Scan_State);  -- To FOR
                      Node1 := P_Iterated_Component_Association;
+
+                     if not (Lparen and then Token = Tok_Right_Paren) then
+                        Error_Msg
+                          ("construct must be parenthesized", Sloc (Node1));
+                     end if;
                   end if;
 
                   return Node1;
@@ -3468,6 +3598,7 @@ package body Ch4 is
       Iter_Spec  : Node_Id;
       Loop_Spec  : Node_Id;
       State      : Saved_Scan_State;
+      In_Reverse : Boolean := False;
 
       procedure Build_Iterated_Element_Association;
       --  If the iterator includes a key expression or a filter, it is
@@ -3485,6 +3616,8 @@ package body Ch4 is
          Loop_Spec :=
            New_Node (N_Loop_Parameter_Specification, Prev_Token_Ptr);
          Set_Defining_Identifier (Loop_Spec, Id);
+
+         Set_Reverse_Present (Loop_Spec, In_Reverse);
 
          Choice := First (Discrete_Choices (Assoc_Node));
          Assoc_Node :=
@@ -3528,6 +3661,13 @@ package body Ch4 is
          when Tok_In =>
             Set_Defining_Identifier (Assoc_Node, Id);
             T_In;
+
+            if Token = Tok_Reverse then
+               Scan; -- past REVERSE
+               Set_Reverse_Present (Assoc_Node, True);
+               In_Reverse := True;
+            end if;
+
             Set_Discrete_Choices (Assoc_Node, P_Discrete_Choice_List);
 
             --  The iterator may include a filter
@@ -3557,7 +3697,7 @@ package body Ch4 is
             TF_Arrow;
             Set_Expression (Assoc_Node, P_Expression);
 
-         when Tok_Of =>
+         when Tok_Colon | Tok_Of =>
             Restore_Scan_State (State);
             Scan;  -- past OF
             Iter_Spec := P_Iterator_Specification (Id);
@@ -3852,12 +3992,17 @@ package body Ch4 is
                  ("quantified expression must be parenthesized!", Result);
             end if;
 
-         else
-            --  If no quantifier keyword, this is an iterated component in
-            --  an aggregate.
+         --  If no quantifier keyword, this is an iterated component in
+         --  an aggregate or an ill-formed quantified expression.
 
+         else
             Restore_Scan_State (Scan_State);
             Result := P_Iterated_Component_Association;
+
+            if not (Lparen and then Token = Tok_Right_Paren) then
+               Error_Msg_N
+                 ("construct must be parenthesized!", Result);
+            end if;
          end if;
 
       --  Declare expression

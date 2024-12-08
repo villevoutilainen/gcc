@@ -1,6 +1,6 @@
 /* Write the GIMPLE representation to a file stream.
 
-   Copyright (C) 2009-2023 Free Software Foundation, Inc.
+   Copyright (C) 2009-2024 Free Software Foundation, Inc.
    Contributed by Kenneth Zadeck <zadeck@naturalbridge.com>
    Re-implemented by Diego Novillo <dnovillo@google.com>
 
@@ -459,7 +459,7 @@ get_symbol_initial_value (lto_symtab_encoder_t encoder, tree expr)
 
 
 /* Output reference to tree T to the stream.
-   Assume that T is already in encoder cache. 
+   Assume that T is already in encoder cache.
    This is used to stream tree bodies where we know the DFS walk arranged
    everything to cache.  Must be matched with stream_read_tree_ref.  */
 
@@ -487,8 +487,6 @@ stream_write_tree_ref (struct output_block *ob, tree t)
 	    gcc_checking_assert (tag == LTO_global_stream_ref);
 	  streamer_write_hwi (ob, -(int)(ix * 2 + id + 1));
 	}
-      if (streamer_debugging)
-	streamer_write_uhwi (ob, TREE_CODE (t));
     }
 }
 
@@ -1160,6 +1158,9 @@ DFS::DFS_write_tree_body (struct output_block *ob,
 	  DFS_follow_tree_edge (value);
 	}
     }
+
+  if (code == RAW_DATA_CST)
+    DFS_follow_tree_edge (RAW_DATA_OWNER (expr));
 
   if (code == OMP_CLAUSE)
     {
@@ -1839,9 +1840,6 @@ lto_output_tree (struct output_block *ob, tree expr,
 	 will instantiate two different nodes for the same object.  */
       streamer_write_record_start (ob, LTO_tree_pickle_reference);
       streamer_write_uhwi (ob, ix);
-      if (streamer_debugging)
-	streamer_write_enum (ob->main_stream, LTO_tags, LTO_NUM_TAGS,
-			     lto_tree_code_to_tag (TREE_CODE (expr)));
       lto_stats.num_pickle_refs_output++;
     }
   else
@@ -1882,9 +1880,6 @@ lto_output_tree (struct output_block *ob, tree expr,
 	    }
 	  streamer_write_record_start (ob, LTO_tree_pickle_reference);
 	  streamer_write_uhwi (ob, ix);
-	  if (streamer_debugging)
-	    streamer_write_enum (ob->main_stream, LTO_tags, LTO_NUM_TAGS,
-				 lto_tree_code_to_tag (TREE_CODE (expr)));
 	}
       in_dfs_walk = false;
       lto_stats.num_pickle_refs_output++;
@@ -2173,13 +2168,26 @@ output_cfg (struct output_block *ob, struct function *fn)
 			   loop_estimation, EST_LAST, loop->estimate_state);
       streamer_write_hwi (ob, loop->any_upper_bound);
       if (loop->any_upper_bound)
-	streamer_write_widest_int (ob, loop->nb_iterations_upper_bound);
+	{
+	  widest_int w = widest_int::from (loop->nb_iterations_upper_bound,
+					   SIGNED);
+	  streamer_write_widest_int (ob, w);
+	}
       streamer_write_hwi (ob, loop->any_likely_upper_bound);
       if (loop->any_likely_upper_bound)
-	streamer_write_widest_int (ob, loop->nb_iterations_likely_upper_bound);
+	{
+	  widest_int w
+	    = widest_int::from (loop->nb_iterations_likely_upper_bound,
+				SIGNED);
+	  streamer_write_widest_int (ob, w);
+	}
       streamer_write_hwi (ob, loop->any_estimate);
       if (loop->any_estimate)
-	streamer_write_widest_int (ob, loop->nb_iterations_estimate);
+	{
+	  widest_int w = widest_int::from (loop->nb_iterations_estimate,
+					   SIGNED);
+	  streamer_write_widest_int (ob, w);
+	}
 
       /* Write OMP SIMD related info.  */
       streamer_write_hwi (ob, loop->safelen);
@@ -2277,6 +2285,8 @@ output_struct_function_base (struct output_block *ob, struct function *fn)
   bp_pack_value (&bp, fn->calls_eh_return, 1);
   bp_pack_value (&bp, fn->has_force_vectorize_loops, 1);
   bp_pack_value (&bp, fn->has_simduid_loops, 1);
+  bp_pack_value (&bp, fn->has_musttail, 1);
+  bp_pack_value (&bp, fn->has_unroll, 1);
   bp_pack_value (&bp, fn->assume_function, 1);
   bp_pack_value (&bp, fn->va_list_fpr_size, 8);
   bp_pack_value (&bp, fn->va_list_gpr_size, 8);
@@ -2532,6 +2542,13 @@ lto_output_toplevel_asms (void)
 
   for (can = symtab->first_asm_symbol (); can; can = can->next)
     {
+      if (TREE_CODE (can->asm_str) != STRING_CST)
+	{
+	  sorry_at (EXPR_LOCATION (can->asm_str),
+		    "LTO streaming of toplevel extended %<asm%> "
+		    "unimplemented");
+	  continue;
+	}
       streamer_write_string_cst (ob, ob->main_stream, can->asm_str);
       streamer_write_hwi (ob, can->order);
     }
@@ -2823,7 +2840,8 @@ lto_output (void)
      statements using the statement UIDs.  */
   output_symtab ();
 
-  output_offload_tables ();
+  if (lto_get_out_decl_state ()->output_offload_tables_p)
+    output_offload_tables ();
 
   if (flag_checking)
     {
@@ -3185,6 +3203,9 @@ lto_write_mode_table (void)
   struct output_block *ob;
   ob = create_output_block (LTO_section_mode_table);
   bitpack_d bp = bitpack_create (ob->main_stream);
+
+  if (lto_stream_offload_p)
+    bp_pack_value (&bp, NUM_POLY_INT_COEFFS, MAX_NUM_POLY_INT_COEFFS_BITS);
 
   /* Ensure that for GET_MODE_INNER (m) != m we have
      also the inner mode marked.  */

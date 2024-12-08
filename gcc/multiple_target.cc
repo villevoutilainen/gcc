@@ -2,7 +2,7 @@
 
    Contributed by Evgeny Stupachenko <evstupac@gmail.com>
 
-   Copyright (C) 2015-2023 Free Software Foundation, Inc.
+   Copyright (C) 2015-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -65,10 +65,6 @@ static void
 create_dispatcher_calls (struct cgraph_node *node)
 {
   ipa_ref *ref;
-
-  if (!DECL_FUNCTION_VERSIONED (node->decl)
-      || !is_function_default_version (node->decl))
-    return;
 
   if (!targetm.has_ifunc_p ())
     {
@@ -184,7 +180,7 @@ create_dispatcher_calls (struct cgraph_node *node)
     }
 }
 
-/* Create string with attributes separated by comma.
+/* Create string with attributes separated by TARGET_CLONES_ATTR_SEPARATOR.
    Return number of attributes.  */
 
 static int
@@ -198,17 +194,21 @@ get_attr_str (tree arglist, char *attr_str)
     {
       const char *str = TREE_STRING_POINTER (TREE_VALUE (arg));
       size_t len = strlen (str);
-      for (const char *p = strchr (str, ','); p; p = strchr (p + 1, ','))
+      for (const char *p = strchr (str, TARGET_CLONES_ATTR_SEPARATOR);
+	   p;
+	   p = strchr (p + 1, TARGET_CLONES_ATTR_SEPARATOR))
 	argnum++;
       memcpy (attr_str + str_len_sum, str, len);
-      attr_str[str_len_sum + len] = TREE_CHAIN (arg) ? ',' : '\0';
+      attr_str[str_len_sum + len]
+	= TREE_CHAIN (arg) ? TARGET_CLONES_ATTR_SEPARATOR : '\0';
       str_len_sum += len + 1;
       argnum++;
     }
   return argnum;
 }
 
-/* Return number of attributes separated by comma and put them into ARGS.
+/* Return number of attributes separated by TARGET_CLONES_ATTR_SEPARATOR
+   and put them into ARGS.
    If there is no DEFAULT attribute return -1.
    If there is an empty string in attribute return -2.
    If there are multiple DEFAULT attributes return -3.
@@ -219,9 +219,10 @@ separate_attrs (char *attr_str, char **attrs, int attrnum)
 {
   int i = 0;
   int default_count = 0;
+  static const char separator_str[] = { TARGET_CLONES_ATTR_SEPARATOR, 0 };
 
-  for (char *attr = strtok (attr_str, ",");
-       attr != NULL; attr = strtok (NULL, ","))
+  for (char *attr = strtok (attr_str, separator_str);
+       attr != NULL; attr = strtok (NULL, separator_str))
     {
       if (strcmp (attr, "default") == 0)
 	{
@@ -309,7 +310,7 @@ static bool
 expand_target_clones (struct cgraph_node *node, bool definition)
 {
   int i;
-  /* Parsing target attributes separated by comma.  */
+  /* Parsing target attributes separated by TARGET_CLONES_ATTR_SEPARATOR.  */
   tree attr_target = lookup_attribute ("target_clones",
 				       DECL_ATTRIBUTES (node->decl));
   /* No targets specified.  */
@@ -377,6 +378,8 @@ expand_target_clones (struct cgraph_node *node, bool definition)
       return false;
     }
 
+  const char *new_attr_name = (TARGET_HAS_FMV_TARGET_ATTRIBUTE
+			       ? "target" : "target_version");
   cgraph_function_version_info *decl1_v = NULL;
   cgraph_function_version_info *decl2_v = NULL;
   cgraph_function_version_info *before = NULL;
@@ -392,7 +395,7 @@ expand_target_clones (struct cgraph_node *node, bool definition)
       char *attr = attrs[i];
 
       /* Create new target clone.  */
-      tree attributes = make_attribute ("target", attr,
+      tree attributes = make_attribute (new_attr_name, attr,
 					DECL_ATTRIBUTES (node->decl));
 
       char *suffix = XNEWVEC (char, strlen (attr) + 1);
@@ -430,7 +433,7 @@ expand_target_clones (struct cgraph_node *node, bool definition)
   XDELETEVEC (attr_str);
 
   /* Setting new attribute to initial function.  */
-  tree attributes = make_attribute ("target", "default",
+  tree attributes = make_attribute (new_attr_name, "default",
 				    DECL_ATTRIBUTES (node->decl));
   DECL_ATTRIBUTES (node->decl) = attributes;
   node->local = false;

@@ -1,6 +1,6 @@
 /* Gcov.c: prepend line execution counts and branch probabilities to a
    source file.
-   Copyright (C) 1990-2023 Free Software Foundation, Inc.
+   Copyright (C) 1990-2024 Free Software Foundation, Inc.
    Contributed by James E. Wilson of Cygnus Support.
    Mangled by Bob Manson of Cygnus Support.
    Mangled further by Nathan Sidwell <nathan@codesourcery.com>
@@ -46,6 +46,8 @@ along with Gcov; see the file COPYING3.  If not see
 #include "color-macros.h"
 #include "pretty-print.h"
 #include "json.h"
+#include "hwint.h"
+#include "xregex.h"
 
 #include <zlib.h>
 #include <getopt.h>
@@ -81,6 +83,7 @@ using namespace std;
 class function_info;
 class block_info;
 class source_info;
+class condition_info;
 
 /* Describes an arc between two basic blocks.  */
 
@@ -115,6 +118,12 @@ struct arc_info
   /* Loop making arc.  */
   unsigned int cycle : 1;
 
+  /* Is a true arc.  */
+  unsigned int true_value : 1;
+
+  /* Is a false arc.  */
+  unsigned int false_value : 1;
+
   /* Links to next arc on src and dst lists.  */
   struct arc_info *succ_next;
   struct arc_info *pred_next;
@@ -133,6 +142,33 @@ public:
   unsigned source_file_idx;
   vector<unsigned> lines;
 };
+
+/* Describes a single conditional expression and the (recorded) conditions
+   shown to independently affect the outcome.  */
+class condition_info
+{
+public:
+  condition_info ();
+
+  int popcount () const;
+
+  /* Bitsets storing the independently significant outcomes for true and false,
+     respectively.  */
+  gcov_type_unsigned truev;
+  gcov_type_unsigned falsev;
+
+  /* Number of terms in the expression; if (x) -> 1, if (x && y) -> 2 etc.  */
+  unsigned n_terms;
+};
+
+condition_info::condition_info (): truev (0), falsev (0), n_terms (0)
+{
+}
+
+int condition_info::popcount () const
+{
+    return popcount_hwi (truev) + popcount_hwi (falsev);
+}
 
 /* Describes a basic block. Contains lists of arcs to successor and
    predecessor blocks.  */
@@ -166,6 +202,8 @@ public:
 
   /* Block is a landing pad for longjmp or throw.  */
   unsigned is_nonlocal_return : 1;
+
+  condition_info conditions;
 
   vector<block_location_info> locations;
 
@@ -277,6 +315,8 @@ public:
   vector<block_info> blocks;
   unsigned blocks_executed;
 
+  vector<condition_info*> conditions;
+
   /* Raw arc coverage counts.  */
   vector<gcov_type> counts;
 
@@ -352,6 +392,9 @@ struct coverage_info
   int branches;
   int branches_executed;
   int branches_taken;
+
+  int conditions;
+  int conditions_covered;
 
   int calls;
   int calls_executed;
@@ -507,6 +550,11 @@ static vector<name_map> names;
    a file being read multiple times.  */
 static vector<char *> processed_files;
 
+/* The contents of a source file.  The nth SOURCE_LINES entry is the
+   contents of the nth SOURCES, or empty if it has not or could not be
+   read.  */
+static vector<vector<const char *>*> source_lines;
+
 /* This holds data summary information.  */
 
 static unsigned object_runs;
@@ -551,6 +599,10 @@ static int multiple_files = 0;
 /* Output branch probabilities.  */
 
 static int flag_branches = 0;
+
+/* Output conditions (modified condition/decision coverage).  */
+
+static bool flag_conditions = 0;
 
 /* Show unconditional branches too.  */
 static int flag_unconditional = 0;
@@ -643,6 +695,48 @@ static int flag_counts = 0;
 /* Return code of the tool invocation.  */
 static int return_code = 0;
 
+/* "Keep policy" when adding functions to the global function table.  This will
+   be set to false when --include is used, otherwise every function should be
+   added to the table.  Used for --include/exclude.  */
+static bool default_keep = true;
+
+/* Include/exclude filters function based on matching the (de)mangled name.
+   The default is to match the mangled name.  Note that flag_demangled_names
+   does not affect this.  */
+static bool flag_filter_on_demangled = false;
+
+/* A 'function filter', a filter and action for determining if a function
+   should be included in the output or not.  Used for --include/--exclude
+   filtering.  */
+struct fnfilter
+{
+  /* The (extended) compiled regex for this filter.  */
+  regex_t regex;
+
+  /* The action when this filter (regex) matches - if true, the function should
+     be kept, otherwise discarded.  */
+  bool keep;
+
+  /* Compile the regex EXPR, or exit if pattern is malformed.  */
+  void compile (const char *expr)
+  {
+    int err = regcomp (&regex, expr, REG_NOSUB | REG_EXTENDED);
+    if (err)
+      {
+	size_t len = regerror (err, &regex, nullptr, 0);
+	char *msg = XNEWVEC (char, len);
+	regerror (err, &regex, msg, len);
+	fprintf (stderr, "Bad regular expression: %s\n", msg);
+	free (msg);
+	exit (EXIT_FAILURE);
+    }
+  }
+};
+
+/* A collection of filter functions for including/exclude functions in the
+   output.  This is empty unless --include/--exclude is used.  */
+static vector<fnfilter> filters;
+
 /* Forward declarations.  */
 static int process_args (int, char **);
 static void print_usage (int) ATTRIBUTE_NORETURN;
@@ -658,6 +752,7 @@ static int read_count_file (void);
 static void solve_flow_graph (function_info *);
 static void find_exception_blocks (function_info *);
 static void add_branch_counts (coverage_info *, const arc_info *);
+static void add_condition_counts (coverage_info *, const block_info *);
 static void add_line_counts (coverage_info *, function_info *);
 static void executed_summary (unsigned, unsigned);
 static void function_summary (const coverage_info *);
@@ -666,11 +761,14 @@ static const char *format_gcov (gcov_type, gcov_type, int);
 static void accumulate_line_counts (source_info *);
 static void output_gcov_file (const char *, source_info *);
 static int output_branch_count (FILE *, int, const arc_info *);
+static void output_conditions (FILE *, const block_info *);
 static void output_lines (FILE *, const source_info *);
 static string make_gcov_file_name (const char *, const char *);
 static char *mangle_name (const char *);
 static void release_structures (void);
 extern int main (int, char **);
+static const vector<const char *>&
+slurp (const source_info &src, FILE *gcov_file, const char *line_start);
 
 function_info::function_info (): m_name (NULL), m_demangled_name (NULL),
   ident (0), lineno_checksum (0), cfg_checksum (0), has_catch (0),
@@ -930,9 +1028,13 @@ print_usage (int error_p)
   fnotice (file, "  -b, --branch-probabilities      Include branch probabilities in output\n");
   fnotice (file, "  -c, --branch-counts             Output counts of branches taken\n\
                                     rather than percentages\n");
+  fnotice (file, "  -g, --conditions                Include modified condition/decision\n\
+                                    coverage (masking MC/DC) in output\n");
   fnotice (file, "  -d, --display-progress          Display progress information\n");
   fnotice (file, "  -D, --debug			    Display debugging dumps\n");
   fnotice (file, "  -f, --function-summaries        Output summaries for each function\n");
+  fnotice (file, "      --include                   Include functions matching this regex\n");
+  fnotice (file, "      --exclude                   Exclude functions matching this regex\n");
   fnotice (file, "  -h, --help                      Print this help, then exit\n");
   fnotice (file, "  -j, --json-format               Output JSON intermediate format\n\
                                     into .gcov.json.gz file\n");
@@ -941,6 +1043,8 @@ print_usage (int error_p)
   fnotice (file, "  -l, --long-file-names           Use long output file names for included\n\
                                     source files\n");
   fnotice (file, "  -m, --demangled-names           Output demangled function names\n");
+  fnotice (file, "  -M, --filter-on-demangled       Make --include/--exclude match on demangled\n\
+                                    names. This does not imply -m\n");
   fnotice (file, "  -n, --no-output                 Do not create an output file\n");
   fnotice (file, "  -o, --object-directory DIR|FILE Search for object files in DIR or called FILE\n");
   fnotice (file, "  -p, --preserve-paths            Preserve all pathname components\n");
@@ -967,7 +1071,7 @@ print_version (void)
 {
   fnotice (stdout, "gcov %s%s\n", pkgversion_string, version_string);
   fnotice (stdout, "JSON format version: %s\n", GCOV_JSON_FORMAT_VERSION);
-  fprintf (stdout, "Copyright %s 2023 Free Software Foundation, Inc.\n",
+  fprintf (stdout, "Copyright %s 2024 Free Software Foundation, Inc.\n",
 	   _("(C)"));
   fnotice (stdout,
 	   _("This is free software; see the source for copying conditions.  There is NO\n\
@@ -983,12 +1087,16 @@ static const struct option options[] =
   { "all-blocks",           no_argument,       NULL, 'a' },
   { "branch-probabilities", no_argument,       NULL, 'b' },
   { "branch-counts",        no_argument,       NULL, 'c' },
+  { "conditions",	    no_argument,       NULL, 'g' },
   { "json-format",	    no_argument,       NULL, 'j' },
+  { "include",              required_argument, NULL, 'I' },
+  { "exclude",              required_argument, NULL, 'E' },
   { "human-readable",	    no_argument,       NULL, 'H' },
   { "no-output",            no_argument,       NULL, 'n' },
   { "long-file-names",      no_argument,       NULL, 'l' },
   { "function-summaries",   no_argument,       NULL, 'f' },
   { "demangled-names",      no_argument,       NULL, 'm' },
+  { "filter-on-demangled",  no_argument,       NULL, 'M' },
   { "preserve-paths",       no_argument,       NULL, 'p' },
   { "relative-only",        no_argument,       NULL, 'r' },
   { "object-directory",     required_argument, NULL, 'o' },
@@ -1011,7 +1119,7 @@ process_args (int argc, char **argv)
 {
   int opt;
 
-  const char *opts = "abcdDfhHijklmno:pqrs:tuvwx";
+  const char *opts = "abcdDfghHijklmMno:pqrs:tuvwx";
   while ((opt = getopt_long (argc, argv, opts, options, NULL)) != -1)
     {
       switch (opt)
@@ -1028,11 +1136,25 @@ process_args (int argc, char **argv)
 	case 'f':
 	  flag_function_summary = 1;
 	  break;
+	case 'g':
+	  flag_conditions = 1;
+	  break;
 	case 'h':
 	  print_usage (false);
 	  /* print_usage will exit.  */
 	case 'l':
 	  flag_long_names = 1;
+	  break;
+	case 'I':
+	  default_keep = false;
+	  filters.push_back (fnfilter {});
+	  filters.back ().keep = true;
+	  filters.back ().compile (optarg);
+	  break;
+	case 'E':
+	  filters.push_back (fnfilter {});
+	  filters.back ().keep = false;
+	  filters.back ().compile (optarg);
 	  break;
 	case 'H':
 	  flag_human_readable_numbers = 1;
@@ -1045,6 +1167,9 @@ process_args (int argc, char **argv)
 	  break;
 	case 'm':
 	  flag_demangled_names = 1;
+	  break;
+	case 'M':
+	  flag_filter_on_demangled = true;
 	  break;
 	case 'n':
 	  flag_gcov_file = 0;
@@ -1109,12 +1234,11 @@ output_intermediate_json_line (json::array *object,
     return;
 
   json::object *lineo = new json::object ();
-  lineo->set ("line_number", new json::integer_number (line_num));
+  lineo->set_integer ("line_number", line_num);
   if (function_name != NULL)
-    lineo->set ("function_name", new json::string (function_name));
-  lineo->set ("count", new json::integer_number (line->count));
-  lineo->set ("unexecuted_block",
-	      new json::literal (line->has_unexecuted_block));
+    lineo->set_string ("function_name", function_name);
+  lineo->set_integer ("count", line->count);
+  lineo->set_bool ("unexecuted_block", line->has_unexecuted_block);
 
   json::array *bb_ids = new json::array ();
   for (const block_info *block : line->blocks)
@@ -1135,28 +1259,62 @@ output_intermediate_json_line (json::array *object,
 	if (!(*it)->is_unconditional && !(*it)->is_call_non_return)
 	  {
 	    json::object *branch = new json::object ();
-	    branch->set ("count", new json::integer_number ((*it)->count));
-	    branch->set ("throw", new json::literal ((*it)->is_throw));
-	    branch->set ("fallthrough",
-			 new json::literal ((*it)->fall_through));
-	    branch->set ("source_block_id",
-			 new json::integer_number ((*it)->src->id));
-	    branch->set ("destination_block_id",
-			 new json::integer_number ((*it)->dst->id));
+	    branch->set_integer ("count", (*it)->count);
+	    branch->set_bool ("throw", (*it)->is_throw);
+	    branch->set_bool ("fallthrough", (*it)->fall_through);
+	    branch->set_integer ("source_block_id", (*it)->src->id);
+	    branch->set_integer ("destination_block_id", (*it)->dst->id);
 	    branches->append (branch);
 	  }
 	else if ((*it)->is_call_non_return)
 	  {
 	    json::object *call = new json::object ();
 	    gcov_type returns = (*it)->src->count - (*it)->count;
-	    call->set ("source_block_id",
-		       new json::integer_number ((*it)->src->id));
-	    call->set ("destination_block_id",
-		       new json::integer_number ((*it)->dst->id));
-	    call->set ("returned", new json::integer_number (returns));
+	    call->set_integer ("source_block_id", (*it)->src->id);
+	    call->set_integer ("destination_block_id", (*it)->dst->id);
+	    call->set_integer ("returned", returns);
 	    calls->append (call);
 	  }
       }
+
+  json::array *conditions = new json::array ();
+  lineo->set ("conditions", conditions);
+  if (flag_conditions)
+  {
+    vector<block_info *>::const_iterator it;
+    for (it = line->blocks.begin (); it != line->blocks.end (); it++)
+      {
+	const condition_info& info = (*it)->conditions;
+	if (info.n_terms == 0)
+	    continue;
+
+	const int count = 2 * info.n_terms;
+	const int covered = info.popcount ();
+
+	json::object *cond = new json::object ();
+	cond->set_integer ("count", count);
+	cond->set_integer ("covered", covered);
+
+	json::array *mtrue = new json::array ();
+	json::array *mfalse = new json::array ();
+	cond->set ("not_covered_true", mtrue);
+	cond->set ("not_covered_false", mfalse);
+
+	if (count != covered)
+	  {
+	    for (unsigned i = 0; i < info.n_terms; i++)
+	      {
+		gcov_type_unsigned index = 1;
+		index <<= i;
+		if (!(index & info.truev))
+		    mtrue->append (new json::integer_number (i));
+		if (!(index & info.falsev))
+		    mfalse->append (new json::integer_number (i));
+	      }
+	  }
+	conditions->append (cond);
+      }
+  }
 
   object->append (lineo);
 }
@@ -1236,7 +1394,7 @@ output_json_intermediate_file (json::array *json_files, source_info *src)
   json::object *root = new json::object ();
   json_files->append (root);
 
-  root->set ("file", new json::string (src->name));
+  root->set_string ("file", src->name);
 
   json::array *functions = new json::array ();
   root->set ("functions", functions);
@@ -1247,22 +1405,15 @@ output_json_intermediate_file (json::array *json_files, source_info *src)
        it != src->functions.end (); it++)
     {
       json::object *function = new json::object ();
-      function->set ("name", new json::string ((*it)->m_name));
-      function->set ("demangled_name",
-		     new json::string ((*it)->get_demangled_name ()));
-      function->set ("start_line",
-		     new json::integer_number ((*it)->start_line));
-      function->set ("start_column",
-		     new json::integer_number ((*it)->start_column));
-      function->set ("end_line", new json::integer_number ((*it)->end_line));
-      function->set ("end_column",
-		     new json::integer_number ((*it)->end_column));
-      function->set ("blocks",
-		     new json::integer_number ((*it)->get_block_count ()));
-      function->set ("blocks_executed",
-		     new json::integer_number ((*it)->blocks_executed));
-      function->set ("execution_count",
-		     new json::integer_number ((*it)->blocks[0].count));
+      function->set_string ("name", (*it)->m_name);
+      function->set_string ("demangled_name", (*it)->get_demangled_name ());
+      function->set_integer ("start_line", (*it)->start_line);
+      function->set_integer ("start_column", (*it)->start_column);
+      function->set_integer ("end_line", (*it)->end_line);
+      function->set_integer ("end_column", (*it)->end_column);
+      function->set_integer ("blocks", (*it)->get_block_count ());
+      function->set_integer ("blocks_executed", (*it)->blocks_executed);
+      function->set_integer ("execution_count", (*it)->blocks[0].count);
 
       functions->append (function);
     }
@@ -1464,6 +1615,12 @@ process_all_functions (void)
 		}
 	    }
 
+	  /* Make sure to include the last line for this function even when it
+	     is not directly covered by a basic block, for example when } is on
+	     its own line.  */
+	  if (sources[fn->src].lines.size () <= fn->end_line)
+	    sources[fn->src].lines.resize (fn->end_line + 1);
+
 	  /* Allocate lines for group function, following start_line
 	     and end_line information of the function.  */
 	  if (fn->is_group)
@@ -1549,12 +1706,12 @@ generate_results (const char *file_name)
   gcov_intermediate_filename = get_gcov_intermediate_filename (file_name);
 
   json::object *root = new json::object ();
-  root->set ("format_version", new json::string (GCOV_JSON_FORMAT_VERSION));
-  root->set ("gcc_version", new json::string (version_string));
+  root->set_string ("format_version", GCOV_JSON_FORMAT_VERSION);
+  root->set_string ("gcc_version", version_string);
 
   if (bbg_cwd != NULL)
-    root->set ("current_working_directory", new json::string (bbg_cwd));
-  root->set ("data_file", new json::string (file_name));
+    root->set_string ("current_working_directory", bbg_cwd);
+  root->set_string ("data_file", file_name);
 
   json::array *json_files = new json::array ();
   root->set ("files", json_files);
@@ -1613,13 +1770,13 @@ generate_results (const char *file_name)
     {
       if (flag_use_stdout)
 	{
-	  root->dump (stdout);
+	  root->dump (stdout, false);
 	  printf ("\n");
 	}
       else
 	{
 	  pretty_printer pp;
-	  root->print (&pp);
+	  root->print (&pp, false);
 	  pp_formatted_text (&pp);
 
 	  fnotice (stdout, "Creating '%s'\n",
@@ -1654,9 +1811,22 @@ release_structures (void)
        it != functions.end (); it++)
     delete (*it);
 
+  for (vector<const char *> *lines : source_lines)
+    {
+      if (lines)
+	for (const char *line : *lines)
+	  free (const_cast <char*> (line));
+      delete (lines);
+    }
+  source_lines.resize (0);
+
+  for (fnfilter &filter : filters)
+    regfree (&filter.regex);
+
   sources.resize (0);
   names.resize (0);
   functions.resize (0);
+  filters.resize (0);
   ident_to_fn.clear ();
 }
 
@@ -1881,8 +2051,6 @@ read_graph_file (void)
 	  unsigned end_column = gcov_read_unsigned ();
 
 	  fn = new function_info ();
-	  functions.push_back (fn);
-	  ident_to_fn[ident] = fn;
 
 	  fn->m_name = function_name;
 	  fn->ident = ident;
@@ -1896,6 +2064,26 @@ read_graph_file (void)
 	  fn->artificial = artificial;
 
 	  current_tag = tag;
+
+	  /* This is separate from flag_demangled_names to support filtering on
+	     mangled names while printing demangled names, or filtering on
+	     demangled names while printing mangled names.  An independent flag
+	     makes sure the function selection does not change even if
+	     demangling is turned on/off.  */
+	  const char *fname = function_name;
+	  if (flag_filter_on_demangled)
+	    fname = fn->get_demangled_name ();
+
+	  bool keep = default_keep;
+	  for (const fnfilter &fn : filters)
+	    if (regexec (&fn.regex, fname, 0, nullptr, 0) == 0)
+	      keep = fn.keep;
+
+	  if (keep)
+	    {
+	      functions.push_back (fn);
+	      ident_to_fn[ident] = fn;
+	    }
 	}
       else if (fn && tag == GCOV_TAG_BLOCKS)
 	{
@@ -1936,6 +2124,8 @@ read_graph_file (void)
 	      arc->on_tree = !!(flags & GCOV_ARC_ON_TREE);
 	      arc->fake = !!(flags & GCOV_ARC_FAKE);
 	      arc->fall_through = !!(flags & GCOV_ARC_FALLTHROUGH);
+	      arc->true_value = !!(flags & GCOV_ARC_TRUE);
+	      arc->false_value = !!(flags & GCOV_ARC_FALSE);
 
 	      arc->succ_next = src_blk->succ;
 	      src_blk->succ = arc;
@@ -1980,6 +2170,28 @@ read_graph_file (void)
 		    arc->is_throw = 1;
 		    fn->has_catch = 1;
 		  }
+	    }
+	}
+      else if (fn && tag == GCOV_TAG_CONDS)
+	{
+	  unsigned num_dests = GCOV_TAG_CONDS_NUM (length);
+
+	  if (!fn->conditions.empty ())
+	    fnotice (stderr, "%s:already seen conditions for '%s'\n",
+		     bbg_file_name, fn->get_name ());
+	  else
+	    fn->conditions.resize (num_dests);
+
+	  for (unsigned i = 0; i < num_dests; ++i)
+	    {
+	      unsigned idx = gcov_read_unsigned ();
+
+	      if (idx >= fn->blocks.size ())
+		goto corrupt;
+
+	      condition_info *info = &fn->blocks[idx].conditions;
+	      info->n_terms = gcov_read_unsigned ();
+	      fn->conditions[i] = info;
 	    }
 	}
       else if (fn && tag == GCOV_TAG_LINES)
@@ -2110,6 +2322,21 @@ read_count_file (void)
 	      fnotice (stderr, "%s:profile mismatch for '%s'\n",
 		       da_file_name, fn->get_name ());
 	      goto cleanup;
+	    }
+	}
+      else if (tag == GCOV_TAG_FOR_COUNTER (GCOV_COUNTER_CONDS) && fn)
+	{
+	  length = abs (read_length);
+	  if (length != GCOV_TAG_COUNTER_LENGTH (2 * fn->conditions.size ()))
+	      goto mismatch;
+
+	  if (read_length > 0)
+	    {
+	      for (ix = 0; ix != fn->conditions.size (); ix++)
+		{
+		  fn->conditions[ix]->truev  |= gcov_read_counter ();
+		  fn->conditions[ix]->falsev |= gcov_read_counter ();
+		}
 	    }
 	}
       else if (tag == GCOV_TAG_FOR_COUNTER (GCOV_COUNTER_ARCS) && fn)
@@ -2456,6 +2683,15 @@ add_branch_counts (coverage_info *coverage, const arc_info *arc)
     }
 }
 
+/* Increment totals in COVERAGE according to block BLOCK.  */
+
+static void
+add_condition_counts (coverage_info *coverage, const block_info *block)
+{
+  coverage->conditions += 2 * block->conditions.n_terms;
+  coverage->conditions_covered += block->conditions.popcount ();
+}
+
 /* Format COUNT, if flag_human_readable_numbers is set, return it human
    readable format.  */
 
@@ -2496,7 +2732,7 @@ format_gcov (gcov_type top, gcov_type bottom, int decimal_places)
 
   if (decimal_places >= 0)
     {
-      float ratio = bottom ? 100.0f * top / bottom: 0;
+      float ratio = bottom ? 100.0f * top / bottom : 0;
 
       /* Round up to 1% if there's a small non-zero value.  */
       if (ratio > 0.0f && ratio < 0.5f && decimal_places == 0)
@@ -2559,6 +2795,18 @@ file_summary (const coverage_info *coverage)
 		 coverage->calls);
       else
 	fnotice (stdout, "No calls\n");
+
+    }
+
+  if (flag_conditions)
+    {
+      if (coverage->conditions)
+	fnotice (stdout, "Condition outcomes covered:%s of %d\n",
+		 format_gcov (coverage->conditions_covered,
+			      coverage->conditions, 2),
+		 coverage->conditions);
+      else
+	fnotice (stdout, "No conditions\n");
     }
 }
 
@@ -2793,6 +3041,12 @@ static void accumulate_line_info (line_info *line, source_info *src,
 	 it != line->branches.end (); it++)
       add_branch_counts (&src->coverage, *it);
 
+  if (add_coverage)
+    for (vector<block_info *>::iterator it = line->blocks.begin ();
+	 it != line->blocks.end (); it++)
+      add_condition_counts (&src->coverage, *it);
+
+
   if (!line->blocks.empty ())
     {
       /* The user expects the line count to be the number of times
@@ -2894,6 +3148,37 @@ accumulate_line_counts (source_info *src)
       }
 }
 
+/* Output information about the conditions in block BINFO.  The output includes
+ * a summary (n/m outcomes covered) and a list of the missing (uncovered)
+ * outcomes.  */
+
+static void
+output_conditions (FILE *gcov_file, const block_info *binfo)
+{
+    const condition_info& info = binfo->conditions;
+    if (info.n_terms == 0)
+	return;
+
+    const int expected = 2 * info.n_terms;
+    const int got = info.popcount ();
+
+    fnotice (gcov_file, "condition outcomes covered %d/%d\n", got, expected);
+    if (expected == got)
+	return;
+
+    for (unsigned i = 0; i < info.n_terms; i++)
+    {
+	gcov_type_unsigned index = 1;
+	index <<= i;
+	if ((index & info.truev & info.falsev))
+	    continue;
+
+	const char *t = (index & info.truev) ? "" : "true";
+	const char *f = (index & info.falsev) ? "" : " false";
+	fnotice (gcov_file, "condition %2u not covered (%s%s)\n", i, t, f + !t[0]);
+    }
+}
+
 /* Output information about ARC number IX.  Returns nonzero if
    anything is output.  */
 
@@ -2975,6 +3260,41 @@ read_line (FILE *file)
     }
 
   return pos ? string : NULL;
+}
+
+/* Get the vector with the contents SRC, possibly from a cache.  If
+   the reading fails, a message prefixed with LINE_START is written to
+   GCOV_FILE.  */
+static const vector<const char *>&
+slurp (const source_info &src, FILE *gcov_file,
+       const char *line_start)
+{
+  if (source_lines.size () <= src.index)
+    source_lines.resize (src.index + 1);
+
+  /* Store vector pointers so that the returned references remain
+     stable and won't be broken by successive calls to slurp.  */
+  if (!source_lines[src.index])
+    source_lines[src.index] = new vector<const char *> ();
+
+  if (!source_lines[src.index]->empty ())
+    return *source_lines[src.index];
+
+  FILE *source_file = fopen (src.name, "r");
+  if (!source_file)
+    fnotice (stderr, "Cannot open source file %s\n", src.name);
+  else if (src.file_time == 0)
+    fprintf (gcov_file, "%sSource is newer than graph\n", line_start);
+
+  const char *retval;
+  vector<const char *> &lines = *source_lines[src.index];
+  if (source_file)
+    while ((retval = read_line (source_file)))
+      lines.push_back (xstrdup (retval));
+
+  if (source_file)
+    fclose (source_file);
+  return lines;
 }
 
 /* Pad string S with spaces from left to have total width equal to 9.  */
@@ -3104,16 +3424,29 @@ output_line_details (FILE *f, const line_info *line, unsigned line_num)
 	  if (flag_branches)
 	    for (arc = (*it)->succ; arc; arc = arc->succ_next)
 	      jx += output_branch_count (f, jx, arc);
+
+	  if (flag_conditions)
+	      output_conditions (f, *it);
 	}
     }
-  else if (flag_branches)
+  else
     {
-      int ix;
+      if (flag_branches)
+	{
+	  int ix;
 
-      ix = 0;
-      for (vector<arc_info *>::const_iterator it = line->branches.begin ();
-	   it != line->branches.end (); it++)
-	ix += output_branch_count (f, ix, (*it));
+	  ix = 0;
+	  for (vector<arc_info *>::const_iterator it = line->branches.begin ();
+		  it != line->branches.end (); it++)
+	      ix += output_branch_count (f, ix, (*it));
+	}
+
+      if (flag_conditions)
+	{
+	  for (vector<block_info *>::const_iterator it = line->blocks.begin ();
+	       it != line->blocks.end (); it++)
+	      output_conditions (f, *it);
+	}
     }
 }
 
@@ -3153,9 +3486,6 @@ output_lines (FILE *gcov_file, const source_info *src)
 #define  DEFAULT_LINE_START "        -:    0:"
 #define FN_SEPARATOR "------------------\n"
 
-  FILE *source_file;
-  const char *retval;
-
   /* Print colorization legend.  */
   if (flag_use_colors)
     fprintf (gcov_file, "%s",
@@ -3182,24 +3512,21 @@ output_lines (FILE *gcov_file, const source_info *src)
       fprintf (gcov_file, DEFAULT_LINE_START "Runs:%u\n", object_runs);
     }
 
-  source_file = fopen (src->name, "r");
-  if (!source_file)
-    fnotice (stderr, "Cannot open source file %s\n", src->name);
-  else if (src->file_time == 0)
-    fprintf (gcov_file, DEFAULT_LINE_START "Source is newer than graph\n");
-
-  vector<const char *> source_lines;
-  if (source_file)
-    while ((retval = read_line (source_file)) != NULL)
-      source_lines.push_back (xstrdup (retval));
-
+  const vector<const char *> &source_lines = slurp (*src, gcov_file,
+						    DEFAULT_LINE_START);
   unsigned line_start_group = 0;
   vector<function_info *> *fns;
+  unsigned filtered_line_end = !filters.empty () ? 0 : source_lines.size ();
 
   for (unsigned line_num = 1; line_num <= source_lines.size (); line_num++)
     {
       if (line_num >= src->lines.size ())
 	{
+	  /* If the src->lines is truncated because the rest of the functions
+	     are filtered out we must stop here, and not fall back to printing
+	     the rest of the file.  */
+	  if (!filters.empty ())
+	    break;
 	  fprintf (gcov_file, "%9s:%5u", "-", line_num);
 	  print_source_line (gcov_file, source_lines, line_num);
 	  continue;
@@ -3218,11 +3545,26 @@ output_lines (FILE *gcov_file, const source_info *src)
 	      for (unsigned i = 0; i < fns->size (); i++)
 		if ((*fns)[i]->end_line > line_start_group)
 		  line_start_group = (*fns)[i]->end_line;
+
+	      /* When filtering, src->lines will be cut short for the last
+		 selected function.  To make sure the "overlapping function"
+		 section is printed too, adjust the end so that it is within
+		 src->lines.  */
+	      if (line_start_group >= src->lines.size ())
+		line_start_group = src->lines.size () - 1;
+
+	      if (!filters.empty ())
+		filtered_line_end = line_start_group;
 	    }
 	  else if (fns != NULL && fns->size () == 1)
 	    {
 	      function_info *fn = (*fns)[0];
 	      output_function_details (gcov_file, fn);
+
+	      /* If functions are filtered, only the matching functions will be in
+		 fns and there is no need for extra checking.  */
+	      if (!filters.empty ())
+		filtered_line_end = fn->end_line;
 	    }
 	}
 
@@ -3232,12 +3574,16 @@ output_lines (FILE *gcov_file, const source_info *src)
 	 Otherwise, print the execution count before the source line.
 	 There are 16 spaces of indentation added before the source
 	 line so that tabs won't be messed up.  */
-      output_line_beginning (gcov_file, line->exists, line->unexceptional,
-			     line->has_unexecuted_block, line->count,
-			     line_num, "=====", "#####", src->maximum_count);
+      if (line_num <= filtered_line_end)
+	{
+	  output_line_beginning (gcov_file, line->exists, line->unexceptional,
+				 line->has_unexecuted_block, line->count,
+				 line_num, "=====", "#####",
+				 src->maximum_count);
 
-      print_source_line (gcov_file, source_lines, line_num);
-      output_line_details (gcov_file, line, line_num);
+	  print_source_line (gcov_file, source_lines, line_num);
+	  output_line_details (gcov_file, line, line_num);
+	}
 
       if (line_start_group == line_num)
 	{
@@ -3289,7 +3635,4 @@ output_lines (FILE *gcov_file, const source_info *src)
 	  line_start_group = 0;
 	}
     }
-
-  if (source_file)
-    fclose (source_file);
 }

@@ -1,6 +1,6 @@
 // class template regex -*- C++ -*-
 
-// Copyright (C) 2010-2023 Free Software Foundation, Inc.
+// Copyright (C) 2010-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -923,7 +923,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
     /// @endcond
     {
       typedef iterator_traits<_BiIter>			__iter_traits;
-	
+
     public:
       typedef typename __iter_traits::value_type      	value_type;
       typedef typename __iter_traits::difference_type 	difference_type;

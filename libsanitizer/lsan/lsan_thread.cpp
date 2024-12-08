@@ -18,12 +18,14 @@
 #include "lsan_common.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_placement_new.h"
+#include "sanitizer_common/sanitizer_thread_history.h"
 #include "sanitizer_common/sanitizer_thread_registry.h"
 #include "sanitizer_common/sanitizer_tls_get_addr.h"
 
 namespace __lsan {
 
 static ThreadRegistry *thread_registry;
+static ThreadArgRetval *thread_arg_retval;
 
 static Mutex mu_for_thread_context;
 static LowLevelAllocator allocator_for_thread_context;
@@ -33,16 +35,26 @@ static ThreadContextBase *CreateThreadContext(u32 tid) {
   return new (allocator_for_thread_context) ThreadContext(tid);
 }
 
-void InitializeThreadRegistry() {
-  static ALIGNED(64) char thread_registry_placeholder[sizeof(ThreadRegistry)];
+void InitializeThreads() {
+  alignas(alignof(ThreadRegistry)) static char
+      thread_registry_placeholder[sizeof(ThreadRegistry)];
   thread_registry =
       new (thread_registry_placeholder) ThreadRegistry(CreateThreadContext);
+
+  alignas(alignof(ThreadArgRetval)) static char
+      thread_arg_retval_placeholder[sizeof(ThreadArgRetval)];
+  thread_arg_retval = new (thread_arg_retval_placeholder) ThreadArgRetval();
 }
+
+ThreadArgRetval &GetThreadArgRetval() { return *thread_arg_retval; }
 
 ThreadContextLsanBase::ThreadContextLsanBase(int tid)
     : ThreadContextBase(tid) {}
 
-void ThreadContextLsanBase::OnStarted(void *arg) { SetCurrentThread(this); }
+void ThreadContextLsanBase::OnStarted(void *arg) {
+  SetCurrentThread(this);
+  AllocatorThreadStart();
+}
 
 void ThreadContextLsanBase::OnFinished() {
   AllocatorThreadFinish();
@@ -72,9 +84,15 @@ void GetThreadExtraStackRangesLocked(tid_t os_id,
                                      InternalMmapVector<Range> *ranges) {}
 void GetThreadExtraStackRangesLocked(InternalMmapVector<Range> *ranges) {}
 
-void LockThreadRegistry() { thread_registry->Lock(); }
+void LockThreads() {
+  thread_registry->Lock();
+  thread_arg_retval->Lock();
+}
 
-void UnlockThreadRegistry() { thread_registry->Unlock(); }
+void UnlockThreads() {
+  thread_arg_retval->Unlock();
+  thread_registry->Unlock();
+}
 
 ThreadRegistry *GetLsanThreadRegistryLocked() {
   thread_registry->CheckLocked();
@@ -90,6 +108,16 @@ void GetRunningThreadsLocked(InternalMmapVector<tid_t> *threads) {
         }
       },
       threads);
+}
+
+void PrintThreads() {
+  InternalScopedString out;
+  PrintThreadHistory(*thread_registry, out);
+  Report("%s\n", out.data());
+}
+
+void GetAdditionalThreadContextPtrsLocked(InternalMmapVector<uptr> *ptrs) {
+  GetThreadArgRetval().GetAllPtrsLocked(ptrs);
 }
 
 }  // namespace __lsan

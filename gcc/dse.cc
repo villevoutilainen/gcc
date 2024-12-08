@@ -1,5 +1,5 @@
 /* RTL dead store elimination.
-   Copyright (C) 2005-2023 Free Software Foundation, Inc.
+   Copyright (C) 2005-2024 Free Software Foundation, Inc.
 
    Contributed by Richard Sandiford <rsandifor@codesourcery.com>
    and Kenneth Zadeck <zadeck@naturalbridge.com>
@@ -682,7 +682,8 @@ get_group_info (rtx base)
       gi->group_kill = BITMAP_ALLOC (&dse_bitmap_obstack);
       gi->process_globally = false;
       gi->frame_related =
-	(base == frame_pointer_rtx) || (base == hard_frame_pointer_rtx);
+	(base == frame_pointer_rtx) || (base == hard_frame_pointer_rtx)
+	|| (base == arg_pointer_rtx && fixed_regs[ARG_POINTER_REGNUM]);
       gi->offset_map_size_n = 0;
       gi->offset_map_size_p = 0;
       gi->offset_map_n = NULL;
@@ -1716,12 +1717,12 @@ dump_insn_info (const char * start, insn_info_t insn_info)
    line up, we need to extract the value from lower part of the rhs of
    the store, shift it, and then put it into a form that can be shoved
    into the read_insn.  This function generates a right SHIFT of a
-   value that is at least ACCESS_SIZE bytes wide of READ_MODE.  The
+   value that is at least ACCESS_BYTES bytes wide of READ_MODE.  The
    shift sequence is returned or NULL if we failed to find a
    shift.  */
 
 static rtx
-find_shift_sequence (poly_int64 access_size,
+find_shift_sequence (poly_int64 access_bytes,
 		     store_info *store_info,
 		     machine_mode read_mode,
 		     poly_int64 shift, bool speed, bool require_cst)
@@ -1733,10 +1734,11 @@ find_shift_sequence (poly_int64 access_size,
   /* If a constant was stored into memory, try to simplify it here,
      otherwise the cost of the shift might preclude this optimization
      e.g. at -Os, even when no actual shift will be needed.  */
+  auto access_bits = access_bytes * BITS_PER_UNIT;
   if (store_info->const_rhs
-      && known_le (access_size, GET_MODE_SIZE (MAX_MODE_INT)))
+      && known_le (access_bytes, GET_MODE_SIZE (MAX_MODE_INT))
+      && smallest_int_mode_for_size (access_bits).exists (&new_mode))
     {
-      auto new_mode = smallest_int_mode_for_size (access_size * BITS_PER_UNIT);
       auto byte = subreg_lowpart_offset (new_mode, store_mode);
       rtx ret
 	= simplify_subreg (new_mode, store_info->const_rhs, store_mode, byte);
@@ -1808,7 +1810,7 @@ find_shift_sequence (poly_int64 access_size,
 	    }
 	}
 
-      if (maybe_lt (GET_MODE_SIZE (new_mode), access_size))
+      if (maybe_lt (GET_MODE_SIZE (new_mode), access_bytes))
 	continue;
 
       new_reg = gen_reg_rtx (new_mode);
@@ -1837,8 +1839,8 @@ find_shift_sequence (poly_int64 access_size,
 	 of the arguments and could be precomputed.  It may
 	 not be worth doing so.  We could precompute if
 	 worthwhile or at least cache the results.  The result
-	 technically depends on both SHIFT and ACCESS_SIZE,
-	 but in practice the answer will depend only on ACCESS_SIZE.  */
+	 technically depends on both SHIFT and ACCESS_BYTES,
+	 but in practice the answer will depend only on ACCESS_BYTES.  */
 
       if (cost > COSTS_N_INSNS (1))
 	continue;
@@ -1900,8 +1902,11 @@ get_stored_val (store_info *store_info, machine_mode read_mode,
   else
     gap = read_offset - store_info->offset;
 
-  if (gap.is_constant () && maybe_ne (gap, 0))
+  if (maybe_ne (gap, 0))
     {
+      if (!gap.is_constant ())
+	return NULL_RTX;
+
       poly_int64 shift = gap * BITS_PER_UNIT;
       poly_int64 access_size = GET_MODE_SIZE (read_mode) + gap;
       read_reg = find_shift_sequence (access_size, store_info, read_mode,
@@ -1940,6 +1945,12 @@ get_stored_val (store_info *store_info, machine_mode read_mode,
 	       || GET_MODE_CLASS (read_mode) != GET_MODE_CLASS (store_mode)))
     read_reg = extract_low_bits (read_mode, store_mode,
 				 copy_rtx (store_info->const_rhs));
+  else if (VECTOR_MODE_P (read_mode) && VECTOR_MODE_P (store_mode)
+    && known_le (GET_MODE_BITSIZE (read_mode), GET_MODE_BITSIZE (store_mode))
+    && targetm.modes_tieable_p (read_mode, store_mode)
+    && validate_subreg (read_mode, store_mode, copy_rtx (store_info->rhs),
+			subreg_lowpart_offset (read_mode, store_mode)))
+    read_reg = gen_lowpart (read_mode, copy_rtx (store_info->rhs));
   else
     read_reg = extract_low_bits (read_mode, store_mode,
 				 copy_rtx (store_info->rhs));
@@ -2157,7 +2168,7 @@ replace_read (store_info *store_info, insn_info_t store_insn,
    be active.  */
 
 static void
-check_mem_read_rtx (rtx *loc, bb_info_t bb_info)
+check_mem_read_rtx (rtx *loc, bb_info_t bb_info, bool used_in_call = false)
 {
   rtx mem = *loc, mem_addr;
   insn_info_t insn_info;
@@ -2302,7 +2313,8 @@ check_mem_read_rtx (rtx *loc, bb_info_t bb_info)
 		 stored, rewrite the read.  */
 	      else
 		{
-		  if (store_info->rhs
+		  if (!used_in_call
+		      && store_info->rhs
 		      && known_subrange_p (offset, width, store_info->offset,
 					   store_info->width)
 		      && all_positions_needed_p (store_info,
@@ -2368,7 +2380,8 @@ check_mem_read_rtx (rtx *loc, bb_info_t bb_info)
 
 	  /* If this read is just reading back something that we just
 	     stored, rewrite the read.  */
-	  if (store_info->rhs
+	  if (!used_in_call
+	      && store_info->rhs
 	      && store_info->group_id == -1
 	      && store_info->cse_base == base
 	      && known_subrange_p (offset, width, store_info->offset,
@@ -2649,6 +2662,12 @@ scan_insn (bb_info_t bb_info, rtx_insn *insn, int max_active_local_stores)
 	/* Every other call, including pure functions, may read any memory
            that is not relative to the frame.  */
         add_non_frame_wild_read (bb_info);
+
+      for (rtx link = CALL_INSN_FUNCTION_USAGE (insn);
+	   link != NULL_RTX;
+	   link = XEXP (link, 1))
+	if (GET_CODE (XEXP (link, 0)) == USE && MEM_P (XEXP (XEXP (link, 0),0)))
+	  check_mem_read_rtx (&XEXP (XEXP (link, 0),0), bb_info, true);
 
       return;
     }

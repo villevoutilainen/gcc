@@ -1,5 +1,5 @@
 /* { dg-do compile } */
-/* { dg-options "-march=rv64gcv_zvfh -mabi=lp64 -O1 --param=riscv-vector-abi -Wno-psabi" } */
+/* { dg-options "-march=rv64gcv_zvfh -mabi=lp64 -O1" } */
 /* { dg-final { check-function-bodies "**" "" } } */
 
 #include "riscv_vector.h"
@@ -94,6 +94,7 @@ foo4 (vint8m1_t a1, vint16m2_t b1, vint32m4_t c1, vint64m8_t d1, vint8m1_t a2,
 
 /*
 ** foo5:
+**   vsetivli\tzero,0,e8,m1,ta,ma
 **   vmv1r\.v\tv8,v16
 **   vmv1r\.v\tv9,v17
 **   vmv1r\.v\tv10,v18

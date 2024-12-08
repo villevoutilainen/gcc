@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -33,6 +33,7 @@ with Einfo.Utils;    use Einfo.Utils;
 with Elists;         use Elists;
 with Errout;         use Errout;
 with Eval_Fat;       use Eval_Fat;
+with Exp_Intr;       use Exp_Intr;
 with Exp_Util;       use Exp_Util;
 with Freeze;         use Freeze;
 with Lib;            use Lib;
@@ -191,7 +192,7 @@ package body Sem_Eval is
    --  (it is an error to make the call if these conditions are not met).
 
    procedure Eval_Intrinsic_Call (N : Node_Id; E : Entity_Id);
-   --  Evaluate a call N to an intrinsic subprogram E.
+   --  Evaluate a call N to an intrinsic subprogram E
 
    function Find_Universal_Operator_Type (N : Node_Id) return Entity_Id;
    --  Check whether an arithmetic operation with universal operands which is a
@@ -2628,6 +2629,9 @@ package body Sem_Eval is
       Expr := First (Expressions (N));
       while Present (Expr) loop
          Check_Non_Static_Context (Expr);
+         if Kill_Range_Check (N) then
+            Set_Do_Range_Check (Expr, False);
+         end if;
          Next (Expr);
       end loop;
 
@@ -2643,6 +2647,14 @@ package body Sem_Eval is
       --  some cases of attributes we need the identify (e.g. Access, Size).
 
       elsif Nkind (Parent (N)) = N_Attribute_Reference then
+         return;
+
+      --  Similarly if the indexed component appears as the name of an
+      --  assignment statement, we don't want to evaluate it,
+
+      elsif Nkind (Parent (N)) = N_Assignment_Statement
+        and then N = Name (Parent (N))
+      then
          return;
       end if;
 
@@ -2888,13 +2900,43 @@ package body Sem_Eval is
       end if;
 
       case Nam is
-         when Name_Shift_Left  =>
+
+         --  Compilation date and time are the same for the entire compilation
+         --  unit, so we can replace them with static strings.
+
+         when Name_Compilation_ISO_Date
+            | Name_Compilation_Date
+            | Name_Compilation_Time
+         =>
+            Expand_Source_Info (N, Nam);
+
+         --  Calls to other intrinsics from the GNAT.Source_Info package give
+         --  different results, depending on where they occur. In particular,
+         --  for generics their results depend on where those generics are
+         --  instantiated; same for default values of subprogram parameters.
+         --  Those calls will behave as nonstatic, and we postpone their
+         --  rewriting until expansion.
+
+         when Name_Enclosing_Entity
+            | Name_File
+            | Name_Line
+            | Name_Source_Location
+         =>
+            if Inside_A_Generic
+              or else In_Spec_Expression
+            then
+               null;
+            else
+               Expand_Source_Info (N, Nam);
+            end if;
+
+         when Name_Shift_Left =>
             Eval_Shift (N, E, N_Op_Shift_Left);
          when Name_Shift_Right =>
             Eval_Shift (N, E, N_Op_Shift_Right);
          when Name_Shift_Right_Arithmetic =>
             Eval_Shift (N, E, N_Op_Shift_Right_Arithmetic);
-         when others           =>
+         when others =>
             null;
       end case;
    end Eval_Intrinsic_Call;
@@ -6185,10 +6227,12 @@ package body Sem_Eval is
 
          if Is_Discrete_Type (T1) and then Is_Discrete_Type (T2) then
             declare
-               Interval_List1 : constant Interval_Lists.Discrete_Interval_List
-                 := Interval_Lists.Type_Intervals (T1);
-               Interval_List2 : constant Interval_Lists.Discrete_Interval_List
-                 := Interval_Lists.Type_Intervals (T2);
+               Interval_List1 :
+                 constant Interval_Lists.Discrete_Interval_List :=
+                 Interval_Lists.Type_Intervals (T1);
+               Interval_List2 :
+                 constant Interval_Lists.Discrete_Interval_List :=
+                 Interval_Lists.Type_Intervals (T2);
             begin
                return Interval_Lists.Is_Subset (Interval_List1, Interval_List2)
                  and then not (Has_Predicates (T1)
@@ -6507,7 +6551,7 @@ package body Sem_Eval is
 
       --  Scalar types
 
-      elsif Is_Scalar_Type (T1) then
+      elsif Is_Scalar_Type (T1) and then Is_Scalar_Type (T2) then
 
          --  Definitely compatible if we match
 
@@ -6560,7 +6604,7 @@ package body Sem_Eval is
 
       --  Access types
 
-      elsif Is_Access_Type (T1) then
+      elsif Is_Access_Type (T1) and then Is_Access_Type (T2) then
          return
            (not Is_Constrained (T2)
              or else Subtypes_Statically_Match
@@ -6812,7 +6856,7 @@ package body Sem_Eval is
 
                  --  No constraint on the parent type
 
-                 or else not Present (Discriminant_Constraint (Etype (Typ)))
+                 or else No (Discriminant_Constraint (Etype (Typ)))
                  or else Is_Empty_Elmt_List
                            (Discriminant_Constraint (Etype (Typ)))
 

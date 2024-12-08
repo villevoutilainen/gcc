@@ -1,5 +1,5 @@
 /* Control flow functions for trees.
-   Copyright (C) 2001-2023 Free Software Foundation, Inc.
+   Copyright (C) 2001-2024 Free Software Foundation, Inc.
    Contributed by Diego Novillo <dnovillo@redhat.com>
 
 This file is part of GCC.
@@ -65,6 +65,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "asan.h"
 #include "profile.h"
 #include "sreal.h"
+#include "gcc-urlifier.h"
 
 /* This file contains functions for building the Control Flow Graph (CFG)
    for a function tree.  */
@@ -297,6 +298,9 @@ replace_loop_annotate_in_block (basic_block bb, class loop *loop)
 	  loop->can_be_parallel = true;
 	  loop->safelen = INT_MAX;
 	  break;
+	case annot_expr_maybe_infinite_kind:
+	  loop->finite_p = false;
+	  break;
 	default:
 	  gcc_unreachable ();
 	}
@@ -320,15 +324,12 @@ replace_loop_annotate (void)
 
   for (auto loop : loops_list (cfun, 0))
     {
-      /* First look into the header.  */
-      replace_loop_annotate_in_block (loop->header, loop);
-
-      /* Then look into the latch, if any.  */
-      if (loop->latch)
-	replace_loop_annotate_in_block (loop->latch, loop);
-
       /* Push the global flag_finite_loops state down to individual loops.  */
       loop->finite_p = flag_finite_loops;
+
+      /* Check all exit source blocks for annotations.  */
+      for (auto e : get_loop_exit_edges (loop))
+	replace_loop_annotate_in_block (e->src, loop);
     }
 
   /* Remove IFN_ANNOTATE.  Safeguard for the case loop->latch == NULL.  */
@@ -350,6 +351,7 @@ replace_loop_annotate (void)
 	    case annot_expr_no_vector_kind:
 	    case annot_expr_vector_kind:
 	    case annot_expr_parallel_kind:
+	    case annot_expr_maybe_infinite_kind:
 	      break;
 	    default:
 	      gcc_unreachable ();
@@ -878,7 +880,7 @@ make_edges_bb (basic_block bb, struct omp_region **pcur_region, int *pomp_index)
       fallthru = false;
       break;
     case GIMPLE_RESX:
-      make_eh_edges (last);
+      make_eh_edge (last);
       fallthru = false;
       break;
     case GIMPLE_EH_DISPATCH:
@@ -894,7 +896,7 @@ make_edges_bb (basic_block bb, struct omp_region **pcur_region, int *pomp_index)
 
       /* If this statement has reachable exception handlers, then
 	 create abnormal edges to them.  */
-      make_eh_edges (last);
+      make_eh_edge (last);
 
       /* BUILTIN_RETURN is really a return statement.  */
       if (gimple_call_builtin_p (last, BUILT_IN_RETURN))
@@ -911,7 +913,7 @@ make_edges_bb (basic_block bb, struct omp_region **pcur_region, int *pomp_index)
       /* A GIMPLE_ASSIGN may throw internally and thus be considered
 	 control-altering.  */
       if (is_ctrl_altering_stmt (last))
-	make_eh_edges (last);
+	make_eh_edge (last);
       fallthru = true;
       break;
 
@@ -1214,6 +1216,22 @@ assign_discriminators (void)
 	{
 	  gimple *stmt = gsi_stmt (gsi);
 
+	  /* Don't allow debug stmts to affect discriminators, but
+	     allow them to take discriminators when they're on the
+	     same line as the preceding nondebug stmt.  */
+	  if (is_gimple_debug (stmt))
+	    {
+	      if (curr_locus != UNKNOWN_LOCATION
+		  && same_line_p (curr_locus, &curr_locus_e,
+				  gimple_location (stmt)))
+		{
+		  location_t loc = gimple_location (stmt);
+		  location_t dloc = location_with_discriminator (loc,
+								 curr_discr);
+		  gimple_set_location (stmt, dloc);
+		}
+	      continue;
+	    }
 	  if (curr_locus == UNKNOWN_LOCATION)
 	    {
 	      curr_locus = gimple_location (stmt);
@@ -1233,7 +1251,7 @@ assign_discriminators (void)
 	    }
 	  /* Allocate a new discriminator for CALL stmt.  */
 	  if (gimple_code (stmt) == GIMPLE_CALL)
-	    curr_discr = next_discriminator_for_locus (curr_locus);
+	    curr_discr = next_discriminator_for_locus (curr_locus_e.line);
 	}
 
       gimple *last = last_nondebug_stmt (bb);
@@ -2273,6 +2291,8 @@ notice_special_calls (gcall *call)
     cfun->calls_alloca = true;
   if (flags & ECF_RETURNS_TWICE)
     cfun->calls_setjmp = true;
+  if (gimple_call_must_tail_p (call))
+    cfun->has_musttail = true;
 }
 
 
@@ -2284,6 +2304,7 @@ clear_special_calls (void)
 {
   cfun->calls_alloca = false;
   cfun->calls_setjmp = false;
+  cfun->has_musttail = false;
 }
 
 /* Remove PHI nodes associated with basic block BB and all edges out of BB.  */
@@ -3051,7 +3072,7 @@ gimple_split_edge (edge edge_in)
 /* Verify properties of the address expression T whose base should be
    TREE_ADDRESSABLE if VERIFY_ADDRESSABLE is true.  */
 
-static bool 
+static bool
 verify_address (tree t, bool verify_addressable)
 {
   bool old_constant;
@@ -3155,7 +3176,7 @@ verify_types_in_gimple_reference (tree expr, bool require_lvalue)
 	      return true;
 	    }
 	  if (!AGGREGATE_TYPE_P (TREE_TYPE (op))
-	      && maybe_gt (size + bitpos,
+	      && known_gt (size + bitpos,
 			   tree_to_poly_uint64 (TYPE_SIZE (TREE_TYPE (op)))))
 	    {
 	      error ("position plus size exceeds size of referenced object in "
@@ -4657,6 +4678,16 @@ verify_gimple_assign_single (gassign *stmt)
       error ("%qs in gimple IL", code_name);
       return true;
 
+    case WITH_SIZE_EXPR:
+      if (!is_gimple_val (TREE_OPERAND (rhs1, 1)))
+	{
+	  error ("invalid %qs size argument in load", code_name);
+	  debug_generic_stmt (lhs);
+	  debug_generic_stmt (rhs1);
+	  return true;
+	}
+      rhs1 = TREE_OPERAND (rhs1, 0);
+      /* Fallthru.  */
     case COMPONENT_REF:
     case BIT_FIELD_REF:
     case ARRAY_REF:
@@ -4794,12 +4825,6 @@ verify_gimple_assign_single (gassign *stmt)
 	}
       return res;
 
-    case WITH_SIZE_EXPR:
-      error ("%qs RHS in assignment statement",
-	     get_tree_code_name (rhs_code));
-      debug_generic_expr (rhs1);
-      return true;
-
     case OBJ_TYPE_REF:
       /* FIXME.  */
       return res;
@@ -4816,6 +4841,17 @@ verify_gimple_assign_single (gassign *stmt)
 static bool
 verify_gimple_assign (gassign *stmt)
 {
+  if (gimple_assign_nontemporal_move_p (stmt))
+    {
+      tree lhs = gimple_assign_lhs (stmt);
+      if (is_gimple_reg (lhs))
+	{
+	  error ("nontemporal store lhs cannot be a gimple register");
+	  debug_generic_stmt (lhs);
+	  return true;
+	}
+    }
+
   switch (gimple_assign_rhs_class (stmt))
     {
     case GIMPLE_SINGLE_RHS:
@@ -5774,6 +5810,7 @@ gimple_verify_flow_info (void)
 	{
 	  gimple *stmt = gsi_stmt (gsi);
 
+	  /* Do NOT disregard debug stmts after found_ctrl_stmt.  */
 	  if (found_ctrl_stmt)
 	    {
 	      error ("control flow in the middle of basic block %d",
@@ -5796,7 +5833,7 @@ gimple_verify_flow_info (void)
 	  if (gimple_code (stmt) == GIMPLE_CALL
 	      && gimple_call_flags (stmt) & ECF_RETURNS_TWICE)
 	    {
-	      const char *misplaced = NULL;
+	      bool misplaced = false;
 	      /* TM is an exception: it points abnormal edges just after the
 		 call that starts a transaction, i.e. it must end the BB.  */
 	      if (gimple_call_builtin_p (stmt, BUILT_IN_TM_START))
@@ -5804,18 +5841,23 @@ gimple_verify_flow_info (void)
 		  if (single_succ_p (bb)
 		      && bb_has_abnormal_pred (single_succ (bb))
 		      && !gsi_one_nondebug_before_end_p (gsi))
-		    misplaced = "not last";
+		    {
+		      error ("returns_twice call is not last in basic block "
+			     "%d", bb->index);
+		      misplaced = true;
+		    }
 		}
 	      else
 		{
-		  if (seen_nondebug_stmt
-		      && bb_has_abnormal_pred (bb))
-		    misplaced = "not first";
+		  if (seen_nondebug_stmt && bb_has_abnormal_pred (bb))
+		    {
+		      error ("returns_twice call is not first in basic block "
+			     "%d", bb->index);
+		      misplaced = true;
+		    }
 		}
 	      if (misplaced)
 		{
-		  error ("returns_twice call is %s in basic block %d",
-			 misplaced, bb->index);
 		  print_gimple_stmt (stderr, stmt, 0, TDF_SLIM);
 		  err = true;
 		}
@@ -6356,7 +6398,7 @@ gimple_split_block (basic_block bb, void *stmt)
       gsi = gsi_for_stmt ((gimple *) stmt);
       gsi_next (&gsi);
     }
- 
+
   /* Move everything from GSI to the new basic block.  */
   if (gsi_end_p (gsi))
     return new_bb;
@@ -6457,6 +6499,13 @@ gimple_can_duplicate_bb_p (const_basic_block bb)
 	&& gimple_call_internal_p (last)
 	&& gimple_call_internal_unique_p (last))
       return false;
+
+    /* Prohibit duplication of returns_twice calls, otherwise associated
+       abnormal edges also need to be duplicated properly.
+       return_twice functions will always be the last statement.  */
+    if (is_gimple_call (last)
+	&& (gimple_call_flags (last) & ECF_RETURNS_TWICE))
+      return false;
   }
 
   for (gimple_stmt_iterator gsi = gsi_start_bb (CONST_CAST_BB (bb));
@@ -6464,15 +6513,12 @@ gimple_can_duplicate_bb_p (const_basic_block bb)
     {
       gimple *g = gsi_stmt (gsi);
 
-      /* Prohibit duplication of returns_twice calls, otherwise associated
-	 abnormal edges also need to be duplicated properly.
-	 An IFN_GOMP_SIMT_ENTER_ALLOC/IFN_GOMP_SIMT_EXIT call must be
+      /* An IFN_GOMP_SIMT_ENTER_ALLOC/IFN_GOMP_SIMT_EXIT call must be
 	 duplicated as part of its group, or not at all.
 	 The IFN_GOMP_SIMT_VOTE_ANY and IFN_GOMP_SIMT_XCHG_* are part of such a
 	 group, so the same holds there.  */
       if (is_gimple_call (g)
-	  && (gimple_call_flags (g) & ECF_RETURNS_TWICE
-	      || gimple_call_internal_p (g, IFN_GOMP_SIMT_ENTER_ALLOC)
+	  && (gimple_call_internal_p (g, IFN_GOMP_SIMT_ENTER_ALLOC)
 	      || gimple_call_internal_p (g, IFN_GOMP_SIMT_EXIT)
 	      || gimple_call_internal_p (g, IFN_GOMP_SIMT_VOTE_ANY)
 	      || gimple_call_internal_p (g, IFN_GOMP_SIMT_XCHG_BFLY)
@@ -6551,7 +6597,7 @@ gimple_duplicate_bb (basic_block bb, copy_bb_data *id)
 	      && (!VAR_P (base) || !DECL_HAS_VALUE_EXPR_P (base)))
 	    DECL_NONSHAREABLE (base) = 1;
 	}
- 
+
       /* If requested remap dependence info of cliques brought in
          via inlining.  */
       if (id)
@@ -6579,7 +6625,7 @@ gimple_duplicate_bb (basic_block bb, copy_bb_data *id)
 		if (!existed)
 		  {
 		    gcc_assert (MR_DEPENDENCE_CLIQUE (op) <= cfun->last_clique);
-		    newc = ++cfun->last_clique;
+		    newc = get_new_clique (cfun);
 		  }
 		MR_DEPENDENCE_CLIQUE (op) = newc;
 	      }
@@ -6801,7 +6847,7 @@ gimple_duplicate_seme_region (edge entry, edge exit,
 }
 
 /* Checks if BB is part of the region defined by N_REGION BBS.  */
-static bool 
+static bool
 bb_part_of_region_p (basic_block bb, basic_block* bbs, unsigned n_region)
 {
   unsigned int n;
@@ -6959,7 +7005,7 @@ gimple_duplicate_sese_tail (edge entry, edge exit,
   sorig->probability = exits[1]->probability;
   snew = make_edge (switch_bb, nentry_bb, exits[0]->flags);
   snew->probability = exits[0]->probability;
-  
+
 
   /* Register the new edge from SWITCH_BB in loop exit lists.  */
   rescan_loop_exit (snew, true, false);
@@ -6974,7 +7020,7 @@ gimple_duplicate_sese_tail (edge entry, edge exit,
   e = redirect_edge_and_branch (exits[0], exits[1]->dest);
   PENDING_STMT (e) = NULL;
 
-  /* The latch of ORIG_LOOP was copied, and so was the backedge 
+  /* The latch of ORIG_LOOP was copied, and so was the backedge
      to the original header.  We redirect this backedge to EXIT_BB.  */
   for (i = 0; i < n_region; i++)
     if (get_bb_original (region_copy[i]) == orig_loop->latch)
@@ -6986,7 +7032,7 @@ gimple_duplicate_sese_tail (edge entry, edge exit,
       }
   e = redirect_edge_and_branch (nexits[1], nexits[0]->dest);
   PENDING_STMT (e) = NULL;
-  
+
   /* Anything that is outside of the region, but was dominated by something
      inside needs to update dominance info.  */
   iterate_fix_dominators (CDI_DOMINATORS, doms, false);
@@ -8160,11 +8206,14 @@ move_sese_region_to_fn (struct function *dest_cfun, basic_block entry_bb,
   bb = create_empty_bb (entry_pred[0]);
   if (current_loops)
     add_bb_to_loop (bb, loop);
+  profile_count count = profile_count::zero ();
   for (i = 0; i < num_entry_edges; i++)
     {
       e = make_edge (entry_pred[i], bb, entry_flag[i]);
       e->probability = entry_prob[i];
+      count += e->count ();
     }
+  bb->count = count;
 
   for (i = 0; i < num_exit_edges; i++)
     {
@@ -8267,6 +8316,15 @@ dump_function_to_file (tree fndecl, FILE *file, dump_flags_t flags)
 
 	      if (strstr (IDENTIFIER_POINTER (name), "no_sanitize"))
 		print_no_sanitize_attr_value (file, TREE_VALUE (chain));
+	      else if (!strcmp (IDENTIFIER_POINTER (name),
+				"omp declare variant base"))
+		{
+		  tree a = TREE_VALUE (chain);
+		  print_generic_expr (file, TREE_PURPOSE (a), dump_flags);
+		  fprintf (file, " match ");
+		  print_omp_context_selector (file, TREE_VALUE (a),
+					      dump_flags);
+		}
 	      else
 		print_generic_expr (file, TREE_VALUE (chain), dump_flags);
 	      fprintf (file, ")");
@@ -8830,7 +8888,7 @@ stmt_can_terminate_bb_p (gimple *t)
     }
 
   if (gasm *asm_stmt = dyn_cast <gasm *> (t))
-    if (gimple_asm_volatile_p (asm_stmt) || gimple_asm_input_p (asm_stmt))
+    if (gimple_asm_volatile_p (asm_stmt) || gimple_asm_basic_p (asm_stmt))
       return true;
 
   return false;
@@ -8974,10 +9032,30 @@ remove_edge_and_dominated_blocks (edge e)
 
   /* If we are removing a path inside a non-root loop that may change
      loop ownership of blocks or remove loops.  Mark loops for fixup.  */
+  class loop *src_loop = e->src->loop_father;
   if (current_loops
-      && loop_outer (e->src->loop_father) != NULL
-      && e->src->loop_father == e->dest->loop_father)
-    loops_state_set (LOOPS_NEED_FIXUP);
+      && loop_outer (src_loop) != NULL
+      && src_loop == e->dest->loop_father)
+    {
+      loops_state_set (LOOPS_NEED_FIXUP);
+      /* If we are removing a backedge clear the number of iterations
+	 and estimates.  */
+      class loop *dest_loop = e->dest->loop_father;
+      if (e->dest == src_loop->header
+	  || (e->dest == dest_loop->header
+	      && flow_loop_nested_p (dest_loop, src_loop)))
+	{
+	  free_numbers_of_iterations_estimates (dest_loop);
+	  /* If we removed the last backedge mark the loop for removal.  */
+	  FOR_EACH_EDGE (f, ei, dest_loop->header->preds)
+	    if (f != e
+		&& (f->src->loop_father == dest_loop
+		    || flow_loop_nested_p (dest_loop, f->src->loop_father)))
+	      break;
+	  if (!f)
+	    mark_loop_for_removal (dest_loop);
+	}
+    }
 
   if (!dom_info_available_p (CDI_DOMINATORS))
     {
@@ -9352,7 +9430,7 @@ struct cfg_hooks gimple_cfg_hooks = {
   gimple_lv_add_condition_to_bb, /* lv_add_condition_to_bb */
   gimple_lv_adjust_loop_header_phi, /* lv_adjust_loop_header_phi*/
   extract_true_false_edges_from_block, /* extract_cond_bb_edges */
-  flush_pending_stmts, 		/* flush_pending_stmts */  
+  flush_pending_stmts, 		/* flush_pending_stmts */
   gimple_empty_block_p,           /* block_empty_p */
   gimple_split_block_before_cond_jump, /* split_block_before_cond_jump */
   gimple_account_profile_record,
@@ -9860,6 +9938,8 @@ do_warn_unused_result (gimple_seq seq)
 
 	  if (lookup_attribute ("warn_unused_result", TYPE_ATTRIBUTES (ftype)))
 	    {
+	      auto_urlify_attributes sentinel;
+
 	      location_t loc = gimple_location (g);
 
 	      if (fdecl)
@@ -9928,7 +10008,7 @@ maybe_remove_writeonly_store (gimple_stmt_iterator &gsi, gimple *stmt,
 			      bitmap dce_ssa_names)
 {
   /* Keep access when store has side effect, i.e. in case when source
-     is volatile.  */  
+     is volatile.  */
   if (!gimple_store_p (stmt)
       || gimple_has_side_effects (stmt)
       || optimize_debug)

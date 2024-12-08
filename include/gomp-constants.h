@@ -1,6 +1,6 @@
 /* Communication between GCC and libgomp.
 
-   Copyright (C) 2014-2023 Free Software Foundation, Inc.
+   Copyright (C) 2014-2024 Free Software Foundation, Inc.
 
    Contributed by Mentor Embedded.
 
@@ -153,6 +153,12 @@ enum gomp_map_kind
        (address of the last adjacent entry plus its size).  */
     GOMP_MAP_STRUCT =			(GOMP_MAP_FLAG_SPECIAL_2
 					 | GOMP_MAP_FLAG_SPECIAL | 0),
+    /* As above, but followed by an unordered list of adjacent entries.
+       At present, this is used only to diagnose incorrect usage of variable
+       indices into arrays of structs.  */
+    GOMP_MAP_STRUCT_UNORD =		(GOMP_MAP_FLAG_SPECIAL_4
+					 | GOMP_MAP_FLAG_SPECIAL_2
+					 | GOMP_MAP_FLAG_SPECIAL | 0),
     /* On a location of a pointer/reference that is assumed to be already mapped
        earlier, store the translated address of the preceeding mapping.
        No refcount is bumped by this, and the store is done unconditionally.  */
@@ -304,6 +310,8 @@ enum gomp_map_kind
 
 /* Force host fallback execution.  */
 #define GOACC_FLAG_HOST_FALLBACK	(1 << 0)
+/* Execute on local device (i.e. host multicore CPU).  */
+#define GOACC_FLAG_LOCAL_DEVICE 	(1 << 1)
 
 /* For legacy reasons, in the ABI, the GOACC_FLAGs are encoded as an inverted
    bitmask.  */
@@ -314,13 +322,15 @@ enum gomp_map_kind
 /* Versions of libgomp and device-specific plugins.  GOMP_VERSION
    should be incremented whenever an ABI-incompatible change is introduced
    to the plugin interface defined in libgomp/libgomp.h.  */
-#define GOMP_VERSION	2
+#define GOMP_VERSION	3
 #define GOMP_VERSION_NVIDIA_PTX 1
 #define GOMP_VERSION_GCN 3
 
 #define GOMP_VERSION_PACK(LIB, DEV) (((LIB) << 16) | (DEV))
 #define GOMP_VERSION_LIB(PACK) (((PACK) >> 16) & 0xffff)
 #define GOMP_VERSION_DEV(PACK) ((PACK) & 0xffff)
+
+#define GOMP_VERSION_SUPPORTS_INDIRECT_FUNCS(VER) (GOMP_VERSION_LIB(VER) >= 3)
 
 #define GOMP_DIM_GANG	0
 #define GOMP_DIM_WORKER	1
@@ -372,11 +382,29 @@ enum gomp_map_kind
 #define GOMP_DEPEND_MUTEXINOUTSET	4
 #define GOMP_DEPEND_INOUTSET		5
 
+/* Predefined allocator value ranges.  */
+#define GOMP_OMP_PREDEF_ALLOC_MAX	8
+#define GOMP_OMPX_PREDEF_ALLOC_MIN	200
+#define GOMP_OMPX_PREDEF_ALLOC_MAX	200
+
+/* Predefined allocator with access == thread.  */
+#define GOMP_OMP_PREDEF_ALLOC_THREADS	8
+
 /* Flag values for OpenMP 'requires' directive features.  */
+// compiler use only: OMP_REQUIRES_ATOMIC_DEFAULT_MEM_ORDER  0xf
 #define GOMP_REQUIRES_UNIFIED_ADDRESS       0x10
 #define GOMP_REQUIRES_UNIFIED_SHARED_MEMORY 0x20
+// compiler use only: OMP_REQUIRES_DYNAMIC_ALLOCATORS 0x40
 #define GOMP_REQUIRES_REVERSE_OFFLOAD       0x80
+// compiler use only: OMP_REQUIRES_ATOMIC_DEFAULT_MEM_ORDER_USED 0x100
 #define GOMP_REQUIRES_TARGET_USED           0x200
+#define GOMP_REQUIRES_SELF_MAPS             0x400
+
+/* Interop foreign-runtime data;
+   OpenMP defines positive values; reserve 0 and negative for GCC.  */
+#define GOMP_INTEROP_IFR_LAST	7
+#define GOMP_INTEROP_IFR_SEPARATOR ((char)(-__INT8_MAX__-1))
+#define GOMP_INTEROP_IFR_UNKNOWN ((char)(-__INT8_MAX__))
 
 /* HSA specific data structures.  */
 

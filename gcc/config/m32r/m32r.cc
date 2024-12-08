@@ -1,5 +1,5 @@
 /* Subroutines used for code generation on the Renesas M32R cpu.
-   Copyright (C) 1996-2023 Free Software Foundation, Inc.
+   Copyright (C) 1996-2024 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -112,15 +112,14 @@ static HOST_WIDE_INT m32r_starting_frame_offset (void);
 
 /* M32R specific attributes.  */
 
-static const struct attribute_spec m32r_attribute_table[] =
+TARGET_GNU_ATTRIBUTES (m32r_attribute_table,
 {
   /* { name, min_len, max_len, decl_req, type_req, fn_type_req,
        affects_type_identity, handler, exclude } */
   { "interrupt", 0, 0, true,  false, false, false, NULL, NULL },
   { "model",     1, 1, true,  false, false, false, m32r_handle_model_attribute,
-    NULL },
-  { NULL,        0, 0, false, false, false, false, NULL, NULL }
-};
+    NULL }
+});
 
 /* Initialize the GCC target structure.  */
 #undef  TARGET_ATTRIBUTE_TABLE
@@ -228,6 +227,9 @@ static const struct attribute_spec m32r_attribute_table[] =
 #undef  TARGET_HAVE_SPECULATION_SAFE_VALUE
 #define TARGET_HAVE_SPECULATION_SAFE_VALUE speculation_safe_value_not_needed
 
+#undef TARGET_DOCUMENTATION_NAME
+#define TARGET_DOCUMENTATION_NAME "M32R/D"
+
 struct gcc_target targetm = TARGET_INITIALIZER;
 
 /* Called by m32r_option_override to initialize various things.  */
@@ -308,7 +310,7 @@ init_reg_tables (void)
   for (i = 0; i < NUM_MACHINE_MODES; i++)
     {
       machine_mode m = (machine_mode) i;
-      
+
       switch (GET_MODE_CLASS (m))
 	{
 	case MODE_INT:
@@ -1288,7 +1290,8 @@ m32r_setup_incoming_varargs (cumulative_args_t cum,
   if (!TYPE_NO_NAMED_ARGS_STDARG_P (TREE_TYPE (current_function_decl)))
     gcc_assert (arg.mode != BLKmode);
 
-  if (!TYPE_NO_NAMED_ARGS_STDARG_P (TREE_TYPE (current_function_decl)))
+  if (!TYPE_NO_NAMED_ARGS_STDARG_P (TREE_TYPE (current_function_decl))
+      || arg.type != NULL_TREE)
     first_anon_arg = (ROUND_ADVANCE_CUM (*get_cumulative_args (cum),
 					 arg.mode, arg.type)
 		      + ROUND_ADVANCE_ARG (arg.mode, arg.type));

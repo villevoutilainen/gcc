@@ -1,4 +1,4 @@
-/* Copyright (C) 2008-2023 Free Software Foundation, Inc.
+/* Copyright (C) 2008-2024 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -54,10 +54,6 @@
 
 #include <avx512fintrin.h>
 
-#include <avx512erintrin.h>
-
-#include <avx512pfintrin.h>
-
 #include <avx512cdintrin.h>
 
 #include <avx512vlintrin.h>
@@ -78,10 +74,6 @@
 
 #include <avx512vbmivlintrin.h>
 
-#include <avx5124fmapsintrin.h>
-
-#include <avx5124vnniwintrin.h>
-
 #include <avx512vpopcntdqintrin.h>
 
 #include <avx512vbmi2intrin.h>
@@ -95,6 +87,8 @@
 #include <avx512vpopcntdqvlintrin.h>
 
 #include <avx512bitalgintrin.h>
+
+#include <avx512bitalgvlintrin.h>
 
 #include <avx512vp2intersectintrin.h>
 
@@ -138,10 +132,45 @@
 
 #include <amxcomplexintrin.h>
 
+#include <amxavx512intrin.h>
+
+#include <amxtf32intrin.h>
+
+#include <amxtransposeintrin.h>
+
+#include <amxfp8intrin.h>
+
 #include <prfchwintrin.h>
 
 #include <keylockerintrin.h>
 
 #include <amxfp16intrin.h>
 
+#include <avx10_2roundingintrin.h>
+
+#include <avx10_2mediaintrin.h>
+
+#include <avx10_2-512mediaintrin.h>
+
+#include <avx10_2convertintrin.h>
+
+#include <avx10_2-512convertintrin.h>
+
+#include <avx10_2bf16intrin.h>
+
+#include <avx10_2-512bf16intrin.h>
+
+#include <avx10_2satcvtintrin.h>
+
+#include <avx10_2-512satcvtintrin.h>
+
+#include <avx10_2minmaxintrin.h>
+
+#include <avx10_2-512minmaxintrin.h>
+
+#include <avx10_2copyintrin.h>
+
+#include <movrsintrin.h>
+
+#include <amxmovrsintrin.h>
 #endif /* _IMMINTRIN_H_INCLUDED */

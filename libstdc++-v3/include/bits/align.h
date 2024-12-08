@@ -1,6 +1,6 @@
 // align implementation -*- C++ -*-
 
-// Copyright (C) 2014-2023 Free Software Foundation, Inc.
+// Copyright (C) 2014-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -30,14 +30,9 @@
 #ifndef _GLIBCXX_ALIGN_H
 #define _GLIBCXX_ALIGN_H 1
 
-#include <bits/c++config.h>
-
-#define __glibcxx_want_assume_aligned
-#include <bits/version.h>
-
 #include <bit>          // std::has_single_bit
-#include <stdint.h>     // uintptr_t
 #include <debug/assertions.h> // _GLIBCXX_DEBUG_ASSERT
+#include <bits/version.h>
 
 namespace std _GLIBCXX_VISIBILITY(default)
 {
@@ -66,7 +61,7 @@ align(size_t __align, size_t __size, void*& __ptr, size_t& __space) noexcept
 {
   if (__space < __size)
     return nullptr;
-  const auto __intptr = reinterpret_cast<uintptr_t>(__ptr);
+  const auto __intptr = reinterpret_cast<__UINTPTR_TYPE__>(__ptr);
   const auto __aligned = (__intptr - 1u + __align) & -__align;
   const auto __diff = __aligned - __intptr;
   if (__diff > (__space - __size))
@@ -78,7 +73,7 @@ align(size_t __align, size_t __size, void*& __ptr, size_t& __space) noexcept
     }
 }
 
-#ifdef __cpp_lib_assume_aligned // C++ >= 20
+#ifdef __glibcxx_assume_aligned // C++ >= 20
   /** @brief Inform the compiler that a pointer is aligned.
    *
    *  @tparam _Align An alignment value (i.e. a power of two)
@@ -101,11 +96,11 @@ align(size_t __align, size_t __size, void*& __ptr, size_t& __space) noexcept
 	{
 	  // This function is expected to be used in hot code, where
 	  // __glibcxx_assert would add unwanted overhead.
-	  _GLIBCXX_DEBUG_ASSERT((uintptr_t)__ptr % _Align == 0);
+	  _GLIBCXX_DEBUG_ASSERT((__UINTPTR_TYPE__)__ptr % _Align == 0);
 	  return static_cast<_Tp*>(__builtin_assume_aligned(__ptr, _Align));
 	}
     }
-#endif // __cpp_lib_assume_aligned
+#endif // __glibcxx_assume_aligned
 
 _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace

@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -1840,6 +1840,9 @@ package body Sprint is
 
             Write_Char (';');
 
+         when N_External_Initializer =>
+            null;
+
          when N_Delta_Aggregate =>
             Write_Str_With_Col_Check_Sloc ("(");
             Sprint_Node (Expression (Node));
@@ -3116,8 +3119,12 @@ package body Sprint is
             Write_Condition_And_Reason (Node);
 
          when N_Raise_Statement =>
-            Write_Indent_Str_Sloc ("raise ");
-            Sprint_Node (Name (Node));
+            if Present (Name (Node)) then
+               Write_Indent_Str_Sloc ("raise ");
+               Sprint_Node (Name (Node));
+            else
+               Write_Indent_Str_Sloc ("raise");
+            end if;
 
             if Present (Expression (Node)) then
                Write_Str_With_Col_Check_Sloc (" with ");
@@ -3127,8 +3134,12 @@ package body Sprint is
             Write_Char (';');
 
          when N_Raise_When_Statement =>
-            Write_Indent_Str_Sloc ("raise ");
-            Sprint_Node (Name (Node));
+            if Present (Name (Node)) then
+               Write_Indent_Str_Sloc ("raise ");
+               Sprint_Node (Name (Node));
+            else
+               Write_Indent_Str_Sloc ("raise");
+            end if;
             Write_Str (" when ");
             Sprint_Node (Condition (Node));
 
@@ -3539,12 +3550,6 @@ package body Sprint is
             Sprint_Node (Expression (Node));
             Write_Char (')');
 
-         when N_Unchecked_Expression =>
-            Col_Check (10);
-            Write_Str ("`(");
-            Sprint_Node_Sloc (Expression (Node));
-            Write_Char (')');
-
          when N_Unchecked_Type_Conversion =>
             Sprint_Node (Subtype_Mark (Node));
             Write_Char ('!');
@@ -3772,7 +3777,6 @@ package body Sprint is
       Node_Exists : Boolean := False;
 
    begin
-
       if Is_Non_Empty_List (List) then
 
          if Dump_Original_Only then

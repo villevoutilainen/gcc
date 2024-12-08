@@ -1,5 +1,5 @@
 /* Convert a program in SSA form into Normal form.
-   Copyright (C) 2004-2023 Free Software Foundation, Inc.
+   Copyright (C) 2004-2024 Free Software Foundation, Inc.
    Contributed by Andrew Macleod <amacleod@redhat.com>
 
 This file is part of GCC.
@@ -45,6 +45,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-ssa-coalesce.h"
 #include "tree-outof-ssa.h"
 #include "dojump.h"
+#include "internal-fn.h"
 
 /* FIXME: A lot of code here deals with expanding to RTL.  All that code
    should be in cfgexpand.cc.  */
@@ -60,8 +61,11 @@ ssa_is_replaceable_p (gimple *stmt)
   tree def;
   gimple *use_stmt;
 
-  /* Only consider modify stmts.  */
-  if (!is_gimple_assign (stmt))
+  /* Only consider modify stmts and direct internal fn calls.  */
+  if (!is_gimple_assign (stmt)
+      && (!is_gimple_call (stmt)
+	  || !gimple_call_internal_p (stmt)
+	  || !direct_internal_fn_p (gimple_call_internal_fn (stmt))))
     return false;
 
   /* If the statement may throw an exception, it cannot be replaced.  */
@@ -92,12 +96,9 @@ ssa_is_replaceable_p (gimple *stmt)
 
   /* An assignment with a register variable on the RHS is not
      replaceable.  */
-  if (gimple_assign_rhs_code (stmt) == VAR_DECL
+  if (is_gimple_assign (stmt)
+      && gimple_assign_rhs_code (stmt) == VAR_DECL
       && DECL_HARD_REGISTER (gimple_assign_rhs1 (stmt)))
-    return false;
-
-  /* No function calls can be replaced.  */
-  if (is_gimple_call (stmt))
     return false;
 
   /* Leave any stmt with volatile operands alone as well.  */
@@ -562,7 +563,7 @@ static inline bool
 queue_phi_copy_p (var_map map, tree t)
 {
   if (TREE_CODE (t) == SSA_NAME)
-    { 
+    {
       if (var_to_partition (map, t) == NO_PARTITION)
         return true;
       return false;
@@ -1351,9 +1352,6 @@ rewrite_out_of_ssa (struct ssaexpand *sa)
     gimple_dump_cfg (dump_file, dump_flags & ~TDF_DETAILS);
 
   remove_ssa_form (flag_tree_ter, sa);
-
-  if (dump_file && (dump_flags & TDF_DETAILS))
-    gimple_dump_cfg (dump_file, dump_flags & ~TDF_DETAILS);
 
   return 0;
 }

@@ -1,5 +1,5 @@
 /* Assign reload pseudos.
-   Copyright (C) 2010-2023 Free Software Foundation, Inc.
+   Copyright (C) 2010-2024 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
 This file is part of GCC.
@@ -578,7 +578,7 @@ find_hard_regno_for_1 (int regno, int *cost, int try_only_hard_regno,
 	    = lra_reg_info[conflict_regno].biggest_mode;
 	  int biggest_conflict_nregs
 	    = hard_regno_nregs (conflict_hr, biggest_conflict_mode);
-	  
+
 	  nregs_diff
 	    = (biggest_conflict_nregs
 	       - hard_regno_nregs (conflict_hr,
@@ -697,7 +697,7 @@ find_hard_regno_for (int regno, int *cost, int try_only_hard_regno, bool first_p
   if (try_only_hard_regno < 0 && regno < lra_new_regno_start)
     {
       enum reg_class pref_class = reg_preferred_class (regno);
-      
+
       if (regno_allocno_class_array[regno] != pref_class)
 	{
 	  hard_regno = find_hard_regno_for_1 (regno, cost, -1, first_p,
@@ -1227,7 +1227,7 @@ setup_live_pseudos_and_spill_after_risky_transforms (bitmap
 	    || hard_regno != reg_renumber[conflict_regno])
 	  {
 	    int conflict_hard_regno = reg_renumber[conflict_regno];
-	    
+
 	    biggest_mode = lra_reg_info[conflict_regno].biggest_mode;
 	    biggest_nregs = hard_regno_nregs (conflict_hard_regno,
 					      biggest_mode);
@@ -1362,14 +1362,7 @@ find_all_spills_for (int regno)
 	    {
 	      if (live_pseudos_reg_renumber[r2->regno] >= 0
 		  && ! sparseset_bit_p (live_range_hard_reg_pseudos, r2->regno)
-		  && rclass_intersect_p[regno_allocno_class_array[r2->regno]]
-		  && ((int) r2->regno < lra_constraint_new_regno_start
-		      || bitmap_bit_p (&lra_inheritance_pseudos, r2->regno)
-		      || bitmap_bit_p (&lra_split_regs, r2->regno)
-		      || bitmap_bit_p (&lra_optional_reload_pseudos, r2->regno)
-		      /* There is no sense to consider another reload
-			 pseudo if it has the same class.  */
-		      || regno_allocno_class_array[r2->regno] != rclass))
+		  && rclass_intersect_p[regno_allocno_class_array[r2->regno]])
 		sparseset_set_bit (live_range_hard_reg_pseudos, r2->regno);
 	    }
 	}
@@ -1430,13 +1423,19 @@ assign_by_spills (void)
 	    hard_regno = spill_for (regno, &all_spilled_pseudos, iter == 1);
 	  if (hard_regno < 0)
 	    {
-	      if (reload_p) {
-		/* Put unassigned reload pseudo first in the
-		   array.  */
-		regno2 = sorted_pseudos[nfails];
-		sorted_pseudos[nfails++] = regno;
-		sorted_pseudos[i] = regno2;
-	      }
+	      if (reload_p)
+		{
+		  /* Put unassigned reload pseudo first in the array.  */
+		  regno2 = sorted_pseudos[nfails];
+		  sorted_pseudos[nfails++] = regno;
+		  sorted_pseudos[i] = regno2;
+		}
+	      else
+		{
+		  /* Consider all alternatives on the next constraint
+		     subpass.  */
+		  bitmap_set_bit (&all_spilled_pseudos, regno);
+		}
 	    }
 	  else
 	    {
@@ -1562,7 +1561,7 @@ assign_by_spills (void)
 	    {
 	      enum reg_class rclass = lra_get_allocno_class (regno);
 	      enum reg_class spill_class;
-	      
+
 	      if (targetm.spill_class == NULL
 		  || lra_reg_info[regno].restore_rtx == NULL_RTX
 		  || ! bitmap_bit_p (&lra_inheritance_pseudos, regno)
@@ -1712,7 +1711,7 @@ find_reload_regno_insns (int regno, rtx_insn * &start, rtx_insn * &finish)
   bool clobber_p = false;
   rtx_insn *prev_insn, *next_insn;
   rtx_insn *start_insn = NULL, *first_insn = NULL, *second_insn = NULL;
-  
+
   EXECUTE_IF_SET_IN_BITMAP (&lra_reg_info[regno].insn_bitmap, 0, uid, bi)
     {
       if (start_insn == NULL)
@@ -1784,7 +1783,7 @@ lra_split_hard_reg_for (void)
      either case.  */
   bool asm_p = false, spill_p = false;
   bitmap_head failed_reload_insns, failed_reload_pseudos, over_split_insns;
-  
+
   if (lra_dump_file != NULL)
     fprintf (lra_dump_file,
 	     "\n****** Splitting a hard reg after assignment #%d: ******\n\n",
@@ -1835,6 +1834,7 @@ lra_split_hard_reg_for (void)
   if (spill_p)
     {
       bitmap_clear (&failed_reload_pseudos);
+      lra_dump_insns_if_possible ("changed func after splitting hard regs");
       return true;
     }
   bitmap_clear (&non_reload_pseudos);

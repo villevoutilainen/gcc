@@ -1,5 +1,5 @@
 /* Loop unrolling.
-   Copyright (C) 2002-2023 Free Software Foundation, Inc.
+   Copyright (C) 2002-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -409,7 +409,7 @@ decide_unroll_constant_iterations (class loop *loop, int flags)
       return;
     }
 
-  /* Check whether the loop rolls enough to consider.  
+  /* Check whether the loop rolls enough to consider.
      Consult also loop bounds and profile; in the case the loop has more
      than one exit it may well loop less than determined maximal number
      of iterations.  */
@@ -1185,7 +1185,7 @@ decide_unroll_stupid (class loop *loop, int flags)
     }
 
   /* Do not unroll loops with branches inside -- it increases number
-     of mispredicts. 
+     of mispredicts.
      TODO: this heuristic needs tunning; call inside the loop body
      is also relatively good reason to not unroll.  */
   if (num_loop_branches (loop) > 1)
@@ -1855,7 +1855,7 @@ insert_var_expansion_initialization (struct var_to_expand *ve,
   rtx var, zero_init;
   unsigned i;
   machine_mode mode = GET_MODE (ve->reg);
-  bool honor_signed_zero_p = HONOR_SIGNED_ZEROS (mode);
+  bool has_signed_zero_p = MODE_HAS_SIGNED_ZEROS (mode);
 
   if (ve->var_expansions.length () == 0)
     return;
@@ -1869,7 +1869,7 @@ insert_var_expansion_initialization (struct var_to_expand *ve,
     case MINUS:
       FOR_EACH_VEC_ELT (ve->var_expansions, i, var)
         {
-	  if (honor_signed_zero_p)
+	  if (has_signed_zero_p)
 	    zero_init = simplify_gen_unary (NEG, mode, CONST0_RTX (mode), mode);
 	  else
 	    zero_init = CONST0_RTX (mode);

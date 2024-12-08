@@ -1,5 +1,5 @@
 /* Default target hook functions.
-   Copyright (C) 2003-2023 Free Software Foundation, Inc.
+   Copyright (C) 2003-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -65,6 +65,7 @@ extern machine_mode default_mode_for_suffix (char);
 
 extern tree default_cxx_guard_type (void);
 extern tree default_cxx_get_cookie_size (tree);
+extern tree default_cxx_adjust_cdtor_callabi_fntype (tree);
 
 extern bool hook_pass_by_reference_must_pass_in_stack
   (cumulative_args_t, const function_arg_info &);
@@ -122,6 +123,7 @@ extern opt_machine_mode default_vectorize_related_mode (machine_mode,
 							poly_uint64);
 extern opt_machine_mode default_get_mask_mode (machine_mode);
 extern bool default_empty_mask_is_expensive (unsigned);
+extern bool default_conditional_operation_is_expensive (unsigned);
 extern vector_costs *default_vectorize_create_costs (vec_info *, bool);
 
 /* OpenACC hooks.  */
@@ -142,8 +144,9 @@ extern bool hook_bool_CUMULATIVE_ARGS_arg_info_true
   (cumulative_args_t, const function_arg_info &);
 extern int hook_int_CUMULATIVE_ARGS_arg_info_0
   (cumulative_args_t, const function_arg_info &);
-extern void hook_void_CUMULATIVE_ARGS_tree
-  (cumulative_args_t, tree);
+extern void hook_void_CUMULATIVE_ARGS (cumulative_args_t);
+extern void hook_void_CUMULATIVE_ARGS_tree (cumulative_args_t, tree);
+extern void hook_void_CUMULATIVE_ARGS_rtx_tree (cumulative_args_t, rtx, tree);
 extern const char *hook_invalid_arg_for_unprototyped_fn
   (const_tree, const_tree, const_tree);
 extern void default_function_arg_advance
@@ -192,6 +195,7 @@ extern bool default_hard_regno_scratch_ok (unsigned int);
 extern bool default_mode_dependent_address_p (const_rtx, addr_space_t);
 extern bool default_new_address_profitable_p (rtx, rtx_insn *, rtx);
 extern bool default_target_option_valid_attribute_p (tree, tree, tree, int);
+extern bool default_target_option_valid_version_attribute_p (tree, tree, tree, int);
 extern bool default_target_option_pragma_parse (tree, tree);
 extern bool default_target_can_inline_p (tree, tree);
 extern bool default_update_ipa_fn_target_info (unsigned int &, const gimple *);
@@ -213,12 +217,14 @@ extern void default_addr_space_diagnose_usage (addr_space_t, location_t);
 extern rtx default_addr_space_convert (rtx, tree, tree);
 extern unsigned int default_case_values_threshold (void);
 extern bool default_have_conditional_execution (void);
+extern bool default_have_ccmp (void);
 
 extern bool default_libc_has_function (enum function_class, tree);
 extern bool default_libc_has_fast_function (int fcode);
 extern bool no_c99_libc_has_function (enum function_class, tree);
 extern bool gnu_libc_has_function (enum function_class, tree);
 extern bool bsd_libc_has_function (enum function_class, tree);
+extern unsigned default_fortify_source_default_level (void);
 extern unsigned default_libm_function_max_error (unsigned, machine_mode, bool);
 extern unsigned glibc_linux_libm_function_max_error (unsigned, machine_mode,
 						     bool);
@@ -247,6 +253,9 @@ extern reg_class_t default_preferred_output_reload_class (rtx, reg_class_t);
 extern reg_class_t default_preferred_rename_class (reg_class_t rclass);
 extern bool default_class_likely_spilled_p (reg_class_t);
 extern unsigned char default_class_max_nregs (reg_class_t, machine_mode);
+
+extern bool default_avoid_store_forwarding_p (vec<store_fwd_info>, rtx, int,
+					      bool);
 
 extern enum unwind_info_type default_debug_unwind_info (void);
 
@@ -285,6 +294,7 @@ extern unsigned int default_min_arithmetic_precision (void);
 extern enum flt_eval_method
 default_excess_precision (enum excess_precision_type ATTRIBUTE_UNUSED);
 extern bool default_bitint_type_info (int, struct bitint_info *);
+extern machine_mode default_mode_for_floating_type (enum tree_index);
 extern HOST_WIDE_INT default_stack_clash_protection_alloca_probe_range (void);
 extern void default_select_early_remat_modes (sbitmap);
 extern tree default_preferred_else_value (unsigned, tree, unsigned, tree *);
@@ -301,7 +311,5 @@ extern rtx default_memtag_add_tag (rtx, poly_int64, uint8_t);
 extern rtx default_memtag_set_tag (rtx, rtx, rtx);
 extern rtx default_memtag_extract_tag (rtx, rtx);
 extern rtx default_memtag_untagged_pointer (rtx, rtx);
-
-extern HOST_WIDE_INT default_gcov_type_size (void);
 
 #endif /* GCC_TARGHOOKS_H */

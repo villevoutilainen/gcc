@@ -30,7 +30,9 @@
 #ifndef _GLIBCXX_EXPERIMENTAL_SCOPE
 #define _GLIBCXX_EXPERIMENTAL_SCOPE 1
 
+#ifdef _GLIBCXX_SYSHDR
 #pragma GCC system_header
+#endif
 
 #include <bits/requires_hosted.h> // experimental is currently omitted
 
@@ -97,7 +99,7 @@ namespace experimental::inline fundamentals_v3
       scope_exit& operator=(const scope_exit&) = delete;
       scope_exit& operator=(scope_exit&&) = delete;
 
-      ~scope_exit() noexcept(noexcept(this->_M_exit_function))
+      ~scope_exit() noexcept
       {
 	if (_M_execute_on_destruction)
 	  _M_exit_function();
@@ -157,7 +159,7 @@ namespace experimental::inline fundamentals_v3
       scope_fail& operator=(const scope_fail&) = delete;
       scope_fail& operator=(scope_fail&&) = delete;
 
-      ~scope_fail() noexcept(noexcept(this->_M_exit_function))
+      ~scope_fail() noexcept
       {
 	if (std::uncaught_exceptions() > _M_uncaught_init)
 	  _M_exit_function();
@@ -211,7 +213,7 @@ namespace experimental::inline fundamentals_v3
       scope_success& operator=(const scope_success&) = delete;
       scope_success& operator=(scope_success&&) = delete;
 
-      ~scope_success() noexcept(noexcept(this->_M_exit_function))
+      ~scope_success() noexcept(noexcept(this->_M_exit_function()))
       {
 	if (std::uncaught_exceptions() <= _M_uncaught_init)
 	  _M_exit_function();

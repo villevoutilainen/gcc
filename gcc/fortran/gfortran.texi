@@ -1,7 +1,7 @@
 \input texinfo  @c -*-texinfo-*-
 @c %**start of header
 @setfilename gfortran.info
-@set copyrights-gfortran 1999-2023
+@set copyrights-gfortran 1999-2024
 
 @include gcc-common.texi
 
@@ -862,8 +862,8 @@ data types are:
 The @code{KIND} value matches the storage size in bytes, except for
 @code{COMPLEX} where the storage size is twice as much (or both real and
 imaginary part are a real value of the given size).  It is recommended to use
-the @ref{SELECTED_CHAR_KIND}, @ref{SELECTED_INT_KIND} and
-@ref{SELECTED_REAL_KIND} intrinsics or the @code{INT8}, @code{INT16},
+the @ref{SELECTED_CHAR_KIND}, @ref{SELECTED_INT_KIND}, @ref{SELECTED_LOGICAL_KIND}
+and @ref{SELECTED_REAL_KIND} intrinsics or the @code{INT8}, @code{INT16},
 @code{INT32}, @code{INT64}, @code{REAL32}, @code{REAL64}, and @code{REAL128}
 parameters of the @code{ISO_FORTRAN_ENV} module instead of the concrete values.
 The available kind parameters can be found in the constant arrays
@@ -1192,6 +1192,7 @@ extensions.
 @menu
 * Extensions implemented in GNU Fortran::
 * Extensions not implemented in GNU Fortran::
+* Experimental features for future Fortran versions::
 @end menu
 
 
@@ -1239,7 +1240,6 @@ additional compatibility extensions along with those enabled by
 * UNION and MAP::
 * Type variants for integer intrinsics::
 * AUTOMATIC and STATIC attributes::
-* Extended math intrinsics::
 * Form feed as whitespace::
 * TYPE as an alias for PRINT::
 * %LOC as an rvalue::
@@ -1273,8 +1273,9 @@ equivalent to the standard-conforming declaration
 @noindent
 where @code{k} is the kind parameter suitable for the intended precision.  As
 kind parameters are implementation-dependent, use the @code{KIND},
-@code{SELECTED_INT_KIND} and @code{SELECTED_REAL_KIND} intrinsics to retrieve
-the correct value, for instance @code{REAL*8 x} can be replaced by:
+@code{SELECTED_INT_KIND}, @code{SELECTED_LOGICAL_KIND} and
+@code{SELECTED_REAL_KIND} intrinsics to retrieve the correct value, for
+instance @code{REAL*8 x} can be replaced by:
 @smallexample
 INTEGER, PARAMETER :: dbl = KIND(1.0d0)
 REAL(KIND=dbl) :: x
@@ -2317,42 +2318,6 @@ subroutine f
 endsubroutine
 @end example
 
-@node Extended math intrinsics
-@subsection Extended math intrinsics
-@cindex intrinsics, math
-@cindex intrinsics, trigonometric functions
-
-GNU Fortran supports an extended list of mathematical intrinsics with the
-compile flag @option{-fdec-math} for compatability with legacy code.
-These intrinsics are described fully in @ref{Intrinsic Procedures} where it is
-noted that they are extensions and should be avoided whenever possible.
-
-Specifically, @option{-fdec-math} enables the @ref{COTAN} intrinsic, and
-trigonometric intrinsics which accept or produce values in degrees instead of
-radians.  Here is a summary of the new intrinsics:
-
-@multitable @columnfractions .5 .5
-@headitem Radians @tab Degrees
-@item @code{@ref{ACOS}}   @tab @code{@ref{ACOSD}}*
-@item @code{@ref{ASIN}}   @tab @code{@ref{ASIND}}*
-@item @code{@ref{ATAN}}   @tab @code{@ref{ATAND}}*
-@item @code{@ref{ATAN2}}  @tab @code{@ref{ATAN2D}}*
-@item @code{@ref{COS}}    @tab @code{@ref{COSD}}*
-@item @code{@ref{COTAN}}* @tab @code{@ref{COTAND}}*
-@item @code{@ref{SIN}}    @tab @code{@ref{SIND}}*
-@item @code{@ref{TAN}}    @tab @code{@ref{TAND}}*
-@end multitable
-
-* Enabled with @option{-fdec-math}.
-
-For advanced users, it may be important to know the implementation of these
-functions. They are simply wrappers around the standard radian functions, which
-have more accurate builtin versions. These functions convert their arguments
-(or results) to degrees (or radians) by taking the value modulus 360 (or 2*pi)
-and then multiplying it by a constant radian-to-degree (or degree-to-radian)
-factor, as appropriate. The factor is computed at compile-time as 180/pi (or
-pi/180).
-
 @node Form feed as whitespace
 @subsection Form feed as whitespace
 @cindex form feed whitespace
@@ -2737,6 +2702,160 @@ descriptor occurred, use @code{INQUIRE} to get the file position,
 count the characters up to the next @code{NEW_LINE} and then start
 reading from the position marked previously.
 
+@node Experimental features for future Fortran versions
+@section Experimental features future Fortran versions
+@cindex Future Fortran versions
+
+GNU Fortran supports some experimental features which have been
+proposed and accepted by the J3 standards committee.  These
+exist to give users a chance to try them out, and to provide
+a reference implementation.
+
+As these features have not been included in the worklist for Fortran
+202Y by WG5, there is a chance that a version in any upcoming standard
+will differ from what GNU Fortran currently implements.  These
+features are therefore currently classified as an extension.
+
+@menu
+* Unsigned integers::
+@end menu
+
+@node Unsigned integers
+@subsection Unsigned integers
+@cindex Unsigned integers
+If the @option{-funsigned} option is given, GNU Fortran supports
+unsigned integers according to
+@uref{https://j3-fortran.org/doc/year/24/24-116.txt, J3/24-116}.  The
+data type is called @code{UNSIGNED}.  For an unsigned type with @code{n}
+bits, it implements integer arithmetic modulo @code{2**n}, comparable
+to the @code{unsigned} data type in C.
+
+The data type has @code{KIND} numbers comparable to other Fortran data
+types, which can be selected via the @code{SELECTED_UNSIGNED_KIND}
+function.
+
+Mixed arithmetic, comparisons and assignment between @code{UNSIGNED}
+and other types are only possible via explicit conversion.  Conversion
+from @code{UNSIGNED} to other types is done via type conversion
+functions like @code{INT} or @code{REAL}. Conversion from other types
+to @code{UNSIGNED} is done via @code{UINT}. Unsigned variables cannot be
+used as index variables in @code{DO} loops or as array indices.
+
+Unsigned numbers have a trailing @code{u} as suffix, optionally followed
+by a @code{KIND} number separated by an underscore.
+
+Input and output can be done using the @code{I}, @code{B}, @code{O}
+and @code{Z} descriptors, plus unformatted I/O.
+
+Here is a small, somewhat contrived example of their use:
+@smallexample
+program main
+  use iso_fortran_env, only : uint64
+  unsigned(kind=uint64) :: v
+  v = huge(v) - 32u_uint64
+  print *,v
+end program main
+@end smallexample
+which will output the number 18446744073709551583.
+
+Arithmetic operations work on unsigned integers, except for exponentiation,
+which is prohibited.  Unary minus is not permitted when @code{-pedantic}
+is in force; this prohibition is part of J3/24-116.txt.
+
+In intrinsic procedures, unsigned arguments are typically permitted
+for arguments for the data to be processed, analogous to the
+use of @code{REAL} arguments. Unsigned values are prohibited
+as index variables in @code{DO} loops and as array indices.
+
+Unsigned numbers can be read and written using list-directed,
+formatted and unformatted I/O.  For formatted I/O, the @code{B},
+@code{I}, @code{O} and @code{Z} descriptors are valid.  Negative
+values and values which would overflow are rejected with
+@code{-pedantic}.
+
+@code{SELECT CASE} is supported for unsigned integers.
+
+The following intrinsics take unsigned arguments:
+@itemize @bullet
+@item @code{BGE}, @pxref{BGE}
+@item @code{BGT}, @pxref{BGT}
+@item @code{BIT_SIZE}, @pxref{BIT_SIZE}
+@item @code{BLE}, @pxref{BLE}
+@item @code{BLT}, @pxref{BLT}
+@item @code{CMPLX}, @pxref{CMPLX}
+@item @code{CSHIFT}, @pxref{CSHIFT}
+@item @code{DIGITS}, @pxref{DIGITS}
+@item @code{DOT_PRODUCT}, @pxref{DOT_PRODUCT}
+@item @code{DSHIFTL}, @pxref{DSHIFTL}
+@item @code{DSHIFTR}, @pxref{DSHIFTR}
+@item @code{EOSHIFT}, @pxref{EOSHIFT}
+@item @code{FINDLOC}, @pxref{FINDLOC}
+@item @code{HUGE}, @pxref{HUGE}
+@item @code{IALL}, @pxref{IALL}
+@item @code{IAND}, @pxref{IAND}
+@item @code{IANY}, @pxref{IANY}
+@item @code{IBCLR}, @pxref{IBCLR}
+@item @code{IBITS}, @pxref{IBITS}
+@item @code{IBSET}, @pxref{IBSET}
+@item @code{IEOR}, @pxref{IEOR}
+@item @code{INT}, @pxref{INT}
+@item @code{IOR}, @pxref{IOR}
+@item @code{IPARITY}, @pxref{IPARITY}
+@item @code{ISHFT}, @pxref{ISHFT}
+@item @code{ISHFTC}, @pxref{ISHFTC}
+@item @code{MATMUL}, @pxref{MATMUL}
+@item @code{MAX}, @pxref{MAX}
+@item @code{MAXLOC}, @pxref{MAXLOC}
+@item @code{MAXVAL}, @pxref{MAXVAL}
+@item @code{MERGE}, @pxref{MERGE}
+@item @code{MERGE_BITS}, @pxref{MERGE_BITS}
+@item @code{MIN}, @pxref{MIN}
+@item @code{MINLOC}, @pxref{MINLOC}
+@item @code{MINVAL}, @pxref{MINVAL}
+@item @code{MOD}, @pxref{MOD}
+@item @code{MODULO}, @pxref{MODULO}
+@item @code{MVBITS}, @pxref{MVBITS}
+@item @code{NOT}, @pxref{NOT}
+@item @code{PRODUCT}, @pxref{PRODUCT}
+@item @code{RANDOM_NUMBER}, @pxref{RANDOM_NUMBER}
+@item @code{RANGE}, @pxref{RANGE}
+@item @code{REAL}, @pxref{REAL}
+@item @code{SHIFTA}, @pxref{SHIFTA}
+@item @code{SHIFTL}, @pxref{SHIFTL}
+@item @code{SHIFTR}, @pxref{SHIFTR}
+@item @code{SUM}, @pxref{SUM}
+@item @code{TRANSPOSE}, @pxref{TRANSPOSE}
+@item @code{TRANSFER}, @pxref{TRANSFER}
+@end itemize
+
+The following intinsics are enabled with @option{-funsigned}:
+@itemize @bullet
+@item @code{UINT}, @pxref{UINT}
+@item @code{UMASKL}, @pxref{UMASKL}
+@item @code{UMASKR}, @pxref{UMASKR}
+@item @code{SELECTED_UNSIGNED_KIND}, @pxref{SELECTED_UNSIGNED_KIND}
+@end itemize
+
+The following intrinsics are not yet implemented in GNU Fortran,
+but will take unsigned arguments once they have been:
+@itemize @bullet
+@item @code{OUT_OF_RANGE}
+@end itemize
+
+The following constants have been added to the intrinsic
+@code{ISO_C_BINDING} module: @code{c_unsigned},
+@code{c_unsigned_short}, @code{c_unsigned_char},
+@code{c_unsigned_long}, @code{c_unsigned_long_long},
+@code{c_uintmax_t}, @code{c_uint8_t}, @code{c_uint16_t},
+@code{c_uint32_t}, @code{c_uint64_t}, @code{c_uint128_t},
+@code{c_uint_fast8_t}, @code{c_uint_fast16_t}, @code{c_uint_fast32_t},
+@code{c_uint_fast64_t}, @code{c_uint_fast128_t},
+@code{c_uint_least8_t}, @code{c_uint_least16_t}, @code{c_uint_least32_t},
+@code{c_uint_least64_t} and @code{c_uint_least128_t}.
+
+The following constants have been added to the intrinsic
+@code{ISO_FORTRAN_ENV} module: @code{uint8}, @code{uint16},
+@code{uint32} and @code{uint64}.
 
 @c ---------------------------------------------------------------------
 @c ---------------------------------------------------------------------
@@ -3299,6 +3418,9 @@ It must be placed immediately before a @code{DO} loop and applies only to the
 loop that follows.  N is an integer constant specifying the unrolling factor.
 The values of 0 and 1 block any unrolling of the loop.
 
+For @code{DO CONCURRENT} constructs the unrolling specification applies
+only to the first loop control variable.
+
 
 @node BUILTIN directive
 @subsection BUILTIN directive
@@ -3337,6 +3459,9 @@ whether a particular loop is vectorizable due to potential
 dependencies between iterations.  The purpose of the directive is to
 tell the compiler that vectorization is safe.
 
+For @code{DO CONCURRENT} constructs this annotation is implicit to all
+loop control variables.
+
 This directive is intended for annotation of existing code.  For new
 code it is recommended to consider OpenMP SIMD directives as potential
 alternative.
@@ -3353,6 +3478,9 @@ This directive tells the compiler to vectorize the following loop.  It
 must be placed immediately before a @code{DO} loop and applies only to
 the loop that follows.
 
+For @code{DO CONCURRENT} constructs this annotation applies to all loops
+specified in the concurrent header.
+
 
 @node NOVECTOR directive
 @subsection NOVECTOR directive
@@ -3364,6 +3492,9 @@ The syntax of the directive is
 This directive tells the compiler to not vectorize the following loop.
 It must be placed immediately before a @code{DO} loop and applies only
 to the loop that follows.
+
+For @code{DO CONCURRENT} constructs this annotation applies to all loops
+specified in the concurrent header.
 
 
 @node Non-Fortran Main Program
@@ -3476,12 +3607,13 @@ standard.  Possible values are (bitwise or-ed) @code{GFC_STD_F77} (1),
 @code{GFC_STD_F95_OBS} (2), @code{GFC_STD_F95_DEL} (4),
 @code{GFC_STD_F95} (8), @code{GFC_STD_F2003} (16), @code{GFC_STD_GNU}
 (32), @code{GFC_STD_LEGACY} (64), @code{GFC_STD_F2008} (128),
-@code{GFC_STD_F2008_OBS} (256), @code{GFC_STD_F2008_TS} (512),
-@code{GFC_STD_F2018} (1024), @code{GFC_STD_F2018_OBS} (2048), and
-@code{GFC_STD=F2018_DEL} (4096). Default: @code{GFC_STD_F95_OBS |
-GFC_STD_F95_DEL | GFC_STD_F95 | GFC_STD_F2003 | GFC_STD_F2008 |
-GFC_STD_F2008_TS | GFC_STD_F2008_OBS | GFC_STD_F77 | GFC_STD_F2018 |
-GFC_STD_F2018_OBS | GFC_STD_F2018_DEL | GFC_STD_GNU | GFC_STD_LEGACY}.
+@code{GFC_STD_F2008_OBS} (256), @code{GFC_STD_F2018} (512),
+@code{GFC_STD_F2018_OBS} (1024), @code{GFC_STD_F2018_DEL} (2048),
+@code{GFC_STD_F2023} (4096), and @code{GFC_STD_F2023_DEL} (8192).
+Default: @code{GFC_STD_F95_OBS | GFC_STD_F95_DEL | GFC_STD_F95 |
+GFC_STD_F2003 | GFC_STD_F2008 | GFC_STD_F2008_OBS
+| GFC_STD_F77 | GFC_STD_F2018 | GFC_STD_F2018_OBS | GFC_STD_F2018_DEL
+| GFC_STD_F2023 | GFC_STD_F2023_DEL | GFC_STD_GNU | GFC_STD_LEGACY}.
 @item @var{option}[1] @tab Standard-warning flag; prints a warning to
 standard error.  Default: @code{GFC_STD_F95_DEL | GFC_STD_LEGACY}.
 @item @var{option}[2] @tab If non zero, enable pedantic checking.

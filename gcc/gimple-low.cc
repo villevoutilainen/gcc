@@ -1,6 +1,6 @@
 /* GIMPLE lowering pass.  Converts High GIMPLE into Low GIMPLE.
 
-   Copyright (C) 2003-2023 Free Software Foundation, Inc.
+   Copyright (C) 2003-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -374,15 +374,22 @@ assumption_copy_decl (tree decl, copy_body_data *id)
   gcc_assert (VAR_P (decl)
 	      || TREE_CODE (decl) == PARM_DECL
 	      || TREE_CODE (decl) == RESULT_DECL);
+  if (TREE_THIS_VOLATILE (decl))
+    type = build_pointer_type (type);
   tree copy = build_decl (DECL_SOURCE_LOCATION (decl),
 			  PARM_DECL, DECL_NAME (decl), type);
   if (DECL_PT_UID_SET_P (decl))
     SET_DECL_PT_UID (copy, DECL_PT_UID (decl));
-  TREE_ADDRESSABLE (copy) = TREE_ADDRESSABLE (decl);
-  TREE_READONLY (copy) = TREE_READONLY (decl);
-  TREE_THIS_VOLATILE (copy) = TREE_THIS_VOLATILE (decl);
-  DECL_NOT_GIMPLE_REG_P (copy) = DECL_NOT_GIMPLE_REG_P (decl);
-  DECL_BY_REFERENCE (copy) = DECL_BY_REFERENCE (decl);
+  TREE_THIS_VOLATILE (copy) = 0;
+  if (TREE_THIS_VOLATILE (decl))
+    TREE_READONLY (copy) = 1;
+  else
+    {
+      TREE_ADDRESSABLE (copy) = TREE_ADDRESSABLE (decl);
+      TREE_READONLY (copy) = TREE_READONLY (decl);
+      DECL_NOT_GIMPLE_REG_P (copy) = DECL_NOT_GIMPLE_REG_P (decl);
+      DECL_BY_REFERENCE (copy) = DECL_BY_REFERENCE (decl);
+    }
   DECL_ARG_TYPE (copy) = type;
   ((lower_assumption_data *) id)->decls.safe_push (decl);
   return copy_decl_for_dup_finish (id, decl, copy);
@@ -466,6 +473,11 @@ adjust_assumption_stmt_op (tree *tp, int *, void *datap)
     case PARM_DECL:
     case RESULT_DECL:
       *tp = remap_decl (t, &data->id);
+      if (TREE_THIS_VOLATILE (t) && *tp != t)
+	{
+	  *tp = build_simple_mem_ref (*tp);
+	  TREE_THIS_NOTRAP (*tp) = 1;
+	}
       break;
     default:
       break;
@@ -600,6 +612,11 @@ lower_assumption (gimple_stmt_iterator *gsi, struct lower_data *data)
       /* Remaining arguments will be the variables/parameters
 	 mentioned in the condition.  */
       vargs[i - sz] = lad.decls[i - 1];
+      if (TREE_THIS_VOLATILE (lad.decls[i - 1]))
+	{
+	  TREE_ADDRESSABLE (lad.decls[i - 1]) = 1;
+	  vargs[i - sz] = build_fold_addr_expr (lad.decls[i - 1]);
+	}
       /* If they have gimple types, we might need to regimplify
 	 them to make the IFN_ASSUME call valid.  */
       if (is_gimple_reg_type (TREE_TYPE (vargs[i - sz]))
@@ -729,6 +746,7 @@ lower_stmt (gimple_stmt_iterator *gsi, struct lower_data *data)
     case GIMPLE_EH_MUST_NOT_THROW:
     case GIMPLE_OMP_FOR:
     case GIMPLE_OMP_SCOPE:
+    case GIMPLE_OMP_DISPATCH:
     case GIMPLE_OMP_SECTIONS:
     case GIMPLE_OMP_SECTIONS_SWITCH:
     case GIMPLE_OMP_SECTION:
@@ -788,6 +806,21 @@ lower_stmt (gimple_stmt_iterator *gsi, struct lower_data *data)
 	    data->cannot_fallthru = true;
 	    gsi_next (gsi);
 	    return;
+	  }
+
+	if (gimple_call_internal_p (stmt, IFN_ASAN_MARK))
+	  {
+	    tree base = gimple_call_arg (stmt, 1);
+	    gcc_checking_assert (TREE_CODE (base) == ADDR_EXPR);
+	    tree decl = TREE_OPERAND (base, 0);
+	    if (VAR_P (decl) && TREE_STATIC (decl))
+	      {
+		/* Don't poison a variable with static storage; it might have
+		   gotten marked before gimplify_init_constructor promoted it
+		   to static.  */
+		gsi_remove (gsi, true);
+		return;
+	      }
 	  }
 
 	/* We delay folding of built calls from gimplification to
@@ -1204,7 +1237,7 @@ lower_builtin_setjmp (gimple_stmt_iterator *gsi)
   /* __builtin_setjmp_{setup,receiver} aren't ECF_RETURNS_TWICE and for RTL
      these builtins are modelled as non-local label jumps to the label
      that is passed to these two builtins, so pretend we have a non-local
-     label during GIMPLE passes too.  See PR60003.  */ 
+     label during GIMPLE passes too.  See PR60003.  */
   cfun->has_nonlocal_label = 1;
 
   /* NEXT_LABEL is the label __builtin_longjmp will jump to.  Its address is

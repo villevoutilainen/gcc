@@ -1,5 +1,5 @@
 /* Target code for NVPTX.
-   Copyright (C) 2014-2023 Free Software Foundation, Inc.
+   Copyright (C) 2014-2024 Free Software Foundation, Inc.
    Contributed by Bernd Schmidt <bernds@codesourcery.com>
 
    This file is part of GCC.
@@ -212,9 +212,12 @@ first_ptx_version_supporting_sm (enum ptx_isa sm)
   switch (sm)
     {
     case PTX_ISA_SM30:
-      return PTX_VERSION_3_0;
+      return /* PTX_VERSION_3_0 not defined */ PTX_VERSION_3_1;
     case PTX_ISA_SM35:
       return PTX_VERSION_3_1;
+    case PTX_ISA_SM37:
+    case PTX_ISA_SM52:
+      return PTX_VERSION_4_1;
     case PTX_ISA_SM53:
       return PTX_VERSION_4_2;
     case PTX_ISA_SM70:
@@ -223,6 +226,8 @@ first_ptx_version_supporting_sm (enum ptx_isa sm)
       return PTX_VERSION_6_3;
     case PTX_ISA_SM80:
       return PTX_VERSION_7_0;
+    case PTX_ISA_SM89:
+      return PTX_VERSION_7_8;
     default:
       gcc_unreachable ();
     }
@@ -231,14 +236,10 @@ first_ptx_version_supporting_sm (enum ptx_isa sm)
 static enum ptx_version
 default_ptx_version_option (void)
 {
-  enum ptx_version first
-    = first_ptx_version_supporting_sm ((enum ptx_isa) ptx_isa_option);
+  enum ptx_version first = first_ptx_version_supporting_sm (ptx_isa_option);
 
   /* Pick a version that supports the sm.  */
   enum ptx_version res = first;
-
-  /* Pick at least 3.1.  This has been the smallest version historically.  */
-  res = MAX (res, PTX_VERSION_3_1);
 
   /* Pick at least 6.0, to enable using bar.warp.sync to have a way to force
      warp convergence.  */
@@ -254,10 +255,10 @@ ptx_version_to_string (enum ptx_version v)
 {
   switch (v)
     {
-    case PTX_VERSION_3_0:
-      return "3.0";
     case PTX_VERSION_3_1:
       return "3.1";
+    case PTX_VERSION_4_1:
+      return "4.1";
     case PTX_VERSION_4_2:
       return "4.2";
     case PTX_VERSION_6_0:
@@ -266,6 +267,8 @@ ptx_version_to_string (enum ptx_version v)
       return "6.3";
     case PTX_VERSION_7_0:
       return "7.0";
+    case PTX_VERSION_7_8:
+      return "7.8";
     default:
       gcc_unreachable ();
     }
@@ -276,10 +279,10 @@ ptx_version_to_number (enum ptx_version v, bool major_p)
 {
   switch (v)
     {
-    case PTX_VERSION_3_0:
-      return major_p ? 3 : 0;
     case PTX_VERSION_3_1:
       return major_p ? 3 : 1;
+    case PTX_VERSION_4_1:
+      return major_p ? 4 : 1;
     case PTX_VERSION_4_2:
       return major_p ? 4 : 2;
     case PTX_VERSION_6_0:
@@ -288,6 +291,8 @@ ptx_version_to_number (enum ptx_version v, bool major_p)
       return major_p ? 6 : 3;
     case PTX_VERSION_7_0:
       return major_p ? 7 : 0;
+    case PTX_VERSION_7_8:
+      return major_p ? 7 : 8;
     default:
       gcc_unreachable ();
     }
@@ -311,20 +316,21 @@ sm_version_to_string (enum ptx_isa sm)
 static void
 handle_ptx_version_option (void)
 {
-  if (!OPTION_SET_P (ptx_version_option)
-      || ptx_version_option == PTX_VERSION_default)
+  if (!OPTION_SET_P (ptx_version_option))
+    gcc_checking_assert (ptx_version_option == PTX_VERSION_default);
+
+  if (ptx_version_option == PTX_VERSION_default)
     {
       ptx_version_option = default_ptx_version_option ();
       return;
     }
 
-  enum ptx_version first
-    = first_ptx_version_supporting_sm ((enum ptx_isa) ptx_isa_option);
+  enum ptx_version first = first_ptx_version_supporting_sm (ptx_isa_option);
 
   if (ptx_version_option < first)
     error ("PTX version (%<-mptx%>) needs to be at least %s to support selected"
 	   " %<-misa%> (sm_%s)", ptx_version_to_string (first),
-	   sm_version_to_string ((enum ptx_isa)ptx_isa_option));
+	   sm_version_to_string (ptx_isa_option));
 }
 
 /* Implement TARGET_OPTION_OVERRIDE.  */
@@ -335,8 +341,11 @@ nvptx_option_override (void)
   init_machine_status = nvptx_init_machine_status;
 
   /* Via nvptx 'OPTION_DEFAULT_SPECS', '-misa' always appears on the command
-     line.  */
-  gcc_checking_assert (OPTION_SET_P (ptx_isa_option));
+     line; but handle the case that the compiler is not run via the driver.  */
+  gcc_checking_assert ((ptx_isa_option == PTX_ISA_unset)
+		       == (!OPTION_SET_P (ptx_isa_option)));
+  if (ptx_isa_option == PTX_ISA_unset)
+    fatal_error (UNKNOWN_LOCATION, "%<-march=%> must be specified");
 
   handle_ptx_version_option ();
 
@@ -593,7 +602,7 @@ nvptx_emit_forking (unsigned mask, bool is_call)
   if (mask)
     {
       rtx op = GEN_INT (mask | (is_call << GOMP_DIM_MAX));
-      
+
       /* Emit fork at all levels.  This helps form SESE regions, as
 	 it creates a block with a single successor before entering a
 	 partitooned region.  That is a good candidate for the end of
@@ -720,7 +729,7 @@ nvptx_function_arg_advance (cumulative_args_t cum_v, const function_arg_info &)
 
 /* Implement TARGET_FUNCTION_ARG_BOUNDARY.
 
-   For nvptx This is only used for varadic args.  The type has already
+   For nvptx This is only used for variadic args.  The type has already
    been promoted and/or converted to invisible reference.  */
 
 static unsigned
@@ -901,10 +910,10 @@ write_return_mode (std::stringstream &s, bool for_proto, machine_mode mode)
   const char *ptx_type = nvptx_ptx_type_from_mode (mode, false);
   const char *pfx = "\t.reg";
   const char *sfx = ";\n";
-  
+
   if (for_proto)
     pfx = "(.param", sfx = "_out) ";
-  
+
   s << pfx << ptx_type << " " << reg_names[NVPTX_RETURN_REGNUM] << sfx;
 }
 
@@ -927,7 +936,7 @@ write_return_type (std::stringstream &s, bool for_proto, tree type)
     {
       if (for_proto)
 	return return_in_mem;
-      
+
       /* Named return values can cause us to return a pointer as well
 	 as expect an argument for the return location.  This is
 	 optimization-level specific, so no caller can make use of
@@ -994,8 +1003,7 @@ static void
 write_fn_proto_1 (std::stringstream &s, bool is_defn,
 		  const char *name, const_tree decl, bool force_public)
 {
-  if (lookup_attribute ("alias", DECL_ATTRIBUTES (decl)) == NULL)
-    write_fn_marker (s, is_defn, TREE_PUBLIC (decl) || force_public, name);
+  write_fn_marker (s, is_defn, TREE_PUBLIC (decl) || force_public, name);
 
   /* PTX declaration.  */
   if (DECL_EXTERNAL (decl))
@@ -1054,7 +1062,7 @@ write_fn_proto_1 (std::stringstream &s, bool is_defn,
   for (; args; args = TREE_CHAIN (args), not_atomic_weak_arg--)
     {
       tree type = prototyped ? TREE_VALUE (args) : TREE_TYPE (args);
-      
+
       if (not_atomic_weak_arg)
 	argno = write_arg_type (s, -1, argno, type, prototyped);
       else
@@ -1224,7 +1232,7 @@ static void
 nvptx_maybe_record_fnsym (rtx sym)
 {
   tree decl = SYMBOL_REF_DECL (sym);
-  
+
   if (decl && TREE_CODE (decl) == FUNCTION_DECL && DECL_EXTERNAL (decl))
     nvptx_record_needed_fndecl (decl);
 }
@@ -1508,7 +1516,7 @@ nvptx_declare_function_name (FILE *file, const char *name, const_tree decl)
   bool return_in_mem = write_return_type (s, false, result_type);
   if (return_in_mem)
     argno = write_arg_type (s, 0, argno, ptr_type_node, true);
-  
+
   /* Declare and initialize incoming arguments.  */
   tree args = TYPE_ARG_TYPES (fntype);
   bool prototyped = true;
@@ -1548,7 +1556,7 @@ nvptx_declare_function_name (FILE *file, const char *name, const_tree decl)
   if (!TARGET_SOFT_STACK)
     {
       /* Declare a local var for outgoing varargs.  */
-      if (cfun->machine->has_varadic)
+      if (cfun->machine->has_variadic)
 	init_frame (file, STACK_POINTER_REGNUM,
 		    UNITS_PER_WORD, crtl->outgoing_args_size);
 
@@ -1558,7 +1566,7 @@ nvptx_declare_function_name (FILE *file, const char *name, const_tree decl)
 	init_frame (file, FRAME_POINTER_REGNUM, alignment,
 		    ROUND_UP (sz, GET_MODE_SIZE (DImode)));
     }
-  else if (need_frameptr || cfun->machine->has_varadic || cfun->calls_alloca
+  else if (need_frameptr || cfun->machine->has_variadic || cfun->calls_alloca
 	   || (cfun->machine->has_simtreg && !crtl->is_leaf))
     init_softstack_frame (file, alignment, sz);
 
@@ -1790,18 +1798,18 @@ nvptx_get_drap_rtx (void)
    argument to the next call.  */
 
 static void
-nvptx_call_args (rtx arg, tree fntype)
+nvptx_call_args (cumulative_args_t, rtx arg, tree fntype)
 {
   if (!cfun->machine->doing_call)
     {
       cfun->machine->doing_call = true;
-      cfun->machine->is_varadic = false;
+      cfun->machine->is_variadic = false;
       cfun->machine->num_args = 0;
 
       if (fntype && stdarg_p (fntype))
 	{
-	  cfun->machine->is_varadic = true;
-	  cfun->machine->has_varadic = true;
+	  cfun->machine->is_variadic = true;
+	  cfun->machine->has_variadic = true;
 	  cfun->machine->num_args++;
 	}
     }
@@ -1818,7 +1826,7 @@ nvptx_call_args (rtx arg, tree fntype)
    information we recorded.  */
 
 static void
-nvptx_end_call_args (void)
+nvptx_end_call_args (cumulative_args_t)
 {
   cfun->machine->doing_call = false;
   free_EXPR_LIST_list (&cfun->machine->call_args);
@@ -1871,7 +1879,7 @@ nvptx_expand_call (rtx retval, rtx address)
     }
 
   unsigned nargs = cfun->machine->num_args;
-  if (cfun->machine->is_varadic)
+  if (cfun->machine->is_variadic)
     {
       varargs = gen_reg_rtx (Pmode);
       emit_move_insn (varargs, stack_pointer_rtx);
@@ -1899,7 +1907,7 @@ nvptx_expand_call (rtx retval, rtx address)
   if (varargs)
     XVECEXP (pat, 0, vec_pos++) = gen_rtx_USE (VOIDmode, varargs);
 
-  gcc_assert (vec_pos = XVECLEN (pat, 0));
+  gcc_assert (vec_pos == XVECLEN (pat, 0));
 
   nvptx_emit_forking (parallel, true);
   emit_call_insn (pat);
@@ -1943,7 +1951,7 @@ static rtx
 nvptx_gen_unpack (rtx dst0, rtx dst1, rtx src)
 {
   rtx res;
-  
+
   switch (GET_MODE (src))
     {
     case E_DImode:
@@ -1964,7 +1972,7 @@ static rtx
 nvptx_gen_pack (rtx dst, rtx src0, rtx src1)
 {
   rtx res;
-  
+
   switch (GET_MODE (dst))
     {
     case E_DImode:
@@ -2067,7 +2075,7 @@ nvptx_gen_shuffle (rtx dst, rtx src, rtx idx, nvptx_shuffle_kind kind)
     case E_BImode:
       {
 	rtx tmp = gen_reg_rtx (SImode);
-	
+
 	start_sequence ();
 	emit_insn (gen_sel_truesi (tmp, src, GEN_INT (1), const0_rtx));
 	emit_insn (nvptx_gen_shuffle (tmp, tmp, idx, kind));
@@ -2090,7 +2098,7 @@ nvptx_gen_shuffle (rtx dst, rtx src, rtx idx, nvptx_shuffle_kind kind)
 	end_sequence ();
       }
       break;
-      
+
     default:
       gcc_unreachable ();
     }
@@ -2130,7 +2138,7 @@ enum propagate_mask
 /* Generate instruction(s) to spill or fill register REG to/from the
    worker broadcast array.  PM indicates what is to be done, REP
    how many loop iterations will be executed (0 for not a loop).  */
-   
+
 static rtx
 nvptx_gen_shared_bcast (rtx reg, propagate_mask pm, unsigned rep,
 			broadcast_data_t *data, bool vector)
@@ -2143,7 +2151,7 @@ nvptx_gen_shared_bcast (rtx reg, propagate_mask pm, unsigned rep,
     case E_BImode:
       {
 	rtx tmp = gen_reg_rtx (SImode);
-	
+
 	start_sequence ();
 	if (pm & PM_read)
 	  emit_insn (gen_sel_truesi (tmp, reg, GEN_INT (1), const0_rtx));
@@ -2170,7 +2178,7 @@ nvptx_gen_shared_bcast (rtx reg, propagate_mask pm, unsigned rep,
 	    if (data->offset)
 	      addr = gen_rtx_PLUS (Pmode, addr, GEN_INT (data->offset));
 	  }
-	
+
 	addr = gen_rtx_MEM (mode, addr);
 	if (pm == PM_read)
 	  res = gen_rtx_SET (addr, reg);
@@ -2183,7 +2191,7 @@ nvptx_gen_shared_bcast (rtx reg, propagate_mask pm, unsigned rep,
 	  {
 	    /* We're using a ptr, increment it.  */
 	    start_sequence ();
-	    
+
 	    emit_insn (res);
 	    emit_insn (gen_adddi3 (data->ptr, data->ptr,
 				   GEN_INT (GET_MODE_SIZE (GET_MODE (reg)))));
@@ -2256,7 +2264,7 @@ output_init_frag (rtx sym)
   init_frag.val = 0;
   init_frag.offset = 0;
   init_frag.remaining--;
-  
+
   if (sym)
     {
       bool function = (SYMBOL_REF_DECL (sym)
@@ -2737,7 +2745,7 @@ nvptx_output_call_insn (rtx_insn *insn, rtx result, rtx callee)
   fprintf (asm_out_file, "\t\tcall ");
   if (result != NULL_RTX)
     fprintf (asm_out_file, "(%s_in), ", reg_names[NVPTX_RETURN_REGNUM]);
-  
+
   if (decl)
     {
       char *replaced_dots = NULL;
@@ -2999,7 +3007,7 @@ nvptx_print_operand (FILE *file, rtx x, int code)
       {
 	nvptx_shuffle_kind kind = (nvptx_shuffle_kind) UINTVAL (x);
 	/* Same order as nvptx_shuffle_kind.  */
-	static const char *const kinds[] = 
+	static const char *const kinds[] =
 	  {".up", ".down", ".bfly", ".idx"};
 	fputs (kinds[kind], file);
       }
@@ -3494,7 +3502,7 @@ struct parallel
 {
   /* Parent parallel.  */
   parallel *parent;
-  
+
   /* Next sibling parallel.  */
   parallel *next;
 
@@ -3538,7 +3546,7 @@ parallel::parallel (parallel *parent_, unsigned mask_)
   forked_block = join_block = 0;
   forked_insn = join_insn = 0;
   fork_insn = joining_insn = 0;
-  
+
   if (parent)
     {
       next = parent->inner;
@@ -3626,7 +3634,7 @@ nvptx_split_blocks (bb_insn_map_t *map)
 	  block = elt->second;
 	  remap = block;
 	}
-      
+
       /* Split block before insn. The insn is in the new block  */
       edge e = split_block (block, PREV_INSN (elt->first));
 
@@ -3798,7 +3806,7 @@ nvptx_discover_pars (bb_insn_map_t *map)
       nvptx_dump_pars (par, 0);
       fprintf (dump_file, "\n");
     }
-  
+
   return par;
 }
 
@@ -3829,7 +3837,7 @@ nvptx_discover_pars (bb_insn_map_t *map)
    the node itself and one for the output edges.  Such back edges are
    referred to as 'Brackets'.  Cycle equivalent nodes will have the
    same set of brackets.
-   
+
    Determining bracket equivalency is done by maintaining a list of
    brackets in such a manner that the list length and final bracket
    uniquely identify the set.
@@ -3839,7 +3847,7 @@ nvptx_discover_pars (bb_insn_map_t *map)
    algorithm.  Notice it doesn't actually find the set of nodes within
    a particular region, just unorderd sets of nodes that are the
    entries and exits of SESE regions.
-   
+
    After determining cycle equivalency, we need to find the minimal
    set of SESE regions.  Do this with a DFS coloring walk of the
    complete graph.  We're either 'looking' or 'coloring'.  When
@@ -3930,7 +3938,7 @@ struct bb_sese
 	       back.first ? back.first->index : 0, back.second);
     brackets.safe_push (bracket (back));
   }
-  
+
   void append (bb_sese *child);
   void remove (const pseudo_node_t &);
 
@@ -4018,10 +4026,10 @@ nvptx_sese_number (int n, int p, int dir, basic_block b,
   if (dump_file)
     fprintf (dump_file, "Block %d(%d), parent (%d), orientation %+d\n",
 	     b->index, n, p, dir);
-  
+
   BB_SET_SESE (b, new bb_sese (n, p, dir));
   p = n;
-      
+
   n += 3;
   list->quick_push (b);
 
@@ -4038,7 +4046,7 @@ nvptx_sese_number (int n, int p, int dir, basic_block b,
       FOR_EACH_EDGE (e, ei, edges)
 	{
 	  basic_block target = *(basic_block *)((char *)e + offset);
-	  
+
 	  if (target->flags & BB_VISITED)
 	    n = nvptx_sese_number (n, p, dir, target, list);
 	}
@@ -4116,7 +4124,7 @@ nvptx_sese_pseudo (basic_block me, bb_sese *sese, int depth, int dir,
 	      /* Non-parental ancestor node -- a backlink.  */
 	      int d = usd * t_sese->dir;
 	      int back = t_sese->node + d;
-	
+
 	      if (hi_back > back)
 		{
 		  hi_back = back;
@@ -4151,7 +4159,7 @@ nvptx_sese_pseudo (basic_block me, bb_sese *sese, int depth, int dir,
 	  sese->push (pseudo_node_t (nullptr, 0));
 	}
     }
-  
+
  /* If this node leads directly or indirectly to a no-return region of
      the graph, then fake a backedge to entry node.  */
   if (!sese->brackets.length () || !edges || !edges->length ())
@@ -4208,7 +4216,7 @@ nvptx_sese_pseudo (basic_block me, bb_sese *sese, int depth, int dir,
 	      node_child = t_sese->high;
 	    }
 	}
-      
+
       sese->push (node_child);
     }
 }
@@ -4231,7 +4239,7 @@ nvptx_sese_color (auto_vec<unsigned> &color_counts, bb_pair_vec_t &regions,
       gcc_assert (coloring < 0 || (sese && coloring == sese->color));
       return;
     }
-  
+
   block->flags |= BB_VISITED;
 
   if (sese)
@@ -4263,7 +4271,7 @@ nvptx_sese_color (auto_vec<unsigned> &color_counts, bb_pair_vec_t &regions,
     {
       edge e;
       edge_iterator ei;
-      
+
       FOR_EACH_EDGE (e, ei, block->succs)
 	nvptx_sese_color (color_counts, regions, e->dest, coloring);
     }
@@ -4280,7 +4288,7 @@ nvptx_find_sese (auto_vec<basic_block> &blocks, bb_pair_vec_t &regions)
   basic_block block;
   int ix;
 
-  /* First clear each BB of the whole function.  */ 
+  /* First clear each BB of the whole function.  */
   FOR_ALL_BB_FN (block, cfun)
     {
       block->flags &= ~BB_VISITED;
@@ -4311,7 +4319,7 @@ nvptx_find_sese (auto_vec<basic_block> &blocks, bb_pair_vec_t &regions)
 
       if (dump_file)
 	fprintf (dump_file, "Searching graph starting at %d\n", block->index);
-      
+
       /* Number the nodes reachable from block initial DFS order.  */
       int depth = nvptx_sese_number (2, 0, +1, block, &spanlist);
 
@@ -4341,7 +4349,7 @@ nvptx_find_sese (auto_vec<basic_block> &blocks, bb_pair_vec_t &regions)
     {
       unsigned count;
       const char *comma = "";
-      
+
       fprintf (dump_file, "Found %d cycle equivalents\n",
 	       color_counts.length ());
       for (ix = 0; color_counts.iterate (ix, &count); ix++)
@@ -4361,7 +4369,7 @@ nvptx_find_sese (auto_vec<basic_block> &blocks, bb_pair_vec_t &regions)
 	}
       fprintf (dump_file, "\n");
    }
-  
+
   /* Now we've colored every block in the subgraph.  We now need to
      determine the minimal set of SESE regions that cover that
      subgraph.  Do this with a DFS walk of the complete function.
@@ -4383,7 +4391,7 @@ nvptx_find_sese (auto_vec<basic_block> &blocks, bb_pair_vec_t &regions)
     {
       const char *comma = "";
       int len = regions.length ();
-      
+
       fprintf (dump_file, "SESE regions:");
       for (ix = 0; ix != len; ix++)
 	{
@@ -4413,7 +4421,7 @@ nvptx_find_sese (auto_vec<basic_block> &blocks, bb_pair_vec_t &regions)
 	}
       fprintf (dump_file, "\n\n");
     }
-  
+
   for (ix = 0; blocks.iterate (ix, &block); ix++)
     delete BB_GET_SESE (block);
 }
@@ -4475,7 +4483,7 @@ nvptx_propagate (bool is_call, basic_block block, rtx_insn *insn,
 	  idx = gen_reg_rtx (SImode);
 	  pred = gen_reg_rtx (BImode);
 	  label = gen_label_rtx ();
-	  
+
 	  emit_insn (gen_rtx_SET (idx, GEN_INT (fs)));
 	  /* Allow worker function to initialize anything needed.  */
 	  rtx init = fn (tmp, PM_loop_begin, fs, data, vector);
@@ -4533,7 +4541,7 @@ warp_prop_gen (rtx reg, propagate_mask pm,
 {
   if (!(pm & PM_read_write))
     return 0;
-  
+
   return nvptx_gen_warp_bcast (reg);
 }
 
@@ -4795,7 +4803,7 @@ verify_neutering_labels (basic_block to, rtx_insn *vector_label,
 /* Single neutering according to MASK.  FROM is the incoming block and
    TO is the outgoing block.  These may be the same block. Insert at
    start of FROM:
-   
+
      if (tid.<axis>) goto end.
 
    and insert before ending branch of TO (if there is such an insn):
@@ -5164,7 +5172,7 @@ nvptx_process_pars (parallel *par)
 {
   if (nvptx_optimize)
     nvptx_optimize_inner (par);
-  
+
   unsigned inner_mask = par->mask;
 
   /* Do the inner parallels first.  */
@@ -5230,7 +5238,7 @@ nvptx_neuter_pars (parallel *par, unsigned modes, unsigned outer)
 		 & (GOMP_DIM_MASK (GOMP_DIM_WORKER)
 		    | GOMP_DIM_MASK (GOMP_DIM_VECTOR)));
   unsigned  skip_mask = 0, neuter_mask = 0;
-  
+
   if (par->inner)
     nvptx_neuter_pars (par->inner, modes, outer | me);
 
@@ -5291,7 +5299,7 @@ nvptx_neuter_pars (parallel *par, unsigned modes, unsigned outer)
 
   if (skip_mask)
     nvptx_skip_par (skip_mask, par);
-  
+
   if (par->next)
     nvptx_neuter_pars (par->next, modes, outer);
 }
@@ -5734,7 +5742,7 @@ nvptx_reorg (void)
 
   if (dump_file)
     df_dump (dump_file);
-  
+
   /* Mark unused regs as unused.  */
   int max_regs = max_reg_num ();
   for (int i = LAST_VIRTUAL_REGISTER + 1; i < max_regs; i++)
@@ -5833,16 +5841,15 @@ nvptx_handle_shared_attribute (tree *node, tree name, tree ARG_UNUSED (args),
 }
 
 /* Table of valid machine attributes.  */
-static const struct attribute_spec nvptx_attribute_table[] =
+TARGET_GNU_ATTRIBUTES (nvptx_attribute_table,
 {
   /* { name, min_len, max_len, decl_req, type_req, fn_type_req,
        affects_type_identity, handler, exclude } */
   { "kernel", 0, 0, true, false,  false, false, nvptx_handle_kernel_attribute,
     NULL },
   { "shared", 0, 0, true, false,  false, false, nvptx_handle_shared_attribute,
-    NULL },
-  { NULL, 0, 0, false, false, false, false, NULL, NULL }
-};
+    NULL }
+});
 
 /* Limit vector alignments to BIGGEST_ALIGNMENT.  */
 
@@ -5918,7 +5925,13 @@ nvptx_record_offload_symbol (tree decl)
 	/* OpenMP offloading does not set this attribute.  */
 	tree dims = attr ? TREE_VALUE (attr) : NULL_TREE;
 
-	fprintf (asm_out_file, "//:FUNC_MAP \"%s\"",
+	fprintf (asm_out_file, "//:");
+	if (lookup_attribute ("omp declare target indirect",
+			      DECL_ATTRIBUTES (decl)))
+	  fprintf (asm_out_file, "IND_FUNC_MAP");
+	else
+	  fprintf (asm_out_file, "FUNC_MAP");
+	fprintf (asm_out_file, " \"%s\"",
 		 IDENTIFIER_POINTER (DECL_ASSEMBLER_NAME (decl)));
 
 	for (; dims; dims = TREE_CHAIN (dims))
@@ -5947,13 +5960,11 @@ nvptx_file_start (void)
   fputs ("// BEGIN PREAMBLE\n", asm_out_file);
 
   fputs ("\t.version\t", asm_out_file);
-  fputs (ptx_version_to_string ((enum ptx_version)ptx_version_option),
-	 asm_out_file);
+  fputs (ptx_version_to_string (ptx_version_option), asm_out_file);
   fputs ("\n", asm_out_file);
 
   fputs ("\t.target\tsm_", asm_out_file);
-  fputs (sm_version_to_string ((enum ptx_isa)ptx_isa_option),
-	 asm_out_file);
+  fputs (sm_version_to_string (ptx_isa_option), asm_out_file);
   fputs ("\n", asm_out_file);
 
   fprintf (asm_out_file, "\t.address_size %d\n", GET_MODE_BITSIZE (Pmode));
@@ -6025,7 +6036,7 @@ nvptx_expand_shuffle (tree exp, rtx target, machine_mode mode, int ignore)
 {
   if (ignore)
     return target;
-  
+
   rtx src = expand_expr (CALL_EXPR_ARG (exp, 0),
 			 NULL_RTX, mode, EXPAND_NORMAL);
   if (!REG_P (src))
@@ -6035,7 +6046,7 @@ nvptx_expand_shuffle (tree exp, rtx target, machine_mode mode, int ignore)
 			 NULL_RTX, SImode, EXPAND_NORMAL);
   rtx op = expand_expr (CALL_EXPR_ARG  (exp, 2),
 			NULL_RTX, SImode, EXPAND_NORMAL);
-  
+
   if (!REG_P (idx) && GET_CODE (idx) != CONST_INT)
     idx = copy_to_mode_reg (SImode, idx);
 
@@ -6054,7 +6065,7 @@ nvptx_expand_brev (tree exp, rtx target, machine_mode mode, int ignore)
 {
   if (ignore)
     return target;
-  
+
   rtx arg = expand_expr (CALL_EXPR_ARG (exp, 0),
 			 NULL_RTX, mode, EXPAND_NORMAL);
   if (!REG_P (arg))
@@ -6144,7 +6155,7 @@ nvptx_expand_cmp_swap (tree exp, rtx target,
 		       machine_mode ARG_UNUSED (m), int ARG_UNUSED (ignore))
 {
   machine_mode mode = TYPE_MODE (TREE_TYPE (exp));
-  
+
   if (!target)
     target = gen_reg_rtx (mode);
 
@@ -6161,7 +6172,7 @@ nvptx_expand_cmp_swap (tree exp, rtx target,
     cmp = copy_to_mode_reg (mode, cmp);
   if (!REG_P (src))
     src = copy_to_mode_reg (mode, src);
-  
+
   if (mode == SImode)
     pat = gen_atomic_compare_and_swapsi_1 (target, mem, cmp, src, const0_rtx);
   else
@@ -6397,7 +6408,8 @@ nvptx_omp_device_kind_arch_isa (enum omp_device_kind_arch_isa trait,
     case omp_device_kind:
       return strcmp (name, "gpu") == 0;
     case omp_device_arch:
-      return strcmp (name, "nvptx") == 0;
+      return (strcmp (name, "nvptx") == 0
+	      || (TARGET_ABI64 && strcmp (name, "nvptx64") == 0));
     case omp_device_isa:
 #define NVPTX_SM(XX, SEP)				\
       {							\
@@ -6740,7 +6752,7 @@ nvptx_generate_vector_shuffle (location_t loc,
       fn = NVPTX_BUILTIN_SHUFFLELL;
       arg_type = long_long_unsigned_type_node;
     }
-  
+
   tree call = nvptx_builtin_decl (fn, true);
   tree bits = build_int_cst (unsigned_type_node, shift);
   tree kind = build_int_cst (unsigned_type_node, SHUFFLE_DOWN);
@@ -6777,7 +6789,7 @@ static tree
 nvptx_global_lock_addr ()
 {
   tree v = global_lock_var;
-  
+
   if (!v)
     {
       tree name = get_identifier ("__reduction_lock");
@@ -6840,7 +6852,7 @@ nvptx_lockless_update (location_t loc, gimple_stmt_iterator *gsi,
   gimple *init_end = gimple_seq_last (init_seq);
 
   gsi_insert_seq_before (gsi, init_seq, GSI_SAME_STMT);
-  
+
   /* Split the block just after the init stmts.  */
   basic_block pre_bb = gsi_bb (*gsi);
   edge pre_edge = split_block (pre_bb, init_end);
@@ -6852,7 +6864,7 @@ nvptx_lockless_update (location_t loc, gimple_stmt_iterator *gsi,
   tree expect_var = make_ssa_name (arg_type);
   tree actual_var = make_ssa_name (arg_type);
   tree write_var = make_ssa_name (arg_type);
-  
+
   /* Build and insert the reduction calculation.  */
   gimple_seq red_seq = NULL;
   tree write_expr = fold_build1 (code, var_type, expect_var);
@@ -6954,7 +6966,7 @@ nvptx_lockfull_update (location_t loc, gimple_stmt_iterator *gsi,
   basic_block update_bb = locked_edge->dest;
   lock_bb = locked_edge->src;
   *gsi = gsi_for_stmt (gsi_stmt (*gsi));
-  
+
   /* Create the lock loop ... */
   locked_edge->flags ^= EDGE_TRUE_VALUE | EDGE_FALLTHRU;
   locked_edge->probability = profile_probability::even ();
@@ -6986,11 +6998,11 @@ nvptx_lockfull_update (location_t loc, gimple_stmt_iterator *gsi,
   tree ref_in = build_simple_mem_ref (ptr);
   TREE_THIS_VOLATILE (ref_in) = 1;
   gimplify_assign (acc_in, ref_in, &red_seq);
-  
+
   tree acc_out = make_ssa_name (var_type);
   tree update_expr = fold_build2 (op, var_type, ref_in, var);
   gimplify_assign (acc_out, update_expr, &red_seq);
-  
+
   tree ref_out = build_simple_mem_ref (ptr);
   TREE_THIS_VOLATILE (ref_out) = 1;
   gimplify_assign (ref_out, acc_out, &red_seq);
@@ -7053,7 +7065,7 @@ nvptx_goacc_reduction_setup (gcall *call, offload_attrs *oa)
       if (!integer_zerop (ref_to_res))
 	var = build_simple_mem_ref (ref_to_res);
     }
-  
+
   if (level == GOMP_DIM_WORKER
       || (level == GOMP_DIM_VECTOR && oa->vector_length > PTX_WARP_SIZE))
     {
@@ -7090,7 +7102,7 @@ nvptx_goacc_reduction_init (gcall *call, offload_attrs *oa)
   tree init = omp_reduction_init_op (gimple_location (call), rcode,
 				     TREE_TYPE (var));
   gimple_seq seq = NULL;
-  
+
   push_gimplify_context (true);
 
   if (level == GOMP_DIM_VECTOR && oa->vector_length == PTX_WARP_SIZE)
@@ -7115,7 +7127,7 @@ nvptx_goacc_reduction_init (gcall *call, offload_attrs *oa)
       /* Fixup flags from call_bb to init_bb.  */
       init_edge->flags ^= EDGE_FALLTHRU | EDGE_TRUE_VALUE;
       init_edge->probability = profile_probability::even ();
-      
+
       /* Set the initialization stmts.  */
       gimple_seq init_seq = NULL;
       tree init_var = make_ssa_name (TREE_TYPE (var));
@@ -7127,7 +7139,7 @@ nvptx_goacc_reduction_init (gcall *call, offload_attrs *oa)
       gsi_prev (&gsi);
       edge inited_edge = split_block (gsi_bb (gsi), gsi_stmt (gsi));
       basic_block dst_bb = inited_edge->dest;
-      
+
       /* Create false edge from call_bb to dst_bb.  */
       edge nop_edge = make_edge (call_bb, dst_bb, EDGE_FALSE_VALUE);
       nop_edge->probability = profile_probability::even ();
@@ -7242,7 +7254,7 @@ nvptx_goacc_reduction_teardown (gcall *call, offload_attrs *oa)
   tree var = gimple_call_arg (call, 2);
   int level = TREE_INT_CST_LOW (gimple_call_arg (call, 3));
   gimple_seq seq = NULL;
-  
+
   push_gimplify_context (true);
   if (level == GOMP_DIM_WORKER
       || (level == GOMP_DIM_VECTOR && oa->vector_length > PTX_WARP_SIZE))
@@ -7269,7 +7281,7 @@ nvptx_goacc_reduction_teardown (gcall *call, offload_attrs *oa)
 
   if (lhs)
     gimplify_assign (lhs, var, &seq);
-  
+
   pop_gimplify_context (NULL);
 
   gsi_replace_with_seq (&gsi, seq, true);
@@ -7576,7 +7588,8 @@ nvptx_mem_local_p (rtx mem)
   while (0)
 
 void
-nvptx_asm_output_def_from_decls (FILE *stream, tree name, tree value)
+nvptx_asm_output_def_from_decls (FILE *stream, tree name,
+				 tree value ATTRIBUTE_UNUSED)
 {
   if (nvptx_alias == 0 || !TARGET_PTX_6_3)
     {
@@ -7611,7 +7624,8 @@ nvptx_asm_output_def_from_decls (FILE *stream, tree name, tree value)
       return;
     }
 
-  if (!cgraph_node::get (name)->referred_to_p ())
+  cgraph_node *cnode = cgraph_node::get (name);
+  if (!cnode->referred_to_p ())
     /* Prevent "Internal error: reference to deleted section".  */
     return;
 
@@ -7620,8 +7634,27 @@ nvptx_asm_output_def_from_decls (FILE *stream, tree name, tree value)
   fputs (s.str ().c_str (), stream);
 
   tree id = DECL_ASSEMBLER_NAME (name);
+
+  /* Walk alias chain to get reference callgraph node.
+     The rationale of using ultimate_alias_target here is that
+     PTX's .alias directive only supports 1-level aliasing where
+     aliasee is function defined in same module.
+
+     So for the following case:
+     int foo() { return 42; }
+     int bar () __attribute__((alias ("foo")));
+     int baz () __attribute__((alias ("bar")));
+
+     should resolve baz to foo:
+     .visible .func (.param.u32 %value_out) baz;
+     .alias baz,foo;  */
+  symtab_node *alias_target_node = cnode->ultimate_alias_target ();
+  tree alias_target_id = DECL_ASSEMBLER_NAME (alias_target_node->decl);
+  std::stringstream s_def;
+  write_fn_marker (s_def, true, TREE_PUBLIC (name), IDENTIFIER_POINTER (id));
+  fputs (s_def.str ().c_str (), stream);
   NVPTX_ASM_OUTPUT_DEF (stream, IDENTIFIER_POINTER (id),
-			IDENTIFIER_POINTER (value));
+			IDENTIFIER_POINTER (alias_target_id));
 }
 
 #undef NVPTX_ASM_OUTPUT_DEF
@@ -7784,6 +7817,12 @@ nvptx_asm_output_def_from_decls (FILE *stream, tree name, tree value)
 
 #undef TARGET_LIBC_HAS_FUNCTION
 #define TARGET_LIBC_HAS_FUNCTION nvptx_libc_has_function
+
+#undef TARGET_HAVE_STRUB_SUPPORT_FOR
+#define TARGET_HAVE_STRUB_SUPPORT_FOR hook_bool_tree_false
+
+#undef TARGET_DOCUMENTATION_NAME
+#define TARGET_DOCUMENTATION_NAME "Nvidia PTX"
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 

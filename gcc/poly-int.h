@@ -1,5 +1,5 @@
 /* Polynomial integer classes.
-   Copyright (C) 2014-2023 Free Software Foundation, Inc.
+   Copyright (C) 2014-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -90,6 +90,20 @@ struct poly_coeff_traits<T, wi::VAR_PRECISION>
   static const int signedness = -1;
   static const int precision = WIDE_INT_MAX_PRECISION;
   static const int rank = INT_MAX;
+
+  template<typename Arg>
+  struct init_cast { using type = const Arg &; };
+};
+
+template<typename T>
+struct poly_coeff_traits<T, wi::INL_CONST_PRECISION>
+{
+  typedef WI_UNARY_RESULT (T) result;
+  typedef int int_type;
+  /* These types are always signed.  */
+  static const int signedness = 1;
+  static const int precision = wi::int_traits<T>::precision;
+  static const int rank = precision * 2 / CHAR_BIT;
 
   template<typename Arg>
   struct init_cast { using type = const Arg &; };
@@ -339,6 +353,10 @@ struct poly_result<T1, T2, 2>
    wi::int_traits<C>::precision_type == wi::FLEXIBLE_PRECISION \
    ? (void) ((RES).coeffs[I] = VALUE) \
    : (void) ((RES).coeffs[I].~C (), new (&(RES).coeffs[I]) C (VALUE)))
+
+/* Number of bits needed to represent maximum value of
+   NUM_POLY_INT_COEFFS defined by any target.  */
+#define MAX_NUM_POLY_INT_COEFFS_BITS	2
 
 /* poly_int_full and poly_int_hungry are used internally within poly_int
    for delegated initializers.  poly_int_full indicates that a parameter

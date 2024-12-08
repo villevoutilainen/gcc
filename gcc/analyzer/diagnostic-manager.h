@@ -1,5 +1,5 @@
 /* Classes for saving, deduplicating, and emitting analyzer diagnostics.
-   Copyright (C) 2019-2023 Free Software Foundation, Inc.
+   Copyright (C) 2019-2024 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -42,7 +42,7 @@ public:
   void add_note (std::unique_ptr<pending_note> pn);
   void add_event (std::unique_ptr<checker_event> event);
 
-  json::object *to_json () const;
+  std::unique_ptr<json::object> to_json () const;
 
   void dump_dot_id (pretty_printer *pp) const;
   void dump_as_dot_node (pretty_printer *pp) const;
@@ -66,6 +66,8 @@ public:
   void add_any_saved_events (checker_path &dst_path);
 
   void emit_any_notes () const;
+
+  void maybe_add_sarif_properties (sarif_object &result_obj) const;
 
   //private:
   const state_machine *m_sm;
@@ -155,7 +157,7 @@ public:
 
   engine *get_engine () const { return m_eng; }
 
-  json::object *to_json () const;
+  std::unique_ptr<json::object> to_json () const;
 
   bool add_diagnostic (const state_machine *sm,
 		       const pending_location &ploc,

@@ -33,7 +33,7 @@ integer(kind=omp_allocator_handle_kind), intent(in) :: my_alloc
 
 !stack variables:
 integer :: a,b,c(n),d(5),e(2)
-!$omp allocate(a)   ! { dg-error "Sorry, declarative !.OMP ALLOCATE at .1. not yet supported" }
+!$omp allocate(a)
 !$omp allocate ( b , c ) align ( 32) allocator (my_alloc)
 !$omp allocate (d) align( 128 )
 !$omp allocate(   e ) allocator( omp_high_bw_mem_alloc )
@@ -47,8 +47,8 @@ integer, save :: k,l,m(5),r(2)
 
 !common /block/
 integer :: q,x,y(2),z(5)
-common /com1/ q,x
-common /com2/ y,z
+common /com1/ q,x  ! { dg-error "Sorry, !.OMP allocate for COMMON block variable 'com1' at .1. not supported" }
+common /com2/ y,z  ! { dg-error "Sorry, !.OMP allocate for COMMON block variable 'com2' at .1. not supported" }
 !$omp allocate ( / com1/) align( 128 ) allocator( omp_high_bw_mem_alloc )
 !$omp allocate(/com2 / ) allocator( omp_high_bw_mem_alloc )
 end

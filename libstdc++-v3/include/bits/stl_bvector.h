@@ -1,6 +1,6 @@
 // vector<bool> specialization -*- C++ -*-
 
-// Copyright (C) 2001-2023 Free Software Foundation, Inc.
+// Copyright (C) 2001-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -56,6 +56,10 @@
 #ifndef _STL_BVECTOR_H
 #define _STL_BVECTOR_H 1
 
+#ifndef _GLIBCXX_ALWAYS_INLINE
+#define _GLIBCXX_ALWAYS_INLINE inline __attribute__((__always_inline__))
+#endif
+
 #if __cplusplus >= 201103L
 #include <initializer_list>
 #include <bits/functional_hash.h>
@@ -77,6 +81,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
   struct _Bit_reference
   {
+  private:
+    template<typename, typename> friend class vector;
+    friend struct _Bit_iterator;
+    friend struct _Bit_const_iterator;
+
+    _GLIBCXX20_CONSTEXPR
+    _Bit_reference() _GLIBCXX_NOEXCEPT : _M_p(0), _M_mask(0) { }
+
     _Bit_type * _M_p;
     _Bit_type _M_mask;
 
@@ -84,9 +96,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     _Bit_reference(_Bit_type * __x, _Bit_type __y)
     : _M_p(__x), _M_mask(__y) { }
 
-    _GLIBCXX20_CONSTEXPR
-    _Bit_reference() _GLIBCXX_NOEXCEPT : _M_p(0), _M_mask(0) { }
-
+  public:
 #if __cplusplus >= 201103L
     _Bit_reference(const _Bit_reference&) = default;
 #endif
@@ -177,6 +187,16 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     _Bit_type * _M_p;
     unsigned int _M_offset;
 
+    _GLIBCXX20_CONSTEXPR _GLIBCXX_ALWAYS_INLINE
+    void
+    _M_assume_normalized() const
+    {
+#if __has_attribute(__assume__) && !defined(_GLIBCXX_CLANG)
+      unsigned int __ofst = _M_offset;
+      __attribute__ ((__assume__ (__ofst < unsigned(_S_word_bit))));
+#endif
+    }
+
     _GLIBCXX20_CONSTEXPR
     _Bit_iterator_base(_Bit_type * __x, unsigned int __y)
     : _M_p(__x), _M_offset(__y) { }
@@ -185,6 +205,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     void
     _M_bump_up()
     {
+      _M_assume_normalized();
       if (_M_offset++ == int(_S_word_bit) - 1)
 	{
 	  _M_offset = 0;
@@ -196,6 +217,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     void
     _M_bump_down()
     {
+      _M_assume_normalized();
       if (_M_offset-- == 0)
 	{
 	  _M_offset = int(_S_word_bit) - 1;
@@ -207,6 +229,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     void
     _M_incr(ptrdiff_t __i)
     {
+      _M_assume_normalized();
       difference_type __n = __i + _M_offset;
       _M_p += __n / int(_S_word_bit);
       __n = __n % int(_S_word_bit);
@@ -221,7 +244,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     _GLIBCXX_NODISCARD
     friend _GLIBCXX20_CONSTEXPR bool
     operator==(const _Bit_iterator_base& __x, const _Bit_iterator_base& __y)
-    { return __x._M_p == __y._M_p && __x._M_offset == __y._M_offset; }
+    {
+      __x._M_assume_normalized();
+      __y._M_assume_normalized();
+      return __x._M_p == __y._M_p && __x._M_offset == __y._M_offset;
+    }
 
 #if __cpp_lib_three_way_comparison
     [[nodiscard]]
@@ -229,6 +256,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     operator<=>(const _Bit_iterator_base& __x, const _Bit_iterator_base& __y)
     noexcept
     {
+      __x._M_assume_normalized();
+      __y._M_assume_normalized();
       if (const auto __cmp = __x._M_p <=> __y._M_p; __cmp != 0)
 	return __cmp;
       return __x._M_offset <=> __y._M_offset;
@@ -238,6 +267,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     friend bool
     operator<(const _Bit_iterator_base& __x, const _Bit_iterator_base& __y)
     {
+      __x._M_assume_normalized();
+      __y._M_assume_normalized();
       return __x._M_p < __y._M_p
 	    || (__x._M_p == __y._M_p && __x._M_offset < __y._M_offset);
     }
@@ -266,6 +297,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     friend _GLIBCXX20_CONSTEXPR ptrdiff_t
     operator-(const _Bit_iterator_base& __x, const _Bit_iterator_base& __y)
     {
+      __x._M_assume_normalized();
+      __y._M_assume_normalized();
       return (int(_S_word_bit) * (__x._M_p - __y._M_p)
 	      + __x._M_offset - __y._M_offset);
     }
@@ -297,7 +330,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
     reference
     operator*() const
-    { return reference(_M_p, 1UL << _M_offset); }
+    {
+      _M_assume_normalized();
+      return reference(_M_p, 1UL << _M_offset);
+    }
 
     _GLIBCXX20_CONSTEXPR
     iterator&
@@ -408,7 +444,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
     const_reference
     operator*() const
-    { return _Bit_reference(_M_p, 1UL << _M_offset); }
+    {
+      _M_assume_normalized();
+      return _Bit_reference(_M_p, 1UL << _M_offset);
+    }
 
     _GLIBCXX20_CONSTEXPR
     const_iterator&
@@ -560,6 +599,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	_GLIBCXX20_CONSTEXPR
 	_Bvector_impl() _GLIBCXX_NOEXCEPT_IF(
 	  is_nothrow_default_constructible<_Bit_alloc_type>::value)
+#if __cpp_concepts && __glibcxx_type_trait_variable_templates
+	requires is_default_constructible_v<_Bit_alloc_type>
+#endif
 	: _Bit_alloc_type()
 	{ }
 
@@ -618,7 +660,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX20_CONSTEXPR
       _Bvector_base(const allocator_type& __a)
-      : _M_impl(__a) { }
+      : _M_impl(_Bit_alloc_type(__a)) { }
 
 #if __cplusplus >= 201103L
       _Bvector_base(_Bvector_base&&) = default;
@@ -641,13 +683,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _M_allocate(size_t __n)
       {
 	_Bit_pointer __p = _Bit_alloc_traits::allocate(_M_impl, _S_nword(__n));
-#if __cpp_lib_is_constant_evaluated
+#if __cpp_lib_is_constant_evaluated && __cpp_constexpr_dynamic_alloc
 	if (std::is_constant_evaluated())
-	{
-	  __n = _S_nword(__n);
-	  for (size_t __i = 0; __i < __n; ++__i)
-	    __p[__i] = 0ul;
-	}
+	  {
+	    __n = _S_nword(__n);
+	    for (size_t __i = 0; __i < __n; ++__i)
+	      std::construct_at(std::to_address(__p) + __i);
+	  }
 #endif
 	return __p;
       }
@@ -745,7 +787,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX20_CONSTEXPR
       explicit
-      vector(const allocator_type& __a)
+      vector(const allocator_type& __a) _GLIBCXX_NOEXCEPT
       : _Base(__a) { }
 
 #if __cplusplus >= 201103L
@@ -847,6 +889,31 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	  // Check whether it's an integral type. If so, it's not an iterator.
 	  typedef typename std::__is_integer<_InputIterator>::__type _Integral;
 	  _M_initialize_dispatch(__first, __last, _Integral());
+	}
+#endif
+
+#if __glibcxx_ranges_to_container // C++ >= 23
+      /**
+       * @brief Construct a vector from a range.
+       * @since C++23
+       */
+      template<__detail::__container_compatible_range<bool> _Rg>
+	constexpr
+	vector(from_range_t, _Rg&& __rg, const _Alloc& __a = _Alloc())
+	: _Base(__a)
+	{
+	  if constexpr (ranges::forward_range<_Rg> || ranges::sized_range<_Rg>)
+	    {
+	      _M_initialize(size_type(ranges::distance(__rg)));
+	      ranges::copy(__rg, begin());
+	    }
+	  else
+	    {
+	      auto __first = ranges::begin(__rg);
+	      const auto __last = ranges::end(__rg);
+	      for (; __first != __last; ++__first)
+		emplace_back(*__first);
+	    }
 	}
 #endif
 
@@ -954,6 +1021,21 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       { _M_assign_aux(__l.begin(), __l.end(), random_access_iterator_tag()); }
 #endif
 
+#if __glibcxx_ranges_to_container // C++ >= 23
+      /**
+       * @brief Assign a range to the vector.
+       * @since C++23
+       */
+      template<__detail::__container_compatible_range<bool> _Rg>
+	constexpr void
+	assign_range(_Rg&& __rg)
+	{
+	  static_assert(assignable_from<bool&, ranges::range_reference_t<_Rg>>);
+	  clear();
+	  append_range(std::forward<_Rg>(__rg));
+	}
+#endif
+
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       iterator
       begin() _GLIBCXX_NOEXCEPT
@@ -1048,12 +1130,18 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
       operator[](size_type __n)
-      { return begin()[__n]; }
+      {
+	__glibcxx_requires_subscript(__n);
+	return begin()[__n];
+      }
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reference
       operator[](size_type __n) const
-      { return begin()[__n]; }
+      {
+	__glibcxx_requires_subscript(__n);
+	return begin()[__n];
+      }
 
     protected:
       _GLIBCXX20_CONSTEXPR
@@ -1068,7 +1156,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       }
 
     public:
-      _GLIBCXX20_CONSTEXPR
+      _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
       at(size_type __n)
       {
@@ -1076,7 +1164,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	return (*this)[__n];
       }
 
-      _GLIBCXX20_CONSTEXPR
+      _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reference
       at(size_type __n) const
       {
@@ -1097,22 +1185,34 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
       front()
-      { return *begin(); }
+      {
+	__glibcxx_requires_nonempty();
+	return *begin();
+      }
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reference
       front() const
-      { return *begin(); }
+      {
+	__glibcxx_requires_nonempty();
+	return *begin();
+      }
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
       back()
-      { return *(end() - 1); }
+      {
+	__glibcxx_requires_nonempty();
+	return *(end() - 1);
+      }
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reference
       back() const
-      { return *(end() - 1); }
+      {
+	__glibcxx_requires_nonempty();
+	return *(end() - 1);
+      }
 
       _GLIBCXX20_CONSTEXPR
       void
@@ -1219,6 +1319,86 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       { return this->insert(__p, __l.begin(), __l.end()); }
 #endif
 
+#if __glibcxx_ranges_to_container // C++ >= 23
+      /**
+       * @brief Insert a range into the vector.
+       * @since C++23
+       */
+      template<__detail::__container_compatible_range<bool> _Rg>
+	constexpr iterator
+	insert_range(const_iterator __pos, _Rg&& __rg)
+	{
+	  if constexpr (ranges::forward_range<_Rg> || ranges::sized_range<_Rg>)
+	    {
+	      if (auto __n = size_type(ranges::distance(__rg)))
+		{
+		  if (capacity() - size() >= __n)
+		    {
+		      std::copy_backward(__pos._M_const_cast(), end(),
+					 this->_M_impl._M_finish
+					   + difference_type(__n));
+		      auto __i = ranges::copy(__rg, __pos._M_const_cast()).out;
+		      this->_M_impl._M_finish += difference_type(__n);
+		      return __i;
+		    }
+		  else
+		    {
+		      const size_type __len =
+			_M_check_len(__n, "vector<bool>::insert_range");
+		      const iterator __begin = begin(), __end = end();
+		      _Bit_pointer __q = this->_M_allocate(__len);
+		      iterator __start(std::__addressof(*__q), 0);
+		      iterator __i = _M_copy_aligned(__begin,
+						     __pos._M_const_cast(),
+						     __start);
+		      __i = ranges::copy(__rg, __i).out;
+		      iterator __finish = std::copy(__pos._M_const_cast(),
+						    __end, __i);
+		      this->_M_deallocate();
+		      this->_M_impl._M_end_of_storage = __q + _S_nword(__len);
+		      this->_M_impl._M_start = __start;
+		      this->_M_impl._M_finish = __finish;
+		      return __i;
+		    }
+		}
+	      else
+		return __pos._M_const_cast();
+	    }
+	  else
+	    return insert_range(__pos,
+				vector(from_range, __rg, get_allocator()));
+	}
+
+      /**
+       * @brief Append a range at the end of the vector.
+       * @since C++23
+       */
+      template<__detail::__container_compatible_range<bool> _Rg>
+	constexpr void
+	append_range(_Rg&& __rg)
+	{
+	  if constexpr (ranges::forward_range<_Rg> || ranges::sized_range<_Rg>)
+	    {
+	      reserve(size() + size_type(ranges::distance(__rg)));
+	      this->_M_impl._M_finish = ranges::copy(__rg, end()).out;
+	    }
+	  else
+	    {
+	      auto __first = ranges::begin(__rg);
+	      const auto __last = ranges::end(__rg);
+	      size_type __n = size();
+	      const size_type __cap = capacity();
+	      for (; __first != __last && __n < __cap; ++__first, (void)++__n)
+		emplace_back(*__first);
+	      if (__first != __last)
+		{
+		  ranges::subrange __rest(std::move(__first), __last);
+		  append_range(vector(from_range, __rest, get_allocator()));
+		}
+	    }
+	}
+#endif // ranges_to_container
+
       _GLIBCXX20_CONSTEXPR
       void
       pop_back()
@@ -1283,7 +1463,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #endif
 	emplace_back(_Args&&... __args)
 	{
-	  push_back(bool(__args...));
+	  push_back(bool(std::forward<_Args>(__args)...));
 #if __cplusplus > 201402L
 	  return back();
 #endif
@@ -1293,7 +1473,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	_GLIBCXX20_CONSTEXPR
 	iterator
 	emplace(const_iterator __pos, _Args&&... __args)
-	{ return insert(__pos, bool(__args...)); }
+	{ return insert(__pos, bool(std::forward<_Args>(__args)...)); }
 #endif
 
     protected:

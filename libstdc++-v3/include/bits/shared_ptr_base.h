@@ -1,6 +1,6 @@
 // shared_ptr and weak_ptr implementation details -*- C++ -*-
 
-// Copyright (C) 2007-2023 Free Software Foundation, Inc.
+// Copyright (C) 2007-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -66,10 +66,6 @@
 # include <bits/align.h> // std::align
 # include <bits/stl_uninitialized.h>
 #endif
-
-#define __glibcxx_want_smart_ptr_for_overwrite
-#define __glibcxx_want_shared_ptr_arrays
-#include <bits/version.h>
 
 namespace std _GLIBCXX_VISIBILITY(default)
 {
@@ -413,7 +409,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<_Lock_policy _Lp = __default_lock_policy>
     class __shared_count;
 
-#if __cplusplus >= 202002L
+#ifdef __glibcxx_atomic_shared_ptr
   template<typename>
     class _Sp_atomic;
 #endif
@@ -553,6 +549,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       }
 
     private:
+#ifdef __glibcxx_out_ptr
+      template<typename, typename, typename...> friend class out_ptr_t;
+#endif
       _Impl _M_impl;
     };
 
@@ -592,7 +591,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 	_Alloc& _M_alloc() noexcept { return _A_base::_S_get(*this); }
 
-	__gnu_cxx::__aligned_buffer<_Tp> _M_storage;
+	__gnu_cxx::__aligned_buffer<__remove_cv_t<_Tp>> _M_storage;
       };
 
     public:
@@ -634,7 +633,6 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       virtual void*
       _M_get_deleter(const std::type_info& __ti) noexcept override
       {
-	auto __ptr = const_cast<typename remove_cv<_Tp>::type*>(_M_ptr());
 	// Check for the fake type_info first, so we don't try to access it
 	// as a real type_info object. Otherwise, check if it's the real
 	// type_info for this class. With RTTI enabled we can check directly,
@@ -647,16 +645,17 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    _Sp_make_shared_tag::_S_eq(__ti)
 #endif
 	   )
-	  return __ptr;
+	  return _M_ptr();
 	return nullptr;
       }
 
-      _Tp* _M_ptr() noexcept { return _M_impl._M_storage._M_ptr(); }
+      __remove_cv_t<_Tp>*
+      _M_ptr() noexcept { return _M_impl._M_storage._M_ptr(); }
 
       _Impl _M_impl;
     };
 
-#ifdef __cpp_lib_smart_ptr_for_overwrite // C++ >= 20 && HOSTED
+#ifdef __glibcxx_smart_ptr_for_overwrite // C++ >= 20 && HOSTED
   struct _Sp_overwrite_tag { };
 
   // Partial specialization used for make_shared_for_overwrite<non-array>().
@@ -675,13 +674,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[no_unique_address]] _Alloc _M_alloc;
 
       union {
-	_Tp _M_obj;
+	remove_cv_t<_Tp> _M_obj;
 	char _M_unused;
       };
 
       friend class __shared_count<_Lp>; // To be able to call _M_ptr().
 
-      _Tp* _M_ptr() noexcept { return std::__addressof(_M_obj); }
+      auto _M_ptr() noexcept { return std::__addressof(_M_obj); }
 
     public:
       using __allocator_type = __alloc_rebind<_Alloc, _Sp_counted_ptr_inplace>;
@@ -715,9 +714,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _M_get_deleter(const std::type_info&) noexcept override
       { return nullptr; }
     };
-#endif // __cpp_lib_smart_ptr_for_overwrite
+#endif // __glibcxx_smart_ptr_for_overwrite
 
-#if __cpp_lib_shared_ptr_arrays >= 201707L // C++ >= 20 && HOSTED
+#if __glibcxx_shared_ptr_arrays >= 201707L // C++ >= 20 && HOSTED
   struct _Sp_overwrite_tag;
 
   // For make_shared<T[]>, make_shared<T[N]>, allocate_shared<T[]> etc.
@@ -879,7 +878,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _M_get_deleter(const std::type_info&) noexcept override
       { return nullptr; }
     };
-#endif // __cpp_lib_shared_ptr_arrays >= 201707L
+#endif // __glibcxx_shared_ptr_arrays >= 201707L
 
   // The default deleter for shared_ptr<T[]> and shared_ptr<T[N]>.
   struct __sp_array_delete
@@ -898,7 +897,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       template<typename _Tp>
 	struct __not_alloc_shared_tag<_Sp_alloc_shared_tag<_Tp>> { };
 
-#if __cpp_lib_shared_ptr_arrays >= 201707L // C++ >= 20 && HOSTED
+#if __glibcxx_shared_ptr_arrays >= 201707L // C++ >= 20 && HOSTED
       template<typename _Alloc>
 	struct __not_alloc_shared_tag<_Sp_counted_array_base<_Alloc>> { };
 #endif
@@ -963,7 +962,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	__shared_count(_Tp*& __p, _Sp_alloc_shared_tag<_Alloc> __a,
 		       _Args&&... __args)
 	{
-	  typedef _Sp_counted_ptr_inplace<_Tp, _Alloc, _Lp> _Sp_cp_type;
+	  using _Tp2 = __remove_cv_t<_Tp>;
+	  using _Sp_cp_type = _Sp_counted_ptr_inplace<_Tp2, _Alloc, _Lp>;
 	  typename _Sp_cp_type::__allocator_type __a2(__a._M_a);
 	  auto __guard = std::__allocate_guarded(__a2);
 	  _Sp_cp_type* __mem = __guard.get();
@@ -974,7 +974,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  __p = __pi->_M_ptr();
 	}
 
-#if __cpp_lib_shared_ptr_arrays >= 201707L // C++ >= 20 && HOSTED
+#if __glibcxx_shared_ptr_arrays >= 201707L // C++ >= 20 && HOSTED
       template<typename _Tp, typename _Alloc, typename _Init>
 	__shared_count(_Tp*& __p, const _Sp_counted_array_base<_Alloc>& __a,
 		       _Init __init)
@@ -1127,8 +1127,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     private:
       friend class __weak_count<_Lp>;
-#if __cplusplus >= 202002L
+#ifdef __glibcxx_atomic_shared_ptr
       template<typename> friend class _Sp_atomic;
+#endif
+#ifdef __glibcxx_out_ptr
+      template<typename, typename, typename...> friend class out_ptr_t;
 #endif
 
       _Sp_counted_base<_Lp>*  _M_pi;
@@ -1227,7 +1230,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     private:
       friend class __shared_count<_Lp>;
-#if __cplusplus >= 202002L
+#ifdef __glibcxx_atomic_shared_ptr
       template<typename> friend class _Sp_atomic;
 #endif
 
@@ -1334,6 +1337,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     { };
 
 
+  template<typename _Tp>
+    [[__gnu__::__always_inline__]]
+    inline _Tp*
+    __shared_ptr_deref(_Tp* __p)
+    {
+      __glibcxx_assert(__p != nullptr);
+      return __p;
+    }
+
   // Define operator* and operator-> for shared_ptr<T>.
   template<typename _Tp, _Lock_policy _Lp,
 	   bool = is_array<_Tp>::value, bool = is_void<_Tp>::value>
@@ -1344,10 +1356,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       element_type&
       operator*() const noexcept
-      {
-	__glibcxx_assert(_M_get() != nullptr);
-	return *_M_get();
-      }
+      { return *std::__shared_ptr_deref(_M_get()); }
 
       element_type*
       operator->() const noexcept
@@ -1389,10 +1398,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[__deprecated__("shared_ptr<T[]>::operator* is absent from C++17")]]
       element_type&
       operator*() const noexcept
-      {
-	__glibcxx_assert(_M_get() != nullptr);
-	return *_M_get();
-      }
+      { return *std::__shared_ptr_deref(_M_get()); }
 
       [[__deprecated__("shared_ptr<T[]>::operator-> is absent from C++17")]]
       element_type*
@@ -1403,13 +1409,16 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       }
 #endif
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wc++17-extensions"
       element_type&
       operator[](ptrdiff_t __i) const noexcept
       {
-	__glibcxx_assert(_M_get() != nullptr);
-	__glibcxx_assert(!extent<_Tp>::value || __i < extent<_Tp>::value);
-	return _M_get()[__i];
+	if constexpr (extent<_Tp>::value)
+	  __glibcxx_assert(__i < extent<_Tp>::value);
+	return std::__shared_ptr_deref(_M_get())[__i];
       }
+#pragma GCC diagnostic pop
 
     private:
       element_type*
@@ -1557,7 +1566,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	__shared_ptr(unique_ptr<_Yp, _Del>&& __r)
 	: _M_ptr(__r.get()), _M_refcount()
 	{
-	  auto __raw = __to_address(__r.get());
+	  auto __raw = std::__to_address(__r.get());
 	  _M_refcount = __shared_count<_Lp>(std::move(__r));
 	  _M_enable_shared_from_this_with(__raw);
 	}
@@ -1573,7 +1582,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	__shared_ptr(unique_ptr<_Tp1, _Del>&& __r, __sp_array_delete)
 	: _M_ptr(__r.get()), _M_refcount()
 	{
-	  auto __raw = __to_address(__r.get());
+	  auto __raw = std::__to_address(__r.get());
 	  _M_refcount = __shared_count<_Lp>(std::move(__r));
 	  _M_enable_shared_from_this_with(__raw);
 	}
@@ -1716,7 +1725,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	friend __shared_ptr<_Tp1, _Lp1>
 	__allocate_shared(const _Alloc& __a, _Args&&... __args);
 
-#if __cpp_lib_shared_ptr_arrays >= 201707L // C++ >= 20 && HOSTED
+#if __glibcxx_shared_ptr_arrays >= 201707L // C++ >= 20 && HOSTED
       // This constructor is non-standard, it is used by allocate_shared<T[]>.
       template<typename _Alloc, typename _Init = const remove_extent_t<_Tp>*>
 	__shared_ptr(const _Sp_counted_array_base<_Alloc>& __a,
@@ -1777,8 +1786,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       template<typename _Del, typename _Tp1>
 	friend _Del* get_deleter(const shared_ptr<_Tp1>&) noexcept;
 
-#if __cplusplus >= 202002L
+#ifdef __glibcxx_atomic_shared_ptr
       friend _Sp_atomic<shared_ptr<_Tp>>;
+#endif
+#ifdef __glibcxx_out_ptr
+      template<typename, typename, typename...> friend class out_ptr_t;
 #endif
 
       element_type*	   _M_ptr;         // Contained pointer.
@@ -2111,7 +2123,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       template<typename _Tp1, _Lock_policy _Lp1> friend class __weak_ptr;
       friend class __enable_shared_from_this<_Tp, _Lp>;
       friend class enable_shared_from_this<_Tp>;
-#if __cplusplus >= 202002L
+#ifdef __glibcxx_atomic_shared_ptr
       friend _Sp_atomic<weak_ptr<_Tp>>;
 #endif
 

@@ -1,5 +1,5 @@
 /* Wrapper to call lto.  Used by collect2 and the linker plugin.
-   Copyright (C) 2009-2023 Free Software Foundation, Inc.
+   Copyright (C) 2009-2024 Free Software Foundation, Inc.
 
    Factored out of collect2 by Rafael Espindola <espindola@google.com>
 
@@ -52,6 +52,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "opts-diagnostic.h"
 #include "opt-suggestions.h"
 #include "opts-jobserver.h"
+#include "make-unique.h"
 
 /* Environment variable, used for passing the names of offload targets from GCC
    driver to lto-wrapper.  */
@@ -218,15 +219,18 @@ find_option (vec<cl_decoded_option> &options, cl_decoded_option *option)
   return find_option (options, option->opt_index);
 }
 
-/* Merge -flto FOPTION into vector of DECODED_OPTIONS.  */
+/* Merge -flto FOPTION into vector of DECODED_OPTIONS.  If FORCE is true
+   then FOPTION overrides previous settings.  */
 
 static void
 merge_flto_options (vec<cl_decoded_option> &decoded_options,
-		    cl_decoded_option *foption)
+		    cl_decoded_option *foption, bool force)
 {
   int existing_opt = find_option (decoded_options, foption);
   if (existing_opt == -1)
     decoded_options.safe_push (*foption);
+  else if (force)
+    decoded_options[existing_opt].arg = foption->arg;
   else
     {
       if (strcmp (foption->arg, decoded_options[existing_opt].arg) != 0)
@@ -285,7 +289,7 @@ merge_and_complain (vec<cl_decoded_option> &decoded_options,
 	  cf_protection_option = foption;
 	}
     }
-  
+
   /* The following does what the old LTO option code did,
      union all target and a selected set of common options.  */
   for (i = 0; i < fdecoded_options.length (); ++i)
@@ -307,6 +311,8 @@ merge_and_complain (vec<cl_decoded_option> &decoded_options,
 
 	  /* Fallthru.  */
 	case OPT_fdiagnostics_show_caret:
+	case OPT_fdiagnostics_show_event_links:
+	case OPT_fdiagnostics_show_highlight_colors:
 	case OPT_fdiagnostics_show_labels:
 	case OPT_fdiagnostics_show_line_numbers:
 	case OPT_fdiagnostics_show_option:
@@ -476,9 +482,10 @@ merge_and_complain (vec<cl_decoded_option> &decoded_options,
 	      decoded_options[existing_opt].value = 1;
 	    }
 	  break;
- 
+
 
 	case OPT_foffload_abi_:
+	case OPT_foffload_abi_host_opts_:
 	  if (existing_opt == -1)
 	    decoded_options.safe_push (*foption);
 	  else if (foption->value != decoded_options[existing_opt].value)
@@ -493,7 +500,7 @@ merge_and_complain (vec<cl_decoded_option> &decoded_options,
 	  break;
 
 	case OPT_flto_:
-	  merge_flto_options (decoded_options, foption);
+	  merge_flto_options (decoded_options, foption, false);
 	  break;
 	}
     }
@@ -512,7 +519,7 @@ merge_and_complain (vec<cl_decoded_option> &decoded_options,
 
      It would be good to warn on mismatches, but it is bit hard to do as
      we do not know what nothing translates to.  */
-    
+
   for (unsigned int j = 0; j < decoded_options.length ();)
     if (decoded_options[j].opt_index == OPT_fPIC
 	|| decoded_options[j].opt_index == OPT_fpic)
@@ -723,6 +730,8 @@ append_compiler_options (obstack *argv_obstack, vec<cl_decoded_option> opts)
       switch (option->opt_index)
 	{
 	case OPT_fdiagnostics_show_caret:
+	case OPT_fdiagnostics_show_event_links:
+	case OPT_fdiagnostics_show_highlight_colors:
 	case OPT_fdiagnostics_show_labels:
 	case OPT_fdiagnostics_show_line_numbers:
 	case OPT_fdiagnostics_show_option:
@@ -738,6 +747,7 @@ append_compiler_options (obstack *argv_obstack, vec<cl_decoded_option> opts)
 	case OPT_fopenacc:
 	case OPT_fopenacc_dim_:
 	case OPT_foffload_abi_:
+	case OPT_foffload_abi_host_opts_:
 	case OPT_fcf_protection_:
 	case OPT_fasynchronous_unwind_tables:
 	case OPT_funwind_tables:
@@ -782,6 +792,8 @@ append_diag_options (obstack *argv_obstack, vec<cl_decoded_option> opts)
 	case OPT_fdiagnostics_color_:
 	case OPT_fdiagnostics_format_:
 	case OPT_fdiagnostics_show_caret:
+	case OPT_fdiagnostics_show_event_links:
+	case OPT_fdiagnostics_show_highlight_colors:
 	case OPT_fdiagnostics_show_labels:
 	case OPT_fdiagnostics_show_line_numbers:
 	case OPT_fdiagnostics_show_option:
@@ -993,7 +1005,8 @@ compile_offload_image (const char *target, const char *compiler_path,
 
   obstack_ptr_grow (&argv_obstack, NULL);
   argv = XOBFINISH (&argv_obstack, char **);
-  fork_execute (argv[0], argv, true, "offload_args");
+  suffix = concat (target, ".offload_args", NULL);
+  fork_execute (argv[0], argv, true, suffix);
   obstack_free (&argv_obstack, NULL);
 
   free_array_of_ptrs ((void **) paths, n_paths);
@@ -1079,13 +1092,16 @@ copy_file (const char *dest, const char *src)
    the copy to the linker.  */
 
 static void
-find_crtoffloadtable (int save_temps, const char *dumppfx)
+find_crtoffloadtable (int save_temps, bool pie_or_shared, const char *dumppfx)
 {
   char **paths = NULL;
   const char *library_path = getenv ("LIBRARY_PATH");
   if (!library_path)
     return;
-  unsigned n_paths = parse_env_var (library_path, &paths, "/crtoffloadtable.o");
+  unsigned n_paths = parse_env_var (library_path, &paths,
+				    pie_or_shared
+				    ? "/crtoffloadtableS.o"
+				    : "/crtoffloadtable.o");
 
   unsigned i;
   for (i = 0; i < n_paths; i++)
@@ -1104,7 +1120,8 @@ find_crtoffloadtable (int save_temps, const char *dumppfx)
       }
   if (i == n_paths)
     fatal_error (input_location,
-		 "installation error, cannot find %<crtoffloadtable.o%>");
+		 "installation error, cannot find %<crtoffloadtable%s.o%>",
+		 pie_or_shared ? "S" : "");
 
   free_array_of_ptrs ((void **) paths, n_paths);
 }
@@ -1354,19 +1371,10 @@ init_num_threads (void)
 void
 print_lto_docs_link ()
 {
-  bool print_url = global_dc->printer->url_format != URL_FORMAT_NONE;
-  const char *url = global_dc->get_option_url (global_dc, OPT_flto);
-
-  pretty_printer pp;
-  pp.url_format = URL_FORMAT_DEFAULT;
-  pp_string (&pp, "see the ");
-  if (print_url)
-    pp_begin_url (&pp, url);
-  pp_string (&pp, "%<-flto%> option documentation");
-  if (print_url)
-    pp_end_url (&pp);
-  pp_string (&pp, " for more information");
-  inform (UNKNOWN_LOCATION, pp_formatted_text (&pp));
+  label_text url = label_text::take (global_dc->make_option_url (OPT_flto));
+  inform (UNKNOWN_LOCATION,
+	  "see the %{%<-flto%> option documentation%} for more information",
+	  url.get ());
 }
 
 /* Test that a make command is present and working, return true if so.  */
@@ -1419,6 +1427,11 @@ run_gcc (unsigned argc, char *argv[])
   char **lto_argv, **ltoobj_argv;
   bool linker_output_rel = false;
   bool skip_debug = false;
+#ifdef ENABLE_DEFAULT_PIE
+  bool pie_or_shared = true;
+#else
+  bool pie_or_shared = false;
+#endif
   const char *incoming_dumppfx = dumppfx = NULL;
   static char current_dir[] = { '.', DIR_SEPARATOR, '\0' };
 
@@ -1478,7 +1491,7 @@ run_gcc (unsigned argc, char *argv[])
 	}
 
       if ((p = strrchr (argv[i], '@'))
-	  && p != argv[i] 
+	  && p != argv[i]
 	  && sscanf (p, "@%li%n", &loffset, &consumed) >= 1
 	  && strlen (p) == (unsigned int) consumed)
 	{
@@ -1549,8 +1562,8 @@ run_gcc (unsigned argc, char *argv[])
 	  break;
 
 	case OPT_flto_:
-	  /* Merge linker -flto= option with what we have in IL files.  */
-	  merge_flto_options (fdecoded_options, option);
+	  /* Override IL file settings with a linker -flto= option.  */
+	  merge_flto_options (fdecoded_options, option, true);
 	  if (strcmp (option->arg, "jobserver") == 0)
 	    jobserver_requested = true;
 	  break;
@@ -1584,6 +1597,20 @@ run_gcc (unsigned argc, char *argv[])
 
 	case OPT_fdiagnostics_color_:
 	  diagnostic_color_init (global_dc, option->value);
+	  break;
+
+	case OPT_fdiagnostics_show_highlight_colors:
+	  global_dc->set_show_highlight_colors (option->value);
+	  break;
+
+	case OPT_pie:
+	case OPT_shared:
+	case OPT_static_pie:
+	  pie_or_shared = true;
+	  break;
+
+	case OPT_no_pie:
+	  pie_or_shared = false;
 	  break;
 
 	default:
@@ -1794,7 +1821,7 @@ cont1:
 
       if (offload_names)
 	{
-	  find_crtoffloadtable (save_temps, dumppfx);
+	  find_crtoffloadtable (save_temps, pie_or_shared, dumppfx);
 	  for (i = 0; offload_names[i]; i++)
 	    printf ("%s\n", offload_names[i]);
 	  free_array_of_ptrs ((void **) offload_names, i);
@@ -1819,7 +1846,7 @@ cont1:
       obstack_ptr_grow (&argv_obstack, "-o");
       obstack_ptr_grow (&argv_obstack, flto_out);
     }
-  else 
+  else
     {
       const char *list_option = "-fltrans-output-list=";
 
@@ -1897,7 +1924,7 @@ cont1:
 	{
 	  for (i = 0; i < ltoobj_argc; ++i)
 	    if (early_debug_object_names[i] != NULL)
-	      printf ("%s\n", early_debug_object_names[i]);	      
+	      printf ("%s\n", early_debug_object_names[i]);
 	}
       /* These now belong to collect2.  */
       free (flto_out);
@@ -1980,7 +2007,10 @@ cont:
 
       if (parallel)
 	{
-	  makefile = make_temp_file (".mk");
+	  if (save_temps)
+	    makefile = concat (dumppfx, "ltrans.mk", NULL);
+	  else
+	    makefile = make_temp_file (".mk");
 	  mstream = fopen (makefile, "w");
 	  qsort (ltrans_priorities, nr, sizeof (int) * 2, cmp_priority);
 	}
@@ -2019,14 +2049,12 @@ cont:
 	      fprintf (mstream, "%s:\n\t@%s ", output_name, new_argv[0]);
 	      for (j = 1; new_argv[j] != NULL; ++j)
 		fprintf (mstream, " '%s'", new_argv[j]);
-	      fprintf (mstream, "\n");
 	      /* If we are not preserving the ltrans input files then
 	         truncate them as soon as we have processed it.  This
 		 reduces temporary disk-space usage.  */
 	      if (! save_temps)
-		fprintf (mstream, "\t@-touch -r \"%s\" \"%s.tem\" > /dev/null "
-			 "2>&1 && mv \"%s.tem\" \"%s\"\n",
-			 input_name, input_name, input_name, input_name); 
+		fprintf (mstream, " -truncate '%s'", input_name);
+	      fprintf (mstream, "\n");
 	    }
 	  else
 	    {
@@ -2060,7 +2088,7 @@ cont:
 	  fclose (mstream);
 	  if (!jobserver)
 	    {
-	      /* Avoid passing --jobserver-fd= and similar flags 
+	      /* Avoid passing --jobserver-fd= and similar flags
 		 unless jobserver mode is explicitly enabled.  */
 	      putenv (xstrdup ("MAKEFLAGS="));
 	      putenv (xstrdup ("MFLAGS="));
@@ -2106,7 +2134,7 @@ cont:
 	{
 	  for (i = 0; i < ltoobj_argc; ++i)
 	    if (early_debug_object_names[i] != NULL)
-	      printf ("%s\n", early_debug_object_names[i]);	      
+	      printf ("%s\n", early_debug_object_names[i]);
 	}
       nr = 0;
       free (ltrans_priorities);
@@ -2124,6 +2152,26 @@ cont:
   obstack_free (&argv_obstack, NULL);
 }
 
+/* Concrete implementation of diagnostic_option_manager for LTO.  */
+
+class lto_diagnostic_option_manager : public gcc_diagnostic_option_manager
+{
+public:
+  lto_diagnostic_option_manager ()
+  : gcc_diagnostic_option_manager (0 /* lang_mask */)
+  {
+  }
+  int option_enabled_p (diagnostic_option_id) const final override
+  {
+    return true;
+  }
+  char *make_option_name (diagnostic_option_id,
+			  diagnostic_t,
+			  diagnostic_t) const final override
+  {
+    return nullptr;
+  }
+};
 
 /* Entry point.  */
 
@@ -2146,7 +2194,8 @@ main (int argc, char *argv[])
   diagnostic_initialize (global_dc, 0);
   diagnostic_color_init (global_dc);
   diagnostic_urls_init (global_dc);
-  global_dc->get_option_url = get_option_url;
+  global_dc->set_option_manager
+    (::make_unique<lto_diagnostic_option_manager> (), 0);
 
   if (atexit (lto_wrapper_cleanup) != 0)
     fatal_error (input_location, "%<atexit%> failed");

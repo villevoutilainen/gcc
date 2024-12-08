@@ -1,5 +1,5 @@
 /* Structure for saving state for a nested function.
-   Copyright (C) 1989-2023 Free Software Foundation, Inc.
+   Copyright (C) 1989-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -45,7 +45,7 @@ struct GTY(()) emit_status {
 
   /* seq.first and seq.last are the ends of the doubly-linked chain of
      rtl for the current function.  Both are reset to null at the
-     start of rtl generation for the function. 
+     start of rtl generation for the function.
 
      start_sequence saves both of these on seq.next and then starts
      a new, nested sequence of insns.
@@ -270,6 +270,10 @@ struct GTY(()) function {
   /* Value histograms attached to particular statements.  */
   htab_t GTY((skip)) value_histograms;
 
+  /* Annotated gconds so that basic conditions in the same expression map to
+     the same uid.  This is used for condition coverage.  */
+  hash_map <gcond*, unsigned> *GTY((skip)) cond_uids;
+
   /* For function.cc.  */
 
   /* Points to the FUNCTION_DECL of this function.  */
@@ -426,6 +430,9 @@ struct GTY(()) function {
   /* Nonzero when the tail call has been identified.  */
   unsigned int tail_call_marked : 1;
 
+  /* Has musttail marked calls.  */
+  unsigned int has_musttail : 1;
+
   /* Nonzero if the current function contains a #pragma GCC unroll.  */
   unsigned int has_unroll : 1;
 
@@ -516,6 +523,17 @@ set_loops_for_fn (struct function *fn, struct loops *loops)
 {
   gcc_checking_assert (fn->x_current_loops == NULL || loops == NULL);
   fn->x_current_loops = loops;
+}
+
+/* Get a new unique dependence clique or zero if none is left.  */
+
+inline unsigned short
+get_new_clique (function *fn)
+{
+  unsigned short clique = fn->last_clique + 1;
+  if (clique != 0)
+    fn->last_clique = clique;
+  return clique;
 }
 
 /* For backward compatibility... eventually these should all go away.  */
@@ -683,6 +701,8 @@ extern void number_blocks (tree);
 extern void set_cfun (struct function *new_cfun, bool force = false);
 extern void push_cfun (struct function *new_cfun);
 extern void pop_cfun (void);
+extern void push_function_decl (tree, bool = false);
+extern void pop_function_decl (void);
 
 extern int get_next_funcdef_no (void);
 extern int get_last_funcdef_no (void);
@@ -715,10 +735,11 @@ extern vec<edge> convert_jumps_to_returns (basic_block last_bb, bool simple_p,
 extern basic_block emit_return_for_exit (edge exit_fallthru_edge,
 					 bool simple_p);
 extern void reposition_prologue_and_epilogue_notes (void);
+extern poly_int64 get_stack_dynamic_offset ();
 
 /* Returns the name of the current function.  */
 extern const char *fndecl_name (tree);
-extern const char *function_name (struct function *);
+extern const char *function_name (const function *);
 extern const char *current_function_name (void);
 
 extern void used_types_insert (tree);

@@ -1,6 +1,6 @@
 // class template regex -*- C++ -*-
 
-// Copyright (C) 2013-2023 Free Software Foundation, Inc.
+// Copyright (C) 2013-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -54,6 +54,9 @@
 // That's why we introduced dummy node here ------ "end_tag" is a dummy node.
 // All dummy nodes will be eliminated at the end of compilation.
 */
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wc++20-extensions" // variadic macro with 0 args
 
 namespace std _GLIBCXX_VISIBILITY(default)
 {
@@ -621,4 +624,6 @@ namespace __detail
 } // namespace __detail
 
 _GLIBCXX_END_NAMESPACE_VERSION
-} // namespace
+} // namespace std
+
+#pragma GCC diagnostic pop

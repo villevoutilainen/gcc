@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 1992-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -93,10 +93,11 @@ package Scans is
       Tok_Raise,                    -- RAISE
       Tok_Right_Curly_Bracket,      -- }
 
+      Tok_Left_Bracket,    -- [
+
       Tok_Dot,             -- .            Namext
       Tok_Apostrophe,      -- '            Namext
 
-      Tok_Left_Bracket,    -- [            Namext
       Tok_Left_Paren,      -- (            Namext, Consk
 
       Tok_Delta,           -- DELTA        Atkwd, Sterm, Consk

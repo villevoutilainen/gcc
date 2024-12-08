@@ -1,7 +1,7 @@
 /* Routines for restoring various data types from a file stream.  This deals
    with various data types like strings, integers, enums, etc.
 
-   Copyright (C) 2011-2023 Free Software Foundation, Inc.
+   Copyright (C) 2011-2024 Free Software Foundation, Inc.
    Contributed by Diego Novillo <dnovillo@google.com>
 
 This file is part of GCC.
@@ -182,10 +182,8 @@ streamer_read_hwi (class lto_input_block *ib)
 poly_uint64
 streamer_read_poly_uint64 (class lto_input_block *ib)
 {
-  poly_uint64 res;
-  for (unsigned int i = 0; i < NUM_POLY_INT_COEFFS; ++i)
-    res.coeffs[i] = streamer_read_uhwi (ib);
-  return res;
+  using coeff_type = poly_int_traits<poly_uint64>::coeff_type;
+  return poly_int_read_common<coeff_type> (streamer_read_uhwi, ib);
 }
 
 /* Read a poly_int64 from IB.  */
@@ -193,10 +191,8 @@ streamer_read_poly_uint64 (class lto_input_block *ib)
 poly_int64
 streamer_read_poly_int64 (class lto_input_block *ib)
 {
-  poly_int64 res;
-  for (unsigned int i = 0; i < NUM_POLY_INT_COEFFS; ++i)
-    res.coeffs[i] = streamer_read_hwi (ib);
-  return res;
+  using coeff_type = poly_int_traits<poly_int64>::coeff_type;
+  return poly_int_read_common<coeff_type> (streamer_read_hwi, ib);
 }
 
 /* Read gcov_type value from IB.  */
@@ -219,14 +215,14 @@ streamer_read_real_value (class lto_input_block *ib, REAL_VALUE_TYPE *r)
 
 void
 streamer_read_value_range (class lto_input_block *ib, data_in *data_in,
-			   Value_Range &vr)
+			   value_range &vr)
 {
   // Read the common fields to all vranges.
   value_range_kind kind = streamer_read_enum (ib, value_range_kind, VR_LAST);
   gcc_checking_assert (kind != VR_UNDEFINED);
   tree type = stream_read_tree (ib, data_in);
 
-  // Initialize the Value_Range to the correct type.
+  // Initialize the value_range to the correct type.
   vr.set_type (type);
 
   if (is_a <irange> (vr))
@@ -268,6 +264,18 @@ streamer_read_value_range (class lto_input_block *ib, data_in *data_in,
 	}
       return;
     }
+  if (is_a <prange> (vr))
+    {
+      prange &r = as_a <prange> (vr);
+      wide_int lb = streamer_read_wide_int (ib);
+      wide_int ub = streamer_read_wide_int (ib);
+      r.set (type, lb, ub);
+      wide_int value = streamer_read_wide_int (ib);
+      wide_int mask = streamer_read_wide_int (ib);
+      irange_bitmask bm (value, mask);
+      r.update_bitmask (bm);
+      return;
+    }
   gcc_unreachable ();
 }
 
@@ -277,10 +285,12 @@ streamer_read_value_range (class lto_input_block *ib, data_in *data_in,
 wide_int
 streamer_read_wide_int (class lto_input_block *ib)
 {
-  HOST_WIDE_INT a[WIDE_INT_MAX_ELTS];
+  HOST_WIDE_INT abuf[WIDE_INT_MAX_INL_ELTS], *a = abuf;
   int i;
   int prec = streamer_read_uhwi (ib);
   int len = streamer_read_uhwi (ib);
+  if (UNLIKELY (len > WIDE_INT_MAX_INL_ELTS))
+    a = XALLOCAVEC (HOST_WIDE_INT, len);
   for (i = 0; i < len; i++)
     a[i] = streamer_read_hwi (ib);
   return wide_int::from_array (a, len, prec);
@@ -292,10 +302,12 @@ streamer_read_wide_int (class lto_input_block *ib)
 widest_int
 streamer_read_widest_int (class lto_input_block *ib)
 {
-  HOST_WIDE_INT a[WIDE_INT_MAX_ELTS];
+  HOST_WIDE_INT abuf[WIDE_INT_MAX_INL_ELTS], *a = abuf;
   int i;
   int prec ATTRIBUTE_UNUSED = streamer_read_uhwi (ib);
   int len = streamer_read_uhwi (ib);
+  if (UNLIKELY (len > WIDE_INT_MAX_INL_ELTS))
+    a = XALLOCAVEC (HOST_WIDE_INT, len);
   for (i = 0; i < len; i++)
     a[i] = streamer_read_hwi (ib);
   return widest_int::from_array (a, len);

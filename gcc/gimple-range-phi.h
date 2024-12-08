@@ -1,5 +1,5 @@
 /* Header file for gimple range phi analysis.
-   Copyright (C) 2023 Free Software Foundation, Inc.
+   Copyright (C) 2023-2024 Free Software Foundation, Inc.
    Contributed by Andrew MacLeod <amacleod@redhat.com>.
 
 This file is part of GCC.
@@ -43,7 +43,7 @@ along with GCC; see the file COPYING3.  If not see
 // PHI cycle members qa_9, qa_10
 // Initial value : 0
 // modifier stmt: qa_20 = qa_10 + 1;
-// 
+//
 // Based on just this analysis, We can project that qa_9 and qa_10 will have
 // a range of [0, +INF].
 
@@ -87,6 +87,7 @@ protected:
 
   bitmap m_simple;       // Processed, not part of a group.
   bitmap m_current;	 // Potential group currently being analyzed.
+  vec<phi_group *> m_phi_groups;
   vec<phi_group *> m_tab;
   bitmap_obstack m_bitmaps;
 };

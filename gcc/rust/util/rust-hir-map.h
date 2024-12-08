@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2024 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -19,7 +19,7 @@
 #ifndef RUST_HIR_MAP_H
 #define RUST_HIR_MAP_H
 
-#include "rust-optional.h"
+#include "optional.h"
 #include "rust-system.h"
 #include "rust-location.h"
 #include "rust-mapping-common.h"
@@ -28,6 +28,9 @@
 #include "rust-hir-full-decls.h"
 #include "rust-lang-item.h"
 #include "rust-privacy-common.h"
+#include "libproc_macro_internal/proc_macro.h"
+#include "rust-proc-macro.h"
+#include "optional.h"
 
 namespace Rust {
 namespace Analysis {
@@ -114,6 +117,9 @@ public:
   void insert_hir_item (HIR::Item *item);
   HIR::Item *lookup_hir_item (HirId id);
 
+  void insert_hir_enumitem (HIR::Enum *parent, HIR::EnumItem *item);
+  std::pair<HIR::Enum *, HIR::EnumItem *> lookup_hir_enumitem (HirId id);
+
   void insert_hir_trait_item (HIR::TraitItem *item);
   HIR::TraitItem *lookup_hir_trait_item (HirId id);
 
@@ -167,8 +173,8 @@ public:
   bool lookup_node_to_hir (NodeId id, HirId *ref);
   bool lookup_hir_to_node (HirId id, NodeId *ref);
 
-  void insert_location (HirId id, Location locus);
-  Location lookup_location (HirId id);
+  void insert_location (HirId id, location_t locus);
+  location_t lookup_location (HirId id);
 
   bool resolve_nodeid_to_stmt (NodeId id, HIR::Stmt **stmt);
 
@@ -249,7 +255,7 @@ public:
     return true;
   }
 
-  void insert_lang_item (RustLangItem::ItemType item_type, DefId id)
+  void insert_lang_item (LangItem::Kind item_type, DefId id)
   {
     auto it = lang_item_mappings.find (item_type);
     rust_assert (it == lang_item_mappings.end ());
@@ -257,7 +263,7 @@ public:
     lang_item_mappings[item_type] = id;
   }
 
-  bool lookup_lang_item (RustLangItem::ItemType item_type, DefId *id)
+  bool lookup_lang_item (LangItem::Kind item_type, DefId *id)
   {
     auto it = lang_item_mappings.find (item_type);
     if (it == lang_item_mappings.end ())
@@ -266,6 +272,9 @@ public:
     *id = it->second;
     return true;
   }
+
+  // This will fatal_error when this lang item does not exist
+  DefId get_lang_item (LangItem::Kind item_type, location_t locus);
 
   void insert_macro_def (AST::MacroRulesDefinition *macro);
 
@@ -276,27 +285,72 @@ public:
   bool lookup_macro_invocation (AST::MacroInvocation &invoc,
 				AST::MacroRulesDefinition **def);
 
+  void insert_exported_macro (AST::MacroRulesDefinition &def);
+  std::vector<NodeId> &get_exported_macros ();
+
+  void insert_derive_proc_macros (CrateNum num,
+				  std::vector<CustomDeriveProcMacro> macros);
+  void insert_bang_proc_macros (CrateNum num,
+				std::vector<BangProcMacro> macros);
+  void insert_attribute_proc_macros (CrateNum num,
+				     std::vector<AttributeProcMacro> macros);
+
+  tl::optional<std::vector<CustomDeriveProcMacro> &>
+  lookup_derive_proc_macros (CrateNum num);
+  tl::optional<std::vector<BangProcMacro> &>
+  lookup_bang_proc_macros (CrateNum num);
+  tl::optional<std::vector<AttributeProcMacro> &>
+  lookup_attribute_proc_macros (CrateNum num);
+
+  void insert_derive_proc_macro_def (CustomDeriveProcMacro macro);
+  void insert_bang_proc_macro_def (BangProcMacro macro);
+  void insert_attribute_proc_macro_def (AttributeProcMacro macro);
+
+  tl::optional<CustomDeriveProcMacro &>
+  lookup_derive_proc_macro_def (NodeId id);
+  tl::optional<BangProcMacro &> lookup_bang_proc_macro_def (NodeId id);
+  tl::optional<AttributeProcMacro &>
+  lookup_attribute_proc_macro_def (NodeId id);
+
+  tl::optional<CustomDeriveProcMacro &>
+  lookup_derive_proc_macro_invocation (AST::SimplePath &invoc);
+  tl::optional<BangProcMacro &>
+  lookup_bang_proc_macro_invocation (AST::MacroInvocation &invoc_id);
+  tl::optional<AttributeProcMacro &>
+  lookup_attribute_proc_macro_invocation (AST::SimplePath &invoc);
+  void insert_derive_proc_macro_invocation (AST::SimplePath &invoc,
+					    CustomDeriveProcMacro def);
+  void insert_bang_proc_macro_invocation (AST::MacroInvocation &invoc,
+					  BangProcMacro def);
+  void insert_attribute_proc_macro_invocation (AST::SimplePath &invoc,
+					       AttributeProcMacro def);
+
   void insert_visibility (NodeId id, Privacy::ModuleVisibility visibility);
   bool lookup_visibility (NodeId id, Privacy::ModuleVisibility &def);
 
+  void insert_ast_module (AST::Module *);
+  tl::optional<AST::Module *> lookup_ast_module (NodeId id);
   void insert_module_child (NodeId module, NodeId child);
-  Optional<std::vector<NodeId> &> lookup_module_children (NodeId module);
+  tl::optional<std::vector<NodeId> &> lookup_module_children (NodeId module);
 
   void insert_module_child_item (NodeId module, Resolver::CanonicalPath item);
-  Optional<std::vector<Resolver::CanonicalPath> &>
+  tl::optional<std::vector<Resolver::CanonicalPath> &>
   lookup_module_chidren_items (NodeId module);
-  Optional<Resolver::CanonicalPath &>
+  tl::optional<Resolver::CanonicalPath &>
   lookup_module_child (NodeId module, const std::string &item_name);
 
   void insert_child_item_to_parent_module_mapping (NodeId child_item,
 						   NodeId parent_module);
-  Optional<NodeId> lookup_parent_module (NodeId child_item);
+  tl::optional<NodeId> lookup_parent_module (NodeId child_item);
   bool node_is_module (NodeId query);
 
   void insert_ast_item (AST::Item *item);
   bool lookup_ast_item (NodeId id, AST::Item **result);
 
   HIR::ImplBlock *lookup_builtin_marker ();
+
+  HIR::TraitItem *lookup_trait_item_lang_item (LangItem::Kind item,
+					       location_t locus);
 
 private:
   Mappings ();
@@ -317,6 +371,7 @@ private:
 
   std::map<HirId, HIR::Module *> hirModuleMappings;
   std::map<HirId, HIR::Item *> hirItemMappings;
+  std::map<HirId, std::pair<HIR::Enum *, HIR::EnumItem *>> hirEnumItemMappings;
   std::map<HirId, HIR::Type *> hirTypeMappings;
   std::map<HirId, HIR::Expr *> hirExprMappings;
   std::map<HirId, HIR::Stmt *> hirStmtMappings;
@@ -334,18 +389,33 @@ private:
   std::map<HirId, HIR::GenericParam *> hirGenericParamMappings;
   std::map<HirId, HIR::Trait *> hirTraitItemsToTraitMappings;
   std::map<HirId, HIR::Pattern *> hirPatternMappings;
-  std::map<RustLangItem::ItemType, DefId> lang_item_mappings;
+  std::map<LangItem::Kind, DefId> lang_item_mappings;
   std::map<NodeId, const Resolver::CanonicalPath> paths;
-  std::map<NodeId, Location> locations;
+  std::map<NodeId, location_t> locations;
   std::map<NodeId, HirId> nodeIdToHirMappings;
   std::map<HirId, NodeId> hirIdToNodeMappings;
 
   // all hirid nodes
   std::map<CrateNum, std::set<HirId>> hirNodesWithinCrate;
 
-  // macros
+  // MBE macros
   std::map<NodeId, AST::MacroRulesDefinition *> macroMappings;
   std::map<NodeId, AST::MacroRulesDefinition *> macroInvocations;
+  std::vector<NodeId> exportedMacros;
+
+  // Procedural macros
+  std::map<CrateNum, std::vector<CustomDeriveProcMacro>>
+    procmacrosDeriveMappings;
+  std::map<CrateNum, std::vector<BangProcMacro>> procmacrosBangMappings;
+  std::map<CrateNum, std::vector<AttributeProcMacro>>
+    procmacrosAttributeMappings;
+
+  std::map<NodeId, CustomDeriveProcMacro> procmacroDeriveMappings;
+  std::map<NodeId, BangProcMacro> procmacroBangMappings;
+  std::map<NodeId, AttributeProcMacro> procmacroAttributeMappings;
+  std::map<NodeId, CustomDeriveProcMacro> procmacroDeriveInvocations;
+  std::map<NodeId, BangProcMacro> procmacroBangInvocations;
+  std::map<NodeId, AttributeProcMacro> procmacroAttributeInvocations;
 
   // crate names
   std::map<CrateNum, std::string> crate_names;
@@ -359,6 +429,7 @@ private:
   std::map<NodeId, std::vector<NodeId>> module_child_map;
   std::map<NodeId, std::vector<Resolver::CanonicalPath>> module_child_items;
   std::map<NodeId, NodeId> child_to_parent_module_map;
+  std::map<NodeId, AST::Module *> modules;
 
   // AST mappings
   std::map<NodeId, AST::Item *> ast_item_mappings;

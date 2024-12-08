@@ -1,5 +1,5 @@
 /* LRA (local register allocator) driver and LRA utilities.
-   Copyright (C) 2010-2023 Free Software Foundation, Inc.
+   Copyright (C) 2010-2024 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
 This file is part of GCC.
@@ -69,9 +69,9 @@ along with GCC; see the file COPYING3.	If not see
          | Spilled pseudo |      -------------------
          |    to memory   |<----| Rematerialization |
          |  substitution  |      -------------------
-          ----------------        
+          ----------------
                   | No susbtitions
-                  V                
+                  V
       -------------------------
      | Hard regs substitution, |
      |  devirtalization, and   |------> Finish
@@ -463,7 +463,7 @@ lra_emit_add (rtx x, rtx y, rtx z)
 	      if (! ok_p)
 		{
 		  rtx_insn *insn;
-		  
+
 		  delete_insns_since (last);
 		  /* Generate x = disp; x = x + base; x = x + index_scale.  */
 		  emit_move_insn (x, disp);
@@ -498,7 +498,7 @@ lra_emit_move (rtx x, rtx y)
 {
   int old;
   rtx_insn *insn;
-  
+
   if (GET_CODE (y) != PLUS)
     {
       if (rtx_equal_p (x, y))
@@ -581,9 +581,8 @@ new_insn_reg (rtx_insn *insn, int regno, enum op_type type,
   lra_insn_reg *ir = lra_insn_reg_pool.allocate ();
   ir->type = type;
   ir->biggest_mode = mode;
-  if (NONDEBUG_INSN_P (insn)
-      && partial_subreg_p (lra_reg_info[regno].biggest_mode, mode))
-    lra_reg_info[regno].biggest_mode = mode;
+  if (NONDEBUG_INSN_P (insn))
+    lra_update_biggest_mode (regno, mode);
   ir->subreg_p = subreg_p;
   ir->early_clobber_alts = early_clobber_alts;
   ir->regno = regno;
@@ -769,7 +768,9 @@ check_and_expand_insn_recog_data (int index)
   if (lra_insn_recog_data_len > index)
     return;
   old = lra_insn_recog_data_len;
-  lra_insn_recog_data_len = index * 3 / 2 + 1;
+  lra_insn_recog_data_len = index * 3U / 2;
+  if (lra_insn_recog_data_len <= index)
+    lra_insn_recog_data_len = index + 1;
   lra_insn_recog_data = XRESIZEVEC (lra_insn_recog_data_t,
 				    lra_insn_recog_data,
 				    lra_insn_recog_data_len);
@@ -1649,7 +1650,7 @@ lra_update_insn_regno_info (rtx_insn *insn)
   struct lra_static_insn_data *static_data;
   enum rtx_code code;
   rtx link;
-  
+
   if (! INSN_P (insn))
     return;
   data = lra_get_insn_recog_data (insn);
@@ -1746,6 +1747,10 @@ lra_rtx_hash (rtx x)
 	case 'n':
 	case 'i':
 	  val += XINT (x, i);
+	  break;
+
+	case 'L':
+	  val += XLOC (x, i);
 	  break;
 
 	case 'V':
@@ -1862,14 +1867,17 @@ push_insns (rtx_insn *from, rtx_insn *to)
 }
 
 /* Set up and return sp offset for insns in range [FROM, LAST].  The offset is
-   taken from the next BB insn after LAST or zero if there in such
-   insn.  */
+   taken from the BB insn before FROM after simulating its effects,
+   or zero if there is no such insn.  */
 static poly_int64
 setup_sp_offset (rtx_insn *from, rtx_insn *last)
 {
-  rtx_insn *before = next_nonnote_nondebug_insn_bb (last);
-  poly_int64 offset = (before == NULL_RTX || ! INSN_P (before)
-		       ? 0 : lra_get_insn_recog_data (before)->sp_offset);
+  rtx_insn *before = prev_nonnote_nondebug_insn_bb (from);
+  poly_int64 offset = 0;
+
+  if (before && INSN_P (before))
+    offset = lra_update_sp_offset (PATTERN (before),
+				   lra_get_insn_recog_data (before)->sp_offset);
 
   for (rtx_insn *insn = from; insn != NEXT_INSN (last); insn = NEXT_INSN (insn))
     {
@@ -1877,6 +1885,24 @@ setup_sp_offset (rtx_insn *from, rtx_insn *last)
       offset = lra_update_sp_offset (PATTERN (insn), offset);
     }
   return offset;
+}
+
+/* Dump all func insns in a slim form.  */
+void
+lra_dump_insns (FILE *f)
+{
+  dump_rtl_slim (f, get_insns (), NULL, -1, 0);
+}
+
+/* Dump all func insns in a slim form with TITLE when the dump file is open and
+   lra_verbose >=7.  */
+void
+lra_dump_insns_if_possible (const char *title)
+{
+  if (lra_dump_file == NULL || lra_verbose < 7)
+    return;
+  fprintf (lra_dump_file, "%s:", title);
+  lra_dump_insns (lra_dump_file);
 }
 
 /* Emit insns BEFORE before INSN and insns AFTER after INSN.  Put the
@@ -1929,7 +1955,7 @@ lra_process_new_insns (rtx_insn *insn, rtx_insn *before, rtx_insn *after,
       if (! JUMP_P (insn))
 	{
 	  rtx_insn *last;
-	  
+
 	  if (lra_dump_file != NULL)
 	    {
 	      fprintf (lra_dump_file, "    %s after:\n", title);
@@ -1948,7 +1974,7 @@ lra_process_new_insns (rtx_insn *insn, rtx_insn *before, rtx_insn *after,
 	  /* Put output reload insns on successor BBs: */
 	  edge_iterator ei;
 	  edge e;
-	  
+
 	  FOR_EACH_EDGE (e, ei, BLOCK_FOR_INSN (insn)->succs)
 	    if (e->dest != EXIT_BLOCK_PTR_FOR_FN (cfun))
 	      {
@@ -2030,7 +2056,7 @@ lra_substitute_pseudo (rtx *loc, int old_regno, rtx new_reg, bool subreg_p,
 	  *loc = subst;
 	  return true;
 	}
-      
+
     }
   else if (code == REG && (int) REGNO (x) == old_regno)
     {
@@ -2297,6 +2323,9 @@ bitmap_head lra_subreg_reload_pseudos;
 /* File used for output of LRA debug information.  */
 FILE *lra_dump_file;
 
+/* How verbose should be the debug information. */
+int lra_verbose;
+
 /* True if we split hard reg after the last constraint sub-pass.  */
 bool lra_hard_reg_split_p;
 
@@ -2332,17 +2361,18 @@ setup_reg_spill_flag (void)
 bool lra_simple_p;
 
 /* Major LRA entry function.  F is a file should be used to dump LRA
-   debug info.  */
+   debug info with given verbosity.  */
 void
-lra (FILE *f)
+lra (FILE *f, int verbose)
 {
   int i;
   bool live_p, inserted_p;
 
   lra_dump_file = f;
+  lra_verbose = verbose;
   lra_asm_error_p = false;
   lra_pmode_pseudo = gen_reg_rtx (Pmode);
-  
+
   timevar_push (TV_LRA);
 
   /* Make sure that the last insn is a note.  Some subsequent passes
@@ -2468,7 +2498,7 @@ lra (FILE *f)
 	      else
 		{
 		  bool spill_p = !lra_assign (fails_p);
-		  
+
 		  if (lra_undo_inheritance ())
 		    live_p = false;
 		  if (spill_p && ! fails_p)
@@ -2526,7 +2556,7 @@ lra (FILE *f)
       if (lra_remat ())
 	{
 	  /* We need full live info -- see the comment above.  */
-	  lra_create_live_ranges (lra_reg_spill_p, true);
+	  lra_create_live_ranges (true, true);
 	  live_p = true;
 	  if (! lra_need_for_spills_p ())
 	    {

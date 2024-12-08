@@ -1,4 +1,4 @@
-/* Copyright (C) 2008-2023 Free Software Foundation, Inc.
+/* Copyright (C) 2008-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -1057,7 +1057,7 @@ cb_used_define (cpp_reader *pfile, location_t line ATTRIBUTE_UNUSED,
 /* Return the gcc option code associated with the reason for a cpp
    message, or 0 if none.  */
 
-static int
+static diagnostic_option_id
 cb_cpp_diagnostic_cpp_option (enum cpp_warning_reason reason)
 {
   const struct cpp_reason_option_codes_t *entry;
@@ -1084,13 +1084,13 @@ cb_cpp_diagnostic (cpp_reader *pfile ATTRIBUTE_UNUSED,
 {
   diagnostic_info diagnostic;
   diagnostic_t dlevel;
-  bool save_warn_system_headers = global_dc->dc_warn_system_headers;
+  bool save_warn_system_headers = global_dc->m_warn_system_headers;
   bool ret;
 
   switch (level)
     {
     case CPP_DL_WARNING_SYSHDR:
-      global_dc->dc_warn_system_headers = 1;
+      global_dc->m_warn_system_headers = 1;
       /* Fall through.  */
     case CPP_DL_WARNING:
       dlevel = DK_WARNING;
@@ -1115,11 +1115,11 @@ cb_cpp_diagnostic (cpp_reader *pfile ATTRIBUTE_UNUSED,
     }
   diagnostic_set_info_translated (&diagnostic, msg, ap,
 				  richloc, dlevel);
-  diagnostic_override_option_index (&diagnostic,
-				    cb_cpp_diagnostic_cpp_option (reason));
+  diagnostic_set_option_id (&diagnostic,
+			    cb_cpp_diagnostic_cpp_option (reason));
   ret = diagnostic_report_diagnostic (global_dc, &diagnostic);
   if (level == CPP_DL_WARNING_SYSHDR)
-    global_dc->dc_warn_system_headers = save_warn_system_headers;
+    global_dc->m_warn_system_headers = save_warn_system_headers;
   return ret;
 }
 

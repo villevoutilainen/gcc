@@ -1,4 +1,4 @@
-/* Copyright (C) 2019-2023 Free Software Foundation, Inc.
+/* Copyright (C) 2019-2024 Free Software Foundation, Inc.
 
    This file is part of LIBF7, which is part of GCC.
 
@@ -29,6 +29,7 @@
 
 #define F7_MANT_BYTES 7
 #define F7_MANT_BITS (8 * F7_MANT_BYTES)
+#define F7_SIZEOF (1 + F7_MANT_BYTES + 2)
 
 /*  Using the following GCC features:
     --  Unnamed structs / unions (GNU-C)
@@ -94,12 +95,16 @@ typedef __INT64_TYPE__ int64_t;
 typedef __INT32_TYPE__ int32_t;
 typedef __INT16_TYPE__ int16_t;
 typedef __INT8_TYPE__  int8_t;
-typedef _Bool bool;
-#define false 0
-#define true  1
 #define INT8_MIN  (-1 - __INT8_MAX__)
 #define INT16_MAX __INT16_MAX__
 #define NULL ((void*) 0)
+#if defined __STDC_VERSION__ && __STDC_VERSION__ > 201710L
+/* bool, true and false are keywords.  */
+#else
+#define bool  _Bool
+#define true  1
+#define false 0
+#endif /* C23 ? */
 #endif /* IN_LIBGCC2 */
 
 #include "asm-defs.h"
@@ -606,6 +611,7 @@ extern void f7_sin (f7_t*, const f7_t*);
 extern void f7_cos (f7_t*, const f7_t*);
 extern void f7_tan (f7_t*, const f7_t*);
 extern void f7_atan (f7_t*, const f7_t*);
+extern void f7_atan2 (f7_t*, const f7_t*, const f7_t*);
 extern void f7_asin (f7_t*, const f7_t*);
 extern void f7_acos (f7_t*, const f7_t*);
 extern void f7_tanh (f7_t*, const f7_t*);
@@ -617,7 +623,6 @@ extern void f7_exp10 (f7_t*, const f7_t*);
 extern void f7_pow10 (f7_t*, const f7_t*);
 
 // Just prototypes, not implemented yet.
-extern void f7_atan2 (f7_t*, const f7_t*, const f7_t*);
 extern long f7_lrint (const f7_t*);
 extern long f7_lround (const f7_t*);
 

@@ -1,5 +1,5 @@
 /* Definitions for describing one tree-ssa optimization pass.
-   Copyright (C) 2004-2023 Free Software Foundation, Inc.
+   Copyright (C) 2004-2024 Free Software Foundation, Inc.
    Contributed by Richard Henderson <rth@redhat.com>
 
 This file is part of GCC.
@@ -368,6 +368,7 @@ extern gimple_opt_pass *make_pass_sra (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_sra_early (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_tail_recursion (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_tail_calls (gcc::context *ctxt);
+extern gimple_opt_pass *make_pass_musttail (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_fix_loops (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_tree_loop (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_tree_no_loop (gcc::context *ctxt);
@@ -387,6 +388,7 @@ extern gimple_opt_pass *make_pass_graphite_transforms (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_if_conversion (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_if_to_switch (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_loop_distribution (gcc::context *ctxt);
+extern gimple_opt_pass *make_pass_crc_optimization (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_vectorize (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_simduid_cleanup (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_slp_vectorize (gcc::context *ctxt);
@@ -399,6 +401,7 @@ extern gimple_opt_pass *make_pass_iv_optimize (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_tree_loop_done (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_ch (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_ch_vect (gcc::context *ctxt);
+extern gimple_opt_pass *make_pass_sccopy (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_ccp (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_split_paths (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_build_ssa (gcc::context *ctxt);
@@ -450,7 +453,7 @@ extern gimple_opt_pass *make_pass_early_warn_uninitialized (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_late_warn_uninitialized (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_cse_reciprocals (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_cse_sincos (gcc::context *ctxt);
-extern gimple_opt_pass *make_pass_expand_powcabs (gcc::context *ctxt);
+extern gimple_opt_pass *make_pass_expand_pow (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_optimize_bswap (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_store_merging (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_optimize_widening_mul (gcc::context *ctxt);
@@ -469,6 +472,7 @@ extern gimple_opt_pass *make_pass_fre (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_check_data_deps (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_copy_prop (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_isolate_erroneous_paths (gcc::context *ctxt);
+extern gimple_opt_pass *make_pass_array_bounds (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_early_vrp (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_fast_vrp (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_vrp (gcc::context *ctxt);
@@ -510,8 +514,9 @@ extern gimple_opt_pass *make_pass_adjust_alignment (gcc::context *ctxt);
 
 /* IPA Passes */
 extern simple_ipa_opt_pass *make_pass_ipa_lower_emutls (gcc::context *ctxt);
-extern simple_ipa_opt_pass
-							      *make_pass_ipa_function_and_variable_visibility (gcc::context *ctxt);
+extern simple_ipa_opt_pass *make_pass_ipa_function_and_variable_visibility (gcc::context *ctxt);
+extern simple_ipa_opt_pass *make_pass_ipa_strub_mode (gcc::context *ctxt);
+extern simple_ipa_opt_pass *make_pass_ipa_strub (gcc::context *ctxt);
 extern simple_ipa_opt_pass *make_pass_ipa_tree_profile (gcc::context *ctxt);
 extern simple_ipa_opt_pass *make_pass_ipa_auto_profile (gcc::context *ctxt);
 
@@ -568,6 +573,7 @@ extern rtl_opt_pass *make_pass_rtl_dse3 (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_rtl_cprop (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_rtl_pre (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_rtl_hoist (gcc::context *ctxt);
+extern rtl_opt_pass *make_pass_rtl_avoid_store_forwarding (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_rtl_store_motion (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_cse_after_global_opts (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_rtl_ifcvt (gcc::context *ctxt);
@@ -591,6 +597,7 @@ extern rtl_opt_pass *make_pass_reginfo_init (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_inc_dec (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_stack_ptr_mod (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_initialize_regs (gcc::context *ctxt);
+extern rtl_opt_pass *make_pass_ext_dce (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_combine (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_if_after_combine (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_jump_after_combine (gcc::context *ctxt);
@@ -612,16 +619,20 @@ extern rtl_opt_pass *make_pass_branch_prob (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_value_profile_transformations (gcc::context
 							      *ctxt);
 extern rtl_opt_pass *make_pass_postreload_cse (gcc::context *ctxt);
+extern rtl_opt_pass *make_pass_late_combine (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_gcse2 (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_split_after_reload (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_thread_prologue_and_epilogue (gcc::context
 							     *ctxt);
+extern rtl_opt_pass *make_pass_late_thread_prologue_and_epilogue (gcc::context
+								  *ctxt);
 extern rtl_opt_pass *make_pass_zero_call_used_regs (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_stack_adjustments (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_sched_fusion (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_peephole2 (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_if_after_reload (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_regrename (gcc::context *ctxt);
+extern rtl_opt_pass *make_pass_fold_mem_offsets (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_cprop_hardreg (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_reorder_blocks (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_leaf_regs (gcc::context *ctxt);
@@ -656,6 +667,8 @@ extern gimple_opt_pass *make_pass_gimple_isel (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_harden_compares (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_harden_conditional_branches (gcc::context
 							       *ctxt);
+extern gimple_opt_pass *make_pass_harden_control_flow_redundancy (gcc::context
+								  *ctxt);
 
 /* Current optimization pass.  */
 extern opt_pass *current_pass;
@@ -673,7 +686,8 @@ extern void emergency_dump_function (void);
 extern void print_current_pass (FILE *);
 extern void debug_pass (void);
 extern void ipa_write_summaries (void);
-extern void ipa_write_optimization_summaries (struct lto_symtab_encoder_d *);
+extern void ipa_write_optimization_summaries (struct lto_symtab_encoder_d *,
+					      bool);
 extern void ipa_read_summaries (void);
 extern void ipa_read_optimization_summaries (void);
 extern void register_one_dump_file (opt_pass *);

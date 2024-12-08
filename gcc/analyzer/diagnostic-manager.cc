@@ -1,5 +1,5 @@
 /* Classes for saving, deduplicating, and emitting analyzer diagnostics.
-   Copyright (C) 2019-2023 Free Software Foundation, Inc.
+   Copyright (C) 2019-2024 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -19,16 +19,16 @@ along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
 #include "config.h"
-#define INCLUDE_MEMORY
+#define INCLUDE_VECTOR
 #include "system.h"
 #include "coretypes.h"
 #include "tree.h"
 #include "input.h"
+#include "diagnostic-core.h"
 #include "pretty-print.h"
 #include "gcc-rich-location.h"
 #include "gimple-pretty-print.h"
 #include "function.h"
-#include "diagnostic-core.h"
 #include "diagnostic-event-id.h"
 #include "diagnostic-path.h"
 #include "bitmap.h"
@@ -58,6 +58,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "analyzer/checker-path.h"
 #include "analyzer/reachability.h"
 #include "make-unique.h"
+#include "diagnostic-format-sarif.h"
 
 #if ENABLE_ANALYZER
 
@@ -517,7 +518,7 @@ process_worklist_item (feasible_worklist *worklist,
 
       feasibility_state succ_state (fnode->get_state ());
       std::unique_ptr<rejected_constraint> rc;
-      if (succ_state.maybe_update_for_edge (logger, succ_eedge, &rc))
+      if (succ_state.maybe_update_for_edge (logger, succ_eedge, nullptr, &rc))
 	{
 	  gcc_assert (rc == NULL);
 	  feasible_node *succ_fnode
@@ -677,12 +678,12 @@ saved_diagnostic::saved_diagnostic (const state_machine *sm,
   m_stmt (ploc.m_stmt),
   /* stmt_finder could be on-stack; we want our own copy that can
      outlive that.  */
-  m_stmt_finder (ploc.m_finder ? ploc.m_finder->clone () : NULL),
+  m_stmt_finder (ploc.m_finder ? ploc.m_finder->clone () : nullptr),
   m_loc (ploc.m_loc),
   m_var (var), m_sval (sval), m_state (state),
-  m_d (std::move (d)), m_trailing_eedge (NULL),
+  m_d (std::move (d)), m_trailing_eedge (nullptr),
   m_idx (idx),
-  m_best_epath (NULL), m_problem (NULL),
+  m_best_epath (nullptr), m_problem (nullptr),
   m_notes ()
 {
   /* We must have an enode in order to be able to look for paths
@@ -738,23 +739,23 @@ saved_diagnostic::add_event (std::unique_ptr<checker_event> event)
     "pending_diagnostic": str,
     "idx": int}.  */
 
-json::object *
+std::unique_ptr<json::object>
 saved_diagnostic::to_json () const
 {
-  json::object *sd_obj = new json::object ();
+  auto sd_obj = ::make_unique<json::object> ();
 
   if (m_sm)
-    sd_obj->set ("sm", new json::string (m_sm->get_name ()));
-  sd_obj->set ("enode", new json::integer_number (m_enode->m_index));
-  sd_obj->set ("snode", new json::integer_number (m_snode->m_index));
+    sd_obj->set_string ("sm", m_sm->get_name ());
+  sd_obj->set_integer ("enode", m_enode->m_index);
+  sd_obj->set_integer ("snode", m_snode->m_index);
   if (m_sval)
     sd_obj->set ("sval", m_sval->to_json ());
   if (m_state)
     sd_obj->set ("state", m_state->to_json ());
   if (m_best_epath)
-    sd_obj->set ("path_length", new json::integer_number (get_epath_length ()));
-  sd_obj->set ("pending_diagnostic", new json::string (m_d->get_kind ()));
-  sd_obj->set ("idx", new json::integer_number (m_idx));
+    sd_obj->set_integer ("path_length", get_epath_length ());
+  sd_obj->set_string ("pending_diagnostic", m_d->get_kind ());
+  sd_obj->set_integer ("idx", m_idx);
 
   /* We're not yet JSONifying the following fields:
      const gimple *m_stmt;
@@ -1018,6 +1019,31 @@ saved_diagnostic::emit_any_notes () const
     pn->emit ();
 }
 
+/* For SARIF output, add additional properties to the "result" object
+   for this diagnostic.
+   This extra data is intended for use when debugging the analyzer.  */
+
+void
+saved_diagnostic::maybe_add_sarif_properties (sarif_object &result_obj) const
+{
+  sarif_property_bag &props = result_obj.get_or_create_properties ();
+#define PROPERTY_PREFIX "gcc/analyzer/saved_diagnostic/"
+  if (m_sm)
+    props.set_string (PROPERTY_PREFIX "sm", m_sm->get_name ());
+  props.set_integer (PROPERTY_PREFIX "enode", m_enode->m_index);
+  props.set_integer (PROPERTY_PREFIX "snode", m_snode->m_index);
+  if (m_sval)
+    props.set (PROPERTY_PREFIX "sval", m_sval->to_json ());
+  if (m_state)
+    props.set (PROPERTY_PREFIX "state", m_state->to_json ());
+  if (m_best_epath)
+  props.set_integer (PROPERTY_PREFIX "idx", m_idx);
+#undef PROPERTY_PREFIX
+
+  /* Potentially add pending_diagnostic-specific properties.  */
+  m_d->maybe_add_sarif_properties (result_obj);
+}
+
 /* State for building a checker_path from a particular exploded_path.
    In particular, this precomputes reachability information: the set of
    source enodes for which a path be found to the diagnostic enode.  */
@@ -1189,18 +1215,18 @@ diagnostic_manager::add_event (std::unique_ptr<checker_event> event)
 /* Return a new json::object of the form
    {"diagnostics"  : [obj for saved_diagnostic]}.  */
 
-json::object *
+std::unique_ptr<json::object>
 diagnostic_manager::to_json () const
 {
-  json::object *dm_obj = new json::object ();
+  auto dm_obj = ::make_unique<json::object> ();
 
   {
-    json::array *sd_arr = new json::array ();
+    auto sd_arr = ::make_unique<json::array> ();
     int i;
     saved_diagnostic *sd;
     FOR_EACH_VEC_ELT (m_saved_diagnostics, i, sd)
       sd_arr->append (sd->to_json ());
-    dm_obj->set ("diagnostics", sd_arr);
+    dm_obj->set ("diagnostics", std::move (sd_arr));
   }
 
   return dm_obj;
@@ -1498,6 +1524,29 @@ diagnostic_manager::emit_saved_diagnostics (const exploded_graph &eg)
   best_candidates.emit_best (this, eg);
 }
 
+/* Custom subclass of diagnostic_metadata which, for SARIF output,
+   populates the property bag of the diagnostic's "result" object
+   with information from the saved_diagnostic and the
+   pending_diagnostic.  */
+
+class pending_diagnostic_metadata : public diagnostic_metadata
+{
+public:
+  pending_diagnostic_metadata (const saved_diagnostic &sd)
+  : m_sd (sd)
+  {
+  }
+
+  void
+  maybe_add_sarif_properties (sarif_object &result_obj) const override
+  {
+    m_sd.maybe_add_sarif_properties (result_obj);
+  }
+
+private:
+  const saved_diagnostic &m_sd;
+};
+
 /* Given a saved_diagnostic SD with m_best_epath through EG,
    create an checker_path of suitable events and use it to call
    SD's underlying pending_diagnostic "emit" vfunc to emit a diagnostic.  */
@@ -1510,8 +1559,6 @@ diagnostic_manager::emit_saved_diagnostic (const exploded_graph &eg,
   log ("sd[%i]: %qs at SN: %i",
        sd.get_index (), sd.m_d->get_kind (), sd.m_snode->m_index);
   log ("num dupes: %i", sd.get_num_dupes ());
-
-  pretty_printer *pp = global_dc->printer->clone ();
 
   const exploded_path *epath = sd.get_best_epath ();
   gcc_assert (epath);
@@ -1538,8 +1585,17 @@ diagnostic_manager::emit_saved_diagnostic (const exploded_graph &eg,
      We use the final enode from the epath, which might be different from
      the sd.m_enode, as the dedupe code doesn't care about enodes, just
      snodes.  */
-  sd.m_d->add_final_event (sd.m_sm, epath->get_final_enode (), sd.m_stmt,
-			   sd.m_var, sd.m_state, &emission_path);
+  {
+    const exploded_node *const enode = epath->get_final_enode ();
+    const gimple *stmt = sd.m_stmt;
+    event_loc_info loc_info (get_stmt_location (stmt, enode->get_function ()),
+			     enode->get_function ()->decl,
+			     enode->get_stack_depth ());
+    if (sd.m_stmt_finder)
+      sd.m_stmt_finder->update_event_loc_info (loc_info);
+    sd.m_d->add_final_event (sd.m_sm, enode, loc_info,
+			     sd.m_var, sd.m_state, &emission_path);
+  }
 
   /* The "final" event might not be final; if the saved_diagnostic has a
      trailing eedge stashed, add any events for it.  This is for use
@@ -1563,7 +1619,9 @@ diagnostic_manager::emit_saved_diagnostic (const exploded_graph &eg,
 
   auto_diagnostic_group d;
   auto_cfun sentinel (sd.m_snode->m_fun);
-  if (sd.m_d->emit (&rich_loc, get_logger ()))
+  pending_diagnostic_metadata m (sd);
+  diagnostic_emission_context diag_ctxt (sd, rich_loc, m, get_logger ());
+  if (sd.m_d->emit (diag_ctxt))
     {
       sd.emit_any_notes ();
 
@@ -1584,7 +1642,6 @@ diagnostic_manager::emit_saved_diagnostic (const exploded_graph &eg,
 	  free (filename);
 	}
     }
-  delete pp;
 }
 
 /* Emit a "path" of events to EMISSION_PATH describing the exploded path
@@ -1739,10 +1796,10 @@ public:
 					stmt,
 					stack_depth,
 					sm,
-					NULL,
+					nullptr,
 					src_sm_val,
 					dst_sm_val,
-					NULL,
+					nullptr,
 					dst_state,
 					src_node));
     return false;
@@ -1932,9 +1989,9 @@ struct null_assignment_sm_context : public sm_context
 					m_sm,
 					var_new_sval,
 					from, to,
-					NULL,
+					nullptr,
 					*m_new_state,
-					NULL));
+					nullptr));
   }
 
   void set_next_state (const gimple *stmt,
@@ -1958,9 +2015,9 @@ struct null_assignment_sm_context : public sm_context
 					m_sm,
 					sval,
 					from, to,
-					NULL,
+					nullptr,
 					*m_new_state,
-					NULL));
+					nullptr));
   }
 
   void warn (const supernode *, const gimple *,
@@ -1988,6 +2045,11 @@ struct null_assignment_sm_context : public sm_context
   }
 
   void set_global_state (state_machine::state_t) final override
+  {
+    /* No-op.  */
+  }
+
+  void clear_all_per_svalue_state () final override
   {
     /* No-op.  */
   }
@@ -2173,7 +2235,7 @@ diagnostic_manager::add_events_for_eedge (const path_builder &pb,
 							    &iter_point,
 							    emission_path,
 							    pb.get_ext_state ());
-			sm.on_stmt (&sm_ctxt, dst_point.get_supernode (), stmt);
+			sm.on_stmt (sm_ctxt, dst_point.get_supernode (), stmt);
 			// TODO: what about phi nodes?
 		      }
 		  }
@@ -2770,7 +2832,8 @@ diagnostic_manager::prune_interproc_events (checker_path *path) const
 	      if (get_logger ())
 		{
 		  label_text desc
-		    (path->get_checker_event (idx)->get_desc (false));
+		    (path->get_checker_event (idx)->get_desc
+		       (*global_dc->get_reference_printer ()));
 		  log ("filtering events %i-%i:"
 		       " irrelevant call/entry/return: %s",
 		       idx, idx + 2, desc.get ());
@@ -2792,7 +2855,8 @@ diagnostic_manager::prune_interproc_events (checker_path *path) const
 	      if (get_logger ())
 		{
 		  label_text desc
-		    (path->get_checker_event (idx)->get_desc (false));
+		    (path->get_checker_event (idx)->get_desc
+		     (*global_dc->get_reference_printer ()));
 		  log ("filtering events %i-%i:"
 		       " irrelevant call/return: %s",
 		       idx, idx + 1, desc.get ());
@@ -2889,7 +2953,8 @@ diagnostic_manager::prune_system_headers (checker_path *path) const
 	      {
 		if (get_logger ())
 		  {
-		    label_text desc (event->get_desc (false));
+		    label_text desc
+		      (event->get_desc (*global_dc->get_reference_printer ()));
 		    log ("filtering event %i:"
 			 "system header entry event: %s",
 			 idx, desc.get ());

@@ -1,5 +1,5 @@
 /* Xstormy16 target functions.
-   Copyright (C) 1997-2023 Free Software Foundation, Inc.
+   Copyright (C) 1997-2024 Free Software Foundation, Inc.
    Contributed by Red Hat, Inc.
 
    This file is part of GCC.
@@ -150,7 +150,7 @@ xstormy16_rtx_costs (rtx x, machine_mode mode,
         *total = COSTS_N_INSNS (speed_p ? 18 + 5 : 6);
       else if (mode == SImode)
 	*total = COSTS_N_INSNS (speed_p ? 3 * 18 + 14 : 17);
-      else 
+      else
         *total = COSTS_N_INSNS (speed_p ? 18 + 3 : 4);
       return false;
 
@@ -2377,7 +2377,7 @@ static tree xstormy16_handle_interrupt_attribute
 static tree xstormy16_handle_below100_attribute
   (tree *, tree, tree, int, bool *);
 
-static const struct attribute_spec xstormy16_attribute_table[] =
+TARGET_GNU_ATTRIBUTES (xstormy16_attribute_table,
 {
   /* name, min_len, max_len, decl_req, type_req, fn_type_req,
      affects_type_identity, handler, exclude.  */
@@ -2386,9 +2386,8 @@ static const struct attribute_spec xstormy16_attribute_table[] =
   { "BELOW100",  0, 0, false, false, false, false,
     xstormy16_handle_below100_attribute, NULL },
   { "below100",  0, 0, false, false, false, false,
-    xstormy16_handle_below100_attribute, NULL },
-  { NULL,        0, 0, false, false, false, false, NULL, NULL }
-};
+    xstormy16_handle_below100_attribute, NULL }
+});
 
 /* Handle an "interrupt" attribute;
    arguments as in struct attribute_spec.handler.  */
@@ -2915,6 +2914,9 @@ xstormy16_push_rounding (poly_int64 bytes)
 
 #undef  TARGET_HAVE_SPECULATION_SAFE_VALUE
 #define TARGET_HAVE_SPECULATION_SAFE_VALUE speculation_safe_value_not_needed
+
+#undef TARGET_DOCUMENTATION_NAME
+#define TARGET_DOCUMENTATION_NAME "Xstormy16"
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 

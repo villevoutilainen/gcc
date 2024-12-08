@@ -1,5 +1,5 @@
 /* Expands front end tree to back end RTL for GCC
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -736,7 +736,7 @@ conditional_probability (profile_probability target_prob,
    Then, a table with the target labels is emitted.
 
    The process is unaware of the CFG.  The caller has to fix up
-   the CFG itself.  This is done in cfgexpand.cc.  */     
+   the CFG itself.  This is done in cfgexpand.cc.  */
 
 static void
 emit_case_dispatch_table (tree index_expr, tree index_type,
@@ -1026,7 +1026,7 @@ expand_case (gswitch *stmt)
 
    DISPATCH_INDEX is the index expression to switch on.  It should be a
    memory or register operand.
-   
+
    DISPATCH_TABLE is a set of case labels.  The set should be sorted in
    ascending order, be contiguous, starting with value 0, and contain only
    single-valued case labels.  */

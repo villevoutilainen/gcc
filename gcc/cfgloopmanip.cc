@@ -1,5 +1,5 @@
 /* Loop manipulation code for GNU compiler.
-   Copyright (C) 2002-2023 Free Software Foundation, Inc.
+   Copyright (C) 2002-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -39,7 +39,7 @@ static void loop_redirect_edge (edge, basic_block);
 static void remove_bbs (basic_block *, int);
 static bool rpe_enum_p (const_basic_block, const void *);
 static int find_path (edge, basic_block **);
-static void fix_loop_placements (class loop *, bool *);
+static void fix_loop_placements (class loop *, bool *, bitmap);
 static bool fix_bb_placement (basic_block);
 static void fix_bb_placements (basic_block, bool *, bitmap);
 
@@ -171,7 +171,7 @@ fix_loop_placement (class loop *loop, bool *irred_invalidated)
    successors we consider edges coming out of the loops.
 
    If the changes may invalidate the information about irreducible regions,
-   IRRED_INVALIDATED is set to true.  
+   IRRED_INVALIDATED is set to true.
 
    If LOOP_CLOSED_SSA_INVLIDATED is non-zero then all basic blocks with
    changed loop_father are collected there. */
@@ -415,7 +415,8 @@ remove_path (edge e, bool *irred_invalidated,
   /* Fix placements of basic blocks inside loops and the placement of
      loops in the loop tree.  */
   fix_bb_placements (from, irred_invalidated, loop_closed_ssa_invalidated);
-  fix_loop_placements (from->loop_father, irred_invalidated);
+  fix_loop_placements (from->loop_father, irred_invalidated,
+		       loop_closed_ssa_invalidated);
 
   if (local_irred_invalidated
       && loops_state_satisfies_p (LOOPS_HAVE_MARKED_IRREDUCIBLE_REGIONS))
@@ -669,7 +670,7 @@ update_loop_exit_probability_scale_dom_bbs (class loop *loop,
 			     + old_exit_count - exit_edge->count ();
     }
   else
-    /* If there are multple blocks, just scale.  */
+    /* If there are multiple blocks, just scale.  */
     scale_dominated_blocks_in_loop (loop, exit_edge->src,
 				    exit_edge->src->count - exit_edge->count (),
 				    exit_edge->src->count - old_exit_count);
@@ -1048,7 +1049,8 @@ unloop (class loop *loop, bool *irred_invalidated,
    invalidate the information about irreducible regions.  */
 
 static void
-fix_loop_placements (class loop *loop, bool *irred_invalidated)
+fix_loop_placements (class loop *loop, bool *irred_invalidated,
+		     bitmap loop_closed_ssa_invalidated)
 {
   class loop *outer;
 
@@ -1064,7 +1066,7 @@ fix_loop_placements (class loop *loop, bool *irred_invalidated)
 	 to the loop.  So call fix_bb_placements to fix up the placement
 	 of the preheader and (possibly) of its predecessors.  */
       fix_bb_placements (loop_preheader_edge (loop)->src,
-			 irred_invalidated, NULL);
+			 irred_invalidated, loop_closed_ssa_invalidated);
       loop = outer;
     }
 }
@@ -1108,7 +1110,7 @@ duplicate_loop (class loop *loop, class loop *target, class loop *after)
   class loop *cloop;
   cloop = alloc_loop ();
   place_new_loop (cfun, cloop);
- 
+
   copy_loop_info (loop, cloop);
 
   /* Mark the new loop as copy of LOOP.  */

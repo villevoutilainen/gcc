@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---                     Copyright (C) 1999-2023, AdaCore                     --
+--                     Copyright (C) 1999-2024, AdaCore                     --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -357,16 +357,16 @@ package body System.Traceback.Symbolic is
       --  fail opening that downstream, we'll just bail out.
 
       declare
-         Argv0 : constant System.Address
-           := Conv.To_Pointer (Gnat_Argv) (0);
+         Argv0 : constant System.Address :=
+           Conv.To_Pointer (Gnat_Argv) (0);
 
-         Resolved_Argv0 : constant System.Address
-           := locate_exec_on_path (Argv0);
+         Resolved_Argv0 : constant System.Address :=
+           locate_exec_on_path (Argv0);
 
-         Exe_Argv : constant System.Address
-           := (if Resolved_Argv0 /= System.Null_Address
-               then Resolved_Argv0
-               else Argv0);
+         Exe_Argv : constant System.Address :=
+           (if Resolved_Argv0 /= System.Null_Address
+            then Resolved_Argv0
+            else Argv0);
 
          Result : constant String := Value (Exe_Argv);
 
@@ -637,14 +637,24 @@ package body System.Traceback.Symbolic is
    -- Symbolic_Traceback --
    ------------------------
 
+   LDAD_Header : constant String := "Load address: ";
+   --  Copied from Ada.Exceptions.Exception_Data
+
    function Symbolic_Traceback
      (Traceback    : Tracebacks_Array;
       Suppress_Hex : Boolean) return String
    is
-      Res : Bounded_String (Max_Length => Max_String_Length);
+      Load_Address : constant Address := Get_Executable_Load_Address;
+      Res          : Bounded_String (Max_Length => Max_String_Length);
+
    begin
       System.Soft_Links.Lock_Task.all;
       Init_Exec_Module;
+      if Load_Address /= Null_Address then
+         Append (Res, LDAD_Header);
+         Append_Address (Res, Load_Address);
+         Append (Res, ASCII.LF);
+      end if;
       Symbolic_Traceback_No_Lock (Traceback, Suppress_Hex, Res);
       System.Soft_Links.Unlock_Task.all;
 

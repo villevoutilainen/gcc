@@ -1,6 +1,6 @@
 // Filesystem operation utilities -*- C++ -*-
 
-// Copyright (C) 2014-2023 Free Software Foundation, Inc.
+// Copyright (C) 2014-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -118,7 +118,7 @@ namespace __gnu_posix
   inline int close(int fd)
   { return ::_close(fd); }
 
-  typedef struct ::__stat64 stat_type;
+  using stat_type = struct ::__stat64;
 
   inline int stat(const wchar_t* path, stat_type* buffer)
   { return ::_wstat64(path, buffer); }
@@ -184,7 +184,7 @@ namespace __gnu_posix
   using ::open;
   using ::close;
 # ifdef _GLIBCXX_HAVE_SYS_STAT_H
-  typedef struct ::stat stat_type;
+  using stat_type = struct ::stat;
   using ::stat;
 #  ifdef _GLIBCXX_USE_LSTAT
   using ::lstat;
@@ -303,7 +303,6 @@ namespace __gnu_posix
   {
     bool skip, update, overwrite;
   };
-
 #endif // _GLIBCXX_HAVE_SYS_STAT_H
 
 } // namespace filesystem
@@ -326,6 +325,12 @@ _GLIBCXX_BEGIN_NAMESPACE_FILESYSTEM
 	   uintmax_t& capacity, uintmax_t& free, uintmax_t& available,
 	   std::error_code&);
 
+
+  // Test whether two files are the same file.
+  bool
+  equiv_files(const char_type*, const stat_type&,
+	      const char_type*, const stat_type&,
+	      error_code&);
 
   inline file_type
   make_file_type(const stat_type& st) noexcept
@@ -400,6 +405,7 @@ _GLIBCXX_BEGIN_NAMESPACE_FILESYSTEM
     return true;
   }
 #endif
+
 #if defined _GLIBCXX_USE_SENDFILE && ! defined _GLIBCXX_FILESYSTEM_IS_WINDOWS
   bool
   copy_file_sendfile(int fd_in, int fd_out, size_t length) noexcept
@@ -428,6 +434,7 @@ _GLIBCXX_BEGIN_NAMESPACE_FILESYSTEM
     return true;
   }
 #endif
+
   bool
   do_copy_file(const char_type* from, const char_type* to,
 	       std::filesystem::copy_options_existing_file options,
@@ -489,8 +496,7 @@ _GLIBCXX_BEGIN_NAMESPACE_FILESYSTEM
 	    return false;
 	  }
 
-	if (to_st->st_dev == from_st->st_dev
-	    && to_st->st_ino == from_st->st_ino)
+	if (equiv_files(from, *from_st, to, *to_st, ec))
 	  {
 	    ec = std::make_error_code(std::errc::file_exists);
 	    return false;

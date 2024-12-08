@@ -1,5 +1,5 @@
 /* Control flow graph manipulation code for GNU compiler.
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -25,7 +25,7 @@ along with GCC; see the file COPYING3.  If not see
      - CFG-aware instruction chain manipulation
 	 delete_insn, delete_insn_chain
      - Edge splitting and committing to edges
-	 insert_insn_on_edge, commit_edge_insertions
+	 insert_insn_on_edge, prepend_insn_to_edge, commit_edge_insertions
      - CFG updating after insn simplification
 	 purge_dead_edges, purge_all_dead_edges
      - CFG fixing after coarse manipulation
@@ -1512,7 +1512,6 @@ force_nonfallthru_and_redirect (edge e, basic_block target, rtx jump_label)
   edge new_edge;
   int abnormal_edge_flags = 0;
   bool asm_goto_edge = false;
-  int loc;
 
   /* In the case the last instruction is conditional jump to the next
      instruction, first redirect the jump itself and then continue
@@ -1697,7 +1696,7 @@ force_nonfallthru_and_redirect (edge e, basic_block target, rtx jump_label)
   else
     jump_block = e->src;
 
-  loc = e->goto_locus;
+  const location_t loc = e->goto_locus;
   e->flags &= ~EDGE_FALLTHRU;
   if (target == EXIT_BLOCK_PTR_FOR_FN (cfun))
     {
@@ -1966,7 +1965,8 @@ rtl_split_edge (edge edge_in)
 
 /* Queue instructions for insertion on an edge between two basic blocks.
    The new instructions and basic blocks (if any) will not appear in the
-   CFG until commit_edge_insertions is called.  */
+   CFG until commit_edge_insertions is called.  If there are already
+   queued instructions on the edge, PATTERN is appended to them.  */
 
 void
 insert_insn_on_edge (rtx pattern, edge e)
@@ -1986,6 +1986,25 @@ insert_insn_on_edge (rtx pattern, edge e)
   end_sequence ();
 }
 
+/* Like insert_insn_on_edge, but if there are already queued instructions
+   on the edge, PATTERN is prepended to them.  */
+
+void
+prepend_insn_to_edge (rtx pattern, edge e)
+{
+  /* We cannot insert instructions on an abnormal critical edge.
+     It will be easier to find the culprit if we die now.  */
+  gcc_assert (!((e->flags & EDGE_ABNORMAL) && EDGE_CRITICAL_P (e)));
+
+  start_sequence ();
+
+  emit_insn (pattern);
+  emit_insn (e->insns.r);
+
+  e->insns.r = get_insns ();
+  end_sequence ();
+}
+
 /* Update the CFG for the instructions queued on edge E.  */
 
 void
@@ -1997,6 +2016,21 @@ commit_one_edge_insertion (edge e)
   /* Pull the insns off the edge now since the edge might go away.  */
   insns = e->insns.r;
   e->insns.r = NULL;
+
+  /* Allow the sequence to contain internal jumps, such as a memcpy loop
+     or an allocation loop.  If such a sequence is emitted during RTL
+     expansion, we'll create the appropriate basic blocks later,
+     at the end of the pass.  But if such a sequence is emitted after
+     initial expansion, we'll need to find the subblocks ourselves.  */
+  bool contains_jump = false;
+  if (!currently_expanding_to_rtl)
+    for (rtx_insn *insn = insns; insn; insn = NEXT_INSN (insn))
+      if (JUMP_P (insn))
+	{
+	  rebuild_jump_labels_chain (insns);
+	  contains_jump = true;
+	  break;
+	}
 
   /* Figure out where to put these insns.  If the destination has
      one predecessor, insert there.  Except for the exit block.  */
@@ -2092,7 +2126,13 @@ commit_one_edge_insertion (edge e)
 	delete_insn (before);
     }
   else
-    gcc_assert (!JUMP_P (last));
+    /* Sequences inserted after RTL expansion are expected to be SESE,
+       with only internal branches allowed.  If the sequence jumps outside
+       itself then we do not know how to add the associated edges here.  */
+    gcc_assert (!JUMP_P (last) || currently_expanding_to_rtl);
+
+  if (contains_jump)
+    find_sub_basic_blocks (bb);
 }
 
 /* Update the CFG for all queued instructions.  */
@@ -4074,7 +4114,7 @@ fixup_reorder_chain (void)
 	  dest = e_fall->dest;
 	}
 
-      /* We got here if we need to add a new jump insn. 
+      /* We got here if we need to add a new jump insn.
 	 Note force_nonfallthru can delete E_FALL and thus we have to
 	 save E_FALL->src prior to the call to force_nonfallthru.  */
       nb = force_nonfallthru_and_redirect (e_fall, dest, ret_label);
@@ -4385,18 +4425,19 @@ duplicate_insn_chain (rtx_insn *from, rtx_insn *to,
 			  {
 			    gcc_assert
 			      (MR_DEPENDENCE_CLIQUE (op) <= cfun->last_clique);
-			    newc = ++cfun->last_clique;
+			    newc = get_new_clique (cfun);
 			  }
 			/* We cannot adjust MR_DEPENDENCE_CLIQUE in-place
 			   since MEM_EXPR is shared so make a copy and
 			   walk to the subtree again.  */
 			tree new_expr = unshare_expr (MEM_EXPR (*iter));
+			tree orig_new_expr = new_expr;
 			if (TREE_CODE (new_expr) == WITH_SIZE_EXPR)
 			  new_expr = TREE_OPERAND (new_expr, 0);
 			while (handled_component_p (new_expr))
 			  new_expr = TREE_OPERAND (new_expr, 0);
 			MR_DEPENDENCE_CLIQUE (new_expr) = newc;
-			set_mem_expr (const_cast <rtx> (*iter), new_expr);
+			set_mem_expr (const_cast <rtx> (*iter), orig_new_expr);
 		      }
 		  }
 	    }
@@ -4904,7 +4945,7 @@ cfg_layout_merge_blocks (basic_block a, basic_block b)
       else
 	{
 	  rtx_insn *last = BB_HEADER (b);
- 
+
 	  while (NEXT_INSN (last))
 	    last = NEXT_INSN (last);
 	  SET_NEXT_INSN (last) = BB_FOOTER (a);
@@ -5015,10 +5056,10 @@ rtl_split_block_before_cond_jump (basic_block bb)
       last = insn;
     }
 
-  /* Did not find everything.  */ 
+  /* Did not find everything.  */
   if (found_code && split_point)
     return split_block (bb, split_point)->dest;
-  else 
+  else
     return NULL;
 }
 
@@ -5413,7 +5454,7 @@ struct cfg_hooks cfg_layout_rtl_cfg_hooks = {
   rtl_lv_add_condition_to_bb, /* lv_add_condition_to_bb */
   NULL, /* lv_adjust_loop_header_phi*/
   rtl_extract_cond_bb_edges, /* extract_cond_bb_edges */
-  NULL, /* flush_pending_stmts */  
+  NULL, /* flush_pending_stmts */
   rtl_block_empty_p, /* block_empty_p */
   rtl_split_block_before_cond_jump, /* split_block_before_cond_jump */
   rtl_account_profile_record,

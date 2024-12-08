@@ -1,5 +1,5 @@
 /* Subroutines used for code generation on the DEC Alpha.
-   Copyright (C) 1992-2023 Free Software Foundation, Inc.
+   Copyright (C) 1992-2024 Free Software Foundation, Inc.
    Contributed by Richard Kenner (kenner@vlsi1.ultra.nyu.edu)
 
 This file is part of GCC.
@@ -3269,7 +3269,7 @@ alpha_emit_xfloating_cvt (enum rtx_code orig_code, rtx operands[])
      set (OP[1] OP[3])
    is valid.  Naturally, output operand ordering is little-endian.
    This is used by *movtf_internal and *movti_internal.  */
-  
+
 void
 alpha_split_tmode_pair (rtx operands[4], machine_mode mode,
 			bool fixup_overlap)
@@ -3820,6 +3820,12 @@ alpha_expand_block_move (rtx operands[])
           else if (a >= 16 && c % 2 == 0)
 	    src_align = 16;
 	}
+
+      if (MEM_P (orig_src) && MEM_ALIGN (orig_src) < src_align)
+	{
+	  orig_src = shallow_copy_rtx (orig_src);
+	  set_mem_align (orig_src, src_align);
+	}
     }
 
   tmp = XEXP (orig_dst, 0);
@@ -3840,6 +3846,12 @@ alpha_expand_block_move (rtx operands[])
 	    dst_align = 32;
           else if (a >= 16 && c % 2 == 0)
 	    dst_align = 16;
+	}
+
+      if (MEM_P (orig_dst) && MEM_ALIGN (orig_dst) < dst_align)
+	{
+	  orig_dst = shallow_copy_rtx (orig_dst);
+	  set_mem_align (orig_dst, dst_align);
 	}
     }
 
@@ -4398,7 +4410,7 @@ emit_insxl (machine_mode mode, rtx op1, rtx op2)
 }
 
 /* Expand an atomic fetch-and-operate pattern.  CODE is the binary operation
-   to perform.  MEM is the memory on which to operate.  VAL is the second 
+   to perform.  MEM is the memory on which to operate.  VAL is the second
    operand of the binary operator.  BEFORE and AFTER are optional locations to
    return the value of MEM either before of after the operation.  SCRATCH is
    a scratch register.  */
@@ -4582,7 +4594,7 @@ alpha_split_compare_and_swap_12 (rtx operands[])
   label2 = gen_rtx_LABEL_REF (DImode, gen_label_rtx ());
 
   emit_insn (gen_load_locked (DImode, scratch, mem));
-  
+
   width = GEN_INT (GET_MODE_BITSIZE (mode));
   mask = GEN_INT (mode == QImode ? 0xff : 0xffff);
   emit_insn (gen_extxl (dest, scratch, width, addr));
@@ -4713,7 +4725,7 @@ alpha_split_atomic_exchange_12 (rtx operands[])
   emit_label (XEXP (label, 0));
 
   emit_insn (gen_load_locked (DImode, scratch, mem));
-  
+
   width = GEN_INT (GET_MODE_BITSIZE (mode));
   mask = GEN_INT (mode == QImode ? 0xff : 0xffff);
   emit_insn (gen_extxl (dest, scratch, width, addr));
@@ -5007,7 +5019,7 @@ get_trap_mode_suffix (void)
 	  gcc_unreachable ();
 	}
       break;
-      
+
     default:
       gcc_unreachable ();
     }
@@ -5044,7 +5056,7 @@ get_round_mode_suffix (void)
 
     case ROUND_SUFFIX_C:
       return "c";
-      
+
     default:
       gcc_unreachable ();
     }
@@ -6090,7 +6102,8 @@ alpha_setup_incoming_varargs (cumulative_args_t pcum,
 {
   CUMULATIVE_ARGS cum = *get_cumulative_args (pcum);
 
-  if (!TYPE_NO_NAMED_ARGS_STDARG_P (TREE_TYPE (current_function_decl)))
+  if (!TYPE_NO_NAMED_ARGS_STDARG_P (TREE_TYPE (current_function_decl))
+      || arg.type != NULL_TREE)
     /* Skip the current argument.  */
     targetm.calls.function_arg_advance (pack_cumulative_args (&cum), arg);
 
@@ -6138,7 +6151,7 @@ alpha_setup_incoming_varargs (cumulative_args_t pcum,
       /* Detect whether integer registers or floating-point registers
 	 are needed by the detected va_arg statements.  See above for
 	 how these values are computed.  Note that the "escape" value
-	 is VA_LIST_MAX_FPR_SIZE, which is 255, which has both of 
+	 is VA_LIST_MAX_FPR_SIZE, which is 255, which has both of
 	 these bits set.  */
       gcc_assert ((VA_LIST_MAX_FPR_SIZE & 3) == 3);
 
@@ -6741,7 +6754,7 @@ alpha_fold_builtin_cmpbge (unsigned HOST_WIDE_INT opint[], long op_const)
   return NULL;
 }
 
-/* Fold the builtin for the ZAPNOT instruction.  This is essentially a 
+/* Fold the builtin for the ZAPNOT instruction.  This is essentially a
    specialized form of an AND operation.  Other byte manipulation instructions
    are defined in terms of this instruction, so this is also used as a
    subroutine for other builtins.
@@ -6808,7 +6821,7 @@ alpha_fold_builtin_extxx (tree op[], unsigned HOST_WIDE_INT opint[],
       else
 	zap_op = op;
     }
-  
+
   opint[1] = bytemask;
   return alpha_fold_builtin_zapnot (zap_op, opint, zap_const);
 }
@@ -7409,7 +7422,7 @@ alpha_vms_can_eliminate (const int from ATTRIBUTE_UNUSED, const int to)
 
 HOST_WIDE_INT
 alpha_vms_initial_elimination_offset (unsigned int from, unsigned int to)
-{ 
+{
   /* The only possible attempts we ever expect are ARG or FRAME_PTR to
      HARD_FRAME or STACK_PTR.  We need the alpha_procedure_type to decide
      on the proper computations and will need the register save area size
@@ -7420,7 +7433,7 @@ alpha_vms_initial_elimination_offset (unsigned int from, unsigned int to)
   /* PT_NULL procedures have no frame of their own and we only allow
      elimination to the stack pointer. This is the argument pointer and we
      resolve the soft frame pointer to that as well.  */
-     
+
   if (alpha_procedure_type == PT_NULL)
     return 0;
 
@@ -7435,13 +7448,13 @@ alpha_vms_initial_elimination_offset (unsigned int from, unsigned int to)
                                    ^         ^              ^               ^
 			      ARG_PTR FRAME_PTR HARD_FRAME_PTR       STACK_PTR
 
-			      
+
      PT_REGISTER procedures are similar in that they may have a frame of their
      own. They have no regs-sa/pv/outgoing-args area.
 
      We first compute offset to HARD_FRAME_PTR, then add what we need to get
      to STACK_PTR if need be.  */
-  
+
   {
     HOST_WIDE_INT offset;
     HOST_WIDE_INT pv_save_size = alpha_procedure_type == PT_STACK ? 8 : 0;
@@ -7460,10 +7473,10 @@ alpha_vms_initial_elimination_offset (unsigned int from, unsigned int to)
       default:
 	gcc_unreachable ();
       }
-    
+
     if (to == STACK_POINTER_REGNUM)
       offset += ALPHA_ROUND (crtl->outgoing_args_size);
-    
+
     return offset;
   }
 }
@@ -7482,14 +7495,13 @@ common_object_handler (tree *node, tree name ATTRIBUTE_UNUSED,
   return NULL_TREE;
 }
 
-static const struct attribute_spec vms_attribute_table[] =
+TARGET_GNU_ATTRIBUTES (vms_attribute_table,
 {
   /* { name, min_len, max_len, decl_req, type_req, fn_type_req,
        affects_type_identity, handler, exclude } */
   { COMMON_OBJECT,   0, 1, true,  false, false, false, common_object_handler,
-    NULL },
-  { NULL,            0, 0, false, false, false, false, NULL, NULL }
-};
+    NULL }
+});
 
 void
 vms_output_aligned_decl_common(FILE *file, tree decl, const char *name,
@@ -7987,8 +7999,7 @@ int num_source_filenames = 0;
 /* Output the textual info surrounding the prologue.  */
 
 void
-alpha_start_function (FILE *file, const char *fnname,
-		      tree decl ATTRIBUTE_UNUSED)
+alpha_start_function (FILE *file, const char *fnname, tree decl)
 {
   unsigned long imask, fmask;
   /* Complete stack size needed.  */
@@ -8053,7 +8064,7 @@ alpha_start_function (FILE *file, const char *fnname,
   if (TARGET_ABI_OPEN_VMS)
     strcat (entry_label, "..en");
 
-  ASM_OUTPUT_LABEL (file, entry_label);
+  ASM_OUTPUT_FUNCTION_LABEL (file, entry_label, decl);
   inside_function = TRUE;
 
   if (TARGET_ABI_OPEN_VMS)
@@ -8631,6 +8642,7 @@ summarize_insn (rtx x, struct shadow_summary *sum, int set)
 	    break;
 
 	  case 'i':
+	  case 'L':
 	    break;
 
 	  default:
@@ -8817,7 +8829,7 @@ alpha_handle_trap_shadows (void)
    suitably aligned.  This is very processor-specific.  */
 /* There are a number of entries in alphaev4_insn_pipe and alphaev5_insn_pipe
    that are marked "fake".  These instructions do not exist on that target,
-   but it is possible to see these insns with deranged combinations of 
+   but it is possible to see these insns with deranged combinations of
    command-line options, such as "-mtune=ev4 -mmax".  Instead of aborting,
    choose a result at random.  */
 
@@ -9454,7 +9466,7 @@ And in the noreturn case:
      after the insn.  In case trap is the last insn in the function,
      emit NOP to guarantee that PC remains inside function boundaries.
      This workaround is needed to get reliable backtraces.  */
-  
+
   rtx_insn *insn = prev_active_insn (get_last_insn ());
 
   if (insn && NONJUMP_INSN_P (insn))
@@ -9714,7 +9726,7 @@ alpha_write_linkage (FILE *stream, const char *funname)
    the section; 0 if the default should be used.  */
 
 static void
-vms_asm_named_section (const char *name, unsigned int flags, 
+vms_asm_named_section (const char *name, unsigned int flags,
 		       tree decl ATTRIBUTE_UNUSED)
 {
   fputc ('\n', asm_out_file);
@@ -9917,7 +9929,19 @@ alpha_can_change_mode_class (machine_mode from, machine_mode to,
   return (GET_MODE_SIZE (from) == GET_MODE_SIZE (to)
 	  || !reg_classes_intersect_p (FLOAT_REGS, rclass));
 }
-
+
+/* Implement TARGET_C_MODE_FOR_FLOATING_TYPE.  Return TFmode or DFmode
+   for TI_LONG_DOUBLE_TYPE which is for long double type, go with the
+   default one for the others.  */
+
+static machine_mode
+alpha_c_mode_for_floating_type (enum tree_index ti)
+{
+  if (ti == TI_LONG_DOUBLE_TYPE)
+    return TARGET_LONG_DOUBLE_128 ? TFmode : DFmode;
+  return default_mode_for_floating_type (ti);
+}
+
 /* Initialize the GCC target structure.  */
 #if TARGET_ABI_OPEN_VMS
 # undef TARGET_ATTRIBUTE_TABLE
@@ -10123,6 +10147,9 @@ alpha_can_change_mode_class (machine_mode from, machine_mode to,
 
 #undef TARGET_CAN_CHANGE_MODE_CLASS
 #define TARGET_CAN_CHANGE_MODE_CLASS alpha_can_change_mode_class
+
+#undef TARGET_C_MODE_FOR_FLOATING_TYPE
+#define TARGET_C_MODE_FOR_FLOATING_TYPE alpha_c_mode_for_floating_type
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 

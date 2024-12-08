@@ -1,6 +1,6 @@
 (* M2SymInit.mod records initialization state for variables.
 
-Copyright (C) 2001-2023 Free Software Foundation, Inc.
+Copyright (C) 2001-2024 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -39,7 +39,8 @@ FROM M2Error IMPORT InternalError ;
 FROM M2BasicBlock IMPORT BasicBlock,
                          InitBasicBlocks, InitBasicBlocksFromRange,
 			 KillBasicBlocks, FreeBasicBlocks,
-                         ForeachBasicBlockDo ;
+                         ForeachBasicBlockDo,
+                         GetBasicBlockStart, GetBasicBlockEnd ;
 
 IMPORT Indexing ;
 FROM Indexing IMPORT Index ;
@@ -49,19 +50,20 @@ FROM Lists IMPORT List, InitList, GetItemFromList, PutItemIntoList,
                   RemoveItemFromList, ForeachItemInListDo, KillList, DuplicateList ;
 
 FROM SymbolTable IMPORT NulSym, ModeOfAddr, IsVar, IsRecord, GetSType,
+                        ProcedureKind, GetNthParam, NoOfParam,
                         GetNth, IsRecordField, IsSet, IsArray, IsProcedure,
                         GetVarScope, IsVarAParam, IsComponent, GetMode,
                         VarCheckReadInit, VarInitState, PutVarInitialized,
                         PutVarFieldInitialized, GetVarFieldInitialized,
-                        IsConst, IsConstString, NoOfParam, IsVarParam,
+                        IsConst, IsConstString, NoOfParamAny, IsVarParamAny,
                         ForeachLocalSymDo, ForeachParamSymDo,
                         IsTemporary, ModeOfAddr,
                         IsReallyPointer, IsUnbounded,
                         IsVarient, IsFieldVarient, GetVarient,
                         IsVarArrayRef, GetSymName,
-                        IsType, IsPointer,
+                        IsType, IsPointer, IsTuple,
                         GetParameterShadowVar, IsParameter, GetLType,
-                        GetParameterHeapVar ;
+                        GetParameterHeapVar, GetVarDeclTok ;
 
 FROM M2Quads IMPORT QuadOperator, GetQuadOtok, GetQuad, GetNextQuad,
                     IsNewLocalVar, IsReturn, IsKillLocalVar, IsConditional,
@@ -571,10 +573,11 @@ VAR
    op                          : QuadOperator ;
    op1, op2, op3               : CARDINAL ;
    op1tok, op2tok, op3tok, qtok: CARDINAL ;
-   overflowChecking            : BOOLEAN ;
+   constExpr, overflowChecking : BOOLEAN ;
    s                           : String ;
 BEGIN
-   GetQuadOtok (quad, qtok, op, op1, op2, op3, overflowChecking,
+   GetQuadOtok (quad, qtok, op, op1, op2, op3,
+                overflowChecking, constExpr,
                 op1tok, op2tok, op3tok) ;
    IF IsUniqueWarning (qtok)
    THEN
@@ -1163,6 +1166,21 @@ END CheckRecordField ;
 
 
 (*
+   CheckLastForIterator -
+*)
+
+PROCEDURE CheckLastForIterator (op1tok: CARDINAL; op1: CARDINAL;
+                                op2tok: CARDINAL; op2: CARDINAL;
+                                warning: BOOLEAN; i: CARDINAL) ;
+BEGIN
+   SetVarInitialized (op1, FALSE, op1tok) ;
+   Assert (IsTuple (op2)) ;
+   CheckDeferredRecordAccess (op2tok, GetNth (op2, 1), FALSE, warning, i) ;
+   CheckDeferredRecordAccess (op2tok, GetNth (op2, 2), FALSE, warning, i) ;
+END CheckLastForIterator ;
+
+
+(*
    CheckBecomes -
 *)
 
@@ -1244,12 +1262,12 @@ END stop ;
 *)
 
 PROCEDURE CheckReadBeforeInitQuad (procSym: CARDINAL; quad: CARDINAL;
-                                   warning: BOOLEAN; lst: List; i: CARDINAL) : BOOLEAN ;
+                                   warning: BOOLEAN; i: CARDINAL) : BOOLEAN ;
 VAR
    op                          : QuadOperator ;
    op1, op2, op3               : CARDINAL ;
    op1tok, op2tok, op3tok, qtok: CARDINAL ;
-   overflowChecking            : BOOLEAN ;
+   constExpr, overflowChecking : BOOLEAN ;
 BEGIN
    IF quad = 3140
    THEN
@@ -1262,7 +1280,8 @@ BEGIN
       ForeachLocalSymDo (procSym, PrintSym) ;
       printf0 ("***********************************\n")
    END ;
-   GetQuadOtok (quad, qtok, op, op1, op2, op3, overflowChecking,
+   GetQuadOtok (quad, qtok, op, op1, op2, op3,
+                overflowChecking, constExpr,
                 op1tok, op2tok, op3tok) ;
    op1tok := DefaultTokPos (op1tok, qtok) ;
    op2tok := DefaultTokPos (op2tok, qtok) ;
@@ -1278,6 +1297,9 @@ BEGIN
    IfLessEquOp,
    IfGreOp,
    IfGreEquOp        : CheckComparison (op1tok, op1, op2tok, op2, warning, i) |
+   LastForIteratorOp : CheckLastForIterator (op1tok, op1, op2tok, op2,
+                                             warning, i) ;
+                       Assert (IsConst (op3)) |
    TryOp,
    ReturnOp,
    CallOp,
@@ -1300,11 +1322,11 @@ BEGIN
    SizeOp            : SetVarInitialized (op1, FALSE, op1tok) |
    AddrOp            : CheckAddr (op1tok, op1, op3tok, op3) |
    ReturnValueOp     : SetVarInitialized (op1, FALSE, op1tok) |
-   NewLocalVarOp     : |
+   NewLocalVarOp     : SetParameterVariablesInitialized (op3) |
    ParamOp           : CheckDeferredRecordAccess (op2tok, op2, FALSE, warning, i) ;
                        CheckDeferredRecordAccess (op3tok, op3, FALSE, warning, i) ;
-                       IF (op1 > 0) AND (op1 <= NoOfParam (op2)) AND
-                          IsVarParam (op2, op1)
+                       IF (op1 > 0) AND (op1 <= NoOfParamAny (op2)) AND
+                          IsVarParamAny (op2, op1)
                        THEN
                           SetVarInitialized (op3, TRUE, op3tok)
                        END |
@@ -1342,6 +1364,9 @@ BEGIN
    ElementSizeOp,
    BuiltinConstOp,  (* Nothing to do, it is assigning a constant to op1 (also a const).  *)
    BuiltinTypeInfoOp,  (* Likewise assigning op1 (const) with a type.  *)
+   StringConvertCnulOp,
+   StringConvertM2nulOp,
+   StringLengthOp,
    ProcedureScopeOp,
    InitEndOp,
    InitStartOp,
@@ -1377,12 +1402,24 @@ END CheckReadBeforeInitQuad ;
 
 
 (*
+   SetParameterVariablesInitialized - sets all shadow variables for parameters as
+                                      initialized.
+*)
+
+PROCEDURE SetParameterVariablesInitialized (procSym: CARDINAL) ;
+BEGIN
+   ForeachLocalSymDo (procSym, SetVarUninitialized) ;
+   ForeachParamSymDo (procSym, SetVarLRInitialized) ;
+END SetParameterVariablesInitialized ;
+
+
+(*
    FilterCheckReadBeforeInitQuad -
 *)
 
 PROCEDURE FilterCheckReadBeforeInitQuad (procSym: CARDINAL; start: CARDINAL;
                                          warning: BOOLEAN;
-                                         lst: List; i: CARDINAL) : BOOLEAN ;
+                                         i: CARDINAL) : BOOLEAN ;
 VAR
    Op           : QuadOperator ;
    Op1, Op2, Op3: CARDINAL ;
@@ -1390,7 +1427,7 @@ BEGIN
    GetQuad (start, Op, Op1, Op2, Op3) ;
    IF (Op # RangeCheckOp) AND (Op # StatementNoteOp)
    THEN
-      RETURN CheckReadBeforeInitQuad (procSym, start, warning, lst, i)
+      RETURN CheckReadBeforeInitQuad (procSym, start, warning, i)
    END ;
    RETURN FALSE
 END FilterCheckReadBeforeInitQuad ;
@@ -1403,10 +1440,10 @@ END FilterCheckReadBeforeInitQuad ;
 PROCEDURE CheckReadBeforeInitFirstBasicBlock (procSym: CARDINAL;
                                               start, end: CARDINAL;
                                               warning: BOOLEAN;
-                                              lst: List; i: CARDINAL) ;
+                                              i: CARDINAL) ;
 BEGIN
    LOOP
-      IF FilterCheckReadBeforeInitQuad (procSym, start, warning, lst, i)
+      IF FilterCheckReadBeforeInitQuad (procSym, start, warning, i)
       THEN
       END ;
       IF start = end
@@ -1538,12 +1575,13 @@ VAR
    op                            : QuadOperator ;
    op1, proc, param, paramValue  : CARDINAL ;
    op1tok, op2tok, paramtok, qtok: CARDINAL ;
-   overflowChecking              : BOOLEAN ;
+   constExpr, overflowChecking   : BOOLEAN ;
    heapValue, ptrToHeap          : CARDINAL ;
 BEGIN
    IF trashQuad # 0
    THEN
-      GetQuadOtok (trashQuad, qtok, op, op1, proc, param, overflowChecking,
+      GetQuadOtok (trashQuad, qtok, op, op1, proc, param,
+                   overflowChecking, constExpr,
                    op1tok, op2tok, paramtok) ;
       heapValue := GetQuadTrash (trashQuad) ;
       IF Debugging
@@ -1630,7 +1668,7 @@ BEGIN
       bbPtr := Indexing.GetIndice (bbArray, bbi) ;
       CheckReadBeforeInitFirstBasicBlock (procSym,
                                           bbPtr^.start, bbPtr^.end,
-                                          warning, lst, i) ;
+                                          warning, i) ;
       IF bbPtr^.endCond
       THEN
          (* Check to see if we are moving into an conditional block in which case
@@ -1867,7 +1905,7 @@ END DetectTrash ;
    AppendEntry -
 *)
 
-PROCEDURE AppendEntry (Start, End: CARDINAL) ;
+PROCEDURE AppendEntry (bb: BasicBlock) ;
 VAR
    bbPtr: bbEntry ;
    high : CARDINAL ;
@@ -1875,13 +1913,13 @@ BEGIN
    high := Indexing.HighIndice (bbArray) ;
    bbPtr := NewEntry () ;
    WITH bbPtr^ DO
-      start := Start ;
-      end := End ;
+      start := GetBasicBlockStart (bb) ;
+      end := GetBasicBlockEnd (bb) ;
       first := high = 0 ;
-      endCall := IsCall (End) ;
-      endGoto := IsGoto (End) ;
-      endCond := IsConditional (End) ;
-      topOfLoop := IsBackReference (Start) ;
+      endCall := IsCall (end) ;
+      endGoto := IsGoto (end) ;
+      endCond := IsConditional (end) ;
+      topOfLoop := IsBackReference (start) ;
       trashQuad := 0 ;
       indexBB := high + 1 ;
       nextQuad := 0 ;

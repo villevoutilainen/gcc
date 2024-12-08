@@ -1,5 +1,5 @@
 /* Header file for gimple iterators.
-   Copyright (C) 2013-2023 Free Software Foundation, Inc.
+   Copyright (C) 2013-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -47,7 +47,7 @@ struct gphi_iterator : public gimple_stmt_iterator
     return as_a <gphi *> (ptr);
   }
 };
- 
+
 enum gsi_iterator_update
 {
   GSI_NEW_STMT = 2,	/* Move the iterator to the first statement added.  */
@@ -86,12 +86,15 @@ extern gimple_stmt_iterator gsi_for_stmt (gimple *);
 extern gimple_stmt_iterator gsi_for_stmt (gimple *, gimple_seq *);
 extern gphi_iterator gsi_for_phi (gphi *);
 extern void gsi_move_after (gimple_stmt_iterator *, gimple_stmt_iterator *);
-extern void gsi_move_before (gimple_stmt_iterator *, gimple_stmt_iterator *);
+extern void gsi_move_before (gimple_stmt_iterator *, gimple_stmt_iterator *,
+			     gsi_iterator_update = GSI_SAME_STMT);
 extern void gsi_move_to_bb_end (gimple_stmt_iterator *, basic_block);
 extern void gsi_insert_on_edge (edge, gimple *);
 extern void gsi_insert_seq_on_edge (edge, gimple_seq);
 extern basic_block gsi_insert_on_edge_immediate (edge, gimple *);
 extern basic_block gsi_insert_seq_on_edge_immediate (edge, gimple_seq);
+extern void gsi_safe_insert_before (gimple_stmt_iterator *, gimple *);
+extern void gsi_safe_insert_seq_before (gimple_stmt_iterator *, gimple_seq);
 extern void gsi_commit_edge_inserts (void);
 extern void gsi_commit_one_edge_insert (edge, basic_block *);
 extern gphi_iterator gsi_start_phis (basic_block);
@@ -163,6 +166,41 @@ gsi_last_bb (basic_block bb)
 
   seq = bb_seq_addr (bb);
   i.ptr = gimple_seq_last (*seq);
+  i.seq = seq;
+  i.bb = bb;
+
+  return i;
+}
+
+/* Return a new iterator pointing to before the first statement or after
+   last statement (depending on whether adding statements after it or before it)
+   in a GIMPLE_SEQ.  */
+
+inline gimple_stmt_iterator
+gsi_end (gimple_seq &seq)
+{
+  gimple_stmt_iterator i;
+  gimple *g = gimple_seq_last (seq);
+
+  i.ptr = NULL;
+  i.seq = &seq;
+  i.bb = g ? gimple_bb (g) : NULL;
+
+  return i;
+}
+
+/* Return a new iterator pointing to before the first statement or after
+   last statement (depending on whether adding statements after it or before it)
+   in basic block BB.  */
+
+inline gimple_stmt_iterator
+gsi_end_bb (basic_block bb)
+{
+  gimple_stmt_iterator i;
+  gimple_seq *seq;
+
+  seq = bb_seq_addr (bb);
+  i.ptr = NULL;
   i.seq = seq;
   i.bb = bb;
 
@@ -392,28 +430,9 @@ gsi_seq (gimple_stmt_iterator i)
 inline bool
 gimple_seq_nondebug_singleton_p (gimple_seq seq)
 {
-  gimple_stmt_iterator gsi;
+  gimple_stmt_iterator gsi = gsi_start_nondebug (seq);
 
-  /* Find a nondebug gimple.  */
-  gsi.ptr = gimple_seq_first (seq);
-  gsi.seq = &seq;
-  gsi.bb = NULL;
-  while (!gsi_end_p (gsi)
-	 && is_gimple_debug (gsi_stmt (gsi)))
-    gsi_next (&gsi);
-
-  /* No nondebug gimple found, not a singleton.  */
-  if (gsi_end_p (gsi))
-    return false;
-
-  /* Find a next nondebug gimple.  */
-  gsi_next (&gsi);
-  while (!gsi_end_p (gsi)
-	 && is_gimple_debug (gsi_stmt (gsi)))
-    gsi_next (&gsi);
-
-  /* Only a singleton if there's no next nondebug gimple.  */
-  return gsi_end_p (gsi);
+  return gsi_one_nondebug_before_end_p (gsi);
 }
 
 #endif /* GCC_GIMPLE_ITERATOR_H */

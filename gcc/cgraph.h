@@ -1,5 +1,5 @@
 /* Callgraph handling code.
-   Copyright (C) 2003-2023 Free Software Foundation, Inc.
+   Copyright (C) 2003-2024 Free Software Foundation, Inc.
    Contributed by Jan Hubicka
 
 This file is part of GCC.
@@ -153,7 +153,7 @@ public:
   void remove (void);
 
   /* Undo any definition or use of the symbol.  */
-  void reset (void);
+  void reset (bool preserve_comdat_group = false);
 
   /* Dump symtab node to F.  */
   void dump (FILE *f);
@@ -436,7 +436,7 @@ public:
 
   /* Return 0 if symbol is known to have different address than S2,
      Return 1 if symbol is known to have same address as S2,
-     return 2 otherwise. 
+     return 2 otherwise.
 
      If MEMORY_ACCESSED is true, assume that both memory pointer to THIS
      and S2 is going to be accessed.  This eliminates the situations when
@@ -478,6 +478,9 @@ public:
   /* Return the cgraph node that has ASMNAME for its DECL_ASSEMBLER_NAME.
      Return NULL if there's no such node.  */
   static symtab_node *get_for_asmname (const_tree asmname);
+
+  /* Check symbol table for callees of IFUNC resolvers.  */
+  static void check_ifunc_callee_symtab_nodes (void);
 
   /* Verify symbol table for internal consistency.  */
   static DEBUG_FUNCTION void verify_symtab_nodes (void);
@@ -896,6 +899,7 @@ struct GTY((tag ("SYMTAB_FUNCTION"))) cgraph_node : public symtab_node
       redefined_extern_inline (false), tm_may_enter_irr (false),
       ipcp_clone (false), declare_variant_alt (false),
       calls_declare_variant_alt (false), gc_candidate (false),
+      called_by_ifunc_resolver (false),
       m_uid (uid), m_summary_id (-1)
   {}
 
@@ -919,7 +923,7 @@ struct GTY((tag ("SYMTAB_FUNCTION"))) cgraph_node : public symtab_node
 
   /* Walk the alias chain to return the function cgraph_node is alias of.
      Walk through thunk, too.
-     When AVAILABILITY is non-NULL, get minimal availability in the chain. 
+     When AVAILABILITY is non-NULL, get minimal availability in the chain.
      When REF is non-NULL, assume that reference happens in symbol REF
      when determining the availability.  */
   cgraph_node *function_symbol (enum availability *avail = NULL,
@@ -928,7 +932,7 @@ struct GTY((tag ("SYMTAB_FUNCTION"))) cgraph_node : public symtab_node
   /* Walk the alias chain to return the function cgraph_node is alias of.
      Walk through non virtual thunks, too.  Thus we return either a function
      or a virtual thunk node.
-     When AVAILABILITY is non-NULL, get minimal availability in the chain.  
+     When AVAILABILITY is non-NULL, get minimal availability in the chain.
      When REF is non-NULL, assume that reference happens in symbol REF
      when determining the availability.  */
   cgraph_node *function_or_virtual_thunk_symbol
@@ -1093,7 +1097,7 @@ struct GTY((tag ("SYMTAB_FUNCTION"))) cgraph_node : public symtab_node
      present.  */
   bool get_untransformed_body ();
 
-  /* Prepare function body.  When doing LTO, read cgraph_node's body from disk 
+  /* Prepare function body.  When doing LTO, read cgraph_node's body from disk
      if it is not already present.  When some IPA transformations are scheduled,
      apply them.  */
   bool get_body ();
@@ -1176,7 +1180,7 @@ struct GTY((tag ("SYMTAB_FUNCTION"))) cgraph_node : public symtab_node
 
     When setting the flag be careful about possible interposition and
     do not set the flag for functions that can be interposed and set pure
-    flag for functions that can bind to other definition. 
+    flag for functions that can bind to other definition.
 
     Return true if any change was done. */
 
@@ -1189,6 +1193,10 @@ struct GTY((tag ("SYMTAB_FUNCTION"))) cgraph_node : public symtab_node
      Return true if any change was done. */
 
   bool set_pure_flag (bool pure, bool looping);
+
+  /* Add attribute ATTR to cgraph_node's decl and on aliases of the node
+     if any.  */
+  bool add_detected_attribute (const char *attr);
 
   /* Call callback on function and aliases associated to the function.
      When INCLUDE_OVERWRITABLE is false, overwritable aliases and thunks are
@@ -1248,7 +1256,7 @@ struct GTY((tag ("SYMTAB_FUNCTION"))) cgraph_node : public symtab_node
      all uses of COMDAT function does not make it necessarily disappear from
      the program unless we are compiling whole program or we do LTO.  In this
      case we know we win since dynamic linking will not really discard the
-     linkonce section.  
+     linkonce section.
 
      If WILL_INLINE is true, assume that function will be inlined into all the
      direct calls.  */
@@ -1261,7 +1269,7 @@ struct GTY((tag ("SYMTAB_FUNCTION"))) cgraph_node : public symtab_node
   bool can_remove_if_no_direct_calls_and_refs_p (void);
 
   /* Return true when function cgraph_node and its aliases can be removed from
-     callgraph if all direct calls are eliminated. 
+     callgraph if all direct calls are eliminated.
      If WILL_INLINE is true, assume that function will be inlined into all the
      direct calls.  */
   bool can_remove_if_no_direct_calls_p (bool will_inline = false);
@@ -1491,6 +1499,8 @@ struct GTY((tag ("SYMTAB_FUNCTION"))) cgraph_node : public symtab_node
      is set for local SIMD clones when they are created and cleared if the
      vectorizer uses them.  */
   unsigned gc_candidate : 1;
+  /* Set if the function is called by an IFUNC resolver.  */
+  unsigned called_by_ifunc_resolver : 1;
 
 private:
   /* Unique id of the node.  */
@@ -1833,9 +1843,16 @@ public:
      speculative indirect call, remove "speculative" of the indirect call and
      also redirect stmt to it's final direct target.
 
+     When called from within tree-inline, KILLED_SSAs has to contain the
+     pointer to killed_new_ssa_names within the copy_body_data structure and
+     SSAs discovered to be useless (if LHS is removed) will be added to it,
+     otherwise it needs to be NULL.
+
      It is up to caller to iteratively transform each "speculative"
      direct call as appropriate.  */
-  static gimple *redirect_call_stmt_to_callee (cgraph_edge *e);
+  static gimple *redirect_call_stmt_to_callee (cgraph_edge *e,
+					       hash_set <tree>
+					       *killed_ssas = nullptr);
 
   /* Create clone of edge in the node N represented
      by CALL_EXPR the callgraph.  */
@@ -2212,7 +2229,7 @@ public:
   friend struct cgraph_node;
   friend struct cgraph_edge;
 
-  symbol_table (): 
+  symbol_table ():
   cgraph_count (0), cgraph_max_uid (1), cgraph_max_summary_id (0),
   edges_count (0), edges_max_uid (1), edges_max_summary_id (0),
   cgraph_released_summary_ids (), edge_released_summary_ids (),

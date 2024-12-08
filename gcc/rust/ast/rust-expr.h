@@ -3,6 +3,7 @@
 
 #include "rust-ast.h"
 #include "rust-path.h"
+#include "rust-macro.h"
 #include "rust-operators.h"
 
 namespace Rust {
@@ -10,6 +11,36 @@ namespace AST {
 /* TODO: if GCC moves to C++17 or allows boost, replace some boolean
  * "has_whatever" pairs with
  * optional types (std::optional or boost::optional)? */
+
+// Loop label expression AST node used with break and continue expressions
+// TODO: inline?
+class LoopLabel /*: public Node*/
+{
+  Lifetime label; // or type LIFETIME_OR_LABEL
+  location_t locus;
+
+  NodeId node_id;
+
+public:
+  std::string as_string () const;
+
+  LoopLabel (Lifetime loop_label, location_t locus = UNDEF_LOCATION)
+    : label (std::move (loop_label)), locus (locus),
+      node_id (Analysis::Mappings::get ()->get_next_node_id ())
+  {}
+
+  // Returns whether the LoopLabel is in an error state.
+  bool is_error () const { return label.is_error (); }
+
+  // Creates an error state LoopLabel.
+  static LoopLabel error () { return LoopLabel (Lifetime::error ()); }
+
+  location_t get_locus () const { return locus; }
+
+  Lifetime &get_lifetime () { return label; }
+
+  NodeId get_node_id () const { return node_id; }
+};
 
 // AST node for an expression with an accompanying block - abstract
 class ExprWithBlock : public Expr
@@ -39,7 +70,7 @@ class LiteralExpr : public ExprWithoutBlock
 {
   std::vector<Attribute> outer_attrs;
   Literal literal;
-  Location locus;
+  location_t locus;
 
 public:
   std::string as_string () const override { return literal.as_string (); }
@@ -48,13 +79,13 @@ public:
 
   LiteralExpr (std::string value_as_string, Literal::LitType type,
 	       PrimitiveCoreType type_hint, std::vector<Attribute> outer_attrs,
-	       Location locus)
+	       location_t locus)
     : outer_attrs (std::move (outer_attrs)),
       literal (std::move (value_as_string), type, type_hint), locus (locus)
   {}
 
   LiteralExpr (Literal literal, std::vector<Attribute> outer_attrs,
-	       Location locus)
+	       location_t locus)
     : outer_attrs (std::move (outer_attrs)), literal (std::move (literal)),
       locus (locus)
   {}
@@ -65,7 +96,7 @@ public:
     return std::unique_ptr<LiteralExpr> (clone_literal_expr_impl ());
   }
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   bool is_literal () const override final { return true; }
 
@@ -78,7 +109,7 @@ public:
   bool is_marked_for_strip () const override { return literal.is_error (); }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -139,6 +170,48 @@ protected:
   }
 };
 
+// Like an AttrInputLiteral, but stores a MacroInvocation
+class AttrInputMacro : public AttrInput
+{
+  std::unique_ptr<MacroInvocation> macro;
+
+public:
+  AttrInputMacro (std::unique_ptr<MacroInvocation> macro)
+    : macro (std::move (macro))
+  {}
+
+  AttrInputMacro (const AttrInputMacro &oth);
+
+  AttrInputMacro (AttrInputMacro &&oth) : macro (std::move (oth.macro)) {}
+
+  void operator= (const AttrInputMacro &oth);
+
+  void operator= (AttrInputMacro &&oth) { macro = std::move (oth.macro); }
+
+  std::string as_string () const override;
+
+  void accept_vis (ASTVisitor &vis) override;
+
+  // assuming this can't be a cfg predicate
+  bool check_cfg_predicate (const Session &) const override { return false; }
+
+  // assuming this is like AttrInputLiteral
+  bool is_meta_item () const override { return false; }
+
+  std::unique_ptr<MacroInvocation> &get_macro () { return macro; }
+
+  AttrInputType get_attr_input_type () const final override
+  {
+    return AttrInput::AttrInputType::MACRO;
+  }
+
+protected:
+  AttrInputMacro *clone_attr_input_impl () const override
+  {
+    return new AttrInputMacro (*this);
+  }
+};
+
 /* literal expr only meta item inner - TODO possibly replace with inheritance of
  * LiteralExpr itself? */
 class MetaItemLitExpr : public MetaItemInner
@@ -150,11 +223,20 @@ public:
 
   std::string as_string () const override { return lit_expr.as_string (); }
 
-  Location get_locus () const override { return lit_expr.get_locus (); }
+  location_t get_locus () const override { return lit_expr.get_locus (); }
+
+  LiteralExpr get_literal () const { return lit_expr; }
+
+  LiteralExpr &get_literal () { return lit_expr; }
 
   void accept_vis (ASTVisitor &vis) override;
 
   bool check_cfg_predicate (const Session &session) const override;
+
+  MetaItemInner::Kind get_kind () override
+  {
+    return MetaItemInner::Kind::LitExpr;
+  }
 
 protected:
   // Use covariance to implement clone function as returning this type
@@ -175,16 +257,29 @@ public:
     : path (std::move (path)), lit (std::move (lit_expr))
   {}
 
+  SimplePath get_path () const { return path; }
+
+  SimplePath &get_path () { return path; }
+
+  LiteralExpr get_literal () const { return lit; }
+
+  LiteralExpr &get_literal () { return lit; }
+
   std::string as_string () const override
   {
     return path.as_string () + " = " + lit.as_string ();
+  }
+
+  MetaItem::ItemKind get_item_kind () const override
+  {
+    return MetaItem::ItemKind::PathLit;
   }
 
   // There are two Locations in MetaItemPathLit (path and lit_expr),
   //  we have no idea use which of them, just simply return UNKNOWN_LOCATION
   //  now.
   // Maybe we will figure out when we really need the location in the future.
-  Location get_locus () const override { return Location (UNKNOWN_LOCATION); }
+  location_t get_locus () const override { return UNKNOWN_LOCATION; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -208,7 +303,7 @@ class OperatorExpr : public ExprWithoutBlock
 {
   // TODO: create binary and unary operator subclasses?
 public:
-  Location locus;
+  location_t locus;
 
 protected:
   /* Variables must be protected to allow derived classes to use them as first
@@ -218,7 +313,7 @@ protected:
 
   // Constructor (only for initialisation of expr purposes)
   OperatorExpr (std::unique_ptr<Expr> main_or_left_expr,
-		std::vector<Attribute> outer_attribs, Location locus)
+		std::vector<Attribute> outer_attribs, location_t locus)
     : locus (locus), outer_attrs (std::move (outer_attribs)),
       main_or_left_expr (std::move (main_or_left_expr))
   {}
@@ -253,7 +348,7 @@ protected:
   OperatorExpr &operator= (OperatorExpr &&other) = default;
 
 public:
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   // Invalid if expr is null, so base stripping on that.
   void mark_for_strip () override { main_or_left_expr = nullptr; }
@@ -263,7 +358,7 @@ public:
   }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -283,7 +378,7 @@ public:
 
   BorrowExpr (std::unique_ptr<Expr> borrow_lvalue, bool is_mut_borrow,
 	      bool is_double_borrow, std::vector<Attribute> outer_attribs,
-	      Location locus)
+	      location_t locus)
     : OperatorExpr (std::move (borrow_lvalue), std::move (outer_attribs),
 		    locus),
       is_mut (is_mut_borrow), double_borrow (is_double_borrow)
@@ -292,10 +387,10 @@ public:
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_borrowed_expr ()
+  Expr &get_borrowed_expr ()
   {
     rust_assert (main_or_left_expr != nullptr);
-    return main_or_left_expr;
+    return *main_or_left_expr;
   }
 
   bool get_is_mut () const { return is_mut; }
@@ -319,17 +414,17 @@ public:
 
   // Constructor calls OperatorExpr's protected constructor
   DereferenceExpr (std::unique_ptr<Expr> deref_lvalue,
-		   std::vector<Attribute> outer_attribs, Location locus)
+		   std::vector<Attribute> outer_attribs, location_t locus)
     : OperatorExpr (std::move (deref_lvalue), std::move (outer_attribs), locus)
   {}
 
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_dereferenced_expr ()
+  Expr &get_dereferenced_expr ()
   {
     rust_assert (main_or_left_expr != nullptr);
-    return main_or_left_expr;
+    return *main_or_left_expr;
   }
 
 protected:
@@ -349,7 +444,7 @@ public:
 
   // Constructor calls OperatorExpr's protected constructor
   ErrorPropagationExpr (std::unique_ptr<Expr> potential_error_value,
-			std::vector<Attribute> outer_attribs, Location locus)
+			std::vector<Attribute> outer_attribs, location_t locus)
     : OperatorExpr (std::move (potential_error_value),
 		    std::move (outer_attribs), locus)
   {}
@@ -357,10 +452,10 @@ public:
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_propagating_expr ()
+  Expr &get_propagating_expr ()
   {
     rust_assert (main_or_left_expr != nullptr);
-    return main_or_left_expr;
+    return *main_or_left_expr;
   }
 
 protected:
@@ -391,7 +486,7 @@ public:
 
   // Constructor calls OperatorExpr's protected constructor
   NegationExpr (std::unique_ptr<Expr> negated_value, ExprType expr_kind,
-		std::vector<Attribute> outer_attribs, Location locus)
+		std::vector<Attribute> outer_attribs, location_t locus)
     : OperatorExpr (std::move (negated_value), std::move (outer_attribs),
 		    locus),
       expr_type (expr_kind)
@@ -400,10 +495,10 @@ public:
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_negated_expr ()
+  Expr &get_negated_expr ()
   {
     rust_assert (main_or_left_expr != nullptr);
-    return main_or_left_expr;
+    return *main_or_left_expr;
   }
 
 protected:
@@ -435,7 +530,7 @@ public:
   // Constructor calls OperatorExpr's protected constructor
   ArithmeticOrLogicalExpr (std::unique_ptr<Expr> left_value,
 			   std::unique_ptr<Expr> right_value,
-			   ExprType expr_kind, Location locus)
+			   ExprType expr_kind, location_t locus)
     : OperatorExpr (std::move (left_value), std::vector<Attribute> (), locus),
       expr_type (expr_kind), right_expr (std::move (right_value))
   {}
@@ -466,14 +561,26 @@ public:
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_left_expr ()
+  Expr &get_left_expr ()
+  {
+    rust_assert (main_or_left_expr != nullptr);
+    return *main_or_left_expr;
+  }
+
+  std::unique_ptr<Expr> &get_left_expr_ptr ()
   {
     rust_assert (main_or_left_expr != nullptr);
     return main_or_left_expr;
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_right_expr ()
+  Expr &get_right_expr ()
+  {
+    rust_assert (right_expr != nullptr);
+    return *right_expr;
+  }
+
+  std::unique_ptr<Expr> &get_right_expr_ptr ()
   {
     rust_assert (right_expr != nullptr);
     return right_expr;
@@ -511,7 +618,7 @@ public:
   // Constructor requires pointers for polymorphism
   ComparisonExpr (std::unique_ptr<Expr> left_value,
 		  std::unique_ptr<Expr> right_value, ExprType comparison_kind,
-		  Location locus)
+		  location_t locus)
     : OperatorExpr (std::move (left_value), std::vector<Attribute> (), locus),
       expr_type (comparison_kind), right_expr (std::move (right_value))
   {}
@@ -542,14 +649,26 @@ public:
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_left_expr ()
+  Expr &get_left_expr ()
+  {
+    rust_assert (main_or_left_expr != nullptr);
+    return *main_or_left_expr;
+  }
+
+  std::unique_ptr<Expr> &get_left_expr_ptr ()
   {
     rust_assert (main_or_left_expr != nullptr);
     return main_or_left_expr;
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_right_expr ()
+  Expr &get_right_expr ()
+  {
+    rust_assert (right_expr != nullptr);
+    return *right_expr;
+  }
+
+  std::unique_ptr<Expr> &get_right_expr_ptr ()
   {
     rust_assert (right_expr != nullptr);
     return right_expr;
@@ -583,7 +702,7 @@ public:
   // Constructor calls OperatorExpr's protected constructor
   LazyBooleanExpr (std::unique_ptr<Expr> left_bool_expr,
 		   std::unique_ptr<Expr> right_bool_expr, ExprType expr_kind,
-		   Location locus)
+		   location_t locus)
     : OperatorExpr (std::move (left_bool_expr), std::vector<Attribute> (),
 		    locus),
       expr_type (expr_kind), right_expr (std::move (right_bool_expr))
@@ -618,14 +737,26 @@ public:
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_left_expr ()
+  Expr &get_left_expr ()
+  {
+    rust_assert (main_or_left_expr != nullptr);
+    return *main_or_left_expr;
+  }
+
+  std::unique_ptr<Expr> &get_left_expr_ptr ()
   {
     rust_assert (main_or_left_expr != nullptr);
     return main_or_left_expr;
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_right_expr ()
+  Expr &get_right_expr ()
+  {
+    rust_assert (right_expr != nullptr);
+    return *right_expr;
+  }
+
+  std::unique_ptr<Expr> &get_right_expr_ptr ()
   {
     rust_assert (right_expr != nullptr);
     return right_expr;
@@ -653,7 +784,7 @@ public:
 
   // Constructor requires calling protected constructor of OperatorExpr
   TypeCastExpr (std::unique_ptr<Expr> expr_to_cast,
-		std::unique_ptr<TypeNoBounds> type_to_cast_to, Location locus)
+		std::unique_ptr<TypeNoBounds> type_to_cast_to, location_t locus)
     : OperatorExpr (std::move (expr_to_cast), std::vector<Attribute> (), locus),
       type_to_convert_to (std::move (type_to_cast_to))
   {}
@@ -682,17 +813,17 @@ public:
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_casted_expr ()
+  Expr &get_casted_expr ()
   {
     rust_assert (main_or_left_expr != nullptr);
-    return main_or_left_expr;
+    return *main_or_left_expr;
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<TypeNoBounds> &get_type_to_cast_to ()
+  TypeNoBounds &get_type_to_cast_to ()
   {
     rust_assert (type_to_convert_to != nullptr);
-    return type_to_convert_to;
+    return *type_to_convert_to;
   }
 
 protected:
@@ -715,7 +846,7 @@ public:
   // Call OperatorExpr constructor to initialise left_expr
   AssignmentExpr (std::unique_ptr<Expr> value_to_assign_to,
 		  std::unique_ptr<Expr> value_to_assign,
-		  std::vector<Attribute> outer_attribs, Location locus)
+		  std::vector<Attribute> outer_attribs, location_t locus)
     : OperatorExpr (std::move (value_to_assign_to), std::move (outer_attribs),
 		    locus),
       right_expr (std::move (value_to_assign))
@@ -748,17 +879,29 @@ public:
   void visit_rhs (ASTVisitor &vis) { right_expr->accept_vis (vis); }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_left_expr ()
+  Expr &get_left_expr ()
+  {
+    rust_assert (main_or_left_expr != nullptr);
+    return *main_or_left_expr;
+  }
+
+  std::unique_ptr<Expr> &get_left_expr_ptr ()
   {
     rust_assert (main_or_left_expr != nullptr);
     return main_or_left_expr;
   }
 
-  // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_right_expr ()
+  std::unique_ptr<Expr> &get_right_expr_ptr ()
   {
     rust_assert (right_expr != nullptr);
     return right_expr;
+  }
+
+  // TODO: is this better? Or is a "vis_block" better?
+  Expr &get_right_expr ()
+  {
+    rust_assert (right_expr != nullptr);
+    return *right_expr;
   }
 
 protected:
@@ -790,7 +933,7 @@ public:
   // Use pointers in constructor to enable polymorphism
   CompoundAssignmentExpr (std::unique_ptr<Expr> value_to_assign_to,
 			  std::unique_ptr<Expr> value_to_assign,
-			  ExprType expr_kind, Location locus)
+			  ExprType expr_kind, location_t locus)
     : OperatorExpr (std::move (value_to_assign_to), std::vector<Attribute> (),
 		    locus),
       expr_type (expr_kind), right_expr (std::move (value_to_assign))
@@ -822,14 +965,26 @@ public:
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_left_expr ()
+  Expr &get_left_expr ()
+  {
+    rust_assert (main_or_left_expr != nullptr);
+    return *main_or_left_expr;
+  }
+
+  std::unique_ptr<Expr> &get_left_expr_ptr ()
   {
     rust_assert (main_or_left_expr != nullptr);
     return main_or_left_expr;
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_right_expr ()
+  Expr &get_right_expr ()
+  {
+    rust_assert (right_expr != nullptr);
+    return *right_expr;
+  }
+
+  std::unique_ptr<Expr> &get_right_expr_ptr ()
   {
     rust_assert (right_expr != nullptr);
     return right_expr;
@@ -850,7 +1005,7 @@ class GroupedExpr : public ExprWithoutBlock
   std::vector<Attribute> outer_attrs;
   std::vector<Attribute> inner_attrs;
   std::unique_ptr<Expr> expr_in_parens;
-  Location locus;
+  location_t locus;
 
 public:
   std::string as_string () const override;
@@ -859,7 +1014,7 @@ public:
   std::vector<Attribute> &get_inner_attrs () { return inner_attrs; }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -868,7 +1023,7 @@ public:
 
   GroupedExpr (std::unique_ptr<Expr> parenthesised_expr,
 	       std::vector<Attribute> inner_attribs,
-	       std::vector<Attribute> outer_attribs, Location locus)
+	       std::vector<Attribute> outer_attribs, location_t locus)
     : outer_attrs (std::move (outer_attribs)),
       inner_attrs (std::move (inner_attribs)),
       expr_in_parens (std::move (parenthesised_expr)), locus (locus)
@@ -905,7 +1060,7 @@ public:
   GroupedExpr (GroupedExpr &&other) = default;
   GroupedExpr &operator= (GroupedExpr &&other) = default;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -917,7 +1072,13 @@ public:
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_expr_in_parens ()
+  Expr &get_expr_in_parens ()
+  {
+    rust_assert (expr_in_parens != nullptr);
+    return *expr_in_parens;
+  }
+
+  std::unique_ptr<Expr> &get_expr_in_parens_ptr ()
   {
     rust_assert (expr_in_parens != nullptr);
     return expr_in_parens;
@@ -964,10 +1125,10 @@ protected:
 class ArrayElemsValues : public ArrayElems
 {
   std::vector<std::unique_ptr<Expr> > values;
-  Location locus;
+  location_t locus;
 
 public:
-  ArrayElemsValues (std::vector<std::unique_ptr<Expr> > elems, Location locus)
+  ArrayElemsValues (std::vector<std::unique_ptr<Expr> > elems, location_t locus)
     : ArrayElems (), values (std::move (elems)), locus (locus)
   {}
 
@@ -1018,12 +1179,12 @@ class ArrayElemsCopied : public ArrayElems
 {
   std::unique_ptr<Expr> elem_to_copy;
   std::unique_ptr<Expr> num_copies;
-  Location locus;
+  location_t locus;
 
 public:
   // Constructor requires pointers for polymorphism
   ArrayElemsCopied (std::unique_ptr<Expr> copied_elem,
-		    std::unique_ptr<Expr> copy_amount, Location locus)
+		    std::unique_ptr<Expr> copy_amount, location_t locus)
     : ArrayElems (), elem_to_copy (std::move (copied_elem)),
       num_copies (std::move (copy_amount)), locus (locus)
   {}
@@ -1052,17 +1213,17 @@ public:
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_elem_to_copy ()
+  Expr &get_elem_to_copy ()
   {
     rust_assert (elem_to_copy != nullptr);
-    return elem_to_copy;
+    return *elem_to_copy;
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_num_copies ()
+  Expr &get_num_copies ()
   {
     rust_assert (num_copies != nullptr);
-    return num_copies;
+    return *num_copies;
   }
 
 protected:
@@ -1078,7 +1239,7 @@ class ArrayExpr : public ExprWithoutBlock
   std::vector<Attribute> outer_attrs;
   std::vector<Attribute> inner_attrs;
   std::unique_ptr<ArrayElems> internal_elements;
-  Location locus;
+  location_t locus;
 
   // TODO: find another way to store this to save memory?
   bool marked_for_strip = false;
@@ -1090,7 +1251,7 @@ public:
   std::vector<Attribute> &get_inner_attrs () { return inner_attrs; }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -1100,7 +1261,7 @@ public:
   // Constructor requires ArrayElems pointer
   ArrayExpr (std::unique_ptr<ArrayElems> array_elems,
 	     std::vector<Attribute> inner_attribs,
-	     std::vector<Attribute> outer_attribs, Location locus)
+	     std::vector<Attribute> outer_attribs, location_t locus)
     : outer_attrs (std::move (outer_attribs)),
       inner_attrs (std::move (inner_attribs)),
       internal_elements (std::move (array_elems)), locus (locus)
@@ -1137,7 +1298,7 @@ public:
   ArrayExpr (ArrayExpr &&other) = default;
   ArrayExpr &operator= (ArrayExpr &&other) = default;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -1171,14 +1332,14 @@ class ArrayIndexExpr : public ExprWithoutBlock
   std::vector<Attribute> outer_attrs;
   std::unique_ptr<Expr> array_expr;
   std::unique_ptr<Expr> index_expr;
-  Location locus;
+  location_t locus;
 
 public:
   std::string as_string () const override;
 
   ArrayIndexExpr (std::unique_ptr<Expr> array_expr,
 		  std::unique_ptr<Expr> array_index_expr,
-		  std::vector<Attribute> outer_attribs, Location locus)
+		  std::vector<Attribute> outer_attribs, location_t locus)
     : outer_attrs (std::move (outer_attribs)),
       array_expr (std::move (array_expr)),
       index_expr (std::move (array_index_expr)), locus (locus)
@@ -1220,7 +1381,7 @@ public:
   ArrayIndexExpr (ArrayIndexExpr &&other) = default;
   ArrayIndexExpr &operator= (ArrayIndexExpr &&other) = default;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -1236,21 +1397,21 @@ public:
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_array_expr ()
+  Expr &get_array_expr ()
   {
     rust_assert (array_expr != nullptr);
-    return array_expr;
+    return *array_expr;
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_index_expr ()
+  Expr &get_index_expr ()
   {
     rust_assert (index_expr != nullptr);
-    return index_expr;
+    return *index_expr;
   }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -1272,7 +1433,7 @@ class TupleExpr : public ExprWithoutBlock
   std::vector<Attribute> outer_attrs;
   std::vector<Attribute> inner_attrs;
   std::vector<std::unique_ptr<Expr> > tuple_elems;
-  Location locus;
+  location_t locus;
 
   // TODO: find another way to store this to save memory?
   bool marked_for_strip = false;
@@ -1284,7 +1445,7 @@ public:
   std::vector<Attribute> &get_inner_attrs () { return inner_attrs; }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -1293,7 +1454,7 @@ public:
 
   TupleExpr (std::vector<std::unique_ptr<Expr> > tuple_elements,
 	     std::vector<Attribute> inner_attribs,
-	     std::vector<Attribute> outer_attribs, Location locus)
+	     std::vector<Attribute> outer_attribs, location_t locus)
     : outer_attrs (std::move (outer_attribs)),
       inner_attrs (std::move (inner_attribs)),
       tuple_elems (std::move (tuple_elements)), locus (locus)
@@ -1333,7 +1494,7 @@ public:
   /* Note: syntactically, can disambiguate single-element tuple from parens with
    * comma, i.e. (0,) rather than (0) */
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -1371,7 +1532,7 @@ class TupleIndexExpr : public ExprWithoutBlock
   // TupleIndex is a decimal int literal with no underscores or suffix
   TupleIndex tuple_index;
 
-  Location locus;
+  location_t locus;
 
   // i.e. pair.0
 
@@ -1381,7 +1542,7 @@ public:
   TupleIndex get_tuple_index () const { return tuple_index; }
 
   TupleIndexExpr (std::unique_ptr<Expr> tuple_expr, TupleIndex index,
-		  std::vector<Attribute> outer_attribs, Location locus)
+		  std::vector<Attribute> outer_attribs, location_t locus)
     : outer_attrs (std::move (outer_attribs)),
       tuple_expr (std::move (tuple_expr)), tuple_index (index), locus (locus)
   {}
@@ -1417,7 +1578,7 @@ public:
   TupleIndexExpr (TupleIndexExpr &&other) = default;
   TupleIndexExpr &operator= (TupleIndexExpr &&other) = default;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -1426,14 +1587,14 @@ public:
   bool is_marked_for_strip () const override { return tuple_expr == nullptr; }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_tuple_expr ()
+  Expr &get_tuple_expr ()
   {
     rust_assert (tuple_expr != nullptr);
-    return tuple_expr;
+    return *tuple_expr;
   }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -1477,7 +1638,7 @@ public:
   bool is_marked_for_strip () const override { return struct_name.is_error (); }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -1490,7 +1651,7 @@ class StructExprStruct : public StructExpr
 {
   std::vector<Attribute> inner_attrs;
 
-  Location locus;
+  location_t locus;
 
 public:
   std::string as_string () const override;
@@ -1501,12 +1662,12 @@ public:
   // Constructor has to call protected constructor of base class
   StructExprStruct (PathInExpression struct_path,
 		    std::vector<Attribute> inner_attribs,
-		    std::vector<Attribute> outer_attribs, Location locus)
+		    std::vector<Attribute> outer_attribs, location_t locus)
     : StructExpr (std::move (struct_path), std::move (outer_attribs)),
       inner_attrs (std::move (inner_attribs)), locus (locus)
   {}
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -1525,10 +1686,10 @@ struct StructBase
 {
 private:
   std::unique_ptr<Expr> base_struct;
-  Location locus;
+  location_t locus;
 
 public:
-  StructBase (std::unique_ptr<Expr> base_struct_ptr, Location locus)
+  StructBase (std::unique_ptr<Expr> base_struct_ptr, location_t locus)
     : base_struct (std::move (base_struct_ptr)), locus (locus)
   {}
 
@@ -1561,7 +1722,7 @@ public:
   StructBase &operator= (StructBase &&other) = default;
 
   // Returns a null expr-ed StructBase - error state
-  static StructBase error () { return StructBase (nullptr, Location ()); }
+  static StructBase error () { return StructBase (nullptr, UNDEF_LOCATION); }
 
   // Returns whether StructBase is in error state
   bool is_invalid () const { return base_struct == nullptr; }
@@ -1569,10 +1730,10 @@ public:
   std::string as_string () const;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_base_struct ()
+  Expr &get_base_struct ()
   {
     rust_assert (base_struct != nullptr);
-    return base_struct;
+    return *base_struct;
   }
 };
 
@@ -1593,7 +1754,7 @@ public:
 
   virtual void accept_vis (ASTVisitor &vis) = 0;
 
-  virtual Location get_locus () const = 0;
+  virtual location_t get_locus () const = 0;
 
   NodeId get_node_id () const { return node_id; }
 
@@ -1611,17 +1772,17 @@ protected:
 class StructExprFieldIdentifier : public StructExprField
 {
   Identifier field_name;
-  Location locus;
+  location_t locus;
 
 public:
-  StructExprFieldIdentifier (Identifier field_identifier, Location locus)
+  StructExprFieldIdentifier (Identifier field_identifier, location_t locus)
     : StructExprField (), field_name (std::move (field_identifier)),
       locus (locus)
   {}
 
-  std::string as_string () const override { return field_name; }
+  std::string as_string () const override { return field_name.as_string (); }
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -1668,10 +1829,10 @@ public:
   std::string as_string () const override;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_value ()
+  Expr &get_value ()
   {
     rust_assert (value != nullptr);
-    return value;
+    return *value;
   }
 };
 
@@ -1679,12 +1840,12 @@ public:
 class StructExprFieldIdentifierValue : public StructExprFieldWithVal
 {
   Identifier field_name;
-  Location locus;
+  location_t locus;
 
 public:
   StructExprFieldIdentifierValue (Identifier field_identifier,
 				  std::unique_ptr<Expr> field_value,
-				  Location locus)
+				  location_t locus)
     : StructExprFieldWithVal (std::move (field_value)),
       field_name (std::move (field_identifier)), locus (locus)
   {}
@@ -1693,9 +1854,9 @@ public:
 
   void accept_vis (ASTVisitor &vis) override;
 
-  std::string get_field_name () const { return field_name; }
+  std::string get_field_name () const { return field_name.as_string (); }
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
 protected:
   /* Use covariance to implement clone function as returning this object rather
@@ -1710,11 +1871,12 @@ protected:
 class StructExprFieldIndexValue : public StructExprFieldWithVal
 {
   TupleIndex index;
-  Location locus;
+  location_t locus;
 
 public:
   StructExprFieldIndexValue (TupleIndex tuple_index,
-			     std::unique_ptr<Expr> field_value, Location locus)
+			     std::unique_ptr<Expr> field_value,
+			     location_t locus)
     : StructExprFieldWithVal (std::move (field_value)), index (tuple_index),
       locus (locus)
   {}
@@ -1725,7 +1887,7 @@ public:
 
   TupleIndex get_index () const { return index; }
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
 protected:
   /* Use covariance to implement clone function as returning this object rather
@@ -1753,8 +1915,8 @@ public:
   // Constructor for StructExprStructFields when no struct base is used
   StructExprStructFields (
     PathInExpression struct_path,
-    std::vector<std::unique_ptr<StructExprField> > expr_fields, Location locus,
-    StructBase base_struct = StructBase::error (),
+    std::vector<std::unique_ptr<StructExprField> > expr_fields,
+    location_t locus, StructBase base_struct = StructBase::error (),
     std::vector<Attribute> inner_attribs = std::vector<Attribute> (),
     std::vector<Attribute> outer_attribs = std::vector<Attribute> ())
     : StructExprStruct (std::move (struct_path), std::move (inner_attribs),
@@ -1824,7 +1986,7 @@ public:
 
   StructExprStructBase (PathInExpression struct_path, StructBase base_struct,
 			std::vector<Attribute> inner_attribs,
-			std::vector<Attribute> outer_attribs, Location locus)
+			std::vector<Attribute> outer_attribs, location_t locus)
     : StructExprStruct (std::move (struct_path), std::move (inner_attribs),
 			std::move (outer_attribs), locus),
       struct_base (std::move (base_struct))
@@ -1853,7 +2015,7 @@ class CallExpr : public ExprWithoutBlock
   std::vector<Attribute> outer_attrs;
   std::unique_ptr<Expr> function;
   std::vector<std::unique_ptr<Expr> > params;
-  Location locus;
+  location_t locus;
 
 public:
   Function *fndeclRef;
@@ -1862,7 +2024,7 @@ public:
 
   CallExpr (std::unique_ptr<Expr> function_expr,
 	    std::vector<std::unique_ptr<Expr> > function_params,
-	    std::vector<Attribute> outer_attribs, Location locus)
+	    std::vector<Attribute> outer_attribs, location_t locus)
     : outer_attrs (std::move (outer_attribs)),
       function (std::move (function_expr)),
       params (std::move (function_params)), locus (locus)
@@ -1909,7 +2071,7 @@ public:
   // Returns whether function call has parameters.
   bool has_params () const { return !params.empty (); }
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -1925,14 +2087,14 @@ public:
   std::vector<std::unique_ptr<Expr> > &get_params () { return params; }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_function_expr ()
+  Expr &get_function_expr ()
   {
     rust_assert (function != nullptr);
-    return function;
+    return *function;
   }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -1955,7 +2117,7 @@ class MethodCallExpr : public ExprWithoutBlock
   std::unique_ptr<Expr> receiver;
   PathExprSegment method_name;
   std::vector<std::unique_ptr<Expr> > params;
-  Location locus;
+  location_t locus;
 
 public:
   std::string as_string () const override;
@@ -1963,7 +2125,7 @@ public:
   MethodCallExpr (std::unique_ptr<Expr> call_receiver,
 		  PathExprSegment method_path,
 		  std::vector<std::unique_ptr<Expr> > method_params,
-		  std::vector<Attribute> outer_attribs, Location locus)
+		  std::vector<Attribute> outer_attribs, location_t locus)
     : outer_attrs (std::move (outer_attribs)),
       receiver (std::move (call_receiver)),
       method_name (std::move (method_path)), params (std::move (method_params)),
@@ -2009,7 +2171,7 @@ public:
   MethodCallExpr (MethodCallExpr &&other) = default;
   MethodCallExpr &operator= (MethodCallExpr &&other) = default;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -2025,17 +2187,17 @@ public:
   std::vector<std::unique_ptr<Expr> > &get_params () { return params; }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_receiver_expr ()
+  Expr &get_receiver_expr ()
   {
     rust_assert (receiver != nullptr);
-    return receiver;
+    return *receiver;
   }
 
   const PathExprSegment &get_method_name () const { return method_name; }
   PathExprSegment &get_method_name () { return method_name; }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -2058,14 +2220,14 @@ class FieldAccessExpr : public ExprWithoutBlock
   std::vector<Attribute> outer_attrs;
   std::unique_ptr<Expr> receiver;
   Identifier field;
-  Location locus;
+  location_t locus;
 
 public:
   std::string as_string () const override;
 
   FieldAccessExpr (std::unique_ptr<Expr> field_access_receiver,
 		   Identifier field_name, std::vector<Attribute> outer_attribs,
-		   Location locus)
+		   location_t locus)
     : outer_attrs (std::move (outer_attribs)),
       receiver (std::move (field_access_receiver)),
       field (std::move (field_name)), locus (locus)
@@ -2102,7 +2264,7 @@ public:
   FieldAccessExpr (FieldAccessExpr &&other) = default;
   FieldAccessExpr &operator= (FieldAccessExpr &&other) = default;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -2111,16 +2273,16 @@ public:
   bool is_marked_for_strip () const override { return receiver == nullptr; }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_receiver_expr ()
+  Expr &get_receiver_expr ()
   {
     rust_assert (receiver != nullptr);
-    return receiver;
+    return *receiver;
   }
 
   Identifier get_field_name () const { return field; }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -2143,7 +2305,7 @@ private:
   std::vector<Attribute> outer_attrs;
   std::unique_ptr<Pattern> pattern;
   std::unique_ptr<Type> type;
-  Location locus;
+  location_t locus;
 
 public:
   // Returns whether the type of the parameter has been given.
@@ -2152,7 +2314,7 @@ public:
   bool has_outer_attrs () const { return !outer_attrs.empty (); }
 
   // Constructor for closure parameter
-  ClosureParam (std::unique_ptr<Pattern> param_pattern, Location locus,
+  ClosureParam (std::unique_ptr<Pattern> param_pattern, location_t locus,
 		std::unique_ptr<Type> param_type = nullptr,
 		std::vector<Attribute> outer_attrs = {})
     : outer_attrs (std::move (outer_attrs)),
@@ -2200,7 +2362,7 @@ public:
   // Creates an error state closure parameter.
   static ClosureParam create_error ()
   {
-    return ClosureParam (nullptr, Location ());
+    return ClosureParam (nullptr, UNDEF_LOCATION);
   }
 
   std::string as_string () const;
@@ -2208,19 +2370,25 @@ public:
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
   std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
 
-  std::unique_ptr<Pattern> &get_pattern ()
+  Pattern &get_pattern ()
   {
     rust_assert (pattern != nullptr);
-    return pattern;
+    return *pattern;
   }
 
-  std::unique_ptr<Type> &get_type ()
+  Type &get_type ()
+  {
+    rust_assert (has_type_given ());
+    return *type;
+  }
+
+  std::unique_ptr<Type> &get_type_ptr ()
   {
     rust_assert (has_type_given ());
     return type;
   }
 
-  Location get_locus () const { return locus; }
+  location_t get_locus () const { return locus; }
 };
 
 // Base closure definition expression AST node - abstract
@@ -2229,11 +2397,11 @@ class ClosureExpr : public ExprWithoutBlock
   std::vector<Attribute> outer_attrs;
   bool has_move;
   std::vector<ClosureParam> params; // may be empty
-  Location locus;
+  location_t locus;
 
 protected:
   ClosureExpr (std::vector<ClosureParam> closure_params, bool has_move,
-	       std::vector<Attribute> outer_attribs, Location locus)
+	       std::vector<Attribute> outer_attribs, location_t locus)
     : outer_attrs (std::move (outer_attribs)), has_move (has_move),
       params (std::move (closure_params)), locus (locus)
   {}
@@ -2241,14 +2409,14 @@ protected:
 public:
   std::string as_string () const override;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   // TODO: this mutable getter seems really dodgy. Think up better way.
   const std::vector<ClosureParam> &get_params () const { return params; }
   std::vector<ClosureParam> &get_params () { return params; }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -2268,7 +2436,7 @@ public:
 
   // Constructor for a ClosureExprInner
   ClosureExprInner (std::unique_ptr<Expr> closure_inner_expr,
-		    std::vector<ClosureParam> closure_params, Location locus,
+		    std::vector<ClosureParam> closure_params, location_t locus,
 		    bool is_move = false,
 		    std::vector<Attribute> outer_attribs
 		    = std::vector<Attribute> ())
@@ -2315,10 +2483,10 @@ public:
     return closure_inner == nullptr;
   }
 
-  std::unique_ptr<Expr> &get_definition_expr ()
+  Expr &get_definition_expr ()
   {
     rust_assert (closure_inner != nullptr);
-    return closure_inner;
+    return *closure_inner;
   }
 
 protected:
@@ -2337,8 +2505,9 @@ class BlockExpr : public ExprWithBlock
   std::vector<Attribute> inner_attrs;
   std::vector<std::unique_ptr<Stmt> > statements;
   std::unique_ptr<Expr> expr;
-  Location start_locus;
-  Location end_locus;
+  LoopLabel label;
+  location_t start_locus;
+  location_t end_locus;
   bool marked_for_strip = false;
 
 public:
@@ -2353,19 +2522,21 @@ public:
   BlockExpr (std::vector<std::unique_ptr<Stmt> > block_statements,
 	     std::unique_ptr<Expr> block_expr,
 	     std::vector<Attribute> inner_attribs,
-	     std::vector<Attribute> outer_attribs, Location start_locus,
-	     Location end_locus)
+	     std::vector<Attribute> outer_attribs, LoopLabel label,
+	     location_t start_locus, location_t end_locus)
     : outer_attrs (std::move (outer_attribs)),
       inner_attrs (std::move (inner_attribs)),
       statements (std::move (block_statements)), expr (std::move (block_expr)),
-      start_locus (start_locus), end_locus (end_locus)
+      label (std::move (label)), start_locus (start_locus),
+      end_locus (end_locus)
   {}
 
   // Copy constructor with clone
   BlockExpr (BlockExpr const &other)
     : ExprWithBlock (other), outer_attrs (other.outer_attrs),
-      inner_attrs (other.inner_attrs), start_locus (other.start_locus),
-      end_locus (other.end_locus), marked_for_strip (other.marked_for_strip)
+      inner_attrs (other.inner_attrs), label (other.label),
+      start_locus (other.start_locus), end_locus (other.end_locus),
+      marked_for_strip (other.marked_for_strip)
   {
     // guard to protect from null pointer dereference
     if (other.expr != nullptr)
@@ -2409,10 +2580,10 @@ public:
     return std::unique_ptr<BlockExpr> (clone_block_expr_impl ());
   }
 
-  Location get_locus () const override final { return start_locus; }
+  location_t get_locus () const override final { return start_locus; }
 
-  Location get_start_locus () const { return start_locus; }
-  Location get_end_locus () const { return end_locus; }
+  location_t get_start_locus () const { return start_locus; }
+  location_t get_end_locus () const { return end_locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -2433,22 +2604,46 @@ public:
   std::vector<std::unique_ptr<Stmt> > &get_statements () { return statements; }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_tail_expr ()
+  Expr &get_tail_expr ()
+  {
+    rust_assert (has_tail_expr ());
+    return *expr;
+  }
+
+  std::unique_ptr<Expr> &get_tail_expr_ptr ()
   {
     rust_assert (has_tail_expr ());
     return expr;
   }
 
+  std::unique_ptr<Expr> take_tail_expr ()
+  {
+    rust_assert (has_tail_expr ());
+    return std::move (expr);
+  }
+
+  void set_tail_expr (std::unique_ptr<Expr> expr)
+  {
+    this->expr = std::move (expr);
+  }
+
   // Removes the tail expression from the block.
   void strip_tail_expr () { expr = nullptr; }
+  // Normalizes a trailing statement without a semicolon to a tail expression.
+  void normalize_tail_expr ();
+
+  void try_convert_last_stmt ();
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
     outer_attrs = std::move (new_attrs);
   }
+
+  bool has_label () { return !label.is_error (); }
+  LoopLabel &get_label () { return label; }
 
 protected:
   /* Use covariance to implement clone function as returning this object rather
@@ -2481,7 +2676,7 @@ public:
   ClosureExprInnerTyped (std::unique_ptr<Type> closure_return_type,
 			 std::unique_ptr<BlockExpr> closure_expr,
 			 std::vector<ClosureParam> closure_params,
-			 Location locus, bool is_move = false,
+			 location_t locus, bool is_move = false,
 			 std::vector<Attribute> outer_attribs
 			 = std::vector<Attribute> ())
     : ClosureExpr (std::move (closure_params), is_move,
@@ -2534,14 +2729,20 @@ public:
   bool is_marked_for_strip () const override { return expr == nullptr; }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<BlockExpr> &get_definition_block ()
+  BlockExpr &get_definition_block ()
   {
     rust_assert (expr != nullptr);
-    return expr;
+    return *expr;
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Type> &get_return_type ()
+  Type &get_return_type ()
+  {
+    rust_assert (return_type != nullptr);
+    return *return_type;
+  }
+
+  std::unique_ptr<Type> &get_return_type_ptr ()
   {
     rust_assert (return_type != nullptr);
     return return_type;
@@ -2561,7 +2762,7 @@ class ContinueExpr : public ExprWithoutBlock
 {
   std::vector<Attribute> outer_attrs;
   Lifetime label;
-  Location locus;
+  location_t locus;
 
   // TODO: find another way to store this to save memory?
   bool marked_for_strip = false;
@@ -2574,12 +2775,12 @@ public:
 
   // Constructor for a ContinueExpr with a label.
   ContinueExpr (Lifetime label, std::vector<Attribute> outer_attribs,
-		Location locus)
+		location_t locus)
     : outer_attrs (std::move (outer_attribs)), label (std::move (label)),
       locus (locus)
   {}
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -2588,7 +2789,7 @@ public:
   bool is_marked_for_strip () const override { return marked_for_strip; }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -2611,9 +2812,9 @@ protected:
 class BreakExpr : public ExprWithoutBlock
 {
   std::vector<Attribute> outer_attrs;
-  Lifetime label;
+  LoopLabel label;
   std::unique_ptr<Expr> break_expr;
-  Location locus;
+  location_t locus;
 
   // TODO: find another way to store this to save memory?
   bool marked_for_strip = false;
@@ -2629,8 +2830,8 @@ public:
   bool has_break_expr () const { return break_expr != nullptr; }
 
   // Constructor for a break expression
-  BreakExpr (Lifetime break_label, std::unique_ptr<Expr> expr_in_break,
-	     std::vector<Attribute> outer_attribs, Location locus)
+  BreakExpr (LoopLabel break_label, std::unique_ptr<Expr> expr_in_break,
+	     std::vector<Attribute> outer_attribs, location_t locus)
     : outer_attrs (std::move (outer_attribs)), label (std::move (break_label)),
       break_expr (std::move (expr_in_break)), locus (locus)
   {}
@@ -2668,7 +2869,7 @@ public:
   BreakExpr (BreakExpr &&other) = default;
   BreakExpr &operator= (BreakExpr &&other) = default;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -2677,21 +2878,21 @@ public:
   bool is_marked_for_strip () const override { return marked_for_strip; }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_break_expr ()
+  Expr &get_break_expr ()
   {
     rust_assert (has_break_expr ());
-    return break_expr;
+    return *break_expr;
   }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
     outer_attrs = std::move (new_attrs);
   }
 
-  Lifetime &get_label () { return label; }
+  LoopLabel &get_label () { return label; }
 
 protected:
   /* Use covariance to implement clone function as returning this object rather
@@ -2705,14 +2906,20 @@ protected:
 // Base range expression AST node object - abstract
 class RangeExpr : public ExprWithoutBlock
 {
-  Location locus;
+  location_t locus;
 
 protected:
   // outer attributes not allowed before range expressions
-  RangeExpr (Location locus) : locus (locus) {}
+  RangeExpr (location_t locus) : locus (locus) {}
 
 public:
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
+
+  std::vector<Attribute> &get_outer_attrs () override final
+  {
+    // RangeExpr cannot have any outer attributes
+    rust_assert (false);
+  }
 
   // should never be called - error if called
   void set_outer_attrs (std::vector<Attribute> /* new_attrs */) override
@@ -2732,7 +2939,7 @@ public:
   std::string as_string () const override;
 
   RangeFromToExpr (std::unique_ptr<Expr> range_from,
-		   std::unique_ptr<Expr> range_to, Location locus)
+		   std::unique_ptr<Expr> range_to, location_t locus)
     : RangeExpr (locus), from (std::move (range_from)),
       to (std::move (range_to))
   {}
@@ -2783,17 +2990,17 @@ public:
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_from_expr ()
+  Expr &get_from_expr ()
   {
     rust_assert (from != nullptr);
-    return from;
+    return *from;
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_to_expr ()
+  Expr &get_to_expr ()
   {
     rust_assert (to != nullptr);
-    return to;
+    return *to;
   }
 
 protected:
@@ -2814,7 +3021,7 @@ class RangeFromExpr : public RangeExpr
 public:
   std::string as_string () const override;
 
-  RangeFromExpr (std::unique_ptr<Expr> range_from, Location locus)
+  RangeFromExpr (std::unique_ptr<Expr> range_from, location_t locus)
     : RangeExpr (locus), from (std::move (range_from))
   {}
 
@@ -2851,10 +3058,10 @@ public:
   bool is_marked_for_strip () const override { return from == nullptr; }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_from_expr ()
+  Expr &get_from_expr ()
   {
     rust_assert (from != nullptr);
-    return from;
+    return *from;
   }
 
 protected:
@@ -2876,7 +3083,7 @@ public:
   std::string as_string () const override;
 
   // outer attributes not allowed
-  RangeToExpr (std::unique_ptr<Expr> range_to, Location locus)
+  RangeToExpr (std::unique_ptr<Expr> range_to, location_t locus)
     : RangeExpr (locus), to (std::move (range_to))
   {}
 
@@ -2913,10 +3120,10 @@ public:
   bool is_marked_for_strip () const override { return to == nullptr; }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_to_expr ()
+  Expr &get_to_expr ()
   {
     rust_assert (to != nullptr);
-    return to;
+    return *to;
   }
 
 protected:
@@ -2938,7 +3145,7 @@ class RangeFullExpr : public RangeExpr
 public:
   std::string as_string () const override;
 
-  RangeFullExpr (Location locus) : RangeExpr (locus) {}
+  RangeFullExpr (location_t locus) : RangeExpr (locus) {}
   // outer attributes not allowed
 
   void accept_vis (ASTVisitor &vis) override;
@@ -2967,7 +3174,7 @@ public:
   std::string as_string () const override;
 
   RangeFromToInclExpr (std::unique_ptr<Expr> range_from,
-		       std::unique_ptr<Expr> range_to, Location locus)
+		       std::unique_ptr<Expr> range_to, location_t locus)
     : RangeExpr (locus), from (std::move (range_from)),
       to (std::move (range_to))
   {}
@@ -3019,17 +3226,17 @@ public:
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_from_expr ()
+  Expr &get_from_expr ()
   {
     rust_assert (from != nullptr);
-    return from;
+    return *from;
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_to_expr ()
+  Expr &get_to_expr ()
   {
     rust_assert (to != nullptr);
-    return to;
+    return *to;
   }
 
 protected:
@@ -3050,7 +3257,7 @@ class RangeToInclExpr : public RangeExpr
 public:
   std::string as_string () const override;
 
-  RangeToInclExpr (std::unique_ptr<Expr> range_to, Location locus)
+  RangeToInclExpr (std::unique_ptr<Expr> range_to, location_t locus)
     : RangeExpr (locus), to (std::move (range_to))
   {}
   // outer attributes not allowed
@@ -3088,10 +3295,10 @@ public:
   bool is_marked_for_strip () const override { return to == nullptr; }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_to_expr ()
+  Expr &get_to_expr ()
   {
     rust_assert (to != nullptr);
-    return to;
+    return *to;
   }
 
 protected:
@@ -3108,7 +3315,7 @@ class ReturnExpr : public ExprWithoutBlock
 {
   std::vector<Attribute> outer_attrs;
   std::unique_ptr<Expr> return_expr;
-  Location locus;
+  location_t locus;
 
   // TODO: find another way to store this to save memory?
   bool marked_for_strip = false;
@@ -3122,7 +3329,7 @@ public:
 
   // Constructor for ReturnExpr.
   ReturnExpr (std::unique_ptr<Expr> returned_expr,
-	      std::vector<Attribute> outer_attribs, Location locus)
+	      std::vector<Attribute> outer_attribs, location_t locus)
     : outer_attrs (std::move (outer_attribs)),
       return_expr (std::move (returned_expr)), locus (locus)
   {}
@@ -3158,7 +3365,7 @@ public:
   ReturnExpr (ReturnExpr &&other) = default;
   ReturnExpr &operator= (ReturnExpr &&other) = default;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -3167,14 +3374,14 @@ public:
   bool is_marked_for_strip () const override { return marked_for_strip; }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_returned_expr ()
+  Expr &get_returned_expr ()
   {
     rust_assert (return_expr != nullptr);
-    return return_expr;
+    return *return_expr;
   }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -3199,13 +3406,13 @@ class UnsafeBlockExpr : public ExprWithBlock
   std::vector<Attribute> outer_attrs;
   // Or just have it extend BlockExpr
   std::unique_ptr<BlockExpr> expr;
-  Location locus;
+  location_t locus;
 
 public:
   std::string as_string () const override;
 
   UnsafeBlockExpr (std::unique_ptr<BlockExpr> block_expr,
-		   std::vector<Attribute> outer_attribs, Location locus)
+		   std::vector<Attribute> outer_attribs, location_t locus)
     : outer_attrs (std::move (outer_attribs)), expr (std::move (block_expr)),
       locus (locus)
   {}
@@ -3240,7 +3447,7 @@ public:
   UnsafeBlockExpr (UnsafeBlockExpr &&other) = default;
   UnsafeBlockExpr &operator= (UnsafeBlockExpr &&other) = default;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -3249,14 +3456,14 @@ public:
   bool is_marked_for_strip () const override { return expr == nullptr; }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<BlockExpr> &get_block_expr ()
+  BlockExpr &get_block_expr ()
   {
     rust_assert (expr != nullptr);
-    return expr;
+    return *expr;
   }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -3272,36 +3479,6 @@ protected:
   }
 };
 
-// Loop label expression AST node used with break and continue expressions
-// TODO: inline?
-class LoopLabel /*: public Node*/
-{
-  Lifetime label; // or type LIFETIME_OR_LABEL
-  Location locus;
-
-  NodeId node_id;
-
-public:
-  std::string as_string () const;
-
-  LoopLabel (Lifetime loop_label, Location locus = Location ())
-    : label (std::move (loop_label)), locus (locus),
-      node_id (Analysis::Mappings::get ()->get_next_node_id ())
-  {}
-
-  // Returns whether the LoopLabel is in an error state.
-  bool is_error () const { return label.is_error (); }
-
-  // Creates an error state LoopLabel.
-  static LoopLabel error () { return LoopLabel (Lifetime::error ()); }
-
-  Location get_locus () const { return locus; }
-
-  Lifetime &get_lifetime () { return label; }
-
-  NodeId get_node_id () const { return node_id; }
-};
-
 // Base loop expression AST node - aka LoopExpr
 class BaseLoopExpr : public ExprWithBlock
 {
@@ -3312,11 +3489,11 @@ protected:
   std::unique_ptr<BlockExpr> loop_block;
 
 private:
-  Location locus;
+  location_t locus;
 
 protected:
   // Constructor for BaseLoopExpr
-  BaseLoopExpr (std::unique_ptr<BlockExpr> loop_block, Location locus,
+  BaseLoopExpr (std::unique_ptr<BlockExpr> loop_block, location_t locus,
 		LoopLabel loop_label = LoopLabel::error (),
 		std::vector<Attribute> outer_attribs
 		= std::vector<Attribute> ())
@@ -3361,21 +3538,21 @@ public:
 
   LoopLabel &get_loop_label () { return loop_label; }
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   // Invalid if loop block is null, so base stripping on that.
   void mark_for_strip () override { loop_block = nullptr; }
   bool is_marked_for_strip () const override { return loop_block == nullptr; }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<BlockExpr> &get_loop_block ()
+  BlockExpr &get_loop_block ()
   {
     rust_assert (loop_block != nullptr);
-    return loop_block;
+    return *loop_block;
   }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -3390,7 +3567,7 @@ public:
   std::string as_string () const override;
 
   // Constructor for LoopExpr
-  LoopExpr (std::unique_ptr<BlockExpr> loop_block, Location locus,
+  LoopExpr (std::unique_ptr<BlockExpr> loop_block, location_t locus,
 	    LoopLabel loop_label = LoopLabel::error (),
 	    std::vector<Attribute> outer_attribs = std::vector<Attribute> ())
     : BaseLoopExpr (std::move (loop_block), locus, std::move (loop_label),
@@ -3418,7 +3595,7 @@ public:
 
   // Constructor for while loop with loop label
   WhileLoopExpr (std::unique_ptr<Expr> loop_condition,
-		 std::unique_ptr<BlockExpr> loop_block, Location locus,
+		 std::unique_ptr<BlockExpr> loop_block, location_t locus,
 		 LoopLabel loop_label = LoopLabel::error (),
 		 std::vector<Attribute> outer_attribs
 		 = std::vector<Attribute> ())
@@ -3451,10 +3628,10 @@ public:
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_predicate_expr ()
+  Expr &get_predicate_expr ()
   {
     rust_assert (condition != nullptr);
-    return condition;
+    return *condition;
   }
 
 protected:
@@ -3479,7 +3656,7 @@ public:
   // Constructor with a loop label
   WhileLetLoopExpr (std::vector<std::unique_ptr<Pattern> > match_arm_patterns,
 		    std::unique_ptr<Expr> scrutinee,
-		    std::unique_ptr<BlockExpr> loop_block, Location locus,
+		    std::unique_ptr<BlockExpr> loop_block, location_t locus,
 		    LoopLabel loop_label = LoopLabel::error (),
 		    std::vector<Attribute> outer_attribs
 		    = std::vector<Attribute> ())
@@ -3524,10 +3701,10 @@ public:
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_scrutinee_expr ()
+  Expr &get_scrutinee_expr ()
   {
     rust_assert (scrutinee != nullptr);
-    return scrutinee;
+    return *scrutinee;
   }
 
   // TODO: this mutable getter seems really dodgy. Think up better way.
@@ -3561,7 +3738,7 @@ public:
   // Constructor with loop label
   ForLoopExpr (std::unique_ptr<Pattern> loop_pattern,
 	       std::unique_ptr<Expr> iterator_expr,
-	       std::unique_ptr<BlockExpr> loop_body, Location locus,
+	       std::unique_ptr<BlockExpr> loop_body, location_t locus,
 	       LoopLabel loop_label = LoopLabel::error (),
 	       std::vector<Attribute> outer_attribs = std::vector<Attribute> ())
     : BaseLoopExpr (std::move (loop_body), locus, std::move (loop_label),
@@ -3596,17 +3773,17 @@ public:
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_iterator_expr ()
+  Expr &get_iterator_expr ()
   {
     rust_assert (iterator_expr != nullptr);
-    return iterator_expr;
+    return *iterator_expr;
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Pattern> &get_pattern ()
+  Pattern &get_pattern ()
   {
     rust_assert (pattern != nullptr);
-    return pattern;
+    return *pattern;
   }
 
 protected:
@@ -3627,13 +3804,13 @@ class IfExpr : public ExprWithBlock
   std::vector<Attribute> outer_attrs;
   std::unique_ptr<Expr> condition;
   std::unique_ptr<BlockExpr> if_block;
-  Location locus;
+  location_t locus;
 
 public:
   std::string as_string () const override;
 
   IfExpr (std::unique_ptr<Expr> condition, std::unique_ptr<BlockExpr> if_block,
-	  std::vector<Attribute> outer_attrs, Location locus)
+	  std::vector<Attribute> outer_attrs, location_t locus)
     : outer_attrs (std::move (outer_attrs)), condition (std::move (condition)),
       if_block (std::move (if_block)), locus (locus)
   {}
@@ -3685,7 +3862,7 @@ public:
    * vector of else ifs - i.e. not like a switch statement. TODO - is this a
    * better approach? or does it not parse correctly and have downsides? */
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -3693,17 +3870,23 @@ public:
   void vis_if_block (ASTVisitor &vis) { if_block->accept_vis (vis); }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_condition_expr ()
+  Expr &get_condition_expr ()
+  {
+    rust_assert (condition != nullptr);
+    return *condition;
+  }
+
+  std::unique_ptr<Expr> &get_condition_expr_ptr ()
   {
     rust_assert (condition != nullptr);
     return condition;
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<BlockExpr> &get_if_block ()
+  BlockExpr &get_if_block ()
   {
     rust_assert (if_block != nullptr);
-    return if_block;
+    return *if_block;
   }
 
   // Invalid if if block or condition is null, so base stripping on that.
@@ -3724,7 +3907,7 @@ public:
 
   // TODO: this mutable getter seems really dodgy. Think up better way.
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
 protected:
   // Base clone function but still concrete as concrete base class
@@ -3741,15 +3924,15 @@ protected:
 // If expression with an ending "else" expression AST node (trailing)
 class IfExprConseqElse : public IfExpr
 {
-  std::unique_ptr<BlockExpr> else_block;
+  std::unique_ptr<ExprWithBlock> else_block;
 
 public:
   std::string as_string () const override;
 
   IfExprConseqElse (std::unique_ptr<Expr> condition,
 		    std::unique_ptr<BlockExpr> if_block,
-		    std::unique_ptr<BlockExpr> else_block,
-		    std::vector<Attribute> outer_attrs, Location locus)
+		    std::unique_ptr<ExprWithBlock> else_block,
+		    std::vector<Attribute> outer_attrs, location_t locus)
     : IfExpr (std::move (condition), std::move (if_block),
 	      std::move (outer_attrs), locus),
       else_block (std::move (else_block))
@@ -3758,7 +3941,7 @@ public:
 
   // Copy constructor with clone
   IfExprConseqElse (IfExprConseqElse const &other)
-    : IfExpr (other), else_block (other.else_block->clone_block_expr ())
+    : IfExpr (other), else_block (other.else_block->clone_expr_with_block ())
   {}
 
   // Overloaded assignment operator with cloning
@@ -3767,7 +3950,7 @@ public:
     IfExpr::operator= (other);
     // condition = other.condition->clone_expr();
     // if_block = other.if_block->clone_block_expr();
-    else_block = other.else_block->clone_block_expr ();
+    else_block = other.else_block->clone_expr_with_block ();
 
     return *this;
   }
@@ -3781,10 +3964,10 @@ public:
   void vis_else_block (ASTVisitor &vis) { else_block->accept_vis (vis); }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<BlockExpr> &get_else_block ()
+  ExprWithBlock &get_else_block ()
   {
     rust_assert (else_block != nullptr);
-    return else_block;
+    return *else_block;
   }
 
 protected:
@@ -3796,67 +3979,6 @@ protected:
   }
 };
 
-// If expression with an ending "else if" expression AST node
-class IfExprConseqIf : public IfExpr
-{
-  std::unique_ptr<IfExpr> conseq_if_expr;
-
-public:
-  std::string as_string () const override;
-
-  IfExprConseqIf (std::unique_ptr<Expr> condition,
-		  std::unique_ptr<BlockExpr> if_block,
-		  std::unique_ptr<IfExpr> conseq_if_expr,
-		  std::vector<Attribute> outer_attrs, Location locus)
-    : IfExpr (std::move (condition), std::move (if_block),
-	      std::move (outer_attrs), locus),
-      conseq_if_expr (std::move (conseq_if_expr))
-  {}
-  // outer attributes not allowed
-
-  // Copy constructor with clone
-  IfExprConseqIf (IfExprConseqIf const &other)
-    : IfExpr (other), conseq_if_expr (other.conseq_if_expr->clone_if_expr ())
-  {}
-
-  // Overloaded assignment operator to use clone
-  IfExprConseqIf &operator= (IfExprConseqIf const &other)
-  {
-    IfExpr::operator= (other);
-    // condition = other.condition->clone_expr();
-    // if_block = other.if_block->clone_block_expr();
-    conseq_if_expr = other.conseq_if_expr->clone_if_expr ();
-
-    return *this;
-  }
-
-  // move constructors
-  IfExprConseqIf (IfExprConseqIf &&other) = default;
-  IfExprConseqIf &operator= (IfExprConseqIf &&other) = default;
-
-  void accept_vis (ASTVisitor &vis) override;
-
-  void vis_conseq_if_expr (ASTVisitor &vis)
-  {
-    conseq_if_expr->accept_vis (vis);
-  }
-
-  // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<IfExpr> &get_conseq_if_expr ()
-  {
-    rust_assert (conseq_if_expr != nullptr);
-    return conseq_if_expr;
-  }
-
-protected:
-  /* Use covariance to implement clone function as returning this object rather
-   * than base */
-  IfExprConseqIf *clone_if_expr_impl () const override
-  {
-    return new IfExprConseqIf (*this);
-  }
-};
-
 // Basic "if let" expression AST node with no else
 class IfLetExpr : public ExprWithBlock
 {
@@ -3864,14 +3986,14 @@ class IfLetExpr : public ExprWithBlock
   std::vector<std::unique_ptr<Pattern> > match_arm_patterns; // inlined
   std::unique_ptr<Expr> value;
   std::unique_ptr<BlockExpr> if_block;
-  Location locus;
+  location_t locus;
 
 public:
   std::string as_string () const override;
 
   IfLetExpr (std::vector<std::unique_ptr<Pattern> > match_arm_patterns,
 	     std::unique_ptr<Expr> value, std::unique_ptr<BlockExpr> if_block,
-	     std::vector<Attribute> outer_attrs, Location locus)
+	     std::vector<Attribute> outer_attrs, location_t locus)
     : outer_attrs (std::move (outer_attrs)),
       match_arm_patterns (std::move (match_arm_patterns)),
       value (std::move (value)), if_block (std::move (if_block)), locus (locus)
@@ -3927,7 +4049,7 @@ public:
     return std::unique_ptr<IfLetExpr> (clone_if_let_expr_impl ());
   }
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -3943,17 +4065,23 @@ public:
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_value_expr ()
+  Expr &get_value_expr ()
+  {
+    rust_assert (value != nullptr);
+    return *value;
+  }
+
+  std::unique_ptr<Expr> &get_value_expr_ptr ()
   {
     rust_assert (value != nullptr);
     return value;
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<BlockExpr> &get_if_block ()
+  BlockExpr &get_if_block ()
   {
     rust_assert (if_block != nullptr);
-    return if_block;
+    return *if_block;
   }
 
   // TODO: this mutable getter seems really dodgy. Think up better way.
@@ -3973,7 +4101,7 @@ public:
 
   // TODO: this mutable getter seems really dodgy. Think up better way.
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
 protected:
   /* Use covariance to implement clone function as returning this object rather
@@ -3990,67 +4118,11 @@ protected:
   }
 };
 
-// If expression with an ending "else if let" expression AST node
-class IfExprConseqIfLet : public IfExpr
-{
-  std::unique_ptr<IfLetExpr> if_let_expr;
-
-public:
-  std::string as_string () const override;
-
-  IfExprConseqIfLet (std::unique_ptr<Expr> condition,
-		     std::unique_ptr<BlockExpr> if_block,
-		     std::unique_ptr<IfLetExpr> conseq_if_let_expr,
-		     std::vector<Attribute> outer_attrs, Location locus)
-    : IfExpr (std::move (condition), std::move (if_block),
-	      std::move (outer_attrs), locus),
-      if_let_expr (std::move (conseq_if_let_expr))
-  {}
-  // outer attributes not allowed
-
-  // Copy constructor with clone
-  IfExprConseqIfLet (IfExprConseqIfLet const &other)
-    : IfExpr (other), if_let_expr (other.if_let_expr->clone_if_let_expr ())
-  {}
-
-  // Overloaded assignment operator to use clone
-  IfExprConseqIfLet &operator= (IfExprConseqIfLet const &other)
-  {
-    IfExpr::operator= (other);
-    // condition = other.condition->clone_expr();
-    // if_block = other.if_block->clone_block_expr();
-    if_let_expr = other.if_let_expr->clone_if_let_expr ();
-
-    return *this;
-  }
-
-  // move constructors
-  IfExprConseqIfLet (IfExprConseqIfLet &&other) = default;
-  IfExprConseqIfLet &operator= (IfExprConseqIfLet &&other) = default;
-
-  void accept_vis (ASTVisitor &vis) override;
-
-  // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<IfLetExpr> &get_conseq_if_let_expr ()
-  {
-    rust_assert (if_let_expr != nullptr);
-    return if_let_expr;
-  }
-
-protected:
-  /* Use covariance to implement clone function as returning this object rather
-   * than base */
-  IfExprConseqIfLet *clone_if_expr_impl () const override
-  {
-    return new IfExprConseqIfLet (*this);
-  }
-};
-
 /* AST node representing "if let" expression with an "else" expression at the
  * end */
 class IfLetExprConseqElse : public IfLetExpr
 {
-  std::unique_ptr<BlockExpr> else_block;
+  std::unique_ptr<ExprWithBlock> else_block;
 
 public:
   std::string as_string () const override;
@@ -4058,8 +4130,8 @@ public:
   IfLetExprConseqElse (
     std::vector<std::unique_ptr<Pattern> > match_arm_patterns,
     std::unique_ptr<Expr> value, std::unique_ptr<BlockExpr> if_block,
-    std::unique_ptr<BlockExpr> else_block, std::vector<Attribute> outer_attrs,
-    Location locus)
+    std::unique_ptr<ExprWithBlock> else_block,
+    std::vector<Attribute> outer_attrs, location_t locus)
     : IfLetExpr (std::move (match_arm_patterns), std::move (value),
 		 std::move (if_block), std::move (outer_attrs), locus),
       else_block (std::move (else_block))
@@ -4068,7 +4140,7 @@ public:
 
   // copy constructor with clone
   IfLetExprConseqElse (IfLetExprConseqElse const &other)
-    : IfLetExpr (other), else_block (other.else_block->clone_block_expr ())
+    : IfLetExpr (other), else_block (other.else_block->clone_expr_with_block ())
   {}
 
   // overload assignment operator to clone
@@ -4078,7 +4150,7 @@ public:
     // match_arm_patterns = other.match_arm_patterns;
     // value = other.value->clone_expr();
     // if_block = other.if_block->clone_block_expr();
-    else_block = other.else_block->clone_block_expr ();
+    else_block = other.else_block->clone_expr_with_block ();
     // outer_attrs = other.outer_attrs;
 
     return *this;
@@ -4091,10 +4163,10 @@ public:
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<BlockExpr> &get_else_block ()
+  ExprWithBlock &get_else_block ()
   {
     rust_assert (else_block != nullptr);
-    return else_block;
+    return *else_block;
   }
 
 protected:
@@ -4103,124 +4175,6 @@ protected:
   IfLetExprConseqElse *clone_if_let_expr_impl () const override
   {
     return new IfLetExprConseqElse (*this);
-  }
-};
-
-/* AST node representing "if let" expression with an "else if" expression at the
- * end */
-class IfLetExprConseqIf : public IfLetExpr
-{
-  std::unique_ptr<IfExpr> if_expr;
-
-public:
-  std::string as_string () const override;
-
-  IfLetExprConseqIf (std::vector<std::unique_ptr<Pattern> > match_arm_patterns,
-		     std::unique_ptr<Expr> value,
-		     std::unique_ptr<BlockExpr> if_block,
-		     std::unique_ptr<IfExpr> if_expr,
-		     std::vector<Attribute> outer_attrs, Location locus)
-    : IfLetExpr (std::move (match_arm_patterns), std::move (value),
-		 std::move (if_block), std::move (outer_attrs), locus),
-      if_expr (std::move (if_expr))
-  {}
-  // again, outer attributes not allowed
-
-  // copy constructor with clone
-  IfLetExprConseqIf (IfLetExprConseqIf const &other)
-    : IfLetExpr (other), if_expr (other.if_expr->clone_if_expr ())
-  {}
-
-  // overload assignment operator to clone
-  IfLetExprConseqIf &operator= (IfLetExprConseqIf const &other)
-  {
-    IfLetExpr::operator= (other);
-    // match_arm_patterns = other.match_arm_patterns;
-    // value = other.value->clone_expr();
-    // if_block = other.if_block->clone_block_expr();
-    if_expr = other.if_expr->clone_if_expr ();
-
-    return *this;
-  }
-
-  // move constructors
-  IfLetExprConseqIf (IfLetExprConseqIf &&other) = default;
-  IfLetExprConseqIf &operator= (IfLetExprConseqIf &&other) = default;
-
-  void accept_vis (ASTVisitor &vis) override;
-
-  // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<IfExpr> &get_conseq_if_expr ()
-  {
-    rust_assert (if_expr != nullptr);
-    return if_expr;
-  }
-
-protected:
-  /* Use covariance to implement clone function as returning this object rather
-   * than base */
-  IfLetExprConseqIf *clone_if_let_expr_impl () const override
-  {
-    return new IfLetExprConseqIf (*this);
-  }
-};
-
-/* AST node representing "if let" expression with an "else if let" expression at
- * the end */
-class IfLetExprConseqIfLet : public IfLetExpr
-{
-  std::unique_ptr<IfLetExpr> if_let_expr;
-
-public:
-  std::string as_string () const override;
-
-  IfLetExprConseqIfLet (
-    std::vector<std::unique_ptr<Pattern> > match_arm_patterns,
-    std::unique_ptr<Expr> value, std::unique_ptr<BlockExpr> if_block,
-    std::unique_ptr<IfLetExpr> if_let_expr, std::vector<Attribute> outer_attrs,
-    Location locus)
-    : IfLetExpr (std::move (match_arm_patterns), std::move (value),
-		 std::move (if_block), std::move (outer_attrs), locus),
-      if_let_expr (std::move (if_let_expr))
-  {}
-  // outer attributes not allowed
-
-  // copy constructor with clone
-  IfLetExprConseqIfLet (IfLetExprConseqIfLet const &other)
-    : IfLetExpr (other), if_let_expr (other.if_let_expr->clone_if_let_expr ())
-  {}
-
-  // overload assignment operator to clone
-  IfLetExprConseqIfLet &operator= (IfLetExprConseqIfLet const &other)
-  {
-    IfLetExpr::operator= (other);
-    // match_arm_patterns = other.match_arm_patterns;
-    // value = other.value->clone_expr();
-    // if_block = other.if_block->clone_block_expr();
-    if_let_expr = other.if_let_expr->clone_if_let_expr ();
-
-    return *this;
-  }
-
-  // move constructors
-  IfLetExprConseqIfLet (IfLetExprConseqIfLet &&other) = default;
-  IfLetExprConseqIfLet &operator= (IfLetExprConseqIfLet &&other) = default;
-
-  void accept_vis (ASTVisitor &vis) override;
-
-  // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<IfLetExpr> &get_conseq_if_let_expr ()
-  {
-    rust_assert (if_let_expr != nullptr);
-    return if_let_expr;
-  }
-
-protected:
-  /* Use covariance to implement clone function as returning this object rather
-   * than base */
-  IfLetExprConseqIfLet *clone_if_let_expr_impl () const override
-  {
-    return new IfLetExprConseqIfLet (*this);
   }
 };
 
@@ -4236,7 +4190,7 @@ private:
   // inlined from MatchArmGuard
   std::unique_ptr<Expr> guard_expr;
 
-  Location locus;
+  location_t locus;
 
 public:
   // Returns whether the MatchArm has a match arm guard expression
@@ -4244,7 +4198,7 @@ public:
 
   // Constructor for match arm with a guard expression
   MatchArm (std::vector<std::unique_ptr<Pattern> > match_arm_patterns,
-	    Location locus, std::unique_ptr<Expr> guard_expr = nullptr,
+	    location_t locus, std::unique_ptr<Expr> guard_expr = nullptr,
 	    std::vector<Attribute> outer_attrs = std::vector<Attribute> ())
     : outer_attrs (std::move (outer_attrs)),
       match_arm_patterns (std::move (match_arm_patterns)),
@@ -4294,14 +4248,20 @@ public:
   // Creates a match arm in an error state.
   static MatchArm create_error ()
   {
-    Location locus = Location ();
+    location_t locus = UNDEF_LOCATION;
     return MatchArm (std::vector<std::unique_ptr<Pattern> > (), locus);
   }
 
   std::string as_string () const;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_guard_expr ()
+  Expr &get_guard_expr ()
+  {
+    rust_assert (has_match_arm_guard ());
+    return *guard_expr;
+  }
+
+  std::unique_ptr<Expr> &get_guard_expr_ptr ()
   {
     rust_assert (has_match_arm_guard ());
     return guard_expr;
@@ -4320,7 +4280,7 @@ public:
     return match_arm_patterns;
   }
 
-  Location get_locus () const { return locus; }
+  location_t get_locus () const { return locus; }
 };
 
 /* A "match case" - a correlated match arm and resulting expression. Not
@@ -4362,7 +4322,13 @@ public:
   std::string as_string () const;
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_expr ()
+  Expr &get_expr ()
+  {
+    rust_assert (expr != nullptr);
+    return *expr;
+  }
+
+  std::unique_ptr<Expr> &get_expr_ptr ()
   {
     rust_assert (expr != nullptr);
     return expr;
@@ -4385,7 +4351,7 @@ class MatchExpr : public ExprWithBlock
   std::unique_ptr<Expr> branch_value;
   std::vector<Attribute> inner_attrs;
   std::vector<MatchCase> match_arms;
-  Location locus;
+  location_t locus;
 
 public:
   std::string as_string () const override;
@@ -4396,7 +4362,7 @@ public:
   MatchExpr (std::unique_ptr<Expr> branch_value,
 	     std::vector<MatchCase> match_arms,
 	     std::vector<Attribute> inner_attrs,
-	     std::vector<Attribute> outer_attrs, Location locus)
+	     std::vector<Attribute> outer_attrs, location_t locus)
     : outer_attrs (std::move (outer_attrs)),
       branch_value (std::move (branch_value)),
       inner_attrs (std::move (inner_attrs)),
@@ -4436,7 +4402,7 @@ public:
   MatchExpr (MatchExpr &&other) = default;
   MatchExpr &operator= (MatchExpr &&other) = default;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -4449,7 +4415,7 @@ public:
   std::vector<Attribute> &get_inner_attrs () { return inner_attrs; }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -4457,10 +4423,10 @@ public:
   }
 
   // TODO: is this better? Or is a "vis_block" better?
-  std::unique_ptr<Expr> &get_scrutinee_expr ()
+  Expr &get_scrutinee_expr ()
   {
     rust_assert (branch_value != nullptr);
-    return branch_value;
+    return *branch_value;
   }
 
   const std::vector<MatchCase> &get_match_cases () const { return match_arms; }
@@ -4480,12 +4446,12 @@ class AwaitExpr : public ExprWithoutBlock
 {
   std::vector<Attribute> outer_attrs;
   std::unique_ptr<Expr> awaited_expr;
-  Location locus;
+  location_t locus;
 
 public:
   // TODO: ensure outer attributes are actually allowed
   AwaitExpr (std::unique_ptr<Expr> awaited_expr,
-	     std::vector<Attribute> outer_attrs, Location locus)
+	     std::vector<Attribute> outer_attrs, location_t locus)
     : outer_attrs (std::move (outer_attrs)),
       awaited_expr (std::move (awaited_expr)), locus (locus)
   {}
@@ -4522,7 +4488,7 @@ public:
 
   std::string as_string () const override;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -4538,7 +4504,7 @@ public:
   }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -4561,11 +4527,11 @@ class AsyncBlockExpr : public ExprWithBlock
   std::vector<Attribute> outer_attrs;
   bool has_move;
   std::unique_ptr<BlockExpr> block_expr;
-  Location locus;
+  location_t locus;
 
 public:
   AsyncBlockExpr (std::unique_ptr<BlockExpr> block_expr, bool has_move,
-		  std::vector<Attribute> outer_attrs, Location locus)
+		  std::vector<Attribute> outer_attrs, location_t locus)
     : outer_attrs (std::move (outer_attrs)), has_move (has_move),
       block_expr (std::move (block_expr)), locus (locus)
   {}
@@ -4603,7 +4569,8 @@ public:
 
   std::string as_string () const override;
 
-  Location get_locus () const override final { return locus; }
+  bool get_has_move () { return has_move; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -4619,7 +4586,7 @@ public:
   }
 
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
-  std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
+  std::vector<Attribute> &get_outer_attrs () override { return outer_attrs; }
 
   void set_outer_attrs (std::vector<Attribute> new_attrs) override
   {
@@ -4635,143 +4602,144 @@ protected:
   }
 };
 
+// Inline-assembly specific options
+enum class InlineAsmOptions
+{
+  PURE = 1 << 0,
+  NOMEM = 1 << 1,
+  READONLY = 1 << 2,
+  PRESERVES_FLAGS = 1 << 3,
+  NORETURN = 1 << 4,
+  NOSTACK = 1 << 5,
+  ATT_SYNTAX = 1 << 6,
+  RAW = 1 << 7,
+  MAY_UNWIND = 1 << 8,
+};
+
+struct AnonConst
+{
+  NodeId id;
+  std::unique_ptr<Expr> value;
+};
+
+struct InlineAsmRegOrRegClass
+{
+  enum Type
+  {
+    Reg,
+    RegClass,
+  };
+
+  struct Reg
+  {
+    std::string Symbol;
+  };
+
+  struct RegClass
+  {
+    std::string Symbol;
+  };
+
+  Identifier name;
+  location_t locus;
+};
+
+struct InlineAsmOperand
+{
+  enum RegisterType
+  {
+    In,
+    Out,
+    InOut,
+    SplitInOut,
+    Const,
+    Sym,
+  };
+
+  struct In
+  {
+    InlineAsmRegOrRegClass reg;
+    std::unique_ptr<Expr> expr;
+  };
+
+  struct Out
+  {
+    InlineAsmRegOrRegClass reg;
+    bool late;
+    std::unique_ptr<Expr> expr; // can be null
+  };
+
+  struct InOut
+  {
+    InlineAsmRegOrRegClass reg;
+    bool late;
+    std::unique_ptr<Expr> expr; // this can't be null
+  };
+
+  struct SplitInOut
+  {
+    InlineAsmRegOrRegClass reg;
+    bool late;
+    std::unique_ptr<Expr> in_expr;
+    std::unique_ptr<Expr> out_expr; // could be null
+  };
+
+  struct Const
+  {
+    AnonConst anon_const;
+  };
+
+  struct Sym
+  {
+    std::unique_ptr<Expr> sym;
+  };
+  location_t locus;
+};
+
+struct InlineAsmPlaceHolder
+{
+  size_t operand_idx;
+  char modifier; // can be null
+  location_t locus;
+};
+
+struct InlineAsmTemplatePiece
+{
+  bool is_placeholder;
+  union
+  {
+    std::string string;
+    InlineAsmPlaceHolder placeholder;
+  };
+};
+
+struct TupleClobber
+{
+  // as gccrs still doesn't contain a symbol class I have put them as strings
+  std::string symbol;
+  location_t loc;
+};
+
+struct TupleTemplateStr
+{
+  // as gccrs still doesn't contain a symbol class I have put them as strings
+  std::string symbol;
+  std::string optional_symbol;
+  location_t loc;
+};
+
 // Inline Assembly Node
 class InlineAsm : public ExprWithoutBlock
 {
-  // Inline-assembly specific options
-  enum InlineAsmOptions
-  {
-    PURE = 1 << 0,
-    NOMEM = 1 << 1,
-    READONLY = 1 << 2,
-    PRESERVES_FLAGS = 1 << 3,
-    NORETURN = 1 << 4,
-    NOSTACK = 1 << 5,
-    ATT_SYNTAX = 1 << 6,
-    RAW = 1 << 7,
-    MAY_UNWIND = 1 << 8,
-  };
-
-  struct AnonConst
-  {
-    NodeId id;
-    std::unique_ptr<Expr> value;
-  };
-
-  struct InlineAsmRegOrRegClass
-  {
-    enum Type
-    {
-      Reg,
-      RegClass,
-    };
-
-    struct Reg
-    {
-      std::string Symbol;
-    };
-
-    struct RegClass
-    {
-      std::string Symbol;
-    };
-
-    Identifier name;
-    Location locus;
-  };
-
-  struct InlineAsmOperand
-  {
-    enum RegisterType
-    {
-      In,
-      Out,
-      InOut,
-      SplitInOut,
-      Const,
-      Sym,
-    };
-
-    struct In
-    {
-      InlineAsmRegOrRegClass reg;
-      std::unique_ptr<Expr> expr;
-    };
-
-    struct Out
-    {
-      InlineAsmRegOrRegClass reg;
-      bool late;
-      std::unique_ptr<Expr> expr; // can be null
-    };
-
-    struct InOut
-    {
-      InlineAsmRegOrRegClass reg;
-      bool late;
-      std::unique_ptr<Expr> expr; // this can't be null
-    };
-
-    struct SplitInOut
-    {
-      InlineAsmRegOrRegClass reg;
-      bool late;
-      std::unique_ptr<Expr> in_expr;
-      std::unique_ptr<Expr> out_expr; // could be null
-    };
-
-    struct Const
-    {
-      AnonConst anon_const;
-    };
-
-    struct Sym
-    {
-      std::unique_ptr<Expr> sym;
-    };
-    Location locus;
-  };
-
-  struct InlineAsmPlaceHolder
-  {
-    size_t operand_idx;
-    char modifier; // can be null
-    Location locus;
-  };
-
-  struct InlineAsmTemplatePiece
-  {
-    bool is_placeholder;
-    union
-    {
-      std::string string;
-      InlineAsmPlaceHolder placeholder;
-    };
-  };
-
-  struct TupleClobber
-  {
-    // as gccrs still doesen't contain a symbol class I have put them as strings
-    std::string symbol;
-    Location loc;
-  };
-
-  struct TupleTemplateStr
-  {
-    // as gccrs still doesen't contain a symbol class I have put them as strings
-    std::string symbol;
-    std::string optional_symbol;
-    Location loc;
-  };
-
 public:
   std::vector<InlineAsmTemplatePiece> template_;
   std::vector<TupleTemplateStr> template_strs;
   std::vector<InlineAsmOperand> operands;
   TupleClobber clobber_abi;
   InlineAsmOptions options;
-  std::vector<Location> line_spans;
+  std::vector<location_t> line_spans;
 };
+
 } // namespace AST
 } // namespace Rust
 

@@ -137,10 +137,6 @@ class ThreadSuspender {
 };
 
 bool ThreadSuspender::SuspendThread(tid_t tid) {
-  // Are we already attached to this thread?
-  // Currently this check takes linear time, however the number of threads is
-  // usually small.
-  if (suspended_threads_list_.ContainsTid(tid)) return false;
   int pterrno;
   if (internal_iserror(internal_ptrace(PTRACE_ATTACH, tid, nullptr, nullptr),
                        &pterrno)) {
@@ -217,17 +213,28 @@ bool ThreadSuspender::SuspendAllThreads() {
     switch (thread_lister.ListThreads(&threads)) {
       case ThreadLister::Error:
         ResumeAllThreads();
+        VReport(1, "Failed to list threads\n");
         return false;
       case ThreadLister::Incomplete:
+        VReport(1, "Incomplete list\n");
         retry = true;
         break;
       case ThreadLister::Ok:
         break;
     }
     for (tid_t tid : threads) {
+      // Are we already attached to this thread?
+      // Currently this check takes linear time, however the number of threads
+      // is usually small.
+      if (suspended_threads_list_.ContainsTid(tid))
+        continue;
       if (SuspendThread(tid))
         retry = true;
+      else
+        VReport(2, "%llu/status: %s\n", tid, thread_lister.LoadStatus(tid));
     }
+    if (retry)
+      VReport(1, "SuspendAllThreads retry: %d\n", i);
   }
   return suspended_threads_list_.ThreadCount();
 }
@@ -257,8 +264,8 @@ static void TracerThreadDieCallback() {
 static void TracerThreadSignalHandler(int signum, __sanitizer_siginfo *siginfo,
                                       void *uctx) {
   SignalContext ctx(siginfo, uctx);
-  Printf("Tracer caught signal %d: addr=0x%zx pc=0x%zx sp=0x%zx\n", signum,
-         ctx.addr, ctx.pc, ctx.sp);
+  Printf("Tracer caught signal %d: addr=%p pc=%p sp=%p\n", signum,
+         (void *)ctx.addr, (void *)ctx.pc, (void *)ctx.sp);
   ThreadSuspender *inst = thread_suspender_instance;
   if (inst) {
     if (signum == SIGABRT)
@@ -565,7 +572,7 @@ PtraceRegistersStatus SuspendedThreadsListLinux::GetRegistersAndSP(
   constexpr uptr uptr_sz = sizeof(uptr);
   int pterrno;
 #ifdef ARCH_IOVEC_FOR_GETREGSET
-  auto append = [&](uptr regset) {
+  auto AppendF = [&](uptr regset) {
     uptr size = buffer->size();
     // NT_X86_XSTATE requires 64bit alignment.
     uptr size_up = RoundUpTo(size, 8 / uptr_sz);
@@ -596,11 +603,11 @@ PtraceRegistersStatus SuspendedThreadsListLinux::GetRegistersAndSP(
   };
 
   buffer->clear();
-  bool fail = !append(NT_PRSTATUS);
+  bool fail = !AppendF(NT_PRSTATUS);
   if (!fail) {
     // Accept the first available and do not report errors.
     for (uptr regs : kExtraRegs)
-      if (regs && append(regs))
+      if (regs && AppendF(regs))
         break;
   }
 #else

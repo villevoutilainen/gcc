@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -494,8 +494,8 @@ package body Exception_Propagation is
       then
          declare
             Current : constant EOA := Get_Current_Excep.all;
-            Cur_Occ : constant GCC_Exception_Access
-              := To_GCC_Exception (Current.Machine_Occurrence);
+            Cur_Occ : constant GCC_Exception_Access :=
+              To_GCC_Exception (Current.Machine_Occurrence);
          begin
             --  If we are releasing the Machine_Occurrence of the current
             --  exception, reset the access to it, so that it is no

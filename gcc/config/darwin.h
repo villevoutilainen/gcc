@@ -1,5 +1,5 @@
 /* Target definitions for Darwin (macOS) systems.
-   Copyright (C) 1989-2023 Free Software Foundation, Inc.
+   Copyright (C) 1989-2024 Free Software Foundation, Inc.
    Contributed by Apple Computer Inc.
 
 This file is part of GCC.
@@ -264,6 +264,8 @@ extern GTY(()) int darwin_ms_struct;
   "%{weak_reference_mismatches*:\
     -Xlinker -weak_reference_mismatches -Xlinker %*} \
     %<weak_reference_mismatches*",					\
+  "%{weak_framework*: -Xlinker -weak_framework -Xlinker %*} \
+    %<weak_framework*",							\
   "%{whyload:-Xlinker -whyload} %<whyload",				\
   "%{whatsloaded:-Xlinker -whatsloaded} %<whatsloaded",			\
   "%{w:-Xlinker -w}",							\
@@ -308,6 +310,35 @@ extern GTY(()) int darwin_ms_struct;
 
 #define DARWIN_CC1_SPEC							\
   "%<dynamic %<force_cpusubtype_ALL %<multiply_defined* %<dynamiclib"
+
+/* When we are using embedded runpaths DARWIN_AT_RPATH is set. */
+#if DARWIN_AT_RPATH
+# define DARWIN_RPATH_LINK \
+"%{!r:%{!nostdlib:%{!nodefaultrpaths:%(darwin_rpaths)}}}"
+# define DARWIN_SHARED_LIBGCC "-lgcc_s.1.1"
+# define DARWIN_SHARED_WEAK_ADDS " "
+#else
+# define DARWIN_RPATH_LINK ""
+# define DARWIN_SHARED_LIBGCC \
+"%:version-compare(!> 10.11 mmacosx-version-min= -lgcc_s.1.1)"
+# define DARWIN_SHARED_WEAK_ADDS \
+"%{%:version-compare(>= 10.11 mmacosx-version-min= -lemutls_w): \
+ " DARWIN_HEAP_T_LIB "}"
+#endif
+
+
+/* We might elect to add a path even when this compiler does not use embedded
+   run paths, so that we can use libraries from an alternate compiler that is
+   using embedded runpaths.  */
+#if DARWIN_DO_EXTRA_RPATH
+# define DARWIN_EXTRA_RPATH \
+"%{!r:%{!nostdlib:%{!nodefaultrpaths:\
+    %:version-compare(>= 10.5 mmacosx-version-min= -rpath) \
+    %:version-compare(>= 10.5 mmacosx-version-min= " DARWIN_ADD_RPATH ") \
+  }}}"
+#else
+# define DARWIN_EXTRA_RPATH ""
+#endif
 
 #define SUBSUBTARGET_OVERRIDE_OPTIONS					\
   do {									\
@@ -373,9 +404,11 @@ extern GTY(()) int darwin_ms_struct;
     %{e*} %{r} \
     %{o*}%{!o:-o a.out} \
     %{!r:%{!nostdlib:%{!nostartfiles:%S}}} \
-    %{L*} %(link_libgcc) %o \
+    %{L*} %(link_libgcc) \
+    %{!r:%{!nostdlib:%{!nodefaultlibs: " DARWIN_WEAK_CRTS "}}} \
+    %o \
     %{!r:%{!nostdlib:%{!nodefaultlibs:\
-      %{fprofile-arcs|fprofile-generate*|coverage:-lgcov} \
+      %{fprofile-arcs|fcondition-coverage|fprofile-generate*|coverage:-lgcov} \
       %{fopenacc|fopenmp|%:gt(%{ftree-parallelize-loops=*:%*} 1): \
 	%{static|static-libgcc|static-libstdc++|static-libgfortran: \
 	  libgomp.a%s; : -lgomp }} \
@@ -387,15 +420,15 @@ extern GTY(()) int darwin_ms_struct;
       %(link_ssp) \
       %:version-compare(>< 10.6 10.7 mmacosx-version-min= -ld10-uwfef) \
       %(link_gcc_c_sequence) \
-      %{!nodefaultexport:%{dylib|dynamiclib|bundle: \
-	%:version-compare(>= 10.11 asm_macosx_version_min= -U) \
-	%:version-compare(>= 10.11 asm_macosx_version_min= ___emutls_get_address) \
-	%:version-compare(>= 10.11 asm_macosx_version_min= -exported_symbol) \
-	%:version-compare(>= 10.11 asm_macosx_version_min= ___emutls_get_address) \
-	%:version-compare(>= 10.11 asm_macosx_version_min= -U) \
-	%:version-compare(>= 10.11 asm_macosx_version_min= ___emutls_register_common) \
-	%:version-compare(>= 10.11 asm_macosx_version_min= -exported_symbol) \
-	%:version-compare(>= 10.11 asm_macosx_version_min= ___emutls_register_common) \
+      %{!nodefaultexport: \
+	%{%:version-compare(>= 10.11 asm_macosx_version_min= -U): \
+	   ___emutls_get_address -exported_symbol ___emutls_get_address \
+	  -U ___emutls_register_common \
+	  -exported_symbol ___emutls_register_common \
+	  -U ___gcc_nested_func_ptr_created \
+	  -exported_symbol ___gcc_nested_func_ptr_created \
+	  -U ___gcc_nested_func_ptr_deleted \
+	  -exported_symbol ___gcc_nested_func_ptr_deleted \
       }} \
     }}}\
     %{!r:%{!nostdlib:%{!nostartfiles:%E}}} %{T*} %{F*} "\
@@ -403,7 +436,9 @@ extern GTY(()) int darwin_ms_struct;
     DARWIN_NOPIE_SPEC \
     DARWIN_RDYNAMIC \
     DARWIN_NOCOMPACT_UNWIND \
-    "}}}}}}} %<pie %<no-pie %<rdynamic %<X %<rpath "
+    DARWIN_EXTRA_RPATH \
+    DARWIN_RPATH_LINK \
+    "}}}}}}} %<pie %<no-pie %<rdynamic %<X %<rpath %<nodefaultrpaths "
 
 /* Spec that controls whether the debug linker is run automatically for
    a link step.  This needs to be done if there is a source file on the
@@ -515,16 +550,20 @@ extern GTY(()) int darwin_ms_struct;
 #undef REAL_LIBGCC_SPEC
 #define REAL_LIBGCC_SPEC \
 "%{static-libgcc|static:						  \
-    %:version-compare(!> 10.6 mmacosx-version-min= -lgcc_eh)		  \
-    %:version-compare(>= 10.6 mmacosx-version-min= -lemutls_w);		  \
+    %:version-compare(!> 10.6 mmacosx-version-min= -lgcc_eh);		  \
    shared-libgcc|fexceptions|fobjc-exceptions|fgnu-runtime:		  \
-    %:version-compare(!> 10.11 mmacosx-version-min= -lgcc_s.1.1)	  \
-    %:version-compare(>= 10.11 mmacosx-version-min= -lemutls_w)		  \
+   " DARWIN_SHARED_LIBGCC "						  \
     %:version-compare(!> 10.3.9 mmacosx-version-min= -lgcc_eh)		  \
     %:version-compare(>< 10.3.9 10.5 mmacosx-version-min= -lgcc_s.10.4)   \
-    %:version-compare(>< 10.5 10.6 mmacosx-version-min= -lgcc_s.10.5);	  \
-   : -lemutls_w								  \
+    %:version-compare(>< 10.5 10.6 mmacosx-version-min= -lgcc_s.10.5)	  \
   } -lgcc "
+
+#define DARWIN_WEAK_CRTS \
+"%{static-libgcc|static:						  \
+    %{%:version-compare(>= 10.6 mmacosx-version-min= -lemutls_w):	  \
+      " DARWIN_HEAP_T_LIB "} ;						  \
+   : -lemutls_w	" DARWIN_HEAP_T_LIB "					  \
+  }"
 
 /* We specify crt0.o as -lcrt0.o so that ld will search the library path.  */
 
@@ -554,7 +593,8 @@ extern GTY(()) int darwin_ms_struct;
   { "darwin_crt2", DARWIN_CRT2_SPEC },					\
   { "darwin_crt3", DARWIN_CRT3_SPEC },					\
   { "darwin_dylib1", DARWIN_DYLIB1_SPEC },				\
-  { "darwin_bundle1", DARWIN_BUNDLE1_SPEC },
+  { "darwin_bundle1", DARWIN_BUNDLE1_SPEC },				\
+  { "darwin_rpaths", DARWIN_RPATH_SPEC },
 
 #define DARWIN_CRT1_SPEC						\
   "%:version-compare(!> 10.5 mmacosx-version-min= -lcrt1.o)		\
@@ -580,6 +620,16 @@ extern GTY(()) int darwin_ms_struct;
 "%{!static:%:version-compare(< 10.6 mmacosx-version-min= -lbundle1.o)	\
 	   %{fgnu-tm: -lcrttms.o}}"
 
+#if DARWIN_AT_RPATH
+/* A default rpath, that picks up dependent libraries installed in the same
+   director as one being loaded.  */
+#define DARWIN_RPATH_SPEC \
+  "%:version-compare(>= 10.5 mmacosx-version-min= -rpath) \
+   %{%:version-compare(>= 10.5 mmacosx-version-min= @loader_path): %P }"
+#else
+#define DARWIN_RPATH_SPEC ""
+#endif
+
 #ifdef HAVE_AS_MMACOSX_VERSION_MIN_OPTION
 /* Emit macosx version (but only major).  */
 #define ASM_MMACOSX_VERSION_MIN_SPEC \
@@ -597,6 +647,8 @@ extern GTY(()) int darwin_ms_struct;
    additional options.  Actually, currently these are the same as GAS.  */
 #define ASM_OPTIONS "%{v} %{w:-W} %{I*}"
 #endif
+
+#define AS_NEEDS_DASH_FOR_PIPED_INPUT
 
 /* Default Darwin ASM_SPEC, very simple. */
 #define ASM_SPEC \
@@ -800,7 +852,7 @@ ASM_OPTIONS ASM_MMACOSX_VERSION_MIN_SPEC
 #define TARGET_ASM_DECLARE_CONSTANT_NAME darwin_asm_declare_constant_name
 
 /* Wrap new method names in quotes so the assembler doesn't gag.
-   Make Objective-C internal symbols local and in doing this, we need 
+   Make Objective-C internal symbols local and in doing this, we need
    to accommodate the name mangling done by c++ on file scope locals.  */
 
 int darwin_label_is_anonymous_local_objc_name (const char *name);
@@ -830,7 +882,9 @@ int darwin_label_is_anonymous_local_objc_name (const char *name);
        else if (xname[0] == '+' || xname[0] == '-')			     \
          fprintf (FILE, "\"%s\"", xname);				     \
        else if (darwin_label_is_anonymous_local_objc_name (xname))	     \
-         fprintf (FILE, "L%s", xname);					     \
+	fprintf (FILE, "%c%s", flag_next_runtime ? 'L' : 'l', xname);	     \
+       else if (strncmp (xname, "__anon_cfstring", 15) == 0)		     \
+	fprintf (FILE, "L%s", xname);					     \
        else if (xname[0] != '"' && name_needs_quotes (xname))		     \
 	 asm_fprintf (FILE, "\"%U%s\"", xname);				     \
        else								     \
@@ -1155,7 +1209,7 @@ void add_framework_path (char *);
 #undef GTM_SELF_SPECS
 #define GTM_SELF_SPECS ""
 
-/* Darwin disables section anchors by default.  
+/* Darwin disables section anchors by default.
    They should be enabled per arch where support exists in that arch.  */
 #define TARGET_ASM_OUTPUT_ANCHOR NULL
 #define DARWIN_SECTION_ANCHORS 0
@@ -1186,7 +1240,7 @@ extern void darwin_driver_init (unsigned int *,struct cl_decoded_option **);
 #undef STACK_CHECK_STATIC_BUILTIN
 #define STACK_CHECK_STATIC_BUILTIN 1
 
-/* When building cross-compilers (and native crosses) we shall default to 
+/* When building cross-compilers (and native crosses) we shall default to
    providing an osx-version-min of this unless overridden by the User.
    10.5 is the only version that fully supports all our archs so that's the
    fall-back default.  */

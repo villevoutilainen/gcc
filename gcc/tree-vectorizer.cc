@@ -1,5 +1,5 @@
 /* Vectorizer
-   Copyright (C) 2003-2023 Free Software Foundation, Inc.
+   Copyright (C) 2003-2024 Free Software Foundation, Inc.
    Contributed by Dorit Naishlos <dorit@il.ibm.com>
 
 This file is part of GCC.
@@ -463,7 +463,10 @@ shrink_simd_arrays
 vec_info::vec_info (vec_info::vec_kind kind_in, vec_info_shared *shared_)
   : kind (kind_in),
     shared (shared_),
-    stmt_vec_info_ro (false)
+    stmt_vec_info_ro (false),
+    bbs (NULL),
+    nbbs (0),
+    inv_pattern_def_seq (NULL)
 {
   stmt_vec_infos.create (50);
 }
@@ -477,8 +480,7 @@ vec_info::~vec_info ()
 }
 
 vec_info_shared::vec_info_shared ()
-  : n_stmts (0),
-    datarefs (vNULL),
+  : datarefs (vNULL),
     datarefs_copy (vNULL),
     ddrs (vNULL)
 {
@@ -532,9 +534,33 @@ stmt_vec_info
 vec_info::add_pattern_stmt (gimple *stmt, stmt_vec_info stmt_info)
 {
   stmt_vec_info res = new_stmt_vec_info (stmt);
+  res->pattern_stmt_p = true;
   set_vinfo_for_stmt (stmt, res, false);
   STMT_VINFO_RELATED_STMT (res) = stmt_info;
   return res;
+}
+
+/* If STMT was previously associated with a stmt_vec_info and STMT now resides
+   at a different address than before (e.g., because STMT is a phi node that has
+   been resized), update the stored address to match the new one.  It is not
+   possible to use lookup_stmt () to perform this task, because that function
+   returns NULL if the stored stmt pointer does not match the one being looked
+   up.  */
+
+stmt_vec_info
+vec_info::resync_stmt_addr (gimple *stmt)
+{
+  unsigned int uid = gimple_uid (stmt);
+  if (uid > 0 && uid - 1 < stmt_vec_infos.length ())
+    {
+      stmt_vec_info res = stmt_vec_infos[uid - 1];
+      if (res && res->stmt)
+	{
+	  res->stmt = stmt;
+	  return res;
+	}
+    }
+  return nullptr;
 }
 
 /* If STMT has an associated stmt_vec_info, return that vec_info, otherwise
@@ -605,6 +631,8 @@ vec_info::move_dr (stmt_vec_info new_stmt_info, stmt_vec_info old_stmt_info)
     = STMT_VINFO_DR_WRT_VEC_LOOP (old_stmt_info);
   STMT_VINFO_GATHER_SCATTER_P (new_stmt_info)
     = STMT_VINFO_GATHER_SCATTER_P (old_stmt_info);
+  STMT_VINFO_STRIDED_P (new_stmt_info)
+    = STMT_VINFO_STRIDED_P (old_stmt_info);
 }
 
 /* Permanently remove the statement described by STMT_INFO from the
@@ -660,9 +688,8 @@ vec_info::insert_seq_on_entry (stmt_vec_info context, gimple_seq seq)
     }
   else
     {
-      bb_vec_info bb_vinfo = as_a <bb_vec_info> (this);
       gimple_stmt_iterator gsi_region_begin
-	= gsi_after_labels (bb_vinfo->bbs[0]);
+	= gsi_after_labels (bbs[0]);
       gsi_insert_seq_before (&gsi_region_begin, seq, GSI_SAME_STMT);
     }
 }
@@ -943,6 +970,8 @@ set_uid_loop_bbs (loop_vec_info loop_vinfo, gimple *loop_vectorized_call,
   class loop *scalar_loop = get_loop (fun, tree_to_shwi (arg));
 
   LOOP_VINFO_SCALAR_LOOP (loop_vinfo) = scalar_loop;
+  LOOP_VINFO_SCALAR_IV_EXIT (loop_vinfo)
+    = vec_init_loop_exit_info (scalar_loop);
   gcc_checking_assert (vect_loop_vectorized_call (scalar_loop)
 		       == loop_vectorized_call);
   /* If we are going to vectorize outer loop, prevent vectorization
@@ -1061,7 +1090,8 @@ try_vectorize_loop_1 (hash_table<simduid_to_vf> *&simduid_to_vf_htab,
 		 LOCATION_LINE (vect_location.get_location_t ()));
 
   /* Try to analyze the loop, retaining an opt_problem if dump_enabled_p.  */
-  opt_loop_vec_info loop_vinfo = vect_analyze_loop (loop, &shared);
+  opt_loop_vec_info loop_vinfo = vect_analyze_loop (loop, loop_vectorized_call,
+						    &shared);
   loop->aux = loop_vinfo;
 
   if (!loop_vinfo)
@@ -1317,6 +1347,7 @@ pass_vectorize::execute (function *fun)
 	    if (g)
 	      {
 		fold_loop_internal_call (g, boolean_false_node);
+		loop->dont_vectorize = false;
 		ret |= TODO_cleanup_cfg;
 		g = NULL;
 	      }
@@ -1326,6 +1357,7 @@ pass_vectorize::execute (function *fun)
 	    if (g)
 	      {
 		fold_loop_internal_call (g, boolean_false_node);
+		loop->dont_vectorize = false;
 		ret |= TODO_cleanup_cfg;
 	      }
 	  }
@@ -1379,7 +1411,9 @@ pass_vectorize::execute (function *fun)
 	 predicates that need to be shared for optimal predicate usage.
 	 However reassoc will re-order them and prevent CSE from working
 	 as it should.  CSE only the loop body, not the entry.  */
-      bitmap_set_bit (exit_bbs, single_exit (loop)->dest->index);
+      auto_vec<edge> exits = get_loop_exit_edges (loop);
+      for (edge exit : exits)
+	bitmap_set_bit (exit_bbs, exit->dest->index);
 
       edge entry = EDGE_PRED (loop_preheader_edge (loop)->src, 0);
       do_rpo_vn (fun, entry, exit_bbs);
@@ -1561,7 +1595,7 @@ static hash_map<tree, unsigned> *type_align_map;
 /* Return alignment of array's vector type corresponding to scalar type.
    0 if no vector type exists.  */
 static unsigned
-get_vec_alignment_for_array_type (tree type) 
+get_vec_alignment_for_array_type (tree type)
 {
   gcc_assert (TREE_CODE (type) == ARRAY_TYPE);
   poly_uint64 array_size, vector_size;
@@ -1582,7 +1616,7 @@ get_vec_alignment_for_array_type (tree type)
    offset is a multiple of it's vector alignment.
    0 if no suitable field is found.  */
 static unsigned
-get_vec_alignment_for_record_type (tree type) 
+get_vec_alignment_for_record_type (tree type)
 {
   gcc_assert (TREE_CODE (type) == RECORD_TYPE);
 
@@ -1601,7 +1635,7 @@ get_vec_alignment_for_record_type (tree type)
        field != NULL_TREE;
        field = DECL_CHAIN (field))
     {
-      /* Skip if not FIELD_DECL or if alignment is set by user.  */ 
+      /* Skip if not FIELD_DECL or if alignment is set by user.  */
       if (TREE_CODE (field) != FIELD_DECL
 	  || DECL_USER_ALIGN (field)
 	  || DECL_ARTIFICIAL (field))
@@ -1619,11 +1653,11 @@ get_vec_alignment_for_record_type (tree type)
       if (!tree_fits_uhwi_p (offset_tree))
 	break;
 
-      offset = tree_to_uhwi (offset_tree); 
+      offset = tree_to_uhwi (offset_tree);
       alignment = get_vec_alignment_for_type (TREE_TYPE (field));
 
       /* Get maximum alignment of vectorized field/array among those members
-	 whose offset is multiple of the vector alignment.  */ 
+	 whose offset is multiple of the vector alignment.  */
       if (alignment
 	  && (offset % alignment == 0)
 	  && (alignment > max_align))

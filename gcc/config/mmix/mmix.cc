@@ -1,5 +1,5 @@
 /* Definitions of target machine for GNU compiler, for MMIX.
-   Copyright (C) 2000-2023 Free Software Foundation, Inc.
+   Copyright (C) 2000-2024 Free Software Foundation, Inc.
    Contributed by Hans-Peter Nilsson (hp@bitrange.com)
 
 This file is part of GCC.
@@ -761,7 +761,7 @@ mmix_function_value (const_tree valtype,
 
   if (!outgoing)
     return gen_rtx_REG (mode, MMIX_RETURN_VALUE_REGNUM);
-  
+
   /* Return values that fit in a register need no special handling.
      There's no register hole when parameters are passed in global
      registers.  */

@@ -1,5 +1,5 @@
 /* real.cc - software floating point emulation.
-   Copyright (C) 1993-2023 Free Software Foundation, Inc.
+   Copyright (C) 1993-2024 Free Software Foundation, Inc.
    Contributed by Stephen L. Moshier (moshier@world.std.com).
    Re-written by Richard Henderson <rth@redhat.com>
 
@@ -1260,7 +1260,7 @@ real_isnan (const REAL_VALUE_TYPE *r)
   return (r->cl == rvc_nan);
 }
 
-/* Determine whether a floating-point value X is a signaling NaN.  */ 
+/* Determine whether a floating-point value X is a signaling NaN.  */
 bool real_issignaling_nan (const REAL_VALUE_TYPE *r)
 {
   return real_isnan (r) && r->signalling;
@@ -1477,7 +1477,7 @@ real_to_integer (const REAL_VALUE_TYPE *r)
 wide_int
 real_to_integer (const REAL_VALUE_TYPE *r, bool *fail, int precision)
 {
-  HOST_WIDE_INT val[2 * WIDE_INT_MAX_ELTS];
+  HOST_WIDE_INT valb[WIDE_INT_MAX_INL_ELTS], *val;
   int exp;
   int words, w;
   wide_int result;
@@ -1516,7 +1516,11 @@ real_to_integer (const REAL_VALUE_TYPE *r, bool *fail, int precision)
 	 is the smallest HWI-multiple that has at least PRECISION bits.
 	 This ensures that the top bit of the significand is in the
 	 top bit of the wide_int.  */
-      words = (precision + HOST_BITS_PER_WIDE_INT - 1) / HOST_BITS_PER_WIDE_INT;
+      words = ((precision + HOST_BITS_PER_WIDE_INT - 1)
+	       / HOST_BITS_PER_WIDE_INT);
+      val = valb;
+      if (UNLIKELY (words > WIDE_INT_MAX_INL_ELTS))
+	val = XALLOCAVEC (HOST_WIDE_INT, words);
       w = words * HOST_BITS_PER_WIDE_INT;
 
 #if (HOST_BITS_PER_WIDE_INT == HOST_BITS_PER_LONG)
@@ -5434,6 +5438,22 @@ void
 get_max_float (const struct real_format *fmt, char *buf, size_t len,
 	       bool norm_max)
 {
+  if (fmt->b == 10)
+    {
+      char *p = buf;
+      for (int i = fmt->p; i; i--)
+	{
+	  *p++ = '9';
+	  if (i == fmt->p)
+	    *p++ = '.';
+	}
+      /* fmt->p plus 1, to account for the decimal point and fmt->emax
+	 minus 1 because the digits are nines, not 1.0.  */
+      sprintf (buf + fmt->p + 1, "E%d", fmt->emax - 1);
+      gcc_assert (strlen (buf) < len);
+      return;
+    }
+
   int i, n;
   char *p;
   bool is_ibm_extended = fmt->pnan < fmt->p;
@@ -5599,6 +5619,6 @@ build_sinatan_real (REAL_VALUE_TYPE * r, tree type)
   mpfr_sqrt (mpfr_c, mpfr_c, MPFR_RNDZ);
 
   real_from_mpfr (r, mpfr_c, fmt, MPFR_RNDZ);
-  
+
   mpfr_clears (mpfr_const1, mpfr_c, mpfr_maxval, NULL);
 }

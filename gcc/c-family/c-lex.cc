@@ -1,5 +1,5 @@
 /* Mainly the interface between cpplib and the C front ends.
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -31,6 +31,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "file-prefix-map.h" /* remap_macro_filename()  */
 #include "langhooks.h"
 #include "attribs.h"
+#include "rich-location.h"
 
 /* We may keep statistics about how long which files took to compile.  */
 static int header_time, body_time;
@@ -53,10 +54,10 @@ static tree lex_charconst (const cpp_token *);
 static void update_header_times (const char *);
 static int dump_one_header (splay_tree_node, void *);
 static void cb_line_change (cpp_reader *, const cpp_token *, int);
-static void cb_ident (cpp_reader *, unsigned int, const cpp_string *);
-static void cb_def_pragma (cpp_reader *, unsigned int);
-static void cb_define (cpp_reader *, unsigned int, cpp_hashnode *);
-static void cb_undef (cpp_reader *, unsigned int, cpp_hashnode *);
+static void cb_ident (cpp_reader *, location_t, const cpp_string *);
+static void cb_def_pragma (cpp_reader *, location_t);
+static void cb_define (cpp_reader *, location_t, cpp_hashnode *);
+static void cb_undef (cpp_reader *, location_t, cpp_hashnode *);
 
 void
 init_c_lex (void)
@@ -82,6 +83,7 @@ init_c_lex (void)
   cb->read_pch = c_common_read_pch;
   cb->has_attribute = c_common_has_attribute;
   cb->has_builtin = c_common_has_builtin;
+  cb->has_feature = c_common_has_feature;
   cb->get_source_date_epoch = cb_get_source_date_epoch;
   cb->get_suggestion = cb_get_suggestion;
   cb->remap_filename = remap_macro_filename;
@@ -162,7 +164,7 @@ dump_time_statistics (void)
 
 static void
 cb_ident (cpp_reader * ARG_UNUSED (pfile),
-	  unsigned int ARG_UNUSED (line),
+	  location_t ARG_UNUSED (line),
 	  const cpp_string * ARG_UNUSED (str))
 {
   if (!flag_no_ident)
@@ -340,7 +342,7 @@ c_common_has_attribute (cpp_reader *pfile, bool std_syntax)
   if (token->type != CPP_OPEN_PAREN)
     {
       cpp_error (pfile, CPP_DL_ERROR,
-		 "missing '(' after \"__has_attribute\"");
+		 "missing %<(%> after %<__has_attribute%>");
       return 0;
     }
   token = get_token_no_padding (pfile);
@@ -355,7 +357,27 @@ c_common_has_attribute (cpp_reader *pfile, bool std_syntax)
       do
 	nxt_token = cpp_peek_token (pfile, idx++);
       while (nxt_token->type == CPP_PADDING);
-      if (nxt_token->type == CPP_SCOPE)
+      if (!c_dialect_cxx ()
+	  && nxt_token->type == CPP_COLON
+	  && (nxt_token->flags & COLON_SCOPE) != 0)
+	{
+	  const cpp_token *prev_token = nxt_token;
+	  do
+	    nxt_token = cpp_peek_token (pfile, idx++);
+	  while (nxt_token->type == CPP_PADDING);
+	  if (nxt_token->type == CPP_COLON)
+	    {
+	      /* __has_attribute (vendor::attr) in -std=c17 etc. modes.
+		 :: isn't CPP_SCOPE but 2 CPP_COLON tokens, where the
+		 first one should have COLON_SCOPE flag to distinguish
+		 it from : :.  */
+	      have_scope = true;
+	      get_token_no_padding (pfile); // Eat first colon.
+	    }
+	  else
+	    nxt_token = prev_token;
+	}
+      if (nxt_token->type == CPP_SCOPE || have_scope)
 	{
 	  have_scope = true;
 	  get_token_no_padding (pfile); // Eat scope.
@@ -367,15 +389,13 @@ c_common_has_attribute (cpp_reader *pfile, bool std_syntax)
 		= get_identifier ((const char *)
 				  cpp_token_as_text (pfile, nxt_token));
 	      attr_id = canonicalize_attr_name (attr_id);
-	      if (c_dialect_cxx ())
-		{
-		  /* OpenMP attributes need special handling.  */
-		  if ((flag_openmp || flag_openmp_simd)
-		      && is_attribute_p ("omp", attr_ns)
-		      && (is_attribute_p ("directive", attr_id)
-			  || is_attribute_p ("sequence", attr_id)))
-		    result = 1;
-		}
+	      /* OpenMP attributes need special handling.  */
+	      if ((flag_openmp || flag_openmp_simd)
+		  && is_attribute_p ("omp", attr_ns)
+		  && (is_attribute_p ("directive", attr_id)
+		      || is_attribute_p ("sequence", attr_id)
+		      || is_attribute_p ("decl", attr_id)))
+		result = 1;
 	      if (result)
 		attr_name = NULL_TREE;
 	      else
@@ -425,7 +445,9 @@ c_common_has_attribute (cpp_reader *pfile, bool std_syntax)
 		  || is_attribute_p ("maybe_unused", attr_name)
 		  || is_attribute_p ("nodiscard", attr_name)
 		  || is_attribute_p ("noreturn", attr_name)
-		  || is_attribute_p ("_Noreturn", attr_name))
+		  || is_attribute_p ("_Noreturn", attr_name)
+		  || is_attribute_p ("reproducible", attr_name)
+		  || is_attribute_p ("unsequenced", attr_name))
 		result = 202311;
 	    }
 	  if (result)
@@ -442,27 +464,27 @@ c_common_has_attribute (cpp_reader *pfile, bool std_syntax)
   else
     {
       cpp_error (pfile, CPP_DL_ERROR,
-		 "macro \"__has_attribute\" requires an identifier");
+		 "macro %<__has_attribute%> requires an identifier");
       return 0;
     }
 
   if (get_token_no_padding (pfile)->type != CPP_CLOSE_PAREN)
     cpp_error (pfile, CPP_DL_ERROR,
-	       "missing ')' after \"__has_attribute\"");
+	       "missing %<)%> after %<__has_attribute%>");
 
   return result;
 }
 
-/* Callback for has_builtin.  */
+/* Helper for __has_{builtin,feature,extension}.  */
 
-int
-c_common_has_builtin (cpp_reader *pfile)
+static const char *
+c_common_lex_availability_macro (cpp_reader *pfile, const char *builtin)
 {
   const cpp_token *token = get_token_no_padding (pfile);
   if (token->type != CPP_OPEN_PAREN)
     {
       cpp_error (pfile, CPP_DL_ERROR,
-		 "missing '(' after \"__has_builtin\"");
+		 "missing %<(%> after %<__has_%s%>", builtin);
       return 0;
     }
 
@@ -475,14 +497,14 @@ c_common_has_builtin (cpp_reader *pfile)
       if (token->type != CPP_CLOSE_PAREN)
 	{
 	  cpp_error (pfile, CPP_DL_ERROR,
-		     "expected ')' after \"%s\"", name);
+		     "expected %<)%> after %qs", name);
 	  name = "";
 	}
     }
   else
     {
       cpp_error (pfile, CPP_DL_ERROR,
-		 "macro \"__has_builtin\" requires an identifier");
+		 "macro %<__has_%s%> requires an identifier", builtin);
       if (token->type == CPP_CLOSE_PAREN)
 	return 0;
     }
@@ -501,7 +523,36 @@ c_common_has_builtin (cpp_reader *pfile)
 	break;
     }
 
+  return name;
+}
+
+/* Callback for has_builtin.  */
+
+int
+c_common_has_builtin (cpp_reader *pfile)
+{
+  const char *name = c_common_lex_availability_macro (pfile, "builtin");
+  if (!name)
+    return 0;
+
   return names_builtin_p (name);
+}
+
+/* Callback for has_feature.  STRICT_P is true for has_feature and false
+   for has_extension.  */
+
+int
+c_common_has_feature (cpp_reader *pfile, bool strict_p)
+{
+  const char *builtin = strict_p ? "feature" : "extension";
+  const char *name = c_common_lex_availability_macro (pfile, builtin);
+  if (!name)
+    return 0;
+
+  /* If -pedantic-errors is given, __has_extension is equivalent to
+     __has_feature.  */
+  strict_p |= flag_pedantic_errors;
+  return has_feature_p (name, strict_p);
 }
 
 
@@ -732,6 +783,48 @@ c_lex_with_flags (tree *value, location_t *loc, unsigned char *cpp_flags,
       *value = build_string (tok->val.str.len, (const char *)tok->val.str.text);
       break;
 
+    case CPP_EMBED:
+      *value = make_node (RAW_DATA_CST);
+      TREE_TYPE (*value) = integer_type_node;
+      RAW_DATA_LENGTH (*value) = tok->val.str.len;
+      if (pch_file)
+	{
+	  /* When writing PCH headers, copy the data over, such that
+	     the owner is a STRING_CST.  */
+	  int off = 0;
+	  if (tok->val.str.len <= INT_MAX - 2)
+	    /* See below.  */
+	    off = 1;
+	  tree owner = build_string (tok->val.str.len + 2 * off,
+				     (const char *) tok->val.str.text - off);
+	  TREE_TYPE (owner) = build_array_type_nelts (unsigned_char_type_node,
+						      tok->val.str.len);
+	  RAW_DATA_OWNER (*value) = owner;
+	  RAW_DATA_POINTER (*value) = TREE_STRING_POINTER (owner) + off;
+	}
+      else
+	{
+	  /* Otherwise add another dummy RAW_DATA_CST as owner which
+	     indicates the data is owned by libcpp.  */
+	  RAW_DATA_POINTER (*value) = (const char *) tok->val.str.text;
+	  tree owner = make_node (RAW_DATA_CST);
+	  TREE_TYPE (owner) = integer_type_node;
+	  RAW_DATA_LENGTH (owner) = tok->val.str.len;
+	  RAW_DATA_POINTER (owner) = (const char *) tok->val.str.text;
+	  if (tok->val.str.len <= INT_MAX - 2)
+	    {
+	      /* The preprocessor surrounds at least smaller CPP_EMBEDs
+		 in between CPP_NUMBER CPP_COMMA before and
+		 CPP_COMMA CPP_NUMBER after, so the actual libcpp buffer
+		 holds those 2 extra bytes around it.  Don't do that if
+		 CPP_EMBED is at the maximum ~ 2GB size.  */
+	      RAW_DATA_LENGTH (owner) += 2;
+	      RAW_DATA_POINTER (owner)--;
+	    }
+	  RAW_DATA_OWNER (*value) = owner;
+	}
+      break;
+
       /* This token should not be visible outside cpplib.  */
     case CPP_MACRO_ARG:
       gcc_unreachable ();
@@ -751,7 +844,7 @@ c_lex_with_flags (tree *value, location_t *loc, unsigned char *cpp_flags,
 	  add_flags |= PREV_FALLTHROUGH;
 	  goto retry_after_at;
 	}
-       goto retry;
+      goto retry;
 
     default:
       *value = NULL_TREE;
@@ -848,6 +941,10 @@ interpret_integer (const cpp_token *token, unsigned int flags,
 	{
 	  max_bits_per_digit = 3;
 	  prefix_len = 1;
+	  if (token->val.str.len > 2
+	      && (token->val.str.text[1] == 'o'
+		  || token->val.str.text[1] == 'O'))
+	    prefix_len = 2;
 	}
       else if ((flags & CPP_N_RADIX) == CPP_N_HEX)
 	{
@@ -1138,6 +1235,8 @@ interpret_float (const cpp_token *token, unsigned int flags,
       type = dfloat128_type_node;
     else if ((flags & CPP_N_WIDTH) == CPP_N_SMALL)
       type = dfloat32_type_node;
+    else if ((flags & CPP_N_FLOATNX) != 0)
+      type = dfloat64x_type_node;
     else
       type = dfloat64_type_node;
   else
@@ -1187,26 +1286,26 @@ interpret_float (const cpp_token *token, unsigned int flags,
 	  }
 	else if (!c_dialect_cxx ())
 	  {
-	    if (warn_c11_c2x_compat > 0)
+	    if (warn_c11_c23_compat > 0)
 	      {
-		if (pedantic && !flag_isoc2x)
-		  pedwarn (input_location, OPT_Wc11_c2x_compat,
+		if (pedantic && !flag_isoc23)
+		  pedwarn (input_location, OPT_Wc11_c23_compat,
 			   "non-standard suffix on floating constant "
-			   "before C2X");
+			   "before C23");
 		else
-		  warning (OPT_Wc11_c2x_compat,
+		  warning (OPT_Wc11_c23_compat,
 			   "non-standard suffix on floating constant "
-			   "before C2X");
+			   "before C23");
 	      }
-	    else if (warn_c11_c2x_compat != 0 && pedantic && !flag_isoc2x)
+	    else if (warn_c11_c23_compat != 0 && pedantic && !flag_isoc23)
 	      pedwarn (input_location, OPT_Wpedantic,
 		       "non-standard suffix on floating constant "
-		       "before C2X");
+		       "before C23");
 	  }
 	else if (!extended)
 	  {
-	    if (cxx_dialect < cxx23)
-	      pedwarn (input_location, OPT_Wpedantic,
+	    if (cxx_dialect < cxx23 && pedantic)
+	      pedwarn (input_location, OPT_Wc__23_extensions,
 		       "%<f%d%> or %<F%d%> suffix on floating constant only "
 		       "available with %<-std=c++2b%> or %<-std=gnu++2b%>",
 		       n, n);
@@ -1226,8 +1325,8 @@ interpret_float (const cpp_token *token, unsigned int flags,
 	if (!c_dialect_cxx ())
 	  pedwarn (input_location, OPT_Wpedantic,
 		   "non-standard suffix on floating constant");
-	else if (cxx_dialect < cxx23)
-	  pedwarn (input_location, OPT_Wpedantic,
+	else if (cxx_dialect < cxx23 && pedantic)
+	  pedwarn (input_location, OPT_Wc__23_extensions,
 		   "%<bf16%> or %<BF16%> suffix on floating constant only "
 		   "available with %<-std=c++2b%> or %<-std=gnu++2b%>");
       }
@@ -1250,7 +1349,14 @@ interpret_float (const cpp_token *token, unsigned int flags,
   if (flags & CPP_N_USERDEF)
     copylen -= strlen (suffix);
   else if (flags & CPP_N_DFLOAT)
-    copylen -= 2;
+    {
+      if (ISDIGIT (token->val.str.text[copylen - 1]))
+	copylen -= (flags & CPP_N_LARGE) ? 4 : 3;
+      else if ((flags & CPP_N_FLOATNX) != 0)
+	copylen -= 4;
+      else
+	copylen -= 2;
+    }
   else
     {
       if ((flags & CPP_N_WIDTH) != CPP_N_MEDIUM)
@@ -1273,7 +1379,7 @@ interpret_float (const cpp_token *token, unsigned int flags,
     }
 
   copy = (char *) alloca (copylen + 1);
-  if (c_dialect_cxx () ? cxx_dialect > cxx11 : flag_isoc2x)
+  if (c_dialect_cxx () ? cxx_dialect > cxx11 : flag_isoc23)
     {
       size_t maxlen = 0;
       for (size_t i = 0; i < copylen; ++i)

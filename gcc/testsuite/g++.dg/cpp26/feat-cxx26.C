@@ -1,4 +1,5 @@
 // { dg-options "-std=c++26 -I${srcdir}/g++.dg/cpp1y -I${srcdir}/g++.dg/cpp1y/testinc" }
+// { dg-skip-if "requires hosted libstdc++ for complex" { ! hostedlib } }
 
 //  C++98 features:
 
@@ -42,8 +43,8 @@
 
 #ifndef __cpp_range_based_for
 #  error "__cpp_range_based_for"
-#elif __cpp_range_based_for != 201603
-#  error "__cpp_range_based_for != 201603"
+#elif __cpp_range_based_for != 202211
+#  error "__cpp_range_based_for != 202211"
 #endif
 
 #ifndef __cpp_decltype
@@ -134,8 +135,8 @@
 
 #ifndef __cpp_constexpr
 #  error "__cpp_constexpr"
-#elif __cpp_constexpr != 202306L
-#  error "__cpp_constexpr != 202306L"
+#elif __cpp_constexpr != 202406L
+#  error "__cpp_constexpr != 202406L"
 #endif
 
 #ifndef __cpp_decltype_auto
@@ -304,8 +305,8 @@
 
 #ifndef __cpp_static_assert
 #  error "__cpp_static_assert"
-#elif __cpp_static_assert != 201411
-#  error "__cpp_static_assert != 201411"
+#elif __cpp_static_assert != 202306
+#  error "__cpp_static_assert != 202306"
 #endif
 
 #ifndef __cpp_namespace_attributes
@@ -394,8 +395,8 @@
 
 #ifndef __cpp_structured_bindings
 #  error "__cpp_structured_bindings"
-#elif __cpp_structured_bindings != 201606
-#  error "__cpp_structured_bindings != 201606"
+#elif __cpp_structured_bindings != 202403
+#  error "__cpp_structured_bindings != 202403"
 #endif
 
 #ifndef __cpp_template_template_args
@@ -480,8 +481,8 @@
 
 #ifndef __cpp_consteval
 #  error "__cpp_consteval"
-#elif __cpp_consteval != 201811
-#  error "__cpp_consteval != 201811"
+#elif __cpp_consteval != 202211L
+#  error "__cpp_consteval != 202211L"
 #endif
 
 #ifndef __cpp_concepts
@@ -578,13 +579,19 @@
 #  error "__cpp_implicit_move != 202207"
 #endif
 
+#ifndef __cpp_explicit_this_parameter
+#  error "__cpp_explicit_this_parameter"
+#elif __cpp_explicit_this_parameter != 202110
+#  error "__cpp_explicit_this_parameter != 202110"
+#endif
+
 #ifndef __cpp_auto_cast
 #  error "__cpp_auto_cast"
 #elif __cpp_auto_cast != 202110
 #  error "__cpp_auto_cast != 202110"
 #endif
 
-//  C++23 attributes:
+// C++23 attributes:
 
 #ifdef __has_cpp_attribute
 #  if ! __has_cpp_attribute(assume)
@@ -594,4 +601,30 @@
 #  endif
 #else
 #  error "__has_cpp_attribute"
+#endif
+
+// C++26 features:
+
+#ifndef __cpp_placeholder_variables
+#  error "__cpp_placeholder_variables"
+#elif __cpp_placeholder_variables != 202306
+#  error "__cpp_placeholder_variables != 202306"
+#endif
+
+#ifndef __cpp_deleted_function
+#  error "__cpp_deleted_function"
+#elif __cpp_deleted_function != 202403
+#  error "__cpp_deleted_function != 202403"
+#endif
+
+#ifndef __cpp_variadic_friend
+#  error "__cpp_variadic_friend"
+#elif __cpp_variadic_friend != 202403
+#  error "__cpp_variadic_friend != 202403"
+#endif
+
+#ifndef __cpp_pack_indexing
+# error "__cpp_pack_indexing"
+#elif __cpp_pack_indexing != 202311
+#  error "__cpp_pack_indexing != 202311"
 #endif

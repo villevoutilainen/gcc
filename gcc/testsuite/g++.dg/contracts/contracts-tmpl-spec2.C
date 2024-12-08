@@ -1,6 +1,6 @@
 // basic test to ensure contracts work for class and member specializations
 // { dg-do run }
-// { dg-options "-std=c++2a -fcontracts -fcontract-continuation-mode=on" }
+// { dg-options "-std=c++2a -fcontracts -fcontract-continuation-mode=on -fsigned-char" }
 #include <cstdio>
 
 // template specializations can have differing contracts
@@ -304,6 +304,7 @@ int main(int, char**)
   return 0;
 }
 
+// { dg-skip-if "requires hosted libstdc++ for cstdio" { ! hostedlib } }
 // { dg-output {contract violation in function body<int> at .*:9: a > 0(\n|\r\n|\r)} }
 // { dg-output {\[continue:on\](\n|\r\n|\r)} }
 // { dg-output {-2(\n|\r\n|\r)} }

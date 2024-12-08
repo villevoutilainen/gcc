@@ -1,5 +1,5 @@
 /* Internal functions.
-   Copyright (C) 2011-2023 Free Software Foundation, Inc.
+   Copyright (C) 2011-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -237,11 +237,23 @@ extern bool internal_store_fn_p (internal_fn);
 extern bool internal_gather_scatter_fn_p (internal_fn);
 extern int internal_fn_mask_index (internal_fn);
 extern int internal_fn_len_index (internal_fn);
+extern int internal_fn_else_index (internal_fn);
 extern int internal_fn_stored_value_index (internal_fn);
 extern bool internal_gather_scatter_fn_supported_p (internal_fn, tree,
-						    tree, tree, int);
+						    tree, tree, int,
+						    vec<int> * = nullptr);
 extern bool internal_check_ptrs_fn_supported_p (internal_fn, tree,
 						poly_uint64, unsigned int);
+
+/* Integer constants representing which else value is supported for masked load
+   functions.  */
+#define MASK_LOAD_ELSE_ZERO -1
+#define MASK_LOAD_ELSE_M1 -2
+#define MASK_LOAD_ELSE_UNDEFINED -3
+
+extern void get_supported_else_vals (enum insn_code, unsigned, vec<int> &);
+extern bool supported_else_val_p (enum insn_code, unsigned, int);
+
 #define VECT_PARTIAL_BIAS_UNSUPPORTED 127
 
 extern signed char internal_len_load_store_bias (internal_fn ifn,
@@ -261,6 +273,12 @@ extern void expand_MULBITINT (internal_fn, gcall *);
 extern void expand_DIVMODBITINT (internal_fn, gcall *);
 extern void expand_FLOATTOBITINT (internal_fn, gcall *);
 extern void expand_BITINTTOFLOAT (internal_fn, gcall *);
+extern void expand_CLRSB (internal_fn, gcall *);
+extern void expand_CLZ (internal_fn, gcall *);
+extern void expand_CTZ (internal_fn, gcall *);
+extern void expand_FFS (internal_fn, gcall *);
+extern void expand_PARITY (internal_fn, gcall *);
+extern void expand_POPCOUNT (internal_fn, gcall *);
 
 extern bool vectorized_internal_fn_supported_p (internal_fn, tree);
 

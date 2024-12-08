@@ -1,6 +1,6 @@
 /* Header file for intrinsics check, resolve and simplify function
    prototypes.
-   Copyright (C) 2000-2023 Free Software Foundation, Inc.
+   Copyright (C) 2000-2024 Free Software Foundation, Inc.
    Contributed by Andy Vaught & Katherine Holcomb
 
 This file is part of GCC.
@@ -89,6 +89,7 @@ bool gfc_check_hostnm (gfc_expr *);
 bool gfc_check_huge (gfc_expr *);
 bool gfc_check_hypot (gfc_expr *, gfc_expr *);
 bool gfc_check_i (gfc_expr *);
+bool gfc_check_iu (gfc_expr *);
 bool gfc_check_iand_ieor_ior (gfc_expr *, gfc_expr *);
 bool gfc_check_and (gfc_expr *, gfc_expr *);
 bool gfc_check_ibits (gfc_expr *, gfc_expr *, gfc_expr *);
@@ -98,6 +99,7 @@ bool gfc_check_image_status (gfc_expr *, gfc_expr *);
 bool gfc_check_index (gfc_expr *, gfc_expr *, gfc_expr *, gfc_expr *);
 bool gfc_check_int (gfc_expr *, gfc_expr *);
 bool gfc_check_intconv (gfc_expr *);
+bool gfc_check_uint (gfc_expr *, gfc_expr *);
 bool gfc_check_irand (gfc_expr *);
 bool gfc_check_is_contiguous (gfc_expr *);
 bool gfc_check_isatty (gfc_expr *);
@@ -124,6 +126,7 @@ bool gfc_check_merge (gfc_expr *, gfc_expr *, gfc_expr *);
 bool gfc_check_merge_bits (gfc_expr *, gfc_expr *, gfc_expr *);
 bool gfc_check_minloc_maxloc (gfc_actual_arglist *);
 bool gfc_check_minval_maxval (gfc_actual_arglist *);
+bool gfc_check_mod (gfc_expr *, gfc_expr *);
 bool gfc_check_nearest (gfc_expr *, gfc_expr *);
 bool gfc_check_new_line (gfc_expr *);
 bool gfc_check_norm2 (gfc_expr *, gfc_expr *);
@@ -324,6 +327,7 @@ gfc_expr *gfc_simplify_image_index (gfc_expr *, gfc_expr *);
 gfc_expr *gfc_simplify_image_status (gfc_expr *, gfc_expr *);
 gfc_expr *gfc_simplify_index (gfc_expr *, gfc_expr *, gfc_expr *, gfc_expr *);
 gfc_expr *gfc_simplify_int (gfc_expr *, gfc_expr *);
+gfc_expr *gfc_simplify_uint (gfc_expr *, gfc_expr *);
 gfc_expr *gfc_simplify_int2 (gfc_expr *);
 gfc_expr *gfc_simplify_int8 (gfc_expr *);
 gfc_expr *gfc_simplify_long (gfc_expr *);
@@ -399,6 +403,8 @@ gfc_expr *gfc_simplify_scale (gfc_expr *, gfc_expr *);
 gfc_expr *gfc_simplify_scan (gfc_expr *, gfc_expr *, gfc_expr *, gfc_expr *);
 gfc_expr *gfc_simplify_selected_char_kind (gfc_expr *);
 gfc_expr *gfc_simplify_selected_int_kind (gfc_expr *);
+gfc_expr *gfc_simplify_selected_unsigned_kind (gfc_expr *);
+gfc_expr *gfc_simplify_selected_logical_kind (gfc_expr *);
 gfc_expr *gfc_simplify_selected_real_kind (gfc_expr *, gfc_expr *, gfc_expr *);
 gfc_expr *gfc_simplify_set_exponent (gfc_expr *, gfc_expr *);
 gfc_expr *gfc_simplify_sign (gfc_expr *, gfc_expr *);
@@ -428,6 +434,8 @@ gfc_expr *gfc_simplify_transpose (gfc_expr *);
 gfc_expr *gfc_simplify_trim (gfc_expr *);
 gfc_expr *gfc_simplify_ubound (gfc_expr *, gfc_expr *, gfc_expr *);
 gfc_expr *gfc_simplify_ucobound (gfc_expr *, gfc_expr *, gfc_expr *);
+gfc_expr *gfc_simplify_umaskl (gfc_expr *, gfc_expr *);
+gfc_expr *gfc_simplify_umaskr (gfc_expr *, gfc_expr *);
 gfc_expr *gfc_simplify_unpack (gfc_expr *, gfc_expr *, gfc_expr *);
 gfc_expr *gfc_simplify_verify (gfc_expr *, gfc_expr *, gfc_expr *, gfc_expr *);
 gfc_expr *gfc_simplify_xor (gfc_expr *, gfc_expr *);
@@ -529,6 +537,7 @@ void gfc_resolve_iall (gfc_expr *, gfc_expr *, gfc_expr *, gfc_expr *);
 void gfc_resolve_iany (gfc_expr *, gfc_expr *, gfc_expr *, gfc_expr *);
 void gfc_resolve_idnint (gfc_expr *, gfc_expr *);
 void gfc_resolve_int (gfc_expr *, gfc_expr *, gfc_expr *);
+void gfc_resolve_uint (gfc_expr *, gfc_expr*, gfc_expr *);
 void gfc_resolve_int2 (gfc_expr *, gfc_expr *);
 void gfc_resolve_int8 (gfc_expr *, gfc_expr *);
 void gfc_resolve_long (gfc_expr *, gfc_expr *);
@@ -559,6 +568,7 @@ void gfc_resolve_maxval (gfc_expr *, gfc_expr *, gfc_expr *, gfc_expr *);
 void gfc_resolve_mclock (gfc_expr *);
 void gfc_resolve_mclock8 (gfc_expr *);
 void gfc_resolve_mask (gfc_expr *, gfc_expr *, gfc_expr *);
+void gfc_resolve_umasklr (gfc_expr *, gfc_expr *, gfc_expr *);
 void gfc_resolve_merge (gfc_expr *, gfc_expr *, gfc_expr *, gfc_expr *);
 void gfc_resolve_merge_bits (gfc_expr *, gfc_expr *, gfc_expr *, gfc_expr *);
 void gfc_resolve_min (gfc_expr *, gfc_actual_arglist *);

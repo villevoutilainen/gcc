@@ -1,5 +1,5 @@
 @ignore
-Copyright (C) 2005-2023 Free Software Foundation, Inc.
+Copyright (C) 2005-2024 Free Software Foundation, Inc.
 This is part of the GNU Fortran manual.   
 For copying conditions, see the file gfortran.texi.
 
@@ -281,7 +281,9 @@ Some basic guidelines for editing this document:
 * @code{SECOND}:        SECOND,    CPU time function
 * @code{SELECTED_CHAR_KIND}: SELECTED_CHAR_KIND,  Choose character kind
 * @code{SELECTED_INT_KIND}: SELECTED_INT_KIND,  Choose integer kind
+* @code{SELECTED_LOGICAL_KIND}: SELECTED_LOGICAL_KIND,  Choose logical kind
 * @code{SELECTED_REAL_KIND}: SELECTED_REAL_KIND,  Choose real kind
+* @code{SELECTED_UNSIGNED_KIND}: SELECTED_UNSIGNED_KIND, Chose unsigned kind
 * @code{SET_EXPONENT}:  SET_EXPONENT, Set the exponent of the model
 * @code{SHAPE}:         SHAPE,     Determine the shape of an array
 * @code{SHIFTA}:        SHIFTA,    Right shift with fill
@@ -319,7 +321,10 @@ Some basic guidelines for editing this document:
 * @code{TTYNAM}:        TTYNAM,    Get the name of a terminal device
 * @code{UBOUND}:        UBOUND,    Upper dimension bounds of an array
 * @code{UCOBOUND}:      UCOBOUND,  Upper codimension bounds of an array
+* @code{UINT}:          UINT,      Convert to an unsigned integer type
 * @code{UMASK}:         UMASK,     Set the file creation mask
+* @code{UMASKL}:        UMASKL,    Unsigned left justified mask
+* @code{UMASKR}:        UMASKR,    Unsigned right justified mask
 * @code{UNLINK}:        UNLINK,    Remove a file from the file system
 * @code{UNPACK}:        UNPACK,    Unpack an array of rank one into an array
 * @code{VERIFY}:        VERIFY,    Scan a string for the absence of a set of characters
@@ -649,11 +654,8 @@ Degrees function: @*
 @code{ACOSD(X)} computes the arccosine of @var{X} in degrees (inverse of
 @code{COSD(X)}).
 
-This function is for compatibility only and should be avoided in favor of
-standard constructs wherever possible.
-
 @item @emph{Standard}:
-GNU extension, enabled with @option{-fdec-math}
+Fortran 2023
 
 @item @emph{Class}:
 Elemental function
@@ -664,7 +666,7 @@ Elemental function
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
 @item @var{X} @tab The type shall either be @code{REAL} with a magnitude that is
-less than or equal to one - or the type shall be @code{COMPLEX}.
+less than or equal to one.
 @end multitable
 
 @item @emph{Return value}:
@@ -683,7 +685,7 @@ end program test_acosd
 @item @emph{Specific names}:
 @multitable @columnfractions .20 .23 .20 .33
 @headitem Name            @tab Argument         @tab Return type     @tab Standard
-@item @code{ACOSD(X)}  @tab @code{REAL(4) X} @tab @code{REAL(4)}  @tab GNU extension
+@item @code{ACOSD(X)}  @tab @code{REAL(4) X} @tab @code{REAL(4)}  @tab Fortran 2023
 @item @code{DACOSD(X)} @tab @code{REAL(8) X} @tab @code{REAL(8)}  @tab GNU extension
 @end multitable
 
@@ -1369,11 +1371,8 @@ Degrees function: @*
 @code{ASIND(X)} computes the arcsine of its @var{X} in degrees (inverse of
 @code{SIND(X)}).
 
-This function is for compatibility only and should be avoided in favor of
-standard constructs wherever possible.
-
 @item @emph{Standard}:
-GNU extension, enabled with @option{-fdec-math}.
+Fortran 2023
 
 @item @emph{Class}:
 Elemental function
@@ -1384,12 +1383,12 @@ Elemental function
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
 @item @var{X} @tab The type shall be either @code{REAL} and a magnitude that is
-less than or equal to one - or be @code{COMPLEX}.
+less than or equal to one.
 @end multitable
 
 @item @emph{Return value}:
 The return value is of the same type and kind as @var{X}.
-The real part of the result is in degrees and lies in the range
+The result is in degrees and lies in the range
 @math{-90 \leq \Re \asin(x) \leq 90}.
 
 @item @emph{Example}:
@@ -1403,7 +1402,7 @@ end program test_asind
 @item @emph{Specific names}:
 @multitable @columnfractions .20 .23 .20 .33
 @headitem Name            @tab Argument          @tab Return type       @tab Standard
-@item @code{ASIND(X)}  @tab @code{REAL(4) X}  @tab @code{REAL(4)}    @tab GNU extension
+@item @code{ASIND(X)}  @tab @code{REAL(4) X}  @tab @code{REAL(4)}    @tab Fortran 2023
 @item @code{DASIND(X)} @tab @code{REAL(8) X}  @tab @code{REAL(8)}    @tab GNU extension
 @end multitable
 
@@ -1413,8 +1412,6 @@ Inverse function: @*
 Radians function: @*
 @ref{ASIN}
 @end table
-
-
 
 @node ASINH
 @section @code{ASINH} --- Inverse hyperbolic sine function
@@ -1620,11 +1617,8 @@ Degrees function: @*
 @code{ATAND(X)} computes the arctangent of @var{X} in degrees (inverse of
 @ref{TAND}).
 
-This function is for compatibility only and should be avoided in favor of
-standard constructs wherever possible.
-
 @item @emph{Standard}:
-GNU extension, enabled with @option{-fdec-math}.
+Fortran 2023
 
 @item @emph{Class}:
 Elemental function
@@ -1632,21 +1626,18 @@ Elemental function
 @item @emph{Syntax}:
 @multitable @columnfractions .80
 @item @code{RESULT = ATAND(X)}
-@item @code{RESULT = ATAND(Y, X)}
 @end multitable
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{X} @tab The type shall be @code{REAL} or @code{COMPLEX};
+@item @var{X} @tab The type shall be @code{REAL};
 if @var{Y} is present, @var{X} shall be REAL.
 @item @var{Y} @tab The type and kind type parameter shall be the same as @var{X}.
 @end multitable
 
 @item @emph{Return value}:
 The return value is of the same type and kind as @var{X}.
-If @var{Y} is present, the result is identical to @code{ATAND2(Y,X)}.
-Otherwise, it is the arcus tangent of @var{X}, where the real part of
-the result is in degrees and lies in the range
+The result is in degrees and lies in the range
 @math{-90 \leq \Re \atand(x) \leq 90}.
 
 @item @emph{Example}:
@@ -1660,7 +1651,7 @@ end program test_atand
 @item @emph{Specific names}:
 @multitable @columnfractions .23 .23 .20 .30
 @headitem Name            @tab Argument          @tab Return type       @tab Standard
-@item @code{ATAND(X)}  @tab @code{REAL(4) X}  @tab @code{REAL(4)}    @tab GNU extension
+@item @code{ATAND(X)}  @tab @code{REAL(4) X}  @tab @code{REAL(4)}    @tab Fortran 2023
 @item @code{DATAND(X)} @tab @code{REAL(8) X}  @tab @code{REAL(8)}    @tab GNU extension
 @end multitable
 
@@ -1752,11 +1743,8 @@ function of the complex number @math{X + i Y} in degrees.  This function can
 be used to transform from Cartesian into polar coordinates and
 allows to determine the angle in the correct quadrant.
 
-This function is for compatibility only and should be avoided in favor of
-standard constructs wherever possible.
-
 @item @emph{Standard}:
-GNU extension, enabled with @option{-fdec-math}.
+Fortran 2023
 
 @item @emph{Class}:
 Elemental function
@@ -1793,7 +1781,7 @@ end program test_atan2d
 @item @emph{Specific names}:
 @multitable @columnfractions .23 .23 .20 .30
 @headitem Name                @tab Argument            @tab Return type    @tab Standard
-@item @code{ATAN2D(X, Y)}  @tab @code{REAL(4) X, Y} @tab @code{REAL(4)} @tab GNU extension
+@item @code{ATAN2D(X, Y)}  @tab @code{REAL(4) X, Y} @tab @code{REAL(4)} @tab Fortran 2023
 @item @code{DATAN2D(X, Y)} @tab @code{REAL(8) X, Y} @tab @code{REAL(8)} @tab GNU extension
 @end multitable
 
@@ -1803,8 +1791,6 @@ Alias: @*
 Radians function: @*
 @ref{ATAN2}
 @end table
-
-
 
 @node ATANH
 @section @code{ATANH} --- Inverse hyperbolic tangent function
@@ -2830,7 +2816,8 @@ Determines whether an integral is a bitwise greater than or equal to
 another.
 
 @item @emph{Standard}:
-Fortran 2008 and later
+Fortran 2008 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Elemental function
@@ -2840,13 +2827,16 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab Shall be of @code{INTEGER} type.
-@item @var{J} @tab Shall be of @code{INTEGER} type, and of the same kind
-as @var{I}.
+@item @var{I} @tab Shall be of @code{INTEGER} or @code{UNSIGNED} type.
+@item @var{J} @tab Shall be of the same type and kind as @var{I}.
 @end multitable
 
 @item @emph{Return value}:
 The return value is of type @code{LOGICAL} and of the default kind.
+
+@item @emph{Note}:
+For @code{UNSIGNED} arguments, this function is identical to the
+@code{.GE.} and @code{>=} operators.
 
 @item @emph{See also}:
 @ref{BGT}, @*
@@ -2866,7 +2856,8 @@ The return value is of type @code{LOGICAL} and of the default kind.
 Determines whether an integral is a bitwise greater than another.
 
 @item @emph{Standard}:
-Fortran 2008 and later
+Fortran 2008 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Elemental function
@@ -2876,13 +2867,16 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab Shall be of @code{INTEGER} type.
-@item @var{J} @tab Shall be of @code{INTEGER} type, and of the same kind
-as @var{I}.
+@item @var{I} @tab Shall be of @code{INTEGER} or @code{UNSIGNED} type.
+@item @var{J} @tab Shall be of the same type and kind as @var{I}.
 @end multitable
 
 @item @emph{Return value}:
 The return value is of type @code{LOGICAL} and of the default kind.
+
+@item @emph{Note}:
+For @code{UNSIGNED} arguments, this function is identical to the
+@code{.GT.}  and @code{>} operators.
 
 @item @emph{See also}:
 @ref{BGE}, @*
@@ -2900,12 +2894,13 @@ The return value is of type @code{LOGICAL} and of the default kind.
 
 @table @asis
 @item @emph{Description}:
-@code{BIT_SIZE(I)} returns the number of bits (integer precision plus sign bit)
-represented by the type of @var{I}.  The result of @code{BIT_SIZE(I)} is
-independent of the actual value of @var{I}.
+@code{BIT_SIZE(I)} returns the number of bits (for integers, the precision
+plus the sign bit) represented by the type of @var{I}.  The result of
+@code{BIT_SIZE(I)} is independent of the actual value of @var{I}.
 
 @item @emph{Standard}:
-Fortran 90 and later
+Fortran 90 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Inquiry function
@@ -2915,7 +2910,7 @@ Inquiry function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab The type shall be @code{INTEGER}.
+@item @var{I} @tab The type shall be @code{INTEGER} or @code{UNSIGNED}.
 @end multitable
 
 @item @emph{Return value}:
@@ -2945,7 +2940,8 @@ Determines whether an integral is a bitwise less than or equal to
 another.
 
 @item @emph{Standard}:
-Fortran 2008 and later
+Fortran 2008 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Elemental function
@@ -2955,13 +2951,16 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab Shall be of @code{INTEGER} type.
-@item @var{J} @tab Shall be of @code{INTEGER} type, and of the same kind
-as @var{I}.
+@item @var{I} @tab Shall be of @code{INTEGER} or @code{UNSIGNED} type.
+@item @var{J} @tab Shall be of the same type and kind as @var{I}.
 @end multitable
 
 @item @emph{Return value}:
 The return value is of type @code{LOGICAL} and of the default kind.
+
+@item @emph{Note}:
+For @code{UNSIGNED} arguments, this function is identical to the
+@code{.LE.}  and @code{<=} operators.
 
 @item @emph{See also}:
 @ref{BGT}, @*
@@ -2981,7 +2980,8 @@ The return value is of type @code{LOGICAL} and of the default kind.
 Determines whether an integral is a bitwise less than another.
 
 @item @emph{Standard}:
-Fortran 2008 and later
+Fortran 2008 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Elemental function
@@ -2991,13 +2991,16 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab Shall be of @code{INTEGER} type.
-@item @var{J} @tab Shall be of @code{INTEGER} type, and of the same kind
-as @var{I}.
+@item @var{I} @tab Shall be of @code{INTEGER} or @code{UNSIGNED} type.
+@item @var{J} @tab Shall be of the same type and kind as @var{I}.
 @end multitable
 
 @item @emph{Return value}:
 The return value is of type @code{LOGICAL} and of the default kind.
+
+@item @emph{Note}:
+For @code{UNSIGNED} arguments, this function is identical to the
+@code{.LT.}  and @code{<} operators.
 
 @item @emph{See also}:
 @ref{BGE}, @*
@@ -3022,7 +3025,8 @@ The return value is of type @code{LOGICAL} and of the default kind.
 in @var{I} is set.  The counting of the bits starts at 0.
 
 @item @emph{Standard}:
-Fortran 90 and later, has overloads that are GNU extensions
+Fortran 90 and later, has overloads that are GNU extensions; extension
+for @code{UNSIGNED} (@pxref{Unsigned integers})
 
 @item @emph{Class}:
 Elemental function
@@ -3032,7 +3036,7 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab The type shall be @code{INTEGER}.
+@item @var{I} @tab The type shall be @code{INTEGER} or @code{UNSIGNED}.
 @item @var{POS} @tab The type shall be @code{INTEGER}.
 @end multitable
 
@@ -3622,7 +3626,8 @@ component.  If @var{Y} is not present then the imaginary component is set to
 0.0.  If @var{X} is complex then @var{Y} must not be present.
 
 @item @emph{Standard}:
-Fortran 77 and later
+Fortran 77 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Elemental function
@@ -3633,9 +3638,9 @@ Elemental function
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
 @item @var{X} @tab The type may be @code{INTEGER}, @code{REAL},
-or @code{COMPLEX}.
+@code{COMPLEX} or @code{UNSIGNED}.
 @item @var{Y} @tab (Optional; only allowed if @var{X} is not
-@code{COMPLEX}.)  May be @code{INTEGER} or @code{REAL}.
+@code{COMPLEX}.)  May be @code{INTEGER}, @code{REAL} or @code{UNSIGNED}.
 @item @var{KIND} @tab (Optional) A scalar @code{INTEGER} constant
 expression indicating the kind parameter of the result.
 @end multitable
@@ -4282,11 +4287,8 @@ Degrees function: @*
 @item @emph{Description}:
 @code{COSD(X)} computes the cosine of @var{X} in degrees.
 
-This function is for compatibility only and should be avoided in favor of
-standard constructs wherever possible.
-
 @item @emph{Standard}:
-GNU extension, enabled with @option{-fdec-math}.
+Fortran 2023
 
 @item @emph{Class}:
 Elemental function
@@ -4296,14 +4298,12 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{X} @tab The type shall be @code{REAL} or
-@code{COMPLEX}.
+@item @var{X} @tab The type shall be @code{REAL}.
 @end multitable
 
 @item @emph{Return value}:
-The return value is of the same type and kind as @var{X}. The real part
-of the result is in degrees.  If @var{X} is of the type @code{REAL},
-the return value lies in the range @math{ -1 \leq \cosd (x) \leq 1}.
+The return value is of the same type and kind as @var{X} and
+lies in the range @math{ -1 \leq \cosd (x) \leq 1}.
 
 @item @emph{Example}:
 @smallexample
@@ -4316,7 +4316,7 @@ end program test_cosd
 @item @emph{Specific names}:
 @multitable @columnfractions .20 .23 .20 .33
 @headitem Name            @tab Argument            @tab Return type       @tab Standard
-@item @code{COSD(X)}   @tab @code{REAL(4) X}    @tab @code{REAL(4)}    @tab GNU extension
+@item @code{COSD(X)}   @tab @code{REAL(4) X}    @tab @code{REAL(4)}    @tab Fortran 2023
 @item @code{DCOSD(X)}  @tab @code{REAL(8) X}    @tab @code{REAL(8)}    @tab GNU extension
 @item @code{CCOSD(X)}  @tab @code{COMPLEX(4) X} @tab @code{COMPLEX(4)} @tab GNU extension
 @item @code{ZCOSD(X)}  @tab @code{COMPLEX(8) X} @tab @code{COMPLEX(8)} @tab GNU extension
@@ -4455,7 +4455,7 @@ Degrees function: @*
 @code{COSD(x)} divided by @code{SIND(x)}, or @code{1 / TAND(x)}.
 
 @item @emph{Standard}:
-GNU extension, enabled with @option{-fdec-math}.
+GNU extension.
 
 This function is for compatibility only and should be avoided in favor of
 standard constructs wherever possible.
@@ -4468,7 +4468,7 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{X} @tab The type shall be @code{REAL} or @code{COMPLEX}.
+@item @var{X} @tab The type shall be @code{REAL}.
 @end multitable
 
 @item @emph{Return value}:
@@ -4643,6 +4643,7 @@ shifted out one end of each rank one section are shifted back in the other end.
 @item @emph{Standard}:
 Fortran 90 and later
 
+
 @item @emph{Class}:
 Transformational function
 
@@ -4655,6 +4656,9 @@ Transformational function
 @item @var{SHIFT}  @tab The type shall be @code{INTEGER}.
 @item @var{DIM}    @tab The type shall be @code{INTEGER}.
 @end multitable
+
+@item @emph{Note}:
+@var{ARRAY} can also be @code{UNSIGNED}.
 
 @item @emph{Return value}:
 Returns an array of same type and rank as the @var{ARRAY} argument.
@@ -4753,22 +4757,22 @@ end program test_ctime
 @item @emph{Description}:
 @code{DATE_AND_TIME(DATE, TIME, ZONE, VALUES)} gets the corresponding date and
 time information from the real-time system clock.  @var{DATE} is
-@code{INTENT(OUT)} and has form ccyymmdd.  @var{TIME} is @code{INTENT(OUT)} and
-has form hhmmss.sss.  @var{ZONE} is @code{INTENT(OUT)} and has form (+-)hhmm,
-representing the difference with respect to Coordinated Universal Time (UTC).
-Unavailable time and date parameters return blanks.
+@code{INTENT(OUT)} and of the form ccyymmdd.  @var{TIME} is @code{INTENT(OUT)}
+and of the form hhmmss.sss.  @var{ZONE} is @code{INTENT(OUT)} and of the form
+(+-)hhmm, representing the difference with respect to Coordinated Universal
+Time (UTC).  Unavailable time and date parameters return blanks.
 
 @var{VALUES} is @code{INTENT(OUT)} and provides the following:
 
 @multitable @columnfractions .15 .70
-@item @code{VALUE(1)}: @tab The year
-@item @code{VALUE(2)}: @tab The month
-@item @code{VALUE(3)}: @tab The day of the month
-@item @code{VALUE(4)}: @tab Time difference with UTC in minutes
-@item @code{VALUE(5)}: @tab The hour of the day
-@item @code{VALUE(6)}: @tab The minutes of the hour
-@item @code{VALUE(7)}: @tab The seconds of the minute
-@item @code{VALUE(8)}: @tab The milliseconds of the second
+@item @code{VALUES(1)}: @tab The year, including the century
+@item @code{VALUES(2)}: @tab The month of the year
+@item @code{VALUES(3)}: @tab The day of the month
+@item @code{VALUES(4)}: @tab The time difference from UTC in minutes
+@item @code{VALUES(5)}: @tab The hour of the day
+@item @code{VALUES(6)}: @tab The minutes of the hour
+@item @code{VALUES(7)}: @tab The seconds of the minute
+@item @code{VALUES(8)}: @tab The milliseconds of the second
 @end multitable
 
 @item @emph{Standard}:
@@ -4782,13 +4786,14 @@ Subroutine
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{DATE}  @tab (Optional) The type shall be @code{CHARACTER(LEN=8)}
-or larger, and of default kind.
-@item @var{TIME}  @tab (Optional) The type shall be @code{CHARACTER(LEN=10)}
-or larger, and of default kind.
-@item @var{ZONE}  @tab (Optional) The type shall be @code{CHARACTER(LEN=5)}
-or larger, and of default kind.
-@item @var{VALUES}@tab (Optional) The type shall be @code{INTEGER(8)}.
+@item @var{DATE}  @tab (Optional) Scalar of type default @code{CHARACTER}.
+Recommended length is 8 or larger.
+@item @var{TIME}  @tab (Optional) Scalar of type default @code{CHARACTER}.
+Recommended length is 10 or larger.
+@item @var{ZONE}  @tab (Optional) Scalar of type default @code{CHARACTER}.
+Recommended length is 5 or larger.
+@item @var{VALUES}@tab (Optional) Rank-1 array of type @code{INTEGER} with
+a decimal exponent range of at least four and array size at least 8.
 @end multitable
 
 @item @emph{Return value}:
@@ -4922,7 +4927,8 @@ model representation of @var{X}.  For example, on a system using a 32-bit
 floating point representation, a default real number would likely return 24.
 
 @item @emph{Standard}:
-Fortran 90 and later
+Fortran 90 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Inquiry function
@@ -4932,7 +4938,7 @@ Inquiry function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{X} @tab The type may be @code{INTEGER} or @code{REAL}.
+@item @var{X} @tab The type may be @code{INTEGER}, @code{REAL} or @code{UNSIGNED}.
 @end multitable
 
 @item @emph{Return value}:
@@ -5020,13 +5026,16 @@ end program test_dim
 @code{DOT_PRODUCT(VECTOR_A, VECTOR_B)} computes the dot product multiplication
 of two vectors @var{VECTOR_A} and @var{VECTOR_B}.  The two vectors may be
 either numeric or logical and must be arrays of rank one and of equal size. If
-the vectors are @code{INTEGER} or @code{REAL}, the result is
+the vectors are @code{INTEGER}, @code{REAL} or @code{UNSIGNED}, the result is
 @code{SUM(VECTOR_A*VECTOR_B)}. If the vectors are @code{COMPLEX}, the result
 is @code{SUM(CONJG(VECTOR_A)*VECTOR_B)}. If the vectors are @code{LOGICAL},
-the result is @code{ANY(VECTOR_A .AND. VECTOR_B)}.  
+the result is @code{ANY(VECTOR_A .AND. VECTOR_B)}. If one of @var{VECTOR_A}
+or @var{VECTOR_B} is @code{UNSIGNED}, the other one shall also be
+@code{UNSIGNED}.
 
 @item @emph{Standard}:
-Fortran 90 and later
+Fortran 90 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Transformational function
@@ -5037,13 +5046,21 @@ Transformational function
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
 @item @var{VECTOR_A} @tab The type shall be numeric or @code{LOGICAL}, rank 1.
-@item @var{VECTOR_B} @tab The type shall be numeric if @var{VECTOR_A} is of numeric type or @code{LOGICAL} if @var{VECTOR_A} is of type @code{LOGICAL}. @var{VECTOR_B} shall be a rank-one array.
+If @var{VECTOR_B} is @code{UNSIGNED}, @var{VECTOR_A} shall also be
+unsigned.
+
+@item @var{VECTOR_B} @tab The type shall if @var{VECTOR_A} is of numeric type
+or @code{LOGICAL} if @var{VECTOR_A} is of type @code{LOGICAL}. @var{VECTOR_B}
+shall be a rank-one array. If @var{VECTOR_A} is @code{UNSIGNED}, @var{VECTOR_B}
+shall also be unsigned.
+
 @end multitable
 
 @item @emph{Return value}:
-If the arguments are numeric, the return value is a scalar of numeric type,
-@code{INTEGER}, @code{REAL}, or @code{COMPLEX}.  If the arguments are
-@code{LOGICAL}, the return value is @code{.TRUE.} or @code{.FALSE.}.
+If the arguments are numeric, the return value is a scalar of numeric
+type, @code{INTEGER}, @code{REAL}, @code{COMPLEX} or @code{UNSIGNED}.
+If the arguments are @code{LOGICAL}, the return value is @code{.TRUE.}
+or @code{.FALSE.}.
 
 @item @emph{Example}:
 @smallexample
@@ -5164,7 +5181,8 @@ bits of @var{J}, and the remaining bits are the rightmost bits of
 @var{I}.
 
 @item @emph{Standard}:
-Fortran 2008 and later
+Fortran 2008 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Elemental function
@@ -5174,11 +5192,13 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab Shall be of type @code{INTEGER} or a BOZ constant.
-@item @var{J} @tab Shall be of type @code{INTEGER} or a BOZ constant.
-If both @var{I} and @var{J} have integer type, then they shall have
-the same kind type parameter. @var{I} and @var{J} shall not both be
-BOZ constants.
+@item @var{I} @tab Shall be of type @code{INTEGER}, @code{UNSIGNED} or
+a BOZ constant.
+@item @var{J} @tab Shall be of type @code{INTEGER}, @code{UNSIGNED} or
+a BOZ constant.
+If both @var{I} and @var{J} have @code{INTEGER} or @code{UNSIGNED} type,
+then they shall have the same type and kind type parameter. @var{I}
+and @var{J} shall not both be BOZ constants.
 @item @var{SHIFT} @tab Shall be of type @code{INTEGER}. It shall
 be nonnegative.  If @var{I} is not a BOZ constant, then @var{SHIFT}
 shall be less than or equal to @code{BIT_SIZE(I)}; otherwise,
@@ -5186,9 +5206,8 @@ shall be less than or equal to @code{BIT_SIZE(I)}; otherwise,
 @end multitable
 
 @item @emph{Return value}:
-If either @var{I} or @var{J} is a BOZ constant, it is first converted
-as if by the intrinsic function @code{INT} to an integer type with the
-kind type parameter of the other.
+The return value is the same type and type kind parameter as @var{I} or,
+if @var{I} is a BOZ constant, @var{J}.
 
 @item @emph{See also}:
 @ref{DSHIFTR}
@@ -5209,7 +5228,8 @@ bits of @var{I}, and the remaining bits are the leftmost bits of
 @var{J}.
 
 @item @emph{Standard}:
-Fortran 2008 and later
+Fortran 2008 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Elemental function
@@ -5219,11 +5239,13 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab Shall be of type @code{INTEGER} or a BOZ constant.
-@item @var{J} @tab Shall be of type @code{INTEGER} or a BOZ constant.
-If both @var{I} and @var{J} have integer type, then they shall have
-the same kind type parameter. @var{I} and @var{J} shall not both be
-BOZ constants.
+@item @var{I} @tab Shall be of type @code{INTEGER}, @code{UNSIGNED} or
+a BOZ constant.
+@item @var{J} @tab Shall be of type @code{INTEGER}, @code{UNSIGNED} or
+a BOZ constant.
+If both @var{I} and @var{J} have @code{INTEGER} or @code{UNSIGNED} type,
+then they shall have the same type and kind type parameter. @var{I}
+and @var{J} shall not both be BOZ constants.
 @item @var{SHIFT} @tab Shall be of type @code{INTEGER}. It shall
 be nonnegative.  If @var{I} is not a BOZ constant, then @var{SHIFT}
 shall be less than or equal to @code{BIT_SIZE(I)}; otherwise,
@@ -5231,9 +5253,8 @@ shall be less than or equal to @code{BIT_SIZE(I)}; otherwise,
 @end multitable
 
 @item @emph{Return value}:
-If either @var{I} or @var{J} is a BOZ constant, it is first converted
-as if by the intrinsic function @code{INT} to an integer type with the
-kind type parameter of the other.
+The return value is the same type and type kind parameter as @var{I} or,
+if @var{I} is a BOZ constant, @var{J}.
 
 @item @emph{See also}:
 @ref{DSHIFTL}
@@ -5356,7 +5377,8 @@ following are copied in depending on the type of @var{ARRAY}.
 @end multitable
 
 @item @emph{Standard}:
-Fortran 90 and later
+Fortran 90 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Transformational function
@@ -5371,6 +5393,9 @@ Transformational function
 @item @var{BOUNDARY} @tab Same type as @var{ARRAY}. 
 @item @var{DIM}    @tab The type shall be @code{INTEGER}.
 @end multitable
+
+@item @emph{Note}:
+@var{ARRAY} can also be @code{UNSIGNED}.
 
 @item @emph{Return value}:
 Returns an array of same type and rank as the @var{ARRAY} argument.
@@ -6165,7 +6190,8 @@ elements of @var{MASK} along a given row are zero, the result value
 for that row is zero.
 
 @item @emph{Standard}:
-Fortran 2008 and later.
+Fortran 2008 and later
+
 
 @item @emph{Class}:
 Transformational function
@@ -6190,6 +6216,9 @@ and conformable with @var{ARRAY}.
 expression indicating the kind parameter of the result.
 @item @var{BACK} @tab (Optional) A scalar of type @code{LOGICAL}.
 @end multitable
+
+@item @emph{Note}:
+@var{ARRAY} can also be @code{UNSIGNED}.
 
 @item @emph{Return value}:
 If @var{DIM} is absent, the result is a rank-one array with a length
@@ -7459,7 +7488,8 @@ be obtained, or to a blank string otherwise.
 the model of the type of @code{X}.
 
 @item @emph{Standard}:
-Fortran 90 and later
+Fortran 90 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Inquiry function
@@ -7469,7 +7499,8 @@ Inquiry function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{X} @tab Shall be of type @code{REAL} or @code{INTEGER}.
+@item @var{X} @tab Shall be of type @code{REAL}, @code{INTEGER} or
+@code{UNSIGNED}.
 @end multitable
 
 @item @emph{Return value}:
@@ -7590,7 +7621,8 @@ Reduces with bitwise AND the elements of @var{ARRAY} along dimension @var{DIM}
 if the corresponding element in @var{MASK} is @code{TRUE}.
 
 @item @emph{Standard}:
-Fortran 2008 and later
+Fortran 2008 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Transformational function
@@ -7603,7 +7635,7 @@ Transformational function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{ARRAY} @tab Shall be an array of type @code{INTEGER}
+@item @var{ARRAY} @tab Shall be an array of type @code{INTEGER} or @code{UNSIGNED}
 @item @var{DIM}   @tab (Optional) shall be a scalar of type 
 @code{INTEGER} with a value in the range from 1 to n, where n 
 equals the rank of @var{ARRAY}.
@@ -7655,7 +7687,9 @@ END PROGRAM
 Bitwise logical @code{AND}.
 
 @item @emph{Standard}:
-Fortran 90 and later, with boz-literal-constant Fortran 2008 and later, has overloads that are GNU extensions
+Fortran 90 and later, with boz-literal-constant Fortran 2008 and
+later, has overloads that are GNU extensions.  Extension for
+@code{UNSIGNED} (@pxref{Unsigned integers})
 
 @item @emph{Class}:
 Elemental function
@@ -7665,17 +7699,19 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab The type shall be @code{INTEGER} or a boz-literal-constant.
-@item @var{J} @tab The type shall be @code{INTEGER} with the same
-kind type parameter as @var{I} or a boz-literal-constant.
+@item @var{I} @tab The type shall be @code{INTEGER}, @code{UNSIGNED}
+or a boz-literal-constant.
+@item @var{J} @tab The type shall be the same type as @var{I} with the same
+kind type parameter or a boz-literal-constant.
 @var{I} and @var{J} shall not both be boz-literal-constants.
 @end multitable
 
 @item @emph{Return value}:
-The return type is @code{INTEGER} with the kind type parameter of the
+The return type is  with the kind type parameter of the
 arguments.
-A boz-literal-constant is converted to an @code{INTEGER} with the kind
-type parameter of the other argument as-if a call to @ref{INT} occurred.
+A boz-literal-constant is converted to an @code{INTEGER} or @code{UNSIGNED}
+with the kind type parameter of the other argument as-if a call to @ref{INT} or
+@ref{UINT}, respectively, occurred.
 
 @item @emph{Example}:
 @smallexample
@@ -7719,7 +7755,8 @@ Reduces with bitwise OR (inclusive or) the elements of @var{ARRAY} along
 dimension @var{DIM} if the corresponding element in @var{MASK} is @code{TRUE}.
 
 @item @emph{Standard}:
-Fortran 2008 and later
+Fortran 2008 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Transformational function
@@ -7732,7 +7769,7 @@ Transformational function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{ARRAY} @tab Shall be an array of type @code{INTEGER}
+@item @var{ARRAY} @tab Shall be an array of type @code{INTEGER} or @code{UNSIGNED}
 @item @var{DIM}   @tab (Optional) shall be a scalar of type 
 @code{INTEGER} with a value in the range from 1 to n, where n 
 equals the rank of @var{ARRAY}.
@@ -7831,7 +7868,8 @@ Fortran 2003 functions and subroutines: @*
 @var{POS} set to zero.
 
 @item @emph{Standard}:
-Fortran 90 and later, has overloads that are GNU extensions
+Fortran 90 and later, has overloads that are GNU extensions. Extension
+for @code{UNSIGNED} (@pxref{Unsigned integers})
 
 @item @emph{Class}:
 Elemental function
@@ -7841,13 +7879,12 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab The type shall be @code{INTEGER}.
+@item @var{I} @tab The type shall be @code{INTEGER} or @code{UNSIGNED}.
 @item @var{POS} @tab The type shall be @code{INTEGER}.
 @end multitable
 
 @item @emph{Return value}:
-The return value is of type @code{INTEGER} and of the same kind as
-@var{I}.
+The return value is of the same type as @var{I}.
 
 @item @emph{Specific names}:
 @multitable @columnfractions .20 .23 .20 .33
@@ -7889,7 +7926,8 @@ zeroed.  The value of @code{POS+LEN} must be less than or equal to the
 value @code{BIT_SIZE(I)}.
 
 @item @emph{Standard}:
-Fortran 90 and later, has overloads that are GNU extensions
+Fortran 90 and later, has overloads that are GNU extensions. Extension
+for @code{UNSIGNED} (@pxref{Unsigned integers})
 
 @item @emph{Class}:
 Elemental function
@@ -7899,14 +7937,13 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I}   @tab The type shall be @code{INTEGER}.
+@item @var{I}   @tab The type shall be @code{INTEGER} or @code{UNSIGNED}.
 @item @var{POS} @tab The type shall be @code{INTEGER}.
 @item @var{LEN} @tab The type shall be @code{INTEGER}.
 @end multitable
 
 @item @emph{Return value}:
-The return value is of type @code{INTEGER} and of the same kind as
-@var{I}.
+The return value is of type as @var{I}.
 
 @item @emph{Specific names}:
 @multitable @columnfractions .20 .23 .20 .33
@@ -7944,7 +7981,8 @@ The return value is of type @code{INTEGER} and of the same kind as
 @var{POS} set to one.
 
 @item @emph{Standard}:
-Fortran 90 and later, has overloads that are GNU extensions
+Fortran 90 and later, has overloads that are GNU extensions.  Extension
+for @code{UNSIGNED} (@pxref{Unsigned integers})
 
 @item @emph{Class}:
 Elemental function
@@ -7954,13 +7992,12 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab The type shall be @code{INTEGER}.
+@item @var{I} @tab The type shall be @code{INTEGER} or @code{UNSIGNED}.
 @item @var{POS} @tab The type shall be @code{INTEGER}.
 @end multitable
 
 @item @emph{Return value}:
-The return value is of type @code{INTEGER} and of the same kind as
-@var{I}.
+The return value is of the same type as @var{I}.
 
 @item @emph{Specific names}:
 @multitable @columnfractions .20 .23 .20 .33
@@ -8128,7 +8165,9 @@ end program test_idate
 @var{J}.
 
 @item @emph{Standard}:
-Fortran 90 and later, with boz-literal-constant Fortran 2008 and later, has overloads that are GNU extensions
+Fortran 90 and later, with boz-literal-constant Fortran 2008 and
+later, has overloads that are GNU extensions. Extension for
+@code{UNSIGNED} (@pxref{Unsigned integers})
 
 @item @emph{Class}:
 Elemental function
@@ -8138,17 +8177,19 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab The type shall be @code{INTEGER} or a boz-literal-constant.
-@item @var{J} @tab The type shall be @code{INTEGER} with the same
-kind type parameter as @var{I} or a boz-literal-constant.
+@item @var{I} @tab The type shall be @code{INTEGER}, @code{UNSIGNED} or
+a boz-literal-constant.
+@item @var{J} @tab The type shall be the same type as @var{I} with the same
+kind type parameter or a boz-literal-constant.
 @var{I} and @var{J} shall not both be boz-literal-constants.
 @end multitable
 
 @item @emph{Return value}:
-The return type is @code{INTEGER} with the kind type parameter of the
+The return type is  with the kind type parameter of the
 arguments.
-A boz-literal-constant is converted to an @code{INTEGER} with the kind
-type parameter of the other argument as-if a call to @ref{INT} occurred.
+A boz-literal-constant is converted to an @code{INTEGER} or @code{UNSIGNED}
+with the kind type parameter of the other argument as-if a call to @ref{INT} or
+@ref{UINT}, respectively, occurred.
 
 @item @emph{Specific names}:
 @multitable @columnfractions .20 .23 .20 .33
@@ -8315,7 +8356,8 @@ Convert to integer type
 Fortran 77 and later, with boz-literal-constant Fortran 2008 and later.
 
 @item @emph{Class}:
-Elemental function
+Elemental function, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers}).
 
 @item @emph{Syntax}:
 @code{RESULT = INT(A [, KIND))}
@@ -8323,7 +8365,7 @@ Elemental function
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
 @item @var{A}    @tab Shall be of type @code{INTEGER},
-@code{REAL}, or @code{COMPLEX} or a boz-literal-constant.
+@code{REAL},  @code{COMPLEX} or @code{UNSIGNED} or a boz-literal-constant.
 @item @var{KIND} @tab (Optional) A scalar @code{INTEGER} constant
 expression indicating the kind parameter of the result.
 @end multitable
@@ -8342,6 +8384,10 @@ whose magnitude is the largest integer that does not exceed the magnitude
 of @var{A} and whose sign is the same as the sign of @var{A}.
 @item (C)
 If @var{A} is of type @code{COMPLEX}, rule B is applied to the real part of @var{A}.
+@item (D)
+If @var{A} is of type @code{UNSIGNED} and @math{0 \leq A \leq}
+@code{HUGE(A)}, @code{INT(A) = A}.  Outside that range, the result
+is interpreted using two's complement.
 @end table
 
 @item @emph{Example}:
@@ -8453,7 +8499,9 @@ The return value is a @code{INTEGER(8)} variable.
 @var{J}.
 
 @item @emph{Standard}:
-Fortran 90 and later, with boz-literal-constant Fortran 2008 and later, has overloads that are GNU extensions
+Fortran 90 and later, with boz-literal-constant Fortran 2008 and
+later, has overloads that are GNU extensions.  Extension for
+@code{UNSIGNED} (@pxref{Unsigned integers})
 
 @item @emph{Class}:
 Elemental function
@@ -8463,17 +8511,19 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab The type shall be @code{INTEGER} or a boz-literal-constant.
-@item @var{J} @tab The type shall be @code{INTEGER} with the same
-kind type parameter as @var{I} or a boz-literal-constant.
+@item @var{I} @tab The type shall be @code{INTEGER}, @code{UNSIGNED}
+or a boz-literal-constant.
+@item @var{J} @tab The type shall be the same type as @var{I} with the same
+kind type parameter or a boz-literal-constant.
 @var{I} and @var{J} shall not both be boz-literal-constants.
 @end multitable
 
 @item @emph{Return value}:
 The return type is @code{INTEGER} with the kind type parameter of the
 arguments.
-A boz-literal-constant is converted to an @code{INTEGER} with the kind
-type parameter of the other argument as-if a call to @ref{INT} occurred.
+A boz-literal-constant is converted to an @code{INTEGER} or @code{UNSIGNED}
+with the kind type parameter of the other argument as-if a call to @ref{INT} or
+@ref{UINT}, respectively, occurred.
 
 @item @emph{Specific names}:
 @multitable @columnfractions .20 .23 .20 .33
@@ -8509,7 +8559,8 @@ Reduces with bitwise XOR (exclusive or) the elements of @var{ARRAY} along
 dimension @var{DIM} if the corresponding element in @var{MASK} is @code{TRUE}.
 
 @item @emph{Standard}:
-Fortran 2008 and later
+Fortran 2008 and later. Extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Transformational function
@@ -8523,6 +8574,7 @@ Transformational function
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
 @item @var{ARRAY} @tab Shall be an array of type @code{INTEGER}
+or @code{UNSIGNED}.
 @item @var{DIM}   @tab (Optional) shall be a scalar of type 
 @code{INTEGER} with a value in the range from 1 to n, where n 
 equals the rank of @var{ARRAY}.
@@ -8811,7 +8863,8 @@ value is undefined.  Bits shifted out from the left end or right end are
 lost; zeros are shifted in from the opposite end.
 
 @item @emph{Standard}:
-Fortran 90 and later, has overloads that are GNU extensions
+Fortran 90 and later, has overloads that are GNU extensions. Extension for
+@code{UNSIGNED} (@pxref{Unsigned integers})
 
 @item @emph{Class}:
 Elemental function
@@ -8821,13 +8874,12 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab The type shall be @code{INTEGER}.
+@item @var{I} @tab The type shall be @code{INTEGER} or @code{UNSIGNED}.
 @item @var{SHIFT} @tab The type shall be @code{INTEGER}.
 @end multitable
 
 @item @emph{Return value}:
-The return value is of type @code{INTEGER} and of the same kind as
-@var{I}.
+The return value is of type of @var{I}.
 
 @item @emph{Specific names}:
 @multitable @columnfractions .20 .23 .20 .33
@@ -8866,7 +8918,8 @@ a right shift.  The absolute value of @var{SHIFT} must be less than
 equivalent to @code{BIT_SIZE(I)}.
 
 @item @emph{Standard}:
-Fortran 90 and later, has overloads that are GNU extensions
+Fortran 90 and later, has overloads that are GNU extensions. Extension for
+@code{UNSIGNED} (@pxref{Unsigned integers})
 
 @item @emph{Class}:
 Elemental function
@@ -8876,7 +8929,7 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab The type shall be @code{INTEGER}.
+@item @var{I} @tab The type shall be @code{INTEGER} or @code{UNSIGNED}.
 @item @var{SHIFT} @tab The type shall be @code{INTEGER}.
 @item @var{SIZE} @tab (Optional) The type shall be @code{INTEGER};
 the value must be greater than zero and less than or equal to
@@ -8884,8 +8937,7 @@ the value must be greater than zero and less than or equal to
 @end multitable
 
 @item @emph{Return value}:
-The return value is of type @code{INTEGER} and of the same kind as
-@var{I}.
+The return value is of the same type as @var{I}.
 
 @item @emph{Specific names}:
 @multitable @columnfractions .20 .23 .20 .33
@@ -10143,7 +10195,8 @@ default integer kind.
 Performs a matrix multiplication on numeric or logical arguments.
 
 @item @emph{Standard}:
-Fortran 90 and later
+Fortran 90 and later. Extension for@code{UNSIGNED}
+(@pxref{Unsigned integers})
 
 @item @emph{Class}:
 Transformational function
@@ -10153,12 +10206,17 @@ Transformational function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
+
 @item @var{MATRIX_A} @tab An array of @code{INTEGER},
-@code{REAL}, @code{COMPLEX}, or @code{LOGICAL} type, with a rank of
-one or two.
+@code{REAL}, @code{COMPLEX}, @code{UNSIGNED} or @code{LOGICAL} type,
+with a rank of one or two.
+
 @item @var{MATRIX_B} @tab An array of @code{INTEGER},
-@code{REAL}, or @code{COMPLEX} type if @var{MATRIX_A} is of a numeric
-type; otherwise, an array of @code{LOGICAL} type. The rank shall be one
+@code{REAL}, or @code{COMPLEX} type if @var{MATRIX_A} is of
+@code{INTEGER}, @code{REAL}, or @code{COMPLEX} type.
+Otherwise, if @var{MATRIX_A} is an array of @code{UNSIGNED} or @code{LOGICAL} type,
+the type shall be the same as that of @var{MATRIX_A}.
+The rank shall be one
 or two, and the first (or only) dimension of @var{MATRIX_B} shall be
 equal to the last (or only) dimension of @var{MATRIX_A}.
 @var{MATRIX_A} and @var{MATRIX_B} shall not both be rank one arrays.
@@ -10187,7 +10245,8 @@ for the @code{*} or @code{.AND.} operators.
 Returns the argument with the largest (most positive) value.
 
 @item @emph{Standard}:
-Fortran 77 and later
+Fortran 77 and later.  Extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Elemental function
@@ -10197,8 +10256,8 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{A1}          @tab The type shall be @code{INTEGER} or
-@code{REAL}.
+@item @var{A1}          @tab The type shall be @code{INTEGER},
+@code{REAL} or @code{UNSIGNED}.
 @item @var{A2}, @var{A3}, ... @tab An expression of the same type and kind
 as @var{A1}.  (As a GNU extension, arguments of different kinds are
 permitted.)
@@ -10293,6 +10352,7 @@ result value for that row is zero.
 Fortran 95 and later; @var{ARRAY} of @code{CHARACTER} and the
 @var{KIND} argument are available in Fortran 2003 and later.
 The @var{BACK} argument is available in Fortran 2008 and later.
+Extension for@code{UNSIGNED} (@pxref{Unsigned integers}).
 
 @item @emph{Class}:
 Transformational function
@@ -10305,8 +10365,8 @@ Transformational function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{ARRAY} @tab Shall be an array of type @code{INTEGER} or
-@code{REAL}.
+@item @var{ARRAY} @tab Shall be an array of type @code{INTEGER},
+@code{REAL}, @code{UNSIGNED} or @code{CHARACTER}.
 @item @var{DIM}   @tab (Optional) Shall be a scalar of type
 @code{INTEGER}, with a value between one and the rank of @var{ARRAY},
 inclusive.  It may not be an optional dummy argument.
@@ -10349,11 +10409,13 @@ each row of the array in the @var{DIM} direction.  If @var{MASK} is
 present, only the elements for which @var{MASK} is @code{.TRUE.} are
 considered.  If the array has zero size, or all of the elements of
 @var{MASK} are @code{.FALSE.}, then the result is @code{-HUGE(ARRAY)}
-if @var{ARRAY} is numeric, or a string of nulls if @var{ARRAY} is of character
-type.
+if @var{ARRAY} is of type @code{INTEGER} or @code{REAL}, @code{0}
+if it is type @code{UNSIGNED}. or a string of nulls if @var{ARRAY} is of
+character type.
 
 @item @emph{Standard}:
-Fortran 90 and later
+Fortran 90 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Transformational function
@@ -10366,8 +10428,8 @@ Transformational function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{ARRAY} @tab Shall be an array of type @code{INTEGER} or
-@code{REAL}.
+@item @var{ARRAY} @tab Shall be an array of type @code{INTEGER},
+@code{REAL}, @code{UNSIGNED} or @code{CHARACTER}.
 @item @var{DIM}   @tab (Optional) Shall be a scalar of type
 @code{INTEGER}, with a value between one and the rank of @var{ARRAY},
 inclusive.  It may not be an optional dummy argument.
@@ -10522,7 +10584,8 @@ i-th bit of @var{I} if the i-th bit of @var{MASK} is 1; it is equal to
 the i-th bit of @var{J} otherwise.
 
 @item @emph{Standard}:
-Fortran 2008 and later
+Fortran 2008 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Elemental function
@@ -10532,12 +10595,13 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab Shall be of type @code{INTEGER} or a boz-literal-constant.
-@item @var{J} @tab Shall be of type @code{INTEGER} with the same
-kind type parameter as @var{I} or a boz-literal-constant.
+@item @var{I} @tab Shall be of type @code{INTEGER}, @code{UNSIGNED}
+or a boz-literal-constant.
 @var{I} and @var{J} shall not both be boz-literal-constants.
-@item @var{MASK} @tab Shall be of type @code{INTEGER} or a boz-literal-constant
-and of the same kind as @var{I}.
+@item @var{J} @tab The type shall be the same type as @var{I} with the same
+kind type parameter or a boz-literal-constant.
+@item @var{MASK} @tab Shall be of the same type as @var{I}, @var{J} or a
+boz-literal-constant.
 @end multitable
 
 @item @emph{Return value}:
@@ -10562,7 +10626,8 @@ The result is of the same type and kind as @var{I}.
 Returns the argument with the smallest (most negative) value.
 
 @item @emph{Standard}:
-Fortran 77 and later
+Fortran 77 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Elemental function
@@ -10572,8 +10637,8 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{A1}          @tab The type shall be @code{INTEGER} or
-@code{REAL}.
+@item @var{A1}          @tab The type shall be @code{INTEGER},
+@code{REAL} or @code{UNSIGNED}.
 @item @var{A2}, @var{A3}, ... @tab An expression of the same type and kind
 as @var{A1}.  (As a GNU extension, arguments of different kinds are
 permitted.)
@@ -10660,6 +10725,7 @@ result value for that row is zero.
 Fortran 90 and later; @var{ARRAY} of @code{CHARACTER} and the
 @var{KIND} argument are available in Fortran 2003 and later.
 The @var{BACK} argument is available in Fortran 2008 and later.
+Extension for @code{UNSIGNED} (@pxref{Unsigned integers}).
 
 @item @emph{Class}:
 Transformational function
@@ -10673,7 +10739,7 @@ Transformational function
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
 @item @var{ARRAY} @tab Shall be an array of type @code{INTEGER},
-@code{REAL} or @code{CHARACTER}.
+@code{REAL}, @code{CHARACTER} or @code{UNSIGNED}.
 @item @var{DIM}   @tab (Optional) Shall be a scalar of type
 @code{INTEGER}, with a value between one and the rank of @var{ARRAY},
 inclusive.  It may not be an optional dummy argument.
@@ -10720,7 +10786,8 @@ considered.  If the array has zero size, or all of the elements of
 @var{ARRAY} is of character type.
 
 @item @emph{Standard}:
-Fortran 90 and later
+Fortran 90 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Transformational function
@@ -10733,8 +10800,8 @@ Transformational function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{ARRAY} @tab Shall be an array of type @code{INTEGER} or
-@code{REAL}.
+@item @var{ARRAY} @tab Shall be an array of type @code{INTEGER},
+@code{REAL} or @code{UNSIGNED}.
 @item @var{DIM}   @tab (Optional) Shall be a scalar of type
 @code{INTEGER}, with a value between one and the rank of @var{ARRAY},
 inclusive.  It may not be an optional dummy argument.
@@ -10773,7 +10840,8 @@ cases, the result is of the same type and kind as @var{ARRAY}.
 @code{MOD(A,P)} computes the remainder of the division of A by P@. 
 
 @item @emph{Standard}:
-Fortran 77 and later, has overloads that are GNU extensions
+Fortran 77 and later, has overloads that are GNU extensions. Extension
+for @code{UNSIGNED}.
 
 @item @emph{Class}:
 Elemental function
@@ -10783,7 +10851,8 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{A} @tab Shall be a scalar of type @code{INTEGER} or @code{REAL}.
+@item @var{A} @tab Shall be a scalar of type @code{INTEGER}, @code{REAL}
+or @code{UNSIGNED}.
 @item @var{P} @tab Shall be a scalar of the same type and kind as @var{A} 
 and not equal to zero.  (As a GNU extension, arguments of different kinds are
 permitted.)
@@ -10795,6 +10864,10 @@ and kind of the return value is the same as that of the arguments. The
 returned value has the same sign as A and a magnitude less than the
 magnitude of P.  (As a GNU extension, kind is the largest kind of the actual
 arguments.)
+
+@item @emph{Note}:
+@code{MOD} and @code{MODULO} yield identical results if their arguments
+are @code{UNSIGNED}.
 
 @item @emph{Example}:
 @smallexample
@@ -10846,7 +10919,8 @@ end program test_mod
 @code{MODULO(A,P)} computes the @var{A} modulo @var{P}.
 
 @item @emph{Standard}:
-Fortran 95 and later
+Fortran 95 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Elemental function
@@ -10866,7 +10940,7 @@ permitted.)
 The type and kind of the result are those of the arguments.  (As a GNU
 extension, kind is the largest kind of the actual arguments.)
 @table @asis
-@item If @var{A} and @var{P} are of type @code{INTEGER}:
+@item If @var{A} and @var{P} are of type @code{INTEGER} or @code{UNSIGNED}:
 @code{MODULO(A,P)} has the value @var{R} such that @code{A=Q*P+R}, where
 @var{Q} is an integer and @var{R} is between 0 (inclusive) and @var{P}
 (exclusive).
@@ -10875,6 +10949,10 @@ extension, kind is the largest kind of the actual arguments.)
 @end table
 The returned value has the same sign as P and a magnitude less than
 the magnitude of P.
+
+@item @emph{Note}:
+@code{MOD} and @code{MODULO} yield identical results if their arguments
+are @code{UNSIGNED}.
 
 @item @emph{Example}:
 @smallexample
@@ -10963,7 +11041,8 @@ affected by the movement of bits is unchanged. The values of
 @code{BIT_SIZE(FROM)}.
 
 @item @emph{Standard}:
-Fortran 90 and later, has overloads that are GNU extensions
+Fortran 90 and later, has overloads that are GNU extensions. Extension
+for @code{UNSIGNED} (@pxref{Unsigned integers}).
 
 @item @emph{Class}:
 Elemental subroutine
@@ -10973,11 +11052,11 @@ Elemental subroutine
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{FROM}    @tab The type shall be @code{INTEGER}.
+@item @var{FROM}    @tab The type shall be @code{INTEGER} or @code{UNSIGNED}.
 @item @var{FROMPOS} @tab The type shall be @code{INTEGER}.
 @item @var{LEN}     @tab The type shall be @code{INTEGER}.
-@item @var{TO}      @tab The type shall be @code{INTEGER}, of the
-same kind as @var{FROM}.
+@item @var{TO}      @tab The type shall be of the same type and kind
+as @var{FROM}.
 @item @var{TOPOS}   @tab The type shall be @code{INTEGER}.
 @end multitable
 
@@ -11212,7 +11291,8 @@ END PROGRAM
 @code{NOT} returns the bitwise Boolean inverse of @var{I}.
 
 @item @emph{Standard}:
-Fortran 90 and later, has overloads that are GNU extensions
+Fortran 90 and later, has overloads that are GNU extensions, extension
+for @code{UNSIGNED} (@pxref{Unsigned integers})
 
 @item @emph{Class}:
 Elemental function
@@ -11222,12 +11302,11 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab The type shall be @code{INTEGER}.
+@item @var{I} @tab The type shall be @code{INTEGER} or @code{UNSIGNED}.
 @end multitable
 
 @item @emph{Return value}:
-The return type is @code{INTEGER}, of the same kind as the
-argument.
+The return type is @code{INTEGER}, of the same kind as the argument.
 
 @item @emph{Specific names}:
 @multitable @columnfractions .20 .23 .20 .33
@@ -11761,7 +11840,8 @@ Multiplies the elements of @var{ARRAY} along dimension @var{DIM} if
 the corresponding element in @var{MASK} is @code{TRUE}.
 
 @item @emph{Standard}:
-Fortran 90 and later
+Fortran 90 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Transformational function
@@ -11775,7 +11855,7 @@ Transformational function
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
 @item @var{ARRAY} @tab Shall be an array of type @code{INTEGER}, 
-@code{REAL} or @code{COMPLEX}.
+@code{REAL}, @code{COMPLEX} or @code{UNSIGNED}.
 @item @var{DIM}   @tab (Optional) shall be a scalar of type 
 @code{INTEGER} with a value in the range from 1 to n, where n 
 equals the rank of @var{ARRAY}.
@@ -11950,15 +12030,15 @@ Subroutine
 and it is @code{INTENT(IN)}.  If it is @code{.true.}, the seed is set to
 a processor-dependent value that is the same each time @code{RANDOM_INIT}
 is called from the same image.  The term ``same image'' means a single
-instance of program execution.  The sequence of random numbers is different
-for repeated execution of the program.  If it is @code{.false.}, the seed
-is set to a processor-dependent value.
+instance of program execution.  The sequence of random numbers is the same
+for repeated execution of the program with the same execution environment.
+If it is @code{.false.}, the seed is set to a processor-dependent value.
 @item @var{IMAGE_DISTINCT} @tab Shall be a scalar with a
 @code{LOGICAL} type, and it is @code{INTENT(IN)}.  If it is @code{.true.},
-the seed is set to a processor-dependent value that is distinct from th
+the seed is set to a processor-dependent value that is distinct from the
 seed set by a call to @code{RANDOM_INIT} in another image.  If it is
-@code{.false.}, the seed is set to a value that does depend which image called
-@code{RANDOM_INIT}.
+@code{.false.}, the seed is set to a value that is the same on every image
+calling @code{RANDOM_INIT}.
 @end multitable
 
 @item @emph{Example}:
@@ -11988,8 +12068,13 @@ end program test_random_seed
 
 @table @asis
 @item @emph{Description}:
-Returns a single pseudorandom number or an array of pseudorandom numbers
-from the uniform distribution over the range @math{ 0 \leq x < 1}.
+For @code{REAL} argument, returns a single pseudorandom number or an
+array of pseudorandom numbers from the uniform distribution over the
+range @math{0 <= x < 1}.
+
+For @code{UNSIGNED} argument returns a single pseudorandom number or
+an array of pseudorandom numbers in over the range of
+@math{0 <= x <= HUGE(HARVEST)}.
 
 The runtime-library implements the xoshiro256** pseudorandom number
 generator (PRNG). This generator has a period of @math{2^{256} - 1},
@@ -12003,7 +12088,8 @@ intrinsic.
 
 
 @item @emph{Standard}:
-Fortran 90 and later
+Fortran 90 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Subroutine
@@ -12113,7 +12199,8 @@ end program test_random_seed
 type of @code{X}.
 
 @item @emph{Standard}:
-Fortran 90 and later
+Fortran 90 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Inquiry function
@@ -12123,8 +12210,8 @@ Inquiry function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{X} @tab Shall be of type @code{INTEGER}, @code{REAL}
-or @code{COMPLEX}.
+@item @var{X} @tab Shall be of type @code{INTEGER}, @code{REAL},
+@code{COMPLEX} or @code{UNSIGNED}.
 @end multitable
 
 @item @emph{Return value}:
@@ -12201,7 +12288,10 @@ end program test_rank
 and its use is strongly discouraged.
 
 @item @emph{Standard}:
-Fortran 77 and later, with @var{KIND} argument Fortran 90 and later, has GNU extensions
+Fortran 77 and later, with @var{KIND} argument Fortran 90 and later,
+has GNU extensions.  Extension for @code{UNSIGNED} (@pxref{Unsigned
+integers}).
+
 
 @item @emph{Class}:
 Elemental function
@@ -12214,8 +12304,8 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{A}    @tab Shall be @code{INTEGER}, @code{REAL}, or
-@code{COMPLEX}.
+@item @var{A}    @tab Shall be @code{INTEGER}, @code{REAL},
+@code{COMPLEX} or @code{UNSIGNED}.
 @item @var{KIND} @tab (Optional) A scalar @code{INTEGER} constant
 expression indicating the kind parameter of the result.
 @end multitable
@@ -12227,14 +12317,14 @@ the following rules:
 @table @asis
 @item (A)
 @code{REAL(A)} is converted to a default real type if @var{A} is an 
-integer or real variable.
+integer, real or unsigned variable.
 @item (B)
 @code{REAL(A)} is converted to a real type with the kind type parameter
 of @var{A} if @var{A} is a complex variable.
 @item (C)
 @code{REAL(A, KIND)} is converted to a real type with kind type
-parameter @var{KIND} if @var{A} is a complex, integer, or real
-variable.
+parameter @var{KIND} if @var{A} is a complex, integer, real
+or unsigned variable.
 @end table
 
 @item @emph{Example}:
@@ -12811,6 +12901,48 @@ end program large_integers
 
 
 
+@node SELECTED_LOGICAL_KIND
+@section @code{SELECTED_LOGICAL_KIND} --- Choose logical kind
+@fnindex SELECTED_LOGICAL_KIND
+@cindex logical kind
+@cindex kind, logical
+
+@table @asis
+@item @emph{Description}:
+@code{SELECTED_LOGICAL_KIND(BITS)} return the kind value of the smallest
+logical type whose storage size in bits is at least @var{BITS}. If there
+is no such logical kind, @code{SELECTED_LOGICAL_KIND} returns @math{-1}.
+
+@item @emph{Standard}:
+Fortran 2023 and later
+
+@item @emph{Class}:
+Transformational function
+
+@item @emph{Syntax}:
+@code{RESULT = SELECTED_LOGICAL_KIND(BITS)}
+
+@item @emph{Arguments}:
+@multitable @columnfractions .15 .70
+@item @var{BITS} @tab Shall be a scalar and of type @code{INTEGER}.
+@end multitable
+
+@item @emph{Example}:
+@smallexample
+program logical_kinds
+  integer, parameter :: k1 = selected_logical_kind(1)
+  integer, parameter :: k40 = selected_logical_kind(40)
+  logical(kind=k1) :: l1    ! At least one bit
+  logical(kind=k40) :: l40  ! At least 40 bits
+
+  ! What is their actual size?
+  print *, storage_size(l1), storage_size(l40)
+end program logical_kinds
+@end smallexample
+@end table
+
+
+
 @node SELECTED_REAL_KIND
 @section @code{SELECTED_REAL_KIND} --- Choose real kind
 @fnindex SELECTED_REAL_KIND
@@ -12886,6 +13018,45 @@ end program real_kinds
 @ref{RADIX}
 @end table
 
+@node SELECTED_UNSIGNED_KIND
+@section @code{SELECTED_UNSIGNED_KIND} --- Choose unsigned kind
+@fnindex SELECTED_UNSIGNED_KIND
+@cindex unsigned kind
+@cindex kind, unsigned
+
+@table @asis
+@item @emph{Description}:
+@code{SELECTED_UNSIGNED_KIND(R)} return the kind value of the smallest
+integer type that can represent all values ranging from 0 to
+@math{10^R} (exclusive). If there is no unsigned kind that accommodates
+this range, @code{SELECTED_UNSIGNED_KIND} returns @math{-1}.
+
+@item @emph{Standard}:
+Extension for @code{UNSIGNED} (@pxref{Unsigned integers})
+
+@item @emph{Class}:
+Transformational function
+
+@item @emph{Syntax}:
+@code{RESULT = SELECTED_UNSIGNED_KIND(R)}
+
+@item @emph{Arguments}:
+@multitable @columnfractions .15 .70
+@item @var{R} @tab Shall be a scalar and of type @code{INTEGER}.
+@end multitable
+
+@item @emph{Example}:
+@smallexample
+program large_unsigned
+  integer,parameter :: k5 = selected_unsigned_kind(5)
+  integer,parameter :: k15 = selected_unsigned_kind(15)
+  unsigned(kind=k5) :: i5
+  unsigned(kind=k15) :: i15
+
+  print *, huge(i5), huge(i15)
+end program large_unsigned
+@end smallexample
+@end table
 
 
 @node SET_EXPONENT
@@ -13000,7 +13171,8 @@ end are equal to the leftmost bit, which in two's complement
 representation is the sign bit.
 
 @item @emph{Standard}:
-Fortran 2008 and later
+Fortran 2008 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Elemental function
@@ -13010,13 +13182,12 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab The type shall be @code{INTEGER}.
+@item @var{I} @tab The type shall be @code{INTEGER} or @code{UNSIGNED}.
 @item @var{SHIFT} @tab The type shall be @code{INTEGER}.
 @end multitable
 
 @item @emph{Return value}:
-The return value is of type @code{INTEGER} and of the same kind as
-@var{I}.
+The return value is of the same type and kind as @var{I}.
 
 @item @emph{See also}:
 @ref{SHIFTL}, @*
@@ -13040,7 +13211,8 @@ the result value is undefined.  Bits shifted out from the left end are
 lost, and bits shifted in from the right end are set to 0.
 
 @item @emph{Standard}:
-Fortran 2008 and later
+Fortran 2008 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Elemental function
@@ -13050,13 +13222,12 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{I} @tab The type shall be @code{INTEGER}.
+@item @var{I} @tab The type shall be @code{INTEGER} or @code{UNSIGNED}.
 @item @var{SHIFT} @tab The type shall be @code{INTEGER}.
 @end multitable
 
 @item @emph{Return value}:
-The return value is of type @code{INTEGER} and of the same kind as
-@var{I}.
+The return value is of the same type and kind as @var{I}.
 
 @item @emph{See also}:
 @ref{SHIFTA}, @*
@@ -13168,10 +13339,10 @@ end program test_sign
 @table @asis
 @item @emph{Description}:
 @code{SIGNAL(NUMBER, HANDLER [, STATUS])} causes external subroutine
-@var{HANDLER} to be executed with a single integer argument when signal
-@var{NUMBER} occurs.  If @var{HANDLER} is an integer, it can be used to
-turn off handling of signal @var{NUMBER} or revert to its default
-action.  See @code{signal(2)}.
+@var{HANDLER} to be executed with a single integer argument passed by
+value when signal @var{NUMBER} occurs.  If @var{HANDLER} is an integer,
+it can be used to turn off handling of signal @var{NUMBER} or revert to
+its default action.  See @code{signal(2)}.
 
 If @code{SIGNAL} is called as a subroutine and the @var{STATUS} argument
 is supplied, it is set to the value returned by @code{signal(2)}.
@@ -13197,19 +13368,26 @@ Subroutine, function
 @item @var{STATUS} @tab (Optional) @var{STATUS} shall be a scalar
 integer. It has @code{INTENT(OUT)}.
 @end multitable
-@c TODO: What should the interface of the handler be?  Does it take arguments?
 
 @item @emph{Return value}:
 The @code{SIGNAL} function returns the value returned by @code{signal(2)}.
 
 @item @emph{Example}:
 @smallexample
+module m_handler
+contains
+  ! POSIX.1-2017:  void (*func)(int)
+  subroutine handler_print(signum) bind(C)
+    use iso_c_binding, only: c_int
+    integer(c_int), value :: signum
+    print *, 'handler_print invoked with signum =', signum
+  end subroutine
+end module
 program test_signal
-  intrinsic signal
-  external handler_print
-
-  call signal (12, handler_print)
-  call signal (10, 1)
+  use m_handler
+  intrinsic :: signal, sleep
+  call signal (12, handler_print)  ! 12 = SIGUSR2 (on some systems)
+  call signal (10, 1)  ! 10 = SIGUSR1 and 1 = SIG_IGN (on some systems)
 
   call sleep (30)
 end program test_signal
@@ -13291,11 +13469,8 @@ Degrees function: @*
 @item @emph{Description}:
 @code{SIND(X)} computes the sine of @var{X} in degrees.
 
-This function is for compatibility only and should be avoided in favor of
-standard constructs wherever possible.
-
 @item @emph{Standard}:
-GNU extension, enabled with @option{-fdec-math}.
+Fortran 2023
 
 @item @emph{Class}:
 Elemental function
@@ -13305,8 +13480,7 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{X} @tab The type shall be @code{REAL} or
-@code{COMPLEX}.
+@item @var{X} @tab The type shall be @code{REAL}.
 @end multitable
 
 @item @emph{Return value}:
@@ -13323,7 +13497,7 @@ end program test_sind
 @item @emph{Specific names}:
 @multitable @columnfractions .20 .23 .20 .33
 @headitem Name            @tab Argument             @tab Return type       @tab Standard
-@item @code{SIND(X)}   @tab @code{REAL(4) X}     @tab @code{REAL(4)}    @tab GNU extension
+@item @code{SIND(X)}   @tab @code{REAL(4) X}     @tab @code{REAL(4)}    @tab Fortran 2023
 @item @code{DSIND(X)}  @tab @code{REAL(8) X}     @tab @code{REAL(8)}    @tab GNU extension
 @item @code{CSIND(X)}  @tab @code{COMPLEX(4) X}  @tab @code{COMPLEX(4)} @tab GNU extension
 @item @code{ZSIND(X)}  @tab @code{COMPLEX(8) X}  @tab @code{COMPLEX(8)} @tab GNU extension
@@ -13336,8 +13510,6 @@ Inverse function: @*
 Radians function: @*
 @ref{SIN} @*
 @end table
-
-
 
 @node SINH
 @section @code{SINH} --- Hyperbolic sine function 
@@ -13864,7 +14036,8 @@ Adds the elements of @var{ARRAY} along dimension @var{DIM} if
 the corresponding element in @var{MASK} is @code{TRUE}.
 
 @item @emph{Standard}:
-Fortran 90 and later
+Fortran 90 and later, extension for @code{UNSIGNED} (@pxref{Unsigned
+integers})
 
 @item @emph{Class}:
 Transformational function
@@ -13878,7 +14051,7 @@ Transformational function
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
 @item @var{ARRAY} @tab Shall be an array of type @code{INTEGER}, 
-@code{REAL} or @code{COMPLEX}.
+@code{REAL}, @code{COMPLEX} or @code{UNSIGNED}.
 @item @var{DIM}   @tab (Optional) shall be a scalar of type 
 @code{INTEGER} with a value in the range from 1 to n, where n 
 equals the rank of @var{ARRAY}.
@@ -14140,11 +14313,8 @@ Degrees function: @*
 @item @emph{Description}:
 @code{TAND(X)} computes the tangent of @var{X} in degrees.
 
-This function is for compatibility only and should be avoided in favor of
-standard constructs wherever possible.
-
 @item @emph{Standard}:
-GNU extension, enabled with @option{-fdec-math}.
+Fortran 2023
 
 @item @emph{Class}:
 Elemental function
@@ -14154,16 +14324,16 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{X} @tab The type shall be @code{REAL} or @code{COMPLEX}.
+@item @var{X} @tab The type shall be @code{REAL}.
 @end multitable
 
 @item @emph{Return value}:
-The return value has same type and kind as @var{X}, and its value is in degrees.
+The return value has same type and kind as @var{X}.
 
 @item @emph{Example}:
 @smallexample
 program test_tand
-  real(8) :: x = 0.165_8
+  real(8) :: x = 45_8
   x = tand(x)
 end program test_tand
 @end smallexample
@@ -14171,7 +14341,7 @@ end program test_tand
 @item @emph{Specific names}:
 @multitable @columnfractions .20 .23 .20 .33
 @headitem Name            @tab Argument          @tab Return type     @tab Standard
-@item @code{TAND(X)}   @tab @code{REAL(4) X}  @tab @code{REAL(4)}  @tab GNU extension
+@item @code{TAND(X)}   @tab @code{REAL(4) X}  @tab @code{REAL(4)}  @tab Fortran 2023
 @item @code{DTAND(X)}  @tab @code{REAL(8) X}  @tab @code{REAL(8)}  @tab GNU extension
 @end multitable
 
@@ -14741,7 +14911,32 @@ corresponding to the lower cobound of the array along that codimension.
 @ref{LBOUND}
 @end table
 
+@node UINT
+@section @code{UINT} -- Convert to @code{UNSIGNED} type
+@fnindex UINT
+@cindex, conversion, to unsigned
 
+@table @asis
+@item @emph{Description}:
+Convert to unsigned type
+
+@item @emph{Standard}:
+Extension.
+
+@item @emph{Class}:
+Elemental function
+
+@item @emph{Syntax}:
+@code{RESULT = UINT(A [, KIND))}
+
+@item @emph{Arguments}:
+@multitable @columnfractions .15 .70
+@item @var{A}    @tab Shall be of type @code{INTEGER},
+@code{REAL},  @code{COMPLEX} or @code{UNSIGNED} or a boz-literal-constant.
+@item @var{KIND} @tab (Optional) A scalar @code{INTEGER} constant
+expression indicating the kind parameter of the result.
+@end multitable
+@end table
 
 @node UMASK
 @section @code{UMASK} --- Set the file creation mask
@@ -14775,6 +14970,79 @@ Subroutine, function
 
 @end table
 
+@node UMASKL
+@section @code{UMASKL} --- Unsigned left justified mask
+@fnindex UMASKL
+@cindex mask, left justified
+
+@table @asis
+@item @emph{Description}:
+@code{UMASKL(I[, KIND])} has its leftmost @var{I} bits set to 1, and the
+remaining bits set to 0.
+
+@item @emph{Standard}:
+Extension (@pxref{Unsigned integers})
+
+@item @emph{Class}:
+Elemental function
+
+@item @emph{Syntax}:
+@code{RESULT = UMASKL(I[, KIND])}
+
+@item @emph{Arguments}:
+@multitable @columnfractions .15 .70
+@item @var{I} @tab Shall be of type @code{UNSIGNED}.
+@item @var{KIND} @tab Shall be a scalar constant expression of type
+@code{INTEGER}.
+@end multitable
+
+@item @emph{Return value}:
+The return value is of type @code{UNSIGNED}. If @var{KIND} is present, it
+specifies the kind value of the return type; otherwise, it is of the
+default unsigned kind.
+
+@item @emph{See also}:
+@ref{MASKL}, @*
+@ref{MASKR}, @*
+@ref{UMASKR}
+@end table
+
+@node UMASKR
+@section @code{UMASKR} --- Unsigned right justified mask
+@fnindex UMASKR
+@cindex mask, right justified
+
+@table @asis
+@item @emph{Description}:
+@code{UMASKL(I[, KIND])} has its rightmost @var{I} bits set to 1, and the
+remaining bits set to 0.
+
+@item @emph{Standard}:
+Extension (@pxref{Unsigned integers})
+
+@item @emph{Class}:
+Elemental function
+
+@item @emph{Syntax}:
+@code{RESULT = MASKR(I[, KIND])}
+
+@item @emph{Arguments}:
+@multitable @columnfractions .15 .70
+@item @var{I} @tab Shall be of type @code{UNSIGNED}.
+@item @var{KIND} @tab Shall be a scalar constant expression of type
+@code{INTEGER}.
+@end multitable
+
+@item @emph{Return value}:
+The return value is of type @code{UNSIGNED}. If @var{KIND} is present, it
+specifies the kind value of the return type; otherwise, it is of the
+default integer kind.
+
+@item @emph{See also}:
+@ref{MASKL}, @*
+@ref{MASKR}, @*
+@ref{UMASKL}
+@end table
 
 
 @node UNLINK

@@ -1,5 +1,5 @@
 /* Definitions of target machine for GNU compiler, Synopsys DesignWare ARC cpu.
-   Copyright (C) 1994-2023 Free Software Foundation, Inc.
+   Copyright (C) 1994-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -296,9 +296,6 @@ if (GET_MODE_CLASS (MODE) == MODE_INT		\
 #define INT_TYPE_SIZE		32
 #define LONG_TYPE_SIZE		32
 #define LONG_LONG_TYPE_SIZE	64
-#define FLOAT_TYPE_SIZE		32
-#define DOUBLE_TYPE_SIZE	64
-#define LONG_DOUBLE_TYPE_SIZE	64
 
 /* Define this as 1 if `char' should by default be signed; else as 0.  */
 #define DEFAULT_SIGNED_CHAR 0
@@ -611,8 +608,8 @@ extern enum reg_class arc_regno_reg_class[];
    needed to represent mode MODE in a register of class CLASS.  */
 
 #define CLASS_MAX_NREGS(CLASS, MODE) \
-(( GET_MODE_SIZE (MODE) == 16 && CLASS == SIMD_VR_REGS) ? 1: \
-((GET_MODE_SIZE (MODE) + UNITS_PER_WORD - 1) / UNITS_PER_WORD))
+((GET_MODE_SIZE (MODE) == 16 && CLASS == SIMD_VR_REGS) ? 1 \
+ : ((GET_MODE_SIZE (MODE) + UNITS_PER_WORD - 1) / UNITS_PER_WORD))
 
 #define SMALL_INT(X) ((unsigned) ((X) + 0x100) < 0x200)
 #define SMALL_INT_RANGE(X, OFFSET, SHIFT)	\
@@ -871,9 +868,9 @@ extern int arc_initial_elimination_offset(int from, int to);
 
 /* Recognize any constant value that is a valid address.  */
 #define CONSTANT_ADDRESS_P(X)					\
-  (flag_pic ? (arc_legitimate_pic_addr_p (X) || LABEL_P (X)):	\
-   (GET_CODE (X) == LABEL_REF || GET_CODE (X) == SYMBOL_REF	\
-    || GET_CODE (X) == CONST_INT || GET_CODE (X) == CONST))
+  (flag_pic ? (arc_legitimate_pic_addr_p (X) || LABEL_P (X))	\
+   : (GET_CODE (X) == LABEL_REF || GET_CODE (X) == SYMBOL_REF	\
+      || GET_CODE (X) == CONST_INT || GET_CODE (X) == CONST))
 
 /* Is the argument a const_int rtx, containing an exact power of 2 */
 #define  IS_POWEROF2_P(X) (! ( (X) & ((X) - 1)) && (X))
@@ -956,10 +953,16 @@ arc_select_cc_mode (OP, X, Y)
 
 /* Costs.  */
 
+/* Analog of COSTS_N_INSNS when optimizing for size.  */
+#ifndef COSTS_N_BYTES
+#define COSTS_N_BYTES(N) (N)
+#endif
+
 /* The cost of a branch insn.  */
 /* ??? What's the right value here?  Branches are certainly more
    expensive than reg->reg moves.  */
-#define BRANCH_COST(speed_p, predictable_p) 2
+#define BRANCH_COST(speed_p, predictable_p) \
+	(speed_p ? COSTS_N_INSNS (2) : COSTS_N_INSNS (1))
 
 /* Scc sets the destination to 1 and then conditionally zeroes it.
    Best case, ORed SCCs can be made into clear - condset - condset.
@@ -971,11 +974,8 @@ arc_select_cc_mode (OP, X, Y)
    beging decisive of p0, we want:
    p0 * (branch_cost - 4) > (1 - p0) * 5
    ??? We don't get to see that probability to evaluate, so we can
-   only wildly guess that it might be 50%.
-   ??? The compiler also lacks the notion of branch predictability.  */
-#define LOGICAL_OP_NON_SHORT_CIRCUIT \
-  (BRANCH_COST (optimize_function_for_speed_p (cfun), \
-		false) > 9)
+   only wildly guess that it might be 50%.  */
+#define LOGICAL_OP_NON_SHORT_CIRCUIT false
 
 /* Nonzero if access to memory by bytes is slow and undesirable.
    For RISC chips, it means that access to memory by bytes is no
@@ -1659,9 +1659,5 @@ enum
 
 /* The default option for BI/BIH instructions.  */
 #define DEFAULT_BRANCH_INDEX 0
-
-#ifndef TARGET_LRA
-#define TARGET_LRA arc_lra_p()
-#endif
 
 #endif /* GCC_ARC_H */

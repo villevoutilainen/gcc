@@ -1,6 +1,6 @@
 // Components for manipulating sequences of characters -*- C++ -*-
 
-// Copyright (C) 1997-2023 Free Software Foundation, Inc.
+// Copyright (C) 1997-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -34,7 +34,9 @@
 #ifndef _BASIC_STRING_H
 #define _BASIC_STRING_H 1
 
+#ifdef _GLIBCXX_SYSHDR
 #pragma GCC system_header
+#endif
 
 #include <ext/alloc_traits.h>
 #include <debug/debug.h>
@@ -51,10 +53,6 @@
 # include <charconv>
 #endif
 
-#define __glibcxx_want_constexpr_string
-#define __glibcxx_want_string_resize_and_overwrite
-#define __glibcxx_want_string_udls
-#define __glibcxx_want_to_string
 #include <bits/version.h>
 
 #if ! _GLIBCXX_USE_CXX11_ABI
@@ -133,7 +131,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _S_allocate(_Char_alloc_type& __a, size_type __n)
       {
 	pointer __p = _Alloc_traits::allocate(__a, __n);
-#if __cpp_lib_constexpr_string >= 201907L
+#if __glibcxx_constexpr_string >= 201907L
 	// std::char_traits begins the lifetime of characters,
 	// but custom traits might not, so do it here.
 	if constexpr (!is_same_v<_Traits, char_traits<_CharT>>)
@@ -353,13 +351,23 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // Ensure that _M_local_buf is the active member of the union.
       __attribute__((__always_inline__))
       _GLIBCXX14_CONSTEXPR
+      void
+      _M_init_local_buf() _GLIBCXX_NOEXCEPT
+      {
+#if __glibcxx_is_constant_evaluated
+	if (std::is_constant_evaluated())
+	  for (size_type __i = 0; __i <= _S_local_capacity; ++__i)
+	    _M_local_buf[__i] = _CharT();
+#endif
+      }
+
+      __attribute__((__always_inline__))
+      _GLIBCXX14_CONSTEXPR
       pointer
       _M_use_local_data() _GLIBCXX_NOEXCEPT
       {
 #if __cpp_lib_is_constant_evaluated
-	if (std::is_constant_evaluated())
-	  for (size_type __i = 0; __i <= _S_local_capacity; ++__i)
-	    _M_local_buf[__i] = _CharT();
+	_M_init_local_buf();
 #endif
 	return _M_local_data();
       }
@@ -520,9 +528,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string()
       _GLIBCXX_NOEXCEPT_IF(is_nothrow_default_constructible<_Alloc>::value)
+#if __cpp_concepts && __glibcxx_type_trait_variable_templates
+      requires is_default_constructible_v<_Alloc>
+#endif
       : _M_dataplus(_M_local_data())
       {
-	_M_use_local_data();
+	_M_init_local_buf();
 	_M_set_length(0);
       }
 
@@ -534,7 +545,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string(const _Alloc& __a) _GLIBCXX_NOEXCEPT
       : _M_dataplus(_M_local_data(), __a)
       {
-	_M_use_local_data();
+	_M_init_local_buf();
 	_M_set_length(0);
       }
 
@@ -678,7 +689,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       {
 	if (__str._M_is_local())
 	  {
-	    (void)_M_use_local_data();
+	    _M_init_local_buf();
 	    traits_type::copy(_M_local_buf, __str._M_local_buf,
 			      __str.length() + 1);
 	  }
@@ -718,7 +729,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       {
 	if (__str._M_is_local())
 	  {
-	    (void)_M_use_local_data();
+	    _M_init_local_buf();
 	    traits_type::copy(_M_local_buf, __str._M_local_buf,
 			      __str.length() + 1);
 	    _M_length(__str.length());
@@ -903,10 +914,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 		__str._M_capacity(__capacity);
 	      }
 	    else
-	      __str._M_data(__str._M_local_buf);
+	      __str._M_data(__str._M_use_local_data());
 	  }
 	else // Need to do a deep copy
-	  assign(__str);
+	  _M_assign(__str);
 	__str.clear();
 	return *this;
       }
@@ -1068,20 +1079,30 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       size() const _GLIBCXX_NOEXCEPT
-      { return _M_string_length; }
+      {
+	size_type __sz = _M_string_length;
+	if (__sz > max_size ())
+	  __builtin_unreachable ();
+	return __sz;
+      }
 
       ///  Returns the number of characters in the string, not including any
       ///  null-termination.
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       length() const _GLIBCXX_NOEXCEPT
-      { return _M_string_length; }
+      { return size(); }
 
       ///  Returns the size() of the largest possible %string.
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       max_size() const _GLIBCXX_NOEXCEPT
-      { return (_Alloc_traits::max_size(_M_get_allocator()) - 1) / 2; }
+      {
+	const size_t __diffmax
+	  = __gnu_cxx::__numeric_traits<ptrdiff_t>::__max / sizeof(_CharT);
+	const size_t __allocmax = _Alloc_traits::max_size(_M_get_allocator());
+	return (std::min)(__diffmax, __allocmax) - 1;
+      }
 
       /**
        *  @brief  Resizes the %string to the specified number of characters.
@@ -1123,7 +1144,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #pragma GCC diagnostic pop
 #endif
 
-#ifdef __cpp_lib_string_resize_and_overwrite // C++ >= 23
+#ifdef __glibcxx_string_resize_and_overwrite // C++ >= 23
       /** Resize the string and call a function to fill it.
        *
        * @param __n   The maximum size requested.
@@ -1173,8 +1194,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       size_type
       capacity() const _GLIBCXX_NOEXCEPT
       {
-	return _M_is_local() ? size_type(_S_local_capacity)
-	                     : _M_allocated_capacity;
+	size_t __sz = _M_is_local() ? size_type(_S_local_capacity)
+				     : _M_allocated_capacity;
+	if (__sz < _S_local_capacity || __sz > max_size ())
+	  __builtin_unreachable ();
+	return __sz;
       }
 
       /**
@@ -1217,13 +1241,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       { _M_set_length(0); }
 
       /**
-       *  Returns true if the %string is empty.  Equivalent to 
+       *  Returns true if the %string is empty.  Equivalent to
        *  <code>*this == ""</code>.
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       bool
       empty() const _GLIBCXX_NOEXCEPT
-      { return this->size() == 0; }
+      { return _M_string_length == 0; }
 
       // Element access:
       /**
@@ -1721,18 +1745,25 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	basic_string&
 	assign(_InputIterator __first, _InputIterator __last)
 	{
-#if __cplusplus >= 202002L
-	  if constexpr (contiguous_iterator<_InputIterator>
-			  && is_same_v<iter_value_t<_InputIterator>, _CharT>)
-#else
-	  if constexpr (__is_one_of<_InputIterator, const_iterator, iterator,
-				    const _CharT*, _CharT*>::value)
-#endif
+	  using _IterTraits = iterator_traits<_InputIterator>;
+	  if constexpr (is_pointer<decltype(std::__niter_base(__first))>::value
+			  && is_same<typename _IterTraits::value_type,
+				     _CharT>::value)
 	    {
 	      __glibcxx_requires_valid_range(__first, __last);
 	      return _M_replace(size_type(0), size(),
-				std::__to_address(__first), __last - __first);
+				std::__niter_base(__first), __last - __first);
 	    }
+#if __cplusplus >= 202002L
+	  else if constexpr (contiguous_iterator<_InputIterator>
+			       && is_same_v<iter_value_t<_InputIterator>,
+					    _CharT>)
+	    {
+	      __glibcxx_requires_valid_range(__first, __last);
+	      return _M_replace(size_type(0), size(),
+				std::to_address(__first), __last - __first);
+	    }
+#endif
 	  else
 	    return *this = basic_string(__first, __last, get_allocator());
 	}
@@ -3736,6 +3767,54 @@ _GLIBCXX_END_NAMESPACE_CXX11
     { return std::move(__lhs.append(1, __rhs)); }
 #endif
 
+#if __glibcxx_string_view >= 202403L
+  // const string & + string_view
+  template<typename _CharT, typename _Traits, typename _Alloc>
+    [[nodiscard]]
+    constexpr basic_string<_CharT, _Traits, _Alloc>
+    operator+(const basic_string<_CharT, _Traits, _Alloc>& __lhs,
+	       type_identity_t<basic_string_view<_CharT, _Traits>> __rhs)
+    {
+      using _Str = basic_string<_CharT, _Traits, _Alloc>;
+      return std::__str_concat<_Str>(__lhs.data(), __lhs.size(),
+				      __rhs.data(), __rhs.size(),
+				      __lhs.get_allocator());
+    }
+
+  // string && + string_view
+  template<typename _CharT, typename _Traits, typename _Alloc>
+    [[nodiscard]]
+    constexpr basic_string<_CharT, _Traits, _Alloc>
+    operator+(basic_string<_CharT, _Traits, _Alloc>&& __lhs,
+	       type_identity_t<basic_string_view<_CharT, _Traits>> __rhs)
+    {
+      return std::move(__lhs.append(__rhs));
+    }
+
+  // string_view + const string &
+  template<typename _CharT, typename _Traits, typename _Alloc>
+    [[nodiscard]]
+    constexpr basic_string<_CharT, _Traits, _Alloc>
+    operator+(type_identity_t<basic_string_view<_CharT, _Traits>> __lhs,
+	       const basic_string<_CharT, _Traits, _Alloc>& __rhs)
+    {
+      using _Str = basic_string<_CharT, _Traits, _Alloc>;
+      return std::__str_concat<_Str>(__lhs.data(), __lhs.size(),
+				      __rhs.data(), __rhs.size(),
+				      __rhs.get_allocator());
+    }
+
+  // string_view + string &&
+  template<typename _CharT, typename _Traits, typename _Alloc>
+    [[nodiscard]]
+    constexpr basic_string<_CharT, _Traits, _Alloc>
+    operator+(type_identity_t<basic_string_view<_CharT, _Traits>> __lhs,
+	       basic_string<_CharT, _Traits, _Alloc>&& __rhs)
+    {
+      return std::move(__rhs.insert(0, __lhs));
+    }
+#endif
+
   // operator ==
   /**
    *  @brief  Test equivalence of two strings.
@@ -4138,7 +4217,7 @@ _GLIBCXX_END_NAMESPACE_CXX11
     basic_istream<wchar_t>&
     getline(basic_istream<wchar_t>& __in, basic_string<wchar_t>& __str,
 	    wchar_t __delim);
-#endif  
+#endif
 
 _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace
@@ -4329,7 +4408,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
     return __str;
   }
 
-#if __cpp_lib_to_string >= 202306L
+#if __glibcxx_to_string >= 202306L // C++ >= 26
 
   [[nodiscard]]
   inline string
@@ -4388,13 +4467,15 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
     return __str;
   }
 #elif _GLIBCXX_USE_C99_STDIO
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsuggest-attribute=format"
   // NB: (v)snprintf vs sprintf.
 
   _GLIBCXX_NODISCARD
   inline string
   to_string(float __val)
   {
-    const int __n = 
+    const int __n =
       __gnu_cxx::__numeric_traits<float>::__max_exponent10 + 20;
     return __gnu_cxx::__to_xstring<string>(&std::vsnprintf, __n,
 					   "%f", __val);
@@ -4404,7 +4485,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline string
   to_string(double __val)
   {
-    const int __n = 
+    const int __n =
       __gnu_cxx::__numeric_traits<double>::__max_exponent10 + 20;
     return __gnu_cxx::__to_xstring<string>(&std::vsnprintf, __n,
 					   "%f", __val);
@@ -4414,20 +4495,21 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline string
   to_string(long double __val)
   {
-    const int __n = 
+    const int __n =
       __gnu_cxx::__numeric_traits<long double>::__max_exponent10 + 20;
     return __gnu_cxx::__to_xstring<string>(&std::vsnprintf, __n,
 					   "%Lf", __val);
   }
+#pragma GCC diagnostic pop
 #endif // _GLIBCXX_USE_C99_STDIO
 
 #if defined(_GLIBCXX_USE_WCHAR_T) && _GLIBCXX_USE_C99_WCHAR
-  inline int 
+  inline int
   stoi(const wstring& __str, size_t* __idx = 0, int __base = 10)
   { return __gnu_cxx::__stoa<long, int>(&std::wcstol, "stoi", __str.c_str(),
 					__idx, __base); }
 
-  inline long 
+  inline long
   stol(const wstring& __str, size_t* __idx = 0, int __base = 10)
   { return __gnu_cxx::__stoa(&std::wcstol, "stol", __str.c_str(),
 			     __idx, __base); }
@@ -4508,7 +4590,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       }
   }
 
-#if __cpp_lib_constexpr_string >= 201907L
+#if __glibcxx_constexpr_string >= 201907L
   constexpr
 #endif
   inline wstring
@@ -4565,7 +4647,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   to_wstring(unsigned long long __val)
   { return std::__to_wstring_numeric(std::to_string(__val)); }
 
-#if __cpp_lib_to_string || _GLIBCXX_USE_C99_STDIO
+#if __glibcxx_to_string || _GLIBCXX_USE_C99_STDIO
   _GLIBCXX_NODISCARD
   inline wstring
   to_wstring(float __val)
@@ -4668,7 +4750,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     { };
 #endif
 
-#ifdef __cpp_lib_string_udls // C++ >= 14
+#ifdef __glibcxx_string_udls // C++ >= 14
   inline namespace literals
   {
   inline namespace string_literals
@@ -4676,7 +4758,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wliteral-suffix"
 
-#if __cpp_lib_constexpr_string >= 201907L
+#if __glibcxx_constexpr_string >= 201907L
 # define _GLIBCXX_STRING_CONSTEXPR constexpr
 #else
 # define _GLIBCXX_STRING_CONSTEXPR
@@ -4713,7 +4795,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #pragma GCC diagnostic pop
   } // inline namespace string_literals
   } // inline namespace literals
-#endif // __cpp_lib_string_udls
+#endif // __glibcxx_string_udls
 
 #if __cplusplus >= 201703L
   namespace __detail::__variant

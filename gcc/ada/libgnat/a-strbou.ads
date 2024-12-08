@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 1992-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
 --                                                                          --
 -- This specification is derived from the Ada Reference Manual for use with --
 -- GNAT. The copyright notice above, and the license provisions that follow --
@@ -127,6 +127,9 @@ is
       --  * If Drop=Error, then Strings.Length_Error is propagated.
 
       function To_String (Source : Bounded_String) return String with
+        Post   =>
+          To_String'Result'First = 1
+            and then To_String'Result'Length = Length (Source),
         Global => null;
       --  To_String returns the String value with lower bound 1
       --  represented by Source. If B is a Bounded_String, then

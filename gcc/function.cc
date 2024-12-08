@@ -1,5 +1,5 @@
 /* Expands front end tree to back end RTL for GCC.
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -84,6 +84,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "function-abi.h"
 #include "value-range.h"
 #include "gimple-range.h"
+#include "insn-attr.h"
 
 /* So we can assign to cfun in this file.  */
 #undef cfun
@@ -215,6 +216,7 @@ free_after_compilation (struct function *f)
   f->machine = NULL;
   f->cfg = NULL;
   f->curr_properties &= ~PROP_cfg;
+  delete f->cond_uids;
 
   regno_reg_rtx = NULL;
 }
@@ -1943,6 +1945,16 @@ instantiate_decls (tree fndecl)
   vec_free (cfun->local_decls);
 }
 
+/* Return the value of STACK_DYNAMIC_OFFSET for the current function.
+   This is done through a function wrapper so that the macro sees a
+   predictable set of included files.  */
+
+poly_int64
+get_stack_dynamic_offset ()
+{
+  return STACK_DYNAMIC_OFFSET (current_function_decl);
+}
+
 /* Pass through the INSNS of function FNDECL and convert virtual register
    references to hard register references.  */
 
@@ -1954,7 +1966,7 @@ instantiate_virtual_regs (void)
   /* Compute the offsets to use for this function.  */
   in_arg_offset = FIRST_PARM_OFFSET (current_function_decl);
   var_offset = targetm.starting_frame_offset ();
-  dynamic_offset = STACK_DYNAMIC_OFFSET (current_function_decl);
+  dynamic_offset = get_stack_dynamic_offset ();
   out_arg_offset = STACK_POINTER_OFFSET;
 #ifdef FRAME_POINTER_CFA_OFFSET
   cfa_offset = FRAME_POINTER_CFA_OFFSET (current_function_decl);
@@ -2219,6 +2231,7 @@ use_register_for_decl (const_tree decl)
       /* We don't set DECL_IGNORED_P for the function_result_decl.  */
       if (optimize)
 	return true;
+      /* Needed for [[musttail]] which can operate even at -O0 */
       if (cfun->tail_call_marked)
 	return true;
       /* We don't set DECL_REGISTER for the function_result_decl.  */
@@ -2374,7 +2387,7 @@ split_complex_args (vec<tree> *args)
    the hidden struct return argument, and (abi willing) complex args.
    Return the new parameter list.  */
 
-static vec<tree> 
+static vec<tree>
 assign_parms_augmented_arg_list (struct assign_parm_data_all *all)
 {
   tree fndecl = current_function_decl;
@@ -3639,7 +3652,8 @@ assign_parms (tree fndecl)
   assign_parms_initialize_all (&all);
   fnargs = assign_parms_augmented_arg_list (&all);
 
-  if (TYPE_NO_NAMED_ARGS_STDARG_P (TREE_TYPE (fndecl)))
+  if (TYPE_NO_NAMED_ARGS_STDARG_P (TREE_TYPE (fndecl))
+      && fnargs.is_empty ())
     {
       struct assign_parm_data_one data = {};
       assign_parms_setup_varargs (&all, &data, false);
@@ -3732,6 +3746,8 @@ assign_parms (tree fndecl)
   /* Output all parameter conversion instructions (possibly including calls)
      now that all parameters have been copied out of hard registers.  */
   emit_insn (all.first_conversion_insn);
+
+  do_pending_stack_adjust ();
 
   /* Estimate reload stack alignment from scalar return mode.  */
   if (SUPPORTS_STACK_ALIGNMENT)
@@ -4691,22 +4707,59 @@ invoke_set_current_function_hook (tree fndecl)
     }
 }
 
+/* Set cfun to NEW_CFUN and switch to the optimization and target options
+   associated with NEW_FNDECL.
+
+   FORCE says whether we should do the switch even if NEW_CFUN is the current
+   function, e.g. because there has been a change in optimization or target
+   options.  */
+
+static void
+set_function_decl (function *new_cfun, tree new_fndecl, bool force)
+{
+  if (cfun != new_cfun || force)
+    {
+      cfun = new_cfun;
+      invoke_set_current_function_hook (new_fndecl);
+      redirect_edge_var_map_empty ();
+    }
+}
+
 /* cfun should never be set directly; use this function.  */
 
 void
 set_cfun (struct function *new_cfun, bool force)
 {
-  if (cfun != new_cfun || force)
-    {
-      cfun = new_cfun;
-      invoke_set_current_function_hook (new_cfun ? new_cfun->decl : NULL_TREE);
-      redirect_edge_var_map_empty ();
-    }
+  set_function_decl (new_cfun, new_cfun ? new_cfun->decl : NULL_TREE, force);
 }
 
 /* Initialized with NOGC, making this poisonous to the garbage collector.  */
 
 static vec<function *> cfun_stack;
+
+/* Push the current cfun onto the stack, then switch to function NEW_CFUN
+   and FUNCTION_DECL NEW_FNDECL.  FORCE is as for set_function_decl.  */
+
+static void
+push_function_decl (function *new_cfun, tree new_fndecl, bool force)
+{
+  gcc_assert ((!cfun && !current_function_decl)
+	      || (cfun && current_function_decl == cfun->decl));
+  cfun_stack.safe_push (cfun);
+  current_function_decl = new_fndecl;
+  set_function_decl (new_cfun, new_fndecl, force);
+}
+
+/* Push the current cfun onto the stack and switch to function declaration
+   NEW_FNDECL, which might or might not have a function body.  FORCE is as for
+   set_function_decl.  */
+
+void
+push_function_decl (tree new_fndecl, bool force)
+{
+  force |= current_function_decl != new_fndecl;
+  push_function_decl (DECL_STRUCT_FUNCTION (new_fndecl), new_fndecl, force);
+}
 
 /* Push the current cfun onto the stack, and set cfun to new_cfun.  Also set
    current_function_decl accordingly.  */
@@ -4714,17 +4767,14 @@ static vec<function *> cfun_stack;
 void
 push_cfun (struct function *new_cfun)
 {
-  gcc_assert ((!cfun && !current_function_decl)
-	      || (cfun && current_function_decl == cfun->decl));
-  cfun_stack.safe_push (cfun);
-  current_function_decl = new_cfun ? new_cfun->decl : NULL_TREE;
-  set_cfun (new_cfun);
+  push_function_decl (new_cfun, new_cfun ? new_cfun->decl : NULL_TREE, false);
 }
 
-/* Pop cfun from the stack.  Also set current_function_decl accordingly.  */
+/* A common subroutine for pop_cfun and pop_function_decl.  FORCE is as
+   for set_function_decl.  */
 
-void
-pop_cfun (void)
+static void
+pop_cfun_1 (bool force)
 {
   struct function *new_cfun = cfun_stack.pop ();
   /* When in_dummy_function, we do have a cfun but current_function_decl is
@@ -4734,8 +4784,28 @@ pop_cfun (void)
   gcc_checking_assert (in_dummy_function
 		       || !cfun
 		       || current_function_decl == cfun->decl);
-  set_cfun (new_cfun);
+  set_cfun (new_cfun, force);
   current_function_decl = new_cfun ? new_cfun->decl : NULL_TREE;
+}
+
+/* Pop cfun from the stack.  Also set current_function_decl accordingly.  */
+
+void
+pop_cfun (void)
+{
+  pop_cfun_1 (false);
+}
+
+/* Undo push_function_decl.  */
+
+void
+pop_function_decl (void)
+{
+  /* If the previous cfun was null, the options should be reset to the
+     global set.  Checking the current cfun against the new (popped) cfun
+     wouldn't catch this if the current function decl has no function
+     struct.  */
+  pop_cfun_1 (!cfun_stack.last ());
 }
 
 /* Return value of funcdef and increase it.  */
@@ -5092,7 +5162,7 @@ expand_function_start (tree subr)
   else if (DECL_MODE (res) == VOIDmode)
     /* If return mode is void, this decl rtl should not be used.  */
     set_parm_rtl (res, NULL_RTX);
-  else 
+  else
     {
       /* Compute the return values into a pseudo reg, which we will copy
 	 into the true return register after the cleanups are done.  */
@@ -5191,7 +5261,7 @@ expand_function_start (tree subr)
 
   gcc_assert (NOTE_P (get_last_insn ()));
 
-  parm_birth_insn = get_last_insn ();
+  function_beg_insn = parm_birth_insn = get_last_insn ();
 
   /* If the function receives a non-local goto, then store the
      bits we need to restore the frame pointer.  */
@@ -6112,6 +6182,8 @@ thread_prologue_and_epilogue_insns (void)
 		  && returnjump_p (BB_END (e->src)))
 		e->flags &= ~EDGE_FALLTHRU;
 	    }
+
+	  find_sub_basic_blocks (BLOCK_FOR_INSN (epilogue_seq));
 	}
       else if (next_active_insn (BB_END (exit_fallthru_edge->src)))
 	{
@@ -6195,7 +6267,17 @@ thread_prologue_and_epilogue_insns (void)
       if (!(CALL_P (insn) && SIBLING_CALL_P (insn)))
 	continue;
 
-      if (rtx_insn *ep_seq = targetm.gen_sibcall_epilogue ())
+      rtx_insn *ep_seq;
+      if (targetm.emit_epilogue_for_sibcall)
+	{
+	  start_sequence ();
+	  targetm.emit_epilogue_for_sibcall (as_a<rtx_call_insn *> (insn));
+	  ep_seq = get_insns ();
+	  end_sequence ();
+	}
+      else
+	ep_seq = targetm.gen_sibcall_epilogue ();
+      if (ep_seq)
 	{
 	  start_sequence ();
 	  emit_note (NOTE_INSN_EPILOGUE_BEG);
@@ -6210,6 +6292,8 @@ thread_prologue_and_epilogue_insns (void)
 	  set_insn_locations (seq, epilogue_location);
 
 	  emit_insn_before (seq, insn);
+
+	  find_sub_basic_blocks (BLOCK_FOR_INSN (insn));
 	}
     }
 
@@ -6232,8 +6316,11 @@ thread_prologue_and_epilogue_insns (void)
     }
 
   /* Threading the prologue and epilogue changes the artificial refs in the
-     entry and exit blocks, and may invalidate DF info for tail calls.  */
+     entry and exit blocks, and may invalidate DF info for tail calls.
+     This is also needed for [[musttail]] conversion even when not
+     optimizing.  */
   if (optimize
+      || cfun->tail_call_marked
       || flag_optimize_sibling_calls
       || flag_ipa_icf_functions
       || in_lto_p)
@@ -6253,7 +6340,8 @@ reposition_prologue_and_epilogue_notes (void)
 {
   if (!targetm.have_prologue ()
       && !targetm.have_epilogue ()
-      && !targetm.have_sibcall_epilogue ())
+      && !targetm.have_sibcall_epilogue ()
+      && !targetm.emit_epilogue_for_sibcall)
     return;
 
   /* Since the hash table is created on demand, the fact that it is
@@ -6365,7 +6453,7 @@ fndecl_name (tree fndecl)
 
 /* Returns the name of function FN.  */
 const char *
-function_name (struct function *fn)
+function_name (const function *fn)
 {
   tree fndecl = (fn == NULL) ? NULL : fn->decl;
   return fndecl_name (fndecl);
@@ -6529,7 +6617,7 @@ rest_of_handle_thread_prologue_and_epilogue (function *fun)
 {
   /* prepare_shrink_wrap is sensitive to the block structure of the control
      flow graph, so clean it up first.  */
-  if (optimize)
+  if (cfun->tail_call_marked || optimize)
     cleanup_cfg (0);
 
   /* On some machines, the prologue and epilogue code, or parts thereof,
@@ -6615,6 +6703,11 @@ public:
   {}
 
   /* opt_pass methods: */
+  bool gate (function *) final override
+    {
+      return !targetm.use_late_prologue_epilogue ();
+    }
+
   unsigned int execute (function * fun) final override
     {
       rest_of_handle_thread_prologue_and_epilogue (fun);
@@ -6623,12 +6716,56 @@ public:
 
 }; // class pass_thread_prologue_and_epilogue
 
+const pass_data pass_data_late_thread_prologue_and_epilogue =
+{
+  RTL_PASS, /* type */
+  "late_pro_and_epilogue", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  TV_THREAD_PROLOGUE_AND_EPILOGUE, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_df_verify | TODO_df_finish ), /* todo_flags_finish */
+};
+
+class pass_late_thread_prologue_and_epilogue : public rtl_opt_pass
+{
+public:
+  pass_late_thread_prologue_and_epilogue (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_late_thread_prologue_and_epilogue, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate (function *) final override
+    {
+      return targetm.use_late_prologue_epilogue ();
+    }
+
+  unsigned int execute (function *fn) final override
+    {
+      /* It's not currently possible to have both delay slots and
+	 late prologue/epilogue, since the latter has to run before
+	 the former, and the former won't honor whatever restrictions
+	 the latter is trying to enforce.  */
+      gcc_assert (!DELAY_SLOTS);
+      rest_of_handle_thread_prologue_and_epilogue (fn);
+      return 0;
+    }
+}; // class pass_late_thread_prologue_and_epilogue
+
 } // anon namespace
 
 rtl_opt_pass *
 make_pass_thread_prologue_and_epilogue (gcc::context *ctxt)
 {
   return new pass_thread_prologue_and_epilogue (ctxt);
+}
+
+rtl_opt_pass *
+make_pass_late_thread_prologue_and_epilogue (gcc::context *ctxt)
+{
+  return new pass_late_thread_prologue_and_epilogue (ctxt);
 }
 
 namespace {

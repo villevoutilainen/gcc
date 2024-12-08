@@ -1,4 +1,4 @@
-/* Copyright (C) 2001-2023 Free Software Foundation, Inc.
+/* Copyright (C) 2001-2024 Free Software Foundation, Inc.
    Contributed by Jakub Jelinek <jakub@redhat.com>.
 
    This file is part of GCC.
@@ -347,7 +347,7 @@ _Unwind_IteratePhdrCallback (struct dl_phdr_info *info, size_t size, void *ptr)
     __RELOC_POINTER (p_eh_frame_hdr->p_vaddr, load_base);
 
 #ifdef CRT_GET_RFIB_DATA
-# if defined __i386__ || defined __nios2__
+# if defined __i386__
   data->dbase = NULL;
   if (p_dynamic)
     {
@@ -544,7 +544,7 @@ _Unwind_Find_FDE (void *pc, struct dwarf_eh_bases *bases)
 
   /* Use DLFO_STRUCT_HAS_EH_DBASE as a proxy for the existence of a glibc-style
      _dl_find_object function.  */
-#ifdef DLFO_STRUCT_HAS_EH_DBASE
+#if defined(DLFO_STRUCT_HAS_EH_DBASE)
   {
     struct dl_find_object dlfo;
     if (_dl_find_object (pc, &dlfo) == 0 && dlfo.dlfo_eh_frame != NULL)

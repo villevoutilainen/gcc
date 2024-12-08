@@ -1,5 +1,5 @@
 /* Single-image implementation of GNU Fortran Coarray Library
-   Copyright (C) 2011-2023 Free Software Foundation, Inc.
+   Copyright (C) 2011-2024 Free Software Foundation, Inc.
    Contributed by Tobias Burnus <burnus@net-b.de>
 
 This file is part of the GNU Fortran Coarray Runtime Library (libcaf).
@@ -2131,14 +2131,14 @@ send_by_ref (caf_reference_t *ref, size_t *i, size_t *src_index,
 	      /* Assume that the rank and the dimensions fit for copying src
 		 to dst.  */
 	      GFC_DESCRIPTOR_DTYPE (dst) = GFC_DESCRIPTOR_DTYPE (src);
-	      dst->offset = 0;
 	      stride_dst = 1;
 	      for (size_t d = 0; d < src_rank; ++d)
 		{
 		  extent_dst = GFC_DIMENSION_EXTENT (src->dim[d]);
-		  GFC_DIMENSION_LBOUND (dst->dim[d]) = 0;
-		  GFC_DIMENSION_UBOUND (dst->dim[d]) = extent_dst - 1;
+		  GFC_DIMENSION_LBOUND (dst->dim[d]) = 1;
+		  GFC_DIMENSION_UBOUND (dst->dim[d]) = extent_dst;
 		  GFC_DIMENSION_STRIDE (dst->dim[d]) = stride_dst;
+		  dst->offset = -extent_dst;
 		  stride_dst *= extent_dst;
 		}
 	      /* Null the data-pointer to make register_component allocate

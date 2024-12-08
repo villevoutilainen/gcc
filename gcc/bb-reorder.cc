@@ -1,5 +1,5 @@
 /* Basic block reordering routines for the GNU compiler.
-   Copyright (C) 2000-2023 Free Software Foundation, Inc.
+   Copyright (C) 2000-2024 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -1207,7 +1207,7 @@ connect_traces (int n_traces, struct trace *traces)
 		  /* If dest has multiple predecessors, skip it.  We expect
 		     that one predecessor with smaller index connects with it
 		     later.  */
-		  if (count != 1) 
+		  if (count != 1)
 		    break;
 		}
 
@@ -2024,7 +2024,8 @@ fix_up_fall_thru_edges (void)
 			     See PR108596.  */
 			  rtx_insn *j = BB_END (cur_bb);
 			  gcc_checking_assert (JUMP_P (j)
-					       && asm_noperands (PATTERN (j)));
+					       && (asm_noperands (PATTERN (j))
+						   > 0));
 			  edge e2 = find_edge (cur_bb, e->dest);
 			  if (e2)
 			    e2->flags |= EDGE_CROSSING;
@@ -2266,7 +2267,8 @@ fix_crossing_unconditional_branches (void)
 	  /* Make sure the jump is not already an indirect or table jump.  */
 
 	  if (!computed_jump_p (last_insn)
-	      && !tablejump_p (last_insn, NULL, NULL))
+	      && !tablejump_p (last_insn, NULL, NULL)
+	      && asm_noperands (PATTERN (last_insn)) < 0)
 	    {
 	      /* We have found a "crossing" unconditional branch.  Now
 		 we must convert it to an indirect jump.  First create
@@ -3037,7 +3039,7 @@ pass_partition_blocks::execute (function *fun)
 
      Which means that the bb_has_eh_pred test in df_bb_refs_collect
      will *always* fail, because no edges can have been added to the
-     block yet.  Which of course means we don't add the right 
+     block yet.  Which of course means we don't add the right
      artificial refs, which means we fail df_verify (much) later.
 
      Cleanest solution would seem to make DF_DEFER_INSN_RESCAN imply

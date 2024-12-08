@@ -1,6 +1,6 @@
 // -*- C++ -*- header.
 
-// Copyright (C) 2008-2023 Free Software Foundation, Inc.
+// Copyright (C) 2008-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -32,19 +32,25 @@
 #ifndef _GLIBCXX_ATOMIC
 #define _GLIBCXX_ATOMIC 1
 
+#ifdef _GLIBCXX_SYSHDR
 #pragma GCC system_header
+#endif
 
 #if __cplusplus < 201103L
 # include <bits/c++0x_warning.h>
 #else
 
 #define __glibcxx_want_atomic_is_always_lock_free
+#define __glibcxx_want_atomic_flag_test
 #define __glibcxx_want_atomic_float
 #define __glibcxx_want_atomic_ref
 #define __glibcxx_want_atomic_lock_free_type_aliases
+#define __glibcxx_want_atomic_value_initialization
+#define __glibcxx_want_atomic_wait
 #include <bits/version.h>
 
 #include <bits/atomic_base.h>
+#include <cstdint>
 
 namespace std _GLIBCXX_VISIBILITY(default)
 {
@@ -447,7 +453,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator++(int) noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return _M_b++;
       }
@@ -456,7 +462,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator++(int) volatile noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return _M_b++;
       }
@@ -465,7 +471,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator--(int) noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return _M_b--;
       }
@@ -474,7 +480,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator--(int) volatile noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return _M_b--;
       }
@@ -483,7 +489,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator++() noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return ++_M_b;
       }
@@ -492,7 +498,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator++() volatile noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return ++_M_b;
       }
@@ -501,7 +507,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator--() noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return --_M_b;
       }
@@ -510,7 +516,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator--() volatile noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return --_M_b;
       }
@@ -519,7 +525,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator+=(ptrdiff_t __d) noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return _M_b.operator+=(__d);
       }
@@ -528,7 +534,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator+=(ptrdiff_t __d) volatile noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return _M_b.operator+=(__d);
       }
@@ -537,7 +543,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator-=(ptrdiff_t __d) noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return _M_b.operator-=(__d);
       }
@@ -546,7 +552,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator-=(ptrdiff_t __d) volatile noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return _M_b.operator-=(__d);
       }
@@ -667,7 +673,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		memory_order __m = memory_order_seq_cst) noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return _M_b.fetch_add(__d, __m);
       }
@@ -677,7 +683,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		memory_order __m = memory_order_seq_cst) volatile noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return _M_b.fetch_add(__d, __m);
       }
@@ -687,7 +693,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		memory_order __m = memory_order_seq_cst) noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return _M_b.fetch_sub(__d, __m);
       }
@@ -697,7 +703,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		memory_order __m = memory_order_seq_cst) volatile noexcept
       {
 #if __cplusplus >= 201703L
-	static_assert( is_object<_Tp>::value, "pointer to object type" );
+	static_assert( is_object_v<_Tp>, "pointer to object type" );
 #endif
 	return _M_b.fetch_sub(__d, __m);
       }
@@ -1771,13 +1777,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     = atomic<make_signed_t<__detail::__platform_wait_t>>;
   using atomic_unsigned_lock_free
     = atomic<make_unsigned_t<__detail::__platform_wait_t>>;
-# elif ATOMIC_INT_LOCK_FREE || !(ATOMIC_LONG_LOCK_FREE || ATOMIC_CHAR_LOCK_FREE)
+# elif ATOMIC_INT_LOCK_FREE == 2
   using atomic_signed_lock_free = atomic<signed int>;
   using atomic_unsigned_lock_free = atomic<unsigned int>;
-# elif ATOMIC_LONG_LOCK_FREE
+# elif ATOMIC_LONG_LOCK_FREE == 2
   using atomic_signed_lock_free = atomic<signed long>;
   using atomic_unsigned_lock_free = atomic<unsigned long>;
-# elif ATOMIC_CHAR_LOCK_FREE
+# elif ATOMIC_CHAR_LOCK_FREE == 2
   using atomic_signed_lock_free = atomic<signed char>;
   using atomic_unsigned_lock_free = atomic<unsigned char>;
 # else

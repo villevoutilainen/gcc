@@ -1,5 +1,5 @@
 /* Expand builtin functions.
-   Copyright (C) 1988-2023 Free Software Foundation, Inc.
+   Copyright (C) 1988-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -37,6 +37,13 @@ struct target_builtins {
      register windows, this gives only the outbound registers.
      INCOMING_REGNO gives the corresponding inbound register.  */
   fixed_size_mode_pod x_apply_result_mode[FIRST_PSEUDO_REGISTER];
+
+  /* Nonzero iff the arrays above have been initialized.  The _plus_one suffix
+     is for zero initialization to make it an unreasonable size, used to signal
+     that the size and the corresponding mode array has not been
+     initialized.  */
+  int x_apply_args_size_plus_one;
+  int x_apply_result_size_plus_one;
 };
 
 extern struct target_builtins default_target_builtins;
@@ -126,6 +133,9 @@ extern void expand_builtin_trap (void);
 extern void expand_ifn_atomic_bit_test_and (gcall *);
 extern void expand_ifn_atomic_compare_exchange (gcall *);
 extern void expand_ifn_atomic_op_fetch_cmp_0 (gcall *);
+extern rtx expand_builtin_crc_table_based (internal_fn, scalar_mode,
+					   scalar_mode, machine_mode,
+					   tree, rtx);
 extern rtx expand_builtin (tree, rtx, rtx, machine_mode, int);
 extern enum built_in_function builtin_mathfn_code (const_tree);
 extern tree fold_builtin_expect (location_t, tree, tree, tree, tree);
