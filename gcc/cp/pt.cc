@@ -26483,6 +26483,23 @@ mark_class_instantiated (tree t, int extern_p)
     }
 }
 
+/* Returns true if DECL is in the std namespace.  */
+
+static bool
+decl_in_namespace_banning_tmpl_instantiations_p (tree decl)
+{
+  while (decl)
+    {
+      decl = decl_namespace_context (decl);
+      if (decl == global_namespace)
+	return false;
+      if (lookup_attribute ("no_template_explicit_instantiation", DECL_ATTRIBUTES (decl)))
+	return true;
+      decl = CP_DECL_CONTEXT (decl);
+    }
+  return false;
+}
+
 /* Perform an explicit instantiation of template class T.  STORAGE, if
    non-null, is the RID for extern, inline or static.  COMPLAIN is
    nonzero if this is called from the parser, zero if called recursively,
@@ -26500,6 +26517,10 @@ do_type_instantiation (tree t, tree storage, tsubst_flags_t complain)
 	error ("explicit instantiation of non-template type %qT", t);
       return;
     }
+
+  if (decl_in_namespace_banning_tmpl_instantiations_p (t))
+      warning (OPT_Wtemplate_explicit_instantiation, "explicit instantiation of template %q#T declared, "
+	       "the template was declared in a namespace marked [[gnu::no_template_explicit_instantiation]]", t);
 
   complete_type (t);
 

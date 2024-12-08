@@ -6074,6 +6074,13 @@ handle_namespace_attrs (tree ns, tree attributes)
 	    DECL_ATTRIBUTES (ns) = tree_cons (name, args,
 					      DECL_ATTRIBUTES (ns));
 	}
+      else if (is_attribute_p ("no_template_explicit_instantiation", name)
+	       && is_attribute_namespace_p ("gnu", d))
+	{
+	  tree dn = DECL_NAME (ns);
+	  DECL_ATTRIBUTES (ns) = tree_cons (name, args,
+					    DECL_ATTRIBUTES (ns));
+	}
       else
 	{
 	  warning (OPT_Wattributes, "%qD attribute directive ignored",
