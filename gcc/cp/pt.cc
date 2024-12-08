@@ -26809,7 +26809,8 @@ mark_class_instantiated (tree t, int extern_p)
     }
 }
 
-/* Returns true if DECL is in the std namespace.  */
+/* Returns true if DECL is in a namespace attributed with
+   [[gnu::no_template_explicit_instantiation]].  */
 
 static bool
 decl_in_namespace_banning_tmpl_instantiations_p (tree decl)
