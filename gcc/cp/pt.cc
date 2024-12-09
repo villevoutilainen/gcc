@@ -26820,7 +26820,7 @@ decl_in_namespace_banning_tmpl_instantiations_p (tree decl)
       decl = decl_namespace_context (decl);
       if (decl == global_namespace)
 	return false;
-      if (lookup_attribute ("no_template_explicit_instantiation", DECL_ATTRIBUTES (decl)))
+      if (lookup_attribute ("gnu", "no_template_explicit_instantiation", DECL_ATTRIBUTES (decl)))
 	return true;
       decl = CP_DECL_CONTEXT (decl);
     }
