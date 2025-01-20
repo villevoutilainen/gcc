@@ -4,11 +4,9 @@
 #include <exception>
 #include <cstdlib>
 
-// Test that there is an active exception when we reach the terminate handler.
 void my_term()
 {
-  try { throw; }
-  catch(int) { std::exit(0); }
+  std::exit(0);
 }
 void handle_contract_violation(const std::experimental::contract_violation& violation)
 {
@@ -17,7 +15,6 @@ void handle_contract_violation(const std::experimental::contract_violation& viol
 
 struct X
 {
-
   void f(const int x) pre(x>1) post(x>3) {
      int i = 1;
   }
