@@ -1,10 +1,10 @@
+//Test that a throwing violation handler causes termination with noexcept-observe
 // { dg-do run }
-// { dg-options "-std=c++2a -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=noexcept_enforce " }
+// { dg-options "-std=c++2a -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=noexcept_observe " }
 #include <experimental/contract>
 #include <exception>
 #include <cstdlib>
 
-// Test that there is an active exception when we reach the terminate handler.
 void my_term()
 {
   try { throw; }
@@ -17,7 +17,6 @@ void handle_contract_violation(const std::experimental::contract_violation& viol
 
 struct X
 {
-
   void f(const int x) pre(x>1) post(x>3) {
      int i = 1;
   }
