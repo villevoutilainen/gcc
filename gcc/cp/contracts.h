@@ -55,6 +55,15 @@ enum contract_semantic
   CCS_NOEXCEPT_OBSERVE
 };
 
+/* Contract inheritance model.  */
+
+enum contract_inheritance
+{
+  CONTRACT_INHERITANCE_NONE = 0,
+  CONTRACT_INHERITANCE_P2900R13 = 1,
+  CONTRACT_INHERITANCE_VILLE = 2,
+};
+
 /* True if the contract is unchecked.  */
 
 inline bool
@@ -313,7 +322,7 @@ extern bool all_attributes_are_contracts_p	(tree);
 extern tree finish_contract_attribute		(tree, tree);
 extern void copy_contract_attributes		(tree, tree);
 extern bool diagnose_misapplied_contracts	(tree);
-extern void remap_contracts			(tree, tree, tree, bool);
+extern tree remap_contracts  			(tree, tree, bool, bool);
 extern tree splice_out_contracts		(tree);
 extern void inherit_base_contracts		(tree, tree);
 
