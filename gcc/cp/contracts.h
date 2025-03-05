@@ -389,22 +389,6 @@ set_contract_semantic (tree t, contract_semantic semantic)
   TREE_LANG_FLAG_0 (t) = (semantic & 0x04) >> 2;
 }
 
-/* Returns the mutable flag of the node.  */
-
-inline int
-get_contract_mutable (const_tree t)
-{
-  return TREE_LANG_FLAG_4 (CONTRACT_CHECK (t));
-}
-
-/* Sets the mutable flag of the node.  */
-
-inline void
-set_contract_mutable (tree t, int mut)
-{
-  TREE_LANG_FLAG_4 (CONTRACT_CHECK (t)) = mut;
-}
-
 /* Returns the const-ify flag of the node.  */
 
 inline bool
@@ -429,15 +413,16 @@ contract_const_wrapper_p (const_tree exp)
   /* A wrapper node has code VIEW_CONVERT_EXPR, and the flag
      EXPR_LOCATION_WRAPPER_P is set.  */
   if (TREE_CODE (exp) == VIEW_CONVERT_EXPR
-      && EXPR_CONTRACT_CONST_WRAPPER_P (exp))
+      && CONTRACT_CONSTIFY_EXPR_P (exp))
     return true;
   return false;
 }
 
-/* Implementation of STRIP_ANY_CONTRACT_CONST_WRAPPER.  */
+/* If EXP is a CONTRACT_CONSTIFY_EXPR_P, return the wrapped expression.
+   Otherwise, do nothing. */
 
 inline tree
-tree_strip_any_contract_const_wrapper (tree exp)
+strip_contract_constify_expr (tree exp)
 {
   if (contract_const_wrapper_p (exp))
     return TREE_OPERAND (exp, 0);
