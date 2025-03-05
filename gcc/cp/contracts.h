@@ -350,7 +350,7 @@ extern bool maybe_reject_param_in_postcondition (tree);
 
 extern tree view_as_const			(tree);
 extern tree maybe_contract_wrap_call		(tree, tree);
-extern void emit_contract_wrapper_func		();
+extern bool emit_contract_wrapper_func		(bool);
 
 /* Return the first contract in ATTRS, or NULL_TREE if there are none.  */
 
@@ -405,20 +405,44 @@ set_contract_mutable (tree t, int mut)
   TREE_LANG_FLAG_4 (CONTRACT_CHECK (t)) = mut;
 }
 
-/* Returns the mutable flag of the node.  */
+/* Returns the const-ify flag of the node.  */
 
-inline int
+inline bool
 get_contract_const (const_tree t)
 {
-  return TREE_LANG_FLAG_5 (CONTRACT_CHECK (t));
+  return TREE_LANG_FLAG_4 (CONTRACT_CHECK (t));
 }
 
-/* Sets the mutable flag of the node.  */
+/* Sets the const-ify flag of the node.  */
 
 inline void
-set_contract_const (tree t, int mut)
+set_contract_const (tree t, bool constify)
 {
-  TREE_LANG_FLAG_5 (CONTRACT_CHECK (t)) = mut;
+  TREE_LANG_FLAG_4 (CONTRACT_CHECK (t)) = constify;
+}
+
+/* Test if EXP is a contract const wrapper node.  */
+
+inline bool
+contract_const_wrapper_p (const_tree exp)
+{
+  /* A wrapper node has code VIEW_CONVERT_EXPR, and the flag
+     EXPR_LOCATION_WRAPPER_P is set.  */
+  if (TREE_CODE (exp) == VIEW_CONVERT_EXPR
+      && EXPR_CONTRACT_CONST_WRAPPER_P (exp))
+    return true;
+  return false;
+}
+
+/* Implementation of STRIP_ANY_CONTRACT_CONST_WRAPPER.  */
+
+inline tree
+tree_strip_any_contract_const_wrapper (tree exp)
+{
+  if (contract_const_wrapper_p (exp))
+    return TREE_OPERAND (exp, 0);
+  else
+    return exp;
 }
 
 /* Will this contract be ignored.  */
