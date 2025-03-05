@@ -3291,12 +3291,6 @@ struct GTY(()) lang_decl {
 #define CONTRACT_HELPER(NODE) \
  (LANG_DECL_FN_CHECK (NODE)->contract_helper)
 
-/* In VIEW_CONVERT_EXPR, set when this node is a const wrapper.  Used to
-   constify entities inside contract assertions.  */
-
-#define CONTRACT_CONSTIFY_EXPR_P(NODE) \
-  (TREE_CHECK(NODE, VIEW_CONVERT_EXPR)->base.private_flag)
-
 /* For a FUNCTION_DECL or a VAR_DECL, the language linkage for the
    declaration.  Some entities (like a member function in a local
    class, or a local variable) do not have linkage at all, and this
