@@ -3293,6 +3293,18 @@ struct GTY(()) lang_decl {
 #define CONTRACT_HELPER(NODE) \
  (LANG_DECL_FN_CHECK (NODE)->contract_helper)
 
+/* In VIEW_CONVERT_EXPR, set when this node is a const wrapper.  Used to
+   constify entities inside contract assertions.  */
+
+#define EXPR_CONTRACT_CONST_WRAPPER_P(NODE) \
+  (TREE_CHECK(NODE, VIEW_CONVERT_EXPR)->base.private_flag)
+
+/* Remove any VIEW_CONVERT_EXPR that's used to constify an entity inside a
+   contract assertion.  */
+
+#define STRIP_ANY_CONTRACT_CONST_WRAPPER(EXP) \
+  (EXP) = tree_strip_any_contract_const_wrapper (CONST_CAST_TREE (EXP))
+
 /* For a FUNCTION_DECL or a VAR_DECL, the language linkage for the
    declaration.  Some entities (like a member function in a local
    class, or a local variable) do not have linkage at all, and this
@@ -9150,76 +9162,6 @@ extern tree coro_get_ramp_function		(tree);
 
 extern tree co_await_get_resume_call		(tree await_expr);
 
-<<<<<<< HEAD
-=======
-
-/* contracts.cc */
-extern tree make_postcondition_variable		(cp_expr);
-extern tree make_postcondition_variable		(cp_expr, tree);
-extern tree grok_contract			(tree, tree, tree, cp_expr, location_t);
-extern tree finish_contract_condition		(cp_expr);
-extern void update_late_contract		(tree, tree, cp_expr);
-extern tree constify_contract_access            (tree);
-extern bool maybe_reject_param_in_postcondition (tree);
-
-extern tree view_as_const                       (tree);
-extern tree maybe_contract_wrap_call	        (tree, tree);
-extern bool emit_contract_wrapper_func          (bool);
-
-/* Return the first contract in ATTRS, or NULL_TREE if there are none.  */
-
-inline tree
-find_contract (tree attrs)
-{
-  while (attrs && !cxx_contract_attribute_p (attrs))
-    attrs = TREE_CHAIN (attrs);
-  return attrs;
-}
-
-inline void
-set_decl_contracts (tree decl, tree contract_attrs)
-{
-  remove_contract_attributes (decl);
-  DECL_ATTRIBUTES (decl) = chainon (DECL_ATTRIBUTES (decl), contract_attrs);
-}
-
-/* Returns the computed semantic of the node.  */
-
-inline contract_semantic
-get_contract_semantic (const_tree t)
-{
-  return (contract_semantic) (TREE_LANG_FLAG_3 (CONTRACT_CHECK (t))
-      | (TREE_LANG_FLAG_2 (t) << 1)
-      | (TREE_LANG_FLAG_0 ((t)) << 2));
-}
-
-/* Sets the computed semantic of the node.  */
-
-inline void
-set_contract_semantic (tree t, contract_semantic semantic)
-{
-  TREE_LANG_FLAG_3 (CONTRACT_CHECK (t)) = semantic & 0x01;
-  TREE_LANG_FLAG_2 (t) = (semantic & 0x02) >> 1;
-  TREE_LANG_FLAG_0 (t) = (semantic & 0x04) >> 2;
-}
-
-/* Returns the const-ify flag of the node.  */
-
-inline bool
-get_contract_const (const_tree t)
-{
-  return TREE_LANG_FLAG_4 (CONTRACT_CHECK (t));
-}
-
-/* Sets the const-ify flag of the node.  */
-
-inline void
-set_contract_const (tree t, bool constify)
-{
-  TREE_LANG_FLAG_4 (CONTRACT_CHECK (t)) = constify;
-}
-
->>>>>>> 84d55eb3960 (wip)
 /* Inline bodies.  */
 
 inline tree
