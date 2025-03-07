@@ -31471,7 +31471,6 @@ cp_parser_contract_attribute_spec (cp_parser *parser, tree attribute)
   tree mode = NULL_TREE;
   mode = cp_parser_contract_mode_opt (parser, postcondition_p);
 
-
   matching_parens parens;
 
   /* Check for postcondition identifiers.  */
