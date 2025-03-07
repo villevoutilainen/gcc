@@ -29,23 +29,6 @@ void f3(int i) pre(true [[pre:i>0]]); // { dg-error "was not declared" }
 // { dg-error "shall only introduce an attribute" "" { target *-*-* } .-1 }
 // { dg-error "expected" "" { target *-*-* } .-2 }
 
-struct B{
-
-  virtual void f() post(true) = 0;
-
-};
-
-struct D : B {
-  void f() override post(true) = 0;
-};
-
-// non attribute contracts come after override.
-struct E : D {
-  void f() post(true) override;  // { dg-error "expected" }
-  // { dg-error "override" "" { target *-*-* } .-1 }
-};
-
-
 namespace other{
 
   static_assert (__cpp_contracts >= 201906);
@@ -57,47 +40,7 @@ namespace other{
 
   auto f(int x) pre(x >= 0) -> int; // { dg-error "expected initializer before" }
 
-  struct X
-  {
-    virtual void f(int x) pre(x >= 0);
-  };
-
-  struct Y : X
-  {
-    void f(int x) override pre(x >= 0);
-  };
-
-  struct Y2 : X
-  {
-    void f(int x) pre(x >= 0) override; // { dg-error "expected .;. at end of member declaration|does not name a type" }
-  };
-
-  struct Y3 : X
-  {
-    void f(int x) pre(x >= 0) override pre(x >= 0); // { dg-error "expected .;. at end of member declaration|does not name a type" }
-  };
-
-  struct X2
-  {
-    virtual void f(int x) pre(x >= 0);
-  };
-
-  struct X3
-  {
-    virtual void f(int x) final pre(x >= 0);
-  };
-
-  struct X4
-  {
-    virtual void f(int x) pre(x >= 0) final; // { dg-error "expected .;. at end of member declaration|does not name a type" }
-  };
-
-  struct X5
-  {
-    virtual void f(int x) pre(x >= 0) final pre(x >= 0); // { dg-error "expected .;. at end of member declaration|does not name a type" }
-  };
-
-  template <class T>
+    template <class T>
   void g(int x) requires(true) pre(x >= 0);
 
   template <class T>
