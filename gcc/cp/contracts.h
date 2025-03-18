@@ -355,8 +355,8 @@ extern void set_contract_functions		(tree, tree, tree);
 extern tree build_contract_check		(tree);
 
 extern tree constify_contract_access		(tree);
-extern bool maybe_reject_param_in_postcondition (tree);
-
+extern void maybe_reject_param_in_postcondition (tree, location_t);
+extern void check_param_in_redecl 		(tree, tree);
 extern tree view_as_const			(tree);
 extern tree maybe_contract_wrap_call		(tree, tree);
 extern bool emit_contract_wrapper_func		(bool);
@@ -435,6 +435,24 @@ strip_contract_const_wrapper (tree exp)
     return TREE_OPERAND (exp, 0);
   else
     return exp;
+}
+
+/* Indicate if PARM_DECL DECL is ODR used in a postcondition.  */
+
+inline void
+set_parm_used_in_post (tree decl, bool constify = true)
+{
+  gcc_checking_assert (TREE_CODE (decl) == PARM_DECL);
+  decl->base.public_flag = constify;
+}
+
+/* Test if PARM_DECL is ODR used in a postcondition.  */
+
+inline bool
+parm_used_in_post_p (const_tree decl)
+{
+  /* Check if this parameter is odr used within a function's postcondition  */
+  return ((TREE_CODE (decl) == PARM_DECL) && decl->base.public_flag);
 }
 
 /* Will this contract be ignored.  */
