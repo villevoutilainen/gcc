@@ -443,7 +443,7 @@ inline void
 set_parm_used_in_post (tree decl, bool constify = true)
 {
   gcc_checking_assert (TREE_CODE (decl) == PARM_DECL);
-  decl->base.public_flag = constify;
+  DECL_LANG_FLAG_4 (decl) = constify;
 }
 
 /* Test if PARM_DECL is ODR used in a postcondition.  */
@@ -452,7 +452,7 @@ inline bool
 parm_used_in_post_p (const_tree decl)
 {
   /* Check if this parameter is odr used within a function's postcondition  */
-  return ((TREE_CODE (decl) == PARM_DECL) && decl->base.public_flag);
+  return ((TREE_CODE (decl) == PARM_DECL) && DECL_LANG_FLAG_4 (decl));
 }
 
 /* Will this contract be ignored.  */
