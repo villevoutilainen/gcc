@@ -200,6 +200,13 @@ enum contract_matching_context
   cmc_override
 };
 
+enum contract_match_kind
+{
+  cmk_all,
+  cmk_pre,
+  cmk_post
+};
+
 /* True if NODE is any kind of contract.  */
 #define CONTRACT_P(NODE)			\
   (TREE_CODE (NODE) == ASSERTION_STMT		\
@@ -346,7 +353,7 @@ extern tree get_precondition_function		(tree);
 extern tree get_postcondition_function		(tree);
 extern tree get_contract_wrapper_function	(tree);
 
-extern void copy_and_remap_contracts		(tree, tree, bool, bool);
+extern tree copy_and_remap_contracts		(tree, tree, bool, contract_match_kind);
 extern void start_function_contracts		(tree);
 extern void maybe_apply_function_contracts	(tree);
 extern void finish_function_contracts		(tree);
@@ -354,12 +361,13 @@ extern void set_contract_functions		(tree, tree, tree);
 
 extern tree build_contract_check		(tree);
 
-extern tree constify_contract_access		(tree);
+extern tree constify_contract_access            (tree);
 extern void maybe_reject_param_in_postcondition (tree, location_t);
 extern void check_param_in_redecl 		(tree, tree);
-extern tree view_as_const			(tree);
-extern tree maybe_contract_wrap_call		(tree, tree);
-extern bool emit_contract_wrapper_func		(bool);
+extern tree view_as_const                       (tree);
+extern tree maybe_contract_wrap_call	        (tree, tree);
+extern bool emit_contract_wrapper_func          (bool);
+extern void set_contract_attributes 		(tree, tree);
 
 /* Return the first contract in ATTRS, or NULL_TREE if there are none.  */
 
@@ -412,6 +420,22 @@ inline void
 set_contract_const (tree t, bool constify)
 {
   TREE_LANG_FLAG_4 (CONTRACT_CHECK (t)) = constify;
+}
+
+/* Returns whether the contract is inherited.  */
+
+inline bool
+get_contract_inherited (const_tree t)
+{
+  return TREE_LANG_FLAG_5 (CONTRACT_CHECK (t));
+}
+
+/* Mark the contract as inherited  */
+
+inline void
+set_contract_inherited (tree t, bool inherited)
+{
+  TREE_LANG_FLAG_5 (CONTRACT_CHECK (t)) = inherited;
 }
 
 /* Test if EXP is a contract const wrapper node.  */
