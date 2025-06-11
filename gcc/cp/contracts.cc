@@ -2949,6 +2949,61 @@ start_function_contracts (tree fndecl)
     build_contract_function_decls (fndecl);
 }
 
+/* Build and return a thunk like call to FUNCTION using the supplied
+  arguments.  The call is like a thunk call in the fact that we do not
+  want to create aditional copies of the arguments. However, we can
+  not simply reuse the thunk machinery as it does more than we want.
+  Instead, we reuse build_call_a, modulo special handling for empty
+  classes that relies on the function being marked as DECL_THUNK_P.
+  We also mark the call as a thunk call allows for correct gimplification
+  of the arguments.
+ */
+
+tree
+build_thunk_like_call (tree function, int n, tree *argarray)
+{
+  tree decl;
+  tree result_type;
+  tree fntype;
+
+  function = build_addr_func (function, tf_warning_or_error);
+
+  gcc_assert (TYPE_PTR_P (TREE_TYPE (function)));
+  fntype = TREE_TYPE (TREE_TYPE (function));
+  gcc_assert (FUNC_OR_METHOD_TYPE_P (fntype));
+  result_type = TREE_TYPE (fntype);
+
+  /* An rvalue has no cv-qualifiers.  */
+  if (SCALAR_TYPE_P (result_type) || VOID_TYPE_P (result_type))
+    result_type = cv_unqualified (result_type);
+
+  function = build_call_array_loc (input_location,
+				   result_type, function, n, argarray);
+  set_flags_from_callee (function);
+
+  decl = get_callee_fndecl (function);
+
+  if (decl && !TREE_USED (decl))
+    {
+      /* We invoke build_call directly for several library
+	 functions.  These may have been declared normally if
+	 we're building libgcc, so we can't just check
+	 DECL_ARTIFICIAL.  */
+      gcc_assert (DECL_ARTIFICIAL (decl)
+		  || !strncmp (IDENTIFIER_POINTER (DECL_NAME (decl)),
+			       "__", 2));
+      mark_used (decl);
+    }
+
+  require_complete_eh_spec_types (fntype, decl);
+
+  TREE_HAS_CONSTRUCTOR (function) = (decl && DECL_CONSTRUCTOR_P (decl));
+
+  CALL_FROM_THUNK_P (function) = true;
+
+  return function;
+}
+
 /* If we have a precondition function and it's valid, call it.  */
 
 static void
@@ -2960,9 +3015,9 @@ add_pre_condition_fn_call (tree fndecl)
 		       && DECL_PRE_FN (fndecl) != error_mark_node);
 
   releasing_vec args = build_arg_list (fndecl);
-  tree call = build_call_a (DECL_PRE_FN (fndecl), args->length (),
+  tree call = build_thunk_like_call (DECL_PRE_FN (fndecl), args->length (),
 			    args->address ());
-  CALL_FROM_THUNK_P (call) = true;
+
   finish_expr_stmt (call);
 }
 
@@ -2978,9 +3033,8 @@ add_post_condition_fn_call (tree fndecl)
   releasing_vec args = build_arg_list (fndecl);
   if (get_postcondition_result_parameter (fndecl))
     vec_safe_push (args, DECL_RESULT (fndecl));
-  tree call = build_call_a (DECL_POST_FN (fndecl), args->length (),
+  tree call = build_thunk_like_call (DECL_POST_FN (fndecl), args->length (),
 			    args->address ());
-  CALL_FROM_THUNK_P (call) = true;
   finish_expr_stmt (call);
 }
 
@@ -3632,8 +3686,7 @@ define_contract_wrapper_func (const tree& fndecl, const tree& wrapdecl, void*)
       TREE_TYPE (fn) = t;
     }
 
-  tree call = build_call_a (fn, args->length (), args->address ());
-  CALL_FROM_THUNK_P (call) = true;
+  tree call = build_thunk_like_call (fn, args->length (), args->address ());
 
   finish_return_stmt (call);
 
