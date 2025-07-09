@@ -409,9 +409,8 @@ set_postcondition_function (tree fndecl, tree post)
   orig_from_outlined->put (post, fndecl);
 }
 
-/* tree that holds the pseude source location type */
+/* tree that holds the internal representation source location _impl */
 static GTY(()) tree contracts_source_location_impl_type;
-static GTY(()) tree contracts_source_location_type;
 
 static tree
 get_orig_for_outlined (tree fndecl)
@@ -894,40 +893,6 @@ build_contract_violation (tree contract, bool is_const)
     return build_contract_violation_p2900 (contract, is_const);
 
   return build_contract_violation_cxx2a (contract);
-}
-
-static tree get_cxx2a_contract_violation_fields ();
-static tree get_p9600_contract_violation_fields ();
-
-static tree
-get_pseudo_contract_violation_type ()
-{
-  if (pseudo_contract_violation_type)
-    return pseudo_contract_violation_type;
-
-  tree fields;
-  if (flag_contracts_nonattr)
-    fields = get_p9600_contract_violation_fields ();
-  else
-    fields = get_cxx2a_contract_violation_fields ();
-
-  iloc_sentinel ils (input_location);
-  input_location = BUILTINS_LOCATION;
-  pseudo_contract_violation_type = make_class_type (RECORD_TYPE);
-  finish_builtin_struct (pseudo_contract_violation_type,
-			 "__pseudo_contract_violation", fields, NULL_TREE);
-  CLASSTYPE_AS_BASE (pseudo_contract_violation_type)
-    = pseudo_contract_violation_type;
-  DECL_CONTEXT (TYPE_NAME (pseudo_contract_violation_type))
-    = FROB_CONTEXT (global_namespace);
-//  TREE_PUBLIC (TYPE_NAME (pseudo_contract_violation_type)) = true;
-  CLASSTYPE_LITERAL_P (pseudo_contract_violation_type) = true;
-  CLASSTYPE_LAZY_COPY_CTOR (pseudo_contract_violation_type) = true;
-  xref_basetypes (pseudo_contract_violation_type, /*bases=*/NULL_TREE);
-  pseudo_contract_violation_type
-    = cp_build_qualified_type (pseudo_contract_violation_type,
-			       TYPE_QUAL_CONST);
-  return pseudo_contract_violation_type;
 }
 
 /* Add the contract statement CONTRACT to the current block if valid.  */
@@ -1577,7 +1542,7 @@ build_contract_violation_cxx2a (tree contract)
     default: gcc_unreachable ();
     }
 
-  /* Must match the type layout in get_pseudo_contract_violation_type.  */
+  /* Must match the type layout in builtin_contract_violation_type.  */
   tree ctor = build_constructor_va
     (init_list_type_node, 7,
      NULL_TREE, build_string_literal (loc.file),
@@ -1588,7 +1553,7 @@ build_contract_violation_cxx2a (tree contract)
      NULL_TREE, build_int_cst (uint_least32_type_node, loc.line),
      NULL_TREE, build_int_cst (signed_char_type_node, cmode));
 
-  ctor = finish_compound_literal (get_pseudo_contract_violation_type (),
+  ctor = finish_compound_literal (builtin_contract_violation_type,
 				  ctor, tf_none, fcl_c99);
   protected_set_expr_location (ctor, EXPR_LOCATION (contract));
   return ctor;
@@ -2230,13 +2195,25 @@ lookup_std_type (tree name_id)
    type.  */
 
 static tree
-get_contracts_source_location_impl_type (tree context)
+get_contracts_source_location_impl_type (tree context = NULL_TREE)
 {
   if (contracts_source_location_impl_type)
      return contracts_source_location_impl_type;
 
-  // first build the __impl layout equivalent type
-  /* Must match <source_location>:
+  /* First see if we have a declaration that we can use.  */
+  tree contracts_source_location_type
+    = lookup_std_type (get_identifier ("source_location"));
+
+  if (contracts_source_location_type
+      && contracts_source_location_type != error_mark_node
+      && TYPE_FIELDS (contracts_source_location_type))
+    {
+      contracts_source_location_impl_type = get_source_location_impl_type ();
+      return contracts_source_location_impl_type;
+    }
+
+  /* We do not, so build the __impl layout equivalent type, which must
+     match <source_location>:
      struct __impl
       {
 	  const char* _M_file_name;
@@ -2281,73 +2258,11 @@ get_contracts_source_location_impl_type (tree context)
   return contracts_source_location_impl_type;
 }
 
-/* We need a source_location type regardless of whether the user includes
-   <source_location>.
-   So, first look to see is we can find std::source_location (and the relevant
-   __impl type).  If that fails, then fall back to building a layout-compatible
-   internal type (__source_location).  */
-
 static tree
-get_contracts_source_location_type ()
+get_contracts_impl_ptr (location_t loc)
 {
-  if (contracts_source_location_type)
-    return contracts_source_location_type;
-
-  contracts_source_location_type
-    = lookup_std_type (get_identifier ("source_location"));
-
-  if (contracts_source_location_type
-      && contracts_source_location_type != error_mark_node
-      && TYPE_FIELDS (contracts_source_location_type))
-    {
-      contracts_source_location_impl_type = get_source_location_impl_type ();
-      return contracts_source_location_type;
-    }
-
-  /* Must match <source_location>:
-     struct source_location
-       {
-	 private:
-	    const __impl* _M_impl = nullptr;
-	};  */
-  iloc_sentinel ils (input_location);
-  input_location = BUILTINS_LOCATION;
-  contracts_source_location_type = make_class_type (RECORD_TYPE);
-
-  tree impl_type
-    = get_contracts_source_location_impl_type (contracts_source_location_type);
-  /* Only one field.  */
-  tree f_type = build_pointer_type (impl_type);
-  tree fields = build_decl (BUILTINS_LOCATION, FIELD_DECL,
-			    get_identifier ("_M_impl"), f_type);
-  finish_builtin_struct (contracts_source_location_type,
-			 "__source_location", fields, NULL_TREE);
-  CLASSTYPE_AS_BASE (contracts_source_location_type)
-    = contracts_source_location_type;
-  xref_basetypes (contracts_source_location_type, /*bases=*/NULL_TREE);
-  DECL_CONTEXT (TYPE_NAME (contracts_source_location_type))
-    = FROB_CONTEXT (global_namespace);
-  CLASSTYPE_LAZY_DEFAULT_CTOR (contracts_source_location_type) = true;
-  CLASSTYPE_LAZY_DESTRUCTOR (contracts_source_location_type) = true;
-  contracts_source_location_type
-    = cp_build_qualified_type (contracts_source_location_type,
-			       TYPE_QUAL_CONST);
-  return contracts_source_location_type;
-}
-
-/* Build a layout-compatible internal version of source location type
-   with location LOC.  */
-
-static tree
-build_contracts_source_location (location_t loc)
-{
-  /* Make sure we have the types.  */
-  tree s_type = get_contracts_source_location_type ();
-  gcc_checking_assert (TYPE_FIELDS (contracts_source_location_type));
-  gcc_checking_assert (TYPE_FIELDS (contracts_source_location_impl_type));
-
-  /* There is only one relevant field.  */
-  tree f = next_aggregate_field (TYPE_FIELDS (s_type));
+  if (!contracts_source_location_impl_type)
+    get_contracts_source_location_impl_type ();
 
   tree fndecl = current_function_decl;
   /* We might be an outlined function.  */
@@ -2361,15 +2276,8 @@ build_contracts_source_location (location_t loc)
   tree impl__
     = build_source_location_impl (loc, fndecl,
 				  contracts_source_location_impl_type);
-  impl__ = build_fold_addr_expr_with_type_loc (loc, impl__, TREE_TYPE (f));
-
-  /* Must match the type layout in std::source_location.  */
-  tree ctor = build_constructor_va (s_type, 1, f, impl__);
-
-  TREE_READONLY (ctor) = true;
-  TREE_CONSTANT (ctor) = true;
-  TREE_STATIC (ctor) = true;
-  return ctor;
+  tree p = build_pointer_type (contracts_source_location_impl_type);
+  return build_fold_addr_expr_with_type_loc (loc, impl__, p);
 }
 
 /* Build a layout-compatible internal version of contract_violation type.  */
@@ -2385,7 +2293,7 @@ get_p9600_contract_violation_fields ()
     evaluation_semantic _M_evaluation_semantic;
     detection_mode _M_detection_mode;
     const char* _M_comment;
-    std::source_location _M_source_location;
+    void *_M_src_loc_ptr;
     void *_M_current_except_obj;
     __vendor_ext* _M_ext;
   };
@@ -2396,7 +2304,7 @@ get_p9600_contract_violation_fields ()
 			 uint16_type_node,
 			 uint16_type_node,
 			 const_string_type_node,
-			 get_contracts_source_location_type(),
+			 ptr_type_node,
 			 ptr_type_node,
 			 ptr_type_node
 			};
@@ -2405,7 +2313,7 @@ get_p9600_contract_violation_fields ()
 			 "_M_evaluation_semantic",
 			 "_M_detection_mode",
 			 "_M_comment",
-			 "_M_source_location",
+			 "_M_src_loc_ptr",
 			 "_M_current_except_obj",
 			 "_M_ext",
 			};
@@ -2420,7 +2328,6 @@ get_p9600_contract_violation_fields ()
     }
  return fields;
 }
-
 
 /* Get constract_assertion_kind of the specified contract. Used when building
  P2900R7 contract_violation object.  */
@@ -2492,15 +2399,15 @@ build_contract_violation_p2900 (tree contract, bool is_const)
   /* we hardcode CDM_PREDICATE_FALSE because that's all we support for now */
   uint16_t detection_mode = CDM_PREDICATE_FALSE;
 
-  /* Must match the type layout in get_pseudo_contract_violation_type.  */
+  /* Must match the type layout in builtin_contract_violation_type.  */
   tree ctor = build_constructor_va
-    (get_pseudo_contract_violation_type (), 8,
+    (builtin_contract_violation_type, 8,
      NULL_TREE, build_int_cst (uint16_type_node, version),
      NULL_TREE, build_int_cst (uint16_type_node, assertion_kind),
      NULL_TREE, build_int_cst (uint16_type_node, evaluation_semantic),
      NULL_TREE, build_int_cst (uint16_type_node, detection_mode),
      NULL_TREE, CONTRACT_COMMENT (contract),
-     NULL_TREE, build_contracts_source_location (EXPR_LOCATION (contract)),
+     NULL_TREE, get_contracts_impl_ptr (EXPR_LOCATION (contract)),
      NULL_TREE, build_zero_cst (nullptr_type_node),  // exception
      NULL_TREE, build_zero_cst (nullptr_type_node)); // __vendor_ext
 
@@ -2510,7 +2417,7 @@ build_contract_violation_p2900 (tree contract, bool is_const)
 
   tree viol_ = contracts_tu_local_named_var
     (EXPR_LOCATION (contract), "Lcontract_violation",
-     get_pseudo_contract_violation_type (), /*is_const*/true);
+     builtin_contract_violation_type, /*is_const*/true);
 
   TREE_CONSTANT (viol_) = is_const;
   DECL_INITIAL (viol_) = ctor;
@@ -2559,7 +2466,7 @@ declare_violation_handler_wrappers ()
 
   iloc_sentinel ils (input_location);
   input_location = BUILTINS_LOCATION;
-  tree v_obj_type = get_pseudo_contract_violation_type ();
+  tree v_obj_type = builtin_contract_violation_type;
   v_obj_type = cp_build_qualified_type (v_obj_type, TYPE_QUAL_CONST);
   v_obj_type = cp_build_reference_type (v_obj_type, /*rval*/false);
   tree fn_type = build_function_type_list (void_type_node, v_obj_type,
@@ -2775,6 +2682,37 @@ p2900_check_redecl_contract (tree newdecl, tree olddecl)
 }
 
 /* ======== public API ======= */
+
+tree
+init_builtin_contract_violation_type ()
+{
+  if (builtin_contract_violation_type)
+    return builtin_contract_violation_type;
+
+  tree fields;
+  if (flag_contracts_nonattr)
+    fields = get_p9600_contract_violation_fields ();
+  else
+    fields = get_cxx2a_contract_violation_fields ();
+
+  iloc_sentinel ils (input_location);
+  input_location = BUILTINS_LOCATION;
+  builtin_contract_violation_type = make_class_type (RECORD_TYPE);
+  finish_builtin_struct (builtin_contract_violation_type,
+			 "__builtin_contract_violation_type", fields, NULL_TREE);
+  CLASSTYPE_AS_BASE (builtin_contract_violation_type)
+    = builtin_contract_violation_type;
+  DECL_CONTEXT (TYPE_NAME (builtin_contract_violation_type))
+    = FROB_CONTEXT (global_namespace);
+  TREE_PUBLIC (TYPE_NAME (builtin_contract_violation_type)) = true;
+  CLASSTYPE_LITERAL_P (builtin_contract_violation_type) = true;
+  CLASSTYPE_LAZY_COPY_CTOR (builtin_contract_violation_type) = true;
+  xref_basetypes (builtin_contract_violation_type, /*bases=*/NULL_TREE);
+  builtin_contract_violation_type
+    = cp_build_qualified_type (builtin_contract_violation_type,
+			       TYPE_QUAL_CONST);
+  return builtin_contract_violation_type;
+}
 
 /* Genericize a CONTRACT tree, but do not attach it to the current context,
    the caller is responsible for that.
