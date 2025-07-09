@@ -5709,7 +5709,10 @@ cxx_init_decl_processing (void)
     init_exception_processing ();
 
   if (flag_contracts)
-    init_terminate_fn ();
+    {
+      init_terminate_fn ();
+      init_builtin_contract_violation_type ();
+    }
 
   if (modules_p ())
     init_modules (parse_in);
