@@ -389,6 +389,7 @@ extern tree maybe_contract_wrap_call		(tree, tree);
 extern bool emit_contract_wrapper_func		(bool);
 extern void maybe_emit_violation_handler_wrappers (void);
 
+extern tree init_builtin_contract_violation_type (void);
 extern tree build_contract_check		(tree);
 
 /* Return the first contract in ATTRS, or NULL_TREE if there are none.  */
