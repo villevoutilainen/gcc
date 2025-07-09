@@ -12182,12 +12182,18 @@ tsubst_contract (tree decl, tree t, tree args, tsubst_flags_t complain,
   cp_expr new_condition (cond_t, cond_l);
   CONTRACT_CONDITION (r) = finish_contract_condition (new_condition);
 
+  if (flag_contracts_nonattr)
+    {
+  /* The semantic, if present.  */
+  CONTRACT_EVALUATION_SEMANTIC (r)
+    = tsubst_expr (CONTRACT_EVALUATION_SEMANTIC (r), args, complain, in_decl);
+
+  /* The assertion kind, if present.  */
+  CONTRACT_ASSERTION_KIND (r)
+    = tsubst_expr (CONTRACT_ASSERTION_KIND (r), args, complain, in_decl);
+    }
+
   /* And the comment.  */
-  /* TODO : this does not do anything at the moment. The CONTRACT_COMMENT is
-     (currently) a string literal, built from the string of the contract.
-     There is nothing to substitute. If we wanted to rebuild the
-     CONTRACT_COMMENT from the substituted contract tree, we would need to
-     modify how a CONTRACT_COMMENT is built.  */
   CONTRACT_COMMENT (r)
       = tsubst_expr (CONTRACT_COMMENT (r), args, complain, in_decl);
 
