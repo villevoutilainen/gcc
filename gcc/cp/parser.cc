@@ -32119,6 +32119,16 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
   contract_modifier modifier
     = cp_parser_function_contract_modifier_opt (parser);
 
+  location_t attrs_loc = cp_lexer_peek_token (parser->lexer)->location;
+  tree std_attrs = cp_parser_std_attribute_spec_seq (parser);
+  if (std_attrs)
+    {
+      attrs_loc = make_location (attrs_loc, attrs_loc, input_location);
+      warning_at (attrs_loc, OPT_Wattributes, "attributes are ignored on"
+		  " contract assertions");
+      std_attrs = NULL_TREE;
+    }
+
   matching_parens parens;
   parens.require_open (parser);
   /* Enable location wrappers when parsing contracts.  */
@@ -32242,6 +32252,16 @@ cp_parser_function_contract_specifier (cp_parser *parser)
   /* Parse experimental modifiers on C++26 contracts.  */
   contract_modifier modifier
     = cp_parser_function_contract_modifier_opt (parser);
+
+  location_t attrs_loc = cp_lexer_peek_token (parser->lexer)->location;
+  tree std_attrs = cp_parser_std_attribute_spec_seq (parser);
+  if (std_attrs)
+    {
+      attrs_loc = make_location (attrs_loc, attrs_loc, input_location);
+      warning_at (attrs_loc, OPT_Wattributes, "attributes are ignored on"
+		  " function contract specifiers");
+      std_attrs = NULL_TREE;
+    }
 
   matching_parens parens;
   parens.require_open (parser);
