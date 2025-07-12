@@ -300,7 +300,7 @@ package body Endh is
             else
                End_Labl := Scopes (Scope.Last).Labl;
 
-               if End_Labl > Empty_Or_Error then
+               if End_Labl not in Empty | Error then
 
                   --  The task here is to construct a designator from the
                   --  opening label, with the components all marked as not
@@ -658,8 +658,6 @@ package body Endh is
             Scan; -- past junk token on same line
          end loop;
       end if;
-
-      return;
    end End_Skip;
 
    --------------------
@@ -921,7 +919,7 @@ package body Endh is
 
       --  Suppress message if error was posted on opening label
 
-      if Error_Msg_Node_1 > Empty_Or_Error
+      if Error_Msg_Node_1 not in Empty | Error
         and then Error_Posted (Error_Msg_Node_1)
       then
          return;

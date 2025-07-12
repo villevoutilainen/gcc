@@ -597,7 +597,7 @@ public:
      There are two exceptions - edges leading to noreturn edges and edges
      predicted by number of iterations heuristics are predicted well.  This macro
      should be able to distinguish those, but at the moment it simply check for
-     noreturn heuristic that is only one giving probability over 99% or bellow
+     noreturn heuristic that is only one giving probability over 99% or below
      1%.  In future we might want to propagate reliability information across the
      CFG if we find this information useful on multiple places.   */
   bool probably_reliable_p () const
@@ -1112,18 +1112,7 @@ public:
     }
 
   /* Make counter forcibly nonzero.  */
-  profile_count force_nonzero () const
-    {
-      if (!initialized_p ())
-	return *this;
-      profile_count ret = *this;
-      if (ret.m_val == 0)
-	{
-	  ret.m_val = 1;
-	  ret.m_quality = MIN (m_quality, ADJUSTED);
-	}
-      return ret;
-    }
+  profile_count force_nonzero () const;
 
   profile_count max (profile_count other) const
     {

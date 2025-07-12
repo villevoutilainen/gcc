@@ -4163,7 +4163,7 @@ package body Sem_Ch3 is
 
       procedure Check_Return_Subtype_Indication (Obj_Decl : Node_Id) is
          Obj_Id  : constant Entity_Id := Defining_Identifier (Obj_Decl);
-         Obj_Typ : constant Entity_Id := Etype (Obj_Id);
+         Obj_Typ : Entity_Id := Etype (Obj_Id);
          Func_Id : constant Entity_Id := Return_Applies_To (Scope (Obj_Id));
          R_Typ   : constant Entity_Id := Etype (Func_Id);
          Indic   : constant Node_Id   :=
@@ -4197,6 +4197,15 @@ package body Sem_Ch3 is
 
          if Error_Posted (Obj_Decl) or else Error_Posted (Indic) then
             return;
+         end if;
+
+         --  The return object type could have been rewritten into a
+         --  constrained type, so for the legality checks that follow we need
+         --  to recover the nominal unconstrained type.
+
+         if Is_Constr_Subt_For_U_Nominal (Obj_Typ) then
+            Obj_Typ := Entity (Original_Node (Object_Definition (Obj_Decl)));
+            pragma Assert (not Is_Constrained (Obj_Typ));
          end if;
 
          --  "return access T" case; check that the return statement also has
@@ -4267,7 +4276,7 @@ package body Sem_Ch3 is
 
             --  AI05-103: for elementary types, subtypes must statically match
 
-            if Is_Constrained (R_Typ) or else Is_Access_Type (R_Typ) then
+            if Is_Elementary_Type (R_Typ) then
                if not Subtypes_Statically_Match (Obj_Typ, R_Typ) then
                   Error_No_Match (Indic);
                end if;
@@ -4283,13 +4292,12 @@ package body Sem_Ch3 is
             --  code is expanded on the basis of the base type (see subprogram
             --  Stream_Base_Type).
 
-            elsif Nkind (Indic) = N_Subtype_Indication
-              and then not Subtypes_Statically_Compatible (Obj_Typ, R_Typ)
+            elsif not Subtypes_Statically_Compatible (Obj_Typ, R_Typ)
               and then not Is_TSS (Func_Id, TSS_Stream_Input)
             then
                Error_Msg_N
                  ("result subtype must be statically compatible with the " &
-                  "function result type", Indic);
+                  "function result subtype", Indic);
 
                if not Predicates_Compatible (Obj_Typ, R_Typ) then
                   Error_Msg_NE
@@ -5328,17 +5336,14 @@ package body Sem_Ch3 is
          else
             Validate_Controlled_Object (Id);
          end if;
+      end if;
 
-         --  If the type of a constrained array has an unconstrained first
-         --  subtype, its Finalize_Address primitive expects the address of
-         --  an object with a dope vector (see Make_Finalize_Address_Stmts).
+      --  If the type of a constrained array has an unconstrained first
+      --  subtype, its Finalize_Address primitive expects the address of
+      --  an object with a dope vector (see Make_Finalize_Address_Stmts).
 
-         if Is_Array_Type (Etype (Id))
-           and then Is_Constrained (Etype (Id))
-           and then not Is_Constrained (First_Subtype (Etype (Id)))
-         then
-            Set_Is_Constr_Array_Subt_With_Bounds (Etype (Id));
-         end if;
+      if Is_Constr_Array_Subt_Of_Unc_With_Controlled (Etype (Id)) then
+         Set_Is_Constr_Array_Subt_With_Bounds (Etype (Id));
       end if;
 
       if Has_Task (Etype (Id)) then
@@ -5737,6 +5742,25 @@ package body Sem_Ch3 is
       Id : constant Entity_Id := Defining_Identifier (N);
       T  : Entity_Id;
 
+      procedure Copy_Parent_Attributes;
+      --  Copy fields that don't depend on the type kind from the subtype
+      --  denoted by the subtype mark.
+
+      ----------------------------
+      -- Copy_Parent_Attributes --
+      ----------------------------
+
+      procedure Copy_Parent_Attributes is
+      begin
+         Set_Etype (Id, Base_Type (T));
+         Set_Is_Volatile (Id, Is_Volatile (T));
+         Set_Treat_As_Volatile (Id, Treat_As_Volatile (T));
+         Set_Is_Generic_Type (Id, Is_Generic_Type (Base_Type (T)));
+         Set_Convention (Id, Convention (T));
+      end Copy_Parent_Attributes;
+
+   --  Start of processing for Analyze_Subtype_Declaration
+
    begin
       Generate_Definition (Id);
       Set_Is_Pure (Id, Is_Pure (Current_Scope));
@@ -5803,13 +5827,6 @@ package body Sem_Ch3 is
          T := Full_View (T);
       end if;
 
-      --  Inherit common attributes
-
-      Set_Is_Volatile       (Id, Is_Volatile       (T));
-      Set_Treat_As_Volatile (Id, Treat_As_Volatile (T));
-      Set_Is_Generic_Type   (Id, Is_Generic_Type   (Base_Type (T)));
-      Set_Convention        (Id, Convention        (T));
-
       --  If ancestor has predicates then so does the subtype, and in addition
       --  we must delay the freeze to properly arrange predicate inheritance.
 
@@ -5849,16 +5866,16 @@ package body Sem_Ch3 is
       --  semantic attributes must be established here.
 
       if Nkind (Subtype_Indication (N)) /= N_Subtype_Indication then
-         Set_Etype (Id, Base_Type (T));
-
          case Ekind (T) is
             when Array_Kind =>
                Mutate_Ekind                  (Id, E_Array_Subtype);
+               Copy_Parent_Attributes;
                Copy_Array_Subtype_Attributes (Id, T);
                Set_Packed_Array_Impl_Type    (Id, Packed_Array_Impl_Type (T));
 
             when Decimal_Fixed_Point_Kind =>
                Mutate_Ekind             (Id, E_Decimal_Fixed_Point_Subtype);
+               Copy_Parent_Attributes;
                Set_Digits_Value         (Id, Digits_Value       (T));
                Set_Delta_Value          (Id, Delta_Value        (T));
                Set_Scale_Value          (Id, Scale_Value        (T));
@@ -5871,6 +5888,7 @@ package body Sem_Ch3 is
 
             when Enumeration_Kind =>
                Mutate_Ekind             (Id, E_Enumeration_Subtype);
+               Copy_Parent_Attributes;
                Set_First_Literal        (Id, First_Literal (Base_Type (T)));
                Set_Scalar_Range         (Id, Scalar_Range       (T));
                Set_Is_Character_Type    (Id, Is_Character_Type  (T));
@@ -5880,6 +5898,7 @@ package body Sem_Ch3 is
 
             when Ordinary_Fixed_Point_Kind =>
                Mutate_Ekind          (Id, E_Ordinary_Fixed_Point_Subtype);
+               Copy_Parent_Attributes;
                Set_Scalar_Range         (Id, Scalar_Range       (T));
                Set_Small_Value          (Id, Small_Value        (T));
                Set_Delta_Value          (Id, Delta_Value        (T));
@@ -5889,6 +5908,7 @@ package body Sem_Ch3 is
 
             when Float_Kind =>
                Mutate_Ekind             (Id, E_Floating_Point_Subtype);
+               Copy_Parent_Attributes;
                Set_Scalar_Range         (Id, Scalar_Range       (T));
                Set_Digits_Value         (Id, Digits_Value       (T));
                Set_Is_Constrained       (Id, Is_Constrained     (T));
@@ -5898,6 +5918,7 @@ package body Sem_Ch3 is
 
             when Signed_Integer_Kind =>
                Mutate_Ekind             (Id, E_Signed_Integer_Subtype);
+               Copy_Parent_Attributes;
                Set_Scalar_Range         (Id, Scalar_Range       (T));
                Set_Is_Constrained       (Id, Is_Constrained     (T));
                Set_Is_Known_Valid       (Id, Is_Known_Valid     (T));
@@ -5905,6 +5926,7 @@ package body Sem_Ch3 is
 
             when Modular_Integer_Kind =>
                Mutate_Ekind             (Id, E_Modular_Integer_Subtype);
+               Copy_Parent_Attributes;
                Set_Scalar_Range         (Id, Scalar_Range       (T));
                Set_Is_Constrained       (Id, Is_Constrained     (T));
                Set_Is_Known_Valid       (Id, Is_Known_Valid     (T));
@@ -5912,6 +5934,7 @@ package body Sem_Ch3 is
 
             when Class_Wide_Kind =>
                Mutate_Ekind             (Id, E_Class_Wide_Subtype);
+               Copy_Parent_Attributes;
                Set_Class_Wide_Type      (Id, Class_Wide_Type    (T));
                Set_Cloned_Subtype       (Id, T);
                Set_Is_Tagged_Type       (Id, True);
@@ -5929,6 +5952,7 @@ package body Sem_Ch3 is
                | E_Record_Type
             =>
                Mutate_Ekind             (Id, E_Record_Subtype);
+               Copy_Parent_Attributes;
 
                --  Subtype declarations introduced for formal type parameters
                --  in generic instantiations should inherit the Size value of
@@ -5980,6 +6004,7 @@ package body Sem_Ch3 is
 
             when Private_Kind =>
                Mutate_Ekind           (Id, Subtype_Kind (Ekind        (T)));
+               Copy_Parent_Attributes;
                Set_Has_Discriminants  (Id, Has_Discriminants          (T));
                Set_Is_Constrained     (Id, Is_Constrained             (T));
                Set_First_Entity       (Id, First_Entity               (T));
@@ -6043,6 +6068,7 @@ package body Sem_Ch3 is
 
             when Access_Kind =>
                Mutate_Ekind          (Id, E_Access_Subtype);
+               Copy_Parent_Attributes;
                Set_Is_Constrained    (Id, Is_Constrained        (T));
                Set_Is_Access_Constant
                                      (Id, Is_Access_Constant    (T));
@@ -6066,6 +6092,7 @@ package body Sem_Ch3 is
 
             when Concurrent_Kind =>
                Mutate_Ekind             (Id, Subtype_Kind (Ekind   (T)));
+               Copy_Parent_Attributes;
                Set_Corresponding_Record_Type (Id,
                                          Corresponding_Record_Type (T));
                Set_First_Entity         (Id, First_Entity          (T));
@@ -6094,6 +6121,7 @@ package body Sem_Ch3 is
                   --  subtypes for Ada 2012 extended use of incomplete types.
 
                   Mutate_Ekind           (Id, E_Incomplete_Subtype);
+                  Copy_Parent_Attributes;
                   Set_Is_Tagged_Type     (Id, Is_Tagged_Type (T));
                   Set_Private_Dependents (Id, New_Elmt_List);
 
@@ -6134,6 +6162,8 @@ package body Sem_Ch3 is
          --  declared entity inherits predicates from the parent.
 
          Inherit_Predicate_Flags (Id, T);
+      else
+         Copy_Parent_Attributes;
       end if;
 
       if Etype (Id) = Any_Type then
@@ -14860,6 +14890,7 @@ package body Sem_Ch3 is
       Set_Etype             (T_Sub, Corr_Rec);
       Set_Has_Discriminants (T_Sub, Has_Discriminants (Prot_Subt));
       Set_Is_Tagged_Type    (T_Sub, Is_Tagged_Type (Corr_Rec));
+      Set_Class_Wide_Type   (T_Sub, Class_Wide_Type (Corr_Rec));
       Set_Is_Constrained    (T_Sub, True);
       Set_First_Entity      (T_Sub, First_Entity (Corr_Rec));
       Set_Last_Entity       (T_Sub, Last_Entity  (Corr_Rec));
@@ -19136,8 +19167,7 @@ package body Sem_Ch3 is
       --  Otherwise we have a subtype mark without a constraint
 
       elsif Error_Posted (S) then
-         --  Don't rewrite if S is Empty or Error
-         if S > Empty_Or_Error then
+         if S not in Empty | Error then
             Rewrite (S, New_Occurrence_Of (Any_Id, Sloc (S)));
          end if;
          return Any_Type;
@@ -21071,7 +21101,7 @@ package body Sem_Ch3 is
 
       --  If no range was given, set a dummy range
 
-      if RRS <= Empty_Or_Error then
+      if RRS in Empty | Error then
          Low_Val  := -Small_Val;
          High_Val := Small_Val;
 

@@ -531,6 +531,7 @@ GNAT_ADA_OBJS+= \
  ada/libgnat/s-bitops.o	\
  ada/libgnat/s-carun8.o	\
  ada/libgnat/s-casuti.o \
+ ada/libgnat/s-cautns.o \
  ada/libgnat/s-crtl.o	\
  ada/libgnat/s-conca2.o	\
  ada/libgnat/s-conca3.o	\
@@ -696,6 +697,7 @@ GNATBIND_OBJS +=  \
  ada/libgnat/s-assert.o   \
  ada/libgnat/s-carun8.o   \
  ada/libgnat/s-casuti.o   \
+ ada/libgnat/s-cautns.o   \
  ada/libgnat/s-conca2.o   \
  ada/libgnat/s-conca3.o   \
  ada/libgnat/s-conca4.o   \
@@ -1094,7 +1096,7 @@ check-ada-subtargets: check-acats-subtargets check-gnat-subtargets
 # No ada-specific selftests
 selftest-ada:
 
-ACATSDIR = $(TESTSUITEDIR)/ada/acats-2
+ACATSDIR = $(TESTSUITEDIR)/ada/acats-4
 ACATSCMD = run_acats.sh
 
 check_acats_numbers0:=1 2 3 4 5 6 7 8 9

@@ -544,6 +544,7 @@ GNATRTL_NONTASKING_OBJS= \
   s-caun16$(objext) \
   s-caun32$(objext) \
   s-caun64$(objext) \
+  s-cautns$(objext) \
   s-chepoo$(objext) \
   s-commun$(objext) \
   s-conca2$(objext) \
@@ -1853,6 +1854,7 @@ ifeq ($(strip $(filter-out %aarch64 freebsd%,$(target_cpu) $(target_os))),)
     LIBGNAT_TARGET_PAIRS += \
     s-intman.adb<libgnarl/s-intman__cheribsd.adb \
     s-osinte.ads<libgnarl/s-osinte__cheribsd.ads \
+    s-tsgsba.adb<libgnarl/s-tsgsba__cheri.adb \
     s-secsta.adb<libgnat/s-secsta__cheri.adb
 
     EXTRA_GNATRTL_NONTASKING_OBJS += i-cheri.o i-cheri-exceptions.o

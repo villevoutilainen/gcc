@@ -34,7 +34,6 @@ start_condition_str( int sc ) {
   switch(sc) {
   case INITIAL: state = "INITIAL"; break;
   case addr_of: state = "addr_of"; break;
-  case author_state: state = "author_state"; break;
   case basis: state = "basis"; break;
   case bool_state: state = "bool_state"; break;
   case cdf_state: state = "cdf_state"; break;
@@ -159,6 +158,8 @@ is_cdf_token( int token ) {
   case CDF_DISPLAY:
   case CDF_IF:       case CDF_ELSE: case CDF_END_IF:
   case CDF_EVALUATE: case CDF_WHEN: case CDF_END_EVALUATE:
+  case CDF_PUSH:
+  case CDF_POP:
     return true;
   case CALL_COBOL:
   case CALL_VERBATIM:

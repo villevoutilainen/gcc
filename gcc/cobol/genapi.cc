@@ -60,7 +60,8 @@ extern int yylineno;
 #define TSI_BACK (tsi_last(current_function->statement_list_stack.back()))
 
 extern char *cobol_name_mangler(const char *cobol_name);
-static tree gg_attribute_bit_get(struct cbl_field_t *var, cbl_field_attr_t bits);
+static tree gg_attribute_bit_get( struct cbl_field_t *var,
+                                  cbl_field_attr_t bits);
 
 static tree label_list_out_goto;
 static tree label_list_out_label;
@@ -125,8 +126,8 @@ treeplet_fill_source(TREEPLET &treeplet, cbl_refer_t &refer)
 
 tree file_static_variable(tree type, const char *v)
   {
-  // This routine returns a reference to an already-defined file_static variable
-  // You need to know the type that was used for the definition.
+  // This routine returns a reference to an already-defined file_static
+  // variable. You need to know the type that was used for the definition.
   return gg_declare_variable(type, v, NULL, vs_file_static);
   }
 
@@ -142,9 +143,9 @@ static void move_helper(tree        size_error,  // INT
 // set using -f-trace-debug, defined in lang.opt
 int f_trace_debug;
 
-// When doing WRITE statements, the IBM Language Reference and the ISO/IEC_2014
-// standard specify that when the ADVANCING clause is omitted, the default is
-// AFTER ADVANCING 1 LINE.
+// When doing WRITE statements, the IBM Language Reference and the
+// ISO/IEC_2014 standard specify that when the ADVANCING clause is omitted, the
+// default isAFTER ADVANCING 1 LINE.
 //
 // MicroFocus and GnuCOBOL state that the default is BEFORE ADVANCING 1 LINE
 //
@@ -201,7 +202,7 @@ trace1_init()
     trace_handle = gg_define_variable(INT, "trace_handle", vs_static);
     trace_indent = gg_define_variable(INT, "trace_indent", vs_static);
 
-    bTRACE1 = getenv("GCOBOL_TRACE") ? getenv("GCOBOL_TRACE") : gv_trace_switch;
+    bTRACE1 = getenv("GCOBOL_TRACE") ? getenv("GCOBOL_TRACE") :gv_trace_switch;
 
     if( bTRACE1 && strcmp(bTRACE1, "0") != 0 )
       {
@@ -267,11 +268,22 @@ build_main_that_calls_something(const char *something)
 
   gg_set_current_line_number(DEFAULT_LINE_NUMBER);
 
-  gg_define_function( INT,
-                      "main",
-                      INT, "argc",
-                      build_pointer_type(CHAR_P), "argv",
-                      NULL_TREE);
+  tree function_decl = gg_define_function( INT,
+                                           "main",
+                                           "main",
+                                           INT, "argc",
+                                           build_pointer_type(CHAR_P), "argv",
+                                           NULL_TREE);
+
+  // Modify the default settings for main(), as empirically determined from
+  // examining C/C+_+ compilations.  (See the comment for gg_build_fn_decl()).
+    TREE_ADDRESSABLE(function_decl) = 0;
+    TREE_USED(function_decl) = 0;
+    TREE_NOTHROW(function_decl) = 0;
+    TREE_STATIC(function_decl) = 1;
+    DECL_EXTERNAL (function_decl) = 0;
+    TREE_PUBLIC (function_decl) = 1;
+    DECL_NO_INSTRUMENT_FUNCTION_ENTRY_EXIT(function_decl) = 1;
 
   // Pick up pointers to the input parameters:
   // First is the INT which is the number of argv[] entries
@@ -701,23 +713,35 @@ struct called_tree_t {
   };
 };
 
-static std::map<program_reference_t, std::list<called_tree_t> > call_targets;
+static std::map<program_reference_t, std::list<tree> > call_targets;
 static std::map<tree, cbl_call_convention_t> called_targets;
 
-static void
-parser_call_target( tree func )
+static
+void
+set_call_convention(tree function_decl, cbl_call_convention_t convention)
   {
-    cbl_call_convention_t convention = current_call_convention();
-    const char *name = IDENTIFIER_POINTER( DECL_NAME(func) );
-    program_reference_t key(current_program_index(), name);
+  called_targets[function_decl] = convention;
+  }
 
-    // Each func is unique and inserted only once.
-    assert( called_targets.find(func) == called_targets.end() );
-    called_targets[func] = convention;
+static
+void
+parser_call_target( const char *name, tree call_expr )
+  {
+  /*  This routine gets called when parser_call() has been invoked with a
+      literal target.  That target is a COBOL name like "prog_2".  However,
+      there is the case when "prog_2" is a forward reference to a contained
+      program nested inside "prog_1".  In that case, the actual definition
+      of "prog_2" will end up with a name like "prog_2.62", and eventually
+      the target of the call will have to be modified from "prog_2" to
+      "prog_2.62".
 
-    called_tree_t value(func, convention);
-    auto& p = call_targets[key];
-    p.push_back(value);
+      We save the call expression for this call, and then we update it later,
+      after we know whether or not it was a forward reference to a local
+      function. */
+
+  program_reference_t key(current_program_index(), name);
+  auto& p = call_targets[key];
+  p.push_back(call_expr);
   }
 
 /*
@@ -729,17 +753,22 @@ parser_call_target( tree func )
 cbl_call_convention_t
 parser_call_target_convention( tree func )
   {
-    auto p = called_targets.find(func);
-    if( p != called_targets.end() ) return p->second;
+  auto p = called_targets.find(func);
+  if( p != called_targets.end() )
+    {
+    // This was found in our list of call targets
+    return p->second;
+    }
 
-    return cbl_call_cobol_e;
+  return cbl_call_cobol_e;
   }
 
 void
 parser_call_targets_dump()
   {
-    dbgmsg( "call targets for #" HOST_SIZE_T_PRINT_UNSIGNED,
+    dbgmsg( "call targets for #" HOST_SIZE_T_PRINT_UNSIGNED " NOT dumping",
             (fmt_size_t)current_program_index() );
+    return; // not currently working 
     for( const auto& elem : call_targets ) {
       const auto& k = elem.first;
       const auto& v = elem.second;
@@ -748,7 +777,7 @@ parser_call_targets_dump()
               k.called);
       char ch = '[';
       for( auto func : v ) {
-        fprintf( stderr, "%c %s", ch, IDENTIFIER_POINTER(DECL_NAME(func.node)) );
+        fprintf( stderr, "%c %s", ch, IDENTIFIER_POINTER(DECL_NAME(func)) );
         ch = ',';
       }
       fprintf(stderr, " ]\n");
@@ -760,20 +789,27 @@ parser_call_target_update( size_t caller,
                            const char plain_name[],
                            const char mangled_name[] )
   {
-    auto key = program_reference_t(caller, plain_name);
-    auto p = call_targets.find(key);
-    if( p == call_targets.end() ) return 0;
+  auto key = program_reference_t(caller, plain_name);
+  auto p = call_targets.find(key);
+  if( p == call_targets.end() ) return 0;
 
-    for( auto func : p->second )
-      {
-      func.convention = cbl_call_verbatim_e;
-      DECL_NAME(func.node) = get_identifier(mangled_name);
-      }
-    return p->second.size();
+  for( auto call_expr : p->second )
+    {
+    tree fndecl_type = build_varargs_function_type_array( COBOL_FUNCTION_RETURN_TYPE,
+                       0,     // No parameters yet
+                       NULL); // And, hence, no types
+
+    // Fetch the FUNCTION_DECL for that FUNCTION_TYPE
+    tree function_decl = gg_build_fn_decl(mangled_name, fndecl_type);
+    tree function_address = gg_get_address_of(function_decl);
+
+    TREE_OPERAND(call_expr, 1) = function_address;
+    }
+  return p->second.size();
   }
 
 static tree
-function_handle_from_name(cbl_refer_t &name,
+function_pointer_from_name(cbl_refer_t &name,
                           tree function_return_type)
   {
   Analyze();
@@ -782,70 +818,71 @@ function_handle_from_name(cbl_refer_t &name,
                         function_return_type,
                         0,
                         NULL);
-  tree function_pointer = build_pointer_type(function_type);
-  tree function_handle  = gg_define_variable(function_pointer, "..function_handle.1", vs_stack);
-
+  tree function_pointer_type = build_pointer_type(function_type);
+  tree function_pointer       = gg_define_variable(function_pointer_type,
+                                                  "..function_pointer.1",
+                                                  vs_stack);
   if( name.field->type == FldPointer )
     {
     // If the parameter is a pointer, just pick up the value and head for the
     // exit
     if( refer_is_clean(name) )
       {
-      gg_memcpy(gg_get_address_of(function_handle),
+      gg_memcpy(gg_get_address_of(function_pointer),
                 member(name.field->var_decl_node, "data"),
                 sizeof_pointer);
       }
     else
       {
-      gg_memcpy(gg_get_address_of(function_handle),
+      gg_memcpy(gg_get_address_of(function_pointer),
                 qualified_data_location(name),
                 sizeof_pointer);
       }
-    return function_handle;
+    return function_pointer;
     }
   else if( use_static_call() && is_literal(name.field) )
     {
-    // It's a literal, and we are using static calls. Generate the CALL, and
-    // pass the address expression to parser_call_target().  That will cause
-    // parser_call_target_update() to replace any nested CALL "foo" with the
-    // local "foo.60" name.
+    tree fndecl_type = build_varargs_function_type_array( function_return_type,
+                       0,     // No parameters yet
+                       NULL); // And, hence, no types
 
-    // We create a reference to it, which is later resolved by the linker.
-    tree addr_expr = gg_get_function_address( function_return_type,
-                                              name.field->data.initial);
-    gg_assign(function_handle, addr_expr);
-
-    tree func = TREE_OPERAND(addr_expr, 0);
-    parser_call_target(func); // add function to list of call targets
+    // Fetch the FUNCTION_DECL for that FUNCTION_TYPE
+    tree function_decl = gg_build_fn_decl(name.field->data.initial,
+                                          fndecl_type);
+    // Take the address of the function decl:
+    tree address_of_function = gg_get_address_of(function_decl);
+    gg_assign(function_pointer, address_of_function);
     }
   else
     {
-    // This is not a literal or static
+    // We are not using static calls.
     if( name.field->type == FldLiteralA )
       {
-      gg_assign(function_handle,
+      gg_assign(function_pointer,
                 gg_cast(build_pointer_type(function_type),
-                        gg_call_expr(VOID_P,
-                                    "__gg__function_handle_from_literal",
-                                    build_int_cst_type(INT, current_function->our_symbol_table_index),
-                                    gg_string_literal(name.field->data.initial),
-                                    NULL_TREE)));
+                        gg_call_expr( VOID_P,
+                                  "__gg__function_handle_from_literal",
+                                  build_int_cst_type(INT,
+                                    current_function->our_symbol_table_index),
+                                  gg_string_literal(name.field->data.initial),
+                                  NULL_TREE)));
       }
     else
       {
-      gg_assign(function_handle,
+      gg_assign(function_pointer,
                 gg_cast(build_pointer_type(function_type),
                         gg_call_expr( VOID_P,
-                                      "__gg__function_handle_from_name",
-                                      build_int_cst_type(INT, current_function->our_symbol_table_index),
-                                      gg_get_address_of(name.field->var_decl_node),
-                                      refer_offset(name),
-                                      refer_size_source(  name),
-                                      NULL_TREE)));
+                                "__gg__function_handle_from_name",
+                                build_int_cst_type(INT,
+                                current_function->our_symbol_table_index),
+                                gg_get_address_of(name.field->var_decl_node),
+                                refer_offset(name),
+                                refer_size_source(  name),
+                                NULL_TREE)));
       }
     }
 
-  return function_handle;
+  return function_pointer;
   }
 
 void
@@ -879,11 +916,11 @@ parser_initialize_programs(size_t nprogs, struct cbl_refer_t *progs)
 
   for( size_t i=0; i<nprogs; i++ )
     {
-    tree function_handle = function_handle_from_name( progs[i],
-                                                    COBOL_FUNCTION_RETURN_TYPE);
+    tree function_pointer = function_pointer_from_name( progs[i],
+                                                        COBOL_FUNCTION_RETURN_TYPE);
     gg_call(VOID,
             "__gg__to_be_canceled",
-            gg_cast(SIZE_T, function_handle),
+            gg_cast(SIZE_T, function_pointer),
             NULL_TREE);
     }
   }
@@ -998,14 +1035,13 @@ parser_compile_dcls( const std::vector<uint64_t>& dcls )
     return NULL_TREE;
     }
 
-  char ach[32];
+  char ach[64];
   static int counter = 1;
   sprintf(ach, "_dcls_table_%d", counter++);
   tree retval =  array_of_long_long(ach, dcls);
   SHOW_IF_PARSE(nullptr)
     {
     SHOW_PARSE_HEADER
-    char ach[64];
     snprintf(ach, sizeof(ach), " Size is %lu; retval is %p",
              gb4(dcls.size()), as_voidp(retval));
     SHOW_PARSE_TEXT(ach);
@@ -1014,7 +1050,6 @@ parser_compile_dcls( const std::vector<uint64_t>& dcls )
   TRACE1
     {
     TRACE1_HEADER
-    char ach[64];
     snprintf(ach, sizeof(ach), " Size is %lu; retval is %p",
              gb4(dcls.size()), as_voidp(retval));
     TRACE1_TEXT_ABC("", ach, "");
@@ -1077,7 +1112,7 @@ set_exception_environment( tree ecs, tree dcls )
   }
 
 void
-parser_statement_begin( const cbl_name_t statement_name, 
+parser_statement_begin( const cbl_name_t statement_name,
                         tree ecs,
                         tree dcls )
   {
@@ -1116,7 +1151,7 @@ parser_statement_begin( const cbl_name_t statement_name,
   // operation, we need to store the location information and do the exception
   // overhead:
 
-  static const std::set<std::string> file_ops = 
+  static const std::set<std::string> file_ops =
     {
     "OPEN",
     "CLOSE",
@@ -1131,7 +1166,7 @@ parser_statement_begin( const cbl_name_t statement_name,
   //  the execution time of a program doing two-billion simple adds in an inner
   //  loop dropped from 3.8 seconds to 0.175 seconds.
 
-  bool exception_processing = enabled_exceptions.size() ;
+  bool exception_processing = cdf_enabled_exceptions().size() ;
 
   if( !exception_processing )
     {
@@ -1552,7 +1587,7 @@ parser_initialize(const cbl_refer_t& refer, bool like_parser_symbol_add)
 
 static void
 get_binary_value_from_float(tree         value,
-                            cbl_refer_t &dest,
+                      const cbl_refer_t &dest,
                             cbl_field_t *source,
                             tree         source_offset
                             )
@@ -1646,6 +1681,7 @@ depending_on_value(tree depending_on, cbl_field_t *current_sizer)
 //  gg_assign(occurs_lower, build_int_cst_type(LONG, current_sizer->occurs.bounds.lower));
 //  gg_assign(occurs_upper, build_int_cst_type(LONG, current_sizer->occurs.bounds.upper));
 
+  gcc_assert(current_sizer);
   if( current_sizer->occurs.depending_on )
     {
     get_depending_on_value_from_odo(depending_on, current_sizer);
@@ -1789,16 +1825,12 @@ normal_normal_compare(bool debugging,
               NULL_TREE);
     }
 
-  bool needs_adjusting;
   if( !left_intermediate && !right_intermediate )
     {
     // Yay!  Both sides have fixed rdigit values.
 
-    // Flag needs_adjusting as false, because we are going to do it here:
-    needs_adjusting = false;
     int adjust =   get_scaled_rdigits(left_side_ref->field)
                  - get_scaled_rdigits(right_side_ref->field);
-
     if( adjust > 0 )
       {
       // We need to make right_side bigger to match the scale of left_side
@@ -1813,6 +1845,7 @@ normal_normal_compare(bool debugging,
   else
     {
     // At least one side is right_intermediate
+    bool needs_adjusting;
 
     tree adjust;
     if( !left_intermediate && right_intermediate )
@@ -2321,7 +2354,7 @@ cobol_compare(  tree return_int,
                 build_int_cst_type(INT, rightflags),
                 integer_zero_node,
                 NULL_TREE));
-    compared = true;
+    // compared = true;  // Commented out to quiet cppcheck
     }
 
 //  gg_printf("   result is %d\n", return_int, NULL_TREE);
@@ -2527,7 +2560,7 @@ get_string_from(cbl_field_t *field)
   }
 
 static char *
-combined_name(cbl_label_t *label)
+combined_name(const cbl_label_t *label)
   {
   // This routine returns a pointer to a static, so make sure you use the result
   // before calling the routine again
@@ -2542,7 +2575,7 @@ combined_name(cbl_label_t *label)
     if( label->parent )
       {
       // It's possible for implicit
-      cbl_label_t *section_label = cbl_label_of(symbol_at(label->parent));
+      const cbl_label_t *section_label = cbl_label_of(symbol_at(label->parent));
       sect_name = section_label->name;
       }
     }
@@ -3279,7 +3312,7 @@ parser_perform(cbl_label_t *label, bool suppress_nexting)
   char ach[256];
   if( label->type == LblParagraph )
     {
-    cbl_label_t *section_label = cbl_label_of(symbol_at(label->parent));
+    const cbl_label_t *section_label = cbl_label_of(symbol_at(label->parent));
     para_name = label->name;
     sect_name = section_label->name;
     sprintf(ach,
@@ -3599,8 +3632,6 @@ parser_first_statement( int lineno )
     }
   }
 
-#define linemap_add(...)
-
 void
 parser_enter_file(const char *filename)
   {
@@ -3631,9 +3662,6 @@ parser_enter_file(const char *filename)
       main_entry_point = xstrdup(pname);
       }
     }
-
-  // Let the linemap routine know we are working on a new file:
-  linemap_add(line_table, LC_ENTER, 0, filename, 1);
 
   if( file_level == 0 )
     {
@@ -3707,16 +3735,22 @@ parser_leave_file()
     {
     SHOW_PARSE_HEADER
     char ach[256];
-    sprintf(ach, "leaving level:%d %s", file_level, current_filename.back().c_str());
+    sprintf(ach,
+            "leaving level:%d %s",
+            file_level,
+            current_filename.back().c_str());
     SHOW_PARSE_TEXT(ach)
     SHOW_PARSE_END
     }
-  if( file_level > 0)
-    {
-    linemap_add(line_table, LC_LEAVE, false, NULL, 0);
-    }
   file_level -= 1;
   current_filename.pop_back();
+
+  if( file_level == 0 )
+    {
+    // We are leaving the top-level file, which means this compilation is
+    // done, done, done.
+    gg_leaving_the_source_code_file();
+    }
   }
 
 void
@@ -3731,15 +3765,16 @@ enter_program_common(const char *funcname, const char *funcname_)
   // have no parameters.  We'll chain the parameters on in parser_division(),
   // when we process PROCEDURE DIVISION USING...
 
-  gg_define_function_with_no_parameters( COBOL_FUNCTION_RETURN_TYPE,
-                                         funcname,
-                                         funcname_);
+  gg_define_function(COBOL_FUNCTION_RETURN_TYPE,
+                     funcname,
+                     funcname_,
+                     NULL_TREE);
 
   current_function->first_time_through =
-    gg_define_variable(INT,
-                        "_first_time_through",
-                        vs_static,
-                        integer_one_node);
+                                  gg_define_variable(INT,
+                                                      "_first_time_through",
+                                                      vs_static,
+                                                      integer_one_node);
 
   gg_create_goto_pair(&current_function->skip_init_goto,
                       &current_function->skip_init_label);
@@ -3763,8 +3798,6 @@ enter_program_common(const char *funcname, const char *funcname_)
 
   current_function->current_section = NULL;
   current_function->current_paragraph = NULL;
-
-  current_function->is_truly_nested = false;
 
   // Text conversion must be initialized before the code generated by
   // parser_symbol_add runs.
@@ -3825,20 +3858,31 @@ parser_enter_program( const char *funcname_,
   // The first thing we have to do is mangle this name.  This is safe even
   // though the end result will be mangled again, because the mangler doesn't
   // change a mangled name.
-  char *mangled_name = cobol_name_mangler(funcname_);
+   
+  char *mangled_name;
+ 
+  if( current_call_convention() == cbl_call_cobol_e )
+    {
+    mangled_name = cobol_name_mangler(funcname_);
+    }
+  else
+    {
+    mangled_name = xstrdup(funcname_);
+    }
 
   size_t parent_index = current_program_index();
-  char funcname[128];
+  char *funcname;
   if( parent_index )
     {
     // This is a nested function.  Tack on the parent_index to the end of it.
-    sprintf(funcname, "%s." HOST_SIZE_T_PRINT_DEC, mangled_name,
-            (fmt_size_t)parent_index);
+    funcname = xasprintf( "%s." HOST_SIZE_T_PRINT_DEC,
+                          mangled_name,
+                          (fmt_size_t)parent_index);
     }
   else
     {
     // This is a top-level function; just use the straight mangled name
-    strcpy(funcname, mangled_name);
+    funcname = xstrdup(mangled_name);
     }
   free(mangled_name);
 
@@ -3904,6 +3948,8 @@ parser_enter_program( const char *funcname_,
     TRACE1_TEXT("\"")
     TRACE1_END
     }
+
+  free(funcname);
   }
 
 void
@@ -4290,67 +4336,182 @@ psa_FldBlob(struct cbl_field_t *var )
   }
 
 void
-parser_accept(  struct cbl_refer_t refer,
-                enum special_name_t special_e )
+parser_accept(struct cbl_refer_t tgt,
+              special_name_t special_e,
+              cbl_label_t *error,
+              cbl_label_t *not_error )
   {
-  Analyze();
   SHOW_PARSE
     {
     SHOW_PARSE_HEADER
-    SHOW_PARSE_REF(" ", refer);
+    if( error )
+      {
+      SHOW_PARSE_LABEL(" error ", error)
+      }
+    if( not_error )
+      {
+      SHOW_PARSE_LABEL(" not_error ", not_error)
+      }
     SHOW_PARSE_END
     }
-  TRACE1
-    {
-    TRACE1_HEADER
-    TRACE1_END
-    }
-
-  /*
-  enum special_name_t
-      {
-        SYSIN_e,
-        SYSIPT_e,
-        SYSOUT_e,
-        SYSLIST_e,
-        SYSLST_e,
-        SYSPUNCH_e,
-        SYSPCH_e,
-        CONSOLE_e,
-        C01_e, C02_e, C03_e, C04_e, C05_e, C06_e,
-        C07_e, C08_e, C09_e, C10_e, C11_e, C12_e,
-        CSP_e,
-        S01_e, S02_e, S03_e, S04_e, S05_e,
-        AFP_5A_e,
-  };
-  */
 
   // The ISO spec describes the valid special names for ACCEPT as implementation
   // dependent.  We are following IBM's lead.
 
   tree environment = build_int_cst_type(INT, special_e);
 
-  switch( special_e )
+  const char *function_to_call = NULL;
+
+  switch(special_e)
     {
+    case STDIN_e:
     case CONSOLE_e:
     case SYSIPT_e:
     case SYSIN_e:
-      break;
-    default:
-      dbgmsg("%s(): We don't know what to do with special_name_t %d,", __func__, special_e);
-      dbgmsg("%s(): so we are ignoring it.", __func__);
-      yywarn("unrecognized SPECIAL NAME ignored");
+      // This is ordinary input from from the stdin:
+      gg_call(VOID,
+              "__gg__accept",
+              environment,
+              gg_get_address_of(tgt.field->var_decl_node),
+              refer_offset(tgt),
+              refer_size_dest(tgt),
+              NULL_TREE);
       return;
       break;
-    }
 
-  gg_call(VOID,
-          "__gg__accept",
-          environment,
-          gg_get_address_of(refer.field->var_decl_node),
-          refer_offset(refer),
-          refer_size_dest(refer),
-          NULL_TREE);
+    case C01_e:
+    case C02_e:
+    case C03_e:
+    case C04_e:
+    case C05_e:
+    case C06_e:
+    case C07_e:
+    case C08_e:
+    case C09_e:
+    case C10_e:
+    case C11_e:
+    case C12_e:
+    case CSP_e:
+    case S01_e:
+    case S02_e:
+    case S03_e:
+    case S04_e:
+    case S05_e:
+    case AFP_5A_e:
+    case STDOUT_e:
+    case SYSOUT_e:
+    case SYSLIST_e:
+    case SYSLST_e:
+    case STDERR_e:
+    case SYSPUNCH_e:
+    case SYSPCH_e:
+    case SYSERR_e:
+      cbl_internal_error("Not valid for ACCEPT statement.");
+      break;
+
+    case ARG_NUM_e:
+      // This ACCEPT statement wants the number of argv values:
+      gg_call(VOID,
+              "__gg__get_argc",
+              gg_get_address_of(tgt.field->var_decl_node),
+              refer_offset(tgt),
+              refer_size_source(tgt),
+              NULL_TREE);
+       return;
+       break;
+
+    case ENV_NAME_e:
+      // This fetches the environment name set by DISPLAY... UPON ENV_NAME_e
+      gg_call(VOID,
+              "__gg__get_env_name",
+              gg_get_address_of(tgt.field->var_decl_node),
+              refer_offset(tgt),
+              refer_size_source(tgt),
+              NULL_TREE);
+       return;
+       break;
+
+    case ENV_VALUE_e:
+      // This fetches the environment value associated with the previously
+      // esablished name
+      function_to_call = "__gg__get_env_value";
+      break;
+
+    case ARG_VALUE_e:
+      // We are fetching the variable whose index was established by a prior
+      // DISPLAY UPON ARGUMENT-NUMBER.  After the fetch, the value will be 
+      // incremented by one.
+      function_to_call = "__gg__accept_arg_value";
+      break;
+    }
+  if( function_to_call )
+    {
+    tree erf = gg_define_int();
+    gg_assign(erf,
+              gg_call_expr(  INT,
+                            function_to_call,
+                            gg_get_address_of(tgt.field->var_decl_node),
+                            refer_offset(tgt),
+                            refer_size_dest(tgt),
+                            NULL_TREE));
+    if( error )
+      {
+      // There is an ON EXCEPTION phrase:
+      IF( erf, ne_op, integer_zero_node )
+        {
+        SHOW_PARSE
+          {
+          SHOW_PARSE_INDENT
+          SHOW_PARSE_TEXT("Laying down GOTO     error->INTO for_argv")
+          SHOW_PARSE_LABEL(" ", error)
+          }
+        gg_append_statement( error->structs.arith_error->into.go_to );
+        }
+      ELSE
+        {
+        }
+        ENDIF
+      }
+    if( not_error )
+      {
+      // There is an NOT ON EXCEPTION phrase:
+      IF( erf, eq_op, integer_zero_node )
+        {
+        SHOW_PARSE
+          {
+          SHOW_PARSE_INDENT
+          SHOW_PARSE_TEXT("Laying down GOTO not_error->INTO for_argv")
+          SHOW_PARSE_LABEL(" ", not_error)
+          }
+        gg_append_statement( not_error->structs.arith_error->into.go_to );
+        }
+      ELSE
+        {
+        }
+        ENDIF
+      }
+    if( error )
+      {
+      SHOW_PARSE
+        {
+        SHOW_PARSE_INDENT
+        SHOW_PARSE_TEXT("Laying down LABEL     error->bottom")
+        SHOW_PARSE_LABEL(" ", error)
+        }
+      gg_append_statement( error->structs.arith_error->bottom.label );
+      }
+    if( not_error )
+      {
+      SHOW_PARSE
+        {
+        SHOW_PARSE_INDENT
+        SHOW_PARSE_TEXT("Laying down LABEL not_error->bottom")
+        SHOW_PARSE_LABEL(" ", not_error)
+        SHOW_PARSE_END
+        }
+      gg_append_statement( not_error->structs.arith_error->bottom.label );
+      }
+    }
   }
 
 // TODO: update documentation.
@@ -5201,22 +5362,29 @@ parser_display_field(cbl_field_t *field)
                                 DISPLAY_NO_ADVANCE);
   }
 
-/*
- * The first parameter to parser_display is the "device" upon which to display
- * the data. Besides normal devices, these may include elements that define the
- * Unix command line and environment:
- *  1.  ARG_NUM_e, the ARGUMENT-NUMBER
- *  2.  ARG_VALUE_e, the ARGUMENT-VALUE
- *  3.  ENV_NAME_e, the ENVIRONMENT-NAME
- *  4.  ENV_VALUE_e, the ENVIRONMENT-VALUE
- * that need special care and feeding.
- */
 void
 parser_display( const struct cbl_special_name_t *upon,
-                struct cbl_refer_t refs[],
-                size_t n,
-                bool advance )
+                std::vector<cbl_refer_t> refs, 
+                bool advance, 
+                cbl_label_t *not_error, 
+                cbl_label_t *error )
   {
+  const size_t n = refs.size();
+  /*
+   * The first parameter to parser_display is the "device" upon which to display
+   * the data. Besides normal devices, these may include elements that define the
+   * Unix command line and environment:
+   *  1.  ARG_NUM_e, the ARGUMENT-NUMBER
+   *  2.  ARG_VALUE_e, the ARGUMENT-VALUE
+   *  3.  ENV_NAME_e, the ENVIRONMENT-NAME
+   *  4.  ENV_VALUE_e, the ENVIRONMENT-VALUE
+   * that need special care and feeding.
+   */
+
+  // At the present time, I am not sure what not_error and error are for
+  gcc_assert(!not_error);
+  gcc_assert(!error);
+
   Analyze();
   SHOW_PARSE
     {
@@ -5225,7 +5393,7 @@ parser_display( const struct cbl_special_name_t *upon,
     for(size_t i=0; i<n; i++)
       {
       SHOW_PARSE_INDENT
-      SHOW_PARSE_REF("", refs[i]);
+      SHOW_PARSE_REF("", refs.at(i));
       }
     if( advance )
       {
@@ -5257,23 +5425,81 @@ parser_display( const struct cbl_special_name_t *upon,
     {
     switch(upon->id)
       {
+      // See table 5 in the IBM Cobol For Linux x86 1.2 document.
+
+      case STDIN_e:
+      case SYSIN_e:
+      case SYSIPT_e:
+        cbl_internal_error("Attempting to send to an input device.");
+        break;
+
+      case C01_e:
+      case C02_e:
+      case C03_e:
+      case C04_e:
+      case C05_e:
+      case C06_e:
+      case C07_e:
+      case C08_e:
+      case C09_e:
+      case C10_e:
+      case C11_e:
+      case C12_e:
+      case CSP_e:
+      case S01_e:
+      case S02_e:
+      case S03_e:
+      case S04_e:
+      case S05_e:
+      case AFP_5A_e:
+      case ARG_VALUE_e:
+        cbl_internal_error("Not valid for DISPLAY statement.");
+        break;
+
       case STDOUT_e:
-      case SYSOUT_e:
-      case SYSLIST_e:
-      case SYSLST_e:
       case CONSOLE_e:
+        // These are inarguably stdout
         gg_assign(file_descriptor, integer_one_node);
         break;
 
       case STDERR_e:
-      case SYSPUNCH_e:
-      case SYSPCH_e:
+      case SYSERR_e:
+        // These are inarguably stderr
         gg_assign(file_descriptor, integer_two_node);
         break;
 
+      case SYSOUT_e:
+      case SYSLIST_e:
+      case SYSLST_e:
+      case SYSPUNCH_e:
+      case SYSPCH_e:
+        // In the 21st century, when there are no longer valid assumptions to
+        // be made about the existence of line printers, and where things
+        // formerly-ubiquitous card punches no longer exist, there is a need
+        // for the possibility of assigning these "devices" to externally-
+        // determined Unix gadgetry in /dev:
+        gg_assign(file_descriptor,
+                  gg_call_expr( INT,
+                                "__gg__get_file_descriptor",
+                                gg_string_literal(upon->os_filename),
+                                NULL_TREE));
+        needs_closing = true;
+        break;
+
+      case ARG_NUM_e:
+        // Set the index number for a subsequent ACCEPT FROM ARG_VALUE_e
+        gg_call(VOID,
+                "__gg__set_arg_num",
+                gg_get_address_of(refs[0].field->var_decl_node),
+                refer_offset(refs[0]),
+                refer_size_source(refs[0]),
+                NULL_TREE);
+         return;
+         break;
+
       case ENV_NAME_e:
-        // This Part I of the slightly absurd method of using DISPLAY...UPON
-        // to fetch, or set, environment variables.
+        // Establish the name of an environment variable for later use with
+        // in either DISPLAY UPON or ACCEPT FROM
         gg_call(VOID,
                 "__gg__set_env_name",
                 gg_get_address_of(refs[0].field->var_decl_node),
@@ -5283,19 +5509,16 @@ parser_display( const struct cbl_special_name_t *upon,
          return;
          break;
 
-      default:
-        if( upon->os_filename[0] )
-          {
-          tree topen = gg_open( gg_string_literal(upon->os_filename),
-                                build_int_cst_type(INT, O_APPEND|O_WRONLY));
-          gg_assign(file_descriptor, topen);
-          needs_closing = true;
-          }
-        else
-          {
-          fprintf(stderr, "We don't know what to do in parser_display\n");
-          gcc_unreachable();
-          }
+      case ENV_VALUE_e:
+        // Set the contents of the environment variable named with ENV_NAME_e
+        gg_call(VOID,
+                "__gg__set_env_value",
+                gg_get_address_of(refs[0].field->var_decl_node),
+                refer_offset(refs[0]),
+                refer_size_source(refs[0]),
+                NULL_TREE);
+         return;
+         break;
       }
     }
   else
@@ -5310,12 +5533,9 @@ parser_display( const struct cbl_special_name_t *upon,
     }
   CHECK_FIELD(refs[n-1].field);
   parser_display_internal(file_descriptor, refs[n-1], advance ? DISPLAY_ADVANCE : DISPLAY_NO_ADVANCE);
-
   if( needs_closing )
     {
-    tree tclose = gg_close(file_descriptor);
-    // We are ignoring the close() return value
-    gg_append_statement(tclose);
+    gg_close(file_descriptor);
     }
 
   cursor_at_sol = advance;
@@ -5973,7 +6193,7 @@ tree_type_from_field_type(cbl_field_t *field, size_t &nbytes)
       case FldNumericDisplay:
       case FldNumericBinary:
       case FldPacked:
-        if( field->data.digits > 18 )
+      if( field->data.digits > 18 )
           {
           retval = UINT128;
           nbytes = 16;
@@ -6031,14 +6251,14 @@ tree_type_from_field_type(cbl_field_t *field, size_t &nbytes)
                 cbl_field_type_str(field->type));
         break;
       }
-    }
-  if( retval == SIZE_T && field->attr & signable_e )
-    {
-    retval = SSIZE_T;
-    }
-  if( retval == UINT128 && field->attr & signable_e )
-    {
-    retval = INT128;
+    if( retval == SIZE_T && field->attr & signable_e )
+      {
+      retval = SSIZE_T;
+      }
+    if( retval == UINT128 && field->attr & signable_e )
+      {
+      retval = INT128;
+      }
     }
   return retval;
   }
@@ -6054,12 +6274,13 @@ restore_local_variables()
 
 static inline bool
 is_valuable( cbl_field_type_t type ) {
+  /*  The name of this routine is a play on words, in English.  It doesn't
+      mean "Is worth a lot".  It means "Can be converted to a value." */
   switch ( type ) {
   case FldInvalid:
   case FldGroup:
   case FldAlphanumeric:
   case FldNumericEdited:
-  case FldAlphaEdited:
   case FldLiteralA:
   case FldClass:
   case FldConditional:
@@ -6072,6 +6293,7 @@ is_valuable( cbl_field_type_t type ) {
   // COBOL form to a little-endian binary representation so that they
   // can be conveyed BY CONTENT/BY VALUE in a CALL or user-defined
   // function activation.
+  case FldAlphaEdited:
   case FldNumericDisplay:
   case FldNumericBinary:
   case FldFloat:
@@ -6126,7 +6348,7 @@ parser_exit_program(void)  // exits back to COBOL only, else continue
 
 static
 void
-pe_stuff(cbl_refer_t refer, ec_type_t ec)
+program_end_stuff(cbl_refer_t refer, ec_type_t ec)
   {
   // This is the moral equivalent of a C "return xyz;".
 
@@ -6148,9 +6370,6 @@ pe_stuff(cbl_refer_t refer, ec_type_t ec)
     tree retval   = gg_define_variable(return_type);
 
     gg_assign(retval, gg_cast(return_type, integer_zero_node));
-
-    gg_modify_function_type(current_function->function_decl,
-                            return_type);
 
     if( is_valuable( field_type ) )
       {
@@ -6192,12 +6411,12 @@ pe_stuff(cbl_refer_t refer, ec_type_t ec)
 
       tree array_type = build_array_type_nelts(UCHAR,
                                     returner->data.capacity);
-      tree retval     =  gg_define_variable(array_type, vs_static);
-      gg_memcpy(gg_get_address_of(retval),
+      tree array     =  gg_define_variable(array_type, vs_static);
+      gg_memcpy(gg_get_address_of(array),
                 member(returner->var_decl_node, "data"),
                 member(returner->var_decl_node, "capacity"));
 
-      tree actual = gg_cast(COBOL_FUNCTION_RETURN_TYPE, gg_get_address_of(retval));
+      tree actual = gg_cast(COBOL_FUNCTION_RETURN_TYPE, gg_get_address_of(array));
 
       restore_local_variables();
       gg_return(actual);
@@ -6254,7 +6473,7 @@ parser_exit( const cbl_refer_t& refer, ec_type_t ec )
     IF( current_function->called_by_main_counter, eq_op, integer_zero_node )
       {
       // This function wasn't called by main, so we treat it like a GOBACK
-      pe_stuff(refer, ec);
+      program_end_stuff(refer, ec);
       }
     ELSE
       {
@@ -6265,7 +6484,7 @@ parser_exit( const cbl_refer_t& refer, ec_type_t ec )
         // This was a recursive call into the function originally called by
         // main.  Because we are under the control of a calling program, we
         // treat this like a GOBACK
-        pe_stuff(refer, ec);
+        program_end_stuff(refer, ec);
         }
       ELSE
         {
@@ -6290,7 +6509,7 @@ parser_exit( const cbl_refer_t& refer, ec_type_t ec )
       {
       }
       ENDIF
-    pe_stuff(refer, ec);
+    program_end_stuff(refer, ec);
     }
   }
 
@@ -6802,6 +7021,10 @@ parser_division(cbl_division_t division,
       {
       parser_local_add(returning);
       current_function->returning = returning;
+
+      size_t nbytes = 0;
+      tree returning_type = tree_type_from_field_type(returning, nbytes);
+      gg_modify_function_type(current_function->function_decl, returning_type);
       }
 
     // Stash the returning variables for use during parser_return()
@@ -6824,7 +7047,6 @@ parser_division(cbl_division_t division,
       // expected formal parameter and tacks it onto the end of the
       // function's arguments chain.
 
-      char ach[2*sizeof(cbl_name_t)];
       sprintf(ach, "_p_%s", args[i].refer.field->name);
 
       size_t nbytes = 0;
@@ -9895,8 +10117,8 @@ parser_file_start(struct cbl_file_t *file,
     // A key has a number of fields
     for(size_t ifield=0; ifield<file->keys[key_number].nfield; ifield++)
       {
-      size_t field_index = file->keys[key_number].fields[ifield];
-      cbl_field_t *field = cbl_field_of(symbol_at(field_index));
+      size_t nfield = file->keys[key_number].fields[ifield];
+      cbl_field_t *field = cbl_field_of(symbol_at(nfield));
       combined_length += field->data.capacity;
       }
     gg_assign(length, build_int_cst_type(SIZE_T, combined_length));
@@ -9923,7 +10145,7 @@ parser_file_start(struct cbl_file_t *file,
 
 static void
 inspect_tally(bool backward,
-              cbl_refer_t identifier_1,
+        const cbl_refer_t &identifier_1,
               cbl_inspect_opers_t& identifier_2)
   {
   Analyze();
@@ -10123,8 +10345,8 @@ inspect_tally(bool backward,
 
 static void
 inspect_replacing(int backward,
-                  cbl_refer_t identifier_1,
-                  cbl_inspect_opers_t& operations)
+            const cbl_refer_t &identifier_1,
+                  cbl_inspect_opers_t &operations)
   {
   Analyze();
   // This is an INSPECT FORMAT 2
@@ -12014,6 +12236,8 @@ parser_file_merge(  cbl_file_t *workfile,
   ELSE
     ENDIF
 
+  cbl_enabled_exceptions_t& enabled_exceptions( cdf_enabled_exceptions() );
+  
   for(size_t i=0; i<ninputs; i++)
     {
     if( process_this_exception(ec_sort_merge_file_open_e) )
@@ -12462,11 +12686,11 @@ static
 void
 create_and_call(size_t narg,
                 cbl_ffi_arg_t args[],
-                tree function_handle,
+                tree function_pointer,
+                const char *funcname,
                 tree returned_value_type,
                 cbl_refer_t returned,
-                cbl_label_t *not_except
-                )
+                cbl_label_t *not_except)
   {
   // We have a good function handle, so we are going to create a call
   tree *arguments = NULL;
@@ -12687,27 +12911,66 @@ create_and_call(size_t narg,
   gg_assign(var_decl_call_parameter_count,
             build_int_cst_type(INT, narg));
 
-  gg_assign(var_decl_call_parameter_signature,
-            gg_cast(CHAR_P, function_handle));
+  tree call_expr = NULL_TREE;
+  if( function_pointer )
+    {
+    gg_assign(var_decl_call_parameter_signature,
+              gg_cast(CHAR_P, function_pointer));
 
-  tree call_expr = gg_call_expr_list( returned_value_type,
-                                      function_handle,
+    call_expr = gg_call_expr_list(returned_value_type,
+                                  function_pointer,
+                                  narg,
+                                  arguments );
+    }
+  else
+    {
+    tree fndecl_type = build_varargs_function_type_array( returned_value_type,
+                       0,     // No parameters yet
+                       NULL); // And, hence, no types
+
+    // Fetch the FUNCTION_DECL for that FUNCTION_TYPE
+    tree function_decl = gg_build_fn_decl(funcname, fndecl_type);
+    set_call_convention(function_decl, current_call_convention());
+    
+    // Take the address of the function decl:
+    tree address_of_function = gg_get_address_of(function_decl);
+
+    // Stash that address as the called program's signature:
+    tree address_as_char_p = gg_cast(CHAR_P, address_of_function);
+    tree assigment = gg_assign( var_decl_call_parameter_signature,
+                                address_as_char_p);
+    // The source of the assigment is the second element of a MODIFY_EXPR
+    parser_call_target( funcname, assigment );
+
+    // Create the call_expr from that address
+    call_expr = build_call_array_loc( location_from_lineno(),
+                                      returned_value_type,
+                                      address_of_function,
                                       narg,
-                                      arguments );
+                                      arguments);
+    // Among other possibilities, this might be a forward reference to a
+    // contained function.  The name  here is "prog2", and ultimately will need
+    // to be replaced with a call to "prog2.62".  So, this call expr goes into
+    // a list of call expressions whose function_decl targets will be replaced.
+    parser_call_target( funcname, call_expr );
+    }
+
   tree returned_value;
+
   if( returned.field )
     {
-    returned_value = gg_define_variable(returned_value_type);
+    // Because the CALL had a RETURNING clause, RETURN-CODE doesn't return a
+    // value.  So, we make sure it is zero
+    //// gg_assign(var_decl_return_code, build_int_cst_type(SHORT, 0));
 
-    // We are expecting a return value of type CHAR_P, SSIZE_T, SIZE_T,
-    // UINT128 or INT128
+    // We expect the return value to be a 64-bit or 128-bit integer.  How
+    // we treat that returned value depends on the target.
+
+    // Pick up that value:
+    returned_value = gg_define_variable(returned_value_type);
     push_program_state();
     gg_assign(returned_value, gg_cast(returned_value_type, call_expr));
     pop_program_state();
-
-    // Because the CALL had a RETURNING clause, RETURN-CODE doesn't return a
-    // value.  So, we make sure it is zero
-////    gg_assign(var_decl_return_code, build_int_cst_type(SHORT, 0));
 
     if( returned_value_type == CHAR_P )
       {
@@ -12918,39 +13181,49 @@ parser_call(   cbl_refer_t name,
   // We are getting close to establishing the function_type.  To do that,
   // we want to establish the function's return type.
 
-//  gg_push_context();
   size_t nbytes;
   tree returned_value_type = tree_type_from_field_type(returned.field, nbytes);
 
-  tree function_handle = function_handle_from_name( name,
-                                                    returned_value_type);
-  if(    (use_static_call() && is_literal(name.field))
-      || (name.field && name.field->type == FldPointer) )
+  if( use_static_call() && is_literal(name.field) )
     {
-    // If these conditions are true, then we know we have a good
-    // function_handle, and we don't need to check
+    // name is a literal
     create_and_call(narg,
                     args,
-                    function_handle,
+                    NULL_TREE,
+                    name.field->data.initial,
                     returned_value_type,
                     returned,
-                    not_except
-                    );
+                    not_except);
+    }
+  else if( name.field && name.field->type == FldPointer )
+    {
+    tree function_pointer = function_pointer_from_name( name,
+                                                        returned_value_type);
+    // This is call-by-pointer; we know function_pointer is good:
+    create_and_call(narg,
+                    args,
+                    function_pointer,
+                    nullptr,
+                    returned_value_type,
+                    returned,
+                    not_except);
     }
   else
     {
+    tree function_pointer = function_pointer_from_name( name,
+                                                      returned_value_type);
     // We might not have a good handle, so we have to check:
-    IF( function_handle,
+    IF( function_pointer,
         ne_op,
-        gg_cast(TREE_TYPE(function_handle), null_pointer_node) )
+        gg_cast(TREE_TYPE(function_pointer), null_pointer_node) )
       {
-      create_and_call(narg,
-                      args,
-                      function_handle,
-                      returned_value_type,
-                      returned,
-                      not_except
-                      );
+    create_and_call(narg,
+                    args,
+                    function_pointer,
+                    nullptr,
+                    returned_value_type,
+                    returned,
+                    not_except);
       }
     ELSE
       {
@@ -12998,8 +13271,6 @@ parser_call(   cbl_refer_t name,
     gg_append_statement( not_except->structs.call_exception->bottom.label );
     free( not_except->structs.call_exception );
     }
-//  gg_pop_context();
-
   }
 
 // Set global variable to use alternative ENTRY point.
@@ -13195,10 +13466,10 @@ parser_set_pointers( size_t ntgt, cbl_refer_t *tgts, cbl_refer_t source )
             || source.field->type == FldLiteralA))
       {
       // This is something like SET varp TO ENTRY "ref".
-      tree function_handle = function_handle_from_name(source,
+      tree function_pointer = function_pointer_from_name(source,
                                                    COBOL_FUNCTION_RETURN_TYPE);
       gg_memcpy(qualified_data_location(tgts[i]),
-                gg_get_address_of(function_handle),
+                gg_get_address_of(function_pointer),
                 sizeof_pointer);
       }
     else
@@ -13411,9 +13682,9 @@ parser_program_hierarchy( const cbl_prog_hier_t& hier )
     // are also accessible by us.  Go find them.
     std::vector<const hier_node *>uncles;
     find_uncles(nodes[i], uncles);
-    for( size_t i=0; i<uncles.size(); i++ )
+    for( size_t j=0; j<uncles.size(); j++ )
       {
-      const hier_node *uncle = uncles[i];
+      const hier_node *uncle = uncles[j];
       if( map_of_sets[caller].find(uncle->name) == map_of_sets[caller].end() )
         {
         // We have a COMMON uncle or sibling we haven't seen before.
@@ -13451,9 +13722,8 @@ parser_program_hierarchy( const cbl_prog_hier_t& hier )
       if( callers.find(caller) == callers.end() )
         {
         // We haven't seen this caller before
-        callers.insert(caller);
 
-        char ach[2*sizeof(cbl_name_t)];
+        char ach[3*sizeof(cbl_name_t)];
         tree names_table_type = build_array_type_nelts(CHAR_P, mol->second.size()+1);
         sprintf(ach, "..our_accessible_functions_" HOST_SIZE_T_PRINT_DEC,
                 (fmt_size_t)caller);
@@ -13480,7 +13750,9 @@ parser_program_hierarchy( const cbl_prog_hier_t& hier )
               callee != mol->second.end();
               callee++ )
           {
-          sprintf(ach, "%s." HOST_SIZE_T_PRINT_DEC, (*callee)->name,
+          sprintf(ach,
+                  "%s." HOST_SIZE_T_PRINT_DEC,
+                  (*callee)->name,
                   (fmt_size_t)(*callee)->parent_node->our_index);
 
           CONSTRUCTOR_APPEND_ELT( CONSTRUCTOR_ELTS(constr_names),
@@ -13516,6 +13788,8 @@ parser_program_hierarchy( const cbl_prog_hier_t& hier )
                 (fmt_size_t)caller);
         tree accessible_programs_decl = gg_trans_unit_var_decl(ach);
         gg_assign( accessible_programs_decl, gg_get_address_of(the_constructed_table) );
+
+        callers.insert(caller);
         }
       }
     }
@@ -13633,7 +13907,7 @@ parser_check_fatal_exception()
   // in its innermost loop had an execution time of 19.5 seconds.  By putting in
   // the if() statement, that was reduced to 3.8 seconds.
 
-  if( enabled_exceptions.size() || sv_is_i_o )
+  if( cdf_enabled_exceptions().size() || sv_is_i_o )
     {
     gg_call(VOID,
             "__gg__check_fatal_exception",
@@ -13782,8 +14056,8 @@ conditional_abs(tree source, const cbl_field_t *field)
 
 static bool
 mh_identical(cbl_refer_t &destref,
-             cbl_refer_t &sourceref,
-             TREEPLET    &tsource)
+       const cbl_refer_t &sourceref,
+       const TREEPLET    &tsource)
   {
   // Check to see if the two variables are identical types, thus allowing
   // for a simple byte-for-byte copy of the data areas:
@@ -14123,7 +14397,7 @@ float_type_of(const cbl_field_t *field)
   }
 
 static tree
-float_type_of(cbl_refer_t *refer)
+float_type_of(const cbl_refer_t *refer)
   {
   return float_type_of(refer->field);
   }
@@ -14355,7 +14629,7 @@ picky_memset(tree &dest_p, unsigned char value, size_t length)
   }
 
 static void
-picky_memcpy(tree &dest_p, tree &source_p, size_t length)
+picky_memcpy(tree &dest_p, const tree &source_p, size_t length)
   {
   if( length )
     {
@@ -14375,8 +14649,8 @@ picky_memcpy(tree &dest_p, tree &source_p, size_t length)
 
 static bool
 mh_numeric_display( cbl_refer_t &destref,
-                    cbl_refer_t &sourceref,
-                    TREEPLET    &tsource,
+              const cbl_refer_t &sourceref,
+              const TREEPLET    &tsource,
                     tree size_error)
   {
   bool moved = false;
@@ -14864,8 +15138,8 @@ mh_numeric_display( cbl_refer_t &destref,
 
 static bool
 mh_little_endian( cbl_refer_t &destref,
-                  cbl_refer_t &sourceref,
-                  TREEPLET    &tsource,
+            const cbl_refer_t &sourceref,
+            const TREEPLET    &tsource,
                   bool check_for_error,
                   tree size_error)
   {
@@ -14936,8 +15210,8 @@ mh_little_endian( cbl_refer_t &destref,
 
 static bool
 mh_source_is_group( cbl_refer_t &destref,
-                    cbl_refer_t &sourceref,
-                    TREEPLET    &tsrc)
+              const cbl_refer_t &sourceref,
+              const TREEPLET    &tsrc)
   {
   bool retval = false;
   if( sourceref.field->type == FldGroup && !(destref.field->attr & rjust_e) )
@@ -15002,7 +15276,7 @@ move_helper(tree size_error,        // This is an INT
     {
     // We are creating a copy of the original destination in case we clobber it
     // and have to restore it because of a computational error.
-    bool first_time = true;
+    static bool first_time = true;
     static size_t stash_size = 1024;
     if( first_time )
       {
@@ -15240,7 +15514,7 @@ move_helper(tree size_error,        // This is an INT
       gg_attribute_bit_clear(destref.field, refmod_e);
       }
 
-    moved = true;
+    // moved = true; // commented out to quiet cppcheck
     }
 
   if( restore_on_error )
@@ -16238,13 +16512,27 @@ psa_FldLiteralA(struct cbl_field_t *field )
   // We have the original nul-terminated text at data.initial.  We have a
   // copy of it in buffer[] in the internal codeset.
 
+  static const char name_base[] = "_literal_a_";
+
   // We will reuse a single static structure for each string
   static std::unordered_map<std::string, int> seen_before;
+
   std::string field_string(buffer);
+
+#if 0
+  /*  This code is suppoed to re-use literals, and seems to work just fine in
+      x86_64-linux and on an Apple aarch64 M1 Macbook Pro.  But on an M1
+      mini, using -Os optimization, attempts were made in the generated
+      assembly language to define _literal_a_1 more than once.
+
+      I didn't know how to try to track this one down, so I decided simply to
+      punt by removing the code.
+
+      I am leaving the code here because of a conviction that it someday should
+      be tracked down. */
+
   std::unordered_map<std::string, int>::const_iterator it =
               seen_before.find(field_string);
-
-  static const char name_base[] = "_literal_a_";
 
   if( it != seen_before.end() )
     {
@@ -16258,9 +16546,11 @@ psa_FldLiteralA(struct cbl_field_t *field )
                                                   vs_file_static);
     }
   else
+#endif    
     {
     // We have not seen that string before
-    static int nvar = 1;
+    static int nvar = 0;
+    nvar += 1;
     seen_before[field_string] = nvar;
 
     char ach[32];
@@ -16280,7 +16570,6 @@ psa_FldLiteralA(struct cbl_field_t *field )
     TREE_USED(field->var_decl_node) = 1;
     TREE_STATIC(field->var_decl_node) = 1;
     DECL_PRESERVE_P (field->var_decl_node) = 1;
-    nvar += 1;
     }
 //  TRACE1
 //    {
@@ -16564,7 +16853,7 @@ parser_symbol_add(struct cbl_field_t *new_var )
 
     if( !ancestor && (new_var->level > LEVEL01 && new_var->level <= LEVEL49 ) )
       {
-      cbl_internal_error("%s: %d %qs has NULL ancestor", __func__, 
+      cbl_internal_error("%s: %d %qs has NULL ancestor", __func__,
                          new_var->level, new_var->name);
       }
 

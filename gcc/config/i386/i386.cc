@@ -335,6 +335,14 @@ static int const x86_64_ms_abi_int_parameter_registers[4] =
   CX_REG, DX_REG, R8_REG, R9_REG
 };
 
+/* Similar as Clang's preserve_none function parameter passing.
+   NB: Use DI_REG and SI_REG, see ix86_function_value_regno_p.  */
+
+static int const x86_64_preserve_none_int_parameter_registers[6] =
+{
+  R12_REG, R13_REG, R14_REG, R15_REG, DI_REG, SI_REG
+};
+
 static int const x86_64_int_return_registers[4] =
 {
   AX_REG, DX_REG, DI_REG, SI_REG
@@ -460,7 +468,8 @@ int ix86_arch_specified;
    red-zone.
 
    NB: Don't use red-zone for functions with no_caller_saved_registers
-   and 32 GPRs since 128-byte red-zone is too small for 31 GPRs.
+   and 32 GPRs or 16 XMM registers since 128-byte red-zone is too small
+   for 31 GPRs or 15 GPRs + 16 XMM registers.
 
    TODO: If we can reserve the first 2 WORDs, for PUSH and, another
    for CALL, in red-zone, we can allow local indirect jumps with
@@ -471,7 +480,7 @@ ix86_using_red_zone (void)
 {
   return (TARGET_RED_ZONE
 	  && !TARGET_64BIT_MS_ABI
-	  && (!TARGET_APX_EGPR
+	  && ((!TARGET_APX_EGPR && !TARGET_SSE)
 	      || (cfun->machine->call_saved_registers
 		  != TYPE_NO_CALLER_SAVED_REGISTERS))
 	  && (!cfun->machine->has_local_indirect_jump
@@ -898,6 +907,18 @@ x86_64_elf_unique_section (tree decl, int reloc)
   default_unique_section (decl, reloc);
 }
 
+/* Return true if TYPE has no_callee_saved_registers or preserve_none
+   attribute.  */
+
+bool
+ix86_type_no_callee_saved_registers_p (const_tree type)
+{
+  return (lookup_attribute ("no_callee_saved_registers",
+			    TYPE_ATTRIBUTES (type)) != NULL
+	  || lookup_attribute ("preserve_none",
+			       TYPE_ATTRIBUTES (type)) != NULL);
+}
+
 #ifdef COMMON_ASM_OP
 
 #ifndef LARGECOMM_SECTION_ASM_OP
@@ -1019,11 +1040,10 @@ ix86_function_ok_for_sibcall (tree decl, tree exp)
 
   /* Sibling call isn't OK if callee has no callee-saved registers
      and the calling function has callee-saved registers.  */
-  if (cfun->machine->call_saved_registers != TYPE_NO_CALLEE_SAVED_REGISTERS
-      && (cfun->machine->call_saved_registers
-	  != TYPE_NO_CALLEE_SAVED_REGISTERS_EXCEPT_BP)
-      && lookup_attribute ("no_callee_saved_registers",
-			   TYPE_ATTRIBUTES (type)))
+  if ((cfun->machine->call_saved_registers
+       != TYPE_NO_CALLEE_SAVED_REGISTERS)
+      && cfun->machine->call_saved_registers != TYPE_PRESERVE_NONE
+      && ix86_type_no_callee_saved_registers_p (type))
     return false;
 
   /* If outgoing reg parm stack space changes, we cannot do sibcall.  */
@@ -1188,10 +1208,16 @@ ix86_comp_type_attributes (const_tree type1, const_tree type2)
       != ix86_function_regparm (type2, NULL))
     return 0;
 
-  if (lookup_attribute ("no_callee_saved_registers",
-			TYPE_ATTRIBUTES (type1))
-      != lookup_attribute ("no_callee_saved_registers",
-			   TYPE_ATTRIBUTES (type2)))
+  if (ix86_type_no_callee_saved_registers_p (type1)
+      != ix86_type_no_callee_saved_registers_p (type2))
+    return 0;
+
+  /* preserve_none attribute uses a different calling convention is
+     only for 64-bit.  */
+  if (TARGET_64BIT
+      && (lookup_attribute ("preserve_none", TYPE_ATTRIBUTES (type1))
+	  != lookup_attribute ("preserve_none",
+			       TYPE_ATTRIBUTES (type2))))
     return 0;
 
   return 1;
@@ -1553,7 +1579,10 @@ ix86_function_arg_regno_p (int regno)
   if (call_abi == SYSV_ABI && regno == AX_REG)
     return true;
 
-  if (call_abi == MS_ABI)
+  if (cfun
+      && cfun->machine->call_saved_registers == TYPE_PRESERVE_NONE)
+    parm_regs = x86_64_preserve_none_int_parameter_registers;
+  else if (call_abi == MS_ABI)
     parm_regs = x86_64_ms_abi_int_parameter_registers;
   else
     parm_regs = x86_64_int_parameter_registers;
@@ -1835,6 +1864,7 @@ init_cumulative_args (CUMULATIVE_ARGS *cum,  /* Argument info to initialize */
 
   memset (cum, 0, sizeof (*cum));
 
+  tree preserve_none_type;
   if (fndecl)
     {
       target = cgraph_node::get (fndecl);
@@ -1843,12 +1873,24 @@ init_cumulative_args (CUMULATIVE_ARGS *cum,  /* Argument info to initialize */
 	  target = target->function_symbol ();
 	  local_info_node = cgraph_node::local_info_node (target->decl);
 	  cum->call_abi = ix86_function_abi (target->decl);
+	  preserve_none_type = TREE_TYPE (target->decl);
 	}
       else
-	cum->call_abi = ix86_function_abi (fndecl);
+	{
+	  cum->call_abi = ix86_function_abi (fndecl);
+	  preserve_none_type = TREE_TYPE (fndecl);
+	}
     }
   else
-    cum->call_abi = ix86_function_type_abi (fntype);
+    {
+      cum->call_abi = ix86_function_type_abi (fntype);
+      preserve_none_type = fntype;
+    }
+  cum->preserve_none_abi
+    = (preserve_none_type
+       && (lookup_attribute ("preserve_none",
+			     TYPE_ATTRIBUTES (preserve_none_type))
+	   != nullptr));
 
   cum->caller = caller;
 
@@ -3421,9 +3463,15 @@ function_arg_64 (const CUMULATIVE_ARGS *cum, machine_mode mode,
       break;
     }
 
+  const int *parm_regs;
+  if (cum->preserve_none_abi)
+    parm_regs = x86_64_preserve_none_int_parameter_registers;
+  else
+    parm_regs = x86_64_int_parameter_registers;
+
   return construct_container (mode, orig_mode, type, 0, cum->nregs,
 			      cum->sse_nregs,
-			      &x86_64_int_parameter_registers [cum->regno],
+			      &parm_regs[cum->regno],
 			      cum->sse_regno);
 }
 
@@ -4588,6 +4636,12 @@ setup_incoming_varargs_64 (CUMULATIVE_ARGS *cum)
   if (max > X86_64_REGPARM_MAX)
     max = X86_64_REGPARM_MAX;
 
+  const int *parm_regs;
+  if (cum->preserve_none_abi)
+    parm_regs = x86_64_preserve_none_int_parameter_registers;
+  else
+    parm_regs = x86_64_int_parameter_registers;
+
   for (i = cum->regno; i < max; i++)
     {
       mem = gen_rtx_MEM (word_mode,
@@ -4595,8 +4649,7 @@ setup_incoming_varargs_64 (CUMULATIVE_ARGS *cum)
       MEM_NOTRAP_P (mem) = 1;
       set_mem_alias_set (mem, set);
       emit_move_insn (mem,
-		      gen_rtx_REG (word_mode,
-				   x86_64_int_parameter_registers[i]));
+		      gen_rtx_REG (word_mode, parm_regs[i]));
     }
 
   if (ix86_varargs_fpr_size)
@@ -6473,7 +6526,7 @@ output_set_got (rtx dest, rtx label)
 
   xops[0] = dest;
 
-  if (TARGET_VXWORKS_RTP && flag_pic)
+  if (TARGET_VXWORKS_GOTTPIC && TARGET_VXWORKS_RTP && flag_pic)
     {
       /* Load (*VXWORKS_GOTT_BASE) into the PIC register.  */
       xops[2] = gen_rtx_MEM (Pmode,
@@ -6718,9 +6771,7 @@ ix86_save_reg (unsigned int regno, bool maybe_eh_return, bool ignore_outlined)
 		  || !frame_pointer_needed));
 
     case TYPE_NO_CALLEE_SAVED_REGISTERS:
-      return false;
-
-    case TYPE_NO_CALLEE_SAVED_REGISTERS_EXCEPT_BP:
+    case TYPE_PRESERVE_NONE:
       if (regno != HARD_FRAME_POINTER_REGNUM)
 	return false;
       break;
@@ -6797,7 +6848,9 @@ ix86_nsaved_sseregs (void)
   int nregs = 0;
   int regno;
 
-  if (!TARGET_64BIT_MS_ABI)
+  if (!TARGET_64BIT_MS_ABI
+      && (cfun->machine->call_saved_registers
+	  != TYPE_NO_CALLER_SAVED_REGISTERS))
     return 0;
   for (regno = 0; regno < FIRST_PSEUDO_REGISTER; regno++)
     if (SSE_REGNO_P (regno) && ix86_save_reg (regno, true, true))
@@ -7005,12 +7058,18 @@ ix86_compute_frame_layout (void)
   gcc_assert (preferred_alignment >= STACK_BOUNDARY / BITS_PER_UNIT);
   gcc_assert (preferred_alignment <= stack_alignment_needed);
 
-  /* The only ABI saving SSE regs should be 64-bit ms_abi.  */
-  gcc_assert (TARGET_64BIT || !frame->nsseregs);
+  /* The only ABI saving SSE regs should be 64-bit ms_abi or with
+     no_caller_saved_registers attribue.  */
+  gcc_assert (TARGET_64BIT
+	      || (cfun->machine->call_saved_registers
+		  == TYPE_NO_CALLER_SAVED_REGISTERS)
+	      || !frame->nsseregs);
   if (TARGET_64BIT && m->call_ms2sysv)
     {
       gcc_assert (stack_alignment_needed >= 16);
-      gcc_assert (!frame->nsseregs);
+      gcc_assert ((cfun->machine->call_saved_registers
+		   == TYPE_NO_CALLER_SAVED_REGISTERS)
+		  || !frame->nsseregs);
     }
 
   /* For SEH we have to limit the amount of code movement into the prologue.
@@ -12186,7 +12245,7 @@ legitimize_pic_address (rtx orig, rtx reg)
   else if ((GET_CODE (addr) == SYMBOL_REF && SYMBOL_REF_TLS_MODEL (addr) == 0)
 	   /* We can't always use @GOTOFF for text labels
 	      on VxWorks, see gotoff_operand.  */
-	   || (TARGET_VXWORKS_RTP && GET_CODE (addr) == LABEL_REF))
+	   || (TARGET_VXWORKS_VAROFF && GET_CODE (addr) == LABEL_REF))
     {
 #if TARGET_PECOFF
       rtx tmp = legitimize_pe_coff_symbol (addr, true);
@@ -12503,11 +12562,12 @@ legitimize_tls_address (rtx x, enum tls_model model, bool for_mov)
 	  if (TARGET_64BIT)
 	    {
 	      rtx rax = gen_rtx_REG (Pmode, AX_REG);
+	      rtx rdi = gen_rtx_REG (Pmode, DI_REG);
 	      rtx_insn *insns;
 
 	      start_sequence ();
 	      emit_call_insn
-		(gen_tls_global_dynamic_64 (Pmode, rax, x, caddr));
+		(gen_tls_global_dynamic_64 (Pmode, rax, x, caddr, rdi));
 	      insns = end_sequence ();
 
 	      if (GET_MODE (x) != Pmode)
@@ -12556,12 +12616,13 @@ legitimize_tls_address (rtx x, enum tls_model model, bool for_mov)
 	  if (TARGET_64BIT)
 	    {
 	      rtx rax = gen_rtx_REG (Pmode, AX_REG);
+	      rtx rdi = gen_rtx_REG (Pmode, DI_REG);
 	      rtx_insn *insns;
 	      rtx eqv;
 
 	      start_sequence ();
 	      emit_call_insn
-		(gen_tls_local_dynamic_base_64 (Pmode, rax, caddr));
+		(gen_tls_local_dynamic_base_64 (Pmode, rax, caddr, rdi));
 	      insns = end_sequence ();
 
 	      /* Attach a unique REG_EQUAL, to allow the RTL optimizers to
@@ -13411,7 +13472,7 @@ ix86_delegitimize_address_1 (rtx x, bool base_term_p)
       else if (base_term_p
 	       && pic_offset_table_rtx
 	       && !TARGET_MACHO
-	       && !TARGET_VXWORKS_RTP)
+	       && !TARGET_VXWORKS_VAROFF)
 	{
 	  rtx tmp = gen_rtx_SYMBOL_REF (Pmode, GOT_SYMBOL_NAME);
 	  tmp = gen_rtx_MINUS (Pmode, copy_rtx (addend), tmp);
@@ -15811,7 +15872,7 @@ ix86_output_addr_diff_elt (FILE *file, int value, int rel)
   gcc_assert (!TARGET_64BIT);
 #endif
   /* We can't use @GOTOFF for text labels on VxWorks; see gotoff_operand.  */
-  if (TARGET_64BIT || TARGET_VXWORKS_RTP)
+  if (TARGET_64BIT || TARGET_VXWORKS_VAROFF)
     fprintf (file, "%s%s%d-%s%d\n",
 	     directive, LPREFIX, value, LPREFIX, rel);
 #if TARGET_MACHO
@@ -23297,7 +23358,9 @@ x86_this_parameter (tree function)
     {
       const int *parm_regs;
 
-      if (ix86_function_type_abi (type) == MS_ABI)
+      if (lookup_attribute ("preserve_none", TYPE_ATTRIBUTES (type)))
+	parm_regs = x86_64_preserve_none_int_parameter_registers;
+      else if (ix86_function_type_abi (type) == MS_ABI)
         parm_regs = x86_64_ms_abi_int_parameter_registers;
       else
         parm_regs = x86_64_int_parameter_registers;
@@ -23623,19 +23686,21 @@ x86_field_alignment (tree type, int computed)
 /* Print call to TARGET to FILE.  */
 
 static void
-x86_print_call_or_nop (FILE *file, const char *target)
+x86_print_call_or_nop (FILE *file, const char *target,
+		       const char *label)
 {
   if (flag_nop_mcount || !strcmp (target, "nop"))
     /* 5 byte nop: nopl 0(%[re]ax,%[re]ax,1) */
-    fprintf (file, "1:" ASM_BYTE "0x0f, 0x1f, 0x44, 0x00, 0x00\n");
+    fprintf (file, "%s" ASM_BYTE "0x0f, 0x1f, 0x44, 0x00, 0x00\n",
+	     label);
   else if (!TARGET_PECOFF && flag_pic)
     {
       gcc_assert (flag_plt);
 
-      fprintf (file, "1:\tcall\t%s@PLT\n", target);
+      fprintf (file, "%s\tcall\t%s@PLT\n", label, target);
     }
   else
-    fprintf (file, "1:\tcall\t%s\n", target);
+    fprintf (file, "%s\tcall\t%s\n", label, target);
 }
 
 static bool
@@ -23720,6 +23785,13 @@ x86_function_profiler (FILE *file, int labelno ATTRIBUTE_UNUSED)
 
   const char *mcount_name = MCOUNT_NAME;
 
+  bool fentry_section_p
+    = (flag_record_mcount
+       || lookup_attribute ("fentry_section",
+			    DECL_ATTRIBUTES (current_function_decl)));
+
+  const char *label = fentry_section_p ? "1:" : "";
+
   if (current_fentry_name (&mcount_name))
     ;
   else if (fentry_name)
@@ -23755,11 +23827,12 @@ x86_function_profiler (FILE *file, int labelno ATTRIBUTE_UNUSED)
 		  reg = legacy_reg;
 		}
 	      if (ASSEMBLER_DIALECT == ASM_INTEL)
-		fprintf (file, "1:\tmovabs\t%s, OFFSET FLAT:%s\n"
-			       "\tcall\t%s\n", reg, mcount_name, reg);
+		fprintf (file, "%s\tmovabs\t%s, OFFSET FLAT:%s\n"
+			       "\tcall\t%s\n", label, reg, mcount_name,
+			       reg);
 	      else
-		fprintf (file, "1:\tmovabsq\t$%s, %%%s\n\tcall\t*%%%s\n",
-			 mcount_name, reg, reg);
+		fprintf (file, "%s\tmovabsq\t$%s, %%%s\n\tcall\t*%%%s\n",
+			 label, mcount_name, reg, reg);
 	      break;
 	    case CM_LARGE_PIC:
 #ifdef NO_PROFILE_COUNTERS
@@ -23800,21 +23873,21 @@ x86_function_profiler (FILE *file, int labelno ATTRIBUTE_UNUSED)
 	      if (!flag_plt)
 		{
 		  if (ASSEMBLER_DIALECT == ASM_INTEL)
-		    fprintf (file, "1:\tcall\t[QWORD PTR %s@GOTPCREL[rip]]\n",
-			     mcount_name);
+		    fprintf (file, "%s\tcall\t[QWORD PTR %s@GOTPCREL[rip]]\n",
+			     label, mcount_name);
 		  else
-		    fprintf (file, "1:\tcall\t*%s@GOTPCREL(%%rip)\n",
-			     mcount_name);
+		    fprintf (file, "%s\tcall\t*%s@GOTPCREL(%%rip)\n",
+			     label, mcount_name);
 		  break;
 		}
 	      /* fall through */
 	    default:
-	      x86_print_call_or_nop (file, mcount_name);
+	      x86_print_call_or_nop (file, mcount_name, label);
 	      break;
 	    }
 	}
       else
-	x86_print_call_or_nop (file, mcount_name);
+	x86_print_call_or_nop (file, mcount_name, label);
     }
   else if (flag_pic)
     {
@@ -23829,11 +23902,13 @@ x86_function_profiler (FILE *file, int labelno ATTRIBUTE_UNUSED)
 		 LPREFIX, labelno);
 #endif
       if (flag_plt)
-	x86_print_call_or_nop (file, mcount_name);
+	x86_print_call_or_nop (file, mcount_name, label);
       else if (ASSEMBLER_DIALECT == ASM_INTEL)
-	fprintf (file, "1:\tcall\t[DWORD PTR %s@GOT[ebx]]\n", mcount_name);
+	fprintf (file, "%s\tcall\t[DWORD PTR %s@GOT[ebx]]\n",
+		 label, mcount_name);
       else
-	fprintf (file, "1:\tcall\t*%s@GOT(%%ebx)\n", mcount_name);
+	fprintf (file, "%s\tcall\t*%s@GOT(%%ebx)\n",
+		 label, mcount_name);
     }
   else
     {
@@ -23846,12 +23921,10 @@ x86_function_profiler (FILE *file, int labelno ATTRIBUTE_UNUSED)
 	fprintf (file, "\tmovl\t$%sP%d, %%" PROFILE_COUNT_REGISTER "\n",
 		 LPREFIX, labelno);
 #endif
-      x86_print_call_or_nop (file, mcount_name);
+      x86_print_call_or_nop (file, mcount_name, label);
     }
 
-  if (flag_record_mcount
-      || lookup_attribute ("fentry_section",
-			   DECL_ATTRIBUTES (current_function_decl)))
+  if (fentry_section_p)
     {
       const char *sname = "__mcount_loc";
 
@@ -25725,6 +25798,14 @@ ix86_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
       if (scalar_p)
 	mode = TYPE_MODE (TREE_TYPE (vectype));
     }
+  /* When we are costing a scalar stmt use the scalar stmt to get at the
+     type of the operation.  */
+  else if (scalar_p && stmt_info)
+    if (tree lhs = gimple_get_lhs (stmt_info->stmt))
+      {
+	fp = FLOAT_TYPE_P (TREE_TYPE (lhs));
+	mode = TYPE_MODE (TREE_TYPE (lhs));
+      }
 
   if ((kind == vector_stmt || kind == scalar_stmt)
       && stmt_info
@@ -26221,6 +26302,65 @@ ix86_vector_costs::finish_cost (const vector_costs *scalar_costs)
       && GET_MODE_SIZE (loop_vinfo->vector_mode) == 16
       && LOOP_VINFO_VECT_FACTOR (loop_vinfo).to_constant () >= 16)
     m_suggested_epilogue_mode = V8QImode;
+
+  /* When X86_TUNE_AVX512_MASKED_EPILOGUES is enabled try to use
+     a masked epilogue if that doesn't seem detrimental.  */
+  if (loop_vinfo
+      && !LOOP_VINFO_EPILOGUE_P (loop_vinfo)
+      && LOOP_VINFO_VECT_FACTOR (loop_vinfo).to_constant () > 2
+      && ix86_tune_features[X86_TUNE_AVX512_MASKED_EPILOGUES]
+      && !OPTION_SET_P (param_vect_partial_vector_usage))
+    {
+      bool avoid = false;
+      if (LOOP_VINFO_NITERS_KNOWN_P (loop_vinfo)
+	  && LOOP_VINFO_PEELING_FOR_ALIGNMENT (loop_vinfo) >= 0)
+	{
+	  unsigned int peel_niter
+	    = LOOP_VINFO_PEELING_FOR_ALIGNMENT (loop_vinfo);
+	  if (LOOP_VINFO_PEELING_FOR_GAPS (loop_vinfo))
+	    peel_niter += 1;
+	  /* When we know the number of scalar iterations of the epilogue,
+	     avoid masking when a single vector epilog iteration handles
+	     it in full.  */
+	  if (pow2p_hwi ((LOOP_VINFO_INT_NITERS (loop_vinfo) - peel_niter)
+			 % LOOP_VINFO_VECT_FACTOR (loop_vinfo).to_constant ()))
+	    avoid = true;
+	}
+      if (!avoid && loop_outer (loop_outer (LOOP_VINFO_LOOP (loop_vinfo))))
+	for (auto ddr : LOOP_VINFO_DDRS (loop_vinfo))
+	  {
+	    if (DDR_ARE_DEPENDENT (ddr) == chrec_known)
+	      ;
+	    else if (DDR_ARE_DEPENDENT (ddr) == chrec_dont_know)
+	      ;
+	    else
+	      {
+		int loop_depth
+		    = index_in_loop_nest (LOOP_VINFO_LOOP (loop_vinfo)->num,
+					  DDR_LOOP_NEST (ddr));
+		if (DDR_NUM_DIST_VECTS (ddr) == 1
+		    && DDR_DIST_VECTS (ddr)[0][loop_depth] == 0)
+		  {
+		    /* Avoid the case when there's an outer loop that might
+		       traverse a multi-dimensional array with the inner
+		       loop just executing the masked epilogue with a
+		       read-write where the next outer iteration might
+		       read from the masked part of the previous write,
+		       'n' filling half a vector.
+			 for (j = 0; j < m; ++j)
+			   for (i = 0; i < n; ++i)
+			     a[j][i] = c * a[j][i];  */
+		    avoid = true;
+		    break;
+		  }
+	      }
+	  }
+      if (!avoid)
+	{
+	  m_suggested_epilogue_mode = loop_vinfo->vector_mode;
+	  m_masked_epilogue = 1;
+	}
+    }
 
   vector_costs::finish_cost (scalar_costs);
 }

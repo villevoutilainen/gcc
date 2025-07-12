@@ -2811,12 +2811,13 @@ enum tree_tag {
   tt_decl,		/* By-value mergeable decl.  */
   tt_tpl_parm,		/* Template parm.  */
 
-  /* The ordering of the following 4 is relied upon in
+  /* The ordering of the following 5 is relied upon in
      trees_out::tree_node.  */
   tt_id,  		/* Identifier node.  */
   tt_conv_id,		/* Conversion operator name.  */
   tt_anon_id,		/* Anonymous name.  */
   tt_lambda_id,		/* Lambda name.  */
+  tt_internal_id,       /* Internal name.  */
 
   tt_typedef_type,	/* A (possibly implicit) typedefed type.  */
   tt_derived_type,	/* A type derived from another type.  */
@@ -3096,6 +3097,9 @@ private:
   unsigned section;
   bool writing_local_entities;	/* Whether we might walk into a TU-local
 				   entity we need to emit placeholders for.  */
+  bool walking_bit_field_unit;  /* Whether we're walking the underlying
+				   storage for a bit field.  There's no other
+				   great way to detect this.  */
 #if CHECKING_P
   int importedness;		/* Checker that imports not occurring
 				   inappropriately.  +ve imports ok,
@@ -3262,7 +3266,7 @@ trees_out::trees_out (allocator *mem, module_state *state, depset::hash &deps,
 		      unsigned section)
   :parent (mem), state (state), tree_map (500),
    dep_hash (&deps), ref_num (0), section (section),
-   writing_local_entities (false)
+   writing_local_entities (false), walking_bit_field_unit (false)
 {
 #if CHECKING_P
   importedness = 0;
@@ -6511,7 +6515,10 @@ trees_out::core_vals (tree t)
     case FIELD_DECL:
       WT (t->field_decl.offset);
       WT (t->field_decl.bit_field_type);
-      WT (t->field_decl.qualifier); /* bitfield unit.  */
+      {
+	auto ovr = make_temp_override (walking_bit_field_unit, true);
+	WT (t->field_decl.qualifier); /* bitfield unit.  */
+      }
       WT (t->field_decl.bit_offset);
       WT (t->field_decl.fcontext);
       WT (t->decl_common.initial);
@@ -8212,6 +8219,10 @@ trees_out::decl_value (tree decl, depset *dep)
       inner = DECL_TEMPLATE_RESULT (decl);
       inner_tag = insert (inner, WK_value);
 
+      /* On stream-in we assume that a template and its result will
+	 have the same type.  */
+      gcc_checking_assert (TREE_TYPE (decl) == TREE_TYPE (inner));
+
       if (streaming_p ())
 	{
 	  int code = TREE_CODE (inner);
@@ -9366,6 +9377,7 @@ trees_out::type_node (tree type)
 
   tree root = (TYPE_NAME (type)
 	       ? TREE_TYPE (TYPE_NAME (type)) : TYPE_MAIN_VARIANT (type));
+  gcc_checking_assert (root);
 
   if (type != root)
     {
@@ -9444,6 +9456,8 @@ trees_out::type_node (tree type)
 	|| TREE_CODE (type) == UNION_TYPE
 	|| TREE_CODE (type) == ENUMERAL_TYPE)
       {
+	gcc_checking_assert (DECL_P (name));
+
 	/* We can meet template parms that we didn't meet in the
 	   tpl_parms walk, because we're referring to a derived type
 	   that was previously constructed from equivalent template
@@ -9605,6 +9619,8 @@ trees_out::type_node (tree type)
 	      tag_type = enum_type;
 	    else if (TYPENAME_IS_CLASS_P (type))
 	      tag_type = class_type;
+	    else if (TYPENAME_IS_UNION_P (type))
+	      tag_type = union_type;
 	    u (int (tag_type));
 	  }
 	}
@@ -9658,11 +9674,14 @@ trees_out::tree_value (tree t)
 
   if (DECL_P (t))
     /* No template, type, var or function, except anonymous
-       non-context vars.  */
+       non-context vars and types.  */
     gcc_checking_assert ((TREE_CODE (t) != TEMPLATE_DECL
-			  && TREE_CODE (t) != TYPE_DECL
+			  && (TREE_CODE (t) != TYPE_DECL
+			      || (DECL_ARTIFICIAL (t) && !DECL_CONTEXT (t)))
 			  && (TREE_CODE (t) != VAR_DECL
-			      || (!DECL_NAME (t) && !DECL_CONTEXT (t)))
+			      || ((!DECL_NAME (t)
+				   || IDENTIFIER_INTERNAL_P (DECL_NAME (t)))
+				  && !DECL_CONTEXT (t)))
 			  && TREE_CODE (t) != FUNCTION_DECL));
 
   if (streaming_p ())
@@ -9674,7 +9693,7 @@ trees_out::tree_value (tree t)
       tree_node_bools (t);
     }
 
-  if  (TREE_CODE (t) == TREE_BINFO)
+  if (TREE_CODE (t) == TREE_BINFO)
     /* Binfos are decl-like and need merging information.  */
     binfo_mergeable (t);
 
@@ -9683,7 +9702,56 @@ trees_out::tree_value (tree t)
     dump (dumper::TREE)
       && dump ("Writing tree:%d %C:%N", tag, TREE_CODE (t), t);
 
+  int type_tag = 0;
+  tree type = NULL_TREE;
+  if (TREE_CODE (t) == TYPE_DECL)
+    {
+      type = TREE_TYPE (t);
+
+      /* We only support a limited set of features for uncontexted types;
+	 these are typically types created in the language-independent
+	 parts of the frontend (such as ubsan).  */
+      gcc_checking_assert (RECORD_OR_UNION_TYPE_P (type)
+			   && TYPE_MAIN_VARIANT (type) == type
+			   && TYPE_NAME (type) == t
+			   && TYPE_STUB_DECL (type) == t
+			   && !TYPE_VFIELD (type)
+			   && !TYPE_BINFO (type)
+			   && !CLASS_TYPE_P (type));
+
+      if (streaming_p ())
+	{
+	  start (type);
+	  tree_node_bools (type);
+	}
+
+      type_tag = insert (type, WK_value);
+      if (streaming_p ())
+	dump (dumper::TREE)
+	  && dump ("Writing type: %d %C:%N", type_tag,
+		   TREE_CODE (type), type);
+    }
+
   tree_node_vals (t);
+
+  if (type)
+    {
+      tree_node_vals (type);
+      tree_node (TYPE_SIZE (type));
+      tree_node (TYPE_SIZE_UNIT (type));
+      chained_decls (TYPE_FIELDS (type));
+      if (streaming_p ())
+	dump (dumper::TREE)
+	  && dump ("Written type:%d %C:%N", type_tag, TREE_CODE (type), type);
+    }
+
+  /* For uncontexted VAR_DECLs we need to stream the definition so that
+     importers can recreate their value.  */
+  if (TREE_CODE (t) == VAR_DECL)
+    {
+      gcc_checking_assert (!DECL_NONTRIVIALLY_INITIALIZED_P (t));
+      tree_node (DECL_INITIAL (t));
+    }
 
   if (streaming_p ())
     dump (dumper::TREE) && dump ("Written tree:%d %C:%N", tag, TREE_CODE (t), t);
@@ -9723,12 +9791,53 @@ trees_in::tree_value ()
   dump (dumper::TREE)
     && dump ("Reading tree:%d %C", tag, TREE_CODE (t));
 
-  if (!tree_node_vals (t))
+  int type_tag = 0;
+  tree type = NULL_TREE;
+  if (TREE_CODE (t) == TYPE_DECL)
     {
+      type = start ();
+      if (!type || !tree_node_bools (type))
+	t = NULL_TREE;
+
+      type_tag = insert (type);
+      if (t)
+	dump (dumper::TREE)
+	  && dump ("Reading type:%d %C", type_tag, TREE_CODE (type));
+    }
+
+  if (!t)
+    {
+bail:
       back_refs[~tag] = NULL_TREE;
+      if (type_tag)
+	back_refs[~type_tag] = NULL_TREE;
       set_overrun ();
-      /* Bail.  */
       return NULL_TREE;
+    }
+
+  if (!tree_node_vals (t))
+    goto bail;
+
+  if (type)
+    {
+      if (!tree_node_vals (type))
+	goto bail;
+
+      TYPE_SIZE (type) = tree_node ();
+      TYPE_SIZE_UNIT (type) = tree_node ();
+      TYPE_FIELDS (type) = chained_decls ();
+      if (get_overrun ())
+	goto bail;
+
+      dump (dumper::TREE)
+	&& dump ("Read type:%d %C:%N", type_tag, TREE_CODE (type), type);
+    }
+
+  if (TREE_CODE (t) == VAR_DECL)
+    {
+      DECL_INITIAL (t) = tree_node ();
+      if (TREE_STATIC (t))
+	varpool_node::finalize_decl (t);
     }
 
   if (TREE_CODE (t) == LAMBDA_EXPR
@@ -9873,10 +9982,13 @@ trees_out::tree_node (tree t)
 
   if (TREE_CODE (t) == IDENTIFIER_NODE)
     {
-      /* An identifier node -> tt_id, tt_conv_id, tt_anon_id, tt_lambda_id.  */
+      /* An identifier node -> tt_id, tt_conv_id, tt_anon_id, tt_lambda_id,
+	 tt_internal_id.  */
       int code = tt_id;
       if (IDENTIFIER_ANON_P (t))
 	code = IDENTIFIER_LAMBDA_P (t) ? tt_lambda_id : tt_anon_id;
+      else if (IDENTIFIER_INTERNAL_P (t))
+	code = tt_internal_id;
       else if (IDENTIFIER_CONV_OP_P (t))
 	code = tt_conv_id;
 
@@ -9891,13 +10003,15 @@ trees_out::tree_node (tree t)
 	}
       else if (code == tt_id && streaming_p ())
 	str (IDENTIFIER_POINTER (t), IDENTIFIER_LENGTH (t));
+      else if (code == tt_internal_id && streaming_p ())
+	str (prefix_for_internal_label (t));
 
       int tag = insert (t);
       if (streaming_p ())
 	{
-	  /* We know the ordering of the 4 id tags.  */
+	  /* We know the ordering of the 5 id tags.  */
 	  static const char *const kinds[] =
-	    {"", "conv_op ", "anon ", "lambda "};
+	    {"", "conv_op ", "anon ", "lambda ", "internal "};
 	  dump (dumper::TREE)
 	    && dump ("Written:%d %sidentifier:%N", tag,
 		     kinds[code - tt_id],
@@ -9974,8 +10088,11 @@ trees_out::tree_node (tree t)
 	      break;
 
 	    case VAR_DECL:
-	      /* AGGR_INIT_EXPRs cons up anonymous uncontexted VAR_DECLs.  */
-	      gcc_checking_assert (!DECL_NAME (t)
+	      /* AGGR_INIT_EXPRs cons up anonymous uncontexted VAR_DECLs,
+		 and internal vars are created by sanitizers and
+		 __builtin_source_location.  */
+	      gcc_checking_assert ((!DECL_NAME (t)
+				    || IDENTIFIER_INTERNAL_P (DECL_NAME (t)))
 				   && DECL_ARTIFICIAL (t));
 	      break;
 
@@ -9984,7 +10101,18 @@ trees_out::tree_node (tree t)
 		 PARM_DECLS.  It'd be nice if they had a
 		 distinguishing flag to double check.  */
 	      break;
+
+	    case TYPE_DECL:
+	      /* Some parts of the compiler need internal struct types;
+		 these types may not have an appropriate context to use.
+		 Walk the whole type (including its definition) by value.  */
+	      gcc_checking_assert (DECL_ARTIFICIAL (t)
+				   && TYPE_ARTIFICIAL (TREE_TYPE (t))
+				   && RECORD_OR_UNION_TYPE_P (TREE_TYPE (t))
+				   && !CLASS_TYPE_P (TREE_TYPE (t)));
+	      break;
 	    }
+	  mark_declaration (t, has_definition (t));
 	  goto by_value;
 	}
     }
@@ -10118,6 +10246,17 @@ trees_in::tree_node (bool is_use)
 	dump (dumper::TREE)
 	  && dump ("Read %s identifier:%d %N",
 		   IDENTIFIER_LAMBDA_P (res) ? "lambda" : "anon", tag, res);
+      }
+      break;
+
+    case tt_internal_id:
+      /* An internal label.  */
+      {
+	const char *prefix = str ();
+	res = generate_internal_label (prefix);
+	int tag = insert (res);
+	dump (dumper::TREE)
+	  && dump ("Read internal identifier:%d %N", tag, res);
       }
       break;
 
@@ -11124,6 +11263,11 @@ trees_out::get_merge_kind (tree decl, depset *dep)
 	return MK_local_friend;
 
       gcc_checking_assert (TYPE_P (ctx));
+
+      /* Internal-only types will not need to dedup their members.  */
+      if (!DECL_CONTEXT (TYPE_NAME (ctx)))
+	return MK_unique;
+
       if (TREE_CODE (decl) == USING_DECL)
 	return MK_field;
 
@@ -11136,15 +11280,16 @@ trees_out::get_merge_kind (tree decl, depset *dep)
 	      return MK_named;
 	    }
 
-	  if (!DECL_NAME (decl)
-	      && !RECORD_OR_UNION_TYPE_P (TREE_TYPE (decl))
-	      && !DECL_BIT_FIELD_REPRESENTATIVE (decl))
+	  if (walking_bit_field_unit)
 	    {
 	      /* The underlying storage unit for a bitfield.  We do not
 		 need to dedup it, because it's only reachable through
 		 the bitfields it represents.  And those are deduped.  */
 	      // FIXME: Is that assertion correct -- do we ever fish it
 	      // out and put it in an expr?
+	      gcc_checking_assert (!DECL_NAME (decl)
+				   && !RECORD_OR_UNION_TYPE_P (TREE_TYPE (decl))
+				   && !DECL_BIT_FIELD_REPRESENTATIVE (decl));
 	      gcc_checking_assert ((TREE_CODE (TREE_TYPE (decl)) == ARRAY_TYPE
 				    ? TREE_CODE (TREE_TYPE (TREE_TYPE (decl)))
 				    : TREE_CODE (TREE_TYPE (decl)))
@@ -12193,7 +12338,8 @@ trees_in::is_matching_decl (tree existing, tree decl, bool is_typedef)
 	{
 	  dump (dumper::MERGE)
 	    && dump ("Propagating deduced return type to %N", existing);
-	  FNDECL_USED_AUTO (e_inner) = true;
+	  gcc_checking_assert (existing == e_inner);
+	  FNDECL_USED_AUTO (existing) = true;
 	  DECL_SAVED_AUTO_RETURN_TYPE (existing) = TREE_TYPE (e_type);
 	  TREE_TYPE (existing) = change_return_type (TREE_TYPE (d_type), e_type);
 	}
@@ -13247,13 +13393,19 @@ trees_in::read_class_def (tree defn, tree maybe_template)
 
       if (TYPE_LANG_SPECIFIC (type))
 	{
-	  CLASSTYPE_LAMBDA_EXPR (type) = lambda;
+	  if (!TYPE_POLYMORPHIC_P (type))
+	    SET_CLASSTYPE_LAMBDA_EXPR (type, lambda);
+	  else
+	    gcc_checking_assert (lambda == NULL_TREE);
 
 	  CLASSTYPE_MEMBER_VEC (type) = member_vec;
 	  CLASSTYPE_PURE_VIRTUALS (type) = pure_virts;
 	  CLASSTYPE_VCALL_INDICES (type) = vcall_indices;
 
-	  CLASSTYPE_KEY_METHOD (type) = key_method;
+	  if (TYPE_POLYMORPHIC_P (type))
+	    SET_CLASSTYPE_KEY_METHOD (type, key_method);
+	  else
+	    gcc_checking_assert (key_method == NULL_TREE);
 
 	  CLASSTYPE_VBASECLASSES (type) = vbase_vec;
 

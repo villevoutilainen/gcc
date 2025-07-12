@@ -2,11 +2,11 @@
 --                                                                          --
 --                         GNAT COMPILER COMPONENTS                         --
 --                                                                          --
---               D I A G N O S T I C S . R E P O S I T O R Y                --
+--                                E R R I D                                 --
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 19925, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -22,6 +22,7 @@
 -- Extensive contributions were provided by Ada Core Technologies Inc.      --
 --                                                                          --
 ------------------------------------------------------------------------------
+
 with Types; use Types;
 with Errsw; use Errsw;
 
@@ -76,8 +77,8 @@ package Errid is
    --    - Optionally additional information
    --    TODO: the mandatory fields for the documentation file could be changed
 
-   Diagnostic_Entries : Diagnostics_Registry_Type :=
-     (No_Diagnostic_Id => (others => <>),
+   Diagnostic_Entries : constant Diagnostics_Registry_Type :=
+     (No_Diagnostic_Id => <>,
       GNAT0001         =>
         (Status        => Active,
          Human_Id      => new String'("Default_Iterator_Not_Primitive_Error"),

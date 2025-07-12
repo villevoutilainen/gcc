@@ -161,16 +161,16 @@ state_machine::to_json () const
 }
 
 void
-state_machine::add_state_to_xml (xml_state &out_xml,
-				 const svalue &sval,
-				 state_machine::state_t state) const
+state_machine::add_state_to_state_graph (analyzer_state_graph &out_state_graph,
+					 const svalue &sval,
+					 state_machine::state_t state) const
 {
   // no-op
 }
 
 void
-state_machine::add_global_state_to_xml (xml_state &out_xml,
-					state_machine::state_t state) const
+state_machine::add_global_state_to_state_graph (analyzer_state_graph &out_state_graph,
+						state_machine::state_t state) const
 {
   // no-op
 }
@@ -183,7 +183,7 @@ sm_context::get_old_region_model () const
   if (const program_state *old_state = get_old_program_state ())
     return old_state->m_region_model;
   else
-    return NULL;
+    return nullptr;
 }
 
 /* Create instances of the various state machines, each using LOGGER,

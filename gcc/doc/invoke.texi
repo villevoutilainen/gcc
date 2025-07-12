@@ -312,7 +312,7 @@ Objective-C and Objective-C++ Dialects}.
 -fdiagnostics-show-location=@r{[}once@r{|}every-line@r{]}
 -fdiagnostics-color=@r{[}auto@r{|}never@r{|}always@r{]}
 -fdiagnostics-urls=@r{[}auto@r{|}never@r{|}always@r{]}
--fdiagnostics-format=@r{[}text@r{|}sarif-stderr@r{|}sarif-file@r{|}json@r{|}json-stderr@r{|}json-file@r{]}
+-fdiagnostics-format=@r{[}text@r{|}sarif-stderr@r{|}sarif-file@r{]}
 -fdiagnostics-add-output=@var{DIAGNOSTICS-OUTPUT-SPEC}
 -fdiagnostics-set-output=@var{DIAGNOSTICS-OUTPUT-SPEC}
 -fno-diagnostics-json-formatting
@@ -340,7 +340,7 @@ Objective-C and Objective-C++ Dialects}.
 -w  -Wextra  -Wall  -Wabi=@var{n}
 -Waddress  -Wno-address-of-packed-member  -Waggregate-return
 -Walloc-size  -Walloc-size-larger-than=@var{byte-size}  -Walloc-zero
--Walloca  -Walloca-larger-than=@var{byte-size}
+-Walloca  -Walloca-larger-than=@var{byte-size}  -Wauto-profile
 -Wno-aggressive-loop-optimizations
 -Warith-conversion
 -Warray-bounds  -Warray-bounds=@var{n}  -Warray-compare
@@ -353,7 +353,7 @@ Objective-C and Objective-C++ Dialects}.
 -Wno-builtin-macro-redefined  -Wc90-c99-compat  -Wc99-c11-compat
 -Wc11-c23-compat  -Wc23-c2y-compat
 -Wc++-compat  -Wc++11-compat  -Wc++14-compat  -Wc++17-compat
--Wc++20-compat
+-Wc++20-compat  -Wc++26-compat
 -Wno-c++11-extensions  -Wno-c++14-extensions -Wno-c++17-extensions
 -Wno-c++20-extensions  -Wno-c++23-extensions
 -Wcalloc-transposed-args
@@ -573,7 +573,7 @@ Objective-C and Objective-C++ Dialects}.
 -fmin-function-alignment=[@var{n}]
 -fno-allocation-dce -fallow-store-data-races
 -fassociative-math  -fauto-profile  -fauto-profile[=@var{path}]
--fauto-inc-dec  -fbranch-probabilities
+-fauto-profile-inlining -fauto-inc-dec  -fbranch-probabilities
 -fcaller-saves
 -fcombine-stack-adjustments  -fconserve-stack
 -ffold-mem-offsets
@@ -3816,6 +3816,23 @@ Warn when a type with an ABI tag is used in a context that does not
 have that ABI tag.  See @ref{C++ Attributes} for more information
 about ABI tags.
 
+@opindex Wabbreviated-auto-in-template-arg
+@opindex Wno-abbreviated-auto-in-template-arg
+@item -Wno-abbreviated-auto-in-template-arg
+Disable the error for an @code{auto} placeholder type used within a
+template argument list to declare a C++20 abbreviated function
+template, e.g.
+
+@smallexample
+void f(S<auto>);
+@end smallexample
+
+This feature was proposed in the Concepts TS, but was not adopted into
+C++20; in the standard, a placeholder in a parameter declaration must
+appear as a decl-specifier.  The error can also be reduced to a
+warning by @option{-fpermissive} or
+@option{-Wno-error=abbreviated-auto-in-template-arg}.
+
 @opindex Wcomma-subscript
 @opindex Wno-comma-subscript
 @item -Wcomma-subscript @r{(C++ and Objective-C++ only)}
@@ -5958,8 +5975,7 @@ column numbers, such as @command{dejagnu}.
 @opindex fdiagnostics-column-unit
 @item -fdiagnostics-column-unit=@var{UNIT}
 Select the units for the column number.  This affects traditional diagnostics
-(in the absence of @option{-fno-show-column}), as well as JSON format
-diagnostics if requested.
+(in the absence of @option{-fno-show-column}).
 
 The default @var{UNIT}, @samp{display}, considers the number of display
 columns occupied by each character.  This may be larger than the number
@@ -6035,8 +6051,7 @@ is set to @samp{C}, in which case the default is @samp{ascii}.
 @opindex fdiagnostics-format
 @item -fdiagnostics-format=@var{FORMAT}
 Select a different format for printing diagnostics.
-@var{FORMAT} is @samp{text}, @samp{sarif-stderr}, @samp{sarif-file},
-@samp{json}, @samp{json-stderr}, or @samp{json-file}.
+@var{FORMAT} is @samp{text}, @samp{sarif-stderr} or @samp{sarif-file}.
 
 Using this option replaces any additional ``output sinks'' added by
 @option{-fdiagnostics-add-output=}, or that set by
@@ -6047,14 +6062,6 @@ The default is @samp{text}.
 The @samp{sarif-stderr} and @samp{sarif-file} formats both emit
 diagnostics in SARIF Version 2.1.0 format, either to stderr, or to a file
 named @file{@var{source}.sarif}, respectively.
-
-The various @samp{json}, @samp{json-stderr}, and @samp{json-file} values
-are deprecated and refer to a legacy JSON-based output format.
-The @samp{json} format is a synonym for @samp{json-stderr}.
-The @samp{json-stderr} and @samp{json-file} formats are identical, apart from
-where the JSON is emitted to.  With @samp{json-stderr}, the JSON is emitted
-to stderr, whereas with @samp{json-file} it is written to
-@file{@var{source}.gcc.json}.
 
 @opindex fdiagnostics-add-output
 @item -fdiagnostics-add-output=@var{DIAGNOSTICS-OUTPUT-SPEC}
@@ -6136,10 +6143,10 @@ end-users, and subject to change or removal without notice:
 
 @table @gcctabopt
 
-@item xml-state=@r{[}yes@r{|}no@r{]}
+@item state-graphs=@r{[}yes@r{|}no@r{]}
 This is a debugging feature and defaults to @code{no}.
-If @code{xml-state=yes}, then attempt to capture detailed state information
-from @option{-fanalyzer} in the generated SARIF.
+If @code{state-graphs=yes}, then attempt to capture detailed state
+information from @option{-fanalyzer} in the generated SARIF.
 
 @end table
 
@@ -6187,11 +6194,11 @@ then if @code{show-state-diagrams=yes},
 the generated state diagrams will also show the .dot source input to
 GraphViz used for the diagram.
 
-@item show-state-diagrams-xml=@r{[}yes@r{|}no@r{]}
+@item show-state-diagrams-sarif=@r{[}yes@r{|}no@r{]}
 This is a debugging feature and defaults to @code{no}.
-If @code{show-state-diagrams-xml=yes}
+If @code{show-state-diagrams-sarif=yes}
 then if @code{show-state-diagrams=yes}, the generated state diagrams will
-also show an XML representation of the state.
+also show a SARIF representation of the state.
 
 @end table
 
@@ -6238,11 +6245,8 @@ replaces all existing output sinks, such as from @option{-fdiagnostics-format=},
 @opindex fdiagnostics-json-formatting
 @item -fno-diagnostics-json-formatting
 By default, when JSON is emitted for diagnostics (via
-@option{-fdiagnostics-format=sarif-stderr},
-@option{-fdiagnostics-format=sarif-file},
-@option{-fdiagnostics-format=json},
-@option{-fdiagnostics-format=json-stderr},
-@option{-fdiagnostics-format=json-file}),
+@option{-fdiagnostics-format=sarif-stderr} or
+@option{-fdiagnostics-format=sarif-file}),
 GCC will add newlines and indentation to visually emphasize the
 hierarchical structure of the JSON.
 
@@ -6456,6 +6460,7 @@ only by this flag, but it also downgrades some C and C++ diagnostics
 that have their own flag:
 
 @gccoptlist{
+-Wabbreviated-auto-in-template-arg @r{(C++ and Objective-C++ only)}
 -Wdeclaration-missing-parameter-type @r{(C and Objective-C only)}
 -Wimplicit-function-declaration @r{(C and Objective-C only)}
 -Wimplicit-int @r{(C and Objective-C only)}
@@ -8728,6 +8733,11 @@ larger.
 @item -Walloca
 This option warns on all uses of @code{alloca} in the source.
 
+@opindex Wno-auto-profile
+@opindex Wauto-profile
+@item -Wauto-profile
+Output warnings about auto-profile inconsistencies.
+
 @opindex Walloca-larger-than=
 @opindex Wno-alloca-larger-than
 @item -Walloca-larger-than=@var{byte-size}
@@ -9679,6 +9689,12 @@ and ISO C++ 2017.  This warning is enabled by @option{-Wall}.
 @item -Wc++20-compat @r{(C++ and Objective-C++ only)}
 Warn about C++ constructs whose meaning differs between ISO C++ 2017
 and ISO C++ 2020.  This warning is enabled by @option{-Wall}.
+
+@opindex Wc++26-compat
+@opindex Wno-c++26-compat
+@item -Wc++26-compat @r{(C++ and Objective-C++ only)}
+Warn about C++ constructs whose meaning differs between ISO C++ 2023
+and upcoming ISO C++ 2026.  This warning is enabled by @option{-Wall}.
 
 @opindex Wc++11-extensions
 @opindex Wno-c++11-extensions
@@ -15502,6 +15518,12 @@ E.g.
 create_gcov --binary=your_program.unstripped --profile=perf.data \
     --gcov=profile.afdo
 @end smallexample
+
+@opindex fauto-profile-inlining
+@item -fauto-profile-inlining
+When auto-profile is available inline all relevant functions which was
+inlined in the tran run before reading the profile feedback.  This improves
+context sensitivity of the profile.  Enabled by default.
 @end table
 
 The following options control compiler behavior regarding floating-point
@@ -22179,7 +22201,7 @@ performance of the code.  Permissible values for this option are:
 The values @samp{cortex-a57.cortex-a53}, @samp{cortex-a72.cortex-a53},
 @samp{cortex-a73.cortex-a35}, @samp{cortex-a73.cortex-a53},
 @samp{cortex-a75.cortex-a55}, @samp{cortex-a76.cortex-a55},
-@samp{apple-m1}, @samp{apple-m2}, @samp{apple-m3} specify that GCC
+@samp{apple-m1}, @samp{apple-m2}, @samp{apple-m3}, @samp{gb10} specify that GCC
 should tune for a big.LITTLE system.
 
 The value @samp{neoverse-512tvb} specifies that GCC should tune
@@ -22468,6 +22490,9 @@ Enable the FlagM2 flag conversion instructions.
 Enable the Pointer Authentication Extension.
 @item cssc
 Enable the Common Short Sequence Compression instructions.
+@item cmpbr
+Enable the shorter compare and branch instructions, @code{cbb}, @code{cbh} and
+@code{cb}.
 @item sme
 Enable the Scalable Matrix Extension.  This is only supported when SVE2 is also
 enabled.
@@ -34840,37 +34865,36 @@ VPCLMULQDQ, AVX512BITALG, RDPID and AVX512VPOPCNTDQ instruction set support.
 Intel Alder Lake/Raptor Lake/Meteor Lake/Gracemont CPU with 64-bit extensions,
 MOVBE, MMX, SSE, SSE2, SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, AES, PREFETCHW,
 PCLMUL, RDRND, XSAVE, XSAVEC, XSAVES, XSAVEOPT, FSGSBASE, PTWRITE, RDPID, SGX,
-GFNI-SSE, CLWB, MOVDIRI, MOVDIR64B, CLDEMOTE, WAITPKG, ADCX, AVX, AVX2, BMI,
-BMI2, F16C, FMA, LZCNT, PCONFIG, PKU, VAES, VPCLMULQDQ, SERIALIZE, HRESET, KL,
-WIDEKL and AVX-VNNI instruction set support.
+GFNI-SSE, CLWB, MOVDIRI, MOVDIR64B, WAITPKG, ADCX, AVX, AVX2, BMI, BMI2, F16C,
+FMA, LZCNT, PCONFIG, PKU, VAES, VPCLMULQDQ, SERIALIZE, HRESET, KL, WIDEKL and
+AVX-VNNI instruction set support.
 
 @item arrowlake
 Intel Arrow Lake CPU with 64-bit extensions, MOVBE, MMX, SSE, SSE2, SSE3,
 SSSE3, SSE4.1, SSE4.2, POPCNT, AES, PREFETCHW, PCLMUL, RDRND, XSAVE, XSAVEC,
 XSAVES, XSAVEOPT, FSGSBASE, PTWRITE, RDPID, SGX, GFNI-SSE, CLWB, MOVDIRI,
-MOVDIR64B, CLDEMOTE, WAITPKG, ADCX, AVX, AVX2, BMI, BMI2, F16C, FMA, LZCNT,
-PCONFIG, PKU, VAES, VPCLMULQDQ, SERIALIZE, HRESET, KL, WIDEKL, AVX-VNNI,
-UINTR, AVXIFMA, AVXVNNIINT8, AVXNECONVERT and CMPCCXADD instruction set
-support.
+MOVDIR64B, WAITPKG, ADCX, AVX, AVX2, BMI, BMI2, F16C, FMA, LZCNT, PCONFIG, PKU,
+VAES, VPCLMULQDQ, SERIALIZE, HRESET, KL, WIDEKL, AVX-VNNI, UINTR, AVXIFMA,
+AVXVNNIINT8, AVXNECONVERT and CMPCCXADD instruction set support.
 
 @item arrowlake-s
 @itemx lunarlake
 Intel Arrow Lake S/Lunar Lake CPU with 64-bit extensions, MOVBE, MMX, SSE,
 SSE2, SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, AES, PREFETCHW, PCLMUL, RDRND,
 XSAVE, XSAVEC, XSAVES, XSAVEOPT, FSGSBASE, PTWRITE, RDPID, SGX, GFNI-SSE, CLWB,
-MOVDIRI, MOVDIR64B, CLDEMOTE, WAITPKG, ADCX, AVX, AVX2, BMI, BMI2, F16C, FMA,
-LZCNT, PCONFIG, PKU, VAES, VPCLMULQDQ, SERIALIZE, HRESET, KL, WIDEKL, AVX-VNNI,
-UINTR, AVXIFMA, AVXVNNIINT8, AVXNECONVERT, CMPCCXADD, AVXVNNIINT16, SHA512,
-SM3 and SM4 instruction set support.
+MOVDIRI, MOVDIR64B, WAITPKG, ADCX, AVX, AVX2, BMI, BMI2, F16C, FMA, LZCNT,
+PCONFIG, PKU, VAES, VPCLMULQDQ, SERIALIZE, HRESET, KL, WIDEKL, AVX-VNNI, UINTR,
+AVXIFMA, AVXVNNIINT8, AVXNECONVERT, CMPCCXADD, AVXVNNIINT16, SHA512, SM3 and
+SM4 instruction set support.
 
 @item pantherlake
 Intel Panther Lake CPU with 64-bit extensions, MOVBE, MMX, SSE, SSE2, SSE3,
 SSSE3, SSE4.1, SSE4.2, POPCNT, AES, PREFETCHW, PCLMUL, RDRND, XSAVE, XSAVEC,
 XSAVES, XSAVEOPT, FSGSBASE, PTWRITE, RDPID, SGX, GFNI-SSE, CLWB, MOVDIRI,
-MOVDIR64B, CLDEMOTE, WAITPKG, ADCX, AVX, AVX2, BMI, BMI2, F16C, FMA, LZCNT,
-PCONFIG, PKU, VAES, VPCLMULQDQ, SERIALIZE, HRESET, KL, WIDEKL, AVX-VNNI,
-UINTR, AVXIFMA, AVXVNNIINT8, AVXNECONVERT, CMPCCXADD, AVXVNNIINT16, SHA512,
-SM3, SM4 and PREFETCHI instruction set support.
+MOVDIR64B, WAITPKG, ADCX, AVX, AVX2, BMI, BMI2, F16C, FMA, LZCNT, PCONFIG, PKU,
+VAES, VPCLMULQDQ, SERIALIZE, HRESET, KL, WIDEKL, AVX-VNNI, UINTR, AVXIFMA,
+AVXVNNIINT8, AVXNECONVERT, CMPCCXADD, AVXVNNIINT16, SHA512, SM3, SM4 and
+PREFETCHI instruction set support.
 
 @item sapphirerapids
 @itemx emeraldrapids
@@ -35222,8 +35246,8 @@ Produce code optimized for the most current Intel processors, which are
 Haswell and Silvermont for this version of GCC.  If you know the CPU
 on which your code will run, then you should use the corresponding
 @option{-mtune} or @option{-march} option instead of @option{-mtune=intel}.
-But, if you want your application performs better on both Haswell and
-Silvermont, then you should use this option.
+But, if you want your application performs better on both Diamond Rapids
+and Clearwater Forest, then you should use this option.
 
 As new Intel processors are deployed in the marketplace, the behavior of
 this option will change.  Therefore, if you upgrade to a newer version of

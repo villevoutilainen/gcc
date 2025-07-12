@@ -64,6 +64,9 @@ UrlSuffix(gcc/Warning-Options.html#index-Warray-bounds)
 Warray-bounds=
 UrlSuffix(gcc/Warning-Options.html#index-Warray-bounds)
 
+Wauto-profile
+UrlSuffix(gcc/Warning-Options.html#index-Wauto-profile)
+
 Wuse-after-free
 UrlSuffix(gcc/Warning-Options.html#index-Wno-use-after-free)
 
@@ -432,6 +435,9 @@ UrlSuffix(gcc/Optimize-Options.html#index-fauto-profile)
 
 fauto-profile=
 UrlSuffix(gcc/Optimize-Options.html#index-fauto-profile)
+
+fauto-profile-inlining
+UrlSuffix(gcc/Optimize-Options.html#index-fauto-profile-inlining)
 
 fbounds-check
 LangUrlSuffix_D(gdc/Runtime-Options.html#index-fbounds-check) LangUrlSuffix_Fortran(gfortran/Code-Gen-Options.html#index-fbounds-check)

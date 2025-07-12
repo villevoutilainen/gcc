@@ -3116,10 +3116,30 @@ ix86_place_single_vector_set (rtx dest, rtx src, bitmap bbs,
 
   rtx_insn *set_insn;
   if (insn == BB_HEAD (bb))
-    set_insn = emit_insn_before (set, insn);
+    {
+      set_insn = emit_insn_before (set, insn);
+      if (dump_file)
+	{
+	  fprintf (dump_file, "\nPlace:\n\n");
+	  print_rtl_single (dump_file, set_insn);
+	  fprintf (dump_file, "\nbefore:\n\n");
+	  print_rtl_single (dump_file, insn);
+	  fprintf (dump_file, "\n");
+	}
+    }
   else
-    set_insn = emit_insn_after (set,
-				insn ? PREV_INSN (insn) : BB_END (bb));
+    {
+      rtx_insn *after = insn ? PREV_INSN (insn) : BB_END (bb);
+      set_insn = emit_insn_after (set, after);
+      if (dump_file)
+	{
+	  fprintf (dump_file, "\nPlace:\n\n");
+	  print_rtl_single (dump_file, set_insn);
+	  fprintf (dump_file, "\nafter:\n\n");
+	  print_rtl_single (dump_file, after);
+	  fprintf (dump_file, "\n");
+	}
+    }
 
   if (inner_scalar)
     {
@@ -3129,7 +3149,15 @@ ix86_place_single_vector_set (rtx dest, rtx src, bitmap bbs,
 	  && GET_MODE (reg) != GET_MODE (inner_scalar))
 	inner_scalar = gen_rtx_SUBREG (GET_MODE (reg), inner_scalar, 0);
       rtx set = gen_rtx_SET (reg, inner_scalar);
-      emit_insn_before (set, set_insn);
+      insn = emit_insn_before (set, set_insn);
+      if (dump_file)
+	{
+	  fprintf (dump_file, "\nAdd:\n\n");
+	  print_rtl_single (dump_file, insn);
+	  fprintf (dump_file, "\nbefore:\n\n");
+	  print_rtl_single (dump_file, set_insn);
+	  fprintf (dump_file, "\n");
+	}
     }
 }
 
@@ -3367,6 +3395,15 @@ make_pass_remove_partial_avx_dependency (gcc::context *ctxt)
 static machine_mode
 ix86_get_vector_cse_mode (unsigned int size, machine_mode smode)
 {
+  /* Use the inner scalar mode of vector broadcast source in:
+
+     (set (reg:V8DF 394)
+	  (vec_duplicate:V8DF (reg:V2DF 190 [ alpha ])))
+
+     to compute the vector mode for broadcast from vector source.
+   */
+  if (VECTOR_MODE_P (smode))
+    smode = GET_MODE_INNER (smode);
   scalar_mode s_mode = as_a <scalar_mode> (smode);
   poly_uint64 nunits = size / GET_MODE_SIZE (smode);
   machine_mode mode = mode_for_vector (s_mode, nunits).require ();
@@ -3416,7 +3453,15 @@ replace_vector_const (machine_mode vector_mode, rtx vector_const,
 		  vreg = gen_reg_rtx (vmode);
 		  rtx vsubreg = gen_rtx_SUBREG (vmode, vector_const, 0);
 		  rtx pat = gen_rtx_SET (vreg, vsubreg);
-		  emit_insn_before (pat, insn);
+		  rtx_insn *vinsn = emit_insn_before (pat, insn);
+		  if (dump_file)
+		    {
+		      fprintf (dump_file, "\nInsert an extra move:\n\n");
+		      print_rtl_single (dump_file, vinsn);
+		      fprintf (dump_file, "\nbefore:\n\n");
+		      print_rtl_single (dump_file, insn);
+		      fprintf (dump_file, "\n");
+		    }
 		}
 	      replace = gen_rtx_SUBREG (mode, vreg, 0);
 	    }
@@ -3424,11 +3469,22 @@ replace_vector_const (machine_mode vector_mode, rtx vector_const,
 	    replace = gen_rtx_SUBREG (mode, vector_const, 0);
 	}
 
+      if (dump_file)
+	{
+	  fprintf (dump_file, "\nReplace:\n\n");
+	  print_rtl_single (dump_file, insn);
+	}
       SET_SRC (set) = replace;
       /* Drop possible dead definitions.  */
       PATTERN (insn) = set;
       INSN_CODE (insn) = -1;
       recog_memoized (insn);
+      if (dump_file)
+	{
+	  fprintf (dump_file, "\nwith:\n\n");
+	  print_rtl_single (dump_file, insn);
+	  fprintf (dump_file, "\n");
+	}
       df_insn_rescan (insn);
     }
 }
@@ -3485,8 +3541,10 @@ ix86_broadcast_inner (rtx op, machine_mode mode,
       *insn_p = nullptr;
       return const0_rtx;
     }
-  else if (GET_MODE_CLASS (mode) == MODE_VECTOR_INT
-	   && (op == constm1_rtx || op == CONSTM1_RTX (mode)))
+  else if ((GET_MODE_CLASS (mode) == MODE_VECTOR_INT
+	    && (op == constm1_rtx || op == CONSTM1_RTX (mode)))
+	    || (GET_MODE_CLASS (mode) == MODE_VECTOR_FLOAT
+		&& float_vector_all_ones_operand (op, mode)))
     {
       *scalar_mode_p = QImode;
       *kind_p = X86_CSE_CONSTM1_VECTOR;
@@ -3773,6 +3831,8 @@ remove_redundant_vector_load (void)
 
   if (replaced)
     {
+      auto_vec<rtx_insn *> control_flow_insns;
+
       /* (Re-)discover loops so that bb->loop_father can be used in the
 	 analysis below.  */
       calculate_dominance_info (CDI_DOMINATORS);
@@ -3788,6 +3848,28 @@ remove_redundant_vector_load (void)
 		rtx set = gen_rtx_SET (load->broadcast_reg,
 				       load->broadcast_source);
 		insn = emit_insn_after (set, load->def_insn);
+
+		if (cfun->can_throw_non_call_exceptions)
+		  {
+		    /* Handle REG_EH_REGION note in DEF_INSN.  */
+		    rtx note = find_reg_note (load->def_insn,
+					      REG_EH_REGION, nullptr);
+		    if (note)
+		      {
+			control_flow_insns.safe_push (load->def_insn);
+			add_reg_note (insn, REG_EH_REGION,
+				      XEXP (note, 0));
+		      }
+		  }
+
+		if (dump_file)
+		  {
+		    fprintf (dump_file, "\nAdd:\n\n");
+		    print_rtl_single (dump_file, insn);
+		    fprintf (dump_file, "\nafter:\n\n");
+		    print_rtl_single (dump_file, load->def_insn);
+		    fprintf (dump_file, "\n");
+		  }
 	      }
 	    else
 	      ix86_place_single_vector_set (load->broadcast_reg,
@@ -3799,6 +3881,22 @@ remove_redundant_vector_load (void)
 	  }
 
       loop_optimizer_finalize ();
+
+      if (!control_flow_insns.is_empty ())
+	{
+	  free_dominance_info (CDI_DOMINATORS);
+
+	  FOR_EACH_VEC_ELT (control_flow_insns, i, insn)
+	    if (control_flow_insn_p (insn))
+	      {
+		/* Split the block after insn.  There will be a fallthru
+		   edge, which is OK so we keep it.  We have to create
+		   the exception edges ourselves.  */
+		bb = BLOCK_FOR_INSN (insn);
+		split_block (bb, insn);
+		rtl_make_eh_edge (NULL, bb, BB_END (bb));
+	      }
+	}
 
       df_process_deferred_rescans ();
     }

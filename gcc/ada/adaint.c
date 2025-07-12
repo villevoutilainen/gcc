@@ -61,6 +61,11 @@
 #define POSIX
 #include "vxWorks.h"
 #include <sys/time.h>
+#include <ctype.h> /* for isalpha */
+
+#ifndef alloca
+#define alloca(n) __builtin_alloca(n)
+#endif
 
 #if defined (__mips_vxworks)
 #include "cacheLib.h"

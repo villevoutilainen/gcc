@@ -287,10 +287,11 @@ package body Exp_Ch6 is
 
    --  This expansion is necessary in all the cases where the constant object
    --  denoted by the call needs finalization in the current subprogram, which
-   --  excludes return statements, and is not identified with another object
-   --  that will be finalized, which excludes (statically) declared objects,
-   --  dynamically allocated objects, and targets of assignments that are done
-   --  directly (without intermediate temporaries).
+   --  excludes simple return statements, and is not identified with another
+   --  object that will be finalized, which excludes (statically) declared
+   --  objects, dynamically allocated objects, components of aggregates, and
+   --  targets of assignments that are done directly (without intermediate
+   --  temporaries).
 
    procedure Expand_Non_Function_Return (N : Node_Id);
    --  Expand a simple return statement found in a procedure body, entry body,
@@ -5365,7 +5366,7 @@ package body Exp_Ch6 is
       --  to copy/readjust/finalize, we can just pass the value through (see
       --  Expand_N_Simple_Return_Statement), and thus no attachment is needed.
       --  Note that simple return statements are distributed into conditional
-      --  expressions but we may be invoked before this distribution is done.
+      --  expressions, but we may be invoked before this distribution is done.
 
       if Nkind (Uncond_Par) = N_Simple_Return_Statement then
          return;
@@ -5386,9 +5387,14 @@ package body Exp_Ch6 is
          end if;
 
       --  Note that object declarations are also distributed into conditional
-      --  expressions but we may be invoked before this distribution is done.
+      --  expressions, but we may be invoked before this distribution is done.
+      --  However that's not the case for the declarations of return objects,
+      --  see the twin Is_Optimizable_Declaration predicates that are present
+      --  in Expand_N_Case_Expression and Expand_N_If_Expression of Exp_Ch4.
 
-      elsif Nkind (Uncond_Par) = N_Object_Declaration then
+      elsif Nkind (Uncond_Par) = N_Object_Declaration
+        and then not Is_Return_Object (Defining_Identifier (Uncond_Par))
+      then
          return;
       end if;
 
@@ -5399,6 +5405,16 @@ package body Exp_Ch6 is
       if Nkind (Par) = N_Qualified_Expression
         and then Nkind (Parent (Par)) = N_Allocator
       then
+         return;
+      end if;
+
+      --  Another optimization: if the returned value is used to initialize the
+      --  component of an aggregate, then no need to copy/readjust/finalize, we
+      --  can initialize it in place. Note that assignments for aggregates are
+      --  also distributed into conditional expressions, but we may be invoked
+      --  before this distribution is done.
+
+      if Parent_Is_Regular_Aggregate (Uncond_Par) then
          return;
       end if;
 
@@ -5754,7 +5770,7 @@ package body Exp_Ch6 is
 
    exception
       when RE_Not_Available =>
-         return;
+         null;
    end Expand_N_Simple_Return_Statement;
 
    ------------------------------
@@ -9565,9 +9581,8 @@ package body Exp_Ch6 is
       --  such build-in-place functions, primitive or not.
 
       return not Restriction_Active (No_Finalization)
-        and then ((Needs_Finalization (Typ)
-                    and then not Has_Relaxed_Finalization (Typ))
-                  or else Is_Tagged_Type (Typ))
+        and then (Needs_Finalization (Typ) or else Is_Tagged_Type (Typ))
+        and then not Has_Relaxed_Finalization (Typ)
         and then not Has_Foreign_Convention (Typ);
    end Needs_BIP_Collection;
 

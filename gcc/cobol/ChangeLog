@@ -1,3 +1,264 @@
+2025-07-10  James K. Lowden  <jklowden@cobolworx.com>
+
+	PR cobol/120765
+	* cdf.y: Extend grammar for new CDF syntax, relocate dictionary.
+	* cdfval.h (cdf_dictionary): Use new CDF dictionary.
+	* dts.h: Remove useless assignment, note incorrect behavior.
+	* except.cc: Remove obsolete EC state.
+	* gcobol.1: Document CDF in its own section.
+	* genapi.cc (parser_statement_begin): Use new EC state function.
+	(parser_file_merge): Same.
+	(parser_check_fatal_exception): Same.
+	* genutil.cc (get_and_check_refstart_and_reflen): Same.
+	(get_depending_on_value_from_odo): Same.
+	(get_data_offset): Same.
+	(process_this_exception): Same.
+	* lexio.cc (check_push_pop_directive): New function.
+	(check_source_format_directive): Restrict regex search to 1 line.
+	(cdftext::free_form_reference_format): Use new function.
+	* parse.y: Define new CDF tokens, use new CDF state.
+	* parse_ante.h (cdf_tokens): Use new CDF state.
+	(redefined_token): Same.
+	(class prog_descr_t): Remove obsolete CDF state.
+	(class program_stack_t): Same.
+	(current_call_convention): Same.
+	* scan.l: Recognize new CDF tokens.
+	* scan_post.h (is_cdf_token): Same.
+	* symbols.h (cdf_current_tokens): Change current_call_convention to return void.
+	* token_names.h: Regenerate.
+	* udf/stored-char-length.cbl: Use new PUSH/POP CDF functionality.
+	* util.cc (class cdf_directives_t): Define cdf_directives_t.
+	(current_call_convention): Same.
+	(cdf_current_tokens): Same.
+	(cdf_dictionary): Same.
+	(cdf_enabled_exceptions): Same.
+	(cdf_push): Same.
+	(cdf_push_call_convention): Same.
+	(cdf_push_current_tokens): Same.
+	(cdf_push_dictionary): Same.
+	(cdf_push_enabled_exceptions): Same.
+	(cdf_push_source_format): Same.
+	(cdf_pop): Same.
+	(cdf_pop_call_convention): Same.
+	(cdf_pop_current_tokens): Same.
+	(cdf_pop_dictionary): Same.
+	(cdf_pop_enabled_exceptions): Same.
+	(cdf_pop_source_format): Same.
+	* util.h (cdf_push): Declare cdf_directives_t.
+	(cdf_push_call_convention): Same.
+	(cdf_push_current_tokens): Same.
+	(cdf_push_dictionary): Same.
+	(cdf_push_enabled_exceptions): Same.
+	(cdf_push_source_format): Same.
+	(cdf_pop): Same.
+	(cdf_pop_call_convention): Same.
+	(cdf_pop_current_tokens): Same.
+	(cdf_pop_dictionary): Same.
+	(cdf_pop_source_format): Same.
+	(cdf_pop_enabled_exceptions): Same.
+
+2025-07-09  Robert Dubner  <rdubner@symas.com>
+	    James K. Lowden  <jklowden@cobolworx.com>
+
+	PR cobol/120765
+	PR cobol/119337
+	PR cobol/120794
+	* Make-lang.in: Take control of the .cc.o rule.
+	* cbldiag.h (error_msg_direct): New declaration.
+	(gcc_location_dump): Forward declaration.
+	(location_dump): Use gcc_location_dump.
+	* cdf.y: Change some tokens.
+	* gcobc: Change dialect handling.
+	* genapi.cc (parser_call_targets_dump): Temporarily remove from service.
+	(parser_compile_dcls): Combine temporary arrays.
+	(get_binary_value_from_float): Apply const to one parameter.
+	(depending_on_value): Localize a boolean variable.
+	(normal_normal_compare): Likewise.
+	(cobol_compare): Eliminate cppcheck warning.
+	(combined_name): Apply const to an input parameter.
+	(parser_perform): Apply const to a variable.
+	(parser_accept): Improve handling of special_name_t parameter and
+	the exception conditions.
+	(parser_display): Improve handling of speciat_name_t parameter; use the
+	os_filename[] string when appropriate.
+	(program_end_stuff): Rename shadowing variable.
+	(parser_division): Consolidate temporary char[] arrays.
+	(parser_file_start): Apply const to a parameter.
+	(inspect_replacing): Likewise.
+	(parser_program_hierarchy): Rename shadowing variable.
+	(mh_identical): Apply const to parameters.
+	(float_type_of): Likewise.
+	(picky_memcpy): Likewise.
+	(mh_numeric_display): Likewise.
+	(mh_little_endian): Likewise.
+	(mh_source_is_group): Apply static to a variable it.
+	(move_helper): Quiet a cppcheck warning.
+	* genapi.h (parser_accept): Add exceptions to declaration.
+	(parser_accept_under_discussion): Add declaration.
+	(parser_display): Change to std::vector; add exceptions to declaration.
+	* lexio.cc (cdf_source_format): Improve source code location handling.
+	(source_format_t::infer): Likewise.
+	(is_fixed_format): Likewise.
+	(is_reference_format): Likewise.
+	(left_margin): Likewise.
+	(right_margin): Likewise.
+	(cobol_set_indicator_column): Likewise.
+	(include_debug): Likewise.
+	(continues_at): Likewise.
+	(indicated): Likewise.
+	(check_source_format_directive): Likewise.
+	(cdftext::free_form_reference_format): Likewise.
+	* parse.y: Tokens; program and function names; DISPLAY and ACCEPT
+	handling.
+	* parse_ante.h (class tokenset_t): Removed.
+	(class current_tokens_t): Removed.
+	(field_of): Removed.
+	* scan.l: Token handling.
+	* scan_ante.h (level_found): Comment.
+	* scan_post.h (start_condition_str): Remove cast author_state:.
+	* symbols.cc (symbols_update): Change error message.
+	(symbol_table_init): Correct and reorder entries.
+	(symbol_unresolved_file_key): New function definition.
+	(cbl_file_key_t::deforward): Change error message.
+	* symbols.h (symbol_unresolved_file_key): New declaration.
+	(keyword_tok): New function.
+	(redefined_token): New function.
+	(class current_tokens_t): New class.
+	* symfind.cc (symbol_match): Revise error message.
+	* token_names.h: Reorder and change numbers in comments.
+	* util.cc (class cdf_directives_t): New class.
+	(cobol_set_indicator_column): New function.
+	(cdf_source_format): New function.
+	(gcc_location_set_impl): Improve column handling in token_location.
+	(gcc_location_dump): New function.
+	(class temp_loc_t): Modify constructor.
+	(error_msg_direct): New function.
+	* util.h (class source_format_t): New class.
+
+2025-07-01  James K. Lowden  <jklowden@cobolworx.com>
+
+	* Make-lang.in: Use && instead of semicolon between commands.
+
+2025-07-01  Robert Dubner  <rdubner@symas.com>
+
+	* parse.y: printf() of size_t is %zu, not %ld.
+
+2025-06-30  James K. Lowden  <jklowden@cobolworx.com>
+
+	PR cobol/120772
+	PR cobol/120779
+	PR cobol/120790
+	PR cobol/120791
+	PR cobol/120794
+	* gcobc: Supply -fPIC for shared objects.
+	* genapi.cc (linemap_add): Delete empty macro.
+	(parser_enter_file): Do not call linemap_add.
+	(parser_leave_file): Same.
+	* gengen.cc (location_from_lineno): Remove function.
+	* lexio.cc (parse_replacing_term): Allow empty term.
+	(cdftext::process_file): Always append to output.
+	(cdftext::segment_line): Output #line directives.
+	* lexio.h (struct span_t): Count lines in span.
+	* parse.y: Revamp REPOSITORY, and minor syntax extensions.
+	* parse_ante.h (input_file_status_notify): Update linemap filename before location.
+	(intrinsic_token_of): Declare.
+	(parser_move_carefully): Support MOVE pointer.
+	* parse_util.h (intrinsic_token_of): New function.
+	* scan.l: New EOF logic, accept NOT=, own yylloc and yylineno.
+	* scan_ante.h (class enter_leave_t): Do not store newline count.
+	(cdf_location_set): Remove declaration.
+	(ydfltype_of): New function.
+	(update_location): Accept location parameter.
+	(reset_location): New function.
+	(YY_USER_ACTION): Use update_location().
+	(YY_USER_INIT): Update CDF location.
+	(verify_ws): New function.
+	(wait_for_the_child): Removed.
+	* symbols.h (cobol_fileline_set): return line number.
+	* util.cc (valid_move): Use range-based for loop.
+	(struct input_file_t): Remove line_map pointer.
+	(class unique_stack): New peek() member function.
+	(cobol_lineno_save): Rename to overload cobol_lineno().
+	(cobol_lineno): Replaces cobol_lineno_save().
+	(cobol_filename): Return void.
+	(location_from_lineno): New function used by genapi.cc.
+	(cdf_location_set): Remove.
+	(matched_length): No change.
+	(cobol_fileline_set): Return line number.
+	(fisspace): Remove extra semicolon.
+	(fisprint): Same.
+	* util.h (cobol_filename_restore): Return void.
+	(cobol_lineno_save): Remove declaration.
+	(cobol_lineno): Declare.
+
+2025-06-29  Robert Dubner  <rdubner@symas.com>
+
+	* Make-lang.in: Incorporate gcobol.clean.
+	* except.cc (cbl_enabled_exceptions_t::dump): Update debug message.
+	* genapi.cc (gg_attribute_bit_get): Formatting.
+	(file_static_variable): Formatting.
+	(trace1_init): Formatting.
+	(build_main_that_calls_something): Normalize function_decl use.
+	(parser_call_target): Likewise.
+	(set_call_convention): Likewise.
+	(parser_call_target_convention): Likewise.
+	(parser_call_targets_dump): Likewise.
+	(function_handle_from_name): Likewise.
+	(function_pointer_from_name): Likewise.
+	(parser_initialize_programs): Likewise.
+	(parser_statement_begin): Formatting.
+	(parser_leave_file): Use function_decl FIFO.
+	(enter_program_common): Normalize function_decl use.
+	(parser_enter_program): Normalize function_decl use.
+	(tree_type_from_field_type): Normalize function_decl use.
+	(is_valuable): Comment.
+	(pe_stuff): Change name to program_end_stuff.
+	(program_end_stuff): Likewise.
+	(parser_exit): Likewise.
+	(parser_division): Normalize function_decl use.
+	(create_and_call): Normalize function_decl use.
+	(parser_call): Normalize function_decl use.
+	(parser_set_pointers): Normalize function_decl use.
+	(parser_program_hierarchy): Normalize function_decl use.
+	(psa_FldLiteralA): Defeat attempt to re-use literals. (Fails on some aarch64).
+	(parser_symbol_add): Error message formatting.
+	* genapi.h: Formatting.
+	* gengen.cc (struct cbl_translation_unit_t): Add function_decl FIFO.
+	(show_type): Rename to gg_show_type.
+	(gg_show_type): Correct an error message.
+	(gg_assign): Formatting; change error handling.
+	(gg_modify_function_type): Normalize function_decl use.
+	(gg_define_function_with_no_parameters): Fold into gg_defint_function().
+	(function_decl_key): Normalize function_decl use.
+	(gg_peek_fn_decl): Normalize function_decl use.
+	(gg_build_fn_decl): Normalize function_decl use.
+	(gg_define_function): Normalize function_decl use.
+	(gg_tack_on_function_parameters): Remove.
+	(gg_finalize_function): Normalize function_decl use.
+	(gg_leaving_the_source_code_file): Normalize function_decl use.
+	(gg_call_expr_list): Normalize function_decl use.
+	(gg_trans_unit_var_decl): Normalize function_decl use.
+	(gg_insert_into_assemblerf): New function; formatting.
+	* gengen.h (struct gg_function_t): Eliminate "is_truly_nested" flag.
+	(gg_assign): Incorporate return value.
+	(gg_define_function): Normalize function_decl use.
+	(gg_define_function_with_no_parameters): Eliminate.
+	(gg_build_fn_decl): Normalize function_decl use.
+	(gg_peek_fn_decl): Normalize function_decl use.
+	(gg_modify_function_type): Normalize function_decl use.
+	(gg_call_expr_list): Normalize function_decl use.
+	(gg_get_function_decl): Normalize function_decl use.
+	(location_from_lineno): Prefix with "extern".
+	(gg_open): Likewise.
+	(gg_close): Likewise.
+	(gg_get_indirect_reference): Likewise.
+	(gg_insert_into_assembler): Likewise.
+	(gg_insert_into_assemblerf): Likewise.
+	(gg_show_type): New declaration.
+	(gg_leaving_the_source_code_file): New declaration.
+	* parse.y: Format debugging message.
+	* parse_ante.h: Normalize function_decl use.
+
 2025-06-20  James K. Lowden  <jklowden@cobolworx.com>
 
 	PR cobol/120621

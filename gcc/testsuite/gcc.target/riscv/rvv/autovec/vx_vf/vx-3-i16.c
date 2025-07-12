@@ -18,3 +18,5 @@ TEST_BINARY_VX_SIGNED_0(T)
 /* { dg-final { scan-assembler-not {vrem.vx} } } */
 /* { dg-final { scan-assembler-not {vmax.vx} } } */
 /* { dg-final { scan-assembler-not {vmin.vx} } } */
+/* { dg-final { scan-assembler-not {vsadd.vx} } } */
+/* { dg-final { scan-assembler-not {vssub.vx} } } */

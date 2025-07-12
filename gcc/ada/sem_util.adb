@@ -52,6 +52,7 @@ with Sem_Attr;       use Sem_Attr;
 with Sem_Cat;        use Sem_Cat;
 with Sem_Ch6;        use Sem_Ch6;
 with Sem_Ch8;        use Sem_Ch8;
+with Sem_Ch12;       use Sem_Ch12;
 with Sem_Ch13;       use Sem_Ch13;
 with Sem_Dim;        use Sem_Dim;
 with Sem_Disp;       use Sem_Disp;
@@ -2176,6 +2177,7 @@ package body Sem_Util is
       Def_Id      : Entity_Id;
       Btyp        : Entity_Id := Base_Type (Typ);
 
+      Predicated_Parent_Used : Boolean := False;
    begin
       --  The Related_Node better be here or else we won't be able to
       --  attach new itypes to a node in the tree.
@@ -2190,6 +2192,25 @@ package body Sem_Util is
         and then Present (Underlying_Type (Btyp))
       then
          Btyp := Underlying_Type (Btyp);
+
+      --  If a predicate has been specified for an unconstrained
+      --  ancestor subtype, then that ancestor subtype needs to also
+      --  be an ancestor subtype for the subtype we are building so that
+      --  we don't lose the predicate. It is somewhat ugly here to have
+      --  to replicate the precondition for Predicated_Parent.
+
+      elsif Typ in E_Array_Subtype_Id
+                   | E_Record_Subtype_Id
+                   | E_Record_Subtype_With_Private_Id
+        and then Present (Predicated_Parent (Typ))
+      then
+         --  Assert that the following assignment is only changing the
+         --  subtype, not the type.
+
+         pragma Assert (Base_Type (Predicated_Parent (Typ)) = Btyp);
+
+         Btyp := Predicated_Parent (Typ);
+         Predicated_Parent_Used := True;
       end if;
 
       Indic :=
@@ -2211,7 +2232,10 @@ package body Sem_Util is
 
       Analyze (Subtyp_Decl, Suppress => All_Checks);
 
-      if Is_Itype (Def_Id) and then Has_Predicates (Typ) then
+      if Is_Itype (Def_Id)
+        and then Has_Predicates (Typ)
+        and then not Predicated_Parent_Used
+      then
          Inherit_Predicate_Flags (Def_Id, Typ);
 
          --  Indicate where the predicate function may be found
@@ -2686,6 +2710,15 @@ package body Sem_Util is
 
                   Append_Unique_Elmt (N, Identifiers_List);
                end if;
+
+            --  Skip attribute references created by the compiler, typically
+            --  'Constrained applied to one of the writable actuals, to avoid
+            --  spurious errors.
+
+            elsif Nkind (N) = N_Attribute_Reference
+              and then not Comes_From_Source (N)
+            then
+               return Skip;
             end if;
 
             return OK;
@@ -10229,6 +10262,43 @@ package body Sem_Util is
           Strval => String_From_Name_Buffer);
    end Get_Default_External_Name;
 
+   --------------------------------
+   -- Get_Enclosing_Ghost_Entity --
+   --------------------------------
+
+   function Get_Enclosing_Ghost_Entity (N : Node_Id) return Entity_Id is
+   begin
+      if Is_Entity_Name (N) then
+         return Entity (N);
+      else
+         case Nkind (N) is
+            when N_Attribute_Reference
+               | N_Explicit_Dereference
+               | N_Indexed_Component
+               | N_Selected_Component
+               | N_Slice
+            =>
+               return Get_Enclosing_Ghost_Entity (Prefix (N));
+
+            when N_Function_Call =>
+               return Get_Called_Entity (N);
+
+            --  We are interested in the target type, because if it is ghost,
+            --  then the object is ghost as well and if it is non-ghost, then
+            --  its expression can't be ghost.
+
+            when N_Qualified_Expression
+               | N_Type_Conversion
+               | N_Unchecked_Type_Conversion
+            =>
+               return Entity (Subtype_Mark (N));
+
+            when others =>
+               return Empty;
+         end case;
+      end if;
+   end Get_Enclosing_Ghost_Entity;
+
    --------------------------
    -- Get_Enclosing_Object --
    --------------------------
@@ -10243,16 +10313,11 @@ package body Sem_Util is
                | N_Selected_Component
                | N_Slice
             =>
-               --  If not generating code, a dereference may be left implicit.
-               --  In thoses cases, return Empty.
+               return Get_Enclosing_Object (Prefix (N));
 
-               if Is_Access_Type (Etype (Prefix (N))) then
-                  return Empty;
-               else
-                  return Get_Enclosing_Object (Prefix (N));
-               end if;
-
-            when N_Type_Conversion =>
+            when N_Type_Conversion
+               | N_Unchecked_Type_Conversion
+            =>
                return Get_Enclosing_Object (Expression (N));
 
             when others =>
@@ -10260,32 +10325,6 @@ package body Sem_Util is
          end case;
       end if;
    end Get_Enclosing_Object;
-
-   -------------------------------
-   -- Get_Enclosing_Deep_Object --
-   -------------------------------
-
-   function Get_Enclosing_Deep_Object (N : Node_Id) return Entity_Id is
-   begin
-      if Is_Entity_Name (N) then
-         return Entity (N);
-      else
-         case Nkind (N) is
-            when N_Explicit_Dereference
-               | N_Indexed_Component
-               | N_Selected_Component
-               | N_Slice
-            =>
-               return Get_Enclosing_Deep_Object (Prefix (N));
-
-            when N_Type_Conversion =>
-               return Get_Enclosing_Deep_Object (Expression (N));
-
-            when others =>
-               return Empty;
-         end case;
-      end if;
-   end Get_Enclosing_Deep_Object;
 
    ---------------------------
    -- Get_Enum_Lit_From_Pos --
@@ -12798,6 +12837,150 @@ package body Sem_Util is
 
       return False;
    end Has_Overriding_Initialize;
+
+   -----------------------------
+   -- Has_Potentially_Invalid --
+   -----------------------------
+
+   function Has_Potentially_Invalid (E : Entity_Id) return Boolean is
+
+      function Denotes_Invalid_Parameter
+        (Expr  : Node_Id;
+         Param : Entity_Id)
+         return Boolean;
+      --  Returns True iff expression Expr denotes a formal parameter or
+      --  function Param (through its attribute Result).
+
+      -------------------------------
+      -- Denotes_Invalid_Parameter --
+      -------------------------------
+
+      function Denotes_Invalid_Parameter
+        (Expr  : Node_Id;
+         Param : Entity_Id) return Boolean is
+      begin
+         if Nkind (Expr) in N_Identifier | N_Expanded_Name then
+            return Entity (Expr) = Param;
+         else
+            pragma Assert (Is_Attribute_Result (Expr));
+            return Entity (Prefix (Expr)) = Param;
+         end if;
+      end Denotes_Invalid_Parameter;
+
+   --  Start of processing for Has_Potentially_Invalid
+
+   begin
+      --  When analyzing, we checked all syntax legality rules for the aspect
+      --  Potentially_Invalid, but didn't store the property anywhere (e.g. as
+      --  an Einfo flag). To query the property we look directly at the AST,
+      --  but now without any syntactic checks.
+
+      case Ekind (E) is
+         --  Constants have this aspect attached directly; for deferred
+         --  constants, the aspect is attached to the partial view.
+
+         when E_Constant =>
+            return Has_Aspect (E, Aspect_Potentially_Invalid);
+
+         --  Variables have this aspect attached directly
+
+         when E_Variable =>
+            return Has_Aspect (E, Aspect_Potentially_Invalid);
+
+         when Formal_Kind
+            | E_Function
+         =>
+            --  Instances of Ada.Unchecked_Conversion is a special case. Look
+            --  for the aspect on the generic instance. The aspect necessarily
+            --  applies to the function result.
+
+            if Is_Unchecked_Conversion_Instance (E) then
+               declare
+                  Wrapper_Pkg : constant Node_Id :=
+                    Defining_Unit_Name (Parent (Subprogram_Spec (E)));
+                  pragma Assert (Is_Wrapper_Package (Wrapper_Pkg));
+                  Instance    : constant Entity_Id := Defining_Unit_Name
+                    (Get_Unit_Instantiation_Node (Wrapper_Pkg));
+               begin
+                  return Has_Aspect (Instance, Aspect_Potentially_Invalid);
+               end;
+            end if;
+
+            --  Formal parameters and functions have the Potentially_Invalid
+            --  aspect attached to the subprogram entity and must be listed in
+            --  the aspect expression.
+
+            declare
+               Subp_Id     : Entity_Id;
+               Aspect_Expr : Node_Id;
+               Param_Expr  : Node_Id;
+               Assoc       : Node_Id;
+
+            begin
+               if Is_Formal (E) then
+                  Subp_Id := Scope (E);
+               else
+                  Subp_Id := E;
+               end if;
+
+               if Has_Aspect (Subp_Id, Aspect_Potentially_Invalid) then
+                  Aspect_Expr :=
+                    Find_Value_Of_Aspect
+                      (Subp_Id, Aspect_Potentially_Invalid);
+
+                  --  Aspect expression is either an aggregate with an optional
+                  --  Boolean expression (which defaults to True), e.g.:
+                  --
+                  --    function F (X : Integer) return Integer
+                  --      with Potentially_Invalid => (X => True, F'Result);
+
+                  if Nkind (Aspect_Expr) = N_Aggregate then
+
+                     if Present (Component_Associations (Aspect_Expr)) then
+                        Assoc := First (Component_Associations (Aspect_Expr));
+
+                        while Present (Assoc) loop
+                           if Denotes_Invalid_Parameter
+                             (First (Choices (Assoc)), E)
+                           then
+                              return
+                                Is_True
+                                  (Static_Boolean (Expression (Assoc)));
+                           end if;
+
+                           Next (Assoc);
+                        end loop;
+                     end if;
+
+                     Param_Expr := First (Expressions (Aspect_Expr));
+
+                     while Present (Param_Expr) loop
+                        if Denotes_Invalid_Parameter (Param_Expr, E) then
+                           return True;
+                        end if;
+
+                        Next (Param_Expr);
+                     end loop;
+
+                     return False;
+
+                  --  or it is a single identifier, e.g.:
+                  --
+                  --    function F (X : Integer) return Integer
+                  --      with Potentially_Invalid => X;
+
+                  else
+                     return Denotes_Invalid_Parameter (Aspect_Expr, E);
+                  end if;
+               else
+                  return False;
+               end if;
+            end;
+
+         when others =>
+            raise Program_Error;
+      end case;
+   end Has_Potentially_Invalid;
 
    --------------------------------------
    -- Has_Preelaborable_Initialization --
@@ -23162,11 +23345,6 @@ package body Sem_Util is
       then
          return True;
 
-      --  Mutably tagged types require default initialization
-
-      elsif Is_Mutably_Tagged_CW_Equivalent_Type (Typ) then
-         return True;
-
       --  If Initialize/Normalize_Scalars is in effect, string objects also
       --  need initialization, unless they are created in the course of
       --  expanding an aggregate (since in the latter case they will be
@@ -23934,7 +24112,7 @@ package body Sem_Util is
 
          Result := N;
 
-         if N > Empty_Or_Error then
+         if N not in Empty | Error then
             pragma Assert (Nkind (N) not in N_Entity);
 
             Result := New_Copy (N);
@@ -24015,7 +24193,7 @@ package body Sem_Util is
 
          Result := Id;
 
-         if Id > Empty_Or_Error then
+         if Id not in Empty | Error then
             pragma Assert (Nkind (Id) in N_Entity);
 
             --  Determine whether the entity has a corresponding new entity
@@ -24129,7 +24307,9 @@ package body Sem_Util is
             Next (Old_Act);
          end loop;
 
-         pragma Assert (Replaced);
+         if Nkind (Old_Call) /= N_Function_Call then
+            pragma Assert (Replaced);
+         end if;
       end Update_Controlling_Argument;
 
       -------------------------------
@@ -24986,7 +25166,7 @@ package body Sem_Util is
             --  In case of a call rewritten in GNATprove mode while "inlining
             --  for proof" go to the original call.
 
-            elsif Nkind (Par) = N_Null_Statement then
+            elsif Nkind (Par) in N_Null_Statement | N_Block_Statement then
                pragma Assert
                  (GNATprove_Mode
                     and then

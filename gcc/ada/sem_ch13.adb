@@ -1930,6 +1930,9 @@ package body Sem_Ch13 is
             procedure Analyze_Aspect_Implicit_Dereference;
             --  Perform analysis of the Implicit_Dereference aspects
 
+            procedure Analyze_Aspect_Potentially_Invalid;
+            --  Perform analysis of aspect Potentially_Invalid
+
             procedure Analyze_Aspect_Relaxed_Initialization;
             --  Perform analysis of aspect Relaxed_Initialization
 
@@ -2296,6 +2299,267 @@ package body Sem_Ch13 is
                end if;
 
             end Analyze_Aspect_Implicit_Dereference;
+
+            ----------------------------------------
+            -- Analyze_Aspect_Potentially_Invalid --
+            ----------------------------------------
+
+            procedure Analyze_Aspect_Potentially_Invalid is
+               procedure Analyze_Aspect_Parameter
+                 (Subp_Id : Entity_Id;
+                  Param   : Node_Id;
+                  Seen    : in out Elist_Id);
+               --  Analyze parameter that appears in the expression of the
+               --  aspect Potentially_Invalid.
+
+               ------------------------------
+               -- Analyze_Aspect_Parameter --
+               ------------------------------
+
+               procedure Analyze_Aspect_Parameter
+                 (Subp_Id : Entity_Id;
+                  Param   : Node_Id;
+                  Seen    : in out Elist_Id)
+               is
+               begin
+                  --  Set name of the aspect for error messages
+                  Error_Msg_Name_1 := Nam;
+
+                  --  The potentially invalid parameter is a formal parameter
+
+                  if Nkind (Param) in N_Identifier | N_Expanded_Name then
+                     Analyze (Param);
+
+                     declare
+                        Item : constant Entity_Id := Entity (Param);
+                     begin
+                        --  It must be a formal of the analyzed subprogram
+
+                        if Scope (Item) = Subp_Id then
+
+                           pragma Assert (Is_Formal (Item));
+
+                           --  It must not have scalar type
+
+                           if Is_Scalar_Type (Underlying_Type (Etype (Item)))
+                           then
+                              Error_Msg_N ("illegal aspect % item", Param);
+                              Error_Msg_N
+                                ("\item must not have scalar type", Param);
+                           end if;
+
+                           --  Detect duplicated items
+
+                           if Contains (Seen, Item) then
+                              Error_Msg_N ("duplicate aspect % item", Param);
+                           else
+                              Append_New_Elmt (Item, Seen);
+                           end if;
+                        else
+                           Error_Msg_N ("illegal aspect % item", Param);
+                        end if;
+                     end;
+
+                  --  The potentially invalid parameter is the function's
+                  --  Result attribute.
+
+                  elsif Is_Attribute_Result (Param) then
+                     Analyze (Param);
+
+                     declare
+                        Pref : constant Node_Id := Prefix (Param);
+                     begin
+                        if Present (Pref)
+                          and then
+                            Nkind (Pref) in N_Identifier | N_Expanded_Name
+                          and then
+                            Entity (Pref) = Subp_Id
+                        then
+                           --  Detect duplicated items
+
+                           if Contains (Seen, Subp_Id) then
+                              Error_Msg_N ("duplicate aspect % item", Param);
+                           else
+                              Append_New_Elmt (Entity (Pref), Seen);
+                           end if;
+
+                        else
+                           Error_Msg_N ("illegal aspect % item", Param);
+                        end if;
+                     end;
+                  else
+                     Error_Msg_N ("illegal aspect % item", Param);
+                  end if;
+               end Analyze_Aspect_Parameter;
+
+               --  Local variables
+
+               Seen : Elist_Id := No_Elist;
+               --  Items that appear in the potentially invalid aspect
+               --  expression of a subprogram; for detecting duplicates.
+
+               Restore_Scope : Boolean;
+               --  Will be set to True if we need to restore the scope table
+               --  after analyzing the aspect expression.
+
+            --  Start of processing for Analyze_Aspect_Potentially_Invalid
+
+            begin
+               --  Set name of the aspect for error messages
+               Error_Msg_Name_1 := Nam;
+
+               --  Annotation of a variable; no aspect expression is allowed
+
+               if Ekind (E) = E_Variable then
+                  if Present (Expr) then
+                     Error_Msg_N ("illegal aspect % expression", Expr);
+                  end if;
+
+               --  Annotation of a constant; no aspect expression is allowed.
+               --  For a deferred constant, the aspect must be attached to the
+               --  partial view.
+
+               elsif Ekind (E) = E_Constant then
+                  if Present (Incomplete_Or_Partial_View (E)) then
+                     Error_Msg_N
+                       ("aspect % must apply to deferred constant", N);
+
+                  elsif Present (Expr) then
+                     Error_Msg_N ("illegal aspect % expression", Expr);
+                  end if;
+
+               --  Annotation of a subprogram; aspect expression is required
+
+               elsif Is_Subprogram_Or_Entry (E)
+                 or else Is_Generic_Subprogram (E)
+               then
+
+                  --  Not allowed for renaming declarations. Examine the
+                  --  original node because a subprogram renaming may have been
+                  --  rewritten as a body.
+
+                  if Nkind (Original_Node (N)) in N_Renaming_Declaration then
+                     Error_Msg_N
+                       ("aspect % not allowed for renaming declaration",
+                        Aspect);
+                  end if;
+
+                  if Present (Expr) then
+
+                     --  If we analyze subprogram body that acts as its own
+                     --  spec, then the subprogram itself and its formals are
+                     --  already installed; otherwise, we need to install them,
+                     --  as they must be visible when analyzing the aspect
+                     --  expression.
+
+                     if In_Open_Scopes (E) then
+                        Restore_Scope := False;
+                     else
+                        Restore_Scope := True;
+                        Push_Scope (E);
+
+                        --  Only formals of the subprogram itself can appear
+                        --  in Potentially_Invalid aspect expression, not
+                        --  formals of the enclosing generic unit. (This is
+                        --  different than in Precondition or Depends aspects,
+                        --  where both kinds of formals are allowed.)
+
+                        Install_Formals (E);
+                     end if;
+
+                     --  Aspect expression is either an aggregate with list of
+                     --  parameters (and possibly the Result attribute for a
+                     --  function).
+
+                     if Nkind (Expr) = N_Aggregate then
+
+                        --  Component associations in the aggregate must be a
+                        --  parameter name followed by a static boolean
+                        --  expression.
+
+                        if Present (Component_Associations (Expr)) then
+                           declare
+                              Assoc : Node_Id :=
+                                First (Component_Associations (Expr));
+                           begin
+                              while Present (Assoc) loop
+                                 if List_Length (Choices (Assoc)) = 1 then
+                                    Analyze_Aspect_Parameter
+                                      (E, First (Choices (Assoc)), Seen);
+
+                                    if Inside_A_Generic then
+                                       Preanalyze_And_Resolve
+                                         (Expression (Assoc), Any_Boolean);
+                                    else
+                                       Analyze_And_Resolve
+                                         (Expression (Assoc), Any_Boolean);
+                                    end if;
+
+                                    if not Is_OK_Static_Expression
+                                      (Expression (Assoc))
+                                    then
+                                       Error_Msg_Name_1 := Nam;
+                                       Flag_Non_Static_Expr
+                                         ("expression of aspect % " &
+                                          "must be static!", Aspect);
+                                    end if;
+
+                                 else
+                                    Error_Msg_Name_1 := Nam;
+                                    Error_Msg_N
+                                      ("illegal aspect % expression", Expr);
+                                 end if;
+                                 Next (Assoc);
+                              end loop;
+                           end;
+                        end if;
+
+                        --  Expressions of the aggregate are parameter names
+
+                        if Present (Expressions (Expr)) then
+                           declare
+                              Param : Node_Id := First (Expressions (Expr));
+
+                           begin
+                              while Present (Param) loop
+                                 Analyze_Aspect_Parameter (E, Param, Seen);
+                                 Next (Param);
+                              end loop;
+                           end;
+                        end if;
+
+                        --  Mark the aggregate expression itself as analyzed;
+                        --  its subexpressions were marked when they themselves
+                        --  were analyzed.
+
+                        Set_Analyzed (Expr);
+
+                     --  Otherwise, it is a single name of a subprogram
+                     --  parameter (or possibly the Result attribute for
+                     --  a function).
+
+                     else
+                        Analyze_Aspect_Parameter (E, Expr, Seen);
+                     end if;
+
+                     if Restore_Scope then
+                        End_Scope;
+                     end if;
+
+                  --  For instances of Ada.Unchecked_Conversion, allow a
+                  --  parameterless aspect, as the 'Result attribute is not
+                  --  defined there.
+
+                  elsif Is_Unchecked_Conversion_Instance (E) then
+                     null;
+                  else
+                     Error_Msg_N ("missing expression for aspect %", N);
+                  end if;
+
+               else
+                  Error_Msg_N ("inappropriate entity for aspect %", E);
+               end if;
+            end Analyze_Aspect_Potentially_Invalid;
 
             -------------------------------------------
             -- Analyze_Aspect_Relaxed_Initialization --
@@ -4075,6 +4339,12 @@ package body Sem_Ch13 is
 
                   goto Continue;
 
+               --  Potentially_Invalid
+
+               when Aspect_Potentially_Invalid =>
+                  Analyze_Aspect_Potentially_Invalid;
+                  goto Continue;
+
                --  SPARK_Mode
 
                when Aspect_SPARK_Mode =>
@@ -4364,6 +4634,7 @@ package body Sem_Ch13 is
 
                when Aspect_Designated_Storage_Model =>
                   if not All_Extensions_Allowed then
+                     Error_Msg_Name_1 := Nam;
                      Error_Msg_GNAT_Extension ("aspect %", Loc);
                      goto Continue;
 
@@ -8591,6 +8862,43 @@ package body Sem_Ch13 is
             Num_Repped_Components   : Nat := 0;
             Num_Unrepped_Components : Nat := 0;
 
+            function Unchecked_Union_Pragma_Pending return Boolean;
+            --  Return True in the corner case of an Unchecked_Union pragma
+            --  occuring after the record representation clause (which
+            --  means that Is_Unchecked_Union will return False for Rectype,
+            --  even though it would return True if called later after the
+            --  pragma is analyzed).
+
+            ------------------------------------
+            -- Unchecked_Union_Pragma_Pending --
+            ------------------------------------
+
+            function Unchecked_Union_Pragma_Pending return Boolean is
+               Decl_List_Element : Node_Id := N;
+               Pragma_Arg : Node_Id;
+            begin
+               while Present (Decl_List_Element) loop
+                  if Nkind (Decl_List_Element) = N_Pragma
+                    and then Get_Pragma_Id (Decl_List_Element) =
+                             Pragma_Unchecked_Union
+                    and then not Is_Empty_List (Pragma_Argument_Associations
+                                                  (Decl_List_Element))
+                  then
+                     Pragma_Arg := Get_Pragma_Arg
+                                     (First (Pragma_Argument_Associations
+                                               (Decl_List_Element)));
+                     if Nkind (Pragma_Arg) = N_Identifier
+                       and then Chars (Pragma_Arg) = Chars (Rectype)
+                     then
+                        return True;
+                     end if;
+                  end if;
+
+                  Next (Decl_List_Element);
+               end loop;
+               return False;
+            end Unchecked_Union_Pragma_Pending;
+
          begin
             --  First count number of repped and unrepped components
 
@@ -8629,8 +8937,10 @@ package body Sem_Ch13 is
                     --  Ignore discriminant in unchecked union, since it is
                     --  not there, and cannot have a component clause.
 
-                    and then (not Is_Unchecked_Union (Rectype)
-                               or else Ekind (Comp) /= E_Discriminant)
+                    and then (Ekind (Comp) /= E_Discriminant
+                              or else not (Is_Unchecked_Union (Rectype)
+                                           or else
+                                             Unchecked_Union_Pragma_Pending))
                   then
                      Error_Msg_Sloc := Sloc (Comp);
                      Error_Msg_NE
@@ -9986,6 +10296,12 @@ package body Sem_Ch13 is
       --  Includes a call to the predicate function for type T in Expr if
       --  Predicate_Function (T) is non-empty.
 
+      function Has_Source_Predicate (T : Entity_Id) return Boolean;
+      --  Return True if one of the 3 predicate aspects is specified
+      --  explicitly (either via a pragma or an aspect specification, but
+      --  not implicitly via propagation from some other type/subtype via
+      --  RM 3.2.4(5)) for the type/subtype T.
+
       procedure Replace_Current_Instance_References
         (N : Node_Id; Typ, New_Entity : Entity_Id);
       --  Replace all references to Typ in the tree rooted at N with
@@ -10202,6 +10518,41 @@ package body Sem_Ch13 is
          end loop;
       end Add_Predicates;
 
+      --------------------------
+      -- Has_Source_Predicate --
+      --------------------------
+
+      function Has_Source_Predicate (T : Entity_Id) return Boolean is
+         Rep_Item : Node_Id := First_Rep_Item (T);
+      begin
+         while Present (Rep_Item) loop
+            case Nkind (Rep_Item) is
+               when N_Pragma =>
+                  if Get_Pragma_Id (Rep_Item) = Pragma_Predicate
+                    and then T = Entity (Expression
+                      (First (Pragma_Argument_Associations (Rep_Item))))
+                  then
+                     return True;
+                  end if;
+
+               when N_Aspect_Specification =>
+                  if Get_Aspect_Id (Rep_Item) in
+                       Aspect_Static_Predicate
+                         | Aspect_Dynamic_Predicate | Aspect_Predicate
+                    and then Entity (Rep_Item) = T
+                  then
+                     return True;
+                  end if;
+
+               when others =>
+                  null;
+            end case;
+
+            Next_Rep_Item (Rep_Item);
+         end loop;
+         return False;
+      end Has_Source_Predicate;
+
       -----------------------------------------
       -- Replace_Current_Instance_References --
       -----------------------------------------
@@ -10245,6 +10596,21 @@ package body Sem_Ch13 is
       --  context where expansion and tests are enabled.
 
       SId := Predicate_Function (Typ);
+
+      --  When declaring a subtype S whose "predecessor" subtype PS (that is,
+      --  the subtype denoted by the subtype_mark in the declaration of S)
+      --  already has a predicate function, do not confuse that existing
+      --  function for PS with the function we need to build for S if
+      --  Has_Source_Predicate returns True for S.
+
+      if Present (SId)
+        and then Nkind (Parent (Typ)) = N_Subtype_Declaration
+        and then Etype (First_Entity (SId)) /= Typ
+        and then Has_Source_Predicate (Typ)
+      then
+         SId := Empty;
+      end if;
+
       if not Has_Predicates (Typ)
         or else (Present (SId) and then Has_Completion (SId))
         or else
@@ -11080,24 +11446,16 @@ package body Sem_Ch13 is
    ----------------------------------
 
    procedure Check_Aspect_At_Freeze_Point (ASN : Node_Id) is
-      Ident : constant Node_Id := Identifier (ASN);
-      --  Identifier (use Entity field to save expression)
-
       Expr : constant Node_Id := Expression (ASN);
-      --  For cases where using Entity (Identifier) doesn't work
 
-      A_Id : constant Aspect_Id := Get_Aspect_Id (Chars (Ident));
+      A_Id : constant Aspect_Id := Get_Aspect_Id (Chars (Identifier (ASN)));
 
       T : Entity_Id := Empty;
       --  Type required for preanalyze call
 
    begin
-      --  On entry to this procedure, Entity (Ident) contains a copy of the
-      --  original expression from the aspect, saved for this purpose.
-
-      --  On exit from this procedure Entity (Ident) is unchanged, still
-      --  containing that copy, but Expression (Ident) is a preanalyzed copy
-      --  of the expression, preanalyzed just after the freeze point.
+      --  On exit from this procedure, Expression (ASN) is a copy of the
+      --  original expression, preanalyzed just after the freeze point.
 
       --  Make a copy of the expression to be preanalyzed
 
@@ -11435,6 +11793,7 @@ package body Sem_Ch13 is
             | Aspect_Part_Of
             | Aspect_Post
             | Aspect_Postcondition
+            | Aspect_Potentially_Invalid
             | Aspect_Pre
             | Aspect_Precondition
             | Aspect_Program_Exit

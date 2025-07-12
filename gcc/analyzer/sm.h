@@ -28,7 +28,7 @@ namespace ana {
 class state_machine;
 class sm_context;
 class pending_diagnostic;
-class xml_state;
+class analyzer_state_graph;
 
 extern bool any_pointer_p (tree expr);
 extern bool any_pointer_p (const svalue *sval);
@@ -76,7 +76,7 @@ public:
 			   const svalue *,
 			   const extrinsic_state &) const
   {
-    return NULL;
+    return nullptr;
   }
 
   virtual bool
@@ -155,7 +155,7 @@ public:
   }
 
   /* Attempt to get a state for the merger of STATE_A and STATE_B,
-     or return NULL if merging shouldn't occur, so that differences
+     or return nullptr if merging shouldn't occur, so that differences
      between sm-state will lead to separate exploded nodes.
 
      Most state machines will only merge equal states, but can
@@ -176,7 +176,7 @@ public:
 				    state_t state_b ATTRIBUTE_UNUSED) const
   {
     /* By default, non-equal sm states should inhibit merger of enodes.  */
-    return NULL;
+    return nullptr;
   }
 
   void validate (state_t s) const;
@@ -188,13 +188,13 @@ public:
   state_t get_start_state () const { return m_start; }
 
   virtual void
-  add_state_to_xml (xml_state &out_xml,
-		    const svalue &sval,
-		    state_machine::state_t state) const;
+  add_state_to_state_graph (analyzer_state_graph &out_state_graph,
+			    const svalue &sval,
+			    state_machine::state_t state) const;
 
   virtual void
-  add_global_state_to_xml (xml_state &out_xml,
-			   state_machine::state_t state) const;
+  add_global_state_to_state_graph (analyzer_state_graph &out_state_graph,
+				   state_machine::state_t state) const;
 
 protected:
   state_t add_state (const char *name);
@@ -330,7 +330,7 @@ public:
 
   virtual path_context *get_path_context () const
   {
-    return NULL;
+    return nullptr;
   }
 
   /* Are we handling an external function with unknown side effects?  */

@@ -192,6 +192,9 @@ package body Sem is
          when N_Conditional_Entry_Call =>
             Analyze_Conditional_Entry_Call (N);
 
+         when N_Continue_Statement =>
+            Analyze_Continue_Statement (N);
+
          when N_Delay_Alternative =>
             Analyze_Delay_Alternative (N);
 
@@ -1398,7 +1401,6 @@ package body Sem is
            Prev     => Global_Suppress_Stack_Top,
            Next     => Suppress_Stack_Entries);
       Suppress_Stack_Entries := Global_Suppress_Stack_Top;
-      return;
    end Push_Global_Suppress_Stack_Entry;
 
    -------------------------------------
@@ -1419,8 +1421,6 @@ package body Sem is
            Prev     => Local_Suppress_Stack_Top,
            Next     => Suppress_Stack_Entries);
       Suppress_Stack_Entries := Local_Suppress_Stack_Top;
-
-      return;
    end Push_Local_Suppress_Stack_Entry;
 
    ---------------

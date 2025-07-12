@@ -397,6 +397,10 @@ Wassign-intercept
 ObjC ObjC++ Var(warn_assign_intercept) Warning
 Warn whenever an Objective-C assignment is being intercepted by the garbage collector.
 
+Wabbreviated-auto-in-template-arg
+C++ ObjC++ Warning Var(warn_abbev_auto_targ) Init(1)
+Diagnose a placeholder type in a template argument in a function parameter type.
+
 Wbad-function-cast
 C ObjC Var(warn_bad_function_cast) Warning
 Warn about casting functions to incompatible types.
@@ -492,6 +496,10 @@ C++ ObjC++ Warning Alias(Wc++20-compat) Undocumented
 Wc++20-compat
 C++ ObjC++ Var(warn_cxx20_compat) Warning LangEnabledBy(C++ ObjC++,Wall) Init(0) CPP(cpp_warn_cxx20_compat) CppReason(CPP_W_CXX20_COMPAT)
 Warn about C++ constructs whose meaning differs between ISO C++ 2017 and ISO C++ 2020.
+
+Wc++26-compat
+C++ ObjC++ Var(warn_cxx26_compat) Warning LangEnabledBy(C++ ObjC++,Wall) Init(0)
+Warn about C++ constructs whose meaning differs between ISO C++ 2023 and ISO C++ 2026.
 
 Wc++11-extensions
 C++ ObjC++ Var(warn_cxx11_extensions) Warning Init(1)

@@ -95,7 +95,7 @@ int
 get_terminal_width (void)
 {
   const char * s = getenv ("COLUMNS");
-  if (s != NULL) {
+  if (s != nullptr) {
     int n = atoi (s);
     if (n > 0)
       return n;
@@ -679,7 +679,7 @@ diagnostic_set_info_translated (diagnostic_info *diagnostic, const char *msg,
   diagnostic->message.m_format_spec = msg;
   diagnostic->message.m_richloc = richloc;
   diagnostic->richloc = richloc;
-  diagnostic->metadata = NULL;
+  diagnostic->metadata = nullptr;
   diagnostic->kind = kind;
   diagnostic->option_id = 0;
 }
@@ -699,11 +699,11 @@ static const char *const diagnostic_kind_color[] = {
 #define DEFINE_DIAGNOSTIC_KIND(K, T, C) (C),
 #include "diagnostic.def"
 #undef DEFINE_DIAGNOSTIC_KIND
-  NULL
+  nullptr
 };
 
 /* Get a color name for diagnostics of type KIND
-   Result could be NULL.  */
+   Result could be nullptr.  */
 
 const char *
 diagnostic_get_color_for_kind (diagnostic_t kind)
@@ -837,12 +837,12 @@ bt_callback (void *data, uintptr_t pc, const char *filename, int lineno,
 
   /* If we don't have any useful information, don't print
      anything.  */
-  if (filename == NULL && function == NULL)
+  if (filename == nullptr && function == nullptr)
     return 0;
 
   /* Skip functions in diagnostic.cc.  */
   if (*pcount == 0
-      && filename != NULL
+      && filename != nullptr
       && strcmp (lbasename (filename), "diagnostic.cc") == 0)
     return 0;
 
@@ -855,13 +855,13 @@ bt_callback (void *data, uintptr_t pc, const char *filename, int lineno,
     }
   ++*pcount;
 
-  char *alc = NULL;
-  if (function != NULL)
+  char *alc = nullptr;
+  if (function != nullptr)
     {
       char *str = cplus_demangle_v3 (function,
 				     (DMGL_VERBOSE | DMGL_ANSI
 				      | DMGL_GNU_V3 | DMGL_PARAMS));
-      if (str != NULL)
+      if (str != nullptr)
 	{
 	  alc = str;
 	  function = str;
@@ -873,7 +873,7 @@ bt_callback (void *data, uintptr_t pc, const char *filename, int lineno,
 	  if (strncmp (function, bt_stop[i], len) == 0
 	      && (function[len] == '\0' || function[len] == '('))
 	    {
-	      if (alc != NULL)
+	      if (alc != nullptr)
 		free (alc);
 	      /* Returning a non-zero value stops the backtrace.  */
 	      return 1;
@@ -883,11 +883,11 @@ bt_callback (void *data, uintptr_t pc, const char *filename, int lineno,
 
   fprintf (stderr, "0x%lx %s\n\t%s:%d\n",
 	   (unsigned long) pc,
-	   function == NULL ? "???" : function,
-	   filename == NULL ? "???" : filename,
+	   function == nullptr ? "???" : function,
+	   filename == nullptr ? "???" : filename,
 	   lineno);
 
-  if (alc != NULL)
+  if (alc != nullptr)
     free (alc);
 
   return 0;
@@ -973,11 +973,11 @@ diagnostic_context::action_after_output (diagnostic_t diag_kind)
 	    finish ();
 	  }
 
-	struct backtrace_state *state = NULL;
+	struct backtrace_state *state = nullptr;
 	if (diag_kind == DK_ICE)
-	  state = backtrace_create_state (NULL, 0, bt_err_callback, NULL);
+	  state = backtrace_create_state (nullptr, 0, bt_err_callback, nullptr);
 	int count = 0;
-	if (state != NULL)
+	if (state != nullptr)
 	  backtrace_full (state, 2, bt_callback, bt_err_callback,
 			  (void *) &count);
 
@@ -1194,7 +1194,7 @@ print_parseable_fixits (file_cache &fc,
   gcc_assert (richloc);
 
   char *saved_prefix = pp_take_prefix (pp);
-  pp_set_prefix (pp, NULL);
+  pp_set_prefix (pp, nullptr);
 
   for (unsigned i = 0; i < richloc->get_num_fixit_hints (); i++)
     {
@@ -1594,7 +1594,7 @@ diagnostic_context::report_diagnostic (diagnostic_info *diagnostic)
       || diagnostic->kind == DK_ICE
       || diagnostic->kind == DK_ICE_NOBT)
     action_after_output (diagnostic->kind);
-  diagnostic->x_data = NULL;
+  diagnostic->x_data = nullptr;
 
   if (m_edit_context_ptr)
     if (diagnostic->richloc->fixits_can_be_auto_applied_p ())
@@ -1622,6 +1622,14 @@ diagnostic_context::report_verbatim (text_info &text)
       sink->on_report_verbatim (text);
       va_end (copied_args);
     }
+}
+
+void
+diagnostic_context::
+report_global_digraph (const diagnostics::digraphs::lazy_digraph &ldg)
+{
+  for (auto sink : m_output_sinks)
+    sink->report_global_digraph (ldg);
 }
 
 /* Get the number of digits in the decimal representation of VALUE.  */
@@ -1793,9 +1801,9 @@ fancy_abort (const char *file, int line, const char *function)
 
       /* Attempt to print a backtrace.  */
       struct backtrace_state *state
-	= backtrace_create_state (NULL, 0, bt_err_callback, NULL);
+	= backtrace_create_state (nullptr, 0, bt_err_callback, nullptr);
       int count = 0;
-      if (state != NULL)
+      if (state != nullptr)
 	backtrace_full (state, 2, bt_callback, bt_err_callback,
 			(void *) &count);
 
@@ -1881,17 +1889,6 @@ diagnostic_output_format_init (diagnostic_context &context,
       /* The default; do nothing.  */
       break;
 
-    case DIAGNOSTICS_OUTPUT_FORMAT_JSON_STDERR:
-      new_sink = &diagnostic_output_format_init_json_stderr (context,
-							     json_formatting);
-      break;
-
-    case DIAGNOSTICS_OUTPUT_FORMAT_JSON_FILE:
-      new_sink = &diagnostic_output_format_init_json_file (context,
-							   json_formatting,
-							   base_file_name);
-      break;
-
     case DIAGNOSTICS_OUTPUT_FORMAT_SARIF_STDERR:
       new_sink = &diagnostic_output_format_init_sarif_stderr (context,
 							      line_table,
@@ -1911,7 +1908,7 @@ diagnostic_output_format_init (diagnostic_context &context,
 
 /* Initialize this context's m_diagrams based on CHARSET.
    Specifically, make a text_art::theme object for m_diagrams.m_theme,
-   (or NULL for "no diagrams").  */
+   (or nullptr for "no diagrams").  */
 
 void
 diagnostic_context::
@@ -2236,7 +2233,7 @@ test_print_parseable_fixits_insert ()
 
   linemap_add (line_table, LC_ENTER, false, "test.c", 0);
   linemap_line_start (line_table, 5, 100);
-  linemap_add (line_table, LC_LEAVE, false, NULL, 0);
+  linemap_add (line_table, LC_LEAVE, false, nullptr, 0);
   location_t where = linemap_position_for_column (line_table, 10);
   richloc.add_fixit_insert_before (where, "added content");
 
@@ -2257,7 +2254,7 @@ test_print_parseable_fixits_remove ()
 
   linemap_add (line_table, LC_ENTER, false, "test.c", 0);
   linemap_line_start (line_table, 5, 100);
-  linemap_add (line_table, LC_LEAVE, false, NULL, 0);
+  linemap_add (line_table, LC_LEAVE, false, nullptr, 0);
   source_range where;
   where.m_start = linemap_position_for_column (line_table, 10);
   where.m_finish = linemap_position_for_column (line_table, 20);
@@ -2280,7 +2277,7 @@ test_print_parseable_fixits_replace ()
 
   linemap_add (line_table, LC_ENTER, false, "test.c", 0);
   linemap_line_start (line_table, 5, 100);
-  linemap_add (line_table, LC_LEAVE, false, NULL, 0);
+  linemap_add (line_table, LC_LEAVE, false, nullptr, 0);
   source_range where;
   where.m_start = linemap_position_for_column (line_table, 10);
   where.m_finish = linemap_position_for_column (line_table, 20);
@@ -2311,7 +2308,7 @@ test_print_parseable_fixits_bytes_vs_display_columns ()
 
   linemap_add (line_table, LC_ENTER, false, fname, 0);
   linemap_line_start (line_table, 1, 100);
-  linemap_add (line_table, LC_LEAVE, false, NULL, 0);
+  linemap_add (line_table, LC_LEAVE, false, nullptr, 0);
   source_range where;
   where.m_start = linemap_position_for_column (line_table, 12);
   where.m_finish = linemap_position_for_column (line_table, 17);
@@ -2369,7 +2366,7 @@ assert_location_text (const char *expected_loc_text,
   xloc.file = filename;
   xloc.line = line;
   xloc.column = column;
-  xloc.data = NULL;
+  xloc.data = nullptr;
   xloc.sysp = false;
 
   diagnostic_column_policy column_policy (dc);
@@ -2385,7 +2382,7 @@ test_get_location_text ()
 {
   const char *old_progname = progname;
   progname = "PROGNAME";
-  assert_location_text ("PROGNAME:", NULL, 0, 0, true);
+  assert_location_text ("PROGNAME:", nullptr, 0, 0, true);
   char *built_in_colon = concat (special_fname_builtin (), ":", (char *) 0);
   assert_location_text (built_in_colon, special_fname_builtin (),
 			42, 10, true);

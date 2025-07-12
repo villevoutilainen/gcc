@@ -4402,7 +4402,7 @@
 )
 
 (define_insn "prefetch"
-  [(prefetch (match_operand 0 "prefetch_operand" "Q")
+  [(prefetch (match_operand 0 "prefetch_operand" "Qr")
              (match_operand 1 "imm5_operand" "i")
              (match_operand 2 "const_int_operand" "n"))]
   "TARGET_ZICBOP"
@@ -4634,6 +4634,17 @@
   }
 )
 
+(define_expand "usmul<mode>3"
+  [(match_operand:ANYI 0 "register_operand")
+   (match_operand:ANYI 1 "register_operand")
+   (match_operand:ANYI 2 "register_operand")]
+  ""
+  {
+    riscv_expand_usmul (operands[0], operands[1], operands[2]);
+    DONE;
+  }
+)
+
 (define_expand "ustrunc<mode><anyi_double_truncated>2"
   [(match_operand:<ANYI_DOUBLE_TRUNCATED> 0 "register_operand")
    (match_operand:ANYI_DOUBLE_TRUNC       1 "register_operand")]
@@ -4860,6 +4871,7 @@
   { operands[3] = GEN_INT (BITS_PER_WORD
 			   - exact_log2 (INTVAL (operands[3]) + 1)); })
 
+;; Standard extensions and pattern for optimization
 (include "bitmanip.md")
 (include "crypto.md")
 (include "sync.md")
@@ -4867,19 +4879,21 @@
 (include "sync-ztso.md")
 (include "peephole.md")
 (include "pic.md")
-(include "generic.md")
-(include "sifive-7.md")
-(include "sifive-p400.md")
-(include "sifive-p600.md")
-(include "thead.md")
-(include "generic-vector-ooo.md")
-(include "generic-ooo.md")
 (include "vector.md")
 (include "vector-crypto.md")
 (include "vector-bfloat16.md")
 (include "zicond.md")
 (include "sfb.md")
 (include "zc.md")
+;; Vendor extensions
+(include "thead.md")
 (include "corev.md")
+;; Pipeline models
+(include "generic.md")
 (include "xiangshan.md")
 (include "mips-p8700.md")
+(include "sifive-7.md")
+(include "sifive-p400.md")
+(include "sifive-p600.md")
+(include "generic-vector-ooo.md")
+(include "generic-ooo.md")

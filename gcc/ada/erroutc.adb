@@ -225,48 +225,10 @@ package body Erroutc is
    ------------------------
 
    function Compilation_Errors return Boolean is
-      Warnings_Count : constant Int := Warnings_Detected;
    begin
-      if Total_Errors_Detected /= 0 then
-         return True;
-
-      elsif Warnings_Treated_As_Errors /= 0 then
-         return True;
-
-      --  We should never treat warnings that originate from a
-      --  Compile_Time_Warning pragma as an error. Warnings_Count is the sum
-      --  of both "normal" and Compile_Time_Warning warnings. This means that
-      --  there are only one or more non-Compile_Time_Warning warnings when
-      --  Warnings_Count is greater than Count_Compile_Time_Pragma_Warnings.
-
-      elsif Warning_Mode = Treat_As_Error
-         and then Warnings_Count > Count_Compile_Time_Pragma_Warnings
-      then
-         return True;
-      end if;
-
-      return False;
+      return Total_Errors_Detected /= 0
+        or else Warnings_Treated_As_Errors /= 0;
    end Compilation_Errors;
-
-   ----------------------------------------
-   -- Count_Compile_Time_Pragma_Warnings  --
-   ----------------------------------------
-
-   function Count_Compile_Time_Pragma_Warnings return Int is
-      Result : Int := 0;
-   begin
-      for J in 1 .. Errors.Last loop
-         begin
-            if Errors.Table (J).Kind = Warning
-               and then Errors.Table (J).Compile_Time_Pragma
-               and then not Errors.Table (J).Deleted
-            then
-               Result := Result + 1;
-            end if;
-         end;
-      end loop;
-      return Result;
-   end Count_Compile_Time_Pragma_Warnings;
 
    ------------------------------
    -- Decrease_Error_Msg_Count --
@@ -281,6 +243,10 @@ package body Erroutc is
 
          when Warning | Style =>
             Warnings_Detected := Warnings_Detected - 1;
+
+            if E.Warn_Err /= None then
+               Warnings_Treated_As_Errors := Warnings_Treated_As_Errors - 1;
+            end if;
 
          when High_Check | Medium_Check | Low_Check =>
             Check_Messages := Check_Messages - 1;
@@ -340,7 +306,7 @@ package body Erroutc is
       w ("  Line               = ", Int (E.Line));
       w ("  Col                = ", Int (E.Col));
       w ("  Kind               = ", E.Kind'Img);
-      w ("  Warn_Err           = ", E.Warn_Err);
+      w ("  Warn_Err           = ", E.Warn_Err'Img);
       w ("  Warn_Chr           = '" & E.Warn_Chr & ''');
       w ("  Uncond             = ", E.Uncond);
       w ("  Msg_Cont           = ", E.Msg_Cont);
@@ -372,11 +338,16 @@ package body Erroutc is
    ------------------------
 
    function Get_Warning_Option (Id : Error_Msg_Id) return String is
-      Is_Style : constant Boolean         := Errors.Table (Id).Kind in Style;
-      Warn_Chr : constant String (1 .. 2) := Errors.Table (Id).Warn_Chr;
+   begin
+      return Get_Warning_Option (Errors.Table (Id));
+   end Get_Warning_Option;
+
+   function Get_Warning_Option (E : Error_Msg_Object) return String is
+      Is_Style : constant Boolean         := E.Kind in Style;
+      Warn_Chr : constant String (1 .. 2) := E.Warn_Chr;
 
    begin
-      if Has_Switch_Tag (Errors.Table (Id))
+      if Has_Switch_Tag (E)
         and then Warn_Chr (1) /= '?'
       then
          if Warn_Chr = "$ " then
@@ -398,11 +369,16 @@ package body Erroutc is
    ---------------------
 
    function Get_Warning_Tag (Id : Error_Msg_Id) return String is
-      Warn_Chr : constant String (1 .. 2) := Errors.Table (Id).Warn_Chr;
-      Option   : constant String          := Get_Warning_Option (Id);
+   begin
+      return Get_Warning_Tag (Errors.Table (Id));
+   end Get_Warning_Tag;
+
+   function Get_Warning_Tag (E : Error_Msg_Object) return String is
+      Warn_Chr : constant String (1 .. 2) := E.Warn_Chr;
+      Option   : constant String          := Get_Warning_Option (E);
 
    begin
-      if Has_Switch_Tag (Id) then
+      if Has_Switch_Tag (E) then
          if Warn_Chr = "? " then
             return "[enabled by default]";
          elsif Warn_Chr = "* " then
@@ -428,6 +404,24 @@ package body Erroutc is
 
          when Warning | Style =>
             Warnings_Detected := Warnings_Detected + 1;
+
+            if E.Warn_Err /= None then
+               Warnings_Treated_As_Errors := Warnings_Treated_As_Errors + 1;
+
+               --  Propagate Warn_Err to all of the preceeding continuation
+               --  messages and the main message.
+
+               for J in reverse 1 .. Errors.Last loop
+                  if Errors.Table (J).Warn_Err = None then
+                     Errors.Table (J).Warn_Err := E.Warn_Err;
+
+                     Warnings_Treated_As_Errors :=
+                       Warnings_Treated_As_Errors + 1;
+                  end if;
+
+                  exit when not Errors.Table (J).Msg_Cont;
+               end loop;
+            end if;
 
          when High_Check | Medium_Check | Low_Check =>
             Check_Messages := Check_Messages + 1;
@@ -1013,10 +1007,7 @@ package body Erroutc is
       --  Prefix with "error:" rather than warning.
       --  Additionally include the style suffix when needed.
 
-      if E_Msg.Warn_Err then
-
-         Warnings_Treated_As_Errors := Warnings_Treated_As_Errors + 1;
-
+      if E_Msg.Warn_Err in From_Pragma | From_Run_Time_As_Err then
          Append
            (Buf,
             SGR_Error & "error: " & SGR_Reset &
@@ -1048,8 +1039,8 @@ package body Erroutc is
 
       --  Postfix [warning-as-error] at the end
 
-      if E_Msg.Warn_Err then
-         Append (Buf, " [warning-as-error]");
+      if E_Msg.Warn_Err = From_Pragma then
+         Append (Buf, " " & Warn_As_Err_Tag);
       end if;
 
       Output_Text_Within (To_String (Buf), Line_Length);
@@ -1143,7 +1134,7 @@ package body Erroutc is
 
          Error_Msg_Kind       := Error;
          Is_Unconditional_Msg := False;
-         Is_Runtime_Raise     := False;
+         Is_Runtime_Raise_Msg := False;
          Warning_Msg_Char     := "  ";
 
          --  Check style message
@@ -1313,6 +1304,8 @@ package body Erroutc is
       E := First_Error_Msg;
       while E /= No_Error_Msg loop
          while To_Be_Purged (Errors.Table (E).Next) loop
+            Errors.Table (Errors.Table (E).Next).Deleted := True;
+
             Errors.Table (E).Next :=
               Errors.Table (Errors.Table (E).Next).Next;
          end loop;
@@ -2106,6 +2099,14 @@ package body Erroutc is
       return False;
    end Warning_Treated_As_Error;
 
+   function Warning_Treated_As_Error (E : Error_Msg_Object) return Boolean is
+
+   begin
+      return
+        Warning_Treated_As_Error (E.Text.all)
+        or else Warning_Treated_As_Error (Get_Warning_Tag (E));
+   end Warning_Treated_As_Error;
+
    -------------------------
    -- Warnings_Suppressed --
    -------------------------
@@ -2182,76 +2183,32 @@ package body Erroutc is
          Write_Str (" errors");
       end if;
 
-      --  We now need to output warnings. When using -gnatwe, all warnings
-      --  should be treated as errors, except for warnings originating from
-      --  the use of the Compile_Time_Warning pragma. Another situation
-      --  where a warning might be treated as an error is when the source
-      --  code contains a Warning_As_Error pragma.
-      --  When warnings are treated as errors, we still log them as
-      --  warnings, but we add a message denoting how many of these warnings
-      --  are also errors.
+      if Warnings_Detected > 0 then
+         Write_Str (", ");
+         Write_Int (Warnings_Detected);
+         Write_Str (" warning");
 
-      declare
-         Warnings_Count : constant Int := Warnings_Detected;
-
-         Compile_Time_Warnings : Int;
-         --  Number of warnings that come from a Compile_Time_Warning
-         --  pragma.
-
-         Non_Compile_Time_Warnings : Int;
-         --  Number of warnings that do not come from a Compile_Time_Warning
-         --  pragmas.
-
-      begin
-         if Warnings_Count > 0 then
-            Write_Str (", ");
-            Write_Int (Warnings_Count);
-            Write_Str (" warning");
-
-            if Warnings_Count > 1 then
-               Write_Char ('s');
-            end if;
-
-            Compile_Time_Warnings := Count_Compile_Time_Pragma_Warnings;
-            Non_Compile_Time_Warnings :=
-               Warnings_Count - Compile_Time_Warnings;
-
-            if Warning_Mode = Treat_As_Error
-               and then Non_Compile_Time_Warnings > 0
-            then
-               Write_Str (" (");
-
-               if Compile_Time_Warnings > 0 then
-                  Write_Int (Non_Compile_Time_Warnings);
-                  Write_Str (" ");
-               end if;
-
-               Write_Str ("treated as error");
-
-               if Non_Compile_Time_Warnings > 1 then
-                  Write_Char ('s');
-               end if;
-
-               Write_Char (')');
-
-            elsif Warnings_Treated_As_Errors > 0 then
-               Write_Str (" (");
-
-               if Warnings_Treated_As_Errors /= Warnings_Count then
-                  Write_Int (Warnings_Treated_As_Errors);
-                  Write_Str (" ");
-               end if;
-
-               Write_Str ("treated as error");
-
-               if Warnings_Treated_As_Errors > 1 then
-                  Write_Str ("s");
-               end if;
-
-               Write_Str (")");
-            end if;
+         if Warnings_Detected > 1 then
+            Write_Char ('s');
          end if;
-      end;
+
+         if Warnings_Treated_As_Errors > 0 then
+            Write_Str (" (");
+
+            if Warnings_Treated_As_Errors /= Warnings_Detected then
+               Write_Int (Warnings_Treated_As_Errors);
+               Write_Str (" ");
+            end if;
+
+            Write_Str ("treated as error");
+
+            if Warnings_Treated_As_Errors > 1 then
+               Write_Str ("s");
+            end if;
+
+            Write_Str (")");
+         end if;
+      end if;
 
       if Info_Messages /= 0 then
          Write_Str (", ");

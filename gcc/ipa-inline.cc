@@ -2222,6 +2222,7 @@ inline_small_functions (void)
 
   gcc_assert (in_lto_p
 	      || !(max_count > 0)
+	      || flag_auto_profile
 	      || (profile_info && flag_branch_probabilities));
 
   while (!edge_heap.empty ())
@@ -3120,7 +3121,7 @@ early_inline_small_functions (struct cgraph_node *node)
 static bool
 inline_functions_by_afdo (struct cgraph_node *node, bool *speculative_calls)
 {
-  if (!flag_auto_profile)
+  if (!flag_auto_profile || !flag_auto_profile_inlining)
     return false;
   struct cgraph_edge *e;
   bool inlined = false;
@@ -3318,6 +3319,25 @@ early_inliner (function *fun)
 	}
       if (dump_file)
 	fprintf (dump_file, "Iterations: %i\n", iterations);
+    }
+
+  /* do AFDO inlining in case it was not done as part of early inlining.  */
+  if (optimize
+      && !flag_no_inline
+      && !flag_early_inlining
+      && flag_auto_profile_inlining)
+    {
+      bool speculative_calls = false;
+      inlined |= inline_functions_by_afdo (node, &speculative_calls);
+      if (speculative_calls)
+	{
+	  cgraph_edge *next;
+	  for (cgraph_edge *e = node->callees; e; e = next)
+	    {
+	      next = e->next_callee;
+	      cgraph_edge::redirect_call_stmt_to_callee (e);
+	    }
+	}
     }
 
   if (inlined)

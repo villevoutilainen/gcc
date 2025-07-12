@@ -9,6 +9,10 @@
 **...
 **	pxor	%xmm0, %xmm0
 **	xorl	%eax, %eax
+**	movups	%xmm0, 190\(%rdi\)
+**	movups	%xmm0, 206\(%rdi\)
+**	movups	%xmm0, 222\(%rdi\)
+**	movups	%xmm0, 238\(%rdi\)
 **.L[0-9]+:
 **	movl	%eax, %edx
 **	addl	\$64, %eax

@@ -554,6 +554,7 @@ cs_interesting_for_ipcp_p (cgraph_edge *e)
   /* If we have zero IPA profile, still consider edge for cloning
      in case we do partial training.  */
   if (e->count.ipa ().initialized_p ()
+      && e->count.ipa ().quality () != AFDO
       && !opt_for_fn (e->callee->decl,flag_profile_partial_training))
     return false;
   return true;
@@ -617,7 +618,9 @@ ipcp_cloning_candidate_p (struct cgraph_node *node)
       return false;
     }
 
-  if (node->optimize_for_size_p ())
+  /* Do not use profile here since cold wrapper wrap
+     hot function.  */
+  if (opt_for_fn (node->decl, optimize_size))
     {
       if (dump_file)
 	fprintf (dump_file, "Not considering %s for cloning; "
@@ -3341,10 +3344,10 @@ devirtualization_time_bonus (struct cgraph_node *node,
 
 /* Return time bonus incurred because of hints stored in ESTIMATES.  */
 
-static int
+static sreal
 hint_time_bonus (cgraph_node *node, const ipa_call_estimates &estimates)
 {
-  int result = 0;
+  sreal result = 0;
   ipa_hints hints = estimates.hints;
   if (hints & (INLINE_HINT_loop_iterations | INLINE_HINT_loop_stride))
     result += opt_for_fn (node->decl, param_ipa_cp_loop_hint_bonus);
@@ -3352,10 +3355,10 @@ hint_time_bonus (cgraph_node *node, const ipa_call_estimates &estimates)
   sreal bonus_for_one = opt_for_fn (node->decl, param_ipa_cp_loop_hint_bonus);
 
   if (hints & INLINE_HINT_loop_iterations)
-    result += (estimates.loops_with_known_iterations * bonus_for_one).to_int ();
+    result += estimates.loops_with_known_iterations * bonus_for_one;
 
   if (hints & INLINE_HINT_loop_stride)
-    result += (estimates.loops_with_known_strides * bonus_for_one).to_int ();
+    result += estimates.loops_with_known_strides * bonus_for_one;
 
   return result;
 }
@@ -3391,9 +3394,10 @@ good_cloning_opportunity_p (struct cgraph_node *node, sreal time_benefit,
 			    int size_cost, bool called_without_ipa_profile)
 {
   gcc_assert (count_sum.ipa () == count_sum);
+  if (count_sum.quality () == AFDO)
+    count_sum = count_sum.force_nonzero ();
   if (time_benefit == 0
       || !opt_for_fn (node->decl, flag_ipa_cp_clone)
-      || node->optimize_for_size_p ()
       /* If there is no call which was executed in profiling or where
 	 profile is missing, we do not want to clone.  */
       || (!called_without_ipa_profile && !count_sum.nonzero_p ()))
@@ -3436,7 +3440,7 @@ good_cloning_opportunity_p (struct cgraph_node *node, sreal time_benefit,
 	 introduced.  This is likely almost always going to be true, since we
 	 already checked that time saved is large enough to be considered
 	 hot.  */
-      else if (evaluation.to_int () >= eval_threshold)
+      else if (evaluation >= (sreal)eval_threshold)
 	return true;
       /* If all call sites have profile known; we know we do not want t clone.
 	 If there are calls with unknown profile; try local heuristics.  */
@@ -3457,7 +3461,7 @@ good_cloning_opportunity_p (struct cgraph_node *node, sreal time_benefit,
 	     info->node_calling_single_call ? ", single_call" : "",
 	     evaluation.to_double (), eval_threshold);
 
-  return evaluation.to_int () >= eval_threshold;
+  return evaluation >= eval_threshold;
 }
 
 /* Grow vectors in AVALS and fill them with information about values of
@@ -3543,8 +3547,8 @@ perform_estimation_of_a_value (cgraph_node *node,
     time_benefit = 0;
   else
     time_benefit = (estimates.nonspecialized_time - estimates.time)
+      + hint_time_bonus (node, estimates)
       + (devirtualization_time_bonus (node, avals)
-	 + hint_time_bonus (node, estimates)
 	 + removable_params_cost + est_move_cost);
 
   int size = estimates.size;
@@ -4834,11 +4838,12 @@ update_profiling_info (struct cgraph_node *orig_node,
       profile_count unexp = orig_node_count - new_sum - orig_nonrec_call_count;
 
       int limit_den = 2 * (orig_nonrec_calls + new_nonrec_calls);
-      profile_count new_part
-	= MAX(MIN (unexp.apply_scale (new_sum,
-				      new_sum + orig_nonrec_call_count),
-		   unexp.apply_scale (limit_den - 1, limit_den)),
-	      unexp.apply_scale (new_nonrec_calls, limit_den));
+      profile_count new_part = unexp.apply_scale (limit_den - 1, limit_den);
+      profile_count den = new_sum + orig_nonrec_call_count;
+      if (den.nonzero_p ())
+	new_part = MIN (unexp.apply_scale (new_sum, den), new_part);
+      new_part = MAX (new_part,
+		      unexp.apply_scale (new_nonrec_calls, limit_den));
       if (dump_file)
 	{
 	  fprintf (dump_file, "       Claiming ");

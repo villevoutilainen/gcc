@@ -26,6 +26,12 @@ along with GCC; see the file COPYING3.  If not see
 #include "pretty-print.h"
 #include "diagnostic-core.h"
 
+namespace diagnostics {
+  namespace digraphs {
+    class lazy_digraph;
+  } // namespace digraphs
+} // namespace diagnostics
+
 namespace text_art
 {
   class theme;
@@ -70,12 +76,6 @@ enum diagnostics_output_format
 {
   /* The default: textual output.  */
   DIAGNOSTICS_OUTPUT_FORMAT_TEXT,
-
-  /* JSON-based output, to stderr.  */
-  DIAGNOSTICS_OUTPUT_FORMAT_JSON_STDERR,
-
-  /* JSON-based output, to a file.  */
-  DIAGNOSTICS_OUTPUT_FORMAT_JSON_FILE,
 
   /* SARIF-based output, as JSON to stderr.  */
   DIAGNOSTICS_OUTPUT_FORMAT_SARIF_STDERR,
@@ -622,6 +622,11 @@ public:
   bool report_diagnostic (diagnostic_info *);
   void report_verbatim (text_info &);
 
+  /* Report a directed graph associated with the run as a whole
+     to any sinks that support directed graphs.  */
+  void
+  report_global_digraph (const diagnostics::digraphs::lazy_digraph &);
+
   diagnostic_t
   classify_diagnostic (diagnostic_option_id option_id,
 		       diagnostic_t new_kind,
@@ -842,6 +847,36 @@ public:
 
   void set_main_input_filename (const char *filename);
 
+  void
+  set_permissive_option (diagnostic_option_id opt_permissive)
+  {
+    m_opt_permissive = opt_permissive;
+  }
+
+  void
+  set_fatal_errors (bool fatal_errors)
+  {
+    m_fatal_errors = fatal_errors;
+  }
+
+  void
+  set_internal_error_callback (void (*cb) (diagnostic_context *,
+					   const char *,
+					   va_list *))
+  {
+    m_internal_error = cb;
+  }
+
+  void
+  set_adjust_diagnostic_info_callback (void (*cb) (diagnostic_context *,
+						   diagnostic_info *))
+  {
+    m_adjust_diagnostic_info = cb;
+  }
+
+  void
+  inhibit_notes () { m_inhibit_notes_p = true; }
+
 private:
   void error_recursion () ATTRIBUTE_NORETURN;
 
@@ -911,6 +946,7 @@ public:
   /* True if permerrors are warnings.  */
   bool m_permissive;
 
+private:
   /* The option to associate with turning permerrors into warnings,
      if any.  */
   diagnostic_option_id m_opt_permissive;
@@ -918,6 +954,7 @@ public:
   /* True if errors are fatal.  */
   bool m_fatal_errors;
 
+public:
   /* True if all warnings should be disabled.  */
   bool m_inhibit_warnings;
 
@@ -949,7 +986,6 @@ private:
     diagnostic_text_finalizer_fn m_end_diagnostic;
   } m_text_callbacks;
 
-public:
   /* Client hook to report an internal error.  */
   void (*m_internal_error) (diagnostic_context *, const char *, va_list *);
 
@@ -957,7 +993,6 @@ public:
      about to issue, such as its kind.  */
   void (*m_adjust_diagnostic_info)(diagnostic_context *, diagnostic_info *);
 
-private:
   /* Owned by the context; this would be a std::unique_ptr if
      diagnostic_context had a proper ctor.  */
   diagnostic_option_manager *m_option_mgr;
@@ -984,9 +1019,9 @@ public:
 private:
   int m_lock;
 
-public:
   bool m_inhibit_notes_p;
 
+public:
   diagnostic_source_printing_options m_source_printing;
 
 private:
@@ -1082,13 +1117,6 @@ private:
      discarded (if the buffer is cleared).  */
   diagnostic_buffer *m_diagnostic_buffer;
 };
-
-inline void
-diagnostic_inhibit_notes (diagnostic_context * context)
-{
-  context->m_inhibit_notes_p = true;
-}
-
 
 /* Client supplied function to announce a diagnostic
    (for text-based diagnostic output).  */

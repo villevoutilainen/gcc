@@ -959,6 +959,39 @@ svpattern_token (enum aarch64_svpattern pattern)
   gcc_unreachable ();
 }
 
+/* Return true if RHS is an operand suitable for a CB<cc> (immediate)
+   instruction.  OP_CODE determines the type of the comparison.  */
+bool
+aarch64_cb_rhs (rtx_code op_code, rtx rhs)
+{
+  if (!CONST_INT_P (rhs))
+    return REG_P (rhs);
+
+  HOST_WIDE_INT rhs_val = INTVAL (rhs);
+
+  switch (op_code)
+    {
+    case EQ:
+    case NE:
+    case GT:
+    case GTU:
+    case LT:
+    case LTU:
+      return IN_RANGE (rhs_val, 0, 63);
+
+    case GE:  /* CBGE:   signed greater than or equal */
+    case GEU: /* CBHS: unsigned greater than or equal */
+      return IN_RANGE (rhs_val, 1, 64);
+
+    case LE:  /* CBLE:   signed less than or equal */
+    case LEU: /* CBLS: unsigned less than or equal */
+      return IN_RANGE (rhs_val, -1, 62);
+
+    default:
+      return false;
+    }
+}
+
 /* Return the location of a piece that is known to be passed or returned
    in registers.  FIRST_ZR is the first unused vector argument register
    and FIRST_PR is the first unused predicate argument register.  */
@@ -2884,10 +2917,10 @@ aarch64_gen_test_and_branch (rtx_code code, rtx x, int bitnum,
       emit_insn (gen_aarch64_and3nr_compare0 (mode, x, mask));
       rtx cc_reg = gen_rtx_REG (CC_NZVmode, CC_REGNUM);
       rtx x = gen_rtx_fmt_ee (code, CC_NZVmode, cc_reg, const0_rtx);
-      return gen_condjump (x, cc_reg, label);
+      return gen_aarch64_bcond (x, cc_reg, label);
     }
-  return gen_aarch64_tb (code, mode, mode,
-			 x, gen_int_mode (bitnum, mode), label);
+  return gen_aarch64_tbz (code, mode, mode,
+			   x, gen_int_mode (bitnum, mode), label);
 }
 
 /* Consider the operation:
@@ -17899,7 +17932,7 @@ aarch64_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 
   /* Do one-time initialization based on the vinfo.  */
   loop_vec_info loop_vinfo = dyn_cast<loop_vec_info> (m_vinfo);
-  if (!m_analyzed_vinfo)
+  if (!m_analyzed_vinfo && !m_costing_for_scalar)
     {
       if (loop_vinfo)
 	analyze_loop_vinfo (loop_vinfo);
@@ -23041,6 +23074,58 @@ aarch64_sve_index_immediate_p (rtx base_or_step)
 	  && IN_RANGE (INTVAL (base_or_step), -16, 15));
 }
 
+/* Return true if SERIES is a constant vector that can be loaded using
+   an immediate SVE INDEX, considering both SVE and Advanced SIMD modes.
+   When returning true, store the base in *BASE_OUT and the step
+   in *STEP_OUT.  */
+
+static bool
+aarch64_sve_index_series_p (rtx series, rtx *base_out, rtx *step_out)
+{
+  rtx base, step;
+  if (!const_vec_series_p (series, &base, &step)
+      || !CONST_INT_P (base)
+      || !CONST_INT_P (step))
+    return false;
+
+  auto mode = GET_MODE (series);
+  auto elt_mode = as_a<scalar_int_mode> (GET_MODE_INNER (mode));
+  unsigned int vec_flags = aarch64_classify_vector_mode (mode);
+  if (BYTES_BIG_ENDIAN && (vec_flags & VEC_ADVSIMD))
+    {
+      /* On big-endian targets, architectural lane 0 holds the last element
+	 for Advanced SIMD and the first element for SVE; see the comment at
+	 the head of aarch64-sve.md for details.  This means that, from an SVE
+	 point of view, an Advanced SIMD series goes from the last element to
+	 the first.  */
+      auto i = GET_MODE_NUNITS (mode).to_constant () - 1;
+      base = gen_int_mode (UINTVAL (base) + i * UINTVAL (step), elt_mode);
+      step = gen_int_mode (-UINTVAL (step), elt_mode);
+    }
+
+  if (!aarch64_sve_index_immediate_p (base)
+      || !aarch64_sve_index_immediate_p (step))
+    return false;
+
+  /* If the mode spans multiple registers, check that each subseries is
+     in range.  */
+  unsigned int nvectors = aarch64_ldn_stn_vectors (mode);
+  if (nvectors != 1)
+    {
+      unsigned int nunits;
+      if (!GET_MODE_NUNITS (mode).is_constant (&nunits))
+	return false;
+      nunits /= nvectors;
+      for (unsigned int i = 1; i < nvectors; ++i)
+	if (!IN_RANGE (INTVAL (base) + i * nunits * INTVAL (step), -16, 15))
+	  return false;
+    }
+
+  *base_out = base;
+  *step_out = step;
+  return true;
+}
+
 /* Return true if X is a valid immediate for the SVE ADD and SUB instructions
    when applied to mode MODE.  Negate X first if NEGATE_P is true.  */
 
@@ -23489,13 +23574,8 @@ aarch64_simd_valid_imm (rtx op, simd_immediate_info *info,
     n_elts = CONST_VECTOR_NPATTERNS (op);
   else if (which == AARCH64_CHECK_MOV
 	   && TARGET_SVE
-	   && const_vec_series_p (op, &base, &step))
+	   && aarch64_sve_index_series_p (op, &base, &step))
     {
-      gcc_assert (GET_MODE_CLASS (mode) == MODE_VECTOR_INT);
-      if (!aarch64_sve_index_immediate_p (base)
-	  || !aarch64_sve_index_immediate_p (step))
-	return false;
-
       if (info)
 	{
 	  /* Get the corresponding container mode.  E.g. an INDEX on V2SI
@@ -23607,6 +23687,8 @@ aarch64_simd_valid_imm (rtx op, simd_immediate_info *info,
       long int as_long_ints[2];
       as_long_ints[0] = ival & 0xFFFFFFFF;
       as_long_ints[1] = (ival >> 32) & 0xFFFFFFFF;
+      if (imode == DImode && FLOAT_WORDS_BIG_ENDIAN)
+	std::swap (as_long_ints[0], as_long_ints[1]);
 
       REAL_VALUE_TYPE r;
       real_from_target (&r, as_long_ints, fmode);
@@ -24797,6 +24879,13 @@ aarch64_expand_vector_init (rtx target, rtx vals)
       emit_insn (rec_seq);
     }
 
+  /* The two halves should (by induction) be individually endian-correct.
+     However, in the memory layout provided by VALS, the nth element of
+     HALVES[0] comes immediately before the nth element HALVES[1].
+     This means that, on big-endian targets, the nth element of HALVES[0]
+     is more significant than the nth element HALVES[1].  */
+  if (BYTES_BIG_ENDIAN)
+    std::swap (halves[0], halves[1]);
   rtvec v = gen_rtvec (2, halves[0], halves[1]);
   rtx_insn *zip1_insn
     = emit_set_insn (target, gen_rtx_UNSPEC (mode, v, UNSPEC_ZIP1));
@@ -26712,7 +26801,6 @@ aarch64_evpc_hvla (struct expand_vec_perm_d *d)
   machine_mode vmode = d->vmode;
   if (!TARGET_SVE2p1
       || !TARGET_NON_STREAMING
-      || BYTES_BIG_ENDIAN
       || d->vec_flags != VEC_SVE_DATA
       || GET_MODE_UNIT_BITSIZE (vmode) > 64)
     return false;
@@ -26872,12 +26960,23 @@ aarch64_evpc_tbl (struct expand_vec_perm_d *d)
 static bool
 aarch64_evpc_sve_tbl (struct expand_vec_perm_d *d)
 {
-  unsigned HOST_WIDE_INT nelt;
+  if (!d->one_vector_p)
+    {
+      /* aarch64_expand_sve_vec_perm does not yet handle variable-length
+	 vectors.  */
+      if (!d->perm.length ().is_constant ())
+	return false;
 
-  /* Permuting two variable-length vectors could overflow the
-     index range.  */
-  if (!d->one_vector_p && !d->perm.length ().is_constant (&nelt))
-    return false;
+      /* This permutation reduces to the vec_perm optab if the elements are
+	 large enough to hold all selector indices.  Do not handle that case
+	 here, since the general TBL+SUB+TBL+ORR sequence is too expensive to
+	 be considered a "native" constant permutation.
+
+	 Not doing this would undermine code that queries can_vec_perm_const_p
+	 with allow_variable_p set to false.  See PR121027.  */
+      if (selector_fits_mode_p (d->vmode, d->perm))
+	return false;
+    }
 
   if (d->testing_p)
     return true;
@@ -27267,7 +27366,7 @@ aarch64_emit_sve_fp_cond (rtx target, rtx_code code, rtx pred,
 			  bool known_ptrue_p, rtx op0, rtx op1)
 {
   rtx flag = gen_int_mode (known_ptrue_p, SImode);
-  rtx unspec = gen_rtx_UNSPEC (GET_MODE (pred),
+  rtx unspec = gen_rtx_UNSPEC (GET_MODE (target),
 			       gen_rtvec (4, pred, flag, op0, op1),
 			       aarch64_unspec_cond_code (code));
   emit_set_insn (target, unspec);
@@ -27286,10 +27385,10 @@ static void
 aarch64_emit_sve_or_fp_conds (rtx target, rtx_code code1, rtx_code code2,
 			      rtx pred, bool known_ptrue_p, rtx op0, rtx op1)
 {
-  machine_mode pred_mode = GET_MODE (pred);
-  rtx tmp1 = gen_reg_rtx (pred_mode);
+  machine_mode target_mode = GET_MODE (target);
+  rtx tmp1 = gen_reg_rtx (target_mode);
   aarch64_emit_sve_fp_cond (tmp1, code1, pred, known_ptrue_p, op0, op1);
-  rtx tmp2 = gen_reg_rtx (pred_mode);
+  rtx tmp2 = gen_reg_rtx (target_mode);
   aarch64_emit_sve_fp_cond (tmp2, code2, pred, known_ptrue_p, op0, op1);
   aarch64_emit_binop (target, ior_optab, tmp1, tmp2);
 }
@@ -27306,8 +27405,7 @@ static void
 aarch64_emit_sve_invert_fp_cond (rtx target, rtx_code code, rtx pred,
 				 bool known_ptrue_p, rtx op0, rtx op1)
 {
-  machine_mode pred_mode = GET_MODE (pred);
-  rtx tmp = gen_reg_rtx (pred_mode);
+  rtx tmp = gen_reg_rtx (GET_MODE (target));
   aarch64_emit_sve_fp_cond (tmp, code, pred, known_ptrue_p, op0, op1);
   aarch64_emit_unop (target, one_cmpl_optab, tmp);
 }
@@ -27319,10 +27417,25 @@ aarch64_emit_sve_invert_fp_cond (rtx target, rtx_code code, rtx pred,
 void
 aarch64_expand_sve_vec_cmp_float (rtx target, rtx_code code, rtx op0, rtx op1)
 {
-  machine_mode pred_mode = GET_MODE (target);
   machine_mode data_mode = GET_MODE (op0);
+  rtx pred = aarch64_sve_fp_pred (data_mode, nullptr);
 
-  rtx ptrue = aarch64_ptrue_reg (pred_mode);
+  /* The governing and destination modes.  */
+  machine_mode pred_mode = GET_MODE (pred);
+  machine_mode target_mode = GET_MODE (target);
+
+  /* For partial vector modes, the choice of predicate mode depends
+     on whether we need to suppress exceptions for inactive elements.
+     If we do need to suppress exceptions, the predicate mode matches
+     the element size rather than the container size and the predicate
+     marks the upper bits in each container as inactive.  The predicate
+     is then a ptrue wrt TARGET_MODE but not wrt PRED_MODE.  It is the
+     latter which matters here.
+
+     If we don't need to suppress exceptions, the predicate mode matches
+     the container size, PRED_MODE == TARGET_MODE, and the predicate is
+     thus a ptrue wrt both TARGET_MODE and PRED_MODE.  */
+  bool known_ptrue_p = pred_mode == target_mode;
   switch (code)
     {
     case UNORDERED:
@@ -27336,12 +27449,13 @@ aarch64_expand_sve_vec_cmp_float (rtx target, rtx_code code, rtx op0, rtx op1)
     case EQ:
     case NE:
       /* There is native support for the comparison.  */
-      aarch64_emit_sve_fp_cond (target, code, ptrue, true, op0, op1);
+      aarch64_emit_sve_fp_cond (target, code, pred, known_ptrue_p, op0, op1);
       return;
 
     case LTGT:
       /* This is a trapping operation (LT or GT).  */
-      aarch64_emit_sve_or_fp_conds (target, LT, GT, ptrue, true, op0, op1);
+      aarch64_emit_sve_or_fp_conds (target, LT, GT,
+				    pred, known_ptrue_p, op0, op1);
       return;
 
     case UNEQ:
@@ -27350,7 +27464,7 @@ aarch64_expand_sve_vec_cmp_float (rtx target, rtx_code code, rtx op0, rtx op1)
 	  /* This would trap for signaling NaNs.  */
 	  op1 = force_reg (data_mode, op1);
 	  aarch64_emit_sve_or_fp_conds (target, UNORDERED, EQ,
-					ptrue, true, op0, op1);
+					pred, known_ptrue_p, op0, op1);
 	  return;
 	}
       /* fall through */
@@ -27360,11 +27474,19 @@ aarch64_expand_sve_vec_cmp_float (rtx target, rtx_code code, rtx op0, rtx op1)
     case UNGE:
       if (flag_trapping_math)
 	{
-	  /* Work out which elements are ordered.  */
-	  rtx ordered = gen_reg_rtx (pred_mode);
 	  op1 = force_reg (data_mode, op1);
-	  aarch64_emit_sve_invert_fp_cond (ordered, UNORDERED,
-					   ptrue, true, op0, op1);
+
+	  /* Work out which elements are unordered.  */
+	  rtx uo_tmp = gen_reg_rtx (target_mode);
+	  aarch64_emit_sve_fp_cond (uo_tmp, UNORDERED,
+				    pred, known_ptrue_p, op0, op1);
+
+	  /* Invert the result.  Governered by PRED so that we only
+	     flip the active bits.  */
+	  rtx ordered = gen_reg_rtx (pred_mode);
+	  uo_tmp = gen_lowpart (pred_mode, uo_tmp);
+	  emit_insn (gen_aarch64_pred_one_cmpl_z (pred_mode, ordered,
+						  pred, uo_tmp));
 
 	  /* Test the opposite condition for the ordered elements,
 	     then invert the result.  */
@@ -27389,7 +27511,8 @@ aarch64_expand_sve_vec_cmp_float (rtx target, rtx_code code, rtx op0, rtx op1)
 
   /* There is native support for the inverse comparison.  */
   code = reverse_condition_maybe_unordered (code);
-  aarch64_emit_sve_invert_fp_cond (target, code, ptrue, true, op0, op1);
+  aarch64_emit_sve_invert_fp_cond (target, code,
+				   pred, known_ptrue_p, op0, op1);
 }
 
 /* Return true if:

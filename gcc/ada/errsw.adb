@@ -2,7 +2,7 @@
 --                                                                          --
 --                         GNAT COMPILER COMPONENTS                         --
 --                                                                          --
---  D I A G N O S T I C S . D I A G N O S T I C S _ R E P O S I T O R Y     --
+--                                E R R S W                                 --
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
@@ -22,6 +22,7 @@
 -- Extensive contributions were provided by Ada Core Technologies Inc.      --
 --                                                                          --
 ------------------------------------------------------------------------------
+
 with JSON_Utils; use JSON_Utils;
 with Output;     use Output;
 
@@ -30,7 +31,7 @@ package body Errsw is
    Switches : constant array (Switch_Id)
      of Switch_Type :=
      (No_Switch_Id            =>
-        (others => <>),
+        <>,
       gnatwb                  =>
         (Human_Id          => new String'("Warn_On_Bad_Fixed_Value"),
          Status            => Active,

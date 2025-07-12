@@ -84,8 +84,6 @@ cbl_enabled_exception_t::dump( int i ) const {
               file );
 }
 
-cbl_enabled_exceptions_t enabled_exceptions;
-
 void
 cbl_enabled_exceptions_t::dump() const {
   extern int yydebug;
@@ -99,11 +97,11 @@ cbl_enabled_exceptions_t::dump() const {
   }
   int i = 1;
   for( auto& elem : *this ) {
-    dbgmsg("cbl_enabled_exceptions_t: %2d  {%s, %s, %zu}",
+    dbgmsg("cbl_enabled_exceptions_t: %2d  {%s, %s, %lu}",
            i++,
            elem.location? "with location" : "  no location", 
            ec_type_str(elem.ec),
-           elem.file );
+           gb4(elem.file) );
   }
   std::swap(debug, yydebug);
 }

@@ -159,6 +159,10 @@ static void xtensa_asm_trampoline_template (FILE *);
 static void xtensa_trampoline_init (rtx, tree, rtx);
 static bool xtensa_output_addr_const_extra (FILE *, rtx);
 static bool xtensa_cannot_force_const_mem (machine_mode, rtx);
+static machine_mode xtensa_promote_function_mode (const_tree,
+						  machine_mode,
+						  int *, const_tree,
+						  int);
 
 static reg_class_t xtensa_preferred_reload_class (rtx, reg_class_t);
 static reg_class_t xtensa_preferred_output_reload_class (rtx, reg_class_t);
@@ -235,9 +239,7 @@ static HARD_REG_SET xtensa_zero_call_used_regs (HARD_REG_SET);
 #define TARGET_EXPAND_BUILTIN_VA_START xtensa_va_start
 
 #undef TARGET_PROMOTE_FUNCTION_MODE
-#define TARGET_PROMOTE_FUNCTION_MODE default_promote_function_mode_always_promote
-#undef TARGET_PROMOTE_PROTOTYPES
-#define TARGET_PROMOTE_PROTOTYPES hook_bool_const_tree_true
+#define TARGET_PROMOTE_FUNCTION_MODE xtensa_promote_function_mode
 
 #undef TARGET_RETURN_IN_MEMORY
 #define TARGET_RETURN_IN_MEMORY xtensa_return_in_memory
@@ -421,12 +423,13 @@ xtensa_uimm8x4 (HOST_WIDE_INT v)
 }
 
 
-static bool
-xtensa_b4const (HOST_WIDE_INT v)
+bool
+xtensa_b4const_or_zero (HOST_WIDE_INT v)
 {
   switch (v)
     {
     case -1:
+    case 0:
     case 1:
     case 2:
     case 3:
@@ -445,15 +448,6 @@ xtensa_b4const (HOST_WIDE_INT v)
       return true;
     }
   return false;
-}
-
-
-bool
-xtensa_b4const_or_zero (HOST_WIDE_INT v)
-{
-  if (v == 0)
-    return true;
-  return xtensa_b4const (v);
 }
 
 
@@ -4510,7 +4504,8 @@ xtensa_rtx_costs (rtx x, machine_mode mode, int outer_code,
 	    }
 	  break;
 	case COMPARE:
-	  if ((INTVAL (x) == 0) || xtensa_b4const (INTVAL (x)))
+	  if (xtensa_b4const_or_zero (INTVAL (x))
+	      || xtensa_b4constu (INTVAL (x)))
 	    {
 	      *total = 0;
 	      return true;
@@ -4799,6 +4794,19 @@ xtensa_insn_cost (rtx_insn *insn, bool speed)
 
   /* Fall back.  */
   return pattern_cost (PATTERN (insn), speed);
+}
+
+/* Worker function for TARGET_PROMOTE_FUNCTION_MODE.  */
+
+static machine_mode
+xtensa_promote_function_mode (const_tree type, machine_mode mode,
+			      int *punsignedp, const_tree, int)
+{
+  if (GET_MODE_CLASS (mode) == MODE_INT
+      && GET_MODE_SIZE (mode) < GET_MODE_SIZE (SImode))
+    return SImode;
+
+  return promote_mode (type, mode, punsignedp);
 }
 
 /* Worker function for TARGET_RETURN_IN_MEMORY.  */

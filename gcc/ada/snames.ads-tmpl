@@ -164,6 +164,7 @@ package Snames is
    Name_Local_Restrictions             : constant Name_Id := N + $;
    Name_No_Controlled_Parts            : constant Name_Id := N + $;
    Name_No_Task_Parts                  : constant Name_Id := N + $;
+   Name_Potentially_Invalid            : constant Name_Id := N + $;
    Name_Real_Literal                   : constant Name_Id := N + $;
    Name_Relaxed_Initialization         : constant Name_Id := N + $;
    Name_Stable_Properties              : constant Name_Id := N + $;
@@ -1391,6 +1392,7 @@ package Snames is
    --  e.g. Name_UP_RESULT maps to "RESULT".
 
    Name_Synchronous_Task_Control         : constant Name_Id := N + $;
+   Name_Continue                         : constant Name_Id := N + $;
 
    --  Names used to implement iterators over predefined containers
 

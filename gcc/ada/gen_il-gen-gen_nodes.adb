@@ -469,12 +469,7 @@ begin -- Gen_IL.Gen.Gen_Nodes
        (Sy (Subtype_Mark, Node_Id, Default_Empty),
         Sy (Expression, Node_Id, Default_Empty),
         Sm (Kill_Range_Check, Flag),
-        Sm (No_Truncation, Flag)),
-       Nmake_Assert => "True or else Nkind (Expression) /= N_Unchecked_Type_Conversion");
---       Nmake_Assert => "Nkind (Expression) /= N_Unchecked_Type_Conversion");
-   --  Assert that we don't have unchecked conversions of unchecked
-   --  conversions; if Expression might be an unchecked conversion,
-   --  then Tbuild.Unchecked_Convert_To should be used.
+        Sm (No_Truncation, Flag)));
 
    Cc (N_Subtype_Indication, N_Has_Etype,
        (Sy (Subtype_Mark, Node_Id, Default_Empty),
@@ -967,6 +962,16 @@ begin -- Gen_IL.Gen.Gen_Nodes
         Sy (Is_Null_Loop, Flag),
         Sy (Suppress_Loop_Warnings, Flag)));
 
+   Ab (N_Loop_Flow_Statement, N_Statement_Other_Than_Procedure_Call,
+       (Sy (Name, Node_Id, Default_Empty),
+        Sy (Condition, Node_Id, Default_Empty)));
+
+   Cc (N_Continue_Statement, N_Loop_Flow_Statement,
+       (Sm (Call_Or_Target_Loop, Node_Id)));
+
+   Cc (N_Exit_Statement, N_Loop_Flow_Statement,
+       (Sm (Next_Exit_Statement, Node_Id)));
+
    Cc (N_Null_Statement, N_Statement_Other_Than_Procedure_Call,
        (Sm (Next_Rep_Item, Node_Id)));
 
@@ -1011,11 +1016,6 @@ begin -- Gen_IL.Gen.Gen_Nodes
    Cc (N_Timed_Entry_Call, N_Statement_Other_Than_Procedure_Call,
        (Sy (Entry_Call_Alternative, Node_Id),
         Sy (Delay_Alternative, Node_Id)));
-
-   Cc (N_Exit_Statement, N_Statement_Other_Than_Procedure_Call,
-       (Sy (Name, Node_Id, Default_Empty),
-        Sy (Condition, Node_Id, Default_Empty),
-        Sm (Next_Exit_Statement, Node_Id)));
 
    Cc (N_If_Statement, N_Statement_Other_Than_Procedure_Call,
        (Sy (Condition, Node_Id, Default_Empty),

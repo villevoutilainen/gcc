@@ -3442,25 +3442,23 @@ expand_DEFERRED_INIT (internal_fn, gcall *stmt)
 }
 
 /* Expand the IFN_ACCESS_WITH_SIZE function:
-   ACCESS_WITH_SIZE (REF_TO_OBJ, REF_TO_SIZE, CLASS_OF_SIZE,
-		     TYPE_OF_SIZE, ACCESS_MODE)
+   ACCESS_WITH_SIZE (REF_TO_OBJ, REF_TO_SIZE,
+		     TYPE_OF_SIZE + ACCESS_MODE, TYPE_SIZE_UNIT for element)
    which returns the REF_TO_OBJ same as the 1st argument;
 
    1st argument REF_TO_OBJ: The reference to the object;
    2nd argument REF_TO_SIZE: The reference to the size of the object,
-   3rd argument CLASS_OF_SIZE: The size referenced by the REF_TO_SIZE represents
-     0: the number of bytes.
-     1: the number of the elements of the object type;
-   4th argument TYPE_OF_SIZE: A constant 0 with its TYPE being the same as the TYPE
-    of the object referenced by REF_TO_SIZE
-   5th argument ACCESS_MODE:
-    -1: Unknown access semantics
-     0: none
-     1: read_only
-     2: write_only
-     3: read_write
-   6th argument: A constant 0 with the pointer TYPE to the original flexible
-     array type.
+   3rd argument TYPE_OF_SIZE + ACCESS_MODE: An integer constant with a pointer
+     TYPE.
+     The pointee TYPE of the pointer TYPE is the TYPE of the object referenced
+	by REF_TO_SIZE.
+     The integer constant value represents the ACCESS_MODE:
+	0: none
+	1: read_only
+	2: write_only
+	3: read_write
+
+   4th argument: The TYPE_SIZE_UNIT of the element TYPE of the array.
 
    Both the return type and the type of the first argument of this
    function have been converted from the incomplete array type to
@@ -4031,9 +4029,14 @@ expand_crc_optab_fn (internal_fn fn, gcall *stmt, convert_optab optab)
   rtx dest = expand_expr (lhs, NULL_RTX, VOIDmode, EXPAND_WRITE);
   rtx crc = expand_normal (rhs1);
   rtx data = expand_normal (rhs2);
-  gcc_assert (TREE_CODE (rhs3) == INTEGER_CST);
-  rtx polynomial = gen_rtx_CONST_INT (TYPE_MODE (result_type),
-				      TREE_INT_CST_LOW (rhs3));
+  rtx polynomial;
+  if (TREE_CODE (rhs3) != INTEGER_CST)
+    {
+      error ("third argument to %<crc%> builtins must be a constant");
+      polynomial = const0_rtx;
+    }
+  else
+    polynomial = convert_to_mode (TYPE_MODE (result_type), expand_normal (rhs3), 0);
 
   /* Use target specific expansion if it exists.
      Otherwise, generate table-based CRC.  */
@@ -4423,6 +4426,7 @@ commutative_binary_fn_p (internal_fn fn)
     case IFN_ADD_OVERFLOW:
     case IFN_MUL_OVERFLOW:
     case IFN_SAT_ADD:
+    case IFN_SAT_MUL:
     case IFN_VEC_WIDEN_PLUS:
     case IFN_VEC_WIDEN_PLUS_LO:
     case IFN_VEC_WIDEN_PLUS_HI:

@@ -34,29 +34,32 @@
  * header files.
  */
 
-#include "cobol-system.h"
-#include "coretypes.h"
-#include "tree.h"
+#include <cobol-system.h>
+#include <coretypes.h>
+#include <tree.h>
 #undef yy_flex_debug
 
 #include <langinfo.h>
 
-#include "coretypes.h"
-#include "version.h"
-#include "demangle.h"
-#include "intl.h"
-#include "backtrace.h"
-#include "diagnostic.h"
-#include "diagnostic-color.h"
-#include "diagnostic-url.h"
-#include "diagnostic-metadata.h"
-#include "diagnostic-path.h"
-#include "edit-context.h"
-#include "selftest.h"
-#include "selftest-diagnostic.h"
-#include "opts.h"
+#include <coretypes.h>
+#include <version.h>
+#include <demangle.h>
+#include <intl.h>
+#include <backtrace.h>
+#include <diagnostic.h>
+#include <diagnostic-color.h>
+#include <diagnostic-url.h>
+#include <diagnostic-metadata.h>
+#include <diagnostic-path.h>
+#include <edit-context.h>
+#include <selftest.h>
+#include <selftest-diagnostic.h>
+#include <opts.h>
+
 #include "util.h"
+
 #include "cbldiag.h"
+#include "cdfval.h"
 #include "lexio.h"
 
 #include "../../libgcobol/ec.h"
@@ -111,6 +114,159 @@ gb4( size_t input ) {
   return input;
 }
   
+/*
+ * Most CDF Directives -- those that have state -- can be pushed and popped.
+ * This class maintains stacks of them, with each stack having a "default
+ * value" that may be updated, without push/pop, via a CDF directive or
+ * command-line option.  A push to a stack pushes the default value onto it; a
+ * pop copies the top of the stack to the default value.
+ *
+ * Supported:
+ *   CALL-CONVENTION
+ *   COBOL-WORDS
+ *   DEFINE
+ *   DISPLAY
+ *   IF
+ *   POP
+ *   PUSH
+ *   SOURCE FORMAT
+ *   TURN
+ * not supported
+ *   EVALUATE
+ *   FLAG-02
+ *   FLAG-14
+ *   LEAP-SECOND
+ *   LISTING
+ *   PAGE
+ *   PROPAGATE
+ *   REF-MOD-ZERO-LENGTH
+ * 
+ * >>PUSH ALL calls the class's push() method. 
+ * >>POP ALL calls the class's pop() method. 
+ */
+class cdf_directives_t
+{
+  template <typename T>
+  class cdf_stack_t : private std::stack<T> {
+    T default_value;
+    const T& top() const { return std::stack<T>::top(); }
+    bool empty() const { return std::stack<T>::empty(); }
+   public:
+    void value( const T& value ) {
+      T& output( empty()? default_value : std::stack<T>::top() );
+      output = value;
+      dbgmsg("cdf_directives_t::%s: %s", __func__, str(output).c_str());
+    }
+    T& value() {
+      return empty()? default_value : std::stack<T>::top();
+    }
+    void push() {
+      std::stack<T>::push(value());
+      dbgmsg("cdf_directives_t::%s: %s", __func__, str(top()).c_str());
+    }
+    void pop() {
+      if( empty() ) {
+        error_msg(YYLTYPE(), "CDF stack empty");
+        return;
+      }
+      default_value = top();
+      std::stack<T>::pop();
+      dbgmsg("cdf_directives_t::%s: %s", __func__, str(default_value).c_str());
+    }
+  protected:
+    static std::string str(cbl_call_convention_t arg) {
+      char output[2] = { static_cast<char>(arg) };
+      return std::string("call-convention ") + output;
+    }
+    static std::string str(current_tokens_t) {
+      return "<cobol-words>";
+    }
+    static std::string str(cdf_values_t) {
+      return "<dictionary>";
+    }
+    static std::string str(source_format_t arg) {
+      return arg.description();
+    }
+    static std::string str(cbl_enabled_exceptions_t) {
+      return "<enabled_exceptions>";
+    }
+                          
+  };
+
+ public:
+  cdf_stack_t<cbl_call_convention_t> call_convention;
+  cdf_stack_t<current_tokens_t> cobol_words;
+  cdf_stack_t<cdf_values_t> dictionary;   // DEFINE
+  cdf_stack_t<source_format_t> source_format;
+  cdf_stack_t<cbl_enabled_exceptions_t> enabled_exceptions;
+
+  cdf_directives_t() {
+    call_convention.value() = cbl_call_cobol_e;
+  }
+ 
+  void push() {
+    call_convention.push();
+    cobol_words.push();
+    dictionary.push();
+    source_format.push();
+    enabled_exceptions.push();
+  }
+  void pop() {
+    call_convention.pop();
+    cobol_words.pop();
+    dictionary.pop();
+    source_format.pop();
+    enabled_exceptions.pop();
+  }
+};
+static cdf_directives_t cdf_directives;
+
+void
+current_call_convention( cbl_call_convention_t convention) {
+  cdf_directives.call_convention.value(convention);
+}
+cbl_call_convention_t
+current_call_convention() {
+  return cdf_directives.call_convention.value();
+}
+
+current_tokens_t&
+cdf_current_tokens() {
+  return cdf_directives.cobol_words.value();
+}
+
+cdf_values_t&
+cdf_dictionary() {
+  return cdf_directives.dictionary.value();
+}
+
+void
+cobol_set_indicator_column( int column ) {
+  cdf_directives.source_format.value().indicator_column_set(column);
+}
+source_format_t& cdf_source_format() {
+  return cdf_directives.source_format.value();
+}
+
+cbl_enabled_exceptions_t&
+cdf_enabled_exceptions() {
+  return cdf_directives.enabled_exceptions.value();
+}
+
+void cdf_push() { cdf_directives.push(); }
+void cdf_push_call_convention() { cdf_directives.call_convention.push(); }
+void cdf_push_current_tokens() { cdf_directives.cobol_words.push(); }
+void cdf_push_dictionary() { cdf_directives.dictionary.push(); }
+void cdf_push_enabled_exceptions() { cdf_directives.enabled_exceptions.push(); }
+void cdf_push_source_format() { cdf_directives.source_format.push(); }
+
+void cdf_pop() { cdf_directives.pop(); }
+void cdf_pop_call_convention() { cdf_directives.call_convention.pop(); }
+void cdf_pop_current_tokens() { cdf_directives.cobol_words.pop(); }
+void cdf_pop_dictionary() { cdf_directives.dictionary.pop(); }
+void cdf_pop_enabled_exceptions() { cdf_directives.enabled_exceptions.pop(); }
+void cdf_pop_source_format() { cdf_directives.source_format.pop(); }
+
 const char *
 symbol_type_str( enum symbol_type_t type )
 {
@@ -902,8 +1058,8 @@ cbl_field_t::report_invalid_initial_value(const YYLTYPE& loc) const {
                                                  return TOUPPER(ch) == 'E';
                                                } );
               if( !has_exponent && data.precision() < pend - p ) {
-                error_msg(loc, "%s cannot represent VALUE %qs exactly (max %c%zu)",
-                          name, data.initial, '.', pend - p);
+                error_msg(loc, "%s cannot represent VALUE %qs exactly (max %c%ld)",
+                          name, data.initial, '.', (long)(pend - p));
               }
             }
           }
@@ -1104,10 +1260,8 @@ valid_move( const struct cbl_field_t *tgt, const struct cbl_field_t *src )
   static_assert(sizeof(matrix[0]) == COUNT_OF(matrix[0]),
                 "matrix should be square");
 
-  for( const cbl_field_t *args[] = {tgt, src}, **p=args;
-       p < args + COUNT_OF(args); p++ ) {
-    auto& f(**p);
-    switch(f.type) {
+  for( auto field : { src, tgt } ) {
+    switch(field->type) {
     case FldClass:
     case FldConditional:
     case FldIndex:
@@ -1119,9 +1273,9 @@ valid_move( const struct cbl_field_t *tgt, const struct cbl_field_t *src )
     case FldForward:
     case FldBlob:
     default:
-      if( sizeof(matrix[0]) < f.type ) {
+      if( sizeof(matrix[0]) < field->type ) {
         cbl_internal_error("logic error: MOVE %s %s invalid type:",
-                           cbl_field_type_str(f.type), f.name);
+                           cbl_field_type_str(field->type), field->name);
       }
       break;
     }
@@ -1745,11 +1899,10 @@ struct input_file_t {
   ino_t inode;
   int lineno;
   const char *name;
-  const line_map *lines;
 
   input_file_t( const char *name, ino_t inode,
-                int lineno=1, const line_map *lines = NULL )
-    : inode(inode), lineno(lineno), name(name), lines(lines)
+                int lineno=1 )
+    : inode(inode), lineno(lineno), name(name)
   {
     if( inode == 0 ) inode_set();
   }
@@ -1811,6 +1964,12 @@ class unique_stack : public std::stack<input_file_t>
     }
     return false;
   }
+
+  // Look down into the stack. peek(0) == top()
+  const input_file_t& peek( size_t n ) const {
+    gcc_assert( n < size() );
+    return c.at(size() - ++n);
+  } 
   
   void option( int opt ) { // capture other preprocessor options eventually
     assert(opt == 'M');
@@ -1867,17 +2026,34 @@ bool cobol_filename( const char *name, ino_t inode ) {
   }
   linemap_add(line_table, LC_ENTER, sysp, name, 1);
   input_filename_vestige = name;
-  bool pushed = input_filenames.push( input_file_t(name, inode, 1, lines) );
-  input_filenames.top().lineno = yylineno = 1;
+  bool pushed = input_filenames.push( input_file_t(name, inode, 1) );
   return pushed;
 }
 
 const char *
-cobol_lineno_save() {
+cobol_lineno( int lineno ) {
   if( input_filenames.empty() ) return NULL;
   auto& input( input_filenames.top() );
-  input.lineno = yylineno;
+  input.lineno = lineno;
   return input.name;
+}
+
+/*
+ * This function is called from the scanner, usually when a copybook is on top
+ * of the input stack, before the parser retrieves the token and resets the
+ * current filename.  For that reason, we normaly want to line number of the
+ * file that is about to become the current one, which is the one behind top().
+ *
+ * If somehow we arrive here when there is nothing underneath, we return the
+ * current line nubmer, or zero if there's no input.  The only consequence is
+ * that the reported line number might be wrong.
+ */
+int
+cobol_lineno() {
+  if( input_filenames.empty() ) return 0;
+  size_t n = input_filenames.size() < 2? 0 : 1;
+  const auto& input( input_filenames.peek(n) );
+  return input.lineno;
 }
 
 const char *
@@ -1885,7 +2061,7 @@ cobol_filename() {
   return input_filenames.empty()? input_filename_vestige : input_filenames.top().name;
 }
 
-const char *
+void
 cobol_filename_restore() {
   assert(!input_filenames.empty());
   const input_file_t& top( input_filenames.top() );
@@ -1893,22 +2069,22 @@ cobol_filename_restore() {
   input_filename_vestige = top.name;
 
   input_filenames.pop();
-  if( input_filenames.empty() ) return NULL;
+  if( input_filenames.empty() ) return;
 
   auto& input = input_filenames.top();
 
-  input.lines = linemap_add(line_table, LC_LEAVE, sysp, NULL, 0);
-
-  yylineno = input.lineno;
-  return input.name;
+  linemap_add(line_table, LC_LEAVE, sysp, NULL, 0);
 }
 
 static location_t token_location;
 
+location_t location_from_lineno() { return token_location; }
+
 template <typename LOC>
 static void
 gcc_location_set_impl( const LOC& loc ) {
-  token_location = linemap_line_start( line_table, loc.last_line, 80 );
+  // Set the position to the first line & column in the location. 
+  token_location = linemap_line_start( line_table, loc.first_line, 80 );
   token_location = linemap_position_for_column( line_table, loc.first_column);
   location_dump(__func__, __LINE__, "parser", loc);
 }
@@ -1953,6 +2129,11 @@ verify_format( const char gmsgid[] ) {
 static const diagnostic_option_id option_zero;
 size_t parse_error_inc();
 
+void gcc_location_dump() {
+    linemap_dump_location( line_table, token_location, stderr );
+}
+
+
 void ydferror( const char gmsgid[], ... ) ATTRIBUTE_GCOBOL_DIAG(1, 2);
 
 void
@@ -1989,10 +2170,7 @@ class temp_loc_t {
     gcc_location_set(loc);
   }
   explicit temp_loc_t( const YDFLTYPE& loc) : orig(token_location) {
-    YYLTYPE lloc = {
-      loc.first_line, loc.first_column,
-      loc.last_line,  loc.last_column };
-    gcc_location_set(lloc);
+    gcc_location_set(loc);
   }
   ~temp_loc_t() {
     if( orig != token_location ) {
@@ -2038,14 +2216,15 @@ void error_msg( const YDFLTYPE& loc, const char gmsgid[], ... ) {
   ERROR_MSG_BODY
 }
 
-void
-cdf_location_set(YYLTYPE loc) {
-  extern YDFLTYPE ydflloc;
-
-  ydflloc.first_line =   loc.first_line;
-  ydflloc.first_column = loc.first_column;
-  ydflloc.last_line =    loc.last_line;
-  ydflloc.last_column =  loc.last_column;
+void error_msg_direct( const char gmsgid[], ... ) {
+  verify_format(gmsgid);
+  parse_error_inc();
+  auto_diagnostic_group d;
+  va_list ap;
+  va_start (ap, gmsgid);
+  auto ret = emit_diagnostic_valist( DK_ERROR, token_location,
+                                     option_zero, gmsgid, &ap );
+  va_end (ap);
 }
 
 void
@@ -2101,7 +2280,7 @@ yyerrorvl( int line, const char *filename, const char fmt[], ... ) {
 static inline size_t
 matched_length( const regmatch_t& rm ) { return rm.rm_eo - rm.rm_so; }
 
-const char *
+int
 cobol_fileline_set( const char line[] ) {
   static const char pattern[] = "#line +([[:alnum:]]+) +[\"']([^\"']+). *\n";
   static const int cflags = REG_EXTENDED | REG_ICASE;
@@ -2114,7 +2293,7 @@ cobol_fileline_set( const char line[] ) {
     if( (erc = regcomp(&re, pattern, cflags)) != 0 ) {
         regerror(erc, &re, regexmsg, sizeof(regexmsg));
         dbgmsg( "%s:%d: could not compile regex: %s", __func__, __LINE__, regexmsg );
-        return line;
+        return 0;
     }
     preg = &re;
   }
@@ -2122,10 +2301,10 @@ cobol_fileline_set( const char line[] ) {
     if( erc != REG_NOMATCH ) {
       regerror(erc, preg, regexmsg, sizeof(regexmsg));
       dbgmsg( "%s:%d: could not compile regex: %s", __func__, __LINE__, regexmsg );
-      return line;
+      return 0;
     }
     error_msg(yylloc, "invalid %<#line%> directive: %s", line );
-    return line;
+    return 0;
   }
 
   const char
@@ -2139,15 +2318,13 @@ cobol_fileline_set( const char line[] ) {
   input_file_t input_file( filename, ino_t(0), fileline ); // constructor sets inode
 
   if( input_filenames.empty() ) {
-    input_file.lines = linemap_add(line_table, LC_ENTER, sysp, filename, 1);
     input_filenames.push(input_file);
   }
 
   input_file_t& file = input_filenames.top();
   file = input_file;
-  yylineno = file.lineno;
 
-  return file.name;
+  return file.lineno;
 }
 
 //#define TIMING_PARSE
@@ -2357,7 +2534,7 @@ bool fisdigit(int c)
 bool fisspace(int c)
   {
   return ISSPACE(c);
-  };
+  }
 int  ftolower(int c)
   {
   return TOLOWER(c);
@@ -2369,7 +2546,7 @@ int  ftoupper(int c)
 bool fisprint(int c)
   {
   return ISPRINT(c);
-  };
+  }
 
 // 8.9 Reserved words
 static const std::set<std::string> reserved_words = {

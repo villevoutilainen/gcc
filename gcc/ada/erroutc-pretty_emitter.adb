@@ -2,7 +2,7 @@
 --                                                                          --
 --                         GNAT COMPILER COMPONENTS                         --
 --                                                                          --
---             D I A G N O S T I C S . P R E T T Y _ E M I T T E R          --
+--                 E R R O U T C . P R E T T Y _ E M I T T E R              --
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
@@ -1120,8 +1120,8 @@ package body Erroutc.Pretty_Emitter is
          Write_Str (" " & Switch_Str);
       end if;
 
-      if E_Msg.Warn_Err then
-         Write_Str (" [warning-as-error]");
+      if E_Msg.Warn_Err = From_Pragma then
+         Write_Str (" " & Warn_As_Err_Tag);
       end if;
 
       Write_Eol;

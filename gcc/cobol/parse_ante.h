@@ -102,8 +102,8 @@ void input_file_status_notify();
           (Current).last_column  = YYRHSLOC (Rhs, 0).last_column;       \
         }                                                               \
       location_dump("parse.c", __LINE__, "current", (Current));         \
-      gcc_location_set( location_set(Current) );                        \
       input_file_status_notify();                                       \
+      gcc_location_set( location_set(Current) );                        \
   } while (0)
 
 int yylex(void);
@@ -209,6 +209,9 @@ in_file_section(void) { return current_data_section == file_datasect_e; }
 
 static cbl_refer_t *
 intrinsic_inconsistent_parameter( size_t n, cbl_refer_t *args );
+
+static int
+intrinsic_token_of( const char name[] );
 
 static inline bool
 namcpy(const YYLTYPE& loc, cbl_name_t tgt, const char *src ) {
@@ -932,165 +935,11 @@ teed_up_names() {
   return name_queue_t::namelist_of( name_queue.peek() );
 }
 
-class tokenset_t {
-  // token_names is initialized from a generated header file. 
-  std::vector<const char *>token_names;  // position indicates token value
-  std::map <std::string, int> tokens;    // aliases
-  std::set<std::string> cobol_words;  // Anything in COBOL-WORDS may appear only once. 
- public:
-  static std::string
-  lowercase( const cbl_name_t name ) {
-    cbl_name_t lname;
-    std::transform(name, name + strlen(name) + 1, lname, ftolower);
-    return lname;
-  }
-  static std::string
-  uppercase( const cbl_name_t name ) {
-    cbl_name_t uname;
-    std::transform(name, name + strlen(name) + 1, uname, ftoupper);
-    return uname;
-  }
-
- public:
-  tokenset_t();
-  int find( const cbl_name_t name, bool include_intrinsics );
-
-  bool equate( const YYLTYPE& loc, int token,
-	       const cbl_name_t name, const cbl_name_t verb = "EQUATE") {
-    auto lname( lowercase(name) );
-    auto cw = cobol_words.insert(lname);
-    if( ! cw.second ) {
-      error_msg(loc, "COBOL-WORDS %s: %s may appear but once", verb, name);
-      return false;
-    }
-    auto p = tokens.find(lowercase(name));
-    bool fOK = p == tokens.end();
-    if( fOK ) { // name not already in use
-      tokens[lname] = token;
-      dbgmsg("%s:%d: %d has alias %s", __func__, __LINE__, token, name);
-    } else {
-      error_msg(loc, "%s: %s already defined as a token", verb, name);
-    }
-    return fOK;
-  }
-  bool undefine( const YYLTYPE& loc,
-		 const cbl_name_t name, const cbl_name_t verb = "UNDEFINE" ) {
-    auto lname( lowercase(name) );
-    auto cw = cobol_words.insert(lname);
-    if( ! cw.second ) {
-      error_msg(loc, "COBOL-WORDS %s: %s may appear but once", verb, name);
-      return false;
-    }
-
-    // Do not erase generic, multi-type tokens COMPUTATIONAL and BINARY_INTEGER.
-    if( binary_integer_usage_of(name) ) {
-      dbgmsg("%s:%d: generic %s remains valid as a token", __func__, __LINE__, name);
-      return true;
-    }
-
-    auto p = tokens.find(lname);
-    bool fOK = p != tokens.end();
-    if( fOK ) { // name in use
-      tokens.erase(p);
-    } else {
-      error_msg(loc, "%s: %s not defined as a token", verb, name);
-    }
-    dbgmsg("%s:%d: %s removed as a valid token name", __func__, __LINE__, name);
-    return fOK;
-  }
-  
-  bool substitute( const YYLTYPE& loc,
-		   const cbl_name_t extant, int token, const cbl_name_t name ) {
-    return
-      equate( loc, token, name, "SUBSTITUTE" )
-      &&
-      undefine( loc, extant, "SUBSTITUTE" );
-  }
-  bool reserve( const YYLTYPE& loc, const cbl_name_t name ) {
-    auto lname( lowercase(name) );
-    auto cw = cobol_words.insert(lname);
-    if( ! cw.second ) {
-      error_msg(loc, "COBOL-WORDS RESERVE: %s may appear but once", name);
-      return false;
-    }
-    tokens[lname] = -42;
-    return true;
-  }
-  int redefined_as( const cbl_name_t name ) {
-    auto lname( lowercase(name) );
-    if( cobol_words.find(lname) != cobol_words.end() ) {
-      auto p = tokens.find(lname);
-      if( p != tokens.end() ) {
-        return p->second;
-      }
-    }
-    return 0;
-  }
-  const char * name_of( int tok ) const {
-    tok -= (255 + 3);
-    gcc_assert(0 <= tok && size_t(tok) < token_names.size());
-    return tok < 0? "???" : token_names[tok];
-  }
-};
-
-class current_tokens_t {
-  tokenset_t tokens;
- public:
-  current_tokens_t() {}
-  int find( const cbl_name_t name, bool include_intrinsics ) {
-    return tokens.find(name, include_intrinsics);
-  }
-  bool equate( const YYLTYPE& loc, const cbl_name_t keyword, const cbl_name_t alias ) {
-    int token; 
-    if( 0 == (token = binary_integer_usage_of(keyword)) ) {
-      if( 0 == (token = keyword_tok(keyword)) ) {
-	error_msg(loc, "EQUATE %s: not a valid token", keyword);
-	return false;
-      }
-    }
-    auto name = keyword_alias_add(tokens.uppercase(keyword),
-				  tokens.uppercase(alias));
-    if( name != keyword ) {
-      error_msg(loc, "EQUATE: %s is already an alias for %s", alias, name.c_str());
-      return false;
-    } 
-    return tokens.equate(loc, token, alias);
-  }
-  bool undefine( const YYLTYPE& loc, cbl_name_t keyword ) {
-    return tokens.undefine(loc, keyword);
-  }
-  bool substitute( const YYLTYPE& loc, const cbl_name_t keyword, const cbl_name_t alias ) {
-    int token; 
-    if( 0 == (token = binary_integer_usage_of(keyword)) ) {
-      if( 0 == (token = keyword_tok(keyword)) ) {
-	error_msg(loc, "SUBSTITUTE %s: not a valid token", keyword);
-	return false;
-      }
-    }
-    auto name = keyword_alias_add(tokens.uppercase(keyword),
-				  tokens.uppercase(alias));
-    if( name != keyword ) {
-      error_msg(loc, "SUBSTITUTE: %s is already an alias for %s", alias, name.c_str());
-      return false;
-    } 
-
-    dbgmsg("%s:%d: %s (%d) will have alias %s", __func__, __LINE__, keyword, token, alias);
-    return tokens.substitute(loc, keyword, token, alias);
-  }
-  bool reserve( const YYLTYPE& loc, const cbl_name_t name ) {
-    return tokens.reserve(loc, name);
-  }
-  int redefined_as( const cbl_name_t name ) {
-    return tokens.redefined_as(name);
-  }
-  const char * name_of( int tok ) const {
-    return tokens.name_of(tok);
-  }
-} tokens;
+#define cdf_tokens cdf_current_tokens()
 
 int
 redefined_token( const cbl_name_t name ) {
-  return tokens.redefined_as(name);
+  return cdf_tokens.redefined_as(name);
 }
 
 struct file_list_t {
@@ -1472,7 +1321,6 @@ class prog_descr_t {
       }
     }
   } locale;
-  cbl_call_convention_t call_convention;
   cbl_options_t options;
 
   explicit prog_descr_t( size_t isymbol )
@@ -1481,9 +1329,7 @@ class prog_descr_t {
     , paragraph(NULL)
     , section(NULL)
     , collating_sequence(NULL)
-  {
-    call_convention = current_call_convention();
-  }
+  {}
 
  std::set<std::string> external_targets() {
    std::set<std::string> externals;
@@ -1572,24 +1418,13 @@ static cbl_label_t *  implicit_section();
 
 class program_stack_t : protected  std::stack<prog_descr_t> {
   struct pending_t {
-    cbl_call_convention_t call_convention;
     bool initial;
-    pending_t()
-      : call_convention(cbl_call_convention_t(0))
-      , initial(false)
-    {}
+    pending_t() : initial(false) {}
   } pending;
  public:
-  cbl_call_convention_t
-  pending_call_convention( cbl_call_convention_t convention ) {
-    return pending.call_convention = convention;
-  }
   bool pending_initial() { return pending.initial = true; }
 
   void push( prog_descr_t descr ) {
-    cbl_call_convention_t call_convention = cbl_call_cobol_e;
-    if( !empty() ) call_convention = top().call_convention;
-    descr.call_convention = call_convention;
     std::stack<prog_descr_t>& me(*this);
     me.push(descr);
   }
@@ -1615,9 +1450,6 @@ class program_stack_t : protected  std::stack<prog_descr_t> {
   }
 
   void apply_pending() {
-    if( size() == 1 && 0 != pending.call_convention ) {
-      top().call_convention = pending.call_convention;
-  }
     if( pending.initial ) {
       auto e = symbol_at(top().program_index);
       auto prog(cbl_label_of(e));
@@ -2024,19 +1856,6 @@ static class current_t {
     return programs.top().options.default_round = mode;
   }
 
-  cbl_call_convention_t
-  call_convention() {
-    return programs.empty()? cbl_call_cobol_e : programs.top().call_convention;
-  }
-  cbl_call_convention_t
-  call_convention( cbl_call_convention_t convention) {
-    if( programs.empty() ) {
-      return programs.pending_call_convention(convention);
-    }
-    auto& prog( programs.top() );
-    return prog.call_convention = convention;
-  }
-
   const char *
   locale() {
     return programs.empty()? NULL : programs.top().locale.os_name;
@@ -2134,6 +1953,7 @@ static class current_t {
    * ISO, in new_program.
    */
   std::set<std::string>  end_program() {
+    cbl_enabled_exceptions_t& enabled_exceptions( cdf_enabled_exceptions() );
     if( enabled_exceptions.size() ) {
       declaratives_evaluate();
     }
@@ -2151,9 +1971,19 @@ static class current_t {
      * subprograms, and whether or not they are COMMON. PROGRAM may be
      * the caller, or a subprogram could call COMMON sibling.
      */
+
+    static std::unordered_set<size_t> callers_we_have_seen;
     if( programs.size() == 1 ) {
       if( yydebug ) parser_call_targets_dump();
       for( size_t caller : symbol_program_programs() ) {
+        // We are running through the entire growing list of called programs
+        // at the point of each END PROGRAM.  This confuses the name changing
+        // routines, so we use a std::set to avoid doing callers more than
+        // once.
+        if( callers_we_have_seen.find(caller) != callers_we_have_seen.end() )
+          {
+          continue;
+          }
         const char *caller_name = cbl_label_of(symbol_at(caller))->name;
         for( auto callable : symbol_program_callables(caller) ) {
           auto called = cbl_label_of(symbol_at(callable));
@@ -2161,13 +1991,16 @@ static class current_t {
             called->mangled_name? called->mangled_name : called->name;
 
           size_t n =
-            parser_call_target_update(caller, called->name, mangled_name);
+            parser_call_target_update(caller,
+                                      called->name,
+                                      mangled_name);
           // Zero is not an error
           dbgmsg("updated " HOST_SIZE_T_PRINT_UNSIGNED
                  " calls from #%-3" GCC_PRISZ "u (%s) s/%s/%s/",
                  (fmt_size_t)n, (fmt_size_t)caller, caller_name,
                  called->name, mangled_name);
         }
+      callers_we_have_seen.insert(caller);
       }
       if( yydebug ) parser_call_targets_dump();
     }
@@ -2410,15 +2243,6 @@ current_rounded_mode( cbl_round_t rounded) {
 }
 #endif
 static cbl_round_t current_rounded_mode( int token );
-
-cbl_call_convention_t
-current_call_convention() {
-  return current.call_convention();
-}
-cbl_call_convention_t
-current_call_convention( cbl_call_convention_t convention) {
-  return current.call_convention(convention);
-}
 
 size_t program_level() { return current.program_level(); }
 
@@ -2893,17 +2717,6 @@ group_attr( const cbl_field_t * field ) {
   return p->attr;
 }
 
-static struct symbol_elem_t *
-field_of( const char F[], int L, const char name[] ) {
-  struct symbol_elem_t *e = symbol_field(PROGRAM, 0, name);
-  if( !e ) {
-    cbl_internal_error("%s:%d: no symbol '%s' found", F, L, name);
-  }
-  assert( procedure_div_e != current_division  );
-  return e;
-}
-#define field_of( F ) field_of(__func__, __LINE__, (F))
-
 static struct cbl_field_t *
 field_add( const YYLTYPE& loc, cbl_field_t *field ) {
   switch(current_data_section) {
@@ -3207,6 +3020,11 @@ parser_move_carefully( const char */*F*/, int /*L*/,
       }
     } else {
       if( ! valid_move( tgt.field, src.field ) ) {
+        if( src.field->type == FldPointer &&
+            tgt.field->type == FldPointer ) {
+          if( dialect_mf() || dialect_gnu() ) return true;
+          dialect_error(src.loc, "MOVE POINTER", "mf");
+        }
         if( ! is_index ) {
           char ach[16];
           char stype[32];
@@ -3232,7 +3050,6 @@ parser_move_carefully( const char */*F*/, int /*L*/,
             sprintf(ach, ".%d", tgt.field->data.rdigits);
             strcat(dtype, ach);
             }
-
           error_msg(src.loc,  "cannot MOVE '%s' (%s) to '%s' (%s)",
                     name_of(src.field), stype,
                     name_of(tgt.field), dtype);

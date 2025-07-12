@@ -1,14 +1,21 @@
 /* { dg-do compile } */
-/* { dg-options "-O2 -mtune=generic -mno-sse" } */
+/* { dg-options "-O2 -mtune=generic -mno-sse -fasynchronous-unwind-tables -fdwarf2-cfi-asm" } */
 /* Keep labels and directives ('.cfi_startproc', '.cfi_endproc').  */
 /* { dg-final { check-function-bodies "**" "" "" { target lp64 } {^\t?\.} } } */
 
 /*
 **foo:
 **.LFB[0-9]+:
-**...
+**	.cfi_startproc
+**	movq	221\(%rsi\), %rax
 **	xorl	%edx, %edx
-**...
+**	movq	%rax, 221\(%rdi\)
+**	movq	229\(%rsi\), %rax
+**	movq	%rax, 229\(%rdi\)
+**	movq	237\(%rsi\), %rax
+**	movq	%rax, 237\(%rdi\)
+**	movq	245\(%rsi\), %rax
+**	movq	%rax, 245\(%rdi\)
 **.L[0-9]+:
 **	movl	%edx, %eax
 **	addl	\$32, %edx
@@ -22,6 +29,7 @@
 **	movq	%rcx, 24\(%rdi,%rax\)
 **	cmpl	\$224, %edx
 **	jb	.L[0-9]+
+**	ret
 **...
 */
 

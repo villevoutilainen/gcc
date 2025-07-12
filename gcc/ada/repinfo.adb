@@ -533,11 +533,13 @@ package body Repinfo is
                      List_Type_Info (E);
                   end if;
 
-               --  Note that formals are not annotated so we skip them here
+               --  Formals and renamings are not annotated, so we skip them
+               --  here.
 
                elsif Ekind (E) in E_Constant
                                 | E_Loop_Parameter
                                 | E_Variable
+                 and then Nkind (Parent (E)) /= N_Object_Renaming_Declaration
                then
                   if List_Representation_Info >= 2 then
                      List_Object_Info (E);
@@ -1237,15 +1239,25 @@ package body Repinfo is
          function First_Comp_Or_Discr (Ent : Entity_Id) return Entity_Id is
 
             function Is_Placed_Before (C1, C2 : Entity_Id) return Boolean;
-            --  Return True if component C1 is placed before component C2
+            --  Return True if components C1 and C2 are in the same component
+            --  list and component C1 is placed before component C2 in there.
 
             ----------------------
             -- Is_Placed_Before --
             ----------------------
 
             function Is_Placed_Before (C1, C2 : Entity_Id) return Boolean is
+               L1 : constant Node_Id := Parent (Parent (C1));
+               L2 : constant Node_Id := Parent (Parent (C2));
+
             begin
-               return Known_Static_Component_Bit_Offset (C1)
+               --  Discriminants and top-level components are considered to be
+               --  in the same list, although this is not syntactically true.
+
+               return (L1 = L2
+                        or else (Nkind (Parent (L1)) /= N_Variant
+                                  and then Nkind (Parent (L2)) /= N_Variant))
+                 and then Known_Static_Component_Bit_Offset (C1)
                  and then Known_Static_Component_Bit_Offset (C2)
                  and then
                    Component_Bit_Offset (C1) < Component_Bit_Offset (C2);

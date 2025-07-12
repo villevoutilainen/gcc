@@ -44,7 +44,6 @@ with Gnatvsn;        use Gnatvsn;
 with Lib;            use Lib;
 with Opt;            use Opt;
 with Nlists;         use Nlists;
-with Osint;          use Osint;
 with Output;         use Output;
 with Scans;          use Scans;
 with Sem_Aux;        use Sem_Aux;
@@ -278,11 +277,7 @@ package body Errout is
          begin
             if not M.Deleted then
                M.Deleted := True;
-               Warnings_Detected := Warnings_Detected - 1;
-
-               if M.Warn_Err then
-                  Warnings_Treated_As_Errors := Warnings_Treated_As_Errors - 1;
-               end if;
+               Decrease_Error_Msg_Count (M);
             end if;
 
             Id := M.Next;
@@ -1061,9 +1056,6 @@ package body Errout is
 
       Temp_Msg : Error_Msg_Id;
 
-      Warn_Err : Boolean;
-      --  Set if warning to be treated as error
-
       First_Fix : Fix_Id := No_Fix;
       Last_Fix  : Fix_Id := No_Fix;
 
@@ -1408,7 +1400,7 @@ package body Errout is
           Line                => Get_Physical_Line_Number (Sptr),
           Col                 => Get_Column_Number (Sptr),
           Compile_Time_Pragma => Is_Compile_Time_Msg,
-          Warn_Err            => False, -- reset below
+          Warn_Err            => None, -- reset below
           Warn_Chr            => Warning_Msg_Char,
           Uncond              => Is_Unconditional_Msg,
           Msg_Cont            => Continuation,
@@ -1421,21 +1413,25 @@ package body Errout is
           Fixes               => First_Fix));
       Cur_Msg := Errors.Last;
 
-      --  Test if warning to be treated as error
+      --  Test if a warning is to be treated as error:
+      --  * It is marked by a pragma Warning_As_Error
+      --  * Warning_Mode is Treat_Run_Time_Warnings_As_Errors and we are
+      --    dealing with a runtime warning.
+      --  * Warning_Mode is Warnings_As_Errors and it is not a compile time
+      --    message.
 
-      Warn_Err :=
-        Error_Msg_Kind in Warning | Style
-        and then (Warning_Treated_As_Error (Msg_Buffer (1 .. Msglen))
-                  or else Warning_Treated_As_Error (Get_Warning_Tag (Cur_Msg))
-                  or else Is_Runtime_Raise);
-
-      --  Propagate Warn_Err to this message and preceding continuations.
-
-      for J in reverse 1 .. Errors.Last loop
-         Errors.Table (J).Warn_Err := Warn_Err;
-
-         exit when not Errors.Table (J).Msg_Cont;
-      end loop;
+      if Error_Msg_Kind in Warning | Style then
+         if Warning_Treated_As_Error (Errors.Table (Cur_Msg)) then
+            Errors.Table (Cur_Msg).Warn_Err := From_Pragma;
+         elsif Warning_Mode = Treat_Run_Time_Warnings_As_Errors
+           and then Is_Runtime_Raise_Msg
+         then
+            Errors.Table (Cur_Msg).Warn_Err := From_Run_Time_As_Err;
+         elsif Warning_Mode = Treat_As_Error and then not Is_Compile_Time_Msg
+         then
+            Errors.Table (Cur_Msg).Warn_Err := From_Warn_As_Err;
+         end if;
+      end if;
 
       --  If immediate errors mode set, output error message now. Also output
       --  now if the -d1 debug flag is set (so node number message comes out
@@ -1815,7 +1811,7 @@ package body Errout is
       begin
          if not Errors.Table (E).Deleted then
             Errors.Table (E).Deleted := True;
-            Warnings_Detected := Warnings_Detected - 1;
+            Decrease_Error_Msg_Count (Errors.Table (E));
          end if;
       end Delete_Warning;
 
@@ -2643,7 +2639,8 @@ package body Errout is
 
       Write_Str ("{""kind"":");
 
-      if Errors.Table (E).Kind = Warning and then not Errors.Table (E).Warn_Err
+      if Errors.Table (E).Kind = Warning
+        and then Errors.Table (E).Warn_Err = None
       then
          Write_Str ("""warning""");
       elsif Errors.Table (E).Kind in
@@ -2710,7 +2707,7 @@ package body Errout is
    -- Output_Messages --
    ---------------------
 
-   procedure Output_Messages is
+   procedure Output_Messages (Exit_Code : Exit_Code_Type) is
 
       --  Local subprograms
 
@@ -2818,6 +2815,8 @@ package body Errout is
       if not Finalize_Called then
          raise Program_Error;
       end if;
+
+      Erroutc.Exit_Code := Exit_Code;
 
       --  Reset current error source file if the main unit has a pragma
       --  Source_Reference. This ensures outputting the proper name of
@@ -3140,19 +3139,10 @@ package body Errout is
       end if;
 
       if Warning_Mode = Treat_As_Error then
-         declare
-            Compile_Time_Pragma_Warnings : constant Nat :=
-               Count_Compile_Time_Pragma_Warnings;
-            Total : constant Int := Total_Errors_Detected + Warnings_Detected
-               - Compile_Time_Pragma_Warnings;
-            --  We need to protect against a negative Total here, because
-            --  if a pragma Compile_Time_Warning occurs in dead code, it
-            --  gets counted in Compile_Time_Pragma_Warnings but not in
-            --  Warnings_Detected.
-         begin
-            Total_Errors_Detected := Int'Max (Total, 0);
-            Warnings_Detected := Compile_Time_Pragma_Warnings;
-         end;
+         pragma Assert (Warnings_Detected >= Warnings_Treated_As_Errors);
+         Total_Errors_Detected :=
+           Total_Errors_Detected + Warnings_Treated_As_Errors;
+         Warnings_Detected := Warnings_Detected - Warnings_Treated_As_Errors;
       end if;
    end Output_Messages;
 
@@ -3341,7 +3331,7 @@ package body Errout is
 
                and then not Errors.Table (E).Uncond
             then
-               Warnings_Detected := Warnings_Detected - 1;
+               Decrease_Error_Msg_Count (Errors.Table (E));
 
                return True;
 
@@ -3366,6 +3356,8 @@ package body Errout is
          E := First_Error_Msg;
          while E /= No_Error_Msg loop
             while To_Be_Removed (Errors.Table (E).Next) loop
+               Errors.Table (Errors.Table (E).Next).Deleted := True;
+
                Errors.Table (E).Next :=
                  Errors.Table (Errors.Table (E).Next).Next;
 
@@ -4095,15 +4087,7 @@ package body Errout is
                   Set_Msg_Insertion_Code;
 
                else
-                  --  Switch the message from a warning to an error if the flag
-                  --  -gnatwE is specified to treat run-time exception warnings
-                  --  as non-serious errors.
-
-                  if Error_Msg_Kind = Warning
-                    and then Warning_Mode = Treat_Run_Time_Warnings_As_Errors
-                  then
-                     Is_Runtime_Raise := True;
-                  end if;
+                  Is_Runtime_Raise_Msg := True;
 
                   if Error_Msg_Kind = Warning then
                      Set_Msg_Str ("will be raised at run time");

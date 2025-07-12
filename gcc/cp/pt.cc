@@ -12725,7 +12725,17 @@ instantiate_class_template (tree type)
       determine_visibility (TYPE_MAIN_DECL (type));
     }
   if (CLASS_TYPE_P (type))
-    CLASSTYPE_FINAL (type) = CLASSTYPE_FINAL (pattern);
+    {
+      CLASSTYPE_FINAL (type) = CLASSTYPE_FINAL (pattern);
+      CLASSTYPE_TRIVIALLY_RELOCATABLE_BIT (type)
+	= CLASSTYPE_TRIVIALLY_RELOCATABLE_BIT (pattern);
+      CLASSTYPE_TRIVIALLY_RELOCATABLE_COMPUTED (type)
+	= CLASSTYPE_TRIVIALLY_RELOCATABLE_COMPUTED (pattern);
+      CLASSTYPE_REPLACEABLE_BIT (type)
+	= CLASSTYPE_REPLACEABLE_BIT (pattern);
+      CLASSTYPE_REPLACEABLE_COMPUTED (type)
+	= CLASSTYPE_REPLACEABLE_COMPUTED (pattern);
+    }
 
   pbinfo = TYPE_BINFO (pattern);
 
@@ -17276,13 +17286,14 @@ tsubst (tree t, tree args, tsubst_flags_t complain, tree in_decl)
 	      return error_mark_node;
 	  }
 
-	/* FIXME: TYPENAME_IS_CLASS_P conflates 'class' vs 'struct' vs 'union'
-	   tags.  TYPENAME_TYPE should probably remember the exact tag that
-	   was written.  */
+	/* FIXME: TYPENAME_IS_CLASS_P conflates 'class' vs 'struct' tags.
+	   TYPENAME_TYPE should probably remember the exact tag that
+	   was written for -Wmismatched-tags.  */
 	enum tag_types tag_type
-	  = TYPENAME_IS_CLASS_P (t) ? class_type
-	  : TYPENAME_IS_ENUM_P (t) ? enum_type
-	  : typename_type;
+	  = (TYPENAME_IS_CLASS_P (t) ? class_type
+	     : TYPENAME_IS_UNION_P (t) ? union_type
+	     : TYPENAME_IS_ENUM_P (t) ? enum_type
+	     : typename_type);
 	tsubst_flags_t tcomplain = complain | tf_keep_type_decl;
 	tcomplain |= tst_ok_flag | qualifying_scope_flag;
 	f = make_typename_type (ctx, f, tag_type, tcomplain);
@@ -17304,10 +17315,18 @@ tsubst (tree t, tree args, tsubst_flags_t complain, tree in_decl)
 		else
 		  return error_mark_node;
 	      }
-	    else if (TYPENAME_IS_CLASS_P (t) && !CLASS_TYPE_P (f))
+	    else if (TYPENAME_IS_CLASS_P (t) && !NON_UNION_CLASS_TYPE_P (f))
 	      {
 		if (complain & tf_error)
-		  error ("%qT resolves to %qT, which is not a class type",
+		  error ("%qT resolves to %qT, which is not a non-union "
+			 "class type", t, f);
+		else
+		  return error_mark_node;
+	      }
+	    else if (TYPENAME_IS_UNION_P (t) && !UNION_TYPE_P (f))
+	      {
+		if (complain & tf_error)
+		  error ("%qT resolves to %qT, which is not a union type",
 			 t, f);
 		else
 		  return error_mark_node;
@@ -20164,7 +20183,14 @@ tsubst_stmt (tree t, tree args, tsubst_flags_t complain, tree in_decl)
       {
 	tree op0 = RECUR (TREE_OPERAND (t, 0));
 	tree cond = RECUR (MUST_NOT_THROW_COND (t));
-	RETURN (build_must_not_throw_expr (op0, cond));
+	stmt = build_must_not_throw_expr (op0, cond);
+	if (stmt && TREE_CODE (stmt) == MUST_NOT_THROW_EXPR)
+	  {
+	    MUST_NOT_THROW_NOEXCEPT_P (stmt) = MUST_NOT_THROW_NOEXCEPT_P (t);
+	    MUST_NOT_THROW_THROW_P (stmt) = MUST_NOT_THROW_THROW_P (t);
+	    MUST_NOT_THROW_CATCH_P (stmt) = MUST_NOT_THROW_CATCH_P (t);
+	  }
+	RETURN (stmt);
       }
 
     case EXPR_PACK_EXPANSION:
@@ -24638,7 +24664,8 @@ resolve_nondeduced_context (tree orig_expr, tsubst_flags_t complain)
 	}
       if (good == 1)
 	{
-	  mark_used (goodfn);
+	  if (!mark_used (goodfn, complain) && !(complain & tf_error))
+	    return error_mark_node;
 	  expr = goodfn;
 	  if (baselink)
 	    expr = build_baselink (BASELINK_BINFO (baselink),
@@ -27570,6 +27597,10 @@ tree
 template_for_substitution (tree decl)
 {
   tree tmpl = DECL_TI_TEMPLATE (decl);
+  if (VAR_P (decl))
+    if (tree partial = most_specialized_partial_spec (decl, tf_none))
+      if (partial != error_mark_node)
+	tmpl = TI_TEMPLATE (partial);
 
   /* Set TMPL to the template whose DECL_TEMPLATE_RESULT is the pattern
      for the instantiation.  This is not always the most general
