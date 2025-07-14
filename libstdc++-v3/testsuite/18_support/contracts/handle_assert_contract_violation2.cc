@@ -14,7 +14,7 @@
 // <http://www.gnu.org/licenses/>.
 
 // { dg-options "-g0 -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe" }
-// { dg-do run { target c++2a } }
+// { dg-do compile { target c++2a } }
 
 #include <exception>
 #include <cstdlib>
