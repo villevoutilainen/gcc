@@ -2984,16 +2984,7 @@ build_thunk_like_call (tree function, int n, tree *argarray)
   decl = get_callee_fndecl (function);
 
   if (decl && !TREE_USED (decl))
-    {
-      /* We invoke build_call directly for several library
-	 functions.  These may have been declared normally if
-	 we're building libgcc, so we can't just check
-	 DECL_ARTIFICIAL.  */
-      gcc_assert (DECL_ARTIFICIAL (decl)
-		  || !strncmp (IDENTIFIER_POINTER (DECL_NAME (decl)),
-			       "__", 2));
       mark_used (decl);
-    }
 
   require_complete_eh_spec_types (fntype, decl);
 
