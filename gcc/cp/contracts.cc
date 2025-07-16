@@ -2950,13 +2950,17 @@ start_function_contracts (tree fndecl)
 }
 
 /* Build and return a thunk like call to FUNCTION using the supplied
-  arguments.  The call is like a thunk call in the fact that we do not
-  want to create aditional copies of the arguments. However, we can
-  not simply reuse the thunk machinery as it does more than we want.
-  Instead, we reuse build_call_a, modulo special handling for empty
-  classes that relies on the function being marked as DECL_THUNK_P.
-  We also mark the call as a thunk call allows for correct gimplification
-  of the arguments.
+ arguments.  The call is like a thunk call in the fact that we do not
+ want to create additional copies of the arguments. However, we can
+ not simply reuse the thunk machinery as it does more than we want.
+ More specifically, we don't want to mark the calling function as
+ `DECL_THUNK_P`, we only want the special treatment for the parameters
+ of the call we are about to generate.
+ We reuse most of build_call_a, modulo special handling for empty
+ classes which relies on `DECL_THUNK_P` to know that the call we're building
+ is going to be a thunk call.
+ We also mark the call as a thunk call to allow for correct gimplification
+ of the arguments.
  */
 
 tree
