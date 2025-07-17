@@ -44,7 +44,10 @@
 
 #include <bits/c++config.h>
 #if defined NDEBUG || ! defined ASSERT_USES_CONTRACTS
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic" // include_next
 #include_next <assert.h>
+#pragma GCC diagnostic pop
 #else // ASSERT_USES_CONTRACTS
 #include <contracts>
 #undef assert

@@ -15,6 +15,7 @@
 // with this library; see the file COPYING3.  If not see
 // <http://www.gnu.org/licenses/>.
 
+// check that default contract violation is not invoked if not explicitly invoked
 // { dg-options "-g0 -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe" }
 // { dg-do run { target c++2a } }
 
@@ -54,8 +55,6 @@ void handle_contract_violation(const std::contracts::contract_violation& v)
 {
   custom_called = true;
 }
-
-
 
 
 void f(int i) pre (i>10) {};
