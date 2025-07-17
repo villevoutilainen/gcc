@@ -13,7 +13,8 @@
 // with this library; see the file COPYING3.  If not see
 // <http://www.gnu.org/licenses/>.
 
-// Check that a case when neither ASSERT_USES_CONTRACTS nor NDEBUG are defined behaves correctly.
+// Check that a case when neither ASSERT_USES_CONTRACTS nor NDEBUG are defined
+// behaves correctly (i.e. falls back to the libc assert).
 // Semantic chosen is a non terminating one.
 // { dg-options "-g0 -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe" }
 // { dg-do run { target c++2a } }
@@ -23,12 +24,10 @@
 #include <cassert>
 #include <csignal>
 
-
 void my_term(int)
 {
   std::exit(0);
 }
-
 
 int main()
 {
@@ -39,5 +38,9 @@ int main()
   // We should not get here
   return 1;
 }
-// { dg-output "main.*: Assertion .*i == 4.* failed.*" }
 
+// Since we are now seeing the output of the libc 'assert' macro, this will
+// (in general) depend on the OS/libc being tested.
+
+// { dg-output "int main.*: Assertion .*i == 4.* failed.*" { target { ! *-*-darwin* } }  }
+// { dg-output "Assertion failed: .i == 4., function main," { target *-*-darwin*  }  }
