@@ -304,144 +304,144 @@ int main(int, char**)
   return 0;
 }
 
-// { dg-output {contract violation in function body<int> at .*:9: a > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function int body.int. .with T = int. at .*:9: a > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {-2(\n|\r\n|\r)} }
-// { dg-output {contract violation in function body<double> at .*:17: a > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function int body.int. .with T = double. at .*:17: a > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {-3(\n|\r\n|\r)} }
-// { dg-output {contract violation in function none<int> at .*:25: a > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function int none.int. .with T = int. at .*:25: a > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {1(\n|\r\n|\r)} }
-// { dg-output {contract violation in function none<double> at .*:32: a > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function int none.int. .with T = double. at .*:32: a > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {-101(\n|\r\n|\r)} }
-// { dg-output {contract violation in function arg0<int> at .*:39: t > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function int arg0.T. .with T = int. at .*:39: t > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {-9(\n|\r\n|\r)} }
-// { dg-output {contract violation in function arg0<double> at .*:46: t > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function int arg0.T. .with T = double. at .*:46: t > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {11(\n|\r\n|\r)} }
-// { dg-output {contract violation in function arg1<int> at .*:53: a > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function int arg1.int, T. .with T = int. at .*:53: a > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function arg1<int> at .*:54: t > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function int arg1.int, T. .with T = int. at .*:54: t > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {-3(\n|\r\n|\r)} }
-// { dg-output {contract violation in function arg1<double> at .*:61: a > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function int arg1.int, T. .with T = double. at .*:61: a > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function arg1<double> at .*:62: t > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function int arg1.int, T. .with T = double. at .*:62: t > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {14(\n|\r\n|\r)} }
-// { dg-output {contract violation in function ret<int> at .*:69: a > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function T ret.int. .with T = int. at .*:69: a > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {1(\n|\r\n|\r)} }
-// { dg-output {contract violation in function ret<double> at .*:76: a > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function T ret.int. .with T = double. at .*:76: a > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {3(\n|\r\n|\r)} }
-// { dg-output {contract violation in function ret<double> at .*:76: a > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function T ret.int. .with T = double. at .*:76: a > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {3.300000(\n|\r\n|\r)} }
-// { dg-output {contract violation in function g1<int> at .*:83: t > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function int g1.T. .with T = int. at .*:83: t > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {-1(\n|\r\n|\r)} }
 // { dg-output {-1(\n|\r\n|\r)} }
-// { dg-output {contract violation in function g2<int> at .*:97: t > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function int g2.T. .with T = int. at .*:97: t > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {-1(\n|\r\n|\r)} }
-// { dg-output {contract violation in function g2<double> at .*:107: t < 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function int g2.T. .with T = double. at .*:107: t < 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {1(\n|\r\n|\r)} }
-// { dg-output {contract violation in function g2<char> at .*:114: t < 'c'(\n|\r\n|\r)} }
+// { dg-output {contract violation in function int g2.T. .with T = char. at .*:114: t < 'c'(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {100(\n|\r\n|\r)} }
-// { dg-output {contract violation in function G3<double, double>::f at .*:124: t > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G3<T, S>::f.T, S. .with T = double; S = double. at .*:124: t > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G3<double, double>::f at .*:125: s > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G3<T, S>::f.T, S. .with T = double; S = double. at .*:125: s > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G3 general T S(\n|\r\n|\r)} }
-// { dg-output {contract violation in function G3<int, int>::f at .*:134: t > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G3<int, S>::f.int, S. .with S = int. at .*:134: t > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G3<int, int>::f at .*:134: s > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G3<int, S>::f.int, S. .with S = int. at .*:134: s > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G3 partial int S(\n|\r\n|\r)} }
-// { dg-output {contract violation in function G3<int, double>::f at .*:147: t > 2(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G3<int, S>::f.int, S. .with S = double. at .*:147: t > 2(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G3<int, double>::f at .*:148: s > 2(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G3<int, S>::f.int, S. .with S = double. at .*:148: s > 2(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G3 full int double(\n|\r\n|\r)} }
-// { dg-output {contract violation in function G3<char, char>::f at .*:124: t > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G3<T, S>::f.T, S. .with T = char; S = char. at .*:124: t > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G3<char, char>::f at .*:125: s > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G3<T, S>::f.T, S. .with T = char; S = char. at .*:125: s > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G3 general T S(\n|\r\n|\r)} }
-// { dg-output {contract violation in function G3<int, char>::f at .*:134: t > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G3<int, S>::f.int, S. .with S = char. at .*:134: t > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G3<int, char>::f at .*:134: s > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G3<int, S>::f.int, S. .with S = char. at .*:134: s > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G3 partial int S(\n|\r\n|\r)} }
 // { dg-output {G3 full int C(\n|\r\n|\r)} }
 // { dg-output {G3 full int C(\n|\r\n|\r)} }
-// { dg-output {contract violation in function G4<int, int>::G4 at .*:173: t > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function G4<T, S>::G4.T, S. .with T = int; S = int. at .*:173: t > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G4<int, int>::G4 at .*:174: s > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function G4<T, S>::G4.T, S. .with T = int; S = int. at .*:174: s > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G4 general T S(\n|\r\n|\r)} }
-// { dg-output {contract violation in function G4<int, int>::G4 at .*:175: x > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function G4<T, S>::G4.T, S. .with T = int; S = int. at .*:175: x > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: post, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G4 full double double(\n|\r\n|\r)} }
-// { dg-output {contract violation in function G4<double, char>::G4 at .*:206: a > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function G4<T, S>::G4.T, S. .with T = double; S = char. at .*:206: a > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G4<double, char>::G4 at .*:207: b > 'b'(\n|\r\n|\r)} }
+// { dg-output {contract violation in function G4<T, S>::G4.T, S. .with T = double; S = char. at .*:207: b > 'b'(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G4 full double char(\n|\r\n|\r)} }
-// { dg-output {contract violation in function G4<double, char>::G4 at .*:208: x > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function G4<T, S>::G4.T, S. .with T = double; S = char. at .*:208: x > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: post, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G4<char, int>::G4 at .*:187: t > 'c'(\n|\r\n|\r)} }
+// { dg-output {contract violation in function G4<char, S>::G4.char, S. .with S = int. at .*:187: t > 'c'(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G4<char, int>::G4 at .*:188: s > 3(\n|\r\n|\r)} }
+// { dg-output {contract violation in function G4<char, S>::G4.char, S. .with S = int. at .*:188: s > 3(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G4 partial char S(\n|\r\n|\r)} }
-// { dg-output {contract violation in function G4<char, int>::G4 at .*:189: x2 > 3(\n|\r\n|\r)} }
+// { dg-output {contract violation in function G4<char, S>::G4.char, S. .with S = int. at .*:189: x2 > 3(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: post, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G5<int, int>::f<int> at .*:220: t > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<T, S>::f.T, S, P. .with P = int; T = int; S = int. at .*:220: t > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G5<int, int>::f<int> at .*:221: s > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<T, S>::f.T, S, P. .with P = int; T = int; S = int. at .*:221: s > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G5<int, int>::f<int> at .*:222: r > 0(\n|\r\n|\r)} }
-// { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {G5 gen T S, f gen R(\n|\r\n|\r)} }
-// { dg-output {contract violation in function G5<int, int>::f<double> at .*:220: t > 0(\n|\r\n|\r)} }
-// { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G5<int, int>::f<double> at .*:221: s > 0(\n|\r\n|\r)} }
-// { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G5<int, int>::f<double> at .*:222: r > 0(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<T, S>::f.T, S, P. .with P = int; T = int; S = int. at .*:222: r > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G5 gen T S, f gen R(\n|\r\n|\r)} }
-// { dg-output {contract violation in function G5<char, int>::f<int> at .*:233: x > 'z'(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<T, S>::f.T, S, P. .with P = double; T = int; S = int. at .*:220: t > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G5<char, int>::f<int> at .*:234: y > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<T, S>::f.T, S, P. .with P = double; T = int; S = int. at .*:221: s > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G5<char, int>::f<int> at .*:235: z > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<T, S>::f.T, S, P. .with P = double; T = int; S = int. at .*:222: r > 0(\n|\r\n|\r)} }
+// { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
+// { dg-output {G5 gen T S, f gen R(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<char, S>::f.char, S, R. .with R = int; S = int. at .*:233: x > 'z'(\n|\r\n|\r)} }
+// { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
+// { dg-output {contract violation in function void G5<char, S>::f.char, S, R. .with R = int; S = int. at .*:234: y > 1(\n|\r\n|\r)} }
+// { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
+// { dg-output {contract violation in function void G5<char, S>::f.char, S, R. .with R = int; S = int. at .*:235: z > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G5 partial char S, f gen R(\n|\r\n|\r)} }
-// { dg-output {contract violation in function G5<char, int>::f<double> at .*:233: x > 'z'(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<char, S>::f.char, S, R. .with R = double; S = int. at .*:233: x > 'z'(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G5<char, int>::f<double> at .*:234: y > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<char, S>::f.char, S, R. .with R = double; S = int. at .*:234: y > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G5<char, int>::f<double> at .*:235: z > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<char, S>::f.char, S, R. .with R = double; S = int. at .*:235: z > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G5 partial char S, f gen R(\n|\r\n|\r)} }
-// { dg-output {contract violation in function G5<double, double>::f<int> at .*:244: a > 2(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<T, S>::f.T, S, P. .with P = int; T = double; S = double. at .*:244: a > 2(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G5<double, double>::f<int> at .*:245: b > 2(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<T, S>::f.T, S, P. .with P = int; T = double; S = double. at .*:245: b > 2(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G5<double, double>::f<int> at .*:246: c > 2(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<T, S>::f.T, S, P. .with P = int; T = double; S = double. at .*:246: c > 2(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G5 full double double, f gen R(\n|\r\n|\r)} }
-// { dg-output {contract violation in function G5<double, double>::f<double> at .*:244: a > 2(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<T, S>::f.T, S, P. .with P = double; T = double; S = double. at .*:244: a > 2(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G5<double, double>::f<double> at .*:245: b > 2(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<T, S>::f.T, S, P. .with P = double; T = double; S = double. at .*:245: b > 2(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function G5<double, double>::f<double> at .*:246: c > 2(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G5<T, S>::f.T, S, P. .with P = double; T = double; S = double. at .*:246: c > 2(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G5 full double double, f gen R(\n|\r\n|\r)} }
