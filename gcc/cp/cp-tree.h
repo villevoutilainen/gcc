@@ -8850,6 +8850,7 @@ extern tree process_stmt_hotness_attribute	(tree, location_t);
 extern tree build_assume_call			(location_t, tree);
 extern tree process_stmt_assume_attribute	(tree, tree, location_t);
 extern bool simple_empty_class_p		(tree, tree, tree_code);
+extern tree build_source_location_impl		(location_t, tree, tree);
 extern tree fold_builtin_source_location	(const_tree);
 extern tree get_source_location_impl_type	();
 extern tree cp_fold_immediate			(tree *, mce_value,

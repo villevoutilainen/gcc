@@ -1428,6 +1428,11 @@ match_deferred_contracts (tree fndecl)
 static GTY(()) hash_map<tree, tree> *decl_pre_fn;
 static GTY(()) hash_map<tree, tree> *decl_post_fn;
 
+/* Given a pre or post function decl (for an outlined check function) return
+   the decl for the function for which the outlined checks are being
+   performed.  */
+static GTY(()) hash_map<tree, tree> *orig_from_outlined;
+
 /* tree that holds the pseude source location type */
 static GTY(()) tree contracts_source_location_impl_type;
 static GTY(()) tree contracts_source_location_type;
@@ -1461,6 +1466,10 @@ set_precondition_function (tree fndecl, tree pre)
   hash_map_maybe_create<hm_ggc> (decl_pre_fn);
   gcc_assert (!decl_pre_fn->get (fndecl));
   decl_pre_fn->put (fndecl, pre);
+
+  hash_map_maybe_create<hm_ggc> (orig_from_outlined);
+  gcc_assert (!orig_from_outlined->get (pre));
+  orig_from_outlined->put (pre, fndecl);
 }
 
 /* Makes POST the postcondition function for FNDECL.  */
@@ -1472,6 +1481,18 @@ set_postcondition_function (tree fndecl, tree post)
   hash_map_maybe_create<hm_ggc> (decl_post_fn);
   gcc_assert (!decl_post_fn->get (fndecl));
   decl_post_fn->put (fndecl, post);
+
+  hash_map_maybe_create<hm_ggc> (orig_from_outlined);
+  gcc_assert (!orig_from_outlined->get (post));
+  orig_from_outlined->put (post, fndecl);
+}
+
+static tree
+get_orig_for_outlined (tree fndecl)
+{
+  gcc_checking_assert (fndecl);
+  tree *result = hash_map_safe_get (orig_from_outlined, fndecl);
+  return result ? *result : NULL_TREE;
 }
 
 /* Set the PRE and POST functions for FNDECL.  Note that PRE and POST can
@@ -1758,86 +1779,6 @@ build_contract_function_decls (tree fndecl)
       set_postcondition_function (fndecl, post);
 }
 
-/* Build a layout-compatible internal version of source location __impl
-   type.  */
-
-static tree
-get_contracts_source_location_impl_type ()
-{
-  if (contracts_source_location_impl_type)
-     return contracts_source_location_impl_type;
-
-  // first build the __impl layout equivalent type
-  tree fields = NULL_TREE;
-  /* Must match <source_location>:
-     struct __impl
-      {
-	  const char* _M_file_name;
-	  const char* _M_function_name;
-	  unsigned _M_line;
-	  unsigned _M_column;
-      }; */
-  const tree types[] = { const_string_type_node,
-			const_string_type_node,
-			uint_least32_type_node,
-			uint_least32_type_node };
-
-  for (tree type : types)
-  {
-    /* finish_builtin_struct wants fieldss chained in reverse.  */
-    tree next = build_decl (BUILTINS_LOCATION, FIELD_DECL,
-			    NULL_TREE, type);
-    DECL_CHAIN (next) = fields;
-    fields = next;
-  }
-
-  iloc_sentinel ils (input_location);
-  input_location = BUILTINS_LOCATION;
-  contracts_source_location_impl_type = make_class_type (RECORD_TYPE);
-  finish_builtin_struct (contracts_source_location_impl_type,
-			 "__contracts_source_location_impl_type",
-			 fields, NULL_TREE);
-  contracts_source_location_impl_type
-    = cp_build_qualified_type (contracts_source_location_impl_type,
-			       TYPE_QUAL_CONST);
-
-  return contracts_source_location_impl_type;
-}
-
-/* Build a layout-compatible internal version of source location type.  */
-
-static tree
-get_contracts_source_location_type ()
-{
-  if (contracts_source_location_type)
-    return contracts_source_location_type;
-
-  tree fields = NULL_TREE;
-  /* Must match <source_location>:
-   struct source_location
-    {
-    private:
-	const __impl* _M_impl = nullptr;
-    };  */
-  const tree type
-    = build_pointer_type (get_contracts_source_location_impl_type ());
-
-  tree next = build_decl (BUILTINS_LOCATION, FIELD_DECL,
-			  NULL_TREE, type);
-  DECL_CHAIN (next) = fields;
-  fields = next;
-
-  iloc_sentinel ils (input_location);
-  input_location = BUILTINS_LOCATION;
-  contracts_source_location_type = make_class_type (RECORD_TYPE);
-  finish_builtin_struct (contracts_source_location_type,
-		       "__contracts_source_location_type",
-		       fields, NULL_TREE);
-  contracts_source_location_type
-    = cp_build_qualified_type (contracts_source_location_type,
-			       TYPE_QUAL_CONST);
-  return contracts_source_location_type;
-}
 
 /* Build a named TU-local constant of TYPE.  */
 
@@ -1862,11 +1803,13 @@ contracts_tu_local_named_var (location_t loc, const char *name, tree type,
   return var_;
 }
 
-/* Map from FUNCTION_DECL to a FUNCTION_DECL for contract wrapper.
-   This map also contains a noexcept contract violation wrapper,
-   if one is needed.  */
+/* Map from FUNCTION_DECL to a FUNCTION_DECL for contract wrapper.  */
 
 static GTY(()) hash_map<tree, tree> *decl_wrapper_fn = nullptr;
+
+/* Map from the function decl of a wrapper to the function that it wraps.  */
+
+static GTY(()) hash_map<tree, tree> *decl_for_wrapper = nullptr;
 
 /* Returns the wrapper function decl for FNDECL, or null if not set.  */
 
@@ -1887,6 +1830,19 @@ set_contract_wrapper_function (tree fndecl, tree wrapper)
   hash_map_maybe_create<hm_ggc> (decl_wrapper_fn);
   gcc_checking_assert (decl_wrapper_fn && !decl_wrapper_fn->get (fndecl));
   decl_wrapper_fn->put (fndecl, wrapper);
+
+  /* We need to know the wrapped function when composing the diagnostic.  */
+  hash_map_maybe_create<hm_ggc> (decl_for_wrapper);
+  gcc_checking_assert (decl_for_wrapper && !decl_for_wrapper->get (wrapper));
+  decl_for_wrapper->put (wrapper, fndecl);
+}
+
+static tree
+get_orig_func_for_wrapper (tree wrapper)
+{
+  gcc_checking_assert (wrapper);
+  tree *result = hash_map_safe_get (decl_for_wrapper, wrapper);
+  return result ? *result : NULL_TREE;
 }
 
 static tree
@@ -2002,29 +1958,138 @@ build_contract_wrapper_function (tree fndecl)
   return wrapdecl;
 }
 
-/* Build a layout-compatible internal version of source location __impl
-   type with location LOC.  */
+
+/* Lookup a name in std::, or inject it.  */
 
 static tree
-build_contracts_source_location_impl (location_t loc)
+lookup_std_type (tree name_id)
 {
-  expanded_location exploc = expand_location (loc);
-  /* For now, this will give the invented name in case of a wrapper
-     function.  */
-  const char *function = fndecl_name (DECL_ORIGIN (current_function_decl));
+  tree res_type = lookup_qualified_name (std_node, name_id,
+					 LOOK_want::TYPE
+					 | LOOK_want::HIDDEN_FRIEND);
 
-  /* Must match the type layout in source_location::__impl type.  */
-  tree ctor = build_constructor_va
-    (get_contracts_source_location_impl_type (), 4,
-     NULL_TREE, build_string_literal (exploc.file),
-     NULL_TREE, build_string_literal (function),
-     NULL_TREE, build_int_cst (uint_least32_type_node, exploc.line),
-     NULL_TREE, build_int_cst (uint_least32_type_node, exploc.column));
+  if (TREE_CODE (res_type) == TYPE_DECL)
+    res_type = TREE_TYPE (res_type);
+  else
+    {
+      push_nested_namespace (std_node);
+      res_type = make_class_type (RECORD_TYPE);
+      create_implicit_typedef (name_id, res_type);
+      DECL_SOURCE_LOCATION (TYPE_NAME (res_type)) = BUILTINS_LOCATION;
+      DECL_CONTEXT (TYPE_NAME (res_type)) = current_namespace;
+      pushdecl_namespace_level (TYPE_NAME (res_type), /*hidden*/true);
+      pop_nested_namespace (std_node);
+    }
+  return res_type;
+}
 
-  TREE_CONSTANT (ctor) = true;
-  TREE_STATIC (ctor) = true;
-  protected_set_expr_location (ctor, loc);
-  return ctor;
+/* Build a layout-compatible internal version of source location __impl
+   type.  */
+
+static tree
+get_contracts_source_location_impl_type (tree context)
+{
+  if (contracts_source_location_impl_type)
+     return contracts_source_location_impl_type;
+
+  // first build the __impl layout equivalent type
+  /* Must match <source_location>:
+     struct __impl
+      {
+	  const char* _M_file_name;
+	  const char* _M_function_name;
+	  unsigned _M_line;
+	  unsigned _M_column;
+      }; */
+  const tree types[] = { const_string_type_node,
+			const_string_type_node,
+			uint_least32_type_node,
+			uint_least32_type_node };
+
+ const char *names[] = { "_M_file_name",
+			 "_M_function_name",
+			 "_M_line",
+			 "_M_column",
+			};
+  tree fields = NULL_TREE;
+  unsigned n = 0;
+  for (tree type : types)
+  {
+    /* finish_builtin_struct wants fields chained in reverse.  */
+    tree next = build_decl (BUILTINS_LOCATION, FIELD_DECL,
+			    get_identifier (names[n++]), type);
+    DECL_CHAIN (next) = fields;
+    fields = next;
+  }
+
+  iloc_sentinel ils (input_location);
+  input_location = BUILTINS_LOCATION;
+  contracts_source_location_impl_type = make_class_type (RECORD_TYPE);
+  finish_builtin_struct (contracts_source_location_impl_type,
+			 "__impl", fields, NULL_TREE);
+  CLASSTYPE_AS_BASE (contracts_source_location_impl_type)
+    = contracts_source_location_impl_type;
+  xref_basetypes (contracts_source_location_impl_type, /*bases=*/NULL_TREE);
+  DECL_CONTEXT (TYPE_NAME (contracts_source_location_impl_type)) = context;
+  contracts_source_location_impl_type
+    = cp_build_qualified_type (contracts_source_location_impl_type,
+			       TYPE_QUAL_CONST);
+
+  return contracts_source_location_impl_type;
+}
+
+/* We need a source_location type regardless of whether the user includes
+   <source_location>.
+   So, first look to see is we can find std::source_location (and the relevant
+   __impl type).  If that fails, then fall back to building a layout-compatible
+   internal type (__source_location).  */
+
+static tree
+get_contracts_source_location_type ()
+{
+  if (contracts_source_location_type)
+    return contracts_source_location_type;
+
+  contracts_source_location_type
+    = lookup_std_type (get_identifier ("source_location"));
+
+  if (contracts_source_location_type
+      && contracts_source_location_type != error_mark_node
+      && TYPE_FIELDS (contracts_source_location_type))
+    {
+      contracts_source_location_impl_type = get_source_location_impl_type ();
+      return contracts_source_location_type;
+    }
+
+  /* Must match <source_location>:
+     struct source_location
+       {
+	 private:
+	    const __impl* _M_impl = nullptr;
+	};  */
+  iloc_sentinel ils (input_location);
+  input_location = BUILTINS_LOCATION;
+  contracts_source_location_type = make_class_type (RECORD_TYPE);
+
+  tree impl_type
+    = get_contracts_source_location_impl_type (contracts_source_location_type);
+  /* Only one field.  */
+  tree f_type = build_pointer_type (impl_type);
+  tree fields = build_decl (BUILTINS_LOCATION, FIELD_DECL,
+			    get_identifier ("_M_impl"), f_type);
+  finish_builtin_struct (contracts_source_location_type,
+			 "__source_location", fields, NULL_TREE);
+  CLASSTYPE_AS_BASE (contracts_source_location_type)
+    = contracts_source_location_type;
+  xref_basetypes (contracts_source_location_type, /*bases=*/NULL_TREE);
+  DECL_CONTEXT (TYPE_NAME (contracts_source_location_type))
+    = FROB_CONTEXT (global_namespace);
+  CLASSTYPE_LAZY_DEFAULT_CTOR (contracts_source_location_type) = true;
+  CLASSTYPE_LAZY_DESTRUCTOR (contracts_source_location_type) = true;
+  contracts_source_location_type
+    = cp_build_qualified_type (contracts_source_location_type,
+			       TYPE_QUAL_CONST);
+  return contracts_source_location_type;
 }
 
 /* Build a layout-compatible internal version of source location type
@@ -2033,16 +2098,30 @@ build_contracts_source_location_impl (location_t loc)
 static tree
 build_contracts_source_location (location_t loc)
 {
-  tree impl_ = contracts_tu_local_named_var
-    (loc, "Lsrc_loc_impl",
-     get_contracts_source_location_impl_type (), /*is_const*/true);
+  /* Make sure we have the types.  */
+  tree s_type = get_contracts_source_location_type ();
+  gcc_checking_assert (TYPE_FIELDS (contracts_source_location_type));
+  gcc_checking_assert (TYPE_FIELDS (contracts_source_location_impl_type));
 
-  DECL_INITIAL (impl_) = build_contracts_source_location_impl (loc);
-  varpool_node::finalize_decl (impl_);
+  /* There is only one relevant field.  */
+  tree f = next_aggregate_field (TYPE_FIELDS (s_type));
 
-  /* Must match the type layout in source_location::__impl type.  */
-  tree ctor = build_constructor_va(get_contracts_source_location_type (), 1,
-				   NULL_TREE, build_address (impl_));
+  tree fndecl = current_function_decl;
+  /* We might be an outlined function.  */
+  if (DECL_IS_PRE_FN_P (fndecl) || DECL_IS_POST_FN_P (fndecl))
+    fndecl = get_orig_for_outlined (fndecl);
+  /* We might be a wrapper.  */
+  if (DECL_IS_WRAPPER_FN_P (fndecl))
+    fndecl = get_orig_func_for_wrapper (fndecl);
+
+  gcc_checking_assert (fndecl);
+  tree impl__
+    = build_source_location_impl (loc, fndecl,
+				  contracts_source_location_impl_type);
+  impl__ = build_fold_addr_expr_with_type_loc (loc, impl__, TREE_TYPE (f));
+
+  /* Must match the type layout in std::source_location.  */
+  tree ctor = build_constructor_va (s_type, 1, f, impl__);
 
   TREE_READONLY (ctor) = true;
   TREE_CONSTANT (ctor) = true;

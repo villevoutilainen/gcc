@@ -11,5 +11,5 @@ int main(int, char**)
   return 0;
 }
 
-// { dg-output "contract violation in function f at .*: a > 2.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function f at .*: r > 2.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int f.int, int. at .*: a > 2.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int f.int, int. at .*: r > 2.*(\n|\r\n|\r)" }
