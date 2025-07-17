@@ -15,6 +15,8 @@
 // with this library; see the file COPYING3.  If not see
 // <http://www.gnu.org/licenses/>.
 
+// Check that a case of contract violation handler throwing an exception works as expected
+// Semantic chosen is a non terminating one.
 // { dg-options "-g0 -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe" }
 // { dg-do run { target c++2a } }
 
@@ -43,5 +45,5 @@ int main()
   }
   VERIFY( exception_thrown == true);
 }
-// { dg-output "contract violation in function int main.* at .*:38: test comment.*" }
+// { dg-output "contract violation in function.*main.* at .*:40: test comment.*" }
 // { dg-output "assertion_kind: manual, semantic: enforce, mode: unspecified, terminating: yes" }

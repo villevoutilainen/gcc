@@ -14,6 +14,8 @@
 // with this library; see the file COPYING3.  If not see
 // <http://www.gnu.org/licenses/>.
 
+// Check that a case when ASSERT_USES_CONTRACTS is defined and NDEBUG is not defined behaves correctly.
+// Semantic chosen is a non terminating one.
 // { dg-options "-g0 -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe" }
 // { dg-do run { target c++2a } }
 
@@ -38,6 +40,6 @@ int main()
   // We should not get here
   return 1;
 }
-// { dg-output "contract violation in function int main.* at .*:37: i == 4.*" }
+// { dg-output "contract violation in function int main.* at .*:39: i == 4.*" }
 // { dg-output "assertion_kind: cassert, semantic: enforce, mode: unspecified, terminating: yes" }
 
