@@ -34,19 +34,19 @@ int main(int, char**)
   return 0;
 }
 
-// { dg-output "contract violation in function f at .*: a > 2.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function f at .*: a > 2.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function f at .*: r > 2.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function f at .*: r > 2.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function S::f at .*: a > 3.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function S::f at .*: a > 3.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function S::f at .*: r > 3.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function S::f at .*: r > 3.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function TS<int>::f at .*: a > 4.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function TS<int>::f at .*: a > 4.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function TS<int>::f at .*: r > 4.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function TS<int>::f at .*: r > 4.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function TS<int>::tf at .*: a > 5.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function TS<int>::tf<int> at .*: a > 5.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function TS<int>::tf<int> at .*: r > 5.*(\n|\r\n|\r)" }
-// { dg-output "contract violation in function TS<int>::tf at .*: r > 5.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int f.int, int. at .*: a > 2.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int f.int, int. at .*: a > 2.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int f.int, int. at .*: r > 2.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int f.int, int. at .*: r > 2.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int S::f.int, int. at .*: a > 3.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int S::f.int, int. at .*: a > 3.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int S::f.int, int. at .*: r > 3.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int S::f.int, int. at .*: r > 3.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int TS<T>::f.int, T. .with T = int. at .*: a > 4.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int TS<T>::f.int, T. .with T = int. at .*: a > 4.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int TS<T>::f.int, T. .with T = int. at .*: r > 4.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int TS<T>::f.int, T. .with T = int. at .*: r > 4.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int TS<T>::tf.int, U. .with U = int; T = int. at .*: a > 5.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int TS<T>::tf.int, U. .with U = int; T = int. at .*: a > 5.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int TS<T>::tf.int, U. .with U = int; T = int. at .*: r > 5.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function int TS<T>::tf.int, U. .with U = int; T = int. at .*: r > 5.*(\n|\r\n|\r)" }
