@@ -38,4 +38,4 @@ int main()
   f(0);
   VERIFY(custom_called);
 }
-// { dg-output "contract violation in function f at .*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function void f.int. at .*(\n|\r\n|\r)" }
