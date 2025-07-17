@@ -15,6 +15,7 @@
 // with this library; see the file COPYING3.  If not see
 // <http://www.gnu.org/licenses/>.
 
+// Check that nothrow overload of handle_observed_contract_violation works as expected.
 // { dg-options "-g0 -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=quick_enforce" }
 // { dg-do run { target c++2a } }
 
@@ -25,5 +26,5 @@ int main()
 
   std::contracts::handle_observed_contract_violation(std::nothrow, "test comment");
 }
-// { dg-output "contract violation in function int main.* at .*:26: test comment.*" }
+// { dg-output "contract violation in function.*main.* at .*:27: test comment.*" }
 // { dg-output "assertion_kind: manual, semantic: observe, mode: unspecified, terminating: no" }

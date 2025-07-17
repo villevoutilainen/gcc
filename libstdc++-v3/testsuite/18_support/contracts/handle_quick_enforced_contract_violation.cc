@@ -15,15 +15,45 @@
 // with this library; see the file COPYING3.  If not see
 // <http://www.gnu.org/licenses/>.
 
+// Check that handle_observed_contract_violation works as expected.
 // { dg-options "-g0 -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe" }
 // { dg-do run { target c++2a } }
 
 #include <contracts>
 #include <exception>
 #include <cstdlib>
+#include <testsuite_hooks.h>
+#include <iostream>
+#include <sstream>
+
+
+struct checking_buf
+  : public std::streambuf
+{
+  bool written = false;
+
+  checking_buf() = default;
+
+  virtual int_type
+  overflow(int_type)
+  {
+    written = true;
+    return int_type();
+  }
+
+  std::streamsize xsputn(const char* s, std::streamsize count)
+  {
+    written = true;
+    return count;
+  }
+
+};
+
+checking_buf buf;
 
 void my_term()
 {
+  VERIFY(!buf.written);
   std::exit(0);
 }
 
@@ -31,10 +61,9 @@ void my_term()
 int main()
 {
   std::set_terminate (my_term);
+  std::cerr.rdbuf(&buf);
 
-  std::contracts::handle_enforced_contract_violation("test comment");
+  std::contracts::handle_quick_enforced_contract_violation("test comment");
   // We should not get here
   return 1;
 }
-// { dg-output "contract violation in function int main.* at .*:35: test comment.*" }
-// { dg-output "assertion_kind: manual, semantic: enforce, mode: unspecified, terminating: yes" }
