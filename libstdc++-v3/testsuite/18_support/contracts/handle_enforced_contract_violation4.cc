@@ -15,6 +15,7 @@
 // with this library; see the file COPYING3.  If not see
 // <http://www.gnu.org/licenses/>.
 
+// Check that nothrow overload of handle_enforced_contract_violation works as expected.
 // { dg-options "-g0 -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=quick_enforce" }
 // { dg-do run { target c++2a } }
 
@@ -37,5 +38,5 @@ int main()
   // We should not get here
   return 1;
 }
-// { dg-output "contract violation in function int main.* at .*:36: test comment.*" }
+// { dg-output "contract violation in function.*main.* at .*:37: test comment.*" }
 // { dg-output "assertion_kind: manual, semantic: enforce, mode: unspecified, terminating: yes" }
