@@ -56,15 +56,17 @@ void handle_contract_violation(const std::contracts::contract_violation& v)
   custom_called = true;
 }
 
-
 void f(int i) pre (i>10) {};
 
 int main()
 {
+  auto save_buf = std::cerr.rdbuf();
   checking_buf buf;
   std::cerr.rdbuf(&buf);
 
   f(0);
-  VERIFY(!buf.written);
+  std::cerr.rdbuf(save_buf);
+  VERIFY(buf.written == 0);
+  return 0;
 }
 
