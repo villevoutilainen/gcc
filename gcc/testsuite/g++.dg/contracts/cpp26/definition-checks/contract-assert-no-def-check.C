@@ -22,4 +22,4 @@ int main(int, char**)
   foo(1);
   return 0;
 }
-// { dg-output "contract violation in function foo at .*: i > 4.*(\n|\r\n|\r)" }
+// { dg-output "contract violation in function void foo.int. at .*: i > 4.*(\n|\r\n|\r)" }
