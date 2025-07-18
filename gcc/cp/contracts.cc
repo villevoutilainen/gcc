@@ -2966,33 +2966,13 @@ start_function_contracts (tree fndecl)
 tree
 build_thunk_like_call (tree function, int n, tree *argarray)
 {
-  tree decl;
-  tree result_type;
-  tree fntype;
 
-  function = build_addr_func (function, tf_warning_or_error);
+  function = build_call_a_1 (function, n, argarray);
 
-  gcc_assert (TYPE_PTR_P (TREE_TYPE (function)));
-  fntype = TREE_TYPE (TREE_TYPE (function));
-  gcc_assert (FUNC_OR_METHOD_TYPE_P (fntype));
-  result_type = TREE_TYPE (fntype);
-
-  /* An rvalue has no cv-qualifiers.  */
-  if (SCALAR_TYPE_P (result_type) || VOID_TYPE_P (result_type))
-    result_type = cv_unqualified (result_type);
-
-  function = build_call_array_loc (input_location,
-				   result_type, function, n, argarray);
-  set_flags_from_callee (function);
-
-  decl = get_callee_fndecl (function);
+  tree decl = get_callee_fndecl (function);
 
   if (decl && !TREE_USED (decl))
       mark_used (decl);
-
-  require_complete_eh_spec_types (fntype, decl);
-
-  TREE_HAS_CONSTRUCTOR (function) = (decl && DECL_CONSTRUCTOR_P (decl));
 
   CALL_FROM_THUNK_P (function) = true;
 
