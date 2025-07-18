@@ -73,10 +73,12 @@ public:
 };
 
 typedef  fail_buf<std::streambuf>   fail_streambuf;
+std::streambuf* g_buf_to_restore;
 
 // Test that there is an active exception when we reach the terminate handler.
 void my_term()
 {
+  std::cerr.rdbuf(g_buf_to_restore); // be nice, restore the buf of a global stream
   try { throw; }
   catch(const underflow_error&) { std::exit(0); }
   catch(const overflow_error&) { std::exit(0); }
@@ -98,7 +100,7 @@ int main()
 {
   std::set_terminate (my_term);
   fail_streambuf buf;
-  std::cerr.rdbuf(&buf);
+  g_buf_to_restore = std::cerr.rdbuf(&buf);
   std::cerr.exceptions(std::ios::badbit | std::ios::failbit | std::ios::eofbit);
   try
   {
