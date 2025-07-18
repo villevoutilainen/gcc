@@ -2949,6 +2949,36 @@ start_function_contracts (tree fndecl)
     build_contract_function_decls (fndecl);
 }
 
+/* Build and return a thunk like call to FUNCTION using the supplied
+ arguments.  The call is like a thunk call in the fact that we do not
+ want to create additional copies of the arguments. However, we can
+ not simply reuse the thunk machinery as it does more than we want.
+ More specifically, we don't want to mark the calling function as
+ `DECL_THUNK_P`, we only want the special treatment for the parameters
+ of the call we are about to generate.
+ We reuse most of build_call_a, modulo special handling for empty
+ classes which relies on `DECL_THUNK_P` to know that the call we're building
+ is going to be a thunk call.
+ We also mark the call as a thunk call to allow for correct gimplification
+ of the arguments.
+ */
+
+tree
+build_thunk_like_call (tree function, int n, tree *argarray)
+{
+
+  function = build_call_a_1 (function, n, argarray);
+
+  tree decl = get_callee_fndecl (function);
+
+  if (decl && !TREE_USED (decl))
+      mark_used (decl);
+
+  CALL_FROM_THUNK_P (function) = true;
+
+  return function;
+}
+
 /* If we have a precondition function and it's valid, call it.  */
 
 static void
@@ -2960,9 +2990,9 @@ add_pre_condition_fn_call (tree fndecl)
 		       && DECL_PRE_FN (fndecl) != error_mark_node);
 
   releasing_vec args = build_arg_list (fndecl);
-  tree call = build_call_a (DECL_PRE_FN (fndecl), args->length (),
+  tree call = build_thunk_like_call (DECL_PRE_FN (fndecl), args->length (),
 			    args->address ());
-  CALL_FROM_THUNK_P (call) = true;
+
   finish_expr_stmt (call);
 }
 
@@ -2978,9 +3008,8 @@ add_post_condition_fn_call (tree fndecl)
   releasing_vec args = build_arg_list (fndecl);
   if (get_postcondition_result_parameter (fndecl))
     vec_safe_push (args, DECL_RESULT (fndecl));
-  tree call = build_call_a (DECL_POST_FN (fndecl), args->length (),
+  tree call = build_thunk_like_call (DECL_POST_FN (fndecl), args->length (),
 			    args->address ());
-  CALL_FROM_THUNK_P (call) = true;
   finish_expr_stmt (call);
 }
 
@@ -3632,8 +3661,7 @@ define_contract_wrapper_func (const tree& fndecl, const tree& wrapdecl, void*)
       TREE_TYPE (fn) = t;
     }
 
-  tree call = build_call_a (fn, args->length (), args->address ());
-  CALL_FROM_THUNK_P (call) = true;
+  tree call = build_thunk_like_call (fn, args->length (), args->address ());
 
   finish_return_stmt (call);
 
