@@ -3,9 +3,8 @@
 // { dg-do compile }
 // { dg-options "-std=c++2a -fcontracts -fcontracts-nonattr" }
 
-static_assert (__cpp_contracts >= 201906);
-static_assert (__cpp_contracts_literal_semantics >= 201906);
-static_assert (__cpp_contracts_roles >= 201906);
+static_assert (__cpp_contracts >= 202502L);
+
 int f(int);
 int g1(int a) pre(f(a) > a)
 {

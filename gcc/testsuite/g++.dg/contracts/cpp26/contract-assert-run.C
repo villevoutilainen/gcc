@@ -23,9 +23,7 @@
 		if ((asserts && !violation) || (!(asserts) && violation)) __builtin_abort(); \
 	} \
 
-static_assert (__cpp_contracts >= 201906);
-static_assert (__cpp_contracts_literal_semantics >= 201906);
-static_assert (__cpp_contracts_roles >= 201906);
+static_assert (__cpp_contracts >= 202502L);
 
 void handle_contract_violation(const std::contracts::contract_violation &violation) {
   std::cerr << "custom std::handle_contract_violation called:"
