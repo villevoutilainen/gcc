@@ -11,9 +11,7 @@
 // { dg-do compile }
 
 
-static_assert (__cpp_contracts >= 201906);
-static_assert (__cpp_contracts_literal_semantics >= 201906);
-static_assert (__cpp_contracts_roles >= 201906);
+static_assert (__cpp_contracts >= 202502L);
 
 int gi = 7;
 int &gri = gi;
@@ -82,7 +80,7 @@ void template_related_tests()
   perfect_forward(ci);
   perfect_forward((const int&&) ci);
   perfect_forward2(666);
-// { dg-error {increment of read-only location} "" { target *-*-* } 67 }
+// { dg-error {increment of read-only location} "" { target *-*-* } 65 }
   S2 s;
   const S2 cs;
   s.perfect_forward();
