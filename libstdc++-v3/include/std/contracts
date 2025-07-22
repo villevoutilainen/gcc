@@ -43,11 +43,6 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 namespace contracts
 {
   // From D3290R3
-  struct __location_info{
-    std::source_location _M_source_location;
-    explicit __location_info(std::source_location __location)
-    : _M_source_location(__location){}
-  };
 
   [[noreturn]] void handle_enforced_contract_violation(
       const char*,
