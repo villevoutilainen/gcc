@@ -12237,17 +12237,27 @@ tsubst_contract_attribute (tree decl, tree t, tree args,
   TREE_VALUE (t) = build_tree_list (NULL_TREE, contract);
 }
 
-/* Rebuild the attribute list for DECL, substituting into contracts
-   as needed.  */
+/* For unsubstituted list of contracts in ATTRIBUTES, instantiate contracts
+ for DECL and set the list as contracts for decl. Original attributes are not
+ modified. Substitution creates a deep copy of the contract.
+ Note that ATTRIBUTES may contain attributes other than contracts, and that
+ they may belong to a decl other than DECL.
+ */
 
 void
-tsubst_contract_attributes (tree decl, tree args, tsubst_flags_t complain,
-			    tree in_decl)
+tsubst_contract_attributes (tree attributes, tree decl, tree args,
+			    tsubst_flags_t complain, tree in_decl)
 {
-  tree list = copy_list (DECL_ATTRIBUTES (decl));
-  for (tree attr = find_contract (list); attr; attr = CONTRACT_CHAIN (attr))
-    tsubst_contract_attribute (decl, attr, args, complain, in_decl);
-  DECL_ATTRIBUTES (decl) = list;
+  tree subst_contract_list = NULL_TREE;
+  for (tree attr = find_contract (attributes); attr;
+      attr = CONTRACT_CHAIN (attr))
+  {
+      tree nc = copy_node (attr);
+      tsubst_contract_attribute (decl, nc, args, complain, in_decl);
+      TREE_CHAIN (nc) = subst_contract_list;
+      subst_contract_list = nc;
+  }
+  set_contract_attributes(decl, nreverse(subst_contract_list));
 }
 
 /* Instantiate a single dependent attribute T (a TREE_LIST), and return either
@@ -27737,17 +27747,19 @@ regenerate_decl_from_template (tree decl, tree tmpl, tree args)
 
       if (DECL_CONTRACTS (decl))
 	{
+
+	  tree attributes = DECL_ATTRIBUTES (decl);
 	  /* If we're regenerating a specialization, the contracts will have
 	     been copied from the most general template. Replace those with
 	     the ones from the actual specialization.  */
 	  tree tmpl = DECL_TI_TEMPLATE (decl);
 	  if (DECL_TEMPLATE_SPECIALIZATION (tmpl))
 	    {
-	      remove_contract_attributes (decl);
-	      copy_contract_attributes (decl, code_pattern);
+	      attributes = DECL_ATTRIBUTES(code_pattern);
 	    }
 
-	  tsubst_contract_attributes (decl, args, tf_warning_or_error, code_pattern);
+	  tsubst_contract_attributes (attributes, decl, args,
+				      tf_warning_or_error, code_pattern);
 	}
 
       /* Merge additional specifiers from the CODE_PATTERN.  */
