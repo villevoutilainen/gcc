@@ -994,8 +994,9 @@ set_contract_attributes (tree fndecl, tree contracts)
 }
 
 
-/* Copy contract attributes from NEWDECL onto the attribute list of
-   OLDDECL.  */
+/* Shallow copy contract attributes from NEWDECL onto the attribute list of
+   OLDDECL. After this operation, any changes to one set of contracts will
+   affect the other set of contracts.  */
 
 void copy_contract_attributes (tree olddecl, tree newdecl)
 {
@@ -1008,9 +1009,6 @@ void copy_contract_attributes (tree olddecl, tree newdecl)
     }
   attrs = chainon (DECL_ATTRIBUTES (olddecl), nreverse (attrs));
   DECL_ATTRIBUTES (olddecl) = attrs;
-
-  /* And update DECL_CONTEXT of the postcondition result identifier.  */
-  rebuild_postconditions (olddecl);
 }
 
 /* Returns the parameter corresponding to the return value of a guarded
@@ -3497,6 +3495,104 @@ p2900_duplicate_contracts (tree newdecl, tree olddecl)
   return;
 }
 
+/* This is called from push decl, and is used to determine if two sets of
+    contract attributes match.  */
+
+void
+cxx2a_duplicate_contracts (tree newdecl, tree olddecl)
+{
+  /* Compare contracts to see if they match.    */
+  tree old_contracts = DECL_CONTRACTS(olddecl);
+  tree new_contracts = DECL_CONTRACTS(newdecl);
+
+  if (!old_contracts && !new_contracts)
+    return;
+
+  location_t old_loc = DECL_SOURCE_LOCATION(olddecl);
+  location_t new_loc = DECL_SOURCE_LOCATION(newdecl);
+
+  /* If both declarations specify contracts, ensure they match.
+
+   TODO: This handles a potential error a little oddly. Consider:
+
+   struct B {
+   virtual void f(int n) [[pre: n == 0]];
+   };
+   struct D : B {
+   void f(int n) override; // inherits contracts
+   };
+   void D::f(int n) [[pre: n == 0]] // OK
+   { }
+
+   It's okay because we're explicitly restating the inherited contract.
+   Changing the precondition on the definition D::f causes match_contracts
+   to complain about the mismatch.
+
+   This would previously have been diagnosed as adding contracts to an
+   override, but this seems like it should be well-formed.  */
+  if (old_contracts && new_contracts)
+    {
+      if (!match_contract_conditions (old_loc, old_contracts, new_loc,
+				      new_contracts, cmc_declaration))
+	return;
+      if (DECL_UNIQUE_FRIEND_P(newdecl))
+	/* Newdecl's contracts are still DEFERRED_PARSE, and we're about to
+	 collapse it into olddecl, so stash away olddecl's contracts for
+	 later comparison.  */
+	defer_guarded_contract_match (olddecl, olddecl, old_contracts);
+      remove_contract_attributes (olddecl);
+      return;
+    }
+
+  /* Handle cases where contracts are omitted in one or the other
+   declaration.  */
+  if (old_contracts)
+    {
+      gcc_checking_assert(!new_contracts);
+      /* Contracts have been previously specified by are no omitted. The
+       new declaration inherits the existing contracts. */
+      copy_contract_attributes (newdecl, olddecl);
+
+      /* Remove existing contracts from OLDDECL to prevent the attribute
+       merging function from adding excess contracts.  */
+      remove_contract_attributes (olddecl);
+    }
+  else if (!old_contracts)
+    {
+      gcc_checking_assert(new_contracts);
+      /* We are adding contracts to a declaration.  */
+      if (DECL_INITIAL(olddecl))
+	{
+	  /* We can't add to a previously defined function.  */
+	  auto_diagnostic_group d;
+	  error_at (new_loc, "cannot add contracts after definition");
+	  inform (DECL_SOURCE_LOCATION(olddecl), "original definition here");
+	  return;
+	}
+
+      /* We can't add to an unguarded virtual function declaration.  */
+      if (DECL_VIRTUAL_P(olddecl))
+	{
+	  auto_diagnostic_group d;
+	  error_at (new_loc, "cannot add contracts to a virtual function");
+	  inform (DECL_SOURCE_LOCATION(olddecl), "original declaration here");
+	  return;
+	}
+
+      /* Depending on the "first declaration" rule, we may not be able
+       to add contracts to a function after the fact; NOTE the option
+       cannot be used to gate here since it takes a string which always
+       compares != 0.  */
+      if (flag_contract_strict_declarations)
+	warning_at (new_loc, 1, "declaration adds contracts to %q#D", olddecl);
+
+      /* The parent will copy or merge the contracts from NEWDECL to OLDDECL;
+       the latter is empty so we need make no special action.  */
+      copy_contract_attributes (olddecl, newdecl);
+      remove_contract_attributes (newdecl);
+    }
+}
+
 /* A subroutine of duplicate_decls. Diagnose issues in the redeclaration of
    guarded functions.  */
 
@@ -3509,105 +3605,10 @@ duplicate_contracts (tree newdecl, tree olddecl)
     olddecl = DECL_TEMPLATE_RESULT (olddecl);
 
   if (flag_contracts_nonattr)
-    {
-      p2900_duplicate_contracts (newdecl, olddecl);
-      return;
-    }
+    p2900_duplicate_contracts (newdecl, olddecl);
+  else
+    cxx2a_duplicate_contracts (newdecl, olddecl);
 
-  /* Compare contracts to see if they match.    */
-  tree old_contracts = DECL_CONTRACTS (olddecl);
-  tree new_contracts = DECL_CONTRACTS (newdecl);
-
-  if (!old_contracts && !new_contracts)
-    return;
-
-  location_t old_loc = DECL_SOURCE_LOCATION (olddecl);
-  location_t new_loc = DECL_SOURCE_LOCATION (newdecl);
-
-  /* If both declarations specify contracts, ensure they match.
-
-     TODO: This handles a potential error a little oddly. Consider:
-
-	struct B {
-	  virtual void f(int n) [[pre: n == 0]];
-	};
-	struct D : B {
-	  void f(int n) override; // inherits contracts
-	};
-	void D::f(int n) [[pre: n == 0]] // OK
-	{ }
-
-    It's okay because we're explicitly restating the inherited contract.
-    Changing the precondition on the definition D::f causes match_contracts
-    to complain about the mismatch.
-
-    This would previously have been diagnosed as adding contracts to an
-    override, but this seems like it should be well-formed.  */
-  if (old_contracts && new_contracts)
-    {
-      if (!match_contract_conditions (old_loc, old_contracts,
-				      new_loc, new_contracts,
-				      cmc_declaration))
-	return;
-      if (DECL_UNIQUE_FRIEND_P (newdecl))
-	/* Newdecl's contracts are still DEFERRED_PARSE, and we're about to
-	   collapse it into olddecl, so stash away olddecl's contracts for
-	   later comparison.  */
-	defer_guarded_contract_match (olddecl, olddecl, old_contracts);
-      remove_contract_attributes (olddecl);
-      return;
-    }
-
-  /* Handle cases where contracts are omitted in one or the other
-     declaration.  */
-  if (old_contracts)
-    {
-      gcc_checking_assert (!new_contracts);
-      /* Contracts have been previously specified by are no omitted. The
-	 new declaration inherits the existing contracts. */
-      copy_contract_attributes (newdecl, olddecl);
-
-      /* Remove existing contracts from OLDDECL to prevent the attribute
-	 merging function from adding excess contracts.  */
-      remove_contract_attributes (olddecl);
-    }
-  else if (!old_contracts)
-    {
-      gcc_checking_assert (new_contracts);
-      /* We are adding contracts to a declaration.  */
-      if (DECL_INITIAL (olddecl))
-	{
-	  /* We can't add to a previously defined function.  */
-	  auto_diagnostic_group d;
-	  error_at (new_loc, "cannot add contracts after definition");
-	  inform (DECL_SOURCE_LOCATION (olddecl),
-		  "original definition here");
-	  return;
-	}
-
-      /* We can't add to an unguarded virtual function declaration.  */
-      if (DECL_VIRTUAL_P (olddecl))
-	{
-	  auto_diagnostic_group d;
-	  error_at (new_loc, "cannot add contracts to a virtual function");
-	  inform (DECL_SOURCE_LOCATION (olddecl),
-		  "original declaration here");
-	  return;
-	}
-
-      /* Depending on the "first declaration" rule, we may not be able
-	 to add contracts to a function after the fact; NOTE the option
-	 cannot be used to gate here since it takes a string which always
-	 compares != 0.  */
-      if (flag_contract_strict_declarations)
-	warning_at (new_loc, 1, "declaration adds contracts to %q#D",
-		    olddecl);
-
-      /* The parent will copy or merge the contracts from NEWDECL to OLDDECL;
-	 the latter is empty so we need make no special action.  */
-    copy_contract_attributes (olddecl, newdecl);
-    remove_contract_attributes (newdecl);
-  }
 }
 
 /* Checks if a contract check wrapper is needed for fndecl.  */
