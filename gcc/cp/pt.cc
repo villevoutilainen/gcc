@@ -27747,7 +27747,6 @@ regenerate_decl_from_template (tree decl, tree tmpl, tree args)
 
       if (DECL_CONTRACTS (decl))
 	{
-
 	  tree attributes = DECL_ATTRIBUTES (decl);
 	  /* If we're regenerating a specialization, the contracts will have
 	     been copied from the most general template. Replace those with
