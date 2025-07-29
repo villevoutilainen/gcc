@@ -359,9 +359,9 @@ int main(int, char**)
 // { dg-output {contract violation in function void G3<T, S>::f.T, S. .with T = double; S = double. at .*:125: s > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G3 general T S(\n|\r\n|\r)} }
-// { dg-output {contract violation in function void G3<int, S>::f.int, S. .with S = int. at .*:134: t > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G3<int, S>::f.int, S. .with S = int. at .*:139: t > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function void G3<int, S>::f.int, S. .with S = int. at .*:134: s > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G3<int, S>::f.int, S. .with S = int. at .*:140: s > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G3 partial int S(\n|\r\n|\r)} }
 // { dg-output {contract violation in function void G3<int, S>::f.int, S. .with S = double. at .*:147: t > 2(\n|\r\n|\r)} }
@@ -374,9 +374,9 @@ int main(int, char**)
 // { dg-output {contract violation in function void G3<T, S>::f.T, S. .with T = char; S = char. at .*:125: s > 0(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G3 general T S(\n|\r\n|\r)} }
-// { dg-output {contract violation in function void G3<int, S>::f.int, S. .with S = char. at .*:134: t > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G3<int, S>::f.int, S. .with S = char. at .*:139: t > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
-// { dg-output {contract violation in function void G3<int, S>::f.int, S. .with S = char. at .*:134: s > 1(\n|\r\n|\r)} }
+// { dg-output {contract violation in function void G3<int, S>::f.int, S. .with S = char. at .*:140: s > 1(\n|\r\n|\r)} }
 // { dg-output ".assertion_kind: pre, semantic: observe, mode: predicate_false, terminating: no.(\n|\r\n|\r)" }
 // { dg-output {G3 partial int S(\n|\r\n|\r)} }
 // { dg-output {G3 full int C(\n|\r\n|\r)} }

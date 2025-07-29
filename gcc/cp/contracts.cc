@@ -988,7 +988,8 @@ extract_contract_attributes (tree fndecl)
 void
 set_contract_attributes (tree fndecl, tree contracts)
 {
-  remove_contract_attributes (fndecl);
+  if (DECL_CONTRACTS(fndecl))
+    remove_contract_attributes (fndecl);
   tree attrs = chainon (DECL_ATTRIBUTES(fndecl), contracts);
   DECL_ATTRIBUTES (fndecl) = attrs;
 }
@@ -1009,6 +1010,28 @@ void copy_contract_attributes (tree olddecl, tree newdecl)
     }
   attrs = chainon (DECL_ATTRIBUTES (olddecl), nreverse (attrs));
   DECL_ATTRIBUTES (olddecl) = attrs;
+}
+
+/* Copy deferred contract attributes from SRC onto DEST.  This
+ assumes that if one contract is deferred, all contracts are deferred.  */
+
+void copy_deferred_contracts (tree srcdecl, tree destdecl)
+{
+  tree attrs = NULL_TREE;
+  tree contracts = DECL_CONTRACTS (srcdecl);
+
+  if (!contracts) return;
+
+  gcc_checking_assert(contract_any_deferred_p (contracts));
+
+  for (tree c = contracts; c; c = TREE_CHAIN (c))
+    {
+      if (!cxx_contract_attribute_p (c))
+	continue;
+      attrs = tree_cons (TREE_PURPOSE (c), TREE_VALUE (c), attrs);
+    }
+  attrs = chainon (DECL_ATTRIBUTES (destdecl), nreverse (attrs));
+  DECL_ATTRIBUTES (destdecl) = attrs;
 }
 
 /* Returns the parameter corresponding to the return value of a guarded
@@ -1049,7 +1072,6 @@ retain_decl (tree decl, copy_body_data *)
    parameters are updated to refer to DST's parameters. The postcondition
    result variable is left unchanged.
 
-   This, along with remap_contracts, are subroutines of duplicate_decls.
    When declarations are merged, we sometimes need to update contracts to
    refer to new parameters.
 
@@ -1149,28 +1171,6 @@ remap_contract (tree src, tree dst, tree contract, bool duplicate_p)
     return;
 
   walk_tree (&CONTRACT_CONDITION (contract), copy_tree_body_r, &id, NULL);
-}
-
-/* Rewrite any references to SRC's PARM_DECLs to the corresponding PARM_DECL in
-   DST in all of the contract attributes in CONTRACTS by calling remap_contract
-   on each.
-
-   This is used for two purposes: to rewrite contract attributes during
-   duplicate_decls, and to prepare contracts for emission into a function's
-   respective precondition and postcondition functions. DUPLICATE_P is used
-   to determine the context in which this function is called. See above for
-   the behavior described by this flag.  */
-
-void
-remap_contracts (tree src, tree dst, tree contracts, bool duplicate_p)
-{
-  for (tree attr = contracts; attr; attr = CONTRACT_CHAIN (attr))
-    {
-      gcc_checking_assert (cxx_contract_attribute_p (attr));
-      tree contract = CONTRACT_STATEMENT (attr);
-      if (TREE_CODE (CONTRACT_CONDITION (contract)) != DEFERRED_PARSE)
-	remap_contract (src, dst, contract, duplicate_p);
-    }
 }
 
 /* Helper to replace references to dummy this parameters with references to
@@ -3427,9 +3427,8 @@ static hash_map<tree_decl_hash, contract_redecl> redeclared_contracts;
     contract attributes match.  */
 
 void
-p2900_duplicate_contracts (tree newdecl, tree olddecl)
+p2900_check_redecl_contract (tree newdecl, tree olddecl)
 {
-  /* Aggregate the contracts and strip them from the input decls.  */
   tree new_contracts = DECL_CONTRACTS (newdecl);
   tree old_contracts = DECL_CONTRACTS (olddecl);
 
@@ -3446,6 +3445,9 @@ p2900_duplicate_contracts (tree newdecl, tree olddecl)
   contract_redecl& rd = redeclared_contracts.get_or_insert (olddecl, &existed);
   if (!existed && !contract_any_deferred_p (old_contracts))
     {
+      // we store a deep copy of the contracts so any further modification to the
+      // contracts on the original decl does not affect comparison with future
+      // declarations.
       rd.original_contracts = copy_contracts(olddecl);
       location_t cont_end = old_loc;
       if (old_contracts)
@@ -3462,36 +3464,31 @@ p2900_duplicate_contracts (tree newdecl, tree olddecl)
       cont_end = make_location (new_loc, new_loc, cont_end);
       error_at (cont_end, "declaration adds contracts to %q#D", olddecl);
       inform (rd.note_loc , "first declared here");
-      /* We have stripped the contracts from the new decl, so that they will
-	 not be merged into the original decl (which had none).  */
+
       return;
     }
 
   if (old_contracts && !new_contracts)
-    /* We allow re-declarations to omit contracts declared on the initial decl.
+    {
+      /* We allow re-declarations to omit contracts declared on the initial decl.
        In fact, this is required if the conditions contain lambdas.  Check if
        all the parameters are correctly const qualified. */
-    check_param_in_redecl (olddecl, newdecl);
-  else if (contract_any_deferred_p (new_contracts)
-	   || contract_any_deferred_p (old_contracts))
-    /* TODO: stash these and figure out how to process them later.  */
-    ;
+      check_param_in_redecl (olddecl, newdecl);
+    }
+  else if (contract_any_deferred_p (old_contracts))
+    {
+      gcc_checking_assert(contract_any_deferred_p (new_contracts));
+      /* TODO: ignore these and figure out how to process them later.  */
+    }
   else
     {
       location_t cont_end = get_contract_end_loc (new_contracts);
       cont_end = make_location (new_loc, new_loc, cont_end);
       /* We have two sets - they should match or we issue a diagnostic.  */
-      match_contract_conditions (rd.note_loc, rd.original_contracts,
-				 cont_end, new_contracts, cmc_declaration);
+      match_contract_conditions (rd.note_loc, rd.original_contracts, cont_end,
+				 new_contracts, cmc_declaration);
     }
 
-  /* We have maybe issued a diagnostic - but because the caller will smash the
-     attributes on the old decl with those on the new, we need to remove the
-     contracts from the old decl and move the old contracts onto the new decl.  */
-  remove_contract_attributes (newdecl);
-  DECL_ATTRIBUTES (newdecl)
-    = attr_chainon (DECL_ATTRIBUTES (newdecl),
-		    extract_contract_attributes (olddecl));
   return;
 }
 
@@ -3499,9 +3496,9 @@ p2900_duplicate_contracts (tree newdecl, tree olddecl)
     contract attributes match.  */
 
 void
-cxx2a_duplicate_contracts (tree newdecl, tree olddecl)
+cxx2a_check_redecl_contract (tree newdecl, tree olddecl)
 {
-  /* Compare contracts to see if they match.    */
+
   tree old_contracts = DECL_CONTRACTS(olddecl);
   tree new_contracts = DECL_CONTRACTS(newdecl);
 
@@ -3532,32 +3529,22 @@ cxx2a_duplicate_contracts (tree newdecl, tree olddecl)
    override, but this seems like it should be well-formed.  */
   if (old_contracts && new_contracts)
     {
-      if (!match_contract_conditions (old_loc, old_contracts, new_loc,
-				      new_contracts, cmc_declaration))
-	return;
-      if (DECL_UNIQUE_FRIEND_P(newdecl))
-	/* Newdecl's contracts are still DEFERRED_PARSE, and we're about to
-	 collapse it into olddecl, so stash away olddecl's contracts for
-	 later comparison.  */
-	defer_guarded_contract_match (olddecl, olddecl, old_contracts);
-      remove_contract_attributes (olddecl);
+
+      if (contract_any_deferred_p (old_contracts))
+	{
+	  gcc_checking_assert(contract_any_deferred_p (new_contracts));
+
+	  defer_guarded_contract_match (olddecl, olddecl, old_contracts);
+	}
+      else
+	match_contract_conditions (old_loc, old_contracts, new_loc,
+				      new_contracts, cmc_declaration);
       return;
     }
 
   /* Handle cases where contracts are omitted in one or the other
    declaration.  */
-  if (old_contracts)
-    {
-      gcc_checking_assert(!new_contracts);
-      /* Contracts have been previously specified by are no omitted. The
-       new declaration inherits the existing contracts. */
-      copy_contract_attributes (newdecl, olddecl);
-
-      /* Remove existing contracts from OLDDECL to prevent the attribute
-       merging function from adding excess contracts.  */
-      remove_contract_attributes (olddecl);
-    }
-  else if (!old_contracts)
+  if (!old_contracts)
     {
       gcc_checking_assert(new_contracts);
       /* We are adding contracts to a declaration.  */
@@ -3588,16 +3575,21 @@ cxx2a_duplicate_contracts (tree newdecl, tree olddecl)
 
       /* The parent will copy or merge the contracts from NEWDECL to OLDDECL;
        the latter is empty so we need make no special action.  */
-      copy_contract_attributes (olddecl, newdecl);
-      remove_contract_attributes (newdecl);
+      if (contract_any_deferred_p (new_contracts))
+	copy_deferred_contracts(newdecl, olddecl);
+      else
+	set_decl_contracts (olddecl,
+			  copy_and_remap_contracts (olddecl, newdecl,
+						    /*remap_result*/true,
+						    cmk_all));
+
     }
 }
 
 /* A subroutine of duplicate_decls. Diagnose issues in the redeclaration of
    guarded functions.  */
-
 void
-duplicate_contracts (tree newdecl, tree olddecl)
+check_redecl_contract (tree newdecl, tree olddecl)
 {
   if (TREE_CODE (newdecl) == TEMPLATE_DECL)
     newdecl = DECL_TEMPLATE_RESULT (newdecl);
@@ -3605,9 +3597,76 @@ duplicate_contracts (tree newdecl, tree olddecl)
     olddecl = DECL_TEMPLATE_RESULT (olddecl);
 
   if (flag_contracts_nonattr)
-    p2900_duplicate_contracts (newdecl, olddecl);
+    p2900_check_redecl_contract (newdecl, olddecl);
   else
-    cxx2a_duplicate_contracts (newdecl, olddecl);
+    cxx2a_check_redecl_contract (newdecl, olddecl);
+
+}
+
+/* Update the contracts of DEST to match the argument names from contracts
+  of SRC. When we merge two declarations in duplicate_decls, we preserve the
+  arguments from the new declaration, if the new declaration is a
+  definition. We need to update the contracts accordingly.  */
+void update_contract_arguments(tree srcdecl, tree destdecl)
+{
+  tree src_contracts = DECL_CONTRACTS (srcdecl);
+  tree dest_contracts = DECL_CONTRACTS (destdecl);
+
+  if (!src_contracts && !dest_contracts)
+    return;
+
+  // C++20 contracts allowed first declaration to omit contracts
+  // Handle this first so it's easily stripped out later.
+  if (!flag_contracts_nonattr && !dest_contracts)
+    {
+      if (contract_any_deferred_p (src_contracts))
+	copy_deferred_contracts(srcdecl, destdecl);
+      else
+	{
+	  /* temporarily rename the arguments to get the right mapping */
+	  tree tmp_arguments = DECL_ARGUMENTS (destdecl);
+	  DECL_ARGUMENTS (destdecl) = DECL_ARGUMENTS (srcdecl);
+	  set_decl_contracts (destdecl,
+			      copy_and_remap_contracts (destdecl, srcdecl,
+							/*remap_result*/true,
+							cmk_all));
+	  DECL_ARGUMENTS (destdecl) = tmp_arguments;
+	}
+      return;
+    }
+
+  /* Check if src even has contracts. It is possible that a redeclaration
+    does not have contracts. Is this is the case, first apply contracts
+    to src.
+   */
+  if(!src_contracts)
+    {
+      if (contract_any_deferred_p (dest_contracts))
+	{
+	  copy_deferred_contracts(destdecl, srcdecl);
+	  /* Nothing more to do here.  */
+	  return;
+	}
+      else
+      	set_decl_contracts (srcdecl,
+      			    copy_and_remap_contracts (srcdecl, destdecl,
+            						    /*remap_result*/true,
+            						    cmk_all));
+    }
+
+  if (contract_any_deferred_p (src_contracts))
+    copy_deferred_contracts(srcdecl, destdecl);
+  else
+    {
+      /* temporarily rename the arguments to get the right mapping */
+      tree tmp_arguments = DECL_ARGUMENTS (destdecl);
+      DECL_ARGUMENTS (destdecl) = DECL_ARGUMENTS (srcdecl);
+      set_decl_contracts (destdecl,
+			  copy_and_remap_contracts (destdecl, srcdecl,
+						    /*remap_result*/true,
+						    cmk_all));
+      DECL_ARGUMENTS (destdecl) = tmp_arguments;
+    }
 
 }
 
