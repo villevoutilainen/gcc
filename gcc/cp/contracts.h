@@ -331,6 +331,7 @@ enum contract_match_kind
 /* contracts.cc */
 extern void emit_assertion			(tree);
 
+extern void update_contract_arguments		(tree, tree);
 extern void remove_contract_attributes		(tree);
 extern bool all_attributes_are_contracts_p	(tree);
 extern tree finish_contract_attribute		(tree, tree);
@@ -339,6 +340,7 @@ extern bool diagnose_misapplied_contracts	(tree);
 extern tree remap_contracts  			(tree, tree, bool, bool);
 extern tree splice_out_contracts		(tree);
 extern void inherit_base_contracts		(tree, tree);
+extern void check_redecl_contract		(tree, tree);
 
 extern tree make_postcondition_variable		(cp_expr);
 extern tree make_postcondition_variable		(cp_expr, tree);
@@ -352,6 +354,7 @@ extern tree finish_contract_condition		(cp_expr);
 extern void update_late_contract		(tree, tree, tree);
 extern tree invalidate_contract			(tree);
 extern void duplicate_contracts			(tree, tree);
+extern tree splice_out_contracts		(tree);
 
 extern void match_deferred_contracts		(tree);
 extern void defer_guarded_contract_match	(tree, tree, tree);
