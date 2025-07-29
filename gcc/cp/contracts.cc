@@ -1040,8 +1040,7 @@ void copy_deferred_contracts (tree srcdecl, tree destdecl)
 	continue;
       attrs = tree_cons (TREE_PURPOSE (c), TREE_VALUE (c), attrs);
     }
-  attrs = chainon (DECL_ATTRIBUTES (destdecl), nreverse (attrs));
-  DECL_ATTRIBUTES (destdecl) = attrs;
+  set_contract_attributes (destdecl, nreverse (attrs));
 }
 
 /* Returns the parameter corresponding to the return value of a guarded
@@ -3496,7 +3495,6 @@ p2900_check_redecl_contract (tree newdecl, tree olddecl)
 	defer_guarded_contract_match (olddecl, olddecl, old_contracts);
 	/* put the defered contracts on the olddecl so we parse it when
 	  we can.  */
-	remove_contract_attributes (olddecl);
 	copy_deferred_contracts(newdecl, olddecl);
     }
   else if (contract_any_deferred_p (old_contracts)
@@ -3565,7 +3563,6 @@ cxx2a_check_redecl_contract (tree newdecl, tree olddecl)
 	  defer_guarded_contract_match (olddecl, olddecl, old_contracts);
 	  /* put the defered contracts on the olddecl so we parse it when
 	     we can.  */
-	  remove_contract_attributes (olddecl);
 	  copy_deferred_contracts(newdecl, olddecl);
 	}
       else if (contract_any_deferred_p (old_contracts)
@@ -3696,8 +3693,6 @@ void update_contract_arguments(tree srcdecl, tree destdecl)
 
   if (contract_any_deferred_p (src_contracts))
     {
-      if (dest_contracts)
-	remove_contract_attributes (destdecl);
       copy_deferred_contracts(srcdecl, destdecl);
     }
   else
