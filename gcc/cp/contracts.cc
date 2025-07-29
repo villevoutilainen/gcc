@@ -889,26 +889,6 @@ cp_contract_assertion_p (const_tree attr)
     && TREE_CODE (CONTRACT_STATEMENT (attr)) == ASSERTION_STMT;
 }
 
-/* Remove all c++2a style contract attributes from the DECL_ATTRIBUTEs of the
-   FUNCTION_DECL FNDECL.  */
-
-void
-remove_contract_attributes (tree fndecl)
-{
-  if (!flag_contracts)
-    return;
-
-  tree list = NULL_TREE;
-  for (tree p = DECL_ATTRIBUTES (fndecl); p; p = TREE_CHAIN (p))
-    if (!cxx_contract_attribute_p (p))
-      {
-	tree nl = copy_node (p);
-	TREE_CHAIN (nl) = list;
-	list = nl;
-      }
-  DECL_ATTRIBUTES (fndecl) = nreverse (list);
-}
-
 static tree find_first_non_contract (tree attributes)
 {
   tree head = attributes;
@@ -929,43 +909,12 @@ static tree find_first_non_contract (tree attributes)
   return head;
 }
 
-/* Remove contracts from ATTRIBUTES.  */
-
-tree splice_out_contracts (tree attributes)
-{
-  tree head = find_first_non_contract (attributes);
-  if (!head)
-    return NULL_TREE;
-
-  /* Splice out remaining contracts.  */
-  tree p = TREE_CHAIN (head);
-  tree q = head;
-  while (p)
-    {
-      if (cxx_contract_attribute_p (p))
-	{
-	  /* Skip a sequence of contracts and then link q to the next
-	     non-contract attribute.  */
-	  do
-	    p = TREE_CHAIN (p);
-	  while (cxx_contract_attribute_p (p));
-	  TREE_CHAIN (q) = p;
-	}
-      else
-	p = TREE_CHAIN (p);
-    }
-
-  return head;
-}
-
-/* Extract contract attributes, leaving none in the original function decl
-   FNDECL.  */
+/* Remove contract attributes from decl FNDECL. Returns the
+ removed contracts. */
 
 tree
-extract_contract_attributes (tree fndecl)
+remove_contract_attributes (tree fndecl)
 {
-  if (!DECL_CONTRACTS (fndecl))
-    return NULL_TREE;
   tree contracts = NULL_TREE;
   tree other = NULL_TREE;
   for (tree a = DECL_ATTRIBUTES (fndecl); a; a = TREE_CHAIN (a))
@@ -992,24 +941,6 @@ set_contract_attributes (tree fndecl, tree contracts)
     remove_contract_attributes (fndecl);
   tree attrs = chainon (DECL_ATTRIBUTES(fndecl), contracts);
   DECL_ATTRIBUTES (fndecl) = attrs;
-}
-
-
-/* Shallow copy contract attributes from NEWDECL onto the attribute list of
-   OLDDECL. After this operation, any changes to one set of contracts will
-   affect the other set of contracts.  */
-
-void copy_contract_attributes (tree olddecl, tree newdecl)
-{
-  tree attrs = NULL_TREE;
-  for (tree c = DECL_CONTRACTS (newdecl); c; c = TREE_CHAIN (c))
-    {
-      if (!cxx_contract_attribute_p (c))
-	continue;
-      attrs = tree_cons (TREE_PURPOSE (c), TREE_VALUE (c), attrs);
-    }
-  attrs = chainon (DECL_ATTRIBUTES (olddecl), nreverse (attrs));
-  DECL_ATTRIBUTES (olddecl) = attrs;
 }
 
 /* Copy deferred contract attributes from SRC onto DEST.  This
@@ -3444,9 +3375,9 @@ p2900_check_redecl_contract (tree newdecl, tree olddecl)
   contract_redecl& rd = redeclared_contracts.get_or_insert (olddecl, &existed);
   if (!existed && !contract_any_deferred_p (old_contracts))
     {
-      // we store a deep copy of the contracts so any further modification to the
-      // contracts on the original decl does not affect comparison with future
-      // declarations.
+      /* We store a deep copy of the contracts so any further modification to the
+	contracts on the original decl does not affect comparison with future
+	declarations.  */
       rd.original_contracts = copy_contracts(olddecl);
       location_t cont_end = old_loc;
       if (old_contracts)
@@ -3642,8 +3573,8 @@ void update_contract_arguments(tree srcdecl, tree destdecl)
   if (!src_contracts && !dest_contracts)
     return;
 
-  // C++20 contracts allowed first declaration to omit contracts
-  // Handle this first so it's easily stripped out later.
+  /* C++20 contracts allowed first declaration to omit contracts.
+    Handle this first so it's easily stripped out later.  */
   if (!flag_contracts_nonattr && !dest_contracts)
     {
       if (contract_any_deferred_p (src_contracts))

@@ -1546,7 +1546,7 @@ cp_fold_function (tree fndecl)
      be copied onto different functions. We do not want to fold contract trees
      at this point in time. They will get folded when they are emitted.
    */
-  tree contracts = extract_contract_attributes (fndecl);
+  tree contracts = remove_contract_attributes (fndecl);
   cp_walk_tree (&DECL_SAVED_TREE (fndecl), cp_fold_r, &data, NULL);
   set_contract_attributes (fndecl, contracts);
 

@@ -2469,14 +2469,14 @@ duplicate_decls (tree newdecl, tree olddecl, bool hiding, bool was_hidden)
   /* Copy all the DECL_... slots specified in the new decl except for
      any that we copy here from the old type.  */
 
-  /* Contracs are currently a part of attributes. They should not participate
+  /* Contracts are currently a part of attributes. They should not participate
      in the merge. Strip them out before the merge and re-apply later.  */
   tree newdecl_sc = NULL_TREE;
   tree olddecl_sc = NULL_TREE;
   if (TREE_CODE (olddecl) == FUNCTION_DECL)
-    olddecl_sc = extract_contract_attributes(olddecl);
+    olddecl_sc = remove_contract_attributes(olddecl);
   if (TREE_CODE (newdecl) == FUNCTION_DECL)
-    newdecl_sc = extract_contract_attributes(newdecl);
+    newdecl_sc = remove_contract_attributes(newdecl);
 
   if (merge_attr)
     DECL_ATTRIBUTES (newdecl)
@@ -2505,9 +2505,9 @@ duplicate_decls (tree newdecl, tree olddecl, bool hiding, bool was_hidden)
       tree new_result_sc = NULL_TREE;
 
       if (TREE_CODE (old_result) == FUNCTION_DECL)
-	old_result_sc = extract_contract_attributes(old_result);
+	old_result_sc = remove_contract_attributes(old_result);
       if (TREE_CODE (new_result) == FUNCTION_DECL)
-	new_result_sc = extract_contract_attributes(new_result);
+	new_result_sc = remove_contract_attributes(new_result);
 
       DECL_ATTRIBUTES (old_result)
 	= (*targetm.merge_decl_attributes) (old_result, new_result);
@@ -3216,12 +3216,12 @@ duplicate_decls (tree newdecl, tree olddecl, bool hiding, bool was_hidden)
      Preserve the contracts so they can be applied later.  */
   tree contracts = NULL_TREE;
   if (TREE_CODE (olddecl) == FUNCTION_DECL)
-    contracts = extract_contract_attributes(olddecl);
+    contracts = remove_contract_attributes(olddecl);
 
   /* Remove contracts from newdecl so they don't get applied when we merge
     the attributes.   */
   if (TREE_CODE (newdecl) == FUNCTION_DECL)
-    extract_contract_attributes(newdecl);
+    remove_contract_attributes(newdecl);
 
   if (TREE_CODE (newdecl) == FUNCTION_DECL)
     {
