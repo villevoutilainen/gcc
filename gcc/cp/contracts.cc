@@ -3475,10 +3475,26 @@ p2900_check_redecl_contract (tree newdecl, tree olddecl)
        all the parameters are correctly const qualified. */
       check_param_in_redecl (olddecl, newdecl);
     }
-  else if (contract_any_deferred_p (old_contracts))
+  else if (old_contracts && new_contracts &&
+      !contract_any_deferred_p (old_contracts)
+      && contract_any_deferred_p (new_contracts)
+      && DECL_UNIQUE_FRIEND_P (newdecl))
     {
-      gcc_checking_assert(contract_any_deferred_p (new_contracts));
+	/* Newdecl's contracts are still DEFERRED_PARSE, and we're about to
+	   collapse it into olddecl, so stash away olddecl's contracts for
+	   later comparison.  */
+	defer_guarded_contract_match (olddecl, olddecl, old_contracts);
+	/* put the defered contracts on the olddecl so we parse it when
+	  we can.  */
+	remove_contract_attributes (olddecl);
+	copy_deferred_contracts(newdecl, olddecl);
+    }
+  else if (contract_any_deferred_p (old_contracts)
+	   || contract_any_deferred_p (new_contracts))
+    {
       /* TODO: ignore these and figure out how to process them later.  */
+      /* Note that an in class friend declaration has deferred contracts, but out
+	 of class friend declaration doesn't. */
     }
   else
     {
@@ -3529,16 +3545,30 @@ cxx2a_check_redecl_contract (tree newdecl, tree olddecl)
    override, but this seems like it should be well-formed.  */
   if (old_contracts && new_contracts)
     {
-
-      if (contract_any_deferred_p (old_contracts))
+      if (!contract_any_deferred_p (old_contracts)
+	  && contract_any_deferred_p (new_contracts)
+	  && DECL_UNIQUE_FRIEND_P (newdecl))
 	{
-	  gcc_checking_assert(contract_any_deferred_p (new_contracts));
-
+	  /* Newdecl's contracts are still DEFERRED_PARSE, and we're about to
+	     collapse it into olddecl, so stash away olddecl's contracts for
+	     later comparison.  */
 	  defer_guarded_contract_match (olddecl, olddecl, old_contracts);
+	  /* put the defered contracts on the olddecl so we parse it when
+	     we can.  */
+	  remove_contract_attributes (olddecl);
+	  copy_deferred_contracts(newdecl, olddecl);
 	}
+      else if (contract_any_deferred_p (old_contracts)
+	  || contract_any_deferred_p (new_contracts))
+	  {
+	  /* TODO: ignore these and figure out how to process them later.  */
+	  /* Note that a in class friend declaration has deferred contracts, but out
+	   * of class friend declaration doesn't. */
+	  }
       else
 	match_contract_conditions (old_loc, old_contracts, new_loc,
-				      new_contracts, cmc_declaration);
+				   new_contracts, cmc_declaration);
+
       return;
     }
 
@@ -3655,7 +3685,11 @@ void update_contract_arguments(tree srcdecl, tree destdecl)
     }
 
   if (contract_any_deferred_p (src_contracts))
-    copy_deferred_contracts(srcdecl, destdecl);
+    {
+      if (dest_contracts)
+	remove_contract_attributes (destdecl);
+      copy_deferred_contracts(srcdecl, destdecl);
+    }
   else
     {
       /* temporarily rename the arguments to get the right mapping */
