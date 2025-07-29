@@ -3612,6 +3612,11 @@ void update_contract_arguments(tree srcdecl, tree destdecl)
             						    cmk_all));
     }
 
+  /* For deferred contracts, we currently copy the tokens from the redeclaration
+    onto the decl that will be preserved. This is not ideal because the
+    redeclaration may have erroneous contracts.
+    For non deferred contracts we currently do copy and remap, which is doing
+    more than we need.  */
   if (contract_any_deferred_p (src_contracts))
     {
       copy_deferred_contracts(srcdecl, destdecl);
