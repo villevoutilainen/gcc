@@ -96,3 +96,13 @@ struct NonTrivial{
 void f(const NonTrivial s) pre(s.x >0);
 void f(const NonTrivial g) {};
 void f(const NonTrivial t) pre(t.x >0);
+
+double sqrt(const double x)
+  post( r : r >= 0 );
+
+
+double sqrt(const double x)
+  post( r : r >= 0)
+{
+  return x;
+}
