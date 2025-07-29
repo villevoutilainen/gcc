@@ -3054,10 +3054,7 @@ duplicate_decls (tree newdecl, tree olddecl, bool hiding, bool was_hidden)
       if (! types_match || new_defines_function)
 	{
 
-	  /* Update the contracts to reflect the new parameter names.
-	     Old comment referred to issues when newdecl is from a prior
-	     friend decl with no argument names, see
-	     modules/contracts-tpl-friend-1).  */
+	  /* Update the contracts to reflect the new parameter names. */
 	  update_contract_arguments(newdecl, olddecl);
 
 	  /* These need to be copied so that the names are available.
