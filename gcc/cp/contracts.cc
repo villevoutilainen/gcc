@@ -889,26 +889,6 @@ cp_contract_assertion_p (const_tree attr)
     && TREE_CODE (CONTRACT_STATEMENT (attr)) == ASSERTION_STMT;
 }
 
-static tree find_first_non_contract (tree attributes)
-{
-  tree head = attributes;
-  tree p = find_contract (attributes);
-
-  /* There are no contracts.  */
-  if (!p)
-    return head;
-
-  /* There are leading contracts.  */
-  if (p == head)
-    {
-      while (cxx_contract_attribute_p (p))
-	p = TREE_CHAIN (p);
-      head = p;
-    }
-
-  return head;
-}
-
 /* Remove contract attributes from decl FNDECL. Returns the
  removed contracts. */
 
