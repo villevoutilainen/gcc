@@ -1861,7 +1861,7 @@ duplicate_decls (tree newdecl, tree olddecl, bool hiding, bool was_hidden)
 	     for built-ins which have not been explicitly declared,
 	     for exception lists, etc...  */
 
-	  /* contracts are currently in the attribute tree. We do not handle
+	  /* Contracts are currently in the attribute tree. We do not handle
 	     them here because we assume built-ins don't have contracts.  */
 	  gcc_assert(!flag_contracts ||
 		     ! (DECL_CONTRACTS(newdecl) || DECL_CONTRACTS(olddecl)));

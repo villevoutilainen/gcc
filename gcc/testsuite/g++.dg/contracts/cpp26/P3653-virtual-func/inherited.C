@@ -63,7 +63,7 @@ struct Base3
 
 struct Child0 : Base1
 {
-  virtual int f1(const int i) pre inherited (Base1) pre(checkC());
+  virtual int f1(const int i) pre inherited (Base1) pre(checkC()) post(r: r>0);
   virtual int f2(const int i) post inherited (Base1){ return 1;}
 };
 

@@ -3422,8 +3422,9 @@ p2900_check_redecl_contract (tree newdecl, tree olddecl)
 	   || contract_any_deferred_p (new_contracts))
     {
       /* TODO: ignore these and figure out how to process them later.  */
-      /* Note that an in class friend declaration has deferred contracts, but out
-	 of class friend declaration doesn't. */
+      /* Note that a friend declaration has deferred contracts, but the
+	 declaration of the same function outside the class definition
+	 doesn't.  */
     }
   else
     {
@@ -3478,11 +3479,11 @@ cxx2a_check_redecl_contract (tree newdecl, tree olddecl)
 	  && contract_any_deferred_p (new_contracts)
 	  && DECL_UNIQUE_FRIEND_P (newdecl))
 	{
-	  /* Newdecl's contracts are still DEFERRED_PARSE, and we're about to
-	     collapse it into olddecl, so stash away olddecl's contracts for
+	  /* The contracts of newdecl are still DEFERRED_PARSE, and we're about
+	     to collapse it into olddecl, so stash away olddecl's contracts for
 	     later comparison.  */
 	  defer_guarded_contract_match (olddecl, olddecl, old_contracts);
-	  /* put the defered contracts on the olddecl so we parse it when
+	  /* Put the defered contracts on the olddecl so we parse it when
 	     we can.  */
 	  copy_deferred_contracts(newdecl, olddecl);
 	}
@@ -3597,7 +3598,7 @@ void update_contract_arguments(tree srcdecl, tree destdecl)
     does not have contracts. Is this is the case, first apply contracts
     to src.
    */
-  if(!src_contracts)
+  if (!src_contracts)
     {
       if (contract_any_deferred_p (dest_contracts))
 	{
