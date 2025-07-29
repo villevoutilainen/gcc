@@ -3491,8 +3491,9 @@ cxx2a_check_redecl_contract (tree newdecl, tree olddecl)
 	  || contract_any_deferred_p (new_contracts))
 	  {
 	  /* TODO: ignore these and figure out how to process them later.  */
-	  /* Note that a in class friend declaration has deferred contracts, but out
-	   * of class friend declaration doesn't. */
+	  /* Note that a friend declaration has deferred contracts, but the
+	     declaration of the same function outside the class definition
+	     doesn't.  */
 	  }
       else
 	match_contract_conditions (old_loc, old_contracts, new_loc,
