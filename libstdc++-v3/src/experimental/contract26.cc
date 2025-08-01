@@ -193,9 +193,8 @@ void handle_observed_contract_violation(
   std::terminate();
 }
 
-}
-}
-
+} // contracts
+} // std
 
 #if _GLIBCXX_INLINE_VERSION
 // The compiler expects the contract_violation class to be in an unversioned
