@@ -654,6 +654,13 @@ namespace __cxxabiv1
   void
   __cxa_free_dependent_exception(__cxa_dependent_exception*) _GLIBCXX_NOTHROW;
 
+  // Additional helpers for contracts.
+  void *__cxa_current_exception_object() throw();
+
+  void *__cxa_current_primary_exception() throw();
+  void __cxa_increment_exception_refcount(void *);
+  void __cxa_decrement_exception_refcount(void *);
+
   } // extern "C"
 
   // A magic placeholder class that can be caught by reference
