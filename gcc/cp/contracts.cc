@@ -2051,7 +2051,7 @@ get_p9600_contract_violation_fields ()
     detection_mode _M_detection_mode;
     const char* _M_comment;
     std::source_location _M_source_location;
-    void *_M_ref_counted_except_obj;
+    void *_M_current_except_obj;
     __vendor_ext* _M_ext;
   };
     If this changes, also update the initializer in
@@ -2071,7 +2071,7 @@ get_p9600_contract_violation_fields ()
 			 "_M_detection_mode",
 			 "_M_comment",
 			 "_M_source_location",
-			 "_M_ref_counted_except_obj",
+			 "_M_current_except_obj",
 			 "_M_ext",
 			};
   unsigned n = 0;
@@ -3781,17 +3781,17 @@ emit_contract_wrapper_func (bool done)
   return more;
 }
 
-static GTY(()) tree get_rc_ex_o = NULL_TREE;
+static GTY(()) tree get_c_ex_o = NULL_TREE;
 
 static tree
-get__cxa_current_primary_exception_decl ()
+get__cxa_current_exception_obj_decl ()
 {
-  if (get_rc_ex_o)
-    return get_rc_ex_o;
+  if (get_c_ex_o)
+    return get_c_ex_o;
 
   auto module_kind_override = make_temp_override
     (module_kind, module_kind & ~(MK_PURVIEW | MK_ATTACH | MK_EXPORTING));
-  tree fnname = get_identifier ("__cxa_current_primary_exception");
+  tree fnname = get_identifier ("__cxa_current_exception_object");
   tree l = lookup_qualified_name (global_namespace, fnname,
 				  LOOK_want::HIDDEN_FRIEND);
   for (tree f: lkp_range (l))
@@ -3800,16 +3800,17 @@ get__cxa_current_primary_exception_decl ()
 	  tree parms = TYPE_ARG_TYPES (TREE_TYPE (f));
 	  if (remaining_arguments (parms) != 0)
 	    continue;
-	  get_rc_ex_o = f;
+	  get_c_ex_o = f;
 	  return f;
 	}
 
   tree fntype = build_function_type_list (ptr_type_node, NULL_TREE);
   push_nested_namespace (global_namespace);
   tree fndecl
-    = build_library_fn_ptr ("__cxa_current_primary_exception", fntype, ECF_NOTHROW);
+    = build_library_fn_ptr ("__cxa_current_exception_object", fntype, ECF_NOTHROW);
   pushdecl_namespace_level (fndecl, /*hiding*/true);
   pop_nested_namespace (global_namespace);
+  get_c_ex_o = fndecl;
   return fndecl;
 }
 
@@ -3899,11 +3900,11 @@ maybe_emit_violation_handler_wrappers ()
     build_int_cst (uint16_type_node, (uint16_t)CDM_EVAL_EXCEPTION),
     tf_warning_or_error);
   finish_expr_stmt (r);
-  memb = lookup_member (a_type, get_identifier ("_M_ref_counted_except_obj"),
+  memb = lookup_member (a_type, get_identifier ("_M_current_except_obj"),
 		     /*protect=*/1, /*want_type=*/0, tf_warning_or_error);
   r = build_class_member_access_expr (v2, memb, NULL_TREE, false,
 				      tf_warning_or_error);
-  tree call = get__cxa_current_primary_exception_decl ();
+  tree call = get__cxa_current_exception_obj_decl ();
   call = build_call_n (call, 0);
   r = cp_build_modify_expr (loc, r, NOP_EXPR, call, tf_warning_or_error);
   finish_expr_stmt (r);
