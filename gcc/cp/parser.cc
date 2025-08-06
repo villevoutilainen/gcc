@@ -32338,9 +32338,13 @@ void cp_parser_late_contract_condition (cp_parser *parser,
   cp_expr parsed_condition = cp_parser_conditional_expression (parser);
   /* Commit to changes.  */
   update_late_contract (contract, result, parsed_condition);
-  /* Leave our temporary scope for the postcondition result.  */
   if (r_ident)
     --processing_template_decl;
+
+  /* Rebuild the postcondition since we didn't do it in grokfndecl. */
+  rebuild_postconditions(fn);
+
+  /* Leave our temporary scope for the postcondition result.  */
   processing_postcondition = old_pc;
   should_constify_contract = old_const;
   gcc_checking_assert (scope_chain && scope_chain->bindings
@@ -32415,9 +32419,7 @@ cp_parser_inherited_contract_base (cp_parser *parser, tree fndecl,
     /* We're inheriting basefn's contracts; create a copy of them but
      * replace references to their parms to our parms.  */
 
-    base_contracts = copy_and_remap_contracts (fndecl, base_fn,
-					       /* remap_result */false,
-					       remap_kind);
+    base_contracts = copy_and_remap_contracts (fndecl, base_fn, remap_kind);
   }
   // todo warn on empty contracts ?
   return base_contracts;
