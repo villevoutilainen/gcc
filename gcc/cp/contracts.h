@@ -359,7 +359,7 @@ extern bool diagnose_misapplied_contracts	(tree);
 extern tree finish_contract_attribute		(tree, tree);
 extern tree invalidate_contract			(tree);
 extern bool all_attributes_are_contracts_p	(tree);
-extern tree copy_and_remap_contracts		(tree, tree, bool, contract_match_kind);
+extern tree copy_and_remap_contracts		(tree, tree, contract_match_kind);
 extern void start_function_contracts		(tree);
 extern void maybe_apply_function_contracts	(tree);
 extern void finish_function_contracts		(tree);

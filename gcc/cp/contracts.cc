@@ -832,8 +832,8 @@ finish_contract_attribute (tree identifier, tree contract)
      TODO: I'm not sure this is strictly necessary. It's going to be marked as
      such by a subroutine of cplus_decl_attributes. */
   tree condition = CONTRACT_CONDITION (contract);
-  if (TREE_CODE (condition) == DEFERRED_PARSE
-      || value_dependent_expression_p (condition))
+  if (TREE_CODE (condition) != DEFERRED_PARSE
+      && value_dependent_expression_p (condition))
     ATTR_IS_DEPENDENT (attribute) = true;
 
   return attribute;
@@ -1037,7 +1037,6 @@ remap_contract (tree src, tree dst, tree contract, bool duplicate_p)
   int src_num_artificial_args = num_artificial_parms_for (src);
   int dst_num_artificial_args = num_artificial_parms_for (dst);
 
-
   for (tree sp = DECL_ARGUMENTS (src), dp = DECL_ARGUMENTS (dst);
        sp || dp;
        sp = DECL_CHAIN (sp), dp = DECL_CHAIN (dp))
@@ -1077,6 +1076,7 @@ remap_contract (tree src, tree dst, tree contract, bool duplicate_p)
 	}
 
     }
+
   if (!do_remap)
     return;
 
@@ -3194,16 +3194,10 @@ maybe_apply_function_contracts (tree fndecl)
 }
 
 /* Returns a copy of SOURCE contracts where any references to SOURCE's
-   PARM_DECLs have been rewritten to the corresponding PARM_DECL in DEST. If
-   remap_result is true, result identifier is also re-mapped.
-   C++20 version used this function to remap contracts on virtual functions
-   from base class to derived class. In such a case postcondition identifier
-   wasn't remapped. Caller side wrapper functions need to remap the result
-   identifier.
-   If remap_post is false, postconditions are dropped from the destination.  */
+   PARM_DECLs have been rewritten to the corresponding PARM_DECL in DEST.  */
 
 tree
-copy_and_remap_contracts (tree dest, tree source, bool remap_result = true,
+copy_and_remap_contracts (tree dest, tree source,
 			  contract_match_kind remap_kind = cmk_all )
 {
   tree last = NULL_TREE, contract_attrs = NULL_TREE;
@@ -3224,12 +3218,14 @@ copy_and_remap_contracts (tree dest, tree source, bool remap_result = true,
       remap_contract (source, dest, CONTRACT_STATEMENT (c),
 		      /*duplicate_p=*/true);
 
-      if (remap_result
-	  && (TREE_CODE (CONTRACT_STATEMENT (c)) == POSTCONDITION_STMT))
+      if (TREE_CODE (CONTRACT_STATEMENT (c)) == POSTCONDITION_STMT)
 	{
 	  tree oldvar = POSTCONDITION_IDENTIFIER (CONTRACT_STATEMENT (c));
-	  if (oldvar)
+	  if (oldvar && oldvar!=error_mark_node)
+	    {
+	      tree type = copy_node (oldvar);
 	      DECL_CONTEXT (oldvar) = dest;
+	    }
 	}
 
       CONTRACT_COMMENT (CONTRACT_STATEMENT (c))
@@ -3522,10 +3518,8 @@ cxx2a_check_redecl_contract (tree newdecl, tree olddecl)
       if (contract_any_deferred_p (new_contracts))
 	copy_deferred_contracts(newdecl, olddecl);
       else
-	set_decl_contracts (olddecl,
-			  copy_and_remap_contracts (olddecl, newdecl,
-						    /*remap_result*/true,
-						    cmk_all));
+	set_decl_contracts (
+	    olddecl, copy_and_remap_contracts (olddecl, newdecl, cmk_all));
 
     }
 }
@@ -3572,7 +3566,6 @@ void update_contract_arguments(tree srcdecl, tree destdecl)
 	  DECL_ARGUMENTS (destdecl) = DECL_ARGUMENTS (srcdecl);
 	  set_decl_contracts (destdecl,
 			      copy_and_remap_contracts (destdecl, srcdecl,
-							/*remap_result*/true,
 							cmk_all));
 	  DECL_ARGUMENTS (destdecl) = tmp_arguments;
 	}
@@ -3594,8 +3587,7 @@ void update_contract_arguments(tree srcdecl, tree destdecl)
       else
       	set_decl_contracts (srcdecl,
       			    copy_and_remap_contracts (srcdecl, destdecl,
-            						    /*remap_result*/true,
-            						    cmk_all));
+						      cmk_all));
     }
 
   /* For deferred contracts, we currently copy the tokens from the redeclaration
@@ -3614,7 +3606,6 @@ void update_contract_arguments(tree srcdecl, tree destdecl)
       DECL_ARGUMENTS (destdecl) = DECL_ARGUMENTS (srcdecl);
       set_decl_contracts (destdecl,
 			  copy_and_remap_contracts (destdecl, srcdecl,
-						    /*remap_result*/true,
 						    cmk_all));
       DECL_ARGUMENTS (destdecl) = tmp_arguments;
     }
@@ -3703,8 +3694,7 @@ define_contract_wrapper_func (const tree& fndecl, const tree& wrapdecl, void*)
 
   /* FIXME: Maybe we should check if fndecl is still dependent?  */
 
-  /* FIXME: We should not really have any.  */
-  remove_contract_attributes (wrapdecl);
+  gcc_checking_assert(!DECL_CONTRACTS (wrapdecl));
   bool is_virtual = DECL_IOBJ_MEMBER_FUNCTION_P (fndecl)
 		    && DECL_VIRTUAL_P (fndecl);
   /* We check postconditions on virtual function calls or if postcondition
@@ -3719,8 +3709,7 @@ define_contract_wrapper_func (const tree& fndecl, const tree& wrapdecl, void*)
      when the wrapper is around a clone.  */
   set_decl_contracts( wrapdecl,
 		      copy_and_remap_contracts (wrapdecl, DECL_ORIGIN (fndecl),
-				       /*remap_result*/true,
-				       check_post? cmk_all : cmk_pre));
+						check_post? cmk_all : cmk_pre));
 
   start_preparsed_function (wrapdecl, /*DECL_ATTRIBUTES*/NULL_TREE,
 			    SF_DEFAULT | SF_PRE_PARSED);

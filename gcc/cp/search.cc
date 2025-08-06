@@ -2196,7 +2196,6 @@ check_final_overrider (tree overrider, tree basefn)
 	set_decl_contracts( overrider,
 			    copy_and_remap_contracts (overrider,
 						      basefn,
-						      /*remap_result*/false,
 						      cmk_all));
       }
     else if (DECL_HAS_CONTRACTS_P (basefn) && DECL_HAS_CONTRACTS_P (overrider))
@@ -2257,10 +2256,8 @@ check_override_contracts (tree fndecl)
 	{
 	  /* We're inheriting basefn's contracts; create a copy of them but
 	   * replace references to their parms to our parms.  */
-	  tree base_contracts = copy_and_remap_contracts (
-	      fndecl, basefn,
-	      /* remap_result */false,
-	      cmk_all);
+	  tree base_contracts = copy_and_remap_contracts (fndecl, basefn,
+							  cmk_all);
 	  tree contracts = chainon (DECL_CONTRACTS (fndecl), base_contracts);
 
 	  set_decl_contracts (fndecl, contracts);
