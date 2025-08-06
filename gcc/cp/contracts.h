@@ -363,7 +363,7 @@ extern tree get_precondition_function		(tree);
 extern tree get_postcondition_function		(tree);
 extern tree get_contract_wrapper_function	(tree);
 
-extern tree copy_and_remap_contracts		(tree, tree, bool, contract_match_kind);
+extern tree copy_and_remap_contracts		(tree, tree, contract_match_kind);
 extern void start_function_contracts		(tree);
 extern void maybe_apply_function_contracts	(tree);
 extern void finish_function_contracts		(tree);
