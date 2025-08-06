@@ -1037,6 +1037,7 @@ remap_contract (tree src, tree dst, tree contract, bool duplicate_p)
   int src_num_artificial_args = num_artificial_parms_for (src);
   int dst_num_artificial_args = num_artificial_parms_for (dst);
 
+
   for (tree sp = DECL_ARGUMENTS (src), dp = DECL_ARGUMENTS (dst);
        sp || dp;
        sp = DECL_CHAIN (sp), dp = DECL_CHAIN (dp))
