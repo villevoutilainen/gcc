@@ -2248,13 +2248,13 @@ get_evaluation_semantic (tree contract)
       return CES_OBSERVE;
     }
 
-  /* Used when building P2900R10 contract_violation object. Note that we do not
-     build such objects unless we are going to use them - so that we should not
-     get asked for 'ignore' or 'quick'.  */
+  /* The p2900 cases.  */
   switch (semantic)
     {
       default:
 	gcc_unreachable ();
+      case CCS_IGNORE:
+	return CES_IGNORE;
       case CCS_OBSERVE:
 	return CES_OBSERVE;
       case CCS_ENFORCE:
