@@ -3781,8 +3781,16 @@ get__cxa_current_exception_obj_decl ()
 
   auto module_kind_override = make_temp_override
     (module_kind, module_kind & ~(MK_PURVIEW | MK_ATTACH | MK_EXPORTING));
+
   tree fnname = get_identifier ("__cxa_current_exception_object");
-  tree l = lookup_qualified_name (global_namespace, fnname,
+  if (!abi_node)
+    {
+      push_namespace (get_identifier ("__cxxabiv1"));
+      abi_node = current_namespace;
+      pop_namespace ();
+    }
+
+  tree l = lookup_qualified_name (abi_node, fnname,
 				  LOOK_want::HIDDEN_FRIEND);
   for (tree f: lkp_range (l))
     if (TREE_CODE (f) == FUNCTION_DECL)
@@ -3795,11 +3803,11 @@ get__cxa_current_exception_obj_decl ()
 	}
 
   tree fntype = build_function_type_list (ptr_type_node, NULL_TREE);
-  push_nested_namespace (global_namespace);
+  push_nested_namespace (abi_node);
   tree fndecl
     = build_library_fn_ptr ("__cxa_current_exception_object", fntype, ECF_NOTHROW);
   pushdecl_namespace_level (fndecl, /*hiding*/true);
-  pop_nested_namespace (global_namespace);
+  pop_nested_namespace (abi_node);
   get_c_ex_o = fndecl;
   return fndecl;
 }
