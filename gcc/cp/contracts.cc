@@ -2789,7 +2789,8 @@ maybe_reject_param_in_postcondition (tree decl, location_t location)
     {
       set_parm_used_in_post (decl);
 
-      if (!CP_TYPE_CONST_P(TREE_TYPE (decl)) && !TREE_READONLY(decl))
+      if (!dependent_type_p(TREE_TYPE (decl)) &&
+	  !CP_TYPE_CONST_P(TREE_TYPE (decl)) && !TREE_READONLY(decl))
 	{
 	  error_at (location,
 		    "a value parameter used in a postcondition must be const");
@@ -2799,20 +2800,25 @@ maybe_reject_param_in_postcondition (tree decl, location_t location)
 }
 
 /* Check if parameters used in postconditions are const qualified on
-   a redeclaration that does not specify contracts.  */
+   a redeclaration that does not specify contracts or on an instantiation
+   of a function template.  */
 
 void
 check_param_in_redecl (tree olddecl, tree newdecl)
 {
+  if (!DECL_CONTRACTS(olddecl)) return;
+
   tree t1 = FUNCTION_FIRST_USER_PARM(olddecl);
   tree t2 = FUNCTION_FIRST_USER_PARM(newdecl);
+
   for (; t1 && t1 != void_list_node;
   t1 = TREE_CHAIN (t1), t2 = TREE_CHAIN (t2))
     {
       if (parm_used_in_post_p(t1))
 	{
 	  set_parm_used_in_post (t2);
-	  if (!CP_TYPE_CONST_P(TREE_TYPE (t2)) && !TREE_READONLY(t2))
+	  if (!dependent_type_p(TREE_TYPE (t2))
+	      && !CP_TYPE_CONST_P(TREE_TYPE (t2)) && !TREE_READONLY(t2))
 	    {
 	      error_at (DECL_SOURCE_LOCATION(t2),
 	      "value parameter %qE used in a postcondition must be const", t2);
