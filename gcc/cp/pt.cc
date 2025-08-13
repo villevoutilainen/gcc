@@ -15188,7 +15188,7 @@ tsubst_function_decl (tree t, tree args, tsubst_flags_t complain,
   if (tree ci = get_constraints (t))
     set_constraints (r, ci);
 
-  check_param_in_redecl (t,r);
+  check_postconditions_in_redecl (t,r);
 
   if (DECL_FRIEND_CONTEXT (t))
     SET_DECL_FRIEND_CONTEXT (r,
@@ -22808,7 +22808,7 @@ tsubst_expr (tree t, tree args, tsubst_flags_t complain, tree in_decl)
 	  /* force_paren_expr can also create a VIEW_CONVERT_EXPR.  */
 	  RETURN (finish_parenthesized_expr (op));
 
-	maybe_reject_param_in_postcondition (op, EXPR_LOCATION (t));
+	check_param_in_postcondition (op, EXPR_LOCATION (t));
 
 	if (flag_contracts_nonattr && should_constify_contract
 	    && processing_contract_condition)
