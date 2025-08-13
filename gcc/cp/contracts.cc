@@ -2774,7 +2774,7 @@ constify_contract_access(tree decl)
    expression was found and is used for diagnostic purposes.  */
 
 void
-maybe_reject_param_in_postcondition (tree decl, location_t location)
+check_param_in_postcondition (tree decl, location_t location)
 {
   if (flag_contracts_nonattr
       && TREE_CODE (decl) == PARM_DECL
@@ -2805,7 +2805,7 @@ maybe_reject_param_in_postcondition (tree decl, location_t location)
    of a function template.  */
 
 void
-check_param_in_redecl (tree olddecl, tree newdecl)
+check_postconditions_in_redecl (tree olddecl, tree newdecl)
 {
   if (!DECL_CONTRACTS (olddecl)) return;
 
@@ -3392,7 +3392,7 @@ p2900_check_redecl_contract (tree newdecl, tree olddecl)
       /* We allow re-declarations to omit contracts declared on the initial decl.
        In fact, this is required if the conditions contain lambdas.  Check if
        all the parameters are correctly const qualified. */
-      check_param_in_redecl (olddecl, newdecl);
+      check_postconditions_in_redecl (olddecl, newdecl);
     }
   else if (old_contracts && new_contracts &&
       !contract_any_deferred_p (old_contracts)

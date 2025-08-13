@@ -2271,7 +2271,7 @@ check_override_contracts (tree fndecl)
 		      "overridden function is %qD", basefn);
 	    }
 
-	  check_param_in_redecl (basefn, fndecl);
+	  check_postconditions_in_redecl (basefn, fndecl);
 	}
     }
 }
