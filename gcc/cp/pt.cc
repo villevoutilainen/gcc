@@ -15180,7 +15180,7 @@ tsubst_function_decl (tree t, tree args, tsubst_flags_t complain,
   if (tree ci = get_constraints (t))
     set_constraints (r, ci);
 
-  check_param_in_redecl(t,r);
+  check_param_in_redecl (t,r);
 
   if (DECL_FRIEND_CONTEXT (t))
     SET_DECL_FRIEND_CONTEXT (r,
