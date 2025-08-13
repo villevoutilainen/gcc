@@ -372,8 +372,8 @@ extern void set_contract_functions		(tree, tree, tree);
 extern tree build_contract_check		(tree);
 
 extern tree constify_contract_access            (tree);
-extern void maybe_reject_param_in_postcondition (tree, location_t);
-extern void check_param_in_redecl 		(tree, tree);
+extern void check_param_in_postcondition 	(tree, location_t);
+extern void check_postconditions_in_redecl 	(tree, tree);
 extern tree view_as_const                       (tree);
 extern tree maybe_contract_wrap_call	        (tree, tree);
 extern bool emit_contract_wrapper_func          (bool);
