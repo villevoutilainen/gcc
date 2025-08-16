@@ -1156,16 +1156,13 @@ contract_attribute_valid_p (tree attribute)
   return contract_valid_p (TREE_VALUE (TREE_VALUE (attribute)));
 }
 
-/* Compare the contract conditions of OLD_ATTR and NEW_ATTR. Returns false
-   if the conditions are equivalent, and true otherwise.  */
+/* Compare the contract conditions of OLD_CONTRACT and NEW_CONTRACT.
+   Returns false if the conditions are equivalent, and true otherwise.  */
 
 static bool
-check_for_mismatched_contracts (tree old_attr, tree new_attr,
-			       contract_matching_context ctx)
+mismatched_contracts_p (tree old_contract, tree new_contract,
+			contract_matching_context ctx)
 {
-  tree old_contract = CONTRACT_STATEMENT (old_attr);
-  tree new_contract = CONTRACT_STATEMENT (new_attr);
-
   /* Different kinds of contracts do not match.  */
   if (TREE_CODE (old_contract) != TREE_CODE (new_contract))
     {
@@ -1216,7 +1213,7 @@ check_for_mismatched_contracts (tree old_attr, tree new_attr,
    if the contracts match, and false if they differ.  */
 
 bool
-match_contract_conditions (location_t oldloc, tree old_attrs,
+match_contract_attributes (location_t oldloc, tree old_attrs,
 			   location_t newloc, tree new_attrs,
 			   contract_matching_context ctx)
 {
@@ -1233,7 +1230,8 @@ match_contract_conditions (location_t oldloc, tree old_attrs,
 	  || !contract_attribute_valid_p (old_attrs))
 	return false;
 
-      if (check_for_mismatched_contracts (old_attrs, new_attrs, ctx))
+      if (mismatched_contracts_p (CONTRACT_STATEMENT (old_attrs),
+				  CONTRACT_STATEMENT (new_attrs), ctx))
 	return false;
       old_attrs = NEXT_CONTRACT_ATTR (old_attrs);
       new_attrs = NEXT_CONTRACT_ATTR (new_attrs);
@@ -1322,7 +1320,7 @@ match_deferred_contracts (tree fndecl)
 	 This means the diagnostic may claim override even in case oF
 	 re declarations.  */
       tree base = TREE_PURPOSE (pending);
-      match_contract_conditions (new_loc, new_contracts,
+      match_contract_attributes (new_loc, new_contracts,
 				 old_loc, old_contracts,
 				 base ? cmc_override : cmc_declaration);
     }
@@ -3420,7 +3418,7 @@ p2900_check_redecl_contract (tree newdecl, tree olddecl)
       location_t cont_end = get_contract_end_loc (new_contracts);
       cont_end = make_location (new_loc, new_loc, cont_end);
       /* We have two sets - they should match or we issue a diagnostic.  */
-      match_contract_conditions (rd.note_loc, rd.original_contracts, cont_end,
+      match_contract_attributes (rd.note_loc, rd.original_contracts, cont_end,
 				 new_contracts, cmc_declaration);
     }
 
@@ -3485,7 +3483,7 @@ cxx2a_check_redecl_contract (tree newdecl, tree olddecl)
 	     doesn't.  */
 	  }
       else
-	match_contract_conditions (old_loc, old_contracts, new_loc,
+	match_contract_attributes (old_loc, old_contracts, new_loc,
 				   new_contracts, cmc_declaration);
 
       return;
