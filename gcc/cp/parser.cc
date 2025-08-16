@@ -32481,7 +32481,7 @@ void cp_parser_late_contracts (cp_parser *parser,
 {
 
   tree new_contracts = NULL_TREE;
-  for (tree a = DECL_CONTRACTS (fndecl); a; a = CONTRACT_CHAIN (a))
+  for (tree a = DECL_CONTRACT_ATTRS (fndecl); a; a = NEXT_CONTRACT_ATTR (a))
     {
 	tree contract = TREE_VALUE(TREE_VALUE (a));
 
