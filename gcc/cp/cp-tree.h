@@ -6828,7 +6828,8 @@ struct cp_declarator {
       /* The trailing requires-clause, if any.  */
       tree requires_clause;
       /* The function-contract-specifier-seq, if any.  */
-      tree contracts;
+      tree contract_specifiers;
+      /* The position of the opening brace for a function definition.  */
       location_t parens_loc;
     } function;
     /* For arrays.  */
