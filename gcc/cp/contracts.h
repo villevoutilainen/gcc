@@ -256,15 +256,15 @@ enum contract_match_kind
 
 /* True iff the FUNCTION_DECL NODE currently has any contracts.  */
 #define DECL_HAS_CONTRACTS_P(NODE) \
-  (DECL_CONTRACTS (NODE) != NULL_TREE)
+  (DECL_CONTRACT_ATTRS (NODE) != NULL_TREE)
 
 /* For a FUNCTION_DECL of a guarded function, this points to a list of the pre
    and post contracts of the first decl of NODE in original order. */
-#define DECL_CONTRACTS(NODE) \
+#define DECL_CONTRACT_ATTRS(NODE) \
   (find_contract (DECL_ATTRIBUTES (NODE)))
 
 /* The next contract (if any) after this one in an attribute list.  */
-#define CONTRACT_CHAIN(NODE) \
+#define NEXT_CONTRACT_ATTR(NODE) \
   (find_contract (TREE_CHAIN (NODE)))
 
 /* The wrapper of the original source location of a list of contracts.  */

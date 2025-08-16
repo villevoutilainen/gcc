@@ -2206,7 +2206,7 @@ check_final_overrider (tree overrider, tree basefn)
 
 	   Note that OVERRIDER's contracts will have been fully parsed at the
 	   point the deferred match is run.  */
-	defer_guarded_contract_match (overrider, basefn, DECL_CONTRACTS (basefn));
+	defer_guarded_contract_match (overrider, basefn, DECL_CONTRACT_ATTRS (basefn));
       }
   }
   if (DECL_FINAL_P (basefn))
@@ -2258,7 +2258,7 @@ check_override_contracts (tree fndecl)
 	   * replace references to their parms to our parms.  */
 	  tree base_contracts = copy_and_remap_contracts (fndecl, basefn,
 							  cmk_all);
-	  tree contracts = chainon (DECL_CONTRACTS (fndecl), base_contracts);
+	  tree contracts = chainon (DECL_CONTRACT_ATTRS (fndecl), base_contracts);
 
 	  set_decl_contracts (fndecl, contracts);
 

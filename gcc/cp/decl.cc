@@ -1864,7 +1864,7 @@ duplicate_decls (tree newdecl, tree olddecl, bool hiding, bool was_hidden)
 	  /* Contracts are currently in the attribute tree. We do not handle
 	     them here because we assume built-ins don't have contracts.  */
 	  gcc_assert(!flag_contracts ||
-		     ! (DECL_CONTRACTS(newdecl) || DECL_CONTRACTS(olddecl)));
+		     ! (DECL_CONTRACT_ATTRS(newdecl) || DECL_CONTRACT_ATTRS(olddecl)));
 
 	  tree type = TREE_TYPE (newdecl);
 	  tree attribs = (*targetm.merge_type_attributes)
@@ -6040,8 +6040,8 @@ start_decl (const cp_declarator *declarator,
       && !processing_template_decl
       && DECL_RESULT (decl)
       && is_auto (TREE_TYPE (DECL_RESULT (decl))))
-    for (tree contract = DECL_CONTRACTS (decl); contract;
-	 contract = CONTRACT_CHAIN (contract))
+    for (tree contract = DECL_CONTRACT_ATTRS (decl); contract;
+	 contract = NEXT_CONTRACT_ATTR (contract))
       if (POSTCONDITION_P (CONTRACT_STATEMENT (contract))
 	  && POSTCONDITION_IDENTIFIER (CONTRACT_STATEMENT (contract)))
 	{

@@ -2357,7 +2357,7 @@ comdat_linkage (tree decl)
   if (flag_weak)
     {
       make_decl_one_only (decl, cxx_comdat_group (decl));
-      if (HAVE_COMDAT_GROUP && flag_contracts && DECL_CONTRACTS (decl))
+      if (HAVE_COMDAT_GROUP && flag_contracts && DECL_CONTRACT_ATTRS (decl))
 	{
 	  symtab_node *n = symtab_node::get (decl);
 	  if (tree pre = DECL_PRE_FN (decl))

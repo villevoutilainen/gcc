@@ -11103,9 +11103,9 @@ trees_out::fn_parms_init (tree fn)
   if (!streaming_p ())
     {
       /* We must walk contract attrs so the dependency graph is complete. */
-      for (tree contract = DECL_CONTRACTS (fn);
+      for (tree contract = DECL_CONTRACT_ATTRS (fn);
 	  contract;
-	  contract = CONTRACT_CHAIN (contract))
+	  contract = NEXT_CONTRACT_ATTR (contract))
 	tree_node (contract);
     }
 
