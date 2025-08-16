@@ -2021,7 +2021,7 @@ make_call_declarator (cp_declarator *target,
 		      tree exception_specification,
 		      tree late_return_type,
 		      tree requires_clause,
-		      tree contracts,
+		      tree contract_specifiers,
 		      tree std_attrs,
 		      location_t parens_loc)
 {
@@ -2037,7 +2037,7 @@ make_call_declarator (cp_declarator *target,
   declarator->u.function.exception_specification = exception_specification;
   declarator->u.function.late_return_type = late_return_type;
   declarator->u.function.requires_clause = requires_clause;
-  declarator->u.function.contracts = contracts;
+  declarator->u.function.contract_specifiers = contract_specifiers;
   declarator->u.function.parens_loc = parens_loc;
   if (target)
     {
@@ -12725,9 +12725,9 @@ cp_parser_lambda_declarator_opt (cp_parser* parser, tree lambda_expr,
       return_type = cp_parser_trailing_type_id (parser);
     }
 
-  tree contracts = NULL_TREE;
+  tree contract_specifiers = NULL_TREE;
   if (flag_contracts_nonattr)
-    contracts = cp_parser_function_contract_specifier_seq (parser);
+    contract_specifiers = cp_parser_function_contract_specifier_seq (parser);
 
   /* Also allow GNU attributes at the very end of the declaration, the usual
      place for GNU attributes.  */
@@ -12795,7 +12795,7 @@ cp_parser_lambda_declarator_opt (cp_parser* parser, tree lambda_expr,
 				       exception_spec,
 				       return_type,
 				       trailing_requires_clause,
-				       contracts,
+				       contract_specifiers,
 				       std_attrs,
 				       UNKNOWN_LOCATION);
 
@@ -25485,9 +25485,10 @@ cp_parser_direct_declarator (cp_parser* parser,
 		  /* Parse the virt-specifier-seq.  */
 		  virt_specifiers = cp_parser_virt_specifier_seq_opt (parser);
 
-		  tree contracts = NULL_TREE;
+		  tree contract_specifiers = NULL_TREE;
 		  if (flag_contracts_nonattr)
-		    contracts = cp_parser_function_contract_specifier_seq (parser);
+		    contract_specifiers
+		      = cp_parser_function_contract_specifier_seq (parser);
 		  /* ??? should we accept std-attr contracts here too? */
 
 		  location_t parens_loc = make_location (parens_start,
@@ -25503,7 +25504,7 @@ cp_parser_direct_declarator (cp_parser* parser,
 						     exception_specification,
 						     late_return,
 						     requires_clause,
-						     contracts,
+						     contract_specifiers,
 						     std_attrs,
 						     parens_loc);
 		  declarator->attributes = gnu_attrs;
@@ -32848,8 +32849,7 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
     attributed-identifier :
 
    Return void_list_node if the current token doesn't start a
-   contract specifier.
-*/
+   contract specifier.  */
 
 static tree
 cp_parser_function_contract_specifier (cp_parser *parser)
@@ -32865,11 +32865,8 @@ cp_parser_function_contract_specifier (cp_parser *parser)
   if (!contract_name
       || !(is_attribute_p ("pre", contract_name)
 	   || is_attribute_p ("post", contract_name)))
-    /* If we don't have a valid contract start, return a marker.  */
-    return void_list_node;
-
-  // this does not currently handle attribute-specifier-seqopt for
-  // a natural contract syntax.
+    /* If we don't have a valid contract start, we are done.  */
+    return NULL_TREE;
 
   cp_lexer_consume_token (parser->lexer);
   location_t loc = token->location;
@@ -33038,16 +33035,15 @@ cp_parser_function_contract_specifier (cp_parser *parser)
   if (contract != error_mark_node)
     set_contract_const (contract, should_constify);
 
-  return finish_contract_attribute (contract_name, contract);
+  return contract;
 }
 
 /* Parse a natural syntax contract specifier seq. Returns a list of
-preconditions and postconditions in an attribute tree. Only handles
-pre and post conditions - contract_assert is handled separately.
+   preconditions and postconditions in an attribute tree.
 
-    function-contract-specifier-seq :
-      function-contract-specifier function-contract-specifier-seq
-*/
+  function-contract-specifier-seq :
+    function-contract-specifier function-contract-specifier-seq.  */
+
 static tree
 cp_parser_function_contract_specifier_seq (cp_parser *parser)
 {
@@ -33055,16 +33051,21 @@ cp_parser_function_contract_specifier_seq (cp_parser *parser)
 
   while (true)
     {
-      tree attr_spec = cp_parser_function_contract_specifier (parser);
+      tree contract_spec = cp_parser_function_contract_specifier (parser);
 
-      // If there are no more contracts, bail.
-      if (attr_spec == void_list_node)
+      /* If there are no more contracts, done.  */
+      if (contract_spec == NULL_TREE)
 	break;
 
-      // Ignore any erroneous contracts and attempt to continue parsing.
-      if (attr_spec == error_mark_node)
+      /* Ignore any erroneous contracts and attempt to continue parsing.  */
+      if (contract_spec == error_mark_node)
 	continue;
 
+      /* For now, turn this into an attribute.  */
+      tree contract_name = TREE_CODE (contract_spec) == PRECONDITION_STMT
+			   ? get_identifier ("pre")
+			   : get_identifier ("post");
+      tree attr_spec = finish_contract_attribute (contract_name, contract_spec);
       /* Arrange to build the list in the correct order.  */
       if (attr_specs)
 	attr_specs = attr_chainon (attr_spec, attr_specs);

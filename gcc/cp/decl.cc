@@ -15365,7 +15365,9 @@ grokdeclarator (const cp_declarator *declarator,
 
 	    /* Actually apply the contract attributes to the declaration.  */
 	    if (flag_contracts_nonattr)
-	      returned_attrs = chainon (returned_attrs, declarator->u.function.contracts);
+	      returned_attrs
+		= chainon (returned_attrs,
+			   declarator->u.function.contract_specifiers);
 	    /* Allow mixing std-attribute style and p2900 syntax.  */
 	    for (tree *p = &attrs; *p;)
 	      {
