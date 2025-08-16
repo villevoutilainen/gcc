@@ -12249,7 +12249,7 @@ tsubst_contract_attributes (tree attributes, tree decl, tree args,
 {
   tree subst_contract_list = NULL_TREE;
   for (tree attr = find_contract (attributes); attr;
-      attr = CONTRACT_CHAIN (attr))
+      attr = NEXT_CONTRACT_ATTR (attr))
   {
       tree nc = copy_node (attr);
       tsubst_contract_attribute (decl, nc, args, complain, in_decl);
@@ -27746,7 +27746,7 @@ regenerate_decl_from_template (tree decl, tree tmpl, tree args)
 	    DECL_CONTEXT (t) = decl;
 	}
 
-      if (DECL_CONTRACTS (decl))
+      if (DECL_CONTRACT_ATTRS (decl))
 	{
 	  tree attributes = DECL_ATTRIBUTES (decl);
 	  /* If we're regenerating a specialization, the contracts will have
