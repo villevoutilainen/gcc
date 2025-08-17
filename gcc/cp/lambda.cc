@@ -702,7 +702,7 @@ add_capture (tree lambda, tree id, tree orig_init, bool by_reference_p,
 
   /* Make member variable.  */
   member = build_decl (input_location, FIELD_DECL, name, type);
-  if (quals == capture_quals::qual_mutable)
+  if (quals == capture_quals::qual_mutable && !by_reference_p)
     DECL_MUTABLE_P (member) = 1;
 
   DECL_VLA_CAPTURE_P (member) = vla;
