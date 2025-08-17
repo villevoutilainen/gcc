@@ -12374,6 +12374,14 @@ cp_parser_lambda_declarator_opt (cp_parser* parser, tree lambda_expr,
   else if (cxx_dialect < cxx23)
     omitted_parms_loc = cp_lexer_peek_token (parser->lexer)->location;
 
+  bool lambda_declared_const = false;
+  /* If a lambda-specifier is const, remember that.  */
+  if (cp_lexer_next_token_is_keyword (parser->lexer, RID_CONST))
+    {
+      cp_lexer_consume_token (parser->lexer);
+      lambda_declared_const = true;
+    }
+
   /* [expr.prim.lambda.general]
      lambda-specifier:
 	consteval, constexpr, mutable, static
@@ -12385,6 +12393,10 @@ cp_parser_lambda_declarator_opt (cp_parser* parser, tree lambda_expr,
     cp_parser_decl_specifier_seq (parser,
 				  CP_PARSER_FLAGS_ONLY_MUTABLE_OR_CONSTEXPR,
 				  &lambda_specs, &declares_class_or_enum);
+
+  if (lambda_declared_const && lambda_specs.storage_class == sc_mutable)
+    error_at (lambda_specs.locations[ds_storage_class],
+	      "a lambda cannot be both const and mutable");
 
   /* [dcl.pre] For a consteval-block-declaration D, the expression E
      corresponding to D is:
