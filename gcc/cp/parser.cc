@@ -12835,7 +12835,7 @@ make_dummy_lambda_op ()
 				     VIRT_SPEC_UNSPECIFIED,
 				     REF_QUAL_NONE, NULL_TREE,
 				     NULL_TREE, NULL_TREE, NULL_TREE,
-				     NULL_TREE, UNKNOWN_LOCATION);
+				     NULL_TREE, NULL_TREE, UNKNOWN_LOCATION);
 
   tree fco = grokmethod (&return_type_specs, declarator, NULL_TREE);
   obstack_free (&declarator_obstack, p);
