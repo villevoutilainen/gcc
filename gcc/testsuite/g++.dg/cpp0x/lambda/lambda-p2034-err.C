@@ -144,3 +144,43 @@ void test13()
   f2(42);
   f3(42);
 }
+
+void test14()
+{
+  int x = 42;
+  const int y = 666;
+  auto z = [const x, mutable y] { // { dg-error "cannot be declared both .const. and .mutable." }
+    x = 666; // { dg-error "read-only variable" }
+    y = 42;
+  };
+}
+
+void test15()
+{
+  int x = 42;
+  const int y = 666;
+  auto z = [const x, mutable &y] {
+    x = 666; // { dg-error "read-only variable" }
+    y = 42;  // { dg-error "read-only reference" }
+  };
+}
+
+void test16()
+{
+  int x = 42;
+  const int y = 666;
+  auto z = [const x, mutable y]() mutable { // { dg-error "cannot be declared both .const. and .mutable." }
+    x = 666; // { dg-error "read-only variable" }
+    y = 42;
+  };
+}
+
+void test17()
+{
+  int x = 42;
+  const int y = 666;
+  auto z = [const x, mutable &y]() mutable {
+    x = 666; // { dg-error "read-only variable" }
+    y = 42;  // { dg-error "read-only reference" }
+  };
+}
