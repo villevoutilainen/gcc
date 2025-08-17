@@ -547,7 +547,7 @@ vla_capture_type (tree array_type)
 
 tree
 add_capture (tree lambda, tree id, tree orig_init, bool by_reference_p,
-	     bool explicit_init_p, unsigned *name_independent_cnt)
+	     bool explicit_init_p, unsigned *name_independent_cnt, capture_quals quals)
 {
   char *buf;
   tree type, member, name;
@@ -603,6 +603,14 @@ add_capture (tree lambda, tree id, tree orig_init, bool by_reference_p,
     {
       type = lambda_capture_field_type (initializer, explicit_init_p,
 					by_reference_p);
+      if (quals == capture_quals::qual_const)
+	{
+	  if (!by_reference_p)
+	    type = cp_build_qualified_type (type, TYPE_QUAL_CONST);
+	  else
+	    type = build_reference_type (cp_build_qualified_type (TREE_TYPE (type), TYPE_QUAL_CONST));
+	}
+
       if (type == error_mark_node)
 	return error_mark_node;
 
@@ -694,6 +702,9 @@ add_capture (tree lambda, tree id, tree orig_init, bool by_reference_p,
 
   /* Make member variable.  */
   member = build_decl (input_location, FIELD_DECL, name, type);
+  if (quals == capture_quals::qual_mutable)
+    DECL_MUTABLE_P (member) = 1;
+
   DECL_VLA_CAPTURE_P (member) = vla;
 
   if (!explicit_init_p)

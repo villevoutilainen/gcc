@@ -12006,6 +12006,18 @@ cp_parser_lambda_introducer (cp_parser* parser, tree lambda_expr)
       else
 	cp_parser_require (parser, CPP_COMMA, RT_COMMA);
 
+      capture_quals quals = capture_quals::none;
+      if (cp_lexer_next_token_is_keyword (parser->lexer, RID_CONST))
+	{
+	  quals = capture_quals::qual_const;
+	  cp_lexer_consume_token (parser->lexer);
+	}
+      else if (cp_lexer_next_token_is_keyword (parser->lexer, RID_MUTABLE))
+	{
+	  quals = capture_quals::qual_mutable;
+	  cp_lexer_consume_token (parser->lexer);
+	}
+
       /* Possibly capture `this'.  */
       if (cp_lexer_next_token_is_keyword (parser->lexer, RID_THIS))
 	{
@@ -12243,7 +12255,7 @@ cp_parser_lambda_introducer (cp_parser* parser, tree lambda_expr)
       else
 	add_capture (lambda_expr, capture_id, capture_init_expr,
 		     /*by_reference_p=*/capture_kind == BY_REFERENCE,
-		     explicit_init_p, &name_independent_cnt);
+		     explicit_init_p, &name_independent_cnt, quals);
 
       /* If there is any qualification still in effect, clear it
 	 now; we will be starting fresh with the next capture.  */
