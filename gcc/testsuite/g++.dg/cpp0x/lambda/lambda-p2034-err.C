@@ -184,3 +184,43 @@ void test17()
     y = 42;  // { dg-error "read-only reference" }
   };
 }
+
+void test18()
+{
+  int x = 42;
+  const int y = 666;
+  auto z = [const x, mutable z = y]() mutable {
+    x = 666; // { dg-error "read-only variable" }
+    z = 42;
+  };
+}
+
+void test19()
+{
+  int x = 42;
+  const int y = 666;
+  auto z = [const x, mutable &z = y]() mutable {
+    x = 666; // { dg-error "read-only variable" }
+    z = 42;  // { dg-error "read-only reference" }
+  };
+}
+
+void test20()
+{
+  int x = 42;
+  const int y = 666;
+  auto z = [const a = x, mutable z = y]() mutable {
+    a = 666; // { dg-error "read-only variable" }
+    z = 42;
+  };
+}
+
+void test21()
+{
+  int x = 42;
+  const int y = 666;
+  auto z = [const &a = x, mutable &z = y]() mutable {
+    a = 666; // { dg-error "read-only reference" }
+    z = 42;  // { dg-error "read-only reference" }
+  };
+}

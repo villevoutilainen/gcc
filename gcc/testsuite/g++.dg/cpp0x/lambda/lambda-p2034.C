@@ -1,4 +1,4 @@
-// { dg-do compile { target c++11 } }
+// { dg-do compile { target c++23 } }
 // { dg-skip-if "requires hosted libstdc++ for cassert" { ! hostedlib } }
 
 void test01()
@@ -119,5 +119,59 @@ void test11()
   int y = 666;
   auto z = [const x, mutable &y]() const {
     y = 42;
+  };
+}
+
+void test12()
+{
+  const int x = 42;
+  int y = 666;
+  auto z = [const x, mutable &z = y]() {
+    z = 42;
+  };
+}
+
+void test13()
+{
+  const int x = 42;
+  int y = 666;
+  auto z = [const x, mutable &z = y]() mutable  {
+    z = 42;
+  };
+}
+
+void test14()
+{
+  const int x = 42;
+  int y = 666;
+  auto z = [const x, mutable z = y]() {
+    z = 42;
+  };
+}
+
+void test15()
+{
+  const int x = 42;
+  int y = 666;
+  auto z = [const x, mutable z = y]() mutable {
+    z = 42;
+  };
+}
+
+void test16()
+{
+  const int x = 42;
+  int y = 666;
+  auto z = [const a = x, mutable z = y]() {
+    z = 42;
+  };
+}
+
+void test17()
+{
+  const int x = 42;
+  int y = 666;
+  auto z = [const a = x, mutable z = y]() mutable {
+    z = 42;
   };
 }
