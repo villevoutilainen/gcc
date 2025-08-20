@@ -175,3 +175,19 @@ void test17()
     z = 42;
   };
 }
+
+void test18()
+{
+  const int x = 42;
+  int y = 666;
+  auto z = [const a = x, mutable z = y]() const constexpr {
+  };
+}
+
+void test19()
+{
+  const int x = 42;
+  int y = 666;
+  auto z = [const a = x, mutable z = y]() const consteval {
+  };
+}
