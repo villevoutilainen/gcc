@@ -12394,9 +12394,7 @@ cp_parser_lambda_declarator_opt (cp_parser* parser, tree lambda_expr,
 				  CP_PARSER_FLAGS_ONLY_MUTABLE_OR_CONSTEXPR,
 				  &lambda_specs, &declares_class_or_enum);
 
-  if (lambda_declared_const
-      && (lambda_specs.storage_class == sc_mutable
-	  || lambda_specs.storage_class == sc_static))
+  if (lambda_declared_const && lambda_specs.storage_class != sc_none)
     error_at (lambda_specs.locations[ds_storage_class],
 	      "a lambda declared const cannot have a storage-class-specifier");
 
