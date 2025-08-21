@@ -256,7 +256,9 @@ enum contract_match_kind
 
 /* True iff the FUNCTION_DECL NODE currently has any contracts.  */
 #define DECL_HAS_CONTRACTS_P(NODE) \
-  (DECL_CONTRACT_ATTRS (NODE) != NULL_TREE)
+  ((flag_contracts_nonattr \
+    ? GET_FN_CONTRACT_SPECIFIERS (NODE) \
+    : DECL_CONTRACT_ATTRS (NODE)) != NULL_TREE)
 
 /* For a FUNCTION_DECL of a guarded function, this points to a list of the pre
    and post contracts of the first decl of NODE in original order. */
@@ -266,6 +268,14 @@ enum contract_match_kind
 /* The next contract (if any) after this one in an attribute list.  */
 #define NEXT_CONTRACT_ATTR(NODE) \
   (find_contract (TREE_CHAIN (NODE)))
+
+/* For a function decl, get the head of the contract_specifiers list.  */
+#define GET_FN_CONTRACT_SPECIFIERS(NODE) \
+  get_fn_contract_specifiers (NODE)
+
+/* For a function decl, get the head of the contract_specifiers list.  */
+#define SET_FN_CONTRACT_SPECIFIERS(NODE, LIST) \
+  set_fn_contract_specifiers ((NODE), (LIST))
 
 /* The wrapper of the original source location of a list of contracts.  */
 #define CONTRACT_SOURCE_LOCATION_WRAPPER(NODE) \
@@ -346,6 +356,11 @@ enum contract_match_kind
   (DECL_DECLARES_FUNCTION_P (NODE) && DECL_LANG_SPECIFIC (NODE) && \
    DECL_CONTRACT_WRAPPER (NODE))
 
+extern void set_fn_contract_specifiers		(tree, tree);
+extern void update_fn_contract_specifiers	(tree, tree);
+extern tree get_fn_contract_specifiers		(tree);
+extern void unset_fn_contract_specifiers	(tree);
+
 extern void maybe_update_postconditions		(tree);
 extern void rebuild_postconditions		(tree);
 extern bool check_postcondition_result		(tree, tree, location_t);
@@ -359,7 +374,7 @@ extern bool diagnose_misapplied_contracts	(tree);
 extern tree finish_contract_attribute		(tree, tree);
 extern tree invalidate_contract			(tree);
 extern bool all_attributes_are_contracts_p	(tree);
-extern tree copy_and_remap_contracts		(tree, tree, contract_match_kind);
+extern tree copy_and_remap_contracts		(tree, tree, contract_match_kind remap_kind = cmk_all);
 extern void start_function_contracts		(tree);
 extern void maybe_apply_function_contracts	(tree);
 extern void finish_function_contracts		(tree);

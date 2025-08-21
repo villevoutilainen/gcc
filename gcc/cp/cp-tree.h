@@ -9179,8 +9179,13 @@ find_contract (tree attrs)
 inline void
 set_decl_contracts (tree decl, tree contract_attrs)
 {
-  remove_contract_attributes (decl);
-  DECL_ATTRIBUTES (decl) = chainon (DECL_ATTRIBUTES (decl), contract_attrs);
+  if (flag_contracts_nonattr)
+    set_fn_contract_specifiers (decl, contract_attrs);
+  else
+    {
+      remove_contract_attributes (decl);
+      DECL_ATTRIBUTES (decl) = chainon (DECL_ATTRIBUTES (decl), contract_attrs);
+    }
 }
 
 /* Returns the computed semantic of the node.  */

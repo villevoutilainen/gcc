@@ -1548,7 +1548,8 @@ cp_fold_function (tree fndecl)
    */
   tree contracts = remove_contract_attributes (fndecl);
   cp_walk_tree (&DECL_SAVED_TREE (fndecl), cp_fold_r, &data, NULL);
-  set_contract_attributes (fndecl, contracts);
+  if (contracts)
+    set_contract_attributes (fndecl, contracts);
 
   /* This is merely an optimization: if FNDECL has no i-e expressions,
      we'll not save c_f_d, and we can safely say that FNDECL will not
