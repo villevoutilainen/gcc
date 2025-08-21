@@ -3530,6 +3530,9 @@ duplicate_decls (tree newdecl, tree olddecl, bool hiding, bool was_hidden)
   if (flag_concepts)
     remove_constraints (newdecl);
 
+  if (flag_contracts_nonattr)
+    unset_fn_contract_specifiers (newdecl);
+
   /* And similarly for any module tracking data.  */
   if (modules_p ())
     remove_defining_module (newdecl);
@@ -6502,10 +6505,9 @@ start_decl (const cp_declarator *declarator,
       && !processing_template_decl
       && DECL_RESULT (decl)
       && is_auto (TREE_TYPE (DECL_RESULT (decl))))
-    for (tree contract = DECL_CONTRACT_ATTRS (decl); contract;
-	 contract = NEXT_CONTRACT_ATTR (contract))
-      if (POSTCONDITION_P (CONTRACT_STATEMENT (contract))
-	  && POSTCONDITION_IDENTIFIER (CONTRACT_STATEMENT (contract)))
+    for (tree ca = GET_FN_CONTRACT_SPECIFIERS (decl); ca; ca = TREE_CHAIN (ca))
+      if (POSTCONDITION_P (CONTRACT_STATEMENT (ca))
+	  && POSTCONDITION_IDENTIFIER (CONTRACT_STATEMENT (ca)))
 	{
 	  error_at (DECL_SOURCE_LOCATION (decl),
 		    "postconditions with deduced result name types must only"
@@ -11954,6 +11956,7 @@ grokfndecl (tree ctype,
 	    int template_count,
 	    tree in_namespace,
 	    tree* attrlist,
+	    tree contract_specifiers,
 	    location_t location)
 {
   tree decl;
@@ -12392,9 +12395,14 @@ grokfndecl (tree ctype,
 	}
     }
 
+
   /* Caller will do the rest of this.  */
   if (check < 0)
-    return decl;
+    {
+      if (decl && decl != error_mark_node && contract_specifiers)
+	SET_FN_CONTRACT_SPECIFIERS (decl, contract_specifiers);
+      return decl;
+    }
 
   if (ctype != NULL_TREE)
     grokclassfn (ctype, decl, flags);
@@ -12425,7 +12433,16 @@ grokfndecl (tree ctype,
       *attrlist = NULL_TREE;
     }
 
-  if (DECL_HAS_CONTRACTS_P (decl))
+  /* Update now we have a decl and maybe know the return type.  */
+  if (contract_specifiers)
+    {
+      tree t = decl;
+      if (TREE_CODE (decl) == TEMPLATE_DECL)
+	t = DECL_TEMPLATE_RESULT (decl);
+      SET_FN_CONTRACT_SPECIFIERS (t, contract_specifiers);
+      rebuild_postconditions (t);
+    }
+  else if (DECL_CONTRACT_ATTRS (decl))
     rebuild_postconditions (decl);
 
   /* Check main's type after attributes have been applied.  */
@@ -13769,6 +13786,7 @@ grokdeclarator (const cp_declarator *declarator,
   tree raises = NULL_TREE;
   int template_count = 0;
   tree returned_attrs = NULL_TREE;
+  tree contract_specifiers = NULL_TREE;
   tree parms = NULL_TREE;
   const cp_declarator *id_declarator;
   /* The unqualified name of the declarator; either an
@@ -14817,7 +14835,7 @@ grokdeclarator (const cp_declarator *declarator,
 
       inner_declarator = declarator->declarator;
 
-      /* Check that contracts aren't misapplied.  */
+      /* Check that contract attributes aren't misapplied.  */
       if (tree contract_attr = find_contract (declarator->std_attributes))
 	if (declarator->kind != cdk_function
 	    || innermost_code != cdk_function)
@@ -15361,10 +15379,10 @@ grokdeclarator (const cp_declarator *declarator,
 
 	    /* Actually apply the contract attributes to the declaration.  */
 	    if (flag_contracts_nonattr)
-	      returned_attrs
-		= chainon (returned_attrs,
-			   declarator->u.function.contract_specifiers);
-	    /* Allow mixing std-attribute style and p2900 syntax.  */
+	      contract_specifiers
+		= attr_chainon (contract_specifiers,
+				declarator->u.function.contract_specifiers);
+
 	    for (tree *p = &attrs; *p;)
 	      {
 		tree l = *p;
@@ -16341,10 +16359,15 @@ grokdeclarator (const cp_declarator *declarator,
 			       is_xobj_member_function, sfk,
 			       funcdef_flag, late_return_type_p,
 			       template_count, in_namespace,
-			       attrlist, id_loc);
-            decl = set_virt_specifiers (decl, virt_specifiers);
+			       attrlist, contract_specifiers, id_loc);
+	    decl = set_virt_specifiers (decl, virt_specifiers);
 	    if (decl == NULL_TREE)
 	      return error_mark_node;
+	    if (0 && flag_contracts_nonattr && contract_specifiers)
+	      {
+		SET_FN_CONTRACT_SPECIFIERS (decl, contract_specifiers);
+		rebuild_postconditions (decl);
+	      }
 #if 0
 	    /* This clobbers the attrs stored in `decl' from `attrlist'.  */
 	    /* The decl and setting of decl_attr is also turned off.  */
@@ -16670,7 +16693,7 @@ grokdeclarator (const cp_declarator *declarator,
 
 	decl = grokfndecl (ctype, type, original_name, parms, unqualified_id,
 			   declspecs,
-                           reqs, virtualp, flags, memfn_quals, rqual, raises,
+			   reqs, virtualp, flags, memfn_quals, rqual, raises,
 			   1, friendp,
 			   publicp,
 			   inlinep | (2 * constexpr_p) | (4 * concept_p)
@@ -16680,9 +16703,14 @@ grokdeclarator (const cp_declarator *declarator,
 			   funcdef_flag,
 			   late_return_type_p,
 			   template_count, in_namespace, attrlist,
-			   id_loc);
+			   contract_specifiers, id_loc);
 	if (decl == NULL_TREE)
 	  return error_mark_node;
+	if (0 && flag_contracts_nonattr && contract_specifiers)
+	  {
+	    SET_FN_CONTRACT_SPECIFIERS (decl, contract_specifiers);
+	    rebuild_postconditions (decl);
+	  }
 
 	if (explicitp == 2)
 	  DECL_NONCONVERTING_P (decl) = 1;
