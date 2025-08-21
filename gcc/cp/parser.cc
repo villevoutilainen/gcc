@@ -12949,7 +12949,8 @@ cp_parser_lambda_body (cp_parser* parser, tree lambda_expr)
 
     /* We need to parse deferred contract conditions before we try to call
        finish_function (which will try to emit the contracts).  */
-    cp_parser_late_contracts (parser,fco);
+    if (DECL_HAS_CONTRACTS_P (fco))
+      cp_parser_late_contracts (parser, fco);
 
     finish_lambda_function (body);
   }
@@ -32619,13 +32620,16 @@ void cp_parser_late_contracts (cp_parser *parser,
 {
 
   tree new_contracts = NULL_TREE;
-  for (tree a = DECL_CONTRACT_ATTRS (fndecl); a; a = NEXT_CONTRACT_ATTR (a))
+  tree a = flag_contracts_nonattr
+	   ? GET_FN_CONTRACT_SPECIFIERS (fndecl)
+	   : DECL_CONTRACT_ATTRS (fndecl);
+  for (; a; a = NEXT_CONTRACT_ATTR (a))
     {
-	tree contract = TREE_VALUE(TREE_VALUE (a));
+	tree contract = TREE_VALUE (TREE_VALUE (a));
 
 	/* Make sure we've gotten something that hasn't been parsed yet or that
 	 we're not parsing an invalid contract.  */
-	tree condition = CONTRACT_CONDITION(contract);
+	tree condition = CONTRACT_CONDITION (contract);
 	if (TREE_CODE (condition) != DEFERRED_PARSE)
 	  {
 	    tree list = tree_cons (TREE_PURPOSE (a), TREE_VALUE (a), NULL_TREE);
@@ -32651,7 +32655,10 @@ void cp_parser_late_contracts (cp_parser *parser,
 	  }
     }
 
-  set_contract_attributes (fndecl, new_contracts);
+  if (flag_contracts_nonattr)
+    update_fn_contract_specifiers (fndecl, new_contracts);
+  else
+    set_contract_attributes (fndecl, new_contracts);
 }
 
 static contract_modifier
@@ -33068,7 +33075,7 @@ cp_parser_function_contract_specifier_seq (cp_parser *parser)
       tree attr_spec = finish_contract_attribute (contract_name, contract_spec);
       /* Arrange to build the list in the correct order.  */
       if (attr_specs)
-	attr_specs = attr_chainon (attr_spec, attr_specs);
+	attr_specs = attr_chainon (attr_specs, attr_spec);
       else
 	attr_specs = attr_spec;
     }
@@ -36187,7 +36194,10 @@ cp_parser_save_default_args (cp_parser* parser, tree decl)
     vec_safe_push (unparsed_noexcepts, decl);
 
   /* Contracts are deferred.  */
-  for (tree attr = DECL_ATTRIBUTES (decl); attr; attr = TREE_CHAIN (attr))
+  tree attr = flag_contracts_nonattr
+	   ? GET_FN_CONTRACT_SPECIFIERS (decl)
+	   : DECL_CONTRACT_ATTRS (decl);
+  for (; attr; attr = TREE_CHAIN (attr))
     if (cxx_contract_attribute_p (attr))
       {
 	vec_safe_push (unparsed_contracts, decl);
