@@ -3222,7 +3222,10 @@ check_explicit_specialization (tree declarator,
 		}
 	      decl = register_specialization (tmpl, gen_tmpl, targs,
 					      is_friend, 0);
-	      remove_contract_attributes (result);
+	      if (flag_contracts_nonattr)
+		set_fn_contract_specifiers (result, NULL_TREE);
+	      else
+		remove_contract_attributes (result);
 	      return decl;
 	    }
 
@@ -3318,7 +3321,12 @@ check_explicit_specialization (tree declarator,
 	  /* If this is a specialization, splice any contracts that may have
 	     been inherited from the template, removing them.  */
 	  if (decl != error_mark_node && DECL_TEMPLATE_SPECIALIZATION (decl))
-	    remove_contract_attributes (decl);
+	    {
+	      if (flag_contracts_nonattr)
+		set_fn_contract_specifiers (decl, NULL_TREE);
+	      else
+		remove_contract_attributes (decl);
+	    }
 
 	  /* A 'structor should already have clones.  */
 	  gcc_assert (decl == error_mark_node
@@ -12256,7 +12264,10 @@ tsubst_contract_attributes (tree attributes, tree decl, tree args,
       TREE_CHAIN (nc) = subst_contract_list;
       subst_contract_list = nc;
   }
-  set_contract_attributes(decl, nreverse(subst_contract_list));
+  if (flag_contracts_nonattr)
+    set_fn_contract_specifiers (decl, nreverse(subst_contract_list));
+  else
+    set_contract_attributes (decl, nreverse(subst_contract_list));
 }
 
 /* Instantiate a single dependent attribute T (a TREE_LIST), and return either
@@ -15187,6 +15198,12 @@ tsubst_function_decl (tree t, tree args, tsubst_flags_t complain,
   if (tree ci = get_constraints (t))
     set_constraints (r, ci);
 
+  /* copy_decl () does not know about contract specifiers.  NOTE these are not
+     substituted at this point.  */
+  if (tree ctrct = get_fn_contract_specifiers (t))
+    set_fn_contract_specifiers (r, ctrct);
+
+  /* The parms have now been substituted, check for incorrect const cases.  */
   check_postconditions_in_redecl (t,r);
 
   if (DECL_FRIEND_CONTEXT (t))
@@ -27746,19 +27763,20 @@ regenerate_decl_from_template (tree decl, tree tmpl, tree args)
 	    DECL_CONTEXT (t) = decl;
 	}
 
-      if (DECL_CONTRACT_ATTRS (decl))
+      if (tree attr = flag_contracts_nonattr
+		      ? GET_FN_CONTRACT_SPECIFIERS (decl)
+		      : DECL_CONTRACT_ATTRS (decl))
 	{
-	  tree attributes = DECL_ATTRIBUTES (decl);
 	  /* If we're regenerating a specialization, the contracts will have
 	     been copied from the most general template. Replace those with
 	     the ones from the actual specialization.  */
 	  tree tmpl = DECL_TI_TEMPLATE (decl);
 	  if (DECL_TEMPLATE_SPECIALIZATION (tmpl))
-	    {
-	      attributes = DECL_ATTRIBUTES(code_pattern);
-	    }
+	    attr = flag_contracts_nonattr
+		   ? GET_FN_CONTRACT_SPECIFIERS (code_pattern)
+		   : DECL_CONTRACT_ATTRS (code_pattern);
 
-	  tsubst_contract_attributes (attributes, decl, args,
+	  tsubst_contract_attributes (attr, decl, args,
 				      tf_warning_or_error, code_pattern);
 	}
 
