@@ -43,6 +43,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "omp-general.h"
 #include "opts.h"
 #include "gcc-urlifier.h"
+#include "contracts.h" // remove_contract_attributes ()
 
 /* Keep track of forward references to immediate-escalating functions in
    case they become consteval.  This vector contains ADDR_EXPRs and
@@ -1546,7 +1547,8 @@ cp_fold_function (tree fndecl)
      be copied onto different functions. We do not want to fold contract trees
      at this point in time. They will get folded when they are emitted.
    */
-  tree contracts = remove_contract_attributes (fndecl);
+  tree contracts = flag_contracts_nonattr ? NULL_TREE
+					  : remove_contract_attributes (fndecl);
   cp_walk_tree (&DECL_SAVED_TREE (fndecl), cp_fold_r, &data, NULL);
   if (contracts)
     set_contract_attributes (fndecl, contracts);
