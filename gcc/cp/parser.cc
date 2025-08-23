@@ -36057,15 +36057,8 @@ cp_parser_save_default_args (cp_parser* parser, tree decl)
     vec_safe_push (unparsed_noexcepts, decl);
 
   /* Contracts are deferred.  */
-  tree attr = flag_contracts_nonattr
-	   ? GET_FN_CONTRACT_SPECIFIERS (decl)
-	   : DECL_CONTRACT_ATTRS (decl);
-  for (; attr; attr = TREE_CHAIN (attr))
-    if (cxx_contract_attribute_p (attr))
-      {
-	vec_safe_push (unparsed_contracts, decl);
-	break;
-      }
+  if (DECL_HAS_CONTRACTS_P (decl))
+    vec_safe_push (unparsed_contracts, decl);
 }
 
 /* DEFAULT_ARG contains the saved tokens for the initializer of DECL,
