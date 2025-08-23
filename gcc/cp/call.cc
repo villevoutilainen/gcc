@@ -45,6 +45,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "c-family/c-type-mismatch.h"
 #include "tristate.h"
 #include "tree-pretty-print-markup.h"
+#include "contracts.h"
 
 /* The various kinds of conversion.  */
 
