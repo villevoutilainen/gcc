@@ -15386,21 +15386,21 @@ grokdeclarator (const cp_declarator *declarator,
 	      contract_specifiers
 		= attr_chainon (contract_specifiers,
 				declarator->u.function.contract_specifiers);
-
-	    for (tree *p = &attrs; *p;)
-	      {
-		tree l = *p;
-		if (cxx_contract_attribute_p (l))
-		  {
-		    *p = TREE_CHAIN (l);
-		    /* Intentionally reverse order of contracts so they're
-		       reversed back into their lexical order.  */
-		    TREE_CHAIN (l) = NULL_TREE;
-		    returned_attrs = chainon (l, returned_attrs);
-		  }
-		else
-		  p = &TREE_CHAIN (l);
-	     }
+	    else
+	      for (tree *p = &attrs; *p;)
+		{
+		  tree l = *p;
+		  if (cxx_contract_attribute_p (l))
+		    {
+		      *p = TREE_CHAIN (l);
+		      /* Intentionally reverse order of contracts so they're
+			 reversed back into their lexical order.  */
+		      TREE_CHAIN (l) = NULL_TREE;
+		      returned_attrs = chainon (l, returned_attrs);
+		    }
+		  else
+		    p = &TREE_CHAIN (l);
+		}
 
 	    if (attrs)
 	      /* [dcl.fct]/2:
