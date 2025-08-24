@@ -1,6 +1,6 @@
 // check that we do not a section type conflict with virtual bases or a duplicate symbol
 // { dg-do run }
-// { dg-options "-fcontracts -std=c++23 -fcontracts-nonattr -fcontracts-on-virtual-functions=P2900R13" }
+// { dg-options "-std=c++23 -fcontracts -fcontracts-nonattr -fcontracts-on-virtual-functions=P2900R13" }
 
 int x = 9;
 struct Base
