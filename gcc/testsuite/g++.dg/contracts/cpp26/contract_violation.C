@@ -1,6 +1,6 @@
 // test that contracts on overriding functions are found correctly
 // { dg-do run }
-// { dg-options "-std=c++2a -fcontracts -fcontract-continuation-mode=on -fcontracts-nonattr " }
+// { dg-options "-std=c++2a -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe " }
 
 int foo(const int i) pre( i > 3) post (r: r > 4){
 
