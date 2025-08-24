@@ -1,6 +1,6 @@
 // check that we do not ICE with an empty nontrivial parameter
 // { dg-do run }
-// { dg-options "-std=c++2b -fcontracts -std=c++23 -fcontracts-nonattr " }
+// { dg-options "-std=c++23 -fcontracts -fcontracts-nonattr " }
 
 struct NTClass {
   NTClass(){};
