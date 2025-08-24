@@ -1,5 +1,5 @@
 // { dg-do run }
-// { dg-options "-std=c++2a -fcontracts -fcontracts-nonattr -fcontract-continuation-mode=on" }
+// { dg-options "-std=c++2a -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe" }
 
 bool check(int i){
   if (i > 10)
