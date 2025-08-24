@@ -1,5 +1,5 @@
 // { dg-do run }
-// { dg-options "-std=c++2a -fcontracts -fcontract-continuation-mode=on -fcontracts-nonattr" }
+// { dg-options "-std=c++2a -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe" }
 
 void gfn3(int n) pre (n > 0 );
 
