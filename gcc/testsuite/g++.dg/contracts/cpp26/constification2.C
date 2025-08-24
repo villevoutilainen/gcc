@@ -1,6 +1,6 @@
 // check that we do not get unused warnings for contract check function parameters
 // { dg-do compile }
-// { dg-options "-std=c++2b -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=enforce   -O -fdump-tree-all" }
+// { dg-options "-std=c++2b -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=enforce -O " }
 
 struct S{
   S(){};

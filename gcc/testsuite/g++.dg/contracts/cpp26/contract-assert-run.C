@@ -8,7 +8,7 @@
 //   ensure that an invalid contract role 'invalid' errors
 //   ensure that a missing colon after contract role errors
 // { dg-do run }
-// { dg-options "-std=c++2a -fcontracts -fcontracts-nonattr -fcontract-continuation-mode=on" }
+// { dg-options "-std=c++2a -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe" }
 #include <iostream>
 #include <contracts>
 

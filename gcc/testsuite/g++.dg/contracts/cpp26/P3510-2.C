@@ -1,5 +1,5 @@
 // { dg-do compile }
-// { dg-options "-fcontracts -fcontracts-nonattr -std=c++23" }
+// { dg-options "-std=c++23 -fcontracts -fcontracts-nonattr " }
 
 struct S{
   bool f();
