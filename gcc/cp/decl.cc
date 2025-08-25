@@ -3391,7 +3391,8 @@ duplicate_decls (tree newdecl, tree olddecl, bool hiding, bool was_hidden)
     remove_constraints (newdecl);
 
   if (flag_contracts_nonattr)
-    unset_fn_contract_specifiers (newdecl);
+    /* Remove the specifiers, and then remove the decl from the lookup.  */
+    remove_decl_with_fn_contracts_specifiers (newdecl);
 
   /* And similarly for any module tracking data.  */
   if (modules_p ())
