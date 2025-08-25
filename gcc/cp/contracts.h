@@ -370,7 +370,8 @@ extern tree view_as_const			(tree);
 extern void set_fn_contract_specifiers		(tree, tree);
 extern void update_fn_contract_specifiers	(tree, tree);
 extern tree get_fn_contract_specifiers		(tree);
-extern void unset_fn_contract_specifiers	(tree);
+extern void remove_decl_with_fn_contracts_specifiers (tree);
+extern void remove_fn_contract_specifiers	(tree);
 extern void update_contract_arguments		(tree, tree);
 
 extern void match_deferred_contracts		(tree);
