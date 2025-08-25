@@ -3266,8 +3266,10 @@ update_fn_contract_specifiers (tree decl, tree list)
   rd.contract_specifiers = list;
 }
 
+/* When a decl is about to be removed, then we need to release its content and
+   then take it out of the map.  */
 void
-unset_fn_contract_specifiers (tree decl)
+remove_decl_with_fn_contracts_specifiers (tree decl)
 {
   if (contract_redecl *p = hash_map_safe_get (redeclared_contracts, decl))
     {
@@ -3275,6 +3277,19 @@ unset_fn_contract_specifiers (tree decl)
       p->original_contracts = NULL_TREE;
       p->pending_list = NULL_TREE;
       redeclared_contracts->remove (decl);
+    }
+}
+
+/* If this function has contract specifiers, then remove them, but leave the
+   function registered.  */
+void
+remove_fn_contract_specifiers (tree decl)
+{
+  if (contract_redecl *p = hash_map_safe_get (redeclared_contracts, decl))
+    {
+      p->contract_specifiers = NULL_TREE;
+      p->original_contracts = NULL_TREE;
+      p->pending_list = NULL_TREE;
     }
 }
 
@@ -3287,7 +3302,6 @@ get_fn_contract_specifiers (tree decl)
     return p->contract_specifiers;
   return NULL_TREE;
 }
-
 
 /* A subroutine of duplicate_decls. Diagnose issues in the redeclaration of
    guarded functions.  */
