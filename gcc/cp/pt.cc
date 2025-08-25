@@ -3224,7 +3224,7 @@ check_explicit_specialization (tree declarator,
 	      decl = register_specialization (tmpl, gen_tmpl, targs,
 					      is_friend, 0);
 	      if (flag_contracts_nonattr)
-		set_fn_contract_specifiers (result, NULL_TREE);
+		remove_fn_contract_specifiers (result);
 	      else
 		remove_contract_attributes (result);
 	      return decl;
@@ -3324,7 +3324,7 @@ check_explicit_specialization (tree declarator,
 	  if (decl != error_mark_node && DECL_TEMPLATE_SPECIALIZATION (decl))
 	    {
 	      if (flag_contracts_nonattr)
-		set_fn_contract_specifiers (decl, NULL_TREE);
+		remove_fn_contract_specifiers (decl);
 	      else
 		remove_contract_attributes (decl);
 	    }
