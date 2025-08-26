@@ -2,7 +2,7 @@
 // behaves as if the function exited via an exception.
 // This tests the behaviour of a pre condition on a virtual member function
 // { dg-do run }
-// { dg-options "-std=c++2a -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe -fno-contract-checks-outlined -fcontracts-on-virtual-functions=P2900R13" }
+// { dg-options "-std=c++2a -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe -fcontract-checks-outlined -fcontracts-on-virtual-functions=P2900R13" }
 
 #include <contracts>
 #include <exception>
