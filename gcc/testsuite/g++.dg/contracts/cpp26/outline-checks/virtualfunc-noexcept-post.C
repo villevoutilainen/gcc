@@ -1,8 +1,8 @@
 // Throwing violation handler in a pre/post check on a noexcept function
 // behaves as if the function exited via an exception.
-// This tests the behaviour of a pre condition on a member function
+// This tests the behaviour of a post condition on a virtual member function
 // { dg-do run }
-// { dg-options "-std=c++2a -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe -fno-contract-checks-outlined" }
+// { dg-options "-std=c++2a -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe -fcontract-checks-outlined -fcontracts-on-virtual-functions=P2900R13" }
 
 #include <contracts>
 #include <exception>
@@ -23,24 +23,26 @@ void handle_contract_violation(const std::contracts::contract_violation& violati
   throw MyException{};
 }
 
-void f(int x) noexcept pre(x>1)
+struct X
 {
-  try{
-   int i = 1;
-  }
-  catch(...) {
-  }
-}
+    virtual void f(const int x) noexcept post(x>1){
+      try{
+       int i = 1;
+      }
+      catch(...) {
+      }
+    }
+};
 
 int main()
 {
   std::set_terminate (my_term);
   try
   {
-      f(-42);
+      X x;
+      x.f(-42);
   } catch (...) {
   }
   // We should not get here
   return 1;
-
 }
