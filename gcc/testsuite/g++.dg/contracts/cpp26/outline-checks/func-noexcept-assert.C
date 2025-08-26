@@ -1,7 +1,7 @@
 // Throwing violation handler in an assert check in a noexcept function
 // can be caught by the function.
 // { dg-do run }
-// { dg-options "-std=c++2a -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe -fno-contract-checks-outlined" }
+// { dg-options "-std=c++2a -fcontracts -fcontracts-nonattr -fcontract-evaluation-semantic=observe -fcontract-checks-outlined" }
 
 #include <contracts>
 #include <exception>
