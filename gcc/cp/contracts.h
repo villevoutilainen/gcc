@@ -506,4 +506,19 @@ parm_used_in_post_p (const_tree decl)
   return ((TREE_CODE (decl) == PARM_DECL) && DECL_LANG_FLAG_4 (decl));
 }
 
+/* Will this contract be ignored.  */
+
+inline bool
+contract_ignored_p (const_tree contract)
+{
+  return (get_contract_semantic (contract) <= CCS_IGNORE); 
+}
+
+/* Will this contract be evaluated?  */
+
+inline bool
+contract_evaluated_p (const_tree contract)
+{
+  return (get_contract_semantic (contract) >= CCS_NEVER); 
+}
 #endif /* ! GCC_CP_CONTRACT_H */
