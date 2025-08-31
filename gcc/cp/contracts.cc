@@ -2212,8 +2212,8 @@ get_contracts_source_location_impl_type (tree context = NULL_TREE)
       return contracts_source_location_impl_type;
     }
 
-  /* We do not, so build the __impl layout equivalent type
-  /* Must match <source_location>:
+  /* We do not, so build the __impl layout equivalent type, which must
+     match <source_location>:
      struct __impl
       {
 	  const char* _M_file_name;

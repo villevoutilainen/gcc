@@ -417,7 +417,9 @@ vect_stmt_relevant_p (stmt_vec_info stmt_info, loop_vec_info loop_vinfo,
 
   /* Check if it's a not live PHI and multiple exits.  In this case
      there will be a usage later on after peeling which is needed for the
-     alternate exit.  */
+     alternate exit.
+     ???  Unless the PHI was marked live because of early
+     break, which also needs the latch def live and vectorized.  */
   if (LOOP_VINFO_EARLY_BREAKS (loop_vinfo)
       && is_a <gphi *> (stmt)
       && gimple_bb (stmt) == LOOP_VINFO_LOOP (loop_vinfo)->header
@@ -655,21 +657,21 @@ process_use (stmt_vec_info stmt_vinfo, tree use, loop_vec_info loop_vinfo,
     }
   /* We are also not interested in uses on loop PHI backedges that are
      inductions.  Otherwise we'll needlessly vectorize the IV increment
-     and cause hybrid SLP for SLP inductions.  Unless the PHI is live
-     of course.  */
+     and cause hybrid SLP for SLP inductions.  */
   else if (gimple_code (stmt_vinfo->stmt) == GIMPLE_PHI
 	   && STMT_VINFO_DEF_TYPE (stmt_vinfo) == vect_induction_def
-	   && ! STMT_VINFO_LIVE_P (stmt_vinfo)
 	   && (PHI_ARG_DEF_FROM_EDGE (stmt_vinfo->stmt,
 				      loop_latch_edge (bb->loop_father))
-	       == use))
+	       == use)
+	   && (!LOOP_VINFO_EARLY_BREAKS (loop_vinfo)
+	       || (gimple_bb (stmt_vinfo->stmt)
+		   != LOOP_VINFO_LOOP (loop_vinfo)->header)))
     {
       if (dump_enabled_p ())
 	dump_printf_loc (MSG_NOTE, vect_location,
                          "induction value on backedge.\n");
       return opt_result::success ();
     }
-
 
   vect_mark_relevant (worklist, dstmt_vinfo, relevant, false);
   return opt_result::success ();
@@ -7889,7 +7891,6 @@ vectorizable_store (vec_info *vinfo,
     = ls.alignment_support_scheme;
   const int misalignment = ls.misalignment;
   const poly_int64 poffset = ls.poffset;
-  const internal_fn lanes_ifn = ls.lanes_ifn;
 
   if (slp_node->ldst_lanes
       && memory_access_type != VMAT_LOAD_STORE_LANES)
@@ -8393,6 +8394,8 @@ vectorizable_store (vec_info *vinfo,
 
   if (memory_access_type == VMAT_LOAD_STORE_LANES)
     {
+      const internal_fn lanes_ifn = ls.lanes_ifn;
+
       if (costing_p)
 	/* Update all incoming store operand nodes, the general handling
 	   above only handles the mask and the first store operand node.  */
@@ -9458,7 +9461,6 @@ vectorizable_load (vec_info *vinfo,
     = ls.alignment_support_scheme;
   const int misalignment = ls.misalignment;
   const poly_int64 poffset = ls.poffset;
-  const internal_fn lanes_ifn = ls.lanes_ifn;
   const vec<int> &elsvals = ls.elsvals;
 
   int maskload_elsval = 0;
@@ -10239,6 +10241,8 @@ vectorizable_load (vec_info *vinfo,
   tree vec_els = NULL_TREE;
   if (memory_access_type == VMAT_LOAD_STORE_LANES)
     {
+      const internal_fn lanes_ifn = ls.lanes_ifn;
+
       gcc_assert (alignment_support_scheme == dr_aligned
 		  || alignment_support_scheme == dr_unaligned_supported);
 

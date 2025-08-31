@@ -17872,6 +17872,9 @@ Instructions number above which STFL stall penalty can be compensated.
 The maximum number of use and def visits when discovering a STV chain before
 the discovery is aborted.
 
+@item ix86-vect-unroll-limit
+Limit how much the autovectorizer may unroll a loop.
+
 @end table
 
 @end table
@@ -22937,7 +22940,7 @@ Compile for the CDNA3 gfx950 devices. (Experimental)
 
 @item gfx9-generic
 Compile generic code for Vega devices, executable on the following subset of
-GFX9 devices: gfx900, gfx902, gfx904, gfx906, gfx909 and gfx90c. (Experimental)
+GFX9 devices: gfx900, gfx902, gfx904, gfx906, gfx909 and gfx90c.
 
 @item gfx9-4-generic
 Compile generic code for CDNA3 devices, executable on the following subset of
@@ -22966,7 +22969,7 @@ Compile for RDNA2 gfx1036 devices (GFX10 series).
 
 @item gfx10-3-generic
 Compile generic code for GFX10-3 devices, executable on gfx1030,
-gfx1031, gfx1032, gfx1033, gfx1034, gfx1035, and gfx1036. (Experimental)
+gfx1031, gfx1032, gfx1033, gfx1034, gfx1035, and gfx1036.
 
 @item gfx1100
 Compile for RDNA3 gfx1100 devices (GFX11 series).
@@ -22994,7 +22997,7 @@ Compile for RDNA3 gfx1153 devices (GFX11 series). (Experimental)
 
 @item gfx11-generic
 Compile generic code for GFX11 devices, executable on gfx1100, gfx1101,
-gfx1102, gfx1103, gfx1150, gfx1151, gfx1152, and gfx1153. (Experimental)
+gfx1102, gfx1103, gfx1150, gfx1151, gfx1152, and gfx1153.
 @end table
 
 @opindex msram-ecc
@@ -37903,6 +37906,16 @@ files.  GCC uses temporary files to hold the output of one stage of
 compilation which is to be used as input to the next stage: for example,
 the output of the preprocessor, which is the input to the compiler
 proper.
+
+@vindex GCC_DIAGNOSTICS_LOG
+@item GCC_DIAGNOSTICS_LOG
+If @env{GCC_DIAGNOSTICS_LOG} is set, then additional information
+about the diagnostics subsystem will be emitted.  If it is set to an empty
+value, then the information will be written to stderr; otherwise, GCC will
+attempt to open that file and write the information there.
+
+The precise content and format of the information is subject to change;
+it is intended for use by GCC developers, rather than end-users.
 
 @vindex GCC_COMPARE_DEBUG
 @item GCC_COMPARE_DEBUG

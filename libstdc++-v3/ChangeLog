@@ -1,3 +1,143 @@
+2025-08-28  Jonathan Wakely  <jwakely@redhat.com>
+
+	PR libstdc++/119670
+	* acinclude.m4 (GLIBCXX_CHECK_DEBUGGING): Check for facilities
+	needed by <debugging>.
+	* config.h.in: Regenerate.
+	* configure: Regenerate.
+	* configure.ac: Use GLIBCXX_CHECK_DEBUGGING.
+	* include/Makefile.am: Add new header.
+	* include/Makefile.in: Regenerate.
+	* include/bits/version.def (debugging): Add.
+	* include/bits/version.h: Regenerate.
+	* include/precompiled/stdc++.h: Add new header.
+	* src/c++26/Makefile.am: Add new file.
+	* src/c++26/Makefile.in: Regenerate.
+	* include/std/debugging: New file.
+	* src/c++26/debugging.cc: New file.
+	* testsuite/19_diagnostics/debugging/breakpoint.cc: New test.
+	* testsuite/19_diagnostics/debugging/breakpoint_if_debugging.cc:
+	New test.
+	* testsuite/19_diagnostics/debugging/is_debugger_present.cc: New
+	test.
+	* testsuite/19_diagnostics/debugging/is_debugger_present-2.cc:
+	New test.
+
+2025-08-28  Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	* testsuite/18_support/comparisons/categories/zero_neg.cc: New test.
+
+2025-08-28  Weslley da Silva Pereira  <weslley.spereira@gmail.com>
+
+	* include/std/complex (polar, __complex_sqrt, pow)
+	(__complex_pow_unsigned): Use explicit conversions from int to
+	the complex value_type.
+
+2025-08-28  Jonathan Wakely  <jwakely@redhat.com>
+
+	PR libstdc++/121046
+	* include/std/bitset (bitset(const CharT*, ...)): Add
+	constraints on CharT type.
+	* testsuite/23_containers/bitset/lwg4294.cc: New test.
+
+2025-08-28  Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	* libsupc++/compare (__cmp_cat::_Ord): Add unordered enumerator.
+	(__cmp_cat::_Ncmp): Remove.
+	(__cmp_cat::__ord, __cmp_cat::__make):  Define.
+	(partial_ordering::partial_ordering(__cmp_cat::_Ncmp)): Remove.
+	(operator<=>(__cmp_cat::__unspec, partial_ordering))
+	(partial_ordering::unordered): Replace _Ncmp with _Ord.
+	(std::partial_ordering, std::weak_ordering, std::strong_ordering):
+	Befriend __ord and __make helpers, remove friend declartions for
+	other orderings.
+	(__compare::__fp_weak_ordering): Remove unused __cat variable.
+	Simplify ordering conversions.
+
+2025-08-27  Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	* libsupc++/compare
+	(operator<=>(__cmp_cat::__unspec, partial_ordering)):
+	Implement using _M_reverse.
+
+2025-08-27  Nathan Myers  <ncm@cantrip.org>
+
+	* include/std/chrono (gps_clock::now, tai_clock::now): Remove
+	inline definitions.
+	* src/c++20/clock.cc (gps_clock::now, tai_clock::now): New file
+	for out-of-line now() impls.
+	* src/c++20/Makefile.am: Mention clock.cc.
+	* src/c++20/Makefile.in: Regenerate.
+	* config/abi/pre/gnu.ver: add mangled now() symbols.
+
+2025-08-27  Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	* libsupc++/compare (_Ncmp::_Unordered): Rename and change the value
+	to minimum value of signed char.
+	(_Ncomp::unordered): Renamed from _Unordered, the name is reserved
+	by partial_ordered::unordered.
+	(partial_ordering::_M_reverse()): Define.
+	(operator<=(partial_ordering, __cmp_cat::__unspec))
+	(operator>=(__cmp_cat::__unspec, partial_ordering)): Implemented
+	in terms of negated _M_value.
+	(operator>=(partial_ordering, __cmp_cat::__unspec))
+	(operator<=(__cmp_cat::__unspec, partial_ordering)): Directly
+	compare _M_value, as unordered value is negative.
+	(partial_ordering::unordered): Handle _Ncmp::unoredred rename.
+	* python/libstdcxx/v6/printers.py: Add -128 as integer value
+	for unordered, keeping 2 to preserve backward compatibility.
+
+2025-08-27  Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	* include/bits/funcwrap.h (__polyfunc::_Mo_base): Reorder _M_manage
+	and _M_storage members. Make _M_destroy protected and remove friend
+	declaration.
+	* testsuite/20_util/copyable_function/call.cc: Add test for aliasing
+	base class.
+	* testsuite/20_util/move_only_function/call.cc: Likewise.
+
+2025-08-26  Patrick Palka  <ppalka@redhat.com>
+
+	* include/std/ranges (__detail::_CachedPosition): Remove
+	additional size constraint on the offset-based partial
+	specialization.
+
+2025-08-26  Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	PR libstdc++/90192
+	* include/bits/stl_vector.h (vector<T>::_M_fill_append): Declare.
+	(vector<T>::fill): Use _M_fill_append instead of _M_fill_insert.
+	* include/bits/vector.tcc (vector<T>::_M_fill_append): Define
+	(vector<T>::_M_fill_insert): Delegate to _M_fill_append when
+	elements are appended.
+	* testsuite/23_containers/vector/modifiers/moveable.cc: Updated
+	copycount for inserting at the end (appending).
+	* testsuite/23_containers/vector/modifiers/resize.cc: New test.
+	* testsuite/backward/hash_set/check_construct_destroy.cc: Updated
+	copycount, the hash_set constructor uses insert to fill buckets
+	with nullptrs.
+
+2025-08-26  Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	* include/bits/move.h (std::__like_impl, std::__like_t): Make
+	available in c++11.
+	* include/std/functional (std::_Indexed_bound_arg)
+	(std::_Bound_arg_storage, std::__make_bound_args): Define.
+	(std::_Bind_front, std::_Bind_back): Use _Bound_arg_storage.
+	* testsuite/20_util/function_objects/bind_back/1.cc: Expand
+	test to cover cases of 0, 1, many bound args.
+	* testsuite/20_util/function_objects/bind_back/111327.cc: Likewise.
+	* testsuite/20_util/function_objects/bind_front/1.cc: Likewise.
+	* testsuite/20_util/function_objects/bind_front/111327.cc: Likewise.
+
+2025-08-26  Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	* include/std/stop_token (__variant::_Never_valueless_alt): Declare.
+	(__variant::_Never_valueless_alt<std::stop_token>)
+	(__variant::_Never_valueless_alt<std::stop_source>): Define.
+	* include/std/thread: (__variant::_Never_valueless_alt): Declare.
+	(__variant::_Never_valueless_alt<std::jthread>): Define.
+
 2025-08-21  Jonathan Wakely  <jwakely@redhat.com>
 
 	PR libstdc++/121496
