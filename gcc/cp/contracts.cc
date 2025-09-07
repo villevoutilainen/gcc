@@ -2615,7 +2615,11 @@ build_contract_check_p2900 (tree contract)
 	  && eval_semantic != CES_NOEXCEPT_OBSERVE)
 	predicate_needs_catch = false;
       else
-	warning_at (loc, 1, "-fcontracts-disable-predicate-exception-translation ignored when the evaluation semantic is noexcept_enforce or noexcept_ignore");
+	warning_at (loc, 1,
+		    "%<-fcontracts-disable-predicate-exception-translation%> "
+		    "ignored when the evaluation semantic is "
+		    "%<noexcept_enforce%> "
+		    "or %<noexcept_ignore%>");
     }
   /* Build a read-only violation object, with the contract settings.  */
   //tree violation = build_contract_violation (contract, /*is_const*/true);
