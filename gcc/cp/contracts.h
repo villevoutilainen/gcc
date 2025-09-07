@@ -356,6 +356,7 @@ enum contract_inheritance
    DECL_CONTRACT_WRAPPER (NODE))
 
 /* contracts.cc */
+
 extern tree remove_contract_attributes		(tree);
 extern void set_contract_attributes 		(tree, tree);
 extern bool all_attributes_are_contracts_p	(tree);

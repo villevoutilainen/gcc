@@ -1,3 +1,74 @@
+2025-09-06  Paul Thomas  <pault@gcc.gnu.org>
+
+	PR fortran/84119
+	* resolve.cc (reset_array_ref_to_scalar): New function using
+	chunk broken out from gfc_resolve_ref.
+	(gfc_resolve_ref): Call the new function, the first time for
+	PDT type parameters and the second time for LEN inquiry refs.
+
+2025-09-05  Paul Thomas  <pault@gcc.gnu.org>
+
+	PR fortran/84432
+	PR fortran/114815
+	* expr.cc (gfc_check_assign_symbol): Check that components in a
+	PDT with a default initializer have type and length parameters
+	that reduce to constant integer expressions.
+	* trans-expr.cc (gfc_trans_assignment_1): Parameterized
+	components cannot have default initializers so they must be
+	allocated after initialization.
+
+2025-09-05  Paul Thomas  <pault@gcc.gnu.org>
+
+	PR fortran/83762
+	PR fortran/102457
+	* decl.cc (gfc_get_pdt_instance): Check that variable PDT parm
+	expressions are of type integer. Note that the symbol must be
+	tested since the expression often appears as BT_PROCEDURE.
+
+2025-09-03  Harald Anlauf  <anlauf@gmx.de>
+
+	PR fortran/121263
+	* trans-intrinsic.cc (gfc_conv_intrinsic_transfer): For an
+	unlimited polymorphic SOURCE to TRANSFER use saved descriptor
+	if possible.
+
+2025-09-02  Paul Thomas  <pault@gcc.gnu.org>
+
+	PR fortran/89707
+	* decl.cc (gfc_get_pdt_instance): Copy the typebound procedure
+	field from the PDT template. If the template interface has
+	kind=0, provide the new instance with an interface with a type
+	spec that points to that of the parameterized component.
+	(match_ppc_decl): When 'saved_kind_expr' this is a PDT and the
+	expression should be copied to the component kind_expr.
+	* gfortran.h: Define gfc_get_tbp.
+
+2025-09-02  Paul Thomas  <pault@gcc.gnu.org>
+
+	PR fortran/87669
+	* expr.cc (gfc_spec_list_type): If no LEN components are seen,
+	unconditionally return 'SPEC_ASSUMED'. This suppresses an
+	invalid error in match.cc(gfc_match_type_is).
+
+2025-09-01  Harald Anlauf  <anlauf@gmx.de>
+
+	PR fortran/121727
+	* trans-expr.cc (gfc_const_length_character_type_p): New helper
+	function.
+	(conv_dummy_value): Use it to determine if a character actual
+	argument has a constant length.  If a character actual argument is
+	constant and longer than the dummy, truncate it at compile time.
+
+2025-08-31  Paul Thomas  <pault@gcc.gnu.org>
+
+	PR fortran/99709
+	* trans-array.cc (structure_alloc_comps): For the case
+	COPY_ALLOC_COMP, do a deep copy of non-allocatable PDT arrays
+	Suppress the use of 'duplicate_allocatable' for PDT arrays.
+	* trans-expr.cc (conv_dummy_value): When passing to a PDT dummy
+	with the VALUE attribute, do a deep copy to ensure that
+	parameterized components are reallocated.
+
 2025-08-29  Harald Anlauf  <anlauf@gmx.de>
 
 	PR fortran/93330

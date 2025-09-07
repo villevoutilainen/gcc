@@ -46,8 +46,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "predict.h"
 #include "memmodel.h"
 #include "gimplify.h"
-#include "print-tree.h"
 #include "contracts.h"
+#include "print-tree.h"
 
 /* There routines provide a modular interface to perform many parsing
    operations.  They may therefore be used during actual parsing, or

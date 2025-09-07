@@ -1824,7 +1824,7 @@
   }
   [(set_attr "type" "vimerge")])
 
-(define_insn_and_split "*vmacc_vx_<mode>"
+(define_insn_and_split "*mul_plus_vx_<mode>"
  [(set (match_operand:V_VLSI 0 "register_operand")
    (plus:V_VLSI
     (mult:V_VLSI
@@ -1838,8 +1838,8 @@
   [(const_int 0)]
   {
     insn_code icode = code_for_pred_mul_plus_vx (<MODE>mode);
-    rtx ops[] = {operands[0], operands[1], operands[2], operands[3],
-		 RVV_VUNDEF(<MODE>mode)};
+    rtx v_undef = RVV_VUNDEF(<MODE>mode);
+    rtx ops[] = {operands[0], operands[1], operands[2], operands[3], v_undef};
     riscv_vector::emit_vlmax_insn (icode, riscv_vector::TERNARY_OP, ops);
 
     DONE;
@@ -2088,10 +2088,10 @@
   [(set_attr "type" "vfdiv")]
 )
 
-;; vfmin.vf
-(define_insn_and_split "*vfmin_vf_<mode>"
+;; vfmin.vf, vfmax.vf
+(define_insn_and_split "*vf<optab>_vf_<mode>"
   [(set (match_operand:V_VLSF 0 "register_operand")
-    (smin:V_VLSF
+    (commutative_float_binop_nofrm:V_VLSF
       (vec_duplicate:V_VLSF
 	(match_operand:<VEL> 2 "register_operand"))
       (match_operand:V_VLSF 1 "register_operand")))]
@@ -2100,7 +2100,7 @@
   "&& 1"
   [(const_int 0)]
   {
-    riscv_vector::emit_vlmax_insn (code_for_pred_scalar (SMIN, <MODE>mode),
+    riscv_vector::emit_vlmax_insn (code_for_pred_scalar (<CODE>, <MODE>mode),
 				   riscv_vector::BINARY_OP, operands);
     DONE;
   }

@@ -4364,7 +4364,7 @@
 			      (umax "%3,%4")
 			      (mult "%3,%4")])
 
-(define_code_attr sz [(sign_extend "s") (zero_extend "z")])
+(define_code_attr sz [(sign_extend "s") (zero_extend "z") (sign_extract "s") (zero_extract "z")])
 
 ;; VLS modes that has NUNITS < 32.
 (define_mode_iterator VLS_AVL_IMM [
@@ -4986,4 +4986,22 @@
 (define_mode_attr SF_XFW [
   (RVVM4HI "HF") (RVVM2HI "HF") (RVVM1HI "HF") (RVVMF2HI "HF") (RVVMF4HI "HF")
   (RVVM4SI "SF") (RVVM2SI "SF") (RVVM1SI "SF") (RVVMF2SI "SF")
+])
+
+(define_mode_iterator NDS_VWEXTBF [
+  (RVVM8SF "TARGET_VECTOR_ELEN_FP_32")
+  (RVVM4SF "TARGET_VECTOR_ELEN_FP_32")
+  (RVVM2SF "TARGET_VECTOR_ELEN_FP_32")
+  (RVVM1SF "TARGET_VECTOR_ELEN_FP_32")
+  (RVVMF2SF "TARGET_VECTOR_ELEN_FP_32 && TARGET_MIN_VLEN > 32")
+])
+
+(define_mode_attr NDS_V_DOUBLE_TRUNC_BF [
+  (RVVM8SF "RVVM4BF") (RVVM4SF "RVVM2BF") (RVVM2SF "RVVM1BF")
+  (RVVM1SF "RVVMF2BF") (RVVMF2SF "RVVMF4BF")
+])
+
+(define_mode_iterator NDS_QVI [
+  RVVM8QI RVVM4QI RVVM2QI RVVM1QI
+  RVVMF2QI RVVMF4QI (RVVMF8QI "TARGET_MIN_VLEN > 32")
 ])
