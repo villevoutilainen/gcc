@@ -8,7 +8,7 @@ bool check(int i){
   return true;
 }
 
-void f() pre(check(15)){} // { dg-warning "ignored when the evaluation semantic is noexcept_enforce or noexcept_ignore" }
+void f() pre(check(15)){} // { dg-warning "ignored when the evaluation semantic is .noexcept_enforce. or .noexcept_ignore." }
 
 
 int main(int, char**)
