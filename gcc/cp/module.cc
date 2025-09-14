@@ -3667,8 +3667,12 @@ class GTY((chain_next ("%h.parent"), for_user)) module_state {
   bitmap imports;	/* Transitive modules we're importing.  */
   bitmap exports;	/* Subset of that, that we're exporting.  */
 
+  /* For a named module interface A.B, parent is A and name is B.
+     For a partition M:P, parent is M and name is P.
+     For an implementation unit I, parent is I's interface and name is NULL.
+     Otherwise parent is NULL and name will be the flatname.  */
   module_state *parent;
-  tree name;		/* Name of the module.  */
+  tree name;
 
   slurping *slurp;	/* Data for loading.  */
 
@@ -3782,7 +3786,7 @@ class GTY((chain_next ("%h.parent"), for_user)) module_state {
   }
 
  public:
-  bool check_not_purview (location_t loc);
+  bool check_circular_import (location_t loc);
 
  public:
   void mangle (bool include_partition);
@@ -4097,6 +4101,13 @@ static unsigned lazy_hard_limit; /* Hard limit on open modules.  */
    current TU; imports start at 1.  */
 static GTY(()) vec<module_state *, va_gc> *modules;
 
+/* Get the module state for the current TU's module.  */
+
+static module_state *
+this_module() {
+  return (*modules)[0];
+}
+
 /* Hash of module state, findable by {name, parent}. */
 static GTY(()) hash_table<module_state_hash> *modules_hash;
 
@@ -4247,7 +4258,7 @@ import_entity_module (unsigned index)
 {
   if (index > ~(~0u >> 1))
     /* This is an index for an exported entity.  */
-    return (*modules)[0];
+    return this_module ();
 
   /* Do not include the current TU (not an off-by-one error).  */
   unsigned pos = 1;
@@ -9394,7 +9405,7 @@ trees_out::decl_node (tree decl, walk_kind ref)
   if (streaming_p () && dump (dumper::TREE))
     {
       char const *kind = "import";
-      module_state *from = (*modules)[0];
+      module_state *from = this_module ();
       if (dep->is_import ())
 	/* Rediscover the unremapped index.  */
 	from = import_entity_module (import_entity_index (decl));
@@ -15891,7 +15902,7 @@ get_module (tree name, module_state *parent, bool partition)
   if (partition)
     {
       if (!parent)
-	parent = get_primary ((*modules)[0]);
+	parent = get_primary (this_module ());
 
       if (!parent->is_partition () && !parent->flatname)
 	parent->set_flatname ();
@@ -15990,20 +16001,19 @@ recursive_lazy (unsigned snum = ~0u)
   return false;
 }
 
-/* If THIS is the current purview, issue an import error and return false.  */
+/* If THIS has an interface dependency on itself, report an error and
+   return false.  */
 
 bool
-module_state::check_not_purview (location_t from)
+module_state::check_circular_import (location_t from)
 {
-  module_state *imp = (*modules)[0];
-  if (imp && !imp->name)
-    imp = imp->parent;
-  if (imp == this)
+  if (this == this_module ())
     {
       /* Cannot import the current module.  */
       auto_diagnostic_group d;
-      error_at (from, "cannot import module in its own purview");
-      inform (loc, "module %qs declared here", get_flatname ());
+      error_at (from, "module %qs depends on itself", get_flatname ());
+      if (!header_module_p ())
+	inform (loc, "module %qs declared here", get_flatname ());
       return false;
     }
   return true;
@@ -16296,7 +16306,7 @@ module_state::read_imports (bytes_in &sec, cpp_reader *reader, line_maps *lmaps)
 	 module as this TU.  */
       if (imp && imp->is_partition () &&
 	  (!named_module_p ()
-	   || (get_primary ((*modules)[0]) != get_primary (imp))))
+	   || (get_primary (this_module ()) != get_primary (imp))))
 	imp = NULL;
 
       if (!imp)
@@ -16314,7 +16324,7 @@ module_state::read_imports (bytes_in &sec, cpp_reader *reader, line_maps *lmaps)
 	  if (sec.get_overrun ())
 	    break;
 
-	  if (!imp->check_not_purview (loc))
+	  if (!imp->check_circular_import (floc))
 	    continue;
 
 	  if (imp->loadedness == ML_NONE)
@@ -17328,7 +17338,7 @@ module_state::write_using_directives (elf_out *to, depset::hash &table,
 bool
 module_state::read_using_directives (unsigned num)
 {
-  if (!bitmap_bit_p ((*modules)[0]->imports, mod))
+  if (!bitmap_bit_p (this_module ()->imports, mod))
     {
       dump () && dump ("Ignoring using-directives because module %M "
 		       "is not visible in this TU", this);
@@ -20551,7 +20561,7 @@ module_state::read_initial (cpp_reader *reader)
 
   /* Determine the module's number.  */
   gcc_checking_assert (mod == MODULE_UNKNOWN);
-  gcc_checking_assert (this != (*modules)[0]);
+  gcc_checking_assert (this != this_module ());
 
   {
     /* Allocate space in the entities array now -- that array must be
@@ -20902,7 +20912,7 @@ module_name (unsigned ix, bool header_ok)
 bitmap
 get_import_bitmap ()
 {
-  return (*modules)[0]->imports;
+  return this_module ()->imports;
 }
 
 /* Return the visible imports and path of instantiation for an
@@ -21142,7 +21152,7 @@ module_may_redeclare (tree olddecl, tree newdecl)
     // FIXME: Should we be checking this in more places on the scope chain?
     return true;
 
-  module_state *old_mod = (*modules)[0];
+  module_state *old_mod = this_module ();
   module_state *new_mod = old_mod;
 
   tree old_origin = get_originating_module_decl (decl);
@@ -21529,6 +21539,12 @@ module_state::do_import (cpp_reader *reader, bool outermost)
 {
   gcc_assert (global_namespace == current_scope () && loadedness == ML_NONE);
 
+  /* If this TU is a partition of the module we're importing,
+     that module is the primary module interface.  */
+  if (this_module ()->is_partition ()
+      && this == get_primary (this_module ()))
+    module_p = true;
+
   loc = linemap_module_loc (line_table, loc, get_flatname ());
 
   if (lazy_open >= lazy_limit)
@@ -21782,7 +21798,7 @@ direct_import (module_state *import, cpp_reader *reader)
     if (!import->do_import (reader, true))
       gcc_unreachable ();
 
-  (*modules)[0]->set_import (import, import->exported_p);
+  this_module ()->set_import (import, import->exported_p);
 
   if (import->loadedness < ML_LANGUAGE)
     {
@@ -21801,7 +21817,17 @@ void
 import_module (module_state *import, location_t from_loc, bool exporting_p,
 	       tree, cpp_reader *reader)
 {
-  if (!import->check_not_purview (from_loc))
+  /* A non-partition implementation unit has no name.  */
+  if (!this_module ()->name && this_module ()->parent == import)
+    {
+      auto_diagnostic_group d;
+      error_at (from_loc, "import of %qs within its own implementation unit",
+		import->get_flatname());
+      inform (import->loc, "module declared here");
+      return;
+    }
+
+  if (!import->check_circular_import (from_loc))
     return;
 
   if (!import->is_header () && current_lang_depth ())
@@ -21823,7 +21849,7 @@ import_module (module_state *import, location_t from_loc, bool exporting_p,
       from_loc = ordinary_loc_of (line_table, from_loc);
       linemap_module_reparent (line_table, import->loc, from_loc);
     }
-  gcc_checking_assert (!import->module_p);
+
   gcc_checking_assert (import->is_direct () && import->has_location ());
 
   direct_import (import, reader);
@@ -21838,7 +21864,7 @@ declare_module (module_state *module, location_t from_loc, bool exporting_p,
 {
   gcc_assert (global_namespace == current_scope ());
 
-  module_state *current = (*modules)[0];
+  module_state *current = this_module ();
   if (module_purview_p () || module->loadedness > ML_CONFIG)
     {
       auto_diagnostic_group d;
@@ -21854,7 +21880,7 @@ declare_module (module_state *module, location_t from_loc, bool exporting_p,
       return;
     }
 
-  gcc_checking_assert (module->module_p);
+  gcc_checking_assert (module->is_module ());
   gcc_checking_assert (module->is_direct () && module->has_location ());
 
   /* Yer a module, 'arry.  */
@@ -22226,8 +22252,9 @@ name_pending_imports (cpp_reader *reader)
       gcc_checking_assert (module->is_direct ());
       if (!module->filename && !module->visited_p)
 	{
-	  bool export_p = (module->module_p
-			   && (module->is_partition () || module->exported_p));
+	  bool export_p = (module->is_module ()
+			   && (module->is_partition ()
+			       || module->is_exported ()));
 
 	  Cody::Flags flags = Cody::Flags::None;
 	  if (flag_preprocess_only
@@ -22315,7 +22342,10 @@ preprocess_module (module_state *module, location_t from_loc,
 	linemap_module_reparent (line_table, module->loc, from_loc);
       else
 	{
-	  module->loc = from_loc;
+	  /* Don't overwrite the location if we're importing ourselves
+	     after already having seen a module-declaration.  */
+	  if (!(is_import && module->is_module ()))
+	    module->loc = from_loc;
 	  if (!module->flatname)
 	    module->set_flatname ();
 	}
@@ -22358,8 +22388,8 @@ preprocess_module (module_state *module, location_t from_loc,
 	  for (unsigned ix = 0; ix != pending_imports->length (); ix++)
 	    {
 	      auto *import = (*pending_imports)[ix];
-	      if (!(import->module_p
-		    && (import->is_partition () || import->exported_p))
+	      if (!(import->is_module ()
+		    && (import->is_partition () || import->is_exported ()))
 		  && import->loadedness == ML_NONE
 		  && (import->is_header () || !flag_preprocess_only))
 		{
@@ -22758,7 +22788,7 @@ finish_module_processing (cpp_reader *reader)
   if (header_module_p ())
     module_kind &= ~MK_EXPORTING;
 
-  if (!modules || !(*modules)[0]->name)
+  if (!modules || !this_module ()->name)
     {
       if (flag_module_only)
 	warning (0, "%<-fmodule-only%> used for non-interface");
@@ -22777,7 +22807,7 @@ finish_module_processing (cpp_reader *reader)
       /* We write to a tmpname, and then atomically rename.  */
       char *cmi_name = NULL;
       char *tmp_name = NULL;
-      module_state *state = (*modules)[0];
+      module_state *state = this_module ();
 
       unsigned n = dump.push (state);
       state->announce ("creating");
@@ -22861,7 +22891,7 @@ late_finish_module (cpp_reader *reader,  module_processing_cookie *cookie,
 {
   timevar_start (TV_MODULE_EXPORT);
 
-  module_state *state = (*modules)[0];
+  module_state *state = this_module ();
   unsigned n = dump.push (state);
   state->announce ("finishing");
 

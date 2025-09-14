@@ -479,7 +479,8 @@ package body Exp_Attr is
 
       --  Local variables
 
-      Func_Id : constant Entity_Id := Make_Temporary (Loc, 'V');
+      Func_Id : constant Entity_Id := Make_Temporary (Loc, 'V',
+                                        Related_Node => Attr);
       Indexes : constant List_Id   := New_List;
       Obj_Id  : constant Entity_Id := Make_Temporary (Loc, 'A');
       Stmts   : List_Id;
@@ -836,7 +837,8 @@ package body Exp_Attr is
 
       --  Local variables
 
-      Func_Id  : constant Entity_Id := Make_Temporary (Loc, 'V');
+      Func_Id  : constant Entity_Id := Make_Temporary (Loc, 'V',
+                                         Related_Node => Attr);
       Obj_Id   : constant Entity_Id := Make_Temporary (Loc, 'R');
       Comps    : Node_Id;
       Stmts    : List_Id;
@@ -2171,7 +2173,7 @@ package body Exp_Attr is
          --  that it has the necessary extra formals.
 
          if not Is_Frozen (Pname) then
-            Create_Extra_Formals (Pname);
+            Create_Extra_Formals (Pname, Related_Nod => N);
          end if;
 
          --  And now rewrite the call
@@ -2648,7 +2650,7 @@ package body Exp_Attr is
                         Set_Extra_Formal (Extra, Empty);
                      end if;
 
-                     Create_Extra_Formals (Subp_Typ);
+                     Create_Extra_Formals (Subp_Typ, Related_Nod => N);
                      Set_Directly_Designated_Type (Typ, Subp_Typ);
                   end;
                end if;
@@ -2679,13 +2681,13 @@ package body Exp_Attr is
                if not Is_Frozen (Entity (Pref))
                  or else From_Limited_With (Etype (Entity (Pref)))
                then
-                  Create_Extra_Formals (Entity (Pref));
+                  Create_Extra_Formals (Entity (Pref), Related_Nod => N);
                end if;
 
                if not Is_Frozen (Btyp_DDT)
                  or else From_Limited_With (Etype (Btyp_DDT))
                then
-                  Create_Extra_Formals (Btyp_DDT);
+                  Create_Extra_Formals (Btyp_DDT, Related_Nod => N);
                end if;
 
                pragma Assert
@@ -8883,6 +8885,7 @@ package body Exp_Attr is
          | Attribute_Type_Key
          | Attribute_Unconstrained_Array
          | Attribute_Universal_Literal_String
+         | Attribute_Unsigned_Base_Range
          | Attribute_Wchar_T_Size
          | Attribute_Word_Size
       =>

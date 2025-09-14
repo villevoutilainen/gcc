@@ -460,8 +460,6 @@ vect_analyze_scalar_cycles_1 (loop_vec_info loop_vinfo, class loop *loop,
 	}
       else if (reduc_stmt_info)
 	{
-	  STMT_VINFO_REDUC_DEF (stmt_vinfo) = reduc_stmt_info;
-	  STMT_VINFO_REDUC_DEF (reduc_stmt_info) = stmt_vinfo;
 	  if (loop != LOOP_VINFO_LOOP (loop_vinfo))
 	    {
 	      if (dump_enabled_p ())
@@ -472,6 +470,8 @@ vect_analyze_scalar_cycles_1 (loop_vec_info loop_vinfo, class loop *loop,
 	    }
 	  else
 	    {
+	      STMT_VINFO_REDUC_DEF (stmt_vinfo) = reduc_stmt_info;
+	      STMT_VINFO_REDUC_DEF (reduc_stmt_info) = stmt_vinfo;
 	      if (dump_enabled_p ())
 		dump_printf_loc (MSG_NOTE, vect_location,
 				 "Detected reduction.\n");
@@ -2932,11 +2932,13 @@ vect_analyze_loop_1 (class loop *loop, vec_info_shared *shared,
 	      {
 		delete loop_vinfo;
 		loop_vinfo = unroll_vinfo;
-		LOOP_VINFO_USER_UNROLL (loop_vinfo) = user_unroll > 1;
 	      }
 	    else
 	      delete unroll_vinfo;
 	  }
+
+	/* Record that we have honored a user unroll factor.  */
+	LOOP_VINFO_USER_UNROLL (loop_vinfo) = user_unroll > 1;
     }
 
   /* Remember the autodetected vector mode.  */
@@ -10029,10 +10031,12 @@ vectorizable_live_operation_1 (loop_vec_info loop_vinfo, basic_block exit_bb,
     {
       /* Emit:
 
-	 SCALAR_RES = VEC_EXTRACT <VEC_LHS, LEN + BIAS - 1>
+	 SCALAR_RES = VEC_EXTRACT <VEC_LHS, LEN - (BIAS + 1)>
 
-	 where VEC_LHS is the vectorized live-out result and MASK is
-	 the loop mask for the final iteration.  */
+	 where VEC_LHS is the vectorized live-out result, LEN is the length of
+	 the vector, BIAS is the load-store bias.  The bias should not be used
+	 at all since we are not using load/store operations, but LEN will be
+	 REALLEN + BIAS, so subtract it to get to the correct position.  */
       gcc_assert (SLP_TREE_LANES (slp_node) == 1);
       gimple_seq tem = NULL;
       gimple_stmt_iterator gsi = gsi_last (tem);
@@ -10041,18 +10045,18 @@ vectorizable_live_operation_1 (loop_vec_info loop_vinfo, basic_block exit_bb,
 				    1, vectype, 0, 1);
       gimple_seq_add_seq (&stmts, tem);
 
-      /* BIAS - 1.  */
+      /* BIAS + 1.  */
       signed char biasval = LOOP_VINFO_PARTIAL_LOAD_STORE_BIAS (loop_vinfo);
-      tree bias_minus_one
-	= int_const_binop (MINUS_EXPR,
+      tree bias_plus_one
+	= int_const_binop (PLUS_EXPR,
 			   build_int_cst (TREE_TYPE (len), biasval),
 			   build_one_cst (TREE_TYPE (len)));
 
-      /* LAST_INDEX = LEN + (BIAS - 1).  */
-      tree last_index = gimple_build (&stmts, PLUS_EXPR, TREE_TYPE (len),
-				     len, bias_minus_one);
+      /* LAST_INDEX = LEN - (BIAS + 1).  */
+      tree last_index = gimple_build (&stmts, MINUS_EXPR, TREE_TYPE (len),
+				     len, bias_plus_one);
 
-      /* SCALAR_RES = VEC_EXTRACT <VEC_LHS, LEN + BIAS - 1>.  */
+      /* SCALAR_RES = VEC_EXTRACT <VEC_LHS, LEN - (BIAS + 1)>.  */
       tree scalar_res
 	= gimple_build (&stmts, CFN_VEC_EXTRACT, TREE_TYPE (vectype),
 			vec_lhs_phi, last_index);

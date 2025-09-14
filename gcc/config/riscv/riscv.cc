@@ -659,7 +659,7 @@ static const struct riscv_tune_param tt_ascalon_d8_tune_info = {
   {COSTS_N_INSNS (3), COSTS_N_INSNS (3)},	/* int_mul */
   {COSTS_N_INSNS (13), COSTS_N_INSNS (13)},	/* int_div */
   8,						/* issue_rate */
-  3,						/* branch_cost */
+  4,						/* branch_cost */
   4,						/* memory_cost */
   4,						/* fmv_cost */
   false,					/* slow_unaligned_access */
@@ -4640,9 +4640,6 @@ riscv_noce_conversion_profitable_p (rtx_insn *seq,
 				    struct noce_if_info *if_info)
 {
   struct noce_if_info riscv_if_info = *if_info;
-
-  riscv_if_info.original_cost -= COSTS_N_INSNS (2);
-  riscv_if_info.original_cost += insn_cost (if_info->jump, if_info->speed_p);
 
   /* Hack alert!  When `noce_try_store_flag_mask' uses `cstore<mode>4'
      to emit a conditional set operation on DImode output it comes up
@@ -11995,6 +11992,12 @@ riscv_function_ok_for_sibcall (tree decl ATTRIBUTE_UNUSED,
 
   /* Don't use sibcall for interrupt functions.  */
   if (cfun->machine->interrupt_handler_p)
+    return false;
+
+  /* Don't use sibcall if a non-vector CC function is being called
+     from a vector CC function.  */
+  if ((riscv_cc) crtl->abi->id () == RISCV_CC_V
+      && (riscv_cc) expr_callee_abi (exp).id () != RISCV_CC_V)
     return false;
 
   /* Don't use sibcalls in the large model, because a sibcall instruction

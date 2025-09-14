@@ -16095,9 +16095,6 @@ tsubst_decl (tree t, tree args, tsubst_flags_t complain,
 				       == TYPE_MAIN_VARIANT (type));
 		SET_DECL_VALUE_EXPR (r, ve);
 	      }
-	    if (CP_DECL_THREAD_LOCAL_P (r)
-		&& !processing_template_decl)
-	      set_decl_tls_model (r, decl_default_tls_model (r));
 	  }
 	else if (DECL_SELF_REFERENCE_P (t))
 	  SET_DECL_SELF_REFERENCE_P (r);
@@ -16159,6 +16156,11 @@ tsubst_decl (tree t, tree args, tsubst_flags_t complain,
 	    if (!cp_unevaluated_operand)
 	      register_local_specialization (r, t);
 	  }
+
+	if (VAR_P (r)
+	    && CP_DECL_THREAD_LOCAL_P (r)
+	    && !processing_template_decl)
+	  set_decl_tls_model (r, decl_default_tls_model (r));
 
 	DECL_CHAIN (r) = NULL_TREE;
 
@@ -26368,8 +26370,8 @@ unify (tree tparms, tree targs, tree parm, tree arg, int strict,
     case TYPEOF_TYPE:
     case DECLTYPE_TYPE:
     case TRAIT_TYPE:
-      /* Cannot deduce anything from TYPEOF_TYPE, DECLTYPE_TYPE,
-	 or TRAIT_TYPE nodes.  */
+    case PACK_INDEX_TYPE:
+      /* These are non-deduced contexts.  */
       return unify_success (explain_p);
 
     case ERROR_MARK:

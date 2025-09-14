@@ -1846,10 +1846,10 @@
   }
   [(set_attr "type" "vimuladd")])
 
-(define_insn_and_split "*vnmsac_vx_<mode>"
+(define_insn_and_split "*mul_minus_vx_<mode>"
  [(set (match_operand:V_VLSI 0 "register_operand")
    (minus:V_VLSI
-    (match_operand:V_VLSI   3 "register_operand")
+    (match_operand:V_VLSI    3 "register_operand")
     (mult:V_VLSI
      (vec_duplicate:V_VLSI
       (match_operand:<VEL>   1 "register_operand"))
@@ -1859,9 +1859,9 @@
   "&& 1"
   [(const_int 0)]
   {
-    insn_code icode = code_for_pred_vnmsac_vx (<MODE>mode);
-    rtx ops[] = {operands[0], operands[1], operands[2], operands[3],
-		 RVV_VUNDEF(<MODE>mode)};
+    insn_code icode = code_for_pred_mul_minus_vx (<MODE>mode);
+    rtx v_undef = RVV_VUNDEF(<MODE>mode);
+    rtx ops[] = {operands[0], operands[1], operands[2], operands[3], v_undef};
     riscv_vector::emit_vlmax_insn (icode, riscv_vector::TERNARY_OP, ops);
 
     DONE;
@@ -2107,40 +2107,213 @@
   [(set_attr "type" "vfminmax")]
 )
 
-(define_insn_and_split "*vfmin_vf_ieee_<mode>"
+(define_insn_and_split "*v<ieee_fmaxmin_op>_vf_<mode>"
   [(set (match_operand:V_VLSF 0 "register_operand")
     (unspec:V_VLSF [
       (vec_duplicate:V_VLSF
 	(match_operand:<VEL> 2 "register_operand"))
       (match_operand:V_VLSF 1 "register_operand")
-      ] UNSPEC_VFMIN))]
+      ] UNSPEC_VFMAXMIN))]
   "TARGET_VECTOR && !HONOR_SNANS (<MODE>mode) && can_create_pseudo_p ()"
   "#"
   "&& 1"
   [(const_int 0)]
   {
-    riscv_vector::emit_vlmax_insn (code_for_pred_scalar (UNSPEC_VFMIN, <MODE>mode),
+    riscv_vector::emit_vlmax_insn (code_for_pred_scalar (<IEEE_FMAXMIN_OP>,
+							 <MODE>mode),
 				   riscv_vector::BINARY_OP, operands);
     DONE;
   }
   [(set_attr "type" "vfminmax")]
 )
 
-(define_insn_and_split "*vfmin_vf_ieee_<mode>"
+(define_insn_and_split "*v<ieee_fmaxmin_op>_vf_<mode>"
   [(set (match_operand:V_VLSF 0 "register_operand")
     (unspec:V_VLSF [
       (match_operand:V_VLSF 1 "register_operand")
       (vec_duplicate:V_VLSF
 	(match_operand:<VEL> 2 "register_operand"))
-      ] UNSPEC_VFMIN))]
+      ] UNSPEC_VFMAXMIN))]
   "TARGET_VECTOR && !HONOR_SNANS (<MODE>mode) && can_create_pseudo_p ()"
   "#"
   "&& 1"
   [(const_int 0)]
   {
-    riscv_vector::emit_vlmax_insn (code_for_pred_scalar (UNSPEC_VFMIN, <MODE>mode),
+    riscv_vector::emit_vlmax_insn (code_for_pred_scalar (<IEEE_FMAXMIN_OP>,
+							 <MODE>mode),
 				   riscv_vector::BINARY_OP, operands);
     DONE;
   }
   [(set_attr "type" "vfminmax")]
+)
+
+;; vfwmul.vf
+(define_insn_and_split "*vfwmul_vf_<mode>"
+  [(set (match_operand:VWEXTF 0 "register_operand")
+    (mult:VWEXTF
+      (float_extend:VWEXTF
+	(match_operand:<V_DOUBLE_TRUNC> 1 "register_operand"))
+      (vec_duplicate:VWEXTF
+	(float_extend:<VEL>
+	  (match_operand:<VSUBEL> 2 "register_operand")))))]
+  "TARGET_VECTOR && can_create_pseudo_p ()"
+  "#"
+  "&& 1"
+  [(const_int 0)]
+  {
+    riscv_vector::emit_vlmax_insn (code_for_pred_dual_widen_scalar (MULT,
+								    <MODE>mode),
+				   riscv_vector::BINARY_OP_FRM_DYN, operands);
+
+    DONE;
+  }
+  [(set_attr "type" "vfwmul")]
+)
+
+;; vfwadd.vf
+(define_insn_and_split "*vfwadd_vf_<mode>"
+  [(set (match_operand:VWEXTF 0 "register_operand")
+    (plus:VWEXTF
+      (float_extend:VWEXTF
+	(match_operand:<V_DOUBLE_TRUNC> 1 "register_operand"))
+      (vec_duplicate:VWEXTF
+	(float_extend:<VEL>
+	  (match_operand:<VSUBEL> 2 "register_operand")))))]
+  "TARGET_VECTOR && can_create_pseudo_p ()"
+  "#"
+  "&& 1"
+  [(const_int 0)]
+  {
+    riscv_vector::emit_vlmax_insn (code_for_pred_dual_widen_scalar (PLUS,
+								    <MODE>mode),
+				   riscv_vector::BINARY_OP_FRM_DYN, operands);
+
+    DONE;
+  }
+  [(set_attr "type" "vfwalu")]
+)
+
+;; vfwadd.wf
+(define_insn_and_split "*vfwadd_wf_<mode>"
+  [(set (match_operand:VWEXTF 0 "register_operand")
+    (plus:VWEXTF
+      (vec_duplicate:VWEXTF
+	(float_extend:<VEL>
+	  (match_operand:<VSUBEL> 2 "register_operand")))
+      (match_operand:VWEXTF 1 "register_operand")))]
+  "TARGET_VECTOR && can_create_pseudo_p ()"
+  "#"
+  "&& 1"
+  [(const_int 0)]
+  {
+    riscv_vector::emit_vlmax_insn (code_for_pred_single_widen_scalar (PLUS,
+								    <MODE>mode),
+				   riscv_vector::BINARY_OP_FRM_DYN, operands);
+
+    DONE;
+  }
+  [(set_attr "type" "vfwalu")]
+)
+
+;; vfwsub.vf
+(define_insn_and_split "*vfwsub_vf_<mode>"
+  [(set (match_operand:VWEXTF 0 "register_operand")
+    (minus:VWEXTF
+      (float_extend:VWEXTF
+	(match_operand:<V_DOUBLE_TRUNC> 1 "register_operand"))
+      (vec_duplicate:VWEXTF
+	(float_extend:<VEL>
+	  (match_operand:<VSUBEL> 2 "register_operand")))))]
+  "TARGET_VECTOR && can_create_pseudo_p ()"
+  "#"
+  "&& 1"
+  [(const_int 0)]
+  {
+    riscv_vector::emit_vlmax_insn (code_for_pred_dual_widen_scalar (MINUS,
+								    <MODE>mode),
+				   riscv_vector::BINARY_OP_FRM_DYN, operands);
+
+    DONE;
+  }
+  [(set_attr "type" "vfwalu")]
+)
+
+;; vfwsub.wf
+(define_insn_and_split "*vfwsub_wf_<mode>"
+  [(set (match_operand:VWEXTF 0 "register_operand")
+    (minus:VWEXTF
+      (match_operand:VWEXTF 1 "register_operand")
+      (vec_duplicate:VWEXTF
+	(float_extend:<VEL>
+	  (match_operand:<VSUBEL> 2 "register_operand")))))]
+  "TARGET_VECTOR && can_create_pseudo_p ()"
+  "#"
+  "&& 1"
+  [(const_int 0)]
+  {
+    riscv_vector::emit_vlmax_insn (code_for_pred_single_widen_scalar (MINUS,
+								      <MODE>mode),
+				   riscv_vector::BINARY_OP_FRM_DYN, operands);
+
+    DONE;
+  }
+  [(set_attr "type" "vfwalu")]
+)
+
+;; vfadd.vf
+(define_insn_and_split "*vfadd_vf_<mode>"
+  [(set (match_operand:V_VLSF 0 "register_operand")
+    (plus:V_VLSF
+      (vec_duplicate:V_VLSF
+        (match_operand:<VEL> 2 "register_operand"))
+      (match_operand:V_VLSF 1 "register_operand")))]
+  "TARGET_VECTOR && can_create_pseudo_p ()"
+  "#"
+  "&& 1"
+  [(const_int 0)]
+  {
+    riscv_vector::emit_vlmax_insn (code_for_pred_scalar (PLUS, <MODE>mode),
+				   riscv_vector::BINARY_OP_FRM_DYN, operands);
+    DONE;
+  }
+  [(set_attr "type" "vfalu")]
+)
+
+;; vfsub.vf
+(define_insn_and_split "*vfsub_vf_<mode>"
+  [(set (match_operand:V_VLSF 0 "register_operand")
+    (minus:V_VLSF
+      (match_operand:V_VLSF 1 "register_operand")
+      (vec_duplicate:V_VLSF
+        (match_operand:<VEL> 2 "register_operand"))))]
+  "TARGET_VECTOR && can_create_pseudo_p ()"
+  "#"
+  "&& 1"
+  [(const_int 0)]
+  {
+    riscv_vector::emit_vlmax_insn (code_for_pred_scalar (MINUS, <MODE>mode),
+				   riscv_vector::BINARY_OP_FRM_DYN, operands);
+    DONE;
+  }
+  [(set_attr "type" "vfalu")]
+)
+
+;; vfrsub.vf
+(define_insn_and_split "*vfrsub_vf_<mode>"
+  [(set (match_operand:V_VLSF 0 "register_operand")
+    (minus:V_VLSF
+      (vec_duplicate:V_VLSF
+        (match_operand:<VEL> 2 "register_operand"))
+      (match_operand:V_VLSF 1 "register_operand")))]
+  "TARGET_VECTOR && can_create_pseudo_p ()"
+  "#"
+  "&& 1"
+  [(const_int 0)]
+  {
+    riscv_vector::emit_vlmax_insn (code_for_pred_reverse_scalar (MINUS,
+								 <MODE>mode),
+				   riscv_vector::BINARY_OP_FRM_DYN, operands);
+    DONE;
+  }
+  [(set_attr "type" "vfalu")]
 )

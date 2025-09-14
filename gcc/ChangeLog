@@ -1,3 +1,493 @@
+2025-09-13  Gerald Pfeifer  <gerald@pfeifer.com>
+
+	* target.def (dtors_from_cxa_atexit): Properly mark up
+	__cxa_atexit as code.
+	* doc/tm.texi: Regenerate.
+
+2025-09-13  Stefan Schulze Frielinghaus  <stefansf@gcc.gnu.org>
+
+	PR rtl-optimization/121205
+	* lra-constraints.cc (curr_insn_transform): Stop processing on
+	error.
+
+2025-09-13  Gerald Pfeifer  <gerald@pfeifer.com>
+
+	* doc/invoke.texi (Optimize Options): Editorial changes around
+	-fprofile-partial-training.
+
+2025-09-12  Jeff Law  <jlaw@ventanamicro.com>
+
+	* lra-constraints.cc (get_equiv): Bounds check before accessing
+	data in ira_reg_equiv.
+
+2025-09-12  Edwin Lu  <ewlu@rivosinc.com>
+
+	* match.pd: New NARROW_CLIP variant for SAT_TRUNC.
+	* tree-vect-patterns.cc (gimple_unsigned_integer_narrow_clip):
+	Add new decl for NARROW_CLIP.
+	(vect_recog_sat_trunc_pattern): Add NARROW_CLIP check.
+
+2025-09-12  David Malcolm  <dmalcolm@redhat.com>
+
+	PR diagnostics/120063
+	* diagnostics/context.cc (context::execution_failed_p): Also treat
+	any kind::fatal errors as leading to failed execution.
+	* diagnostics/sarif-sink.cc (maybe_get_sarif_level): Handle
+	kind::fatal as SARIF level "error".
+
+2025-09-12  David Malcolm  <dmalcolm@redhat.com>
+
+	PR diagnostics/121876
+	* diagnostics/buffering.cc (context::set_diagnostic_buffer): Add
+	early reject of the no-op case.
+
+2025-09-12  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/121865
+	* ipa-free-lang-data.cc (find_decls_types_r): Don't walk into
+	DECL_CHAIN for any DECL.
+
+2025-09-12  Eric Botcazou  <ebotcazou@adacore.com>
+
+	* ipa-pure-const.cc (check_stmt): Minor formatting tweaks.
+	(pass_data_nothrow): Fix pasto in description.
+
+2025-09-12  Tamar Christina  <tamar.christina@arm.com>
+
+	* internal-fn.def (VEC_TRUNC_ADD_HIGH): New.
+	* doc/generic.texi: Document it.
+	* optabs.def (vec_trunc_add_high): New.
+	* doc/md.texi: Document it.
+	* tree-vect-stmts.cc (vectorizable_early_exit): Use addhn if supported.
+
+2025-09-12  Tamar Christina  <tamar.christina@arm.com>
+
+	* config/aarch64/aarch64-simd.md (vec_addh_narrow<mode>): New.
+
+2025-09-12  Tamar Christina  <tamar.christina@arm.com>
+
+	* tree-vect-loop.cc (vect_analyze_loop_1): If the unroll pragma was set
+	mark it as handled.
+	* doc/extend.texi (pragma GCC unroll): Update documentation.
+
+2025-09-11  Trevor Gross  <tmgross@umich.edu>
+
+	* doc/libgcc.texi (Comparison functions): Document functions as
+	returning CMPtype.
+
+2025-09-11  Wilco Dijkstra  <wilco.dijkstra@arm.com>
+
+	PR middle-end/66462
+	* config/aarch64/aarch64.md (isfinite<mode>2): Add new expander.
+
+2025-09-11  Matteo Nicoli  <matteo.nicoli001@gmail.com>
+
+	PR tree-optimization/121595
+	* match.pd (fabs(a + 0.0) -> fabs (a)): Optimization pattern limited to
+	the -fno-trapping-math case.
+
+2025-09-11  Xi Ruoyao  <xry111@xry111.site>
+
+	* config/loongarch/sync.md (atomic_compare_and_swapti_scq):
+	Require LSX.  Change the operands for the output, the memory,
+	and the expected value to LSX vector modes.  Add a FCCmode
+	output to indicate if CAS has written the desired value into
+	memory.  Use LSX to atomically load both words of the 16B value
+	in memory.
+	(atomic_compare_and_swapti): Pun the modes to satisify
+	the new atomic_compare_and_swapti_scq implementation.  Read the
+	bool return value from the FCC instead of performing a
+	comparision.
+
+2025-09-11  Xi Ruoyao  <xry111@xry111.site>
+
+	* config/loongarch/loongarch.cc (loongarch_print_operand): Call
+	reg_or_0_operand for checking the sanity of %t.
+
+2025-09-11  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/121703
+	* tree-vect-stmts.cc (vectorizable_store): Value-initialize ls.
+	(vectorizable_load): Likewise.
+
+2025-09-11  Tsukasa OI  <research_trasio@irq.a4lg.com>
+
+	* config/riscv/riscv.cc (riscv_function_ok_for_sibcall):
+	Suppress cross calling convention sibcall optimization from
+	the vector calling convention variant.
+
+2025-09-11  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/121829
+	* cfgloopmanip.cc (create_preheader): Ensure we can insert
+	at the end of a preheader.
+
+2025-09-11  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/121870
+	* tree-ssa-propagate.cc
+	(substitute_and_fold_engine::substitute_and_fold): Skip
+	removed stmts from noreturn fixup.
+
+2025-09-11  Robin Dapp  <rdapp@ventanamicro.com>
+
+	* config/riscv/bitmanip.md (*<bitmanip_minmax_cmp_insn>_cmp_<mode>3):
+	New min/max ifcvt pattern.
+	* config/riscv/iterators.md (minu): New iterator.
+	* config/riscv/riscv.cc (riscv_noce_conversion_profitable_p):
+	Remove riscv-specific adjustment.
+
+2025-09-11  Robin Dapp  <rdapp@ventanamicro.com>
+
+	* ifcvt.cc (noce_convert_multiple_sets_1): Add use_cond_earliest
+	param.
+	(noce_convert_multiple_sets): Set use_cond_earliest.
+	(noce_process_if_block): Just use original cost.
+	(noce_find_if_block): Use insn_cost (jump_insn).
+
+2025-09-11  Kito Cheng  <kito.cheng@sifive.com>
+
+	* config/riscv/riscv-selftests.cc (riscv_run_selftests): Call
+	run_vectorize_related_mode_selftests.
+	(test_vectorize_related_mode): New function to test
+	vectorize_related_mode behavior.
+	(run_vectorize_related_mode_selftests): New function to run all
+	vectorize_related_mode tests.
+	(run_vectorize_related_mode_vla_selftests): New function to test
+	VLA modes.
+	(run_vectorize_related_mode_vls_rv64gcv_selftests): New function to
+	test VLS modes on rv64gcv.
+	(run_vectorize_related_mode_vls_rv32gc_zve32x_zvl256b_selftests):
+	New function to test VLS modes on rv32gc_zve32x_zvl256b.
+	(run_vectorize_related_mode_vls_selftests): New function to run all
+	VLS mode tests.
+	* config/riscv/riscv-v.cc (can_find_related_mode_p): Fix VLS type
+	handling by converting TARGET_MIN_VLEN from bits to bytes.
+
+2025-09-10  Georg-Johann Lay  <avr@gjlay.de>
+
+	PR target/81540
+	PR target/49857
+	* common/config/avr/avr-common.cc: Disable -ftree-switch-conversion.
+
+2025-09-10  Takayuki 'January June' Suwa  <jjsuwa_sys3175@yahoo.co.jp>
+
+	* config/xtensa/xtensa.h (TARGET_SMALL_REGISTER_CLASSES_FOR_MODE_P):
+	Change "Xtrnase" in the comment to "Xtensa".
+
+2025-09-10  Peter Bergner  <bergner@tenstorrent.com>
+
+	PR target/121878
+	* config/riscv/tt-ascalon-d8.md (tt_ascalon_d8_vec_idiv_half): Test the
+	Selected Element Width (SEW) rather than the mode.
+	(tt_ascalon_d8_vec_idiv_single): Likewise.
+	(tt_ascalon_d8_vec_idiv_double): Likewise.
+	(tt_ascalon_d8_vec_float_divsqrt_half): Likewise.
+	(tt_ascalon_d8_vec_float_divsqrt_single): Likewise.
+	(tt_ascalon_d8_vec_float_divsqrt_double): Likewise.
+
+2025-09-10  Juergen Christ  <jchrist@linux.ibm.com>
+
+	* tree-vect-loop.cc (vectorizable_live_operation_1): Fix
+	load/store bias handling.
+
+2025-09-10  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* config/riscv/autovec-opt.md (*vfwsub_wf_<mode>): New pattern to
+	combine float_extend + vec_duplicate + vfsub.vv into vfwsub.wf.
+
+2025-09-10  Jakub Jelinek  <jakub@redhat.com>
+
+	PR middle-end/121828
+	* gimple-lower-bitint.cc (gimple_lower_bitint): For REALPART_EXPR
+	consumed by store in the same bb and with REALPART_EXPR from
+	optimizable_arith_overflow, don't add REALPART_EXPR lhs to
+	the m_names bitmap only if the cast from IMAGPART_EXPR doesn't
+	appear in between the REALPART_EXPR and the store.
+
+2025-09-10  Jakub Jelinek  <jakub@redhat.com>
+
+	PR middle-end/121831
+	* expr.cc (raw_data_cst_read_str): New function.
+	(store_constructor) <case ARRAY_TYPE>: Handle RAW_DATA_CST.
+
+2025-09-10  Juergen Christ  <jchrist@linux.ibm.com>
+
+	* config/s390/s390.h (CLZ_DEFINED_VALUE_AT_ZERO): Adjust and
+	return 2.
+	(CTZ_DEFINED_VALUE_AT_ZERO): Return 2.
+	* config/s390/s390.md (clzsi2): Implement.
+	(ctzsi2): Implement.
+
+2025-09-10  Maximilian Immanuel Brandtner  <maxbr@linux.ibm.com>
+
+	* config/s390/vector.md (*vec_extract<mode>_plus_zero_extend):
+	Fix define insn.
+
+2025-09-09  Andrew Stubbs  <ams@baylibre.com>
+
+	* config/gcn/gcn-devices.def: Correct the Max ISA VGPRs counts for
+	GFX10 and GFX11 devices.
+	* config/gcn/gcn.cc (gcn_hsa_declare_function_name): Remove the wave64
+	VGPR count fudge.
+
+2025-09-09  Andrew Stubbs  <ams@baylibre.com>
+
+	* config/gcn/gcn.cc (gcn_expand_builtin_1): Enable the "mode" parameter
+	and ensure that "target" is a register for most of the builtins.
+
+2025-09-09  David Faust  <david.faust@oracle.com>
+
+	PR debug/121411
+	* dwarf2ctf.cc (ctf_get_AT_data_member_location) Use AT_unsigned
+	when fetching AT_bit_offset and AT_data_member_location.  Simplify.
+	(ctf_die_bitsize): Return unsigned HOST_WIDE_INT instead of
+	uint32_t.
+	(gen_ctf_base_type, gen_ctf_sou_type, gen_ctf_enumeration_type):
+	Adapt accordingly.
+
+2025-09-09  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* config/riscv/autovec-opt.md (*vfwsub_vf_<mode>): New pattern to
+	combine float_extend + vec_duplicate + vfwsub.vv into vfwsub.vf.
+
+2025-09-09  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/121678
+	* tree.cc (staticp): Handle REALPART_EXPR and IMAGPART_EXPR.
+
+2025-09-09  Jonathan Wakely  <jwakely@redhat.com>
+
+	* doc/invoke.texi (Warning Options): Note that an option
+	enabled by -Wextra is for C and ObjC only.
+
+2025-09-09  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* config/riscv/autovec-opt.md (*vfwadd_wf_<mode>): New pattern to
+	combine float_extend + vec_duplicate + vfadd.vv into vfwadd.wf.
+	* config/riscv/vector.md
+	(@pred_single_widen_<plus_minus:optab><mode>_scalar): Swap and reorder
+	operands to match the RTL emitted by expand.
+
+2025-09-09  Kyrylo Tkachov  <ktkachov@nvidia.com>
+
+	Revert:
+	2025-07-11  Kyrylo Tkachov  <ktkachov@nvidia.com>
+
+	* config/aarch64/aarch64-simd.md (*bcaxqdi4): New
+	define_insn_and_split.
+
+2025-09-09  Tamar Christina  <tamar.christina@arm.com>
+
+	Revert:
+	2025-09-08  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/121829
+	* tree-vect-loop-manip.cc (vect_remove_forwarder): New
+	function.
+	(slpeel_tree_duplicate_loop_to_edge_cfg): Use it.
+
+2025-09-09  H.J. Lu  <hjl.tools@gmail.com>
+
+	PR target/121861
+	* config/i386/i386.cc (ix86_optab_supported_p): Drop
+	!flag_trapping_math check for floor_optab, ceil_optab and
+	btrunc_optab.
+
+2025-09-09  liuhongt  <hongtao.liu@intel.com>
+
+	* config/i386/i386-expand.cc (expand_vec_perm_vpermil): Extend
+	to handle V8SImode.
+	* config/i386/i386.cc (avx_vpermilp_parallel): Extend to
+	handle vector integer modes with same vector size and same
+	component size.
+	* config/i386/sse.md
+	(<sse2_avx_avx512f>_vpermilp<mode><mask_name>): Ditto.
+	(V48_AVX): New mode iterator.
+	(ssefltmodesuffix): Extend for V16SI/V8DI/V16SF/V8DF.
+
+2025-09-09  liuhongt  <hongtao.liu@intel.com>
+
+	* config/i386/i386.cc (ix86_vector_costs::add_stmt_cost):
+	Check permutation index for vec_perm, don't count it if we
+	know it's not a cross-lane permutation.
+
+2025-09-08  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/107997
+	PR tree-optimization/121844
+	* tree-ssa-loop-ivopts.cc (allow_ip_end_pos_p): Do not allow
+	IP_END for latches ending with a control stmt.
+	(create_new_iv): Do not split the latch edge, instead assert
+	that's not necessary.
+
+2025-09-08  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* config/riscv/autovec-opt.md (*vfwadd_vf_<mode>): New pattern to
+	combine float_extend + vec_duplicate + vfwadd.vv into vfwadd.vf.
+
+2025-09-08  Anton Blanchard  <antonb@tenstorrent.com>
+
+	* config/riscv/riscv.cc (tt_ascalon_d8_tune_info): Increase branch_cost
+	from 3 to 4.
+
+2025-09-08  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/121830
+	* tree-vect-loop.cc (vect_analyze_scalar_cycles_1): Only
+	set STMT_VINFO_REDUC_DEF on reductions.
+	* tree-vect-slp.cc (vect_build_slp_tree_2): Identify reduction
+	PHIs by a set STMT_VINFO_REDUC_DEF instead of their def type.
+
+2025-09-08  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/121829
+	* tree-vect-loop-manip.cc (vect_remove_forwarder): New
+	function.
+	(slpeel_tree_duplicate_loop_to_edge_cfg): Use it.
+
+2025-09-08  Alex Coplan  <alex.coplan@arm.com>
+
+	PR tree-optimization/114892
+	* doc/invoke.texi (Developer Options): Document -folding option
+	for -fdump-tree-*.
+
+2025-09-08  Kugan Vivekanandarajah  <kvivekananda@nvidia.com>
+
+	* ipa-cp.cc (gather_count_of_non_rec_edges): Check count
+	initialization before adding to total.
+
+2025-09-08  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* config/riscv/autovec-opt.md (*vfrsub_vf_<mode>): New pattern to
+	combine vec_duplicate + vfsub.vv into vfrsub.vf.
+
+2025-09-08  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* config/riscv/autovec-opt.md (*vfsub_vf_<mode>): New pattern to
+	combine vec_duplicate + vfsub.vv into vfsub.vf.
+	* config/riscv/vector.md (@pred_<optab><mode>_scalar): Allow VLS modes.
+
+2025-09-08  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* config/riscv/autovec-opt.md (*vfadd_vf_<mode>): New pattern to
+	combine vec_duplicate + vfadd.vv into vfadd.vf.
+
+2025-09-08  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* config/riscv/autovec-opt.md (*vfwmul_vf_<mode>): New pattern to
+	combine float_extend + vec_duplicate + vfmul.vv into vfmul.vf.
+	* config/riscv/vector.md (*@pred_dual_widen_<optab><mode>_scalar):
+	Swap operands to match the RTL emitted by expand, i.e. first
+	float_extend then vec_duplicate.
+
+2025-09-08  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* config/riscv/autovec-opt.md (*vfmin_vf_ieee_<mode>): Rename into...
+	(*v<ieee_fmaxmin_op>_vf_<mode>): New pattern to combine vec_duplicate +
+	vf{max,min}.vv (unspec) into vf{max,min}.vf.
+
+2025-09-08  Gerald Pfeifer  <gerald@pfeifer.com>
+
+	* doc/extend.texi (SH Function Attributes): Remove reference to
+	GNU Binutils 2.7 requirement.
+	(H8/300 Variable Attributes): Ditto.
+
+2025-09-08  Andrew Pinski  <quic_apinski@quicinc.com>
+
+	PR tree-optimization/87900
+	* tree-ssa-strlen.cc  (strlen_pass::handle_assign): Add RHS argument.
+	For empty constructor RHS, see if can combine with a previous malloc into
+	a calloc.
+	(strlen_pass::check_and_optimize_call): Update call to handle_assign;
+	passing NULL_TREE for RHS.
+	(strlen_pass::check_and_optimize_stmt): Update call to handle_assign.
+
+2025-09-08  Andrew Pinski  <quic_apinski@quicinc.com>
+
+	PR tree-optimization/83022
+	* tree-ssa-strlen.cc (last_stmt_ptr_check): New function.
+	(allow_memset_malloc_to_calloc): New function.
+	(strlen_pass::handle_builtin_memset): Check to see if it is a good
+	idea to do the malloc+memset->calloc optimization.
+	(printf_strlen_execute): Free post dom info.
+
+2025-09-08  Sam James  <sam@gentoo.org>
+
+	* common.opt.urls: Regenerate.
+
+2025-09-07  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/121841
+	* tree-ssa-forwprop.cc (optimize_agr_copyprop_1): Allow
+	two different decls as bases as non-overlapping bases.
+
+2025-09-07  Jeff Law  <jlaw@ventanamicro.com>
+
+	* dep-fusion.cc: Mark clone, gate and execute methods as final.
+
+2025-09-07  Kuan-Lin Chen  <rufus@andestech.com>
+
+	* config/riscv/andes-vector-builtins-bases.cc (nds_vd4dot): New class.
+	(class nds_vd4dotsu): New class.
+	* config/riscv/andes-vector-builtins-bases.h: New def.
+	* config/riscv/andes-vector-builtins-functions.def (nds_vd4dots): Ditto.
+	(nds_vd4dotsu): Ditto.
+	(nds_vd4dotu): Ditto.
+	* config/riscv/andes-vector.md
+	(@pred_nds_vd4dot<su><mode>): New pattern.
+	(@pred_nds_vd4dotsu<mode>): New pattern.
+	* config/riscv/genrvv-type-indexer.cc (main): Modify sew of QUAD_FIX,
+	QUAD_FIX_SIGNED and QUAD_FIX_UNSIGNED.
+	* config/riscv/riscv-vector-builtins.cc
+	(qexti_vvvv_ops): New operand information.
+	(qexti_su_vvvv_ops): New operand information.
+	(qextu_vvvv_ops): New operand information.
+	* config/riscv/riscv-vector-builtins.h (XANDESVDOT_EXT): New def.
+	(required_ext_to_isa_name): Add case XANDESVDOT_EXT.
+	(required_extensions_specified): Ditto.
+	(struct function_group_info): Ditto.
+	* config/riscv/vector-iterators.md (NDS_QUAD_FIX): New iterator.
+
+2025-09-07  Jeff Law  <jlaw@ventanamicro.com>
+
+	* config/riscv/riscv-opts.h (riscv_microarchitecture_type): Fix ordering.
+
+2025-09-07  Kuan-Lin Chen  <rufus@andestech.com>
+
+	* common/config/riscv/riscv-common.cc:
+	Turn on VECTOR_ELEN_FP_16 for XAndesvpackfph.
+	* config/riscv/andes-vector-builtins-bases.cc (nds_vfpmad): New class.
+	* config/riscv/andes-vector-builtins-bases.h: New def.
+	* config/riscv/andes-vector-builtins-functions.def (nds_vfpmadt): Ditto.
+	(nds_vfpmadb): Ditto.
+	(nds_vfpmadt_frm): Ditto.
+	(nds_vfpmadb_frm): Ditto.
+	* config/riscv/andes-vector.md (@pred_nds_vfpmad<nds_tb><mode>):
+	New pattern.
+	* config/riscv/riscv-vector-builtins-types.def
+	(DEF_RVV_F16_OPS): New def.
+	* config/riscv/riscv-vector-builtins.cc (f16_ops): Ditto
+	* config/riscv/riscv-vector-builtins.def (float32_type_node): Ditto.
+	* config/riscv/riscv-vector-builtins.h (XANDESVPACKFPH_EXT): Ditto.
+	(required_ext_to_isa_name): Add case XANDESVPACKFPH_EXT.
+	(required_extensions_specified): Ditto.
+	* config/riscv/vector-iterators.md (VHF): New iterator.
+
+2025-09-07  Georg-Johann Lay  <avr@gjlay.de>
+
+	PR target/121794
+	* config/avr/avr.md (cmpqi3): Use cpi R,0 if possible.
+
+2025-09-07  Pan Li  <pan2.li@intel.com>
+
+	* config/riscv/autovec-opt.md (*vnmsac_vx_<mode>): Rename from.
+	(*mul_minus_vx_<mode>): Rename to and add nmsub support.
+	* config/riscv/vector.md (@pred_vnmsac_vx_<mode>): Rename from.
+	(@pred_mul_minus_vx_<mode>): Rename to and add nmsub support.
+	(*pred_nmsac_<mode>_scalar_undef): Rename from.
+	(*pred_mul_minus_vx<mode>_undef): Rename to and add nmsub support.
+
 2025-09-06  Sam James  <sam@gentoo.org>
 
 	* doc/generic.texi (TYPE_CANONICAL): Don't mention long-removed
