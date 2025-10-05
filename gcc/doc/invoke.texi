@@ -272,7 +272,7 @@ in the following sections.
 -Woverloaded-virtual  -Wno-pmf-conversions -Wself-move -Wsign-promo
 -Wsized-deallocation  -Wsuggest-final-methods
 -Wsuggest-final-types  -Wsuggest-override  -Wno-template-body
--Wno-template-id-cdtor  -Wtemplate-names-tu-local
+-Wno-template-id-cdtor  -Wtemplate-names-tu-local -Wno-external-tu-local
 -Wno-terminate  -Wno-vexing-parse  -Wvirtual-inheritance
 -Wno-virtual-move-assign  -Wvolatile}
 
@@ -4758,6 +4758,32 @@ This warning attempts to detect cases where this might occur.
 The presence of an explicit instantiation silences the warning.
 
 This flag is enabled by @option{-Wextra}.
+
+@opindex Wexternal-tu-local
+@opindex Wno-external-tu-local
+@item -Wno-external-tu-local
+Warn when naming a TU-local entity outside of the translation unit it
+was declared in.  Such declarations will be ignored during name lookup.
+This can occur when performing ADL from a template declared in the same
+TU as the internal function:
+
+@smallexample
+export module M;
+template <typename T> void foo(T t) @{
+  bar(t);
+@}
+struct S @{@} s;
+static void bar(S) @{@}  // internal linkage
+
+// instantiating foo(s) from outside this TU can see ::bar,
+// but naming it there is ill-formed.
+@end smallexample
+
+This can be worked around by making @code{bar} attached to the global
+module, using @code{extern "C++"}.
+
+This warning is enabled by default, and is upgraded to an error by
+@option{-pedantic-errors}.
 
 @opindex Wterminate
 @opindex Wno-terminate
@@ -14725,27 +14751,25 @@ and @option{-fauto-profile}.
 
 @opindex ftrivial-auto-var-init
 @item -ftrivial-auto-var-init=@var{choice}
-Initialize automatic variables with either a pattern or with zeroes to increase
-the security and predictability of a program by preventing uninitialized memory
-disclosure and use.
+Initialize automatic variables or temporary objects with either a pattern or with
+zeroes to increase the security and predictability of a program by preventing
+uninitialized memory disclosure and use.
 GCC still considers an automatic variable that doesn't have an explicit
 initializer as uninitialized, @option{-Wuninitialized} and
 @option{-Wanalyzer-use-of-uninitialized-value} will still report
-warning messages on such automatic variables and the compiler will
-perform optimization as if the variable were uninitialized.
+warning messages on such automatic variables or temporary objects and the
+compiler will perform optimization as if the variable were uninitialized.
 With this option, GCC will also initialize any padding of automatic variables
-that have structure or union types to zeroes.
-However, the current implementation cannot initialize automatic variables that
-are declared between the controlling expression and the first case of a
-@code{switch} statement.  Using @option{-Wtrivial-auto-var-init} to report all
-such cases.
+or temporary objects that have structure or union types to zeroes.
+However, the current implementation cannot initialize automatic variables
+whose initialization is bypassed through @code{switch} or @code{goto}
+statement.  Using @option{-Wtrivial-auto-var-init} to report all such cases.
 
 The three values of @var{choice} are:
 
 @itemize @bullet
 @item
 @samp{uninitialized} doesn't initialize any automatic variables.
-This is C and C++'s default.
 
 @item
 @samp{pattern} Initialize automatic variables with values which will likely
@@ -14759,7 +14783,10 @@ The values used for pattern initialization might be changed in the future.
 @samp{zero} Initialize automatic variables with zeroes.
 @end itemize
 
-The default is @samp{uninitialized}.
+The default is @samp{uninitialized} except for C++26, in which case
+if @option{-ftrivial-auto-var-init=} is not specified at all automatic
+variables or temporary objects are zero initialized, but zero initialization
+of padding bits does not happen.
 
 Note that the initializer values, whether @samp{zero} or @samp{pattern},
 refer to data representation (in memory or machine registers), rather
@@ -14772,7 +14799,7 @@ with the bit patterns @code{0x00} or @code{0xFE}, depending on
 @var{choice}, whether or not these representations stand for values in
 that range, and even if they do, the interpretation of the value held by
 the variable will depend on the bias.  A @samp{hardbool} variable that
-uses say @code{0X5A} and @code{0xA5} for @code{false} and @code{true},
+uses say @code{0x5A} and @code{0xA5} for @code{false} and @code{true},
 respectively, will trap with either @samp{choice} of trivial
 initializer, i.e., @samp{zero} initialization will not convert to the
 representation for @code{false}, even if it would for a @code{static}
@@ -14783,7 +14810,8 @@ are initialized with @code{false} (zero), even when @samp{pattern} is
 requested.
 
 You can control this behavior for a specific variable by using the variable
-attribute @code{uninitialized} (@pxref{Variable Attributes}).
+attribute @code{uninitialized} standard attribute (@pxref{Variable Attributes})
+or the C++26 @code{[[indeterminate]]}.
 
 @opindex fvect-cost-model
 @item -fvect-cost-model=@var{model}

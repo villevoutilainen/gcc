@@ -10500,6 +10500,7 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
   unsigned int arg_index = 0;
   int conv_index = 0;
   int param_index = 0;
+  tree parmd = DECL_ARGUMENTS (fn);
 
   auto consume_object_arg = [&arg_index, &first_arg, args]()
     {
@@ -10517,6 +10518,8 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
       tree object_arg = consume_object_arg ();
       argarray[argarray_size++] = build_this (object_arg);
       parm = TREE_CHAIN (parm);
+      if (parmd)
+	parmd = DECL_CHAIN (parmd);
       /* We should never try to call the abstract constructor.  */
       gcc_assert (!DECL_HAS_IN_CHARGE_PARM_P (fn));
 
@@ -10525,6 +10528,8 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
 	  argarray[argarray_size++] = (*args)[arg_index];
 	  ++arg_index;
 	  parm = TREE_CHAIN (parm);
+	  if (parmd)
+	    parmd = DECL_CHAIN (parmd);
 	}
     }
   /* Bypass access control for 'this' parameter.  */
@@ -10612,6 +10617,8 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
 
       argarray[argarray_size++] = converted_arg;
       parm = TREE_CHAIN (parm);
+      if (parmd)
+	parmd = DECL_CHAIN (parmd);
     }
 
   auto handle_arg = [fn, flags](tree type,
@@ -10635,6 +10642,27 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
       return val;
     };
 
+  auto handle_indeterminate_arg = [](tree parmd, tree val)
+    {
+      if (parmd
+	  && lookup_attribute (NULL, "indeterminate", DECL_ATTRIBUTES (parmd)))
+	{
+	  STRIP_NOPS (val);
+	  if (TREE_CODE (val) == ADDR_EXPR
+	      && TREE_CODE (TREE_OPERAND (val, 0)) == TARGET_EXPR)
+	    {
+	      val = TARGET_EXPR_SLOT (TREE_OPERAND (val, 0));
+	      if (auto_var_p (val) && DECL_ARTIFICIAL (val))
+		{
+		  tree id = get_identifier ("indeterminate");
+		  DECL_ATTRIBUTES (val)
+		    = tree_cons (build_tree_list (NULL_TREE, id), NULL_TREE,
+				 DECL_ATTRIBUTES (val));
+		}
+	    }
+	}
+    };
+
   if (DECL_XOBJ_MEMBER_FUNCTION_P (fn))
     {
       gcc_assert (cand->num_convs > 0);
@@ -10648,8 +10676,13 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
       if (val == error_mark_node)
 	return error_mark_node;
       else
-	argarray[argarray_size++] = val;
+	{
+	  argarray[argarray_size++] = val;
+	  handle_indeterminate_arg (parmd, val);
+	}
       parm = TREE_CHAIN (parm);
+      if (parmd)
+	parmd = DECL_CHAIN (parmd);
     }
 
   gcc_assert (first_arg == NULL_TREE);
@@ -10695,7 +10728,12 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
       if (val == error_mark_node)
 	return error_mark_node;
       else
-	argarray[argarray_size++] = val;
+	{
+	  argarray[argarray_size++] = val;
+	  handle_indeterminate_arg (parmd, val);
+	}
+      if (parmd)
+	parmd = DECL_CHAIN (parmd);
     }
 
   /* Default arguments */
@@ -10711,6 +10749,9 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
       if (val == error_mark_node)
 	return error_mark_node;
       argarray[argarray_size++] = val;
+      handle_indeterminate_arg (parmd, val);
+      if (parmd)
+	parmd = DECL_CHAIN (parmd);
     }
 
   /* Ellipsis */
