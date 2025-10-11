@@ -412,12 +412,38 @@ set_postcondition_function (tree fndecl, tree post)
 /* tree that holds the internal representation source location _impl */
 static GTY(()) tree contracts_source_location_impl_type;
 
-static tree
+/* For a given pre or post condition function, find the checked function. */
+tree
 get_orig_for_outlined (tree fndecl)
 {
   gcc_checking_assert (fndecl);
   tree *result = hash_map_safe_get (orig_from_outlined, fndecl);
   return result ? *result : NULL_TREE;
+}
+
+/* For a given function decl name identifier, return identifier representing
+ the name of the contracts check. Using the same identifier is not possible
+ with functions with special meaning names (i.e. main and cdtors). For
+ consistency reasons we use the same naming convention for all contract check
+ functions.
+ PRE specifies if we need an identifier for a pre or post contract check.
+ CDTOR specifies if the checked function is a cdtor.  */
+
+static tree
+contracts_fixup_name (tree idin, bool pre, bool cdtor)
+{
+  const char *fname = IDENTIFIER_POINTER (idin);
+  size_t len = strlen (fname);
+  /* Cdtor names have a space at the end. We need to remove that space
+     when forming the new identifier. */
+  char *nn = xasprintf ("%.*s%s%s",
+			cdtor ? (int)len-1 : int(len),
+			fname,
+			JOIN_STR,
+			pre ? "pre" : "post");
+  tree newid = get_identifier (nn);
+  free (nn);
+  return newid;
 }
 
 /* Build a declaration for the pre- or postcondition of a guarded FNDECL.  */
@@ -520,13 +546,19 @@ build_contract_condition_function (tree fndecl, bool pre)
   if (DECL_IOBJ_MEMBER_FUNCTION_P (fndecl))
     TREE_TYPE (fn) = build_method_type (class_type, TREE_TYPE (fn));
 
-  DECL_NAME (fn) = copy_node (DECL_NAME (fn));
+  /* The contract check functions are never a cdtor */
+  DECL_CXX_DESTRUCTOR_P (fn) = DECL_CXX_CONSTRUCTOR_P (fn) = 0;
+
+  DECL_NAME (fn) = contracts_fixup_name (DECL_NAME(fndecl),
+					 pre,
+					 DECL_CXX_CONSTRUCTOR_P (fndecl)
+					 || DECL_CXX_DESTRUCTOR_P (fndecl));
+
   DECL_INITIAL (fn) = NULL_TREE;
   CONTRACT_HELPER (fn) = pre ? ldf_contract_pre : ldf_contract_post;
   /* We might have a pre/post for a wrapper.  */
   DECL_CONTRACT_WRAPPER (fn) = DECL_CONTRACT_WRAPPER (fndecl);
 
-  IDENTIFIER_VIRTUAL_P (DECL_NAME (fn)) = false;
   DECL_VIRTUAL_P (fn) = false;
 
   /* Make these functions internal if we can, i.e. if the guarded function is
@@ -538,16 +570,6 @@ build_contract_condition_function (tree fndecl, bool pre)
       DECL_EXTERNAL (fn) = false;
       DECL_WEAK (fn) = false;
       DECL_COMDAT (fn) = false;
-
-      /* We may not have set the comdat group on the guarded function yet.
-	 If we haven't, we'll add this to the same group in comdat_linkage
-	 later.  Otherwise, add it to the same comdat group now.  */
-      if (DECL_ONE_ONLY (fndecl))
-	{
-	  symtab_node *n = symtab_node::get (fndecl);
-	  cgraph_node::get_create (fn)->add_to_same_comdat_group (n);
-	}
-
       DECL_INTERFACE_KNOWN (fn) = true;
     }
 
@@ -679,17 +701,14 @@ handle_contracts_p (tree fndecl)
 	  && contract_any_active_p (fndecl));
 }
 
-/* Should we break out FNDECL pre/post contracts into separate functions?
-   FIXME I'd like this to default to 0, but that will need an overhaul to the
-   return identifier handling to just refer to the RESULT_DECL.  */
+/* Should we break out FNDECL pre/post contracts into separate functions.  */
 
 static bool
 outline_contracts_p (tree fndecl)
 {
-  bool cdtor = DECL_CONSTRUCTOR_P (fndecl) || DECL_DESTRUCTOR_P (fndecl);
   if (flag_contracts_nonattr)
-    return flag_contract_checks_outlined && !cdtor;
-  return !cdtor;
+    return flag_contract_checks_outlined;
+  return !(DECL_CONSTRUCTOR_P (fndecl) || DECL_DESTRUCTOR_P (fndecl));
 }
 
 /* Returns the parameter corresponding to the return value of a guarded
@@ -962,8 +981,9 @@ build_thunk_like_call (tree function, int n, tree *argarray)
 
   tree decl = get_callee_fndecl (function);
 
+  /* Set TREE_USED for the benefit of -Wunused.  */
   if (decl && !TREE_USED (decl))
-      mark_used (decl);
+    TREE_USED (decl) = true;
 
   CALL_FROM_THUNK_P (function) = true;
 
@@ -1525,7 +1545,17 @@ static tree
 build_contract_violation_cxx2a (tree contract)
 {
   expanded_location loc = expand_location (EXPR_LOCATION (contract));
-  const char *function = fndecl_name (DECL_ORIGIN (current_function_decl));
+
+  tree decl = current_function_decl;
+  bool pre = DECL_IS_PRE_FN_P(decl);
+  bool post = DECL_IS_POST_FN_P(decl);
+
+  /* If we have a pre or post check, mangle the name of the checked
+   function. */
+  if (pre || post)
+    decl = get_orig_for_outlined (decl);
+
+  const char *function = fndecl_name (DECL_ORIGIN(decl));
   const char *level = get_contract_level_name (contract);
   const char *role = get_contract_role_name (contract);
 
@@ -3042,7 +3072,8 @@ start_function_contracts (tree fndecl)
 	      }
 	  }
 
-  /* For cdtors, we evaluate the contracts check inline.  */
+  /* We do not need the outline function decls if we are building contracts
+     inline.  */
   if (!outline_contracts_p (fndecl))
     return;
 
