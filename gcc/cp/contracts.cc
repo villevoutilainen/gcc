@@ -520,7 +520,15 @@ build_contract_condition_function (tree fndecl, bool pre)
   if (DECL_IOBJ_MEMBER_FUNCTION_P (fndecl))
     TREE_TYPE (fn) = build_method_type (class_type, TREE_TYPE (fn));
 
-  DECL_NAME (fn) = copy_node (DECL_NAME (fn));
+  if (DECL_CONSTRUCTOR_P (fndecl) || DECL_DESTRUCTOR_P (fndecl))
+    {
+      /* If we're dealing with a cdtor, we need to give it a "normal"
+	 DECL_NAME so it doesn't trigger IDENTIFIER_CDTOR_P checks */
+      DECL_NAME (fn) = DECL_ASSEMBLER_NAME(fndecl);
+      DECL_CXX_DESTRUCTOR_P (fn) = DECL_CXX_CONSTRUCTOR_P (fn) = 0;
+    }
+  else
+    DECL_NAME (fn) = copy_node (DECL_NAME (fn));
   DECL_INITIAL (fn) = NULL_TREE;
   CONTRACT_HELPER (fn) = pre ? ldf_contract_pre : ldf_contract_post;
   /* We might have a pre/post for a wrapper.  */
@@ -538,16 +546,6 @@ build_contract_condition_function (tree fndecl, bool pre)
       DECL_EXTERNAL (fn) = false;
       DECL_WEAK (fn) = false;
       DECL_COMDAT (fn) = false;
-
-      /* We may not have set the comdat group on the guarded function yet.
-	 If we haven't, we'll add this to the same group in comdat_linkage
-	 later.  Otherwise, add it to the same comdat group now.  */
-      if (DECL_ONE_ONLY (fndecl))
-	{
-	  symtab_node *n = symtab_node::get (fndecl);
-	  cgraph_node::get_create (fn)->add_to_same_comdat_group (n);
-	}
-
       DECL_INTERFACE_KNOWN (fn) = true;
     }
 
@@ -679,17 +677,14 @@ handle_contracts_p (tree fndecl)
 	  && contract_any_active_p (fndecl));
 }
 
-/* Should we break out FNDECL pre/post contracts into separate functions?
-   FIXME I'd like this to default to 0, but that will need an overhaul to the
-   return identifier handling to just refer to the RESULT_DECL.  */
+/* Should we break out FNDECL pre/post contracts into separate functions.  */
 
 static bool
 outline_contracts_p (tree fndecl)
 {
-  bool cdtor = DECL_CONSTRUCTOR_P (fndecl) || DECL_DESTRUCTOR_P (fndecl);
   if (flag_contracts_nonattr)
-    return flag_contract_checks_outlined && !cdtor;
-  return !cdtor;
+    return flag_contract_checks_outlined;
+  return !(DECL_CONSTRUCTOR_P (fndecl) || DECL_DESTRUCTOR_P (fndecl));
 }
 
 /* Returns the parameter corresponding to the return value of a guarded
@@ -962,8 +957,9 @@ build_thunk_like_call (tree function, int n, tree *argarray)
 
   tree decl = get_callee_fndecl (function);
 
+  /* Set TREE_USED for the benefit of -Wunused.  */
   if (decl && !TREE_USED (decl))
-      mark_used (decl);
+    TREE_USED (decl) = true;
 
   CALL_FROM_THUNK_P (function) = true;
 
@@ -3042,7 +3038,8 @@ start_function_contracts (tree fndecl)
 	      }
 	  }
 
-  /* For cdtors, we evaluate the contracts check inline.  */
+  /* We do not need the outline function decls if we are building contracts
+     inline.  */
   if (!outline_contracts_p (fndecl))
     return;
 
