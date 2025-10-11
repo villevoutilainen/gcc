@@ -225,10 +225,9 @@ enum contract_evaluation_semantic : uint16_t {
   CES_ENFORCE = 3,
   CES_QUICK = 4,
 
-  // These should start at 1000
-  CES_NOEXCEPT_ENFORCE = 5,
-  CES_NOEXCEPT_OBSERVE = 6,
-  CES_FORCE_QUICK = 7,
+  /* Implementation-defined.  */
+  CES_NOEXCEPT_ENFORCE = 1001,
+  CES_NOEXCEPT_OBSERVE = 1002,
 };
 
 enum detection_mode : uint16_t {
@@ -362,6 +361,7 @@ extern void set_contract_attributes 		(tree, tree);
 extern bool all_attributes_are_contracts_p	(tree);
 extern tree finish_contract_attribute		(tree, tree);
 extern bool diagnose_misapplied_contracts	(tree);
+extern contract_evaluation_semantic get_evaluation_semantic (const_tree);
 
 extern tree make_postcondition_variable		(cp_expr);
 extern tree make_postcondition_variable		(cp_expr, tree);
@@ -524,6 +524,8 @@ parm_used_in_post_p (const_tree decl)
 inline bool
 contract_ignored_p (const_tree contract)
 {
+  if (flag_contracts_nonattr)
+    return (get_evaluation_semantic (contract) <= CES_IGNORE);
   return (get_contract_semantic (contract) <= CCS_IGNORE);
 }
 
@@ -532,6 +534,8 @@ contract_ignored_p (const_tree contract)
 inline bool
 contract_evaluated_p (const_tree contract)
 {
+  if (flag_contracts_nonattr)
+    return (get_evaluation_semantic (contract) >= CES_OBSERVE);
   return (get_contract_semantic (contract) >= CCS_NEVER);
 }
 #endif /* ! GCC_CP_CONTRACT_H */
