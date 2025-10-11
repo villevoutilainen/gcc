@@ -225,10 +225,9 @@ enum contract_evaluation_semantic : uint16_t {
   CES_ENFORCE = 3,
   CES_QUICK = 4,
 
-  // These should start at 1000
-  CES_NOEXCEPT_ENFORCE = 5,
-  CES_NOEXCEPT_OBSERVE = 6,
-  CES_FORCE_QUICK = 7,
+  /* Implementation-defined.  */
+  CES_NOEXCEPT_ENFORCE = 1001,
+  CES_NOEXCEPT_OBSERVE = 1002,
 };
 
 enum detection_mode : uint16_t {
