@@ -567,7 +567,10 @@ build_contract_condition_function (tree fndecl, bool pre)
 static bool
 contract_active_p (tree contract)
 {
-  return get_contract_semantic (contract) != CCS_IGNORE;
+  if (flag_contracts_nonattr)
+    return get_evaluation_semantic (contract) != CES_IGNORE;
+  else
+    return get_contract_semantic (contract) != CCS_IGNORE;
 }
 
 /* True if FNDECL has any checked or assumed contracts whose TREE_CODE is
@@ -888,8 +891,15 @@ emit_contract_statement (tree contract)
 {
   /* Only add valid contracts.  */
   if (contract == error_mark_node
-      || CONTRACT_CONDITION (contract) == error_mark_node
-      || get_contract_semantic (contract) == CCS_INVALID)
+      || CONTRACT_CONDITION (contract) == error_mark_node)
+    return false;
+
+  if (flag_contracts_nonattr
+      && get_evaluation_semantic (contract) == CES_INVALID)
+    return false;
+
+  if (!flag_contracts_nonattr
+      && get_contract_semantic (contract) == CCS_INVALID)
     return false;
 
   add_stmt (contract);
@@ -2345,8 +2355,8 @@ get_contract_assertion_kind (tree contract)
 
 /* Get contract_evaluation_semantic of the specified contract.  */
 
-static uint16_t
-get_evaluation_semantic (tree contract)
+contract_evaluation_semantic
+get_evaluation_semantic (const_tree contract)
 {
   gcc_checking_assert (flag_contracts_nonattr);
   if (CONTRACT_EVALUATION_SEMANTIC (contract))
@@ -2355,29 +2365,11 @@ get_evaluation_semantic (tree contract)
       tree i = (TREE_CODE (s) == INTEGER_CST) ? s
 					      : DECL_INITIAL (STRIP_NOPS (s));
       gcc_checking_assert (!type_dependent_expression_p (s) && i);
-      return (uint16_t) tree_to_uhwi (i);
+      return (contract_evaluation_semantic) tree_to_uhwi (i);
     }
 
-  /* Temporary; pick up the semantic from the bitfield and translate to the
-     P2900 version.  */
-  contract_semantic semantic = get_contract_semantic (contract);
-  switch (semantic)
-    {
-      default:
-	gcc_unreachable ();
-      case CCS_IGNORE:
-	return CES_IGNORE;
-      case CCS_OBSERVE:
-	return CES_OBSERVE;
-      case CCS_ENFORCE:
-	return CES_ENFORCE;
-      case CCS_QUICK:
-	return CES_QUICK;
-      case CCS_NOEXCEPT_ENFORCE:
-	return CES_NOEXCEPT_ENFORCE;
-      case CCS_NOEXCEPT_OBSERVE:
-	return CES_NOEXCEPT_OBSERVE;
-    }
+  gcc_checking_assert (0 && "we should not get here");
+  return CES_INVALID;
 }
 
 /* Insert a BUILT_IN_OBSERVABLE epoch marker.  */
@@ -2417,12 +2409,8 @@ build_contract_violation_p2900_ctor (tree contract)
     can_be_const = false;
 
   tree eval_semantic = CONTRACT_EVALUATION_SEMANTIC (contract);
-  if (!eval_semantic || really_constant_p (eval_semantic))
-    {
-      uint16_t semantic = get_evaluation_semantic (contract);
-      eval_semantic = build_int_cst (uint16_type_node, semantic);
-    }
-  else
+  gcc_checking_assert (eval_semantic && "We should have set this.");
+  if (!really_constant_p (eval_semantic))
     can_be_const = false;
 
   tree comment = CONTRACT_COMMENT (contract);
@@ -2555,7 +2543,7 @@ declare_violation_handler_wrappers ()
 static tree
 build_contract_check_p2900 (tree contract)
 {
-  uint16_t semantic = get_evaluation_semantic (contract);
+  contract_evaluation_semantic semantic = get_evaluation_semantic (contract);
   if (semantic == CES_INVALID)
     return NULL_TREE;
 
@@ -2589,9 +2577,8 @@ build_contract_check_p2900 (tree contract)
      noexcept_observe.  */
   if (flag_contracts_disable_predicate_exception_translation)
     {
-      uint16_t eval_semantic = get_evaluation_semantic (contract);
-      if (eval_semantic != CES_NOEXCEPT_ENFORCE
-	  && eval_semantic != CES_NOEXCEPT_OBSERVE)
+      if (semantic != CES_NOEXCEPT_ENFORCE
+	  && semantic != CES_NOEXCEPT_OBSERVE)
 	predicate_needs_catch = false;
       else
 	warning_at (loc, 1,
@@ -3971,15 +3958,22 @@ grok_contract (tree attribute, tree mode, tree result, cp_expr condition,
       SET_EXPR_LOCATION (contract, loc);
     }
 
-  /* Determine the evaluation semantic:
-     First, apply the c++2a rules
-     FIXME: this is a convenience to avoid updating many tests.  */
-  contract_semantic semantic = compute_concrete_semantic (contract);
-  if (flag_contracts_nonattr
-      && OPTION_SET_P (flag_contract_evaluation_semantic))
-    semantic
-      = static_cast<contract_semantic>(flag_contract_evaluation_semantic);
-  set_contract_semantic (contract, semantic);
+  /* Determine the evaluation semantic.  */
+  if (flag_contracts_nonattr)
+    {
+      /* This is now an override, so that if not set we will get the default
+	 (currently enforce).  */
+      contract_evaluation_semantic ev_semantic
+	= static_cast<contract_evaluation_semantic>
+		     (flag_contract_evaluation_semantic);
+      CONTRACT_EVALUATION_SEMANTIC (contract)
+	= build_int_cst (uint16_type_node, (uint16_t) ev_semantic);
+    }
+  else
+    {
+      contract_semantic semantic = compute_concrete_semantic (contract);
+      set_contract_semantic (contract, semantic);
+    }
 
   /* If the contract is deferred, don't do anything with the condition.  */
   if (TREE_CODE (condition) == DEFERRED_PARSE)
