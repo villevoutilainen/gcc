@@ -12532,7 +12532,7 @@ potential_constant_expression_1 (tree t, bool want_rval, bool strict, bool now,
     case ASSERTION_STMT:
     case PRECONDITION_STMT:
     case POSTCONDITION_STMT:
-      if (!checked_contract_p (get_contract_semantic (t)))
+      if (!contract_evaluated_p (t))
 	return true;
       return RECUR (CONTRACT_CONDITION (t), rval);
 
