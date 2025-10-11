@@ -18,4 +18,4 @@ int main(int, char**)
 }
 
 // { dg-output "contract violation in function void f.. at .*: check.15..*(\n|\r\n|\r)" }
-// { dg-output ".assertion_kind: pre, semantic: unknown: 6, mode: evaluation_exception: threw an instance of .int., terminating: no.*(\n|\r\n|\r)" }
+// { dg-output ".assertion_kind: pre, semantic: unknown: 1002, mode: evaluation_exception: threw an instance of .int., terminating: no.*(\n|\r\n|\r)" }
