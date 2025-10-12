@@ -731,7 +731,7 @@ Objective-C and Objective-C++ Dialects}.
 
 @item Linker Options
 @xref{Link Options,,Options for Linking}.
-@gccoptlist{@var{object-file-name}  -fuse-ld=@var{linker}  -l@var{library}
+@gccoptlist{@var{object-file-name} -flink-libatomic  -fuse-ld=@var{linker}  -l@var{library}
 -nostartfiles  -nodefaultlibs  -nolibc  -nostdlib  -nostdlib++
 -e @var{entry}  --entry=@var{entry}
 -pie  -pthread  -r  -rdynamic
@@ -8375,7 +8375,10 @@ known to read the object.)  Annotating the function with attribute
 the object and avoids the warning (@pxref{Common Function Attributes}).
 
 These warnings are only possible in optimizing compilation, because otherwise
-GCC does not keep track of the state of variables.
+GCC does not keep track of the state of variables.  On the other hand,
+@option{-Wmaybe-uninitialized} is known not to warn in many situations
+(false negatives) due to optimizations taking advantage of undefinedness
+of uninitialized uses like constant propagation.
 
 These warnings are made optional because GCC may not be able to determine when
 the code is correct in spite of appearing to have an error.  Here is one
@@ -8461,7 +8464,7 @@ It warns about code that might break the strict aliasing rules that the
 compiler is using for optimization.  The warning does not catch all
 cases, but does attempt to catch the more common pitfalls.  It is
 included in @option{-Wall}.
-It is equivalent to @option{-Wstrict-aliasing=3}
+It is equivalent to @option{-Wstrict-aliasing=3}.
 
 @opindex Wstrict-aliasing=n
 @item -Wstrict-aliasing=n
@@ -15046,10 +15049,11 @@ int f() @{
 @end smallexample
 The practice of reading from a different union member than the one most
 recently written to (called ``type-punning'') is common.  Even with
-@option{-fstrict-aliasing}, type-punning is allowed, provided the memory
-is accessed through the union type.  So, the code above works as
-expected.  @xref{Structures unions enumerations and bit-fields
-implementation}.  However, this code might not:
+@option{-fstrict-aliasing}, type-punning is allowed in C, provided the memory
+is accessed through the union type.  In ISO C++, type-punning through a union
+type is undefined behavior, but GCC supports it as an extension. So, the code
+above works as expected.  @xref{Structures unions enumerations and
+bit-fields implementation}.  However, this code might not:
 @smallexample
 int f() @{
   union a_union t;
@@ -19466,6 +19470,12 @@ If any of these options is used, then the linker is not run, and
 object file names should not be used as arguments.  @xref{Overall
 Options}.
 
+@opindex flink-libatomic
+@item -flink-libatomic
+Enable linking of libatomic if it's supported by target, and is enabled by
+default. The negative form @option{-fno-link-libatomic} can be used to
+explicitly disable linking of libatomic.
+
 @opindex flinker-output
 @item -flinker-output=@var{type}
 This option controls code generation of the link-time optimizer.  By
@@ -22411,7 +22421,7 @@ performance of the code.  Permissible values for this option are:
 @samp{cortex-a520}, @samp{cortex-a520ae}, @samp{cortex-a710}, @samp{cortex-a715},
 @samp{cortex-a720}, @samp{cortex-a720ae}, @samp{ampere1}, @samp{ampere1a},
 @samp{ampere1b}, @samp{cobalt-100}, @samp{apple-m1}, @samp{apple-m2},
-@samp{apple-m3} and @samp{native}.
+@samp{apple-m3}, @samp{apple-m4} and @samp{native}.
 
 The values @samp{cortex-a57.cortex-a53}, @samp{cortex-a72.cortex-a53},
 @samp{cortex-a73.cortex-a35}, @samp{cortex-a73.cortex-a53},

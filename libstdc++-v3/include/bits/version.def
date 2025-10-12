@@ -1062,6 +1062,25 @@ ftms = {
     cxxmin = 26;
     extra_cond = "__glibcxx_assume_aligned "
     "&& __glibcxx_is_sufficiently_aligned";
+    };
+};
+
+// Purely internal macro padded layouts.
+ftms = {
+  name = padded_layouts;
+  no_stdname = true; // internal
+  values = {
+    v = 1;
+    cxxmin = 26;
+  };
+};
+
+ftms = {
+  name = submdspan;
+  no_stdname = true; // TODO: change once complete
+  values = {
+    v = 1;
+    cxxmin = 26;
   };
 };
 
@@ -1846,7 +1865,7 @@ ftms = {
 ftms = {
   name = print;
   values = {
-    v = 202211;
+    v = 202406;
     cxxmin = 23;
     hosted = yes;
   };

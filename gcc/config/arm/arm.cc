@@ -287,7 +287,6 @@ static bool arm_class_likely_spilled_p (reg_class_t);
 static HOST_WIDE_INT arm_vector_alignment (const_tree type);
 static bool arm_vector_alignment_reachable (const_tree type, bool is_packed);
 static bool arm_builtin_support_vector_misalignment (machine_mode mode,
-						     const_tree type,
 						     int misalignment,
 						     bool is_packed,
 						     bool is_gather_scatter);
@@ -30662,13 +30661,13 @@ arm_vector_alignment_reachable (const_tree type, bool is_packed)
 
 static bool
 arm_builtin_support_vector_misalignment (machine_mode mode,
-					 const_tree type, int misalignment,
+					 int misalignment,
 					 bool is_packed,
 					 bool is_gather_scatter)
 {
   if (TARGET_NEON && !BYTES_BIG_ENDIAN && unaligned_access)
     {
-      HOST_WIDE_INT align = TYPE_ALIGN_UNIT (type);
+      HOST_WIDE_INT align = GET_MODE_UNIT_SIZE (mode);
 
       if (is_gather_scatter)
 	return true;
@@ -30688,7 +30687,7 @@ arm_builtin_support_vector_misalignment (machine_mode mode,
       return ((misalignment % align) == 0);
     }
 
-  return default_builtin_support_vector_misalignment (mode, type, misalignment,
+  return default_builtin_support_vector_misalignment (mode, misalignment,
 						      is_packed,
 						      is_gather_scatter);
 }

@@ -1,3 +1,767 @@
+2025-10-10  Harald Anlauf  <anlauf@gmx.de>
+
+	PR fortran/50377
+	* gfortran.dg/pr41011.f: Fix invalid testcase.
+	* gfortran.dg/actual_procedure_2.f: New test.
+
+2025-10-10  David Faust  <david.faust@oracle.com>
+
+	PR target/122141
+	* gcc.target/bpf/pr122141-1.c: New.
+	* gcc.target/bpf/pr122141-2.c: New.
+
+2025-10-10  Robert Dubner  <rdubner@symas.com>
+
+	* cobol.dg/group1/check_88.cob: Likewise.
+
+2025-10-10  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	* gfortran.dg/intent_optimize_10.f90: Update so -g won't fail.
+	* gcc.dg/tree-ssa/copy-prop-aggregate-sra-1.c: New testcase.
+
+2025-10-10  Patrick Palka  <ppalka@redhat.com>
+
+	PR c++/122192
+	* g++.dg/template/dependent-base6.C: New test.
+
+2025-10-10  Pan Li  <pan2.li@intel.com>
+
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-1-u16.c: Add asm check
+	for vwsubu.wx.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-1-u32.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-1-u64.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-2-u16.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-2-u32.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-2-u64.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-3-u16.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-3-u32.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-3-u64.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx_widen.h: Add test helper
+	macros.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx_widen_data.h: Add test
+	data for run test.
+	* gcc.target/riscv/rvv/autovec/vx_vf/wx_vwsubu-run-1-u64.c: New test.
+
+2025-10-10  Juergen Christ  <jchrist@linux.ibm.com>
+
+	* gcc.target/s390/fminmax-1.c: Disable for signaling NaNs.
+	* gcc.target/s390/fminmax-2.c: Ditto.
+	* gcc.target/s390/vector/reduc-minmax-1.c: Ditto.
+
+2025-10-10  Stefan Schulze Frielinghaus  <stefansf@gcc.gnu.org>
+
+	PR testsuite/116421
+	* c-c++-common/vector-subscript-4.c: Check for vectors prior
+	ISEL.
+
+2025-10-10  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* gcc.dg/vect/vect-reduc-chain-1.c: Adjust expected
+	dump.
+
+2025-10-10  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	PR target/122223
+	* gcc.target/arm/mve/intrinsics/pr122223.c: New test.
+
+2025-10-10  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122111
+	* gcc.target/arm/pr122111.c: New test.
+
+2025-10-10  YunQiang Su  <yunqiang@isrc.iscas.ac.cn>
+
+	Revert:
+	2025-10-10  Jie Mei  <jie.mei@oss.cipunited.com>
+
+	* gcc.target/mips/mips16e2-cache.c: Use isa_rev>=2 instead of
+	-mips32r2 and remove -mips16 option.
+	* gcc.target/mips/mips16e2-cmov.c: Add isa_rev>=2 and remove
+	-mips16 option.
+	* gcc.target/mips/mips16e2-gp.c: Same as above.
+	* gcc.target/mips/mips16e2.c: Same as above.
+
+2025-10-10  YunQiang Su  <yunqiang@isrc.iscas.ac.cn>
+
+	Revert:
+	2025-09-27  YunQiang Su  <syq@gcc.gnu.org>
+
+	* gcc.target/mips/mips16e2.c: Use isa_rev=2 instead of >=2.
+	* gcc.target/mips/mips16e2-cache.c: Ditto.
+	* gcc.target/mips/mips16e2-cmov.c: Ditto.
+	* gcc.target/mips/mips16e2-gp.c: Ditto.
+
+2025-10-09  David Faust  <david.faust@oracle.com>
+
+	* gcc.target/bpf/core-btf-tag-1.c: New test.
+	* gcc.target/bpf/core-btf-tag-2.c: New test.
+
+2025-10-09  David Faust  <david.faust@oracle.com>
+
+	* gcc.dg/debug/btf/btf-decl-tag-1.c: New test.
+	* gcc.dg/debug/btf/btf-decl-tag-2.c: New test.
+	* gcc.dg/debug/btf/btf-decl-tag-3.c: New test.
+	* gcc.dg/debug/btf/btf-decl-tag-4.c: New test.
+	* gcc.dg/debug/btf/btf-type-tag-1.c: New test.
+	* gcc.dg/debug/btf/btf-type-tag-2.c: New test.
+	* gcc.dg/debug/btf/btf-type-tag-3.c: New test.
+	* gcc.dg/debug/btf/btf-type-tag-4.c: New test.
+	* gcc.dg/debug/btf/btf-type-tag-c2x-1.c: New test.
+
+2025-10-09  David Faust  <david.faust@oracle.com>
+
+	* gcc.dg/debug/ctf/ctf-decl-tag-1.c: New test.
+	* gcc.dg/debug/ctf/ctf-type-tag-1.c: New test.
+
+2025-10-09  David Faust  <david.faust@oracle.com>
+
+	* gcc.dg/debug/dwarf2/dwarf-btf-decl-tag-1.c: New test.
+	* gcc.dg/debug/dwarf2/dwarf-btf-decl-tag-2.c: New test.
+	* gcc.dg/debug/dwarf2/dwarf-btf-decl-tag-3.c: New test.
+	* gcc.dg/debug/dwarf2/dwarf-btf-type-tag-1.c: New test.
+	* gcc.dg/debug/dwarf2/dwarf-btf-type-tag-2.c: New test.
+	* gcc.dg/debug/dwarf2/dwarf-btf-type-tag-3.c: New test.
+	* gcc.dg/debug/dwarf2/dwarf-btf-type-tag-4.c: New test.
+	* gcc.dg/debug/dwarf2/dwarf-btf-type-tag-5.c: New test.
+	* gcc.dg/debug/dwarf2/dwarf-btf-type-tag-6.c: New test.
+	* gcc.dg/debug/dwarf2/dwarf-btf-type-tag-7.c: New test.
+	* gcc.dg/debug/dwarf2/dwarf-btf-type-tag-8.c: New test.
+	* gcc.dg/debug/dwarf2/dwarf-btf-type-tag-9.c: New test.
+	* gcc.dg/debug/dwarf2/dwarf-btf-type-tag-10.c: New test.
+
+2025-10-09  David Faust  <david.faust@oracle.com>
+
+	* gcc.dg/attr-btf-decl-tag-1.c: New test.
+	* gcc.dg/attr-btf-decl-tag-2.c: New test.
+	* gcc.dg/attr-btf-type-tag-1.c: New test.
+	* gcc.dg/attr-btf-type-tag-2.c: New test.
+	* gcc.dg/attr-btf-type-tag-3.c: New test.
+
+2025-10-09  Jakub Jelinek  <jakub@redhat.com>
+
+	* c-c++-common/cpp/has-builtin-4.c: Expect
+	__has_builtin (__builtin_c23_va_start) == 1 also for C++26.
+	* c-c++-common/Wvarargs.c (foo3): Don't expect undefined behavior
+	warning for C++26.
+	* g++.dg/cpp26/stdarg1.C: New test.
+	* g++.dg/cpp26/stdarg2.C: New test.
+	* g++.dg/cpp26/stdarg3.C: New test.
+	* g++.dg/cpp26/stdarg4.C: New test.
+	* g++.dg/cpp26/stdarg5.C: New test.
+	* g++.dg/cpp26/stdarg6.C: New test.
+	* g++.dg/cpp26/stdarg7.C: New test.
+	* g++.dg/cpp26/stdarg8.C: New test.
+	* g++.dg/cpp26/stdarg9.C: New test.
+	* g++.dg/opt/pr60849.C (foo): Add explicit cast.
+
+2025-10-09  Egas Ribeiro  <egas.g.ribeiro@tecnico.ulisboa.pt>
+
+	PR c++/116477
+	* g++.dg/cpp2a/concepts-pr116477.C: New test.
+
+2025-10-09  Georg-Johann Lay  <avr@gjlay.de>
+
+	PR target/122222
+	* gcc.target/avr/pr122222-sitod.c: New test.
+
+2025-10-09  Georg-Johann Lay  <avr@gjlay.de>
+
+	PR target/122220
+	* gcc.target/avr/pr122220.c: New test.
+
+2025-10-09  David Malcolm  <dmalcolm@redhat.com>
+
+	* gcc.dg/plugin/analyzer_cpython_plugin.cc: Replace INCLUDE_
+	defines with include of include "analyzer/common.h".  Update
+	for changes to binding_pair.
+	* gcc.dg/plugin/analyzer_kernel_plugin.cc: Likewise.
+	* gcc.dg/plugin/analyzer_known_fns_plugin.cc: Likewise.
+
+2025-10-09  Dimitar Dimitrov  <dimitar@dinux.eu>
+
+	* gcc.dg/tree-ssa/cselim-2.c: Pass -ftree-cselim option.
+
+2025-10-09  Harald Anlauf  <anlauf@gmx.de>
+
+	PR fortran/122206
+	* gfortran.dg/interface_abstract_6.f90: New test.
+
+2025-10-09  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/122188
+	* gcc.dg/torture/pr122188.c: New test.
+
+2025-10-09  David Malcolm  <dmalcolm@redhat.com>
+
+	* gcc.dg/plugin/diagnostic_group_plugin.cc: Define INCLUDE_VECTOR.
+	* gcc.dg/plugin/diagnostic_plugin_test_show_locus.cc: Likewise.
+	* gcc.dg/plugin/location_overflow_plugin.cc: Likewise.
+
+2025-10-09  Takayuki 'January June' Suwa  <jjsuwa_sys3175@yahoo.co.jp>
+
+	* gcc.target/xtensa/constsynth_2insns.c,
+	gcc.target/xtensa/constsynth_3insns.c,
+	gcc.target/xtensa/constsynth_double.c: Remove due to outdated.
+	* gcc.target/xtensa/constsynthV2_O2_costs0.c,
+	gcc.target/xtensa/constsynthV2_O2_costs5.c,
+	gcc.target/xtensa/constsynthV2_Os.c: New.
+
+2025-10-09  Takayuki 'January June' Suwa  <jjsuwa_sys3175@yahoo.co.jp>
+
+	* gcc.target/xtensa/BGEUI-BLTUI-32k-64k.c:
+	Disable optimizations and modify to also verify RTL dump in the
+	"expand" pass.
+
+2025-10-09  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122212
+	* gcc.dg/torture/pr122212.c: New testcase.
+
+2025-10-09  Georg-Johann Lay  <avr@gjlay.de>
+
+	PR target/122210
+	* gcc.target/avr/dtofx.c: New test.
+
+2025-10-09  Georg-Johann Lay  <avr@gjlay.de>
+
+	PR target/122210
+	* gcc.target/avr/fxtod.c: New test.
+
+2025-10-09  Kito Cheng  <kito.cheng@sifive.com>
+
+	* gcc.target/riscv/rvv/vls-type-rvv-max-lmul.c: New test.
+	* gcc.target/riscv/rvv/vls-type-rvv-max-lmul-autovec.c: New
+	test.
+
+2025-10-08  Joseph Myers  <josmyers@redhat.com>
+
+	* gcc.dg/c11-generic-4.c, gcc.dg/c23-generic-5.c,
+	gcc.dg/c2y-generic-5.c: New tests.
+
+2025-10-08  Harald Anlauf  <anlauf@gmx.de>
+
+	PR fortran/49111
+	* gfortran.dg/binding_label_tests_9.f03: Adjust test.
+	* gfortran.dg/module_private_2.f90: Likewise.
+	* gfortran.dg/public_private_module_2.f90: Likewise.
+	* gfortran.dg/binding_label_tests_35.f90: New test.
+
+2025-10-08  Martin Uecker  <uecker@tugraz.at>
+
+	* gcc.dg/c11-generic-2.c: Adapt error message.
+	* gcc.dg/c2y-generic-3.c: Adapt test.
+	* gcc.dg/c2y-generic-4.c: New test.
+
+2025-10-08  Jakub Jelinek  <jakub@redhat.com>
+
+	* c-c++-common/cpp/named-universal-char-escape-1.c: Add test for
+	\N{CJK UNIFIED IDEOGRAPH-3340E}.
+
+2025-10-08  Jason Merrill  <jason@redhat.com>
+
+	* g++.dg/analyzer/new-2.C: Adjust diags.
+	* g++.dg/analyzer/noexcept-new.C: Adjust diags.
+	* g++.dg/warn/Warray-bounds-23.C: Add warnings.
+	* g++.dg/warn/Warray-bounds-24.C: Add warnings.
+	* g++.dg/cpp26/constexpr-new4a.C: New test.
+
+2025-10-08  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/110223
+	PR tree-optimization/122128
+	* gcc.dg/vect/vect-bool-2.c: New testcase.
+	* gcc.dg/vect/vect-bool-cmp-3.c: Likewise.
+	* gcc.dg/vect/vect-bool-cmp-4.c: Likewise.
+
+2025-10-08  Richard Biener  <rguenther@suse.de>
+
+	PR testsuite/120100
+	* g++.dg/vect/pr64410.cc: Adjust.
+
+2025-10-08  Richard Biener  <rguenther@suse.de>
+
+	PR target/120091
+	* gcc.target/i386/pr119919.c: Only check for vectorization
+	when !ia32.
+
+2025-10-08  Alfie Richards  <alfie.richards@arm.com>
+
+	PR target/122180
+	* gcc.target/i386/pr122180.c: New test.
+
+2025-10-08  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/122188
+	* c-c++-common/pr122188.c: New test.
+
+2025-10-08  Jakub Jelinek  <jakub@redhat.com>
+
+	PR tree-optimization/121206
+	* gcc.dg/pr121987.c (main): Use unsigned long long type for e instead
+	of unsigned long and use ULL suffix on the initializer.
+
+2025-10-08  Paul Thomas  <pault@gcc.gnu.org>
+
+	PR fortran/93175
+	PR fortran/102240
+	PR fortran/102686
+	* gfortran.dg/pdt_55.f03: New test.
+
+2025-10-08  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/105490
+	* gcc.dg/vect/vect-cond-14.c: New testcase.
+
+2025-10-08  Antoni Boucher  <bouanto@zoho.com>
+
+	PR jit/112466
+	* jit.dg/all-non-failing-tests.h: Mention
+	test-target-info.c.
+	* jit.dg/test-target-info.c: New test.
+	* jit.dg/test-error-target-info.c: New test.
+
+2025-10-07  Joseph Myers  <josmyers@redhat.com>
+
+	PR c/26581
+	* gcc.dg/c23-incomplete-2.c, gcc.dg/c23-incomplete-3.c,
+	gcc.dg/c23-incomplete-4.c, gcc.dg/c2y-incomplete-4.c,
+	gcc.dg/c2y-incomplete-5.c: New tests.
+	* gcc.dg/c23-thread-local-2.c, gcc.dg/c2y-incomplete-1.c: Update
+	expected errors.
+
+2025-10-07  H.J. Lu  <hjl.tools@gmail.com>
+
+	PR target/120691
+	* gcc.target/i386/pr120691.c: New test.
+
+2025-10-07  Jason Merrill  <jason@redhat.com>
+
+	* g++.dg/warn/Warray-bounds-20.C: Remove xfails, add diags.
+
+2025-10-07  Georg-Johann Lay  <avr@gjlay.de>
+
+	PR target/122187
+	* gcc.target/avr/torture/pr122187.c: New test.
+
+2025-10-07  Jonathan Wakely  <jwakely@redhat.com>
+
+	* gfortran.dg/dynamic_dispatch_9.f03: Fix spelling in comment.
+	* gfortran.dg/use_only_3.inc: Likewise
+
+2025-10-07  Robin Dapp  <rdapp.gcc@gmail.com>
+
+	PR target/121845
+	* gcc.target/riscv/rvv/autovec/pr121845.c: New test.
+
+2025-10-07  Raphael Moreira Zinsly  <rzinsly@ventanamicro.com>
+
+	PR target/122124
+	* gcc.target/riscv/rvv/autovec/pr122124.c: New test.
+
+2025-10-07  Paul Thomas  <pault@gcc.gnu.org>
+
+	PR fortran/102901
+	* gfortran.dg/pdt_56.f03: Copy of pdt_13.f03 compiled with
+	-fcheck=all.
+
+2025-10-07  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/121921
+	* gcc.dg/pr121921-1.c: New test.
+
+2025-10-07  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/122083
+	* gcc.dg/tree-ssa/ssa-pre-19.c: Disable phiopt and cselim.
+	* g++.dg/opt/pr122083-1.C: New test.
+	* gcc.dg/tree-ssa/cselim-1.c: New test.
+	* gcc.dg/tree-ssa/cselim-2.c: New test.
+
+2025-10-07  H.J. Lu  <hjl.tools@gmail.com>
+
+	PR middle-end/122122
+	* gcc.target/i386/memcpy-pr120683-2.c: Swap %edx/%rdx with
+	%eax/%rax after
+	* gcc.target/i386/memcpy-pr120683-3.c: Likewise.
+	* gcc.target/i386/memcpy-pr120683-4.c: Likewise.
+	* gcc.target/i386/memcpy-pr120683-5.c: Likewise.
+	* gcc.target/i386/memcpy-pr120683-6.c: Likewise.
+	* gcc.target/i386/memcpy-pr120683-7.c: Likewise.
+	* gcc.target/i386/pr111657-1.c: Likewise.
+
+2025-10-06  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/122155
+	* gcc.dg/tree-ssa/cselim-3.c: New test.
+
+2025-10-06  Georg-Johann Lay  <avr@gjlay.de>
+
+	* gcc.target/avr/sincos-1.c: New test.
+
+2025-10-06  Andrew MacLeod  <amacleod@redhat.com>
+
+	PR tree-optimization/121206
+	* gcc.dg/pr121987.c: New.
+
+2025-10-06  Georg-Johann Lay  <avr@gjlay.de>
+
+	PR target/122177
+	* gcc.target/avr/fminfmax-1.c: New test.
+
+2025-10-06  Georg-Johann Lay  <avr@gjlay.de>
+
+	* gcc.target/avr/cmpdi-1.c: New test.
+
+2025-10-06  Jennifer Schmitz  <jschmitz@nvidia.com>
+
+	PR target/121599
+	* gcc.target/aarch64/sve2/pr121599.c: New test.
+
+2025-10-06  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122131
+	* gcc.target/powerpc/altivec-39.c: New testcase.
+
+2025-10-06  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122158
+	* gcc.dg/vect/pr122158.c: New testcase.
+
+2025-10-06  Jakub Jelinek  <jakub@redhat.com>
+
+	PR middle-end/122133
+	* c-c++-common/toplevel-asm-9.c: New test.
+
+2025-10-05  H.J. Lu  <hjl.tools@gmail.com>
+
+	PR target/122150
+	* gcc.target/i386/pr122150.c: New test.
+
+2025-10-05  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	* c-c++-common/torture/asm-inline.c: Disable at -Og.
+	* gcc.dg/torture/restrict-8.c: Likewise.
+
+2025-10-05  Pan Li  <pan2.li@intel.com>
+
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-1-u16.c: Add asm check
+	for vwaddu.wx.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-1-u32.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-1-u64.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-2-u16.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-2-u32.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-2-u64.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-3-u16.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-3-u32.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-3-u64.c: Ditto.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx_widen.h: Add test helper
+	macros.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx_widen_data.h: Add test
+	helper macros and data.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx_widen_wx_run.h: New test.
+	* gcc.target/riscv/rvv/autovec/vx_vf/wx_vwaddu-run-1-u64.c: New test.
+
+2025-10-05  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/122053
+	* g++.dg/modules/pr122053_a.C: New test.
+	* g++.dg/modules/pr122053_b.C: New test.
+
+2025-10-05  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* g++.dg/modules/namespace-1_c.C: Adjust to expect errors.
+	* g++.dg/modules/namespace-2_b.C: Likewise.
+	* g++.dg/modules/namespace-3_a.C: Removed.
+	* g++.dg/modules/namespace-3_b.C: Removed.
+
+2025-10-05  Franck Behaghel  <franckbehaghel_gcc@protonmail.com>
+
+	* gnat.dg/allocator3.adb: New test.
+
+2025-10-05  Eric Botcazou  <ebotcazou@adacore.com>
+
+	PR ada/113536
+	* gnat.dg/reduce2.adb: New test.
+
+2025-10-04  Harald Anlauf  <anlauf@gmx.de>
+
+	PR fortran/107968
+	* gfortran.dg/implied_do_io_9.f90: New test.
+
+2025-10-04  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/122153
+	* gcc.dg/tree-ssa/pr122153-1.c: New test.
+
+2025-10-04  Matteo Nicoli  <matteo.nicoli001@gmail.com>
+
+	PR tree-optimization/117760
+	* gcc.dg/int-bwise-opt-1.c: New test.
+	* gcc.dg/int-bwise-opt-2.c: New test.
+
+2025-10-04  Jakub Jelinek  <jakub@redhat.com>
+
+	PR tree-optimization/122104
+	* gcc.target/i386/pr122104.c: New test.
+
+2025-10-04  Raphael Moreira Zinsly  <rzinsly@ventanamicro.com>
+
+	PR target/122114
+	* gcc.target/riscv/pr122114.c: New test.
+
+2025-10-04  Jeff Law  <jlaw@ventanamicro.com>
+
+	PR target/122147
+	* gcc.target/riscv/pr122147.c: New test.
+
+2025-10-04  Zhongyao Chen  <chenzhongyao.hit@gmail.com>
+
+	PR target/118945
+	* gcc.target/riscv/rvv/autovec/pr118945-1.c: New file.
+	* gcc.target/riscv/rvv/autovec/pr118945-2.c: New file.
+
+2025-10-04  Eric Botcazou  <ebotcazou@adacore.com>
+
+	* gnat.dg/use_type1.adb: New test.
+	* gnat.dg/use_type2.adb: Likewise.
+
+2025-10-04  Jakub Jelinek  <jakub@redhat.com>
+
+	* g++.dg/cpp2a/constexpr-new28.C: New test.
+	* g++.dg/cpp2a/constexpr-new29.C: New test.
+
+2025-10-04  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/114457
+	* g++.dg/cpp1y/vla-initlist1.C: Remove dg-skip-if for powerpc.
+	Initialize i to 43 for ctor from initializer_list and expect value
+	43 instead of 42.
+	* g++.dg/cpp26/attr-indeterminate1.C: New test.
+	* g++.dg/cpp26/attr-indeterminate2.C: New test.
+	* g++.dg/cpp26/attr-indeterminate3.C: New test.
+	* g++.dg/cpp26/attr-indeterminate4.C: New test.
+	* g++.dg/cpp26/erroneous1.C: New test.
+	* g++.dg/cpp26/erroneous2.C: New test.
+	* g++.dg/cpp26/erroneous3.C: New test.
+	* g++.dg/cpp26/erroneous4.C: New test.
+	* g++.dg/opt/store-merging-1.C: Add
+	-ftrivial-auto-var-init=uninitialized to dg-options.
+	* g++.dg/uninit-pred-loop-1_b.C: Expect a warning for C++26.
+	* g++.dg/warn/Wuninitialized-13.C: Expect warning on a different
+	line.
+	* c-c++-common/ubsan/vla-1.c: Add
+	-ftrivial-auto-var-init=uninitialized to dg-options.
+	* c-c++-common/uninit-17.c: For c++26 expect warning on a different
+	line.
+	* g++.dg/warn/Warray-bounds-20.C: Expect warning on a different line.
+	* c-c++-common/analyzer/invalid-shift-1.c: Xfail for c++26 until
+	PR122044 is fixed.
+	* g++.dg/analyzer/exception-value-2.C: Skip for c++26 until PR122044
+	is fixed.
+	* c-c++-common/goacc-gomp/nesting-1.c: Skip for c++26 until PR121975
+	is fixed.
+	* c-c++-common/goacc/kernels-decompose-2.c: Likewise.
+	* c-c++-common/goacc/kernels-decompose-pr100400-1-1.c: Likewise.
+	* c-c++-common/goacc/kernels-decompose-pr100400-1-3.c: Likewise.
+	* c-c++-common/goacc/kernels-decompose-pr104061-1-1.c: Likewise.
+	* c-c++-common/goacc/kernels-decompose-pr104061-1-3.c: Likewise.
+	* c-c++-common/goacc/kernels-decompose-pr104061-1-4.c: Likewise.
+	* c-c++-common/goacc/kernels-decompose-pr104132-1.c: Likewise.
+	* c-c++-common/goacc/kernels-decompose-pr104133-1.c: Likewise.
+	* c-c++-common/goacc/kernels-decompose-pr104774-1.c: Likewise.
+	* c-c++-common/goacc/mdc-1.c: Likewise.
+
+2025-10-04  Jason Merrill  <jason@redhat.com>
+
+	PR c++/122127
+	PR c++/112632
+	* g++.dg/cpp0x/lambda/lambda-template18.C: New test.
+
+2025-10-04  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/117658
+	* g++.dg/modules/adl-6_c.C: Adjust diagnostics.
+	* g++.dg/modules/internal-14_c.C: Likewise.
+	* g++.dg/modules/internal-15_a.C: New test.
+	* g++.dg/modules/internal-15_b.C: New test.
+
+2025-10-03  Egas Ribeiro  <egas.g.ribeiro@tecnico.ulisboa.pt>
+
+	PR c++/122112
+	* g++.dg/parse/auto-struct-param.C: New test.
+
+2025-10-03  David Malcolm  <dmalcolm@redhat.com>
+
+	Revert:
+	2025-10-03  David Malcolm  <dmalcolm@redhat.com>
+
+	* gcc.dg/plugin/diagnostic_plugin_test_graphs.cc
+	(report_diag_with_graphs): Port from set_attr to set_property.
+
+2025-10-03  Jeff Law  <jlaw@ventanamicro.com>
+
+	PR rtl-optimization/121937
+	* gcc.target/riscv/pr121937.c: New test.
+
+2025-10-03  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/121762
+	* gcc.dg/tree-ssa/builtin-fprintf-1.c: Update to scan optimized.
+	* gcc.dg/tree-ssa/builtin-fprintf-chk-1.c: Likewise.
+	* gcc.dg/tree-ssa/builtin-printf-1.c: Likewise.
+	* gcc.dg/tree-ssa/builtin-printf-chk-1.c: Likewise.
+	* gcc.dg/tree-ssa/builtin-vfprintf-1.c: Likewise.
+	* gcc.dg/tree-ssa/builtin-vfprintf-chk-1.c: Likewise.
+	* gcc.dg/tree-ssa/builtin-vprintf-1.c: Likewise.
+	* gcc.dg/tree-ssa/builtin-vprintf-chk-1.c: Likewise.
+	* gcc.dg/tree-ssa/ssa-ccp-10.c: Likewise.
+	* gcc.dg/builtin-unreachable-5.c: Likewise.
+	* gcc.dg/builtin-unreachable-6.c: Likewise.
+	* gcc.dg/builtin-unreachable-6a.c: Likewise.
+	* gcc.dg/builtin-unreachable-7.c: Likewise.
+	* gcc.dg/pr78408-2.c: Change fab1 to forwprop1 as that
+	optimization was moved there a while back.
+	* gcc.dg/tree-ssa/pr79691.c: Udpate scanning for 9
+	constant to return.
+
+2025-10-03  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/122033
+	* gcc.dg/tree-ssa/pr122033-1.c: New test.
+	* gcc.dg/tree-ssa/pr122033-2.c: New test.
+
+2025-10-03  Richard Earnshaw  <rearnsha@arm.com>
+
+	* gcc.target/aarch64/asm-flag-1.c: Scan for lt.
+	* gcc.target/aarch64/vector-compare-5.c: Use scan-tree-dump-times.
+	* gcc.target/aarch64/simd/fold_to_highpart_5.c: Scan for sabal2
+	and uabal2.
+	* gcc.target/aarch64/sve/mixed_size_6.c: Scan for absence of
+	index with 2.
+	* gcc.target/aarch64/declare-simd-2.c: Scan for _ZGVnM4ul2v_f05
+	and_ZGVnN8ul2v_f05
+	* gcc.target/aarch64/sve/arith_1.c: Remove duplicate
+	scan-assembler patterns.
+	* gcc.target/aarch64/sve/cond_fmaxnm_1.c: Likewise.
+	* gcc.target/aarch64/sve/cond_fmaxnm_5.c: Likewise.
+	* gcc.target/aarch64/sve/cond_fminnm_1.c: Likewise.
+	* gcc.target/aarch64/sve/cond_fminnm_5.c: Likewise
+	* gcc.target/aarch64/sve/pcs/annotate_1.c: Likewise.
+	* gcc.target/aarch64/sve/uzp1_1.c: Likewise.
+	* gcc.target/aarch64/sve/uzp2_1.c: Likewise.
+	* gcc.target/aarch64/scalar_intrinsics.c: Scan for ursra.
+	* gcc.target/aarch64/singleton_intrinsics_1.c: Likewise.
+	* gcc.target/aarch64/sve/cond_fmaxnm_3.c: Fix register modifiers in
+	scan patterns.
+	* gcc.target/aarch64/sve/cond_fmaxnm_7.c: Likewise.
+	* gcc.target/aarch64/sve/cond_fminnm_3.c: Likewise.
+	* gcc.target/aarch64/sve/cond_fminnm_7.c: Likewise.
+	* gcc.target/aarch64/sve/cond_fmul_3.c: Likewise.
+	* gcc.target/aarch64/sve/cond_fsubr_3.c: Likewise.
+	* gcc.target/aarch64/ldp_stp_18.c: Fix typos in scan patterns.
+	* gcc.target/aarch64/sve/pcs/return_6.c: Likewise.
+	* gcc.target/aarch64/ror_2.c: Adjust constants to ensure
+	scan-assembler patterns are unique.
+	* gcc.target/aarch64/sve/struct_move_3.c: Likewise.
+	* gcc.target/aarch64/sve/struct_move_6.c: Likewise.
+	* gcc.target/aarch64/builtin_pld_pli.c: Use check-function-bodies
+	* gcc.target/aarch64/csinc-1.c: Likewise.
+	* gcc.target/aarch64/csneg-1.c: Likewise.
+	* gcc.target/aarch64/flt_mov_immediate_1.c: Likewise.
+	* gcc.target/aarch64/scalar_shift_1.c: Likewise.
+
+2025-10-03  Paul Thomas  <pault@gcc.gnu.org>
+
+	PR fortran/122089
+	* gfortran.dg/pdt_52.f03: New test.
+	* gfortran.dg/pdt_53.f03: New test.
+	* gfortran.dg/pdt_54.f03: New test.
+
+2025-10-02  David Malcolm  <dmalcolm@redhat.com>
+
+	* gcc.dg/plugin/diagnostic_plugin_test_graphs.cc
+	(report_diag_with_graphs): Port from set_attr to set_property.
+
+2025-10-02  Joseph Myers  <josmyers@redhat.com>
+
+	* gcc.dg/c2y-init-2.c, gcc.dg/c2y-init-3.c: New tests.
+
+2025-10-02  Aurelien Jarno  <aurelien@aurel32.net>
+
+	PR target/121652
+	* gcc.target/riscv/rvv/autovec/vls/math-nearbyint-1.c: Adjust
+	scan pattern for fewer instances of frflags/fsrflags.
+
+2025-10-02  David Malcolm  <dmalcolm@redhat.com>
+
+	* gcc.dg/plugin/start_unit_plugin.cc: Fix typo in comment.
+
+2025-10-02  Jeff Law  <jlaw@ventanamicro.com>
+
+	PR target/122051
+	* gcc.target/riscv/pr122051.c: New test.
+
+2025-10-02  Alfie Richards  <alfie.richards@arm.com>
+
+	* gcc.target/aarch64/mv-error11.c: New test.
+	* gcc.target/aarch64/mv-error12.c: New test.
+
+2025-10-02  Alfie Richards  <alfie.richards@arm.com>
+
+	* gcc.target/aarch64/mv-and-mvc-error1.c: New test.
+	* gcc.target/aarch64/mv-and-mvc-error2.c: New test.
+	* gcc.target/aarch64/mv-and-mvc-error3.c: New test.
+	* gcc.target/aarch64/mv-error1.c: New test.
+	* gcc.target/aarch64/mv-error2.c: New test.
+	* gcc.target/aarch64/mv-error3.c: New test.
+	* gcc.target/aarch64/mv-error4.c: New test.
+	* gcc.target/aarch64/mv-error5.c: New test.
+	* gcc.target/aarch64/mv-error6.c: New test.
+	* gcc.target/aarch64/mv-error7.c: New test.
+	* gcc.target/aarch64/mv-error8.c: New test.
+	* gcc.target/aarch64/mv-error9.c: New test.
+	* gcc.target/aarch64/mv-error10.c: New test.
+	* gcc.target/aarch64/mvc-error1.c: New test.
+	* gcc.target/aarch64/mvc-error2.c: New test.
+	* gcc.target/aarch64/mvc-warning1.c: New test.
+
+2025-10-02  Alfie Richards  <alfie.richards@arm.com>
+
+	* gcc.target/aarch64/mv-1.c: New test.
+	* gcc.target/aarch64/mv-and-mvc1.c: New test.
+	* gcc.target/aarch64/mv-and-mvc2.c: New test.
+	* gcc.target/aarch64/mv-and-mvc3.c: New test.
+	* gcc.target/aarch64/mv-and-mvc4.c: New test.
+	* gcc.target/aarch64/mv-symbols1.c: New test.
+	* gcc.target/aarch64/mv-symbols10.c: New test.
+	* gcc.target/aarch64/mv-symbols11.c: New test.
+	* gcc.target/aarch64/mv-symbols12.c: New test.
+	* gcc.target/aarch64/mv-symbols13.c: New test.
+	* gcc.target/aarch64/mv-symbols14.c: New test.
+	* gcc.target/aarch64/mv-symbols2.c: New test.
+	* gcc.target/aarch64/mv-symbols3.c: New test.
+	* gcc.target/aarch64/mv-symbols4.c: New test.
+	* gcc.target/aarch64/mv-symbols5.c: New test.
+	* gcc.target/aarch64/mv-symbols6.c: New test.
+	* gcc.target/aarch64/mv-symbols7.c: New test.
+	* gcc.target/aarch64/mv-symbols8.c: New test.
+	* gcc.target/aarch64/mv-symbols9.c: New test.
+	* gcc.target/aarch64/mvc-symbols1.c: New test.
+	* gcc.target/aarch64/mvc-symbols2.c: New test.
+	* gcc.target/aarch64/mvc-symbols3.c: New test.
+	* gcc.target/aarch64/mvc-symbols4.c: New test.
+
+2025-10-02  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122079
+	* gcc.dg/torture/pr122079-2.c: New testcase.
+	* gcc.dg/torture/pr122079-3.c: Likewise.
+
+2025-10-02  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122079
+	* gcc.dg/torture/pr122079-1.c: New testcase.
+
 2025-10-01  Jeff Law  <jlaw@ventanamicro.com>
 
 	PR target/122106

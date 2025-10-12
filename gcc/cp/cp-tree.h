@@ -7597,6 +7597,7 @@ extern tree mark_lvalue_use_nonread		(tree);
 extern tree mark_type_use			(tree);
 extern tree mark_discarded_use			(tree);
 extern void mark_exp_read			(tree);
+extern tree wrap_with_if_consteval		(tree);
 
 /* friend.cc */
 extern int is_friend				(tree, tree);
@@ -8527,6 +8528,7 @@ extern tree cp_build_reference_type		(tree, bool);
 extern tree move				(tree);
 extern tree cp_build_qualified_type		(tree, int,
 						 tsubst_flags_t = tf_warning_or_error);
+extern tree cp_build_function_type		(tree, tree);
 extern bool cv_qualified_p			(const_tree);
 extern tree cv_unqualified			(tree);
 extern special_function_kind special_function_p (const_tree);

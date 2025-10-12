@@ -7691,7 +7691,7 @@ trees_in::tree_node_bools (tree t)
 }
 
 
-/* Write out the lang-specifc vals of node T.  */
+/* Write out the lang-specific vals of node T.  */
 
 void
 trees_out::lang_vals (tree t)
@@ -10414,7 +10414,7 @@ trees_in::tree_node (bool is_use)
 		  if (klass)
 		    res = build_method_type_directly (klass, res, args);
 		  else
-		    res = build_function_type (res, args);
+		    res = cp_build_function_type (res, args);
 		}
 	    }
 	    break;

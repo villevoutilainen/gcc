@@ -649,6 +649,7 @@ ISLLIBS
 GMPINC
 GMPLIBS
 target_cpu_default
+jit_target_objs
 rust_target_objs
 d_target_objs
 fortran_target_objs
@@ -658,6 +659,8 @@ use_gcc_stdint
 xm_defines
 xm_include_list
 xm_file_list
+tm_jit_include_list
+tm_jit_file_list
 tm_rust_include_list
 tm_rust_file_list
 tm_d_include_list
@@ -15114,6 +15117,17 @@ for f in $tm_rust_file; do
   esac
 done
 
+tm_jit_file_list=
+tm_jit_include_list=
+for f in $tm_jit_file; do
+  case $f in
+    * )
+       tm_jit_file_list="${tm_jit_file_list} \$(srcdir)/config/$f"
+       tm_jit_include_list="${tm_jit_include_list} config/$f"
+       ;;
+  esac
+done
+
 xm_file_list=
 xm_include_list=
 for f in $xm_file; do
@@ -21859,7 +21873,7 @@ else
   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
   lt_status=$lt_dlunknown
   cat > conftest.$ac_ext <<_LT_EOF
-#line 21862 "configure"
+#line 21876 "configure"
 #include "confdefs.h"
 
 #if HAVE_DLFCN_H
@@ -21965,7 +21979,7 @@ else
   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
   lt_status=$lt_dlunknown
   cat > conftest.$ac_ext <<_LT_EOF
-#line 21968 "configure"
+#line 21982 "configure"
 #include "confdefs.h"
 
 #if HAVE_DLFCN_H
@@ -33920,6 +33934,12 @@ $as_echo "#define ENABLE_DEFAULT_SSP 1" >>confdefs.h
 fi
 
 
+if echo " ${TARGET_CONFIGDIRS} " | grep " libatomic " > /dev/null 2>&1 ; then
+
+$as_echo "#define TARGET_PROVIDES_LIBATOMIC 1" >>confdefs.h
+
+fi
+
 # Test for <sys/sdt.h> on the target.
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking sys/sdt.h in the target C library" >&5
@@ -34466,6 +34486,9 @@ fi
 
 
 # Substitute configuration variables
+
+
+
 
 
 

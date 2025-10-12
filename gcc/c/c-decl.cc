@@ -908,8 +908,12 @@ c_finish_incomplete_decl (tree decl)
 	  && !DECL_EXTERNAL (decl)
 	  && TYPE_DOMAIN (type) == NULL_TREE)
 	{
-	  warning_at (DECL_SOURCE_LOCATION (decl),
-		      0, "array %q+D assumed to have one element", decl);
+	  if (flag_isoc2y && !TREE_PUBLIC (decl))
+	    error_at (DECL_SOURCE_LOCATION (decl),
+		      "array size missing in %q+D", decl);
+	  else
+	    warning_at (DECL_SOURCE_LOCATION (decl),
+			0, "array %q+D assumed to have one element", decl);
 
 	  complete_array_type (&TREE_TYPE (decl), NULL_TREE, true);
 
@@ -3410,8 +3414,11 @@ pushdecl (tree x)
 	    }
 	}
 
-      /* Check if x is part of a FMV set with b_use.  */
-      if (b_use && TREE_CODE (b_use->decl) == FUNCTION_DECL
+      /* Check if x is part of a FMV set with b_use.
+	 FMV is only supported in c for targets with target_version
+	 attributes.  */
+      if (!TARGET_HAS_FMV_TARGET_ATTRIBUTE
+	  && b_use && TREE_CODE (b_use->decl) == FUNCTION_DECL
 	  && TREE_CODE (x) == FUNCTION_DECL && DECL_FILE_SCOPE_P (b_use->decl)
 	  && DECL_FILE_SCOPE_P (x)
 	  && disjoint_version_decls (x, b_use->decl)
@@ -5984,11 +5991,7 @@ finish_decl (tree decl, location_t init_loc, tree init,
       && !(TREE_PUBLIC (decl) && current_scope != file_scope))
     {
       bool do_default
-	= (TREE_STATIC (decl)
-	   /* Even if pedantic, an external linkage array
-	      may have incomplete type at first.  */
-	   ? pedantic && !TREE_PUBLIC (decl)
-	   : !DECL_EXTERNAL (decl));
+	= !TREE_STATIC (decl) && !DECL_EXTERNAL (decl);
       int failure
 	= complete_array_type (&TREE_TYPE (decl), DECL_INITIAL (decl),
 			       do_default);
@@ -6005,6 +6008,9 @@ finish_decl (tree decl, location_t init_loc, tree init,
 	case 2:
 	  if (do_default)
 	    error ("array size missing in %q+D", decl);
+	  else if (!TREE_PUBLIC (decl))
+	    pedwarn_c23 (DECL_SOURCE_LOCATION (decl), OPT_Wpedantic,
+			 "array size missing in %q+D", decl);
 	  break;
 
 	case 3:

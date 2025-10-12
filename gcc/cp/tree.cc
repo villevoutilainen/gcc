@@ -1538,6 +1538,19 @@ cp_build_qualified_type (tree type, int type_quals,
   return result;
 }
 
+/* Return a FUNCTION_TYPE for a function returning VALUE_TYPE
+   with ARG_TYPES arguments.  Wrapper around build_function_type
+   which ensures TYPE_NO_NAMED_ARGS_STDARG_P is set if ARG_TYPES
+   is NULL for C++26.  */
+
+tree
+cp_build_function_type (tree value_type, tree arg_types)
+{
+  return build_function_type (value_type, arg_types,
+			      cxx_dialect >= cxx26
+			      && arg_types == NULL_TREE);
+}
+
 /* Return TYPE with const and volatile removed.  */
 
 tree
@@ -1783,7 +1796,8 @@ strip_typedefs (tree t, bool *remove_attributes /* = NULL */,
 	  }
 	else
 	  {
-	    result = build_function_type (type, arg_types);
+	    result = build_function_type (type, arg_types,
+					  TYPE_NO_NAMED_ARGS_STDARG_P (t));
 	    result = apply_memfn_quals (result, type_memfn_quals (t));
 	  }
 

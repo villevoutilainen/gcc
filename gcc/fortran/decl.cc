@@ -3790,6 +3790,48 @@ match_record_decl (char *name)
 }
 
 
+  /* In parsing a PDT, it is possible that one of the type parameters has the
+     same name as a previously declared symbol that is not a type parameter.
+     Intercept this now by looking for the symtree in f2k_derived.  */
+
+static bool
+correct_parm_expr (gfc_expr* e, gfc_symbol* pdt, int* f ATTRIBUTE_UNUSED)
+{
+  if (!e || (e->expr_type != EXPR_VARIABLE && e->expr_type != EXPR_FUNCTION))
+    return false;
+
+  if (!(e->symtree->n.sym->attr.pdt_len
+	|| e->symtree->n.sym->attr.pdt_kind))
+    {
+      gfc_symtree *st;
+      st = gfc_find_symtree (pdt->f2k_derived->sym_root,
+			     e->symtree->n.sym->name);
+      if (st && st->n.sym
+	  && (st->n.sym->attr.pdt_len || st->n.sym->attr.pdt_kind))
+	{
+	  gfc_expr *new_expr;
+	  gfc_set_sym_referenced (st->n.sym);
+	  new_expr = gfc_get_expr ();
+	  new_expr->ts = st->n.sym->ts;
+	  new_expr->expr_type = EXPR_VARIABLE;
+	  new_expr->symtree = st;
+	  new_expr->where = e->where;
+	  gfc_replace_expr (e, new_expr);
+	}
+    }
+
+  return false;
+}
+
+
+void
+gfc_correct_parm_expr (gfc_symbol *pdt, gfc_expr **bound)
+{
+  if (!*bound || (*bound)->expr_type == EXPR_CONSTANT)
+    return;
+  gfc_traverse_expr (*bound, pdt, &correct_parm_expr, 0);
+}
+
 /* This function uses the gfc_actual_arglist 'type_param_spec_list' as a source
    of expressions to substitute into the possibly parameterized expression
    'e'. Using a list is inefficient but should not be too bad since the
@@ -3801,12 +3843,13 @@ insert_parameter_exprs (gfc_expr* e, gfc_symbol* sym ATTRIBUTE_UNUSED,
   gfc_actual_arglist *param;
   gfc_expr *copy;
 
-  if (e->expr_type != EXPR_VARIABLE)
+  if (e->expr_type != EXPR_VARIABLE && e->expr_type != EXPR_FUNCTION)
     return false;
 
   gcc_assert (e->symtree);
   if (e->symtree->n.sym->attr.pdt_kind
-      || (*f != 0 && e->symtree->n.sym->attr.pdt_len))
+      || (*f != 0 && e->symtree->n.sym->attr.pdt_len)
+      || (e->expr_type == EXPR_FUNCTION && e->symtree->n.sym))
     {
       for (param = type_param_spec_list; param; param = param->next)
 	if (strcmp (e->symtree->n.sym->name, param->name) == 0)
@@ -4141,7 +4184,7 @@ gfc_get_pdt_instance (gfc_actual_arglist *param_list, gfc_symbol **sym,
 	  /* Now obtain the PDT instance for the extended type.  */
 	  c2->param_list = type_param_spec_list;
 	  m = gfc_get_pdt_instance (type_param_spec_list, &c2->ts.u.derived,
-				    NULL);
+				    &c2->param_list);
 	  type_param_spec_list = old_param_spec_list;
 
 	  c2->ts.u.derived->refs++;
@@ -4203,20 +4246,6 @@ gfc_get_pdt_instance (gfc_actual_arglist *param_list, gfc_symbol **sym,
 	      c2->attr.function = 1;
 	      c2->attr.if_source = IFSRC_UNKNOWN;
 	    }
-	}
-
-      /* Similarly, set the string length if parameterized.  */
-      if (c1->ts.type == BT_CHARACTER
-	  && c1->ts.u.cl->length
-	  && gfc_derived_parameter_expr (c1->ts.u.cl->length))
-	{
-	  gfc_expr *e;
-	  e = gfc_copy_expr (c1->ts.u.cl->length);
-	  gfc_insert_kind_parameter_exprs (e);
-	  gfc_simplify_expr (e, 1);
-	  c2->ts.u.cl = gfc_new_charlen (gfc_current_ns, NULL);
-	  c2->ts.u.cl->length = e;
-	  c2->attr.pdt_string = 1;
 	}
 
       /* Set up either the KIND/LEN initializer, if constant,
@@ -4283,13 +4312,28 @@ gfc_get_pdt_instance (gfc_actual_arglist *param_list, gfc_symbol **sym,
 	      gfc_free_expr (c2->as->upper[i]);
 	      c2->as->upper[i] = e;
 	    }
-	  c2->attr.pdt_array = pdt_array ? 1 : c2->attr.pdt_string;
+
+	  c2->attr.pdt_array = 1;
 	  if (c1->initializer)
 	    {
 	      c2->initializer = gfc_copy_expr (c1->initializer);
 	      gfc_insert_kind_parameter_exprs (c2->initializer);
 	      gfc_simplify_expr (c2->initializer, 1);
 	    }
+	}
+
+      /* Similarly, set the string length if parameterized.  */
+      if (c1->ts.type == BT_CHARACTER
+	  && c1->ts.u.cl->length
+	  && gfc_derived_parameter_expr (c1->ts.u.cl->length))
+	{
+	  gfc_expr *e;
+	  e = gfc_copy_expr (c1->ts.u.cl->length);
+	  gfc_insert_kind_parameter_exprs (e);
+	  gfc_simplify_expr (e, 1);
+	  gfc_free_expr (c2->ts.u.cl->length);
+	  c2->ts.u.cl->length = e;
+	  c2->attr.pdt_string = 1;
 	}
 
       /* Recurse into this function for PDT components.  */
@@ -4304,15 +4348,18 @@ gfc_get_pdt_instance (gfc_actual_arglist *param_list, gfc_symbol **sym,
 	  /* Substitute the template parameters with the expressions
 	     from the specification list.  */
 	  for (;actual_param; actual_param = actual_param->next)
-	    gfc_insert_parameter_exprs (actual_param->expr,
-					type_param_spec_list);
+	    {
+	      gfc_correct_parm_expr (pdt, &actual_param->expr);
+	      gfc_insert_parameter_exprs (actual_param->expr,
+					  type_param_spec_list);
+	    }
 
 	  /* Now obtain the PDT instance for the component.  */
 	  old_param_spec_list = type_param_spec_list;
-	  m = gfc_get_pdt_instance (params, &c2->ts.u.derived, NULL);
+	  m = gfc_get_pdt_instance (params, &c2->ts.u.derived,
+				    &c2->param_list);
 	  type_param_spec_list = old_param_spec_list;
 
-	  c2->param_list = params;
 	  if (!(c2->attr.pointer || c2->attr.allocatable))
 	    c2->initializer = gfc_default_initializer (&c2->ts);
 
@@ -6373,15 +6420,17 @@ verify_bind_c_sym (gfc_symbol *tmp_sym, gfc_typespec *ts,
 			 &(tmp_sym->declared_at));
     }
 
-  /* See if the symbol has been marked as private.  If it has, make sure
-     there is no binding label and warn the user if there is one.  */
+  /* See if the symbol has been marked as private.  If it has, warn if
+     there is a binding label with default binding name.  */
   if (tmp_sym->attr.access == ACCESS_PRIVATE
-      && tmp_sym->binding_label)
-      /* Use gfc_warning_now because we won't say that the symbol fails
-	 just because of this.	*/
-      gfc_warning_now (0, "Symbol %qs at %L is marked PRIVATE but has been "
-		       "given the binding label %qs", tmp_sym->name,
-		       &(tmp_sym->declared_at), tmp_sym->binding_label);
+      && tmp_sym->binding_label
+      && strcmp (tmp_sym->name, tmp_sym->binding_label) == 0
+      && (tmp_sym->attr.flavor == FL_VARIABLE
+	  || tmp_sym->attr.if_source == IFSRC_DECL))
+    gfc_warning (OPT_Wsurprising,
+		 "Symbol %qs at %L is marked PRIVATE but is accessible "
+		 "via its default binding name %qs", tmp_sym->name,
+		 &(tmp_sym->declared_at), tmp_sym->binding_label);
 
   return retval;
 }

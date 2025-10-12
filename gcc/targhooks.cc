@@ -1551,8 +1551,6 @@ default_builtin_vector_alignment_reachable (const_tree /*type*/, bool is_packed)
    is_packed is true if the memory access is defined in a packed struct.  */
 bool
 default_builtin_support_vector_misalignment (machine_mode mode,
-					     const_tree type
-					     ATTRIBUTE_UNUSED,
 					     int misalignment
 					     ATTRIBUTE_UNUSED,
 					     bool is_packed
@@ -1792,6 +1790,16 @@ default_addr_space_convert (rtx op ATTRIBUTE_UNUSED,
 {
   gcc_unreachable ();
 }
+
+
+/* The default hook for TARGET_ADDR_SPACE_FOR_ARTIFICIAL_RODATA.  */
+
+addr_space_t
+default_addr_space_for_artificial_rodata (tree, artificial_rodata)
+{
+  return ADDR_SPACE_GENERIC;
+}
+
 
 /* The defualt implementation of TARGET_HARD_REGNO_NREGS.  */
 

@@ -3726,7 +3726,11 @@ push_local_extern_decl_alias (tree decl)
 			  chain = &TREE_CHAIN (*chain);
 			}
 
-		    tree fn_type = build_function_type (TREE_TYPE (type), nargs);
+		    bool no_named_args_stdarg
+		      = TYPE_NO_NAMED_ARGS_STDARG_P (type);
+		    tree fn_type
+		      = build_function_type (TREE_TYPE (type), nargs,
+					     no_named_args_stdarg);
 
 		    fn_type = apply_memfn_quals
 		      (fn_type, type_memfn_quals (type));
@@ -3882,7 +3886,7 @@ check_module_override (tree decl, tree mvec, bool hiding,
 	  }
       }
 
-  if (TREE_PUBLIC (scope) && TREE_PUBLIC (STRIP_TEMPLATE (decl))
+  if (TREE_PUBLIC (scope)
       /* Namespaces are dealt with specially in
 	 make_namespace_finish.  */
       && !(TREE_CODE (decl) == NAMESPACE_DECL && !DECL_NAMESPACE_ALIAS (decl)))
@@ -8599,6 +8603,12 @@ pushtag (tree name, tree type, TAG_how how)
 	}
       else
 	{
+	  /* If an import is going to provide a definition for this tag,
+	     load it now so that we don't get confused later when processing
+	     this tag's definition.  */
+	  if (modules_p ())
+	    lazy_load_pendings (decl);
+
 	  decl = do_pushdecl_with_scope
 	    (decl, b, /*hiding=*/(how == TAG_how::HIDDEN_FRIEND));
 	  if (decl == error_mark_node)

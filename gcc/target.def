@@ -1925,13 +1925,13 @@ DEFHOOK
 (support_vector_misalignment,
  "This hook should return true if the target supports misaligned vector\n\
 store/load of a specific factor denoted in the @var{misalignment}\n\
-parameter.  The vector store/load should be of machine mode @var{mode} and\n\
-the elements in the vectors should be of type @var{type}.  The\n\
-@var{is_packed} parameter is true if the misalignment is unknown and the\n\
-memory access is defined in a packed struct.  @var{is_gather_scatter} is true\n\
-if the load/store is a gather or scatter.",
+parameter.  The vector store/load should be of machine mode @var{mode}.\n\
+The @var{is_packed} parameter is true if the original memory access is\n\
+not naturally aligned.  @var{is_gather_scatter} is true if the\n\
+load/store is a gather or scatter.  In that case misalignment\n\
+denotes the misalignment of @var{mode}'s element mode.",
  bool,
- (machine_mode mode, const_tree type, int misalignment, bool is_packed,
+ (machine_mode mode, int misalignment, bool is_packed,
   bool is_gather_scatter),
  default_builtin_support_vector_misalignment)
 
@@ -3539,6 +3539,35 @@ the address space as registered with @code{c_register_addr_space}.\n\
 The default implementation does nothing.",
  void, (addr_space_t as, location_t loc),
  default_addr_space_diagnose_usage)
+
+/* Function to patch the address space of some compiler-generated
+   read-only data.  Used for optimization purposes only.  */
+DEFHOOK
+(for_artificial_rodata,
+ "Define this hook to return a named address space to be used for\n\
+@var{type}, usually the type of an artificial lookup-table that would\n\
+reside in @code{.rodata} and in the generic address space.\n\
+\n\
+The hook can be used to put compiler-generated, artificial lookup tables in\n\
+static storage into a non-generic address space when it is better suited\n\
+than the generic address space.\n\
+The compiler will generate all accesses to the respective data\n\
+so that all associated accesses will also use the specified address space\n\
+and pointer mode.\n\
+\n\
+@var{type} is the type of the lookup table. @var{purpose} specifies\n\
+the purpose of the lookup table.  It is one of:\n\
+@table @code\n\
+@item ARTIFICIAL_RODATA_CSWITCH\n\
+@file{tree-switch-conversion.cc} lowered a GIMPLE_SWITCH expressions\n\
+to something more efficient than a jump table.\n\
+@item ARTIFICIAL_RODATA_CRC\n\
+@file{gimple-crc-optimization.cc} optimized a CRC computation by\n\
+using a polynomial lookup table.\n\
+@end table\n\
+The default implementation of the hook returns @code{ADDR_SPACE_GENERIC}.",
+ addr_space_t, (tree type, enum artificial_rodata purpose),
+ default_addr_space_for_artificial_rodata)
 
 HOOK_VECTOR_END (addr_space)
 

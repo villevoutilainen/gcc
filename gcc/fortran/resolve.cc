@@ -2030,7 +2030,7 @@ static bool
 resolve_actual_arglist (gfc_actual_arglist *arg, procedure_type ptype,
 			bool no_formal_args)
 {
-  gfc_symbol *sym;
+  gfc_symbol *sym = NULL;
   gfc_symtree *parent_st;
   gfc_expr *e;
   gfc_component *comp;
@@ -2293,6 +2293,30 @@ resolve_actual_arglist (gfc_actual_arglist *arg, procedure_type ptype,
 	  gfc_error ("Coindexed actual argument at %L with ultimate pointer "
 		     "component", &e->where);
 	  goto cleanup;
+	}
+
+      if (e->expr_type == EXPR_VARIABLE
+	  && e->ts.type == BT_PROCEDURE
+	  && no_formal_args
+	  && sym->attr.flavor == FL_PROCEDURE
+	  && sym->attr.if_source == IFSRC_UNKNOWN
+	  && !sym->attr.external
+	  && !sym->attr.intrinsic
+	  && !sym->attr.artificial
+	  && !sym->ts.interface)
+	{
+	  /* Emit a warning for -std=legacy and an error otherwise. */
+	  if (gfc_option.warn_std == 0)
+	    gfc_warning (0, "Procedure %qs at %L used as actual argument but "
+			 "does neither have an explicit interface nor the "
+			 "EXTERNAL attribute", sym->name, &e->where);
+	  else
+	    {
+	      gfc_error ("Procedure %qs at %L used as actual argument but "
+			 "does neither have an explicit interface nor the "
+			 "EXTERNAL attribute", sym->name, &e->where);
+	      goto cleanup;
+	    }
 	}
 
       first_actual_arg = false;
@@ -16877,27 +16901,30 @@ resolve_component (gfc_component *c, gfc_symbol *sym)
       && gfc_find_typebound_proc (super_type, NULL, c->name, true, NULL))
     {
       gfc_error ("Component %qs of %qs at %L has the same name as an"
-                 " inherited type-bound procedure",
-                 c->name, sym->name, &c->loc);
+		 " inherited type-bound procedure",
+		 c->name, sym->name, &c->loc);
       return false;
     }
 
   if (c->ts.type == BT_CHARACTER && !c->attr.proc_pointer
       && !c->ts.deferred)
     {
+      if (sym->attr.pdt_template || c->attr.pdt_string)
+	gfc_correct_parm_expr (sym, &c->ts.u.cl->length);
+
       if (c->ts.u.cl->length == NULL
-	  || (!resolve_charlen(c->ts.u.cl))
+	  || !resolve_charlen(c->ts.u.cl)
 	  || !gfc_is_constant_expr (c->ts.u.cl->length))
 	{
 	  gfc_error ("Character length of component %qs needs to "
 		     "be a constant specification expression at %L",
 		     c->name,
 		     c->ts.u.cl->length ? &c->ts.u.cl->length->where : &c->loc);
-         return false;
-       }
+	  return false;
+	}
 
      if (c->ts.u.cl->length && c->ts.u.cl->length->ts.type != BT_INTEGER)
-       {
+	{
 	 if (!c->ts.u.cl->length->error)
 	   {
 	     gfc_error ("Character length expression of component %qs at %L "

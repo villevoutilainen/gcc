@@ -113,7 +113,6 @@ extern poly_uint64 default_preferred_vector_alignment (const_tree);
 extern bool default_builtin_vector_alignment_reachable (const_tree, bool);
 extern bool
 default_builtin_support_vector_misalignment (machine_mode mode,
-					     const_tree,
 					     int, bool, bool);
 extern machine_mode default_preferred_simd_mode (scalar_mode mode);
 extern machine_mode default_split_reduction (machine_mode);
@@ -215,6 +214,8 @@ extern bool default_addr_space_subset_p (addr_space_t, addr_space_t);
 extern bool default_addr_space_zero_address_valid (addr_space_t);
 extern int default_addr_space_debug (addr_space_t);
 extern void default_addr_space_diagnose_usage (addr_space_t, location_t);
+extern addr_space_t default_addr_space_for_artificial_rodata (tree,
+							      artificial_rodata);
 extern rtx default_addr_space_convert (rtx, tree, tree);
 extern unsigned int default_case_values_threshold (void);
 extern bool default_have_conditional_execution (void);
