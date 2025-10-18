@@ -2029,6 +2029,11 @@ Wsuggest-explicit-contract
 C++ ObjC++ Var(suggest_explicit_contract) Warning
 Warn about functions with implicitly inherited contracts.
 
+fcontracts-conservative-ipa
+C++ ObjC++ Var(flag_contracts_conservative_ipa) Init(1)
+-fcontracts-conservative-ipa	Do not allow certain optimisations between
+functions in contract assertions.
+
 fcoroutines
 C++ LTO Var(flag_coroutines)
 Enable C++ coroutines (experimental).
