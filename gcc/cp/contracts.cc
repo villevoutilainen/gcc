@@ -2408,7 +2408,7 @@ get_evaluation_semantic (const_tree contract)
 static void
 emit_builtin_observable ()
 {
-  tree fn = builtin_decl_explicit (BUILT_IN_OBSERVABLE);
+  tree fn = builtin_decl_explicit (BUILT_IN_OBSERVABLE_CHKPT);
   releasing_vec vec;
   fn = finish_call_expr (fn, &vec, false, false, tf_warning_or_error);
   finish_expr_stmt (fn);
