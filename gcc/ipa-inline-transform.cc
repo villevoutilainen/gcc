@@ -833,7 +833,8 @@ inline_transform (struct cgraph_node *node)
       FOR_ALL_BB_FN (bb, cfun)
 	{
 	  bb->count = bb->count.apply_scale (num, den);
-	  cfun->cfg->count_max = cfun->cfg->count_max.max (bb->count);
+	  cfun->cfg->count_max = profile_count::max_prefer_initialized
+		  (cfun->cfg->count_max, bb->count);
 	}
       ENTRY_BLOCK_PTR_FOR_FN (cfun)->count = node->count;
     }
@@ -844,7 +845,17 @@ inline_transform (struct cgraph_node *node)
       if (!e->inline_failed)
 	has_inline = true;
       next = e->next_callee;
-      cgraph_edge::redirect_call_stmt_to_callee (e);
+      if (e->has_callback)
+	{
+	  /* Redirect callback edges when redirecting their carrying edge.  */
+	  cgraph_edge *cbe;
+	  cgraph_edge::redirect_call_stmt_to_callee (e);
+	  for (cbe = e->first_callback_edge (); cbe;
+	       cbe = cbe->next_callback_edge ())
+	    cgraph_edge::redirect_call_stmt_to_callee (cbe);
+	}
+      else
+	cgraph_edge::redirect_call_stmt_to_callee (e);
     }
   node->remove_all_references ();
 

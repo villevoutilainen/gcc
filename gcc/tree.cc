@@ -75,6 +75,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "dfp.h"
 #include "asan.h"
 #include "ubsan.h"
+#include "attr-callback.h"
 
 /* Names of tree components.
    Used for printing out the tree and error messages.  */
@@ -10000,10 +10001,18 @@ set_call_expr_flags (tree decl, int flags)
     DECL_ATTRIBUTES (decl)
       = tree_cons (get_identifier ("expected_throw"),
 		   NULL, DECL_ATTRIBUTES (decl));
-  /* Looping const or pure is implied by noreturn.
+
+  if (flags & ECF_CB_1_2)
+    {
+      tree attr = callback_build_attr (1, 1, 2);
+      TREE_CHAIN (attr) = DECL_ATTRIBUTES (decl);
+      DECL_ATTRIBUTES (decl) = attr;
+    }
+
+    /* Looping const or pure is implied by noreturn.
      There is currently no way to declare looping const or looping pure alone.  */
   gcc_assert (!(flags & ECF_LOOPING_CONST_OR_PURE)
-	      || ((flags & ECF_NORETURN) && (flags & (ECF_CONST | ECF_PURE))));
+	      || (flags & (ECF_CONST | ECF_PURE)));
 }
 
 
@@ -10048,6 +10057,7 @@ build_common_builtin_nodes (void)
   if (!builtin_decl_explicit_p (BUILT_IN_UNREACHABLE)
       || !builtin_decl_explicit_p (BUILT_IN_TRAP)
       || !builtin_decl_explicit_p (BUILT_IN_UNREACHABLE_TRAP)
+      || !builtin_decl_explicit_p (BUILT_IN_OBSERVABLE_CHKPT)
       || !builtin_decl_explicit_p (BUILT_IN_ABORT))
     {
       ftype = build_function_type (void_type_node, void_list_node);
@@ -10071,6 +10081,12 @@ build_common_builtin_nodes (void)
 	local_define_builtin ("__builtin_trap", ftype, BUILT_IN_TRAP,
 			      "__builtin_trap",
 			      ECF_NORETURN | ECF_NOTHROW | ECF_LEAF | ECF_COLD);
+      if (!builtin_decl_explicit_p (BUILT_IN_OBSERVABLE_CHKPT))
+	local_define_builtin ("__builtin_observable_checkpoint", ftype,
+			      BUILT_IN_OBSERVABLE_CHKPT,
+			      "__builtin_observable_checkpoint",
+			      ECF_NOTHROW | ECF_LEAF | ECF_CONST
+			      | ECF_LOOPING_CONST_OR_PURE);
     }
 
   if (!builtin_decl_explicit_p (BUILT_IN_MEMCPY)

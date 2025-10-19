@@ -981,16 +981,18 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
  (if (INTEGRAL_TYPE_P (TREE_TYPE (@0)) && TYPE_UNSIGNED (TREE_TYPE (@0)))
   (bit_and @0 (negate @1))))
 
-(for div (trunc_div ceil_div floor_div round_div exact_div)
+/* Canonicalize unsigned t / 4 to t >> 2.  */
 #if GIMPLE
- /* Canonicalize unsigned t / 4 to t >> 2.  */
+(for div (trunc_div floor_div exact_div)
  (simplify
   (div @0 integer_pow2p@1)
   (if (INTEGRAL_TYPE_P (type)
        && (TYPE_UNSIGNED (type) || tree_expr_nonnegative_p (@0)))
    (rshift @0 { build_int_cst (integer_type_node,
-			       wi::exact_log2 (wi::to_wide (@1))); })))
+			       wi::exact_log2 (wi::to_wide (@1))); }))))
 #endif
+
+(for div (trunc_div ceil_div floor_div round_div exact_div)
  /* Simplify (t * u) / u -> t.  */
  (simplify
   (div (mult:c @0 @1) @1)
@@ -3717,6 +3719,36 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
        bool c2_is_type_precision_p = tree_to_uhwi (@2) == prec;
       }
       (if (c2_is_type_precision_p && (mult_p || widen_mult_p)))))))
+ (match (unsigned_integer_sat_mul @0 @1)
+  (convert (min (widen_mult:c@3 @0 @1) INTEGER_CST@2))
+  (if (types_match (type, @0, @1))
+   (with
+    {
+     unsigned prec = TYPE_PRECISION (type);
+     unsigned widen_prec = TYPE_PRECISION (TREE_TYPE (@3));
+
+     wide_int max = wi::mask (prec, false, widen_prec);
+     bool c2_is_max_p = wi::eq_p (wi::to_wide (@2), max);
+     bool widen_mult_p = prec * 2 == widen_prec;
+    }
+    (if (c2_is_max_p && widen_mult_p)))))
+  (match (unsigned_integer_sat_mul @0 @1)
+   (convert1?
+    (bit_ior
+     (convert?
+      (negate
+       (convert (ne (convert2? (rshift @3 INTEGER_CST@2)) integer_zerop))))
+     (convert (widen_mult:c@3 @0 @1))))
+   (if (types_match (type, @0, @1))
+    (with
+     {
+      unsigned prec = TYPE_PRECISION (type);
+      unsigned widen_prec = TYPE_PRECISION (TREE_TYPE (@3));
+
+      bool c2_is_type_precision_p = tree_to_uhwi (@2) == prec;
+      bool widen_mult_p = prec * 2 == widen_prec;
+     }
+     (if (c2_is_type_precision_p && widen_mult_p)))))
 )
 
 /* The boundary condition for case 10: IMM = 1:
@@ -6812,20 +6844,20 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
  (bit_and:c (ne:c @0 @1) (ne (bit_ior @0 @1) integer_zerop))
  (ne @0 @1))
 (simplify
- (bit_ior:c (ne:c @0 @1) (ne (bit_ior @0 @1) integer_zerop))
- (ne (bit_ior @0 @1) { integer_zero_node; }))
+ (bit_ior:c (ne:c @0 @1) (ne (bit_ior@2 @0 @1) integer_zerop@3))
+ (ne @2 @3))
 (simplify
- (bit_and:c (eq:c @0 @1) (eq (bit_ior @0 @1) integer_zerop))
- (eq (bit_ior @0 @1) { integer_zero_node; }))
+ (bit_and:c (eq:c @0 @1) (eq (bit_ior@2 @0 @1) integer_zerop@3))
+ (eq @2 @3))
 (simplify
  (bit_ior:c (eq:c @0 @1) (eq (bit_ior @0 @1) integer_zerop))
  (eq @0 @1))
 (simplify
  (bit_and:c (ne:c @0 @1) (eq (bit_ior @0 @1) integer_zerop))
- { build_zero_cst (type); })
+ { constant_boolean_node (false, type); })
 (simplify
  (bit_ior:c (eq:c @0 @1) (ne (bit_ior @0 @1) integer_zerop))
- { build_one_cst (type); })
+ { constant_boolean_node (true, type); })
 #endif
 
 /* These was part of minmax phiopt.  */

@@ -288,7 +288,10 @@ struct vect_load_store_data : vect_data {
       tree decl;	// VMAT_GATHER_SCATTER_DECL
   } gs;
   tree strided_offset_vectype; // VMAT_GATHER_SCATTER_IFN, originally strided
+  tree ls_type; // VMAT_GATHER_SCATTER_IFN
   auto_vec<int> elsvals;
+  /* True if the load requires a load permutation.  */
+  bool slp_perm;    // SLP_TREE_LOAD_PERMUTATION
   unsigned n_perms; // SLP_TREE_LOAD_PERMUTATION
 };
 
@@ -843,6 +846,9 @@ public:
      following land-reducing operation would be assigned to.  */
   unsigned int reduc_result_pos;
 
+  /* Whether this represents a reduction chain.  */
+  bool is_reduc_chain;
+
   /* Whether we force a single cycle PHI during reduction vectorization.  */
   bool force_single_cycle;
 
@@ -1065,10 +1071,6 @@ public:
   /* Reduction cycles detected in the loop. Used in loop-aware SLP.  */
   auto_vec<stmt_vec_info> reductions;
 
-  /* All reduction chains in the loop, represented by the first
-     stmt in the chain.  */
-  auto_vec<stmt_vec_info> reduction_chains;
-
   /* Defs that could not be analyzed such as OMP SIMD calls without
      a LHS.  */
   auto_vec<stmt_vec_info> alternate_defs;
@@ -1289,7 +1291,6 @@ public:
 #define LOOP_VINFO_SLP_INSTANCES(L)        (L)->slp_instances
 #define LOOP_VINFO_SLP_UNROLLING_FACTOR(L) (L)->slp_unrolling_factor
 #define LOOP_VINFO_REDUCTIONS(L)           (L)->reductions
-#define LOOP_VINFO_REDUCTION_CHAINS(L)     (L)->reduction_chains
 #define LOOP_VINFO_PEELING_FOR_GAPS(L)     (L)->peeling_for_gaps
 #define LOOP_VINFO_PEELING_FOR_NITER(L)    (L)->peeling_for_niter
 #define LOOP_VINFO_EARLY_BREAKS(L)         (L)->early_breaks
@@ -1537,7 +1538,7 @@ public:
   /*  Whether the stmt is SLPed, loop-based vectorized, or both.  */
   enum slp_vect_type slp_type;
 
-  /* Interleaving and reduction chains info.  */
+  /* Interleaving chains info.  */
   /* First element in the group.  */
   stmt_vec_info first_element;
   /* Pointer to the next element in the group.  */
@@ -1709,13 +1710,6 @@ struct gather_scatter_info {
   (gcc_checking_assert ((S)->dr_aux.dr), (S)->size)
 #define DR_GROUP_GAP(S) \
   (gcc_checking_assert ((S)->dr_aux.dr), (S)->gap)
-
-#define REDUC_GROUP_FIRST_ELEMENT(S) \
-  (gcc_checking_assert (!(S)->dr_aux.dr), (S)->first_element)
-#define REDUC_GROUP_NEXT_ELEMENT(S) \
-  (gcc_checking_assert (!(S)->dr_aux.dr), (S)->next_element)
-#define REDUC_GROUP_SIZE(S) \
-  (gcc_checking_assert (!(S)->dr_aux.dr), (S)->size)
 
 #define STMT_VINFO_RELEVANT_P(S)          ((S)->relevant != vect_unused_in_scope)
 

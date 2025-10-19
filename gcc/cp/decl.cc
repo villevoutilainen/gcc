@@ -5820,6 +5820,23 @@ cp_make_fname_decl (location_t loc, tree id, int type_dep)
 	  name = cxx_printable_name (current_function_decl, 2);
 	}
 
+      if (!release_name)
+	{
+	  cpp_string cstr = { 0, 0 }, strname;
+	  size_t len = strlen (name) + 3; /* Two for '"'s.  One for NULL.  */
+	  char *namep = XNEWVEC (char, len);
+	  snprintf (namep, len, "\"%s\"", name);
+	  strname.text = (unsigned char *) namep;
+	  strname.len = len - 1;
+	  if (cpp_interpret_string (parse_in, &strname, 1, &cstr, CPP_STRING))
+	    {
+	      name = (const char *) cstr.text;
+	      release_name = true;
+	    }
+
+	  XDELETEVEC (namep);
+	}
+
       size_t length = strlen (name);
       domain = build_index_type (size_int (length));
       init = build_string (length + 1, name);
@@ -9127,6 +9144,7 @@ omp_declare_variant_finalize_one (tree decl, tree attr)
 	  for (unsigned i = 0; i < nappend_args && varg; i++)
 	    varg = TREE_CHAIN (varg);
 	  tree saved_vargs;
+	  int saved_no_named_args_stdarg = 0;
 	  if (nbase_args)
 	    {
 	      saved_vargs = TREE_CHAIN (vargs);
@@ -9136,6 +9154,11 @@ omp_declare_variant_finalize_one (tree decl, tree attr)
 	    {
 	      saved_vargs = vargs;
 	      TYPE_ARG_TYPES (TREE_TYPE (variant)) = varg;
+	      saved_no_named_args_stdarg
+		= TYPE_NO_NAMED_ARGS_STDARG_P (TREE_TYPE (variant));
+	      if (TYPE_NO_NAMED_ARGS_STDARG_P (TREE_TYPE (decl))
+		  && varg == NULL_TREE)
+		TYPE_NO_NAMED_ARGS_STDARG_P (TREE_TYPE (variant)) = 1;
 	    }
 	  /* Skip assert check that TYPE_CANONICAL is the same.  */
 	  fail = !comptypes (TREE_TYPE (decl), TREE_TYPE (variant),
@@ -9143,7 +9166,11 @@ omp_declare_variant_finalize_one (tree decl, tree attr)
 	  if (nbase_args)
 	    TREE_CHAIN (vargs) = saved_vargs;
 	  else
-	    TYPE_ARG_TYPES (TREE_TYPE (variant)) = saved_vargs;
+	    {
+	      TYPE_ARG_TYPES (TREE_TYPE (variant)) = saved_vargs;
+	      TYPE_NO_NAMED_ARGS_STDARG_P (TREE_TYPE (variant))
+		= saved_no_named_args_stdarg;
+	    }
 	  varg = saved_vargs;
 	  if (!fail && !processing_template_decl)
 	    for (unsigned i = 0; i < nappend_args;

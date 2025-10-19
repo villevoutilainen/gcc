@@ -62,6 +62,9 @@ along with GCC; see the file COPYING3.  If not see
 /* For lang_hooks.types.type_for_mode.  */
 #include "langhooks.h"
 
+static tree vector_vector_composition_type (tree, poly_uint64, tree *,
+					    bool = false);
+
 /* Return TRUE iff the given statement is in an inner loop relative to
    the loop being vectorized.  */
 bool
@@ -1723,6 +1726,95 @@ vect_truncate_gather_scatter_offset (stmt_vec_info stmt_info, tree vectype,
   return false;
 }
 
+/* Return true if we can use gather/scatter or strided internal functions
+   to vectorize STMT_INFO, which is a grouped or strided load or store
+   with multiple lanes and will be implemented by a type-punned access
+   of a vector with element size that matches the number of lanes.
+
+   MASKED_P is true if load or store is conditional.
+   When returning true, fill in GS_INFO with the information required to
+   perform the operation.  Also, store the punning type in PUNNED_VECTYPE.
+
+   If successful and ELSVALS is nonzero the supported
+   else values will be stored in the vector ELSVALS points to.  */
+
+static bool
+vect_use_grouped_gather (dr_vec_info *dr_info, tree vectype,
+			 loop_vec_info loop_vinfo, bool masked_p,
+			 unsigned int nelts,
+			 gather_scatter_info *info, vec<int> *elsvals,
+			 tree *pun_vectype)
+{
+  data_reference *dr = dr_info->dr;
+
+  /* TODO: We can support nelts > BITS_PER_UNIT or non-power-of-two by
+     multiple gathers/scatter.  */
+  if (nelts > BITS_PER_UNIT || !pow2p_hwi (nelts))
+    return false;
+
+  /* Pun the vectype with one of the same size but an element spanning
+     NELTS elements of VECTYPE.
+     The punned type of a V16QI with NELTS = 4 would be V4SI.
+     */
+  tree tmp;
+  unsigned int pieces;
+  if (!can_div_trunc_p (TYPE_VECTOR_SUBPARTS (vectype), nelts, &pieces)
+      || !pieces)
+    return false;
+
+  *pun_vectype = vector_vector_composition_type (vectype, pieces, &tmp, true);
+
+  if (!*pun_vectype || !VECTOR_TYPE_P (*pun_vectype))
+    return false;
+
+  internal_fn ifn;
+  tree offset_vectype = *pun_vectype;
+
+  internal_fn strided_ifn = DR_IS_READ (dr)
+    ? IFN_MASK_LEN_STRIDED_LOAD : IFN_MASK_LEN_STRIDED_STORE;
+
+  /* Check if we have a gather/scatter with the new type.  We're just trying
+     with the type itself as offset for now.  If not, check if we have a
+     strided load/store.  These have fewer constraints (for example no offset
+     type must exist) so it is possible that even though a gather/scatter is
+     not available we still have a strided load/store.  */
+  bool ok = false;
+  if (vect_gather_scatter_fn_p
+      (loop_vinfo, DR_IS_READ (dr), masked_p, *pun_vectype,
+       TREE_TYPE (*pun_vectype), *pun_vectype, 1, &ifn,
+       &offset_vectype, elsvals))
+    ok = true;
+  else if (internal_strided_fn_supported_p (strided_ifn, *pun_vectype,
+					    elsvals))
+    {
+      /* Use gather/scatter IFNs, vect_get_strided_load_store_ops
+	 will switch back to the strided variants.  */
+      ifn = DR_IS_READ (dr) ? IFN_MASK_LEN_GATHER_LOAD :
+	IFN_MASK_LEN_SCATTER_STORE;
+      ok = true;
+    }
+
+  if (ok)
+    {
+      info->ifn = ifn;
+      info->decl = NULL_TREE;
+      info->base = dr->ref;
+      info->alias_ptr = build_int_cst
+	(reference_alias_ptr_type (DR_REF (dr)),
+	 get_object_alignment (DR_REF (dr)));
+      info->element_type = TREE_TYPE (*pun_vectype);
+      info->offset_vectype = offset_vectype;
+      /* No need to set the offset, vect_get_strided_load_store_ops
+	 will do that.  */
+      info->scale = 1;
+      info->memory_type = TREE_TYPE (DR_REF (dr));
+      return true;
+    }
+
+  return false;
+}
+
+
 /* Return true if we can use gather/scatter internal functions to
    vectorize STMT_INFO, which is a grouped or strided load or store.
    MASKED_P is true if load or store is conditional.  When returning
@@ -1888,12 +1980,14 @@ vect_get_store_rhs (stmt_vec_info stmt_info)
 
 /* Function VECTOR_VECTOR_COMPOSITION_TYPE
 
-   This function returns a vector type which can be composed with NETLS pieces,
+   This function returns a vector type which can be composed with NELTS pieces,
    whose type is recorded in PTYPE.  VTYPE should be a vector type, and has the
    same vector size as the return vector.  It checks target whether supports
    pieces-size vector mode for construction firstly, if target fails to, check
    pieces-size scalar mode for construction further.  It returns NULL_TREE if
-   fails to find the available composition.
+   fails to find the available composition.  If the caller only wants scalar
+   pieces where PTYPE e.g. is a possible gather/scatter element type
+   SCALAR_PTYPE_ONLY must be true.
 
    For example, for (vtype=V16QI, nelts=4), we can probably get:
      - V16QI with PTYPE V4QI.
@@ -1901,7 +1995,8 @@ vect_get_store_rhs (stmt_vec_info stmt_info)
      - NULL_TREE.  */
 
 static tree
-vector_vector_composition_type (tree vtype, poly_uint64 nelts, tree *ptype)
+vector_vector_composition_type (tree vtype, poly_uint64 nelts, tree *ptype,
+				bool scalar_ptype_only)
 {
   gcc_assert (VECTOR_TYPE_P (vtype));
   gcc_assert (known_gt (nelts, 0U));
@@ -1927,7 +2022,8 @@ vector_vector_composition_type (tree vtype, poly_uint64 nelts, tree *ptype)
       scalar_mode elmode = SCALAR_TYPE_MODE (TREE_TYPE (vtype));
       poly_uint64 inelts = pbsize / GET_MODE_BITSIZE (elmode);
       machine_mode rmode;
-      if (related_vector_mode (vmode, elmode, inelts).exists (&rmode)
+      if (!scalar_ptype_only
+	  && related_vector_mode (vmode, elmode, inelts).exists (&rmode)
 	  && (convert_optab_handler (vec_init_optab, vmode, rmode)
 	      != CODE_FOR_nothing))
 	{
@@ -1938,12 +2034,15 @@ vector_vector_composition_type (tree vtype, poly_uint64 nelts, tree *ptype)
       /* Otherwise check if exists an integer type of the same piece size and
 	 if vec_init optab supports construction from it directly.  */
       if (int_mode_for_size (pbsize, 0).exists (&elmode)
-	  && related_vector_mode (vmode, elmode, nelts).exists (&rmode)
-	  && (convert_optab_handler (vec_init_optab, rmode, elmode)
-	      != CODE_FOR_nothing))
+	  && related_vector_mode (vmode, elmode, nelts).exists (&rmode))
 	{
-	  *ptype = build_nonstandard_integer_type (pbsize, 1);
-	  return build_vector_type (*ptype, nelts);
+	  if (scalar_ptype_only
+	      || convert_optab_handler (vec_init_optab, rmode, elmode)
+	      != CODE_FOR_nothing)
+	    {
+	      *ptype = build_nonstandard_integer_type (pbsize, 1);
+	      return build_vector_type (*ptype, nelts);
+	    }
 	}
     }
 
@@ -1963,16 +2062,13 @@ vector_vector_composition_type (tree vtype, poly_uint64 nelts, tree *ptype)
    VECTYPE is the vector type that the vectorized statements will use.
 
    If ELSVALS is nonzero the supported else values will be stored in the
-   vector ELSVALS points to.
-
-   For loads PERM_OK indicates whether we can code generate a
-   SLP_TREE_LOAD_PERMUTATION on the node.  */
+   vector ELSVALS points to.  */
 
 static bool
 get_load_store_type (vec_info  *vinfo, stmt_vec_info stmt_info,
 		     tree vectype, slp_tree slp_node,
 		     bool masked_p, vec_load_store_type vls_type,
-		     bool perm_ok, vect_load_store_data *ls)
+		     vect_load_store_data *ls)
 {
   vect_memory_access_type *memory_access_type = &ls->memory_access_type;
   poly_int64 *poffset = &ls->poffset;
@@ -1981,6 +2077,9 @@ get_load_store_type (vec_info  *vinfo, stmt_vec_info stmt_info,
   int *misalignment = &ls->misalignment;
   internal_fn *lanes_ifn = &ls->lanes_ifn;
   vec<int> *elsvals = &ls->elsvals;
+  tree *ls_type = &ls->ls_type;
+  bool *slp_perm = &ls->slp_perm;
+  unsigned *n_perms = &ls->n_perms;
   loop_vec_info loop_vinfo = dyn_cast <loop_vec_info> (vinfo);
   poly_uint64 nunits = TYPE_VECTOR_SUBPARTS (vectype);
   class loop *loop = loop_vinfo ? LOOP_VINFO_LOOP (loop_vinfo) : NULL;
@@ -1992,6 +2091,16 @@ get_load_store_type (vec_info  *vinfo, stmt_vec_info stmt_info,
 
   *misalignment = DR_MISALIGNMENT_UNKNOWN;
   *poffset = 0;
+  *ls_type = NULL_TREE;
+  *slp_perm = false;
+  *n_perms = -1U;
+
+  bool perm_ok = true;
+  poly_int64 vf = loop_vinfo ? LOOP_VINFO_VECT_FACTOR (loop_vinfo) : 1;
+
+  if (SLP_TREE_LOAD_PERMUTATION (slp_node).exists ())
+    perm_ok = vect_transform_slp_perm_load (vinfo, slp_node, vNULL, NULL,
+					    vf, true, n_perms);
 
   if (STMT_VINFO_GROUPED_ACCESS (stmt_info))
     {
@@ -2298,24 +2407,41 @@ get_load_store_type (vec_info  *vinfo, stmt_vec_info stmt_info,
      on nearby locations.  Or, even if it's a win over scalar code,
      it might not be a win over vectorizing at a lower VF, if that
      allows us to use contiguous accesses.  */
+  vect_memory_access_type grouped_gather_fallback = VMAT_UNINITIALIZED;
   if (loop_vinfo
       && (*memory_access_type == VMAT_ELEMENTWISE
 	  || *memory_access_type == VMAT_STRIDED_SLP)
-      && !STMT_VINFO_GATHER_SCATTER_P (stmt_info)
-      && SLP_TREE_LANES (slp_node) == 1
-      && (!SLP_TREE_LOAD_PERMUTATION (slp_node).exists ()
-	  || single_element_p))
+      && !STMT_VINFO_GATHER_SCATTER_P (stmt_info))
     {
       gather_scatter_info gs_info;
-      if (vect_use_strided_gather_scatters_p (stmt_info, vectype, loop_vinfo,
-					      masked_p, &gs_info, elsvals,
-					      group_size, single_element_p))
+      if (SLP_TREE_LANES (slp_node) == 1
+	  && (!SLP_TREE_LOAD_PERMUTATION (slp_node).exists ()
+	      || single_element_p)
+	  && vect_use_strided_gather_scatters_p (stmt_info, vectype, loop_vinfo,
+						 masked_p, &gs_info, elsvals,
+						 group_size, single_element_p))
 	{
 	  SLP_TREE_GS_SCALE (slp_node) = gs_info.scale;
 	  SLP_TREE_GS_BASE (slp_node) = error_mark_node;
 	  ls->gs.ifn = gs_info.ifn;
 	  ls->strided_offset_vectype = gs_info.offset_vectype;
 	  *memory_access_type = VMAT_GATHER_SCATTER_IFN;
+	}
+      else if (SLP_TREE_LANES (slp_node) > 1
+	       && !masked_p
+	       && !single_element_p
+	       && vect_use_grouped_gather (STMT_VINFO_DR_INFO (stmt_info),
+					   vectype, loop_vinfo,
+					   masked_p, group_size,
+					   &gs_info, elsvals, ls_type))
+	{
+	  SLP_TREE_GS_SCALE (slp_node) = gs_info.scale;
+	  SLP_TREE_GS_BASE (slp_node) = error_mark_node;
+	  grouped_gather_fallback = *memory_access_type;
+	  *memory_access_type = VMAT_GATHER_SCATTER_IFN;
+	  ls->gs.ifn = gs_info.ifn;
+	  vectype = *ls_type;
+	  ls->strided_offset_vectype = gs_info.offset_vectype;
 	}
     }
 
@@ -2342,6 +2468,18 @@ get_load_store_type (vec_info  *vinfo, stmt_vec_info stmt_info,
 	= vect_supportable_dr_alignment
 	   (vinfo, first_dr_info, vectype, *misalignment,
 	    mat_gather_scatter_p (*memory_access_type));
+      if (grouped_gather_fallback != VMAT_UNINITIALIZED
+	  && *alignment_support_scheme != dr_aligned
+	  && *alignment_support_scheme != dr_unaligned_supported)
+	{
+	  /* No supportable alignment for a grouped gather, fall back to the
+	     original memory access type.  Even though VMAT_STRIDED_SLP might
+	     also try aligned vector loads it can still choose vector
+	     construction from scalars.  */
+	  *memory_access_type = grouped_gather_fallback;
+	  *alignment_support_scheme = dr_unaligned_supported;
+	  *misalignment = DR_MISALIGNMENT_UNKNOWN;
+	}
     }
 
   if (overrun_p)
@@ -2404,7 +2542,7 @@ get_load_store_type (vec_info  *vinfo, stmt_vec_info stmt_info,
       poly_uint64 read_amount
 	= vf * TREE_INT_CST_LOW (TYPE_SIZE_UNIT (TREE_TYPE (vectype)));
       if (STMT_VINFO_GROUPED_ACCESS (stmt_info))
-	read_amount *= DR_GROUP_SIZE (DR_GROUP_FIRST_ELEMENT (stmt_info));
+	read_amount *= group_size;
 
       auto target_alignment
 	= DR_TARGET_ALIGNMENT (STMT_VINFO_DR_INFO (stmt_info));
@@ -2496,6 +2634,60 @@ get_load_store_type (vec_info  *vinfo, stmt_vec_info stmt_info,
   /* For BB vectorization build up the vector from existing scalar defs.  */
   if (!loop_vinfo && *memory_access_type == VMAT_ELEMENTWISE)
     return false;
+
+  /* Some loads need to explicitly permute the loaded data if there
+     is a load permutation.  Among those are:
+      - VMAT_ELEMENTWISE.
+      - VMAT_STRIDED_SLP.
+      - VMAT_GATHER_SCATTER:
+	- Strided gather (fallback for VMAT_STRIDED_SLP if #lanes == 1).
+	- Grouped strided gather (ditto but for #lanes > 1).
+
+     For VMAT_ELEMENTWISE we can fold the load permutation into the
+     individual indices we access directly, eliding the permutation.
+     Strided gather only allows load permutations for the
+     single-element case.  */
+
+  if (SLP_TREE_LOAD_PERMUTATION (slp_node).exists ()
+      && !(*memory_access_type == VMAT_ELEMENTWISE
+	   || (mat_gather_scatter_p (*memory_access_type)
+	       && SLP_TREE_LANES (slp_node) == 1
+	       && single_element_p)))
+    {
+      if (!loop_vinfo)
+	{
+	  /* In BB vectorization we may not actually use a loaded vector
+	     accessing elements in excess of DR_GROUP_SIZE.  */
+	  stmt_vec_info group_info = SLP_TREE_SCALAR_STMTS (slp_node)[0];
+	  group_info = DR_GROUP_FIRST_ELEMENT (group_info);
+	  unsigned HOST_WIDE_INT nunits;
+	  unsigned j, k, maxk = 0;
+	  FOR_EACH_VEC_ELT (SLP_TREE_LOAD_PERMUTATION (slp_node), j, k)
+	    if (k > maxk)
+	      maxk = k;
+	  tree vectype = SLP_TREE_VECTYPE (slp_node);
+	  if (!TYPE_VECTOR_SUBPARTS (vectype).is_constant (&nunits)
+	      || maxk >= (DR_GROUP_SIZE (group_info) & ~(nunits - 1)))
+	    {
+	      if (dump_enabled_p ())
+		dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
+				 "BB vectorization with gaps at the end of "
+				 "a load is not supported\n");
+	      return false;
+	    }
+	}
+
+      if (!perm_ok)
+	{
+	  if (dump_enabled_p ())
+	    dump_printf_loc (MSG_MISSED_OPTIMIZATION,
+			     vect_location,
+			     "unsupported load permutation\n");
+	  return false;
+	}
+
+      *slp_perm = true;
+    }
 
   return true;
 }
@@ -7879,7 +8071,7 @@ vectorizable_store (vec_info *vinfo,
   vect_load_store_data &ls = slp_node->get_data (_ls_data);
   if (cost_vec
       && !get_load_store_type (vinfo, stmt_info, vectype, slp_node, mask_node,
-			       vls_type, false, &_ls_data))
+			       vls_type, &_ls_data))
     return false;
   /* Temporary aliases to analysis data, should not be modified through
      these.  */
@@ -8355,10 +8547,13 @@ vectorizable_store (vec_info *vinfo,
     {
       aggr_type = elem_type;
       if (!costing_p)
-	vect_get_strided_load_store_ops (stmt_info, slp_node, vectype,
-					 ls.strided_offset_vectype,
-					 loop_vinfo, gsi,
-					 &bump, &vec_offset, loop_lens);
+	{
+	  tree vtype = ls.ls_type ? ls.ls_type : vectype;
+	  vect_get_strided_load_store_ops (stmt_info, slp_node, vtype,
+					   ls.strided_offset_vectype,
+					   loop_vinfo, gsi,
+					   &bump, &vec_offset, loop_lens);
+	}
     }
   else
     {
@@ -8544,7 +8739,9 @@ vectorizable_store (vec_info *vinfo,
 
   if (mat_gather_scatter_p (memory_access_type))
     {
-      gcc_assert (!grouped_store);
+      gcc_assert (!grouped_store || ls.ls_type);
+      if (ls.ls_type)
+	vectype = ls.ls_type;
       auto_vec<tree> vec_offsets;
       unsigned int inside_cost = 0, prologue_cost = 0;
       int num_stmts = vec_num;
@@ -8591,8 +8788,9 @@ vectorizable_store (vec_info *vinfo,
 	      if (mask_node)
 		vec_mask = vec_masks[j];
 	      /* We should have catched mismatched types earlier.  */
-	      gcc_assert (useless_type_conversion_p (vectype,
-						     TREE_TYPE (vec_oprnd)));
+	      gcc_assert (ls.ls_type
+			  || useless_type_conversion_p
+			  (vectype, TREE_TYPE (vec_oprnd)));
 	    }
 	  tree final_mask = NULL_TREE;
 	  tree final_len = NULL_TREE;
@@ -8643,6 +8841,18 @@ vectorizable_store (vec_info *vinfo,
 		      mask_vectype = truth_type_for (vectype);
 		      final_mask = build_minus_one_cst (mask_vectype);
 		    }
+		}
+
+	      if (ls.ls_type)
+		{
+		  gimple *conv_stmt
+		    = gimple_build_assign (make_ssa_name (vectype),
+					   VIEW_CONVERT_EXPR,
+					   build1 (VIEW_CONVERT_EXPR, vectype,
+						   vec_oprnd));
+		  vect_finish_stmt_generation (vinfo, stmt_info, conv_stmt,
+					       gsi);
+		  vec_oprnd = gimple_get_lhs (conv_stmt);
 		}
 
 	      gcall *call;
@@ -9306,7 +9516,6 @@ vectorizable_load (vec_info *vinfo,
   bool compute_in_loop = false;
   class loop *at_loop;
   int vec_num;
-  bool slp_perm = false;
   bb_vec_info bb_vinfo = dyn_cast <bb_vec_info> (vinfo);
   poly_uint64 vf;
   tree aggr_type;
@@ -9444,17 +9653,11 @@ vectorizable_load (vec_info *vinfo,
   else
     group_size = 1;
 
-  bool perm_ok = true;
-  unsigned n_perms = -1U;
-  if (cost_vec && SLP_TREE_LOAD_PERMUTATION (slp_node).exists ())
-    perm_ok = vect_transform_slp_perm_load (vinfo, slp_node, vNULL, NULL, vf,
-					    true, &n_perms);
-
   vect_load_store_data _ls_data{};
   vect_load_store_data &ls = slp_node->get_data (_ls_data);
   if (cost_vec
       && !get_load_store_type (vinfo, stmt_info, vectype, slp_node, mask_node,
-			       VLS_LOAD, perm_ok, &ls))
+			       VLS_LOAD, &ls))
     return false;
   /* Temporary aliases to analysis data, should not be modified through
      these.  */
@@ -9474,56 +9677,6 @@ vectorizable_load (vec_info *vinfo,
   tree scalar_type = TREE_TYPE (scalar_dest);
   bool type_mode_padding_p
     = TYPE_PRECISION (scalar_type) < GET_MODE_PRECISION (GET_MODE_INNER (mode));
-
-  /* ???  The following checks should really be part of
-     get_load_store_type.  */
-  if (SLP_TREE_LOAD_PERMUTATION (slp_node).exists ()
-      && !(memory_access_type == VMAT_ELEMENTWISE
-	   || (mat_gather_scatter_p (memory_access_type)
-	       && SLP_TREE_LANES (slp_node) == 1
-	       && (!grouped_load
-		   || !DR_GROUP_NEXT_ELEMENT (first_stmt_info)))))
-    {
-      slp_perm = true;
-
-      if (!loop_vinfo && cost_vec)
-	{
-	  /* In BB vectorization we may not actually use a loaded vector
-	     accessing elements in excess of DR_GROUP_SIZE.  */
-	  stmt_vec_info group_info = SLP_TREE_SCALAR_STMTS (slp_node)[0];
-	  group_info = DR_GROUP_FIRST_ELEMENT (group_info);
-	  unsigned HOST_WIDE_INT nunits;
-	  unsigned j, k, maxk = 0;
-	  FOR_EACH_VEC_ELT (SLP_TREE_LOAD_PERMUTATION (slp_node), j, k)
-	      if (k > maxk)
-		maxk = k;
-	  tree vectype = SLP_TREE_VECTYPE (slp_node);
-	  if (!TYPE_VECTOR_SUBPARTS (vectype).is_constant (&nunits)
-	      || maxk >= (DR_GROUP_SIZE (group_info) & ~(nunits - 1)))
-	    {
-	      if (dump_enabled_p ())
-		dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
-				 "BB vectorization with gaps at the end of "
-				 "a load is not supported\n");
-	      return false;
-	    }
-	}
-
-      if (cost_vec)
-	{
-	  if (!perm_ok)
-	    {
-	      if (dump_enabled_p ())
-		dump_printf_loc (MSG_MISSED_OPTIMIZATION,
-				 vect_location,
-				 "unsupported load permutation\n");
-	      return false;
-	    }
-	  ls.n_perms = n_perms;
-	}
-      else
-	n_perms = ls.n_perms;
-    }
 
   if (slp_node->ldst_lanes
       && memory_access_type != VMAT_LOAD_STORE_LANES)
@@ -9879,7 +10032,7 @@ vectorizable_load (vec_info *vinfo,
 	 not only the number of vector stmts the permutation result
 	 fits in.  */
       int ncopies;
-      if (slp_perm)
+      if (ls.slp_perm)
 	{
 	  gcc_assert (memory_access_type != VMAT_ELEMENTWISE);
 	  /* We don't yet generate SLP_TREE_LOAD_PERMUTATIONs for
@@ -9987,18 +10140,18 @@ vectorizable_load (vec_info *vinfo,
 
 	  if (!costing_p)
 	    {
-	      if (slp_perm)
+	      if (ls.slp_perm)
 		dr_chain.quick_push (gimple_assign_lhs (new_stmt));
 	      else
 		slp_node->push_vec_def (new_stmt);
 	    }
 	}
-      if (slp_perm)
+      if (ls.slp_perm)
 	{
 	  if (costing_p)
 	    {
-	      gcc_assert (n_perms != -1U);
-	      inside_cost += record_stmt_cost (cost_vec, n_perms, vec_perm,
+	      gcc_assert (ls.n_perms != -1U);
+	      inside_cost += record_stmt_cost (cost_vec, ls.n_perms, vec_perm,
 					       slp_node, 0, vect_body);
 	    }
 	  else
@@ -10006,7 +10159,7 @@ vectorizable_load (vec_info *vinfo,
 	      unsigned n_perms2;
 	      vect_transform_slp_perm_load (vinfo, slp_node, dr_chain, gsi, vf,
 					    false, &n_perms2);
-	      gcc_assert (n_perms == n_perms2);
+	      gcc_assert (ls.n_perms == n_perms2);
 	    }
 	}
 
@@ -10027,7 +10180,8 @@ vectorizable_load (vec_info *vinfo,
       return true;
     }
 
-  if (mat_gather_scatter_p (memory_access_type))
+  if (mat_gather_scatter_p (memory_access_type)
+      && !ls.ls_type)
     grouped_load = false;
 
   if (grouped_load
@@ -10070,7 +10224,7 @@ vectorizable_load (vec_info *vinfo,
 	   instead the access is contiguous but it might be
 	   permuted.  No gap adjustment is needed though.  */
 	;
-      else if (slp_perm
+      else if (ls.slp_perm
 	       && (group_size != scalar_lanes
 		   || !multiple_p (nunits, group_size)))
 	{
@@ -10085,6 +10239,7 @@ vectorizable_load (vec_info *vinfo,
 	{
 	  group_gap_adj = group_size - scalar_lanes;
 	}
+      dr_chain.create (vec_num);
 
       ref_type = get_group_alias_ptr_type (first_stmt_info);
     }
@@ -10418,7 +10573,14 @@ vectorizable_load (vec_info *vinfo,
 
   if (mat_gather_scatter_p (memory_access_type))
     {
-      gcc_assert (!grouped_load && !slp_perm);
+      gcc_assert ((!grouped_load && !ls.slp_perm) || ls.ls_type);
+
+      /* If we pun the original vectype the loads as well as costing, length,
+	 etc. is performed with the new type.  After loading we VIEW_CONVERT
+	 the data to the original vectype.  */
+      tree original_vectype = vectype;
+      if (ls.ls_type)
+	vectype = ls.ls_type;
 
       /* 1. Create the vector or array pointer update chain.  */
       if (STMT_VINFO_GATHER_SCATTER_P (stmt_info))
@@ -10759,8 +10921,42 @@ vectorizable_load (vec_info *vinfo,
 	      new_temp = new_temp2;
 	    }
 
+	  if (ls.ls_type)
+	    {
+	      new_stmt = gimple_build_assign (make_ssa_name
+					      (original_vectype),
+					      VIEW_CONVERT_EXPR,
+					      build1 (VIEW_CONVERT_EXPR,
+						      original_vectype,
+						      new_temp));
+	      vect_finish_stmt_generation (vinfo, stmt_info, new_stmt, gsi);
+	    }
+
 	  /* Store vector loads in the corresponding SLP_NODE.  */
-	  slp_node->push_vec_def (new_stmt);
+	  if (!costing_p)
+	    {
+	      if (ls.slp_perm)
+		dr_chain.quick_push (gimple_assign_lhs (new_stmt));
+	      else
+		slp_node->push_vec_def (new_stmt);
+	    }
+	}
+
+      if (ls.slp_perm)
+	{
+	  if (costing_p)
+	    {
+	      gcc_assert (ls.n_perms != -1U);
+	      inside_cost += record_stmt_cost (cost_vec, ls.n_perms, vec_perm,
+					       slp_node, 0, vect_body);
+	    }
+	  else
+	    {
+	      unsigned n_perms2;
+	      vect_transform_slp_perm_load (vinfo, slp_node, dr_chain, gsi, vf,
+					    false, &n_perms2);
+	      gcc_assert (ls.n_perms == n_perms2);
+	    }
 	}
 
       if (costing_p && dump_enabled_p ())
@@ -10843,7 +11039,7 @@ vectorizable_load (vec_info *vinfo,
 				       stmt_info, bump);
     }
 
-  if (grouped_load || slp_perm)
+  if (grouped_load || ls.slp_perm)
     dr_chain.create (vec_num);
 
   gimple *new_stmt = NULL;
@@ -11340,11 +11536,11 @@ vectorizable_load (vec_info *vinfo,
 
       /* Collect vector loads and later create their permutation in
 	 vect_transform_slp_perm_load.  */
-      if (!costing_p && (grouped_load || slp_perm))
+      if (!costing_p && (grouped_load || ls.slp_perm))
 	dr_chain.quick_push (new_temp);
 
       /* Store vector loads in the corresponding SLP_NODE.  */
-      if (!costing_p && !slp_perm)
+      if (!costing_p && !ls.slp_perm)
 	slp_node->push_vec_def (new_stmt);
 
       /* With SLP permutation we load the gaps as well, without
@@ -11353,7 +11549,7 @@ vectorizable_load (vec_info *vinfo,
       group_elt += nunits;
       if (!costing_p
 	  && maybe_ne (group_gap_adj, 0U)
-	  && !slp_perm
+	  && !ls.slp_perm
 	  && known_eq (group_elt, group_size - group_gap_adj))
 	{
 	  poly_wide_int bump_val
@@ -11370,7 +11566,7 @@ vectorizable_load (vec_info *vinfo,
      elements loaded for a permuted SLP load.  */
   if (!costing_p
       && maybe_ne (group_gap_adj, 0U)
-      && slp_perm)
+      && ls.slp_perm)
     {
       poly_wide_int bump_val
 	= (wi::to_wide (TYPE_SIZE_UNIT (elem_type)) * group_gap_adj);
@@ -11381,7 +11577,7 @@ vectorizable_load (vec_info *vinfo,
 				     stmt_info, bump);
     }
 
-  if (slp_perm)
+  if (ls.slp_perm)
     {
       /* For SLP we know we've seen all possible uses of dr_chain so
 	 direct vect_transform_slp_perm_load to DCE the unused parts.
@@ -11389,9 +11585,9 @@ vectorizable_load (vec_info *vinfo,
 	 in PR101120 and friends.  */
       if (costing_p)
 	{
-	  gcc_assert (n_perms != -1U);
-	  if (n_perms != 0)
-	    inside_cost = record_stmt_cost (cost_vec, n_perms, vec_perm,
+	  gcc_assert (ls.n_perms != -1U);
+	  if (ls.n_perms != 0)
+	    inside_cost = record_stmt_cost (cost_vec, ls.n_perms, vec_perm,
 					    slp_node, 0, vect_body);
 	}
       else
@@ -11400,7 +11596,7 @@ vectorizable_load (vec_info *vinfo,
 	  bool ok = vect_transform_slp_perm_load (vinfo, slp_node, dr_chain,
 						  gsi, vf, false, &n_perms2,
 						  nullptr, true);
-	  gcc_assert (ok && n_perms == n_perms2);
+	  gcc_assert (ok && ls.n_perms == n_perms2);
 	}
       dr_chain.release ();
     }

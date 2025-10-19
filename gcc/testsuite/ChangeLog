@@ -1,3 +1,320 @@
+2025-10-18  Iain Sandoe  <iain@sandoe.co.uk>
+
+	PR c++/119060
+	* g++.dg/cpp26/observable-checkpoint.C: New test.
+
+2025-10-18  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/122279
+	* g++.dg/modules/namespace-13_b.C: Adjust expected results.
+	* g++.dg/modules/namespace-13_c.C: Test non-exported
+	using-directive is not used.
+	* g++.dg/modules/namespace-14_a.C: New test.
+	* g++.dg/modules/namespace-14_b.C: New test.
+	* g++.dg/modules/namespace-14_c.C: New test.
+	* g++.dg/modules/namespace-14_d.C: New test.
+
+2025-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	PR middle-end/122069
+	* gcc.target/aarch64/sve2/pr122069_3.c: New test.
+	* gcc.target/aarch64/sve2/pr122069_4.c: New test.
+
+2025-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	PR middle-end/122069
+	* gcc.target/aarch64/sve2/pr122069_1.c: New test.
+	* gcc.target/aarch64/sve2/pr122069_2.c: New test.
+
+2025-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	PR middle-end/122069
+	* gcc.target/aarch64/sve/pr122069_1.c: New test.
+	* gcc.target/aarch64/sve/pr122069_2.c: New test.
+
+2025-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	PR middle-end/122069
+	* gcc.target/aarch64/pr122069_3.c: New test.
+	* gcc.target/aarch64/pr122069_4.c: New test.
+
+2025-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	PR middle-end/122069
+	* gcc.target/aarch64/pr122069_1.c: New test.
+	* gcc.target/aarch64/pr122069_2.c: New test.
+
+2025-10-18  Yuao Ma  <c8ef@outlook.com>
+
+	* gfortran.dg/conditional_1.f90: Test character type.
+	* gfortran.dg/conditional_2.f90: Test print constants.
+	* gfortran.dg/conditional_4.f90: Test diagnostic message.
+	* gfortran.dg/conditional_6.f90: Test character cond-arg.
+
+2025-10-18  Linsen Zhou  <i@lin.moe>
+
+	PR tree-optimization/122012
+	* gcc.dg/torture/pr122012.c: New test.
+
+2025-10-17  David Faust  <david.faust@oracle.com>
+
+	PR target/122139
+	* gcc.target/bpf/memset-3.c: New.
+	* gcc.target/bpf/memset-4.c: New.
+
+2025-10-17  Tamar Christina  <tamar.christina@arm.com>
+	    Jennifer Schmitz  <jschmitz@nvidia.com>
+
+	PR target/121604
+	* gcc.target/aarch64/sve/pr121604_brk.c: New test.
+	* gcc.target/aarch64/sve2/pr121604_pmov.c: New test.
+
+2025-10-17  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122308
+	* gcc.dg/vect/vect-pr122308.c: New testcase.
+
+2025-10-17  Josef Melcr  <jmelcr02@gmail.com>
+
+	* gcc.dg/ipa/ipcp-cb-spec1.c: New test.
+	* gcc.dg/ipa/ipcp-cb-spec2.c: New test.
+	* gcc.dg/ipa/ipcp-cb1.c: New test.
+
+2025-10-17  Eric Botcazou  <ebotcazou@adacore.com>
+
+	* gnat.dg/specs/style1.ads: New test.
+
+2025-10-17  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122301
+	* gcc.dg/vect/vect-pr122301.c: New testcase.
+
+2025-10-17  Avinash Jayakar  <avinashd@linux.ibm.com>
+
+	PR tree-optimization/104116
+	* gcc.dg/vect/pr104116-ceil-div-2.c: New test.
+	* gcc.dg/vect/pr104116-ceil-div-pow2.c: New test.
+	* gcc.dg/vect/pr104116-ceil-div.c: New test.
+	* gcc.dg/vect/pr104116-ceil-mod-2.c: New test.
+	* gcc.dg/vect/pr104116-ceil-mod-pow2.c: New test.
+	* gcc.dg/vect/pr104116-ceil-mod.c: New test.
+	* gcc.dg/vect/pr104116-ceil-udiv-2.c: New test.
+	* gcc.dg/vect/pr104116-ceil-udiv-pow2.c: New test.
+	* gcc.dg/vect/pr104116-ceil-udiv.c: New test.
+	* gcc.dg/vect/pr104116-ceil-umod-2.c: New test.
+	* gcc.dg/vect/pr104116-ceil-umod-pow2.c: New test.
+	* gcc.dg/vect/pr104116-ceil-umod.c: New test.
+	* gcc.dg/vect/pr104116-floor-div-2.c: New test.
+	* gcc.dg/vect/pr104116-floor-div-pow2.c: New test.
+	* gcc.dg/vect/pr104116-floor-div.c: New test.
+	* gcc.dg/vect/pr104116-floor-mod-2.c: New test.
+	* gcc.dg/vect/pr104116-floor-mod-pow2.c: New test.
+	* gcc.dg/vect/pr104116-floor-mod.c: New test.
+	* gcc.dg/vect/pr104116-round-div-2.c: New test.
+	* gcc.dg/vect/pr104116-round-div-pow2.c: New test.
+	* gcc.dg/vect/pr104116-round-div.c: New test.
+	* gcc.dg/vect/pr104116-round-mod-2.c: New test.
+	* gcc.dg/vect/pr104116-round-mod-pow2.c: New test.
+	* gcc.dg/vect/pr104116-round-mod.c: New test.
+	* gcc.dg/vect/pr104116-round-udiv-2.c: New test.
+	* gcc.dg/vect/pr104116-round-udiv-pow2.c: New test.
+	* gcc.dg/vect/pr104116-round-udiv.c: New test.
+	* gcc.dg/vect/pr104116-round-umod-2.c: New test.
+	* gcc.dg/vect/pr104116-round-umod-pow2.c: New test.
+	* gcc.dg/vect/pr104116-round-umod.c: New test.
+	* gcc.dg/vect/pr104116.h: New test.
+
+2025-10-17  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/122296
+	* gcc.dg/torture/int-bwise-opt-1.c: New test.
+
+2025-10-17  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/122296
+	* gcc.dg/tree-ssa/int-bwise-opt-vect01.c: New test.
+
+2025-10-16  David Malcolm  <dmalcolm@redhat.com>
+
+	* gcc.dg/plugin/diagnostic_plugin_test_graphs.cc
+	(report_diag_with_graphs): Port from set_attr to set_property.
+
+2025-10-15  Andrew MacLeod  <amacleod@redhat.com>
+
+	PR tree-optimization/121468
+	PR tree-optimization/121206
+	PR tree-optimization/122200
+	* gcc.dg/pr121468.c: New.
+	* gcc.dg/pr122200.c: New.
+
+2025-10-15  Richard Earnshaw  <rearnsha@arm.com>
+
+	PR target/118460
+	* gcc.target/arm/armv8_2-fp16-move-1.c: Adjust expected output.
+	* gcc.target/arm/armv8_2-fp16-move-2.c: Likewise.
+
+2025-10-15  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/122037
+	* gcc.dg/tree-ssa/vla-1.c: New test.
+
+2025-10-15  Alice Carlotti  <alice.carlotti@arm.com>
+
+	* gcc.target/aarch64/acle/rwsr-armv8p9.c: Fix incorrect encoding.
+
+2025-10-15  Sebastian Pop  <spop@nvidia.com>
+
+	* gcc.dg/autopar/runtime-auto.c: New test.
+
+2025-10-15  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	PR target/122189
+	* gcc.target/arm/mve/intrinsics/vadcq-check-carry.c: New test.
+	* gcc.target/arm/mve/intrinsics/vadcq_m_s32.c: Adjust instructions
+	order.
+	* gcc.target/arm/mve/intrinsics/vadcq_m_u32.c: Likewise.
+	* gcc.target/arm/mve/intrinsics/vsbcq_m_s32.c: Likewise.
+	* gcc.target/arm/mve/intrinsics/vsbcq_m_u32.c: Likewise.
+
+2025-10-15  Roger Sayle  <roger@nextmovesoftware.com>
+
+	PR rtl-optimization/122266
+	* gcc.target/i386/pr122266.c: New test case.
+
+2025-10-14  Patrick Palka  <ppalka@redhat.com>
+
+	PR c++/122192
+	* g++.dg/template/dependent-base6.C: Verify mem-initializer-id
+	qualified name lookup is type-only too.
+
+2025-10-14  Tamar Christina  <tamar.christina@arm.com>
+
+	PR tree-optimization/121949
+	* gcc.dg/vect/pr121949_1.c: New test.
+	* gcc.dg/vect/pr121949_2.c: New test.
+	* gcc.dg/vect/pr121949_3.c: New test.
+
+2025-10-14  Richard Biener  <rguenther@suse.de>
+
+	* gcc.dg/vect/pr120687-1.c: Adjust.
+	* gcc.dg/vect/pr120687-2.c: Likewise.
+	* gcc.dg/vect/pr120687-3.c: Likewise.
+
+2025-10-14  Haochen Jiang  <haochen.jiang@intel.com>
+
+	* g++.dg/other/i386-2.C: Remove AMX-TRANSPOSE test.
+	* g++.dg/other/i386-3.C: Ditto.
+	* gcc.target/i386/amx-check.h: Ditto.
+	* gcc.target/i386/amxmovrs-asmatt-1.c: Ditto.
+	* gcc.target/i386/amxmovrs-asmintel-1.c: Ditto.
+	* gcc.target/i386/funcspec-56.inc: Ditto.
+	* gcc.target/i386/sse-12.c: Ditto.
+	* gcc.target/i386/sse-13.c: Ditto.
+	* gcc.target/i386/sse-14.c: Ditto.
+	* gcc.target/i386/sse-22.c: Ditto.
+	* gcc.target/i386/sse-23.c: Ditto.
+	* lib/target-supports.exp: Ditto.
+	* gcc.target/i386/amxmovrs-2rpntlvwrs-2.c: Removed.
+	* gcc.target/i386/amxtranspose-2rpntlvw-2.c: Removed.
+	* gcc.target/i386/amxtranspose-asmatt-1.c: Removed.
+	* gcc.target/i386/amxtranspose-asmintel-1.c: Removed.
+	* gcc.target/i386/amxtranspose-conjtcmmimfp16ps-2.c: Removed.
+	* gcc.target/i386/amxtranspose-conjtfp16-2.c: Removed.
+	* gcc.target/i386/amxtranspose-tcmmimfp16ps-2.c: Removed.
+	* gcc.target/i386/amxtranspose-tcmmrlfp16ps-2.c: Removed.
+	* gcc.target/i386/amxtranspose-tdpbf16ps-2.c: Removed.
+	* gcc.target/i386/amxtranspose-tdpfp16ps-2.c: Removed.
+	* gcc.target/i386/amxtranspose-tmmultf32ps-2.c: Removed.
+	* gcc.target/i386/amxtranspose-transposed-2.c: Removed.
+
+2025-10-14  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/122178
+	* g++.dg/tree-ssa/cselim-1.C: New test.
+
+2025-10-14  Zhongyao Chen  <chenzhongyao.hit@gmail.com>
+
+	* gcc.target/riscv/predef-profiles-1.c: New test for __riscv_rvi20u64.
+	* gcc.target/riscv/predef-profiles-2.c: New test for __riscv_rvi20u32.
+	* gcc.target/riscv/predef-profiles-3.c: New test for __riscv_rva20u64.
+	* gcc.target/riscv/predef-profiles-4.c: New test for __riscv_rva22u64.
+	* gcc.target/riscv/predef-profiles-5.c: New test for __riscv_rva23u64.
+	* gcc.target/riscv/predef-profiles-6.c: New test for __riscv_rva23s64.
+	* gcc.target/riscv/predef-profiles-7.c: New test for __riscv_rvb23u64.
+	* gcc.target/riscv/predef-profiles-8.c: New test for __riscv_rvb23s64.
+
+2025-10-13  Eric Botcazou  <ebotcazou@adacore.com>
+
+	* gcc.dg/cpp/cpp.exp: Process .i files.
+	* gcc.dg/cpp/pr36674.i: Pass -Wno-implicit-int.
+	* gcc.dg/cpp/escape-3.i: New test.
+
+2025-10-13  Shreya Munnangi  <smunnangi1@ventanamicro.com>
+
+	PR target/120811
+	* gcc.target/riscv/add-synthesis-1.c: Adjust const to fit in range.
+	* gcc.target/riscv/pr120811.c: Add new test case.
+	* gcc.target/riscv/sum-of-two-s12-const-1.c: Adjust const to fit in range.
+
+2025-10-13  Jeff Law  <jlaw@ventanamicro.com>
+
+	PR target/120674
+	* gcc.target/riscv/pr120674.c: New test.
+
+2025-10-13  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/122228
+	* g++.dg/cpp1y/func_constexpr3.C: New test.
+
+2025-10-13  Gaius Mulley  <gaiusmod2@gmail.com>
+
+	PR modula2/122241
+	* gm2/iso/fail/badconst.mod: New test.
+	* gm2/iso/fail/badtype.mod: New test.
+	* gm2/iso/fail/badvar.mod: New test.
+
+2025-10-13  Alex Coplan  <alex.coplan@arm.com>
+
+	PR tree-optimization/121772
+	* gcc.target/aarch64/torture/pr121772.c: Add -fchecking to
+	dg-options.
+
+2025-10-13  Robin Dapp  <rdapp@ventanamicro.com>
+
+	PR target/118019
+	* gcc.target/riscv/rvv/autovec/pr118019-2.c: New test.
+
+2025-10-13  Paul Thomas  <pault@gcc.gnu.org>
+
+	PR fortran/121191
+	* gfortran.dg/pdt_59.f03: New test.
+
+2025-10-12  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/122163
+	* g++.dg/cpp0x/lambda/lambda-ref3.C: New test.
+
+2025-10-12  Paul Thomas  <pault@gcc.gnu.org>
+
+	PR fortran/95543
+	PR fortran/103748
+	* gfortran.dg/pdt_17.f03: Change error message.
+	* gfortran.dg/pdt_57.f03: New test.
+	* gfortran.dg/pdt_58.f03: New test.
+
+2025-10-11  Gaius Mulley  <gaiusmod2@gmail.com>
+
+	* gm2/iso/fail/badfield.mod: New test.
+	* gm2/iso/fail/badfield2.mod: New test.
+	* gm2/iso/fail/badprocedure.mod: New test.
+	* gm2/iso/fail/badprocedure2.mod: New test.
+	* gm2/iso/fail/badset4.mod: New test.
+
+2025-10-11  Bohan Lei  <garthlei@linux.alibaba.com>
+
+	PR target/119587
+	* gcc.target/riscv/xtheadmemidx-bug.c: New test.
+
 2025-10-10  Harald Anlauf  <anlauf@gmx.de>
 
 	PR fortran/50377

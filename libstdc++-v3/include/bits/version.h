@@ -880,7 +880,12 @@
 #undef __glibcxx_want_atomic_lock_free_type_aliases
 
 #if !defined(__cpp_lib_atomic_ref)
-# if (__cplusplus >= 202002L)
+# if (__cplusplus >  202302L)
+#  define __glibcxx_atomic_ref 202411L
+#  if defined(__glibcxx_want_all) || defined(__glibcxx_want_atomic_ref)
+#   define __cpp_lib_atomic_ref 202411L
+#  endif
+# elif (__cplusplus >= 202002L)
 #  define __glibcxx_atomic_ref 201806L
 #  if defined(__glibcxx_want_all) || defined(__glibcxx_want_atomic_ref)
 #   define __cpp_lib_atomic_ref 201806L
@@ -2175,6 +2180,16 @@
 # endif
 #endif /* !defined(__cpp_lib_unreachable) */
 #undef __glibcxx_want_unreachable
+
+#if !defined(__cpp_lib_observable_checkpoint)
+# if (__cplusplus >  202302L) && (__has_builtin(__builtin_observable_checkpoint))
+#  define __glibcxx_observable_checkpoint 202506L
+#  if defined(__glibcxx_want_all) || defined(__glibcxx_want_observable_checkpoint)
+#   define __cpp_lib_observable_checkpoint 202506L
+#  endif
+# endif
+#endif /* !defined(__cpp_lib_observable_checkpoint) && defined(__glibcxx_want_observable_checkpoint) */
+#undef __glibcxx_want_observable_checkpoint
 
 #if !defined(__cpp_lib_algorithm_default_value_type)
 # if (__cplusplus >  202302L)

@@ -1,3 +1,690 @@
+2025-10-18  Mark Wielaard  <mark@klomp.org>
+
+	* common.opt.urls: Regenerate.
+
+2025-10-18  Iain Sandoe  <iain@sandoe.co.uk>
+
+	PR c++/119060
+	* builtins.cc (expand_builtin): Handle BUILT_IN_OBSERVABLE_CHKPT.
+	* builtins.def (BUILT_IN_OBSERVABLE_CHKPT): New.
+	* tree.cc (build_common_builtin_nodes): Build observable
+	checkpoint builtin.
+
+2025-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	PR middle-end/122069
+	* config/aarch64/aarch64-sve2.md
+	(widen_ssum<mode><Vnarrow>3): Update.
+	(widen_usum<mode><Vnarrow>3): Update.
+
+2025-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	PR middle-end/122069
+	* config/aarch64/aarch64-sve2.md: (widen_ssum<mode><Vnarrow>3): New.
+	(widen_usum<mode><Vnarrow>3): New.
+	* config/aarch64/iterators.md (Vnarrow): New, to match VNARROW.
+
+2025-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	PR middle-end/122069
+	* config/aarch64/aarch64-sve.md (widen_<sur>sum<mode><vsi2qi>3): New.
+
+2025-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	PR middle-end/122069
+	* config/rs6000/altivec.md (widen_usum<mode>3): Rename ...
+	(widen_usumv4si<mode>3): ... to this.
+	(widen_ssumv16qi3): Rename ...
+	(widen_ssumv4siv16qi3): ... to this.
+	(widen_ssumv8hi3): Rename ...
+	(widen_ssumv4siv8hi3): ... to this.
+
+2025-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	PR middle-end/122069
+	* config/ia64/vect.md (widen_usumv8qi3): Renamed ...
+	(widen_usumv4hiv8qi3): ... into this.
+	(widen_usumv4hi3): Renamed ...
+	(widen_usumv2siv4hi3): ... into this.
+	(widen_ssumv8qi3): Renamed ...
+	(widen_ssumv4hiv8qi3): ... into this.
+	(widen_ssumv4hi3): Renamed ...
+	(widen_ssumv2siv4hi3): ... into this.
+
+2025-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	PR middle-end/122069
+	* config/arm/iterators.md (v_double_width): New, matching
+	V_double_width.
+	* config/arm/neon.md (widen_ssum<mode>3): Renamed ...
+	(widen_ssum<v_double_width><mode>3, widen_ssum<V_widen_l><mode>3): ...
+	into these.
+	(widen_usum<mode>3): Renamed ...
+	(widen_usum<v_double_width><mode>3, widen_usum<V_widen_l><mode>3): ...
+	into these.
+
+2025-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	PR middle-end/122069
+	* config/aarch64/aarch64-simd.md (widen_ssum<mode><vsi2qi>3): New.
+	(widen_usum<mode><vsi2qi>3): New.
+
+2025-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	PR middle-end/122069
+	* config/aarch64/aarch64-simd.md (widen_ssum<mode>3): Change into..
+	(widen_ssum<Vdblw><mode>3, widen_ssum<Vwide><mode>3): ... these.
+	(widen_usum<mode>3): Change into ...
+	(widen_usum<Vdblw><mode>3, widen_usum<Vwide><mode>3): ... these.
+	* config/aarch64/iterators.md (Vdblw): New.
+	(Vwide): Extend to match VWIDE.
+
+2025-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	PR middle-end/122069
+	* doc/md.texi (widen_ssum@var{n}@var{m}3, widen_usum@var{n}@var{m}3):
+	Update docs.
+	* optabs.cc (expand_widen_pattern_expr): Add WIDEN_SUM_EXPR as widening.
+	* optabs.def (ssum_widen_optab, usum_widen_optab): Convert from direct
+	to a conversion optab.
+	* tree-vect-patterns.cc (vect_recog_widen_sum_pattern): Change
+	vect_supportable_direct_optab_p into vect_supportable_conv_optab_p.
+
+2025-10-18  Linsen Zhou  <i@lin.moe>
+
+	PR tree-optimization/122012
+	* tree-object-size.cc (check_for_plus_in_loops): Skip check
+	for the variable offset
+
+2025-10-17  David Faust  <david.faust@oracle.com>
+
+	PR target/122139
+	* config/bpf/bpf.cc (bpf_expand_setmem): Duplicate byte value
+	across to new mode when using larger modes for store.
+
+2025-10-17  Tamar Christina  <tamar.christina@arm.com>
+	    Jennifer Schmitz  <jschmitz@nvidia.com>
+
+	PR target/121604
+	* config/aarch64/aarch64-sve-builtins-shapes.cc (apply_predication):
+	Store gp_index.
+	(struct pmov_to_vector_lane_def): Mark instruction as has no GP.
+	* config/aarch64/aarch64-sve-builtins.h (function_instance::gp_value,
+	function_instance::inactive_values, function_instance::gp_index,
+	function_shape::has_gp_argument_p): New.
+	* config/aarch64/aarch64-sve-builtins.cc (gimple_folder::fold_pfalse):
+	Simplify code and use GP helpers.
+
+2025-10-17  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122308
+	* gimple-loop-jam.cc (tree_loop_unroll_and_jam): Do LIM
+	after applying unroll-and-jam.
+
+2025-10-17  Josef Melcr  <jmelcr02@gmail.com>
+
+	* Makefile.in: Add attr-callback.o to OBJS.
+	* builtin-attrs.def (ATTR_CALLBACK): Callback attr identifier.
+	(DEF_CALLBACK_ATTRIBUTE): Macro for callback attr creation.
+	(GOMP): Attr for libgomp functions.
+	(ATTR_CALLBACK_GOMP_LIST): ATTR_NOTHROW_LIST with GOMP callback
+	attr added.
+	* cgraph.cc (cgraph_add_edge_to_call_site_hash): Always hash the
+	callback-carrying edge.
+	(cgraph_node::get_edge): Always return the callback-carrying
+	edge.
+	(cgraph_edge::set_call_stmt): Add cascade for callback edges.
+	(symbol_table::create_edge): Allow callback edges to share call
+	stmts, initialize new flags.
+	(cgraph_edge::make_callback): New method, derives a new callback
+	edge.
+	(cgraph_edge::get_callback_carrying_edge): New method.
+	(cgraph_edge::first_callback_edge): Likewise.
+	(cgraph_edge::next_callback_edge): Likewise.
+	(cgraph_edge::purge_callback_edges): Likewise.
+	(cgraph_edge::redirect_callee): When redirecting a callback
+	edge, redirect its ref as well.
+	(cgraph_edge::redirect_call_stmt_to_callee): Add callback edge
+	redirection logic, set update_derived_edges to true hwne
+	redirecting the carrying edge.
+	(cgraph_node::remove_callers): Add cascade for callback edges.
+	(cgraph_edge::dump_edge_flags): Print callback flags.
+	(cgraph_node::verify_node): Add sanity checks for callback
+	edges.
+	* cgraph.h: Add new 1 bit flags and 16 bit callback_id to
+	cgraph_edge class.
+	* cgraphclones.cc (cgraph_edge::clone): Copy over callback data.
+	* cif-code.def (CALLBACK_EDGE): Add CIF_CALLBACK_EDGE code.
+	* ipa-cp.cc (purge_useless_callback_edges): New function,
+	deletes callback edges when necessary.
+	(ipcp_decision_stage): Call purge_useless_callback_edges.
+	* ipa-fnsummary.cc (ipa_call_summary_t::duplicate): Add
+	an exception for callback edges.
+	(analyze_function_body): Copy over summary from carrying to
+	callback edge.
+	* ipa-inline-analysis.cc (do_estimate_growth_1): Skip callback
+	edges when estimating growth.
+	* ipa-inline-transform.cc (inline_transform): Add redirection
+	cascade for callback edges.
+	* ipa-param-manipulation.cc
+	(drop_decl_attribute_if_params_changed_p): New function.
+	(ipa_param_adjustments::build_new_function_type): Add
+	args_modified out param.
+	(ipa_param_adjustments::adjust_decl): Drop callback attrs when
+	modifying args.
+	* ipa-param-manipulation.h: Adjust decl of
+	build_new_function_type.
+	* ipa-prop.cc (ipa_duplicate_jump_function): Add decl.
+	(init_callback_edge_summary): New function.
+	(ipa_compute_jump_functions_for_edge): Add callback edge
+	creation logic.
+	* lto-cgraph.cc (lto_output_edge): Stream out callback data.
+	(input_edge): Input callback data.
+	* omp-builtins.def (BUILT_IN_GOMP_PARALLEL_LOOP_STATIC): Use new
+	attr list.
+	(BUILT_IN_GOMP_PARALLEL_LOOP_GUIDED): Likewise.
+	(BUILT_IN_GOMP_PARALLEL_LOOP_NONMONOTONIC_DYNAMIC): Likewise.
+	(BUILT_IN_GOMP_PARALLEL_LOOP_NONMONOTONIC_RUNTIME): Likewise.
+	(BUILT_IN_GOMP_PARALLEL): Likewise.
+	(BUILT_IN_GOMP_PARALLEL_SECTIONS): Likewise.
+	(BUILT_IN_GOMP_TEAMS_REG): Likewise.
+	* tree-core.h (ECF_CB_1_2): New constant for callback(1,2).
+	* tree-inline.cc (copy_bb): Copy callback edges when copying the
+	carrying edge.
+	(redirect_all_calls): Redirect callback edges.
+	* tree.cc (set_call_expr_flags): Create callback attr according
+	to the ECF_CB flag.
+	* attr-callback.cc: New file.
+	* attr-callback.h: New file.
+
+2025-10-17  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122301
+	* tree-vect-patterns.cc (vect_recog_over_widening_pattern):
+	Fix reduction guard.
+	(vect_mark_pattern_stmts): Fix reduction def check.
+
+2025-10-17  Avinash Jayakar  <avinashd@linux.ibm.com>
+
+	PR tree-optimization/104116
+	* tree-vect-patterns.cc (add_code_for_floorceilround_divmod): patt recog
+	for {FLOOR,ROUND,CEIL}_{DIV,MOD}_EXPR.
+	(vect_recog_divmod_pattern): Call add_code_for_floorceilround_divmod
+	after computing div/mod for each control path.
+
+2025-10-17  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/122296
+	* match.pd (`(a != b) | ((a|b) != 0)`): Reuse both
+	the ior and zero instead of recreating them.
+	(`(a == b) & ((a|b) == 0)`): Likewise
+
+2025-10-17  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/122296
+	* match.pd (`(a == b) | ((a|b) != 0)`): Fix true value.
+
+2025-10-17  Hu, Lin1  <lin1.hu@intel.com>
+
+	PR target/122119
+	* config/i386/amxmovrsintrin.h
+	(_tile_loaddrs_internal): Use __PTRDIFF_TYPE__ instead of long.
+	(_tile_loaddrst1_internal): Ditto.
+
+2025-10-16  David Malcolm  <dmalcolm@redhat.com>
+
+	* Makefile.in (OBJS-libcommon): Add
+	custom-sarif-properties/digraphs.o and
+	custom-sarif-properties/state-graphs.o.  Remove
+	diagnostics/state-graphs.o.
+	* configure: Regenerate.
+	* configure.ac: Add custom-sarif-properties to subdir iteration.
+	* custom-sarif-properties/digraphs.cc: New file.
+	* custom-sarif-properties/digraphs.h: New file.
+	* custom-sarif-properties/state-graphs.cc: New file.
+	* custom-sarif-properties/state-graphs.h: New file.
+	* diagnostics/diagnostics-selftests.cc
+	(run_diagnostics_selftests): Drop call of state_graphs_cc_tests.
+	* diagnostics/diagnostics-selftests.h (state_graphs_cc_tests):
+	Delete decl.
+	* diagnostics/digraphs.cc: Include
+	"custom-sarif-properties/digraphs.h".  Move include of
+	"selftest.h" to within CHECKING_P section.
+	(using digraph_object): New.
+	(namespace properties): New.
+	(diagnostics::digraphs::object::get_attr): Delete.
+	(diagnostics::digraphs::object::set_attr): Delete.
+	(diagnostics::digraphs::object::set_json_attr): Delete.
+	(digraph_object::get_property): New definitions, for various
+	property types.
+	(digraph_object::set_property): Likewise.
+	(digraph_object::maybe_get_property): New.
+	(digraph_object::get_property_as_tristate): New.
+	(digraph_object::ensure_property_bag): New.
+	(digraph::get_graph_kind): New.
+	(digraph::set_graph_kind): New.
+	Add include of "custom-sarif-properties/state-graphs.h".
+	(selftest::test_simple_graph): Rewrite to use json::property
+	instances rather than string attribute names.
+	(selftest::test_property_objects): New test.
+	(selftest::digraphs_cc_tests): Call it.
+	* diagnostics/digraphs.h: Include "tristate.h".
+	(object::get_attr): Delete.
+	(object::set_attr): Delete.
+	(object::get_property): New decls.
+	(object::set_property): New decls.
+	(object::maybe_get_property): New.
+	(object::get_property_as_tristate): New.
+	(object::set_json_attr): Delete.
+	(object::ensure_property_bag): New.
+	(graph::get_graph_kind): New.
+	(graph::set_graph_kind): New.
+	* diagnostics/html-sink.cc
+	(html_generation_options::html_generation_options): Update for
+	field renamings.
+	(html_generation_options::dump): Likewise.
+	(html_builder::maybe_make_state_diagram): Likewise.
+	(html_builder::add_graph): Show SARIF and .dot src inline, if
+	requested.
+	* diagnostics/html-sink.h
+	(html_generation_options::m_show_state_diagrams_sarif): Rename
+	to...
+	(html_generation_options::m_show_graph_sarif): ...this.
+	(html_generation_options::m_show_state_diagrams_dot_src): Rename
+	to...
+	(html_generation_options::m_show_graph_dot_src0): ...this.
+	* diagnostics/output-spec.cc
+	(html_scheme_handler::maybe_handle_kv): Rename keys.
+	(html_scheme_handler::get_keys): Likewise.
+	* diagnostics/state-graphs-to-dot.cc: : Reimplement throughout to
+	use json::property instances found within custom_sarif_properties
+	throughout, rather than types in diagnostics::state_graphs.
+	* diagnostics/state-graphs.cc: Deleted file.
+	* diagnostics/state-graphs.h: Delete almost all, except decl of
+	diagnostics::state_graphs::make_dot_graph.
+	* doc/invoke.texi: Update for changes to "experimental-html" sink
+	keys.
+	* json.cc (json::object::set_string): New.
+	(json::object::set_integer): New.
+	(json::object::set_bool): New.
+	(json::object::set_array_of_string): New.
+	* json.h: Include "label-text.h".
+	(struct json::property): New template.
+	(json::string_property): New.
+	(json::integer_property): New.
+	(json::bool_property): New.
+	(json::json_property): New.
+	(using json::array_of_string_property): New.
+	(struct json::enum_traits): New.
+	(enum_json::property): New.
+	(json::value::dyn_cast_array): New vfunc.
+	(json::value::dyn_cast_integer_number): New vfunc.
+	(json::value::set_string): New.
+	(json::value::set_integer): New.
+	(json::value::set_bool): New.
+	(json::value::set_array_of_string): New.
+	(json::value::maybe_get_enum): New.
+	(json::value::set_enum): New.
+	(json::array::dyn_cast_array): New.
+	(json::integer_number::dyn_cast_integer_number): New.
+	(object::maybe_get_enum): New.
+	(object::set_enum): New.
+
+2025-10-16  Ayappan Perumal  <ayappap2@in.ibm.com>
+
+	* config/rs6000/aix.h (SUBTARGET_DRIVER_SELF_SPECS):
+	Error out when stack-protector option is used in AIX
+	as it is not supported on AIX
+	Approved By: Segher Boessenkool <segher@kernel.crashing.org>
+
+2025-10-16  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122292
+	* tree-vect-loop.cc (vect_transform_reduction): Compute the
+	input vector type the same way the analysis phase does.
+
+2025-10-15  Andrew MacLeod  <amacleod@redhat.com>
+
+	PR tree-optimization/121468
+	PR tree-optimization/121206
+	PR tree-optimization/122200
+	* value-range.cc (irange_bitmask::range_from_mask): New.
+	(irange::snap): Add explicit overflow flag.
+	(irange::snap_subranges): Use overflow flag.
+	(irange::set_range_from_bitmask): Use range_from_mask.
+	(test_irange_snap_bounds): Adjust for improved ranges.
+	* value-range.h (irange::range_from_mask): Add prototype.
+	(irange::snap): Adjust prototype.
+
+2025-10-15  Tobias Burnus  <tburnus@baylibre.com>
+
+	* config/gcn/gcn-devices.def (gfx942, gfx950): Set generic name
+	to GFX9_4_GENERIC.
+	* config/gcn/t-omp-device: Include generic names for OpenMP's
+	ISA trait.
+
+2025-10-15  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	* print-tree.cc (print_node): Print out clique/base
+	for MEM_REF and TARGET_MEM_REF.
+
+2025-10-15  Richard Earnshaw  <rearnsha@arm.com>
+
+	PR target/118460
+	* config/arm/arm.cc (arm_canonicalize_comparison): For floating-
+	point comparisons, swap the operand order if that will be more
+	likely to produce a comparison that can be used with VSEL.
+	(arm_validize_comparison): Make sure that HFmode comparisons
+	are compatible with VSEL.
+
+2025-10-15  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/122037
+	* tree-ssa-dce.cc (eliminate_unnecessary_stmts): Remove
+	__builtin_stack_save when the lhs is unused.
+
+2025-10-15  Alice Carlotti  <alice.carlotti@arm.com>
+
+	* config/aarch64/aarch64-sys-regs.def: Copy from Binutils.
+	* config/aarch64/aarch64.cc (F_ARCHEXT): Delete flag.
+	* config/aarch64/aarch64.h
+	(AARCH64_FL_AMU): Delete unused macro.
+	(AARCH64_FL_SCXTNUM): Ditto.
+	(AARCH64_FL_ID_PFR2): Ditto.
+	(AARCH64_FL_AIE): Ditto.
+	(AARCH64_FL_DEBUGv8p9): Ditto.
+	(AARCH64_FL_FGT2): Ditto.
+	(AARCH64_FL_PFAR): Ditto.
+	(AARCH64_FL_PMUv3_ICNTR): Ditto.
+	(AARCH64_FL_PMUv3_SS): Ditto.
+	(AARCH64_FL_PMUv3p9): Ditto.
+	(AARCH64_FL_S1PIE): Ditto.
+	(AARCH64_FL_S1POE): Ditto.
+	(AARCH64_FL_S2PIE): Ditto.
+	(AARCH64_FL_S2POE): Ditto.
+	(AARCH64_FL_SCTLR2): Ditto.
+	(AARCH64_FL_SEBEP): Ditto.
+	(AARCH64_FL_SPE_FDS): Ditto.
+	(AARCH64_FL_TCR2): Ditto.
+
+2025-10-15  Sebastian Pop  <spop@nvidia.com>
+
+	* doc/invoke.texi (ftree-parallelize-loops): Update.
+	* common.opt (ftree-parallelize-loops): Add alias that maps to
+	special value INT_MAX for runtime thread detection.
+	* tree-parloops.cc (create_parallel_loop): Use INT_MAX for runtime
+	detection.  Call gimple_build_omp_parallel without building a
+	OMP_CLAUSE_NUM_THREADS clause.
+	(gen_parallel_loop): For auto-detection, use a conservative
+	estimate of 2 threads.
+	(parallelize_loops): Same.
+
+2025-10-15  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	PR target/122189
+	* config/arm/iterators.md (VxCIQ_carry, VxCIQ_M_carry, VxCQ_carry)
+	(VxCQ_M_carry): New iterators.
+	* config/arm/mve.md (get_fpscr_nzcvqc, set_fpscr_nzcvqc): Use
+	unspec instead of unspec_volatile.
+	(vadciq, vadciq_m, vadcq, vadcq_m): Use vfpcc in operation.  Use a
+	different unspec code for carry calcultation.
+	* config/arm/unspecs.md (VADCQ_U_carry, VADCQ_M_U_carry)
+	(VADCQ_S_carry, VADCQ_M_S_carry, VSBCIQ_U_carry ,VSBCIQ_S_carry
+	,VSBCIQ_M_U_carry ,VSBCIQ_M_S_carry ,VSBCQ_U_carry ,VSBCQ_S_carry
+	,VSBCQ_M_U_carry ,VSBCQ_M_S_carry ,VADCIQ_U_carry
+	,VADCIQ_M_U_carry ,VADCIQ_S_carry ,VADCIQ_M_S_carry): New unspec
+	codes.
+
+2025-10-15  Roger Sayle  <roger@nextmovesoftware.com>
+
+	PR rtl-optimization/122266
+	* combine.cc (struct reg_stat_type): Change types of sign_bit_copies
+	and last_set_sign_bit_copies to unsigned short, to avoid overflows
+	on TImode (and wider) values.
+
+2025-10-15  Jan Hubicka  <hubicka@ucw.cz>
+
+	* auto-profile.cc (scale_bb_profile): Use
+	profile_count::max_prefer_initialized.
+	(afdo_adjust_guessed_profile): Likewise.
+	* bb-reorder.cc (edge_order): Do not use max.
+	* cfghooks.cc (merge_blocks): Likewise.
+	* ipa-fnsummary.cc (param_change_prob): Likewise.
+	* ipa-inline-transform.cc (inline_transform): Likewise.
+	* predict.cc (update_max_bb_count): Likewise.
+	(estimate_bb_frequencies): Likewise.
+	(rebuild_frequencies): Likewise.
+	* tree-ssa-loop-unswitch.cc (struct unswitch_predicate): Likewise.
+	* profile-count.h (profile_count::max): Rename to
+	(profile_count::max_prefer_initialized): this; update handling
+	of qualities.
+
+2025-10-15  Haochen Jiang  <haochen.jiang@intel.com>
+
+	* common/config/i386/cpuinfo.h
+	(get_intel_cpu): Handle Wildcat Lake.
+	* common/config/i386/i386-common.cc (processor_name):
+	Add Wildcat Lake.
+	* doc/invoke.texi: Ditto.
+
+2025-10-15  Haochen Jiang  <haochen.jiang@intel.com>
+
+	* config/i386/i386.h
+	(PTA_PANTHERLAKE): Remove PREFETCHI.
+	(PTA_DIAMONDRAPIDS): Remove USER_MSR.
+	* doc/invoke.texi: Correct documentation.
+
+2025-10-15  Pan Li  <pan2.li@intel.com>
+
+	* config/riscv/autovec-opt.md: Take concrete op instead
+	of any_widen_binop for vwaddu/vwsubu wx combine.
+
+2025-10-14  Richard Biener  <rguenther@suse.de>
+
+	* tree-vectorizer.h (REDUC_GROUP_FIRST_ELEMENT,
+	REDUC_GROUP_NEXT_ELEMENT, REDUC_GROUP_SIZE): Remove.
+	* tree-vect-slp.cc (REDUC_GROUP_FIRST_ELEMENT): Re-instantiate
+	here.
+
+2025-10-14  Richard Biener  <rguenther@suse.de>
+
+	* tree-vect-slp.cc (vect_analyze_slp_reduction): Move
+	reduction chain discovery ...
+	(vect_analyze_slp_reduc_chain): ... here.
+
+2025-10-14  Richard Biener  <rguenther@suse.de>
+
+	* tree-vect-loop.cc (vect_create_epilog_for_reduction): Move
+	bitsize compute down to where it is used and consistently
+	use vectype1 for element extraction.
+
+2025-10-14  Tamar Christina  <tamar.christina@arm.com>
+
+	PR tree-optimization/121949
+	* tree-vect-patterns.cc (vect_recog_vector_vector_shift_pattern): Remove
+	restriction on internal_def.
+
+2025-10-14  Robin Dapp  <rdapp@ventanamicro.com>
+
+	* tree-vect-stmts.cc (get_load_store_type): Add load-permutation
+	checks and setting of slp_perm.
+	(vectorizable_store): Remove perm_ok argument.
+	(vectorizable_load): Ditto and replace slp_perm by ls.slp_perm.
+	* tree-vectorizer.h (struct vect_load_store_data): Add slp_perm.
+
+2025-10-14  Richard Biener  <rguenther@suse.de>
+
+	* tree-vectorizer.h (vect_reduc_info_s::is_reduc_chain): New.
+	(_loop_vec_info::reduction_chains): Remove.
+	(LOOP_VINFO_REDUCTION_CHAINS): Likewise.
+	* tree-vect-patterns.cc (vect_reassociating_reduction_p):
+	Do not special-case reduction group stmts.
+	* tree-vect-loop.cc (vect_is_simple_reduction): Remove
+	reduction chain handling.
+	(vect_analyze_scalar_cycles_1): Remove slp parameter and adjust.
+	(vect_analyze_scalar_cycles): Likewise.
+	(vect_fixup_reduc_chain): Remove.
+	(vect_fixup_scalar_cycles_with_patterns): Likewise.
+	(vect_analyze_loop_2): Adjust.
+	(vect_create_epilog_for_reduction): Check the reduction info
+	for whether this is a reduction chain.
+	(vect_transform_cycle_phi): Likewise.
+	(vectorizable_reduction): Likewise.  Simplify code for all-SLP.
+	* tree-vect-slp.cc (vect_analyze_slp_reduc_chain): Simplify.
+	(vect_analyze_slp_reduction): New function, perform reduction
+	chain discovery here.
+	(vect_analyze_slp): Remove reduction chain handling.
+	Use vect_analyze_slp_reduction for possible reduction chain
+	processing.
+
+2025-10-14  Haochen Jiang  <haochen.jiang@intel.com>
+
+	* common/config/i386/cpuinfo.h
+	(get_available_features): Remove AMX-TRANSPOSE.
+	* common/config/i386/i386-common.cc
+	(OPTION_MASK_ISA2_AMX_TRANSPOSE_SET): Removed.
+	(OPTION_MASK_ISA2_AMX_TRANSPOSE_UNSET): Ditto.
+	(ix86_handle_option): Remove amx-transpose handle.
+	* common/config/i386/i386-cpuinfo.h
+	(enum processor_features): Remove FEATURE_AMX_TRANSPOSE.
+	Set FEATURE_AMX_MOVRS value.
+	* common/config/i386/i386-isas.h: Remove AMX-TRANSPOSE.
+	* config.gcc: Do not include amxtransposeintrin.h.
+	* config/i386/amxmovrsintrin.h: Remove AMX-TRANSPOSE intrins.
+	* config/i386/amxtransposeintrin.h: Ditto.
+	* config/i386/cpuid.h (bit_AMX_TRANSPOSE): Removed.
+	* config/i386/i386.h (PTA_DIAMONDRAPIDS): Remove AMX-TRANSPOSE.
+	* config/i386/i386-c.cc (ix86_target_macros_internal): Remove
+	AMX_TRANSPOSE.
+	* config/i386/i386-isa.def (AMX_TRANSPOSE): Removed.
+	* config/i386/i386-options.cc
+	(ix86_valid_target_attribute_inner_p): Remove AMX-TRANSPOSE.
+	* config/i386/i386.opt: Ditto.
+	* config/i386/i386.opt.urls: Ditto.
+	* config/i386/immintrin.h: Remove amxtransposeintrin.h.
+	* doc/extend.texi: Remove amx-transpose.
+	* doc/invoke.texi: Ditto.
+	* doc/sourcebuild.texi: Ditto.
+
+2025-10-14  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	* tree-ssa-phiopt.cc (pass_phiopt::execute): Disable
+	cselim-limited and factor out operations for -Og.
+
+2025-10-14  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/122178
+	* tree-ssa-phiopt.cc (cond_if_else_store_replacement_1): Handle
+	clobber statements.
+
+2025-10-14  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/122182
+	* tree-ssa-dom.cc (cprop_operand): Don't check may_propagate_copy_into_asm.
+	* tree-ssa-propagate.cc (substitute_and_fold_engine::replace_uses_in): Don't
+	check may_propagate_copy_into_asm.
+	(may_propagate_copy_into_asm): Remove.
+	* tree-ssa-propagate.h (may_propagate_copy_into_asm): Remove.
+
+2025-10-14  Zhongyao Chen  <chenzhongyao.hit@gmail.com>
+
+	* common/config/riscv/riscv-common.cc (riscv_subset_list::get_profile_name):
+	New function.
+	* config/riscv/riscv-c.cc (riscv_cpu_cpp_builtins): Define
+	profile macro if a profile is detected.
+	* config/riscv/riscv-subset.h (riscv_subset_list::get_profile_name): Declare.
+
+2025-10-13  Shreya Munnangi  <smunnangi1@ventanamicro.com>
+
+	PR target/120811
+	* config/riscv/riscv.cc (synthesize_add): Exchange constant terms when
+	generating addi pairs.
+	(synthesize_addsi): Similarly.
+	* config/riscv/riscv.md (addptr<mode>3): New define_expand.
+	(*add<mode>3_const_sum_of_two_s12): Remove pattern.
+
+2025-10-13  Jeff Law  <jlaw@ventanamicro.com>
+
+	PR target/120674
+	* config/riscv/riscv.cc (riscv_dwarf_poly_indeterminite_value): Do not
+	set FACTOR to zero, for that case use one instead.
+
+2025-10-13  Pan Li  <pan2.li@intel.com>
+
+	* match.pd: Add simplifed pattern for widen_mul based unsigned
+	SAT_MUL.
+
+2025-10-13  Jan Hubicka  <hubicka@ucw.cz>
+
+	* ipa-inline.cc (max_count): Remove.
+	(has_nonzero_ipa_profile): New.
+	(inline_small_functions): Update.
+	(dump_inline_stats): Update.
+
+2025-10-13  Robin Dapp  <rdapp@ventanamicro.com>
+
+	PR target/118019
+	* internal-fn.cc (get_supported_else_vals): Exit at invalid
+	index.
+	(internal_strided_fn_supported_p): New funtion.
+	* internal-fn.h (internal_strided_fn_supported_p): Declare.
+	* tree-vect-stmts.cc (vector_vector_composition_type):
+	Add vector_only argument.
+	(vect_use_grouped_gather): New function.
+	(vect_get_store_rhs): Adjust docs of
+	vector_vector_composition_type.
+	(get_load_store_type): Try grouped gather.
+	(vectorizable_store): Use punned vectype.
+	(vectorizable_load): Ditto.
+	* tree-vectorizer.h (struct vect_load_store_data): Add punned
+	vectype.
+
+2025-10-13  Avinash Jayakar  <avinashd@linux.ibm.com>
+
+	PR tree-optimization/122213
+	* match.pd: Canonicalize unsigned pow2 div only for trunk, floor and
+	exact div.
+
+2025-10-13  Richard Biener  <rguenther@suse.de>
+
+	* tree-vect-patterns.cc (integer_type_for_mask): Add optional
+	output dt argument.
+	(vect_recog_bool_pattern): Make sure to not apply the bitwise
+	binary pattern to an external operand.
+
+2025-10-11  Bohan Lei  <garthlei@linux.alibaba.com>
+
+	PR target/119587
+	* config/riscv/thead.md (*th_memidx_operand): New splitter.
+
+2025-10-11  Georg-Johann Lay  <avr@gjlay.de>
+
+	* coretypes.h (enum artificial_rodata): New enum type.
+	* doc/tm.texi: Rebuild.
+	* doc/tm.texi.in (TARGET_ADDR_SPACE_FOR_ARTIFICIAL_RODATA):
+	New hook.
+	* target.def (addr_sapce.for_artificial_rodata): New DEFHOOK.
+	* targhooks.cc (default_addr_space_convert): New function.
+	* targhooks.h (default_addr_space_convert): New prototype.
+	* tree-switch-conversion.cc (build_one_array) <value_type>:
+	Set type_quals address-space according to
+	targetm.addr_space.for_artificial_rodata().
+	* config/avr/avr.cc (avr_rodata_in_flash_p): Move up.
+	(TARGET_ADDR_SPACE_FOR_ARTIFICIAL_RODATA): Define to...
+	(avr_addr_space_for_artificial_rodata): ...this new function.
+	* common/config/avr/avr-common.cc (avr_option_optimization_table):
+	Adjust -ftree-switch-conversion comment.
+
+2025-10-11  Austin Law  <austinklaw@gmail.com>
+
+	* config/riscv/sync.md (lrsc_atomic_fetch_<atomic_optab><mode>):
+	Adjust operand predicate/constraint to allow simm12 operands
+	where valid.  Adjust output template accordingly.
+	(subword_atomic_fech_strong_<atomic_optab>): Likewise.
+	(subword_atomic_fetch_strong_nand): Likewise.
+	(subword_atomic_exchange_strong): Likewise.
+	(subword_atomic_cas_strong): Likewise.
+
 2025-10-10  David Faust  <david.faust@oracle.com>
 
 	PR target/122141

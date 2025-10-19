@@ -1535,10 +1535,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       }
 
       static consteval int
-      _S_required_aligment()
+      _S_required_alignment()
       {
 	if constexpr (is_floating_point_v<_Vt> || is_pointer_v<_Vt>)
-	  return alignof(_Vt);
+	  return __alignof__(_Vt);
 	else if constexpr ((sizeof(_Vt) & (sizeof(_Vt) - 1)) || sizeof(_Vt) > 16)
 	  return alignof(_Vt);
 	else
@@ -1555,7 +1555,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       static_assert(is_always_lock_free || !is_volatile_v<_Tp>,
 	"atomic operations on volatile T must be lock-free");
 
-      static constexpr size_t required_alignment = _S_required_aligment();
+      static constexpr size_t required_alignment = _S_required_alignment();
 
       __atomic_ref_base() = delete;
       __atomic_ref_base& operator=(const __atomic_ref_base&) = delete;
@@ -1588,6 +1588,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	__atomic_impl::wait(_M_ptr, __old, __m);
       }
 #endif // __glibcxx_atomic_wait
+
+#if __glibcxx_atomic_ref >= 202411L
+      _GLIBCXX_ALWAYS_INLINE constexpr const _Tp*
+      address() const noexcept
+      { return _M_ptr; }
+#endif // __glibcxx_atomic_ref >= 202411L
 
     protected:
       _Tp* _M_ptr;
@@ -1672,6 +1678,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	__atomic_impl::notify_all(this->_M_ptr);
       }
 #endif // __glibcxx_atomic_wait
+
+#if __glibcxx_atomic_ref >= 202411L
+      _GLIBCXX_ALWAYS_INLINE constexpr _Tp*
+      address() const noexcept
+      { return this->_M_ptr; }
+#endif // __glibcxx_atomic_ref >= 202411L
     };
 
   template<typename _Tp,

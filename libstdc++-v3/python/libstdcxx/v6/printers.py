@@ -287,7 +287,11 @@ class SharedPointerPrinter(printer_base):
     def _get_refcounts(self):
         if self._typename == 'std::atomic':
             # A tagged pointer is stored as uintptr_t.
-            ptr_val = self._val['_M_refcount']['_M_val']['_M_i']
+            val = self._val['_M_refcount']['_M_val']
+            if val.type.is_scalar: # GCC 16 stores uintptr_t
+                ptr_val = val
+            else: # GCC 12-15 stores std::atomic<uintptr_t>
+                ptr_val = val['_M_i']
             ptr_val = ptr_val - (ptr_val % 2)  # clear lock bit
             ptr_type = find_type(self._val['_M_refcount'].type, 'pointer')
             return ptr_val.cast(ptr_type)
@@ -2353,6 +2357,37 @@ class StdTextEncodingPrinter(printer_base):
             return 'unknown'
         return rep['_M_name']
 
+class StdStacktraceEntryPrinter(printer_base):
+    """Print a std::stacktrace_entry."""
+
+    def __init__(self, typename, val):
+        self._val = val
+        self._typename = typename
+
+    def to_string(self):
+        block = gdb.current_progspace().block_for_pc(self._val['_M_pc'])
+        if block is None or block.function is None:
+            return "<unknown>"
+        sym = block.function
+        return "{{{} at {}:{}}}".format(sym.print_name, sym.symtab.filename, sym.line)
+
+class StdStacktracePrinter(printer_base):
+    """Print a std::stacktrace."""
+
+    def __init__(self, typename, val):
+        self._val = val
+        self._typename = typename
+        self._size = self._val['_M_impl']['_M_size']
+
+    def to_string(self):
+        return '%s of length %d' % (self._typename, self._size)
+
+    def children(self):
+        return StdSpanPrinter._iterator(self._val['_M_impl']['_M_frames'], self._size)
+
+    def display_hint(self):
+        return 'array'
+
 # A "regular expression" printer which conforms to the
 # "SubPrettyPrinter" protocol from gdb.printing.
 class RxPrinter(object):
@@ -2972,6 +3007,12 @@ def build_libstdcxx_dictionary():
         'std::chrono::', 'tzdb', StdChronoTzdbPrinter)
     # libstdcxx_printer.add_version('std::chrono::(anonymous namespace)', 'Rule',
     #                              StdChronoTimeZoneRulePrinter)
+
+    # C++23 components
+    libstdcxx_printer.add_version('std::', 'stacktrace_entry',
+                                  StdStacktraceEntryPrinter)
+    libstdcxx_printer.add_version('std::', 'basic_stacktrace',
+                                  StdStacktracePrinter)
 
     # C++26 components
     libstdcxx_printer.add_version('std::', 'text_encoding',
