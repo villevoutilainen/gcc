@@ -8046,6 +8046,7 @@ cp_parser_postfix_expression (cp_parser *parser, bool address_p, bool cast_p,
     case RID_BUILTIN_SHUFFLE:
     case RID_BUILTIN_SHUFFLEVECTOR:
     case RID_BUILTIN_LAUNDER:
+    case RID_BUILTIN_OBSERVABLE:
     case RID_BUILTIN_ASSOC_BARRIER:
     case RID_BUILTIN_OPERATOR_NEW:
     case RID_BUILTIN_OPERATOR_DELETE:
@@ -8155,7 +8156,7 @@ cp_parser_postfix_expression (cp_parser *parser, bool address_p, bool cast_p,
 		      error_at (loc, "call to %<__builtin_operator_new%> "
 				     "does not select replaceable global "
 				     "allocation function");
-		    else 
+		    else
 		      error_at (loc, "call to %<__builtin_operator_delete%> "
 				     "does not select replaceable global "
 				     "deallocation function");
@@ -11651,7 +11652,7 @@ cp_parser_builtin_c23_va_start (cp_parser *parser)
   if (TREE_CODE (ret) == CALL_EXPR)
     SET_EXPR_LOCATION (ret, combined_loc);
   return cp_expr (ret, combined_loc);
-}	  
+}
 
 /* Parse __builtin_offsetof.
 
@@ -12144,7 +12145,7 @@ cp_parser_lambda_introducer (cp_parser* parser, tree lambda_expr)
       first = false;
 
       tree scope = current_nonlambda_scope (/*only_skip_closures_p=*/true);
-      if (TREE_CODE (scope) != FUNCTION_DECL 
+      if (TREE_CODE (scope) != FUNCTION_DECL
 	  && !parsing_nsdmi ()
 	  && current_binding_level->kind != sk_contract)
 	error ("non-local lambda expression cannot have a capture-default");
