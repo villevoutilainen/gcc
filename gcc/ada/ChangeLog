@@ -1,3 +1,82 @@
+2025-10-24  Eric Botcazou  <ebotcazou@adacore.com>
+
+	PR ada/80033
+	* gcc-interface/Makefile.in (force): Restore.
+
+2025-10-24  Nicolas Boulenguez  <nicolas@debian.org>
+
+	PR ada/80033
+	* gcc-interface/Makefile.in (deftarg.o): Delete.
+	(init-vxsim.o): Likewise.
+	(force): Likewise.
+
+2025-10-24  Mivirl  <octoberstargazer7405@mivirl.dev>
+
+	PR ada/122367
+	* rtinit.c (__gnat_runtime_initialize) [__MINGW32__]: Fix detection
+	of quoted arguments.
+
+2025-10-24  Eric Botcazou  <ebotcazou@adacore.com>
+
+	PR ada/118782
+	* styleg.adb (Is_Box_Comment): Also stop the loop at EOF.
+
+2025-10-24  Eric Botcazou  <ebotcazou@adacore.com>
+
+	PR ada/113516
+	* s-oscons-tmplt.c [_WIN32]: Undefine POLLPRI before redefining it.
+
+2025-10-24  Eric Botcazou  <ebotcazou@adacore.com>
+
+	PR ada/98879
+	* terminals.c (__gnat_setup_child_communication) [_WIN32]: Add else
+	blocks in the processing of the data returned by ReadFile.
+
+2025-10-24  Nicolas Boulenguez  <nicolas@debian.org>
+
+	PR ada/81087
+	* gnatlink.adb (Is_Prefix): Move around, streamline and return false
+	when the prefix is not strict.
+	(Gnatlink): Fix other instances of incorrect lower bound assumption.
+
+2025-10-20  Eric Botcazou  <ebotcazou@adacore.com>
+
+	PR ada/102078
+	* affinity.c (__gnat_set_affinity_mask): Add U qualifier.
+
+2025-10-20  Eric Botcazou  <ebotcazou@adacore.com>
+
+	PR ada/32318
+	* libgnat/g-catiio.adb (Image_Helper) <'c'>: Fix comment.
+
+2025-10-20  Eric Botcazou  <ebotcazou@adacore.com>
+
+	PR ada/68179
+	* exp_ch3.adb (Expand_Freeze_Array_Type): Build an initialization
+	procedure for a type derived from String declared with the aspect
+	Default_Aspect_Component_Value.
+
+2025-10-20  Eric Botcazou  <ebotcazou@adacore.com>
+
+	PR ada/52319
+	* sem_ch7.adb (Uninstall_Declarations): Use direct test on Nkind
+	to spot operators.
+	* sem_ch8.adb (End_Use_Package): Also test the Etype of operators
+	to spot those which are primitive operators of use-visible types.
+
+2025-10-20  Nicolas Boulenguez  <nicolas@debian.org>
+
+	PR ada/87777
+	* gnatchop.adb: Add with clause for Osint.
+	(Locate_Executable): Delete.
+	(Gnatchop): Use Osint.Program_Name and Locate_Exec_On_Path instead
+	of Locate_Executable to locate GCC's driver executable.
+
+2025-10-20  Eric Botcazou  <ebotcazou@adacore.com>
+
+	PR ada/107536
+	* exp_ch2.adb (Expand_Renaming): Mark the entity as referenced.
+
 2025-10-17  Eric Botcazou  <ebotcazou@adacore.com>
 
 	PR ada/122295

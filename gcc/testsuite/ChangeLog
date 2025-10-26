@@ -1,3 +1,492 @@
+2025-10-25  Harald Anlauf  <anlauf@gmx.de>
+
+	PR fortran/114023
+	* gfortran.dg/is_contiguous_5.f90: New test.
+
+2025-10-25  Jiahao Xu  <xujiahao@loongson.cn>
+
+	* gcc.target/loongarch/lasx-reduc-1.c: New test.
+
+2025-10-24  Andrew MacLeod  <amacleod@redhat.com>
+
+	* gcc.dg/pr110405.c: New.
+
+2025-10-24  Andrew MacLeod  <amacleod@redhat.com>
+
+	PR tree-optimization/114025
+	* g++.dg/pr114025.C: New.
+
+2025-10-24  Gaius Mulley  <gaiusmod2@gmail.com>
+
+	PR modula2/122407
+	* gm2.dg/spell/iso/fail/badspellabs.mod: New test.
+	* gm2.dg/spell/iso/fail/badspelladr.mod: New test.
+	* gm2.dg/spell/iso/fail/badspellcap.mod: New test.
+	* gm2.dg/spell/iso/fail/badspellchr.mod: New test.
+	* gm2.dg/spell/iso/fail/badspellchr2.mod: New test.
+	* gm2.dg/spell/iso/fail/badspelldec.mod: New test.
+	* gm2.dg/spell/iso/fail/badspellexcl.mod: New test.
+	* gm2.dg/spell/iso/fail/badspellinc.mod: New test.
+	* gm2.dg/spell/iso/fail/badspellincl.mod: New test.
+	* gm2.dg/spell/iso/fail/badspellnew.mod: New test.
+	* gm2.dg/spell/iso/fail/badspellsize.mod: New test.
+	* gm2.dg/spell/iso/fail/dg-spell-iso-fail.exp: New test.
+
+2025-10-24  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR target/122402
+	* gcc.target/aarch64/auto-init-padding-2.c: Turn off SRA.
+	* gcc.target/aarch64/auto-init-padding-4.c: Likewise.
+
+2025-10-24  Harald Anlauf  <anlauf@gmx.de>
+
+	PR fortran/122386
+	* gfortran.dg/transfer_array_subref_2.f90: New test.
+
+2025-10-24  Andrew MacLeod  <amacleod@redhat.com>
+
+	* gcc.dg/pr114725.c: New.
+
+2025-10-24  Andrew MacLeod  <amacleod@redhat.com>
+
+	PR tree-optimization/118254
+	PR tree-optimization/114331
+	* gcc.dg/pr114331.c: New.
+	* gcc.dg/pr118254.c: New.
+
+2025-10-24  Alex Coplan  <alex.coplan@arm.com>
+
+	* gcc.dg/torture/vect-permute-ice.c: New test.
+
+2025-10-24  Richard Biener  <rguenther@suse.de>
+
+	* gcc.dg/vect/vect-pr122406-1.c: Adjust to expect reduction
+	chain vectorization.
+	* gcc.dg/vect/vect-pr122406-2.c: Likewise.
+
+2025-10-24  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122406
+	* gcc.dg/vect/vect-pr122406-1.c: New testcase.
+	* gcc.dg/vect/vect-pr122406-2.c: Likewise.
+
+2025-10-24  Paul-Antoine Arras  <parras@baylibre.com>
+
+	PR fortran/121452
+	* c-c++-common/gomp/pr121452-1.c: New test.
+	* c-c++-common/gomp/pr121452-2.c: New test.
+	* gfortran.dg/gomp/pr121452-1.f90: New test.
+	* gfortran.dg/gomp/pr121452-2.f90: New test.
+	* gfortran.dg/gomp/pr121452-3.f90: New test.
+
+2025-10-24  H.J. Lu  <hjl.tools@gmail.com>
+
+	PR target/122323
+	* gcc.target/i386/builtin-fabs-2.c: Also scan (%edi)for x32.
+
+2025-10-24  Pengfei Li  <Pengfei.Li2@arm.com>
+
+	* gcc.dg/fold-vecperm-1.c: New test.
+
+2025-10-24  Olivier Hainque  <hainque@adacore.com>
+
+	* lib/target-supports.exp (check_weak_available):
+	Return 1 for VxWorks7.
+
+2025-10-24  Joseph Myers  <josmyers@redhat.com>
+
+	* gcc.dg/c23-static-assert-5.c, gcc.dg/c23-static-assert-6.c,
+	gcc.dg/c23-static-assert-7.c, gcc.dg/c23-static-assert-8.c,
+	gcc.dg/c2y-static-assert-2.c, gcc.dg/c2y-static-assert-3.c,
+	gcc.dg/c2y-static-assert-4.c: New tests.
+
+2025-10-23  Robert Dubner  <rdubner@symas.com>
+
+	* cobol.dg/group2/Length_overflow__2_.out: Updated test result.
+	* cobol.dg/group2/Length_overflow_with_offset__1_.out: Likewise.
+	* cobol.dg/group2/Offset_overflow.out: Likewise.
+	* cobol.dg/group2/CALL_with_OCCURS_DEPENDING_ON.cob: New test.
+	* cobol.dg/group2/CALL_with_OCCURS_DEPENDING_ON.out: New test.
+	* cobol.dg/group2/CHAR_and_ORD_with_COLLATING_sequence_-_ASCII.cob: New test.
+	* cobol.dg/group2/CHAR_and_ORD_with_COLLATING_sequence_-_ASCII.out: New test.
+	* cobol.dg/group2/CHAR_and_ORD_with_COLLATING_sequence_-_EBCDIC.cob: New test.
+	* cobol.dg/group2/CHAR_and_ORD_with_COLLATING_sequence_-_EBCDIC.out: New test.
+	* cobol.dg/group2/EC-BOUND-REF-MOD_checking_process_termination.cob: New test.
+	* cobol.dg/group2/EC-BOUND-REF-MOD_checking_process_termination.out: New test.
+	* cobol.dg/group2/Intrinsics_without_FUNCTION_keyword__3_.cob: New test.
+	* cobol.dg/group2/Occurs_DEPENDING_ON__source_and_dest.cob: New test.
+	* cobol.dg/group2/Occurs_DEPENDING_ON__source_and_dest.out: New test.
+	* cobol.dg/group2/Recursive_subscripts.cob: New test.
+	* cobol.dg/group2/Recursive_subscripts.out: New test.
+	* cobol.dg/group2/SEARCH_ALL_with_OCCURS_DEPENDING_ON.cob: New test.
+	* cobol.dg/group2/SEARCH_ALL_with_OCCURS_DEPENDING_ON.out: New test.
+	* cobol.dg/group2/Subscript_by_arithmetic_expression.cob: New test.
+	* cobol.dg/group2/Subscript_out_of_bounds__1_.cob: New test.
+	* cobol.dg/group2/Subscript_out_of_bounds__1_.out: New test.
+	* cobol.dg/group2/Subscript_out_of_bounds__2_.cob: New test.
+	* cobol.dg/group2/Subscript_out_of_bounds__2_.out: New test.
+	* cobol.dg/group2/Subscripted_refmods.cob: New test.
+	* cobol.dg/group2/Subscripted_refmods.out: New test.
+	* cobol.dg/group2/length_of_ODO_Rules_7__8A__and_8B.cob: New test.
+	* cobol.dg/group2/length_of_ODO_Rules_7__8A__and_8B.out: New test.
+	* cobol.dg/group2/length_of_ODO_w_-_reference_modification.cob: New test.
+
+2025-10-23  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	* gcc.dg/tree-ssa/bool-12.c: Update based on when BIT_AND/BIT_IOR
+	is created and no longer MIN/MAX.
+
+2025-10-23  Robert Dubner  <rdubner@symas.com>
+	    James K. Lowden  <jklowden@cobolworx.com>
+
+	* cobol.dg/typo-1.cob: New test for squiggles and carets.
+
+2025-10-23  Alfie Richards  <alfie.richards@arm.com>
+
+	* gcc.target/aarch64/fmv_priority1.c: New test.
+	* gcc.target/aarch64/fmv_priority2.c: New test.
+	* gcc.target/aarch64/fmv_priority.in: Support file.
+
+2025-10-23  Alfie Richards  <alfie.richards@arm.com>
+
+	PR target/122190
+	* gcc.target/aarch64/pr122190.c: New test
+
+2025-10-23  zhaozhou  <zhaozhou@loongson.cn>
+
+	* gcc.dg/fold-round-1.c: New test.
+
+2025-10-23  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	PR target/122223
+	* gcc.target/arm/mve/intrinsics/pr122223.c: Relax expected code.
+
+2025-10-23  liuhongt  <hongtao.liu@intel.com>
+
+	* gcc.target/i386/pr101639_reduc_mask_vdi.c: New test.
+	* gcc.target/i386/pr101639_reduc_mask_vqi.c: New test.
+	* gcc.target/i386/pr101639_reduc_mask_vsi.c: New test.
+	* gcc.target/i386/pr101639_reduc_mask_ior_vqi.c: New test.
+	* gcc.target/i386/pr101639_reduc_mask_and_vqi.c: New test.
+
+2025-10-23  liuhongt  <hongtao.liu@intel.com>
+
+	* gcc.target/i386/pr101639_reduc_mask_di.c: New test.
+	* gcc.target/i386/pr101639_reduc_mask_hi.c: New test.
+	* gcc.target/i386/pr101639_reduc_mask_qi.c: New test.
+	* gcc.target/i386/pr101639_reduc_mask_si.c: New test.
+
+2025-10-22  Paul-Antoine Arras  <parras@baylibre.com>
+
+	PR middle-end/122378
+	* c-c++-common/gomp/attrs-metadirective-2.c: Uncomment local label
+	declaration.
+	* c-c++-common/gomp/metadirective-2.c: Likewise.
+
+2025-10-22  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/122302
+	* g++.dg/cpp0x/pr122302.C: New test.
+	* g++.dg/cpp/embed-27.C: New test.
+
+2025-10-22  Tamar Christina  <tamar.christina@arm.com>
+
+	* gcc.target/aarch64/sve/vect-reduc-bool-10.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-11.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-12.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-13.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-14.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-15.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-16.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-17.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-18.c: New test.
+
+2025-10-22  Tamar Christina  <tamar.christina@arm.com>
+
+	* gcc.target/aarch64/vect-reduc-bool-1.c: New test.
+	* gcc.target/aarch64/vect-reduc-bool-2.c: New test.
+	* gcc.target/aarch64/vect-reduc-bool-3.c: New test.
+	* gcc.target/aarch64/vect-reduc-bool-4.c: New test.
+	* gcc.target/aarch64/vect-reduc-bool-5.c: New test.
+	* gcc.target/aarch64/vect-reduc-bool-6.c: New test.
+	* gcc.target/aarch64/vect-reduc-bool-7.c: New test.
+	* gcc.target/aarch64/vect-reduc-bool-8.c: New test.
+	* gcc.target/aarch64/vect-reduc-bool-9.c: New test.
+
+2025-10-22  Tamar Christina  <tamar.christina@arm.com>
+
+	* gcc.target/aarch64/sve/vect-reduc-bool-1.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-2.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-3.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-4.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-5.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-6.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-7.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-8.c: New test.
+	* gcc.target/aarch64/sve/vect-reduc-bool-9.c: New test.
+
+2025-10-22  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122364
+	* gcc.dg/vect/vect-reduc-chain-5.c: New testcase.
+
+2025-10-22  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122370
+	* gcc.dg/vect/vect-pr122370.c: New testcase.
+
+2025-10-22  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122371
+	* gcc.dg/vect/vect-pr122371.c: New testcase.
+
+2025-10-22  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122365
+	* gcc.dg/vect/vect-reduc-bool-9.c: New testcase.
+
+2025-10-22  Haochen Jiang  <haochen.jiang@intel.com>
+
+	* g++.target/i386/mv16.C: Ditto.
+	* gcc.target/i386/funcspec-56.inc: Handle new march.
+
+2025-10-22  liuhongt  <hongtao.liu@intel.com>
+
+	* gcc.target/i386/pr122320-mask16.c: New test.
+	* gcc.target/i386/pr122320-mask2.c: New test.
+	* gcc.target/i386/pr122320-mask32.c: New test.
+	* gcc.target/i386/pr122320-mask4.c: New test.
+	* gcc.target/i386/pr122320-mask64.c: New test.
+	* gcc.target/i386/pr122320-mask8.c: New test.
+
+2025-10-22  Antoni Boucher  <bouanto@zoho.com>
+
+	* jit.dg/all-non-failing-tests.h: Mention new test.
+	* jit.dg/test-sized-float.c: New test.
+
+2025-10-21  Martin Uecker  <uecker@tugraz.at>
+
+	* gcc.dg/c2y-generic-6.c: New test.
+	* gcc.dg/c2y-generic-7.c: New test.
+
+2025-10-21  Jakub Jelinek  <jakub@redhat.com>
+
+	* g++.dg/ext/is_implicit_lifetime.C: New test.
+
+2025-10-21  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	PR target/122189
+	* gcc.target/arm/mve/intrinsics/vadcq_m_s32.c
+	* gcc.target/arm/mve/intrinsics/vadcq_m_u32.c
+	* gcc.target/arm/mve/intrinsics/vsbcq_m_s32.c
+	* gcc.target/arm/mve/intrinsics/vsbcq_m_u32.c
+
+2025-10-21  Paul-Antoine Arras  <parras@baylibre.com>
+
+	PR c/120180
+	PR fortran/122306
+	* c-c++-common/gomp/imperfect1.c: Adjust dg-error.
+	* c-c++-common/gomp/imperfect4.c: Likewise.
+	* c-c++-common/gomp/pr120180.c: Move to...
+	* c-c++-common/gomp/pr120180-1.c: ...here. Remove dg-error.
+	* g++.dg/gomp/attrs-imperfect1.C: Adjust dg-error.
+	* g++.dg/gomp/attrs-imperfect4.C: Likewise.
+	* gfortran.dg/gomp/declare-variant-2.f90: Adjust dg-error.
+	* gfortran.dg/gomp/declare-variant-20.f90: Likewise.
+	* c-c++-common/gomp/pr120180-2.c: New test.
+	* g++.dg/gomp/pr120180-1.C: New test.
+	* gfortran.dg/gomp/pr120180-1.f90: New test.
+	* gfortran.dg/gomp/pr120180-2.f90: New test.
+	* gfortran.dg/gomp/pr122306-1.f90: New file.
+	* gfortran.dg/gomp/pr122306-2.f90: New file.
+
+2025-10-21  Roger Sayle  <roger@nextmovesoftware.com>
+
+	* gcc.target/i386/sse4_1-stv-10.c: New test case.
+	* gcc.target/i386/sse4_1-stv-11.c: Likewise.
+	* gcc.target/i386/sse4_1-stv-12.c: Likewise.
+
+2025-10-21  Tobias Burnus  <tburnus@baylibre.com>
+
+	* c-c++-common/gomp/assumes-2.c: Change for 'invalid'
+	to 'unknown' change for end directives.
+	* c-c++-common/gomp/begin-assumes-2.c: Likewise.
+	* c-c++-common/gomp/assume-2.c: Likewise. Check 'declare
+	mapper'.
+
+2025-10-21  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/120687
+	* gcc.dg/vect/vect-reduc-chain-4.c: New testcase.
+
+2025-10-21  Avinash Jayakar  <avinashd@linux.ibm.com>
+
+	PR target/104116
+	* gcc.dg/vect/pr104116-ceil-div-2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-ceil-div-pow2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-ceil-div.c: disable vectorization.
+	* gcc.dg/vect/pr104116-ceil-mod-2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-ceil-mod-pow2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-ceil-mod.c: disable vectorization.
+	* gcc.dg/vect/pr104116-ceil-udiv-2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-ceil-udiv-pow2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-ceil-udiv.c: disable vectorization.
+	* gcc.dg/vect/pr104116-ceil-umod-2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-ceil-umod-pow2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-ceil-umod.c: disable vectorization.
+	* gcc.dg/vect/pr104116-floor-div-2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-floor-div-pow2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-floor-div.c: disable vectorization.
+	* gcc.dg/vect/pr104116-floor-mod-2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-floor-mod-pow2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-floor-mod.c: disable vectorization.
+	* gcc.dg/vect/pr104116-round-div-2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-round-div-pow2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-round-div.c: disable vectorization.
+	* gcc.dg/vect/pr104116-round-mod-2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-round-mod-pow2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-round-mod.c: disable vectorization.
+	* gcc.dg/vect/pr104116-round-udiv-2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-round-udiv-pow2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-round-udiv.c: disable vectorization.
+	* gcc.dg/vect/pr104116-round-umod-2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-round-umod-pow2.c: disable vectorization.
+	* gcc.dg/vect/pr104116-round-umod.c: disable vectorization.
+	* gcc.dg/vect/pr104116.h (init_arr): use std idiom, correct
+	indentation.
+	(init_uarr): use std idiom.
+
+2025-10-21  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/95699
+	PR tree-optimization/101024
+	PR tree-optimization/110068
+	* gcc.dg/tree-ssa/pr101024-1.c: New test.
+	* gcc.dg/tree-ssa/pr110068-1.c: New test.
+
+2025-10-20  Jeff Law  <jlaw@ventanamicro.com>
+
+	* gcc.target/riscv/rvv/autovec/reduc/reduc-8.c: Adjust expected output.
+
+2025-10-20  Antoni Boucher  <bouanto@zoho.com>
+
+	* jit.dg/all-non-failing-tests.h: Add test-arrays-u64.c.
+	* jit.dg/test-arrays-u64.c: New test.
+
+2025-10-20  Josef Melcr  <jmelcr02@gmail.com>
+
+	* gcc.dg/ipa/ipcp-cb-spec1.c: Moved to libgomp/testsuite/libgomp.c/.
+	* gcc.dg/ipa/ipcp-cb-spec2.c: Likewise.
+	* gcc.dg/ipa/ipcp-cb1.c: Likewise.
+
+2025-10-20  Antoni Boucher  <bouanto@zoho.com>
+
+	* jit.dg/test-error-array-bounds.c: Fix test.
+
+2025-10-20  Thomas Schwinge  <tschwinge@baylibre.com>
+
+	PR c++/114457
+	* c-c++-common/goacc/kernels-decompose-pr100280-1.c: Skip for
+	c++26 until PR121975 is fixed.
+
+2025-10-20  Eric Botcazou  <ebotcazou@adacore.com>
+
+	* gnat.dg/component_value1.adb: New test.
+
+2025-10-20  Eric Botcazou  <ebotcazou@adacore.com>
+
+	* gnat.dg/use_type3.adb: New test.
+
+2025-10-20  Srinath Parvathaneni  <srinath.parvathaneni@arm.com>
+
+	* gcc.target/aarch64/acle/asm-inlined-sysreg-1.c: New test.
+	* gcc.target/aarch64/acle/asm-inlined-sysreg-2.c: Likewise.
+	* gcc.target/aarch64/acle/rwsr-gated-1.c: Likewise.
+	* gcc.target/aarch64/acle/rwsr-gated-2.c: Likewise.
+	* lib/target-supports.exp
+	(check_effective_target_aarch64_sysreg_guarding_ok): Check
+	assembler support of -menable-sysreg-checking flag.
+
+2025-10-20  Jeff Law  <jlaw@ventanamicro.com>
+
+	* gcc.target/riscv/rvv/vsetvl/imm_switch-6.c: Skip scan-asm test for -O1 too.
+	* gcc.target/riscv/rvv/vsetvl/imm_switch-7.c: Likewise.
+	* gcc.target/riscv/shrink-wrap-1.c: Likewise.  Skip for -Og as well.
+	* gcc.target/riscv/xandes/xandesperf-1.c: Adjust expected output.
+
+2025-10-20  Eric Botcazou  <ebotcazou@adacore.com>
+
+	* gnat.dg/renaming18.adb: New test.
+
+2025-10-20  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/101639
+	PR tree-optimization/103495
+	* gcc.dg/vect/vect-reduc-bool-1.c: New testcase.
+	* gcc.dg/vect/vect-reduc-bool-2.c: Likewise.
+	* gcc.dg/vect/vect-reduc-bool-3.c: Likewise.
+	* gcc.dg/vect/vect-reduc-bool-4.c: Likewise.
+	* gcc.dg/vect/vect-reduc-bool-5.c: Likewise.
+	* gcc.dg/vect/vect-reduc-bool-6.c: Likewise.
+	* gcc.dg/vect/vect-reduc-bool-7.c: Likewise.
+	* gcc.dg/vect/vect-reduc-bool-8.c: Likewise.
+
+2025-10-20  H.J. Lu  <hjl.tools@gmail.com>
+
+	PR target/99930
+	PR target/122323
+	* gcc.target/i386/builtin-copysign-2.c: New test.
+	* gcc.target/i386/builtin-copysign-3.c: Likewise.
+	* gcc.target/i386/builtin-copysign-4.c: Likewise.
+	* gcc.target/i386/builtin-copysign-5.c: Likewise.
+	* gcc.target/i386/builtin-copysign-6.c: Likewise.
+	* gcc.target/i386/builtin-copysign-7.c: Likewise.
+	* gcc.target/i386/builtin-copysign-8a.c: Likewise.
+	* gcc.target/i386/builtin-copysign-8b.c: Likewise.
+	* gcc.target/i386/builtin-fabs-1.c: Likewise.
+	* gcc.target/i386/builtin-fabs-2.c: Likewise.
+
+2025-10-19  Georg-Johann Lay  <avr@gjlay.de>
+
+	PR testsuite/122212
+	PR testsuite/52641
+	* gcc.dg/torture/pr122212.c: Pass 0xffffffff instead of -1u
+	for all bits set in uint32_t.
+
+2025-10-19  Georg-Johann Lay  <avr@gjlay.de>
+
+	PR testsuite/122016
+	PR testsuite/52641
+	* gcc.dg/torture/pr122016.c (strncmp): Use __SIZE_TYPE__ instead
+	of long as type of the size argument.
+
+2025-10-19  Pan Li  <pan2.li@intel.com>
+
+	* gcc.target/riscv/sat/sat_arith.h: Add test helper macros.
+	* gcc.target/riscv/sat/sat_u_mul-7-u16-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-7-u16-from-u32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-7-u16-from-u64.rv32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-7-u16-from-u64.rv64.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-7-u32-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-7-u32-from-u64.rv32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-7-u32-from-u64.rv64.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-7-u64-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-7-u8-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-7-u8-from-u16.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-7-u8-from-u32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-7-u8-from-u64.rv32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-7-u8-from-u64.rv64.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-7-u16-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-7-u16-from-u32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-7-u16-from-u64.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-7-u32-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-7-u32-from-u64.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-7-u64-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-7-u8-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-7-u8-from-u16.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-7-u8-from-u32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-7-u8-from-u64.c: New test.
+
 2025-10-18  Iain Sandoe  <iain@sandoe.co.uk>
 
 	PR c++/119060

@@ -794,6 +794,27 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
  (rdiv @0 (negate @1))
  (rdiv (negate @0) @1))
 
+/* convert semantics of round(x) function to floor(x+0.5).  */
+/* (x-floor(x)) < (ceil(x)-x) ? floor(x) : ceil(x) --> floor(x+0.5).  */
+/* (x-floor(x)) >= (ceil(x)-x) ? ceil(x) : floor(x) --> floor(x+0.5).  */
+/* (ceil(x)-x) > (x-floor(x)) ? floor(x) : ceil(x) --> floor(x+0.5).  */
+/* (ceil(x)-x) <= (x-floor(x)) ? ceil(x) : floor(x) --> floor(x+0.5).  */
+(for op (lt lt lt lt ge ge ge ge)
+     bt (BUILT_IN_FLOORF BUILT_IN_FLOOR BUILT_IN_FLOORL IFN_FLOOR
+	 BUILT_IN_CEILF BUILT_IN_CEIL BUILT_IN_CEILL IFN_CEIL)
+     bf (BUILT_IN_CEILF BUILT_IN_CEIL BUILT_IN_CEILL IFN_CEIL
+	 BUILT_IN_FLOORF BUILT_IN_FLOOR BUILT_IN_FLOORL IFN_FLOOR)
+     floor (BUILT_IN_FLOORF BUILT_IN_FLOOR BUILT_IN_FLOORL IFN_FLOOR
+	    BUILT_IN_FLOORF BUILT_IN_FLOOR BUILT_IN_FLOORL IFN_FLOOR)
+     ceil (BUILT_IN_CEILF BUILT_IN_CEIL BUILT_IN_CEILL IFN_CEIL
+	   BUILT_IN_CEILF BUILT_IN_CEIL BUILT_IN_CEILL IFN_CEIL)
+ (simplify
+  (cond (op:c (minus:s SSA_NAME@0 (floor SSA_NAME@0))
+	      (minus:s (ceil SSA_NAME@0) SSA_NAME@0))
+	(bt SSA_NAME@0) (bf SSA_NAME@0))
+  (if (!HONOR_SIGNED_ZEROS (type) && !HONOR_SIGN_DEPENDENT_ROUNDING (type))
+   (floor (plus @0 { build_real (type, dconsthalf); })))))
+
 (if (flag_unsafe_math_optimizations)
  /* Simplify (C / x op 0.0) to x op 0.0 for C != 0, C != Inf/Nan.
     Since C / x may underflow to zero, do this only for unsafe math.  */
@@ -6572,7 +6593,29 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
      tree c1_type = TREE_TYPE (@3), c2_type = TREE_TYPE (@2);
      enum tree_code code = ERROR_MARK;
 
-     if (INTEGRAL_TYPE_P (from_type)
+     /* `((signed)a) < 0` should be converted back into
+        `a >= (unsigned)SIGNED_TYPE_MIN`.
+	`((signed)a) >= 0` should be converted back into
+	`a < (unsigned)SIGNED_TYPE_MIN`. */
+     if (integer_zerop (@3)
+         && INTEGRAL_TYPE_P (from_type)
+         && (cmp == GE_EXPR || cmp == LT_EXPR)
+	 && TYPE_UNSIGNED (from_type)
+	 && !TYPE_UNSIGNED (c1_type)
+	 && TYPE_PRECISION (from_type) == TYPE_PRECISION (c1_type)
+	 && int_fits_type_p (@2, from_type)
+	 && (types_match (c2_type, from_type)
+	     || (TYPE_PRECISION (c2_type) > TYPE_PRECISION (from_type)
+		 && (TYPE_UNSIGNED (from_type)
+		     || TYPE_SIGN (c2_type) == TYPE_SIGN (from_type)))))
+	{
+	  tree_code ncmp = cmp == GE_EXPR ? LE_EXPR : GT_EXPR;
+	  widest_int c1 = wi::mask<widest_int>(TYPE_PRECISION (type) - 1, 0);
+	  code = minmax_from_comparison (ncmp, @1, c1, wi::to_widest (@2));
+	}
+
+     if (code == ERROR_MARK
+         && INTEGRAL_TYPE_P (from_type)
 	 && int_fits_type_p (@2, from_type)
 	 && (types_match (c1_type, from_type)
 	     || (TYPE_PRECISION (c1_type) > TYPE_PRECISION (from_type)
@@ -6893,6 +6936,35 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
 	  && code == MAX_EXPR
           && integer_nonzerop (fold_build2 (GE_EXPR, boolean_type_node, @3, @4)))
       (max @2 @4))))))
+
+/* Optimize (((signed)a CMP 0) ? max<a,CST2> : CST3 */
+(for cmp    (lt  ge)
+     minmax (min max)
+ (simplify
+  (cond (cmp:c (nop_convert @0) integer_zerop@1) (minmax@2 @0 INTEGER_CST@3) INTEGER_CST@4)
+   (if (!TYPE_UNSIGNED (TREE_TYPE (@1))
+        && TYPE_UNSIGNED (TREE_TYPE (@0)))
+    (with
+     {
+       tree_code code;
+       /* ((signed)a) < 0 -> a > SIGNED_MAX */
+       /* ((signed)a) >= 0 -> a <= SIGNED_MAX */
+       widest_int c1 = wi::mask<widest_int>(TYPE_PRECISION (type) - 1, 0);
+       tree_code ncmp = cmp == GE_EXPR ? LE_EXPR : GT_EXPR;
+       code = minmax_from_comparison (ncmp, @0, c1, wi::to_widest (@4));
+     }
+     (if (ncmp == LE_EXPR
+	  && code == MIN_EXPR
+	  && wi::le_p (wi::to_wide (@3),
+		       wi::to_wide (@4),
+		       TYPE_SIGN (type)))
+      (min @2 @4)
+      (if (ncmp == GT_EXPR
+	   && code == MAX_EXPR
+	   && wi::ge_p (wi::to_wide (@3),
+		        wi::to_wide (@4),
+		        TYPE_SIGN (type)))
+       (max @2 @4)))))))
 
 #if GIMPLE
 /* These patterns should be after min/max detection as simplifications
@@ -11854,6 +11926,59 @@ and,
       }
       (if (full_perm_p)
 	(vec_perm (op@3 @0 @1) @3 @2))))))
+
+/* Fold
+     x = VEC_PERM_EXPR <a, ANY, sel0>;
+     y = VEC_PERM_EXPR <ANY, b, sel0>;
+     c = VEC_PERM_EXPR <x, y, sel1>;
+   into
+     c = VEC_PERM_EXPR <a, b, sel0>;
+   if sel0 combined with sel1 denotes extracting a contiguous subvector from
+   the conceptual concatenated [ a | b ].  */
+(simplify
+ (vec_perm (view_convert? (vec_perm @0 @4 VECTOR_CST@2))
+	   (view_convert? (vec_perm @5 @1 VECTOR_CST@2))
+	   VECTOR_CST@3)
+ (with
+  {
+    bool can_fold = false;
+    unsigned HOST_WIDE_INT nelts;
+    vec_perm_builder builder;
+    if (TYPE_VECTOR_SUBPARTS (type).is_constant (&nelts)
+	&& tree_to_vec_perm_builder (&builder, @2))
+      {
+	/* Set can_fold to true when
+	   - sel0 is a vector of consecutive indices.
+	   - sel1 is composed of two parts of consecutive indices [ ia | ib ],
+	     selecting the elements originally in 'a' and 'b', respectively.  */
+	vec_perm_indices sel0 (builder, 2, VECTOR_CST_NELTS (@2));
+	unsigned int sel0_first_idx = sel0[0].to_constant ();
+	unsigned int elt_size = vector_element_bits (TREE_TYPE (@0));
+	unsigned int ia_size = tree_to_uhwi (TYPE_SIZE (type))
+			       - elt_size * sel0_first_idx;
+	unsigned int ib_start;
+	if (sel0.series_p (0, 1, sel0_first_idx, 1)
+	    && multiple_p (ia_size, vector_element_bits (type), &ib_start)
+	    && tree_to_vec_perm_builder (&builder, @3))
+	  {
+	    /* Check if the ib part contains consecutive indices starting from
+	       'nelts + ib_start'.  */
+	    vec_perm_indices sel1 (builder, 2, VECTOR_CST_NELTS (@3));
+	    can_fold = sel1.series_p (ib_start, 1, nelts + ib_start, 1);
+
+	    /* Check if the ia part contains indices [0 ... ib_start - 1].  */
+	    if (can_fold)
+	      for (unsigned int i = 0; i < ib_start; i++)
+		if (sel1[i].to_constant () != i)
+		  {
+		    can_fold = false;
+		    break;
+		  }
+	  }
+      }
+  }
+  (if (can_fold)
+    (view_convert (vec_perm @0 @1 @2)))))
 
 #if GIMPLE
 /* Simplify (a >> 1) + (b >> 1) + ((a | b) & 1) to .AVG_CEIL (a, b).

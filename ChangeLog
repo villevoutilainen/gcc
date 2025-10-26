@@ -1,3 +1,27 @@
+2025-10-24  Thomas Schwinge  <tschwinge@baylibre.com>
+
+	PR driver/81358
+	* Makefile.tpl: Move generation of dependencies for libatomic out
+	of loop over 'target_modules'.
+	* Makefile.in: Regenerate.
+
+2025-10-22  Josef Melcr  <jmelcr02@gmail.com>
+
+	* MAINTAINERS: Update my contact information.
+
+2025-10-20  Tamar Christina  <tamar.christina@arm.com>
+
+	* MAINTAINERS (Various Maintainers): Add myself for the vectorizer.
+
+2025-10-20  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* .forgejo/workflows/sanity-checks.yaml: New file.
+
+2025-10-20  Richard Biener  <rguenther@suse.de>
+
+	* MAINTAINERS (auto-vectorizer): Change attribution to
+	vectorizer (+ tree-if-conv).
+
 2025-10-15  Basil Milanich  <bmilanich@gmail.com>
 
 	* Makefile.tpl (distclean): Remove extraenous semicolon.

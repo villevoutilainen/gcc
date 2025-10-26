@@ -20607,14 +20607,8 @@ static int
 compare_feature_masks (aarch64_fmv_feature_mask mask1,
 		       aarch64_fmv_feature_mask mask2)
 {
-  int pop1 = popcount_hwi (mask1);
-  int pop2 = popcount_hwi (mask2);
-  if (pop1 > pop2)
-    return 1;
-  if (pop2 > pop1)
-    return -1;
-
   auto diff_mask = mask1 ^ mask2;
+  /* If there is no difference.  */
   if (diff_mask == 0ULL)
     return 0;
   int num_features = ARRAY_SIZE (aarch64_fmv_feature_data);
@@ -21029,45 +21023,16 @@ dispatch_function_versions (tree dispatch_decl,
   unsigned int num_versions = fndecls->length ();
   gcc_assert (num_versions >= 2);
 
-  struct function_version_info
+  int i;
+  tree version_decl;
+  FOR_EACH_VEC_ELT_REVERSE ((*fndecls), i, version_decl)
     {
-      tree version_decl;
-      aarch64_fmv_feature_mask feature_mask;
-    } *function_versions;
-
-  function_versions = (struct function_version_info *)
-    XNEWVEC (struct function_version_info, (num_versions));
-
-  unsigned int actual_versions = 0;
-
-  for (tree version_decl : *fndecls)
-    {
-      aarch64_fmv_feature_mask feature_mask;
-      /* Get attribute string, parse it and find the right features.  */
-      feature_mask = get_feature_mask_for_version (version_decl);
-      function_versions [actual_versions].version_decl = version_decl;
-      function_versions [actual_versions].feature_mask = feature_mask;
-      actual_versions++;
+      aarch64_fmv_feature_mask feature_mask
+	= get_feature_mask_for_version (version_decl);
+      *empty_bb = add_condition_to_bb (dispatch_decl, version_decl,
+				       feature_mask, mask_var, *empty_bb);
     }
 
-  auto compare_feature_version_info = [](const void *p1, const void *p2) {
-    const function_version_info v1 = *(const function_version_info *)p1;
-    const function_version_info v2 = *(const function_version_info *)p2;
-    return - compare_feature_masks (v1.feature_mask, v2.feature_mask);
-  };
-
-  /* Sort the versions according to descending order of dispatch priority.  */
-  qsort (function_versions, actual_versions,
-	 sizeof (struct function_version_info), compare_feature_version_info);
-
-  for (unsigned int i = 0; i < actual_versions; ++i)
-    *empty_bb = add_condition_to_bb (dispatch_decl,
-				     function_versions[i].version_decl,
-				     function_versions[i].feature_mask,
-				     mask_var,
-				     *empty_bb);
-
-  free (function_versions);
   return 0;
 }
 
@@ -21109,6 +21074,9 @@ aarch64_generate_version_dispatcher_body (void *node_p)
 
   auto_vec<tree, 2> fn_ver_vec;
 
+  if (dump_enabled_p ())
+    dump_printf (MSG_NOTE, "Version order for %s:\n", node->dump_asm_name ());
+
   for (versn_info = node_version_info->next; versn_info;
        versn_info = versn_info->next)
     {
@@ -21120,6 +21088,9 @@ aarch64_generate_version_dispatcher_body (void *node_p)
 	 virtual.  */
       if (DECL_VINDEX (versn->decl))
 	sorry ("virtual function multiversioning not supported");
+
+      if (dump_enabled_p ())
+	dump_printf (MSG_NOTE, "%s\n", versn->dump_asm_name ());
 
       fn_ver_vec.safe_push (versn->decl);
     }
@@ -31663,7 +31634,9 @@ aarch64_valid_sysreg_name_p (const char *regname)
   const sysreg_t *sysreg = aarch64_lookup_sysreg_map (regname);
   if (sysreg == NULL)
     return aarch64_is_implem_def_reg (regname);
-  return true;
+
+  return (!aarch64_enable_sysreg_guarding
+	  || ((~aarch64_isa_flags & sysreg->arch_reqs) == 0));
 }
 
 /* Return the generic sysreg specification for a valid system register
@@ -31685,6 +31658,9 @@ aarch64_retrieve_sysreg (const char *regname, bool write_p, bool is128op)
     return NULL;
   if ((write_p && (sysreg->properties & F_REG_READ))
       || (!write_p && (sysreg->properties & F_REG_WRITE)))
+    return NULL;
+  if (aarch64_enable_sysreg_guarding
+      && ((~aarch64_isa_flags & sysreg->arch_reqs) != 0))
     return NULL;
   return sysreg->encoding;
 }

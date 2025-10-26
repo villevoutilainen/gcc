@@ -5754,11 +5754,10 @@ split_DI_SF_DF_const (rtx_insn *insn)
 /* The constant-synthesis optimization (constantsynth for short).
 
    This is an optimization that attempts to replace the assignment of a
-   large integer (and some single-precision floating-point) constant value
-   that won't fit in the immediate field of a single machine instruction
-   with a smaller integer value that does fit, and a group of subsequent
-   instructions that derive the equivalent value through some arithmetic/
-   bitwise operations.
+   large integer constant value that won't fit in the immediate field of
+   a single machine instruction with a smaller integer value that does fit,
+   and a group of subsequent instructions that derive the equivalent value
+   through some arithmetic/bitwise operations.
 
    In Xtensa ISA, when TARGET_CONST16 is not enabled, such large immediate
    assignments are typically treated as references to literal pool entries
@@ -5955,6 +5954,29 @@ constantsynth_method_square (rtx dest, HOST_WIDE_INT v)
   return end_sequence ();
 }
 
+/* A method that generates two machine instructions for assigning a value
+   between -32 and 95, followed by a CONST16 instruction to synthesize a
+   value in the range -2097151 to 6291455.  This method only works when
+   TARGET_CONST16 is enabled.  */
+
+static rtx_insn *
+constantsynth_method_const16 (rtx dest, HOST_WIDE_INT v)
+{
+  rtx x;
+
+  if (!TARGET_CONST16
+      || ! IN_RANGE (v >> 16, -32, 95)
+      || ! IN_RANGE (v & 65535, 1, 65535))
+    return NULL;
+
+  start_sequence ();
+  emit_insn (gen_rtx_SET (dest, GEN_INT (v >> 16)));
+  x = gen_rtx_ASHIFT (SImode, dest, GEN_INT (16));
+  x = gen_rtx_IOR (SImode, x, GEN_INT (v & 65535));
+  emit_insn (gen_rtx_SET (dest, x));
+  return end_sequence ();
+}
+
 /* List of all available synthesis methods.  */
 
 struct constantsynth_method_info
@@ -5969,6 +5991,7 @@ static const struct constantsynth_method_info constantsynth_methods[] =
   { constantsynth_method_16bits, "16bits" },
   { constantsynth_method_32bits, "32bits" },
   { constantsynth_method_square, "square" },
+  { constantsynth_method_const16, "const16" },
 };
 
 /* Information that mediates between synthesis pass 1 and 2.  */
@@ -5980,13 +6003,19 @@ struct constantsynth_info
   hash_map<rtx, int> usage;
   constantsynth_info ()
   {
-    /* To avoid wasting literal pool entries, we use fake references to
-       estimate the costs of an L32R instruction.  */
-    rtx x = gen_rtx_SYMBOL_REF (Pmode, "*.LC-1");
-    SYMBOL_REF_FLAGS (x) |= SYMBOL_FLAG_LOCAL;
-    CONSTANT_POOL_ADDRESS_P (x) = 1;
-    x = gen_const_mem (SImode, x);
-    gcc_assert (constantpool_mem_p (x));
+    rtx x;
+    if (TARGET_CONST16)
+      x = GEN_INT (0x5A5A5A5A);
+    else
+      {
+	/* To avoid wasting literal pool entries, we use fake references
+	   to estimate the costs of an L32R instruction.  */
+	x = gen_rtx_SYMBOL_REF (Pmode, "*.LC-1");
+	SYMBOL_REF_FLAGS (x) |= SYMBOL_FLAG_LOCAL;
+	CONSTANT_POOL_ADDRESS_P (x) = 1;
+	x = gen_const_mem (SImode, x);
+	gcc_assert (constantpool_mem_p (x));
+      }
     costs += make_insn_raw (gen_rtx_SET (gen_rtx_REG (SImode, A9_REG),
 					 x));
   }
@@ -6006,8 +6035,7 @@ constantsynth_pass1 (rtx_insn *insn, constantsynth_info &info)
      number of occurrences of the constant if optimizing for size.  If the
      constant fits in the immediate field, update the insn to re-assign the
      constant.  */
-  if (TARGET_CONST16
-      || GET_CODE (pat = PATTERN (insn)) != SET
+  if (GET_CODE (pat = PATTERN (insn)) != SET
       || ! REG_P (dest = SET_DEST (pat)) || ! GP_REG_P (REGNO (dest))
       || GET_MODE (dest) != SImode
       || ! CONST_INT_P (src = avoid_constant_pool_reference (SET_SRC (pat))))
@@ -6265,8 +6293,7 @@ do_largeconst (void)
 	/* Split DI/SF/DFmode constant assignments into pairs of SImode
 	   ones.  This is also the pre-processing for constantsynth opti-
 	   mization that follows immediately after.  */
-	if (replacing_required)
-	  split_DI_SF_DF_const (insn);
+	split_DI_SF_DF_const (insn);
 
 	/* constantsynth pass 1.
 	   Detect and record large constant assignments within a function.  */

@@ -1135,6 +1135,8 @@ extern int gomp_get_num_devices (void);
 extern bool gomp_target_task_fn (void *);
 extern void gomp_target_rev (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,
 			     int, struct goacc_asyncqueue *);
+extern bool gomp_page_locked_host_alloc (void **, size_t);
+extern void gomp_page_locked_host_free (void *);
 
 /* Splay tree definitions.  */
 typedef struct splay_tree_node_s *splay_tree_node;
@@ -1419,6 +1421,8 @@ struct gomp_device_descr
   __typeof (GOMP_OFFLOAD_unload_image) *unload_image_func;
   __typeof (GOMP_OFFLOAD_alloc) *alloc_func;
   __typeof (GOMP_OFFLOAD_free) *free_func;
+  __typeof (GOMP_OFFLOAD_page_locked_host_alloc) *page_locked_host_alloc_func;
+  __typeof (GOMP_OFFLOAD_page_locked_host_free) *page_locked_host_free_func;
   __typeof (GOMP_OFFLOAD_dev2host) *dev2host_func;
   __typeof (GOMP_OFFLOAD_host2dev) *host2dev_func;
   __typeof (GOMP_OFFLOAD_dev2dev) *dev2dev_func;
@@ -1667,5 +1671,17 @@ gomp_thread_to_pthread_t (struct gomp_thread *thr)
   return gomp_thread_self ();
 }
 #endif
+
+/* simple-allocator.c  */
+
+typedef struct gomp_simple_alloc_context *gomp_simple_alloc_ctx_p;
+
+gomp_simple_alloc_ctx_p gomp_simple_alloc_init_context ();
+void gomp_simple_alloc_register_memory (gomp_simple_alloc_ctx_p ctx,
+				        char *base, size_t size);
+void *gomp_simple_alloc (gomp_simple_alloc_ctx_p ctx, size_t size);
+void gomp_simple_free (gomp_simple_alloc_ctx_p ctx, void *addr);
+void *gomp_simple_realloc (gomp_simple_alloc_ctx_p ctx, void *addr,
+			   size_t newsize);
 
 #endif /* LIBGOMP_H */

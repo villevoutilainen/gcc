@@ -190,7 +190,7 @@
   [(set (match_operand:SI 0 "register_operand" "=a")
 	(match_operator:SI 4 "addsub_operator"
 		[(ashift:SI (match_operand:SI 1 "register_operand" "r")
-			    (match_operand:SI 3 "addsubx_operand" "i"))
+			    (match_operand:SI 3 "addsubx_operand" ""))
 		 (match_operand:SI 2 "register_operand" "r")]))]
   "TARGET_ADDX"
 {
@@ -270,7 +270,7 @@
 
 (define_insn_and_split "*subsi3_from_const"
   [(set (match_operand:SI 0 "register_operand" "=a")
-	(minus:SI (match_operand:SI 1 "const_int_operand" "i")
+	(minus:SI (match_operand:SI 1 "const_int_operand" "")
 		  (match_operand:SI 2 "register_operand" "r")))]
   "xtensa_simm8 (-INTVAL (operands[1]))
    || xtensa_simm8x256 (-INTVAL (operands[1]))"
@@ -545,8 +545,8 @@
         (match_operator:SI 5 "xtensa_sminmax_operator"
 	  [(match_operator:SI 4 "xtensa_sminmax_operator"
 	    [(match_operand:SI 1 "register_operand" "r")
-	     (match_operand:SI 2 "const_int_operand" "i")])
-	   (match_operand:SI 3 "const_int_operand" "i")]))]
+	     (match_operand:SI 2 "const_int_operand" "")])
+	   (match_operand:SI 3 "const_int_operand" "")]))]
   "TARGET_MINMAX && TARGET_CLAMPS
    && INTVAL (operands[2]) + INTVAL (operands[3]) == -1
    && ((GET_CODE (operands[5]) == SMIN && GET_CODE (operands[4]) == SMAX
@@ -747,7 +747,7 @@
 (define_insn_and_split "*andsi3_const_pow2_minus_one"
   [(set (match_operand:SI 0 "register_operand" "=a")
 	(and:SI (match_operand:SI 1 "register_operand" "r")
-		(match_operand:SI 2 "const_int_operand" "i")))]
+		(match_operand:SI 2 "const_int_operand" "")))]
   "IN_RANGE (exact_log2 (INTVAL (operands[2]) + 1), 17, 31)"
   "#"
   "&& 1"
@@ -771,7 +771,7 @@
 (define_insn_and_split "*andsi3_const_negative_pow2"
   [(set (match_operand:SI 0 "register_operand" "=a")
 	(and:SI (match_operand:SI 1 "register_operand" "r")
-		(match_operand:SI 2 "const_int_operand" "i")))]
+		(match_operand:SI 2 "const_int_operand" "")))]
   "IN_RANGE (exact_log2 (-INTVAL (operands[2])), 12, 31)"
   "#"
   "&& 1"
@@ -791,7 +791,7 @@
 (define_insn_and_split "*andsi3_const_shifted_mask"
   [(set (match_operand:SI 0 "register_operand" "=a")
 	(and:SI (match_operand:SI 1 "register_operand" "r")
-		(match_operand:SI 2 "shifted_mask_operand" "i")))]
+		(match_operand:SI 2 "shifted_mask_operand" "")))]
   "! xtensa_simm12b (INTVAL (operands[2]))"
   "#"
   "&& 1"
@@ -868,9 +868,9 @@
 (define_insn_and_split "*splice_bits"
   [(set (match_operand:SI 0 "register_operand" "=a")
 	(ior:SI (and:SI (match_operand:SI 1 "register_operand" "r")
-			(match_operand:SI 3 "const_int_operand" "i"))
+			(match_operand:SI 3 "const_int_operand" ""))
 		(and:SI (match_operand:SI 2 "register_operand" "r")
-			(match_operand:SI 4 "const_int_operand" "i"))))]
+			(match_operand:SI 4 "const_int_operand" ""))))]
 
   "!optimize_debug && optimize
    && INTVAL (operands[3]) + INTVAL (operands[4]) == -1
@@ -997,8 +997,8 @@
 (define_insn "extvsi_internal"
   [(set (match_operand:SI 0 "register_operand" "=a")
 	(sign_extract:SI (match_operand:SI 1 "register_operand" "r")
-			 (match_operand:SI 2 "sext_fldsz_operand" "i")
-			 (match_operand:SI 3 "lsbitnum_operand" "i")))]
+			 (match_operand:SI 2 "sext_fldsz_operand" "")
+			 (match_operand:SI 3 "lsbitnum_operand" "")))]
   "TARGET_SEXT"
 {
   int fldsz = INTVAL (operands[2]);
@@ -1026,8 +1026,8 @@
 (define_insn "extzvsi_internal"
   [(set (match_operand:SI 0 "register_operand" "=a")
 	(zero_extract:SI (match_operand:SI 1 "register_operand" "r")
-			 (match_operand:SI 2 "extui_fldsz_operand" "i")
-			 (match_operand:SI 3 "const_int_operand" "i")))]
+			 (match_operand:SI 2 "extui_fldsz_operand" "")
+			 (match_operand:SI 3 "const_int_operand" "")))]
   ""
 {
   int shift;
@@ -1046,8 +1046,8 @@
   [(set (match_operand:SI 0 "register_operand" "=a")
 	(and:SI (match_operator:SI 4 "logical_shift_operator"
 			[(match_operand:SI 1 "register_operand" "r")
-			 (match_operand:SI 2 "const_int_operand" "i")])
-		(match_operand:SI 3 "const_int_operand" "i")))]
+			 (match_operand:SI 2 "const_int_operand" "")])
+		(match_operand:SI 3 "const_int_operand" "")))]
   "exact_log2 (INTVAL (operands[3])) > 0"
   "#"
   "&& 1"
@@ -1078,8 +1078,8 @@
 	(match_operator:SI 5 "addsub_operator"
 		[(and:SI (match_operator:SI 6 "logical_shift_operator"
 				[(match_operand:SI 1 "register_operand" "r0")
-				 (match_operand:SI 3 "const_int_operand" "i")])
-			 (match_operand:SI 4 "const_int_operand" "i"))
+				 (match_operand:SI 3 "const_int_operand" "")])
+			 (match_operand:SI 4 "const_int_operand" ""))
 		 (match_operand:SI 2 "register_operand" "r")]))]
   "TARGET_ADDX
    && IN_RANGE (exact_log2 (INTVAL (operands[4])), 1, 3)"
@@ -1108,8 +1108,8 @@
 
 (define_insn "insvsi"
   [(set (zero_extract:SI (match_operand:SI 0 "register_operand" "+a")
-			 (match_operand:SI 1 "extui_fldsz_operand" "i")
-			 (match_operand:SI 2 "const_int_operand" "i"))
+			 (match_operand:SI 1 "extui_fldsz_operand" "")
+			 (match_operand:SI 2 "const_int_operand" ""))
 	(match_operand:SI 3 "register_operand" "r"))]
   "TARGET_DEPBITS"
 {
@@ -1263,23 +1263,33 @@
   "xtensa_valid_move (SImode, operands)"
   {@ [cons: =0, 1; attrs: type, length]
      [ D,  M; move , 2] movi.n\t%0, %x1
-     [ D,  D; move , 2] mov.n\t%0, %1
-     [ D,  d; move , 2] ^
-     [ D,  R; load , 2] %v1l32i.n\t%0, %1
-     [ R,  D; store, 2] %v0s32i.n\t%1, %0
-     [ R,  d; store, 2] ^
-     [ a,  r; move , 3] mov\t%0, %1
-     [ q,  r; move , 3] movsp\t%0, %1
      [ a,  I; move , 3] movi\t%0, %x1
-     [ a,  Y; load , 3] movi\t%0, %1
      [ W,  i; move , 6] const16\t%0, %t1\;const16\t%0, %b1
+     [ a,  Y; load , 3] movi\t%0, %1
      [ a,  T; load , 3] %v1l32r\t%0, %1
+     [ q,  r; move , 3] movsp\t%0, %1
+     [ D, Dd; move , 2] mov.n\t%0, %1
+     [ a,  r; move , 3] mov\t%0, %1
+     [ D,  R; load , 2] %v1l32i.n\t%0, %1
      [ a,  U; load , 3] %v1l32i\t%0, %1
+     [ R, Dd; store, 2] %v0s32i.n\t%1, %0
      [ U,  r; store, 3] %v0s32i\t%1, %0
      [*a, *A; rsr  , 3] rsr\t%0, ACCLO
      [*A, *r; wsr  , 3] wsr\t%1, ACCLO
   }
   [(set_attr "mode" "SI")])
+
+(define_insn "*xtensa_const16"
+  [(set (match_operand:SI 0 "register_operand" "=a")
+	(match_operator:SI 3 "xtensa_bit_join_operator"
+		[(ashift:SI (match_operand:SI 1 "register_operand" "0")
+			    (const_int 16))
+		 (match_operand:SI 2 "const_int_operand" "")]))]
+  "TARGET_CONST16 && IN_RANGE (INTVAL (operands[2]), 1, 65535)"
+  "const16\t%0, %2"
+  [(set_attr "type"	"move")
+   (set_attr "mode"	"SI")
+   (set_attr "length"	"3")])
 
 ;; 16-bit Integer moves
 
@@ -1298,11 +1308,11 @@
   "xtensa_valid_move (HImode, operands)"
   {@ [cons: =0, 1; attrs: type, length]
      [ D,  M; move , 2] movi.n\t%0, %x1
-     [ D,  d; move , 2] mov.n\t%0, %1
-     [ a,  r; move , 3] mov\t%0, %1
      [ a,  I; move , 3] movi\t%0, %x1
      [ a,  Y; load , 3] movi\t%0, %1
      [ a,  T; load , 3] %v1l32r\t%0, %1
+     [ D,  d; move , 2] mov.n\t%0, %1
+     [ a,  r; move , 3] mov\t%0, %1
      [ a,  U; load , 3] %v1l16ui\t%0, %1
      [ U,  r; store, 3] %v0s16i\t%1, %0
      [*a, *A; rsr  , 3] rsr\t%0, ACCLO
@@ -1327,9 +1337,9 @@
   "xtensa_valid_move (QImode, operands)"
   {@ [cons: =0, 1; attrs: type, length]
      [ D,  M; move , 2] movi.n\t%0, %x1
+     [ a,  I; move , 3] movi\t%0, %x1
      [ D,  d; move , 2] mov.n\t%0, %1
      [ a,  r; move , 3] mov\t%0, %1
-     [ a,  I; move , 3] movi\t%0, %x1
      [ a,  U; load , 3] %v1l8ui\t%0, %1
      [ U,  r; store, 3] %v0s8i\t%1, %0
      [*a, *A; rsr  , 3] rsr\t%0, ACCLO
@@ -1400,27 +1410,27 @@
     && !(FP_REG_P (xt_true_regnum (operands[0]))
 	 && (constantpool_mem_p (operands[1]) || CONSTANT_P (operands[1]))))"
   {@ [cons: =0, 1; attrs: type, length]
-     [f,  f; farith, 3] mov.s\t%0, %1
-     [f, ^U; fload , 3] %v1lsi\t%0, %1
-     [U,  f; fstore, 3] %v0ssi\t%1, %0
-     [D,  d; move  , 2] mov.n\t%0, %1
+     [W, iF; move  , 6] const16\t%0, %t1\;const16\t%0, %b1
+     [a,  Y; load  , 3] movi\t%0, %y1
      [a,  T; load  , 3] %v1l32r\t%0, %1
-     [D,  R; load  , 2] %v1l32i.n\t%0, %1
-     [R,  d; store , 2] %v0s32i.n\t%1, %0
+     [D,  d; move  , 2] mov.n\t%0, %1
      [a,  r; move  , 3] mov\t%0, %1
+     [f,  f; farith, 3] mov.s\t%0, %1
      [f,  r; farith, 3] wfr\t%0, %1
      [a,  f; farith, 3] rfr\t%0, %1
-     [a,  Y; load  , 3] movi\t%0, %y1
-     [W, iF; move  , 6] const16\t%0, %t1\;const16\t%0, %b1
+     [D,  R; load  , 2] %v1l32i.n\t%0, %1
      [a,  U; load  , 3] %v1l32i\t%0, %1
+     [f,  U; fload , 3] %v1lsi\t%0, %1
+     [R,  d; store , 2] %v0s32i.n\t%1, %0
      [U,  r; store , 3] %v0s32i\t%1, %0
+     [U,  f; fstore, 3] %v0ssi\t%1, %0
   }
   [(set_attr "mode" "SF")])
 
 (define_insn "*lsiu"
   [(set (match_operand:SF 0 "register_operand" "=f")
 	(mem:SF (plus:SI (match_operand:SI 1 "register_operand" "+a")
-			 (match_operand:SI 2 "fpmem_offset_operand" "i"))))
+			 (match_operand:SI 2 "fpmem_offset_operand" ""))))
    (set (match_dup 1)
 	(plus:SI (match_dup 1) (match_dup 2)))]
   "TARGET_HARD_FLOAT && !TARGET_HARD_FLOAT_POSTINC"
@@ -1435,7 +1445,7 @@
 
 (define_insn "*ssiu"
   [(set (mem:SF (plus:SI (match_operand:SI 0 "register_operand" "+a")
-			 (match_operand:SI 1 "fpmem_offset_operand" "i")))
+			 (match_operand:SI 1 "fpmem_offset_operand" "")))
 	(match_operand:SF 2 "register_operand" "f"))
    (set (match_dup 0)
 	(plus:SI (match_dup 0) (match_dup 1)))]
@@ -1454,7 +1464,7 @@
 	(mem:SF (match_operand:SI 1 "register_operand" "+a")))
    (set (match_dup 1)
 	(plus:SI (match_dup 1)
-		 (match_operand:SI 2 "fpmem_offset_operand" "i")))]
+		 (match_operand:SI 2 "fpmem_offset_operand" "")))]
   "TARGET_HARD_FLOAT && TARGET_HARD_FLOAT_POSTINC"
 {
   if (TARGET_SERIALIZE_VOLATILE && volatile_refs_p (PATTERN (insn)))
@@ -1470,7 +1480,7 @@
 	(match_operand:SF 1 "register_operand" "f"))
    (set (match_dup 0)
 	(plus:SI (match_dup 0)
-		 (match_operand:SI 2 "fpmem_offset_operand" "i")))]
+		 (match_operand:SI 2 "fpmem_offset_operand" "")))]
   "TARGET_HARD_FLOAT && TARGET_HARD_FLOAT_POSTINC"
 {
   if (TARGET_SERIALIZE_VOLATILE && volatile_refs_p (PATTERN (insn)))
@@ -1627,7 +1637,7 @@
 		[(match_operand:SI 1 "register_operand" "r")
 		 (and:SI (ashift:SI (match_operand:SI 2 "register_operand" "r")
 				    (const_int 3))
-			 (match_operand:SI 3 "const_int_operand" "i"))]))]
+			 (match_operand:SI 3 "const_int_operand" ""))]))]
   "!optimize_debug && optimize
    && (INTVAL (operands[3]) & 0x1f) == 3 << 3"
   "#"
@@ -1648,7 +1658,7 @@
 		[(match_operand:SI 1 "register_operand" "r")
 		 (neg:SI (and:SI (ashift:SI (match_operand:SI 2 "register_operand" "r")
 					    (const_int 3))
-				 (match_operand:SI 3 "const_int_operand" "i")))]))]
+				 (match_operand:SI 3 "const_int_operand" "")))]))]
   "!optimize_debug && optimize
    && (INTVAL (operands[3]) & 0x1f) == 3 << 3"
   "#"
@@ -1722,10 +1732,10 @@
 	(match_operator:SI 7 "xtensa_bit_join_operator"
 		[(match_operator:SI 5 "logical_shift_operator"
 			[(match_operand:SI 1 "register_operand" "r")
-			 (match_operand:SI 3 "const_int_operand" "i")])
+			 (match_operand:SI 3 "const_int_operand" "")])
 		 (match_operator:SI 6 "logical_shift_operator"
 			[(match_operand:SI 2 "register_operand" "r")
-			 (match_operand:SI 4 "const_int_operand" "i")])]))]
+			 (match_operand:SI 4 "const_int_operand" "")])]))]
   "!optimize_debug && optimize
    && xtensa_shlrd_which_direction (operands[5], operands[6]) != UNKNOWN
    && IN_RANGE (INTVAL (operands[3]), 1, 31)
@@ -1775,7 +1785,7 @@
 			[(match_operand:SI 1 "register_operand" "r")
 			 (and:SI (ashift:SI (match_operand:SI 2 "register_operand" "r")
 					    (const_int 3))
-				 (match_operand:SI 4 "const_int_operand" "i"))])
+				 (match_operand:SI 4 "const_int_operand" ""))])
 		 (match_operator:SI 6 "logical_shift_operator"
 			[(match_operand:SI 3 "register_operand" "r")
 			 (neg:SI (and:SI (ashift:SI (match_dup 2)
@@ -1997,7 +2007,7 @@
   [(set (pc)
 	(if_then_else (match_operator 3 "boolean_operator"
 			[(and:SI (not:SI (match_operand:SI 0 "register_operand" "r"))
-				 (match_operand:SI 1 "const_int_operand" "i"))
+				 (match_operand:SI 1 "const_int_operand" ""))
 			 (const_int 0)])
 		      (label_ref (match_operand 2 "" ""))
 		      (pc)))]
@@ -2050,8 +2060,8 @@
   [(set (pc)
 	(if_then_else (match_operator 4 "boolean_operator"
 			[(and:SI (match_operand:SI 0 "register_operand" "r")
-				 (match_operand:SI 1 "const_int_operand" "i"))
-			 (match_operand:SI 2 "const_int_operand" "i")])
+				 (match_operand:SI 1 "const_int_operand" ""))
+			 (match_operand:SI 2 "const_int_operand" "")])
 		      (label_ref (match_operand 3 "" ""))
 		      (pc)))]
   "IN_RANGE (exact_log2 (INTVAL (operands[1]) + 1), 17, 31)
@@ -2090,8 +2100,8 @@
   [(set (pc)
 	(if_then_else (match_operator 4 "boolean_operator"
 			[(and:SI (match_operand:SI 0 "register_operand" "r")
-				 (match_operand:SI 1 "const_int_operand" "i"))
-			 (match_operand:SI 2 "const_int_operand" "i")])
+				 (match_operand:SI 1 "const_int_operand" ""))
+			 (match_operand:SI 2 "const_int_operand" "")])
 		      (label_ref (match_operand 3 "" ""))
 		      (pc)))]
   "IN_RANGE (exact_log2 (-INTVAL (operands[1])), 1, 30)
@@ -2125,8 +2135,8 @@
   [(set (pc)
 	(if_then_else (match_operator 4 "boolean_operator"
 			[(and:SI (match_operand:SI 0 "register_operand" "r")
-				 (match_operand:SI 1 "shifted_mask_operand" "i"))
-			 (match_operand:SI 2 "const_int_operand" "i")])
+				 (match_operand:SI 1 "shifted_mask_operand" ""))
+			 (match_operand:SI 2 "const_int_operand" "")])
 		      (label_ref (match_operand 3 "" ""))
 		      (pc)))]
   "/* (INTVAL (operands[2]) & ((1 << ctz_hwi (INTVAL (operands[1]))) - 1)) == 0  // can be omitted
@@ -2506,8 +2516,8 @@
 })
 
 (define_insn "call_internal"
-  [(call (mem (match_operand:SI 0 "call_insn_operand" "nir"))
-	 (match_operand 1 "" "i"))]
+  [(call (mem (match_operand:SI 0 "call_insn_operand" "ir"))
+	 (match_operand 1 "" ""))]
   "!SIBLING_CALL_P (insn)"
 {
   return xtensa_emit_call (0, operands);
@@ -2528,8 +2538,8 @@
 
 (define_insn "call_value_internal"
   [(set (match_operand 0 "register_operand" "=a")
-	(call (mem (match_operand:SI 1 "call_insn_operand" "nir"))
-	      (match_operand 2 "" "i")))]
+	(call (mem (match_operand:SI 1 "call_insn_operand" "ir"))
+	      (match_operand 2 "" "")))]
   "!SIBLING_CALL_P (insn)"
 {
   return xtensa_emit_call (1, operands);
@@ -2548,8 +2558,8 @@
 })
 
 (define_insn "sibcall_internal"
-  [(call (mem:SI (match_operand:SI 0 "call_insn_operand" "nic"))
-	 (match_operand 1 "" "i"))]
+  [(call (mem:SI (match_operand:SI 0 "call_insn_operand" "ic"))
+	 (match_operand 1 "" ""))]
   "!TARGET_WINDOWED_ABI && SIBLING_CALL_P (insn)"
 {
   return xtensa_emit_sibcall (0, operands);
@@ -2570,8 +2580,8 @@
 
 (define_insn "sibcall_value_internal"
   [(set (match_operand 0 "register_operand" "=a")
-	(call (mem:SI (match_operand:SI 1 "call_insn_operand" "nic"))
-	      (match_operand 2 "" "i")))]
+	(call (mem:SI (match_operand:SI 1 "call_insn_operand" "ic"))
+	      (match_operand 2 "" "")))]
   "!TARGET_WINDOWED_ABI && SIBLING_CALL_P (insn)"
 {
   return xtensa_emit_sibcall (1, operands);
@@ -2603,7 +2613,7 @@
 
 (define_insn "entry"
   [(set (reg:SI A1_REG)
-	(unspec_volatile:SI [(match_operand:SI 0 "const_int_operand" "i")]
+	(unspec_volatile:SI [(match_operand:SI 0 "const_int_operand" "")]
 			    UNSPECV_ENTRY))]
   ""
   "entry\tsp, %0"
@@ -3169,7 +3179,7 @@
   [(set (match_operand:SI 0 "register_operand" "=a")
 	(match_operator:SI 3 "boolean_operator"
 		[(and:SI (match_operand:SI 1 "register_operand" "r")
-			 (match_operand:SI 2 "const_int_operand" "i"))
+			 (match_operand:SI 2 "const_int_operand" ""))
 		 (const_int 0)]))]
   "IN_RANGE (exact_log2 (INTVAL (operands[2]) + 1), 17, 31)
    || IN_RANGE (exact_log2 (-INTVAL (operands[2])), 1, 30)"
@@ -3227,8 +3237,8 @@
   [(set (pc)
 	(if_then_else (match_operator 4 "alt_ubranch_operator"
 			[(plus:SI (match_operand:SI 0 "register_operand" "r")
-				  (match_operand:SI 1 "const_int_operand" "i"))
-			 (match_operand:SI 2 "const_int_operand" "i")])
+				  (match_operand:SI 1 "const_int_operand" ""))
+			 (match_operand:SI 2 "const_int_operand" "")])
 		      (label_ref (match_operand 3 ""))
 		      (pc)))
    (clobber (match_scratch:SI 5 "=&a"))]

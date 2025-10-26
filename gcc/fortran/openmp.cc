@@ -59,6 +59,7 @@ struct gfc_omp_directive {
    and "nothing".  */
 
 static const struct gfc_omp_directive gfc_omp_directives[] = {
+  /* allocate as alias for allocators is also executive. */
   {"allocate", GFC_OMP_DIR_DECLARATIVE, ST_OMP_ALLOCATE},
   {"allocators", GFC_OMP_DIR_EXECUTABLE, ST_OMP_ALLOCATORS},
   {"assumes", GFC_OMP_DIR_INFORMATIONAL, ST_OMP_ASSUMES},
@@ -68,6 +69,7 @@ static const struct gfc_omp_directive gfc_omp_directives[] = {
   {"cancellation point", GFC_OMP_DIR_EXECUTABLE, ST_OMP_CANCELLATION_POINT},
   {"cancel", GFC_OMP_DIR_EXECUTABLE, ST_OMP_CANCEL},
   {"critical", GFC_OMP_DIR_EXECUTABLE, ST_OMP_CRITICAL},
+  /* {"declare induction", GFC_OMP_DIR_DECLARATIVE, ST_OMP_DECLARE_INDUCTION}, */
   /* {"declare mapper", GFC_OMP_DIR_DECLARATIVE, ST_OMP_DECLARE_MAPPER}, */
   {"declare reduction", GFC_OMP_DIR_DECLARATIVE, ST_OMP_DECLARE_REDUCTION},
   {"declare simd", GFC_OMP_DIR_DECLARATIVE, ST_OMP_DECLARE_SIMD},
@@ -79,7 +81,10 @@ static const struct gfc_omp_directive gfc_omp_directives[] = {
   {"do", GFC_OMP_DIR_EXECUTABLE, ST_OMP_DO},
   /* "error" becomes GFC_OMP_DIR_EXECUTABLE with at(execution) */
   {"error", GFC_OMP_DIR_UTILITY, ST_OMP_ERROR},
+  /* {"flatten", GFC_OMP_DIR_EXECUTABLE, ST_OMP_FLATTEN}, */
   {"flush", GFC_OMP_DIR_EXECUTABLE, ST_OMP_FLUSH},
+  /* {"fuse", GFC_OMP_DIR_EXECUTABLE, ST_OMP_FLUSE}, */
+  /* {"interchange", GFC_OMP_DIR_EXECUTABLE, ST_OMP_INTERCHANGE}, */
   {"interop", GFC_OMP_DIR_EXECUTABLE, ST_OMP_INTEROP},
   {"loop", GFC_OMP_DIR_EXECUTABLE, ST_OMP_LOOP},
   {"masked", GFC_OMP_DIR_EXECUTABLE, ST_OMP_MASKED},
@@ -98,11 +103,15 @@ static const struct gfc_omp_directive gfc_omp_directives[] = {
   {"section", GFC_OMP_DIR_SUBSIDIARY, ST_OMP_SECTION},
   {"simd", GFC_OMP_DIR_EXECUTABLE, ST_OMP_SIMD},
   {"single", GFC_OMP_DIR_EXECUTABLE, ST_OMP_SINGLE},
+  /* {"split", GFC_OMP_DIR_EXECUTABLE, ST_OMP_SPLIT}, */
+  /* {"strip", GFC_OMP_DIR_EXECUTABLE, ST_OMP_STRIP}, */
   {"target data", GFC_OMP_DIR_EXECUTABLE, ST_OMP_TARGET_DATA},
   {"target enter data", GFC_OMP_DIR_EXECUTABLE, ST_OMP_TARGET_ENTER_DATA},
   {"target exit data", GFC_OMP_DIR_EXECUTABLE, ST_OMP_TARGET_EXIT_DATA},
   {"target update", GFC_OMP_DIR_EXECUTABLE, ST_OMP_TARGET_UPDATE},
   {"target", GFC_OMP_DIR_EXECUTABLE, ST_OMP_TARGET},
+  /* {"taskgraph", GFC_OMP_DIR_EXECUTABLE, ST_OMP_TASKGRAPH}, */
+  /* {"task iteration", GFC_OMP_DIR_EXECUTABLE, ST_OMP_TASK_ITERATION}, */
   {"taskloop", GFC_OMP_DIR_EXECUTABLE, ST_OMP_TASKLOOP},
   {"taskwait", GFC_OMP_DIR_EXECUTABLE, ST_OMP_TASKWAIT},
   {"taskyield", GFC_OMP_DIR_EXECUTABLE, ST_OMP_TASKYIELD},
@@ -111,6 +120,7 @@ static const struct gfc_omp_directive gfc_omp_directives[] = {
   {"threadprivate", GFC_OMP_DIR_DECLARATIVE, ST_OMP_THREADPRIVATE},
   {"tile", GFC_OMP_DIR_EXECUTABLE, ST_OMP_TILE},
   {"unroll", GFC_OMP_DIR_EXECUTABLE, ST_OMP_UNROLL},
+  /* {"workdistribute", GFC_OMP_DIR_EXECUTABLE, ST_OMP_WORKDISTRIBUTE}, */
   {"workshare", GFC_OMP_DIR_EXECUTABLE, ST_OMP_WORKSHARE},
 };
 
@@ -6306,9 +6316,8 @@ gfc_match_omp_interop (void)
    trait-score:
      score(score-expression)  */
 
-match
-gfc_match_omp_context_selector (gfc_omp_set_selector *oss,
-				bool metadirective_p)
+static match
+gfc_match_omp_context_selector (gfc_omp_set_selector *oss)
 {
   do
     {
@@ -6372,22 +6381,8 @@ gfc_match_omp_context_selector (gfc_omp_set_selector *oss,
 		  gfc_error ("expected %<(%> at %C");
 		  return MATCH_ERROR;
 		}
-	      if (gfc_match_expr (&os->score) != MATCH_YES
-		  || !gfc_resolve_expr (os->score)
-		  || os->score->ts.type != BT_INTEGER
-		  || os->score->rank != 0)
-		{
-		  gfc_error ("%<score%> argument must be constant integer "
-			     "expression at %C");
-		  return MATCH_ERROR;
-		}
-
-	      if (os->score->expr_type == EXPR_CONSTANT
-		  && mpz_sgn (os->score->value.integer) < 0)
-		{
-		  gfc_error ("%<score%> argument must be non-negative at %C");
-		  return MATCH_ERROR;
-		}
+	      if (gfc_match_expr (&os->score) != MATCH_YES)
+		return MATCH_ERROR;
 
 	      if (gfc_match (" )") != MATCH_YES)
 		{
@@ -6420,6 +6415,8 @@ gfc_match_omp_context_selector (gfc_omp_set_selector *oss,
 		else
 		  {
 		    gfc_error ("expected identifier at %C");
+		    free (otp);
+		    os->properties = nullptr;
 		    return MATCH_ERROR;
 		  }
 	      }
@@ -6440,6 +6437,8 @@ gfc_match_omp_context_selector (gfc_omp_set_selector *oss,
 		    {
 		      gfc_error ("expected identifier or string literal "
 				 "at %C");
+		      free (otp);
+		      os->properties = nullptr;
 		      return MATCH_ERROR;
 		    }
 
@@ -6460,51 +6459,8 @@ gfc_match_omp_context_selector (gfc_omp_set_selector *oss,
 	      if (gfc_match_expr (&otp->expr) != MATCH_YES)
 		{
 		  gfc_error ("expected expression at %C");
-		  return MATCH_ERROR;
-		}
-	      if (!gfc_resolve_expr (otp->expr)
-		  || (property_kind == OMP_TRAIT_PROPERTY_BOOL_EXPR
-		      && otp->expr->ts.type != BT_LOGICAL)
-		  || (property_kind == OMP_TRAIT_PROPERTY_DEV_NUM_EXPR
-		      && otp->expr->ts.type != BT_INTEGER)
-		  || otp->expr->rank != 0
-		  || (!metadirective_p
-		      && otp->expr->expr_type != EXPR_CONSTANT))
-		{
-		  if (metadirective_p)
-		    {
-		      if (property_kind == OMP_TRAIT_PROPERTY_BOOL_EXPR)
-			gfc_error ("property must be a "
-				   "logical expression at %L",
-				   &otp->expr->where);
-		      else
-			gfc_error ("property must be an "
-				   "integer expression at %L",
-				   &otp->expr->where);
-		    }
-		  else
-		    {
-		      if (property_kind == OMP_TRAIT_PROPERTY_BOOL_EXPR)
-			gfc_error ("property must be a constant "
-				   "logical expression at %L",
-				   &otp->expr->where);
-		      else
-			gfc_error ("property must be a constant "
-				   "integer expression at %L",
-				   &otp->expr->where);
-		    }
-		  return MATCH_ERROR;
-		}
-	      /* Device number must be conforming, which includes
-		 omp_initial_device (-1) and omp_invalid_device (-4).  */
-	      if (property_kind == OMP_TRAIT_PROPERTY_DEV_NUM_EXPR
-		  && otp->expr->expr_type == EXPR_CONSTANT
-		  && mpz_sgn (otp->expr->value.integer) < 0
-		  && mpz_cmp_si (otp->expr->value.integer, -1) != 0
-		  && mpz_cmp_si (otp->expr->value.integer, -4) != 0)
-		{
-		  gfc_error ("property must be a conforming device number "
-			     "at %C");
+		  free (otp);
+		  os->properties = nullptr;
 		  return MATCH_ERROR;
 		}
 	      break;
@@ -6580,9 +6536,8 @@ gfc_match_omp_context_selector (gfc_omp_set_selector *oss,
      implementation
      user  */
 
-match
-gfc_match_omp_context_selector_specification (gfc_omp_set_selector **oss_head,
-					      bool metadirective_p)
+static match
+gfc_match_omp_context_selector_specification (gfc_omp_set_selector **oss_head)
 {
   do
     {
@@ -6619,7 +6574,7 @@ gfc_match_omp_context_selector_specification (gfc_omp_set_selector **oss_head,
       oss->code = set;
       *oss_head = oss;
 
-      if (gfc_match_omp_context_selector (oss, metadirective_p) != MATCH_YES)
+      if (gfc_match_omp_context_selector (oss) != MATCH_YES)
 	return MATCH_ERROR;
 
       m = gfc_match (" }");
@@ -6750,8 +6705,7 @@ gfc_match_omp_declare_variant (void)
 	      return MATCH_ERROR;
 	    }
 	  has_match = true;
-	  if (gfc_match_omp_context_selector_specification (&odv->set_selectors,
-							    false)
+	  if (gfc_match_omp_context_selector_specification (&odv->set_selectors)
 	      != MATCH_YES)
 	    return MATCH_ERROR;
 	  if (gfc_match (" )") != MATCH_YES)
@@ -7042,7 +6996,7 @@ match_omp_metadirective (bool begin_p)
 
       if (!default_p)
 	{
-	  if (gfc_match_omp_context_selector_specification (&selectors, true)
+	  if (gfc_match_omp_context_selector_specification (&selectors)
 	      != MATCH_YES)
 	    return MATCH_ERROR;
 
@@ -11418,82 +11372,10 @@ icode_code_error_callback (gfc_code **codep,
       /* Errors have already been diagnosed in match_exit_cycle.  */
       state->errorp = true;
       break;
-    case EXEC_OMP_CRITICAL:
-    case EXEC_OMP_DO:
-    case EXEC_OMP_FLUSH:
-    case EXEC_OMP_MASTER:
-    case EXEC_OMP_ORDERED:
-    case EXEC_OMP_PARALLEL:
-    case EXEC_OMP_PARALLEL_DO:
-    case EXEC_OMP_PARALLEL_SECTIONS:
-    case EXEC_OMP_PARALLEL_WORKSHARE:
-    case EXEC_OMP_SECTIONS:
-    case EXEC_OMP_SINGLE:
-    case EXEC_OMP_WORKSHARE:
-    case EXEC_OMP_ATOMIC:
-    case EXEC_OMP_BARRIER:
-    case EXEC_OMP_END_NOWAIT:
-    case EXEC_OMP_END_SINGLE:
-    case EXEC_OMP_TASK:
-    case EXEC_OMP_TASKWAIT:
-    case EXEC_OMP_TASKYIELD:
-    case EXEC_OMP_CANCEL:
-    case EXEC_OMP_CANCELLATION_POINT:
-    case EXEC_OMP_TASKGROUP:
-    case EXEC_OMP_SIMD:
-    case EXEC_OMP_DO_SIMD:
-    case EXEC_OMP_PARALLEL_DO_SIMD:
-    case EXEC_OMP_TARGET:
-    case EXEC_OMP_TARGET_DATA:
-    case EXEC_OMP_TEAMS:
-    case EXEC_OMP_DISTRIBUTE:
-    case EXEC_OMP_DISTRIBUTE_SIMD:
-    case EXEC_OMP_DISTRIBUTE_PARALLEL_DO:
-    case EXEC_OMP_DISTRIBUTE_PARALLEL_DO_SIMD:
-    case EXEC_OMP_TARGET_TEAMS:
-    case EXEC_OMP_TEAMS_DISTRIBUTE:
-    case EXEC_OMP_TEAMS_DISTRIBUTE_SIMD:
-    case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE:
-    case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE_SIMD:
-    case EXEC_OMP_TEAMS_DISTRIBUTE_PARALLEL_DO:
-    case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE_PARALLEL_DO:
-    case EXEC_OMP_TEAMS_DISTRIBUTE_PARALLEL_DO_SIMD:
-    case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE_PARALLEL_DO_SIMD:
-    case EXEC_OMP_TARGET_UPDATE:
-    case EXEC_OMP_END_CRITICAL:
-    case EXEC_OMP_TARGET_ENTER_DATA:
-    case EXEC_OMP_TARGET_EXIT_DATA:
-    case EXEC_OMP_TARGET_PARALLEL:
-    case EXEC_OMP_TARGET_PARALLEL_DO:
-    case EXEC_OMP_TARGET_PARALLEL_DO_SIMD:
-    case EXEC_OMP_TARGET_SIMD:
-    case EXEC_OMP_TASKLOOP:
-    case EXEC_OMP_TASKLOOP_SIMD:
-    case EXEC_OMP_SCAN:
-    case EXEC_OMP_DEPOBJ:
-    case EXEC_OMP_PARALLEL_MASTER:
-    case EXEC_OMP_PARALLEL_MASTER_TASKLOOP:
-    case EXEC_OMP_PARALLEL_MASTER_TASKLOOP_SIMD:
-    case EXEC_OMP_MASTER_TASKLOOP:
-    case EXEC_OMP_MASTER_TASKLOOP_SIMD:
-    case EXEC_OMP_LOOP:
-    case EXEC_OMP_PARALLEL_LOOP:
-    case EXEC_OMP_TEAMS_LOOP:
-    case EXEC_OMP_TARGET_PARALLEL_LOOP:
-    case EXEC_OMP_TARGET_TEAMS_LOOP:
-    case EXEC_OMP_MASKED:
-    case EXEC_OMP_PARALLEL_MASKED:
-    case EXEC_OMP_PARALLEL_MASKED_TASKLOOP:
-    case EXEC_OMP_PARALLEL_MASKED_TASKLOOP_SIMD:
-    case EXEC_OMP_MASKED_TASKLOOP:
-    case EXEC_OMP_MASKED_TASKLOOP_SIMD:
-    case EXEC_OMP_SCOPE:
-    case EXEC_OMP_ERROR:
-    case EXEC_OMP_DISPATCH:
-      gfc_error ("%s cannot contain OpenMP directive in intervening code "
-		 "at %L",
-		 state->name, &code->loc);
-      state->errorp = true;
+    case EXEC_OMP_ASSUME:
+    case EXEC_OMP_METADIRECTIVE:
+      /* Per OpenMP 6.0, some non-executable directives are allowed in
+	 intervening code.  */
       break;
     case EXEC_CALL:
       /* Per OpenMP 5.2, the "omp_" prefix is reserved, so we don't have to
@@ -11509,7 +11391,14 @@ icode_code_error_callback (gfc_code **codep,
 	}
       break;
     default:
-      break;
+      if (code->op >= EXEC_OMP_FIRST_OPENMP_EXEC
+	  && code->op <= EXEC_OMP_LAST_OPENMP_EXEC)
+	{
+	  gfc_error ("%s cannot contain OpenMP directive in intervening code "
+		     "at %L",
+		     state->name, &code->loc);
+	  state->errorp = true;
+	}
     }
   return 0;
 }
@@ -12261,7 +12150,8 @@ resolve_omp_do (gfc_code *code)
 		     name, i, &code->loc);
 	  goto fail;
 	}
-      else if (next != do_code->block->next || next->next)
+      else if (next != do_code->block->next
+	       || (next->next && next->next->op != EXEC_CONTINUE))
 	/* Imperfectly nested loop found.  */
 	{
 	  /* Only diagnose violation of imperfect nesting constraints once.  */
@@ -12312,6 +12202,118 @@ resolve_omp_do (gfc_code *code)
 				  non_generated_count);
 }
 
+/* Resolve the context selector. In particular, SKIP_P is set to true,
+   the context can never be matched.  */
+
+static void
+gfc_resolve_omp_context_selector (gfc_omp_set_selector *oss,
+				  bool is_metadirective, bool *skip_p)
+{
+  if (skip_p)
+    *skip_p = false;
+  for (gfc_omp_set_selector *set_selector = oss; set_selector;
+       set_selector = set_selector->next)
+    for (gfc_omp_selector *os = set_selector->trait_selectors; os; os = os->next)
+      {
+	if (os->score)
+	  {
+	    if (!gfc_resolve_expr (os->score)
+		|| os->score->ts.type != BT_INTEGER
+		|| os->score->rank != 0)
+	      {
+		gfc_error ("%<score%> argument must be constant integer "
+			   "expression at %L", &os->score->where);
+		gfc_free_expr (os->score);
+		os->score = nullptr;
+	      }
+	    else if (os->score->expr_type == EXPR_CONSTANT
+		     && mpz_sgn (os->score->value.integer) < 0)
+	      {
+		gfc_error ("%<score%> argument must be non-negative at %L",
+			   &os->score->where);
+		gfc_free_expr (os->score);
+		os->score = nullptr;
+	      }
+	  }
+
+	enum omp_tp_type property_kind = omp_ts_map[os->code].tp_type;
+	gfc_omp_trait_property *otp = os->properties;
+
+	if (!otp)
+	  continue;
+	switch (property_kind)
+	  {
+	  case OMP_TRAIT_PROPERTY_DEV_NUM_EXPR:
+	  case OMP_TRAIT_PROPERTY_BOOL_EXPR:
+	    if (!gfc_resolve_expr (otp->expr)
+		|| (property_kind == OMP_TRAIT_PROPERTY_BOOL_EXPR
+		    && otp->expr->ts.type != BT_LOGICAL)
+		|| (property_kind == OMP_TRAIT_PROPERTY_DEV_NUM_EXPR
+		    && otp->expr->ts.type != BT_INTEGER)
+		|| otp->expr->rank != 0
+		|| (!is_metadirective && otp->expr->expr_type != EXPR_CONSTANT))
+	      {
+		if (is_metadirective)
+		  {
+		    if (property_kind == OMP_TRAIT_PROPERTY_BOOL_EXPR)
+		      gfc_error ("property must be a "
+				 "logical expression at %L",
+				 &otp->expr->where);
+		    else
+		      gfc_error ("property must be an "
+				 "integer expression at %L",
+				 &otp->expr->where);
+		  }
+		else
+		  {
+		    if (property_kind == OMP_TRAIT_PROPERTY_BOOL_EXPR)
+		      gfc_error ("property must be a constant "
+				 "logical expression at %L",
+				 &otp->expr->where);
+		    else
+		      gfc_error ("property must be a constant "
+				 "integer expression at %L",
+				 &otp->expr->where);
+		  }
+		/* Prevent later ICEs. */
+		gfc_expr *e;
+		if (property_kind == OMP_TRAIT_PROPERTY_BOOL_EXPR)
+		  e = gfc_get_logical_expr (gfc_default_logical_kind,
+					    &otp->expr->where, true);
+		else
+		  e = gfc_get_int_expr (gfc_default_integer_kind,
+					&otp->expr->where, 0);
+		gfc_free_expr (otp->expr);
+		otp->expr = e;
+		continue;
+	      }
+	    /* Device number must be conforming, which includes
+	       omp_initial_device (-1) and omp_invalid_device (-4).  */
+	    if (property_kind == OMP_TRAIT_PROPERTY_DEV_NUM_EXPR
+		&& otp->expr->expr_type == EXPR_CONSTANT
+		&& mpz_sgn (otp->expr->value.integer) < 0
+		&& mpz_cmp_si (otp->expr->value.integer, -1) != 0
+		&& mpz_cmp_si (otp->expr->value.integer, -4) != 0)
+	      gfc_error ("property must be a conforming device number at %L",
+			 &otp->expr->where);
+	    break;
+	  default:
+	    break;
+	  }
+	/* This only handles one specific case: User condition.
+	   FIXME: Handle more cases by calling omp_context_selector_matches;
+	   unfortunately, we cannot generate the tree here as, e.g., PARM_DECL
+	   backend decl are not available at this stage - but might be used in,
+	   e.g. user conditions. See PR122361.  */
+	if (skip_p && otp
+	    && os->code == OMP_TRAIT_USER_CONDITION
+	    && otp->expr->expr_type == EXPR_CONSTANT
+	    && otp->expr->value.logical == false)
+	  *skip_p = true;
+      }
+}
+
+
 static void
 resolve_omp_metadirective (gfc_code *code, gfc_namespace *ns)
 {
@@ -12319,9 +12321,38 @@ resolve_omp_metadirective (gfc_code *code, gfc_namespace *ns)
 
   while (variant)
     {
+      bool skip;
+      gfc_resolve_omp_context_selector (variant->selectors, true, &skip);
       gfc_code *variant_code = variant->code;
       gfc_resolve_code (variant_code, ns);
-      variant = variant->next;
+      if (skip)
+	{
+	  /* The following should only be true if an error occurred
+	     as the 'otherwise' clause should always match.  */
+	  if (variant == code->ext.omp_variants && !variant->next)
+	    break;
+	  if (variant == code->ext.omp_variants)
+	    code->ext.omp_variants = variant->next;
+	  gfc_omp_variant *tmp = variant;
+	  variant = variant->next;
+	  gfc_free_omp_set_selector_list (tmp->selectors);
+	  free (tmp);
+	}
+      else
+	variant = variant->next;
+    }
+  /* Replace metadirective by its body if only 'nothing' remains.  */
+  if (!code->ext.omp_variants->next && code->ext.omp_variants->stmt == ST_NONE)
+    {
+      gfc_code *next = code->next;
+      gfc_code *inner = code->ext.omp_variants->code;
+      gfc_free_omp_set_selector_list (code->ext.omp_variants->selectors);
+      free (code->ext.omp_variants);
+      *code = *inner;
+      free (inner);
+      while (code->next)
+	code = code->next;
+      code->next = next;
     }
 }
 
@@ -13098,6 +13129,9 @@ gfc_resolve_omp_declare (gfc_namespace *ns)
 
   gfc_omp_declare_variant *odv;
   gfc_omp_namelist *range_begin = NULL;
+
+  for (odv = ns->omp_declare_variant; odv; odv = odv->next)
+    gfc_resolve_omp_context_selector (odv->set_selectors, false, nullptr);
   for (odv = ns->omp_declare_variant; odv; odv = odv->next)
     for (gfc_omp_namelist *n = odv->adjust_args_list; n != NULL; n = n->next)
       {

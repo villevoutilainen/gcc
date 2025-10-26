@@ -1,3 +1,53 @@
+2025-10-25  Harald Anlauf  <anlauf@gmx.de>
+
+	PR fortran/114023
+	* trans-expr.cc (gfc_trans_pointer_assignment): Always set dtype
+	when remapping a pointer.  For unlimited polymorphic LHS use
+	elem_len from RHS.
+	* trans-intrinsic.cc (gfc_conv_is_contiguous_expr): Extend inline
+	generated code for IS_CONTIGUOUS for pointer arguments to detect
+	when span differs from the element size.
+
+2025-10-24  Harald Anlauf  <anlauf@gmx.de>
+
+	PR fortran/122386
+	* dependency.cc (gfc_ref_needs_temporary_p): Revert r16-518.
+	* trans-intrinsic.cc (gfc_conv_intrinsic_transfer): Force temporary
+	for SOURCE not being a simply-contiguous array.
+
+2025-10-24  Paul-Antoine Arras  <parras@baylibre.com>
+
+	PR fortran/121452
+	* openmp.cc (resolve_omp_do): Allow CONTINUE as end statement of a
+	perfectly nested loop.
+
+2025-10-21  Paul-Antoine Arras  <parras@baylibre.com>
+
+	PR c/120180
+	PR fortran/122306
+	* gfortran.h (enum gfc_exec_op): Add EXEC_OMP_FIRST_OPENMP_EXEC and
+	EXEC_OMP_LAST_OPENMP_EXEC.
+	* openmp.cc (gfc_match_omp_context_selector): Remove static. Remove
+	checks on score. Add cleanup. Remove checks on trait properties.
+	(gfc_match_omp_context_selector_specification): Remove static. Adjust
+	calls to gfc_match_omp_context_selector.
+	(gfc_match_omp_declare_variant): Adjust call to
+	gfc_match_omp_context_selector_specification.
+	(match_omp_metadirective): Likewise.
+	(icode_code_error_callback): Reject all statements except
+	'assume' and 'metadirective'.
+	(gfc_resolve_omp_context_selector): New function.
+	(resolve_omp_metadirective): Skip metadirectives which context selectors
+	can be statically resolved to false. Replace metadirective by its body
+	if only 'nothing' remains.
+	(gfc_resolve_omp_declare): Call gfc_resolve_omp_context_selector for
+	each variant.
+
+2025-10-21  Tobias Burnus  <tburnus@baylibre.com>
+
+	* openmp.cc (gfc_omp_directive): Add comment to 'allocate';
+	add 6.x unimplemented directives as comment-out entries.
+
 2025-10-18  Yuao Ma  <c8ef@outlook.com>
 
 	* resolve.cc (resolve_conditional): Allow character in cond-expr.

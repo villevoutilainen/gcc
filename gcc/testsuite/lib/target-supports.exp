@@ -336,10 +336,11 @@ proc check_weak_available { } {
 	return 0
     }
 
-    # VxWorks hardly supports it (vx7 RTPs only)
-
+    # VxWorks supports it only since VxWorks 7 (assumed >= r2) for RTPs.
+    # Kernel mode works fine as well for our testsuite's purposes.
+ 
     if { [istarget *-*-vxworks*] } {
-	return 0
+	return [istarget *-*-vxworks7*]
     }
 
     # ELF and ECOFF support it. a.out does with gas/gld but may also with
@@ -12571,6 +12572,16 @@ foreach { aarch64_ext } $exts_sve2 {
 	  }
 	}
     }]
+}
+
+proc check_effective_target_aarch64_sysreg_guarding_ok { } {
+    if { [istarget aarch64*-*-*] && [check_effective_target_elf] } {
+	return [check_no_compiler_messages aarch64_assembler object {
+	    __asm__ ("msr\ts3_3_c9_c13_4, x0");
+	} "-menable-sysreg-checking"]
+    } else {
+	return 0
+    }
 }
 
 proc check_effective_target_aarch64_asm_sve2p1_ok { } {

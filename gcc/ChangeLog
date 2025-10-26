@@ -1,3 +1,468 @@
+2025-10-25  Sam James  <sam@gentoo.org>
+
+	* doc/extend.texi (nocf_check): Fix syntax errors in example.
+
+2025-10-25  Jiahao Xu  <xujiahao@loongson.cn>
+
+	* config/loongarch/lasx.md (vec_extract<mode><lasxhalf>): New define_expand.
+	(vec_extract_lo_<mode>): New define_insn_and_split.
+	(vec_extract_hi_<mode>): New define_insn.
+	* config/loongarch/loongarch-protos.h (loongarch_check_vect_par_cnst_half)
+	New function prototype.
+	* config/loongarch/loongarch.cc (loongarch_split_reduction):
+	Implement TARGET_VECTORIZE_SPLIT_REDUCTION.
+	(loongarch_check_vect_par_cnst_half): New function.
+	* config/loongarch/predicates.md
+	(vect_par_cnst_low_half): New predicate.
+	(vect_par_cnst_high_half): New predicate.
+
+2025-10-24  Andrew MacLeod  <amacleod@redhat.com>
+
+	PR tree-optimization/114025
+	* gimple-range-fold.cc (fold_using_range::condexpr_adjust): Handle
+	the same ssa_name in the condition and the COND_EXPR better.
+
+2025-10-24  Andrew MacLeod  <amacleod@redhat.com>
+
+	* range-op.cc (operator_bitwise_and::wi_fold): Split signed
+	operations crossing zero into 2 operations.
+
+2025-10-24  Andrew MacLeod  <amacleod@redhat.com>
+
+	PR tree-optimization/118254
+	PR tree-optimization/114331
+	* range-op.cc (operator_cast::fold_range): When VARYING is
+	reached, update the bitmask if we reach VARYING.
+	(operator_cast::op1_range): For truncating casts, create a
+	bitmask bit in LHS.
+
+2025-10-24  Takayuki 'January June' Suwa  <jjsuwa_sys3175@yahoo.co.jp>
+
+	* config/xtensa/xtensa.md (call_internal, call_value_internal,
+	sibcall_internal, sibcall_value_internal): Remove 'n'-constraint.
+
+2025-10-24  Takayuki 'January June' Suwa  <jjsuwa_sys3175@yahoo.co.jp>
+
+	* config/xtensa/xtensa.md (*addsubx, *subsi3_from_const,
+	*xtensa_clamps, *andsi3_const_pow2_minus_one,
+	*andsi3_const_negative_pow2, *andsi3_const_shifted_mask,
+	*splice_bits, extvsi_internal, extzvsi_internal,
+	*extzvsi-1bit_ashlsi3, *extzvsi-1bit_addsubx, insvsi, *lsiu, *ssiu,
+	*lsip, *ssip, *shift_per_byte_omit_AND_0, *shift_per_byte_omit_AND_1,
+	*shlrd_const, *shlrd_per_byte_omit_AND, *masktrue_const_bitcmpl,
+	*masktrue_const_pow2_minus_one, *masktrue_const_negative_pow2,
+	*masktrue_const_shifted_mask, call_internal, call_value_internal,
+	sibcall_internal, sibcall_value_internal, entry,
+	*eqne_zero_masked_bits, *eqne_in_range): Remove 'i'-constraint.
+
+2025-10-24  Josef Melcr  <jmelcr02@gmail.com>
+
+	PR middle-end/122392
+	* attr-callback.cc (callback_build_attr): Remove erroneous
+	annotation.
+
+2025-10-24  Richard Biener  <rguenther@suse.de>
+
+	* tree-vect-loop.cc (vectorizable_reduction): SLP-ify reduction
+	operation processing a bit more.
+
+2025-10-24  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122406
+	* tree-vect-slp.cc (vect_analyze_slp_reduc_chain): Create
+	the SLP nodes for the conversions around the reduction
+	operation if required.
+
+2025-10-24  Paul-Antoine Arras  <parras@baylibre.com>
+
+	PR fortran/121452
+	* omp-low.cc (check_omp_nesting_restrictions): Accept an
+	OMP_STRUCTURED_BLOCK in a collapsed simd region and in an ordered loop.
+
+2025-10-24  Pengfei Li  <Pengfei.Li2@arm.com>
+
+	* match.pd: Fold VEC_PERM_EXPR chains implementing vector
+	concat-and-extract.
+
+2025-10-24  Olivier Hainque  <hainque@adacore.com>
+
+	* config/rs6000/vxworks.h (SET_CMODEL): Undefine before
+	(re)defining.
+
+2025-10-23  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	* match.pd (`(type1)x CMP CST1 ? (type2)x : CST2`): Better handling
+	of `((signed)x) < 0`.
+
+2025-10-23  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/101024
+	* tree-ssa-phiopt.cc (match_simplify_replacement): Special
+	case fp `a CMP b ? a : b` when not creating a min/max.
+	(strip_bit_not): Remove.
+	(invert_minmax_code): Remove.
+	(minmax_replacement): Remove.
+	(pass_phiopt::execute): Update pass comment.
+	Don't call minmax_replacement.
+
+2025-10-23  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/101024
+	* fold-const.cc (minmax_from_comparison): New version that takes widest_int
+	instead of tree.
+	(minmax_from_comparison):  Call minmax_from_comparison for integer cst case.
+	* fold-const.h (minmax_from_comparison): New declaration.
+	* match.pd (`((signed)a </>= 0) ? min/max (a, c) : b`): New pattern.
+
+2025-10-23  Alfie Richards  <alfie.richards@arm.com>
+
+	* config/aarch64/aarch64-c.cc (aarch64_update_cpp_builtins): Add
+	__HAVE_FUNCTION_MULTI_VERSIONING macro.
+
+2025-10-23  Alfie Richards  <alfie.richards@arm.com>
+
+	* config/aarch64/aarch64.cc (dispatch_function_versions): Remove
+	unnecessary sorting and data structure.
+
+2025-10-23  Alfie Richards  <alfie.richards@arm.com>
+
+	PR target/122190
+	* config/aarch64/aarch64.cc (compare_feature_masks): Fix version rules.
+
+2025-10-23  Alfie Richards  <alfie.richards@arm.com>
+
+	* config/aarch64/aarch64.cc (aarch64_generate_version_dispatcher_body):
+	Dump function versions and the ordering.
+
+2025-10-23  zhaozhou  <zhaozhou@loongson.cn>
+
+	* match.pd: Add new pattern for round.
+
+2025-10-23  Richard Biener  <rguenther@suse.de>
+
+	* tree-vectorizer.h (_loop_vec_info::slp_unrolling_factor): Remove.
+	(LOOP_VINFO_SLP_UNROLLING_FACTOR): Likewise.
+	* tree-vect-loop.cc (_loop_vec_info::_loop_vec_info): Adjust.
+	(vect_analyze_loop_2): Likewise.
+	* tree-vect-slp.cc (vect_make_slp_decision): Set
+	LOOP_VINFO_VECT_FACTOR directly.
+
+2025-10-23  Richard Biener  <rguenther@suse.de>
+
+	* tree-vect-loop.cc (vect_analyze_loop_2): Move vect_optimize_slp
+	after applying suggested_unroll_factor.
+
+2025-10-23  Richard Biener  <rguenther@suse.de>
+
+	* tree-vect-loop.cc (vect_analyze_loop_2): Deal with NULL
+	element in SLP_TREE_SCALAR_STMTS.
+
+2025-10-23  liuhongt  <hongtao.liu@intel.com>
+
+	PR target/101639
+	* config/i386/sse.md
+	(VI_AVX): New mode iterator.
+	(VI_AVX_CMP): Ditto.
+	(ssebytemode): Add V16HI, V32QI, V16QI.
+	(reduc_sbool_and_scal_<mode>): New expander.
+	(reduc_sbool_ior_scal_<mode>): Ditto.
+	(reduc_sbool_xor_scal_<mode>): Ditto.
+	(*eq<mode>3_2_negate): New pre_reload splitter.
+	(*ptest<mode>_ccz): Ditto.
+
+2025-10-23  liuhongt  <hongtao.liu@intel.com>
+
+	PR target/101639
+	* config/i386/sse.md
+	(reduc_sbool_and_scal_<mode>): New expander.
+	(reduc_sbool_ior_scal_<mode>): Ditto.
+	(reduc_sbool_xor_scal_<mode>): Ditto.
+
+2025-10-22  H.J. Lu  <hjl.tools@gmail.com>
+
+	* config/i386/i386-expand.cc (ix86_expand_set_or_cpymem): Use
+	HOST_WIDE_INT_0U and HOST_WIDE_INT_M1U to initialize unsigned
+	HOST_WIDE_INT.
+
+2025-10-22  Tamar Christina  <tamar.christina@arm.com>
+
+	* config/aarch64/aarch64-simd.md (reduc_sbool_and_scal_<mode>,
+	reduc_sbool_ior_scal_<mode>, reduc_sbool_xor_scal_<mode>): Use SVE if
+	available.
+	* config/aarch64/aarch64-sve.md (*cmp<cmp_op><mode>_ptest): Rename ...
+	(@aarch64_pred_cmp<cmp_op><mode>_ptest): ... To this.
+	(reduc_sbool_xor_scal_<mode>): Rename ...
+	(@reduc_sbool_xor_scal_<mode>): ... To this.
+
+2025-10-22  Tamar Christina  <tamar.christina@arm.com>
+
+	* config/aarch64/aarch64-simd.md (reduc_sbool_and_scal_<mode>,
+	reduc_sbool_ior_scal_<mode>, reduc_sbool_xor_scal_<mode>): New.
+	* config/aarch64/iterators.md (VALLI): New.
+
+2025-10-22  Tamar Christina  <tamar.christina@arm.com>
+
+	* config/aarch64/aarch64-sve.md (reduc_sbool_and_scal_<mode>,
+	reduc_sbool_ior_scal_<mode>, reduc_sbool_xor_scal_<mode>): New.
+
+2025-10-22  Tamar Christina  <tamar.christina@arm.com>
+
+	* tree-vect-loop.cc (vectorizable_reduction): Don't always require
+	IFN_VEC_SHL_INSERT when using reduc sbool optabs.
+
+2025-10-22  Srinath Parvathaneni  <srinath.parvathaneni@arm.com>
+
+	* config/aarch64/aarch64.opt.urls: Regenerate.
+
+2025-10-22  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122364
+	* tree-vect-slp.cc (vect_analyze_slp_reduc_chain): Re-try
+	linearization on a conversion source.
+
+2025-10-22  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122370
+	* tree-vect-loop.cc (vect_create_epilog_for_reduction):
+	Also update compute_vectype when demoting masks to an
+	integer vector.
+
+2025-10-22  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122371
+	* tree-vect-loop.cc (vectorize_fold_left_reduction): Get
+	to the scalar def to replace via the scalar PHI backedge def.
+	* tree-vect-slp.cc (vect_analyze_slp_reduc_chain): Do not
+	re-associate to for a reduction chain if a fold-left
+	reduction is required.
+
+2025-10-22  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/122365
+	* tree-vect-loop.cc (vect_create_epilog_for_reduction):
+	Convert all inputs.  Use the proper vector element sizes
+	for the elementwise reduction.
+
+2025-10-22  Haochen Jiang  <haochen.jiang@intel.com>
+
+	* common/config/i386/cpuinfo.h
+	(get_intel_cpu): Handle Nova Lake.
+	* common/config/i386/i386-common.cc (processor_name):
+	Add Nova Lake.
+	(processor_alias_table): Ditto.
+	* common/config/i386/i386-cpuinfo.h (enum processor_types):
+	Add INTEL_COREI7_NOVALAKE.
+	* config.gcc: Add -march=novalake.
+	* config/i386/driver-i386.cc (host_detect_local_cpu): Handle
+	novalake.
+	* config/i386/i386-c.cc (ix86_target_macros_internal): Ditto.
+	* config/i386/i386-options.cc (processor_cost_table): Ditto.
+	(m_NOVALAKE): New.
+	(m_CORE_HYBRID): Add novalake.
+	* config/i386/i386.h (enum processor_type): Ditto.
+	* doc/extend.texi: Ditto.
+	* doc/invoke.texi: Ditto.
+
+2025-10-22  Haochen Jiang  <haochen.jiang@intel.com>
+
+	* config/i386/driver-i386.cc (host_detect_local_cpu): Correct
+	the logic for unknown model number cpu guess value.
+
+2025-10-22  liuhongt  <hongtao.liu@intel.com>
+
+	PR target/122320
+	* config/i386/sse.md (*<avx512>_cmp<mode>3_dup_op): New define_insn_and_split.
+
+2025-10-22  Antoni Boucher  <bouanto@zoho.com>
+
+	* config/i386/i386-jit.cc: Mark new float types as supported.
+
+2025-10-21  Antoni Boucher  <bouanto@zoho.com>
+
+	* config.gcc (jit_target_objs): Don't set this variable since
+	the object files don't exist.
+
+2025-10-21  Roger Sayle  <roger@nextmovesoftware.com>
+
+	* config/i386/i386-features.cc (timode_concatdi_p): New
+	function to recognize the various variants of *concatditi3_[1-7].
+	(scalar_chain::add_insn): Like VEC_SELECT, ZERO_EXTEND and
+	timode_concatdi_p instructions don't require their input
+	operands to be converted (to TImode).
+	(timode_scalar_chain::compute_convert_gain): Split/clone XOR and
+	IOR cases from AND case, to handle timode_concatdi_p costs.
+	<case PLUS>: Handle timode_concatdi_p conversion costs.
+	<case ZERO_EXTEND>: Provide costs of DImode to TImode extension.
+	(timode_convert_concatdi): Helper function to transform
+	a *concatditi3 instruction into a vec_concatv2di instruction.
+	(timode_scalar_chain::convert_insn): Split/clone XOR and IOR
+	cases from ANS case, to handle timode_concatdi_p using the new
+	timode_convert_concatdi helper function.
+	<case ZERO_EXTEND>: Convert zero_extendditi2 to *vec_concatv2di_0.
+	<case PLUS>: Handle timode_concatdi_p using the new
+	timode_convert_concatdi helper function.
+	(timode_scalar_to_vector_candidate_p): Support timode_concatdi_p
+	instructions in IOR, XOR and PLUS cases.
+	<case ZERO_EXTEND>: Consider zero extension of a register from
+	DImode to TImode to be a candidate.
+
+2025-10-21  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/120687
+	* tree-vect-slp.cc (vect_analyze_slp_reduc_chain): When
+	there's no natural reduction chain see if vect_slp_linearize_chain
+	can recover one and built the SLP instance manually in that
+	case.
+	(vect_schedule_slp): Deal with NULL lanes when looking for
+	stores to remove.
+	* tree-vect-loop.cc (vect_transform_cycle_phi): Dump when we
+	are successfully transforming a reduction chain.
+
+2025-10-21  Richard Biener  <rguenther@suse.de>
+
+	* tree-vect-loop.cc (vect_create_partial_epilog): Pun back
+	to the requested type if necessary.
+
+2025-10-21  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/95699
+	PR tree-optimization/101024
+	PR tree-optimization/110068
+	* match.pd (`(type1)x CMP CST1 ? (type2)x : CST2`): Treat
+	`(signed)x </>= 0` as `x >=/< SIGNED_TYPE_MIN`
+
+2025-10-21  Olivier Hainque  <hainque@adacore.com>
+
+	* config/rs6000/vxworks.h (ASM_PREFERRED_EH_DATA_FORMAT):
+	Redefine.
+
+2025-10-21  Olivier Hainque  <hainque@adacore.com>
+
+	* config/vxworks.h (VXWORKS_ADDITIONAL_CPP_SPEC):
+	Remove guard on -fself-tests and replace %:getenv(VSB_DIR) by
+	sysroot references.
+
+2025-10-20  Josef Melcr  <jmelcr02@gmail.com>
+
+	* ipa-fnsummary.cc (redirect_to_unreachable): Purge callback
+	edges when redirecting the carrying edge.
+	(analyze_function_body): Fix typo.
+
+2025-10-20  Svante Signell  <svante.signell@gmail.com>
+
+	PR go/104290
+	* config/gnu.h (OPTION_GLIBC_P, OPTION_GLIBC): Define.
+
+2025-10-20  Takayuki 'January June' Suwa  <jjsuwa_sys3175@yahoo.co.jp>
+
+	* config/xtensa/constraints.md (R, U):
+	Change define_memory_constraint to define_special_memory_constraint.
+	* config/xtensa/xtensa.md
+	(movsi_internal, movhi_internal, movqi_internal):
+	Rearrange their alternatives in the order of constant assignment, register-
+	register move, load, store and special.  And also consolidate overlapping
+	alternatives.
+	(movsf_internal): Rearrange the alternatives as above, and remove the '^'
+	alternative character which is no longer needed.
+
+2025-10-20  Takayuki 'January June' Suwa  <jjsuwa_sys3175@yahoo.co.jp>
+
+	* config/xtensa/xtensa.cc
+	(constantsynth_method_const16): New.
+	(constantsynth_methods): Append constantsynth_method_const16().
+	(constantsynth_info): Add cost calculation for full-word constant
+	assignment when TARGET_CONST16 is enabled.
+	(constantsynth_pass1): Change it so that it works regardless of
+	TARGET_CONST16.
+	* config/xtensa/xtensa.md (*xtensa_const16): New.
+
+2025-10-20  Takayuki 'January June' Suwa  <jjsuwa_sys3175@yahoo.co.jp>
+
+	* config/xtensa/xtensa.cc (do_largeconst):
+	Change split_DI_SF_DF_const() to be called unconditionally.
+
+2025-10-20  Olivier Hainque  <hainque@adacore.com>
+
+	* config.gcc (powerpc*-wrs-vxworks7r*): Add linux-protos.h
+	to tm_p_file.
+
+2025-10-20  Olivier Hainque  <hainque@adacore.com>
+
+	* config/vxworks.h (VXWORKS_OS_CPP_BUILTINS): Only
+	builtin_define TOOL and TOOL_FAMILY for !TARGET_VXWORKS7.
+	Augment comment on VXWORKS_PERSONALITY.
+	* config/vxworks/vxworks-predef.h: Infer TOOL and TOOL_FAMILY
+	from the VSB autoconf.h	when we have one, determined by the presence
+	of a _VSB_CONFIG_FILE definition.
+
+2025-10-20  Srinath Parvathaneni  <srinath.parvathaneni@arm.com>
+
+	* config/aarch64/aarch64-elf.h (ASM_SPEC): Update the macro.
+	* config/aarch64/aarch64.cc (aarch64_valid_sysreg_name_p):
+	Add feature check condition.
+	(aarch64_retrieve_sysreg): Likewise.
+	* config/aarch64/aarch64.opt (menable-sysreg-checking):
+	Define new flag.
+	* doc/invoke.texi (menable-sysreg-checking): Document new flag.
+
+2025-10-20  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/121631
+	* tree-vect-loop.cc (vect_create_epilog_for_reduction):
+	When the reduction operation invokes UB on signed overflow
+	make sure to perform operations with it on an unsigned type.
+
+2025-10-20  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/101639
+	PR tree-optimization/103495
+	* tree-vectorizer.h (vect_reduc_info_s): Add reduc_type_for_mask.
+	(VECT_REDUC_INFO_VECTYPE_FOR_MASK): New.
+	* tree-vect-patterns.cc (vect_determine_mask_precision):
+	Return whether the mask precision changed.
+	(vect_determine_precisions): Iterate mask precision computation
+	for loop vectorization.
+	* tree-vect-loop.cc (get_initial_defs_for_reduction): Properly
+	convert non-mask initial values to a mask initial def for
+	the reduction.
+	(sbool_reduction_fn_for_fn): New function.
+	(vect_create_epilog_for_reduction): For a mask input convert
+	it to the vector type analysis decided to use.  Use a regular
+	conversion for the final convert to the scalar code type.
+	(vectorizable_reduction): Support mask reductions.  Verify
+	we can compute a data vector from the mask result or a direct
+	maks reduction is provided by the target.
+
+2025-10-20  Richard Biener  <rguenther@suse.de>
+
+	* doc/md.texi (reduc_sbool_{and,ior,xor}_scal_<mode>): Document.
+	* optabs.def (reduc_sbool_and_scal_optab,
+	reduc_sbool_ior_scal_optab, reduc_sbool_xor_scal_optab): New.
+	* internal-fn.def (REDUC_SBOOL_AND, REDUC_SBOOL_IOR,
+	REDUC_SBOO_XOR): Likewise.
+	* internal-fn.cc (reduc_sbool_direct): New initializer.
+	(expand_reduc_sbool_optab_fn): New expander.
+	(direct_reduc_sbool_optab_supported_p): New.
+
+2025-10-20  H.J. Lu  <hjl.tools@gmail.com>
+
+	PR target/99930
+	PR target/122323
+	* config/i386/i386-expand.cc (ix86_expand_copysign): Swap
+	operands[1] with operands[2].  Optimize copysign (x, const_double)
+	instead of copysign (const_double, x).
+	* config/i386/i386.md (copysign<mode>3): Swap constraints for
+	operands[1] and operands[2].
+
+2025-10-19  Georg-Johann Lay  <avr@gjlay.de>
+
+	* config/avr/avr.cc (avr_nonzero_bits_lsr_operands_p): Also
+	handle PLUS.
+	* config/avr/avr.md (pixaop): New code iterator for PLUS,
+	IOR, XOR, AND.
+	(nzb=1 insns): Use pixaop instead of bitop code iterator.
+	Handle PLUS in outputs.
+
 2025-10-18  Mark Wielaard  <mark@klomp.org>
 
 	* common.opt.urls: Regenerate.

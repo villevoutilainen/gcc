@@ -24,6 +24,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "jit-common.h"
 #include "jit-logging.h"
 #include "jit-target.h"
+#include "diagnostic-core.h"
 #include "libgccjit.h"
 
 #include <string>
@@ -105,7 +106,7 @@ public:
   type *
   new_array_type (location *loc,
 		  type *element_type,
-		  int num_elements);
+		  uint64_t num_elements);
 
   field *
   new_field (location *loc,
@@ -270,6 +271,12 @@ public:
   void
   set_output_ident (const char *output_ident);
 
+  bool
+  get_abort_on_unsupported_target_builtin ();
+
+  void
+  set_abort_on_unsupported_target_builtin ();
+
   void
   set_int_option (enum gcc_jit_int_option opt,
 		  int value);
@@ -340,12 +347,19 @@ public:
   }
 
   void
+  add_diagnostic (location *loc, enum diagnostics::kind diagnostic_kind,
+		  const char *fmt, ...)
+      GNU_PRINTF (4, 5);
+
+  void
   add_error (location *loc, const char *fmt, ...)
       GNU_PRINTF(3, 4);
 
   void
-  add_error_va (location *loc, const char *fmt, va_list ap)
-      GNU_PRINTF(3, 0);
+  add_error_va (location *loc, enum diagnostics::kind diagnostic_kind,
+		const char *fmt,
+		va_list ap)
+      GNU_PRINTF (4, 0);
 
   const char *
   get_first_error () const;
@@ -424,6 +438,7 @@ private:
   type *m_FILE_type;
 
   bool m_populated_target_info = false;
+  bool m_abort_on_unsupported_target_builtin = false;
 
   builtins_manager *m_builtins_manager; // lazily created
 
@@ -1030,7 +1045,7 @@ class array_type : public type
   array_type (context *ctxt,
 	      location *loc,
 	      type *element_type,
-	      int num_elements)
+	      uint64_t num_elements)
   : type (ctxt),
     m_loc (loc),
     m_element_type (element_type),
@@ -1063,7 +1078,7 @@ class array_type : public type
   bool is_bool () const final override { return false; }
   type *is_pointer () final override { return NULL; }
   type *is_array () final override { return m_element_type; }
-  int num_elements () { return m_num_elements; }
+  uint64_t num_elements () { return m_num_elements; }
   bool is_signed () const final override { return false; }
 
   void replay_into (replayer *) final override;
@@ -1075,7 +1090,7 @@ class array_type : public type
  private:
   location *m_loc;
   type *m_element_type;
-  int m_num_elements;
+  uint64_t m_num_elements;
 };
 
 class function_type : public type

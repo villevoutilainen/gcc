@@ -729,7 +729,8 @@ skylake goldmont goldmont-plus tremont cascadelake tigerlake cooperlake \
 sapphirerapids alderlake rocketlake eden-x2 nano nano-1000 nano-2000 nano-3000 \
 nano-x2 eden-x4 nano-x4 lujiazui yongfeng shijidadao x86-64 x86-64-v2 \
 x86-64-v3 x86-64-v4 sierraforest graniterapids graniterapids-d grandridge \
-arrowlake arrowlake-s clearwaterforest pantherlake diamondrapids native"
+arrowlake arrowlake-s clearwaterforest pantherlake diamondrapids novalake \
+native"
 
 # Additional x86 processors supported by --with-cpu=.  Each processor
 # MUST be separated by exactly one space.
@@ -3166,6 +3167,8 @@ powerpc*-wrs-vxworks7r*)
 	tm_file="${tm_file} elfos.h gnu-user.h linux.h freebsd-spec.h"
 	tm_file="${tm_file} rs6000/sysv4.h rs6000/biarch64.h rs6000/default64.h rs6000/linux64.h"
 	tm_file="${tm_file} vx-common.h vxworks.h rs6000/vxworks.h"
+
+	tm_p_file="${tm_p_file} linux-protos.h"
 
 	extra_options="${extra_options} rs6000/sysv4.opt linux.opt rs6000/linux64.opt"
 
@@ -6106,7 +6109,6 @@ case ${target} in
 		c_target_objs="${c_target_objs} ${cpu_type}-c.o"
 		cxx_target_objs="${cxx_target_objs} ${cpu_type}-c.o"
 		d_target_objs="${d_target_objs} ${cpu_type}-d.o"
-		jit_target_objs="${jit_target_objs} ${cpu_type}-jit.o"
 		tmake_file="${cpu_type}/t-${cpu_type} ${tmake_file}"
 		;;
 

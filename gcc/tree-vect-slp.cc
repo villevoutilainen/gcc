@@ -4230,8 +4230,243 @@ vect_analyze_slp_reduc_chain (loop_vec_info vinfo,
       first = false;
     }
   while (!is_a <gphi *> (STMT_VINFO_STMT (next_stmt)));
-  if (fail || scalar_stmts.length () <= 1)
+  if (fail)
     return false;
+
+  /* Remember a stmt with the actual reduction operation.  */
+  stmt_vec_info reduc_scalar_stmt = scalar_stmts[0];
+
+  /* When the SSA def chain through reduc-idx does not form a natural
+     reduction chain try to linearize an associative operation manually.  */
+  if (scalar_stmts.length () == 1
+      && code.is_tree_code ()
+      && associative_tree_code ((tree_code)code)
+      /* We may not associate if a fold-left reduction is required.  */
+      && !needs_fold_left_reduction_p (TREE_TYPE (gimple_get_lhs
+						    (reduc_scalar_stmt->stmt)),
+				       code))
+    {
+      auto_vec<chain_op_t> chain;
+      auto_vec<std::pair<tree_code, gimple *> > worklist;
+      gimple *op_stmt = NULL, *other_op_stmt = NULL;
+      vect_slp_linearize_chain (vinfo, worklist, chain, (tree_code)code,
+				scalar_stmts[0]->stmt, op_stmt, other_op_stmt,
+				NULL);
+
+      scalar_stmts.truncate (0);
+      stmt_vec_info tail = NULL;
+      for (auto el : chain)
+	{
+	  if (el.dt == vect_external_def
+	      || el.dt == vect_constant_def
+	      || el.code != (tree_code) code)
+	    {
+	      scalar_stmts.release ();
+	      return false;
+	    }
+	  stmt_vec_info stmt = vinfo->lookup_def (el.op);
+	  if (STMT_VINFO_REDUC_IDX (stmt) != -1
+	      || STMT_VINFO_REDUC_DEF (stmt))
+	    {
+	      gcc_assert (tail == NULL);
+	      tail = stmt;
+	      continue;
+	    }
+	  scalar_stmts.safe_push (stmt);
+	}
+      gcc_assert (tail);
+
+      /* When this linearization didn't produce a chain see if stripping
+	 a wrapping sign conversion produces one.  */
+      if (scalar_stmts.length () == 1)
+	{
+	  gimple *stmt = scalar_stmts[0]->stmt;
+	  if (!is_gimple_assign (stmt)
+	      || !CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (stmt))
+	      || TREE_CODE (gimple_assign_rhs1 (stmt)) != SSA_NAME
+	      || !tree_nop_conversion_p (TREE_TYPE (gimple_assign_lhs (stmt)),
+					 TREE_TYPE (gimple_assign_rhs1 (stmt))))
+	    {
+	      scalar_stmts.release ();
+	      return false;
+	    }
+	  stmt = SSA_NAME_DEF_STMT (gimple_assign_rhs1 (stmt));
+	  if (!is_gimple_assign (stmt)
+	      || gimple_assign_rhs_code (stmt) != (tree_code)code)
+	    {
+	      scalar_stmts.release ();
+	      return false;
+	    }
+	  chain.truncate (0);
+	  vect_slp_linearize_chain (vinfo, worklist, chain, (tree_code)code,
+				    stmt, op_stmt, other_op_stmt, NULL);
+
+	  scalar_stmts.truncate (0);
+	  tail = NULL;
+	  for (auto el : chain)
+	    {
+	      if (el.dt == vect_external_def
+		  || el.dt == vect_constant_def
+		  || el.code != (tree_code) code)
+		{
+		  scalar_stmts.release ();
+		  return false;
+		}
+	      stmt_vec_info stmt = vinfo->lookup_def (el.op);
+	      if (STMT_VINFO_REDUC_IDX (stmt) != -1
+		  || STMT_VINFO_REDUC_DEF (stmt))
+		{
+		  gcc_assert (tail == NULL);
+		  tail = stmt;
+		  continue;
+		}
+	      scalar_stmts.safe_push (stmt);
+	    }
+	  /* Unlike the above this does not include the reduction SSA
+	     cycle.  */
+	  gcc_assert (!tail);
+	}
+
+      if (scalar_stmts.length () < 2)
+	{
+	  scalar_stmts.release ();
+	  return false;
+	}
+
+      if (dump_enabled_p ())
+	{
+	  dump_printf_loc (MSG_NOTE, vect_location,
+			   "Starting SLP discovery of reduction chain for\n");
+	  for (unsigned i = 0; i < scalar_stmts.length (); ++i)
+	    dump_printf_loc (MSG_NOTE, vect_location,
+			     "  %G", scalar_stmts[i]->stmt);
+	}
+
+      unsigned int group_size = scalar_stmts.length ();
+      bool *matches = XALLOCAVEC (bool, group_size);
+      poly_uint64 max_nunits = 1;
+      unsigned tree_size = 0;
+      slp_tree node = vect_build_slp_tree (vinfo, scalar_stmts, group_size,
+					   &max_nunits, matches, limit,
+					   &tree_size, bst_map);
+      if (!node)
+	{
+	  scalar_stmts.release ();
+	  return false;
+	}
+
+      unsigned cycle_id = vinfo->reduc_infos.length ();
+      vect_reduc_info reduc_info = new vect_reduc_info_s ();
+      vinfo->reduc_infos.safe_push (reduc_info);
+      VECT_REDUC_INFO_DEF_TYPE (reduc_info) = STMT_VINFO_DEF_TYPE (next_stmt);
+      VECT_REDUC_INFO_TYPE (reduc_info) = STMT_VINFO_REDUC_TYPE (next_stmt);
+      VECT_REDUC_INFO_CODE (reduc_info) = STMT_VINFO_REDUC_CODE (next_stmt);
+      VECT_REDUC_INFO_FN (reduc_info) = IFN_LAST;
+      reduc_info->is_reduc_chain = true;
+
+      /* Build the node for the PHI and possibly the conversions.  */
+      slp_tree phis = vect_create_new_slp_node (2, ERROR_MARK);
+      SLP_TREE_REPRESENTATIVE (phis) = next_stmt;
+      phis->cycle_info.id = cycle_id;
+      SLP_TREE_LANES (phis) = group_size;
+      if (reduc_scalar_stmt == scalar_stmt)
+	SLP_TREE_VECTYPE (phis) = SLP_TREE_VECTYPE (node);
+      else
+	SLP_TREE_VECTYPE (phis)
+	  = signed_or_unsigned_type_for (TYPE_UNSIGNED
+					   (TREE_TYPE (gimple_get_lhs
+							 (scalar_stmt->stmt))),
+					 SLP_TREE_VECTYPE (node));
+      /* ???  vect_cse_slp_nodes cannot cope with cycles without any
+	 SLP_TREE_SCALAR_STMTS.  */
+      SLP_TREE_SCALAR_STMTS (phis).create (group_size);
+      for (unsigned i = 0; i < group_size; ++i)
+	SLP_TREE_SCALAR_STMTS (phis).quick_push (next_stmt);
+
+      slp_tree op_input = phis;
+      if (reduc_scalar_stmt != scalar_stmt)
+	{
+	  slp_tree conv = vect_create_new_slp_node (1, ERROR_MARK);
+	  SLP_TREE_REPRESENTATIVE (conv)
+	    = vinfo->lookup_def (gimple_arg (reduc_scalar_stmt->stmt,
+					     STMT_VINFO_REDUC_IDX
+					       (reduc_scalar_stmt)));
+	  SLP_TREE_CHILDREN (conv).quick_push (phis);
+	  conv->cycle_info.id = cycle_id;
+	  SLP_TREE_REDUC_IDX (conv) = 0;
+	  SLP_TREE_LANES (conv) = group_size;
+	  SLP_TREE_VECTYPE (conv) = SLP_TREE_VECTYPE (node);
+	  SLP_TREE_SCALAR_STMTS (conv) = vNULL;
+	  op_input = conv;
+	}
+
+      slp_tree reduc = vect_create_new_slp_node (2, ERROR_MARK);
+      SLP_TREE_REPRESENTATIVE (reduc) = reduc_scalar_stmt;
+      SLP_TREE_CHILDREN (reduc).quick_push (op_input);
+      SLP_TREE_CHILDREN (reduc).quick_push (node);
+      reduc->cycle_info.id = cycle_id;
+      SLP_TREE_REDUC_IDX (reduc) = 0;
+      SLP_TREE_LANES (reduc) = group_size;
+      SLP_TREE_VECTYPE (reduc) = SLP_TREE_VECTYPE (node);
+      /* ???  For the reduction epilogue we need a live lane.  */
+      SLP_TREE_SCALAR_STMTS (reduc).create (group_size);
+      SLP_TREE_SCALAR_STMTS (reduc).quick_push (reduc_scalar_stmt);
+      for (unsigned i = 1; i < group_size; ++i)
+	SLP_TREE_SCALAR_STMTS (reduc).quick_push (NULL);
+
+      if (reduc_scalar_stmt != scalar_stmt)
+	{
+	  slp_tree conv = vect_create_new_slp_node (1, ERROR_MARK);
+	  SLP_TREE_REPRESENTATIVE (conv) = scalar_stmt;
+	  SLP_TREE_CHILDREN (conv).quick_push (reduc);
+	  conv->cycle_info.id = cycle_id;
+	  SLP_TREE_REDUC_IDX (conv) = 0;
+	  SLP_TREE_LANES (conv) = group_size;
+	  SLP_TREE_VECTYPE (conv) = SLP_TREE_VECTYPE (phis);
+	  /* ???  For the reduction epilogue we need a live lane.  */
+	  SLP_TREE_SCALAR_STMTS (conv).create (group_size);
+	  SLP_TREE_SCALAR_STMTS (conv).quick_push (scalar_stmt);
+	  for (unsigned i = 1; i < group_size; ++i)
+	    SLP_TREE_SCALAR_STMTS (conv).quick_push (NULL);
+	  reduc = conv;
+	}
+
+      edge le = loop_latch_edge (LOOP_VINFO_LOOP (vinfo));
+      SLP_TREE_CHILDREN (phis).quick_push (NULL);
+      SLP_TREE_CHILDREN (phis).quick_push (NULL);
+      SLP_TREE_CHILDREN (phis)[le->dest_idx] = reduc;
+      SLP_TREE_REF_COUNT (reduc)++;
+
+      /* Create a new SLP instance.  */
+      slp_instance new_instance = XNEW (class _slp_instance);
+      SLP_INSTANCE_TREE (new_instance) = reduc;
+      SLP_INSTANCE_LOADS (new_instance) = vNULL;
+      SLP_INSTANCE_ROOT_STMTS (new_instance) = vNULL;
+      SLP_INSTANCE_REMAIN_DEFS (new_instance) = vNULL;
+      SLP_INSTANCE_KIND (new_instance) = slp_inst_kind_reduc_chain;
+      new_instance->reduc_phis = NULL;
+      new_instance->cost_vec = vNULL;
+      new_instance->subgraph_entries = vNULL;
+
+      vinfo->slp_instances.safe_push (new_instance);
+
+      if (dump_enabled_p ())
+	{
+	  dump_printf_loc (MSG_NOTE, vect_location,
+			   "Final SLP tree for instance %p:\n",
+			   (void *) new_instance);
+	  vect_print_slp_graph (MSG_NOTE, vect_location,
+				SLP_INSTANCE_TREE (new_instance));
+	}
+
+      return true;
+    }
+
+  if (scalar_stmts.length () <= 1)
+    {
+      scalar_stmts.release ();
+      return false;
+    }
 
   scalar_stmts.reverse ();
   stmt_vec_info reduc_phi_info = next_stmt;
@@ -7980,7 +8215,7 @@ vect_make_slp_decision (loop_vec_info loop_vinfo)
 	decided_to_slp++;
     }
 
-  LOOP_VINFO_SLP_UNROLLING_FACTOR (loop_vinfo) = unrolling_factor;
+  LOOP_VINFO_VECT_FACTOR (loop_vinfo) = unrolling_factor;
 
   if (decided_to_slp && dump_enabled_p ())
     {
@@ -12046,7 +12281,8 @@ vect_schedule_slp (vec_info *vinfo, const vec<slp_instance> &slp_instances)
       /* Remove vectorized stores original scalar stmts.  */
       for (j = 0; SLP_TREE_SCALAR_STMTS (root).iterate (j, &store_info); j++)
         {
-	  if (!STMT_VINFO_DATA_REF (store_info)
+	  if (!store_info
+	      || !STMT_VINFO_DATA_REF (store_info)
 	      || !DR_IS_WRITE (STMT_VINFO_DATA_REF (store_info)))
 	    break;
 

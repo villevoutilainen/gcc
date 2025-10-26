@@ -905,7 +905,6 @@ adadecode.o : adadecode.c adadecode.h
 aux-io.o  : aux-io.c
 argv.o    : argv.c
 cal.o     : cal.c
-deftarg.o : deftarg.c
 errno.o   : errno.c
 exit.o    : adaint.h exit.c
 expect.o  : expect.c
@@ -935,10 +934,6 @@ cio.o     : cio.c
 	         $(ALL_CPPFLAGS) $(INCLUDES) $< $(OUTPUT_OPTION)
 
 init.o    : init.c adaint.h raise.h
-	$(CC) -c $(ALL_CFLAGS) $(ADA_CFLAGS) \
-	         $(ALL_CPPFLAGS) $(INCLUDES) $< $(OUTPUT_OPTION)
-
-init-vxsim.o : init-vxsim.c
 	$(CC) -c $(ALL_CFLAGS) $(ADA_CFLAGS) \
 	         $(ALL_CPPFLAGS) $(INCLUDES) $< $(OUTPUT_OPTION)
 

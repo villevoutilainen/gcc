@@ -3988,6 +3988,37 @@ parser_enter_program( const char *funcname_,
   free(funcname);
   }
 
+static class label_verify_t {
+  std::set<size_t> lain, dangling;
+  static inline size_t index_of( const cbl_label_t *label ) {
+    return symbol_index(symbol_elem_of(label));
+  }
+public:
+  void go_to( const cbl_label_t *label ) {
+    auto p = lain.find(index_of(label));
+    if( p == lain.end() ) {
+      dangling.insert(index_of(label));
+    }
+  }
+  bool lay( const cbl_label_t *label ) {
+    auto ok = lain.insert(index_of(label));
+    if( ok.second ) {
+      dangling.erase(index_of(label));
+    }
+    return true;
+  }
+  bool vet() const { // be always agreeable, for now.
+    return dangling.empty();
+  }
+  void dump() const {
+    fprintf(stderr, "%u nonexistent labels called\n", unsigned(dangling.size()) );
+    for( auto sym : dangling ) {
+      const cbl_label_t *label = cbl_label_of(symbol_at(sym));
+      fprintf(stderr, "\t %s\n", label->name);
+    }
+  }
+} label_verify;
+
 void
 parser_end_program(const char *prog_name  )
   {
@@ -4013,6 +4044,13 @@ parser_end_program(const char *prog_name  )
     TRACE1_TEXT_ABC("\"", prog_name, "\"")
     TRACE1_END
     }
+
+  if( ! label_verify.vet() )
+    {
+    label_verify.dump();
+    gcc_unreachable();
+    }
+
 
   if( gg_trans_unit.function_stack.size() )
     {
@@ -5035,7 +5073,7 @@ parser_accept_date_hhmmssff( struct cbl_field_t *target )
  */
 
 void
-parser_alphabet( cbl_alphabet_t& alphabet )
+parser_alphabet( const cbl_alphabet_t& alphabet )
   {
   Analyze();
   SHOW_PARSE
@@ -5046,6 +5084,9 @@ parser_alphabet( cbl_alphabet_t& alphabet )
     free(psz);
     switch(alphabet.encoding)
       {
+      case iconv_CP1252_e:
+        psz = xasprintf("CP1252");
+        break;
       case ASCII_e:
         psz = xasprintf("ASCII");
         break;
@@ -5074,6 +5115,7 @@ parser_alphabet( cbl_alphabet_t& alphabet )
 
   switch(alphabet.encoding)
     {
+    case iconv_CP1252_e:
     case ASCII_e:
     case iso646_e:
     case EBCDIC_e:
@@ -5082,6 +5124,7 @@ parser_alphabet( cbl_alphabet_t& alphabet )
 
     case custom_encoding_e:
       {
+#pragma message "Use program-id to disambiguate"
       size_t alphabet_index = symbol_index(symbol_elem_of(&alphabet));
 
       unsigned char ach[256];
@@ -5097,23 +5140,28 @@ parser_alphabet( cbl_alphabet_t& alphabet )
         gg_assign(  gg_array_value(table256, ch),
                     build_int_cst_type(UCHAR, (alphabet.alphabet[i])) );
         }
+
+      unsigned int low_char  = alphabet.low_char;
+      unsigned int high_char = alphabet.high_char;
       __gg__alphabet_create(alphabet.encoding,
                             alphabet_index,
                             ach,
-                            alphabet.low_index,
-                            alphabet.high_index);
+                            low_char,
+                            high_char);
       gg_call(VOID,
               "__gg__alphabet_create",
               build_int_cst_type(INT, alphabet.encoding),
               build_int_cst_type(SIZE_T, alphabet_index),
               gg_get_address_of(table256),
-              build_int_cst_type(INT, alphabet.low_index),
-              build_int_cst_type(INT, alphabet.high_index),
-
+              build_int_cst_type(INT, low_char),
+              build_int_cst_type(INT, high_char),
               NULL_TREE );
       break;
       }
     default:
+      fprintf(stderr, "%s: Program ID %s:\n",
+              cobol_filename(),
+              cbl_label_of(symbol_at(current_program_index()))->name);
       gcc_unreachable();
     }
   }
@@ -5130,6 +5178,9 @@ parser_alphabet_use( cbl_alphabet_t& alphabet )
     free(psz);
     switch(alphabet.encoding)
       {
+      case iconv_CP1252_e:
+        psz = xasprintf("CP1252");
+        break;
       case ASCII_e:
         psz = xasprintf("ASCII");
         break;
@@ -5159,6 +5210,7 @@ parser_alphabet_use( cbl_alphabet_t& alphabet )
     {
     default:
       gcc_unreachable();
+    case iconv_CP1252_e:
     case ASCII_e:
     case iso646_e:
     case EBCDIC_e:
@@ -5167,7 +5219,8 @@ parser_alphabet_use( cbl_alphabet_t& alphabet )
       __gg__high_value_character = DEGENERATE_HIGH_VALUE;
       gg_call(VOID,
               "__gg__alphabet_use",
-              build_int_cst_type(INT, current_encoding(encoding_display_e)),
+              build_int_cst_type(INT, current_encoding(display_encoding_e)),
+              build_int_cst_type(INT, current_encoding(national_encoding_e)),
               build_int_cst_type(INT, alphabet.encoding),
               null_pointer_node,
               NULL_TREE);
@@ -5183,7 +5236,8 @@ parser_alphabet_use( cbl_alphabet_t& alphabet )
 
       gg_call(VOID,
               "__gg__alphabet_use",
-              build_int_cst_type(INT, current_encoding(encoding_display_e)),
+              build_int_cst_type(INT, current_encoding(display_encoding_e)),
+              build_int_cst_type(INT, current_encoding(national_encoding_e)),
               build_int_cst_type(INT, alphabet.encoding),
               build_int_cst_type(SIZE_T, alphabet_index),
               NULL_TREE);
@@ -6802,6 +6856,160 @@ parser_free( size_t n, cbl_refer_t refers[] )
     }
   }
 
+static
+cbl_label_addresses_t *
+label_fetch(struct cbl_label_t *label)
+  {
+  if( !label->structs.goto_trees )
+    {
+    label->structs.goto_trees
+      = static_cast<cbl_label_addresses_t *>
+        (xmalloc(sizeof(struct cbl_label_addresses_t)));
+    gcc_assert(label->structs.goto_trees);
+
+    gg_create_goto_pair(&label->structs.goto_trees->go_to,
+                        &label->structs.goto_trees->label);
+    }
+  return label->structs.goto_trees;
+  }
+
+void
+parser_xml_parse( cbl_label_t *instance,
+                  cbl_refer_t input,
+                  cbl_field_t *encoding,
+                  cbl_field_t *validating,
+                  bool returns_national,
+                  cbl_label_t *from_proc,
+                  cbl_label_t *to_proc )
+  {
+  SHOW_PARSE
+    {
+    SHOW_PARSE_HEADER
+    SHOW_PARSE_LABEL_OK("", instance)
+    SHOW_PARSE_REF(" ", input)
+    SHOW_PARSE_END
+    }
+
+  TRACE1
+    {
+    TRACE1_HEADER
+    TRACE1_END
+    }
+
+  // We know that this routine comes first in the sequence, so we can
+  // create the goto/label pairs here:
+
+  instance->structs.xml_parse = static_cast<struct cbl_xml_parse_t *>
+                                  (xmalloc(sizeof(struct cbl_xml_parse_t)));
+  gcc_assert(instance->structs.xml_parse);
+
+  gg_create_goto_pair(&instance->structs.xml_parse->over.go_to,
+                      &instance->structs.xml_parse->over.label);
+  gg_create_goto_pair(&instance->structs.xml_parse->exception.go_to,
+                      &instance->structs.xml_parse->exception.label);
+  gg_create_goto_pair(&instance->structs.xml_parse->no_exception.go_to,
+                      &instance->structs.xml_parse->no_exception.label);
+
+  // We need to create a COBOL ENTRY point into this function.  That entry
+  // point will be used by __gg__xml_parse to perform from_proc through to_proc
+  // as part of processing the libxml2 callbacks.
+
+  char ach[64];
+  static int instance_counter = 1;
+  sprintf(ach,
+          "_%s_xml_callback_%d",
+          current_function->our_name,
+          instance_counter++);
+
+  cbl_field_t for_entry = {};
+  for_entry.type = FldAlphanumeric;
+  for_entry.data.capacity = strlen(ach);
+  for_entry.data.initial = ach;
+  for_entry.codeset.encoding = iconv_CP1252_e;
+
+  // build an island for the callback:
+  tree island_goto;
+  tree island_label;
+  gg_create_goto_pair(&island_goto,
+                      &island_label);
+
+  gg_append_statement(island_goto);
+  // This creates the separate _xml_callback function
+  parser_entry(&for_entry, 0, nullptr);
+  // When invoked, the callback performs the processing procedures
+  parser_perform(from_proc, to_proc);
+  // And then returns back to the caller
+  gg_return(0);
+  gg_append_statement(island_label);
+
+  // With the callback in place, we are ready to call the library:
+  tree pcallback = gg_get_function_address(VOID, ach);
+
+  tree erc = gg_define_int();
+  gg_assign(erc, gg_call_expr(INT,
+                              "__gg__xml_parse",
+                              gg_get_address_of(input.field->var_decl_node),
+                              refer_offset(input),
+                              refer_size_source(input),
+                              encoding ?
+                                  gg_get_address_of(encoding->var_decl_node)
+                                : null_pointer_node,
+                              validating ?
+                                  gg_get_address_of(validating->var_decl_node)
+                                : null_pointer_node,
+                              build_int_cst_type(INT, returns_national),
+                              pcallback,
+                              NULL_TREE));
+  IF( erc, ne_op, integer_zero_node )
+    {
+    //gg_printf("__gg__xml_parse() failed with erc %d\n", erc, NULL_TREE);
+    gg_append_statement(instance->structs.xml_parse->exception.go_to);
+    }
+  ELSE
+    {
+    //gg_printf("__gg__xml_parse() apparently succeeded\n", NULL_TREE);
+    gg_append_statement(instance->structs.xml_parse->no_exception.go_to);
+    }
+  ENDIF
+  }
+
+void
+parser_xml_on_exception( cbl_label_t *instance )
+  {
+  SHOW_PARSE
+    {
+    SHOW_PARSE_HEADER
+    SHOW_PARSE_LABEL_OK(" ", instance)
+    SHOW_PARSE_END
+    }
+  gg_append_statement(instance->structs.xml_parse->over.go_to);
+  gg_append_statement(instance->structs.xml_parse->exception.label);
+  }
+
+void
+parser_xml_not_exception( cbl_label_t *instance )
+{
+  SHOW_PARSE
+    {
+    SHOW_PARSE_HEADER
+    SHOW_PARSE_LABEL_OK(" ", instance)
+    SHOW_PARSE_END
+    }
+  gg_append_statement(instance->structs.xml_parse->over.go_to);
+  gg_append_statement(instance->structs.xml_parse->no_exception.label);
+  }
+
+void parser_xml_end( cbl_label_t *instance )
+  {
+  SHOW_PARSE
+    {
+    SHOW_PARSE_HEADER
+    SHOW_PARSE_LABEL_OK(" ", instance)
+    SHOW_PARSE_END
+    }
+  gg_append_statement(instance->structs.xml_parse->over.label);
+  }
+
 void
 parser_arith_error(cbl_label_t *arithmetic_label)
   {
@@ -6933,7 +7141,8 @@ initialize_the_data()
   // This is one-time initialization of the libgcobol program state stack
   gg_call(VOID,
           "__gg__init_program_state",
-          build_int_cst_type(INT, current_encoding(encoding_display_e)),
+          build_int_cst_type(INT, current_encoding(display_encoding_e)),
+          build_int_cst_type(INT, current_encoding(national_encoding_e)),
           NULL_TREE);
 
   __gg__currency_signs = __gg__ct_currency_signs;
@@ -7962,23 +8171,6 @@ parser_see_stop_run(struct cbl_refer_t exit_status,
   gg_exit(returned_value);
   }
 
-static
-cbl_label_addresses_t *
-label_fetch(struct cbl_label_t *label)
-  {
-  if( !label->structs.goto_trees )
-    {
-    label->structs.goto_trees
-      = static_cast<cbl_label_addresses_t *>
-        (xmalloc(sizeof(struct cbl_label_addresses_t)));
-    gcc_assert(label->structs.goto_trees);
-
-    gg_create_goto_pair(&label->structs.goto_trees->go_to,
-                        &label->structs.goto_trees->label);
-    }
-  return label->structs.goto_trees;
-  }
-
 void
 parser_label_label(struct cbl_label_t *label)
   {
@@ -8009,6 +8201,18 @@ parser_label_label(struct cbl_label_t *label)
     }
 
   CHECK_LABEL(label);
+  
+#if 1
+  // At the present time, label_verify.lay is returning true, so I edited
+  // out the if( !... ) to quiet cppcheck
+  label_verify.lay(label);
+#else
+  if( ! label_verify.lay(label) )
+    {
+    yywarn("%s: label %qs already exists", __func__, label->name);
+    gcc_unreachable();
+    }
+#endif
 
   if(strcmp(label->name, "_end_declaratives") == 0 )
     {
@@ -8048,6 +8252,10 @@ parser_label_goto(struct cbl_label_t *label)
     }
 
   CHECK_LABEL(label);
+  
+  label_verify.go_to(label);
+
+  label_verify.go_to(label);
 
   if( strcmp(label->name, "_end_declaratives") == 0 )
     {
@@ -9682,6 +9890,7 @@ parser_file_add(struct cbl_file_t *file)
           __func__);
     }
 
+#pragma message "Use program-id to disambiguate"
   size_t symbol_table_index = symbol_index(symbol_elem_of(file));
 
   gg_call(VOID,
@@ -9708,7 +9917,7 @@ parser_file_add(struct cbl_file_t *file)
 /*  Right now, file->codeset.encoding is not being set properly.  Remove this
     comment and fix the following code when that's repaired.  */
 //          build_int_cst_type(INT, (int)file->codeset.encoding),
-          build_int_cst_type(INT, current_encoding(encoding_display_e)),
+          build_int_cst_type(INT, current_encoding(display_encoding_e)),
           build_int_cst_type(INT, (int)file->codeset.alphabet),
           NULL_TREE);
   file->var_decl_node = new_var_decl;
@@ -11138,6 +11347,16 @@ parser_intrinsic_call_1( cbl_field_t *tgt,
         }
       }
     }
+  else if( strcmp(function_name, "__gg__char") == 0 )
+    {
+    gg_call(VOID,
+            function_name,
+            gg_get_address_of(tgt->var_decl_node),
+            gg_get_address_of(ref1.field->var_decl_node),
+            refer_offset(ref1),
+            refer_size_source(ref1),
+            NULL_TREE);
+    }
   else
     {
     TRACE1
@@ -11192,13 +11411,15 @@ parser_intrinsic_call_2( cbl_field_t *tgt,
     TRACE1_REFER("parameter 2: ", ref2, "")
     }
   store_location_stuff(function_name);
+
   gg_call(VOID,
           function_name,
           gg_get_address_of(tgt->var_decl_node),
           gg_get_address_of(ref1.field->var_decl_node),
           refer_offset(ref1),
           refer_size_source(ref1),
-          ref2.field ? gg_get_address_of(ref2.field->var_decl_node) : null_pointer_node,
+          ref2.field ? gg_get_address_of(ref2.field->var_decl_node)
+                     : null_pointer_node,
           refer_offset(ref2),
           refer_size_source(ref2),
           NULL_TREE);
@@ -13525,7 +13746,8 @@ parser_entry( const cbl_field_t *name, size_t nusing, cbl_ffi_arg_t *args )
   SHOW_PARSE
     {
     SHOW_PARSE_HEADER
-    SHOW_PARSE_FIELD( " ENTRY ", name)
+    SHOW_PARSE_TEXT(" ")
+    SHOW_PARSE_TEXT(name->data.initial)
     SHOW_PARSE_END
     }
 

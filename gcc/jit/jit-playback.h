@@ -88,7 +88,7 @@ public:
   type *
   new_array_type (location *loc,
 		  type *element_type,
-		  int num_elements);
+		  uint64_t num_elements);
 
   field *
   new_field (location *loc,
@@ -338,6 +338,11 @@ public:
     target_info *info = new target_info {std::move (m_target_info)};
     m_target_info = target_info{};
     return info;
+  }
+
+  bool get_abort_on_unsupported_target_builtin () const
+  {
+    return m_recording_ctxt->get_abort_on_unsupported_target_builtin ();
   }
 
 private:

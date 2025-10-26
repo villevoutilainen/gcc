@@ -3103,8 +3103,9 @@ operator_cast::fold_range (irange &r, tree type ATTRIBUTE_UNUSED,
       int_range_max tmp;
       fold_pair (tmp, x, inner, outer);
       r.union_ (tmp);
+      // If we hit varying, go update the bitmask.
       if (r.varying_p ())
-	return true;
+	break;
     }
 
   update_bitmask (r, inner, outer);
@@ -3204,6 +3205,25 @@ operator_cast::op1_range (irange &r, tree type,
 	}
       // And intersect with any known value passed in the extra operand.
       r.intersect (op2);
+      if (r.undefined_p ())
+	return true;
+
+      // Now create a bitmask indicating that the lower bit must match the
+      // bits in the LHS.   Zero-extend LHS bitmask to precision of op1.
+      irange_bitmask bm = lhs.get_bitmask ();
+      wide_int mask = wide_int::from (bm.mask (), TYPE_PRECISION (type),
+				      UNSIGNED);
+      wide_int value = wide_int::from (bm.value (), TYPE_PRECISION (type),
+				       UNSIGNED);
+
+      // Set then additonal unknown bits in mask.
+      wide_int lim = wi::mask (TYPE_PRECISION (lhs_type), true,
+			       TYPE_PRECISION (type));
+      mask = mask | lim;
+
+      // Now set the new bitmask for the range.
+      irange_bitmask new_bm (value, mask);
+      r.update_bitmask (new_bm);
       return true;
     }
 
@@ -3502,6 +3522,22 @@ operator_bitwise_and::wi_fold (irange &r, tree type,
 			       const wide_int &rh_lb,
 			       const wide_int &rh_ub) const
 {
+  // The AND algorithm does not handle complex signed operations well.
+  // If a signed range crosses the boundry between signed and unsigned
+  // proces sit as 2 ranges and union the results.
+  if (TYPE_SIGN (type) == SIGNED
+      && wi::neg_p (lh_lb, SIGNED) != wi::neg_p (lh_ub, SIGNED))
+    {
+      int prec = TYPE_PRECISION (type);
+      int_range_max tmp;
+      // Process [lh_lb, -1]
+      wi_fold (tmp, type, lh_lb, wi::minus_one (prec), rh_lb, rh_ub);
+      // Now Process [0, rh_ub]
+      wi_fold (r, type, wi::zero (prec), lh_ub, rh_lb, rh_ub);
+      r.union_ (tmp);
+      return;
+    }
+
   if (wi_optimize_and_or (r, BIT_AND_EXPR, type, lh_lb, lh_ub, rh_lb, rh_ub))
     return;
 

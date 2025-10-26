@@ -342,7 +342,7 @@ jit_error (gcc::jit::recording::context *ctxt,
   va_start (ap, fmt);
 
   if (ctxt)
-    ctxt->add_error_va (loc, fmt, ap);
+    ctxt->add_error_va (loc, diagnostics::kind::error, fmt, ap);
   else
     {
       /* No context?  Send to stderr.  */
@@ -784,11 +784,21 @@ gcc_jit_context_new_array_type (gcc_jit_context *ctxt,
 				gcc_jit_type *element_type,
 				int num_elements)
 {
+  RETURN_NULL_IF_FAIL (num_elements >= 0, ctxt, NULL, "negative size");
+  return gcc_jit_context_new_array_type_u64 (ctxt, loc, element_type,
+    (uint64_t) num_elements);
+}
+
+gcc_jit_type *
+gcc_jit_context_new_array_type_u64 (gcc_jit_context *ctxt,
+					      gcc_jit_location *loc,
+					      gcc_jit_type *element_type,
+					      uint64_t num_elements)
+{
   RETURN_NULL_IF_FAIL (ctxt, NULL, loc, "NULL context");
   JIT_LOG_FUNC (ctxt->get_logger ());
   /* LOC can be NULL.  */
   RETURN_NULL_IF_FAIL (element_type, ctxt, loc, "NULL type");
-  RETURN_NULL_IF_FAIL (num_elements >= 0, ctxt, NULL, "negative size");
   RETURN_NULL_IF_FAIL (!element_type->is_void (), ctxt, loc,
 		       "void type for elements");
 
@@ -3949,6 +3959,14 @@ gcc_jit_target_info_supports_target_dependent_type (gcc_jit_target_info *info,
   RETURN_VAL_IF_FAIL (info, 0, NULL, NULL, "NULL info");
   return info->m_supported_target_dependent_types.find (type)
     != info->m_supported_target_dependent_types.end ();
+}
+
+void
+gcc_jit_context_set_abort_on_unsupported_target_builtin (gcc_jit_context *ctxt)
+{
+  RETURN_IF_FAIL (ctxt, NULL, NULL, "NULL context");
+
+  ctxt->set_abort_on_unsupported_target_builtin ();
 }
 
 /* Public entrypoint.  See description in libgccjit.h.
