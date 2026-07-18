@@ -2045,9 +2045,12 @@ build_comment (cp_expr condition)
 
 tree
 grok_contract (tree contract_spec, tree mode, tree result, cp_expr condition,
-	       location_t loc)
+	       location_t loc, tree control_type /* = NULL_TREE */)
 {
   if (condition == error_mark_node)
+    return error_mark_node;
+
+  if (control_type == error_mark_node)
     return error_mark_node;
 
   tree_code code;
@@ -2072,18 +2075,17 @@ grok_contract (tree contract_spec, tree mode, tree result, cp_expr condition,
 
   /* Build the contract. The condition is added later.  In the case that
      the contract is deferred, result an plain identifier, not a result
-     variable.  */
+     variable.  Operand 5 holds the optional control type; postconditions
+     store the result name at operand 6.  */
   tree contract;
   if (code != POSTCONDITION_STMT)
-    contract = build5_loc (loc, code, void_type_node, mode,
-			   NULL_TREE, NULL_TREE, NULL_TREE, NULL_TREE);
+    contract = build_nt (code, mode, NULL_TREE, NULL_TREE, NULL_TREE,
+			 NULL_TREE, control_type);
   else
-    {
-      contract = build_nt (code, mode, NULL_TREE, NULL_TREE,
-			   NULL_TREE, NULL_TREE, result);
-      TREE_TYPE (contract) = void_type_node;
-      SET_EXPR_LOCATION (contract, loc);
-    }
+    contract = build_nt (code, mode, NULL_TREE, NULL_TREE, NULL_TREE,
+			 NULL_TREE, control_type, result);
+  TREE_TYPE (contract) = void_type_node;
+  SET_EXPR_LOCATION (contract, loc);
 
   /* Determine the assertion kind.  */
   CONTRACT_ASSERTION_KIND (contract) = build_int_cst (uint16_type_node, kind);

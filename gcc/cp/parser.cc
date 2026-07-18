@@ -33806,6 +33806,77 @@ cp_parser_late_contracts (cp_parser *parser, tree fndecl)
   update_fn_contract_specifiers (fndecl, new_contracts);
 }
 
+/* Parse an optional contract control type appearing immediately after a
+   contract introducer (pre / post / contract_assert):
+
+     contract-control-type:
+       < type-id >
+
+   This names the assertion-control type T for the assertion, as in
+   pre<T>(cond).  Returns NULL_TREE when there is no '<' (the assertion
+   uses the default control), the parsed TYPE on success, or
+   error_mark_node on a malformed specifier.  */
+
+static tree
+cp_parser_contract_control_type (cp_parser *parser)
+{
+  if (!cp_lexer_next_token_is (parser->lexer, CPP_LESS))
+    return NULL_TREE;
+
+  cp_lexer_consume_token (parser->lexer); /* Consume '<'.  */
+
+  /* Inside the angle brackets a '>' closes the control type rather than
+     acting as a greater-than operator.  */
+  bool saved_gtio = parser->greater_than_is_operator_p;
+  parser->greater_than_is_operator_p = false;
+
+  tree type = cp_parser_type_id (parser, CP_PARSER_FLAGS_NONE, nullptr);
+
+  parser->greater_than_is_operator_p = saved_gtio;
+
+  /* A trailing '>>' is split so its first half closes this control type.  */
+  if (cp_lexer_next_token_is (parser->lexer, CPP_RSHIFT))
+    cp_lexer_peek_token (parser->lexer)->type = CPP_GREATER;
+  else if (!cp_parser_require (parser, CPP_GREATER, RT_GREATER))
+    return error_mark_node;
+
+  return type;
+}
+
+/* Starting at the Nth token (1 is the next token), if it begins a contract
+   control type '< type-id >', return the index of the first token past the
+   closing '>'.  Otherwise, or on an unterminated specifier, return N.  Used
+   by the function-contract-specifier look-ahead.  */
+
+static size_t
+cp_parser_skip_contract_control_type (cp_parser *parser, size_t n)
+{
+  if (!cp_lexer_nth_token_is (parser->lexer, n, CPP_LESS))
+    return n;
+
+  size_t orig_n = n;
+  int depth = 0;
+  do
+    switch (cp_lexer_peek_nth_token (parser->lexer, n++)->type)
+      {
+      case CPP_EOF:
+	return orig_n;
+      case CPP_LESS:
+	++depth;
+	break;
+      case CPP_GREATER:
+	--depth;
+	break;
+      case CPP_RSHIFT:
+	depth -= 2;
+	break;
+      default:
+	break;
+      }
+  while (depth > 0);
+  return n;
+}
+
 static tree
 cp_parser_contract_assert (cp_parser *parser, cp_token *token)
 {
@@ -33821,6 +33892,14 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
 
   token = cp_lexer_consume_token (parser->lexer);
   location_t loc = token->location;
+
+  /* Parse the optional control type: contract_assert<T>(cond).  */
+  tree control_type = cp_parser_contract_control_type (parser);
+  if (control_type == error_mark_node)
+    {
+      cp_parser_skip_to_end_of_statement (parser);
+      return error_mark_node;
+    }
 
   location_t attrs_loc = cp_lexer_peek_token (parser->lexer)->location;
   tree std_attrs = cp_parser_std_attribute_spec_seq (parser);
@@ -33851,7 +33930,7 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
 		       && scope_chain->bindings->kind == sk_contract);
   /* Build the contract.  */
   tree contract = grok_contract (cont_assert, /*mode*/NULL_TREE,
-			    /*result*/NULL_TREE, condition, loc);
+			    /*result*/NULL_TREE, condition, loc, control_type);
   processing_postcondition = old_pc;
   pop_bindings_and_leave_scope ();
 
@@ -33903,6 +33982,8 @@ cp_maybe_function_contract_specifier (cp_parser *parser)
     return NULL_TREE;
 
   size_t n = 2;
+  /* Skip the optional control type: pre<T> / post<T>.  */
+  n = cp_parser_skip_contract_control_type (parser, n);
   if (cp_nth_tokens_can_be_std_attribute_p (parser, n))
     n = cp_parser_skip_std_attribute_spec_seq (parser, n);
   if (cp_lexer_nth_token_is (parser->lexer, n, CPP_OPEN_PAREN))
@@ -33936,6 +34017,17 @@ cp_parser_function_contract_specifier (cp_parser *parser)
   cp_lexer_consume_token (parser->lexer);
   location_t loc = token->location;
   bool postcondition_p = id_equal (contract_name, "post");
+
+  /* Parse the optional control type: pre<T>(cond) / post<T>(r: cond).  */
+  tree control_type = cp_parser_contract_control_type (parser);
+  if (control_type == error_mark_node)
+    {
+      cp_parser_skip_to_closing_parenthesis (parser,
+					     /*recovering=*/true,
+					     /*or_comma=*/false,
+					     /*consume_paren=*/true);
+      return error_mark_node;
+    }
 
   location_t attrs_loc = cp_lexer_peek_token (parser->lexer)->location;
   tree std_attrs = cp_parser_std_attribute_spec_seq (parser);
@@ -33995,7 +34087,7 @@ cp_parser_function_contract_specifier (cp_parser *parser)
       if (identifier)
 	identifier.maybe_add_location_wrapper ();
       contract = grok_contract (contract_name, /*mode*/NULL_TREE, identifier,
-				condition, loc);
+				condition, loc, control_type);
     }
   else
     {
@@ -34022,7 +34114,7 @@ cp_parser_function_contract_specifier (cp_parser *parser)
       cp_expr condition = cp_parser_conditional_expression (parser);
       /* Build the contract.  */
       contract = grok_contract (contract_name, /*mode*/NULL_TREE, result,
-				condition, loc);
+				condition, loc, control_type);
       if (identifier)
 	--processing_template_decl;
       processing_postcondition = old_pc;
