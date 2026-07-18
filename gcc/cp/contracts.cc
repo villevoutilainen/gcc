@@ -2918,6 +2918,72 @@ contract_control_is_ignored (tree ctrl)
   return (val && TREE_CODE (val) == INTEGER_CST && integer_onep (val));
 }
 
+/* If the control type CTRL provides the D4324 dispatch operator
+   operator()(const char*, std::source_location, evaluation_config), return
+   its FUNCTION_DECL, otherwise NULL_TREE.  A control type without such an
+   operator (or a bare contract) uses the built-in evaluation-semantic path
+   instead.  */
+
+static tree
+contract_control_operator (tree ctrl)
+{
+  if (!ctrl || !CLASS_TYPE_P (ctrl))
+    return NULL_TREE;
+  complete_type (ctrl);
+  if (!COMPLETE_TYPE_P (ctrl))
+    return NULL_TREE;
+
+  tree fns = lookup_member (ctrl, call_op_identifier,
+			    /*protect=*/1, /*want_type=*/false, tf_none);
+  if (!fns || fns == error_mark_node || !BASELINK_P (fns))
+    return NULL_TREE;
+
+  for (ovl_iterator it (BASELINK_FUNCTIONS (fns)); it; ++it)
+    {
+      tree fn = *it;
+      if (TREE_CODE (fn) != FUNCTION_DECL)
+	continue;
+      int n = 0;
+      for (tree t = FUNCTION_FIRST_USER_PARMTYPE (fn);
+	   t && t != void_list_node; t = TREE_CHAIN (t))
+	++n;
+      if (n == 3)
+	return fn;
+    }
+  return NULL_TREE;
+}
+
+/* Build the D4324 control-object dispatch call for CONTRACT: a single call
+   to CTRL's operator()(comment, loc, cfg), where OP is that operator (used
+   for its parameter types).  Returns an expression of type violation_response,
+   or error_mark_node.  The predicate text is passed as comment and the TU cfg
+   as the evaluation_config; the source_location argument is value-initialized
+   for now (populated with the real location once the run tests land).  */
+
+static tree
+build_contract_control_call (tree contract, tree ctrl, tree op)
+{
+  tree pt = FUNCTION_FIRST_USER_PARMTYPE (op);
+  tree t_comment = TREE_VALUE (pt); pt = TREE_CHAIN (pt);
+  tree t_loc = TREE_VALUE (pt); pt = TREE_CHAIN (pt);
+  tree t_cfg = TREE_VALUE (pt);
+
+  tree comment = CONTRACT_COMMENT (contract);
+  if (!comment)
+    comment = build_zero_cst (t_comment);
+  tree loc_arg = build_value_init (TYPE_MAIN_VARIANT (non_reference (t_loc)),
+				   tf_warning_or_error);
+  tree cfg_arg = build_int_cst (t_cfg, contract_evaluation_config_value ());
+
+  releasing_vec args;
+  vec_safe_push (args, comment);
+  vec_safe_push (args, loc_arg);
+  vec_safe_push (args, cfg_arg);
+
+  tree obj = get_target_expr (build_value_init (ctrl, tf_warning_or_error));
+  return build_op_call (obj, &args, tf_warning_or_error);
+}
+
 
 /* Genericize a CONTRACT tree, but do not attach it to the current context,
    the caller is responsible for that.
@@ -2926,28 +2992,39 @@ contract_control_is_ignored (tree ctrl)
 tree
 build_contract_check (tree contract)
 {
+  tree ctrl = CONTRACT_CONTROL_TYPE (contract);
+
   /* D4324 step 1: when a named control type reports, at compile time, that
      this assertion is ignored for the TU's evaluation_config, emit no code
      and do not evaluate the predicate - even under an enforced default.  */
-  if (contract_control_is_ignored (CONTRACT_CONTROL_TYPE (contract)))
+  if (contract_control_is_ignored (ctrl))
     return void_node;
 
-  contract_evaluation_semantic semantic = get_evaluation_semantic (contract);
+  /* If the control type provides the D4324 dispatch operator, codegen calls
+     it and branches on the returned violation_response instead of using the
+     built-in evaluation-semantic switch.  */
+  tree control_op = contract_control_operator (ctrl);
+
+  contract_evaluation_semantic semantic = CES_ENFORCE;
   bool quick = false;
   bool calls_handler = false;
-  switch (semantic)
+  if (!control_op)
     {
-    case CES_IGNORE:
-      return void_node;
-    case CES_ENFORCE:
-    case CES_OBSERVE:
-      calls_handler = true;
-      break;
-    case CES_QUICK:
-      quick = true;
-      break;
-    default:
-      gcc_unreachable ();
+      semantic = get_evaluation_semantic (contract);
+      switch (semantic)
+	{
+	case CES_IGNORE:
+	  return void_node;
+	case CES_ENFORCE:
+	case CES_OBSERVE:
+	  calls_handler = true;
+	  break;
+	case CES_QUICK:
+	  quick = true;
+	  break;
+	default:
+	  gcc_unreachable ();
+	}
     }
 
   location_t loc = EXPR_LOCATION (contract);
@@ -2982,27 +3059,40 @@ build_contract_check (tree contract)
     emit_builtin_observable_checkpoint ();
   tree cond = build_x_unary_op (loc, TRUTH_NOT_EXPR, condition, NULL_TREE,
 				tf_warning_or_error);
-  tree violation;
-  if (quick)
+
+  tree do_check = begin_if_stmt ();
+  finish_if_stmt_cond (cond, do_check);
+  if (control_op)
+    {
+      /* D4324 step 3: one call to T::operator()(comment, loc, cfg); on a
+	 terminate response contract-terminate, otherwise proceed.  */
+      tree resp = build_contract_control_call (contract, ctrl, control_op);
+      if (resp && resp != error_mark_node)
+	{
+	  resp = save_expr (resp);
+	  /* violation_response::terminate == 1 (proceed == 0).  */
+	  tree is_term = build2 (EQ_EXPR, boolean_type_node, resp,
+				 build_int_cst (TREE_TYPE (resp), 1));
+	  tree if_term = begin_if_stmt ();
+	  finish_if_stmt_cond (is_term, if_term);
+	  finish_expr_stmt (build_call_a (terminate_wrapper, 0, nullptr));
+	  finish_then_clause (if_term);
+	  finish_if_stmt (if_term);
+	}
+    }
+  else if (quick)
     /* We will not be calling a handler.  */
-    violation = build_zero_cst (nullptr_type_node);
+    finish_expr_stmt (build_call_a (terminate_wrapper, 0, nullptr));
   else
     {
       /* Build a violation object, with the contract settings.  */
       tree ctor = build_contract_violation_ctor (contract);
       gcc_checking_assert (TREE_CONSTANT (ctor));
-      violation = build_contract_violation_constant (ctor, contract);
+      tree violation = build_contract_violation_constant (ctor, contract);
       violation = build_address (violation);
+      tree s_const = build_int_cst (uint16_type_node, semantic);
+      finish_expr_stmt (build_call_n (tu_has_violation, 2, violation, s_const));
     }
-
-  tree s_const = build_int_cst (uint16_type_node, semantic);
-
-  tree do_check = begin_if_stmt ();
-  finish_if_stmt_cond (cond, do_check);
-  if (quick)
-    finish_expr_stmt (build_call_a (terminate_wrapper, 0, nullptr));
-  else
-    finish_expr_stmt (build_call_n (tu_has_violation, 2, violation, s_const));
   finish_then_clause (do_check);
   finish_if_stmt (do_check);
 
