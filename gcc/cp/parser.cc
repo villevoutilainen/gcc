@@ -33731,9 +33731,13 @@ cp_parser_late_contract_condition (cp_parser *parser, tree fn, tree contract)
   cp_token_cache *tokens = DEFPARSE_TOKENS (condition);
   cp_parser_push_lexer_for_tokens (parser, tokens);
 
-  /* If we have a current class object, we need to consider
-     it const when processing the contract condition.  */
-  current_class_ref = view_as_const (current_class_ref);
+  /* D4324: constification is off unless the control type opts in.  When it
+     does, treat the current class object as const in the condition too.  */
+  bool constify_p = contract_control_constifies (CONTRACT_CONTROL_TYPE (contract));
+  auto constify_ovr = make_temp_override (contract_condition_constify_p,
+					  constify_p);
+  if (constify_p)
+    current_class_ref = view_as_const (current_class_ref);
 
   /* Parse the condition, ensuring that parameters or the return variable
      aren't flagged for use outside the body of a function.  */
@@ -33916,10 +33920,14 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
   /* Enable location wrappers when parsing contracts.  */
   auto suppression = make_temp_override (suppress_location_wrappers, 0);
 
-  /* If we have a current class object, see if we need to consider
-     it const when processing the contract condition.  */
+  /* D4324: constification is off unless the control type opts in.  When it
+     does, treat the current class object as const in the condition too.  */
+  bool constify_p = contract_control_constifies (control_type);
+  auto constify_ovr = make_temp_override (contract_condition_constify_p,
+					  constify_p);
   tree current_class_ref_copy = current_class_ref;
-  current_class_ref = view_as_const (current_class_ref);
+  if (constify_p)
+    current_class_ref = view_as_const (current_class_ref);
 
   /* Parse the condition.  */
   begin_scope (sk_contract, current_function_decl);
@@ -34094,10 +34102,14 @@ cp_parser_function_contract_specifier (cp_parser *parser)
       /* Enable location wrappers when parsing contracts.  */
       auto suppression = make_temp_override (suppress_location_wrappers, 0);
 
-      /* If we have a current class object, see if we need to consider
-       it const when processing the contract condition.  */
+      /* D4324: constification is off unless the control type opts in.  When
+       it does, treat the current class object as const in the condition.  */
+      bool constify_p = contract_control_constifies (control_type);
+      auto constify_ovr = make_temp_override (contract_condition_constify_p,
+					      constify_p);
       tree current_class_ref_copy = current_class_ref;
-      current_class_ref = view_as_const (current_class_ref);
+      if (constify_p)
+	current_class_ref = view_as_const (current_class_ref);
 
       /* Parse the condition, ensuring that parameters or the return variable
        aren't flagged for use outside the body of a function.  */

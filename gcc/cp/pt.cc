@@ -12394,6 +12394,18 @@ tsubst_contract (tree decl, tree t, tree args, tsubst_flags_t complain,
 	  return invalidate_contract (r);
     }
 
+  /* D4324: substitute the control type and gate constification on its
+     constify member while the condition is instantiated.  */
+  tree ctrl = CONTRACT_CONTROL_TYPE (t);
+  if (ctrl && uses_template_parms (ctrl))
+    {
+      ctrl = tsubst (ctrl, args, complain, in_decl);
+      CONTRACT_CONTROL_TYPE (r) = ctrl;
+    }
+  auto constify_ovr
+    = make_temp_override (contract_condition_constify_p,
+			  contract_control_constifies (ctrl));
+
   /* Instantiate the condition.  If the return type is undeduced, process
      the expression as if inside a template to avoid spurious type errors.  */
   begin_scope (sk_contract, decl);

@@ -499,11 +499,24 @@ view_as_const (tree decl)
   return decl;
 }
 
+/* True while parsing or substituting a contract condition whose control type
+   opts into constification (constify == true).  D4324 makes constification
+   opt-in: by default a predicate binds the same overload the function body
+   would, so this is false unless a control type turns it on.  */
+
+bool contract_condition_constify_p = false;
+
 /* Constify access to DECL from within the contract condition.  */
 
 tree
 constify_contract_access (tree decl)
 {
+  /* D4324: constification is opt-in via the control type's constify member.
+     When it is off, the access is left as-is so the predicate binds the same
+     overload the function body would.  */
+  if (!contract_condition_constify_p)
+    return decl;
+
   /* We check if we have a variable, a parameter, a variable of reference type,
    * or a parameter of reference type
    */
@@ -2916,6 +2929,40 @@ contract_control_is_ignored (tree ctrl)
 
   tree val = maybe_constant_value (call);
   return (val && TREE_CODE (val) == INTEGER_CST && integer_onep (val));
+}
+
+/* Constant-evaluate the static bool data member NAME on the control type
+   CTRL.  Returns 1 if it folds to true, 0 if it folds to false, and -1 if
+   CTRL has no such usable compile-time member.  */
+
+static int
+contract_control_bool_member (tree ctrl, const char *name)
+{
+  if (!ctrl || !CLASS_TYPE_P (ctrl))
+    return -1;
+  complete_type (ctrl);
+  if (!COMPLETE_TYPE_P (ctrl))
+    return -1;
+
+  tree m = lookup_member (ctrl, get_identifier (name),
+			  /*protect=*/1, /*want_type=*/false, tf_none);
+  if (!m || m == error_mark_node || BASELINK_P (m))
+    return -1;
+
+  tree val = maybe_constant_value (m);
+  if (!val || TREE_CODE (val) != INTEGER_CST)
+    return -1;
+  return integer_onep (val) ? 1 : 0;
+}
+
+/* True if the control type CTRL opts into constification (constify == true).
+   A bare contract, or a control type without a true constify member, does not
+   constify.  */
+
+bool
+contract_control_constifies (tree ctrl)
+{
+  return contract_control_bool_member (ctrl, "constify") == 1;
 }
 
 /* If the control type CTRL provides the D4324 dispatch operator

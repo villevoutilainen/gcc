@@ -171,6 +171,12 @@ extern tree invalidate_contract			(tree);
 extern tree copy_and_remap_contracts		(tree, tree, contract_match_kind = cmk_all);
 extern tree constify_contract_access		(tree);
 extern tree view_as_const			(tree);
+extern bool contract_control_constifies		(tree);
+
+/* True while parsing/substituting a contract condition that opts into
+   constification via its control type's constify member (D4324: off by
+   default).  */
+extern bool contract_condition_constify_p;
 
 extern void set_fn_contract_specifiers		(tree, tree);
 extern void update_fn_contract_specifiers	(tree, tree);
