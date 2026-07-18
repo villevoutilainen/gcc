@@ -115,10 +115,16 @@ enum detection_mode : uint16_t {
 #define CONTRACT_STD_SOURCE_LOC(NODE) \
   (TREE_OPERAND (CONTRACT_CHECK (NODE), 4))
 
+/* The optional control TYPE named as pre<T>/post<T>/contract_assert<T>.
+   NULL_TREE means the assertion uses the default control
+   (std::contracts::default_v).  */
+#define CONTRACT_CONTROL_TYPE(NODE) \
+  (TREE_OPERAND (CONTRACT_CHECK (NODE), 5))
+
 /* The VAR_DECL of a postcondition result. For deferred contracts, this
    is an IDENTIFIER.  */
 #define POSTCONDITION_IDENTIFIER(NODE) \
-  (TREE_OPERAND (POSTCONDITION_STMT_CHECK (NODE), 5))
+  (TREE_OPERAND (POSTCONDITION_STMT_CHECK (NODE), 6))
 
 /* For a FUNCTION_DECL of a guarded function, this holds the function decl
    where pre contract checks are emitted.  */
@@ -156,7 +162,7 @@ enum contract_match_kind
 
 extern void init_contracts			(void);
 
-extern tree grok_contract			(tree, tree, tree, cp_expr, location_t);
+extern tree grok_contract			(tree, tree, tree, cp_expr, location_t, tree = NULL_TREE);
 extern tree finish_contract_specifier 		(tree, tree);
 extern tree finish_contract_condition		(cp_expr);
 extern void update_late_contract		(tree, tree, cp_expr);
