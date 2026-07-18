@@ -2855,6 +2855,69 @@ remap_retval (tree fndecl, tree contract)
   walk_tree (&CONTRACT_CONDITION (contract), remap_retval_1, &data, NULL);
 }
 
+/* Map the translation-unit -fcontract-evaluation-semantic flag to the D4324
+   std::contracts::evaluation_config value (ignore=0, observe=1, enforce=2,
+   quick_enforce=3) that is passed to a control type's compile-time members.  */
+
+static unsigned
+contract_evaluation_config_value ()
+{
+  switch (flag_contract_evaluation_semantic)
+    {
+    case CES_IGNORE: return 0;
+    case CES_OBSERVE: return 1;
+    case CES_ENFORCE: return 2;
+    case CES_QUICK: return 3;
+    default: return 2;
+    }
+}
+
+/* If the assertion names a control type CTRL, constant-evaluate
+   CTRL::is_ignored(cfg) for the current translation unit's cfg.  Returns true
+   iff it folds to a compile-time true, meaning the assertion is ignored: no
+   code is emitted and the predicate is never evaluated, even under an enforced
+   translation-unit default.  A bare contract (no control type) or a control
+   type without a usable compile-time is_ignored member yields false, so the
+   existing evaluation-semantic path is used instead.  */
+
+static bool
+contract_control_is_ignored (tree ctrl)
+{
+  if (!ctrl || !CLASS_TYPE_P (ctrl))
+    return false;
+  complete_type (ctrl);
+  if (!COMPLETE_TYPE_P (ctrl))
+    return false;
+
+  tree member = lookup_member (ctrl, get_identifier ("is_ignored"),
+			       /*protect=*/1, /*want_type=*/false, tf_none);
+  if (!member || member == error_mark_node || !BASELINK_P (member))
+    return false;
+
+  tree fn = OVL_FIRST (BASELINK_FUNCTIONS (member));
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL || !DECL_STATIC_FUNCTION_P (fn))
+    return false;
+
+  /* The single parameter is std::contracts::evaluation_config; build the TU
+     cfg value directly in that type so overload resolution matches.  */
+  tree parm_types = TYPE_ARG_TYPES (TREE_TYPE (fn));
+  if (!parm_types || parm_types == void_list_node)
+    return false;
+  tree cfg_type = TREE_VALUE (parm_types);
+  tree cfg_arg = build_int_cst (cfg_type, contract_evaluation_config_value ());
+
+  releasing_vec args;
+  vec_safe_push (args, cfg_arg);
+  tree obj = build_dummy_object (ctrl);
+  tree call = build_new_method_call (obj, member, &args, NULL_TREE,
+				     LOOKUP_NORMAL, NULL, tf_none);
+  if (!call || call == error_mark_node)
+    return false;
+
+  tree val = maybe_constant_value (call);
+  return (val && TREE_CODE (val) == INTEGER_CST && integer_onep (val));
+}
+
 
 /* Genericize a CONTRACT tree, but do not attach it to the current context,
    the caller is responsible for that.
@@ -2863,6 +2926,12 @@ remap_retval (tree fndecl, tree contract)
 tree
 build_contract_check (tree contract)
 {
+  /* D4324 step 1: when a named control type reports, at compile time, that
+     this assertion is ignored for the TU's evaluation_config, emit no code
+     and do not evaluate the predicate - even under an enforced default.  */
+  if (contract_control_is_ignored (CONTRACT_CONTROL_TYPE (contract)))
+    return void_node;
+
   contract_evaluation_semantic semantic = get_evaluation_semantic (contract);
   bool quick = false;
   bool calls_handler = false;
