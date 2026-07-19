@@ -55,6 +55,9 @@
 #endif
 #ifdef _GLIBCXX_FILESYSTEM_IS_WINDOWS
 # define WIN32_LEAN_AND_MEAN
+# ifndef NOMINMAX
+#  define NOMINMAX 1
+# endif
 # include <windows.h>
 # include <winioctl.h> // FSCTL_GET_REPARSE_POINT
 # include <ntdef.h> // REPARSE_DATA_BUFFER
