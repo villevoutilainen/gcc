@@ -113,7 +113,9 @@ namespace contracts
     ignore = 0, observe = 1, enforce = 2, quick_enforce = 3
   };
 
-  enum class violation_response { proceed, terminate };
+  // A control object's call operator returns void: returning means the
+  // program continues past the assertion; to end the program the operator
+  // terminates in its own body.  No violation_response is needed.
 
   template <class _Tp>
   concept assertion_control =
@@ -123,10 +125,11 @@ namespace contracts
       { _Tp::is_ignored(__cfg) } -> same_as<bool>;
       { bool(_Tp::constify) };
       { bool(_Tp::assumable) };
-      { __c(__comment, __loc, __cfg) } -> same_as<violation_response>;
+      { __c(__comment, __loc, __cfg) } -> same_as<void>;
     };
 
   void __d4324_log_violation(const char*, std::source_location) noexcept;
+  [[noreturn]] void __d4324_terminate() noexcept;
 
   struct default_control {
     static constexpr bool
@@ -136,14 +139,13 @@ namespace contracts
     static constexpr bool constify  = false;
     static constexpr bool assumable = false;
 
-    violation_response
+    void
     operator()(const char* __comment, std::source_location __loc,
 	       evaluation_config __cfg) const noexcept
     {
       __d4324_log_violation(__comment, __loc);
-      return (__cfg == evaluation_config::observe)
-	? violation_response::proceed
-	: violation_response::terminate;
+      if (__cfg != evaluation_config::observe)
+	__d4324_terminate();
     }
   };
 
@@ -157,13 +159,10 @@ namespace contracts
     static constexpr bool constify  = true;
     static constexpr bool assumable = false;
 
-    violation_response
+    void
     operator()(const char* __comment, std::source_location __loc,
-	       evaluation_config __cfg) const noexcept
-    {
-      __d4324_log_violation(__comment, __loc);
-      return violation_response::proceed;
-    }
+	       evaluation_config) const noexcept
+    { __d4324_log_violation(__comment, __loc); }
   };
 
   inline constexpr review review_v{};
@@ -176,12 +175,12 @@ namespace contracts
     static constexpr bool constify  = false;
     static constexpr bool assumable = true;
 
-    violation_response
+    [[noreturn]] void
     operator()(const char* __comment, std::source_location __loc,
-	       evaluation_config __cfg) const noexcept
+	       evaluation_config) const noexcept
     {
       __d4324_log_violation(__comment, __loc);
-      return violation_response::terminate;
+      __d4324_terminate();
     }
   };
 

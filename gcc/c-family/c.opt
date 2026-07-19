@@ -1912,6 +1912,11 @@ fcontracts
 C++ ObjC++ Var(flag_contracts) Init(0)
 Enable features proposed for C++26 Contracts.
 
+fcontract-control-objects
+C++ ObjC++ Var(flag_contract_control_objects) Init(0)
+Enable D4324 contract control objects (pre<T>(cond) etc.); off by default so
+plain -fcontracts keeps the P2900 behaviour.
+
 ; Keep these in step with the values in cp/contracts.h
 
 Enum

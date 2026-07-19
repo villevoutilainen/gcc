@@ -5,7 +5,7 @@
 // rather than being caught (catch(...) / __cxa_begin_catch) and turned into a
 // contract violation via a __tu_has_violation_exception entry point.
 // { dg-do compile { target c++26 } }
-// { dg-additional-options "-fcontracts -fcontract-evaluation-semantic=enforce -fdump-tree-gimple" }
+// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=enforce -fdump-tree-gimple" }
 
 bool maythrow (int);		// may throw: not noexcept
 

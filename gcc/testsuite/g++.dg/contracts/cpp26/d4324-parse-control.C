@@ -4,7 +4,7 @@
 // nested template control type parses; and a malformed empty control type is
 // rejected.
 // { dg-do compile { target c++26 } }
-// { dg-additional-options "-fcontracts -fsyntax-only" }
+// { dg-additional-options "-fcontracts -fcontract-control-objects -fsyntax-only" }
 
 static_assert (__cpp_contracts >= 202502L);
 

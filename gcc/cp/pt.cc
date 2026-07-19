@@ -12425,7 +12425,8 @@ tsubst_contract (tree decl, tree t, tree args, tsubst_flags_t complain,
     }
   auto constify_ovr
     = make_temp_override (contract_condition_constify_p,
-			  contract_control_constifies (ctrl));
+			  flag_contract_control_objects
+			  ? contract_control_constifies (ctrl) : true);
 
   /* Instantiate the condition.  If the postcondition has a result binding
      whose type is undeduced, process the expression as if inside a template to

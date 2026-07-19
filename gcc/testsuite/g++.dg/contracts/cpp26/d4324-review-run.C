@@ -2,7 +2,7 @@
 // so execution continues past the failed assertion.  This verifies the
 // end-to-end control-object dispatch with a real operator() at runtime.
 // { dg-do run { target c++26 } }
-// { dg-additional-options "-fcontracts" }
+// { dg-additional-options "-fcontracts -fcontract-control-objects" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
 
 #include <contracts>
@@ -14,9 +14,9 @@ struct my_review {
   static constexpr bool is_ignored (sc::evaluation_config) { return false; }
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
-  sc::violation_response
+  void
   operator() (const char*, std::source_location, sc::evaluation_config) const
-  { logged = true; return sc::violation_response::proceed; }
+  { logged = true; }		// returns -> continue
 };
 
 int f (int x) pre<my_review>(x > 0) { return x; }

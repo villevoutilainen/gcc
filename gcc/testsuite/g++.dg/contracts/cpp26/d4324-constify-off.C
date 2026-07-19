@@ -3,7 +3,7 @@
 // resolution.  Naming a control type whose constify member is true restores
 // constification for the assertions that name it.
 // { dg-do compile { target c++26 } }
-// { dg-additional-options "-fcontracts -fcontract-evaluation-semantic=enforce" }
+// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=enforce" }
 
 namespace std {
 namespace contracts {
