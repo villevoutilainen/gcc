@@ -129,6 +129,15 @@ void invoke_default_contract_violation_handler(const std::contracts::contract_vi
   return __handle_contract_violation(violation);
 }
 
+void __d4324_log_violation(const char* comment, std::source_location loc) noexcept
+{
+#if _GLIBCXX_HOSTED && _GLIBCXX_VERBOSE
+  std::cerr << "contract violation in function " << loc.function_name()
+    << " at " << loc.file_name() << ':' << loc.line()
+    << ": " << (comment ? comment : "(no predicate text)") << std::endl;
+#endif
+}
+
 }
 }
 
