@@ -1,8 +1,8 @@
-// D4324: a control object whose operator() returns terminate causes
-// contract-termination (via std::terminate) after the handler returns.
-// The program must not reach main's return statement.
+// D4324: a control object that terminates in its call operator ends the
+// program (via std::terminate).  The operator returns void, so termination is
+// the control's own responsibility; the program must not reach main's return.
 // { dg-do run { target c++26 } }
-// { dg-additional-options "-fcontracts" }
+// { dg-additional-options "-fcontracts -fcontract-control-objects" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
 
 #include <contracts>
@@ -15,9 +15,9 @@ struct my_terminate_ctrl {
   static constexpr bool is_ignored (sc::evaluation_config) { return false; }
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
-  sc::violation_response
+  [[noreturn]] void
   operator() (const char*, std::source_location, sc::evaluation_config) const
-  { return sc::violation_response::terminate; }
+  { std::terminate (); }
 };
 
 int f (int x) pre<my_terminate_ctrl>(x > 0) { return x; }

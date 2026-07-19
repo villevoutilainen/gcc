@@ -33733,7 +33733,8 @@ cp_parser_late_contract_condition (cp_parser *parser, tree fn, tree contract)
 
   /* D4324: constification is off unless the control type opts in.  When it
      does, treat the current class object as const in the condition too.  */
-  bool constify_p = contract_control_constifies (CONTRACT_CONTROL_TYPE (contract));
+  bool constify_p = flag_contract_control_objects
+    ? contract_control_constifies (CONTRACT_CONTROL_TYPE (contract)) : true;
   auto constify_ovr = make_temp_override (contract_condition_constify_p,
 					  constify_p);
   if (constify_p)
@@ -33824,6 +33825,11 @@ cp_parser_late_contracts (cp_parser *parser, tree fndecl)
 static tree
 cp_parser_contract_control_type (cp_parser *parser)
 {
+  /* D4324 control objects are opt-in; without the flag a bare contract never
+     takes a control type and 'pre<...>' is rejected as under P2900.  */
+  if (!flag_contract_control_objects)
+    return NULL_TREE;
+
   if (!cp_lexer_next_token_is (parser->lexer, CPP_LESS))
     return NULL_TREE;
 
@@ -33855,6 +33861,9 @@ cp_parser_contract_control_type (cp_parser *parser)
 static size_t
 cp_parser_skip_contract_control_type (cp_parser *parser, size_t n)
 {
+  if (!flag_contract_control_objects)
+    return n;
+
   if (!cp_lexer_nth_token_is (parser->lexer, n, CPP_LESS))
     return n;
 
@@ -33920,9 +33929,10 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
   /* Enable location wrappers when parsing contracts.  */
   auto suppression = make_temp_override (suppress_location_wrappers, 0);
 
-  /* D4324: constification is off unless the control type opts in.  When it
-     does, treat the current class object as const in the condition too.  */
-  bool constify_p = contract_control_constifies (control_type);
+  /* D4324: with control objects enabled, constification is opt-in via the
+     control type; otherwise P2900 constification (always on) applies.  */
+  bool constify_p = flag_contract_control_objects
+    ? contract_control_constifies (control_type) : true;
   auto constify_ovr = make_temp_override (contract_condition_constify_p,
 					  constify_p);
   tree current_class_ref_copy = current_class_ref;
@@ -34102,9 +34112,10 @@ cp_parser_function_contract_specifier (cp_parser *parser)
       /* Enable location wrappers when parsing contracts.  */
       auto suppression = make_temp_override (suppress_location_wrappers, 0);
 
-      /* D4324: constification is off unless the control type opts in.  When
-       it does, treat the current class object as const in the condition.  */
-      bool constify_p = contract_control_constifies (control_type);
+      /* D4324: with control objects enabled, constification is opt-in via the
+       control type; otherwise P2900 constification (always on) applies.  */
+      bool constify_p = flag_contract_control_objects
+	? contract_control_constifies (control_type) : true;
       auto constify_ovr = make_temp_override (contract_condition_constify_p,
 					      constify_p);
       tree current_class_ref_copy = current_class_ref;

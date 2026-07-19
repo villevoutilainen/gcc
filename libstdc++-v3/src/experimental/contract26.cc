@@ -24,6 +24,7 @@
 // <http://www.gnu.org/licenses/>.
 
 #include <contracts>
+#include <exception> // std::terminate
 
 #ifndef __cpp_lib_contracts
 # error "This file requires C++26 contracts support to be enabled"
@@ -136,6 +137,11 @@ void __d4324_log_violation(const char* comment, std::source_location loc) noexce
     << " at " << loc.file_name() << ':' << loc.line()
     << ": " << (comment ? comment : "(no predicate text)") << std::endl;
 #endif
+}
+
+[[noreturn]] void __d4324_terminate() noexcept
+{
+  std::terminate();
 }
 
 }

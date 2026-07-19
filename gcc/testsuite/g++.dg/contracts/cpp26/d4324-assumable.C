@@ -4,7 +4,7 @@
 // predicate is handed to the optimizer (no runtime evaluation), and a later
 // branch that contradicts it is eliminated.
 // { dg-do compile { target c++26 } }
-// { dg-additional-options "-fcontracts -fcontract-evaluation-semantic=ignore -O2 -fdump-tree-optimized" }
+// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=ignore -O2 -fdump-tree-optimized" }
 
 namespace std {
 namespace contracts {

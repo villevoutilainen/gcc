@@ -2340,6 +2340,10 @@ declare_one_violation_handler_wrapper (tree fn_name, tree fn_type,
 }
 
 static GTY(()) tree tu_has_violation = NULL_TREE;
+/* The P2900 exception-to-violation entry point.  Only declared/emitted in
+   the default (non-D4324) mode; D4324 does not translate predicate
+   exceptions into violations.  */
+static GTY(()) tree tu_has_violation_exception = NULL_TREE;
 
 static void
 declare_violation_handler_wrappers ()
@@ -2354,6 +2358,13 @@ declare_violation_handler_wrappers ()
   v_obj_type = cp_build_reference_type (v_obj_type, /*rval*/false);
   tree fn_type = build_function_type_list (void_type_node, v_obj_type,
 					   uint16_type_node, NULL_TREE);
+  if (!flag_contract_control_objects)
+    {
+      tree fn_name_ex = get_identifier ("__tu_has_violation_exception");
+      tu_has_violation_exception
+	= declare_one_violation_handler_wrapper (fn_name_ex, fn_type, v_obj_type,
+						 uint16_type_node);
+    }
   tree fn_name = get_identifier ("__tu_has_violation");
   tu_has_violation
     = declare_one_violation_handler_wrapper (fn_name, fn_type, v_obj_type,
@@ -2551,6 +2562,59 @@ maybe_emit_violation_handler_wrappers ()
   finish_function_body (body);
   tu_has_violation = finish_function (false);
   expand_or_defer_fn (tu_has_violation);
+
+  /* tu_has_violation_exception (P2900 only; not declared under D4324).  */
+  if (tu_has_violation_exception)
+    {
+      start_preparsed_function (tu_has_violation_exception, NULL_TREE,
+				SF_DEFAULT | SF_PRE_PARSED);
+      body = begin_function_body ();
+      compound_stmt = begin_compound_stmt (BCS_FN_BODY);
+      v = DECL_ARGUMENTS (tu_has_violation_exception);
+      semantic = DECL_CHAIN (v);
+      location_t loc = DECL_SOURCE_LOCATION (tu_has_violation_exception);
+
+      tree a_type = strip_top_quals (non_reference (TREE_TYPE (v)));
+      tree v2 = build_decl (loc, VAR_DECL, NULL_TREE, a_type);
+      DECL_SOURCE_LOCATION (v2) = loc;
+      DECL_CONTEXT (v2) = current_function_decl;
+      DECL_ARTIFICIAL (v2) = true;
+      layout_decl (v2, 0);
+      v2 = pushdecl (v2);
+      add_decl_expr (v2);
+      tree r = cp_build_init_expr (v2, convert_from_reference (v));
+      finish_expr_stmt (r);
+      tree memb = lookup_member (a_type, get_identifier ("_M_detection_mode"),
+				 /*protect=*/1, /*want_type=*/0,
+				 tf_warning_or_error);
+      r = build_class_member_access_expr (v2, memb, NULL_TREE, false,
+					  tf_warning_or_error);
+      r = cp_build_modify_expr
+	(loc, r, NOP_EXPR,
+	 build_int_cst (uint16_type_node, (uint16_t)CDM_EVAL_EXCEPTION),
+	 tf_warning_or_error);
+      finish_expr_stmt (r);
+      /* We are going to call the handler.  */
+      build_contract_handler_call (v);
+
+      if_observe = begin_if_stmt ();
+      /* if (observe) return; */
+      cond = build2 (EQ_EXPR, uint16_type_node, semantic,
+		     build_int_cst (uint16_type_node, (uint16_t)CES_OBSERVE));
+      finish_if_stmt_cond (cond, if_observe);
+      emit_builtin_observable_checkpoint ();
+      finish_then_clause (if_observe);
+      begin_else_clause (if_observe);
+      /* else terminate.  */
+      finish_expr_stmt (build_call_a (terminate_wrapper, 0, nullptr));
+      finish_else_clause (if_observe);
+      finish_if_stmt (if_observe);
+      finish_return_stmt (NULL_TREE);
+      finish_compound_stmt (compound_stmt);
+      finish_function_body (body);
+      tu_has_violation_exception = finish_function (false);
+      expand_or_defer_fn (tu_has_violation_exception);
+    }
 }
 
 /* Build a layout-compatible internal version of contract_violation type.  */
@@ -3036,8 +3100,10 @@ contract_control_operator (tree ctrl)
    for now (populated with the real location once the run tests land).  */
 
 /* Build the D4324 control-object dispatch call for CONTRACT inside CC_BIND
-   (a BIND_EXPR whose variable chain is available for temporaries).  Returns
-   an expression of type violation_response or error_mark_node.  */
+   (a BIND_EXPR whose variable chain is available for temporaries).  The
+   control object's operator() returns void: returning means proceed, and a
+   terminating control terminates in its own body.  Returns the call
+   expression or error_mark_node.  */
 
 static tree
 build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind)
@@ -3168,10 +3234,8 @@ build_contract_check (tree contract)
   if (calls_handler)
     declare_violation_handler_wrappers ();
 
-  /* Build a statement expression to hold a contract check.  D4324 does not
-     translate a predicate exception into a violation: an exception thrown
-     while evaluating the predicate propagates as an ordinary exception,
-     stopped at the nearest noexcept boundary.  */
+  /* Build a statement expression to hold a contract check, with the check
+     potentially wrapped in a try-catch expr (P2900 mode only).  */
   tree cc_bind = build3 (BIND_EXPR, void_type_node, NULL, NULL, NULL);
   BIND_EXPR_BODY (cc_bind) = push_stmt_list ();
 
@@ -3180,40 +3244,106 @@ build_contract_check (tree contract)
   tree cond = build_x_unary_op (loc, TRUTH_NOT_EXPR, condition, NULL_TREE,
 				tf_warning_or_error);
 
+  /* The bare (non control-object) path builds a violation object and, in the
+     default P2900 mode, may wrap a throwing predicate in a try/catch that
+     translates the exception into a violation.  The D4324 control-object path
+     does neither: it just calls the control object.  */
+  tree violation = NULL_TREE;
+  tree s_const = NULL_TREE;
+  if (!control_op)
+    {
+      if (quick)
+	/* We will not be calling a handler.  */
+	violation = build_zero_cst (nullptr_type_node);
+      else
+	{
+	  /* Build a violation object, with the contract settings.  */
+	  tree ctor = build_contract_violation_ctor (contract);
+	  gcc_checking_assert (TREE_CONSTANT (ctor));
+	  violation = build_contract_violation_constant (ctor, contract);
+	  violation = build_address (violation);
+	}
+      s_const = build_int_cst (uint16_type_node, semantic);
+
+      /* P2900 only: translate an exception thrown while evaluating the
+	 predicate into a violation.  D4324 leaves it to propagate to the
+	 nearest noexcept boundary, so noexcept keeps its meaning.  */
+      bool check_might_throw = !flag_contract_control_objects
+	&& flag_exceptions && !expr_noexcept_p (condition, tf_none);
+      if (check_might_throw)
+	{
+	  bool viol_is_var = false;
+	  /* This will hold the computed condition.  */
+	  tree check_failed = build_decl (loc, VAR_DECL, NULL,
+					  boolean_type_node);
+	  DECL_ARTIFICIAL (check_failed) = true;
+	  DECL_IGNORED_P (check_failed) = true;
+	  DECL_CONTEXT (check_failed) = current_function_decl;
+	  layout_decl (check_failed, 0);
+	  add_decl_expr (check_failed);
+	  DECL_CHAIN (check_failed) = BIND_EXPR_VARS (cc_bind);
+	  BIND_EXPR_VARS (cc_bind) = check_failed;
+	  tree check_try = begin_try_block ();
+	  finish_expr_stmt (cp_build_init_expr (check_failed, cond));
+	  finish_try_block (check_try);
+
+	  tree handler = begin_handler ();
+	  finish_handler_parms (NULL_TREE, handler); /* catch (...) */
+	  if (quick)
+	    finish_expr_stmt (build_call_a (terminate_wrapper, 0, nullptr));
+	  else
+	    {
+	      if (viol_is_var)
+		{
+		  /* We can update the detection mode here.  */
+		  tree memb
+		    = lookup_member (builtin_contract_violation_type,
+				     get_identifier ("_M_detection_mode"),
+				     1, 0, tf_warning_or_error);
+		  tree r = cp_build_indirect_ref (loc, violation, RO_UNARY_STAR,
+						  tf_warning_or_error);
+		  r = build_class_member_access_expr (r, memb, NULL_TREE, false,
+						      tf_warning_or_error);
+		  r = cp_build_modify_expr
+		    (loc, r, NOP_EXPR,
+		     build_int_cst (uint16_type_node,
+				    (uint16_t)CDM_EVAL_EXCEPTION),
+		     tf_warning_or_error);
+		  finish_expr_stmt (r);
+		  finish_expr_stmt (build_call_n (tu_has_violation, 2,
+						  violation, s_const));
+		}
+	      else
+		/* We need to make a copy of the violation object to update.  */
+		finish_expr_stmt (build_call_n (tu_has_violation_exception, 2,
+						violation, s_const));
+	      /* If we reach here, we have handled the exception thrown and do
+		 not need further action.  */
+	      tree e = cp_build_modify_expr (loc, check_failed, NOP_EXPR,
+					     boolean_false_node,
+					     tf_warning_or_error);
+	      finish_expr_stmt (e);
+	    }
+	  finish_handler (handler);
+	  finish_handler_sequence (check_try);
+	  cond = check_failed;
+	  BIND_EXPR_VARS (cc_bind) = nreverse (BIND_EXPR_VARS (cc_bind));
+	}
+    }
+
   tree do_check = begin_if_stmt ();
   finish_if_stmt_cond (cond, do_check);
   if (control_op)
-    {
-      /* D4324 step 3: one call to T::operator()(comment, loc, cfg); on a
-	 terminate response contract-terminate, otherwise proceed.  */
-      tree resp = build_contract_control_call (contract, ctrl, control_op,
-					      cc_bind);
-      if (resp && resp != error_mark_node)
-	{
-	  resp = save_expr (resp);
-	  /* violation_response::terminate == 1 (proceed == 0).  */
-	  tree is_term = build2 (EQ_EXPR, boolean_type_node, resp,
-				 build_int_cst (TREE_TYPE (resp), 1));
-	  tree if_term = begin_if_stmt ();
-	  finish_if_stmt_cond (is_term, if_term);
-	  finish_expr_stmt (build_call_a (terminate_wrapper, 0, nullptr));
-	  finish_then_clause (if_term);
-	  finish_if_stmt (if_term);
-	}
-    }
+    /* D4324 step 3: a single call to T::operator()(comment, loc, cfg).  The
+       operator returns void; returning means proceed, and terminating is the
+       control object's own responsibility (it terminates in its body).  */
+    finish_expr_stmt (build_contract_control_call (contract, ctrl, control_op,
+						   cc_bind));
   else if (quick)
     /* We will not be calling a handler.  */
     finish_expr_stmt (build_call_a (terminate_wrapper, 0, nullptr));
   else
-    {
-      /* Build a violation object, with the contract settings.  */
-      tree ctor = build_contract_violation_ctor (contract);
-      gcc_checking_assert (TREE_CONSTANT (ctor));
-      tree violation = build_contract_violation_constant (ctor, contract);
-      violation = build_address (violation);
-      tree s_const = build_int_cst (uint16_type_node, semantic);
-      finish_expr_stmt (build_call_n (tu_has_violation, 2, violation, s_const));
-    }
+    finish_expr_stmt (build_call_n (tu_has_violation, 2, violation, s_const));
   finish_then_clause (do_check);
   finish_if_stmt (do_check);
 

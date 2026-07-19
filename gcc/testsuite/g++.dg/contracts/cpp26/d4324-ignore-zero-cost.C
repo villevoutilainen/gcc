@@ -4,7 +4,7 @@
 // the compiler can provide: a library call form would have to evaluate the
 // predicate to make its call.
 // { dg-do compile { target c++26 } }
-// { dg-additional-options "-fcontracts -fcontract-evaluation-semantic=enforce -fdump-tree-gimple" }
+// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=enforce -fdump-tree-gimple" }
 
 namespace std {
 namespace contracts {
