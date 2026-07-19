@@ -26,6 +26,9 @@
 
 #include <bit>
 #include <cfenv>
+#if defined(__MINGW32__) && !defined(_RC_NEAR)
+# define _RC_NEAR 0x00000000
+#endif
 #include <cmath>
 #include <cstdio>
 #include <cstring>
