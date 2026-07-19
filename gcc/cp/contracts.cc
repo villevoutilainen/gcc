@@ -257,12 +257,25 @@ match_contract_specifiers (location_t oldloc, tree old_contracts,
   return true;
 }
 
+static bool contract_control_is_ignored (tree);
+static bool contract_control_assumable (tree);
+
 /* Return true if CONTRACT is checked or assumed under the current build
    configuration. */
 
 static bool
 contract_active_p (tree contract)
 {
+  /* D4324: a named control type decides activity by its compile-time members
+     rather than the translation-unit semantic.  The assertion is active if it
+     is not ignored (a runtime check or control-object dispatch runs) or if it
+     is ignored but assumable (an optimizer assumption is emitted).  */
+  if (tree ctrl = CONTRACT_CONTROL_TYPE (contract))
+    {
+      if (!contract_control_is_ignored (ctrl))
+	return true;
+      return contract_control_assumable (ctrl);
+    }
   return get_evaluation_semantic (contract) != CES_IGNORE;
 }
 
@@ -2946,10 +2959,16 @@ contract_control_bool_member (tree ctrl, const char *name)
 
   tree m = lookup_member (ctrl, get_identifier (name),
 			  /*protect=*/1, /*want_type=*/false, tf_none);
-  if (!m || m == error_mark_node || BASELINK_P (m))
+  if (!m || m == error_mark_node || BASELINK_P (m) || TREE_CODE (m) != VAR_DECL)
     return -1;
 
-  tree val = maybe_constant_value (m);
+  /* Extract the constexpr initializer of the static data member and fold it;
+     scalar_constant_value returns the decl unchanged if it is not a usable
+     constant.  */
+  tree val = scalar_constant_value (m);
+  if (val == m)
+    return -1;
+  val = maybe_constant_value (val);
   if (!val || TREE_CODE (val) != INTEGER_CST)
     return -1;
   return integer_onep (val) ? 1 : 0;
@@ -2963,6 +2982,15 @@ bool
 contract_control_constifies (tree ctrl)
 {
   return contract_control_bool_member (ctrl, "constify") == 1;
+}
+
+/* True if the control type CTRL has assumable == true, meaning an ignored
+   predicate may be handed to the optimizer as an assumption.  */
+
+static bool
+contract_control_assumable (tree ctrl)
+{
+  return contract_control_bool_member (ctrl, "assumable") == 1;
 }
 
 /* If the control type CTRL provides the D4324 dispatch operator
@@ -3041,21 +3069,25 @@ build_contract_check (tree contract)
 {
   tree ctrl = CONTRACT_CONTROL_TYPE (contract);
 
-  /* D4324 step 1: when a named control type reports, at compile time, that
-     this assertion is ignored for the TU's evaluation_config, emit no code
-     and do not evaluate the predicate - even under an enforced default.  */
-  if (contract_control_is_ignored (ctrl))
+  /* D4324 step 1: a named control type decides, at compile time, whether this
+     assertion is ignored for the TU's evaluation_config.  An ignored
+     assertion emits no runtime check; if the control type is also assumable
+     the predicate is handed to the optimizer as an assumption (evaluated by
+     no one at runtime) instead.  */
+  bool ignored = contract_control_is_ignored (ctrl);
+  bool assumable = ignored && contract_control_assumable (ctrl);
+  if (ignored && !assumable)
     return void_node;
 
   /* If the control type provides the D4324 dispatch operator, codegen calls
      it and branches on the returned violation_response instead of using the
      built-in evaluation-semantic switch.  */
-  tree control_op = contract_control_operator (ctrl);
+  tree control_op = ignored ? NULL_TREE : contract_control_operator (ctrl);
 
   contract_evaluation_semantic semantic = CES_ENFORCE;
   bool quick = false;
   bool calls_handler = false;
-  if (!control_op)
+  if (!ignored && !control_op)
     {
       semantic = get_evaluation_semantic (contract);
       switch (semantic)
@@ -3088,6 +3120,13 @@ build_contract_check (tree contract)
       if (condition == error_mark_node)
 	return NULL_TREE;
     }
+
+  /* D4324 step 1, assumable: emit an optimizer assumption over the predicate
+     rather than a runtime check.  IFN_ASSUME does not evaluate the predicate
+     at runtime, so this stays zero-cost while letting the optimizer simplify
+     downstream code.  */
+  if (assumable)
+    return build_assume_call (loc, condition);
 
   tree terminate_wrapper = terminate_fn;
   if (flag_contracts_conservative_ipa)
