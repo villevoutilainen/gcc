@@ -2033,6 +2033,22 @@ rebuild_postconditions (tree fndecl)
       bool old_pc = processing_postcondition;
       processing_postcondition = true;
 
+      /* Re-establish the constification state for this walk.  tsubst_expr
+	 re-visits the VIEW_CONVERT_EXPR const-wrappers in the condition and
+	 calls constify_contract_access on the remapped result variable; that
+	 helper is gated on contract_condition_constify_p (D4324), which is the
+	 parser-time global and is not otherwise set here.  Leaving it false
+	 lets the result variable come back non-const, which sends tsubst down
+	 the "not const, presumably still dependent" path where it substitutes
+	 the wrapper's placeholder type with an empty argument vector and ICEs
+	 (e.g. auto return with post(r: check(r))).  Matching the parser's
+	 setting keeps the result const, exactly as P2900 requires.  */
+      bool constify_p = flag_contract_control_objects
+	? contract_control_constifies (CONTRACT_CONTROL_TYPE (contract))
+	: true;
+      auto constify_ovr
+	= make_temp_override (contract_condition_constify_p, constify_p);
+
       condition = tsubst_expr (condition, make_tree_vec (0),
 			       tf_warning_or_error, fndecl);
 
