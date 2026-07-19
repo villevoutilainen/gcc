@@ -37,6 +37,7 @@
 #include <bits/version.h>
 
 #ifdef __cpp_lib_contracts
+#include <concepts>
 #include <source_location>
 #include <bits/exception_ptr.h>
 
@@ -105,6 +106,86 @@ namespace contracts
   };
 
   void invoke_default_contract_violation_handler(const contract_violation&) noexcept;
+
+  // D4324 "Minimum Language, Maximum Library" control-object surface.
+
+  enum class evaluation_config : unsigned {
+    ignore = 0, observe = 1, enforce = 2, quick_enforce = 3
+  };
+
+  enum class violation_response { proceed, terminate };
+
+  template <class _Tp>
+  concept assertion_control =
+    __is_empty(_Tp) &&
+    requires (_Tp __c, const char* __comment, std::source_location __loc,
+	      evaluation_config __cfg) {
+      { _Tp::is_ignored(__cfg) } -> same_as<bool>;
+      { bool(_Tp::constify) };
+      { bool(_Tp::assumable) };
+      { __c(__comment, __loc, __cfg) } -> same_as<violation_response>;
+    };
+
+  void __d4324_log_violation(const char*, std::source_location) noexcept;
+
+  struct default_control {
+    static constexpr bool
+    is_ignored(evaluation_config __cfg) noexcept
+    { return __cfg == evaluation_config::ignore; }
+
+    static constexpr bool constify  = false;
+    static constexpr bool assumable = false;
+
+    violation_response
+    operator()(const char* __comment, std::source_location __loc,
+	       evaluation_config __cfg) const noexcept
+    {
+      __d4324_log_violation(__comment, __loc);
+      return (__cfg == evaluation_config::observe)
+	? violation_response::proceed
+	: violation_response::terminate;
+    }
+  };
+
+  inline constexpr default_control default_v{};
+
+  struct review {
+    static constexpr bool
+    is_ignored(evaluation_config __cfg) noexcept
+    { return __cfg == evaluation_config::ignore; }
+
+    static constexpr bool constify  = true;
+    static constexpr bool assumable = false;
+
+    violation_response
+    operator()(const char* __comment, std::source_location __loc,
+	       evaluation_config __cfg) const noexcept
+    {
+      __d4324_log_violation(__comment, __loc);
+      return violation_response::proceed;
+    }
+  };
+
+  inline constexpr review review_v{};
+
+  struct mandatory {
+    static constexpr bool
+    is_ignored(evaluation_config __cfg) noexcept
+    { return __cfg == evaluation_config::ignore; }
+
+    static constexpr bool constify  = false;
+    static constexpr bool assumable = true;
+
+    violation_response
+    operator()(const char* __comment, std::source_location __loc,
+	       evaluation_config __cfg) const noexcept
+    {
+      __d4324_log_violation(__comment, __loc);
+      return violation_response::terminate;
+    }
+  };
+
+  inline constexpr mandatory mandatory_v{};
 
 } // namespace contracts
 

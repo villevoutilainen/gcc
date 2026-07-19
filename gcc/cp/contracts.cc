@@ -3035,9 +3035,14 @@ contract_control_operator (tree ctrl)
    as the evaluation_config; the source_location argument is value-initialized
    for now (populated with the real location once the run tests land).  */
 
+/* Build the D4324 control-object dispatch call for CONTRACT inside CC_BIND
+   (a BIND_EXPR whose variable chain is available for temporaries).  Returns
+   an expression of type violation_response or error_mark_node.  */
+
 static tree
-build_contract_control_call (tree contract, tree ctrl, tree op)
+build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind)
 {
+  location_t loc = EXPR_LOCATION (contract);
   tree pt = FUNCTION_FIRST_USER_PARMTYPE (op);
   tree t_comment = TREE_VALUE (pt); pt = TREE_CHAIN (pt);
   tree t_loc = TREE_VALUE (pt); pt = TREE_CHAIN (pt);
@@ -3046,17 +3051,46 @@ build_contract_control_call (tree contract, tree ctrl, tree op)
   tree comment = CONTRACT_COMMENT (contract);
   if (!comment)
     comment = build_zero_cst (t_comment);
-  tree loc_arg = build_value_init (TYPE_MAIN_VARIANT (non_reference (t_loc)),
-				   tf_warning_or_error);
+
+  /* Build a zero-initialized source_location on the stack, registered in
+     the BIND_EXPR so the gimplifier can find it.  */
+  tree loc_type = TYPE_MAIN_VARIANT (non_reference (t_loc));
+  tree loc_var = build_decl (loc, VAR_DECL, NULL_TREE, loc_type);
+  DECL_ARTIFICIAL (loc_var) = true;
+  DECL_IGNORED_P (loc_var) = true;
+  DECL_CONTEXT (loc_var) = current_function_decl;
+  layout_decl (loc_var, 0);
+  DECL_INITIAL (loc_var) = build_zero_cst (loc_type);
+  DECL_CHAIN (loc_var) = BIND_EXPR_VARS (cc_bind);
+  BIND_EXPR_VARS (cc_bind) = loc_var;
+  add_decl_expr (loc_var);
+
   tree cfg_arg = build_int_cst (t_cfg, contract_evaluation_config_value ());
 
-  releasing_vec args;
-  vec_safe_push (args, comment);
-  vec_safe_push (args, loc_arg);
-  vec_safe_push (args, cfg_arg);
+  /* Build a zero-initialized control object on the stack; register it.  */
+  tree ctrl_var = build_decl (loc, VAR_DECL, NULL_TREE, ctrl);
+  DECL_ARTIFICIAL (ctrl_var) = true;
+  DECL_IGNORED_P (ctrl_var) = true;
+  DECL_CONTEXT (ctrl_var) = current_function_decl;
+  layout_decl (ctrl_var, 0);
+  DECL_INITIAL (ctrl_var) = build_zero_cst (ctrl);
+  DECL_CHAIN (ctrl_var) = BIND_EXPR_VARS (cc_bind);
+  BIND_EXPR_VARS (cc_bind) = ctrl_var;
+  add_decl_expr (ctrl_var);
 
-  tree obj = get_target_expr (build_value_init (ctrl, tf_warning_or_error));
-  return build_op_call (obj, &args, tf_warning_or_error);
+  tree this_arg = build_fold_addr_expr (ctrl_var);
+  tree this_type = TREE_TYPE (DECL_ARGUMENTS (op));
+  this_arg = fold_convert (this_type, this_arg);
+
+  tree fn_addr = build_addr_func (op, tf_warning_or_error);
+  tree fntype = TREE_TYPE (TREE_TYPE (fn_addr));
+  tree result_type = TREE_TYPE (fntype);
+  if (SCALAR_TYPE_P (result_type) || VOID_TYPE_P (result_type))
+    result_type = cv_unqualified (result_type);
+
+  tree args[4] = { this_arg, comment, loc_var, cfg_arg };
+  mark_used (op);
+  return build_call_array_loc (loc, result_type, fn_addr, 4, args);
 }
 
 
@@ -3152,7 +3186,8 @@ build_contract_check (tree contract)
     {
       /* D4324 step 3: one call to T::operator()(comment, loc, cfg); on a
 	 terminate response contract-terminate, otherwise proceed.  */
-      tree resp = build_contract_control_call (contract, ctrl, control_op);
+      tree resp = build_contract_control_call (contract, ctrl, control_op,
+					      cc_bind);
       if (resp && resp != error_mark_node)
 	{
 	  resp = save_expr (resp);
