@@ -44,7 +44,15 @@
 // and overloads of _S_copy_chars for string iterators and pointers.
 #define _GLIBCXX_DEFINING_STRING_INSTANTIATIONS 1
 
+// On Windows the gthreads header transitively includes <windows.h>, whose
+// <winnt.h> declares a struct bitfield named 'C'.  When this file is included
+// by another instantiation file that has already defined the macro C (to char
+// or wchar_t), that macro would corrupt the winnt.h declaration.  Push the
+// macro aside across the system include so the two do not clash.
+#pragma push_macro("C")
+#undef C
 #include <string>
+#pragma pop_macro("C")
 
 // Instantiation configuration.
 #ifndef C
