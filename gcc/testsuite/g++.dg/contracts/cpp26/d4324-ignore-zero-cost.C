@@ -6,20 +6,7 @@
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=enforce -fdump-tree-gimple" }
 
-namespace std {
-namespace contracts {
-enum class evaluation_config : unsigned {
-  ignore = 0, observe = 1, enforce = 2, quick_enforce = 3
-};
-enum class violation_response { proceed, terminate };
-struct ignore {
-  static constexpr bool is_ignored (evaluation_config) { return true; }
-  static constexpr bool constify = false;
-  static constexpr bool assumable = false;
-};
-inline constexpr ignore ignore_v{};
-}
-}
+#include <contracts>
 
 bool expensive_check (int);	// never called: the predicate is not evaluated
 

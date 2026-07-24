@@ -11,9 +11,9 @@
 
 static_assert (__cpp_contracts >= 202502L);
 
-struct review {};
-struct mandatory {};
-template<class T> struct ctl {};
+struct review { void operator() (const std::contracts::assertion_context&) const {} };
+struct mandatory { void operator() (const std::contracts::assertion_context&) const {} };
+template<class T> struct ctl { void operator() (const std::contracts::assertion_context&) const {} };
 
 inline constexpr review review_v{};
 inline constexpr mandatory mandatory_v{};
