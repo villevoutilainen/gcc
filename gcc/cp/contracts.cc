@@ -2740,12 +2740,17 @@ init_builtin_contract_violation_type ()
   return builtin_contract_violation_type;
 }
 
+/* Defined below, after get_contracts_source_location_impl_type, which it
+   needs for the location field's type.  */
+static tree init_builtin_assertion_context_type ();
+
 /* Early initialisation of types and functions we will use.  */
 void
 init_contracts ()
 {
   init_terminate_fn ();
   init_builtin_contract_violation_type ();
+  init_builtin_assertion_context_type ();
 }
 
 static GTY(()) tree contracts_source_location_impl_type;
@@ -2836,6 +2841,83 @@ get_src_loc_impl_ptr (location_t loc)
 				  contracts_source_location_impl_type);
   tree p = build_pointer_type (contracts_source_location_impl_type);
   return build_fold_addr_expr_with_type_loc (loc, impl__, p);
+}
+
+/* Build a layout-compatible internal version of assertion_context type.  */
+
+static tree
+get_assertion_context_fields ()
+{
+  if (!contracts_source_location_impl_type)
+    get_contracts_source_location_impl_type ();
+
+  tree fields = NULL_TREE;
+  /* Must match <contracts>:
+  struct assertion_context {
+    const char* comment;
+    std::source_location location;	// a single const __impl* member
+    evaluation_config cfg;		// enum class ... : unsigned
+    void* args;
+    bool (*check)(void*);
+  };
+    If this changes, also update the initializer in
+    build_contract_control_call.  */
+  tree check_fn_type
+    = build_function_type_list (boolean_type_node, ptr_type_node, NULL_TREE);
+  const tree types[] = { const_string_type_node,
+			  build_pointer_type (contracts_source_location_impl_type),
+			  unsigned_type_node,
+			  ptr_type_node,
+			  build_pointer_type (check_fn_type),
+			};
+  const char *names[] = { "comment",
+			   "location",
+			   "cfg",
+			   "args",
+			   "check",
+			 };
+  unsigned n = 0;
+  for (tree type : types)
+    {
+      /* finish_builtin_struct wants fields chained in reverse.  */
+      tree next = build_decl (BUILTINS_LOCATION, FIELD_DECL,
+			      get_identifier (names[n++]), type);
+      DECL_CHAIN (next) = fields;
+      fields = next;
+    }
+  return fields;
+}
+
+/* Build a type to represent a control object's operator() argument.  */
+
+static tree
+init_builtin_assertion_context_type ()
+{
+  if (builtin_assertion_context_type)
+    return builtin_assertion_context_type;
+
+  tree fields = get_assertion_context_fields ();
+
+  iloc_sentinel ils (input_location);
+  input_location = BUILTINS_LOCATION;
+  builtin_assertion_context_type = make_class_type (RECORD_TYPE);
+  finish_builtin_struct (builtin_assertion_context_type,
+			 "__builtin_assertion_context_type", fields, NULL_TREE);
+  CLASSTYPE_AS_BASE (builtin_assertion_context_type)
+    = builtin_assertion_context_type;
+  DECL_CONTEXT (TYPE_NAME (builtin_assertion_context_type))
+    = FROB_CONTEXT (global_namespace);
+  CLASSTYPE_LITERAL_P (builtin_assertion_context_type) = true;
+  CLASSTYPE_LAZY_COPY_CTOR (builtin_assertion_context_type) = true;
+  xref_basetypes (builtin_assertion_context_type, /*bases=*/NULL_TREE);
+  DECL_CONTEXT (TYPE_NAME (builtin_assertion_context_type))
+    = FROB_CONTEXT (global_namespace);
+  DECL_ARTIFICIAL (TYPE_NAME (builtin_assertion_context_type)) = true;
+  TYPE_ARTIFICIAL (builtin_assertion_context_type) = true;
+  builtin_assertion_context_type
+    = cp_build_qualified_type (builtin_assertion_context_type,
+			       TYPE_QUAL_CONST);
+  return builtin_assertion_context_type;
 }
 
 /* Build a contract_violation layout compatible object. */
@@ -3119,14 +3201,13 @@ contract_control_assumable (tree ctrl)
 }
 
 /* If the control type CTRL provides the D4324 dispatch operator
-   operator()(const char*, std::source_location, evaluation_config, void*,
-   bool(*)(void*)), return its FUNCTION_DECL, otherwise NULL_TREE.  The last
-   two parameters are a type-erased bundle of the assertion's real arguments
-   and a callback that evaluates the predicate given that bundle: the
-   operator decides whether/when to call it, rather than the compiler always
-   evaluating the predicate itself.  A control type without such an operator
-   (or a bare contract) uses the built-in evaluation-semantic path
-   instead.  */
+   operator()(const assertion_context&), return its FUNCTION_DECL,
+   otherwise NULL_TREE.  assertion_context bundles the comment, source
+   location, evaluation_config, and a type-erased (args, check) callback
+   pair that evaluates the predicate given those args: the operator decides
+   whether/when to call it, rather than the compiler always evaluating the
+   predicate itself.  A control type without such an operator (or a bare
+   contract) uses the built-in evaluation-semantic path instead.  */
 
 static tree
 contract_control_operator (tree ctrl)
@@ -3148,12 +3229,20 @@ contract_control_operator (tree ctrl)
       tree fn = *it;
       if (TREE_CODE (fn) != FUNCTION_DECL)
 	continue;
-      int n = 0;
-      for (tree t = FUNCTION_FIRST_USER_PARMTYPE (fn);
-	   t && t != void_list_node; t = TREE_CHAIN (t))
-	++n;
-      if (n == 5)
-	return fn;
+      tree parms = FUNCTION_FIRST_USER_PARMTYPE (fn);
+      if (!parms || parms == void_list_node)
+	continue;
+      if (TREE_CHAIN (parms) != void_list_node)
+	continue;
+      /* The one parameter should be a reference (or value) to some class
+	 type -- assertion_context, by convention, though we don't depend on
+	 the name: a stray unrelated single-parameter operator() is far more
+	 plausible than one taking 5 parameters was, so this arity check
+	 alone is weaker evidence than it used to be.  */
+      tree parm_type = non_reference (TREE_VALUE (parms));
+      if (!CLASS_TYPE_P (parm_type))
+	continue;
+      return fn;
     }
   return NULL_TREE;
 }
@@ -3480,43 +3569,55 @@ build_predicate_arg_struct_var (tree contract, tree struct_type, tree cc_bind,
    control object's operator() returns void: returning means proceed, and a
    terminating control terminates in its own body.  ARGS_PTR is a void*
    expression pointing at the packed argument struct for this assertion (see
-   build_predicate_arg_struct) and THUNK_FN is the FUNCTION_DECL of the
-   matching bool(void*) thunk (see build_predicate_thunk_function): together
-   these let the control object evaluate the predicate itself, on its own
-   terms, via OP's trailing (void*, bool(*)(void*)) parameters instead of the
-   compiler evaluating it eagerly.  Returns the call expression or
-   error_mark_node.  */
+   build_predicate_arg_struct_type/_var) and THUNK_FN is the FUNCTION_DECL of
+   the matching bool(void*) thunk (see build_predicate_thunk_function):
+   together these let the control object evaluate the predicate itself, on
+   its own terms, via a callback bundled into OP's single assertion_context
+   parameter, instead of the compiler evaluating it eagerly.  Returns the
+   call expression or error_mark_node.  */
 
 static tree
 build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
 			      tree args_ptr, tree thunk_fn)
 {
   location_t loc = EXPR_LOCATION (contract);
-  tree pt = FUNCTION_FIRST_USER_PARMTYPE (op);
-  tree t_comment = TREE_VALUE (pt); pt = TREE_CHAIN (pt);
-  tree t_loc = TREE_VALUE (pt); pt = TREE_CHAIN (pt);
-  tree t_cfg = TREE_VALUE (pt); pt = TREE_CHAIN (pt);
-  tree t_args = TREE_VALUE (pt); pt = TREE_CHAIN (pt);
-  tree t_check = TREE_VALUE (pt);
+  tree t_ctx = TREE_VALUE (FUNCTION_FIRST_USER_PARMTYPE (op));
 
   tree comment = CONTRACT_COMMENT (contract);
   if (!comment)
-    comment = build_zero_cst (t_comment);
+    comment = build_zero_cst (const_string_type_node);
 
-  /* Build a zero-initialized source_location on the stack, registered in
-     the BIND_EXPR so the gimplifier can find it.  */
-  tree loc_type = TYPE_MAIN_VARIANT (non_reference (t_loc));
-  tree loc_var = build_decl (loc, VAR_DECL, NULL_TREE, loc_type);
-  DECL_ARTIFICIAL (loc_var) = true;
-  DECL_IGNORED_P (loc_var) = true;
-  DECL_CONTEXT (loc_var) = current_function_decl;
-  layout_decl (loc_var, 0);
-  DECL_INITIAL (loc_var) = build_zero_cst (loc_type);
-  DECL_CHAIN (loc_var) = BIND_EXPR_VARS (cc_bind);
-  BIND_EXPR_VARS (cc_bind) = loc_var;
-  add_decl_expr (loc_var);
+  tree check_fn = build_addr_func (thunk_fn, tf_warning_or_error);
+  mark_used (thunk_fn);
 
-  tree cfg_arg = build_int_cst (t_cfg, contract_evaluation_config_value ());
+  /* Must match the field order in get_assertion_context_fields.  */
+  tree f0 = next_aggregate_field (TYPE_FIELDS (builtin_assertion_context_type));
+  tree f1 = next_aggregate_field (DECL_CHAIN (f0));
+  tree f2 = next_aggregate_field (DECL_CHAIN (f1));
+  tree f3 = next_aggregate_field (DECL_CHAIN (f2));
+  tree f4 = next_aggregate_field (DECL_CHAIN (f3));
+  tree ctor = build_constructor_va
+    (builtin_assertion_context_type, 5,
+     f0, comment,
+     f1, get_src_loc_impl_ptr (loc),
+     f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_config_value ()),
+     f3, fold_convert (TREE_TYPE (f3), args_ptr),
+     f4, fold_convert (TREE_TYPE (f4), check_fn));
+
+  /* Build the assertion_context object on the stack; register it, exactly
+     like the control object below.  Unlike a contract_violation object,
+     this is never a compile-time constant: ARGS_PTR/CHECK_FN are runtime
+     addresses of stack/function locals.  */
+  tree ctx_var = build_decl (loc, VAR_DECL, NULL_TREE,
+			     builtin_assertion_context_type);
+  DECL_ARTIFICIAL (ctx_var) = true;
+  DECL_IGNORED_P (ctx_var) = true;
+  DECL_CONTEXT (ctx_var) = current_function_decl;
+  layout_decl (ctx_var, 0);
+  DECL_INITIAL (ctx_var) = ctor;
+  DECL_CHAIN (ctx_var) = BIND_EXPR_VARS (cc_bind);
+  BIND_EXPR_VARS (cc_bind) = ctx_var;
+  add_decl_expr (ctx_var);
 
   /* CTRL is a constant-expression naming a control OBJECT (pre<expr>, or the
      implicit std::contracts::default_v for a bare pre/post/contract_assert):
@@ -3547,14 +3648,16 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
   if (SCALAR_TYPE_P (result_type) || VOID_TYPE_P (result_type))
     result_type = cv_unqualified (result_type);
 
-  tree args_arg = fold_convert (t_args, args_ptr);
-  tree check_arg = fold_convert (t_check,
-				 build_addr_func (thunk_fn, tf_warning_or_error));
-  mark_used (thunk_fn);
+  /* Reinterpret the internal assertion_context's address as OP's declared
+     (const assertion_context&) parameter, the same layout-compatible-ABI
+     trick build_contract_handler_call already relies on to pass a
+     builtin_contract_violation_type object where a real
+     std::contracts::contract_violation& is expected.  */
+  tree ctx_arg = fold_convert (t_ctx, build_fold_addr_expr (ctx_var));
 
-  tree args[6] = { this_arg, comment, loc_var, cfg_arg, args_arg, check_arg };
+  tree args[2] = { this_arg, ctx_arg };
   mark_used (op);
-  return build_call_array_loc (loc, result_type, fn_addr, 6, args);
+  return build_call_array_loc (loc, result_type, fn_addr, 2, args);
 }
 
 

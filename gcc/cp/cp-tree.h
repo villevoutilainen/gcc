@@ -238,6 +238,7 @@ enum cp_tree_index
     CPTI_DCAST,
     CPTI_META_INFO_TYPE,
     CPTI_CONTRACT_VIOLATION_TYPE,
+    CPTI_ASSERTION_CONTEXT_TYPE,
 
     CPTI_MAX
 };
@@ -270,6 +271,10 @@ extern GTY(()) tree cp_global_trees[CPTI_MAX];
 #define align_type_node			cp_global_trees[CPTI_ALIGN_TYPE]
 #define meta_info_type_node		cp_global_trees[CPTI_META_INFO_TYPE]
 #define builtin_contract_violation_type	cp_global_trees[CPTI_CONTRACT_VIOLATION_TYPE]
+/* D4324: layout-compatible internal version of
+   std::contracts::assertion_context, the struct bundling a control
+   object's operator() argument -- see get_assertion_context_fields.  */
+#define builtin_assertion_context_type	cp_global_trees[CPTI_ASSERTION_CONTEXT_TYPE]
 
 /* We cache these tree nodes so as to call get_identifier less frequently.
    For identifiers for functions, including special member functions such

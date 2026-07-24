@@ -15,9 +15,8 @@ struct my_review {
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
   void
-  operator() (const char*, std::source_location, sc::evaluation_config,
-	      void* args, bool (*check) (void*)) const
-  { if (check (args)) return; logged = true; }		// returns -> continue
+  operator() (const sc::assertion_context& ctx) const
+  { if (ctx.check (ctx.args)) return; logged = true; }		// returns -> continue
 };
 
 inline constexpr my_review my_review_v{};

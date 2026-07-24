@@ -21,9 +21,8 @@ struct capture {
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
   void
-  operator() (const char *, std::source_location, sc::evaluation_config c,
-	      void* args, bool (*check) (void*)) const
-  { if (check (args)) return; seen = c; called = true; }	// returns -> continue
+  operator() (const sc::assertion_context& ctx) const
+  { if (ctx.check (ctx.args)) return; seen = ctx.cfg; called = true; }	// returns -> continue
 };
 
 inline constexpr capture capture_v{};

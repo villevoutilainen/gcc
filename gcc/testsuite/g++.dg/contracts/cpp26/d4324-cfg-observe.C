@@ -14,12 +14,22 @@
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=observe -fdump-tree-gimple" }
 
 namespace std {
-struct source_location {
-  constexpr source_location () = default;
-};
 namespace contracts {
 enum class evaluation_config : unsigned {
   ignore = 0, observe = 1, enforce = 2, quick_enforce = 3
+};
+
+// Layout-compatible stand-in for std::contracts::assertion_context: the
+// compiler builds its own internal equivalent-layout struct (it does not
+// depend on this header declaration), so only the field order/sizes need to
+// match, not the type names.  "location" isn't a real std::source_location
+// here since neither control type below reads it.
+struct assertion_context {
+  const char* comment;
+  const void* location;
+  evaluation_config cfg;
+  void* args;
+  bool (*check) (void*);
 };
 }
 }
@@ -33,9 +43,8 @@ struct if_observe {
   { return c != sc::evaluation_config::observe; }
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
-  void operator() (const char *, std::source_location,
-		   sc::evaluation_config, void* args,
-		   bool (*check) (void*)) const { check (args); }
+  void operator() (const sc::assertion_context& ctx) const
+  { ctx.check (ctx.args); }
 };
 
 struct if_enforce {
@@ -43,9 +52,8 @@ struct if_enforce {
   { return c != sc::evaluation_config::enforce; }
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
-  void operator() (const char *, std::source_location,
-		   sc::evaluation_config, void* args,
-		   bool (*check) (void*)) const { check (args); }
+  void operator() (const sc::assertion_context& ctx) const
+  { ctx.check (ctx.args); }
 };
 
 inline constexpr if_observe if_observe_v{};

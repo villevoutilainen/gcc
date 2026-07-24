@@ -118,22 +118,30 @@ namespace contracts
   // terminates in its own body.  No violation_response is needed.
   //
   // The operator is handed the predicate itself rather than its already-
-  // computed result: __args is an opaque bundle of the assertion's real
-  // arguments and __check is a callback that evaluates the predicate given
+  // computed result: ctx.args is an opaque bundle of the assertion's real
+  // arguments and ctx.check is a callback that evaluates the predicate given
   // that bundle.  This lets the control object decide whether, when, and how
   // many times to evaluate the predicate, and whether to let an exception
   // from it propagate or contain it, instead of the compiler always
   // evaluating eagerly and only calling the operator on failure.
 
+  struct assertion_context {
+    const char* comment;
+    std::source_location location;
+    evaluation_config cfg;
+    void* args;
+    bool (*check)(void*);
+  };
+
   template <class _Tp>
   concept assertion_control =
     __is_empty(_Tp) &&
-    requires (_Tp __c, const char* __comment, std::source_location __loc,
-	      evaluation_config __cfg, void* __args, bool (*__check)(void*)) {
+    requires (_Tp __c, evaluation_config __cfg,
+	      const assertion_context& __ctx) {
       { _Tp::is_ignored(__cfg) } -> same_as<bool>;
       { bool(_Tp::constify) };
       { bool(_Tp::assumable) };
-      { __c(__comment, __loc, __cfg, __args, __check) } -> same_as<void>;
+      { __c(__ctx) } -> same_as<void>;
     };
 
   void __d4324_log_violation(const char*, std::source_location) noexcept;
@@ -148,14 +156,12 @@ namespace contracts
     static constexpr bool assumable = false;
 
     void
-    operator()(const char* __comment, std::source_location __loc,
-	       evaluation_config __cfg, void* __args,
-	       bool (*__check)(void*)) const noexcept
+    operator()(const assertion_context& __ctx) const noexcept
     {
-      if (__check(__args))
+      if (__ctx.check(__ctx.args))
 	return;
-      __d4324_log_violation(__comment, __loc);
-      if (__cfg != evaluation_config::observe)
+      __d4324_log_violation(__ctx.comment, __ctx.location);
+      if (__ctx.cfg != evaluation_config::observe)
 	__d4324_terminate();
     }
   };
@@ -171,13 +177,11 @@ namespace contracts
     static constexpr bool assumable = false;
 
     void
-    operator()(const char* __comment, std::source_location __loc,
-	       evaluation_config, void* __args,
-	       bool (*__check)(void*)) const noexcept
+    operator()(const assertion_context& __ctx) const noexcept
     {
-      if (__check(__args))
+      if (__ctx.check(__ctx.args))
 	return;
-      __d4324_log_violation(__comment, __loc);
+      __d4324_log_violation(__ctx.comment, __ctx.location);
     }
   };
 
@@ -192,13 +196,11 @@ namespace contracts
     static constexpr bool assumable = true;
 
     void
-    operator()(const char* __comment, std::source_location __loc,
-	       evaluation_config, void* __args,
-	       bool (*__check)(void*)) const noexcept
+    operator()(const assertion_context& __ctx) const noexcept
     {
-      if (__check(__args))
+      if (__ctx.check(__ctx.args))
 	return;
-      __d4324_log_violation(__comment, __loc);
+      __d4324_log_violation(__ctx.comment, __ctx.location);
       __d4324_terminate();
     }
   };
