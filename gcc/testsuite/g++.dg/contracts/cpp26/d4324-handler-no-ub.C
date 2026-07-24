@@ -15,9 +15,10 @@ struct my_terminate_ctrl {
   static constexpr bool is_ignored (sc::evaluation_config) { return false; }
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
-  [[noreturn]] void
-  operator() (const char*, std::source_location, sc::evaluation_config) const
-  { std::terminate (); }
+  void
+  operator() (const char*, std::source_location, sc::evaluation_config,
+	      void* args, bool (*check) (void*)) const
+  { if (check (args)) return; std::terminate (); }
 };
 
 inline constexpr my_terminate_ctrl my_terminate_ctrl_v{};

@@ -116,16 +116,24 @@ namespace contracts
   // A control object's call operator returns void: returning means the
   // program continues past the assertion; to end the program the operator
   // terminates in its own body.  No violation_response is needed.
+  //
+  // The operator is handed the predicate itself rather than its already-
+  // computed result: __args is an opaque bundle of the assertion's real
+  // arguments and __check is a callback that evaluates the predicate given
+  // that bundle.  This lets the control object decide whether, when, and how
+  // many times to evaluate the predicate, and whether to let an exception
+  // from it propagate or contain it, instead of the compiler always
+  // evaluating eagerly and only calling the operator on failure.
 
   template <class _Tp>
   concept assertion_control =
     __is_empty(_Tp) &&
     requires (_Tp __c, const char* __comment, std::source_location __loc,
-	      evaluation_config __cfg) {
+	      evaluation_config __cfg, void* __args, bool (*__check)(void*)) {
       { _Tp::is_ignored(__cfg) } -> same_as<bool>;
       { bool(_Tp::constify) };
       { bool(_Tp::assumable) };
-      { __c(__comment, __loc, __cfg) } -> same_as<void>;
+      { __c(__comment, __loc, __cfg, __args, __check) } -> same_as<void>;
     };
 
   void __d4324_log_violation(const char*, std::source_location) noexcept;
@@ -141,8 +149,11 @@ namespace contracts
 
     void
     operator()(const char* __comment, std::source_location __loc,
-	       evaluation_config __cfg) const noexcept
+	       evaluation_config __cfg, void* __args,
+	       bool (*__check)(void*)) const noexcept
     {
+      if (__check(__args))
+	return;
       __d4324_log_violation(__comment, __loc);
       if (__cfg != evaluation_config::observe)
 	__d4324_terminate();
@@ -161,8 +172,13 @@ namespace contracts
 
     void
     operator()(const char* __comment, std::source_location __loc,
-	       evaluation_config) const noexcept
-    { __d4324_log_violation(__comment, __loc); }
+	       evaluation_config, void* __args,
+	       bool (*__check)(void*)) const noexcept
+    {
+      if (__check(__args))
+	return;
+      __d4324_log_violation(__comment, __loc);
+    }
   };
 
   inline constexpr review review_v{};
@@ -175,10 +191,13 @@ namespace contracts
     static constexpr bool constify  = false;
     static constexpr bool assumable = true;
 
-    [[noreturn]] void
+    void
     operator()(const char* __comment, std::source_location __loc,
-	       evaluation_config) const noexcept
+	       evaluation_config, void* __args,
+	       bool (*__check)(void*)) const noexcept
     {
+      if (__check(__args))
+	return;
       __d4324_log_violation(__comment, __loc);
       __d4324_terminate();
     }

@@ -3119,9 +3119,13 @@ contract_control_assumable (tree ctrl)
 }
 
 /* If the control type CTRL provides the D4324 dispatch operator
-   operator()(const char*, std::source_location, evaluation_config), return
-   its FUNCTION_DECL, otherwise NULL_TREE.  A control type without such an
-   operator (or a bare contract) uses the built-in evaluation-semantic path
+   operator()(const char*, std::source_location, evaluation_config, void*,
+   bool(*)(void*)), return its FUNCTION_DECL, otherwise NULL_TREE.  The last
+   two parameters are a type-erased bundle of the assertion's real arguments
+   and a callback that evaluates the predicate given that bundle: the
+   operator decides whether/when to call it, rather than the compiler always
+   evaluating the predicate itself.  A control type without such an operator
+   (or a bare contract) uses the built-in evaluation-semantic path
    instead.  */
 
 static tree
@@ -3148,33 +3152,352 @@ contract_control_operator (tree ctrl)
       for (tree t = FUNCTION_FIRST_USER_PARMTYPE (fn);
 	   t && t != void_list_node; t = TREE_CHAIN (t))
 	++n;
-      if (n == 3)
+      if (n == 5)
 	return fn;
     }
   return NULL_TREE;
 }
 
-/* Build the D4324 control-object dispatch call for CONTRACT: a single call
-   to CTRL's operator()(comment, loc, cfg), where OP is that operator (used
-   for its parameter types).  Returns an expression of type violation_response,
-   or error_mark_node.  The predicate text is passed as comment and the TU cfg
-   as the evaluation_config; the source_location argument is value-initialized
-   for now (populated with the real location once the run tests land).  */
+/* Build a fresh, file-local, static bool FUNCTION_DECL that copies
+   CURRENT_FUNCTION_DECL's real parameter list verbatim (including an
+   implicit `this' for a member function, kept as an ordinary leading
+   pointer parameter -- never a METHOD_TYPE, since its address needs to flow
+   through a type-erased struct/thunk rather than member-call syntax) plus,
+   for a postcondition, a trailing result parameter, and whose body is a
+   single `return <condition>;'.  This "outlines" the predicate itself, so a
+   control object's operator() can invoke it on demand via a matching thunk
+   (build_predicate_thunk_function) instead of the compiler evaluating it
+   unconditionally.
+
+   Called during genericization of CURRENT_FUNCTION_DECL (from
+   build_contract_check).  Synthesizes and finalizes the new function
+   immediately: push_struct_function/pop_cfun save and restore
+   cfun/current_function_decl around the nested synthesis, so control
+   returns to genericizing CURRENT_FUNCTION_DECL exactly as it was.  */
+
+static tree
+build_predicate_core_function (tree contract)
+{
+  tree orig = current_function_decl;
+  location_t loc = EXPR_LOCATION (contract);
+  bool postcondition = POSTCONDITION_P (contract);
+
+  tree result_type = postcondition ? TREE_TYPE (TREE_TYPE (orig)) : NULL_TREE;
+  bool has_result = postcondition && result_type
+		    && !VOID_TYPE_P (result_type);
+
+  /* Parameter TYPE list: a copy of ORIG's, plus a trailing result type for a
+     postcondition with a non-void return.  */
+  tree arg_types = NULL_TREE;
+  tree *last_type = &arg_types;
+  for (tree p = DECL_ARGUMENTS (orig); p; p = DECL_CHAIN (p))
+    {
+      *last_type = build_tree_list (NULL_TREE, TREE_TYPE (p));
+      last_type = &TREE_CHAIN (*last_type);
+    }
+  if (has_result)
+    {
+      *last_type = build_tree_list (NULL_TREE, result_type);
+      last_type = &TREE_CHAIN (*last_type);
+    }
+  *last_type = void_list_node;
+
+  tree fn_type = build_function_type (boolean_type_node, arg_types);
+  tree name = clone_function_name_numbered (orig, "pred");
+  tree fn = build_lang_decl_loc (loc, FUNCTION_DECL, name, fn_type);
+  DECL_CONTEXT (fn) = NULL_TREE;
+  DECL_SOURCE_LOCATION (fn) = loc;
+  SET_DECL_ASSEMBLER_NAME (fn, name);
+
+  /* Copy ORIG's parameters verbatim, plus a trailing result parameter.  */
+  tree new_args = NULL_TREE;
+  tree *last_arg = &new_args;
+  for (tree p = DECL_ARGUMENTS (orig); p; p = DECL_CHAIN (p))
+    {
+      tree np = copy_decl (p);
+      DECL_CONTEXT (np) = fn;
+      DECL_CHAIN (np) = NULL_TREE;
+      suppress_warning (np);
+      *last_arg = np;
+      last_arg = &DECL_CHAIN (np);
+    }
+  tree result_parm = NULL_TREE;
+  if (has_result)
+    {
+      result_parm = build_lang_decl (PARM_DECL, get_identifier ("__r"),
+				     result_type);
+      DECL_CONTEXT (result_parm) = fn;
+      DECL_ARTIFICIAL (result_parm) = true;
+      suppress_warning (result_parm);
+      *last_arg = result_parm;
+      last_arg = &DECL_CHAIN (result_parm);
+    }
+  DECL_ARGUMENTS (fn) = new_args;
+  DECL_RESULT (fn) = NULL_TREE; /* Let start_preparsed_function fill it in.  */
+
+  TREE_STATIC (fn) = 1;
+  TREE_USED (fn) = 1;
+  DECL_ARTIFICIAL (fn) = 1;
+  TREE_PUBLIC (fn) = 0;
+  DECL_EXTERNAL (fn) = 0;
+  DECL_INTERFACE_KNOWN (fn) = 1;
+  suppress_warning (fn);
+
+  /* Remap CONTRACT's condition from ORIG's real decls (parameters, and for a
+     postcondition, DECL_RESULT) onto FN's fresh copies.  Work on a local
+     copy of the tree pointer, not CONTRACT_CONDITION's own slot, so the
+     original (already fully processed for ORIG) is left untouched.  */
+  copy_body_data id;
+  hash_map<tree, tree> decl_map;
+  memset (&id, 0, sizeof (id));
+  id.src_fn = orig;
+  id.dst_fn = fn;
+  id.src_cfun = DECL_STRUCT_FUNCTION (orig);
+  id.decl_map = &decl_map;
+  id.copy_decl = copy_decl_no_change;
+  id.transform_call_graph_edges = CB_CGE_DUPLICATE;
+  id.transform_new_cfg = false;
+  id.transform_return_to_modify = false;
+  id.transform_parameter = true;
+  id.regimplify = false;
+  id.do_not_unshare = true;
+  id.do_not_fold = true;
+  id.eh_lp_nr = 0;
+
+  tree dp = new_args;
+  for (tree sp = DECL_ARGUMENTS (orig); sp; sp = DECL_CHAIN (sp), dp = DECL_CHAIN (dp))
+    insert_decl_map (&id, sp, dp);
+  if (has_result)
+    insert_decl_map (&id, DECL_RESULT (orig), result_parm);
+
+  tree condition = CONTRACT_CONDITION (contract);
+  walk_tree (&condition, copy_tree_body_r, &id, NULL);
+  condition = fold_convert (boolean_type_node, condition);
+
+  /* Synthesizing and finishing a whole new, unrelated (non-member) function
+     while genericizing ORIG (which is still mid-flight on the call stack,
+     possibly itself a class member with its own class scope still pushed)
+     needs to temporarily act as if at global scope: push_to_top_level /
+     pop_from_top_level is the front end's general-purpose primitive for
+     that (it also handles the plain cfun/current_function_decl save that
+     push_function_context alone provides, but additionally resets
+     current_class_type/current_namespace/etc., which a bare
+     push_function_context leaves untouched -- leaving them untouched here
+     is what makes finish_function wrongly believe FN shares ORIG's still-
+     active class scope and pop it a second, unbalanced time).
+     start_preparsed_function/finish_function internally does the actual
+     genericization, matching how every other synthesized function body in
+     this front end is finished.  */
+  push_to_top_level ();
+  start_preparsed_function (fn, NULL_TREE, SF_PRE_PARSED | SF_DEFAULT);
+  /* The body below is built directly as already-resolved trees rather than
+     via the normal semantic-level call-building routines, so the usual
+     "did we see anything that might throw" bookkeeping never runs.  Without
+     this, finish_function would conclude FN can't throw and mark it
+     TREE_NOTHROW, and an exception genuinely raised while evaluating the
+     predicate would hit that false nothrow boundary and terminate instead
+     of propagating -- exactly backwards from a control object that wants
+     to let it through.  */
+  cp_function_chain->can_throw = true;
+  tree body = begin_function_body ();
+  finish_return_stmt (condition);
+  finish_function_body (body);
+  fn = finish_function (/*inline_p=*/false);
+  expand_or_defer_fn (fn);
+  pop_from_top_level ();
+
+  return fn;
+}
+
+/* Build a fresh, file-local, static `bool NAME (void *)' thunk for CORE_FN
+   (as built by build_predicate_core_function).  Its body casts its argument
+   to a pointer to STRUCT_TYPE (see the struct built in build_contract_check,
+   one pointer FIELD_DECL per CORE_FN parameter), dereferences each field to
+   recover CORE_FN's real arguments -- except for a field backing a
+   reference-typed parameter, where the stored pointer value is passed
+   directly, since a reference argument is itself just that pointer value --
+   calls CORE_FN, and returns its result.  This is the function whose address
+   is handed to a control object's operator() as its bool(*)(void*)
+   callback.  */
+
+static tree
+build_predicate_thunk_function (tree contract, tree core_fn, tree struct_type)
+{
+  location_t loc = EXPR_LOCATION (contract);
+
+  tree void_ptr_type = build_pointer_type (void_type_node);
+  tree arg_types = tree_cons (NULL_TREE, void_ptr_type, void_list_node);
+  tree fn_type = build_function_type (boolean_type_node, arg_types);
+
+  tree name = clone_function_name_numbered (core_fn, "thunk");
+  tree fn = build_lang_decl_loc (loc, FUNCTION_DECL, name, fn_type);
+  DECL_CONTEXT (fn) = NULL_TREE;
+  DECL_SOURCE_LOCATION (fn) = loc;
+  SET_DECL_ASSEMBLER_NAME (fn, name);
+
+  tree parm = build_lang_decl (PARM_DECL, get_identifier ("p"), void_ptr_type);
+  DECL_CONTEXT (parm) = fn;
+  DECL_ARGUMENTS (fn) = parm;
+  DECL_RESULT (fn) = NULL_TREE; /* Let start_preparsed_function fill it in.  */
+
+  TREE_STATIC (fn) = 1;
+  TREE_USED (fn) = 1;
+  DECL_ARTIFICIAL (fn) = 1;
+  TREE_PUBLIC (fn) = 0;
+  DECL_EXTERNAL (fn) = 0;
+  DECL_INTERFACE_KNOWN (fn) = 1;
+  suppress_warning (fn);
+
+  tree struct_ptr_type = build_pointer_type (struct_type);
+  tree cast = build1 (NOP_EXPR, struct_ptr_type, parm);
+  tree deref = build_simple_mem_ref (cast);
+
+  releasing_vec call_args;
+  tree field = TYPE_FIELDS (struct_type);
+  for (tree cp = DECL_ARGUMENTS (core_fn); cp; cp = DECL_CHAIN (cp), field = DECL_CHAIN (field))
+    {
+      tree field_ref = build3 (COMPONENT_REF, TREE_TYPE (field), deref,
+			       field, NULL_TREE);
+      tree arg = TYPE_REF_P (TREE_TYPE (cp))
+	? fold_convert (TREE_TYPE (cp), field_ref)
+	: build_simple_mem_ref (field_ref);
+      vec_safe_push (call_args, arg);
+    }
+
+  tree call = build_call_a (core_fn, call_args->length (), call_args->address ());
+
+  /* See the matching comment in build_predicate_core_function: this nested
+     synthesis must go through push_to_top_level/pop_from_top_level, not a
+     bare push_function_context/pop_function_context.  */
+  push_to_top_level ();
+  start_preparsed_function (fn, NULL_TREE, SF_PRE_PARSED | SF_DEFAULT);
+  /* The body below is built directly as already-resolved trees rather than
+     via the normal semantic-level call-building routines, so the usual
+     "did we see anything that might throw" bookkeeping never runs.  Without
+     this, finish_function would conclude FN can't throw and mark it
+     TREE_NOTHROW, and an exception genuinely raised while evaluating the
+     predicate would hit that false nothrow boundary and terminate instead
+     of propagating -- exactly backwards from a control object that wants
+     to let it through.  */
+  cp_function_chain->can_throw = true;
+  tree body = begin_function_body ();
+  finish_return_stmt (call);
+  finish_function_body (body);
+  fn = finish_function (/*inline_p=*/false);
+  expand_or_defer_fn (fn);
+  pop_from_top_level ();
+
+  return fn;
+}
+
+/* Build a RECORD_TYPE with one pointer FIELD_DECL per CORE_FN parameter (see
+   build_predicate_core_function): the Nth field's type is a pointer to the
+   Nth parameter's type with any reference stripped.  Needed by both the
+   thunk (to know which fields to dereference when unpacking) and the
+   struct-populating code in build_contract_check, so it's built once,
+   separately from either.  */
+
+static tree
+build_predicate_arg_struct_type (tree core_fn, location_t loc)
+{
+  tree fields = NULL_TREE;
+  tree *last_field = &fields;
+  for (tree p = DECL_ARGUMENTS (core_fn); p; p = DECL_CHAIN (p))
+    {
+      tree pointee = TYPE_REF_P (TREE_TYPE (p))
+	? TREE_TYPE (TREE_TYPE (p)) : TREE_TYPE (p);
+      tree field = build_decl (loc, FIELD_DECL, NULL_TREE,
+			       build_pointer_type (pointee));
+      *last_field = field;
+      last_field = &DECL_CHAIN (field);
+    }
+
+  tree struct_type = make_node (RECORD_TYPE);
+  TYPE_FIELDS (struct_type) = fields;
+  for (tree f = fields; f; f = DECL_CHAIN (f))
+    DECL_CONTEXT (f) = struct_type;
+  layout_type (struct_type);
+  return struct_type;
+}
+
+/* Declare a local variable of STRUCT_TYPE (built by
+   build_predicate_arg_struct_type) in CC_BIND (registered for the
+   gimplifier, exactly like the ctrl_var/loc_var temporaries
+   build_contract_control_call already declares there), and populate each
+   field with the address of CURRENT_FUNCTION_DECL's corresponding real
+   parameter -- or, for STRUCT_TYPE's trailing field when CONTRACT is a
+   postcondition, the address of DECL_RESULT (CURRENT_FUNCTION_DECL).  No
+   explicit "spill to memory" step is needed: taking a parameter's (or
+   DECL_RESULT's) address is ordinary C++ semantics -- a reference
+   parameter's address is already the address of its referent -- and GCC's
+   own gimplifier forces the addressed decl onto the stack automatically
+   once the ADDR_EXPR is built.  Returns the address of the new struct
+   variable.  */
+
+static tree
+build_predicate_arg_struct_var (tree contract, tree struct_type, tree cc_bind,
+				location_t loc)
+{
+  tree struct_var = build_decl (loc, VAR_DECL, NULL_TREE, struct_type);
+  DECL_ARTIFICIAL (struct_var) = true;
+  DECL_IGNORED_P (struct_var) = true;
+  DECL_CONTEXT (struct_var) = current_function_decl;
+  layout_decl (struct_var, 0);
+  DECL_CHAIN (struct_var) = BIND_EXPR_VARS (cc_bind);
+  BIND_EXPR_VARS (cc_bind) = struct_var;
+  add_decl_expr (struct_var);
+
+  tree real_val = DECL_ARGUMENTS (current_function_decl);
+  tree field = TYPE_FIELDS (struct_type);
+  for (; real_val && field;
+       real_val = DECL_CHAIN (real_val), field = DECL_CHAIN (field))
+    {
+      tree field_ref = build3 (COMPONENT_REF, TREE_TYPE (field), struct_var,
+			       field, NULL_TREE);
+      tree addr = fold_convert (TREE_TYPE (field),
+				build_fold_addr_expr (real_val));
+      finish_expr_stmt (cp_build_init_expr (field_ref, addr));
+    }
+  if (field)
+    {
+      /* The trailing field, for a postcondition's result.  */
+      gcc_checking_assert (POSTCONDITION_P (contract));
+      tree field_ref = build3 (COMPONENT_REF, TREE_TYPE (field), struct_var,
+			       field, NULL_TREE);
+      tree addr = fold_convert (TREE_TYPE (field),
+				build_fold_addr_expr
+				  (DECL_RESULT (current_function_decl)));
+      finish_expr_stmt (cp_build_init_expr (field_ref, addr));
+      field = DECL_CHAIN (field);
+    }
+  gcc_checking_assert (!field);
+
+  return build_fold_addr_expr (struct_var);
+}
 
 /* Build the D4324 control-object dispatch call for CONTRACT inside CC_BIND
    (a BIND_EXPR whose variable chain is available for temporaries).  The
    control object's operator() returns void: returning means proceed, and a
-   terminating control terminates in its own body.  Returns the call
-   expression or error_mark_node.  */
+   terminating control terminates in its own body.  ARGS_PTR is a void*
+   expression pointing at the packed argument struct for this assertion (see
+   build_predicate_arg_struct) and THUNK_FN is the FUNCTION_DECL of the
+   matching bool(void*) thunk (see build_predicate_thunk_function): together
+   these let the control object evaluate the predicate itself, on its own
+   terms, via OP's trailing (void*, bool(*)(void*)) parameters instead of the
+   compiler evaluating it eagerly.  Returns the call expression or
+   error_mark_node.  */
 
 static tree
-build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind)
+build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
+			      tree args_ptr, tree thunk_fn)
 {
   location_t loc = EXPR_LOCATION (contract);
   tree pt = FUNCTION_FIRST_USER_PARMTYPE (op);
   tree t_comment = TREE_VALUE (pt); pt = TREE_CHAIN (pt);
   tree t_loc = TREE_VALUE (pt); pt = TREE_CHAIN (pt);
-  tree t_cfg = TREE_VALUE (pt);
+  tree t_cfg = TREE_VALUE (pt); pt = TREE_CHAIN (pt);
+  tree t_args = TREE_VALUE (pt); pt = TREE_CHAIN (pt);
+  tree t_check = TREE_VALUE (pt);
 
   tree comment = CONTRACT_COMMENT (contract);
   if (!comment)
@@ -3224,9 +3547,14 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind)
   if (SCALAR_TYPE_P (result_type) || VOID_TYPE_P (result_type))
     result_type = cv_unqualified (result_type);
 
-  tree args[4] = { this_arg, comment, loc_var, cfg_arg };
+  tree args_arg = fold_convert (t_args, args_ptr);
+  tree check_arg = fold_convert (t_check,
+				 build_addr_func (thunk_fn, tf_warning_or_error));
+  mark_used (thunk_fn);
+
+  tree args[6] = { this_arg, comment, loc_var, cfg_arg, args_arg, check_arg };
   mark_used (op);
-  return build_call_array_loc (loc, result_type, fn_addr, 4, args);
+  return build_call_array_loc (loc, result_type, fn_addr, 6, args);
 }
 
 
@@ -3311,17 +3639,36 @@ build_contract_check (tree contract)
 
   if (TREE_CODE (contract) == ASSERTION_STMT)
     emit_builtin_observable_checkpoint ();
-  tree cond = build_x_unary_op (loc, TRUTH_NOT_EXPR, condition, NULL_TREE,
-				tf_warning_or_error);
 
-  /* The bare (non control-object) path builds a violation object and, in the
-     default P2900 mode, may wrap a throwing predicate in a try/catch that
-     translates the exception into a violation.  The D4324 control-object path
-     does neither: it just calls the control object.  */
-  tree violation = NULL_TREE;
-  tree s_const = NULL_TREE;
-  if (!control_op)
+  if (control_op)
     {
+      /* D4324 step 2/3: unconditionally call the control object, handing it
+	 a callback that evaluates the predicate on demand -- via a struct of
+	 pointers to the real arguments and a thunk that unpacks it and calls
+	 the outlined predicate function -- instead of the compiler evaluating
+	 the predicate itself and only calling the control object on
+	 violation.  */
+      tree core_fn = build_predicate_core_function (contract);
+      tree struct_type = build_predicate_arg_struct_type (core_fn, loc);
+      tree thunk_fn = build_predicate_thunk_function (contract, core_fn,
+						      struct_type);
+      tree args_ptr = build_predicate_arg_struct_var (contract, struct_type,
+						       cc_bind, loc);
+      finish_expr_stmt (build_contract_control_call (contract, ctrl, control_op,
+						      cc_bind, args_ptr,
+						      thunk_fn));
+    }
+  else
+    {
+      /* The bare (non control-object) path evaluates the predicate eagerly
+	 and, only if it's false, builds a violation object and calls the
+	 built-in handler; in the default P2900 mode it may wrap a throwing
+	 predicate in a try/catch that translates the exception into a
+	 violation.  */
+      tree cond = build_x_unary_op (loc, TRUTH_NOT_EXPR, condition, NULL_TREE,
+				    tf_warning_or_error);
+
+      tree violation = NULL_TREE;
       if (quick)
 	/* We will not be calling a handler.  */
 	violation = build_zero_cst (nullptr_type_node);
@@ -3333,7 +3680,7 @@ build_contract_check (tree contract)
 	  violation = build_contract_violation_constant (ctor, contract);
 	  violation = build_address (violation);
 	}
-      s_const = build_int_cst (uint16_type_node, semantic);
+      tree s_const = build_int_cst (uint16_type_node, semantic);
 
       /* P2900 only: translate an exception thrown while evaluating the
 	 predicate into a violation.  D4324 leaves it to propagate to the
@@ -3399,23 +3746,17 @@ build_contract_check (tree contract)
 	  cond = check_failed;
 	  BIND_EXPR_VARS (cc_bind) = nreverse (BIND_EXPR_VARS (cc_bind));
 	}
-    }
 
-  tree do_check = begin_if_stmt ();
-  finish_if_stmt_cond (cond, do_check);
-  if (control_op)
-    /* D4324 step 3: a single call to T::operator()(comment, loc, cfg).  The
-       operator returns void; returning means proceed, and terminating is the
-       control object's own responsibility (it terminates in its body).  */
-    finish_expr_stmt (build_contract_control_call (contract, ctrl, control_op,
-						   cc_bind));
-  else if (quick)
-    /* We will not be calling a handler.  */
-    finish_expr_stmt (build_call_a (terminate_wrapper, 0, nullptr));
-  else
-    finish_expr_stmt (build_call_n (tu_has_violation, 2, violation, s_const));
-  finish_then_clause (do_check);
-  finish_if_stmt (do_check);
+      tree do_check = begin_if_stmt ();
+      finish_if_stmt_cond (cond, do_check);
+      if (quick)
+	/* We will not be calling a handler.  */
+	finish_expr_stmt (build_call_a (terminate_wrapper, 0, nullptr));
+      else
+	finish_expr_stmt (build_call_n (tu_has_violation, 2, violation, s_const));
+      finish_then_clause (do_check);
+      finish_if_stmt (do_check);
+    }
 
   BIND_EXPR_BODY (cc_bind) = pop_stmt_list (BIND_EXPR_BODY (cc_bind));
   return cc_bind;
