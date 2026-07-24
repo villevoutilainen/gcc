@@ -17,7 +17,7 @@ struct my_terminate_ctrl {
   static constexpr bool assumable = false;
   void
   operator() (const sc::assertion_context& ctx) const
-  { if (ctx.check (ctx.args)) return; std::terminate (); }
+  { if (ctx.check ()) return; std::terminate (); }
 };
 
 inline constexpr my_terminate_ctrl my_terminate_ctrl_v{};

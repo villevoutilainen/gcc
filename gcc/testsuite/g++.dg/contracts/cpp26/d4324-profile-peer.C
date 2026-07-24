@@ -38,7 +38,7 @@ struct logging_control {
   static constexpr bool assumable = false;
   void
   operator() (const sc::assertion_context& ctx) const
-  { if (ctx.check (ctx.args)) return; contract_handler_called = true; }	// returns -> continue
+  { if (ctx.check ()) return; contract_handler_called = true; }	// returns -> continue
 };
 
 inline constexpr logging_control logging_control_v{};

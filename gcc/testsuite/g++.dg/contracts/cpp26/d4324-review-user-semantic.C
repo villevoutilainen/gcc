@@ -22,8 +22,12 @@ struct assertion_context {
   const char* comment;
   const void* location;
   evaluation_config cfg;
-  void* args;
-  bool (*check) (void*);
+
+  bool check () const { return __check (__args); }
+
+private:
+  void* __args;
+  bool (*__check) (void*);
 };
 }
 }
@@ -35,7 +39,7 @@ struct review {
   static constexpr bool assumable = false;
   void
   operator() (const std::contracts::assertion_context& ctx) const
-  { if (ctx.check (ctx.args)) return; logged = true; }
+  { if (ctx.check ()) return; logged = true; }
 };
 
 inline constexpr review review_v{};

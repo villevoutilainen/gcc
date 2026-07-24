@@ -16,7 +16,7 @@ struct my_review {
   static constexpr bool assumable = false;
   void
   operator() (const sc::assertion_context& ctx) const
-  { if (ctx.check (ctx.args)) return; logged = true; }		// returns -> continue
+  { if (ctx.check ()) return; logged = true; }		// returns -> continue
 };
 
 inline constexpr my_review my_review_v{};
