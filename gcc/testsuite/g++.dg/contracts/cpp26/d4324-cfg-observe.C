@@ -46,7 +46,10 @@ struct if_enforce {
 		   sc::evaluation_config) const {}
 };
 
-int f (int x) pre<if_observe>(pred_obs ()) pre<if_enforce>(pred_enf ())
+inline constexpr if_observe if_observe_v{};
+inline constexpr if_enforce if_enforce_v{};
+
+int f (int x) pre<if_observe_v>(pred_obs ()) pre<if_enforce_v>(pred_enf ())
 { return x; }
 
 // cfg == observe: the observe-keyed assertion is active.

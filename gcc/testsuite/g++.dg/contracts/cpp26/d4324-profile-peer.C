@@ -41,7 +41,9 @@ struct logging_control {
   { contract_handler_called = true; }	// returns -> continue
 };
 
-int f (int x) pre<logging_control>(x > 0) { return x; }
+inline constexpr logging_control logging_control_v{};
+
+int f (int x) pre<logging_control_v>(x > 0) { return x; }
 
 int main ()
 {

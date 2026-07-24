@@ -25,7 +25,9 @@ struct capture {
   { seen = c; called = true; }		// returns -> continue
 };
 
-int f (int x) pre<capture>(x > 0) { return x; }
+inline constexpr capture capture_v{};
+
+int f (int x) pre<capture_v>(x > 0) { return x; }
 
 int main ()
 {

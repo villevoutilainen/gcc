@@ -17,12 +17,13 @@ struct ignore {
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
 };
+inline constexpr ignore ignore_v{};
 }
 }
 
 bool expensive_check (int);	// never called: the predicate is not evaluated
 
-int f (int x) pre<std::contracts::ignore>(expensive_check (x)) { return x; }
+int f (int x) pre<std::contracts::ignore_v>(expensive_check (x)) { return x; }
 
 // The predicate is not evaluated.
 // { dg-final { scan-tree-dump-not "expensive_check" "gimple" } }

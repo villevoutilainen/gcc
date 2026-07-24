@@ -19,7 +19,9 @@ struct my_review {
   { logged = true; }		// returns -> continue
 };
 
-int f (int x) pre<my_review>(x > 0) { return x; }
+inline constexpr my_review my_review_v{};
+
+int f (int x) pre<my_review_v>(x > 0) { return x; }
 
 int main ()
 {
