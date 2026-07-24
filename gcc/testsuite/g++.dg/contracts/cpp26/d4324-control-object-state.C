@@ -25,9 +25,8 @@ struct labeled {
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
   void
-  operator() (const char*, std::source_location, sc::evaluation_config,
-	      void* args, bool (*check) (void*)) const
-  { if (check (args)) return; seen = label; }		// returns -> continue
+  operator() (const sc::assertion_context& ctx) const
+  { if (ctx.check (ctx.args)) return; seen = label; }		// returns -> continue
   static const char* seen;
 };
 const char* labeled::seen = nullptr;
@@ -48,12 +47,11 @@ struct annotated {
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
   void
-  operator() (const char* comment, std::source_location,
-	      sc::evaluation_config, void* args, bool (*check) (void*)) const
+  operator() (const sc::assertion_context& ctx) const
   {
-    if (check (args))
+    if (ctx.check (ctx.args))
       return;
-    seen = std::string (comment) + ": " + note;	// returns -> continue
+    seen = std::string (ctx.comment) + ": " + note;	// returns -> continue
   }
   static std::string seen;
 };

@@ -8,12 +8,22 @@
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=enforce -fdump-tree-gimple" }
 
 namespace std {
-struct source_location {
-  constexpr source_location () = default;
-};
 namespace contracts {
 enum class evaluation_config : unsigned {
   ignore = 0, observe = 1, enforce = 2, quick_enforce = 3
+};
+
+// Layout-compatible stand-in for std::contracts::assertion_context: the
+// compiler builds its own internal equivalent-layout struct (it does not
+// depend on this header declaration), so only the field order/sizes need to
+// match, not the type names.  "location" isn't a real std::source_location
+// here since review's operator() below doesn't read it.
+struct assertion_context {
+  const char* comment;
+  const void* location;
+  evaluation_config cfg;
+  void* args;
+  bool (*check) (void*);
 };
 }
 }
@@ -24,10 +34,8 @@ struct review {
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
   void
-  operator() (const char *, std::source_location,
-	      std::contracts::evaluation_config, void* args,
-	      bool (*check) (void*)) const
-  { if (check (args)) return; logged = true; }
+  operator() (const std::contracts::assertion_context& ctx) const
+  { if (ctx.check (ctx.args)) return; logged = true; }
 };
 
 inline constexpr review review_v{};
