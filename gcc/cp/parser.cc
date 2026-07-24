@@ -33822,13 +33822,29 @@ cp_parser_late_contracts (cp_parser *parser, tree fndecl)
    This names the assertion-control type T for the assertion, as in
    pre<T>(cond).  Returns NULL_TREE when there is no '<' (the assertion
    uses the default control), the parsed TYPE on success, or
-   error_mark_node on a malformed specifier.  */
+   error_mark_node on a malformed specifier or when D4324 control types
+   are not enabled.
+
+   The '<...>' shape is still recognized (and reported on) without
+   -fcontract-control-objects, so that pre<T>/post<T>/contract_assert<T>
+   get this diagnostic instead of falling through to a confusing parse
+   error elsewhere; only -fcontract-control-objects actually names a
+   control type.  */
 
 static tree
 cp_parser_contract_control_type (cp_parser *parser)
 {
   if (!cp_lexer_next_token_is (parser->lexer, CPP_LESS))
     return NULL_TREE;
+
+  if (!flag_contract_control_objects)
+    {
+      error_at (cp_lexer_peek_token (parser->lexer)->location,
+	       "contract control types are only available with %qs",
+	       "-fcontract-control-objects");
+      cp_lexer_consume_token (parser->lexer); /* Consume '<'.  */
+      return error_mark_node;
+    }
 
   cp_lexer_consume_token (parser->lexer); /* Consume '<'.  */
 
@@ -33853,7 +33869,15 @@ cp_parser_contract_control_type (cp_parser *parser)
 /* Starting at the Nth token (1 is the next token), if it begins a contract
    control type '< type-id >', return the index of the first token past the
    closing '>'.  Otherwise, or on an unterminated specifier, return N.  Used
-   by the function-contract-specifier look-ahead.  */
+   by the function-contract-specifier look-ahead.
+
+   This look-ahead is intentionally not gated on -fcontract-control-objects:
+   it only decides whether pre/post introduces a contract specifier at all,
+   so it must still skip over '<T>' when the flag is off.  Rejecting the
+   control type happens where it is actually parsed, in
+   cp_parser_contract_control_type, which gives a specific diagnostic
+   instead of leaving pre<T>(...) unrecognized and falling through to a
+   confusing syntax error.  */
 
 static size_t
 cp_parser_skip_contract_control_type (cp_parser *parser, size_t n)
@@ -34037,10 +34061,24 @@ cp_parser_function_contract_specifier (cp_parser *parser)
   tree control_type = cp_parser_contract_control_type (parser);
   if (control_type == error_mark_node)
     {
-      cp_parser_skip_to_closing_parenthesis (parser,
-					     /*recovering=*/true,
-					     /*or_comma=*/false,
-					     /*consume_paren=*/true);
+      while (true)
+	{
+	  cp_token *t = cp_lexer_peek_token (parser->lexer);
+	  if (t->type == CPP_OPEN_PAREN || t->type == CPP_SEMICOLON
+	      || t->type == CPP_OPEN_BRACE || t->type == CPP_EOF)
+	    break;
+	  cp_lexer_consume_token (parser->lexer);
+	}
+      if (cp_lexer_next_token_is (parser->lexer, CPP_OPEN_PAREN))
+	{
+	  cp_lexer_consume_token (parser->lexer);
+	  cp_parser_skip_to_closing_parenthesis (parser,
+						 /*recovering=*/true,
+						 /*or_comma=*/false,
+						 /*consume_paren=*/true);
+	}
+      else
+	cp_parser_skip_to_end_of_statement (parser);
       return error_mark_node;
     }
 
