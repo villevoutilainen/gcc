@@ -2854,13 +2854,16 @@ get_assertion_context_fields ()
   tree fields = NULL_TREE;
   /* Must match <contracts>:
   struct assertion_context {
-    const char* comment;
-    std::source_location location;	// a single const __impl* member
-    evaluation_config cfg;		// enum class ... : unsigned
+    const char* comment() const noexcept { return __comment; }
+    std::source_location location() const noexcept { return __location; }
+    evaluation_config cfg() const noexcept { return __cfg; }
 
     bool check() const { return __check(__args); }
 
   private:
+    const char* __comment;
+    std::source_location __location;	// a single const __impl* member
+    evaluation_config __cfg;		// enum class ... : unsigned
     void* __args;
     bool (*__check)(void*);
   };
@@ -2878,9 +2881,9 @@ get_assertion_context_fields ()
 			  ptr_type_node,
 			  build_pointer_type (check_fn_type),
 			};
-  const char *names[] = { "comment",
-			   "location",
-			   "cfg",
+  const char *names[] = { "__comment",
+			   "__location",
+			   "__cfg",
 			   "__args",
 			   "__check",
 			 };
