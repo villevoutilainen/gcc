@@ -29,7 +29,9 @@ struct review {
   { logged = true; }
 };
 
-int f (int x) pre<review>(x > 0) { return x; }
+inline constexpr review review_v{};
+
+int f (int x) pre<review_v>(x > 0) { return x; }
 
 // The user's operator() is called on violation, not a hard-coded semantic.
 // { dg-final { scan-tree-dump "review::operator" "gimple" } }

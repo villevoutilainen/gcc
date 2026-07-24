@@ -33813,29 +33813,44 @@ cp_parser_late_contracts (cp_parser *parser, tree fndecl)
   update_fn_contract_specifiers (fndecl, new_contracts);
 }
 
-/* Parse an optional contract control type appearing immediately after a
+/* Parse an optional contract control specifier appearing immediately after a
    contract introducer (pre / post / contract_assert):
 
-     contract-control-type:
+     contract-control-specifier:
        < type-id >
+       < constant-expression >
 
-   This names the assertion-control type T for the assertion, as in
-   pre<T>(cond).  Returns NULL_TREE when there is no '<' (the assertion
-   uses the default control), the parsed TYPE on success, or
-   error_mark_node on a malformed specifier or when D4324 control types
-   are not enabled.
+   This names the assertion control for the assertion, as in pre<T>(cond) or
+   pre<expr>(cond), where expr is a constant-expression naming a control
+   OBJECT (e.g. pre<my_control{"msg"}>(cond), allowing distinct objects of
+   the same control type).  Returns the parsed TYPE or constant-expression
+   on success, error_mark_node on a malformed specifier or when D4324
+   control types are not enabled, or, when there is no '<' at all, either
+   NULL_TREE (no control objects: the built-in evaluation-semantic path is
+   used) or the implicit std::contracts::default_v object (control objects
+   enabled: a bare pre/post/contract_assert behaves as if
+   '<std::contracts::default_v>' had been written).
 
    The '<...>' shape is still recognized (and reported on) without
    -fcontract-control-objects, so that pre<T>/post<T>/contract_assert<T>
    get this diagnostic instead of falling through to a confusing parse
    error elsewhere; only -fcontract-control-objects actually names a
-   control type.  */
+   control.  */
 
 static tree
 cp_parser_contract_control_type (cp_parser *parser)
 {
   if (!cp_lexer_next_token_is (parser->lexer, CPP_LESS))
-    return NULL_TREE;
+    {
+      if (!flag_contract_control_objects)
+	return NULL_TREE;
+
+      /* D4324: with control objects enabled, a bare pre/post/contract_assert
+	 (no '<...>' at all) uses std::contracts::default_v, exactly as if
+	 '<std::contracts::default_v>' had been written.  */
+      return contract_default_control_object
+	(cp_lexer_peek_token (parser->lexer)->location);
+    }
 
   if (!flag_contract_control_objects)
     {
@@ -33848,22 +33863,46 @@ cp_parser_contract_control_type (cp_parser *parser)
 
   cp_lexer_consume_token (parser->lexer); /* Consume '<'.  */
 
-  /* Inside the angle brackets a '>' closes the control type rather than
-     acting as a greater-than operator.  */
+  /* Inside the angle brackets a '>' closes the control specifier rather
+     than acting as a greater-than operator.  */
   bool saved_gtio = parser->greater_than_is_operator_p;
   parser->greater_than_is_operator_p = false;
 
-  tree type = cp_parser_type_id (parser, CP_PARSER_FLAGS_NONE, nullptr);
+  tree control;
+  if (cp_lexer_next_token_is (parser->lexer, CPP_GREATER)
+      || cp_lexer_next_token_is (parser->lexer, CPP_RSHIFT))
+    /* Empty control specifier '<>': let cp_parser_type_id give its usual
+       "expected type-specifier" diagnostic; there is nothing to retry as an
+       expression either.  */
+    control = cp_parser_type_id (parser, CP_PARSER_FLAGS_NONE, nullptr);
+  else
+    {
+      /* An ambiguity between a type-id and an expression is resolved to the
+	 type-id, mirroring [temp.arg]; try the type-id first, falling back
+	 to a general constant-expression naming a control object.  */
+      cp_parser_parse_tentatively (parser);
+      control = cp_parser_type_id (parser, CP_PARSER_FLAGS_NONE, nullptr);
+      if (!cp_parser_error_occurred (parser)
+	  && !cp_lexer_next_token_is (parser->lexer, CPP_GREATER)
+	  && !cp_lexer_next_token_is (parser->lexer, CPP_RSHIFT))
+	cp_parser_error (parser, "expected type-id or constant-expression");
+      if (!cp_parser_parse_definitely (parser))
+	control = cp_parser_constant_expression (parser);
+    }
 
   parser->greater_than_is_operator_p = saved_gtio;
 
-  /* A trailing '>>' is split so its first half closes this control type.  */
+  if (control == error_mark_node)
+    return error_mark_node;
+
+  /* A trailing '>>' is split so its first half closes this control
+     specifier.  */
   if (cp_lexer_next_token_is (parser->lexer, CPP_RSHIFT))
     cp_lexer_peek_token (parser->lexer)->type = CPP_GREATER;
   else if (!cp_parser_require (parser, CPP_GREATER, RT_GREATER))
     return error_mark_node;
 
-  return type;
+  return control;
 }
 
 /* Starting at the Nth token (1 is the next token), if it begins a contract

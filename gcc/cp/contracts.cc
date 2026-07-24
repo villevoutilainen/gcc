@@ -2476,6 +2476,34 @@ lookup_std_contracts_type (tree name_id)
   return res_type;
 }
 
+/* Look up VAR_DECL std::contracts::default_v: the implicit control object
+   used for a bare pre/post/contract_assert (no named control) when
+   -fcontract-control-objects is enabled, exactly as if
+   '<std::contracts::default_v>' had been written.  Unlike
+   lookup_std_contracts_type, this never injects a stand-in: default_v's
+   behavior comes entirely from the library, so a missing declaration is a
+   hard error telling the user to include <contracts>.  */
+
+tree
+contract_default_control_object (location_t loc)
+{
+  tree id_ns = get_identifier ("contracts");
+  tree ns = lookup_qualified_name (std_node, id_ns);
+
+  tree res = NULL_TREE;
+  if (TREE_CODE (ns) == NAMESPACE_DECL)
+    res = lookup_qualified_name (ns, get_identifier ("default_v"));
+
+  if (!res || res == error_mark_node || TREE_CODE (res) != VAR_DECL)
+    {
+      error_at (loc, "%<std::contracts::default_v%> has not been declared; "
+		"include %<<contracts>%> before using %qs without a named "
+		"control object", "-fcontract-control-objects");
+      return error_mark_node;
+    }
+  return res;
+}
+
 /* Return handle_contract_violation (), declaring it if needed.  */
 
 static tree
@@ -2978,6 +3006,20 @@ contract_evaluation_config_value ()
     }
 }
 
+/* CTRL is what was named as pre<...>/post<...>/contract_assert<...>: either
+   a control TYPE named directly, or a constant-expression naming a control
+   OBJECT (including the implicit std::contracts::default_v substituted for
+   a bare pre/post/contract_assert under -fcontract-control-objects).  The
+   is_ignored/constify/assumable/operator() members looked up below are
+   always static, so only the type is ever needed for member lookup; return
+   it, deriving it from the object's type when CTRL isn't already a type.  */
+
+static tree
+contract_control_naming_type (tree ctrl)
+{
+  return (ctrl && !TYPE_P (ctrl)) ? TREE_TYPE (ctrl) : ctrl;
+}
+
 /* If the assertion names a control type CTRL, constant-evaluate
    CTRL::is_ignored(cfg) for the current translation unit's cfg.  Returns true
    iff it folds to a compile-time true, meaning the assertion is ignored: no
@@ -2989,6 +3031,7 @@ contract_evaluation_config_value ()
 static bool
 contract_control_is_ignored (tree ctrl)
 {
+  ctrl = contract_control_naming_type (ctrl);
   if (!ctrl || !CLASS_TYPE_P (ctrl))
     return false;
   complete_type (ctrl);
@@ -3031,6 +3074,7 @@ contract_control_is_ignored (tree ctrl)
 static int
 contract_control_bool_member (tree ctrl, const char *name)
 {
+  ctrl = contract_control_naming_type (ctrl);
   if (!ctrl || !CLASS_TYPE_P (ctrl))
     return -1;
   complete_type (ctrl);
@@ -3082,6 +3126,7 @@ contract_control_assumable (tree ctrl)
 static tree
 contract_control_operator (tree ctrl)
 {
+  ctrl = contract_control_naming_type (ctrl);
   if (!ctrl || !CLASS_TYPE_P (ctrl))
     return NULL_TREE;
   complete_type (ctrl);
@@ -3149,13 +3194,24 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind)
 
   tree cfg_arg = build_int_cst (t_cfg, contract_evaluation_config_value ());
 
-  /* Build a zero-initialized control object on the stack; register it.  */
-  tree ctrl_var = build_decl (loc, VAR_DECL, NULL_TREE, ctrl);
+  /* CTRL is either a control TYPE named directly (pre<T>: build a
+     zero-initialized instance, as before), or a constant-expression naming a
+     control OBJECT (pre<expr>, or the implicit std::contracts::default_v for
+     a bare pre/post/contract_assert): constant-evaluate it and use that
+     value, so distinct objects of the same type (e.g. carrying different
+     diagnostic data) are preserved instead of collapsing to zero.  */
+  bool is_type = TYPE_P (ctrl);
+  tree ctrl_type = is_type ? ctrl : TREE_TYPE (ctrl);
+  tree ctrl_init = is_type ? build_zero_cst (ctrl_type)
+			   : cxx_constant_value (ctrl);
+
+  /* Build the control object on the stack; register it.  */
+  tree ctrl_var = build_decl (loc, VAR_DECL, NULL_TREE, ctrl_type);
   DECL_ARTIFICIAL (ctrl_var) = true;
   DECL_IGNORED_P (ctrl_var) = true;
   DECL_CONTEXT (ctrl_var) = current_function_decl;
   layout_decl (ctrl_var, 0);
-  DECL_INITIAL (ctrl_var) = build_zero_cst (ctrl);
+  DECL_INITIAL (ctrl_var) = ctrl_init;
   DECL_CHAIN (ctrl_var) = BIND_EXPR_VARS (cc_bind);
   BIND_EXPR_VARS (cc_bind) = ctrl_var;
   add_decl_expr (ctrl_var);

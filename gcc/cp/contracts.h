@@ -115,9 +115,13 @@ enum detection_mode : uint16_t {
 #define CONTRACT_STD_SOURCE_LOC(NODE) \
   (TREE_OPERAND (CONTRACT_CHECK (NODE), 4))
 
-/* The optional control TYPE named as pre<T>/post<T>/contract_assert<T>.
-   NULL_TREE means the assertion uses the default control
-   (std::contracts::default_v).  */
+/* The optional control named as pre<T>/post<T>/contract_assert<T> (a TYPE)
+   or pre<expr>/post<expr>/contract_assert<expr> (a constant-expression
+   naming a control OBJECT).  NULL_TREE means -fcontract-control-objects is
+   off, so the built-in evaluation-semantic path is used; with the flag on, a
+   bare pre/post/contract_assert has this already resolved to the implicit
+   std::contracts::default_v object (see contract_default_control_object),
+   so NULL_TREE never reaches this slot in that configuration.  */
 #define CONTRACT_CONTROL_TYPE(NODE) \
   (TREE_OPERAND (CONTRACT_CHECK (NODE), 5))
 
@@ -172,6 +176,7 @@ extern tree copy_and_remap_contracts		(tree, tree, contract_match_kind = cmk_all
 extern tree constify_contract_access		(tree);
 extern tree view_as_const			(tree);
 extern bool contract_control_constifies		(tree);
+extern tree contract_default_control_object		(location_t);
 
 /* True while parsing/substituting a contract condition that opts into
    constification via its control type's constify member (D4324: off by

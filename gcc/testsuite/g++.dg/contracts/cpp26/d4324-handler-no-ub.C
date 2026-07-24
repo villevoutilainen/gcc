@@ -20,7 +20,9 @@ struct my_terminate_ctrl {
   { std::terminate (); }
 };
 
-int f (int x) pre<my_terminate_ctrl>(x > 0) { return x; }
+inline constexpr my_terminate_ctrl my_terminate_ctrl_v{};
+
+int f (int x) pre<my_terminate_ctrl_v>(x > 0) { return x; }
 
 void my_terminate ()
 {

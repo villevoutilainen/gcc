@@ -21,9 +21,11 @@ struct mandatory {
   static constexpr bool assumable = true;
 };
 
+inline constexpr mandatory mandatory_v{};
+
 void sink (int);
 
-int f (int x) pre<mandatory>(x > 5)
+int f (int x) pre<mandatory_v>(x > 5)
 {
   if (x <= 5)
     sink (x);		// dead: the predicate x > 5 is assumed
