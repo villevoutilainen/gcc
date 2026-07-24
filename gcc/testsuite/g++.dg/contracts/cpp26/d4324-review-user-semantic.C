@@ -25,8 +25,9 @@ struct review {
   static constexpr bool assumable = false;
   void
   operator() (const char *, std::source_location,
-	      std::contracts::evaluation_config) const
-  { logged = true; }
+	      std::contracts::evaluation_config, void* args,
+	      bool (*check) (void*)) const
+  { if (check (args)) return; logged = true; }
 };
 
 inline constexpr review review_v{};

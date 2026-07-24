@@ -34,7 +34,8 @@ struct if_observe {
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
   void operator() (const char *, std::source_location,
-		   sc::evaluation_config) const {}
+		   sc::evaluation_config, void* args,
+		   bool (*check) (void*)) const { check (args); }
 };
 
 struct if_enforce {
@@ -43,7 +44,8 @@ struct if_enforce {
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
   void operator() (const char *, std::source_location,
-		   sc::evaluation_config) const {}
+		   sc::evaluation_config, void* args,
+		   bool (*check) (void*)) const { check (args); }
 };
 
 inline constexpr if_observe if_observe_v{};

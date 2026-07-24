@@ -37,8 +37,9 @@ struct logging_control {
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
   void
-  operator() (const char*, std::source_location, sc::evaluation_config) const
-  { contract_handler_called = true; }	// returns -> continue
+  operator() (const char*, std::source_location, sc::evaluation_config,
+	      void* args, bool (*check) (void*)) const
+  { if (check (args)) return; contract_handler_called = true; }	// returns -> continue
 };
 
 inline constexpr logging_control logging_control_v{};
