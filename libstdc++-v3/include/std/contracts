@@ -158,15 +158,22 @@ namespace contracts
   void __d4324_log_violation(const char*, std::source_location) noexcept;
   [[noreturn]] void __d4324_terminate() noexcept;
 
-  // Declared, never defined anywhere: calling this during constant
-  // evaluation is the deliberate mechanism by which a compile-time contract
-  // violation fails with a clear, contract-specific diagnostic (naming this
-  // function), instead of the flatter "call to non-'constexpr' function"
-  // that calling __d4324_log_violation/__d4324_terminate directly would
-  // otherwise produce. Those two remain real, non-constexpr, noexcept
-  // entry points for actual runtime logging/termination; this one exists
-  // solely to be an intentionally-unusable compile-time failure point.
-  void __d4324_consteval_violation(const char*, std::source_location) noexcept;
+  // Recognized specially by the compiler during constant evaluation (see
+  // gcc/cp/constexpr.cc); never actually defined/linked anywhere. Reuses
+  // [basic.contract.eval]'s own manifestly-constant-evaluated diagnostic
+  // machinery: diagnoses (error if TERMINATING, warning otherwise) only
+  // when the enclosing evaluation is manifestly constant-evaluated,
+  // exactly like a bare (control-object-less) contract does; a warning
+  // still lets the caller's already-computed value stand, matching a bare
+  // contract's observe semantic, instead of the flatter "call to
+  // non-'constexpr' function" that an ordinary declared-but-undefined
+  // function would produce (which, being subject to the usual "quiet"
+  // trial-evaluation suppression, would stay silent even when
+  // manifestly-constant-evaluated -- the gap this function exists to
+  // close).
+  void __d4324_consteval_diagnose_violation(bool /*terminating*/,
+					     const char*,
+					     std::source_location) noexcept;
 
   struct default_control {
     static constexpr bool
@@ -181,7 +188,12 @@ namespace contracts
     {
       if (__ctx.check())
 	return;
-      if consteval { __d4324_consteval_violation(__ctx.comment(), __ctx.location()); }
+      if consteval
+	{
+	  __d4324_consteval_diagnose_violation
+	    (__ctx.cfg() != evaluation_config::observe,
+	     __ctx.comment(), __ctx.location());
+	}
       else
 	{
 	  __d4324_log_violation(__ctx.comment(), __ctx.location());
@@ -206,7 +218,12 @@ namespace contracts
     {
       if (__ctx.check())
 	return;
-      if consteval { __d4324_consteval_violation(__ctx.comment(), __ctx.location()); }
+      if consteval
+	{
+	  // Never terminates at runtime, so never a compile-time error either.
+	  __d4324_consteval_diagnose_violation
+	    (false, __ctx.comment(), __ctx.location());
+	}
       else { __d4324_log_violation(__ctx.comment(), __ctx.location()); }
     }
   };
@@ -226,7 +243,13 @@ namespace contracts
     {
       if (__ctx.check())
 	return;
-      if consteval { __d4324_consteval_violation(__ctx.comment(), __ctx.location()); }
+      if consteval
+	{
+	  // Always terminates at runtime, regardless of cfg, so always a
+	  // compile-time error too.
+	  __d4324_consteval_diagnose_violation
+	    (true, __ctx.comment(), __ctx.location());
+	}
       else
 	{
 	  __d4324_log_violation(__ctx.comment(), __ctx.location());
