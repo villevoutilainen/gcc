@@ -125,15 +125,15 @@ namespace contracts
   // only calling the operator on failure.
 
   struct assertion_context {
-    const char* comment() const noexcept { return __comment; }
-    std::source_location location() const noexcept { return __location; }
-    evaluation_config cfg() const noexcept { return __cfg; }
-    assertion_kind kind() const noexcept { return __kind; }
+    constexpr const char* comment() const noexcept { return __comment; }
+    constexpr std::source_location location() const noexcept { return __location; }
+    constexpr evaluation_config cfg() const noexcept { return __cfg; }
+    constexpr assertion_kind kind() const noexcept { return __kind; }
 
     // Evaluates the predicate.  Deliberately not noexcept: the predicate
     // may throw, and a control object may want that exception to
     // propagate rather than be forced into std::terminate() here.
-    bool check() const { return __check(__args); }
+    constexpr bool check() const { return __check(__args); }
 
   private:
     const char* __comment;
@@ -158,6 +158,16 @@ namespace contracts
   void __d4324_log_violation(const char*, std::source_location) noexcept;
   [[noreturn]] void __d4324_terminate() noexcept;
 
+  // Declared, never defined anywhere: calling this during constant
+  // evaluation is the deliberate mechanism by which a compile-time contract
+  // violation fails with a clear, contract-specific diagnostic (naming this
+  // function), instead of the flatter "call to non-'constexpr' function"
+  // that calling __d4324_log_violation/__d4324_terminate directly would
+  // otherwise produce. Those two remain real, non-constexpr, noexcept
+  // entry points for actual runtime logging/termination; this one exists
+  // solely to be an intentionally-unusable compile-time failure point.
+  void __d4324_consteval_violation(const char*, std::source_location) noexcept;
+
   struct default_control {
     static constexpr bool
     is_ignored(evaluation_config __cfg) noexcept
@@ -166,14 +176,18 @@ namespace contracts
     static constexpr bool constify  = false;
     static constexpr bool assumable = false;
 
-    void
+    constexpr void
     operator()(const assertion_context& __ctx) const noexcept
     {
       if (__ctx.check())
 	return;
-      __d4324_log_violation(__ctx.comment(), __ctx.location());
-      if (__ctx.cfg() != evaluation_config::observe)
-	__d4324_terminate();
+      if consteval { __d4324_consteval_violation(__ctx.comment(), __ctx.location()); }
+      else
+	{
+	  __d4324_log_violation(__ctx.comment(), __ctx.location());
+	  if (__ctx.cfg() != evaluation_config::observe)
+	    __d4324_terminate();
+	}
     }
   };
 
@@ -187,12 +201,13 @@ namespace contracts
     static constexpr bool constify  = true;
     static constexpr bool assumable = false;
 
-    void
+    constexpr void
     operator()(const assertion_context& __ctx) const noexcept
     {
       if (__ctx.check())
 	return;
-      __d4324_log_violation(__ctx.comment(), __ctx.location());
+      if consteval { __d4324_consteval_violation(__ctx.comment(), __ctx.location()); }
+      else { __d4324_log_violation(__ctx.comment(), __ctx.location()); }
     }
   };
 
@@ -206,13 +221,17 @@ namespace contracts
     static constexpr bool constify  = false;
     static constexpr bool assumable = true;
 
-    void
+    constexpr void
     operator()(const assertion_context& __ctx) const noexcept
     {
       if (__ctx.check())
 	return;
-      __d4324_log_violation(__ctx.comment(), __ctx.location());
-      __d4324_terminate();
+      if consteval { __d4324_consteval_violation(__ctx.comment(), __ctx.location()); }
+      else
+	{
+	  __d4324_log_violation(__ctx.comment(), __ctx.location());
+	  __d4324_terminate();
+	}
     }
   };
 
@@ -229,7 +248,7 @@ namespace contracts
     // Never actually called: is_ignored is unconditionally true
     // (regardless of the TU's -fcontract-evaluation-semantic=), so no
     // assertion naming this control ever reaches operator().
-    void
+    constexpr void
     operator()(const assertion_context&) const noexcept
     { }
   };
@@ -248,7 +267,7 @@ namespace contracts
     // always ignored (unconditionally, unlike mandatory::is_ignored, which
     // is tied to the TU's cfg), so the predicate is always handed to the
     // optimizer as an assumption instead of being called through here.
-    void
+    constexpr void
     operator()(const assertion_context&) const noexcept
     { }
   };
