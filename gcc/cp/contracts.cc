@@ -266,11 +266,12 @@ static bool contract_control_assumable (tree);
 static bool
 contract_active_p (tree contract)
 {
-  /* D4324: a named control type decides activity by its compile-time members
-     rather than the translation-unit semantic.  The assertion is active if it
-     is not ignored (a runtime check or control-object dispatch runs) or if it
-     is ignored but assumable (an optimizer assumption is emitted).  */
-  if (tree ctrl = CONTRACT_CONTROL_TYPE (contract))
+  /* D4324: a named control object decides activity by its type's
+     compile-time members rather than the translation-unit semantic.  The
+     assertion is active if it is not ignored (a runtime check or
+     control-object dispatch runs) or if it is ignored but assumable (an
+     optimizer assumption is emitted).  */
+  if (tree ctrl = CONTRACT_CONTROL_OBJECT (contract))
     {
       if (!contract_control_is_ignored (ctrl))
 	return true;
@@ -2044,7 +2045,7 @@ rebuild_postconditions (tree fndecl)
 	 (e.g. auto return with post(r: check(r))).  Matching the parser's
 	 setting keeps the result const, exactly as P2900 requires.  */
       bool constify_p = flag_contract_control_objects
-	? contract_control_constifies (CONTRACT_CONTROL_TYPE (contract))
+	? contract_control_constifies (CONTRACT_CONTROL_OBJECT (contract))
 	: true;
       auto constify_ovr
 	= make_temp_override (contract_condition_constify_p, constify_p);
@@ -2087,12 +2088,12 @@ build_comment (cp_expr condition)
 
 tree
 grok_contract (tree contract_spec, tree mode, tree result, cp_expr condition,
-	       location_t loc, tree control_type /* = NULL_TREE */)
+	       location_t loc, tree control_object /* = NULL_TREE */)
 {
   if (condition == error_mark_node)
     return error_mark_node;
 
-  if (control_type == error_mark_node)
+  if (control_object == error_mark_node)
     return error_mark_node;
 
   tree_code code;
@@ -2117,15 +2118,15 @@ grok_contract (tree contract_spec, tree mode, tree result, cp_expr condition,
 
   /* Build the contract. The condition is added later.  In the case that
      the contract is deferred, result an plain identifier, not a result
-     variable.  Operand 5 holds the optional control type; postconditions
+     variable.  Operand 5 holds the optional control object; postconditions
      store the result name at operand 6.  */
   tree contract;
   if (code != POSTCONDITION_STMT)
     contract = build_nt (code, mode, NULL_TREE, NULL_TREE, NULL_TREE,
-			 NULL_TREE, control_type);
+			 NULL_TREE, control_object);
   else
     contract = build_nt (code, mode, NULL_TREE, NULL_TREE, NULL_TREE,
-			 NULL_TREE, control_type, result);
+			 NULL_TREE, control_object, result);
   TREE_TYPE (contract) = void_type_node;
   SET_EXPR_LOCATION (contract, loc);
 
@@ -3006,18 +3007,18 @@ contract_evaluation_config_value ()
     }
 }
 
-/* CTRL is what was named as pre<...>/post<...>/contract_assert<...>: either
-   a control TYPE named directly, or a constant-expression naming a control
-   OBJECT (including the implicit std::contracts::default_v substituted for
-   a bare pre/post/contract_assert under -fcontract-control-objects).  The
+/* CTRL is the constant-expression naming a control OBJECT for
+   pre<...>/post<...>/contract_assert<...> (including the implicit
+   std::contracts::default_v substituted for a bare pre/post/contract_assert
+   under -fcontract-control-objects), or NULL_TREE.  The
    is_ignored/constify/assumable/operator() members looked up below are
-   always static, so only the type is ever needed for member lookup; return
-   it, deriving it from the object's type when CTRL isn't already a type.  */
+   always static, so only CTRL's type is ever needed for member lookup;
+   return it.  */
 
 static tree
 contract_control_naming_type (tree ctrl)
 {
-  return (ctrl && !TYPE_P (ctrl)) ? TREE_TYPE (ctrl) : ctrl;
+  return ctrl ? TREE_TYPE (ctrl) : NULL_TREE;
 }
 
 /* If the assertion names a control type CTRL, constant-evaluate
@@ -3194,16 +3195,13 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind)
 
   tree cfg_arg = build_int_cst (t_cfg, contract_evaluation_config_value ());
 
-  /* CTRL is either a control TYPE named directly (pre<T>: build a
-     zero-initialized instance, as before), or a constant-expression naming a
-     control OBJECT (pre<expr>, or the implicit std::contracts::default_v for
-     a bare pre/post/contract_assert): constant-evaluate it and use that
-     value, so distinct objects of the same type (e.g. carrying different
-     diagnostic data) are preserved instead of collapsing to zero.  */
-  bool is_type = TYPE_P (ctrl);
-  tree ctrl_type = is_type ? ctrl : TREE_TYPE (ctrl);
-  tree ctrl_init = is_type ? build_zero_cst (ctrl_type)
-			   : cxx_constant_value (ctrl);
+  /* CTRL is a constant-expression naming a control OBJECT (pre<expr>, or the
+     implicit std::contracts::default_v for a bare pre/post/contract_assert):
+     constant-evaluate it and use that value, so distinct objects of the same
+     type (e.g. carrying different diagnostic data) are preserved instead of
+     collapsing to zero.  */
+  tree ctrl_type = TREE_TYPE (ctrl);
+  tree ctrl_init = cxx_constant_value (ctrl);
 
   /* Build the control object on the stack; register it.  */
   tree ctrl_var = build_decl (loc, VAR_DECL, NULL_TREE, ctrl_type);
@@ -3239,21 +3237,21 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind)
 tree
 build_contract_check (tree contract)
 {
-  tree ctrl = CONTRACT_CONTROL_TYPE (contract);
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
 
-  /* D4324 step 1: a named control type decides, at compile time, whether this
-     assertion is ignored for the TU's evaluation_config.  An ignored
-     assertion emits no runtime check; if the control type is also assumable
-     the predicate is handed to the optimizer as an assumption (evaluated by
-     no one at runtime) instead.  */
+  /* D4324 step 1: a named control object decides, at compile time, whether
+     this assertion is ignored for the TU's evaluation_config.  An ignored
+     assertion emits no runtime check; if the control object's type is also
+     assumable the predicate is handed to the optimizer as an assumption
+     (evaluated by no one at runtime) instead.  */
   bool ignored = contract_control_is_ignored (ctrl);
   bool assumable = ignored && contract_control_assumable (ctrl);
   if (ignored && !assumable)
     return void_node;
 
-  /* If the control type provides the D4324 dispatch operator, codegen calls
-     it and branches on the returned violation_response instead of using the
-     built-in evaluation-semantic switch.  */
+  /* If the control object's type provides the D4324 dispatch operator,
+     codegen calls it and branches on the returned violation_response instead
+     of using the built-in evaluation-semantic switch.  */
   tree control_op = ignored ? NULL_TREE : contract_control_operator (ctrl);
 
   contract_evaluation_semantic semantic = CES_ENFORCE;
