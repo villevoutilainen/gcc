@@ -1,10 +1,10 @@
-// D4324: pre<...> can name a constant-expression control object instead of
-// only a type, so a control type can carry real per-instance state across
-// distinct uses.  Two constexpr objects of the same control type each carry
-// a different diagnostic string; naming a different one on two different
-// assertions and observing which string the operator() call captures proves
-// the two objects are genuinely distinct, not both collapsing to one shared
-// (or zero-initialized) instance.
+// D4324: pre<...> names a constant-expression control object, so a control
+// type can carry real per-instance state across distinct uses.  Two
+// constexpr objects of the same control type each carry a different
+// diagnostic string; naming a different one on two different assertions
+// and observing which string the operator() call captures proves the two
+// objects are genuinely distinct, not both collapsing to one shared (or
+// zero-initialized) instance.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
