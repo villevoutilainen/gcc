@@ -10559,10 +10559,36 @@ cxx_eval_constant_expression (const constexpr_ctx *ctx, tree t,
     case POSTCONDITION_STMT:
       {
 	r = void_node;
+	if (*non_constant_p || ctx->global->contract_statement)
+	  break;
+
+	/* D4324: a contract naming a control object dispatches through that
+	   object's own protocol -- is_ignored/operator() -- instead of the
+	   TU-wide evaluation-semantic fallback below, exactly like the
+	   runtime (genericized) path does.  Unlike that fallback, a
+	   violation here isn't deferred/severity-decided by
+	   check_for_failed_contracts: the operator() call's own
+	   success/failure (a real constant-expression call, which may hit a
+	   non-constexpr function or an uncaught exception) is itself the
+	   immediate, correct signal, so it's evaluated exactly like any
+	   other statement.  */
+	if (CONTRACT_CONTROL_OBJECT (t))
+	  {
+	    tree fndecl = (ctx->call && ctx->call->fundef
+			   ? ctx->call->fundef->decl : current_function_decl);
+	    tree check = build_contract_control_constexpr_check (t, fndecl);
+	    if (check == error_mark_node)
+	      *non_constant_p = true;
+	    else if (check != void_node)
+	      r = cxx_eval_constant_expression (ctx, check, vc_discard,
+						 non_constant_p, overflow_p,
+						 jump_target);
+	    break;
+	  }
+
 	/* Only record the first fail, and do not go further is the semantic
 	   is 'ignore'.  */
-	if (*non_constant_p || ctx->global->contract_statement
-	    || contract_ignored_p (t))
+	if (contract_ignored_p (t))
 	  break;
 
 	tree cond = CONTRACT_CONDITION (t);

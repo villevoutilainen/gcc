@@ -2822,12 +2822,11 @@ get_contracts_source_location_impl_type (tree context = NULL_TREE)
 }
 
 static tree
-get_src_loc_impl_ptr (location_t loc)
+get_src_loc_impl_ptr_for (location_t loc, tree fndecl)
 {
   if (!contracts_source_location_impl_type)
     get_contracts_source_location_impl_type ();
 
-  tree fndecl = current_function_decl;
   /* We might be an outlined function.  */
   if (DECL_IS_PRE_FN_P (fndecl) || DECL_IS_POST_FN_P (fndecl))
     fndecl = get_orig_for_outlined (fndecl);
@@ -2841,6 +2840,12 @@ get_src_loc_impl_ptr (location_t loc)
 				  contracts_source_location_impl_type);
   tree p = build_pointer_type (contracts_source_location_impl_type);
   return build_fold_addr_expr_with_type_loc (loc, impl__, p);
+}
+
+static tree
+get_src_loc_impl_ptr (location_t loc)
+{
+  return get_src_loc_impl_ptr_for (loc, current_function_decl);
 }
 
 /* Build a layout-compatible internal version of assertion_context type.  */
@@ -3681,6 +3686,276 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
   return build_call_array_loc (loc, result_type, fn_addr, 2, args);
 }
 
+/* Build a genuine `std::source_location' value (of type SRC_LOC_TYPE, the
+   real library class -- not the compiler-internal
+   contracts_source_location_impl_type mirror get_src_loc_impl_ptr uses,
+   which is a bare pointer, layout-compatible with std::source_location's
+   single-pointer-member layout only for runtime/GENERIC purposes, not a
+   value of the real class type constant evaluation requires) usable in a
+   constexpr-evaluated context.  Mirrors the same lookup/construction
+   reflect.cc's eval_source_location_of uses for
+   std::meta::source_location_of: find the library's single pointer-typed
+   data member (named _M_impl in libstdc++), and initialize it via the real
+   __builtin_source_location () intrinsic -- the same one
+   std::source_location::current()'s own library implementation calls --
+   which the constexpr evaluator already fully supports.  */
+
+static tree
+build_real_source_location_value (location_t loc, tree src_loc_type,
+				   tree fndecl)
+{
+  tree field = next_aggregate_field (TYPE_FIELDS (src_loc_type));
+  if (!field || !POINTER_TYPE_P (TREE_TYPE (field))
+      || next_aggregate_field (DECL_CHAIN (field)))
+    return build_constructor (src_loc_type, NULL);
+
+  tree decl = lookup_qualified_name (global_namespace,
+				      get_identifier
+					("__builtin_source_location"));
+  if (TREE_CODE (decl) != FUNCTION_DECL
+      || !fndecl_built_in_p (decl, BUILT_IN_FRONTEND)
+      || DECL_FE_FUNCTION_CODE (decl) != CP_BUILT_IN_SOURCE_LOCATION
+      || !require_deduced_type (decl, tf_warning_or_error))
+    return build_constructor (src_loc_type, NULL);
+
+  tree call = build_call_nary (TREE_TYPE (TREE_TYPE (decl)), decl, 0);
+  SET_EXPR_LOCATION (call, loc);
+  /* fold_builtin_source_location hard-codes current_function_decl to name
+     the enclosing function; override it to the real one temporarily (see
+     the identical pattern already used in cxx_maybe_build_cleanup,
+     constexpr.cc), since current_function_decl itself cannot be relied on
+     mid-constant-evaluation.  */
+  temp_override<tree> ovr (current_function_decl, fndecl);
+  call = fold_builtin_source_location (call);
+  return build_constructor_single (src_loc_type, field, call);
+}
+
+/* Build a constexpr-eligible `bool (void *)' thunk for CONTRACT's
+   condition, for use only by build_contract_control_constexpr_check below.
+   Unlike build_predicate_thunk_function (used at genericization time,
+   where the thunk may be called much later from arbitrary code and so
+   must recover its real arguments through a type-erased pointer), this
+   thunk is only ever constant-evaluated immediately, within the very same
+   constant evaluation that is still evaluating CONTRACT's enclosing call
+   -- so its body can reference CONTRACT_CONDITION's PARM_DECLs directly:
+   the constexpr evaluator resolves a PARM_DECL's value by decl identity
+   (via the global value map), not by which FUNCTION_DECL it nominally
+   belongs to.  The `void *' parameter exists only to match
+   assertion_context::__check's bool(*)(void*) field type; it is never
+   read.  */
+
+static tree
+build_predicate_constexpr_thunk (tree contract)
+{
+  location_t loc = EXPR_LOCATION (contract);
+
+  tree void_ptr_type = build_pointer_type (void_type_node);
+  tree arg_types = tree_cons (NULL_TREE, void_ptr_type, void_list_node);
+  tree fn_type = build_function_type (boolean_type_node, arg_types);
+
+  tree name = clone_function_name_numbered ("__contract_consteval_pred",
+					     "thunk");
+  tree fn = build_lang_decl_loc (loc, FUNCTION_DECL, name, fn_type);
+  DECL_CONTEXT (fn) = NULL_TREE;
+  DECL_SOURCE_LOCATION (fn) = loc;
+  SET_DECL_ASSEMBLER_NAME (fn, name);
+
+  tree parm = build_lang_decl (PARM_DECL, get_identifier ("__unused"),
+				void_ptr_type);
+  DECL_CONTEXT (parm) = fn;
+  DECL_ARTIFICIAL (parm) = true;
+  suppress_warning (parm);
+  DECL_ARGUMENTS (fn) = parm;
+  DECL_RESULT (fn) = NULL_TREE; /* Let start_preparsed_function fill it in.  */
+
+  TREE_STATIC (fn) = 0;
+  DECL_ARTIFICIAL (fn) = 1;
+  TREE_PUBLIC (fn) = 0;
+  DECL_EXTERNAL (fn) = 0;
+  DECL_INTERFACE_KNOWN (fn) = 1;
+  /* Unlike the runtime-only core/thunk functions, this one must actually be
+     usable from a constant expression -- and, unlike them, must NEVER be
+     scheduled for real code generation: its body borrows CONTRACT's
+     PARM_DECLs verbatim (see the function comment above), which the
+     constexpr evaluator resolves by decl identity regardless of which
+     FUNCTION_DECL they nominally belong to, but which do not correspond to
+     any real storage in this thunk's own (nonexistent) stack frame.  Real
+     RTL expansion of this function would try to reference those decls as
+     if they belonged to it and crash.  So: no TREE_USED, no mark_used, and
+     no expand_or_defer_fn below -- only maybe_save_constexpr_fundef
+     (already run inside finish_function, since DECL_DECLARED_CONSTEXPR_P is
+     set) is needed to make it constexpr-callable; nothing here should ever
+     mark it reachable for ordinary codegen.  */
+  DECL_DECLARED_CONSTEXPR_P (fn) = 1;
+  suppress_warning (fn);
+
+  /* Reuse CONTRACT_CONDITION's PARM_DECL references verbatim (see the
+     function comment above) but duplicate the surrounding expression
+     structure, so that finishing this unrelated function can't affect the
+     original tree still owned by CONTRACT.  */
+  tree condition = unshare_expr (CONTRACT_CONDITION (contract));
+  condition = fold_convert (boolean_type_node, condition);
+
+  /* See the matching comment in build_predicate_core_function: this nested
+     synthesis must go through push_to_top_level/pop_from_top_level, not a
+     bare push_function_context/pop_function_context.  */
+  push_to_top_level ();
+  start_preparsed_function (fn, NULL_TREE, SF_PRE_PARSED | SF_DEFAULT);
+  cp_function_chain->can_throw = true;
+  tree body = begin_function_body ();
+  finish_return_stmt (condition);
+  finish_function_body (body);
+  fn = finish_function (/*inline_p=*/false);
+  pop_from_top_level ();
+
+  return fn;
+}
+
+/* CONTRACT names a control object (CONTRACT_CONTROL_OBJECT is non-NULL).
+   Called only from cxx_eval_constant_expression's ASSERTION_STMT/
+   PRECONDITION_STMT/POSTCONDITION_STMT case, to make constant evaluation of
+   a contract that names a control object actually invoke that object's
+   protocol -- is_ignored/operator() -- instead of falling back to the
+   built-in TU-evaluation-semantic path the way it used to (that fallback
+   remains, unchanged, for CONTRACT_CONTROL_OBJECT == NULL_TREE, i.e.
+   -fcontract-control-objects off).
+
+   Returns:
+     - void_node if the control object is ignored: both ignored sub-cases
+       (assumable or not) collapse to the same "skip entirely, don't touch
+       the object at all" outcome here, since there is no
+       optimizer-assumption concept during constant evaluation to give the
+       assumable case a different, meaningful compile-time behavior.
+     - error_mark_node (having already issued the same "no usable
+       operator()" diagnostic build_contract_check's runtime path would
+       eventually give) if the control type has no usable operator().
+     - Otherwise, a BIND_EXPR that faithfully replays the same dispatch
+       build_contract_check's control-object branch builds at
+       genericization time for the runtime path -- constructing the
+       control object and an assertion_context, then calling the control
+       object's operator() -- so that C++26 throw/catch semantics around
+       ctx.check() behave identically whether the contract is evaluated at
+       compile time or run time.  The caller constant-evaluates this
+       exactly like any other statement.
+
+   FNDECL is the FUNCTION_DECL whose call is currently being constant
+   evaluated (e.g. from the constexpr evaluator's own call-frame tracking,
+   ctx->call->fundef->decl) -- current_function_decl itself cannot be
+   relied on here, since constant evaluation of a call can happen from a
+   context (e.g. a file-scope static_assert) where it is NULL or refers to
+   an unrelated function.  */
+
+tree
+build_contract_control_constexpr_check (tree contract, tree fndecl)
+{
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  gcc_checking_assert (ctrl);
+
+  if (contract_control_is_ignored (ctrl))
+    return void_node;
+
+  tree op = contract_control_operator (ctrl);
+  if (!op)
+    {
+      error_at (EXPR_LOCATION (contract),
+		"control object of type %qT has no usable "
+		"%<operator()%>", contract_control_naming_type (ctrl));
+      return error_mark_node;
+    }
+
+  location_t loc = EXPR_LOCATION (contract);
+  tree t_ctx = TREE_VALUE (FUNCTION_FIRST_USER_PARMTYPE (op));
+  tree ctx_type = non_reference (t_ctx);
+
+  tree thunk_fn = build_predicate_constexpr_thunk (contract);
+  tree check_fn = build_addr_func (thunk_fn, tf_warning_or_error);
+  /* Deliberately not mark_used: see the comment in
+     build_predicate_constexpr_thunk on why this thunk must never be
+     scheduled for real code generation.  */
+
+  tree comment = CONTRACT_COMMENT (contract);
+  if (!comment)
+    comment = build_zero_cst (const_string_type_node);
+
+  /* Build a genuine `const assertion_context' CONSTRUCTOR directly against
+     the real class's own (private) fields -- unlike
+     build_contract_control_call's runtime path, which goes through a
+     compiler-internal mirror type and a pointer-cast "reinterpret" to
+     avoid needing the real class's constructor semantics at GENERIC/gimple
+     time.  Constant evaluation enforces the C++ object model strictly, so
+     that type-punned mirror value is not usable here; building the real
+     type's CONSTRUCTOR instead -- exactly the same low-level mechanism
+     already used to construct any other class object internally,
+     independent of the class's aggregate-ness or access specifiers --
+     sidesteps the type-punning question entirely.  */
+  tree f0 = next_aggregate_field (TYPE_FIELDS (ctx_type));
+  tree f1 = next_aggregate_field (DECL_CHAIN (f0));
+  tree f2 = next_aggregate_field (DECL_CHAIN (f1));
+  tree f3 = next_aggregate_field (DECL_CHAIN (f2));
+  tree f4 = next_aggregate_field (DECL_CHAIN (f3));
+  tree f5 = next_aggregate_field (DECL_CHAIN (f4));
+  tree dummy_args_ptr = build_zero_cst (ptr_type_node); /* Never read.  */
+  tree ctor = build_constructor_va
+    (ctx_type, 6,
+     f0, comment,
+     f1, build_real_source_location_value (loc, TREE_TYPE (f1), fndecl),
+     f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_config_value ()),
+     f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
+     f4, fold_convert (TREE_TYPE (f4), dummy_args_ptr),
+     f5, fold_convert (TREE_TYPE (f5), check_fn));
+
+  tree ctx_var = build_decl (loc, VAR_DECL, NULL_TREE, ctx_type);
+  DECL_ARTIFICIAL (ctx_var) = true;
+  DECL_INITIAL (ctx_var) = ctor;
+  layout_decl (ctx_var, 0);
+
+  /* CTRL is a constant-expression naming a control OBJECT (pre<expr>, or the
+     implicit std::contracts::default_v for a bare pre/post/contract_assert):
+     constant-evaluate it and use that value, exactly like
+     build_contract_control_call's runtime path.  */
+  tree ctrl_type = TREE_TYPE (ctrl);
+  tree ctrl_init = cxx_constant_value (ctrl);
+
+  tree ctrl_var = build_decl (loc, VAR_DECL, NULL_TREE, ctrl_type);
+  DECL_ARTIFICIAL (ctrl_var) = true;
+  DECL_INITIAL (ctrl_var) = ctrl_init;
+  layout_decl (ctrl_var, 0);
+
+  tree this_arg = build_fold_addr_expr (ctrl_var);
+  tree this_type = TREE_TYPE (DECL_ARGUMENTS (op));
+  this_arg = fold_convert (this_type, this_arg);
+
+  tree fn_addr = build_addr_func (op, tf_warning_or_error);
+  tree fntype = TREE_TYPE (TREE_TYPE (fn_addr));
+  tree result_type = TREE_TYPE (fntype);
+
+  tree ctx_arg = fold_convert (t_ctx, build_fold_addr_expr (ctx_var));
+
+  tree args[2] = { this_arg, ctx_arg };
+  mark_used (op);
+  tree call = build_call_array_loc (loc, result_type, fn_addr, 2, args);
+
+  /* Package CTRL_VAR/CTX_VAR's declarations and the call into a small,
+     self-contained BIND_EXPR: the constexpr evaluator already knows how to
+     evaluate BIND_EXPR/DECL_EXPR/VAR_DECL initialization -- that's how it
+     evaluates any function body with locals -- so handing it this directly
+     is the natural fit for being invoked mid-evaluation, unlike
+     build_contract_control_call's runtime path, which splices its
+     temporaries into an already-open, enclosing statement list (CC_BIND)
+     that doesn't exist here.  */
+  DECL_CHAIN (ctrl_var) = ctx_var;
+  DECL_CHAIN (ctx_var) = NULL_TREE;
+
+  tree bind = build3 (BIND_EXPR, void_type_node, ctrl_var, NULL_TREE,
+		       NULL_TREE);
+  tree stmt_list = alloc_stmt_list ();
+  append_to_statement_list (build_stmt (loc, DECL_EXPR, ctrl_var), &stmt_list);
+  append_to_statement_list (build_stmt (loc, DECL_EXPR, ctx_var), &stmt_list);
+  append_to_statement_list (call, &stmt_list);
+  BIND_EXPR_BODY (bind) = stmt_list;
+
+  return bind;
+}
 
 /* Genericize a CONTRACT tree, but do not attach it to the current context,
    the caller is responsible for that.

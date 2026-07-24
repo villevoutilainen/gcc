@@ -214,6 +214,7 @@ extern bool emit_contract_wrapper_func		(bool);
 extern void maybe_emit_violation_handler_wrappers (void);
 
 extern tree build_contract_check		(tree);
+extern tree build_contract_control_constexpr_check (tree, tree);
 
 /* Test if EXP is a contract const wrapper node.  */
 
