@@ -2857,11 +2857,19 @@ get_assertion_context_fields ()
     const char* comment;
     std::source_location location;	// a single const __impl* member
     evaluation_config cfg;		// enum class ... : unsigned
-    void* args;
-    bool (*check)(void*);
+
+    bool check() const { return __check(__args); }
+
+  private:
+    void* __args;
+    bool (*__check)(void*);
   };
-    If this changes, also update the initializer in
-    build_contract_control_call.  */
+    Field NAMES here are only for this internal type's own debug info --
+    fields are tied to the real assertion_context by position (see
+    next_aggregate_field in build_contract_control_call), not by name, so
+    the library is free to rename/encapsulate its own fields freely.  If
+    the field order, types, or count change, also update the initializer
+    in build_contract_control_call.  */
   tree check_fn_type
     = build_function_type_list (boolean_type_node, ptr_type_node, NULL_TREE);
   const tree types[] = { const_string_type_node,
@@ -2873,8 +2881,8 @@ get_assertion_context_fields ()
   const char *names[] = { "comment",
 			   "location",
 			   "cfg",
-			   "args",
-			   "check",
+			   "__args",
+			   "__check",
 			 };
   unsigned n = 0;
   for (tree type : types)

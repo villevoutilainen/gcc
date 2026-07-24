@@ -118,19 +118,25 @@ namespace contracts
   // terminates in its own body.  No violation_response is needed.
   //
   // The operator is handed the predicate itself rather than its already-
-  // computed result: ctx.args is an opaque bundle of the assertion's real
-  // arguments and ctx.check is a callback that evaluates the predicate given
-  // that bundle.  This lets the control object decide whether, when, and how
-  // many times to evaluate the predicate, and whether to let an exception
-  // from it propagate or contain it, instead of the compiler always
-  // evaluating eagerly and only calling the operator on failure.
+  // computed result: ctx.check() evaluates it on demand.  This lets the
+  // control object decide whether, when, and how many times to evaluate
+  // the predicate, and whether to let an exception from it propagate or
+  // contain it, instead of the compiler always evaluating eagerly and
+  // only calling the operator on failure.
 
   struct assertion_context {
     const char* comment;
     std::source_location location;
     evaluation_config cfg;
-    void* args;
-    bool (*check)(void*);
+
+    // Evaluates the predicate.  Deliberately not noexcept: the predicate
+    // may throw, and a control object may want that exception to
+    // propagate rather than be forced into std::terminate() here.
+    bool check() const { return __check(__args); }
+
+  private:
+    void* __args;
+    bool (*__check)(void*);
   };
 
   template <class _Tp>
@@ -158,7 +164,7 @@ namespace contracts
     void
     operator()(const assertion_context& __ctx) const noexcept
     {
-      if (__ctx.check(__ctx.args))
+      if (__ctx.check())
 	return;
       __d4324_log_violation(__ctx.comment, __ctx.location);
       if (__ctx.cfg != evaluation_config::observe)
@@ -179,7 +185,7 @@ namespace contracts
     void
     operator()(const assertion_context& __ctx) const noexcept
     {
-      if (__ctx.check(__ctx.args))
+      if (__ctx.check())
 	return;
       __d4324_log_violation(__ctx.comment, __ctx.location);
     }
@@ -198,7 +204,7 @@ namespace contracts
     void
     operator()(const assertion_context& __ctx) const noexcept
     {
-      if (__ctx.check(__ctx.args))
+      if (__ctx.check())
 	return;
       __d4324_log_violation(__ctx.comment, __ctx.location);
       __d4324_terminate();

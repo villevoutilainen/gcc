@@ -26,7 +26,7 @@ struct labeled {
   static constexpr bool assumable = false;
   void
   operator() (const sc::assertion_context& ctx) const
-  { if (ctx.check (ctx.args)) return; seen = label; }		// returns -> continue
+  { if (ctx.check ()) return; seen = label; }		// returns -> continue
   static const char* seen;
 };
 const char* labeled::seen = nullptr;
@@ -49,7 +49,7 @@ struct annotated {
   void
   operator() (const sc::assertion_context& ctx) const
   {
-    if (ctx.check (ctx.args))
+    if (ctx.check ())
       return;
     seen = std::string (ctx.comment) + ": " + note;	// returns -> continue
   }

@@ -22,7 +22,7 @@ struct capture {
   static constexpr bool assumable = false;
   void
   operator() (const sc::assertion_context& ctx) const
-  { if (ctx.check (ctx.args)) return; seen = ctx.cfg; called = true; }	// returns -> continue
+  { if (ctx.check ()) return; seen = ctx.cfg; called = true; }	// returns -> continue
 };
 
 inline constexpr capture capture_v{};

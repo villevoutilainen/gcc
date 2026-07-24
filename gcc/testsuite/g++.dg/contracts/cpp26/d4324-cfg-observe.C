@@ -28,8 +28,12 @@ struct assertion_context {
   const char* comment;
   const void* location;
   evaluation_config cfg;
-  void* args;
-  bool (*check) (void*);
+
+  bool check () const { return __check (__args); }
+
+private:
+  void* __args;
+  bool (*__check) (void*);
 };
 }
 }
@@ -44,7 +48,7 @@ struct if_observe {
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
   void operator() (const sc::assertion_context& ctx) const
-  { ctx.check (ctx.args); }
+  { ctx.check (); }
 };
 
 struct if_enforce {
@@ -53,7 +57,7 @@ struct if_enforce {
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
   void operator() (const sc::assertion_context& ctx) const
-  { ctx.check (ctx.args); }
+  { ctx.check (); }
 };
 
 inline constexpr if_observe if_observe_v{};
