@@ -3846,7 +3846,8 @@ build_predicate_constexpr_thunk (tree contract)
    an unrelated function.  */
 
 tree
-build_contract_control_constexpr_check (tree contract, tree fndecl)
+build_contract_control_constexpr_check (tree contract, tree fndecl,
+					 bool quiet)
 {
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   gcc_checking_assert (ctrl);
@@ -3857,9 +3858,20 @@ build_contract_control_constexpr_check (tree contract, tree fndecl)
   tree op = contract_control_operator (ctrl);
   if (!op)
     {
-      error_at (EXPR_LOCATION (contract),
-		"control object of type %qT has no usable "
-		"%<operator()%>", contract_control_naming_type (ctrl));
+      /* Unlike a genuine contract violation (handled by the caller via the
+	 recognized __d4324_consteval_diagnose_violation call, deliberately
+	 not quiet-gated to match check_for_failed_contracts), a missing
+	 operator() is a malformed-program error, not something
+	 manifestly-const-eval-awareness should force into visibility: a
+	 merely-quiet trial evaluation (e.g. this same contract reached via
+	 an ordinary static const initializer) must stay silent on failure
+	 like any other quiet constexpr evaluation attempt, since
+	 build_contract_check's own runtime path will raise this same error
+	 for real if/when the function is ever actually genericized.  */
+      if (!quiet)
+	error_at (EXPR_LOCATION (contract),
+		  "control object of type %qT has no usable "
+		  "%<operator()%>", contract_control_naming_type (ctrl));
       return error_mark_node;
     }
 

@@ -1,13 +1,14 @@
 // D4324: a contract violation discovered while constant-evaluating a
-// control-object dispatch fails via the control-object protocol itself --
-// mandatory_v's operator() genuinely runs at compile time and hits
-// __d4324_consteval_violation (declared, deliberately never defined, only
-// ever reached along an "if consteval" branch) -- rather than the old
-// bespoke "contract predicate is false in constant expression" message,
-// which is now only ever produced on the P2900 built-in
-// (-fcontract-control-objects off) path.  See
-// d4324-constexpr-violation-review.C for review_v, which fails identically
-// despite its different (log-only, non-terminating) runtime behavior.
+// control-object dispatch is diagnosed via the exact same
+// manifestly-constant-evaluated, quiet-independent decision
+// [basic.contract.eval] already requires for a bare (control-object-less)
+// contract (see check_for_failed_contracts in gcc/cp/constexpr.cc) --
+// reached here via a recognized library entry point,
+// __d4324_consteval_diagnose_violation, that each control type's
+// operator() calls under "if consteval" with its own terminating verdict.
+// mandatory_v always terminates at runtime, so this is a hard error here
+// too. See d4324-constexpr-violation-review.C for review_v, which never
+// terminates and so only warns here, with the value still usable.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=enforce" }
 
@@ -28,10 +29,11 @@ namespace sc = std::contracts;
 
 constexpr int f (int x) pre<sc::mandatory_v>(x >= 0) { return x; }
 
-// The primary diagnostic is anchored here, at the point of use; the
-// secondary "call to non-'constexpr' function ... __d4324_consteval_violation"
-// diagnostic is reported inside <contracts> itself (at the "if consteval"
-// call site operator() reaches), not at any line in this file, so it's
-// matched by message only (line 0), not by position.
+// The "non-constant condition for static assertion" diagnostic is anchored
+// here, at the point of use; the "contract predicate is false in constant
+// expression" diagnostic is reported inside <contracts> itself (at the
+// __d4324_consteval_diagnose_violation call site operator() reaches), not
+// at any line in this file, so it's matched by message only (line 0), not
+// by position.
 static_assert (f (-1) == -1);	// { dg-error "non-constant condition" }
-// { dg-error "call to non-.constexpr. function" "" { target *-*-* } 0 }
+// { dg-error "contract predicate is false in constant expression" "" { target *-*-* } 0 }
