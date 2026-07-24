@@ -216,6 +216,43 @@ namespace contracts
 
   inline constexpr mandatory mandatory_v{};
 
+  struct ignore {
+    static constexpr bool
+    is_ignored(evaluation_config) noexcept
+    { return true; }
+
+    static constexpr bool constify  = false;
+    static constexpr bool assumable = false;
+
+    // Never actually called: is_ignored is unconditionally true
+    // (regardless of the TU's -fcontract-evaluation-semantic=), so no
+    // assertion naming this control ever reaches operator().
+    void
+    operator()(const assertion_context&) const noexcept
+    { }
+  };
+
+  inline constexpr ignore ignore_v{};
+
+  struct assume {
+    static constexpr bool
+    is_ignored(evaluation_config) noexcept
+    { return true; }
+
+    static constexpr bool constify  = false;
+    static constexpr bool assumable = true;
+
+    // Never actually called, for the same reason as ignore::operator():
+    // always ignored (unconditionally, unlike mandatory::is_ignored, which
+    // is tied to the TU's cfg), so the predicate is always handed to the
+    // optimizer as an assumption instead of being called through here.
+    void
+    operator()(const assertion_context&) const noexcept
+    { }
+  };
+
+  inline constexpr assume assume_v{};
+
 } // namespace contracts
 
 _GLIBCXX_END_NAMESPACE_VERSION

@@ -3217,8 +3217,12 @@ contract_control_assumable (tree ctrl)
    location, evaluation_config, and a type-erased (args, check) callback
    pair that evaluates the predicate given those args: the operator decides
    whether/when to call it, rather than the compiler always evaluating the
-   predicate itself.  A control type without such an operator (or a bare
-   contract) uses the built-in evaluation-semantic path instead.  */
+   predicate itself.  Every named control type must provide this operator,
+   even one that's always ignored or always assumable and so never actually
+   calls it -- see build_contract_check, which errors out if CTRL is
+   non-NULL and this returns NULL_TREE.  A bare contract (CTRL itself
+   NULL_TREE, i.e. -fcontract-control-objects off) uses the built-in
+   evaluation-semantic path instead.  */
 
 static tree
 contract_control_operator (tree ctrl)
@@ -3688,18 +3692,32 @@ build_contract_check (tree contract)
      (evaluated by no one at runtime) instead.  */
   bool ignored = contract_control_is_ignored (ctrl);
   bool assumable = ignored && contract_control_assumable (ctrl);
+
+  /* A named control object must provide operator() unconditionally, even
+     when ignored/assumable -- so whether it's required never depends on
+     the TU's compiled evaluation_config.  Only "no control object at all"
+     (CTRL null, -fcontract-control-objects off) still falls through to the
+     built-in evaluation-semantic switch below.  */
+  tree control_op = NULL_TREE;
+  if (ctrl)
+    {
+      control_op = contract_control_operator (ctrl);
+      if (!control_op)
+	{
+	  error_at (EXPR_LOCATION (contract),
+		    "control object of type %qT has no usable "
+		    "%<operator()%>", contract_control_naming_type (ctrl));
+	  return error_mark_node;
+	}
+    }
+
   if (ignored && !assumable)
     return void_node;
-
-  /* If the control object's type provides the D4324 dispatch operator,
-     codegen calls it and branches on the returned violation_response instead
-     of using the built-in evaluation-semantic switch.  */
-  tree control_op = ignored ? NULL_TREE : contract_control_operator (ctrl);
 
   contract_evaluation_semantic semantic = CES_ENFORCE;
   bool quick = false;
   bool calls_handler = false;
-  if (!ignored && !control_op)
+  if (!ctrl)
     {
       semantic = get_evaluation_semantic (contract);
       switch (semantic)
