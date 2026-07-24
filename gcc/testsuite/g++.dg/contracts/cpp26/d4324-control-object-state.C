@@ -51,7 +51,7 @@ struct annotated {
   {
     if (ctx.check ())
       return;
-    seen = std::string (ctx.comment) + ": " + note;	// returns -> continue
+    seen = std::string (ctx.comment ()) + ": " + note;	// returns -> continue
   }
   static std::string seen;
 };

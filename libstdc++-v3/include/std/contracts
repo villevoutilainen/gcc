@@ -125,9 +125,9 @@ namespace contracts
   // only calling the operator on failure.
 
   struct assertion_context {
-    const char* comment;
-    std::source_location location;
-    evaluation_config cfg;
+    const char* comment() const noexcept { return __comment; }
+    std::source_location location() const noexcept { return __location; }
+    evaluation_config cfg() const noexcept { return __cfg; }
 
     // Evaluates the predicate.  Deliberately not noexcept: the predicate
     // may throw, and a control object may want that exception to
@@ -135,6 +135,9 @@ namespace contracts
     bool check() const { return __check(__args); }
 
   private:
+    const char* __comment;
+    std::source_location __location;
+    evaluation_config __cfg;
     void* __args;
     bool (*__check)(void*);
   };
@@ -166,8 +169,8 @@ namespace contracts
     {
       if (__ctx.check())
 	return;
-      __d4324_log_violation(__ctx.comment, __ctx.location);
-      if (__ctx.cfg != evaluation_config::observe)
+      __d4324_log_violation(__ctx.comment(), __ctx.location());
+      if (__ctx.cfg() != evaluation_config::observe)
 	__d4324_terminate();
     }
   };
@@ -187,7 +190,7 @@ namespace contracts
     {
       if (__ctx.check())
 	return;
-      __d4324_log_violation(__ctx.comment, __ctx.location);
+      __d4324_log_violation(__ctx.comment(), __ctx.location());
     }
   };
 
@@ -206,7 +209,7 @@ namespace contracts
     {
       if (__ctx.check())
 	return;
-      __d4324_log_violation(__ctx.comment, __ctx.location);
+      __d4324_log_violation(__ctx.comment(), __ctx.location());
       __d4324_terminate();
     }
   };
