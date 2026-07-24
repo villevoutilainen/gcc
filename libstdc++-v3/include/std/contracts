@@ -128,6 +128,7 @@ namespace contracts
     const char* comment() const noexcept { return __comment; }
     std::source_location location() const noexcept { return __location; }
     evaluation_config cfg() const noexcept { return __cfg; }
+    assertion_kind kind() const noexcept { return __kind; }
 
     // Evaluates the predicate.  Deliberately not noexcept: the predicate
     // may throw, and a control object may want that exception to
@@ -138,6 +139,7 @@ namespace contracts
     const char* __comment;
     std::source_location __location;
     evaluation_config __cfg;
+    assertion_kind __kind;
     void* __args;
     bool (*__check)(void*);
   };

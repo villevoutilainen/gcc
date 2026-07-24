@@ -2857,6 +2857,7 @@ get_assertion_context_fields ()
     const char* comment() const noexcept { return __comment; }
     std::source_location location() const noexcept { return __location; }
     evaluation_config cfg() const noexcept { return __cfg; }
+    assertion_kind kind() const noexcept { return __kind; }
 
     bool check() const { return __check(__args); }
 
@@ -2864,6 +2865,7 @@ get_assertion_context_fields ()
     const char* __comment;
     std::source_location __location;	// a single const __impl* member
     evaluation_config __cfg;		// enum class ... : unsigned
+    assertion_kind __kind;		// enum class ... : uint16_t
     void* __args;
     bool (*__check)(void*);
   };
@@ -2878,12 +2880,14 @@ get_assertion_context_fields ()
   const tree types[] = { const_string_type_node,
 			  build_pointer_type (contracts_source_location_impl_type),
 			  unsigned_type_node,
+			  uint16_type_node,
 			  ptr_type_node,
 			  build_pointer_type (check_fn_type),
 			};
   const char *names[] = { "__comment",
 			   "__location",
 			   "__cfg",
+			   "__kind",
 			   "__args",
 			   "__check",
 			 };
@@ -3611,13 +3615,15 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
   tree f2 = next_aggregate_field (DECL_CHAIN (f1));
   tree f3 = next_aggregate_field (DECL_CHAIN (f2));
   tree f4 = next_aggregate_field (DECL_CHAIN (f3));
+  tree f5 = next_aggregate_field (DECL_CHAIN (f4));
   tree ctor = build_constructor_va
-    (builtin_assertion_context_type, 5,
+    (builtin_assertion_context_type, 6,
      f0, comment,
      f1, get_src_loc_impl_ptr (loc),
      f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_config_value ()),
-     f3, fold_convert (TREE_TYPE (f3), args_ptr),
-     f4, fold_convert (TREE_TYPE (f4), check_fn));
+     f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
+     f4, fold_convert (TREE_TYPE (f4), args_ptr),
+     f5, fold_convert (TREE_TYPE (f5), check_fn));
 
   /* Build the assertion_context object on the stack; register it, exactly
      like the control object below.  Unlike a contract_violation object,
