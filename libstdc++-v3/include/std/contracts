@@ -158,6 +158,29 @@ namespace contracts
   void __d4324_log_violation(const char*, std::source_location) noexcept;
   [[noreturn]] void __d4324_terminate() noexcept;
 
+  // Mirrors gcc/cp/contracts.cc's declare_terminate_wrapper /
+  // __tu_terminate_wrapper, the existing P2900 workaround for GCC
+  // PR121936 (see -fcontracts-conservative-ipa). default_control's and
+  // mandatory's operator() are ordinary inline functions, visible and
+  // inlinable in every TU that includes <contracts>; without this
+  // wrapper, once a TU's cfg() constant-folds and the call to the real,
+  // noreturn __d4324_terminate() becomes unconditional, IPA is free to
+  // infer that a caller reaching past the call proves the precondition
+  // held -- sound only within the TU that compiled it, since cfg()
+  // reflects that TU's own -fcontract-evaluation-semantic=, which may
+  // legitimately differ between TUs (the same hazard P2900's own
+  // mechanism exists to prevent from leaking across TU boundaries, e.g.
+  // under LTO or via -fipa-cp-clone's per-call-site specialization).
+  // Deliberately NOT noreturn itself, even though its body unconditionally
+  // calls the real (noreturn) __d4324_terminate: noipa alone blocks IPA
+  // from *analyzing* the body to infer noreturn-ness, but does not and
+  // cannot override an explicit noreturn declared directly on the
+  // function being called, so the wrapper must decline that declaration
+  // too for callers to see it as possibly-returning.
+  [[gnu::noipa]] void
+  __d4324_terminate_wrapper() noexcept
+  { __d4324_terminate(); }
+
   // Recognized specially by the compiler during constant evaluation (see
   // gcc/cp/constexpr.cc); never actually defined/linked anywhere. Reuses
   // [basic.contract.eval]'s own manifestly-constant-evaluated diagnostic
@@ -198,7 +221,7 @@ namespace contracts
 	{
 	  __d4324_log_violation(__ctx.comment(), __ctx.location());
 	  if (__ctx.cfg() != evaluation_config::observe)
-	    __d4324_terminate();
+	    __d4324_terminate_wrapper();
 	}
     }
   };
@@ -253,7 +276,7 @@ namespace contracts
       else
 	{
 	  __d4324_log_violation(__ctx.comment(), __ctx.location());
-	  __d4324_terminate();
+	  __d4324_terminate_wrapper();
 	}
     }
   };
