@@ -1917,6 +1917,11 @@ C++ ObjC++ Var(flag_contract_control_objects) Init(0)
 Enable D4324 contract control objects (pre<T>(cond) etc.); off by default so
 plain -fcontracts keeps the P2900 behaviour.
 
+fcontracts-implicit-include
+C++ ObjC++ Var(flag_contracts_implicit_include) Init(0)
+-fcontracts-implicit-include	Implicitly #include <contracts> before the
+translation unit, and enable -fcontracts and -fcontract-control-objects.
+
 ; Keep these in step with the values in cp/contracts.h
 
 Enum

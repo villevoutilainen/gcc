@@ -228,6 +228,7 @@ in the following sections.
 -fcontract-disable-optimized-checks
 -fcontracts-client-check=@r{[}none@r{|}pre@r{|}all@r{]}
 -fcontracts-definition-check=@r{[}on@r{|}off@r{]}
+-fcontracts-implicit-include
 -fcoroutines  -fdiagnostics-all-candidates
 -fno-elide-constructors
 -fno-enforce-eh-specs
@@ -3419,6 +3420,17 @@ This option introduces the ability to disable callee/definition-side checks,
 which are otherwise enabled by default when the contracts feature is active.
 
 The variable @var{mode} has the values '@code{on}' and '@code{off}'.
+
+@opindex fcontracts-implicit-include
+@opindex fno-contracts-implicit-include
+@item -fcontracts-implicit-include
+Implicitly @code{#include <contracts>} before the translation unit, as if
+it were the first line of the user's source, giving access to the
+standard Contracts library types without an explicit include and letting
+a bare @code{pre}/@code{post}/@code{contract_assert} without an explicit
+control object be written directly.  This option also enables
+@option{-fcontracts} and @option{-fcontract-control-objects}, unless
+either was explicitly disabled on the command line.
 
 @opindex fcoroutines
 @opindex fno-coroutines

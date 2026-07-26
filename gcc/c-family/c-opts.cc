@@ -110,6 +110,10 @@ static size_t include_cursor;
 /* Whether any standard preincluded header has been preincluded.  */
 static bool done_preinclude;
 
+/* Whether <contracts> has been implicitly preincluded for
+   -fcontracts-implicit-include.  */
+static bool done_contracts_implicit_include;
+
 static void handle_OPT_d (const char *);
 static void set_std_cxx98 (int);
 static void set_std_cxx11 (int);
@@ -1260,6 +1264,19 @@ c_common_post_options (const char **pfilename)
   SET_OPTION_IF_UNSET (&global_options, &global_options_set,
 		       flag_contracts, cxx_dialect >= cxx26);
 
+  /* -fcontracts-implicit-include also silently #includes <contracts>
+     (see push_command_line_include), so it needs -fcontracts and
+     -fcontract-control-objects too for that to be useful -- default both
+     on unless the user explicitly chose otherwise (e.g. -fno-contracts
+     still wins).  */
+  if (flag_contracts_implicit_include)
+    {
+      SET_OPTION_IF_UNSET (&global_options, &global_options_set,
+			   flag_contracts, 1);
+      SET_OPTION_IF_UNSET (&global_options, &global_options_set,
+			   flag_contract_control_objects, 1);
+    }
+
   /* EnabledBy unfortunately can't specify value to use if set and
      LangEnabledBy can't specify multiple options with &&.  For -Wunused
      or -Wunused -Wextra we want these to default to 3 unless user specified
@@ -1821,6 +1838,15 @@ push_command_line_include (void)
 	  if (preinc && cpp_push_default_include (parse_in, preinc))
 	    return;
 	}
+    }
+
+  if (!done_contracts_implicit_include)
+    {
+      done_contracts_implicit_include = true;
+      if (flag_contracts_implicit_include
+	  && flag_hosted && std_inc && !cpp_opts->preprocessed
+	  && cpp_push_default_include (parse_in, "contracts"))
+	return;
     }
 
   pch_cpp_save_state ();
