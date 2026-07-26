@@ -2560,6 +2560,121 @@ build_contract_handler_call (tree violation)
   finish_expr_stmt (call);
 }
 
+/* Return true if FNDECL is std::contracts::__d4324_invoke_violation_handler
+   (declared, never defined, in libstdc++-v3/include/std/contracts).  See
+   maybe_replace_d4324_violation_handler_call below.  The name is
+   distinctive enough that only a light namespace sanity check is done,
+   matching the analogous recognizer for __d4324_consteval_diagnose_violation
+   in gcc/cp/constexpr.cc.  */
+
+static bool
+is_d4324_invoke_violation_handler (tree fndecl)
+{
+  if (fndecl == NULL_TREE || TREE_CODE (fndecl) != FUNCTION_DECL)
+    return false;
+  tree name = DECL_NAME (fndecl);
+  if (name == NULL_TREE
+      || !id_equal (name, "__d4324_invoke_violation_handler"))
+    return false;
+  tree ctx = CP_DECL_CONTEXT (fndecl);
+  return (ctx != NULL_TREE && TREE_CODE (ctx) == NAMESPACE_DECL
+	  && DECL_NAME (ctx) != NULL_TREE
+	  && id_equal (DECL_NAME (ctx), "contracts"));
+}
+
+/* CALL_EXPR is a call to a FUNCTION_DECL FN, found by the caller
+   (cp_genericize_r, gcc/cp/cp-gimplify.cc) via cp_get_callee_fndecl_nofold.
+   If FN is std::contracts::__d4324_invoke_violation_handler, build the
+   same contract_violation object and the same call to the real,
+   user-replaceable ::handle_contract_violation that the bare
+   (control-object-less) contract path already builds
+   (build_contract_violation_ctor/build_contract_handler_call above) --
+   but from the five arguments the caller passed directly (kind, semantic,
+   mode, comment, location) instead of deriving them from a CONTRACT tree.
+   Unlike build_contract_violation_ctor's inputs, these are ordinary,
+   possibly non-constant runtime expressions -- a control object's
+   operator() calls this with values computed however it likes, not
+   necessarily compile-time constants. Returns NULL_TREE if FN doesn't
+   match, so the caller falls through unchanged.
+
+   Deliberately does nothing else: no severity decision, no termination --
+   that stays entirely the calling control object's own responsibility.  */
+
+tree
+maybe_replace_d4324_violation_handler_call (tree call_expr, tree fn)
+{
+  if (!is_d4324_invoke_violation_handler (fn))
+    return NULL_TREE;
+
+  location_t loc = EXPR_LOCATION (call_expr);
+  tree kind_arg = CALL_EXPR_ARG (call_expr, 0);
+  tree semantic_arg = CALL_EXPR_ARG (call_expr, 1);
+  tree mode_arg = CALL_EXPR_ARG (call_expr, 2);
+  tree comment_arg = CALL_EXPR_ARG (call_expr, 3);
+  tree loc_arg = CALL_EXPR_ARG (call_expr, 4);
+
+  /* Extract the real std::source_location argument's single pointer-typed
+     field (named _M_impl in libstdc++) -- the same layout-compatible,
+     position-based binding used throughout this file, here used in
+     reverse (reading rather than building one) from how the
+     constexpr-evaluation path's build_real_source_location_value builds
+     a real std::source_location value.  */
+  tree loc_type = non_reference (TREE_TYPE (loc_arg));
+  tree loc_field = next_aggregate_field (TYPE_FIELDS (loc_type));
+  tree src_loc_impl_ptr;
+  if (loc_field
+      && POINTER_TYPE_P (TREE_TYPE (loc_field))
+      && !next_aggregate_field (DECL_CHAIN (loc_field)))
+    src_loc_impl_ptr = build3 (COMPONENT_REF, TREE_TYPE (loc_field),
+			       loc_arg, loc_field, NULL_TREE);
+  else
+    /* Not the expected single-pointer-member shape; fall back to a null
+       location rather than misinterpreting the object's layout.  */
+    src_loc_impl_ptr = build_zero_cst (ptr_type_node);
+
+  /* Must match the field order in get_contract_violation_fields.  */
+  tree f0 = next_aggregate_field (TYPE_FIELDS (builtin_contract_violation_type));
+  tree f1 = next_aggregate_field (DECL_CHAIN (f0));
+  tree f2 = next_aggregate_field (DECL_CHAIN (f1));
+  tree f3 = next_aggregate_field (DECL_CHAIN (f2));
+  tree f4 = next_aggregate_field (DECL_CHAIN (f3));
+  tree f5 = next_aggregate_field (DECL_CHAIN (f4));
+  tree f6 = next_aggregate_field (DECL_CHAIN (f5));
+  tree ctor = build_constructor_va
+    (builtin_contract_violation_type, 7,
+     f0, build_int_cst (uint16_type_node, 1), /* _M_version.  */
+     f1, fold_convert (TREE_TYPE (f1), kind_arg),
+     f2, fold_convert (TREE_TYPE (f2), semantic_arg),
+     f3, fold_convert (TREE_TYPE (f3), mode_arg),
+     f4, comment_arg,
+     f5, fold_convert (TREE_TYPE (f5), src_loc_impl_ptr),
+     f6, build_zero_cst (nullptr_type_node)); /* __vendor_ext.  */
+  TREE_READONLY (ctor) = true;
+
+  /* Build the violation object on the stack; register it, the same way
+     build_contract_control_call's runtime path builds its own
+     temporaries, since these fields are runtime values, not compile-time
+     constants the way build_contract_violation_constant's TU-local
+     static-const path requires.  */
+  tree viol_var = build_decl (loc, VAR_DECL, NULL_TREE,
+			      builtin_contract_violation_type);
+  DECL_ARTIFICIAL (viol_var) = true;
+  DECL_IGNORED_P (viol_var) = true;
+  DECL_CONTEXT (viol_var) = current_function_decl;
+  layout_decl (viol_var, 0);
+  DECL_INITIAL (viol_var) = ctor;
+
+  tree bind = build3 (BIND_EXPR, void_type_node, NULL_TREE, NULL_TREE,
+		       NULL_TREE);
+  BIND_EXPR_VARS (bind) = viol_var;
+  BIND_EXPR_BODY (bind) = push_stmt_list ();
+  add_decl_expr (viol_var);
+  build_contract_handler_call (build_fold_addr_expr (viol_var));
+  BIND_EXPR_BODY (bind) = pop_stmt_list (BIND_EXPR_BODY (bind));
+
+  return bind;
+}
+
 /* If we have emitted any contracts in this TU that will call a violation
    handler, then emit the wrappers for the handler.  */
 

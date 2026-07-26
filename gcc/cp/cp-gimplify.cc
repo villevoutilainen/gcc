@@ -2427,6 +2427,12 @@ cp_genericize_r (tree *stmt_p, int *walk_subtrees, void *data)
       break;
 
     case CALL_EXPR:
+      if (tree fn = cp_get_callee_fndecl_nofold (stmt))
+	if (tree call = maybe_replace_d4324_violation_handler_call (stmt, fn))
+	  {
+	    *stmt_p = call;
+	    return cp_genericize_r (stmt_p, walk_subtrees, data);
+	  }
       if (!wtd->no_sanitize_p
 	  && sanitize_flags_p ((SANITIZE_NULL
 				| SANITIZE_ALIGNMENT | SANITIZE_VPTR)))
