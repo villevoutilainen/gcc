@@ -146,7 +146,6 @@ namespace contracts
 
   template <class _Tp>
   concept assertion_control =
-    __is_empty(_Tp) &&
     requires (_Tp __c, evaluation_config __cfg,
 	      const assertion_context& __ctx) {
       { _Tp::is_ignored(__cfg) } -> same_as<bool>;
