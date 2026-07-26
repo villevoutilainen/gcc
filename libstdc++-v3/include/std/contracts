@@ -206,7 +206,7 @@ namespace contracts
   // cannot override an explicit noreturn declared directly on the
   // function being called, so the wrapper must decline that declaration
   // too for callers to see it as possibly-returning.
-  [[gnu::noipa]] void
+  [[gnu::noipa]] inline void
   __d4324_terminate_wrapper() noexcept
   { __d4324_terminate(); }
 
