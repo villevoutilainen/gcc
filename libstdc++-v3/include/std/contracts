@@ -173,6 +173,17 @@ namespace contracts
 					 const char* comment,
 					 std::source_location loc) noexcept;
 
+  // The plain-named public entry point control objects actually call;
+  // forwards straight to __d4324_invoke_violation_handler above, which
+  // the compiler recognizes by name during genericization. Ordinary
+  // library code -- ends up inlined away at the call site, leaving only
+  // the compiler-rewritten call behind.
+  inline void
+  invoke_violation_handler(assertion_kind kind, evaluation_semantic semantic,
+			    detection_mode mode, const char* comment,
+			    std::source_location loc) noexcept
+  { __d4324_invoke_violation_handler(kind, semantic, mode, comment, loc); }
+
   void __d4324_log_violation(const char*, std::source_location) noexcept;
   [[noreturn]] void __d4324_terminate() noexcept;
 

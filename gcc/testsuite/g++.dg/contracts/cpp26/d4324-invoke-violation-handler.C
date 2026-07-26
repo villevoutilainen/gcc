@@ -1,8 +1,10 @@
 // D4324: a control object can invoke the same real, user-replaceable
 // ::handle_contract_violation the compiler already synthesizes for a bare
-// (control-object-less) contract, via the compiler-recognized
-// std::contracts::__d4324_invoke_violation_handler entry point -- without
-// needing to construct a contract_violation object itself (its fields are
+// (control-object-less) contract, via the plain-named
+// std::contracts::invoke_violation_handler entry point (an ordinary
+// library function that forwards to the compiler-recognized
+// __d4324_invoke_violation_handler) -- without needing to construct a
+// contract_violation object itself (its fields are
 // private, and duplicating the compiler's layout-compatible "reinterpret"
 // trick in library code is neither possible nor wanted). This closes the
 // last functionality gap for library-based control objects: everything a
@@ -51,13 +53,14 @@ handle_contract_violation (const sc::contract_violation& v)
 }
 
 // A custom control object whose operator(), on a failing check(), invokes
-// the real handler directly via the new intrinsic -- passing its own
-// choice of evaluation_semantic (enforce here), independent of the TU's
-// own -fcontract-evaluation-semantic= (which isn't even set on this test,
-// so defaults to enforce anyway -- the point is that the control object
-// decides this, not the compiler). Deliberately does nothing else
-// afterward: no termination, matching the intrinsic's own contract that
-// it only invokes the handler and leaves everything else to the caller.
+// the real handler directly via invoke_violation_handler -- passing its
+// own choice of evaluation_semantic (enforce here), independent of the
+// TU's own -fcontract-evaluation-semantic= (which isn't even set on this
+// test, so defaults to enforce anyway -- the point is that the control
+// object decides this, not the compiler). Deliberately does nothing else
+// afterward: no termination, matching invoke_violation_handler's own
+// contract that it only invokes the handler and leaves everything else
+// to the caller.
 struct calls_handler {
   static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
   static constexpr bool constify = false;
@@ -67,7 +70,7 @@ struct calls_handler {
   {
     if (ctx.check ())
       return;
-    sc::__d4324_invoke_violation_handler
+    sc::invoke_violation_handler
       (ctx.kind (), sc::evaluation_semantic::enforce,
        sc::detection_mode::predicate_false, ctx.comment (), ctx.location ());
   }
