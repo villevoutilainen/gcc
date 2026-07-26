@@ -17,8 +17,8 @@ namespace sc = std::contracts;
 
 struct my_less_mandatory {
   static constexpr bool
-  is_ignored (sc::evaluation_config cfg) noexcept
-  { return cfg == sc::evaluation_config::ignore; }
+  is_ignored (sc::evaluation_semantic cfg) noexcept
+  { return cfg == sc::evaluation_semantic::ignore; }
 
   static constexpr bool constify  = true;
   static constexpr bool assumable = false;

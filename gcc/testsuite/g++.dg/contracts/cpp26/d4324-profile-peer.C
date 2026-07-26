@@ -33,7 +33,7 @@ namespace core_ub {
 static bool contract_handler_called = false;
 
 struct logging_control {
-  static constexpr bool is_ignored (sc::evaluation_config) { return false; }
+  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
   void
