@@ -166,22 +166,30 @@ namespace contracts
   // semantic (e.g. downgrade enforce to observe under some runtime
   // condition) independent of the TU's own
   // -fcontract-evaluation-semantic=, so it is a real argument here, not
-  // something the compiler fills in from the command line.
+  // something the compiler fills in from the command line. Deliberately
+  // NOT noexcept: the real, bare (control-object-less) contract path lets
+  // a throwing ::handle_contract_violation propagate to its caller
+  // unmodified, and this must match -- a calling control object may
+  // itself want to catch that exception (e.g. to log it, or to terminate
+  // with its own diagnostic instead of the default one), which is only
+  // possible if the exception isn't forced into std::terminate() at this
+  // call's own noexcept boundary first.
   void __d4324_invoke_violation_handler(assertion_kind kind,
 					 evaluation_semantic semantic,
 					 detection_mode mode,
 					 const char* comment,
-					 std::source_location loc) noexcept;
+					 std::source_location loc);
 
   // The plain-named public entry point control objects actually call;
   // forwards straight to __d4324_invoke_violation_handler above, which
   // the compiler recognizes by name during genericization. Ordinary
   // library code -- ends up inlined away at the call site, leaving only
-  // the compiler-rewritten call behind.
+  // the compiler-rewritten call behind. Not noexcept, for the same reason
+  // as __d4324_invoke_violation_handler above.
   inline void
   invoke_violation_handler(assertion_kind kind, evaluation_semantic semantic,
 			    detection_mode mode, const char* comment,
-			    std::source_location loc) noexcept
+			    std::source_location loc)
   { __d4324_invoke_violation_handler(kind, semantic, mode, comment, loc); }
 
   void __d4324_log_violation(const char*, std::source_location) noexcept;
