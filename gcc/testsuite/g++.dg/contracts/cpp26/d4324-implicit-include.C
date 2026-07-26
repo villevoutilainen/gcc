@@ -8,10 +8,10 @@
 // { dg-additional-options "-fcontracts-implicit-include" }
 
 // Proves the library declarations are visible with no explicit include:
-// naming std::contracts::evaluation_config here would fail to compile if
+// naming std::contracts::evaluation_semantic here would fail to compile if
 // <contracts> hadn't already been implicitly included.
-using cfg_t = std::contracts::evaluation_config;
-static_assert (cfg_t::enforce != cfg_t::ignore);
+using sem_t = std::contracts::evaluation_semantic;
+static_assert (sem_t::enforce != sem_t::ignore);
 
 // This test never links the runtime contracts support library
 // (libstdc++exp): default_v's operator() calls these two library-only

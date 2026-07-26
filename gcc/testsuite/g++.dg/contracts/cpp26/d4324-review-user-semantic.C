@@ -9,8 +9,8 @@
 
 namespace std {
 namespace contracts {
-enum class evaluation_config : unsigned {
-  ignore = 0, observe = 1, enforce = 2, quick_enforce = 3
+enum class evaluation_semantic : unsigned short {
+  ignore = 1, observe = 2, enforce = 3, quick_enforce = 4
 };
 
 // Layout-compatible stand-in for std::contracts::assertion_context: the
@@ -21,7 +21,7 @@ enum class evaluation_config : unsigned {
 struct assertion_context {
   const char* comment;
   const void* location;
-  evaluation_config cfg;
+  evaluation_semantic semantic;
 
   bool check () const { return __check (__args); }
 
@@ -34,7 +34,7 @@ private:
 
 bool logged;
 struct review {
-  static constexpr bool is_ignored (std::contracts::evaluation_config) { return false; }
+  static constexpr bool is_ignored (std::contracts::evaluation_semantic) { return false; }
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
   void

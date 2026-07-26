@@ -1,5 +1,5 @@
-// D4324: assertion_context::kind()/cfg() report the right
-// std::contracts::assertion_kind/evaluation_config during constant
+// D4324: assertion_context::kind()/semantic() report the right
+// std::contracts::assertion_kind/evaluation_semantic during constant
 // evaluation, exactly as they do at runtime (see d4324-kind-mapping-run.C /
 // d4324-cfg-mapping-run.C).  A control object can't return a value from
 // operator() (it's void), so values are observed here via the same
@@ -21,7 +21,7 @@
 namespace sc = std::contracts;
 
 struct probe_kind {
-  static constexpr bool is_ignored (sc::evaluation_config) { return false; }
+  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
 
@@ -36,8 +36,8 @@ struct probe_kind {
 
 inline constexpr probe_kind probe_kind_v{};
 
-struct probe_cfg {
-  static constexpr bool is_ignored (sc::evaluation_config) { return false; }
+struct probe_semantic {
+  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
 
@@ -46,14 +46,14 @@ struct probe_cfg {
   {
     if (ctx.check ())
       return;
-    throw ctx.cfg ();
+    throw ctx.semantic ();
   }
 };
 
-inline constexpr probe_cfg probe_cfg_v{};
+inline constexpr probe_semantic probe_semantic_v{};
 
 constexpr int f (int x) pre<probe_kind_v>(x >= 0) { return x; }
-constexpr int fc (int x) pre<probe_cfg_v>(x >= 0) { return x; }
+constexpr int fc (int x) pre<probe_semantic_v>(x >= 0) { return x; }
 
 constexpr void
 h (int x)
@@ -75,13 +75,13 @@ observe_assert_kind ()
   return sc::assertion_kind::pre; // unreachable
 }
 
-constexpr sc::evaluation_config
-observe_cfg ()
+constexpr sc::evaluation_semantic
+observe_semantic ()
 {
-  try { fc (-1); } catch (sc::evaluation_config c) { return c; }
-  return sc::evaluation_config::ignore; // unreachable
+  try { fc (-1); } catch (sc::evaluation_semantic c) { return c; }
+  return sc::evaluation_semantic::ignore; // unreachable
 }
 
 static_assert (observe_pre_kind () == sc::assertion_kind::pre);
 static_assert (observe_assert_kind () == sc::assertion_kind::assert);
-static_assert (observe_cfg () == sc::evaluation_config::observe);
+static_assert (observe_semantic () == sc::evaluation_semantic::observe);

@@ -19,7 +19,7 @@ void __d4324_log_violation (const char*, std::source_location) noexcept {}
 } }
 
 struct constified {
-  static constexpr bool is_ignored (std::contracts::evaluation_config) { return false; }
+  static constexpr bool is_ignored (std::contracts::evaluation_semantic) { return false; }
   static constexpr bool constify = true;
   static constexpr bool assumable = false;
   void operator() (const std::contracts::assertion_context&) const {}

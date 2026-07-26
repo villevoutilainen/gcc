@@ -109,10 +109,6 @@ namespace contracts
 
   // D4324 "Minimum Language, Maximum Library" control-object surface.
 
-  enum class evaluation_config : unsigned {
-    ignore = 0, observe = 1, enforce = 2, quick_enforce = 3
-  };
-
   // A control object's call operator returns void: returning means the
   // program continues past the assertion; to end the program the operator
   // terminates in its own body.  No violation_response is needed.
@@ -127,7 +123,7 @@ namespace contracts
   struct assertion_context {
     constexpr const char* comment() const noexcept { return __comment; }
     constexpr std::source_location location() const noexcept { return __location; }
-    constexpr evaluation_config cfg() const noexcept { return __cfg; }
+    constexpr evaluation_semantic semantic() const noexcept { return __semantic; }
     constexpr assertion_kind kind() const noexcept { return __kind; }
 
     // Evaluates the predicate.  Deliberately not noexcept: the predicate
@@ -138,7 +134,7 @@ namespace contracts
   private:
     const char* __comment;
     std::source_location __location;
-    evaluation_config __cfg;
+    evaluation_semantic __semantic;
     assertion_kind __kind;
     void* __args;
     bool (*__check)(void*);
@@ -146,9 +142,9 @@ namespace contracts
 
   template <class _Tp>
   concept assertion_control =
-    requires (_Tp __c, evaluation_config __cfg,
+    requires (_Tp __c, evaluation_semantic __semantic,
 	      const assertion_context& __ctx) {
-      { _Tp::is_ignored(__cfg) } -> same_as<bool>;
+      { _Tp::is_ignored(__semantic) } -> same_as<bool>;
       { bool(_Tp::constify) };
       { bool(_Tp::assumable) };
       { __c(__ctx) } -> same_as<void>;
@@ -222,8 +218,8 @@ namespace contracts
 
   struct default_control {
     static constexpr bool
-    is_ignored(evaluation_config __cfg) noexcept
-    { return __cfg == evaluation_config::ignore; }
+    is_ignored(evaluation_semantic __semantic) noexcept
+    { return __semantic == evaluation_semantic::ignore; }
 
     static constexpr bool constify  = false;
     static constexpr bool assumable = false;
@@ -236,13 +232,13 @@ namespace contracts
       if consteval
 	{
 	  __d4324_consteval_diagnose_violation
-	    (__ctx.cfg() != evaluation_config::observe,
+	    (__ctx.semantic() != evaluation_semantic::observe,
 	     __ctx.comment(), __ctx.location());
 	}
       else
 	{
 	  __d4324_log_violation(__ctx.comment(), __ctx.location());
-	  if (__ctx.cfg() != evaluation_config::observe)
+	  if (__ctx.semantic() != evaluation_semantic::observe)
 	    __d4324_terminate_wrapper();
 	}
     }
@@ -252,8 +248,8 @@ namespace contracts
 
   struct review {
     static constexpr bool
-    is_ignored(evaluation_config __cfg) noexcept
-    { return __cfg == evaluation_config::ignore; }
+    is_ignored(evaluation_semantic __semantic) noexcept
+    { return __semantic == evaluation_semantic::ignore; }
 
     static constexpr bool constify  = true;
     static constexpr bool assumable = false;
@@ -277,8 +273,8 @@ namespace contracts
 
   struct mandatory {
     static constexpr bool
-    is_ignored(evaluation_config __cfg) noexcept
-    { return __cfg == evaluation_config::ignore; }
+    is_ignored(evaluation_semantic __semantic) noexcept
+    { return __semantic == evaluation_semantic::ignore; }
 
     static constexpr bool constify  = false;
     static constexpr bool assumable = true;
@@ -290,7 +286,7 @@ namespace contracts
 	return;
       if consteval
 	{
-	  // Always terminates at runtime, regardless of cfg, so always a
+	  // Always terminates at runtime, regardless of semantic, so always a
 	  // compile-time error too.
 	  __d4324_consteval_diagnose_violation
 	    (true, __ctx.comment(), __ctx.location());
@@ -307,7 +303,7 @@ namespace contracts
 
   struct ignore {
     static constexpr bool
-    is_ignored(evaluation_config) noexcept
+    is_ignored(evaluation_semantic) noexcept
     { return true; }
 
     static constexpr bool constify  = false;
@@ -325,7 +321,7 @@ namespace contracts
 
   struct assume {
     static constexpr bool
-    is_ignored(evaluation_config) noexcept
+    is_ignored(evaluation_semantic) noexcept
     { return true; }
 
     static constexpr bool constify  = false;
@@ -333,8 +329,8 @@ namespace contracts
 
     // Never actually called, for the same reason as ignore::operator():
     // always ignored (unconditionally, unlike mandatory::is_ignored, which
-    // is tied to the TU's cfg), so the predicate is always handed to the
-    // optimizer as an assumption instead of being called through here.
+    // is tied to the TU's semantic), so the predicate is always handed to
+    // the optimizer as an assumption instead of being called through here.
     constexpr void
     operator()(const assertion_context&) const noexcept
     { }

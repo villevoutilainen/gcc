@@ -2976,7 +2976,7 @@ get_assertion_context_fields ()
   struct assertion_context {
     const char* comment() const noexcept { return __comment; }
     std::source_location location() const noexcept { return __location; }
-    evaluation_config cfg() const noexcept { return __cfg; }
+    evaluation_semantic semantic() const noexcept { return __semantic; }
     assertion_kind kind() const noexcept { return __kind; }
 
     bool check() const { return __check(__args); }
@@ -2984,7 +2984,7 @@ get_assertion_context_fields ()
   private:
     const char* __comment;
     std::source_location __location;	// a single const __impl* member
-    evaluation_config __cfg;		// enum class ... : unsigned
+    evaluation_semantic __semantic;	// enum class ... : uint16_t
     assertion_kind __kind;		// enum class ... : uint16_t
     void* __args;
     bool (*__check)(void*);
@@ -2999,14 +2999,14 @@ get_assertion_context_fields ()
     = build_function_type_list (boolean_type_node, ptr_type_node, NULL_TREE);
   const tree types[] = { const_string_type_node,
 			  build_pointer_type (contracts_source_location_impl_type),
-			  unsigned_type_node,
+			  uint16_type_node,
 			  uint16_type_node,
 			  ptr_type_node,
 			  build_pointer_type (check_fn_type),
 			};
   const char *names[] = { "__comment",
 			   "__location",
-			   "__cfg",
+			   "__semantic",
 			   "__kind",
 			   "__args",
 			   "__check",
@@ -3207,21 +3207,17 @@ remap_retval (tree fndecl, tree contract)
   walk_tree (&CONTRACT_CONDITION (contract), remap_retval_1, &data, NULL);
 }
 
-/* Map the translation-unit -fcontract-evaluation-semantic flag to the D4324
-   std::contracts::evaluation_config value (ignore=0, observe=1, enforce=2,
-   quick_enforce=3) that is passed to a control type's compile-time members.  */
+/* Map the translation-unit -fcontract-evaluation-semantic flag to the
+   std::contracts::evaluation_semantic value that is passed to a control
+   type's compile-time members.  CES_IGNORE/OBSERVE/ENFORCE/QUICK (see
+   contracts.h) already use the same 1-based ignore/observe/enforce/
+   quick_enforce encoding as evaluation_semantic, so no remapping is
+   needed.  */
 
 static unsigned
-contract_evaluation_config_value ()
+contract_evaluation_semantic_value ()
 {
-  switch (flag_contract_evaluation_semantic)
-    {
-    case CES_IGNORE: return 0;
-    case CES_OBSERVE: return 1;
-    case CES_ENFORCE: return 2;
-    case CES_QUICK: return 3;
-    default: return 2;
-    }
+  return flag_contract_evaluation_semantic;
 }
 
 /* CTRL is the constant-expression naming a control OBJECT for
@@ -3265,13 +3261,14 @@ contract_control_is_ignored (tree ctrl)
   if (!fn || TREE_CODE (fn) != FUNCTION_DECL || !DECL_STATIC_FUNCTION_P (fn))
     return false;
 
-  /* The single parameter is std::contracts::evaluation_config; build the TU
-     cfg value directly in that type so overload resolution matches.  */
+  /* The single parameter is std::contracts::evaluation_semantic; build the
+     TU semantic value directly in that type so overload resolution
+     matches.  */
   tree parm_types = TYPE_ARG_TYPES (TREE_TYPE (fn));
   if (!parm_types || parm_types == void_list_node)
     return false;
   tree cfg_type = TREE_VALUE (parm_types);
-  tree cfg_arg = build_int_cst (cfg_type, contract_evaluation_config_value ());
+  tree cfg_arg = build_int_cst (cfg_type, contract_evaluation_semantic_value ());
 
   releasing_vec args;
   vec_safe_push (args, cfg_arg);
@@ -3338,7 +3335,7 @@ contract_control_assumable (tree ctrl)
 /* If the control type CTRL provides the D4324 dispatch operator
    operator()(const assertion_context&), return its FUNCTION_DECL,
    otherwise NULL_TREE.  assertion_context bundles the comment, source
-   location, evaluation_config, and a type-erased (args, check) callback
+   location, evaluation_semantic, and a type-erased (args, check) callback
    pair that evaluates the predicate given those args: the operator decides
    whether/when to call it, rather than the compiler always evaluating the
    predicate itself.  Every named control type must provide this operator,
@@ -3740,7 +3737,7 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
     (builtin_assertion_context_type, 6,
      f0, comment,
      f1, get_src_loc_impl_ptr (loc),
-     f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_config_value ()),
+     f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
      f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
      f4, fold_convert (TREE_TYPE (f4), args_ptr),
      f5, fold_convert (TREE_TYPE (f5), check_fn));
@@ -4026,7 +4023,7 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
     (ctx_type, 6,
      f0, comment,
      f1, build_real_source_location_value (loc, TREE_TYPE (f1), fndecl),
-     f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_config_value ()),
+     f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
      f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
      f4, fold_convert (TREE_TYPE (f4), dummy_args_ptr),
      f5, fold_convert (TREE_TYPE (f5), check_fn));
@@ -4094,7 +4091,7 @@ build_contract_check (tree contract)
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
 
   /* D4324 step 1: a named control object decides, at compile time, whether
-     this assertion is ignored for the TU's evaluation_config.  An ignored
+     this assertion is ignored for the TU's evaluation_semantic.  An ignored
      assertion emits no runtime check; if the control object's type is also
      assumable the predicate is handed to the optimizer as an assumption
      (evaluated by no one at runtime) instead.  */
@@ -4103,7 +4100,7 @@ build_contract_check (tree contract)
 
   /* A named control object must provide operator() unconditionally, even
      when ignored/assumable -- so whether it's required never depends on
-     the TU's compiled evaluation_config.  Only "no control object at all"
+     the TU's compiled evaluation_semantic.  Only "no control object at all"
      (CTRL null, -fcontract-control-objects off) still falls through to the
      built-in evaluation-semantic switch below.  */
   tree control_op = NULL_TREE;

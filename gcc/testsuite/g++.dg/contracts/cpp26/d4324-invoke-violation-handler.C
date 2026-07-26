@@ -59,7 +59,7 @@ handle_contract_violation (const sc::contract_violation& v)
 // afterward: no termination, matching the intrinsic's own contract that
 // it only invokes the handler and leaves everything else to the caller.
 struct calls_handler {
-  static constexpr bool is_ignored (sc::evaluation_config) { return false; }
+  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
   void

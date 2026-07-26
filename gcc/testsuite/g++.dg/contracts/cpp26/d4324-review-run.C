@@ -11,7 +11,7 @@ bool logged = false;
 namespace sc = std::contracts;
 
 struct my_review {
-  static constexpr bool is_ignored (sc::evaluation_config) { return false; }
+  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
   static constexpr bool constify = false;
   static constexpr bool assumable = false;
   void
