@@ -3332,6 +3332,28 @@ contract_control_assumable (tree ctrl)
   return contract_control_bool_member (ctrl, "assumable") == 1;
 }
 
+/* True if the control type CTRL has omit_comment == true, meaning it never
+   needs the assertion's stringified condition text, so the compiler should
+   not embed it at all.  Optional: a control type without this member (or
+   with it false) keeps the existing behaviour of always storing it.  */
+
+static bool
+contract_control_omits_comment (tree ctrl)
+{
+  return contract_control_bool_member (ctrl, "omit_comment") == 1;
+}
+
+/* True if the control type CTRL has omit_source_location == true, meaning
+   it never needs the assertion's std::source_location, so the compiler
+   should not build/embed one at all.  Optional, same default-false
+   behaviour as contract_control_omits_comment.  */
+
+static bool
+contract_control_omits_source_location (tree ctrl)
+{
+  return contract_control_bool_member (ctrl, "omit_source_location") == 1;
+}
+
 /* If the control type CTRL provides the D4324 dispatch operator
    operator()(const assertion_context&), return its FUNCTION_DECL,
    otherwise NULL_TREE.  assertion_context bundles the comment, source
@@ -3719,7 +3741,8 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
   location_t loc = EXPR_LOCATION (contract);
   tree t_ctx = TREE_VALUE (FUNCTION_FIRST_USER_PARMTYPE (op));
 
-  tree comment = CONTRACT_COMMENT (contract);
+  tree comment = contract_control_omits_comment (ctrl)
+    ? NULL_TREE : CONTRACT_COMMENT (contract);
   if (!comment)
     comment = build_zero_cst (const_string_type_node);
 
@@ -3736,7 +3759,8 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
   tree ctor = build_constructor_va
     (builtin_assertion_context_type, 6,
      f0, comment,
-     f1, get_src_loc_impl_ptr (loc),
+     f1, (contract_control_omits_source_location (ctrl)
+	  ? build_zero_cst (ptr_type_node) : get_src_loc_impl_ptr (loc)),
      f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
      f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
      f4, fold_convert (TREE_TYPE (f4), args_ptr),
@@ -3997,7 +4021,8 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
      build_predicate_constexpr_thunk on why this thunk must never be
      scheduled for real code generation.  */
 
-  tree comment = CONTRACT_COMMENT (contract);
+  tree comment = contract_control_omits_comment (ctrl)
+    ? NULL_TREE : CONTRACT_COMMENT (contract);
   if (!comment)
     comment = build_zero_cst (const_string_type_node);
 
@@ -4022,7 +4047,9 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
   tree ctor = build_constructor_va
     (ctx_type, 6,
      f0, comment,
-     f1, build_real_source_location_value (loc, TREE_TYPE (f1), fndecl),
+     f1, (contract_control_omits_source_location (ctrl)
+	  ? build_constructor (TREE_TYPE (f1), NULL)
+	  : build_real_source_location_value (loc, TREE_TYPE (f1), fndecl)),
      f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
      f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
      f4, fold_convert (TREE_TYPE (f4), dummy_args_ptr),
