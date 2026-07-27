@@ -13,30 +13,8 @@
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=observe -fdump-tree-gimple" }
 
-namespace std {
-namespace contracts {
-enum class evaluation_semantic : unsigned short {
-  ignore = 1, observe = 2, enforce = 3, quick_enforce = 4
-};
+#include <contracts>
 
-// Layout-compatible stand-in for std::contracts::assertion_context: the
-// compiler builds its own internal equivalent-layout struct (it does not
-// depend on this header declaration), so only the field order/sizes need to
-// match, not the type names.  "location" isn't a real std::source_location
-// here since neither control type below reads it.
-struct assertion_context {
-  const char* comment;
-  const void* location;
-  evaluation_semantic semantic;
-
-  bool check () const { return __check (__args); }
-
-private:
-  void* __args;
-  bool (*__check) (void*);
-};
-}
-}
 namespace sc = std::contracts;
 
 bool pred_obs ();
