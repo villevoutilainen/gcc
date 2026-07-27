@@ -3744,7 +3744,10 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
   tree comment = contract_control_omits_comment (ctrl)
     ? NULL_TREE : CONTRACT_COMMENT (contract);
   if (!comment)
-    comment = build_zero_cst (const_string_type_node);
+    /* Empty, not null: matches the "static empty string, never a null
+       pointer" convention cp-gimplify.cc's build_source_location_impl
+       already uses for a missing file/function name.  */
+    comment = build_string_literal ("");
 
   tree check_fn = build_addr_func (thunk_fn, tf_warning_or_error);
   mark_used (thunk_fn);
@@ -4024,7 +4027,10 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
   tree comment = contract_control_omits_comment (ctrl)
     ? NULL_TREE : CONTRACT_COMMENT (contract);
   if (!comment)
-    comment = build_zero_cst (const_string_type_node);
+    /* Empty, not null: matches the "static empty string, never a null
+       pointer" convention cp-gimplify.cc's build_source_location_impl
+       already uses for a missing file/function name.  */
+    comment = build_string_literal ("");
 
   /* Build a genuine `const assertion_context' CONSTRUCTOR directly against
      the real class's own (private) fields -- unlike

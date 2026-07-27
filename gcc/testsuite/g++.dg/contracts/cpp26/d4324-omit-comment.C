@@ -53,7 +53,9 @@ int main ()
   f_omits (1);
   if (!seen_kept || __builtin_strcmp (seen_kept, "x >= 0") != 0)
     __builtin_abort ();
-  if (seen_omitted != nullptr)
+  // Omitted, not read: still a real, non-null pointer to an empty
+  // string, never a null pointer.
+  if (!seen_omitted || seen_omitted[0] != '\0')
     __builtin_abort ();
   return 0;
 }
