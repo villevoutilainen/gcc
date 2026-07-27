@@ -140,6 +140,15 @@ namespace contracts
     bool (*__check)(void*);
   };
 
+  // A control type may also optionally declare
+  //   static constexpr bool omit_comment = true;
+  //   static constexpr bool omit_source_location = true;
+  // to tell the compiler it never needs assertion_context::comment()/
+  // location() for this control, so it doesn't need to build/embed
+  // either one at all (both default to false -- i.e. keep storing --
+  // when absent, so existing control types are unaffected). Deliberately
+  // not part of this concept: unlike constify/assumable, their absence
+  // must still make a control type usable.
   template <class _Tp>
   concept assertion_control =
     requires (_Tp __c, evaluation_semantic __semantic,
