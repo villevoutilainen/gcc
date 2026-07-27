@@ -2855,17 +2855,12 @@ init_builtin_contract_violation_type ()
   return builtin_contract_violation_type;
 }
 
-/* Defined below, after get_contracts_source_location_impl_type, which it
-   needs for the location field's type.  */
-static tree init_builtin_assertion_context_type ();
-
 /* Early initialisation of types and functions we will use.  */
 void
 init_contracts ()
 {
   init_terminate_fn ();
   init_builtin_contract_violation_type ();
-  init_builtin_assertion_context_type ();
 }
 
 static GTY(()) tree contracts_source_location_impl_type;
@@ -2963,97 +2958,27 @@ get_src_loc_impl_ptr (location_t loc)
   return get_src_loc_impl_ptr_for (loc, current_function_decl);
 }
 
-/* Build a layout-compatible internal version of assertion_context type.  */
-
-static tree
-get_assertion_context_fields ()
-{
-  if (!contracts_source_location_impl_type)
-    get_contracts_source_location_impl_type ();
-
-  tree fields = NULL_TREE;
-  /* Must match <contracts>:
-  struct assertion_context {
-    const char* comment() const noexcept { return __comment; }
-    std::source_location location() const noexcept { return __location; }
-    evaluation_semantic semantic() const noexcept { return __semantic; }
-    assertion_kind kind() const noexcept { return __kind; }
-
-    bool check() const { return __check(__args); }
-
-  private:
-    const char* __comment;
-    std::source_location __location;	// a single const __impl* member
-    evaluation_semantic __semantic;	// enum class ... : uint16_t
-    assertion_kind __kind;		// enum class ... : uint16_t
-    void* __args;
-    bool (*__check)(void*);
-  };
-    Field NAMES here are only for this internal type's own debug info --
-    fields are tied to the real assertion_context by position (see
-    next_aggregate_field in build_contract_control_call), not by name, so
-    the library is free to rename/encapsulate its own fields freely.  If
-    the field order, types, or count change, also update the initializer
-    in build_contract_control_call.  */
-  tree check_fn_type
-    = build_function_type_list (boolean_type_node, ptr_type_node, NULL_TREE);
-  const tree types[] = { const_string_type_node,
-			  build_pointer_type (contracts_source_location_impl_type),
-			  uint16_type_node,
-			  uint16_type_node,
-			  ptr_type_node,
-			  build_pointer_type (check_fn_type),
-			};
-  const char *names[] = { "__comment",
-			   "__location",
-			   "__semantic",
-			   "__kind",
-			   "__args",
-			   "__check",
-			 };
-  unsigned n = 0;
-  for (tree type : types)
-    {
-      /* finish_builtin_struct wants fields chained in reverse.  */
-      tree next = build_decl (BUILTINS_LOCATION, FIELD_DECL,
-			      get_identifier (names[n++]), type);
-      DECL_CHAIN (next) = fields;
-      fields = next;
-    }
-  return fields;
-}
-
-/* Build a type to represent a control object's operator() argument.  */
-
-static tree
-init_builtin_assertion_context_type ()
-{
-  if (builtin_assertion_context_type)
-    return builtin_assertion_context_type;
-
-  tree fields = get_assertion_context_fields ();
-
-  iloc_sentinel ils (input_location);
-  input_location = BUILTINS_LOCATION;
-  builtin_assertion_context_type = make_class_type (RECORD_TYPE);
-  finish_builtin_struct (builtin_assertion_context_type,
-			 "__builtin_assertion_context_type", fields, NULL_TREE);
-  CLASSTYPE_AS_BASE (builtin_assertion_context_type)
-    = builtin_assertion_context_type;
-  DECL_CONTEXT (TYPE_NAME (builtin_assertion_context_type))
-    = FROB_CONTEXT (global_namespace);
-  CLASSTYPE_LITERAL_P (builtin_assertion_context_type) = true;
-  CLASSTYPE_LAZY_COPY_CTOR (builtin_assertion_context_type) = true;
-  xref_basetypes (builtin_assertion_context_type, /*bases=*/NULL_TREE);
-  DECL_CONTEXT (TYPE_NAME (builtin_assertion_context_type))
-    = FROB_CONTEXT (global_namespace);
-  DECL_ARTIFICIAL (TYPE_NAME (builtin_assertion_context_type)) = true;
-  TYPE_ARTIFICIAL (builtin_assertion_context_type) = true;
-  builtin_assertion_context_type
-    = cp_build_qualified_type (builtin_assertion_context_type,
-			       TYPE_QUAL_CONST);
-  return builtin_assertion_context_type;
-}
+/* D4324 used to represent a control object's operator() argument with a
+   separate, compiler-internal mirror type here (get_assertion_context_fields/
+   init_builtin_assertion_context_type), reinterpret-cast to the real
+   assertion_context& at the call boundary in build_contract_control_call --
+   mirroring build_contract_violation_ctor's (P2900, pre-existing)
+   contract_violation mirror-type approach for the bare, no-control-object
+   path. That second, independent representation of a location (alongside
+   the real std::source_location build_contract_control_constexpr_check
+   needs for constant evaluation) is what caused two different requested
+   __impl types to collide in build_source_location_impl's (cp-gimplify.cc)
+   location+fndecl-keyed cache, silently corrupting whichever path ran
+   second for the same assertion. assertion_context (like
+   std::source_location) is a compiler-backed library type with no base
+   classes or vtable to set up, so there was never a real need for the
+   mirror type here: build_contract_control_call now builds directly
+   against the real assertion_context, the same low-level "CONSTRUCTOR
+   against a real class's own private fields" mechanism the constexpr path
+   already used (and still does, unchanged) -- see there for why that's
+   safe. contract_violation's own, separate mirror type is untouched: nothing
+   about the bare path ever requests a second, differently-typed location
+   for the same assertion, so it never collides with anything.  */
 
 /* Build a contract_violation layout compatible object. */
 
@@ -3722,6 +3647,14 @@ build_predicate_arg_struct_var (tree contract, tree struct_type, tree cc_bind,
   return build_fold_addr_expr (struct_var);
 }
 
+/* Forward declaration: defined below, builds a genuine std::source_location
+   CONSTRUCTOR; used here as well as by build_contract_control_constexpr_check
+   further down.  Despite its "constexpr" heritage in the comment above its
+   definition, it's just an ordinary constant-folded __builtin_source_location()
+   call and is equally valid at genericization time as it is under constant
+   evaluation.  */
+static tree build_real_source_location_value (location_t, tree, tree);
+
 /* Build the D4324 control-object dispatch call for CONTRACT inside CC_BIND
    (a BIND_EXPR whose variable chain is available for temporaries).  The
    control object's operator() returns void: returning means proceed, and a
@@ -3740,6 +3673,7 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
 {
   location_t loc = EXPR_LOCATION (contract);
   tree t_ctx = TREE_VALUE (FUNCTION_FIRST_USER_PARMTYPE (op));
+  tree ctx_type = non_reference (t_ctx);
 
   tree comment = contract_control_omits_comment (ctrl)
     ? NULL_TREE : CONTRACT_COMMENT (contract);
@@ -3752,18 +3686,31 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
   tree check_fn = build_addr_func (thunk_fn, tf_warning_or_error);
   mark_used (thunk_fn);
 
-  /* Must match the field order in get_assertion_context_fields.  */
-  tree f0 = next_aggregate_field (TYPE_FIELDS (builtin_assertion_context_type));
+  /* Build a genuine `const assertion_context' CONSTRUCTOR directly against
+     the real class's own (private) fields -- the same mechanism
+     build_contract_control_constexpr_check uses for the constexpr path, and
+     just as safe here: assertion_context (like std::source_location) is a
+     compiler-backed library type with no base classes or vtable to set up,
+     so there's no real constructor semantics a raw CONSTRUCTOR could skip.
+     Building directly against the real type -- instead of a separate
+     compiler-internal mirror type, reinterpret-cast at the call boundary --
+     is what makes this path and the constexpr path always agree on the
+     location field's real __impl type, rather than each asking
+     build_source_location_impl's (cp-gimplify.cc) location+fndecl-keyed
+     cache for a different one and silently colliding.  */
+  tree f0 = next_aggregate_field (TYPE_FIELDS (ctx_type));
   tree f1 = next_aggregate_field (DECL_CHAIN (f0));
   tree f2 = next_aggregate_field (DECL_CHAIN (f1));
   tree f3 = next_aggregate_field (DECL_CHAIN (f2));
   tree f4 = next_aggregate_field (DECL_CHAIN (f3));
   tree f5 = next_aggregate_field (DECL_CHAIN (f4));
   tree ctor = build_constructor_va
-    (builtin_assertion_context_type, 6,
+    (ctx_type, 6,
      f0, comment,
      f1, (contract_control_omits_source_location (ctrl)
-	  ? build_zero_cst (ptr_type_node) : get_src_loc_impl_ptr (loc)),
+	  ? build_constructor (TREE_TYPE (f1), NULL)
+	  : build_real_source_location_value (loc, TREE_TYPE (f1),
+					       current_function_decl)),
      f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
      f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
      f4, fold_convert (TREE_TYPE (f4), args_ptr),
@@ -3773,8 +3720,7 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
      like the control object below.  Unlike a contract_violation object,
      this is never a compile-time constant: ARGS_PTR/CHECK_FN are runtime
      addresses of stack/function locals.  */
-  tree ctx_var = build_decl (loc, VAR_DECL, NULL_TREE,
-			     builtin_assertion_context_type);
+  tree ctx_var = build_decl (loc, VAR_DECL, NULL_TREE, ctx_type);
   DECL_ARTIFICIAL (ctx_var) = true;
   DECL_IGNORED_P (ctx_var) = true;
   DECL_CONTEXT (ctx_var) = current_function_decl;
@@ -3813,11 +3759,6 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
   if (SCALAR_TYPE_P (result_type) || VOID_TYPE_P (result_type))
     result_type = cv_unqualified (result_type);
 
-  /* Reinterpret the internal assertion_context's address as OP's declared
-     (const assertion_context&) parameter, the same layout-compatible-ABI
-     trick build_contract_handler_call already relies on to pass a
-     builtin_contract_violation_type object where a real
-     std::contracts::contract_violation& is expected.  */
   tree ctx_arg = fold_convert (t_ctx, build_fold_addr_expr (ctx_var));
 
   tree args[2] = { this_arg, ctx_arg };
@@ -3843,6 +3784,15 @@ static tree
 build_real_source_location_value (location_t loc, tree src_loc_type,
 				   tree fndecl)
 {
+  /* A control object's own assertion_context-shaped parameter type isn't
+     required to declare a real std::source_location for this field's
+     position -- some tests (e.g. d4324-cfg-observe.C) use a bare pointer
+     there instead, as a pure layout placeholder for a field they never
+     read.  TYPE_FIELDS is only meaningful for a class/record type, so
+     check that first, before even attempting the field walk below.  */
+  if (!CLASS_TYPE_P (src_loc_type))
+    return build_zero_cst (src_loc_type);
+
   tree field = next_aggregate_field (TYPE_FIELDS (src_loc_type));
   if (!field || !POINTER_TYPE_P (TREE_TYPE (field))
       || next_aggregate_field (DECL_CHAIN (field)))
