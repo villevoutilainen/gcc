@@ -149,6 +149,18 @@ namespace contracts
   // when absent, so existing control types are unaffected). Deliberately
   // not part of this concept: unlike constify/assumable, their absence
   // must still make a control type usable.
+  //
+  // A control type may also optionally declare
+  //   static constexpr bool force_client_side_check = true;
+  //   static constexpr bool force_definition_side_check = true;
+  // (mutually exclusive -- a program is ill-formed if a control type sets
+  // both) to pin every contract naming it to one specific side, regardless
+  // of the -fcontracts-client-check/-fcontracts-definition-check command-
+  // line policy: force_client_side_check means the contract is checked
+  // only via a caller-side wrapper, never at the function's own
+  // definition; force_definition_side_check is the mirror image. Both
+  // default to false when absent, so existing control types are
+  // unaffected and the ordinary command-line policy applies as before.
   template <class _Tp>
   concept assertion_control =
     requires (_Tp __c, evaluation_semantic __semantic,

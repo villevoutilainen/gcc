@@ -259,6 +259,8 @@ match_contract_specifiers (location_t oldloc, tree old_contracts,
 
 static bool contract_control_is_ignored (tree);
 static bool contract_control_assumable (tree);
+static bool contract_control_forces_client_side (tree);
+static bool contract_control_forces_definition_side (tree);
 
 /* Return true if CONTRACT is checked or assumed under the current build
    configuration. */
@@ -280,36 +282,72 @@ contract_active_p (tree contract)
   return get_evaluation_semantic (contract) != CES_IGNORE;
 }
 
-/* True if FNDECL has any checked or assumed contracts whose TREE_CODE is
-   C.  */
+/* Which side of a call a contract's runtime check may run on: at the
+   function's own definition, or via a caller-side (client) wrapper.  */
+
+enum contract_check_side { ccs_definition, ccs_wrapper };
+
+/* True if CONTRACT should run its check on SIDE.  A control object naming
+   force_client_side_check/force_definition_side_check overrides the
+   ordinary -fcontracts-definition-check/-fcontracts-client-check policy
+   for that one contract, regardless of what the command line says.  If a
+   control object (erroneously) sets both, this deterministically routes
+   the contract to ccs_definition only, so it is still processed exactly
+   once; build_contract_check diagnoses that case.  */
 
 static bool
-has_active_contract_condition (tree fndecl, tree_code c)
+contract_runs_on_side (tree contract, contract_check_side side)
+{
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  bool force_client = ctrl && contract_control_forces_client_side (ctrl);
+  bool force_def = ctrl && contract_control_forces_definition_side (ctrl);
+  /* Check the "definition" flag first on both sides, so that when a
+     control object (erroneously) sets both, the contract is routed to
+     ccs_definition only rather than dropped from both sides entirely --
+     see the comment above.  */
+  if (side == ccs_definition)
+    return force_def ? true : force_client ? false
+			     : flag_contracts_definition_check;
+  return force_def ? false : force_client ? true
+			   : (TREE_CODE (contract) == POSTCONDITION_STMT
+			      ? flag_contract_client_check > 1
+			      : flag_contract_client_check > 0);
+}
+
+/* True if FNDECL has any checked or assumed contracts whose TREE_CODE is
+   C that also run on SIDE.  */
+
+static bool
+has_active_contract_condition (tree fndecl, tree_code c,
+				contract_check_side side)
 {
   tree as = get_fn_contract_specifiers (fndecl);
   for (; as != NULL_TREE; as = TREE_CHAIN (as))
     {
       tree contract = TREE_VALUE (TREE_VALUE (as));
-      if (TREE_CODE (contract) == c && contract_active_p (contract))
+      if (TREE_CODE (contract) == c && contract_active_p (contract)
+	  && contract_runs_on_side (contract, side))
 	return true;
     }
   return false;
 }
 
-/* True if FNDECL has any checked or assumed preconditions.  */
+/* True if FNDECL has any checked or assumed preconditions that run on
+   SIDE.  */
 
 static bool
-has_active_preconditions (tree fndecl)
+has_active_preconditions (tree fndecl, contract_check_side side)
 {
-  return has_active_contract_condition (fndecl, PRECONDITION_STMT);
+  return has_active_contract_condition (fndecl, PRECONDITION_STMT, side);
 }
 
-/* True if FNDECL has any checked or assumed postconditions.  */
+/* True if FNDECL has any checked or assumed postconditions that run on
+   SIDE.  */
 
 static bool
-has_active_postconditions (tree fndecl)
+has_active_postconditions (tree fndecl, contract_check_side side)
 {
-  return has_active_contract_condition (fndecl, POSTCONDITION_STMT);
+  return has_active_contract_condition (fndecl, POSTCONDITION_STMT, side);
 }
 
 /* Return true if any contract in the CONTRACT list is checked or assumed
@@ -852,7 +890,9 @@ build_contract_condition_function (tree fndecl, bool pre)
 static tree
 build_precondition_function (tree fndecl)
 {
-  if (!has_active_preconditions (fndecl))
+  contract_check_side side
+    = DECL_CONTRACT_WRAPPER (fndecl) ? ccs_wrapper : ccs_definition;
+  if (!has_active_preconditions (fndecl, side))
     return NULL_TREE;
 
   return build_contract_condition_function (fndecl, /*pre=*/true);
@@ -865,7 +905,9 @@ build_precondition_function (tree fndecl)
 static tree
 build_postcondition_function (tree fndecl)
 {
-  if (!has_active_postconditions (fndecl))
+  contract_check_side side
+    = DECL_CONTRACT_WRAPPER (fndecl) ? ccs_wrapper : ccs_definition;
+  if (!has_active_postconditions (fndecl, side))
     return NULL_TREE;
 
   tree type = TREE_TYPE (TREE_TYPE (fndecl));
@@ -1032,11 +1074,15 @@ start_function_contracts (tree fndecl)
   if (!handle_contracts_p (fndecl))
     return;
 
-  /* If this is not a client side check and definition side checks are
-     disabled, do nothing.  */
-  if (!flag_contracts_definition_check
-      && !DECL_CONTRACT_WRAPPER (fndecl))
-    return;
+  /* If nothing on FNDECL is going to run on its own side (whichever side
+     that is -- the wrapper's or the real definition's), do nothing.  */
+  {
+    contract_check_side side
+      = DECL_CONTRACT_WRAPPER (fndecl) ? ccs_wrapper : ccs_definition;
+    if (!has_active_preconditions (fndecl, side)
+	&& !has_active_postconditions (fndecl, side))
+      return;
+  }
 
   /* Check that the postcondition result name, if any, does not shadow a
      function parameter.  */
@@ -1093,7 +1139,9 @@ maybe_update_postconditions (tree fndecl)
   /* Update any postconditions and the postcondition checking function
      as needed.  If there are postconditions, we'll use those to rewrite
      return statements to check postconditions.  */
-  if (has_active_postconditions (fndecl))
+  contract_check_side side
+    = DECL_CONTRACT_WRAPPER (fndecl) ? ccs_wrapper : ccs_definition;
+  if (has_active_postconditions (fndecl, side))
     {
       rebuild_postconditions (fndecl);
       tree post = build_postcondition_function (fndecl);
@@ -1207,6 +1255,8 @@ copy_contracts_list (tree contracts, tree fndecl,
 		     contract_match_kind remap_kind = cmk_all)
 {
   tree last = NULL_TREE, new_contracts = NULL_TREE;
+  contract_check_side side
+    = DECL_CONTRACT_WRAPPER (fndecl) ? ccs_wrapper : ccs_definition;
   for (; contracts; contracts = TREE_CHAIN (contracts))
     {
       if ((remap_kind == cmk_pre
@@ -1215,6 +1265,9 @@ copy_contracts_list (tree contracts, tree fndecl,
 	  || (remap_kind == cmk_post
 	      && (TREE_CODE (CONTRACT_STATEMENT (contracts))
 		  == PRECONDITION_STMT)))
+	continue;
+
+      if (!contract_runs_on_side (CONTRACT_STATEMENT (contracts), side))
 	continue;
 
       tree c = copy_node (contracts);
@@ -1354,16 +1407,14 @@ maybe_apply_function_contracts (tree fndecl)
        popped by our caller.  */
     return;
 
-  /* If this is not a client side check and definition side checks are
-     disabled, do nothing.  */
-  if (!flag_contracts_definition_check
-      && !DECL_CONTRACT_WRAPPER (fndecl))
+  /* If nothing on FNDECL is going to run on its own side (whichever side
+     that is -- the wrapper's or the real definition's), do nothing.  */
+  contract_check_side side
+    = DECL_CONTRACT_WRAPPER (fndecl) ? ccs_wrapper : ccs_definition;
+  bool do_pre = has_active_preconditions (fndecl, side);
+  bool do_post = has_active_postconditions (fndecl, side);
+  if (!do_pre && !do_post)
     return;
-
-  bool do_pre = has_active_preconditions (fndecl);
-  bool do_post = has_active_postconditions (fndecl);
-  /* We should not have reached here with nothing to do... */
-  gcc_checking_assert (do_pre || do_post);
 
   /* If the function is noexcept, the user's written body will be wrapped in a
      MUST_NOT_THROW expression.  In that case we leave the MUST_NOT_THROW in
@@ -1538,7 +1589,7 @@ remap_contract (tree src, tree dst, tree contract, bool duplicate_p)
 
 tree
 copy_and_remap_contracts (tree dest, tree source,
-			  contract_match_kind remap_kind)
+			  contract_match_kind remap_kind, bool for_wrapper)
 {
   tree last = NULL_TREE, contracts_copy= NULL_TREE;
   tree contracts = get_fn_contract_specifiers (source);
@@ -1550,6 +1601,16 @@ copy_and_remap_contracts (tree dest, tree source,
 	  || (remap_kind == cmk_post
 	      && (TREE_CODE (CONTRACT_STATEMENT (contracts))
 		  == PRECONDITION_STMT)))
+	continue;
+
+      /* update_contract_arguments uses this function for plain
+	 redeclaration/definition argument-name bookkeeping, unrelated to
+	 caller-vs-definition side selection, and must keep copying every
+	 contract unconditionally; only a genuine caller-side wrapper copy
+	 (define_contract_wrapper_func) filters by side here.  */
+      if (for_wrapper
+	  && !contract_runs_on_side (CONTRACT_STATEMENT (contracts),
+				     ccs_wrapper))
 	continue;
 
       /* The first part is copying of the legacy attribute layout - eventually
@@ -1789,19 +1850,16 @@ update_contract_arguments (tree srcdecl, tree destdecl)
     }
 }
 
-/* Checks if a contract check wrapper is needed for fndecl.  */
+/* Checks if a contract check wrapper is needed for fndecl.  DO_PRE/DO_POST
+   (computed with side ccs_wrapper) already fold in both the ordinary
+   -fcontracts-client-check policy and any per-contract
+   force_client_side_check/force_definition_side_check override, so a
+   wrapper is needed simply if either is set.  */
 
 static bool
 should_contract_wrap_call (bool do_pre, bool do_post)
 {
-  /* Only if the target function actually has any contracts.  */
-  if (!do_pre && !do_post)
-    return false;
-
-
-  return ((flag_contract_client_check > 1)
-	  || ((flag_contract_client_check > 0)
-	      && do_pre));
+  return do_pre || do_post;
 }
 
 /* Possibly replace call with a call to a wrapper function which
@@ -1820,8 +1878,8 @@ maybe_contract_wrap_call (tree fndecl, tree call)
   if (!handle_contracts_p (fndecl))
     return call;
 
-  bool do_pre = has_active_preconditions (fndecl);
-  bool do_post = has_active_postconditions (fndecl);
+  bool do_pre = has_active_preconditions (fndecl, ccs_wrapper);
+  bool do_post = has_active_postconditions (fndecl, ccs_wrapper);
 
   /* Check if we need a wrapper.  */
   if (!should_contract_wrap_call (do_pre, do_post))
@@ -1857,14 +1915,16 @@ define_contract_wrapper_func (const tree& fndecl, const tree& wrapdecl, void*)
     return true;
 
   gcc_checking_assert (!DECL_HAS_CONTRACTS_P (wrapdecl));
-  /* We check postconditions if postcondition checks are enabled for clients.
-    We should not get here unless there are some checks to make.  */
-  bool check_post = flag_contract_client_check > 1;
-  /* For wrappers on CDTORs we need to refer to the original contracts,
+  /* Which of the original contracts (pre and/or post) actually belong on
+     this wrapper -- whether under the ordinary -fcontracts-client-check
+     policy or a per-contract force_client_side_check/
+     force_definition_side_check override -- is decided per-contract by
+     copy_and_remap_contracts's for_wrapper filter below, not here.
+     For wrappers on CDTORs we need to refer to the original contracts,
      when the wrapper is around a clone.  */
   set_fn_contract_specifiers ( wrapdecl,
 		      copy_and_remap_contracts (wrapdecl, DECL_ORIGIN (fndecl),
-						check_post? cmk_all : cmk_pre));
+						cmk_all, /*for_wrapper=*/true));
 
   start_preparsed_function (wrapdecl, /*DECL_ATTRIBUTES*/NULL_TREE,
 			    SF_DEFAULT | SF_PRE_PARSED);
@@ -2240,11 +2300,14 @@ static void
 remap_and_emit_conditions (tree fn, tree condfn, tree_code code)
 {
   gcc_assert (code == PRECONDITION_STMT || code == POSTCONDITION_STMT);
+  contract_check_side side
+    = DECL_CONTRACT_WRAPPER (fn) ? ccs_wrapper : ccs_definition;
   tree contract_spec = get_fn_contract_specifiers (fn);
   for (; contract_spec; contract_spec = TREE_CHAIN (contract_spec))
     {
       tree contract = CONTRACT_STATEMENT (contract_spec);
-      if (TREE_CODE (contract) == code)
+      if (TREE_CODE (contract) == code
+	  && contract_runs_on_side (contract, side))
 	{
 	  contract = copy_node (contract);
 	  if (CONTRACT_CONDITION (contract) != error_mark_node)
@@ -2273,11 +2336,15 @@ finish_function_outlined_contracts (tree fndecl)
       || !flag_contract_checks_outlined)
     return;
 
-  /* If this is not a client side check and definition side checks are
-     disabled, do nothing.  */
-  if (!flag_contracts_definition_check
-      && !DECL_CONTRACT_WRAPPER (fndecl))
-    return;
+  /* If nothing on FNDECL is going to run on its own side (whichever side
+     that is -- the wrapper's or the real definition's), do nothing.  */
+  {
+    contract_check_side side
+      = DECL_CONTRACT_WRAPPER (fndecl) ? ccs_wrapper : ccs_definition;
+    if (!has_active_preconditions (fndecl, side)
+	&& !has_active_postconditions (fndecl, side))
+      return;
+  }
 
   /* If either the pre or post functions are bad, don't bother emitting
      any contracts.  The program is already ill-formed.  */
@@ -3279,6 +3346,29 @@ contract_control_omits_source_location (tree ctrl)
   return contract_control_bool_member (ctrl, "omit_source_location") == 1;
 }
 
+/* True if the control type CTRL has force_client_side_check == true,
+   meaning any contract naming it is checked only via the caller-side
+   (client) wrapper mechanism, never at the function's own definition,
+   regardless of -fcontracts-client-check/-fcontracts-definition-check.
+   Optional, same default-false behaviour as contract_control_omits_comment.  */
+
+static bool
+contract_control_forces_client_side (tree ctrl)
+{
+  return contract_control_bool_member (ctrl, "force_client_side_check") == 1;
+}
+
+/* True if the control type CTRL has force_definition_side_check == true,
+   the mirror image of contract_control_forces_client_side: any contract
+   naming it is checked only at the function's own definition, never via a
+   caller-side wrapper.  */
+
+static bool
+contract_control_forces_definition_side (tree ctrl)
+{
+  return contract_control_bool_member (ctrl, "force_definition_side_check") == 1;
+}
+
 /* If the control type CTRL provides the D4324 dispatch operator
    operator()(const assertion_context&), return its FUNCTION_DECL,
    otherwise NULL_TREE.  assertion_context bundles the comment, source
@@ -4095,6 +4185,22 @@ build_contract_check (tree contract)
 	  error_at (EXPR_LOCATION (contract),
 		    "control object of type %qT has no usable "
 		    "%<operator()%>", contract_control_naming_type (ctrl));
+	  return error_mark_node;
+	}
+
+      /* force_client_side_check and force_definition_side_check are
+	 mutually exclusive: each names the one side this contract may run
+	 on.  contract_runs_on_side deterministically routes a
+	 (misconfigured) contract with both set to ccs_definition only, so
+	 this fires exactly once for it, here.  */
+      if (contract_control_forces_client_side (ctrl)
+	  && contract_control_forces_definition_side (ctrl))
+	{
+	  error_at (EXPR_LOCATION (contract),
+		    "control object of type %qT has both "
+		    "%<force_client_side_check%> and "
+		    "%<force_definition_side_check%> set to %<true%>",
+		    contract_control_naming_type (ctrl));
 	  return error_mark_node;
 	}
     }
