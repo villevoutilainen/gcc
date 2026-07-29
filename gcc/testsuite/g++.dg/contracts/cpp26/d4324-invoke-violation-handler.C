@@ -63,8 +63,8 @@ handle_contract_violation (const sc::contract_violation& v)
 // to the caller.
 struct calls_handler {
   static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify = false;
-  static constexpr bool assumable = false;
+  static constexpr bool constify (sc::evaluation_semantic) { return false; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
   void
   operator() (const sc::assertion_context& ctx) const
   {

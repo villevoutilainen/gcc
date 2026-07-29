@@ -23,8 +23,8 @@ namespace sc = std::contracts;
 
 struct probe_line {
   static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify = false;
-  static constexpr bool assumable = false;
+  static constexpr bool constify (sc::evaluation_semantic) { return false; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
 
   constexpr void
   operator() (const sc::assertion_context& ctx) const
@@ -37,8 +37,8 @@ struct probe_line {
 
 struct probe_column {
   static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify = false;
-  static constexpr bool assumable = false;
+  static constexpr bool constify (sc::evaluation_semantic) { return false; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
 
   constexpr void
   operator() (const sc::assertion_context& ctx) const
@@ -51,8 +51,8 @@ struct probe_column {
 
 struct probe_file_name {
   static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify = false;
-  static constexpr bool assumable = false;
+  static constexpr bool constify (sc::evaluation_semantic) { return false; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
 
   constexpr void
   operator() (const sc::assertion_context& ctx) const
@@ -65,8 +65,8 @@ struct probe_file_name {
 
 struct probe_function_name {
   static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify = false;
-  static constexpr bool assumable = false;
+  static constexpr bool constify (sc::evaluation_semantic) { return false; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
 
   constexpr void
   operator() (const sc::assertion_context& ctx) const

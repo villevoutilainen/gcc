@@ -20,8 +20,8 @@ struct my_less_mandatory {
   is_ignored (sc::evaluation_semantic cfg) noexcept
   { return cfg == sc::evaluation_semantic::ignore; }
 
-  static constexpr bool constify  = true;
-  static constexpr bool assumable = false;
+  static constexpr bool constify (sc::evaluation_semantic) { return true; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
 
   void
   operator() (const sc::assertion_context& ctx) const

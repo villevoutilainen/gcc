@@ -140,9 +140,21 @@ namespace contracts
     bool (*__check)(void*);
   };
 
+  // Every one of these bool-returning static member functions -- the
+  // mandatory is_ignored/constify/assumable below, and the optional
+  // omit_comment/omit_source_location/force_client_side_check/
+  // force_definition_side_check -- takes the translation unit's
+  // evaluation_semantic, exactly like is_ignored, so a control type can
+  // answer differently depending on it (e.g. constify only under
+  // enforce). None of them take an assertion_context: they're all
+  // evaluated before one can exist -- e.g. constify is consulted during
+  // template substitution, before any predicate-evaluation machinery
+  // exists, and omit_comment/omit_source_location decide whether to even
+  // build the real runtime assertion_context fields in the first place.
+  //
   // A control type may also optionally declare
-  //   static constexpr bool omit_comment = true;
-  //   static constexpr bool omit_source_location = true;
+  //   static constexpr bool omit_comment(evaluation_semantic) { return true; }
+  //   static constexpr bool omit_source_location(evaluation_semantic) { return true; }
   // to tell the compiler it never needs assertion_context::comment()/
   // location() for this control, so it doesn't need to build/embed
   // either one at all (both default to false -- i.e. keep storing --
@@ -151,23 +163,24 @@ namespace contracts
   // must still make a control type usable.
   //
   // A control type may also optionally declare
-  //   static constexpr bool force_client_side_check = true;
-  //   static constexpr bool force_definition_side_check = true;
-  // (mutually exclusive -- a program is ill-formed if a control type sets
-  // both) to pin every contract naming it to one specific side, regardless
-  // of the -fcontracts-client-check/-fcontracts-definition-check command-
-  // line policy: force_client_side_check means the contract is checked
-  // only via a caller-side wrapper, never at the function's own
-  // definition; force_definition_side_check is the mirror image. Both
-  // default to false when absent, so existing control types are
-  // unaffected and the ordinary command-line policy applies as before.
+  //   static constexpr bool force_client_side_check(evaluation_semantic) { return true; }
+  //   static constexpr bool force_definition_side_check(evaluation_semantic) { return true; }
+  // (mutually exclusive -- a program is ill-formed if a control type
+  // returns true from both for the same evaluation_semantic) to pin every
+  // contract naming it to one specific side, regardless of the
+  // -fcontracts-client-check/-fcontracts-definition-check command-line
+  // policy: force_client_side_check means the contract is checked only
+  // via a caller-side wrapper, never at the function's own definition;
+  // force_definition_side_check is the mirror image. Both default to
+  // false when absent, so existing control types are unaffected and the
+  // ordinary command-line policy applies as before.
   template <class _Tp>
   concept assertion_control =
     requires (_Tp __c, evaluation_semantic __semantic,
 	      const assertion_context& __ctx) {
       { _Tp::is_ignored(__semantic) } -> same_as<bool>;
-      { bool(_Tp::constify) };
-      { bool(_Tp::assumable) };
+      { _Tp::constify(__semantic) } -> same_as<bool>;
+      { _Tp::assumable(__semantic) } -> same_as<bool>;
       { __c(__ctx) } -> same_as<void>;
     };
 
@@ -261,8 +274,10 @@ namespace contracts
     is_ignored(evaluation_semantic __semantic) noexcept
     { return __semantic == evaluation_semantic::ignore; }
 
-    static constexpr bool constify  = false;
-    static constexpr bool assumable = false;
+    static constexpr bool
+    constify(evaluation_semantic) noexcept { return false; }
+    static constexpr bool
+    assumable(evaluation_semantic) noexcept { return false; }
 
     constexpr void
     operator()(const assertion_context& __ctx) const noexcept
@@ -291,8 +306,10 @@ namespace contracts
     is_ignored(evaluation_semantic __semantic) noexcept
     { return __semantic == evaluation_semantic::ignore; }
 
-    static constexpr bool constify  = true;
-    static constexpr bool assumable = false;
+    static constexpr bool
+    constify(evaluation_semantic) noexcept { return true; }
+    static constexpr bool
+    assumable(evaluation_semantic) noexcept { return false; }
 
     constexpr void
     operator()(const assertion_context& __ctx) const noexcept
@@ -316,8 +333,10 @@ namespace contracts
     is_ignored(evaluation_semantic __semantic) noexcept
     { return __semantic == evaluation_semantic::ignore; }
 
-    static constexpr bool constify  = false;
-    static constexpr bool assumable = true;
+    static constexpr bool
+    constify(evaluation_semantic) noexcept { return false; }
+    static constexpr bool
+    assumable(evaluation_semantic) noexcept { return true; }
 
     constexpr void
     operator()(const assertion_context& __ctx) const noexcept
@@ -346,8 +365,10 @@ namespace contracts
     is_ignored(evaluation_semantic) noexcept
     { return true; }
 
-    static constexpr bool constify  = false;
-    static constexpr bool assumable = false;
+    static constexpr bool
+    constify(evaluation_semantic) noexcept { return false; }
+    static constexpr bool
+    assumable(evaluation_semantic) noexcept { return false; }
 
     // Never actually called: is_ignored is unconditionally true
     // (regardless of the TU's -fcontract-evaluation-semantic=), so no
@@ -364,8 +385,10 @@ namespace contracts
     is_ignored(evaluation_semantic) noexcept
     { return true; }
 
-    static constexpr bool constify  = false;
-    static constexpr bool assumable = true;
+    static constexpr bool
+    constify(evaluation_semantic) noexcept { return false; }
+    static constexpr bool
+    assumable(evaluation_semantic) noexcept { return true; }
 
     // Never actually called, for the same reason as ignore::operator():
     // always ignored (unconditionally, unlike mandatory::is_ignored, which
