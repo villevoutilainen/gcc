@@ -49,9 +49,9 @@ throwing_pred (int x)
 // invoke_violation_handler from within that same catch (...) -- no
 // special exception-carrying argument needed.
 struct rethrows_naturally {
-  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify (sc::evaluation_semantic) { return false; }
-  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
+  static constexpr bool is_ignored (sc::assertion_static_info) { return false; }
+  static constexpr bool constify (sc::assertion_static_info) { return false; }
+  static constexpr bool assumable (sc::assertion_static_info) { return false; }
   void
   operator() (const sc::assertion_context& ctx) const
   {

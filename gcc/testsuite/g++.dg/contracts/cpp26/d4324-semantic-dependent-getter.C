@@ -30,18 +30,18 @@ void __d4324_log_violation (const char*, std::source_location) noexcept {}
 namespace sc = std::contracts;
 
 struct constify_under_observe {
-  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify (sc::evaluation_semantic c)
-  { return c == sc::evaluation_semantic::observe; }
-  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
+  static constexpr bool is_ignored (sc::assertion_static_info) { return false; }
+  static constexpr bool constify (sc::assertion_static_info info)
+  { return info.semantic () == sc::evaluation_semantic::observe; }
+  static constexpr bool assumable (sc::assertion_static_info) { return false; }
   void operator() (const sc::assertion_context&) const {}
 };
 
 struct constify_under_enforce {
-  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify (sc::evaluation_semantic c)
-  { return c == sc::evaluation_semantic::enforce; }
-  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
+  static constexpr bool is_ignored (sc::assertion_static_info) { return false; }
+  static constexpr bool constify (sc::assertion_static_info info)
+  { return info.semantic () == sc::evaluation_semantic::enforce; }
+  static constexpr bool assumable (sc::assertion_static_info) { return false; }
   void operator() (const sc::assertion_context&) const {}
 };
 

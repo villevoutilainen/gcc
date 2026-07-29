@@ -17,9 +17,9 @@ sc::evaluation_semantic seen = sc::evaluation_semantic::quick_enforce;
 bool called = false;
 
 struct capture {
-  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify (sc::evaluation_semantic) { return false; }
-  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
+  static constexpr bool is_ignored (sc::assertion_static_info) { return false; }
+  static constexpr bool constify (sc::assertion_static_info) { return false; }
+  static constexpr bool assumable (sc::assertion_static_info) { return false; }
   void
   operator() (const sc::assertion_context& ctx) const
   { if (ctx.check ()) return; seen = ctx.semantic (); called = true; }	// returns -> continue

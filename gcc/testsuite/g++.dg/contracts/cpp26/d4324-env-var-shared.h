@@ -17,11 +17,11 @@ namespace sc = std::contracts;
 
 struct my_less_mandatory {
   static constexpr bool
-  is_ignored (sc::evaluation_semantic cfg) noexcept
-  { return cfg == sc::evaluation_semantic::ignore; }
+  is_ignored (sc::assertion_static_info info) noexcept
+  { return info.semantic () == sc::evaluation_semantic::ignore; }
 
-  static constexpr bool constify (sc::evaluation_semantic) { return true; }
-  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
+  static constexpr bool constify (sc::assertion_static_info) { return true; }
+  static constexpr bool assumable (sc::assertion_static_info) { return false; }
 
   void
   operator() (const sc::assertion_context& ctx) const
