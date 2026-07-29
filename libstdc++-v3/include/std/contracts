@@ -207,6 +207,18 @@ namespace contracts
   // force_definition_side_check is the mirror image. Both default to
   // false when absent, so existing control types are unaffected and the
   // ordinary command-line policy applies as before.
+  //
+  // A control type may also optionally declare
+  //   static constexpr bool inherited(assertion_static_info) { return true; }
+  // to let a virtual function's contract propagate to an override that
+  // declares no contract of its own: if a contract-less override's
+  // base contract's control type returns true from inherited() for a
+  // given side (client/definition), the override behaves, on that
+  // side, as if it had explicitly declared the identical contract
+  // (same control object). Evaluated independently per side -- a
+  // control type may choose to be inherited on only one of the two.
+  // Defaults to false when absent, so existing control types opt in to
+  // nothing new and are unaffected.
   template <class _Tp>
   concept assertion_control =
     requires (_Tp __c, assertion_static_info __info,

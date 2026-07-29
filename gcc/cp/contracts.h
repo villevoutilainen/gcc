@@ -188,6 +188,7 @@ extern tree view_as_const			(tree);
 extern contract_check_side contract_side_of	(tree, tree);
 extern bool contract_control_constifies		(tree, contract_check_side);
 extern tree contract_default_control_object		(location_t);
+extern void maybe_inherit_virtual_contract		(tree, tree);
 
 /* True while parsing/substituting a contract condition that opts into
    constification via its control type's constify member (D4324: off by
