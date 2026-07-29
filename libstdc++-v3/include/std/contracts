@@ -229,6 +229,39 @@ namespace contracts
       { __c(__ctx) } -> same_as<void>;
     };
 
+  // Recognized specially by the compiler (see gcc/cp/contracts.cc's
+  // build_contract_check) wherever it appears inside the condition of a
+  // pre<>/post<> on a virtual member function that overrides another;
+  // never actually defined/linked anywhere. _Base must name an
+  // accessible, unambiguous (direct or indirect) base of the enclosing
+  // class that itself declares a corresponding override -- i.e. exactly
+  // what a qualified call like _Base::f(...) would need to resolve to,
+  // but naming only the predicate part, not a real call: no access to
+  // _Base's override is required beyond what naming it as a base already
+  // grants, even when the override's own condition refers to a private
+  // member of _Base.
+  //
+  // Evaluates to the conjunction of all of _Base's own contracts of the
+  // *same kind* as the pre<>/post<> it's used in (all its preconditions
+  // if used inside a pre<>, all its postconditions if used inside a
+  // post<>) -- one term per named ancestor, meant to be combined with
+  // ordinary boolean operators: base_contract<Base>() || extra_check(x)
+  // weakens a precondition (Eiffel/Ada-style), base_contract<Base>() &&
+  // extra_check(r) strengthens a postcondition, and simply never calling
+  // it at all is a valid policy too (no inheritance, as if this feature
+  // didn't exist). If _Base's own override has no contract of the
+  // matching kind at all, this evaluates to true (an absent precondition
+  // or postcondition vacuously accepts anything), so a composed
+  // expression doesn't need every ancestor to declare a matching kind.
+  //
+  // Distinct from, and independent of, a control type's own inherited()
+  // (which governs a contract-*less* override picking up its base's
+  // contract wholesale, automatically): base_contract<Base>() is always
+  // an explicit, opt-in reference written by the author of the
+  // override's own contract.
+  template <class _Base>
+  bool base_contract();
+
   // Recognized specially by the compiler during genericization (see
   // gcc/cp/cp-gimplify.cc's cp_genericize_r); never actually
   // defined/linked anywhere. Builds the same contract_violation object

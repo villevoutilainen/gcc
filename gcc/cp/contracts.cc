@@ -3645,7 +3645,21 @@ build_predicate_core_function_1 (tree contract, tree orig)
   for (tree sp = DECL_ARGUMENTS (orig); sp; sp = DECL_CHAIN (sp), dp = DECL_CHAIN (dp))
     insert_decl_map (&id, sp, dp);
   if (has_result)
-    insert_decl_map (&id, DECL_RESULT (orig), result_parm);
+    {
+      insert_decl_map (&id, DECL_RESULT (orig), result_parm);
+      /* CONTRACT's condition may not have had its postcondition
+	 placeholder substituted with DECL_RESULT (orig) yet: that
+	 substitution (remap_retval) is part of ORIG's own
+	 genericization, and this function may be called (e.g. by
+	 build_base_contract_expr, for a base_contract<Base>() naming
+	 ORIG's class) before ORIG's own body has been genericized --
+	 body genericization order between unrelated functions in a TU
+	 is not otherwise something this depends on.  Map the
+	 placeholder too, so either form works.  */
+      if (tree placeholder = POSTCONDITION_IDENTIFIER (contract))
+	if (placeholder != DECL_RESULT (orig))
+	  insert_decl_map (&id, placeholder, result_parm);
+    }
 
   tree condition = CONTRACT_CONDITION (contract);
   walk_tree (&condition, copy_tree_body_r, &id, NULL);
@@ -4028,6 +4042,272 @@ maybe_inherit_virtual_contract (tree overrider, tree basefn)
   hash_map_maybe_create<hm_ggc> (contract_inherited_from);
   contract_inherited_from->put (overrider, basefn);
   set_fn_contract_specifiers (overrider, new_specs);
+}
+
+/* D4324 step 3: std::contracts::base_contract<Base>() -- an explicit,
+   user-written reference (inside a pre<>/post<> condition) to a named
+   base class's own corresponding contract, as opposed to
+   maybe_inherit_virtual_contract's automatic, all-or-nothing inheritance
+   above.  Declared (never defined) as a plain function template in
+   <contracts>; base_contract<Base>() is therefore ordinary,
+   unmodified-grammar template-id-call syntax, recognized here purely by
+   which template a CALL_EXPR's callee is a specialization of -- nothing
+   in the parser needs to know about it at all.  */
+
+/* Cached TEMPLATE_DECL for std::contracts::base_contract, looked up once
+   (mirrors lookup_std_contracts_type).  */
+
+static GTY(()) tree base_contract_template;
+
+static tree
+lookup_base_contract_template ()
+{
+  if (base_contract_template)
+    return base_contract_template;
+
+  tree id_ns = get_identifier ("contracts");
+  tree ns = lookup_qualified_name (std_node, id_ns);
+  if (TREE_CODE (ns) != NAMESPACE_DECL)
+    return NULL_TREE;
+
+  tree found = lookup_qualified_name (ns, get_identifier ("base_contract"));
+  for (tree f : lkp_range (found))
+    if (TREE_CODE (f) == TEMPLATE_DECL)
+      {
+	base_contract_template = f;
+	break;
+      }
+  return base_contract_template;
+}
+
+/* If CALL is a call to a specialization of std::contracts::base_contract,
+   return true and set *BASE_TYPE to its explicit template argument.  */
+
+static bool
+base_contract_call_p (tree call, tree *base_type)
+{
+  if (TREE_CODE (call) != CALL_EXPR)
+    return false;
+  tree tmpl = lookup_base_contract_template ();
+  if (!tmpl)
+    return false;
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL
+      || !is_specialization_of (callee, tmpl))
+    return false;
+  tree args = DECL_TI_ARGS (callee);
+  if (!args || TREE_VEC_LENGTH (args) < 1)
+    return false;
+  *base_type = TREE_VEC_ELT (args, 0);
+  return true;
+}
+
+/* Validate BASE_TYPE as the target of a base_contract<BASE_TYPE>() used
+   inside a contract of CANONICAL (the real, canonical FUNCTION_DECL this
+   contract belongs to -- see resolve_base_contract_calls's comment for
+   why this may differ from the FUNCTION_DECL currently being
+   genericized): CANONICAL must be virtual; BASE_TYPE must be an
+   accessible (from CANONICAL's own class, so accessibility of the
+   inheritance itself is irrelevant here) unambiguous, proper (direct or
+   indirect) base of CANONICAL's class; and BASE_TYPE must itself declare
+   a matching override of CANONICAL (look_for_overrides_here, exactly
+   the same override-signature match used to validate an ordinary
+   override).  Diagnoses each failure when COMPLAIN; returns the found
+   FUNCTION_DECL in BASE_TYPE, or NULL_TREE.  */
+
+static tree
+find_base_contract_target (tree base_type, tree canonical, bool complain,
+			    location_t loc)
+{
+  if (!DECL_VIRTUAL_P (canonical))
+    {
+      if (complain)
+	error_at (loc, "%<base_contract%> may only be used in a contract "
+		  "of a virtual member function");
+      return NULL_TREE;
+    }
+
+  tree derived_type = DECL_CONTEXT (canonical);
+
+  if (!CLASS_TYPE_P (base_type))
+    {
+      if (complain)
+	error_at (loc, "%qT is not a class type", base_type);
+      return NULL_TREE;
+    }
+
+  if (same_type_ignoring_top_level_qualifiers_p (base_type, derived_type))
+    {
+      if (complain)
+	error_at (loc, "%qT is not a base of itself", base_type);
+      return NULL_TREE;
+    }
+
+  tree binfo = lookup_base (derived_type, base_type, ba_unique, NULL,
+			    complain ? tf_warning_or_error : tf_none);
+  if (binfo == error_mark_node)
+    /* lookup_base already diagnosed the ambiguity when COMPLAIN.  */
+    return NULL_TREE;
+  if (!binfo)
+    {
+      if (complain)
+	error_at (loc, "%qT is not a base of %qT", base_type, derived_type);
+      return NULL_TREE;
+    }
+
+  tree target = look_for_overrides_here (base_type, canonical);
+  if (!target)
+    {
+      if (complain)
+	error_at (loc, "%qT does not declare an override of %qD",
+		  base_type, canonical);
+      return NULL_TREE;
+    }
+
+  return target;
+}
+
+/* Build the boolean expression base_contract<BASE_FN's class>() resolves
+   to: the conjunction of all of BASE_FN's own contract specifiers whose
+   TREE_CODE is KIND (matching whether CONTRACT -- the contract this
+   base_contract<>() call appears inside, as part of USING_FNDECL's own
+   processing -- is itself a precondition or postcondition), each called
+   through a this-adjusting thunk exactly like
+   resolve_inherited_contract's own argument-building.  boolean_true_node
+   (vacuously true) if BASE_FN has no contracts of that kind at all.  */
+
+static tree
+build_base_contract_expr (tree base_fn, tree_code kind, tree using_fndecl,
+			   tree contract)
+{
+  tree this_parm = DECL_ARGUMENTS (using_fndecl);
+  tree binfo = lookup_base (TREE_TYPE (TREE_TYPE (this_parm)),
+			    DECL_CONTEXT (base_fn), ba_any, NULL,
+			    tf_warning_or_error);
+  gcc_assert (binfo && binfo != error_mark_node);
+  tree adjusted_this = save_expr (build_base_path (PLUS_EXPR, this_parm,
+						    binfo, 1,
+						    tf_warning_or_error));
+
+  tree result = NULL_TREE;
+  for (tree spec = get_fn_contract_specifiers (base_fn); spec;
+       spec = TREE_CHAIN (spec))
+    {
+      tree base_contract = CONTRACT_STATEMENT (spec);
+      if (TREE_CODE (base_contract) != kind)
+	continue;
+
+      tree core_fn = get_or_build_predicate_core_function (base_contract,
+							     base_fn);
+      releasing_vec args;
+      vec_safe_push (args, adjusted_this);
+      for (tree p = DECL_CHAIN (this_parm); p; p = DECL_CHAIN (p))
+	vec_safe_push (args, p);
+      if (POSTCONDITION_P (contract))
+	vec_safe_push (args, POSTCONDITION_IDENTIFIER (contract));
+
+      tree call = build_call_a (core_fn, args->length (), args->address ());
+      result = result
+	? build2 (TRUTH_ANDIF_EXPR, boolean_type_node, result, call)
+	: call;
+    }
+
+  return result ? result : boolean_true_node;
+}
+
+/* walk_tree callback data for resolve_base_contract_calls.  */
+
+struct base_contract_walk_data
+{
+  tree using_fndecl;
+  tree contract;
+  bool complain;
+};
+
+static tree
+resolve_base_contract_r (tree *tp, int *do_subtree, void *data_)
+{
+  base_contract_walk_data *data = (base_contract_walk_data *) data_;
+  tree base_type;
+  if (!base_contract_call_p (*tp, &base_type))
+    return NULL_TREE;
+
+  location_t loc = EXPR_LOCATION (*tp);
+
+  if (TREE_CODE (data->contract) != PRECONDITION_STMT
+      && TREE_CODE (data->contract) != POSTCONDITION_STMT)
+    {
+      if (data->complain)
+	error_at (loc, "%<base_contract%> may only be used in a "
+		  "precondition or postcondition");
+      *tp = error_mark_node;
+      *do_subtree = 0;
+      return NULL_TREE;
+    }
+
+  tree canonical = data->using_fndecl;
+  if (DECL_LANG_SPECIFIC (canonical) && DECL_CONTRACT_WRAPPER (canonical))
+    canonical = get_orig_func_for_wrapper (canonical);
+
+  tree target = find_base_contract_target (base_type, canonical,
+					     data->complain, loc);
+  *tp = target
+    ? build_base_contract_expr (target, TREE_CODE (data->contract),
+				data->using_fndecl, data->contract)
+    : error_mark_node;
+  *do_subtree = 0;
+  return NULL_TREE;
+}
+
+/* Rewrite every std::contracts::base_contract<Base>() call appearing
+   anywhere in CONTRACT's condition (as currently being processed as part
+   of USING_FNDECL -- CONTRACT's own real function or its caller-side
+   wrapper; never its outlined PRE_FN/POST_FN, which is built directly
+   from an already-fully-resolved CONTRACT_CONDITION via
+   build_predicate_core_function_1's own copy_tree_body_r remapping, and
+   so never calls build_contract_check/this function at all) into a
+   real, this-adjusted call to the named base's own matching contract
+   set.
+
+   Deferred to here (genericization time), exactly like
+   resolve_inherited_contract, for the same reason: lookup_base/
+   build_base_path need a complete type.  Unlike that function, there is
+   no persistent marker to maintain across copy_node duplicates -- the
+   base_contract<Base>() CALL_EXPR itself already carries everything
+   needed (BASE_TYPE is recoverable from its callee's own template
+   arguments), so simply redoing this lookup, harmlessly, on every copy
+   build_contract_check ever sees is enough.
+
+   USING_FNDECL's own DECL_ARGUMENTS give the *current* copy's own
+   parameters to forward, but its DECL_NAME/signature is not always a
+   reliable proxy for the enclosing member function's own signature (an
+   outlined PRE_FN/POST_FN copy's is not one at all -- moot here, since
+   that copy never reaches this function; a caller-side wrapper's,
+   though, is reached here, and while it does mirror the real function's
+   name and parameter list, going through the existing, already-proven
+   decl_for_wrapper map instead is simpler and avoids relying on that).
+   contract_side_of (DECL_CONTRACT_WRAPPER) already distinguishes a
+   wrapper from the real function; get_orig_func_for_wrapper already maps
+   a wrapper back to it -- so CANONICAL, used only to find BASE_TYPE's
+   matching override, is always the real, stable FUNCTION_DECL.
+
+   Diagnoses failures only when USING_FNDECL is the real function, not
+   its wrapper: the real function's own pass always eventually runs
+   (unlike the wrapper, which is only built on demand by an actual
+   client-side-eligible call site), so it is the diagnostic point of
+   record -- the wrapper's own, independent re-resolution of the same
+   source-level expression reuses the identical logic but stays quiet.  */
+
+static void
+resolve_base_contract_calls (tree contract, tree using_fndecl)
+{
+  base_contract_walk_data data;
+  data.using_fndecl = using_fndecl;
+  data.contract = contract;
+  data.complain = !(DECL_LANG_SPECIFIC (using_fndecl)
+		     && DECL_CONTRACT_WRAPPER (using_fndecl));
+  walk_tree (&CONTRACT_CONDITION (contract), resolve_base_contract_r,
+	     &data, NULL);
 }
 
 /* Build a fresh, file-local, static `bool NAME (void *)' thunk for CORE_FN
@@ -4636,6 +4916,12 @@ build_contract_check (tree contract)
       resolve_inherited_contract (contract, current_function_decl,
 				  basefn, base_contract);
   }
+
+  /* D4324 step 3: rewrite any std::contracts::base_contract<Base>()
+     calls the user wrote explicitly in this condition -- see
+     resolve_base_contract_calls's comment for why this also has to
+     happen here, at genericization time.  */
+  resolve_base_contract_calls (contract, current_function_decl);
 
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   contract_check_side side
