@@ -21,9 +21,9 @@
 namespace sc = std::contracts;
 
 struct probe_kind {
-  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify (sc::evaluation_semantic) { return false; }
-  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
+  static constexpr bool is_ignored (sc::assertion_static_info) { return false; }
+  static constexpr bool constify (sc::assertion_static_info) { return false; }
+  static constexpr bool assumable (sc::assertion_static_info) { return false; }
 
   constexpr void
   operator() (const sc::assertion_context& ctx) const
@@ -37,9 +37,9 @@ struct probe_kind {
 inline constexpr probe_kind probe_kind_v{};
 
 struct probe_semantic {
-  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify (sc::evaluation_semantic) { return false; }
-  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
+  static constexpr bool is_ignored (sc::assertion_static_info) { return false; }
+  static constexpr bool constify (sc::assertion_static_info) { return false; }
+  static constexpr bool assumable (sc::assertion_static_info) { return false; }
 
   constexpr void
   operator() (const sc::assertion_context& ctx) const

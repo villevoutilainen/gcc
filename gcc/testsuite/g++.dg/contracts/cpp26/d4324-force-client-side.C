@@ -20,10 +20,10 @@ int pre_calls = 0;
 int post_calls = 0;
 
 struct probe {
-  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify (sc::evaluation_semantic) { return false; }
-  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
-  static constexpr bool force_client_side_check (sc::evaluation_semantic) { return true; }
+  static constexpr bool is_ignored (sc::assertion_static_info) { return false; }
+  static constexpr bool constify (sc::assertion_static_info) { return false; }
+  static constexpr bool assumable (sc::assertion_static_info) { return false; }
+  static constexpr bool force_client_side_check (sc::assertion_static_info) { return true; }
   void
   operator() (const sc::assertion_context& ctx) const
   {

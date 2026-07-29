@@ -257,16 +257,32 @@ match_contract_specifiers (location_t oldloc, tree old_contracts,
   return true;
 }
 
-static bool contract_control_is_ignored (tree);
-static bool contract_control_assumable (tree);
-static bool contract_control_forces_client_side (tree);
-static bool contract_control_forces_definition_side (tree);
+static bool contract_control_is_ignored (tree, contract_check_side);
+static bool contract_control_assumable (tree, contract_check_side);
+static bool contract_control_forces_client_side (tree, contract_check_side);
+static bool contract_control_forces_definition_side (tree, contract_check_side);
+
+/* CONTRACT's side, given the FNDECL whose own copy of it is currently
+   being processed (the real function, or its caller-side wrapper).
+   contract_check_side is declared in contracts.h since this is also
+   needed by parser.cc/pt.cc, at points where a contract's condition is
+   first parsed/instantiated, before any wrapper copy exists.  */
+
+contract_check_side
+contract_side_of (tree contract, tree fndecl)
+{
+  if (TREE_CODE (contract) == ASSERTION_STMT)
+    return ccs_not_applicable;
+  if (!fndecl || !DECL_LANG_SPECIFIC (fndecl))
+    return ccs_definition;
+  return DECL_CONTRACT_WRAPPER (fndecl) ? ccs_wrapper : ccs_definition;
+}
 
 /* Return true if CONTRACT is checked or assumed under the current build
-   configuration. */
+   configuration, for the given SIDE.  */
 
 static bool
-contract_active_p (tree contract)
+contract_active_p (tree contract, contract_check_side side)
 {
   /* D4324: a named control object decides activity by its type's
      compile-time members rather than the translation-unit semantic.  The
@@ -275,17 +291,12 @@ contract_active_p (tree contract)
      optimizer assumption is emitted).  */
   if (tree ctrl = CONTRACT_CONTROL_OBJECT (contract))
     {
-      if (!contract_control_is_ignored (ctrl))
+      if (!contract_control_is_ignored (ctrl, side))
 	return true;
-      return contract_control_assumable (ctrl);
+      return contract_control_assumable (ctrl, side);
     }
   return get_evaluation_semantic (contract) != CES_IGNORE;
 }
-
-/* Which side of a call a contract's runtime check may run on: at the
-   function's own definition, or via a caller-side (client) wrapper.  */
-
-enum contract_check_side { ccs_definition, ccs_wrapper };
 
 /* True if CONTRACT should run its check on SIDE.  A control object naming
    force_client_side_check/force_definition_side_check overrides the
@@ -299,8 +310,10 @@ static bool
 contract_runs_on_side (tree contract, contract_check_side side)
 {
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
-  bool force_client = ctrl && contract_control_forces_client_side (ctrl);
-  bool force_def = ctrl && contract_control_forces_definition_side (ctrl);
+  bool force_client
+    = ctrl && contract_control_forces_client_side (ctrl, side);
+  bool force_def
+    = ctrl && contract_control_forces_definition_side (ctrl, side);
   /* Check the "definition" flag first on both sides, so that when a
      control object (erroneously) sets both, the contract is routed to
      ccs_definition only rather than dropped from both sides entirely --
@@ -325,7 +338,8 @@ has_active_contract_condition (tree fndecl, tree_code c,
   for (; as != NULL_TREE; as = TREE_CHAIN (as))
     {
       tree contract = TREE_VALUE (TREE_VALUE (as));
-      if (TREE_CODE (contract) == c && contract_active_p (contract)
+      if (TREE_CODE (contract) == c
+	  && contract_active_p (contract, side)
 	  && contract_runs_on_side (contract, side))
 	return true;
     }
@@ -351,15 +365,28 @@ has_active_postconditions (tree fndecl, contract_check_side side)
 }
 
 /* Return true if any contract in the CONTRACT list is checked or assumed
-   under the current build configuration.  */
+   under the current build configuration.  A plain "is anything active at
+   all" query has no single correct side, so a PRE/POST contract is
+   checked under *both* real sides (never a false negative that would
+   wrongly skip real per-side processing later); an ASSERTION_STMT has
+   only ccs_not_applicable to check.  */
 
 static bool
 contract_any_active_p (tree fndecl)
 {
   tree as = get_fn_contract_specifiers (fndecl);
   for (; as; as = TREE_CHAIN (as))
-    if (contract_active_p (TREE_VALUE (TREE_VALUE (as))))
-      return true;
+    {
+      tree contract = TREE_VALUE (TREE_VALUE (as));
+      if (TREE_CODE (contract) == ASSERTION_STMT)
+	{
+	  if (contract_active_p (contract, ccs_not_applicable))
+	    return true;
+	}
+      else if (contract_active_p (contract, ccs_definition)
+	       || contract_active_p (contract, ccs_wrapper))
+	return true;
+    }
   return false;
 }
 
@@ -1255,8 +1282,6 @@ copy_contracts_list (tree contracts, tree fndecl,
 		     contract_match_kind remap_kind = cmk_all)
 {
   tree last = NULL_TREE, new_contracts = NULL_TREE;
-  contract_check_side side
-    = DECL_CONTRACT_WRAPPER (fndecl) ? ccs_wrapper : ccs_definition;
   for (; contracts; contracts = TREE_CHAIN (contracts))
     {
       if ((remap_kind == cmk_pre
@@ -1267,6 +1292,8 @@ copy_contracts_list (tree contracts, tree fndecl,
 		  == PRECONDITION_STMT)))
 	continue;
 
+      contract_check_side side
+	= contract_side_of (CONTRACT_STATEMENT (contracts), fndecl);
       if (!contract_runs_on_side (CONTRACT_STATEMENT (contracts), side))
 	continue;
 
@@ -2105,7 +2132,8 @@ rebuild_postconditions (tree fndecl)
 	 (e.g. auto return with post(r: check(r))).  Matching the parser's
 	 setting keeps the result const, exactly as P2900 requires.  */
       bool constify_p = flag_contract_control_objects
-	? contract_control_constifies (CONTRACT_CONTROL_OBJECT (contract))
+	? contract_control_constifies (CONTRACT_CONTROL_OBJECT (contract),
+					contract_side_of (contract, fndecl))
 	: true;
       auto constify_ovr
 	= make_temp_override (contract_condition_constify_p, constify_p);
@@ -2300,14 +2328,12 @@ static void
 remap_and_emit_conditions (tree fn, tree condfn, tree_code code)
 {
   gcc_assert (code == PRECONDITION_STMT || code == POSTCONDITION_STMT);
-  contract_check_side side
-    = DECL_CONTRACT_WRAPPER (fn) ? ccs_wrapper : ccs_definition;
   tree contract_spec = get_fn_contract_specifiers (fn);
   for (; contract_spec; contract_spec = TREE_CHAIN (contract_spec))
     {
       tree contract = CONTRACT_STATEMENT (contract_spec);
       if (TREE_CODE (contract) == code
-	  && contract_runs_on_side (contract, side))
+	  && contract_runs_on_side (contract, contract_side_of (contract, fn)))
 	{
 	  contract = copy_node (contract);
 	  if (CONTRACT_CONDITION (contract) != error_mark_node)
@@ -3226,17 +3252,54 @@ contract_control_naming_type (tree ctrl)
   return ctrl ? TREE_TYPE (ctrl) : NULL_TREE;
 }
 
-/* Constant-evaluate CTRL::NAME(cfg) for the current translation unit's cfg,
-   where NAME is a static member function taking a single
-   std::contracts::evaluation_semantic parameter (e.g. is_ignored, constify,
-   assumable, omit_comment, ...).  Returns 1 if it folds to a compile-time
-   true, 0 if it folds to false, and -1 if CTRL has no such usable
-   compile-time member (no member by that name, not a static function, not
-   callable with one evaluation_semantic argument, or doesn't constant-fold
-   to a bool).  */
+/* Build an assertion_static_info CONSTRUCTOR of type INFO_TYPE for a
+   contract being evaluated for SIDE.  Shared by contract_control_bool_member
+   below (evaluating a control-object query) and the assertion_context
+   builders build_contract_control_call/build_contract_control_constexpr_check
+   (populating assertion_context::static_info()) -- the one place this
+   value's shape is built.  is_virtual/overrides_virtual are always false
+   for now: groundwork for later work on virtual-function semantics, not
+   yet wired to any real detection.  */
+
+static tree
+build_assertion_static_info_value (contract_check_side side, tree info_type)
+{
+  tree f0 = next_aggregate_field (TYPE_FIELDS (info_type));
+  tree f1 = next_aggregate_field (DECL_CHAIN (f0));
+  tree f2 = next_aggregate_field (DECL_CHAIN (f1));
+  tree f3 = next_aggregate_field (DECL_CHAIN (f2));
+
+  /* Matches std::contracts::assertion_check_side's enumerator values
+     exactly (see the library header).  */
+  int side_val;
+  switch (side)
+    {
+    case ccs_not_applicable: side_val = 0; break;
+    case ccs_definition: side_val = 1; break;
+    case ccs_wrapper: side_val = 2; break;
+    default: gcc_unreachable ();
+    }
+
+  return build_constructor_va
+    (info_type, 4,
+     f0, build_int_cst (TREE_TYPE (f0), contract_evaluation_semantic_value ()),
+     f1, build_int_cst (TREE_TYPE (f1), side_val),
+     f2, boolean_false_node,
+     f3, boolean_false_node);
+}
+
+/* Constant-evaluate CTRL::NAME(info) for the current translation unit's
+   evaluation_semantic and the given SIDE, where NAME is a static member
+   function taking a single std::contracts::assertion_static_info parameter
+   (e.g. is_ignored, constify, assumable, omit_comment, ...).  Returns 1 if
+   it folds to a compile-time true, 0 if it folds to false, and -1 if CTRL
+   has no such usable compile-time member (no member by that name, not a
+   static function, not callable with one assertion_static_info argument,
+   or doesn't constant-fold to a bool).  */
 
 static int
-contract_control_bool_member (tree ctrl, const char *name)
+contract_control_bool_member (tree ctrl, const char *name,
+			       contract_check_side side)
 {
   ctrl = contract_control_naming_type (ctrl);
   if (!ctrl || !CLASS_TYPE_P (ctrl))
@@ -3254,14 +3317,13 @@ contract_control_bool_member (tree ctrl, const char *name)
   if (!fn || TREE_CODE (fn) != FUNCTION_DECL || !DECL_STATIC_FUNCTION_P (fn))
     return -1;
 
-  /* The single parameter is std::contracts::evaluation_semantic; build the
-     TU semantic value directly in that type so overload resolution
-     matches.  */
+  /* The single parameter is std::contracts::assertion_static_info; build
+     the argument directly in that type so overload resolution matches.  */
   tree parm_types = TYPE_ARG_TYPES (TREE_TYPE (fn));
   if (!parm_types || parm_types == void_list_node)
     return -1;
-  tree cfg_type = TREE_VALUE (parm_types);
-  tree cfg_arg = build_int_cst (cfg_type, contract_evaluation_semantic_value ());
+  tree info_type = TREE_VALUE (parm_types);
+  tree cfg_arg = build_assertion_static_info_value (side, info_type);
 
   releasing_vec args;
   vec_safe_push (args, cfg_arg);
@@ -3286,9 +3348,9 @@ contract_control_bool_member (tree ctrl, const char *name)
    existing evaluation-semantic path is used instead.  */
 
 static bool
-contract_control_is_ignored (tree ctrl)
+contract_control_is_ignored (tree ctrl, contract_check_side side)
 {
-  return contract_control_bool_member (ctrl, "is_ignored") == 1;
+  return contract_control_bool_member (ctrl, "is_ignored", side) == 1;
 }
 
 /* True if the control type CTRL opts into constification
@@ -3297,9 +3359,9 @@ contract_control_is_ignored (tree ctrl)
    constify.  */
 
 bool
-contract_control_constifies (tree ctrl)
+contract_control_constifies (tree ctrl, contract_check_side side)
 {
-  return contract_control_bool_member (ctrl, "constify") == 1;
+  return contract_control_bool_member (ctrl, "constify", side) == 1;
 }
 
 /* True if the control type CTRL's assumable(cfg) returns true for the TU's
@@ -3307,9 +3369,9 @@ contract_control_constifies (tree ctrl)
    optimizer as an assumption.  */
 
 static bool
-contract_control_assumable (tree ctrl)
+contract_control_assumable (tree ctrl, contract_check_side side)
 {
-  return contract_control_bool_member (ctrl, "assumable") == 1;
+  return contract_control_bool_member (ctrl, "assumable", side) == 1;
 }
 
 /* True if the control type CTRL's omit_comment(cfg) returns true for the
@@ -3319,9 +3381,9 @@ contract_control_assumable (tree ctrl)
    keeps the existing behaviour of always storing it.  */
 
 static bool
-contract_control_omits_comment (tree ctrl)
+contract_control_omits_comment (tree ctrl, contract_check_side side)
 {
-  return contract_control_bool_member (ctrl, "omit_comment") == 1;
+  return contract_control_bool_member (ctrl, "omit_comment", side) == 1;
 }
 
 /* True if the control type CTRL's omit_source_location(cfg) returns true
@@ -3330,9 +3392,9 @@ contract_control_omits_comment (tree ctrl)
    Optional, same default-false behaviour as contract_control_omits_comment.  */
 
 static bool
-contract_control_omits_source_location (tree ctrl)
+contract_control_omits_source_location (tree ctrl, contract_check_side side)
 {
-  return contract_control_bool_member (ctrl, "omit_source_location") == 1;
+  return contract_control_bool_member (ctrl, "omit_source_location", side) == 1;
 }
 
 /* True if the control type CTRL's force_client_side_check(cfg) returns true
@@ -3343,9 +3405,9 @@ contract_control_omits_source_location (tree ctrl)
    default-false behaviour as contract_control_omits_comment.  */
 
 static bool
-contract_control_forces_client_side (tree ctrl)
+contract_control_forces_client_side (tree ctrl, contract_check_side side)
 {
-  return contract_control_bool_member (ctrl, "force_client_side_check") == 1;
+  return contract_control_bool_member (ctrl, "force_client_side_check", side) == 1;
 }
 
 /* True if the control type CTRL's force_definition_side_check(cfg) returns
@@ -3354,9 +3416,9 @@ contract_control_forces_client_side (tree ctrl)
    only at the function's own definition, never via a caller-side wrapper.  */
 
 static bool
-contract_control_forces_definition_side (tree ctrl)
+contract_control_forces_definition_side (tree ctrl, contract_check_side side)
 {
-  return contract_control_bool_member (ctrl, "force_definition_side_check") == 1;
+  return contract_control_bool_member (ctrl, "force_definition_side_check", side) == 1;
 }
 
 /* If the control type CTRL provides the D4324 dispatch operator
@@ -3754,8 +3816,10 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
   location_t loc = EXPR_LOCATION (contract);
   tree t_ctx = TREE_VALUE (FUNCTION_FIRST_USER_PARMTYPE (op));
   tree ctx_type = non_reference (t_ctx);
+  contract_check_side side
+    = contract_side_of (contract, current_function_decl);
 
-  tree comment = contract_control_omits_comment (ctrl)
+  tree comment = contract_control_omits_comment (ctrl, side)
     ? NULL_TREE : CONTRACT_COMMENT (contract);
   if (!comment)
     /* Empty, not null: matches the "static empty string, never a null
@@ -3784,17 +3848,19 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
   tree f3 = next_aggregate_field (DECL_CHAIN (f2));
   tree f4 = next_aggregate_field (DECL_CHAIN (f3));
   tree f5 = next_aggregate_field (DECL_CHAIN (f4));
+  tree f6 = next_aggregate_field (DECL_CHAIN (f5));
   tree ctor = build_constructor_va
-    (ctx_type, 6,
+    (ctx_type, 7,
      f0, comment,
-     f1, (contract_control_omits_source_location (ctrl)
+     f1, (contract_control_omits_source_location (ctrl, side)
 	  ? build_constructor (TREE_TYPE (f1), NULL)
 	  : build_real_source_location_value (loc, TREE_TYPE (f1),
 					       current_function_decl)),
      f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
      f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
-     f4, fold_convert (TREE_TYPE (f4), args_ptr),
-     f5, fold_convert (TREE_TYPE (f5), check_fn));
+     f4, build_assertion_static_info_value (side, TREE_TYPE (f4)),
+     f5, fold_convert (TREE_TYPE (f5), args_ptr),
+     f6, fold_convert (TREE_TYPE (f6), check_fn));
 
   /* Build the assertion_context object on the stack; register it, exactly
      like the control object below.  Unlike a contract_violation object,
@@ -4020,8 +4086,9 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
 {
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   gcc_checking_assert (ctrl);
+  contract_check_side side = contract_side_of (contract, fndecl);
 
-  if (contract_control_is_ignored (ctrl))
+  if (contract_control_is_ignored (ctrl, side))
     return void_node;
 
   tree op = contract_control_operator (ctrl);
@@ -4054,7 +4121,7 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
      build_predicate_constexpr_thunk on why this thunk must never be
      scheduled for real code generation.  */
 
-  tree comment = contract_control_omits_comment (ctrl)
+  tree comment = contract_control_omits_comment (ctrl, side)
     ? NULL_TREE : CONTRACT_COMMENT (contract);
   if (!comment)
     /* Empty, not null: matches the "static empty string, never a null
@@ -4079,17 +4146,19 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
   tree f3 = next_aggregate_field (DECL_CHAIN (f2));
   tree f4 = next_aggregate_field (DECL_CHAIN (f3));
   tree f5 = next_aggregate_field (DECL_CHAIN (f4));
+  tree f6 = next_aggregate_field (DECL_CHAIN (f5));
   tree dummy_args_ptr = build_zero_cst (ptr_type_node); /* Never read.  */
   tree ctor = build_constructor_va
-    (ctx_type, 6,
+    (ctx_type, 7,
      f0, comment,
-     f1, (contract_control_omits_source_location (ctrl)
+     f1, (contract_control_omits_source_location (ctrl, side)
 	  ? build_constructor (TREE_TYPE (f1), NULL)
 	  : build_real_source_location_value (loc, TREE_TYPE (f1), fndecl)),
      f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
      f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
-     f4, fold_convert (TREE_TYPE (f4), dummy_args_ptr),
-     f5, fold_convert (TREE_TYPE (f5), check_fn));
+     f4, build_assertion_static_info_value (side, TREE_TYPE (f4)),
+     f5, fold_convert (TREE_TYPE (f5), dummy_args_ptr),
+     f6, fold_convert (TREE_TYPE (f6), check_fn));
 
   tree ctx_var = build_decl (loc, VAR_DECL, NULL_TREE, ctx_type);
   DECL_ARTIFICIAL (ctx_var) = true;
@@ -4152,14 +4221,16 @@ tree
 build_contract_check (tree contract)
 {
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  contract_check_side side
+    = contract_side_of (contract, current_function_decl);
 
   /* D4324 step 1: a named control object decides, at compile time, whether
      this assertion is ignored for the TU's evaluation_semantic.  An ignored
      assertion emits no runtime check; if the control object's type is also
      assumable the predicate is handed to the optimizer as an assumption
      (evaluated by no one at runtime) instead.  */
-  bool ignored = contract_control_is_ignored (ctrl);
-  bool assumable = ignored && contract_control_assumable (ctrl);
+  bool ignored = contract_control_is_ignored (ctrl, side);
+  bool assumable = ignored && contract_control_assumable (ctrl, side);
 
   /* A named control object must provide operator() unconditionally, even
      when ignored/assumable -- so whether it's required never depends on
@@ -4183,8 +4254,8 @@ build_contract_check (tree contract)
 	 on.  contract_runs_on_side deterministically routes a
 	 (misconfigured) contract with both set to ccs_definition only, so
 	 this fires exactly once for it, here.  */
-      if (contract_control_forces_client_side (ctrl)
-	  && contract_control_forces_definition_side (ctrl))
+      if (contract_control_forces_client_side (ctrl, side)
+	  && contract_control_forces_definition_side (ctrl, side))
 	{
 	  error_at (EXPR_LOCATION (contract),
 		    "control object of type %qT has both "

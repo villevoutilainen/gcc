@@ -11,9 +11,9 @@
 
 bool logged;
 struct review {
-  static constexpr bool is_ignored (std::contracts::evaluation_semantic) { return false; }
-  static constexpr bool constify (std::contracts::evaluation_semantic) { return false; }
-  static constexpr bool assumable (std::contracts::evaluation_semantic) { return false; }
+  static constexpr bool is_ignored (std::contracts::assertion_static_info) { return false; }
+  static constexpr bool constify (std::contracts::assertion_static_info) { return false; }
+  static constexpr bool assumable (std::contracts::assertion_static_info) { return false; }
   void
   operator() (const std::contracts::assertion_context& ctx) const
   { if (ctx.check ()) return; logged = true; }

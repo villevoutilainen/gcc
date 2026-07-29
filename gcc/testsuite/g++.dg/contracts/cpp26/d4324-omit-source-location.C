@@ -24,9 +24,9 @@ bool kept_called = false;
 bool omitted_called = false;
 
 struct keeps_location {
-  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify (sc::evaluation_semantic) { return false; }
-  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
+  static constexpr bool is_ignored (sc::assertion_static_info) { return false; }
+  static constexpr bool constify (sc::assertion_static_info) { return false; }
+  static constexpr bool assumable (sc::assertion_static_info) { return false; }
   void
   operator() (const sc::assertion_context& ctx) const
   {
@@ -38,10 +38,10 @@ struct keeps_location {
 };
 
 struct omits_location {
-  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify (sc::evaluation_semantic) { return false; }
-  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
-  static constexpr bool omit_source_location (sc::evaluation_semantic) { return true; }
+  static constexpr bool is_ignored (sc::assertion_static_info) { return false; }
+  static constexpr bool constify (sc::assertion_static_info) { return false; }
+  static constexpr bool assumable (sc::assertion_static_info) { return false; }
+  static constexpr bool omit_source_location (sc::assertion_static_info) { return true; }
   void
   operator() (const sc::assertion_context& ctx) const
   {

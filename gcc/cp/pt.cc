@@ -12405,7 +12405,9 @@ tsubst_contract (tree decl, tree t, tree args, tsubst_flags_t complain,
   auto constify_ovr
     = make_temp_override (contract_condition_constify_p,
 			  flag_contract_control_objects
-			  ? contract_control_constifies (ctrl) : true);
+			  ? contract_control_constifies
+			      (ctrl, contract_side_of (t, decl))
+			  : true);
 
   /* Instantiate the condition.  If the return type is undeduced, process
      the expression as if inside a template to avoid spurious type errors.  */

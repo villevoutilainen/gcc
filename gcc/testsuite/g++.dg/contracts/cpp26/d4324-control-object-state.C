@@ -21,9 +21,9 @@ namespace sc = std::contracts;
 
 struct labeled {
   const char* label;
-  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify (sc::evaluation_semantic) { return false; }
-  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
+  static constexpr bool is_ignored (sc::assertion_static_info) { return false; }
+  static constexpr bool constify (sc::assertion_static_info) { return false; }
+  static constexpr bool assumable (sc::assertion_static_info) { return false; }
   void
   operator() (const sc::assertion_context& ctx) const
   { if (ctx.check ()) return; seen = label; }		// returns -> continue
@@ -43,9 +43,9 @@ int j (int x) pre<labeled("temp diagnostic")>(x > 0) { return x; }
 
 struct annotated {
   const char* note;
-  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify (sc::evaluation_semantic) { return false; }
-  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
+  static constexpr bool is_ignored (sc::assertion_static_info) { return false; }
+  static constexpr bool constify (sc::assertion_static_info) { return false; }
+  static constexpr bool assumable (sc::assertion_static_info) { return false; }
   void
   operator() (const sc::assertion_context& ctx) const
   {

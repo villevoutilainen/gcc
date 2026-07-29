@@ -162,6 +162,15 @@ enum contract_match_kind
   cmk_post
 };
 
+/* Which side of a call a contract's runtime check is happening on: at the
+   function's own definition, via a caller-side (client) wrapper, or
+   neither (ccs_not_applicable, for a contract_assert, which has no
+   caller/definition distinction at all -- it's a statement inside a
+   function body, not a precondition/postcondition on a boundary callers
+   can see).  Mirrors std::contracts::assertion_check_side exactly (see
+   build_assertion_static_info_value in contracts.cc).  */
+enum contract_check_side { ccs_definition, ccs_wrapper, ccs_not_applicable };
+
 /* contracts.cc */
 
 extern void init_contracts			(void);
@@ -176,7 +185,8 @@ extern tree copy_and_remap_contracts		(tree, tree, contract_match_kind = cmk_all
 						 bool for_wrapper = false);
 extern tree constify_contract_access		(tree);
 extern tree view_as_const			(tree);
-extern bool contract_control_constifies		(tree);
+extern contract_check_side contract_side_of	(tree, tree);
+extern bool contract_control_constifies		(tree, contract_check_side);
 extern tree contract_default_control_object		(location_t);
 
 /* True while parsing/substituting a contract condition that opts into

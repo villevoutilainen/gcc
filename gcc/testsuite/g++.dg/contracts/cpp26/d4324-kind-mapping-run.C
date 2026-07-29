@@ -17,9 +17,9 @@ sc::assertion_kind seen_post = sc::assertion_kind::assert;
 sc::assertion_kind seen_assert = sc::assertion_kind::pre;
 
 struct capture {
-  static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify (sc::evaluation_semantic) { return false; }
-  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
+  static constexpr bool is_ignored (sc::assertion_static_info) { return false; }
+  static constexpr bool constify (sc::assertion_static_info) { return false; }
+  static constexpr bool assumable (sc::assertion_static_info) { return false; }
   void
   operator() (const sc::assertion_context& ctx) const
   {

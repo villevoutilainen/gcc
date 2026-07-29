@@ -33735,7 +33735,8 @@ cp_parser_late_contract_condition (cp_parser *parser, tree fn, tree contract)
      control object's type; otherwise P2900 constification (always on) applies,
      exactly as for early-parsed contracts.  */
   bool constify_p = flag_contract_control_objects
-    ? contract_control_constifies (CONTRACT_CONTROL_OBJECT (contract))
+    ? contract_control_constifies (CONTRACT_CONTROL_OBJECT (contract),
+				    contract_side_of (contract, fn))
     : true;
   auto constify_ovr = make_temp_override (contract_condition_constify_p,
 					  constify_p);
@@ -33972,7 +33973,7 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
      applies.  When constifying, treat the current class object as const in
      the condition too.  */
   bool constify_p = flag_contract_control_objects
-    ? contract_control_constifies (control_object)
+    ? contract_control_constifies (control_object, ccs_not_applicable)
     : true;
   auto constify_ovr = make_temp_override (contract_condition_constify_p,
 					  constify_p);
@@ -34172,7 +34173,7 @@ cp_parser_function_contract_specifier (cp_parser *parser)
 	 applies.  When constifying, treat the current class object as const
 	 in the condition.  */
       bool constify_p = flag_contract_control_objects
-	? contract_control_constifies (control_object)
+	? contract_control_constifies (control_object, ccs_definition)
 	: true;
       auto constify_ovr = make_temp_override (contract_condition_constify_p,
 					      constify_p);
