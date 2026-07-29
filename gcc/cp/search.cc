@@ -2299,6 +2299,7 @@ look_for_overrides_r (tree type, tree fndecl)
 	  /* It's definitely virtual, even if not explicitly set.  */
 	  DECL_VIRTUAL_P (fndecl) = 1;
 	  check_final_overrider (fndecl, fn);
+	  maybe_inherit_virtual_contract (fndecl, fn);
 	}
       return 1;
     }

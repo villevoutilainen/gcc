@@ -261,6 +261,8 @@ static bool contract_control_is_ignored (tree, contract_check_side);
 static bool contract_control_assumable (tree, contract_check_side);
 static bool contract_control_forces_client_side (tree, contract_check_side);
 static bool contract_control_forces_definition_side (tree, contract_check_side);
+static bool contract_is_inherited_p (tree);
+static bool contract_inherited_runs_on_side (tree, contract_check_side);
 
 /* CONTRACT's side, given the FNDECL whose own copy of it is currently
    being processed (the real function, or its caller-side wrapper).
@@ -304,11 +306,20 @@ contract_active_p (tree contract, contract_check_side side)
    for that one contract, regardless of what the command line says.  If a
    control object (erroneously) sets both, this deterministically routes
    the contract to ccs_definition only, so it is still processed exactly
-   once; build_contract_check diagnoses that case.  */
+   once; build_contract_check diagnoses that case.
+
+   A contract synthesized by maybe_inherit_virtual_contract is a special
+   case handled first: its side eligibility was fixed, per side, at
+   inheritance time, and is the sole authority for it -- not blended
+   with the (irrelevant, since it names the same control object as the
+   base's own contract) force-flag/policy logic below.  */
 
 static bool
 contract_runs_on_side (tree contract, contract_check_side side)
 {
+  if (contract_is_inherited_p (contract))
+    return contract_inherited_runs_on_side (contract, side);
+
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   bool force_client
     = ctrl && contract_control_forces_client_side (ctrl, side);
@@ -705,6 +716,16 @@ static GTY(()) hash_map<tree, tree> *decl_post_fn;
    the decl for the function for which the outlined checks are being
    performed.  */
 static GTY(()) hash_map<tree, tree> *orig_from_outlined;
+
+/* Map from a CONTRACT tree (a PRECONDITION_STMT/POSTCONDITION_STMT) to its
+   persistent predicate core function (see build_predicate_core_function_1).
+   Populated eagerly for a virtual function's control-object contracts
+   (update_late_contract), so a later contract-less override can inherit
+   it (maybe_inherit_virtual_contract) by calling straight into code
+   already compiled once, with the base's own access, regardless of
+   whether/when the base function itself is ever genericized; populated
+   lazily otherwise, exactly as before this map existed.  */
+static GTY(()) hash_map<tree, tree> *contract_predicate_core_fn;
 
 /* Makes PRE the precondition function for FNDECL.  */
 
@@ -3445,6 +3466,18 @@ contract_control_forces_definition_side (tree ctrl, contract_check_side side)
   return contract_control_bool_member (ctrl, "force_definition_side_check", side) == 1;
 }
 
+/* True if the control type CTRL's inherited(cfg) returns true for SIDE,
+   meaning a contract-less override of the function this contract is
+   attached to should behave, on that side, as if it had explicitly
+   declared the identical contract (same control object).  See
+   maybe_inherit_virtual_contract.  */
+
+static bool
+contract_control_inherited (tree ctrl, contract_check_side side)
+{
+  return contract_control_bool_member (ctrl, "inherited", side) == 1;
+}
+
 /* If the control type CTRL provides the D4324 dispatch operator
    operator()(const assertion_context&), return its FUNCTION_DECL,
    otherwise NULL_TREE.  assertion_context bundles the comment, source
@@ -3496,27 +3529,33 @@ contract_control_operator (tree ctrl)
   return NULL_TREE;
 }
 
-/* Build a fresh, file-local, static bool FUNCTION_DECL that copies
-   CURRENT_FUNCTION_DECL's real parameter list verbatim (including an
-   implicit `this' for a member function, kept as an ordinary leading
-   pointer parameter -- never a METHOD_TYPE, since its address needs to flow
-   through a type-erased struct/thunk rather than member-call syntax) plus,
-   for a postcondition, a trailing result parameter, and whose body is a
-   single `return <condition>;'.  This "outlines" the predicate itself, so a
+/* Build a fresh, file-local, static bool FUNCTION_DECL that copies ORIG's
+   real parameter list verbatim (including an implicit `this' for a member
+   function, kept as an ordinary leading pointer parameter -- never a
+   METHOD_TYPE, since its address needs to flow through a type-erased
+   struct/thunk rather than member-call syntax) plus, for a postcondition, a
+   trailing result parameter, and whose body is a single
+   `return <condition>;'.  This "outlines" the predicate itself, so a
    control object's operator() can invoke it on demand via a matching thunk
    (build_predicate_thunk_function) instead of the compiler evaluating it
-   unconditionally.
+   unconditionally -- and, for a virtual ORIG, so a later contract-less
+   override can invoke it too (maybe_inherit_virtual_contract), reusing
+   code already compiled once, with ORIG's own access, instead of
+   re-hosting the condition anywhere new.
 
-   Called during genericization of CURRENT_FUNCTION_DECL (from
-   build_contract_check).  Synthesizes and finalizes the new function
-   immediately: push_struct_function/pop_cfun save and restore
-   cfun/current_function_decl around the nested synthesis, so control
-   returns to genericizing CURRENT_FUNCTION_DECL exactly as it was.  */
+   Called either during genericization of ORIG (from build_contract_check,
+   where ORIG is always CURRENT_FUNCTION_DECL), or eagerly, right after
+   CONTRACT's condition finishes parsing (update_late_contract, for a
+   virtual ORIG only) -- both contexts leave ORIG's own parameters and
+   CONTRACT_CONDITION fully resolved, which is all this needs.
+   Synthesizes and finalizes the new function immediately:
+   push_struct_function/pop_cfun save and restore cfun/current_function_decl
+   around the nested synthesis, so control returns to whichever of those two
+   callers invoked this exactly as it was.  */
 
 static tree
-build_predicate_core_function (tree contract)
+build_predicate_core_function_1 (tree contract, tree orig)
 {
-  tree orig = current_function_decl;
   location_t loc = EXPR_LOCATION (contract);
   bool postcondition = POSTCONDITION_P (contract);
 
@@ -3645,6 +3684,350 @@ build_predicate_core_function (tree contract)
   pop_from_top_level ();
 
   return fn;
+}
+
+/* Return CONTRACT's cached predicate core function, or NULL_TREE if none
+   has been built yet.  */
+
+static tree
+get_contract_predicate_core_fn (tree contract)
+{
+  tree *result = hash_map_safe_get (contract_predicate_core_fn, contract);
+  return result ? *result : NULL_TREE;
+}
+
+/* Return CONTRACT's predicate core function for ORIG, building and
+   caching it via build_predicate_core_function_1 if this is the first
+   request for it (whether that first request comes from the normal,
+   genericization-time dispatch path below, or eagerly, from
+   update_late_contract for a virtual ORIG) -- so at most one such
+   function is ever built per contract, callable by anything that later
+   needs it.  */
+
+static tree
+get_or_build_predicate_core_function (tree contract, tree orig)
+{
+  tree fn = get_contract_predicate_core_fn (contract);
+  if (fn)
+    return fn;
+  fn = build_predicate_core_function_1 (contract, orig);
+  hash_map_maybe_create<hm_ggc> (contract_predicate_core_fn);
+  contract_predicate_core_fn->put (contract, fn);
+  return fn;
+}
+
+/* A synthesized (inherited) contract stashes its bookkeeping directly in
+   its own, otherwise-unused CONTRACT_STD_SOURCE_LOC operand, rather than
+   in a side table keyed by the contract tree's identity: this specifier
+   gets duplicated by copy_node an arbitrary number of times (for a
+   caller-side wrapper, for an outlined PRE_FN/POST_FN, ...), each
+   producing a distinct tree object that a side-table lookup would miss,
+   while copy_node itself -- along with the remap walks in
+   copy_contracts_list/copy_and_remap_contracts/remap_and_emit_conditions,
+   which only ever touch CONTRACT_CONDITION and POSTCONDITION_IDENTIFIER
+   -- shallow-copies every other operand, including this one, verbatim.
+
+   The stashed value is
+     (bits . (basefn . base_contract))
+   where BITS (an INTEGER_CST) encodes which side(s) this specifier is
+   eligible on (bit 0/1 client, bit 1/2 definition) -- the answer
+   contract_runs_on_side uses in place of the normal force-flag/policy
+   logic, the authoritative decision for this specifier -- and
+   (BASEFN . BASE_CONTRACT) is what CONTRACT_CONDITION is still pending
+   against, until resolve_inherited_contract fills it in for good (see
+   its own comment for why that's deferred instead of done up front).  */
+
+#define CONTRACT_INHERITED_CLIENT_BIT 1
+#define CONTRACT_INHERITED_DEFINITION_BIT 2
+
+/* True if CONTRACT was synthesized by maybe_inherit_virtual_contract
+   (rather than written explicitly).  */
+
+static bool
+contract_is_inherited_p (tree contract)
+{
+  tree marker = CONTRACT_STD_SOURCE_LOC (contract);
+  return marker && TREE_CODE (marker) == TREE_LIST
+	 && TREE_VALUE (marker) && TREE_CODE (TREE_VALUE (marker)) == TREE_LIST
+	 && TREE_PURPOSE (TREE_VALUE (marker))
+	 && TREE_CODE (TREE_PURPOSE (TREE_VALUE (marker))) == FUNCTION_DECL;
+}
+
+/* True if inherited CONTRACT (contract_is_inherited_p) is eligible on
+   SIDE.  */
+
+static bool
+contract_inherited_runs_on_side (tree contract, contract_check_side side)
+{
+  gcc_checking_assert (contract_is_inherited_p (contract));
+  int bits = TREE_INT_CST_LOW (TREE_PURPOSE (CONTRACT_STD_SOURCE_LOC (contract)));
+  int bit = side == ccs_definition ? CONTRACT_INHERITED_DEFINITION_BIT
+				    : CONTRACT_INHERITED_CLIENT_BIT;
+  return (bits & bit) != 0;
+}
+
+/* Map from an overrider FUNCTION_DECL that has received at least one
+   inherited contract (maybe_inherit_virtual_contract) to the specific
+   base FUNCTION_DECL it inherited from -- so that a second, distinct
+   direct base independently offering an inheritable contract for the
+   same override can be recognized as ambiguous rather than silently
+   merged or overwritten.  */
+static GTY(()) hash_map<tree, tree> *contract_inherited_from;
+
+/* True if OVERRIDER currently has contracts that came only from
+   maybe_inherit_virtual_contract, i.e. it had none of its own to begin
+   with.  Distinguishes that case from OVERRIDER having genuinely
+   user-written contracts, which must never be touched here.  */
+
+static bool
+contract_only_has_inherited_p (tree overrider)
+{
+  return hash_map_safe_get (contract_inherited_from, overrider) != NULL;
+}
+
+/* For each contract on BASEFN whose TREE_CODE is CODE (PRECONDITION_STMT
+   or POSTCONDITION_STMT), require every one of their control objects to
+   agree on inherited(info) for both sides; report the unanimous answer
+   in CLIENT/DEFINITION.  Returns false (diagnosing the disagreement)
+   if they don't agree, in which case CLIENT/DEFINITION are both left
+   false, as if inheritance had been declined outright.  Returns true
+   (with CLIENT/DEFINITION left false) when there are no contracts of
+   this CODE on BASEFN at all -- nothing to inherit, not an error.  */
+
+static bool
+whole_set_inherited_p (tree basefn, tree_code code, tree overrider,
+			bool *client, bool *definition)
+{
+  *client = false;
+  *definition = false;
+  bool seen = false;
+  for (tree spec = get_fn_contract_specifiers (basefn); spec;
+       spec = TREE_CHAIN (spec))
+    {
+      tree contract = CONTRACT_STATEMENT (spec);
+      if (TREE_CODE (contract) != code)
+	continue;
+      tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+      if (!ctrl)
+	continue;
+      bool this_client = contract_control_inherited (ctrl, ccs_wrapper);
+      bool this_definition = contract_control_inherited (ctrl, ccs_definition);
+      if (!seen)
+	{
+	  *client = this_client;
+	  *definition = this_definition;
+	  seen = true;
+	}
+      else if (this_client != *client || this_definition != *definition)
+	{
+	  auto_diagnostic_group d;
+	  error_at (DECL_SOURCE_LOCATION (overrider),
+		    "disagreement between inherited base contracts for %qD",
+		    overrider);
+	  inform (DECL_SOURCE_LOCATION (basefn),
+		  "base contracts declared on %qD disagree on %<inherited%>",
+		  basefn);
+	  *client = false;
+	  *definition = false;
+	  return false;
+	}
+    }
+  return true;
+}
+
+/* True if inherited CONTRACT (contract_is_inherited_p) hasn't had its
+   condition resolved into a real call yet (see the file comment on
+   synthesize_inherited_specifier), and if so, set *BASEFN/*BASE_CONTRACT
+   to what it's pending against.  Once resolve_inherited_contract
+   overwrites CONTRACT_CONDITION, this returns false forever after (the
+   bookkeeping in CONTRACT_STD_SOURCE_LOC is left in place -- harmless,
+   since side-eligibility queries still need it, but the placeholder
+   CONTRACT_CONDITION it was pending against is gone).  */
+
+static bool
+contract_inherited_pending_p (tree contract, tree *basefn, tree *base_contract)
+{
+  if (!contract_is_inherited_p (contract)
+      || CONTRACT_CONDITION (contract) != boolean_true_node)
+    return false;
+  tree pending = TREE_VALUE (CONTRACT_STD_SOURCE_LOC (contract));
+  *basefn = TREE_PURPOSE (pending);
+  *base_contract = TREE_VALUE (pending);
+  return true;
+}
+
+/* Resolve CONTRACT (a pending inherited specifier, per
+   contract_inherited_pending_p, currently being processed as part of
+   USING_FNDECL -- CONTRACT's own real function, its caller-side wrapper,
+   or its outlined PRE_FN/POST_FN) into a real condition: a call to
+   BASE_CONTRACT's own (cached, built with BASEFN's own access) predicate
+   core function, with USING_FNDECL's own `this' (whichever of those
+   three it is -- its first parameter always has the same, real static
+   pointer-to-derived-class type, regardless) adjusted to BASEFN's type,
+   and USING_FNDECL's other parameters (identical types to BASEFN's,
+   guaranteed by override compatibility) passed through unchanged.
+
+   Deferred to here (called from build_contract_check, at genericization
+   time) rather than resolved once when the specifier is first
+   synthesized (maybe_inherit_virtual_contract, called from
+   look_for_overrides_r during the *overrider's* own class completion):
+   at that point the overriding class itself is not yet a complete type
+   (finish_struct_1 is still running), and both lookup_base and
+   build_base_path need a complete type to compute a base subobject
+   offset.  By genericization time -- long after every class involved is
+   complete -- this is safe, and USING_FNDECL is exactly the right
+   function to build the call against no matter which of the three
+   contexts is currently being processed.  */
+
+static void
+resolve_inherited_contract (tree contract, tree using_fndecl,
+			    tree basefn, tree base_contract)
+{
+  tree core_fn = get_or_build_predicate_core_function (base_contract, basefn);
+
+  tree this_parm = DECL_ARGUMENTS (using_fndecl);
+  tree binfo = lookup_base (TREE_TYPE (TREE_TYPE (this_parm)),
+			    DECL_CONTEXT (basefn), ba_any, NULL,
+			    tf_warning_or_error);
+  gcc_assert (binfo && binfo != error_mark_node);
+
+  releasing_vec args;
+  tree adjusted_this = build_base_path (PLUS_EXPR, this_parm, binfo, 1,
+					 tf_warning_or_error);
+  vec_safe_push (args, adjusted_this);
+  /* USING_FNDECL's own DECL_ARGUMENTS never has a trailing result slot
+     (that's specific to CORE_FN's own synthesized signature) -- just its
+     ordinary parameters, all the way to the end.  */
+  for (tree p = DECL_CHAIN (this_parm); p; p = DECL_CHAIN (p))
+    vec_safe_push (args, p);
+  /* The postcondition result placeholder, already built (and, for a
+     copy made for a wrapper or outlined PRE_FN/POST_FN, already remapped
+     onto that copy) as part of synthesizing this specifier.  */
+  if (POSTCONDITION_P (contract))
+    vec_safe_push (args, POSTCONDITION_IDENTIFIER (contract));
+
+  CONTRACT_CONDITION (contract)
+    = build_call_a (core_fn, args->length (), args->address ());
+  /* CONTRACT_STD_SOURCE_LOC is deliberately left as-is: it still holds
+     this specifier's side-eligibility bits (contract_inherited_runs_on_side),
+     which stay relevant forever; only the now-resolved CONTRACT_CONDITION
+     is what made this "pending".  */
+}
+
+/* Synthesize OVERRIDER's own copy of BASE_SPEC (one entry of BASEFN's
+   contract-specifier list, as returned by get_fn_contract_specifiers),
+   recording its side eligibility (CLIENT/DEFINITION) and a (BASEFN,
+   BASE_CONTRACT) marker together in the otherwise-unused
+   CONTRACT_STD_SOURCE_LOC slot (see the comment above
+   contract_is_inherited_p for why there, not a side table).  Mirrors
+   copy_contracts_list's shallow copy-and-rebuild of the specifier-list
+   entry shape.  The condition itself is left as a placeholder (never
+   evaluated as-is) -- resolved into a real call later, by
+   resolve_inherited_contract, once OVERRIDER (or a copy made for its
+   wrapper or outlined PRE_FN/POST_FN) is definitely a complete type.  */
+
+static tree
+synthesize_inherited_specifier (tree base_spec, tree basefn, tree overrider,
+				 bool client, bool definition)
+{
+  tree base_contract = CONTRACT_STATEMENT (base_spec);
+  tree result_parm = NULL_TREE;
+  if (TREE_CODE (base_contract) == POSTCONDITION_STMT)
+    {
+      result_parm = build_lang_decl (PARM_DECL,
+				      get_identifier ("__inherited_r"),
+				      make_auto ());
+      DECL_ARTIFICIAL (result_parm) = true;
+      DECL_SOURCE_LOCATION (result_parm) = DECL_SOURCE_LOCATION (overrider);
+    }
+
+  tree entry = copy_node (base_spec);
+  tree contract = copy_node (base_contract);
+  TREE_VALUE (entry) = build_tree_list (TREE_PURPOSE (TREE_VALUE (base_spec)),
+					contract);
+  TREE_CHAIN (entry) = NULL_TREE;
+
+  int bits = (client ? CONTRACT_INHERITED_CLIENT_BIT : 0)
+	     | (definition ? CONTRACT_INHERITED_DEFINITION_BIT : 0);
+  CONTRACT_CONDITION (contract) = boolean_true_node; /* Placeholder.  */
+  CONTRACT_STD_SOURCE_LOC (contract)
+    = build_tree_list (build_int_cst (integer_type_node, bits),
+		       build_tree_list (basefn, base_contract));
+  if (result_parm)
+    POSTCONDITION_IDENTIFIER (contract) = result_parm;
+
+  return entry;
+}
+
+/* OVERRIDER overrides BASEFN (gcc/cp/search.cc's look_for_overrides_r has
+   just confirmed this and validated signature compatibility via
+   check_final_overrider).  If OVERRIDER has no contracts of its own, and
+   BASEFN's precondition-set and/or postcondition-set (each as a whole --
+   see whole_set_inherited_p) grants inherited() == true for at least one
+   side, synthesize OVERRIDER's own copy of each contract in that set,
+   eligible on exactly the side(s) granted, and attach them to OVERRIDER.
+   A second, distinct direct base independently offering an inheritable
+   contract for the same override is diagnosed as ambiguous.  */
+
+void
+maybe_inherit_virtual_contract (tree overrider, tree basefn)
+{
+  if (!flag_contract_control_objects)
+    return;
+  if (DECL_HAS_CONTRACTS_P (overrider)
+      && !contract_only_has_inherited_p (overrider))
+    return;
+  if (!DECL_HAS_CONTRACTS_P (basefn))
+    return;
+
+  bool pre_client, pre_definition, post_client, post_definition;
+  whole_set_inherited_p (basefn, PRECONDITION_STMT, overrider,
+			  &pre_client, &pre_definition);
+  whole_set_inherited_p (basefn, POSTCONDITION_STMT, overrider,
+			  &post_client, &post_definition);
+
+  if (!pre_client && !pre_definition && !post_client && !post_definition)
+    return;
+
+  tree *prev = hash_map_safe_get (contract_inherited_from, overrider);
+  if (prev && *prev != basefn)
+    {
+      auto_diagnostic_group d;
+      error_at (DECL_SOURCE_LOCATION (overrider),
+		"ambiguous inherited contract for %qD", overrider);
+      inform (DECL_SOURCE_LOCATION (*prev),
+	      "inherited from %qD here", *prev);
+      inform (DECL_SOURCE_LOCATION (basefn),
+	      "and also from %qD here", basefn);
+      return;
+    }
+
+  tree last = NULL_TREE, new_specs = NULL_TREE;
+  for (tree spec = get_fn_contract_specifiers (basefn); spec;
+       spec = TREE_CHAIN (spec))
+    {
+      tree contract = CONTRACT_STATEMENT (spec);
+      bool client, definition;
+      if (TREE_CODE (contract) == PRECONDITION_STMT)
+	client = pre_client, definition = pre_definition;
+      else if (TREE_CODE (contract) == POSTCONDITION_STMT)
+	client = post_client, definition = post_definition;
+      else
+	continue;
+      if (!client && !definition)
+	continue;
+
+      tree entry = synthesize_inherited_specifier (spec, basefn, overrider,
+						    client, definition);
+      chainon (last, entry);
+      last = entry;
+      if (!new_specs)
+	new_specs = entry;
+    }
+
+  hash_map_maybe_create<hm_ggc> (contract_inherited_from);
+  contract_inherited_from->put (overrider, basefn);
+  set_fn_contract_specifiers (overrider, new_specs);
 }
 
 /* Build a fresh, file-local, static `bool NAME (void *)' thunk for CORE_FN
@@ -4244,6 +4627,16 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
 tree
 build_contract_check (tree contract)
 {
+  /* A specifier synthesized by maybe_inherit_virtual_contract has its
+     real condition resolved lazily, here, rather than when first
+     synthesized -- see resolve_inherited_contract's comment for why.  */
+  {
+    tree basefn, base_contract;
+    if (contract_inherited_pending_p (contract, &basefn, &base_contract))
+      resolve_inherited_contract (contract, current_function_decl,
+				  basefn, base_contract);
+  }
+
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   contract_check_side side
     = contract_side_of (contract, current_function_decl);
@@ -4359,7 +4752,8 @@ build_contract_check (tree contract)
 	 the outlined predicate function -- instead of the compiler evaluating
 	 the predicate itself and only calling the control object on
 	 violation.  */
-      tree core_fn = build_predicate_core_function (contract);
+      tree core_fn = get_or_build_predicate_core_function (contract,
+							    current_function_decl);
       tree struct_type = build_predicate_arg_struct_type (core_fn, loc);
       tree thunk_fn = build_predicate_thunk_function (contract, core_fn,
 						      struct_type);
