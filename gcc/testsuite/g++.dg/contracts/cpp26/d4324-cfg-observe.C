@@ -23,8 +23,8 @@ bool pred_enf ();
 struct if_observe {
   static constexpr bool is_ignored (sc::evaluation_semantic c)
   { return c != sc::evaluation_semantic::observe; }
-  static constexpr bool constify = false;
-  static constexpr bool assumable = false;
+  static constexpr bool constify (sc::evaluation_semantic) { return false; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
   void operator() (const sc::assertion_context& ctx) const
   { ctx.check (); }
 };
@@ -32,8 +32,8 @@ struct if_observe {
 struct if_enforce {
   static constexpr bool is_ignored (sc::evaluation_semantic c)
   { return c != sc::evaluation_semantic::enforce; }
-  static constexpr bool constify = false;
-  static constexpr bool assumable = false;
+  static constexpr bool constify (sc::evaluation_semantic) { return false; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
   void operator() (const sc::assertion_context& ctx) const
   { ctx.check (); }
 };

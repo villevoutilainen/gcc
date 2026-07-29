@@ -12,8 +12,8 @@ namespace sc = std::contracts;
 
 struct my_review {
   static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify = false;
-  static constexpr bool assumable = false;
+  static constexpr bool constify (sc::evaluation_semantic) { return false; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
   void
   operator() (const sc::assertion_context& ctx) const
   { if (ctx.check ()) return; logged = true; }		// returns -> continue

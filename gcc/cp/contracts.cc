@@ -3226,57 +3226,14 @@ contract_control_naming_type (tree ctrl)
   return ctrl ? TREE_TYPE (ctrl) : NULL_TREE;
 }
 
-/* If the assertion names a control type CTRL, constant-evaluate
-   CTRL::is_ignored(cfg) for the current translation unit's cfg.  Returns true
-   iff it folds to a compile-time true, meaning the assertion is ignored: no
-   code is emitted and the predicate is never evaluated, even under an enforced
-   translation-unit default.  A bare contract (no control type) or a control
-   type without a usable compile-time is_ignored member yields false, so the
-   existing evaluation-semantic path is used instead.  */
-
-static bool
-contract_control_is_ignored (tree ctrl)
-{
-  ctrl = contract_control_naming_type (ctrl);
-  if (!ctrl || !CLASS_TYPE_P (ctrl))
-    return false;
-  complete_type (ctrl);
-  if (!COMPLETE_TYPE_P (ctrl))
-    return false;
-
-  tree member = lookup_member (ctrl, get_identifier ("is_ignored"),
-			       /*protect=*/1, /*want_type=*/false, tf_none);
-  if (!member || member == error_mark_node || !BASELINK_P (member))
-    return false;
-
-  tree fn = OVL_FIRST (BASELINK_FUNCTIONS (member));
-  if (!fn || TREE_CODE (fn) != FUNCTION_DECL || !DECL_STATIC_FUNCTION_P (fn))
-    return false;
-
-  /* The single parameter is std::contracts::evaluation_semantic; build the
-     TU semantic value directly in that type so overload resolution
-     matches.  */
-  tree parm_types = TYPE_ARG_TYPES (TREE_TYPE (fn));
-  if (!parm_types || parm_types == void_list_node)
-    return false;
-  tree cfg_type = TREE_VALUE (parm_types);
-  tree cfg_arg = build_int_cst (cfg_type, contract_evaluation_semantic_value ());
-
-  releasing_vec args;
-  vec_safe_push (args, cfg_arg);
-  tree obj = build_dummy_object (ctrl);
-  tree call = build_new_method_call (obj, member, &args, NULL_TREE,
-				     LOOKUP_NORMAL, NULL, tf_none);
-  if (!call || call == error_mark_node)
-    return false;
-
-  tree val = maybe_constant_value (call);
-  return (val && TREE_CODE (val) == INTEGER_CST && integer_onep (val));
-}
-
-/* Constant-evaluate the static bool data member NAME on the control type
-   CTRL.  Returns 1 if it folds to true, 0 if it folds to false, and -1 if
-   CTRL has no such usable compile-time member.  */
+/* Constant-evaluate CTRL::NAME(cfg) for the current translation unit's cfg,
+   where NAME is a static member function taking a single
+   std::contracts::evaluation_semantic parameter (e.g. is_ignored, constify,
+   assumable, omit_comment, ...).  Returns 1 if it folds to a compile-time
+   true, 0 if it folds to false, and -1 if CTRL has no such usable
+   compile-time member (no member by that name, not a static function, not
+   callable with one evaluation_semantic argument, or doesn't constant-fold
+   to a bool).  */
 
 static int
 contract_control_bool_member (tree ctrl, const char *name)
@@ -3288,25 +3245,55 @@ contract_control_bool_member (tree ctrl, const char *name)
   if (!COMPLETE_TYPE_P (ctrl))
     return -1;
 
-  tree m = lookup_member (ctrl, get_identifier (name),
-			  /*protect=*/1, /*want_type=*/false, tf_none);
-  if (!m || m == error_mark_node || BASELINK_P (m) || TREE_CODE (m) != VAR_DECL)
+  tree member = lookup_member (ctrl, get_identifier (name),
+			       /*protect=*/1, /*want_type=*/false, tf_none);
+  if (!member || member == error_mark_node || !BASELINK_P (member))
     return -1;
 
-  /* Extract the constexpr initializer of the static data member and fold it;
-     scalar_constant_value returns the decl unchanged if it is not a usable
-     constant.  */
-  tree val = scalar_constant_value (m);
-  if (val == m)
+  tree fn = OVL_FIRST (BASELINK_FUNCTIONS (member));
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL || !DECL_STATIC_FUNCTION_P (fn))
     return -1;
-  val = maybe_constant_value (val);
+
+  /* The single parameter is std::contracts::evaluation_semantic; build the
+     TU semantic value directly in that type so overload resolution
+     matches.  */
+  tree parm_types = TYPE_ARG_TYPES (TREE_TYPE (fn));
+  if (!parm_types || parm_types == void_list_node)
+    return -1;
+  tree cfg_type = TREE_VALUE (parm_types);
+  tree cfg_arg = build_int_cst (cfg_type, contract_evaluation_semantic_value ());
+
+  releasing_vec args;
+  vec_safe_push (args, cfg_arg);
+  tree obj = build_dummy_object (ctrl);
+  tree call = build_new_method_call (obj, member, &args, NULL_TREE,
+				     LOOKUP_NORMAL, NULL, tf_none);
+  if (!call || call == error_mark_node)
+    return -1;
+
+  tree val = maybe_constant_value (call);
   if (!val || TREE_CODE (val) != INTEGER_CST)
     return -1;
   return integer_onep (val) ? 1 : 0;
 }
 
-/* True if the control type CTRL opts into constification (constify == true).
-   A bare contract, or a control type without a true constify member, does not
+/* If the assertion names a control type CTRL, constant-evaluate
+   CTRL::is_ignored(cfg) for the current translation unit's cfg.  Returns true
+   iff it folds to a compile-time true, meaning the assertion is ignored: no
+   code is emitted and the predicate is never evaluated, even under an enforced
+   translation-unit default.  A bare contract (no control type) or a control
+   type without a usable compile-time is_ignored member yields false, so the
+   existing evaluation-semantic path is used instead.  */
+
+static bool
+contract_control_is_ignored (tree ctrl)
+{
+  return contract_control_bool_member (ctrl, "is_ignored") == 1;
+}
+
+/* True if the control type CTRL opts into constification
+   (constify(cfg) == true for the TU's evaluation_semantic).  A bare
+   contract, or a control type without a usable constify getter, does not
    constify.  */
 
 bool
@@ -3315,8 +3302,9 @@ contract_control_constifies (tree ctrl)
   return contract_control_bool_member (ctrl, "constify") == 1;
 }
 
-/* True if the control type CTRL has assumable == true, meaning an ignored
-   predicate may be handed to the optimizer as an assumption.  */
+/* True if the control type CTRL's assumable(cfg) returns true for the TU's
+   evaluation_semantic, meaning an ignored predicate may be handed to the
+   optimizer as an assumption.  */
 
 static bool
 contract_control_assumable (tree ctrl)
@@ -3324,10 +3312,11 @@ contract_control_assumable (tree ctrl)
   return contract_control_bool_member (ctrl, "assumable") == 1;
 }
 
-/* True if the control type CTRL has omit_comment == true, meaning it never
-   needs the assertion's stringified condition text, so the compiler should
-   not embed it at all.  Optional: a control type without this member (or
-   with it false) keeps the existing behaviour of always storing it.  */
+/* True if the control type CTRL's omit_comment(cfg) returns true for the
+   TU's evaluation_semantic, meaning it never needs the assertion's
+   stringified condition text, so the compiler should not embed it at all.
+   Optional: a control type without this getter (or one that returns false)
+   keeps the existing behaviour of always storing it.  */
 
 static bool
 contract_control_omits_comment (tree ctrl)
@@ -3335,10 +3324,10 @@ contract_control_omits_comment (tree ctrl)
   return contract_control_bool_member (ctrl, "omit_comment") == 1;
 }
 
-/* True if the control type CTRL has omit_source_location == true, meaning
-   it never needs the assertion's std::source_location, so the compiler
-   should not build/embed one at all.  Optional, same default-false
-   behaviour as contract_control_omits_comment.  */
+/* True if the control type CTRL's omit_source_location(cfg) returns true
+   for the TU's evaluation_semantic, meaning it never needs the assertion's
+   std::source_location, so the compiler should not build/embed one at all.
+   Optional, same default-false behaviour as contract_control_omits_comment.  */
 
 static bool
 contract_control_omits_source_location (tree ctrl)
@@ -3346,11 +3335,12 @@ contract_control_omits_source_location (tree ctrl)
   return contract_control_bool_member (ctrl, "omit_source_location") == 1;
 }
 
-/* True if the control type CTRL has force_client_side_check == true,
-   meaning any contract naming it is checked only via the caller-side
-   (client) wrapper mechanism, never at the function's own definition,
-   regardless of -fcontracts-client-check/-fcontracts-definition-check.
-   Optional, same default-false behaviour as contract_control_omits_comment.  */
+/* True if the control type CTRL's force_client_side_check(cfg) returns true
+   for the TU's evaluation_semantic, meaning any contract naming it is
+   checked only via the caller-side (client) wrapper mechanism, never at the
+   function's own definition, regardless of
+   -fcontracts-client-check/-fcontracts-definition-check.  Optional, same
+   default-false behaviour as contract_control_omits_comment.  */
 
 static bool
 contract_control_forces_client_side (tree ctrl)
@@ -3358,10 +3348,10 @@ contract_control_forces_client_side (tree ctrl)
   return contract_control_bool_member (ctrl, "force_client_side_check") == 1;
 }
 
-/* True if the control type CTRL has force_definition_side_check == true,
-   the mirror image of contract_control_forces_client_side: any contract
-   naming it is checked only at the function's own definition, never via a
-   caller-side wrapper.  */
+/* True if the control type CTRL's force_definition_side_check(cfg) returns
+   true for the TU's evaluation_semantic, the mirror image of
+   contract_control_forces_client_side: any contract naming it is checked
+   only at the function's own definition, never via a caller-side wrapper.  */
 
 static bool
 contract_control_forces_definition_side (tree ctrl)

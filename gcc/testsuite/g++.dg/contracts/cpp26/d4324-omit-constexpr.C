@@ -15,8 +15,8 @@ namespace sc = std::contracts;
 
 struct probe_keeps_comment {
   static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify = false;
-  static constexpr bool assumable = false;
+  static constexpr bool constify (sc::evaluation_semantic) { return false; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
 
   constexpr void
   operator() (const sc::assertion_context& ctx) const
@@ -29,9 +29,9 @@ struct probe_keeps_comment {
 
 struct probe_omits_comment {
   static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify = false;
-  static constexpr bool assumable = false;
-  static constexpr bool omit_comment = true;
+  static constexpr bool constify (sc::evaluation_semantic) { return false; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
+  static constexpr bool omit_comment (sc::evaluation_semantic) { return true; }
 
   constexpr void
   operator() (const sc::assertion_context& ctx) const
@@ -44,8 +44,8 @@ struct probe_omits_comment {
 
 struct probe_keeps_location {
   static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify = false;
-  static constexpr bool assumable = false;
+  static constexpr bool constify (sc::evaluation_semantic) { return false; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
 
   constexpr void
   operator() (const sc::assertion_context& ctx) const
@@ -58,9 +58,9 @@ struct probe_keeps_location {
 
 struct probe_omits_location {
   static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify = false;
-  static constexpr bool assumable = false;
-  static constexpr bool omit_source_location = true;
+  static constexpr bool constify (sc::evaluation_semantic) { return false; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
+  static constexpr bool omit_source_location (sc::evaluation_semantic) { return true; }
 
   constexpr void
   operator() (const sc::assertion_context& ctx) const

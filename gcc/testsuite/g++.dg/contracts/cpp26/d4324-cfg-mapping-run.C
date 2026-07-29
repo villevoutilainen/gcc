@@ -18,8 +18,8 @@ bool called = false;
 
 struct capture {
   static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify = false;
-  static constexpr bool assumable = false;
+  static constexpr bool constify (sc::evaluation_semantic) { return false; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
   void
   operator() (const sc::assertion_context& ctx) const
   { if (ctx.check ()) return; seen = ctx.semantic (); called = true; }	// returns -> continue

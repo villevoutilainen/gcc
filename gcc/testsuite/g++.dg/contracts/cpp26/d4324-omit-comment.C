@@ -16,8 +16,8 @@ const char* seen_omitted = "unset";
 
 struct keeps_comment {
   static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify  = false;
-  static constexpr bool assumable = false;
+  static constexpr bool constify (sc::evaluation_semantic) { return false; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
   void
   operator() (const sc::assertion_context& ctx) const
   {
@@ -29,9 +29,9 @@ struct keeps_comment {
 
 struct omits_comment {
   static constexpr bool is_ignored (sc::evaluation_semantic) { return false; }
-  static constexpr bool constify  = false;
-  static constexpr bool assumable = false;
-  static constexpr bool omit_comment = true;
+  static constexpr bool constify (sc::evaluation_semantic) { return false; }
+  static constexpr bool assumable (sc::evaluation_semantic) { return false; }
+  static constexpr bool omit_comment (sc::evaluation_semantic) { return true; }
   void
   operator() (const sc::assertion_context& ctx) const
   {
