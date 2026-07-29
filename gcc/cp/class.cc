@@ -3260,7 +3260,14 @@ check_for_override (tree decl, tree ctype)
       if (DECL_DESTRUCTOR_P (decl))
 	TYPE_HAS_NONTRIVIAL_DESTRUCTOR (ctype) = true;
 
-      if (DECL_HAS_CONTRACTS_P (decl))
+      /* [dcl.contract.func]p6 bans contracts on virtual functions
+	 outright, but that's relaxed for P4324 control-object
+	 contracts: with -fcontract-control-objects on, every contract
+	 already has a control object (a bare pre/post implicitly
+	 resolves to std::contracts::default_v), so checking this one
+	 TU-wide flag is exactly equivalent to "does this contract have
+	 a control object" and needs no per-contract inspection.  */
+      if (DECL_HAS_CONTRACTS_P (decl) && !flag_contract_control_objects)
 	error_at (DECL_SOURCE_LOCATION (decl),
 		  "contracts cannot be added to virtual functions");
     }

@@ -11047,6 +11047,16 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
       && DECL_BUILT_IN_CLASS (fn) == BUILT_IN_NORMAL)
     maybe_warn_class_memaccess (input_location, fn, args);
 
+  /* Remember the statically-resolved FUNCTION_DECL before a virtual
+     call below replaces FN with a vtable-load expression: get_callee_fndecl
+     can't recover a FUNCTION_DECL from that (there's no static callee to
+     find, only a runtime-computed one), so build_cxx_call's own recovery
+     of it would silently see none at all for a virtual call.  Passed
+     through as ORIG_FNDECL so things that need the real, named function
+     regardless of how the call is ultimately dispatched (e.g.
+     maybe_contract_wrap_call) still have it.  */
+  tree orig_fn = fn;
+
   if (DECL_VINDEX (fn) && (flags & LOOKUP_NONVIRTUAL) == 0)
     {
       tree t;
@@ -11080,7 +11090,8 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
       ADDR_EXPR_DENOTES_CALL_P (fn) = true;
     }
 
-  tree call = build_cxx_call (fn, nargs, argarray, complain|decltype_flag);
+  tree call = build_cxx_call (fn, nargs, argarray, complain|decltype_flag,
+			       orig_fn);
   if (call == error_mark_node)
     return call;
   if (cand->flags & LOOKUP_LIST_INIT_CTOR)
@@ -11595,8 +11606,16 @@ build_cxx_call (tree fn, int nargs, tree *argarray,
 	}
     }
 
+  /* Use ORIG_FNDECL, not the just-recomputed FNDECL, for the contract
+     wrap decision: for a virtual call, FN's callee is by now a
+     vtable-load expression with no static FUNCTION_DECL for
+     get_callee_fndecl to find (FNDECL is NULL_TREE here), while
+     ORIG_FNDECL still names the statically-chosen function whose
+     contracts the caller-side wrapper needs to check (see
+     build_over_call).  For every other, non-virtual call this is a
+     no-op: ORIG_FNDECL already defaults to FNDECL above.  */
   if (VOID_TYPE_P (TREE_TYPE (fn)))
-    return maybe_contract_wrap_call (fndecl, fn);
+    return maybe_contract_wrap_call (orig_fndecl, fn);
 
   /* 5.2.2/11: If a function call is a prvalue of object type: if the
      function call is either the operand of a decltype-specifier or the
@@ -11608,7 +11627,7 @@ build_cxx_call (tree fn, int nargs, tree *argarray,
       fn = require_complete_type (fn, complain);
       if (fn == error_mark_node)
 	return error_mark_node;
-      fn = maybe_contract_wrap_call (fndecl, fn);
+      fn = maybe_contract_wrap_call (orig_fndecl, fn);
 
       if (MAYBE_CLASS_TYPE_P (TREE_TYPE (fn)))
 	{
@@ -11617,7 +11636,7 @@ build_cxx_call (tree fn, int nargs, tree *argarray,
 	}
     }
   else
-    fn = maybe_contract_wrap_call (fndecl, fn);
+    fn = maybe_contract_wrap_call (orig_fndecl, fn);
   return convert_from_reference (fn);
 }
 

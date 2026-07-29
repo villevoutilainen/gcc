@@ -1960,11 +1960,35 @@ define_contract_wrapper_func (const tree& fndecl, const tree& wrapdecl, void*)
 
   vec<tree, va_gc> * args = build_arg_list (wrapdecl);
 
-  /* We do not support contracts on virtual functions yet.  */
-  gcc_checking_assert (!DECL_IOBJ_MEMBER_FUNCTION_P (fndecl)
-		       || !DECL_VIRTUAL_P (fndecl));
+  /* For a virtual FNDECL, the wrapper must still call through the
+     vtable: the caller-side check above runs against FNDECL, the
+     statically-chosen function, but the call itself needs to reach
+     whatever the final overrider actually is, exactly like any
+     ordinary virtual call would.  A plain call to FNDECL here would
+     silently always run FNDECL's own body, never dispatching to a more
+     derived override -- breaking polymorphism for every wrapped call.
+     Build the same base-adjusted vtable load build_over_call uses
+     (call.cc), rather than a direct call, when that matters.  */
+  tree call_target = fndecl;
+  if (DECL_IOBJ_MEMBER_FUNCTION_P (fndecl) && DECL_VIRTUAL_P (fndecl))
+    {
+      gcc_checking_assert (TREE_CODE (DECL_VINDEX (fndecl)) == INTEGER_CST);
+      tree this_parm = (*args)[0];
+      tree binfo = lookup_base (TREE_TYPE (TREE_TYPE (this_parm)),
+				 DECL_CONTEXT (fndecl), ba_any, NULL,
+				 tf_warning_or_error);
+      gcc_assert (binfo && binfo != error_mark_node);
+      this_parm = build_base_path (PLUS_EXPR, this_parm, binfo, 1,
+				    tf_warning_or_error);
+      if (TREE_SIDE_EFFECTS (this_parm))
+	this_parm = save_expr (this_parm);
+      (*args)[0] = this_parm;
+      call_target = build_vfn_ref (this_parm, DECL_VINDEX (fndecl));
+      TREE_TYPE (call_target) = build_pointer_type (TREE_TYPE (fndecl));
+    }
 
-  tree call = build_thunk_like_call (fndecl, args->length (), args->address ());
+  tree call = build_thunk_like_call (call_target, args->length (),
+				      args->address ());
 
   finish_return_stmt (call);
 
