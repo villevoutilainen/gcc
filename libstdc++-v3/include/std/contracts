@@ -438,6 +438,102 @@ namespace contracts
 
   inline constexpr mandatory mandatory_v{};
 
+  // Backs libstdc++'s own internal precondition checks (__glibcxx_assert,
+  // active under _GLIBCXX_ASSERTIONS): unlike every other control type
+  // above, is_ignored is unconditionally false, not just false-under-
+  // ignore-like mandatory -- there is no "observe" or "ignore" behavior
+  // for this type at all, ever, regardless of -fcontract-evaluation-
+  // semantic=. What differs is only *how* it reports/terminates on
+  // failure, controlled by two separate, purely compile-time macros:
+  //
+  //   _GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER, together with
+  //   _GLIBCXX_ASSERTIONS itself, routes through the same replaceable
+  //   ::handle_contract_violation as any other contract (always reporting
+  //   evaluation_semantic::enforce, regardless of the TU's own semantic --
+  //   this type has no other semantic to report). A handler that throws
+  //   must never let that exception escape the assertion itself: it's
+  //   caught and discarded, and the assertion terminates anyway -- a
+  //   handler throwing is a bug in the replaced handler, not something
+  //   recoverable here, and is treated exactly like an ordinary failure.
+  //
+  //   Otherwise (plain _GLIBCXX_ASSERTIONS, or neither macro -- these two
+  //   macros decide only how this type fails, never whether it's active),
+  //   this reconstructs __glibcxx_assert_fail's own existing diagnostic
+  //   from the assertion_context instead of forwarding __FILE__/__LINE__/
+  //   __PRETTY_FUNCTION__ directly: those, written literally in this
+  //   operator()'s own body, would name this header's own location, not
+  //   the real call site's -- ctx.location()/ctx.comment() are what the
+  //   compiler actually populates per call site. A per-instance message
+  //   (see below), when present, is reported in place of (not alongside)
+  //   the predicate's own auto-derived source text, so the existing,
+  //   unmodified 4-argument std::__glibcxx_assert_fail can be reused
+  //   as-is -- no new overload, no new exported symbol.
+  //
+  // Like every other control type here, this is a plain aggregate (no
+  // user-declared constructor): std::contracts::noexcept_assert_v below
+  // is the shared, message-less instance for the ordinary case, and
+  // noexcept_assert("some message") -- a fresh temporary, one per
+  // distinct message, aggregate-paren-initialized exactly like
+  // d4324-control-object-state.C's labeled("temp diagnostic") -- lets one
+  // call site splice its own diagnostic text in place of the predicate's
+  // own stringified condition.
+  struct noexcept_assert {
+    const char* message = nullptr;
+
+    static constexpr bool
+    is_ignored(assertion_static_info) noexcept { return false; }
+
+    static constexpr bool
+    constify(assertion_static_info) noexcept { return false; }
+    static constexpr bool
+    assumable(assertion_static_info) noexcept { return false; }
+
+    void
+    operator()(const assertion_context& __ctx) const noexcept
+    {
+      if (__ctx.check())
+	return;
+
+      const char* __text = message ? message : __ctx.comment();
+
+#if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
+      if consteval
+	{
+	  __d4324_consteval_diagnose_violation (true, __text, __ctx.location());
+	}
+      else
+	{
+	  try
+	    {
+	      invoke_violation_handler
+		(__ctx.kind(), evaluation_semantic::enforce,
+		 detection_mode::predicate_false, __text, __ctx.location());
+	    }
+	  catch (...) { }
+	  __d4324_terminate_wrapper();
+	}
+#else
+      if consteval
+	{
+	  __d4324_consteval_diagnose_violation (true, __text, __ctx.location());
+	}
+      else
+	{
+#ifdef _GLIBCXX_VERBOSE_ASSERT
+	  std::__glibcxx_assert_fail (__ctx.location().file_name(),
+				       __ctx.location().line(),
+				       __ctx.location().function_name(),
+				       __text);
+#else
+	  __builtin_abort();
+#endif
+	}
+#endif
+    }
+  };
+
+  inline constexpr noexcept_assert noexcept_assert_v{};
+
   struct ignore {
     static constexpr bool
     is_ignored(assertion_static_info) noexcept
