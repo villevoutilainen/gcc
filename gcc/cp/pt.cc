@@ -12395,11 +12395,28 @@ tsubst_contract (tree decl, tree t, tree args, tsubst_flags_t complain,
     }
 
   /* D4324: substitute the control object and gate constification on its
-     type's constify member while the condition is instantiated.  */
+     type's constify member while the condition is instantiated.  Always
+     tsubst when present, even if !uses_template_parms: a control object
+     named as a temporary (e.g. noexcept_assert("message")) parsed inside
+     a template is left as an unresolved functional-cast-shaped node
+     regardless of whether it actually mentions a template parameter --
+     tsubst (with the same, current ARGS either way) is what turns it
+     into a real, evaluatable construction; skipping that for a
+     non-dependent temporary previously left the original, still-raw
+     node in place, which the constexpr evaluator doesn't know how to
+     handle at all (an ICE, not merely wrong results) -- a plain named
+     control object like noexcept_assert_v is already fully resolved at
+     parse time regardless, so re-substituting it here is a no-op.  */
   tree ctrl = CONTRACT_CONTROL_OBJECT (t);
-  if (ctrl && uses_template_parms (ctrl))
+  if (ctrl)
     {
-      ctrl = tsubst (ctrl, args, complain, in_decl);
+      /* CTRL is a general expression (e.g. a temporary construction
+	 like noexcept_assert("message")), not just a type or simple
+	 decl reference -- tsubst_expr, not plain tsubst, is what knows
+	 how to finish resolving an expression-shaped node left over
+	 from parsing inside a template, exactly as CONTRACT_CONDITION's
+	 own substitution just below already does.  */
+      ctrl = tsubst_expr (ctrl, args, complain, in_decl);
       CONTRACT_CONTROL_OBJECT (r) = ctrl;
     }
   auto constify_ovr
