@@ -3362,12 +3362,25 @@ contract_control_bool_member (tree ctrl, const char *name,
   if (!fn || TREE_CODE (fn) != FUNCTION_DECL || !DECL_STATIC_FUNCTION_P (fn))
     return -1;
 
-  /* The single parameter is std::contracts::assertion_static_info; build
-     the argument directly in that type so overload resolution matches.  */
+  /* The single parameter must be std::contracts::assertion_static_info
+     (by value or by reference); build the argument directly in that
+     type so overload resolution matches.  A member by this name with
+     some other parameter type (e.g. a plain evaluation_semantic, or
+     anything else a user might mistakenly write) is exactly the "not
+     callable with one assertion_static_info argument" case this
+     function's own contract already promises to handle by returning
+     -1 -- build_assertion_static_info_value below assumes its type
+     argument is assertion_static_info's own class type unconditionally
+     (TYPE_FIELDS on anything else, e.g. an enum, is an ICE, not a
+     graceful failure), so that assumption must be checked here first.  */
   tree parm_types = TYPE_ARG_TYPES (TREE_TYPE (fn));
   if (!parm_types || parm_types == void_list_node)
     return -1;
-  tree info_type = TREE_VALUE (parm_types);
+  tree info_type = non_reference (TREE_VALUE (parm_types));
+  tree real_info_type
+    = lookup_std_contracts_type (get_identifier ("assertion_static_info"));
+  if (!same_type_ignoring_top_level_qualifiers_p (info_type, real_info_type))
+    return -1;
   tree cfg_arg = build_assertion_static_info_value (side, info_type);
 
   releasing_vec args;
