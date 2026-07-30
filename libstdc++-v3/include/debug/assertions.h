@@ -33,11 +33,25 @@
 
 #ifndef _GLIBCXX_DEBUG
 // Verify that [_First, _Last) forms a non-empty iterator range.
+//
+// Both of these conditions mix a parameter substituted from the real
+// call site with literal text written directly in this macro's own
+// body -- unlike a condition entirely from one origin (however many
+// macro layers it passes through), that defeats __glibcxx_assert's own
+// "recover the real source text" step under contracts (see
+// __glibcxx_assert_msg's own comment in bits/c++config), so an
+// explicit message is supplied here instead, built the same
+// macro-expansion-independent way the pre-contracts diagnostic always
+// was: # stringification of just the real, call-site-supplied tokens,
+// string-literal-concatenated with this macro's own literal text.
 # define __glibcxx_requires_non_empty_range(_First,_Last)	\
-  __glibcxx_assert(_First != _Last)
+  __glibcxx_assert_msg(_First != _Last, #_First " != " #_Last)
 # define __glibcxx_requires_subscript(_N)	\
-  __glibcxx_assert(_N < this->size())
-// Verify that the container is nonempty
+  __glibcxx_assert_msg(_N < this->size(), #_N " < this->size()")
+// Verify that the container is nonempty. Unlike the two above, this
+// condition is entirely this macro's own literal text -- no call-site
+// tokens involved at all -- so the usual __glibcxx_assert already
+// reports it correctly with no message needed.
 # define __glibcxx_requires_nonempty()		\
   __glibcxx_assert(!this->empty())
 #else // Use the more verbose Debug Mode checks.

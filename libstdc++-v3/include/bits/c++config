@@ -669,6 +669,24 @@ namespace std
 # define _GLIBCXX_USE_CONTRACT_ASSERT 1
 # define __glibcxx_assert(cond) \
     contract_assert<std::contracts::noexcept_assert_v>(cond)
+// A caller with its own message to report on failure, instead of
+// noexcept_assert_v's own default of falling back to the predicate's
+// auto-derived condition text: mainly for a caller whose own condition
+// splices tokens from more than one macro expansion (e.g.
+// debug/assertions.h's __glibcxx_requires_subscript, whose condition
+// mixes a parameter substituted from the real call site with literal
+// text written in its own macro body) -- CONTRACT_COMMENT's own
+// "recover the real source text" step (get_source_text_between) needs
+// a single, contiguous range in one file, which such a condition simply
+// doesn't have, falling back to a pretty-printed, fully-qualified dump
+// of the resolved tree instead. Message-carrying callers sidestep that
+// by supplying MSG explicitly, typically itself built the same
+// macro-expansion-independent way the pre-contracts __glibcxx_assert_fail
+// used to (# stringification of just the real, call-site-supplied
+// tokens, string-literal-concatenated with whatever literal text the
+// condition also needs).
+# define __glibcxx_assert_msg(cond, msg) \
+    contract_assert<std::contracts::noexcept_assert(msg)>(cond)
 #elif defined(_GLIBCXX_ASSERTIONS)
 // When _GLIBCXX_ASSERTIONS is defined we enable runtime assertion checks.
 // These checks will also be done during constant evaluation.
@@ -677,6 +695,11 @@ namespace std
     if (__builtin_expect(!bool(cond), false))				\
       _GLIBCXX_ASSERT_FAIL(cond);					\
   } while (false)
+// No contract control objects here: MSG has nowhere to go, so it's
+// simply dropped -- _GLIBCXX_ASSERT_FAIL's own #_Condition stringifies
+// the raw condition tokens directly, which already reproduces a
+// reasonable diagnostic regardless of macro-expansion origin.
+# define __glibcxx_assert_msg(cond, msg) __glibcxx_assert(cond)
 #elif _GLIBCXX_HAVE_IS_CONSTANT_EVALUATED
 // _GLIBCXX_ASSERTIONS is not defined, so assertions checks are only enabled
 // during constant evaluation. This ensures we diagnose undefined behaviour
@@ -693,10 +716,12 @@ namespace std
     if (std::__is_constant_evaluated() && !bool(cond))			\
       std::__glibcxx_assert_fail();					\
   } while (false)
+# define __glibcxx_assert_msg(cond, msg) __glibcxx_assert(cond)
 #else
 // _GLIBCXX_ASSERTIONS is not defined and __is_constant_evaluated() doesn't
 // work so don't check any assertions.
 # define __glibcxx_assert(cond)
+# define __glibcxx_assert_msg(cond, msg)
 #endif
 
 // Macro indicating that TSAN is in use.
