@@ -3566,6 +3566,80 @@ contract_control_operator (tree ctrl)
    around the nested synthesis, so control returns to whichever of those two
    callers invoked this exactly as it was.  */
 
+/* walk_tree callback data for find_condition_captures.  */
+
+struct find_condition_captures_data
+{
+  hash_set<tree> *exclude;
+  vec<tree, va_gc> *captured;
+};
+
+static tree
+find_condition_captures_r (tree *tp, int *, void *data_)
+{
+  auto *data = (find_condition_captures_data *) data_;
+  tree t = *tp;
+  /* DECL_ARTIFICIAL excludes compiler-synthesized temporaries -- most
+     importantly a TARGET_EXPR's own slot (plain walk_tree, with no
+     custom callback intercepting TARGET_EXPR specially, still walks
+     into its operand 0, the slot, as an ordinary VAR_DECL leaf): that's
+     already correctly given a fresh copy by copy_tree_body_r's own
+     existing SAVE_EXPR/TARGET_EXPR handling (remap_save_expr), which
+     depends on it being a plain automatic variable of ORIG, not an
+     extra captured parameter of the outlined function -- capturing it
+     here too would rebind the slot to a passed-in parameter instead of
+     the outlined function's own local temporary storage, corrupting
+     the target-expr's own semantics entirely.  A genuine, user-written
+     local variable is never artificial.  */
+  if ((VAR_P (t) || TREE_CODE (t) == PARM_DECL)
+      && !DECL_ARTIFICIAL (t)
+      && !data->exclude->contains (t))
+    {
+      bool already = false;
+      for (unsigned i = 0; i < vec_safe_length (data->captured); ++i)
+	if ((*data->captured)[i] == t)
+	  {
+	    already = true;
+	    break;
+	  }
+      if (!already)
+	vec_safe_push (data->captured, t);
+    }
+  return NULL_TREE;
+}
+
+/* Collect, in walk_tree's own stable traversal order, every VAR_DECL or
+   PARM_DECL that CONDITION references other than one of ORIG's own
+   parameters, ORIG's DECL_RESULT, or (if POSTCOND_ID) the postcondition
+   placeholder -- all of which build_predicate_core_function_1 already
+   maps some other way.  A pre/post condition can only ever reference its
+   own parameters/result, so this is always empty for one of those; only
+   an ASSERTION_STMT's condition -- an ordinary in-body statement, free to
+   reference any local variable in scope at that point, exactly like a
+   plain assert() would -- can populate it.  Called twice for the same
+   CONTRACT (once building the predicate core function's own extra
+   parameters, once building the caller-side argument struct that feeds
+   them): both calls walk the same, unmodified CONTRACT_CONDITION tree, so
+   both see the same list in the same order, safe to zip positionally.  */
+
+static vec<tree, va_gc> *
+find_condition_captures (tree condition, tree orig, tree postcond_id)
+{
+  hash_set<tree> exclude;
+  for (tree p = DECL_ARGUMENTS (orig); p; p = DECL_CHAIN (p))
+    exclude.add (p);
+  if (tree result = DECL_RESULT (orig))
+    exclude.add (result);
+  if (postcond_id)
+    exclude.add (postcond_id);
+
+  find_condition_captures_data data;
+  data.exclude = &exclude;
+  data.captured = NULL;
+  walk_tree (&condition, find_condition_captures_r, &data, NULL);
+  return data.captured;
+}
+
 static tree
 build_predicate_core_function_1 (tree contract, tree orig)
 {
@@ -3575,14 +3649,25 @@ build_predicate_core_function_1 (tree contract, tree orig)
   tree result_type = postcondition ? TREE_TYPE (TREE_TYPE (orig)) : NULL_TREE;
   bool has_result = postcondition && result_type
 		    && !VOID_TYPE_P (result_type);
+  tree postcond_id = postcondition ? POSTCONDITION_IDENTIFIER (contract)
+				    : NULL_TREE;
+  vec<tree, va_gc> *captures
+    = find_condition_captures (CONTRACT_CONDITION (contract), orig,
+				postcond_id);
 
-  /* Parameter TYPE list: a copy of ORIG's, plus a trailing result type for a
-     postcondition with a non-void return.  */
+  /* Parameter TYPE list: a copy of ORIG's, plus one entry per captured
+     local (see find_condition_captures), plus a trailing result type for
+     a postcondition with a non-void return.  */
   tree arg_types = NULL_TREE;
   tree *last_type = &arg_types;
   for (tree p = DECL_ARGUMENTS (orig); p; p = DECL_CHAIN (p))
     {
       *last_type = build_tree_list (NULL_TREE, TREE_TYPE (p));
+      last_type = &TREE_CHAIN (*last_type);
+    }
+  for (unsigned i = 0; i < vec_safe_length (captures); ++i)
+    {
+      *last_type = build_tree_list (NULL_TREE, TREE_TYPE ((*captures)[i]));
       last_type = &TREE_CHAIN (*last_type);
     }
   if (has_result)
@@ -3599,7 +3684,8 @@ build_predicate_core_function_1 (tree contract, tree orig)
   DECL_SOURCE_LOCATION (fn) = loc;
   SET_DECL_ASSEMBLER_NAME (fn, name);
 
-  /* Copy ORIG's parameters verbatim, plus a trailing result parameter.  */
+  /* Copy ORIG's parameters verbatim, one fresh parameter per captured
+     local, plus a trailing result parameter.  */
   tree new_args = NULL_TREE;
   tree *last_arg = &new_args;
   for (tree p = DECL_ARGUMENTS (orig); p; p = DECL_CHAIN (p))
@@ -3610,6 +3696,25 @@ build_predicate_core_function_1 (tree contract, tree orig)
       suppress_warning (np);
       *last_arg = np;
       last_arg = &DECL_CHAIN (np);
+    }
+  tree new_captures = NULL_TREE;
+  tree *last_capture = &new_captures;
+  for (unsigned i = 0; i < vec_safe_length (captures); ++i)
+    {
+      /* A captured local may be a VAR_DECL (an ordinary local variable)
+	 or a PARM_DECL (e.g. a lambda's own parameter, if the condition
+	 references one) -- either way, DECL_ARGUMENTS (fn) must be a
+	 PARM_DECL chain, so build a fresh one of the same type rather
+	 than copy_decl, which would preserve a VAR_DECL's own tree code.  */
+      tree cp = (*captures)[i];
+      tree np = build_lang_decl (PARM_DECL, DECL_NAME (cp), TREE_TYPE (cp));
+      DECL_CONTEXT (np) = fn;
+      DECL_ARTIFICIAL (np) = true;
+      suppress_warning (np);
+      *last_arg = np;
+      last_arg = &DECL_CHAIN (np);
+      *last_capture = np;
+      last_capture = &DECL_CHAIN (np);
     }
   tree result_parm = NULL_TREE;
   if (has_result)
@@ -3634,9 +3739,10 @@ build_predicate_core_function_1 (tree contract, tree orig)
   suppress_warning (fn);
 
   /* Remap CONTRACT's condition from ORIG's real decls (parameters, and for a
-     postcondition, DECL_RESULT) onto FN's fresh copies.  Work on a local
-     copy of the tree pointer, not CONTRACT_CONDITION's own slot, so the
-     original (already fully processed for ORIG) is left untouched.  */
+     postcondition, DECL_RESULT), plus each captured local, onto FN's fresh
+     copies.  Work on a local copy of the tree pointer, not
+     CONTRACT_CONDITION's own slot, so the original (already fully
+     processed for ORIG) is left untouched.  */
   copy_body_data id;
   hash_map<tree, tree> decl_map;
   memset (&id, 0, sizeof (id));
@@ -3657,6 +3763,11 @@ build_predicate_core_function_1 (tree contract, tree orig)
   tree dp = new_args;
   for (tree sp = DECL_ARGUMENTS (orig); sp; sp = DECL_CHAIN (sp), dp = DECL_CHAIN (dp))
     insert_decl_map (&id, sp, dp);
+  {
+    tree ncp = new_captures;
+    for (unsigned i = 0; i < vec_safe_length (captures); ++i, ncp = DECL_CHAIN (ncp))
+      insert_decl_map (&id, (*captures)[i], ncp);
+  }
   if (has_result)
     {
       insert_decl_map (&id, DECL_RESULT (orig), result_parm);
@@ -3669,9 +3780,8 @@ build_predicate_core_function_1 (tree contract, tree orig)
 	 body genericization order between unrelated functions in a TU
 	 is not otherwise something this depends on.  Map the
 	 placeholder too, so either form works.  */
-      if (tree placeholder = POSTCONDITION_IDENTIFIER (contract))
-	if (placeholder != DECL_RESULT (orig))
-	  insert_decl_map (&id, placeholder, result_parm);
+      if (postcond_id && postcond_id != DECL_RESULT (orig))
+	insert_decl_map (&id, postcond_id, result_parm);
     }
 
   tree condition = CONTRACT_CONDITION (contract);
@@ -4461,28 +4571,35 @@ build_predicate_arg_struct_var (tree contract, tree struct_type, tree cc_bind,
   BIND_EXPR_VARS (cc_bind) = struct_var;
   add_decl_expr (struct_var);
 
-  tree real_val = DECL_ARGUMENTS (current_function_decl);
   tree field = TYPE_FIELDS (struct_type);
-  for (; real_val && field;
-       real_val = DECL_CHAIN (real_val), field = DECL_CHAIN (field))
+
+  auto fill_one = [&] (tree real_val)
     {
       tree field_ref = build3 (COMPONENT_REF, TREE_TYPE (field), struct_var,
-			       field, NULL_TREE);
+				field, NULL_TREE);
       tree addr = fold_convert (TREE_TYPE (field),
 				build_fold_addr_expr (real_val));
       finish_expr_stmt (cp_build_init_expr (field_ref, addr));
-    }
+      field = DECL_CHAIN (field);
+    };
+
+  for (tree real_val = DECL_ARGUMENTS (current_function_decl);
+       real_val && field; real_val = DECL_CHAIN (real_val))
+    fill_one (real_val);
+
+  tree postcond_id = POSTCONDITION_P (contract)
+		      ? POSTCONDITION_IDENTIFIER (contract) : NULL_TREE;
+  vec<tree, va_gc> *captures
+    = find_condition_captures (CONTRACT_CONDITION (contract),
+				current_function_decl, postcond_id);
+  for (unsigned i = 0; i < vec_safe_length (captures) && field; ++i)
+    fill_one ((*captures)[i]);
+
   if (field)
     {
       /* The trailing field, for a postcondition's result.  */
       gcc_checking_assert (POSTCONDITION_P (contract));
-      tree field_ref = build3 (COMPONENT_REF, TREE_TYPE (field), struct_var,
-			       field, NULL_TREE);
-      tree addr = fold_convert (TREE_TYPE (field),
-				build_fold_addr_expr
-				  (DECL_RESULT (current_function_decl)));
-      finish_expr_stmt (cp_build_init_expr (field_ref, addr));
-      field = DECL_CHAIN (field);
+      fill_one (DECL_RESULT (current_function_decl));
     }
   gcc_checking_assert (!field);
 

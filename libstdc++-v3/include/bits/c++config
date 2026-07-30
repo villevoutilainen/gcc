@@ -639,7 +639,37 @@ namespace std
 # define _GLIBCXX_ASSERT_FAIL(_Condition) __builtin_abort()
 #endif
 
-#if defined(_GLIBCXX_ASSERTIONS)
+#if defined(_GLIBCXX_ASSERTIONS) && __STDC_HOSTED__ \
+    && defined(__cpp_contracts) && __cpp_contracts >= 202502L \
+    && defined(__cpp_contract_control_objects)
+// D4324: when contract control objects are available in this TU, route
+// through the same mechanism a user's own contracts use instead of the
+// hardcoded __glibcxx_assert_fail/abort path below -- noexcept_assert's
+// own is_ignored is unconditionally false, so this is exactly as active
+// as the plain _GLIBCXX_ASSERTIONS path regardless of
+// -fcontract-evaluation-semantic=, and its message-less default falls
+// back to the predicate's own auto-derived condition text, reproducing
+// this TU's existing diagnostic for every call site that doesn't supply
+// its own message. __STDC_HOSTED__ guards against a freestanding build,
+// where the contracts runtime support library (needed for
+// noexcept_assert's violation-handler/terminate helpers) may not be
+// available. Falls through to the unmodified tiers below whenever
+// contracts (or control objects specifically) aren't enabled in the
+// compiling TU -- the overwhelming common case is entirely unaffected.
+//
+// The actual #include <contracts> is deferred to the very end of this
+// file (see _GLIBCXX_USE_CONTRACT_ASSERT below), not done here: this
+// point is reached mid-file, well before this file finishes defining
+// its own later macros (e.g. _GLIBCXX_USE_BUILTIN_TRAIT); <contracts>
+// transitively includes <concepts> -> <type_traits>, which itself
+// #include <bits/c++config.h> again, hits this file's own include
+// guard (already set, since guards are set at the top), and proceeds
+// assuming everything in this file is already defined -- true only if
+// the #include actually happens after this file's own body is done.
+# define _GLIBCXX_USE_CONTRACT_ASSERT 1
+# define __glibcxx_assert(cond) \
+    contract_assert<std::contracts::noexcept_assert_v>(cond)
+#elif defined(_GLIBCXX_ASSERTIONS)
 // When _GLIBCXX_ASSERTIONS is defined we enable runtime assertion checks.
 // These checks will also be done during constant evaluation.
 # define __glibcxx_assert(cond)						\
@@ -970,5 +1000,11 @@ namespace __gnu_cxx
 #endif // C++17
 
 #pragma GCC diagnostic pop
+
+#ifdef _GLIBCXX_USE_CONTRACT_ASSERT
+// Deferred from __glibcxx_assert's own definition, far above -- see the
+// comment there for why this can't happen at that point in the file.
+# include <contracts>
+#endif
 
 // End of prewritten config; the settings discovered at configure time follow.

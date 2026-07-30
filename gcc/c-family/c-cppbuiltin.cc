@@ -1138,6 +1138,8 @@ c_cpp_builtins (cpp_reader *pfile)
 	cpp_define (pfile, "__cpp_contracts=202502L");
       else if (cxx_dialect >= cxx26)
 	cpp_warn (pfile, "__cpp_contracts");
+      if (flag_contract_control_objects)
+	cpp_define (pfile, "__cpp_contract_control_objects=1");
       if (flag_modules)
 	/* The std-defined value is 201907L, but I don't think we can
 	   claim victory yet.  201810 is the p1103 date. */
