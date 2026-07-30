@@ -488,7 +488,7 @@ namespace contracts
     static constexpr bool
     assumable(assertion_static_info) noexcept { return false; }
 
-    void
+    constexpr void
     operator()(const assertion_context& __ctx) const noexcept
     {
       if (__ctx.check())
