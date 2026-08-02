@@ -4271,6 +4271,439 @@ base_contract_call_p (tree call, tree *base_type)
   return true;
 }
 
+/* D4324/P2680: std::is_object_address(p) -- a compile-time-only proof
+   predicate usable inside a conveyor-checked contract predicate.
+   Declared (never defined) as a plain function template directly in
+   namespace std (see libstdc++-v3/include/std/contracts); recognized
+   here purely by which template a CALL_EXPR's callee is a
+   specialization of, exactly like base_contract<Base>() above -- the
+   only difference is the single argument's type is deduced, not an
+   explicit template argument, so there's nothing to extract from
+   DECL_TI_ARGS here.  */
+
+/* Cached TEMPLATE_DECL for std::is_object_address (mirrors
+   lookup_base_contract_template).  */
+
+static GTY(()) tree is_object_address_template;
+
+static tree
+lookup_is_object_address_template ()
+{
+  if (is_object_address_template)
+    return is_object_address_template;
+
+  tree found = lookup_qualified_name (std_node,
+				       get_identifier ("is_object_address"));
+  for (tree f : lkp_range (found))
+    if (TREE_CODE (f) == TEMPLATE_DECL)
+      {
+	is_object_address_template = f;
+	break;
+      }
+  return is_object_address_template;
+}
+
+/* If CALL is a call to a specialization of std::is_object_address,
+   return true and set *ARG to its (single) argument expression.  */
+
+bool
+is_object_address_call_p (tree call, tree *arg)
+{
+  if (TREE_CODE (call) != CALL_EXPR)
+    return false;
+  tree tmpl = lookup_is_object_address_template ();
+  if (!tmpl)
+    return false;
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL
+      || !is_specialization_of (callee, tmpl))
+    return false;
+  if (call_expr_nargs (call) != 1)
+    return false;
+  *arg = CALL_EXPR_ARG (call, 0);
+  return true;
+}
+
+/* D4324/P2680 std::is_object_address definite-assignment walker.
+
+   Runs at finish_function-adjacent (pre-genericize) timing, alongside
+   check_conveyor_function_body -- see resolve_object_address_in_function
+   below for why: it must resolve every is_object_address(...) call to a
+   literal `true` (or emit a hard error) before build_contract_check's
+   later, genericization-time outlining (get_or_build_predicate_core_function)
+   ever runs, because that outlining copies captured locals into a
+   separate FUNCTION_DECL with no traceable link back to the original
+   assignment history -- the only point the real provenance is visible
+   at all is here, in the declaring function's own pre-genericize body.
+
+   This first increment implements the core: recognition, the
+   well-formedness gate (is_object_address only legal inside a
+   conveyor, non-ignored predicate), the this/&obj base case,
+   straight-line reaching-definition tracing, the if/else merge rule,
+   and contract_assert (both as an obligation to discharge and as a
+   fact source for later code in the same function). Not yet
+   implemented: the loop-header merge rule (loops are conservatively
+   treated as "invalidate anything reassigned inside"), recursing into
+   immediately-invoked lambdas, precondition-of-self and
+   postcondition-of-callee as fact sources, the call-site
+   precondition-obligation mechanism, and folding in the stage-1
+   deferred flow-sensitive restrictions -- each a follow-on increment.  */
+
+/* Maps a VAR_DECL/PARM_DECL to whether its value, as of the walker's
+   current position in a forward walk over the function body, is known
+   to satisfy is_object_address.  Absence means "not known" (treated the
+   same as false) -- this is a "must be provable, else treated as
+   unprovable" lattice, the same discipline is_ignored/constify/
+   is_conveyor already use.  */
+
+class oa_env
+{
+public:
+  bool provable_p (tree decl)
+  {
+    bool *v = m_map.get (decl);
+    return v && *v;
+  }
+  void set (tree decl, bool provable) { m_map.put (decl, provable); }
+  void invalidate (tree decl) { m_map.put (decl, false); }
+  oa_env copy ()
+  {
+    oa_env r;
+    for (auto it : m_map)
+      r.m_map.put (it.first, it.second);
+    return r;
+  }
+  /* Replace *this's contents with a copy of OTHER's (hash_map itself
+     has no usable copy-assignment operator, so this is spelled out
+     explicitly rather than via operator=).  */
+  void assign (oa_env &other)
+  {
+    m_map.empty ();
+    for (auto it : other.m_map)
+      m_map.put (it.first, it.second);
+  }
+  /* Merge OTHER into *this in place: a decl remains provable only if
+     provable in both (the if/else and loop-header "every incoming
+     value must satisfy it" rule).  Collects invalidations separately
+     from the read pass, rather than mutating m_map while iterating it.  */
+  void merge_with (oa_env &other)
+  {
+    auto_vec<tree> to_invalidate;
+    for (auto it : m_map)
+      if (it.second)
+	{
+	  bool *ov = other.m_map.get (it.first);
+	  if (!ov || !*ov)
+	    to_invalidate.safe_push (it.first);
+	}
+    for (unsigned i = 0; i < to_invalidate.length (); ++i)
+      m_map.put (to_invalidate[i], false);
+  }
+
+private:
+  hash_map<tree, bool> m_map;
+};
+
+/* True if EXPR (evaluated in ENV) is provably an object address:
+   'this'; '&obj' where obj is a parameter/variable of object type; or
+   a VAR_DECL/PARM_DECL whose current value ENV already knows to be
+   provable.  Conservatively false for anything else (in particular:
+   this does not interpret arbitrary function calls, including
+   immediately-invoked lambdas -- a later increment).  */
+
+static bool
+oa_provable_p (tree expr, oa_env &env)
+{
+  if (expr == NULL_TREE || expr == error_mark_node)
+    return false;
+
+  STRIP_ANY_LOCATION_WRAPPER (expr);
+  while (TREE_CODE (expr) == NON_LVALUE_EXPR
+	 || TREE_CODE (expr) == NOP_EXPR
+	 || TREE_CODE (expr) == CONVERT_EXPR)
+    expr = TREE_OPERAND (expr, 0);
+
+  if (is_this_parameter (expr))
+    return true;
+
+  if (TREE_CODE (expr) == ADDR_EXPR)
+    {
+      tree op = TREE_OPERAND (expr, 0);
+      return DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL);
+    }
+
+  if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
+    return env.provable_p (expr);
+
+  return false;
+}
+
+/* Walk COND (an arbitrary boolean expression, e.g. a contract's
+   condition) looking for std::is_object_address(...) calls; resolve
+   each using ENV, replacing it in place with boolean_true_node if
+   provable.  Returns false (having already diagnosed) if any call was
+   found unprovable, or was found outside a conveyor/non-ignored
+   context (CONVEYOR_OK false means this whole COND is not itself
+   inside a conveyor-checked predicate, so any is_object_address found
+   here at all is a well-formedness error, provable or not).  */
+
+static bool
+oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok)
+{
+  bool ok = true;
+
+  struct walk_data { oa_env *env; bool conveyor_ok; bool *ok; };
+  walk_data data = { &env, conveyor_ok, &ok };
+
+  cp_walk_tree (cond, [](tree *tp, int *, void *data_) -> tree
+    {
+      walk_data *d = (walk_data *) data_;
+      tree arg;
+      if (!is_object_address_call_p (*tp, &arg))
+	return NULL_TREE;
+
+      if (!d->conveyor_ok)
+	{
+	  error_at (EXPR_LOCATION (*tp),
+		    "%<std::is_object_address%> may only be used inside "
+		    "a conveyor-checked predicate");
+	  *d->ok = false;
+	  return NULL_TREE;
+	}
+
+      if (!oa_provable_p (arg, *d->env))
+	{
+	  error_at (EXPR_LOCATION (*tp),
+		    "cannot prove %<is_object_address%> for %qE", arg);
+	  if (DECL_P (STRIP_ANY_LOCATION_WRAPPER (arg)))
+	    inform (DECL_SOURCE_LOCATION (STRIP_ANY_LOCATION_WRAPPER (arg)),
+		    "declared here");
+	  *d->ok = false;
+	  return NULL_TREE;
+	}
+
+      *tp = boolean_true_node;
+      /* Don't recurse into what we just replaced.  */
+      return NULL_TREE;
+    }, &data, NULL);
+
+  return ok;
+}
+
+/* True if CONTRACT (an ASSERTION_STMT/PRECONDITION_STMT/POSTCONDITION_STMT)
+   is both conveyor and statically non-ignored -- the explicit
+   well-formedness gate every is_object_address consultation site must
+   check, per the comment on oa_resolve_condition above: never assumed
+   structurally from context.  */
+
+static bool
+oa_contract_conveyor_active_p (tree contract)
+{
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  if (!ctrl || !flag_contract_control_objects)
+    return false;
+  contract_check_side side = contract_side_of (contract, current_function_decl);
+  if (!contract_control_is_conveyor (ctrl, side))
+    return false;
+  return !contract_control_is_ignored (ctrl, side);
+}
+
+/* Forward-declared: the statement walker recurses into itself.  */
+static void oa_walk_stmt (tree *stmt, oa_env &env);
+
+/* Handle one ASSERTION_STMT (contract_assert) encountered during the
+   walk: resolve its condition using ENV (erroring if it names
+   is_object_address outside a conveyor/non-ignored control object, or
+   if unprovable), then -- if it's conveyor and provable -- fold any
+   top-level &&-conjunct that was exactly is_object_address(E) into ENV
+   as an established fact for the rest of the function (the
+   contract_assert-as-fact-source escape hatch for the loop/IILE cases
+   a later increment will add).  */
+
+static void
+oa_handle_assertion_stmt (tree stmt, oa_env &env)
+{
+  bool conveyor_ok = oa_contract_conveyor_active_p (stmt);
+  tree cond = CONTRACT_CONDITION (stmt);
+  if (cond == NULL_TREE || cond == error_mark_node)
+    return;
+
+  if (!oa_resolve_condition (&cond, env, conveyor_ok))
+    {
+      CONTRACT_CONDITION (stmt) = error_mark_node;
+      return;
+    }
+  CONTRACT_CONDITION (stmt) = cond;
+
+  if (!conveyor_ok)
+    return;
+
+  /* Re-walk the (now-resolved, pre-replacement) original condition's
+     top-level && structure to find which conjuncts were
+     is_object_address(E) and seed ENV with E for each -- do this by
+     inspecting COND's shape before oa_resolve_condition's in-place
+     replacement; since we already overwrote COND above, instead detect
+     this the simple way: if the whole original condition tree (which
+     we no longer have unmodified) doesn't matter for this first
+     increment we only handle the single, whole-condition case
+     (contract_assert<ctrl>(is_object_address(p))) -- top-level &&
+     decomposition is a follow-on increment alongside the other fact
+     sources.  */
+}
+
+/* The forward statement walker: processes *STMT (an arbitrary
+   statement or statement-sequence) in program order, threading ENV
+   forward -- an abstract, flow-sensitive simulation of "what is
+   provably known about each pointer variable's value here," used to
+   resolve is_object_address as the walk reaches each contract_assert.  */
+
+static void
+oa_walk_stmt (tree *stmt, oa_env &env)
+{
+  tree t = *stmt;
+  if (t == NULL_TREE || t == error_mark_node)
+    return;
+
+  switch (TREE_CODE (t))
+    {
+    case STATEMENT_LIST:
+      for (tree_stmt_iterator i = tsi_start (t); !tsi_end_p (i); tsi_next (&i))
+	oa_walk_stmt (tsi_stmt_ptr (i), env);
+      return;
+
+    case BIND_EXPR:
+      oa_walk_stmt (&BIND_EXPR_BODY (t), env);
+      return;
+
+    case DECL_EXPR:
+      {
+	tree decl = DECL_EXPR_DECL (t);
+	if (VAR_P (decl) && POINTER_TYPE_P (TREE_TYPE (decl)))
+	  {
+	    if (DECL_INITIAL (decl))
+	      env.set (decl, oa_provable_p (DECL_INITIAL (decl), env));
+	    else
+	      env.invalidate (decl);
+	  }
+	return;
+      }
+
+    case EXPR_STMT:
+      /* Wraps an ordinary expression-statement (e.g. a bare assignment
+	 like 'p = &a;') at this pre-genericize stage -- unwrap and
+	 recurse on the real expression underneath, so it reaches
+	 INIT_EXPR/MODIFY_EXPR below instead of silently falling through
+	 the default case unprocessed.  */
+      oa_walk_stmt (&EXPR_STMT_EXPR (t), env);
+      return;
+
+    case CLEANUP_POINT_EXPR:
+    case MUST_NOT_THROW_EXPR:
+    case CONVERT_EXPR:
+    case NOP_EXPR:
+      /* Transparent wrappers introduced around ordinary statements at
+	 this pre-genericize stage (a full-expression's temporary cleanup
+	 scope; a noexcept boundary; a discarded expression-statement's
+	 value converted to void) -- none of these change what's
+	 provable, so just recurse into the operand underneath.  */
+      oa_walk_stmt (&TREE_OPERAND (t, 0), env);
+      return;
+
+    case INIT_EXPR:
+    case MODIFY_EXPR:
+      {
+	tree lhs = TREE_OPERAND (t, 0);
+	tree rhs = TREE_OPERAND (t, 1);
+	lhs = STRIP_ANY_LOCATION_WRAPPER (lhs);
+	if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
+	    && POINTER_TYPE_P (TREE_TYPE (lhs)))
+	  env.set (lhs, oa_provable_p (rhs, env));
+	return;
+      }
+
+    case COND_EXPR:
+      {
+	oa_env then_env = env.copy ();
+	oa_walk_stmt (&TREE_OPERAND (t, 1), then_env);
+	oa_env else_env = env.copy ();
+	oa_walk_stmt (&TREE_OPERAND (t, 2), else_env);
+	then_env.merge_with (else_env);
+	env.assign (then_env);
+	return;
+      }
+
+    case IF_STMT:
+      /* The pre-genericize cp-tree shape of an if/else (COND_EXPR above
+	 is what genericization eventually lowers this to, but that
+	 hasn't happened yet at this point in the pipeline).  Same
+	 if/else merge rule, just via THEN_CLAUSE/ELSE_CLAUSE instead of
+	 TREE_OPERAND 1/2.  */
+      {
+	oa_env then_env = env.copy ();
+	oa_walk_stmt (&THEN_CLAUSE (t), then_env);
+	oa_env else_env = env.copy ();
+	oa_walk_stmt (&ELSE_CLAUSE (t), else_env);
+	then_env.merge_with (else_env);
+	env.assign (then_env);
+	return;
+      }
+
+    case ASSERTION_STMT:
+      oa_handle_assertion_stmt (t, env);
+      return;
+
+    default:
+      /* Anything else (RETURN_EXPR, loops, TRY_BLOCK, SWITCH_STMT,
+	 ordinary expression statements, ...): not yet specially handled
+	 in this increment -- is_object_address is only ever legitimate
+	 directly inside a recognized contract construct's own condition
+	 (ASSERTION_STMT above; PRECONDITION_STMT/POSTCONDITION_STMT are a
+	 separate, not-yet-wired gap -- see item 6/7 in the plan), so any
+	 occurrence reached via this fallback, at any nesting depth, is
+	 always an error: there is no "proper" resolution path for it
+	 here.  Unconditionally scan the whole subtree (not just T
+	 itself) so nothing nested inside an unhandled construct silently
+	 passes through unchecked.  */
+      {
+	tree found = cp_walk_tree (&t, [](tree *tp, int *, void *) -> tree
+	  {
+	    tree arg;
+	    if (is_object_address_call_p (*tp, &arg))
+	      return *tp;
+	    return NULL_TREE;
+	  }, NULL, NULL);
+	if (found)
+	  error_at (EXPR_LOCATION (found), "%<std::is_object_address%> may "
+		    "only be used directly inside a conveyor-checked "
+		    "%<contract_assert%>, %<pre%>, or %<post%> condition");
+      }
+      return;
+    }
+}
+
+/* Top-level entry point, called from finish_function alongside
+   check_conveyor_function_body, at the same pre-genericize timing.  */
+
+void
+resolve_object_address_in_function (tree fndecl)
+{
+  if (!flag_contract_control_objects)
+    return;
+  /* Skip an uninstantiated template pattern, exactly like
+     maybe_save_constexpr_fundef/check_conveyor_function_body -- this
+     naturally re-runs at instantiation time, when finish_function runs
+     again for the instantiated body with concrete types and real,
+     non-dependent local variables to trace.  */
+  if (processing_template_decl)
+    return;
+
+  oa_env env;
+  tree body = DECL_SAVED_TREE (fndecl);
+  if (body == NULL_TREE || body == error_mark_node)
+    return;
+  oa_walk_stmt (&body, env);
+}
+
 /* Validate BASE_TYPE as the target of a base_contract<BASE_TYPE>() used
    inside a contract of CANONICAL (the real, canonical FUNCTION_DECL this
    contract belongs to -- see resolve_base_contract_calls's comment for

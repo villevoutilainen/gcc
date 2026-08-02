@@ -20867,6 +20867,16 @@ finish_function (bool inline_p)
      constexpr check above.  */
   check_conveyor_function_body (fndecl);
 
+  /* D4324/P2680: resolve every std::is_object_address(...) call in this
+     function's contracts to a literal 'true' (or diagnose it), before
+     any later genericization-time outlining
+     (get_or_build_predicate_core_function) can copy referenced locals
+     into a separate FUNCTION_DECL and discard the very assignment
+     history this needs to see -- see resolve_object_address_in_function's
+     own comment in contracts.cc for why this has to happen exactly
+     here, at this same pre-genericize timing.  */
+  resolve_object_address_in_function (fndecl);
+
   /* Perform delayed folding before NRV transformation.  */
   if (!processing_template_decl
       && !DECL_IMMEDIATE_FUNCTION_P (fndecl)
