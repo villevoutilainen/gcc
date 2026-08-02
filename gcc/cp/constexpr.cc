@@ -1031,14 +1031,6 @@ maybe_save_constexpr_fundef (tree fun)
   register_constexpr_fundef (entry);
 }
 
-/* Accumulator for check_conveyor_function_body_r's single walk over a
-   conveyor function's body.  */
-
-struct conveyor_walk_data
-{
-  bool saw_return;
-};
-
 /* cp_walk_tree callback implementing the syntactic (non-flow-sensitive)
    D4324 conveyor-function restrictions that are best checked by
    walking the whole body at once, rather than at the point a
@@ -1049,17 +1041,12 @@ struct conveyor_walk_data
    constructs they gate instead).  */
 
 static tree
-check_conveyor_function_body_r (tree *tp, int *, void *data_)
+check_conveyor_function_body_r (tree *tp, int *, void *)
 {
-  conveyor_walk_data *data = (conveyor_walk_data *) data_;
   tree t = *tp;
 
   switch (TREE_CODE (t))
     {
-    case RETURN_EXPR:
-      data->saw_return = true;
-      break;
-
     case CALL_EXPR:
       {
 	tree fn = cp_get_callee_fndecl_nofold (t);
@@ -1097,9 +1084,15 @@ check_conveyor_function_body_r (tree *tp, int *, void *data_)
    definition guard, the pointer-arithmetic array-bound rule, and the
    pointer-relational-comparison ban -- needs real dataflow (reaching
    definitions over the CFG/SSA form) and is deferred to a later pass,
-   not implemented here.  Likewise, "all exit paths return" is only
-   checked in the weaker form "at least one return statement is
-   present"; full path-consistency needs the CFG too.  */
+   not implemented here.
+
+   Increment O: "all exit paths return" is now checked for real (not
+   just "at least one return statement is present") by reusing oa_stmt_
+   terminates_p (contracts.cc/contracts.h) directly: a non-void
+   conveyor function's body never falling through its own end is
+   exactly the same property that function already computes for an
+   arbitrary sub-statement (used there to decide an if/else merge),
+   just applied here to the whole body.  */
 
 void
 check_conveyor_function_body (tree fun)
@@ -1115,15 +1108,14 @@ check_conveyor_function_body (tree fun)
   if (body == NULL_TREE || body == error_mark_node)
     return;
 
-  conveyor_walk_data data = { false };
   hash_set<tree> pset;
-  cp_walk_tree (&body, check_conveyor_function_body_r, &data, &pset);
+  cp_walk_tree (&body, check_conveyor_function_body_r, NULL, &pset);
 
   tree return_type = TREE_TYPE (TREE_TYPE (fun));
   if (!VOID_TYPE_P (return_type)
-      && !data.saw_return
       && !DECL_CONSTRUCTOR_P (fun)
-      && !DECL_DESTRUCTOR_P (fun))
+      && !DECL_DESTRUCTOR_P (fun)
+      && !oa_stmt_terminates_p (body))
     error_at (DECL_SOURCE_LOCATION (fun),
 	      "conveyor function %qD with non-%<void%> return type must "
 	      "contain a %<return%> statement", fun);

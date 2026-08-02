@@ -6654,13 +6654,23 @@ oa_loop_has_own_break_p (tree body)
    below, is not merely conservative but exactly correct once NO_
    BREAK_P holds); a WHILE_STMT/FOR_STMT/DO_STMT with a provably-always
    -true condition and no break belonging to it (oa_cond_always_true_p/
-   oa_loop_has_own_break_p above); and, recursively, a STATEMENT_LIST/
-   BIND_EXPR's last real statement. Deliberately conservative for
-   anything else (default: does NOT terminate, i.e. assume it might
-   fall through) -- safe, just occasionally missing a case, the
-   discipline used throughout this pass.  */
+   oa_loop_has_own_break_p above); a CLEANUP_STMT (a local variable's
+   non-trivial-destructor scope-exit wrapper), matching gcc/cp/
+   cp-objcp-common.cc's own cxx_block_may_fallthru exactly (see that
+   case's own comment); and, recursively, a STATEMENT_LIST/BIND_EXPR's
+   last real statement. Deliberately conservative for anything else
+   (default: does NOT terminate, i.e. assume it might fall through) --
+   safe, just occasionally missing a case, the discipline used
+   throughout this pass.
 
-static bool
+   Increment O: also exported (declared in contracts.h) and reused
+   directly by check_conveyor_function_body (constexpr.cc) for the
+   "all exit paths return" restriction -- a non-void conveyor
+   function's body never falling through its own end is exactly the
+   same property this function already computes for an arbitrary
+   sub-statement, just applied to the whole body.  */
+
+bool
 oa_stmt_terminates_p (tree stmt)
 {
   if (stmt == NULL_TREE || stmt == error_mark_node)
@@ -6710,6 +6720,29 @@ oa_stmt_terminates_p (tree stmt)
     case SWITCH_STMT:
       return (SWITCH_STMT_ALL_CASES_P (t) && SWITCH_STMT_NO_BREAK_P (t)
 	      && oa_stmt_terminates_p (SWITCH_STMT_BODY (t)));
+
+    case CLEANUP_STMT:
+      /* A local variable with a non-trivial destructor wraps the rest
+	 of its scope in one of these (a try/finally shape: run BODY,
+	 then always run the destructor call EXPR at scope exit) --
+	 found via a real regression (a pre-existing RAII test) once
+	 this case was missing here. Mirrors gcc/cp/cp-objcp-common.cc's
+	 own cxx_block_may_fallthru exactly (De Morgan's over its
+	 "&&", since that function computes the opposite polarity --
+	 "may fall through" -- from this one): if BODY itself never
+	 falls through (already returns/throws/etc, regardless of what
+	 EXPR does), the whole construct doesn't either -- the returned
+	 value already left before EXPR's own fallthrough status could
+	 matter. An EH-only cleanup (only runs on the exceptional path,
+	 never the normal one) is conservatively treated as "does NOT
+	 terminate" -- the same simple, always-safe choice cxx_block_
+	 may_fallthru itself makes there (unconditional "may fall
+	 through", never trying to reason about BODY specifically for
+	 that case).  */
+      if (!CLEANUP_EH_ONLY (t))
+	return (oa_stmt_terminates_p (CLEANUP_BODY (t))
+		|| oa_stmt_terminates_p (CLEANUP_EXPR (t)));
+      return false;
 
     case WHILE_STMT:
       return (oa_cond_always_true_p (WHILE_COND (t))
