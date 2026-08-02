@@ -6546,6 +6546,67 @@ oa_process_condition (tree cond, oa_env &env,
     }
 }
 
+/* D4324/P2680, Increment L: true if COND (a loop's condition --
+   WHILE_COND/DO_COND, or NULL_TREE for a FOR_STMT with none, i.e.
+   'for (;;)') is a compile-time constant that is always true.
+   Deliberately narrow: only a bare nonzero INTEGER_CST (confirmed via
+   debug_tree to be exactly what 'while (true)'/'while (1)' already
+   reduce to by this pass's timing, after stripping location wrappers/
+   CLEANUP_POINT_EXPR) -- no attempt at deeper constant-folding for a
+   non-literal-but-provably-true condition.  */
+
+static bool
+oa_cond_always_true_p (tree cond)
+{
+  if (cond == NULL_TREE)
+    return true;
+  tree c = cond;
+  STRIP_ANY_LOCATION_WRAPPER (c);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    {
+      c = TREE_OPERAND (c, 0);
+      STRIP_ANY_LOCATION_WRAPPER (c);
+    }
+  return TREE_CODE (c) == INTEGER_CST && !integer_zerop (c);
+}
+
+/* D4324/P2680, Increment L: true if BODY (a loop's body) contains a
+   BREAK_STMT belonging to *that* loop specifically -- i.e. one not
+   itself nested inside a further loop or switch, whose own break
+   would belong to it instead. Implemented via a cp_walk_tree scan
+   (unlike everything else in this file, which hand-rolls a recursive
+   switch) specifically so this is correct for any nesting shape
+   without needing to enumerate every leaf statement code that could
+   never embed a further statement -- the only thing genuinely special
+   here is pruning descent, via the callback's own WALK_SUBTREES
+   out-parameter, at a nested FOR_STMT/WHILE_STMT/DO_STMT/SWITCH_STMT's
+   own body.  */
+
+static bool
+oa_loop_has_own_break_p (tree body)
+{
+  tree found = cp_walk_tree (&body, [](tree *tp, int *walk_subtrees, void *) -> tree
+    {
+      tree t = *tp;
+      if (t == NULL_TREE || t == error_mark_node)
+	return NULL_TREE;
+      switch (TREE_CODE (t))
+	{
+	case BREAK_STMT:
+	  return t;
+	case FOR_STMT:
+	case WHILE_STMT:
+	case DO_STMT:
+	case SWITCH_STMT:
+	  *walk_subtrees = 0;
+	  return NULL_TREE;
+	default:
+	  return NULL_TREE;
+	}
+    }, NULL, NULL);
+  return found != NULL_TREE;
+}
+
 /* D4324/P2680: does control ever fall through past the end of STMT?
    Used by oa_walk_stmt's IF_STMT/COND_EXPR cases to decide, after
    walking both branches, whether the code following the if/else is
@@ -6554,20 +6615,28 @@ oa_process_condition (tree cond, oa_env &env,
    which case that branch's facts should be used as-is for the merge
    point, rather than blindly ANDed/unioned with the terminating
    branch's (which never actually reaches there). Recognizes:
-   RETURN_EXPR; THROW_EXPR; a CALL_EXPR to a function GCC already
-   knows is noreturn (call_expr_flags, the same query used everywhere
-   else in the compiler for this question -- picks up __builtin_trap,
-   __builtin_unreachable, std::unreachable, abort, and any other
-   [[noreturn]]-attributed callee uniformly, no name-matching needed);
-   and, recursively, a nested IF_STMT/COND_EXPR where *both* arms
-   terminate, or a STATEMENT_LIST/BIND_EXPR's last real statement.
-   Deliberately conservative for anything else (default: does NOT
-   terminate, i.e. assume it might fall through) -- safe, just
-   occasionally missing a case, the discipline used throughout this
-   pass. Not attempted: break/continue (transfer control within an
-   enclosing loop, not analogous to falling through past this if),
-   switch, goto, or a loop that never falls through by construction
-   (e.g. 'while (true) { ... return ...; }' with no break).  */
+   RETURN_EXPR; THROW_EXPR; BREAK_STMT/CONTINUE_STMT/GOTO_EXPR (each a
+   plain leaf that never falls through to whatever textually follows
+   it, regardless of where control ends up); a CALL_EXPR to a function
+   GCC already knows is noreturn (call_expr_flags, the same query used
+   everywhere else in the compiler for this question -- picks up
+   __builtin_trap, __builtin_unreachable, std::unreachable, abort, and
+   any other [[noreturn]]-attributed callee uniformly, no name-matching
+   needed); a nested IF_STMT/COND_EXPR where *both* arms terminate;
+   a SWITCH_STMT that is provably exhaustive and provably has no break
+   anywhere in it (SWITCH_STMT_ALL_CASES_P/SWITCH_STMT_NO_BREAK_P,
+   directly reusing the exact flags/logic gcc/c-family/c-common.cc's
+   own c_block_may_fallthru already computes and relies on for this
+   same question -- see Increment L's own plan-file writeup for why
+   checking only the body's last element, via the STATEMENT_LIST case
+   below, is not merely conservative but exactly correct once NO_
+   BREAK_P holds); a WHILE_STMT/FOR_STMT/DO_STMT with a provably-always
+   -true condition and no break belonging to it (oa_cond_always_true_p/
+   oa_loop_has_own_break_p above); and, recursively, a STATEMENT_LIST/
+   BIND_EXPR's last real statement. Deliberately conservative for
+   anything else (default: does NOT terminate, i.e. assume it might
+   fall through) -- safe, just occasionally missing a case, the
+   discipline used throughout this pass.  */
 
 static bool
 oa_stmt_terminates_p (tree stmt)
@@ -6600,6 +6669,9 @@ oa_stmt_terminates_p (tree stmt)
 
     case RETURN_EXPR:
     case THROW_EXPR:
+    case BREAK_STMT:
+    case CONTINUE_STMT:
+    case GOTO_EXPR:
       return true;
 
     case CALL_EXPR:
@@ -6612,6 +6684,22 @@ oa_stmt_terminates_p (tree stmt)
     case COND_EXPR:
       return (oa_stmt_terminates_p (TREE_OPERAND (t, 1))
 	      && oa_stmt_terminates_p (TREE_OPERAND (t, 2)));
+
+    case SWITCH_STMT:
+      return (SWITCH_STMT_ALL_CASES_P (t) && SWITCH_STMT_NO_BREAK_P (t)
+	      && oa_stmt_terminates_p (SWITCH_STMT_BODY (t)));
+
+    case WHILE_STMT:
+      return (oa_cond_always_true_p (WHILE_COND (t))
+	      && !oa_loop_has_own_break_p (WHILE_BODY (t)));
+
+    case FOR_STMT:
+      return (oa_cond_always_true_p (FOR_COND (t))
+	      && !oa_loop_has_own_break_p (FOR_BODY (t)));
+
+    case DO_STMT:
+      return (oa_cond_always_true_p (DO_COND (t))
+	      && !oa_loop_has_own_break_p (DO_BODY (t)));
 
     default:
       return false;
