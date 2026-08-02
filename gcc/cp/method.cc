@@ -2644,7 +2644,8 @@ is_nothrow_convertible (tree from, tree to, bool explain/*=false*/)
 static void
 process_subob_fn (tree fn, special_function_kind sfk, tree *spec_p,
 		  bool *trivial_p, bool *deleted_p, bool *constexpr_p,
-		  bool diag, tree arg, bool dtor_from_ctor = false)
+		  bool *conveyor_p, bool diag, tree arg,
+		  bool dtor_from_ctor = false)
 {
   if (!fn || fn == error_mark_node)
     {
@@ -2691,6 +2692,11 @@ process_subob_fn (tree fn, special_function_kind sfk, tree *spec_p,
 	  explain_invalid_constexpr_fn (fn);
 	}
     }
+
+  /* D4324/P2680 9.2.3: a defaulted special member is conveyor only if
+     every corresponding base/member special member is conveyor too.  */
+  if (conveyor_p && !DECL_DECLARED_CONVEYOR_P (fn))
+    *conveyor_p = false;
 }
 
 /* Subroutine of synthesized_method_walk to allow recursion into anonymous
@@ -2701,7 +2707,7 @@ process_subob_fn (tree fn, special_function_kind sfk, tree *spec_p,
 static void
 walk_field_subobs (tree fields, special_function_kind sfk, tree fnname,
 		   int quals, tree *spec_p, bool *trivial_p,
-		   bool *deleted_p, bool *constexpr_p,
+		   bool *deleted_p, bool *constexpr_p, bool *conveyor_p,
 		   bool diag, int flags, tsubst_flags_t complain,
 		   bool dtor_from_ctor)
 {
@@ -2860,7 +2866,8 @@ walk_field_subobs (tree fields, special_function_kind sfk, tree fnname,
 	{
 	  walk_field_subobs (TYPE_FIELDS (mem_type), sfk, fnname, quals,
 			     spec_p, trivial_p, deleted_p, constexpr_p,
-			     diag, flags, complain, dtor_from_ctor);
+			     conveyor_p, diag, flags, complain,
+			     dtor_from_ctor);
 	  continue;
 	}
 
@@ -2929,7 +2936,7 @@ walk_field_subobs (tree fields, special_function_kind sfk, tree fnname,
       rval = locate_fn_flags (mem_type, fnname, argtype, flags, complain);
 
       process_subob_fn (rval, sfk, spec_p, trivial_p, deleted_p,
-			constexpr_p, diag, field, dtor_from_ctor);
+			constexpr_p, conveyor_p, diag, field, dtor_from_ctor);
     }
 
   /* We didn't find a DMI in this union, now check all the members.  */
@@ -2951,7 +2958,8 @@ synthesized_method_base_walk (tree binfo, tree base_binfo,
 			      tree *inheriting_ctor, tree inherited_parms,
 			      int flags, bool diag,
 			      tree *spec_p, bool *trivial_p,
-			      bool *deleted_p, bool *constexpr_p)
+			      bool *deleted_p, bool *constexpr_p,
+			      bool *conveyor_p)
 {
   bool inherited_binfo = false;
   tree argtype = NULL_TREE;
@@ -2989,7 +2997,7 @@ synthesized_method_base_walk (tree binfo, tree base_binfo,
     *inheriting_ctor = DECL_CLONED_FUNCTION (rval);
 
   process_subob_fn (rval, sfk, spec_p, trivial_p, deleted_p,
-		    constexpr_p, diag, BINFO_TYPE (base_binfo));
+		    constexpr_p, conveyor_p, diag, BINFO_TYPE (base_binfo));
   if (SFK_CTOR_P (sfk)
       && (!BINFO_VIRTUAL_P (base_binfo)
 	  || TYPE_HAS_NONTRIVIAL_DESTRUCTOR (BINFO_TYPE (base_binfo))))
@@ -3003,8 +3011,10 @@ synthesized_method_base_walk (tree binfo, tree base_binfo,
 	 destructors don't affect triviality of the constructor.  Nor
 	 do they affect constexpr-ness (a constant expression doesn't
 	 throw) or exception-specification (a throw from one of the
-	 dtors would be a double-fault).  */
-      process_subob_fn (dtor, sfk, NULL, NULL, deleted_p, NULL, false,
+	 dtors would be a double-fault).  Conveyor-ness is excluded for
+	 the same reason -- a conveyor constructor can't throw in the
+	 first place, so this cleanup-only path is moot for it too.  */
+      process_subob_fn (dtor, sfk, NULL, NULL, deleted_p, NULL, NULL, false,
 			BINFO_TYPE (base_binfo), /*dtor_from_ctor*/true);
     }
 
@@ -3021,7 +3031,7 @@ synthesized_method_base_walk (tree binfo, tree base_binfo,
 static void
 synthesized_method_walk (tree ctype, special_function_kind sfk, bool const_p,
 			 tree *spec_p, bool *trivial_p, bool *deleted_p,
-			 bool *constexpr_p, bool diag,
+			 bool *constexpr_p, bool *conveyor_p, bool diag,
 			 tree *inheriting_ctor, tree inherited_parms)
 {
   tree binfo, base_binfo;
@@ -3093,6 +3103,18 @@ synthesized_method_walk (tree ctype, special_function_kind sfk, bool const_p,
 		    || (SFK_ASSIGN_P (sfk) && cxx_dialect >= cxx14)
 		    || (SFK_DTOR_P (sfk) && cxx_dialect >= cxx20));
 
+  /* D4324/P2680 9.2.3: start optimistic (folded to false by any
+     corresponding base/member special member that isn't conveyor) --
+     but only when the whole conveyor mechanism is actually enabled;
+     otherwise this must stay false unconditionally, since DECL_DECLARED_
+     CONVEYOR_P (fn) ending up true for a plain compiler-generated
+     special member in an ordinary program (one that never uses
+     -fcontract-control-objects at all) would incorrectly make
+     conveyor_restrictions_active_p () start rejecting perfectly
+     ordinary constructs (casts, throws, etc.) in its synthesized body.  */
+  if (conveyor_p)
+    *conveyor_p = flag_contract_control_objects;
+
   bool expected_trivial = type_has_trivial_fn (ctype, sfk);
   if (trivial_p)
     *trivial_p = expected_trivial;
@@ -3152,7 +3174,8 @@ synthesized_method_walk (tree ctype, special_function_kind sfk, bool const_p,
 					      sfk, fnname, quals,
 					      inheriting_ctor, inherited_parms,
 					      flags, diag, spec_p, trivial_p,
-					      deleted_p, constexpr_p);
+					      deleted_p, constexpr_p,
+					      conveyor_p);
 
       if (diag && SFK_ASSIGN_P (sfk) && SFK_MOVE_P (sfk)
 	  && BINFO_VIRTUAL_P (base_binfo)
@@ -3205,17 +3228,18 @@ synthesized_method_walk (tree ctype, special_function_kind sfk, bool const_p,
 	synthesized_method_base_walk (binfo, base_binfo, sfk, fnname, quals,
 				      inheriting_ctor, inherited_parms,
 				      flags, diag,
-				      spec_p, trivial_p, deleted_p, constexpr_p);
+				      spec_p, trivial_p, deleted_p, constexpr_p,
+				      conveyor_p);
     }
 
   /* Now handle the non-static data members.  */
   walk_field_subobs (TYPE_FIELDS (ctype), sfk, fnname, quals,
-		     spec_p, trivial_p, deleted_p, constexpr_p,
+		     spec_p, trivial_p, deleted_p, constexpr_p, conveyor_p,
 		     diag, flags, complain, /*dtor_from_ctor*/false);
   if (SFK_CTOR_P (sfk))
     walk_field_subobs (TYPE_FIELDS (ctype), sfk_destructor,
 		       complete_dtor_identifier, TYPE_UNQUALIFIED,
-		       NULL, NULL, deleted_p, NULL,
+		       NULL, NULL, deleted_p, NULL, NULL,
 		       false, flags, complain, /*dtor_from_ctor*/true);
 
   pop_scope (scope);
@@ -3253,7 +3277,7 @@ get_defaulted_eh_spec (tree decl, tsubst_flags_t complain)
   if (CLASSTYPE_TEMPLATE_INSTANTIATION (ctype))
     pushed = push_tinst_level (decl);
   synthesized_method_walk (ctype, sfk, const_p, &spec, NULL, NULL,
-			   NULL, diag, &inh, parms);
+			   NULL, NULL, diag, &inh, parms);
   if (pushed)
     pop_tinst_level ();
   return spec;
@@ -3344,16 +3368,16 @@ maybe_explain_implicit_delete (tree decl)
 	  tree inh = DECL_INHERITED_CTOR (decl);
 
 	  synthesized_method_walk (ctype, sfk, const_p,
-				   &raises, NULL, &deleted_p, NULL, false,
-				   &inh, parms);
+				   &raises, NULL, &deleted_p, NULL, NULL,
+				   false, &inh, parms);
 	  if (deleted_p)
 	    {
 	      inform (DECL_SOURCE_LOCATION (decl),
 		      "%q#D is implicitly deleted because the default "
 		      "definition would be ill-formed:", decl);
 	      synthesized_method_walk (ctype, sfk, const_p,
-				       NULL, NULL, &deleted_p, NULL, true,
-				       &inh, parms);
+				       NULL, NULL, &deleted_p, NULL, NULL,
+				       true, &inh, parms);
 	    }
 	  else if (!comp_except_specs
 		   (TYPE_RAISES_EXCEPTIONS (TREE_TYPE (decl)),
@@ -3394,7 +3418,7 @@ explain_implicit_non_constexpr (tree decl)
   else
     synthesized_method_walk (DECL_CLASS_CONTEXT (decl),
 			     sfk, const_p,
-			     NULL, NULL, NULL, &dummy, true,
+			     NULL, NULL, NULL, &dummy, NULL, true,
 			     &inh, parms);
 }
 
@@ -3412,7 +3436,7 @@ deduce_inheriting_ctor (tree decl)
   tree inh = DECL_INHERITED_CTOR (decl);
   synthesized_method_walk (DECL_CONTEXT (decl), sfk_inheriting_constructor,
 			   false, &spec, &trivial, &deleted, &constexpr_,
-			   /*diag*/false,
+			   NULL, /*diag*/false,
 			   &inh,
 			   FUNCTION_FIRST_USER_PARMTYPE (decl));
   if (spec == error_mark_node)
@@ -3590,6 +3614,7 @@ implicitly_declare_fn (special_function_kind kind, tree type,
     }
 
   bool trivial_p = false;
+  bool conveyor_p = false;
   bool was_lazy = is_lazy_special_member (kind, type);
 
   if (inherited_ctor)
@@ -3599,17 +3624,18 @@ implicitly_declare_fn (special_function_kind kind, tree type,
       raises = TYPE_RAISES_EXCEPTIONS (TREE_TYPE (inherited_ctor));
       deleted_p = DECL_DELETED_FN (inherited_ctor);
       constexpr_p = DECL_DECLARED_CONSTEXPR_P (inherited_ctor);
+      conveyor_p = DECL_DECLARED_CONVEYOR_P (inherited_ctor);
     }
   else if (cxx_dialect >= cxx11)
     {
       raises = noexcept_deferred_spec;
       synthesized_method_walk (type, kind, const_p, NULL, &trivial_p,
-			       &deleted_p, &constexpr_p, false,
+			       &deleted_p, &constexpr_p, &conveyor_p, false,
 			       &inherited_ctor, inherited_parms);
     }
   else
     synthesized_method_walk (type, kind, const_p, &raises, &trivial_p,
-			     &deleted_p, &constexpr_p, false,
+			     &deleted_p, &constexpr_p, &conveyor_p, false,
 			     &inherited_ctor, inherited_parms);
 
   /* The above walk may have indirectly loaded a lazy decl we're
@@ -3650,7 +3676,7 @@ implicitly_declare_fn (special_function_kind kind, tree type,
 	     failed to deduce RAISES, so try again but complain this time.  */
 	  if (cxx_dialect < cxx11)
 	    synthesized_method_walk (type, kind, const_p, &raises, nullptr,
-				     nullptr, nullptr, /*diag=*/true,
+				     nullptr, nullptr, nullptr, /*diag=*/true,
 				     &inherited_ctor, inherited_parms);
 	  /* We should have seen an error at this point.  */
 	  gcc_assert (seen_error ());
@@ -3733,6 +3759,11 @@ implicitly_declare_fn (special_function_kind kind, tree type,
       DECL_DELETED_FN (fn) = deleted_p;
       DECL_DECLARED_CONSTEXPR_P (fn) = constexpr_p;
     }
+  /* D4324/P2680 9.2.3: a non-deleted, compiler-generated special member
+     is conveyor if every corresponding base/member special member is
+     conveyor.  */
+  if (!deleted_p && conveyor_p)
+    SET_DECL_DECLARED_CONVEYOR_P (fn);
   DECL_EXTERNAL (fn) = true;
   DECL_NOT_REALLY_EXTERN (fn) = 1;
   DECL_DECLARED_INLINE_P (fn) = 1;
@@ -3763,7 +3794,7 @@ implicitly_declare_fn (special_function_kind kind, tree type,
       location_t loc = input_location;
       input_location = DECL_SOURCE_LOCATION (fn);
       synthesized_method_walk (type, kind, const_p,
-			       NULL, NULL, NULL, NULL, true,
+			       NULL, NULL, NULL, NULL, NULL, true,
 			       NULL, NULL_TREE);
       input_location = loc;
     }
@@ -3971,6 +4002,25 @@ defaulted_late_check (tree fn, tristate imp_const/*=tristate::unknown()*/)
 	  explain_implicit_non_constexpr (fn);
 	}
       DECL_DECLARED_CONSTEXPR_P (fn) = false;
+    }
+
+  /* D4324/P2680 9.2.3: mirror the constexpr handling just above for
+     'conveyor'.  An explicitly-defaulted special member with no explicit
+     'conveyor' of its own picks up the property if the implicit form
+     would have it; one explicitly marked 'conveyor' is rejected if the
+     implicit form wouldn't qualify.  */
+  if (DECL_DEFAULTED_IN_CLASS_P (fn)
+      && DECL_DECLARED_CONVEYOR_P (implicit_fn))
+    SET_DECL_DECLARED_CONVEYOR_P (fn);
+
+  if (!DECL_DECLARED_CONVEYOR_P (implicit_fn)
+      && DECL_DECLARED_CONVEYOR_P (fn))
+    {
+      if (!CLASSTYPE_TEMPLATE_INSTANTIATION (ctx))
+	error ("explicitly defaulted function %q+D cannot be declared "
+	       "%<conveyor%> because the implicit declaration is not "
+	       "%<conveyor%>", fn);
+      CLEAR_DECL_DECLARED_CONVEYOR_P (fn);
     }
 }
 

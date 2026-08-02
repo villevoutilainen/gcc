@@ -20,7 +20,7 @@ struct conveyor_ctrl {
 };
 inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 
-int arr[5] = { 10, 11, 12, 13, 14 };
+const int arr[5] = { 10, 11, 12, 13, 14 };
 
 int compute_index (int x) post<conveyor_ctrl_v>(r: r >= 0 && r < 5)
 {

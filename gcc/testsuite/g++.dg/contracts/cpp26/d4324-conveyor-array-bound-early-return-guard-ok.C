@@ -7,7 +7,7 @@
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
-int arr[5] = { 10, 11, 12, 13, 14 };
+const int arr[5] = { 10, 11, 12, 13, 14 };
 
 int f (int k) conveyor
 {
