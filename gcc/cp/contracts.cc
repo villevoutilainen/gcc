@@ -4837,17 +4837,6 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
   return false;
 }
 
-/* Forward-declared: oa_refine_range_for_condition (defined below)
-   decomposes a condition at top-level && the same way contract
-   conditions already are, via this existing helper defined later in
-   the file.  */
-static void oa_collect_conjuncts (tree *cond, vec<tree *> *conjuncts);
-
-/* Forward-declared: Increment J -- oa_refine_range_for_condition also
-   decomposes a *compound* condition's top-level || (De Morgan's, for
-   its else-branch refinement), via this sibling of oa_collect_
-   conjuncts, defined right next to it later in the file.  */
-static void oa_collect_disjuncts (tree *cond, vec<tree *> *disjuncts);
 
 /* D4324/P2680 item 8, Increment E1: determine EXPR's provable value
    range (or a pointer's provable offset into a named array, once
@@ -5169,45 +5158,6 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
   env.range_set (decl, refined);
 }
 
-/* D4324/P2680 item 8, Increment E1: refine THEN_ENV/ELSE_ENV's range
-   facts from COND, the condition of an IF_STMT/COND_EXPR (or,
-   symmetrically, a loop's own condition -- Increment E3). A top-level
-   '&&' conjunct chain is decomposed the same way oa_collect_conjuncts
-   already does for contract conditions, applying each conjunct's
-   then-refinement in sequence (sound: all conjuncts must hold for the
-   then-branch to be reached) -- the else-branch of a *compound* '&&'
-   condition is deliberately never refined at all (De Morgan's gives a
-   disjunction of negations there, not a single conjunction
-   representable the same way; conservatively left unconstrained, the
-   same discipline used throughout this pass).
-
-   Increment J: symmetrically, a compound '||' condition's *then*-branch
-   is never refined (entering it only guarantees "at least one operand
-   holds," itself a disjunction) -- but its *else*-branch is, via
-   De Morgan's the other way around: NOT (A || B) == !A && !B *is* a
-   plain conjunction, decomposed via oa_collect_disjuncts and refined
-   exactly like an ordinary '&&' conjunct chain, just asserted false.
-   A single, non-compound condition (no top-level '&&' or '||' at all)
-   refines both branches -- oa_collect_disjuncts on a lone comparison
-   simply yields that comparison as its own sole "disjunct," so this is
-   the same case as before Increment J, not a separate path.  */
-
-static void
-oa_refine_range_for_condition (tree cond, oa_env &then_env, oa_env &else_env)
-{
-  auto_vec<tree *> conjuncts;
-  oa_collect_conjuncts (&cond, &conjuncts);
-  for (unsigned i = 0; i < conjuncts.length (); ++i)
-    oa_refine_single_comparison (*conjuncts[i], then_env, /*asserted_true=*/true);
-  if (conjuncts.length () == 1)
-    {
-      auto_vec<tree *> disjuncts;
-      oa_collect_disjuncts (conjuncts[0], &disjuncts);
-      for (unsigned i = 0; i < disjuncts.length (); ++i)
-	oa_refine_single_comparison (*disjuncts[i], else_env, /*asserted_true=*/false);
-    }
-}
-
 /* D4324/P2680: closes the "assignment-in-condition" gap left open when
    the IF_STMT/COND_EXPR condition-operand gap was first fixed
    (item 7) -- an assignment written directly inside an if/ternary
@@ -5221,17 +5171,25 @@ oa_refine_range_for_condition (tree cond, oa_env &then_env, oa_env &else_env)
    fixed while first closing this same gap for item 7).
 
    Deliberately narrow: only ever recognizes a *single* assignment that
-   either *is* the condition itself, or is directly nested as the
-   operand of a comparison/negation wrapping it ('(i = compute()) > 0',
-   '(p = f()) != nullptr', '!(p = f())') -- never one nested inside a
-   '&&'/'||' chain, where whether the assignment actually executes at
-   all depends on short-circuit evaluation of an earlier operand.
-   Blindly tracking a fact from an assignment that might not have run
-   would be unsound; this restriction avoids that question entirely by
-   simply not looking there. Reuses the *tracking* logic oa_walk_stmt's
-   own INIT_EXPR/MODIFY_EXPR case already has (oa_provable_p/oa_
-   provably_nonzero_p/oa_get_range), not its scanning logic (already
-   run separately, once, on the whole condition by the caller).  */
+   either *is* COND itself, or is directly nested as the operand of a
+   comparison/negation wrapping it ('(i = compute()) > 0', '(p = f())
+   != nullptr', '!(p = f())'). Since Increment K, COND is one top-level
+   '&&' conjunct at a time (oa_process_condition calls this once per
+   conjunct, not once on the whole condition) -- this correctly extends
+   coverage to an assignment nested in *any* conjunct of a '&&'-chain
+   ('a && (i = compute()) > 0'), while still never looking inside a
+   '||', where whether the assignment actually executes at all depends
+   on short-circuit evaluation of an earlier operand (oa_collect_
+   conjuncts itself never decomposes '||', so a '||'-nested conjunct
+   reaches this function, if at all, only as one opaque, undecomposed
+   unit that won't match either recognized shape). Blindly tracking a
+   fact from an assignment that might not have run would be unsound;
+   this restriction avoids that question entirely by simply not
+   looking there. Reuses the *tracking* logic oa_walk_stmt's own
+   INIT_EXPR/MODIFY_EXPR case already has (oa_provable_p/oa_provably_
+   nonzero_p/oa_get_range), not its scanning logic (already run
+   separately by oa_process_condition, per conjunct, in evaluation
+   order).  */
 
 static void
 oa_track_condition_assignment (tree cond, oa_env &env)
@@ -5538,12 +5496,31 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
    top-level && is a single conjunct of itself.  Used to find which
    specific is_object_address(E) conjunct(s) of a precondition to seed
    as facts, without needing to guess at E's identity from an arbitrary
-   position inside a larger boolean expression.  */
+   position inside a larger boolean expression.
+
+   Increment K: the classification strips a CLEANUP_POINT_EXPR/location
+   wrapper on a *local copy* first (never mutating *COND itself, which
+   downstream consumers -- oa_refine_single_comparison et al. -- still
+   need to see in its original, wrapped form and unwrap themselves) --
+   found necessary because a condition containing an embedded
+   assignment ('k >= 0 && k < 5 && (p = &arr[k]) != nullptr') arrives
+   with the *entire* condition wrapped in one CLEANUP_POINT_EXPR (the
+   assignment's own full-expression temporary-cleanup scope), which
+   previously defeated decomposition entirely: the top-level code was
+   CLEANUP_POINT_EXPR, never TRUTH_ANDIF_EXPR/TRUTH_AND_EXPR, so the
+   whole condition was treated as a single opaque "conjunct" no matter
+   how many real && operands it contained.  */
 
 static void
 oa_collect_conjuncts (tree *cond, vec<tree *> *conjuncts)
 {
   tree c = *cond;
+  STRIP_ANY_LOCATION_WRAPPER (c);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    {
+      c = TREE_OPERAND (c, 0);
+      STRIP_ANY_LOCATION_WRAPPER (c);
+    }
   if (c && (TREE_CODE (c) == TRUTH_ANDIF_EXPR
 	    || TREE_CODE (c) == TRUTH_AND_EXPR))
     {
@@ -5557,15 +5534,23 @@ oa_collect_conjuncts (tree *cond, vec<tree *> *conjuncts)
 /* D4324/P2680 item 8, Increment J: the De Morgan's-dual sibling of
    oa_collect_conjuncts above, decomposing *COND at top-level ||
    (either spelling) instead of && -- a condition with no top-level ||
-   is a single disjunct of itself. Used only by oa_refine_range_for_
-   condition's else-branch refinement: negating a top-level || gives a
-   plain conjunction of negated disjuncts (De Morgan's), each refinable
-   the same way an ordinary && conjunct chain already is.  */
+   is a single disjunct of itself. Used only by oa_process_condition's
+   else-branch refinement (Increment K): negating a top-level || gives
+   a plain conjunction of negated disjuncts (De Morgan's), each
+   refinable the same way an ordinary && conjunct chain already is.
+   Strips a CLEANUP_POINT_EXPR/location wrapper on a local copy before
+   classifying, for the same reason oa_collect_conjuncts does.  */
 
 static void
 oa_collect_disjuncts (tree *cond, vec<tree *> *disjuncts)
 {
   tree c = *cond;
+  STRIP_ANY_LOCATION_WRAPPER (c);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    {
+      c = TREE_OPERAND (c, 0);
+      STRIP_ANY_LOCATION_WRAPPER (c);
+    }
   if (c && (TREE_CODE (c) == TRUTH_ORIF_EXPR
 	    || TREE_CODE (c) == TRUTH_OR_EXPR))
     {
@@ -6473,6 +6458,94 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
     }
 }
 
+/* D4324/P2680 item 8, Increment K: process COND (an IF_STMT's or
+   COND_EXPR's own condition operand) in true left-to-right,
+   short-circuit evaluation order, replacing what used to be two
+   separate phases (scan the *whole* condition eagerly, then
+   separately refine THEN_ENV/ELSE_ENV from it -- Increment E1's
+   oa_refine_range_for_condition, folded into this function entirely)
+   with one interleaved pass.
+
+   For each top-level '&&' conjunct (oa_collect_conjuncts, in order):
+   scan it for call-site obligations/div-mod/array-bounds/stray-
+   is_object_address uses and any top-level assignment
+   (oa_track_condition_assignment, now applied once per conjunct
+   rather than once to the whole condition -- see its own updated
+   comment), using COND_ENV as refined by only the *strictly earlier*
+   conjuncts; then fold this conjunct's own comparison into COND_ENV
+   (oa_refine_single_comparison, asserted true) before moving on, so
+   the *next* conjunct's scan sees it. This matters because reaching a
+   later conjunct in a '&&'-chain genuinely does guarantee every
+   earlier conjunct already evaluated true -- e.g. 'k >= 0 && k < 5 &&
+   (p = &arr[k]) != nullptr' is a sound access (the bounds are
+   established before '&arr[k]' ever executes), but was previously
+   rejected anyway, since the array-bounds scan ran against the
+   *pre*-condition ENV, before any conjunct's refinement had been
+   applied at all. The mirror-image ordering ('(p = &arr[k]) !=
+   nullptr && k >= 0 && k < 5') is genuinely unsound -- '&arr[k]'
+   really does execute before the bounds are checked -- and correctly
+   stays rejected: it is scanned using only whatever facts were
+   already established *before* this whole condition, since it's the
+   first conjunct, with nothing preceding it to refine from.
+
+   *THEN_ENV_OUT is the fully-refined COND_ENV (every conjunct
+   evaluated true to reach the then-branch). *ELSE_ENV_OUT starts from
+   ENV itself (unrefined by any conjunct) and, only for a single
+   non-compound condition, is refined by De Morgan's over its
+   top-level '||' disjuncts (Increment J, unchanged, folded in here
+   verbatim) -- a compound '&&' condition's else-branch is still never
+   refined at all, for the same reason as always (De Morgan's gives a
+   disjunction of negations there, not a single conjunction
+   representable the same way).
+
+   This is a strict generalization, not a behavior change, for any
+   condition with no top-level '&&': oa_collect_conjuncts yields the
+   condition itself as the sole "conjunct," scanned and refined exactly
+   once, in the same relative order as before.  */
+
+static void
+oa_process_condition (tree cond, oa_env &env,
+		       oa_env *then_env_out, oa_env *else_env_out)
+{
+  oa_env cond_env = env.copy ();
+  tree cond_copy = cond;
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts (&cond_copy, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      oa_scan_calls_in_expr (conjuncts[i], cond_env);
+      if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
+	{
+	  oa_scan_div_mod_in_expr (conjuncts[i], cond_env);
+	  oa_scan_array_bounds_in_expr (conjuncts[i], cond_env);
+	}
+      oa_scan_stray_is_object_address (conjuncts[i]);
+      oa_track_condition_assignment (*conjuncts[i], cond_env);
+      /* A bare 'E != 0'/'0 != E' conjunct seeds the nz-fact map
+	 directly, exactly as a precondition/contract_assert conjunct
+	 already does (oa_handle_precondition_stmt/oa_handle_assertion_
+	 stmt) -- oa_refine_single_comparison alone doesn't handle
+	 NE_EXPR at all (not representable as a single interval), so
+	 without this a later conjunct's div/mod scan wouldn't see an
+	 earlier 'n != 0' conjunct's own fact.  */
+      tree nz_decl;
+      if (oa_nonzero_conjunct_p (*conjuncts[i], &nz_decl))
+	cond_env.nz_set (nz_decl, true);
+      oa_refine_single_comparison (*conjuncts[i], cond_env, /*asserted_true=*/true);
+    }
+
+  then_env_out->assign (cond_env);
+  else_env_out->assign (env);
+  if (conjuncts.length () == 1)
+    {
+      auto_vec<tree *> disjuncts;
+      oa_collect_disjuncts (conjuncts[0], &disjuncts);
+      for (unsigned i = 0; i < disjuncts.length (); ++i)
+	oa_refine_single_comparison (*disjuncts[i], *else_env_out,
+				      /*asserted_true=*/false);
+    }
+}
+
 /* D4324/P2680: does control ever fall through past the end of STMT?
    Used by oa_walk_stmt's IF_STMT/COND_EXPR cases to decide, after
    walking both branches, whether the code following the if/else is
@@ -6803,30 +6876,15 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 
     case COND_EXPR:
       {
-	/* The condition itself was previously never walked at all here --
-	   see the IF_STMT case's comment below for why this matters and
-	   what these three steps do; identical treatment for both
-	   shapes.  */
-	oa_scan_calls_in_expr (&TREE_OPERAND (t, 0), env);
-	if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
-	  {
-	    oa_scan_div_mod_in_expr (&TREE_OPERAND (t, 0), env);
-	    oa_scan_array_bounds_in_expr (&TREE_OPERAND (t, 0), env);
-	  }
-	oa_scan_stray_is_object_address (&TREE_OPERAND (t, 0));
-	/* Closes the assignment-in-condition gap: update the assigned
-	   decl's tracked facts in ENV itself (never scanning inside
-	   &&/||, see oa_track_condition_assignment's own comment) before
-	   ENV is copied into THEN_ENV/ELSE_ENV below, so both branches
-	   (and the post-merge state) see the up-to-date facts.  */
-	oa_track_condition_assignment (TREE_OPERAND (t, 0), env);
-
-	oa_env then_env = env.copy ();
-	oa_env else_env = env.copy ();
-	/* Increment E1: refine both branches' range facts from the
-	   condition before walking into them, so nested code (and the
-	   post-merge state after the if/else) sees the narrowed bounds.  */
-	oa_refine_range_for_condition (TREE_OPERAND (t, 0), then_env, else_env);
+	/* Increment K: oa_process_condition scans the condition (calls/
+	   div-mod/array-bounds/stray-is_object_address/assignment-
+	   tracking) and refines THEN_ENV/ELSE_ENV, all in one interleaved,
+	   left-to-right, per-'&&'-conjunct pass -- see its own comment for
+	   why this matters (a later conjunct's scan now sees facts
+	   established by earlier conjuncts within the same condition).
+	   Identical treatment for both shapes (COND_EXPR/IF_STMT).  */
+	oa_env then_env, else_env;
+	oa_process_condition (TREE_OPERAND (t, 0), env, &then_env, &else_env);
 	oa_walk_stmt (&TREE_OPERAND (t, 1), then_env);
 	oa_walk_stmt (&TREE_OPERAND (t, 2), else_env);
 	/* Increment H: if exactly one arm never falls through (always
@@ -6857,49 +6915,21 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	 if/else merge rule, just via THEN_CLAUSE/ELSE_CLAUSE instead of
 	 TREE_OPERAND 1/2.  */
       {
-	/* The condition operand itself: previously never walked at all,
-	   meaning a call embedded in an if/ternary condition never got
-	   item 7's call-site precondition-obligation check, and a stray
-	   is_object_address used directly inside one (outside any
-	   contract) wasn't flagged by the well-formedness gate either --
-	   both simply invisible to this pass (unlike a loop's own
-	   condition, already covered by oa_handle_loop's "repeated part"
-	   list for item 4). Mirrors the exact shape already used for
-	   RETURN_EXPR's value and INIT_EXPR/MODIFY_EXPR's RHS: an
-	   explicit call-site-obligation scan, explicit narrow item-8
-	   scans (only within a function actually declared conveyor, same
-	   gating used everywhere else), and an explicit stray-is_object_
-	   address scan -- deliberately *not* a full oa_walk_stmt dispatch
-	   on the condition (unlike a plain sub-statement): the condition
-	   here plays the same role as RETURN_EXPR's/INIT_EXPR's own
-	   value/RHS, which don't recurse via oa_walk_stmt into themselves
-	   either, precisely to avoid re-dispatching into (and so
-	   double-scanning/double-reporting through) the very same
-	   CALL_EXPR/INIT_EXPR/MODIFY_EXPR cases that already perform
-	   their own oa_scan_calls_in_expr internally. This deliberately
-	   still doesn't dispatch the condition through oa_walk_stmt for
-	   that reason -- but an assignment written directly in the
-	   condition itself ('if ((p = f()) != nullptr)') is separately
-	   handled by oa_track_condition_assignment below, which updates
-	   the assigned decl's tracked facts without re-scanning for
-	   calls/div-mod/array-bounds (already done above), narrowly
-	   scoped to a top-level assignment only (never inside &&/||,
-	   see its own comment for why).  */
-	oa_scan_calls_in_expr (&IF_COND (t), env);
-	if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
-	  {
-	    oa_scan_div_mod_in_expr (&IF_COND (t), env);
-	    oa_scan_array_bounds_in_expr (&IF_COND (t), env);
-	  }
-	oa_scan_stray_is_object_address (&IF_COND (t));
-	oa_track_condition_assignment (IF_COND (t), env);
-
-	oa_env then_env = env.copy ();
-	oa_env else_env = env.copy ();
-	/* Increment E1: refine both branches' range facts from the
-	   condition before walking into them, so nested code (and the
-	   post-merge state after the if/else) sees the narrowed bounds.  */
-	oa_refine_range_for_condition (IF_COND (t), then_env, else_env);
+	/* The condition operand itself: not walked via a full oa_walk_stmt
+	   dispatch (unlike a plain sub-statement), to avoid re-dispatching
+	   into (and so double-scanning/double-reporting through) the very
+	   same CALL_EXPR/INIT_EXPR/MODIFY_EXPR cases that already perform
+	   their own oa_scan_calls_in_expr internally -- see oa_process_
+	   condition's own comment for the explicit, interleaved scan-then-
+	   refine sequencing it performs instead (Increment K), including
+	   the call-site precondition-obligation check (item 7), the
+	   narrow item-8 scans (conveyor functions only), the stray-
+	   is_object_address well-formedness gate, and assignment-in-
+	   condition tracking (oa_track_condition_assignment, narrowly
+	   scoped to a top-level assignment only, never inside &&/||, see
+	   its own comment for why).  */
+	oa_env then_env, else_env;
+	oa_process_condition (IF_COND (t), env, &then_env, &else_env);
 	oa_walk_stmt (&THEN_CLAUSE (t), then_env);
 	oa_walk_stmt (&ELSE_CLAUSE (t), else_env);
 	/* Increment H: same reachability-aware merge as COND_EXPR above
