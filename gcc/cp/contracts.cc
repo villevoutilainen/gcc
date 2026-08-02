@@ -4021,8 +4021,8 @@ whole_set_inherited_p (tree basefn, tree_code code, tree overrider,
 
 /* True if inherited CONTRACT (contract_is_inherited_p) hasn't had its
    condition resolved into a real call yet (see the file comment on
-   synthesize_inherited_specifier), and if so, set *BASEFN/*BASE_CONTRACT
-   to what it's pending against.  Once resolve_inherited_contract
+   synthesize_inherited_specifier), and if so, set *BASEFN and
+   *BASE_CONTRACT to what it's pending against.  Once resolve_inherited_contract
    overwrites CONTRACT_CONDITION, this returns false forever after (the
    bookkeeping in CONTRACT_STD_SOURCE_LOC is left in place -- harmless,
    since side-eligibility queries still need it, but the placeholder
@@ -5829,7 +5829,7 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env)
 	    {
 	      error_at (EXPR_LOCATION (call),
 			"cannot prove %<is_object_address%> for %qE, "
-			"required by %qD's precondition", substituted, callee);
+			"required by the precondition of %qD", substituted, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	}
