@@ -41,6 +41,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "intl.h"
 #include "cgraph.h"
 #include "opts.h"
+#include "calls.h"
 #include "output.h"
 
 /*  Design notes.
@@ -6249,6 +6250,78 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
     }
 }
 
+/* D4324/P2680: does control ever fall through past the end of STMT?
+   Used by oa_walk_stmt's IF_STMT/COND_EXPR cases to decide, after
+   walking both branches, whether the code following the if/else is
+   only ever reachable via one particular branch (because the other
+   unconditionally returns, throws, or hits a noreturn call) -- in
+   which case that branch's facts should be used as-is for the merge
+   point, rather than blindly ANDed/unioned with the terminating
+   branch's (which never actually reaches there). Recognizes:
+   RETURN_EXPR; THROW_EXPR; a CALL_EXPR to a function GCC already
+   knows is noreturn (call_expr_flags, the same query used everywhere
+   else in the compiler for this question -- picks up __builtin_trap,
+   __builtin_unreachable, std::unreachable, abort, and any other
+   [[noreturn]]-attributed callee uniformly, no name-matching needed);
+   and, recursively, a nested IF_STMT/COND_EXPR where *both* arms
+   terminate, or a STATEMENT_LIST/BIND_EXPR's last real statement.
+   Deliberately conservative for anything else (default: does NOT
+   terminate, i.e. assume it might fall through) -- safe, just
+   occasionally missing a case, the discipline used throughout this
+   pass. Not attempted: break/continue (transfer control within an
+   enclosing loop, not analogous to falling through past this if),
+   switch, goto, or a loop that never falls through by construction
+   (e.g. 'while (true) { ... return ...; }' with no break).  */
+
+static bool
+oa_stmt_terminates_p (tree stmt)
+{
+  if (stmt == NULL_TREE || stmt == error_mark_node)
+    return false;
+
+  tree t = STRIP_ANY_LOCATION_WRAPPER (stmt);
+  while (true)
+    {
+      if (TREE_CODE (t) == CLEANUP_POINT_EXPR)
+	t = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
+      else if (TREE_CODE (t) == EXPR_STMT)
+	t = STRIP_ANY_LOCATION_WRAPPER (EXPR_STMT_EXPR (t));
+      else if (TREE_CODE (t) == BIND_EXPR)
+	t = STRIP_ANY_LOCATION_WRAPPER (BIND_EXPR_BODY (t));
+      else
+	break;
+    }
+
+  switch (TREE_CODE (t))
+    {
+    case STATEMENT_LIST:
+      {
+	tree_stmt_iterator i = tsi_last (t);
+	if (tsi_end_p (i))
+	  return false;
+	return oa_stmt_terminates_p (tsi_stmt (i));
+      }
+
+    case RETURN_EXPR:
+    case THROW_EXPR:
+      return true;
+
+    case CALL_EXPR:
+      return (call_expr_flags (t) & ECF_NORETURN) != 0;
+
+    case IF_STMT:
+      return (oa_stmt_terminates_p (THEN_CLAUSE (t))
+	      && oa_stmt_terminates_p (ELSE_CLAUSE (t)));
+
+    case COND_EXPR:
+      return (oa_stmt_terminates_p (TREE_OPERAND (t, 1))
+	      && oa_stmt_terminates_p (TREE_OPERAND (t, 2)));
+
+    default:
+      return false;
+    }
+}
+
 /* The forward statement walker: processes *STMT (an arbitrary
    statement or statement-sequence) in program order, threading ENV
    forward -- an abstract, flow-sensitive simulation of "what is
@@ -6533,9 +6606,24 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	oa_refine_range_for_condition (TREE_OPERAND (t, 0), then_env, else_env);
 	oa_walk_stmt (&TREE_OPERAND (t, 1), then_env);
 	oa_walk_stmt (&TREE_OPERAND (t, 2), else_env);
-	then_env.merge_with (else_env);
-	then_env.range_merge_with (else_env);
-	env.assign (then_env);
+	/* Increment H: if exactly one arm never falls through (always
+	   returns/throws/hits a noreturn call), code after this
+	   conditional is only ever reached via the *other* arm -- use
+	   its facts as-is rather than blindly merging in the
+	   terminating arm's (which the merge point never actually
+	   sees).  */
+	bool then_terminates = oa_stmt_terminates_p (TREE_OPERAND (t, 1));
+	bool else_terminates = oa_stmt_terminates_p (TREE_OPERAND (t, 2));
+	if (then_terminates && !else_terminates)
+	  env.assign (else_env);
+	else if (else_terminates && !then_terminates)
+	  env.assign (then_env);
+	else
+	  {
+	    then_env.merge_with (else_env);
+	    then_env.range_merge_with (else_env);
+	    env.assign (then_env);
+	  }
 	return;
       }
 
@@ -6591,9 +6679,25 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	oa_refine_range_for_condition (IF_COND (t), then_env, else_env);
 	oa_walk_stmt (&THEN_CLAUSE (t), then_env);
 	oa_walk_stmt (&ELSE_CLAUSE (t), else_env);
-	then_env.merge_with (else_env);
-	then_env.range_merge_with (else_env);
-	env.assign (then_env);
+	/* Increment H: same reachability-aware merge as COND_EXPR above
+	   -- if exactly one arm never falls through, code after the if
+	   is only ever reached via the other arm.  This is what makes
+	   the common early-return-guard idiom ('if (n <= 0) return 0;')
+	   work: ELSE_CLAUSE is NULL_TREE (falls through trivially), so
+	   ELSE_ENV alone -- carrying the else-branch's own range
+	   refinement -- survives to the code after the if.  */
+	bool then_terminates = oa_stmt_terminates_p (THEN_CLAUSE (t));
+	bool else_terminates = oa_stmt_terminates_p (ELSE_CLAUSE (t));
+	if (then_terminates && !else_terminates)
+	  env.assign (else_env);
+	else if (else_terminates && !then_terminates)
+	  env.assign (then_env);
+	else
+	  {
+	    then_env.merge_with (else_env);
+	    then_env.range_merge_with (else_env);
+	    env.assign (then_env);
+	  }
 	return;
       }
 
