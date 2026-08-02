@@ -5002,13 +5002,22 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
      byte constant as the signed value it actually represents: sizetype
      is nominally unsigned, so to_widest would zero-extend a
      wraparound-encoded negative offset into a huge positive number
-     instead of recovering the intended negative byte count.  */
+     instead of recovering the intended negative byte count.
+
+     Increment W: a *variable* offset ('p + i', as opposed to a literal
+     constant like 'p + 2') arrives, confirmed empirically the same
+     way, as NOP_EXPR(MULT_EXPR(i, elt_size)) -- the scaling
+     multiplication by the pointee's own size, done before the literal
+     case's own constant-folding ever gets a chance to collapse it into
+     a single byte count, wrapped in a widening conversion to the
+     pointer-difference type. Handled by recognizing this shape and
+     using I's own tracked range (already in *elements*, not bytes, so
+     no further division is needed) instead of dividing a byte
+     constant.  */
   if (TREE_CODE (expr) == POINTER_PLUS_EXPR)
     {
       tree ptr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
       tree byte_off = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 1));
-      if (TREE_CODE (byte_off) != INTEGER_CST)
-	return false;
 
       oa_range_fact ptr_fact;
       if (!oa_get_range (ptr, env, &ptr_fact) || ptr_fact.base == NULL_TREE)
@@ -5022,23 +5031,54 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
       if (elt_size == 0)
 	return false;
 
-      widest_int byte_k = widest_int::from (wi::to_offset (byte_off),
-					     SIGNED);
-      widest_int rem;
-      widest_int elt_k = wi::divmod_trunc (byte_k, elt_size, SIGNED, &rem);
-      if (rem != 0)
-	/* Not an exact multiple of the pointee's size -- e.g. a
-	   reinterpreted or otherwise non-array-normalized offset.
-	   Conservatively unprovable rather than guessing.  */
-	return false;
+      oa_range_fact elt_off;
+      if (TREE_CODE (byte_off) == INTEGER_CST)
+	{
+	  widest_int byte_k = widest_int::from (wi::to_offset (byte_off),
+						 SIGNED);
+	  widest_int rem;
+	  widest_int elt_k = wi::divmod_trunc (byte_k, elt_size, SIGNED, &rem);
+	  if (rem != 0)
+	    /* Not an exact multiple of the pointee's size -- e.g. a
+	       reinterpreted or otherwise non-array-normalized offset.
+	       Conservatively unprovable rather than guessing.  */
+	    return false;
+	  elt_off.base = NULL_TREE;
+	  elt_off.has_lo = elt_off.has_hi = true;
+	  elt_off.lo = elt_off.hi = elt_k;
+	}
+      else
+	{
+	  tree inner = byte_off;
+	  while (TREE_CODE (inner) == NOP_EXPR || TREE_CODE (inner) == CONVERT_EXPR)
+	    inner = TREE_OPERAND (inner, 0);
+	  if (TREE_CODE (inner) != MULT_EXPR)
+	    return false;
+	  tree mop0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (inner, 0));
+	  tree mop1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (inner, 1));
+	  tree index_expr;
+	  if (TREE_CODE (mop1) == INTEGER_CST
+	      && wi::to_widest (mop1) == elt_size)
+	    index_expr = mop0;
+	  else if (TREE_CODE (mop0) == INTEGER_CST
+		   && wi::to_widest (mop0) == elt_size)
+	    index_expr = mop1;
+	  else
+	    /* Not a plain 'index * elt_size' scaling -- conservatively
+	       unprovable rather than guessing.  */
+	    return false;
+	  if (!oa_get_range (index_expr, env, &elt_off)
+	      || elt_off.base != NULL_TREE)
+	    return false;
+	}
 
       out->base = ptr_fact.base;
-      out->has_lo = ptr_fact.has_lo;
-      out->has_hi = ptr_fact.has_hi;
+      out->has_lo = ptr_fact.has_lo && elt_off.has_lo;
+      out->has_hi = ptr_fact.has_hi && elt_off.has_hi;
       if (out->has_lo)
-	out->lo = ptr_fact.lo + elt_k;
+	out->lo = ptr_fact.lo + elt_off.lo;
       if (out->has_hi)
-	out->hi = ptr_fact.hi + elt_k;
+	out->hi = ptr_fact.hi + elt_off.hi;
       return true;
     }
 
@@ -5325,7 +5365,8 @@ oa_index_range (tree index, oa_env &env, oa_range_fact *out)
 
 static void
 oa_check_offset_in_bounds (tree t, tree array_type, const oa_range_fact &total,
-			    const char *what, tree diag_expr)
+			    const char *what, tree diag_expr,
+			    bool allow_one_past_end = false)
 {
   tree max = TYPE_DOMAIN (array_type) ? TYPE_MAX_VALUE (TYPE_DOMAIN (array_type))
 				       : NULL_TREE;
@@ -5339,8 +5380,16 @@ oa_check_offset_in_bounds (tree t, tree array_type, const oa_range_fact &total,
 		  "conveyor function", what);
       return;
     }
+  /* D4324/P2680 item 8, Increment W: forming a one-past-the-end pointer
+     (offset == N, for an N-element array) is well-defined -- only
+     *dereferencing* it isn't -- so the pointer-arithmetic-formation
+     check (ALLOW_ONE_PAST_END) allows an upper bound of N, one past
+     the array's own last valid index (MAX_W, itself N-1).  Every other
+     caller (ARRAY_REF/INDIRECT_REF, i.e. actual access) keeps the
+     strict N-1 bound.  */
   widest_int max_w = wi::to_widest (max);
-  if (total.lo < 0 || total.hi > max_w)
+  widest_int hi_limit = allow_one_past_end ? max_w + 1 : max_w;
+  if (total.lo < 0 || total.hi > hi_limit)
     {
       if (diag_expr)
 	error_at (EXPR_LOCATION (t), "%s %qE out of bounds in a "
@@ -5445,6 +5494,37 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 	    return NULL_TREE;
 	  oa_check_offset_in_bounds (t, TREE_TYPE (base_fact.base), base_fact,
 				     "pointer dereference", NULL_TREE);
+	  return NULL_TREE;
+	}
+
+      /* D4324/P2680 item 8, Increment W: pointer-arithmetic-*formation*
+	 checking -- validate 'p + n'/'p - n' itself, independent of
+	 whether the result is ever dereferenced, per the "one-past-the-
+	 end is formable but not dereferencable" rule (the strict N-1
+	 upper bound above is for actual access; ALLOW_ONE_PAST_END below
+	 relaxes it by one for mere formation). Only applies when the
+	 base pointer already carries a tracked array-offset fact (an
+	 ordinary pointer with no such fact is untouched, exactly like
+	 the INDIRECT_REF case above); reuses oa_get_range's own
+	 POINTER_PLUS_EXPR handling directly (already computes the
+	 resulting shifted range) rather than re-deriving the byte-to-
+	 element arithmetic here.  */
+      if (TREE_CODE (t) == POINTER_PLUS_EXPR)
+	{
+	  oa_range_fact base_fact;
+	  tree ptr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
+	  if (!oa_get_range (ptr, *e, &base_fact) || base_fact.base == NULL_TREE)
+	    return NULL_TREE;
+	  oa_range_fact result_fact;
+	  if (!oa_get_range (t, *e, &result_fact))
+	    {
+	      error_at (EXPR_LOCATION (t), "pointer arithmetic not provably "
+			"in-bounds in a conveyor function");
+	      return NULL_TREE;
+	    }
+	  oa_check_offset_in_bounds (t, TREE_TYPE (result_fact.base), result_fact,
+				     "pointer arithmetic", NULL_TREE,
+				     /*allow_one_past_end=*/true);
 	  return NULL_TREE;
 	}
 
