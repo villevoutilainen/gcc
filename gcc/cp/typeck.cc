@@ -3219,6 +3219,16 @@ lookup_destructor (tree object, tree scope, tree dtor_name,
   if (dtor_type == error_mark_node)
     return error_mark_node;
 
+  /* D4324: an explicit destructor call (as opposed to an implicit one at
+     scope exit) is not permitted in a conveyor function or predicate.  */
+  if (conveyor_restrictions_active_p ())
+    {
+      if (complain & tf_error)
+	error ("explicit destructor call not permitted in a conveyor "
+	       "function or predicate");
+      return error_mark_node;
+    }
+
   if (scope && !check_dtor_name (scope, dtor_type))
     {
       if (complain & tf_error)
@@ -9043,6 +9053,15 @@ build_static_cast_1 (location_t loc, tree type, tree expr, bool c_cast_p,
 		      complain))
     {
       tree base;
+
+      if (conveyor_restrictions_active_p ())
+	{
+	  if (complain & tf_error)
+	    error_at (loc, "%<static_cast%> performing a base-to-derived "
+		      "conversion not permitted in a conveyor function "
+		      "or predicate");
+	  return error_mark_node;
+	}
 
       if (processing_template_decl)
 	return expr;

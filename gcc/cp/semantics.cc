@@ -3696,6 +3696,16 @@ finish_pseudo_destructor_expr (tree object, tree scope, tree destructor,
 
   gcc_assert (TYPE_P (destructor));
 
+  /* D4324: a pseudo-destructor call is not permitted in a conveyor
+     function or predicate.  */
+  if (conveyor_restrictions_active_p ())
+    {
+      if (complain & tf_error)
+	error_at (loc, "pseudo-destructor call not permitted in a "
+		  "conveyor function or predicate");
+      return error_mark_node;
+    }
+
   if (!processing_template_decl)
     {
       if (scope == error_mark_node)
@@ -4987,6 +4997,28 @@ finish_id_expression_1 (tree id_expression,
 	   || TREE_CODE (decl) == RESULT_DECL)
 	  && !mark_used (decl))
 	return error_mark_node;
+
+      /* D4324: a conveyor function/predicate may not odr-use a non-const
+	 namespace-scope or static-member variable, nor any thread_local
+	 variable (const or not) -- such a use could observe or depend on
+	 mutable state outside the conveyor's own cone of evaluation.  Local
+	 variables and parameters (DECL_FUNCTION_SCOPE_P) are never
+	 restricted here.  */
+      if (VAR_P (decl)
+	  && conveyor_restrictions_active_p ()
+	  && (DECL_THREAD_LOCAL_P (decl)
+	      || ((DECL_NAMESPACE_SCOPE_P (decl) || DECL_CLASS_SCOPE_P (decl))
+		  && !CP_TYPE_CONST_P (TREE_TYPE (decl)))))
+	{
+	  if (DECL_THREAD_LOCAL_P (decl))
+	    error ("use of %<thread_local%> variable %qD not permitted in "
+		   "a conveyor function or predicate", decl);
+	  else
+	    error ("use of non-const variable %qD with static storage "
+		   "duration not permitted in a conveyor function or "
+		   "predicate", decl);
+	  return error_mark_node;
+	}
 
       /* Only certain kinds of names are allowed in constant
 	 expression.  Template parameters have already

@@ -8,11 +8,11 @@
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
-int arr[5];
+const int arr[5] = {};
 
 int f (int k) conveyor
 {
-  int* p = arr;
+  const int* p = arr;
   if ((p = &arr[k]) != nullptr && k >= 0 && k < 5) // { dg-error "array index .k. not provably in-bounds in a conveyor function" }
     return *p;
   return 0;

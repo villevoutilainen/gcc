@@ -6,11 +6,11 @@
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
-int arr[5];
+const int arr[5] = {};
 
 int f (int k) conveyor
 {
-  int* p = arr;
+  const int* p = arr;
   if (k >= 0 && k < 5 && (p = &arr[k]) != nullptr)
     return *p;
   return 0;

@@ -12728,6 +12728,18 @@ grokfndecl (tree ctype,
 
   set_originating_module (decl);
 
+  /* D4324: apply the conveyor bit before check_explicit_specialization
+     (which, for an explicit instantiation, calls determine_specialization
+     -- its own conveyor-mismatch guard reads DECL_DECLARED_CONVEYOR_P on
+     this very DECL, so the bit must already be set by the time we get
+     there.  noexcept doesn't have this problem, since the exception spec
+     is baked into the function type back in grokdeclarator, long before
+     grokfndecl runs; conveyor is a lang_decl_fn bit, so it needs setting
+     here explicitly.  The post-check_explicit_specialization block below
+     still runs too, for ordinary (non-explicit-instantiation) decls.  */
+  if (decl && decl != error_mark_node && declared_conveyor_p)
+    SET_DECL_DECLARED_CONVEYOR_P (decl);
+
   decl = check_explicit_specialization (orig_declarator, decl,
 					template_count,
 					2 * funcdef_flag +

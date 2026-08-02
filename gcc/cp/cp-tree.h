@@ -3889,6 +3889,9 @@ struct GTY(()) lang_decl {
 #define SET_DECL_DECLARED_CONVEYOR_P(NODE) \
   (retrofit_lang_decl (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE))),	\
    LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->conveyor_p = true)
+#define CLEAR_DECL_DECLARED_CONVEYOR_P(NODE) \
+  (retrofit_lang_decl (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE))),	\
+   LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->conveyor_p = false)
 
 /* Nonzero if this DECL is the __PRETTY_FUNCTION__ variable in a
    template function.  */
