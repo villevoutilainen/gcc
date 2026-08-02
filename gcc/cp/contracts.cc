@@ -4679,9 +4679,18 @@ oa_provable_p (tree expr, oa_env &env)
 	expr = op;
     }
 
+  /* D4324, Increment V: VIEW_CONVERT_EXPR is how a contract condition's
+     access to a decl is wrapped to present it as const-qualified (see
+     the comment above the VIEW_CONVERT_EXPR-building code near line
+     570) -- decl-identity-preserving, so safe (and necessary) to strip
+     through here exactly like the ordinary conversion wrappers, found
+     via direct testing that a const-qualified parameter's own fact
+     otherwise silently failed to be recognized in a contract
+     condition.  */
   while (TREE_CODE (expr) == NON_LVALUE_EXPR
 	 || TREE_CODE (expr) == NOP_EXPR
-	 || TREE_CODE (expr) == CONVERT_EXPR)
+	 || TREE_CODE (expr) == CONVERT_EXPR
+	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
     expr = TREE_OPERAND (expr, 0);
 
   if (is_this_parameter (expr))
@@ -4795,9 +4804,18 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
 	expr = op;
     }
 
+  /* D4324, Increment V: VIEW_CONVERT_EXPR is how a contract condition's
+     access to a decl is wrapped to present it as const-qualified (see
+     the comment above the VIEW_CONVERT_EXPR-building code near line
+     570) -- decl-identity-preserving, so safe (and necessary) to strip
+     through here exactly like the ordinary conversion wrappers, found
+     via direct testing that a const-qualified parameter's own fact
+     otherwise silently failed to be recognized in a contract
+     condition.  */
   while (TREE_CODE (expr) == NON_LVALUE_EXPR
 	 || TREE_CODE (expr) == NOP_EXPR
-	 || TREE_CODE (expr) == CONVERT_EXPR)
+	 || TREE_CODE (expr) == CONVERT_EXPR
+	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
     expr = TREE_OPERAND (expr, 0);
 
   if (TREE_CODE (expr) == INTEGER_CST)
@@ -4872,9 +4890,18 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 	expr = op;
     }
 
+  /* D4324, Increment V: VIEW_CONVERT_EXPR is how a contract condition's
+     access to a decl is wrapped to present it as const-qualified (see
+     the comment above the VIEW_CONVERT_EXPR-building code near line
+     570) -- decl-identity-preserving, so safe (and necessary) to strip
+     through here exactly like the ordinary conversion wrappers, found
+     via direct testing that a const-qualified parameter's own fact
+     otherwise silently failed to be recognized in a contract
+     condition.  */
   while (TREE_CODE (expr) == NON_LVALUE_EXPR
 	 || TREE_CODE (expr) == NOP_EXPR
-	 || TREE_CODE (expr) == CONVERT_EXPR)
+	 || TREE_CODE (expr) == CONVERT_EXPR
+	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
     expr = TREE_OPERAND (expr, 0);
 
   if (TREE_CODE (expr) == INTEGER_CST)
@@ -5583,6 +5610,22 @@ oa_nonzero_conjunct_p (tree conjunct, tree *decl_out)
 
   tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
   tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+  /* D4324/P2680, Increment V: strip NOP_EXPR/CONVERT_EXPR wrappers before
+     the VAR_P/PARM_DECL check below, mirroring oa_provably_nonzero_p's
+     own stripping loop -- found via direct testing that a const-
+     qualified parameter (needing an implicit conversion wrapper for the
+     comparison) was never recognized as an nz-conjunct at all, silently
+     defeating precondition/contract_assert fact-seeding for exactly the
+     common 'pre(m != 0)' shape whenever m is declared const (as every
+     by-value non-reference postcondition parameter must be).  */
+  while (TREE_CODE (op0) == NOP_EXPR || TREE_CODE (op0) == CONVERT_EXPR
+	 || TREE_CODE (op0) == NON_LVALUE_EXPR
+	 || TREE_CODE (op0) == VIEW_CONVERT_EXPR)
+    op0 = TREE_OPERAND (op0, 0);
+  while (TREE_CODE (op1) == NOP_EXPR || TREE_CODE (op1) == CONVERT_EXPR
+	 || TREE_CODE (op1) == NON_LVALUE_EXPR
+	 || TREE_CODE (op1) == VIEW_CONVERT_EXPR)
+    op1 = TREE_OPERAND (op1, 0);
   tree decl, zero;
   if (TREE_CODE (op1) == INTEGER_CST)
     decl = op0, zero = op1;
@@ -5948,6 +5991,27 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 
   auto_vec<tree *> conjuncts;
   oa_collect_conjuncts (&cond, &conjuncts);
+
+  /* D4324/P2680, Increment V: the narrow item-8 dataflow checks (div/mod
+     nonzero-divisor, fixed-size-array-bound) are conveyor-scoped the
+     same way the point-of-construction checks are, but unlike those,
+     they previously only ever fired inside a function actually declared
+     'conveyor' -- never for an is_conveyor contract condition living
+     inside an otherwise-ordinary function.  Scanned here against ENV as
+     it stands from *prior* code only (this condition's own conjuncts
+     haven't seeded any fact into ENV yet at this point) -- conservative
+     but sound: a later conjunct in *this same* condition doesn't yet
+     benefit from an earlier one's own fact (the intra-condition
+     left-to-right ordering refinement Increment K gave ordinary if/loop
+     conditions is not attempted here), a documented, narrower-than-
+     ideal scope decision, not a soundness gap.  */
+  if (conveyor_ok)
+    for (unsigned i = 0; i < conjuncts.length (); ++i)
+      {
+	oa_scan_div_mod_in_expr (conjuncts[i], env);
+	oa_scan_array_bounds_in_expr (conjuncts[i], env);
+      }
+
   auto_vec<tree> facts;
   auto_vec<tree> nz_facts;
   if (conveyor_ok)
@@ -5995,7 +6059,7 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
    the postcondition handler defined below it (which needs the return-
    tracking globals the walker itself accumulates).  */
 static void oa_walk_stmt (tree *stmt, oa_env &env);
-static void oa_handle_postcondition_stmt (tree contract);
+static void oa_handle_postcondition_stmt (tree contract, oa_env &env);
 
 /* Forward-declared: Increment N -- oa_handle_loop (defined next)
    reuses this for its own condition, defined much later in the file
@@ -6166,6 +6230,18 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
      successfully.  */
   auto_vec<tree *> conjuncts;
   oa_collect_conjuncts (&cond, &conjuncts);
+
+  /* D4324/P2680, Increment V: see the identical comment in
+     oa_handle_precondition_stmt -- same narrow item-8 dataflow checks,
+     same conservative (sound but not intra-condition-ordering-aware)
+     scan against ENV as it stands from prior code only.  */
+  if (conveyor_ok)
+    for (unsigned i = 0; i < conjuncts.length (); ++i)
+      {
+	oa_scan_div_mod_in_expr (conjuncts[i], env);
+	oa_scan_array_bounds_in_expr (conjuncts[i], env);
+      }
+
   auto_vec<tree> facts;
   auto_vec<tree> nz_facts;
   if (conveyor_ok)
@@ -6885,7 +6961,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
       return;
 
     case POSTCONDITION_STMT:
-      oa_handle_postcondition_stmt (t);
+      oa_handle_postcondition_stmt (t, env);
       return;
 
     case BIND_EXPR:
@@ -7336,7 +7412,7 @@ oa_has_active_postcondition (tree fndecl)
    sharing reason explained on oa_handle_precondition_stmt above.  */
 
 static void
-oa_handle_postcondition_stmt (tree contract)
+oa_handle_postcondition_stmt (tree contract, oa_env &env)
 {
   bool conveyor_ok = oa_contract_conveyor_active_p (contract);
   tree cond = CONTRACT_CONDITION (contract);
@@ -7347,6 +7423,31 @@ oa_handle_postcondition_stmt (tree contract)
   tree result_id = POSTCONDITION_IDENTIFIER (contract);
   if (result_id && (VAR_P (result_id) || TREE_CODE (result_id) == PARM_DECL))
     ret_env.set (result_id, oa_return_seen && oa_return_all_provable);
+
+  /* D4324/P2680, Increment V: the narrow item-8 dataflow checks, same as
+     oa_handle_precondition_stmt/oa_handle_assertion_stmt above -- scanned
+     against a copy of the real, accumulated function-body ENV (so an
+     ordinary local variable referenced in the postcondition is checked
+     using everything established throughout the function), additionally
+     seeded with the postcondition's own named-result identifier's
+     is_object_address-provability (mirroring RET_ENV above -- but not
+     its nonzero-ness or range, which nothing yet seeds for a named
+     result; a conjunct needing those for the result identifier itself
+     is conservatively left unprovable, a documented, narrower-than-
+     ideal scope, not a soundness gap).  */
+  if (conveyor_ok)
+    {
+      oa_env scan_env = env.copy ();
+      if (result_id && (VAR_P (result_id) || TREE_CODE (result_id) == PARM_DECL))
+	scan_env.set (result_id, oa_return_seen && oa_return_all_provable);
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  oa_scan_div_mod_in_expr (conjuncts[i], scan_env);
+	  oa_scan_array_bounds_in_expr (conjuncts[i], scan_env);
+	}
+    }
 
   if (!oa_resolve_condition (&cond, ret_env, conveyor_ok))
     {
