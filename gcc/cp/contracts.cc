@@ -4878,9 +4878,10 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 	return false;
 
       if (base_fact.base != NULL_TREE)
-	/* A pointer's own array-offset shifting is Increment E2's
-	   concern (validated together with the array's bound at the use
-	   site), not plain-integer E1's.  */
+	/* A pointer's own array-offset shifting through plain PLUS_EXPR/
+	   MINUS_EXPR doesn't happen at this stage -- see POINTER_PLUS_EXPR
+	   below, confirmed empirically to be what pointer arithmetic
+	   actually lowers to here, unlike plain integer addition.  */
 	return false;
 
       if (TREE_CODE (expr) == MINUS_EXPR)
@@ -4893,6 +4894,88 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 	out->lo = base_fact.lo + k;
       if (out->has_hi)
 	out->hi = base_fact.hi + k;
+      return true;
+    }
+
+  /* Increment E2: '&arr[index]', forming a pointer's initial tracked
+     offset into a named array -- confirmed empirically to be a plain
+     ADDR_EXPR(ARRAY_REF(arr, index)) at this stage, the same shape
+     oa_scan_array_bounds_in_expr's own ARRAY_TYPE-base case already
+     recognizes for direct array-element access; here it's the
+     address-of form specifically, establishing a fact for a pointer
+     variable rather than validating an immediate access.  */
+  if (TREE_CODE (expr) == ADDR_EXPR)
+    {
+      tree op = TREE_OPERAND (expr, 0);
+      if (TREE_CODE (op) == ARRAY_REF)
+	{
+	  tree arr = TREE_OPERAND (op, 0);
+	  tree index = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 1));
+	  if (VAR_P (arr) && TREE_CODE (TREE_TYPE (arr)) == ARRAY_TYPE)
+	    {
+	      oa_range_fact idx_fact;
+	      if (!oa_get_range (index, env, &idx_fact) || idx_fact.base != NULL_TREE)
+		return false;
+	      out->base = arr;
+	      out->has_lo = idx_fact.has_lo;
+	      out->has_hi = idx_fact.has_hi;
+	      out->lo = idx_fact.lo;
+	      out->hi = idx_fact.hi;
+	      return true;
+	    }
+	}
+      return false;
+    }
+
+  /* Increment E2: pointer arithmetic ('p + n'/'p - n') -- confirmed
+     empirically to already be POINTER_PLUS_EXPR at this pre-genericize
+     stage (unlike plain integer addition, which stays PLUS_EXPR), with
+     the offset operand *always* addition (subtraction folds the
+     negated byte count directly into the constant, via ordinary
+     two's-complement wraparound in the offset's own sizetype) and
+     *already scaled to bytes* rather than elements -- both found only
+     by direct inspection, not guessable from the plain-integer case's
+     own shape. wi::to_offset (not to_widest) is required to read the
+     byte constant as the signed value it actually represents: sizetype
+     is nominally unsigned, so to_widest would zero-extend a
+     wraparound-encoded negative offset into a huge positive number
+     instead of recovering the intended negative byte count.  */
+  if (TREE_CODE (expr) == POINTER_PLUS_EXPR)
+    {
+      tree ptr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      tree byte_off = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 1));
+      if (TREE_CODE (byte_off) != INTEGER_CST)
+	return false;
+
+      oa_range_fact ptr_fact;
+      if (!oa_get_range (ptr, env, &ptr_fact) || ptr_fact.base == NULL_TREE)
+	return false;
+
+      tree pointee = TREE_TYPE (TREE_TYPE (expr));
+      tree elt_size_tree = TYPE_SIZE_UNIT (pointee);
+      if (!elt_size_tree || TREE_CODE (elt_size_tree) != INTEGER_CST)
+	return false;
+      widest_int elt_size = wi::to_widest (elt_size_tree);
+      if (elt_size == 0)
+	return false;
+
+      widest_int byte_k = widest_int::from (wi::to_offset (byte_off),
+					     SIGNED);
+      widest_int rem;
+      widest_int elt_k = wi::divmod_trunc (byte_k, elt_size, SIGNED, &rem);
+      if (rem != 0)
+	/* Not an exact multiple of the pointee's size -- e.g. a
+	   reinterpreted or otherwise non-array-normalized offset.
+	   Conservatively unprovable rather than guessing.  */
+	return false;
+
+      out->base = ptr_fact.base;
+      out->has_lo = ptr_fact.has_lo;
+      out->has_hi = ptr_fact.has_hi;
+      if (out->has_lo)
+	out->lo = ptr_fact.lo + elt_k;
+      if (out->has_hi)
+	out->hi = ptr_fact.hi + elt_k;
       return true;
     }
 
@@ -5057,44 +5140,160 @@ oa_scan_div_mod_in_expr (tree *expr, oa_env &env)
     }, &env, NULL);
 }
 
-/* D4324/P2680 item 8, narrowest useful version of the pointer-
-   arithmetic array-bound rule: check every ARRAY_REF within *EXPR whose
-   base is a decl of a fixed-size ARRAY_TYPE, erroring unless the index
-   is a compile-time-constant actually within [0, N). A non-constant
-   index, or a constant one out of range, is rejected -- general pointer
-   arithmetic on an already-decayed/ordinary pointer (not a directly-
-   named fixed-size array) is conservatively left unchecked entirely by
-   this narrow pass (a documented limitation, not silently accepted --
-   see Increment E in the plan for real array-bound/size dataflow).
+/* D4324/P2680 item 8: get INDEX's value as an oa_range_fact -- either a
+   literal constant (the exact point) or (Increment E2) a range-tracked
+   expression, requiring a plain integer range (no array base of its
+   own; an index that's itself a tracked pointer-into-array offset
+   would be a nonsensical index expression).  */
+
+static bool
+oa_index_range (tree index, oa_env &env, oa_range_fact *out)
+{
+  if (TREE_CODE (index) == INTEGER_CST)
+    {
+      out->base = NULL_TREE;
+      out->has_lo = out->has_hi = true;
+      out->lo = out->hi = wi::to_widest (index);
+      return true;
+    }
+  return oa_get_range (index, env, out) && out->base == NULL_TREE;
+}
+
+/* D4324/P2680 item 8: check that TOTAL (an already-computed offset
+   range relative to ARRAY_TYPE's own start, in elements) is fully
+   within [0, N) of ARRAY_TYPE's declared bound, erroring at T
+   (labelled WHAT in the diagnostic) if not -- either because the
+   bound itself isn't staticaly known, TOTAL is not fully bounded in
+   both directions, or the bounded range exceeds the array either
+   below zero or beyond its last valid index.  */
+
+static void
+oa_check_offset_in_bounds (tree t, tree array_type, const oa_range_fact &total,
+			    const char *what, tree diag_expr)
+{
+  tree max = TYPE_DOMAIN (array_type) ? TYPE_MAX_VALUE (TYPE_DOMAIN (array_type))
+				       : NULL_TREE;
+  if (!total.has_lo || !total.has_hi || !max || TREE_CODE (max) != INTEGER_CST)
+    {
+      if (diag_expr)
+	error_at (EXPR_LOCATION (t), "%s %qE not provably in-bounds in a "
+		  "conveyor function", what, diag_expr);
+      else
+	error_at (EXPR_LOCATION (t), "%s not provably in-bounds in a "
+		  "conveyor function", what);
+      return;
+    }
+  widest_int max_w = wi::to_widest (max);
+  if (total.lo < 0 || total.hi > max_w)
+    {
+      if (diag_expr)
+	error_at (EXPR_LOCATION (t), "%s %qE out of bounds in a "
+		  "conveyor function", what, diag_expr);
+      else
+	error_at (EXPR_LOCATION (t), "%s out of bounds in a conveyor "
+		  "function", what);
+    }
+}
+
+/* D4324/P2680 item 8, the pointer-arithmetic array-bound rule: check
+   every ARRAY_REF and INDIRECT_REF within *EXPR.
+
+   An ARRAY_REF (subscript syntax, 'arr[i]'/'p[i]') is *always*
+   validated, whether its base is a directly-named fixed-size
+   ARRAY_TYPE (the narrow version's original scope: the index must be
+   a compile-time constant, or, as of Increment E2, a range-tracked
+   expression, fully within [0, N)) or a POINTER_TYPE whose own value
+   is itself tracked (Increment E2) as an offset into a named array
+   (oa_get_range) -- combined with the subscript's own index range via
+   ordinary interval addition, then checked the same way. Subscript
+   syntax unambiguously signals "this is array access," so an
+   unprovable case is always an error, never silently skipped.
+
+   An INDIRECT_REF ('*p', no subscript syntax) is different: a bare
+   dereference is common and legitimate for perfectly ordinary,
+   non-array-related pointers (whose validity is is_object_address's
+   separate concern entirely) -- so this is only ever checked *when P
+   already carries a tracked array-offset fact* (Increment E2): only
+   then does "was this dereference formed via array-related pointer
+   arithmetic, and is the offset still in range" actually apply. A
+   plain pointer with no such fact is silently left alone here.
+
    Only meaningful within a function actually declared with the
    'conveyor' keyword -- checked by the caller, not here.  */
 
 static void
 oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 {
-  cp_walk_tree (expr, [](tree *tp, int *, void *) -> tree
+  cp_walk_tree (expr, [](tree *tp, int *, void *data_) -> tree
     {
+      oa_env *e = (oa_env *) data_;
       tree t = *tp;
-      if (t == NULL_TREE || t == error_mark_node || TREE_CODE (t) != ARRAY_REF)
+      if (t == NULL_TREE || t == error_mark_node)
 	return NULL_TREE;
-      tree base = TREE_OPERAND (t, 0);
-      tree base_type = TREE_TYPE (base);
-      if (TREE_CODE (base_type) != ARRAY_TYPE || !TYPE_DOMAIN (base_type))
-	return NULL_TREE;
-      tree index = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 1));
-      tree max = TYPE_MAX_VALUE (TYPE_DOMAIN (base_type));
-      if (TREE_CODE (index) != INTEGER_CST || !max
-	  || TREE_CODE (max) != INTEGER_CST)
+
+      if (TREE_CODE (t) == ARRAY_REF)
 	{
-	  error_at (EXPR_LOCATION (t), "array index %qE not provably "
-		    "in-bounds in a conveyor function", index);
+	  tree base = TREE_OPERAND (t, 0);
+	  tree base_type = TREE_TYPE (base);
+	  tree index = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 1));
+
+	  if (TREE_CODE (base_type) == ARRAY_TYPE)
+	    {
+	      oa_range_fact idx_fact;
+	      if (!oa_index_range (index, *e, &idx_fact))
+		{
+		  error_at (EXPR_LOCATION (t), "array index %qE not "
+			    "provably in-bounds in a conveyor function",
+			    index);
+		  return NULL_TREE;
+		}
+	      oa_check_offset_in_bounds (t, base_type, idx_fact, "array index", index);
+	    }
+	  else if (POINTER_TYPE_P (base_type))
+	    {
+	      oa_range_fact base_fact;
+	      oa_range_fact idx_fact;
+	      if (!oa_get_range (base, *e, &base_fact) || base_fact.base == NULL_TREE
+		  || !oa_index_range (index, *e, &idx_fact))
+		{
+		  error_at (EXPR_LOCATION (t), "array index %qE not "
+			    "provably in-bounds in a conveyor function",
+			    index);
+		  return NULL_TREE;
+		}
+	      oa_range_fact total;
+	      total.base = NULL_TREE;
+	      total.has_lo = base_fact.has_lo && idx_fact.has_lo;
+	      total.has_hi = base_fact.has_hi && idx_fact.has_hi;
+	      if (total.has_lo)
+		total.lo = base_fact.lo + idx_fact.lo;
+	      if (total.has_hi)
+		total.hi = base_fact.hi + idx_fact.hi;
+	      oa_check_offset_in_bounds (t, TREE_TYPE (base_fact.base), total,
+					 "array index", index);
+	    }
 	  return NULL_TREE;
 	}
-      if (tree_int_cst_sgn (index) < 0 || tree_int_cst_lt (max, index))
-	error_at (EXPR_LOCATION (t), "array index %qE out of bounds in "
-		  "a conveyor function", index);
+
+      if (TREE_CODE (t) == INDIRECT_REF)
+	{
+	  tree base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
+	  if (!POINTER_TYPE_P (TREE_TYPE (base)))
+	    return NULL_TREE;
+	  oa_range_fact base_fact;
+	  if (!oa_get_range (base, *e, &base_fact) || base_fact.base == NULL_TREE)
+	    /* No tracked array-offset fact at all -- an ordinary
+	       dereference, not something this rule is about; silently
+	       left alone (is_object_address's separate mechanism is
+	       what validates a plain pointer's own basic validity).  */
+	    return NULL_TREE;
+	  oa_check_offset_in_bounds (t, TREE_TYPE (base_fact.base), base_fact,
+				     "pointer dereference", NULL_TREE);
+	  return NULL_TREE;
+	}
+
       return NULL_TREE;
-    }, NULL, NULL);
+    }, &env, NULL);
 }
 
 /* Walk COND (an arbitrary boolean expression, e.g. a contract's
@@ -5892,6 +6091,13 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      env.set (decl, oa_provable_p (DECL_INITIAL (decl), env));
 	    else
 	      env.invalidate (decl);
+	    /* Increment E2's array-base+offset tracking, independent of
+	       (and alongside) the is_object_address tracking above.  */
+	    oa_range_fact fact;
+	    if (DECL_INITIAL (decl) && oa_get_range (DECL_INITIAL (decl), env, &fact))
+	      env.range_set (decl, fact);
+	    else
+	      env.range_invalidate (decl);
 	  }
 	else if (VAR_P (decl) && INTEGRAL_TYPE_P (TREE_TYPE (decl)))
 	  {
@@ -5952,7 +6158,16 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  }
 	if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 	    && POINTER_TYPE_P (TREE_TYPE (lhs)))
-	  env.set (lhs, oa_provable_p (rhs, env));
+	  {
+	    env.set (lhs, oa_provable_p (rhs, env));
+	    /* Increment E2's array-base+offset tracking, independent of
+	       (and alongside) the is_object_address tracking above.  */
+	    oa_range_fact fact;
+	    if (oa_get_range (rhs, env, &fact))
+	      env.range_set (lhs, fact);
+	    else
+	      env.range_invalidate (lhs);
+	  }
 	else if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 		 && INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
 	  {
