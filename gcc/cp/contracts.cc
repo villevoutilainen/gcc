@@ -4720,23 +4720,31 @@ oa_provable_p (tree expr, oa_env &env)
    decl, resolved against the *enclosing* scope's env exactly the way
    oa_provable_p's own capture-proxy redirect works.
 
-   Deliberately still narrow in one respect: this does not recurse into
-   a statically-resolvable, immediately-invoked closure *call* the way
-   oa_provable_p does (item 5) -- e.g. 'int n = [&]{ return 5; }();'
-   isn't recognized as nonzero-provable. Doing so would need a second,
-   parallel return-path tracking mechanism (mirroring OA_RETURN_
-   TRACKING/OA_RETURN_ALL_PROVABLE/OA_RETURN_SEEN, which only accumulate
-   is_object_address-provability across a closure's return paths, not
-   nonzero-ness) -- left as a further, smaller residual gap, not part of
-   Increment E-divmod's scoped set of fixes (nor of Increments E1-E4,
-   which are about range facts specifically, not this one).  Anything
-   not recognized here is conservatively left unprovable, the same
-   "must be provable, else treated as unprovable" discipline used
-   throughout this pass.  */
+   This function itself still does not recurse into a statically-
+   resolvable, immediately-invoked closure *call* directly the way
+   oa_provable_p does (item 5) -- doing so here would need its own
+   parallel return-path tracking mechanism for nonzero-ness
+   specifically. In practice, though, Increment E4's extension of the
+   supplementary range-fact check just below now covers the common
+   case anyway: 'int n = [&]{ return 5; }();' ends up with a range
+   fact for 'n' (via oa_get_range's own IILE recursion, oa_resolve_
+   iile_range), which the range check below then recognizes as
+   excluding zero -- so this residual gap only remains for a case
+   where a range fact isn't establishable at all (e.g. the closure
+   returns something oa_get_range doesn't recognize) but nonzero-ness
+   specifically still might be. Anything not recognized here is
+   conservatively left unprovable, the same "must be provable, else
+   treated as unprovable" discipline used throughout this pass.  */
 
 /* Forward-declared: oa_provably_nonzero_p also consults a range fact
    (Increment E1) as a supplementary source, defined below it.  */
 static bool oa_get_range (tree expr, oa_env &env, oa_range_fact *out);
+
+/* Forward-declared: oa_get_range recurses into a statically-
+   resolvable, immediately-invoked closure (Increment E4) via this,
+   defined near its sibling oa_resolve_iile_call further down (after
+   oa_walk_stmt itself, which both need to call).  */
+static bool oa_resolve_iile_range (tree call, oa_env &env, oa_range_fact *out);
 
 static bool
 oa_provably_nonzero_p (tree expr, oa_env &env)
@@ -4978,6 +4986,14 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 	out->hi = ptr_fact.hi + elt_k;
       return true;
     }
+
+  /* Increment E4: recurse into a statically-resolvable, immediately-
+     invoked closure (item 5), the same restriction oa_provable_p/oa_
+     provably_nonzero_p already apply -- one level deep only (see
+     oa_iile_outer_env's own comment).  */
+  tree closure_obj;
+  if (!oa_iile_outer_env && oa_iile_call_p (expr, &closure_obj))
+    return oa_resolve_iile_range (expr, env, out);
 
   return false;
 }
@@ -5657,6 +5673,17 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
     }
   for (unsigned i = 0; i < nz_facts.length (); ++i)
     env.nz_set (nz_facts[i], true);
+  /* Increment E4: a comparison-shaped conjunct ('i < N', etc.) is
+     trusted the same way an is_object_address(E)/E != 0 conjunct
+     already is above -- reusing oa_refine_single_comparison directly,
+     since "trusted true" for a precondition conjunct is exactly the
+     same thing as a then-branch refinement.  Silently does nothing for
+     any conjunct shape it doesn't recognize (already covered above, or
+     neither), so it's safe to call unconditionally over every
+     conjunct.  */
+  if (conveyor_ok)
+    for (unsigned i = 0; i < conjuncts.length (); ++i)
+      oa_refine_single_comparison (*conjuncts[i], env, /*asserted_true=*/true);
 }
 
 /* Forward-declared: the statement walker recurses into itself, and into
@@ -5690,6 +5717,18 @@ static bool oa_return_tracking;
 static bool oa_return_all_provable;
 static bool oa_return_seen;
 
+/* Increment E4: the exact same accumulator shape, for a range fact
+   instead of is_object_address-provability -- merged by *union* of
+   intervals across every return path (the range-fact lattice's own
+   merge rule, same as everywhere else it's used) rather than AND of
+   booleans.  Used by oa_resolve_iile_range below, the range-fact
+   counterpart of oa_resolve_iile_call.  */
+
+static bool oa_return_range_tracking;
+static bool oa_return_range_has_fact;
+static bool oa_return_range_seen;
+static oa_range_fact oa_return_range_fact;
+
 /* Resolve CALL (already confirmed by oa_iile_call_p) by walking the
    invoked closure's own operator() body: provable only if the returned
    value is provable on *every* return path (the same merge discipline
@@ -5716,6 +5755,14 @@ oa_resolve_iile_call (tree call, oa_env &env)
   bool saved_tracking = oa_return_tracking;
   bool saved_all_provable = oa_return_all_provable;
   bool saved_seen = oa_return_seen;
+  /* Suppress the sibling range-fact accumulator (Increment E4) during
+     this walk -- it must not be conflated with the boolean one being
+     computed here, in case this call happens to be nested inside an
+     already-in-progress oa_resolve_iile_range (a pathological,
+     currently out-of-scope case, but the save/restore costs nothing
+     and keeps the two mechanisms cleanly independent regardless).  */
+  bool saved_range_tracking = oa_return_range_tracking;
+  oa_return_range_tracking = false;
 
   oa_iile_outer_env = &env;
   oa_return_tracking = true;
@@ -5731,6 +5778,53 @@ oa_resolve_iile_call (tree call, oa_env &env)
   oa_return_tracking = saved_tracking;
   oa_return_all_provable = saved_all_provable;
   oa_return_seen = saved_seen;
+  oa_return_range_tracking = saved_range_tracking;
+
+  return result;
+}
+
+/* Increment E4: the range-fact counterpart of oa_resolve_iile_call
+   above -- same shape entirely, just accumulating OA_RETURN_RANGE_*
+   (union of intervals) instead of the boolean OA_RETURN_*.  Writes the
+   merged fact to *OUT and returns true only if every return path
+   concluded with an actual, mutually-compatible range fact.  */
+
+static bool
+oa_resolve_iile_range (tree call, oa_env &env, oa_range_fact *out)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  tree body = DECL_SAVED_TREE (callee);
+  if (body == NULL_TREE || body == error_mark_node)
+    return false;
+
+  oa_env *saved_outer_env = oa_iile_outer_env;
+  bool saved_range_tracking = oa_return_range_tracking;
+  bool saved_range_has_fact = oa_return_range_has_fact;
+  bool saved_range_seen = oa_return_range_seen;
+  oa_range_fact saved_range_fact = oa_return_range_fact;
+  /* Suppress the sibling boolean accumulator during this walk, for the
+     same reason oa_resolve_iile_call suppresses this one.  */
+  bool saved_tracking = oa_return_tracking;
+  oa_return_tracking = false;
+
+  oa_iile_outer_env = &env;
+  oa_return_range_tracking = true;
+  oa_return_range_has_fact = false;
+  oa_return_range_seen = false;
+
+  oa_env inner_env;
+  oa_walk_stmt (&body, inner_env);
+
+  bool result = oa_return_range_seen && oa_return_range_has_fact;
+  if (result)
+    *out = oa_return_range_fact;
+
+  oa_iile_outer_env = saved_outer_env;
+  oa_return_range_tracking = saved_range_tracking;
+  oa_return_range_has_fact = saved_range_has_fact;
+  oa_return_range_seen = saved_range_seen;
+  oa_return_range_fact = saved_range_fact;
+  oa_return_tracking = saved_tracking;
 
   return result;
 }
@@ -5790,6 +5884,14 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
     }
   for (unsigned i = 0; i < nz_facts.length (); ++i)
     env.nz_set (nz_facts[i], true);
+  /* Increment E4: the same comparison-shaped-conjunct fact-seeding as
+     oa_handle_precondition_stmt above, applied here too -- a preceding,
+     conveyor, non-ignored contract_assert's own comparison conjunct
+     establishes a usable range fact for later code, the same escape
+     hatch already used for is_object_address/nonzero-ness.  */
+  if (conveyor_ok)
+    for (unsigned i = 0; i < conjuncts.length (); ++i)
+      oa_refine_single_comparison (*conjuncts[i], env, /*asserted_true=*/true);
 }
 
 /* Collect, into PTR_OUT/NZ_OUT (each deduplicated), every pointer-typed
@@ -6072,7 +6174,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
       return;
 
     case RETURN_EXPR:
-      if (oa_return_tracking)
+      if (oa_return_tracking || oa_return_range_tracking)
 	{
 	  /* The return value: TREE_OPERAND (t, 0) is either the plain
 	     value expression (void-returning path not relevant here) or
@@ -6082,14 +6184,53 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  tree val = TREE_OPERAND (t, 0);
 	  if (val && (TREE_CODE (val) == INIT_EXPR || TREE_CODE (val) == MODIFY_EXPR))
 	    val = TREE_OPERAND (val, 1);
-	  bool this_provable = oa_provable_p (val, env);
-	  if (!oa_return_seen)
+
+	  if (oa_return_tracking)
 	    {
-	      oa_return_all_provable = this_provable;
-	      oa_return_seen = true;
+	      bool this_provable = oa_provable_p (val, env);
+	      if (!oa_return_seen)
+		{
+		  oa_return_all_provable = this_provable;
+		  oa_return_seen = true;
+		}
+	      else
+		oa_return_all_provable = oa_return_all_provable && this_provable;
 	    }
-	  else
-	    oa_return_all_provable = oa_return_all_provable && this_provable;
+
+	  /* Increment E4: the same "every incoming value must satisfy
+	     it" merge across every return path, generalized to range
+	     facts (union of intervals rather than AND of booleans) --
+	     mirrors OA_RETURN_TRACKING/ALL_PROVABLE/SEEN's shape exactly,
+	     just for oa_resolve_iile_range below instead of oa_provable_p/
+	     oa_resolve_iile_call.  */
+	  if (oa_return_range_tracking)
+	    {
+	      oa_range_fact this_fact;
+	      bool this_ok = oa_get_range (val, env, &this_fact);
+	      if (!oa_return_range_seen)
+		{
+		  oa_return_range_has_fact = this_ok;
+		  if (this_ok)
+		    oa_return_range_fact = this_fact;
+		  oa_return_range_seen = true;
+		}
+	      else if (!oa_return_range_has_fact || !this_ok
+		       || oa_return_range_fact.base != this_fact.base)
+		oa_return_range_has_fact = false;
+	      else
+		{
+		  oa_return_range_fact.has_lo
+		    = oa_return_range_fact.has_lo && this_fact.has_lo;
+		  oa_return_range_fact.has_hi
+		    = oa_return_range_fact.has_hi && this_fact.has_hi;
+		  if (oa_return_range_fact.has_lo)
+		    oa_return_range_fact.lo
+		      = wi::smin (oa_return_range_fact.lo, this_fact.lo);
+		  if (oa_return_range_fact.has_hi)
+		    oa_return_range_fact.hi
+		      = wi::smax (oa_return_range_fact.hi, this_fact.hi);
+		}
+	    }
 	}
       /* A returned value commonly flows directly from a call (e.g.
 	 'return deref(p);') -- discharge any call-site precondition
