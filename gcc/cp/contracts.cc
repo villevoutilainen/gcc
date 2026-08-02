@@ -4370,6 +4370,28 @@ is_object_address_call_p (tree call, tree *arg)
    unprovable" lattice, the same discipline is_ignored/constify/
    is_conveyor already use.  */
 
+/* D4324/P2680 item 8, Increment E1: a provable value-range fact for an
+   integer-typed decl, or a pointer-typed decl's provable offset (in
+   elements) into a named array -- see oa_env's own m_range_map comment
+   below for why these two are unified into one representation rather
+   than tracked as two separate maps.  BASE is NULL_TREE for a plain
+   integer range; a VAR_DECL of ARRAY_TYPE for a pointer's tracked
+   offset into that array.  HAS_LO/HAS_HI false means unbounded in that
+   direction (e.g. a fact established by 'i < N' alone has no lower
+   bound at all).  Bounds are widest_int (arbitrary precision, the same
+   utility real value-range passes use, via the wi:: namespace already
+   available everywhere in gcc/cp through coretypes.h) rather than
+   HOST_WIDE_INT, so interval arithmetic never has to separately worry
+   about overflow of the bound-tracking machinery itself, independent
+   of the actual integer type being reasoned about.  */
+
+struct oa_range_fact
+{
+  tree base;
+  bool has_lo, has_hi;
+  widest_int lo, hi;
+};
+
 class oa_env
 {
 public:
@@ -4397,6 +4419,29 @@ public:
   void nz_set (tree decl, bool provable) { m_nz_map.put (decl, provable); }
   void nz_invalidate (tree decl) { m_nz_map.put (decl, false); }
 
+  /* A third, independent per-decl fact -- a provable value range,
+     unified across "plain integer range" and "pointer's offset into a
+     named array" (see oa_range_fact's own comment) -- for item 8's
+     Increment E1/E2 (symbolic range analysis for the array-bound
+     rule). Unlike the two boolean maps above, absence means
+     "unconstrained," and merging is by *union* of intervals, not AND
+     of booleans -- a genuinely different lattice, so this needs its
+     own range_merge_with rather than fitting into the existing
+     merge_with's shape.  */
+  bool range_get (tree decl, oa_range_fact *out)
+  {
+    oa_range_fact *v = m_range_map.get (decl);
+    if (!v)
+      return false;
+    *out = *v;
+    return true;
+  }
+  void range_set (tree decl, const oa_range_fact &fact)
+  {
+    m_range_map.put (decl, fact);
+  }
+  void range_invalidate (tree decl) { m_range_map.remove (decl); }
+
   oa_env copy ()
   {
     oa_env r;
@@ -4404,6 +4449,8 @@ public:
       r.m_map.put (it.first, it.second);
     for (auto it : m_nz_map)
       r.m_nz_map.put (it.first, it.second);
+    for (auto it : m_range_map)
+      r.m_range_map.put (it.first, it.second);
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -4417,6 +4464,9 @@ public:
     m_nz_map.empty ();
     for (auto it : other.m_nz_map)
       m_nz_map.put (it.first, it.second);
+    m_range_map.empty ();
+    for (auto it : other.m_range_map)
+      m_range_map.put (it.first, it.second);
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -4447,9 +4497,50 @@ public:
       m_nz_map.put (nz_to_invalidate[i], false);
   }
 
+  /* Merge OTHER's range facts into *this in place, by *union* of
+     intervals (the range-fact lattice's own merge rule, distinct from
+     merge_with's AND-of-booleans above): a decl keeps a fact after the
+     merge only if *both* sides have one, for the *same* base (differing
+     bases, or a fact present on only one side, means the merged value
+     could fall outside either single interval, so the merged result is
+     "unconstrained" -- absence, the same "must be provable, else
+     treated as unconstrained" discipline as everywhere else in this
+     pass). Collects the post-merge state separately from the read
+     pass, rather than mutating m_range_map while iterating it.  */
+  void range_merge_with (oa_env &other)
+  {
+    auto_vec<tree> to_remove;
+    auto_vec<tree> to_keep;
+    auto_vec<oa_range_fact> kept_facts;
+    for (auto it : m_range_map)
+      {
+	oa_range_fact *ov = other.m_range_map.get (it.first);
+	if (!ov || ov->base != it.second.base)
+	  {
+	    to_remove.safe_push (it.first);
+	    continue;
+	  }
+	oa_range_fact merged;
+	merged.base = it.second.base;
+	merged.has_lo = it.second.has_lo && ov->has_lo;
+	merged.has_hi = it.second.has_hi && ov->has_hi;
+	if (merged.has_lo)
+	  merged.lo = wi::smin (it.second.lo, ov->lo);
+	if (merged.has_hi)
+	  merged.hi = wi::smax (it.second.hi, ov->hi);
+	to_keep.safe_push (it.first);
+	kept_facts.safe_push (merged);
+      }
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_range_map.remove (to_remove[i]);
+    for (unsigned i = 0; i < to_keep.length (); ++i)
+      m_range_map.put (to_keep[i], kept_facts[i]);
+  }
+
 private:
   hash_map<tree, bool> m_map;
   hash_map<tree, bool> m_nz_map;
+  hash_map<tree, oa_range_fact> m_range_map;
 };
 
 /* True if CALL is a statically-resolvable, immediately-invoked closure
@@ -4643,6 +4734,10 @@ oa_provable_p (tree expr, oa_env &env)
    "must be provable, else treated as unprovable" discipline used
    throughout this pass.  */
 
+/* Forward-declared: oa_provably_nonzero_p also consults a range fact
+   (Increment E1) as a supplementary source, defined below it.  */
+static bool oa_get_range (tree expr, oa_env &env, oa_range_fact *out);
+
 static bool
 oa_provably_nonzero_p (tree expr, oa_env &env)
 {
@@ -4685,10 +4780,254 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
 	  if (captured)
 	    return oa_provably_nonzero_p (captured, *oa_iile_outer_env);
 	}
-      return env.nz_provable_p (expr);
+      if (env.nz_provable_p (expr))
+	return true;
+      /* Increment E1: a provable value range that excludes zero
+	 entirely (e.g. established by a preceding 'if (n > 0)' guard)
+	 is also sufficient, supplementing the narrow nz-fact map above
+	 rather than replacing it.  */
+      oa_range_fact fact;
+      if (env.range_get (expr, &fact) && fact.base == NULL_TREE
+	  && ((fact.has_lo && fact.lo > 0) || (fact.has_hi && fact.hi < 0)))
+	return true;
+      return false;
     }
 
   return false;
+}
+
+/* Forward-declared: oa_refine_range_for_condition (defined below)
+   decomposes a condition at top-level && the same way contract
+   conditions already are, via this existing helper defined later in
+   the file.  */
+static void oa_collect_conjuncts (tree *cond, vec<tree *> *conjuncts);
+
+/* D4324/P2680 item 8, Increment E1: determine EXPR's provable value
+   range (or a pointer's provable offset into a named array, once
+   Increment E2 starts populating that side of the fact -- this
+   function doesn't yet special-case pointer arithmetic itself, only
+   plain integer ranges, per E1's own scope), writing it to *OUT and
+   returning true if any fact is known. Mirrors oa_provable_p/oa_
+   provably_nonzero_p's shape exactly (capture-proxy redirect via
+   OA_IILE_OUTER_ENV, including the same INDIRECT_REF unwrap for
+   reading a captured value directly), plus straight-line propagation
+   through a constant addition/subtraction ('i + 1', with 'i' itself
+   range-tracked) -- deliberately only a *constant* shift, not general
+   interval-plus-interval arithmetic (needed for e.g. a pointer
+   incremented by another range-tracked amount, which is Increment E2's
+   concern, not this one's). Does not recurse into a statically-
+   resolvable immediately-invoked closure the way oa_provable_p does
+   (item 5) -- an even narrower residual gap than oa_provably_nonzero_p
+   already has, noted for a future increment rather than this one.  */
+
+static bool
+oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
+{
+  if (expr == NULL_TREE || expr == error_mark_node)
+    return false;
+
+  STRIP_ANY_LOCATION_WRAPPER (expr);
+
+  if (oa_iile_outer_env && TREE_CODE (expr) == INDIRECT_REF)
+    {
+      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (VAR_P (op) && TREE_CODE (TREE_TYPE (op)) == REFERENCE_TYPE
+	  && is_capture_proxy (op))
+	expr = op;
+    }
+
+  while (TREE_CODE (expr) == NON_LVALUE_EXPR
+	 || TREE_CODE (expr) == NOP_EXPR
+	 || TREE_CODE (expr) == CONVERT_EXPR)
+    expr = TREE_OPERAND (expr, 0);
+
+  if (TREE_CODE (expr) == INTEGER_CST)
+    {
+      out->base = NULL_TREE;
+      out->has_lo = out->has_hi = true;
+      out->lo = out->hi = wi::to_widest (expr);
+      return true;
+    }
+
+  if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
+    {
+      if (oa_iile_outer_env && is_capture_proxy (expr))
+	{
+	  tree captured = DECL_CAPTURED_VARIABLE (expr);
+	  if (captured)
+	    return oa_get_range (captured, *oa_iile_outer_env, out);
+	}
+      return env.range_get (expr, out);
+    }
+
+  if (TREE_CODE (expr) == PLUS_EXPR || TREE_CODE (expr) == MINUS_EXPR)
+    {
+      tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 1));
+
+      oa_range_fact base_fact;
+      widest_int k;
+      if (TREE_CODE (op1) == INTEGER_CST && oa_get_range (op0, env, &base_fact))
+	k = wi::to_widest (op1);
+      else if (TREE_CODE (expr) == PLUS_EXPR && TREE_CODE (op0) == INTEGER_CST
+	       && oa_get_range (op1, env, &base_fact))
+	k = wi::to_widest (op0);
+      else
+	/* '<constant> - decl' negates the whole range rather than
+	   shifting it -- not a simple shift, left unrecognized.  */
+	return false;
+
+      if (base_fact.base != NULL_TREE)
+	/* A pointer's own array-offset shifting is Increment E2's
+	   concern (validated together with the array's bound at the use
+	   site), not plain-integer E1's.  */
+	return false;
+
+      if (TREE_CODE (expr) == MINUS_EXPR)
+	k = -k;
+
+      out->base = NULL_TREE;
+      out->has_lo = base_fact.has_lo;
+      out->has_hi = base_fact.has_hi;
+      if (out->has_lo)
+	out->lo = base_fact.lo + k;
+      if (out->has_hi)
+	out->hi = base_fact.hi + k;
+      return true;
+    }
+
+  return false;
+}
+
+/* D4324/P2680 item 8, Increment E1: refine a single top-level
+   comparison CONJUNCT ('<', '<=', '>', '>=', '=='; '!=' isn't usefully
+   representable as a single interval and is left alone) between a
+   range-trackable decl and a constant-or-exactly-known-range
+   expression, folding the implied bound into ENV -- ASSERTED_TRUE
+   selects whether CONJUNCT is being assumed true (the then-branch) or
+   false (its logical negation, the else-branch of a single, non-
+   compound condition only -- see oa_refine_range_for_condition below
+   for why a compound '&&' condition's else-branch is never refined at
+   all). Only ever *tightens* an existing fact (intersects with what's
+   already known), never widens it. Silently does nothing for any
+   unrecognized shape -- always safe, just occasionally conservative,
+   the discipline used throughout this whole pass.  */
+
+static void
+oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  enum tree_code code = TREE_CODE (c);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return;
+
+  tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+
+  tree decl, other;
+  bool flipped;
+  if ((VAR_P (op0) || TREE_CODE (op0) == PARM_DECL)
+      && INTEGRAL_TYPE_P (TREE_TYPE (op0)))
+    decl = op0, other = op1, flipped = false;
+  else if ((VAR_P (op1) || TREE_CODE (op1) == PARM_DECL)
+	   && INTEGRAL_TYPE_P (TREE_TYPE (op1)))
+    decl = op1, other = op0, flipped = true;
+  else
+    return;
+
+  oa_range_fact other_fact;
+  if (!oa_get_range (other, env, &other_fact) || other_fact.base != NULL_TREE
+      || !other_fact.has_lo || !other_fact.has_hi
+      || other_fact.lo != other_fact.hi)
+    /* The comparison's other side must resolve to a single, exactly-
+       known point (a literal, or a decl whose own range is already an
+       exact point) -- comparing against a genuine, non-degenerate
+       range on both sides is a further generalization not attempted in
+       E1.  */
+    return;
+  widest_int val = other_fact.lo;
+
+  if (flipped)
+    switch (code)
+      {
+      case LT_EXPR: code = GT_EXPR; break;
+      case LE_EXPR: code = GE_EXPR; break;
+      case GT_EXPR: code = LT_EXPR; break;
+      case GE_EXPR: code = LE_EXPR; break;
+      default: break;
+      }
+
+  if (!asserted_true)
+    switch (code)
+      {
+      case LT_EXPR: code = GE_EXPR; break;
+      case LE_EXPR: code = GT_EXPR; break;
+      case GT_EXPR: code = LE_EXPR; break;
+      case GE_EXPR: code = LT_EXPR; break;
+      default: return; /* NOT(decl == val) is decl != val -- skip.  */
+      }
+
+  oa_range_fact refined;
+  if (!env.range_get (decl, &refined))
+    {
+      refined.base = NULL_TREE;
+      refined.has_lo = refined.has_hi = false;
+    }
+
+  switch (code)
+    {
+    case LT_EXPR:
+      if (!refined.has_hi || refined.hi > val - 1)
+	{ refined.has_hi = true; refined.hi = val - 1; }
+      break;
+    case LE_EXPR:
+      if (!refined.has_hi || refined.hi > val)
+	{ refined.has_hi = true; refined.hi = val; }
+      break;
+    case GT_EXPR:
+      if (!refined.has_lo || refined.lo < val + 1)
+	{ refined.has_lo = true; refined.lo = val + 1; }
+      break;
+    case GE_EXPR:
+      if (!refined.has_lo || refined.lo < val)
+	{ refined.has_lo = true; refined.lo = val; }
+      break;
+    case EQ_EXPR:
+      refined.has_lo = refined.has_hi = true;
+      refined.lo = refined.hi = val;
+      break;
+    default:
+      return;
+    }
+  env.range_set (decl, refined);
+}
+
+/* D4324/P2680 item 8, Increment E1: refine THEN_ENV/ELSE_ENV's range
+   facts from COND, the condition of an IF_STMT/COND_EXPR (or,
+   symmetrically, a loop's own condition -- Increment E3). A top-level
+   '&&' conjunct chain is decomposed the same way oa_collect_conjuncts
+   already does for contract conditions, applying each conjunct's
+   then-refinement in sequence (sound: all conjuncts must hold for the
+   then-branch to be reached) -- the else-branch of a *compound*
+   condition is deliberately never refined at all (De Morgan's gives a
+   disjunction of negations, not a single conjunction representable the
+   same way; conservatively left unconstrained, the same discipline
+   used throughout this pass). A single, non-compound condition refines
+   both branches.  */
+
+static void
+oa_refine_range_for_condition (tree cond, oa_env &then_env, oa_env &else_env)
+{
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts (&cond, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    oa_refine_single_comparison (*conjuncts[i], then_env, /*asserted_true=*/true);
+  if (conjuncts.length () == 1)
+    oa_refine_single_comparison (cond, else_env, /*asserted_true=*/false);
 }
 
 /* D4324/P2680 item 8, narrow version: check every TRUNC_DIV_EXPR/
@@ -5415,6 +5754,18 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 
   for (unsigned i = 0; i < nz_result_decls.length (); ++i)
     env.nz_set (nz_result_decls[i], nz_result_provable[i]);
+
+  /* Increment E1: any range fact ENV already has for a decl the loop's
+     repeated part reassigns must not survive unchanged past the loop --
+     left as-is, a stale pre-loop range could incorrectly persist into
+     code that runs after the loop. Proper reasoning (the same
+     self-reference-free-reassignment-union rule as above, generalized
+     to interval union) is Increment E3's job; unconditionally
+     invalidating here is the safe, sound placeholder in the meantime
+     (never wrongly accepting, only occasionally failing to prove a
+     range that E3 will eventually recover).  */
+  for (unsigned i = 0; i < reassigned_nz.length (); ++i)
+    env.range_invalidate (reassigned_nz[i]);
 }
 
 /* The forward statement walker: processes *STMT (an arbitrary
@@ -5550,6 +5901,12 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      env.nz_set (decl, oa_provably_nonzero_p (DECL_INITIAL (decl), env));
 	    else
 	      env.nz_invalidate (decl);
+	    /* Increment E1's value-range tracking, parallel again.  */
+	    oa_range_fact fact;
+	    if (DECL_INITIAL (decl) && oa_get_range (DECL_INITIAL (decl), env, &fact))
+	      env.range_set (decl, fact);
+	    else
+	      env.range_invalidate (decl);
 	  }
 	return;
       }
@@ -5598,9 +5955,17 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  env.set (lhs, oa_provable_p (rhs, env));
 	else if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 		 && INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
-	  /* Item 8's narrow "provably nonzero" tracking, parallel to the
-	     pointer tracking above.  */
-	  env.nz_set (lhs, oa_provably_nonzero_p (rhs, env));
+	  {
+	    /* Item 8's narrow "provably nonzero" tracking, parallel to the
+	       pointer tracking above.  */
+	    env.nz_set (lhs, oa_provably_nonzero_p (rhs, env));
+	    /* Increment E1's value-range tracking, parallel again.  */
+	    oa_range_fact fact;
+	    if (oa_get_range (rhs, env, &fact))
+	      env.range_set (lhs, fact);
+	    else
+	      env.range_invalidate (lhs);
+	  }
 	return;
       }
 
@@ -5619,10 +5984,15 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	oa_scan_stray_is_object_address (&TREE_OPERAND (t, 0));
 
 	oa_env then_env = env.copy ();
-	oa_walk_stmt (&TREE_OPERAND (t, 1), then_env);
 	oa_env else_env = env.copy ();
+	/* Increment E1: refine both branches' range facts from the
+	   condition before walking into them, so nested code (and the
+	   post-merge state after the if/else) sees the narrowed bounds.  */
+	oa_refine_range_for_condition (TREE_OPERAND (t, 0), then_env, else_env);
+	oa_walk_stmt (&TREE_OPERAND (t, 1), then_env);
 	oa_walk_stmt (&TREE_OPERAND (t, 2), else_env);
 	then_env.merge_with (else_env);
+	then_env.range_merge_with (else_env);
 	env.assign (then_env);
 	return;
       }
@@ -5670,10 +6040,15 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	oa_scan_stray_is_object_address (&IF_COND (t));
 
 	oa_env then_env = env.copy ();
-	oa_walk_stmt (&THEN_CLAUSE (t), then_env);
 	oa_env else_env = env.copy ();
+	/* Increment E1: refine both branches' range facts from the
+	   condition before walking into them, so nested code (and the
+	   post-merge state after the if/else) sees the narrowed bounds.  */
+	oa_refine_range_for_condition (IF_COND (t), then_env, else_env);
+	oa_walk_stmt (&THEN_CLAUSE (t), then_env);
 	oa_walk_stmt (&ELSE_CLAUSE (t), else_env);
 	then_env.merge_with (else_env);
+	then_env.range_merge_with (else_env);
 	env.assign (then_env);
 	return;
       }
