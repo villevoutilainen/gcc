@@ -4843,6 +4843,12 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
    the file.  */
 static void oa_collect_conjuncts (tree *cond, vec<tree *> *conjuncts);
 
+/* Forward-declared: Increment J -- oa_refine_range_for_condition also
+   decomposes a *compound* condition's top-level || (De Morgan's, for
+   its else-branch refinement), via this sibling of oa_collect_
+   conjuncts, defined right next to it later in the file.  */
+static void oa_collect_disjuncts (tree *cond, vec<tree *> *disjuncts);
+
 /* D4324/P2680 item 8, Increment E1: determine EXPR's provable value
    range (or a pointer's provable offset into a named array, once
    Increment E2 starts populating that side of the fact -- this
@@ -5169,12 +5175,22 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
    '&&' conjunct chain is decomposed the same way oa_collect_conjuncts
    already does for contract conditions, applying each conjunct's
    then-refinement in sequence (sound: all conjuncts must hold for the
-   then-branch to be reached) -- the else-branch of a *compound*
+   then-branch to be reached) -- the else-branch of a *compound* '&&'
    condition is deliberately never refined at all (De Morgan's gives a
-   disjunction of negations, not a single conjunction representable the
-   same way; conservatively left unconstrained, the same discipline
-   used throughout this pass). A single, non-compound condition refines
-   both branches.  */
+   disjunction of negations there, not a single conjunction
+   representable the same way; conservatively left unconstrained, the
+   same discipline used throughout this pass).
+
+   Increment J: symmetrically, a compound '||' condition's *then*-branch
+   is never refined (entering it only guarantees "at least one operand
+   holds," itself a disjunction) -- but its *else*-branch is, via
+   De Morgan's the other way around: NOT (A || B) == !A && !B *is* a
+   plain conjunction, decomposed via oa_collect_disjuncts and refined
+   exactly like an ordinary '&&' conjunct chain, just asserted false.
+   A single, non-compound condition (no top-level '&&' or '||' at all)
+   refines both branches -- oa_collect_disjuncts on a lone comparison
+   simply yields that comparison as its own sole "disjunct," so this is
+   the same case as before Increment J, not a separate path.  */
 
 static void
 oa_refine_range_for_condition (tree cond, oa_env &then_env, oa_env &else_env)
@@ -5184,7 +5200,12 @@ oa_refine_range_for_condition (tree cond, oa_env &then_env, oa_env &else_env)
   for (unsigned i = 0; i < conjuncts.length (); ++i)
     oa_refine_single_comparison (*conjuncts[i], then_env, /*asserted_true=*/true);
   if (conjuncts.length () == 1)
-    oa_refine_single_comparison (cond, else_env, /*asserted_true=*/false);
+    {
+      auto_vec<tree *> disjuncts;
+      oa_collect_disjuncts (conjuncts[0], &disjuncts);
+      for (unsigned i = 0; i < disjuncts.length (); ++i)
+	oa_refine_single_comparison (*disjuncts[i], else_env, /*asserted_true=*/false);
+    }
 }
 
 /* D4324/P2680: closes the "assignment-in-condition" gap left open when
@@ -5531,6 +5552,28 @@ oa_collect_conjuncts (tree *cond, vec<tree *> *conjuncts)
       return;
     }
   conjuncts->safe_push (cond);
+}
+
+/* D4324/P2680 item 8, Increment J: the De Morgan's-dual sibling of
+   oa_collect_conjuncts above, decomposing *COND at top-level ||
+   (either spelling) instead of && -- a condition with no top-level ||
+   is a single disjunct of itself. Used only by oa_refine_range_for_
+   condition's else-branch refinement: negating a top-level || gives a
+   plain conjunction of negated disjuncts (De Morgan's), each refinable
+   the same way an ordinary && conjunct chain already is.  */
+
+static void
+oa_collect_disjuncts (tree *cond, vec<tree *> *disjuncts)
+{
+  tree c = *cond;
+  if (c && (TREE_CODE (c) == TRUTH_ORIF_EXPR
+	    || TREE_CODE (c) == TRUTH_OR_EXPR))
+    {
+      oa_collect_disjuncts (&TREE_OPERAND (c, 0), disjuncts);
+      oa_collect_disjuncts (&TREE_OPERAND (c, 1), disjuncts);
+      return;
+    }
+  disjuncts->safe_push (cond);
 }
 
 /* D4324/P2680 item 8, Increment E-divmod: true if CONJUNCT is of the
