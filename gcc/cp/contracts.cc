@@ -5997,6 +5997,13 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 static void oa_walk_stmt (tree *stmt, oa_env &env);
 static void oa_handle_postcondition_stmt (tree contract);
 
+/* Forward-declared: Increment N -- oa_handle_loop (defined next)
+   reuses this for its own condition, defined much later in the file
+   (right before oa_stmt_terminates_p), the same way IF_STMT/COND_EXPR/
+   SWITCH_STMT already do -- see oa_handle_loop's own comment on why.  */
+static void oa_process_condition (tree cond, oa_env &env,
+				   oa_env *then_env_out, oa_env *else_env_out);
+
 /* Accumulates, across every RETURN_EXPR the walk encounters, whether
    the *returned value itself* is provably an object address on *every*
    return path -- since a function's postcondition is a single,
@@ -6302,22 +6309,37 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
      Applied inside walk_parts itself, so every invocation (the
      diagnostic pass below, and every per-decl invalidated re-walk
      further down) sees it uniformly. Mirrors the same then-branch-only
-     refinement IF_STMT/COND_EXPR already apply, just without a
-     parallel else-branch -- a loop body is only ever entered when the
-     condition is true, there is no "else" here at all.  */
+     refinement IF_STMT/COND_EXPR/SWITCH_STMT already apply, just
+     without a parallel else-branch -- a loop body is only ever entered
+     when the condition is true, there is no "else" here at all.
+
+     Increment N: the condition part is handled via oa_process_condition
+     (not a plain oa_walk_stmt call) -- previously calling oa_walk_stmt
+     directly on the condition meant a call/div-mod/array-ref reached
+     as a *sub-expression* (not the condition's own top-level code, the
+     only shape oa_walk_stmt's own CALL_EXPR case would catch) got no
+     item-7/item-8 scanning at all, the exact same "condition gets no
+     scanning" gap already closed for IF_STMT/COND_EXPR (item 7) and
+     SWITCH_STMT (Increment M). oa_process_condition never dispatches
+     the condition through oa_walk_stmt's own switch internally either,
+     for the same double-scan reason those two never did -- so
+     replacing the call here (rather than calling both) avoids
+     reintroducing that bug. ELSE_ENV is computed but discarded (a
+     loop's condition has no "else" side to use it for) -- a harmless,
+     compile-time-only inefficiency, not worth a separate then-only
+     variant of oa_process_condition just to avoid it.  */
   auto walk_parts = [&] (oa_env &e)
     {
       for (unsigned i = 0; i < parts.length (); ++i)
 	{
-	  oa_walk_stmt (parts[i], e);
 	  if (cond && parts[i] == cond)
 	    {
-	      auto_vec<tree *> conjuncts;
-	      tree c = *cond;
-	      oa_collect_conjuncts (&c, &conjuncts);
-	      for (unsigned j = 0; j < conjuncts.length (); ++j)
-		oa_refine_single_comparison (*conjuncts[j], e, /*asserted_true=*/true);
+	      oa_env then_env, else_env;
+	      oa_process_condition (*cond, e, &then_env, &else_env);
+	      e.assign (then_env);
 	    }
+	  else
+	    oa_walk_stmt (parts[i], e);
 	}
     };
 
