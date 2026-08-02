@@ -5027,14 +5027,34 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
   tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
   tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
 
+  /* An assignment written directly as this comparison's own operand
+     ('(i = compute ()) > 0') evaluates to its LHS's newly assigned
+     value -- so for refinement purposes it plays the exact same role
+     the bare decl would.  Safe to unwrap here (into DECL0/DECL1, kept
+     separate from OP0/OP1 themselves): this function is only ever
+     invoked (via oa_refine_range_for_condition) on the top-level
+     condition or a top-level &&-conjunct of it, so reaching the
+     then-branch already guarantees this operand's assignment was
+     actually evaluated. Deliberately does *not* also substitute this
+     unwrapped form into the *other* (non-decl) operand's role below --
+     if a comparison assigns on both sides ('(i = f()) > (j = g())'),
+     the non-tracked side's own freshly assigned value is unknown here
+     (oa_track_condition_assignment only ever tracks one, the first
+     found), and must not be resolved via ENV's possibly-stale prior
+     fact for that decl.  */
+  tree decl0 = (TREE_CODE (op0) == INIT_EXPR || TREE_CODE (op0) == MODIFY_EXPR)
+    ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op0, 0)) : op0;
+  tree decl1 = (TREE_CODE (op1) == INIT_EXPR || TREE_CODE (op1) == MODIFY_EXPR)
+    ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op1, 0)) : op1;
+
   tree decl, other;
   bool flipped;
-  if ((VAR_P (op0) || TREE_CODE (op0) == PARM_DECL)
-      && INTEGRAL_TYPE_P (TREE_TYPE (op0)))
-    decl = op0, other = op1, flipped = false;
-  else if ((VAR_P (op1) || TREE_CODE (op1) == PARM_DECL)
-	   && INTEGRAL_TYPE_P (TREE_TYPE (op1)))
-    decl = op1, other = op0, flipped = true;
+  if ((VAR_P (decl0) || TREE_CODE (decl0) == PARM_DECL)
+      && INTEGRAL_TYPE_P (TREE_TYPE (decl0)))
+    decl = decl0, other = op1, flipped = false;
+  else if ((VAR_P (decl1) || TREE_CODE (decl1) == PARM_DECL)
+	   && INTEGRAL_TYPE_P (TREE_TYPE (decl1)))
+    decl = decl1, other = op0, flipped = true;
   else
     return;
 
@@ -5127,6 +5147,82 @@ oa_refine_range_for_condition (tree cond, oa_env &then_env, oa_env &else_env)
     oa_refine_single_comparison (*conjuncts[i], then_env, /*asserted_true=*/true);
   if (conjuncts.length () == 1)
     oa_refine_single_comparison (cond, else_env, /*asserted_true=*/false);
+}
+
+/* D4324/P2680: closes the "assignment-in-condition" gap left open when
+   the IF_STMT/COND_EXPR condition-operand gap was first fixed
+   (item 7) -- an assignment written directly inside an if/ternary
+   condition (e.g. 'if ((i = compute()) > 0)') previously never updated
+   the assigned decl's tracked facts (is_object_address-provability,
+   "provably nonzero," or -- since Increment E -- its value/array-offset
+   range) at all, since the condition is deliberately *not* dispatched
+   through the full oa_walk_stmt switch (which would re-trigger CALL_
+   EXPR/INIT_EXPR's own internal call/div-mod/array-bounds scans a
+   second time -- the exact double-scan/double-report bug found and
+   fixed while first closing this same gap for item 7).
+
+   Deliberately narrow: only ever recognizes a *single* assignment that
+   either *is* the condition itself, or is directly nested as the
+   operand of a comparison/negation wrapping it ('(i = compute()) > 0',
+   '(p = f()) != nullptr', '!(p = f())') -- never one nested inside a
+   '&&'/'||' chain, where whether the assignment actually executes at
+   all depends on short-circuit evaluation of an earlier operand.
+   Blindly tracking a fact from an assignment that might not have run
+   would be unsound; this restriction avoids that question entirely by
+   simply not looking there. Reuses the *tracking* logic oa_walk_stmt's
+   own INIT_EXPR/MODIFY_EXPR case already has (oa_provable_p/oa_
+   provably_nonzero_p/oa_get_range), not its scanning logic (already
+   run separately, once, on the whole condition by the caller).  */
+
+static void
+oa_track_condition_assignment (tree cond, oa_env &env)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (cond);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR || TREE_CODE (c) == NON_LVALUE_EXPR
+	 || TREE_CODE (c) == NOP_EXPR || TREE_CODE (c) == CONVERT_EXPR
+	 || TREE_CODE (c) == TRUTH_NOT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  tree assign = NULL_TREE;
+  if (TREE_CODE (c) == INIT_EXPR || TREE_CODE (c) == MODIFY_EXPR)
+    assign = c;
+  else if (TREE_CODE (c) == EQ_EXPR || TREE_CODE (c) == NE_EXPR
+	   || TREE_CODE (c) == LT_EXPR || TREE_CODE (c) == LE_EXPR
+	   || TREE_CODE (c) == GT_EXPR || TREE_CODE (c) == GE_EXPR)
+    {
+      tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+      tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+      if (TREE_CODE (op0) == INIT_EXPR || TREE_CODE (op0) == MODIFY_EXPR)
+	assign = op0;
+      else if (TREE_CODE (op1) == INIT_EXPR || TREE_CODE (op1) == MODIFY_EXPR)
+	assign = op1;
+    }
+  if (!assign)
+    return;
+
+  tree lhs = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (assign, 0));
+  tree rhs = TREE_OPERAND (assign, 1);
+  if (!(VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL))
+    return;
+
+  if (POINTER_TYPE_P (TREE_TYPE (lhs)))
+    {
+      env.set (lhs, oa_provable_p (rhs, env));
+      oa_range_fact fact;
+      if (oa_get_range (rhs, env, &fact))
+	env.range_set (lhs, fact);
+      else
+	env.range_invalidate (lhs);
+    }
+  else if (INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
+    {
+      env.nz_set (lhs, oa_provably_nonzero_p (rhs, env));
+      oa_range_fact fact;
+      if (oa_get_range (rhs, env, &fact))
+	env.range_set (lhs, fact);
+      else
+	env.range_invalidate (lhs);
+    }
 }
 
 /* D4324/P2680 item 8, narrow version: check every TRUNC_DIV_EXPR/
@@ -6422,6 +6518,12 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    oa_scan_array_bounds_in_expr (&TREE_OPERAND (t, 0), env);
 	  }
 	oa_scan_stray_is_object_address (&TREE_OPERAND (t, 0));
+	/* Closes the assignment-in-condition gap: update the assigned
+	   decl's tracked facts in ENV itself (never scanning inside
+	   &&/||, see oa_track_condition_assignment's own comment) before
+	   ENV is copied into THEN_ENV/ELSE_ENV below, so both branches
+	   (and the post-merge state) see the up-to-date facts.  */
+	oa_track_condition_assignment (TREE_OPERAND (t, 0), env);
 
 	oa_env then_env = env.copy ();
 	oa_env else_env = env.copy ();
@@ -6463,14 +6565,15 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   either, precisely to avoid re-dispatching into (and so
 	   double-scanning/double-reporting through) the very same
 	   CALL_EXPR/INIT_EXPR/MODIFY_EXPR cases that already perform
-	   their own oa_scan_calls_in_expr internally. The one thing this
-	   deliberately gives up, matching that same precedent: an
-	   assignment-in-condition ('if ((p = f()) != nullptr)', a real if
-	   rare pattern) doesn't update provability going forward the way
-	   an ordinary statement's assignment would -- safe, just
-	   occasionally missing a would-be-provable case, the same
-	   "conservative but sound" discipline used throughout this
-	   pass.  */
+	   their own oa_scan_calls_in_expr internally. This deliberately
+	   still doesn't dispatch the condition through oa_walk_stmt for
+	   that reason -- but an assignment written directly in the
+	   condition itself ('if ((p = f()) != nullptr)') is separately
+	   handled by oa_track_condition_assignment below, which updates
+	   the assigned decl's tracked facts without re-scanning for
+	   calls/div-mod/array-bounds (already done above), narrowly
+	   scoped to a top-level assignment only (never inside &&/||,
+	   see its own comment for why).  */
 	oa_scan_calls_in_expr (&IF_COND (t), env);
 	if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
 	  {
@@ -6478,6 +6581,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    oa_scan_array_bounds_in_expr (&IF_COND (t), env);
 	  }
 	oa_scan_stray_is_object_address (&IF_COND (t));
+	oa_track_condition_assignment (IF_COND (t), env);
 
 	oa_env then_env = env.copy ();
 	oa_env else_env = env.copy ();
