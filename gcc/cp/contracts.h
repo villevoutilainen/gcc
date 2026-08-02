@@ -191,6 +191,7 @@ extern bool contract_control_is_conveyor		(tree, contract_check_side);
 extern tree contract_default_control_object		(location_t);
 extern void maybe_inherit_virtual_contract		(tree, tree);
 extern void resolve_object_address_in_function		(tree);
+extern bool oa_stmt_terminates_p			(tree);
 
 /* True while parsing/substituting a contract condition that opts into
    constification via its control type's constify member (D4324: off by
