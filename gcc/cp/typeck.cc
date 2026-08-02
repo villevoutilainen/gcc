@@ -6418,6 +6418,22 @@ cp_build_binary_op (const op_location_t &location,
     case LT_EXPR:
     case GT_EXPR:
     case SPACESHIP_EXPR:
+      /* D4324/P2680: a relational (or three-way) comparison between two
+	 pointers is only well-defined when both provably designate
+	 elements of the same array -- this pass doesn't attempt to prove
+	 that, so within a conveyor function/predicate it's banned
+	 outright, matching item 8's flat "ban" (unlike the div/mod and
+	 pointer-arithmetic restrictions, this one needs no dataflow and
+	 so is checked here, at the point of construction, rather than in
+	 the post-hoc walker in contracts.cc).  */
+      if ((code0 == POINTER_TYPE || code1 == POINTER_TYPE)
+	  && conveyor_restrictions_active_p ())
+	{
+	  if (complain & tf_error)
+	    error_at (location, "pointer relational comparison not "
+		      "permitted in a conveyor function or predicate");
+	  return error_mark_node;
+	}
       if (TREE_CODE (orig_op0) == STRING_CST
 	  || TREE_CODE (orig_op1) == STRING_CST)
 	{

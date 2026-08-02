@@ -4380,11 +4380,30 @@ public:
   }
   void set (tree decl, bool provable) { m_map.put (decl, provable); }
   void invalidate (tree decl) { m_map.put (decl, false); }
+
+  /* A second, independent per-decl fact -- "provably nonzero" -- for
+     item 8's narrow div/mod restriction (see oa_provably_nonzero_p
+     below). Kept as a wholly separate map rather than folded into the
+     one above: it tracks a different property (integer-valued decls,
+     not pointer provenance) and the two are never meaningfully
+     conflated, but sharing this class's copy/assign/merge_with
+     machinery (the exact same "every incoming value must satisfy it"
+     lattice) is exactly what's wanted for it too.  */
+  bool nz_provable_p (tree decl)
+  {
+    bool *v = m_nz_map.get (decl);
+    return v && *v;
+  }
+  void nz_set (tree decl, bool provable) { m_nz_map.put (decl, provable); }
+  void nz_invalidate (tree decl) { m_nz_map.put (decl, false); }
+
   oa_env copy ()
   {
     oa_env r;
     for (auto it : m_map)
       r.m_map.put (it.first, it.second);
+    for (auto it : m_nz_map)
+      r.m_nz_map.put (it.first, it.second);
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -4395,6 +4414,9 @@ public:
     m_map.empty ();
     for (auto it : other.m_map)
       m_map.put (it.first, it.second);
+    m_nz_map.empty ();
+    for (auto it : other.m_nz_map)
+      m_nz_map.put (it.first, it.second);
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -4412,18 +4434,86 @@ public:
 	}
     for (unsigned i = 0; i < to_invalidate.length (); ++i)
       m_map.put (to_invalidate[i], false);
+
+    auto_vec<tree> nz_to_invalidate;
+    for (auto it : m_nz_map)
+      if (it.second)
+	{
+	  bool *ov = other.m_nz_map.get (it.first);
+	  if (!ov || !*ov)
+	    nz_to_invalidate.safe_push (it.first);
+	}
+    for (unsigned i = 0; i < nz_to_invalidate.length (); ++i)
+      m_nz_map.put (nz_to_invalidate[i], false);
   }
 
 private:
   hash_map<tree, bool> m_map;
+  hash_map<tree, bool> m_nz_map;
 };
 
+/* True if CALL is a statically-resolvable, immediately-invoked closure
+   call -- a CALL_EXPR whose callee is directly a lambda's operator(),
+   invoked on a closure object constructed right there in the same
+   expression (a TARGET_EXPR, never a named variable, parameter, or
+   anything stored/passed around) -- the exact, narrow pattern item 5
+   permits recursing into.  On success, *CLOSURE_OBJ is the constructed
+   closure TARGET_EXPR (unused by the caller currently, but kept for
+   symmetry/future use).  */
+
+static bool
+oa_iile_call_p (tree call, tree *closure_obj)
+{
+  if (call == NULL_TREE || call == error_mark_node
+      || TREE_CODE (call) != CALL_EXPR)
+    return false;
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return false;
+  tree ctx = DECL_CONTEXT (callee);
+  if (!ctx || TREE_CODE (ctx) != RECORD_TYPE || !LAMBDA_TYPE_P (ctx))
+    return false;
+  if (call_expr_nargs (call) < 1)
+    return false;
+  tree arg0 = CALL_EXPR_ARG (call, 0);
+  if (TREE_CODE (arg0) != ADDR_EXPR)
+    return false;
+  tree obj = TREE_OPERAND (arg0, 0);
+  if (TREE_CODE (obj) != TARGET_EXPR)
+    return false;
+  *closure_obj = obj;
+  return true;
+}
+
+/* Non-null only while oa_provable_p is currently resolving values
+   *inside* an invoked closure's own body (set/cleared by
+   oa_resolve_iile_call, defined below oa_walk_stmt since it needs to
+   call it) -- points at the *enclosing* (caller's) env, consulted only
+   for capture-proxy resolution (see oa_provable_p below). A single
+   pointer rather than a stack: deliberately supports only one level of
+   IILE nesting (recursing into an IILE found *inside* another IILE's
+   own body is conservatively left unresolved, never incorrectly
+   accepted) -- nested IILEs are a pathological enough case that this
+   restriction is an accepted, documented limitation rather than
+   something worth a general stack for in this increment.  */
+
+static oa_env *oa_iile_outer_env;
+
+/* Forward-declared: defined below oa_walk_stmt, since resolving an
+   invoked closure's body requires calling the statement walker
+   recursively.  */
+static bool oa_resolve_iile_call (tree call, oa_env &env);
+
 /* True if EXPR (evaluated in ENV) is provably an object address:
-   'this'; '&obj' where obj is a parameter/variable of object type; or
-   a VAR_DECL/PARM_DECL whose current value ENV already knows to be
-   provable.  Conservatively false for anything else (in particular:
-   this does not interpret arbitrary function calls, including
-   immediately-invoked lambdas -- a later increment).  */
+   'this'; '&obj' where obj is a parameter/variable of object type; a
+   VAR_DECL/PARM_DECL whose current value ENV already knows to be
+   provable; a by-reference lambda-capture proxy, resolved against the
+   *enclosing* scope's env if we're currently inside an invoked
+   closure's own body; or the result of a statically-resolvable,
+   immediately-invoked closure call (item 5), recursed into via
+   oa_resolve_iile_call.  Conservatively false for anything else (in
+   particular: this does not interpret arbitrary function calls, or a
+   stored/passed-around closure invoked here).  */
 
 static bool
 oa_provable_p (tree expr, oa_env &env)
@@ -4432,6 +4522,36 @@ oa_provable_p (tree expr, oa_env &env)
     return false;
 
   STRIP_ANY_LOCATION_WRAPPER (expr);
+
+  /* 'return &a;' where 'a' is a by-reference lambda-capture proxy
+     arrives here as NOP_EXPR/CONVERT_EXPR converting the proxy's own
+     reference type directly to a pointer type -- taking the address of
+     a reference is, at this representation, just reading the
+     reference's own stored pointer value, with no separate ADDR_EXPR
+     node the way '&plain_var' gets. This must be recognized *before*
+     the generic conversion-stripping loop below (which would otherwise
+     blindly strip it and lose the "this was an address-of" distinction
+     entirely, treating it as if the code had read the pointee's *value*
+     instead of its *address*). Only meaningful -- and only safe --
+     while currently resolving values inside an invoked closure's own
+     body (OA_IILE_OUTER_ENV set): the answer is exactly the same as the
+     ADDR_EXPR-of-plain-decl base case below, just applied to whatever
+     DECL_CAPTURED_VARIABLE names, since capturing a variable by
+     reference always binds directly to that variable's own storage.  */
+  if (oa_iile_outer_env
+      && (TREE_CODE (expr) == NOP_EXPR || TREE_CODE (expr) == CONVERT_EXPR)
+      && POINTER_TYPE_P (TREE_TYPE (expr)))
+    {
+      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (VAR_P (op) && TREE_CODE (TREE_TYPE (op)) == REFERENCE_TYPE
+	  && is_capture_proxy (op))
+	{
+	  tree captured = DECL_CAPTURED_VARIABLE (op);
+	  return captured && DECL_P (captured)
+	    && (VAR_P (captured) || TREE_CODE (captured) == PARM_DECL);
+	}
+    }
+
   while (TREE_CODE (expr) == NON_LVALUE_EXPR
 	 || TREE_CODE (expr) == NOP_EXPR
 	 || TREE_CODE (expr) == CONVERT_EXPR)
@@ -4447,9 +4567,135 @@ oa_provable_p (tree expr, oa_env &env)
     }
 
   if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
-    return env.provable_p (expr);
+    {
+      /* A by-reference lambda-capture proxy whose *value* (not address,
+	 handled above) is read directly -- e.g. a captured *pointer*
+	 variable used as-is, '[&]{ return p; }()' -- is just an alias
+	 for the outer variable it captures. Only meaningful -- and only
+	 safe -- while currently resolving values inside an invoked
+	 closure's own body (OA_IILE_OUTER_ENV set): redirect to whatever
+	 the *enclosing* scope's env already knows about the real
+	 captured variable, since for an *immediately*-invoked closure
+	 nothing in the enclosing scope can have changed between capture
+	 and invocation.  */
+      if (oa_iile_outer_env && is_capture_proxy (expr))
+	{
+	  tree captured = DECL_CAPTURED_VARIABLE (expr);
+	  if (captured)
+	    return oa_provable_p (captured, *oa_iile_outer_env);
+	}
+      return env.provable_p (expr);
+    }
+
+  /* Recurse into a statically-resolvable, immediately-invoked closure
+     (item 5) -- but only one level deep (see oa_iile_outer_env above):
+     an IILE found while already resolving another IILE's own body is
+     conservatively left unprovable rather than followed further.  */
+  tree closure_obj;
+  if (!oa_iile_outer_env && oa_iile_call_p (expr, &closure_obj))
+    return oa_resolve_iile_call (expr, env);
 
   return false;
+}
+
+/* D4324/P2680 item 8, narrow version: true if EXPR is provably nonzero
+   -- a literal nonzero integer constant, or an integer-typed VAR_DECL/
+   PARM_DECL ENV's second ("nonzero") fact map already knows to be
+   provable (fed only by the same two sources, via the ENV.nz_set calls
+   in oa_walk_stmt's DECL_EXPR/INIT_EXPR/MODIFY_EXPR cases -- no
+   cross-statement inference beyond what the ordinary straight-line/
+   if-else merge already gives this for free). Deliberately narrow, per
+   the decision recorded in the plan: this is not extended to recognize
+   e.g. a decl known nonzero via a prior comparison
+   ('if (n != 0) ... n ...'), which would need real dataflow parity with
+   is_object_address (Increment E, not yet started).  */
+
+static bool
+oa_provably_nonzero_p (tree expr, oa_env &env)
+{
+  if (expr == NULL_TREE || expr == error_mark_node)
+    return false;
+
+  STRIP_ANY_LOCATION_WRAPPER (expr);
+  while (TREE_CODE (expr) == NON_LVALUE_EXPR
+	 || TREE_CODE (expr) == NOP_EXPR
+	 || TREE_CODE (expr) == CONVERT_EXPR)
+    expr = TREE_OPERAND (expr, 0);
+
+  if (TREE_CODE (expr) == INTEGER_CST)
+    return !integer_zerop (expr);
+
+  if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
+    return env.nz_provable_p (expr);
+
+  return false;
+}
+
+/* D4324/P2680 item 8, narrow version: check every TRUNC_DIV_EXPR/
+   TRUNC_MOD_EXPR div/mod operation within *EXPR (an arbitrary
+   sub-expression -- a RETURN_EXPR's value or an INIT_EXPR/MODIFY_EXPR's
+   RHS, the same two hook points oa_scan_calls_in_expr uses for item 7),
+   erroring on any whose divisor isn't provably nonzero (ENV, per
+   oa_provably_nonzero_p above). Only meaningful within a function
+   actually declared with the 'conveyor' keyword -- checked by the
+   caller, not here.  */
+
+static void
+oa_scan_div_mod_in_expr (tree *expr, oa_env &env)
+{
+  cp_walk_tree (expr, [](tree *tp, int *, void *data_) -> tree
+    {
+      oa_env *e = (oa_env *) data_;
+      tree t = *tp;
+      if (t == NULL_TREE || t == error_mark_node
+	  || (TREE_CODE (t) != TRUNC_DIV_EXPR && TREE_CODE (t) != TRUNC_MOD_EXPR))
+	return NULL_TREE;
+      tree divisor = TREE_OPERAND (t, 1);
+      if (!oa_provably_nonzero_p (divisor, *e))
+	error_at (EXPR_LOCATION (t), "divisor %qE not provably nonzero in "
+		  "a conveyor function", divisor);
+      return NULL_TREE;
+    }, &env, NULL);
+}
+
+/* D4324/P2680 item 8, narrowest useful version of the pointer-
+   arithmetic array-bound rule: check every ARRAY_REF within *EXPR whose
+   base is a decl of a fixed-size ARRAY_TYPE, erroring unless the index
+   is a compile-time-constant actually within [0, N). A non-constant
+   index, or a constant one out of range, is rejected -- general pointer
+   arithmetic on an already-decayed/ordinary pointer (not a directly-
+   named fixed-size array) is conservatively left unchecked entirely by
+   this narrow pass (a documented limitation, not silently accepted --
+   see Increment E in the plan for real array-bound/size dataflow).
+   Only meaningful within a function actually declared with the
+   'conveyor' keyword -- checked by the caller, not here.  */
+
+static void
+oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
+{
+  cp_walk_tree (expr, [](tree *tp, int *, void *) -> tree
+    {
+      tree t = *tp;
+      if (t == NULL_TREE || t == error_mark_node || TREE_CODE (t) != ARRAY_REF)
+	return NULL_TREE;
+      tree base = TREE_OPERAND (t, 0);
+      tree base_type = TREE_TYPE (base);
+      if (TREE_CODE (base_type) != ARRAY_TYPE || !TYPE_DOMAIN (base_type))
+	return NULL_TREE;
+      tree index = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 1));
+      tree max = TYPE_MAX_VALUE (TYPE_DOMAIN (base_type));
+      if (TREE_CODE (index) != INTEGER_CST || !max
+	  || TREE_CODE (max) != INTEGER_CST)
+	{
+	  error_at (EXPR_LOCATION (t), "array index %qE not provably "
+		    "in-bounds in a conveyor function", index);
+	  return NULL_TREE;
+	}
+      if (tree_int_cst_sgn (index) < 0 || tree_int_cst_lt (max, index))
+	error_at (EXPR_LOCATION (t), "array index %qE out of bounds in "
+		  "a conveyor function", index);
+      return NULL_TREE;
+    }, NULL, NULL);
 }
 
 /* Walk COND (an arbitrary boolean expression, e.g. a contract's
@@ -4486,6 +4732,15 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
 		    "%<std::is_object_address%> may only be used inside "
 		    "a conveyor-checked predicate");
 	  *d->ok = false;
+	  /* Replace with a harmless leaf, same reason as the success path
+	     below: *TP may be a CALL_EXPR wrapped in a CLEANUP_POINT_EXPR/
+	     location wrapper, and is_object_address_call_p matches through
+	     such wrappers by stripping a *local copy* -- it doesn't alter
+	     *TP itself. Left unchanged, walk_tree would next recurse into
+	     *TP's own operand (the unwrapped call), re-invoke this same
+	     callback on it, match again, and report the same error a
+	     second time.  */
+	  *tp = error_mark_node;
 	  return NULL_TREE;
 	}
 
@@ -4497,6 +4752,7 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
 	    inform (DECL_SOURCE_LOCATION (STRIP_ANY_LOCATION_WRAPPER (arg)),
 		    "declared here");
 	  *d->ok = false;
+	  *tp = error_mark_node;
 	  return NULL_TREE;
 	}
 
@@ -4533,18 +4789,142 @@ oa_collect_conjuncts (tree *cond, vec<tree *> *conjuncts)
    is both conveyor and statically non-ignored -- the explicit
    well-formedness gate every is_object_address consultation site must
    check, per the comment on oa_resolve_condition above: never assumed
-   structurally from context.  */
+   structurally from context.  OWNER_FN is the FUNCTION_DECL that
+   CONTRACT belongs to (needed by contract_side_of to tell a wrapper
+   from the real definition); defaults to CURRENT_FUNCTION_DECL, correct
+   for every consultation site that checks a contract belonging to the
+   function whose own body is currently being walked (all of them,
+   except the call-site precondition-obligation check in
+   oa_handle_call_precondition_obligation below, which explicitly
+   passes the *callee*).  */
 
 static bool
-oa_contract_conveyor_active_p (tree contract)
+oa_contract_conveyor_active_p (tree contract, tree owner_fn = NULL_TREE)
 {
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl || !flag_contract_control_objects)
     return false;
-  contract_check_side side = contract_side_of (contract, current_function_decl);
+  if (!owner_fn)
+    owner_fn = current_function_decl;
+  contract_check_side side = contract_side_of (contract, owner_fn);
   if (!contract_control_is_conveyor (ctrl, side))
     return false;
   return !contract_control_is_ignored (ctrl, side);
+}
+
+/* Discharge the call-site precondition-obligation mechanism (item 7):
+   the complement of a postcondition being a trusted fact for the caller
+   (item 6) -- here, a *precondition's* is_object_address(E) conjunct
+   is instead a proof *obligation* the caller must satisfy at each call,
+   using its own argument expression substituted positionally for the
+   callee's corresponding parameter (DECL_ARGUMENTS/CALL_EXPR_ARG). This
+   is what actually earns the "trust" oa_handle_precondition_stmt grants
+   a function's own precondition when checking its own body -- every
+   caller found here is required to independently prove it.
+
+   Always performed, regardless of whether the runtime enforcement for
+   CALLEE's precondition actually executes client-side or definition-
+   side (that policy, -fcontracts-client-check et al., only controls
+   *where* the runtime check runs; this is a separate, always-active
+   compile-time proof requirement -- see the "single unified hook" note
+   in the plan). Unprovable here is a hard error at the call site
+   itself, not at CALLEE's own definition.
+
+   Only CALLEE's precondition *text* is ever consulted -- never its
+   body -- so this stays a purely local, per-call substitution-and-prove
+   step with no interprocedural body-walking involved.  Only a bare
+   parameter reference (not a general expression built from one or more
+   parameters) is supported for E, via direct positional substitution;
+   anything more general is conservatively left unproven (silently, not
+   an error -- the call-site obligation mechanism just doesn't help in
+   that case, exactly like any other "must be provable, else treated as
+   unprovable" discipline elsewhere in this pass, except here the
+   consequence is simply "no obligation discharged", since the *error*
+   for failing to discharge one only fires when a matching bare
+   parameter reference *is* found and its substituted argument isn't
+   provable).  */
+
+static void
+oa_handle_call_precondition_obligation (tree call, oa_env &env)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return;
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract))
+	continue;
+      if (!oa_contract_conveyor_active_p (contract, callee))
+	continue;
+
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree arg;
+	  if (!is_object_address_call_p (*conjuncts[i], &arg))
+	    continue;
+	  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+
+	  /* Positional correspondence between CALLEE's own PARM_DECLs and
+	     CALL's actual argument expressions (member-function in-charge/
+	     VTT artificial parameters aren't specially reconciled here --
+	     out of scope for this increment, matching the plan's free-
+	     function-oriented item 7 examples).  */
+	  tree substituted = NULL_TREE;
+	  unsigned argno = 0;
+	  for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
+	    if (p == arg)
+	      {
+		if (argno < (unsigned) call_expr_nargs (call))
+		  substituted = CALL_EXPR_ARG (call, argno);
+		break;
+	      }
+	  if (!substituted)
+	    continue;
+
+	  if (!oa_provable_p (substituted, env))
+	    {
+	      error_at (EXPR_LOCATION (call),
+			"cannot prove %<is_object_address%> for %qE, "
+			"required by %qD's precondition", substituted, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    }
+	}
+    }
+}
+
+/* Scan *EXPR (an arbitrary expression, not necessarily a full
+   statement -- e.g. a RETURN_EXPR's value or an INIT_EXPR/MODIFY_EXPR's
+   RHS) for every CALL_EXPR it contains, including nested calls within
+   argument expressions, and discharge each one's call-site precondition
+   obligation against ENV.  A bare is_object_address(...) call found
+   here is deliberately skipped -- it isn't an ordinary call needing
+   this treatment, and any illegitimate use of it reaching this point is
+   still separately caught by oa_walk_stmt's own default-fallback
+   stray-use scan.  */
+
+static void
+oa_scan_calls_in_expr (tree *expr, oa_env &env)
+{
+  cp_walk_tree (expr, [](tree *tp, int *, void *data_) -> tree
+    {
+      oa_env *e = (oa_env *) data_;
+      tree t = *tp;
+      if (t == NULL_TREE || t == error_mark_node || TREE_CODE (t) != CALL_EXPR)
+	return NULL_TREE;
+      tree arg;
+      if (is_object_address_call_p (t, &arg))
+	return NULL_TREE;
+      oa_handle_call_precondition_obligation (t, *e);
+      return NULL_TREE;
+    }, &env, NULL);
 }
 
 /* Handle one PRECONDITION_STMT encountered during the body walk: both
@@ -4619,6 +4999,76 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 static void oa_walk_stmt (tree *stmt, oa_env &env);
 static void oa_handle_postcondition_stmt (tree contract);
 
+/* Accumulates, across every RETURN_EXPR the walk encounters, whether
+   the *returned value itself* is provably an object address on *every*
+   return path -- since a function's postcondition is a single,
+   physically shared condition checked identically regardless of which
+   return statement was taken, is_object_address(<its named result>)
+   can only be trusted using whatever holds on *all* return paths (the
+   same "every incoming value must satisfy it" merge rule as if/else and
+   loops, just merged across every exit point instead of two branches).
+   A single accumulated bool suffices here (rather than a full oa_env,
+   as if/else and loops need) because the postcondition's named result
+   identifier is a synthetic binding to "whatever was returned," not an
+   ordinary local variable this pass otherwise tracks -- there is
+   nothing else to look up. -1 (not yet reset) / 0 (tracking, currently
+   false) / 1 (tracking, currently true); tracking-vs-not is
+   distinguished by OA_RETURN_TRACKING below, which also doubles as
+   "does a function with an active postcondition need this at all."
+   Set/cleared by resolve_object_address_in_function around a single
+   function's walk (and, likewise, saved/restored around a nested
+   oa_resolve_iile_call walk below); not re-entrant beyond that explicit
+   save/restore discipline.  */
+
+static bool oa_return_tracking;
+static bool oa_return_all_provable;
+static bool oa_return_seen;
+
+/* Resolve CALL (already confirmed by oa_iile_call_p) by walking the
+   invoked closure's own operator() body: provable only if the returned
+   value is provable on *every* return path (the same merge discipline
+   oa_handle_postcondition_stmt already uses for a function's own named
+   return value), reusing the very same OA_RETURN_TRACKING/
+   OA_RETURN_ALL_PROVABLE/OA_RETURN_SEEN globals for exactly that
+   purpose -- saved and restored around this nested walk, since it must
+   not disturb the *enclosing* walk's own in-progress return tracking
+   (relevant if the IILE itself appears inside ENV's own function's
+   return-value expression, e.g. 'return is_object_address([&]{...}());').
+   ENV (the enclosing/caller's env at the point of the call) is recorded
+   in OA_IILE_OUTER_ENV for the duration, consulted by oa_provable_p
+   whenever the closure body reads a by-reference capture-proxy.  */
+
+static bool
+oa_resolve_iile_call (tree call, oa_env &env)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  tree body = DECL_SAVED_TREE (callee);
+  if (body == NULL_TREE || body == error_mark_node)
+    return false;
+
+  oa_env *saved_outer_env = oa_iile_outer_env;
+  bool saved_tracking = oa_return_tracking;
+  bool saved_all_provable = oa_return_all_provable;
+  bool saved_seen = oa_return_seen;
+
+  oa_iile_outer_env = &env;
+  oa_return_tracking = true;
+  oa_return_all_provable = false;
+  oa_return_seen = false;
+
+  oa_env inner_env;
+  oa_walk_stmt (&body, inner_env);
+
+  bool result = oa_return_seen && oa_return_all_provable;
+
+  oa_iile_outer_env = saved_outer_env;
+  oa_return_tracking = saved_tracking;
+  oa_return_all_provable = saved_all_provable;
+  oa_return_seen = saved_seen;
+
+  return result;
+}
+
 /* Handle one ASSERTION_STMT (contract_assert) encountered during the
    walk: resolve its condition using ENV (erroring if it names
    is_object_address outside a conveyor/non-ignored control object, or
@@ -4671,29 +5121,132 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
     }
 }
 
-/* Accumulates, across every RETURN_EXPR the walk encounters, whether
-   the *returned value itself* is provably an object address on *every*
-   return path -- since a function's postcondition is a single,
-   physically shared condition checked identically regardless of which
-   return statement was taken, is_object_address(<its named result>)
-   can only be trusted using whatever holds on *all* return paths (the
-   same "every incoming value must satisfy it" merge rule as if/else and
-   loops, just merged across every exit point instead of two branches).
-   A single accumulated bool suffices here (rather than a full oa_env,
-   as if/else and loops need) because the postcondition's named result
-   identifier is a synthetic binding to "whatever was returned," not an
-   ordinary local variable this pass otherwise tracks -- there is
-   nothing else to look up. -1 (not yet reset) / 0 (tracking, currently
-   false) / 1 (tracking, currently true); tracking-vs-not is
-   distinguished by OA_RETURN_TRACKING below, which also doubles as
-   "does a function with an active postcondition need this at all."
-   Set/cleared by resolve_object_address_in_function around a single
-   function's walk; not re-entrant, but this pass never recurses into
-   another function's body while walking one.  */
+/* Collect, into OUT (deduplicated), every pointer-typed VAR_DECL/
+   PARM_DECL that is the target of a plain INIT_EXPR/MODIFY_EXPR
+   assignment anywhere within *STMT -- a plain syntactic scan,
+   independent of provability, used only to determine which decls the
+   loop-header merge rule (item 4) needs to consider at all. A decl
+   freshly declared *inside* the loop body (via DECL_EXPR) is
+   deliberately not specially recognized here: such a decl doesn't
+   persist across iterations, so it needs no pre-loop/post-loop merge --
+   any INIT_EXPR that happens to represent its own initial declaration-
+   with-initializer looks identical to an ordinary assignment to this
+   syntactic scan, but including it in OUT is harmless (at worst a dead,
+   never-looked-up entry ends up in the enclosing env after the loop,
+   since the decl itself is out of scope there).  */
 
-static bool oa_return_tracking;
-static bool oa_return_all_provable;
-static bool oa_return_seen;
+static void
+oa_collect_loop_targets (tree *stmt, vec<tree> *out)
+{
+  cp_walk_tree (stmt, [](tree *tp, int *, void *data_) -> tree
+    {
+      vec<tree> *out = (vec<tree> *) data_;
+      tree t = *tp;
+      if (t == NULL_TREE || t == error_mark_node)
+	return NULL_TREE;
+      if (TREE_CODE (t) != INIT_EXPR && TREE_CODE (t) != MODIFY_EXPR)
+	return NULL_TREE;
+      tree lhs = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
+      if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
+	  && POINTER_TYPE_P (TREE_TYPE (lhs))
+	  && !out->contains (lhs))
+	out->safe_push (lhs);
+      return NULL_TREE;
+    }, out, NULL);
+}
+
+/* Handle one loop (FOR_STMT/WHILE_STMT/DO_STMT), implementing the
+   loop-header merge rule (item 4): PARTS is the sequence of tree slots
+   that execute on *every* iteration, in execution order (condition-prep,
+   condition, body, increment-expression -- whichever apply; a loop's
+   one-time init-statement, e.g. FOR_INIT_STMT, is walked by the caller
+   *before* calling this, with ordinary straight-line semantics, since it
+   only ever runs once).
+
+   Two passes over the combined repeated part:
+
+   1. A single "diagnostic" pass, using a plain copy of the incoming ENV
+      (no artificial invalidation) -- this is the one pass that performs
+      real, honest evaluation: it's what actually resolves/diagnoses any
+      is_object_address use or contract_assert reached inside the loop
+      (a nested ASSERTION_STMT is handled exactly like anywhere else),
+      and the only pass allowed to affect the OA_RETURN_TRACKING globals
+      if the loop body contains a return statement. Resolving a
+      contract's condition mutates it in place to a literal
+      boolean_true_node/error_mark_node, so any *later* re-walk of the
+      same shared subtree (pass 2 below) is naturally idempotent on it --
+      no duplicate diagnostics.
+
+   2. For each pointer decl the loop's repeated part ever reassigns
+      (oa_collect_loop_targets, a plain syntactic scan): re-walk the
+      *same* repeated part once more, in a fresh copy of the pre-loop ENV
+      with that one decl pre-invalidated -- this is exactly what enforces
+      "every reassignment's RHS must be provable without referring back
+      to the decl's own prior value" (the plan's item 4 restriction)
+      without needing genuine fixpoint iteration: if the decl's own
+      (invalidated) value is what a reassignment's RHS depends on, that
+      RHS correctly fails to resolve as provable; if a *different*,
+      provable reassignment already ran earlier in the very same pass
+      (ordinary straight-line/if-else sequencing within one iteration,
+      not a dependency on a *previous* iteration), that's legitimate and
+      is correctly picked up. The decl is provable after the loop only if
+      this pass concludes it provable *and* it was already provable
+      before the loop even started (covering zero-iteration execution).
+      OA_RETURN_TRACKING is suppressed during these synthetic re-walks
+      (they use a deliberately perturbed, hypothetical environment, not
+      real program-order semantics, and must not corrupt real
+      return-value tracking established by pass 1).
+
+   All outcomes from pass 2 are collected and only applied to the real
+   ENV after every reassigned decl has been independently checked (each
+   check must start fresh from the real pre-loop ENV, not from another
+   decl's already-updated result).  */
+
+static void
+oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
+		oa_env &env)
+{
+  auto_vec<tree *> parts;
+  if (cond_prep && *cond_prep) parts.safe_push (cond_prep);
+  if (cond && *cond) parts.safe_push (cond);
+  if (body && *body) parts.safe_push (body);
+  if (expr && *expr) parts.safe_push (expr);
+
+  auto walk_parts = [&] (oa_env &e)
+    {
+      for (unsigned i = 0; i < parts.length (); ++i)
+	oa_walk_stmt (parts[i], e);
+    };
+
+  oa_env scratch = env.copy ();
+  walk_parts (scratch);
+
+  auto_vec<tree> reassigned;
+  for (unsigned i = 0; i < parts.length (); ++i)
+    oa_collect_loop_targets (parts[i], &reassigned);
+
+  auto_vec<tree> result_decls;
+  auto_vec<bool> result_provable;
+  for (unsigned i = 0; i < reassigned.length (); ++i)
+    {
+      tree d = reassigned[i];
+      bool pre_ok = env.provable_p (d);
+
+      oa_env checkenv = env.copy ();
+      checkenv.invalidate (d);
+
+      bool saved_tracking = oa_return_tracking;
+      oa_return_tracking = false;
+      walk_parts (checkenv);
+      oa_return_tracking = saved_tracking;
+
+      result_decls.safe_push (d);
+      result_provable.safe_push (pre_ok && checkenv.provable_p (d));
+    }
+
+  for (unsigned i = 0; i < result_decls.length (); ++i)
+    env.set (result_decls[i], result_provable[i]);
+}
 
 /* The forward statement walker: processes *STMT (an arbitrary
    statement or statement-sequence) in program order, threading ENV
@@ -4734,6 +5287,19 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    }
 	  else
 	    oa_return_all_provable = oa_return_all_provable && this_provable;
+	}
+      /* A returned value commonly flows directly from a call (e.g.
+	 'return deref(p);') -- discharge any call-site precondition
+	 obligation (item 7) for every call reached from here, since such
+	 a call never stands alone as its own expression-statement and so
+	 would otherwise never reach the CALL_EXPR case below.  */
+      oa_scan_calls_in_expr (&TREE_OPERAND (t, 0), env);
+      /* Item 8's narrow div/mod and array-bound restrictions, only
+	 within a function actually declared 'conveyor'.  */
+      if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
+	{
+	  oa_scan_div_mod_in_expr (&TREE_OPERAND (t, 0), env);
+	  oa_scan_array_bounds_in_expr (&TREE_OPERAND (t, 0), env);
 	}
       /* Still scan the return value expression itself for a stray
 	 is_object_address call (e.g. 'return std::is_object_address(p);'
@@ -4784,6 +5350,15 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    else
 	      env.invalidate (decl);
 	  }
+	else if (VAR_P (decl) && INTEGRAL_TYPE_P (TREE_TYPE (decl)))
+	  {
+	    /* Item 8's narrow "provably nonzero" tracking, parallel to
+	       the pointer tracking above.  */
+	    if (DECL_INITIAL (decl))
+	      env.nz_set (decl, oa_provably_nonzero_p (DECL_INITIAL (decl), env));
+	    else
+	      env.nz_invalidate (decl);
+	  }
 	return;
       }
 
@@ -4814,9 +5389,26 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	tree lhs = TREE_OPERAND (t, 0);
 	tree rhs = TREE_OPERAND (t, 1);
 	lhs = STRIP_ANY_LOCATION_WRAPPER (lhs);
+	/* The RHS commonly flows directly from a call (e.g.
+	   'int* q = deref(p);') -- discharge any call-site precondition
+	   obligation (item 7) for every call reached from here, for the
+	   same reason as RETURN_EXPR above.  */
+	oa_scan_calls_in_expr (&TREE_OPERAND (t, 1), env);
+	/* Item 8's narrow div/mod and array-bound restrictions, only
+	   within a function actually declared 'conveyor'.  */
+	if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
+	  {
+	    oa_scan_div_mod_in_expr (&TREE_OPERAND (t, 1), env);
+	    oa_scan_array_bounds_in_expr (&TREE_OPERAND (t, 1), env);
+	  }
 	if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 	    && POINTER_TYPE_P (TREE_TYPE (lhs)))
 	  env.set (lhs, oa_provable_p (rhs, env));
+	else if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
+		 && INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
+	  /* Item 8's narrow "provably nonzero" tracking, parallel to the
+	     pointer tracking above.  */
+	  env.nz_set (lhs, oa_provably_nonzero_p (rhs, env));
 	return;
       }
 
@@ -4851,9 +5443,57 @@ oa_walk_stmt (tree *stmt, oa_env &env)
       oa_handle_assertion_stmt (t, env);
       return;
 
+    case CALL_EXPR:
+      /* A call used as its own complete expression-statement (e.g.
+	 'deref(p);', return value discarded) -- everywhere else a call
+	 can appear (a RETURN_EXPR's value, an INIT_EXPR/MODIFY_EXPR's
+	 RHS) is handled by an explicit oa_scan_calls_in_expr call at that
+	 site instead, since this switch only ever dispatches on a node's
+	 own top-level code. oa_scan_calls_in_expr's own is_object_address
+	 exclusion means a bare 'std::is_object_address(x);' reaching here
+	 directly (used outside any contract, i.e. not as an ASSERTION_STMT/
+	 PRECONDITION_STMT/POSTCONDITION_STMT's own condition) is correctly
+	 left for the default fallback's stray-use scan below instead.  */
+      oa_scan_calls_in_expr (stmt, env);
+      goto oa_default_scan;
+
+    case FOR_STMT:
+      /* FOR_INIT_STMT only ever runs once, before the loop -- walk it
+	 with ordinary straight-line semantics; everything else
+	 (cond-prep/cond/body/increment) repeats every iteration, handled
+	 by the loop-header merge rule (item 4).  */
+      oa_walk_stmt (&FOR_INIT_STMT (t), env);
+      oa_handle_loop (&FOR_COND_PREP (t), &FOR_COND (t), &FOR_BODY (t),
+		      &FOR_EXPR (t), env);
+      return;
+
+    case WHILE_STMT:
+      oa_handle_loop (&WHILE_COND_PREP (t), &WHILE_COND (t),
+		      &WHILE_BODY (t), NULL, env);
+      return;
+
+    case DO_STMT:
+      oa_handle_loop (NULL, &DO_COND (t), &DO_BODY (t), NULL, env);
+      return;
+
+    case RANGE_FOR_STMT:
+      /* Defensive only: an ordinary (non-template, already-instantiated)
+	 function's range-for is already desugared into a plain FOR_STMT
+	 by the time finish_function runs (cp_convert_range_for) -- a real
+	 RANGE_FOR_STMT only survives for a dependent template body, which
+	 this whole pass already skips via resolve_object_address_in_
+	 function's processing_template_decl guard, so this case is not
+	 expected to be reachable in practice.  Walk both operands plainly
+	 rather than invoking the full loop-header merge logic, since the
+	 exact per-iteration semantics here don't matter for a path that
+	 should never actually execute.  */
+      oa_walk_stmt (&RANGE_FOR_EXPR (t), env);
+      oa_walk_stmt (&RANGE_FOR_BODY (t), env);
+      return;
+
     default:
     oa_default_scan:
-      /* Anything else (loops, TRY_BLOCK, SWITCH_STMT, ordinary
+      /* Anything else (TRY_BLOCK, SWITCH_STMT, ordinary
 	 expression statements, a RETURN_EXPR's own value expression
 	 falling through from above, ...): not yet specially handled in
 	 this increment -- is_object_address is only ever legitimate
