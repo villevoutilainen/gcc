@@ -5890,10 +5890,28 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
   if (body && *body) parts.safe_push (body);
   if (expr && *expr) parts.safe_push (expr);
 
+  /* Increment E3: the loop's own condition refines the env used for
+     body+expr -- entering the body at all means the condition held.
+     Applied inside walk_parts itself, so every invocation (the
+     diagnostic pass below, and every per-decl invalidated re-walk
+     further down) sees it uniformly. Mirrors the same then-branch-only
+     refinement IF_STMT/COND_EXPR already apply, just without a
+     parallel else-branch -- a loop body is only ever entered when the
+     condition is true, there is no "else" here at all.  */
   auto walk_parts = [&] (oa_env &e)
     {
       for (unsigned i = 0; i < parts.length (); ++i)
-	oa_walk_stmt (parts[i], e);
+	{
+	  oa_walk_stmt (parts[i], e);
+	  if (cond && parts[i] == cond)
+	    {
+	      auto_vec<tree *> conjuncts;
+	      tree c = *cond;
+	      oa_collect_conjuncts (&c, &conjuncts);
+	      for (unsigned j = 0; j < conjuncts.length (); ++j)
+		oa_refine_single_comparison (*conjuncts[j], e, /*asserted_true=*/true);
+	    }
+	}
     };
 
   oa_env scratch = env.copy ();
@@ -5954,17 +5972,83 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
   for (unsigned i = 0; i < nz_result_decls.length (); ++i)
     env.nz_set (nz_result_decls[i], nz_result_provable[i]);
 
-  /* Increment E1: any range fact ENV already has for a decl the loop's
-     repeated part reassigns must not survive unchanged past the loop --
-     left as-is, a stale pre-loop range could incorrectly persist into
-     code that runs after the loop. Proper reasoning (the same
-     self-reference-free-reassignment-union rule as above, generalized
-     to interval union) is Increment E3's job; unconditionally
-     invalidating here is the safe, sound placeholder in the meantime
-     (never wrongly accepting, only occasionally failing to prove a
-     range that E3 will eventually recover).  */
+  /* Increment E3: the same merge rule again, generalized from the
+     boolean AND-merge above to interval *union* -- a decl (pointer or
+     integer; both fact kinds share the one range map, so this covers
+     both a plain integer's value range and a pointer's array-offset
+     range together) reassigned in the loop's repeated part gets a
+     post-loop range fact only if: every reassignment is provable
+     without depending on the decl's own prior value (checked the same
+     way as above, invalidating the decl's *range* fact specifically
+     before the re-walk); doing so still concludes with an actual range
+     fact (not just "some value," which the invalidated re-walk can't
+     rule out); and the pre-loop fact existed with the *same* base.
+     The final fact is the union of the pre-loop range and the
+     iteration-independent post-reassignment range (covering
+     zero-iteration execution the same way the boolean version's "AND
+     with pre_ok" does) -- e.g. 'for (...) { p = &candidates[i]; if
+     (...) break; }' with a provable pre-loop value, exactly the
+     realistic pattern the original plan cited for this rule. Any
+     disagreement (a differing base, or either side failing to
+     conclude with a fact at all) invalidates the range entirely rather
+     than guessing -- note this replaces item 4's original placeholder,
+     which only ever invalidated integer decls' ranges
+     (REASSIGNED_NZ), never a reassigned *pointer's* array-offset fact
+     at all (REASSIGNED) -- a latent gap between when Increment E2
+     started populating that side of the fact and now, closed here by
+     covering both.  */
+  auto_vec<tree> range_targets;
+  for (unsigned i = 0; i < reassigned.length (); ++i)
+    range_targets.safe_push (reassigned[i]);
   for (unsigned i = 0; i < reassigned_nz.length (); ++i)
-    env.range_invalidate (reassigned_nz[i]);
+    range_targets.safe_push (reassigned_nz[i]);
+
+  auto_vec<tree> range_result_decls;
+  auto_vec<bool> range_result_has_fact;
+  auto_vec<oa_range_fact> range_result_facts;
+  for (unsigned i = 0; i < range_targets.length (); ++i)
+    {
+      tree d = range_targets[i];
+      oa_range_fact pre_fact;
+      bool pre_ok = env.range_get (d, &pre_fact);
+
+      oa_env checkenv = env.copy ();
+      checkenv.range_invalidate (d);
+
+      bool saved_tracking = oa_return_tracking;
+      oa_return_tracking = false;
+      walk_parts (checkenv);
+      oa_return_tracking = saved_tracking;
+
+      oa_range_fact post_fact;
+      bool post_ok = checkenv.range_get (d, &post_fact);
+
+      range_result_decls.safe_push (d);
+      if (!pre_ok || !post_ok || pre_fact.base != post_fact.base)
+	{
+	  range_result_has_fact.safe_push (false);
+	  range_result_facts.safe_push (oa_range_fact ());
+	  continue;
+	}
+      oa_range_fact merged;
+      merged.base = pre_fact.base;
+      merged.has_lo = pre_fact.has_lo && post_fact.has_lo;
+      merged.has_hi = pre_fact.has_hi && post_fact.has_hi;
+      if (merged.has_lo)
+	merged.lo = wi::smin (pre_fact.lo, post_fact.lo);
+      if (merged.has_hi)
+	merged.hi = wi::smax (pre_fact.hi, post_fact.hi);
+      range_result_has_fact.safe_push (true);
+      range_result_facts.safe_push (merged);
+    }
+
+  for (unsigned i = 0; i < range_result_decls.length (); ++i)
+    {
+      if (range_result_has_fact[i])
+	env.range_set (range_result_decls[i], range_result_facts[i]);
+      else
+	env.range_invalidate (range_result_decls[i]);
+    }
 }
 
 /* The forward statement walker: processes *STMT (an arbitrary
