@@ -3359,6 +3359,23 @@ check_explicit_specialization (tree declarator,
 		    }
 		}
 
+	      /* Likewise for the D4324 'conveyor' function-specifier: it
+		 may be repeated on an explicit instantiation, but need not
+		 be.  Unlike noexcept, 'conveyor' has no syntax for
+		 "explicitly not conveyor", so omitting it here is always
+		 lenient; only a 'conveyor' written here that contradicts
+		 the real instantiation is an error.  */
+	      if (DECL_FUNCTION_TEMPLATE_P (tmpl)
+		  && DECL_DECLARED_CONVEYOR_P (decl)
+		  && !DECL_DECLARED_CONVEYOR_P (inst))
+		{
+		  auto_diagnostic_group d;
+		  error ("%qs specified in explicit instantiation does not "
+			 "match the instantiated declaration", "conveyor");
+		  inform (DECL_SOURCE_LOCATION (tmpl), "template declared here");
+		  return error_mark_node;
+		}
+
 	      return inst;
 	    }
 
@@ -12425,6 +12442,11 @@ tsubst_contract (tree decl, tree t, tree args, tsubst_flags_t complain,
 			  ? contract_control_constifies
 			      (ctrl, contract_side_of (t, decl))
 			  : true);
+  auto conveyor_ovr
+    = make_temp_override (contract_condition_conveyor_p,
+			  flag_contract_control_objects
+			  && contract_control_is_conveyor
+			       (ctrl, contract_side_of (t, decl)));
 
   /* Instantiate the condition.  If the return type is undeduced, process
      the expression as if inside a template to avoid spurious type errors.  */

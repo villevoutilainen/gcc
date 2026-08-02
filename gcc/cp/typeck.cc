@@ -29,6 +29,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "target.h"
 #include "cp-tree.h"
+#include "contracts.h"
 #include "stor-layout.h"
 #include "varasm.h"
 #include "intl.h"
@@ -8820,6 +8821,15 @@ build_static_cast_1 (location_t loc, tree type, tree expr, bool c_cast_p,
     {
       tree base;
 
+      if (conveyor_restrictions_active_p ())
+	{
+	  if (complain & tf_error)
+	    error_at (loc, "%<static_cast%> performing a base-to-derived "
+		      "conversion not permitted in a conveyor function "
+		      "or predicate");
+	  return error_mark_node;
+	}
+
       if (processing_template_decl)
 	return expr;
 
@@ -9451,6 +9461,14 @@ build_reinterpret_cast (location_t loc, tree type, tree expr,
 
   if (type == error_mark_node || expr == error_mark_node)
     return error_mark_node;
+
+  if (conveyor_restrictions_active_p ())
+    {
+      if (complain & tf_error)
+	error_at (loc, "%<reinterpret_cast%> not permitted in a "
+		  "conveyor function or predicate");
+      return error_mark_node;
+    }
 
   if (processing_template_decl)
     {

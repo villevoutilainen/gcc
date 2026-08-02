@@ -1627,6 +1627,46 @@ validate_constexpr_redeclaration (tree old_decl, tree new_decl)
   return true;
 }
 
+/* Return true if OLD_DECL and NEW_DECL agree on whether they were
+   declared with the D4324 'conveyor' function-specifier.  Every
+   reachable declaration of a conveyor function must repeat 'conveyor';
+   this is a strict, symmetric requirement (unlike contracts, which may
+   be omitted on a redeclaration).  Otherwise issue diagnostics.  */
+
+bool
+check_conveyor_redeclaration (tree old_decl, tree new_decl)
+{
+  old_decl = STRIP_TEMPLATE (old_decl);
+  new_decl = STRIP_TEMPLATE (new_decl);
+  if (TREE_CODE (old_decl) != FUNCTION_DECL
+      || TREE_CODE (new_decl) != FUNCTION_DECL)
+    return true;
+  if (DECL_DECLARED_CONVEYOR_P (old_decl)
+      == DECL_DECLARED_CONVEYOR_P (new_decl))
+    return true;
+  if (fndecl_built_in_p (old_decl))
+    {
+      /* Hide a built-in declaration.  */
+      if (DECL_DECLARED_CONVEYOR_P (new_decl))
+	SET_DECL_DECLARED_CONVEYOR_P (old_decl);
+      return true;
+    }
+  /* An explicit specialization can differ from the template
+     declaration with respect to 'conveyor', just as for constexpr
+     (see validate_constexpr_redeclaration above).  */
+  if (! DECL_TEMPLATE_SPECIALIZATION (old_decl)
+      && DECL_TEMPLATE_SPECIALIZATION (new_decl))
+    return true;
+
+  auto_diagnostic_group d;
+  error_at (DECL_SOURCE_LOCATION (new_decl),
+	    "redeclaration %qD differs in %qs "
+	    "from previous declaration", new_decl, "conveyor");
+  inform (DECL_SOURCE_LOCATION (old_decl),
+	  "previous declaration %qD", old_decl);
+  return false;
+}
+
 /* DECL is a redeclaration of a function or function template.  If
    it does have default arguments issue a diagnostic.  Note: this
    function is used to enforce the requirements in C++11 8.3.6 about
@@ -2546,6 +2586,9 @@ duplicate_decls (tree newdecl, tree olddecl, bool hiding, bool was_hidden)
     return NULL_TREE;
 
   if (!validate_constexpr_redeclaration (olddecl, newdecl))
+    return error_mark_node;
+
+  if (!check_conveyor_redeclaration (olddecl, newdecl))
     return error_mark_node;
 
   if (modules_p ()
@@ -9503,6 +9546,24 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
   if (type == error_mark_node)
     return;
 
+  /* D4324: every local variable in a conveyor function or predicate
+     must be explicitly initialized at its point of declaration.
+     Checked here (with the as-parsed INIT, before any of the
+     processing below) rather than by inspecting DECL_INITIAL after
+     the fact, because DECL_INITIAL does not reliably survive to
+     finish_function time for class-type variables initialized via a
+     constructor call -- the actual initialization becomes a separate
+     statement, and DECL_INITIAL reverts to NULL_TREE.  Only ordinary
+     local automatic variables are subject to this -- not statics or
+     thread_locals (those have their own, separate restriction), not
+     externs, and not namespace/class-scope variables.  */
+  if (VAR_P (decl) && !init && conveyor_restrictions_active_p ()
+      && at_function_scope_p ()
+      && !TREE_STATIC (decl) && !DECL_EXTERNAL (decl))
+    error_at (DECL_SOURCE_LOCATION (decl),
+	      "local variable %qD not explicitly initialized in a "
+	      "conveyor function or predicate", decl);
+
   if (VAR_P (decl) && is_copy_initialization (init))
     flags |= LOOKUP_ONLYCONVERTING;
 
@@ -12168,6 +12229,7 @@ grokfndecl (tree ctype,
 	    tree in_namespace,
 	    tree* attrlist,
 	    tree contract_specifiers,
+	    bool declared_conveyor_p,
 	    location_t location)
 {
   tree decl;
@@ -12649,6 +12711,8 @@ grokfndecl (tree ctype,
     {
       if (decl && decl != error_mark_node && contract_specifiers)
 	set_fn_contract_specifiers (decl, contract_specifiers);
+      if (decl && decl != error_mark_node && declared_conveyor_p)
+	SET_DECL_DECLARED_CONVEYOR_P (decl);
       return decl;
     }
 
@@ -12689,6 +12753,14 @@ grokfndecl (tree ctype,
 	t = DECL_TEMPLATE_RESULT (decl);
       set_fn_contract_specifiers (t, contract_specifiers);
       rebuild_postconditions (t);
+    }
+
+  if (declared_conveyor_p)
+    {
+      tree t = decl;
+      if (TREE_CODE (decl) == TEMPLATE_DECL)
+	t = DECL_TEMPLATE_RESULT (decl);
+      SET_DECL_DECLARED_CONVEYOR_P (t);
     }
 
   /* Check main's type after attributes have been applied.  */
@@ -14057,6 +14129,7 @@ grokdeclarator (const cp_declarator *declarator,
   int template_count = 0;
   tree returned_attrs = NULL_TREE;
   tree contract_specifiers = NULL_TREE;
+  bool declared_conveyor_p = false;
   tree parms = NULL_TREE;
   const cp_declarator *id_declarator;
   /* The unqualified name of the declarator; either an
@@ -15643,6 +15716,10 @@ grokdeclarator (const cp_declarator *declarator,
 		= attr_chainon (contract_specifiers,
 				declarator->u.function.contract_specifiers);
 
+	    if (flag_contract_control_objects
+		&& declarator->u.function.conveyor_p)
+	      declared_conveyor_p = true;
+
 	    if (attrs)
 	      /* [dcl.fct]/2:
 
@@ -16621,7 +16698,8 @@ grokdeclarator (const cp_declarator *declarator,
 			       is_xobj_member_function, sfk,
 			       funcdef_flag, late_return_type_p,
 			       template_count, in_namespace,
-			       attrlist, contract_specifiers, id_loc);
+			       attrlist, contract_specifiers,
+			       declared_conveyor_p, id_loc);
 	    decl = set_virt_specifiers (decl, virt_specifiers);
 	    if (decl == NULL_TREE)
 	      return error_mark_node;
@@ -16976,7 +17054,7 @@ grokdeclarator (const cp_declarator *declarator,
 			   funcdef_flag,
 			   late_return_type_p,
 			   template_count, in_namespace, attrlist,
-			   contract_specifiers, id_loc);
+			   contract_specifiers, declared_conveyor_p, id_loc);
 	if (decl == NULL_TREE)
 	  return error_mark_node;
 
@@ -20783,6 +20861,11 @@ finish_function (bool inline_p)
   /* Save constexpr function body before it gets munged by
      the NRV transformation.   */
   maybe_save_constexpr_fundef (fndecl);
+
+  /* D4324: check the syntactic conveyor-function restrictions, if this
+     function was declared 'conveyor'.  Also pre-genericize, like the
+     constexpr check above.  */
+  check_conveyor_function_body (fndecl);
 
   /* Perform delayed folding before NRV transformation.  */
   if (!processing_template_decl

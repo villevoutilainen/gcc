@@ -596,6 +596,34 @@ view_as_const (tree decl)
 
 bool contract_condition_constify_p = false;
 
+/* True while parsing or substituting a contract condition whose control
+   type opts into D4324 conveyor-function rules (is_conveyor == true).
+   Set via contract_control_is_conveyor at the same call sites as
+   contract_condition_constify_p above.  */
+
+bool contract_condition_conveyor_p = false;
+
+/* True if constructs subject to the D4324 conveyor-function syntactic
+   restrictions (gcc/cp/constexpr.cc's check_conveyor_function_body, and
+   the point-of-construction checks alongside it) should be rejected
+   right now -- either because we are in the body of a function declared
+   with the 'conveyor' function-specifier, or because we are parsing/
+   substituting a contract condition whose control object says
+   is_conveyor() == true.  Note this deliberately does NOT cover a
+   contract control object's own operator(): only the condition itself
+   is ever checked against conveyor rules.  */
+
+bool
+conveyor_restrictions_active_p ()
+{
+  if (contract_condition_conveyor_p)
+    return true;
+  if (current_function_decl
+      && DECL_DECLARED_CONVEYOR_P (current_function_decl))
+    return true;
+  return false;
+}
+
 /* Constify access to DECL from within the contract condition.  */
 
 tree
@@ -2183,6 +2211,12 @@ rebuild_postconditions (tree fndecl)
       auto constify_ovr
 	= make_temp_override (contract_condition_constify_p, constify_p);
 
+      bool conveyor_p = flag_contract_control_objects
+	&& contract_control_is_conveyor (CONTRACT_CONTROL_OBJECT (contract),
+					  contract_side_of (contract, fndecl));
+      auto conveyor_ovr
+	= make_temp_override (contract_condition_conveyor_p, conveyor_p);
+
       condition = tsubst_expr (condition, make_tree_vec (0),
 			       tf_warning_or_error, fndecl);
 
@@ -3420,6 +3454,18 @@ bool
 contract_control_constifies (tree ctrl, contract_check_side side)
 {
   return contract_control_bool_member (ctrl, "constify", side) == 1;
+}
+
+/* True if the control type CTRL's is_conveyor(cfg) returns true for the
+   TU's evaluation_semantic, meaning the predicate itself (not CTRL's own
+   operator()) must satisfy the D4324 conveyor-function syntactic
+   restrictions.  A bare contract, or a control type without a usable
+   is_conveyor getter, is not conveyor.  */
+
+bool
+contract_control_is_conveyor (tree ctrl, contract_check_side side)
+{
+  return contract_control_bool_member (ctrl, "is_conveyor", side) == 1;
 }
 
 /* True if the control type CTRL's assumable(cfg) returns true for the TU's

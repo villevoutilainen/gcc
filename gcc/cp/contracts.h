@@ -187,6 +187,7 @@ extern tree constify_contract_access		(tree);
 extern tree view_as_const			(tree);
 extern contract_check_side contract_side_of	(tree, tree);
 extern bool contract_control_constifies		(tree, contract_check_side);
+extern bool contract_control_is_conveyor		(tree, contract_check_side);
 extern tree contract_default_control_object		(location_t);
 extern void maybe_inherit_virtual_contract		(tree, tree);
 
@@ -194,6 +195,14 @@ extern void maybe_inherit_virtual_contract		(tree, tree);
    constification via its control type's constify member (D4324: off by
    default).  */
 extern bool contract_condition_constify_p;
+
+/* True while parsing/substituting a contract condition whose control
+   type opts into D4324 conveyor-function rules (is_conveyor member).  */
+extern bool contract_condition_conveyor_p;
+
+/* True if conveyor-function syntactic restrictions should be rejected
+   right now (see contracts.cc for the exact conditions).  */
+extern bool conveyor_restrictions_active_p		(void);
 
 extern void set_fn_contract_specifiers		(tree, tree);
 extern void update_fn_contract_specifiers	(tree, tree);

@@ -25,6 +25,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "target.h"
 #include "cp-tree.h"
+#include "contracts.h"
 #include "stringpool.h"
 #include "varasm.h"
 #include "gimplify.h"
@@ -4024,6 +4025,14 @@ build_new (location_t loc, vec<tree, va_gc> **placement, tree type,
 
   if (type == error_mark_node)
     return error_mark_node;
+
+  if (conveyor_restrictions_active_p ())
+    {
+      if (complain & tf_error)
+	error_at (loc, "%<new%>-expression not permitted in a conveyor "
+		  "function or predicate");
+      return error_mark_node;
+    }
 
   if (nelts == NULL_TREE
       /* Don't do auto deduction where it might affect mangling.  */

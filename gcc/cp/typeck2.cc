@@ -29,6 +29,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "system.h"
 #include "coretypes.h"
 #include "cp-tree.h"
+#include "contracts.h"
 #include "stor-layout.h"
 #include "varasm.h"
 #include "intl.h"
@@ -1193,6 +1194,14 @@ check_narrowing (tree type, tree init, tsubst_flags_t complain,
   if (!ok)
     {
       location_t loc = cp_expr_loc_or_input_loc (init);
+      if (conveyor_restrictions_active_p ())
+	{
+	  if (complain & tf_error)
+	    error_at (loc, "narrowing conversion of %qE from %qH to %qI "
+		      "not permitted in a conveyor function or predicate",
+		      init, ftype, type);
+	  return false;
+	}
       if (cxx_dialect == cxx98)
 	{
 	  if (complain & tf_warning)

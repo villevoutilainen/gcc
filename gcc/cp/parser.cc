@@ -2065,6 +2065,7 @@ make_call_declarator (cp_declarator *target,
   declarator->u.function.late_return_type = late_return_type;
   declarator->u.function.requires_clause = requires_clause;
   declarator->u.function.contract_specifiers = contract_specifiers;
+  declarator->u.function.conveyor_p = false;
   declarator->u.function.parens_loc = parens_loc;
   if (target)
     {
@@ -2763,6 +2764,8 @@ static enum tree_code cp_parser_ptr_operator
 static cp_cv_quals cp_parser_cv_qualifier_seq_opt
   (cp_parser *);
 static cp_virt_specifiers cp_parser_virt_specifier_seq_opt
+  (cp_parser *);
+static bool cp_parser_conveyor_specifier_opt
   (cp_parser *);
 static cp_ref_qualifier cp_parser_ref_qualifier_opt
   (cp_parser *);
@@ -26862,6 +26865,11 @@ cp_parser_direct_declarator (cp_parser* parser,
 
 		  cp_finalize_omp_declare_simd (parser, &odsd);
 
+		  /* Parse the (D4324) conveyor-specifier, if present.  */
+		  bool conveyor_p = false;
+		  if (flag_contract_control_objects)
+		    conveyor_p = cp_parser_conveyor_specifier_opt (parser);
+
 		  /* Parse the virt-specifier-seq.  */
 		  virt_specifiers = cp_parser_virt_specifier_seq_opt (parser);
 
@@ -26887,6 +26895,7 @@ cp_parser_direct_declarator (cp_parser* parser,
 						     attrs,
 						     parens_loc);
 		  declarator->attributes = gnu_attrs;
+		  declarator->u.function.conveyor_p = conveyor_p;
 		  declarator->parameter_pack_p |= pack_expansion_p;
 		  /* Any subsequent parameter lists are to do with
 		     return type, so are not those of the declared
@@ -27601,6 +27610,28 @@ cp_parser_tx_qualifier_opt (cp_parser *parser)
 	}
     }
   return NULL_TREE;
+}
+
+/* Parse an (optional) D4324 conveyor-specifier.
+
+   conveyor-specifier:
+     conveyor
+
+   'conveyor' is a context-sensitive identifier, exactly like
+   'override'/'final' below: it is not a reserved word, so a variable,
+   function, or member named 'conveyor' anywhere outside this one
+   declarator position continues to parse exactly as before, regardless
+   of whether -fcontract-control-objects is in effect.  Returns true iff
+   the specifier was present and consumed.  */
+
+static bool
+cp_parser_conveyor_specifier_opt (cp_parser *parser)
+{
+  cp_token *token = cp_lexer_peek_token (parser->lexer);
+  if (token->type != CPP_NAME || !id_equal (token->u.value, "conveyor"))
+    return false;
+  cp_lexer_consume_token (parser->lexer);
+  return true;
 }
 
 /* Parse an (optional) virt-specifier-seq.
@@ -33743,6 +33774,12 @@ cp_parser_late_contract_condition (cp_parser *parser, tree fn, tree contract)
   if (constify_p)
     current_class_ref = view_as_const (current_class_ref);
 
+  bool conveyor_p = flag_contract_control_objects
+    && contract_control_is_conveyor (CONTRACT_CONTROL_OBJECT (contract),
+				      contract_side_of (contract, fn));
+  auto conveyor_ovr = make_temp_override (contract_condition_conveyor_p,
+					  conveyor_p);
+
   /* Parse the condition, ensuring that parameters or the return variable
      aren't flagged for use outside the body of a function.  */
   begin_scope (sk_contract, fn);
@@ -33981,6 +34018,11 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
   if (constify_p)
     current_class_ref = view_as_const (current_class_ref);
 
+  bool conveyor_p = flag_contract_control_objects
+    && contract_control_is_conveyor (control_object, ccs_not_applicable);
+  auto conveyor_ovr = make_temp_override (contract_condition_conveyor_p,
+					  conveyor_p);
+
   /* Parse the condition.  */
   begin_scope (sk_contract, current_function_decl);
   bool old_pc = processing_postcondition;
@@ -34180,6 +34222,11 @@ cp_parser_function_contract_specifier (cp_parser *parser)
       tree current_class_ref_copy = current_class_ref;
       if (constify_p)
 	current_class_ref = view_as_const (current_class_ref);
+
+      bool conveyor_p = flag_contract_control_objects
+	&& contract_control_is_conveyor (control_object, ccs_definition);
+      auto conveyor_ovr = make_temp_override (contract_condition_conveyor_p,
+					      conveyor_p);
 
       /* Parse the condition, ensuring that parameters or the return variable
        aren't flagged for use outside the body of a function.  */

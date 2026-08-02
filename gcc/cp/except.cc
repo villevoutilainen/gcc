@@ -25,6 +25,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "system.h"
 #include "coretypes.h"
 #include "cp-tree.h"
+#include "contracts.h"
 #include "stringpool.h"
 #include "trans-mem.h"
 #include "attribs.h"
@@ -632,6 +633,14 @@ build_throw (location_t loc, tree exp, tsubst_flags_t complain)
 {
   if (exp == error_mark_node)
     return exp;
+
+  if (conveyor_restrictions_active_p ())
+    {
+      if (complain & tf_error)
+	error_at (loc, "%<throw%>-expression not permitted in a conveyor "
+		  "function or predicate");
+      return error_mark_node;
+    }
 
   if (processing_template_decl)
     {

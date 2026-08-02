@@ -1031,6 +1031,104 @@ maybe_save_constexpr_fundef (tree fun)
   register_constexpr_fundef (entry);
 }
 
+/* Accumulator for check_conveyor_function_body_r's single walk over a
+   conveyor function's body.  */
+
+struct conveyor_walk_data
+{
+  bool saw_return;
+};
+
+/* cp_walk_tree callback implementing the syntactic (non-flow-sensitive)
+   D4324 conveyor-function restrictions that are best checked by
+   walking the whole body at once, rather than at the point a
+   sub-expression is constructed (see conveyor_restrictions_active_p in
+   contracts.cc/contracts.h for the point-of-construction checks --
+   reinterpret_cast, new/delete, throw, co_await, base-to-derived
+   static_cast, narrowing conversion -- that live alongside the
+   constructs they gate instead).  */
+
+static tree
+check_conveyor_function_body_r (tree *tp, int *, void *data_)
+{
+  conveyor_walk_data *data = (conveyor_walk_data *) data_;
+  tree t = *tp;
+
+  switch (TREE_CODE (t))
+    {
+    case RETURN_EXPR:
+      data->saw_return = true;
+      break;
+
+    case CALL_EXPR:
+      {
+	tree fn = cp_get_callee_fndecl_nofold (t);
+	if (fn && DECL_NAME (fn)
+	    && id_equal (DECL_NAME (fn), "unreachable")
+	    && decl_in_std_namespace_p (fn))
+	  error_at (EXPR_LOCATION (t),
+		    "%<std::unreachable%> not permitted in a conveyor "
+		    "function or predicate");
+      }
+      break;
+
+    /* Explicit-initialization-of-locals is checked at the point of
+       declaration instead (cp_finish_decl, decl.cc) -- DECL_INITIAL
+       does not reliably survive to this later, post-hoc walk for
+       class-type variables initialized via a constructor call (the
+       actual initialization becomes a separate statement, and
+       DECL_INITIAL reverts to NULL_TREE), so checking it here would
+       misfire on exactly the common "S s{args};" case.  */
+
+    default:
+      break;
+    }
+
+  return NULL_TREE;
+}
+
+/* D4324: check the syntactic conveyor-function restrictions over FUN's
+   body, if FUN was declared with the 'conveyor' function-specifier.
+   Called from finish_function alongside maybe_save_constexpr_fundef,
+   at the same pre-genericize timing.
+
+   NOTE: the flow-sensitive quarter of the restriction list --
+   std::is_object_address-gated dereference, the div/mod reaching-
+   definition guard, the pointer-arithmetic array-bound rule, and the
+   pointer-relational-comparison ban -- needs real dataflow (reaching
+   definitions over the CFG/SSA form) and is deferred to a later pass,
+   not implemented here.  Likewise, "all exit paths return" is only
+   checked in the weaker form "at least one return statement is
+   present"; full path-consistency needs the CFG too.  */
+
+void
+check_conveyor_function_body (tree fun)
+{
+  if (processing_template_decl)
+    return;
+  if (!DECL_DECLARED_CONVEYOR_P (fun))
+    return;
+  if (DECL_CLONED_FUNCTION_P (fun) && !DECL_DELETING_DESTRUCTOR_P (fun))
+    return;
+
+  tree body = DECL_SAVED_TREE (fun);
+  if (body == NULL_TREE || body == error_mark_node)
+    return;
+
+  conveyor_walk_data data = { false };
+  hash_set<tree> pset;
+  cp_walk_tree (&body, check_conveyor_function_body_r, &data, &pset);
+
+  tree return_type = TREE_TYPE (TREE_TYPE (fun));
+  if (!VOID_TYPE_P (return_type)
+      && !data.saw_return
+      && !DECL_CONSTRUCTOR_P (fun)
+      && !DECL_DESTRUCTOR_P (fun))
+    error_at (DECL_SOURCE_LOCATION (fun),
+	      "conveyor function %qD with non-%<void%> return type must "
+	      "contain a %<return%> statement", fun);
+}
+
 /* BODY is a validated and massaged definition of a constexpr
    function.  Register it in the hash table.  */
 

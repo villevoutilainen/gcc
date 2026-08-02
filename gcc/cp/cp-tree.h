@@ -3298,7 +3298,12 @@ struct GTY(()) lang_decl_fn {
   unsigned contract_wrapper : 1;
   ENUM_BITFIELD(lang_contract_helper) contract_helper : 2;
 
-  unsigned spare : 4;
+  /* True if this function was declared with the D4324 context-sensitive
+     'conveyor' trailing function-specifier.  Declaration-only: does not
+     affect the function's type or mangling.  */
+  unsigned conveyor_p : 1;
+
+  unsigned spare : 3;
 
   /* 32-bits padding on 64-bit host.  */
 
@@ -3873,6 +3878,17 @@ struct GTY(()) lang_decl {
 #define SET_DECL_IMMEDIATE_FUNCTION_P(NODE) \
   (retrofit_lang_decl (FUNCTION_DECL_CHECK (NODE)),			\
    LANG_DECL_FN_CHECK (NODE)->immediate_fn_p = true)
+
+/* True if FNDECL was declared with the D4324 context-sensitive 'conveyor'
+   trailing function-specifier.  Declaration-only: no effect on the
+   function's type or mangling.  */
+#define DECL_DECLARED_CONVEYOR_P(NODE) \
+  (DECL_LANG_SPECIFIC (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE)))	\
+   ? LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->conveyor_p		\
+   : false)
+#define SET_DECL_DECLARED_CONVEYOR_P(NODE) \
+  (retrofit_lang_decl (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE))),	\
+   LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->conveyor_p = true)
 
 /* Nonzero if this DECL is the __PRETTY_FUNCTION__ variable in a
    template function.  */
@@ -7137,6 +7153,9 @@ struct cp_declarator {
       tree requires_clause;
       /* The function-contract-specifier-seq, if any.  */
       tree contract_specifiers;
+      /* True if the D4324 context-sensitive 'conveyor' trailing
+	 function-specifier was present.  */
+      bool conveyor_p;
       /* The position of the opening brace for a function definition.  */
       location_t parens_loc;
     } function;
@@ -7621,6 +7640,7 @@ extern bool fns_correspond			(tree, tree);
 extern int decls_match				(tree, tree, bool = true);
 extern bool maybe_version_functions		(tree, tree);
 extern bool validate_constexpr_redeclaration	(tree, tree);
+extern bool check_conveyor_redeclaration	(tree, tree);
 extern bool merge_default_template_args		(tree, tree, bool);
 extern void merge_decl_arguments		(tree, tree, bool, bool, bool);
 extern tree duplicate_decls			(tree, tree,
@@ -9429,6 +9449,7 @@ struct GTY((for_user)) constexpr_fundef {
 extern void fini_constexpr			(void);
 extern bool literal_type_p                      (tree);
 extern void maybe_save_constexpr_fundef		(tree);
+extern void check_conveyor_function_body		(tree);
 extern void register_constexpr_fundef		(const constexpr_fundef &);
 extern constexpr_fundef *retrieve_constexpr_fundef	(tree);
 extern bool is_valid_constexpr_fn		(tree, bool);

@@ -25,6 +25,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "target.h"
 #include "cp-tree.h"
+#include "contracts.h"
 #include "stringpool.h"
 #include "stmt.h"
 #include "stor-layout.h"
@@ -1589,6 +1590,13 @@ finish_co_await_expr (location_t kw, tree expr)
 {
   if (!expr || error_operand_p (expr))
     return error_mark_node;
+
+  if (conveyor_restrictions_active_p ())
+    {
+      error_at (kw, "%<co_await%>-expression not permitted in a conveyor "
+		"function or predicate");
+      return error_mark_node;
+    }
 
   if (cp_unevaluated_operand)
     {
