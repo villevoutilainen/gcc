@@ -219,6 +219,21 @@ namespace contracts
   // control type may choose to be inherited on only one of the two.
   // Defaults to false when absent, so existing control types opt in to
   // nothing new and are unaffected.
+  //
+  // A control type may also optionally declare
+  //   static constexpr bool is_conveyor(assertion_static_info) { return true; }
+  // (D4324) to require that the predicate itself -- not this control
+  // type's own operator(), which is never checked -- satisfy the
+  // conveyor-function syntactic restrictions (see the 'conveyor'
+  // function-specifier): no reinterpret_cast, no new/delete/throw/
+  // co_await, no base-to-derived static_cast, no narrowing conversion,
+  // every local explicitly initialized, at least one return statement
+  // for a non-void condition. Evaluated the same way as
+  // is_ignored/constify -- before any predicate-evaluation machinery
+  // exists -- and consulted regardless of whether the predicate is
+  // otherwise ignored, since it is a static well-formedness property of
+  // the program, not a runtime behavior. Defaults to false when absent,
+  // so existing control types are unaffected.
   template <class _Tp>
   concept assertion_control =
     requires (_Tp __c, assertion_static_info __info,

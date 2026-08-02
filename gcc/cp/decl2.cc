@@ -674,6 +674,14 @@ delete_sanity (location_t loc, tree exp, tree size, bool doing_vec,
   if (exp == error_mark_node)
     return exp;
 
+  if (conveyor_restrictions_active_p ())
+    {
+      if (complain & tf_error)
+	error_at (loc, "%<delete%>-expression not permitted in a conveyor "
+		  "function or predicate");
+      return error_mark_node;
+    }
+
   if (processing_template_decl)
     {
       t = build_min (DELETE_EXPR, void_type_node, exp, size);
