@@ -4927,6 +4927,32 @@ oa_scan_calls_in_expr (tree *expr, oa_env &env)
     }, &env, NULL);
 }
 
+/* Scan *EXPR for a stray std::is_object_address(...) call -- one
+   reached somewhere this pass doesn't recognize as a legitimate
+   contract construct's own condition (ASSERTION_STMT/PRECONDITION_STMT/
+   POSTCONDITION_STMT), which is always an error: it has no definition
+   and could never be evaluated at runtime, so it can never be
+   legally present anywhere else.  Used both by oa_walk_stmt's own
+   default fallback (over an entire unhandled node) and, narrower, by
+   the IF_STMT/COND_EXPR condition-operand handling (over just the
+   condition, not the whole if-statement).  */
+
+static void
+oa_scan_stray_is_object_address (tree *expr)
+{
+  tree found = cp_walk_tree (expr, [](tree *tp, int *, void *) -> tree
+    {
+      tree arg;
+      if (is_object_address_call_p (*tp, &arg))
+	return *tp;
+      return NULL_TREE;
+    }, NULL, NULL);
+  if (found)
+    error_at (EXPR_LOCATION (found), "%<std::is_object_address%> may "
+	      "only be used directly inside a conveyor-checked "
+	      "%<contract_assert%>, %<pre%>, or %<post%> condition");
+}
+
 /* Handle one PRECONDITION_STMT encountered during the body walk: both
    a resolution point (so is_object_address never reaches
    genericization unresolved -- it has no definition and could never
@@ -5414,6 +5440,18 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 
     case COND_EXPR:
       {
+	/* The condition itself was previously never walked at all here --
+	   see the IF_STMT case's comment below for why this matters and
+	   what these three steps do; identical treatment for both
+	   shapes.  */
+	oa_scan_calls_in_expr (&TREE_OPERAND (t, 0), env);
+	if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
+	  {
+	    oa_scan_div_mod_in_expr (&TREE_OPERAND (t, 0), env);
+	    oa_scan_array_bounds_in_expr (&TREE_OPERAND (t, 0), env);
+	  }
+	oa_scan_stray_is_object_address (&TREE_OPERAND (t, 0));
+
 	oa_env then_env = env.copy ();
 	oa_walk_stmt (&TREE_OPERAND (t, 1), then_env);
 	oa_env else_env = env.copy ();
@@ -5430,6 +5468,41 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	 if/else merge rule, just via THEN_CLAUSE/ELSE_CLAUSE instead of
 	 TREE_OPERAND 1/2.  */
       {
+	/* The condition operand itself: previously never walked at all,
+	   meaning a call embedded in an if/ternary condition never got
+	   item 7's call-site precondition-obligation check, and a stray
+	   is_object_address used directly inside one (outside any
+	   contract) wasn't flagged by the well-formedness gate either --
+	   both simply invisible to this pass (unlike a loop's own
+	   condition, already covered by oa_handle_loop's "repeated part"
+	   list for item 4). Mirrors the exact shape already used for
+	   RETURN_EXPR's value and INIT_EXPR/MODIFY_EXPR's RHS: an
+	   explicit call-site-obligation scan, explicit narrow item-8
+	   scans (only within a function actually declared conveyor, same
+	   gating used everywhere else), and an explicit stray-is_object_
+	   address scan -- deliberately *not* a full oa_walk_stmt dispatch
+	   on the condition (unlike a plain sub-statement): the condition
+	   here plays the same role as RETURN_EXPR's/INIT_EXPR's own
+	   value/RHS, which don't recurse via oa_walk_stmt into themselves
+	   either, precisely to avoid re-dispatching into (and so
+	   double-scanning/double-reporting through) the very same
+	   CALL_EXPR/INIT_EXPR/MODIFY_EXPR cases that already perform
+	   their own oa_scan_calls_in_expr internally. The one thing this
+	   deliberately gives up, matching that same precedent: an
+	   assignment-in-condition ('if ((p = f()) != nullptr)', a real if
+	   rare pattern) doesn't update provability going forward the way
+	   an ordinary statement's assignment would -- safe, just
+	   occasionally missing a would-be-provable case, the same
+	   "conservative but sound" discipline used throughout this
+	   pass.  */
+	oa_scan_calls_in_expr (&IF_COND (t), env);
+	if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
+	  {
+	    oa_scan_div_mod_in_expr (&IF_COND (t), env);
+	    oa_scan_array_bounds_in_expr (&IF_COND (t), env);
+	  }
+	oa_scan_stray_is_object_address (&IF_COND (t));
+
 	oa_env then_env = env.copy ();
 	oa_walk_stmt (&THEN_CLAUSE (t), then_env);
 	oa_env else_env = env.copy ();
@@ -5507,19 +5580,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	 Unconditionally scan the whole subtree (not just T itself) so
 	 nothing nested inside an unhandled construct silently passes
 	 through unchecked.  */
-      {
-	tree found = cp_walk_tree (&t, [](tree *tp, int *, void *) -> tree
-	  {
-	    tree arg;
-	    if (is_object_address_call_p (*tp, &arg))
-	      return *tp;
-	    return NULL_TREE;
-	  }, NULL, NULL);
-	if (found)
-	  error_at (EXPR_LOCATION (found), "%<std::is_object_address%> may "
-		    "only be used directly inside a conveyor-checked "
-		    "%<contract_assert%>, %<pre%>, or %<post%> condition");
-      }
+      oa_scan_stray_is_object_address (&t);
       return;
     }
 }
