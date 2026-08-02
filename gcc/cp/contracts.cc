@@ -4552,6 +4552,26 @@ oa_provable_p (tree expr, oa_env &env)
 	}
     }
 
+  /* Reading a by-reference lambda-capture proxy's *value* directly
+     (e.g. a captured pointer used as-is, '[&]{ return p; }()', as
+     opposed to '&p' handled just above) arrives here as
+     INDIRECT_REF(proxy) -- found empirically alongside the div/mod
+     fact's own identical case (Increment E-divmod): unlike '&proxy',
+     an ordinary *read* needs an explicit dereference node with no
+     conversion wrapper of its own, so the VAR_P branch below never
+     used to see through it at all -- silently falling through to
+     "unprovable" regardless of whether the captured pointer actually
+     was, rather than via the capture-proxy redirect that branch
+     already contains.  Strip it here, before the generic conversion-
+     stripping loop (which has nothing that would remove it).  */
+  if (oa_iile_outer_env && TREE_CODE (expr) == INDIRECT_REF)
+    {
+      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (VAR_P (op) && TREE_CODE (TREE_TYPE (op)) == REFERENCE_TYPE
+	  && is_capture_proxy (op))
+	expr = op;
+    }
+
   while (TREE_CODE (expr) == NON_LVALUE_EXPR
 	 || TREE_CODE (expr) == NOP_EXPR
 	 || TREE_CODE (expr) == CONVERT_EXPR)
@@ -4598,17 +4618,30 @@ oa_provable_p (tree expr, oa_env &env)
   return false;
 }
 
-/* D4324/P2680 item 8, narrow version: true if EXPR is provably nonzero
-   -- a literal nonzero integer constant, or an integer-typed VAR_DECL/
-   PARM_DECL ENV's second ("nonzero") fact map already knows to be
-   provable (fed only by the same two sources, via the ENV.nz_set calls
-   in oa_walk_stmt's DECL_EXPR/INIT_EXPR/MODIFY_EXPR cases -- no
-   cross-statement inference beyond what the ordinary straight-line/
-   if-else merge already gives this for free). Deliberately narrow, per
-   the decision recorded in the plan: this is not extended to recognize
-   e.g. a decl known nonzero via a prior comparison
-   ('if (n != 0) ... n ...'), which would need real dataflow parity with
-   is_object_address (Increment E, not yet started).  */
+/* D4324/P2680 item 8: true if EXPR is provably nonzero -- a literal
+   nonzero integer constant, an integer-typed VAR_DECL/PARM_DECL ENV's
+   second ("nonzero") fact map already knows to be provable (fed by the
+   narrow version's two sources -- a literal, or a decl straight-line-
+   assigned from one -- plus, as of Increment E-divmod, the loop-header
+   merge rule and contract_assert/precondition/postcondition fact
+   sources, exactly mirroring is_object_address's own sources), or (also
+   Increment E-divmod) a by-reference lambda-capture proxy for such a
+   decl, resolved against the *enclosing* scope's env exactly the way
+   oa_provable_p's own capture-proxy redirect works.
+
+   Deliberately still narrow in one respect: this does not recurse into
+   a statically-resolvable, immediately-invoked closure *call* the way
+   oa_provable_p does (item 5) -- e.g. 'int n = [&]{ return 5; }();'
+   isn't recognized as nonzero-provable. Doing so would need a second,
+   parallel return-path tracking mechanism (mirroring OA_RETURN_
+   TRACKING/OA_RETURN_ALL_PROVABLE/OA_RETURN_SEEN, which only accumulate
+   is_object_address-provability across a closure's return paths, not
+   nonzero-ness) -- left as a further, smaller residual gap, not part of
+   Increment E-divmod's scoped set of fixes (nor of Increments E1-E4,
+   which are about range facts specifically, not this one).  Anything
+   not recognized here is conservatively left unprovable, the same
+   "must be provable, else treated as unprovable" discipline used
+   throughout this pass.  */
 
 static bool
 oa_provably_nonzero_p (tree expr, oa_env &env)
@@ -4617,6 +4650,25 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
     return false;
 
   STRIP_ANY_LOCATION_WRAPPER (expr);
+
+  /* Reading a by-reference lambda-capture proxy's *value* (as opposed
+     to its address, which oa_provable_p's own capture-proxy comment
+     explains at length) arrives here as INDIRECT_REF(proxy) directly --
+     found empirically (via debug_tree, the same method used throughout
+     this pass): unlike '&proxy' (a bare NOP_EXPR/CONVERT_EXPR
+     reference-to-pointer conversion, no ADDR_EXPR node), an ordinary
+     *read* of a reference-typed proxy needs an explicit dereference
+     node, with no intervening conversion wrapper of its own. Strip it
+     before the generic conversion-stripping loop below, which
+     otherwise has nothing that would recognize or remove it.  */
+  if (oa_iile_outer_env && TREE_CODE (expr) == INDIRECT_REF)
+    {
+      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (VAR_P (op) && TREE_CODE (TREE_TYPE (op)) == REFERENCE_TYPE
+	  && is_capture_proxy (op))
+	expr = op;
+    }
+
   while (TREE_CODE (expr) == NON_LVALUE_EXPR
 	 || TREE_CODE (expr) == NOP_EXPR
 	 || TREE_CODE (expr) == CONVERT_EXPR)
@@ -4626,7 +4678,15 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
     return !integer_zerop (expr);
 
   if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
-    return env.nz_provable_p (expr);
+    {
+      if (oa_iile_outer_env && is_capture_proxy (expr))
+	{
+	  tree captured = DECL_CAPTURED_VARIABLE (expr);
+	  if (captured)
+	    return oa_provably_nonzero_p (captured, *oa_iile_outer_env);
+	}
+      return env.nz_provable_p (expr);
+    }
 
   return false;
 }
@@ -4783,6 +4843,43 @@ oa_collect_conjuncts (tree *cond, vec<tree *> *conjuncts)
       return;
     }
   conjuncts->safe_push (cond);
+}
+
+/* D4324/P2680 item 8, Increment E-divmod: true if CONJUNCT is of the
+   form 'E != 0' or '0 != E' (either operand order), with *DECL_OUT set
+   to E -- the fact-seeding counterpart of is_object_address_call_p,
+   used the same way by oa_handle_precondition_stmt/oa_handle_
+   assertion_stmt/oa_handle_postcondition_stmt to recognize a
+   nonzero-ness conjunct worth folding into the nz-fact map. Only a
+   direct decl reference is recognized as E (matching oa_provably_
+   nonzero_p's own scope); '==' is deliberately not handled the
+   symmetric way is_object_address's gate is, since 'E == 0' doesn't
+   establish nonzero-ness at all.  */
+
+static bool
+oa_nonzero_conjunct_p (tree conjunct, tree *decl_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  if (TREE_CODE (c) != NE_EXPR)
+    return false;
+
+  tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+  tree decl, zero;
+  if (TREE_CODE (op1) == INTEGER_CST)
+    decl = op0, zero = op1;
+  else if (TREE_CODE (op0) == INTEGER_CST)
+    decl = op1, zero = op0;
+  else
+    return false;
+
+  if (!integer_zerop (zero) || !(VAR_P (decl) || TREE_CODE (decl) == PARM_DECL))
+    return false;
+
+  *decl_out = decl;
+  return true;
 }
 
 /* True if CONTRACT (an ASSERTION_STMT/PRECONDITION_STMT/POSTCONDITION_STMT)
@@ -4993,12 +5090,15 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
   auto_vec<tree *> conjuncts;
   oa_collect_conjuncts (&cond, &conjuncts);
   auto_vec<tree> facts;
+  auto_vec<tree> nz_facts;
   if (conveyor_ok)
     for (unsigned i = 0; i < conjuncts.length (); ++i)
       {
 	tree arg;
 	if (is_object_address_call_p (*conjuncts[i], &arg))
 	  facts.safe_push (STRIP_ANY_LOCATION_WRAPPER (arg));
+	else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
+	  nz_facts.safe_push (arg);
       }
 
   if (!oa_resolve_condition (&cond, env, conveyor_ok, /*trust=*/true))
@@ -5017,6 +5117,8 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
       if (VAR_P (e) || TREE_CODE (e) == PARM_DECL)
 	env.set (e, true);
     }
+  for (unsigned i = 0; i < nz_facts.length (); ++i)
+    env.nz_set (nz_facts[i], true);
 }
 
 /* Forward-declared: the statement walker recurses into itself, and into
@@ -5121,12 +5223,15 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
   auto_vec<tree *> conjuncts;
   oa_collect_conjuncts (&cond, &conjuncts);
   auto_vec<tree> facts;
+  auto_vec<tree> nz_facts;
   if (conveyor_ok)
     for (unsigned i = 0; i < conjuncts.length (); ++i)
       {
 	tree arg;
 	if (is_object_address_call_p (*conjuncts[i], &arg))
 	  facts.safe_push (STRIP_ANY_LOCATION_WRAPPER (arg));
+	else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
+	  nz_facts.safe_push (arg);
       }
 
   if (!oa_resolve_condition (&cond, env, conveyor_ok))
@@ -5145,40 +5250,49 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
       if (VAR_P (e) || TREE_CODE (e) == PARM_DECL)
 	env.set (e, true);
     }
+  for (unsigned i = 0; i < nz_facts.length (); ++i)
+    env.nz_set (nz_facts[i], true);
 }
 
-/* Collect, into OUT (deduplicated), every pointer-typed VAR_DECL/
-   PARM_DECL that is the target of a plain INIT_EXPR/MODIFY_EXPR
-   assignment anywhere within *STMT -- a plain syntactic scan,
-   independent of provability, used only to determine which decls the
-   loop-header merge rule (item 4) needs to consider at all. A decl
-   freshly declared *inside* the loop body (via DECL_EXPR) is
-   deliberately not specially recognized here: such a decl doesn't
-   persist across iterations, so it needs no pre-loop/post-loop merge --
-   any INIT_EXPR that happens to represent its own initial declaration-
-   with-initializer looks identical to an ordinary assignment to this
-   syntactic scan, but including it in OUT is harmless (at worst a dead,
-   never-looked-up entry ends up in the enclosing env after the loop,
-   since the decl itself is out of scope there).  */
+/* Collect, into PTR_OUT/NZ_OUT (each deduplicated), every pointer-typed
+   (respectively integer-typed) VAR_DECL/PARM_DECL that is the target of
+   a plain INIT_EXPR/MODIFY_EXPR assignment anywhere within *STMT -- a
+   plain syntactic scan, independent of provability, used only to
+   determine which decls the loop-header merge rule (item 4, and its
+   div/mod-nonzero-fact counterpart, Increment E-divmod) needs to
+   consider at all. A decl freshly declared *inside* the loop body (via
+   DECL_EXPR) is deliberately not specially recognized here: such a decl
+   doesn't persist across iterations, so it needs no pre-loop/post-loop
+   merge -- any INIT_EXPR that happens to represent its own initial
+   declaration-with-initializer looks identical to an ordinary
+   assignment to this syntactic scan, but including it in an OUT vec is
+   harmless (at worst a dead, never-looked-up entry ends up in the
+   enclosing env after the loop, since the decl itself is out of scope
+   there).  */
+
+struct oa_loop_target_data { vec<tree> *ptr_out; vec<tree> *nz_out; };
 
 static void
-oa_collect_loop_targets (tree *stmt, vec<tree> *out)
+oa_collect_loop_targets (tree *stmt, vec<tree> *ptr_out, vec<tree> *nz_out)
 {
+  oa_loop_target_data data = { ptr_out, nz_out };
   cp_walk_tree (stmt, [](tree *tp, int *, void *data_) -> tree
     {
-      vec<tree> *out = (vec<tree> *) data_;
+      oa_loop_target_data *d = (oa_loop_target_data *) data_;
       tree t = *tp;
       if (t == NULL_TREE || t == error_mark_node)
 	return NULL_TREE;
       if (TREE_CODE (t) != INIT_EXPR && TREE_CODE (t) != MODIFY_EXPR)
 	return NULL_TREE;
       tree lhs = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
-      if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
-	  && POINTER_TYPE_P (TREE_TYPE (lhs))
-	  && !out->contains (lhs))
-	out->safe_push (lhs);
+      if (!(VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL))
+	return NULL_TREE;
+      if (POINTER_TYPE_P (TREE_TYPE (lhs)) && !d->ptr_out->contains (lhs))
+	d->ptr_out->safe_push (lhs);
+      else if (INTEGRAL_TYPE_P (TREE_TYPE (lhs)) && !d->nz_out->contains (lhs))
+	d->nz_out->safe_push (lhs);
       return NULL_TREE;
-    }, out, NULL);
+    }, &data, NULL);
 }
 
 /* Handle one loop (FOR_STMT/WHILE_STMT/DO_STMT), implementing the
@@ -5247,9 +5361,9 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
   oa_env scratch = env.copy ();
   walk_parts (scratch);
 
-  auto_vec<tree> reassigned;
+  auto_vec<tree> reassigned, reassigned_nz;
   for (unsigned i = 0; i < parts.length (); ++i)
-    oa_collect_loop_targets (parts[i], &reassigned);
+    oa_collect_loop_targets (parts[i], &reassigned, &reassigned_nz);
 
   auto_vec<tree> result_decls;
   auto_vec<bool> result_provable;
@@ -5272,6 +5386,35 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 
   for (unsigned i = 0; i < result_decls.length (); ++i)
     env.set (result_decls[i], result_provable[i]);
+
+  /* Increment E-divmod: the exact same merge rule, applied to the
+     "provably nonzero" fact map instead of the "is_object_address"
+     one -- a reassigned integer decl is nonzero-provable after the
+     loop only if every reassignment is independently nonzero-provable
+     without depending on the decl's own prior value, and the pre-loop
+     value was already nonzero-provable (covers zero-iteration
+     execution).  */
+  auto_vec<tree> nz_result_decls;
+  auto_vec<bool> nz_result_provable;
+  for (unsigned i = 0; i < reassigned_nz.length (); ++i)
+    {
+      tree d = reassigned_nz[i];
+      bool pre_ok = env.nz_provable_p (d);
+
+      oa_env checkenv = env.copy ();
+      checkenv.nz_invalidate (d);
+
+      bool saved_tracking = oa_return_tracking;
+      oa_return_tracking = false;
+      walk_parts (checkenv);
+      oa_return_tracking = saved_tracking;
+
+      nz_result_decls.safe_push (d);
+      nz_result_provable.safe_push (pre_ok && checkenv.nz_provable_p (d));
+    }
+
+  for (unsigned i = 0; i < nz_result_decls.length (); ++i)
+    env.nz_set (nz_result_decls[i], nz_result_provable[i]);
 }
 
 /* The forward statement walker: processes *STMT (an arbitrary
@@ -5369,6 +5512,29 @@ oa_walk_stmt (tree *stmt, oa_env &env)
     case DECL_EXPR:
       {
 	tree decl = DECL_EXPR_DECL (t);
+	bool tracked = (VAR_P (decl)
+			&& (POINTER_TYPE_P (TREE_TYPE (decl))
+			    || INTEGRAL_TYPE_P (TREE_TYPE (decl))));
+	/* A declaration's own initializer ('int c = 10 / q;') is a
+	   distinct shape from an ordinary assignment statement ('int c;
+	   c = 10 / q;', reaching the INIT_EXPR/MODIFY_EXPR case below) --
+	   this was previously the *only* place in the whole walk that
+	   never ran the item 7/8 scans on a call/div-mod/array-ref
+	   reached through it at all, found while testing Increment
+	   E-divmod's IILE support (a direct-initialization local inside
+	   a closure body went completely unchecked). Mirrors the exact
+	   same three calls RETURN_EXPR's value and INIT_EXPR/MODIFY_
+	   EXPR's RHS already use.  */
+	if (tracked && DECL_INITIAL (decl))
+	  {
+	    oa_scan_calls_in_expr (&DECL_INITIAL (decl), env);
+	    if (current_function_decl
+		&& DECL_DECLARED_CONVEYOR_P (current_function_decl))
+	      {
+		oa_scan_div_mod_in_expr (&DECL_INITIAL (decl), env);
+		oa_scan_array_bounds_in_expr (&DECL_INITIAL (decl), env);
+	      }
+	  }
 	if (VAR_P (decl) && POINTER_TYPE_P (TREE_TYPE (decl)))
 	  {
 	    if (DECL_INITIAL (decl))
