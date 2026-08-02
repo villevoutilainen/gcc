@@ -592,6 +592,30 @@ namespace contracts
 
 } // namespace contracts
 
+// D4324/P2680 (Dos Reis, "Contracts for C++: Prioritizing Safety"):
+// std::is_object_address(p) is a compile-time-only proof predicate,
+// usable inside a conveyor-checked contract predicate (see the
+// 'conveyor' function-specifier and a control object's is_conveyor
+// member). Unlike an ordinary predicate sub-expression it is never
+// evaluated at runtime: the compiler either proves, via definite-
+// assignment reasoning (and facts contributed by prior non-ignored
+// preconditions/postconditions/contract_asserts), that the argument
+// provably designates a real object, or the program is ill-formed
+// (a hard compile-time error) -- there is no third, "checked but
+// false" outcome, because there is no general way to check pointer
+// validity at runtime in the first place.
+//
+// Declared (never defined) as a plain function template, exactly like
+// std::contracts::base_contract<Base>() above: recognized by the
+// compiler purely by which template a CALL_EXPR's callee is a
+// specialization of (is_object_address_call_p in gcc/cp/contracts.cc),
+// nothing in the parser needs to know about it. Lives directly in
+// namespace std (not std::contracts), matching std::unreachable's own
+// placement as a general-purpose utility rather than a contracts-
+// specific one.
+template <class _Tp>
+bool is_object_address(_Tp*);
+
 _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace std
 
