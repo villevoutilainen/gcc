@@ -4596,6 +4596,21 @@ static oa_env *oa_iile_outer_env;
    recursively.  */
 static bool oa_resolve_iile_call (tree call, oa_env &env);
 
+/* D4324/P2680 item 6: forward-declared -- the actual definitions
+   (defined near oa_handle_call_precondition_obligation, item 7's dual,
+   since they need oa_collect_conjuncts/oa_nonzero_conjunct_p/oa_
+   refine_single_comparison/oa_contract_conveyor_active_p, all defined
+   later in the file) are consulted from the tail of oa_provable_p/
+   oa_provably_nonzero_p/oa_get_range respectively, as one more fact
+   source alongside each function's existing IILE-recursion check: a
+   callee's own non-ignored, conveyor postcondition, naming its result
+   identifier in a fact-shaped conjunct, is an unconditional guarantee
+   about any call's return value -- no argument substitution needed,
+   unlike item 7's complementary precondition-*obligation* direction.  */
+static bool oa_call_postcondition_object_address_p (tree call);
+static bool oa_call_postcondition_nonzero_p (tree call);
+static bool oa_call_postcondition_range_p (tree call, oa_range_fact *out);
+
 /* True if EXPR (evaluated in ENV) is provably an object address:
    'this'; '&obj' where obj is a parameter/variable of object type; a
    VAR_DECL/PARM_DECL whose current value ENV already knows to be
@@ -4707,6 +4722,13 @@ oa_provable_p (tree expr, oa_env &env)
   if (!oa_iile_outer_env && oa_iile_call_p (expr, &closure_obj))
     return oa_resolve_iile_call (expr, env);
 
+  /* Item 6: an ordinary (non-IILE) call whose callee's own non-ignored,
+     conveyor postcondition unconditionally guarantees its return value
+     is an object address.  */
+  if (TREE_CODE (expr) == CALL_EXPR
+      && oa_call_postcondition_object_address_p (expr))
+    return true;
+
   return false;
 }
 
@@ -4801,6 +4823,16 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
 	return true;
       return false;
     }
+
+  /* Item 6: an ordinary call whose callee's own non-ignored, conveyor
+     postcondition has a bare 'r != 0'/'0 != r' conjunct naming its
+     result identifier. A comparison-based guarantee (e.g. 'r > 0') is
+     already covered above, via oa_get_range's own item-6 fallback
+     (below) feeding the range-fact check just above -- this only
+     covers the literal-!= shape that isn't representable as a single
+     interval.  */
+  if (TREE_CODE (expr) == CALL_EXPR && oa_call_postcondition_nonzero_p (expr))
+    return true;
 
   return false;
 }
@@ -4995,6 +5027,11 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
   tree closure_obj;
   if (!oa_iile_outer_env && oa_iile_call_p (expr, &closure_obj))
     return oa_resolve_iile_range (expr, env, out);
+
+  /* Item 6: an ordinary call whose callee's own non-ignored, conveyor
+     postcondition(s) imply a value range for its result identifier.  */
+  if (TREE_CODE (expr) == CALL_EXPR && oa_call_postcondition_range_p (expr, out))
+    return true;
 
   return false;
 }
@@ -5646,6 +5683,149 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env)
 	    }
 	}
     }
+}
+
+/* D4324/P2680 item 6: the complementary direction from item 7 above --
+   a callee's own non-ignored, conveyor *postcondition* is a trusted
+   fact about *any* call's return value, not a per-call obligation the
+   caller must discharge. Unlike item 7, no argument substitution is
+   needed at all: a postcondition's guarantee about its own named
+   result identifier (POSTCONDITION_IDENTIFIER, the same accessor
+   oa_handle_postcondition_stmt already uses for a function's own
+   postcondition) holds unconditionally for every successful call, so
+   this only ever consults CALL's callee declaration, never CALL's own
+   arguments or the caller's ENV.  Three near-identical small
+   functions, one per fact map, mirroring how oa_provable_p/oa_
+   provably_nonzero_p/oa_get_range are themselves three separate
+   functions rather than one combined multi-output one.  */
+
+static bool
+oa_call_postcondition_object_address_p (tree call)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return false;
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      if (!oa_contract_conveyor_active_p (contract, callee))
+	continue;
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      if (!result_id || (!VAR_P (result_id) && TREE_CODE (result_id) != PARM_DECL))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree arg;
+	  if (is_object_address_call_p (*conjuncts[i], &arg))
+	    {
+	      STRIP_ANY_LOCATION_WRAPPER (arg);
+	      if (arg == result_id)
+		return true;
+	    }
+	}
+    }
+  return false;
+}
+
+/* Same idea, for item 8's "provably nonzero" fact -- a bare
+   'r != 0'/'0 != r' conjunct only. A comparison-based exclusion of
+   zero (e.g. 'r > 0') needs no separate handling here: it is already
+   covered by oa_provably_nonzero_p's own existing range-fact
+   supplementary check, once oa_call_postcondition_range_p below is
+   consulted from oa_get_range -- exactly why oa_nonzero_conjunct_p and
+   oa_refine_single_comparison are two separate mechanisms everywhere
+   else in this pass.  */
+
+static bool
+oa_call_postcondition_nonzero_p (tree call)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return false;
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      if (!oa_contract_conveyor_active_p (contract, callee))
+	continue;
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      if (!result_id || (!VAR_P (result_id) && TREE_CODE (result_id) != PARM_DECL))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree decl;
+	  if (oa_nonzero_conjunct_p (*conjuncts[i], &decl) && decl == result_id)
+	    return true;
+	}
+    }
+  return false;
+}
+
+/* Same idea, for item 8's value-range fact -- applies every matching
+   postcondition's conjuncts via oa_refine_single_comparison ("trusted
+   true," exactly as a precondition/contract_assert conjunct already is
+   for the current function's own body, Increment E4) into one scratch,
+   otherwise-empty ENV keyed at the postcondition's own result
+   identifier, then reads back whatever fact accumulated there. A
+   second postcondition naming a *different* result identifier is
+   conservatively skipped rather than risking a wrong merge under one
+   key -- a deliberate simplification for the rare case of more than
+   one named postcondition; in practice a function has at most one.  */
+
+static bool
+oa_call_postcondition_range_p (tree call, oa_range_fact *out)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return false;
+
+  tree result_id = NULL_TREE;
+  oa_env scratch;
+  bool any = false;
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      if (!oa_contract_conveyor_active_p (contract, callee))
+	continue;
+      tree rid = POSTCONDITION_IDENTIFIER (contract);
+      if (!rid || (!VAR_P (rid) && TREE_CODE (rid) != PARM_DECL))
+	continue;
+      if (!result_id)
+	result_id = rid;
+      else if (rid != result_id)
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      any = true;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	oa_refine_single_comparison (*conjuncts[i], scratch, /*asserted_true=*/true);
+    }
+  if (!any || !result_id)
+    return false;
+  return scratch.range_get (result_id, out);
 }
 
 /* Scan *EXPR (an arbitrary expression, not necessarily a full
