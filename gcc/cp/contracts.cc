@@ -4309,7 +4309,21 @@ lookup_is_object_address_template ()
 bool
 is_object_address_call_p (tree call, tree *arg)
 {
-  if (TREE_CODE (call) != CALL_EXPR)
+  /* A conjunct picked out of a &&-chain, or a whole precondition/
+     postcondition condition consisting of nothing else, commonly
+     arrives wrapped in a location wrapper (a VIEW_CONVERT_EXPR/
+     NON_LVALUE_EXPR purely there to carry a location_t) and/or a
+     CLEANUP_POINT_EXPR (the full-expression temporary-cleanup scope a
+     condition gets wrapped in at this pre-genericize stage) -- unlike a
+     call reached via cp_walk_tree, which recurses through those on its
+     own, a direct TREE_CODE check here needs to strip them first.  */
+  STRIP_ANY_LOCATION_WRAPPER (call);
+  while (call && TREE_CODE (call) == CLEANUP_POINT_EXPR)
+    {
+      call = TREE_OPERAND (call, 0);
+      STRIP_ANY_LOCATION_WRAPPER (call);
+    }
+  if (!call || TREE_CODE (call) != CALL_EXPR)
     return false;
   tree tmpl = lookup_is_object_address_template ();
   if (!tmpl)
@@ -4440,20 +4454,24 @@ oa_provable_p (tree expr, oa_env &env)
 
 /* Walk COND (an arbitrary boolean expression, e.g. a contract's
    condition) looking for std::is_object_address(...) calls; resolve
-   each using ENV, replacing it in place with boolean_true_node if
-   provable.  Returns false (having already diagnosed) if any call was
-   found unprovable, or was found outside a conveyor/non-ignored
+   each, replacing it in place with boolean_true_node if provable (or,
+   when TRUST is set, unconditionally -- see the comment on
+   oa_handle_own_precondition below for why a precondition's own
+   is_object_address is trusted as an axiom here rather than proven
+   against ENV). Returns false (having already diagnosed) if any call
+   was found unprovable, or was found outside a conveyor/non-ignored
    context (CONVEYOR_OK false means this whole COND is not itself
    inside a conveyor-checked predicate, so any is_object_address found
    here at all is a well-formedness error, provable or not).  */
 
 static bool
-oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok)
+oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
+		      bool trust = false)
 {
   bool ok = true;
 
-  struct walk_data { oa_env *env; bool conveyor_ok; bool *ok; };
-  walk_data data = { &env, conveyor_ok, &ok };
+  struct walk_data { oa_env *env; bool conveyor_ok; bool trust; bool *ok; };
+  walk_data data = { &env, conveyor_ok, trust, &ok };
 
   cp_walk_tree (cond, [](tree *tp, int *, void *data_) -> tree
     {
@@ -4471,7 +4489,7 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok)
 	  return NULL_TREE;
 	}
 
-      if (!oa_provable_p (arg, *d->env))
+      if (!d->trust && !oa_provable_p (arg, *d->env))
 	{
 	  error_at (EXPR_LOCATION (*tp),
 		    "cannot prove %<is_object_address%> for %qE", arg);
@@ -4488,6 +4506,27 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok)
     }, &data, NULL);
 
   return ok;
+}
+
+/* Decompose *COND at top-level && (either spelling), collecting the
+   address of each conjunct into CONJUNCTS -- a condition with no
+   top-level && is a single conjunct of itself.  Used to find which
+   specific is_object_address(E) conjunct(s) of a precondition to seed
+   as facts, without needing to guess at E's identity from an arbitrary
+   position inside a larger boolean expression.  */
+
+static void
+oa_collect_conjuncts (tree *cond, vec<tree *> *conjuncts)
+{
+  tree c = *cond;
+  if (c && (TREE_CODE (c) == TRUTH_ANDIF_EXPR
+	    || TREE_CODE (c) == TRUTH_AND_EXPR))
+    {
+      oa_collect_conjuncts (&TREE_OPERAND (c, 0), conjuncts);
+      oa_collect_conjuncts (&TREE_OPERAND (c, 1), conjuncts);
+      return;
+    }
+  conjuncts->safe_push (cond);
 }
 
 /* True if CONTRACT (an ASSERTION_STMT/PRECONDITION_STMT/POSTCONDITION_STMT)
@@ -4508,8 +4547,77 @@ oa_contract_conveyor_active_p (tree contract)
   return !contract_control_is_ignored (ctrl, side);
 }
 
-/* Forward-declared: the statement walker recurses into itself.  */
+/* Handle one PRECONDITION_STMT encountered during the body walk: both
+   a resolution point (so is_object_address never reaches
+   genericization unresolved -- it has no definition and could never
+   link) and a fact source, seeding ENV with any top-level &&-conjunct
+   that names is_object_address(E) for the rest of the function body.
+
+   CONTRACT here is the actual node embedded in the function's own
+   body (added by apply_preconditions/copy_contracts), not the
+   pristine one reachable via get_fn_contract_specifiers -- the two are
+   separate tree copies (copy_contracts makes a fresh copy for the body
+   at maybe_apply_function_contracts time, well before this pass ever
+   runs), so resolution must happen on the embedded copy directly, or
+   the unresolved is_object_address call would still be sitting in the
+   body that genericization/outlining actually sees.
+
+   Unlike contract_assert/postcondition, a precondition's own
+   is_object_address is TRUSTED here (oa_resolve_condition's TRUST mode)
+   rather than proven against ENV: per the paper's Q4.7 answer, a
+   precondition's is_object_address is proven at *each call site*, using
+   the caller's own argument expression (item 7 in the plan -- not yet
+   implemented) -- the callee has no way to prove anything about its own
+   parameter's provenance internally.  Trusting it here, in the
+   declaring function's own body, is exactly the same "assume your own
+   non-ignored precondition holds" model this branch already uses for
+   ordinary boolean preconditions via ignored-and-assumable/IFN_ASSUME;
+   item 7 is what will eventually make that trust actually be earned by
+   every caller, not a soundness gap introduced by doing this half
+   first.  */
+
+static void
+oa_handle_precondition_stmt (tree contract, oa_env &env)
+{
+  bool conveyor_ok = oa_contract_conveyor_active_p (contract);
+  tree cond = CONTRACT_CONDITION (contract);
+  if (cond == NULL_TREE || cond == error_mark_node)
+    return;
+
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts (&cond, &conjuncts);
+  auto_vec<tree> facts;
+  if (conveyor_ok)
+    for (unsigned i = 0; i < conjuncts.length (); ++i)
+      {
+	tree arg;
+	if (is_object_address_call_p (*conjuncts[i], &arg))
+	  facts.safe_push (STRIP_ANY_LOCATION_WRAPPER (arg));
+      }
+
+  if (!oa_resolve_condition (&cond, env, conveyor_ok, /*trust=*/true))
+    {
+      CONTRACT_CONDITION (contract) = error_mark_node;
+      return;
+    }
+  CONTRACT_CONDITION (contract) = cond;
+
+  if (!conveyor_ok)
+    return;
+
+  for (unsigned i = 0; i < facts.length (); ++i)
+    {
+      tree e = facts[i];
+      if (VAR_P (e) || TREE_CODE (e) == PARM_DECL)
+	env.set (e, true);
+    }
+}
+
+/* Forward-declared: the statement walker recurses into itself, and into
+   the postcondition handler defined below it (which needs the return-
+   tracking globals the walker itself accumulates).  */
 static void oa_walk_stmt (tree *stmt, oa_env &env);
+static void oa_handle_postcondition_stmt (tree contract);
 
 /* Handle one ASSERTION_STMT (contract_assert) encountered during the
    walk: resolve its condition using ENV (erroring if it names
@@ -4528,6 +4636,23 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
   if (cond == NULL_TREE || cond == error_mark_node)
     return;
 
+  /* Find top-level &&-conjuncts that are exactly is_object_address(E),
+     capturing E *before* resolution replaces the call with
+     boolean_true_node below -- these are what get folded into ENV as
+     established facts for later code (the contract_assert-as-fact-
+     source mechanism), once we know the whole condition resolved
+     successfully.  */
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts (&cond, &conjuncts);
+  auto_vec<tree> facts;
+  if (conveyor_ok)
+    for (unsigned i = 0; i < conjuncts.length (); ++i)
+      {
+	tree arg;
+	if (is_object_address_call_p (*conjuncts[i], &arg))
+	  facts.safe_push (STRIP_ANY_LOCATION_WRAPPER (arg));
+      }
+
   if (!oa_resolve_condition (&cond, env, conveyor_ok))
     {
       CONTRACT_CONDITION (stmt) = error_mark_node;
@@ -4538,18 +4663,37 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
   if (!conveyor_ok)
     return;
 
-  /* Re-walk the (now-resolved, pre-replacement) original condition's
-     top-level && structure to find which conjuncts were
-     is_object_address(E) and seed ENV with E for each -- do this by
-     inspecting COND's shape before oa_resolve_condition's in-place
-     replacement; since we already overwrote COND above, instead detect
-     this the simple way: if the whole original condition tree (which
-     we no longer have unmodified) doesn't matter for this first
-     increment we only handle the single, whole-condition case
-     (contract_assert<ctrl>(is_object_address(p))) -- top-level &&
-     decomposition is a follow-on increment alongside the other fact
-     sources.  */
+  for (unsigned i = 0; i < facts.length (); ++i)
+    {
+      tree e = facts[i];
+      if (VAR_P (e) || TREE_CODE (e) == PARM_DECL)
+	env.set (e, true);
+    }
 }
+
+/* Accumulates, across every RETURN_EXPR the walk encounters, whether
+   the *returned value itself* is provably an object address on *every*
+   return path -- since a function's postcondition is a single,
+   physically shared condition checked identically regardless of which
+   return statement was taken, is_object_address(<its named result>)
+   can only be trusted using whatever holds on *all* return paths (the
+   same "every incoming value must satisfy it" merge rule as if/else and
+   loops, just merged across every exit point instead of two branches).
+   A single accumulated bool suffices here (rather than a full oa_env,
+   as if/else and loops need) because the postcondition's named result
+   identifier is a synthetic binding to "whatever was returned," not an
+   ordinary local variable this pass otherwise tracks -- there is
+   nothing else to look up. -1 (not yet reset) / 0 (tracking, currently
+   false) / 1 (tracking, currently true); tracking-vs-not is
+   distinguished by OA_RETURN_TRACKING below, which also doubles as
+   "does a function with an active postcondition need this at all."
+   Set/cleared by resolve_object_address_in_function around a single
+   function's walk; not re-entrant, but this pass never recurses into
+   another function's body while walking one.  */
+
+static bool oa_return_tracking;
+static bool oa_return_all_provable;
+static bool oa_return_seen;
 
 /* The forward statement walker: processes *STMT (an arbitrary
    statement or statement-sequence) in program order, threading ENV
@@ -4569,6 +4713,61 @@ oa_walk_stmt (tree *stmt, oa_env &env)
     case STATEMENT_LIST:
       for (tree_stmt_iterator i = tsi_start (t); !tsi_end_p (i); tsi_next (&i))
 	oa_walk_stmt (tsi_stmt_ptr (i), env);
+      return;
+
+    case RETURN_EXPR:
+      if (oa_return_tracking)
+	{
+	  /* The return value: TREE_OPERAND (t, 0) is either the plain
+	     value expression (void-returning path not relevant here) or
+	     an INIT_EXPR/MODIFY_EXPR assigning it to a hidden result
+	     temporary -- in the latter case the actual value is the
+	     assignment's RHS.  */
+	  tree val = TREE_OPERAND (t, 0);
+	  if (val && (TREE_CODE (val) == INIT_EXPR || TREE_CODE (val) == MODIFY_EXPR))
+	    val = TREE_OPERAND (val, 1);
+	  bool this_provable = oa_provable_p (val, env);
+	  if (!oa_return_seen)
+	    {
+	      oa_return_all_provable = this_provable;
+	      oa_return_seen = true;
+	    }
+	  else
+	    oa_return_all_provable = oa_return_all_provable && this_provable;
+	}
+      /* Still scan the return value expression itself for a stray
+	 is_object_address call (e.g. 'return std::is_object_address(p);'
+	 directly) -- fall through to the default case's blanket scan.  */
+      goto oa_default_scan;
+
+    case TRY_FINALLY_EXPR:
+      /* The postcondition machinery's own shape (maybe_apply_function_
+	 contracts): operand 0 is the real function body (containing every
+	 return), operand 1 is the finally/handler block -- walked here in
+	 that same order, so any RETURN_EXPRs in operand 0 have already
+	 updated OA_RETURN_TRACKING's accumulators by the time operand 1
+	 (which is where the postcondition itself lives, see EH_ELSE_EXPR
+	 below) is reached.  */
+      oa_walk_stmt (&TREE_OPERAND (t, 0), env);
+      oa_walk_stmt (&TREE_OPERAND (t, 1), env);
+      return;
+
+    case EH_ELSE_EXPR:
+      /* Operand 0 is the non-exceptional handler (where the
+	 postcondition check itself lives); operand 1 is the exceptional
+	 path (a no-op void expression -- postconditions are skipped if
+	 the function exits via an exception).  Walk both for uniformity;
+	 there is nothing of interest in operand 1.  */
+      oa_walk_stmt (&TREE_OPERAND (t, 0), env);
+      oa_walk_stmt (&TREE_OPERAND (t, 1), env);
+      return;
+
+    case PRECONDITION_STMT:
+      oa_handle_precondition_stmt (t, env);
+      return;
+
+    case POSTCONDITION_STMT:
+      oa_handle_postcondition_stmt (t);
       return;
 
     case BIND_EXPR:
@@ -4653,17 +4852,21 @@ oa_walk_stmt (tree *stmt, oa_env &env)
       return;
 
     default:
-      /* Anything else (RETURN_EXPR, loops, TRY_BLOCK, SWITCH_STMT,
-	 ordinary expression statements, ...): not yet specially handled
-	 in this increment -- is_object_address is only ever legitimate
+    oa_default_scan:
+      /* Anything else (loops, TRY_BLOCK, SWITCH_STMT, ordinary
+	 expression statements, a RETURN_EXPR's own value expression
+	 falling through from above, ...): not yet specially handled in
+	 this increment -- is_object_address is only ever legitimate
 	 directly inside a recognized contract construct's own condition
-	 (ASSERTION_STMT above; PRECONDITION_STMT/POSTCONDITION_STMT are a
-	 separate, not-yet-wired gap -- see item 6/7 in the plan), so any
-	 occurrence reached via this fallback, at any nesting depth, is
-	 always an error: there is no "proper" resolution path for it
-	 here.  Unconditionally scan the whole subtree (not just T
-	 itself) so nothing nested inside an unhandled construct silently
-	 passes through unchecked.  */
+	 (ASSERTION_STMT and a function's own PRECONDITION_STMT/
+	 POSTCONDITION_STMT above; the call-site precondition-obligation
+	 mechanism for *other* functions' preconditions is a separate,
+	 not-yet-wired gap -- see item 7 in the plan), so any occurrence
+	 reached via this fallback, at any nesting depth, is always an
+	 error: there is no "proper" resolution path for it here.
+	 Unconditionally scan the whole subtree (not just T itself) so
+	 nothing nested inside an unhandled construct silently passes
+	 through unchecked.  */
       {
 	tree found = cp_walk_tree (&t, [](tree *tp, int *, void *) -> tree
 	  {
@@ -4679,6 +4882,65 @@ oa_walk_stmt (tree *stmt, oa_env &env)
       }
       return;
     }
+}
+
+/* True if FNDECL has at least one active (conveyor, non-ignored)
+   postcondition.  */
+
+static bool
+oa_has_active_postcondition (tree fndecl)
+{
+  for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (POSTCONDITION_P (contract) && oa_contract_conveyor_active_p (contract))
+	return true;
+    }
+  return false;
+}
+
+/* Handle one POSTCONDITION_STMT encountered during the body walk (see
+   the TRY_FINALLY_EXPR/EH_ELSE_EXPR cases in oa_walk_stmt above -- by
+   construction this is always reached *after* every RETURN_EXPR in the
+   same function's try-block has already been walked, since the
+   postcondition lives in the try-finally's handler operand).
+   OA_RETURN_ALL_PROVABLE/OA_RETURN_SEEN (globals above) hold whether
+   the returned value was provably an object address on *every* return
+   path encountered (false/unseen if the function has no return
+   statement at all -- e.g. every path throws -- which conservatively
+   fails to prove anything, the same "must be provable, else treated as
+   unprovable" discipline as everywhere else here). Unlike the
+   precondition, this is proven (not trusted): the postcondition is
+   checked at THIS function's own return, in THIS function's own body,
+   so the ordinary reaching-definition rules apply, merged across every
+   exit point instead of just two branches. Builds a one-entry env
+   binding the postcondition's own named result identifier to that
+   merged result, since that identifier is a synthetic binding to
+   "whatever was returned," not an ordinary local variable
+   oa_provable_p's env lookup otherwise tracks.
+
+   CONTRACT is the actual node embedded in the body, for the same
+   sharing reason explained on oa_handle_precondition_stmt above.  */
+
+static void
+oa_handle_postcondition_stmt (tree contract)
+{
+  bool conveyor_ok = oa_contract_conveyor_active_p (contract);
+  tree cond = CONTRACT_CONDITION (contract);
+  if (cond == NULL_TREE || cond == error_mark_node)
+    return;
+
+  oa_env ret_env;
+  tree result_id = POSTCONDITION_IDENTIFIER (contract);
+  if (result_id && (VAR_P (result_id) || TREE_CODE (result_id) == PARM_DECL))
+    ret_env.set (result_id, oa_return_seen && oa_return_all_provable);
+
+  if (!oa_resolve_condition (&cond, ret_env, conveyor_ok))
+    {
+      CONTRACT_CONDITION (contract) = error_mark_node;
+      return;
+    }
+  CONTRACT_CONDITION (contract) = cond;
 }
 
 /* Top-level entry point, called from finish_function alongside
@@ -4697,11 +4959,25 @@ resolve_object_address_in_function (tree fndecl)
   if (processing_template_decl)
     return;
 
-  oa_env env;
   tree body = DECL_SAVED_TREE (fndecl);
   if (body == NULL_TREE || body == error_mark_node)
     return;
+
+  oa_env env;
+
+  /* Whether a RETURN_EXPR needs to be tracked at all is known upfront
+     (a pure existence query over the pristine specifier list -- same
+     conveyor/is_ignored status as the body's copy, no identity-sharing
+     concern since nothing is mutated here); the actual resolution of
+     the postcondition itself always happens on the body's own embedded
+     copy, via the POSTCONDITION_STMT case in oa_walk_stmt below.  */
+  oa_return_tracking = oa_has_active_postcondition (fndecl);
+  oa_return_all_provable = false;
+  oa_return_seen = false;
+
   oa_walk_stmt (&body, env);
+
+  oa_return_tracking = false;
 }
 
 /* Validate BASE_TYPE as the target of a base_contract<BASE_TYPE>() used
