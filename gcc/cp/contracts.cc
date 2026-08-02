@@ -7079,6 +7079,133 @@ oa_walk_stmt (tree *stmt, oa_env &env)
       oa_handle_loop (NULL, &DO_COND (t), &DO_BODY (t), NULL, env);
       return;
 
+    case SWITCH_STMT:
+      {
+	/* Increment M: closes the "no SWITCH_STMT case at all" gap --
+	   previously a switch body got no fact-tracking whatsoever
+	   (no assignment tracking, no call-site obligations, no
+	   contract_assert resolution), silently falling to the default
+	   fallback's stray-is_object_address-only scan.
+
+	   The condition itself: same explicit scan-only treatment
+	   IF_STMT/COND_EXPR's own condition gets (item 7's obligation
+	   scan, item 8's narrow scans, the stray-use gate).  */
+	oa_scan_calls_in_expr (&SWITCH_STMT_COND (t), env);
+	if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
+	  {
+	    oa_scan_div_mod_in_expr (&SWITCH_STMT_COND (t), env);
+	    oa_scan_array_bounds_in_expr (&SWITCH_STMT_COND (t), env);
+	  }
+	oa_scan_stray_is_object_address (&SWITCH_STMT_COND (t));
+
+	/* The body (always a STATEMENT_LIST -- confirmed via
+	   finish_switch_stmt/pop_switch, built via push_stmt_list/
+	   pop_stmt_list) is walked left to right in CURRENT, reset to
+	   the pre-switch ENV at every CASE_LABEL_EXPR -- a switch has
+	   multiple valid entry points (each case/default label), so a
+	   naive single top-to-bottom walk would be unsound: 'case 0:
+	   p = &a; case 1: contract_assert<...>(is_object_address(p));'
+	   (intentional fallthrough) would wrongly trust P at case 1
+	   even when case 1 is entered *directly*, bypassing case 0's
+	   assignment entirely. The reset means a fact is only ever
+	   trusted within one label-to-label run, never assumed to
+	   carry across a label boundary -- conservative but sound;
+	   genuine fallthrough-dependent facts are a documented,
+	   accepted precision loss.
+
+	   MERGED accumulates every legitimate "reaches past the
+	   switch" exit point (a bare break, or falling off the body's
+	   true end) via the same merge_with/range_merge_with used for
+	   the if/else merge (Increment H), generalized to N branches;
+	   REACHABLE_AT_END tracks whether the *current* run could
+	   still reach the very end of the body (reset true at each
+	   label, false after a break or anything oa_stmt_terminates_p
+	   already recognizes as never falling through).  */
+	oa_env current = env.copy ();
+	oa_env merged;
+	bool any_result = false;
+	bool reachable_at_end = true;
+
+	auto record = [&] ()
+	  {
+	    if (!any_result)
+	      {
+		merged.assign (current);
+		any_result = true;
+	      }
+	    else
+	      {
+		merged.merge_with (current);
+		merged.range_merge_with (current);
+	      }
+	  };
+
+	auto process_elem = [&] (tree *elem_ptr)
+	  {
+	    tree elem = *elem_ptr;
+	    if (elem == NULL_TREE)
+	      return;
+	    tree stripped = elem;
+	    STRIP_ANY_LOCATION_WRAPPER (stripped);
+	    if (TREE_CODE (stripped) == CASE_LABEL_EXPR)
+	      {
+		current.assign (env);
+		reachable_at_end = true;
+		return;
+	      }
+	    oa_walk_stmt (elem_ptr, current);
+	    if (TREE_CODE (stripped) == BREAK_STMT)
+	      {
+		record ();
+		current.assign (env);
+		reachable_at_end = false;
+	      }
+	    else if (oa_stmt_terminates_p (elem))
+	      {
+		current.assign (env);
+		reachable_at_end = false;
+	      }
+	    else
+	      reachable_at_end = true;
+	  };
+
+	tree body = SWITCH_STMT_BODY (t);
+	if (body && TREE_CODE (body) == STATEMENT_LIST)
+	  {
+	    for (tree_stmt_iterator i = tsi_start (body); !tsi_end_p (i); tsi_next (&i))
+	      process_elem (tsi_stmt_ptr (i));
+	  }
+	else if (body)
+	  process_elem (&SWITCH_STMT_BODY (t));
+
+	if (reachable_at_end)
+	  record ();
+
+	/* No default label (and not provably exhaustive): "no case
+	   matches" is itself a legitimate way to reach post-switch
+	   code, contributing the untouched pre-switch ENV.  */
+	if (!SWITCH_STMT_ALL_CASES_P (t))
+	  {
+	    if (!any_result)
+	      merged.assign (env);
+	    else
+	      {
+		merged.merge_with (env);
+		merged.range_merge_with (env);
+	      }
+	    any_result = true;
+	  }
+
+	/* If nothing was ever recorded, every run provably terminates
+	   and the switch is exhaustive with no break -- exactly
+	   Increment L's own oa_stmt_terminates_p (SWITCH_STMT)
+	   conclusion. Post-switch code is unreachable either way, so
+	   leaving ENV untouched is sound.  */
+	if (any_result)
+	  env.assign (merged);
+	return;
+      }
+
     case RANGE_FOR_STMT:
       /* Defensive only: an ordinary (non-template, already-instantiated)
 	 function's range-for is already desugared into a plain FOR_STMT
