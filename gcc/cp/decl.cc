@@ -14090,6 +14090,37 @@ complain_about_incompatible_declspecs (const char *name_a, location_t loc_a,
    declarator, in cases like "struct S;"), or the ERROR_MARK_NODE if an
    error occurs. */
 
+/* D4324: attach a parsed pre<>/post<> contract-specifier list to a
+   non-function DECL of callable type (currently: a function pointer or
+   reference-to-function object or parameter -- the declaration-level-
+   contracts-on-callables extension).  TYPE is DECL's final resolved
+   type.  A contract specifier can only ever be parsed here because the
+   declarator contained a function shape somewhere (see
+   cp_parser_direct_declarator's trailing-specifier-seq for any
+   cdk_function node); but that function shape need not end up directly
+   callable itself, e.g. an array of function pointers.  Reject that
+   case explicitly rather than silently dropping the clause: the
+   language only associates it with one declared *name*, not with
+   anything reached from it by a further dereference or index.  */
+
+static void
+maybe_attach_object_contract_specifiers (tree decl, tree type,
+					  tree contract_specifiers)
+{
+  if (!contract_specifiers || !decl || decl == error_mark_node)
+    return;
+
+  if (!TYPE_PTRFN_P (type) && !TYPE_REFFN_P (type))
+    {
+      location_t loc = EXPR_LOCATION (CONTRACT_STATEMENT (contract_specifiers));
+      error_at (loc, "contract specifier is only valid on a callable-typed "
+		"declaration");
+      return;
+    }
+
+  set_fn_contract_specifiers (decl, contract_specifiers);
+}
+
 tree
 grokdeclarator (const cp_declarator *declarator,
 		cp_decl_specifier_seq *declspecs,
@@ -16508,6 +16539,9 @@ grokdeclarator (const cp_declarator *declarator,
 			memfn_quals != TYPE_UNQUALIFIED,
 			inlinep, friendp, raises != NULL_TREE,
 			declspecs->locations);
+
+	maybe_attach_object_contract_specifiers (decl, type,
+						 contract_specifiers);
       }
     else if (decl_context == FIELD)
       {
@@ -17123,6 +17157,9 @@ grokdeclarator (const cp_declarator *declarator,
 			memfn_quals != TYPE_UNQUALIFIED,
 			inlinep, friendp, raises != NULL_TREE,
 			declspecs->locations);
+
+	maybe_attach_object_contract_specifiers (decl, type,
+						 contract_specifiers);
 
 	if (ctype)
 	  {
