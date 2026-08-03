@@ -1879,6 +1879,60 @@ check_redecl_contract (tree newdecl, tree olddecl)
   return;
 }
 
+/* A subroutine of duplicate_decls, for VAR_DECL/PARM_DECL redeclarations
+   of a callable-typed object carrying a declaration-level pre<>/post<>
+   clause (see .claude/plans/stateless-jumping-shore.md) -- the object-
+   declaration analogue of check_redecl_contract, following the same
+   consistency rule (a later declaration may omit the clause, inheriting
+   the first; must match structurally if both specify one; may never
+   add one where the first had none).  Deliberately simpler than
+   check_redecl_contract: there is no function body here to const-check
+   parameters against (check_postconditions_in_redecl), and no template/
+   friend deferral to consider, since this feature currently only
+   supports the eager, non-class-body parse path.  */
+
+void
+check_redecl_object_contract (tree newdecl, tree olddecl)
+{
+  if (!flag_contracts)
+    return;
+
+  tree new_contracts = get_fn_contract_specifiers (newdecl);
+  tree old_contracts = get_fn_contract_specifiers (olddecl);
+
+  if (!old_contracts && !new_contracts)
+    return;
+
+  contract_decl *rdp = hash_map_safe_get (contract_decl_map, olddecl);
+  gcc_checking_assert (rdp || !old_contracts);
+
+  location_t new_loc = DECL_SOURCE_LOCATION (newdecl);
+  if (new_contracts && !old_contracts)
+    {
+      auto_diagnostic_group d;
+      /* If a re-declaration has a clause, it must be the same as the one
+	 on the first declaration seen (it cannot be added).  */
+      location_t cont_end = get_contract_end_loc (new_contracts);
+      cont_end = make_location (new_loc, new_loc, cont_end);
+      error_at (cont_end, "declaration adds a contract specifier to %q#D",
+		olddecl);
+      inform (DECL_SOURCE_LOCATION (olddecl), "first declared here");
+      return;
+    }
+
+  if (old_contracts && !new_contracts)
+    /* Re-declarations may omit a clause declared on the initial decl --
+       it is inherited.  */
+    return;
+
+  gcc_checking_assert (old_contracts);
+  location_t cont_end = get_contract_end_loc (new_contracts);
+  cont_end = make_location (new_loc, new_loc, cont_end);
+  /* We have two sets - they should match or we issue a diagnostic.  */
+  match_contract_specifiers (rdp->note_loc, old_contracts, cont_end,
+			     new_contracts);
+}
+
 /* Update the contracts of DEST to match the argument names from contracts
   of SRC. When we merge two declarations in duplicate_decls, we preserve the
   arguments from the new declaration, if the new declaration is a

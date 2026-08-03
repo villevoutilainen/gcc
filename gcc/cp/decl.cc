@@ -2951,6 +2951,11 @@ duplicate_decls (tree newdecl, tree olddecl, bool hiding, bool was_hidden)
 	      retrofit_lang_decl (newdecl);
 	      CP_DECL_THREADPRIVATE_P (newdecl) = 1;
 	    }
+
+	  /* D4324: check declaration-level pre<>/post<> consistency for a
+	     redeclared callable-typed object (see
+	     maybe_attach_object_contract_specifiers).  */
+	  check_redecl_object_contract (newdecl, olddecl);
 	}
 
       /* An explicit specialization of a function template or of a member
