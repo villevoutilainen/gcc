@@ -7120,6 +7120,16 @@ struct cp_declarator {
      declarator is a pointer or a reference, these attributes apply
      to the pointer, rather than to the type pointed to.  */
   tree std_attributes;
+  /* D4324: a parsed pre<>/post<> contract-specifier-seq for a class-
+     type callable object declaration (see
+     .claude/plans/stateless-jumping-shore.md), only ever set on the
+     outermost declarator node (whatever its kind) by the new grammar
+     hooks in cp_parser_init_declarator/cp_parser_parameter_declaration.
+     A class type has no cdk_function node of its own to carry this
+     the way a function pointer/reference declarator already does
+     (see u.function.contract_specifiers below), so this is a common
+     field rather than living in the cdk_function union member.  */
+  tree contract_specifiers;
   /* For all but cdk_id, cdk_decomp and cdk_error, the contained declarator.
      For cdk_id, cdk_decomp and cdk_error, guaranteed to be NULL.  */
   cp_declarator *declarator;

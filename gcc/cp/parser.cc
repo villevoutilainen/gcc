@@ -1900,6 +1900,7 @@ make_declarator (cp_declarator_kind kind)
   declarator->parenthesized = UNKNOWN_LOCATION;
   declarator->attributes = NULL_TREE;
   declarator->std_attributes = NULL_TREE;
+  declarator->contract_specifiers = NULL_TREE;
   declarator->declarator = NULL;
   declarator->parameter_pack_p = false;
   declarator->id_loc = UNKNOWN_LOCATION;
@@ -3014,6 +3015,8 @@ static tree cp_maybe_function_contract_specifier
 static tree cp_parser_function_contract_specifier
   (cp_parser *, tree);
 static tree cp_parser_function_contract_specifier_seq
+  (cp_parser *, tree);
+static tree cp_parser_maybe_class_contract_specifier_seq
   (cp_parser *, tree);
 static void cp_parser_late_contracts
   (cp_parser *, tree);
@@ -26261,6 +26264,22 @@ cp_parser_init_declarator (cp_parser* parser,
     }
   else
     {
+      /* D4324: a pre<>/post<> contract-specifier-seq on a class-type
+	 callable object declaration (see
+	 .claude/plans/stateless-jumping-shore.md).  Unlike the
+	 function-pointer/reference case, there's no cdk_function node
+	 here to carry a parsed contract-specifier-seq, so it's parsed
+	 here instead and attached directly to the outermost declarator
+	 node.  Must run before the CPP_COMMA/CPP_SEMICOLON check below:
+	 for a class-type object, 'token' here is 'pre'/'post', which
+	 would otherwise fall straight into "expected initializer".  */
+      tree class_contract_specifiers
+	= cp_parser_maybe_class_contract_specifier_seq (parser,
+							 decl_specifiers->type);
+      if (class_contract_specifiers)
+	declarator->contract_specifiers = class_contract_specifiers;
+      token = cp_lexer_peek_token (parser->lexer);
+
       /* If the init-declarator isn't initialized and isn't followed by a
 	 `,' or `;', it's not a valid init-declarator.  */
 
@@ -28680,6 +28699,22 @@ cp_parser_parameter_declaration (cp_parser *parser,
       decl_specifiers.attributes
 	= attr_chainon (decl_specifiers.attributes,
 			cp_parser_attributes_opt (parser));
+
+      /* D4324: a pre<>/post<> contract-specifier-seq on a class-type
+	 callable object *parameter* declaration (see
+	 .claude/plans/stateless-jumping-shore.md and the analogous hook
+	 in cp_parser_init_declarator) -- a parameter never goes through
+	 cp_parser_init_declarator at all, so this needs its own hook
+	 here, right where a function parameter's own trailing
+	 attributes are already handled above.  */
+      if (declarator)
+	{
+	  tree class_contract_specifiers
+	    = cp_parser_maybe_class_contract_specifier_seq
+		(parser, decl_specifiers.type);
+	  if (class_contract_specifiers)
+	    declarator->contract_specifiers = class_contract_specifiers;
+	}
 
       /* If the declarator is a template parameter pack, remember that and
 	 clear the flag in the declarator itself so we don't get errors
@@ -31620,6 +31655,21 @@ cp_parser_member_declaration (cp_parser* parser)
 		    cp_lexer_consume_token (parser->lexer);
 		  goto out;
 		}
+	      /* D4324: a pre<>/post<> contract-specifier-seq on a
+		 class-type callable static data member declaration (see
+		 .claude/plans/stateless-jumping-shore.md and the
+		 analogous hook in cp_parser_init_declarator) -- a member
+		 declarator never goes through cp_parser_init_declarator
+		 at all, so this needs its own hook here too.  */
+	      else if (tree class_contract_specifiers
+			 = (declarator
+			    ? cp_parser_maybe_class_contract_specifier_seq
+				(parser, decl_specifiers.type)
+			    : NULL_TREE))
+		{
+		  declarator->contract_specifiers = class_contract_specifiers;
+		  initializer = NULL_TREE;
+		}
 	      /* Otherwise, there is no initializer.  */
 	      else
 		initializer = NULL_TREE;
@@ -34110,6 +34160,98 @@ cp_maybe_function_contract_specifier (cp_parser *parser)
   if (cp_lexer_nth_token_is (parser->lexer, n, CPP_OPEN_PAREN))
     return contract_name;
   return NULL_TREE;
+}
+
+/* D4324: parse a declaration-level pre<>/post<> contract-specifier-seq
+   on a class-type callable object declaration (a std::function, an
+   ordinary functor, a non-generic lambda closure -- see
+   .claude/plans/stateless-jumping-shore.md), as opposed to the
+   ordinary function-contract-specifier-seq grammar above, which lives
+   inside a function-declarator's own trailing specifiers and already
+   covers the function-pointer/reference case (that declarator shape
+   has its own cdk_function node to carry a parsed
+   contract_specifiers on; a plain class-type object declarator has no
+   such node at all, hence this separate hook).  TYPE is the
+   decl-specifier-seq's own base type.
+
+   Unlike the ordinary grammar, the control object is never optional
+   here: 'pre'/'post' must be immediately followed by '<'.  This is
+   never ambiguous with a declarator-id actually named 'pre' or 'post'
+   (a plain identifier can never be immediately followed by '<' in
+   this position), which matters here specifically because an
+   anonymous, bare-class-typed parameter could otherwise read exactly
+   like one (the same shape of hazard as 'void f(int pre(int));',
+   where 'pre' is an ordinary parameter name).
+
+   Returns NULL_TREE if there was nothing here to parse (TYPE isn't a
+   class type, or the next tokens don't match); otherwise the parsed
+   contract-specifier-seq, in the same TREE_CHAIN'd shape
+   u.function.contract_specifiers already has.  */
+
+static tree
+cp_parser_maybe_class_contract_specifier_seq (cp_parser *parser, tree type)
+{
+  /* decl_specifiers->type is often a TYPE_DECL wrapping the actual
+     type (see grokdeclarator's own identical unwrap, decl.cc), not
+     the type itself -- e.g. for an ordinary class-name type-specifier
+     like 'adder' below, as opposed to a decltype-specifier, which
+     already yields the real type directly.  */
+  if (type && TREE_CODE (type) == TYPE_DECL)
+    type = TREE_TYPE (type);
+
+  if (!flag_contracts || !type || !CLASS_TYPE_P (type))
+    return NULL_TREE;
+
+  cp_token *token = cp_lexer_peek_token (parser->lexer);
+  if (token->type != CPP_NAME
+      || (!id_equal (token->u.value, "pre")
+	  && !id_equal (token->u.value, "post")))
+    return NULL_TREE;
+  if (cp_lexer_peek_nth_token (parser->lexer, 2)->type != CPP_LESS)
+    return NULL_TREE;
+
+  tree operator_fn = resolve_single_call_operator (type);
+  if (!operator_fn)
+    {
+      error_at (token->location, "contract specifier on %qT requires a "
+		"single, non-overloaded, non-template %<operator()%>", type);
+      /* Still skip past the clause, for error recovery, leaving the
+	 token stream in a sensible state for whatever follows -- but
+	 without actually parsing the condition (mirrors
+	 cp_parser_function_contract_specifier's own recovery for an
+	 ill-formed control object): with no real operator_fn, we have
+	 no parameter names to bind, so actually parsing the condition
+	 would just cascade into spurious "not declared" errors on top
+	 of the one error above that actually explains the problem.  */
+      cp_lexer_consume_token (parser->lexer);
+      cp_parser_contract_control_object (parser);
+      if (cp_lexer_next_token_is (parser->lexer, CPP_OPEN_PAREN))
+	{
+	  cp_lexer_consume_token (parser->lexer);
+	  cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
+						 /*or_comma=*/false,
+						 /*consume_paren=*/true);
+	}
+      return NULL_TREE;
+    }
+
+  tree params = build_call_operator_contract_params (operator_fn);
+
+  /* Push PARAMS's own fresh PARM_DECLs into a temporary function-
+     parameter scope, exactly like cp_parser_direct_declarator already
+     does around an ordinary function declarator's own parameter-
+     declaration-clause: the shortcut (no binder list) contract
+     grammar resolves a plain-named condition like '(a > 0)' via
+     ordinary lookup, which needs these bound somewhere -- a class-
+     type callable has no declarator parameter-list of its own to have
+     already done this.  */
+  begin_scope (sk_function_parms, NULL_TREE);
+  for (tree p = params; p; p = TREE_CHAIN (p))
+    pushdecl (TREE_VALUE (p));
+  tree contract_specifiers = cp_parser_function_contract_specifier_seq (parser, params);
+  pop_bindings_and_leave_scope ();
+
+  return contract_specifiers;
 }
 
 /* Parse a contract specifier.

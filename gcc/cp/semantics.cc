@@ -3560,9 +3560,64 @@ finish_call_expr (tree fn, vec<tree, va_gc> **args, bool disallow_virtual,
 	result = convert_to_void (ob, ICV_STATEMENT, complain);
     }
   else if (CLASS_TYPE_P (TREE_TYPE (fn)))
-    /* If the "function" is really an object of class type, it might
-       have an overloaded `operator ()'.  */
-    result = build_op_call (fn, args, complain);
+    {
+      /* D4324: FN here, before build_op_call resolves the call, is the
+	 callee as the caller actually wrote it -- the same role
+	 CONTRACT_CALLEE plays in cp_build_function_call_vec
+	 (typeck.cc), for the function-pointer/reference case -- see
+	 .claude/plans/stateless-jumping-shore.md.  */
+      tree contract_callee = fn;
+
+      /* If the "function" is really an object of class type, it might
+	 have an overloaded `operator ()'.  */
+      result = build_op_call (fn, args, complain);
+
+      if (result && result != error_mark_node
+	  && DECL_P (contract_callee)
+	  && get_fn_contract_specifiers (contract_callee))
+	{
+	  /* CONTRACT_CALLEE's contract clause was checked, at its
+	     declaration, against exactly one non-template operator()
+	     (resolve_single_call_operator) -- but a class type can
+	     also have a conversion operator to a function pointer/
+	     reference, which competes with operator() in build_op_call's
+	     own overload resolution above: verify this call actually
+	     resolved through that same operator(), by re-running the
+	     exact same resolution against the object's type and
+	     comparing identity.  Per direct user feedback, a call that
+	     resolves any other way (this conversion, or -- otherwise
+	     unreachable, given the declaration-time check -- some other
+	     candidate) is rejected outright, here, rather than silently
+	     skipped or silently checked differently.  */
+	  tree extracted = extract_call_expr (result);
+	  tree expected_fn
+	    = resolve_single_call_operator (TREE_TYPE (contract_callee));
+	  tree actual_fn = extracted ? get_callee_fndecl (extracted) : NULL_TREE;
+	  if (!expected_fn || actual_fn != expected_fn)
+	    {
+	      if (complain & tf_error)
+		error_at (cp_expr_loc_or_input_loc (fn),
+			  "call does not resolve through the %<operator()%> "
+			  "declared for %qD, so its contract specifier does "
+			  "not apply to this call", contract_callee);
+	      result = error_mark_node;
+	    }
+	  else
+	    {
+	      /* EXPECTED_FN's CALL_EXPR (built by build_over_call, via
+		 build_op_call above) carries an implicit leading 'this'
+		 argument for an ordinary (non-static, non-explicit-object)
+		 member operator() -- one more than *ARGS, the source-level
+		 argument list, ever has -- see
+		 maybe_object_contract_check_call's own comment.  */
+	      unsigned arg_offset
+		= DECL_IOBJ_MEMBER_FUNCTION_P (expected_fn) ? 1 : 0;
+	      result = maybe_object_contract_check_call (contract_callee,
+							  result, *args,
+							  arg_offset);
+	    }
+	}
+    }
 
   if (!result)
     /* A call where the function is unknown.  */

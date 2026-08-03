@@ -14096,17 +14096,23 @@ complain_about_incompatible_declspecs (const char *name_a, location_t loc_a,
    error occurs. */
 
 /* D4324: attach a parsed pre<>/post<> contract-specifier list to a
-   non-function DECL of callable type (currently: a function pointer or
-   reference-to-function object or parameter -- the declaration-level-
-   contracts-on-callables extension).  TYPE is DECL's final resolved
-   type.  A contract specifier can only ever be parsed here because the
-   declarator contained a function shape somewhere (see
-   cp_parser_direct_declarator's trailing-specifier-seq for any
-   cdk_function node); but that function shape need not end up directly
-   callable itself, e.g. an array of function pointers.  Reject that
-   case explicitly rather than silently dropping the clause: the
-   language only associates it with one declared *name*, not with
-   anything reached from it by a further dereference or index.  */
+   non-function DECL of callable type (a function pointer or
+   reference-to-function object or parameter, or a class-type callable
+   object with a single, non-overloaded, non-template operator() --
+   the declaration-level-contracts-on-callables extension, see
+   .claude/plans/stateless-jumping-shore.md).  TYPE is DECL's final
+   resolved type.  A contract specifier can only ever be parsed here
+   because the declarator either contained a function shape somewhere
+   (see cp_parser_direct_declarator's trailing-specifier-seq for any
+   cdk_function node) or had a class-type base type (see the grammar
+   hooks in cp_parser_init_declarator/cp_parser_parameter_declaration);
+   but that shape need not end up directly callable itself, e.g. an
+   array of function pointers, or a class type whose operator() isn't
+   uniquely resolvable.  Reject those cases explicitly rather than
+   silently dropping the clause: the language only associates it with
+   one declared *name*, not with anything reached from it by a further
+   dereference or index, and a class type this feature doesn't support
+   at all is far more likely a mistake than an intentional no-op.  */
 
 static void
 maybe_attach_object_contract_specifiers (tree decl, tree type,
@@ -14115,9 +14121,21 @@ maybe_attach_object_contract_specifiers (tree decl, tree type,
   if (!contract_specifiers || !decl || decl == error_mark_node)
     return;
 
-  if (!TYPE_PTRFN_P (type) && !TYPE_REFFN_P (type))
+  location_t loc = EXPR_LOCATION (CONTRACT_STATEMENT (contract_specifiers));
+
+  if (TYPE_PTRFN_P (type) || TYPE_REFFN_P (type))
+    ;
+  else if (CLASS_TYPE_P (type))
     {
-      location_t loc = EXPR_LOCATION (CONTRACT_STATEMENT (contract_specifiers));
+      if (!resolve_single_call_operator (type))
+	{
+	  error_at (loc, "contract specifier on %qT requires a single, "
+		    "non-overloaded, non-template %<operator()%>", type);
+	  return;
+	}
+    }
+  else
+    {
       error_at (loc, "contract specifier is only valid on a callable-typed "
 		"declaration");
       return;
@@ -14176,7 +14194,18 @@ grokdeclarator (const cp_declarator *declarator,
   tree raises = NULL_TREE;
   int template_count = 0;
   tree returned_attrs = NULL_TREE;
-  tree contract_specifiers = NULL_TREE;
+  /* D4324: a class-type callable object declaration's own
+     pre<>/post<> contract-specifier-seq, if any, is parsed straight
+     onto the outermost declarator node (see
+     cp_parser_init_declarator/cp_parser_parameter_declaration in
+     parser.cc, and .claude/plans/stateless-jumping-shore.md) rather
+     than accumulated via u.function.contract_specifiers the way the
+     function-pointer/reference case already is below (a class type
+     has no cdk_function node of its own to carry it) -- pick it up
+     here, before DECLARATOR (the parameter, not yet reassigned by the
+     loop below) is walked inward at all.  */
+  tree contract_specifiers
+    = declarator ? declarator->contract_specifiers : NULL_TREE;
   bool declared_conveyor_p = false;
   tree parms = NULL_TREE;
   const cp_declarator *id_declarator;

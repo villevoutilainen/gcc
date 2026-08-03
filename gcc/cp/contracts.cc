@@ -2154,6 +2154,105 @@ emit_contract_wrapper_func (bool done)
   return more;
 }
 
+/* If TYPE (expected to be a complete class type) has exactly one
+   operator(), and it isn't a template (a member function template, or
+   a generic lambda's own call operator), return its FUNCTION_DECL;
+   otherwise NULL_TREE.  This resolves the one call signature a
+   declaration-level pre<>/post<> clause on a class-type callable
+   object (e.g. std::function<void(int)>) is parsed and checked
+   against -- see .claude/plans/stateless-jumping-shore.md.  Class
+   types with an overloaded or generic operator() are deliberately not
+   supported by this feature at all (rather than deferring resolution
+   to each call site): this keeps the existing "resolve once, at the
+   declaration" architecture (built for function pointers) fully
+   reusable, unchanged, for class-type callables too.
+
+   Pure function of TYPE alone, not of any particular declaration or
+   call site -- deliberately, so it can be (and is) re-run at every
+   call site to verify the call actually resolved through this same
+   operator(), not some other candidate (see
+   maybe_object_contract_check_call's caller in semantics.cc): a class
+   type can also have a conversion operator to a function pointer/
+   reference, which competes with operator() in real overload
+   resolution at an actual call site (build_op_call, call.cc), so
+   "exactly one operator() exists" alone does not guarantee every call
+   actually goes through it.  Uses the same lookup_member machinery
+   build_op_call itself uses (rather than the narrower, non-inherited
+   get_class_binding_direct), so this always agrees with what a real
+   call site's own overload resolution would consider.  */
+
+tree
+resolve_single_call_operator (tree type)
+{
+  if (!type || !CLASS_TYPE_P (type))
+    return NULL_TREE;
+  complete_type (type);
+  if (!COMPLETE_TYPE_P (type))
+    return NULL_TREE;
+
+  tree fns = lookup_member (type, call_op_identifier,
+			    /*protect=*/1, /*want_type=*/false, tf_none);
+  if (!fns || fns == error_mark_node || !BASELINK_P (fns))
+    return NULL_TREE;
+
+  tree found = NULL_TREE;
+  for (ovl_iterator it (BASELINK_FUNCTIONS (fns)); it; ++it)
+    {
+      tree fn = *it;
+      /* A template operator() (a member function template, or a
+	 generic lambda's own call operator) -- reject the whole thing,
+	 even if some other, non-template overload also exists: any
+	 overloading at all is out of scope for this feature.  */
+      if (TREE_CODE (fn) == TEMPLATE_DECL)
+	return NULL_TREE;
+      /* More than one non-template candidate -- genuinely overloaded,
+	 also out of scope.  */
+      if (found)
+	return NULL_TREE;
+      found = fn;
+    }
+  return found;
+}
+
+/* Build a TREE_LIST of fresh PARM_DECLs with the same names and types
+   as OPERATOR_FN's own real parameters (skipping any implicit object
+   parameter), matching the shape the contract-specifier-seq grammar
+   expects for its own PARAMS argument (a chain, via TREE_CHAIN, of
+   TREE_LIST nodes each holding a PARM_DECL in TREE_VALUE -- the same
+   shape a declarator's own u.function.parameters already has) -- see
+   resolve_single_call_operator and
+   .claude/plans/stateless-jumping-shore.md.  OPERATOR_FN is expected
+   to already be resolved by resolve_single_call_operator (non-NULL,
+   non-template, the one real operator()).
+
+   Fresh copies, rather than OPERATOR_FN's own real PARM_DECLs,
+   because the caller (the new grammar hooks in
+   cp_parser_init_declarator/cp_parser_parameter_declaration) needs to
+   push these by name into a temporary scope for the shortcut (no
+   binder list) grammar's ordinary-lookup condition-parsing to find
+   them -- exactly like an ordinary function declarator's own
+   parameter scope already does for the function-pointer case (see
+   cp_parser_direct_declarator's begin_scope (sk_function_parms, ...)
+   around its own parameter-declaration-clause parsing).  OPERATOR_FN's
+   real parameters are shared, permanent decls belonging to the class's
+   member function; pushing those directly into an unrelated temporary
+   scope would be a needless, surprising mutation of shared state.  */
+
+tree
+build_call_operator_contract_params (tree operator_fn)
+{
+  tree list = NULL_TREE;
+  tree *tail = &list;
+  for (tree p = FUNCTION_FIRST_USER_PARM (operator_fn); p; p = DECL_CHAIN (p))
+    {
+      tree fresh = cp_build_parm_decl (NULL_TREE, DECL_NAME (p), TREE_TYPE (p));
+      DECL_SOURCE_LOCATION (fresh) = DECL_SOURCE_LOCATION (p);
+      *tail = build_tree_list (NULL_TREE, fresh);
+      tail = &TREE_CHAIN (*tail);
+    }
+  return list;
+}
+
 /* ------------------------------------------------------------------
    Declaration-level contracts on callable-typed objects: call-site
    enforcement (see .claude/plans/stateless-jumping-shore.md and
@@ -2350,7 +2449,27 @@ static GTY(()) hash_map<tree, tree> *object_post_check_fn_map;
 static tree
 build_object_contract_check_function (tree objdecl, bool is_post)
 {
-  tree fn_type = TREE_TYPE (TREE_TYPE (objdecl));
+  /* A class-type callable's own operator() has a METHOD_TYPE (an
+     implicit leading 'this' entry in TYPE_ARG_TYPES), unlike a
+     function pointer's own pointee FUNCTION_TYPE -- resolve it the
+     same way the declaration-time attach point did
+     (resolve_single_call_operator), and skip that implicit entry via
+     FUNCTION_FIRST_USER_PARMTYPE (matching contract_control_operator's
+     own use of the same idiom) -- see
+     .claude/plans/stateless-jumping-shore.md.  */
+  tree fn_type;
+  tree first_arg_type;
+  if (CLASS_TYPE_P (TREE_TYPE (objdecl)))
+    {
+      tree operator_fn = resolve_single_call_operator (TREE_TYPE (objdecl));
+      fn_type = TREE_TYPE (operator_fn);
+      first_arg_type = FUNCTION_FIRST_USER_PARMTYPE (operator_fn);
+    }
+  else
+    {
+      fn_type = TREE_TYPE (TREE_TYPE (objdecl));
+      first_arg_type = TYPE_ARG_TYPES (fn_type);
+    }
   tree ret_type = TREE_TYPE (fn_type);
   bool has_result = is_post && !VOID_TYPE_P (ret_type);
   location_t loc = DECL_SOURCE_LOCATION (objdecl);
@@ -2382,7 +2501,7 @@ build_object_contract_check_function (tree objdecl, bool is_post)
   tree arg_types = NULL_TREE;
   tree *at_tail = &arg_types;
   unsigned i = 0;
-  for (tree t = TYPE_ARG_TYPES (fn_type); t && t != void_list_node;
+  for (tree t = first_arg_type; t && t != void_list_node;
        t = TREE_CHAIN (t), i++)
     {
       char namebuf[8];
@@ -2520,11 +2639,26 @@ get_or_build_object_contract_check_function (tree objdecl, bool is_post)
    also runs those checks, using CALL's own actual arguments (ARGS,
    already fully resolved/converted), alongside the untouched real call
    CALL -- see the file comment above build_object_contract_check_
-   function.  Otherwise, return CALL unchanged.  */
+   function.  Otherwise, return CALL unchanged.
+
+   ARG_OFFSET is how many leading arguments CALL's own CALL_EXPR has
+   beyond ARGS's own count: 0 for a plain function call (the
+   function-pointer/reference case), where CALL_EXPR_ARG lines up with
+   ARGS directly; 1 for a class-type callable's ordinary (non-static,
+   non-explicit-object) operator(), whose CALL_EXPR carries an
+   implicit leading 'this' argument that ARGS -- the source-level
+   argument list -- never includes at all (see finish_call_expr's own
+   caller, semantics.cc, which derives this from the same
+   DECL_IOBJ_MEMBER_FUNCTION_P check build_object_contract_check_
+   function itself uses).  Only affects where the possibly-save_expr'd
+   argument gets written back into CALL for shared evaluation --
+   SAVED_ARGS, and the check functions built from them, are unaffected,
+   since neither the pre-check nor the post-check has an implicit
+   object parameter of its own.  */
 
 tree
 maybe_object_contract_check_call (tree function, tree call,
-				  vec<tree, va_gc> *args)
+				  vec<tree, va_gc> *args, unsigned arg_offset)
 {
   if (!flag_contracts || call == error_mark_node
       || !function || !DECL_P (function)
@@ -2549,8 +2683,8 @@ maybe_object_contract_check_call (tree function, tree call,
       if (TREE_SIDE_EFFECTS (arg))
 	arg = save_expr (arg);
       saved_args.quick_push (arg);
-      if (i < (unsigned) call_expr_nargs (call))
-	CALL_EXPR_ARG (call, i) = arg;
+      if (i + arg_offset < (unsigned) call_expr_nargs (call))
+	CALL_EXPR_ARG (call, i + arg_offset) = arg;
     }
 
   tree pre_call = NULL_TREE;
