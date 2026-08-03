@@ -4677,6 +4677,11 @@ cp_build_function_call_vec (tree function, vec<tree, va_gc> **params,
       && TREE_TYPE (function) == TREE_TYPE (TREE_OPERAND (function, 0)))
     function = TREE_OPERAND (function, 0);
 
+  /* D4324: FUNCTION here, before any decay to a pointer value below, is
+     the callee as the caller actually wrote it (modulo the ObjC/NOP_EXPR
+     unwrapping just above) -- see maybe_object_contract_check_call.  */
+  tree contract_callee = function;
+
   if (TREE_CODE (function) == FUNCTION_DECL)
     {
       if (!mark_used (function, complain))
@@ -4778,6 +4783,13 @@ cp_build_function_call_vec (tree function, vec<tree, va_gc> **params,
 				    cp_comp_parm_types));
 
   ret = build_cxx_call (function, nargs, argarray, complain, orig_fndecl);
+
+  /* D4324: CONTRACT_CALLEE is the call's callee before any decay to a
+     pointer value -- if it's a reference to a decl carrying a
+     declaration-level pre<>/post<> clause (see maybe_attach_object_
+     contract_specifiers, decl.cc), check it here using this call's own
+     actual arguments, alongside the untouched real call built above.  */
+  ret = maybe_object_contract_check_call (contract_callee, ret, *params);
 
   if (warned_p)
     {

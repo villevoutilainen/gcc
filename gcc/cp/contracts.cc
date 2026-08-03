@@ -1804,6 +1804,38 @@ get_fn_contract_specifiers (tree decl)
   return NULL_TREE;
 }
 
+/* Map from a CONTRACT (PRECONDITION_STMT/POSTCONDITION_STMT) to the
+   ordered TREE_LIST (TREE_VALUE of each node a decl) of the decls its
+   condition treats as its own positional parameters -- either the real
+   declarator's own named PARM_DECLs (the "shortcut" form, no binder
+   list) or the synthetic binder decls built by make_postcondition_
+   variable (a comma-separated binder list).  Populated at parse time
+   (cp_parser_function_contract_specifier, parser.cc) for every eagerly
+   -parsed contract, not just ones on a declaration-level callable-typed
+   object clause -- see .claude/plans/stateless-jumping-shore.md -- but
+   only ever consulted for that feature: an ordinary function's own
+   contracts are remapped via DECL_ARGUMENTS instead (remap_contract),
+   which needs no such side table.  */
+
+static GTY(()) hash_map<tree, tree> *contract_positional_parms_map;
+
+void
+set_contract_positional_parms (tree contract, tree parms)
+{
+  if (!contract || contract == error_mark_node)
+    return;
+  hash_map_maybe_create<hm_ggc> (contract_positional_parms_map);
+  contract_positional_parms_map->put (contract, parms);
+}
+
+tree
+get_contract_positional_parms (tree contract)
+{
+  if (tree *p = hash_map_safe_get (contract_positional_parms_map, contract))
+    return *p;
+  return NULL_TREE;
+}
+
 /* A subroutine of duplicate_decls. Diagnose issues in the redeclaration of
    guarded functions.  */
 
@@ -2120,6 +2152,442 @@ emit_contract_wrapper_func (bool done)
     decl_wrapper_fn->empty ();
   gcc_checking_assert (!done || !more);
   return more;
+}
+
+/* ------------------------------------------------------------------
+   Declaration-level contracts on callable-typed objects: call-site
+   enforcement (see .claude/plans/stateless-jumping-shore.md and
+   maybe_attach_object_contract_specifiers, decl.cc).
+
+   A pre<ctrl>/post<ctrl> clause attached directly to a callable-typed
+   OBJECT declaration (a function pointer/reference variable or
+   parameter -- never a FUNCTION_DECL) is checked at every call site
+   referencing that declared name, using that call's own actual
+   arguments, with no dependency on what the callable currently targets
+   at runtime: the real call is never rerouted (contrast with
+   maybe_contract_wrap_call's wrapper-reroute mechanism for an ordinary
+   function's own contracts, deliberately not reused here beyond its
+   underlying dispatch, which this still relies on transitively via the
+   ordinary apply_preconditions/apply_postconditions pipeline any
+   function body goes through in finish_function).
+
+   For each contracted object decl, up to two small, internal "check
+   functions" are built once (and cached): one running only the pre<>
+   clauses (same parameter types as the callable, void return), one
+   running only the post<> clauses (same parameter types, plus one
+   extra trailing parameter for the actual computed result when the
+   callable's return type isn't void; same return type as the
+   callable, with a body that is simply 'return' of that trailing
+   parameter, so the ordinary postcondition-checking machinery -- which
+   expects to check a real return statement -- runs unmodified, with no
+   manual build_contract_check call needed here at all).  Both are
+   built and defined immediately, not deferred the way contract
+   wrappers are: this feature does not yet support templates, so there
+   is no dependent-type case requiring the declaration/definition split
+   the wrapper mechanism needs.
+
+   Each call site rewrites 'fp(args...)' into a single expression that
+   evaluates each argument (and the real call's own result) exactly
+   once, shared between the checks and the real call: pre<>, then the
+   real call, then post<>, yielding the real call's result.  ------
+   ------------------------------------------------------------------ */
+
+/* A copy_tree_body_r-style condition remap that needs no FUNCTION_DECL
+   on the source side at all (unlike remap_contract, which walks
+   DECL_ARGUMENTS on both sides in lockstep): DECL_MAP already holds
+   the exact decl -> decl substitutions to apply.  A CONTRACT_CONDITION
+   is always a plain expression (parsed via
+   cp_parser_conditional_expression), never containing statements,
+   blocks, or labels, so this needs none of copy_tree_body_r's
+   FUNCTION_DECL-inlining machinery -- just substitute-or-copy.
+
+   Two wrapper shapes need special handling rather than a blind copy,
+   both only ever seen around one of the *parameter* positions this
+   walker actually substitutes (DECL_MAP never maps the postcondition
+   result placeholder at all -- see remap_object_contract's own
+   comment for why that one is handled separately, entirely by
+   rebuild_postconditions):
+
+   - A D4324 constification const-wrapper (view_as_const/
+     constify_contract_access, a VIEW_CONVERT_EXPR marked
+     CONST_WRAPPER_P), added around a parameter reference when the
+     control object opts into constify() but the declarator's own
+     parameter isn't already const-qualified.  Rebuilding it via
+     view_as_const on the already-substituted decl recomputes its
+     const-qualified type from that decl's own (already correct) type,
+     rather than blindly copying forward whatever the wrapper's type
+     happened to be before substitution.
+
+   - An ordinary location wrapper (maybe_wrap_with_location), which
+     "normally has the same type as its operand, but it can have a
+     different one if the type of the operand has changed" (tree.h's
+     own location_wrapper_p comment) -- in practice not something the
+     substituted parameter positions here trip (their types don't
+     change across the substitution), but handled the same way for
+     the same reason, and cheap to keep correct regardless.  */
+
+static tree
+object_contract_remap_r (tree *tp, int *walk_subtrees, void *data)
+{
+  hash_map<tree, tree> *decl_map = (hash_map<tree, tree> *) data;
+
+  if (contract_const_wrapper_p (*tp))
+    if (tree *n = decl_map->get (TREE_OPERAND (*tp, 0)))
+      {
+	*tp = view_as_const (*n);
+	*walk_subtrees = 0;
+	return NULL_TREE;
+      }
+
+  /* An ordinary location wrapper -- see the function comment above.  */
+  if (location_wrapper_p (*tp))
+    if (tree *n = decl_map->get (TREE_OPERAND (*tp, 0)))
+      {
+	*tp = maybe_wrap_with_location (*n, EXPR_LOCATION (*tp));
+	*walk_subtrees = 0;
+	return NULL_TREE;
+      }
+
+  if (tree *n = decl_map->get (*tp))
+    {
+      *tp = *n;
+      *walk_subtrees = 0;
+      return NULL_TREE;
+    }
+
+  /* Anything else that's a decl or a type is shared, not copied -- it
+     isn't part of the condition's own private expression structure
+     (a global, the control object, ...).  */
+  if (DECL_P (*tp) || TYPE_P (*tp))
+    {
+      *walk_subtrees = 0;
+      return NULL_TREE;
+    }
+
+  copy_tree_r (tp, walk_subtrees, NULL);
+  return NULL_TREE;
+}
+
+/* Return a copy of CONTRACT (a PRECONDITION_STMT/POSTCONDITION_STMT
+   attribute-list node) whose condition has been remapped from its own
+   stored positional parameter decls (get_contract_positional_parms)
+   onto DST_PARMS, a DECL_CHAIN of DST_FN's own fresh parameters (of
+   the same length as the stored list).
+
+   A postcondition's own result identifier (built by
+   make_postcondition_variable at parse time, always auto-typed there,
+   per the single existing binder mechanism this feature's binder list
+   generalizes -- see cp_parser_function_contract_specifier) is
+   deliberately left untouched here: any expression built using it at
+   parse time (e.g. 'r == a + b') has a dependent_operator_type of its
+   own, computed then from operand types that included that auto
+   placeholder -- fixing only the leaf reference (whether by a plain
+   substitution or by retyping a copy of it in place) leaves every
+   *enclosing* expression node's own stale, still-dependent type
+   unrepaired, which later chokes fold_convert in exactly the way this
+   function's caller (build_object_contract_check_function) exists to
+   avoid.  There is no shallow fix for that: it needs the same full
+   tsubst_expr-based re-evaluation grokfndecl runs (rebuild_
+   postconditions) for an ordinary function's own postcondition right
+   after attaching its contract_specifiers -- which
+   build_object_contract_check_function duly calls, once, right after
+   this function's own parameter remapping has already replaced every
+   *other* decl reference the condition might have; by that point
+   DST_FN's own DECL_ARGUMENTS already match what the condition
+   references, so rebuild_postconditions's local_specialization_stack
+   set-up (register_local_identity over DECL_ARGUMENTS (DST_FN))
+   resolves them correctly instead of falling through to its own
+   "unrecognized decl" path.  */
+
+static tree
+remap_object_contract (tree contract, tree dst_parms)
+{
+  /* Look this up against the *original* (pre-copy) statement node:
+     that's the exact tree set_contract_positional_parms was keyed on
+     back in cp_parser_function_contract_specifier, before
+     finish_contract_specifier ever wrapped it into the attribute-list
+     shape CONTRACT is received as here.  */
+  tree orig_stmt = CONTRACT_STATEMENT (contract);
+  tree orig_positional_parms = get_contract_positional_parms (orig_stmt);
+
+  tree copy = copy_node (contract);
+  TREE_VALUE (copy) = build_tree_list (TREE_PURPOSE (TREE_VALUE (contract)),
+					copy_node (orig_stmt));
+  tree stmt = CONTRACT_STATEMENT (copy);
+
+  hash_map<tree, tree> decl_map;
+  tree dp = dst_parms;
+  for (tree sp = orig_positional_parms; sp;
+       sp = TREE_CHAIN (sp), dp = DECL_CHAIN (dp))
+    {
+      gcc_checking_assert (dp);
+      decl_map.put (TREE_VALUE (sp), dp);
+    }
+
+  walk_tree (&CONTRACT_CONDITION (stmt), object_contract_remap_r, &decl_map,
+	     NULL);
+  return copy;
+}
+
+/* Map from a callable-typed object decl to its (cached) pre-check or
+   post-check function -- see build_object_contract_check_function.  */
+
+static GTY(()) hash_map<tree, tree> *object_pre_check_fn_map;
+static GTY(()) hash_map<tree, tree> *object_post_check_fn_map;
+
+/* Build OBJDECL's pre-check (IS_POST false) or post-check (IS_POST
+   true) function: a fresh, internal FUNCTION_DECL taking OBJDECL's own
+   callable parameter types (plus, for a post-check with a non-void
+   return, one extra trailing parameter for the real call's actual
+   result), carrying only OBJDECL's contracts of the matching kind
+   (remapped onto its own fresh parameters), defined immediately with a
+   trivial body ('return <the trailing result parameter, if any>;') so
+   the ordinary contract-application pipeline
+   (maybe_apply_function_contracts, driven automatically by
+   finish_function) builds the actual check.  Returns NULL_TREE if
+   OBJDECL has no contract of the requested kind.  */
+
+static tree
+build_object_contract_check_function (tree objdecl, bool is_post)
+{
+  tree fn_type = TREE_TYPE (TREE_TYPE (objdecl));
+  tree ret_type = TREE_TYPE (fn_type);
+  bool has_result = is_post && !VOID_TYPE_P (ret_type);
+  location_t loc = DECL_SOURCE_LOCATION (objdecl);
+
+  /* No point building anything unless OBJDECL actually has a contract
+     of this kind.  Each kept entry is its own copy_node, with its
+     TREE_CHAIN explicitly reset: C's own chain slot still belongs to
+     OBJDECL's full (pre-and-post) list, and reusing C or its chain
+     pointer directly here would splice the *other* kind's contracts
+     in right behind it.  */
+  tree specs = NULL_TREE;
+  tree *specs_tail = &specs;
+  for (tree c = get_fn_contract_specifiers (objdecl); c; c = TREE_CHAIN (c))
+    if ((TREE_CODE (CONTRACT_STATEMENT (c)) == POSTCONDITION_STMT) == is_post)
+      {
+	tree entry = copy_node (c);
+	TREE_CHAIN (entry) = NULL_TREE;
+	*specs_tail = entry;
+	specs_tail = &TREE_CHAIN (entry);
+      }
+  if (!specs)
+    return NULL_TREE;
+
+  /* Fresh parameters matching OBJDECL's own callable signature,
+     positionally, plus (for a post-check with a non-void return) one
+     extra trailing parameter carrying the real call's actual result.  */
+  tree parms = NULL_TREE;
+  tree *parms_tail = &parms;
+  tree arg_types = NULL_TREE;
+  tree *at_tail = &arg_types;
+  unsigned i = 0;
+  for (tree t = TYPE_ARG_TYPES (fn_type); t && t != void_list_node;
+       t = TREE_CHAIN (t), i++)
+    {
+      char namebuf[8];
+      snprintf (namebuf, sizeof namebuf, "__a%u", i);
+      tree ptype = TREE_VALUE (t);
+      tree parm = cp_build_parm_decl (NULL_TREE, get_identifier (namebuf),
+				       ptype);
+      DECL_ARTIFICIAL (parm) = true;
+      *parms_tail = parm;
+      parms_tail = &DECL_CHAIN (parm);
+      *at_tail = build_tree_list (NULL_TREE, ptype);
+      at_tail = &TREE_CHAIN (*at_tail);
+    }
+
+  tree result_parm = NULL_TREE;
+  if (has_result)
+    {
+      result_parm = cp_build_parm_decl (NULL_TREE, get_identifier ("__result"),
+					 ret_type);
+      DECL_ARTIFICIAL (result_parm) = true;
+      *parms_tail = result_parm;
+      parms_tail = &DECL_CHAIN (result_parm);
+      *at_tail = build_tree_list (NULL_TREE, ret_type);
+      at_tail = &TREE_CHAIN (*at_tail);
+    }
+  *at_tail = void_list_node;
+
+  tree check_ret_type = is_post ? ret_type : void_type_node;
+  tree check_fn_type = build_function_type (check_ret_type, arg_types);
+  tree check_fn = build_lang_decl_loc (loc, FUNCTION_DECL, NULL_TREE,
+				       check_fn_type);
+  for (tree p = parms; p; p = DECL_CHAIN (p))
+    DECL_CONTEXT (p) = check_fn;
+
+  /* Reuse OBJDECL's own enclosing namespace/class as CHECK_FN's context
+     when that's what it is -- but OBJDECL may instead be function-local
+     (a PARM_DECL, whose DECL_CONTEXT is the enclosing FUNCTION_DECL, or
+     a local VAR_DECL): CHECK_FN is never actually nested inside
+     anything (it's synthesized once, the first time some call site
+     needs it, regardless of how deeply that call site happens to be
+     lexically nested -- see the file comment above), so a FUNCTION_DECL
+     context here would wrongly mark it as a real nested function, which
+     later stages (e.g. tree-nested.cc's unnest_nesting_tree, expecting
+     the full nested-function apparatus: a static chain, and so on) are
+     not prepared to cope with.  Fall back to the global namespace in
+     that case.  */
+  tree objdecl_context = DECL_CONTEXT (objdecl);
+  if (objdecl_context && TREE_CODE (objdecl_context) == FUNCTION_DECL)
+    objdecl_context = NULL_TREE;
+  DECL_CONTEXT (check_fn) = objdecl_context;
+  DECL_ARTIFICIAL (check_fn) = true;
+  DECL_SOURCE_LOCATION (check_fn) = loc;
+  DECL_ARGUMENTS (check_fn) = parms;
+  DECL_RESULT (check_fn) = NULL_TREE;
+  DECL_INITIAL (check_fn) = NULL_TREE;
+  TREE_PUBLIC (check_fn) = false;
+  DECL_EXTERNAL (check_fn) = false;
+  DECL_WEAK (check_fn) = false;
+  DECL_INTERFACE_KNOWN (check_fn) = true;
+
+  {
+    static unsigned counter;
+    char namebuf[32];
+    snprintf (namebuf, sizeof namebuf, "__contract_%s_check_%u",
+	      is_post ? "post" : "pre", counter++);
+    DECL_NAME (check_fn) = get_identifier (namebuf);
+  }
+
+  tree remapped_specs = NULL_TREE;
+  tree *remapped_tail = &remapped_specs;
+  for (tree c = specs; c; c = TREE_CHAIN (c))
+    {
+      *remapped_tail = remap_object_contract (c, parms);
+      remapped_tail = &TREE_CHAIN (*remapped_tail);
+    }
+  set_fn_contract_specifiers (check_fn, remapped_specs);
+  /* Resolve the postcondition result placeholder (still auto-typed,
+     per make_postcondition_variable) to CHECK_FN's own real return
+     type, and re-evaluate every expression built using it so no
+     enclosing node is left with a stale dependent_operator_type --
+     exactly the same step grokfndecl runs for any ordinary function
+     right after attaching its own contract_specifiers, and just as
+     necessary here (see remap_object_contract's own comment for why
+     the parameter remapping just above can't also cover this).  A
+     no-op for the pre-check function, which never has a
+     postcondition at all.  */
+  rebuild_postconditions (check_fn);
+
+  /* This whole synthesis happens mid-expression, wherever the call site
+     that first needs CHECK_FN happens to be lexically (possibly itself
+     nested arbitrarily deep in some other function's own body, class
+     scope, etc. still being parsed) -- push_to_top_level/
+     pop_from_top_level is the same general-purpose primitive
+     build_predicate_core_function_1 uses for exactly this reason (see
+     its own, more detailed comment): it isolates CHECK_FN's own
+     start_preparsed_function/finish_function from every bit of that
+     ambient, still-in-progress state (current_function_decl,
+     current_class_type, the statement-list stack, ...), and restores
+     it correctly afterward so parsing of whatever expression is
+     actually in progress can continue.  */
+  push_to_top_level ();
+  start_preparsed_function (check_fn, /*attributes*/NULL_TREE,
+			   SF_DEFAULT | SF_PRE_PARSED);
+  tree body = begin_function_body ();
+  tree compound_stmt = begin_compound_stmt (BCS_FN_BODY);
+  finish_return_stmt (has_result ? result_parm : NULL_TREE);
+  finish_compound_stmt (compound_stmt);
+  finish_function_body (body);
+  expand_or_defer_fn (finish_function (/*inline_p=*/false));
+  pop_from_top_level ();
+
+  return check_fn;
+}
+
+/* Return OBJDECL's cached pre-check (IS_POST false) or post-check
+   (IS_POST true) function, building it first if this is the first
+   request; NULL_TREE if OBJDECL has no contract of that kind.  */
+
+static tree
+get_or_build_object_contract_check_function (tree objdecl, bool is_post)
+{
+  hash_map<tree, tree> *&map
+    = is_post ? object_post_check_fn_map : object_pre_check_fn_map;
+  if (tree *p = hash_map_safe_get (map, objdecl))
+    return *p;
+  tree checkfn = build_object_contract_check_function (objdecl, is_post);
+  hash_map_maybe_create<hm_ggc> (map);
+  map->put (objdecl, checkfn);
+  return checkfn;
+}
+
+/* If FUNCTION (a call's callee, before any decay to a pointer value --
+   see cp_build_function_call_vec) is a reference to a decl carrying a
+   declaration-level pre<>/post<> clause, return an expression that
+   also runs those checks, using CALL's own actual arguments (ARGS,
+   already fully resolved/converted), alongside the untouched real call
+   CALL -- see the file comment above build_object_contract_check_
+   function.  Otherwise, return CALL unchanged.  */
+
+tree
+maybe_object_contract_check_call (tree function, tree call,
+				  vec<tree, va_gc> *args)
+{
+  if (!flag_contracts || call == error_mark_node
+      || !function || !DECL_P (function)
+      || !get_fn_contract_specifiers (function))
+    return call;
+
+  tree pre_check = get_or_build_object_contract_check_function (function,
+								 false);
+  tree post_check = get_or_build_object_contract_check_function (function,
+								  true);
+  if (!pre_check && !post_check)
+    return call;
+
+  /* Evaluate each argument exactly once, reusing the same value for
+     the checks and the real call -- also updating CALL's own args in
+     place, so its evaluation of them is the shared one too.  */
+  unsigned nargs = vec_safe_length (args);
+  auto_vec<tree, 8> saved_args (nargs);
+  for (unsigned i = 0; i < nargs; i++)
+    {
+      tree arg = (*args)[i];
+      if (TREE_SIDE_EFFECTS (arg))
+	arg = save_expr (arg);
+      saved_args.quick_push (arg);
+      if (i < (unsigned) call_expr_nargs (call))
+	CALL_EXPR_ARG (call, i) = arg;
+    }
+
+  tree pre_call = NULL_TREE;
+  if (pre_check)
+    pre_call = build_call_a (pre_check, nargs, saved_args.address ());
+
+  tree ret_type = TREE_TYPE (call);
+  bool void_result = VOID_TYPE_P (ret_type);
+  /* Force the real call to happen exactly once, right here -- between
+     the pre<> and post<> checks -- and, if it has a result, let a
+     later reference to it (post<>'s own extra argument, and this
+     expression's own overall value) reuse that one evaluation.  */
+  tree result_expr = (!void_result && post_check) ? save_expr (call) : call;
+
+  tree post_call = NULL_TREE;
+  if (post_check)
+    {
+      auto_vec<tree, 9> post_args (nargs + 1);
+      for (unsigned i = 0; i < nargs; i++)
+	post_args.quick_push (saved_args[i]);
+      if (!void_result)
+	post_args.quick_push (result_expr);
+      post_call = build_call_a (post_check, post_args.length (),
+				post_args.address ());
+    }
+
+  tree seq = result_expr;
+  if (post_call)
+    {
+      seq = build2 (COMPOUND_EXPR, TREE_TYPE (post_call), seq, post_call);
+      if (!void_result)
+	seq = build2 (COMPOUND_EXPR, ret_type, seq, result_expr);
+    }
+  if (pre_call)
+    seq = build2 (COMPOUND_EXPR, TREE_TYPE (seq), pre_call, seq);
+
+  return seq;
 }
 
 /* Mark most of a contract as being invalid.  */

@@ -181,6 +181,9 @@ extern tree finish_contract_condition		(cp_expr);
 extern void update_late_contract		(tree, tree, cp_expr);
 extern void check_redecl_contract		(tree, tree);
 extern void check_redecl_object_contract	(tree, tree);
+extern void set_contract_positional_parms	(tree, tree);
+extern tree get_contract_positional_parms	(tree);
+extern tree maybe_object_contract_check_call	(tree, tree, vec<tree, va_gc> *);
 extern tree invalidate_contract			(tree);
 extern tree copy_and_remap_contracts		(tree, tree, contract_match_kind = cmk_all,
 						 bool for_wrapper = false);

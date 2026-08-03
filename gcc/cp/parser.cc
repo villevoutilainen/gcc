@@ -34318,6 +34318,8 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
       bool old_pc = processing_postcondition;
       processing_postcondition = postcondition_p;
       tree result = NULL_TREE;
+      tree positional_parms = NULL_TREE;
+      tree *positional_tail = &positional_parms;
       unsigned n_binders = binder_ids.length ();
       if (n_binders > 0)
 	{
@@ -34366,16 +34368,49 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
 		     parameter binder, so ordinary lookup in the condition
 		     finds it -- exactly like the result identifier above,
 		     just with a concrete type instead of auto.  */
-		  if (parm_type)
-		    make_postcondition_variable (binder_ids[i], parm_type);
-		  else
-		    make_postcondition_variable (binder_ids[i]);
+		  tree binder_decl = parm_type
+		    ? make_postcondition_variable (binder_ids[i], parm_type)
+		    : make_postcondition_variable (binder_ids[i]);
+		  *positional_tail = build_tree_list (NULL_TREE, binder_decl);
+		  positional_tail = &TREE_CHAIN (*positional_tail);
 		  if (p)
 		    p = TREE_CHAIN (p);
+		}
+	      /* A binder list naming only the result (post's traditional
+		 single-name form, e.g. post(r: cond), where the lone name
+		 is always the result -- see above) leaves every parameter
+		 position uncovered: the condition resolves them via
+		 ordinary lookup against the real declarator names instead,
+		 exactly like the no-binder-list case below.  Record those
+		 real decls for any positions the binder list didn't reach,
+		 so this contract's positional parameter list always has
+		 exactly ARITY entries regardless of how much of it came
+		 from the binder list.  */
+	      for (; p && p != void_list_node && p != explicit_void_list_node;
+		   p = TREE_CHAIN (p))
+		{
+		  *positional_tail = build_tree_list (NULL_TREE, TREE_VALUE (p));
+		  positional_tail = &TREE_CHAIN (*positional_tail);
 		}
 	    }
 	  ++processing_template_decl;
 	}
+      else
+	/* No binder list: if the condition names any parameters at all, it
+	   resolves them via ordinary lookup against the real PARM_DECLs the
+	   declarator itself provides.  Record those, in order, as this
+	   contract's own positional parameter list too, for the same reason
+	   a binder list's synthetic names are recorded (see
+	   set_contract_positional_parms) -- consumed only for a
+	   declaration-level clause on a callable-typed object, to build its
+	   call-site check function; irrelevant, harmless bookkeeping for an
+	   ordinary function's own contracts.  */
+	for (tree p = params; p && p != void_list_node
+	     && p != explicit_void_list_node; p = TREE_CHAIN (p))
+	  {
+	    *positional_tail = build_tree_list (NULL_TREE, TREE_VALUE (p));
+	    positional_tail = &TREE_CHAIN (*positional_tail);
+	  }
       cp_expr condition = cp_parser_conditional_expression (parser);
       /* Build the contract.  */
       contract = grok_contract (contract_name, /*mode*/NULL_TREE, result,
@@ -34395,6 +34430,7 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
 	  location_t end = cp_lexer_peek_token (parser->lexer)->location;
 	  loc = make_location (loc, loc, end);
 	  SET_EXPR_LOCATION (contract, loc);
+	  set_contract_positional_parms (contract, positional_parms);
 	}
 
       parens.require_close (parser);
