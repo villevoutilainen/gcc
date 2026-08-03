@@ -3,7 +3,8 @@
 // object parses; the bare forms still default (now to
 // std::contracts::default_v); a '<' that starts a predicate is still
 // less-than; an object of a class-template-instantiation control type
-// parses; and a malformed empty control specifier is rejected.
+// parses; and an empty '<>' also defaults to std::contracts::default_v,
+// exactly like the bare form (pre<>/post<>/contract_assert<>).
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fsyntax-only" }
 
@@ -31,5 +32,8 @@ void h (int x)
   contract_assert<mandatory_v>(x > 0);
   contract_assert(x > 0);
   contract_assert(x < 0);
-  contract_assert<>(x > 0);   // { dg-error "expected primary-expression" }
+  contract_assert<>(x > 0);   // empty '<>': std::contracts::default_v
 }
+
+int e (int x) pre<>(x > 0) { return x; }
+int r (int x) post<>(res: res > 0) { return x; }
