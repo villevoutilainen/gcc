@@ -33873,7 +33873,15 @@ cp_parser_late_contracts (cp_parser *parser, tree fndecl)
    -fcontract-control-objects, so that pre<obj>/post<obj>/contract_assert<obj>
    get this diagnostic instead of falling through to a confusing parse
    error elsewhere; only -fcontract-control-objects actually names a
-   control.  */
+   control.
+
+   An empty '<>' is treated the same as no '<...>' at all: it names
+   std::contracts::default_v, exactly as if '<std::contracts::default_v>'
+   had been written.  This gives pre<>/post<>/contract_assert<> a use --
+   spelling out "the default control object, explicitly" -- most useful
+   where a bare pre/post/contract_assert would otherwise be grammatically
+   ambiguous or simply unavailable (e.g. attached to something other than
+   an ordinary function contract).  */
 
 static tree
 cp_parser_contract_control_object (cp_parser *parser)
@@ -33899,7 +33907,16 @@ cp_parser_contract_control_object (cp_parser *parser)
       return error_mark_node;
     }
 
+  location_t open_loc = cp_lexer_peek_token (parser->lexer)->location;
   cp_lexer_consume_token (parser->lexer); /* Consume '<'.  */
+
+  /* An empty '<>': use std::contracts::default_v, same as a bare
+     pre/post/contract_assert with no '<...>' at all.  */
+  if (cp_lexer_next_token_is (parser->lexer, CPP_GREATER))
+    {
+      cp_lexer_consume_token (parser->lexer); /* Consume '>'.  */
+      return contract_default_control_object (open_loc);
+    }
 
   /* Inside the angle brackets a '>' closes the control specifier rather
      than acting as a greater-than operator.  */
