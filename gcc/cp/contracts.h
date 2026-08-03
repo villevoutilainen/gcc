@@ -180,6 +180,7 @@ extern tree finish_contract_specifier 		(tree, tree);
 extern tree finish_contract_condition		(cp_expr);
 extern void update_late_contract		(tree, tree, cp_expr);
 extern void check_redecl_contract		(tree, tree);
+extern void check_redecl_object_contract	(tree, tree);
 extern tree invalidate_contract			(tree);
 extern tree copy_and_remap_contracts		(tree, tree, contract_match_kind = cmk_all,
 						 bool for_wrapper = false);
