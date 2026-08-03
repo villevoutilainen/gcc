@@ -3012,9 +3012,9 @@ static tree cp_maybe_function_contract_specifier
   (cp_parser *parser);
 
 static tree cp_parser_function_contract_specifier
-  (cp_parser *);
+  (cp_parser *, tree);
 static tree cp_parser_function_contract_specifier_seq
-  (cp_parser *);
+  (cp_parser *, tree);
 static void cp_parser_late_contracts
   (cp_parser *, tree);
 
@@ -13564,7 +13564,8 @@ cp_parser_lambda_declarator_opt (cp_parser* parser, tree lambda_expr,
 
   tree contract_specifiers = NULL_TREE;
   if (flag_contracts)
-    contract_specifiers = cp_parser_function_contract_specifier_seq (parser);
+    contract_specifiers
+      = cp_parser_function_contract_specifier_seq (parser, param_list);
 
   /* Also allow GNU attributes at the very end of the declaration, the usual
      place for GNU attributes.  */
@@ -26876,7 +26877,8 @@ cp_parser_direct_declarator (cp_parser* parser,
 		  tree contract_specifiers = NULL_TREE;
 		  if (flag_contracts)
 		    contract_specifiers
-		      = cp_parser_function_contract_specifier_seq (parser);
+		      = cp_parser_function_contract_specifier_seq (parser,
+								    params);
 
 		  location_t parens_loc = make_location (parens_start,
 							 parens_start,
@@ -34116,17 +34118,31 @@ cp_maybe_function_contract_specifier (cp_parser *parser)
     precondition-specifier
     postcondition-specifier
   precondition-specifier :
-    pre attribute-specifier-seqopt ( conditional-expression )
+    pre attribute-specifier-seqopt ( binder-listopt conditional-expression )
   postcondition-specifier :
-    post attribute-specifier-seqopt ( result-name-introduceropt conditional-expression )
-  result-name-introducer :
-    attributed-identifier :
+    post attribute-specifier-seqopt ( binder-listopt conditional-expression )
+  binder-list :
+    binder-list-name-seq :
+  binder-list-name-seq :
+    attributed-identifier
+    binder-list-name-seq , attributed-identifier
+
+   A single-name binder-list is the traditional postcondition result-
+   name introducer (post(r: cond)); a comma-separated binder-list also
+   works for pre, and names the callable's own parameters positionally
+   when the declarator being contracted doesn't already give them real
+   names (e.g. a function-pointer object declaration with unnamed
+   parameters) -- see .claude/plans/stateless-jumping-shore.md.  PARAMS
+   is the TREE_LIST of the contracted callable's own already-resolved
+   parameters (TREE_VALUE of each node is a PARM_DECL, possibly unnamed;
+   NULL_TREE if unknown/not applicable), used to validate the binder
+   count and to positionally type each parameter binder.
 
    Return void_list_node if the current token doesn't start a
    contract specifier.  */
 
 static tree
-cp_parser_function_contract_specifier (cp_parser *parser)
+cp_parser_function_contract_specifier (cp_parser *parser, tree params)
 {
   tree contract_name = cp_function_contract_specifier_intro (parser);
   if (!contract_name)
@@ -34175,14 +34191,59 @@ cp_parser_function_contract_specifier (cp_parser *parser)
   matching_parens parens;
   parens.require_open (parser);
 
-  /* Check for postcondition identifiers.  */
-  cp_expr identifier;
-  if (postcondition_p && cp_lexer_next_token_is (parser->lexer, CPP_NAME)
-      && cp_lexer_peek_nth_token (parser->lexer, 2)->type == CPP_COLON)
-    identifier = cp_parser_identifier (parser);
+  bool deferred_p = (current_class_type
+		     && TYPE_BEING_DEFINED (current_class_type));
 
-  if (identifier == error_mark_node)
+  /* Check for a binder list: a comma-separated run of bare identifiers
+     immediately followed by ':'.  A bare ':' can never appear in a
+     plain conditional-expression (only as part of '?:'), so the moment
+     the run doesn't end in ':', this is unambiguously a plain condition
+     instead -- no arity bound needed for the lookahead itself.  */
+  auto_vec<cp_expr, 4> binder_ids;
+  {
+    size_t n = 1;
+    bool binder_list_p = cp_lexer_nth_token_is (parser->lexer, n, CPP_NAME);
+    while (binder_list_p)
+      {
+	n++;
+	if (cp_lexer_nth_token_is (parser->lexer, n, CPP_COLON))
+	  break;
+	if (!cp_lexer_nth_token_is (parser->lexer, n, CPP_COMMA))
+	  {
+	    binder_list_p = false;
+	    break;
+	  }
+	n++;
+	if (!cp_lexer_nth_token_is (parser->lexer, n, CPP_NAME))
+	  {
+	    binder_list_p = false;
+	    break;
+	  }
+      }
+
+    if (binder_list_p)
+      {
+	binder_ids.safe_push (cp_parser_identifier (parser));
+	while (cp_lexer_next_token_is (parser->lexer, CPP_COMMA))
+	  {
+	    cp_lexer_consume_token (parser->lexer);
+	    binder_ids.safe_push (cp_parser_identifier (parser));
+	  }
+      }
+  }
+
+  bool binder_error_p = false;
+  for (unsigned i = 0; i < binder_ids.length (); i++)
+    if (binder_ids[i] == error_mark_node)
+      binder_error_p = true;
+
+  if (binder_error_p
+      || (binder_ids.length () > 1 && deferred_p))
     {
+      if (!binder_error_p)
+	error_at (loc, "a contract binder list naming more than one "
+		  "parameter is not yet supported inside a class "
+		  "definition");
       cp_parser_skip_to_closing_parenthesis (parser,
 					     /*recovering=*/true,
 					     /*or_comma=*/false,
@@ -34190,11 +34251,17 @@ cp_parser_function_contract_specifier (cp_parser *parser)
       return error_mark_node;
     }
 
-  if (identifier)
+  if (!binder_ids.is_empty ())
     cp_parser_require (parser, CPP_COLON, RT_COLON);
 
+  /* For a single-name binder list, keep the traditional postcondition
+     result-name identifier around too, for the deferred (class-body)
+     path below, which doesn't yet support a longer binder list.  */
+  cp_expr identifier
+    = binder_ids.length () == 1 ? binder_ids[0] : cp_expr ();
+
   tree contract;
-  if (current_class_type && TYPE_BEING_DEFINED (current_class_type))
+  if (deferred_p)
     {
       /* Defer the parsing of pre/post contracts inside class definitions.  */
       cp_token *first = cp_lexer_peek_token (parser->lexer);
@@ -34251,17 +34318,69 @@ cp_parser_function_contract_specifier (cp_parser *parser)
       bool old_pc = processing_postcondition;
       processing_postcondition = postcondition_p;
       tree result = NULL_TREE;
-      if (identifier)
+      unsigned n_binders = binder_ids.length ();
+      if (n_binders > 0)
 	{
-	  /* Build a fake variable for the result identifier.  */
-	  result = make_postcondition_variable (identifier);
+	  /* PARAMS's own arity (stopping at the void/variadic sentinel)
+	     decides whether this binder list is "just the parameters" or,
+	     for a postcondition, "the result, then the parameters" -- see
+	     the comment on this function.  */
+	  size_t arity = 0;
+	  for (tree p = params; p && p != void_list_node
+	       && p != explicit_void_list_node; p = TREE_CHAIN (p))
+	    arity++;
+
+	  bool has_result;
+	  if (postcondition_p && n_binders == 1)
+	    /* A single name in a postcondition's binder position is
+	       always the traditional result name, regardless of arity --
+	       this is the pre-existing single-binder grammar
+	       (post(r: cond)), which never validated arity at all and
+	       must keep working unchanged for every existing use (e.g. a
+	       single-parameter, non-void function).  Naming a lone,
+	       otherwise-unnamed parameter (with no result) needs 'pre'
+	       instead, or a binder list of two or more names.  */
+	    has_result = true;
+	  else
+	    has_result = postcondition_p && params && n_binders == arity + 1;
+
+	  if (!has_result && params && n_binders != arity)
+	    error_at (loc, "wrong number of names in contract binder list "
+		      "(expected %wu, got %u)",
+		      (unsigned HOST_WIDE_INT) arity, n_binders);
+	  else
+	    {
+	      unsigned i = 0;
+	      if (has_result)
+		{
+		  /* Build a fake variable for the result identifier.  */
+		  result = make_postcondition_variable (binder_ids[0]);
+		  i = 1;
+		}
+	      tree p = params;
+	      for (; i < n_binders; i++)
+		{
+		  tree parm_type
+		    = p ? TREE_TYPE (TREE_VALUE (p)) : NULL_TREE;
+		  /* Build a fake, positionally-typed variable for this
+		     parameter binder, so ordinary lookup in the condition
+		     finds it -- exactly like the result identifier above,
+		     just with a concrete type instead of auto.  */
+		  if (parm_type)
+		    make_postcondition_variable (binder_ids[i], parm_type);
+		  else
+		    make_postcondition_variable (binder_ids[i]);
+		  if (p)
+		    p = TREE_CHAIN (p);
+		}
+	    }
 	  ++processing_template_decl;
 	}
       cp_expr condition = cp_parser_conditional_expression (parser);
       /* Build the contract.  */
       contract = grok_contract (contract_name, /*mode*/NULL_TREE, result,
 				condition, loc, control_object);
-      if (identifier)
+      if (n_binders > 0)
 	--processing_template_decl;
       processing_postcondition = old_pc;
       gcc_checking_assert (scope_chain && scope_chain->bindings
@@ -34291,19 +34410,24 @@ cp_parser_function_contract_specifier (cp_parser *parser)
 }
 
 /* Parse a contract specifier seq. Returns a list of preconditions and
-  postconditions in an attribute tree.
+  postconditions in an attribute tree.  PARAMS is the contracted
+  callable's own already-resolved parameter TREE_LIST, threaded through
+  to each specifier for binder-list arity validation and positional
+  typing (see cp_parser_function_contract_specifier); NULL_TREE if not
+  available.
 
   function-contract-specifier-seq :
     function-contract-specifier function-contract-specifier-seq.  */
 
 static tree
-cp_parser_function_contract_specifier_seq (cp_parser *parser)
+cp_parser_function_contract_specifier_seq (cp_parser *parser, tree params)
 {
   tree contract_specs = NULL_TREE;
 
   while (true)
     {
-      tree contract_spec = cp_parser_function_contract_specifier (parser);
+      tree contract_spec
+	= cp_parser_function_contract_specifier (parser, params);
 
       /* If there are no more contracts, done.  */
       if (contract_spec == NULL_TREE)
