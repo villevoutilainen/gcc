@@ -795,6 +795,27 @@ get_orig_for_outlined (tree fndecl)
   return result ? *result : NULL_TREE ;
 }
 
+/* Given a check function built by build_object_contract_check_function
+   for a declaration-level pre<>/post<> clause on a callable-typed
+   OBJECT declaration (a VAR_DECL/PARM_DECL, never a FUNCTION_DECL --
+   see .claude/plans/stateless-jumping-shore.md), return that object
+   decl; NULL_TREE if FNDECL isn't one of these check functions.  Lets
+   get_src_loc_impl_ptr_for substitute the object's own declared name
+   into a violation's reported "function name" instead of the check
+   function's own compiler-synthesized one (e.g. "divide" instead of
+   "__contract_post_check_1"), mirroring get_orig_for_outlined's
+   identical role for an ordinary function's outlined pre/post
+   checks.  */
+static GTY(()) hash_map<tree, tree> *object_check_fn_orig_decl;
+
+static tree
+get_orig_objdecl_for_check_fn (tree fndecl)
+{
+  gcc_checking_assert (fndecl);
+  tree *result = hash_map_safe_get (object_check_fn_orig_decl, fndecl);
+  return result ? *result : NULL_TREE;
+}
+
 /* For a given function OLD_FN set suitable names for NEW_FN (which is an
    outlined contract check) usually by appending '.pre' or '.post'.
 
@@ -2562,6 +2583,14 @@ build_object_contract_check_function (tree objdecl, bool is_post)
   DECL_WEAK (check_fn) = false;
   DECL_INTERFACE_KNOWN (check_fn) = true;
 
+  /* So a violation's reported source_location can name OBJDECL itself
+     (e.g. "divide") instead of CHECK_FN's own compiler-synthesized
+     name -- see get_orig_objdecl_for_check_fn and its use in
+     get_src_loc_impl_ptr_for.  */
+  hash_map_maybe_create<hm_ggc> (object_check_fn_orig_decl);
+  gcc_checking_assert (!object_check_fn_orig_decl->get (check_fn));
+  object_check_fn_orig_decl->put (check_fn, objdecl);
+
   {
     static unsigned counter;
     char namebuf[32];
@@ -3760,18 +3789,43 @@ get_contracts_source_location_impl_type (tree context = NULL_TREE)
   return contracts_source_location_impl_type;
 }
 
-static tree
-get_src_loc_impl_ptr_for (location_t loc, tree fndecl)
-{
-  if (!contracts_source_location_impl_type)
-    get_contracts_source_location_impl_type ();
+/* FNDECL is about to be embedded (by name) into a diagnostic-facing
+   source_location -- a violation message's "in function ..." text, via
+   either build_source_location_impl (cp-gimplify.cc, the bare/no-
+   control-object path) or build_real_source_location_value (the D4324
+   control-object path, both the runtime and constexpr variants).
+   FNDECL may not be the function a user would recognize: resolve it to
+   whatever *should* actually be named instead, the same way already
+   done here for an outlined pre/post-condition function and a caller-
+   side wrapper. Also resolves a declaration-level object contract's
+   own synthesized check function (build_object_contract_check_function)
+   to the contracted object's own declaration (a VAR_DECL/PARM_DECL,
+   e.g. "divide", not a FUNCTION_DECL at all from that point on) --
+   see .claude/plans/stateless-jumping-shore.md.  */
 
+static tree
+resolve_fndecl_for_diagnostic_name (tree fndecl)
+{
   /* We might be an outlined function.  */
   if (DECL_IS_PRE_FN_P (fndecl) || DECL_IS_POST_FN_P (fndecl))
     fndecl = get_orig_for_outlined (fndecl);
   /* We might be a wrapper.  */
   if (DECL_IS_WRAPPER_FN_P (fndecl))
     fndecl = get_orig_func_for_wrapper (fndecl);
+  /* We might be a declaration-level object contract's own synthesized
+     check function.  */
+  if (tree objdecl = get_orig_objdecl_for_check_fn (fndecl))
+    fndecl = objdecl;
+  return fndecl;
+}
+
+static tree
+get_src_loc_impl_ptr_for (location_t loc, tree fndecl)
+{
+  if (!contracts_source_location_impl_type)
+    get_contracts_source_location_impl_type ();
+
+  fndecl = resolve_fndecl_for_diagnostic_name (fndecl);
 
   gcc_checking_assert (fndecl);
   tree impl__
@@ -8676,8 +8730,9 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
      f0, comment,
      f1, (contract_control_omits_source_location (ctrl, side)
 	  ? build_constructor (TREE_TYPE (f1), NULL)
-	  : build_real_source_location_value (loc, TREE_TYPE (f1),
-					       current_function_decl)),
+	  : build_real_source_location_value
+	      (loc, TREE_TYPE (f1),
+	       resolve_fndecl_for_diagnostic_name (current_function_decl))),
      f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
      f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
      f4, build_assertion_static_info_value (side, TREE_TYPE (f4)),
@@ -8975,7 +9030,9 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
      f0, comment,
      f1, (contract_control_omits_source_location (ctrl, side)
 	  ? build_constructor (TREE_TYPE (f1), NULL)
-	  : build_real_source_location_value (loc, TREE_TYPE (f1), fndecl)),
+	  : build_real_source_location_value
+	      (loc, TREE_TYPE (f1),
+	       resolve_fndecl_for_diagnostic_name (fndecl))),
      f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
      f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
      f4, build_assertion_static_info_value (side, TREE_TYPE (f4)),

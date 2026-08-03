@@ -4399,7 +4399,7 @@ build_source_location_impl (location_t loc, tree fndecl,
 	{
 	  const char *name = "";
 
-	  if (fndecl)
+	  if (fndecl && TREE_CODE (fndecl) == FUNCTION_DECL)
 	    {
 	      /* If this is a coroutine, we should get the name of the user
 		 function rather than the actor we generate.  */
@@ -4408,6 +4408,13 @@ build_source_location_impl (location_t loc, tree fndecl,
 	      else
 		name = cxx_printable_name (fndecl, 2);
 	    }
+	  else if (fndecl && DECL_NAME (fndecl))
+	    /* Not really a function at all -- a declaration-level contract
+	       on a callable-typed object (see contracts.cc's
+	       get_orig_objdecl_for_check_fn): use the object's own plain
+	       declared name (e.g. "divide") instead, since there's no real
+	       FUNCTION_DECL here for cxx_printable_name to describe.  */
+	    name = IDENTIFIER_POINTER (DECL_NAME (fndecl));
 
 	  val = build_string_literal (name);
 	}
