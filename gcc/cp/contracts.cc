@@ -6704,6 +6704,186 @@ oa_predicate_check_inner_call (tree substituted, tree pred_fn, bool negated)
   return OA_UNKNOWN;
 }
 
+/* -fdump-contract-proofs: a lazily-opened dump file, one SMT-LIB2
+   verification-condition certificate per concluded conveyor-proof
+   obligation (OA_PROVEN_TRUE or OA_PROVEN_FALSE only -- there is no
+   proof to certify for OA_UNKNOWN).  See
+   .claude/plans/stateless-jumping-shore.md.  Opened once and appended to
+   directly, the same shape -fdump-go-spec's own flag_dump_go_spec use
+   (godump.cc/toplev.cc) already has -- overkill to route this through
+   GCC's own per-pass dump-file manager for one flat, ad hoc text
+   stream.  */
+
+static FILE *oa_proof_dump_file;
+
+/* QF_UFLIA (not QF_LIA/QF_UF separately) so a single "(set-logic ...)"
+   covers both the range-subsumption (linear-arithmetic) and predicate-
+   chaining (uninterpreted-constant) certificates that may both be
+   appended to the same file.  Each individual obligation's own
+   declarations/assertions are wrapped in its own "(push 1)"/"(pop 1)"
+   (oa_emit_range_certificate/oa_emit_predicate_certificate below), so
+   certificate blocks never collide on a repeated constant name (e.g.
+   two obligations about different calls to the same predicate) -- the
+   whole file remains one single, valid SMT-LIB2 script check-sat can be
+   run against block by block, or in one solver session covering every
+   obligation at once.
+
+   "(set-logic ...)" itself must appear only *once* in the whole file,
+   though, and this file can be shared across more than one compiler
+   invocation appending to the same path (e.g. a build compiling many
+   translation units all with the same -fdump-contract-proofs=path) --
+   each such invocation opens its own fresh FILE* in its own process, so
+   a plain "write it once per process" guard isn't enough by itself. Use
+   the file's on-disk size instead: only an invocation that finds the
+   file genuinely empty (the very first writer) emits the header;
+   every later invocation appending to an already-populated file leaves
+   it alone, keeping exactly one "(set-logic ...)" in the file no matter
+   how many separate compilations contributed to it.  */
+
+static FILE *
+oa_get_proof_dump_file ()
+{
+  if (!oa_proof_dump_file && flag_dump_contract_proofs)
+    {
+      oa_proof_dump_file = fopen (flag_dump_contract_proofs, "a");
+      if (oa_proof_dump_file)
+	{
+	  fseek (oa_proof_dump_file, 0, SEEK_END);
+	  if (ftell (oa_proof_dump_file) == 0)
+	    fprintf (oa_proof_dump_file, "(set-logic QF_UFLIA)\n\n");
+	}
+    }
+  return oa_proof_dump_file;
+}
+
+/* Print every known bound of BOUNDS as an SMT-LIB2 assertion on the
+   free constant "v" to FILE -- one (assert ...) per side that's
+   actually constrained (has_lo/has_hi), nothing for a side that isn't.
+   Shared between the "establish the premises" and "assert the goal"
+   roles in oa_emit_range_certificate below -- both are just "print
+   this range's own bounds," the only difference is which range and
+   whether the result gets negated (handled by the caller).  */
+
+static void
+oa_print_range_assertions (FILE *file, oa_range_fact &bounds)
+{
+  if (bounds.has_lo)
+    fprintf (file, "(assert (>= v " HOST_WIDE_INT_PRINT_DEC "))\n",
+	     bounds.lo.to_shwi ());
+  if (bounds.has_hi)
+    fprintf (file, "(assert (<= v " HOST_WIDE_INT_PRINT_DEC "))\n",
+	     bounds.hi.to_shwi ());
+}
+
+/* Emit one QF_LIA SMT-LIB2 verification condition certifying the range-
+   subsumption/disjointness obligation just concluded at LOC for CALLEE:
+   ESTABLISHED is the caller's own already-established interval (the
+   axioms -- e.g. from an earlier call's postcondition), REQUIRED is the
+   callee's own combined precondition interval (the goal).
+   PROVEN_FALSE selects which of the two symmetric refutations applies
+   (see the plan's worked examples): OA_PROVEN_TRUE asserts ESTABLISHED
+   plus the *negation* of REQUIRED (refuting "a value satisfying
+   ESTABLISHED could violate REQUIRED"); OA_PROVEN_FALSE asserts
+   ESTABLISHED plus REQUIRED directly, unnegated (refuting "a value
+   satisfying ESTABLISHED could ever satisfy REQUIRED at all"). Either
+   way, an independent SMT solver reporting "unsat" on the emitted query
+   confirms the same conclusion this compiler already reached, without
+   having to trust this compiler's own reasoning.  */
+
+static void
+oa_emit_range_certificate (location_t loc, tree callee,
+			    oa_range_fact &established, oa_range_fact &required,
+			    bool proven_false)
+{
+  FILE *file = oa_get_proof_dump_file ();
+  if (!file)
+    return;
+
+  expanded_location xloc = expand_location (loc);
+  fprintf (file, "; obligation: call to %s at %s:%d\n",
+	   IDENTIFIER_POINTER (DECL_NAME (callee)), xloc.file, xloc.line);
+  fprintf (file, "(push 1)\n");
+  fprintf (file, "(declare-const v Int)\n");
+  oa_print_range_assertions (file, established);
+
+  if (!proven_false)
+    {
+      /* OA_PROVEN_TRUE: refute the negation of REQUIRED.  */
+      fprintf (file, "(assert (not (and");
+      if (required.has_lo)
+	fprintf (file, " (>= v " HOST_WIDE_INT_PRINT_DEC ")",
+		 required.lo.to_shwi ());
+      if (required.has_hi)
+	fprintf (file, " (<= v " HOST_WIDE_INT_PRINT_DEC ")",
+		 required.hi.to_shwi ());
+      fprintf (file, ")))\n");
+    }
+  else
+    {
+      /* OA_PROVEN_FALSE: refute REQUIRED directly.  */
+      fprintf (file, "(assert (and");
+      if (required.has_lo)
+	fprintf (file, " (>= v " HOST_WIDE_INT_PRINT_DEC ")",
+		 required.lo.to_shwi ());
+      if (required.has_hi)
+	fprintf (file, " (<= v " HOST_WIDE_INT_PRINT_DEC ")",
+		 required.hi.to_shwi ());
+      fprintf (file, "))\n");
+    }
+  fprintf (file, "(check-sat)\n; expect: unsat\n(pop 1)\n\n");
+  fflush (file);
+}
+
+/* Emit one SMT-LIB2 verification condition (within the file-wide
+   QF_UFLIA logic, see oa_get_proof_dump_file's own comment) certifying the
+   predicate-chaining obligation just concluded at LOC for CALLEE, about
+   PRED_FN: ESTABLISHED_VALUE is the truth value an earlier call's
+   postcondition guarantees for "pred_fn applied to this value";
+   REQUIRED_VALUE is the truth value CALLEE's own precondition requires
+   for the very same value.  A single 0-ary Bool constant models
+   "pred_fn applied to this value" (sound here precisely because both
+   sides name the identical value -- see oa_predicate_check_inner_call's
+   own comment on why this never needs to inspect PRED_FN's actual
+   definition).
+
+   PROVEN_FALSE selects which of the two symmetric refutations applies,
+   exactly mirroring oa_emit_range_certificate: since ESTABLISHED_VALUE
+   fixes the constant to one definite value, OA_PROVEN_TRUE (reached
+   when ESTABLISHED_VALUE == REQUIRED_VALUE) asserts the *negation* of
+   REQUIRED_VALUE (refuting "the fixed value could differ from what's
+   required"); OA_PROVEN_FALSE (reached when they differ) asserts
+   REQUIRED_VALUE directly, unnegated (refuting "the fixed value could
+   ever equal what's required").  Either way, unsat confirms the
+   conclusion independently.  */
+
+static void
+oa_emit_predicate_certificate (location_t loc, tree callee, tree pred_fn,
+				bool established_value, bool required_value,
+				bool proven_false)
+{
+  FILE *file = oa_get_proof_dump_file ();
+  if (!file)
+    return;
+
+  expanded_location xloc = expand_location (loc);
+  const char *name = IDENTIFIER_POINTER (DECL_NAME (pred_fn));
+  fprintf (file, "; obligation: call to %s at %s:%d\n",
+	   IDENTIFIER_POINTER (DECL_NAME (callee)), xloc.file, xloc.line);
+  fprintf (file, "(push 1)\n");
+  fprintf (file, "(declare-const %s Bool)\n", name);
+  fprintf (file, "(assert %s%s%s)\n",
+	   established_value ? "" : "(not ", name, established_value ? "" : ")");
+
+  /* Goal assertion: negated (opposite literal of REQUIRED_VALUE) unless
+     PROVEN_FALSE, in which case it's asserted directly.  */
+  bool assert_true = proven_false ? required_value : !required_value;
+  fprintf (file, "(assert %s%s%s)\n",
+	   assert_true ? "" : "(not ", name, assert_true ? "" : ")");
+
+  fprintf (file, "(check-sat)\n; expect: unsat\n(pop 1)\n\n");
+  fflush (file);
+}
+
 /* -fcontract-conveyor-proofs: the built-in counterpart to
    oa_handle_call_precondition_obligation above, extending call-site
    precondition-obligation checking beyond std::is_object_address to
@@ -6810,6 +6990,13 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	  switch (pr)
 	    {
 	    case OA_PROVEN_TRUE:
+	      /* Same polarity as the precondition's own requirement --
+		 see oa_predicate_check_inner_call's own comment.  */
+	      if (flag_dump_contract_proofs)
+		oa_emit_predicate_certificate (EXPR_LOCATION (call), callee,
+						pred_fn, /*established_value=*/!negated,
+						/*required_value=*/!negated,
+						/*proven_false=*/false);
 	      break;
 	    case OA_PROVEN_FALSE:
 	      error_at (EXPR_LOCATION (call),
@@ -6819,6 +7006,13 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 			substituted, callee, pred_fn, substituted,
 			negated ? "true" : "false", negated ? "false" : "true");
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      /* Opposite polarity -- established_value is therefore
+		 NEGATED (not !negated) here.  */
+	      if (flag_dump_contract_proofs)
+		oa_emit_predicate_certificate (EXPR_LOCATION (call), callee,
+						pred_fn, /*established_value=*/negated,
+						/*required_value=*/!negated,
+						/*proven_false=*/true);
 	      break;
 	    case OA_UNKNOWN:
 	      warning_at (EXPR_LOCATION (call), 0,
@@ -6851,12 +7045,28 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
       switch (r)
 	{
 	case OA_PROVEN_TRUE:
+	  if (flag_dump_contract_proofs)
+	    {
+	      oa_range_fact established;
+	      if (oa_get_range (substituted, env, &established))
+		oa_emit_range_certificate (EXPR_LOCATION (call), callee,
+					   established, range_facts[idx],
+					   /*proven_false=*/false);
+	    }
 	  break;
 	case OA_PROVEN_FALSE:
 	  error_at (EXPR_LOCATION (call),
 		    "argument %qE provably violates the precondition "
 		    "of %qD", substituted, callee);
 	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  if (flag_dump_contract_proofs)
+	    {
+	      oa_range_fact established;
+	      if (oa_get_range (substituted, env, &established))
+		oa_emit_range_certificate (EXPR_LOCATION (call), callee,
+					   established, range_facts[idx],
+					   /*proven_false=*/true);
+	    }
 	  break;
 	case OA_UNKNOWN:
 	  warning_at (EXPR_LOCATION (call), 0,

@@ -3442,6 +3442,17 @@ code may still be correct at run time even though it could not be
 verified). This option has no effect unless
 @option{-fcontract-control-objects} is also enabled.
 
+@opindex fdump-contract-proofs
+@item -fdump-contract-proofs=@var{file}
+Emit an SMT-LIB2 verification condition to @var{file} for every
+conveyor-proof obligation concluded by
+@option{-fcontract-conveyor-proofs} (proven or disproven; nothing is
+emitted for an obligation left unknown, since there is no proof to
+certify). Each emitted query is independently checkable by any
+SMT-LIB2-compatible solver (e.g.@: Z3, CVC5): feeding it to a solver and
+observing @code{unsat} confirms the compiler's own conclusion without
+having to trust this compiler's own reasoning.
+
 @opindex fcontracts-implicit-include
 @opindex fno-contracts-implicit-include
 @item -fcontracts-implicit-include
