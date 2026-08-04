@@ -199,6 +199,55 @@ extern void maybe_inherit_virtual_contract		(tree, tree);
 extern void resolve_object_address_in_function		(tree);
 extern bool oa_stmt_terminates_p			(tree);
 
+/* A standalone GCC plugin's own entry points into the object-address
+   ("oa_*") analysis engine (see
+   .claude/plans/stateless-jumping-shore.md) -- deliberately a small,
+   separate, opaque-handle API, not a raw exposure of oa_env/oa_range_fact
+   (both stay entirely private to contracts.cc).  Never used by anything
+   in the compiler itself; resolve_object_address_in_function above (the
+   compiler's own, mandatory, always-armed-with-no-callback entry point)
+   is completely unaffected by any of this.  */
+
+/* Opaque; a plugin only ever holds a pointer, never the definition.  */
+struct oa_analysis_env;
+
+/* A static checker's answer is never just binary -- see the "Diagnostics"
+   discussion in .claude/plans/stateless-jumping-shore.md.  OA_PROVEN_FALSE
+   is a real, confirmed violation; OA_UNKNOWN is a much weaker "couldn't
+   verify" signal and must not be reported with the same severity.  */
+enum oa_proof_result { OA_PROVEN_TRUE, OA_PROVEN_FALSE, OA_UNKNOWN };
+
+/* Walk FNDECL's own pre-genericize body using the existing oa_walk_stmt
+   machinery unchanged (so IILE recursion, loop-header/if-else merging,
+   and existing fact tracking, including a callee's postcondition
+   becoming a trusted fact at an assignment from its call, are all
+   inherited for free) -- but additionally invoke CALLBACK at every call
+   site encountered, in program order, with the environment as it stands
+   at that exact point.  */
+extern void oa_walk_function_calls
+  (tree fndecl,
+   void (*callback) (tree call, tree callee, oa_analysis_env *env, void *data),
+   void *data);
+
+/* Is EXPR, evaluated under ENV's current facts, provably CMP CONST_VAL
+   for every value it could take, provably CMP CONST_VAL for no value it
+   could take, or is ENV's knowledge insufficient to conclude either?  */
+extern oa_proof_result oa_env_check_comparison
+  (oa_analysis_env *env, tree expr, tree_code cmp, tree const_val);
+
+/* Split COND into its top-level '&&' conjuncts.  */
+extern void oa_collect_conjuncts_public (tree *cond, vec<tree *> *out);
+
+/* If CONJUNCT has the shape "param OP const" (bare PARM_DECL only, same
+   restriction as the compiler's own is_object_address(param) matching),
+   recognize it and fill PARAM_OUT/CODE_OUT/CONST_VAL_OUT.  */
+extern bool oa_match_simple_comparison
+  (tree conjunct, tree *param_out, tree_code *code_out, tree *const_val_out);
+
+/* Is CONTRACT (a PRECONDITION_STMT/POSTCONDITION_STMT belonging to
+   OWNER_FN) currently conveyor-active (non-ignored)?  */
+extern bool oa_contract_conveyor_active_public (tree contract, tree owner_fn);
+
 /* True while parsing/substituting a contract condition that opts into
    constification via its control type's constify member (D4324: off by
    default).  */

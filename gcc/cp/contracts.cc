@@ -5254,6 +5254,17 @@ private:
   hash_map<tree, oa_range_fact> m_range_map;
 };
 
+/* An empty, no-added-members subclass, purely so a plugin (which only
+   ever sees the opaque forward declaration in contracts.h) can hold an
+   oa_analysis_env* without oa_env's own definition being plugin-visible
+   at all -- see .claude/plans/stateless-jumping-shore.md. Never
+   separately instantiated: oa_walk_function_calls always actually hands
+   a plugin callback a real oa_env's address, reinterpreted, which is
+   safe here since there is no vtable and not one added byte of layout
+   to diverge on.  */
+
+struct oa_analysis_env : public oa_env {};
+
 /* True if CALL is a statically-resolvable, immediately-invoked closure
    call -- a CALL_EXPR whose callee is directly a lambda's operator(),
    invoked on a closure object constructed right there in the same
@@ -6689,6 +6700,19 @@ oa_call_postcondition_range_p (tree call, oa_range_fact *out)
   return scratch.range_get (result_id, out);
 }
 
+/* A standalone plugin's own call-site fact-tracing (see
+   .claude/plans/stateless-jumping-shore.md and oa_walk_function_calls
+   further below) needs to observe every call site oa_scan_calls_in_expr
+   already finds, with the environment as it stands at that exact point
+   -- set/cleared by oa_walk_function_calls around a single function's
+   walk, the same save/restore discipline as OA_RETURN_TRACKING uses
+   elsewhere in this file.  NULL (the default) means "no plugin callback
+   active," so resolve_object_address_in_function's own, unrelated
+   callers are completely unaffected.  */
+
+static void (*oa_call_site_callback) (tree, tree, oa_env *, void *);
+static void *oa_call_site_callback_data;
+
 /* Scan *EXPR (an arbitrary expression, not necessarily a full
    statement -- e.g. a RETURN_EXPR's value or an INIT_EXPR/MODIFY_EXPR's
    RHS) for every CALL_EXPR it contains, including nested calls within
@@ -6712,6 +6736,12 @@ oa_scan_calls_in_expr (tree *expr, oa_env &env)
       if (is_object_address_call_p (t, &arg))
 	return NULL_TREE;
       oa_handle_call_precondition_obligation (t, *e);
+      if (oa_call_site_callback)
+	{
+	  tree callee = cp_get_callee_fndecl_nofold (t);
+	  if (callee && TREE_CODE (callee) == FUNCTION_DECL)
+	    oa_call_site_callback (t, callee, e, oa_call_site_callback_data);
+	}
       return NULL_TREE;
     }, &env, NULL);
 }
@@ -8247,11 +8277,15 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
   CONTRACT_CONDITION (contract) = cond;
 }
 
-/* Top-level entry point, called from finish_function alongside
-   check_conveyor_function_body, at the same pre-genericize timing.  */
+/* Shared body for resolve_object_address_in_function and
+   oa_walk_function_calls below: both need exactly the same early exits
+   and the same fresh, freshly-tracked oa_env walk over FNDECL's own
+   pre-genericize body -- they differ only in whether a plugin's own
+   call-site callback is armed (via oa_call_site_callback) around the
+   walk, which is oa_walk_function_calls's own, sole addition.  */
 
-void
-resolve_object_address_in_function (tree fndecl)
+static void
+oa_resolve_object_address_in_function_1 (tree fndecl)
 {
   if (!flag_contract_control_objects)
     return;
@@ -8282,6 +8316,170 @@ resolve_object_address_in_function (tree fndecl)
   oa_walk_stmt (&body, env);
 
   oa_return_tracking = false;
+}
+
+/* Top-level entry point, called from finish_function alongside
+   check_conveyor_function_body, at the same pre-genericize timing.  */
+
+void
+resolve_object_address_in_function (tree fndecl)
+{
+  oa_resolve_object_address_in_function_1 (fndecl);
+}
+
+/* A standalone plugin's own entry point (see
+   .claude/plans/stateless-jumping-shore.md): identical walk, but with
+   CALLBACK armed so it additionally observes every call site
+   oa_scan_calls_in_expr finds during that walk, in program order, with
+   the environment as it stands at that exact point -- including any
+   facts already established by an earlier call's postcondition in the
+   same straight-line sequence, since that chaining already happens
+   unconditionally as part of the walk (see the INIT_EXPR/MODIFY_EXPR
+   case in oa_walk_stmt).  Never invoked from anywhere in the compiler
+   itself; CALLBACK is always NULL when resolve_object_address_in_function
+   runs, so that mandatory pass is entirely unaffected.  */
+
+void
+oa_walk_function_calls (tree fndecl,
+			 void (*callback) (tree, tree, oa_analysis_env *, void *),
+			 void *data)
+{
+  void (*saved_callback) (tree, tree, oa_env *, void *) = oa_call_site_callback;
+  void *saved_data = oa_call_site_callback_data;
+
+  oa_call_site_callback
+    = reinterpret_cast<void (*) (tree, tree, oa_env *, void *)> (callback);
+  oa_call_site_callback_data = data;
+
+  oa_resolve_object_address_in_function_1 (fndecl);
+
+  oa_call_site_callback = saved_callback;
+  oa_call_site_callback_data = saved_data;
+}
+
+/* Thin wrapper over oa_collect_conjuncts, for a plugin (see
+   .claude/plans/stateless-jumping-shore.md).  */
+
+void
+oa_collect_conjuncts_public (tree *cond, vec<tree *> *out)
+{
+  oa_collect_conjuncts (cond, out);
+}
+
+/* Thin wrapper over oa_contract_conveyor_active_p, for a plugin.  */
+
+bool
+oa_contract_conveyor_active_public (tree contract, tree owner_fn)
+{
+  return oa_contract_conveyor_active_p (contract, owner_fn);
+}
+
+/* Recognize CONJUNCT as the shape "param OP const" (or "const OP
+   param", normalized so the returned CODE_OUT always reads left-to-
+   right as "param CODE_OUT const"), for a plugin's own precondition-
+   obligation checking (see .claude/plans/stateless-jumping-shore.md).
+   Only a bare PARM_DECL is recognized for "param" -- the same
+   restriction oa_handle_call_precondition_obligation's own
+   is_object_address(param) matching already has, kept consistent here
+   for the general comparison case.  Shares its shape-recognition logic
+   with oa_refine_single_comparison, but in "just recognize" mode: no
+   env is touched, and (unlike that function) there is no "asserted_true"
+   direction to negate, since this is answering "what does this conjunct
+   require," not "what does asserting it true establish."  */
+
+bool
+oa_match_simple_comparison (tree conjunct, tree *param_out, tree_code *code_out,
+			    tree *const_val_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  enum tree_code code = TREE_CODE (c);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return false;
+
+  tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+
+  tree param, const_val;
+  bool flipped;
+  if (TREE_CODE (op0) == PARM_DECL && TREE_CODE (op1) == INTEGER_CST)
+    param = op0, const_val = op1, flipped = false;
+  else if (TREE_CODE (op1) == PARM_DECL && TREE_CODE (op0) == INTEGER_CST)
+    param = op1, const_val = op0, flipped = true;
+  else
+    return false;
+
+  if (flipped)
+    switch (code)
+      {
+      case LT_EXPR: code = GT_EXPR; break;
+      case LE_EXPR: code = GE_EXPR; break;
+      case GT_EXPR: code = LT_EXPR; break;
+      case GE_EXPR: code = LE_EXPR; break;
+      default: break;
+      }
+
+  *param_out = param;
+  *code_out = code;
+  *const_val_out = const_val;
+  return true;
+}
+
+/* The three-way answer a plugin's own call-site precondition-obligation
+   check actually needs (see .claude/plans/stateless-jumping-shore.md):
+   is EXPR, under ENV's current facts, provably CMP CONST_VAL for every
+   value it could take (OA_PROVEN_TRUE), provably CMP CONST_VAL for no
+   value it could take (OA_PROVEN_FALSE), or is ENV's known range for
+   EXPR (if any) insufficient to conclude either (OA_UNKNOWN, which also
+   covers "no range fact known for EXPR at all")?  Built on oa_get_range's
+   [lo,hi] interval -- a genuinely new query direction: oa_refine_single_
+   comparison only ever *establishes* facts from an asserted-true
+   condition, never needing a proven-false direction before this.  A
+   range fact tied to a pointer's own array-base (BASE != NULL_TREE, see
+   oa_range_fact's own comment) isn't a plain numeric interval comparable
+   against CONST_VAL the same way, so that case is conservatively
+   OA_UNKNOWN too.  */
+
+oa_proof_result
+oa_env_check_comparison (oa_analysis_env *env, tree expr, tree_code cmp,
+			 tree const_val)
+{
+  oa_range_fact fact;
+  if (!oa_get_range (expr, *env, &fact) || fact.base != NULL_TREE)
+    return OA_UNKNOWN;
+
+  widest_int val = wi::to_widest (const_val);
+
+  switch (cmp)
+    {
+    case GT_EXPR:
+      if (fact.has_lo && fact.lo > val) return OA_PROVEN_TRUE;
+      if (fact.has_hi && fact.hi <= val) return OA_PROVEN_FALSE;
+      return OA_UNKNOWN;
+    case GE_EXPR:
+      if (fact.has_lo && fact.lo >= val) return OA_PROVEN_TRUE;
+      if (fact.has_hi && fact.hi < val) return OA_PROVEN_FALSE;
+      return OA_UNKNOWN;
+    case LT_EXPR:
+      if (fact.has_hi && fact.hi < val) return OA_PROVEN_TRUE;
+      if (fact.has_lo && fact.lo >= val) return OA_PROVEN_FALSE;
+      return OA_UNKNOWN;
+    case LE_EXPR:
+      if (fact.has_hi && fact.hi <= val) return OA_PROVEN_TRUE;
+      if (fact.has_lo && fact.lo > val) return OA_PROVEN_FALSE;
+      return OA_UNKNOWN;
+    case EQ_EXPR:
+      if (fact.has_lo && fact.has_hi && fact.lo == val && fact.hi == val)
+	return OA_PROVEN_TRUE;
+      if ((fact.has_lo && fact.lo > val) || (fact.has_hi && fact.hi < val))
+	return OA_PROVEN_FALSE;
+      return OA_UNKNOWN;
+    default:
+      return OA_UNKNOWN;
+    }
 }
 
 /* Validate BASE_TYPE as the target of a base_contract<BASE_TYPE>() used
