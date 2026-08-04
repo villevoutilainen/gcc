@@ -1939,6 +1939,16 @@ by an earlier call's symbolic postcondition on the same object, and not
 invalidated since, at call sites; requires -fcontract-control-objects to
 have any effect.
 
+fcontract-symbolic-runtime-checks
+C++ ObjC++ Var(flag_contract_symbolic_runtime_checks) Init(0)
+Generate real (opt-in) runtime code for symbolic contracts: a symbolic
+postcondition records that it was established, and a symbolic
+precondition consults that record, via the control object's operator(),
+instead of ever evaluating the original (possibly bodiless) condition
+directly; the record is shared across translation units and threads.
+Independent of -fcontract-symbolic-proofs; requires
+-fcontract-control-objects to have any effect.
+
 fdump-contract-proofs=
 C++ ObjC++ RejectNegative Joined Var(flag_dump_contract_proofs)
 -fdump-contract-proofs=<file>	Emit an SMT-LIB2 verification condition to
