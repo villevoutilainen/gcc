@@ -3453,6 +3453,18 @@ effect on any proof's outcome, and no effect at all unless both
 @option{-fcontract-conveyor-proofs} and
 @option{-fdump-contract-proofs=} are also enabled.
 
+@opindex fcontract-symbolic-proofs
+@item -fcontract-symbolic-proofs
+Statically check that a symbolic contract's precondition (a contract
+whose control object's @code{is_symbolic} member returns true) is
+established by an earlier call's own symbolic postcondition on the same
+object, and has not been invalidated since -- either by reassigning the
+object, or by any other call taking its address. Each obligation is
+either proven (silently discharged), proven false (a hard error, since
+this is a confirmed contradiction), or left unknown (a warning). This
+option has no effect unless @option{-fcontract-control-objects} is also
+enabled.
+
 @opindex fdump-contract-proofs
 @item -fdump-contract-proofs=@var{file}
 Emit an SMT-LIB2 verification condition to @var{file} for every

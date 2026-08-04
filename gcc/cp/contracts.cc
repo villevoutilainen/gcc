@@ -5117,6 +5117,23 @@ struct oa_range_fact
   widest_int lo, hi;
 };
 
+/* -fcontract-symbolic-proofs: a symbolic contract's own established
+   fact -- "PRED_FN holds (POLARITY true) or its negation holds
+   (POLARITY false) for this object identity", e.g. for
+   'post<ctrl>(is_opened(this))', PRED_FN is the FUNCTION_DECL for
+   'is_opened' and POLARITY is true.  Unlike oa_range_fact (a numeric
+   interval, meaningful even partially known via has_lo/has_hi alone),
+   this fact only ever means anything as a whole -- there's no partial
+   "known lower bound" analogue -- so it's carried by value the same
+   way, but merged by full agreement only (oa_env::symbolic_merge_with),
+   not by combining partial information.  */
+
+struct oa_symbolic_fact
+{
+  tree pred_fn;
+  bool polarity;
+};
+
 /* Forward-declared: oa_derivation's full definition (contract-conveyor-
    proof-provenance's own "why does this range fact hold" node, see its
    own comment further below) isn't needed here, only pointers to it --
@@ -5175,6 +5192,44 @@ public:
   }
   void range_invalidate (tree decl) { m_range_map.remove (decl); }
 
+  /* -fcontract-symbolic-proofs only: another independent per-decl
+     fact -- see oa_symbolic_fact's own comment.  Always empty -- and
+     therefore free -- unless -fcontract-symbolic-proofs is active.
+     symbolic_merge_with mirrors range_merge_with's own "keep only if
+     both sides agree" shape, but requires full agreement (same
+     PRED_FN, same POLARITY), not partial-bound combination -- there is
+     no meaningful "weaker combined fact" for two different symbolic
+     claims the way there is for two numeric intervals.  */
+  bool symbolic_get (tree decl, oa_symbolic_fact *out)
+  {
+    oa_symbolic_fact *v = m_symbolic_map.get (decl);
+    if (!v)
+      return false;
+    *out = *v;
+    return true;
+  }
+  void symbolic_set (tree decl, tree pred_fn, bool polarity)
+  {
+    oa_symbolic_fact fact;
+    fact.pred_fn = pred_fn;
+    fact.polarity = polarity;
+    m_symbolic_map.put (decl, fact);
+  }
+  void symbolic_invalidate (tree decl) { m_symbolic_map.remove (decl); }
+  void symbolic_merge_with (oa_env &other)
+  {
+    auto_vec<tree> to_remove;
+    for (auto it : m_symbolic_map)
+      {
+	oa_symbolic_fact *ov = other.m_symbolic_map.get (it.first);
+	if (!ov || ov->pred_fn != it.second.pred_fn
+	    || ov->polarity != it.second.polarity)
+	  to_remove.safe_push (it.first);
+      }
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_symbolic_map.remove (to_remove[i]);
+  }
+
   /* -fcontract-conveyor-proof-provenance only: a fourth, independent
      per-decl map, "why is DECL's range fact what it is" -- pointers
      only (oa_derivation nodes themselves are owned and allocated
@@ -5207,6 +5262,8 @@ public:
       r.m_range_map.put (it.first, it.second);
     for (auto it : m_deriv_map)
       r.m_deriv_map.put (it.first, it.second);
+    for (auto it : m_symbolic_map)
+      r.m_symbolic_map.put (it.first, it.second);
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -5226,6 +5283,9 @@ public:
     m_deriv_map.empty ();
     for (auto it : other.m_deriv_map)
       m_deriv_map.put (it.first, it.second);
+    m_symbolic_map.empty ();
+    for (auto it : other.m_symbolic_map)
+      m_symbolic_map.put (it.first, it.second);
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -5301,6 +5361,7 @@ private:
   hash_map<tree, bool> m_nz_map;
   hash_map<tree, oa_range_fact> m_range_map;
   hash_map<tree, oa_derivation *> m_deriv_map;
+  hash_map<tree, oa_symbolic_fact> m_symbolic_map;
 };
 
 /* An empty, no-added-members subclass, purely so a plugin (which only
@@ -5550,6 +5611,59 @@ static bool oa_call_postcondition_object_address_p (tree call);
 static bool oa_call_postcondition_nonzero_p (tree call);
 static bool oa_call_postcondition_range_p (tree call, oa_range_fact *out,
 					    oa_derivation **deriv_out = NULL);
+
+/* -fcontract-symbolic-proofs: resolve EXPR to the one canonical decl
+   identifying "the object this expression names" -- true for 'this'
+   (returns the current function's own 'this' PARM_DECL), '&decl' where
+   decl is a VAR_DECL/PARM_DECL (returns decl), or a bare VAR_DECL/
+   PARM_DECL used directly (returns itself, for a value that's already
+   a pointer). Conservatively false for anything else.
+
+   Factored out of oa_provable_p's own identical 'this'/'&decl'
+   recognition just below (same shapes, same stripping), but
+   deliberately simpler: no IILE-capture-proxy redirection, no oa_env
+   dependency at all -- this only ever needs a stable identity key for
+   the symbolic-fact map, never a truth value, so none of
+   oa_provable_p's *provability* logic applies here.  */
+
+static bool
+oa_object_identity_decl (tree expr, tree *decl_out)
+{
+  if (expr == NULL_TREE || expr == error_mark_node)
+    return false;
+
+  expr = STRIP_ANY_LOCATION_WRAPPER (expr);
+  while (TREE_CODE (expr) == NON_LVALUE_EXPR
+	 || TREE_CODE (expr) == NOP_EXPR
+	 || TREE_CODE (expr) == CONVERT_EXPR
+	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
+    expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+
+  if (is_this_parameter (expr))
+    {
+      *decl_out = expr;
+      return true;
+    }
+
+  if (TREE_CODE (expr) == ADDR_EXPR)
+    {
+      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
+	{
+	  *decl_out = op;
+	  return true;
+	}
+      return false;
+    }
+
+  if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
+    {
+      *decl_out = expr;
+      return true;
+    }
+
+  return false;
+}
 
 /* True if EXPR (evaluated in ENV) is provably an object address:
    'this'; '&obj' where obj is a parameter/variable of object type; a
@@ -6706,6 +6820,26 @@ oa_contract_conveyor_active_p (tree contract, tree owner_fn = NULL_TREE)
   return !contract_control_is_ignored (ctrl, side);
 }
 
+/* -fcontract-symbolic-proofs: does CONTRACT (a PRECONDITION_STMT/
+   POSTCONDITION_STMT belonging to OWNER_FN) currently have an active
+   (non-ignored) symbolic control object?  Mirrors oa_contract_conveyor_
+   active_p immediately above exactly, keyed on is_symbolic instead of
+   is_conveyor.  */
+
+static bool
+oa_contract_symbolic_active_p (tree contract, tree owner_fn = NULL_TREE)
+{
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  if (!ctrl || !flag_contract_control_objects)
+    return false;
+  if (!owner_fn)
+    owner_fn = current_function_decl;
+  contract_check_side side = contract_side_of (contract, owner_fn);
+  if (!contract_control_is_symbolic (ctrl, side))
+    return false;
+  return !contract_control_is_ignored (ctrl, side);
+}
+
 /* Discharge the call-site precondition-obligation mechanism (item 7):
    the complement of a postcondition being a trusted fact for the caller
    (item 6) -- here, a *precondition's* is_object_address(E) conjunct
@@ -6857,6 +6991,21 @@ oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
     return false;
 
   tree arg = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (c, 0));
+  /* -fcontract-symbolic-proofs: an argument that's already a pointer
+     (e.g. 'this' passed to a predicate expecting the same pointer type)
+     can still arrive wrapped in a plain conversion node (found via
+     direct testing with 'is_opened (this)': a NOP_EXPR, not the
+     VIEW_CONVERT_EXPR the const-qualification comment elsewhere in this
+     file warns about, but the same class of "decl-identity-preserving
+     wrapper" concern) -- strip it here the same way oa_provable_p's own
+     generic conversion-stripping loop already does, so 'this' (and
+     other pointer-typed arguments reached the same way) aren't silently
+     rejected as "not a bare decl".  */
+  while (TREE_CODE (arg) == NON_LVALUE_EXPR
+	 || TREE_CODE (arg) == NOP_EXPR
+	 || TREE_CODE (arg) == CONVERT_EXPR
+	 || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
   if (TREE_CODE (arg) != PARM_DECL && !VAR_P (arg))
     return false;
 
@@ -7392,6 +7541,169 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
     }
 }
 
+/* -fcontract-symbolic-proofs: positionally substitute PARAM (one of
+   CALLEE's own PARM_DECLs -- including its implicit 'this', which is
+   just an ordinary leading PARM_DECL here, no special-casing needed)
+   to CALL's actual argument expression -- the same DECL_ARGUMENTS-to-
+   CALL_EXPR_ARG correspondence used throughout this file's other call-
+   site checks.  Returns NULL_TREE if PARAM isn't actually one of
+   CALLEE's own parameters, or CALL doesn't supply that many
+   arguments.  */
+
+static tree
+oa_substitute_call_arg (tree callee, tree call, tree param)
+{
+  unsigned argno = 0;
+  for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
+    if (p == param)
+      return argno < (unsigned) call_expr_nargs (call)
+	? CALL_EXPR_ARG (call, argno) : NULL_TREE;
+  return NULL_TREE;
+}
+
+/* -fcontract-symbolic-proofs: for each of CALL's callee's own active
+   (non-ignored) symbolic postconditions, record the fact it establishes
+   -- e.g. 'post<ctrl>(is_opened(this))' called as 'f.open()' records
+   "is_opened holds for f" in ENV, keyed by f's own object identity
+   (oa_object_identity_decl).  Symmetric complement of oa_handle_call_
+   symbolic_precondition_obligation below (that one *consumes* a fact
+   this one *produces*) -- see .claude/plans/stateless-jumping-shore.md.  */
+
+static void
+oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return;
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      if (!oa_contract_symbolic_active_p (contract, callee))
+	continue;
+
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree pred_fn, arg_decl;
+	  bool negated;
+	  if (!oa_predicate_conjunct_shape (*conjuncts[i], &pred_fn, &arg_decl,
+					    &negated))
+	    continue;
+
+	  tree substituted = oa_substitute_call_arg (callee, call, arg_decl);
+	  if (!substituted)
+	    continue;
+
+	  tree identity;
+	  if (!oa_object_identity_decl (substituted, &identity))
+	    continue;
+
+	  env.symbolic_set (identity, pred_fn, !negated);
+	}
+    }
+}
+
+/* -fcontract-symbolic-proofs: for each of CALL's callee's own active
+   (non-ignored) symbolic preconditions, check that ENV already has a
+   matching fact for the substituted argument's own object identity --
+   established by an earlier call's own symbolic postcondition
+   (oa_handle_call_symbolic_postcondition_establishment above), and not
+   invalidated since (see this function's own callers in oa_scan_
+   calls_in_expr for the invalidation rules).  */
+
+static void
+oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return;
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract))
+	continue;
+      if (!oa_contract_symbolic_active_p (contract, callee))
+	continue;
+
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree pred_fn, arg_decl;
+	  bool negated;
+	  if (!oa_predicate_conjunct_shape (*conjuncts[i], &pred_fn, &arg_decl,
+					    &negated))
+	    continue;
+
+	  tree substituted = oa_substitute_call_arg (callee, call, arg_decl);
+	  if (!substituted)
+	    continue;
+
+	  tree identity;
+	  if (!oa_object_identity_decl (substituted, &identity))
+	    continue;
+
+	  bool required = !negated;
+	  oa_symbolic_fact fact;
+	  if (!env.symbolic_get (identity, &fact) || fact.pred_fn != pred_fn)
+	    {
+	      warning_at (EXPR_LOCATION (call), 0,
+			  "cannot verify that %qD (%qE) holds, as required by "
+			  "the precondition of %qD", pred_fn, substituted, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      continue;
+	    }
+
+	  if (fact.polarity == required)
+	    continue; /* Proven true: silently discharged.  */
+
+	  error_at (EXPR_LOCATION (call),
+		    "argument %qE provably violates the precondition of "
+		    "%qD: %qD (%qE) is established %s, but the "
+		    "precondition requires it to be %s",
+		    substituted, callee, pred_fn, substituted,
+		    fact.polarity ? "true" : "false", required ? "true" : "false");
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	}
+    }
+}
+
+/* -fcontract-symbolic-proofs invalidation rule 2 (see the plan's own
+   "Invalidation" design section): a tracked object's fact must be
+   invalidated by *any* call taking its address, not just the one
+   recognized as re-establishing it -- the analysis has no way to know
+   an arbitrary, uncontracted function didn't change that object's
+   logical state.  Invalidating unconditionally here and letting oa_
+   handle_call_symbolic_postcondition_establishment run *after* this in
+   oa_scan_calls_in_expr (so it cleanly overwrites whatever this just
+   invalidated) is simpler than trying to detect and skip the
+   re-establishing case specially.  */
+
+static void
+oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
+{
+  int nargs = call_expr_nargs (call);
+  for (int i = 0; i < nargs; ++i)
+    {
+      tree identity;
+      if (oa_object_identity_decl (CALL_EXPR_ARG (call, i), &identity))
+	env.symbolic_invalidate (identity);
+    }
+}
+
 /* D4324/P2680 item 6: the complementary direction from item 7 above --
    a callee's own non-ignored, conveyor *postcondition* is a trusted
    fact about *any* call's return value, not a per-call obligation the
@@ -7629,6 +7941,12 @@ oa_scan_calls_in_expr (tree *expr, oa_env &env)
       oa_handle_call_precondition_obligation (t, *e);
       if (flag_contract_conveyor_proofs)
 	oa_handle_call_conveyor_proof_obligation (t, *e);
+      if (flag_contract_symbolic_proofs)
+	{
+	  oa_handle_call_symbolic_precondition_obligation (t, *e);
+	  oa_invalidate_symbolic_facts_for_call_args (t, *e);
+	  oa_handle_call_symbolic_postcondition_establishment (t, *e);
+	}
       if (oa_call_site_callback)
 	{
 	  tree callee = cp_get_callee_fndecl_nofold (t);
@@ -8289,6 +8607,9 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	 prevent for the numeric fact.  A no-op when tracking is
 	 inactive (the map is always empty).  */
       checkenv.deriv_invalidate (d);
+      /* -fcontract-symbolic-proofs: same staleness concern, for the
+	 symbolic-fact map -- a no-op when tracking is inactive.  */
+      checkenv.symbolic_invalidate (d);
 
       bool saved_tracking = oa_return_tracking;
       oa_return_tracking = false;
@@ -8343,6 +8664,12 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	env.deriv_set (range_result_decls[i], range_result_derivs[i]);
       else
 	env.deriv_invalidate (range_result_decls[i]);
+      /* -fcontract-symbolic-proofs: a decl reassigned anywhere in the
+	 loop's repeated part unconditionally loses its symbolic fact --
+	 unlike a numeric range, there's no sound "loop invariant" to
+	 compute for a symbolic fact (see the plan's own scope notes), so
+	 this is simply always invalidated, never re-established here.  */
+      env.symbolic_invalidate (range_result_decls[i]);
     }
 }
 
@@ -8798,6 +9125,11 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      env.range_set (decl, fact);
 	    else
 	      env.range_invalidate (decl);
+	    /* -fcontract-symbolic-proofs: a freshly declared decl never had
+	       a prior entry, so this is a defensive no-op in practice --
+	       kept for the same completeness/consistency reasons as the
+	       is_object_address/range invalidation just above.  */
+	    env.symbolic_invalidate (decl);
 	  }
 	else if (VAR_P (decl) && INTEGRAL_TYPE_P (TREE_TYPE (decl)))
 	  {
@@ -8864,6 +9196,18 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  {
 	    oa_scan_div_mod_in_expr (&TREE_OPERAND (t, 1), env);
 	    oa_scan_array_bounds_in_expr (&TREE_OPERAND (t, 1), env);
+	  }
+	/* -fcontract-symbolic-proofs invalidation rule 1: any reassignment
+	   of a tracked object's identity invalidates its symbolic facts,
+	   whatever the object's type -- unlike the is_object_address/range
+	   tracking below, a symbolic fact can be keyed on a class-typed
+	   decl (e.g. 'f = io_facility();'), which neither the pointer nor
+	   the integral branch below ever reaches.  */
+	if (flag_contract_symbolic_proofs)
+	  {
+	    tree identity;
+	    if (oa_object_identity_decl (lhs, &identity))
+	      env.symbolic_invalidate (identity);
 	  }
 	if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 	    && POINTER_TYPE_P (TREE_TYPE (lhs)))
@@ -8935,6 +9279,11 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       with's own comment; a no-op entirely when provenance
 	       tracking is inactive.  */
 	    then_env.deriv_merge_with (else_env, TREE_OPERAND (t, 0));
+	    /* -fcontract-symbolic-proofs: a symbolic fact survives the
+	       merge only if both branches agree on it exactly (same
+	       PRED_FN, same polarity) -- see oa_env::symbolic_merge_with's
+	       own comment.  */
+	    then_env.symbolic_merge_with (else_env);
 	    env.assign (then_env);
 	  }
 	return;
@@ -8986,6 +9335,9 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       with's own comment; a no-op entirely when provenance
 	       tracking is inactive.  */
 	    then_env.deriv_merge_with (else_env, IF_COND (t));
+	    /* -fcontract-symbolic-proofs: same merge rule as COND_EXPR
+	       above.  */
+	    then_env.symbolic_merge_with (else_env);
 	    env.assign (then_env);
 	  }
 	return;
@@ -9087,6 +9439,9 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      {
 		merged.merge_with (current);
 		merged.range_merge_with (current);
+		/* -fcontract-symbolic-proofs: same merge rule as the
+		   if/else case.  */
+		merged.symbolic_merge_with (current);
 	      }
 	  };
 
@@ -9142,6 +9497,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      {
 		merged.merge_with (env);
 		merged.range_merge_with (env);
+		merged.symbolic_merge_with (env);
 	      }
 	    any_result = true;
 	  }

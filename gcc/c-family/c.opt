@@ -1932,6 +1932,13 @@ contract clause, or which if/else branches, established it) so
 from its branches instead of asserting it as a bare premise; has no effect
 without both -fcontract-conveyor-proofs and -fdump-contract-proofs=.
 
+fcontract-symbolic-proofs
+C++ ObjC++ Var(flag_contract_symbolic_proofs) Init(0)
+Statically check that a symbolic contract's precondition is established
+by an earlier call's symbolic postcondition on the same object, and not
+invalidated since, at call sites; requires -fcontract-control-objects to
+have any effect.
+
 fdump-contract-proofs=
 C++ ObjC++ RejectNegative Joined Var(flag_dump_contract_proofs)
 -fdump-contract-proofs=<file>	Emit an SMT-LIB2 verification condition to
