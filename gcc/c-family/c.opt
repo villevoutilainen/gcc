@@ -1924,6 +1924,14 @@ std::is_object_address to general comparison conjuncts and
 predicate-chaining through an earlier call's postcondition; requires
 -fcontract-control-objects to have any effect.
 
+fcontract-conveyor-proof-provenance
+C++ ObjC++ Var(flag_contract_conveyor_proof_provenance) Init(0)
+Track why each range fact used by -fcontract-conveyor-proofs holds (which
+contract clause, or which if/else branches, established it) so
+-fdump-contract-proofs= can emit a certificate that derives a joined fact
+from its branches instead of asserting it as a bare premise; has no effect
+without both -fcontract-conveyor-proofs and -fdump-contract-proofs=.
+
 fdump-contract-proofs=
 C++ ObjC++ RejectNegative Joined Var(flag_dump_contract_proofs)
 -fdump-contract-proofs=<file>	Emit an SMT-LIB2 verification condition to

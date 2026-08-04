@@ -3442,6 +3442,17 @@ code may still be correct at run time even though it could not be
 verified). This option has no effect unless
 @option{-fcontract-control-objects} is also enabled.
 
+@opindex fcontract-conveyor-proof-provenance
+@item -fcontract-conveyor-proof-provenance
+Track why each range fact used by @option{-fcontract-conveyor-proofs}
+holds -- which contract clause established it, or which if/else
+branches it was joined from -- so that @option{-fdump-contract-proofs=}
+can emit a certificate that *derives* a joined fact from its
+contributing branches instead of asserting it as a bare premise. Has no
+effect on any proof's outcome, and no effect at all unless both
+@option{-fcontract-conveyor-proofs} and
+@option{-fdump-contract-proofs=} are also enabled.
+
 @opindex fdump-contract-proofs
 @item -fdump-contract-proofs=@var{file}
 Emit an SMT-LIB2 verification condition to @var{file} for every

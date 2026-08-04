@@ -5103,6 +5103,14 @@ struct oa_range_fact
   widest_int lo, hi;
 };
 
+/* Forward-declared: oa_derivation's full definition (contract-conveyor-
+   proof-provenance's own "why does this range fact hold" node, see its
+   own comment further below) isn't needed here, only pointers to it --
+   oa_env only ever stores/copies/merges pointers, never builds nodes
+   itself (that's oa_provenance_env's job, defined alongside
+   oa_derivation below oa_env).  */
+struct oa_derivation;
+
 class oa_env
 {
 public:
@@ -5153,6 +5161,27 @@ public:
   }
   void range_invalidate (tree decl) { m_range_map.remove (decl); }
 
+  /* -fcontract-conveyor-proof-provenance only: a fourth, independent
+     per-decl map, "why is DECL's range fact what it is" -- pointers
+     only (oa_derivation nodes themselves are owned and allocated
+     elsewhere, see oa_provenance_env below), copied/assigned by value
+     exactly like the three maps above so it follows an oa_env copy
+     (e.g. a branch's own then_env/else_env) automatically. Always empty
+     -- and therefore free -- unless -fcontract-conveyor-proof-provenance
+     is active; see oa_active_provenance's own comment. Merging (unlike
+     the three maps above, which have simple, context-free merge rules)
+     needs to *build a new node*, so its body is defined out-of-line,
+     after oa_derivation/oa_provenance_env's own definitions further
+     below.  */
+  oa_derivation *deriv_get (tree decl)
+  {
+    oa_derivation **v = m_deriv_map.get (decl);
+    return v ? *v : NULL;
+  }
+  void deriv_set (tree decl, oa_derivation *d) { m_deriv_map.put (decl, d); }
+  void deriv_invalidate (tree decl) { m_deriv_map.remove (decl); }
+  void deriv_merge_with (oa_env &other, tree branch_cond);
+
   oa_env copy ()
   {
     oa_env r;
@@ -5162,6 +5191,8 @@ public:
       r.m_nz_map.put (it.first, it.second);
     for (auto it : m_range_map)
       r.m_range_map.put (it.first, it.second);
+    for (auto it : m_deriv_map)
+      r.m_deriv_map.put (it.first, it.second);
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -5178,6 +5209,9 @@ public:
     m_range_map.empty ();
     for (auto it : other.m_range_map)
       m_range_map.put (it.first, it.second);
+    m_deriv_map.empty ();
+    for (auto it : other.m_deriv_map)
+      m_deriv_map.put (it.first, it.second);
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -5252,6 +5286,7 @@ private:
   hash_map<tree, bool> m_map;
   hash_map<tree, bool> m_nz_map;
   hash_map<tree, oa_range_fact> m_range_map;
+  hash_map<tree, oa_derivation *> m_deriv_map;
 };
 
 /* An empty, no-added-members subclass, purely so a plugin (which only
@@ -5264,6 +5299,149 @@ private:
    to diverge on.  */
 
 struct oa_analysis_env : public oa_env {};
+
+/* -fcontract-conveyor-proof-provenance: a *why*, alongside the numeric
+   *what* oa_range_fact already tracks -- see
+   .claude/plans/stateless-jumping-shore.md.
+
+   OA_DERIV_AXIOM: a leaf -- FACT came directly from asserting
+   SOURCE_CONTRACT's own conjunct(s) true (a precondition/postcondition/
+   contract_assert), no further derivation needed.  OA_DERIV_CALL: FACT
+   is CALLEE's own combined postcondition range, substituted at a call
+   -- wraps one or more OA_DERIV_AXIOM children (one per contributing
+   postcondition conjunct); already fully faithful with no merging
+   involved, so this node exists mainly to record which function's
+   postcondition it came from for the rendered certificate's own
+   comments.  OA_DERIV_IF_JOIN: FACT is the union of THEN_DERIV's and
+   ELSE_DERIV's own facts under BRANCH_COND, mirroring
+   oa_env::range_merge_with's own min/max join one level up.
+
+   Node *pointers* are freely shared/aliased across independent oa_env
+   copies (see oa_env's own new m_deriv_map below) -- a derivation node
+   is immutable once built, exactly like a `tree` node is shared
+   throughout the rest of the compiler, so aliasing across branch copies
+   is always safe.  */
+
+enum oa_derivation_kind { OA_DERIV_AXIOM, OA_DERIV_CALL, OA_DERIV_IF_JOIN };
+
+struct oa_derivation
+{
+  oa_derivation_kind kind;
+  oa_range_fact fact;
+  tree source_contract;	/* OA_DERIV_AXIOM.  */
+  tree callee;			/* OA_DERIV_CALL.  */
+  auto_vec<oa_derivation *> children;	/* OA_DERIV_CALL: one per axiom conjunct.  */
+  tree branch_cond;		/* OA_DERIV_IF_JOIN.  */
+  oa_derivation *then_deriv, *else_deriv;	/* OA_DERIV_IF_JOIN.  */
+};
+
+/* The *allocator/owner* for every oa_derivation node built during one
+   function's own oa_walk_stmt walk -- deliberately NOT where the
+   per-decl "which derivation does this decl currently have" mapping
+   lives (that has to copy/merge across if/else branches in lockstep
+   with the numeric facts, so it lives directly in oa_env itself instead
+   -- see oa_env::m_deriv_map below). This class's only job is handing
+   out freshly built nodes and freeing all of them together when the
+   function's analysis is done, rather than making every individual hook
+   manage its own nodes' lifetimes.  */
+
+class oa_provenance_env
+{
+public:
+  ~oa_provenance_env ()
+  {
+    for (unsigned i = 0; i < m_owned.length (); ++i)
+      delete m_owned[i];
+  }
+
+  oa_derivation *make_axiom (const oa_range_fact &fact, tree source_contract)
+  {
+    oa_derivation *d = new oa_derivation ();
+    d->kind = OA_DERIV_AXIOM;
+    d->fact = fact;
+    d->source_contract = source_contract;
+    m_owned.safe_push (d);
+    return d;
+  }
+
+  oa_derivation *make_call (const oa_range_fact &fact, tree callee)
+  {
+    oa_derivation *d = new oa_derivation ();
+    d->kind = OA_DERIV_CALL;
+    d->fact = fact;
+    d->callee = callee;
+    m_owned.safe_push (d);
+    return d;
+  }
+
+  oa_derivation *make_if_join (const oa_range_fact &fact, tree branch_cond,
+			       oa_derivation *then_deriv, oa_derivation *else_deriv)
+  {
+    oa_derivation *d = new oa_derivation ();
+    d->kind = OA_DERIV_IF_JOIN;
+    d->fact = fact;
+    d->branch_cond = branch_cond;
+    d->then_deriv = then_deriv;
+    d->else_deriv = else_deriv;
+    m_owned.safe_push (d);
+    return d;
+  }
+
+private:
+  auto_vec<oa_derivation *> m_owned;
+};
+
+/* NULL (the default) means provenance tracking is completely inactive --
+   every hook that would otherwise call into this allocator degrades to
+   a no-op, so this feature has zero effect on anything unless both
+   -fcontract-conveyor-proofs and -fcontract-conveyor-proof-provenance
+   are on.  Set/cleared by oa_resolve_object_address_in_function_1
+   around one function's own walk, mirroring oa_call_site_callback's
+   own save/restore discipline.  */
+
+static oa_provenance_env *oa_active_provenance;
+
+/* Out-of-line (needs oa_provenance_env's full definition, and
+   oa_active_provenance, both only just declared above -- see the
+   in-class declaration's own comment).  A no-op entirely when
+   provenance tracking is inactive.  Mirrors range_merge_with's own
+   shape exactly, but a decl is only kept if the *numeric* merge
+   (range_merge_with, already called by the caller before this) itself
+   still has a fact for it -- if either side lacks a derivation (e.g.
+   one arm's fact came from a source this feature doesn't yet build
+   derivations for), the decl is simply left without one, and the
+   certificate renderer falls back to a flat bare-premise assertion for
+   it, exactly as if provenance tracking had never run at all.  */
+
+void
+oa_env::deriv_merge_with (oa_env &other, tree branch_cond)
+{
+  if (!oa_active_provenance)
+    return;
+
+  auto_vec<tree> to_remove;
+  auto_vec<tree> to_keep;
+  auto_vec<oa_derivation *> kept_derivs;
+  for (auto it : m_deriv_map)
+    {
+      oa_derivation **ov = other.m_deriv_map.get (it.first);
+      oa_range_fact merged_fact;
+      if (!ov || !range_get (it.first, &merged_fact))
+	{
+	  to_remove.safe_push (it.first);
+	  continue;
+	}
+      oa_derivation *joined
+	= oa_active_provenance->make_if_join (merged_fact, branch_cond,
+					       it.second, *ov);
+      to_keep.safe_push (it.first);
+      kept_derivs.safe_push (joined);
+    }
+  for (unsigned i = 0; i < to_remove.length (); ++i)
+    m_deriv_map.remove (to_remove[i]);
+  for (unsigned i = 0; i < to_keep.length (); ++i)
+    m_deriv_map.put (to_keep[i], kept_derivs[i]);
+}
 
 /* True if CALL is a statically-resolvable, immediately-invoked closure
    call -- a CALL_EXPR whose callee is directly a lambda's operator(),
@@ -5330,7 +5508,8 @@ static bool oa_resolve_iile_call (tree call, oa_env &env);
    unlike item 7's complementary precondition-*obligation* direction.  */
 static bool oa_call_postcondition_object_address_p (tree call);
 static bool oa_call_postcondition_nonzero_p (tree call);
-static bool oa_call_postcondition_range_p (tree call, oa_range_fact *out);
+static bool oa_call_postcondition_range_p (tree call, oa_range_fact *out,
+					    oa_derivation **deriv_out = NULL);
 
 /* True if EXPR (evaluated in ENV) is provably an object address:
    'this'; '&obj' where obj is a parameter/variable of object type; a
@@ -6587,6 +6766,11 @@ static oa_proof_result oa_env_check_comparison_1
 static oa_proof_result oa_env_check_range_subsumption
   (oa_env &env, tree expr, oa_range_fact &req);
 
+/* Forward-declared: defined later, right after oa_call_postcondition_
+   range_p; oa_handle_call_conveyor_proof_obligation below needs it
+   before that point in the file.  */
+static oa_derivation *oa_get_range_derivation (tree expr, oa_env &env);
+
 /* -fcontract-conveyor-proofs: recognize CONJUNCT as "pred_fn (decl)" or
    its negation "!pred_fn (decl)" -- a call to some ordinary FUNCTION_DECL
    with exactly one argument, itself a bare PARM_DECL/VAR_DECL (never a
@@ -6775,6 +6959,66 @@ oa_print_range_assertions (FILE *file, oa_range_fact &bounds)
 	     bounds.hi.to_shwi ());
 }
 
+/* -fcontract-conveyor-proof-provenance: format FACT as a single inline
+   SMT-LIB2 boolean expression on "v" into BUF (a plain fixed buffer --
+   these expressions are always tiny, and this file otherwise avoids any
+   std::string dependency question by just not introducing one).  Used
+   as an implication's consequent by oa_emit_derivation_premises's own
+   OA_DERIV_IF_JOIN case below.  */
+
+static void
+oa_range_fact_inline_expr (oa_range_fact &fact, char *buf, size_t buflen)
+{
+  if (!fact.has_lo && !fact.has_hi)
+    snprintf (buf, buflen, "true");
+  else if (fact.has_lo && fact.has_hi)
+    snprintf (buf, buflen,
+	      "(and (>= v " HOST_WIDE_INT_PRINT_DEC ") (<= v "
+	      HOST_WIDE_INT_PRINT_DEC "))",
+	      fact.lo.to_shwi (), fact.hi.to_shwi ());
+  else if (fact.has_lo)
+    snprintf (buf, buflen, "(>= v " HOST_WIDE_INT_PRINT_DEC ")",
+	      fact.lo.to_shwi ());
+  else
+    snprintf (buf, buflen, "(<= v " HOST_WIDE_INT_PRINT_DEC ")",
+	      fact.hi.to_shwi ());
+}
+
+/* -fcontract-conveyor-proof-provenance: emit DERIV's own bounds on "v"
+   to FILE as premises, in place of oa_print_range_assertions's own flat
+   rendering -- OA_DERIV_AXIOM/OA_DERIV_CALL are exactly that same flat
+   case (already fully faithful, see oa_derivation's own comment).
+   OA_DERIV_IF_JOIN is a genuine case split: a fresh branch-condition
+   constant (BRANCH_COUNTER supplies distinct names across a whole
+   certificate) and one implication per arm. Only one level of case-
+   split provenance is unpacked this way -- each arm's own bounds are
+   rendered directly from its already-merged FACT (oa_range_fact_inline_
+   expr) rather than recursing into a *nested* IF_JOIN inside that arm;
+   a deeper if/else chain than that falls back to its own outer FACT,
+   exactly like any other source this increment doesn't build
+   derivations for (loops, IILE) -- safe, just less faithful, matching
+   the plan's own documented scope.  */
+
+static void
+oa_emit_derivation_premises (FILE *file, oa_derivation *deriv,
+			      unsigned *branch_counter)
+{
+  if (deriv->kind == OA_DERIV_IF_JOIN)
+    {
+      unsigned n = (*branch_counter)++;
+      char then_buf[128], else_buf[128];
+      oa_range_fact_inline_expr (deriv->then_deriv->fact, then_buf,
+				 sizeof (then_buf));
+      oa_range_fact_inline_expr (deriv->else_deriv->fact, else_buf,
+				 sizeof (else_buf));
+      fprintf (file, "(declare-const branch_%u Bool)\n", n);
+      fprintf (file, "(assert (=> branch_%u %s))\n", n, then_buf);
+      fprintf (file, "(assert (=> (not branch_%u) %s))\n", n, else_buf);
+      return;
+    }
+  oa_print_range_assertions (file, deriv->fact);
+}
+
 /* Emit one QF_LIA SMT-LIB2 verification condition certifying the range-
    subsumption/disjointness obligation just concluded at LOC for CALLEE:
    ESTABLISHED is the caller's own already-established interval (the
@@ -6788,12 +7032,17 @@ oa_print_range_assertions (FILE *file, oa_range_fact &bounds)
    satisfying ESTABLISHED could ever satisfy REQUIRED at all"). Either
    way, an independent SMT solver reporting "unsat" on the emitted query
    confirms the same conclusion this compiler already reached, without
-   having to trust this compiler's own reasoning.  */
+   having to trust this compiler's own reasoning.
+
+   ESTABLISHED_DERIV, when non-NULL (-fcontract-conveyor-proof-
+   provenance active and a derivation was actually recorded for this
+   obligation's argument), is rendered instead of the flat ESTABLISHED
+   bare premise -- see oa_emit_derivation_premises above.  */
 
 static void
 oa_emit_range_certificate (location_t loc, tree callee,
 			    oa_range_fact &established, oa_range_fact &required,
-			    bool proven_false)
+			    bool proven_false, oa_derivation *established_deriv)
 {
   FILE *file = oa_get_proof_dump_file ();
   if (!file)
@@ -6804,7 +7053,13 @@ oa_emit_range_certificate (location_t loc, tree callee,
 	   IDENTIFIER_POINTER (DECL_NAME (callee)), xloc.file, xloc.line);
   fprintf (file, "(push 1)\n");
   fprintf (file, "(declare-const v Int)\n");
-  oa_print_range_assertions (file, established);
+  if (established_deriv)
+    {
+      unsigned branch_counter = 0;
+      oa_emit_derivation_premises (file, established_deriv, &branch_counter);
+    }
+  else
+    oa_print_range_assertions (file, established);
 
   if (!proven_false)
     {
@@ -7051,7 +7306,8 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	      if (oa_get_range (substituted, env, &established))
 		oa_emit_range_certificate (EXPR_LOCATION (call), callee,
 					   established, range_facts[idx],
-					   /*proven_false=*/false);
+					   /*proven_false=*/false,
+					   oa_get_range_derivation (substituted, env));
 	    }
 	  break;
 	case OA_PROVEN_FALSE:
@@ -7065,7 +7321,8 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	      if (oa_get_range (substituted, env, &established))
 		oa_emit_range_certificate (EXPR_LOCATION (call), callee,
 					   established, range_facts[idx],
-					   /*proven_false=*/true);
+					   /*proven_false=*/true,
+					   oa_get_range_derivation (substituted, env));
 	    }
 	  break;
 	case OA_UNKNOWN:
@@ -7182,8 +7439,20 @@ oa_call_postcondition_nonzero_p (tree call)
    key -- a deliberate simplification for the rare case of more than
    one named postcondition; in practice a function has at most one.  */
 
+/* DERIV_OUT, when non-NULL and -fcontract-conveyor-proof-provenance is
+   active, receives an OA_DERIV_CALL node wrapping one OA_DERIV_AXIOM per
+   contributing postcondition contract (in practice at most one, per
+   this function's own comment above) -- a thin, purely additional
+   recording of exactly what's already being computed below, changing no
+   computation itself.  A second call to this same function purely to
+   fetch DERIV_OUT (see oa_get_range_derivation further below) is
+   deliberately allowed to redundantly recompute the fact: this is a
+   cheap, side-effect-free query over contract specifiers, and only ever
+   happens when provenance tracking is explicitly requested.  */
+
 static bool
-oa_call_postcondition_range_p (tree call, oa_range_fact *out)
+oa_call_postcondition_range_p (tree call, oa_range_fact *out,
+				oa_derivation **deriv_out)
 {
   tree callee = cp_get_callee_fndecl_nofold (call);
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
@@ -7192,6 +7461,7 @@ oa_call_postcondition_range_p (tree call, oa_range_fact *out)
   tree result_id = NULL_TREE;
   oa_env scratch;
   bool any = false;
+  tree last_contract = NULL_TREE;
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
       tree contract = CONTRACT_STATEMENT (as);
@@ -7211,6 +7481,7 @@ oa_call_postcondition_range_p (tree call, oa_range_fact *out)
 	continue;
 
       any = true;
+      last_contract = contract;
       auto_vec<tree *> conjuncts;
       oa_collect_conjuncts (&cond, &conjuncts);
       for (unsigned i = 0; i < conjuncts.length (); ++i)
@@ -7218,7 +7489,49 @@ oa_call_postcondition_range_p (tree call, oa_range_fact *out)
     }
   if (!any || !result_id)
     return false;
-  return scratch.range_get (result_id, out);
+  if (!scratch.range_get (result_id, out))
+    return false;
+
+  if (deriv_out && oa_active_provenance)
+    {
+      oa_derivation *axiom
+	= oa_active_provenance->make_axiom (*out, last_contract);
+      oa_derivation *call_deriv = oa_active_provenance->make_call (*out, callee);
+      call_deriv->children.safe_push (axiom);
+      *deriv_out = call_deriv;
+    }
+  return true;
+}
+
+/* -fcontract-conveyor-proof-provenance: EXPR's own derivation, if one
+   can be built -- a decl simply propagates forward whatever derivation
+   it already has (an ordinary copy, 'int s = r;', doesn't lose
+   provenance); a call defers to oa_call_postcondition_range_p above.
+   Anything else (array offsets, IILE recursion, ...) returns NULL --
+   out of scope for this increment (see the plan's own "deliberately out
+   of scope" section) -- the certificate renderer's own fallback to a
+   flat bare-premise assertion handles that safely.  Always NULL when
+   provenance tracking is inactive.  */
+
+static oa_derivation *
+oa_get_range_derivation (tree expr, oa_env &env)
+{
+  if (!oa_active_provenance)
+    return NULL;
+
+  expr = STRIP_ANY_LOCATION_WRAPPER (expr);
+  if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
+    return env.deriv_get (expr);
+
+  if (TREE_CODE (expr) == CALL_EXPR)
+    {
+      oa_range_fact fact;
+      oa_derivation *deriv = NULL;
+      oa_call_postcondition_range_p (expr, &fact, &deriv);
+      return deriv;
+    }
+
+  return NULL;
 }
 
 /* A standalone plugin's own call-site fact-tracing (see
@@ -8365,6 +8678,15 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      env.range_set (decl, fact);
 	    else
 	      env.range_invalidate (decl);
+	    /* -fcontract-conveyor-proof-provenance: mirror the numeric
+	       tracking just above, one level up -- a no-op entirely when
+	       provenance tracking is inactive.  */
+	    oa_derivation *deriv = DECL_INITIAL (decl)
+	      ? oa_get_range_derivation (DECL_INITIAL (decl), env) : NULL;
+	    if (deriv)
+	      env.deriv_set (decl, deriv);
+	    else
+	      env.deriv_invalidate (decl);
 	  }
 	return;
       }
@@ -8432,6 +8754,14 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      env.range_set (lhs, fact);
 	    else
 	      env.range_invalidate (lhs);
+	    /* -fcontract-conveyor-proof-provenance: mirror the numeric
+	       tracking just above, one level up -- a no-op entirely when
+	       provenance tracking is inactive.  */
+	    oa_derivation *deriv = oa_get_range_derivation (rhs, env);
+	    if (deriv)
+	      env.deriv_set (lhs, deriv);
+	    else
+	      env.deriv_invalidate (lhs);
 	  }
 	return;
       }
@@ -8465,6 +8795,11 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  {
 	    then_env.merge_with (else_env);
 	    then_env.range_merge_with (else_env);
+	    /* -fcontract-conveyor-proof-provenance: mirror the numeric
+	       merge just above, one level up -- see oa_env::deriv_merge_
+	       with's own comment; a no-op entirely when provenance
+	       tracking is inactive.  */
+	    then_env.deriv_merge_with (else_env, TREE_OPERAND (t, 0));
 	    env.assign (then_env);
 	  }
 	return;
@@ -8511,6 +8846,11 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  {
 	    then_env.merge_with (else_env);
 	    then_env.range_merge_with (else_env);
+	    /* -fcontract-conveyor-proof-provenance: mirror the numeric
+	       merge just above, one level up -- see oa_env::deriv_merge_
+	       with's own comment; a no-op entirely when provenance
+	       tracking is inactive.  */
+	    then_env.deriv_merge_with (else_env, IF_COND (t));
 	    env.assign (then_env);
 	  }
 	return;
@@ -8836,8 +9176,22 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
   oa_return_all_provable = false;
   oa_return_seen = false;
 
+  /* -fcontract-conveyor-proof-provenance: arm the provenance side-table
+     for this one function's walk, mirroring oa_walk_function_calls's own
+     save/restore of oa_call_site_callback -- see oa_active_provenance's
+     own comment.  Only ever non-NULL here (never nested: this function
+     is the sole top-level driver, not itself reentrant), but save/
+     restore defensively anyway, the same discipline used everywhere
+     else in this file for this kind of cross-cutting optional state.  */
+  oa_provenance_env prov_env;
+  oa_provenance_env *saved_provenance = oa_active_provenance;
+  oa_active_provenance
+    = (flag_contract_conveyor_proofs && flag_contract_conveyor_proof_provenance)
+      ? &prov_env : NULL;
+
   oa_walk_stmt (&body, env);
 
+  oa_active_provenance = saved_provenance;
   oa_return_tracking = false;
 }
 
