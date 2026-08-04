@@ -8187,33 +8187,40 @@ oa_call_symbolic_range_p (tree call, oa_range_fact *out)
   return scratch.range_get (result_id, out);
 }
 
+/* -fcontract-symbolic-runtime-checks (Mechanism B): one (CONTRACT,
+   PARAM, RANGE) match found by oa_precondition_symbolic_ranges below --
+   CONTRACT is needed by the caller to find CTRL/build the dispatch,
+   PARAM to positionally find the actual argument at the call site.  */
+
+struct oa_symbolic_precondition_match
+{
+  tree contract;
+  tree param;
+  oa_range_fact range;
+};
+
 /* -fcontract-symbolic-runtime-checks (Mechanism B): the consult-side
    counterpart of oa_call_symbolic_range_p above -- CALLEE's own
-   precondition (not postcondition), comparing one of CALLEE's *own
-   parameters* directly (not its return-value binder), the bare-scalar
-   shape Mechanism A's ptr->field-only comparison recognizer
-   (oa_symbolic_comparison_conjunct_shape) deliberately excludes.
-   Unlike that function, which combines every conjunct into one
+   precondition(s) (not postconditions), each comparing one or more of
+   CALLEE's *own parameters* directly (not its return-value binder), the
+   bare-scalar shape Mechanism A's ptr->field-only comparison recognizer
+   (oa_symbolic_comparison_conjunct_shape) deliberately excludes.  Unlike
+   oa_call_symbolic_range_p, which combines every conjunct into one
    accumulator keyed by a single, already-known identifier
    (POSTCONDITION_IDENTIFIER), a precondition may compare several
-   different parameters across its conjuncts -- oa_match_simple_
-   comparison identifies the first bare PARM_DECL any conjunct names,
-   then every conjunct is refined into SCRATCH exactly as before, and
-   the result is read back for that one parameter.  A callee may have
-   more than one symbolic-active precondition contract (rare, but
-   possible with multiple control-object specifiers); only the first
-   one whose shape matches is used -- a real, narrow limitation for
-   B1's scope, not a silent unsoundness (a second, non-matching
-   contract's own conjuncts simply aren't recognized as this shape at
-   all, so they fall through this function entirely, same as any other
-   unsupported shape elsewhere in this file).  Returns the matched
-   CONTRACT (needed by the caller to find CTRL/build the dispatch) and
-   PARAM (needed to positionally find the actual argument at the call
-   site) alongside the combined range.  */
+   different parameters across its own conjuncts, and a callee may have
+   more than one symbolic-active precondition contract at all (multiple
+   control-object specifiers) -- so this collects every distinct bare
+   PARM_DECL named by *any* conjunct of *every* symbolic-active
+   precondition, appending one match per (contract, param) pair found,
+   rather than stopping at the first.  Each contract's own conjuncts are
+   refined into a single fresh SCRATCH env shared by every parameter that
+   contract names, exactly as oa_call_symbolic_range_p does for its own
+   single identifier.  */
 
-static bool
-oa_precondition_symbolic_range_p (tree callee, tree *contract_out,
-				   tree *param_out, oa_range_fact *out)
+static void
+oa_precondition_symbolic_ranges (tree callee,
+				  vec<oa_symbolic_precondition_match> *out)
 {
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
@@ -8228,29 +8235,33 @@ oa_precondition_symbolic_range_p (tree callee, tree *contract_out,
 
       auto_vec<tree *> conjuncts;
       oa_collect_conjuncts (&cond, &conjuncts);
-      tree param = NULL_TREE;
-      for (unsigned i = 0; i < conjuncts.length () && !param; ++i)
+      auto_vec<tree> params;
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree p, const_val;
 	  tree_code code;
 	  if (oa_match_simple_comparison (*conjuncts[i], &p, &code, &const_val)
-	      && TREE_CODE (p) == PARM_DECL)
-	    param = p;
+	      && TREE_CODE (p) == PARM_DECL
+	      && !params.contains (p))
+	    params.safe_push (p);
 	}
-      if (!param)
+      if (params.is_empty ())
 	continue;
 
       oa_env scratch;
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	oa_refine_single_comparison (*conjuncts[i], scratch, /*asserted_true=*/true);
-      if (!scratch.range_get (param, out))
-	continue;
 
-      *contract_out = contract;
-      *param_out = param;
-      return true;
+      for (unsigned i = 0; i < params.length (); ++i)
+	{
+	  oa_range_fact range;
+	  if (!scratch.range_get (params[i], &range))
+	    continue;
+	  oa_symbolic_precondition_match match
+	    = { contract, params[i], range };
+	  out->safe_push (match);
+	}
     }
-  return false;
 }
 
 /* -fcontract-symbolic-runtime-checks (Mechanism B): the shared shadow
@@ -8584,16 +8595,15 @@ oa_build_symbolic_scalar_check_bind (tree contract, tree ctrl, tree op,
 /* -fcontract-symbolic-runtime-checks (Mechanism B): the consult side's
    own per-call-site obligation check, wired into oa_scan_calls_in_expr
    alongside the existing symbolic/conveyor handlers -- for CALL's
-   callee, if oa_precondition_symbolic_range_p finds a symbolic-active
-   precondition comparing one of the callee's own bare parameters,
-   positionally substitute to find the *actual argument expression* at
-   this call site (the same DECL_ARGUMENTS-to-CALL_EXPR_ARG pattern
-   used throughout this file), and, only if that argument is a decl
-   already carrying a registered shadow (env.shadow_get) -- otherwise
-   there is nothing to check yet on this path, per this walk's own
-   program-order-incremental population, and no runtime check is
-   emitted at all for this call site -- append a fully self-contained
-   dispatch (oa_build_symbolic_scalar_check_bind) to *EXTRA, force-
+   callee, for *every* symbolic-active precondition/parameter match
+   oa_precondition_symbolic_ranges finds (a callee may have more than one
+   symbolic-active precondition, and any one of them may itself compare
+   more than one of its own parameters -- each gets its own independent
+   check here now, rather than only ever the first), positionally
+   substitute to find the *actual argument expression* at this call site
+   (the same DECL_ARGUMENTS-to-CALL_EXPR_ARG pattern used throughout
+   this file), and append a fully self-contained dispatch
+   (oa_build_symbolic_scalar_check_bind) to *EXTRA for each, force-
    appended exactly like every other Mechanism B codegen this walk
    injects.  */
 
@@ -8606,68 +8616,73 @@ oa_handle_call_symbolic_scalar_obligation (tree call, oa_env &env, tree *extra)
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
 
-  tree contract, param;
-  oa_range_fact required;
-  if (!oa_precondition_symbolic_range_p (callee, &contract, &param, &required))
-    return;
+  auto_vec<oa_symbolic_precondition_match> matches;
+  oa_precondition_symbolic_ranges (callee, &matches);
 
-  tree substituted = oa_substitute_call_arg (callee, call, param);
-  if (!substituted)
-    return;
-  tree arg_decl = STRIP_ANY_LOCATION_WRAPPER (substituted);
-  if (!VAR_P (arg_decl) && TREE_CODE (arg_decl) != PARM_DECL)
-    return;
-
-  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
-  tree control_op = contract_control_operator (ctrl);
-  if (!control_op)
-    return;
-  tree thunk_fn = get_or_build_scalar_precondition_thunk (contract, callee,
-							   required);
-
-  tree shadow = env.shadow_get (arg_decl);
-  tree args_ptr;
-  tree dummy_wrap = NULL_TREE;
-  location_t loc = EXPR_LOCATION (call);
-  if (shadow)
-    args_ptr = fold_convert (ptr_type_node, build_fold_addr_expr (shadow));
-  else
+  for (unsigned m = 0; m < matches.length (); ++m)
     {
-      /* No shadow at all for this argument -- correctly "never
-	 established," not "nothing to check": dispatch anyway, using a
-	 throwaway, zero-initialized (IS_VALID false) temporary in place
-	 of a real shadow, so the control object still gets invoked and
-	 correctly sees the check fail -- matching Mechanism A's own "no
-	 record means the check fails" semantics (a value that was never
-	 proven safe must not silently pass just because this walk never
-	 saw it established anywhere reachable from here).  Declared in
-	 its own small BIND_EXPR (DUMMY_WRAP), wrapping the real check
-	 dispatch as its body, so it only needs to stay in scope for
-	 exactly as long as that dispatch's own use of its address does.  */
-      tree type = oa_symbolic_shadow_type ();
-      tree dummy = build_decl (loc, VAR_DECL, NULL_TREE, type);
-      DECL_ARTIFICIAL (dummy) = 1;
-      DECL_IGNORED_P (dummy) = 1;
-      DECL_CONTEXT (dummy) = current_function_decl;
-      DECL_INITIAL (dummy) = build_constructor (type, NULL);
-      layout_decl (dummy, 0);
+      tree contract = matches[m].contract;
+      tree param = matches[m].param;
+      oa_range_fact required = matches[m].range;
 
-      dummy_wrap = build3 (BIND_EXPR, void_type_node, dummy, NULL_TREE, NULL_TREE);
-      tree stmt_list = alloc_stmt_list ();
-      append_to_statement_list_force (build_stmt (loc, DECL_EXPR, dummy),
-				       &stmt_list);
-      BIND_EXPR_BODY (dummy_wrap) = stmt_list;
-      args_ptr = fold_convert (ptr_type_node, build_fold_addr_expr (dummy));
-    }
+      tree substituted = oa_substitute_call_arg (callee, call, param);
+      if (!substituted)
+	continue;
+      tree arg_decl = STRIP_ANY_LOCATION_WRAPPER (substituted);
+      if (!VAR_P (arg_decl) && TREE_CODE (arg_decl) != PARM_DECL)
+	continue;
 
-  tree bind = oa_build_symbolic_scalar_check_bind (contract, ctrl, control_op,
-						    thunk_fn, args_ptr);
-  if (dummy_wrap)
-    {
-      append_to_statement_list_force (bind, &BIND_EXPR_BODY (dummy_wrap));
-      bind = dummy_wrap;
+      tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+      tree control_op = contract_control_operator (ctrl);
+      if (!control_op)
+	continue;
+      tree thunk_fn = get_or_build_scalar_precondition_thunk (contract, callee,
+							       required);
+
+      tree shadow = env.shadow_get (arg_decl);
+      tree args_ptr;
+      tree dummy_wrap = NULL_TREE;
+      location_t loc = EXPR_LOCATION (call);
+      if (shadow)
+	args_ptr = fold_convert (ptr_type_node, build_fold_addr_expr (shadow));
+      else
+	{
+	  /* No shadow at all for this argument -- correctly "never
+	     established," not "nothing to check": dispatch anyway, using a
+	     throwaway, zero-initialized (IS_VALID false) temporary in place
+	     of a real shadow, so the control object still gets invoked and
+	     correctly sees the check fail -- matching Mechanism A's own "no
+	     record means the check fails" semantics (a value that was never
+	     proven safe must not silently pass just because this walk never
+	     saw it established anywhere reachable from here).  Declared in
+	     its own small BIND_EXPR (DUMMY_WRAP), wrapping the real check
+	     dispatch as its body, so it only needs to stay in scope for
+	     exactly as long as that dispatch's own use of its address does.  */
+	  tree type = oa_symbolic_shadow_type ();
+	  tree dummy = build_decl (loc, VAR_DECL, NULL_TREE, type);
+	  DECL_ARTIFICIAL (dummy) = 1;
+	  DECL_IGNORED_P (dummy) = 1;
+	  DECL_CONTEXT (dummy) = current_function_decl;
+	  DECL_INITIAL (dummy) = build_constructor (type, NULL);
+	  layout_decl (dummy, 0);
+
+	  dummy_wrap = build3 (BIND_EXPR, void_type_node, dummy, NULL_TREE, NULL_TREE);
+	  tree stmt_list = alloc_stmt_list ();
+	  append_to_statement_list_force (build_stmt (loc, DECL_EXPR, dummy),
+					   &stmt_list);
+	  BIND_EXPR_BODY (dummy_wrap) = stmt_list;
+	  args_ptr = fold_convert (ptr_type_node, build_fold_addr_expr (dummy));
+	}
+
+      tree bind = oa_build_symbolic_scalar_check_bind (contract, ctrl, control_op,
+							thunk_fn, args_ptr);
+      if (dummy_wrap)
+	{
+	  append_to_statement_list_force (bind, &BIND_EXPR_BODY (dummy_wrap));
+	  bind = dummy_wrap;
+	}
+      append_to_statement_list_force (bind, extra);
     }
-  append_to_statement_list_force (bind, extra);
 }
 
 /* -fcontract-conveyor-proof-provenance: EXPR's own derivation, if one
@@ -8725,21 +8740,33 @@ static void *oa_call_site_callback_data;
    stray-use scan.  */
 
 /* EXTRA, when non-NULL, is -fcontract-symbolic-runtime-checks
-   (Mechanism B)'s own accumulator: any call found here whose callee has
-   a symbolic-active precondition on a bare parameter (oa_handle_call_
-   symbolic_scalar_obligation) gets its runtime check appended there,
-   for the caller to splice into its own statement the same way every
-   other Mechanism B codegen this walk injects already is. Defaults to
-   NULL (skip that check entirely) for every call site that doesn't
-   have a natural "splice a new statement in right here" position to
-   offer -- a real, narrow limitation for B1's scope (see oa_handle_
-   call_symbolic_scalar_obligation's own comment), not a silent one.  */
+   (Mechanism B)'s own consult-side accumulator: any call found here
+   whose callee has a symbolic-active precondition on a bare parameter
+   (oa_handle_call_symbolic_scalar_obligation) gets its runtime check
+   appended there, for the caller to splice into its own statement the
+   same way every other Mechanism B codegen this walk injects already
+   is. Defaults to NULL (skip that check entirely) for every call site
+   that doesn't have a natural "splice a new statement in right here"
+   position to offer -- a real, narrow limitation (see oa_handle_call_
+   symbolic_scalar_obligation's own comment), not a silent one.
+
+   INVALIDATE_EXTRA, when non-NULL, is Mechanism B's own invalidation
+   accumulator: any call found here (including one nested arbitrarily
+   deep inside another, e.g. the inner 'modify(&y)' in
+   'foo(modify(&y), 5)' -- this cp_walk_tree already reaches every
+   CALL_EXPR regardless of nesting depth, unlike a shallow check of the
+   expression's own top-level shape) whose own arguments take the
+   address of an already-shadowed bare scalar gets that shadow
+   invalidated there (oa_invalidate_scalar_shadow_for_call_args).
+   Defaults to NULL for call sites with no splice point to offer, same
+   as EXTRA above.  */
 
 static void
-oa_scan_calls_in_expr (tree *expr, oa_env &env, tree *extra = NULL)
+oa_scan_calls_in_expr (tree *expr, oa_env &env, tree *extra = NULL,
+			tree *invalidate_extra = NULL)
 {
-  struct oa_scan_calls_data { oa_env *env; tree *extra; };
-  oa_scan_calls_data data = { &env, extra };
+  struct oa_scan_calls_data { oa_env *env; tree *extra; tree *invalidate_extra; };
+  oa_scan_calls_data data = { &env, extra, invalidate_extra };
   cp_walk_tree (expr, [](tree *tp, int *, void *data_) -> tree
     {
       oa_scan_calls_data *d = (oa_scan_calls_data *) data_;
@@ -8761,6 +8788,8 @@ oa_scan_calls_in_expr (tree *expr, oa_env &env, tree *extra = NULL)
 	}
       if (d->extra)
 	oa_handle_call_symbolic_scalar_obligation (t, *e, d->extra);
+      if (d->invalidate_extra && oa_symbolic_codegen_active)
+	oa_invalidate_scalar_shadow_for_call_args (t, *e, d->invalidate_extra);
       if (oa_call_site_callback)
 	{
 	  tree callee = cp_get_callee_fndecl_nofold (t);
@@ -10040,26 +10069,16 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   obligation (item 7) for every call reached from here, for the
 	   same reason as RETURN_EXPR above.  Also passes PRE_EXTRA
 	   through, so a call reached here whose callee has a Mechanism B
-	   bare-parameter precondition gets its own runtime check
-	   appended too.  */
-	oa_scan_calls_in_expr (&TREE_OPERAND (t, 1), env, &pre_extra);
-	/* Mechanism B again: the RHS may itself be (or contain) a call
-	   whose own arguments take the address of an already-shadowed
-	   bare scalar (e.g. 'int z = modify(&y);') -- invalidate those
-	   shadows.  Scoped to RHS's own top-level call only, not calls
-	   nested arbitrarily deep inside it (e.g. 'foo(modify(&y), 5)'):
-	   a known, narrow limitation, not a silent gap -- oa_scan_calls_
-	   in_expr's own cp_walk_tree already finds every nested call for
-	   precondition-obligation purposes, but reaching this same
-	   generality for shadow invalidation needs a statement-level
-	   splice point this callback doesn't have access to.  */
-	if (oa_symbolic_codegen_active)
-	  {
-	    tree stripped_rhs_for_invalidation = STRIP_ANY_LOCATION_WRAPPER (rhs);
-	    if (TREE_CODE (stripped_rhs_for_invalidation) == CALL_EXPR)
-	      oa_invalidate_scalar_shadow_for_call_args
-		(stripped_rhs_for_invalidation, env, &post_extra);
-	  }
+	   bare-parameter precondition gets its own runtime check appended
+	   too, and POST_EXTRA through as oa_scan_calls_in_expr's own
+	   INVALIDATE_EXTRA, so the RHS's own top-level call *and* any call
+	   nested arbitrarily deep inside it (e.g. the inner 'modify(&y)'
+	   in 'int z = foo(modify(&y), 5);') that takes the address of an
+	   already-shadowed bare scalar invalidates that shadow -- this
+	   cp_walk_tree already reaches every such call regardless of
+	   nesting depth, the same reach oa_handle_call_symbolic_scalar_
+	   obligation above already gets through PRE_EXTRA.  */
+	oa_scan_calls_in_expr (&TREE_OPERAND (t, 1), env, &pre_extra, &post_extra);
 	/* Item 8's narrow div/mod and array-bound restrictions, only
 	   within a function actually declared 'conveyor'.  */
 	if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
@@ -10317,16 +10336,17 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   oa_scan_calls_in_expr's own EXTRA parameter) -- spliced in
 	   *before* T, matching ordinary precondition-checking semantics
 	   (checked ahead of the call actually running), unlike POST_EXTRA
-	   below (address-taken invalidation), which belongs *after* T,
-	   since it reflects what the call itself may have just changed.  */
+	   below (address-taken invalidation, via oa_scan_calls_in_expr's
+	   own INVALIDATE_EXTRA parameter), which belongs *after* T, since
+	   it reflects what T and any call nested inside its own arguments
+	   may have just changed -- this cp_walk_tree visits T itself and
+	   every call reachable from its arguments regardless of nesting
+	   depth, so a case like 'foo(modify(&y), 5);' correctly invalidates
+	   y's shadow from the inner modify(&y) call too, not just from a
+	   shallow check of T's own top-level shape.  */
 	tree pre_extra = NULL_TREE;
-	oa_scan_calls_in_expr (stmt, env, &pre_extra);
-	/* -fcontract-symbolic-runtime-checks (Mechanism B): this call's
-	   own arguments may take the address of an already-shadowed bare
-	   scalar (e.g. 'modify(&y);') -- invalidate those shadows.  */
 	tree post_extra = NULL_TREE;
-	if (oa_symbolic_codegen_active)
-	  oa_invalidate_scalar_shadow_for_call_args (t, env, &post_extra);
+	oa_scan_calls_in_expr (stmt, env, &pre_extra, &post_extra);
 	if (pre_extra || post_extra)
 	  {
 	    tree new_list = alloc_stmt_list ();
@@ -10952,7 +10972,9 @@ oa_env_check_comparison (oa_analysis_env *env, tree expr, tree_code cmp,
    pointer" comparison case Mechanism A covers (see
    .claude/plans/stateless-jumping-shore.md); a bare by-value local
    compared directly, with no pointer indirection at all, does not
-   match this shape (that's Mechanism B, not yet built). Shares its
+   match this shape (that shape is Mechanism B's, handled separately by
+   oa_match_simple_comparison/oa_precondition_symbolic_range_p and
+   oa_call_symbolic_range_p further below). Shares its
    OP/const-operand recognition with oa_match_simple_comparison, but
    requires the non-constant operand to be a COMPONENT_REF through an
    INDIRECT_REF, extracting the FIELD_DECL and the pointer
