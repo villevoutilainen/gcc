@@ -5315,6 +5315,16 @@ struct oa_analysis_env : public oa_env {};
    comments.  OA_DERIV_IF_JOIN: FACT is the union of THEN_DERIV's and
    ELSE_DERIV's own facts under BRANCH_COND, mirroring
    oa_env::range_merge_with's own min/max join one level up.
+   OA_DERIV_LOOP: FACT is the union of PRE_DERIV's own facts (the value
+   entering the loop, zero iterations) and BODY_DERIV's own facts (one
+   iteration-independent execution of the loop's repeated part, from the
+   same invalidated re-walk oa_handle_loop's own numeric merge already
+   performs) -- see .claude/plans/stateless-jumping-shore.md's own
+   Context section for why this is already a sound Hoare-style loop
+   invariant by construction, and why it renders as a bare disjunction
+   with no branch selector at all (unlike OA_DERIV_IF_JOIN): there is no
+   condition to select between "zero iterations" and "at least one," so
+   none is needed to state the fact.
 
    Node *pointers* are freely shared/aliased across independent oa_env
    copies (see oa_env's own new m_deriv_map below) -- a derivation node
@@ -5322,7 +5332,10 @@ struct oa_analysis_env : public oa_env {};
    throughout the rest of the compiler, so aliasing across branch copies
    is always safe.  */
 
-enum oa_derivation_kind { OA_DERIV_AXIOM, OA_DERIV_CALL, OA_DERIV_IF_JOIN };
+enum oa_derivation_kind
+{
+  OA_DERIV_AXIOM, OA_DERIV_CALL, OA_DERIV_IF_JOIN, OA_DERIV_LOOP
+};
 
 struct oa_derivation
 {
@@ -5333,6 +5346,7 @@ struct oa_derivation
   auto_vec<oa_derivation *> children;	/* OA_DERIV_CALL: one per axiom conjunct.  */
   tree branch_cond;		/* OA_DERIV_IF_JOIN.  */
   oa_derivation *then_deriv, *else_deriv;	/* OA_DERIV_IF_JOIN.  */
+  oa_derivation *pre_deriv, *body_deriv;	/* OA_DERIV_LOOP.  */
 };
 
 /* The *allocator/owner* for every oa_derivation node built during one
@@ -5383,6 +5397,18 @@ public:
     d->branch_cond = branch_cond;
     d->then_deriv = then_deriv;
     d->else_deriv = else_deriv;
+    m_owned.safe_push (d);
+    return d;
+  }
+
+  oa_derivation *make_loop (const oa_range_fact &fact, oa_derivation *pre_deriv,
+			    oa_derivation *body_deriv)
+  {
+    oa_derivation *d = new oa_derivation ();
+    d->kind = OA_DERIV_LOOP;
+    d->fact = fact;
+    d->pre_deriv = pre_deriv;
+    d->body_deriv = body_deriv;
     m_owned.safe_push (d);
     return d;
   }
@@ -6996,8 +7022,15 @@ oa_range_fact_inline_expr (oa_range_fact &fact, char *buf, size_t buflen)
    expr) rather than recursing into a *nested* IF_JOIN inside that arm;
    a deeper if/else chain than that falls back to its own outer FACT,
    exactly like any other source this increment doesn't build
-   derivations for (loops, IILE) -- safe, just less faithful, matching
-   the plan's own documented scope.  */
+   derivations for (IILE) -- safe, just less faithful, matching the
+   plan's own documented scope.  OA_DERIV_LOOP is simpler than
+   OA_DERIV_IF_JOIN -- no branch selector needed at all, just a bare
+   disjunction of PRE_DERIV's own bounds (zero iterations) and
+   BODY_DERIV's own bounds (one iteration-independent execution of the
+   repeated part) -- see oa_derivation's own comment for why this is
+   already a sound loop-invariant argument without needing an
+   implication tied to any condition.  Same one-level-only scope limit
+   as OA_DERIV_IF_JOIN.  */
 
 static void
 oa_emit_derivation_premises (FILE *file, oa_derivation *deriv,
@@ -7014,6 +7047,16 @@ oa_emit_derivation_premises (FILE *file, oa_derivation *deriv,
       fprintf (file, "(declare-const branch_%u Bool)\n", n);
       fprintf (file, "(assert (=> branch_%u %s))\n", n, then_buf);
       fprintf (file, "(assert (=> (not branch_%u) %s))\n", n, else_buf);
+      return;
+    }
+  if (deriv->kind == OA_DERIV_LOOP)
+    {
+      char pre_buf[128], body_buf[128];
+      oa_range_fact_inline_expr (deriv->pre_deriv->fact, pre_buf,
+				 sizeof (pre_buf));
+      oa_range_fact_inline_expr (deriv->body_deriv->fact, body_buf,
+				 sizeof (body_buf));
+      fprintf (file, "(assert (or %s %s))\n", pre_buf, body_buf);
       return;
     }
   oa_print_range_assertions (file, deriv->fact);
@@ -8167,14 +8210,28 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
   auto_vec<tree> range_result_decls;
   auto_vec<bool> range_result_has_fact;
   auto_vec<oa_range_fact> range_result_facts;
+  auto_vec<oa_derivation *> range_result_derivs;
   for (unsigned i = 0; i < range_targets.length (); ++i)
     {
       tree d = range_targets[i];
       oa_range_fact pre_fact;
       bool pre_ok = env.range_get (d, &pre_fact);
+      /* -fcontract-conveyor-proof-provenance: fetched from ENV before
+	 CHECKENV (below) invalidates its own copy; NULL harmlessly when
+	 tracking is inactive.  */
+      oa_derivation *pre_deriv = env.deriv_get (d);
 
       oa_env checkenv = env.copy ();
       checkenv.range_invalidate (d);
+      /* -fcontract-conveyor-proof-provenance: mirror range_invalidate
+	 just above -- without this, a reassignment that doesn't touch D
+	 on every path through the loop body (e.g. 'if (cond) d = foo();'
+	 with no else) could leave CHECKENV's own derivation for D as a
+	 stale carry-over from *before* this invalidated re-walk, exactly
+	 the same staleness range_invalidate itself already exists to
+	 prevent for the numeric fact.  A no-op when tracking is
+	 inactive (the map is always empty).  */
+      checkenv.deriv_invalidate (d);
 
       bool saved_tracking = oa_return_tracking;
       oa_return_tracking = false;
@@ -8183,12 +8240,18 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 
       oa_range_fact post_fact;
       bool post_ok = checkenv.range_get (d, &post_fact);
+      /* -fcontract-conveyor-proof-provenance: the re-walk's own
+	 derivation for D, if any -- populated by the exact same
+	 assignment/if-join hooks already threaded through oa_walk_stmt,
+	 since CHECKENV is walked by the ordinary machinery.  */
+      oa_derivation *body_deriv = checkenv.deriv_get (d);
 
       range_result_decls.safe_push (d);
       if (!pre_ok || !post_ok || pre_fact.base != post_fact.base)
 	{
 	  range_result_has_fact.safe_push (false);
 	  range_result_facts.safe_push (oa_range_fact ());
+	  range_result_derivs.safe_push (NULL);
 	  continue;
 	}
       oa_range_fact merged;
@@ -8201,6 +8264,16 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	merged.hi = wi::smax (pre_fact.hi, post_fact.hi);
       range_result_has_fact.safe_push (true);
       range_result_facts.safe_push (merged);
+      /* -fcontract-conveyor-proof-provenance: OA_DERIV_LOOP only when
+	 both arms actually have their own derivation recorded -- falls
+	 back to a flat (no-derivation) rendering of MERGED otherwise,
+	 the same fallback discipline used everywhere else in this
+	 feature.  */
+      if (oa_active_provenance && pre_deriv && body_deriv)
+	range_result_derivs.safe_push
+	  (oa_active_provenance->make_loop (merged, pre_deriv, body_deriv));
+      else
+	range_result_derivs.safe_push (NULL);
     }
 
   for (unsigned i = 0; i < range_result_decls.length (); ++i)
@@ -8209,6 +8282,10 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	env.range_set (range_result_decls[i], range_result_facts[i]);
       else
 	env.range_invalidate (range_result_decls[i]);
+      if (range_result_derivs[i])
+	env.deriv_set (range_result_decls[i], range_result_derivs[i]);
+      else
+	env.deriv_invalidate (range_result_decls[i]);
     }
 }
 
