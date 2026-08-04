@@ -1917,6 +1917,13 @@ C++ ObjC++ Var(flag_contract_control_objects) Init(0)
 Enable D4324 contract control objects (pre<T>(cond) etc.); off by default so
 plain -fcontracts keeps the P2900 behaviour.
 
+fcontract-conveyor-proofs
+C++ ObjC++ Var(flag_contract_conveyor_proofs) Init(0)
+Extend D4324 conveyor precondition-obligation checking at call sites beyond
+std::is_object_address to general comparison conjuncts and
+predicate-chaining through an earlier call's postcondition; requires
+-fcontract-control-objects to have any effect.
+
 fcontracts-implicit-include
 C++ ObjC++ Var(flag_contracts_implicit_include) Init(0)
 -fcontracts-implicit-include	Implicitly #include <contracts> before the

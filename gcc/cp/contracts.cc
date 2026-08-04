@@ -6557,6 +6557,252 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env)
     }
 }
 
+/* Forward-declared: defined later, alongside its public, plugin-facing
+   wrapper oa_env_check_comparison; oa_handle_call_conveyor_proof_obligation
+   below needs it before that point in the file.  */
+static oa_proof_result oa_env_check_comparison_1
+  (oa_env &env, tree expr, tree_code cmp, tree const_val);
+
+/* -fcontract-conveyor-proofs: recognize CONJUNCT as "pred_fn (decl)" or
+   its negation "!pred_fn (decl)" -- a call to some ordinary FUNCTION_DECL
+   with exactly one argument, itself a bare PARM_DECL/VAR_DECL (never a
+   general expression -- same "bare decl only" scope limit
+   oa_match_simple_comparison already has).  Fills PRED_FN_OUT/
+   ARG_DECL_OUT/NEGATED_OUT.  Used both for a precondition's own conjunct
+   ("check_it (x)", ARG_DECL_OUT = the callee's own parameter x) and a
+   postcondition's ("!check_it (r)", ARG_DECL_OUT = POSTCONDITION_IDENTIFIER,
+   NEGATED_OUT = true) -- see oa_handle_call_conveyor_proof_obligation's own
+   use of this below for how the two get connected, including how a
+   mismatched polarity between the two is a genuine, provable
+   contradiction (see oa_predicate_check_inner_call's own comment).
+
+   PRED_FN (e.g.@: "check_it") can be a conveyor-declared function whose
+   own definition is never visible here (declared only, defined in some
+   other TU) -- none of this ever needs to evaluate or even see PRED_FN's
+   body.  The connection this establishes is purely syntactic (the same
+   predicate function, named identically, applied to identical-by-
+   construction values across a call boundary), which is exactly the
+   trust a conveyor-declared predicate is supposed to license.  */
+
+static bool
+oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
+			     tree *arg_decl_out, bool *negated_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  bool negated = false;
+  if (TREE_CODE (c) == TRUTH_NOT_EXPR)
+    {
+      negated = true;
+      c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+      while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+	c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+    }
+
+  if (TREE_CODE (c) != CALL_EXPR || call_expr_nargs (c) != 1)
+    return false;
+
+  tree fn = cp_get_callee_fndecl_nofold (c);
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL)
+    return false;
+
+  tree arg = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (c, 0));
+  if (TREE_CODE (arg) != PARM_DECL && !VAR_P (arg))
+    return false;
+
+  *pred_fn_out = fn;
+  *arg_decl_out = arg;
+  *negated_out = negated;
+  return true;
+}
+
+/* -fcontract-conveyor-proofs: is SUBSTITUTED (the caller's actual
+   argument expression for a precondition conjunct whose polarity is
+   NEGATED -- "pred_fn (param)" if false, "!pred_fn (param)" if true)
+   itself a direct call whose own callee's postcondition asserts PRED_FN
+   (at some polarity) for its own result -- e.g.@: "consume (produce ())",
+   where produce's postcondition is "post<ctrl> (r: check_it (r))" or
+   "post<ctrl> (r: !check_it (r))", and consume's precondition is
+   "pre<ctrl> (check_it (x))"?  Purely syntactic (same PRED_FN identity,
+   applied to produce's own POSTCONDITION_IDENTIFIER) -- never looks at
+   PRED_FN's own definition, matching the whole point of this check (see
+   oa_predicate_conjunct_shape's own comment).
+
+   Returns OA_PROVEN_TRUE if a matching postcondition conjunct is found
+   with the *same* polarity as NEGATED (the precondition's own
+   requirement is discharged); OA_PROVEN_FALSE if one is found with the
+   *opposite* polarity (a genuine, provable contradiction: the
+   postcondition guarantees PRED_FN's negation of what the precondition
+   requires, for the very same value); OA_UNKNOWN if SUBSTITUTED isn't a
+   direct call, or no matching conjunct (of either polarity) for this
+   PRED_FN is found at all.  */
+
+static oa_proof_result
+oa_predicate_check_inner_call (tree substituted, tree pred_fn, bool negated)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (substituted);
+  if (TREE_CODE (c) != CALL_EXPR)
+    return OA_UNKNOWN;
+  tree inner_callee = cp_get_callee_fndecl_nofold (c);
+  if (!inner_callee || TREE_CODE (inner_callee) != FUNCTION_DECL)
+    return OA_UNKNOWN;
+
+  for (tree as = get_fn_contract_specifiers (inner_callee); as;
+       as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      if (!oa_contract_conveyor_active_p (contract, inner_callee))
+	continue;
+
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree inner_pred_fn, inner_arg_decl;
+	  bool inner_negated;
+	  if (!oa_predicate_conjunct_shape (*conjuncts[i], &inner_pred_fn,
+					    &inner_arg_decl, &inner_negated)
+	      || inner_pred_fn != pred_fn
+	      || inner_arg_decl != POSTCONDITION_IDENTIFIER (contract))
+	    continue;
+
+	  return (inner_negated == negated) ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
+	}
+    }
+  return OA_UNKNOWN;
+}
+
+/* -fcontract-conveyor-proofs: the built-in counterpart to
+   oa_handle_call_precondition_obligation above, extending call-site
+   precondition-obligation checking beyond std::is_object_address to
+   general comparison conjuncts (oa_match_simple_comparison /
+   oa_env_check_comparison_1) and predicate-chaining
+   (oa_predicate_conjunct_shape / oa_predicate_check_inner_call) -- see
+   .claude/plans/stateless-jumping-shore.md.  Only active when
+   flag_contract_conveyor_proofs is set (checked by the caller in
+   oa_scan_calls_in_expr); every existing mandatory diagnostic above is
+   completely unaffected.  A conjunct already recognized by
+   is_object_address_call_p is skipped here -- that one is already
+   mandatorily handled above, not this function's obligation.  */
+
+static void
+oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return;
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract))
+	continue;
+      if (!oa_contract_conveyor_active_p (contract, callee))
+	continue;
+
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree already_arg;
+	  if (is_object_address_call_p (*conjuncts[i], &already_arg))
+	    continue;
+
+	  tree param, const_val;
+	  tree_code code;
+	  if (oa_match_simple_comparison (*conjuncts[i], &param, &code,
+					  &const_val))
+	    {
+	      tree substituted = NULL_TREE;
+	      unsigned argno = 0;
+	      for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
+		if (p == param)
+		  {
+		    if (argno < (unsigned) call_expr_nargs (call))
+		      substituted = CALL_EXPR_ARG (call, argno);
+		    break;
+		  }
+	      if (!substituted)
+		continue;
+
+	      oa_proof_result r
+		= oa_env_check_comparison_1 (env, substituted, code, const_val);
+	      switch (r)
+		{
+		case OA_PROVEN_TRUE:
+		  break;
+		case OA_PROVEN_FALSE:
+		  error_at (EXPR_LOCATION (call),
+			    "argument %qE provably violates the precondition "
+			    "of %qD", substituted, callee);
+		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  break;
+		case OA_UNKNOWN:
+		  warning_at (EXPR_LOCATION (call), 0,
+			      "cannot verify that %qE satisfies the "
+			      "precondition of %qD", substituted, callee);
+		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  break;
+		}
+	      continue;
+	    }
+
+	  tree pred_fn, arg_decl;
+	  bool negated;
+	  if (!oa_predicate_conjunct_shape (*conjuncts[i], &pred_fn, &arg_decl,
+					    &negated))
+	    continue;
+
+	  tree matched_parm = NULL_TREE;
+	  unsigned argno = 0;
+	  for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
+	    if (p == arg_decl)
+	      {
+		matched_parm = p;
+		break;
+	      }
+	  if (!matched_parm || argno >= (unsigned) call_expr_nargs (call))
+	    continue;
+
+	  tree substituted = CALL_EXPR_ARG (call, argno);
+	  oa_proof_result pr
+	    = oa_predicate_check_inner_call (substituted, pred_fn, negated);
+	  switch (pr)
+	    {
+	    case OA_PROVEN_TRUE:
+	      break;
+	    case OA_PROVEN_FALSE:
+	      error_at (EXPR_LOCATION (call),
+			"argument %qE provably violates the precondition of "
+			"%qD: %qD (%qE) is established %s, but the "
+			"precondition requires it to be %s",
+			substituted, callee, pred_fn, substituted,
+			negated ? "true" : "false", negated ? "false" : "true");
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      break;
+	    case OA_UNKNOWN:
+	      warning_at (EXPR_LOCATION (call), 0,
+			  "cannot verify that %qD (%qE) holds, as required by "
+			  "the precondition of %qD", pred_fn, substituted, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      break;
+	    }
+	}
+    }
+}
+
 /* D4324/P2680 item 6: the complementary direction from item 7 above --
    a callee's own non-ignored, conveyor *postcondition* is a trusted
    fact about *any* call's return value, not a per-call obligation the
@@ -6736,6 +6982,8 @@ oa_scan_calls_in_expr (tree *expr, oa_env &env)
       if (is_object_address_call_p (t, &arg))
 	return NULL_TREE;
       oa_handle_call_precondition_obligation (t, *e);
+      if (flag_contract_conveyor_proofs)
+	oa_handle_call_conveyor_proof_obligation (t, *e);
       if (oa_call_site_callback)
 	{
 	  tree callee = cp_get_callee_fndecl_nofold (t);
@@ -8428,9 +8676,9 @@ oa_match_simple_comparison (tree conjunct, tree *param_out, tree_code *code_out,
   return true;
 }
 
-/* The three-way answer a plugin's own call-site precondition-obligation
-   check actually needs (see .claude/plans/stateless-jumping-shore.md):
-   is EXPR, under ENV's current facts, provably CMP CONST_VAL for every
+/* The three-way answer a call-site precondition-obligation check
+   actually needs (see .claude/plans/stateless-jumping-shore.md): is
+   EXPR, under ENV's current facts, provably CMP CONST_VAL for every
    value it could take (OA_PROVEN_TRUE), provably CMP CONST_VAL for no
    value it could take (OA_PROVEN_FALSE), or is ENV's known range for
    EXPR (if any) insufficient to conclude either (OA_UNKNOWN, which also
@@ -8441,14 +8689,18 @@ oa_match_simple_comparison (tree conjunct, tree *param_out, tree_code *code_out,
    range fact tied to a pointer's own array-base (BASE != NULL_TREE, see
    oa_range_fact's own comment) isn't a plain numeric interval comparable
    against CONST_VAL the same way, so that case is conservatively
-   OA_UNKNOWN too.  */
+   OA_UNKNOWN too.
 
-oa_proof_result
-oa_env_check_comparison (oa_analysis_env *env, tree expr, tree_code cmp,
-			 tree const_val)
+   Shared between the public, plugin-facing oa_env_check_comparison below
+   and the compiler's own built-in oa_handle_call_conveyor_proof_obligation
+   (-fcontract-conveyor-proofs), so both go through one implementation.  */
+
+static oa_proof_result
+oa_env_check_comparison_1 (oa_env &env, tree expr, tree_code cmp,
+			    tree const_val)
 {
   oa_range_fact fact;
-  if (!oa_get_range (expr, *env, &fact) || fact.base != NULL_TREE)
+  if (!oa_get_range (expr, env, &fact) || fact.base != NULL_TREE)
     return OA_UNKNOWN;
 
   widest_int val = wi::to_widest (const_val);
@@ -8480,6 +8732,19 @@ oa_env_check_comparison (oa_analysis_env *env, tree expr, tree_code cmp,
     default:
       return OA_UNKNOWN;
     }
+}
+
+/* Public, plugin-facing wrapper over oa_env_check_comparison_1 -- see
+   .claude/plans/stateless-jumping-shore.md.  ENV's dynamic type is always
+   really oa_env (oa_analysis_env is an empty subclass with no added
+   layout, the same cast idiom oa_walk_function_calls already uses).  */
+
+oa_proof_result
+oa_env_check_comparison (oa_analysis_env *env, tree expr, tree_code cmp,
+			 tree const_val)
+{
+  return oa_env_check_comparison_1 (*reinterpret_cast<oa_env *> (env),
+				     expr, cmp, const_val);
 }
 
 /* Validate BASE_TYPE as the target of a base_contract<BASE_TYPE>() used
