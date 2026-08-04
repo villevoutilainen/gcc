@@ -5393,6 +5393,38 @@ public:
   void deriv_invalidate (tree decl) { m_deriv_map.remove (decl); }
   void deriv_merge_with (oa_env &other, tree branch_cond);
 
+  /* -fcontract-symbolic-runtime-checks (Mechanism B, see
+     .claude/plans/stateless-jumping-shore.md): OUTERMOST_BIND is the
+     current function's own top-level BIND_EXPR, captured once by
+     oa_resolve_object_address_in_function_1 before the walk starts --
+     a plain tree value, never forked/merged (every copy/assign of an
+     oa_env just carries the same value along), since it names a
+     function-wide constant, not a per-branch fact.  SHADOW_DECLS maps a
+     tracked bare-scalar decl to its shadow VAR_DECL (get_or_build_
+     scalar_shadow); unlike every map above, its own merge rule is a
+     plain set *union*, not an intersection/agreement check -- a shadow,
+     once created anywhere reachable from here, must stay visible
+     everywhere reachable from here, regardless of which branch created
+     it, since the shadow variable itself already exists in the
+     compiled function's own top-level scope by then.  */
+  tree outermost_bind () { return m_outermost_bind; }
+  void set_outermost_bind (tree t) { m_outermost_bind = t; }
+  tree shadow_get (tree decl)
+  {
+    tree *v = m_shadow_decls.get (decl);
+    return v ? *v : NULL_TREE;
+  }
+  void shadow_set (tree decl, tree shadow_var)
+  {
+    m_shadow_decls.put (decl, shadow_var);
+  }
+  void shadow_decls_merge_with (oa_env &other)
+  {
+    for (auto it : other.m_shadow_decls)
+      if (!m_shadow_decls.get (it.first))
+	m_shadow_decls.put (it.first, it.second);
+  }
+
   oa_env copy ()
   {
     oa_env r;
@@ -5406,6 +5438,9 @@ public:
       r.m_deriv_map.put (it.first, it.second);
     for (auto it : m_symbolic_map)
       r.m_symbolic_map.put (it.first, it.second);
+    r.m_outermost_bind = m_outermost_bind;
+    for (auto it : m_shadow_decls)
+      r.m_shadow_decls.put (it.first, it.second);
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -5428,6 +5463,10 @@ public:
     m_symbolic_map.empty ();
     for (auto it : other.m_symbolic_map)
       m_symbolic_map.put (it.first, it.second);
+    m_outermost_bind = other.m_outermost_bind;
+    m_shadow_decls.empty ();
+    for (auto it : other.m_shadow_decls)
+      m_shadow_decls.put (it.first, it.second);
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -5504,6 +5543,8 @@ private:
   hash_map<tree, oa_range_fact> m_range_map;
   hash_map<tree, oa_derivation *> m_deriv_map;
   hash_map<tree, oa_symbolic_fact> m_symbolic_map;
+  tree m_outermost_bind = NULL_TREE;
+  hash_map<tree, tree> m_shadow_decls;
 };
 
 /* An empty, no-added-members subclass, purely so a plugin (which only
@@ -5753,6 +5794,20 @@ static bool oa_call_postcondition_object_address_p (tree call);
 static bool oa_call_postcondition_nonzero_p (tree call);
 static bool oa_call_postcondition_range_p (tree call, oa_range_fact *out,
 					    oa_derivation **deriv_out = NULL);
+
+/* -fcontract-symbolic-runtime-checks (Mechanism B): gates every codegen-
+   *injecting* side effect (shadow creation, establish/invalidate
+   statement insertion) -- as opposed to every other global/map in this
+   file, which only ever gets *read* to produce a diagnostic.  On
+   whenever the flag is set, for the walk's one top-level pass, exactly
+   the same shape as OA_RETURN_TRACKING (below); explicitly saved and
+   cleared around oa_handle_loop's own per-reassigned-decl re-walks
+   (which exist purely to compute compile-time facts, not to represent
+   any one real execution of the loop) so codegen is never injected more
+   than once for the same loop -- see oa_handle_loop's own comment.  */
+static bool oa_symbolic_codegen_active;
+static tree oa_shadow_field (tree type, unsigned index);
+static tree build_real_source_location_value (location_t, tree, tree);
 
 /* -fcontract-symbolic-proofs: resolve EXPR to the one canonical decl
    identifying "the object this expression names" -- true for 'this'
@@ -7846,6 +7901,69 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
     }
 }
 
+/* -fcontract-symbolic-runtime-checks (Mechanism B): the exact same
+   "any call taking this decl's address invalidates it" rule as
+   oa_invalidate_symbolic_facts_for_call_args above, for a bare
+   scalar's own shadow instead of an object-identity symbolic fact --
+   a call taking '&y' has no way to promise it didn't change y's value,
+   so any established range fact for y can no longer be trusted.
+   Unlike that function (which mutates ENV's own compile-time map
+   directly), this one only *emits real code* -- it appends a
+   'shadow.is_valid = false;' assignment to *EXTRA (force-appended, a
+   STATEMENT_LIST built up across possibly several calls in the same
+   expression) for each argument whose decl already has a registered
+   shadow; the caller is responsible for splicing *EXTRA into its own
+   statement, exactly like the reassignment case in the INIT_EXPR/
+   MODIFY_EXPR walker above does.  Never creates a shadow that doesn't
+   already exist, matching that same "never establish just to
+   invalidate" discipline.  */
+
+static void
+oa_invalidate_scalar_shadow_for_call_args (tree call, oa_env &env, tree *extra)
+{
+  if (!oa_symbolic_codegen_active)
+    return;
+  int nargs = call_expr_nargs (call);
+  for (int i = 0; i < nargs; ++i)
+    {
+      /* Deliberately *not* oa_object_identity_decl here: that helper's
+	 own trailing "a bare VAR_DECL/PARM_DECL used directly" branch
+	 exists for Mechanism A's own domain, where the tracked decl is
+	 always pointer-typed, so passing the pointer *value* itself
+	 already amounts to passing an address. A Mechanism B shadow
+	 tracks a plain integer scalar -- passing 'y' *by value* (e.g.
+	 'printf("%d", y)') gives the callee no way to alias or modify
+	 the caller's own y at all, and must not invalidate its shadow;
+	 only a genuine address-of ('&y') or 'this' should.  */
+      tree arg = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (call, i));
+      while (TREE_CODE (arg) == NON_LVALUE_EXPR || TREE_CODE (arg) == NOP_EXPR
+	     || TREE_CODE (arg) == CONVERT_EXPR
+	     || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+	arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+      tree identity = NULL_TREE;
+      if (is_this_parameter (arg))
+	identity = arg;
+      else if (TREE_CODE (arg) == ADDR_EXPR)
+	{
+	  tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	  if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
+	    identity = op;
+	}
+      if (!identity)
+	continue;
+      tree shadow = env.shadow_get (identity);
+      if (!shadow)
+	continue;
+      tree type = TREE_TYPE (shadow);
+      tree lhs_ref = build3 (COMPONENT_REF, TREE_TYPE (oa_shadow_field (type, 0)),
+			      shadow, oa_shadow_field (type, 0), NULL_TREE);
+      tree a = build2 (MODIFY_EXPR, TREE_TYPE (lhs_ref), lhs_ref,
+			boolean_false_node);
+      TREE_SIDE_EFFECTS (a) = 1;
+      append_to_statement_list_force (a, extra);
+    }
+}
+
 /* D4324/P2680 item 6: the complementary direction from item 7 above --
    a callee's own non-ignored, conveyor *postcondition* is a trusted
    fact about *any* call's return value, not a per-call obligation the
@@ -8014,6 +8132,544 @@ oa_call_postcondition_range_p (tree call, oa_range_fact *out,
   return true;
 }
 
+/* -fcontract-symbolic-runtime-checks (Mechanism B, see
+   .claude/plans/stateless-jumping-shore.md): CALL's own bare-scalar
+   counterpart to oa_call_postcondition_range_p above -- same shape
+   entirely (a postcondition whose own POSTCONDITION_IDENTIFIER is a
+   bare VAR_DECL/PARM_DECL, refined via oa_refine_single_comparison into
+   a scratch env), except gated on oa_contract_symbolic_active_p instead
+   of oa_contract_conveyor_active_p.  Kept as its own, separate function
+   rather than parameterizing the one above over which "is this active"
+   predicate to use: conveyor and symbolic are two deliberately
+   independent axes elsewhere in this file (see e.g.
+   oa_predicate_conjunct_shape's own shared-but-unparameterized use by
+   both), and entangling them behind one shared knob here would be the
+   first place that stopped being true.  No provenance/derivation
+   output -- -fcontract-conveyor-proof-provenance is a conveyor-only
+   concept, orthogonal to this.  */
+
+static bool
+oa_call_symbolic_range_p (tree call, oa_range_fact *out)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return false;
+
+  tree result_id = NULL_TREE;
+  oa_env scratch;
+  bool any = false;
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      if (!oa_contract_symbolic_active_p (contract, callee))
+	continue;
+      tree rid = POSTCONDITION_IDENTIFIER (contract);
+      if (!rid || (!VAR_P (rid) && TREE_CODE (rid) != PARM_DECL))
+	continue;
+      if (!result_id)
+	result_id = rid;
+      else if (rid != result_id)
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      any = true;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	oa_refine_single_comparison (*conjuncts[i], scratch, /*asserted_true=*/true);
+    }
+  if (!any || !result_id)
+    return false;
+  return scratch.range_get (result_id, out);
+}
+
+/* -fcontract-symbolic-runtime-checks (Mechanism B): the consult-side
+   counterpart of oa_call_symbolic_range_p above -- CALLEE's own
+   precondition (not postcondition), comparing one of CALLEE's *own
+   parameters* directly (not its return-value binder), the bare-scalar
+   shape Mechanism A's ptr->field-only comparison recognizer
+   (oa_symbolic_comparison_conjunct_shape) deliberately excludes.
+   Unlike that function, which combines every conjunct into one
+   accumulator keyed by a single, already-known identifier
+   (POSTCONDITION_IDENTIFIER), a precondition may compare several
+   different parameters across its conjuncts -- oa_match_simple_
+   comparison identifies the first bare PARM_DECL any conjunct names,
+   then every conjunct is refined into SCRATCH exactly as before, and
+   the result is read back for that one parameter.  A callee may have
+   more than one symbolic-active precondition contract (rare, but
+   possible with multiple control-object specifiers); only the first
+   one whose shape matches is used -- a real, narrow limitation for
+   B1's scope, not a silent unsoundness (a second, non-matching
+   contract's own conjuncts simply aren't recognized as this shape at
+   all, so they fall through this function entirely, same as any other
+   unsupported shape elsewhere in this file).  Returns the matched
+   CONTRACT (needed by the caller to find CTRL/build the dispatch) and
+   PARAM (needed to positionally find the actual argument at the call
+   site) alongside the combined range.  */
+
+static bool
+oa_precondition_symbolic_range_p (tree callee, tree *contract_out,
+				   tree *param_out, oa_range_fact *out)
+{
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract))
+	continue;
+      if (!oa_contract_symbolic_active_p (contract, callee))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      tree param = NULL_TREE;
+      for (unsigned i = 0; i < conjuncts.length () && !param; ++i)
+	{
+	  tree p, const_val;
+	  tree_code code;
+	  if (oa_match_simple_comparison (*conjuncts[i], &p, &code, &const_val)
+	      && TREE_CODE (p) == PARM_DECL)
+	    param = p;
+	}
+      if (!param)
+	continue;
+
+      oa_env scratch;
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	oa_refine_single_comparison (*conjuncts[i], scratch, /*asserted_true=*/true);
+      if (!scratch.range_get (param, out))
+	continue;
+
+      *contract_out = contract;
+      *param_out = param;
+      return true;
+    }
+  return false;
+}
+
+/* -fcontract-symbolic-runtime-checks (Mechanism B): the shared shadow
+   RECORD_TYPE every tracked bare-scalar decl's own shadow VAR_DECL
+   uses -- built once (mirrors build_predicate_arg_struct_type's own
+   "build once, reuse" shape further below) and cached, since every
+   shadow needs the exact same five fields regardless of which decl it
+   tracks: IS_VALID (has a fact been established here, and not since
+   invalidated), HAS_LO/LO and HAS_HI/HI (the bound itself). LO and HI
+   are both *inclusive* -- unlike Mechanism A's own, unrelated
+   established/required range payload (deliberately half-open, see
+   oa_collect_symbolic_actions), Mechanism B's own establish
+   (oa_call_symbolic_range_p) and consult (oa_precondition_symbolic_
+   range_p) sides both derive their ranges from the pre-existing
+   oa_range_fact/oa_refine_single_comparison/oa_tighten_range_bound
+   machinery already used throughout this file for -fcontract-conveyor-
+   proofs, whose own HI is inclusive (see oa_tighten_range_bound's own
+   LE_EXPR/LT_EXPR cases) -- so the shadow keeps that value unchanged,
+   rather than introducing an unnecessary, error-prone +-1 conversion
+   at either end.  */
+
+static GTY(()) tree oa_symbolic_shadow_type_cache;
+
+static tree
+oa_symbolic_shadow_type ()
+{
+  if (oa_symbolic_shadow_type_cache)
+    return oa_symbolic_shadow_type_cache;
+
+  static const char *const names[5]
+    = { "is_valid", "has_lo", "lo", "has_hi", "hi" };
+  tree type = make_node (RECORD_TYPE);
+  tree fields = NULL_TREE;
+  tree *last = &fields;
+  for (unsigned i = 0; i < 5; ++i)
+    {
+      tree field_type = (i == 2 || i == 4)
+	? long_long_integer_type_node : boolean_type_node;
+      tree field = build_decl (BUILTINS_LOCATION, FIELD_DECL,
+				get_identifier (names[i]), field_type);
+      DECL_CONTEXT (field) = type;
+      *last = field;
+      last = &DECL_CHAIN (field);
+    }
+  TYPE_FIELDS (type) = fields;
+  layout_type (type);
+
+  oa_symbolic_shadow_type_cache = type;
+  return type;
+}
+
+/* Return the INDEXth (0-based) field of the shadow RECORD_TYPE, in the
+   fixed order oa_symbolic_shadow_type above builds them.  */
+
+static tree
+oa_shadow_field (tree type, unsigned index)
+{
+  tree f = TYPE_FIELDS (type);
+  for (unsigned i = 0; i < index; ++i)
+    f = DECL_CHAIN (f);
+  return f;
+}
+
+/* Return DECL's shadow VAR_DECL, creating it if this is the first time
+   it's needed anywhere in the current function -- see the plan's own
+   "shadow placement" note for why it always lives in ENV's
+   OUTERMOST_BIND (the current function's own top-level scope) rather
+   than wherever the walk happens to be right now: DECL (and any later
+   consult of its shadow) may live in an enclosing scope even when the
+   *first* establishing assignment the walk encounters is nested inside
+   an if/switch/loop. Declines (returns NULL_TREE) if Mechanism B isn't
+   active for this walk, or if OUTERMOST_BIND was never captured (see
+   oa_resolve_object_address_in_function_1's own defensive check).
+
+   Inserted via tsi_link_before, not the push_stmt_list/add_decl_expr
+   machinery build_contract_check's own codegen uses: that machinery
+   assumes an active genericization-time parsing context that doesn't
+   exist during oa_walk_stmt's own, earlier, pre-genericize walk;
+   tsi_link_before instead splices a new statement directly into an
+   existing STATEMENT_LIST without depending on any such ambient state,
+   and without disturbing any *other* iterator already in progress over
+   the same list (in particular, the very tsi_start/tsi_next loop in
+   oa_walk_stmt's own STATEMENT_LIST case, several frames up the call
+   stack when this runs from a nested statement).  */
+
+static tree
+get_or_build_scalar_shadow (tree decl, oa_env &env)
+{
+  tree existing = env.shadow_get (decl);
+  if (existing)
+    return existing;
+
+  if (!oa_symbolic_codegen_active)
+    return NULL_TREE;
+  tree outer = env.outermost_bind ();
+  if (!outer)
+    return NULL_TREE;
+
+  location_t loc = DECL_SOURCE_LOCATION (decl);
+  tree type = oa_symbolic_shadow_type ();
+  tree shadow = build_decl (loc, VAR_DECL, NULL_TREE, type);
+  DECL_ARTIFICIAL (shadow) = 1;
+  DECL_IGNORED_P (shadow) = 1;
+  TREE_USED (shadow) = 1;
+  DECL_CONTEXT (shadow) = current_function_decl;
+  /* Value-initialize: an empty CONSTRUCTOR zero-initializes every
+     field, so IS_VALID starts false (no fact established yet) without
+     needing a separate explicit assignment.  */
+  DECL_INITIAL (shadow) = build_constructor (type, NULL);
+  layout_decl (shadow, 0);
+
+  DECL_CHAIN (shadow) = BIND_EXPR_VARS (outer);
+  BIND_EXPR_VARS (outer) = shadow;
+
+  /* Prepend a DECL_EXPR for SHADOW ahead of whatever OUTER's body
+     already contains (a bare single statement or an existing
+     STATEMENT_LIST -- append_to_statement_list_force handles both
+     uniformly, allocating/converting to a STATEMENT_LIST as needed).
+     This builds a brand new STATEMENT_LIST tree object rather than
+     mutating the existing one in place, so it can never disturb any
+     tree_stmt_iterator some other, already-in-progress stack frame
+     might hold into the *old* body (in particular, the very
+     tsi_start/tsi_next loop in oa_walk_stmt's own STATEMENT_LIST case,
+     several frames up the call stack when this runs from a nested
+     statement) -- that iterator simply keeps walking the old, otherwise
+     still-intact tree object to completion, unaware BIND_EXPR_BODY now
+     points elsewhere.  Uses the _force variant (not the plain, side-
+     effect-sniffing append_to_statement_list) since a raw, hand-built
+     DECL_EXPR/existing body might not have TREE_SIDE_EFFECTS set the
+     way semantically-constructed trees normally would, and this must
+     never be silently dropped.  */
+  tree new_body = alloc_stmt_list ();
+  append_to_statement_list_force (build_stmt (loc, DECL_EXPR, shadow), &new_body);
+  append_to_statement_list_force (BIND_EXPR_BODY (outer), &new_body);
+  BIND_EXPR_BODY (outer) = new_body;
+
+  env.shadow_set (decl, shadow);
+  return shadow;
+}
+
+/* -fcontract-symbolic-runtime-checks (Mechanism B): cache, keyed by the
+   precondition CONTRACT's own identity (mirrors contract_predicate_
+   core_fn's own cache), of a small, purpose-built thunk function
+   'bool (void *p)' that casts P to a pointer to the shared shadow
+   RECORD_TYPE and directly evaluates whether it satisfies REQUIRED --
+   no argument-struct packing/unpacking at all, unlike build_predicate_
+   thunk_function's own general-purpose thunk: there is nothing to defer
+   or unpack here, since the whole comparison is just reading P's own
+   fields against bounds that are already compile-time constants (REQUIRED
+   itself, extracted once from CONTRACT's own condition by the caller).
+   Built once per CONTRACT, then reused at every call site that needs to
+   check it -- each such call site only needs to supply its own shadow's
+   address as P.  */
+static GTY(()) hash_map<tree, tree> *symbolic_scalar_thunk_cache;
+
+static tree
+get_or_build_scalar_precondition_thunk (tree contract, tree callee,
+					 oa_range_fact &required)
+{
+  if (tree *cached = hash_map_safe_get (symbolic_scalar_thunk_cache, contract))
+    return *cached;
+
+  location_t loc = EXPR_LOCATION (contract);
+  tree shadow_type = oa_symbolic_shadow_type ();
+  tree shadow_ptr_type = build_pointer_type (shadow_type);
+  tree void_ptr_type = build_pointer_type (void_type_node);
+  tree arg_types = tree_cons (NULL_TREE, void_ptr_type, void_list_node);
+  tree fn_type = build_function_type (boolean_type_node, arg_types);
+
+  tree name = clone_function_name_numbered (callee, "symthunk");
+  tree fn = build_lang_decl_loc (loc, FUNCTION_DECL, name, fn_type);
+  DECL_CONTEXT (fn) = NULL_TREE;
+  DECL_SOURCE_LOCATION (fn) = loc;
+  SET_DECL_ASSEMBLER_NAME (fn, name);
+
+  tree parm = build_lang_decl (PARM_DECL, get_identifier ("p"), void_ptr_type);
+  DECL_CONTEXT (parm) = fn;
+  DECL_ARGUMENTS (fn) = parm;
+  DECL_RESULT (fn) = NULL_TREE; /* Let start_preparsed_function fill it in.  */
+
+  TREE_STATIC (fn) = 1;
+  TREE_USED (fn) = 1;
+  DECL_ARTIFICIAL (fn) = 1;
+  TREE_PUBLIC (fn) = 0;
+  DECL_EXTERNAL (fn) = 0;
+  DECL_INTERFACE_KNOWN (fn) = 1;
+  suppress_warning (fn);
+
+  tree cast = build1 (NOP_EXPR, shadow_ptr_type, parm);
+  tree deref = build_simple_mem_ref (cast);
+
+  auto field_val = [&] (unsigned idx)
+    {
+      tree field = oa_shadow_field (shadow_type, idx);
+      return build3 (COMPONENT_REF, TREE_TYPE (field), deref, field, NULL_TREE);
+    };
+
+  /* IS_VALID && (!has_lo-required || (shadow.has_lo && shadow.lo >=
+     need_lo)) && (!has_hi-required || (shadow.has_hi && shadow.hi <=
+     need_hi)) -- both LO and HI are inclusive on both sides (see
+     oa_symbolic_shadow_type's own comment for why no conversion is
+     needed here).  */
+  tree cond = field_val (0);
+  if (required.has_lo)
+    {
+      tree need_lo = wide_int_to_tree (long_long_integer_type_node, required.lo);
+      tree ok = build2 (TRUTH_ANDIF_EXPR, boolean_type_node, field_val (1),
+			 build2 (GE_EXPR, boolean_type_node, field_val (2), need_lo));
+      cond = build2 (TRUTH_ANDIF_EXPR, boolean_type_node, cond, ok);
+    }
+  if (required.has_hi)
+    {
+      tree need_hi = wide_int_to_tree (long_long_integer_type_node, required.hi);
+      tree ok = build2 (TRUTH_ANDIF_EXPR, boolean_type_node, field_val (3),
+			 build2 (LE_EXPR, boolean_type_node, field_val (4), need_hi));
+      cond = build2 (TRUTH_ANDIF_EXPR, boolean_type_node, cond, ok);
+    }
+
+  push_to_top_level ();
+  start_preparsed_function (fn, NULL_TREE, SF_PRE_PARSED | SF_DEFAULT);
+  cp_function_chain->can_throw = true;
+  tree body = begin_function_body ();
+  finish_return_stmt (cond);
+  finish_function_body (body);
+  fn = finish_function (/*inline_p=*/false);
+  expand_or_defer_fn (fn);
+  pop_from_top_level ();
+
+  hash_map_maybe_create<hm_ggc> (symbolic_scalar_thunk_cache);
+  symbolic_scalar_thunk_cache->put (contract, fn);
+  return fn;
+}
+
+/* -fcontract-symbolic-runtime-checks (Mechanism B): build a self-
+   contained BIND_EXPR dispatching CONTRACT's own control object CTRL/OP
+   with THUNK_FN/ARGS_PTR -- mirrors build_contract_control_constexpr_
+   check's own construction technique exactly (direct tree manipulation:
+   a real CONSTRUCTOR, DECL_INITIAL, a manually-chained BIND_EXPR_VARS
+   list, a hand-built stmt_list), *not* build_contract_control_call's
+   runtime-path technique (which depends on an active push_stmt_list/
+   add_decl_expr parsing context that does not exist here: this runs
+   from oa_walk_stmt's own pre-genericize walk, not from genericization
+   proper the way build_contract_check's own dispatch does). ARGS_PTR
+   is the caller's own shadow variable's address; THUNK_FN is get_or_
+   build_scalar_precondition_thunk's result -- unlike the constexpr
+   path's own dummy args_ptr (nothing for its thunk to read), this one
+   is real and meaningfully read by THUNK_FN.  Uses CURRENT_FUNCTION_
+   DECL (the caller, since this always runs while oa_walk_stmt is
+   walking the caller's own body) for both CONTRACT_SIDE_OF -- giving
+   exactly the caller/client-side semantics wanted here -- and the
+   assertion_context's own source-location field.  */
+
+static tree
+oa_build_symbolic_scalar_check_bind (tree contract, tree ctrl, tree op,
+				      tree thunk_fn, tree args_ptr)
+{
+  location_t loc = EXPR_LOCATION (contract);
+  contract_check_side side = contract_side_of (contract, current_function_decl);
+  tree t_ctx = TREE_VALUE (FUNCTION_FIRST_USER_PARMTYPE (op));
+  tree ctx_type = non_reference (t_ctx);
+
+  tree comment = contract_control_omits_comment (ctrl, side)
+    ? NULL_TREE : CONTRACT_COMMENT (contract);
+  if (!comment)
+    comment = build_string_literal ("");
+
+  tree check_fn = build_addr_func (thunk_fn, tf_warning_or_error);
+  mark_used (thunk_fn);
+
+  tree f0 = next_aggregate_field (TYPE_FIELDS (ctx_type));
+  tree f1 = next_aggregate_field (DECL_CHAIN (f0));
+  tree f2 = next_aggregate_field (DECL_CHAIN (f1));
+  tree f3 = next_aggregate_field (DECL_CHAIN (f2));
+  tree f4 = next_aggregate_field (DECL_CHAIN (f3));
+  tree f5 = next_aggregate_field (DECL_CHAIN (f4));
+  tree f6 = next_aggregate_field (DECL_CHAIN (f5));
+  tree ctor = build_constructor_va
+    (ctx_type, 7,
+     f0, comment,
+     f1, (contract_control_omits_source_location (ctrl, side)
+	  ? build_constructor (TREE_TYPE (f1), NULL)
+	  : build_real_source_location_value
+	      (loc, TREE_TYPE (f1),
+	       resolve_fndecl_for_diagnostic_name (current_function_decl))),
+     f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
+     f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
+     f4, build_assertion_static_info_value (side, TREE_TYPE (f4)),
+     f5, fold_convert (TREE_TYPE (f5), args_ptr),
+     f6, fold_convert (TREE_TYPE (f6), check_fn));
+
+  tree ctx_var = build_decl (loc, VAR_DECL, NULL_TREE, ctx_type);
+  DECL_ARTIFICIAL (ctx_var) = true;
+  DECL_INITIAL (ctx_var) = ctor;
+  layout_decl (ctx_var, 0);
+
+  tree ctrl_type = TREE_TYPE (ctrl);
+  tree ctrl_init = cxx_constant_value (ctrl);
+
+  tree ctrl_var = build_decl (loc, VAR_DECL, NULL_TREE, ctrl_type);
+  DECL_ARTIFICIAL (ctrl_var) = true;
+  DECL_INITIAL (ctrl_var) = ctrl_init;
+  layout_decl (ctrl_var, 0);
+
+  tree this_arg = build_fold_addr_expr (ctrl_var);
+  tree this_type = TREE_TYPE (DECL_ARGUMENTS (op));
+  this_arg = fold_convert (this_type, this_arg);
+
+  tree fn_addr = build_addr_func (op, tf_warning_or_error);
+  tree fntype = TREE_TYPE (TREE_TYPE (fn_addr));
+  tree result_type = TREE_TYPE (fntype);
+
+  tree ctx_arg = fold_convert (t_ctx, build_fold_addr_expr (ctx_var));
+
+  tree args[2] = { this_arg, ctx_arg };
+  mark_used (op);
+  tree call = build_call_array_loc (loc, result_type, fn_addr, 2, args);
+
+  DECL_CHAIN (ctrl_var) = ctx_var;
+  DECL_CHAIN (ctx_var) = NULL_TREE;
+
+  tree bind = build3 (BIND_EXPR, void_type_node, ctrl_var, NULL_TREE, NULL_TREE);
+  tree stmt_list = alloc_stmt_list ();
+  append_to_statement_list_force (build_stmt (loc, DECL_EXPR, ctrl_var), &stmt_list);
+  append_to_statement_list_force (build_stmt (loc, DECL_EXPR, ctx_var), &stmt_list);
+  append_to_statement_list_force (call, &stmt_list);
+  BIND_EXPR_BODY (bind) = stmt_list;
+
+  return bind;
+}
+
+/* -fcontract-symbolic-runtime-checks (Mechanism B): the consult side's
+   own per-call-site obligation check, wired into oa_scan_calls_in_expr
+   alongside the existing symbolic/conveyor handlers -- for CALL's
+   callee, if oa_precondition_symbolic_range_p finds a symbolic-active
+   precondition comparing one of the callee's own bare parameters,
+   positionally substitute to find the *actual argument expression* at
+   this call site (the same DECL_ARGUMENTS-to-CALL_EXPR_ARG pattern
+   used throughout this file), and, only if that argument is a decl
+   already carrying a registered shadow (env.shadow_get) -- otherwise
+   there is nothing to check yet on this path, per this walk's own
+   program-order-incremental population, and no runtime check is
+   emitted at all for this call site -- append a fully self-contained
+   dispatch (oa_build_symbolic_scalar_check_bind) to *EXTRA, force-
+   appended exactly like every other Mechanism B codegen this walk
+   injects.  */
+
+static void
+oa_handle_call_symbolic_scalar_obligation (tree call, oa_env &env, tree *extra)
+{
+  if (!oa_symbolic_codegen_active)
+    return;
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return;
+
+  tree contract, param;
+  oa_range_fact required;
+  if (!oa_precondition_symbolic_range_p (callee, &contract, &param, &required))
+    return;
+
+  tree substituted = oa_substitute_call_arg (callee, call, param);
+  if (!substituted)
+    return;
+  tree arg_decl = STRIP_ANY_LOCATION_WRAPPER (substituted);
+  if (!VAR_P (arg_decl) && TREE_CODE (arg_decl) != PARM_DECL)
+    return;
+
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  tree control_op = contract_control_operator (ctrl);
+  if (!control_op)
+    return;
+  tree thunk_fn = get_or_build_scalar_precondition_thunk (contract, callee,
+							   required);
+
+  tree shadow = env.shadow_get (arg_decl);
+  tree args_ptr;
+  tree dummy_wrap = NULL_TREE;
+  location_t loc = EXPR_LOCATION (call);
+  if (shadow)
+    args_ptr = fold_convert (ptr_type_node, build_fold_addr_expr (shadow));
+  else
+    {
+      /* No shadow at all for this argument -- correctly "never
+	 established," not "nothing to check": dispatch anyway, using a
+	 throwaway, zero-initialized (IS_VALID false) temporary in place
+	 of a real shadow, so the control object still gets invoked and
+	 correctly sees the check fail -- matching Mechanism A's own "no
+	 record means the check fails" semantics (a value that was never
+	 proven safe must not silently pass just because this walk never
+	 saw it established anywhere reachable from here).  Declared in
+	 its own small BIND_EXPR (DUMMY_WRAP), wrapping the real check
+	 dispatch as its body, so it only needs to stay in scope for
+	 exactly as long as that dispatch's own use of its address does.  */
+      tree type = oa_symbolic_shadow_type ();
+      tree dummy = build_decl (loc, VAR_DECL, NULL_TREE, type);
+      DECL_ARTIFICIAL (dummy) = 1;
+      DECL_IGNORED_P (dummy) = 1;
+      DECL_CONTEXT (dummy) = current_function_decl;
+      DECL_INITIAL (dummy) = build_constructor (type, NULL);
+      layout_decl (dummy, 0);
+
+      dummy_wrap = build3 (BIND_EXPR, void_type_node, dummy, NULL_TREE, NULL_TREE);
+      tree stmt_list = alloc_stmt_list ();
+      append_to_statement_list_force (build_stmt (loc, DECL_EXPR, dummy),
+				       &stmt_list);
+      BIND_EXPR_BODY (dummy_wrap) = stmt_list;
+      args_ptr = fold_convert (ptr_type_node, build_fold_addr_expr (dummy));
+    }
+
+  tree bind = oa_build_symbolic_scalar_check_bind (contract, ctrl, control_op,
+						    thunk_fn, args_ptr);
+  if (dummy_wrap)
+    {
+      append_to_statement_list_force (bind, &BIND_EXPR_BODY (dummy_wrap));
+      bind = dummy_wrap;
+    }
+  append_to_statement_list_force (bind, extra);
+}
+
 /* -fcontract-conveyor-proof-provenance: EXPR's own derivation, if one
    can be built -- a decl simply propagates forward whatever derivation
    it already has (an ordinary copy, 'int s = r;', doesn't lose
@@ -8068,12 +8724,26 @@ static void *oa_call_site_callback_data;
    still separately caught by oa_walk_stmt's own default-fallback
    stray-use scan.  */
 
+/* EXTRA, when non-NULL, is -fcontract-symbolic-runtime-checks
+   (Mechanism B)'s own accumulator: any call found here whose callee has
+   a symbolic-active precondition on a bare parameter (oa_handle_call_
+   symbolic_scalar_obligation) gets its runtime check appended there,
+   for the caller to splice into its own statement the same way every
+   other Mechanism B codegen this walk injects already is. Defaults to
+   NULL (skip that check entirely) for every call site that doesn't
+   have a natural "splice a new statement in right here" position to
+   offer -- a real, narrow limitation for B1's scope (see oa_handle_
+   call_symbolic_scalar_obligation's own comment), not a silent one.  */
+
 static void
-oa_scan_calls_in_expr (tree *expr, oa_env &env)
+oa_scan_calls_in_expr (tree *expr, oa_env &env, tree *extra = NULL)
 {
+  struct oa_scan_calls_data { oa_env *env; tree *extra; };
+  oa_scan_calls_data data = { &env, extra };
   cp_walk_tree (expr, [](tree *tp, int *, void *data_) -> tree
     {
-      oa_env *e = (oa_env *) data_;
+      oa_scan_calls_data *d = (oa_scan_calls_data *) data_;
+      oa_env *e = d->env;
       tree t = *tp;
       if (t == NULL_TREE || t == error_mark_node || TREE_CODE (t) != CALL_EXPR)
 	return NULL_TREE;
@@ -8089,6 +8759,8 @@ oa_scan_calls_in_expr (tree *expr, oa_env &env)
 	  oa_invalidate_symbolic_facts_for_call_args (t, *e);
 	  oa_handle_call_symbolic_postcondition_establishment (t, *e);
 	}
+      if (d->extra)
+	oa_handle_call_symbolic_scalar_obligation (t, *e, d->extra);
       if (oa_call_site_callback)
 	{
 	  tree callee = cp_get_callee_fndecl_nofold (t);
@@ -8096,7 +8768,7 @@ oa_scan_calls_in_expr (tree *expr, oa_env &env)
 	    oa_call_site_callback (t, callee, e, oa_call_site_callback_data);
 	}
       return NULL_TREE;
-    }, &env, NULL);
+    }, &data, NULL);
 }
 
 /* Scan *EXPR for a stray std::is_object_address(...) call -- one
@@ -8637,6 +9309,15 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 
   oa_env scratch = env.copy ();
   walk_parts (scratch);
+  /* -fcontract-symbolic-runtime-checks (Mechanism B): SCRATCH is where
+     any shadow the loop body itself establishes actually gets created
+     (get_or_build_scalar_shadow registers it via whichever env
+     reference reaches it, which throughout this one, real pass is
+     SCRATCH, not ENV) -- merge its existence back into ENV now, or
+     code after the loop could never find a shadow the loop body
+     itself just created.  A plain union, same as every other
+     shadow_decls_merge_with call site.  */
+  env.shadow_decls_merge_with (scratch);
 
   auto_vec<tree> reassigned, reassigned_nz;
   for (unsigned i = 0; i < parts.length (); ++i)
@@ -8654,7 +9335,17 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 
       bool saved_tracking = oa_return_tracking;
       oa_return_tracking = false;
+      /* -fcontract-symbolic-runtime-checks (Mechanism B): this re-walk
+	 exists purely to compute a compile-time fact (does D stay
+	 provable independent of its own prior value) -- it never
+	 represents any one real execution of the loop, so codegen must
+	 not fire here, or the same establish/invalidate statements would
+	 be injected into the tree once per reassigned decl.  See
+	 oa_symbolic_codegen_active's own comment.  */
+      bool saved_symbolic_codegen = oa_symbolic_codegen_active;
+      oa_symbolic_codegen_active = false;
       walk_parts (checkenv);
+      oa_symbolic_codegen_active = saved_symbolic_codegen;
       oa_return_tracking = saved_tracking;
 
       result_decls.safe_push (d);
@@ -8683,7 +9374,10 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 
       bool saved_tracking = oa_return_tracking;
       oa_return_tracking = false;
+      bool saved_symbolic_codegen = oa_symbolic_codegen_active;
+      oa_symbolic_codegen_active = false;
       walk_parts (checkenv);
+      oa_symbolic_codegen_active = saved_symbolic_codegen;
       oa_return_tracking = saved_tracking;
 
       nz_result_decls.safe_push (d);
@@ -8755,7 +9449,10 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 
       bool saved_tracking = oa_return_tracking;
       oa_return_tracking = false;
+      bool saved_symbolic_codegen = oa_symbolic_codegen_active;
+      oa_symbolic_codegen_active = false;
       walk_parts (checkenv);
+      oa_symbolic_codegen_active = saved_symbolic_codegen;
       oa_return_tracking = saved_tracking;
 
       oa_range_fact post_fact;
@@ -9327,11 +10024,42 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	tree lhs = TREE_OPERAND (t, 0);
 	tree rhs = TREE_OPERAND (t, 1);
 	lhs = STRIP_ANY_LOCATION_WRAPPER (lhs);
+	/* -fcontract-symbolic-runtime-checks (Mechanism B): PRE_EXTRA
+	   accumulates this statement's own consult-side obligation check
+	   (a call reached from the RHS whose callee has a bare-parameter
+	   precondition, e.g. 'int z = consumer(y);') -- spliced in
+	   *before* T, matching ordinary precondition-checking semantics.
+	   POST_EXTRA accumulates everything else below (address-taken
+	   invalidation, establish/invalidate for LHS itself) -- spliced
+	   in *after* T, since all of it reflects what T itself just did
+	   or what some other call's arguments may have just changed.  */
+	tree pre_extra = NULL_TREE;
+	tree post_extra = NULL_TREE;
 	/* The RHS commonly flows directly from a call (e.g.
 	   'int* q = deref(p);') -- discharge any call-site precondition
 	   obligation (item 7) for every call reached from here, for the
-	   same reason as RETURN_EXPR above.  */
-	oa_scan_calls_in_expr (&TREE_OPERAND (t, 1), env);
+	   same reason as RETURN_EXPR above.  Also passes PRE_EXTRA
+	   through, so a call reached here whose callee has a Mechanism B
+	   bare-parameter precondition gets its own runtime check
+	   appended too.  */
+	oa_scan_calls_in_expr (&TREE_OPERAND (t, 1), env, &pre_extra);
+	/* Mechanism B again: the RHS may itself be (or contain) a call
+	   whose own arguments take the address of an already-shadowed
+	   bare scalar (e.g. 'int z = modify(&y);') -- invalidate those
+	   shadows.  Scoped to RHS's own top-level call only, not calls
+	   nested arbitrarily deep inside it (e.g. 'foo(modify(&y), 5)'):
+	   a known, narrow limitation, not a silent gap -- oa_scan_calls_
+	   in_expr's own cp_walk_tree already finds every nested call for
+	   precondition-obligation purposes, but reaching this same
+	   generality for shadow invalidation needs a statement-level
+	   splice point this callback doesn't have access to.  */
+	if (oa_symbolic_codegen_active)
+	  {
+	    tree stripped_rhs_for_invalidation = STRIP_ANY_LOCATION_WRAPPER (rhs);
+	    if (TREE_CODE (stripped_rhs_for_invalidation) == CALL_EXPR)
+	      oa_invalidate_scalar_shadow_for_call_args
+		(stripped_rhs_for_invalidation, env, &post_extra);
+	  }
 	/* Item 8's narrow div/mod and array-bound restrictions, only
 	   within a function actually declared 'conveyor'.  */
 	if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
@@ -9384,6 +10112,80 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    else
 	      env.deriv_invalidate (lhs);
 	  }
+
+	/* -fcontract-symbolic-runtime-checks (Mechanism B): a bare
+	   scalar's own runtime-tracked range fact -- entirely independent
+	   of the compile-time m_range_map handling just above (a symbolic
+	   postcondition gives no compile-time guarantee at all; only an
+	   actual runtime record does).  Establishing overwrites any
+	   existing shadow (whether or not one already existed); an
+	   ordinary reassignment that doesn't match invalidates one only if
+	   it already exists -- no shadow is ever created purely to
+	   invalidate it.  */
+	if (oa_symbolic_codegen_active
+	    && (VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
+	    && INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
+	  {
+	    tree stripped_rhs = STRIP_ANY_LOCATION_WRAPPER (rhs);
+	    oa_range_fact sym_fact;
+	    if (TREE_CODE (stripped_rhs) == CALL_EXPR
+		&& oa_call_symbolic_range_p (stripped_rhs, &sym_fact))
+	      {
+		tree shadow = get_or_build_scalar_shadow (lhs, env);
+		if (shadow)
+		  {
+		    tree type = TREE_TYPE (shadow);
+		    location_t loc = EXPR_LOCATION (t);
+		    tree lo_cst = sym_fact.has_lo
+		      ? wide_int_to_tree (long_long_integer_type_node, sym_fact.lo)
+		      : build_zero_cst (long_long_integer_type_node);
+		    tree hi_cst = sym_fact.has_hi
+		      ? wide_int_to_tree (long_long_integer_type_node, sym_fact.hi)
+		      : build_zero_cst (long_long_integer_type_node);
+		    auto field_ref = [&] (unsigned idx)
+		      {
+			return build3 (COMPONENT_REF, TREE_TYPE (oa_shadow_field (type, idx)),
+				       shadow, oa_shadow_field (type, idx), NULL_TREE);
+		      };
+		    auto assign_field = [&] (unsigned idx, tree val)
+		      {
+			tree lhs_ref = field_ref (idx);
+			tree a = build2 (MODIFY_EXPR, TREE_TYPE (lhs_ref), lhs_ref,
+					  fold_convert (TREE_TYPE (lhs_ref), val));
+			TREE_SIDE_EFFECTS (a) = 1;
+			append_to_statement_list_force (a, &post_extra);
+		      };
+		    assign_field (0, boolean_true_node);
+		    assign_field (1, sym_fact.has_lo ? boolean_true_node : boolean_false_node);
+		    assign_field (2, lo_cst);
+		    assign_field (3, sym_fact.has_hi ? boolean_true_node : boolean_false_node);
+		    assign_field (4, hi_cst);
+		    (void) loc;
+		  }
+	      }
+	    else
+	      {
+		tree shadow = env.shadow_get (lhs);
+		if (shadow)
+		  {
+		    tree type = TREE_TYPE (shadow);
+		    tree lhs_ref = build3 (COMPONENT_REF, TREE_TYPE (oa_shadow_field (type, 0)),
+					    shadow, oa_shadow_field (type, 0), NULL_TREE);
+		    tree a = build2 (MODIFY_EXPR, TREE_TYPE (lhs_ref), lhs_ref,
+				      boolean_false_node);
+		    TREE_SIDE_EFFECTS (a) = 1;
+		    append_to_statement_list_force (a, &post_extra);
+		  }
+	      }
+	  }
+	if (pre_extra || post_extra)
+	  {
+	    tree new_list = alloc_stmt_list ();
+	    append_to_statement_list_force (pre_extra, &new_list);
+	    append_to_statement_list_force (t, &new_list);
+	    append_to_statement_list_force (post_extra, &new_list);
+	    *stmt = new_list;
+	  }
 	return;
       }
 
@@ -9426,6 +10228,11 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       PRED_FN, same polarity) -- see oa_env::symbolic_merge_with's
 	       own comment.  */
 	    then_env.symbolic_merge_with (else_env);
+	    /* -fcontract-symbolic-runtime-checks (Mechanism B): a shadow's
+	       own *existence* is a plain set union across branches, not
+	       an agreement check -- see oa_env::shadow_decls_merge_with's
+	       own comment for why.  */
+	    then_env.shadow_decls_merge_with (else_env);
 	    env.assign (then_env);
 	  }
 	return;
@@ -9480,6 +10287,9 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    /* -fcontract-symbolic-proofs: same merge rule as COND_EXPR
 	       above.  */
 	    then_env.symbolic_merge_with (else_env);
+	    /* -fcontract-symbolic-runtime-checks (Mechanism B): same union
+	       rule as COND_EXPR above.  */
+	    then_env.shadow_decls_merge_with (else_env);
 	    env.assign (then_env);
 	  }
 	return;
@@ -9500,7 +10310,32 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	 directly (used outside any contract, i.e. not as an ASSERTION_STMT/
 	 PRECONDITION_STMT/POSTCONDITION_STMT's own condition) is correctly
 	 left for the default fallback's stray-use scan below instead.  */
-      oa_scan_calls_in_expr (stmt, env);
+      {
+	/* -fcontract-symbolic-runtime-checks (Mechanism B): PRE_EXTRA
+	   accumulates this call's own consult-side obligation check
+	   (oa_handle_call_symbolic_scalar_obligation, via
+	   oa_scan_calls_in_expr's own EXTRA parameter) -- spliced in
+	   *before* T, matching ordinary precondition-checking semantics
+	   (checked ahead of the call actually running), unlike POST_EXTRA
+	   below (address-taken invalidation), which belongs *after* T,
+	   since it reflects what the call itself may have just changed.  */
+	tree pre_extra = NULL_TREE;
+	oa_scan_calls_in_expr (stmt, env, &pre_extra);
+	/* -fcontract-symbolic-runtime-checks (Mechanism B): this call's
+	   own arguments may take the address of an already-shadowed bare
+	   scalar (e.g. 'modify(&y);') -- invalidate those shadows.  */
+	tree post_extra = NULL_TREE;
+	if (oa_symbolic_codegen_active)
+	  oa_invalidate_scalar_shadow_for_call_args (t, env, &post_extra);
+	if (pre_extra || post_extra)
+	  {
+	    tree new_list = alloc_stmt_list ();
+	    append_to_statement_list_force (pre_extra, &new_list);
+	    append_to_statement_list_force (t, &new_list);
+	    append_to_statement_list_force (post_extra, &new_list);
+	    *stmt = new_list;
+	  }
+      }
       goto oa_default_scan;
 
     case FOR_STMT:
@@ -9584,6 +10419,9 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		/* -fcontract-symbolic-proofs: same merge rule as the
 		   if/else case.  */
 		merged.symbolic_merge_with (current);
+		/* -fcontract-symbolic-runtime-checks (Mechanism B): same
+		   union rule as the if/else case.  */
+		merged.shadow_decls_merge_with (current);
 	      }
 	  };
 
@@ -9640,6 +10478,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.merge_with (env);
 		merged.range_merge_with (env);
 		merged.symbolic_merge_with (env);
+		merged.shadow_decls_merge_with (env);
 	      }
 	    any_result = true;
 	  }
@@ -9801,6 +10640,38 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
 
   oa_env env;
 
+  /* -fcontract-symbolic-runtime-checks (Mechanism B): every shadow
+     variable get_or_build_scalar_shadow ever creates for this function
+     needs one stable scope to live in, regardless of how deeply nested
+     the statement that first needs it is (see the plan's own "shadow
+     placement" note for why declaring it anywhere else is unsound).
+     BODY at this pre-genericize stage is *not* generally wrapped in a
+     BIND_EXPR at all yet (that only happens later, during real
+     genericization) -- it is typically a bare STATEMENT_LIST, or that
+     wrapped in a TRY_FINALLY_EXPR for a function with active
+     postcondition processing (see oa_walk_stmt's own TRY_FINALLY_EXPR
+     case) -- so there is no existing scope to hook into here at all.
+     When the flag is on, synthesize one: wrap the whole, untouched
+     original BODY in a fresh, otherwise-empty BIND_EXPR, and write it
+     back to DECL_SAVED_TREE itself -- BODY here is only a local
+     snapshot of that slot's value, and mutating operand slots reached
+     *through* it (as every other oa_walk_stmt case already does)
+     persists correctly on its own, but reassigning BODY's own top-
+     level identity does not, without this explicit writeback.  An
+     empty-VARS BIND_EXPR wrapping the exact same content it already
+     held is completely transparent (the same as adding one extra pair
+     of braces in source) until/unless a shadow is actually prepended
+     to it, so this is done unconditionally whenever the flag is on,
+     not only for functions later found to need one.  */
+  if (flag_contract_symbolic_runtime_checks)
+    {
+      tree outer_bind = build3 (BIND_EXPR, void_type_node, NULL_TREE,
+				 body, NULL_TREE);
+      DECL_SAVED_TREE (fndecl) = outer_bind;
+      body = outer_bind;
+      env.set_outermost_bind (outer_bind);
+    }
+
   /* Whether a RETURN_EXPR needs to be tracked at all is known upfront
      (a pure existence query over the pristine specifier list -- same
      conveyor/is_ignored status as the body's copy, no identity-sharing
@@ -9810,6 +10681,15 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
   oa_return_tracking = oa_has_active_postcondition (fndecl);
   oa_return_all_provable = false;
   oa_return_seen = false;
+
+  /* -fcontract-symbolic-runtime-checks (Mechanism B): active for this
+     one top-level walk whenever the flag is on -- saved/restored (not
+     just set unconditionally false at the end) for the same reason
+     OA_ACTIVE_PROVENANCE below is: this function is the sole top-level
+     driver, never itself nested, but the save/restore discipline is
+     used uniformly throughout this file regardless.  */
+  bool saved_symbolic_codegen = oa_symbolic_codegen_active;
+  oa_symbolic_codegen_active = flag_contract_symbolic_runtime_checks;
 
   /* -fcontract-conveyor-proof-provenance: arm the provenance side-table
      for this one function's walk, mirroring oa_walk_function_calls's own
@@ -9828,6 +10708,7 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
 
   oa_active_provenance = saved_provenance;
   oa_return_tracking = false;
+  oa_symbolic_codegen_active = saved_symbolic_codegen;
 }
 
 /* Top-level entry point, called from finish_function alongside
@@ -10238,6 +11119,48 @@ oa_collect_symbolic_actions (location_t loc, tree condition,
 	    }
 	  continue;
 	}
+
+      /* -fcontract-symbolic-runtime-checks (Mechanism B): a conjunct
+	 comparing a *bare* decl directly (no pointer indirection at
+	 all -- a precondition's own by-value parameter, or a
+	 postcondition's own POSTCONDITION_IDENTIFIER binder, either of
+	 which may be a VAR_DECL or a PARM_DECL, unlike oa_match_simple_
+	 comparison's own PARM_DECL-only shape, built for a different
+	 purpose) is neither of the two shapes Mechanism A (this
+	 function) handles at all -- it is entirely Mechanism B's own
+	 responsibility, established at the producing call's own call
+	 site (oa_call_symbolic_range_p) and consulted at the consuming
+	 call's own call site (oa_precondition_symbolic_range_p/oa_
+	 handle_call_symbolic_scalar_obligation), never inside
+	 CONTRACT's own owner's build_contract_check dispatch at all.
+	 Silently deferred, not an error: unlike a conjunct matching
+	 neither shape at all (still a hard error below), this one is a
+	 recognized, supported shape -- just not this function's to
+	 handle.  */
+      {
+	tree c = STRIP_ANY_LOCATION_WRAPPER (*conjuncts[i]);
+	while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+	  c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+	if (TREE_CODE (c) == LT_EXPR || TREE_CODE (c) == LE_EXPR
+	    || TREE_CODE (c) == GT_EXPR || TREE_CODE (c) == GE_EXPR
+	    || TREE_CODE (c) == EQ_EXPR)
+	  {
+	    tree bare_op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+	    tree bare_op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+	    /* A postcondition's own identifier, once remap_retval has
+	       already substituted it (build_contract_check does this
+	       before calling build_symbolic_runtime_check), is DECL_RESULT
+	       (current_function_decl) -- a RESULT_DECL, not a VAR_DECL/
+	       PARM_DECL like a bare precondition parameter is.  */
+	    bool bare0 = VAR_P (bare_op0) || TREE_CODE (bare_op0) == PARM_DECL
+	      || TREE_CODE (bare_op0) == RESULT_DECL;
+	    bool bare1 = VAR_P (bare_op1) || TREE_CODE (bare_op1) == PARM_DECL
+	      || TREE_CODE (bare_op1) == RESULT_DECL;
+	    if ((bare0 && TREE_CODE (bare_op1) == INTEGER_CST)
+		|| (bare1 && TREE_CODE (bare_op0) == INTEGER_CST))
+	      continue;
+	  }
+      }
 
       error_at (loc, "unsupported conjunct in the condition of a symbolic "
 		"contract under %<-fcontract-symbolic-runtime-checks%>: "
@@ -11201,8 +12124,17 @@ build_symbolic_runtime_check (tree contract, tree ctrl, location_t loc,
 	  finish_expr_stmt (call);
 	}
     }
-  else
+  else if (!actions.is_empty ())
     {
+      /* If every conjunct was deferred to Mechanism B (oa_collect_
+	 symbolic_actions silently skipping a bare-parameter comparison
+	 -- see its own comment), ACTIONS is empty here: Mechanism A has
+	 nothing left to check at all for this contract, so building a
+	 shadow contract (whose condition would be NULL_TREE, an empty
+	 ANDIF chain) and dispatching through it would be both pointless
+	 and unsound to even attempt -- skip entirely, leaving this
+	 contract's whole runtime verification to Mechanism B's own,
+	 separate, per-call-site obligation check instead.  */
       tree shadow = get_or_build_symbolic_shadow_contract (loc, contract,
 							    actions);
       if (shadow == error_mark_node)
