@@ -7,7 +7,12 @@
 // precondition is discharged silently -- proven as one combined
 // subsumption check, not as two independently-checked conjuncts.
 // { dg-do run { target c++26 } }
-// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
+// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -fdump-contract-proofs=range-ok-proofs.smt2" }
+// { dg-final { scan-file range-ok-proofs.smt2 "\\(set-logic QF_UFLIA\\)" } }
+// { dg-final { scan-file range-ok-proofs.smt2 "\\(assert \\(>= v 40\\)\\)" } }
+// { dg-final { scan-file range-ok-proofs.smt2 "\\(assert \\(<= v 99\\)\\)" } }
+// { dg-final { scan-file range-ok-proofs.smt2 "\\(assert \\(not \\(and \\(>= v 20\\) \\(<= v 999\\)\\)\\)\\)" } }
+// { dg-final { scan-file range-ok-proofs.smt2 "expect: unsat" } }
 
 #include <contracts>
 namespace sc = std::contracts;

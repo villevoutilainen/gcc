@@ -5,7 +5,10 @@
 // definition is trusted by construction, so the connection holds
 // without ever evaluating it.
 // { dg-do run { target c++26 } }
-// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
+// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -fdump-contract-proofs=predicate-ok-proofs.smt2" }
+// { dg-final { scan-file predicate-ok-proofs.smt2 "\\(declare-const check_it Bool\\)" } }
+// { dg-final { scan-file predicate-ok-proofs.smt2 "\\(assert check_it\\)\n\\(assert \\(not check_it\\)\\)" } }
+// { dg-final { scan-file predicate-ok-proofs.smt2 "expect: unsat" } }
 
 #include <contracts>
 namespace sc = std::contracts;

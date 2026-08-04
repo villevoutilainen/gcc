@@ -1924,6 +1924,13 @@ std::is_object_address to general comparison conjuncts and
 predicate-chaining through an earlier call's postcondition; requires
 -fcontract-control-objects to have any effect.
 
+fdump-contract-proofs=
+C++ ObjC++ RejectNegative Joined Var(flag_dump_contract_proofs)
+-fdump-contract-proofs=<file>	Emit an SMT-LIB2 verification condition to
+<file> for every conveyor-proof obligation concluded by
+-fcontract-conveyor-proofs (proven or disproven; nothing is emitted for
+an obligation left unknown, since there is no proof to certify).
+
 fcontracts-implicit-include
 C++ ObjC++ Var(flag_contracts_implicit_include) Init(0)
 -fcontracts-implicit-include	Implicitly #include <contracts> before the

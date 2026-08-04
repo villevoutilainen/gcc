@@ -7,7 +7,9 @@
 // proven from the two combined ranges as a whole rather than from
 // either single conjunct in isolation.
 // { dg-do compile { target c++26 } }
-// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
+// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -fdump-contract-proofs=range-disjoint-bad-proofs.smt2" }
+// { dg-final { scan-file range-disjoint-bad-proofs.smt2 "\\(assert \\(and \\(>= v 0\\) \\(<= v 9\\)\\)\\)" } }
+// { dg-final { scan-file range-disjoint-bad-proofs.smt2 "expect: unsat" } }
 
 #include <contracts>
 namespace sc = std::contracts;

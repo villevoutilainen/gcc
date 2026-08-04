@@ -4,7 +4,9 @@
 // precondition requires for that same value.  A genuine, provable
 // contradiction, still without ever evaluating check_it itself.
 // { dg-do compile { target c++26 } }
-// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
+// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -fdump-contract-proofs=predicate-bad-proofs.smt2" }
+// { dg-final { scan-file predicate-bad-proofs.smt2 "\\(assert \\(not check_it\\)\\)\n\\(assert check_it\\)" } }
+// { dg-final { scan-file predicate-bad-proofs.smt2 "expect: unsat" } }
 
 #include <contracts>
 namespace sc = std::contracts;
