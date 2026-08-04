@@ -3418,6 +3418,148 @@ build_contract_handler_call (tree violation)
   finish_expr_stmt (call);
 }
 
+/* -fcontract-symbolic-runtime-checks ("the gem", ~/gcc-axiom-
+   contracts.md): the four runtime record-store entry points, declared in
+   <contracts> and defined exactly once in libstdc++'s contract26.cc.
+   Unlike handle_contract_violation, these are not meant to be user-
+   overridable, so there's no global_namespace fallback-declaration path
+   -- a plain qualified-name lookup into std::contracts, mirroring
+   contract_default_control_object's lookup of default_v, is enough; a
+   missing declaration is a hard error naming the required #include,
+   the same way contract_default_control_object handles a missing
+   default_v.  Each of the four is looked up (and cached) at most once
+   per compilation.  */
+
+static tree
+lookup_symbolic_runtime_fn (location_t loc, tree *cache, const char *name)
+{
+  if (*cache)
+    return *cache;
+
+  tree id_ns = get_identifier ("contracts");
+  tree ns = lookup_qualified_name (std_node, id_ns);
+
+  tree res = NULL_TREE;
+  if (TREE_CODE (ns) == NAMESPACE_DECL)
+    res = lookup_qualified_name (ns, get_identifier (name));
+
+  if (!res || res == error_mark_node || TREE_CODE (res) != FUNCTION_DECL)
+    {
+      error_at (loc, "%<std::contracts::%s%> has not been declared; "
+		"include %<<contracts>%> before using %qs", name,
+		"-fcontract-symbolic-runtime-checks");
+      return error_mark_node;
+    }
+  *cache = res;
+  return res;
+}
+
+static GTY(()) tree symbolic_establish_bool_decl;
+static GTY(()) tree symbolic_check_bool_decl;
+static GTY(()) tree symbolic_establish_range_decl;
+static GTY(()) tree symbolic_check_range_decl;
+
+static tree
+get_symbolic_establish_bool_fn (location_t loc)
+{
+  return lookup_symbolic_runtime_fn (loc, &symbolic_establish_bool_decl,
+				      "__contracts_symbolic_establish_bool");
+}
+
+static tree
+get_symbolic_check_bool_fn (location_t loc)
+{
+  return lookup_symbolic_runtime_fn (loc, &symbolic_check_bool_decl,
+				      "__contracts_symbolic_check_bool");
+}
+
+static tree
+get_symbolic_establish_range_fn (location_t loc)
+{
+  return lookup_symbolic_runtime_fn (loc, &symbolic_establish_range_decl,
+				      "__contracts_symbolic_establish_range");
+}
+
+static tree
+get_symbolic_check_range_fn (location_t loc)
+{
+  return lookup_symbolic_runtime_fn (loc, &symbolic_check_range_decl,
+				      "__contracts_symbolic_check_range");
+}
+
+/* Return the address of a stable, comdat-folded, per-declaration opaque
+   "key" VAR_DECL named NAME -- -fcontract-symbolic-runtime-checks's
+   runtime identity for "which predicate/comparison is this", used as
+   the KEY argument to the four runtime functions above.  Mirrors
+   get_guard/mangle_guard_variable (decl2.cc/mangle.cc): a 1-byte
+   artificial global, cached via get_global_binding exactly like a
+   guard variable, so it's synthesized at most once per name even
+   though every TU that names the same symbolic function/field
+   independently asks for it.  Unlike a guard variable (whose linkage
+   mirrors its guarded variable's own, via copy_linkage), this is
+   *always* comdat regardless of the target's own linkage: there is no
+   real definition of the target anywhere to mirror (a symbolic
+   function has none at all; a field isn't a linkage-bearing entity in
+   the first place), so every TU that needs this key must be able to
+   synthesize an identical, foldable one independently.  */
+
+static tree
+get_symbolic_key_decl (location_t loc, tree name)
+{
+  tree key = get_global_binding (name);
+  if (key)
+    return key;
+
+  key = build_decl (loc, VAR_DECL, name, unsigned_char_type_node);
+  SET_DECL_ASSEMBLER_NAME (key, name);
+  DECL_ARTIFICIAL (key) = 1;
+  DECL_IGNORED_P (key) = 1;
+  TREE_STATIC (key) = 1;
+  TREE_USED (key) = 1;
+  TREE_PUBLIC (key) = 1;
+  comdat_linkage (key);
+  pushdecl_top_level_and_finish (key, NULL_TREE);
+  return key;
+}
+
+/* Return the runtime identity key for symbolic predicate function FN
+   (an is_opened(this)-shaped conjunct's callee) -- see
+   get_symbolic_key_decl.  FN has no definition anywhere (that's the
+   whole point of 'symbolic'), so its own DECL_ASSEMBLER_NAME is the
+   only stable, cross-TU-identical handle to derive a name from.  */
+
+static tree
+get_symbolic_predicate_key (tree fn)
+{
+  const char *fn_name = IDENTIFIER_POINTER (DECL_ASSEMBLER_NAME (fn));
+  char *name_str = concat ("_ZGSyP", fn_name, NULL);
+  tree key = get_symbolic_key_decl (DECL_SOURCE_LOCATION (fn),
+				     get_identifier (name_str));
+  free (name_str);
+  return build_fold_addr_expr (key);
+}
+
+/* Return the runtime identity key for symbolic comparison conjunct
+   FIELD (a ptr->field OP const-shaped conjunct's field) -- see
+   get_symbolic_key_decl.  FIELD_DECLs carry no DECL_ASSEMBLER_NAME
+   (they aren't linkage-bearing entities), so the name is derived from
+   its containing class's own ABI-mangled name (identical across every
+   TU by ODR) plus the field's own identifier (unique within that
+   class).  */
+
+static tree
+get_symbolic_field_key (tree field)
+{
+  tree type_name = mangle_typeinfo_for_type (DECL_CONTEXT (field));
+  const char *field_name = IDENTIFIER_POINTER (DECL_NAME (field));
+  char *name_str = concat ("_ZGSyF", IDENTIFIER_POINTER (type_name), "_",
+			    field_name, NULL);
+  tree key = get_symbolic_key_decl (DECL_SOURCE_LOCATION (field),
+				     get_identifier (name_str));
+  free (name_str);
+  return build_fold_addr_expr (key);
+}
+
 /* Return true if FNDECL is std::contracts::__d4324_invoke_violation_handler
    (declared, never defined, in libstdc++-v3/include/std/contracts).  See
    maybe_replace_d4324_violation_handler_call below.  The name is
@@ -9923,6 +10065,189 @@ oa_env_check_comparison (oa_analysis_env *env, tree expr, tree_code cmp,
 				     expr, cmp, const_val);
 }
 
+/* -fcontract-symbolic-runtime-checks: recognize a ptr->field OP const
+   (or (*ptr).field OP const, the same shape after the front end
+   desugars '->') conjunct -- the "reached through a persistent
+   pointer" comparison case Mechanism A covers (see
+   .claude/plans/stateless-jumping-shore.md); a bare by-value local
+   compared directly, with no pointer indirection at all, does not
+   match this shape (that's Mechanism B, not yet built). Shares its
+   OP/const-operand recognition with oa_match_simple_comparison, but
+   requires the non-constant operand to be a COMPONENT_REF through an
+   INDIRECT_REF, extracting the FIELD_DECL and the pointer
+   sub-expression underneath separately rather than requiring a bare
+   PARM_DECL.  */
+
+static bool
+oa_symbolic_comparison_conjunct_shape (tree conjunct, tree *field_out,
+					tree *ptr_expr_out, tree_code *code_out,
+					tree *const_val_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  tree_code code = TREE_CODE (c);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return false;
+
+  tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+
+  tree comp, const_val;
+  bool flipped;
+  if (TREE_CODE (op1) == INTEGER_CST)
+    comp = op0, const_val = op1, flipped = false;
+  else if (TREE_CODE (op0) == INTEGER_CST)
+    comp = op1, const_val = op0, flipped = true;
+  else
+    return false;
+
+  comp = STRIP_ANY_LOCATION_WRAPPER (comp);
+  if (TREE_CODE (comp) != COMPONENT_REF)
+    return false;
+  tree field = TREE_OPERAND (comp, 1);
+  if (TREE_CODE (field) != FIELD_DECL)
+    return false;
+  tree base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (comp, 0));
+  if (TREE_CODE (base) != INDIRECT_REF)
+    return false;
+  tree ptr_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (base, 0));
+
+  if (flipped)
+    switch (code)
+      {
+      case LT_EXPR: code = GT_EXPR; break;
+      case LE_EXPR: code = GE_EXPR; break;
+      case GT_EXPR: code = LT_EXPR; break;
+      case GE_EXPR: code = LE_EXPR; break;
+      default: break;
+      }
+
+  *field_out = field;
+  *ptr_expr_out = ptr_expr;
+  *code_out = code;
+  *const_val_out = const_val;
+  return true;
+}
+
+/* One recognized, codegen-ready action for -fcontract-symbolic-runtime-
+   checks: either a pred_fn(arg)/!pred_fn(arg) conjunct (IS_RANGE
+   false), or one or more ptr->field OP const conjuncts on the same
+   (FIELD, PTR_EXPR) pair, already combined into a single [lo,hi) range
+   (IS_RANGE true) -- mirrors oa_range_fact's own half-open convention.
+   PRED_FN/BOOL_ARG/FIELD/PTR_EXPR all still reference ORIG's real decls
+   (this, parameters), unremapped -- the same decls
+   build_predicate_core_function_1's own walk_tree/copy_tree_body_r
+   remapping already knows how to handle once these are woven into a
+   shadow CONTRACT_CONDITION, exactly as for any other conjunct.  */
+
+struct oa_symbolic_action
+{
+  bool is_range;
+  tree pred_fn;
+  tree bool_arg;
+  bool polarity;
+  tree field;
+  tree ptr_expr;
+  bool has_lo, has_hi;
+  long long lo, hi;
+};
+
+/* Break CONDITION into conjuncts (oa_collect_conjuncts) and classify
+   each as a predicate-call or comparison action (above), combining
+   multiple comparison conjuncts on the same (field, ptr_expr) pair into
+   one range action.  Returns false (diagnosing at LOC) if any conjunct
+   matches neither shape -- -fcontract-symbolic-runtime-checks requires
+   every conjunct of a symbolic contract's condition to be recognized,
+   rather than silently doing something unsound with the rest.  */
+
+static bool
+oa_collect_symbolic_actions (location_t loc, tree condition,
+			     vec<oa_symbolic_action> *actions)
+{
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts (&condition, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree pred_fn, arg_decl;
+      bool negated;
+      if (oa_predicate_conjunct_shape (*conjuncts[i], &pred_fn, &arg_decl,
+					&negated))
+	{
+	  oa_symbolic_action act = {};
+	  act.is_range = false;
+	  act.pred_fn = pred_fn;
+	  act.bool_arg = arg_decl;
+	  act.polarity = !negated;
+	  actions->safe_push (act);
+	  continue;
+	}
+
+      tree field, ptr_expr, const_val;
+      tree_code code;
+      if (oa_symbolic_comparison_conjunct_shape (*conjuncts[i], &field,
+						  &ptr_expr, &code, &const_val))
+	{
+	  if (TREE_CODE (const_val) != INTEGER_CST)
+	    {
+	      error_at (loc, "non-constant bound in a comparison conjunct of "
+			"a symbolic contract");
+	      return false;
+	    }
+	  long long val = TREE_INT_CST_LOW (const_val);
+	  bool has_lo = false, has_hi = false;
+	  long long lo = 0, hi = 0;
+	  switch (code)
+	    {
+	    case GE_EXPR: has_lo = true; lo = val; break;
+	    case GT_EXPR: has_lo = true; lo = val + 1; break;
+	    case LE_EXPR: has_hi = true; hi = val + 1; break;
+	    case LT_EXPR: has_hi = true; hi = val; break;
+	    case EQ_EXPR: has_lo = true; has_hi = true; lo = val; hi = val + 1; break;
+	    default: gcc_unreachable ();
+	    }
+
+	  oa_symbolic_action *found = NULL;
+	  for (unsigned j = 0; j < actions->length () && !found; ++j)
+	    {
+	      oa_symbolic_action &a = (*actions)[j];
+	      if (a.is_range && a.field == field
+		  && cp_tree_equal (a.ptr_expr, ptr_expr))
+		found = &a;
+	    }
+	  if (found)
+	    {
+	      if (has_lo && (!found->has_lo || lo > found->lo))
+		{ found->has_lo = true; found->lo = lo; }
+	      if (has_hi && (!found->has_hi || hi < found->hi))
+		{ found->has_hi = true; found->hi = hi; }
+	    }
+	  else
+	    {
+	      oa_symbolic_action act = {};
+	      act.is_range = true;
+	      act.field = field;
+	      act.ptr_expr = ptr_expr;
+	      act.has_lo = has_lo;
+	      act.lo = lo;
+	      act.has_hi = has_hi;
+	      act.hi = hi;
+	      actions->safe_push (act);
+	    }
+	  continue;
+	}
+
+      error_at (loc, "unsupported conjunct in the condition of a symbolic "
+		"contract under %<-fcontract-symbolic-runtime-checks%>: "
+		"expected a symbolic predicate call or a pointer-reached "
+		"field comparison");
+      return false;
+    }
+  return true;
+}
+
 /* Validate BASE_TYPE as the target of a base_contract<BASE_TYPE>() used
    inside a contract of CANONICAL (the real, canonical FUNCTION_DECL this
    contract belongs to -- see resolve_base_contract_calls's comment for
@@ -10731,6 +11056,175 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
   return bind;
 }
 
+/* -fcontract-symbolic-runtime-checks: build a CALL_EXPR to the matching
+   runtime check_bool/check_range function for one recognized ACTION
+   (oa_collect_symbolic_actions) -- LOC is used for the (rare) error if
+   the runtime function itself can't be found (missing <contracts>
+   include).  Returns error_mark_node on that failure.  */
+
+static tree
+oa_build_symbolic_check_call (location_t loc, oa_symbolic_action &action)
+{
+  if (!action.is_range)
+    {
+      tree fn = get_symbolic_check_bool_fn (loc);
+      if (fn == error_mark_node)
+	return error_mark_node;
+      tree key = get_symbolic_predicate_key (action.pred_fn);
+      tree obj = fold_convert (ptr_type_node, action.bool_arg);
+      tree polarity = build_int_cst (boolean_type_node, action.polarity);
+      return build_call_n (fn, 3, key, obj, polarity);
+    }
+
+  tree fn = get_symbolic_check_range_fn (loc);
+  if (fn == error_mark_node)
+    return error_mark_node;
+  tree key = get_symbolic_field_key (action.field);
+  tree obj = fold_convert (ptr_type_node, action.ptr_expr);
+  tree has_lo = build_int_cst (boolean_type_node, action.has_lo);
+  tree lo = build_int_cst (long_long_integer_type_node, action.lo);
+  tree has_hi = build_int_cst (boolean_type_node, action.has_hi);
+  tree hi = build_int_cst (long_long_integer_type_node, action.hi);
+  return build_call_n (fn, 6, key, obj, has_lo, lo, has_hi, hi);
+}
+
+/* -fcontract-symbolic-runtime-checks: build a CALL_EXPR to the matching
+   runtime establish_bool/establish_range function for one recognized
+   ACTION, to be executed unconditionally (see
+   build_symbolic_runtime_check's own comment for why the establishing
+   side never goes through the control object at all).  */
+
+static tree
+oa_build_symbolic_establish_call (location_t loc, oa_symbolic_action &action)
+{
+  if (!action.is_range)
+    {
+      tree fn = get_symbolic_establish_bool_fn (loc);
+      if (fn == error_mark_node)
+	return error_mark_node;
+      tree key = get_symbolic_predicate_key (action.pred_fn);
+      tree obj = fold_convert (ptr_type_node, action.bool_arg);
+      tree polarity = build_int_cst (boolean_type_node, action.polarity);
+      return build_call_n (fn, 3, key, obj, polarity);
+    }
+
+  tree fn = get_symbolic_establish_range_fn (loc);
+  if (fn == error_mark_node)
+    return error_mark_node;
+  tree key = get_symbolic_field_key (action.field);
+  tree obj = fold_convert (ptr_type_node, action.ptr_expr);
+  tree has_lo = build_int_cst (boolean_type_node, action.has_lo);
+  tree lo = build_int_cst (long_long_integer_type_node, action.lo);
+  tree has_hi = build_int_cst (boolean_type_node, action.has_hi);
+  tree hi = build_int_cst (long_long_integer_type_node, action.hi);
+  return build_call_n (fn, 6, key, obj, has_lo, lo, has_hi, hi);
+}
+
+/* Cache, keyed by the original CONTRACT tree's own identity (mirroring
+   contract_predicate_core_fn's own cache immediately above), of the
+   "shadow" CONTRACT_STATEMENT synthesized for a symbolic precondition/
+   assertion's runtime check: a copy_node of CONTRACT with
+   CONTRACT_CONDITION replaced by ACTIONS' check-calls, ANDed together
+   in their original order.  Never mutates CONTRACT's own
+   CONTRACT_CONDITION -- -fcontract-symbolic-proofs' static analysis
+   reads that original, untouched tree separately, and is unaffected by
+   this cache existing at all.  */
+static GTY(()) hash_map<tree, tree> *symbolic_shadow_contract;
+
+static tree
+get_or_build_symbolic_shadow_contract (location_t loc, tree contract,
+					vec<oa_symbolic_action> &actions)
+{
+  if (tree *cached = hash_map_safe_get (symbolic_shadow_contract, contract))
+    return *cached;
+
+  tree new_condition = NULL_TREE;
+  for (unsigned i = 0; i < actions.length (); ++i)
+    {
+      tree call = oa_build_symbolic_check_call (loc, actions[i]);
+      if (call == error_mark_node)
+	return error_mark_node;
+      new_condition = new_condition
+	? build2 (TRUTH_ANDIF_EXPR, boolean_type_node, new_condition, call)
+	: call;
+    }
+
+  tree shadow = copy_node (contract);
+  CONTRACT_CONDITION (shadow) = new_condition;
+
+  hash_map_maybe_create<hm_ggc> (symbolic_shadow_contract);
+  symbolic_shadow_contract->put (contract, shadow);
+  return shadow;
+}
+
+/* -fcontract-symbolic-runtime-checks ("the gem", see
+   ~/gcc-axiom-contracts.md and .claude/plans/stateless-jumping-shore.md):
+   build the runtime codegen for a symbolic CONTRACT once
+   build_contract_check has determined the new flag is on.  CONDITION is
+   CONTRACT_CONDITION (contract) as build_contract_check has already
+   remapped it (remap_dummy_this/remap_retval).
+
+   A postcondition unconditionally records each recognized conjunct's
+   establishment and nothing else -- no control-object dispatch, no
+   violation path, no thunk at all: per the document's own "isn't really
+   a check... simply a straight-up establishment."
+
+   A precondition or assertion instead goes through the ordinary
+   control-object dispatch machinery (get_or_build_predicate_core_
+   function et al.) completely unchanged, fed a synthesized shadow
+   contract whose condition calls the matching runtime check function
+   for each conjunct instead of the original (possibly bodiless)
+   predicate -- per the document's "the runtime code that checks a
+   symbolic pre() should invoke the control object's operator()."  */
+
+static tree
+build_symbolic_runtime_check (tree contract, tree ctrl, location_t loc,
+			       tree condition)
+{
+  auto_vec<oa_symbolic_action> actions;
+  if (!oa_collect_symbolic_actions (loc, condition, &actions))
+    return error_mark_node;
+
+  tree cc_bind = build3 (BIND_EXPR, void_type_node, NULL, NULL, NULL);
+  BIND_EXPR_BODY (cc_bind) = push_stmt_list ();
+
+  if (TREE_CODE (contract) == ASSERTION_STMT)
+    emit_builtin_observable_checkpoint ();
+
+  if (POSTCONDITION_P (contract))
+    {
+      for (unsigned i = 0; i < actions.length (); ++i)
+	{
+	  tree call = oa_build_symbolic_establish_call (loc, actions[i]);
+	  if (call == error_mark_node)
+	    return error_mark_node;
+	  finish_expr_stmt (call);
+	}
+    }
+  else
+    {
+      tree shadow = get_or_build_symbolic_shadow_contract (loc, contract,
+							    actions);
+      if (shadow == error_mark_node)
+	return error_mark_node;
+
+      tree control_op = contract_control_operator (ctrl);
+      tree core_fn = get_or_build_predicate_core_function (shadow,
+							    current_function_decl);
+      tree struct_type = build_predicate_arg_struct_type (core_fn, loc);
+      tree thunk_fn = build_predicate_thunk_function (contract, core_fn,
+						      struct_type);
+      tree args_ptr = build_predicate_arg_struct_var (contract, struct_type,
+						       cc_bind, loc);
+      finish_expr_stmt (build_contract_control_call (contract, ctrl, control_op,
+						      cc_bind, args_ptr,
+						      thunk_fn));
+    }
+
+  BIND_EXPR_BODY (cc_bind) = pop_stmt_list (BIND_EXPR_BODY (cc_bind));
+  return cc_bind;
+}
+
 /* Genericize a CONTRACT tree, but do not attach it to the current context,
    the caller is responsible for that.
    This is called during genericization.  */
@@ -10807,14 +11301,24 @@ build_contract_check (tree contract)
      a pre/post written against a control object whose is_symbolic(cfg)
      returns true has no runtime representation at all -- no predicate
      thunk, no arg struct, no control-object operator() call -- the
-     contract exists purely for a (not-yet-built) static analyzer to
-     consult from the untouched CONTRACT_CONDITION this function leaves
-     behind pre-genericize.  Unlike the ignored/assumable case above,
-     there is no "hand it to the optimizer as an assumption" alternative
-     here: this is a separate axis from evaluation_semantic entirely, so
-     the check is unconditional, not gated on assumability.  */
+     contract exists purely for the (optional) static analyzer
+     (-fcontract-symbolic-proofs) to consult from the untouched
+     CONTRACT_CONDITION this function leaves behind pre-genericize.
+     Unlike the ignored/assumable case above, there is no "hand it to
+     the optimizer as an assumption" alternative here: this is a
+     separate axis from evaluation_semantic entirely, so the check is
+     unconditional, not gated on assumability.  -fcontract-symbolic-
+     runtime-checks ("the gem") opts into real runtime codegen instead
+     -- see build_symbolic_runtime_check -- dispatched below, once
+     CONDITION has gone through the same remap_dummy_this/remap_retval
+     processing as every other contract.  */
+  bool symbolic_runtime = false;
   if (ctrl && contract_control_is_symbolic (ctrl, side))
-    return void_node;
+    {
+      if (!flag_contract_symbolic_runtime_checks)
+	return void_node;
+      symbolic_runtime = true;
+    }
 
   contract_evaluation_semantic semantic = CES_ENFORCE;
   bool quick = false;
@@ -10852,6 +11356,9 @@ build_contract_check (tree contract)
       if (condition == error_mark_node)
 	return NULL_TREE;
     }
+
+  if (symbolic_runtime)
+    return build_symbolic_runtime_check (contract, ctrl, loc, condition);
 
   /* D4324 step 1, assumable: emit an optimizer assumption over the predicate
      rather than a runtime check.  IFN_ASSUME does not evaluate the predicate

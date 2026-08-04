@@ -25,6 +25,8 @@
 
 #include <contracts>
 #include <exception> // std::terminate
+#include <mutex>
+#include <unordered_map>
 
 #ifndef __cpp_lib_contracts
 # error "This file requires C++26 contracts support to be enabled"
@@ -142,6 +144,111 @@ void __d4324_log_violation(const char* comment, std::source_location loc) noexce
 [[noreturn]] void __d4324_terminate() noexcept
 {
   std::terminate();
+}
+
+namespace
+{
+  // -fcontract-symbolic-runtime-checks ("the gem"): one process-wide,
+  // mutex-guarded record store, shared across every TU and thread that
+  // links against this library -- the whole point being that an
+  // establishing call in one TU can be consulted by a checking call in
+  // another. KEY identifies the predicate function (for a bool record)
+  // or the field (for a range record) via a compiler-synthesized,
+  // comdat-folded tag object (see get_symbolic_predicate_key /
+  // get_symbolic_field_key in gcc/cp/contracts.cc), so it is stable and
+  // identical across every TU that names the same declaration. OBJ is
+  // the tracked object's own runtime pointer value.
+  struct symbolic_record_key
+  {
+    const void* key;
+    const void* obj;
+
+    friend bool
+    operator==(const symbolic_record_key&, const symbolic_record_key&) noexcept
+      = default;
+  };
+
+  struct symbolic_record_key_hash
+  {
+    std::size_t
+    operator()(const symbolic_record_key& k) const noexcept
+    {
+      std::size_t h1 = std::hash<const void*>{}(k.key);
+      std::size_t h2 = std::hash<const void*>{}(k.obj);
+      return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1 << 6) + (h1 >> 2));
+    }
+  };
+
+  struct symbolic_record_value
+  {
+    bool is_range;
+    bool bool_val;
+    bool has_lo;
+    bool has_hi;
+    long long lo;
+    long long hi;
+  };
+
+  std::mutex symbolic_mutex;
+  std::unordered_map<symbolic_record_key, symbolic_record_value,
+		      symbolic_record_key_hash> symbolic_records;
+}
+
+void
+__contracts_symbolic_establish_bool(const void* key, const void* obj,
+				     bool polarity) noexcept
+{
+  symbolic_record_value v{};
+  v.is_range = false;
+  v.bool_val = polarity;
+  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  symbolic_records[symbolic_record_key{key, obj}] = v;
+}
+
+bool
+__contracts_symbolic_check_bool(const void* key, const void* obj,
+				 bool polarity) noexcept
+{
+  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  auto it = symbolic_records.find(symbolic_record_key{key, obj});
+  if (it == symbolic_records.end() || it->second.is_range)
+    return false;
+  return it->second.bool_val == polarity;
+}
+
+void
+__contracts_symbolic_establish_range(const void* key, const void* obj,
+				      bool has_lo, long long lo,
+				      bool has_hi, long long hi) noexcept
+{
+  symbolic_record_value v{};
+  v.is_range = true;
+  v.has_lo = has_lo;
+  v.lo = lo;
+  v.has_hi = has_hi;
+  v.hi = hi;
+  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  symbolic_records[symbolic_record_key{key, obj}] = v;
+}
+
+bool
+__contracts_symbolic_check_range(const void* key, const void* obj,
+				  bool has_lo, long long lo,
+				  bool has_hi, long long hi) noexcept
+{
+  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  auto it = symbolic_records.find(symbolic_record_key{key, obj});
+  if (it == symbolic_records.end() || !it->second.is_range)
+    return false;
+  const symbolic_record_value& est = it->second;
+  // The established range must entail (be a subset of) the required
+  // one: a required bound the established fact doesn't itself have, or
+  // has but looser than required, fails the check.
+  if (has_lo && (!est.has_lo || est.lo < lo))
+    return false;
+  if (has_hi && (!est.has_hi || est.hi > hi))
+    return false;
+  return true;
 }
 
 }

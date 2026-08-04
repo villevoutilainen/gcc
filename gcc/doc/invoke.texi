@@ -3465,6 +3465,22 @@ this is a confirmed contradiction), or left unknown (a warning). This
 option has no effect unless @option{-fcontract-control-objects} is also
 enabled.
 
+@opindex fcontract-symbolic-runtime-checks
+@item -fcontract-symbolic-runtime-checks
+Generate real, opt-in runtime code for symbolic contracts, instead of
+the default of no runtime representation at all. A symbolic
+postcondition records, at run time, that it was established; a symbolic
+precondition consults that record -- via the control object's
+@code{operator()}, exactly as an ordinary contract does -- rather than
+ever evaluating the original condition directly (which may not even be
+possible: a symbolic predicate function has no body anywhere). The
+record is shared across translation units and threads, so an
+establishing call in one TU can be consulted by a checking call in
+another. Independent of @option{-fcontract-symbolic-proofs} (a
+compile-time, single-function check); the two may be used separately or
+together. This option has no effect unless
+@option{-fcontract-control-objects} is also enabled.
+
 @opindex fdump-contract-proofs
 @item -fdump-contract-proofs=@var{file}
 Emit an SMT-LIB2 verification condition to @var{file} for every

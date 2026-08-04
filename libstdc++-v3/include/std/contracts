@@ -322,6 +322,30 @@ namespace contracts
   void __d4324_log_violation(const char*, std::source_location) noexcept;
   [[noreturn]] void __d4324_terminate() noexcept;
 
+  // -fcontract-symbolic-runtime-checks (~/gcc-axiom-contracts.md, "the
+  // gem"): a symbolic postcondition's runtime establishment, and a
+  // symbolic precondition's runtime consultation of that established
+  // fact -- shared across translation units and threads. The _bool pair
+  // is for a pred_fn(arg)/!pred_fn(arg)-shaped conjunct (KEY identifies
+  // the predicate function, OBJ is the argument's runtime pointer
+  // value); the _range pair is for a ptr->field OP const-shaped
+  // conjunct (KEY identifies the field, OBJ is the pointer's runtime
+  // value, [LO,HI) is the established/required bound, gated by
+  // HAS_LO/HAS_HI). The compiler calls these directly
+  // (build_cp_library_fn_ptr, gcc/cp/contracts.cc) rather than through
+  // ordinary name lookup, so they are never meant to be called from
+  // user code.
+  void __contracts_symbolic_establish_bool(const void* key, const void* obj,
+					    bool polarity) noexcept;
+  bool __contracts_symbolic_check_bool(const void* key, const void* obj,
+					bool polarity) noexcept;
+  void __contracts_symbolic_establish_range(const void* key, const void* obj,
+					     bool has_lo, long long lo,
+					     bool has_hi, long long hi) noexcept;
+  bool __contracts_symbolic_check_range(const void* key, const void* obj,
+					 bool has_lo, long long lo,
+					 bool has_hi, long long hi) noexcept;
+
   // Mirrors gcc/cp/contracts.cc's declare_terminate_wrapper /
   // __tu_terminate_wrapper, the existing P2900 workaround for GCC
   // PR121936 (see -fcontracts-conservative-ipa). default_control's and
