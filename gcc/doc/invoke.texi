@@ -3427,11 +3427,17 @@ The variable @var{mode} has the values '@code{on}' and '@code{off}'.
 Extend the D4324 conveyor precondition-obligation checking already
 performed at call sites (which otherwise only recognizes a bare
 @code{std::is_object_address} conjunct) to general comparison conjuncts
-(e.g.@: @code{x > 0}) and to predicate-chaining, where a precondition's
-named-predicate conjunct is connected to an earlier call's postcondition
-asserting the same predicate on its own result. Each obligation is
-either proven (silently discharged), proven false (a hard error, since
-this is a confirmed violation), or left unknown (a warning, since the
+(e.g.@: @code{x > 0}), to combined value-range subsumption (all of a
+precondition's comparison conjuncts on the same parameter, e.g.@:
+@code{x < 1000 && x >= 20}, are combined into one required interval and
+checked as a whole against the caller's own established interval, e.g.@:
+from an earlier call's postcondition combining @code{r < 100 && r >= 40}
+-- proving subsumption, or disjointness, of the two intervals directly),
+and to predicate-chaining, where a precondition's named-predicate
+conjunct is connected to an earlier call's postcondition asserting the
+same predicate on its own result. Each obligation is either proven
+(silently discharged), proven false (a hard error, since this is a
+confirmed violation), or left unknown (a warning, since the
 code may still be correct at run time even though it could not be
 verified). This option has no effect unless
 @option{-fcontract-control-objects} is also enabled.

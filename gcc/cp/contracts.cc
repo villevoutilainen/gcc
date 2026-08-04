@@ -5819,6 +5819,48 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
   return false;
 }
 
+/* Intersect REFINED with the bound implied by "decl CODE val" (CODE
+   already normalized to read left-to-right as "decl CODE val", any
+   asserted-false negation already applied by the caller) -- the shared
+   core of oa_refine_single_comparison below, factored out so
+   -fcontract-conveyor-proofs's own combined-range precondition check
+   (oa_handle_call_conveyor_proof_obligation) can fold several
+   precondition conjuncts on the same parameter into one required
+   interval the same way a postcondition's own conjuncts already get
+   folded into one established interval (oa_call_postcondition_range_p).
+   Only ever tightens (intersects), never widens -- same discipline as
+   the rest of this pass.  */
+
+static void
+oa_tighten_range_bound (oa_range_fact &refined, tree_code code, widest_int val)
+{
+  switch (code)
+    {
+    case LT_EXPR:
+      if (!refined.has_hi || refined.hi > val - 1)
+	{ refined.has_hi = true; refined.hi = val - 1; }
+      break;
+    case LE_EXPR:
+      if (!refined.has_hi || refined.hi > val)
+	{ refined.has_hi = true; refined.hi = val; }
+      break;
+    case GT_EXPR:
+      if (!refined.has_lo || refined.lo < val + 1)
+	{ refined.has_lo = true; refined.lo = val + 1; }
+      break;
+    case GE_EXPR:
+      if (!refined.has_lo || refined.lo < val)
+	{ refined.has_lo = true; refined.lo = val; }
+      break;
+    case EQ_EXPR:
+      refined.has_lo = refined.has_hi = true;
+      refined.lo = refined.hi = val;
+      break;
+    default:
+      break;
+    }
+}
+
 /* D4324/P2680 item 8, Increment E1: refine a single top-level
    comparison CONJUNCT ('<', '<=', '>', '>=', '=='; '!=' isn't usefully
    representable as a single interval and is left alone) between a
@@ -5918,31 +5960,7 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
       refined.has_lo = refined.has_hi = false;
     }
 
-  switch (code)
-    {
-    case LT_EXPR:
-      if (!refined.has_hi || refined.hi > val - 1)
-	{ refined.has_hi = true; refined.hi = val - 1; }
-      break;
-    case LE_EXPR:
-      if (!refined.has_hi || refined.hi > val)
-	{ refined.has_hi = true; refined.hi = val; }
-      break;
-    case GT_EXPR:
-      if (!refined.has_lo || refined.lo < val + 1)
-	{ refined.has_lo = true; refined.lo = val + 1; }
-      break;
-    case GE_EXPR:
-      if (!refined.has_lo || refined.lo < val)
-	{ refined.has_lo = true; refined.lo = val; }
-      break;
-    case EQ_EXPR:
-      refined.has_lo = refined.has_hi = true;
-      refined.lo = refined.hi = val;
-      break;
-    default:
-      return;
-    }
+  oa_tighten_range_bound (refined, code, val);
   env.range_set (decl, refined);
 }
 
@@ -6563,6 +6581,12 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env)
 static oa_proof_result oa_env_check_comparison_1
   (oa_env &env, tree expr, tree_code cmp, tree const_val);
 
+/* Forward-declared: defined later, right after oa_env_check_comparison_1;
+   oa_handle_call_conveyor_proof_obligation below needs it before that
+   point in the file.  */
+static oa_proof_result oa_env_check_range_subsumption
+  (oa_env &env, tree expr, oa_range_fact &req);
+
 /* -fcontract-conveyor-proofs: recognize CONJUNCT as "pred_fn (decl)" or
    its negation "!pred_fn (decl)" -- a call to some ordinary FUNCTION_DECL
    with exactly one argument, itself a bare PARM_DECL/VAR_DECL (never a
@@ -6684,14 +6708,32 @@ oa_predicate_check_inner_call (tree substituted, tree pred_fn, bool negated)
    oa_handle_call_precondition_obligation above, extending call-site
    precondition-obligation checking beyond std::is_object_address to
    general comparison conjuncts (oa_match_simple_comparison /
-   oa_env_check_comparison_1) and predicate-chaining
+   oa_range_subsumption_result) and predicate-chaining
    (oa_predicate_conjunct_shape / oa_predicate_check_inner_call) -- see
    .claude/plans/stateless-jumping-shore.md.  Only active when
    flag_contract_conveyor_proofs is set (checked by the caller in
    oa_scan_calls_in_expr); every existing mandatory diagnostic above is
    completely unaffected.  A conjunct already recognized by
    is_object_address_call_p is skipped here -- that one is already
-   mandatorily handled above, not this function's obligation.  */
+   mandatorily handled above, not this function's obligation.
+
+   Comparison conjuncts are handled in two passes rather than checked
+   independently as each is found: pass 1 folds every comparison
+   conjunct that constrains the *same* parameter into one combined
+   required range (oa_tighten_range_bound, the same tightening
+   oa_refine_single_comparison itself uses -- mirroring how
+   oa_call_postcondition_range_p already combines a postcondition's own
+   conjuncts into one established range), and pass 2 checks that
+   combined range, as a whole, against the argument's own established
+   range via oa_range_subsumption_result.  This matters for two
+   reasons: a precondition like "x > 10 && x < 200" would otherwise be
+   checked as two entirely independent single-sided comparisons, which
+   can under-report a genuine subset/disjoint relationship the combined
+   interval actually has, and -- even when the per-conjunct verdicts
+   happen to agree with the combined one -- independent per-conjunct
+   checking can emit multiple redundant diagnostics for what is really
+   one obligation on one value.  Predicate-shaped conjuncts aren't
+   ranges at all, so they're still handled per-conjunct, unchanged.  */
 
 static void
 oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
@@ -6699,6 +6741,9 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
   tree callee = cp_get_callee_fndecl_nofold (call);
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
+
+  auto_vec<tree> range_parms;
+  auto_vec<oa_range_fact> range_facts;
 
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
@@ -6725,37 +6770,20 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	  if (oa_match_simple_comparison (*conjuncts[i], &param, &code,
 					  &const_val))
 	    {
-	      tree substituted = NULL_TREE;
-	      unsigned argno = 0;
-	      for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
-		if (p == param)
-		  {
-		    if (argno < (unsigned) call_expr_nargs (call))
-		      substituted = CALL_EXPR_ARG (call, argno);
-		    break;
-		  }
-	      if (!substituted)
-		continue;
-
-	      oa_proof_result r
-		= oa_env_check_comparison_1 (env, substituted, code, const_val);
-	      switch (r)
+	      unsigned idx;
+	      for (idx = 0; idx < range_parms.length (); ++idx)
+		if (range_parms[idx] == param)
+		  break;
+	      if (idx == range_parms.length ())
 		{
-		case OA_PROVEN_TRUE:
-		  break;
-		case OA_PROVEN_FALSE:
-		  error_at (EXPR_LOCATION (call),
-			    "argument %qE provably violates the precondition "
-			    "of %qD", substituted, callee);
-		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
-		  break;
-		case OA_UNKNOWN:
-		  warning_at (EXPR_LOCATION (call), 0,
-			      "cannot verify that %qE satisfies the "
-			      "precondition of %qD", substituted, callee);
-		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
-		  break;
+		  range_parms.safe_push (param);
+		  oa_range_fact fresh;
+		  fresh.base = NULL_TREE;
+		  fresh.has_lo = fresh.has_hi = false;
+		  range_facts.safe_push (fresh);
 		}
+	      oa_tighten_range_bound (range_facts[idx], code,
+				      wi::to_widest (const_val));
 	      continue;
 	    }
 
@@ -6799,6 +6827,43 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
+	}
+    }
+
+  for (unsigned idx = 0; idx < range_parms.length (); ++idx)
+    {
+      tree param = range_parms[idx];
+
+      tree substituted = NULL_TREE;
+      unsigned argno = 0;
+      for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
+	if (p == param)
+	  {
+	    if (argno < (unsigned) call_expr_nargs (call))
+	      substituted = CALL_EXPR_ARG (call, argno);
+	    break;
+	  }
+      if (!substituted)
+	continue;
+
+      oa_proof_result r
+	= oa_env_check_range_subsumption (env, substituted, range_facts[idx]);
+      switch (r)
+	{
+	case OA_PROVEN_TRUE:
+	  break;
+	case OA_PROVEN_FALSE:
+	  error_at (EXPR_LOCATION (call),
+		    "argument %qE provably violates the precondition "
+		    "of %qD", substituted, callee);
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  break;
+	case OA_UNKNOWN:
+	  warning_at (EXPR_LOCATION (call), 0,
+		      "cannot verify that %qE satisfies the "
+		      "precondition of %qD", substituted, callee);
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  break;
 	}
     }
 }
@@ -8732,6 +8797,60 @@ oa_env_check_comparison_1 (oa_env &env, tree expr, tree_code cmp,
     default:
       return OA_UNKNOWN;
     }
+}
+
+/* -fcontract-conveyor-proofs: is ARG's established interval a *subset*
+   of REQ (every value ARG could take also satisfies REQ ->
+   OA_PROVEN_TRUE, the callee's combined range precondition is fully
+   discharged), or is it *disjoint* from REQ (no value ARG could take
+   satisfies REQ -> OA_PROVEN_FALSE, a genuine, confirmed violation), or
+   does neither hold (the two intervals genuinely overlap only
+   partially, so whether the actual runtime value -- known only to lie
+   somewhere in ARG's interval -- satisfies REQ depends on exactly which
+   value that turns out to be; OA_UNKNOWN is the mathematically correct
+   answer here, not just a conservative fallback: no sound analysis of
+   two overlapping-but-not-nested intervals could claim more)?  REQ
+   missing one side (has_lo or has_hi false) means that side is
+   unconstrained -- e.g. a precondition of "x > 0" alone leaves REQ.hi
+   unset, matching oa_env_check_comparison_1's own single-sided
+   handling exactly (this function is a strict generalization of it: for
+   a REQ built from a single conjunct, the two are equivalent).  A
+   pointer/array-base fact (ARG.base != NULL_TREE) isn't a plain integer
+   interval, so that case is conservatively OA_UNKNOWN too.  */
+
+static oa_proof_result
+oa_range_subsumption_result (oa_range_fact &arg, oa_range_fact &req)
+{
+  if (arg.base != NULL_TREE)
+    return OA_UNKNOWN;
+
+  bool subsumed
+    = (!req.has_lo || (arg.has_lo && arg.lo >= req.lo))
+      && (!req.has_hi || (arg.has_hi && arg.hi <= req.hi));
+  if (subsumed)
+    return OA_PROVEN_TRUE;
+
+  bool disjoint
+    = (req.has_hi && arg.has_lo && arg.lo > req.hi)
+      || (req.has_lo && arg.has_hi && arg.hi < req.lo);
+  if (disjoint)
+    return OA_PROVEN_FALSE;
+
+  return OA_UNKNOWN;
+}
+
+/* -fcontract-conveyor-proofs: EXPR's own version of the above -- looks
+   up EXPR's established range via oa_get_range first (mirroring
+   oa_env_check_comparison_1's own first step), then defers to
+   oa_range_subsumption_result.  */
+
+static oa_proof_result
+oa_env_check_range_subsumption (oa_env &env, tree expr, oa_range_fact &req)
+{
+  oa_range_fact fact;
+  if (!oa_get_range (expr, env, &fact))
+    return OA_UNKNOWN;
+  return oa_range_subsumption_result (fact, req);
 }
 
 /* Public, plugin-facing wrapper over oa_env_check_comparison_1 -- see
