@@ -1667,6 +1667,46 @@ check_conveyor_redeclaration (tree old_decl, tree new_decl)
   return false;
 }
 
+/* Return true if OLD_DECL and NEW_DECL agree on whether they were
+   declared with the (axiom contracts) 'symbolic' function-specifier.
+   Every reachable declaration of a symbolic function must repeat
+   'symbolic'; this is a strict, symmetric requirement, exactly mirroring
+   check_conveyor_redeclaration above.  Otherwise issue diagnostics.  */
+
+bool
+check_symbolic_redeclaration (tree old_decl, tree new_decl)
+{
+  old_decl = STRIP_TEMPLATE (old_decl);
+  new_decl = STRIP_TEMPLATE (new_decl);
+  if (TREE_CODE (old_decl) != FUNCTION_DECL
+      || TREE_CODE (new_decl) != FUNCTION_DECL)
+    return true;
+  if (DECL_DECLARED_SYMBOLIC_P (old_decl)
+      == DECL_DECLARED_SYMBOLIC_P (new_decl))
+    return true;
+  if (fndecl_built_in_p (old_decl))
+    {
+      /* Hide a built-in declaration.  */
+      if (DECL_DECLARED_SYMBOLIC_P (new_decl))
+	SET_DECL_DECLARED_SYMBOLIC_P (old_decl);
+      return true;
+    }
+  /* An explicit specialization can differ from the template
+     declaration with respect to 'symbolic', just as for 'conveyor'
+     (see check_conveyor_redeclaration above).  */
+  if (! DECL_TEMPLATE_SPECIALIZATION (old_decl)
+      && DECL_TEMPLATE_SPECIALIZATION (new_decl))
+    return true;
+
+  auto_diagnostic_group d;
+  error_at (DECL_SOURCE_LOCATION (new_decl),
+	    "redeclaration %qD differs in %qs "
+	    "from previous declaration", new_decl, "symbolic");
+  inform (DECL_SOURCE_LOCATION (old_decl),
+	  "previous declaration %qD", old_decl);
+  return false;
+}
+
 /* DECL is a redeclaration of a function or function template.  If
    it does have default arguments issue a diagnostic.  Note: this
    function is used to enforce the requirements in C++11 8.3.6 about
@@ -2589,6 +2629,9 @@ duplicate_decls (tree newdecl, tree olddecl, bool hiding, bool was_hidden)
     return error_mark_node;
 
   if (!check_conveyor_redeclaration (olddecl, newdecl))
+    return error_mark_node;
+
+  if (!check_symbolic_redeclaration (olddecl, newdecl))
     return error_mark_node;
 
   if (modules_p ()
@@ -12235,6 +12278,7 @@ grokfndecl (tree ctype,
 	    tree* attrlist,
 	    tree contract_specifiers,
 	    bool declared_conveyor_p,
+	    bool declared_symbolic_p,
 	    location_t location)
 {
   tree decl;
@@ -12249,6 +12293,16 @@ grokfndecl (tree ctype,
   if (concept_p)
     {
       error_at (location, "function concepts are no longer supported");
+      return NULL_TREE;
+    }
+
+  /* (axiom contracts): a function declared 'symbolic' may never be
+     defined -- it exists purely for contract conditions to name, with
+     no runtime representation at all.  */
+  if (declared_symbolic_p && funcdef_flag)
+    {
+      error_at (location, "a function declared %<symbolic%> may not "
+		"be defined");
       return NULL_TREE;
     }
 
@@ -12718,6 +12772,8 @@ grokfndecl (tree ctype,
 	set_fn_contract_specifiers (decl, contract_specifiers);
       if (decl && decl != error_mark_node && declared_conveyor_p)
 	SET_DECL_DECLARED_CONVEYOR_P (decl);
+      if (decl && decl != error_mark_node && declared_symbolic_p)
+	SET_DECL_DECLARED_SYMBOLIC_P (decl);
       return decl;
     }
 
@@ -12744,6 +12800,8 @@ grokfndecl (tree ctype,
      still runs too, for ordinary (non-explicit-instantiation) decls.  */
   if (decl && decl != error_mark_node && declared_conveyor_p)
     SET_DECL_DECLARED_CONVEYOR_P (decl);
+  if (decl && decl != error_mark_node && declared_symbolic_p)
+    SET_DECL_DECLARED_SYMBOLIC_P (decl);
 
   decl = check_explicit_specialization (orig_declarator, decl,
 					template_count,
@@ -12778,6 +12836,14 @@ grokfndecl (tree ctype,
       if (TREE_CODE (decl) == TEMPLATE_DECL)
 	t = DECL_TEMPLATE_RESULT (decl);
       SET_DECL_DECLARED_CONVEYOR_P (t);
+    }
+
+  if (declared_symbolic_p)
+    {
+      tree t = decl;
+      if (TREE_CODE (decl) == TEMPLATE_DECL)
+	t = DECL_TEMPLATE_RESULT (decl);
+      SET_DECL_DECLARED_SYMBOLIC_P (t);
     }
 
   /* Check main's type after attributes have been applied.  */
@@ -14207,6 +14273,7 @@ grokdeclarator (const cp_declarator *declarator,
   tree contract_specifiers
     = declarator ? declarator->contract_specifiers : NULL_TREE;
   bool declared_conveyor_p = false;
+  bool declared_symbolic_p = false;
   tree parms = NULL_TREE;
   const cp_declarator *id_declarator;
   /* The unqualified name of the declarator; either an
@@ -15797,6 +15864,10 @@ grokdeclarator (const cp_declarator *declarator,
 		&& declarator->u.function.conveyor_p)
 	      declared_conveyor_p = true;
 
+	    if (flag_contract_control_objects
+		&& declarator->u.function.symbolic_p)
+	      declared_symbolic_p = true;
+
 	    if (attrs)
 	      /* [dcl.fct]/2:
 
@@ -16779,7 +16850,7 @@ grokdeclarator (const cp_declarator *declarator,
 			       funcdef_flag, late_return_type_p,
 			       template_count, in_namespace,
 			       attrlist, contract_specifiers,
-			       declared_conveyor_p, id_loc);
+			       declared_conveyor_p, declared_symbolic_p, id_loc);
 	    decl = set_virt_specifiers (decl, virt_specifiers);
 	    if (decl == NULL_TREE)
 	      return error_mark_node;
@@ -17134,7 +17205,8 @@ grokdeclarator (const cp_declarator *declarator,
 			   funcdef_flag,
 			   late_return_type_p,
 			   template_count, in_namespace, attrlist,
-			   contract_specifiers, declared_conveyor_p, id_loc);
+			   contract_specifiers, declared_conveyor_p,
+			   declared_symbolic_p, id_loc);
 	if (decl == NULL_TREE)
 	  return error_mark_node;
 

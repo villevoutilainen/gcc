@@ -3303,7 +3303,13 @@ struct GTY(()) lang_decl_fn {
      affect the function's type or mangling.  */
   unsigned conveyor_p : 1;
 
-  unsigned spare : 3;
+  /* True if this function was declared with the (axiom contracts)
+     context-sensitive 'symbolic' trailing function-specifier -- such a
+     function may never be defined.  Declaration-only: does not affect
+     the function's type or mangling.  */
+  unsigned symbolic_p : 1;
+
+  unsigned spare : 2;
 
   /* 32-bits padding on 64-bit host.  */
 
@@ -3892,6 +3898,21 @@ struct GTY(()) lang_decl {
 #define CLEAR_DECL_DECLARED_CONVEYOR_P(NODE) \
   (retrofit_lang_decl (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE))),	\
    LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->conveyor_p = false)
+
+/* True if FNDECL was declared with the (axiom contracts) context-
+   sensitive 'symbolic' trailing function-specifier -- such a function
+   may never be defined.  Declaration-only: no effect on the function's
+   type or mangling.  */
+#define DECL_DECLARED_SYMBOLIC_P(NODE) \
+  (DECL_LANG_SPECIFIC (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE)))	\
+   ? LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->symbolic_p		\
+   : false)
+#define SET_DECL_DECLARED_SYMBOLIC_P(NODE) \
+  (retrofit_lang_decl (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE))),	\
+   LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->symbolic_p = true)
+#define CLEAR_DECL_DECLARED_SYMBOLIC_P(NODE) \
+  (retrofit_lang_decl (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE))),	\
+   LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->symbolic_p = false)
 
 /* Nonzero if this DECL is the __PRETTY_FUNCTION__ variable in a
    template function.  */
@@ -7169,6 +7190,9 @@ struct cp_declarator {
       /* True if the D4324 context-sensitive 'conveyor' trailing
 	 function-specifier was present.  */
       bool conveyor_p;
+      /* True if the (axiom contracts) context-sensitive 'symbolic'
+	 trailing function-specifier was present.  */
+      bool symbolic_p;
       /* The position of the opening brace for a function definition.  */
       location_t parens_loc;
     } function;
@@ -7654,6 +7678,7 @@ extern int decls_match				(tree, tree, bool = true);
 extern bool maybe_version_functions		(tree, tree);
 extern bool validate_constexpr_redeclaration	(tree, tree);
 extern bool check_conveyor_redeclaration	(tree, tree);
+extern bool check_symbolic_redeclaration	(tree, tree);
 extern bool merge_default_template_args		(tree, tree, bool);
 extern void merge_decl_arguments		(tree, tree, bool, bool, bool);
 extern tree duplicate_decls			(tree, tree,

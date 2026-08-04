@@ -2067,6 +2067,7 @@ make_call_declarator (cp_declarator *target,
   declarator->u.function.requires_clause = requires_clause;
   declarator->u.function.contract_specifiers = contract_specifiers;
   declarator->u.function.conveyor_p = false;
+  declarator->u.function.symbolic_p = false;
   declarator->u.function.parens_loc = parens_loc;
   if (target)
     {
@@ -2767,6 +2768,8 @@ static cp_cv_quals cp_parser_cv_qualifier_seq_opt
 static cp_virt_specifiers cp_parser_virt_specifier_seq_opt
   (cp_parser *);
 static bool cp_parser_conveyor_specifier_opt
+  (cp_parser *);
+static bool cp_parser_symbolic_specifier_opt
   (cp_parser *);
 static cp_ref_qualifier cp_parser_ref_qualifier_opt
   (cp_parser *);
@@ -26890,6 +26893,12 @@ cp_parser_direct_declarator (cp_parser* parser,
 		  if (flag_contract_control_objects)
 		    conveyor_p = cp_parser_conveyor_specifier_opt (parser);
 
+		  /* Parse the (axiom contracts) symbolic-specifier, if
+		     present.  */
+		  bool symbolic_p = false;
+		  if (flag_contract_control_objects)
+		    symbolic_p = cp_parser_symbolic_specifier_opt (parser);
+
 		  /* Parse the virt-specifier-seq.  */
 		  virt_specifiers = cp_parser_virt_specifier_seq_opt (parser);
 
@@ -26917,6 +26926,7 @@ cp_parser_direct_declarator (cp_parser* parser,
 						     parens_loc);
 		  declarator->attributes = gnu_attrs;
 		  declarator->u.function.conveyor_p = conveyor_p;
+		  declarator->u.function.symbolic_p = symbolic_p;
 		  declarator->parameter_pack_p |= pack_expansion_p;
 		  /* Any subsequent parameter lists are to do with
 		     return type, so are not those of the declared
@@ -27650,6 +27660,28 @@ cp_parser_conveyor_specifier_opt (cp_parser *parser)
 {
   cp_token *token = cp_lexer_peek_token (parser->lexer);
   if (token->type != CPP_NAME || !id_equal (token->u.value, "conveyor"))
+    return false;
+  cp_lexer_consume_token (parser->lexer);
+  return true;
+}
+
+/* Parse an (optional) axiom-contracts symbolic-specifier.
+
+   symbolic-specifier:
+     symbolic
+
+   'symbolic' is a context-sensitive identifier, exactly like
+   'conveyor' above: it is not a reserved word, so a variable, function,
+   or member named 'symbolic' anywhere outside this one declarator
+   position continues to parse exactly as before, regardless of whether
+   -fcontract-control-objects is in effect.  Returns true iff the
+   specifier was present and consumed.  */
+
+static bool
+cp_parser_symbolic_specifier_opt (cp_parser *parser)
+{
+  cp_token *token = cp_lexer_peek_token (parser->lexer);
+  if (token->type != CPP_NAME || !id_equal (token->u.value, "symbolic"))
     return false;
   cp_lexer_consume_token (parser->lexer);
   return true;

@@ -4179,6 +4179,20 @@ contract_control_is_conveyor (tree ctrl, contract_check_side side)
   return contract_control_bool_member (ctrl, "is_conveyor", side) == 1;
 }
 
+/* True if the control type CTRL's is_symbolic(cfg) returns true for the
+   TU's evaluation_semantic -- axiom/symbolic contracts (see
+   ~/gcc-axiom-contracts.md): a pre/post written against such a control
+   object has no runtime representation by default (see build_contract_
+   check's own is_symbolic early-return), existing purely for static
+   analysis to consult.  A bare contract, or a control type without a
+   usable is_symbolic getter, is not symbolic.  */
+
+bool
+contract_control_is_symbolic (tree ctrl, contract_check_side side)
+{
+  return contract_control_bool_member (ctrl, "is_symbolic", side) == 1;
+}
+
 /* True if the control type CTRL's assumable(cfg) returns true for the TU's
    evaluation_semantic, meaning an ignored predicate may be handed to the
    optimizer as an assumption.  */
@@ -7651,6 +7665,49 @@ oa_scan_stray_is_object_address (tree *expr)
 	      "%<contract_assert%>, %<pre%>, or %<post%> condition");
 }
 
+/* Scan *EXPR for a stray call to a function declared 'symbolic'
+   (axiom contracts, see ~/gcc-axiom-contracts.md) -- one reached
+   somewhere this pass doesn't recognize as a legitimate contract
+   construct's own condition, mirroring oa_scan_stray_is_object_address
+   above exactly: a symbolic function has no definition (enforced at
+   declaration time, decl.cc's grokfndecl) and could never be evaluated
+   at runtime, so calling it anywhere but directly inside a contract
+   condition is always an error, not merely an unresolved external at
+   link time.
+
+   This only ever inspects CALL_EXPRs actually present in the pre-
+   genericize *executable* body/condition tree oa_walk_stmt walks --
+   an unevaluated operand (decltype, a requires-expression's own
+   requirement, sizeof, noexcept) is fully resolved away during parsing/
+   constraint-checking and leaves no residual CALL_EXPR in that tree at
+   all, so `decltype (is_opened (p))` or `requires { is_opened (p); }`
+   never reaches this scan and is correctly never flagged -- exactly the
+   same reason std::is_object_address itself already coexists with
+   unevaluated uses.  */
+
+static void
+oa_scan_stray_symbolic_call (tree *expr)
+{
+  tree found = cp_walk_tree (expr, [](tree *tp, int *, void *) -> tree
+    {
+      tree t = *tp;
+      if (t == NULL_TREE || t == error_mark_node || TREE_CODE (t) != CALL_EXPR)
+	return NULL_TREE;
+      tree callee = cp_get_callee_fndecl_nofold (t);
+      if (callee && TREE_CODE (callee) == FUNCTION_DECL
+	  && DECL_DECLARED_SYMBOLIC_P (callee))
+	return t;
+      return NULL_TREE;
+    }, NULL, NULL);
+  if (found)
+    {
+      tree callee = cp_get_callee_fndecl_nofold (found);
+      error_at (EXPR_LOCATION (found), "%qD, declared %<symbolic%>, may "
+		"only be used directly inside a %<contract_assert%>, "
+		"%<pre%>, or %<post%> condition", callee);
+    }
+}
+
 /* Handle one PRECONDITION_STMT encountered during the body walk: both
    a resolution point (so is_object_address never reaches
    genericization unresolved -- it has no definition and could never
@@ -8351,6 +8408,7 @@ oa_process_condition (tree cond, oa_env &env,
 	  oa_scan_array_bounds_in_expr (conjuncts[i], cond_env);
 	}
       oa_scan_stray_is_object_address (conjuncts[i]);
+      oa_scan_stray_symbolic_call (conjuncts[i]);
       oa_track_condition_assignment (*conjuncts[i], cond_env);
       /* A bare 'E != 0'/'0 != E' conjunct seeds the nz-fact map
 	 directly, exactly as a precondition/contract_assert conjunct
@@ -8988,6 +9046,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    oa_scan_array_bounds_in_expr (&SWITCH_STMT_COND (t), env);
 	  }
 	oa_scan_stray_is_object_address (&SWITCH_STMT_COND (t));
+	oa_scan_stray_symbolic_call (&SWITCH_STMT_COND (t));
 
 	/* The body (always a STATEMENT_LIST -- confirmed via
 	   finish_switch_stmt/pop_switch, built via push_stmt_list/
@@ -9129,6 +9188,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	 nothing nested inside an unhandled construct silently passes
 	 through unchecked.  */
       oa_scan_stray_is_object_address (&t);
+      oa_scan_stray_symbolic_call (&t);
       return;
     }
 }
@@ -10385,6 +10445,19 @@ build_contract_check (tree contract)
     }
 
   if (ignored && !assumable)
+    return void_node;
+
+  /* Axiom/symbolic contracts (see ~/gcc-axiom-contracts.md): by default,
+     a pre/post written against a control object whose is_symbolic(cfg)
+     returns true has no runtime representation at all -- no predicate
+     thunk, no arg struct, no control-object operator() call -- the
+     contract exists purely for a (not-yet-built) static analyzer to
+     consult from the untouched CONTRACT_CONDITION this function leaves
+     behind pre-genericize.  Unlike the ignored/assumable case above,
+     there is no "hand it to the optimizer as an assumption" alternative
+     here: this is a separate axis from evaluation_semantic entirely, so
+     the check is unconditional, not gated on assumability.  */
+  if (ctrl && contract_control_is_symbolic (ctrl, side))
     return void_node;
 
   contract_evaluation_semantic semantic = CES_ENFORCE;
