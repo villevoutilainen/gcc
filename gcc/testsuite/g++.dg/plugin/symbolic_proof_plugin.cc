@@ -119,10 +119,16 @@ scalar_range_callback (tree /*contract*/, tree param, bool has_lo, tree lo,
    CALLEE's own ptr->field symbolic preconditions.  */
 
 static void
-field_range_callback (tree /*contract*/, tree field, tree base_parm,
+field_range_callback (tree contract, tree field, tree base_parm,
 		       bool has_lo, tree lo, bool has_hi, tree hi, void *data)
 {
   range_ctx *ctx = (range_ctx *) data;
+  /* oa_precondition_field_range_obligations is shared with the
+     conveyor plugin (CALLEE could carry preconditions of either
+     flavor) -- only this contract's own symbolic-active matches are
+     this plugin's obligation to check.  */
+  if (!oa_contract_symbolic_active_public (contract, ctx->callee))
+    return;
   tree substituted = substitute_arg (ctx->callee, ctx->call, base_parm);
   if (!substituted)
     return;

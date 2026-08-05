@@ -100,7 +100,10 @@ set plugin_test_list [list \
 	  conveyor-proof-numeric-unknown.C \
 	  conveyor-proof-predicate-ok.C \
 	  conveyor-proof-predicate-bad.C \
-	  conveyor-proof-predicate-unknown.C } \
+	  conveyor-proof-predicate-unknown.C \
+	  conveyor-proof-field-range-ok.C \
+	  conveyor-proof-field-range-bad.C \
+	  conveyor-proof-field-range-unknown.C } \
     { symbolic_proof_plugin.cc \
 	  symbolic-proof-predicate-ok.C \
 	  symbolic-proof-predicate-bad.C \
@@ -110,7 +113,10 @@ set plugin_test_list [list \
 	  symbolic-proof-scalar-range-unknown.C \
 	  symbolic-proof-field-range-ok.C \
 	  symbolic-proof-field-range-bad.C \
-	  symbolic-proof-field-range-unknown.C } \
+	  symbolic-proof-field-range-unknown.C \
+	  symbolic-proof-predicate-returnvalue-ok.C \
+	  symbolic-proof-predicate-returnvalue-bad.C \
+	  symbolic-proof-predicate-returnvalue-unknown.C } \
 ]
 
 foreach file [find $PLUGIN_DEFAULT_REPO *.gcm] {

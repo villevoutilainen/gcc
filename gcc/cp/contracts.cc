@@ -9084,15 +9084,24 @@ oa_precondition_scalar_range_obligations
 /* Same, for the ptr->field shape -- iterates CALLEE's own active
    preconditions directly (oa_collect_contract_field_ranges has no per-
    callee driver of its own the way oa_precondition_symbolic_ranges does
-   for the bare-scalar shape), gated the same way that function is
-   (symbolic-active only -- this export is specifically for the symbolic
-   plugin's own use; -fcontract-conveyor-proofs's own field-range
-   checking, oa_handle_call_conveyor_field_range_obligation above, does
-   its own independent, conveyor-gated iteration instead of going
-   through this export).  BASE_PARM is CALLEE's own PARM_DECL (including
-   'this'); the caller is responsible for positional substitution to its
-   own call site's actual argument, exactly as for oa_precondition_
-   scalar_range_obligations's own PARAM.  */
+   for the bare-scalar shape), gated on oa_contract_fact_tracking_
+   active_p (conveyor- or symbolic-active) -- unlike oa_precondition_
+   scalar_range_obligations, which stays symbolic-only (m_contract_
+   scalar_range_map has no conveyor-side gap to close, see oa_call_
+   symbolic_range_p's own comment), this export is genuinely shared:
+   both conveyor_proof_plugin.cc and symbolic_proof_plugin.cc use it.
+   Since CALLEE could carry preconditions of *both* flavors, each
+   caller filters the CONTRACT a match came from by its own flavor
+   (oa_contract_conveyor_active_public / oa_contract_symbolic_active_
+   public) before treating a match as its own obligation to check --
+   -fcontract-conveyor-proofs's own built-in field-range checking,
+   oa_handle_call_conveyor_field_range_obligation above, does its own
+   independent, conveyor-gated iteration instead of going through this
+   export, so it needs no such filter.  BASE_PARM is CALLEE's own
+   PARM_DECL (including 'this'); the caller is responsible for
+   positional substitution to its own call site's actual argument,
+   exactly as for oa_precondition_scalar_range_obligations's own
+   PARAM.  */
 
 void
 oa_precondition_field_range_obligations
@@ -9105,7 +9114,7 @@ oa_precondition_field_range_obligations
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
-      if (!oa_contract_symbolic_active_p (contract, callee))
+      if (!oa_contract_fact_tracking_active_p (contract, callee))
 	continue;
 
       tree cond = CONTRACT_CONDITION (contract);
