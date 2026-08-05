@@ -286,11 +286,16 @@ extern oa_proof_result oa_env_check_field_range_fact
    bool has_hi, tree hi);
 
 /* Collect every distinct PARM_DECL compared by a bare-scalar conjunct of
-   CALLEE's own active (conveyor- or symbolic-) preconditions, and the
-   combined [lo,hi] each implies -- hides oa_range_fact behind plain tree
-   bounds (has_lo/has_hi false and the corresponding bound NULL_TREE for
-   an open bound).  CALLBACK is invoked once per (contract, param) match
-   found.  */
+   CALLEE's own active *symbolic* preconditions, and the combined
+   [lo,hi] each implies -- hides oa_range_fact behind plain tree bounds
+   (has_lo/has_hi false and the corresponding bound NULL_TREE for an
+   open bound).  CALLBACK is invoked once per (contract, param) match
+   found.  Symbolic-only, unlike oa_precondition_field_range_
+   obligations below: m_contract_scalar_range_map has no conveyor-side
+   gap to close, since -fcontract-conveyor-proofs's own bare-scalar
+   checking already gets full cross-statement tracking from the
+   general-purpose m_range_map (see oa_call_symbolic_range_p's own
+   comment in contracts.cc).  */
 extern void oa_precondition_scalar_range_obligations
   (tree callee,
    void (*callback) (tree contract, tree param, bool has_lo, tree lo,
@@ -299,7 +304,12 @@ extern void oa_precondition_scalar_range_obligations
 
 /* Same, for the ptr->field shape (this->field/param->field-style
    conjuncts) -- CALLBACK is invoked once per (contract, field, base
-   parameter) match found.  */
+   parameter) match found.  Genuinely shared between conveyor- and
+   symbolic-active preconditions (unlike oa_precondition_scalar_range_
+   obligations, which stays symbolic-only): a caller that only cares
+   about one flavor should filter matches by checking oa_contract_
+   conveyor_active_public/oa_contract_symbolic_active_public on the
+   CONTRACT passed to its own callback.  */
 extern void oa_precondition_field_range_obligations
   (tree callee,
    void (*callback) (tree contract, tree field, tree base_parm,

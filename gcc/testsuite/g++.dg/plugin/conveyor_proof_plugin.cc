@@ -53,7 +53,17 @@
    "!check_it (r)" while a later call's precondition requires
    "check_it (x)" for that same value, that is exactly as provable a
    contradiction as a numeric range check ever finds, still without
-   ever evaluating check_it itself.  */
+   ever evaluating check_it itself.
+
+   A third check covers the ptr->field shape ("this->count >= 40 &&
+   this->count < 100"-style), via oa_precondition_field_range_
+   obligations/oa_env_check_field_range_fact -- the same shared
+   substrate and exported API symbolic_proof_plugin.cc uses for its own
+   field-range obligations (m_contract_field_range_map is genuinely
+   shared, not symbolic-exclusive: CALLEE could carry preconditions of
+   either flavor, so this plugin filters matches to its own conveyor-
+   active ones, exactly as the symbolic plugin filters to its own
+   symbolic-active ones).  */
 
 #include "gcc-plugin.h"
 #include "config.h"
@@ -67,6 +77,74 @@
 #include "stringpool.h"
 
 int plugin_is_GPL_compatible;
+
+/* Context oa_precondition_field_range_obligations's own callback below
+   needs: CALL/CALLEE identify the call site check_call is examining;
+   ENV is that same call site's own environment, passed straight
+   through.  */
+
+struct range_ctx
+{
+  tree call;
+  tree callee;
+  oa_analysis_env *env;
+};
+
+/* Positional correspondence between CALLEE's own PARM_DECLs and CALL's
+   actual argument expressions -- same convention check_call's own two
+   inline loops below use.  */
+
+static tree
+substitute_arg (tree callee, tree call, tree param)
+{
+  unsigned argno = 0;
+  for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
+    if (p == param)
+      return argno < (unsigned) call_expr_nargs (call)
+	? CALL_EXPR_ARG (call, argno) : NULL_TREE;
+  return NULL_TREE;
+}
+
+/* oa_precondition_field_range_obligations's own callback: one
+   (CONTRACT, FIELD, BASE_PARM, required [lo,hi]) match for one of
+   CALLEE's own ptr->field preconditions -- CONTRACT could belong to
+   either flavor (the underlying map is shared), so only this plugin's
+   own conveyor-active matches are its obligation to check.  */
+
+static void
+field_range_callback (tree contract, tree field, tree base_parm,
+		       bool has_lo, tree lo, bool has_hi, tree hi, void *data)
+{
+  range_ctx *ctx = (range_ctx *) data;
+  if (!oa_contract_conveyor_active_public (contract, ctx->callee))
+    return;
+  tree substituted = substitute_arg (ctx->callee, ctx->call, base_parm);
+  if (!substituted)
+    return;
+
+  oa_proof_result r = oa_env_check_field_range_fact (ctx->env, substituted,
+						      field, has_lo, lo,
+						      has_hi, hi);
+  switch (r)
+    {
+    case OA_PROVEN_TRUE:
+      /* Nothing to report: the obligation is discharged.  */
+      break;
+    case OA_PROVEN_FALSE:
+      error_at (EXPR_LOCATION (ctx->call),
+		"argument %qE provably violates the precondition of %qD: "
+		"%qD is established outside the required range",
+		substituted, ctx->callee, field);
+      inform (DECL_SOURCE_LOCATION (ctx->callee), "declared here");
+      break;
+    case OA_UNKNOWN:
+      warning_at (EXPR_LOCATION (ctx->call), 0,
+		  "cannot verify that field %qD of %qE satisfies the "
+		  "precondition of %qD", field, substituted, ctx->callee);
+      inform (DECL_SOURCE_LOCATION (ctx->callee), "declared here");
+      break;
+    }
+}
 
 /* One call site's precondition-obligation check, invoked by
    oa_walk_function_calls at every call in program order.  */
@@ -188,6 +266,9 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	    }
 	}
     }
+
+  range_ctx ctx = { call, callee, env };
+  oa_precondition_field_range_obligations (callee, field_range_callback, &ctx);
 }
 
 /* PLUGIN_PRE_GENERICIZE: fires once per non-template function, body
