@@ -1,8 +1,8 @@
 /* conveyor-proof: a standalone GCC plugin demonstrating static
    fact-tracing for ordinary, non-conveyor calling code that calls
    functions carrying conveyor contracts -- see
-   /home/claude-dude/.claude/plans/stateless-jumping-shore.md for the
-   full design and rationale.
+   /home/claude-dude/.claude/plans/well-we-last-discussed-ethereal-
+   duckling.md for the full design and rationale.
 
    Reuses the existing D4324 "oa_*" object-address analysis engine
    (gcc/cp/contracts.cc) via its small, deliberately-designed public API
@@ -23,13 +23,25 @@
    static checker, does reject the program outright when it *proves* a
    violation (not merely when it fails to prove correctness).
 
-   A second, sibling check (oa_predicate_conjunct_shape /
-   oa_predicate_check_inner_call) connects a postcondition and a
-   precondition that both call the *same* named predicate function
-   ("check_it (r)" / "check_it (x)"), purely by name and argument
-   identity -- entirely independent of oa_env/oa_range_fact, since a
-   named, uninterpreted predicate call isn't a numeric fact at all.
-   This works even when that predicate function is declared `conveyor`
+   A second, sibling check connects a postcondition and a precondition
+   that both call the *same* named predicate function ("check_it (r)" /
+   "check_it (x)"), purely by name and argument identity.  This used to
+   be a purely syntactic, single-hop check (recognizing only the case
+   where the precondition's own argument was itself a direct call, e.g.
+   "consume (produce ())"), reimplemented locally in this file because no
+   persistent per-function fact map existed yet for named predicates.
+   Named-predicate facts are now tracked by the same real, cross-
+   statement engine -fcontract-symbolic-proofs uses for its own
+   obligations (m_predicate_fact_map is a shared substrate, not
+   symbolic-exclusive -- see oa_contract_fact_tracking_active_p in
+   contracts.cc), so this plugin now queries that engine directly via
+   the exported oa_match_predicate_conjunct/oa_env_check_predicate_fact,
+   the same way the numeric check above already did.  This is a strict
+   capability upgrade: an object whose identity persists across
+   statements (e.g. "f.open (); f.read ();") is now provable too, not
+   just the direct-nested-call shape.
+
+   This works even when the predicate function is declared `conveyor`
    with its definition never visible in this translation unit: the
    whole premise of a conveyor function is that it's trusted to be
    well-defined by construction, so this connection never needs to
@@ -55,129 +67,6 @@
 #include "stringpool.h"
 
 int plugin_is_GPL_compatible;
-
-/* Recognize CONJUNCT as "pred_fn (decl)" or its negation
-   "!pred_fn (decl)" -- a call to some ordinary FUNCTION_DECL with
-   exactly one argument, itself a bare PARM_DECL/VAR_DECL (never a
-   general expression -- same "bare decl only" scope limit the
-   numeric-comparison matching already has).  Fills PRED_FN_OUT/
-   ARG_DECL_OUT/NEGATED_OUT.  Used both for a precondition's own
-   conjunct ("check_it (x)", ARG_DECL_OUT = the callee's own parameter
-   x) and a postcondition's ("!check_it (r)", ARG_DECL_OUT =
-   POSTCONDITION_IDENTIFIER, NEGATED_OUT = true) -- see check_call's own
-   use of this below for how the two get connected, including how a
-   mismatched polarity between the two is a genuine, provable
-   contradiction (see oa_predicate_check_inner_call's own comment).
-
-   This is the whole point of the sibling example this function exists
-   for: PRED_FN (e.g. "check_it") can be a conveyor-declared function
-   whose own definition is never visible here (declared only, defined in
-   some other TU) -- none of this ever needs to evaluate or even see
-   PRED_FN's body.  The connection this establishes is purely syntactic
-   (the same predicate function, named identically, applied to
-   identical-by-construction values across a call boundary), which is
-   exactly the trust a conveyor-declared predicate is supposed to
-   license: it's assumed well-defined by construction (see the
-   `conveyor` function-specifier's own restrictions), so propagating
-   "PRED_FN holds (or doesn't) for this value" across the boundary
-   doesn't require inspecting what PRED_FN actually computes -- only
-   that it's the *same* call, applied to the *same* value.  */
-
-static bool
-oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
-			    tree *arg_decl_out, bool *negated_out)
-{
-  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
-  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
-    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
-
-  bool negated = false;
-  if (TREE_CODE (c) == TRUTH_NOT_EXPR)
-    {
-      negated = true;
-      c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
-      while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
-	c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
-    }
-
-  if (TREE_CODE (c) != CALL_EXPR || call_expr_nargs (c) != 1)
-    return false;
-
-  tree fn = cp_get_callee_fndecl_nofold (c);
-  if (!fn || TREE_CODE (fn) != FUNCTION_DECL)
-    return false;
-
-  tree arg = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (c, 0));
-  if (TREE_CODE (arg) != PARM_DECL && !VAR_P (arg))
-    return false;
-
-  *pred_fn_out = fn;
-  *arg_decl_out = arg;
-  *negated_out = negated;
-  return true;
-}
-
-/* Is SUBSTITUTED (the caller's actual argument expression for a
-   precondition conjunct whose polarity is NEGATED -- "pred_fn (param)"
-   if false, "!pred_fn (param)" if true) itself a direct call whose own
-   callee's postcondition asserts PRED_FN (at some polarity) for its own
-   result -- e.g. "consume (produce ())", where produce's postcondition
-   is "post<ctrl> (r: check_it (r))" or "post<ctrl> (r: !check_it (r))",
-   and consume's precondition is "pre<ctrl> (check_it (x))"?  Purely
-   syntactic (same PRED_FN identity, applied to produce's own
-   POSTCONDITION_IDENTIFIER) -- never looks at PRED_FN's own definition,
-   matching the whole point of this check (see
-   oa_predicate_conjunct_shape's own comment).
-
-   Returns OA_PROVEN_TRUE if a matching postcondition conjunct is found
-   with the *same* polarity as NEGATED (the precondition's own
-   requirement is discharged); OA_PROVEN_FALSE if one is found with the
-   *opposite* polarity (a genuine, provable contradiction: the
-   postcondition guarantees PRED_FN's negation of what the precondition
-   requires, for the very same value); OA_UNKNOWN if SUBSTITUTED isn't a
-   direct call, or no matching conjunct (of either polarity) for this
-   PRED_FN is found at all.  */
-
-static oa_proof_result
-oa_predicate_check_inner_call (tree substituted, tree pred_fn, bool negated)
-{
-  tree c = STRIP_ANY_LOCATION_WRAPPER (substituted);
-  if (TREE_CODE (c) != CALL_EXPR)
-    return OA_UNKNOWN;
-  tree inner_callee = cp_get_callee_fndecl_nofold (c);
-  if (!inner_callee || TREE_CODE (inner_callee) != FUNCTION_DECL)
-    return OA_UNKNOWN;
-
-  for (tree as = get_fn_contract_specifiers (inner_callee); as;
-       as = TREE_CHAIN (as))
-    {
-      tree contract = CONTRACT_STATEMENT (as);
-      if (!POSTCONDITION_P (contract))
-	continue;
-      if (!oa_contract_conveyor_active_public (contract, inner_callee))
-	continue;
-
-      tree cond = CONTRACT_CONDITION (contract);
-      if (cond == NULL_TREE || cond == error_mark_node)
-	continue;
-
-      auto_vec<tree *> conjuncts;
-      oa_collect_conjuncts_public (&cond, &conjuncts);
-      for (unsigned i = 0; i < conjuncts.length (); ++i)
-	{
-	  tree inner_pred_fn, inner_arg_decl;
-	  bool inner_negated;
-	  if (!oa_predicate_conjunct_shape (*conjuncts[i], &inner_pred_fn,
-					   &inner_arg_decl, &inner_negated)
-	      || inner_pred_fn != pred_fn
-	      || inner_arg_decl != POSTCONDITION_IDENTIFIER (contract))
-	    continue;
-
-	  return (inner_negated == negated) ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
-	}
-    }
-  return OA_UNKNOWN;
-}
 
 /* One call site's precondition-obligation check, invoked by
    oa_walk_function_calls at every call in program order.  */
@@ -246,15 +135,15 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	    }
 
 	  /* Not a plain comparison -- try the "predicate function applied
-	     to a bare parameter" shape instead (see
-	     oa_predicate_conjunct_shape's own comment: this is the sibling
-	     check connecting a postcondition and a precondition through a
-	     conveyor-declared predicate function whose own definition is
-	     never visible here).  */
+	     to a bare parameter" shape instead (see this file's own top
+	     comment: connecting a postcondition and a precondition
+	     through a conveyor-declared predicate function, now via the
+	     real, cross-statement-tracked engine rather than a purely
+	     syntactic, single-hop reimplementation).  */
 	  tree pred_fn, arg_decl;
 	  bool negated;
-	  if (!oa_predicate_conjunct_shape (*conjuncts[i], &pred_fn, &arg_decl,
-					   &negated))
+	  if (!oa_match_predicate_conjunct (*conjuncts[i], &pred_fn, &arg_decl,
+					    &negated))
 	    /* Recognized by neither check -- e.g. is_object_address, which
 	       the compiler already checks mandatorily.  Not this plugin's
 	       obligation to discharge.  */
@@ -273,12 +162,12 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 
 	  tree substituted = CALL_EXPR_ARG (call, argno);
 	  oa_proof_result pr
-	    = oa_predicate_check_inner_call (substituted, pred_fn, negated);
+	    = oa_env_check_predicate_fact (env, substituted, pred_fn, !negated);
 	  switch (pr)
 	    {
 	    case OA_PROVEN_TRUE:
 	      /* Nothing to report: the obligation is discharged, chained
-		 through the inner call's own postcondition -- without ever
+		 through the engine's own established fact -- without ever
 		 looking at PRED_FN's own definition.  */
 	      break;
 	    case OA_PROVEN_FALSE:
