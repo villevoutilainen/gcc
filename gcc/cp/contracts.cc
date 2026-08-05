@@ -5251,13 +5251,24 @@ is_object_address_call_p (tree call, tree *arg)
    available everywhere in gcc/cp through coretypes.h) rather than
    HOST_WIDE_INT, so interval arithmetic never has to separately worry
    about overflow of the bound-tracking machinery itself, independent
-   of the actual integer type being reasoned about.  */
+   of the actual integer type being reasoned about.
+
+   Default member initializers give LO/HI a defined value even when
+   HAS_LO/HAS_HI are false and no bound was ever assigned -- without
+   them, a default-constructed instance leaves widest_int's own
+   internal storage uninitialized, which -Wmaybe-uninitialized
+   correctly flags at every copy/destroy of an oa_range_fact that
+   was never fully assigned (e.g. oa_collect_contract_field_ranges's
+   own fresh oa_symbolic_field_group, or oa_env::deriv_merge_with's
+   own early-continue path) -- LO/HI are still never meant to be
+   *read* while their own HAS_* is false, this only makes copying and
+   destroying a not-fully-established fact well-defined.  */
 
 struct oa_range_fact
 {
-  tree base;
-  bool has_lo, has_hi;
-  widest_int lo, hi;
+  tree base = NULL_TREE;
+  bool has_lo = false, has_hi = false;
+  widest_int lo = 0, hi = 0;
 };
 
 /* -fcontract-symbolic-proofs: a symbolic contract's own established
