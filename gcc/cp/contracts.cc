@@ -33,6 +33,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "options.h"
 #include "contracts.h"
 #include "tree.h"
+#include "hash-traits.h"
 #include "tree-inline.h"
 #include "attribs.h"
 #include "tree-iterator.h"
@@ -5276,6 +5277,14 @@ struct oa_symbolic_fact
   bool polarity;
 };
 
+/* -fcontract-symbolic-proofs only: composite key for m_symbolic_field_
+   range_map, (object identity, FIELD_DECL) -- pair_hash (hash-traits.h)
+   combines two ordinary pointer-hash traits, the same idiom used
+   elsewhere in the compiler for a two-tree key (e.g. tree-vectorizer.h's
+   own tree_cond_mask_hash).  */
+typedef pair_hash<nofree_ptr_hash<tree_node>, nofree_ptr_hash<tree_node>>
+  oa_field_key_hash;
+
 /* Forward-declared: oa_derivation's full definition (contract-conveyor-
    proof-provenance's own "why does this range fact hold" node, see its
    own comment further below) isn't needed here, only pointers to it --
@@ -5372,6 +5381,133 @@ public:
       m_symbolic_map.remove (to_remove[i]);
   }
 
+  /* -fcontract-symbolic-proofs only: static-prover analogue of
+     Mechanism B's runtime bare-scalar range shadow (oa_call_symbolic_
+     range_p / oa_precondition_symbolic_ranges, built for
+     -fcontract-symbolic-runtime-checks) -- a symbolic postcondition's
+     own established range for a by-value scalar (a precondition's own
+     parameter, or a postcondition's own return-value binder assigned to
+     a decl), tracked purely at compile time so a later call's symbolic
+     precondition can be checked against it with a diagnostic, the same
+     way m_symbolic_map already does for the predicate shape. Merge is
+     intersect-and-widen, exactly mirroring range_merge_with (dropping
+     that map's own `base`/array-offset handling, which this fact never
+     has).  */
+  bool symbolic_scalar_range_get (tree decl, oa_range_fact *out)
+  {
+    oa_range_fact *v = m_symbolic_scalar_range_map.get (decl);
+    if (!v)
+      return false;
+    *out = *v;
+    return true;
+  }
+  void symbolic_scalar_range_set (tree decl, const oa_range_fact &fact)
+  {
+    m_symbolic_scalar_range_map.put (decl, fact);
+  }
+  void symbolic_scalar_range_invalidate (tree decl)
+  {
+    m_symbolic_scalar_range_map.remove (decl);
+  }
+  void symbolic_scalar_range_merge_with (oa_env &other)
+  {
+    auto_vec<tree> to_remove;
+    auto_vec<tree> to_keep;
+    auto_vec<oa_range_fact> kept_facts;
+    for (auto it : m_symbolic_scalar_range_map)
+      {
+	oa_range_fact *ov = other.m_symbolic_scalar_range_map.get (it.first);
+	if (!ov)
+	  {
+	    to_remove.safe_push (it.first);
+	    continue;
+	  }
+	oa_range_fact merged;
+	merged.base = NULL_TREE;
+	merged.has_lo = it.second.has_lo && ov->has_lo;
+	merged.has_hi = it.second.has_hi && ov->has_hi;
+	if (merged.has_lo)
+	  merged.lo = wi::smin (it.second.lo, ov->lo);
+	if (merged.has_hi)
+	  merged.hi = wi::smax (it.second.hi, ov->hi);
+	to_keep.safe_push (it.first);
+	kept_facts.safe_push (merged);
+      }
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_symbolic_scalar_range_map.remove (to_remove[i]);
+    for (unsigned i = 0; i < to_keep.length (); ++i)
+      m_symbolic_scalar_range_map.put (to_keep[i], kept_facts[i]);
+  }
+
+  /* -fcontract-symbolic-proofs only: static-prover analogue of
+     Mechanism A's runtime ptr->field range shape (oa_symbolic_
+     comparison_conjunct_shape, built for -fcontract-symbolic-runtime-
+     checks) -- a symbolic postcondition's own established range for a
+     persistent pointer's own field, keyed by (object identity, FIELD_
+     DECL) rather than a single decl, since one object can have several
+     independently-tracked fields.  Same intersect-and-widen merge
+     discipline as symbolic_scalar_range_merge_with, just keyed on the
+     pair.  */
+  bool symbolic_field_range_get (tree identity, tree field, oa_range_fact *out)
+  {
+    oa_range_fact *v = m_symbolic_field_range_map.get ({identity, field});
+    if (!v)
+      return false;
+    *out = *v;
+    return true;
+  }
+  void symbolic_field_range_set (tree identity, tree field,
+				  const oa_range_fact &fact)
+  {
+    m_symbolic_field_range_map.put ({identity, field}, fact);
+  }
+  void symbolic_field_range_invalidate (tree identity, tree field)
+  {
+    m_symbolic_field_range_map.remove ({identity, field});
+  }
+  /* Drop every tracked field for IDENTITY at once -- a reassignment of
+     the whole object, or a call taking its address, invalidates all of
+     its fields, not just whichever one happens to already be tracked
+     (mirrors symbolic_invalidate's own whole-object granularity).  */
+  void symbolic_field_range_invalidate_all (tree identity)
+  {
+    auto_vec<std::pair<tree, tree>> to_remove;
+    for (auto it : m_symbolic_field_range_map)
+      if (it.first.first == identity)
+	to_remove.safe_push (it.first);
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_symbolic_field_range_map.remove (to_remove[i]);
+  }
+  void symbolic_field_range_merge_with (oa_env &other)
+  {
+    auto_vec<std::pair<tree, tree>> to_remove;
+    auto_vec<std::pair<tree, tree>> to_keep;
+    auto_vec<oa_range_fact> kept_facts;
+    for (auto it : m_symbolic_field_range_map)
+      {
+	oa_range_fact *ov = other.m_symbolic_field_range_map.get (it.first);
+	if (!ov)
+	  {
+	    to_remove.safe_push (it.first);
+	    continue;
+	  }
+	oa_range_fact merged;
+	merged.base = NULL_TREE;
+	merged.has_lo = it.second.has_lo && ov->has_lo;
+	merged.has_hi = it.second.has_hi && ov->has_hi;
+	if (merged.has_lo)
+	  merged.lo = wi::smin (it.second.lo, ov->lo);
+	if (merged.has_hi)
+	  merged.hi = wi::smax (it.second.hi, ov->hi);
+	to_keep.safe_push (it.first);
+	kept_facts.safe_push (merged);
+      }
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_symbolic_field_range_map.remove (to_remove[i]);
+    for (unsigned i = 0; i < to_keep.length (); ++i)
+      m_symbolic_field_range_map.put (to_keep[i], kept_facts[i]);
+  }
+
   /* -fcontract-conveyor-proof-provenance only: a fourth, independent
      per-decl map, "why is DECL's range fact what it is" -- pointers
      only (oa_derivation nodes themselves are owned and allocated
@@ -5438,6 +5574,10 @@ public:
       r.m_deriv_map.put (it.first, it.second);
     for (auto it : m_symbolic_map)
       r.m_symbolic_map.put (it.first, it.second);
+    for (auto it : m_symbolic_scalar_range_map)
+      r.m_symbolic_scalar_range_map.put (it.first, it.second);
+    for (auto it : m_symbolic_field_range_map)
+      r.m_symbolic_field_range_map.put (it.first, it.second);
     r.m_outermost_bind = m_outermost_bind;
     for (auto it : m_shadow_decls)
       r.m_shadow_decls.put (it.first, it.second);
@@ -5463,6 +5603,12 @@ public:
     m_symbolic_map.empty ();
     for (auto it : other.m_symbolic_map)
       m_symbolic_map.put (it.first, it.second);
+    m_symbolic_scalar_range_map.empty ();
+    for (auto it : other.m_symbolic_scalar_range_map)
+      m_symbolic_scalar_range_map.put (it.first, it.second);
+    m_symbolic_field_range_map.empty ();
+    for (auto it : other.m_symbolic_field_range_map)
+      m_symbolic_field_range_map.put (it.first, it.second);
     m_outermost_bind = other.m_outermost_bind;
     m_shadow_decls.empty ();
     for (auto it : other.m_shadow_decls)
@@ -5543,6 +5689,8 @@ private:
   hash_map<tree, oa_range_fact> m_range_map;
   hash_map<tree, oa_derivation *> m_deriv_map;
   hash_map<tree, oa_symbolic_fact> m_symbolic_map;
+  hash_map<tree, oa_range_fact> m_symbolic_scalar_range_map;
+  hash_map<oa_field_key_hash, oa_range_fact> m_symbolic_field_range_map;
   tree m_outermost_bind = NULL_TREE;
   hash_map<tree, tree> m_shadow_decls;
 };
@@ -7758,13 +7906,160 @@ oa_substitute_call_arg (tree callee, tree call, tree param)
   return NULL_TREE;
 }
 
+/* Forward-declared: full definition (and the runtime-checking-only
+   oa_symbolic_action/oa_collect_symbolic_actions this shares its single-
+   conjunct recognition with) is much further below, where -fcontract-
+   symbolic-runtime-checks's own codegen lives; oa_collect_symbolic_
+   field_ranges just below needs it here too, for the static prover's own,
+   differently-scoped use (see that function's own comment for why it
+   isn't simply oa_collect_symbolic_actions itself).  */
+static bool oa_symbolic_comparison_conjunct_shape
+  (tree conjunct, tree *field_out, tree *ptr_expr_out, tree_code *code_out,
+   tree *const_val_out);
+
+/* -fcontract-symbolic-proofs: one (FIELD, PTR_EXPR) pair's own combined
+   range, as written in a single contract's own condition -- e.g.
+   'this->count >= 0 && this->count < 100' combines into one RANGE for
+   (count, this).  PTR_EXPR and FIELD still reference the *contract
+   owner's own* decls (this, parameters), unresolved to any caller-side
+   identity yet -- that substitution is each caller's own job (establish
+   substitutes via the callee's DECL_ARGUMENTS, consult likewise), exactly
+   mirroring how oa_predicate_conjunct_shape's own ARG_DECL_OUT is handled
+   by its two callers.  */
+
+struct oa_symbolic_field_group
+{
+  tree field;
+  tree ptr_expr;
+  oa_range_fact range;
+};
+
+/* -fcontract-symbolic-proofs: like oa_collect_symbolic_actions (defined
+   much further below, for -fcontract-symbolic-runtime-checks's own
+   codegen), but scoped to just the ptr->field comparison shape, and
+   silently *skipping* (not error_at-ing on) any conjunct that doesn't
+   match it -- unlike that function, which must recognize every conjunct
+   of a condition it's given (since it always runs under -fcontract-
+   symbolic-runtime-checks, where every conjunct genuinely does need
+   codegen), this one runs whenever just -fcontract-symbolic-proofs is
+   active, where a predicate-call conjunct (oa_predicate_conjunct_shape's
+   own job, called separately) or a bare-scalar conjunct (oa_precondition_
+   symbolic_ranges/oa_call_symbolic_range_p's own job) appearing in the
+   same condition is simply somebody else's shape to recognize, not a
+   failure here.  Groups multiple conjuncts on the same (FIELD, PTR_EXPR)
+   pair into one combined range via oa_tighten_range_bound (the same
+   widest_int/inclusive-hi representation oa_range_fact itself already
+   uses), rather than oa_symbolic_action's own separate long long/half-
+   open one (which exists only to feed runtime codegen's struct-literal
+   building, of no use to this static-only path).  */
+
+/* PTR_EXPR, as extracted by oa_symbolic_comparison_conjunct_shape from a
+   contract *condition*, is presented wrapped for const-qualified access
+   (see the comment above the VIEW_CONVERT_EXPR-building code near line
+   570, and oa_get_range's own identical stripping) -- typically a
+   NOP_EXPR around the real PARM_DECL (including 'this'), confirmed by
+   direct testing (a bare 'TREE_CODE (ptr_expr) != PARM_DECL' check
+   otherwise silently rejected every use, the same failure mode oa_get_
+   range's own comment describes for a different field).  Strip that
+   down to the real decl before resolving identity.  */
+
+static tree
+oa_strip_symbolic_ptr_expr (tree ptr_expr)
+{
+  ptr_expr = STRIP_ANY_LOCATION_WRAPPER (ptr_expr);
+  while (TREE_CODE (ptr_expr) == NON_LVALUE_EXPR
+	 || TREE_CODE (ptr_expr) == NOP_EXPR
+	 || TREE_CODE (ptr_expr) == CONVERT_EXPR
+	 || TREE_CODE (ptr_expr) == VIEW_CONVERT_EXPR)
+    ptr_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (ptr_expr, 0));
+  return ptr_expr;
+}
+
+static void
+oa_collect_symbolic_field_ranges (tree condition,
+				   vec<oa_symbolic_field_group> *out)
+{
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts (&condition, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree field, ptr_expr, const_val;
+      tree_code code;
+      if (!oa_symbolic_comparison_conjunct_shape (*conjuncts[i], &field,
+						   &ptr_expr, &code, &const_val)
+	  || TREE_CODE (const_val) != INTEGER_CST)
+	continue;
+
+      oa_symbolic_field_group *found = NULL;
+      for (unsigned j = 0; j < out->length () && !found; ++j)
+	if ((*out)[j].field == field
+	    && cp_tree_equal ((*out)[j].ptr_expr, ptr_expr))
+	  found = &(*out)[j];
+      if (!found)
+	{
+	  oa_symbolic_field_group g;
+	  g.field = field;
+	  g.ptr_expr = ptr_expr;
+	  g.range.base = NULL_TREE;
+	  g.range.has_lo = false;
+	  g.range.has_hi = false;
+	  out->safe_push (g);
+	  found = &out->last ();
+	}
+      oa_tighten_range_bound (found->range, code, wi::to_widest (const_val));
+    }
+}
+
+/* -fcontract-symbolic-proofs: three-way outcome shared by both new
+   range-based consult loops below (the bare-scalar one in oa_handle_
+   call_symbolic_precondition_obligation's sibling, and the ptr->field one
+   in oa_handle_call_symbolic_precondition_obligation itself) -- unlike
+   the predicate shape's own strict true/false (a symbolic boolean fact
+   either matches the required polarity or its exact negation), two
+   *ranges* can also merely partially overlap: ESTABLISHED might satisfy
+   REQUIRED for some but not all of its own possible values, which is
+   neither a proof of correctness nor a proof of violation, just "cannot
+   verify" -- the same "must be provable, else treated as unconstrained"
+   discipline used everywhere else in this file, extended to have a
+   distinct provably-false case only when the two ranges cannot possibly
+   overlap at all.  */
+
+enum oa_range_subsumption_result
+{
+  OA_RANGE_SUBSUMED,    /* ESTABLISHED fully satisfies REQUIRED: proven.  */
+  OA_RANGE_DISJOINT,    /* No possible overlap: provably violates.  */
+  OA_RANGE_PARTIAL      /* Neither of the above: cannot verify.  */
+};
+
+static oa_range_subsumption_result
+oa_range_subsumption (const oa_range_fact &established,
+		       const oa_range_fact &required)
+{
+  bool subsumed
+    = (!required.has_lo
+       || (established.has_lo && established.lo >= required.lo))
+      && (!required.has_hi
+	  || (established.has_hi && established.hi <= required.hi));
+  if (subsumed)
+    return OA_RANGE_SUBSUMED;
+
+  bool disjoint
+    = (established.has_hi && required.has_lo && established.hi < required.lo)
+      || (established.has_lo && required.has_hi
+	  && established.lo > required.hi);
+  return disjoint ? OA_RANGE_DISJOINT : OA_RANGE_PARTIAL;
+}
+
 /* -fcontract-symbolic-proofs: for each of CALL's callee's own active
    (non-ignored) symbolic postconditions, record the fact it establishes
    -- e.g. 'post<ctrl>(is_opened(this))' called as 'f.open()' records
    "is_opened holds for f" in ENV, keyed by f's own object identity
    (oa_object_identity_decl).  Symmetric complement of oa_handle_call_
    symbolic_precondition_obligation below (that one *consumes* a fact
-   this one *produces*) -- see .claude/plans/stateless-jumping-shore.md.  */
+   this one *produces*) -- see .claude/plans/stateless-jumping-shore.md.
+   Also establishes any ptr->field range facts the same postcondition's
+   condition names (oa_collect_symbolic_field_ranges), the static-prover
+   analogue of Mechanism A's own runtime establishment.  */
 
 static void
 oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
@@ -7805,6 +8100,24 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 
 	  env.symbolic_set (identity, pred_fn, !negated);
 	}
+
+	      auto_vec<oa_symbolic_field_group> field_groups;
+	      oa_collect_symbolic_field_ranges (cond, &field_groups);
+	      for (unsigned i = 0; i < field_groups.length (); ++i)
+		{
+		  tree ptr_expr
+		    = oa_strip_symbolic_ptr_expr (field_groups[i].ptr_expr);
+		  if (TREE_CODE (ptr_expr) != PARM_DECL)
+		    continue;
+		  tree substituted = oa_substitute_call_arg (callee, call, ptr_expr);
+		  if (!substituted)
+		    continue;
+		  tree identity;
+		  if (!oa_object_identity_decl (substituted, &identity))
+		    continue;
+		  env.symbolic_field_range_set (identity, field_groups[i].field,
+						field_groups[i].range);
+		}
     }
 }
 
@@ -7875,6 +8188,55 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		    fact.polarity ? "true" : "false", required ? "true" : "false");
 	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	}
+
+	      auto_vec<oa_symbolic_field_group> field_groups;
+	      oa_collect_symbolic_field_ranges (cond, &field_groups);
+	      for (unsigned i = 0; i < field_groups.length (); ++i)
+		{
+		  tree ptr_expr
+		    = oa_strip_symbolic_ptr_expr (field_groups[i].ptr_expr);
+		  if (TREE_CODE (ptr_expr) != PARM_DECL)
+		    continue;
+		  tree substituted = oa_substitute_call_arg (callee, call, ptr_expr);
+		  if (!substituted)
+		    continue;
+		  tree identity;
+		  if (!oa_object_identity_decl (substituted, &identity))
+		    continue;
+
+		  oa_range_fact established;
+		  if (!env.symbolic_field_range_get (identity, field_groups[i].field,
+						      &established))
+		    {
+		      warning_at (EXPR_LOCATION (call), 0,
+				  "cannot verify that field %qD of %qE satisfies "
+				  "the precondition of %qD", field_groups[i].field,
+				  substituted, callee);
+		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      continue;
+		    }
+
+		  oa_range_subsumption_result r
+		    = oa_range_subsumption (established, field_groups[i].range);
+		  if (r == OA_RANGE_SUBSUMED)
+		    continue; /* Proven true: silently discharged.  */
+		  if (r == OA_RANGE_DISJOINT)
+		    {
+		      error_at (EXPR_LOCATION (call),
+				"argument %qE provably violates the precondition "
+				"of %qD: %qD is established outside the required "
+				"range", substituted, callee, field_groups[i].field);
+		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    }
+		  else
+		    {
+		      warning_at (EXPR_LOCATION (call), 0,
+				  "cannot verify that field %qD of %qE satisfies "
+				  "the precondition of %qD", field_groups[i].field,
+				  substituted, callee);
+		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    }
+		}
     }
 }
 
@@ -7887,7 +8249,10 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
    handle_call_symbolic_postcondition_establishment run *after* this in
    oa_scan_calls_in_expr (so it cleanly overwrites whatever this just
    invalidated) is simpler than trying to detect and skip the
-   re-establishing case specially.  */
+   re-establishing case specially.  Also drops every tracked ptr->field
+   range fact for the same identity (symbolic_field_range_invalidate_all)
+   -- a whole-object invalidation, same reasoning, same granularity as
+   the predicate fact just above.  */
 
 static void
 oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
@@ -7897,9 +8262,46 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
     {
       tree identity;
       if (oa_object_identity_decl (CALL_EXPR_ARG (call, i), &identity))
-	env.symbolic_invalidate (identity);
+	{
+	  env.symbolic_invalidate (identity);
+	  env.symbolic_field_range_invalidate_all (identity);
+	}
     }
 }
+
+/* -fcontract-symbolic-proofs: static-prover analogue of Mechanism B's
+   own runtime invalidation (oa_invalidate_scalar_shadow_for_call_args,
+   below) for a bare scalar's own compile-time tracked range -- same
+   "not oa_object_identity_decl, `this`/`ADDR_EXPR`-of-decl only" logic
+   (passing a plain scalar *by value* never aliases it, so it must not
+   invalidate its own range fact; only a genuine address-of does), just
+   updating ENV's own map directly rather than emitting code.  */
+
+static void
+oa_invalidate_symbolic_scalar_range_for_call_args (tree call, oa_env &env)
+{
+  int nargs = call_expr_nargs (call);
+  for (int i = 0; i < nargs; ++i)
+    {
+      tree arg = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (call, i));
+      while (TREE_CODE (arg) == NON_LVALUE_EXPR || TREE_CODE (arg) == NOP_EXPR
+	     || TREE_CODE (arg) == CONVERT_EXPR
+	     || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+	arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+      tree identity = NULL_TREE;
+      if (is_this_parameter (arg))
+	identity = arg;
+      else if (TREE_CODE (arg) == ADDR_EXPR)
+	{
+	  tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	  if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
+	    identity = op;
+	}
+      if (identity)
+	env.symbolic_scalar_range_invalidate (identity);
+    }
+}
+
 
 /* -fcontract-symbolic-runtime-checks (Mechanism B): the exact same
    "any call taking this decl's address invalidates it" rule as
@@ -8261,6 +8663,69 @@ oa_precondition_symbolic_ranges (tree callee,
 	    = { contract, params[i], range };
 	  out->safe_push (match);
 	}
+    }
+}
+
+/* -fcontract-symbolic-proofs: the bare-scalar consult side, sibling of
+   oa_handle_call_symbolic_precondition_obligation above (which only
+   handles the predicate and ptr->field shapes) -- for each of CALL's
+   callee's own symbolic-active preconditions comparing one of its own
+   by-value parameters (oa_precondition_symbolic_ranges, already built
+   for Mechanism B's runtime dispatch and reused here as-is), check
+   whether ENV already has a compile-time established range for the
+   substituted argument, with the same three-way subsumed/disjoint/
+   partial outcome as the ptr->field consult above.  */
+
+static void
+oa_handle_call_symbolic_scalar_precondition_obligation (tree call, oa_env &env)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return;
+
+  auto_vec<oa_symbolic_precondition_match> matches;
+  oa_precondition_symbolic_ranges (callee, &matches);
+  for (unsigned m = 0; m < matches.length (); ++m)
+    {
+      tree contract = matches[m].contract;
+      tree param = matches[m].param;
+      oa_range_fact &required = matches[m].range;
+
+      tree substituted = oa_substitute_call_arg (callee, call, param);
+      if (!substituted)
+	continue;
+      tree arg_decl = STRIP_ANY_LOCATION_WRAPPER (substituted);
+      if (!VAR_P (arg_decl) && TREE_CODE (arg_decl) != PARM_DECL)
+	continue;
+
+      oa_range_fact established;
+      if (!env.symbolic_scalar_range_get (arg_decl, &established))
+	{
+	  warning_at (EXPR_LOCATION (call), 0,
+		      "cannot verify that %qE satisfies the precondition "
+		      "of %qD", substituted, callee);
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  continue;
+	}
+
+      oa_range_subsumption_result r = oa_range_subsumption (established, required);
+      if (r == OA_RANGE_SUBSUMED)
+	continue; /* Proven true: silently discharged.  */
+      if (r == OA_RANGE_DISJOINT)
+	{
+	  error_at (EXPR_LOCATION (call),
+		    "argument %qE provably violates the precondition of %qD",
+		    substituted, callee);
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	}
+      else
+	{
+	  warning_at (EXPR_LOCATION (call), 0,
+		      "cannot verify that %qE satisfies the precondition "
+		      "of %qD", substituted, callee);
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	}
+      (void) contract;
     }
 }
 
@@ -8783,7 +9248,9 @@ oa_scan_calls_in_expr (tree *expr, oa_env &env, tree *extra = NULL,
       if (flag_contract_symbolic_proofs)
 	{
 	  oa_handle_call_symbolic_precondition_obligation (t, *e);
+	  oa_handle_call_symbolic_scalar_precondition_obligation (t, *e);
 	  oa_invalidate_symbolic_facts_for_call_args (t, *e);
+	  oa_invalidate_symbolic_scalar_range_for_call_args (t, *e);
 	  oa_handle_call_symbolic_postcondition_establishment (t, *e);
 	}
       if (d->extra)
@@ -9475,6 +9942,13 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       /* -fcontract-symbolic-proofs: same staleness concern, for the
 	 symbolic-fact map -- a no-op when tracking is inactive.  */
       checkenv.symbolic_invalidate (d);
+      /* -fcontract-symbolic-proofs: same staleness concern, for the two
+	 new static-only symbolic range maps -- D may be a tracked bare
+	 scalar (symbolic_scalar_range_map's own key) or a tracked pointer
+	 whose fields are tracked (symbolic_field_range_map's own identity
+	 half); harmless no-ops for whichever one D isn't.  */
+      checkenv.symbolic_scalar_range_invalidate (d);
+      checkenv.symbolic_field_range_invalidate_all (d);
 
       bool saved_tracking = oa_return_tracking;
       oa_return_tracking = false;
@@ -9538,6 +10012,10 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	 compute for a symbolic fact (see the plan's own scope notes), so
 	 this is simply always invalidated, never re-established here.  */
       env.symbolic_invalidate (range_result_decls[i]);
+      /* Same "always invalidated, never re-established" treatment for
+	 the two new static-only symbolic range maps, for the same reason.  */
+      env.symbolic_scalar_range_invalidate (range_result_decls[i]);
+      env.symbolic_field_range_invalidate_all (range_result_decls[i]);
     }
 }
 
@@ -10096,7 +10574,38 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  {
 	    tree identity;
 	    if (oa_object_identity_decl (lhs, &identity))
-	      env.symbolic_invalidate (identity);
+	      {
+		env.symbolic_invalidate (identity);
+		env.symbolic_field_range_invalidate_all (identity);
+	      }
+	    else
+	      {
+		/* A direct field write ('p->field = x;', LHS a COMPONENT_REF
+		   through an INDIRECT_REF -- or 't.field = x;' for a plain,
+		   non-pointer object, LHS a COMPONENT_REF whose own base is
+		   already a bare decl with no indirection at all) reassigns
+		   just that one field, not the whole object -- narrower
+		   invalidation than the whole-object rule just above, using
+		   the same ptr->field shape oa_symbolic_comparison_conjunct_
+		   shape recognizes for a contract condition (here applied to
+		   an ordinary assignment statement's own LHS instead).  */
+		tree base = STRIP_ANY_LOCATION_WRAPPER (lhs);
+		if (TREE_CODE (base) == COMPONENT_REF)
+		  {
+		    tree field = TREE_OPERAND (base, 1);
+		    tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (base, 0));
+		    if (TREE_CODE (field) == FIELD_DECL)
+		      {
+			tree obj_expr
+			  = TREE_CODE (obj) == INDIRECT_REF
+			    ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0))
+			    : obj;
+			tree field_identity;
+			if (oa_object_identity_decl (obj_expr, &field_identity))
+			  env.symbolic_field_range_invalidate (field_identity, field);
+		      }
+		  }
+	      }
 	  }
 	if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 	    && POINTER_TYPE_P (TREE_TYPE (lhs)))
@@ -10197,6 +10706,28 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		  }
 	      }
 	  }
+
+	/* -fcontract-symbolic-proofs: the static-prover analogue of the
+	   runtime shadow tracking just above -- same establishment rule
+	   (only from a call matching oa_call_symbolic_range_p, the exact
+	   same recognizer, reused as-is), same "invalidate only if a fact
+	   already exists, never establish just to invalidate" discipline,
+	   just updating ENV's own compile-time map directly instead of
+	   emitting code.  Entirely independent of oa_symbolic_codegen_active
+	   -- this runs whenever -fcontract-symbolic-proofs itself is on,
+	   regardless of whether -fcontract-symbolic-runtime-checks also is.  */
+	if (flag_contract_symbolic_proofs
+	    && (VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
+	    && INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
+	  {
+	    tree stripped_rhs_static = STRIP_ANY_LOCATION_WRAPPER (rhs);
+	    oa_range_fact static_sym_fact;
+	    if (TREE_CODE (stripped_rhs_static) == CALL_EXPR
+		&& oa_call_symbolic_range_p (stripped_rhs_static, &static_sym_fact))
+	      env.symbolic_scalar_range_set (lhs, static_sym_fact);
+	    else
+	      env.symbolic_scalar_range_invalidate (lhs);
+	  }
 	if (pre_extra || post_extra)
 	  {
 	    tree new_list = alloc_stmt_list ();
@@ -10247,6 +10778,11 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       PRED_FN, same polarity) -- see oa_env::symbolic_merge_with's
 	       own comment.  */
 	    then_env.symbolic_merge_with (else_env);
+	    /* -fcontract-symbolic-proofs: same intersect-and-widen merge as
+	       range_merge_with, for the two new static-only symbolic range
+	       maps (bare-scalar and ptr->field).  */
+	    then_env.symbolic_scalar_range_merge_with (else_env);
+	    then_env.symbolic_field_range_merge_with (else_env);
 	    /* -fcontract-symbolic-runtime-checks (Mechanism B): a shadow's
 	       own *existence* is a plain set union across branches, not
 	       an agreement check -- see oa_env::shadow_decls_merge_with's
@@ -10306,6 +10842,9 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    /* -fcontract-symbolic-proofs: same merge rule as COND_EXPR
 	       above.  */
 	    then_env.symbolic_merge_with (else_env);
+	    /* -fcontract-symbolic-proofs: same as COND_EXPR above.  */
+	    then_env.symbolic_scalar_range_merge_with (else_env);
+	    then_env.symbolic_field_range_merge_with (else_env);
 	    /* -fcontract-symbolic-runtime-checks (Mechanism B): same union
 	       rule as COND_EXPR above.  */
 	    then_env.shadow_decls_merge_with (else_env);
@@ -10439,6 +10978,9 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		/* -fcontract-symbolic-proofs: same merge rule as the
 		   if/else case.  */
 		merged.symbolic_merge_with (current);
+		/* -fcontract-symbolic-proofs: same as the if/else case.  */
+		merged.symbolic_scalar_range_merge_with (current);
+		merged.symbolic_field_range_merge_with (current);
 		/* -fcontract-symbolic-runtime-checks (Mechanism B): same
 		   union rule as the if/else case.  */
 		merged.shadow_decls_merge_with (current);
@@ -10498,6 +11040,8 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.merge_with (env);
 		merged.range_merge_with (env);
 		merged.symbolic_merge_with (env);
+		merged.symbolic_scalar_range_merge_with (env);
+		merged.symbolic_field_range_merge_with (env);
 		merged.shadow_decls_merge_with (env);
 	      }
 	    any_result = true;
