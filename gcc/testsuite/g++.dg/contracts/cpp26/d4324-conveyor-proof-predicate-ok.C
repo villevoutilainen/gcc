@@ -3,7 +3,10 @@
 // ("check_it (r)") to consume's precondition ("check_it (x)") purely by
 // name + argument identity.  check_it is a conveyor function; its
 // definition is trusted by construction, so the connection holds
-// without ever evaluating it.
+// without ever evaluating it.  Backed by the real, cross-statement-
+// tracked fact engine (m_predicate_fact_map), so the value must be
+// named by an intermediate variable first for oa_object_identity_decl
+// to have a stable key to track it by.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -fdump-contract-proofs=predicate-ok-proofs.smt2" }
 // { dg-final { scan-file predicate-ok-proofs.smt2 "\\(declare-const check_it Bool\\)" } }
@@ -38,7 +41,8 @@ void consume (int x) pre<conveyor_ctrl_v>(check_it (x))
 
 void caller ()
 {
-  consume (produce ());
+  int r = produce ();
+  consume (r);
 }
 
 int main () { caller (); return 0; }

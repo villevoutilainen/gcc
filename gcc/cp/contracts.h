@@ -249,6 +249,64 @@ extern bool oa_match_simple_comparison
    OWNER_FN) currently conveyor-active (non-ignored)?  */
 extern bool oa_contract_conveyor_active_public (tree contract, tree owner_fn);
 
+/* Mirrors oa_contract_conveyor_active_public immediately above, for the
+   symbolic side.  */
+extern bool oa_contract_symbolic_active_public (tree contract, tree owner_fn);
+
+/* Recognize CONJUNCT as "pred_fn (decl)" or its negation "!pred_fn
+   (decl)" -- the named-predicate shape both -fcontract-conveyor-proofs
+   and -fcontract-symbolic-proofs already share internally.  Fills
+   PRED_FN_OUT/ARG_DECL_OUT/NEGATED_OUT.  */
+extern bool oa_match_predicate_conjunct
+  (tree conjunct, tree *pred_fn_out, tree *arg_decl_out, bool *negated_out);
+
+/* Is OBJ_EXPR established by ENV's current (real, cross-statement-
+   tracked) facts to have PRED_FN hold at REQUIRED_POLARITY, established
+   at the opposite polarity, or unknown?  Backed by the same shared
+   substrate both built-in checkers consult for their own named-predicate
+   obligations (see .claude/plans/well-we-last-discussed-ethereal-
+   duckling.md).  */
+extern oa_proof_result oa_env_check_predicate_fact
+  (oa_analysis_env *env, tree obj_expr, tree pred_fn, bool required_polarity);
+
+/* Same three-way verdict, for a bare scalar's own contract-established
+   range (distinct from oa_env_check_comparison's ordinary dataflow
+   range: this one is only ever established by a callee's own
+   postcondition, never inferred from an arbitrary computation).  Each
+   bound is optional -- pass has_lo/has_hi false (LO/HI then ignored) for
+   an open bound.  */
+extern oa_proof_result oa_env_check_scalar_range_fact
+  (oa_analysis_env *env, tree expr, bool has_lo, tree lo, bool has_hi,
+   tree hi);
+
+/* Same, for FIELD of the object identified by BASE_EXPR (this->field-
+   style).  */
+extern oa_proof_result oa_env_check_field_range_fact
+  (oa_analysis_env *env, tree base_expr, tree field, bool has_lo, tree lo,
+   bool has_hi, tree hi);
+
+/* Collect every distinct PARM_DECL compared by a bare-scalar conjunct of
+   CALLEE's own active (conveyor- or symbolic-) preconditions, and the
+   combined [lo,hi] each implies -- hides oa_range_fact behind plain tree
+   bounds (has_lo/has_hi false and the corresponding bound NULL_TREE for
+   an open bound).  CALLBACK is invoked once per (contract, param) match
+   found.  */
+extern void oa_precondition_scalar_range_obligations
+  (tree callee,
+   void (*callback) (tree contract, tree param, bool has_lo, tree lo,
+		      bool has_hi, tree hi, void *data),
+   void *data);
+
+/* Same, for the ptr->field shape (this->field/param->field-style
+   conjuncts) -- CALLBACK is invoked once per (contract, field, base
+   parameter) match found.  */
+extern void oa_precondition_field_range_obligations
+  (tree callee,
+   void (*callback) (tree contract, tree field, tree base_parm,
+		      bool has_lo, tree lo, bool has_hi, tree hi,
+		      void *data),
+   void *data);
+
 /* True while parsing/substituting a contract condition that opts into
    constification via its control type's constify member (D4324: off by
    default).  */

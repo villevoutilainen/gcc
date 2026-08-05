@@ -2,7 +2,9 @@
 // OA_PROVEN_FALSE case -- produce_bad's postcondition guarantees
 // "!check_it (r)" -- the exact opposite polarity of what consume's
 // precondition requires for that same value.  A genuine, provable
-// contradiction, still without ever evaluating check_it itself.
+// contradiction, still without ever evaluating check_it itself.  Via
+// the real fact-tracking engine, same intermediate-variable requirement
+// as d4324-conveyor-proof-predicate-ok.C.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -fdump-contract-proofs=predicate-bad-proofs.smt2" }
 // { dg-final { scan-file predicate-bad-proofs.smt2 "\\(assert \\(not check_it\\)\\)\n\\(assert check_it\\)" } }
@@ -36,7 +38,8 @@ void consume (int x) pre<conveyor_ctrl_v>(check_it (x))
 
 void caller ()
 {
-  consume (produce_bad ()); // { dg-error "provably violates the precondition" }
+  int r = produce_bad ();
+  consume (r); // { dg-error "provably violates the precondition" }
 }
 
 int main () { caller (); return 0; }
