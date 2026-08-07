@@ -9777,6 +9777,98 @@ oa_scan_stray_symbolic_call (tree *expr)
     }
 }
 
+/* Shared substrate self-trust: both oa_handle_precondition_stmt and
+   oa_handle_assertion_stmt call this once their own condition has
+   already resolved is_object_address and is being trusted as
+   unconditionally true -- the shared-substrate analogue of the is_
+   object_address/nonzero/range self-trust those two functions already
+   do for the classic three maps (m_map/m_nz_map/m_range_map), extended
+   to the three newer maps (m_predicate_fact_map/m_contract_scalar_
+   range_map/m_contract_field_range_map) that today are only ever
+   established from a *callee's* postcondition at a call site
+   (oa_handle_call_symbolic_postcondition_establishment). A function's
+   own pre<ctrl>(...)/contract_assert<ctrl>(...) is just as good a
+   source of these facts for its own later code as a callee's
+   postcondition already is for its caller -- e.g. 'pre<ctrl>(is_opened
+   (this))' should let the rest of this same function's body use
+   is_opened(this) as an established fact, exactly like a *caller* of
+   this function already can after this precondition is proven.
+
+   Deliberately gated on TRACKING_OK (oa_contract_fact_tracking_
+   active_p: conveyor- or symbolic-active) rather than the classic
+   facts' own CONVEYOR_OK: this is general contract-obligation-fact
+   tracking, not UB-freedom, the same distinction that already keeps
+   item 8's own div/mod/array-bound scanning conveyor-scoped while
+   -fcontract-conveyor-proofs's own range-subsumption consult is not
+   (see .claude/plans/well-we-last-discussed-ethereal-duckling.md and
+   the "Conveyor UB-freedom scope" project note) -- so a symbolic-only
+   precondition/assert gets this shared-substrate self-trust even
+   though it gets none of the classic-maps' self-trust just below.
+
+   Only ever matches a conjunct against the function's own PARM_DECLs/
+   'this' (via oa_predicate_conjunct_shape's own VAR_P||PARM_DECL scope
+   and oa_object_identity_decl's own this/&decl/bare-decl resolution),
+   the same "trust the condition's own literal text, no interprocedural
+   reasoning" discipline the classic-maps blocks already use.  */
+
+static void
+oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
+					   bool tracking_ok)
+{
+  if (!tracking_ok)
+    return;
+
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts (&cond, &conjuncts);
+
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree pred_fn, arg_decl;
+      bool negated;
+      if (!oa_predicate_conjunct_shape (*conjuncts[i], &pred_fn, &arg_decl,
+					&negated))
+	continue;
+      tree identity;
+      if (oa_object_identity_decl (arg_decl, &identity))
+	env.predicate_fact_set (identity, pred_fn, !negated);
+    }
+
+  auto_vec<tree> params;
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree param, const_val;
+      tree_code code;
+      if (oa_match_simple_comparison (*conjuncts[i], &param, &code, &const_val)
+	  && TREE_CODE (param) == PARM_DECL && !params.contains (param))
+	params.safe_push (param);
+    }
+  if (!params.is_empty ())
+    {
+      oa_env scratch;
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	oa_refine_single_comparison (*conjuncts[i], scratch,
+				     /*asserted_true=*/true);
+      for (unsigned i = 0; i < params.length (); ++i)
+	{
+	  oa_range_fact range;
+	  if (scratch.range_get (params[i], &range))
+	    env.contract_scalar_range_set (params[i], range);
+	}
+    }
+
+  auto_vec<oa_symbolic_field_group> field_groups;
+  oa_collect_contract_field_ranges (cond, &field_groups);
+  for (unsigned i = 0; i < field_groups.length (); ++i)
+    {
+      tree ptr_expr = oa_strip_symbolic_ptr_expr (field_groups[i].ptr_expr);
+      tree identity;
+      if (!oa_object_identity_decl (ptr_expr, &identity))
+	continue;
+      env.contract_field_range_set (identity, field_groups[i].field,
+				     field_groups[i].range);
+    }
+}
+
 /* Handle one PRECONDITION_STMT encountered during the body walk: both
    a resolution point (so is_object_address never reaches
    genericization unresolved -- it has no definition and could never
@@ -9804,12 +9896,20 @@ oa_scan_stray_symbolic_call (tree *expr)
    ordinary boolean preconditions via ignored-and-assumable/IFN_ASSUME;
    item 7 is what will eventually make that trust actually be earned by
    every caller, not a soundness gap introduced by doing this half
-   first.  */
+   first.
+
+   Also a shared-substrate fact source (oa_establish_shared_substrate_
+   self_trust, own comment above): a named-predicate/scalar-range/
+   field-range conjunct here is trusted for the rest of this function's
+   body too, gated independently on TRACKING_OK rather than CONVEYOR_OK
+   -- unlike the is_object_address/nonzero/range facts below, this
+   half also fires for a symbolic-only precondition.  */
 
 static void
 oa_handle_precondition_stmt (tree contract, oa_env &env)
 {
   bool conveyor_ok = oa_contract_conveyor_active_p (contract);
+  bool tracking_ok = oa_contract_fact_tracking_active_p (contract);
   tree cond = CONTRACT_CONDITION (contract);
   if (cond == NULL_TREE || cond == error_mark_node)
     return;
@@ -9855,6 +9955,8 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
       return;
     }
   CONTRACT_CONDITION (contract) = cond;
+
+  oa_establish_shared_substrate_self_trust (cond, env, tracking_ok);
 
   if (!conveyor_ok)
     return;
@@ -10037,12 +10139,20 @@ oa_resolve_iile_range (tree call, oa_env &env, oa_range_fact *out)
    top-level &&-conjunct that was exactly is_object_address(E) into ENV
    as an established fact for the rest of the function (the
    contract_assert-as-fact-source escape hatch for the loop/IILE cases
-   a later increment will add).  */
+   a later increment will add).
+
+   Also a shared-substrate fact source (oa_establish_shared_substrate_
+   self_trust, own comment above oa_handle_precondition_stmt): gated
+   independently on TRACKING_OK, so a symbolic-only contract_assert
+   establishes a named-predicate/scalar-range/field-range fact for
+   later code too, even though it gets none of the is_object_address/
+   nonzero/range treatment below.  */
 
 static void
 oa_handle_assertion_stmt (tree stmt, oa_env &env)
 {
   bool conveyor_ok = oa_contract_conveyor_active_p (stmt);
+  bool tracking_ok = oa_contract_fact_tracking_active_p (stmt);
   tree cond = CONTRACT_CONDITION (stmt);
   if (cond == NULL_TREE || cond == error_mark_node)
     return;
@@ -10085,6 +10195,8 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
       return;
     }
   CONTRACT_CONDITION (stmt) = cond;
+
+  oa_establish_shared_substrate_self_trust (cond, env, tracking_ok);
 
   if (!conveyor_ok)
     return;
