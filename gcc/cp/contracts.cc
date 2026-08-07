@@ -5286,6 +5286,13 @@ struct oa_predicate_fact
 {
   tree pred_fn;
   bool polarity;
+  /* True if the specific contract that established this fact was
+     conveyor-active -- see oa_env_predicate_result's own REQUIRE_CONVEYOR
+     parameter for why this matters: a fact a purely-axiomatic symbolic
+     contract established must never satisfy a conveyor obligation (which
+     is supposed to be backed by real UB-freedom verification), while the
+     reverse (conveyor feeding symbolic) is fine.  */
+  bool conveyor_established;
 };
 
 /* Composite key for m_contract_field_range_map, (object identity,
@@ -5295,6 +5302,15 @@ struct oa_predicate_fact
    own tree_cond_mask_hash).  */
 typedef pair_hash<nofree_ptr_hash<tree_node>, nofree_ptr_hash<tree_node>>
   oa_field_key_hash;
+
+/* m_contract_field_range_map's own value type -- RANGE plus the same
+   CONVEYOR_ESTABLISHED provenance tag oa_predicate_fact carries, and for
+   the same reason (see that struct's own comment).  */
+struct oa_contract_field_range_fact
+{
+  oa_range_fact range;
+  bool conveyor_established;
+};
 
 /* Forward-declared: oa_derivation's full definition (contract-conveyor-
    proof-provenance's own "why does this range fact hold" node, see its
@@ -5364,7 +5380,12 @@ public:
      both sides agree" shape, but requires full agreement (same
      PRED_FN, same POLARITY), not partial-bound combination -- there is
      no meaningful "weaker combined fact" for two different named-
-     predicate claims the way there is for two numeric intervals.  */
+     predicate claims the way there is for two numeric intervals.
+     CONVEYOR_ESTABLISHED is merged by AND, matching HAS_LO/HAS_HI's own
+     "only claim what holds on every path" discipline elsewhere in this
+     file: a fact conveyor-established on only one of two joining
+     branches must not be treated as conveyor-established after the
+     join.  */
   bool predicate_fact_get (tree decl, oa_predicate_fact *out)
   {
     oa_predicate_fact *v = m_predicate_fact_map.get (decl);
@@ -5373,26 +5394,40 @@ public:
     *out = *v;
     return true;
   }
-  void predicate_fact_set (tree decl, tree pred_fn, bool polarity)
+  void predicate_fact_set (tree decl, tree pred_fn, bool polarity,
+			    bool conveyor_established)
   {
     oa_predicate_fact fact;
     fact.pred_fn = pred_fn;
     fact.polarity = polarity;
+    fact.conveyor_established = conveyor_established;
     m_predicate_fact_map.put (decl, fact);
   }
   void predicate_fact_invalidate (tree decl) { m_predicate_fact_map.remove (decl); }
   void predicate_fact_merge_with (oa_env &other)
   {
     auto_vec<tree> to_remove;
+    auto_vec<tree> to_keep;
+    auto_vec<oa_predicate_fact> kept_facts;
     for (auto it : m_predicate_fact_map)
       {
 	oa_predicate_fact *ov = other.m_predicate_fact_map.get (it.first);
 	if (!ov || ov->pred_fn != it.second.pred_fn
 	    || ov->polarity != it.second.polarity)
-	  to_remove.safe_push (it.first);
+	  {
+	    to_remove.safe_push (it.first);
+	    continue;
+	  }
+	oa_predicate_fact merged = it.second;
+	merged.conveyor_established
+	  = it.second.conveyor_established && ov->conveyor_established;
+	to_keep.safe_push (it.first);
+	kept_facts.safe_push (merged);
       }
     for (unsigned i = 0; i < to_remove.length (); ++i)
       m_predicate_fact_map.remove (to_remove[i]);
+    for (unsigned i = 0; i < to_keep.length (); ++i)
+      m_predicate_fact_map.put (to_keep[i], kept_facts[i]);
   }
 
   /* A shared substrate, same gating as m_predicate_fact_map above: a
@@ -5462,18 +5497,24 @@ public:
      comparison_conjunct_shape, built for -fcontract-symbolic-runtime-
      checks), which stays symbolic-only (Mechanism A has no conveyor
      counterpart).  Same intersect-and-widen merge discipline as
-     contract_scalar_range_merge_with, just keyed on the pair.  */
-  bool contract_field_range_get (tree identity, tree field, oa_range_fact *out)
+     contract_scalar_range_merge_with, just keyed on the pair, plus the
+     same CONVEYOR_ESTABLISHED provenance tag (merged by AND) oa_
+     predicate_fact's own map carries, and for the same reason.  */
+  bool contract_field_range_get (tree identity, tree field,
+				  oa_contract_field_range_fact *out)
   {
-    oa_range_fact *v = m_contract_field_range_map.get ({identity, field});
+    oa_contract_field_range_fact *v
+      = m_contract_field_range_map.get ({identity, field});
     if (!v)
       return false;
     *out = *v;
     return true;
   }
   void contract_field_range_set (tree identity, tree field,
-				  const oa_range_fact &fact)
+				  const oa_range_fact &range,
+				  bool conveyor_established)
   {
+    oa_contract_field_range_fact fact = { range, conveyor_established };
     m_contract_field_range_map.put ({identity, field}, fact);
   }
   void contract_field_range_invalidate (tree identity, tree field)
@@ -5497,23 +5538,26 @@ public:
   {
     auto_vec<std::pair<tree, tree>> to_remove;
     auto_vec<std::pair<tree, tree>> to_keep;
-    auto_vec<oa_range_fact> kept_facts;
+    auto_vec<oa_contract_field_range_fact> kept_facts;
     for (auto it : m_contract_field_range_map)
       {
-	oa_range_fact *ov = other.m_contract_field_range_map.get (it.first);
+	oa_contract_field_range_fact *ov
+	  = other.m_contract_field_range_map.get (it.first);
 	if (!ov)
 	  {
 	    to_remove.safe_push (it.first);
 	    continue;
 	  }
-	oa_range_fact merged;
-	merged.base = NULL_TREE;
-	merged.has_lo = it.second.has_lo && ov->has_lo;
-	merged.has_hi = it.second.has_hi && ov->has_hi;
-	if (merged.has_lo)
-	  merged.lo = wi::smin (it.second.lo, ov->lo);
-	if (merged.has_hi)
-	  merged.hi = wi::smax (it.second.hi, ov->hi);
+	oa_contract_field_range_fact merged;
+	merged.range.base = NULL_TREE;
+	merged.range.has_lo = it.second.range.has_lo && ov->range.has_lo;
+	merged.range.has_hi = it.second.range.has_hi && ov->range.has_hi;
+	if (merged.range.has_lo)
+	  merged.range.lo = wi::smin (it.second.range.lo, ov->range.lo);
+	if (merged.range.has_hi)
+	  merged.range.hi = wi::smax (it.second.range.hi, ov->range.hi);
+	merged.conveyor_established
+	  = it.second.conveyor_established && ov->conveyor_established;
 	to_keep.safe_push (it.first);
 	kept_facts.safe_push (merged);
       }
@@ -5705,7 +5749,7 @@ private:
   hash_map<tree, oa_derivation *> m_deriv_map;
   hash_map<tree, oa_predicate_fact> m_predicate_fact_map;
   hash_map<tree, oa_range_fact> m_contract_scalar_range_map;
-  hash_map<oa_field_key_hash, oa_range_fact> m_contract_field_range_map;
+  hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_contract_field_range_map;
   tree m_outermost_bind = NULL_TREE;
   hash_map<tree, tree> m_shadow_decls;
 };
@@ -7414,17 +7458,30 @@ oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
    function.  Consulting the real map instead means an object whose
    identity persists across statements (e.g. 'f.open(); f.read();') is
    now provable too, not just the direct-nested-call shape -- see
-   .claude/plans/well-we-last-discussed-ethereal-duckling.md.  */
+   .claude/plans/well-we-last-discussed-ethereal-duckling.md.
+
+   REQUIRE_CONVEYOR: the trust relationship between the two flavors is
+   one-way, not a wall in both directions -- a conveyor-established fact
+   (backed by real UB-freedom verification) is trustworthy enough for
+   symbolic's own, purely-axiomatic checks to rely on, but a symbolic-
+   established fact (never verified, trusted outright) must never
+   satisfy a *conveyor* obligation, which would silently weaken the
+   guarantee conveyor is supposed to provide.  Conveyor's own callers
+   (oa_handle_call_conveyor_proof_obligation) pass true; symbolic's own
+   (oa_handle_call_symbolic_precondition_obligation) pass false, since
+   accepting a fact regardless of which flavor established it is
+   correct for that direction.  */
 
 static oa_proof_result
 oa_env_predicate_result (oa_env &env, tree substituted, tree pred_fn,
-			  bool required_polarity)
+			  bool required_polarity, bool require_conveyor)
 {
   tree identity;
   if (!oa_object_identity_decl (substituted, &identity))
     return OA_UNKNOWN;
   oa_predicate_fact fact;
-  if (!env.predicate_fact_get (identity, &fact) || fact.pred_fn != pred_fn)
+  if (!env.predicate_fact_get (identity, &fact) || fact.pred_fn != pred_fn
+      || (require_conveyor && !fact.conveyor_established))
     return OA_UNKNOWN;
   return (fact.polarity == required_polarity) ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
 }
@@ -7446,10 +7503,14 @@ oa_env_predicate_result (oa_env &env, tree substituted, tree pred_fn,
    that: PRED_FN_OUT/POLARITY_OUT are keyed by the *assignment's own
    LHS* there, not by any substitution through CALL's own arguments.
    Gated by oa_contract_fact_tracking_active_p, the same shared
-   substrate every other establishment site here uses.  */
+   substrate every other establishment site here uses.  CONVEYOR_
+   ESTABLISHED_OUT records whether the *matching* postcondition was
+   itself conveyor-active, for the caller to tag the fact it stores
+   (see oa_predicate_fact's own comment on why this matters).  */
 
 static bool
-oa_call_symbolic_predicate_p (tree call, tree *pred_fn_out, bool *polarity_out)
+oa_call_symbolic_predicate_p (tree call, tree *pred_fn_out, bool *polarity_out,
+			       bool *conveyor_established_out)
 {
   tree callee = cp_get_callee_fndecl_nofold (call);
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
@@ -7480,6 +7541,7 @@ oa_call_symbolic_predicate_p (tree call, tree *pred_fn_out, bool *polarity_out)
 
 	  *pred_fn_out = pred_fn;
 	  *polarity_out = !negated;
+	  *conveyor_established_out = oa_contract_conveyor_active_p (contract, callee);
 	  return true;
 	}
     }
@@ -7874,7 +7936,8 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 
 	  tree substituted = CALL_EXPR_ARG (call, argno);
 	  oa_proof_result pr
-	    = oa_env_predicate_result (env, substituted, pred_fn, !negated);
+	    = oa_env_predicate_result (env, substituted, pred_fn, !negated,
+				       /*require_conveyor=*/true);
 	  switch (pr)
 	    {
 	    case OA_PROVEN_TRUE:
@@ -8161,6 +8224,13 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 	continue;
       if (!oa_contract_fact_tracking_active_p (contract, callee))
 	continue;
+      /* Which flavor *this specific* postcondition is -- recorded
+	 alongside every fact it establishes, so a conveyor-only consumer
+	 (oa_env_predicate_result/oa_env_check_field_range_fact with
+	 REQUIRE_CONVEYOR true) can refuse a fact that was only ever
+	 backed by a symbolic contract's own, unverified trust.  See
+	 oa_predicate_fact's own comment.  */
+      bool conveyor_established = oa_contract_conveyor_active_p (contract, callee);
 
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
@@ -8184,7 +8254,7 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 	  if (!oa_object_identity_decl (substituted, &identity))
 	    continue;
 
-	  env.predicate_fact_set (identity, pred_fn, !negated);
+	  env.predicate_fact_set (identity, pred_fn, !negated, conveyor_established);
 	}
 
 	      auto_vec<oa_symbolic_field_group> field_groups;
@@ -8202,7 +8272,8 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 		  if (!oa_object_identity_decl (substituted, &identity))
 		    continue;
 		  env.contract_field_range_set (identity, field_groups[i].field,
-						field_groups[i].range);
+						field_groups[i].range,
+						conveyor_established);
 		}
     }
 }
@@ -8290,7 +8361,7 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		  if (!oa_object_identity_decl (substituted, &identity))
 		    continue;
 
-		  oa_range_fact established;
+		  oa_contract_field_range_fact established;
 		  if (!env.contract_field_range_get (identity, field_groups[i].field,
 						      &established))
 		    {
@@ -8301,9 +8372,12 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		      continue;
 		    }
+		  /* Symbolic's own consult: any established fact satisfies
+		     it, whichever flavor established it -- see oa_predicate_
+		     fact's own comment on the one-way trust direction.  */
 
 		  oa_range_subsumption_result r
-		    = oa_range_subsumption (established, field_groups[i].range);
+		    = oa_range_subsumption (established.range, field_groups[i].range);
 		  if (r == OA_RANGE_SUBSUMED)
 		    continue; /* Proven true: silently discharged.  */
 		  if (r == OA_RANGE_DISJOINT)
@@ -8374,9 +8448,14 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	  if (!oa_object_identity_decl (substituted, &identity))
 	    continue;
 
-	  oa_range_fact established;
+	  oa_contract_field_range_fact established;
+	  /* Conveyor's own consult: a fact backed only by a symbolic
+	     contract's own, unverified trust must not satisfy a conveyor
+	     obligation -- see oa_predicate_fact's own comment.  Treated
+	     identically to "no fact found at all".  */
 	  if (!env.contract_field_range_get (identity, field_groups[i].field,
-					      &established))
+					      &established)
+	      || !established.conveyor_established)
 	    {
 	      warning_at (EXPR_LOCATION (call), 0,
 			  "cannot verify that field %qD of %qE satisfies "
@@ -8387,7 +8466,7 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	    }
 
 	  oa_range_subsumption_result r
-	    = oa_range_subsumption (established, field_groups[i].range);
+	    = oa_range_subsumption (established.range, field_groups[i].range);
 	  if (r == OA_RANGE_SUBSUMED)
 	    continue; /* Proven true: silently discharged.  */
 	  if (r == OA_RANGE_DISJOINT)
@@ -8983,14 +9062,16 @@ oa_match_predicate_conjunct (tree conjunct, tree *pred_fn_out,
 
 /* Public, plugin-facing wrapper over oa_env_predicate_result.  ENV's
    dynamic type is always really oa_env (the same reinterpret_cast idiom
-   oa_env_check_comparison already uses further below).  */
+   oa_env_check_comparison already uses further below).  REQUIRE_CONVEYOR:
+   see oa_env_predicate_result's own comment -- the conveyor plugin
+   passes true, the symbolic plugin passes false.  */
 
 oa_proof_result
 oa_env_check_predicate_fact (oa_analysis_env *env, tree obj_expr, tree pred_fn,
-			      bool required_polarity)
+			      bool required_polarity, bool require_conveyor)
 {
   return oa_env_predicate_result (*reinterpret_cast<oa_env *> (env), obj_expr,
-				   pred_fn, required_polarity);
+				   pred_fn, required_polarity, require_conveyor);
 }
 
 /* Build a plain-tree-bounds REQUIRED oa_range_fact from a plugin's own
@@ -9045,22 +9126,25 @@ oa_env_check_scalar_range_fact (oa_analysis_env *env, tree expr, bool has_lo,
 }
 
 /* Same, for FIELD of the object identified by BASE_EXPR
-   (m_contract_field_range_map).  */
+   (m_contract_field_range_map).  REQUIRE_CONVEYOR: see oa_env_check_
+   predicate_fact's own comment -- the conveyor plugin passes true, the
+   symbolic plugin passes false.  */
 
 oa_proof_result
 oa_env_check_field_range_fact (oa_analysis_env *env, tree base_expr,
 				tree field, bool has_lo, tree lo, bool has_hi,
-				tree hi)
+				tree hi, bool require_conveyor)
 {
   oa_env &e = *reinterpret_cast<oa_env *> (env);
   tree identity;
   if (!oa_object_identity_decl (base_expr, &identity))
     return OA_UNKNOWN;
-  oa_range_fact established;
-  if (!e.contract_field_range_get (identity, field, &established))
+  oa_contract_field_range_fact established;
+  if (!e.contract_field_range_get (identity, field, &established)
+      || (require_conveyor && !established.conveyor_established))
     return OA_UNKNOWN;
   oa_range_fact required = oa_range_fact_from_bounds (has_lo, lo, has_hi, hi);
-  switch (oa_range_subsumption (established, required))
+  switch (oa_range_subsumption (established.range, required))
     {
     case OA_RANGE_SUBSUMED: return OA_PROVEN_TRUE;
     case OA_RANGE_DISJOINT: return OA_PROVEN_FALSE;
@@ -9809,11 +9893,17 @@ oa_scan_stray_symbolic_call (tree *expr)
    'this' (via oa_predicate_conjunct_shape's own VAR_P||PARM_DECL scope
    and oa_object_identity_decl's own this/&decl/bare-decl resolution),
    the same "trust the condition's own literal text, no interprocedural
-   reasoning" discipline the classic-maps blocks already use.  */
+   reasoning" discipline the classic-maps blocks already use.
+
+   CONVEYOR_OK records whether *this specific* contract is conveyor-
+   active, independent of TRACKING_OK -- a symbolic-only precondition/
+   assert still establishes these facts (TRACKING_OK), but they get
+   tagged as not conveyor_established, so a conveyor consumer later
+   refuses to rely on them (see oa_predicate_fact's own comment).  */
 
 static void
 oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
-					   bool tracking_ok)
+					   bool tracking_ok, bool conveyor_ok)
 {
   if (!tracking_ok)
     return;
@@ -9830,7 +9920,7 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
 	continue;
       tree identity;
       if (oa_object_identity_decl (arg_decl, &identity))
-	env.predicate_fact_set (identity, pred_fn, !negated);
+	env.predicate_fact_set (identity, pred_fn, !negated, conveyor_ok);
     }
 
   auto_vec<tree> params;
@@ -9865,7 +9955,7 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
       if (!oa_object_identity_decl (ptr_expr, &identity))
 	continue;
       env.contract_field_range_set (identity, field_groups[i].field,
-				     field_groups[i].range);
+				     field_groups[i].range, conveyor_ok);
     }
 }
 
@@ -9956,7 +10046,7 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
     }
   CONTRACT_CONDITION (contract) = cond;
 
-  oa_establish_shared_substrate_self_trust (cond, env, tracking_ok);
+  oa_establish_shared_substrate_self_trust (cond, env, tracking_ok, conveyor_ok);
 
   if (!conveyor_ok)
     return;
@@ -10196,7 +10286,7 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
     }
   CONTRACT_CONDITION (stmt) = cond;
 
-  oa_establish_shared_substrate_self_trust (cond, env, tracking_ok);
+  oa_establish_shared_substrate_self_trust (cond, env, tracking_ok, conveyor_ok);
 
   if (!conveyor_ok)
     return;
@@ -11026,11 +11116,11 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  {
 	    tree stripped_init_pred = STRIP_ANY_LOCATION_WRAPPER (DECL_INITIAL (decl));
 	    tree pred_fn;
-	    bool polarity;
+	    bool polarity, pred_conveyor_established;
 	    if (TREE_CODE (stripped_init_pred) == CALL_EXPR
 		&& oa_call_symbolic_predicate_p (stripped_init_pred, &pred_fn,
-						  &polarity))
-	      env.predicate_fact_set (decl, pred_fn, polarity);
+						  &polarity, &pred_conveyor_established))
+	      env.predicate_fact_set (decl, pred_fn, polarity, pred_conveyor_established);
 	  }
 	if (VAR_P (decl) && POINTER_TYPE_P (TREE_TYPE (decl)))
 	  {
@@ -11198,11 +11288,11 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  {
 	    tree stripped_rhs_pred = STRIP_ANY_LOCATION_WRAPPER (rhs);
 	    tree pred_fn;
-	    bool polarity;
+	    bool polarity, pred_conveyor_established;
 	    if (TREE_CODE (stripped_rhs_pred) == CALL_EXPR
 		&& oa_call_symbolic_predicate_p (stripped_rhs_pred, &pred_fn,
-						  &polarity))
-	      env.predicate_fact_set (lhs, pred_fn, polarity);
+						  &polarity, &pred_conveyor_established))
+	      env.predicate_fact_set (lhs, pred_fn, polarity, pred_conveyor_established);
 	  }
 	if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 	    && POINTER_TYPE_P (TREE_TYPE (lhs)))

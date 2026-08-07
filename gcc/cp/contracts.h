@@ -265,25 +265,36 @@ extern bool oa_match_predicate_conjunct
    at the opposite polarity, or unknown?  Backed by the same shared
    substrate both built-in checkers consult for their own named-predicate
    obligations (see .claude/plans/well-we-last-discussed-ethereal-
-   duckling.md).  */
+   duckling.md).  REQUIRE_CONVEYOR: the trust relationship between the
+   two flavors is one-way -- a conveyor-established fact (backed by real
+   UB-freedom verification) is trustworthy enough for a symbolic
+   obligation to rely on, but a symbolic-established fact (never
+   verified, trusted outright) must never satisfy a conveyor obligation.
+   Pass true from the conveyor plugin, false from the symbolic plugin.  */
 extern oa_proof_result oa_env_check_predicate_fact
-  (oa_analysis_env *env, tree obj_expr, tree pred_fn, bool required_polarity);
+  (oa_analysis_env *env, tree obj_expr, tree pred_fn, bool required_polarity,
+   bool require_conveyor);
 
 /* Same three-way verdict, for a bare scalar's own contract-established
    range (distinct from oa_env_check_comparison's ordinary dataflow
    range: this one is only ever established by a callee's own
    postcondition, never inferred from an arbitrary computation).  Each
    bound is optional -- pass has_lo/has_hi false (LO/HI then ignored) for
-   an open bound.  */
+   an open bound.  Symbolic-only substrate (see oa_precondition_scalar_
+   range_obligations's own comment), so there is no REQUIRE_CONVEYOR
+   parameter here -- nothing conveyor-side ever establishes into this
+   map, so there is no wrong-direction fact to guard against.  */
 extern oa_proof_result oa_env_check_scalar_range_fact
   (oa_analysis_env *env, tree expr, bool has_lo, tree lo, bool has_hi,
    tree hi);
 
 /* Same, for FIELD of the object identified by BASE_EXPR (this->field-
-   style).  */
+   style).  REQUIRE_CONVEYOR: see oa_env_check_predicate_fact's own
+   comment -- this map is genuinely shared between both flavors, so the
+   same one-way trust rule applies here too.  */
 extern oa_proof_result oa_env_check_field_range_fact
   (oa_analysis_env *env, tree base_expr, tree field, bool has_lo, tree lo,
-   bool has_hi, tree hi);
+   bool has_hi, tree hi, bool require_conveyor);
 
 /* Collect every distinct PARM_DECL compared by a bare-scalar conjunct of
    CALLEE's own active *symbolic* preconditions, and the combined
