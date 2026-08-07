@@ -11,7 +11,7 @@
 int f ()
 {
   int x = 5;
-  if (std::is_object_address (&x)) // { dg-error "may only be used directly inside a conveyor-checked" }
+  if (std::is_object_address (&x)) // { dg-error "may only be used directly inside a conveyor- or symbolic-checked" }
     return 0;
   return 1;
 }
