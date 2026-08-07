@@ -5347,6 +5347,47 @@ public:
   void nz_set (tree decl, bool provable) { m_nz_map.put (decl, provable); }
   void nz_invalidate (tree decl) { m_nz_map.put (decl, false); }
 
+  /* -fcontract-symbolic-proofs: symbolic-only counterparts of m_map/
+     m_nz_map above, established *only* when the specific establishing
+     contract is symbolic-active (never conveyor-active) -- see
+     .claude/plans/well-we-last-discussed-ethereal-duckling.md. Kept
+     entirely separate from m_map/m_nz_map, rather than folded in with
+     an extra provenance tag the way m_predicate_fact_map/m_contract_
+     field_range_map were, because those two are read-only from the
+     conveyor side (m_map/m_nz_map must never gain a fact a symbolic
+     contract established): a symbolic consult falls back to m_map/
+     m_nz_map itself (the allowed direction, conveyor feeding symbolic)
+     at its own call site instead, so there is no shared map needing a
+     tag here at all. Same "every incoming value must satisfy it"
+     AND-of-booleans lattice as m_map/m_nz_map, folded into the same
+     merge_with below.  */
+  bool symbolic_object_address_provable_p (tree decl)
+  {
+    bool *v = m_symbolic_object_address_map.get (decl);
+    return v && *v;
+  }
+  void symbolic_object_address_set (tree decl, bool provable)
+  {
+    m_symbolic_object_address_map.put (decl, provable);
+  }
+  void symbolic_object_address_invalidate (tree decl)
+  {
+    m_symbolic_object_address_map.put (decl, false);
+  }
+  bool symbolic_nz_provable_p (tree decl)
+  {
+    bool *v = m_symbolic_nz_map.get (decl);
+    return v && *v;
+  }
+  void symbolic_nz_set (tree decl, bool provable)
+  {
+    m_symbolic_nz_map.put (decl, provable);
+  }
+  void symbolic_nz_invalidate (tree decl)
+  {
+    m_symbolic_nz_map.put (decl, false);
+  }
+
   /* A third, independent per-decl fact -- a provable value range,
      unified across "plain integer range" and "pointer's offset into a
      named array" (see oa_range_fact's own comment) -- for item 8's
@@ -5627,6 +5668,10 @@ public:
       r.m_map.put (it.first, it.second);
     for (auto it : m_nz_map)
       r.m_nz_map.put (it.first, it.second);
+    for (auto it : m_symbolic_object_address_map)
+      r.m_symbolic_object_address_map.put (it.first, it.second);
+    for (auto it : m_symbolic_nz_map)
+      r.m_symbolic_nz_map.put (it.first, it.second);
     for (auto it : m_range_map)
       r.m_range_map.put (it.first, it.second);
     for (auto it : m_deriv_map)
@@ -5653,6 +5698,12 @@ public:
     m_nz_map.empty ();
     for (auto it : other.m_nz_map)
       m_nz_map.put (it.first, it.second);
+    m_symbolic_object_address_map.empty ();
+    for (auto it : other.m_symbolic_object_address_map)
+      m_symbolic_object_address_map.put (it.first, it.second);
+    m_symbolic_nz_map.empty ();
+    for (auto it : other.m_symbolic_nz_map)
+      m_symbolic_nz_map.put (it.first, it.second);
     m_range_map.empty ();
     for (auto it : other.m_range_map)
       m_range_map.put (it.first, it.second);
@@ -5700,6 +5751,28 @@ public:
 	}
     for (unsigned i = 0; i < nz_to_invalidate.length (); ++i)
       m_nz_map.put (nz_to_invalidate[i], false);
+
+    auto_vec<tree> symbolic_oa_to_invalidate;
+    for (auto it : m_symbolic_object_address_map)
+      if (it.second)
+	{
+	  bool *ov = other.m_symbolic_object_address_map.get (it.first);
+	  if (!ov || !*ov)
+	    symbolic_oa_to_invalidate.safe_push (it.first);
+	}
+    for (unsigned i = 0; i < symbolic_oa_to_invalidate.length (); ++i)
+      m_symbolic_object_address_map.put (symbolic_oa_to_invalidate[i], false);
+
+    auto_vec<tree> symbolic_nz_to_invalidate;
+    for (auto it : m_symbolic_nz_map)
+      if (it.second)
+	{
+	  bool *ov = other.m_symbolic_nz_map.get (it.first);
+	  if (!ov || !*ov)
+	    symbolic_nz_to_invalidate.safe_push (it.first);
+	}
+    for (unsigned i = 0; i < symbolic_nz_to_invalidate.length (); ++i)
+      m_symbolic_nz_map.put (symbolic_nz_to_invalidate[i], false);
   }
 
   /* Merge OTHER's range facts into *this in place, by *union* of
@@ -5745,6 +5818,8 @@ public:
 private:
   hash_map<tree, bool> m_map;
   hash_map<tree, bool> m_nz_map;
+  hash_map<tree, bool> m_symbolic_object_address_map;
+  hash_map<tree, bool> m_symbolic_nz_map;
   hash_map<tree, oa_range_fact> m_range_map;
   hash_map<tree, oa_derivation *> m_deriv_map;
   hash_map<tree, oa_predicate_fact> m_predicate_fact_map;
@@ -7015,19 +7090,28 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
    oa_handle_own_precondition below for why a precondition's own
    is_object_address is trusted as an axiom here rather than proven
    against ENV). Returns false (having already diagnosed) if any call
-   was found unprovable, or was found outside a conveyor/non-ignored
-   context (CONVEYOR_OK false means this whole COND is not itself
-   inside a conveyor-checked predicate, so any is_object_address found
-   here at all is a well-formedness error, provable or not).  */
+   was found unprovable, or was found outside a conveyor/symbolic/
+   non-ignored context (CONVEYOR_OK and SYMBOLIC_OK both false means
+   this whole COND is not itself inside a conveyor- or symbolic-checked
+   predicate, so any is_object_address found here at all is a well-
+   formedness error, provable or not). The prove-vs-trust behavior
+   below is unaffected by which of the two made it allowed: a symbolic-
+   only post/assert still only proves via ENV's own m_map (i.e. whatever
+   a conveyor-established fact already put there -- the allowed
+   direction, see .claude/plans/well-we-last-discussed-ethereal-
+   duckling.md), never trusted outright the way a precondition's own is.  */
 
 static bool
 oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
-		      bool trust = false)
+		      bool symbolic_ok = false, bool trust = false)
 {
   bool ok = true;
 
-  struct walk_data { oa_env *env; bool conveyor_ok; bool trust; bool *ok; };
-  walk_data data = { &env, conveyor_ok, trust, &ok };
+  struct walk_data
+  {
+    oa_env *env; bool conveyor_ok; bool symbolic_ok; bool trust; bool *ok;
+  };
+  walk_data data = { &env, conveyor_ok, symbolic_ok, trust, &ok };
 
   cp_walk_tree (cond, [](tree *tp, int *, void *data_) -> tree
     {
@@ -7036,11 +7120,11 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
       if (!is_object_address_call_p (*tp, &arg))
 	return NULL_TREE;
 
-      if (!d->conveyor_ok)
+      if (!d->conveyor_ok && !d->symbolic_ok)
 	{
 	  error_at (EXPR_LOCATION (*tp),
 		    "%<std::is_object_address%> may only be used inside "
-		    "a conveyor-checked predicate");
+		    "a conveyor- or symbolic-checked predicate");
 	  *d->ok = false;
 	  /* Replace with a harmless leaf, same reason as the success path
 	     below: *TP may be a CALL_EXPR wrapped in a CLEANUP_POINT_EXPR/
@@ -7389,7 +7473,27 @@ static oa_derivation *oa_get_range_derivation (tree expr, oa_env &env);
    body.  The connection this establishes is purely syntactic (the same
    predicate function, named identically, applied to identical-by-
    construction values across a call boundary), which is exactly the
-   trust a conveyor-declared predicate is supposed to license.  */
+   trust a conveyor-declared predicate is supposed to license.
+
+   Excludes an is_object_address(E)-shaped conjunct explicitly: syntactically
+   it's indistinguishable from an ordinary single-arg predicate call (a
+   FUNCTION_DECL callee, one PARM_DECL/VAR_DECL argument), but it has its
+   own, entirely separate dedicated mechanism throughout this file
+   (is_object_address_call_p, the classic/symbolic-only maps, item 6's
+   own postcondition-return-value shortcut) with its own diagnostics --
+   letting it through here as if it were a named predicate would send it
+   through the wrong consult path (looking for a same-named "predicate
+   fact" that establishment never stores under that name) instead of the
+   right one, producing a spurious "cannot verify" even when the
+   dedicated mechanism could prove it immediately.  Found via direct
+   testing, once Increment (see .claude/plans/well-we-last-discussed-
+   ethereal-duckling.md) first allowed is_object_address inside a
+   symbolic (as opposed to only conveyor) contract at all -- conveyor's
+   own oa_handle_call_conveyor_proof_obligation already had its own
+   explicit 'continue' for this before ever reaching this function, from
+   the very first increment that added it; every symbolic-side caller
+   needs the same exclusion, so it belongs here once, centrally, rather
+   than repeated at each call site.  */
 
 static bool
 oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
@@ -7409,6 +7513,10 @@ oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
     }
 
   if (TREE_CODE (c) != CALL_EXPR || call_expr_nargs (c) != 1)
+    return false;
+
+  tree oa_arg;
+  if (is_object_address_call_p (c, &oa_arg))
     return false;
 
   tree fn = cp_get_callee_fndecl_nofold (c);
@@ -8208,7 +8316,10 @@ oa_range_subsumption (const oa_range_fact &established,
    duckling.md.  Also establishes any ptr->field range facts the same
    postcondition's condition names (oa_collect_contract_field_ranges),
    the static-prover analogue of Mechanism A's own runtime
-   establishment.  */
+   establishment, and, for a symbolic-active postcondition specifically,
+   any is_object_address(this)/E != 0-shaped conjunct naming one of
+   CALLEE's own persistent parameters, into the symbolic-only m_symbolic_
+   object_address_map/m_symbolic_nz_map -- see those maps' own comment.  */
 
 static void
 oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
@@ -8231,6 +8342,19 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 	 backed by a symbolic contract's own, unverified trust.  See
 	 oa_predicate_fact's own comment.  */
       bool conveyor_established = oa_contract_conveyor_active_p (contract, callee);
+      /* Unlike the shared-substrate maps above/below, is_object_address/
+	 nonzero-ness has its own, symbolic-only maps (m_symbolic_object_
+	 address_map/m_symbolic_nz_map) rather than a provenance tag on a
+	 shared one -- see those maps' own comment on oa_env. Only a
+	 symbolic-active postcondition ever writes to them: a conveyor-
+	 active one's own is_object_address/nonzero conjuncts are never
+	 checked as a caller-side obligation at all (oa_handle_call_
+	 conveyor_proof_obligation explicitly skips is_object_address, and
+	 has no nonzero-conjunct handling either -- these exist only to
+	 seed conveyor's own UB-freedom analysis of the callee's own body,
+	 not as a fact for callers), so establishing into a *conveyor* map
+	 here would have no consumer and only add confusion.  */
+      bool symbolic_established = oa_contract_symbolic_active_p (contract, callee);
 
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
@@ -8256,6 +8380,28 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 
 	  env.predicate_fact_set (identity, pred_fn, !negated, conveyor_established);
 	}
+
+      if (symbolic_established)
+	for (unsigned i = 0; i < conjuncts.length (); ++i)
+	  {
+	    tree arg;
+	    if (is_object_address_call_p (*conjuncts[i], &arg))
+	      {
+		tree substituted
+		  = oa_substitute_call_arg (callee, call,
+					     STRIP_ANY_LOCATION_WRAPPER (arg));
+		tree identity;
+		if (substituted && oa_object_identity_decl (substituted, &identity))
+		  env.symbolic_object_address_set (identity, true);
+	      }
+	    else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
+	      {
+		tree substituted = oa_substitute_call_arg (callee, call, arg);
+		tree identity;
+		if (substituted && oa_object_identity_decl (substituted, &identity))
+		  env.symbolic_nz_set (identity, true);
+	      }
+	  }
 
 	      auto_vec<oa_symbolic_field_group> field_groups;
 	      oa_collect_contract_field_ranges (cond, &field_groups);
@@ -8284,7 +8430,11 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
    established by an earlier call's own symbolic postcondition
    (oa_handle_call_symbolic_postcondition_establishment above), and not
    invalidated since (see this function's own callers in oa_scan_
-   calls_in_expr for the invalidation rules).  */
+   calls_in_expr for the invalidation rules).  Also checks is_object_
+   address/nonzero-shaped conjuncts, each falling back to whatever
+   conveyor has already established (the allowed direction) before
+   consulting its own symbolic-only maps -- see the comment on that
+   loop, further below.  */
 
 static void
 oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
@@ -8344,6 +8494,71 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		    substituted, callee, pred_fn, substituted,
 		    fact.polarity ? "true" : "false", required ? "true" : "false");
 	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	}
+
+      /* is_object_address/nonzero-shaped conjuncts: unlike the
+	 predicate/field-range shapes above, these have no "provably
+	 false" case of their own (see is_object_address_call_p/
+	 oa_nonzero_conjunct_p's own callers elsewhere in this file --
+	 neither ever tracks "provably NOT an object address/zero"), so
+	 the only two outcomes are proven-true or cannot-verify.  Each
+	 checks, in order: CALL's own conveyor fallback (oa_provable_p/
+	 oa_provably_nonzero_p, which read m_map/m_nz_map/m_range_map --
+	 the allowed direction, see oa_predicate_fact's own comment),
+	 then the symbolic-only maps this same pass populates (m_symbolic_
+	 object_address_map/m_symbolic_nz_map, see their own comment on
+	 oa_env), then, for nonzero only, an m_contract_scalar_range_map
+	 fact for the same decl that provably excludes zero -- the
+	 symbolic-only bare-scalar range shape (Mechanism B's own static-
+	 prover analogue), checked here rather than folded into oa_
+	 provably_nonzero_p itself since that function is shared with
+	 conveyor's own, unrelated checking and must not gain a symbolic-
+	 only fact source.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree arg;
+	  if (is_object_address_call_p (*conjuncts[i], &arg))
+	    {
+	      tree substituted
+		= oa_substitute_call_arg (callee, call,
+					   STRIP_ANY_LOCATION_WRAPPER (arg));
+	      if (!substituted)
+		continue;
+	      if (oa_provable_p (substituted, env))
+		continue; /* Proven true: silently discharged.  */
+	      tree identity;
+	      if (oa_object_identity_decl (substituted, &identity)
+		  && env.symbolic_object_address_provable_p (identity))
+		continue; /* Proven true: silently discharged.  */
+	      warning_at (EXPR_LOCATION (call), 0,
+			  "cannot verify %<is_object_address%> for %qE, as "
+			  "required by the precondition of %qD",
+			  substituted, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    }
+	  else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
+	    {
+	      tree substituted = oa_substitute_call_arg (callee, call, arg);
+	      if (!substituted)
+		continue;
+	      if (oa_provably_nonzero_p (substituted, env))
+		continue; /* Proven true: silently discharged.  */
+	      tree identity;
+	      if (oa_object_identity_decl (substituted, &identity)
+		  && env.symbolic_nz_provable_p (identity))
+		continue; /* Proven true: silently discharged.  */
+	      tree stripped = STRIP_ANY_LOCATION_WRAPPER (substituted);
+	      oa_range_fact scalar_range;
+	      if ((VAR_P (stripped) || TREE_CODE (stripped) == PARM_DECL)
+		  && env.contract_scalar_range_get (stripped, &scalar_range)
+		  && ((scalar_range.has_lo && scalar_range.lo > 0)
+		      || (scalar_range.has_hi && scalar_range.hi < 0)))
+		continue; /* Proven true: silently discharged.  */
+	      warning_at (EXPR_LOCATION (call), 0,
+			  "cannot verify that %qE is nonzero, as required by "
+			  "the precondition of %qD", substituted, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    }
 	}
 
 	      auto_vec<oa_symbolic_field_group> field_groups;
@@ -8982,7 +9197,18 @@ oa_precondition_symbolic_ranges (tree callee,
    for Mechanism B's runtime dispatch and reused here as-is), check
    whether ENV already has a compile-time established range for the
    substituted argument, with the same three-way subsumed/disjoint/
-   partial outcome as the ptr->field consult above.  */
+   partial outcome as the ptr->field consult above. Falls back to the
+   general-purpose m_range_map (conveyor's own numeric checking's own
+   map, populated by ordinary dataflow throughout the caller's body, not
+   just by a callee's postcondition) when m_contract_scalar_range_map
+   has nothing for this decl -- the same allowed conveyor-feeds-symbolic
+   direction as is_object_address/nonzero's own new fallback just above,
+   giving this check the same reach conveyor's own numeric checking
+   already has. Only a plain integer range, never a pointer's own
+   offset-into-array range (BASE null), is a meaningful fallback here --
+   this obligation is about a *by-value scalar* argument, not a pointer,
+   mirroring oa_provably_nonzero_p's own identical BASE-null guard on its
+   own m_range_map fallback.  */
 
 static void
 oa_handle_call_symbolic_scalar_precondition_obligation (tree call, oa_env &env)
@@ -9009,11 +9235,16 @@ oa_handle_call_symbolic_scalar_precondition_obligation (tree call, oa_env &env)
       oa_range_fact established;
       if (!env.contract_scalar_range_get (arg_decl, &established))
 	{
-	  warning_at (EXPR_LOCATION (call), 0,
-		      "cannot verify that %qE satisfies the precondition "
-		      "of %qD", substituted, callee);
-	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
-	  continue;
+	  oa_range_fact fallback;
+	  if (!env.range_get (arg_decl, &fallback) || fallback.base != NULL_TREE)
+	    {
+	      warning_at (EXPR_LOCATION (call), 0,
+			  "cannot verify that %qE satisfies the precondition "
+			  "of %qD", substituted, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      continue;
+	    }
+	  established = fallback;
 	}
 
       oa_range_subsumption_result r = oa_range_subsumption (established, required);
@@ -9814,7 +10045,7 @@ oa_scan_stray_is_object_address (tree *expr)
     }, NULL, NULL);
   if (found)
     error_at (EXPR_LOCATION (found), "%<std::is_object_address%> may "
-	      "only be used directly inside a conveyor-checked "
+	      "only be used directly inside a conveyor- or symbolic-checked "
 	      "%<contract_assert%>, %<pre%>, or %<post%> condition");
 }
 
@@ -9887,7 +10118,12 @@ oa_scan_stray_symbolic_call (tree *expr)
    (see .claude/plans/well-we-last-discussed-ethereal-duckling.md and
    the "Conveyor UB-freedom scope" project note) -- so a symbolic-only
    precondition/assert gets this shared-substrate self-trust even
-   though it gets none of the classic-maps' self-trust just below.
+   though it gets none of the *classic* m_map/m_nz_map self-trust just
+   below (those stay conveyor-only forever; a symbolic-only precondition/
+   assert's own is_object_address/nonzero self-trust instead goes to the
+   newer, symbolic-only m_symbolic_object_address_map/m_symbolic_nz_map,
+   in oa_handle_precondition_stmt/oa_handle_assertion_stmt's own
+   SYMBOLIC_OK branch, right alongside this call).
 
    Only ever matches a conjunct against the function's own PARM_DECLs/
    'this' (via oa_predicate_conjunct_shape's own VAR_P||PARM_DECL scope
@@ -9999,6 +10235,7 @@ static void
 oa_handle_precondition_stmt (tree contract, oa_env &env)
 {
   bool conveyor_ok = oa_contract_conveyor_active_p (contract);
+  bool symbolic_ok = oa_contract_symbolic_active_p (contract);
   bool tracking_ok = oa_contract_fact_tracking_active_p (contract);
   tree cond = CONTRACT_CONDITION (contract);
   if (cond == NULL_TREE || cond == error_mark_node)
@@ -10029,7 +10266,7 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 
   auto_vec<tree> facts;
   auto_vec<tree> nz_facts;
-  if (conveyor_ok)
+  if (conveyor_ok || symbolic_ok)
     for (unsigned i = 0; i < conjuncts.length (); ++i)
       {
 	tree arg;
@@ -10039,7 +10276,7 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 	  nz_facts.safe_push (arg);
       }
 
-  if (!oa_resolve_condition (&cond, env, conveyor_ok, /*trust=*/true))
+  if (!oa_resolve_condition (&cond, env, conveyor_ok, symbolic_ok, /*trust=*/true))
     {
       CONTRACT_CONDITION (contract) = error_mark_node;
       return;
@@ -10048,28 +10285,47 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 
   oa_establish_shared_substrate_self_trust (cond, env, tracking_ok, conveyor_ok);
 
-  if (!conveyor_ok)
-    return;
-
-  for (unsigned i = 0; i < facts.length (); ++i)
-    {
-      tree e = facts[i];
-      if (VAR_P (e) || TREE_CODE (e) == PARM_DECL)
-	env.set (e, true);
-    }
-  for (unsigned i = 0; i < nz_facts.length (); ++i)
-    env.nz_set (nz_facts[i], true);
-  /* Increment E4: a comparison-shaped conjunct ('i < N', etc.) is
-     trusted the same way an is_object_address(E)/E != 0 conjunct
-     already is above -- reusing oa_refine_single_comparison directly,
-     since "trusted true" for a precondition conjunct is exactly the
-     same thing as a then-branch refinement.  Silently does nothing for
-     any conjunct shape it doesn't recognize (already covered above, or
-     neither), so it's safe to call unconditionally over every
-     conjunct.  */
+  /* CONVEYOR_OK writes into env's own m_map/m_nz_map, SYMBOLIC_OK into
+     the symbolic-only maps -- independently, since a control object
+     could in principle be both (see oa_predicate_fact's own comment on
+     why the two axes are never entangled behind one shared knob).  A
+     symbolic-only precondition's own is_object_address/nonzero fact
+     must never reach m_map/m_nz_map itself: those feed conveyor's own,
+     stronger obligations, and a symbolic fact is only ever trusted, not
+     verified (see .claude/plans/well-we-last-discussed-ethereal-
+     duckling.md).  */
   if (conveyor_ok)
-    for (unsigned i = 0; i < conjuncts.length (); ++i)
-      oa_refine_single_comparison (*conjuncts[i], env, /*asserted_true=*/true);
+    {
+      for (unsigned i = 0; i < facts.length (); ++i)
+	{
+	  tree e = facts[i];
+	  if (VAR_P (e) || TREE_CODE (e) == PARM_DECL)
+	    env.set (e, true);
+	}
+      for (unsigned i = 0; i < nz_facts.length (); ++i)
+	env.nz_set (nz_facts[i], true);
+      /* Increment E4: a comparison-shaped conjunct ('i < N', etc.) is
+	 trusted the same way an is_object_address(E)/E != 0 conjunct
+	 already is above -- reusing oa_refine_single_comparison directly,
+	 since "trusted true" for a precondition conjunct is exactly the
+	 same thing as a then-branch refinement.  Silently does nothing
+	 for any conjunct shape it doesn't recognize (already covered
+	 above, or neither), so it's safe to call unconditionally over
+	 every conjunct.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	oa_refine_single_comparison (*conjuncts[i], env, /*asserted_true=*/true);
+    }
+  if (symbolic_ok)
+    {
+      for (unsigned i = 0; i < facts.length (); ++i)
+	{
+	  tree e = facts[i];
+	  if (VAR_P (e) || TREE_CODE (e) == PARM_DECL)
+	    env.symbolic_object_address_set (e, true);
+	}
+      for (unsigned i = 0; i < nz_facts.length (); ++i)
+	env.symbolic_nz_set (nz_facts[i], true);
+    }
 }
 
 /* Forward-declared: the statement walker recurses into itself, and into
@@ -10242,6 +10498,7 @@ static void
 oa_handle_assertion_stmt (tree stmt, oa_env &env)
 {
   bool conveyor_ok = oa_contract_conveyor_active_p (stmt);
+  bool symbolic_ok = oa_contract_symbolic_active_p (stmt);
   bool tracking_ok = oa_contract_fact_tracking_active_p (stmt);
   tree cond = CONTRACT_CONDITION (stmt);
   if (cond == NULL_TREE || cond == error_mark_node)
@@ -10269,7 +10526,7 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 
   auto_vec<tree> facts;
   auto_vec<tree> nz_facts;
-  if (conveyor_ok)
+  if (conveyor_ok || symbolic_ok)
     for (unsigned i = 0; i < conjuncts.length (); ++i)
       {
 	tree arg;
@@ -10279,7 +10536,7 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 	  nz_facts.safe_push (arg);
       }
 
-  if (!oa_resolve_condition (&cond, env, conveyor_ok))
+  if (!oa_resolve_condition (&cond, env, conveyor_ok, symbolic_ok))
     {
       CONTRACT_CONDITION (stmt) = error_mark_node;
       return;
@@ -10288,25 +10545,39 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 
   oa_establish_shared_substrate_self_trust (cond, env, tracking_ok, conveyor_ok);
 
-  if (!conveyor_ok)
-    return;
-
-  for (unsigned i = 0; i < facts.length (); ++i)
-    {
-      tree e = facts[i];
-      if (VAR_P (e) || TREE_CODE (e) == PARM_DECL)
-	env.set (e, true);
-    }
-  for (unsigned i = 0; i < nz_facts.length (); ++i)
-    env.nz_set (nz_facts[i], true);
-  /* Increment E4: the same comparison-shaped-conjunct fact-seeding as
-     oa_handle_precondition_stmt above, applied here too -- a preceding,
-     conveyor, non-ignored contract_assert's own comparison conjunct
-     establishes a usable range fact for later code, the same escape
-     hatch already used for is_object_address/nonzero-ness.  */
+  /* See the identical CONVEYOR_OK/SYMBOLIC_OK split in oa_handle_
+     precondition_stmt above, and its own comment on why the two axes
+     stay independent rather than sharing one knob.  */
   if (conveyor_ok)
-    for (unsigned i = 0; i < conjuncts.length (); ++i)
-      oa_refine_single_comparison (*conjuncts[i], env, /*asserted_true=*/true);
+    {
+      for (unsigned i = 0; i < facts.length (); ++i)
+	{
+	  tree e = facts[i];
+	  if (VAR_P (e) || TREE_CODE (e) == PARM_DECL)
+	    env.set (e, true);
+	}
+      for (unsigned i = 0; i < nz_facts.length (); ++i)
+	env.nz_set (nz_facts[i], true);
+      /* Increment E4: the same comparison-shaped-conjunct fact-seeding
+	 as oa_handle_precondition_stmt above, applied here too -- a
+	 preceding, conveyor, non-ignored contract_assert's own
+	 comparison conjunct establishes a usable range fact for later
+	 code, the same escape hatch already used for is_object_address/
+	 nonzero-ness.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	oa_refine_single_comparison (*conjuncts[i], env, /*asserted_true=*/true);
+    }
+  if (symbolic_ok)
+    {
+      for (unsigned i = 0; i < facts.length (); ++i)
+	{
+	  tree e = facts[i];
+	  if (VAR_P (e) || TREE_CODE (e) == PARM_DECL)
+	    env.symbolic_object_address_set (e, true);
+	}
+      for (unsigned i = 0; i < nz_facts.length (); ++i)
+	env.symbolic_nz_set (nz_facts[i], true);
+    }
 }
 
 /* Collect, into PTR_OUT/NZ_OUT (each deduplicated), every pointer-typed
@@ -11831,6 +12102,7 @@ static void
 oa_handle_postcondition_stmt (tree contract, oa_env &env)
 {
   bool conveyor_ok = oa_contract_conveyor_active_p (contract);
+  bool symbolic_ok = oa_contract_symbolic_active_p (contract);
   tree cond = CONTRACT_CONDITION (contract);
   if (cond == NULL_TREE || cond == error_mark_node)
     return;
@@ -11865,7 +12137,7 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 	}
     }
 
-  if (!oa_resolve_condition (&cond, ret_env, conveyor_ok))
+  if (!oa_resolve_condition (&cond, ret_env, conveyor_ok, symbolic_ok))
     {
       CONTRACT_CONDITION (contract) = error_mark_node;
       return;
