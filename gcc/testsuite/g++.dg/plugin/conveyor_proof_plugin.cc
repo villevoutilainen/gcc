@@ -124,7 +124,8 @@ field_range_callback (tree contract, tree field, tree base_parm,
 
   oa_proof_result r = oa_env_check_field_range_fact (ctx->env, substituted,
 						      field, has_lo, lo,
-						      has_hi, hi);
+						      has_hi, hi,
+						      /*require_conveyor=*/true);
   switch (r)
     {
     case OA_PROVEN_TRUE:
@@ -240,7 +241,8 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 
 	  tree substituted = CALL_EXPR_ARG (call, argno);
 	  oa_proof_result pr
-	    = oa_env_check_predicate_fact (env, substituted, pred_fn, !negated);
+	    = oa_env_check_predicate_fact (env, substituted, pred_fn, !negated,
+					    /*require_conveyor=*/true);
 	  switch (pr)
 	    {
 	    case OA_PROVEN_TRUE:
