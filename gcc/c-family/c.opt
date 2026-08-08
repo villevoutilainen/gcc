@@ -1932,12 +1932,30 @@ contract clause, or which if/else branches, established it) so
 from its branches instead of asserting it as a bare premise; has no effect
 without both -fcontract-conveyor-proofs and -fdump-contract-proofs=.
 
+fcontract-conveyor-proofs-gimple
+C++ ObjC++ Var(flag_contract_conveyor_proofs_gimple) Init(0)
+Experimental: perform -fcontract-conveyor-proofs's own checking as a GIMPLE
+pass (run once SSA is built, before any optimization pass) instead of the
+default AST walk; independent of -fcontract-conveyor-proofs itself, so
+either, both, or neither may be active. See
+~/gimple-contract-analysis.md for the design rationale. Requires
+-fcontract-control-objects to have any effect.
+
 fcontract-symbolic-proofs
 C++ ObjC++ Var(flag_contract_symbolic_proofs) Init(0)
 Statically check that a symbolic contract's precondition is established
 by an earlier call's symbolic postcondition on the same object, and not
 invalidated since, at call sites; requires -fcontract-control-objects to
 have any effect.
+
+fcontract-symbolic-proofs-gimple
+C++ ObjC++ Var(flag_contract_symbolic_proofs_gimple) Init(0)
+Experimental: perform -fcontract-symbolic-proofs's own checking as a GIMPLE
+pass (run once SSA is built, before any optimization pass) instead of the
+default AST walk; independent of -fcontract-symbolic-proofs itself, so
+either, both, or neither may be active. See
+~/gimple-contract-analysis.md for the design rationale. Requires
+-fcontract-control-objects to have any effect.
 
 fcontract-symbolic-runtime-checks
 C++ ObjC++ Var(flag_contract_symbolic_runtime_checks) Init(0)
