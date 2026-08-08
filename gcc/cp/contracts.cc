@@ -5330,6 +5330,23 @@ struct oa_predicate_fact
   bool conveyor_established;
 };
 
+/* A *relational* fact between two decls -- "LHS CODE RHS holds", e.g.
+   for 'pre<ctrl>(x < q)', LHS is x, CODE is LT_EXPR, RHS is q. Unlike
+   oa_range_fact (a numeric interval against a literal bound), this
+   never resolves either side to a value at all -- see oa_match_
+   comparison_against_param's own comment for why. Structurally
+   identical in every other way to oa_predicate_fact immediately above
+   (whole-fact merge by full agreement, same CONVEYOR_ESTABLISHED
+   one-way-trust tag, same rationale), just keyed on a second decl
+   instead of a FUNCTION_DECL/polarity pair.  */
+
+struct oa_relational_fact
+{
+  tree_code code;
+  tree rhs;
+  bool conveyor_established;
+};
+
 /* Composite key for m_contract_field_range_map, (object identity,
    FIELD_DECL) -- pair_hash (hash-traits.h)
    combines two ordinary pointer-hash traits, the same idiom used
@@ -5504,6 +5521,69 @@ public:
       m_predicate_fact_map.remove (to_remove[i]);
     for (unsigned i = 0; i < to_keep.length (); ++i)
       m_predicate_fact_map.put (to_keep[i], kept_facts[i]);
+  }
+
+  /* A shared substrate, same gating and shape as m_predicate_fact_map
+     above, for oa_relational_fact ("LHS CODE RHS holds") instead of a
+     named-predicate call.  relational_merge_with mirrors predicate_
+     fact_merge_with exactly: full agreement (same CODE, same RHS) or
+     the fact is dropped at the join, and CONVEYOR_ESTABLISHED merges
+     by AND.  */
+  bool relational_get (tree decl, oa_relational_fact *out)
+  {
+    oa_relational_fact *v = m_relational_map.get (decl);
+    if (!v)
+      return false;
+    *out = *v;
+    return true;
+  }
+  void relational_set (tree decl, tree_code code, tree rhs,
+			bool conveyor_established)
+  {
+    oa_relational_fact fact;
+    fact.code = code;
+    fact.rhs = rhs;
+    fact.conveyor_established = conveyor_established;
+    m_relational_map.put (decl, fact);
+  }
+  void relational_invalidate (tree decl) { m_relational_map.remove (decl); }
+  /* Rule 2 (see oa_predicate_fact's own invalidation callers): a fact
+     about a stale value on *either* side is no longer valid, so this
+     also drops every fact whose own RHS is DECL, not just an entry
+     keyed on DECL itself.  */
+  void relational_invalidate_involving (tree decl)
+  {
+    m_relational_map.remove (decl);
+    auto_vec<tree> to_remove;
+    for (auto it : m_relational_map)
+      if (it.second.rhs == decl)
+	to_remove.safe_push (it.first);
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_relational_map.remove (to_remove[i]);
+  }
+  void relational_merge_with (oa_env &other)
+  {
+    auto_vec<tree> to_remove;
+    auto_vec<tree> to_keep;
+    auto_vec<oa_relational_fact> kept_facts;
+    for (auto it : m_relational_map)
+      {
+	oa_relational_fact *ov = other.m_relational_map.get (it.first);
+	if (!ov || ov->code != it.second.code || ov->rhs != it.second.rhs)
+	  {
+	    to_remove.safe_push (it.first);
+	    continue;
+	  }
+	oa_relational_fact merged = it.second;
+	merged.conveyor_established
+	  = it.second.conveyor_established && ov->conveyor_established;
+	to_keep.safe_push (it.first);
+	kept_facts.safe_push (merged);
+      }
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_relational_map.remove (to_remove[i]);
+    for (unsigned i = 0; i < to_keep.length (); ++i)
+      m_relational_map.put (to_keep[i], kept_facts[i]);
   }
 
   /* A shared substrate, same gating as m_predicate_fact_map above: a
@@ -5713,6 +5793,8 @@ public:
       r.m_deriv_map.put (it.first, it.second);
     for (auto it : m_predicate_fact_map)
       r.m_predicate_fact_map.put (it.first, it.second);
+    for (auto it : m_relational_map)
+      r.m_relational_map.put (it.first, it.second);
     for (auto it : m_contract_scalar_range_map)
       r.m_contract_scalar_range_map.put (it.first, it.second);
     for (auto it : m_contract_field_range_map)
@@ -5748,6 +5830,9 @@ public:
     m_predicate_fact_map.empty ();
     for (auto it : other.m_predicate_fact_map)
       m_predicate_fact_map.put (it.first, it.second);
+    m_relational_map.empty ();
+    for (auto it : other.m_relational_map)
+      m_relational_map.put (it.first, it.second);
     m_contract_scalar_range_map.empty ();
     for (auto it : other.m_contract_scalar_range_map)
       m_contract_scalar_range_map.put (it.first, it.second);
@@ -5858,6 +5943,7 @@ private:
   hash_map<tree, oa_range_fact> m_range_map;
   hash_map<tree, oa_derivation *> m_deriv_map;
   hash_map<tree, oa_predicate_fact> m_predicate_fact_map;
+  hash_map<tree, oa_relational_fact> m_relational_map;
   hash_map<tree, oa_range_fact> m_contract_scalar_range_map;
   hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_contract_field_range_map;
   tree m_outermost_bind = NULL_TREE;
@@ -6664,6 +6750,59 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
     return true;
 
   return false;
+}
+
+/* EXPR's own established *relational* fact, if any -- the oa_
+   relational_fact analogue of oa_get_range immediately above, sharing
+   its exact wrapper-stripping discipline (a contract condition's own
+   access to a decl is wrapped the same way regardless of which fact
+   shape is being consulted).  Deliberately much narrower than oa_get_
+   range: no PLUS_EXPR/MINUS_EXPR/IILE/item-6 handling, since a
+   relational fact is only ever recorded directly against a bare decl
+   by oa_establish_shared_substrate_self_trust, never derived
+   arithmetically or from a callee's own postcondition (see this
+   plan's own explicit non-goal on postcondition-established relational
+   facts).  */
+
+static bool
+oa_get_relational (tree expr, oa_env &env, oa_relational_fact *out)
+{
+  if (expr == NULL_TREE || expr == error_mark_node)
+    return false;
+
+  STRIP_ANY_LOCATION_WRAPPER (expr);
+  while (TREE_CODE (expr) == NON_LVALUE_EXPR
+	 || TREE_CODE (expr) == NOP_EXPR
+	 || TREE_CODE (expr) == CONVERT_EXPR
+	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
+    expr = TREE_OPERAND (expr, 0);
+
+  if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
+    return env.relational_get (expr, out);
+
+  return false;
+}
+
+/* Strip EXPR the same way oa_get_relational above does, without
+   consulting any fact -- used to normalize both sides of a relational
+   obligation's own substituted call-site arguments down to a bare
+   decl before comparing them for identity (oa_relational_fact's own
+   RHS is always recorded as a bare decl by oa_establish_shared_
+   substrate_self_trust, so the caller-side argument must be reduced
+   the same way before matching).  */
+
+static tree
+oa_strip_to_relational_operand (tree expr)
+{
+  if (expr == NULL_TREE)
+    return NULL_TREE;
+  STRIP_ANY_LOCATION_WRAPPER (expr);
+  while (TREE_CODE (expr) == NON_LVALUE_EXPR
+	 || TREE_CODE (expr) == NOP_EXPR
+	 || TREE_CODE (expr) == CONVERT_EXPR
+	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
+    expr = TREE_OPERAND (expr, 0);
+  return expr;
 }
 
 /* Intersect REFINED with the bound implied by "decl CODE val" (CODE
@@ -8008,6 +8147,59 @@ oa_emit_predicate_certificate (location_t loc, tree callee, tree pred_fn,
 static void oa_handle_call_conveyor_field_range_obligation
   (tree call, oa_env &env);
 
+/* Forward-declared for the same reason: defined just below this
+   function, but needed here to substitute a relational obligation's
+   own two parameters at this specific call site.  */
+static tree oa_substitute_call_arg (tree callee, tree call, tree param);
+
+/* True if an established relational fact of code ESTABLISHED is
+   strong enough to satisfy a required comparison of code REQUIRED --
+   e.g. an established '<' satisfies a required '<=' (a stricter fact
+   subsumes a weaker obligation), and '==' satisfies both '<=' and
+   '>='; nothing else is implied (an established '<=' does NOT satisfy
+   a required '<', since equality remains possible).  Exported (not
+   static) so contracts-gimple.cc's own built-in GIMPLE-pass engine can
+   reuse the exact same rule rather than a separately-maintained copy.  */
+
+bool
+oa_relational_code_implies (tree_code established, tree_code required)
+{
+  if (established == required)
+    return true;
+  switch (established)
+    {
+    case LT_EXPR: return required == LE_EXPR;
+    case GT_EXPR: return required == GE_EXPR;
+    case EQ_EXPR: return required == LE_EXPR || required == GE_EXPR;
+    default: return false;
+    }
+}
+
+/* Does "A CODE B" hold, where A and B are both ordinary compile-time
+   INTEGER_CST literals?  Plain constant folding of two concrete
+   numbers actually present at a specific call site -- not resolving
+   any parameter's own opaque meaning (contrast oa_get_relational,
+   which never inspects a value at all), so this is unconditionally
+   safe to evaluate directly, the same way oa_match_simple_comparison's
+   own literal-bound checking already is.  Exported for the same
+   reason as oa_relational_code_implies immediately above.  */
+
+bool
+oa_relational_literal_holds (tree_code code, tree a, tree b)
+{
+  widest_int wa = wi::to_widest (a);
+  widest_int wb = wi::to_widest (b);
+  switch (code)
+    {
+    case LT_EXPR: return wa < wb;
+    case LE_EXPR: return wa <= wb;
+    case GT_EXPR: return wa > wb;
+    case GE_EXPR: return wa >= wb;
+    case EQ_EXPR: return wa == wb;
+    default: return false;
+    }
+}
+
 static void
 oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 {
@@ -8057,6 +8249,54 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		}
 	      oa_tighten_range_bound (range_facts[idx], code,
 				      wi::to_widest (const_val));
+	      continue;
+	    }
+
+	  tree rel_param, rel_other;
+	  tree_code rel_code;
+	  if (oa_match_comparison_against_param (*conjuncts[i], &rel_param,
+						  &rel_code, &rel_other))
+	    {
+	      tree sub_param = oa_substitute_call_arg (callee, call, rel_param);
+	      tree sub_other = oa_substitute_call_arg (callee, call, rel_other);
+	      tree stripped_param
+		= sub_param ? oa_strip_to_relational_operand (sub_param) : NULL_TREE;
+	      tree stripped_other
+		= sub_other ? oa_strip_to_relational_operand (sub_other) : NULL_TREE;
+
+	      /* Both sides happen to be ordinary compile-time literals at
+		 THIS specific call site (e.g. a caller passing '5' directly,
+		 or relying on a plain scalar default argument that's
+		 already a literal) -- plain constant folding, not resolving
+		 any parameter's own opaque meaning, so this is unconditionally
+		 safe and needs no established fact at all.  */
+	      if (stripped_param && stripped_other
+		  && TREE_CODE (stripped_param) == INTEGER_CST
+		  && TREE_CODE (stripped_other) == INTEGER_CST)
+		{
+		  if (oa_relational_literal_holds (rel_code, stripped_param,
+						    stripped_other))
+		    continue; /* Proven true: silently discharged.  */
+		  error_at (EXPR_LOCATION (call),
+			    "argument %qE provably violates the precondition "
+			    "of %qD", sub_param, callee);
+		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  continue;
+		}
+
+	      oa_relational_fact fact;
+	      if (sub_param && sub_other
+		  && oa_get_relational (sub_param, env, &fact)
+		  && oa_relational_code_implies (fact.code, rel_code)
+		  && fact.conveyor_established
+		  && oa_strip_to_relational_operand (fact.rhs) == stripped_other)
+		continue; /* Proven true: silently discharged.  */
+
+	      warning_at (EXPR_LOCATION (call), 0,
+			  "cannot verify that %qE satisfies the "
+			  "precondition of %qD",
+			  sub_param ? sub_param : rel_param, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
 
@@ -8528,6 +8768,60 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		    "precondition requires it to be %s",
 		    substituted, callee, pred_fn, substituted,
 		    fact.polarity ? "true" : "false", required ? "true" : "false");
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	}
+
+      /* A relational conjunct against another of the callee's own
+	 parameters -- unlike the predicate/field-range shapes above,
+	 there is no established provenance requirement here: a
+	 conveyor-established relational fact is trustworthy enough for
+	 this symbolic obligation to rely on (the allowed direction --
+	 see oa_relational_fact's own comment), so this consult never
+	 checks CONVEYOR_ESTABLISHED at all, unlike the conveyor side's
+	 own consult in oa_handle_call_conveyor_proof_obligation.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree rel_param, rel_other;
+	  tree_code rel_code;
+	  if (!oa_match_comparison_against_param (*conjuncts[i], &rel_param,
+						   &rel_code, &rel_other))
+	    continue;
+
+	  tree sub_param = oa_substitute_call_arg (callee, call, rel_param);
+	  tree sub_other = oa_substitute_call_arg (callee, call, rel_other);
+	  tree stripped_param
+	    = sub_param ? oa_strip_to_relational_operand (sub_param) : NULL_TREE;
+	  tree stripped_other
+	    = sub_other ? oa_strip_to_relational_operand (sub_other) : NULL_TREE;
+
+	  /* Both sides are ordinary compile-time literals at this call
+	     site -- plain constant folding, see the identical comment in
+	     oa_handle_call_conveyor_proof_obligation.  */
+	  if (stripped_param && stripped_other
+	      && TREE_CODE (stripped_param) == INTEGER_CST
+	      && TREE_CODE (stripped_other) == INTEGER_CST)
+	    {
+	      if (oa_relational_literal_holds (rel_code, stripped_param,
+						stripped_other))
+		continue; /* Proven true: silently discharged.  */
+	      error_at (EXPR_LOCATION (call),
+			"argument %qE provably violates the precondition "
+			"of %qD", sub_param, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      continue;
+	    }
+
+	  oa_relational_fact fact;
+	  if (sub_param && sub_other
+	      && oa_get_relational (sub_param, env, &fact)
+	      && oa_relational_code_implies (fact.code, rel_code)
+	      && oa_strip_to_relational_operand (fact.rhs) == stripped_other)
+	    continue; /* Proven true: silently discharged.  */
+
+	  warning_at (EXPR_LOCATION (call), 0,
+		      "cannot verify that %qE satisfies the "
+		      "precondition of %qD",
+		      sub_param ? sub_param : rel_param, callee);
 	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	}
 
@@ -10218,6 +10512,21 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
 	env.predicate_fact_set (identity, pred_fn, !negated, conveyor_ok);
     }
 
+  /* A relational conjunct against another of the SAME function's own
+     parameters (e.g. 'pre<ctrl>(x < q)') -- trust it unconditionally
+     for the rest of this function's own body, the same "trust your
+     own precondition" principle already applied to every other fact
+     shape here. See oa_match_comparison_against_param's own comment
+     for why neither PARAM nor OTHER is ever resolved to a value.  */
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree param, other;
+      tree_code code;
+      if (oa_match_comparison_against_param (*conjuncts[i], &param, &code,
+					      &other))
+	env.relational_set (param, code, other, conveyor_ok);
+    }
+
   auto_vec<tree> params;
   for (unsigned i = 0; i < conjuncts.length (); ++i)
     {
@@ -10915,6 +11224,9 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       /* Same staleness concern, for the shared predicate-fact map -- a
 	 no-op when tracking is inactive.  */
       checkenv.predicate_fact_invalidate (d);
+      /* Same staleness concern, for a relational fact naming D on
+	 either side.  */
+      checkenv.relational_invalidate_involving (d);
       /* Same staleness concern, for the two static-only contract range
 	 maps -- D may be a tracked bare scalar (m_contract_scalar_range_
 	 map's own key) or a tracked pointer whose fields are tracked
@@ -10985,6 +11297,9 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	 compute for a symbolic fact (see the plan's own scope notes), so
 	 this is simply always invalidated, never re-established here.  */
       env.predicate_fact_invalidate (range_result_decls[i]);
+      /* Same treatment for a relational fact naming this decl on
+	 either side.  */
+      env.relational_invalidate_involving (range_result_decls[i]);
       /* Same "always invalidated, never re-established" treatment for
 	 the two new static-only symbolic range maps, for the same reason.  */
       env.contract_scalar_range_invalidate (range_result_decls[i]);
@@ -11571,6 +11886,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    if (oa_object_identity_decl (lhs, &identity))
 	      {
 		env.predicate_fact_invalidate (identity);
+		env.relational_invalidate_involving (identity);
 		env.contract_field_range_invalidate_all (identity);
 	      }
 	    else
@@ -11803,6 +12119,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       PRED_FN, same polarity) -- see oa_env::predicate_fact_merge_with's
 	       own comment.  */
 	    then_env.predicate_fact_merge_with (else_env);
+	    then_env.relational_merge_with (else_env);
 	    /* -fcontract-symbolic-proofs: same intersect-and-widen merge as
 	       range_merge_with, for the two new static-only symbolic range
 	       maps (bare-scalar and ptr->field).  */
@@ -11867,6 +12184,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    /* -fcontract-symbolic-proofs: same merge rule as COND_EXPR
 	       above.  */
 	    then_env.predicate_fact_merge_with (else_env);
+	    then_env.relational_merge_with (else_env);
 	    /* -fcontract-symbolic-proofs: same as COND_EXPR above.  */
 	    then_env.contract_scalar_range_merge_with (else_env);
 	    then_env.contract_field_range_merge_with (else_env);
@@ -12003,6 +12321,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		/* -fcontract-symbolic-proofs: same merge rule as the
 		   if/else case.  */
 		merged.predicate_fact_merge_with (current);
+		merged.relational_merge_with (current);
 		/* -fcontract-symbolic-proofs: same as the if/else case.  */
 		merged.contract_scalar_range_merge_with (current);
 		merged.contract_field_range_merge_with (current);
@@ -12065,6 +12384,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.merge_with (env);
 		merged.range_merge_with (env);
 		merged.predicate_fact_merge_with (env);
+		merged.relational_merge_with (env);
 		merged.contract_scalar_range_merge_with (env);
 		merged.contract_field_range_merge_with (env);
 		merged.shadow_decls_merge_with (env);
@@ -12419,6 +12739,115 @@ bool
 oa_contract_conveyor_active_public (tree contract, tree owner_fn)
 {
   return oa_contract_conveyor_active_p (contract, owner_fn);
+}
+
+/* If OP is (a) a bare PARM_DECL, or (b) a call through an implicit,
+   single-argument conversion operator (DECL_CONV_FN_P) whose own
+   receiver is a PARM_DECL -- e.g. 'q.operator int()', the shape a
+   class-typed parameter gets wrapped in wherever it's used in an
+   arithmetic comparison -- return that underlying PARM_DECL;
+   otherwise NULL_TREE.  Purely structural: this never inspects the
+   PARM_DECL's own type or value, only *which* parameter a comparison
+   operand refers to -- see oa_match_comparison_against_param's own
+   comment for why that distinction matters.  */
+
+static tree
+oa_underlying_param_operand (tree op)
+{
+  /* A contract condition's own access to a by-value parameter is
+     wrapped in ordinary value-preserving conversions (NOP_EXPR/
+     VIEW_CONVERT_EXPR, to present it as const-qualified -- see oa_get_
+     range's own identical comment) -- found by direct testing to be
+     necessary as soon as the same function also has a postcondition
+     naming one of its own by-value parameters (which forces this
+     const-presentation view onto the precondition's own copy of the
+     same parameters too, not just the postcondition's).  */
+  op = oa_strip_to_relational_operand (op);
+  if (TREE_CODE (op) == PARM_DECL)
+    return op;
+
+  if (TREE_CODE (op) != CALL_EXPR || call_expr_nargs (op) != 1)
+    return NULL_TREE;
+  tree fn = CALL_EXPR_FN (op);
+  if (fn == NULL_TREE || TREE_CODE (fn) != ADDR_EXPR)
+    return NULL_TREE;
+  tree fndecl = TREE_OPERAND (fn, 0);
+  if (TREE_CODE (fndecl) != FUNCTION_DECL || !DECL_CONV_FN_P (fndecl))
+    return NULL_TREE;
+
+  tree object = oa_strip_to_relational_operand (CALL_EXPR_ARG (op, 0));
+  if (TREE_CODE (object) == ADDR_EXPR)
+    object = TREE_OPERAND (object, 0);
+  return TREE_CODE (object) == PARM_DECL ? object : NULL_TREE;
+}
+
+/* Recognize CONJUNCT as "paramA OP paramB", where *both* sides are
+   PARM_DECLs of the same callee (via oa_underlying_param_operand just
+   above) -- e.g. 'x < q' where q is another of the callee's own
+   parameters, of any type, not a literal. Deliberately does NOT try
+   to resolve paramB to any compile-time value: unlike oa_match_simple_
+   comparison (which requires an already-literal INTEGER_CST), this
+   recognizes a genuine *relational* fact between two parameters,
+   tracked and consulted symbolically by its own caller (oa_env's
+   relational_get/set) the same way a named-predicate fact like
+   'is_opened(this)' is tracked without ever evaluating is_opened --
+   paramB's actual value is never needed, only whether the same
+   relationship holds between whatever a specific call site's own
+   substituted arguments turn out to be. Kept entirely separate from
+   oa_match_simple_comparison, which self-trust's own range-fact
+   seeding and the exported plugin API also rely on returning an
+   actual literal -- broadening that function's own contract instead
+   would force every existing caller to handle an unresolved "other
+   parameter" result it has no way to act on.  Exported so
+   contracts-gimple.cc's own built-in GIMPLE-pass engine can reuse the
+   exact same shape recognition, the same way it already reuses
+   is_object_address_call_p/oa_nonzero_conjunct_p.  */
+
+bool
+oa_match_comparison_against_param (tree conjunct, tree *param_out,
+				    tree_code *code_out, tree *other_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  enum tree_code code = TREE_CODE (c);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return false;
+
+  tree op0 = oa_strip_to_relational_operand (TREE_OPERAND (c, 0));
+  tree op1 = oa_strip_to_relational_operand (TREE_OPERAND (c, 1));
+
+  tree param, other;
+  bool flipped;
+  if (TREE_CODE (op0) == PARM_DECL && (other = oa_underlying_param_operand (op1)))
+    param = op0, flipped = false;
+  else if (TREE_CODE (op1) == PARM_DECL
+	   && (other = oa_underlying_param_operand (op0)))
+    param = op1, flipped = true;
+  else
+    return false;
+
+  /* A parameter compared against itself isn't a useful relation (and
+     would otherwise self-establish trivially).  */
+  if (param == other)
+    return false;
+
+  if (flipped)
+    switch (code)
+      {
+      case LT_EXPR: code = GT_EXPR; break;
+      case LE_EXPR: code = GE_EXPR; break;
+      case GT_EXPR: code = LT_EXPR; break;
+      case GE_EXPR: code = LE_EXPR; break;
+      default: break;
+      }
+
+  *param_out = param;
+  *code_out = code;
+  *other_out = other;
+  return true;
 }
 
 /* Recognize CONJUNCT as the shape "param OP const" (or "const OP

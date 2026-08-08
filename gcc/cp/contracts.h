@@ -256,6 +256,27 @@ extern void oa_collect_conjuncts_public (tree *cond, vec<tree *> *out);
 extern bool oa_match_simple_comparison
   (tree conjunct, tree *param_out, tree_code *code_out, tree *const_val_out);
 
+/* If CONJUNCT has the shape "paramA OP paramB", where paramB is
+   *another* of the same callee's own parameters (not a literal) --
+   optionally reached through an implicit conversion operator -- rather
+   than a constant, recognize it and fill PARAM_OUT/CODE_OUT/OTHER_OUT.
+   Unlike oa_match_simple_comparison above, OTHER_OUT is not a resolved
+   value; the caller substitutes it with a specific call site's own
+   argument and consults a *relational* fact (oa_env::relational_get),
+   never a value one.  */
+extern bool oa_match_comparison_against_param
+  (tree conjunct, tree *param_out, tree_code *code_out, tree *other_out);
+
+/* True if an established relational fact of code ESTABLISHED (e.g.
+   LT_EXPR) is strong enough to satisfy a required comparison of code
+   REQUIRED (e.g. an established '<' satisfies a required '<=').  */
+extern bool oa_relational_code_implies (tree_code established, tree_code required);
+
+/* Does "A CODE B" hold, where A and B are both ordinary compile-time
+   INTEGER_CST literals -- plain constant folding, not resolving any
+   parameter's own opaque meaning.  */
+extern bool oa_relational_literal_holds (tree_code code, tree a, tree b);
+
 /* Is CONTRACT (a PRECONDITION_STMT/POSTCONDITION_STMT belonging to
    OWNER_FN) currently conveyor-active (non-ignored)?  */
 extern bool oa_contract_conveyor_active_public (tree contract, tree owner_fn);
