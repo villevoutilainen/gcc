@@ -247,6 +247,21 @@ extern void oa_walk_function_calls
 extern oa_proof_result oa_env_check_comparison
   (oa_analysis_env *env, tree expr, tree_code cmp, tree const_val);
 
+/* The relational-fact analogue of oa_env_check_comparison above: is
+   SUBSTITUTED_PARAM (already positionally substituted at the plugin's
+   own call site, the same way SUBSTITUTED_PARAM is for that function)
+   provably REQUIRED_CODE SUBSTITUTED_OTHER (likewise substituted),
+   given ENV's current facts?  REQUIRE_CONVEYOR is the same one-way-
+   trust parameter oa_env_check_predicate_fact below already exposes: a
+   conveyor-established relational fact satisfies either direction, a
+   symbolic-established one only ever satisfies REQUIRE_CONVEYOR=false.
+   Neither operand's own value is ever resolved except when both are
+   already literal (ordinary constant folding) -- see oa_match_
+   comparison_against_param's own comment for why.  */
+extern oa_proof_result oa_env_check_relational_fact
+  (oa_analysis_env *env, tree substituted_param, tree_code required_code,
+   tree substituted_other, bool require_conveyor);
+
 /* Split COND into its top-level '&&' conjuncts.  */
 extern void oa_collect_conjuncts_public (tree *cond, vec<tree *> *out);
 
