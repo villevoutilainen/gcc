@@ -117,6 +117,10 @@ set plugin_test_list [list \
 	  symbolic-proof-predicate-returnvalue-ok.C \
 	  symbolic-proof-predicate-returnvalue-bad.C \
 	  symbolic-proof-predicate-returnvalue-unknown.C } \
+    { gimple_object_address_plugin.cc \
+	  gimple-object-address-ok.C \
+	  gimple-object-address-self-trust-ok.C \
+	  gimple-object-address-unknown.C } \
 ]
 
 foreach file [find $PLUGIN_DEFAULT_REPO *.gcm] {
