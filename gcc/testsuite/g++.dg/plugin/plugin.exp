@@ -120,6 +120,7 @@ set plugin_test_list [list \
     { gimple_object_address_plugin.cc \
 	  gimple-object-address-ok.C \
 	  gimple-object-address-self-trust-ok.C \
+	  gimple-object-address-postcondition-ok.C \
 	  gimple-object-address-unknown.C } \
 ]
 

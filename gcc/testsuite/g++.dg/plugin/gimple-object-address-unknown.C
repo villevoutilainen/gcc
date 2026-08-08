@@ -1,17 +1,20 @@
 // gimple_object_address_plugin.cc: a deliberately out-of-scope shape for
-// this narrow prototype -- make_ptr()'s own postcondition guarantees
-// is_object_address for its *return value* (item 6's own mechanism),
-// which the existing, mandatory AST-level check already understands
-// (and so accepts 'deref (p)' below silently, where p was assigned
-// from that call) -- but this prototype's own provable_object_address_p
-// only chases GIMPLE_PHI/GIMPLE_ASSIGN def-stmts, not a GIMPLE_CALL's
-// own return-value guarantee (see the plugin's own top-of-file comment,
-// "no attempt at ... item-6 ... call substitution"), so it reports
-// "cannot verify" here even though the construct is actually sound.
-// This is an honest, expected divergence from the full engine given
-// this prototype's own documented scope, not a soundness bug in either
-// engine (this plugin's own limitation only ever produces an extra
-// warning, never a false accept) -- see ~/gimple-contract-analysis.md.
+// this prototype -- deref's own argument is the result of an
+// immediately-invoked closure call (an IILE), which the existing
+// mandatory AST-level check already recognizes and resolves (item 5's
+// own IILE recursion; compare gcc/testsuite/g++.dg/contracts/cpp26/
+// d4324-object-address-iile-ok.C), so it accepts this silently. This
+// prototype's own provable_object_address_p never attempts IILE
+// recursion at all (see the plugin's own top comment) -- the closure's
+// own operator() call is just an ordinary, uninterpreted GIMPLE_CALL to
+// a callee with no declared postcondition of its own, so item 6's own
+// new call_postcondition_guarantees_object_address_p check (added for
+// the *previous* unknown scenario this test used to cover -- see the
+// git history for gimple-object-address-postcondition-ok.C, which now
+// covers that shape instead) finds nothing and this reports "cannot
+// verify." An honest, documented divergence (an extra warning, never a
+// missed violation), not a soundness bug in either engine. See
+// ~/gimple-contract-analysis.md.
 // { dg-do run }
 // { dg-options "-std=c++26 -fcontracts -fcontract-control-objects" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
@@ -29,13 +32,6 @@ struct conveyor_ctrl {
 };
 inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 
-int a;
-
-int* make_ptr () post<conveyor_ctrl_v>(r: std::is_object_address (r))
-{
-  return &a;
-}
-
 int deref (int* p) pre<conveyor_ctrl_v>(std::is_object_address (p))
 {
   return *p;
@@ -43,8 +39,8 @@ int deref (int* p) pre<conveyor_ctrl_v>(std::is_object_address (p))
 
 int f ()
 {
-  int *p = make_ptr ();
-  return deref (p); // { dg-warning "gimple-oa: cannot verify" }
+  int x = 5;
+  return deref ([&]{ return &x; }()); // { dg-warning "gimple-oa: cannot verify" }
 }
 
-int main () { a = 5; return f () - 5; }
+int main () { return f () - 5; }
