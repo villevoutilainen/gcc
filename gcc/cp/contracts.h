@@ -253,6 +253,22 @@ extern bool oa_contract_conveyor_active_public (tree contract, tree owner_fn);
    symbolic side.  */
 extern bool oa_contract_symbolic_active_public (tree contract, tree owner_fn);
 
+/* Cached, GIMPLE-pass-safe readers of CONTRACT's own conveyor-/
+   symbolic-active status, populated once per function at reliable
+   front-end time (oa_cache_contract_flavors) -- unlike oa_contract_
+   conveyor_active_public/oa_contract_symbolic_active_public
+   immediately above, which call straight into oa_contract_conveyor_
+   active_p/oa_contract_symbolic_active_p's own real semantic analysis
+   (overload resolution + constexpr evaluation) every time, found by
+   direct testing to silently answer incorrectly once called from
+   GIMPLE-pass timing (see ~/gimple-contract-analysis.md, Sections
+   9.3/10) -- these two are pure cache lookups, safe to call from
+   anywhere, at any time, including after genericization/gimplification.
+   Prefer these over the *_public pair above for any consumer that
+   might run post-front-end.  */
+extern bool oa_contract_conveyor_active_cached_p (tree contract);
+extern bool oa_contract_symbolic_active_cached_p (tree contract);
+
 /* Recognize CONJUNCT as "pred_fn (decl)" or its negation "!pred_fn
    (decl)" -- the named-predicate shape both -fcontract-conveyor-proofs
    and -fcontract-symbolic-proofs already share internally.  Fills

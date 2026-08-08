@@ -757,6 +757,18 @@ static GTY(()) hash_map<tree, tree> *orig_from_outlined;
    lazily otherwise, exactly as before this map existed.  */
 static GTY(()) hash_map<tree, tree> *contract_predicate_core_fn;
 
+/* Caches, per CONTRACT tree, whether it's conveyor-/symbolic-active --
+   see oa_cache_contract_flavors's own comment (further below, near
+   oa_resolve_object_address_in_function_1) for why a *cache* is needed
+   here at all: oa_contract_conveyor_active_p/oa_contract_symbolic_
+   active_p do real semantic work (overload resolution + constexpr
+   evaluation, via contract_control_bool_member) that is only reliable
+   at front-end time, not once GIMPLE exists for a GIMPLE-pass-based
+   consumer to call into later (found empirically -- see ~/gimple-
+   contract-analysis.md, Sections 9.3/10).  */
+static GTY(()) hash_set<tree> *oa_conveyor_active_contract_cache;
+static GTY(()) hash_set<tree> *oa_symbolic_active_contract_cache;
+
 /* Makes PRE the precondition function for FNDECL.  */
 
 static void
@@ -12169,6 +12181,68 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
   CONTRACT_CONDITION (contract) = cond;
 }
 
+/* Cache FNDECL's own contracts' conveyor-/symbolic-active status now,
+   at reliable front-end (pre-genericize) time, into oa_conveyor_
+   active_contract_cache/oa_symbolic_active_contract_cache -- for a
+   GIMPLE-pass-based consumer that needs a flavor split (unlike this
+   whole file's other oa_* consumers, which only ever call oa_contract_
+   conveyor_active_p/oa_contract_symbolic_active_p directly, always at
+   this same reliable timing) to consult later via oa_contract_
+   conveyor_active_cached_p/oa_contract_symbolic_active_cached_p
+   instead of calling into the real, non-cached predicates itself.
+   Runs once per function, alongside (and for the same reason as) the
+   rest of this pass's own mandatory work -- see ~/gimple-contract-
+   analysis.md, Sections 9.3/10, for the empirical finding motivating
+   this: oa_contract_conveyor_active_p/oa_contract_symbolic_active_p do
+   real semantic work (overload resolution + constexpr evaluation, via
+   contract_control_bool_member/build_new_method_call/maybe_constant_
+   value) that silently, incorrectly answers false once called from
+   GIMPLE-pass timing instead -- direct instrumentation confirmed the
+   condition tree itself was completely intact at that point, so the
+   failure is specifically in that semantic-analysis machinery's own
+   reliance on front-end-only context, not in anything the oa_* fact-
+   tracking layer itself does.  */
+
+static void
+oa_cache_contract_flavors (tree fndecl)
+{
+  for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (oa_contract_conveyor_active_p (contract, fndecl))
+	{
+	  if (!oa_conveyor_active_contract_cache)
+	    oa_conveyor_active_contract_cache = hash_set<tree>::create_ggc (37);
+	  oa_conveyor_active_contract_cache->add (contract);
+	}
+      if (oa_contract_symbolic_active_p (contract, fndecl))
+	{
+	  if (!oa_symbolic_active_contract_cache)
+	    oa_symbolic_active_contract_cache = hash_set<tree>::create_ggc (37);
+	  oa_symbolic_active_contract_cache->add (contract);
+	}
+    }
+}
+
+/* Plugin-facing (and, prospectively, in-tree-GIMPLE-pass-facing)
+   readers of the cache oa_cache_contract_flavors populates -- pure
+   lookups, no semantic analysis, safe to call at any time after the
+   owning function's own front-end processing has completed.  */
+
+bool
+oa_contract_conveyor_active_cached_p (tree contract)
+{
+  return oa_conveyor_active_contract_cache
+	 && oa_conveyor_active_contract_cache->contains (contract);
+}
+
+bool
+oa_contract_symbolic_active_cached_p (tree contract)
+{
+  return oa_symbolic_active_contract_cache
+	 && oa_symbolic_active_contract_cache->contains (contract);
+}
+
 /* Shared body for resolve_object_address_in_function and
    oa_walk_function_calls below: both need exactly the same early exits
    and the same fresh, freshly-tracked oa_env walk over FNDECL's own
@@ -12181,6 +12255,8 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
 {
   if (!flag_contract_control_objects)
     return;
+
+  oa_cache_contract_flavors (fndecl);
   /* Skip an uninstantiated template pattern, exactly like
      maybe_save_constexpr_fundef/check_conveyor_function_body -- this
      naturally re-runs at instantiation time, when finish_function runs
