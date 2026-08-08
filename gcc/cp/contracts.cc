@@ -6432,6 +6432,78 @@ static bool oa_get_range (tree expr, oa_env &env, oa_range_fact *out);
    oa_walk_stmt itself, which both need to call).  */
 static bool oa_resolve_iile_range (tree call, oa_env &env, oa_range_fact *out);
 
+/* If OP, after stripping the same ordinary, decl-identity-preserving
+   wrappers used throughout this pass (NON_LVALUE_EXPR/NOP_EXPR/
+   CONVERT_EXPR/VIEW_CONVERT_EXPR -- see oa_get_range's own comment on
+   why these are safe to strip), is a call through an implicit, single-
+   argument conversion operator (DECL_CONV_FN_P) -- e.g. 'q.operator
+   int()' or '(ptr->count).operator int()', the shape a class-typed
+   operand gets wrapped in wherever it participates in a scalar
+   comparison, arithmetic, or nonzero-ness context via a user-defined
+   conversion rather than already being of scalar type -- return its
+   own receiver object expression (ordinary-stripped the same way, with
+   one ADDR_EXPR peeled off, since a non-static member function's
+   implicit object argument is always passed by address), whatever
+   shape that turns out to be (a decl, a field access, ...).  Otherwise
+   return OP itself, ordinary-stripped only, unchanged.
+
+   Also looks through a TARGET_EXPR whose own initializer is a plain
+   copy (not a full constructor call, AGGR_INIT_EXPR, which has no
+   single source value to unwrap to) -- passing a class-typed decl BY
+   VALUE to another function (e.g. 'need_small (q)' substituting a
+   class-typed q for an int parameter, or a relational obligation's own
+   call-argument substitution) materializes the copy as exactly this
+   shape, found via direct testing that a relational fact for a class-
+   typed parameter otherwise silently failed to be recognized at any
+   *cross-call* consult site (self-trust seeding, which stays within
+   one function's own AST, never goes through this materialization at
+   all -- only a call's own substituted argument does).
+
+   Purely structural: never inspects the conversion's own return value
+   or the receiver's type, only *which* underlying operand a scalar-
+   context expression actually refers to -- callers that need a
+   specific resulting shape (a bare decl, a COMPONENT_REF, ...) check
+   that themselves, the same way they already check the un-converted
+   case.  Shared by every fact-shape recognizer that used to require an
+   operand to already be of scalar type (oa_provably_nonzero_p, oa_get_
+   range, oa_nonzero_conjunct_p, oa_predicate_conjunct_shape, oa_match_
+   simple_comparison, oa_match_result_relation, oa_symbolic_comparison_
+   conjunct_shape, oa_underlying_param_operand, oa_get_relational,
+   oa_strip_to_relational_operand) so a class type with a conversion
+   operator is recognized uniformly everywhere a bare scalar-typed
+   operand already was, not just in whichever one shape prompted the
+   fix.  */
+
+static tree
+oa_strip_conversion_call (tree op)
+{
+  while (TREE_CODE (op) == NON_LVALUE_EXPR || TREE_CODE (op) == NOP_EXPR
+	 || TREE_CODE (op) == CONVERT_EXPR || TREE_CODE (op) == VIEW_CONVERT_EXPR)
+    op = TREE_OPERAND (op, 0);
+
+  if (TREE_CODE (op) == TARGET_EXPR)
+    {
+      tree init = TREE_OPERAND (op, 1);
+      if (init != NULL_TREE && TREE_CODE (init) != AGGR_INIT_EXPR)
+	return oa_strip_conversion_call (init);
+      return op;
+    }
+
+  if (TREE_CODE (op) != CALL_EXPR || call_expr_nargs (op) != 1)
+    return op;
+  tree fn = CALL_EXPR_FN (op);
+  if (fn == NULL_TREE || TREE_CODE (fn) != ADDR_EXPR)
+    return op;
+  tree fndecl = TREE_OPERAND (fn, 0);
+  if (TREE_CODE (fndecl) != FUNCTION_DECL || !DECL_CONV_FN_P (fndecl))
+    return op;
+
+  tree object = oa_strip_conversion_call (CALL_EXPR_ARG (op, 0));
+  if (TREE_CODE (object) == ADDR_EXPR)
+    object = TREE_OPERAND (object, 0);
+  return object;
+}
+
 static bool
 oa_provably_nonzero_p (tree expr, oa_env &env)
 {
@@ -6471,6 +6543,12 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
 	 || TREE_CODE (expr) == CONVERT_EXPR
 	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
     expr = TREE_OPERAND (expr, 0);
+
+  /* A class-typed operand reached via an implicit conversion operator
+     (e.g. 'w != 0' where w's type has 'operator int() const') --
+     recognize the same underlying decl a bare scalar-typed operand
+     already would.  */
+  expr = oa_strip_conversion_call (expr);
 
   if (TREE_CODE (expr) == INTEGER_CST)
     return !integer_zerop (expr);
@@ -6557,6 +6635,12 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 	 || TREE_CODE (expr) == CONVERT_EXPR
 	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
     expr = TREE_OPERAND (expr, 0);
+
+  /* A class-typed operand reached via an implicit conversion operator
+     (e.g. 'q.operator int()') -- recognize the same underlying decl a
+     bare scalar-typed operand already would, so its range fact (if
+     any) is found the same way.  */
+  expr = oa_strip_conversion_call (expr);
 
   if (TREE_CODE (expr) == INTEGER_CST)
     {
@@ -6752,6 +6836,28 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
   return false;
 }
 
+/* Strip EXPR the same way oa_get_relational below does, without
+   consulting any fact -- used to normalize both sides of a relational
+   obligation's own substituted call-site arguments down to a bare
+   decl before comparing them for identity (oa_relational_fact's own
+   RHS is always recorded as a bare decl by oa_establish_shared_
+   substrate_self_trust, so the caller-side argument must be reduced
+   the same way before matching).  Also looks through a class-typed
+   operand's own implicit conversion operator and/or by-value copy
+   materialization (oa_strip_conversion_call) -- a relational
+   obligation's own substituted call argument goes through exactly
+   that shape whenever the parameter it substitutes is class-typed,
+   not just a bare scalar decl.  */
+
+static tree
+oa_strip_to_relational_operand (tree expr)
+{
+  if (expr == NULL_TREE)
+    return NULL_TREE;
+  STRIP_ANY_LOCATION_WRAPPER (expr);
+  return oa_strip_conversion_call (expr);
+}
+
 /* EXPR's own established *relational* fact, if any -- the oa_
    relational_fact analogue of oa_get_range immediately above, sharing
    its exact wrapper-stripping discipline (a contract condition's own
@@ -6770,39 +6876,11 @@ oa_get_relational (tree expr, oa_env &env, oa_relational_fact *out)
   if (expr == NULL_TREE || expr == error_mark_node)
     return false;
 
-  STRIP_ANY_LOCATION_WRAPPER (expr);
-  while (TREE_CODE (expr) == NON_LVALUE_EXPR
-	 || TREE_CODE (expr) == NOP_EXPR
-	 || TREE_CODE (expr) == CONVERT_EXPR
-	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
-    expr = TREE_OPERAND (expr, 0);
-
+  expr = oa_strip_to_relational_operand (expr);
   if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
     return env.relational_get (expr, out);
 
   return false;
-}
-
-/* Strip EXPR the same way oa_get_relational above does, without
-   consulting any fact -- used to normalize both sides of a relational
-   obligation's own substituted call-site arguments down to a bare
-   decl before comparing them for identity (oa_relational_fact's own
-   RHS is always recorded as a bare decl by oa_establish_shared_
-   substrate_self_trust, so the caller-side argument must be reduced
-   the same way before matching).  */
-
-static tree
-oa_strip_to_relational_operand (tree expr)
-{
-  if (expr == NULL_TREE)
-    return NULL_TREE;
-  STRIP_ANY_LOCATION_WRAPPER (expr);
-  while (TREE_CODE (expr) == NON_LVALUE_EXPR
-	 || TREE_CODE (expr) == NOP_EXPR
-	 || TREE_CODE (expr) == CONVERT_EXPR
-	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
-    expr = TREE_OPERAND (expr, 0);
-  return expr;
 }
 
 /* Intersect REFINED with the bound implied by "decl CODE val" (CODE
@@ -6873,8 +6951,18 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
       && code != GE_EXPR && code != EQ_EXPR)
     return;
 
-  tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
-  tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+  /* A class-typed operand reached via its own implicit conversion
+     operator (e.g. 'q.operator int() < 5') is recognized the same way
+     a bare scalar-typed operand already is -- OP0_SCALAR/OP1_SCALAR
+     (the actual, already-scalar-typed expression the comparison itself
+     operates on) are kept around alongside OP0/OP1 (conversion-
+     unwrapped down to the underlying, possibly class-typed decl) since
+     the INTEGRAL_TYPE_P check just below needs the former, not the
+     class type the latter might now have.  */
+  tree op0_scalar = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  tree op1_scalar = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+  tree op0 = oa_strip_conversion_call (op0_scalar);
+  tree op1 = oa_strip_conversion_call (op1_scalar);
 
   /* An assignment written directly as this comparison's own operand
      ('(i = compute ()) > 0') evaluates to its LHS's newly assigned
@@ -6896,13 +6984,20 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
   tree decl1 = (TREE_CODE (op1) == INIT_EXPR || TREE_CODE (op1) == MODIFY_EXPR)
     ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op1, 0)) : op1;
 
+  /* The INTEGRAL_TYPE_P check below deliberately looks at OP0_SCALAR/
+     OP1_SCALAR's own type, not DECL0/DECL1's -- DECL0/DECL1 may now
+     legitimately be class-typed (reached via a conversion operator),
+     while OP0_SCALAR/OP1_SCALAR is always the actual, already-scalar
+     expression the comparison itself operates on (the conversion
+     call's own return type, or the same type as DECL0/DECL1 in every
+     case that isn't a conversion at all).  */
   tree decl, other;
   bool flipped;
   if ((VAR_P (decl0) || TREE_CODE (decl0) == PARM_DECL)
-      && INTEGRAL_TYPE_P (TREE_TYPE (decl0)))
+      && INTEGRAL_TYPE_P (TREE_TYPE (op0_scalar)))
     decl = decl0, other = op1, flipped = false;
   else if ((VAR_P (decl1) || TREE_CODE (decl1) == PARM_DECL)
-	   && INTEGRAL_TYPE_P (TREE_TYPE (decl1)))
+	   && INTEGRAL_TYPE_P (TREE_TYPE (op1_scalar)))
     decl = decl1, other = op0, flipped = true;
   else
     return;
@@ -7440,6 +7535,11 @@ oa_nonzero_conjunct_p (tree conjunct, tree *decl_out)
 	 || TREE_CODE (op1) == NON_LVALUE_EXPR
 	 || TREE_CODE (op1) == VIEW_CONVERT_EXPR)
     op1 = TREE_OPERAND (op1, 0);
+  /* Also look through a class-typed operand's own implicit conversion
+     operator (e.g. 'w != 0' where w's type has 'operator int() const'),
+     the same lookthrough oa_provably_nonzero_p itself now applies.  */
+  op0 = oa_strip_conversion_call (op0);
+  op1 = oa_strip_conversion_call (op1);
   tree decl, zero;
   if (TREE_CODE (op1) == INTEGER_CST)
     decl = op0, zero = op1;
@@ -7713,6 +7813,11 @@ oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
 	 || TREE_CODE (arg) == CONVERT_EXPR
 	 || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
     arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+  /* A class-typed argument reached via its own implicit conversion
+     operator (e.g. a wrapper convertible to the reference/pointer type
+     a predicate function actually expects) -- same lookthrough as
+     every other fact-shape recognizer in this pass.  */
+  arg = oa_strip_conversion_call (arg);
   if (TREE_CODE (arg) != PARM_DECL && !VAR_P (arg))
     return false;
 
@@ -12762,24 +12867,12 @@ oa_underlying_param_operand (tree op)
      necessary as soon as the same function also has a postcondition
      naming one of its own by-value parameters (which forces this
      const-presentation view onto the precondition's own copy of the
-     same parameters too, not just the postcondition's).  */
+     same parameters too, not just the postcondition's).  oa_strip_
+     to_relational_operand handles both that and a class-typed
+     parameter's own implicit conversion operator/by-value copy
+     materialization in one shared step.  */
   op = oa_strip_to_relational_operand (op);
-  if (TREE_CODE (op) == PARM_DECL)
-    return op;
-
-  if (TREE_CODE (op) != CALL_EXPR || call_expr_nargs (op) != 1)
-    return NULL_TREE;
-  tree fn = CALL_EXPR_FN (op);
-  if (fn == NULL_TREE || TREE_CODE (fn) != ADDR_EXPR)
-    return NULL_TREE;
-  tree fndecl = TREE_OPERAND (fn, 0);
-  if (TREE_CODE (fndecl) != FUNCTION_DECL || !DECL_CONV_FN_P (fndecl))
-    return NULL_TREE;
-
-  tree object = oa_strip_to_relational_operand (CALL_EXPR_ARG (op, 0));
-  if (TREE_CODE (object) == ADDR_EXPR)
-    object = TREE_OPERAND (object, 0);
-  return TREE_CODE (object) == PARM_DECL ? object : NULL_TREE;
+  return TREE_CODE (op) == PARM_DECL ? op : NULL_TREE;
 }
 
 /* Recognize CONJUNCT as "paramA OP paramB", where *both* sides are
@@ -12820,13 +12913,19 @@ oa_match_comparison_against_param (tree conjunct, tree *param_out,
   tree op0 = oa_strip_to_relational_operand (TREE_OPERAND (c, 0));
   tree op1 = oa_strip_to_relational_operand (TREE_OPERAND (c, 1));
 
+  /* Both sides go through oa_underlying_param_operand, not just one --
+     a bare PARM_DECL passes through it unchanged, so this is a strict
+     generalization that also covers the case where *both* sides are
+     class-typed parameters each reached via their own conversion
+     operator (e.g. 'x < y' with both x and y convertible-to-int).  */
   tree param, other;
   bool flipped;
-  if (TREE_CODE (op0) == PARM_DECL && (other = oa_underlying_param_operand (op1)))
-    param = op0, flipped = false;
-  else if (TREE_CODE (op1) == PARM_DECL
+  if ((param = oa_underlying_param_operand (op0))
+      && (other = oa_underlying_param_operand (op1)))
+    flipped = false;
+  else if ((param = oa_underlying_param_operand (op1))
 	   && (other = oa_underlying_param_operand (op0)))
-    param = op1, flipped = true;
+    flipped = true;
   else
     return false;
 
@@ -12882,6 +12981,12 @@ oa_match_result_relation (tree conjunct, tree result_id, tree_code *code_out,
       && code != GE_EXPR && code != EQ_EXPR)
     return false;
 
+  /* RESULT_ID itself may be reached through its own implicit conversion
+     operator too (e.g. a class-typed return value with 'operator
+     int() const'), the same way the OTHER side already is via
+     oa_underlying_param_operand -- oa_strip_to_relational_operand
+     already applies that same lookthrough, so strip that before
+     comparing against RESULT_ID by identity.  */
   tree op0 = oa_strip_to_relational_operand (TREE_OPERAND (c, 0));
   tree op1 = oa_strip_to_relational_operand (TREE_OPERAND (c, 1));
 
@@ -13014,8 +13119,13 @@ oa_match_simple_comparison (tree conjunct, tree *param_out, tree_code *code_out,
       && code != GE_EXPR && code != EQ_EXPR)
     return false;
 
-  tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
-  tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+  /* A class-typed parameter reached via its own implicit conversion
+     operator (e.g. 'q.operator int() < 5') is recognized the same way
+     a bare scalar-typed parameter already is -- oa_strip_conversion_
+     call is a no-op for the already-bare case, so this is a strict
+     generalization.  */
+  tree op0 = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0)));
+  tree op1 = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1)));
 
   tree param, const_val;
   bool flipped;
@@ -13270,7 +13380,12 @@ oa_symbolic_comparison_conjunct_shape (tree conjunct, tree *field_out,
   else
     return false;
 
-  comp = STRIP_ANY_LOCATION_WRAPPER (comp);
+  /* 'ptr->count' itself may be reached via a further implicit
+     conversion operator (e.g. if count's own type has 'operator
+     int() const') -- oa_strip_conversion_call returns the conversion's
+     receiver object regardless of its shape, so the COMPONENT_REF
+     check just below still applies to whatever's underneath.  */
+  comp = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (comp));
   if (TREE_CODE (comp) != COMPONENT_REF)
     return false;
   tree field = TREE_OPERAND (comp, 1);
