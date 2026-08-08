@@ -279,6 +279,16 @@ extern bool oa_match_predicate_conjunct
    own, GIMPLE/SSA-native machinery instead.  */
 extern bool is_object_address_call_p (tree call, tree *arg);
 
+/* D4324/P2680 item 8, Increment E-divmod: true if CONJUNCT is of the
+   form 'E != 0' or '0 != E' (either operand order), with *DECL_OUT set
+   to E (a direct VAR_DECL/PARM_DECL reference only) -- the nonzero-
+   fact analogue of is_object_address_call_p immediately above, and
+   exported for the same reason (a GIMPLE-pass-based consumer needs to
+   recognize a *declared* condition's own shape without a separate,
+   drifting copy of the recognition logic).  Previously static; no
+   change to its own implementation.  */
+extern bool oa_nonzero_conjunct_p (tree conjunct, tree *decl_out);
+
 /* Is OBJ_EXPR established by ENV's current (real, cross-statement-
    tracked) facts to have PRED_FN hold at REQUIRED_POLARITY, established
    at the opposite polarity, or unknown?  Backed by the same shared

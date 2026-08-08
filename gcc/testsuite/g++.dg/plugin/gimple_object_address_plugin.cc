@@ -1,57 +1,76 @@
 /* gimple-object-address: an experimental prototype demonstrating the
    "Option A, front-end-assisted" design from ~/gimple-contract-
-   analysis.md -- doing D4324's std::is_object_address checking as a
-   GIMPLE pass, run right after SSA is built (before any optimization
-   pass), instead of the existing AST-walk (gcc/cp/contracts.cc's own
-   oa_* machinery, hooked at PLUGIN_PRE_GENERICIZE).
+   analysis.md -- doing D4324's mandatory item 6/7/8 checks (is_object_
+   address, nonzero-divisor; more fact shapes to follow, see the
+   analysis's own Section 8) as a GIMPLE pass, run right after SSA is
+   built (before any optimization pass), instead of the existing
+   AST-walk (gcc/cp/contracts.cc's own oa_* machinery, hooked at
+   PLUGIN_PRE_GENERICIZE).
 
    This is an ADDITIONAL alternative, not a replacement: the existing
-   mandatory item-7 check (contracts.cc) keeps running exactly as
-   before, so a test compiled with this plugin will typically see BOTH
-   the existing check's own diagnostic AND this pass's own (distinctly
-   worded, "gimple-oa:"-prefixed) diagnostic for the same construct --
-   that overlap is expected and is not a bug in either engine.
+   mandatory checks (contracts.cc) keep running exactly as before, so a
+   test compiled with this plugin will typically see BOTH the existing
+   check's own diagnostic AND this pass's own (distinctly worded,
+   "gimple-oa:"-prefixed) diagnostic for the same construct -- that
+   overlap is expected and is not a bug in either engine.
 
    Design (see ~/gimple-contract-analysis.md, section 4, "the wrapper-
    parameter problem, and its resolution"): this pass NEVER looks at a
    contract's own outlined GIMPLE machinery (F.pre/F.post/the
    predicate-core function/the thunk) -- it reads a function's
-   *declared* precondition text directly off its own FUNCTION_DECL
-   (get_fn_contract_specifiers/CONTRACT_CONDITION, exactly the same
-   front-end API the existing AST-walk itself uses, and the exported
-   is_object_address_call_p recognizer, unchanged), and does the "is
-   this argument provably an object address, right here" part with
-   ordinary GIMPLE/SSA reasoning: SSA_NAME_DEF_STMT plus a recursive
-   PHI-argument walk (a PHI's own "reaches from every incoming edge" is
-   exactly the merge rule oa_env::merge_with hand-rolls at the AST
-   level, but reified as a real node here instead of a hand-maintained
-   env). Because contract *text* is read declaratively, this sidesteps
-   both the wrapper-parameter correspondence problem (Section 4.1 of
-   the analysis) and the fact that a `symbolic` contract's own
-   condition may generate no GIMPLE at all (Section 2.2) -- neither
-   matters, since this pass never needs the contract's own generated
-   code, only its declared text plus the ordinary code around it.
+   *declared* precondition/postcondition text directly off its own
+   FUNCTION_DECL (get_fn_contract_specifiers/CONTRACT_CONDITION,
+   exactly the same front-end API the existing AST-walk itself uses,
+   and the exported is_object_address_call_p/oa_nonzero_conjunct_p
+   recognizers, unchanged), and does the "is this argument provably
+   true, right here" part with ordinary GIMPLE/SSA reasoning:
+   SSA_NAME_DEF_STMT plus a recursive PHI-argument walk (a PHI's own
+   "reaches from every incoming edge" is exactly the merge rule
+   oa_env::merge_with hand-rolls at the AST level, but reified as a
+   real node here instead of a hand-maintained env). Because contract
+   *text* is read declaratively, this sidesteps both the wrapper-
+   parameter correspondence problem (Section 4.1 of the analysis) and
+   the fact that a `symbolic` contract's own condition may generate no
+   GIMPLE at all (Section 2.2) -- neither matters, since this pass
+   never needs the contract's own generated code, only its declared
+   text plus the ordinary code around it.
 
-   Deliberately narrow scope for this prototype (see the analysis's own
-   "phased plan," section 6, and its own "Section 8" validation-results
-   writeup for how this evolved past that plan's original first cut):
-   - PRECONDITION_STMT self-trust/consult, and POSTCONDITION_STMT's own
-     item-6 shape (a postcondition unconditionally guaranteeing
-     is_object_address for its own *return value*, consulted wherever
-     a call's own result feeds into a later obligation) are both
-     handled. ASSERTION_STMT (contract_assert, which has no single
-     fixed get_fn_contract_specifiers-style declarative home the way
-     pre/post do) and a postcondition establishing a fact about a
-     *persistent parameter* (as opposed to the return value) for a
-     later, separate call site are both still out of scope.
+   Every fact shape below (is_object_address, nonzero -- more to
+   follow) shares this exact same three-part structure, mirroring the
+   "classic" m_map/m_nz_map maps' own self-trust/consult/item-6 trio in
+   contracts.cc itself:
+   1. Self-trust: a function's own declared precondition seeds a fact
+      onto ssa_default_def(fun, parm) at function entry.
+   2. Call-site consult: a direct callee's own declared precondition is
+      checked against the caller's actual gimple_call_arg, substituted
+      positionally (find_param_position, the GIMPLE analogue of
+      oa_substitute_call_arg).
+   3. Item 6: a direct callee's own declared postcondition
+      unconditionally guaranteeing the fact for its own return value is
+      recognized wherever a GIMPLE_CALL's own result feeds into a later
+      obligation.
+   Provability itself is a single recursive SSA walk per fact shape:
+   SSA_NAME_DEF_STMT dispatch on GIMPLE_PHI (AND over every incoming
+   value, cycle-guarded via an IN_PROGRESS hash_set for loop-carried
+   PHIs -- conservatively false, the same "must be provable, else
+   unprovable" discipline used throughout), GIMPLE_ASSIGN (a trivial
+   shape, or propagate through a copy/conversion), and GIMPLE_CALL
+   (item 6).
+
+   Deliberately narrow scope, kept out on purpose (see the analysis's
+   own "phased plan," section 6, and its own "Section 8"/"Section 9"
+   validation-results writeups for how this evolved):
+   - ASSERTION_STMT (contract_assert, which has no single fixed
+     get_fn_contract_specifiers-style declarative home the way pre/post
+     do), and a postcondition establishing a fact about a *persistent
+     parameter* (as opposed to the return value) for a later, separate
+     call site, are both still out of scope for every fact shape below.
    - Only DIRECT calls (a resolved GIMPLE_CALL callee FUNCTION_DECL)
      are consulted; an indirect/virtual call gets no consult at all,
      matching the same limitation the existing AST-walk already has.
-   - The provability walk recognizes the two trivial shapes (ADDR_EXPR-
-     of-decl; a self-trusted parameter), PHI-merge, plain copies/
-     conversions, and item 6's own call-return-value guarantee -- no
-     attempt at IILE recursion or any of the richer shapes the real
-     engine already handles.  */
+   - IILE recursion is explicitly, permanently out of scope for this
+     prototype (not merely deferred) -- an immediately-invoked closure
+     always reports "cannot verify" here, by design.  */
 
 #include "gcc-plugin.h"
 #include "config.h"
@@ -130,6 +149,37 @@ call_postcondition_guarantees_object_address_p (tree callee)
 	    continue;
 	  STRIP_ANY_LOCATION_WRAPPER (arg);
 	  if (arg == result_id)
+	    return true;
+	}
+    }
+  return false;
+}
+
+/* Same idea, for nonzero-ness -- mirrors contracts.cc's own
+   oa_call_postcondition_nonzero_p exactly, again reading CALLEE's
+   *declared* postcondition text only.  */
+
+static bool
+call_postcondition_guarantees_nonzero_p (tree callee)
+{
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      if (!result_id)
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree decl;
+	  if (oa_nonzero_conjunct_p (*conjuncts[i], &decl) && decl == result_id)
 	    return true;
 	}
     }
@@ -217,11 +267,73 @@ provable_object_address_p (tree val, hash_set<tree> &established,
   return result;
 }
 
-/* Seed ESTABLISHED from FNDECL's own declared precondition: an
-   is_object_address(p)-shaped conjunct naming one of FNDECL's own
-   parameters is trusted as an axiom for the rest of FNDECL's own body
-   (self-trust) -- the GIMPLE-level analogue of oa_handle_precondition_
-   stmt's own fact-seeding, just keyed by SSA name (ssa_default_def)
+/* Nonzero-ness's own counterpart of provable_object_address_p
+   immediately above -- same three-part structure (trivial constant
+   case, established-fact lookup, PHI-merge, copy/conversion
+   propagation, item 6's own call-return-value guarantee), just for a
+   different fact.  ESTABLISHED_NZ is a wholly separate hash_set from
+   is_object_address's own ESTABLISHED (matching contracts.cc's own
+   m_map/m_nz_map being two separate maps for two separate facts).  */
+
+static bool
+provable_nonzero_p (tree val, hash_set<tree> &established_nz,
+		     hash_set<tree> &in_progress)
+{
+  if (val == NULL_TREE)
+    return false;
+
+  if (TREE_CODE (val) == INTEGER_CST)
+    return !integer_zerop (val);
+
+  if (TREE_CODE (val) != SSA_NAME)
+    return false;
+
+  if (established_nz.contains (val))
+    return true;
+
+  if (in_progress.contains (val))
+    return false;
+
+  in_progress.add (val);
+  bool result = false;
+
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (def && gimple_code (def) == GIMPLE_PHI)
+    {
+      result = true;
+      unsigned n = gimple_phi_num_args (def);
+      for (unsigned i = 0; i < n; ++i)
+	if (!provable_nonzero_p (gimple_phi_arg_def (def, i),
+				  established_nz, in_progress))
+	  {
+	    result = false;
+	    break;
+	  }
+    }
+  else if (def && is_gimple_assign (def))
+    {
+      enum tree_code code = gimple_assign_rhs_code (def);
+      if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
+	result = provable_nonzero_p (gimple_assign_rhs1 (def),
+				      established_nz, in_progress);
+    }
+  else if (def && is_gimple_call (def))
+    {
+      tree callee = gimple_call_fndecl (as_a <gcall *> (def));
+      if (callee)
+	result = call_postcondition_guarantees_nonzero_p (callee);
+    }
+
+  in_progress.remove (val);
+  return result;
+}
+
+/* Seed ESTABLISHED/ESTABLISHED_NZ from FNDECL's own declared
+   precondition: an is_object_address(p)/'p != 0'-shaped conjunct
+   naming one of FNDECL's own parameters is trusted as an axiom for the
+   rest of FNDECL's own body (self-trust) -- the GIMPLE-level analogue
+   of oa_handle_precondition_stmt's own fact-seeding, just keyed by SSA
+   name (ssa_default_def)
    instead of a raw PARM_DECL in a hand-rolled map.  Reads FNDECL's
    *declared* condition tree directly (get_fn_contract_specifiers/
    CONTRACT_CONDITION) -- never FNDECL.pre's own outlined GIMPLE body,
@@ -229,7 +341,8 @@ provable_object_address_p (tree val, hash_set<tree> &established,
    comment).  */
 
 static void
-seed_self_trust (function *fun, hash_set<tree> &established)
+seed_self_trust (function *fun, hash_set<tree> &established,
+		  hash_set<tree> &established_nz)
 {
   tree fndecl = fun->decl;
   for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
@@ -246,27 +359,37 @@ seed_self_trust (function *fun, hash_set<tree> &established)
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree arg;
-	  if (!is_object_address_call_p (*conjuncts[i], &arg))
+	  hash_set<tree> *target;
+	  if (is_object_address_call_p (*conjuncts[i], &arg))
+	    {
+	      STRIP_ANY_LOCATION_WRAPPER (arg);
+	      target = &established;
+	    }
+	  else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
+	    target = &established_nz;
+	  else
 	    continue;
-	  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+
 	  if (TREE_CODE (arg) != PARM_DECL)
 	    continue;
 	  tree ssa = ssa_default_def (fun, arg);
 	  if (ssa)
-	    established.add (ssa);
+	    target->add (ssa);
 	}
     }
 }
 
-/* For CALL's own callee, check every is_object_address(param)-shaped
-   conjunct of its own declared precondition against CALL's own actual
-   argument, substituted positionally (find_param_position) exactly the
-   way the AST-walk's own oa_substitute_call_arg already does -- again,
-   only CALLEE's *declared* condition is ever consulted, never
-   CALLEE.pre's own outlined body.  */
+/* For CALL's own callee, check every is_object_address(param)/'param
+   != 0'-shaped conjunct of its own declared precondition against
+   CALL's own actual argument, substituted positionally
+   (find_param_position) exactly the way the AST-walk's own
+   oa_substitute_call_arg already does -- again, only CALLEE's
+   *declared* condition is ever consulted, never CALLEE.pre's own
+   outlined body.  */
 
 static void
-check_call (gcall *call, hash_set<tree> &established)
+check_call (gcall *call, hash_set<tree> &established,
+	     hash_set<tree> &established_nz)
 {
   tree callee = gimple_call_fndecl (call);
   if (!callee)
@@ -286,9 +409,17 @@ check_call (gcall *call, hash_set<tree> &established)
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree arg;
-	  if (!is_object_address_call_p (*conjuncts[i], &arg))
+	  bool is_oa;
+	  if (is_object_address_call_p (*conjuncts[i], &arg))
+	    {
+	      STRIP_ANY_LOCATION_WRAPPER (arg);
+	      is_oa = true;
+	    }
+	  else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
+	    is_oa = false;
+	  else
 	    continue;
-	  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+
 	  if (TREE_CODE (arg) != PARM_DECL)
 	    continue;
 
@@ -299,13 +430,25 @@ check_call (gcall *call, hash_set<tree> &established)
 
 	  tree substituted = gimple_call_arg (call, argno);
 	  hash_set<tree> in_progress;
-	  if (provable_object_address_p (substituted, established, in_progress))
-	    continue; /* Proven true: silently discharged.  */
-
-	  warning_at (gimple_location (call), 0,
-		      "gimple-oa: cannot verify %<is_object_address%> for "
-		      "%qE, as required by the precondition of %qD",
-		      substituted, callee);
+	  if (is_oa)
+	    {
+	      if (provable_object_address_p (substituted, established,
+					      in_progress))
+		continue; /* Proven true: silently discharged.  */
+	      warning_at (gimple_location (call), 0,
+			  "gimple-oa: cannot verify %<is_object_address%> for "
+			  "%qE, as required by the precondition of %qD",
+			  substituted, callee);
+	    }
+	  else
+	    {
+	      if (provable_nonzero_p (substituted, established_nz, in_progress))
+		continue; /* Proven true: silently discharged.  */
+	      warning_at (gimple_location (call), 0,
+			  "gimple-oa: cannot verify that %qE is nonzero, as "
+			  "required by the precondition of %qD",
+			  substituted, callee);
+	    }
 	}
     }
 }
@@ -340,7 +483,8 @@ unsigned int
 pass_gimple_object_address::execute (function *fun)
 {
   hash_set<tree> established;
-  seed_self_trust (fun, established);
+  hash_set<tree> established_nz;
+  seed_self_trust (fun, established, established_nz);
 
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
@@ -349,7 +493,7 @@ pass_gimple_object_address::execute (function *fun)
       {
 	gimple *stmt = gsi_stmt (gsi);
 	if (is_gimple_call (stmt))
-	  check_call (as_a <gcall *> (stmt), established);
+	  check_call (as_a <gcall *> (stmt), established, established_nz);
       }
 
   return 0;
