@@ -32,21 +32,26 @@
    matters, since this pass never needs the contract's own generated
    code, only its declared text plus the ordinary code around it.
 
-   Deliberately narrow scope for this first prototype (see the
-   analysis's own "phased plan," section 6):
-   - Only PRECONDITION_STMT is consulted -- POSTCONDITION_STMT
-     (establishing a fact from a call's own return value) and
-     ASSERTION_STMT (contract_assert, which has no single fixed
-     get_fn_contract_specifiers-style declarative home the way pre/post
-     do) are both out of scope here.
+   Deliberately narrow scope for this prototype (see the analysis's own
+   "phased plan," section 6, and its own "Section 8" validation-results
+   writeup for how this evolved past that plan's original first cut):
+   - PRECONDITION_STMT self-trust/consult, and POSTCONDITION_STMT's own
+     item-6 shape (a postcondition unconditionally guaranteeing
+     is_object_address for its own *return value*, consulted wherever
+     a call's own result feeds into a later obligation) are both
+     handled. ASSERTION_STMT (contract_assert, which has no single
+     fixed get_fn_contract_specifiers-style declarative home the way
+     pre/post do) and a postcondition establishing a fact about a
+     *persistent parameter* (as opposed to the return value) for a
+     later, separate call site are both still out of scope.
    - Only DIRECT calls (a resolved GIMPLE_CALL callee FUNCTION_DECL)
      are consulted; an indirect/virtual call gets no consult at all,
      matching the same limitation the existing AST-walk already has.
-   - The provability walk only recognizes the two trivial shapes
-     (ADDR_EXPR-of-decl; a self-trusted parameter) plus PHI-merge and
-     plain copies/conversions -- no attempt at IILE recursion, item-6
-     "postcondition guarantees an address" call substitution, or any
-     of the richer shapes the real engine already handles.  */
+   - The provability walk recognizes the two trivial shapes (ADDR_EXPR-
+     of-decl; a self-trusted parameter), PHI-merge, plain copies/
+     conversions, and item 6's own call-return-value guarantee -- no
+     attempt at IILE recursion or any of the richer shapes the real
+     engine already handles.  */
 
 #include "gcc-plugin.h"
 #include "config.h"
@@ -84,6 +89,50 @@ find_param_position (tree callee, tree parm, unsigned *argno_out)
 	*argno_out = argno;
 	return true;
       }
+  return false;
+}
+
+/* Item 6's own shape, read declaratively: does CALLEE have a declared
+   postcondition whose condition names is_object_address(r) for r ==
+   its own POSTCONDITION_IDENTIFIER (its named result)?  If so, ANY
+   successful call to CALLEE unconditionally guarantees its return
+   value is an object address -- no argument substitution needed at
+   all, since a postcondition's guarantee about its own return value
+   holds regardless of the caller's own context.  Mirrors contracts.cc's
+   own oa_call_postcondition_object_address_p exactly, but -- per this
+   whole prototype's own design -- reads CALLEE's *declared* condition
+   tree directly rather than anything derived from CALLEE's own,
+   possibly-not-yet-processed GIMPLE body, so it works regardless of
+   whichever order the pass manager happens to visit functions in (see
+   ~/gimple-contract-analysis.md, Section 3's own "ordering" caveat).  */
+
+static bool
+call_postcondition_guarantees_object_address_p (tree callee)
+{
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      if (!result_id)
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree arg;
+	  if (!is_object_address_call_p (*conjuncts[i], &arg))
+	    continue;
+	  STRIP_ANY_LOCATION_WRAPPER (arg);
+	  if (arg == result_id)
+	    return true;
+	}
+    }
   return false;
 }
 
@@ -150,6 +199,18 @@ provable_object_address_p (tree val, hash_set<tree> &established,
 	   true of the RHS is true here too.  */
 	result = provable_object_address_p (gimple_assign_rhs1 (def),
 					     established, in_progress);
+    }
+  else if (def && is_gimple_call (def))
+    {
+      /* Item 6: VAL is a call's own return value -- if the (direct)
+	 callee's own declared postcondition unconditionally guarantees
+	 it, that's a fact about VAL regardless of anything else.  Only
+	 ever consults CALLEE's *declared* text (see the function above),
+	 never CALLEE's own GIMPLE body -- so this works even if CALLEE
+	 hasn't been visited by this pass yet at all.  */
+      tree callee = gimple_call_fndecl (as_a <gcall *> (def));
+      if (callee)
+	result = call_postcondition_guarantees_object_address_p (callee);
     }
 
   in_progress.remove (val);
