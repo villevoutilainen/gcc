@@ -9291,6 +9291,30 @@ oa_match_predicate_conjunct (tree conjunct, tree *pred_fn_out,
 				       negated_out);
 }
 
+/* Thin wrappers over oa_symbolic_comparison_conjunct_shape/oa_strip_
+   symbolic_ptr_expr, for a plugin that needs the ptr->field comparison
+   shape directly (see their own declarations in contracts.h for why:
+   oa_precondition_field_range_obligations's own PRECONDITION_P/
+   oa_contract_fact_tracking_active_p-gated iteration doesn't cover
+   every use a plugin might have for this shape, e.g. collecting the
+   POSTCONDITION_P side too).  */
+
+bool
+oa_match_field_range_comparison (tree conjunct, tree *field_out,
+				  tree *ptr_expr_out, tree_code *code_out,
+				  tree *const_val_out)
+{
+  return oa_symbolic_comparison_conjunct_shape (conjunct, field_out,
+						 ptr_expr_out, code_out,
+						 const_val_out);
+}
+
+tree
+oa_strip_symbolic_ptr_expr_public (tree ptr_expr)
+{
+  return oa_strip_symbolic_ptr_expr (ptr_expr);
+}
+
 /* Public, plugin-facing wrapper over oa_env_predicate_result.  ENV's
    dynamic type is always really oa_env (the same reinterpret_cast idiom
    oa_env_check_comparison already uses further below).  REQUIRE_CONVEYOR:

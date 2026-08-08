@@ -93,6 +93,7 @@
 #include "dominance.h"
 #include "gimple-range.h"
 #include "domwalk.h"
+#include "hash-traits.h"
 
 int plugin_is_GPL_compatible;
 
@@ -411,9 +412,27 @@ established_range_of (tree val, hash_map<tree, oa_range_lite> &established_range
    still correctly sees whatever was true of it); '&decl' resolves to
    DECL directly, so a plain-object receiver ('f.open()') and a
    pointer receiver ('hp->open()') both key correctly off "the same
-   object" across separate calls on the same variable.  */
+   object" across separate calls on the same variable.
+
+   A fifth shape, ptr->field ranges (e.g. 'this->count in [0, N)'),
+   shares this exact same dominator-walk substrate: it's the same kind
+   of persistent-memory fact as a named predicate, just keyed by
+   (IDENTITY, FIELD_DECL) instead of IDENTITY alone and carrying an
+   oa_range_lite payload instead of (PRED_FN, POLARITY) -- so both are
+   threaded through ONE walk, sharing establish/invalidate/consult
+   ordering per statement, rather than two separate walks.  */
 
 struct oa_predicate_fact_lite { tree pred_fn; bool polarity; };
+typedef pair_hash<nofree_ptr_hash<tree_node>, nofree_ptr_hash<tree_node>>
+  oa_field_key_hash;
+
+/* Both persistent-memory fact maps for one program point, threaded
+   together through the dominator walk below.  */
+struct dom_fact_state
+{
+  hash_map<tree, oa_predicate_fact_lite> pred;
+  hash_map<oa_field_key_hash, oa_range_lite> field;
+};
 
 static tree
 gimple_object_identity (tree val)
@@ -432,15 +451,63 @@ gimple_object_identity (tree val)
   return NULL_TREE;
 }
 
-/* Seed SEED from FNDECL's own declared precondition -- self-trust, the
-   exact analogue of seed_self_trust above, just for predicate facts:
-   keyed by ssa_default_def(fun, parm) instead of a bare hash_set
-   entry, since a predicate fact carries a (PRED_FN, POLARITY) payload
-   rather than being a plain boolean.  */
+/* A ptr->field range conjunct group, exactly like contracts.cc's own
+   oa_symbolic_field_group, just built from the exported oa_match_
+   field_range_comparison/oa_strip_symbolic_ptr_expr_public primitives
+   directly rather than through oa_precondition_field_range_
+   obligations's own PRECONDITION_P/oa_contract_fact_tracking_active_p-
+   gated iteration -- that gate turned out, by direct testing, to
+   answer false at GIMPLE-pass time for a plainly conveyor-active
+   contract (its own dependency on contract_side_of/DECL_LANG_SPECIFIC
+   apparently isn't reliable this late), so this collects the shape
+   itself instead, matching this whole prototype's already-established
+   choice (Sections 8/9's own is_object_address/nonzero/predicate work)
+   to skip flavor-gating entirely rather than depend on machinery only
+   ever exercised at front-end time before now.  */
+
+struct field_group_lite { tree field; tree ptr_expr; oa_range_lite range; };
 
 static void
-seed_predicate_self_trust (function *fun,
-			    hash_map<tree, oa_predicate_fact_lite> &seed)
+collect_field_range_groups (tree cond, vec<field_group_lite> *out)
+{
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree field, ptr_expr, const_val;
+      tree_code code;
+      if (!oa_match_field_range_comparison (*conjuncts[i], &field, &ptr_expr,
+					     &code, &const_val)
+	  || TREE_CODE (const_val) != INTEGER_CST)
+	continue;
+      ptr_expr = oa_strip_symbolic_ptr_expr_public (ptr_expr);
+      if (TREE_CODE (ptr_expr) != PARM_DECL)
+	continue;
+
+      field_group_lite *found = NULL;
+      for (unsigned j = 0; j < out->length () && !found; ++j)
+	if ((*out)[j].field == field && (*out)[j].ptr_expr == ptr_expr)
+	  found = &(*out)[j];
+      if (!found)
+	{
+	  field_group_lite g;
+	  g.field = field;
+	  g.ptr_expr = ptr_expr;
+	  out->safe_push (g);
+	  found = &out->last ();
+	}
+      tighten_range_bound (found->range, code, wi::to_widest (const_val));
+    }
+}
+
+/* Seed SEED from FNDECL's own declared precondition -- self-trust, the
+   exact analogue of seed_self_trust above, just for predicate/field-
+   range facts: keyed by ssa_default_def(fun, parm) instead of a bare
+   hash_set entry, since these facts carry a payload rather than being
+   plain booleans.  */
+
+static void
+seed_predicate_self_trust (function *fun, dom_fact_state &seed)
 {
   tree fndecl = fun->decl;
   for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
@@ -465,16 +532,25 @@ seed_predicate_self_trust (function *fun,
 	    continue;
 	  tree ssa = ssa_default_def (fun, arg_decl);
 	  if (ssa)
-	    seed.put (ssa, { pred_fn, !negated });
+	    seed.pred.put (ssa, { pred_fn, !negated });
+	}
+
+      auto_vec<field_group_lite> field_groups;
+      collect_field_range_groups (cond, &field_groups);
+      for (unsigned g = 0; g < field_groups.length (); ++g)
+	{
+	  tree ssa = ssa_default_def (fun, field_groups[g].ptr_expr);
+	  if (ssa)
+	    seed.field.put ({ssa, field_groups[g].field}, field_groups[g].range);
 	}
     }
 }
 
 /* CALL's own callee's declared precondition, checked against STATE as
-   it stands right before CALL -- the consult side.  */
+   it stands right before CALL -- the consult side, for both facts.  */
 
 static void
-consult_predicate_call (gcall *call, hash_map<tree, oa_predicate_fact_lite> &state)
+consult_persistent_facts (gcall *call, dom_fact_state &state)
 {
   tree callee = gimple_call_fndecl (call);
   if (!callee)
@@ -507,7 +583,8 @@ consult_predicate_call (gcall *call, hash_map<tree, oa_predicate_fact_lite> &sta
 	  tree identity = gimple_object_identity (substituted);
 
 	  bool required = !negated;
-	  oa_predicate_fact_lite *fact = identity ? state.get (identity) : NULL;
+	  oa_predicate_fact_lite *fact
+	    = identity ? state.pred.get (identity) : NULL;
 	  if (fact && fact->pred_fn == pred_fn && fact->polarity == required)
 	    continue; /* Proven true: silently discharged.  */
 
@@ -515,6 +592,34 @@ consult_predicate_call (gcall *call, hash_map<tree, oa_predicate_fact_lite> &sta
 		      "gimple-oa: cannot verify that %qD (%qE) holds, as "
 		      "required by the precondition of %qD",
 		      pred_fn, substituted, callee);
+	}
+
+      auto_vec<field_group_lite> field_groups;
+      collect_field_range_groups (cond, &field_groups);
+      for (unsigned g = 0; g < field_groups.length (); ++g)
+	{
+	  unsigned argno;
+	  if (!find_param_position (callee, field_groups[g].ptr_expr, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree substituted = gimple_call_arg (call, argno);
+	  tree identity = gimple_object_identity (substituted);
+	  oa_range_lite &required = field_groups[g].range;
+
+	  oa_range_lite *established
+	    = identity ? state.field.get ({identity, field_groups[g].field})
+		       : NULL;
+	  if (established
+	      && (!required.has_lo
+		  || (established->has_lo && established->lo >= required.lo))
+	      && (!required.has_hi
+		  || (established->has_hi && established->hi <= required.hi)))
+	    continue; /* Proven true: silently discharged.  */
+
+	  warning_at (gimple_location (call), 0,
+		      "gimple-oa: cannot verify that field %qD of %qE "
+		      "satisfies the precondition of %qD",
+		      field_groups[g].field, substituted, callee);
 	}
     }
 }
@@ -524,18 +629,27 @@ consult_predicate_call (gcall *call, hash_map<tree, oa_predicate_fact_lite> &sta
    must be invalidated by *any* call taking its address or receiving it
    as a bare pointer, whether or not that call has any contracts of its
    own at all -- there's no way to know an arbitrary, uncontracted
-   function didn't change the pointee's logical state.  */
+   function didn't change the pointee's logical state.  Drops every
+   tracked field for the same identity too, matching contracts.cc's own
+   contract_field_range_invalidate_all's whole-object granularity.  */
 
 static void
-invalidate_predicate_call_args (gcall *call,
-				 hash_map<tree, oa_predicate_fact_lite> &state)
+invalidate_persistent_facts_for_call_args (gcall *call, dom_fact_state &state)
 {
   unsigned n = gimple_call_num_args (call);
   for (unsigned i = 0; i < n; ++i)
     {
       tree identity = gimple_object_identity (gimple_call_arg (call, i));
-      if (identity)
-	state.remove (identity);
+      if (!identity)
+	continue;
+      state.pred.remove (identity);
+
+      auto_vec<std::pair<tree, tree>> to_remove;
+      for (auto it : state.field)
+	if (it.first.first == identity)
+	  to_remove.safe_push (it.first);
+      for (unsigned j = 0; j < to_remove.length (); ++j)
+	state.field.remove (to_remove[j]);
     }
 }
 
@@ -550,8 +664,7 @@ invalidate_predicate_call_args (gcall *call,
    invalidation of the same identity.  */
 
 static void
-establish_predicate_call (gcall *call,
-			   hash_map<tree, oa_predicate_fact_lite> &state)
+establish_persistent_facts_for_call (gcall *call, dom_fact_state &state)
 {
   tree callee = gimple_call_fndecl (call);
   if (!callee)
@@ -583,7 +696,22 @@ establish_predicate_call (gcall *call,
 	  tree substituted = gimple_call_arg (call, argno);
 	  tree identity = gimple_object_identity (substituted);
 	  if (identity)
-	    state.put (identity, { pred_fn, !negated });
+	    state.pred.put (identity, { pred_fn, !negated });
+	}
+
+      auto_vec<field_group_lite> field_groups;
+      collect_field_range_groups (cond, &field_groups);
+      for (unsigned g = 0; g < field_groups.length (); ++g)
+	{
+	  unsigned argno;
+	  if (!find_param_position (callee, field_groups[g].ptr_expr, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree substituted = gimple_call_arg (call, argno);
+	  tree identity = gimple_object_identity (substituted);
+	  if (identity)
+	    state.field.put ({identity, field_groups[g].field},
+			      field_groups[g].range);
 	}
     }
 }
@@ -599,7 +727,7 @@ establish_predicate_call (gcall *call,
 class predicate_dom_walker : public dom_walker
 {
 public:
-  predicate_dom_walker (hash_map<tree, oa_predicate_fact_lite> *seed_)
+  predicate_dom_walker (dom_fact_state *seed_)
     : dom_walker (CDI_DOMINATORS), seed (seed_)
   {}
 
@@ -611,28 +739,29 @@ public:
 
   edge before_dom_children (basic_block) final override;
 
-  hash_map<tree, oa_predicate_fact_lite> *seed;
-  hash_map<basic_block, hash_map<tree, oa_predicate_fact_lite> *> block_out;
+  dom_fact_state *seed;
+  hash_map<basic_block, dom_fact_state *> block_out;
 };
 
 edge
 predicate_dom_walker::before_dom_children (basic_block bb)
 {
-  hash_map<tree, oa_predicate_fact_lite> *state
-    = new hash_map<tree, oa_predicate_fact_lite> ();
+  dom_fact_state *state = new dom_fact_state ();
 
   basic_block idom = get_immediate_dominator (CDI_DOMINATORS, bb);
+  const dom_fact_state *from = seed;
   if (idom)
     {
-      hash_map<tree, oa_predicate_fact_lite> **parent
-	= block_out.get (idom);
-      if (parent)
-	for (auto it : **parent)
-	  state->put (it.first, it.second);
+      dom_fact_state **parent = block_out.get (idom);
+      from = parent ? *parent : NULL;
     }
-  else
-    for (auto it : *seed)
-      state->put (it.first, it.second);
+  if (from)
+    {
+      for (auto it : from->pred)
+	state->pred.put (it.first, it.second);
+      for (auto it : from->field)
+	state->field.put (it.first, it.second);
+    }
 
   for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
        gsi_next (&gsi))
@@ -645,9 +774,9 @@ predicate_dom_walker::before_dom_children (basic_block bb)
 	 using the state as it stood *before* this call, then invalidate,
 	 then establish whatever this same call's own postcondition
 	 guarantees.  */
-      consult_predicate_call (call, *state);
-      invalidate_predicate_call_args (call, *state);
-      establish_predicate_call (call, *state);
+      consult_persistent_facts (call, *state);
+      invalidate_persistent_facts_for_call_args (call, *state);
+      establish_persistent_facts_for_call (call, *state);
     }
 
   block_out.put (bb, state);
@@ -1035,15 +1164,15 @@ pass_gimple_object_address::execute (function *fun)
 
   disable_ranger (fun);
 
-  /* Named-predicate facts get their own, separate dominator-tree-based
-     walk (see predicate_dom_walker's own comment) rather than folding
-     into the FOR_EACH_BB_FN loop above: that loop's own three fact
-     shapes are consulted using a single, function-wide ESTABLISHED
-     set/map (correct for them, since a backward SSA walk needs no
-     block-order-sensitive state at all), whereas predicate facts are
-     inherently per-program-point and need the dominator walk's own
-     per-block state threading.  */
-  hash_map<tree, oa_predicate_fact_lite> predicate_seed;
+  /* Named-predicate and field-range facts get their own, separate
+     dominator-tree-based walk (see predicate_dom_walker's own comment)
+     rather than folding into the FOR_EACH_BB_FN loop above: that
+     loop's own three fact shapes are consulted using a single,
+     function-wide ESTABLISHED set/map (correct for them, since a
+     backward SSA walk needs no block-order-sensitive state at all),
+     whereas these two are inherently per-program-point and need the
+     dominator walk's own per-block state threading.  */
+  dom_fact_state predicate_seed;
   seed_predicate_self_trust (fun, predicate_seed);
   predicate_dom_walker pdw (&predicate_seed);
   pdw.walk (ENTRY_BLOCK_PTR_FOR_FN (fun));

@@ -134,7 +134,11 @@ set plugin_test_list [list \
 	  gimple-predicate-ok.C \
 	  gimple-predicate-self-trust-ok.C \
 	  gimple-predicate-invalidated.C \
-	  gimple-predicate-unknown.C } \
+	  gimple-predicate-unknown.C \
+	  gimple-field-range-ok.C \
+	  gimple-field-range-self-trust-ok.C \
+	  gimple-field-range-invalidated.C \
+	  gimple-field-range-unknown.C } \
 ]
 
 foreach file [find $PLUGIN_DEFAULT_REPO *.gcm] {
