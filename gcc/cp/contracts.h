@@ -267,6 +267,17 @@ extern bool oa_match_simple_comparison
 extern bool oa_match_comparison_against_param
   (tree conjunct, tree *param_out, tree_code *code_out, tree *other_out);
 
+/* If CONJUNCT has the shape "RESULT_ID OP other", where RESULT_ID is a
+   postcondition's own already-known return-value binder and "other" is
+   one of the postcondition-owning function's own parameters, recognize
+   it and fill CODE_OUT/OTHER_OUT, oriented so the relation always reads
+   "RESULT_ID CODE_OUT other".  The item-6 counterpart of oa_match_
+   comparison_against_param above, for a postcondition relating its own
+   return value to one of its own other parameters (e.g. 'post<ctrl>(r:
+   r < q)').  */
+extern bool oa_match_result_relation
+  (tree conjunct, tree result_id, tree_code *code_out, tree *other_out);
+
 /* True if an established relational fact of code ESTABLISHED (e.g.
    LT_EXPR) is strong enough to satisfy a required comparison of code
    REQUIRED (e.g. an established '<' satisfies a required '<=').  */

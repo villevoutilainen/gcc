@@ -10702,6 +10702,13 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 static void oa_walk_stmt (tree *stmt, oa_env &env);
 static void oa_handle_postcondition_stmt (tree contract, oa_env &env);
 
+/* Forward-declared: full definition is much further below (needs
+   oa_match_result_relation/oa_underlying_param_operand, defined near
+   oa_match_comparison_against_param), but oa_walk_stmt's own DECL_EXPR/
+   MODIFY_EXPR handling needs it here, at an assignment whose RHS is a
+   call.  */
+static void oa_establish_relational_from_call (tree lhs, tree rhs, oa_env &env);
+
 /* Forward-declared: Increment N -- oa_handle_loop (defined next)
    reuses this for its own condition, defined much later in the file
    (right before oa_stmt_terminates_p), the same way IF_STMT/COND_EXPR/
@@ -11800,6 +11807,15 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      env.range_set (decl, fact);
 	    else
 	      env.range_invalidate (decl);
+	    /* Item 6 for relational facts: a callee's own postcondition
+	       relating its return value to one of its own OTHER
+	       parameters, e.g. 'int y = f (x, q);' with f's postcondition
+	       'post<ctrl>(r: r < q)' -- see oa_establish_relational_
+	       from_call's own comment.  No else-invalidate here: unlike
+	       range/nz (always-tracked, mandatory-adjacent facts), a
+	       relational fact for a freshly-declared decl simply has no
+	       prior entry to go stale.  */
+	    oa_establish_relational_from_call (decl, DECL_INITIAL (decl), env);
 	    /* -fcontract-conveyor-proof-provenance: mirror the numeric
 	       tracking just above, one level up -- a no-op entirely when
 	       provenance tracking is inactive.  */
@@ -11964,6 +11980,12 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      env.range_set (lhs, fact);
 	    else
 	      env.range_invalidate (lhs);
+	    /* Item 6 for relational facts -- see oa_establish_relational_
+	       from_call's own comment.  No else-invalidate needed here:
+	       Rule 1, just above this whole if/else chain, already
+	       unconditionally invalidated any stale relational fact for
+	       LHS before this branch ever runs.  */
+	    oa_establish_relational_from_call (lhs, rhs, env);
 	    /* -fcontract-conveyor-proof-provenance: mirror the numeric
 	       tracking just above, one level up -- a no-op entirely when
 	       provenance tracking is inactive.  */
@@ -12848,6 +12870,137 @@ oa_match_comparison_against_param (tree conjunct, tree *param_out,
   *code_out = code;
   *other_out = other;
   return true;
+}
+
+/* Recognize CONJUNCT as "RESULT_ID OP other", where RESULT_ID is a
+   postcondition's own already-known return-value binder (POSTCONDITION_
+   IDENTIFIER, typically a VAR_DECL, not a PARM_DECL -- unlike oa_match_
+   comparison_against_param immediately above, this takes RESULT_ID as a
+   parameter rather than discovering it, since it isn't itself
+   recognized by that function's own "bare PARM_DECL" check) and OTHER
+   is one of the postcondition-owning function's own *parameters* (via
+   oa_underlying_param_operand, shared with oa_match_comparison_against_
+   param above). CODE_OUT/OTHER_OUT are oriented so the returned
+   relation always reads "RESULT_ID CODE_OUT OTHER", flipping if the
+   postcondition itself wrote it the other way around (e.g. 'q > r').
+   The item-6 counterpart of oa_match_comparison_against_param, used by
+   oa_establish_relational_from_call below to let a callee's own
+   postcondition establish a relational fact for its caller's own
+   assigned-to decl -- see that function's own comment. Exported (not
+   static) so contracts-gimple.cc's own built-in GIMPLE-pass engine can
+   reuse the exact same shape recognition for its own item-6 support.  */
+
+bool
+oa_match_result_relation (tree conjunct, tree result_id, tree_code *code_out,
+			   tree *other_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  enum tree_code code = TREE_CODE (c);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return false;
+
+  tree op0 = oa_strip_to_relational_operand (TREE_OPERAND (c, 0));
+  tree op1 = oa_strip_to_relational_operand (TREE_OPERAND (c, 1));
+
+  tree other;
+  bool flipped;
+  if (op0 == result_id && (other = oa_underlying_param_operand (op1)))
+    flipped = false;
+  else if (op1 == result_id && (other = oa_underlying_param_operand (op0)))
+    flipped = true;
+  else
+    return false;
+
+  if (flipped)
+    switch (code)
+      {
+      case LT_EXPR: code = GT_EXPR; break;
+      case LE_EXPR: code = GE_EXPR; break;
+      case GT_EXPR: code = LT_EXPR; break;
+      case GE_EXPR: code = LE_EXPR; break;
+      default: break;
+      }
+
+  *code_out = code;
+  *other_out = other;
+  return true;
+}
+
+/* Item 6 for relational facts, the establish side: if RHS is (after
+   ordinary wrapper stripping) a call whose callee's own postcondition
+   guarantees a relation between its own return value and one of its
+   OTHER parameters (e.g. 'post<ctrl>(r: r < q)'), and that other
+   parameter's own positional argument at THIS call resolves to a real
+   decl, establish that relation for LHS in ENV -- e.g. 'int y = f (x,
+   q);' with f's own postcondition above establishes "y < q" (q being
+   THIS call's own substituted argument, not necessarily f's own q).
+   Deliberately narrow, unlike oa_get_range's own much broader item 6:
+   RHS must literally reduce to a CALL_EXPR, no arithmetic/IILE
+   composition, matching the explicit scope decision recorded in
+   .claude/plans/well-we-last-discussed-ethereal-duckling.md (a
+   postcondition relating the return value to a parameter is a
+   materially different, harder problem than a precondition doing the
+   same, and this covers only the direct, single-hop case).  A no-op
+   (ENV untouched) for anything else, including when neither opt-in
+   prover is active at all -- relational facts are never part of the
+   mandatory, always-on substrate.  */
+
+static void
+oa_establish_relational_from_call (tree lhs, tree rhs, oa_env &env)
+{
+  if (!flag_contract_conveyor_proofs && !flag_contract_symbolic_proofs)
+    return;
+  if (rhs == NULL_TREE)
+    return;
+
+  tree expr = STRIP_ANY_LOCATION_WRAPPER (rhs);
+  if (TREE_CODE (expr) != CALL_EXPR)
+    return;
+  tree callee = cp_get_callee_fndecl_nofold (expr);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return;
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      bool conveyor_active = oa_contract_conveyor_active_p (contract, callee);
+      bool symbolic_active = oa_contract_symbolic_active_p (contract, callee);
+      if (!conveyor_active && !symbolic_active)
+	continue;
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      if (!result_id || (!VAR_P (result_id) && TREE_CODE (result_id) != PARM_DECL))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree_code code;
+	  tree other_param;
+	  if (!oa_match_result_relation (*conjuncts[i], result_id, &code,
+					  &other_param))
+	    continue;
+
+	  tree substituted = oa_substitute_call_arg (callee, expr, other_param);
+	  if (!substituted)
+	    continue;
+	  tree resolved = oa_strip_to_relational_operand (substituted);
+	  if (!VAR_P (resolved) && TREE_CODE (resolved) != PARM_DECL)
+	    continue;
+
+	  env.relational_set (lhs, code, resolved, conveyor_active);
+	  return;
+	}
+    }
 }
 
 /* Recognize CONJUNCT as the shape "param OP const" (or "const OP
