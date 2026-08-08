@@ -90,6 +90,8 @@
 #include "stringpool.h"
 #include "function.h"
 #include "plugin-version.h"
+#include "dominance.h"
+#include "gimple-range.h"
 
 int plugin_is_GPL_compatible;
 
@@ -183,6 +185,190 @@ call_postcondition_guarantees_nonzero_p (tree callee)
 	    return true;
 	}
     }
+  return false;
+}
+
+/* A third fact shape, general numeric ranges (conveyor's own item-8
+   numeric checking, e.g. 'pre<ctrl>(x >= 20 && x < 100)') -- unlike
+   is_object_address/nonzero, this one is NOT resolved by a hand-rolled
+   recursive SSA/PHI walk: GCC's own on-demand ranger (class
+   gimple_ranger, gimple-range.h) already computes exactly this kind of
+   "what values can this SSA name take here" query, handling PHI merges,
+   copy propagation, and comparison-derived refinement far more
+   completely than a bespoke walker could -- see ~/gimple-contract-
+   analysis.md, Section 5. This still needs its own established-facts
+   map for self-trust/item 6, though: the ranger only ever derives
+   facts from *real code* in the function it's asked about, and has no
+   way to know about a *declared* precondition/postcondition's own
+   axiomatic range for a parameter/result identifier it never actually
+   constrains via a visible comparison or assignment.  */
+
+struct oa_range_lite
+{
+  bool has_lo = false, has_hi = false;
+  widest_int lo = 0, hi = 0;
+};
+
+/* Combine CODE/VAL (one comparison conjunct, e.g. 'x >= 20') into R --
+   mirrors contracts.cc's own oa_tighten_range_bound.  */
+
+static void
+tighten_range_bound (oa_range_lite &r, tree_code code, const widest_int &val)
+{
+  switch (code)
+    {
+    case GT_EXPR:
+      if (!r.has_lo || val + 1 > r.lo) { r.has_lo = true; r.lo = val + 1; }
+      break;
+    case GE_EXPR:
+      if (!r.has_lo || val > r.lo) { r.has_lo = true; r.lo = val; }
+      break;
+    case LT_EXPR:
+      if (!r.has_hi || val - 1 < r.hi) { r.has_hi = true; r.hi = val - 1; }
+      break;
+    case LE_EXPR:
+      if (!r.has_hi || val < r.hi) { r.has_hi = true; r.hi = val; }
+      break;
+    case EQ_EXPR:
+      r.has_lo = true; r.lo = val;
+      r.has_hi = true; r.hi = val;
+      break;
+    default:
+      break;
+    }
+}
+
+/* Accumulate every 'TARGET OP const'-shaped conjunct of CONJUNCTS
+   (oa_match_simple_comparison, already exported) naming TARGET into a
+   single combined range in *OUT -- e.g. 'x >= 20 && x < 100' becomes
+   [20, 100). Returns false (leaving *OUT untouched) if no conjunct
+   named TARGET at all.  */
+
+static bool
+extract_conjunct_range (vec<tree *> &conjuncts, tree target, oa_range_lite *out)
+{
+  oa_range_lite acc;
+  bool any = false;
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree param, const_val;
+      tree_code code;
+      if (oa_match_simple_comparison (*conjuncts[i], &param, &code, &const_val)
+	  && param == target && TREE_CODE (const_val) == INTEGER_CST)
+	{
+	  tighten_range_bound (acc, code, wi::to_widest (const_val));
+	  any = true;
+	}
+    }
+  if (any)
+    *out = acc;
+  return any;
+}
+
+/* Item 6 for ranges: does CALLEE's own declared postcondition
+   unconditionally guarantee a range for its own return value?  */
+
+static bool
+call_postcondition_range_p (tree callee, oa_range_lite *out)
+{
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      if (!result_id)
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      if (extract_conjunct_range (conjuncts, result_id, out))
+	return true;
+    }
+  return false;
+}
+
+/* Resolve VAL's own range, trying, in order: a literal constant; a
+   self-trusted/item-6 fact in ESTABLISHED_RANGE (keyed exactly like
+   ESTABLISHED/ESTABLISHED_NZ elsewhere in this file); item 6 via a
+   GIMPLE_CALL def-stmt; and finally RANGER's own general-dataflow
+   answer (the "conveyor's own general m_range_map fallback" idea this
+   session's earlier AST-walk work already used for symbolic's own
+   scalar-range checking, here just backed by a real ranger instead of
+   a hand-rolled map).  A multi-sub-range irange's own outer envelope
+   (lowest lower_bound, highest upper_bound) is a sound, if slightly
+   coarser, stand-in for the full value set when checking "is
+   ESTABLISHED entirely inside REQUIRED" -- gaps inside the envelope
+   only ever make the real value set a stricter subset.  */
+
+static bool
+established_range_of (tree val, hash_map<tree, oa_range_lite> &established_range,
+		       gimple_ranger *ranger, oa_range_lite *out)
+{
+  if (val == NULL_TREE)
+    return false;
+
+  if (TREE_CODE (val) == INTEGER_CST)
+    {
+      widest_int v = wi::to_widest (val);
+      out->has_lo = out->has_hi = true;
+      out->lo = out->hi = v;
+      return true;
+    }
+
+  if (TREE_CODE (val) != SSA_NAME)
+    return false;
+
+  if (oa_range_lite *found = established_range.get (val))
+    {
+      *out = *found;
+      return true;
+    }
+
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (def && is_gimple_call (def))
+    {
+      tree callee = gimple_call_fndecl (as_a <gcall *> (def));
+      if (callee && call_postcondition_range_p (callee, out))
+	return true;
+    }
+  else if (def && is_gimple_assign (def))
+    {
+      /* A plain copy or value-preserving conversion -- e.g. 'int y =
+	 make_val();' gimplifies to a temporary holding the call's own
+	 result, then an ordinary copy into y ('_4 = make_val (); y_5 =
+	 _4;'), so item 6's own guarantee on _4 must be checked one hop
+	 back from y's own def-stmt, not just at y's def-stmt itself
+	 (which the ranger's own ordinary dataflow reasoning wouldn't
+	 catch either, since an uninterpreted call gives it nothing to
+	 propagate).  */
+      enum tree_code code = gimple_assign_rhs_code (def);
+      if ((CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
+	  && established_range_of (gimple_assign_rhs1 (def), established_range,
+				    ranger, out))
+	return true;
+    }
+
+  if (ranger)
+    {
+      int_range_max vr;
+      if (ranger->range_of_expr (vr, val) && !vr.undefined_p ()
+	  && !vr.varying_p ())
+	{
+	  unsigned n = vr.num_pairs ();
+	  if (n > 0)
+	    {
+	      out->has_lo = out->has_hi = true;
+	      out->lo = widest_int::from (vr.lower_bound (0), SIGNED);
+	      out->hi = widest_int::from (vr.upper_bound (n - 1), SIGNED);
+	      return true;
+	    }
+	}
+    }
+
   return false;
 }
 
@@ -342,7 +528,8 @@ provable_nonzero_p (tree val, hash_set<tree> &established_nz,
 
 static void
 seed_self_trust (function *fun, hash_set<tree> &established,
-		  hash_set<tree> &established_nz)
+		  hash_set<tree> &established_nz,
+		  hash_map<tree, oa_range_lite> &established_range)
 {
   tree fndecl = fun->decl;
   for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
@@ -376,6 +563,29 @@ seed_self_trust (function *fun, hash_set<tree> &established,
 	  if (ssa)
 	    target->add (ssa);
 	}
+
+      /* Range conjuncts need their own pass: several conjuncts can
+	 name the SAME param ('x >= 20 && x < 100'), so they must be
+	 grouped and combined (extract_conjunct_range) rather than
+	 handled one at a time like the two boolean facts above.  */
+      auto_vec<tree> params;
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree param, const_val;
+	  tree_code code;
+	  if (oa_match_simple_comparison (*conjuncts[i], &param, &code, &const_val)
+	      && TREE_CODE (param) == PARM_DECL && !params.contains (param))
+	    params.safe_push (param);
+	}
+      for (unsigned p = 0; p < params.length (); ++p)
+	{
+	  oa_range_lite range;
+	  if (!extract_conjunct_range (conjuncts, params[p], &range))
+	    continue;
+	  tree ssa = ssa_default_def (fun, params[p]);
+	  if (ssa)
+	    established_range.put (ssa, range);
+	}
     }
 }
 
@@ -389,7 +599,9 @@ seed_self_trust (function *fun, hash_set<tree> &established,
 
 static void
 check_call (gcall *call, hash_set<tree> &established,
-	     hash_set<tree> &established_nz)
+	     hash_set<tree> &established_nz,
+	     hash_map<tree, oa_range_lite> &established_range,
+	     gimple_ranger *ranger)
 {
   tree callee = gimple_call_fndecl (call);
   if (!callee)
@@ -450,6 +662,44 @@ check_call (gcall *call, hash_set<tree> &established,
 			  substituted, callee);
 	    }
 	}
+
+      /* Range obligations: same per-param grouping as seed_self_trust's
+	 own range handling, since one precondition can constrain
+	 several distinct parameters, each via more than one conjunct.  */
+      auto_vec<tree> params;
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree param, const_val;
+	  tree_code code;
+	  if (oa_match_simple_comparison (*conjuncts[i], &param, &code, &const_val)
+	      && TREE_CODE (param) == PARM_DECL && !params.contains (param))
+	    params.safe_push (param);
+	}
+      for (unsigned p = 0; p < params.length (); ++p)
+	{
+	  oa_range_lite required;
+	  if (!extract_conjunct_range (conjuncts, params[p], &required))
+	    continue;
+
+	  unsigned argno;
+	  if (!find_param_position (callee, params[p], &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree substituted = gimple_call_arg (call, argno);
+
+	  oa_range_lite established_r;
+	  if (established_range_of (substituted, established_range, ranger,
+				     &established_r)
+	      && (!required.has_lo
+		  || (established_r.has_lo && established_r.lo >= required.lo))
+	      && (!required.has_hi
+		  || (established_r.has_hi && established_r.hi <= required.hi)))
+	    continue; /* Proven true: silently discharged.  */
+
+	  warning_at (gimple_location (call), 0,
+		      "gimple-oa: cannot verify that %qE satisfies the "
+		      "precondition of %qD", substituted, callee);
+	}
     }
 }
 
@@ -484,7 +734,11 @@ pass_gimple_object_address::execute (function *fun)
 {
   hash_set<tree> established;
   hash_set<tree> established_nz;
-  seed_self_trust (fun, established, established_nz);
+  hash_map<tree, oa_range_lite> established_range;
+  seed_self_trust (fun, established, established_nz, established_range);
+
+  calculate_dominance_info (CDI_DOMINATORS);
+  gimple_ranger *ranger = enable_ranger (fun, false);
 
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
@@ -493,9 +747,11 @@ pass_gimple_object_address::execute (function *fun)
       {
 	gimple *stmt = gsi_stmt (gsi);
 	if (is_gimple_call (stmt))
-	  check_call (as_a <gcall *> (stmt), established, established_nz);
+	  check_call (as_a <gcall *> (stmt), established, established_nz,
+		      established_range, ranger);
       }
 
+  disable_ranger (fun);
   return 0;
 }
 

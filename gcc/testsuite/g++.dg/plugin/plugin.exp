@@ -125,7 +125,12 @@ set plugin_test_list [list \
 	  gimple-nonzero-ok.C \
 	  gimple-nonzero-self-trust-ok.C \
 	  gimple-nonzero-postcondition-ok.C \
-	  gimple-nonzero-unknown.C } \
+	  gimple-nonzero-unknown.C \
+	  gimple-range-ok.C \
+	  gimple-range-self-trust-ok.C \
+	  gimple-range-postcondition-ok.C \
+	  gimple-range-ranger-fallback-ok.C \
+	  gimple-range-unknown.C } \
 ]
 
 foreach file [find $PLUGIN_DEFAULT_REPO *.gcm] {
