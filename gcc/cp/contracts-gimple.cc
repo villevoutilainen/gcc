@@ -128,6 +128,17 @@ cg_find_param_position (tree callee, tree parm, unsigned *argno_out)
 
 struct cg_fact { bool conveyor_established; };
 
+/* A *relational* fact -- "the SSA name this is keyed on CODE RHS
+   holds", e.g. for 'pre<ctrl>(x < q)', keyed on x's own SSA name, with
+   CODE LT_EXPR and RHS q's own SSA name. Structurally identical to
+   cg_fact (same one-way-trust tag), just carrying a second SSA name
+   and a comparison code instead of nothing. Mirrors contracts.cc's own
+   oa_relational_fact exactly -- see that struct's own comment and
+   oa_match_comparison_against_param's for why neither side is ever
+   resolved to a value.  */
+
+struct cg_rel_fact { tree_code code; tree rhs; bool conveyor_established; };
+
 /* A numeric-interval fact -- see this file's own top comment for why,
    unlike cg_fact, this carries no conveyor_established provenance tag
    (mirroring contracts.cc's own m_contract_scalar_range_map).  */
@@ -495,7 +506,8 @@ cg_provable_nonzero_p (tree val, hash_map<tree, cg_fact> &established_nz,
 static void
 cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 		     hash_map<tree, cg_fact> &established_nz,
-		     hash_map<tree, cg_range_lite> &established_range)
+		     hash_map<tree, cg_range_lite> &established_range,
+		     hash_map<tree, cg_rel_fact> &established_rel)
 {
   tree fndecl = fun->decl;
   for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
@@ -544,6 +556,25 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	  target->put (ssa, { conveyor_enabled });
 	}
 
+      /* A relational conjunct against another of the SAME function's
+	 own parameters (e.g. 'pre<ctrl>(x < q)') -- trust it
+	 unconditionally for the rest of this function's own body,
+	 mirroring contracts.cc's own oa_establish_shared_substrate_
+	 self_trust exactly.  Neither PARAM nor OTHER is ever resolved to
+	 a value -- see oa_match_comparison_against_param's own comment.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree rel_param, rel_other;
+	  tree_code rel_code;
+	  if (!oa_match_comparison_against_param (*conjuncts[i], &rel_param,
+						   &rel_code, &rel_other))
+	    continue;
+	  tree ssa_param = ssa_default_def (fun, rel_param);
+	  tree ssa_other = ssa_default_def (fun, rel_other);
+	  if (ssa_param && ssa_other)
+	    established_rel.put (ssa_param, { rel_code, ssa_other, conveyor_enabled });
+	}
+
       /* Range conjuncts need their own pass: several conjuncts can name
 	 the SAME param ('x >= 20 && x < 100'), so they must be grouped
 	 and combined (cg_extract_conjunct_range) rather than handled one
@@ -584,6 +615,7 @@ static void
 cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		hash_map<tree, cg_fact> &established_nz,
 		hash_map<tree, cg_range_lite> &established_range,
+		hash_map<tree, cg_rel_fact> &established_rel,
 		gimple_ranger *ranger)
 {
   tree callee = gimple_call_fndecl (call);
@@ -656,6 +688,56 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 			  "cannot verify that %qE is nonzero, as required by "
 			  "the precondition of %qD", substituted, callee);
 	    }
+	}
+
+      /* Relational obligations against another of the callee's own
+	 parameters (e.g. 'pre<ctrl>(x < q)') -- both PARM_DECLs
+	 substituted positionally, mirroring contracts.cc's own
+	 oa_handle_call_conveyor_proof_obligation/oa_handle_call_
+	 symbolic_precondition_obligation.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree rel_param, rel_other;
+	  tree_code rel_code;
+	  if (!oa_match_comparison_against_param (*conjuncts[i], &rel_param,
+						   &rel_code, &rel_other))
+	    continue;
+
+	  unsigned param_argno, other_argno;
+	  if (!cg_find_param_position (callee, rel_param, &param_argno)
+	      || !cg_find_param_position (callee, rel_other, &other_argno)
+	      || param_argno >= gimple_call_num_args (call)
+	      || other_argno >= gimple_call_num_args (call))
+	    continue;
+
+	  tree sub_param = gimple_call_arg (call, param_argno);
+	  tree sub_other = gimple_call_arg (call, other_argno);
+
+	  /* Both sides are ordinary compile-time literals at this call
+	     site -- plain constant folding, not resolving any
+	     parameter's own opaque meaning (see oa_relational_literal_
+	     holds's own comment in contracts.cc).  */
+	  if (TREE_CODE (sub_param) == INTEGER_CST
+	      && TREE_CODE (sub_other) == INTEGER_CST)
+	    {
+	      if (oa_relational_literal_holds (rel_code, sub_param, sub_other))
+		continue; /* Proven true: silently discharged.  */
+	      warning_at (gimple_location (call), 0,
+			  "argument %qE provably violates the precondition "
+			  "of %qD", sub_param, callee);
+	      continue;
+	    }
+
+	  cg_rel_fact *fact = established_rel.get (sub_param);
+	  if (fact
+	      && oa_relational_code_implies (fact->code, rel_code)
+	      && (!require_conveyor || fact->conveyor_established)
+	      && fact->rhs == sub_other)
+	    continue; /* Proven true: silently discharged.  */
+
+	  warning_at (gimple_location (call), 0,
+		      "cannot verify that %qE satisfies the "
+		      "precondition of %qD", sub_param, callee);
 	}
 
       /* Range obligations: same per-param grouping as
@@ -1130,7 +1212,9 @@ pass_contracts_gimple::execute (function *fun)
   hash_map<tree, cg_fact> established;
   hash_map<tree, cg_fact> established_nz;
   hash_map<tree, cg_range_lite> established_range;
-  cg_seed_self_trust (fun, established, established_nz, established_range);
+  hash_map<tree, cg_rel_fact> established_rel;
+  cg_seed_self_trust (fun, established, established_nz, established_range,
+		       established_rel);
 
   calculate_dominance_info (CDI_DOMINATORS);
   gimple_ranger *ranger = enable_ranger (fun, false);
@@ -1143,7 +1227,7 @@ pass_contracts_gimple::execute (function *fun)
 	gimple *stmt = gsi_stmt (gsi);
 	if (is_gimple_call (stmt))
 	  cg_check_call (as_a <gcall *> (stmt), established, established_nz,
-			 established_range, ranger);
+			 established_range, established_rel, ranger);
       }
 
   disable_ranger (fun);
