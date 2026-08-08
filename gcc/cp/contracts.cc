@@ -6448,16 +6448,32 @@ static bool oa_resolve_iile_range (tree call, oa_env &env, oa_range_fact *out);
    return OP itself, ordinary-stripped only, unchanged.
 
    Also looks through a TARGET_EXPR whose own initializer is a plain
-   copy (not a full constructor call, AGGR_INIT_EXPR, which has no
-   single source value to unwrap to) -- passing a class-typed decl BY
-   VALUE to another function (e.g. 'need_small (q)' substituting a
-   class-typed q for an int parameter, or a relational obligation's own
-   call-argument substitution) materializes the copy as exactly this
-   shape, found via direct testing that a relational fact for a class-
-   typed parameter otherwise silently failed to be recognized at any
-   *cross-call* consult site (self-trust seeding, which stays within
-   one function's own AST, never goes through this materialization at
-   all -- only a call's own substituted argument does).
+   copy -- passing a class-typed decl BY VALUE to another function (e.g.
+   'need_small (q)' substituting a class-typed q for an int parameter,
+   or a relational obligation's own call-argument substitution)
+   materializes the copy as exactly this shape, found via direct testing
+   that a relational fact for a class-typed parameter otherwise silently
+   failed to be recognized at any *cross-call* consult site (self-trust
+   seeding, which stays within one function's own AST, never goes
+   through this materialization at all -- only a call's own substituted
+   argument does).
+
+   A TARGET_EXPR's own initializer can also be a full constructor call
+   (AGGR_INIT_EXPR) instead of a plain copy -- the shape a NON-trivially-
+   copyable class type's own by-value forwarding takes (found via direct
+   testing of 'int g (wrap q) { return f (q); }' where wrap has a user-
+   provided copy constructor: 'f (&TARGET_EXPR<D.NNNN, AGGR_INIT_EXPR
+   (wrap::wrap(const wrap&), D.NNNN, ..., q)>)', not the plain-copy
+   TARGET_EXPR a trivially-copyable type gets). Recognized specifically
+   when that call is to a copy or move constructor (DECL_COPY_
+   CONSTRUCTOR_P/DECL_MOVE_CONSTRUCTOR_P) -- its *last* argument is then
+   the receiver's own single source value (found via direct testing
+   that an extra, compiler-internal leading argument can precede it, so
+   the argument *count* isn't reliably one, only the source's *position*
+   is reliably last) -- and otherwise left unresolved (a converting
+   constructor building a genuinely new object from unrelated arguments
+   has no "source" to unwrap to, the same non-goal as an ordinary
+   AGGR_INIT_EXPR construction of a fresh rvalue like 'wrap (2)').
 
    Purely structural: never inspects the conversion's own return value
    or the receiver's type, only *which* underlying operand a scalar-
@@ -6481,11 +6497,53 @@ oa_strip_conversion_call (tree op)
 	 || TREE_CODE (op) == CONVERT_EXPR || TREE_CODE (op) == VIEW_CONVERT_EXPR)
     op = TREE_OPERAND (op, 0);
 
+  /* A non-trivially-copyable by-value argument is passed as the address
+     of a materialized temporary even at this pre-genericize stage
+     (found via direct testing -- matches the GIMPLE-level "invisible
+     reference" ABI convention, already visible this early), so the
+     TARGET_EXPR below can arrive wrapped in one extra ADDR_EXPR; peel
+     it, the same way a conversion-operator call's own receiver is
+     peeled just below.  */
+  if (TREE_CODE (op) == ADDR_EXPR && TREE_CODE (TREE_OPERAND (op, 0)) == TARGET_EXPR)
+    op = TREE_OPERAND (op, 0);
+
   if (TREE_CODE (op) == TARGET_EXPR)
     {
       tree init = TREE_OPERAND (op, 1);
       if (init != NULL_TREE && TREE_CODE (init) != AGGR_INIT_EXPR)
 	return oa_strip_conversion_call (init);
+      if (init != NULL_TREE && TREE_CODE (init) == AGGR_INIT_EXPR)
+	{
+	  tree fn = AGGR_INIT_EXPR_FN (init);
+	  if (fn != NULL_TREE && TREE_CODE (fn) == ADDR_EXPR)
+	    {
+	      tree fndecl = TREE_OPERAND (fn, 0);
+	      int nargs = aggr_init_expr_nargs (init);
+	      if (fndecl != NULL_TREE && TREE_CODE (fndecl) == FUNCTION_DECL
+		  && (DECL_COPY_CONSTRUCTOR_P (fndecl)
+		      || DECL_MOVE_CONSTRUCTOR_P (fndecl))
+		  && nargs >= 1)
+		{
+		  /* A copy/move constructor has exactly one user-visible
+		     parameter (the source reference), always last in
+		     AGGR_INIT_EXPR's own argument list -- found via direct
+		     testing that an extra, leading compiler-internal
+		     argument (an unrelated CONVERT_EXPR of a VOID_CST) can
+		     precede it here, so the *count* isn't reliably 1, only
+		     the *position* of the real source is reliably last.
+		     That source argument is itself an ADDR_EXPR when it's a
+		     reference (the same by-reference representation the
+		     conversion-operator receiver below is unwrapped from)
+		     -- peel it too before recursing, so the result is the
+		     bare decl, not its address.  */
+		  tree source
+		    = oa_strip_conversion_call (AGGR_INIT_EXPR_ARG (init, nargs - 1));
+		  if (TREE_CODE (source) == ADDR_EXPR)
+		    source = TREE_OPERAND (source, 0);
+		  return source;
+		}
+	    }
+	}
       return op;
     }
 
