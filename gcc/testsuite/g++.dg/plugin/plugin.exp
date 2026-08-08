@@ -121,7 +121,11 @@ set plugin_test_list [list \
 	  gimple-object-address-ok.C \
 	  gimple-object-address-self-trust-ok.C \
 	  gimple-object-address-postcondition-ok.C \
-	  gimple-object-address-unknown.C } \
+	  gimple-object-address-unknown.C \
+	  gimple-nonzero-ok.C \
+	  gimple-nonzero-self-trust-ok.C \
+	  gimple-nonzero-postcondition-ok.C \
+	  gimple-nonzero-unknown.C } \
 ]
 
 foreach file [find $PLUGIN_DEFAULT_REPO *.gcm] {

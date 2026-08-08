@@ -7239,7 +7239,7 @@ oa_collect_disjuncts (tree *cond, vec<tree *> *disjuncts)
    symmetric way is_object_address's gate is, since 'E == 0' doesn't
    establish nonzero-ness at all.  */
 
-static bool
+bool
 oa_nonzero_conjunct_p (tree conjunct, tree *decl_out)
 {
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
