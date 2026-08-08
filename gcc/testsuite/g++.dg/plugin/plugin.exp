@@ -130,7 +130,11 @@ set plugin_test_list [list \
 	  gimple-range-self-trust-ok.C \
 	  gimple-range-postcondition-ok.C \
 	  gimple-range-ranger-fallback-ok.C \
-	  gimple-range-unknown.C } \
+	  gimple-range-unknown.C \
+	  gimple-predicate-ok.C \
+	  gimple-predicate-self-trust-ok.C \
+	  gimple-predicate-invalidated.C \
+	  gimple-predicate-unknown.C } \
 ]
 
 foreach file [find $PLUGIN_DEFAULT_REPO *.gcm] {
