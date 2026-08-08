@@ -95,6 +95,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "contracts.h"
 #include "gimple.h"
 #include "gimple-iterator.h"
+#include "gimple-walk.h"
 #include "is-a.h"
 #include "tree-dfa.h"
 #include "tree-pass.h"
@@ -241,6 +242,41 @@ cg_call_postcondition_range_p (tree callee, bool require_conveyor,
   return false;
 }
 
+/* If VAL is an SSA_NAME whose def-stmt is a call through an implicit,
+   single-argument conversion operator (DECL_CONV_FN_P) -- e.g.
+   'wrap::operator int (q)' (a reference-passed receiver) or
+   'wrap::operator int (&q)' (a by-value receiver) -- return that
+   receiver, with one ADDR_EXPR peeled off if present; otherwise return
+   VAL itself, unchanged.  The GIMPLE-level analogue of contracts.cc's
+   own oa_strip_conversion_call, minus the ordinary-wrapper/TARGET_EXPR
+   handling that function also does: GIMPLE has no equivalent nodes for
+   either (SSA form and gimplification already normalize both away), so
+   a call through a conversion operator is the entire remaining shape to
+   recognize here. Shared by every consult function below that used to
+   stop at "the callee's own postcondition, or nothing" for a
+   GIMPLE_CALL def-stmt, and by cg_check_call's own relational
+   obligation check (which needs to resolve a *second*, non-recursed-
+   into operand the same way before comparing it against an already-
+   established fact's own RHS).  */
+
+static tree
+cg_resolve_conversion_receiver (tree val)
+{
+  if (val == NULL_TREE || TREE_CODE (val) != SSA_NAME)
+    return val;
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (!def || !is_gimple_call (def))
+    return val;
+  gcall *call = as_a <gcall *> (def);
+  tree callee = gimple_call_fndecl (call);
+  if (!callee || !DECL_CONV_FN_P (callee) || gimple_call_num_args (call) != 1)
+    return val;
+  tree receiver = gimple_call_arg (call, 0);
+  if (TREE_CODE (receiver) == ADDR_EXPR)
+    receiver = TREE_OPERAND (receiver, 0);
+  return receiver;
+}
+
 /* Resolve VAL's own range, trying, in order: a literal constant; a
    self-trusted/item-6 fact in ESTABLISHED_RANGE (keyed exactly like
    ESTABLISHED/ESTABLISHED_NZ elsewhere in this file, gated the same
@@ -268,6 +304,20 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
       return true;
     }
 
+  /* A decl-keyed fact (an address-taken, by-value class-typed parameter
+     provably never written to anywhere in this function -- see
+     cg_decl_safe_for_conversion_tracking_p) is a leaf: no SSA def-stmt
+     exists for a plain decl, so there is nothing further to walk.  */
+  if (VAR_P (val) || TREE_CODE (val) == PARM_DECL)
+    {
+      if (cg_range_lite *found = established_range.get (val))
+	{
+	  *out = *found;
+	  return true;
+	}
+      return false;
+    }
+
   if (TREE_CODE (val) != SSA_NAME)
     return false;
 
@@ -283,6 +333,15 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
       tree callee = gimple_call_fndecl (as_a <gcall *> (def));
       if (callee && cg_call_postcondition_range_p (callee, require_conveyor,
 						     require_symbolic, out))
+	return true;
+      /* A class-typed operand reached via its own implicit conversion
+	 operator (e.g. 'q.operator int()') -- recurse into the
+	 receiver, the same lookthrough contracts.cc's own oa_get_range
+	 applies at the AST level.  */
+      tree receiver = cg_resolve_conversion_receiver (val);
+      if (receiver != val
+	  && cg_established_range_of (receiver, established_range, ranger,
+				       require_conveyor, require_symbolic, out))
 	return true;
     }
   else if (def && is_gimple_assign (def))
@@ -447,6 +506,14 @@ cg_provable_nonzero_p (tree val, hash_map<tree, cg_fact> &established_nz,
   if (TREE_CODE (val) == INTEGER_CST)
     return !integer_zerop (val);
 
+  /* A decl-keyed fact -- see cg_established_range_of's own identical
+     comment just above.  */
+  if (VAR_P (val) || TREE_CODE (val) == PARM_DECL)
+    {
+      cg_fact *fact = established_nz.get (val);
+      return fact && (!require_conveyor || fact->conveyor_established);
+    }
+
   if (TREE_CODE (val) != SSA_NAME)
     return false;
 
@@ -489,10 +556,227 @@ cg_provable_nonzero_p (tree val, hash_map<tree, cg_fact> &established_nz,
 	result = cg_call_postcondition_guarantees_p
 	  (callee, require_conveyor, !require_conveyor,
 	   oa_nonzero_conjunct_p);
+      if (!result)
+	{
+	  tree receiver = cg_resolve_conversion_receiver (val);
+	  if (receiver != val)
+	    result = cg_provable_nonzero_p (receiver, established_nz,
+					     require_conveyor, in_progress);
+	}
     }
 
   in_progress.remove (val);
   return result;
+}
+
+/* FUN/DECL packed together for the visit_store/visit_addr callbacks
+   below, both of which need FUN (to re-scan for a capture struct's own
+   further uses) alongside DECL (the candidate parameter itself).  */
+
+struct cg_conversion_safety_ctx { function *fun; tree decl; };
+
+/* visit_store callback for cg_decl_safe_for_conversion_tracking_p below
+   -- any direct store to DATA's own candidate decl at all disqualifies
+   it, regardless of shape.  */
+
+static bool
+cg_store_disqualifies_p (gimple *, tree base, tree, void *data)
+{
+  return base == ((cg_conversion_safety_ctx *) data)->decl;
+}
+
+/* True if STMT is 'SOME_STRUCT.field = &T', where the field being
+   assigned is named "__args" -- the exact, stable shape build_contract_
+   check (contracts.cc) emits to hand a per-call capture struct's own
+   address to an assertion_context object, for its own (read-only)
+   thunk to later re-evaluate the condition through.  */
+
+static bool
+cg_stores_addr_into_args_field_p (gimple *stmt, tree t)
+{
+  if (!gimple_assign_single_p (stmt))
+    return false;
+  tree rhs = gimple_assign_rhs1 (stmt);
+  if (TREE_CODE (rhs) != ADDR_EXPR || TREE_OPERAND (rhs, 0) != t)
+    return false;
+  tree lhs = gimple_assign_lhs (stmt);
+  if (TREE_CODE (lhs) != COMPONENT_REF)
+    return false;
+  tree field = TREE_OPERAND (lhs, 1);
+  return TREE_CODE (field) == FIELD_DECL && DECL_NAME (field)
+	 && id_equal (DECL_NAME (field), "__args");
+}
+
+/* True if every address-of T anywhere in FUN is exactly the safe
+   cg_stores_addr_into_args_field_p shape above -- i.e. T's own address
+   never escapes anywhere else at all.  Used by cg_addr_disqualifies_p
+   below to validate the *capture struct* (T) a candidate decl's own
+   address was stored into, one level removed.  */
+
+static bool
+cg_addr_only_feeds_args_field_p (function *fun, tree t)
+{
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      {
+	gimple *stmt = gsi_stmt (gsi);
+	if (gimple_assign_single_p (stmt))
+	  {
+	    tree rhs = gimple_assign_rhs1 (stmt);
+	    if (TREE_CODE (rhs) == ADDR_EXPR && TREE_OPERAND (rhs, 0) == t
+		&& !cg_stores_addr_into_args_field_p (stmt, t))
+	      return false;
+	  }
+	/* Any other statement kind referencing T's own address at all
+	   (a call argument, a GIMPLE_ASM operand, ...) is conservatively
+	   treated as an escape -- only the one recognized capture shape
+	   above is ever trusted.  walk_stmt_load_store_addr_ops's own
+	   visit_addr also covers the plain-assignment case just handled,
+	   redundantly but harmlessly (STMT already failed the check
+	   above, or T doesn't appear in it at all).  */
+	if (walk_stmt_load_store_addr_ops (stmt, t, NULL, NULL,
+					    [] (gimple *s, tree base, tree,
+						void *data) -> bool
+					    {
+					      tree tt = (tree) data;
+					      return base == tt
+						     && !cg_stores_addr_into_args_field_p (s, tt);
+					    }))
+	  return false;
+      }
+  return true;
+}
+
+/* visit_addr callback for cg_decl_safe_for_conversion_tracking_p below
+   -- an address-of DATA (packed with FUN into a cg_conversion_safety_ctx,
+   passed as DATA) is safe when it is either (a) the receiver argument
+   of a call whose own corresponding formal parameter's pointee type is
+   TYPE_READONLY (a genuine const-qualified accessor call, which by the
+   language's own rules cannot write through that pointer), or (b)
+   stored into a field of a local capture-struct temporary whose own
+   address, in turn, only ever flows into an assertion_context's own
+   "__args" field (cg_addr_only_feeds_args_field_p) -- the shape DATA's
+   own address takes when it's merely referenced by this precondition's
+   *own* runtime-check machinery, trusted here for the same reason
+   self-trust already trusts the precondition's own truth axiomatically:
+   this capture exists to evaluate THIS SAME precondition, not arbitrary
+   code, and by the language's own rules never writes back through it.
+   Anything else disqualifies DATA.  */
+
+static bool
+cg_addr_disqualifies_p (gimple *stmt, tree base, tree op, void *data)
+{
+  cg_conversion_safety_ctx *ctx = (cg_conversion_safety_ctx *) data;
+  if (base != ctx->decl)
+    return false;
+
+  if (is_gimple_call (stmt))
+    {
+      gcall *call = as_a <gcall *> (stmt);
+      tree callee = gimple_call_fndecl (call);
+      tree formal = callee ? DECL_ARGUMENTS (callee) : NULL_TREE;
+      unsigned nargs = gimple_call_num_args (call);
+      for (unsigned i = 0; i < nargs; ++i, formal = formal ? DECL_CHAIN (formal) : NULL_TREE)
+	if (gimple_call_arg (call, i) == op)
+	  return !(formal && POINTER_TYPE_P (TREE_TYPE (formal))
+		   && TYPE_READONLY (TREE_TYPE (TREE_TYPE (formal))));
+      return true;
+    }
+
+  if (gimple_assign_single_p (stmt))
+    {
+      tree lhs = gimple_assign_lhs (stmt);
+      if (TREE_CODE (lhs) == COMPONENT_REF)
+	{
+	  tree capture_struct = TREE_OPERAND (lhs, 0);
+	  if (DECL_P (capture_struct)
+	      && cg_addr_only_feeds_args_field_p (ctx->fun, capture_struct))
+	    return false;
+	}
+    }
+
+  return true;
+}
+
+/* True if DECL (a candidate address-taken PARM_DECL of FUN -- never
+   promoted to SSA form because calling its own conversion operator
+   requires taking its address; see this file's own top-of-plan
+   analysis in ~/gimple-contract-analysis.md on the ABI split between
+   value-passed and reference-passed class types) is never written to
+   anywhere in FUN's body, so a fact self-trust establishes for it from
+   FUN's own precondition remains valid everywhere in FUN, the same
+   order-independent way an SSA-keyed fact already is (see cg_seed_
+   self_trust's own use of this, and cg_established_range_of/cg_
+   provable_nonzero_p/cg_get_relational's own decl-keyed leaf lookup,
+   which never re-derives this -- a decl-keyed fact is only ever seeded
+   after this check has already passed).
+
+   Deliberately NOT built on the general alias oracle (stmt_may_
+   clobber_ref_p and friends): verified empirically (a scratch GCC
+   plugin, not part of this file) that, this early in the pipeline
+   (right after into-SSA, before any IPA/modref summary is available),
+   it conservatively reports "may clobber" for essentially every call
+   statement following the address-taking one -- including the very
+   conversion-operator call this analysis exists to validate, and
+   unrelated calls that don't even receive DECL's address -- making it
+   useless as a precision signal here. A purpose-built, syntactic check
+   instead, via walk_stmt_load_store_addr_ops: DECL is safe iff it is
+   never the target of a direct store, and every address-of it is
+   either passed to a call whose own corresponding formal parameter's
+   pointee type is const-qualified, or captured by this precondition's
+   own runtime-check machinery (cg_addr_disqualifies_p's own second
+   case) -- found necessary by direct testing: *every* function with an
+   actively-checked contract unconditionally takes the address of each
+   referenced-by-value parameter to build that contract's own capture
+   struct, entirely independent of any conversion-operator call, so
+   without this second case this whole analysis would never actually
+   fire for any real, checked contract.
+
+   A class type still passed by value at all (needing this whole
+   analysis) is, by the ABI's own "trivial for the purposes of calls"
+   rule, always trivially destructible -- so no destructor call ever
+   appears here to worry about; a type with a non-trivial destructor
+   (or copy/move constructor) is passed by invisible reference instead,
+   which already gets an ordinary SSA name and needs none of this (see
+   cg_resolve_conversion_receiver's own callers, which reach a plain
+   SSA_NAME receiver directly in that case).  */
+
+static bool
+cg_decl_safe_for_conversion_tracking_p (function *fun, tree decl)
+{
+  cg_conversion_safety_ctx ctx = { fun, decl };
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      if (walk_stmt_load_store_addr_ops (gsi_stmt (gsi), &ctx,
+					  NULL, cg_store_disqualifies_p,
+					  cg_addr_disqualifies_p))
+	return false;
+  return true;
+}
+
+/* The key to use in a self-trust fact map for PARM: its own SSA
+   default-def if it has one, or -- when PARM is address-taken solely
+   for provably-safe const-qualified accessor calls (cg_decl_safe_for_
+   conversion_tracking_p) -- PARM itself, decl-keyed (raw tree-pointer
+   keys mean an SSA name and a decl can never collide, so both key
+   kinds share the same map without ambiguity). NULL_TREE if neither
+   applies, in which case no fact should be seeded for PARM at all --
+   the same silently-conservative behavior this file already had before
+   either key kind existed.  */
+
+static tree
+cg_self_trust_key (function *fun, tree parm)
+{
+  tree ssa = ssa_default_def (fun, parm);
+  if (ssa)
+    return ssa;
+  if (TREE_ADDRESSABLE (parm) && cg_decl_safe_for_conversion_tracking_p (fun, parm))
+    return parm;
+  return NULL_TREE;
 }
 
 /* Seed ESTABLISHED/ESTABLISHED_NZ from FNDECL's own declared
@@ -544,8 +828,8 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 
 	  if (TREE_CODE (arg) != PARM_DECL)
 	    continue;
-	  tree ssa = ssa_default_def (fun, arg);
-	  if (!ssa)
+	  tree key = cg_self_trust_key (fun, arg);
+	  if (!key)
 	    continue;
 
 	  /* CONVEYOR_ENABLED/SYMBOLIC_ENABLED aren't mutually exclusive,
@@ -553,7 +837,7 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	     still only ever produces ONE fact, correctly tagged
 	     conveyor_established for the one-way trust rule -- there is
 	     no meaningful "established twice, differently" case here.  */
-	  target->put (ssa, { conveyor_enabled });
+	  target->put (key, { conveyor_enabled });
 	}
 
       /* A relational conjunct against another of the SAME function's
@@ -569,10 +853,10 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	  if (!oa_match_comparison_against_param (*conjuncts[i], &rel_param,
 						   &rel_code, &rel_other))
 	    continue;
-	  tree ssa_param = ssa_default_def (fun, rel_param);
-	  tree ssa_other = ssa_default_def (fun, rel_other);
-	  if (ssa_param && ssa_other)
-	    established_rel.put (ssa_param, { rel_code, ssa_other, conveyor_enabled });
+	  tree key_param = cg_self_trust_key (fun, rel_param);
+	  tree key_other = cg_self_trust_key (fun, rel_other);
+	  if (key_param && key_other)
+	    established_rel.put (key_param, { rel_code, key_other, conveyor_enabled });
 	}
 
       /* Range conjuncts need their own pass: several conjuncts can name
@@ -595,9 +879,9 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	  cg_range_lite range;
 	  if (!cg_extract_conjunct_range (conjuncts, params[p], &range))
 	    continue;
-	  tree ssa = ssa_default_def (fun, params[p]);
-	  if (ssa)
-	    established_range.put (ssa, range);
+	  tree key = cg_self_trust_key (fun, params[p]);
+	  if (key)
+	    established_range.put (key, range);
 	}
     }
 }
@@ -680,7 +964,23 @@ static bool
 cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
 		    tree_code *code_out, tree *rhs_out, bool *conveyor_out)
 {
-  if (val == NULL_TREE || TREE_CODE (val) != SSA_NAME)
+  if (val == NULL_TREE)
+    return false;
+
+  /* A decl-keyed fact -- see cg_established_range_of's own identical
+     comment.  A plain decl is a leaf: no SSA def-stmt to walk.  */
+  if (VAR_P (val) || TREE_CODE (val) == PARM_DECL)
+    {
+      cg_rel_fact *fact = established_rel.get (val);
+      if (!fact)
+	return false;
+      *code_out = fact->code;
+      *rhs_out = fact->rhs;
+      *conveyor_out = fact->conveyor_established;
+      return true;
+    }
+
+  if (TREE_CODE (val) != SSA_NAME)
     return false;
 
   if (cg_rel_fact *fact = established_rel.get (val))
@@ -693,8 +993,18 @@ cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
 
   gimple *def = SSA_NAME_DEF_STMT (val);
   if (def && is_gimple_call (def))
-    return cg_call_postcondition_relation_p (as_a <gcall *> (def), code_out,
-					      rhs_out, conveyor_out);
+    {
+      if (cg_call_postcondition_relation_p (as_a <gcall *> (def), code_out,
+					     rhs_out, conveyor_out))
+	return true;
+      /* A class-typed operand reached via its own implicit conversion
+	 operator -- recurse into the receiver.  */
+      tree receiver = cg_resolve_conversion_receiver (val);
+      if (receiver != val)
+	return cg_get_relational (receiver, established_rel, code_out,
+				   rhs_out, conveyor_out);
+      return false;
+    }
   if (def && is_gimple_assign (def))
     {
       enum tree_code code = gimple_assign_rhs_code (def);
@@ -832,6 +1142,16 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      continue;
 	    }
 
+	  /* SUB_OTHER must be resolved through the same conversion-operator
+	     lookthrough cg_get_relational applies to SUB_PARAM before
+	     comparing identities -- e.g. two class-typed parameters each
+	     converted to int for a plain-int callee's own precondition
+	     ('check (x, q)' where x/q are wrap-typed): SUB_OTHER arrives
+	     here as q's own converted SSA result, not q itself, and would
+	     never match FACT_RHS (q, as self-trust originally recorded it)
+	     without this step.  */
+	  tree resolved_other = cg_resolve_conversion_receiver (sub_other);
+
 	  tree_code fact_code;
 	  tree fact_rhs;
 	  bool fact_conveyor_established;
@@ -839,7 +1159,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 				  &fact_rhs, &fact_conveyor_established)
 	      && oa_relational_code_implies (fact_code, rel_code)
 	      && (!require_conveyor || fact_conveyor_established)
-	      && fact_rhs == sub_other)
+	      && fact_rhs == resolved_other)
 	    continue; /* Proven true: silently discharged.  */
 
 	  warning_at (gimple_location (call), 0,
