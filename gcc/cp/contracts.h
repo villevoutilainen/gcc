@@ -357,6 +357,27 @@ extern void oa_precondition_field_range_obligations
 		      void *data),
    void *data);
 
+/* If CONJUNCT has the ptr->field shape ('ptr->field OP const' or
+   '(*ptr).field OP const'), recognize it and fill FIELD_OUT/
+   PTR_EXPR_OUT/CODE_OUT/CONST_VAL_OUT -- the ptr->field analogue of
+   oa_match_simple_comparison above.  PTR_EXPR_OUT is presented wrapped
+   for const-qualified access (typically a NOP_EXPR around the real
+   PARM_DECL, including 'this') -- pass it through
+   oa_strip_symbolic_ptr_expr_public below before resolving identity.
+   Exported (alongside that stripping helper) for a GIMPLE-pass-based
+   consumer that needs to recognize this shape directly rather than
+   through oa_precondition_field_range_obligations's own PRECONDITION_
+   P/oa_contract_fact_tracking_active_p-gated iteration -- e.g. to
+   collect the *established* (POSTCONDITION_P) side of this same shape,
+   which that export doesn't cover.  */
+extern bool oa_match_field_range_comparison
+  (tree conjunct, tree *field_out, tree *ptr_expr_out, tree_code *code_out,
+   tree *const_val_out);
+
+/* Strip PTR_EXPR (as extracted by oa_match_field_range_comparison) down
+   to its own real decl -- see that function's own comment.  */
+extern tree oa_strip_symbolic_ptr_expr_public (tree ptr_expr);
+
 /* True while parsing/substituting a contract condition that opts into
    constification via its control type's constify member (D4324: off by
    default).  */
