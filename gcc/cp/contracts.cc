@@ -8152,6 +8152,15 @@ static void oa_handle_call_conveyor_field_range_obligation
    own two parameters at this specific call site.  */
 static tree oa_substitute_call_arg (tree callee, tree call, tree param);
 
+/* Forward-declared: full definition is much further below, near
+   oa_env_check_comparison_1 (its own non-relational sibling), but both
+   oa_handle_call_conveyor_proof_obligation here and oa_handle_call_
+   symbolic_precondition_obligation need it before that point in the
+   file.  */
+static oa_proof_result oa_env_check_relational_fact_1
+  (oa_env &env, tree substituted_param, tree_code required_code,
+   tree substituted_other, bool require_conveyor);
+
 /* True if an established relational fact of code ESTABLISHED is
    strong enough to satisfy a required comparison of code REQUIRED --
    e.g. an established '<' satisfies a required '<=' (a stricter fact
@@ -8259,44 +8268,27 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	    {
 	      tree sub_param = oa_substitute_call_arg (callee, call, rel_param);
 	      tree sub_other = oa_substitute_call_arg (callee, call, rel_other);
-	      tree stripped_param
-		= sub_param ? oa_strip_to_relational_operand (sub_param) : NULL_TREE;
-	      tree stripped_other
-		= sub_other ? oa_strip_to_relational_operand (sub_other) : NULL_TREE;
-
-	      /* Both sides happen to be ordinary compile-time literals at
-		 THIS specific call site (e.g. a caller passing '5' directly,
-		 or relying on a plain scalar default argument that's
-		 already a literal) -- plain constant folding, not resolving
-		 any parameter's own opaque meaning, so this is unconditionally
-		 safe and needs no established fact at all.  */
-	      if (stripped_param && stripped_other
-		  && TREE_CODE (stripped_param) == INTEGER_CST
-		  && TREE_CODE (stripped_other) == INTEGER_CST)
+	      oa_proof_result rel_pr
+		= oa_env_check_relational_fact_1 (env, sub_param, rel_code, sub_other,
+					   /*require_conveyor=*/true);
+	      switch (rel_pr)
 		{
-		  if (oa_relational_literal_holds (rel_code, stripped_param,
-						    stripped_other))
-		    continue; /* Proven true: silently discharged.  */
+		case OA_PROVEN_TRUE:
+		  break; /* Silently discharged.  */
+		case OA_PROVEN_FALSE:
 		  error_at (EXPR_LOCATION (call),
 			    "argument %qE provably violates the precondition "
 			    "of %qD", sub_param, callee);
 		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
-		  continue;
+		  break;
+		case OA_UNKNOWN:
+		  warning_at (EXPR_LOCATION (call), 0,
+			      "cannot verify that %qE satisfies the "
+			      "precondition of %qD",
+			      sub_param ? sub_param : rel_param, callee);
+		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  break;
 		}
-
-	      oa_relational_fact fact;
-	      if (sub_param && sub_other
-		  && oa_get_relational (sub_param, env, &fact)
-		  && oa_relational_code_implies (fact.code, rel_code)
-		  && fact.conveyor_established
-		  && oa_strip_to_relational_operand (fact.rhs) == stripped_other)
-		continue; /* Proven true: silently discharged.  */
-
-	      warning_at (EXPR_LOCATION (call), 0,
-			  "cannot verify that %qE satisfies the "
-			  "precondition of %qD",
-			  sub_param ? sub_param : rel_param, callee);
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
 
@@ -8789,40 +8781,27 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 
 	  tree sub_param = oa_substitute_call_arg (callee, call, rel_param);
 	  tree sub_other = oa_substitute_call_arg (callee, call, rel_other);
-	  tree stripped_param
-	    = sub_param ? oa_strip_to_relational_operand (sub_param) : NULL_TREE;
-	  tree stripped_other
-	    = sub_other ? oa_strip_to_relational_operand (sub_other) : NULL_TREE;
-
-	  /* Both sides are ordinary compile-time literals at this call
-	     site -- plain constant folding, see the identical comment in
-	     oa_handle_call_conveyor_proof_obligation.  */
-	  if (stripped_param && stripped_other
-	      && TREE_CODE (stripped_param) == INTEGER_CST
-	      && TREE_CODE (stripped_other) == INTEGER_CST)
+	  oa_proof_result rel_pr
+	    = oa_env_check_relational_fact_1 (env, sub_param, rel_code, sub_other,
+					/*require_conveyor=*/false);
+	  switch (rel_pr)
 	    {
-	      if (oa_relational_literal_holds (rel_code, stripped_param,
-						stripped_other))
-		continue; /* Proven true: silently discharged.  */
+	    case OA_PROVEN_TRUE:
+	      break; /* Silently discharged.  */
+	    case OA_PROVEN_FALSE:
 	      error_at (EXPR_LOCATION (call),
 			"argument %qE provably violates the precondition "
 			"of %qD", sub_param, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
-	      continue;
+	      break;
+	    case OA_UNKNOWN:
+	      warning_at (EXPR_LOCATION (call), 0,
+			  "cannot verify that %qE satisfies the "
+			  "precondition of %qD",
+			  sub_param ? sub_param : rel_param, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      break;
 	    }
-
-	  oa_relational_fact fact;
-	  if (sub_param && sub_other
-	      && oa_get_relational (sub_param, env, &fact)
-	      && oa_relational_code_implies (fact.code, rel_code)
-	      && oa_strip_to_relational_operand (fact.rhs) == stripped_other)
-	    continue; /* Proven true: silently discharged.  */
-
-	  warning_at (EXPR_LOCATION (call), 0,
-		      "cannot verify that %qE satisfies the "
-		      "precondition of %qD",
-		      sub_param ? sub_param : rel_param, callee);
-	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	}
 
       /* is_object_address/nonzero-shaped conjuncts: unlike the
@@ -12946,13 +12925,19 @@ oa_match_result_relation (tree conjunct, tree result_id, tree_code *code_out,
    materially different, harder problem than a precondition doing the
    same, and this covers only the direct, single-hop case).  A no-op
    (ENV untouched) for anything else, including when neither opt-in
-   prover is active at all -- relational facts are never part of the
-   mandatory, always-on substrate.  */
+   prover nor a plugin is active at all -- relational facts are never
+   part of the mandatory, always-on substrate.  Gated on OA_CALL_SITE_
+   CALLBACK too, not just the two built-in flags -- matching oa_handle_
+   call_symbolic_postcondition_establishment's own identical gating in
+   oa_scan_calls_in_expr, for the same reason: a plugin driving oa_walk_
+   function_calls needs this bookkeeping done on its behalf even with
+   neither -fcontract-conveyor-proofs nor -fcontract-symbolic-proofs on.  */
 
 static void
 oa_establish_relational_from_call (tree lhs, tree rhs, oa_env &env)
 {
-  if (!flag_contract_conveyor_proofs && !flag_contract_symbolic_proofs)
+  if (!flag_contract_conveyor_proofs && !flag_contract_symbolic_proofs
+      && !oa_call_site_callback)
     return;
   if (rhs == NULL_TREE)
     return;
@@ -13167,6 +13152,68 @@ oa_env_check_range_subsumption (oa_env &env, tree expr, oa_range_fact &req)
   if (!oa_get_range (expr, env, &fact))
     return OA_UNKNOWN;
   return oa_range_subsumption_result (fact, req);
+}
+
+/* The three-way answer a relational obligation's own consult needs: is
+   SUBSTITUTED_PARAM provably REQUIRED_CODE SUBSTITUTED_OTHER, given
+   ENV's current facts? Tries, in order: both sides already ordinary
+   compile-time literals (plain constant folding, oa_relational_
+   literal_holds -- OA_PROVEN_TRUE or OA_PROVEN_FALSE, never UNKNOWN,
+   since two concrete numbers always decide the question outright); an
+   established relational fact (oa_get_relational, which also reaches
+   item 6 via oa_establish_relational_from_call's own earlier work)
+   whose own code implies REQUIRED_CODE and whose own RHS matches
+   SUBSTITUTED_OTHER, filtered by REQUIRE_CONVEYOR the same one-way-
+   trust way every other shared-substrate fact is. Shared by both
+   oa_handle_call_conveyor_proof_obligation/oa_handle_call_symbolic_
+   precondition_obligation (which call this directly, keeping their own
+   diagnostic emission local) and, via the plugin-facing oa_env_check_
+   relational_fact below, any plugin driving oa_walk_function_calls --
+   the same DRY relationship oa_env_check_range_subsumption above has
+   with oa_env_check_comparison.  */
+
+static oa_proof_result
+oa_env_check_relational_fact_1 (oa_env &env, tree substituted_param,
+				 tree_code required_code, tree substituted_other,
+				 bool require_conveyor)
+{
+  tree stripped_param = oa_strip_to_relational_operand (substituted_param);
+  tree stripped_other = oa_strip_to_relational_operand (substituted_other);
+
+  if (stripped_param && stripped_other
+      && TREE_CODE (stripped_param) == INTEGER_CST
+      && TREE_CODE (stripped_other) == INTEGER_CST)
+    return oa_relational_literal_holds (required_code, stripped_param,
+					 stripped_other)
+	   ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
+
+  oa_relational_fact fact;
+  if (oa_get_relational (substituted_param, env, &fact)
+      && oa_relational_code_implies (fact.code, required_code)
+      && (!require_conveyor || fact.conveyor_established)
+      && oa_strip_to_relational_operand (fact.rhs) == stripped_other)
+    return OA_PROVEN_TRUE;
+
+  return OA_UNKNOWN;
+}
+
+/* Public, plugin-facing wrapper over oa_env_check_relational_fact_1,
+   the relational-fact analogue of oa_env_check_comparison immediately
+   below.  SUBSTITUTED_PARAM/SUBSTITUTED_OTHER are the plugin's own
+   already-positionally-substituted call arguments (the same
+   oa_substitute_call_arg-based substitution the plugin already does
+   for oa_env_check_comparison); REQUIRE_CONVEYOR is the same one-way-
+   trust parameter oa_env_check_predicate_fact's own plugin-facing
+   wrapper already exposes.  */
+
+oa_proof_result
+oa_env_check_relational_fact (oa_analysis_env *env, tree substituted_param,
+			       tree_code required_code, tree substituted_other,
+			       bool require_conveyor)
+{
+  return oa_env_check_relational_fact_1 (*reinterpret_cast<oa_env *> (env),
+					  substituted_param, required_code,
+					  substituted_other, require_conveyor);
 }
 
 /* Public, plugin-facing wrapper over oa_env_check_comparison_1 -- see

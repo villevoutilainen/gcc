@@ -57,6 +57,16 @@
    shape, or propagate through a copy/conversion), and GIMPLE_CALL
    (item 6).
 
+   A sixth shape, added as a follow-up once the built-in engines
+   (contracts.cc/contracts-gimple.cc) gained it: a *relational* fact
+   between two of the same function's own parameters ("x < q", q not a
+   literal), via the shared oa_match_comparison_against_param/oa_match_
+   result_relation -- rel_fact_lite/get_relational/call_postcondition_
+   relation_p mirror contracts-gimple.cc's own cg_rel_fact/cg_get_
+   relational/cg_call_postcondition_relation_p exactly, just without a
+   conveyor/symbolic provenance tag (this prototype is flavor-agnostic
+   throughout, unlike the built-in engines).
+
    Deliberately narrow scope, kept out on purpose (see the analysis's
    own "phased plan," section 6, and its own "Section 8"/"Section 9"
    validation-results writeups for how this evolved):
@@ -925,6 +935,105 @@ provable_nonzero_p (tree val, hash_set<tree> &established_nz,
   return result;
 }
 
+/* A sixth fact shape: a *relational* fact between two of the same
+   function's own parameters ("x < q", q not a literal) -- see
+   oa_match_comparison_against_param's own comment in contracts.cc for
+   the full rationale (this recognizes the shape; neither PARAM nor
+   OTHER is ever resolved to a value). Flavor-agnostic like every other
+   fact this prototype tracks (no conveyor/symbolic distinction at
+   all), so no provenance tag is needed here, unlike contracts.cc's own
+   oa_relational_fact or contracts-gimple.cc's own cg_rel_fact.  */
+
+struct rel_fact_lite { tree_code code; tree rhs; };
+
+/* Item 6 for relational facts: does CALLEE's own declared postcondition
+   guarantee a relation between its own return value and one of its
+   OTHER parameters (e.g. 'post<ctrl>(r: r < q)'), via the shared
+   oa_match_result_relation?  Mirrors call_postcondition_range_p's own
+   structure exactly, one shape over.  */
+
+static bool
+call_postcondition_relation_p (tree callee, gcall *call, tree_code *code_out,
+				tree *rhs_out)
+{
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      if (!result_id)
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree_code code;
+	  tree other_param;
+	  if (!oa_match_result_relation (*conjuncts[i], result_id, &code,
+					  &other_param))
+	    continue;
+
+	  unsigned argno;
+	  if (!find_param_position (callee, other_param, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+
+	  *code_out = code;
+	  *rhs_out = gimple_call_arg (call, argno);
+	  return true;
+	}
+    }
+  return false;
+}
+
+/* VAL's own established relational fact, if any -- tries, in order: a
+   self-trusted fact in ESTABLISHED_REL (keyed exactly like ESTABLISHED/
+   ESTABLISHED_NZ elsewhere in this file); a copy/conversion one hop
+   back (the same shape established_range_of already handles); and
+   item 6 via a GIMPLE_CALL def-stmt (call_postcondition_relation_p
+   immediately above).  Mirrors established_range_of's own recursive
+   structure, one shape over.  */
+
+static bool
+get_relational (tree val, hash_map<tree, rel_fact_lite> &established_rel,
+		 tree_code *code_out, tree *rhs_out)
+{
+  if (val == NULL_TREE || TREE_CODE (val) != SSA_NAME)
+    return false;
+
+  if (rel_fact_lite *found = established_rel.get (val))
+    {
+      *code_out = found->code;
+      *rhs_out = found->rhs;
+      return true;
+    }
+
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (def && is_gimple_call (def))
+    {
+      tree callee = gimple_call_fndecl (as_a <gcall *> (def));
+      if (callee
+	  && call_postcondition_relation_p (callee, as_a <gcall *> (def),
+					     code_out, rhs_out))
+	return true;
+    }
+  else if (def && is_gimple_assign (def))
+    {
+      enum tree_code code = gimple_assign_rhs_code (def);
+      if ((CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
+	  && get_relational (gimple_assign_rhs1 (def), established_rel,
+			      code_out, rhs_out))
+	return true;
+    }
+
+  return false;
+}
+
 /* Seed ESTABLISHED/ESTABLISHED_NZ from FNDECL's own declared
    precondition: an is_object_address(p)/'p != 0'-shaped conjunct
    naming one of FNDECL's own parameters is trusted as an axiom for the
@@ -940,7 +1049,8 @@ provable_nonzero_p (tree val, hash_set<tree> &established_nz,
 static void
 seed_self_trust (function *fun, hash_set<tree> &established,
 		  hash_set<tree> &established_nz,
-		  hash_map<tree, oa_range_lite> &established_range)
+		  hash_map<tree, oa_range_lite> &established_range,
+		  hash_map<tree, rel_fact_lite> &established_rel)
 {
   tree fndecl = fun->decl;
   for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
@@ -973,6 +1083,22 @@ seed_self_trust (function *fun, hash_set<tree> &established,
 	  tree ssa = ssa_default_def (fun, arg);
 	  if (ssa)
 	    target->add (ssa);
+	}
+
+      /* A relational conjunct against another of the SAME function's
+	 own parameters -- trust it unconditionally for the rest of this
+	 function's own body, mirroring the two boolean facts above.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree rel_param, rel_other;
+	  tree_code rel_code;
+	  if (!oa_match_comparison_against_param (*conjuncts[i], &rel_param,
+						   &rel_code, &rel_other))
+	    continue;
+	  tree ssa_param = ssa_default_def (fun, rel_param);
+	  tree ssa_other = ssa_default_def (fun, rel_other);
+	  if (ssa_param && ssa_other)
+	    established_rel.put (ssa_param, { rel_code, ssa_other });
 	}
 
       /* Range conjuncts need their own pass: several conjuncts can
@@ -1012,6 +1138,7 @@ static void
 check_call (gcall *call, hash_set<tree> &established,
 	     hash_set<tree> &established_nz,
 	     hash_map<tree, oa_range_lite> &established_range,
+	     hash_map<tree, rel_fact_lite> &established_rel,
 	     gimple_ranger *ranger)
 {
   tree callee = gimple_call_fndecl (call);
@@ -1072,6 +1199,54 @@ check_call (gcall *call, hash_set<tree> &established,
 			  "required by the precondition of %qD",
 			  substituted, callee);
 	    }
+	}
+
+      /* Relational obligations against another of the callee's own
+	 parameters (e.g. 'pre<ctrl>(x < q)') -- both PARM_DECLs
+	 substituted positionally, mirroring the is_object_address/
+	 nonzero loop just above, one shape over.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree rel_param, rel_other;
+	  tree_code rel_code;
+	  if (!oa_match_comparison_against_param (*conjuncts[i], &rel_param,
+						   &rel_code, &rel_other))
+	    continue;
+
+	  unsigned param_argno, other_argno;
+	  if (!find_param_position (callee, rel_param, &param_argno)
+	      || !find_param_position (callee, rel_other, &other_argno)
+	      || param_argno >= gimple_call_num_args (call)
+	      || other_argno >= gimple_call_num_args (call))
+	    continue;
+
+	  tree sub_param = gimple_call_arg (call, param_argno);
+	  tree sub_other = gimple_call_arg (call, other_argno);
+
+	  /* Both sides are ordinary compile-time literals at this call
+	     site -- plain constant folding, not resolving any
+	     parameter's own opaque meaning.  */
+	  if (TREE_CODE (sub_param) == INTEGER_CST
+	      && TREE_CODE (sub_other) == INTEGER_CST)
+	    {
+	      if (oa_relational_literal_holds (rel_code, sub_param, sub_other))
+		continue; /* Proven true: silently discharged.  */
+	      warning_at (gimple_location (call), 0,
+			  "gimple-oa: argument %qE provably violates the "
+			  "precondition of %qD", sub_param, callee);
+	      continue;
+	    }
+
+	  tree_code fact_code;
+	  tree fact_rhs;
+	  if (get_relational (sub_param, established_rel, &fact_code, &fact_rhs)
+	      && oa_relational_code_implies (fact_code, rel_code)
+	      && fact_rhs == sub_other)
+	    continue; /* Proven true: silently discharged.  */
+
+	  warning_at (gimple_location (call), 0,
+		      "gimple-oa: cannot verify that %qE satisfies the "
+		      "precondition of %qD", sub_param, callee);
 	}
 
       /* Range obligations: same per-param grouping as seed_self_trust's
@@ -1146,7 +1321,9 @@ pass_gimple_object_address::execute (function *fun)
   hash_set<tree> established;
   hash_set<tree> established_nz;
   hash_map<tree, oa_range_lite> established_range;
-  seed_self_trust (fun, established, established_nz, established_range);
+  hash_map<tree, rel_fact_lite> established_rel;
+  seed_self_trust (fun, established, established_nz, established_range,
+		    established_rel);
 
   calculate_dominance_info (CDI_DOMINATORS);
   gimple_ranger *ranger = enable_ranger (fun, false);
@@ -1159,7 +1336,7 @@ pass_gimple_object_address::execute (function *fun)
 	gimple *stmt = gsi_stmt (gsi);
 	if (is_gimple_call (stmt))
 	  check_call (as_a <gcall *> (stmt), established, established_nz,
-		      established_range, ranger);
+		      established_range, established_rel, ranger);
       }
 
   disable_ranger (fun);

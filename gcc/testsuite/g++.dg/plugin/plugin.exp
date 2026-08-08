@@ -103,7 +103,10 @@ set plugin_test_list [list \
 	  conveyor-proof-predicate-unknown.C \
 	  conveyor-proof-field-range-ok.C \
 	  conveyor-proof-field-range-bad.C \
-	  conveyor-proof-field-range-unknown.C } \
+	  conveyor-proof-field-range-unknown.C \
+	  conveyor-proof-relational-ok.C \
+	  conveyor-proof-relational-bad.C \
+	  conveyor-proof-relational-unknown.C } \
     { symbolic_proof_plugin.cc \
 	  symbolic-proof-predicate-ok.C \
 	  symbolic-proof-predicate-bad.C \
@@ -116,7 +119,10 @@ set plugin_test_list [list \
 	  symbolic-proof-field-range-unknown.C \
 	  symbolic-proof-predicate-returnvalue-ok.C \
 	  symbolic-proof-predicate-returnvalue-bad.C \
-	  symbolic-proof-predicate-returnvalue-unknown.C } \
+	  symbolic-proof-predicate-returnvalue-unknown.C \
+	  symbolic-proof-relational-ok.C \
+	  symbolic-proof-relational-bad.C \
+	  symbolic-proof-relational-unknown.C } \
     { gimple_object_address_plugin.cc \
 	  gimple-object-address-ok.C \
 	  gimple-object-address-self-trust-ok.C \
@@ -138,7 +144,11 @@ set plugin_test_list [list \
 	  gimple-field-range-ok.C \
 	  gimple-field-range-self-trust-ok.C \
 	  gimple-field-range-invalidated.C \
-	  gimple-field-range-unknown.C } \
+	  gimple-field-range-unknown.C \
+	  gimple-relational-ok.C \
+	  gimple-relational-self-trust-ok.C \
+	  gimple-relational-postcondition-ok.C \
+	  gimple-relational-unknown.C } \
 ]
 
 foreach file [find $PLUGIN_DEFAULT_REPO *.gcm] {

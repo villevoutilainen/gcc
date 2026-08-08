@@ -38,7 +38,17 @@
    oa_contract_fact_tracking_active_p's own comment in contracts.cc),
    so the plugin gets full, real, cross-statement-tracked fact tracking
    -- the same engine the built-in checker uses -- purely through
-   -fcontract-control-objects.  */
+   -fcontract-control-objects.
+
+   A fourth check covers a relational precondition against another of
+   the same callee's own parameters ("pre<ctrl>(x < q)"-style, q not a
+   literal), via oa_match_comparison_against_param/oa_env_check_
+   relational_fact (REQUIRE_CONVEYOR false, the allowed direction: a
+   conveyor-established relational fact is trustworthy enough for this
+   symbolic obligation too) -- the same relational-fact tracking
+   -fcontract-symbolic-proofs itself gained (see .claude/plans/well-we-
+   last-discussed-ethereal-duckling.md), closing what used to be a
+   silent gap shared with the conveyor plugin.  */
 
 #include "gcc-plugin.h"
 #include "config.h"
@@ -221,6 +231,48 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	      warning_at (EXPR_LOCATION (call), 0,
 			  "cannot verify that %qD (%qE) holds, as required by "
 			  "the precondition of %qD", pred_fn, substituted, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      break;
+	    }
+	}
+
+      /* Not a predicate-identity conjunct -- try "param OP another of
+	 CALLEE's own parameters" instead (e.g. 'pre<ctrl>(x < q)'), via
+	 the engine's own oa_match_comparison_against_param/oa_env_check_
+	 relational_fact -- the same relational-fact tracking
+	 -fcontract-symbolic-proofs itself gained (see .claude/plans/
+	 well-we-last-discussed-ethereal-duckling.md). REQUIRE_CONVEYOR is
+	 false here (the allowed direction: a conveyor-established fact
+	 satisfies this symbolic obligation too), unlike the conveyor
+	 plugin's own identical-looking check.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree rel_param, rel_other;
+	  tree_code rel_code;
+	  if (!oa_match_comparison_against_param (*conjuncts[i], &rel_param,
+						   &rel_code, &rel_other))
+	    continue;
+
+	  tree sub_param = substitute_arg (callee, call, rel_param);
+	  tree sub_other = substitute_arg (callee, call, rel_other);
+	  oa_proof_result r
+	    = oa_env_check_relational_fact (env, sub_param, rel_code,
+					     sub_other, /*require_conveyor=*/false);
+	  switch (r)
+	    {
+	    case OA_PROVEN_TRUE:
+	      break;
+	    case OA_PROVEN_FALSE:
+	      error_at (EXPR_LOCATION (call),
+			"argument %qE provably violates the precondition "
+			"of %qD", sub_param, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      break;
+	    case OA_UNKNOWN:
+	      warning_at (EXPR_LOCATION (call), 0,
+			  "cannot verify that %qE satisfies the "
+			  "precondition of %qD",
+			  sub_param ? sub_param : rel_param, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }

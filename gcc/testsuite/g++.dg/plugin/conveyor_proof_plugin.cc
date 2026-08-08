@@ -63,7 +63,17 @@
    shared, not symbolic-exclusive: CALLEE could carry preconditions of
    either flavor, so this plugin filters matches to its own conveyor-
    active ones, exactly as the symbolic plugin filters to its own
-   symbolic-active ones).  */
+   symbolic-active ones).
+
+   A fourth check covers a relational precondition against another of
+   the same callee's own parameters ("pre<ctrl>(x < q)"-style, q not a
+   literal), via oa_match_comparison_against_param/oa_env_check_
+   relational_fact -- the same relational-fact tracking -fcontract-
+   conveyor-proofs itself gained (see .claude/plans/well-we-last-
+   discussed-ethereal-duckling.md), closing what used to be a silent
+   gap: neither the plain-comparison check above (which requires an
+   already-literal bound) nor any other check here recognized this
+   shape at all.  */
 
 #include "gcc-plugin.h"
 #include "config.h"
@@ -147,6 +157,24 @@ field_range_callback (tree contract, tree field, tree base_parm,
     }
 }
 
+/* Positional correspondence between CALLEE's own PARM_DECLs and CALL's
+   actual argument expressions -- the same bare-parameter-only scope
+   the two inline duplicates of this loop already have in check_call
+   below, factored out once for the new relational check's own use
+   (oa_substitute_call_arg, the engine's own internal equivalent, isn't
+   exported -- this plugin has always had its own copy).  */
+
+static tree
+substitute_call_arg (tree callee, tree call, tree param)
+{
+  unsigned argno = 0;
+  for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
+    if (p == param)
+      return argno < (unsigned) call_expr_nargs (call)
+	     ? CALL_EXPR_ARG (call, argno) : NULL_TREE;
+  return NULL_TREE;
+}
+
 /* One call site's precondition-obligation check, invoked by
    oa_walk_function_calls at every call in program order.  */
 
@@ -207,6 +235,46 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 		  warning_at (EXPR_LOCATION (call), 0,
 			      "cannot verify that %qE satisfies the "
 			      "precondition of %qD", substituted, callee);
+		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  break;
+		}
+	      continue;
+	    }
+
+	  /* Not a comparison against a literal -- try "param OP another of
+	     CALLEE's own parameters" instead (e.g. 'pre<ctrl>(x < q)'),
+	     via the engine's own oa_match_comparison_against_param/
+	     oa_env_check_relational_fact -- the same relational-fact
+	     tracking -fcontract-conveyor-proofs itself gained (see
+	     .claude/plans/well-we-last-discussed-ethereal-duckling.md):
+	     neither PARAM's own value nor OTHER's is ever resolved except
+	     when both substitute to already-literal arguments at this
+	     specific call site.  */
+	  tree rel_param, rel_other;
+	  tree_code rel_code;
+	  if (oa_match_comparison_against_param (*conjuncts[i], &rel_param,
+						  &rel_code, &rel_other))
+	    {
+	      tree sub_param = substitute_call_arg (callee, call, rel_param);
+	      tree sub_other = substitute_call_arg (callee, call, rel_other);
+	      oa_proof_result r
+		= oa_env_check_relational_fact (env, sub_param, rel_code,
+						 sub_other, /*require_conveyor=*/true);
+	      switch (r)
+		{
+		case OA_PROVEN_TRUE:
+		  break;
+		case OA_PROVEN_FALSE:
+		  error_at (EXPR_LOCATION (call),
+			    "argument %qE provably violates the precondition "
+			    "of %qD", sub_param, callee);
+		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  break;
+		case OA_UNKNOWN:
+		  warning_at (EXPR_LOCATION (call), 0,
+			      "cannot verify that %qE satisfies the "
+			      "precondition of %qD",
+			      sub_param ? sub_param : rel_param, callee);
 		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		  break;
 		}
