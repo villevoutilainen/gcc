@@ -260,6 +260,25 @@ extern bool oa_contract_symbolic_active_public (tree contract, tree owner_fn);
 extern bool oa_match_predicate_conjunct
   (tree conjunct, tree *pred_fn_out, tree *arg_decl_out, bool *negated_out);
 
+/* If CALL is a call to a specialization of std::is_object_address,
+   return true and set *ARG to its (single) argument expression --
+   the exact same recognizer the compiler's own mandatory UB-freedom
+   pass and both built-in provers already use internally
+   (contracts.cc), now also exported so a plugin can recognize the
+   shape of a *declared* precondition/postcondition/contract_assert
+   conjunct directly (e.g. via get_fn_contract_specifiers +
+   CONTRACT_CONDITION) without needing its own, separately-maintained
+   copy of the recognition logic. Deliberately front-end/GENERIC-level
+   only: it operates on the *declared* condition tree, unaffected by
+   whether the owning function's own body has been genericized/
+   gimplified/outlined into a predicate-core function yet -- see the
+   "front-end-assisted" design in ~/gimple-contract-analysis.md, whose
+   whole point is that a GIMPLE-time consumer never needs to chase the
+   outlining machinery to answer "what does this contract say," only
+   to answer "is this fact true right here," which it does with its
+   own, GIMPLE/SSA-native machinery instead.  */
+extern bool is_object_address_call_p (tree call, tree *arg);
+
 /* Is OBJ_EXPR established by ENV's current (real, cross-statement-
    tracked) facts to have PRED_FN hold at REQUIRED_POLARITY, established
    at the opposite polarity, or unknown?  Backed by the same shared
