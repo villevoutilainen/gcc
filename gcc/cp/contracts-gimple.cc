@@ -277,6 +277,86 @@ cg_resolve_conversion_receiver (tree val)
   return receiver;
 }
 
+/* If ARG is 'ADDR_EXPR (temp)' for some local VAR_DECL TEMP -- the
+   shape a class-typed argument forwarded BY VALUE to CALL takes when
+   its own type isn't trivially copyable (Itanium ABI "non-trivial for
+   the purposes of calls": passed by invisible reference, materialized
+   into a temporary the caller constructs) -- search backward through
+   CALL's own containing basic block (from CALL towards the block's
+   start) for a GIMPLE_CALL whose own first argument is the same
+   ADDR_EXPR (TEMP) and whose callee is a copy or move constructor;
+   if found, return its own *last* argument (a copy/move constructor
+   has exactly one user-visible parameter, always last -- see
+   contracts.cc's own oa_strip_conversion_call, which found by direct
+   testing that an extra, compiler-internal leading argument can
+   precede it, so the count alone isn't reliable), recursed through
+   cg_resolve_conversion_receiver too in case of a further chained
+   conversion-operator call. Otherwise return ARG unchanged.
+
+   Confirmed via -fdump-tree-ssa that the constructing call and the
+   forwarding call remain in the same basic block even when the
+   temporary's own type has a non-trivial destructor (whose GENERIC-
+   level try/finally region collapses away here, since no exception
+   path is actually reachable) -- this deliberately does not search
+   beyond CALL's own block, consistent with this file's own "decline
+   rather than guess" discipline for any shape reached a different
+   way.  */
+
+static tree
+cg_resolve_copy_construction_receiver (gcall *call, tree arg)
+{
+  if (TREE_CODE (arg) != ADDR_EXPR)
+    return arg;
+  tree temp = TREE_OPERAND (arg, 0);
+  if (!VAR_P (temp))
+    return arg;
+
+  for (gimple_stmt_iterator gsi = gsi_for_stmt (call); !gsi_end_p (gsi);
+       gsi_prev (&gsi))
+    {
+      gimple *stmt = gsi_stmt (gsi);
+      if (stmt == call || !is_gimple_call (stmt))
+	continue;
+      gcall *ctor_call = as_a <gcall *> (stmt);
+      if (gimple_call_num_args (ctor_call) < 1)
+	continue;
+      tree ctor_recv = gimple_call_arg (ctor_call, 0);
+      if (TREE_CODE (ctor_recv) != ADDR_EXPR || TREE_OPERAND (ctor_recv, 0) != temp)
+	continue;
+      tree ctor = gimple_call_fndecl (ctor_call);
+      if (!ctor || !(DECL_COPY_CONSTRUCTOR_P (ctor) || DECL_MOVE_CONSTRUCTOR_P (ctor)))
+	continue;
+      unsigned nargs = gimple_call_num_args (ctor_call);
+      if (nargs < 2)
+	continue;
+      tree source = gimple_call_arg (ctor_call, nargs - 1);
+      if (TREE_CODE (source) == ADDR_EXPR)
+	source = TREE_OPERAND (source, 0);
+      return cg_resolve_conversion_receiver (source);
+    }
+  return arg;
+}
+
+/* CALL's own ARGNO-th actual argument, resolved through both a
+   conversion-operator call (cg_resolve_conversion_receiver) and a
+   copy/move-constructor materialization (cg_resolve_copy_construction_
+   receiver above) -- the single entry point cg_check_call/cg_call_
+   postcondition_relation_p use instead of bare gimple_call_arg, so a
+   class-typed argument forwarded from the caller's own decl (via
+   conversion, via copy, or both chained) is recognized uniformly.
+   Copy-construction resolution must run first: its own input shape
+   (ADDR_EXPR of a memory temp) is exactly what cg_resolve_conversion_
+   receiver's own SSA_NAME check would otherwise reject outright.  */
+
+static tree
+cg_resolve_call_argument (gcall *call, unsigned argno)
+{
+  tree arg = gimple_call_arg (call, argno);
+  arg = cg_resolve_copy_construction_receiver (call, arg);
+  arg = cg_resolve_conversion_receiver (arg);
+  return arg;
+}
+
 /* Resolve VAL's own range, trying, in order: a literal constant; a
    self-trusted/item-6 fact in ESTABLISHED_RANGE (keyed exactly like
    ESTABLISHED/ESTABLISHED_NZ elsewhere in this file, gated the same
@@ -940,7 +1020,7 @@ cg_call_postcondition_relation_p (gcall *call, tree_code *code_out,
 	    continue;
 
 	  *code_out = code;
-	  *rhs_out = gimple_call_arg (call, argno);
+	  *rhs_out = cg_resolve_call_argument (call, argno);
 	  *conveyor_out = conveyor_active;
 	  return true;
 	}
@@ -1081,7 +1161,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      || argno >= gimple_call_num_args (call))
 	    continue;
 
-	  tree substituted = gimple_call_arg (call, argno);
+	  tree substituted = cg_resolve_call_argument (call, argno);
 	  hash_set<tree> in_progress;
 	  if (is_oa)
 	    {
@@ -1124,8 +1204,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      || other_argno >= gimple_call_num_args (call))
 	    continue;
 
-	  tree sub_param = gimple_call_arg (call, param_argno);
-	  tree sub_other = gimple_call_arg (call, other_argno);
+	  tree sub_param = cg_resolve_call_argument (call, param_argno);
+	  tree sub_other = cg_resolve_call_argument (call, other_argno);
 
 	  /* Both sides are ordinary compile-time literals at this call
 	     site -- plain constant folding, not resolving any
@@ -1142,16 +1222,16 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      continue;
 	    }
 
-	  /* SUB_OTHER must be resolved through the same conversion-operator
-	     lookthrough cg_get_relational applies to SUB_PARAM before
-	     comparing identities -- e.g. two class-typed parameters each
-	     converted to int for a plain-int callee's own precondition
-	     ('check (x, q)' where x/q are wrap-typed): SUB_OTHER arrives
-	     here as q's own converted SSA result, not q itself, and would
-	     never match FACT_RHS (q, as self-trust originally recorded it)
-	     without this step.  */
-	  tree resolved_other = cg_resolve_conversion_receiver (sub_other);
-
+	  /* SUB_OTHER is already resolved through the same conversion-
+	     operator/copy-construction lookthrough (cg_resolve_call_
+	     argument, above) that cg_get_relational applies to SUB_PARAM
+	     internally, so comparing it directly against FACT_RHS below
+	     is safe -- e.g. two class-typed parameters each converted to
+	     int for a plain-int callee's own precondition ('check (x, q)'
+	     where x/q are wrap-typed): without this, SUB_OTHER would
+	     arrive as q's own converted SSA result, not q itself, and
+	     never match FACT_RHS (q, as self-trust originally recorded
+	     it).  */
 	  tree_code fact_code;
 	  tree fact_rhs;
 	  bool fact_conveyor_established;
@@ -1159,7 +1239,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 				  &fact_rhs, &fact_conveyor_established)
 	      && oa_relational_code_implies (fact_code, rel_code)
 	      && (!require_conveyor || fact_conveyor_established)
-	      && fact_rhs == resolved_other)
+	      && fact_rhs == sub_other)
 	    continue; /* Proven true: silently discharged.  */
 
 	  warning_at (gimple_location (call), 0,
@@ -1191,7 +1271,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  if (!cg_find_param_position (callee, params[p], &argno)
 	      || argno >= gimple_call_num_args (call))
 	    continue;
-	  tree substituted = gimple_call_arg (call, argno);
+	  tree substituted = cg_resolve_call_argument (call, argno);
 
 	  cg_range_lite established_r;
 	  if (cg_established_range_of (substituted, established_range,
