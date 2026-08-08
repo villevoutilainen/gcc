@@ -61,20 +61,22 @@ along with GCC; see the file COPYING3.  If not see
    obligation. CONVEYOR_ESTABLISHED, carried alongside every fact this
    file tracks, is exactly that provenance tag.
 
-   Scope so far: is_object_address, nonzero-ness, and general numeric
-   ranges (self-trust, call-site consult, and item 6's postcondition-
-   return-value guarantee for all three) -- the two persistent-object
-   fact shapes (named predicates, ptr->field ranges) are not yet
-   ported from the validated plugin prototype. IILE recursion remains
-   permanently out of scope, per the same instruction that applied to
-   the plugin prototype.
+   Full parity with the validated plugin prototype: is_object_address,
+   nonzero-ness, general numeric ranges, named predicates, and
+   ptr->field ranges, each with self-trust, call-site consult, and
+   item 6's postcondition-return-value guarantee (the two persistent-
+   object fact shapes -- named predicates, ptr->field ranges -- via
+   their own dominator-tree dataflow instead, see cg_predicate_dom_
+   walker below). IILE recursion remains permanently out of scope, per
+   the same instruction that applied to the plugin prototype.
 
-   One-way trust applies to is_object_address/nonzero (see cg_fact
-   below) but deliberately NOT to general ranges: mirroring
-   contracts.cc's own m_contract_scalar_range_map (consulted
-   identically by both -fcontract-conveyor-proofs and -fcontract-
-   symbolic-proofs, with no conveyor_established tag at all, unlike
-   oa_predicate_fact/oa_contract_field_range_fact), a range fact here
+   One-way trust applies to is_object_address/nonzero/named-predicates/
+   ptr->field-ranges (see cg_fact/cg_pred_fact/cg_field_fact below) but
+   deliberately NOT to general ranges: mirroring contracts.cc's own
+   m_contract_scalar_range_map (consulted identically by both
+   -fcontract-conveyor-proofs and -fcontract-symbolic-proofs, with no
+   conveyor_established tag at all, unlike oa_predicate_fact/
+   oa_contract_field_range_fact, which do carry it), a range fact here
    carries no flavor provenance -- only whether the specific contract
    that established it was flavor-enabled at all (so self-trust/
    consult still only happen when the matching -fcontract-*-proofs-
@@ -100,6 +102,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "diagnostic.h"
 #include "stringpool.h"
 #include "gimple-range.h"
+#include "domwalk.h"
+#include "hash-traits.h"
 
 /* Positional correspondence between CALLEE's own PARM_DECLs and CALL's
    actual argument expressions -- the GIMPLE-level analogue of
@@ -697,6 +701,397 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
     }
 }
 
+/* Two persistent-object fact shapes, ported from the validated plugin
+   prototype's own dominator-tree dataflow (see that file's own
+   extensive top comment on predicate_dom_walker for the full
+   rationale): named predicates ('is_opened(this)') and ptr->field
+   ranges ('this->count in [0, N)'). Unlike the value-based facts
+   above, these ARE one-way-trust-tagged (cg_pred_fact/cg_field_fact's
+   own CONVEYOR_ESTABLISHED), matching contracts.cc's own
+   oa_predicate_fact/oa_contract_field_range_fact -- both of those
+   carry the tag in the real engine, unlike oa_range_fact (see this
+   file's own top comment on why general ranges are the one exception).
+   Self-trust/establish are gated on flavor-enabled exactly like
+   cg_seed_self_trust/cg_check_call; invalidation is unconditional
+   (a safety measure, not a trust concern, so it never depends on
+   which -fcontract-*-proofs-gimple flags happen to be on).  */
+
+struct cg_pred_fact { tree pred_fn; bool polarity; bool conveyor_established; };
+struct cg_field_fact { cg_range_lite range; bool conveyor_established; };
+typedef pair_hash<nofree_ptr_hash<tree_node>, nofree_ptr_hash<tree_node>>
+  cg_field_key_hash;
+
+struct cg_dom_fact_state
+{
+  hash_map<tree, cg_pred_fact> pred;
+  hash_map<cg_field_key_hash, cg_field_fact> field;
+};
+
+/* An SSA_NAME's own identity is itself; '&decl' resolves to DECL
+   directly -- see the plugin's own identical gimple_object_identity
+   for the full rationale (unifying plain-object and pointer
+   receivers).  */
+
+static tree
+cg_gimple_object_identity (tree val)
+{
+  if (val == NULL_TREE)
+    return NULL_TREE;
+  if (TREE_CODE (val) == ADDR_EXPR)
+    {
+      tree op = TREE_OPERAND (val, 0);
+      if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
+	return op;
+      return NULL_TREE;
+    }
+  if (TREE_CODE (val) == SSA_NAME && POINTER_TYPE_P (TREE_TYPE (val)))
+    return val;
+  return NULL_TREE;
+}
+
+/* A ptr->field range conjunct group, exactly like contracts.cc's own
+   oa_symbolic_field_group, built from the exported oa_match_field_
+   range_comparison/oa_strip_symbolic_ptr_expr_public primitives
+   directly (see the plugin's own identical collect_field_range_groups
+   for why: contracts.cc's own PRECONDITION_P/oa_contract_fact_
+   tracking_active_p-gated iteration was found unreliable at GIMPLE-pass
+   time, the same reliability gap Section 10 of ~/gimple-contract-
+   analysis.md fixed for flavor checks specifically).  */
+
+struct cg_field_group_lite { tree field; tree ptr_expr; cg_range_lite range; };
+
+static void
+cg_collect_field_range_groups (tree cond, vec<cg_field_group_lite> *out)
+{
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree field, ptr_expr, const_val;
+      tree_code code;
+      if (!oa_match_field_range_comparison (*conjuncts[i], &field, &ptr_expr,
+					     &code, &const_val)
+	  || TREE_CODE (const_val) != INTEGER_CST)
+	continue;
+      ptr_expr = oa_strip_symbolic_ptr_expr_public (ptr_expr);
+      if (TREE_CODE (ptr_expr) != PARM_DECL)
+	continue;
+
+      cg_field_group_lite *found = NULL;
+      for (unsigned j = 0; j < out->length () && !found; ++j)
+	if ((*out)[j].field == field && (*out)[j].ptr_expr == ptr_expr)
+	  found = &(*out)[j];
+      if (!found)
+	{
+	  cg_field_group_lite g;
+	  g.field = field;
+	  g.ptr_expr = ptr_expr;
+	  out->safe_push (g);
+	  found = &out->last ();
+	}
+      cg_tighten_range_bound (found->range, code, wi::to_widest (const_val));
+    }
+}
+
+/* Seed SEED from FNDECL's own declared precondition -- self-trust, the
+   persistent-fact analogue of cg_seed_self_trust.  */
+
+static void
+cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
+{
+  tree fndecl = fun->decl;
+  for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract))
+	continue;
+      bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
+      bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
+      bool conveyor_enabled = conveyor_active && flag_contract_conveyor_proofs_gimple;
+      bool symbolic_enabled = symbolic_active && flag_contract_symbolic_proofs_gimple;
+      if (!conveyor_enabled && !symbolic_enabled)
+	continue;
+
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree pred_fn, arg_decl;
+	  bool negated;
+	  if (!oa_match_predicate_conjunct (*conjuncts[i], &pred_fn, &arg_decl,
+					     &negated))
+	    continue;
+	  if (TREE_CODE (arg_decl) != PARM_DECL)
+	    continue;
+	  tree ssa = ssa_default_def (fun, arg_decl);
+	  if (ssa)
+	    seed.pred.put (ssa, { pred_fn, !negated, conveyor_enabled });
+	}
+
+      auto_vec<cg_field_group_lite> field_groups;
+      cg_collect_field_range_groups (cond, &field_groups);
+      for (unsigned g = 0; g < field_groups.length (); ++g)
+	{
+	  tree ssa = ssa_default_def (fun, field_groups[g].ptr_expr);
+	  if (ssa)
+	    seed.field.put ({ssa, field_groups[g].field},
+			     { field_groups[g].range, conveyor_enabled });
+	}
+    }
+}
+
+/* CALL's own callee's declared precondition, checked against STATE as
+   it stands right before CALL -- the consult side, for both facts,
+   the persistent-fact analogue of cg_check_call.  */
+
+static void
+cg_consult_persistent_facts (gcall *call, cg_dom_fact_state &state)
+{
+  tree callee = gimple_call_fndecl (call);
+  if (!callee)
+    return;
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract))
+	continue;
+      bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
+      bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
+      bool check_as_conveyor = conveyor_active && flag_contract_conveyor_proofs_gimple;
+      bool check_as_symbolic = symbolic_active && flag_contract_symbolic_proofs_gimple;
+      if (!check_as_conveyor && !check_as_symbolic)
+	continue;
+      bool require_conveyor = check_as_conveyor;
+
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree pred_fn, arg_decl;
+	  bool negated;
+	  if (!oa_match_predicate_conjunct (*conjuncts[i], &pred_fn, &arg_decl,
+					     &negated))
+	    continue;
+
+	  unsigned argno;
+	  if (!cg_find_param_position (callee, arg_decl, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree substituted = gimple_call_arg (call, argno);
+	  tree identity = cg_gimple_object_identity (substituted);
+
+	  bool required = !negated;
+	  cg_pred_fact *fact = identity ? state.pred.get (identity) : NULL;
+	  if (fact && fact->pred_fn == pred_fn && fact->polarity == required
+	      && (!require_conveyor || fact->conveyor_established))
+	    continue; /* Proven true: silently discharged.  */
+
+	  warning_at (gimple_location (call), 0,
+		      "cannot verify that %qD (%qE) holds, as required by "
+		      "the precondition of %qD", pred_fn, substituted, callee);
+	}
+
+      auto_vec<cg_field_group_lite> field_groups;
+      cg_collect_field_range_groups (cond, &field_groups);
+      for (unsigned g = 0; g < field_groups.length (); ++g)
+	{
+	  unsigned argno;
+	  if (!cg_find_param_position (callee, field_groups[g].ptr_expr, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree substituted = gimple_call_arg (call, argno);
+	  tree identity = cg_gimple_object_identity (substituted);
+	  cg_range_lite &required = field_groups[g].range;
+
+	  cg_field_fact *established
+	    = identity ? state.field.get ({identity, field_groups[g].field}) : NULL;
+	  if (established
+	      && (!require_conveyor || established->conveyor_established)
+	      && (!required.has_lo
+		  || (established->range.has_lo
+		      && established->range.lo >= required.lo))
+	      && (!required.has_hi
+		  || (established->range.has_hi
+		      && established->range.hi <= required.hi)))
+	    continue; /* Proven true: silently discharged.  */
+
+	  warning_at (gimple_location (call), 0,
+		      "cannot verify that field %qD of %qE satisfies the "
+		      "precondition of %qD",
+		      field_groups[g].field, substituted, callee);
+	}
+    }
+}
+
+/* A tracked object's fact must be invalidated by *any* call taking its
+   address or receiving it as a bare pointer, whether or not that call
+   has any contracts of its own at all -- unconditional, matching
+   contracts.cc's own oa_invalidate_symbolic_facts_for_call_args, and
+   the plugin's own identical invalidate_persistent_facts_for_call_args.
+   Drops every tracked field for the same identity too (whole-object
+   granularity).  */
+
+static void
+cg_invalidate_persistent_facts_for_call_args (gcall *call,
+					       cg_dom_fact_state &state)
+{
+  unsigned n = gimple_call_num_args (call);
+  for (unsigned i = 0; i < n; ++i)
+    {
+      tree identity = cg_gimple_object_identity (gimple_call_arg (call, i));
+      if (!identity)
+	continue;
+      state.pred.remove (identity);
+
+      auto_vec<std::pair<tree, tree>> to_remove;
+      for (auto it : state.field)
+	if (it.first.first == identity)
+	  to_remove.safe_push (it.first);
+      for (unsigned j = 0; j < to_remove.length (); ++j)
+	state.field.remove (to_remove[j]);
+    }
+}
+
+/* CALL's own callee's declared postcondition establishing a fact about
+   one of CALLEE's own (persistent, non-return-value) parameters -- the
+   persistent-fact analogue of item 6, gated on flavor-enabled exactly
+   like cg_seed_predicate_self_trust.  Order relative to invalidation
+   matters, matching oa_scan_calls_in_expr's own "invalidate then
+   establish" discipline: this call's own postcondition must win over
+   its own (necessarily stale-by-then) invalidation of the same
+   identity.  */
+
+static void
+cg_establish_persistent_facts_for_call (gcall *call, cg_dom_fact_state &state)
+{
+  tree callee = gimple_call_fndecl (call);
+  if (!callee)
+    return;
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
+      bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
+      bool conveyor_enabled = conveyor_active && flag_contract_conveyor_proofs_gimple;
+      bool symbolic_enabled = symbolic_active && flag_contract_symbolic_proofs_gimple;
+      if (!conveyor_enabled && !symbolic_enabled)
+	continue;
+
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree pred_fn, arg_decl;
+	  bool negated;
+	  if (!oa_match_predicate_conjunct (*conjuncts[i], &pred_fn, &arg_decl,
+					     &negated))
+	    continue;
+
+	  unsigned argno;
+	  if (!cg_find_param_position (callee, arg_decl, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree substituted = gimple_call_arg (call, argno);
+	  tree identity = cg_gimple_object_identity (substituted);
+	  if (identity)
+	    state.pred.put (identity, { pred_fn, !negated, conveyor_enabled });
+	}
+
+      auto_vec<cg_field_group_lite> field_groups;
+      cg_collect_field_range_groups (cond, &field_groups);
+      for (unsigned g = 0; g < field_groups.length (); ++g)
+	{
+	  unsigned argno;
+	  if (!cg_find_param_position (callee, field_groups[g].ptr_expr, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree substituted = gimple_call_arg (call, argno);
+	  tree identity = cg_gimple_object_identity (substituted);
+	  if (identity)
+	    state.field.put ({identity, field_groups[g].field},
+			      { field_groups[g].range, conveyor_enabled });
+	}
+    }
+}
+
+/* The dominator-preorder walk itself -- see the plugin's own identical
+   predicate_dom_walker for the full rationale (a fact is available at
+   block B iff established somewhere that dominates B with no
+   invalidation on the path, exactly what processing each block from
+   its immediate dominator's already-computed exit state gives for
+   free).  */
+
+class cg_predicate_dom_walker : public dom_walker
+{
+public:
+  cg_predicate_dom_walker (cg_dom_fact_state *seed_)
+    : dom_walker (CDI_DOMINATORS), seed (seed_)
+  {}
+
+  ~cg_predicate_dom_walker ()
+  {
+    for (auto it : block_out)
+      delete it.second;
+  }
+
+  edge before_dom_children (basic_block) final override;
+
+  cg_dom_fact_state *seed;
+  hash_map<basic_block, cg_dom_fact_state *> block_out;
+};
+
+edge
+cg_predicate_dom_walker::before_dom_children (basic_block bb)
+{
+  cg_dom_fact_state *state = new cg_dom_fact_state ();
+
+  basic_block idom = get_immediate_dominator (CDI_DOMINATORS, bb);
+  const cg_dom_fact_state *from = seed;
+  if (idom)
+    {
+      cg_dom_fact_state **parent = block_out.get (idom);
+      from = parent ? *parent : NULL;
+    }
+  if (from)
+    {
+      for (auto it : from->pred)
+	state->pred.put (it.first, it.second);
+      for (auto it : from->field)
+	state->field.put (it.first, it.second);
+    }
+
+  for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+       gsi_next (&gsi))
+    {
+      gimple *stmt = gsi_stmt (gsi);
+      if (!is_gimple_call (stmt))
+	continue;
+      gcall *call = as_a <gcall *> (stmt);
+      cg_consult_persistent_facts (call, *state);
+      cg_invalidate_persistent_facts_for_call_args (call, *state);
+      cg_establish_persistent_facts_for_call (call, *state);
+    }
+
+  block_out.put (bb, state);
+  return NULL;
+}
+
 namespace {
 
 const pass_data pass_data_contracts_gimple =
@@ -752,6 +1147,19 @@ pass_contracts_gimple::execute (function *fun)
       }
 
   disable_ranger (fun);
+
+  /* Named-predicate and field-range facts get their own, separate
+     dominator-tree-based walk (see cg_predicate_dom_walker's own
+     comment) rather than folding into the FOR_EACH_BB_FN loop above:
+     that loop's own three fact shapes are consulted using a single,
+     function-wide ESTABLISHED set/map (correct for them, since a
+     backward SSA walk needs no block-order-sensitive state at all),
+     whereas these two are inherently per-program-point and need the
+     dominator walk's own per-block state threading.  */
+  cg_dom_fact_state pred_seed;
+  cg_seed_predicate_self_trust (fun, pred_seed);
+  cg_predicate_dom_walker walker (&pred_seed);
+  walker.walk (ENTRY_BLOCK_PTR_FOR_FN (fun));
 
   return 0;
 }
