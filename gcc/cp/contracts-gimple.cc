@@ -602,6 +602,110 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
     }
 }
 
+/* Item 6 for relational facts: does CALL's own callee have a
+   postcondition relating its own return value to one of its OTHER
+   parameters (e.g. 'post<ctrl>(r: r < q)', via the shared oa_match_
+   result_relation)?  If so, CODE_OUT/RHS_OUT/CONVEYOR_OUT describe the
+   relation oriented against CALL's own substituted argument for that
+   other parameter -- e.g. for 'y = make_val (x, q);' with make_val's
+   postcondition above, this returns (LT_EXPR, q's own SSA value at
+   THIS call, conveyor_active). Mirrors contracts.cc's own
+   oa_establish_relational_from_call, but as a query (this file's own
+   established_rel map is populated once per function by self-trust
+   only, never eagerly at each call site the way oa_env::relational_map
+   is -- see cg_get_relational immediately below, which calls this
+   lazily instead).  */
+
+static bool
+cg_call_postcondition_relation_p (gcall *call, tree_code *code_out,
+				   tree *rhs_out, bool *conveyor_out)
+{
+  tree callee = gimple_call_fndecl (call);
+  if (!callee)
+    return false;
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
+      bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
+      if (!conveyor_active && !symbolic_active)
+	continue;
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      if (!result_id || (!VAR_P (result_id) && TREE_CODE (result_id) != PARM_DECL))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree_code code;
+	  tree other_param;
+	  if (!oa_match_result_relation (*conjuncts[i], result_id, &code,
+					  &other_param))
+	    continue;
+
+	  unsigned argno;
+	  if (!cg_find_param_position (callee, other_param, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+
+	  *code_out = code;
+	  *rhs_out = gimple_call_arg (call, argno);
+	  *conveyor_out = conveyor_active;
+	  return true;
+	}
+    }
+  return false;
+}
+
+/* VAL's own established relational fact, if any -- tries, in order: a
+   self-trusted fact in ESTABLISHED_REL (keyed exactly like ESTABLISHED/
+   ESTABLISHED_NZ elsewhere in this file); a copy/conversion one hop
+   back (the same "int y = make_val();" gimplifies to a temporary
+   shape cg_established_range_of already handles); and item 6 via a
+   GIMPLE_CALL def-stmt (cg_call_postcondition_relation_p immediately
+   above).  The recursive-resolution counterpart of oa_get_relational
+   in contracts.cc, which instead relies on oa_env::relational_map
+   already having been eagerly populated at each assignment site --
+   this file's own established_rel is only ever populated once, by
+   self-trust, so item 6 must be resolved lazily here instead.  */
+
+static bool
+cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
+		    tree_code *code_out, tree *rhs_out, bool *conveyor_out)
+{
+  if (val == NULL_TREE || TREE_CODE (val) != SSA_NAME)
+    return false;
+
+  if (cg_rel_fact *fact = established_rel.get (val))
+    {
+      *code_out = fact->code;
+      *rhs_out = fact->rhs;
+      *conveyor_out = fact->conveyor_established;
+      return true;
+    }
+
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (def && is_gimple_call (def))
+    return cg_call_postcondition_relation_p (as_a <gcall *> (def), code_out,
+					      rhs_out, conveyor_out);
+  if (def && is_gimple_assign (def))
+    {
+      enum tree_code code = gimple_assign_rhs_code (def);
+      if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
+	return cg_get_relational (gimple_assign_rhs1 (def), established_rel,
+				   code_out, rhs_out, conveyor_out);
+    }
+
+  return false;
+}
+
 /* CALL's own callee, checked against ESTABLISHED/ESTABLISHED_NZ as
    they stand right before CALL -- the consult side. Each of the
    callee's own preconditions is only checked against the flag whose
@@ -728,11 +832,14 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      continue;
 	    }
 
-	  cg_rel_fact *fact = established_rel.get (sub_param);
-	  if (fact
-	      && oa_relational_code_implies (fact->code, rel_code)
-	      && (!require_conveyor || fact->conveyor_established)
-	      && fact->rhs == sub_other)
+	  tree_code fact_code;
+	  tree fact_rhs;
+	  bool fact_conveyor_established;
+	  if (cg_get_relational (sub_param, established_rel, &fact_code,
+				  &fact_rhs, &fact_conveyor_established)
+	      && oa_relational_code_implies (fact_code, rel_code)
+	      && (!require_conveyor || fact_conveyor_established)
+	      && fact_rhs == sub_other)
 	    continue; /* Proven true: silently discharged.  */
 
 	  warning_at (gimple_location (call), 0,
