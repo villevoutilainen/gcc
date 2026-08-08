@@ -175,6 +175,17 @@ enum contract_check_side { ccs_definition, ccs_wrapper, ccs_not_applicable };
 
 extern void init_contracts			(void);
 
+/* contracts-gimple.cc.  Declared here (rather than alongside the other
+   make_pass_* declarations in tree-pass.h) because this pass only exists
+   in the C++ front end's own object file; tree-pass.h is shared by every
+   language driver via passes.def/pass-instances.def, so a declaration
+   there would force cc1/lto1 to resolve a symbol they never link in.
+   init_contracts calls register_pass (tree-pass.h) directly, exactly as a
+   plugin's own PLUGIN_PASS_MANAGER_SETUP callback would, instead of
+   listing this pass in passes.def.  */
+class gimple_opt_pass;
+extern gimple_opt_pass *make_pass_contracts_gimple (gcc::context *ctxt);
+
 extern tree grok_contract			(tree, tree, tree, cp_expr, location_t, tree = NULL_TREE);
 extern tree finish_contract_specifier 		(tree, tree);
 extern tree finish_contract_condition		(cp_expr);

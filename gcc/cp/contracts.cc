@@ -44,6 +44,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "opts.h"
 #include "calls.h"
 #include "output.h"
+#include "context.h"
+#include "tree-pass.h"
 
 /*  Design notes.
 
@@ -3874,6 +3876,27 @@ init_contracts ()
 {
   init_terminate_fn ();
   init_builtin_contract_violation_type ();
+
+  /* Register the experimental GIMPLE-pass contract-checking engine
+     (-fcontract-conveyor-proofs-gimple / -fcontract-symbolic-proofs-gimple)
+     directly, the same way a plugin's own PLUGIN_PASS_MANAGER_SETUP
+     callback would, rather than listing it in passes.def.  passes.def is
+     shared by every language driver via libbackend.a, but
+     make_pass_contracts_gimple only exists in the C++ front end's own
+     object file, so referencing it from passes.def would leave cc1/lto1
+     with an unresolved symbol at link time.  This call site runs safely
+     before the pass list is ever iterated: general_init (toplev.cc)
+     constructs the pass manager before lang_hooks.init (which reaches
+     here via cxx_init_decl_processing) or initialize_plugins ever run.  */
+  if (flag_contract_conveyor_proofs_gimple || flag_contract_symbolic_proofs_gimple)
+    {
+      struct register_pass_info pass_info;
+      pass_info.pass = make_pass_contracts_gimple (g);
+      pass_info.reference_pass_name = "ssa";
+      pass_info.ref_pass_instance_number = 1;
+      pass_info.pos_op = PASS_POS_INSERT_AFTER;
+      register_pass (&pass_info);
+    }
 }
 
 static GTY(()) tree contracts_source_location_impl_type;
