@@ -1317,15 +1317,26 @@ struct cg_dom_fact_state
 };
 
 /* An SSA_NAME's own identity is itself; '&decl' resolves to DECL
-   directly -- see the plugin's own identical gimple_object_identity
-   for the full rationale (unifying plain-object and pointer
-   receivers).  */
+   directly; a bare VAR_DECL/PARM_DECL used directly is its own
+   identity too (closing a pre-existing asymmetry with the AST engine's
+   own oa_object_identity_decl, which already accepts this shape) --
+   see the plugin's own identical gimple_object_identity for the full
+   rationale (unifying plain-object and pointer receivers).
+
+   Also looks through VAL's own implicit conversion operator
+   (cg_resolve_conversion_receiver) first -- always safe here,
+   including for establish/invalidate callers, not just consult ones:
+   a conversion operator always refers to the *same* underlying object,
+   unlike a by-value copy (which IS only safe to look through at
+   consult call sites -- see cg_consult_persistent_facts's own use of
+   cg_resolve_call_argument instead of a bare gimple_call_arg).  */
 
 static tree
 cg_gimple_object_identity (tree val)
 {
   if (val == NULL_TREE)
     return NULL_TREE;
+  val = cg_resolve_conversion_receiver (val);
   if (TREE_CODE (val) == ADDR_EXPR)
     {
       tree op = TREE_OPERAND (val, 0);
@@ -1334,6 +1345,8 @@ cg_gimple_object_identity (tree val)
       return NULL_TREE;
     }
   if (TREE_CODE (val) == SSA_NAME && POINTER_TYPE_P (TREE_TYPE (val)))
+    return val;
+  if (VAR_P (val) || TREE_CODE (val) == PARM_DECL)
     return val;
   return NULL_TREE;
 }
@@ -1475,7 +1488,16 @@ cg_consult_persistent_facts (gcall *call, cg_dom_fact_state &state)
 	  if (!cg_find_param_position (callee, arg_decl, &argno)
 	      || argno >= gimple_call_num_args (call))
 	    continue;
-	  tree substituted = gimple_call_arg (call, argno);
+	  /* Consult-only copy-construction lookthrough (cg_resolve_call_
+	     argument, not a bare gimple_call_arg) -- sound here
+	     specifically because this checks a REQUIREMENT against an
+	     already-established fact, and a copy has the same state as
+	     its source at the moment of copying; see contracts.cc's own
+	     identical reasoning for oa_handle_call_symbolic_precondition_
+	     obligation's predicate block.  cg_establish_persistent_facts_
+	     for_call/cg_invalidate_persistent_facts_for_call_args
+	     deliberately do NOT do this.  */
+	  tree substituted = cg_resolve_call_argument (call, argno);
 	  tree identity = cg_gimple_object_identity (substituted);
 
 	  bool required = !negated;
@@ -1497,7 +1519,9 @@ cg_consult_persistent_facts (gcall *call, cg_dom_fact_state &state)
 	  if (!cg_find_param_position (callee, field_groups[g].ptr_expr, &argno)
 	      || argno >= gimple_call_num_args (call))
 	    continue;
-	  tree substituted = gimple_call_arg (call, argno);
+	  /* Consult-only copy-construction lookthrough -- see this
+	     function's own predicate block above.  */
+	  tree substituted = cg_resolve_call_argument (call, argno);
 	  tree identity = cg_gimple_object_identity (substituted);
 	  cg_range_lite &required = field_groups[g].range;
 
@@ -1527,12 +1551,27 @@ cg_consult_persistent_facts (gcall *call, cg_dom_fact_state &state)
    contracts.cc's own oa_invalidate_symbolic_facts_for_call_args, and
    the plugin's own identical invalidate_persistent_facts_for_call_args.
    Drops every tracked field for the same identity too (whole-object
-   granularity).  */
+   granularity).
+
+   Except for a call *to* a conversion operator itself: cg_gimple_
+   object_identity now looks through such a call to reach the wrapped
+   object's own identity (cg_resolve_conversion_receiver), so a call
+   through 'ref.operator T()' has that same 'ref' as its own implicit-
+   object argument -- without this guard, every consult of a fact
+   reached via a wrapper's conversion operator would invalidate that
+   exact fact via the very call used to reach it, in program order
+   before the consult even runs.  Mirrors contracts.cc's own oa_call_
+   is_conversion_operator_call precedent (a conversion operator is
+   already trusted as a same-object, non-mutating pass-through
+   everywhere else in this pass).  */
 
 static void
 cg_invalidate_persistent_facts_for_call_args (gcall *call,
 					       cg_dom_fact_state &state)
 {
+  tree call_callee = gimple_call_fndecl (call);
+  if (call_callee && DECL_CONV_FN_P (call_callee))
+    return;
   unsigned n = gimple_call_num_args (call);
   for (unsigned i = 0; i < n; ++i)
     {
