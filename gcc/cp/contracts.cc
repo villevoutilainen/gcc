@@ -6212,6 +6212,11 @@ static bool oa_symbolic_codegen_active;
 static tree oa_shadow_field (tree type, unsigned index);
 static tree build_real_source_location_value (location_t, tree, tree);
 
+/* Forward-declared: full definition is much further below (near its
+   own sibling oa_strip_conversion_call), but oa_object_identity_decl
+   just below needs it here.  */
+static tree oa_strip_conversion_operator_call (tree op);
+
 /* -fcontract-symbolic-proofs: resolve EXPR to the one canonical decl
    identifying "the object this expression names" -- true for 'this'
    (returns the current function's own 'this' PARM_DECL), '&decl' where
@@ -6239,6 +6244,16 @@ oa_object_identity_decl (tree expr, tree *decl_out)
 	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
     expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
 
+  /* A class-typed operand reached via its own implicit conversion
+     operator (e.g. a smart-pointer-like wrapper converting to a
+     reference to the object a predicate/field-range fact is actually
+     tracked against) -- always safe to look through here, for every
+     caller (self-trust, establish, invalidate, consult alike), since a
+     conversion operator always refers to the *same* object, unlike a
+     by-value copy (see oa_strip_conversion_operator_call's own
+     comment for why that distinction matters and isn't handled here).  */
+  expr = oa_strip_conversion_operator_call (expr);
+
   if (is_this_parameter (expr))
     {
       *decl_out = expr;
@@ -6248,6 +6263,14 @@ oa_object_identity_decl (tree expr, tree *decl_out)
   if (TREE_CODE (expr) == ADDR_EXPR)
     {
       tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      /* A reference-typed argument is itself passed as the address of
+	 whatever it's bound to -- so when that reference is produced by
+	 a conversion operator (e.g. a wrapper's own 'operator T&()',
+	 substituted for a callee's own reference parameter at a call
+	 site), the conversion call sits *underneath* this ADDR_EXPR,
+	 not at EXPR's own top level where the strip just above already
+	 looked -- found via direct testing of exactly this shape.  */
+      op = oa_strip_conversion_operator_call (op);
       if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
 	{
 	  *decl_out = op;
@@ -6489,6 +6512,50 @@ static bool oa_resolve_iile_range (tree call, oa_env &env, oa_range_fact *out);
    operator is recognized uniformly everywhere a bare scalar-typed
    operand already was, not just in whichever one shape prompted the
    fix.  */
+
+/* The conversion-operator-only half of oa_strip_conversion_call below
+   (ordinary-wrapper strip + the CALL_EXPR/DECL_CONV_FN_P receiver
+   extraction), deliberately NOT looking through a TARGET_EXPR/AGGR_
+   INIT_EXPR copy-construction materialization the way the full
+   function does -- a standalone twin, not a shared-code refactor of
+   the existing, already-tested function, so as to carry zero risk of
+   changing its behavior.
+
+   Needed because, unlike the value-fact layer (a copy has the
+   *identical value* to its source, so copy-construction lookthrough is
+   sound for every purpose there), the named-predicate/ptr->field-range
+   *identity* layer tracks an object's own *mutable state*: a callee
+   that receives a byvalue COPY and asserts something about it tells us
+   nothing about the caller's own original object, so establishing or
+   invalidating a fact via a copy's own source would be unsound.
+   Conversion-operator lookthrough has no such problem (a wrapper
+   converting to a reference is always the *same* object), so it's
+   safe to apply unconditionally, including to establish/invalidate --
+   see oa_object_identity_decl's own use of this function, versus its
+   own callers that additionally apply the full oa_strip_conversion_
+   call for their own consult-only call sites.  */
+
+static tree
+oa_strip_conversion_operator_call (tree op)
+{
+  while (TREE_CODE (op) == NON_LVALUE_EXPR || TREE_CODE (op) == NOP_EXPR
+	 || TREE_CODE (op) == CONVERT_EXPR || TREE_CODE (op) == VIEW_CONVERT_EXPR)
+    op = TREE_OPERAND (op, 0);
+
+  if (TREE_CODE (op) != CALL_EXPR || call_expr_nargs (op) != 1)
+    return op;
+  tree fn = CALL_EXPR_FN (op);
+  if (fn == NULL_TREE || TREE_CODE (fn) != ADDR_EXPR)
+    return op;
+  tree fndecl = TREE_OPERAND (fn, 0);
+  if (TREE_CODE (fndecl) != FUNCTION_DECL || !DECL_CONV_FN_P (fndecl))
+    return op;
+
+  tree object = oa_strip_conversion_operator_call (CALL_EXPR_ARG (op, 0));
+  if (TREE_CODE (object) == ADDR_EXPR)
+    object = TREE_OPERAND (object, 0);
+  return object;
+}
 
 static tree
 oa_strip_conversion_call (tree op)
@@ -7921,11 +7988,19 @@ static oa_proof_result
 oa_env_predicate_result (oa_env &env, tree substituted, tree pred_fn,
 			  bool required_polarity, bool require_conveyor)
 {
+  /* Consult-only copy-construction lookthrough -- see oa_handle_call_
+     symbolic_precondition_obligation's own predicate block for why
+     it's sound specifically at a consult site.  Shared by both the
+     built-in engine's own conveyor predicate obligation and the
+     plugin-facing oa_env_check_predicate_fact below, so both benefit
+     from a single fix here.  */
+  substituted = oa_strip_conversion_call (substituted);
   tree identity;
   if (!oa_object_identity_decl (substituted, &identity))
     return OA_UNKNOWN;
   oa_predicate_fact fact;
-  if (!env.predicate_fact_get (identity, &fact) || fact.pred_fn != pred_fn
+  bool found = env.predicate_fact_get (identity, &fact);
+  if (!found || fact.pred_fn != pred_fn
       || (require_conveyor && !fact.conveyor_established))
     return OA_UNKNOWN;
   return (fact.polarity == required_polarity) ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
@@ -8898,6 +8973,14 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	  tree substituted = oa_substitute_call_arg (callee, call, arg_decl);
 	  if (!substituted)
 	    continue;
+	  /* Consult-only: also look through a by-value copy-construction
+	     materialization (oa_object_identity_decl's own internal strip
+	     only ever handles the always-safe conversion-operator case) --
+	     sound here specifically because this is checking a REQUIREMENT
+	     against an already-established fact, and a copy has the same
+	     state as its source at the moment of copying.  See this file's
+	     own plan notes on why establish/invalidate must not do this.  */
+	  substituted = oa_strip_conversion_call (substituted);
 
 	  tree identity;
 	  if (!oa_object_identity_decl (substituted, &identity))
@@ -9014,6 +9097,12 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		continue;
 	      if (oa_provably_nonzero_p (substituted, env))
 		continue; /* Proven true: silently discharged.  */
+	      /* Nonzero-ness is a value fact (copy-invariant, unlike
+		 identity), so the fallback symbolic_nz_provable_p check
+		 just below may as well see through a by-value copy too --
+		 harmless if oa_provably_nonzero_p (just above, which
+		 already does this internally) already succeeded.  */
+	      substituted = oa_strip_conversion_call (substituted);
 	      tree identity;
 	      if (oa_object_identity_decl (substituted, &identity)
 		  && env.symbolic_nz_provable_p (identity))
@@ -9043,6 +9132,11 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		  tree substituted = oa_substitute_call_arg (callee, call, ptr_expr);
 		  if (!substituted)
 		    continue;
+		  /* Consult-only copy-construction lookthrough -- see this
+		     function's own predicate block above for why it's sound
+		     specifically here (a copy has the same field state as
+		     its source at the moment of copying).  */
+		  substituted = oa_strip_conversion_call (substituted);
 		  tree identity;
 		  if (!oa_object_identity_decl (substituted, &identity))
 		    continue;
@@ -9130,6 +9224,10 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	  tree substituted = oa_substitute_call_arg (callee, call, ptr_expr);
 	  if (!substituted)
 	    continue;
+	  /* Consult-only copy-construction lookthrough -- see oa_handle_
+	     call_symbolic_precondition_obligation's own identical field-
+	     range block for why it's sound specifically here.  */
+	  substituted = oa_strip_conversion_call (substituted);
 	  tree identity;
 	  if (!oa_object_identity_decl (substituted, &identity))
 	    continue;
@@ -9193,6 +9291,37 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
    pointer decl (which that function's own scalar-only domain never
    needs to).  */
 
+/* True if CALL is a call to a single-argument implicit conversion
+   operator (DECL_CONV_FN_P) -- the exact shape oa_strip_conversion_
+   operator_call/oa_strip_conversion_call already treat as a
+   transparent, identity-preserving pass-through to the *same* object
+   (see that function's own comment), never a genuine, opaque call
+   that could mutate anything.
+
+   Every "any call taking this decl's address invalidates it" rule
+   below must skip such a call entirely: once identity resolution
+   learns to see *through* a wrapper's own conversion operator to
+   reach the wrapped object's identity, calling that same conversion
+   operator necessarily takes the wrapper's own address for its
+   implicit object argument -- and without this guard, invalidation
+   would immediately undo, within the very same statement, whatever
+   fact establish/consult just reached through that identical call.
+   Found via direct testing: a postcondition establishing a named-
+   predicate fact for a conversion-reached identity was silently wiped
+   out before the very next statement's precondition could consult it,
+   traced to this exact interaction.  Mirrors oa_strip_conversion_call's
+   own "no need to check constness -- a conversion operator is already
+   trusted as a same-object pass-through everywhere else in this pass"
+   precedent, so this isn't a new soundness claim, just consistency
+   with one already made.  */
+
+static bool
+oa_call_is_conversion_operator_call (tree call)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  return callee != NULL_TREE && DECL_CONV_FN_P (callee);
+}
+
 static bool
 oa_invalidation_identity_decl (tree expr, tree *decl_out)
 {
@@ -9251,6 +9380,8 @@ oa_invalidation_identity_decl (tree expr, tree *decl_out)
 static void
 oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 {
+  if (oa_call_is_conversion_operator_call (call))
+    return;
   int nargs = call_expr_nargs (call);
   for (int i = 0; i < nargs; ++i)
     {
@@ -9274,6 +9405,8 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 static void
 oa_invalidate_symbolic_scalar_range_for_call_args (tree call, oa_env &env)
 {
+  if (oa_call_is_conversion_operator_call (call))
+    return;
   int nargs = call_expr_nargs (call);
   for (int i = 0; i < nargs; ++i)
     {
@@ -9318,6 +9451,8 @@ static void
 oa_invalidate_scalar_shadow_for_call_args (tree call, oa_env &env, tree *extra)
 {
   if (!oa_symbolic_codegen_active)
+    return;
+  if (oa_call_is_conversion_operator_call (call))
     return;
   int nargs = call_expr_nargs (call);
   for (int i = 0; i < nargs; ++i)
@@ -9699,7 +9834,14 @@ oa_handle_call_symbolic_scalar_precondition_obligation (tree call, oa_env &env)
       tree substituted = oa_substitute_call_arg (callee, call, param);
       if (!substituted)
 	continue;
-      tree arg_decl = STRIP_ANY_LOCATION_WRAPPER (substituted);
+      /* Full lookthrough (conversion operator and copy-construction)
+	 -- this is a value fact like oa_get_range's own domain, not an
+	 identity one, so unlike the predicate/field-range layer there's
+	 no establish/invalidate-vs-consult asymmetry to worry about; a
+	 class-typed argument reached via a conversion operator, or
+	 forwarded by value through a real copy/move-constructor call,
+	 must resolve the same way oa_get_range itself already does.  */
+      tree arg_decl = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (substituted));
       if (!VAR_P (arg_decl) && TREE_CODE (arg_decl) != PARM_DECL)
 	continue;
 
@@ -9824,21 +9966,19 @@ oa_range_fact_from_bounds (bool has_lo, tree lo, bool has_hi, tree hi)
    plugin's own substituted call argument, never stripped by the
    plugin itself) can arrive wrapped in a plain conversion node (a
    by-value int argument found wrapped in a VIEW_CONVERT_EXPR by direct
-   testing) -- strip it here the same way oa_object_identity_decl's own
-   generic conversion-stripping loop already does, so the bare decl
-   m_contract_scalar_range_map is actually keyed on isn't silently
-   missed as "no fact".  */
+   testing), or reach a class-typed decl via its own conversion
+   operator, or arrive as a by-value copy-construction materialization
+   -- oa_strip_conversion_call handles all three (consult-only lookthrough
+   is sound here: a scalar range, like nonzero-ness, is copy-invariant),
+   so the bare decl m_contract_scalar_range_map is actually keyed on
+   isn't silently missed as "no fact".  */
 
 oa_proof_result
 oa_env_check_scalar_range_fact (oa_analysis_env *env, tree expr, bool has_lo,
 				 tree lo, bool has_hi, tree hi)
 {
   oa_env &e = *reinterpret_cast<oa_env *> (env);
-  expr = STRIP_ANY_LOCATION_WRAPPER (expr);
-  while (TREE_CODE (expr) == NON_LVALUE_EXPR || TREE_CODE (expr) == NOP_EXPR
-	 || TREE_CODE (expr) == CONVERT_EXPR
-	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
-    expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+  expr = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (expr));
   oa_range_fact established;
   if (!e.contract_scalar_range_get (expr, &established))
     return OA_UNKNOWN;
@@ -9862,6 +10002,10 @@ oa_env_check_field_range_fact (oa_analysis_env *env, tree base_expr,
 				tree hi, bool require_conveyor)
 {
   oa_env &e = *reinterpret_cast<oa_env *> (env);
+  /* Consult-only copy-construction lookthrough -- see oa_handle_call_
+     symbolic_precondition_obligation's own field-range block for why
+     it's sound specifically at a consult site.  */
+  base_expr = oa_strip_conversion_call (base_expr);
   tree identity;
   if (!oa_object_identity_decl (base_expr, &identity))
     return OA_UNKNOWN;
@@ -10324,7 +10468,14 @@ oa_handle_call_symbolic_scalar_obligation (tree call, oa_env &env, tree *extra)
       tree substituted = oa_substitute_call_arg (callee, call, param);
       if (!substituted)
 	continue;
-      tree arg_decl = STRIP_ANY_LOCATION_WRAPPER (substituted);
+      /* Full lookthrough, same reasoning as this function's static-
+	 consult sibling (oa_handle_call_symbolic_scalar_precondition_
+	 obligation) just above -- ARG_DECL is only ever used below as a
+	 lookup key into ENV's own shadow map, never spliced into
+	 generated code as an expression, so resolving it further can
+	 only let more legitimate shadows be found, never change what
+	 code gets emitted.  */
+      tree arg_decl = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (substituted));
       if (!VAR_P (arg_decl) && TREE_CODE (arg_decl) != PARM_DECL)
 	continue;
 
