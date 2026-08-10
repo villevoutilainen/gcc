@@ -9760,6 +9760,105 @@ oa_invalidation_identity_decl (tree expr, tree *decl_out)
   return false;
 }
 
+/* Stage 3: two of a function's own distinct parameters (or 'this' and
+   a parameter) are never treated as potentially the same object,
+   anywhere in this file -- yet nothing in standard C++ prevents a
+   caller from passing the same object through two different pointer/
+   reference parameters ('f(p, p)' for 'f(file *a, file *b)' is
+   completely ordinary, legal code) unless a parameter is __restrict-
+   qualified. This is a real, confirmed soundness gap of the identical
+   shape Stages 1/2a/2b each fixed for a different syntactic source of
+   aliasing -- just never assigned from one another within the body,
+   so none of those stages' own alias-tracking (which only ever links
+   decls *observed* to be assigned from each other) can see it:
+
+     void f (file *a, file *b) {
+       open_it (a);              // establishes is_opened(a)
+       mutate_via_alias (b);      // invalidates b's own identity only
+       use_it (a);                 // wrongly proven if called as f(p, p)
+     }
+
+   Deliberately conservative by default, a scope decision made
+   explicitly with the user rather than assumed: any two same/
+   compatible-typed, non-__restrict parameters are *always* treated as
+   a potential-alias group, no opt-in annotation -- this closes the gap
+   universally but does increase "cannot verify" diagnostics for the
+   common, actually-non-aliasing case; __restrict is the existing,
+   standard way to opt back out.
+
+   Fully intraprocedural, no per-call-site reanalysis, no new alias
+   map: only *invalidation* propagates across a potential-alias group;
+   *establishing* a fact via one parameter must never propagate to
+   another (unsound in the other direction -- the two parameters might
+   genuinely be different objects, so proving is_opened(a) can never
+   imply is_opened(b)).
+
+   Explicitly scoped to the whole-object invalidation sites only (this
+   function's own callers, Rule 1's whole-object reassignment branch,
+   and oa_handle_loop's two per-reassigned-decl sites) -- a parameter
+   that is itself a pointer to a struct/array, mutated through a
+   narrower field/array-slot write (Stage 2a/2b's own single-slot
+   invalidate calls), does NOT get this treatment. See .claude/plans/
+   well-we-last-discussed-ethereal-duckling.md for why this and the
+   nested-IILE-closure gap (a parameterized IILE's own aliasing
+   parameters never get swept, since oa_resolve_iile_call never
+   redirects current_function_decl to the closure's own operator())
+   are both deliberately disclosed, bounded omissions rather than
+   attempted here.  */
+
+static bool
+oa_could_alias_as_parameters (tree a, tree b)
+{
+  if (a == b || TREE_CODE (a) != PARM_DECL || TREE_CODE (b) != PARM_DECL)
+    return false;
+  tree ta = TREE_TYPE (a), tb = TREE_TYPE (b);
+  if (!((POINTER_TYPE_P (ta) || TREE_CODE (ta) == REFERENCE_TYPE)
+	&& (POINTER_TYPE_P (tb) || TREE_CODE (tb) == REFERENCE_TYPE)))
+    return false;
+  if (TYPE_RESTRICT (ta) || TYPE_RESTRICT (tb))
+    return false;
+  tree pa = TREE_TYPE (ta), pb = TREE_TYPE (tb);
+  /* 'void*' can legitimately alias any object type (a common C-API
+     parameter shape) -- found during this stage's own design review:
+     a 'void*' parameter's own pointee is never TYPE_MAIN_VARIANT-equal
+     to any concrete type, so a plain type-match comparison alone would
+     never group it with anything. (A reference operand can never have
+     a void referent at all, so this never spuriously fires for the
+     REFERENCE_TYPE side.)  */
+  if (VOID_TYPE_P (pa) || VOID_TYPE_P (pb))
+    return true;
+  return TYPE_MAIN_VARIANT (pa) == TYPE_MAIN_VARIANT (pb);
+}
+
+/* IDENTITY is guarded to be a genuine parameter of the currently-
+   analyzed function before doing anything, so invalidating a local
+   variable's own identity (the overwhelmingly common case) is an
+   immediate, cheap no-op: this is specifically about two parameters
+   potentially being the *same caller-supplied object*, not about a
+   local coincidentally sharing a parameter's type. 'this' needs no
+   special-casing -- it is spliced in as the head of the real
+   DECL_ARGUMENTS chain for every non-static member function (confirmed
+   via method.cc's own build_this_parm, and by direct tree-dump
+   inspection), so the loop below already enumerates it.  */
+
+static void
+oa_invalidate_parameter_alias_group (tree identity, oa_env &env)
+{
+  if (!current_function_decl || TREE_CODE (identity) != PARM_DECL
+      || DECL_CONTEXT (identity) != current_function_decl)
+    return;
+  for (tree parm = DECL_ARGUMENTS (current_function_decl); parm;
+       parm = DECL_CHAIN (parm))
+    {
+      if (!oa_could_alias_as_parameters (identity, parm))
+	continue;
+      env.predicate_fact_invalidate (parm);
+      env.contract_field_range_invalidate_all (parm);
+      env.field_alias_invalidate_all (parm);
+      env.array_alias_invalidate_all (parm);
+    }
+}
+
 /* Shared-substrate invalidation rule 2 (see the plan's own
    "Invalidation" design section): a tracked object's fact must be
    invalidated by *any* call taking its address, not just the one
@@ -9793,6 +9892,7 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 	  env.contract_field_range_invalidate_all (identity);
 	  env.field_alias_invalidate_all (identity);
 	  env.array_alias_invalidate_all (identity);
+	  oa_invalidate_parameter_alias_group (identity, env);
 	}
     }
 }
@@ -11954,6 +12054,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       checkenv.contract_field_range_invalidate_all (d);
       checkenv.field_alias_invalidate_all (d);
       checkenv.array_alias_invalidate_all (d);
+      oa_invalidate_parameter_alias_group (d, checkenv);
 
       bool saved_tracking = oa_return_tracking;
       oa_return_tracking = false;
@@ -12029,6 +12130,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       env.contract_field_range_invalidate_all (range_result_decls[i]);
       env.field_alias_invalidate_all (range_result_decls[i]);
       env.array_alias_invalidate_all (range_result_decls[i]);
+      oa_invalidate_parameter_alias_group (range_result_decls[i], env);
     }
 }
 
@@ -12827,6 +12929,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		env.contract_field_range_invalidate_all (identity);
 		env.field_alias_invalidate_all (identity);
 		env.array_alias_invalidate_all (identity);
+		oa_invalidate_parameter_alias_group (identity, env);
 		env.alias_invalidate (identity);
 	      }
 	    else
