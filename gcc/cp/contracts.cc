@@ -11884,6 +11884,37 @@ oa_stmt_terminates_p (tree stmt)
       return (oa_cond_always_true_p (DO_COND (t))
 	      && !oa_loop_has_own_break_p (DO_BODY (t)));
 
+    case TRY_BLOCK:
+      /* Mirrors IF_STMT/COND_EXPR's own "every arm must terminate"
+	 rule, generalized from two arms to N+1: the whole construct
+	 falls through unless *both* TRY_STMTS and *every* handler do
+	 not (an exception could be caught by any one handler, so all of
+	 them are live "arms" here, not just the one that happens to
+	 match at runtime -- the same conservative "could be any of
+	 them" treatment oa_walk_stmt's own TRY_BLOCK case gives them).  */
+      {
+	if (!oa_stmt_terminates_p (TRY_STMTS (t)))
+	  return false;
+	tree handlers = TRY_HANDLERS (t);
+	if (handlers == NULL_TREE)
+	  return true;
+	if (TREE_CODE (handlers) == STATEMENT_LIST)
+	  {
+	    for (tree_stmt_iterator i = tsi_start (handlers); !tsi_end_p (i);
+		 tsi_next (&i))
+	      {
+		tree h = tsi_stmt (i);
+		if (h && TREE_CODE (h) == HANDLER
+		    && !oa_stmt_terminates_p (HANDLER_BODY (h)))
+		  return false;
+	      }
+	    return true;
+	  }
+	if (TREE_CODE (handlers) == HANDLER)
+	  return oa_stmt_terminates_p (HANDLER_BODY (handlers));
+	return false;
+      }
+
     default:
       return false;
     }
@@ -12030,6 +12061,105 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	 other call would).  */
       oa_walk_stmt (&CLEANUP_BODY (t), env);
       oa_walk_stmt (&CLEANUP_EXPR (t), env);
+      return;
+
+    case TRY_BLOCK:
+      {
+	/* A real 'try { ... } catch (...) { ... }' (user-written, unlike
+	   TRY_FINALLY_EXPR's own compiler-generated postcondition shape
+	   above): with no case for this node, execution fell to the same
+	   default fallback CLEANUP_STMT did, silently skipping the try
+	   body, every handler, and anything following the whole
+	   construct -- confirmed via direct testing that a call with a
+	   provable, unconditional precondition violation inside a bare
+	   'try { ...; } catch (...) { ... }' produced no diagnostic at
+	   all, the same severity as the CLEANUP_STMT gap.
+
+	   Soundness needs more than just "walk both parts", though: an
+	   exception can occur at *any* point inside TRY_STMTS, so a
+	   handler's own entry state must be the *pre-try* ENV, never
+	   anything TRY_STMTS itself may have established by the time it
+	   threw -- forking a copy before walking TRY_STMTS, and walking
+	   every handler from a fresh copy of that same pre-try state (not
+	   of whatever TRY_STMTS left behind), gives each handler exactly
+	   the same "nothing established yet" view a throw from the very
+	   first statement would.  Post-try/catch code is then reachable
+	   via any one of: TRY_STMTS running to completion without
+	   throwing, or any single handler completing -- an exception can
+	   only be caught by one handler, but statically it's unknown
+	   which, so all of them are live "arms" needing the same N-way
+	   merge_with/range_merge_with/... SWITCH_STMT's own MERGED/
+	   any_result/record() already generalizes the if/else merge to
+	   (Increment M), reused here verbatim rather than duplicating
+	   its own logic. TRY_HANDLERS is always a STATEMENT_LIST of
+	   HANDLER nodes (built via push_stmt_list/pop_stmt_list in
+	   finish_handler_sequence), each carrying its own body via
+	   HANDLER_BODY.  */
+	oa_env pre_try = env.copy ();
+	oa_env merged;
+	bool any_result = false;
+
+	auto record = [&] (oa_env &result)
+	  {
+	    if (!any_result)
+	      {
+		merged.assign (result);
+		any_result = true;
+	      }
+	    else
+	      {
+		merged.merge_with (result);
+		merged.range_merge_with (result);
+		merged.predicate_fact_merge_with (result);
+		merged.relational_merge_with (result);
+		merged.contract_scalar_range_merge_with (result);
+		merged.contract_field_range_merge_with (result);
+		merged.shadow_decls_merge_with (result);
+	      }
+	  };
+
+	oa_walk_stmt (&TRY_STMTS (t), env);
+	if (!oa_stmt_terminates_p (TRY_STMTS (t)))
+	  record (env);
+
+	tree handlers = TRY_HANDLERS (t);
+	auto walk_handler = [&] (tree *h)
+	  {
+	    if (*h == NULL_TREE || TREE_CODE (*h) != HANDLER)
+	      return;
+	    oa_env handler_env = pre_try.copy ();
+	    oa_walk_stmt (&HANDLER_BODY (*h), handler_env);
+	    if (!oa_stmt_terminates_p (HANDLER_BODY (*h)))
+	      record (handler_env);
+	  };
+	if (handlers && TREE_CODE (handlers) == STATEMENT_LIST)
+	  {
+	    for (tree_stmt_iterator i = tsi_start (handlers); !tsi_end_p (i);
+		 tsi_next (&i))
+	      walk_handler (tsi_stmt_ptr (i));
+	  }
+	else if (handlers)
+	  walk_handler (&TRY_HANDLERS (t));
+
+	/* If nothing was ever recorded, every arm (the try body and
+	   every handler alike) provably terminates, so post-try/catch
+	   code is unreachable regardless -- leaving ENV as TRY_STMTS'
+	   own walk left it is sound either way, mirroring SWITCH_STMT's
+	   own identical "any_result stays false" case.  */
+	if (any_result)
+	  env.assign (merged);
+	return;
+      }
+
+    case HANDLER:
+      /* Defensive only: every HANDLER this pass actually reaches is
+	 unwrapped directly by the TRY_BLOCK case above, which forks its
+	 own pre-try ENV for it rather than delegating to a generic
+	 recursive walk -- this case exists only in case some other path
+	 ever feeds a bare HANDLER node here, walking its own body with
+	 whatever ENV was already in hand since no better "pre-try"
+	 state is available in that situation.  */
+      oa_walk_stmt (&HANDLER_BODY (t), env);
       return;
 
     case PRECONDITION_STMT:
