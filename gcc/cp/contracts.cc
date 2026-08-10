@@ -5581,6 +5581,62 @@ public:
       m_alias_target.remove (to_remove[i]);
   }
 
+  /* Stage 2a: the same "current alias target" tracking as m_alias_
+     target above, for a struct/class field slot (e.g. 'h.ptr') instead
+     of a bare decl -- keyed on (base_identity, FIELD_DECL), the same
+     composite key shape m_contract_field_range_map already uses via
+     oa_field_key_hash. Unlike alias_find, field_alias_find has no
+     "identity of last resort" to fall back to: a COMPONENT_REF is not
+     itself an interned decl the way a VAR_DECL is (two syntactically
+     identical 'h.ptr' occurrences are two different tree nodes), so
+     the (base, field) pair is the only possible stable cross-statement
+     key, and returning NULL_TREE (rather than some synthesized "self"
+     identity) when a slot was never recorded is the only structurally
+     coherent answer, not just the conservative one. See oa_field_slot_
+     identity's own comment for how this map actually gets consulted --
+     deliberately not folded into oa_object_identity_decl itself (see
+     that comment for why: this file's own Rule 1 dispatch relies on
+     that function's true/false return as a control-flow discriminator,
+     which teaching it to resolve COMPONENT_REF would silently break).  */
+  tree *field_alias_find (tree base, tree field)
+  {
+    return m_field_alias_target.get ({base, field});
+  }
+  void field_alias_set (tree base, tree field, tree target)
+  {
+    m_field_alias_target.put ({base, field}, target);
+  }
+  void field_alias_invalidate (tree base, tree field)
+  {
+    m_field_alias_target.remove ({base, field});
+  }
+  /* Mirrors contract_field_range_invalidate_all's own removal-by-
+     first-key-component sweep exactly -- BASE's own reassignment or
+     escape must drop every field-slot alias recorded for it too.  */
+  void field_alias_invalidate_all (tree base)
+  {
+    auto_vec<std::pair<tree, tree>> to_remove;
+    for (auto it : m_field_alias_target)
+      if (it.first.first == base)
+	to_remove.safe_push (it.first);
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_field_alias_target.remove (to_remove[i]);
+  }
+  /* Agreement-based, mirroring alias_merge_with exactly (never a
+     union -- see that method's own comment for why).  */
+  void field_alias_merge_with (oa_env &other)
+  {
+    auto_vec<std::pair<tree, tree>> to_remove;
+    for (auto it : m_field_alias_target)
+      {
+	tree *ov = other.m_field_alias_target.get (it.first);
+	if (!ov || *ov != it.second)
+	  to_remove.safe_push (it.first);
+      }
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_field_alias_target.remove (to_remove[i]);
+  }
+
   /* A shared substrate, same gating and shape as m_predicate_fact_map
      above, for oa_relational_fact ("LHS CODE RHS holds") instead of a
      named-predicate call.  relational_merge_with mirrors predicate_
@@ -5862,6 +5918,8 @@ public:
       r.m_shadow_decls.put (it.first, it.second);
     for (auto it : m_alias_target)
       r.m_alias_target.put (it.first, it.second);
+    for (auto it : m_field_alias_target)
+      r.m_field_alias_target.put (it.first, it.second);
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -5906,6 +5964,9 @@ public:
     m_alias_target.empty ();
     for (auto it : other.m_alias_target)
       m_alias_target.put (it.first, it.second);
+    m_field_alias_target.empty ();
+    for (auto it : other.m_field_alias_target)
+      m_field_alias_target.put (it.first, it.second);
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -6012,6 +6073,7 @@ private:
   tree m_outermost_bind = NULL_TREE;
   hash_map<tree, tree> m_shadow_decls;
   hash_map<tree, tree> m_alias_target;
+  hash_map<oa_field_key_hash, tree> m_field_alias_target;
 };
 
 /* An empty, no-added-members subclass, purely so a plugin (which only
@@ -6350,6 +6412,70 @@ oa_object_identity_decl (tree expr, tree *decl_out)
     }
 
   return false;
+}
+
+/* Stage 2a: a new, separate resolver for a struct/class field slot
+   (e.g. 'h.ptr' or 'hp->ptr') that currently holds the same pointer
+   value as some other tracked decl -- see oa_env::field_alias_find's
+   own comment for the (base_identity, FIELD_DECL) map this consults.
+
+   Deliberately NOT folded into oa_object_identity_decl itself, even
+   though every caller of that function could, in principle, also
+   benefit from resolving a COMPONENT_REF this way. oa_object_identity_
+   decl's own true/false return is used as a control-flow discriminator
+   at Rule 1's own reassignment dispatch (see oa_walk_stmt's INIT_EXPR/
+   MODIFY_EXPR case): true means "LHS is itself a whole-object identity,
+   invalidate its own facts wholesale"; false means "LHS is some other
+   shape (a COMPONENT_REF field write), do the narrower per-field
+   invalidation instead". Teaching oa_object_identity_decl to resolve
+   'h.ptr' whenever a field alias happens to already be recorded for it
+   would make an ordinary, *unrelated* later write to that same field
+   wrongly take the "whole-object" branch instead of the field-specific
+   one -- a real regression, found and rejected during this feature's
+   own design review, not a hypothetical worry. Callers that want this
+   resolution (establish/consult/Rule 2 sites) call this function as an
+   explicit, separate fallback instead.
+
+   The base of the COMPONENT_REF must be resolved via oa_object_
+   identity_decl specifically (the untyped "any object has an
+   identity" resolver) -- never oa_invalidation_identity_decl, which
+   requires POINTER_TYPE_P/REFERENCE_TYPE on its own operand and would
+   always fail for a plain, non-pointer struct base like 'h'. A leading
+   INDIRECT_REF is unwrapped first (mirroring Rule 1's own existing
+   COMPONENT_REF invalidation block's identical unwrap), so 'hp->ptr'
+   (pointer-to-struct) resolves the same way 'h.ptr' (plain struct)
+   does. The resolved base is then canonicalized through ENV's own
+   alias_find *before* the field-map lookup, symmetric with how the
+   write side (oa_walk_stmt's own field-alias-recording block) stores
+   it -- without this, Stage 1's own pointer aliasing (e.g. 'hp' itself
+   being reassigned from another pointer) and this function's own field
+   aliasing wouldn't compose for a combined case like 'hp = other_hp;
+   hp->ptr = p; mutate (hp->ptr);', found and fixed during the same
+   review.  */
+
+static bool
+oa_field_slot_identity (tree expr, oa_env &env, tree *decl_out)
+{
+  expr = STRIP_ANY_LOCATION_WRAPPER (expr);
+  if (TREE_CODE (expr) != COMPONENT_REF)
+    return false;
+  tree field = TREE_OPERAND (expr, 1);
+  if (TREE_CODE (field) != FIELD_DECL
+      || !(POINTER_TYPE_P (TREE_TYPE (field))
+	   || TREE_CODE (TREE_TYPE (field)) == REFERENCE_TYPE))
+    return false;
+  tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+  tree obj_expr = TREE_CODE (obj) == INDIRECT_REF
+    ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0)) : obj;
+  tree base_identity;
+  if (!oa_object_identity_decl (obj_expr, &base_identity))
+    return false;
+  base_identity = env.alias_find (base_identity);
+  tree *target = env.field_alias_find (base_identity, field);
+  if (!target)
+    return false;
+  *decl_out = *target;
+  return true;
 }
 
 /* True if EXPR (evaluated in ENV) is provably an object address:
@@ -8060,7 +8186,8 @@ oa_env_predicate_result (oa_env &env, tree substituted, tree pred_fn,
      from a single fix here.  */
   substituted = oa_strip_conversion_call (substituted);
   tree identity;
-  if (!oa_object_identity_decl (substituted, &identity))
+  if (!oa_object_identity_decl (substituted, &identity)
+      && !oa_field_slot_identity (substituted, env, &identity))
     return OA_UNKNOWN;
   identity = env.alias_find (identity);
   oa_predicate_fact fact;
@@ -8945,7 +9072,8 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 	    continue;
 
 	  tree identity;
-	  if (!oa_object_identity_decl (substituted, &identity))
+	  if (!oa_object_identity_decl (substituted, &identity)
+	      && !oa_field_slot_identity (substituted, env, &identity))
 	    continue;
 	  identity = env.alias_find (identity);
 
@@ -8986,7 +9114,8 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 		  if (!substituted)
 		    continue;
 		  tree identity;
-		  if (!oa_object_identity_decl (substituted, &identity))
+		  if (!oa_object_identity_decl (substituted, &identity)
+		      && !oa_field_slot_identity (substituted, env, &identity))
 		    continue;
 		  identity = env.alias_find (identity);
 		  env.contract_field_range_set (identity, field_groups[i].field,
@@ -9050,7 +9179,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	  substituted = oa_strip_conversion_call (substituted);
 
 	  tree identity;
-	  if (!oa_object_identity_decl (substituted, &identity))
+	  if (!oa_object_identity_decl (substituted, &identity)
+	      && !oa_field_slot_identity (substituted, env, &identity))
 	    continue;
 	  identity = env.alias_find (identity);
 
@@ -9206,7 +9336,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		     its source at the moment of copying).  */
 		  substituted = oa_strip_conversion_call (substituted);
 		  tree identity;
-		  if (!oa_object_identity_decl (substituted, &identity))
+		  if (!oa_object_identity_decl (substituted, &identity)
+		      && !oa_field_slot_identity (substituted, env, &identity))
 		    continue;
 		  identity = env.alias_find (identity);
 
@@ -9298,7 +9429,8 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	     range block for why it's sound specifically here.  */
 	  substituted = oa_strip_conversion_call (substituted);
 	  tree identity;
-	  if (!oa_object_identity_decl (substituted, &identity))
+	  if (!oa_object_identity_decl (substituted, &identity)
+	      && !oa_field_slot_identity (substituted, env, &identity))
 	    continue;
 	  identity = env.alias_find (identity);
 
@@ -9464,11 +9596,13 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
   for (int i = 0; i < nargs; ++i)
     {
       tree identity;
-      if (oa_invalidation_identity_decl (CALL_EXPR_ARG (call, i), &identity))
+      if (oa_invalidation_identity_decl (CALL_EXPR_ARG (call, i), &identity)
+	  || oa_field_slot_identity (CALL_EXPR_ARG (call, i), env, &identity))
 	{
 	  identity = env.alias_find (identity);
 	  env.predicate_fact_invalidate (identity);
 	  env.contract_field_range_invalidate_all (identity);
+	  env.field_alias_invalidate_all (identity);
 	}
     }
 }
@@ -10086,7 +10220,8 @@ oa_env_check_field_range_fact (oa_analysis_env *env, tree base_expr,
      it's sound specifically at a consult site.  */
   base_expr = oa_strip_conversion_call (base_expr);
   tree identity;
-  if (!oa_object_identity_decl (base_expr, &identity))
+  if (!oa_object_identity_decl (base_expr, &identity)
+      && !oa_field_slot_identity (base_expr, e, &identity))
     return OA_UNKNOWN;
   identity = e.alias_find (identity);
   oa_contract_field_range_fact established;
@@ -10881,7 +11016,8 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
 					&negated))
 	continue;
       tree identity;
-      if (oa_object_identity_decl (arg_decl, &identity))
+      if (oa_object_identity_decl (arg_decl, &identity)
+	  || oa_field_slot_identity (arg_decl, env, &identity))
 	env.predicate_fact_set (env.alias_find (identity), pred_fn, !negated,
 				 conveyor_ok);
     }
@@ -10930,7 +11066,8 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
     {
       tree ptr_expr = oa_strip_symbolic_ptr_expr (field_groups[i].ptr_expr);
       tree identity;
-      if (!oa_object_identity_decl (ptr_expr, &identity))
+      if (!oa_object_identity_decl (ptr_expr, &identity)
+	  && !oa_field_slot_identity (ptr_expr, env, &identity))
 	continue;
       identity = env.alias_find (identity);
       env.contract_field_range_set (identity, field_groups[i].field,
@@ -11622,6 +11759,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	 no-ops for whichever one D isn't.  */
       checkenv.contract_scalar_range_invalidate (d);
       checkenv.contract_field_range_invalidate_all (d);
+      checkenv.field_alias_invalidate_all (d);
 
       bool saved_tracking = oa_return_tracking;
       oa_return_tracking = false;
@@ -11695,6 +11833,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	 the two new static-only symbolic range maps, for the same reason.  */
       env.contract_scalar_range_invalidate (range_result_decls[i]);
       env.contract_field_range_invalidate_all (range_result_decls[i]);
+      env.field_alias_invalidate_all (range_result_decls[i]);
     }
 }
 
@@ -12207,6 +12346,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.contract_field_range_merge_with (result);
 		merged.shadow_decls_merge_with (result);
 		merged.alias_merge_with (result);
+		merged.field_alias_merge_with (result);
 	      }
 	  };
 
@@ -12489,6 +12629,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		env.predicate_fact_invalidate (identity);
 		env.relational_invalidate_involving (identity);
 		env.contract_field_range_invalidate_all (identity);
+		env.field_alias_invalidate_all (identity);
 		env.alias_invalidate (identity);
 	      }
 	    else
@@ -12524,6 +12665,28 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 			       OBJ_EXPR's own raw key.  */
 			    field_identity = env.alias_find (field_identity);
 			    env.contract_field_range_invalidate (field_identity, field);
+			    /* Stage 2a: LHS ('h.ptr' or 'hp->ptr') is a
+			       pointer/reference-typed field slot -- record
+			       what it now aliases (RHS resolved via either
+			       resolver, so a field-to-field copy like
+			       'h.ptr = other.ptr;' works too), or drop any
+			       stale alias if RHS doesn't resolve to anything
+			       recognizable.  Gated on the field's own type,
+			       matching Stage 1's own plain-decl gating -- a
+			       scalar field write ('h.count = q;') must not
+			       populate this map at all.  */
+			    if (POINTER_TYPE_P (TREE_TYPE (field))
+				|| TREE_CODE (TREE_TYPE (field)) == REFERENCE_TYPE)
+			      {
+				tree alias_rhs_identity;
+				if (oa_object_identity_decl (rhs, &alias_rhs_identity)
+				    || oa_field_slot_identity (rhs, env,
+							       &alias_rhs_identity))
+				  env.field_alias_set (field_identity, field,
+							env.alias_find (alias_rhs_identity));
+				else
+				  env.field_alias_invalidate (field_identity, field);
+			      }
 			  }
 		      }
 		  }
@@ -12768,6 +12931,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    /* Pointer-aliasing fix: agreement-based, same as predicate_
 	       fact_merge_with -- see oa_env::alias_find's own comment.  */
 	    then_env.alias_merge_with (else_env);
+	    then_env.field_alias_merge_with (else_env);
 	    env.assign (then_env);
 	  }
 	return;
@@ -12832,6 +12996,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    /* Pointer-aliasing fix: same agreement-based merge as COND_EXPR
 	       above -- see oa_env::alias_find's own comment.  */
 	    then_env.alias_merge_with (else_env);
+	    then_env.field_alias_merge_with (else_env);
 	    env.assign (then_env);
 	  }
 	return;
@@ -12972,6 +13137,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		/* Pointer-aliasing fix: same agreement-based merge as the
 		   if/else case -- see oa_env::alias_find's own comment.  */
 		merged.alias_merge_with (current);
+		merged.field_alias_merge_with (current);
 	      }
 	  };
 
@@ -13033,6 +13199,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.contract_field_range_merge_with (env);
 		merged.shadow_decls_merge_with (env);
 		merged.alias_merge_with (env);
+		merged.field_alias_merge_with (env);
 	      }
 	    any_result = true;
 	  }
