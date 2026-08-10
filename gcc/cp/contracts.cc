@@ -12008,6 +12008,30 @@ oa_walk_stmt (tree *stmt, oa_env &env)
       oa_walk_stmt (&TREE_OPERAND (t, 1), env);
       return;
 
+    case CLEANUP_STMT:
+      /* Emitted whenever a local variable has a non-trivial destructor
+	 (i.e. very commonly): CLEANUP_BODY is "the rest of this block"
+	 (every statement from here to the end of the enclosing scope,
+	 not just the very next one -- the whole remainder is nested
+	 inside this one node, not a sibling of it), CLEANUP_EXPR is the
+	 destructor call to run when leaving CLEANUP_BODY, CLEANUP_DECL
+	 the variable it's for.  Found via direct testing (a temporary
+	 per-statement trace of every TREE_CODE this walk visits) that,
+	 with no case for this node, execution fell to the default
+	 fallback below, which only scans for *stray* is_object_address/
+	 symbolic misuse and never recurses into CLEANUP_BODY at all --
+	 silently skipping every statement following such a declaration,
+	 for every analysis in this file (establish, consult, invalidate
+	 alike), not just one fact shape. Walk CLEANUP_BODY first (the
+	 code that actually runs), then CLEANUP_EXPR (the destructor call
+	 itself -- a bare CALL_EXPR, handled the same as any other
+	 expression-statement call by the CALL_EXPR case below, so Rule 2
+	 invalidation sees it taking CLEANUP_DECL's own address like any
+	 other call would).  */
+      oa_walk_stmt (&CLEANUP_BODY (t), env);
+      oa_walk_stmt (&CLEANUP_EXPR (t), env);
+      return;
+
     case PRECONDITION_STMT:
       oa_handle_precondition_stmt (t, env);
       return;
