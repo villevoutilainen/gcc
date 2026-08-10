@@ -9830,6 +9830,20 @@ oa_could_alias_as_parameters (tree a, tree b)
   return TYPE_MAIN_VARIANT (pa) == TYPE_MAIN_VARIANT (pb);
 }
 
+/* Public wrapper, the same "thin, non-static, same name + _public
+   suffix" shape as this file's own dozen-plus other GIMPLE-engine-
+   facing exports (oa_collect_conjuncts_public, oa_strip_symbolic_ptr_
+   expr_public, etc.) -- oa_could_alias_as_parameters itself needs no
+   change at all to be reused by contracts-gimple.cc's own Stage 4e:
+   it only ever inspects two PARM_DECLs' own types (TYPE_RESTRICT,
+   TYPE_MAIN_VARIANT, VOID_TYPE_P), nothing AST-specific.  */
+
+bool
+oa_could_alias_as_parameters_public (tree a, tree b)
+{
+  return oa_could_alias_as_parameters (a, b);
+}
+
 /* IDENTITY is guarded to be a genuine parameter of the currently-
    analyzed function before doing anything, so invalidating a local
    variable's own identity (the overwhelmingly common case) is an
@@ -12965,6 +12979,19 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 			       OBJ_EXPR's own raw key.  */
 			    field_identity = env.alias_find (field_identity);
 			    env.contract_field_range_invalidate (field_identity, field);
+			    /* Stage 4a: a named predicate (e.g. 'is_opened')
+			       is opaque and could depend on any field, so
+			       a direct write to *any* field must invalidate
+			       whole-object predicate facts about FIELD_
+			       IDENTITY too -- not just the narrower field-
+			       range fact above. Mirrors the sibling whole-
+			       object branch above, which already does this
+			       unconditionally. Found by asking, after Stage
+			       3 shipped, whether any gaps remained: 'open_it
+			       (p); p->opened = false; use_it (p);' (the same
+			       p, no aliasing at all) wrongly verified before
+			       this fix.  */
+			    env.predicate_fact_invalidate (field_identity);
 			    /* Stage 2a: LHS ('h.ptr' or 'hp->ptr') is a
 			       pointer/reference-typed field slot -- record
 			       what it now aliases (RHS resolved via either
@@ -13010,6 +13037,17 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 			if (oa_object_identity_decl (arr_base, &array_identity))
 			  {
 			    array_identity = env.alias_find (array_identity);
+			    /* Stage 4a: same reasoning as the field-write
+			       branch above -- a named predicate could, in
+			       principle, be declared to accept the array's
+			       own identity directly, so any write through it
+			       must invalidate whole-object predicate facts
+			       about ARRAY_IDENTITY too. Deliberately NOT
+			       gated on the element's own type (unlike the
+			       block below): this is about ARRAY_IDENTITY's
+			       own whole-object facts, independent of what
+			       kind of element was written.  */
+			    env.predicate_fact_invalidate (array_identity);
 			    /* Gated on the *element's* own type, matching the
 			       field block's own gating just above -- a scalar
 			       array's writes must never touch this map at all,
