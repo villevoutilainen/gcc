@@ -5637,6 +5637,71 @@ public:
       m_field_alias_target.remove (to_remove[i]);
   }
 
+  /* Stage 2b: the same "current alias target" tracking as m_field_
+     alias_target above, for a named array's own slot (e.g. 'arr[0]' or
+     the semantically identical '*arr') instead of a struct field.
+     Keyed on (base_identity, HOST_WIDE_INT) rather than (base_identity,
+     FIELD_DECL): an array index, unlike a FIELD_DECL, isn't a small,
+     finite, already-interned identity safely comparable by pointer, so
+     the actual integer value is extracted (via oa_array_index_
+     constant) and used as the key directly, rather than keying on the
+     INTEGER_CST tree itself. int_hash<HOST_WIDE_INT, -1, -2> is the
+     same precedented pattern coroutine-passes.cc's own destinations
+     map already uses; the -1/-2 sentinels are never actually consulted
+     here (pair_hash's own is_empty/is_deleted/mark_empty/mark_deleted
+     all delegate solely to the first, tree-pointer component -- this
+     is why field_alias's own base/FIELD_DECL key shape works safely
+     too), so restricting this map to non-negative indices is purely
+     about not bothering to track an already-UB index, not about
+     sentinel collisions. Same "no identity of last resort" absence of
+     a fallback as field_alias_find, for the same reason: an array-slot
+     expression isn't an interned decl either. See oa_array_slot_
+     identity's own comment for how this map is actually consulted --
+     deliberately a new, separate resolver rather than an extension of
+     oa_object_identity_decl, for the identical Rule-1-dispatch reason
+     field_alias's own comment explains.  */
+  tree *array_alias_find (tree base, HOST_WIDE_INT index)
+  {
+    return m_array_alias_target.get ({base, index});
+  }
+  void array_alias_set (tree base, HOST_WIDE_INT index, tree target)
+  {
+    m_array_alias_target.put ({base, index}, target);
+  }
+  void array_alias_invalidate (tree base, HOST_WIDE_INT index)
+  {
+    m_array_alias_target.remove ({base, index});
+  }
+  /* Mirrors field_alias_invalidate_all's own removal-by-first-key-
+     component sweep -- also the rule an unprovable-index write itself
+     uses (see the Rule 1 write-detection site's own comment): BASE's
+     own reassignment/escape, or a write through it with an index that
+     could be any slot, must drop every array-slot alias recorded for
+     it.  */
+  void array_alias_invalidate_all (tree base)
+  {
+    auto_vec<std::pair<tree, HOST_WIDE_INT>> to_remove;
+    for (auto it : m_array_alias_target)
+      if (it.first.first == base)
+	to_remove.safe_push (it.first);
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_array_alias_target.remove (to_remove[i]);
+  }
+  /* Agreement-based, mirroring field_alias_merge_with exactly (never a
+     union -- see alias_merge_with's own comment for why).  */
+  void array_alias_merge_with (oa_env &other)
+  {
+    auto_vec<std::pair<tree, HOST_WIDE_INT>> to_remove;
+    for (auto it : m_array_alias_target)
+      {
+	tree *ov = other.m_array_alias_target.get (it.first);
+	if (!ov || *ov != it.second)
+	  to_remove.safe_push (it.first);
+      }
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_array_alias_target.remove (to_remove[i]);
+  }
+
   /* A shared substrate, same gating and shape as m_predicate_fact_map
      above, for oa_relational_fact ("LHS CODE RHS holds") instead of a
      named-predicate call.  relational_merge_with mirrors predicate_
@@ -5920,6 +5985,8 @@ public:
       r.m_alias_target.put (it.first, it.second);
     for (auto it : m_field_alias_target)
       r.m_field_alias_target.put (it.first, it.second);
+    for (auto it : m_array_alias_target)
+      r.m_array_alias_target.put (it.first, it.second);
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -5967,6 +6034,9 @@ public:
     m_field_alias_target.empty ();
     for (auto it : other.m_field_alias_target)
       m_field_alias_target.put (it.first, it.second);
+    m_array_alias_target.empty ();
+    for (auto it : other.m_array_alias_target)
+      m_array_alias_target.put (it.first, it.second);
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -6074,6 +6144,8 @@ private:
   hash_map<tree, tree> m_shadow_decls;
   hash_map<tree, tree> m_alias_target;
   hash_map<oa_field_key_hash, tree> m_field_alias_target;
+  hash_map<pair_hash<nofree_ptr_hash<tree_node>,
+		      int_hash<HOST_WIDE_INT, -1, -2>>, tree> m_array_alias_target;
 };
 
 /* An empty, no-added-members subclass, purely so a plugin (which only
@@ -6472,6 +6544,116 @@ oa_field_slot_identity (tree expr, oa_env &env, tree *decl_out)
     return false;
   base_identity = env.alias_find (base_identity);
   tree *target = env.field_alias_find (base_identity, field);
+  if (!target)
+    return false;
+  *decl_out = *target;
+  return true;
+}
+
+/* Stage 2b: recognizes 'arr[N]' (a literal ARRAY_REF) or '*arr' (an
+   array decaying to a pointer and being immediately dereferenced --
+   confirmed via a raw tree dump to be INDIRECT_REF (NOP_EXPR
+   (ADDR_EXPR (arr))) at this stage, semantically identical to
+   'arr[0]') uniformly, used by both oa_array_slot_identity below and
+   the Rule 1 write-detection site so the two can never drift out of
+   sync the way two independently-written copies of this logic could.
+
+   Deliberately returns the index as a TREE, not yet resolved to a
+   constant: the write site needs to distinguish "not an array-slot
+   access at all" (nothing to do) from "an array-slot access with an
+   unprovable index" (invalidate every tracked slot for this array,
+   see oa_array_index_constant's own comment) -- collapsing both into a
+   single boolean here would lose that distinction.
+
+   Deliberately does not care whether ARR_BASE itself is a plain decl
+   or something else (e.g. a COMPONENT_REF for a struct-embedded array,
+   'hp2->arr[0]'/'h2.arr[0]') -- both are syntactically valid array-
+   typed bases here. The caller's own subsequent oa_object_identity_
+   decl call already, correctly, declines for a COMPONENT_REF base (no
+   such case in that function), which is the intended, honestly
+   documented "struct-embedded arrays are out of scope" outcome (see
+   this feature's own plan notes: a struct-embedded array's own slots
+   would need a fundamentally different, 3-tuple (struct_identity,
+   FIELD_DECL, index) key, not attempted here) -- no extra code is
+   needed to enforce that boundary, it falls out for free from reusing
+   the same base-resolution step everywhere.  */
+
+static bool
+oa_array_slot_base (tree expr, tree *arr_base_out, tree *index_out)
+{
+  expr = STRIP_ANY_LOCATION_WRAPPER (expr);
+  if (TREE_CODE (expr) == ARRAY_REF)
+    {
+      tree arr_base = TREE_OPERAND (expr, 0);
+      if (TREE_CODE (TREE_TYPE (arr_base)) != ARRAY_TYPE)
+	return false;
+      *arr_base_out = arr_base;
+      *index_out = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 1));
+      return true;
+    }
+  if (TREE_CODE (expr) == INDIRECT_REF)
+    {
+      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      while (TREE_CODE (op) == NOP_EXPR || TREE_CODE (op) == CONVERT_EXPR
+	     || TREE_CODE (op) == NON_LVALUE_EXPR
+	     || TREE_CODE (op) == VIEW_CONVERT_EXPR)
+	op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
+      if (TREE_CODE (op) != ADDR_EXPR)
+	return false;
+      tree arr_base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
+      if (TREE_CODE (TREE_TYPE (arr_base)) != ARRAY_TYPE)
+	return false;
+      *arr_base_out = arr_base;
+      *index_out = integer_zero_node;
+      return true;
+    }
+  return false;
+}
+
+/* True if INDEX (as returned by oa_array_slot_base) is a provable,
+   non-negative compile-time constant. Non-negative is required purely
+   to keep the value space simple (a negative index into a real,
+   fixed-size array is already UB in the source under analysis, so
+   there is nothing useful to track) -- NOT to avoid colliding with
+   int_hash<HOST_WIDE_INT, -1, -2>'s own empty/deleted sentinels the
+   way it might first appear: pair_hash's own is_empty/is_deleted/
+   mark_empty/mark_deleted all delegate solely to the first (tree
+   pointer) component, so the second component's sentinels are never
+   actually consulted for slot management when used this way, and no
+   such collision could occur regardless of this gate.  */
+
+static bool
+oa_array_index_constant (tree index, HOST_WIDE_INT *out)
+{
+  if (TREE_CODE (index) != INTEGER_CST || !tree_fits_shwi_p (index)
+      || tree_int_cst_sgn (index) < 0)
+    return false;
+  *out = tree_to_shwi (index);
+  return true;
+}
+
+/* Stage 2b: the array-element analogue of oa_field_slot_identity
+   above -- same "new, separate, purely additive resolver" reasoning,
+   same reason it's never folded into oa_object_identity_decl.  */
+
+static bool
+oa_array_slot_identity (tree expr, oa_env &env, tree *decl_out)
+{
+  expr = STRIP_ANY_LOCATION_WRAPPER (expr);
+  if (!(POINTER_TYPE_P (TREE_TYPE (expr))
+	|| TREE_CODE (TREE_TYPE (expr)) == REFERENCE_TYPE))
+    return false;
+  tree arr_base, index;
+  if (!oa_array_slot_base (expr, &arr_base, &index))
+    return false;
+  HOST_WIDE_INT idx;
+  if (!oa_array_index_constant (index, &idx))
+    return false;
+  tree array_identity;
+  if (!oa_object_identity_decl (arr_base, &array_identity))
+    return false;
+  array_identity = env.alias_find (array_identity);
+  tree *target = env.array_alias_find (array_identity, idx);
   if (!target)
     return false;
   *decl_out = *target;
@@ -8187,7 +8369,8 @@ oa_env_predicate_result (oa_env &env, tree substituted, tree pred_fn,
   substituted = oa_strip_conversion_call (substituted);
   tree identity;
   if (!oa_object_identity_decl (substituted, &identity)
-      && !oa_field_slot_identity (substituted, env, &identity))
+      && !oa_field_slot_identity (substituted, env, &identity)
+      && !oa_array_slot_identity (substituted, env, &identity))
     return OA_UNKNOWN;
   identity = env.alias_find (identity);
   oa_predicate_fact fact;
@@ -9073,7 +9256,8 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 
 	  tree identity;
 	  if (!oa_object_identity_decl (substituted, &identity)
-	      && !oa_field_slot_identity (substituted, env, &identity))
+	      && !oa_field_slot_identity (substituted, env, &identity)
+	      && !oa_array_slot_identity (substituted, env, &identity))
 	    continue;
 	  identity = env.alias_find (identity);
 
@@ -9115,7 +9299,8 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 		    continue;
 		  tree identity;
 		  if (!oa_object_identity_decl (substituted, &identity)
-		      && !oa_field_slot_identity (substituted, env, &identity))
+		      && !oa_field_slot_identity (substituted, env, &identity)
+		      && !oa_array_slot_identity (substituted, env, &identity))
 		    continue;
 		  identity = env.alias_find (identity);
 		  env.contract_field_range_set (identity, field_groups[i].field,
@@ -9180,7 +9365,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 
 	  tree identity;
 	  if (!oa_object_identity_decl (substituted, &identity)
-	      && !oa_field_slot_identity (substituted, env, &identity))
+	      && !oa_field_slot_identity (substituted, env, &identity)
+	      && !oa_array_slot_identity (substituted, env, &identity))
 	    continue;
 	  identity = env.alias_find (identity);
 
@@ -9337,7 +9523,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		  substituted = oa_strip_conversion_call (substituted);
 		  tree identity;
 		  if (!oa_object_identity_decl (substituted, &identity)
-		      && !oa_field_slot_identity (substituted, env, &identity))
+		      && !oa_field_slot_identity (substituted, env, &identity)
+		      && !oa_array_slot_identity (substituted, env, &identity))
 		    continue;
 		  identity = env.alias_find (identity);
 
@@ -9430,7 +9617,8 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	  substituted = oa_strip_conversion_call (substituted);
 	  tree identity;
 	  if (!oa_object_identity_decl (substituted, &identity)
-	      && !oa_field_slot_identity (substituted, env, &identity))
+	      && !oa_field_slot_identity (substituted, env, &identity)
+	      && !oa_array_slot_identity (substituted, env, &identity))
 	    continue;
 	  identity = env.alias_find (identity);
 
@@ -9597,12 +9785,14 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
     {
       tree identity;
       if (oa_invalidation_identity_decl (CALL_EXPR_ARG (call, i), &identity)
-	  || oa_field_slot_identity (CALL_EXPR_ARG (call, i), env, &identity))
+	  || oa_field_slot_identity (CALL_EXPR_ARG (call, i), env, &identity)
+	  || oa_array_slot_identity (CALL_EXPR_ARG (call, i), env, &identity))
 	{
 	  identity = env.alias_find (identity);
 	  env.predicate_fact_invalidate (identity);
 	  env.contract_field_range_invalidate_all (identity);
 	  env.field_alias_invalidate_all (identity);
+	  env.array_alias_invalidate_all (identity);
 	}
     }
 }
@@ -10221,7 +10411,8 @@ oa_env_check_field_range_fact (oa_analysis_env *env, tree base_expr,
   base_expr = oa_strip_conversion_call (base_expr);
   tree identity;
   if (!oa_object_identity_decl (base_expr, &identity)
-      && !oa_field_slot_identity (base_expr, e, &identity))
+      && !oa_field_slot_identity (base_expr, e, &identity)
+      && !oa_array_slot_identity (base_expr, e, &identity))
     return OA_UNKNOWN;
   identity = e.alias_find (identity);
   oa_contract_field_range_fact established;
@@ -11017,7 +11208,8 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
 	continue;
       tree identity;
       if (oa_object_identity_decl (arg_decl, &identity)
-	  || oa_field_slot_identity (arg_decl, env, &identity))
+	  || oa_field_slot_identity (arg_decl, env, &identity)
+	  || oa_array_slot_identity (arg_decl, env, &identity))
 	env.predicate_fact_set (env.alias_find (identity), pred_fn, !negated,
 				 conveyor_ok);
     }
@@ -11067,7 +11259,8 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
       tree ptr_expr = oa_strip_symbolic_ptr_expr (field_groups[i].ptr_expr);
       tree identity;
       if (!oa_object_identity_decl (ptr_expr, &identity)
-	  && !oa_field_slot_identity (ptr_expr, env, &identity))
+	  && !oa_field_slot_identity (ptr_expr, env, &identity)
+	  && !oa_array_slot_identity (ptr_expr, env, &identity))
 	continue;
       identity = env.alias_find (identity);
       env.contract_field_range_set (identity, field_groups[i].field,
@@ -11760,6 +11953,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       checkenv.contract_scalar_range_invalidate (d);
       checkenv.contract_field_range_invalidate_all (d);
       checkenv.field_alias_invalidate_all (d);
+      checkenv.array_alias_invalidate_all (d);
 
       bool saved_tracking = oa_return_tracking;
       oa_return_tracking = false;
@@ -11834,6 +12028,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       env.contract_scalar_range_invalidate (range_result_decls[i]);
       env.contract_field_range_invalidate_all (range_result_decls[i]);
       env.field_alias_invalidate_all (range_result_decls[i]);
+      env.array_alias_invalidate_all (range_result_decls[i]);
     }
 }
 
@@ -12347,6 +12542,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.shadow_decls_merge_with (result);
 		merged.alias_merge_with (result);
 		merged.field_alias_merge_with (result);
+		merged.array_alias_merge_with (result);
 	      }
 	  };
 
@@ -12630,6 +12826,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		env.relational_invalidate_involving (identity);
 		env.contract_field_range_invalidate_all (identity);
 		env.field_alias_invalidate_all (identity);
+		env.array_alias_invalidate_all (identity);
 		env.alias_invalidate (identity);
 	      }
 	    else
@@ -12681,11 +12878,64 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 				tree alias_rhs_identity;
 				if (oa_object_identity_decl (rhs, &alias_rhs_identity)
 				    || oa_field_slot_identity (rhs, env,
+							       &alias_rhs_identity)
+				    || oa_array_slot_identity (rhs, env,
 							       &alias_rhs_identity))
 				  env.field_alias_set (field_identity, field,
 							env.alias_find (alias_rhs_identity));
 				else
 				  env.field_alias_invalidate (field_identity, field);
+			      }
+			  }
+		      }
+		  }
+		else
+		  {
+		    /* Stage 2b: 'arr[N] = x;' or the semantically identical
+		       '*arr = x;' -- the array-element analogue of the
+		       COMPONENT_REF block just above. ARR_BASE may itself be
+		       a COMPONENT_REF (a struct-embedded array, 'hp2->arr[0]'/
+		       'h2.arr[0]') -- oa_object_identity_decl below already,
+		       correctly, declines for that shape (no COMPONENT_REF
+		       case), which is the intended, documented "struct-
+		       embedded arrays are out of scope" outcome; nothing
+		       further is needed to enforce it here.  */
+		    tree arr_base, index;
+		    if (oa_array_slot_base (base, &arr_base, &index))
+		      {
+			tree array_identity;
+			if (oa_object_identity_decl (arr_base, &array_identity))
+			  {
+			    array_identity = env.alias_find (array_identity);
+			    /* Gated on the *element's* own type, matching the
+			       field block's own gating just above -- a scalar
+			       array's writes must never touch this map at all,
+			       not even to call invalidate_all on a base that
+			       could never have an entry.  */
+			    if (POINTER_TYPE_P (TREE_TYPE (base))
+				|| TREE_CODE (TREE_TYPE (base)) == REFERENCE_TYPE)
+			      {
+				HOST_WIDE_INT idx;
+				if (oa_array_index_constant (index, &idx))
+				  {
+				    tree alias_rhs_identity;
+				    if (oa_object_identity_decl (rhs, &alias_rhs_identity)
+					|| oa_field_slot_identity (rhs, env,
+							   &alias_rhs_identity)
+					|| oa_array_slot_identity (rhs, env,
+							   &alias_rhs_identity))
+				      env.array_alias_set (array_identity, idx,
+							    env.alias_find (alias_rhs_identity));
+				    else
+				      env.array_alias_invalidate (array_identity, idx);
+				  }
+				else
+				  /* Unprovable index -- could touch any
+				     previously tracked slot of this array; see
+				     oa_env::array_alias_invalidate_all's own
+				     comment for why this must be a full sweep,
+				     not a decline-to-update.  */
+				  env.array_alias_invalidate_all (array_identity);
 			      }
 			  }
 		      }
@@ -12932,6 +13182,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       fact_merge_with -- see oa_env::alias_find's own comment.  */
 	    then_env.alias_merge_with (else_env);
 	    then_env.field_alias_merge_with (else_env);
+	    then_env.array_alias_merge_with (else_env);
 	    env.assign (then_env);
 	  }
 	return;
@@ -12997,6 +13248,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       above -- see oa_env::alias_find's own comment.  */
 	    then_env.alias_merge_with (else_env);
 	    then_env.field_alias_merge_with (else_env);
+	    then_env.array_alias_merge_with (else_env);
 	    env.assign (then_env);
 	  }
 	return;
@@ -13138,6 +13390,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		   if/else case -- see oa_env::alias_find's own comment.  */
 		merged.alias_merge_with (current);
 		merged.field_alias_merge_with (current);
+		merged.array_alias_merge_with (current);
 	      }
 	  };
 
@@ -13200,6 +13453,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.shadow_decls_merge_with (env);
 		merged.alias_merge_with (env);
 		merged.field_alias_merge_with (env);
+		merged.array_alias_merge_with (env);
 	      }
 	    any_result = true;
 	  }
