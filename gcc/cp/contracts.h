@@ -452,6 +452,13 @@ extern bool oa_match_field_range_comparison
    to its own real decl -- see that function's own comment.  */
 extern tree oa_strip_symbolic_ptr_expr_public (tree ptr_expr);
 
+/* True if A and B are both non-__restrict pointer/reference PARM_DECLs
+   with the same (or void-compatible) pointee type, i.e. a caller could
+   legally pass the same object through both -- D4324 Stage 3's own
+   parameter-alias-group check, reused as-is by a GIMPLE-pass-based
+   consumer's own analogous sweep (contracts-gimple.cc).  */
+extern bool oa_could_alias_as_parameters_public (tree a, tree b);
+
 /* True while parsing/substituting a contract condition that opts into
    constification via its control type's constify member (D4324: off by
    default).  */
