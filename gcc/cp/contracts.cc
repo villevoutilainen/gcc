@@ -5523,6 +5523,64 @@ public:
       m_predicate_fact_map.put (to_keep[i], kept_facts[i]);
   }
 
+  /* Fixes a soundness gap in m_predicate_fact_map/m_contract_field_
+     range_map's own invalidation: both are invalidated (Rule 2, see
+     oa_invalidate_symbolic_facts_for_call_args) keyed on a tracked
+     pointer's own syntactic decl identity, not on what it points to,
+     so 'file *q = p; mutate (q);' never invalidates a fact established
+     via 'p' even though q and p name the same object -- confirmed via
+     direct testing to be a real, silent unsoundness for -fcontract-
+     symbolic-proofs specifically (no runtime backstop there, unlike
+     conveyor). M_ALIAS_TARGET[d] = target means "d currently holds the
+     same pointer value as canonical decl TARGET"; TARGET itself never
+     has its own entry (every write stores the fully-resolved target,
+     so alias_find is always a single lookup, never a chase). Every
+     other identity-resolution/establish/consult/invalidate call site
+     for the two maps above canonicalizes through alias_find first, so
+     'q' and 'p' share the same map key once aliased.
+
+     Deliberately NOT a union-find/DSU: an earlier version of this fix
+     used one, merged across branches by unioning edges (matching
+     m_shadow_decls_merge_with's own "union, once true always true"
+     semantics) -- rejected after review found it unsound. DSU's own
+     union(a,b) operates on *roots*, so reassigning any variable that
+     once shared history with a component permanently fuses that whole
+     component with whatever the variable is reassigned to next: 'file
+     *q = p1; q = p2;' would incorrectly fuse p1 and p2's own
+     identities together forever, even though q never simultaneously
+     aliased both. And "current alias target" isn't a monotonic
+     property the way shadow existence is -- it changes on every
+     reassignment of the aliasing decl itself -- so union-only merging
+     also fails the branch-merge case: an alias created on only one arm
+     of an 'if' would survive unconditionally past the join. A plain,
+     *overwritten* hash_map with agreement-based merging (below) avoids
+     both: reassigning q only ever touches q's own entry, and a branch-
+     only alias is correctly dropped, not kept, at the join.  */
+  tree alias_find (tree d)
+  {
+    tree *t = m_alias_target.get (d);
+    return t ? *t : d;
+  }
+  void alias_set (tree d, tree target) { m_alias_target.put (d, target); }
+  void alias_invalidate (tree d) { m_alias_target.remove (d); }
+  /* Agreement-based, mirroring predicate_fact_merge_with exactly: an
+     entry survives only if both sides have it and agree on the same
+     target, otherwise it's dropped (treated as "no longer known to
+     alias anything" going forward) -- never a union, per this
+     structure's own comment above.  */
+  void alias_merge_with (oa_env &other)
+  {
+    auto_vec<tree> to_remove;
+    for (auto it : m_alias_target)
+      {
+	tree *ov = other.m_alias_target.get (it.first);
+	if (!ov || *ov != it.second)
+	  to_remove.safe_push (it.first);
+      }
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_alias_target.remove (to_remove[i]);
+  }
+
   /* A shared substrate, same gating and shape as m_predicate_fact_map
      above, for oa_relational_fact ("LHS CODE RHS holds") instead of a
      named-predicate call.  relational_merge_with mirrors predicate_
@@ -5802,6 +5860,8 @@ public:
     r.m_outermost_bind = m_outermost_bind;
     for (auto it : m_shadow_decls)
       r.m_shadow_decls.put (it.first, it.second);
+    for (auto it : m_alias_target)
+      r.m_alias_target.put (it.first, it.second);
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -5843,6 +5903,9 @@ public:
     m_shadow_decls.empty ();
     for (auto it : other.m_shadow_decls)
       m_shadow_decls.put (it.first, it.second);
+    m_alias_target.empty ();
+    for (auto it : other.m_alias_target)
+      m_alias_target.put (it.first, it.second);
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -5948,6 +6011,7 @@ private:
   hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_contract_field_range_map;
   tree m_outermost_bind = NULL_TREE;
   hash_map<tree, tree> m_shadow_decls;
+  hash_map<tree, tree> m_alias_target;
 };
 
 /* An empty, no-added-members subclass, purely so a plugin (which only
@@ -7998,6 +8062,7 @@ oa_env_predicate_result (oa_env &env, tree substituted, tree pred_fn,
   tree identity;
   if (!oa_object_identity_decl (substituted, &identity))
     return OA_UNKNOWN;
+  identity = env.alias_find (identity);
   oa_predicate_fact fact;
   bool found = env.predicate_fact_get (identity, &fact);
   if (!found || fact.pred_fn != pred_fn
@@ -8882,6 +8947,7 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 	  tree identity;
 	  if (!oa_object_identity_decl (substituted, &identity))
 	    continue;
+	  identity = env.alias_find (identity);
 
 	  env.predicate_fact_set (identity, pred_fn, !negated, conveyor_established);
 	}
@@ -8922,6 +8988,7 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 		  tree identity;
 		  if (!oa_object_identity_decl (substituted, &identity))
 		    continue;
+		  identity = env.alias_find (identity);
 		  env.contract_field_range_set (identity, field_groups[i].field,
 						field_groups[i].range,
 						conveyor_established);
@@ -8985,6 +9052,7 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	  tree identity;
 	  if (!oa_object_identity_decl (substituted, &identity))
 	    continue;
+	  identity = env.alias_find (identity);
 
 	  bool required = !negated;
 	  oa_predicate_fact fact;
@@ -9140,6 +9208,7 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		  tree identity;
 		  if (!oa_object_identity_decl (substituted, &identity))
 		    continue;
+		  identity = env.alias_find (identity);
 
 		  oa_contract_field_range_fact established;
 		  if (!env.contract_field_range_get (identity, field_groups[i].field,
@@ -9231,6 +9300,7 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	  tree identity;
 	  if (!oa_object_identity_decl (substituted, &identity))
 	    continue;
+	  identity = env.alias_find (identity);
 
 	  oa_contract_field_range_fact established;
 	  /* Conveyor's own consult: a fact backed only by a symbolic
@@ -9352,8 +9422,16 @@ oa_invalidation_identity_decl (tree expr, tree *decl_out)
       return false;
     }
 
+  /* A bare REFERENCE_TYPE decl reaches here, with no ADDR_EXPR wrapper
+     at all, for exactly '&some_reference' (taking a reference's own
+     address needs no extra address-of node -- the reference already
+     internally represents one) -- found via direct testing that
+     'mutate_via_alias (&r)' for 'file &r = *p;' never invalidated
+     anything at all before this, the same "real aliasing concern" as
+     a bare pointer passed by value, just reached one layer differently.  */
   if ((VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
-      && POINTER_TYPE_P (TREE_TYPE (expr)))
+      && (POINTER_TYPE_P (TREE_TYPE (expr))
+	  || TREE_CODE (TREE_TYPE (expr)) == REFERENCE_TYPE))
     {
       *decl_out = expr;
       return true;
@@ -9388,6 +9466,7 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
       tree identity;
       if (oa_invalidation_identity_decl (CALL_EXPR_ARG (call, i), &identity))
 	{
+	  identity = env.alias_find (identity);
 	  env.predicate_fact_invalidate (identity);
 	  env.contract_field_range_invalidate_all (identity);
 	}
@@ -10009,6 +10088,7 @@ oa_env_check_field_range_fact (oa_analysis_env *env, tree base_expr,
   tree identity;
   if (!oa_object_identity_decl (base_expr, &identity))
     return OA_UNKNOWN;
+  identity = e.alias_find (identity);
   oa_contract_field_range_fact established;
   if (!e.contract_field_range_get (identity, field, &established)
       || (require_conveyor && !established.conveyor_established))
@@ -10802,7 +10882,8 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
 	continue;
       tree identity;
       if (oa_object_identity_decl (arg_decl, &identity))
-	env.predicate_fact_set (identity, pred_fn, !negated, conveyor_ok);
+	env.predicate_fact_set (env.alias_find (identity), pred_fn, !negated,
+				 conveyor_ok);
     }
 
   /* A relational conjunct against another of the SAME function's own
@@ -10851,6 +10932,7 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
       tree identity;
       if (!oa_object_identity_decl (ptr_expr, &identity))
 	continue;
+      identity = env.alias_find (identity);
       env.contract_field_range_set (identity, field_groups[i].field,
 				     field_groups[i].range, conveyor_ok);
     }
@@ -11524,6 +11606,12 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       /* Same staleness concern, for the shared predicate-fact map -- a
 	 no-op when tracking is inactive.  */
       checkenv.predicate_fact_invalidate (d);
+      /* D's own VALUE (not whatever it aliased) may change across this
+	 speculative re-walk, so any "D currently aliases TARGET" entry
+	 from before it can no longer be trusted -- TARGET's own fact
+	 stays valid (D's own reassignment doesn't touch TARGET's actual
+	 memory), only D's own claim to still equal it is stale.  */
+      checkenv.alias_invalidate (d);
       /* Same staleness concern, for a relational fact naming D on
 	 either side.  */
       checkenv.relational_invalidate_involving (d);
@@ -11597,6 +11685,9 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	 compute for a symbolic fact (see the plan's own scope notes), so
 	 this is simply always invalidated, never re-established here.  */
       env.predicate_fact_invalidate (range_result_decls[i]);
+      /* Same "D's own value may have changed" treatment as the
+	 speculative re-walk above.  */
+      env.alias_invalidate (range_result_decls[i]);
       /* Same treatment for a relational fact naming this decl on
 	 either side.  */
       env.relational_invalidate_involving (range_result_decls[i]);
@@ -12115,6 +12206,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.contract_scalar_range_merge_with (result);
 		merged.contract_field_range_merge_with (result);
 		merged.shadow_decls_merge_with (result);
+		merged.alias_merge_with (result);
 	      }
 	  };
 
@@ -12219,7 +12311,8 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    if (TREE_CODE (stripped_init_pred) == CALL_EXPR
 		&& oa_call_symbolic_predicate_p (stripped_init_pred, &pred_fn,
 						  &polarity, &pred_conveyor_established))
-	      env.predicate_fact_set (decl, pred_fn, polarity, pred_conveyor_established);
+	      env.predicate_fact_set (env.alias_find (decl), pred_fn, polarity,
+				       pred_conveyor_established);
 	  }
 	if (VAR_P (decl) && POINTER_TYPE_P (TREE_TYPE (decl)))
 	  {
@@ -12239,6 +12332,38 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       kept for the same completeness/consistency reasons as the
 	       is_object_address/range invalidation just above.  */
 	    env.predicate_fact_invalidate (decl);
+	    /* Pointer-aliasing fix, direct-initialization shape's own
+	       analogue of the INIT_EXPR/MODIFY_EXPR case's identical
+	       block below -- see oa_env::alias_find's own comment.
+	       Whatever oa_object_identity_decl itself resolves to, not
+	       just another pointer decl -- that function already treats
+	       '&f' and 'f' as the same identity for is_opened(f)/is_opened
+	       (&f) purposes, so a pointer *initialized* from '&f' (or
+	       'this') must reach that same identity too, the same way a
+	       pointer copied from another pointer does.  */
+	    tree alias_rhs_identity;
+	    if (DECL_INITIAL (decl)
+		&& oa_object_identity_decl (DECL_INITIAL (decl), &alias_rhs_identity)
+		&& alias_rhs_identity != decl)
+	      env.alias_set (decl, env.alias_find (alias_rhs_identity));
+	    else
+	      env.alias_invalidate (decl);
+	  }
+	else if (VAR_P (decl) && TREE_CODE (TREE_TYPE (decl)) == REFERENCE_TYPE
+		 && DECL_INITIAL (decl))
+	  {
+	    /* A reference can never be rebound after its own declaration
+	       (unlike a pointer, there is no INIT_EXPR/MODIFY_EXPR shape
+	       to also handle -- 'r = x;' assigns through the reference,
+	       it never re-targets it), so this is the *only* site a
+	       reference's own aliasing needs recording at.  Same "whatever
+	       oa_object_identity_decl itself resolves to" scope as the
+	       pointer case above (see its own comment) -- covers 'file &r
+	       = *p;', 'file &r2 = r;', and 'file &r = f;' alike.  */
+	    tree alias_rhs_identity;
+	    if (oa_object_identity_decl (DECL_INITIAL (decl), &alias_rhs_identity)
+		&& alias_rhs_identity != decl)
+	      env.alias_set (decl, env.alias_find (alias_rhs_identity));
 	  }
 	else if (VAR_P (decl) && INTEGRAL_TYPE_P (TREE_TYPE (decl)))
 	  {
@@ -12348,9 +12473,23 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    tree identity;
 	    if (oa_object_identity_decl (lhs, &identity))
 	      {
+		/* Deliberately NOT canonicalized through alias_find: this
+		   branch fires for LHS's own reassignment (LHS may be a
+		   pointer being repointed, not its pointee being mutated),
+		   so invalidating whatever LHS's own raw key tracks is
+		   correct -- if LHS currently aliases some other TARGET,
+		   nothing was ever stored under LHS's own raw key to begin
+		   with (establish/consult always canonicalize first), and
+		   TARGET's own fact must NOT be invalidated here: LHS being
+		   repointed doesn't touch TARGET's actual memory. Do still
+		   drop LHS's own now-stale alias entry, if any -- LHS's own
+		   value may have just changed, so it can no longer be
+		   trusted to still equal whatever it aliased before this
+		   assignment (see oa_env::alias_find's own comment).  */
 		env.predicate_fact_invalidate (identity);
 		env.relational_invalidate_involving (identity);
 		env.contract_field_range_invalidate_all (identity);
+		env.alias_invalidate (identity);
 	      }
 	    else
 	      {
@@ -12376,7 +12515,16 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 			    : obj;
 			tree field_identity;
 			if (oa_object_identity_decl (obj_expr, &field_identity))
-			  env.contract_field_range_invalidate (field_identity, field);
+			  {
+			    /* Unlike the whole-object branch above, this
+			       genuinely mutates the pointee's own memory (a
+			       field write through OBJ_EXPR), so -- unlike a
+			       pointer's own reassignment -- it must reach
+			       whatever OBJ_EXPR currently aliases, not just
+			       OBJ_EXPR's own raw key.  */
+			    field_identity = env.alias_find (field_identity);
+			    env.contract_field_range_invalidate (field_identity, field);
+			  }
 		      }
 		  }
 	      }
@@ -12401,7 +12549,8 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    if (TREE_CODE (stripped_rhs_pred) == CALL_EXPR
 		&& oa_call_symbolic_predicate_p (stripped_rhs_pred, &pred_fn,
 						  &polarity, &pred_conveyor_established))
-	      env.predicate_fact_set (lhs, pred_fn, polarity, pred_conveyor_established);
+	      env.predicate_fact_set (env.alias_find (lhs), pred_fn, polarity,
+				       pred_conveyor_established);
 	  }
 	if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 	    && POINTER_TYPE_P (TREE_TYPE (lhs)))
@@ -12414,6 +12563,23 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      env.range_set (lhs, fact);
 	    else
 	      env.range_invalidate (lhs);
+	    /* Pointer-aliasing fix (see oa_env::alias_find's own comment):
+	       'q = p;' means Rule 2 invalidating a call argument's own
+	       identity must also be able to reach whatever else currently
+	       holds the same value -- record LHS as now aliasing RHS's own
+	       identity, whatever oa_object_identity_decl itself resolves
+	       RHS to (another pointer decl, '&f', or 'this' -- that
+	       function already treats '&f' and 'f' as the same identity,
+	       so a pointer *reassigned* from '&f' must reach that same
+	       identity too), or drop any stale alias LHS previously had
+	       when RHS resolves to nothing recognizable (e.g. 'q =
+	       nullptr;' or 'q = some_call();').  */
+	    tree alias_rhs_identity;
+	    if (oa_object_identity_decl (rhs, &alias_rhs_identity)
+		&& alias_rhs_identity != lhs)
+	      env.alias_set (lhs, env.alias_find (alias_rhs_identity));
+	    else
+	      env.alias_invalidate (lhs);
 	  }
 	else if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 		 && INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
@@ -12599,6 +12765,9 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       an agreement check -- see oa_env::shadow_decls_merge_with's
 	       own comment for why.  */
 	    then_env.shadow_decls_merge_with (else_env);
+	    /* Pointer-aliasing fix: agreement-based, same as predicate_
+	       fact_merge_with -- see oa_env::alias_find's own comment.  */
+	    then_env.alias_merge_with (else_env);
 	    env.assign (then_env);
 	  }
 	return;
@@ -12660,6 +12829,9 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    /* -fcontract-symbolic-runtime-checks (Mechanism B): same union
 	       rule as COND_EXPR above.  */
 	    then_env.shadow_decls_merge_with (else_env);
+	    /* Pointer-aliasing fix: same agreement-based merge as COND_EXPR
+	       above -- see oa_env::alias_find's own comment.  */
+	    then_env.alias_merge_with (else_env);
 	    env.assign (then_env);
 	  }
 	return;
@@ -12797,6 +12969,9 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		/* -fcontract-symbolic-runtime-checks (Mechanism B): same
 		   union rule as the if/else case.  */
 		merged.shadow_decls_merge_with (current);
+		/* Pointer-aliasing fix: same agreement-based merge as the
+		   if/else case -- see oa_env::alias_find's own comment.  */
+		merged.alias_merge_with (current);
 	      }
 	  };
 
@@ -12857,6 +13032,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.contract_scalar_range_merge_with (env);
 		merged.contract_field_range_merge_with (env);
 		merged.shadow_decls_merge_with (env);
+		merged.alias_merge_with (env);
 	      }
 	    any_result = true;
 	  }

@@ -1331,8 +1331,27 @@ struct cg_dom_fact_state
    consult call sites -- see cg_consult_persistent_facts's own use of
    cg_resolve_call_argument instead of a bare gimple_call_arg).  */
 
+/* Pointer-aliasing fix (see contracts.cc's own oa_env::alias_find, the
+   AST-engine analogue of this same fix, for the full soundness
+   rationale): a bare pointer-typed SSA_NAME used to be its own
+   identity unconditionally, so 'q_2 = p_1;' left q_2 and p_1 as two
+   different identities even though they hold the same value -- the
+   same "Rule 2 invalidates the wrong decl" bug the AST engine had.
+   Fixed by chasing VAL's own def-stmt through a plain copy/conversion
+   or a PHI, mirroring cg_provable_object_address_p's own identical
+   SSA_NAME/GIMPLE_PHI chasing just above (same IN_PROGRESS cycle
+   guard for a loop-carried PHI). Unlike the AST engine, this needs no
+   separate explicit merge step at all across a conditional branch's
+   own join: SSA_NAMEs are immutable, so resolution is just recomputed
+   fresh from each one's own single definition every time it's needed,
+   and "a PHI's own identity only if every incoming argument agrees"
+   is exactly the sound, AND-across-arms answer a branch-only alias
+   needs -- falls back to VAL itself, not NULL_TREE, whenever the
+   chase fails or arguments disagree, preserving this function's own
+   prior behavior for every already-working, non-aliasing case.  */
+
 static tree
-cg_gimple_object_identity (tree val)
+cg_gimple_object_identity_1 (tree val, hash_set<tree> &in_progress)
 {
   if (val == NULL_TREE)
     return NULL_TREE;
@@ -1345,10 +1364,49 @@ cg_gimple_object_identity (tree val)
       return NULL_TREE;
     }
   if (TREE_CODE (val) == SSA_NAME && POINTER_TYPE_P (TREE_TYPE (val)))
-    return val;
+    {
+      if (in_progress.contains (val))
+	return val;
+      in_progress.add (val);
+      gimple *def = SSA_NAME_DEF_STMT (val);
+      if (def && gimple_code (def) == GIMPLE_PHI)
+	{
+	  tree shared = NULL_TREE;
+	  unsigned n = gimple_phi_num_args (def);
+	  for (unsigned i = 0; i < n; ++i)
+	    {
+	      tree arg_identity
+		= cg_gimple_object_identity_1 (gimple_phi_arg_def (def, i),
+						in_progress);
+	      if (!arg_identity || (shared && shared != arg_identity))
+		return val;
+	      shared = arg_identity;
+	    }
+	  return shared ? shared : val;
+	}
+      if (def && is_gimple_assign (def))
+	{
+	  enum tree_code code = gimple_assign_rhs_code (def);
+	  if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
+	    {
+	      tree resolved
+		= cg_gimple_object_identity_1 (gimple_assign_rhs1 (def),
+						in_progress);
+	      return resolved ? resolved : val;
+	    }
+	}
+      return val;
+    }
   if (VAR_P (val) || TREE_CODE (val) == PARM_DECL)
     return val;
   return NULL_TREE;
+}
+
+static tree
+cg_gimple_object_identity (tree val)
+{
+  hash_set<tree> in_progress;
+  return cg_gimple_object_identity_1 (val, in_progress);
 }
 
 /* A ptr->field range conjunct group, exactly like contracts.cc's own
