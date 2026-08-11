@@ -494,7 +494,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  otherwise returns @c numeric_limits<size_type>::max()
       */
       static _GLIBCXX20_CONSTEXPR size_type
-      max_size(const _Alloc& __a) noexcept
+      max_size(const _Alloc& __a) noexcept _GLIBCXX_CONVEYOR
       {
 	if constexpr (__has_max_size<_Alloc>)
 	  return __a.max_size();
@@ -746,6 +746,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[__gnu__::__always_inline__]]
       static _GLIBCXX20_CONSTEXPR size_type
       max_size(const allocator_type& __a __attribute__((__unused__))) noexcept
+      _GLIBCXX_CONVEYOR
       {
 #if __cplusplus <= 201703L
 	return __a.max_size();

@@ -1257,7 +1257,7 @@ namespace __fwdlist
        */
       [[__nodiscard__]]
       bool
-      empty() const noexcept
+      empty() const noexcept _GLIBCXX_CONVEYOR
       { return this->_M_impl._M_head._M_next == nullptr; }
 
       /**

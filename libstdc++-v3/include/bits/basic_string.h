@@ -390,12 +390,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       _GLIBCXX20_CONSTEXPR
       allocator_type&
-      _M_get_allocator()
+      _M_get_allocator() _GLIBCXX_CONVEYOR
       { return _M_dataplus; }
 
       _GLIBCXX20_CONSTEXPR
       const allocator_type&
-      _M_get_allocator() const
+      _M_get_allocator() const _GLIBCXX_CONVEYOR
       { return _M_dataplus; }
 
       // Ensure that _M_local_buf is the active member of the union.
@@ -1214,7 +1214,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       ///  null-termination.
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
-      size() const _GLIBCXX_NOEXCEPT
+      size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       {
 	size_type __sz = _M_string_length;
 	if (__sz > max_size ())
@@ -1232,7 +1232,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       ///  Returns the size() of the largest possible %string.
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
-      max_size() const _GLIBCXX_NOEXCEPT
+      max_size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       {
 	const size_t __diffmax
 	  = __gnu_cxx::__numeric_traits<ptrdiff_t>::__max / sizeof(_CharT);
@@ -1382,7 +1382,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       bool
-      empty() const _GLIBCXX_NOEXCEPT
+      empty() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return _M_string_length == 0; }
 
       // Element access:

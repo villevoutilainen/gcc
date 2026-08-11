@@ -131,7 +131,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     // by std::_Rb_tree::_M_end() where the pointer is used to initialize a
     // const_iterator and so constness is restored.
     _Base_ptr
-    _M_base_ptr() const _GLIBCXX_NOEXCEPT
+    _M_base_ptr() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
     { return const_cast<_Rb_tree_node_base*>(this); }
   };
 
@@ -385,7 +385,7 @@ namespace __rb_tree
       : _M_node() { }
 
       explicit
-      _Rb_tree_iterator(_Base_ptr __x) _GLIBCXX_NOEXCEPT
+      _Rb_tree_iterator(_Base_ptr __x) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       : _M_node(__x) { }
 
       reference
@@ -428,13 +428,13 @@ namespace __rb_tree
 
       friend bool
       operator==(const _Rb_tree_iterator& __x,
-		 const _Rb_tree_iterator& __y) _GLIBCXX_NOEXCEPT
+		 const _Rb_tree_iterator& __y) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return __x._M_node == __y._M_node; }
 
 #if ! __cpp_lib_three_way_comparison
       friend bool
       operator!=(const _Rb_tree_iterator& __x,
-		 const _Rb_tree_iterator& __y) _GLIBCXX_NOEXCEPT
+		 const _Rb_tree_iterator& __y) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return __x._M_node != __y._M_node; }
 #endif
 
@@ -460,10 +460,11 @@ namespace __rb_tree
       : _M_node() { }
 
       explicit
-      _Rb_tree_const_iterator(_Base_ptr __x) _GLIBCXX_NOEXCEPT
+      _Rb_tree_const_iterator(_Base_ptr __x) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       : _M_node(__x) { }
 
       _Rb_tree_const_iterator(const iterator& __it) _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR
       : _M_node(__it._M_node) { }
 
       reference
@@ -507,12 +508,14 @@ namespace __rb_tree
       friend bool
       operator==(const _Rb_tree_const_iterator& __x,
 		 const _Rb_tree_const_iterator& __y) _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR
       { return __x._M_node == __y._M_node; }
 
 #if ! __cpp_lib_three_way_comparison
       friend bool
       operator!=(const _Rb_tree_const_iterator& __x,
 		 const _Rb_tree_const_iterator& __y) _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR
       { return __x._M_node != __y._M_node; }
 #endif
 
@@ -1387,7 +1390,7 @@ namespace __rb_tree
       }
 
       _Base_ptr
-      _M_end() const _GLIBCXX_NOEXCEPT
+      _M_end() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return this->_M_impl._M_header._M_base_ptr(); }
 
       // _GLIBCXX_RESOLVE_LIB_DEFECTS
@@ -1645,11 +1648,11 @@ namespace __rb_tree
       { return const_iterator(this->_M_impl._M_header._M_left); }
 
       iterator
-      end() _GLIBCXX_NOEXCEPT
+      end() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return iterator(_M_end()); }
 
       const_iterator
-      end() const _GLIBCXX_NOEXCEPT
+      end() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return const_iterator(_M_end()); }
 
       reverse_iterator

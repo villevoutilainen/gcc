@@ -562,7 +562,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _M_reset() noexcept
       { _M_payload._M_reset(); }
 
-      constexpr bool _M_is_engaged() const noexcept
+      constexpr bool _M_is_engaged() const noexcept _GLIBCXX_CONVEYOR
       { return _M_payload._M_engaged; }
 
       // The _M_get operations have _M_engaged as a precondition.
@@ -612,7 +612,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _M_reset() noexcept
       { static_cast<_Dp*>(this)->_M_payload._M_reset(); }
 
-      constexpr bool _M_is_engaged() const noexcept
+      constexpr bool _M_is_engaged() const noexcept _GLIBCXX_CONVEYOR
       { return static_cast<const _Dp*>(this)->_M_payload._M_engaged; }
 
       // The _M_get operations have _M_engaged as a precondition.

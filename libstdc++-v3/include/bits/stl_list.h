@@ -114,8 +114,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       void
       _M_unhook() _GLIBCXX_USE_NOEXCEPT;
 
-      _List_node_base* _M_base() { return this; }
-      const _List_node_base* _M_base() const { return this; }
+      _List_node_base* _M_base() _GLIBCXX_CONVEYOR { return this; }
+      const _List_node_base* _M_base() const _GLIBCXX_CONVEYOR { return this; }
     };
 
     struct _List_size
@@ -1575,7 +1575,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        *  end().)
        */
       _GLIBCXX_NODISCARD bool
-      empty() const _GLIBCXX_NOEXCEPT
+      empty() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       {
 	return this->_M_impl._M_node._M_next == this->_M_impl._M_node._M_base();
       }
