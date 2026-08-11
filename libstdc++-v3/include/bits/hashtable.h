@@ -645,11 +645,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       { return const_iterator(_M_begin()); }
 
       iterator
-      end() noexcept
+      end() noexcept _GLIBCXX_CONVEYOR
       { return iterator(nullptr); }
 
       const_iterator
-      end() const noexcept
+      end() const noexcept _GLIBCXX_CONVEYOR
       { return const_iterator(nullptr); }
 
       const_iterator

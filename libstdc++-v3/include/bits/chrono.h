@@ -594,7 +594,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 	// 20.11.5.2 observer
 	constexpr rep
-	count() const
+	count() const _GLIBCXX_CONVEYOR
 	{ return __r; }
 
 	// 20.11.5.3 arithmetic

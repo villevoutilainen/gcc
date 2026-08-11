@@ -153,7 +153,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       { return _M_dataplus._M_p; }
 
       size_type
-      _M_length() const
+      _M_length() const _GLIBCXX_CONVEYOR
       { return _M_string_length; }
 
       size_type

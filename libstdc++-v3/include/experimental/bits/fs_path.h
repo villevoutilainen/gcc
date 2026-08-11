@@ -399,7 +399,8 @@ namespace __detail
 
     // query
 
-    _GLIBCXX_NODISCARD bool empty() const noexcept { return _M_pathname.empty(); }
+    _GLIBCXX_NODISCARD bool empty() const noexcept _GLIBCXX_CONVEYOR
+    { return _M_pathname.empty(); }
     bool has_root_name() const;
     bool has_root_directory() const;
     bool has_root_path() const;

@@ -314,10 +314,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     static constexpr unsigned _S_max_readers = ~_S_write_entered;
 
     // Test whether the write-entered flag is set. _M_mut must be locked.
-    bool _M_write_entered() const { return _M_state & _S_write_entered; }
+    bool _M_write_entered() const _GLIBCXX_CONVEYOR
+    { return _M_state & _S_write_entered; }
 
     // The number of reader locks currently held. _M_mut must be locked.
-    unsigned _M_readers() const { return _M_state & _S_max_readers; }
+    unsigned _M_readers() const _GLIBCXX_CONVEYOR
+    { return _M_state & _S_max_readers; }
 
   public:
     __shared_mutex_cv() : _M_state(0) {}

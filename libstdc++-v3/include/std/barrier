@@ -84,7 +84,7 @@ It looks different from literature pseudocode for two main reasons:
   struct __tree_barrier_base
   {
     static constexpr ptrdiff_t
-    max() noexcept
+    max() noexcept _GLIBCXX_CONVEYOR
     { return __PTRDIFF_MAX__ - 1; }
 
   protected:
