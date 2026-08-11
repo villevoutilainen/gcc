@@ -1444,11 +1444,32 @@ cg_gimple_object_identity (tree val)
    rather than mis-resolving.  */
 
 static tree cg_field_slot_identity (tree val, cg_dom_fact_state &state);
-static void cg_invalidate_parameter_alias_group (tree identity, function *fun,
-						  cg_dom_fact_state &state);
+static void cg_invalidate_parameter_alias_group
+  (tree identity, function *fun, hash_map<cg_field_key_hash, tree> &field_object_cache,
+   cg_dom_fact_state &state);
+static tree cg_field_object_identity (tree val,
+				       hash_map<cg_field_key_hash, tree> &cache);
+
+/* Stage 5: mirrors contracts.cc's own oa_env::field_object_predicate_
+   invalidate_all -- sweeps every cached '&BASE->field' synthetic key
+   and drops whatever state.pred fact was recorded under it, the same
+   whole-object granularity every other sweep in this file already
+   uses.  */
 
 static void
-cg_process_field_write (tree lhs, tree rhs, function *fun, cg_dom_fact_state &state)
+cg_field_object_predicate_invalidate_all (tree base,
+					   hash_map<cg_field_key_hash, tree> &cache,
+					   cg_dom_fact_state &state)
+{
+  for (auto it : cache)
+    if (it.first.first == base)
+      state.pred.remove (it.second);
+}
+
+static void
+cg_process_field_write (tree lhs, tree rhs, function *fun,
+			 hash_map<cg_field_key_hash, tree> &field_object_cache,
+			 cg_dom_fact_state &state)
 {
   if (TREE_CODE (lhs) != COMPONENT_REF)
     return;
@@ -1466,12 +1487,22 @@ cg_process_field_write (tree lhs, tree rhs, function *fun, cg_dom_fact_state &st
      ANY field write invalidates it wholesale).  */
   state.pred.remove (identity);
   state.field.remove ({identity, field});
+  /* Stage 5: this replaces the FIELD sub-object of IDENTITY directly,
+     so whatever predicate fact was tracked about '&identity->field'
+     itself must be dropped too -- narrower single-slot form, mirroring
+     contracts.cc's own field-write branch exactly (unlike a whole-
+     object reassignment, which has no GIMPLE analogue reaching this
+     function at all: cg_process_field_write only ever sees a
+     COMPONENT_REF LHS, the narrower shape).  */
+  tree *fo_key = field_object_cache.get ({identity, field});
+  if (fo_key)
+    state.pred.remove (*fo_key);
   /* Stage 4e: a parameter-alias-group sweep for this same whole-object
      effect only -- explicitly NOT extended to sweep siblings' own
      field-slot facts (field_alias, just below), matching the AST
      engine's own already-disclosed scope cut for exact parity between
      the two engines' residual gaps.  */
-  cg_invalidate_parameter_alias_group (identity, fun, state);
+  cg_invalidate_parameter_alias_group (identity, fun, field_object_cache, state);
   /* Stage 4d: FIELD is a pointer/reference-typed slot -- record what
      it now aliases (RHS resolved via either resolver, so a field-to-
      field copy works too), or drop any stale alias if RHS doesn't
@@ -1551,6 +1582,62 @@ cg_field_slot_identity (tree val, cg_dom_fact_state &state)
     return NULL_TREE;
   tree *target = state.field_alias.get ({base_identity, field});
   return target ? *target : NULL_TREE;
+}
+
+/* Stage 5: the GIMPLE analogue of contracts.cc's own oa_field_object_
+   identity -- '&base->field' (of any type, most usefully a non-
+   pointer, embedded sub-object) names a fixed, permanent sub-object,
+   resolved to a synthesized, stable placeholder tree per (base_
+   identity, FIELD_DECL) pair, cached in CACHE and plugged into the
+   *existing* state.pred map exactly like the AST engine plugs it into
+   m_predicate_fact_map -- no new cg_dom_fact_state member needed.
+
+   Re-verified directly (not assumed to carry over from the AST engine
+   unchanged) that a raw dump of 'mutate (&h->f);' shows the call
+   argument always lowers through an SSA temporary first ('_1 =
+   &h_2(D)->f; mutate (_1);'), the identical shape cg_field_slot_
+   identity's own SSA-chase already needed for 'h->ptr' -- so the same
+   chase is required here too, before the ADDR_EXPR check.
+
+   Unlike the AST side's oa_env::field_object_identity_key, CACHE here
+   needs no shared-vs-per-branch-copy design question at all:
+   cg_predicate_facts_walk's own fixed-point walk has no forking oa_env
+   analogue to begin with (state.* is threaded by reference throughout
+   one single, function-scoped walk), so a single, ordinary local
+   hash_map declared once in cg_predicate_facts_walk itself and passed
+   by reference wherever needed is already exactly as "shared" as the
+   AST side's pointer-based design has to work to be.  */
+
+static tree
+cg_field_object_identity (tree val, hash_map<cg_field_key_hash, tree> &cache)
+{
+  if (TREE_CODE (val) == SSA_NAME)
+    {
+      gimple *def = SSA_NAME_DEF_STMT (val);
+      if (!def || !gimple_assign_single_p (def))
+	return NULL_TREE;
+      val = gimple_assign_rhs1 (def);
+    }
+  if (TREE_CODE (val) != ADDR_EXPR)
+    return NULL_TREE;
+  tree comp = TREE_OPERAND (val, 0);
+  if (TREE_CODE (comp) != COMPONENT_REF)
+    return NULL_TREE;
+  tree field = TREE_OPERAND (comp, 1);
+  if (TREE_CODE (field) != FIELD_DECL)
+    return NULL_TREE;
+  tree obj = TREE_OPERAND (comp, 0);
+  tree obj_expr = TREE_CODE (obj) == MEM_REF && integer_zerop (TREE_OPERAND (obj, 1))
+    ? TREE_OPERAND (obj, 0) : obj;
+  tree base_identity = cg_gimple_object_identity (obj_expr);
+  if (!base_identity)
+    return NULL_TREE;
+  tree *existing = cache.get ({base_identity, field});
+  if (existing)
+    return *existing;
+  tree key = build_decl (UNKNOWN_LOCATION, VAR_DECL, NULL_TREE, ptr_type_node);
+  cache.put ({base_identity, field}, key);
+  return key;
 }
 
 /* A ptr->field range conjunct group, exactly like contracts.cc's own
@@ -1653,7 +1740,9 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
    the persistent-fact analogue of cg_check_call.  */
 
 static void
-cg_consult_persistent_facts (gcall *call, cg_dom_fact_state &state)
+cg_consult_persistent_facts (gcall *call,
+			      hash_map<cg_field_key_hash, tree> &field_object_cache,
+			      cg_dom_fact_state &state)
 {
   tree callee = gimple_call_fndecl (call);
   if (!callee)
@@ -1700,7 +1789,15 @@ cg_consult_persistent_facts (gcall *call, cg_dom_fact_state &state)
 	     for_call/cg_invalidate_persistent_facts_for_call_args
 	     deliberately do NOT do this.  */
 	  tree substituted = cg_resolve_call_argument (call, argno);
+	  /* Ordering matters, same reason cg_field_slot_identity must be
+	     tried before cg_gimple_object_identity: that resolver always
+	     "succeeds" for a pointer-typed SSA value with an unrecognized
+	     def-stmt, falling back to the value itself (confirmed this
+	     includes an ADDR_EXPR def-stmt, e.g. '_1 = &h->f;'), which
+	     would silently pre-empt this resolver if tried after it.  */
 	  tree identity = cg_field_slot_identity (substituted, state);
+	  if (!identity)
+	    identity = cg_field_object_identity (substituted, field_object_cache);
 	  if (!identity)
 	    identity = cg_gimple_object_identity (substituted);
 
@@ -1727,6 +1824,8 @@ cg_consult_persistent_facts (gcall *call, cg_dom_fact_state &state)
 	     function's own predicate block above.  */
 	  tree substituted = cg_resolve_call_argument (call, argno);
 	  tree identity = cg_field_slot_identity (substituted, state);
+	  if (!identity)
+	    identity = cg_field_object_identity (substituted, field_object_cache);
 	  if (!identity)
 	    identity = cg_gimple_object_identity (substituted);
 	  cg_range_lite &required = field_groups[g].range;
@@ -1808,6 +1907,7 @@ cg_identity_as_parm (tree identity)
 
 static void
 cg_invalidate_parameter_alias_group (tree identity, function *fun,
+				      hash_map<cg_field_key_hash, tree> &field_object_cache,
 				      cg_dom_fact_state &state)
 {
   tree parm = cg_identity_as_parm (identity);
@@ -1827,6 +1927,7 @@ cg_invalidate_parameter_alias_group (tree identity, function *fun,
       if (!sib_identity)
 	sib_identity = sib;
       state.pred.remove (sib_identity);
+      cg_field_object_predicate_invalidate_all (sib_identity, field_object_cache, state);
       auto_vec<std::pair<tree, tree>> to_remove;
       for (auto it : state.field)
 	if (it.first.first == sib_identity)
@@ -1864,6 +1965,7 @@ cg_invalidate_parameter_alias_group (tree identity, function *fun,
 
 static void
 cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
+					       hash_map<cg_field_key_hash, tree> &field_object_cache,
 					       cg_dom_fact_state &state)
 {
   tree call_callee = gimple_call_fndecl (call);
@@ -1873,12 +1975,19 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
   for (unsigned i = 0; i < n; ++i)
     {
       tree arg = gimple_call_arg (call, i);
+      /* Ordering: cg_field_slot_identity, then cg_field_object_identity,
+	 then cg_gimple_object_identity last -- see cg_consult_persistent_
+	 facts's own identical comment for why the fallback resolver must
+	 stay last.  */
       tree identity = cg_field_slot_identity (arg, state);
+      if (!identity)
+	identity = cg_field_object_identity (arg, field_object_cache);
       if (!identity)
 	identity = cg_gimple_object_identity (arg);
       if (!identity)
 	continue;
       state.pred.remove (identity);
+      cg_field_object_predicate_invalidate_all (identity, field_object_cache, state);
 
       auto_vec<std::pair<tree, tree>> to_remove;
       for (auto it : state.field)
@@ -1894,7 +2003,7 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
       for (unsigned j = 0; j < to_remove.length (); ++j)
 	state.field_alias.remove (to_remove[j]);
 
-      cg_invalidate_parameter_alias_group (identity, fun, state);
+      cg_invalidate_parameter_alias_group (identity, fun, field_object_cache, state);
     }
 }
 
@@ -1908,7 +2017,9 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
    identity.  */
 
 static void
-cg_establish_persistent_facts_for_call (gcall *call, cg_dom_fact_state &state)
+cg_establish_persistent_facts_for_call (gcall *call,
+					 hash_map<cg_field_key_hash, tree> &field_object_cache,
+					 cg_dom_fact_state &state)
 {
   tree callee = gimple_call_fndecl (call);
   if (!callee)
@@ -1947,6 +2058,8 @@ cg_establish_persistent_facts_for_call (gcall *call, cg_dom_fact_state &state)
 	  tree substituted = gimple_call_arg (call, argno);
 	  tree identity = cg_field_slot_identity (substituted, state);
 	  if (!identity)
+	    identity = cg_field_object_identity (substituted, field_object_cache);
+	  if (!identity)
 	    identity = cg_gimple_object_identity (substituted);
 	  if (identity)
 	    state.pred.put (identity, { pred_fn, !negated, conveyor_enabled });
@@ -1962,6 +2075,8 @@ cg_establish_persistent_facts_for_call (gcall *call, cg_dom_fact_state &state)
 	    continue;
 	  tree substituted = gimple_call_arg (call, argno);
 	  tree identity = cg_field_slot_identity (substituted, state);
+	  if (!identity)
+	    identity = cg_field_object_identity (substituted, field_object_cache);
 	  if (!identity)
 	    identity = cg_gimple_object_identity (substituted);
 	  if (identity)
@@ -2161,6 +2276,15 @@ cg_predicate_facts_walk (function *fun)
   hash_map<basic_block, cg_dom_fact_state *> block_out;
   cg_dom_fact_state seed;
   cg_seed_predicate_self_trust (fun, seed);
+  /* Stage 5: shared across BOTH phases below (the fixed-point
+     computation and the final consult-only re-derivation) -- a key
+     synthesized for a given (base, field) pair during the fixed-point
+     phase is referenced from BLOCK_OUT's own saved cg_dom_fact_state
+     entries, so the final phase must resolve the identical (base,
+     field) pair to that same key, not a freshly synthesized one, or
+     every fact carried forward from BLOCK_OUT would become permanently
+     unmatchable.  */
+  hash_map<cg_field_key_hash, tree> field_object_cache;
 
   /* Fixed-point computation, deliberately WITHOUT consulting (cg_
      consult_persistent_facts is the one call among the three that has
@@ -2187,7 +2311,8 @@ cg_predicate_facts_walk (function *fun)
 	      gimple *stmt = gsi_stmt (gsi);
 	      if (gimple_assign_single_p (stmt))
 		cg_process_field_write (gimple_assign_lhs (stmt),
-					 gimple_assign_rhs1 (stmt), fun, out_state);
+					 gimple_assign_rhs1 (stmt), fun,
+					 field_object_cache, out_state);
 	      else if (is_gimple_call (stmt))
 		{
 		  gcall *call = as_a <gcall *> (stmt);
@@ -2202,9 +2327,11 @@ cg_predicate_facts_walk (function *fun)
 		     stale-by-then, argument invalidation).  */
 		  if (gimple_call_lhs (call))
 		    cg_process_field_write (gimple_call_lhs (call), NULL_TREE,
-					     fun, out_state);
-		  cg_invalidate_persistent_facts_for_call_args (call, fun, out_state);
-		  cg_establish_persistent_facts_for_call (call, out_state);
+					     fun, field_object_cache, out_state);
+		  cg_invalidate_persistent_facts_for_call_args
+		    (call, fun, field_object_cache, out_state);
+		  cg_establish_persistent_facts_for_call (call, field_object_cache,
+							   out_state);
 		}
 	    }
 
@@ -2234,15 +2361,18 @@ cg_predicate_facts_walk (function *fun)
 	  gimple *stmt = gsi_stmt (gsi);
 	  if (gimple_assign_single_p (stmt))
 	    cg_process_field_write (gimple_assign_lhs (stmt),
-				     gimple_assign_rhs1 (stmt), fun, state);
+				     gimple_assign_rhs1 (stmt), fun,
+				     field_object_cache, state);
 	  else if (is_gimple_call (stmt))
 	    {
 	      gcall *call = as_a <gcall *> (stmt);
-	      cg_consult_persistent_facts (call, state);
+	      cg_consult_persistent_facts (call, field_object_cache, state);
 	      if (gimple_call_lhs (call))
-		cg_process_field_write (gimple_call_lhs (call), NULL_TREE, fun, state);
-	      cg_invalidate_persistent_facts_for_call_args (call, fun, state);
-	      cg_establish_persistent_facts_for_call (call, state);
+		cg_process_field_write (gimple_call_lhs (call), NULL_TREE, fun,
+					 field_object_cache, state);
+	      cg_invalidate_persistent_facts_for_call_args (call, fun,
+							     field_object_cache, state);
+	      cg_establish_persistent_facts_for_call (call, field_object_cache, state);
 	    }
 	}
     }
