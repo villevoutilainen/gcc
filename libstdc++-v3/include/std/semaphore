@@ -64,7 +64,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       counting_semaphore& operator=(const counting_semaphore&) = delete;
 
       static constexpr ptrdiff_t
-      max() noexcept
+      max() noexcept _GLIBCXX_CONVEYOR
       { return __least_max_value; }
 
       void

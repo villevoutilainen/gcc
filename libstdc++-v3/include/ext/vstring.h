@@ -428,7 +428,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       ///  Returns the number of characters in the string, not including any
       ///  null-termination.
       size_type
-      size() const _GLIBCXX_NOEXCEPT
+      size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return this->_M_length(); }
 
       ///  Returns the number of characters in the string, not including any

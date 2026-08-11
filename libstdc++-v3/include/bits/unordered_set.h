@@ -400,11 +400,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  element in the %unordered_set.
        */
       iterator
-      end() noexcept
+      end() noexcept _GLIBCXX_CONVEYOR
       { return _M_h.end(); }
 
       const_iterator
-      end() const noexcept
+      end() const noexcept _GLIBCXX_CONVEYOR
       { return _M_h.end(); }
       ///@}
 
@@ -1444,11 +1444,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  element in the %unordered_multiset.
        */
       iterator
-      end() noexcept
+      end() noexcept _GLIBCXX_CONVEYOR
       { return _M_h.end(); }
 
       const_iterator
-      end() const noexcept
+      end() const noexcept _GLIBCXX_CONVEYOR
       { return _M_h.end(); }
       ///@}
 

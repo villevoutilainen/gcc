@@ -376,7 +376,7 @@ namespace __detail
       __node_type* _M_cur;
 
       _Node_iterator_base() : _M_cur(nullptr) { }
-      _Node_iterator_base(__node_type* __p) noexcept
+      _Node_iterator_base(__node_type* __p) noexcept _GLIBCXX_CONVEYOR
       : _M_cur(__p) { }
 
       void
@@ -385,7 +385,7 @@ namespace __detail
 
       friend bool
       operator==(const _Node_iterator_base& __x, const _Node_iterator_base& __y)
-      noexcept
+      noexcept _GLIBCXX_CONVEYOR
       { return __x._M_cur == __y._M_cur; }
 
 #if __cpp_impl_three_way_comparison < 201907L
@@ -419,7 +419,7 @@ namespace __detail
       _Node_iterator() = default;
 
       explicit
-      _Node_iterator(__node_type* __p) noexcept
+      _Node_iterator(__node_type* __p) noexcept _GLIBCXX_CONVEYOR
       : __base_type(__p) { }
 
       reference
@@ -447,7 +447,8 @@ namespace __detail
 
 #if __cpp_impl_three_way_comparison >= 201907L
       friend bool
-      operator==(const _Node_iterator&, const _Node_iterator&) = default;
+      operator==(const _Node_iterator&, const _Node_iterator&) _GLIBCXX_CONVEYOR
+      = default;
 #else
       friend bool
       operator==(const _Node_iterator& __x, const _Node_iterator& __y) noexcept
@@ -487,10 +488,10 @@ namespace __detail
       _Node_const_iterator() = default;
 
       explicit
-      _Node_const_iterator(__node_type* __p) noexcept
+      _Node_const_iterator(__node_type* __p) noexcept _GLIBCXX_CONVEYOR
       : __base_type(__p) { }
 
-      _Node_const_iterator(const __iterator& __x) noexcept
+      _Node_const_iterator(const __iterator& __x) noexcept _GLIBCXX_CONVEYOR
       : __base_type(__x._M_cur) { }
 
       reference
@@ -519,10 +520,11 @@ namespace __detail
 #if __cpp_impl_three_way_comparison >= 201907L
       friend bool
       operator==(const _Node_const_iterator&,
-		 const _Node_const_iterator&) = default;
+		 const _Node_const_iterator&) _GLIBCXX_CONVEYOR = default;
 
       friend bool
       operator==(const _Node_const_iterator& __x, const __iterator& __y)
+      _GLIBCXX_CONVEYOR
       {
 	const __base_type& __bx = __x;
 	const __base_type& __by = __y;
