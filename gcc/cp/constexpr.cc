@@ -11073,6 +11073,20 @@ cxx_eval_outermost_constant_expr (tree t, bool allow_non_constant,
 {
   auto_timevar time (TV_CONSTEXPR);
 
+  /* D4324: this function is GCC's own constexpr interpreter -- the
+     single, authoritative place representing "we are now evaluating a
+     manifestly constant expression," which by the core language's own
+     rules can never have side effects or exhibit UB (a sub-expression
+     that would need either simply isn't a constant expression at all,
+     and fails with its own, conveyor-independent diagnostic instead).
+     So none of conveyor_restrictions_active_p's checks have anything
+     real to catch for the whole duration of this call, regardless of
+     whether we were otherwise inside conveyor-restricted code when it
+     was invoked.  See that flag's own comment in contracts.h for the
+     real regression (one of std::pair's own conditionally-explicit
+     constructors) that motivated this.  */
+  suppress_conveyor_restrictions_for_converted_constant_expr_sentinel sccce;
+
   bool non_constant_p = false;
   bool overflow_p = false;
 

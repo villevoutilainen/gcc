@@ -15478,6 +15478,16 @@ tsubst_function_decl (tree t, tree args, tsubst_flags_t complain,
   if (DECL_HAS_DEPENDENT_EXPLICIT_SPEC_P (t))
     {
       tree spec = lookup_explicit_specifier (t);
+      /* D4324: tsubst_expr rebuilds (not just substitutes into) any call
+	 in SPEC via the ordinary call-building machinery, which is where
+	 the callee-must-be-conveyor check actually lives -- well before
+	 build_explicit_specifier below even gets a chance to establish
+	 that this whole expression is a converted constant expression.
+	 See suppress_conveyor_restrictions_for_converted_constant_expr_p's
+	 own comment in contracts.h for why that check has nothing real to
+	 catch here regardless.  */
+      suppress_conveyor_restrictions_for_converted_constant_expr_sentinel
+	sccce;
       spec = tsubst_expr (spec, args, complain, in_decl);
       spec = build_explicit_specifier (spec, complain);
       if (spec == error_mark_node)

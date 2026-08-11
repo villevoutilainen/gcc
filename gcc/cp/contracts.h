@@ -491,6 +491,39 @@ extern bool contract_condition_conveyor_p;
    right now (see contracts.cc for the exact conditions).  */
 extern bool conveyor_restrictions_active_p		(void);
 
+/* True while building or evaluating a converted constant expression or
+   any other manifestly constant expression (an explicit-specifier's own
+   operand, a non-type template argument, an array bound, an enumerator
+   value, a static_assert condition, ...): such an expression can never
+   have side effects or UB by the core language's own rules (if it did,
+   it simply wouldn't BE a constant expression, and evaluation fails
+   with its own, conveyor-independent diagnostic), so none of
+   conveyor_restrictions_active_p's restrictions have anything real to
+   check here regardless of whether we're otherwise inside conveyor-
+   restricted code.  See contracts.cc for the full rationale; set from
+   both gcc/cp/call.cc's build_converted_constant_expr_internal (the
+   call-building phase) and gcc/cp/constexpr.cc's cxx_eval_outermost_
+   constant_expr (the actual interpreter) since a real regression showed
+   up in only one of the two conditionally-explicit std::pair
+   constructors tried, meaning both phases can independently reach a
+   call this check would otherwise flag.  */
+extern bool suppress_conveyor_restrictions_for_converted_constant_expr_p;
+
+/* RAII sentinel for the flag just above: covers every return path of
+   whatever scope it's declared in, unlike a manual save/restore pair,
+   which is easy to miss one of on a function with many early returns
+   (cxx_eval_outermost_constant_expr, notably).  */
+class suppress_conveyor_restrictions_for_converted_constant_expr_sentinel
+{
+public:
+  bool saved;
+  suppress_conveyor_restrictions_for_converted_constant_expr_sentinel ()
+    : saved (suppress_conveyor_restrictions_for_converted_constant_expr_p)
+  { suppress_conveyor_restrictions_for_converted_constant_expr_p = true; }
+  ~suppress_conveyor_restrictions_for_converted_constant_expr_sentinel ()
+  { suppress_conveyor_restrictions_for_converted_constant_expr_p = saved; }
+};
+
 extern void set_fn_contract_specifiers		(tree, tree);
 extern void update_fn_contract_specifiers	(tree, tree);
 extern tree get_fn_contract_specifiers		(tree);

@@ -4968,6 +4968,15 @@ build_converted_constant_expr_internal (tree type, tree expr,
 
   conversion_obstack_sentinel cos;
 
+  /* D4324: this whole function builds (and, via its caller's later
+     cxx_constant_value, evaluates) a converted constant expression --
+     an explicit-specifier's operand, a non-type template argument, an
+     array bound, ... -- which by the core language's own rules can
+     never have side effects or exhibit UB, so none of conveyor_
+     restrictions_active_p's checks have anything real to catch here.
+     See that flag's own comment in contracts.h for why.  */
+  suppress_conveyor_restrictions_for_converted_constant_expr_sentinel sccce;
+
   conv = implicit_conversion (type, TREE_TYPE (expr), expr,
 			      /*c_cast_p=*/false, flags, complain);
 
