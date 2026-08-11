@@ -37,9 +37,20 @@
 #include <bits/version.h>
 
 #ifdef __cpp_lib_contracts
-#include <concepts>
+// Deliberately not #include <concepts> here (the only thing in this file
+// that ever needed it was the assertion_control concept, now moved to
+// <concepts> itself -- see that header's own matching comment for why),
+// and deliberately not #include <bits/exception_ptr.h> either -- nothing
+// here actually names exception_ptr/current_exception/etc (the comments
+// about an exception propagating past a violation handler are about the
+// *user's* control-object code, not this header's own), and that header
+// pulls in <bits/move.h> for its own std::forward/std::move use, which
+// needs <type_traits>. Keeping this header free of any <type_traits>/
+// <concepts> dependency, transitive or direct, avoids a real, confirmed
+// circular-include failure when <contracts> is reached from a context
+// where <type_traits> is itself still mid-body (e.g. <type_traits>'s own
+// #include <bits/version.h>, for its own feature-test-macro needs).
 #include <source_location>
-#include <bits/exception_ptr.h>
 
 namespace std _GLIBCXX_VISIBILITY(default)
 {
@@ -234,15 +245,11 @@ namespace contracts
   // otherwise ignored, since it is a static well-formedness property of
   // the program, not a runtime behavior. Defaults to false when absent,
   // so existing control types are unaffected.
-  template <class _Tp>
-  concept assertion_control =
-    requires (_Tp __c, assertion_static_info __info,
-	      const assertion_context& __ctx) {
-      { _Tp::is_ignored(__info) } -> same_as<bool>;
-      { _Tp::constify(__info) } -> same_as<bool>;
-      { _Tp::assumable(__info) } -> same_as<bool>;
-      { __c(__ctx) } -> same_as<void>;
-    };
+  //
+  // The assertion_control concept that checks the three mandatory traits
+  // above (is_ignored/constify/assumable) plus a callable operator() now
+  // lives in <concepts> instead of here -- see that header's own comment
+  // for why (this header must not need <concepts>/<type_traits> itself).
 
   // Recognized specially by the compiler (see gcc/cp/contracts.cc's
   // build_contract_check) wherever it appears inside the condition of a

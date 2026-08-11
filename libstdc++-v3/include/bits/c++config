@@ -660,15 +660,38 @@ namespace std
 // contracts (or control objects specifically) aren't enabled in the
 // compiling TU -- the overwhelming common case is entirely unaffected.
 //
-// The actual #include <contracts> is deferred to the very end of this
-// file (see _GLIBCXX_USE_CONTRACT_ASSERT below), not done here: this
-// point is reached mid-file, well before this file finishes defining
-// its own later macros (e.g. _GLIBCXX_USE_BUILTIN_TRAIT); <contracts>
-// transitively includes <concepts> -> <type_traits>, which itself
-// #include <bits/c++config.h> again, hits this file's own include
-// guard (already set, since guards are set at the top), and proceeds
-// assuming everything in this file is already defined -- true only if
-// the #include actually happens after this file's own body is done.
+// The actual #include <contracts> is deferred -- not to the end of this
+// file, but all the way out to bits/version.h, right after *its own*
+// #include of this file (see _GLIBCXX_CONTRACTS_DEFERRED_INCLUDE there).
+// This point is reached mid-file, well before this file finishes
+// defining its own later macros (e.g. _GLIBCXX_USE_BUILTIN_TRAIT, or the
+// autoconf-detected macros appended wholesale after this template's own
+// content, per include/Makefile.am's own build rule -- see "end of
+// prewritten config" near this file's tail); <contracts> needs several
+// of those (_GLIBCXX_HOSTED and friends) correctly defined, so the
+// #include can't happen here.
+//
+// It also can't simply be deferred to this file's own tail instead (that
+// was tried first): this file's include guard means a #include here
+// that's merely deferred to *this file's own end* is still, in effect,
+// happening from arbitrarily early in whichever translation unit first
+// drags this header in -- and <contracts> no longer transitively needs
+// <concepts>/<type_traits> at all (the one thing in it that ever did,
+// the assertion_control concept, now lives in <concepts> itself, which
+// already has what it needs -- see that header's own comment), so the
+// circular-include failure that this same relocation-to-bits/version.h
+// idea originally hit (a real regression compiling this repo's own
+// d4324-conveyor-no-unreachable.C: <type_traits>'s own #include of
+// bits/version.h, partway through <type_traits>'s own body, triggered a
+// <contracts> pull that transitively needed is_same_v from that same,
+// still-mid-body <type_traits>) no longer applies. bits/version.h is the
+// right place for this precisely because it's *already* included from
+// arbitrary, sometimes-mid-body points all over the library -- once
+// <contracts> itself is safe to reach from any of them, doing the
+// #include there (rather than here) is what actually guarantees this
+// file's own later, autoconf-appended macros exist first, since
+// bits/version.h's own #include of *this* file always returns after
+// this file's full body -- including the appended tail -- is done.
 # define _GLIBCXX_USE_CONTRACT_ASSERT 1
 // A caller with its own message to report on failure, instead of
 // noexcept_assert_v's own default of falling back to the predicate's
@@ -1060,10 +1083,9 @@ namespace __gnu_cxx
 
 #pragma GCC diagnostic pop
 
-#ifdef _GLIBCXX_USE_CONTRACT_ASSERT
-// Deferred from __glibcxx_assert's own definition, far above -- see the
-// comment there for why this can't happen at that point in the file.
-# include <contracts>
-#endif
+// _GLIBCXX_USE_CONTRACT_ASSERT's own #include <contracts> is deferred all
+// the way out to bits/version.h now, not done here -- see that header's
+// own _GLIBCXX_CONTRACTS_DEFERRED_INCLUDE comment, and the comment on
+// _GLIBCXX_USE_CONTRACT_ASSERT's own definition far above, for why.
 
 // End of prewritten config; the settings discovered at configure time follow.

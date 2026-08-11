@@ -50,6 +50,39 @@
 
 #include <bits/c++config.h>
 
+#if defined(_GLIBCXX_USE_CONTRACT_ASSERT) \
+    && !defined(_GLIBCXX_CONTRACTS_DEFERRED_INCLUDE)
+#define _GLIBCXX_CONTRACTS_DEFERRED_INCLUDE 1
+// bits/c++config.h's own __glibcxx_assert machinery wants <contracts>
+// whenever _GLIBCXX_USE_CONTRACT_ASSERT is set, but can't #include it
+// directly itself: at the point that macro is defined, this file's own
+// later, autoconf-detected macros (_GLIBCXX_HOSTED and others, appended
+// after the rest of the template per include/Makefile.am's own build
+// rule) don't exist yet, and <contracts>'s own feature-test-macro logic
+// (via this very header) needs them. Doing the #include here instead,
+// right after this file's own #include <bits/c++config.h> just above,
+// guarantees they exist: bits/c++config.h's include guard means that
+// #include always returns only once that file's *entire* body --
+// including its appended, autoconf-discovered tail -- is fully done,
+// however many times, or from however deep inside some other header's
+// own body, this file itself gets reached, *provided* nothing reachable
+// from within bits/c++config.h's own body re-enters this file (it
+// doesn't: this deferred #include is the only thing that ever pulled
+// bits/version.h back in from there, and it no longer runs until this
+// point).
+//
+// This only works because <contracts> itself no longer transitively
+// needs <concepts>/<type_traits>: the one thing in it that ever did (the
+// assertion_control concept) now lives in <concepts> instead -- see that
+// header's own comment. Without that, this #include would still be
+// reachable from inside <type_traits>'s own body (via *its* #include of
+// this file, for its own feature-test-macro needs), and <contracts> ->
+// <concepts> -> <type_traits> would be a hard circular-include failure,
+// not just a slow build -- confirmed by a real regression the first time
+// this relocation was attempted, before that root cause was fixed.
+# include <contracts>
+#endif
+
 #if !defined(__cpp_lib_incomplete_container_elements)
 # if _GLIBCXX_HOSTED
 #  define __glibcxx_incomplete_container_elements 201505L
