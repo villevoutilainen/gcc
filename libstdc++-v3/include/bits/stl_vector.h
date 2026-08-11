@@ -1156,7 +1156,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       /**  Returns the number of elements in the %vector.  */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
-      size() const _GLIBCXX_NOEXCEPT
+      size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       {
 	ptrdiff_t __dif = this->_M_impl._M_finish - this->_M_impl._M_start;
 	if (__dif < 0)

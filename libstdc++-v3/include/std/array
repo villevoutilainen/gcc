@@ -193,7 +193,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       // Capacity.
       [[__nodiscard__, __gnu__::__const__, __gnu__::__always_inline__]]
       constexpr size_type
-      size() const noexcept { return _Nm; }
+      size() const noexcept _GLIBCXX_CONVEYOR { return _Nm; }
 
       [[__nodiscard__, __gnu__::__const__, __gnu__::__always_inline__]]
       constexpr size_type
