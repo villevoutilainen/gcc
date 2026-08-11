@@ -229,7 +229,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     _GLIBCXX_NODISCARD _GLIBCXX14_CONSTEXPR
     inline const _Tp&
-    min(const _Tp& __a, const _Tp& __b)
+    min(const _Tp& __a, const _Tp& __b) _GLIBCXX_CONVEYOR
     {
       // concept requirements
       __glibcxx_function_requires(_LessThanComparableConcept<_Tp>)

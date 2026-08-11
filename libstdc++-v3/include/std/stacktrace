@@ -438,7 +438,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       crend() const noexcept { return rend(); };
 
       [[nodiscard]] bool empty() const noexcept { return size() == 0; }
-      [[nodiscard]] size_type size() const noexcept { return _M_impl._M_size; }
+      [[nodiscard]] size_type size() const noexcept _GLIBCXX_CONVEYOR
+      { return _M_impl._M_size; }
 
       [[nodiscard]]
       size_type

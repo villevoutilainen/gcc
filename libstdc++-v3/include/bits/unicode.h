@@ -48,7 +48,7 @@ namespace __unicode
 {
   // A Unicode code point that is not a high or low surrogate.
   constexpr bool
-  __is_scalar_value(char32_t __c)
+  __is_scalar_value(char32_t __c) _GLIBCXX_CONVEYOR
   {
     if (__c < 0xD800) [[likely]]
       return true;
