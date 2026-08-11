@@ -180,13 +180,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       template<typename _Tp1>
 	__attribute__((__always_inline__))
 	_GLIBCXX20_CONSTEXPR
-	allocator(const allocator<_Tp1>&) _GLIBCXX_NOTHROW { }
+	allocator(const allocator<_Tp1>&) _GLIBCXX_NOTHROW _GLIBCXX_CONVEYOR { }
 
       __attribute__((__always_inline__))
 #if __cpp_constexpr_dynamic_alloc
       constexpr
 #endif
-      ~allocator() _GLIBCXX_NOTHROW { }
+      ~allocator() _GLIBCXX_NOTHROW _GLIBCXX_CONVEYOR { }
 
 #if __cpp_constexpr_dynamic_alloc // >= C++20
       [[nodiscard,__gnu__::__always_inline__]]
@@ -242,6 +242,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       friend __attribute__((__always_inline__)) _GLIBCXX20_CONSTEXPR
       bool
       operator==(const allocator&, const allocator&) _GLIBCXX_NOTHROW
+      _GLIBCXX_CONVEYOR
       { return true; }
 
 #if __cpp_impl_three_way_comparison < 201907L
@@ -263,7 +264,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     __attribute__((__always_inline__))
     inline _GLIBCXX20_CONSTEXPR bool
     operator==(const allocator<_T1>&, const allocator<_T2>&)
-    _GLIBCXX_NOTHROW
+    _GLIBCXX_NOTHROW _GLIBCXX_CONVEYOR
     { return true; }
 
 #if __cpp_impl_three_way_comparison < 201907L

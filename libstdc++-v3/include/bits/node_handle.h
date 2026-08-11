@@ -72,7 +72,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       using allocator_type = __alloc_rebind<_NodeAlloc, _Val>;
 
       allocator_type
-      get_allocator() const noexcept
+      get_allocator() const noexcept _GLIBCXX_CONVEYOR
       {
 	__glibcxx_assert(!this->empty());
 	return allocator_type(_M_alloc._M_alloc);
@@ -80,7 +80,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       explicit operator bool() const noexcept { return _M_ptr != nullptr; }
 
-      [[nodiscard]] bool empty() const noexcept { return _M_ptr == nullptr; }
+      [[nodiscard]] bool empty() const noexcept _GLIBCXX_CONVEYOR
+      { return _M_ptr == nullptr; }
 
     /// @cond undocumented
     protected:
