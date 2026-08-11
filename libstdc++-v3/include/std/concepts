@@ -434,4 +434,49 @@ _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace
 #endif // __cpp_lib_concepts
 
+// D4324: std::contracts::assertion_control lives here, not in <contracts>
+// itself, even though it's entirely about that header's own types
+// (assertion_static_info/assertion_context) -- deliberately, so that
+// <contracts> itself never needs to include <concepts> (hence never
+// <type_traits>, which <concepts> already needs for same_as's own
+// implementation). <contracts> has no include guard against being
+// reached while some *other* header transitively needing it (like this
+// one) is itself still mid-body -- e.g. <type_traits>'s own #include
+// <bits/version.h>, for its own feature-test-macro needs, deferred
+// #include <contracts> from within bits/c++config.h at that exact point
+// -- and confirmed via a real regression that a mid-body <type_traits>
+// transitively reaching a same_as-needing concept back inside itself
+// (via <contracts> -> <concepts> -> <type_traits>) is a hard, circular
+// compile failure, not just a slow build. <concepts> itself has no such
+// problem: nothing reaches *this* header from partway through its own
+// body the way <type_traits> can reach bits/version.h.
+#include <contracts>
+#ifdef __cpp_lib_contracts
+namespace std _GLIBCXX_VISIBILITY(default)
+{
+_GLIBCXX_BEGIN_NAMESPACE_VERSION
+
+namespace contracts
+{
+  // A control type used for pre<>/post<>/contract_assert<> must satisfy
+  // this: the three mandatory static traits (is_ignored/constify/
+  // assumable), and a callable operator(). See <contracts>'s own,
+  // adjacent comments on default_control/assertion_control's use for
+  // the full contract each of these traits has to uphold -- this
+  // concept only checks their signatures, not their semantics.
+  template <class _Tp>
+  concept assertion_control =
+    requires (_Tp __c, assertion_static_info __info,
+	      const assertion_context& __ctx) {
+      { _Tp::is_ignored(__info) } -> same_as<bool>;
+      { _Tp::constify(__info) } -> same_as<bool>;
+      { _Tp::assumable(__info) } -> same_as<bool>;
+      { __c(__ctx) } -> same_as<void>;
+    };
+} // namespace contracts
+
+_GLIBCXX_END_NAMESPACE_VERSION
+} // namespace std
+#endif // __cpp_lib_contracts
+
 #endif /* _GLIBCXX_CONCEPTS */
