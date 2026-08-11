@@ -333,6 +333,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _M_data(_CharT* __p) _GLIBCXX_NOEXCEPT
       { return (_M_dataplus._M_p = __p); }
 
+      // The old COW ABI's reinterpret_cast right below is banned outright
+      // in a conveyor function, so size()/empty() (both bottoming out
+      // here) can never be conveyor-checked -- every __glibcxx_assert
+      // below that calls either one uses the _noconveyor spelling
+      // instead, unlike a plain pointer/field-compare assert elsewhere
+      // in this file.
       _Rep*
       _M_rep() const _GLIBCXX_NOEXCEPT
       { return &((reinterpret_cast<_Rep*> (_M_data()))[-1]); }
@@ -1130,7 +1136,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       const_reference
       operator[] (size_type __pos) const _GLIBCXX_NOEXCEPT
       {
-	__glibcxx_assert(__pos <= size());
+	__glibcxx_assert_noconveyor(__pos <= size());
 	return _M_data()[__pos];
       }
 
@@ -1149,7 +1155,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 	// Allow pos == size() both in C++98 mode, as v3 extension,
 	// and in C++11 mode.
-	__glibcxx_assert(__pos <= size());
+	__glibcxx_assert_noconveyor(__pos <= size());
 	// In pedantic mode be strict in C++98 mode.
 	_GLIBCXX_DEBUG_PEDASSERT(__cplusplus >= 201103L || __pos < size());
 	_M_leak();
@@ -1208,7 +1214,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       reference
       front()
       {
-	__glibcxx_assert(!empty());
+	__glibcxx_assert_noconveyor(!empty());
 	return operator[](0);
       }
 
@@ -1219,7 +1225,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       const_reference
       front() const noexcept
       {
-	__glibcxx_assert(!empty());
+	__glibcxx_assert_noconveyor(!empty());
 	return operator[](0);
       }
 
@@ -1230,7 +1236,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       reference
       back()
       {
-	__glibcxx_assert(!empty());
+	__glibcxx_assert_noconveyor(!empty());
 	return operator[](this->size() - 1);
       }
 
@@ -1241,7 +1247,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       const_reference
       back() const noexcept
       {
-	__glibcxx_assert(!empty());
+	__glibcxx_assert_noconveyor(!empty());
 	return operator[](this->size() - 1);
       }
 #endif
@@ -1928,7 +1934,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       void
       pop_back() // FIXME C++11: should be noexcept.
       {
-	__glibcxx_assert(!empty());
+	__glibcxx_assert_noconveyor(!empty());
 	erase(size() - 1, 1);
       }
 #endif // C++11

@@ -729,6 +729,17 @@ namespace std
 #  define __glibcxx_assert_msg(cond, msg) \
      contract_assert<std::contracts::noexcept_assert(msg)>(cond)
 # endif
+// For a condition whose own callee chain is known not to satisfy the
+// mandatory conveyor UB-freedom rules (e.g. a reinterpret_cast reached
+// through some accessor it calls) and so must never switch over to
+// conveyor_assert regardless of _GLIBCXX_CONVEYOR_ASSERTIONS, unlike
+// __glibcxx_assert above -- call sites opt into this spelling by name
+// (bits/cow_string.h, bits/fs_path.h, std/text_encoding), rather than
+// this header implicitly redefining __glibcxx_assert itself around them.
+# define __glibcxx_assert_noconveyor(cond) \
+     contract_assert<std::contracts::noexcept_assert_v>(cond)
+# define __glibcxx_assert_msg_noconveyor(cond, msg) \
+     contract_assert<std::contracts::noexcept_assert(msg)>(cond)
 #elif defined(_GLIBCXX_ASSERTIONS)
 // When _GLIBCXX_ASSERTIONS is defined we enable runtime assertion checks.
 // These checks will also be done during constant evaluation.
@@ -742,6 +753,11 @@ namespace std
 // the raw condition tokens directly, which already reproduces a
 // reasonable diagnostic regardless of macro-expansion origin.
 # define __glibcxx_assert_msg(cond, msg) __glibcxx_assert(cond)
+// No conveyor/non-conveyor distinction to make outside the contract-
+// control-objects tier above: every assertion here is already the same,
+// non-conveyor runtime check, so these are just aliases.
+# define __glibcxx_assert_noconveyor(cond) __glibcxx_assert(cond)
+# define __glibcxx_assert_msg_noconveyor(cond, msg) __glibcxx_assert(cond)
 #elif _GLIBCXX_HAVE_IS_CONSTANT_EVALUATED
 // _GLIBCXX_ASSERTIONS is not defined, so assertions checks are only enabled
 // during constant evaluation. This ensures we diagnose undefined behaviour
@@ -759,11 +775,15 @@ namespace std
       std::__glibcxx_assert_fail();					\
   } while (false)
 # define __glibcxx_assert_msg(cond, msg) __glibcxx_assert(cond)
+# define __glibcxx_assert_noconveyor(cond) __glibcxx_assert(cond)
+# define __glibcxx_assert_msg_noconveyor(cond, msg) __glibcxx_assert(cond)
 #else
 // _GLIBCXX_ASSERTIONS is not defined and __is_constant_evaluated() doesn't
 // work so don't check any assertions.
 # define __glibcxx_assert(cond)
 # define __glibcxx_assert_msg(cond, msg)
+# define __glibcxx_assert_noconveyor(cond)
+# define __glibcxx_assert_msg_noconveyor(cond, msg)
 #endif
 
 // How an individual library function gets tagged conveyor "conditionally,
