@@ -5702,6 +5702,85 @@ public:
       m_array_alias_target.remove (to_remove[i]);
   }
 
+  /* Stage 5: '&h->f'/'&h.f' (the address of a struct/class member, of
+     any type) names a fixed, permanent sub-object -- unlike a field's
+     own *value* (what m_field_alias_target tracks), there is nothing to
+     "look up" here: for a given base object, '&h.f' always refers to
+     the exact same storage for its whole lifetime, the same way '&f'
+     and a plain decl 'f' already share one identity (Stage 1's own
+     widened scope). Since m_predicate_fact_map is keyed by a single
+     tree, and two syntactically identical '&h->f' occurrences are two
+     different, non-interned tree nodes, a stable, synthesized
+     placeholder tree is created once per (base_identity, FIELD_DECL)
+     pair and reused for every later occurrence naming the same slot --
+     plugged into the *existing*, unchanged m_predicate_fact_map, not a
+     new parallel map: every establish/consult/invalidate site keeps
+     working unmodified once handed this key, the same shape oa_field_
+     slot_identity/oa_array_slot_identity already produce for that map.
+
+     M_FIELD_OBJECT_KEY is deliberately a *pointer*, shared (never
+     deep-copied) across every oa_env instance analyzing one function --
+     unlike every map above, which is copied by value at every branch
+     point. If it were an ordinary, per-instance member, two sibling
+     branches that each, independently, first need a key for the same
+     (base, field) pair (never yet cached in their shared parent) would
+     synthesize two *different* placeholder trees for the same logical
+     slot, silently breaking predicate_fact_merge_with's own pointer-
+     identity agreement check forever after for that field. Allocated
+     once, before the first oa_env for a given function exists
+     (oa_resolve_object_address_in_function_1's own local, address-
+     taken hash_map), and explicitly propagated -- never freshly
+     allocated -- into the only other two functions that construct a
+     fresh oa_env of their own for a nested walk (oa_resolve_iile_call/
+     oa_resolve_iile_range): found and fixed during this feature's own
+     design review, which caught that an otherwise-uninitialized fresh
+     inner_env used inside a parameterless IILE (e.g. 'g (holder *h) {
+     [&]{ open_it (&h->f); }(); }') would otherwise dereference a null
+     cache the first time '&h->f' is seen inside such a closure.
+
+     No new merge function is needed: the cache itself is a pure,
+     permanent, append-only mapping (a synthesized key, once created for
+     a given (base, field) pair, is never removed or regenerated -- only
+     the *fact* recorded under it in m_predicate_fact_map is ever
+     invalidated), and predicate_fact_merge_with already works on any
+     tree key regardless of its own origin, so entries reached through a
+     synthetic key merge correctly for free.  */
+  tree field_object_identity_key (tree base, tree field)
+  {
+    tree *existing = m_field_object_key->get ({base, field});
+    if (existing)
+      return *existing;
+    tree key = build_decl (UNKNOWN_LOCATION, VAR_DECL, NULL_TREE,
+			    ptr_type_node);
+    m_field_object_key->put ({base, field}, key);
+    return key;
+  }
+  void field_object_predicate_invalidate (tree base, tree field)
+  {
+    tree *key = m_field_object_key->get ({base, field});
+    if (key)
+      predicate_fact_invalidate (*key);
+  }
+  /* Mirrors field_alias_invalidate_all's own removal-by-first-key-
+     component sweep, but against m_predicate_fact_map (via each cached
+     key) rather than against this cache itself -- the cache's own
+     entries are permanent (see the comment above); only the *fact*
+     recorded under a given key is ever invalidated.  */
+  void field_object_predicate_invalidate_all (tree base)
+  {
+    for (auto it : *m_field_object_key)
+      if (it.first.first == base)
+	predicate_fact_invalidate (it.second);
+  }
+  hash_map<oa_field_key_hash, tree> *field_object_key_cache ()
+  {
+    return m_field_object_key;
+  }
+  void set_field_object_key_cache (hash_map<oa_field_key_hash, tree> *cache)
+  {
+    m_field_object_key = cache;
+  }
+
   /* A shared substrate, same gating and shape as m_predicate_fact_map
      above, for oa_relational_fact ("LHS CODE RHS holds") instead of a
      named-predicate call.  relational_merge_with mirrors predicate_
@@ -5987,6 +6066,7 @@ public:
       r.m_field_alias_target.put (it.first, it.second);
     for (auto it : m_array_alias_target)
       r.m_array_alias_target.put (it.first, it.second);
+    r.m_field_object_key = m_field_object_key;
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -6037,6 +6117,7 @@ public:
     m_array_alias_target.empty ();
     for (auto it : other.m_array_alias_target)
       m_array_alias_target.put (it.first, it.second);
+    m_field_object_key = other.m_field_object_key;
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -6146,6 +6227,9 @@ private:
   hash_map<oa_field_key_hash, tree> m_field_alias_target;
   hash_map<pair_hash<nofree_ptr_hash<tree_node>,
 		      int_hash<HOST_WIDE_INT, -1, -2>>, tree> m_array_alias_target;
+  /* Never owned/allocated here -- see field_object_identity_key's own
+     comment for why this must be a shared pointer, not an embedded map.  */
+  hash_map<oa_field_key_hash, tree> *m_field_object_key = nullptr;
 };
 
 /* An empty, no-added-members subclass, purely so a plugin (which only
@@ -6657,6 +6741,69 @@ oa_array_slot_identity (tree expr, oa_env &env, tree *decl_out)
   if (!target)
     return false;
   *decl_out = *target;
+  return true;
+}
+
+/* Stage 5: '&h->f'/'&h.f' -- the address of a struct/class member of
+   ANY type (most usefully a non-pointer, embedded sub-object) -- names
+   a fixed, permanent sub-object of the base, distinct in kind from
+   oa_field_slot_identity above (which answers "what pointer value does
+   field slot h.ptr currently hold", an alias lookup for a value that
+   can change over time). There is no "alias target" to look up here;
+   the (base_identity, FIELD_DECL) pair *is* the identity, permanently,
+   for the object's whole lifetime -- resolved to a synthesized,
+   stable, cached placeholder tree via ENV's own field_object_identity_
+   key (see that method's own comment on why the cache must be shared,
+   not per-branch-copied).
+
+   Deliberately not folded into oa_object_identity_decl itself, even
+   though (unlike Stage 2a's h.ptr case) '&h->f' can never appear as an
+   assignment's own LHS, so there is no Rule-1-dispatch-corruption risk
+   here -- oa_object_identity_decl returns a single, already-existing
+   tree via its own out-param, but a (base, FIELD_DECL) pair has no
+   single, natural tree representation the way a bare decl does; two
+   syntactically identical '&h->f' expressions at different program
+   points are different ADDR_EXPR/COMPONENT_REF tree nodes (the same
+   non-interning problem oa_field_slot_identity's own map was designed
+   around), so whatever is returned as "the identity" has to be some
+   stable, synthesized representative instead.
+
+   The base is resolved via oa_object_identity_decl specifically (the
+   untyped "any object has an identity" resolver) -- never oa_
+   invalidation_identity_decl, for the identical reason oa_field_slot_
+   identity's own comment gives.  A leading INDIRECT_REF is unwrapped
+   first (confirmed via raw tree dump that '&h->f' is ADDR_EXPR
+   (COMPONENT_REF (INDIRECT_REF (h), f)) while '&h.f' is ADDR_EXPR
+   (COMPONENT_REF (h, f)), no INDIRECT_REF at all), the same unwrap
+   oa_field_slot_identity already needs for 'hp->ptr'.
+
+   Deliberately does NOT gate on FIELD's own type (unlike oa_field_
+   slot_identity, which only ever tracks pointer/reference-typed
+   fields, since it's about aliasing a pointer *value*) -- '&h->f' is a
+   meaningful, trackable identity for a field of any type at all, since
+   the predicate is over the field's own address, not whatever value it
+   currently holds.  */
+
+static bool
+oa_field_object_identity (tree expr, oa_env &env, tree *decl_out)
+{
+  expr = STRIP_ANY_LOCATION_WRAPPER (expr);
+  if (TREE_CODE (expr) != ADDR_EXPR)
+    return false;
+  tree comp = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+  if (TREE_CODE (comp) != COMPONENT_REF)
+    return false;
+  tree field = TREE_OPERAND (comp, 1);
+  if (TREE_CODE (field) != FIELD_DECL)
+    return false;
+  tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (comp, 0));
+  tree obj_expr = TREE_CODE (obj) == INDIRECT_REF
+    ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0)) : obj;
+  tree base_identity;
+  if (!oa_object_identity_decl (obj_expr, &base_identity))
+    return false;
+  base_identity = env.alias_find (base_identity);
+  *decl_out = env.field_object_identity_key (base_identity, field);
   return true;
 }
 
@@ -8370,7 +8517,8 @@ oa_env_predicate_result (oa_env &env, tree substituted, tree pred_fn,
   tree identity;
   if (!oa_object_identity_decl (substituted, &identity)
       && !oa_field_slot_identity (substituted, env, &identity)
-      && !oa_array_slot_identity (substituted, env, &identity))
+      && !oa_array_slot_identity (substituted, env, &identity)
+      && !oa_field_object_identity (substituted, env, &identity))
     return OA_UNKNOWN;
   identity = env.alias_find (identity);
   oa_predicate_fact fact;
@@ -9257,7 +9405,8 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 	  tree identity;
 	  if (!oa_object_identity_decl (substituted, &identity)
 	      && !oa_field_slot_identity (substituted, env, &identity)
-	      && !oa_array_slot_identity (substituted, env, &identity))
+	      && !oa_array_slot_identity (substituted, env, &identity)
+	      && !oa_field_object_identity (substituted, env, &identity))
 	    continue;
 	  identity = env.alias_find (identity);
 
@@ -9300,7 +9449,8 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 		  tree identity;
 		  if (!oa_object_identity_decl (substituted, &identity)
 		      && !oa_field_slot_identity (substituted, env, &identity)
-		      && !oa_array_slot_identity (substituted, env, &identity))
+		      && !oa_array_slot_identity (substituted, env, &identity)
+		      && !oa_field_object_identity (substituted, env, &identity))
 		    continue;
 		  identity = env.alias_find (identity);
 		  env.contract_field_range_set (identity, field_groups[i].field,
@@ -9366,7 +9516,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	  tree identity;
 	  if (!oa_object_identity_decl (substituted, &identity)
 	      && !oa_field_slot_identity (substituted, env, &identity)
-	      && !oa_array_slot_identity (substituted, env, &identity))
+	      && !oa_array_slot_identity (substituted, env, &identity)
+	      && !oa_field_object_identity (substituted, env, &identity))
 	    continue;
 	  identity = env.alias_find (identity);
 
@@ -9524,7 +9675,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		  tree identity;
 		  if (!oa_object_identity_decl (substituted, &identity)
 		      && !oa_field_slot_identity (substituted, env, &identity)
-		      && !oa_array_slot_identity (substituted, env, &identity))
+		      && !oa_array_slot_identity (substituted, env, &identity)
+		      && !oa_field_object_identity (substituted, env, &identity))
 		    continue;
 		  identity = env.alias_find (identity);
 
@@ -9618,7 +9770,8 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	  tree identity;
 	  if (!oa_object_identity_decl (substituted, &identity)
 	      && !oa_field_slot_identity (substituted, env, &identity)
-	      && !oa_array_slot_identity (substituted, env, &identity))
+	      && !oa_array_slot_identity (substituted, env, &identity)
+	      && !oa_field_object_identity (substituted, env, &identity))
 	    continue;
 	  identity = env.alias_find (identity);
 
@@ -9870,6 +10023,7 @@ oa_invalidate_parameter_alias_group (tree identity, oa_env &env)
       env.contract_field_range_invalidate_all (parm);
       env.field_alias_invalidate_all (parm);
       env.array_alias_invalidate_all (parm);
+      env.field_object_predicate_invalidate_all (parm);
     }
 }
 
@@ -9899,13 +10053,15 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
       tree identity;
       if (oa_invalidation_identity_decl (CALL_EXPR_ARG (call, i), &identity)
 	  || oa_field_slot_identity (CALL_EXPR_ARG (call, i), env, &identity)
-	  || oa_array_slot_identity (CALL_EXPR_ARG (call, i), env, &identity))
+	  || oa_array_slot_identity (CALL_EXPR_ARG (call, i), env, &identity)
+	  || oa_field_object_identity (CALL_EXPR_ARG (call, i), env, &identity))
 	{
 	  identity = env.alias_find (identity);
 	  env.predicate_fact_invalidate (identity);
 	  env.contract_field_range_invalidate_all (identity);
 	  env.field_alias_invalidate_all (identity);
 	  env.array_alias_invalidate_all (identity);
+	  env.field_object_predicate_invalidate_all (identity);
 	  oa_invalidate_parameter_alias_group (identity, env);
 	}
     }
@@ -10526,7 +10682,8 @@ oa_env_check_field_range_fact (oa_analysis_env *env, tree base_expr,
   tree identity;
   if (!oa_object_identity_decl (base_expr, &identity)
       && !oa_field_slot_identity (base_expr, e, &identity)
-      && !oa_array_slot_identity (base_expr, e, &identity))
+      && !oa_array_slot_identity (base_expr, e, &identity)
+      && !oa_field_object_identity (base_expr, e, &identity))
     return OA_UNKNOWN;
   identity = e.alias_find (identity);
   oa_contract_field_range_fact established;
@@ -11613,6 +11770,11 @@ oa_resolve_iile_call (tree call, oa_env &env)
   oa_return_seen = false;
 
   oa_env inner_env;
+  /* Stage 5: propagate the caller's own already-valid cache -- a fresh,
+     default-constructed inner_env's own cache pointer is null, a real
+     crash/UB path for '&h->f' first resolved inside this closure's own
+     body (see oa_env::field_object_identity_key's own comment).  */
+  inner_env.set_field_object_key_cache (env.field_object_key_cache ());
   oa_walk_stmt (&body, inner_env);
 
   bool result = oa_return_seen && oa_return_all_provable;
@@ -11656,6 +11818,8 @@ oa_resolve_iile_range (tree call, oa_env &env, oa_range_fact *out)
   oa_return_range_seen = false;
 
   oa_env inner_env;
+  /* Stage 5: see oa_resolve_iile_call's own identical propagation.  */
+  inner_env.set_field_object_key_cache (env.field_object_key_cache ());
   oa_walk_stmt (&body, inner_env);
 
   bool result = oa_return_range_seen && oa_return_range_has_fact;
@@ -12068,6 +12232,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       checkenv.contract_field_range_invalidate_all (d);
       checkenv.field_alias_invalidate_all (d);
       checkenv.array_alias_invalidate_all (d);
+      checkenv.field_object_predicate_invalidate_all (d);
       oa_invalidate_parameter_alias_group (d, checkenv);
 
       bool saved_tracking = oa_return_tracking;
@@ -12144,6 +12309,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       env.contract_field_range_invalidate_all (range_result_decls[i]);
       env.field_alias_invalidate_all (range_result_decls[i]);
       env.array_alias_invalidate_all (range_result_decls[i]);
+      env.field_object_predicate_invalidate_all (range_result_decls[i]);
       oa_invalidate_parameter_alias_group (range_result_decls[i], env);
     }
 }
@@ -12943,6 +13109,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		env.contract_field_range_invalidate_all (identity);
 		env.field_alias_invalidate_all (identity);
 		env.array_alias_invalidate_all (identity);
+		env.field_object_predicate_invalidate_all (identity);
 		oa_invalidate_parameter_alias_group (identity, env);
 		env.alias_invalidate (identity);
 	      }
@@ -12992,6 +13159,14 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 			       p, no aliasing at all) wrongly verified before
 			       this fix.  */
 			    env.predicate_fact_invalidate (field_identity);
+			    /* Stage 5: this replaces the FIELD sub-object of
+			       FIELD_IDENTITY directly, so whatever predicate
+			       fact was tracked about '&field_identity->field'
+			       itself (a fixed address, but not a fixed value)
+			       must be dropped too -- narrower than the whole-
+			       object sweep above, same granularity distinction
+			       contract_field_range_invalidate already draws.  */
+			    env.field_object_predicate_invalidate (field_identity, field);
 			    /* Stage 2a: LHS ('h.ptr' or 'hp->ptr') is a
 			       pointer/reference-typed field slot -- record
 			       what it now aliases (RHS resolved via either
@@ -13010,7 +13185,9 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 				    || oa_field_slot_identity (rhs, env,
 							       &alias_rhs_identity)
 				    || oa_array_slot_identity (rhs, env,
-							       &alias_rhs_identity))
+							       &alias_rhs_identity)
+				    || oa_field_object_identity (rhs, env,
+								  &alias_rhs_identity))
 				  env.field_alias_set (field_identity, field,
 							env.alias_find (alias_rhs_identity));
 				else
@@ -13064,6 +13241,8 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 					|| oa_field_slot_identity (rhs, env,
 							   &alias_rhs_identity)
 					|| oa_array_slot_identity (rhs, env,
+							   &alias_rhs_identity)
+					|| oa_field_object_identity (rhs, env,
 							   &alias_rhs_identity))
 				      env.array_alias_set (array_identity, idx,
 							    env.alias_find (alias_rhs_identity));
@@ -13820,6 +13999,18 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
     return;
 
   oa_env env;
+  /* Stage 5: the shared, cross-branch, cross-nested-walk cache backing
+     oa_env::field_object_identity_key -- allocated once here, the true
+     single per-function entry point for the *outermost* env, and
+     explicitly propagated (never freshly allocated) into every other
+     oa_env this walk ever constructs, whether via copy()/assign() (every
+     branch/loop/try fork) or explicitly (oa_resolve_iile_call/_range's
+     own fresh inner_env, see their own comments). A plain stack-local
+     hash_map, not heap-allocated: its address stays valid for this
+     entire function's walk, including any nested IILE resolution, since
+     that always happens synchronously within this same call.  */
+  hash_map<oa_field_key_hash, tree> field_object_key_cache;
+  env.set_field_object_key_cache (&field_object_key_cache);
 
   /* -fcontract-symbolic-runtime-checks (Mechanism B): every shadow
      variable get_or_build_scalar_shadow ever creates for this function
