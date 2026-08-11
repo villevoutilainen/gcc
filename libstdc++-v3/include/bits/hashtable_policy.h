@@ -1528,11 +1528,11 @@ namespace __detail
 	{ }
 
       __node_alloc_type&
-      _M_node_allocator()
+      _M_node_allocator() _GLIBCXX_CONVEYOR
       { return _M_alloc._M_obj; }
 
       const __node_alloc_type&
-      _M_node_allocator() const
+      _M_node_allocator() const _GLIBCXX_CONVEYOR
       { return _M_alloc._M_obj; }
 
       // Allocate a node and construct an element within it.

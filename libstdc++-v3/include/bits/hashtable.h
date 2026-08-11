@@ -669,7 +669,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       { return size() == 0; }
 
       allocator_type
-      get_allocator() const noexcept
+      get_allocator() const noexcept _GLIBCXX_CONVEYOR
       { return allocator_type(this->_M_node_allocator()); }
 
       size_type
