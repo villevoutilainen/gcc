@@ -35,7 +35,7 @@ struct Base {
   virtual ~Base () {}
 };
 
-struct Derived : Base { Derived () {}
+struct Derived : Base {
   int f (int x) override { return x * 2; }
 };
 

@@ -36,7 +36,7 @@ private:
 };
 
 // No friend declaration, no access grant of any kind.
-struct Derived : Base { Derived () {}
+struct Derived : Base {
   int f (int x) override
     pre<probe_v>(sc::base_contract<Base>())
   { return x * 2; }

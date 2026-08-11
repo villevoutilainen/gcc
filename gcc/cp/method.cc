@@ -2990,11 +2990,25 @@ synthesized_method_base_walk (tree binfo, tree base_binfo,
 	 destructors don't affect triviality of the constructor.  Nor
 	 do they affect constexpr-ness (a constant expression doesn't
 	 throw) or exception-specification (a throw from one of the
-	 dtors would be a double-fault).  Conveyor-ness is excluded for
-	 the same reason -- a conveyor constructor can't throw in the
-	 first place, so this cleanup-only path is moot for it too.  */
-      process_subob_fn (dtor, sfk, NULL, NULL, deleted_p, NULL, NULL, false,
-			BINFO_TYPE (base_binfo), /*dtor_from_ctor*/true);
+	 dtors would be a double-fault).
+	 CONVEYOR_P, unlike those, IS passed down (found and fixed after
+	 initially being excluded here on the same "can't throw, so this
+	 path is moot" reasoning as constexpr_p/spec_p above -- that
+	 reasoning doesn't actually hold for conveyor: "conveyor" is not a
+	 proven, checked no-throw guarantee in its own right, it only
+	 holds transitively if *every* call reachable from a conveyor
+	 function -- including this very cleanup call, on the path taken
+	 if a later member's own initializer throws -- itself targets a
+	 conveyor function (see D4324's own callee-must-be-conveyor rule,
+	 build_over_call/cp_build_function_call_vec). If this cleanup
+	 dtor were still allowed to be non-conveyor while the constructor
+	 as a whole gets treated as conveyor, an exception genuinely
+	 propagating through partially-completed construction would run
+	 unverified code from what's supposed to be a fully-verified
+	 conveyor call graph -- exactly the soundness gap that rule
+	 exists to close.  */
+      process_subob_fn (dtor, sfk, NULL, NULL, deleted_p, NULL, conveyor_p,
+			false, BINFO_TYPE (base_binfo), /*dtor_from_ctor*/true);
     }
 
   return rval;

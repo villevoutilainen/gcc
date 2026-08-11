@@ -38,7 +38,7 @@ struct Base {
   virtual ~Base () {}
 };
 
-struct Derived : Base { Derived () {}
+struct Derived : Base {
   int g () { return 99; }
 };
 

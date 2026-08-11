@@ -66,7 +66,7 @@ Base::f (int x)
   return x;
 }
 
-struct Derived : Base { Derived () {}
+struct Derived : Base {
   int f (int x) override pre<derived_probe_v>(x >= 0) { return x * 2; }
 };
 

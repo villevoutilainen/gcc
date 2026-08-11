@@ -32,16 +32,13 @@ struct X {
   virtual ~X () {}
 };
 struct Y : X {
-  Y () {}
   int f (int x) override pre<probe_v>(x >= 0 && x < 100) { return x; }
 };
 struct Z : Y {
-  Z () {}
   int f (int x) override pre<probe_v>(x >= 0 && x < 1000) { return x; }
 };
 
 struct Derived : Z {
-  Derived () {}
   int f (int x) override
     pre<probe_v>(sc::base_contract<X>() || sc::base_contract<Y>()
 		 || sc::base_contract<Z>())

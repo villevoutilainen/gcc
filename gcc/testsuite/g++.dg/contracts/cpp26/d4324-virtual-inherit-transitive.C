@@ -35,10 +35,9 @@ struct Base {
 };
 
 // Middle doesn't override f at all.
-struct Middle : Base { Middle () {} };
+struct Middle : Base { };
 
 struct Derived : Middle {
-  Derived () {}
   int f (int x) override { return x * 4; }
 };
 
