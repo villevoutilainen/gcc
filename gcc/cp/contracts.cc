@@ -630,6 +630,32 @@ bool contract_condition_conveyor_p = false;
 
 bool suppress_conveyor_restrictions_for_trait_query_p = false;
 
+/* True while building a converted constant expression (an
+   explicit-specifier's own operand, a non-type template argument, an
+   array bound, an enumerator value, ...) -- see build_converted_
+   constant_expr_internal in call.cc, the single shared helper for all
+   of these. A manifestly constant expression can never have side
+   effects or exhibit UB: the core language itself already requires
+   this (a sub-expression that would need to invoke UB, or that isn't a
+   core constant expression for any other reason, simply isn't a valid
+   constant expression at all, and evaluation fails with its own,
+   conveyor-independent diagnostic -- see cxx_eval_outermost_constant_
+   expr in constexpr.cc). So none of conveyor_restrictions_active_p's
+   restrictions have anything real left to check while evaluating one,
+   regardless of whether we're otherwise inside conveyor-restricted
+   code. Found and fixed via direct testing: instantiating std::pair's
+   own conditionally-explicit constructors (explicit(bool-expr), where
+   bool-expr calls a constexpr helper like _S_convertible()) from
+   inside an ordinary, never-conveyor _Rb_tree::erase() overload -- not
+   even a conveyor function itself -- tripped the callee-must-be-
+   conveyor check purely because completing std::pair as a type
+   happened to be needed there, exactly the same false-positive shape
+   __or_/__and_'s decltype-based SFINAE hit before it (see
+   cp_unevaluated_operand above), just reached through constant-
+   expression evaluation instead of an unevaluated operand.  */
+
+bool suppress_conveyor_restrictions_for_converted_constant_expr_p = false;
+
 /* True if constructs subject to the D4324 conveyor-function syntactic
    restrictions (gcc/cp/constexpr.cc's check_conveyor_function_body, and
    the point-of-construction checks alongside it) should be rejected
@@ -644,6 +670,8 @@ bool
 conveyor_restrictions_active_p ()
 {
   if (suppress_conveyor_restrictions_for_trait_query_p)
+    return false;
+  if (suppress_conveyor_restrictions_for_converted_constant_expr_p)
     return false;
   /* None of these checks exist to reject code that can never actually
      execute: they exist to prove the code that *does* run at runtime is
