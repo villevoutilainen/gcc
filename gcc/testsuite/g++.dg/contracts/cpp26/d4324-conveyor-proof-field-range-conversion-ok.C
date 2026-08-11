@@ -7,6 +7,13 @@
 // [20,1000) on the same object, reached via ref's own conversion
 // operator on a separate statement. See .claude/plans/well-we-last-
 // discussed-ethereal-duckling.md.
+//
+// Each function's own dereference of 't' inside its conveyor-flavored
+// condition text (mandatory-scanned regardless of whether the function
+// itself is declared 'conveyor', per Increment V) needs its own
+// is_object_address(t) precondition to be provable -- an earlier,
+// separate 'pre<>' on the same function, since a later conjunct in the
+// very same condition does not benefit from an earlier one's fact.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
 
@@ -27,9 +34,11 @@ struct thing { int count; };
 struct thing_ref { thing *t; operator thing* () const { return t; } };
 
 void produce_count (thing * const t)
+  pre<conveyor_ctrl_v> (std::is_object_address (t))
   post<conveyor_ctrl_v> (t->count >= 40 && t->count < 100)
 { t->count = 55; }
 void consume_count (thing * const t)
+  pre<conveyor_ctrl_v> (std::is_object_address (t))
   pre<conveyor_ctrl_v> (t->count >= 20 && t->count < 1000)
 { }
 

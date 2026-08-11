@@ -9,7 +9,7 @@ int f (int i) conveyor
 {
   int arr[10] = {};
   int* p = &arr[i]; // { dg-error "array index .i. not provably in-bounds in a conveyor function" }
-  return *p;
+  return p == p;
 }
 
 int main () { return f (0); }
