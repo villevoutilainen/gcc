@@ -31,10 +31,12 @@ struct X {
   virtual ~X () {}
 };
 struct Y : X {
+  Y () {}
   int f (int x) override post<probe_v>(r: r < 1000) { return x; }
 };
 
 struct Derived : Y {
+  Derived () {}
   int f (int x) override
     post<probe_v>(r: sc::base_contract<X>() && sc::base_contract<Y>())
   { return x * 2; }

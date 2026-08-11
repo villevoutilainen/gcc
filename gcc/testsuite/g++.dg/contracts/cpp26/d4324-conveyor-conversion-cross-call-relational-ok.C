@@ -30,7 +30,7 @@ struct wrap {
   wrap (int v_) : v (v_) {}
   wrap (const wrap &other) : v (other.v) {}
   ~wrap () {}
-  operator int () const { return v; }
+  operator int () const conveyor { return v; }
 };
 
 int f (wrap x, wrap q) pre<ctrl_v> (x < q) { return x; }

@@ -27,7 +27,7 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 struct needs_dtor { ~needs_dtor () {} };
 
 struct file { bool opened = false; };
-bool is_opened (const file *f) { return f->opened; }
+bool is_opened (const file *f) conveyor { return f->opened; }
 
 void open_it (file * const f) post<conveyor_ctrl_v> (is_opened (f)) { f->opened = true; }
 void use_it (file * const f) pre<conveyor_ctrl_v> (is_opened (f)) { }

@@ -24,7 +24,7 @@ inline constexpr conveyor_ctrl ctrl_v{};
 struct wrap {
   int v;
   constexpr wrap (int v_) : v (v_) {}
-  constexpr operator int () const { return v; }
+  constexpr operator int () const conveyor { return v; }
 };
 
 int divide (int a, wrap b) pre<ctrl_v> (b != 0) { return a / b; }

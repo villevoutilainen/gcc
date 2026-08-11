@@ -28,7 +28,7 @@ inline constexpr conveyor_ctrl ctrl_v{};
 struct wrap {
   int v;
   constexpr wrap (int v_) : v (v_) {}
-  constexpr operator int () const { return v; }
+  constexpr operator int () const conveyor { return v; }
 };
 
 int check_relation (int a, int b) pre<ctrl_v> (a < b) { return a; }

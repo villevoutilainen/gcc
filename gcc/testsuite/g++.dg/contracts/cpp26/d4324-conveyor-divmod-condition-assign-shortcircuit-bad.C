@@ -8,7 +8,7 @@
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
-int compute (int);
+int compute (int) conveyor;
 
 int f (int q, bool a) conveyor
 {

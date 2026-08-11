@@ -19,7 +19,7 @@ struct conveyor_ctrl {
 };
 inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 
-int g (int x) post<conveyor_ctrl_v>(r: r < 1000)
+int g (int x) conveyor post<conveyor_ctrl_v>(r: r < 1000)
 {
   return x;
 }

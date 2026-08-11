@@ -6,7 +6,7 @@
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
-int compute (int);
+int compute (int) conveyor;
 
 int f (int q) conveyor
 {
@@ -16,6 +16,6 @@ int f (int q) conveyor
   return 0;
 }
 
-int compute (int q) { return q; }
+int compute (int q) conveyor { return q; }
 
 int main () { return f (5) - 2; }

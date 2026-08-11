@@ -38,7 +38,7 @@ inline constexpr symbolic_ctrl symbolic_ctrl_v{};
 struct wrap {
   int v;
   constexpr wrap (int v_) : v (v_) {}
-  constexpr operator int () const { return v; }
+  constexpr operator int () const conveyor { return v; }
 };
 
 int f_symbolic (wrap x, wrap q) pre<symbolic_ctrl_v> (x < q) { return x; }
