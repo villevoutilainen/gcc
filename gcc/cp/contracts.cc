@@ -12719,6 +12719,18 @@ oa_stmt_terminates_p (tree stmt)
 	t = STRIP_ANY_LOCATION_WRAPPER (EXPR_STMT_EXPR (t));
       else if (TREE_CODE (t) == BIND_EXPR)
 	t = STRIP_ANY_LOCATION_WRAPPER (BIND_EXPR_BODY (t));
+      else if (TREE_CODE (t) == MUST_NOT_THROW_EXPR)
+	/* A 'noexcept' function's whole body is wrapped in one of these
+	   (run the real body; if an exception propagates out of it,
+	   std::terminate instead) -- found via a real regression (any
+	   conveyor function declared 'noexcept' with a non-void return
+	   type, confirmed to affect a plain free function exactly as
+	   much as a member function, nothing template- or const-
+	   specific about it) once this case was missing here: the
+	   wrapper adds no new *normal*-path control flow of its own, so
+	   whether the real body returns on every path is unaffected by
+	   unwrapping it, the same reasoning as CLEANUP_POINT_EXPR above.  */
+	t = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
       else
 	break;
     }

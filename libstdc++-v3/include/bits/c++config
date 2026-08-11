@@ -604,6 +604,9 @@ namespace std
 # if defined(_GLIBCXX_DEBUG)
 // Debug Mode implies checking assertions.
 #  define _GLIBCXX_ASSERTIONS 1
+# elif defined(_GLIBCXX_CONVEYOR_ASSERTIONS)
+// Conveyor assertions imply checking assertions.
+#  define _GLIBCXX_ASSERTIONS 1
 # elif ! defined(__OPTIMIZE__) && ! defined(_GLIBCXX_NO_ASSERTIONS)
 // Enable assertions for unoptimized builds.
 #  define _GLIBCXX_ASSERTIONS 1
@@ -667,8 +670,6 @@ namespace std
 // assuming everything in this file is already defined -- true only if
 // the #include actually happens after this file's own body is done.
 # define _GLIBCXX_USE_CONTRACT_ASSERT 1
-# define __glibcxx_assert(cond) \
-    contract_assert<std::contracts::noexcept_assert_v>(cond)
 // A caller with its own message to report on failure, instead of
 // noexcept_assert_v's own default of falling back to the predicate's
 // auto-derived condition text: mainly for a caller whose own condition
@@ -685,8 +686,26 @@ namespace std
 // used to (# stringification of just the real, call-site-supplied
 // tokens, string-literal-concatenated with whatever literal text the
 // condition also needs).
-# define __glibcxx_assert_msg(cond, msg) \
-    contract_assert<std::contracts::noexcept_assert(msg)>(cond)
+//
+// _GLIBCXX_CONVEYOR_ASSERTIONS opts into a second, stricter flavor:
+// conveyor_assert instead of noexcept_assert, routing __glibcxx_assert's
+// condition (and every function it calls, tagged _GLIBCXX_CONVEYOR
+// below) through GCC's mandatory conveyor UB-freedom checks. A separate
+// macro, not a wholesale replacement, since the library functions this
+// implies must be tagged _GLIBCXX_CONVEYOR are opted into one at a time
+// (see std/array, bits/stl_vector.h) -- most of the library isn't tagged
+// yet, so making this the default would break the untagged remainder.
+# if defined(_GLIBCXX_CONVEYOR_ASSERTIONS)
+#  define __glibcxx_assert(cond) \
+     contract_assert<std::contracts::conveyor_assert_v>(cond)
+#  define __glibcxx_assert_msg(cond, msg) \
+     contract_assert<std::contracts::conveyor_assert(msg)>(cond)
+# else
+#  define __glibcxx_assert(cond) \
+     contract_assert<std::contracts::noexcept_assert_v>(cond)
+#  define __glibcxx_assert_msg(cond, msg) \
+     contract_assert<std::contracts::noexcept_assert(msg)>(cond)
+# endif
 #elif defined(_GLIBCXX_ASSERTIONS)
 // When _GLIBCXX_ASSERTIONS is defined we enable runtime assertion checks.
 // These checks will also be done during constant evaluation.
@@ -722,6 +741,21 @@ namespace std
 // work so don't check any assertions.
 # define __glibcxx_assert(cond)
 # define __glibcxx_assert_msg(cond, msg)
+#endif
+
+// How an individual library function gets tagged conveyor "conditionally,
+// when [_GLIBCXX_CONVEYOR_ASSERTIONS] is defined" -- expands to GCC's
+// 'conveyor' function-specifier only when both this macro and the
+// compiler support it actually claims to back are present, else to
+// nothing at all, so a build with _GLIBCXX_CONVEYOR_ASSERTIONS defined
+// but an older/differently-configured compiler degrades silently to an
+// ordinary, unchecked function instead of a hard parse error.
+#ifndef _GLIBCXX_CONVEYOR
+# if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+#  define _GLIBCXX_CONVEYOR conveyor
+# else
+#  define _GLIBCXX_CONVEYOR
+# endif
 #endif
 
 // Macro indicating that TSAN is in use.

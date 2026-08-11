@@ -8896,7 +8896,20 @@ build_static_cast_1 (location_t loc, tree type, tree expr, bool c_cast_p,
     {
       tree base;
 
-      if (conveyor_restrictions_active_p ())
+      /* DERIVED_FROM_P/can_convert are both reflexive -- a class is its
+	 own base, and a pointer converts to a pointer of its own exact
+	 type -- so this branch is also reached for a same-type
+	 static_cast (e.g. 'return __v;' inside a function returning the
+	 exact type of its own local/parameter, which the language may
+	 implement via a static_cast-to-reference for copy/move
+	 purposes). That's never an actual downcast (no real base/derived
+	 relationship, no object-layout adjustment, nothing the conveyor
+	 restriction is protecting against), so it must not be banned
+	 here -- confirmed via a real regression (std::strong_ordering's
+	 own 'return __v;', __v already exactly strong_ordering) once
+	 this exclusion was missing.  */
+      if (conveyor_restrictions_active_p ()
+	  && !same_type_ignoring_top_level_qualifiers_p (intype, TREE_TYPE (type)))
 	{
 	  if (complain & tf_error)
 	    error_at (loc, "%<static_cast%> performing a base-to-derived "
@@ -9103,7 +9116,16 @@ build_static_cast_1 (location_t loc, tree type, tree expr, bool c_cast_p,
     {
       tree base;
 
-      if (conveyor_restrictions_active_p ())
+      /* can_convert is reflexive -- a pointer converts to a pointer of
+	 its own exact type -- so this branch (unlike the reference-cast
+	 one above, where TYPE itself is a reference and TREE_TYPE (type)
+	 is the referenced class) is also reached for a same-type pointer
+	 static_cast; TYPE and INTYPE are both pointer types here, so the
+	 same-type check compares them directly, not via TREE_TYPE. See
+	 the reference-cast branch's own comment for why this must be
+	 excluded from the conveyor restriction.  */
+      if (conveyor_restrictions_active_p ()
+	  && !same_type_ignoring_top_level_qualifiers_p (intype, type))
 	{
 	  if (complain & tf_error)
 	    error_at (loc, "%<static_cast%> performing a base-to-derived "

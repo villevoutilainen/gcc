@@ -65,7 +65,7 @@ namespace ranges
 
       template<typename _Tp> requires integral<_Tp>
 	constexpr
-	__max_size_type(_Tp __i) noexcept
+	__max_size_type(_Tp __i) noexcept _GLIBCXX_CONVEYOR
 	  : _M_val(__i), _M_msb(__i < 0)
 	{ }
 
@@ -379,12 +379,12 @@ namespace ranges
       }
 
       friend constexpr bool
-      operator==(const __max_size_type& __l, const __max_size_type& __r) noexcept
+      operator==(const __max_size_type& __l, const __max_size_type& __r) noexcept _GLIBCXX_CONVEYOR
       { return __l._M_val == __r._M_val && __l._M_msb == __r._M_msb; }
 
 #if __cpp_lib_three_way_comparison
       friend constexpr strong_ordering
-      operator<=>(const __max_size_type& __l, const __max_size_type& __r) noexcept
+      operator<=>(const __max_size_type& __l, const __max_size_type& __r) noexcept _GLIBCXX_CONVEYOR
       {
 	if (__l._M_msb ^ __r._M_msb)
 	  return __l._M_msb ? strong_ordering::greater : strong_ordering::less;
@@ -447,7 +447,7 @@ namespace ranges
 
       template<typename _Tp> requires integral<_Tp>
 	constexpr
-	__max_diff_type(_Tp __i) noexcept
+	__max_diff_type(_Tp __i) noexcept _GLIBCXX_CONVEYOR
 	  : _M_rep(__i)
 	{ }
 
@@ -710,12 +710,12 @@ namespace ranges
       }
 
       friend constexpr bool
-      operator==(const __max_diff_type& __l, const __max_diff_type& __r) noexcept
+      operator==(const __max_diff_type& __l, const __max_diff_type& __r) noexcept _GLIBCXX_CONVEYOR
       { return __l._M_rep == __r._M_rep; }
 
 #if __cpp_lib_three_way_comparison
       constexpr strong_ordering
-      operator<=>(const __max_diff_type& __r) const noexcept
+      operator<=>(const __max_diff_type& __r) const noexcept _GLIBCXX_CONVEYOR
       {
 	const auto __lsign = _M_rep._M_msb;
 	const auto __rsign = __r._M_rep._M_msb;
