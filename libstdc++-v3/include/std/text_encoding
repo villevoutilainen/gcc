@@ -481,7 +481,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       else
 	{
 	  // Preconditions: i has the value of one of the enumerators of id.
-	  __glibcxx_assert(__r->_M_id == __i);
+	  // __r comes from std::lower_bound over the static _S_reps array,
+	  // not a fixed offset from a provenance conveyor checking can
+	  // follow -- same reason _M_dereferenceable's own callers below
+	  // use the _noconveyor spelling, see that function's comment.
+	  __glibcxx_assert_noconveyor(__r->_M_id == __i);
 	  return _S_reps + 1; // id::unknown
 	}
     }
@@ -511,7 +515,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	return _M_rep->_M_name;
       else
 	{
-	  __glibcxx_assert(_M_dereferenceable());
+	  __glibcxx_assert_noconveyor(_M_dereferenceable());
 	  return "";
 	}
     }
@@ -523,7 +527,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	++_M_rep;
       else
 	{
-	  __glibcxx_assert(_M_dereferenceable());
+	  __glibcxx_assert_noconveyor(_M_dereferenceable());
 	  *this = _Iterator{};
 	}
       return *this;
@@ -652,6 +656,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     : _M_rep(__r), _M_id(__r ? __r->_M_id : 0)
     { }
 
+    // _M_rep walks a static lookup-table array (_S_reps) via runtime
+    // ++/--/+=, not a fixed offset from a provenance GCC's conveyor
+    // checking can follow -- so the two __glibcxx_assert_noconveyor
+    // call sites above can never switch to a conveyor-checked assert.
     constexpr bool
     _M_dereferenceable() const noexcept
     { return _M_rep != nullptr && _M_rep->_M_id == _M_id; }

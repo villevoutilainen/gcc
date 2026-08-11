@@ -1019,7 +1019,12 @@ namespace __detail
       else if (__n != 0)
 	{
 	  __glibcxx_assert(__i._M_path != nullptr);
-	  __glibcxx_assert(__i._M_is_multi());
+	  // _M_is_multi() -> _M_type() -> _List::type() does a
+	  // reinterpret_cast<__UINTPTR_TYPE__> on a stored pointer, banned
+	  // outright in a conveyor function -- never eligible to switch to
+	  // a conveyor-checked assert, regardless of _GLIBCXX_CONVEYOR_
+	  // ASSERTIONS, unlike the trivial pointer-null check just above.
+	  __glibcxx_assert_noconveyor(__i._M_is_multi());
 	  // __glibcxx_assert(__i._M_path->_M_cmpts.end() - __i._M_cur >= __n);
 	  __i._M_cur += __n;
 	}
