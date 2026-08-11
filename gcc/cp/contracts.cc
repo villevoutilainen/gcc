@@ -645,6 +645,23 @@ conveyor_restrictions_active_p ()
 {
   if (suppress_conveyor_restrictions_for_trait_query_p)
     return false;
+  /* None of these checks exist to reject code that can never actually
+     execute: they exist to prove the code that *does* run at runtime is
+     UB-free. cp_unevaluated_operand covers exactly that -- decltype's,
+     sizeof's, and noexcept's operands, plus the discarded branch of a
+     requires-expression -- so a call/reinterpret_cast/etc. found only
+     there can never introduce UB, regardless of whether its callee is
+     itself conveyor-declared or well-formed by conveyor's own rules.
+     Found and fixed via direct testing: <type_traits>'s own __or_/__and_
+     (struct __or_ : decltype(__detail::__or_fn<_Bn...>(0)) { };) are
+     pure, body-less SFINAE overloads used only to compute a base-class
+     type at compile time -- the "call" to __or_fn never generates any
+     code, yet was rejected here as though it were a real, executed call
+     to a non-conveyor function, which made ordinary <type_traits>
+     queries like is_scalar_v unusable from conveyor-restricted code for
+     no actual UB-freedom reason.  */
+  if (cp_unevaluated_operand)
+    return false;
   if (contract_condition_conveyor_p)
     return true;
   if (current_function_decl
