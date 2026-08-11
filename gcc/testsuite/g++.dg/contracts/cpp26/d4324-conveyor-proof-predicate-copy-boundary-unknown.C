@@ -37,7 +37,7 @@ struct file {
   file () = default;
   file (const file &other) : opened (other.opened) {}
 };
-bool is_opened (const file *f) { return f->opened; }
+bool is_opened (const file *f) conveyor { return f->opened; }
 
 void set_opened (file *f) { f->opened = true; }
 void open_copy (const file f) post<conveyor_ctrl_v> (is_opened (&f)) { }

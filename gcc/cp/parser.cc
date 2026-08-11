@@ -13568,6 +13568,15 @@ cp_parser_lambda_declarator_opt (cp_parser* parser, tree lambda_expr,
       return_type = cp_parser_trailing_type_id (parser);
     }
 
+  /* Parse the (D4324) conveyor-specifier, if present -- same grammar and
+     ordering (before the contract-specifier-seq) as the ordinary
+     function-declarator path just above, so a lambda's own operator() can
+     be declared 'conveyor' too (e.g. '[&]() conveyor { ... }'), letting it
+     be called from conveyor-restricted code like any other function.  */
+  bool conveyor_p = false;
+  if (flag_contract_control_objects)
+    conveyor_p = cp_parser_conveyor_specifier_opt (parser);
+
   tree contract_specifiers = NULL_TREE;
   if (flag_contracts)
     contract_specifiers
@@ -13644,6 +13653,7 @@ cp_parser_lambda_declarator_opt (cp_parser* parser, tree lambda_expr,
 				       contract_specifiers,
 				       std_attrs,
 				       UNKNOWN_LOCATION);
+    declarator->u.function.conveyor_p = conveyor_p;
 
     fco = grokmethod (&return_type_specs,
 		      declarator,

@@ -353,6 +353,25 @@ extern bool oa_match_predicate_conjunct
    own, GIMPLE/SSA-native machinery instead.  */
 extern bool is_object_address_call_p (tree call, tree *arg);
 
+/* D4324: is FN a specialization of std::is_object_address itself (as
+   opposed to some other call)? Used by call.cc/typeck.cc's callee-must-
+   be-conveyor check to exempt it -- see contracts.cc's own comment.  */
+extern bool is_object_address_fndecl_p (tree fn);
+
+/* D4324: is FN std::unreachable itself? Used by the same callee-must-
+   be-conveyor check to exempt it, so constexpr.cc's own, more specific
+   "std::unreachable not permitted" diagnostic still fires undisturbed --
+   see contracts.cc's own comment.  */
+extern bool is_std_unreachable_fndecl_p (tree fn);
+
+/* D4324: is a call to FN, with not-yet-adjusted object argument OBJ_ARG,
+   a genuinely immediately-invoked closure call (the same narrow shape
+   oa_iile_call_p recognizes, parameterized for build_over_call's own
+   pre-CALL_EXPR-construction use)? Used by the callee-must-be-conveyor
+   check to exempt it -- see contracts.cc's own comment for why this is
+   load-bearing, not just a convenience.  */
+extern bool is_iile_operator_call_p (tree fn, tree obj_arg);
+
 /* D4324/P2680 item 8, Increment E-divmod: true if CONJUNCT is of the
    form 'E != 0' or '0 != E' (either operand order), with *DECL_OUT set
    to E (a direct VAR_DECL/PARM_DECL reference only) -- the nonzero-

@@ -607,6 +607,29 @@ bool contract_condition_constify_p = false;
 
 bool contract_condition_conveyor_p = false;
 
+/* True while D4324's own internal machinery is probing a contract
+   control object's own trait members (is_ignored/constify/assumable/
+   is_conveyor/is_symbolic, see contract_control_bool_member below) at
+   compile time -- this call has nothing to do with whatever function
+   happens to be mid-compilation (current_function_decl) at the exact
+   moment it runs, so none of conveyor_restrictions_active_p's own
+   restrictions, including the callee-must-be-conveyor check in
+   call.cc's build_over_call/typeck.cc's cp_build_function_call_vec,
+   should ever apply to it.  Found and fixed via direct testing: without
+   this, evaluating a conveyor-declared function's own is_conveyor()/
+   is_ignored() trait query for one of its own contracts -- while
+   current_function_decl still happens to be that very function --
+   silently poisoned the query's own result (the callee-must-be-conveyor
+   check rejected the trait-method call itself, since a trait method is
+   an ordinary, never conveyor-declared, function), corrupting
+   is_conveyor()/is_ignored() to a false negative and, cascading from
+   there, disabling self-trust fact-seeding for the function's own
+   precondition/postcondition/assert entirely -- a real, confirmed
+   regression (d4324-conveyor-divmod-precondition-fact-ok.C and several
+   siblings), not a hypothetical one.  */
+
+bool suppress_conveyor_restrictions_for_trait_query_p = false;
+
 /* True if constructs subject to the D4324 conveyor-function syntactic
    restrictions (gcc/cp/constexpr.cc's check_conveyor_function_body, and
    the point-of-construction checks alongside it) should be rejected
@@ -620,6 +643,8 @@ bool contract_condition_conveyor_p = false;
 bool
 conveyor_restrictions_active_p ()
 {
+  if (suppress_conveyor_restrictions_for_trait_query_p)
+    return false;
   if (contract_condition_conveyor_p)
     return true;
   if (current_function_decl
@@ -4309,12 +4334,20 @@ contract_control_bool_member (tree ctrl, const char *name,
   releasing_vec args;
   vec_safe_push (args, cfg_arg);
   tree obj = build_dummy_object (ctrl);
+  /* See suppress_conveyor_restrictions_for_trait_query_p's own comment:
+     this call -- and its evaluation just below, in case the trait
+     method's own body itself calls something else -- must never be
+     subject to conveyor_restrictions_active_p's restrictions, which
+     have nothing to do with this internal, compile-time-only probe.  */
+  bool saved_suppress = suppress_conveyor_restrictions_for_trait_query_p;
+  suppress_conveyor_restrictions_for_trait_query_p = true;
   tree call = build_new_method_call (obj, member, &args, NULL_TREE,
 				     LOOKUP_NORMAL, NULL, tf_none);
+  tree val = (call && call != error_mark_node)
+    ? maybe_constant_value (call) : NULL_TREE;
+  suppress_conveyor_restrictions_for_trait_query_p = saved_suppress;
   if (!call || call == error_mark_node)
     return -1;
-
-  tree val = maybe_constant_value (call);
   if (!val || TREE_CODE (val) != INTEGER_CST)
     return -1;
   return integer_onep (val) ? 1 : 0;
@@ -5239,6 +5272,47 @@ is_object_address_call_p (tree call, tree *arg)
     return false;
   *arg = CALL_EXPR_ARG (call, 0);
   return true;
+}
+
+/* D4324: is FN a specialization of std::is_object_address itself, rather
+   than an arbitrary call appearing as one of its arguments? Used by the
+   callee-must-be-conveyor check (call.cc's build_over_call, typeck.cc's
+   cp_build_function_call_vec) to exempt it: is_object_address is a
+   special, compiler-recognized identifier that is never actually invoked
+   at runtime (resolve_object_address_in_function_1 always resolves or
+   rejects it before genericization -- see that function's own comment),
+   so requiring a 'conveyor' declaration on it would be meaningless (it
+   has no body of its own for the mandatory checks to even examine) and
+   would incorrectly block the one, well-established way to name an
+   object's own address inside conveyor-restricted code at all.  */
+
+bool
+is_object_address_fndecl_p (tree fn)
+{
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL)
+    return false;
+  tree tmpl = lookup_is_object_address_template ();
+  return tmpl && is_specialization_of (fn, tmpl);
+}
+
+/* D4324: is FN std::unreachable itself? Same recognition constexpr.cc's
+   own check_conveyor_function_body_r already uses to reject a call to it
+   with its own specific diagnostic. The callee-must-be-conveyor check
+   exempts it for the identical reason: without this, that later,
+   already-specific diagnostic would never be reached at all (this
+   check's own, less specific "not declared conveyor" error would fire
+   first, at the point the call is built, and replace the call with
+   error_mark_node before check_conveyor_function_body's own later,
+   whole-body walk ever sees it) -- confirmed via direct testing this
+   regression is real, not hypothetical: d4324-conveyor-no-unreachable.C
+   lost its own specific message and gained a spurious secondary "missing
+   return statement" cascade before this exemption was added.  */
+
+bool
+is_std_unreachable_fndecl_p (tree fn)
+{
+  return fn && DECL_NAME (fn) && id_equal (DECL_NAME (fn), "unreachable")
+	 && decl_in_std_namespace_p (fn);
 }
 
 /* D4324/P2680 std::is_object_address definite-assignment walker.
@@ -6443,6 +6517,46 @@ oa_iile_call_p (tree call, tree *closure_obj)
     return false;
   *closure_obj = obj;
   return true;
+}
+
+/* D4324: the same recognition oa_iile_call_p above already does,
+   parameterized for build_over_call's own callee-must-be-conveyor
+   check (call.cc), which runs *before* the CALL_EXPR itself is fully
+   built (only a resolved FUNCTION_DECL and its own not-yet-adjusted
+   object argument are available at that point, not a real call tree to
+   hand oa_iile_call_p). FN is the resolved callee; OBJ_ARG is the
+   corresponding not-yet-adjusted 'this' argument. Exempting this exact,
+   narrow shape (never bare "any lambda operator() call") is deliberate
+   and load-bearing, not just a convenience: an immediately-invoked
+   closure's own body is already walked directly, with full access to
+   the *caller's* own established facts (capture-proxy redirection,
+   oa_resolve_iile_call), by the very same analysis that would otherwise
+   need the closure to be independently 'conveyor' -- requiring the
+   keyword here would only ever add a *second*, wholly separate,
+   context-free top-level analysis of the same body (this file's own,
+   ordinary per-function entry point that every FUNCTION_DECL gets,
+   conveyor or not), which cannot see anything the caller captured by
+   reference and would misdiagnose facts the caller-context walk already
+   established correctly. Confirmed via direct testing: d4324-conveyor-
+   divmod-iile-ok.C's own by-reference-capture-proxy-redirect scenario
+   regressed to a spurious "not provably nonzero" precisely this way
+   before this exemption was added.  A lambda stored in a variable and
+   invoked later is NOT this shape (OBJ_ARG would name that variable,
+   not a fresh TARGET_EXPR) and still needs its own 'conveyor'
+   declaration like any other callable, since nothing analyzes its body
+   with the caller's own context in that case.  */
+
+bool
+is_iile_operator_call_p (tree fn, tree obj_arg)
+{
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL)
+    return false;
+  tree ctx = DECL_CONTEXT (fn);
+  if (!ctx || TREE_CODE (ctx) != RECORD_TYPE || !LAMBDA_TYPE_P (ctx))
+    return false;
+  if (!obj_arg || TREE_CODE (obj_arg) != ADDR_EXPR)
+    return false;
+  return TREE_CODE (TREE_OPERAND (obj_arg, 0)) == TARGET_EXPR;
 }
 
 /* Non-null only while oa_provable_p is currently resolving values
@@ -12578,6 +12692,26 @@ oa_stmt_terminates_p (tree stmt)
 	return (oa_stmt_terminates_p (CLEANUP_BODY (t))
 		|| oa_stmt_terminates_p (CLEANUP_EXPR (t)));
       return false;
+
+    case TRY_FINALLY_EXPR:
+      /* The exact same try/finally shape CLEANUP_STMT's own case just
+	 above already handles (that case's own comment literally
+	 describes it that way), just built via the more primitive,
+	 non-C++-specific tree code -- this is precisely how a function
+	 with an active postcondition gets its own body wrapped (see
+	 grok_contract's own 'build_stmt (loc, TRY_FINALLY_EXPR, fnbody,
+	 NULL_TREE)'), which this function's own caller,
+	 check_conveyor_function_body (constexpr.cc), needs to see through
+	 for its "every exit path returns" check on a non-void conveyor
+	 function. Found via direct testing: a conveyor function with any
+	 active postcondition and a non-void return type was unconditionally
+	 misdiagnosed as never returning, regardless of its own body's
+	 actual, real return statements -- this tree shape has no
+	 CLEANUP_EH_ONLY-style "only runs on the exceptional path" flag to
+	 check the way CLEANUP_STMT does, so both operands are always
+	 unconditionally live, same OR-of-both-arms reasoning either way.  */
+      return (oa_stmt_terminates_p (TREE_OPERAND (t, 0))
+	      || oa_stmt_terminates_p (TREE_OPERAND (t, 1)));
 
     case WHILE_STMT:
       return (oa_cond_always_true_p (WHILE_COND (t))

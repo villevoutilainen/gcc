@@ -33,7 +33,7 @@ struct symbolic_ctrl {
 inline constexpr symbolic_ctrl symbolic_ctrl_v{};
 
 struct io_facility {
-  static bool is_opened (io_facility*) { return true; }
+  static bool is_opened (io_facility*) conveyor { return true; }
   void open_symbolic () post<symbolic_ctrl_v>(is_opened (this)) {}
   void read_conveyor () pre<conveyor_ctrl_v>(is_opened (this)) {}
 };

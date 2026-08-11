@@ -11057,6 +11057,53 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
      maybe_contract_wrap_call) still have it.  */
   tree orig_fn = fn;
 
+  /* D4324: a call from conveyor-restricted code (a 'conveyor'-declared
+     function's own body, or the condition text of a conveyor-flavored
+     contract) must itself target a 'conveyor'-declared function -- the
+     mandatory UB-freedom checks conveyor_restrictions_active_p's other
+     callers already enforce only ever look at the literal expression
+     text handed to them, never recursing into a callee's own body, so
+     without this, "this call's condition has no UB" was true only of the
+     condition's own syntax, never of whatever it actually calls into.
+     Checked here, before ORIG_FN's own static identity could be replaced
+     by a runtime vtable-load just below, so both branches still see the
+     real, named FUNCTION_DECL. A genuinely virtual call is banned
+     outright for now (temporary -- the compiler has no way to know every
+     override is itself conveyor, since that isn't yet a checked,
+     inherited property of an override; a devirtualized call, which
+     already reached this point with LOOKUP_NONVIRTUAL set, is treated as
+     an ordinary call instead, not banned here). Builtins are exempt via
+     fndecl_built_in_p: their behavior is fully known to the compiler,
+     the same trust the array-bounds/div-mod scanners already extend to
+     primitive operators, and a conveyor function may legitimately need
+     one (e.g. size()'s own existing use of __builtin_unreachable () as a
+     negative-result guard) -- this is a different, broader rule than
+     check_conveyor_function_body_r's own narrow, name-based ban on
+     std::unreachable() specifically, which is unaffected by this check
+     and still applies independently.  */
+  if (conveyor_restrictions_active_p ())
+    {
+      if (DECL_VINDEX (fn) && (flags & LOOKUP_NONVIRTUAL) == 0)
+	{
+	  if (complain & tf_error)
+	    error_at (input_location, "virtual function call not permitted "
+		      "in a conveyor function or predicate; %qD is called "
+		      "virtually here", orig_fn);
+	  return error_mark_node;
+	}
+      else if (!fndecl_built_in_p (fn) && !DECL_DECLARED_CONVEYOR_P (fn)
+	       && !is_object_address_fndecl_p (fn)
+	       && !is_std_unreachable_fndecl_p (fn)
+	       && !(nargs && is_iile_operator_call_p (fn, argarray[0])))
+	{
+	  if (complain & tf_error)
+	    error_at (input_location, "call to %qD, which is not declared "
+		      "%<conveyor%>, not permitted in a conveyor function "
+		      "or predicate", fn);
+	  return error_mark_node;
+	}
+    }
+
   if (DECL_VINDEX (fn) && (flags & LOOKUP_NONVIRTUAL) == 0)
     {
       tree t;

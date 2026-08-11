@@ -49,7 +49,7 @@ struct Base {
   virtual ~Base () {}
 };
 
-struct Derived : Base {
+struct Derived : Base { Derived () {}
   int f (int x) override pre<derived_probe_v>(x >= 0) { return x * 2; }
 };
 

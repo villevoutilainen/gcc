@@ -13,7 +13,7 @@ namespace std {
 struct strong_ordering {
   int _v;
   constexpr strong_ordering (int v) : _v (v) {}
-  constexpr operator int (void) const { return _v; }
+  constexpr operator int (void) const conveyor { return _v; }
   static const strong_ordering less;
   static const strong_ordering equal;
   static const strong_ordering greater;

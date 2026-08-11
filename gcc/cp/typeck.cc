@@ -4719,6 +4719,43 @@ cp_build_function_call_vec (tree function, vec<tree, va_gc> **params,
   if (function == error_mark_node)
     return error_mark_node;
 
+  /* D4324: the other half of the callee-must-be-conveyor check in
+     build_over_call (call.cc) -- this function is reached instead of
+     that one specifically when overload resolution never found a fixed
+     FUNCTION_DECL to call at all: a raw function-pointer value, or a
+     bound pointer-to-member-function ('(obj.*pmf)(args)'), both of
+     which decay through build_addr_func/get_member_function_from_ptrfunc
+     just above into a runtime-computed callee with no static identity to
+     check. Banned outright for now, the same stopgap as the virtual-call
+     ban in build_over_call and for the identical reason: there is no
+     fixed decl here whose 'conveyor' declaration could even be
+     consulted. FNDECL non-NULL here (a literal FUNCTION_DECL FUNCTION
+     was) is otherwise checked exactly like build_over_call's own
+     ordinary case -- reachable when overload resolution's own general
+     path didn't handle this call (see finish_call_expr's own fallback to
+     this function), not just when it's genuinely unresolvable.  */
+  if (conveyor_restrictions_active_p ())
+    {
+      if (!fndecl)
+	{
+	  if (complain & tf_error)
+	    error_at (input_location, "call through a function pointer or "
+		      "pointer to member function not permitted in a "
+		      "conveyor function or predicate");
+	  return error_mark_node;
+	}
+      else if (!fndecl_built_in_p (fndecl) && !DECL_DECLARED_CONVEYOR_P (fndecl)
+	       && !is_object_address_fndecl_p (fndecl)
+	       && !is_std_unreachable_fndecl_p (fndecl))
+	{
+	  if (complain & tf_error)
+	    error_at (input_location, "call to %qD, which is not declared "
+		      "%<conveyor%>, not permitted in a conveyor function "
+		      "or predicate", fndecl);
+	  return error_mark_node;
+	}
+    }
+
   fntype = TREE_TYPE (function);
 
   if (TYPE_PTRMEMFUNC_P (fntype))

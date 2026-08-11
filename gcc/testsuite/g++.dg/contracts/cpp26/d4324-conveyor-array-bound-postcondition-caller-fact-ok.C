@@ -22,7 +22,7 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 
 const int arr[5] = { 10, 11, 12, 13, 14 };
 
-int compute_index (int x) post<conveyor_ctrl_v>(r: r >= 0 && r < 5)
+int compute_index (int x) conveyor post<conveyor_ctrl_v>(r: r >= 0 && r < 5)
 {
   return x % 5;
 }
