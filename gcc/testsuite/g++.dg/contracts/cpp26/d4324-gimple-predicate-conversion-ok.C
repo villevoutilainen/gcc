@@ -28,7 +28,7 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 
 struct file { bool opened = false; };
 
-bool is_opened (file *f) conveyor { return f->opened; }
+bool is_opened (file *f) conveyor { return f != nullptr; }
 
 struct file_ref {
   file *f;

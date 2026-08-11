@@ -32,7 +32,9 @@ struct thing {
   { }
 };
 
-void g (thing *p) pre<conveyor_ctrl_v>(p->count >= 20 && p->count < 1000)
+void g (thing *p)
+  pre<conveyor_ctrl_v>(std::is_object_address (p))
+  pre<conveyor_ctrl_v>(p->count >= 20 && p->count < 1000)
 {
   p->consume ();
 }

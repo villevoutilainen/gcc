@@ -7468,7 +7468,23 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
       tree op = TREE_OPERAND (expr, 0);
       if (TREE_CODE (op) == ARRAY_REF)
 	{
-	  tree arr = TREE_OPERAND (op, 0);
+	  /* ARR reaches here as a VIEW_CONVERT_EXPR whenever the array's
+	     own element type needed a const-qualified view for this
+	     access (the same wrapping this function's own top-of-function
+	     comment already documents finding for a plain scalar decl,
+	     confirmed via direct testing to affect a reassignment's own
+	     RHS -- e.g. 'p = &arr[k];' after an earlier 'const int*
+	     p = arr;' -- even though the very same expression reaches
+	     here unwrapped when it's a declaration's own initializer
+	     instead) -- strip it (and the same ordinary conversion
+	     wrappers this function already strips off EXPR itself above)
+	     before the VAR_P check below, or a reassigned pointer's
+	     array-offset fact silently, incorrectly fails to establish.  */
+	  tree arr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
+	  while (TREE_CODE (arr) == NON_LVALUE_EXPR || TREE_CODE (arr) == NOP_EXPR
+		 || TREE_CODE (arr) == CONVERT_EXPR
+		 || TREE_CODE (arr) == VIEW_CONVERT_EXPR)
+	    arr = TREE_OPERAND (arr, 0);
 	  tree index = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 1));
 	  if (VAR_P (arr) && TREE_CODE (TREE_TYPE (arr)) == ARRAY_TYPE)
 	    {
@@ -7992,14 +8008,25 @@ oa_check_offset_in_bounds (tree t, tree array_type, const oa_range_fact &total,
    syntax unambiguously signals "this is array access," so an
    unprovable case is always an error, never silently skipped.
 
-   An INDIRECT_REF ('*p', no subscript syntax) is different: a bare
-   dereference is common and legitimate for perfectly ordinary,
-   non-array-related pointers (whose validity is is_object_address's
-   separate concern entirely) -- so this is only ever checked *when P
-   already carries a tracked array-offset fact* (Increment E2): only
-   then does "was this dereference formed via array-related pointer
-   arithmetic, and is the offset still in range" actually apply. A
-   plain pointer with no such fact is silently left alone here.
+   An INDIRECT_REF ('*p', no subscript syntax) is different: when P
+   already carries a tracked array-offset fact (Increment E2), "was
+   this dereference formed via array-related pointer arithmetic, and
+   is the offset still in range" is checked exactly like ARRAY_REF
+   above. Otherwise (Increment W2, closing a real UB-freedom gap: a
+   conveyor function could freely dereference an arbitrary, unproven
+   pointer, with none of "no unprovable UB" actually enforced), P must
+   instead be provably an object address in its own right (oa_provable_p
+   -- 'this', '&local', or an is_object_address(p)-trusted parameter):
+   dereferencing a single proven object needs no further bound, but a
+   pointer that's neither array-offset-tracked nor is_object_address-
+   proven is unprovable UB and is now an error, the same as an
+   unprovable ARRAY_REF index above. Note this does NOT extend to the
+   POINTER_PLUS_EXPR case below (pointer arithmetic *formation*, 'p+n'
+   with no dereference): is_object_address(p) proves only that P alone
+   denotes a valid object, nothing about whether P+N is itself a
+   formable pointer, so applying the same fallback there would be
+   unsound, not just incomplete -- deliberately left unaddressed here,
+   a disclosed, narrower follow-on gap.
 
    Only meaningful within a function actually declared with the
    'conveyor' keyword -- checked by the caller, not here.  */
@@ -8064,14 +8091,43 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 	  if (!POINTER_TYPE_P (TREE_TYPE (base)))
 	    return NULL_TREE;
 	  oa_range_fact base_fact;
-	  if (!oa_get_range (base, *e, &base_fact) || base_fact.base == NULL_TREE)
-	    /* No tracked array-offset fact at all -- an ordinary
-	       dereference, not something this rule is about; silently
-	       left alone (is_object_address's separate mechanism is
-	       what validates a plain pointer's own basic validity).  */
+	  if (oa_get_range (base, *e, &base_fact) && base_fact.base != NULL_TREE)
+	    {
+	      oa_check_offset_in_bounds (t, TREE_TYPE (base_fact.base), base_fact,
+					 "pointer dereference", NULL_TREE);
+	      return NULL_TREE;
+	    }
+	  /* A REFERENCE_TYPE'd operand (POINTER_TYPE_P above matches both
+	     POINTER_TYPE and REFERENCE_TYPE) reaching here needs no
+	     is_object_address fallback below: unlike a raw pointer, a
+	     bound reference is guaranteed valid for its own entire
+	     lifetime by the language itself -- there is no "null"/
+	     "reseated" reference, so reading one is never itself the
+	     unprovable-UB case this fallback exists for. Confirmed via
+	     direct testing this matters in practice, not just in theory:
+	     without this exclusion, reading an ordinary by-reference
+	     lambda-capture proxy (itself a REFERENCE_TYPE local, e.g.
+	     '[&]() { return b; }' reading a by-reference-captured 'b')
+	     was wrongly flagged as an unprovable "pointer" dereference.  */
+	  if (TREE_CODE (TREE_TYPE (base)) != POINTER_TYPE)
 	    return NULL_TREE;
-	  oa_check_offset_in_bounds (t, TREE_TYPE (base_fact.base), base_fact,
-				     "pointer dereference", NULL_TREE);
+	  /* No tracked array-offset fact -- fall back to is_object_address
+	     provability (Increment W2): dereferencing a pointer proven to
+	     denote a single valid object (this/&var/an is_object_address-
+	     trusted parameter) needs no further bound check; anything
+	     else is unprovable UB.  See this function's own header
+	     comment for why this does not extend to POINTER_PLUS_EXPR.  */
+	  if (!oa_provable_p (base, *e))
+	    /* The implicit INDIRECT_REF inside 'p->field' (as opposed to
+	       an explicit '*p') is compiler-synthesized with no location
+	       of its own -- confirmed via direct testing that plain
+	       EXPR_LOCATION (t) silently falls back to UNKNOWN_LOCATION
+	       for it, printing a location-free diagnostic; EXPR_LOC_OR_LOC
+	       falls back to INPUT_LOCATION the same way this file's
+	       neighboring diagnostics already do for a similar reason.  */
+	    error_at (EXPR_LOC_OR_LOC (t, input_location), "pointer "
+		      "dereference of %qE not provably valid in a "
+		      "conveyor function", base);
 	  return NULL_TREE;
 	}
 
@@ -11729,7 +11785,24 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
       {
 	tree arg;
 	if (is_object_address_call_p (*conjuncts[i], &arg))
-	  facts.safe_push (STRIP_ANY_LOCATION_WRAPPER (arg));
+	  {
+	    /* A 'T* const' parameter's own read arrives wrapped in a
+	       NOP_EXPR (dropping the top-level const so it reads as a
+	       plain 'T*' rvalue) -- confirmed via direct testing that,
+	       left unstripped, the self-trust loop below's VAR_P/
+	       PARM_DECL check silently never fires for it, so
+	       is_object_address(t) established nothing at all for the
+	       ordinary, common 'T* const' parameter style, exactly
+	       mirroring the analogous VIEW_CONVERT_EXPR-stripping fix
+	       oa_provable_p/oa_get_range already needed for the same
+	       reason.  */
+	    arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+	    while (TREE_CODE (arg) == NON_LVALUE_EXPR || TREE_CODE (arg) == NOP_EXPR
+		   || TREE_CODE (arg) == CONVERT_EXPR
+		   || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+	      arg = TREE_OPERAND (arg, 0);
+	    facts.safe_push (arg);
+	  }
 	else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
 	  nz_facts.safe_push (arg);
       }
@@ -12003,7 +12076,19 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
       {
 	tree arg;
 	if (is_object_address_call_p (*conjuncts[i], &arg))
-	  facts.safe_push (STRIP_ANY_LOCATION_WRAPPER (arg));
+	  {
+	    /* See oa_handle_precondition_stmt's own identical fix and
+	       comment: a 'T* const' parameter's read needs the same
+	       NOP_EXPR/CONVERT_EXPR/VIEW_CONVERT_EXPR stripping before
+	       the self-trust loop below's VAR_P/PARM_DECL check, or the
+	       fact silently never gets established.  */
+	    arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+	    while (TREE_CODE (arg) == NON_LVALUE_EXPR || TREE_CODE (arg) == NOP_EXPR
+		   || TREE_CODE (arg) == CONVERT_EXPR
+		   || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+	      arg = TREE_OPERAND (arg, 0);
+	    facts.safe_push (arg);
+	  }
 	else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
 	  nz_facts.safe_push (arg);
       }

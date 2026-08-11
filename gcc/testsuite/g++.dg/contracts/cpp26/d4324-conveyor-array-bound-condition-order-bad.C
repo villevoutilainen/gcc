@@ -14,7 +14,7 @@ int f (int k) conveyor
 {
   const int* p = arr;
   if ((p = &arr[k]) != nullptr && k >= 0 && k < 5) // { dg-error "array index .k. not provably in-bounds in a conveyor function" }
-    return *p;
+    return 0;
   return 0;
 }
 

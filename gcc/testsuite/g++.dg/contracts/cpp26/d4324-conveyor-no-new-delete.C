@@ -5,8 +5,8 @@
 
 int f (int x) conveyor
 {
-  int* p = new int (x); // { dg-error "new.-expression not permitted in a conveyor function or predicate" }
-  return *p;
+  (void) (new int (x)); // { dg-error "new.-expression not permitted in a conveyor function or predicate" }
+  return 0;
 }
 
 int g (int* x) conveyor

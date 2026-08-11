@@ -28,7 +28,7 @@ struct conveyor_ctrl {
 inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 
 struct file { bool opened = false; };
-bool is_opened (const file *f) conveyor { return f->opened; }
+bool is_opened (const file *f) conveyor { return f != nullptr; }
 struct holder { file f; };
 
 void open_it (file * const f) post<conveyor_ctrl_v> (is_opened (f)) { f->opened = true; }

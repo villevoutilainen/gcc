@@ -9,6 +9,6 @@ struct Derived : Base { int v; };
 
 int f (Base& b) conveyor
 {
-  Derived& d = static_cast<Derived&> (b); // { dg-error ".static_cast. performing a base-to-derived conversion not permitted in a conveyor function or predicate" }
-  return d.v;
+  (void) static_cast<Derived&> (b); // { dg-error ".static_cast. performing a base-to-derived conversion not permitted in a conveyor function or predicate" }
+  return 0;
 }
