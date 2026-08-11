@@ -39,7 +39,7 @@ private:
 };
 
 // No friend declaration, no access grant of any kind.
-struct Derived : Base { Derived () {}
+struct Derived : Base {
   int f (int x) override { return x * 2; }
 };
 

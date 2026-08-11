@@ -9,25 +9,19 @@
 // declaring a virtual destructor conveyor drags in its own compiler-
 // generated "deleting destructor" clone's call to operator delete
 // (irrelevant to what this test checks) -- a separate, disclosed
-// follow-on gap, not fixed here. Both classes are given explicit,
-// empty-body default constructors for the same reason d4324-conveyor-
-// static-cast-upcast-ok.C's own identical comment explains (an
-// unrelated, separately-discovered pre-existing gap in this compiler's
-// defaulted-special-member conveyor-inheritance computation).
+// follow-on gap, not fixed here.
 // See .claude/plans/well-we-last-discussed-ethereal-duckling.md.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
 struct Base
 {
-  Base () {}
   virtual int f (int x) conveyor { return x; }
   virtual ~Base () {}
 };
 
 struct Derived : Base
 {
-  Derived () {}
   int f (int x) conveyor override { return x + 1; }
 };
 

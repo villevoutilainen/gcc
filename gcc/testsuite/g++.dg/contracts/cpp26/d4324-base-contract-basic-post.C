@@ -31,7 +31,7 @@ struct Base {
   virtual ~Base () {}
 };
 
-struct Derived : Base { Derived () {}
+struct Derived : Base {
   int f (int x) override
     post<probe_v>(r: sc::base_contract<Base>() && r < 1000)
   { return x * 2; }
