@@ -1876,7 +1876,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        * @retval true   The object has a fully-established result state.
        * @retval false  The object is not ready.
        */
-      bool ready() const noexcept { return !_Unchecked::empty(); }
+      bool ready() const noexcept _GLIBCXX_CONVEYOR
+      { return !_Unchecked::empty(); }
 
       /**
        * @name 28.10.2 Size
