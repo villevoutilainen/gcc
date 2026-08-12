@@ -140,6 +140,19 @@ struct cg_fact { bool conveyor_established; };
 
 struct cg_rel_fact { tree_code code; tree rhs; bool conveyor_established; };
 
+/* The call analogue of cg_rel_fact immediately above -- "the SSA name
+   this is keyed on CODE RHS_RECEIVER.RHS_CALLEE () holds", e.g. for
+   'pre<ctrl>(i < v.size ())'.  Mirrors contracts.cc's own oa_call_
+   relational_fact exactly.  */
+
+struct cg_call_rel_fact
+{
+  tree_code code;
+  tree rhs_receiver;
+  tree rhs_callee;
+  bool conveyor_established;
+};
+
 /* A numeric-interval fact -- see this file's own top comment for why,
    unlike cg_fact, this carries no conveyor_established provenance tag
    (mirroring contracts.cc's own m_contract_scalar_range_map).  */
@@ -871,7 +884,8 @@ static void
 cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 		     hash_map<tree, cg_fact> &established_nz,
 		     hash_map<tree, cg_range_lite> &established_range,
-		     hash_map<tree, cg_rel_fact> &established_rel)
+		     hash_map<tree, cg_rel_fact> &established_rel,
+		     hash_map<tree, cg_call_rel_fact> &established_call_rel)
 {
   tree fndecl = fun->decl;
   for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
@@ -937,6 +951,25 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	  tree key_other = cg_self_trust_key (fun, rel_other);
 	  if (key_param && key_other)
 	    established_rel.put (key_param, { rel_code, key_other, conveyor_enabled });
+	}
+
+      /* The call analogue of the relational loop just above (e.g.
+	 'pre<ctrl>(i < v.size ())').  RHS_CALLEE is a FUNCTION_DECL, not
+	 a value -- no self-trust key needed for it, only for the two
+	 decl-valued sides (PARAM/RHS_RECEIVER).  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree rel_param, rhs_receiver, rhs_callee;
+	  tree_code rel_code;
+	  if (!oa_match_comparison_against_call (*conjuncts[i], &rel_param,
+						  &rel_code, &rhs_receiver,
+						  &rhs_callee))
+	    continue;
+	  tree key_param = cg_self_trust_key (fun, rel_param);
+	  tree key_receiver = cg_self_trust_key (fun, rhs_receiver);
+	  if (key_param && key_receiver)
+	    established_call_rel.put (key_param, { rel_code, key_receiver,
+						    rhs_callee, conveyor_enabled });
 	}
 
       /* Range conjuncts need their own pass: several conjuncts can name
@@ -1096,6 +1129,58 @@ cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
   return false;
 }
 
+/* The call analogue of cg_get_relational immediately above, for
+   established_call_rel/cg_call_rel_fact instead. No item-6 (GIMPLE_
+   CALL postcondition) fallback here -- this shape's postcondition-side
+   composition is out of scope for this pass, matching contracts.cc's
+   own oa_get_call_relational, which has none either.  */
+
+static bool
+cg_get_call_relational (tree val, hash_map<tree, cg_call_rel_fact> &established_call_rel,
+			  tree_code *code_out, tree *rhs_receiver_out,
+			  tree *rhs_callee_out, bool *conveyor_out)
+{
+  if (val == NULL_TREE)
+    return false;
+
+  if (VAR_P (val) || TREE_CODE (val) == PARM_DECL)
+    {
+      cg_call_rel_fact *fact = established_call_rel.get (val);
+      if (!fact)
+	return false;
+      *code_out = fact->code;
+      *rhs_receiver_out = fact->rhs_receiver;
+      *rhs_callee_out = fact->rhs_callee;
+      *conveyor_out = fact->conveyor_established;
+      return true;
+    }
+
+  if (TREE_CODE (val) != SSA_NAME)
+    return false;
+
+  if (cg_call_rel_fact *fact = established_call_rel.get (val))
+    {
+      *code_out = fact->code;
+      *rhs_receiver_out = fact->rhs_receiver;
+      *rhs_callee_out = fact->rhs_callee;
+      *conveyor_out = fact->conveyor_established;
+      return true;
+    }
+
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (def && is_gimple_assign (def))
+    {
+      enum tree_code code = gimple_assign_rhs_code (def);
+      if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
+	return cg_get_call_relational (gimple_assign_rhs1 (def),
+					established_call_rel, code_out,
+					rhs_receiver_out, rhs_callee_out,
+					conveyor_out);
+    }
+
+  return false;
+}
+
 /* CALL's own callee, checked against ESTABLISHED/ESTABLISHED_NZ as
    they stand right before CALL -- the consult side. Each of the
    callee's own preconditions is only checked against the flag whose
@@ -1110,6 +1195,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		hash_map<tree, cg_fact> &established_nz,
 		hash_map<tree, cg_range_lite> &established_range,
 		hash_map<tree, cg_rel_fact> &established_rel,
+		hash_map<tree, cg_call_rel_fact> &established_call_rel,
 		gimple_ranger *ranger)
 {
   tree callee = gimple_call_fndecl (call);
@@ -1240,6 +1326,47 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      && oa_relational_code_implies (fact_code, rel_code)
 	      && (!require_conveyor || fact_conveyor_established)
 	      && fact_rhs == sub_other)
+	    continue; /* Proven true: silently discharged.  */
+
+	  warning_at (gimple_location (call), 0,
+		      "cannot verify that %qE satisfies the "
+		      "precondition of %qD", sub_param, callee);
+	}
+
+      /* The call analogue of the relational loop just above (e.g.
+	 'pre<ctrl>(i < v.size ())').  RHS_CALLEE is compared directly by
+	 identity (a FUNCTION_DECL, not a value to substitute); RHS_
+	 RECEIVER, like REL_PARAM, is one of CALLEE's own PARM_DECLs,
+	 substituted positionally the same way.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree rel_param, rhs_receiver, rhs_callee;
+	  tree_code rel_code;
+	  if (!oa_match_comparison_against_call (*conjuncts[i], &rel_param,
+						  &rel_code, &rhs_receiver,
+						  &rhs_callee))
+	    continue;
+
+	  unsigned param_argno, receiver_argno;
+	  if (!cg_find_param_position (callee, rel_param, &param_argno)
+	      || !cg_find_param_position (callee, rhs_receiver, &receiver_argno)
+	      || param_argno >= gimple_call_num_args (call)
+	      || receiver_argno >= gimple_call_num_args (call))
+	    continue;
+
+	  tree sub_param = cg_resolve_call_argument (call, param_argno);
+	  tree sub_receiver = cg_resolve_call_argument (call, receiver_argno);
+
+	  tree_code fact_code;
+	  tree fact_rhs_receiver, fact_rhs_callee;
+	  bool fact_conveyor_established;
+	  if (cg_get_call_relational (sub_param, established_call_rel, &fact_code,
+				       &fact_rhs_receiver, &fact_rhs_callee,
+				       &fact_conveyor_established)
+	      && oa_relational_code_implies (fact_code, rel_code)
+	      && (!require_conveyor || fact_conveyor_established)
+	      && fact_rhs_callee == rhs_callee
+	      && fact_rhs_receiver == sub_receiver)
 	    continue; /* Proven true: silently discharged.  */
 
 	  warning_at (gimple_location (call), 0,
@@ -2783,8 +2910,9 @@ pass_contracts_gimple::execute (function *fun)
   hash_map<tree, cg_fact> established_nz;
   hash_map<tree, cg_range_lite> established_range;
   hash_map<tree, cg_rel_fact> established_rel;
+  hash_map<tree, cg_call_rel_fact> established_call_rel;
   cg_seed_self_trust (fun, established, established_nz, established_range,
-		       established_rel);
+		       established_rel, established_call_rel);
 
   calculate_dominance_info (CDI_DOMINATORS);
   gimple_ranger *ranger = enable_ranger (fun, false);
@@ -2797,7 +2925,8 @@ pass_contracts_gimple::execute (function *fun)
 	gimple *stmt = gsi_stmt (gsi);
 	if (is_gimple_call (stmt))
 	  cg_check_call (as_a <gcall *> (stmt), established, established_nz,
-			 established_range, established_rel, ranger);
+			 established_range, established_rel, established_call_rel,
+			 ranger);
       }
 
   disable_ranger (fun);
