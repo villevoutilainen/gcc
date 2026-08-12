@@ -1319,6 +1319,15 @@ struct cg_dom_fact_state
      typed field slot currently holds", same (identity, FIELD_DECL) key
      shape as .field above, reusing the same cg_field_key_hash.  */
   hash_map<cg_field_key_hash, tree> field_alias;
+  /* The GIMPLE analogue of contracts.cc's own m_contract_call_range_map
+     -- a call to a DECL_DECLARED_CONVEYOR_P accessor used in a
+     comparison (e.g. 'i < v.size ()'), keyed by (receiver identity,
+     FUNCTION_DECL) rather than (identity, FIELD_DECL). cg_field_fact/
+     cg_field_key_hash are already fully generic over any two tree
+     pointers/a plain range, so reused as-is, exactly as the AST engine
+     reuses oa_contract_field_range_fact/oa_field_key_hash for the same
+     reason.  */
+  hash_map<cg_field_key_hash, cg_field_fact> call;
 };
 
 /* An SSA_NAME's own identity is itself; '&decl' resolves to DECL
@@ -1684,6 +1693,52 @@ cg_collect_field_range_groups (tree cond, vec<cg_field_group_lite> *out)
     }
 }
 
+/* The call-range analogue of cg_field_group_lite/cg_collect_field_
+   range_groups immediately above, built from the exported oa_match_
+   call_range_comparison primitive -- a call to a DECL_DECLARED_
+   CONVEYOR_P accessor (e.g. 'i < v.size ()') rather than a ptr->field
+   access.  RECEIVER_EXPR, like PTR_EXPR above, is only recognized when
+   it's already a bare PARM_DECL (including 'this') -- the shape needed
+   to resolve a default SSA def / substitute a call argument by
+   position; anything else is out of scope for this shape, same
+   restriction the AST engine's own establishment/consult sites apply.  */
+
+struct cg_call_group_lite { tree callee; tree receiver_expr; cg_range_lite range; };
+
+static void
+cg_collect_call_range_groups (tree cond, vec<cg_call_group_lite> *out)
+{
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree receiver_expr, callee, const_val;
+      tree_code code;
+      if (!oa_match_call_range_comparison (*conjuncts[i], &receiver_expr,
+					    &callee, &code, &const_val)
+	  || TREE_CODE (const_val) != INTEGER_CST)
+	continue;
+      receiver_expr = oa_strip_symbolic_ptr_expr_public (receiver_expr);
+      if (TREE_CODE (receiver_expr) != PARM_DECL)
+	continue;
+
+      cg_call_group_lite *found = NULL;
+      for (unsigned j = 0; j < out->length () && !found; ++j)
+	if ((*out)[j].callee == callee
+	    && (*out)[j].receiver_expr == receiver_expr)
+	  found = &(*out)[j];
+      if (!found)
+	{
+	  cg_call_group_lite g;
+	  g.callee = callee;
+	  g.receiver_expr = receiver_expr;
+	  out->safe_push (g);
+	  found = &out->last ();
+	}
+      cg_tighten_range_bound (found->range, code, wi::to_widest (const_val));
+    }
+}
+
 /* Seed SEED from FNDECL's own declared precondition -- self-trust, the
    persistent-fact analogue of cg_seed_self_trust.  */
 
@@ -1731,6 +1786,16 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
 	  if (ssa)
 	    seed.field.put ({ssa, field_groups[g].field},
 			     { field_groups[g].range, conveyor_enabled });
+	}
+
+      auto_vec<cg_call_group_lite> call_groups;
+      cg_collect_call_range_groups (cond, &call_groups);
+      for (unsigned g = 0; g < call_groups.length (); ++g)
+	{
+	  tree ssa = ssa_default_def (fun, call_groups[g].receiver_expr);
+	  if (ssa)
+	    seed.call.put ({ssa, call_groups[g].callee},
+			    { call_groups[g].range, conveyor_enabled });
 	}
     }
 }
@@ -1847,6 +1912,41 @@ cg_consult_persistent_facts (gcall *call,
 		      "precondition of %qD",
 		      field_groups[g].field, substituted, callee);
 	}
+
+      auto_vec<cg_call_group_lite> call_groups;
+      cg_collect_call_range_groups (cond, &call_groups);
+      for (unsigned g = 0; g < call_groups.length (); ++g)
+	{
+	  unsigned argno;
+	  if (!cg_find_param_position (callee, call_groups[g].receiver_expr,
+					&argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree substituted = cg_resolve_call_argument (call, argno);
+	  tree identity = cg_field_slot_identity (substituted, state);
+	  if (!identity)
+	    identity = cg_field_object_identity (substituted, field_object_cache);
+	  if (!identity)
+	    identity = cg_gimple_object_identity (substituted);
+	  cg_range_lite &required = call_groups[g].range;
+
+	  cg_field_fact *established
+	    = identity ? state.call.get ({identity, call_groups[g].callee}) : NULL;
+	  if (established
+	      && (!require_conveyor || established->conveyor_established)
+	      && (!required.has_lo
+		  || (established->range.has_lo
+		      && established->range.lo >= required.lo))
+	      && (!required.has_hi
+		  || (established->range.has_hi
+		      && established->range.hi <= required.hi)))
+	    continue; /* Proven true: silently discharged.  */
+
+	  warning_at (gimple_location (call), 0,
+		      "cannot verify that %qD called on %qE satisfies the "
+		      "precondition of %qD",
+		      call_groups[g].callee, substituted, callee);
+	}
     }
 }
 
@@ -1940,6 +2040,12 @@ cg_invalidate_parameter_alias_group (tree identity, function *fun,
 	  to_remove.safe_push (it.first);
       for (unsigned j = 0; j < to_remove.length (); ++j)
 	state.field_alias.remove (to_remove[j]);
+      to_remove.truncate (0);
+      for (auto it : state.call)
+	if (it.first.first == sib_identity)
+	  to_remove.safe_push (it.first);
+      for (unsigned j = 0; j < to_remove.length (); ++j)
+	state.call.remove (to_remove[j]);
     }
 }
 
@@ -2002,6 +2108,13 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
 	  to_remove.safe_push (it.first);
       for (unsigned j = 0; j < to_remove.length (); ++j)
 	state.field_alias.remove (to_remove[j]);
+
+      to_remove.truncate (0);
+      for (auto it : state.call)
+	if (it.first.first == identity)
+	  to_remove.safe_push (it.first);
+      for (unsigned j = 0; j < to_remove.length (); ++j)
+	state.call.remove (to_remove[j]);
 
       cg_invalidate_parameter_alias_group (identity, fun, field_object_cache, state);
     }
@@ -2083,6 +2196,26 @@ cg_establish_persistent_facts_for_call (gcall *call,
 	    state.field.put ({identity, field_groups[g].field},
 			      { field_groups[g].range, conveyor_enabled });
 	}
+
+      auto_vec<cg_call_group_lite> call_groups;
+      cg_collect_call_range_groups (cond, &call_groups);
+      for (unsigned g = 0; g < call_groups.length (); ++g)
+	{
+	  unsigned argno;
+	  if (!cg_find_param_position (callee, call_groups[g].receiver_expr,
+					&argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree substituted = gimple_call_arg (call, argno);
+	  tree identity = cg_field_slot_identity (substituted, state);
+	  if (!identity)
+	    identity = cg_field_object_identity (substituted, field_object_cache);
+	  if (!identity)
+	    identity = cg_gimple_object_identity (substituted);
+	  if (identity)
+	    state.call.put ({identity, call_groups[g].callee},
+			     { call_groups[g].range, conveyor_enabled });
+	}
     }
 }
 
@@ -2142,6 +2275,9 @@ cg_dom_fact_state_assign (cg_dom_fact_state *dst, const cg_dom_fact_state &src)
   dst->field_alias.empty ();
   for (auto it : src.field_alias)
     dst->field_alias.put (it.first, it.second);
+  dst->call.empty ();
+  for (auto it : src.call)
+    dst->call.put (it.first, it.second);
 }
 
 /* Agreement-based, mirroring contracts.cc's own oa_env::predicate_
@@ -2186,6 +2322,20 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src)
     }
   for (auto k : field_alias_remove)
     dst->field_alias.remove (k);
+
+  auto_vec<std::pair<tree, tree>> call_remove;
+  for (auto it : dst->call)
+    {
+      const cg_field_fact *ov = src.call.get (it.first);
+      if (!ov || ov->range.has_lo != it.second.range.has_lo
+	  || ov->range.has_hi != it.second.range.has_hi
+	  || (it.second.range.has_lo && ov->range.lo != it.second.range.lo)
+	  || (it.second.range.has_hi && ov->range.hi != it.second.range.hi)
+	  || ov->conveyor_established != it.second.conveyor_established)
+	call_remove.safe_push (it.first);
+    }
+  for (auto k : call_remove)
+    dst->call.remove (k);
 }
 
 /* The fixed-point loop's own "has anything changed since the last time
@@ -2198,7 +2348,8 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
 {
   if (a.pred.elements () != b.pred.elements ()
       || a.field.elements () != b.field.elements ()
-      || a.field_alias.elements () != b.field_alias.elements ())
+      || a.field_alias.elements () != b.field_alias.elements ()
+      || a.call.elements () != b.call.elements ())
     return false;
   for (auto it : a.pred)
     {
@@ -2222,6 +2373,16 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
     {
       tree *ov = b.field_alias.get (it.first);
       if (!ov || *ov != it.second)
+	return false;
+    }
+  for (auto it : a.call)
+    {
+      const cg_field_fact *ov = b.call.get (it.first);
+      if (!ov || ov->range.has_lo != it.second.range.has_lo
+	  || ov->range.has_hi != it.second.range.has_hi
+	  || (it.second.range.has_lo && ov->range.lo != it.second.range.lo)
+	  || (it.second.range.has_hi && ov->range.hi != it.second.range.hi)
+	  || ov->conveyor_established != it.second.conveyor_established)
 	return false;
     }
   return true;

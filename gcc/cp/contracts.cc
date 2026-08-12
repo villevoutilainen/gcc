@@ -6103,6 +6103,85 @@ public:
       m_contract_field_range_map.put (to_keep[i], kept_facts[i]);
   }
 
+  /* The call-range analogue of the ptr->field range map immediately
+     above -- keyed by (receiver identity, FUNCTION_DECL) rather than
+     (identity, FIELD_DECL), for a call to a DECL_DECLARED_CONVEYOR_P
+     accessor (e.g. 'v.size ()') used in a comparison, the same way a
+     field access is.  oa_field_key_hash/oa_contract_field_range_fact are
+     both already fully generic over any two tree pointers/a plain range
+     -- nothing field-specific in either -- so they're reused as-is
+     rather than duplicated under a new name.  Same shared substrate,
+     same provenance-tag discipline, for the same reasons: see oa_
+     call_range_conjunct_shape's own comment for why the accessor itself
+     must be conveyor-declared (never symbolic-declared).  */
+  bool contract_call_range_get (tree identity, tree callee,
+				  oa_contract_field_range_fact *out)
+  {
+    oa_contract_field_range_fact *v
+      = m_contract_call_range_map.get ({identity, callee});
+    if (!v)
+      return false;
+    *out = *v;
+    return true;
+  }
+  void contract_call_range_set (tree identity, tree callee,
+				  const oa_range_fact &range,
+				  bool conveyor_established)
+  {
+    oa_contract_field_range_fact fact = { range, conveyor_established };
+    m_contract_call_range_map.put ({identity, callee}, fact);
+  }
+  void contract_call_range_invalidate (tree identity, tree callee)
+  {
+    m_contract_call_range_map.remove ({identity, callee});
+  }
+  /* Drop every tracked call-range fact for IDENTITY at once -- mirrors
+     contract_field_range_invalidate_all's own whole-object granularity,
+     for the same reason (a reassignment or potentially-mutating exposure
+     of the whole object invalidates everything tracked about it, not
+     just whichever single callee happens to already be tracked).  */
+  void contract_call_range_invalidate_all (tree identity)
+  {
+    auto_vec<std::pair<tree, tree>> to_remove;
+    for (auto it : m_contract_call_range_map)
+      if (it.first.first == identity)
+	to_remove.safe_push (it.first);
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_contract_call_range_map.remove (to_remove[i]);
+  }
+  void contract_call_range_merge_with (oa_env &other)
+  {
+    auto_vec<std::pair<tree, tree>> to_remove;
+    auto_vec<std::pair<tree, tree>> to_keep;
+    auto_vec<oa_contract_field_range_fact> kept_facts;
+    for (auto it : m_contract_call_range_map)
+      {
+	oa_contract_field_range_fact *ov
+	  = other.m_contract_call_range_map.get (it.first);
+	if (!ov)
+	  {
+	    to_remove.safe_push (it.first);
+	    continue;
+	  }
+	oa_contract_field_range_fact merged;
+	merged.range.base = NULL_TREE;
+	merged.range.has_lo = it.second.range.has_lo && ov->range.has_lo;
+	merged.range.has_hi = it.second.range.has_hi && ov->range.has_hi;
+	if (merged.range.has_lo)
+	  merged.range.lo = wi::smin (it.second.range.lo, ov->range.lo);
+	if (merged.range.has_hi)
+	  merged.range.hi = wi::smax (it.second.range.hi, ov->range.hi);
+	merged.conveyor_established
+	  = it.second.conveyor_established && ov->conveyor_established;
+	to_keep.safe_push (it.first);
+	kept_facts.safe_push (merged);
+      }
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_contract_call_range_map.remove (to_remove[i]);
+    for (unsigned i = 0; i < to_keep.length (); ++i)
+      m_contract_call_range_map.put (to_keep[i], kept_facts[i]);
+  }
+
   /* -fcontract-conveyor-proof-provenance only: a fourth, independent
      per-decl map, "why is DECL's range fact what it is" -- pointers
      only (oa_derivation nodes themselves are owned and allocated
@@ -6179,6 +6258,8 @@ public:
       r.m_contract_scalar_range_map.put (it.first, it.second);
     for (auto it : m_contract_field_range_map)
       r.m_contract_field_range_map.put (it.first, it.second);
+    for (auto it : m_contract_call_range_map)
+      r.m_contract_call_range_map.put (it.first, it.second);
     r.m_outermost_bind = m_outermost_bind;
     for (auto it : m_shadow_decls)
       r.m_shadow_decls.put (it.first, it.second);
@@ -6226,6 +6307,9 @@ public:
     m_contract_field_range_map.empty ();
     for (auto it : other.m_contract_field_range_map)
       m_contract_field_range_map.put (it.first, it.second);
+    m_contract_call_range_map.empty ();
+    for (auto it : other.m_contract_call_range_map)
+      m_contract_call_range_map.put (it.first, it.second);
     m_outermost_bind = other.m_outermost_bind;
     m_shadow_decls.empty ();
     for (auto it : other.m_shadow_decls)
@@ -6343,6 +6427,7 @@ private:
   hash_map<tree, oa_relational_fact> m_relational_map;
   hash_map<tree, oa_range_fact> m_contract_scalar_range_map;
   hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_contract_field_range_map;
+  hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_contract_call_range_map;
   tree m_outermost_bind = NULL_TREE;
   hash_map<tree, tree> m_shadow_decls;
   hash_map<tree, tree> m_alias_target;
@@ -9126,6 +9211,11 @@ oa_emit_predicate_certificate (location_t loc, tree callee, tree pred_fn,
 static void oa_handle_call_conveyor_field_range_obligation
   (tree call, oa_env &env);
 
+/* Forward-declared for the same reason as oa_handle_call_conveyor_
+   field_range_obligation immediately above: the call-range analogue.  */
+static void oa_handle_call_conveyor_call_range_obligation
+  (tree call, oa_env &env);
+
 /* Forward-declared for the same reason: defined just below this
    function, but needed here to substitute a relational obligation's
    own two parameters at this specific call site.  */
@@ -9385,6 +9475,7 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
     }
 
   oa_handle_call_conveyor_field_range_obligation (call, env);
+  oa_handle_call_conveyor_call_range_obligation (call, env);
 }
 
 /* -fcontract-symbolic-proofs: positionally substitute PARAM (one of
@@ -9418,6 +9509,25 @@ static bool oa_symbolic_comparison_conjunct_shape
   (tree conjunct, tree *field_out, tree *ptr_expr_out, tree_code *code_out,
    tree *const_val_out);
 
+/* Forward-declared for the same reason as oa_symbolic_comparison_
+   conjunct_shape immediately above: the call-range analogue, full
+   definition much further below, needed here by oa_collect_contract_
+   call_ranges.  */
+static bool oa_call_range_conjunct_shape
+  (tree conjunct, tree *receiver_out, tree *callee_out, tree_code *code_out,
+   tree *const_val_out);
+
+/* Forward-declared for the same reason: needed by oa_match_result_
+   call_relation below, full definition much further below (alongside
+   oa_call_range_conjunct_shape, which shares it).  */
+static bool oa_underlying_call_range_operand
+  (tree op, tree *receiver_out, tree *callee_out);
+
+/* Forward-declared: full definition is below oa_match_result_relation
+   (whose call-shaped analogue this is), but oa_call_postcondition_
+   range_p above that point in the file needs it here.  Exported (not
+   static), like oa_match_result_relation itself, so contracts-gimple.cc
+   can reuse it for its own postcondition-range composition.  */
 /* -fcontract-symbolic-proofs: one (FIELD, PTR_EXPR) pair's own combined
    range, as written in a single contract's own condition -- e.g.
    'this->count >= 0 && this->count < 100' combines into one RANGE for
@@ -9501,6 +9611,68 @@ oa_collect_contract_field_ranges (tree condition,
 	  oa_symbolic_field_group g;
 	  g.field = field;
 	  g.ptr_expr = ptr_expr;
+	  g.range.base = NULL_TREE;
+	  g.range.has_lo = false;
+	  g.range.has_hi = false;
+	  out->safe_push (g);
+	  found = &out->last ();
+	}
+      oa_tighten_range_bound (found->range, code, wi::to_widest (const_val));
+    }
+}
+
+/* The call-range analogue of oa_symbolic_field_group/oa_collect_
+   contract_field_ranges immediately above -- one (RECEIVER_EXPR,
+   CALLEE) pair's own combined range, as written in a single contract's
+   own condition -- e.g. 'i < this->size ()' combines into one RANGE for
+   (this, size).  Same grouping discipline: multiple conjuncts on the
+   same pair combine via oa_tighten_range_bound; RECEIVER_EXPR is
+   compared structurally (cp_tree_equal), CALLEE by decl identity,
+   mirroring the field case's (FIELD identity, PTR_EXPR structural)
+   split exactly.  */
+
+struct oa_symbolic_call_group
+{
+  tree callee;
+  tree receiver_expr;
+  oa_range_fact range;
+};
+
+static void
+oa_collect_contract_call_ranges (tree condition,
+				  vec<oa_symbolic_call_group> *out)
+{
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts (&condition, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree receiver_expr, callee, const_val;
+      tree_code code;
+      if (!oa_call_range_conjunct_shape (*conjuncts[i], &receiver_expr,
+					  &callee, &code, &const_val)
+	  || TREE_CODE (const_val) != INTEGER_CST)
+	continue;
+      /* RECEIVER_EXPR, like PTR_EXPR in the field case, is presented
+	 wrapped for const-qualified access (typically a NOP_EXPR around
+	 the real PARM_DECL, including 'this') -- confirmed by direct
+	 testing (a bare 'TREE_CODE (receiver_expr) != PARM_DECL' check
+	 otherwise silently rejected every use). Stripped once here,
+	 unlike the field case (which leaves this to each individual
+	 consumer, oa_strip_symbolic_ptr_expr) -- there is exactly one
+	 place that builds an oa_symbolic_call_group, so stripping here
+	 once removes the chance of a consumer forgetting to.  */
+      receiver_expr = oa_strip_symbolic_ptr_expr (receiver_expr);
+
+      oa_symbolic_call_group *found = NULL;
+      for (unsigned j = 0; j < out->length () && !found; ++j)
+	if ((*out)[j].callee == callee
+	    && cp_tree_equal ((*out)[j].receiver_expr, receiver_expr))
+	  found = &(*out)[j];
+      if (!found)
+	{
+	  oa_symbolic_call_group g;
+	  g.callee = callee;
+	  g.receiver_expr = receiver_expr;
 	  g.range.base = NULL_TREE;
 	  g.range.has_lo = false;
 	  g.range.has_hi = false;
@@ -9673,6 +9845,34 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 		  identity = env.alias_find (identity);
 		  env.contract_field_range_set (identity, field_groups[i].field,
 						field_groups[i].range,
+						conveyor_established);
+		}
+
+	      /* The call-range analogue of the field-range block just
+		 above: CALLEE's own postcondition may also name a call to
+		 a conveyor-declared accessor (e.g. 'post<ctrl>(this->
+		 count () < 100)'), establishing a fact for the caller's own
+		 receiver the same way.  */
+	      auto_vec<oa_symbolic_call_group> call_groups;
+	      oa_collect_contract_call_ranges (cond, &call_groups);
+	      for (unsigned i = 0; i < call_groups.length (); ++i)
+		{
+		  if (TREE_CODE (call_groups[i].receiver_expr) != PARM_DECL)
+		    continue;
+		  tree substituted
+		    = oa_substitute_call_arg (callee, call,
+					       call_groups[i].receiver_expr);
+		  if (!substituted)
+		    continue;
+		  tree identity;
+		  if (!oa_object_identity_decl (substituted, &identity)
+		      && !oa_field_slot_identity (substituted, env, &identity)
+		      && !oa_array_slot_identity (substituted, env, &identity)
+		      && !oa_field_object_identity (substituted, env, &identity))
+		    continue;
+		  identity = env.alias_find (identity);
+		  env.contract_call_range_set (identity, call_groups[i].callee,
+						call_groups[i].range,
 						conveyor_established);
 		}
     }
@@ -9934,6 +10134,66 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		}
+
+	      /* The call-range analogue of the field-range consult loop
+		 just above: symbolic's own consult accepts an established
+		 fact regardless of provenance, whichever flavor of
+		 contract established it -- unlike conveyor's own consult
+		 (oa_handle_call_conveyor_call_range_obligation below),
+		 which requires conveyor_established specifically.  */
+	      auto_vec<oa_symbolic_call_group> call_groups;
+	      oa_collect_contract_call_ranges (cond, &call_groups);
+	      for (unsigned i = 0; i < call_groups.length (); ++i)
+		{
+		  if (TREE_CODE (call_groups[i].receiver_expr) != PARM_DECL)
+		    continue;
+		  tree substituted
+		    = oa_substitute_call_arg (callee, call,
+					       call_groups[i].receiver_expr);
+		  if (!substituted)
+		    continue;
+		  substituted = oa_strip_conversion_call (substituted);
+		  tree identity;
+		  if (!oa_object_identity_decl (substituted, &identity)
+		      && !oa_field_slot_identity (substituted, env, &identity)
+		      && !oa_array_slot_identity (substituted, env, &identity)
+		      && !oa_field_object_identity (substituted, env, &identity))
+		    continue;
+		  identity = env.alias_find (identity);
+
+		  oa_contract_field_range_fact established;
+		  if (!env.contract_call_range_get (identity, call_groups[i].callee,
+						     &established))
+		    {
+		      warning_at (EXPR_LOCATION (call), 0,
+				  "cannot verify that %qD called on %qE satisfies "
+				  "the precondition of %qD", call_groups[i].callee,
+				  substituted, callee);
+		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      continue;
+		    }
+
+		  oa_range_subsumption_result r
+		    = oa_range_subsumption (established.range, call_groups[i].range);
+		  if (r == OA_RANGE_SUBSUMED)
+		    continue; /* Proven true: silently discharged.  */
+		  if (r == OA_RANGE_DISJOINT)
+		    {
+		      error_at (EXPR_LOCATION (call),
+				"argument %qE provably violates the precondition "
+				"of %qD: %qD is established outside the required "
+				"range", substituted, callee, call_groups[i].callee);
+		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    }
+		  else
+		    {
+		      warning_at (EXPR_LOCATION (call), 0,
+				  "cannot verify that %qD called on %qE satisfies "
+				  "the precondition of %qD", call_groups[i].callee,
+				  substituted, callee);
+		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    }
+		}
     }
 }
 
@@ -10027,6 +10287,98 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	      warning_at (EXPR_LOCATION (call), 0,
 			  "cannot verify that field %qD of %qE satisfies "
 			  "the precondition of %qD", field_groups[i].field,
+			  substituted, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    }
+	}
+    }
+}
+
+/* -fcontract-conveyor-proofs: the call-range consult side of oa_handle_
+   call_conveyor_proof_obligation, forward-declared there for the same
+   reason as oa_handle_call_conveyor_field_range_obligation immediately
+   above -- closes conveyor-proofs' own call-range gap (a conveyor
+   contract's 'n < this->size ()'-style conjunct, naming a call to a
+   DECL_DECLARED_CONVEYOR_P accessor rather than a ptr->field access,
+   previously got no scrutiny at all).  Identical three-way subsumed/
+   disjoint/partial consult logic to oa_handle_call_conveyor_field_range_
+   obligation, over m_contract_call_range_map instead of m_contract_
+   field_range_map -- requires conveyor_established, exactly like that
+   function: a call-range fact backed only by a symbolic contract's own,
+   unverified trust must not satisfy a conveyor obligation.  */
+
+static void
+oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return;
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract))
+	continue;
+      if (!oa_contract_conveyor_active_p (contract, callee))
+	continue;
+
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<oa_symbolic_call_group> call_groups;
+      oa_collect_contract_call_ranges (cond, &call_groups);
+      for (unsigned i = 0; i < call_groups.length (); ++i)
+	{
+	  if (TREE_CODE (call_groups[i].receiver_expr) != PARM_DECL)
+	    continue;
+	  tree substituted
+	    = oa_substitute_call_arg (callee, call, call_groups[i].receiver_expr);
+	  if (!substituted)
+	    continue;
+	  substituted = oa_strip_conversion_call (substituted);
+	  tree identity;
+	  if (!oa_object_identity_decl (substituted, &identity)
+	      && !oa_field_slot_identity (substituted, env, &identity)
+	      && !oa_array_slot_identity (substituted, env, &identity)
+	      && !oa_field_object_identity (substituted, env, &identity))
+	    continue;
+	  identity = env.alias_find (identity);
+
+	  oa_contract_field_range_fact established;
+	  /* Conveyor's own consult: a fact backed only by a symbolic
+	     contract's own, unverified trust must not satisfy a conveyor
+	     obligation -- see oa_predicate_fact's own comment.  Treated
+	     identically to "no fact found at all".  */
+	  if (!env.contract_call_range_get (identity, call_groups[i].callee,
+					     &established)
+	      || !established.conveyor_established)
+	    {
+	      warning_at (EXPR_LOCATION (call), 0,
+			  "cannot verify that %qD called on %qE satisfies "
+			  "the precondition of %qD", call_groups[i].callee,
+			  substituted, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      continue;
+	    }
+
+	  oa_range_subsumption_result r
+	    = oa_range_subsumption (established.range, call_groups[i].range);
+	  if (r == OA_RANGE_SUBSUMED)
+	    continue; /* Proven true: silently discharged.  */
+	  if (r == OA_RANGE_DISJOINT)
+	    {
+	      error_at (EXPR_LOCATION (call),
+			"argument %qE provably violates the precondition "
+			"of %qD: %qD is established outside the required "
+			"range", substituted, callee, call_groups[i].callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    }
+	  else
+	    {
+	      warning_at (EXPR_LOCATION (call), 0,
+			  "cannot verify that %qD called on %qE satisfies "
+			  "the precondition of %qD", call_groups[i].callee,
 			  substituted, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
@@ -10239,6 +10591,7 @@ oa_invalidate_parameter_alias_group (tree identity, oa_env &env)
 	continue;
       env.predicate_fact_invalidate (parm);
       env.contract_field_range_invalidate_all (parm);
+      env.contract_call_range_invalidate_all (parm);
       env.field_alias_invalidate_all (parm);
       env.array_alias_invalidate_all (parm);
       env.field_object_predicate_invalidate_all (parm);
@@ -10277,6 +10630,7 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 	  identity = env.alias_find (identity);
 	  env.predicate_fact_invalidate (identity);
 	  env.contract_field_range_invalidate_all (identity);
+	  env.contract_call_range_invalidate_all (identity);
 	  env.field_alias_invalidate_all (identity);
 	  env.array_alias_invalidate_all (identity);
 	  env.field_object_predicate_invalidate_all (identity);
@@ -10917,6 +11271,43 @@ oa_env_check_field_range_fact (oa_analysis_env *env, tree base_expr,
     }
 }
 
+/* The call-range analogue of oa_env_check_field_range_fact immediately
+   above, for a call to CALLEE_FN (a DECL_DECLARED_CONVEYOR_P accessor)
+   on the object identified by RECEIVER_EXPR (m_contract_call_range_map)
+   rather than a ptr->field access.  REQUIRE_CONVEYOR: see oa_env_check_
+   predicate_fact's own comment -- the conveyor plugin passes true, the
+   symbolic plugin passes false.  */
+
+oa_proof_result
+oa_env_check_call_range_fact (oa_analysis_env *env, tree receiver_expr,
+				tree callee_fn, bool has_lo, tree lo,
+				bool has_hi, tree hi, bool require_conveyor)
+{
+  oa_env &e = *reinterpret_cast<oa_env *> (env);
+  /* Consult-only copy-construction lookthrough -- see oa_handle_call_
+     symbolic_precondition_obligation's own call-range block for why
+     it's sound specifically at a consult site.  */
+  receiver_expr = oa_strip_conversion_call (receiver_expr);
+  tree identity;
+  if (!oa_object_identity_decl (receiver_expr, &identity)
+      && !oa_field_slot_identity (receiver_expr, e, &identity)
+      && !oa_array_slot_identity (receiver_expr, e, &identity)
+      && !oa_field_object_identity (receiver_expr, e, &identity))
+    return OA_UNKNOWN;
+  identity = e.alias_find (identity);
+  oa_contract_field_range_fact established;
+  if (!e.contract_call_range_get (identity, callee_fn, &established)
+      || (require_conveyor && !established.conveyor_established))
+    return OA_UNKNOWN;
+  oa_range_fact required = oa_range_fact_from_bounds (has_lo, lo, has_hi, hi);
+  switch (oa_range_subsumption (established.range, required))
+    {
+    case OA_RANGE_SUBSUMED: return OA_PROVEN_TRUE;
+    case OA_RANGE_DISJOINT: return OA_PROVEN_FALSE;
+    default: return OA_UNKNOWN;
+    }
+}
+
 /* Public, plugin-facing wrapper over oa_precondition_symbolic_ranges --
    hides oa_range_fact/oa_symbolic_precondition_match behind plain tree
    bounds, invoking CALLBACK once per (contract, param) match found.  */
@@ -10995,6 +11386,52 @@ oa_precondition_field_range_obligations
 	    ? wide_int_to_tree (long_long_integer_type_node, r.hi) : NULL_TREE;
 	  callback (contract, field_groups[i].field, ptr_expr, r.has_lo, lo,
 		    r.has_hi, hi, data);
+	}
+    }
+}
+
+/* The call-range analogue of oa_precondition_field_range_obligations
+   immediately above: CALLBACK is invoked once per (contract, callee_fn,
+   receiver_parm, required [lo,hi]) match, for a call to a DECL_
+   DECLARED_CONVEYOR_P accessor (e.g. 'n < this->size ()') rather than a
+   ptr->field access, named in one of CALLEE's own active preconditions.
+   Same shared-substrate, both-flavors-possible discipline: the caller
+   filters matches to its own flavor exactly as for the field-range
+   export.  RECEIVER_PARM is CALLEE's own PARM_DECL (including 'this');
+   the caller is responsible for positional substitution to its own call
+   site's actual argument.  */
+
+void
+oa_precondition_call_range_obligations
+  (tree callee,
+   void (*callback) (tree, tree, tree, bool, tree, bool, tree, void *),
+   void *data)
+{
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract))
+	continue;
+      if (!oa_contract_fact_tracking_active_p (contract, callee))
+	continue;
+
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<oa_symbolic_call_group> call_groups;
+      oa_collect_contract_call_ranges (cond, &call_groups);
+      for (unsigned i = 0; i < call_groups.length (); ++i)
+	{
+	  if (TREE_CODE (call_groups[i].receiver_expr) != PARM_DECL)
+	    continue;
+	  oa_range_fact &r = call_groups[i].range;
+	  tree lo = r.has_lo
+	    ? wide_int_to_tree (long_long_integer_type_node, r.lo) : NULL_TREE;
+	  tree hi = r.has_hi
+	    ? wide_int_to_tree (long_long_integer_type_node, r.hi) : NULL_TREE;
+	  callback (contract, call_groups[i].callee, call_groups[i].receiver_expr,
+		    r.has_lo, lo, r.has_hi, hi, data);
 	}
     }
 }
@@ -11755,6 +12192,26 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
       env.contract_field_range_set (identity, field_groups[i].field,
 				     field_groups[i].range, conveyor_ok);
     }
+
+  /* The call-range analogue of the field-range block just above: trust
+     a call-range conjunct naming this function's own precondition (e.g.
+     'pre<ctrl>(n < this->size ())') for the rest of this function's own
+     body, the same "trust your own precondition" principle.  */
+  auto_vec<oa_symbolic_call_group> call_groups;
+  oa_collect_contract_call_ranges (cond, &call_groups);
+  for (unsigned i = 0; i < call_groups.length (); ++i)
+    {
+      tree identity;
+      if (!oa_object_identity_decl (call_groups[i].receiver_expr, &identity)
+	  && !oa_field_slot_identity (call_groups[i].receiver_expr, env,
+				      &identity)
+	  && !oa_array_slot_identity (call_groups[i].receiver_expr, env,
+				      &identity))
+	continue;
+      identity = env.alias_find (identity);
+      env.contract_call_range_set (identity, call_groups[i].callee,
+				    call_groups[i].range, conveyor_ok);
+    }
 }
 
 /* Handle one PRECONDITION_STMT encountered during the body walk: both
@@ -12477,6 +12934,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	 no-ops for whichever one D isn't.  */
       checkenv.contract_scalar_range_invalidate (d);
       checkenv.contract_field_range_invalidate_all (d);
+      checkenv.contract_call_range_invalidate_all (d);
       checkenv.field_alias_invalidate_all (d);
       checkenv.array_alias_invalidate_all (d);
       checkenv.field_object_predicate_invalidate_all (d);
@@ -12554,6 +13012,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	 the two new static-only symbolic range maps, for the same reason.  */
       env.contract_scalar_range_invalidate (range_result_decls[i]);
       env.contract_field_range_invalidate_all (range_result_decls[i]);
+      env.contract_call_range_invalidate_all (range_result_decls[i]);
       env.field_alias_invalidate_all (range_result_decls[i]);
       env.array_alias_invalidate_all (range_result_decls[i]);
       env.field_object_predicate_invalidate_all (range_result_decls[i]);
@@ -13123,6 +13582,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.relational_merge_with (result);
 		merged.contract_scalar_range_merge_with (result);
 		merged.contract_field_range_merge_with (result);
+		merged.contract_call_range_merge_with (result);
 		merged.shadow_decls_merge_with (result);
 		merged.alias_merge_with (result);
 		merged.field_alias_merge_with (result);
@@ -13409,6 +13869,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		env.predicate_fact_invalidate (identity);
 		env.relational_invalidate_involving (identity);
 		env.contract_field_range_invalidate_all (identity);
+		env.contract_call_range_invalidate_all (identity);
 		env.field_alias_invalidate_all (identity);
 		env.array_alias_invalidate_all (identity);
 		env.field_object_predicate_invalidate_all (identity);
@@ -13795,6 +14256,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       maps (bare-scalar and ptr->field).  */
 	    then_env.contract_scalar_range_merge_with (else_env);
 	    then_env.contract_field_range_merge_with (else_env);
+	    then_env.contract_call_range_merge_with (else_env);
 	    /* -fcontract-symbolic-runtime-checks (Mechanism B): a shadow's
 	       own *existence* is a plain set union across branches, not
 	       an agreement check -- see oa_env::shadow_decls_merge_with's
@@ -13863,6 +14325,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    /* -fcontract-symbolic-proofs: same as COND_EXPR above.  */
 	    then_env.contract_scalar_range_merge_with (else_env);
 	    then_env.contract_field_range_merge_with (else_env);
+	    then_env.contract_call_range_merge_with (else_env);
 	    /* -fcontract-symbolic-runtime-checks (Mechanism B): same union
 	       rule as COND_EXPR above.  */
 	    then_env.shadow_decls_merge_with (else_env);
@@ -14005,6 +14468,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		/* -fcontract-symbolic-proofs: same as the if/else case.  */
 		merged.contract_scalar_range_merge_with (current);
 		merged.contract_field_range_merge_with (current);
+		merged.contract_call_range_merge_with (current);
 		/* -fcontract-symbolic-runtime-checks (Mechanism B): same
 		   union rule as the if/else case.  */
 		merged.shadow_decls_merge_with (current);
@@ -14072,6 +14536,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.relational_merge_with (env);
 		merged.contract_scalar_range_merge_with (env);
 		merged.contract_field_range_merge_with (env);
+		merged.contract_call_range_merge_with (env);
 		merged.shadow_decls_merge_with (env);
 		merged.alias_merge_with (env);
 		merged.field_alias_merge_with (env);
@@ -15005,6 +15470,145 @@ oa_symbolic_comparison_conjunct_shape (tree conjunct, tree *field_out,
   *code_out = code;
   *const_val_out = const_val;
   return true;
+}
+
+/* Recognize CONJUNCT as "RECEIVER.ACCESSOR () OP const" (or "const OP
+   RECEIVER.ACCESSOR ()", normalized so CODE_OUT always reads left-to-
+   right as "call CODE_OUT const"), the call-range analogue of oa_
+   symbolic_comparison_conjunct_shape immediately above -- e.g.
+   'i < v.size ()'.  ACCESSOR must itself be DECL_DECLARED_CONVEYOR_P
+   (forcing maybe_instantiate_conveyor first, exactly as build_over_
+   call's own callee check already does, so a conveyor(auto) callee's
+   per-specialization answer is resolved on demand) -- never DECL_
+   DECLARED_SYMBOLIC_P: a 'symbolic' function has no definition at all
+   (decl.cc's grokfndecl) and can never genuinely execute, so it has no
+   real value this numeric range shape could ever compare against. A
+   manifestly constant-expression call (e.g. std::array<T,N>::size())
+   needs no handling here at all -- it's already folded to an INTEGER_
+   CST long before this pass ever sees a CALL_EXPR.  RECEIVER_OUT is
+   presented the way a call's own implicit-object argument actually
+   appears in the tree -- typically a bare pointer PARM_DECL with no
+   ADDR_EXPR (e.g. 'this' inside operator[]'s own 'this->size ()'), or
+   an ADDR_EXPR of the real object (e.g. '&v' for 'v.size ()' at an
+   ordinary call site) -- both handled by conditionally peeling a
+   leading ADDR_EXPR, mirroring oa_strip_conversion_operator_call's own
+   identical peel.  Only a non-static member function call with no
+   extra arguments is recognized (RECEIVER.ACCESSOR()); a free-function
+   call is out of scope for this shape.  */
+
+/* Shared by oa_call_range_conjunct_shape below and oa_match_comparison_
+   against_call further below: is OP (one side of a top-level
+   comparison, not yet stripped) a call to a DECL_DECLARED_CONVEYOR_P
+   accessor with no extra arguments (RECEIVER.ACCESSOR())? If so,
+   RECEIVER_OUT/CALLEE_OUT describe it -- RECEIVER_OUT presented the way
+   a call's own implicit-object argument actually appears in the tree
+   (see oa_call_range_conjunct_shape's own comment on that). Never
+   DECL_DECLARED_SYMBOLIC_P -- a 'symbolic' function has no definition
+   at all and can never genuinely execute, so it has no real value
+   either of these two shapes could ever compare against.  */
+
+static bool
+oa_underlying_call_range_operand (tree op, tree *receiver_out, tree *callee_out)
+{
+  tree comp = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (op));
+  if (TREE_CODE (comp) != CALL_EXPR || call_expr_nargs (comp) != 1)
+    return false;
+
+  tree callee = cp_get_callee_fndecl_nofold (comp);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL
+      || !DECL_OBJECT_MEMBER_FUNCTION_P (callee))
+    return false;
+
+  maybe_instantiate_conveyor (callee);
+  if (!DECL_DECLARED_CONVEYOR_P (callee))
+    return false;
+
+  /* The implicit-object argument is presented wrapped for const-
+     qualified access, exactly like a ptr->field access's own PTR_EXPR
+     (see oa_strip_symbolic_ptr_expr's own comment) -- confirmed by
+     direct testing (a bare ADDR_EXPR check alone left a NOP_EXPR/
+     CONVERT_EXPR wrapper in place around 'this' and around '&v' alike,
+     so neither ever matched TREE_CODE (...) == PARM_DECL downstream).
+     Strip that wrapping both before and after peeling a leading
+     ADDR_EXPR (an ADDR_EXPR can itself be wrapped, and unwrapping it
+     can expose another layer).  */
+  tree receiver = oa_strip_symbolic_ptr_expr (CALL_EXPR_ARG (comp, 0));
+  if (TREE_CODE (receiver) == ADDR_EXPR)
+    receiver = oa_strip_symbolic_ptr_expr (TREE_OPERAND (receiver, 0));
+
+  *receiver_out = receiver;
+  *callee_out = callee;
+  return true;
+}
+
+static bool
+oa_call_range_conjunct_shape (tree conjunct, tree *receiver_out,
+			       tree *callee_out, tree_code *code_out,
+			       tree *const_val_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  tree_code code = TREE_CODE (c);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return false;
+
+  tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+
+  tree comp, const_val;
+  bool flipped;
+  if (TREE_CODE (op1) == INTEGER_CST)
+    comp = op0, const_val = op1, flipped = false;
+  else if (TREE_CODE (op0) == INTEGER_CST)
+    comp = op1, const_val = op0, flipped = true;
+  else
+    return false;
+
+  tree receiver, callee;
+  if (!oa_underlying_call_range_operand (comp, &receiver, &callee))
+    return false;
+
+  if (flipped)
+    switch (code)
+      {
+      case LT_EXPR: code = GT_EXPR; break;
+      case LE_EXPR: code = GE_EXPR; break;
+      case GT_EXPR: code = LT_EXPR; break;
+      case GE_EXPR: code = LE_EXPR; break;
+      default: break;
+      }
+
+  *receiver_out = receiver;
+  *callee_out = callee;
+  *code_out = code;
+  *const_val_out = const_val;
+  return true;
+}
+
+/* Recognize CONJUNCT as "PARAM OP RECEIVER.ACCESSOR ()" (or the mirror
+   image, normalized so CODE_OUT always reads left-to-right as "param
+   CODE_OUT call"), the call analogue of oa_match_comparison_against_
+   param -- e.g. 'i < v.size ()', the shape that actually motivated this
+   whole feature (oa_call_range_conjunct_shape above only recognizes a
+   call compared against a *literal*, e.g. 'v.size () > 3', which is a
+   different, narrower shape -- found by direct testing that the
+   motivating 'n < v.size()'-style precondition doesn't match it at
+   all). PARAM is recognized the same narrow way oa_match_comparison_
+   against_param's own PARAM is (a bare PARM_DECL, via oa_underlying_
+   param_operand) -- deliberately no field/array-slot identity
+   resolution on either side, matching that function's own scope
+   exactly, not oa_call_range_conjunct_shape's broader one.  */
+
+bool
+oa_match_call_range_comparison (tree conjunct, tree *receiver_out,
+				  tree *callee_out, tree_code *code_out,
+				  tree *const_val_out)
+{
+  return oa_call_range_conjunct_shape (conjunct, receiver_out, callee_out,
+					code_out, const_val_out);
 }
 
 /* One recognized, codegen-ready action for -fcontract-symbolic-runtime-
