@@ -262,6 +262,16 @@ extern oa_proof_result oa_env_check_relational_fact
   (oa_analysis_env *env, tree substituted_param, tree_code required_code,
    tree substituted_other, bool require_conveyor);
 
+/* The call analogue of oa_env_check_relational_fact immediately above:
+   is SUBSTITUTED_PARAM provably REQUIRED_CODE SUBSTITUTED_RHS_RECEIVER.
+   SUBSTITUTED_RHS_CALLEE () (both already positionally substituted at
+   the plugin's own call site), given ENV's current facts? Same
+   REQUIRE_CONVEYOR meaning as that function.  */
+extern oa_proof_result oa_env_check_call_relational_fact
+  (oa_analysis_env *env, tree substituted_param, tree_code required_code,
+   tree substituted_rhs_receiver, tree substituted_rhs_callee,
+   bool require_conveyor);
+
 /* Split COND into its top-level '&&' conjuncts.  */
 extern void oa_collect_conjuncts_public (tree *cond, vec<tree *> *out);
 
@@ -281,6 +291,17 @@ extern bool oa_match_simple_comparison
    never a value one.  */
 extern bool oa_match_comparison_against_param
   (tree conjunct, tree *param_out, tree_code *code_out, tree *other_out);
+
+/* The call analogue of oa_match_comparison_against_param immediately
+   above: "PARAM OP RECEIVER.ACCESSOR ()" (e.g. 'i < v.size ()'), where
+   ACCESSOR is a DECL_DECLARED_CONVEYOR_P accessor rather than another
+   of the callee's own parameters. RHS_RECEIVER_OUT/RHS_CALLEE_OUT are
+   not resolved values; the caller substitutes RHS_RECEIVER_OUT with a
+   specific call site's own argument and consults a *call-relational*
+   fact, the call-shaped counterpart of oa_env::relational_map.  */
+extern bool oa_match_comparison_against_call
+  (tree conjunct, tree *param_out, tree_code *code_out,
+   tree *rhs_receiver_out, tree *rhs_callee_out);
 
 /* If CONJUNCT has the shape "RESULT_ID OP other", where RESULT_ID is a
    postcondition's own already-known return-value binder and "other" is
