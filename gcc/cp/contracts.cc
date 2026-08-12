@@ -7846,9 +7846,130 @@ oa_tighten_range_bound (oa_range_fact &refined, tree_code code, widest_int val)
    unrecognized shape -- always safe, just occasionally conservative,
    the discipline used throughout this whole pass.  */
 
+/* Forward-declared: full definitions are much further below (this
+   pass's own ptr->field/call-range shape recognizers), needed here by
+   oa_refine_single_comparison to recognize those two shapes directly.  */
+static bool oa_symbolic_comparison_conjunct_shape
+  (tree conjunct, tree *field_out, tree *ptr_expr_out, tree_code *code_out,
+   tree *const_val_out);
+static tree oa_strip_symbolic_ptr_expr (tree ptr_expr);
+static bool oa_call_range_conjunct_shape
+  (tree conjunct, tree *receiver_out, tree *callee_out, tree_code *code_out,
+   tree *const_val_out);
+
 static void
 oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
 {
+  /* D4324: a ptr->field or call-range conjunct in an ordinary runtime
+     'if'/ternary condition (e.g. 'if (ptr->count < N)' / 'if (i < v.size
+     ())') refines the same shared substrate a declared contract already
+     establishes into (m_contract_field_range_map/m_contract_call_range_
+     map) -- previously these two shapes were only ever established from
+     a declared pre<>/post<>, never from ordinary control flow, unlike a
+     bare decl (handled below). Tried first, before the bare-decl-
+     specific parsing below (which requires one side to already be a
+     PARM_DECL/VAR_DECL and would never match either shape anyway).  A
+     fact established this way is tagged conveyor_established = true
+     unconditionally when it's brand new: it comes from a real,
+     actually-executed comparison, not from any contract's own control
+     object, so it's exactly as trustworthy as a real conveyor contract's
+     own established fact -- conveyor's own strict consult can use it
+     freely. Tightening an *existing* fact instead keeps whatever
+     provenance that fact already had (never upgrades a symbolic-only
+     fact to conveyor-established merely because it was also refined by
+     a real comparison).  */
+  {
+    tree field, ptr_expr, field_const;
+    tree_code field_code;
+    if (oa_symbolic_comparison_conjunct_shape (conjunct, &field, &ptr_expr,
+						&field_code, &field_const)
+	&& TREE_CODE (field_const) == INTEGER_CST)
+      {
+	ptr_expr = oa_strip_symbolic_ptr_expr (ptr_expr);
+	tree identity;
+	if (oa_object_identity_decl (ptr_expr, &identity)
+	    || oa_field_slot_identity (ptr_expr, env, &identity)
+	    || oa_array_slot_identity (ptr_expr, env, &identity)
+	    || oa_field_object_identity (ptr_expr, env, &identity))
+	  {
+	    identity = env.alias_find (identity);
+	    if (!asserted_true)
+	      switch (field_code)
+		{
+		case LT_EXPR: field_code = GE_EXPR; break;
+		case LE_EXPR: field_code = GT_EXPR; break;
+		case GT_EXPR: field_code = LE_EXPR; break;
+		case GE_EXPR: field_code = LT_EXPR; break;
+		default: return; /* NOT(field == val) -- skip.  */
+		}
+	    oa_contract_field_range_fact established;
+	    oa_range_fact refined;
+	    bool conveyor_established = true;
+	    if (env.contract_field_range_get (identity, field, &established))
+	      {
+		refined = established.range;
+		conveyor_established = established.conveyor_established;
+	      }
+	    else
+	      {
+		refined.base = NULL_TREE;
+		refined.has_lo = refined.has_hi = false;
+	      }
+	    oa_tighten_range_bound (refined, field_code,
+				     wi::to_widest (field_const));
+	    env.contract_field_range_set (identity, field, refined,
+					   conveyor_established);
+	  }
+	return;
+      }
+  }
+
+  {
+    tree receiver_expr, callee, call_const;
+    tree_code call_code;
+    if (oa_call_range_conjunct_shape (conjunct, &receiver_expr, &callee,
+				       &call_code, &call_const)
+	&& TREE_CODE (call_const) == INTEGER_CST)
+      {
+	receiver_expr = oa_strip_symbolic_ptr_expr (receiver_expr);
+	tree identity;
+	if (oa_object_identity_decl (receiver_expr, &identity)
+	    || oa_field_slot_identity (receiver_expr, env, &identity)
+	    || oa_array_slot_identity (receiver_expr, env, &identity)
+	    || oa_field_object_identity (receiver_expr, env, &identity))
+	  {
+	    identity = env.alias_find (identity);
+	    if (!asserted_true)
+	      switch (call_code)
+		{
+		case LT_EXPR: call_code = GE_EXPR; break;
+		case LE_EXPR: call_code = GT_EXPR; break;
+		case GT_EXPR: call_code = LE_EXPR; break;
+		case GE_EXPR: call_code = LT_EXPR; break;
+		default: return; /* NOT(call == val) -- skip.  */
+		}
+	    oa_contract_field_range_fact established;
+	    oa_range_fact refined;
+	    bool conveyor_established = true;
+	    if (env.contract_call_range_get (identity, callee, &established))
+	      {
+		refined = established.range;
+		conveyor_established = established.conveyor_established;
+	      }
+	    else
+	      {
+		refined.base = NULL_TREE;
+		refined.has_lo = refined.has_hi = false;
+	      }
+	    oa_tighten_range_bound (refined, call_code,
+				     wi::to_widest (call_const));
+	    env.contract_call_range_set (identity, callee, refined,
+					  conveyor_established);
+	  }
+	return;
+      }
+  }
+
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
   while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
     c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
