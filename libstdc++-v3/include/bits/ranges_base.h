@@ -71,17 +71,20 @@ namespace ranges
     [[__gnu__::__always_inline__]]
     constexpr __max_size_type
     __to_unsigned_like(__max_size_type __t) noexcept
+    _GLIBCXX_CONVEYOR
     { return __t; }
 
     [[__gnu__::__always_inline__]]
     constexpr __max_size_type
     __to_unsigned_like(__max_diff_type __t) noexcept
+    _GLIBCXX_CONVEYOR
     { return __max_size_type(__t); }
 
     template<integral _Tp>
       [[__gnu__::__always_inline__]]
       constexpr auto
       __to_unsigned_like(_Tp __t) noexcept
+      _GLIBCXX_CONVEYOR
       { return static_cast<make_unsigned_t<_Tp>>(__t); }
 
     template<typename _Tp>

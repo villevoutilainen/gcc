@@ -517,7 +517,7 @@ namespace __variant
       { _M_reset(); }
 
       constexpr bool
-      _M_valid() const noexcept
+      _M_valid() const noexcept _GLIBCXX_CONVEYOR
       {
 	if constexpr (__variant::__never_valueless<_Types...>())
 	  return true;
@@ -549,7 +549,7 @@ namespace __variant
       { _M_index = static_cast<__index_type>(variant_npos); }
 
       constexpr bool
-      _M_valid() const noexcept
+      _M_valid() const noexcept _GLIBCXX_CONVEYOR
       {
 	if constexpr (__variant::__never_valueless<_Types...>())
 	  return true;
@@ -1702,7 +1702,7 @@ namespace __detail::__variant
       template<typename _Tp, typename... _Args>
 	enable_if_t<!__exactly_once<_Tp>> emplace(_Args&&...) = delete;
 
-      constexpr bool valueless_by_exception() const noexcept
+      constexpr bool valueless_by_exception() const noexcept _GLIBCXX_CONVEYOR
       { return !this->_M_valid(); }
 
       constexpr size_t index() const noexcept
