@@ -5462,10 +5462,22 @@ struct oa_predicate_fact
    one-way-trust tag, same rationale), just keyed on a second decl
    instead of a FUNCTION_DECL/polarity pair.  */
 
+/* OFFSET (Commit 2/D4324 arithmetic tracking): the fact actually holds
+   for '(LHS - OFFSET) CODE RHS', not literally 'LHS CODE RHS' --
+   established facts always have OFFSET 0 (an actually-observed
+   comparison, not a derived one); a later 'LHS2 = LHS +/- k' shifts a
+   *copy* of the fact for LHS2 by accumulating k into OFFSET, tracked
+   this way (rather than folding the shift into RHS, which is symbolic
+   for the call-relational shapes and so can't absorb a numeric shift)
+   so the same representation covers all three relational-fact structs
+   uniformly. See oa_get_relational's own comment for the transfer
+   function, and oa_env_check_relational_fact_1's own comment for why
+   OFFSET's sign, not just CODE, must be checked at consult time.  */
 struct oa_relational_fact
 {
   tree_code code;
   tree rhs;
+  widest_int offset;
   bool conveyor_established;
 };
 
@@ -5485,6 +5497,8 @@ struct oa_call_relational_fact
   tree_code code;
   tree rhs_receiver;
   tree rhs_callee;
+  /* See oa_relational_fact's own comment on OFFSET.  */
+  widest_int offset;
   bool conveyor_established;
 };
 
@@ -5498,6 +5512,16 @@ struct oa_call_relational_fact
    oa_field_key_hash idiom m_contract_call_range_map already uses; this
    struct is the value, holding only the RHS side (the LHS is the key).  */
 
+/* D4324 Commit 2: unlike oa_relational_fact/oa_call_relational_fact,
+   this struct deliberately does NOT gain an OFFSET field. Those two are
+   keyed on a plain decl, so 'decl2 = decl +/- k' meaningfully shifts a
+   copy of decl's own fact for decl2. This one is keyed on (receiver
+   identity, callee) -- its own "left-hand side" is an object's call,
+   not an arithmetic-shiftable scalar, so there is no assignment that
+   plays the analogous role: shifting an object's own identity by an
+   integer constant would be pointer arithmetic on the object, not value
+   arithmetic on an index, and isn't a coherent operation on this map's
+   key at all.  */
 struct oa_call_call_relational_fact
 {
   tree_code code;
@@ -5955,11 +5979,12 @@ public:
     return true;
   }
   void relational_set (tree decl, tree_code code, tree rhs,
-			bool conveyor_established)
+			bool conveyor_established, widest_int offset = 0)
   {
     oa_relational_fact fact;
     fact.code = code;
     fact.rhs = rhs;
+    fact.offset = offset;
     fact.conveyor_established = conveyor_established;
     m_relational_map.put (decl, fact);
   }
@@ -5986,7 +6011,8 @@ public:
     for (auto it : m_relational_map)
       {
 	oa_relational_fact *ov = other.m_relational_map.get (it.first);
-	if (!ov || ov->code != it.second.code || ov->rhs != it.second.rhs)
+	if (!ov || ov->code != it.second.code || ov->rhs != it.second.rhs
+	    || ov->offset != it.second.offset)
 	  {
 	    to_remove.safe_push (it.first);
 	    continue;
@@ -6016,12 +6042,14 @@ public:
     return true;
   }
   void call_relational_set (tree decl, tree_code code, tree rhs_receiver,
-			      tree rhs_callee, bool conveyor_established)
+			      tree rhs_callee, bool conveyor_established,
+			      widest_int offset = 0)
   {
     oa_call_relational_fact fact;
     fact.code = code;
     fact.rhs_receiver = rhs_receiver;
     fact.rhs_callee = rhs_callee;
+    fact.offset = offset;
     fact.conveyor_established = conveyor_established;
     m_call_relational_map.put (decl, fact);
   }
@@ -6053,7 +6081,8 @@ public:
 	oa_call_relational_fact *ov = other.m_call_relational_map.get (it.first);
 	if (!ov || ov->code != it.second.code
 	    || ov->rhs_receiver != it.second.rhs_receiver
-	    || ov->rhs_callee != it.second.rhs_callee)
+	    || ov->rhs_callee != it.second.rhs_callee
+	    || ov->offset != it.second.offset)
 	  {
 	    to_remove.safe_push (it.first);
 	    continue;
@@ -7957,13 +7986,19 @@ oa_strip_to_relational_operand (tree expr)
    relational_fact analogue of oa_get_range immediately above, sharing
    its exact wrapper-stripping discipline (a contract condition's own
    access to a decl is wrapped the same way regardless of which fact
-   shape is being consulted).  Deliberately much narrower than oa_get_
-   range: no PLUS_EXPR/MINUS_EXPR/IILE/item-6 handling, since a
-   relational fact is only ever recorded directly against a bare decl
-   by oa_establish_shared_substrate_self_trust, never derived
-   arithmetically or from a callee's own postcondition (see this
-   plan's own explicit non-goal on postcondition-established relational
-   facts).  */
+   shape is being consulted).  Unlike oa_get_range, still no IILE/item-6
+   handling (a relational fact is only ever recorded directly against a
+   bare decl by oa_establish_shared_substrate_self_trust, never derived
+   from a callee's own postcondition -- see this plan's own explicit
+   non-goal on postcondition-established relational facts), but D4324
+   Commit 2 adds the same PLUS_EXPR/MINUS_EXPR-by-constant handling
+   oa_get_range already has: 'base +/- k' (K a literal) shifts a copy of
+   BASE's own established fact by accumulating K into OUT->offset,
+   mirroring oa_get_range's own identical arithmetic exactly (same
+   restriction: only a literal-constant shift, not two tracked
+   quantities combined -- Commit 4 covers that case separately). See
+   oa_env_check_relational_fact_1's own comment for why OFFSET's sign
+   must be checked at consult time, since it's no longer always 0.  */
 
 static bool
 oa_get_relational (tree expr, oa_env &env, oa_relational_fact *out)
@@ -7971,9 +8006,31 @@ oa_get_relational (tree expr, oa_env &env, oa_relational_fact *out)
   if (expr == NULL_TREE || expr == error_mark_node)
     return false;
 
-  expr = oa_strip_to_relational_operand (expr);
-  if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
-    return env.relational_get (expr, out);
+  tree e = oa_strip_to_relational_operand (expr);
+  if (VAR_P (e) || TREE_CODE (e) == PARM_DECL)
+    return env.relational_get (e, out);
+
+  if (TREE_CODE (e) == PLUS_EXPR || TREE_CODE (e) == MINUS_EXPR)
+    {
+      tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
+      tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 1));
+
+      widest_int k;
+      if (TREE_CODE (op1) == INTEGER_CST && oa_get_relational (op0, env, out))
+	k = wi::to_widest (op1);
+      else if (TREE_CODE (e) == PLUS_EXPR && TREE_CODE (op0) == INTEGER_CST
+	       && oa_get_relational (op1, env, out))
+	k = wi::to_widest (op0);
+      else
+	/* '<constant> - decl' negates rather than shifts -- not a simple
+	   shift, left unrecognized, same as oa_get_range.  */
+	return false;
+
+      if (TREE_CODE (e) == MINUS_EXPR)
+	k = -k;
+      out->offset += k;
+      return true;
+    }
 
   return false;
 }
@@ -7987,9 +8044,30 @@ oa_get_call_relational (tree expr, oa_env &env, oa_call_relational_fact *out)
   if (expr == NULL_TREE || expr == error_mark_node)
     return false;
 
-  expr = oa_strip_to_relational_operand (expr);
-  if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
-    return env.call_relational_get (expr, out);
+  tree e = oa_strip_to_relational_operand (expr);
+  if (VAR_P (e) || TREE_CODE (e) == PARM_DECL)
+    return env.call_relational_get (e, out);
+
+  if (TREE_CODE (e) == PLUS_EXPR || TREE_CODE (e) == MINUS_EXPR)
+    {
+      tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
+      tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 1));
+
+      widest_int k;
+      if (TREE_CODE (op1) == INTEGER_CST
+	  && oa_get_call_relational (op0, env, out))
+	k = wi::to_widest (op1);
+      else if (TREE_CODE (e) == PLUS_EXPR && TREE_CODE (op0) == INTEGER_CST
+	       && oa_get_call_relational (op1, env, out))
+	k = wi::to_widest (op0);
+      else
+	return false;
+
+      if (TREE_CODE (e) == MINUS_EXPR)
+	k = -k;
+      out->offset += k;
+      return true;
+    }
 
   return false;
 }
@@ -8358,6 +8436,37 @@ oa_track_condition_assignment (tree cond, oa_env &env)
 	env.range_set (lhs, fact);
       else
 	env.range_invalidate (lhs);
+      /* D4324 Commit 2: same relational-fact derive-or-invalidate
+	 treatment as oa_walk_stmt's own INIT_EXPR/MODIFY_EXPR case (see
+	 that case's own comment on the PLUS_EXPR/MINUS_EXPR transfer) --
+	 unlike that case, nothing already invalidated LHS's own stale
+	 relational facts before this function runs, so both the derive
+	 and the invalidate-on-no-match belong here directly, including
+	 invalidating the *other* shape's map whenever one of them
+	 successfully resolves (a fact is only ever one shape at a
+	 time).  */
+      oa_relational_fact rel_fact;
+      oa_call_relational_fact call_rel_fact;
+      if (oa_get_relational (rhs, env, &rel_fact))
+	{
+	  env.relational_set (lhs, rel_fact.code, rel_fact.rhs,
+				rel_fact.conveyor_established, rel_fact.offset);
+	  env.call_relational_invalidate_involving (lhs);
+	}
+      else if (oa_get_call_relational (rhs, env, &call_rel_fact))
+	{
+	  env.call_relational_set (lhs, call_rel_fact.code,
+				     call_rel_fact.rhs_receiver,
+				     call_rel_fact.rhs_callee,
+				     call_rel_fact.conveyor_established,
+				     call_rel_fact.offset);
+	  env.relational_invalidate_involving (lhs);
+	}
+      else
+	{
+	  env.relational_invalidate_involving (lhs);
+	  env.call_relational_invalidate_involving (lhs);
+	}
     }
 }
 
@@ -14431,6 +14540,33 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       relational fact for a freshly-declared decl simply has no
 	       prior entry to go stale.  */
 	    oa_establish_relational_from_call (decl, DECL_INITIAL (decl), env);
+	    /* D4324 Commit 2: same relational/call-relational derive as the
+	       INIT_EXPR/MODIFY_EXPR case's own identical addition (see that
+	       case's own comment on the PLUS_EXPR/MINUS_EXPR transfer) --
+	       'int j = i + k;' is this direct-initialization shape, not
+	       that one, so it needs its own copy of the same "try, else
+	       nothing" logic. No else-invalidate here either, same reason
+	       as oa_establish_relational_from_call just above (a freshly
+	       declared decl has no prior entry to go stale).  */
+	    if (DECL_INITIAL (decl))
+	      {
+		oa_relational_fact rel_fact;
+		if (oa_get_relational (DECL_INITIAL (decl), env, &rel_fact))
+		  env.relational_set (decl, rel_fact.code, rel_fact.rhs,
+					rel_fact.conveyor_established,
+					rel_fact.offset);
+		else
+		  {
+		    oa_call_relational_fact call_rel_fact;
+		    if (oa_get_call_relational (DECL_INITIAL (decl), env,
+						  &call_rel_fact))
+		      env.call_relational_set (decl, call_rel_fact.code,
+						 call_rel_fact.rhs_receiver,
+						 call_rel_fact.rhs_callee,
+						 call_rel_fact.conveyor_established,
+						 call_rel_fact.offset);
+		  }
+	      }
 	    /* -fcontract-conveyor-proof-provenance: mirror the numeric
 	       tracking just above, one level up -- a no-op entirely when
 	       provenance tracking is inactive.  */
@@ -14781,6 +14917,30 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       unconditionally invalidated any stale relational fact for
 	       LHS before this branch ever runs.  */
 	    oa_establish_relational_from_call (lhs, rhs, env);
+	    /* D4324 Commit 2: RHS may itself resolve to a shifted copy of
+	       an already-established relational/call-relational fact for
+	       some other decl (see oa_get_relational/oa_get_call_
+	       relational's own comment on the PLUS_EXPR/MINUS_EXPR
+	       transfer) -- same "no else-invalidate needed" reasoning as
+	       oa_establish_relational_from_call just above (Rule 1 already
+	       invalidated). Call-relational tried only if the plain shape
+	       didn't already resolve something (a fact is only ever one
+	       shape at a time).  */
+	    oa_relational_fact rel_fact;
+	    if (oa_get_relational (rhs, env, &rel_fact))
+	      env.relational_set (lhs, rel_fact.code, rel_fact.rhs,
+				    rel_fact.conveyor_established,
+				    rel_fact.offset);
+	    else
+	      {
+		oa_call_relational_fact call_rel_fact;
+		if (oa_get_call_relational (rhs, env, &call_rel_fact))
+		  env.call_relational_set (lhs, call_rel_fact.code,
+					     call_rel_fact.rhs_receiver,
+					     call_rel_fact.rhs_callee,
+					     call_rel_fact.conveyor_established,
+					     call_rel_fact.offset);
+	      }
 	    /* -fcontract-conveyor-proof-provenance: mirror the numeric
 	       tracking just above, one level up -- a no-op entirely when
 	       provenance tracking is inactive.  */
@@ -16208,6 +16368,39 @@ oa_env_check_range_subsumption (oa_env &env, tree expr, oa_range_fact &req)
    the same DRY relationship oa_env_check_range_subsumption above has
    with oa_env_check_comparison.  */
 
+/* D4324 Commit 2: is OFFSET compatible with (i.e., doesn't invalidate)
+   an established fact's entailment of REQUIRED_CODE? An established
+   '(param - offset) CODE rhs' does not entail 'param CODE rhs'
+   unconditionally once OFFSET != 0 -- e.g. 'i < size ()' does not
+   entail 'i + 1 < size ()' (i could equal size () - 1) -- so this must
+   be checked alongside oa_relational_code_implies, not instead of it.
+   A non-positive offset (the value was decremented, or left unchanged,
+   since establishment) only ever tightens an upper bound (LT_EXPR/
+   LE_EXPR) and loosens a lower one; a non-negative offset does the
+   reverse for a lower bound (GT_EXPR/GE_EXPR); EQ_EXPR needs an exact,
+   unshifted match. Checked against REQUIRED_CODE (what must ultimately
+   hold), not FACT.CODE (which oa_relational_code_implies already
+   independently verifies is strong enough).  */
+
+static bool
+oa_offset_compatible_with_code (const widest_int &offset,
+				 tree_code required_code)
+{
+  switch (required_code)
+    {
+    case LT_EXPR:
+    case LE_EXPR:
+      return offset <= 0;
+    case GT_EXPR:
+    case GE_EXPR:
+      return offset >= 0;
+    case EQ_EXPR:
+      return offset == 0;
+    default:
+      return false;
+    }
+}
+
 static oa_proof_result
 oa_env_check_relational_fact_1 (oa_env &env, tree substituted_param,
 				 tree_code required_code, tree substituted_other,
@@ -16226,6 +16419,7 @@ oa_env_check_relational_fact_1 (oa_env &env, tree substituted_param,
   oa_relational_fact fact;
   if (oa_get_relational (substituted_param, env, &fact)
       && oa_relational_code_implies (fact.code, required_code)
+      && oa_offset_compatible_with_code (fact.offset, required_code)
       && (!require_conveyor || fact.conveyor_established)
       && oa_strip_to_relational_operand (fact.rhs) == stripped_other)
     return OA_PROVEN_TRUE;
@@ -16269,6 +16463,7 @@ oa_env_check_call_relational_fact_1 (oa_env &env, tree substituted_param,
   oa_call_relational_fact fact;
   if (oa_get_call_relational (substituted_param, env, &fact)
       && oa_relational_code_implies (fact.code, required_code)
+      && oa_offset_compatible_with_code (fact.offset, required_code)
       && (!require_conveyor || fact.conveyor_established)
       && fact.rhs_callee == substituted_rhs_callee
       && (oa_strip_to_relational_operand (fact.rhs_receiver)
