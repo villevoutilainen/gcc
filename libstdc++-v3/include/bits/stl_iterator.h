@@ -2733,6 +2733,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr
     basic_const_iterator(_It __current)
     noexcept(is_nothrow_move_constructible_v<_It>)
+    _GLIBCXX_CONVEYOR_AUTO
     : _M_current(std::move(__current))
     { }
 
@@ -2763,6 +2764,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr __reference
     operator*() const
     noexcept(noexcept(static_cast<__reference>(*_M_current)))
+    _GLIBCXX_CONVEYOR_AUTO
     { return static_cast<__reference>(*_M_current); }
 
     constexpr const auto*
