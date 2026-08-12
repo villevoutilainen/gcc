@@ -28844,6 +28844,18 @@ maybe_instantiate_noexcept (tree fn, tsubst_flags_t complain)
 	  if (orig_fn)
 	    ++processing_template_decl;
 
+	  /* D4324: a noexcept-specifier's own operand is a contextually
+	     converted constant expression of type bool (the same category
+	     as an explicit-specifier's), so any call reached only here can
+	     never execute or exhibit UB regardless of which callee it
+	     names. tsubst_expr below rebuilds any such call via the
+	     ordinary call-building machinery, before build_noexcept_spec's
+	     own evaluation of NOEX ever runs, so this needs the same
+	     exemption explicit-specifier substitution does. See
+	     suppress_conveyor_restrictions_for_converted_constant_expr_p's
+	     own comment in contracts.h.  */
+	  suppress_conveyor_restrictions_for_converted_constant_expr_sentinel
+	    sccce;
 	  /* Do deferred instantiation of the noexcept-specifier.  */
 	  noex = tsubst_expr (pattern, DEFERRED_NOEXCEPT_ARGS (noex),
 			      tf_warning_or_error, fn);
