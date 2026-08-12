@@ -1050,12 +1050,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       __attribute__((__always_inline__))
       _GLIBCXX_CONSTEXPR
-      __normal_iterator() _GLIBCXX_NOEXCEPT
+      __normal_iterator() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       : _M_current() { }
 
       __attribute__((__always_inline__))
       explicit _GLIBCXX_CONSTEXPR
-      __normal_iterator(const _Iterator& __i) _GLIBCXX_NOEXCEPT
+      __normal_iterator(const _Iterator& __i) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       : _M_current(__i) { }
 
       // Allow iterator to const_iterator conversion
@@ -1068,7 +1068,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	[[__gnu__::__always_inline__]]
 	constexpr
 	__normal_iterator(const __normal_iterator<_Iter, _Container>& __i)
-	noexcept
+	noexcept _GLIBCXX_CONVEYOR
 #else
       // N.B. _Container::pointer is not actually in container requirements,
       // but is present in std::vector and std::basic_string.
@@ -1162,7 +1162,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_NODISCARD __attribute__((__always_inline__))
       _GLIBCXX_CONSTEXPR
       const _Iterator&
-      base() const _GLIBCXX_NOEXCEPT
+      base() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return _M_current; }
 
     private:
@@ -1185,6 +1185,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	requires requires {
 	  { __lhs.base() == __rhs.base() } -> std::convertible_to<bool>;
 	}
+	_GLIBCXX_CONVEYOR
 	{ return __lhs.base() == __rhs.base(); }
 
       [[nodiscard, __gnu__::__always_inline__]]
@@ -1195,6 +1196,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       requires requires {
 	{ __lhs.base() == __rhs.base() } -> std::convertible_to<bool>;
       }
+      _GLIBCXX_CONVEYOR
       { return __lhs.base() == __rhs.base(); }
 
       template<typename _Iter>

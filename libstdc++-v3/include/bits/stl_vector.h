@@ -1047,7 +1047,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_iterator
-      begin() const _GLIBCXX_NOEXCEPT
+      begin() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return const_iterator(this->_M_impl._M_start); }
 
       /**
@@ -1067,7 +1067,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_iterator
-      end() const _GLIBCXX_NOEXCEPT
+      end() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return const_iterator(this->_M_impl._M_finish); }
 
       /**
@@ -1262,7 +1262,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       bool
-      empty() const _GLIBCXX_NOEXCEPT
+      empty() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return begin() == end(); }
 
       /**
