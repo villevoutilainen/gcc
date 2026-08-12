@@ -418,6 +418,16 @@ extern oa_proof_result oa_env_check_field_range_fact
   (oa_analysis_env *env, tree base_expr, tree field, bool has_lo, tree lo,
    bool has_hi, tree hi, bool require_conveyor);
 
+/* The call-range analogue of oa_env_check_field_range_fact immediately
+   above, for a call to CALLEE_FN (a DECL_DECLARED_CONVEYOR_P accessor)
+   on the object identified by RECEIVER_EXPR, rather than a ptr->field
+   access.  REQUIRE_CONVEYOR: same meaning as everywhere else in this
+   file -- the conveyor plugin passes true, the symbolic plugin passes
+   false.  */
+extern oa_proof_result oa_env_check_call_range_fact
+  (oa_analysis_env *env, tree receiver_expr, tree callee_fn, bool has_lo,
+   tree lo, bool has_hi, tree hi, bool require_conveyor);
+
 /* Collect every distinct PARM_DECL compared by a bare-scalar conjunct of
    CALLEE's own active *symbolic* preconditions, and the combined
    [lo,hi] each implies -- hides oa_range_fact behind plain tree bounds
@@ -450,6 +460,18 @@ extern void oa_precondition_field_range_obligations
 		      void *data),
    void *data);
 
+/* The call-range analogue of oa_precondition_field_range_obligations
+   immediately above: CALLBACK is invoked once per (contract, callee_fn,
+   receiver parameter) match, for a call to a DECL_DECLARED_CONVEYOR_P
+   accessor (e.g. 'n < this->size ()') rather than a ptr->field access.
+   Same shared-substrate discipline as that function.  */
+extern void oa_precondition_call_range_obligations
+  (tree callee,
+   void (*callback) (tree contract, tree callee_fn, tree receiver_parm,
+		      bool has_lo, tree lo, bool has_hi, tree hi,
+		      void *data),
+   void *data);
+
 /* If CONJUNCT has the ptr->field shape ('ptr->field OP const' or
    '(*ptr).field OP const'), recognize it and fill FIELD_OUT/
    PTR_EXPR_OUT/CODE_OUT/CONST_VAL_OUT -- the ptr->field analogue of
@@ -470,6 +492,18 @@ extern bool oa_match_field_range_comparison
 /* Strip PTR_EXPR (as extracted by oa_match_field_range_comparison) down
    to its own real decl -- see that function's own comment.  */
 extern tree oa_strip_symbolic_ptr_expr_public (tree ptr_expr);
+
+/* Recognize CONJUNCT as "RECEIVER.ACCESSOR () OP const" -- the call-
+   range analogue of oa_match_field_range_comparison immediately above,
+   for a call to a DECL_DECLARED_CONVEYOR_P accessor (e.g. 'i < v.size
+   ()') rather than a ptr->field access.  See the definition (contracts.cc)
+   for the full rationale, including why a 'symbolic'-declared function
+   is never accepted here.  Exported for the same reason as that
+   function: a GIMPLE-pass-based or plugin consumer that needs this
+   shape directly.  */
+extern bool oa_match_call_range_comparison
+  (tree conjunct, tree *receiver_out, tree *callee_out, tree_code *code_out,
+   tree *const_val_out);
 
 /* True if A and B are both non-__restrict pointer/reference PARM_DECLs
    with the same (or void-compatible) pointee type, i.e. a caller could

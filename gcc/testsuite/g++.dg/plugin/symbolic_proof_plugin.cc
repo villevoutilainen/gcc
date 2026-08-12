@@ -168,6 +168,48 @@ field_range_callback (tree contract, tree field, tree base_parm,
     }
 }
 
+/* oa_precondition_call_range_obligations's own callback: the call-range
+   analogue of field_range_callback immediately above, for a call to a
+   DECL_DECLARED_CONVEYOR_P accessor (e.g. 'n < this->size ()') rather
+   than a ptr->field access, named in one of CALLEE's own symbolic
+   preconditions.  */
+
+static void
+call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
+		      bool has_lo, tree lo, bool has_hi, tree hi, void *data)
+{
+  range_ctx *ctx = (range_ctx *) data;
+  if (!oa_contract_symbolic_active_public (contract, ctx->callee))
+    return;
+  tree substituted = substitute_arg (ctx->callee, ctx->call, receiver_parm);
+  if (!substituted)
+    return;
+
+  oa_proof_result r = oa_env_check_call_range_fact (ctx->env, substituted,
+						      callee_fn, has_lo, lo,
+						      has_hi, hi,
+						      /*require_conveyor=*/false);
+  switch (r)
+    {
+    case OA_PROVEN_TRUE:
+      /* Nothing to report: the obligation is discharged.  */
+      break;
+    case OA_PROVEN_FALSE:
+      error_at (EXPR_LOCATION (ctx->call),
+		"argument %qE provably violates the precondition of %qD: "
+		"%qD is established outside the required range",
+		substituted, ctx->callee, callee_fn);
+      inform (DECL_SOURCE_LOCATION (ctx->callee), "declared here");
+      break;
+    case OA_UNKNOWN:
+      warning_at (EXPR_LOCATION (ctx->call), 0,
+		  "cannot verify that %qD called on %qE satisfies the "
+		  "precondition of %qD", callee_fn, substituted, ctx->callee);
+      inform (DECL_SOURCE_LOCATION (ctx->callee), "declared here");
+      break;
+    }
+}
+
 /* One call site's precondition-obligation check, invoked by
    oa_walk_function_calls at every call in program order -- the
    predicate-identity shape is checked directly here (a single
@@ -282,6 +324,7 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
   range_ctx ctx = { call, callee, env };
   oa_precondition_scalar_range_obligations (callee, scalar_range_callback, &ctx);
   oa_precondition_field_range_obligations (callee, field_range_callback, &ctx);
+  oa_precondition_call_range_obligations (callee, call_range_callback, &ctx);
 }
 
 /* PLUGIN_PRE_GENERICIZE: fires once per non-template function, body
