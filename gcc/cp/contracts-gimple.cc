@@ -138,14 +138,30 @@ struct cg_fact { bool conveyor_established; };
    oa_match_comparison_against_param's for why neither side is ever
    resolved to a value.  */
 
-/* OFFSET (D4324 Commit 2): mirrors contracts.cc's own oa_relational_
-   fact exactly -- the fact actually holds for '(the SSA name this is
-   keyed on - OFFSET) CODE RHS', not literally 'SSA name CODE RHS';
-   self-trust-established facts always have OFFSET 0, and a later
-   'name2 = name +/- k' shifts a copy of NAME's own fact for NAME2 by
-   accumulating K into OFFSET. See cg_get_relational's own comment for
-   the transfer function.  */
-struct cg_rel_fact { tree_code code; tree rhs; widest_int offset; bool conveyor_established; };
+/* A numeric-interval fact -- see this file's own top comment for why,
+   unlike cg_fact, this carries no conveyor_established provenance tag
+   (mirroring contracts.cc's own m_contract_scalar_range_map). Defined
+   here (rather than alongside cg_established_range_of further below,
+   which also uses it) because cg_rel_fact/cg_call_rel_fact's own OFFSET
+   field, immediately below, needs it before that point in the file.  */
+
+struct cg_range_lite
+{
+  bool has_lo = false, has_hi = false;
+  widest_int lo = 0, hi = 0;
+};
+
+/* OFFSET (D4324 Commit 2, generalized to an interval in Commit 4):
+   mirrors contracts.cc's own oa_relational_fact exactly -- the fact
+   actually holds for '(the SSA name this is keyed on - OFFSET) CODE
+   RHS', not literally 'SSA name CODE RHS'; self-trust-established facts
+   always have OFFSET an exact-zero point interval, and a later 'name2 =
+   name +/- k' shifts a copy of NAME's own fact for NAME2 by
+   accumulating k into OFFSET. OFFSET reuses cg_range_lite (this file's
+   own numeric-interval type) rather than a single widest_int so K need
+   not itself be a compile-time constant (Commit 4). See cg_get_
+   relational's own comment for the transfer function.  */
+struct cg_rel_fact { tree_code code; tree rhs; cg_range_lite offset; bool conveyor_established; };
 
 /* The call analogue of cg_rel_fact immediately above -- "the SSA name
    this is keyed on CODE RHS_RECEIVER.RHS_CALLEE () holds", e.g. for
@@ -158,7 +174,7 @@ struct cg_call_rel_fact
   tree rhs_receiver;
   tree rhs_callee;
   /* See cg_rel_fact's own comment on OFFSET.  */
-  widest_int offset;
+  cg_range_lite offset;
   bool conveyor_established;
 };
 
@@ -188,15 +204,50 @@ struct cg_call_call_rel_fact
   bool conveyor_established;
 };
 
-/* A numeric-interval fact -- see this file's own top comment for why,
-   unlike cg_fact, this carries no conveyor_established provenance tag
-   (mirroring contracts.cc's own m_contract_scalar_range_map).  */
+/* D4324 Commit 4: mirrors contracts.cc's own oa_range_fact_exact/
+   _negate/_accumulate/_equal exactly, for cg_range_lite instead of
+   oa_range_fact (no BASE field here to carry along -- cg_range_lite
+   never had one).  */
 
-struct cg_range_lite
+static cg_range_lite
+cg_range_lite_exact (widest_int val)
 {
-  bool has_lo = false, has_hi = false;
-  widest_int lo = 0, hi = 0;
-};
+  cg_range_lite r;
+  r.has_lo = r.has_hi = true;
+  r.lo = r.hi = val;
+  return r;
+}
+
+static void
+cg_range_lite_negate (cg_range_lite &r)
+{
+  bool old_has_lo = r.has_lo, old_has_hi = r.has_hi;
+  widest_int old_lo = r.lo, old_hi = r.hi;
+  r.has_lo = old_has_hi;
+  r.has_hi = old_has_lo;
+  if (r.has_lo)
+    r.lo = -old_hi;
+  if (r.has_hi)
+    r.hi = -old_lo;
+}
+
+static void
+cg_range_lite_accumulate (cg_range_lite &acc, const cg_range_lite &shift)
+{
+  acc.has_lo = acc.has_lo && shift.has_lo;
+  acc.has_hi = acc.has_hi && shift.has_hi;
+  if (acc.has_lo)
+    acc.lo += shift.lo;
+  if (acc.has_hi)
+    acc.hi += shift.hi;
+}
+
+static bool
+cg_range_lite_equal (const cg_range_lite &a, const cg_range_lite &b)
+{
+  return a.has_lo == b.has_lo && a.has_hi == b.has_hi
+	 && (!a.has_lo || a.lo == b.lo) && (!a.has_hi || a.hi == b.hi);
+}
 
 /* Combine CODE/VAL (one comparison conjunct, e.g. 'x >= 20') into R --
    mirrors contracts.cc's own oa_tighten_range_bound.  */
@@ -1006,7 +1057,9 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	  tree key_param = cg_self_trust_key (fun, rel_param);
 	  tree key_other = cg_self_trust_key (fun, rel_other);
 	  if (key_param && key_other)
-	    established_rel.put (key_param, { rel_code, key_other, 0, conveyor_enabled });
+	    established_rel.put (key_param, { rel_code, key_other,
+					       cg_range_lite_exact (0),
+					       conveyor_enabled });
 	}
 
       /* The call analogue of the relational loop just above (e.g.
@@ -1025,7 +1078,9 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	  tree key_receiver = cg_self_trust_key (fun, rhs_receiver);
 	  if (key_param && key_receiver)
 	    established_call_rel.put (key_param, { rel_code, key_receiver,
-						    rhs_callee, 0, conveyor_enabled });
+						    rhs_callee,
+						    cg_range_lite_exact (0),
+						    conveyor_enabled });
 	}
 
       /* The call-vs-call analogue of the call-relational loop just
@@ -1154,8 +1209,11 @@ cg_call_postcondition_relation_p (gcall *call, tree_code *code_out,
 static bool
 cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
 		    hash_map<tree, cg_rel_fact> &scalar_rel_cache,
-		    tree_code *code_out, tree *rhs_out, widest_int *offset_out,
-		    bool *conveyor_out)
+		    hash_map<tree, cg_range_lite> &established_range,
+		    hash_map<tree, cg_range_lite> &scalar_range_cache,
+		    gimple_ranger *ranger, bool require_conveyor,
+		    bool require_symbolic, tree_code *code_out, tree *rhs_out,
+		    cg_range_lite *offset_out, bool *conveyor_out)
 {
   if (val == NULL_TREE)
     return false;
@@ -1208,7 +1266,7 @@ cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
       if (cg_call_postcondition_relation_p (as_a <gcall *> (def), code_out,
 					     rhs_out, conveyor_out))
 	{
-	  *offset_out = 0;
+	  *offset_out = cg_range_lite_exact (0);
 	  return true;
 	}
       /* A class-typed operand reached via its own implicit conversion
@@ -1216,6 +1274,8 @@ cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
       tree receiver = cg_resolve_conversion_receiver (val);
       if (receiver != val)
 	return cg_get_relational (receiver, established_rel, scalar_rel_cache,
+				   established_range, scalar_range_cache,
+				   ranger, require_conveyor, require_symbolic,
 				   code_out, rhs_out, offset_out, conveyor_out);
       return false;
     }
@@ -1224,12 +1284,18 @@ cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
       enum tree_code code = gimple_assign_rhs_code (def);
       if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
 	return cg_get_relational (gimple_assign_rhs1 (def), established_rel,
-				   scalar_rel_cache, code_out, rhs_out,
+				   scalar_rel_cache, established_range,
+				   scalar_range_cache, ranger, require_conveyor,
+				   require_symbolic, code_out, rhs_out,
 				   offset_out, conveyor_out);
-      /* D4324 Commit 2: 'base +/- k' (K a compile-time constant) shifts
-	 a copy of BASE's own established fact by accumulating K into
-	 *OFFSET_OUT, mirroring contracts.cc's own oa_get_relational
-	 (same restriction: only a literal-constant shift).  Unlike that
+      /* D4324 Commit 2 (generalized to a variable shift in Commit 4):
+	 'base +/- k' shifts a copy of BASE's own established fact by
+	 accumulating K into *OFFSET_OUT, mirroring contracts.cc's own
+	 oa_get_relational exactly, including the Commit 4 fallback to
+	 the *range* mechanism (cg_established_range_of, which -- via its
+	 own gimple_ranger fallback -- derives a range for practically
+	 any SSA arithmetic chain, broader coverage than the AST side's
+	 own oa_get_range gets) when K isn't itself a literal. Unlike the
 	 AST-level version, GIMPLE is already flat 3-address form, so the
 	 two operands come directly from gimple_assign_rhs1/2 rather than
 	 TREE_OPERAND on a PLUS_EXPR node.  */
@@ -1238,22 +1304,41 @@ cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
 	  tree op0 = gimple_assign_rhs1 (def);
 	  tree op1 = gimple_assign_rhs2 (def);
 
-	  widest_int k;
-	  if (TREE_CODE (op1) == INTEGER_CST
-	      && cg_get_relational (op0, established_rel, scalar_rel_cache,
-				     code_out, rhs_out, offset_out, conveyor_out))
-	    k = wi::to_widest (op1);
-	  else if (code == PLUS_EXPR && TREE_CODE (op0) == INTEGER_CST
+	  cg_range_lite shift;
+	  if (cg_get_relational (op0, established_rel, scalar_rel_cache,
+				  established_range, scalar_range_cache,
+				  ranger, require_conveyor, require_symbolic,
+				  code_out, rhs_out, offset_out, conveyor_out))
+	    {
+	      if (TREE_CODE (op1) == INTEGER_CST)
+		shift = cg_range_lite_exact (wi::to_widest (op1));
+	      else if (!cg_established_range_of (op1, established_range,
+						  scalar_range_cache, ranger,
+						  require_conveyor,
+						  require_symbolic, &shift))
+		return false;
+	    }
+	  else if (code == PLUS_EXPR
 		   && cg_get_relational (op1, established_rel, scalar_rel_cache,
-					  code_out, rhs_out, offset_out,
-					  conveyor_out))
-	    k = wi::to_widest (op0);
+					  established_range, scalar_range_cache,
+					  ranger, require_conveyor,
+					  require_symbolic, code_out, rhs_out,
+					  offset_out, conveyor_out))
+	    {
+	      if (TREE_CODE (op0) == INTEGER_CST)
+		shift = cg_range_lite_exact (wi::to_widest (op0));
+	      else if (!cg_established_range_of (op0, established_range,
+						  scalar_range_cache, ranger,
+						  require_conveyor,
+						  require_symbolic, &shift))
+		return false;
+	    }
 	  else
 	    return false;
 
 	  if (code == MINUS_EXPR)
-	    k = -k;
-	  *offset_out += k;
+	    cg_range_lite_negate (shift);
+	  cg_range_lite_accumulate (*offset_out, shift);
 	  return true;
 	}
     }
@@ -1270,9 +1355,12 @@ cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
 static bool
 cg_get_call_relational (tree val, hash_map<tree, cg_call_rel_fact> &established_call_rel,
 			  hash_map<tree, cg_call_rel_fact> &scalar_call_rel_cache,
-			  tree_code *code_out, tree *rhs_receiver_out,
-			  tree *rhs_callee_out, widest_int *offset_out,
-			  bool *conveyor_out)
+			  hash_map<tree, cg_range_lite> &established_range,
+			  hash_map<tree, cg_range_lite> &scalar_range_cache,
+			  gimple_ranger *ranger, bool require_conveyor,
+			  bool require_symbolic, tree_code *code_out,
+			  tree *rhs_receiver_out, tree *rhs_callee_out,
+			  cg_range_lite *offset_out, bool *conveyor_out)
 {
   if (val == NULL_TREE)
     return false;
@@ -1322,34 +1410,58 @@ cg_get_call_relational (tree val, hash_map<tree, cg_call_rel_fact> &established_
       if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
 	return cg_get_call_relational (gimple_assign_rhs1 (def),
 					established_call_rel, scalar_call_rel_cache,
+					established_range, scalar_range_cache,
+					ranger, require_conveyor, require_symbolic,
 					code_out, rhs_receiver_out, rhs_callee_out,
 					offset_out, conveyor_out);
-      /* D4324 Commit 2: same PLUS_EXPR/MINUS_EXPR-by-constant transfer
-	 as cg_get_relational's own identical addition just above.  */
+      /* D4324 Commit 2 (generalized to a variable shift in Commit 4):
+	 same transfer as cg_get_relational's own identical addition
+	 just above.  */
       if (code == PLUS_EXPR || code == MINUS_EXPR)
 	{
 	  tree op0 = gimple_assign_rhs1 (def);
 	  tree op1 = gimple_assign_rhs2 (def);
 
-	  widest_int k;
-	  if (TREE_CODE (op1) == INTEGER_CST
-	      && cg_get_call_relational (op0, established_call_rel,
-					  scalar_call_rel_cache, code_out,
-					  rhs_receiver_out, rhs_callee_out,
-					  offset_out, conveyor_out))
-	    k = wi::to_widest (op1);
-	  else if (code == PLUS_EXPR && TREE_CODE (op0) == INTEGER_CST
+	  cg_range_lite shift;
+	  if (cg_get_call_relational (op0, established_call_rel,
+				       scalar_call_rel_cache, established_range,
+				       scalar_range_cache, ranger,
+				       require_conveyor, require_symbolic,
+				       code_out, rhs_receiver_out, rhs_callee_out,
+				       offset_out, conveyor_out))
+	    {
+	      if (TREE_CODE (op1) == INTEGER_CST)
+		shift = cg_range_lite_exact (wi::to_widest (op1));
+	      else if (!cg_established_range_of (op1, established_range,
+						  scalar_range_cache, ranger,
+						  require_conveyor,
+						  require_symbolic, &shift))
+		return false;
+	    }
+	  else if (code == PLUS_EXPR
 		   && cg_get_call_relational (op1, established_call_rel,
-					       scalar_call_rel_cache, code_out,
-					       rhs_receiver_out, rhs_callee_out,
-					       offset_out, conveyor_out))
-	    k = wi::to_widest (op0);
+					       scalar_call_rel_cache,
+					       established_range,
+					       scalar_range_cache, ranger,
+					       require_conveyor, require_symbolic,
+					       code_out, rhs_receiver_out,
+					       rhs_callee_out, offset_out,
+					       conveyor_out))
+	    {
+	      if (TREE_CODE (op0) == INTEGER_CST)
+		shift = cg_range_lite_exact (wi::to_widest (op0));
+	      else if (!cg_established_range_of (op0, established_range,
+						  scalar_range_cache, ranger,
+						  require_conveyor,
+						  require_symbolic, &shift))
+		return false;
+	    }
 	  else
 	    return false;
 
 	  if (code == MINUS_EXPR)
-	    k = -k;
-	  *offset_out += k;
+	    cg_range_lite_negate (shift);
+	  cg_range_lite_accumulate (*offset_out, shift);
 	  return true;
 	}
     }
@@ -1420,19 +1532,20 @@ cg_get_call_call_relational (tree val, tree lhs_callee,
    entail 'param CODE rhs' unconditionally once OFFSET != 0).  */
 
 static bool
-cg_offset_compatible_with_code (const widest_int &offset,
+cg_offset_compatible_with_code (const cg_range_lite &offset,
 				 tree_code required_code)
 {
   switch (required_code)
     {
     case LT_EXPR:
     case LE_EXPR:
-      return offset <= 0;
+      return offset.has_hi && offset.hi <= 0;
     case GT_EXPR:
     case GE_EXPR:
-      return offset >= 0;
+      return offset.has_lo && offset.lo >= 0;
     case EQ_EXPR:
-      return offset == 0;
+      return offset.has_lo && offset.has_hi && offset.lo == 0
+	     && offset.hi == 0;
     default:
       return false;
     }
@@ -1582,9 +1695,11 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	     it).  */
 	  tree_code fact_code;
 	  tree fact_rhs;
-	  widest_int fact_offset;
+	  cg_range_lite fact_offset;
 	  bool fact_conveyor_established;
 	  if (cg_get_relational (sub_param, established_rel, scalar_rel_cache,
+				  established_range, scalar_range_cache, ranger,
+				  check_as_conveyor, check_as_symbolic,
 				  &fact_code, &fact_rhs, &fact_offset,
 				  &fact_conveyor_established)
 	      && oa_relational_code_implies (fact_code, rel_code)
@@ -1624,12 +1739,15 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 
 	  tree_code fact_code;
 	  tree fact_rhs_receiver, fact_rhs_callee;
-	  widest_int fact_offset;
+	  cg_range_lite fact_offset;
 	  bool fact_conveyor_established;
 	  if (cg_get_call_relational (sub_param, established_call_rel,
-				       scalar_call_rel_cache, &fact_code,
-				       &fact_rhs_receiver, &fact_rhs_callee,
-				       &fact_offset, &fact_conveyor_established)
+				       scalar_call_rel_cache, established_range,
+				       scalar_range_cache, ranger,
+				       check_as_conveyor, check_as_symbolic,
+				       &fact_code, &fact_rhs_receiver,
+				       &fact_rhs_callee, &fact_offset,
+				       &fact_conveyor_established)
 	      && oa_relational_code_implies (fact_code, rel_code)
 	      && cg_offset_compatible_with_code (fact_offset, rel_code)
 	      && (!require_conveyor || fact_conveyor_established)
@@ -2797,7 +2915,7 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src)
     {
       const cg_rel_fact *ov = src.rel.get (it.first);
       if (!ov || ov->code != it.second.code || ov->rhs != it.second.rhs
-	  || ov->offset != it.second.offset
+	  || !cg_range_lite_equal (ov->offset, it.second.offset)
 	  || ov->conveyor_established != it.second.conveyor_established)
 	rel_remove.safe_push (it.first);
     }
@@ -2811,7 +2929,7 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src)
       if (!ov || ov->code != it.second.code
 	  || ov->rhs_receiver != it.second.rhs_receiver
 	  || ov->rhs_callee != it.second.rhs_callee
-	  || ov->offset != it.second.offset
+	  || !cg_range_lite_equal (ov->offset, it.second.offset)
 	  || ov->conveyor_established != it.second.conveyor_established)
 	call_rel_remove.safe_push (it.first);
     }
@@ -2872,7 +2990,7 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
     {
       const cg_rel_fact *ov = b.rel.get (it.first);
       if (!ov || ov->code != it.second.code || ov->rhs != it.second.rhs
-	  || ov->offset != it.second.offset
+	  || !cg_range_lite_equal (ov->offset, it.second.offset)
 	  || ov->conveyor_established != it.second.conveyor_established)
 	return false;
     }
@@ -2882,7 +3000,7 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
       if (!ov || ov->code != it.second.code
 	  || ov->rhs_receiver != it.second.rhs_receiver
 	  || ov->rhs_callee != it.second.rhs_callee
-	  || ov->offset != it.second.offset
+	  || !cg_range_lite_equal (ov->offset, it.second.offset)
 	  || ov->conveyor_established != it.second.conveyor_established)
 	return false;
     }
@@ -3002,7 +3120,7 @@ cg_refine_relational_edge_into (tree lhs, tree rhs, tree_code code,
 	  case GE_EXPR: rel_code = LT_EXPR; break;
 	  default: return; /* NOT(lhs == rhs) -- skip.  */
 	  }
-      state.rel.put (lhs, { rel_code, rhs, 0, true });
+      state.rel.put (lhs, { rel_code, rhs, cg_range_lite_exact (0), true });
       return;
     }
 
@@ -3040,7 +3158,8 @@ cg_refine_relational_edge_into (tree lhs, tree rhs, tree_code code,
       case GE_EXPR: rel_code = LT_EXPR; break;
       default: return;
       }
-  state.call_rel.put (param_side, { rel_code, receiver, callee, 0, true });
+  state.call_rel.put (param_side, { rel_code, receiver, callee,
+				      cg_range_lite_exact (0), true });
 }
 
 /* If E is a true/false edge of a GIMPLE_COND matching the field/call-
