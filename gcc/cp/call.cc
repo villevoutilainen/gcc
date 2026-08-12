@@ -11092,24 +11092,45 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
      and still applies independently.  */
   if (conveyor_restrictions_active_p ())
     {
+      /* D4324: force a still-undecided 'conveyor(auto)' FN's deduction
+	 now, before the callee-must-be-conveyor check below reads
+	 DECL_DECLARED_CONVEYOR_P (FN) -- a template callee's body is
+	 often not otherwise instantiated yet at this point (only its
+	 signature is needed to build the call at all), and an
+	 unresolved "false" is indistinguishable from a genuine, resolved
+	 "not conveyor" otherwise, rejecting every conveyor(auto) callee
+	 unconditionally.  See maybe_instantiate_conveyor's own comment
+	 (pt.cc).  A no-op for anything else.  */
+      maybe_instantiate_conveyor (fn);
+
       if (DECL_VINDEX (fn) && (flags & LOOKUP_NONVIRTUAL) == 0)
 	{
-	  if (complain & tf_error)
-	    error_at (input_location, "virtual function call not permitted "
-		      "in a conveyor function or predicate; %qD is called "
-		      "virtually here", orig_fn);
-	  return error_mark_node;
+	  if (conveyor_auto_probing_p ())
+	    note_conveyor_auto_violation ();
+	  else
+	    {
+	      if (complain & tf_error)
+		error_at (input_location, "virtual function call not "
+			  "permitted in a conveyor function or predicate; "
+			  "%qD is called virtually here", orig_fn);
+	      return error_mark_node;
+	    }
 	}
       else if (!fndecl_built_in_p (fn) && !DECL_DECLARED_CONVEYOR_P (fn)
 	       && !is_object_address_fndecl_p (fn)
 	       && !is_std_unreachable_fndecl_p (fn)
 	       && !(nargs && is_iile_operator_call_p (fn, argarray[0])))
 	{
-	  if (complain & tf_error)
-	    error_at (input_location, "call to %qD, which is not declared "
-		      "%<conveyor%>, not permitted in a conveyor function "
-		      "or predicate", fn);
-	  return error_mark_node;
+	  if (conveyor_auto_probing_p ())
+	    note_conveyor_auto_violation ();
+	  else
+	    {
+	      if (complain & tf_error)
+		error_at (input_location, "call to %qD, which is not "
+			  "declared %<conveyor%>, not permitted in a "
+			  "conveyor function or predicate", fn);
+	      return error_mark_node;
+	    }
 	}
     }
 

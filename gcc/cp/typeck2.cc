@@ -1196,11 +1196,16 @@ check_narrowing (tree type, tree init, tsubst_flags_t complain,
       location_t loc = cp_expr_loc_or_input_loc (init);
       if (conveyor_restrictions_active_p ())
 	{
-	  if (complain & tf_error)
-	    error_at (loc, "narrowing conversion of %qE from %qH to %qI "
-		      "not permitted in a conveyor function or predicate",
-		      init, ftype, type);
-	  return false;
+	  if (conveyor_auto_probing_p ())
+	    note_conveyor_auto_violation ();
+	  else
+	    {
+	      if (complain & tf_error)
+		error_at (loc, "narrowing conversion of %qE from %qH to %qI "
+			  "not permitted in a conveyor function or "
+			  "predicate", init, ftype, type);
+	      return false;
+	    }
 	}
       if (cxx_dialect == cxx98)
 	{

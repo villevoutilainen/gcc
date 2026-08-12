@@ -3300,7 +3300,10 @@ struct GTY(()) lang_decl_fn {
 
   /* True if this function was declared with the D4324 context-sensitive
      'conveyor' trailing function-specifier.  Declaration-only: does not
-     affect the function's type or mangling.  */
+     affect the function's type or mangling.  For a function declared
+     'conveyor(auto)' (conveyor_auto_p below), this bit instead holds
+     the *deduced* per-specialization answer once conveyor_auto_
+     resolved_p is set -- see maybe_instantiate_conveyor in pt.cc.  */
   unsigned conveyor_p : 1;
 
   /* True if this function was declared with the (axiom contracts)
@@ -3309,7 +3312,25 @@ struct GTY(()) lang_decl_fn {
      the function's type or mangling.  */
   unsigned symbolic_p : 1;
 
-  unsigned spare : 2;
+  /* True if this function (necessarily a template, or a member
+     template, or a generic lambda's call operator) was declared
+     'conveyor(auto)' rather than plain 'conveyor': its conveyor-ness
+     is deduced per specialization from whether that specialization's
+     own body happens to satisfy the mandatory conveyor rules, instead
+     of being eagerly, unconditionally required.  Set on both the
+     primary template's pattern decl and every specialization (copied
+     "for free" the same way conveyor_p itself already is, via
+     tsubst_function_decl's copy_decl).  See maybe_instantiate_conveyor
+     in pt.cc.  */
+  unsigned conveyor_auto_p : 1;
+
+  /* Meaningful only when conveyor_auto_p is set on THIS decl (a
+     concrete specialization, not the primary template pattern): true
+     once this specialization's own conveyor-ness has actually been
+     deduced (conveyor_p above then holds the answer, permanently --
+     never recomputed, mirroring how a deferred noexcept-specifier,
+     once resolved, is never recomputed either).  */
+  unsigned conveyor_auto_resolved_p : 1;
 
   /* 32-bits padding on 64-bit host.  */
 
@@ -3898,6 +3919,32 @@ struct GTY(()) lang_decl {
 #define CLEAR_DECL_DECLARED_CONVEYOR_P(NODE) \
   (retrofit_lang_decl (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE))),	\
    LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->conveyor_p = false)
+
+/* True if FNDECL was declared with the D4324 'conveyor(auto)' form
+   rather than plain 'conveyor': its conveyor-ness is deduced per
+   specialization rather than eagerly required.  See lang_decl_fn's
+   own conveyor_auto_p for the full rationale, and
+   DECL_CONVEYOR_AUTO_RESOLVED_P/maybe_instantiate_conveyor (pt.cc) for
+   how and when a given specialization's answer actually gets decided.  */
+#define DECL_CONVEYOR_AUTO_P(NODE) \
+  (DECL_LANG_SPECIFIC (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE)))	\
+   ? LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->conveyor_auto_p	\
+   : false)
+#define SET_DECL_CONVEYOR_AUTO_P(NODE) \
+  (retrofit_lang_decl (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE))),	\
+   LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->conveyor_auto_p = true)
+
+/* True once a 'conveyor(auto)' specialization's own conveyor-ness (see
+   just above) has actually been deduced -- DECL_DECLARED_CONVEYOR_P
+   then holds the (permanent, never recomputed) answer.  Meaningless
+   unless DECL_CONVEYOR_AUTO_P is also true on the same NODE.  */
+#define DECL_CONVEYOR_AUTO_RESOLVED_P(NODE) \
+  (DECL_LANG_SPECIFIC (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE)))	\
+   ? LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->conveyor_auto_resolved_p \
+   : false)
+#define SET_DECL_CONVEYOR_AUTO_RESOLVED_P(NODE) \
+  (retrofit_lang_decl (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE))),	\
+   LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->conveyor_auto_resolved_p = true)
 
 /* True if FNDECL was declared with the (axiom contracts) context-
    sensitive 'symbolic' trailing function-specifier -- such a function
@@ -7190,6 +7237,10 @@ struct cp_declarator {
       /* True if the D4324 context-sensitive 'conveyor' trailing
 	 function-specifier was present.  */
       bool conveyor_p;
+      /* True if CONVEYOR_P's specifier was written as 'conveyor(auto)'
+	 rather than bare 'conveyor'.  Meaningless unless conveyor_p is
+	 also true.  */
+      bool conveyor_auto_p;
       /* True if the (axiom contracts) context-sensitive 'symbolic'
 	 trailing function-specifier was present.  */
       bool symbolic_p;
@@ -8318,6 +8369,7 @@ extern void do_decl_instantiation		(tree, tree);
 extern void do_type_instantiation		(tree, tree, tsubst_flags_t);
 extern bool always_instantiate_p		(tree);
 extern bool maybe_instantiate_noexcept		(tree, tsubst_flags_t = tf_warning_or_error);
+extern void maybe_instantiate_conveyor		(tree);
 extern tree instantiate_decl			(tree, bool, bool);
 extern void maybe_instantiate_decl		(tree);
 extern int comp_template_parms			(const_tree, const_tree);

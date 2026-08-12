@@ -3755,10 +3755,15 @@ finish_pseudo_destructor_expr (tree object, tree scope, tree destructor,
      function or predicate.  */
   if (conveyor_restrictions_active_p ())
     {
-      if (complain & tf_error)
-	error_at (loc, "pseudo-destructor call not permitted in a "
-		  "conveyor function or predicate");
-      return error_mark_node;
+      if (conveyor_auto_probing_p ())
+	note_conveyor_auto_violation ();
+      else
+	{
+	  if (complain & tf_error)
+	    error_at (loc, "pseudo-destructor call not permitted in a "
+		      "conveyor function or predicate");
+	  return error_mark_node;
+	}
     }
 
   if (!processing_template_decl)
@@ -5065,14 +5070,19 @@ finish_id_expression_1 (tree id_expression,
 	      || ((DECL_NAMESPACE_SCOPE_P (decl) || DECL_CLASS_SCOPE_P (decl))
 		  && !CP_TYPE_CONST_P (TREE_TYPE (decl)))))
 	{
-	  if (DECL_THREAD_LOCAL_P (decl))
-	    error ("use of %<thread_local%> variable %qD not permitted in "
-		   "a conveyor function or predicate", decl);
+	  if (conveyor_auto_probing_p ())
+	    note_conveyor_auto_violation ();
 	  else
-	    error ("use of non-const variable %qD with static storage "
-		   "duration not permitted in a conveyor function or "
-		   "predicate", decl);
-	  return error_mark_node;
+	    {
+	      if (DECL_THREAD_LOCAL_P (decl))
+		error ("use of %<thread_local%> variable %qD not permitted "
+		       "in a conveyor function or predicate", decl);
+	      else
+		error ("use of non-const variable %qD with static storage "
+		       "duration not permitted in a conveyor function or "
+		       "predicate", decl);
+	      return error_mark_node;
+	    }
 	}
 
       /* Only certain kinds of names are allowed in constant

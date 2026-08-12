@@ -1593,9 +1593,14 @@ finish_co_await_expr (location_t kw, tree expr)
 
   if (conveyor_restrictions_active_p ())
     {
-      error_at (kw, "%<co_await%>-expression not permitted in a conveyor "
-		"function or predicate");
-      return error_mark_node;
+      if (conveyor_auto_probing_p ())
+	note_conveyor_auto_violation ();
+      else
+	{
+	  error_at (kw, "%<co_await%>-expression not permitted in a "
+		    "conveyor function or predicate");
+	  return error_mark_node;
+	}
     }
 
   if (cp_unevaluated_operand)

@@ -2067,6 +2067,7 @@ make_call_declarator (cp_declarator *target,
   declarator->u.function.requires_clause = requires_clause;
   declarator->u.function.contract_specifiers = contract_specifiers;
   declarator->u.function.conveyor_p = false;
+  declarator->u.function.conveyor_auto_p = false;
   declarator->u.function.symbolic_p = false;
   declarator->u.function.parens_loc = parens_loc;
   if (target)
@@ -2768,7 +2769,7 @@ static cp_cv_quals cp_parser_cv_qualifier_seq_opt
 static cp_virt_specifiers cp_parser_virt_specifier_seq_opt
   (cp_parser *);
 static bool cp_parser_conveyor_specifier_opt
-  (cp_parser *);
+  (cp_parser *, bool *);
 static bool cp_parser_symbolic_specifier_opt
   (cp_parser *);
 static cp_ref_qualifier cp_parser_ref_qualifier_opt
@@ -13574,8 +13575,9 @@ cp_parser_lambda_declarator_opt (cp_parser* parser, tree lambda_expr,
      be declared 'conveyor' too (e.g. '[&]() conveyor { ... }'), letting it
      be called from conveyor-restricted code like any other function.  */
   bool conveyor_p = false;
+  bool conveyor_auto_p = false;
   if (flag_contract_control_objects)
-    conveyor_p = cp_parser_conveyor_specifier_opt (parser);
+    conveyor_p = cp_parser_conveyor_specifier_opt (parser, &conveyor_auto_p);
 
   tree contract_specifiers = NULL_TREE;
   if (flag_contracts)
@@ -13654,6 +13656,7 @@ cp_parser_lambda_declarator_opt (cp_parser* parser, tree lambda_expr,
 				       std_attrs,
 				       UNKNOWN_LOCATION);
     declarator->u.function.conveyor_p = conveyor_p;
+    declarator->u.function.conveyor_auto_p = conveyor_auto_p;
 
     fco = grokmethod (&return_type_specs,
 		      declarator,
@@ -26917,8 +26920,10 @@ cp_parser_direct_declarator (cp_parser* parser,
 
 		  /* Parse the (D4324) conveyor-specifier, if present.  */
 		  bool conveyor_p = false;
+		  bool conveyor_auto_p = false;
 		  if (flag_contract_control_objects)
-		    conveyor_p = cp_parser_conveyor_specifier_opt (parser);
+		    conveyor_p = cp_parser_conveyor_specifier_opt
+		      (parser, &conveyor_auto_p);
 
 		  /* Parse the (axiom contracts) symbolic-specifier, if
 		     present.  */
@@ -26953,6 +26958,7 @@ cp_parser_direct_declarator (cp_parser* parser,
 						     parens_loc);
 		  declarator->attributes = gnu_attrs;
 		  declarator->u.function.conveyor_p = conveyor_p;
+		  declarator->u.function.conveyor_auto_p = conveyor_auto_p;
 		  declarator->u.function.symbolic_p = symbolic_p;
 		  declarator->parameter_pack_p |= pack_expansion_p;
 		  /* Any subsequent parameter lists are to do with
@@ -27674,21 +27680,39 @@ cp_parser_tx_qualifier_opt (cp_parser *parser)
 
    conveyor-specifier:
      conveyor
+     conveyor ( auto )
 
    'conveyor' is a context-sensitive identifier, exactly like
    'override'/'final' below: it is not a reserved word, so a variable,
    function, or member named 'conveyor' anywhere outside this one
    declarator position continues to parse exactly as before, regardless
    of whether -fcontract-control-objects is in effect.  Returns true iff
-   the specifier was present and consumed.  */
+   the specifier was present and consumed, in which case *AUTO_P is set
+   to whether it was the 'conveyor(auto)' form (per-specialization
+   conveyor-ness deduced from whether that specialization's own body
+   happens to satisfy the mandatory conveyor rules, rather than eagerly
+   and unconditionally required the way bare 'conveyor' is -- see
+   maybe_instantiate_conveyor in pt.cc) rather than bare 'conveyor'.
+   *AUTO_P is left unspecified if this function returns false.  */
 
 static bool
-cp_parser_conveyor_specifier_opt (cp_parser *parser)
+cp_parser_conveyor_specifier_opt (cp_parser *parser, bool *auto_p)
 {
   cp_token *token = cp_lexer_peek_token (parser->lexer);
   if (token->type != CPP_NAME || !id_equal (token->u.value, "conveyor"))
     return false;
   cp_lexer_consume_token (parser->lexer);
+
+  *auto_p = false;
+  if (cp_lexer_next_token_is (parser->lexer, CPP_OPEN_PAREN)
+      && cp_lexer_nth_token_is_keyword (parser->lexer, 2, RID_AUTO)
+      && cp_lexer_nth_token_is (parser->lexer, 3, CPP_CLOSE_PAREN))
+    {
+      cp_lexer_consume_token (parser->lexer); /* '('  */
+      cp_lexer_consume_token (parser->lexer); /* 'auto'  */
+      cp_lexer_consume_token (parser->lexer); /* ')'  */
+      *auto_p = true;
+    }
   return true;
 }
 

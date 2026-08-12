@@ -3223,10 +3223,15 @@ lookup_destructor (tree object, tree scope, tree dtor_name,
      scope exit) is not permitted in a conveyor function or predicate.  */
   if (conveyor_restrictions_active_p ())
     {
-      if (complain & tf_error)
-	error ("explicit destructor call not permitted in a conveyor "
-	       "function or predicate");
-      return error_mark_node;
+      if (conveyor_auto_probing_p ())
+	note_conveyor_auto_violation ();
+      else
+	{
+	  if (complain & tf_error)
+	    error ("explicit destructor call not permitted in a conveyor "
+		   "function or predicate");
+	  return error_mark_node;
+	}
     }
 
   if (scope && !check_dtor_name (scope, dtor_type))
@@ -4736,23 +4741,40 @@ cp_build_function_call_vec (tree function, vec<tree, va_gc> **params,
      this function), not just when it's genuinely unresolvable.  */
   if (conveyor_restrictions_active_p ())
     {
+      /* D4324: see build_over_call's own identical comment (call.cc) --
+	 force a still-undecided 'conveyor(auto)' FNDECL's deduction now,
+	 before the callee-must-be-conveyor check below reads
+	 DECL_DECLARED_CONVEYOR_P (FNDECL).  A no-op for anything else,
+	 including a null FNDECL.  */
+      maybe_instantiate_conveyor (fndecl);
+
       if (!fndecl)
 	{
-	  if (complain & tf_error)
-	    error_at (input_location, "call through a function pointer or "
-		      "pointer to member function not permitted in a "
-		      "conveyor function or predicate");
-	  return error_mark_node;
+	  if (conveyor_auto_probing_p ())
+	    note_conveyor_auto_violation ();
+	  else
+	    {
+	      if (complain & tf_error)
+		error_at (input_location, "call through a function pointer "
+			  "or pointer to member function not permitted in "
+			  "a conveyor function or predicate");
+	      return error_mark_node;
+	    }
 	}
       else if (!fndecl_built_in_p (fndecl) && !DECL_DECLARED_CONVEYOR_P (fndecl)
 	       && !is_object_address_fndecl_p (fndecl)
 	       && !is_std_unreachable_fndecl_p (fndecl))
 	{
-	  if (complain & tf_error)
-	    error_at (input_location, "call to %qD, which is not declared "
-		      "%<conveyor%>, not permitted in a conveyor function "
-		      "or predicate", fndecl);
-	  return error_mark_node;
+	  if (conveyor_auto_probing_p ())
+	    note_conveyor_auto_violation ();
+	  else
+	    {
+	      if (complain & tf_error)
+		error_at (input_location, "call to %qD, which is not "
+			  "declared %<conveyor%>, not permitted in a "
+			  "conveyor function or predicate", fndecl);
+	      return error_mark_node;
+	    }
 	}
     }
 
@@ -6488,10 +6510,15 @@ cp_build_binary_op (const op_location_t &location,
       if ((code0 == POINTER_TYPE || code1 == POINTER_TYPE)
 	  && conveyor_restrictions_active_p ())
 	{
-	  if (complain & tf_error)
-	    error_at (location, "pointer relational comparison not "
-		      "permitted in a conveyor function or predicate");
-	  return error_mark_node;
+	  if (conveyor_auto_probing_p ())
+	    note_conveyor_auto_violation ();
+	  else
+	    {
+	      if (complain & tf_error)
+		error_at (location, "pointer relational comparison not "
+			  "permitted in a conveyor function or predicate");
+	      return error_mark_node;
+	    }
 	}
       if (TREE_CODE (orig_op0) == STRING_CST
 	  || TREE_CODE (orig_op1) == STRING_CST)
@@ -8911,11 +8938,16 @@ build_static_cast_1 (location_t loc, tree type, tree expr, bool c_cast_p,
       if (conveyor_restrictions_active_p ()
 	  && !same_type_ignoring_top_level_qualifiers_p (intype, TREE_TYPE (type)))
 	{
-	  if (complain & tf_error)
-	    error_at (loc, "%<static_cast%> performing a base-to-derived "
-		      "conversion not permitted in a conveyor function "
-		      "or predicate");
-	  return error_mark_node;
+	  if (conveyor_auto_probing_p ())
+	    note_conveyor_auto_violation ();
+	  else
+	    {
+	      if (complain & tf_error)
+		error_at (loc, "%<static_cast%> performing a base-to-derived "
+			  "conversion not permitted in a conveyor function "
+			  "or predicate");
+	      return error_mark_node;
+	    }
 	}
 
       if (processing_template_decl)
@@ -9127,11 +9159,16 @@ build_static_cast_1 (location_t loc, tree type, tree expr, bool c_cast_p,
       if (conveyor_restrictions_active_p ()
 	  && !same_type_ignoring_top_level_qualifiers_p (intype, type))
 	{
-	  if (complain & tf_error)
-	    error_at (loc, "%<static_cast%> performing a base-to-derived "
-		      "conversion not permitted in a conveyor function "
-		      "or predicate");
-	  return error_mark_node;
+	  if (conveyor_auto_probing_p ())
+	    note_conveyor_auto_violation ();
+	  else
+	    {
+	      if (complain & tf_error)
+		error_at (loc, "%<static_cast%> performing a base-to-derived "
+			  "conversion not permitted in a conveyor function "
+			  "or predicate");
+	      return error_mark_node;
+	    }
 	}
 
       if (processing_template_decl)
@@ -9570,10 +9607,15 @@ build_reinterpret_cast (location_t loc, tree type, tree expr,
 
   if (conveyor_restrictions_active_p ())
     {
-      if (complain & tf_error)
-	error_at (loc, "%<reinterpret_cast%> not permitted in a "
-		  "conveyor function or predicate");
-      return error_mark_node;
+      if (conveyor_auto_probing_p ())
+	note_conveyor_auto_violation ();
+      else
+	{
+	  if (complain & tf_error)
+	    error_at (loc, "%<reinterpret_cast%> not permitted in a "
+		      "conveyor function or predicate");
+	  return error_mark_node;
+	}
     }
 
   if (processing_template_decl)

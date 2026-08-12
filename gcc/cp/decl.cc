@@ -1641,6 +1641,21 @@ check_conveyor_redeclaration (tree old_decl, tree new_decl)
   if (TREE_CODE (old_decl) != FUNCTION_DECL
       || TREE_CODE (new_decl) != FUNCTION_DECL)
     return true;
+  /* D4324: 'conveyor(auto)'-ness itself must also agree -- comparing
+     DECL_DECLARED_CONVEYOR_P alone isn't enough for a still-unresolved
+     conveyor(auto) declaration, whose conveyor_p bit reads false (not
+     yet deduced) exactly like an ordinary, never-conveyor declaration
+     until maybe_instantiate_conveyor (pt.cc) first runs.  */
+  if (DECL_CONVEYOR_AUTO_P (old_decl) != DECL_CONVEYOR_AUTO_P (new_decl))
+    {
+      auto_diagnostic_group d;
+      error_at (DECL_SOURCE_LOCATION (new_decl),
+		"redeclaration %qD differs in %qs "
+		"from previous declaration", new_decl, "conveyor(auto)");
+      inform (DECL_SOURCE_LOCATION (old_decl),
+	      "previous declaration %qD", old_decl);
+      return false;
+    }
   if (DECL_DECLARED_CONVEYOR_P (old_decl)
       == DECL_DECLARED_CONVEYOR_P (new_decl))
     return true;
@@ -9608,9 +9623,14 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
   if (VAR_P (decl) && !init && conveyor_restrictions_active_p ()
       && at_function_scope_p ()
       && !TREE_STATIC (decl) && !DECL_EXTERNAL (decl))
-    error_at (DECL_SOURCE_LOCATION (decl),
-	      "local variable %qD not explicitly initialized in a "
-	      "conveyor function or predicate", decl);
+    {
+      if (conveyor_auto_probing_p ())
+	note_conveyor_auto_violation ();
+      else
+	error_at (DECL_SOURCE_LOCATION (decl),
+		  "local variable %qD not explicitly initialized in a "
+		  "conveyor function or predicate", decl);
+    }
 
   if (VAR_P (decl) && is_copy_initialization (init))
     flags |= LOOKUP_ONLYCONVERTING;
@@ -12278,6 +12298,7 @@ grokfndecl (tree ctype,
 	    tree* attrlist,
 	    tree contract_specifiers,
 	    bool declared_conveyor_p,
+	    bool declared_conveyor_auto_p,
 	    bool declared_symbolic_p,
 	    location_t location)
 {
@@ -12772,6 +12793,8 @@ grokfndecl (tree ctype,
 	set_fn_contract_specifiers (decl, contract_specifiers);
       if (decl && decl != error_mark_node && declared_conveyor_p)
 	SET_DECL_DECLARED_CONVEYOR_P (decl);
+      if (decl && decl != error_mark_node && declared_conveyor_auto_p)
+	SET_DECL_CONVEYOR_AUTO_P (decl);
       if (decl && decl != error_mark_node && declared_symbolic_p)
 	SET_DECL_DECLARED_SYMBOLIC_P (decl);
       return decl;
@@ -12800,6 +12823,8 @@ grokfndecl (tree ctype,
      still runs too, for ordinary (non-explicit-instantiation) decls.  */
   if (decl && decl != error_mark_node && declared_conveyor_p)
     SET_DECL_DECLARED_CONVEYOR_P (decl);
+  if (decl && decl != error_mark_node && declared_conveyor_auto_p)
+    SET_DECL_CONVEYOR_AUTO_P (decl);
   if (decl && decl != error_mark_node && declared_symbolic_p)
     SET_DECL_DECLARED_SYMBOLIC_P (decl);
 
@@ -12836,6 +12861,14 @@ grokfndecl (tree ctype,
       if (TREE_CODE (decl) == TEMPLATE_DECL)
 	t = DECL_TEMPLATE_RESULT (decl);
       SET_DECL_DECLARED_CONVEYOR_P (t);
+    }
+
+  if (declared_conveyor_auto_p)
+    {
+      tree t = decl;
+      if (TREE_CODE (decl) == TEMPLATE_DECL)
+	t = DECL_TEMPLATE_RESULT (decl);
+      SET_DECL_CONVEYOR_AUTO_P (t);
     }
 
   if (declared_symbolic_p)
@@ -14273,6 +14306,7 @@ grokdeclarator (const cp_declarator *declarator,
   tree contract_specifiers
     = declarator ? declarator->contract_specifiers : NULL_TREE;
   bool declared_conveyor_p = false;
+  bool declared_conveyor_auto_p = false;
   bool declared_symbolic_p = false;
   tree parms = NULL_TREE;
   const cp_declarator *id_declarator;
@@ -15862,7 +15896,39 @@ grokdeclarator (const cp_declarator *declarator,
 
 	    if (flag_contract_control_objects
 		&& declarator->u.function.conveyor_p)
-	      declared_conveyor_p = true;
+	      {
+		if (!declarator->u.function.conveyor_auto_p)
+		  /* Plain 'conveyor': eagerly, unconditionally true, as
+		     always.  (Deliberately NOT set for the 'conveyor(auto)'
+		     form just below -- that one starts out false and stays
+		     false until maybe_instantiate_conveyor (pt.cc) actually
+		     deduces an answer for a given specialization; setting
+		     it eagerly here would let every specialization read as
+		     "conveyor" from birth, via ordinary decl-copying, long
+		     before any deduction ever ran.)  */
+		  declared_conveyor_p = true;
+		else
+		  {
+		    /* D4324: 'conveyor(auto)' only makes sense where more
+		       than one instantiation of this declaration could
+		       ever exist -- a function template, a member
+		       (template or not) of a class template, or a generic
+		       lambda's call operator -- all of which leave
+		       processing_template_decl nonzero here.  An
+		       ordinary, fully concrete declaration has exactly one
+		       "instantiation", itself, so auto-deduction has
+		       nothing to do beyond what plain 'conveyor' already
+		       does, and only trades a loud, immediate error for
+		       conveyor(auto)'s own silent-downgrade-on-violation
+		       behavior, which is strictly worse here.  */
+		    if (processing_template_decl)
+		      declared_conveyor_auto_p = true;
+		    else
+		      error_at (declarator->id_loc,
+				"%<conveyor(auto)%> may only be used in "
+				"a template");
+		  }
+	      }
 
 	    if (flag_contract_control_objects
 		&& declarator->u.function.symbolic_p)
@@ -16850,7 +16916,8 @@ grokdeclarator (const cp_declarator *declarator,
 			       funcdef_flag, late_return_type_p,
 			       template_count, in_namespace,
 			       attrlist, contract_specifiers,
-			       declared_conveyor_p, declared_symbolic_p, id_loc);
+			       declared_conveyor_p, declared_conveyor_auto_p,
+			       declared_symbolic_p, id_loc);
 	    decl = set_virt_specifiers (decl, virt_specifiers);
 	    if (decl == NULL_TREE)
 	      return error_mark_node;
@@ -17206,7 +17273,8 @@ grokdeclarator (const cp_declarator *declarator,
 			   late_return_type_p,
 			   template_count, in_namespace, attrlist,
 			   contract_specifiers, declared_conveyor_p,
-			   declared_symbolic_p, id_loc);
+			   declared_conveyor_auto_p, declared_symbolic_p,
+			   id_loc);
 	if (decl == NULL_TREE)
 	  return error_mark_node;
 

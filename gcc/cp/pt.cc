@@ -3364,7 +3364,23 @@ check_explicit_specialization (tree declarator,
 		 be.  Unlike noexcept, 'conveyor' has no syntax for
 		 "explicitly not conveyor", so omitting it here is always
 		 lenient; only a 'conveyor' written here that contradicts
-		 the real instantiation is an error.  */
+		 the real instantiation is an error.
+
+		 For a 'conveyor(auto)' template, this doubles as the
+		 feature's own pinning mechanism: writing plain 'conveyor'
+		 (not 'conveyor(auto)' again -- DECL_DECLARED_CONVEYOR_P
+		 (decl) is only set by the former, see grokdeclarator) on an
+		 explicit instantiation asserts "this specific
+		 specialization must actually deduce conveyor", the same
+		 assertion an ordinary conveyor template's explicit
+		 instantiation already makes of every specialization
+		 uniformly. INST's own conveyor-ness may not have been
+		 decided yet at this point (only its signature was needed to
+		 reach here) -- force it now, the same way DECL's own
+		 noexcept-specifier is forced via maybe_instantiate_noexcept
+		 just above, so the comparison below sees a genuinely
+		 resolved answer rather than a still-pending "false".  */
+	      maybe_instantiate_conveyor (inst);
 	      if (DECL_FUNCTION_TEMPLATE_P (tmpl)
 		  && DECL_DECLARED_CONVEYOR_P (decl)
 		  && !DECL_DECLARED_CONVEYOR_P (inst))
@@ -29078,6 +29094,88 @@ instantiate_body (tree pattern, tree args, tree d, bool nested_p)
     restore_omp_privatization_clauses (omp_privatization_save);
 }
 
+/* D4324: RAII helper wrapping instantiate_decl's own call to
+   instantiate_body for a single FUNCTION_DECL D.  If D's own template
+   was declared 'conveyor(auto)' (DECL_CONVEYOR_AUTO_P) and D's own
+   answer isn't resolved yet (DECL_CONVEYOR_AUTO_RESOLVED_P), this
+   decides it right here, framing the upcoming body substitution as an
+   active conveyor(auto) probe (contracts.h): D is temporarily marked
+   as if plain 'conveyor', so conveyor_restrictions_active_p -- and
+   everything built on it, both the point-of-construction checks
+   scattered across the front end and check_conveyor_function_body's
+   own post-hoc "every path returns" check (called later, from
+   finish_function, within this same instantiate_body call) --
+   naturally activate for D's body exactly once, right now, while any
+   violation is recorded rather than diagnosed-and-poisoned: the body
+   remains valid, ordinary C++ regardless of whether it happens to
+   satisfy conveyor's extra rules, so there is nothing to poison.
+   Once substitution completes, D's own conveyor-ness is exactly "no
+   violation was recorded", permanently -- every later query (build_
+   over_call's callee-must-be-conveyor check, most directly) just
+   reads the now-resolved bit, the same way a deferred noexcept-
+   specifier, once computed by maybe_instantiate_noexcept above, is
+   never recomputed either.
+
+   A no-op (conditionally, matching suppress_conveyor_restrictions_
+   for_converted_constant_expr_sentinel's own ACTIVE parameter) unless
+   D genuinely is an unresolved conveyor(auto) specialization.
+
+   Self-referential deduction (D's own body's conveyor-ness depending
+   on D's own conveyor-ness -- direct or mutual recursion through
+   another conveyor(auto) function) is guarded by S_RESOLVING,
+   mirroring maybe_instantiate_noexcept's own hash_set guard for the
+   analogous noexcept case -- but, per conveyor(auto)'s own downgrade-
+   don't-error philosophy, resolved silently as "not (yet provably)
+   conveyor" rather than as a hard "depends on itself" error.  */
+
+class conveyor_auto_deduction_sentinel
+{
+  bool m_violation = false;
+  bool m_active;
+  tree m_decl;
+  conveyor_auto_probe_sentinel m_probe;
+
+  static hash_set<tree> *s_resolving;
+
+  static bool
+  try_start_probe (tree d)
+  {
+    if (TREE_CODE (d) != FUNCTION_DECL
+	|| !DECL_CONVEYOR_AUTO_P (d)
+	|| DECL_CONVEYOR_AUTO_RESOLVED_P (d))
+      return false;
+    if (!s_resolving)
+      s_resolving = new hash_set<tree>;
+    if (s_resolving->add (d))
+      {
+	/* Self-referential; see this class's own leading comment.  */
+	SET_DECL_CONVEYOR_AUTO_RESOLVED_P (d);
+	CLEAR_DECL_DECLARED_CONVEYOR_P (d);
+	return false;
+      }
+    SET_DECL_DECLARED_CONVEYOR_P (d);
+    return true;
+  }
+
+public:
+  explicit conveyor_auto_deduction_sentinel (tree d)
+    : m_active (try_start_probe (d)), m_decl (d),
+      m_probe (&m_violation, m_active)
+  { }
+
+  ~conveyor_auto_deduction_sentinel ()
+  {
+    if (!m_active)
+      return;
+    s_resolving->remove (m_decl);
+    if (m_violation)
+      CLEAR_DECL_DECLARED_CONVEYOR_P (m_decl);
+    SET_DECL_CONVEYOR_AUTO_RESOLVED_P (m_decl);
+  }
+};
+
+hash_set<tree> *conveyor_auto_deduction_sentinel::s_resolving = nullptr;
+
 /* Produce the definition of D, a _DECL generated from a template.  If
    DEFER_OK is true, then we don't have to actually do the
    instantiation now; we just have to do it sometime.  Normally it is
@@ -29328,6 +29426,10 @@ instantiate_decl (tree d, bool defer_ok, bool expl_inst_class_mem_p)
       set_instantiating_module (d);
       if (variable_template_p (gen_tmpl))
 	note_vague_linkage_variable (d);
+      /* D4324: see conveyor_auto_deduction_sentinel's own leading
+	 comment -- a no-op unless D is an unresolved 'conveyor(auto)'
+	 specialization.  */
+      conveyor_auto_deduction_sentinel conveyor_auto_sentinel (d);
       instantiate_body (td, args, d, false);
     }
 
@@ -29336,6 +29438,34 @@ instantiate_decl (tree d, bool defer_ok, bool expl_inst_class_mem_p)
   input_location = saved_loc;
 
   return d;
+}
+
+/* D4324: if FN is an unresolved 'conveyor(auto)' specialization
+   (DECL_CONVEYOR_AUTO_P set, DECL_CONVEYOR_AUTO_RESOLVED_P not),
+   force its deduction right now by instantiating its body ahead of
+   whatever would otherwise have triggered that instantiation --
+   mirroring maybe_instantiate_noexcept above, which does the same for
+   a deferred noexcept-specifier. Needed because a callee-must-be-
+   conveyor check (build_over_call, most directly) can easily run
+   before a template callee's body would otherwise be instantiated on
+   its own (only its signature is needed to build the call at all),
+   and DECL_DECLARED_CONVEYOR_P must not be read as a bare "not yet
+   resolved" false in that case -- that's indistinguishable from a
+   genuine, resolved "not conveyor" and would reject every
+   conveyor(auto) callee unconditionally, defeating the whole feature.
+   A no-op for anything else, including an already-resolved
+   specialization (instantiate_decl's own DECL_TEMPLATE_INSTANTIATED
+   check makes a redundant call here harmless).  */
+
+void
+maybe_instantiate_conveyor (tree fn)
+{
+  if (fn == NULL_TREE || fn == error_mark_node
+      || TREE_CODE (fn) != FUNCTION_DECL)
+    return;
+  if (!DECL_CONVEYOR_AUTO_P (fn) || DECL_CONVEYOR_AUTO_RESOLVED_P (fn))
+    return;
+  instantiate_decl (fn, /*defer_ok=*/false, /*expl_inst_class_mem_p=*/false);
 }
 
 /* Run through the list of templates that we wish we could
