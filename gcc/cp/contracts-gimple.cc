@@ -1153,6 +1153,7 @@ cg_call_postcondition_relation_p (gcall *call, tree_code *code_out,
 
 static bool
 cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
+		    hash_map<tree, cg_rel_fact> &scalar_rel_cache,
 		    tree_code *code_out, tree *rhs_out, widest_int *offset_out,
 		    bool *conveyor_out)
 {
@@ -1185,6 +1186,22 @@ cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
       return true;
     }
 
+  /* D4324 Commit 3: SCALAR_REL_CACHE -- a branch-derived fact,
+     established by cg_predicate_facts_walk's own dominator-tree pass
+     (cg_refine_edge_into) and flattened here for this, the *other*,
+     simple pass to see -- see cg_predicate_facts_walk's own comment on
+     why that flattening is sound. Checked here, before the SSA def-stmt
+     walk below, mirroring cg_established_range_of's own identical
+     ordering for SCALAR_RANGE_CACHE.  */
+  if (cg_rel_fact *fact = scalar_rel_cache.get (val))
+    {
+      *code_out = fact->code;
+      *rhs_out = fact->rhs;
+      *offset_out = fact->offset;
+      *conveyor_out = fact->conveyor_established;
+      return true;
+    }
+
   gimple *def = SSA_NAME_DEF_STMT (val);
   if (def && is_gimple_call (def))
     {
@@ -1198,8 +1215,8 @@ cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
 	 operator -- recurse into the receiver.  */
       tree receiver = cg_resolve_conversion_receiver (val);
       if (receiver != val)
-	return cg_get_relational (receiver, established_rel, code_out,
-				   rhs_out, offset_out, conveyor_out);
+	return cg_get_relational (receiver, established_rel, scalar_rel_cache,
+				   code_out, rhs_out, offset_out, conveyor_out);
       return false;
     }
   if (def && is_gimple_assign (def))
@@ -1207,7 +1224,8 @@ cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
       enum tree_code code = gimple_assign_rhs_code (def);
       if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
 	return cg_get_relational (gimple_assign_rhs1 (def), established_rel,
-				   code_out, rhs_out, offset_out, conveyor_out);
+				   scalar_rel_cache, code_out, rhs_out,
+				   offset_out, conveyor_out);
       /* D4324 Commit 2: 'base +/- k' (K a compile-time constant) shifts
 	 a copy of BASE's own established fact by accumulating K into
 	 *OFFSET_OUT, mirroring contracts.cc's own oa_get_relational
@@ -1222,12 +1240,13 @@ cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
 
 	  widest_int k;
 	  if (TREE_CODE (op1) == INTEGER_CST
-	      && cg_get_relational (op0, established_rel, code_out, rhs_out,
-				     offset_out, conveyor_out))
+	      && cg_get_relational (op0, established_rel, scalar_rel_cache,
+				     code_out, rhs_out, offset_out, conveyor_out))
 	    k = wi::to_widest (op1);
 	  else if (code == PLUS_EXPR && TREE_CODE (op0) == INTEGER_CST
-		   && cg_get_relational (op1, established_rel, code_out,
-					  rhs_out, offset_out, conveyor_out))
+		   && cg_get_relational (op1, established_rel, scalar_rel_cache,
+					  code_out, rhs_out, offset_out,
+					  conveyor_out))
 	    k = wi::to_widest (op0);
 	  else
 	    return false;
@@ -1250,6 +1269,7 @@ cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
 
 static bool
 cg_get_call_relational (tree val, hash_map<tree, cg_call_rel_fact> &established_call_rel,
+			  hash_map<tree, cg_call_rel_fact> &scalar_call_rel_cache,
 			  tree_code *code_out, tree *rhs_receiver_out,
 			  tree *rhs_callee_out, widest_int *offset_out,
 			  bool *conveyor_out)
@@ -1283,14 +1303,26 @@ cg_get_call_relational (tree val, hash_map<tree, cg_call_rel_fact> &established_
       return true;
     }
 
+  /* D4324 Commit 3: same SCALAR_CALL_REL_CACHE fallback as cg_get_
+     relational's own identical addition just above.  */
+  if (cg_call_rel_fact *fact = scalar_call_rel_cache.get (val))
+    {
+      *code_out = fact->code;
+      *rhs_receiver_out = fact->rhs_receiver;
+      *rhs_callee_out = fact->rhs_callee;
+      *offset_out = fact->offset;
+      *conveyor_out = fact->conveyor_established;
+      return true;
+    }
+
   gimple *def = SSA_NAME_DEF_STMT (val);
   if (def && is_gimple_assign (def))
     {
       enum tree_code code = gimple_assign_rhs_code (def);
       if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
 	return cg_get_call_relational (gimple_assign_rhs1 (def),
-					established_call_rel, code_out,
-					rhs_receiver_out, rhs_callee_out,
+					established_call_rel, scalar_call_rel_cache,
+					code_out, rhs_receiver_out, rhs_callee_out,
 					offset_out, conveyor_out);
       /* D4324 Commit 2: same PLUS_EXPR/MINUS_EXPR-by-constant transfer
 	 as cg_get_relational's own identical addition just above.  */
@@ -1301,15 +1333,16 @@ cg_get_call_relational (tree val, hash_map<tree, cg_call_rel_fact> &established_
 
 	  widest_int k;
 	  if (TREE_CODE (op1) == INTEGER_CST
-	      && cg_get_call_relational (op0, established_call_rel, code_out,
+	      && cg_get_call_relational (op0, established_call_rel,
+					  scalar_call_rel_cache, code_out,
 					  rhs_receiver_out, rhs_callee_out,
 					  offset_out, conveyor_out))
 	    k = wi::to_widest (op1);
 	  else if (code == PLUS_EXPR && TREE_CODE (op0) == INTEGER_CST
 		   && cg_get_call_relational (op1, established_call_rel,
-					       code_out, rhs_receiver_out,
-					       rhs_callee_out, offset_out,
-					       conveyor_out))
+					       scalar_call_rel_cache, code_out,
+					       rhs_receiver_out, rhs_callee_out,
+					       offset_out, conveyor_out))
 	    k = wi::to_widest (op0);
 	  else
 	    return false;
@@ -1423,6 +1456,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		hash_map<cg_field_key_hash, cg_call_call_rel_fact>
 		  &established_call_call_rel,
 		hash_map<tree, cg_range_lite> &scalar_range_cache,
+		hash_map<tree, cg_rel_fact> &scalar_rel_cache,
+		hash_map<tree, cg_call_rel_fact> &scalar_call_rel_cache,
 		gimple_ranger *ranger)
 {
   tree callee = gimple_call_fndecl (call);
@@ -1549,8 +1584,9 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  tree fact_rhs;
 	  widest_int fact_offset;
 	  bool fact_conveyor_established;
-	  if (cg_get_relational (sub_param, established_rel, &fact_code,
-				  &fact_rhs, &fact_offset, &fact_conveyor_established)
+	  if (cg_get_relational (sub_param, established_rel, scalar_rel_cache,
+				  &fact_code, &fact_rhs, &fact_offset,
+				  &fact_conveyor_established)
 	      && oa_relational_code_implies (fact_code, rel_code)
 	      && cg_offset_compatible_with_code (fact_offset, rel_code)
 	      && (!require_conveyor || fact_conveyor_established)
@@ -1590,7 +1626,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  tree fact_rhs_receiver, fact_rhs_callee;
 	  widest_int fact_offset;
 	  bool fact_conveyor_established;
-	  if (cg_get_call_relational (sub_param, established_call_rel, &fact_code,
+	  if (cg_get_call_relational (sub_param, established_call_rel,
+				       scalar_call_rel_cache, &fact_code,
 				       &fact_rhs_receiver, &fact_rhs_callee,
 				       &fact_offset, &fact_conveyor_established)
 	      && oa_relational_code_implies (fact_code, rel_code)
@@ -1730,6 +1767,16 @@ struct cg_dom_fact_state
      reuses oa_contract_field_range_fact/oa_field_key_hash for the same
      reason.  */
   hash_map<cg_field_key_hash, cg_field_fact> call;
+  /* D4324 Commit 3: branch-derived relational facts (param-vs-param,
+     param-vs-call), keyed on a plain SSA name -- the exact same key
+     type established_rel/established_call_rel (the *simple*, self-
+     trust-only pass's own maps) already use, so a fixed-point-converged
+     entry here can later be flattened into a cache of that identical
+     type (see cg_predicate_facts_walk's own comment on why that's
+     sound for these two shapes specifically, unlike call-vs-call, which
+     deliberately has no counterpart field here at all).  */
+  hash_map<tree, cg_rel_fact> rel;
+  hash_map<tree, cg_call_rel_fact> call_rel;
 };
 
 /* An SSA_NAME's own identity is itself; '&decl' resolves to DECL
@@ -2680,6 +2727,12 @@ cg_dom_fact_state_assign (cg_dom_fact_state *dst, const cg_dom_fact_state &src)
   dst->call.empty ();
   for (auto it : src.call)
     dst->call.put (it.first, it.second);
+  dst->rel.empty ();
+  for (auto it : src.rel)
+    dst->rel.put (it.first, it.second);
+  dst->call_rel.empty ();
+  for (auto it : src.call_rel)
+    dst->call_rel.put (it.first, it.second);
 }
 
 /* Agreement-based, mirroring contracts.cc's own oa_env::predicate_
@@ -2738,6 +2791,32 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src)
     }
   for (auto k : call_remove)
     dst->call.remove (k);
+
+  auto_vec<tree> rel_remove;
+  for (auto it : dst->rel)
+    {
+      const cg_rel_fact *ov = src.rel.get (it.first);
+      if (!ov || ov->code != it.second.code || ov->rhs != it.second.rhs
+	  || ov->offset != it.second.offset
+	  || ov->conveyor_established != it.second.conveyor_established)
+	rel_remove.safe_push (it.first);
+    }
+  for (auto t : rel_remove)
+    dst->rel.remove (t);
+
+  auto_vec<tree> call_rel_remove;
+  for (auto it : dst->call_rel)
+    {
+      const cg_call_rel_fact *ov = src.call_rel.get (it.first);
+      if (!ov || ov->code != it.second.code
+	  || ov->rhs_receiver != it.second.rhs_receiver
+	  || ov->rhs_callee != it.second.rhs_callee
+	  || ov->offset != it.second.offset
+	  || ov->conveyor_established != it.second.conveyor_established)
+	call_rel_remove.safe_push (it.first);
+    }
+  for (auto t : call_rel_remove)
+    dst->call_rel.remove (t);
 }
 
 /* The fixed-point loop's own "has anything changed since the last time
@@ -2751,7 +2830,9 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
   if (a.pred.elements () != b.pred.elements ()
       || a.field.elements () != b.field.elements ()
       || a.field_alias.elements () != b.field_alias.elements ()
-      || a.call.elements () != b.call.elements ())
+      || a.call.elements () != b.call.elements ()
+      || a.rel.elements () != b.rel.elements ()
+      || a.call_rel.elements () != b.call_rel.elements ())
     return false;
   for (auto it : a.pred)
     {
@@ -2784,6 +2865,24 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
 	  || ov->range.has_hi != it.second.range.has_hi
 	  || (it.second.range.has_lo && ov->range.lo != it.second.range.lo)
 	  || (it.second.range.has_hi && ov->range.hi != it.second.range.hi)
+	  || ov->conveyor_established != it.second.conveyor_established)
+	return false;
+    }
+  for (auto it : a.rel)
+    {
+      const cg_rel_fact *ov = b.rel.get (it.first);
+      if (!ov || ov->code != it.second.code || ov->rhs != it.second.rhs
+	  || ov->offset != it.second.offset
+	  || ov->conveyor_established != it.second.conveyor_established)
+	return false;
+    }
+  for (auto it : a.call_rel)
+    {
+      const cg_call_rel_fact *ov = b.call_rel.get (it.first);
+      if (!ov || ov->code != it.second.code
+	  || ov->rhs_receiver != it.second.rhs_receiver
+	  || ov->rhs_callee != it.second.rhs_callee
+	  || ov->offset != it.second.offset
 	  || ov->conveyor_established != it.second.conveyor_established)
 	return false;
     }
@@ -2855,6 +2954,93 @@ cg_cond_operand_shape (tree val, bool *is_call, tree *field_out, tree *base_out,
     }
 
   return false;
+}
+
+/* D4324 Commit 3: is VAL a bare formal parameter's own, still-unmodified
+   SSA value -- the GIMPLE-native analogue of contracts.cc's own
+   oa_underlying_param_operand (a bare PARM_DECL, no field/array-slot
+   resolution)? Deliberately narrower than cg_self_trust_key: no
+   TREE_ADDRESSABLE fallback for a not-SSA-tracked parameter, since an
+   operand actually appearing in a GIMPLE_COND is virtually always an
+   SSA name already (it's a value being compared, not an address-taken
+   aggregate) -- matching this file's own "safe, occasionally
+   conservative" discipline rather than chasing full generality.  */
+
+static bool
+cg_cond_is_bare_param (tree val)
+{
+  return TREE_CODE (val) == SSA_NAME
+	 && SSA_NAME_IS_DEFAULT_DEF (val)
+	 && TREE_CODE (SSA_NAME_VAR (val)) == PARM_DECL;
+}
+
+/* D4324 Commit 3: the relational analogue of cg_refine_edge_into's own
+   field/call-range handling immediately below, for when NEITHER side
+   of the (already one-hop-unwrapped) comparison is a literal -- tried
+   specifically because that's exactly the shape neither of that
+   function's own two blocks ever matches. Only two of the three
+   relational shapes (param-vs-param, param-vs-call): see cg_dom_fact_
+   state's own comment on .rel/.call_rel for why call-vs-call
+   deliberately has no counterpart here (its own fact is keyed on an
+   object's identity, not an SSA name, so it can't be safely flattened
+   into scalar_rel_cache/scalar_call_rel_cache the way these two are --
+   see cg_predicate_facts_walk's own comment on that cache).  */
+
+static void
+cg_refine_relational_edge_into (tree lhs, tree rhs, tree_code code,
+				  bool asserted_true, cg_dom_fact_state &state)
+{
+  if (cg_cond_is_bare_param (lhs) && cg_cond_is_bare_param (rhs))
+    {
+      tree_code rel_code = code;
+      if (!asserted_true)
+	switch (rel_code)
+	  {
+	  case LT_EXPR: rel_code = GE_EXPR; break;
+	  case LE_EXPR: rel_code = GT_EXPR; break;
+	  case GT_EXPR: rel_code = LE_EXPR; break;
+	  case GE_EXPR: rel_code = LT_EXPR; break;
+	  default: return; /* NOT(lhs == rhs) -- skip.  */
+	  }
+      state.rel.put (lhs, { rel_code, rhs, 0, true });
+      return;
+    }
+
+  bool lhs_is_param = cg_cond_is_bare_param (lhs);
+  bool rhs_is_param = cg_cond_is_bare_param (rhs);
+  if (!lhs_is_param && !rhs_is_param)
+    return;
+
+  tree param_side = lhs_is_param ? lhs : rhs;
+  tree call_side = lhs_is_param ? rhs : lhs;
+
+  bool is_call;
+  tree field, base, callee, receiver;
+  if (!cg_cond_operand_shape (call_side, &is_call, &field, &base, &callee,
+			       &receiver)
+      || !is_call)
+    return;
+
+  tree_code rel_code = code;
+  if (!lhs_is_param)
+    switch (rel_code)
+      {
+      case LT_EXPR: rel_code = GT_EXPR; break;
+      case LE_EXPR: rel_code = GE_EXPR; break;
+      case GT_EXPR: rel_code = LT_EXPR; break;
+      case GE_EXPR: rel_code = LE_EXPR; break;
+      default: break;
+      }
+  if (!asserted_true)
+    switch (rel_code)
+      {
+      case LT_EXPR: rel_code = GE_EXPR; break;
+      case LE_EXPR: rel_code = GT_EXPR; break;
+      case GT_EXPR: rel_code = LE_EXPR; break;
+      case GE_EXPR: rel_code = LT_EXPR; break;
+      default: return;
+      }
+  state.call_rel.put (param_side, { rel_code, receiver, callee, 0, true });
 }
 
 /* If E is a true/false edge of a GIMPLE_COND matching the field/call-
@@ -2931,7 +3117,10 @@ cg_refine_edge_into (edge e, cg_dom_fact_state &state)
   else if (TREE_CODE (lhs) == INTEGER_CST)
     other = rhs, const_val = lhs, flipped = true;
   else
-    return;
+    {
+      cg_refine_relational_edge_into (lhs, rhs, code, asserted_true, state);
+      return;
+    }
 
   bool is_call;
   tree field, base, callee, receiver;
@@ -3162,7 +3351,9 @@ cg_compose_call_result_range (gcall *call, cg_dom_fact_state &state,
 }
 
 static bool
-cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_range_cache_out)
+cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_range_cache_out,
+			   hash_map<tree, cg_rel_fact> *scalar_rel_cache_out,
+			   hash_map<tree, cg_call_rel_fact> *scalar_call_rel_cache_out)
 {
   int *rpo = XNEWVEC (int, n_basic_blocks_for_fn (fun));
   int rpo_num = pre_and_rev_post_order_compute (NULL, rpo, false);
@@ -3238,6 +3429,34 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 	      changed = true;
 	    }
 	}
+    }
+
+  /* D4324 Commit 3: flatten every block's own, now-fully-converged
+     .rel/.call_rel entries into SCALAR_REL_CACHE_OUT/SCALAR_CALL_REL_
+     CACHE_OUT -- the relational analogue of SCALAR_RANGE_CACHE (see
+     cg_compose_call_result_range's own comment on that one), letting
+     the *other*, simple linear pass's own cg_get_relational/cg_get_
+     call_relational (used by cg_check_call, which has no dominator-
+     tree awareness of its own) see a branch-derived fact, not just a
+     self-trust-established one. Sound to flatten into one, function-
+     wide, non-per-block map for exactly the same reason SCALAR_RANGE_
+     CACHE already is: both maps here are keyed on a plain SSA name, and
+     an SSA name's own value is permanent once defined, so a fact
+     established for it by whichever branch dominates its later uses
+     remains valid at every one of them -- unlike .field/.call
+     (object-identity-keyed, where a later mutation can invalidate an
+     earlier fact), which is exactly why call-vs-call has no flattened
+     cache of its own here (see cg_dom_fact_state's own comment). Each
+     SSA name is defined in exactly one place, so iterating every
+     block's own final OUT-state and unioning their .rel/.call_rel
+     entries can never see two genuinely conflicting facts for the same
+     key.  */
+  for (auto it : block_out)
+    {
+      for (auto rel_it : it.second->rel)
+	scalar_rel_cache_out->put (rel_it.first, rel_it.second);
+      for (auto call_rel_it : it.second->call_rel)
+	scalar_call_rel_cache_out->put (call_rel_it.first, call_rel_it.second);
     }
 
   /* Final pass, over the now-stable BLOCK_OUT: re-derive each block's
@@ -3334,7 +3553,17 @@ pass_contracts_gimple::execute (function *fun)
      literal-bounded postcondition's own item 6 already answers from
      ESTABLISHED_RANGE alone.  */
   hash_map<tree, cg_range_lite> scalar_range_cache;
-  cg_predicate_facts_walk (fun, &scalar_range_cache);
+  /* D4324 Commit 3: SCALAR_REL_CACHE/SCALAR_CALL_REL_CACHE -- the
+     relational analogue of SCALAR_RANGE_CACHE just above, letting a
+     branch-derived param-vs-param/param-vs-call fact (cg_predicate_
+     facts_walk's own cg_refine_edge_into, dominator-tracked) be seen by
+     this function's own simple, self-trust-only established_rel/
+     established_call_rel below -- see cg_predicate_facts_walk's own
+     comment on why flattening is sound for these two shapes.  */
+  hash_map<tree, cg_rel_fact> scalar_rel_cache;
+  hash_map<tree, cg_call_rel_fact> scalar_call_rel_cache;
+  cg_predicate_facts_walk (fun, &scalar_range_cache, &scalar_rel_cache,
+			     &scalar_call_rel_cache);
 
   hash_map<tree, cg_fact> established;
   hash_map<tree, cg_fact> established_nz;
@@ -3359,7 +3588,8 @@ pass_contracts_gimple::execute (function *fun)
 	  cg_check_call (as_a <gcall *> (stmt), established, established_nz,
 			 established_range, established_rel,
 			 established_call_rel, established_call_call_rel,
-			 scalar_range_cache, ranger);
+			 scalar_range_cache, scalar_rel_cache,
+			 scalar_call_rel_cache, ranger);
       }
 
   disable_ranger (fun);

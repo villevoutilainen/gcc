@@ -8252,6 +8252,95 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
       }
   }
 
+  /* D4324 Commit 3: the same if-condition establishment just above,
+     generalized to the three relational shapes -- previously these
+     were only ever established from a declared pre<>, never from
+     ordinary control flow (see oa_env_check_relational_fact_1's own
+     comment on why 'i < v.size ()' proven this way is exactly as
+     trustworthy as a real conveyor contract's own fact). Overwrite, not
+     tighten, unlike the two numeric blocks above: there's no numeric
+     range to combine for a symbolic RHS, the same way self-trust
+     establishment (contracts.cc's own precondition-establishing loop)
+     already just overwrites. Tried in this order because each matcher
+     is mutually exclusive with the other two by construction (bare-
+     param-vs-bare-param, bare-param-vs-call, call-vs-call can never
+     all match the same conjunct), so relative order among these three
+     doesn't affect correctness.  */
+  {
+    tree param, other;
+    tree_code rel_code;
+    if (oa_match_comparison_against_param (conjunct, &param, &rel_code, &other))
+      {
+	if (!asserted_true)
+	  switch (rel_code)
+	    {
+	    case LT_EXPR: rel_code = GE_EXPR; break;
+	    case LE_EXPR: rel_code = GT_EXPR; break;
+	    case GT_EXPR: rel_code = LE_EXPR; break;
+	    case GE_EXPR: rel_code = LT_EXPR; break;
+	    default: return; /* NOT(param == other) -- skip.  */
+	    }
+	env.relational_set (param, rel_code, other, /*conveyor_established=*/true);
+	return;
+      }
+  }
+
+  {
+    tree param, rhs_receiver, rhs_callee;
+    tree_code rel_code;
+    if (oa_match_comparison_against_call (conjunct, &param, &rel_code,
+					    &rhs_receiver, &rhs_callee))
+      {
+	if (!asserted_true)
+	  switch (rel_code)
+	    {
+	    case LT_EXPR: rel_code = GE_EXPR; break;
+	    case LE_EXPR: rel_code = GT_EXPR; break;
+	    case GT_EXPR: rel_code = LE_EXPR; break;
+	    case GE_EXPR: rel_code = LT_EXPR; break;
+	    default: return;
+	    }
+	env.call_relational_set (param, rel_code, rhs_receiver, rhs_callee,
+				   /*conveyor_established=*/true);
+	return;
+      }
+  }
+
+  {
+    tree lhs_receiver, lhs_callee, rhs_receiver, rhs_callee;
+    tree_code call_code;
+    if (oa_match_call_against_call (conjunct, &lhs_receiver, &lhs_callee,
+				      &call_code, &rhs_receiver, &rhs_callee))
+      {
+	/* Only the three-function chain self-trust establishment already
+	   uses (contracts.cc:12889's own establishment loop), not the
+	   four-function chain the consult side needs -- matching that
+	   loop's own scope exactly, the same asymmetry the pre-existing
+	   field-range/call-range establishment-vs-consult pair already
+	   has.  */
+	tree identity;
+	if (oa_object_identity_decl (lhs_receiver, &identity)
+	    || oa_field_slot_identity (lhs_receiver, env, &identity)
+	    || oa_array_slot_identity (lhs_receiver, env, &identity))
+	  {
+	    identity = env.alias_find (identity);
+	    if (!asserted_true)
+	      switch (call_code)
+		{
+		case LT_EXPR: call_code = GE_EXPR; break;
+		case LE_EXPR: call_code = GT_EXPR; break;
+		case GT_EXPR: call_code = LE_EXPR; break;
+		case GE_EXPR: call_code = LT_EXPR; break;
+		default: return;
+		}
+	    env.call_call_relational_set (identity, lhs_callee, call_code,
+					    rhs_receiver, rhs_callee,
+					    /*conveyor_established=*/true);
+	  }
+	return;
+      }
+  }
+
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
   while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
     c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
