@@ -15345,7 +15345,24 @@ cp_parser_selection_statement (cp_parser* parser, bool *if_p,
 	  }
 
 	/* Parse the condition.  */
-	condition = cp_parser_condition (parser, keyword);
+	{
+	  /* D4324: for 'if constexpr' specifically (not an ordinary,
+	     possibly side-effecting runtime 'if'/'switch'), this builds
+	     (and, for a call whose arguments don't depend on any
+	     enclosing template parameter, immediately checks) any call in
+	     the condition via the ordinary call-building machinery --
+	     reachable even outside template instantiation, whenever the
+	     condition itself doesn't depend on a template parameter, so
+	     pt.cc's tsubst_expr IF_STMT case (which covers the dependent
+	     case, substituted later) never runs for it at all.  See
+	     suppress_conveyor_restrictions_for_converted_constant_expr_p's
+	     own comment in contracts.h for why an 'if constexpr' condition
+	     -- always a manifestly constant expression -- has nothing here
+	     for that check to catch regardless.  */
+	  suppress_conveyor_restrictions_for_converted_constant_expr_sentinel
+	    sccce (cx);
+	  condition = cp_parser_condition (parser, keyword);
+	}
 	/* Look for the `)'.  */
 	if (!parens.require_close (parser))
 	  cp_parser_skip_to_closing_parenthesis (parser, true, false,

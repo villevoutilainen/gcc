@@ -20238,6 +20238,16 @@ tsubst_stmt (tree t, tree args, tsubst_flags_t complain, tree in_decl)
       {
 	tree cond = IF_COND (t);
 	bool was_dep = dependent_operand_p (cond);
+	/* D4324: substituting COND here rebuilds any call in it via the
+	   ordinary call-building machinery -- the same callee-must-be-
+	   conveyor check finish_if_stmt_cond's own later cxx_constant_value
+	   call is meant to be exempt from, for an 'if constexpr' condition,
+	   but reached here first, before that exemption is established.
+	   See suppress_conveyor_restrictions_for_converted_constant_expr_p's
+	   own comment in contracts.h; only 'if constexpr' (not an ordinary,
+	   possibly side-effecting runtime 'if') gets this exemption.  */
+	suppress_conveyor_restrictions_for_converted_constant_expr_sentinel
+	  sccce (IF_STMT_CONSTEXPR_P (t));
 	cond = RECUR (cond);
 	warning_sentinel s1(warn_address, was_dep);
 	tmp = finish_if_stmt_cond (cond, stmt);
