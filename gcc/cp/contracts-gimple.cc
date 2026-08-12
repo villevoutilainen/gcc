@@ -383,6 +383,7 @@ cg_resolve_call_argument (gcall *call, unsigned argno)
 
 static bool
 cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_range,
+			  hash_map<tree, cg_range_lite> &scalar_range_cache,
 			  gimple_ranger *ranger, bool require_conveyor,
 			  bool require_symbolic, cg_range_lite *out)
 {
@@ -408,6 +409,11 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
 	  *out = *found;
 	  return true;
 	}
+      if (cg_range_lite *found = scalar_range_cache.get (val))
+	{
+	  *out = *found;
+	  return true;
+	}
       return false;
     }
 
@@ -415,6 +421,18 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
     return false;
 
   if (cg_range_lite *found = established_range.get (val))
+    {
+      *out = *found;
+      return true;
+    }
+  /* SCALAR_RANGE_CACHE: a postcondition relating its own return value
+     to a call-range-eligible accessor (e.g. 'post<ctrl>(r: r < this->
+     size ())'), already resolved once, for this exact call, by cg_
+     predicate_facts_walk's own cg_compose_call_result_range -- see that
+     function's own comment for why this needs a separate cache from
+     ESTABLISHED_RANGE (a different pass's own dominator-tracked state
+     feeds it) and why a flat, non-recursive lookup is sound here.  */
+  if (cg_range_lite *found = scalar_range_cache.get (val))
     {
       *out = *found;
       return true;
@@ -433,7 +451,8 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
 	 applies at the AST level.  */
       tree receiver = cg_resolve_conversion_receiver (val);
       if (receiver != val
-	  && cg_established_range_of (receiver, established_range, ranger,
+	  && cg_established_range_of (receiver, established_range,
+				       scalar_range_cache, ranger,
 				       require_conveyor, require_symbolic, out))
 	return true;
     }
@@ -442,8 +461,8 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
       enum tree_code code = gimple_assign_rhs_code (def);
       if ((CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
 	  && cg_established_range_of (gimple_assign_rhs1 (def), established_range,
-				       ranger, require_conveyor, require_symbolic,
-				       out))
+				       scalar_range_cache, ranger, require_conveyor,
+				       require_symbolic, out))
 	return true;
     }
 
@@ -1196,6 +1215,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		hash_map<tree, cg_range_lite> &established_range,
 		hash_map<tree, cg_rel_fact> &established_rel,
 		hash_map<tree, cg_call_rel_fact> &established_call_rel,
+		hash_map<tree, cg_range_lite> &scalar_range_cache,
 		gimple_ranger *ranger)
 {
   tree callee = gimple_call_fndecl (call);
@@ -1402,7 +1422,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 
 	  cg_range_lite established_r;
 	  if (cg_established_range_of (substituted, established_range,
-					ranger, check_as_conveyor,
+					scalar_range_cache, ranger,
+					check_as_conveyor,
 					check_as_symbolic, &established_r)
 	      && (!required.has_lo
 		  || (established_r.has_lo && established_r.lo >= required.lo))
@@ -2755,8 +2776,139 @@ cg_compute_in_state (basic_block bb,
     cg_dom_fact_state_assign (in_state, seed);
 }
 
+/* GIMPLE analogue of contracts.cc's own postcondition-side call-range
+   composition (oa_call_postcondition_range_p's own extension, see that
+   function's comment for the full rationale and the composition math
+   this mirrors exactly): if CALL's callee has a postcondition relating
+   its own return value to a call-range-eligible accessor call on one of
+   its own parameters (e.g. 'post<ctrl>(r: r < this->size ())'), and
+   STATE already has an established call-range fact for the substituted
+   receiver, derive a concrete range for CALL's own result and record it
+   in SCALAR_RANGE_CACHE, keyed on CALL's own LHS.
+
+   Structurally new plumbing, not a mirror of an existing GIMPLE
+   mechanism: field/call-range facts (STATE.call) live only in this
+   file's own dominator-tree fixed-point walk (branch-sensitive
+   tracking, needed for the GIMPLE_COND edge refinement above), while
+   the scalar-range facts a literal-bounded postcondition already
+   produces (cg_established_range_of/cg_call_postcondition_range_p)
+   live in pass_contracts_gimple::execute's own separate, simple linear
+   pass -- the two never previously shared state. SCALAR_RANGE_CACHE
+   bridges them: computed once here, using this (now-stable, final-pass)
+   dominator-tracked STATE, and consulted from the *other*, simple pass
+   by cg_established_range_of (see pass_contracts_gimple::execute's own
+   comment on why it now runs cg_predicate_facts_walk first). Sound to
+   share as a single, flat, function-wide cache despite living outside
+   cg_dom_fact_state's own per-block machinery: unlike a mutable
+   object's field/call state, an SSA name's own value is permanent for
+   its whole lifetime once defined (the same reasoning that already
+   lets established_range itself be a single, non-per-block map), and
+   this is only ever computed once, in this walk's final, fully-
+   converged pass -- never during the fixed-point computation above,
+   where STATE.call could still be mid-convergence.
+
+   Called from this same call's own consult step, *before* its own
+   argument invalidation (cg_invalidate_persistent_facts_for_call_args)
+   -- unlike contracts.cc's own equivalent composition, which runs from
+   inside oa_get_range, itself reached only *after* the assignment's own
+   RHS call has already had its own arguments invalidated (a real,
+   documented limitation there: see oa_call_postcondition_range_p's own
+   comment). Ordering it this way here avoids that same self-
+   invalidation entirely for the GIMPLE side: this call's own receiver
+   argument's own established facts are still exactly as the *caller*
+   left them when this composition runs.  */
+
+static void
+cg_compose_call_result_range (gcall *call, cg_dom_fact_state &state,
+				hash_map<tree, cg_range_lite> &scalar_range_cache)
+{
+  tree lhs = gimple_call_lhs (call);
+  if (!lhs)
+    return;
+  tree callee = gimple_call_fndecl (call);
+  if (!callee)
+    return;
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      if (!oa_contract_conveyor_active_cached_p (contract))
+	continue;
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      if (!result_id)
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree_code rcode;
+	  tree rhs_receiver, rhs_callee;
+	  if (!oa_match_result_call_relation (*conjuncts[i], result_id, &rcode,
+					       &rhs_receiver, &rhs_callee)
+	      || TREE_CODE (rhs_receiver) != PARM_DECL)
+	    continue;
+
+	  unsigned argno;
+	  if (!cg_find_param_position (callee, rhs_receiver, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree substituted = cg_resolve_call_argument (call, argno);
+	  tree identity = cg_gimple_object_identity (substituted);
+	  if (!identity)
+	    continue;
+
+	  cg_field_fact *established = state.call.get ({identity, rhs_callee});
+	  if (!established)
+	    continue;
+
+	  cg_range_lite &derived = established->range;
+	  cg_range_lite refined;
+	  if (cg_range_lite *existing = scalar_range_cache.get (lhs))
+	    refined = *existing;
+
+	  switch (rcode)
+	    {
+	    case LT_EXPR:
+	      if (derived.has_hi
+		  && (!refined.has_hi || derived.hi - 1 < refined.hi))
+		{ refined.has_hi = true; refined.hi = derived.hi - 1; }
+	      break;
+	    case LE_EXPR:
+	      if (derived.has_hi && (!refined.has_hi || derived.hi < refined.hi))
+		{ refined.has_hi = true; refined.hi = derived.hi; }
+	      break;
+	    case GT_EXPR:
+	      if (derived.has_lo
+		  && (!refined.has_lo || derived.lo + 1 > refined.lo))
+		{ refined.has_lo = true; refined.lo = derived.lo + 1; }
+	      break;
+	    case GE_EXPR:
+	      if (derived.has_lo && (!refined.has_lo || derived.lo > refined.lo))
+		{ refined.has_lo = true; refined.lo = derived.lo; }
+	      break;
+	    case EQ_EXPR:
+	      if (derived.has_lo && (!refined.has_lo || derived.lo > refined.lo))
+		{ refined.has_lo = true; refined.lo = derived.lo; }
+	      if (derived.has_hi && (!refined.has_hi || derived.hi < refined.hi))
+		{ refined.has_hi = true; refined.hi = derived.hi; }
+	      break;
+	    default:
+	      break;
+	    }
+	  if (refined.has_lo || refined.has_hi)
+	    scalar_range_cache.put (lhs, refined);
+	}
+    }
+}
+
 static bool
-cg_predicate_facts_walk (function *fun)
+cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_range_cache_out)
 {
   int *rpo = XNEWVEC (int, n_basic_blocks_for_fn (fun));
   int rpo_num = pre_and_rev_post_order_compute (NULL, rpo, false);
@@ -2855,6 +3007,11 @@ cg_predicate_facts_walk (function *fun)
 	    {
 	      gcall *call = as_a <gcall *> (stmt);
 	      cg_consult_persistent_facts (call, field_object_cache, state);
+	      /* Before this same call's own argument invalidation just
+		 below, so it sees the receiver's facts exactly as the
+		 caller left them -- see cg_compose_call_result_range's
+		 own comment.  */
+	      cg_compose_call_result_range (call, state, *scalar_range_cache_out);
 	      if (gimple_call_lhs (call))
 		cg_process_field_write (gimple_call_lhs (call), NULL_TREE, fun,
 					 field_object_cache, state);
@@ -2906,6 +3063,25 @@ public:
 unsigned int
 pass_contracts_gimple::execute (function *fun)
 {
+  /* Named-predicate and field/call-range facts get their own, separate
+     fixed-point RPO walk (see cg_predicate_facts_walk's own comment)
+     rather than folding into the FOR_EACH_BB_FN loop below: that loop's
+     own fact shapes are consulted using a single, function-wide
+     ESTABLISHED set/map (correct for them, since a backward SSA walk
+     needs no block-order-sensitive state at all), whereas these are
+     inherently per-program-point and need genuine per-block dataflow.
+
+     Run *first*, not after: SCALAR_RANGE_CACHE is this walk's own
+     output (see cg_compose_call_result_range's own comment) -- a
+     postcondition relating a return value to a call-range-eligible
+     accessor (needing this walk's own STATE.call) is resolved here and
+     fed into the loop below's own cg_established_range_of, the same
+     "look up this SSA name's own established range" query an ordinary
+     literal-bounded postcondition's own item 6 already answers from
+     ESTABLISHED_RANGE alone.  */
+  hash_map<tree, cg_range_lite> scalar_range_cache;
+  cg_predicate_facts_walk (fun, &scalar_range_cache);
+
   hash_map<tree, cg_fact> established;
   hash_map<tree, cg_fact> established_nz;
   hash_map<tree, cg_range_lite> established_range;
@@ -2925,21 +3101,11 @@ pass_contracts_gimple::execute (function *fun)
 	gimple *stmt = gsi_stmt (gsi);
 	if (is_gimple_call (stmt))
 	  cg_check_call (as_a <gcall *> (stmt), established, established_nz,
-			 established_range, established_rel, established_call_rel,
-			 ranger);
+			 established_range, established_rel,
+			 established_call_rel, scalar_range_cache, ranger);
       }
 
   disable_ranger (fun);
-
-  /* Named-predicate and field-range facts get their own, separate
-     fixed-point RPO walk (see cg_predicate_facts_walk's own comment)
-     rather than folding into the FOR_EACH_BB_FN loop above: that
-     loop's own three fact shapes are consulted using a single,
-     function-wide ESTABLISHED set/map (correct for them, since a
-     backward SSA walk needs no block-order-sensitive state at all),
-     whereas these two are inherently per-program-point and need
-     genuine per-block dataflow.  */
-  cg_predicate_facts_walk (fun);
 
   return 0;
 }

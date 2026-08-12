@@ -6816,7 +6816,7 @@ static bool oa_resolve_iile_call (tree call, oa_env &env);
    unlike item 7's complementary precondition-*obligation* direction.  */
 static bool oa_call_postcondition_object_address_p (tree call);
 static bool oa_call_postcondition_nonzero_p (tree call);
-static bool oa_call_postcondition_range_p (tree call, oa_range_fact *out,
+static bool oa_call_postcondition_range_p (tree call, oa_env &env, oa_range_fact *out,
 					    oa_derivation **deriv_out = NULL);
 
 /* -fcontract-symbolic-runtime-checks (Mechanism B): gates every codegen-
@@ -7829,7 +7829,7 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 
   /* Item 6: an ordinary call whose callee's own non-ignored, conveyor
      postcondition(s) imply a value range for its result identifier.  */
-  if (TREE_CODE (expr) == CALL_EXPR && oa_call_postcondition_range_p (expr, out))
+  if (TREE_CODE (expr) == CALL_EXPR && oa_call_postcondition_range_p (expr, env, out))
     return true;
 
   return false;
@@ -9801,6 +9801,16 @@ static bool oa_underlying_call_range_operand
    range_p above that point in the file needs it here.  Exported (not
    static), like oa_match_result_relation itself, so contracts-gimple.cc
    can reuse it for its own postcondition-range composition.  */
+bool oa_match_result_call_relation
+  (tree conjunct, tree result_id, tree_code *code_out,
+   tree *rhs_receiver_out, tree *rhs_callee_out);
+
+/* Forward-declared: full definition is much further below (it needs
+   oa_match_result_call_relation immediately above), but oa_walk_stmt's
+   own INIT_EXPR/MODIFY_EXPR case needs it here, well before that
+   point.  */
+static bool oa_compose_call_result_range (tree lhs, tree rhs, oa_env &env);
+
 /* -fcontract-symbolic-proofs: one (FIELD, PTR_EXPR) pair's own combined
    range, as written in a single contract's own condition -- e.g.
    'this->count >= 0 && this->count < 100' combines into one RANGE for
@@ -11167,7 +11177,7 @@ oa_call_postcondition_nonzero_p (tree call)
    happens when provenance tracking is explicitly requested.  */
 
 static bool
-oa_call_postcondition_range_p (tree call, oa_range_fact *out,
+oa_call_postcondition_range_p (tree call, oa_env &env, oa_range_fact *out,
 				oa_derivation **deriv_out)
 {
   tree callee = cp_get_callee_fndecl_nofold (call);
@@ -11202,6 +11212,112 @@ oa_call_postcondition_range_p (tree call, oa_range_fact *out,
       oa_collect_conjuncts (&cond, &conjuncts);
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	oa_refine_single_comparison (*conjuncts[i], scratch, /*asserted_true=*/true);
+
+      /* 'post<ctrl>(r: r < this->size ())' -- RESULT_ID related to a
+	 call rather than a literal, so there's nothing for the plain
+	 refinement above to resolve on its own (this->size () is not a
+	 known point). Compose with the *caller's* own already-
+	 established call-range fact for the substituted receiver
+	 instead: if the caller already knows 'v.size ()' is in
+	 [lo, hi], and the postcondition says 'r < this->size ()', the
+	 call's own result is therefore in (-inf, hi - 1].  Only ever
+	 tightens SCRATCH's existing result_id fact (never overwrites
+	 it), so a literal-bounded conjunct on the same result_id
+	 combines correctly with this one, same as everywhere else in
+	 this file.
+
+	 Ordering hazard, found via direct testing: CALL is itself the
+	 statement that exposes its own receiver, so if this function is
+	 reached lazily -- via oa_get_range, itself only ever called
+	 *after* oa_scan_calls_in_expr has already invalidated this same
+	 call's own exposed arguments (INIT_EXPR/MODIFY_EXPR's own
+	 handling) -- any fact the caller established about that same
+	 receiver *earlier* is already gone by the time this composition
+	 runs (confirmed: this alone never fires for 'if (v.size () > 3)
+	 { int y = f (v); ... }'). Not a bug in the composition itself:
+	 it's the same "a call's own exposure of its receiver invalidates
+	 facts about that receiver, unconditionally, before this same
+	 call's own effects are computed" rule already applied throughout
+	 this file -- this is simply the first item-6 shape whose own
+	 composition needs a fact about one of the *current* call's own
+	 arguments (the literal and param-relation shapes above never
+	 needed one). Fixed not by reordering oa_scan_calls_in_expr's own
+	 shared, foundational invalidate/compute steps (which every other
+	 feature in this file also depends on), but by also calling this
+	 same composition *eagerly*, from oa_walk_stmt's own INIT_EXPR/
+	 MODIFY_EXPR case, before that same invalidation runs -- see oa_
+	 compose_call_result_range below, and contracts-gimple.cc's own
+	 cg_compose_call_result_range, which fixes the identical ordering
+	 problem the identical way on the GIMPLE side. This lazy path
+	 (oa_get_range/here) remains as the correct fallback for every
+	 context that isn't a direct 'lhs = call(...)' assignment (e.g. a
+	 call's return value used directly in a larger expression), where
+	 there is no "eager, pre-invalidation" moment to hook into to
+	 begin with, and for the case oa_compose_call_result_range's own
+	 comment describes: a fact established by something *other* than
+	 CALL's own exposure of the same receiver.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree_code rcode;
+	  tree rhs_receiver, rhs_callee;
+	  if (!oa_match_result_call_relation (*conjuncts[i], result_id, &rcode,
+					       &rhs_receiver, &rhs_callee)
+	      || TREE_CODE (rhs_receiver) != PARM_DECL)
+	    continue;
+	  tree sub_receiver = oa_substitute_call_arg (callee, call, rhs_receiver);
+	  if (!sub_receiver)
+	    continue;
+	  sub_receiver = oa_strip_conversion_call (sub_receiver);
+	  tree identity;
+	  if (!oa_object_identity_decl (sub_receiver, &identity)
+	      && !oa_field_slot_identity (sub_receiver, env, &identity)
+	      && !oa_array_slot_identity (sub_receiver, env, &identity)
+	      && !oa_field_object_identity (sub_receiver, env, &identity))
+	    continue;
+	  identity = env.alias_find (identity);
+	  oa_contract_field_range_fact established;
+	  if (!env.contract_call_range_get (identity, rhs_callee, &established))
+	    continue;
+
+	  oa_range_fact &derived = established.range;
+	  oa_range_fact refined;
+	  if (!scratch.range_get (result_id, &refined))
+	    {
+	      refined.base = NULL_TREE;
+	      refined.has_lo = refined.has_hi = false;
+	    }
+	  switch (rcode)
+	    {
+	    case LT_EXPR:
+	      if (derived.has_hi
+		  && (!refined.has_hi || derived.hi - 1 < refined.hi))
+		{ refined.has_hi = true; refined.hi = derived.hi - 1; }
+	      break;
+	    case LE_EXPR:
+	      if (derived.has_hi && (!refined.has_hi || derived.hi < refined.hi))
+		{ refined.has_hi = true; refined.hi = derived.hi; }
+	      break;
+	    case GT_EXPR:
+	      if (derived.has_lo
+		  && (!refined.has_lo || derived.lo + 1 > refined.lo))
+		{ refined.has_lo = true; refined.lo = derived.lo + 1; }
+	      break;
+	    case GE_EXPR:
+	      if (derived.has_lo && (!refined.has_lo || derived.lo > refined.lo))
+		{ refined.has_lo = true; refined.lo = derived.lo; }
+	      break;
+	    case EQ_EXPR:
+	      if (derived.has_lo && (!refined.has_lo || derived.lo > refined.lo))
+		{ refined.has_lo = true; refined.lo = derived.lo; }
+	      if (derived.has_hi && (!refined.has_hi || derived.hi < refined.hi))
+		{ refined.has_hi = true; refined.hi = derived.hi; }
+	      break;
+	    default:
+	      break;
+	    }
+	  if (refined.has_lo || refined.has_hi)
+	    scratch.range_set (result_id, refined);
+	}
     }
   if (!any || !result_id)
     return false;
@@ -12199,7 +12315,7 @@ oa_get_range_derivation (tree expr, oa_env &env)
     {
       oa_range_fact fact;
       oa_derivation *deriv = NULL;
-      oa_call_postcondition_range_p (expr, &fact, &deriv);
+      oa_call_postcondition_range_p (expr, env, &fact, &deriv);
       return deriv;
     }
 
@@ -14146,6 +14262,22 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   or what some other call's arguments may have just changed.  */
 	tree pre_extra = NULL_TREE;
 	tree post_extra = NULL_TREE;
+	/* Postcondition-side call-range composition (see oa_call_
+	   postcondition_range_p's own comment on this exact ordering
+	   problem, and contracts-gimple.cc's own cg_compose_call_result_
+	   range, whose fix this mirrors): if RHS is a direct call whose
+	   callee's own postcondition relates its return value to a call-
+	   range-eligible accessor on one of its own parameters, compose
+	   *now*, before oa_scan_calls_in_expr below invalidates this same
+	   call's own exposed receiver. EAGER_RANGE_COMPOSED gates the
+	   ordinary oa_get_range-based assignment handling much further
+	   below (which runs after invalidation, and so can no longer see
+	   the fact this composition needs) -- that handling's own "found
+	   nothing, invalidate LHS" branch must not blindly wipe what this
+	   already set, or this composition would be nullified immediately
+	   after running (found via direct testing: without this, LHS's
+	   own range came back exactly as if this call never happened).  */
+	bool eager_range_composed = oa_compose_call_result_range (lhs, rhs, env);
 	/* The RHS commonly flows directly from a call (e.g.
 	   'int* q = deref(p);') -- discharge any call-site precondition
 	   obligation (item 7) for every call reached from here, for the
@@ -14411,11 +14543,16 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    /* Item 8's narrow "provably nonzero" tracking, parallel to the
 	       pointer tracking above.  */
 	    env.nz_set (lhs, oa_provably_nonzero_p (rhs, env));
-	    /* Increment E1's value-range tracking, parallel again.  */
+	    /* Increment E1's value-range tracking, parallel again.  EAGER_
+	       RANGE_COMPOSED: don't blindly wipe what oa_compose_call_
+	       result_range already set further up this same case, on the
+	       same LHS, from a fact this call's own argument invalidation
+	       (already run by now) has since dropped -- see that call's
+	       own comment.  */
 	    oa_range_fact fact;
 	    if (oa_get_range (rhs, env, &fact))
 	      env.range_set (lhs, fact);
-	    else
+	    else if (!eager_range_composed)
 	      env.range_invalidate (lhs);
 	    /* Item 6 for relational facts -- see oa_establish_relational_
 	       from_call's own comment.  No else-invalidate needed here:
@@ -15400,6 +15537,179 @@ oa_match_result_relation (tree conjunct, tree result_id, tree_code *code_out,
   *code_out = code;
   *other_out = other;
   return true;
+}
+
+/* The call analogue of oa_match_result_relation immediately above:
+   "RESULT_ID OP RECEIVER.CALLEE ()" (e.g. 'post<ctrl>(r: r < this->
+   size ())'), where CALLEE is a DECL_DECLARED_CONVEYOR_P accessor
+   rather than another of the postcondition-owning function's own
+   parameters.  Used by oa_call_postcondition_range_p to compose a
+   concrete range for a call's own result from the *caller's* own
+   already-established call-range fact for the substituted receiver --
+   see that function's own comment for the composition itself.  */
+
+bool
+oa_match_result_call_relation (tree conjunct, tree result_id, tree_code *code_out,
+				 tree *rhs_receiver_out, tree *rhs_callee_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  enum tree_code code = TREE_CODE (c);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return false;
+
+  tree op0 = oa_strip_to_relational_operand (TREE_OPERAND (c, 0));
+  tree op1 = oa_strip_to_relational_operand (TREE_OPERAND (c, 1));
+
+  tree receiver, callee;
+  bool flipped;
+  if (op0 == result_id
+      && oa_underlying_call_range_operand (op1, &receiver, &callee))
+    flipped = false;
+  else if (op1 == result_id
+	   && oa_underlying_call_range_operand (op0, &receiver, &callee))
+    flipped = true;
+  else
+    return false;
+
+  if (flipped)
+    switch (code)
+      {
+      case LT_EXPR: code = GT_EXPR; break;
+      case LE_EXPR: code = GE_EXPR; break;
+      case GT_EXPR: code = LT_EXPR; break;
+      case GE_EXPR: code = LE_EXPR; break;
+      default: break;
+      }
+
+  *code_out = code;
+  *rhs_receiver_out = receiver;
+  *rhs_callee_out = callee;
+  return true;
+}
+
+/* Eager counterpart of oa_call_postcondition_range_p's own call-range
+   composition block: called from oa_walk_stmt's own INIT_EXPR/
+   MODIFY_EXPR case, *before* oa_scan_calls_in_expr invalidates RHS's
+   own exposed arguments, so LHS's range can still be composed from a
+   fact oa_scan_calls_in_expr's own invalidation step is about to drop
+   -- see oa_call_postcondition_range_p's own comment for the ordering
+   problem this fixes, and contracts-gimple.cc's own cg_compose_call_
+   result_range, which fixes the identical problem the identical way on
+   the GIMPLE side. Sets ENV's own range for LHS directly and returns
+   true when it does, so the caller (the ordinary, lazy oa_get_range-
+   based assignment handling further down the same case, which by then
+   finds nothing through oa_get_range -- the fact is gone) knows not to
+   unconditionally invalidate LHS the way it otherwise would on "found
+   nothing": found via direct testing that skipping this return value
+   entirely (assuming "nothing else uses this fact, so nothing can
+   clobber it") is wrong -- that unconditional invalidate immediately
+   wipes what this function just set, the same statement, before
+   control ever leaves oa_walk_stmt's own INIT_EXPR/MODIFY_EXPR case.
+   Returns false (a no-op) for every other shape RHS could have (not a
+   direct call, or a call whose postcondition doesn't use this exact
+   shape) -- always safe to call unconditionally.  */
+
+static bool
+oa_compose_call_result_range (tree lhs, tree rhs, oa_env &env)
+{
+  rhs = STRIP_ANY_LOCATION_WRAPPER (rhs);
+  if (TREE_CODE (rhs) != CALL_EXPR)
+    return false;
+  tree callee = cp_get_callee_fndecl_nofold (rhs);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return false;
+  lhs = STRIP_ANY_LOCATION_WRAPPER (lhs);
+  if (!VAR_P (lhs) && TREE_CODE (lhs) != PARM_DECL)
+    return false;
+
+  bool composed = false;
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      if (!oa_contract_conveyor_active_p (contract, callee))
+	continue;
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      if (!result_id)
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree_code rcode;
+	  tree rhs_receiver, rhs_callee;
+	  if (!oa_match_result_call_relation (*conjuncts[i], result_id, &rcode,
+					       &rhs_receiver, &rhs_callee)
+	      || TREE_CODE (rhs_receiver) != PARM_DECL)
+	    continue;
+	  tree sub_receiver = oa_substitute_call_arg (callee, rhs, rhs_receiver);
+	  if (!sub_receiver)
+	    continue;
+	  sub_receiver = oa_strip_conversion_call (sub_receiver);
+	  tree identity;
+	  if (!oa_object_identity_decl (sub_receiver, &identity)
+	      && !oa_field_slot_identity (sub_receiver, env, &identity)
+	      && !oa_array_slot_identity (sub_receiver, env, &identity)
+	      && !oa_field_object_identity (sub_receiver, env, &identity))
+	    continue;
+	  identity = env.alias_find (identity);
+	  oa_contract_field_range_fact established;
+	  if (!env.contract_call_range_get (identity, rhs_callee, &established))
+	    continue;
+
+	  oa_range_fact &derived = established.range;
+	  oa_range_fact refined;
+	  if (!env.range_get (lhs, &refined))
+	    {
+	      refined.base = NULL_TREE;
+	      refined.has_lo = refined.has_hi = false;
+	    }
+	  switch (rcode)
+	    {
+	    case LT_EXPR:
+	      if (derived.has_hi
+		  && (!refined.has_hi || derived.hi - 1 < refined.hi))
+		{ refined.has_hi = true; refined.hi = derived.hi - 1; }
+	      break;
+	    case LE_EXPR:
+	      if (derived.has_hi && (!refined.has_hi || derived.hi < refined.hi))
+		{ refined.has_hi = true; refined.hi = derived.hi; }
+	      break;
+	    case GT_EXPR:
+	      if (derived.has_lo
+		  && (!refined.has_lo || derived.lo + 1 > refined.lo))
+		{ refined.has_lo = true; refined.lo = derived.lo + 1; }
+	      break;
+	    case GE_EXPR:
+	      if (derived.has_lo && (!refined.has_lo || derived.lo > refined.lo))
+		{ refined.has_lo = true; refined.lo = derived.lo; }
+	      break;
+	    case EQ_EXPR:
+	      if (derived.has_lo && (!refined.has_lo || derived.lo > refined.lo))
+		{ refined.has_lo = true; refined.lo = derived.lo; }
+	      if (derived.has_hi && (!refined.has_hi || derived.hi < refined.hi))
+		{ refined.has_hi = true; refined.hi = derived.hi; }
+	      break;
+	    default:
+	      break;
+	    }
+	  if (refined.has_lo || refined.has_hi)
+	    {
+	      env.range_set (lhs, refined);
+	      composed = true;
+	    }
+	}
+    }
+  return composed;
 }
 
 /* Item 6 for relational facts, the establish side: if RHS is (after
