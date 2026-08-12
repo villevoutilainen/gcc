@@ -5462,22 +5462,29 @@ struct oa_predicate_fact
    one-way-trust tag, same rationale), just keyed on a second decl
    instead of a FUNCTION_DECL/polarity pair.  */
 
-/* OFFSET (Commit 2/D4324 arithmetic tracking): the fact actually holds
-   for '(LHS - OFFSET) CODE RHS', not literally 'LHS CODE RHS' --
-   established facts always have OFFSET 0 (an actually-observed
-   comparison, not a derived one); a later 'LHS2 = LHS +/- k' shifts a
-   *copy* of the fact for LHS2 by accumulating k into OFFSET, tracked
-   this way (rather than folding the shift into RHS, which is symbolic
-   for the call-relational shapes and so can't absorb a numeric shift)
-   so the same representation covers all three relational-fact structs
-   uniformly. See oa_get_relational's own comment for the transfer
-   function, and oa_env_check_relational_fact_1's own comment for why
-   OFFSET's sign, not just CODE, must be checked at consult time.  */
+/* OFFSET (D4324 Commit 2, generalized to an interval in Commit 4): the
+   fact actually holds for '(LHS - OFFSET) CODE RHS', not literally 'LHS
+   CODE RHS' -- established facts always have OFFSET an exact-zero point
+   interval (an actually-observed comparison, not a derived one); a
+   later 'LHS2 = LHS +/- k' shifts a *copy* of the fact for LHS2 by
+   accumulating k into OFFSET. OFFSET is an interval (reusing oa_range_
+   fact itself, BASE always NULL_TREE here, the same way a plain scalar
+   range already uses that struct without a base) rather than a single
+   widest_int, so K need not itself be a compile-time constant -- it can
+   come from a second tracked variable's own established range, per
+   Commit 4 (a fixed K is just this interval's own degenerate has_lo &&
+   has_hi && lo == hi case). Tracked this way (rather than folding the
+   shift into RHS, which is symbolic for the call-relational shapes and
+   so can't absorb a numeric shift) so the same representation covers
+   both decl-keyed relational-fact structs uniformly. See oa_get_
+   relational's own comment for the transfer function, and oa_env_check_
+   relational_fact_1's own comment for why OFFSET's own bounds, not just
+   CODE, must be checked at consult time.  */
 struct oa_relational_fact
 {
   tree_code code;
   tree rhs;
-  widest_int offset;
+  oa_range_fact offset;
   bool conveyor_established;
 };
 
@@ -5498,7 +5505,7 @@ struct oa_call_relational_fact
   tree rhs_receiver;
   tree rhs_callee;
   /* See oa_relational_fact's own comment on OFFSET.  */
-  widest_int offset;
+  oa_range_fact offset;
   bool conveyor_established;
 };
 
@@ -5554,6 +5561,12 @@ struct oa_contract_field_range_fact
    itself (that's oa_provenance_env's job, defined alongside
    oa_derivation below oa_env).  */
 struct oa_derivation;
+
+/* Forward-declared for the same reason as oa_derivation just above:
+   defined alongside its own oa_range_fact_exact/_negate/_accumulate
+   siblings, much further below, but oa_env's own relational_merge_with/
+   call_relational_merge_with (right here) need it before that point.  */
+static bool oa_range_fact_equal (const oa_range_fact &a, const oa_range_fact &b);
 
 class oa_env
 {
@@ -5979,7 +5992,7 @@ public:
     return true;
   }
   void relational_set (tree decl, tree_code code, tree rhs,
-			bool conveyor_established, widest_int offset = 0)
+			bool conveyor_established, oa_range_fact offset)
   {
     oa_relational_fact fact;
     fact.code = code;
@@ -6012,7 +6025,7 @@ public:
       {
 	oa_relational_fact *ov = other.m_relational_map.get (it.first);
 	if (!ov || ov->code != it.second.code || ov->rhs != it.second.rhs
-	    || ov->offset != it.second.offset)
+	    || !oa_range_fact_equal (ov->offset, it.second.offset))
 	  {
 	    to_remove.safe_push (it.first);
 	    continue;
@@ -6043,7 +6056,7 @@ public:
   }
   void call_relational_set (tree decl, tree_code code, tree rhs_receiver,
 			      tree rhs_callee, bool conveyor_established,
-			      widest_int offset = 0)
+			      oa_range_fact offset)
   {
     oa_call_relational_fact fact;
     fact.code = code;
@@ -6082,7 +6095,7 @@ public:
 	if (!ov || ov->code != it.second.code
 	    || ov->rhs_receiver != it.second.rhs_receiver
 	    || ov->rhs_callee != it.second.rhs_callee
-	    || ov->offset != it.second.offset)
+	    || !oa_range_fact_equal (ov->offset, it.second.offset))
 	  {
 	    to_remove.safe_push (it.first);
 	    continue;
@@ -7982,6 +7995,69 @@ oa_strip_to_relational_operand (tree expr)
   return oa_strip_conversion_call (expr);
 }
 
+/* D4324 Commit 4: an exact-point oa_range_fact for VAL -- a relational
+   fact's own OFFSET at establishment time (always exactly 0: an
+   actually-observed comparison, never yet shifted) or a literal
+   constant shift amount, represented as a degenerate interval so the
+   same OFFSET field covers both a fixed and a variable shift.  */
+
+static oa_range_fact
+oa_range_fact_exact (widest_int val)
+{
+  oa_range_fact r;
+  r.base = NULL_TREE;
+  r.has_lo = r.has_hi = true;
+  r.lo = r.hi = val;
+  return r;
+}
+
+/* D4324 Commit 4: negate an interval in place (swap and negate lo/hi) --
+   MINUS_EXPR's own shift is subtracted, so its interval must be negated
+   before accumulating, the same sign-flip oa_get_range's own scalar K
+   already gets for MINUS_EXPR, generalized to a whole interval.  */
+
+static void
+oa_range_fact_negate (oa_range_fact &r)
+{
+  bool old_has_lo = r.has_lo, old_has_hi = r.has_hi;
+  widest_int old_lo = r.lo, old_hi = r.hi;
+  r.has_lo = old_has_hi;
+  r.has_hi = old_has_lo;
+  if (r.has_lo)
+    r.lo = -old_hi;
+  if (r.has_hi)
+    r.hi = -old_lo;
+}
+
+/* D4324 Commit 4: accumulate SHIFT into ACC via ordinary interval
+   addition (ACC.lo/hi each widen by SHIFT's own lo/hi) -- unknown
+   (has_lo/has_hi false) on either side is contagious, same convention
+   oa_range_fact uses everywhere else.  */
+
+static void
+oa_range_fact_accumulate (oa_range_fact &acc, const oa_range_fact &shift)
+{
+  acc.has_lo = acc.has_lo && shift.has_lo;
+  acc.has_hi = acc.has_hi && shift.has_hi;
+  if (acc.has_lo)
+    acc.lo += shift.lo;
+  if (acc.has_hi)
+    acc.hi += shift.hi;
+}
+
+/* D4324 Commit 4: do A and B (both interpreted as oa_relational_fact/
+   oa_call_relational_fact's own OFFSET field) represent the exact same
+   interval? Used by relational_merge_with/call_relational_merge_with,
+   which need full agreement across a branch merge, the same as CODE/
+   RHS.  */
+
+static bool
+oa_range_fact_equal (const oa_range_fact &a, const oa_range_fact &b)
+{
+  return a.has_lo == b.has_lo && a.has_hi == b.has_hi
+	 && (!a.has_lo || a.lo == b.lo) && (!a.has_hi || a.hi == b.hi);
+}
+
 /* EXPR's own established *relational* fact, if any -- the oa_
    relational_fact analogue of oa_get_range immediately above, sharing
    its exact wrapper-stripping discipline (a contract condition's own
@@ -8015,20 +8091,33 @@ oa_get_relational (tree expr, oa_env &env, oa_relational_fact *out)
       tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
       tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 1));
 
-      widest_int k;
-      if (TREE_CODE (op1) == INTEGER_CST && oa_get_relational (op0, env, out))
-	k = wi::to_widest (op1);
-      else if (TREE_CODE (e) == PLUS_EXPR && TREE_CODE (op0) == INTEGER_CST
-	       && oa_get_relational (op1, env, out))
-	k = wi::to_widest (op0);
+      oa_range_fact shift;
+      if (oa_get_relational (op0, env, out))
+	{
+	  /* D4324 Commit 4: OP1 (the shift amount) need not itself be a
+	     literal -- a second tracked variable's own established range
+	     works too, using its interval directly instead of a single
+	     exact point (Commit 2's own original, narrower restriction).  */
+	  if (TREE_CODE (op1) == INTEGER_CST)
+	    shift = oa_range_fact_exact (wi::to_widest (op1));
+	  else if (!oa_get_range (op1, env, &shift) || shift.base != NULL_TREE)
+	    return false;
+	}
+      else if (TREE_CODE (e) == PLUS_EXPR && oa_get_relational (op1, env, out))
+	{
+	  if (TREE_CODE (op0) == INTEGER_CST)
+	    shift = oa_range_fact_exact (wi::to_widest (op0));
+	  else if (!oa_get_range (op0, env, &shift) || shift.base != NULL_TREE)
+	    return false;
+	}
       else
 	/* '<constant> - decl' negates rather than shifts -- not a simple
 	   shift, left unrecognized, same as oa_get_range.  */
 	return false;
 
       if (TREE_CODE (e) == MINUS_EXPR)
-	k = -k;
-      out->offset += k;
+	oa_range_fact_negate (shift);
+      oa_range_fact_accumulate (out->offset, shift);
       return true;
     }
 
@@ -8053,19 +8142,28 @@ oa_get_call_relational (tree expr, oa_env &env, oa_call_relational_fact *out)
       tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
       tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 1));
 
-      widest_int k;
-      if (TREE_CODE (op1) == INTEGER_CST
-	  && oa_get_call_relational (op0, env, out))
-	k = wi::to_widest (op1);
-      else if (TREE_CODE (e) == PLUS_EXPR && TREE_CODE (op0) == INTEGER_CST
+      oa_range_fact shift;
+      if (oa_get_call_relational (op0, env, out))
+	{
+	  if (TREE_CODE (op1) == INTEGER_CST)
+	    shift = oa_range_fact_exact (wi::to_widest (op1));
+	  else if (!oa_get_range (op1, env, &shift) || shift.base != NULL_TREE)
+	    return false;
+	}
+      else if (TREE_CODE (e) == PLUS_EXPR
 	       && oa_get_call_relational (op1, env, out))
-	k = wi::to_widest (op0);
+	{
+	  if (TREE_CODE (op0) == INTEGER_CST)
+	    shift = oa_range_fact_exact (wi::to_widest (op0));
+	  else if (!oa_get_range (op0, env, &shift) || shift.base != NULL_TREE)
+	    return false;
+	}
       else
 	return false;
 
       if (TREE_CODE (e) == MINUS_EXPR)
-	k = -k;
-      out->offset += k;
+	oa_range_fact_negate (shift);
+      oa_range_fact_accumulate (out->offset, shift);
       return true;
     }
 
@@ -8280,7 +8378,8 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
 	    case GE_EXPR: rel_code = LT_EXPR; break;
 	    default: return; /* NOT(param == other) -- skip.  */
 	    }
-	env.relational_set (param, rel_code, other, /*conveyor_established=*/true);
+	env.relational_set (param, rel_code, other, /*conveyor_established=*/true,
+			      oa_range_fact_exact (0));
 	return;
       }
   }
@@ -8301,7 +8400,8 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
 	    default: return;
 	    }
 	env.call_relational_set (param, rel_code, rhs_receiver, rhs_callee,
-				   /*conveyor_established=*/true);
+				   /*conveyor_established=*/true,
+				   oa_range_fact_exact (0));
 	return;
       }
   }
@@ -12966,7 +13066,7 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
       tree_code code;
       if (oa_match_comparison_against_param (*conjuncts[i], &param, &code,
 					      &other))
-	env.relational_set (param, code, other, conveyor_ok);
+	env.relational_set (param, code, other, conveyor_ok, oa_range_fact_exact (0));
     }
 
   /* The call analogue of the relational block just above (e.g.
@@ -12979,7 +13079,7 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
       if (oa_match_comparison_against_call (*conjuncts[i], &param, &code,
 					     &rhs_receiver, &rhs_callee))
 	env.call_relational_set (param, code, rhs_receiver, rhs_callee,
-				  conveyor_ok);
+				  conveyor_ok, oa_range_fact_exact (0));
     }
 
   /* The call-vs-call analogue of the two relational blocks above (e.g.
@@ -16262,7 +16362,8 @@ oa_establish_relational_from_call (tree lhs, tree rhs, oa_env &env)
 	  if (!VAR_P (resolved) && TREE_CODE (resolved) != PARM_DECL)
 	    continue;
 
-	  env.relational_set (lhs, code, resolved, conveyor_active);
+	  env.relational_set (lhs, code, resolved, conveyor_active,
+			       oa_range_fact_exact (0));
 	  return;
 	}
     }
@@ -16457,34 +16558,48 @@ oa_env_check_range_subsumption (oa_env &env, tree expr, oa_range_fact &req)
    the same DRY relationship oa_env_check_range_subsumption above has
    with oa_env_check_comparison.  */
 
-/* D4324 Commit 2: is OFFSET compatible with (i.e., doesn't invalidate)
-   an established fact's entailment of REQUIRED_CODE? An established
+/* D4324 Commit 2 (generalized from a single widest_int to an interval
+   in Commit 4): is OFFSET compatible with (i.e., doesn't invalidate) an
+   established fact's entailment of REQUIRED_CODE? An established
    '(param - offset) CODE rhs' does not entail 'param CODE rhs'
-   unconditionally once OFFSET != 0 -- e.g. 'i < size ()' does not
-   entail 'i + 1 < size ()' (i could equal size () - 1) -- so this must
-   be checked alongside oa_relational_code_implies, not instead of it.
-   A non-positive offset (the value was decremented, or left unchanged,
-   since establishment) only ever tightens an upper bound (LT_EXPR/
-   LE_EXPR) and loosens a lower one; a non-negative offset does the
-   reverse for a lower bound (GT_EXPR/GE_EXPR); EQ_EXPR needs an exact,
-   unshifted match. Checked against REQUIRED_CODE (what must ultimately
-   hold), not FACT.CODE (which oa_relational_code_implies already
-   independently verifies is strong enough).  */
+   unconditionally once OFFSET isn't exactly 0 -- e.g. 'i < size ()'
+   does not entail 'i + 1 < size ()' (i could equal size () - 1) -- so
+   this must be checked alongside oa_relational_code_implies, not
+   instead of it. A non-positive offset (the value was decremented, or
+   left unchanged, since establishment) only ever tightens an upper
+   bound (LT_EXPR/LE_EXPR) and loosens a lower one; a non-negative
+   offset does the reverse for a lower bound (GT_EXPR/GE_EXPR); EQ_EXPR
+   needs an exact, unshifted match. Checked against REQUIRED_CODE (what
+   must ultimately hold), not FACT.CODE (which oa_relational_code_
+   implies already independently verifies is strong enough).
+
+   OFFSET is now an interval, not a single value (Commit 4: the shift
+   amount can come from a second tracked variable's own established
+   range, not just a literal) -- soundness requires using OFFSET's own
+   *worst case* in the direction that could break entailment: an upper
+   bound needs the interval's own upper end (HAS_HI/HI) to still be
+   <= 0, a lower bound needs its own lower end (HAS_LO/LO) to still be
+   >= 0, and an unknown bound in the relevant direction (HAS_HI/HAS_LO
+   false) can never be proven safe.  A fixed literal K is just this
+   interval's own degenerate has_lo && has_hi && lo == hi == K case, so
+   this is a strict generalization of Commit 2's own plain sign check --
+   nothing about that commit's own tests changes.  */
 
 static bool
-oa_offset_compatible_with_code (const widest_int &offset,
+oa_offset_compatible_with_code (const oa_range_fact &offset,
 				 tree_code required_code)
 {
   switch (required_code)
     {
     case LT_EXPR:
     case LE_EXPR:
-      return offset <= 0;
+      return offset.has_hi && offset.hi <= 0;
     case GT_EXPR:
     case GE_EXPR:
-      return offset >= 0;
+      return offset.has_lo && offset.lo >= 0;
     case EQ_EXPR:
-      return offset == 0;
+      return offset.has_lo && offset.has_hi && offset.lo == 0
+	     && offset.hi == 0;
     default:
       return false;
     }
