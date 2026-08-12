@@ -801,6 +801,28 @@ namespace std
 # endif
 #endif
 
+// Same as _GLIBCXX_CONVEYOR just above, but for a function template
+// whose conveyor-ness is only ever true for some of its
+// instantiations (e.g. a customization-point object dispatching, via
+// 'if constexpr', to a type's own possibly-conveyor member function):
+// 'conveyor(auto)' deduces this per instantiation instead of requiring
+// it of all of them unconditionally, so an instantiation for a type
+// that doesn't happen to qualify is simply an ordinary function
+// instead of a hard error -- see D4324's own conveyor(auto) feature.
+// Degrades the same way _GLIBCXX_CONVEYOR does when unsupported;
+// __cpp_contract_control_objects is presently a plain boolean-valued
+// (not versioned) macro, so, like _GLIBCXX_CONVEYOR, this can't
+// distinguish a compiler new enough for bare 'conveyor' but not yet
+// for 'conveyor(auto)' -- not a concern for this single-implementation
+// experimental extension.
+#ifndef _GLIBCXX_CONVEYOR_AUTO
+# if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+#  define _GLIBCXX_CONVEYOR_AUTO conveyor(auto)
+# else
+#  define _GLIBCXX_CONVEYOR_AUTO
+# endif
+#endif
+
 // Macro indicating that TSAN is in use.
 #if __SANITIZE_THREAD__
 #  define _GLIBCXX_TSAN 1

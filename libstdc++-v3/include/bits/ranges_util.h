@@ -108,6 +108,7 @@ namespace ranges
 	noexcept(noexcept(_S_empty(__self)))
 	requires forward_range<remove_reference_t<_Self>>
 	  && (!sized_range<remove_reference_t<_Self>>)
+	_GLIBCXX_CONVEYOR_AUTO
 	{ return _S_empty(__self); }
 
       template<typename _Self>
@@ -115,6 +116,7 @@ namespace ranges
 	empty(this _Self&& __self)
 	noexcept(noexcept(ranges::size(__self) == 0))
 	requires sized_range<remove_reference_t<_Self>>
+	_GLIBCXX_CONVEYOR_AUTO
 	{ return ranges::size(__self) == 0; }
 
       template<typename _Self>
@@ -122,6 +124,7 @@ namespace ranges
 	operator bool(this _Self&& __self)
 	noexcept(noexcept(ranges::empty(__self)))
 	requires requires { ranges::empty(__self); }
+	_GLIBCXX_CONVEYOR_AUTO
 	{ return !ranges::empty(__self); }
 
       template<typename _Self>
@@ -130,6 +133,7 @@ namespace ranges
 	data(this _Self&& __self)
 	noexcept(noexcept(ranges::begin(__self)))
 	requires contiguous_iterator<iterator_t<remove_reference_t<_Self>>>
+	_GLIBCXX_CONVEYOR_AUTO
 	{ return std::to_address(ranges::begin(__self)); }
 
       template<typename _Self>
@@ -139,6 +143,7 @@ namespace ranges
 	noexcept(noexcept(ranges::begin(__self)))
 	requires range<remove_reference_t<_Self>>
 	  && contiguous_iterator<iterator_t<remove_reference_t<_Self>>>
+	_GLIBCXX_CONVEYOR_AUTO
 	{ return std::to_address(ranges::begin(__self)); }
 
       template<typename _Self>
@@ -148,12 +153,14 @@ namespace ranges
 	requires forward_range<remove_reference_t<_Self>>
 	  && sized_sentinel_for<sentinel_t<remove_reference_t<_Self>>,
 				iterator_t<remove_reference_t<_Self>>>
+	_GLIBCXX_CONVEYOR_AUTO
 	{ return _S_size(__self); }
 
       template<typename _Self>
 	constexpr decltype(auto)
 	front(this _Self&& __self)
 	requires forward_range<remove_reference_t<_Self>>
+	_GLIBCXX_CONVEYOR_AUTO
 	{
 	  __glibcxx_assert(!__self.empty());
 	  return *ranges::begin(__self);
@@ -164,6 +171,7 @@ namespace ranges
 	back(this _Self&& __self)
 	requires bidirectional_range<remove_reference_t<_Self>>
 	  && common_range<remove_reference_t<_Self>>
+	_GLIBCXX_CONVEYOR_AUTO
 	{
 	  __glibcxx_assert(!__self.empty());
 	  return *ranges::prev(ranges::end(__self));
@@ -173,18 +181,21 @@ namespace ranges
 	       random_access_range _Range = remove_reference_t<_Self>>
 	constexpr decltype(auto)
 	operator[](this _Self&& __self, range_difference_t<_Range> __n)
+	_GLIBCXX_CONVEYOR_AUTO
 	{ return ranges::begin(__self)[__n]; }
 
       template<typename _Self>
 	constexpr auto
 	cbegin(this _Self&& __self)
 	requires input_range<remove_reference_t<_Self>>
+	_GLIBCXX_CONVEYOR_AUTO
 	{ return ranges::cbegin(__self); }
 
       template<typename _Self>
 	constexpr auto
 	cend(this _Self&& __self)
 	requires input_range<remove_reference_t<_Self>>
+	_GLIBCXX_CONVEYOR_AUTO
 	{ return ranges::cend(__self); }
 #else
     private:

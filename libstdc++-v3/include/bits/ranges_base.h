@@ -127,6 +127,7 @@ namespace ranges
 	[[nodiscard, __gnu__::__always_inline__]]
 	constexpr auto
 	operator()(_Tp&& __t) const noexcept(_S_noexcept<_Tp&>())
+	_GLIBCXX_CONVEYOR_AUTO
 	{
 	  if constexpr (is_array_v<remove_reference_t<_Tp>>)
 	    {
@@ -178,6 +179,7 @@ namespace ranges
 	[[nodiscard, __gnu__::__always_inline__]]
 	constexpr auto
 	operator()(_Tp&& __t) const noexcept(_S_noexcept<_Tp&>())
+	_GLIBCXX_CONVEYOR_AUTO
 	{
 	  if constexpr (is_bounded_array_v<remove_reference_t<_Tp>>)
 	    {
@@ -366,6 +368,7 @@ namespace ranges
 	[[nodiscard, __gnu__::__always_inline__]]
 	constexpr auto
 	operator()(_Tp&& __t) const noexcept(_S_noexcept<_Tp&>())
+	_GLIBCXX_CONVEYOR_AUTO
 	{
 	  if constexpr (is_bounded_array_v<remove_reference_t<_Tp>>)
 	    return extent_v<remove_reference_t<_Tp>>;
@@ -444,6 +447,7 @@ namespace ranges
 	[[nodiscard, __gnu__::__always_inline__]]
 	constexpr bool
 	operator()(_Tp&& __t) const noexcept(_S_noexcept<_Tp&>())
+	_GLIBCXX_CONVEYOR_AUTO
 	{
 	  if constexpr (__member_empty<_Tp>)
 	    return bool(__t.empty());
@@ -665,6 +669,7 @@ namespace ranges
       [[__gnu__::__always_inline__]]
       constexpr auto&
       __possibly_const_range(_Range& __r) noexcept
+      _GLIBCXX_CONVEYOR
       {
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
 	// 4027. possibly-const-range should prefer returning const R&
@@ -700,6 +705,7 @@ namespace ranges
 			  (ranges::begin(__access::__possibly_const_range(__t)))))
 	requires requires { std::make_const_iterator
 			    (ranges::begin(__access::__possibly_const_range(__t))); }
+	_GLIBCXX_CONVEYOR_AUTO
 	{
 	  auto& __r = __access::__possibly_const_range(__t);
 	  return const_iterator<decltype(ranges::begin(__r))>(ranges::begin(__r));
@@ -1086,6 +1092,7 @@ namespace ranges
       [[nodiscard, __gnu__::__always_inline__]]
       constexpr _It
       operator()(_It __x) const
+      _GLIBCXX_CONVEYOR_AUTO
       {
 	--__x;
 	return __x;
