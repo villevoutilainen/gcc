@@ -14733,6 +14733,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       own comment.  */
 	    then_env.predicate_fact_merge_with (else_env);
 	    then_env.relational_merge_with (else_env);
+	    then_env.call_relational_merge_with (else_env);
 	    /* -fcontract-symbolic-proofs: same intersect-and-widen merge as
 	       range_merge_with, for the two new static-only symbolic range
 	       maps (bare-scalar and ptr->field).  */
@@ -14804,6 +14805,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       above.  */
 	    then_env.predicate_fact_merge_with (else_env);
 	    then_env.relational_merge_with (else_env);
+	    then_env.call_relational_merge_with (else_env);
 	    /* -fcontract-symbolic-proofs: same as COND_EXPR above.  */
 	    then_env.contract_scalar_range_merge_with (else_env);
 	    then_env.contract_field_range_merge_with (else_env);
@@ -14947,6 +14949,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		   if/else case.  */
 		merged.predicate_fact_merge_with (current);
 		merged.relational_merge_with (current);
+		merged.call_relational_merge_with (current);
 		/* -fcontract-symbolic-proofs: same as the if/else case.  */
 		merged.contract_scalar_range_merge_with (current);
 		merged.contract_field_range_merge_with (current);
