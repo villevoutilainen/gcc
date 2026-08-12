@@ -69,6 +69,124 @@ namespace ranges
     requires is_class_v<_Derived> && same_as<_Derived, remove_cv_t<_Derived>>
     class view_interface
     {
+#if __cplusplus > 202002L
+      // D4324: implemented via an explicit object parameter (deducing
+      // 'this', P0847), instead of the pre-C++23 static_cast<_Derived&>
+      // (*this) CRTP downcast in the '#else' branch below. The derived
+      // type comes from the call site's own static type (e.g.
+      // 'sr.front()', where 'sr' really is a 'subrange<...>'), with no
+      // cast at all -- which additionally sidesteps the conveyor
+      // mandatory rule's unconditional ban on a genuine base-to-derived
+      // static_cast (confirmed, independent of this file, via an
+      // isolated repro that the CRTP form can never be made
+      // conveyor-compatible; see this stage's own write-up in
+      // ~/.claude/plans/well-we-last-discussed-ethereal-duckling.md).
+      // Kept side-by-side with the original implementation, rather than
+      // replacing it outright, because <ranges> -- and view_interface
+      // with it -- is usable from plain C++20, where explicit object
+      // parameters don't exist.
+    private:
+      static constexpr bool
+      _S_bool(bool) noexcept; // not defined
+
+      template<typename _Tp>
+	static constexpr bool
+	_S_empty(_Tp& __t)
+	noexcept(noexcept(_S_bool(ranges::begin(__t) == ranges::end(__t))))
+	{ return ranges::begin(__t) == ranges::end(__t); }
+
+      template<typename _Tp>
+	static constexpr auto
+	_S_size(_Tp& __t)
+	noexcept(noexcept(ranges::end(__t) - ranges::begin(__t)))
+	{ return ranges::end(__t) - ranges::begin(__t); }
+
+    public:
+      template<typename _Self>
+	constexpr bool
+	empty(this _Self&& __self)
+	noexcept(noexcept(_S_empty(__self)))
+	requires forward_range<remove_reference_t<_Self>>
+	  && (!sized_range<remove_reference_t<_Self>>)
+	{ return _S_empty(__self); }
+
+      template<typename _Self>
+	constexpr bool
+	empty(this _Self&& __self)
+	noexcept(noexcept(ranges::size(__self) == 0))
+	requires sized_range<remove_reference_t<_Self>>
+	{ return ranges::size(__self) == 0; }
+
+      template<typename _Self>
+	constexpr explicit
+	operator bool(this _Self&& __self)
+	noexcept(noexcept(ranges::empty(__self)))
+	requires requires { ranges::empty(__self); }
+	{ return !ranges::empty(__self); }
+
+      template<typename _Self>
+	requires (!is_const_v<remove_reference_t<_Self>>)
+	constexpr auto
+	data(this _Self&& __self)
+	noexcept(noexcept(ranges::begin(__self)))
+	requires contiguous_iterator<iterator_t<remove_reference_t<_Self>>>
+	{ return std::to_address(ranges::begin(__self)); }
+
+      template<typename _Self>
+	requires is_const_v<remove_reference_t<_Self>>
+	constexpr auto
+	data(this _Self&& __self)
+	noexcept(noexcept(ranges::begin(__self)))
+	requires range<remove_reference_t<_Self>>
+	  && contiguous_iterator<iterator_t<remove_reference_t<_Self>>>
+	{ return std::to_address(ranges::begin(__self)); }
+
+      template<typename _Self>
+	constexpr auto
+	size(this _Self&& __self)
+	noexcept(noexcept(_S_size(__self)))
+	requires forward_range<remove_reference_t<_Self>>
+	  && sized_sentinel_for<sentinel_t<remove_reference_t<_Self>>,
+				iterator_t<remove_reference_t<_Self>>>
+	{ return _S_size(__self); }
+
+      template<typename _Self>
+	constexpr decltype(auto)
+	front(this _Self&& __self)
+	requires forward_range<remove_reference_t<_Self>>
+	{
+	  __glibcxx_assert(!__self.empty());
+	  return *ranges::begin(__self);
+	}
+
+      template<typename _Self>
+	constexpr decltype(auto)
+	back(this _Self&& __self)
+	requires bidirectional_range<remove_reference_t<_Self>>
+	  && common_range<remove_reference_t<_Self>>
+	{
+	  __glibcxx_assert(!__self.empty());
+	  return *ranges::prev(ranges::end(__self));
+	}
+
+      template<typename _Self,
+	       random_access_range _Range = remove_reference_t<_Self>>
+	constexpr decltype(auto)
+	operator[](this _Self&& __self, range_difference_t<_Range> __n)
+	{ return ranges::begin(__self)[__n]; }
+
+      template<typename _Self>
+	constexpr auto
+	cbegin(this _Self&& __self)
+	requires input_range<remove_reference_t<_Self>>
+	{ return ranges::cbegin(__self); }
+
+      template<typename _Self>
+	constexpr auto
+	cend(this _Self&& __self)
+	requires input_range<remove_reference_t<_Self>>
+	{ return ranges::cend(__self); }
+#else
     private:
       constexpr _Derived& _M_derived() noexcept
       {
@@ -198,23 +316,6 @@ namespace ranges
 	constexpr decltype(auto)
 	operator[](range_difference_t<_Range> __n) const
 	{ return ranges::begin(_M_derived())[__n]; }
-
-#if __cplusplus > 202002L
-      constexpr auto
-      cbegin() requires input_range<_Derived>
-      { return ranges::cbegin(_M_derived()); }
-
-      constexpr auto
-      cbegin() const requires input_range<const _Derived>
-      { return ranges::cbegin(_M_derived()); }
-
-      constexpr auto
-      cend() requires input_range<_Derived>
-      { return ranges::cend(_M_derived()); }
-
-      constexpr auto
-      cend() const requires input_range<const _Derived>
-      { return ranges::cend(_M_derived()); }
 #endif
     };
 
@@ -359,13 +460,16 @@ namespace ranges
 
       constexpr _It
       begin() const requires copyable<_It>
+      _GLIBCXX_CONVEYOR
       { return _M_begin; }
 
       [[nodiscard]] constexpr _It
       begin() requires (!copyable<_It>)
+      _GLIBCXX_CONVEYOR
       { return std::move(_M_begin); }
 
-      constexpr _Sent end() const { return _M_end; }
+      constexpr _Sent end() const _GLIBCXX_CONVEYOR
+      { return _M_end; }
 
       constexpr bool empty() const _GLIBCXX_CONVEYOR
       { return _M_begin == _M_end; }

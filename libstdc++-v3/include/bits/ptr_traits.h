@@ -232,6 +232,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     [[__gnu__::__always_inline__]]
     constexpr _Tp*
     to_address(_Tp* __ptr) noexcept
+    _GLIBCXX_CONVEYOR
     {
       static_assert(!is_function_v<_Tp>, "std::to_address argument "
 		    "must not be a function pointer");

@@ -136,6 +136,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     [[__nodiscard__,__gnu__::__always_inline__]]
     constexpr typename std::remove_reference<_Tp>::type&&
     move(_Tp&& __t) noexcept
+    _GLIBCXX_CONVEYOR
     { return static_cast<typename std::remove_reference<_Tp>::type&&>(__t); }
 
 
