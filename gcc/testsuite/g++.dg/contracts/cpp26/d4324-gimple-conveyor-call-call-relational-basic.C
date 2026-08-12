@@ -1,0 +1,48 @@
+// D4324: the built-in GIMPLE pass's own mirror of d4324-conveyor-call-
+// call-relational-basic.C (cg_call_call_rel_fact/cg_get_call_call_
+// relational, the call-vs-call analogue of the existing cg_call_rel_
+// fact/cg_get_call_relational mechanism) -- "RECEIVER_1.CALLEE_1 () OP
+// RECEIVER_2.CALLEE_2 ()" established via a function's own declared
+// precondition (self-trust only, never from an ordinary branch, on
+// either the AST or the GIMPLE side -- matching scope exactly).
+// { dg-do compile { target c++26 } }
+// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs-gimple" }
+
+#include <contracts>
+namespace sc = std::contracts;
+
+struct conveyor_ctrl {
+  static constexpr bool is_ignored (sc::assertion_static_info) { return false; }
+  static constexpr bool constify (sc::assertion_static_info) { return false; }
+  static constexpr bool assumable (sc::assertion_static_info) { return false; }
+  static constexpr bool is_conveyor (sc::assertion_static_info) { return true; }
+  void operator() (const sc::assertion_context& ctx) const
+  { if (!ctx.check ()) __builtin_trap (); }
+};
+inline constexpr conveyor_ctrl conveyor_ctrl_v{};
+
+struct S {
+  int size () const conveyor { return 5; }
+};
+
+int use_it (S& a, S& b) conveyor pre<conveyor_ctrl_v>(a.size () < b.size ())
+{
+  return 0;
+}
+
+int get_checked (S& v, S& w) conveyor pre<conveyor_ctrl_v>(v.size () < w.size ())
+{
+  return use_it (v, w);
+}
+
+int get_unchecked (S& v, S& w) conveyor
+{
+  return use_it (v, w); // { dg-warning "cannot verify that .int S::size\\(\\) const." }
+}
+
+int main ()
+{
+  S v, w;
+  return get_checked (v, w) // { dg-warning "cannot verify that .int S::size\\(\\) const." }
+	 + get_unchecked (v, w);
+}

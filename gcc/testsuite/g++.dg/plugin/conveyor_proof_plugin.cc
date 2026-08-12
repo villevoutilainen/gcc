@@ -360,6 +360,47 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	      }
 	  }
 
+	  /* The call-vs-call analogue of the check just above (e.g.
+	     'pre<ctrl>(v.size () < w.size ())'), via oa_match_call_against_
+	     call/oa_env_check_call_call_relational_fact.  */
+	  {
+	    tree lhs_receiver, lhs_callee, rhs_receiver, rhs_callee;
+	    tree_code call_code;
+	    if (oa_match_call_against_call (*conjuncts[i], &lhs_receiver,
+					      &lhs_callee, &call_code,
+					      &rhs_receiver, &rhs_callee))
+	      {
+		tree sub_lhs_receiver
+		  = substitute_call_arg (callee, call, lhs_receiver);
+		tree sub_rhs_receiver
+		  = substitute_call_arg (callee, call, rhs_receiver);
+		oa_proof_result r
+		  = oa_env_check_call_call_relational_fact
+		      (env, sub_lhs_receiver, lhs_callee, call_code,
+		       sub_rhs_receiver, rhs_callee, /*require_conveyor=*/true);
+		switch (r)
+		  {
+		  case OA_PROVEN_TRUE:
+		    break;
+		  case OA_PROVEN_FALSE:
+		    error_at (EXPR_LOCATION (call),
+			      "argument %qE provably violates the precondition "
+			      "of %qD", sub_lhs_receiver, callee);
+		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    break;
+		  case OA_UNKNOWN:
+		    warning_at (EXPR_LOCATION (call), 0,
+				"cannot verify that %qD called on %qE satisfies "
+				"the precondition of %qD", lhs_callee,
+				sub_lhs_receiver ? sub_lhs_receiver : lhs_receiver,
+				callee);
+		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    break;
+		  }
+		continue;
+	      }
+	  }
+
 	  /* Not a plain comparison -- try the "predicate function applied
 	     to a bare parameter" shape instead (see this file's own top
 	     comment: connecting a postcondition and a precondition
