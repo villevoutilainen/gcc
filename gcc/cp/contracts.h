@@ -272,6 +272,18 @@ extern oa_proof_result oa_env_check_call_relational_fact
    tree substituted_rhs_receiver, tree substituted_rhs_callee,
    bool require_conveyor);
 
+/* The call-vs-call analogue of oa_env_check_call_relational_fact
+   immediately above: is SUBSTITUTED_LHS_RECEIVER.SUBSTITUTED_LHS_
+   CALLEE () provably REQUIRED_CODE SUBSTITUTED_RHS_RECEIVER.
+   SUBSTITUTED_RHS_CALLEE () (all already positionally substituted at
+   the plugin's own call site), given ENV's current facts? Same
+   REQUIRE_CONVEYOR meaning as that function.  */
+extern oa_proof_result oa_env_check_call_call_relational_fact
+  (oa_analysis_env *env, tree substituted_lhs_receiver,
+   tree substituted_lhs_callee, tree_code required_code,
+   tree substituted_rhs_receiver, tree substituted_rhs_callee,
+   bool require_conveyor);
+
 /* Split COND into its top-level '&&' conjuncts.  */
 extern void oa_collect_conjuncts_public (tree *cond, vec<tree *> *out);
 
@@ -302,6 +314,19 @@ extern bool oa_match_comparison_against_param
 extern bool oa_match_comparison_against_call
   (tree conjunct, tree *param_out, tree_code *code_out,
    tree *rhs_receiver_out, tree *rhs_callee_out);
+
+/* The call-vs-call analogue of oa_match_comparison_against_call
+   immediately above: "RECEIVER_1.CALLEE_1 () OP RECEIVER_2.CALLEE_2 ()"
+   (e.g. 'v.size () < w.size ()'), two calls compared against each other
+   rather than a bare parameter against a call. Neither side is a
+   privileged operand to canonicalize around (unlike that function's own
+   PARAM/CALL asymmetry), so LHS/RHS are simply the operands as written.
+   None of the four *_OUT values are resolved; the caller substitutes
+   both receivers with a specific call site's own arguments and consults
+   a *call-call-relational* fact.  */
+extern bool oa_match_call_against_call
+  (tree conjunct, tree *lhs_receiver_out, tree *lhs_callee_out,
+   tree_code *code_out, tree *rhs_receiver_out, tree *rhs_callee_out);
 
 /* If CONJUNCT has the shape "RESULT_ID OP other", where RESULT_ID is a
    postcondition's own already-known return-value binder and "other" is

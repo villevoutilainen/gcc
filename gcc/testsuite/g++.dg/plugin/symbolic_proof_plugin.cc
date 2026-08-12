@@ -358,6 +358,46 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	      break;
 	    }
 	}
+
+      /* The call-vs-call analogue of the relational loop just above
+	 (e.g. 'pre<ctrl>(v.size () < w.size ())'), via oa_match_call_
+	 against_call/oa_env_check_call_call_relational_fact -- same
+	 allowed-direction discipline (REQUIRE_CONVEYOR false).  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree lhs_receiver, lhs_callee, rhs_receiver, rhs_callee;
+	  tree_code call_code;
+	  if (!oa_match_call_against_call (*conjuncts[i], &lhs_receiver,
+					     &lhs_callee, &call_code,
+					     &rhs_receiver, &rhs_callee))
+	    continue;
+
+	  tree sub_lhs_receiver = substitute_arg (callee, call, lhs_receiver);
+	  tree sub_rhs_receiver = substitute_arg (callee, call, rhs_receiver);
+	  oa_proof_result r
+	    = oa_env_check_call_call_relational_fact
+		(env, sub_lhs_receiver, lhs_callee, call_code,
+		 sub_rhs_receiver, rhs_callee, /*require_conveyor=*/false);
+	  switch (r)
+	    {
+	    case OA_PROVEN_TRUE:
+	      break;
+	    case OA_PROVEN_FALSE:
+	      error_at (EXPR_LOCATION (call),
+			"argument %qE provably violates the precondition "
+			"of %qD", sub_lhs_receiver, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      break;
+	    case OA_UNKNOWN:
+	      warning_at (EXPR_LOCATION (call), 0,
+			  "cannot verify that %qD called on %qE satisfies "
+			  "the precondition of %qD", lhs_callee,
+			  sub_lhs_receiver ? sub_lhs_receiver : lhs_receiver,
+			  callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      break;
+	    }
+	}
     }
 
   range_ctx ctx = { call, callee, env };
