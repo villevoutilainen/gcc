@@ -314,6 +314,15 @@ extern bool oa_match_comparison_against_call
 extern bool oa_match_result_relation
   (tree conjunct, tree result_id, tree_code *code_out, tree *other_out);
 
+/* The call analogue of oa_match_result_relation immediately above:
+   "RESULT_ID OP RECEIVER.CALLEE ()" (e.g. 'post<ctrl>(r: r < this->
+   size ())'), where CALLEE is a DECL_DECLARED_CONVEYOR_P accessor
+   rather than another of the postcondition-owning function's own
+   parameters.  */
+extern bool oa_match_result_call_relation
+  (tree conjunct, tree result_id, tree_code *code_out,
+   tree *rhs_receiver_out, tree *rhs_callee_out);
+
 /* True if an established relational fact of code ESTABLISHED (e.g.
    LT_EXPR) is strong enough to satisfy a required comparison of code
    REQUIRED (e.g. an established '<' satisfies a required '<=').  */
