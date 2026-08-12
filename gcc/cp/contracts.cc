@@ -12801,6 +12801,29 @@ oa_stmt_terminates_p (tree stmt)
       return (call_expr_flags (t) & ECF_NORETURN) != 0;
 
     case IF_STMT:
+      /* For 'if constexpr' specifically, once instantiated, IF_COND is
+	 a resolved, known compile-time constant, and the branch it
+	 doesn't select is never copied into the instantiated tree at all
+	 (pt.cc's own tsubst_expr IF_STMT case skips substituting it) --
+	 so that branch ends up looking like an ordinary empty clause
+	 (which would legitimately fail to terminate on its own), even
+	 though it can never actually run and so can never threaten
+	 falling through regardless of its own, never-executed shape.
+	 Found via a real regression: a conveyor function's if-constexpr
+	 with a 'return' in *both* source branches was misdiagnosed as
+	 never returning, because only one branch's statements survive
+	 instantiation and the other reads as empty here. Only the
+	 selected branch's own termination status matters in this case;
+	 an unresolved (still-dependent, or a plain non-constexpr) 'if'
+	 falls through to the ordinary same-arms-required conjunction
+	 below, exactly as before.  */
+      if (IF_STMT_CONSTEXPR_P (t))
+	{
+	  tree cond = IF_COND (t);
+	  if (cond && TREE_CODE (cond) == INTEGER_CST)
+	    return oa_stmt_terminates_p (integer_zerop (cond)
+					  ? ELSE_CLAUSE (t) : THEN_CLAUSE (t));
+	}
       return (oa_stmt_terminates_p (THEN_CLAUSE (t))
 	      && oa_stmt_terminates_p (ELSE_CLAUSE (t)));
 
