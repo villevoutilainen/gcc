@@ -261,7 +261,7 @@ namespace ranges
 	}
 
 	constexpr bool
-	has_value() const noexcept
+	has_value() const noexcept _GLIBCXX_CONVEYOR
 	{ return true; };
 
 	constexpr _Tp&
@@ -1610,7 +1610,7 @@ namespace views::__adaptor
       struct _CachedPosition
       {
 	constexpr bool
-	_M_has_value() const
+	_M_has_value() const _GLIBCXX_CONVEYOR
 	{ return false; }
 
 	constexpr iterator_t<_Range>
@@ -1630,7 +1630,7 @@ namespace views::__adaptor
 	: protected __non_propagating_cache<iterator_t<_Range>>
       {
 	constexpr bool
-	_M_has_value() const
+	_M_has_value() const _GLIBCXX_CONVEYOR
 	{ return this->_M_is_engaged(); }
 
 	constexpr iterator_t<_Range>
@@ -1679,7 +1679,7 @@ namespace views::__adaptor
 	}
 
 	constexpr bool
-	_M_has_value() const
+	_M_has_value() const _GLIBCXX_CONVEYOR
 	{ return _M_offset >= 0; }
 
 	constexpr iterator_t<_Range>

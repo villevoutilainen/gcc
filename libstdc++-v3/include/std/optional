@@ -1238,7 +1238,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr explicit operator bool() const noexcept
       { return this->_M_is_engaged(); }
 
-      constexpr bool has_value() const noexcept
+      constexpr bool has_value() const noexcept _GLIBCXX_CONVEYOR
       { return this->_M_is_engaged(); }
 
       constexpr const _Tp&

@@ -70,7 +70,7 @@ namespace ranges
 	{ }
 
       constexpr explicit
-      __max_size_type(const __max_diff_type& __d) noexcept;
+      __max_size_type(const __max_diff_type& __d) noexcept _GLIBCXX_CONVEYOR;
 
       template<typename _Tp> requires integral<_Tp>
 	constexpr explicit
@@ -760,6 +760,7 @@ namespace ranges
 
     constexpr
     __max_size_type::__max_size_type(const __max_diff_type& __d) noexcept
+      _GLIBCXX_CONVEYOR
       : __max_size_type(__d._M_rep)
     { }
 

@@ -367,10 +367,12 @@ namespace ranges
 
       constexpr _Sent end() const { return _M_end; }
 
-      constexpr bool empty() const { return _M_begin == _M_end; }
+      constexpr bool empty() const _GLIBCXX_CONVEYOR
+      { return _M_begin == _M_end; }
 
       constexpr __size_type
       size() const requires (_Kind == subrange_kind::sized)
+      _GLIBCXX_CONVEYOR
       {
 	if constexpr (_S_store_size)
 	  return _M_size._M_size;
