@@ -517,11 +517,24 @@ class suppress_conveyor_restrictions_for_converted_constant_expr_sentinel
 {
 public:
   bool saved;
-  suppress_conveyor_restrictions_for_converted_constant_expr_sentinel ()
-    : saved (suppress_conveyor_restrictions_for_converted_constant_expr_p)
-  { suppress_conveyor_restrictions_for_converted_constant_expr_p = true; }
+  bool active;
+  /* ACTIVE lets a caller conditionally no-op this sentinel (e.g. for
+     'if constexpr' specifically, not an ordinary, possibly side-
+     effecting runtime 'if') without needing a separate, hand-written
+     save/restore fallback path alongside the RAII one.  */
+  suppress_conveyor_restrictions_for_converted_constant_expr_sentinel
+    (bool active = true)
+    : saved (suppress_conveyor_restrictions_for_converted_constant_expr_p),
+      active (active)
+  {
+    if (active)
+      suppress_conveyor_restrictions_for_converted_constant_expr_p = true;
+  }
   ~suppress_conveyor_restrictions_for_converted_constant_expr_sentinel ()
-  { suppress_conveyor_restrictions_for_converted_constant_expr_p = saved; }
+  {
+    if (active)
+      suppress_conveyor_restrictions_for_converted_constant_expr_p = saved;
+  }
 };
 
 extern void set_fn_contract_specifiers		(tree, tree);
