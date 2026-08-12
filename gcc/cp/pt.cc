@@ -29453,6 +29453,26 @@ instantiate_decl (tree d, bool defer_ok, bool expl_inst_class_mem_p)
    resolved" false in that case -- that's indistinguishable from a
    genuine, resolved "not conveyor" and would reject every
    conveyor(auto) callee unconditionally, defeating the whole feature.
+
+   If FN is a constructor/destructor clone, redirect to the function it
+   was cloned from first -- instantiate_decl's own top does the same
+   ("Don't instantiate cloned functions.  Instead, instantiate the
+   functions they cloned"), so a clone's body never gets its own,
+   separate substitution/deduction pass (mirroring check_conveyor_
+   function_body's own, already-established skip-for-clones logic in
+   constexpr.cc), and conveyor_auto_deduction_sentinel (above) only
+   ever sets DECL_DECLARED_CONVEYOR_P/DECL_CONVEYOR_AUTO_RESOLVED_P on
+   whatever decl instantiate_decl actually substitutes -- the
+   un-cloned one. A clone's own lang_decl_fn bits are otherwise just a
+   frozen, one-time copy taken when the clone was created (ordinary
+   decl-copying, not a live view), so they must be explicitly
+   propagated back from the now-resolved original once deduction
+   completes, or a callee check that happens to operate on a specific
+   clone's own decl (as build_over_call's does for a constructor call)
+   would still see the stale, pre-deduction "false" -- found as a real
+   bug via a conveyor(auto) constructor failing to deduce correctly
+   despite a trivially-safe body.
+
    A no-op for anything else, including an already-resolved
    specialization (instantiate_decl's own DECL_TEMPLATE_INSTANTIATED
    check makes a redundant call here harmless).  */
@@ -29463,9 +29483,29 @@ maybe_instantiate_conveyor (tree fn)
   if (fn == NULL_TREE || fn == error_mark_node
       || TREE_CODE (fn) != FUNCTION_DECL)
     return;
-  if (!DECL_CONVEYOR_AUTO_P (fn) || DECL_CONVEYOR_AUTO_RESOLVED_P (fn))
+
+  tree target = fn;
+  if (DECL_CLONED_FUNCTION_P (target))
+    target = DECL_CLONED_FUNCTION (target);
+
+  if (!DECL_CONVEYOR_AUTO_P (target) || DECL_CONVEYOR_AUTO_RESOLVED_P (target))
     return;
-  instantiate_decl (fn, /*defer_ok=*/false, /*expl_inst_class_mem_p=*/false);
+
+  instantiate_decl (target, /*defer_ok=*/false,
+		     /*expl_inst_class_mem_p=*/false);
+
+  if (DECL_CONVEYOR_AUTO_RESOLVED_P (target))
+    {
+      tree clone;
+      FOR_EACH_CLONE (clone, target)
+	{
+	  if (DECL_DECLARED_CONVEYOR_P (target))
+	    SET_DECL_DECLARED_CONVEYOR_P (clone);
+	  else
+	    CLEAR_DECL_DECLARED_CONVEYOR_P (clone);
+	  SET_DECL_CONVEYOR_AUTO_RESOLVED_P (clone);
+	}
+    }
 }
 
 /* Run through the list of templates that we wish we could
