@@ -537,6 +537,87 @@ public:
   }
 };
 
+/* Non-null while attempting a D4324 'conveyor(auto)' per-instantiation
+   deduction (see maybe_instantiate_conveyor in pt.cc): points at the
+   deduction attempt's own "did we find a violation" flag.  Every one
+   of conveyor_restrictions_active_p's many scattered callers is
+   expected to check conveyor_auto_probing_p () itself and, if true,
+   call note_conveyor_auto_violation () instead of diagnosing and
+   poisoning the expression -- a conveyor(auto) instantiation whose
+   body happens to violate a mandatory rule must still build as an
+   ordinary, ill-conveyor-but-otherwise-valid function: banning
+   reinterpret_cast, for instance, doesn't stop it from being
+   perfectly valid C++, just conveyor-incompatible C++, so there is
+   nothing to poison in the AST built for the surrounding, non-probing
+   compilation to see.  The usual shape at each call site is:
+
+     if (conveyor_restrictions_active_p ())
+       {
+	 if (conveyor_auto_probing_p ())
+	   note_conveyor_auto_violation ();
+	 else
+	   {
+	     if (complain & tf_error)
+	       error_at (loc, "...");
+	     return error_mark_node;
+	   }
+       }
+
+   i.e. the existing diagnose-and-poison block is untouched; only a
+   probing early-out is added in front of it.  */
+extern bool *conveyor_auto_probe_violation_p;
+
+/* True while a conveyor(auto) probe (as above) is in progress.  */
+inline bool
+conveyor_auto_probing_p (void)
+{
+  return conveyor_auto_probe_violation_p != nullptr;
+}
+
+/* Record that the active conveyor(auto) probe found a violation.
+   Must not be called unless conveyor_auto_probing_p ().  */
+inline void
+note_conveyor_auto_violation (void)
+{
+  gcc_checking_assert (conveyor_auto_probe_violation_p);
+  *conveyor_auto_probe_violation_p = true;
+}
+
+/* RAII sentinel for a single conveyor(auto) probe attempt: while
+   alive, conveyor_auto_probing_p () is true and every violation
+   conveyor_restrictions_active_p's callers see anywhere sets
+   *VIOLATION.  Probes nest correctly (a conveyor(auto) function's own
+   body may itself call another conveyor(auto) function, whose
+   deduction must run to answer the outer probe's own callee-is-
+   conveyor question), each with its own VIOLATION flag -- this is a
+   plain save/restore, not a single-entry guard.  Self-referential
+   deduction (a conveyor(auto) function depending on its own
+   conveyor-ness) is guarded separately, by maybe_instantiate_
+   conveyor's own hash_set, not here.  */
+class conveyor_auto_probe_sentinel
+{
+public:
+  bool *saved;
+  bool active;
+  /* ACTIVE lets a caller conditionally no-op this sentinel (e.g. when
+     D isn't actually an unresolved conveyor(auto) specialization)
+     without a separate hand-written fallback path, matching
+     suppress_conveyor_restrictions_for_converted_constant_expr_
+     sentinel's own ACTIVE parameter above.  When inactive, VIOLATION
+     is never touched.  */
+  explicit conveyor_auto_probe_sentinel (bool *violation, bool active = true)
+    : saved (conveyor_auto_probe_violation_p), active (active)
+  {
+    if (active)
+      conveyor_auto_probe_violation_p = violation;
+  }
+  ~conveyor_auto_probe_sentinel ()
+  {
+    if (active)
+      conveyor_auto_probe_violation_p = saved;
+  }
+};
+
 extern void set_fn_contract_specifiers		(tree, tree);
 extern void update_fn_contract_specifiers	(tree, tree);
 extern tree get_fn_contract_specifiers		(tree);

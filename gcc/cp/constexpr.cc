@@ -1053,9 +1053,14 @@ check_conveyor_function_body_r (tree *tp, int *, void *)
 	if (fn && DECL_NAME (fn)
 	    && id_equal (DECL_NAME (fn), "unreachable")
 	    && decl_in_std_namespace_p (fn))
-	  error_at (EXPR_LOCATION (t),
-		    "%<std::unreachable%> not permitted in a conveyor "
-		    "function or predicate");
+	  {
+	    if (conveyor_auto_probing_p ())
+	      note_conveyor_auto_violation ();
+	    else
+	      error_at (EXPR_LOCATION (t),
+			"%<std::unreachable%> not permitted in a conveyor "
+			"function or predicate");
+	  }
       }
       break;
 
@@ -1116,9 +1121,14 @@ check_conveyor_function_body (tree fun)
       && !DECL_CONSTRUCTOR_P (fun)
       && !DECL_DESTRUCTOR_P (fun)
       && !oa_stmt_terminates_p (body))
-    error_at (DECL_SOURCE_LOCATION (fun),
-	      "conveyor function %qD with non-%<void%> return type must "
-	      "contain a %<return%> statement", fun);
+    {
+      if (conveyor_auto_probing_p ())
+	note_conveyor_auto_violation ();
+      else
+	error_at (DECL_SOURCE_LOCATION (fun),
+		  "conveyor function %qD with non-%<void%> return type must "
+		  "contain a %<return%> statement", fun);
+    }
 }
 
 /* BODY is a validated and massaged definition of a constexpr

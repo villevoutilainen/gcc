@@ -656,6 +656,9 @@ bool suppress_conveyor_restrictions_for_trait_query_p = false;
 
 bool suppress_conveyor_restrictions_for_converted_constant_expr_p = false;
 
+/* See contracts.h for the full rationale.  */
+bool *conveyor_auto_probe_violation_p = nullptr;
+
 /* True if constructs subject to the D4324 conveyor-function syntactic
    restrictions (gcc/cp/constexpr.cc's check_conveyor_function_body, and
    the point-of-construction checks alongside it) should be rejected
