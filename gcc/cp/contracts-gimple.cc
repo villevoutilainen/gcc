@@ -2388,6 +2388,197 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
   return true;
 }
 
+/* New infrastructure, not a mirror of an existing mechanism: unlike
+   every other fact in this file (self-trust from a declared contract,
+   or a callee's declared postcondition at a call site), field/call-
+   range facts have never been derivable from an ORDINARY runtime
+   branch condition here (e.g. 'if (h->count < 5)' / 'if (i < v.size
+   ())' in ordinary, uncontracted code) -- there is no GIMPLE_COND/edge
+   handling anywhere else in this file. Ordinary bare-decl/SSA ranges
+   get this for free from GCC's own general gimple_ranger (already
+   consulted elsewhere in this file), which is why this gap was never
+   visible until field/call-range facts existed at all. VAL, if it's an
+   SSA_NAME whose def-stmt is a field load ('x = h->count') or a call
+   to a DECL_DECLARED_CONVEYOR_P accessor ('x = v.size ()'), is
+   recognized as such -- the GIMPLE-native analogue of contracts.cc's
+   own oa_symbolic_comparison_conjunct_shape/oa_call_range_conjunct_
+   shape, which instead operate on a still-AST contract-condition tree
+   (a contract specifier keeps its original AST form even after the
+   surrounding function body is gimplified, which is why those two
+   never needed a GIMPLE-native counterpart before now -- an ordinary
+   if-condition in the function body has no such luxury).  */
+
+static bool
+cg_cond_operand_shape (tree val, bool *is_call, tree *field_out, tree *base_out,
+			 tree *callee_out, tree *receiver_out)
+{
+  if (TREE_CODE (val) != SSA_NAME)
+    return false;
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (!def)
+    return false;
+
+  if (is_gimple_call (def))
+    {
+      gcall *call = as_a <gcall *> (def);
+      tree callee = gimple_call_fndecl (call);
+      if (!callee || !DECL_OBJECT_MEMBER_FUNCTION_P (callee)
+	  || gimple_call_num_args (call) != 1)
+	return false;
+      maybe_instantiate_conveyor (callee);
+      if (!DECL_DECLARED_CONVEYOR_P (callee))
+	return false;
+      *is_call = true;
+      *callee_out = callee;
+      *receiver_out = gimple_call_arg (call, 0);
+      return true;
+    }
+
+  if (gimple_assign_single_p (def))
+    {
+      tree rhs = gimple_assign_rhs1 (def);
+      if (TREE_CODE (rhs) != COMPONENT_REF)
+	return false;
+      tree field = TREE_OPERAND (rhs, 1);
+      if (TREE_CODE (field) != FIELD_DECL)
+	return false;
+      tree obj = TREE_OPERAND (rhs, 0);
+      tree obj_expr
+	= TREE_CODE (obj) == MEM_REF && integer_zerop (TREE_OPERAND (obj, 1))
+	  ? TREE_OPERAND (obj, 0) : obj;
+      *is_call = false;
+      *field_out = field;
+      *base_out = obj_expr;
+      return true;
+    }
+
+  return false;
+}
+
+/* If E is a true/false edge of a GIMPLE_COND matching the field/call-
+   range shape above, tighten the corresponding fact in STATE (already
+   a copy of the predecessor's own OUT state -- see this function's
+   only caller, cg_compute_in_state) the same way an established
+   contract-derived fact is tightened elsewhere in this file. A fact
+   created this way (from a real, executed branch, not from any
+   contract) is tagged conveyor_established = true when brand new,
+   mirroring contracts.cc's own oa_refine_single_comparison exactly --
+   see that function's own comment for the full rationale. No
+   relational (param-vs-call) counterpart here: that shape is only ever
+   established from a declared precondition's own self-trust, never
+   from an ordinary branch, on the AST side either (contracts.cc's own
+   oa_establish_shared_substrate_self_trust, never oa_refine_single_
+   comparison) -- this mirrors that same scope exactly.  */
+
+static void
+cg_refine_edge_into (edge e, cg_dom_fact_state &state)
+{
+  if (!(e->flags & (EDGE_TRUE_VALUE | EDGE_FALSE_VALUE)))
+    return;
+  gimple *stmt = gsi_stmt (gsi_last_bb (e->src));
+  if (!stmt || gimple_code (stmt) != GIMPLE_COND)
+    return;
+  gcond *cond = as_a <gcond *> (stmt);
+
+  tree_code code = gimple_cond_code (cond);
+  tree lhs = gimple_cond_lhs (cond);
+  tree rhs = gimple_cond_rhs (cond);
+  bool asserted_true = (e->flags & EDGE_TRUE_VALUE) != 0;
+
+  /* 'if (v.size () > 3)' does not gimplify into a GIMPLE_COND that
+     directly embeds the '>' comparison -- confirmed by direct testing
+     (this refinement never fired at all until this was added): the
+     comparison is computed into a separate boolean temporary first
+     ('_1 = v.size (); _2 = _1 > 3;'), and the GIMPLE_COND itself only
+     ever tests that temporary against zero ('if (_2 != 0)').  Unwrap
+     that one indirection here: trace the temporary's own def-stmt for
+     the real comparison, folding its own polarity into ASSERTED_TRUE
+     (a '_2 == 0' test flips which edge means "the real comparison held
+     true", unlike a '_2 != 0' test).  Only one hop is unwrapped, not a
+     general SSA copy-chase -- this exact shape (a single, freshly
+     computed boolean temp feeding the branch) is what's actually
+     produced here; anything deeper is left unrecognized, the same
+     "safe, just occasionally conservative" discipline used throughout
+     this whole engine.  */
+  if ((code == NE_EXPR || code == EQ_EXPR)
+      && TREE_CODE (rhs) == INTEGER_CST && integer_zerop (rhs)
+      && TREE_CODE (lhs) == SSA_NAME)
+    {
+      gimple *def = SSA_NAME_DEF_STMT (lhs);
+      if (!def || !is_gimple_assign (def))
+	return;
+      tree_code def_code = gimple_assign_rhs_code (def);
+      if (def_code != LT_EXPR && def_code != LE_EXPR && def_code != GT_EXPR
+	  && def_code != GE_EXPR && def_code != EQ_EXPR)
+	return;
+      if (code == EQ_EXPR)
+	asserted_true = !asserted_true;
+      code = def_code;
+      lhs = gimple_assign_rhs1 (def);
+      rhs = gimple_assign_rhs2 (def);
+    }
+
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return;
+
+  tree other, const_val;
+  bool flipped;
+  if (TREE_CODE (rhs) == INTEGER_CST)
+    other = lhs, const_val = rhs, flipped = false;
+  else if (TREE_CODE (lhs) == INTEGER_CST)
+    other = rhs, const_val = lhs, flipped = true;
+  else
+    return;
+
+  bool is_call;
+  tree field, base, callee, receiver;
+  if (!cg_cond_operand_shape (other, &is_call, &field, &base, &callee, &receiver))
+    return;
+
+  if (flipped)
+    switch (code)
+      {
+      case LT_EXPR: code = GT_EXPR; break;
+      case LE_EXPR: code = GE_EXPR; break;
+      case GT_EXPR: code = LT_EXPR; break;
+      case GE_EXPR: code = LE_EXPR; break;
+      default: break;
+      }
+  if (!asserted_true)
+    switch (code)
+      {
+      case LT_EXPR: code = GE_EXPR; break;
+      case LE_EXPR: code = GT_EXPR; break;
+      case GT_EXPR: code = LE_EXPR; break;
+      case GE_EXPR: code = LT_EXPR; break;
+      default: return; /* NOT(x == val) -- skip.  */
+      }
+
+  if (is_call)
+    {
+      tree identity = cg_gimple_object_identity (receiver);
+      if (!identity)
+	return;
+      cg_field_fact *existing = state.call.get ({identity, callee});
+      cg_range_lite refined = existing ? existing->range : cg_range_lite ();
+      bool conveyor_established = existing ? existing->conveyor_established : true;
+      cg_tighten_range_bound (refined, code, wi::to_widest (const_val));
+      state.call.put ({identity, callee}, { refined, conveyor_established });
+    }
+  else
+    {
+      tree identity = cg_gimple_object_identity (base);
+      if (!identity)
+	return;
+      cg_field_fact *existing = state.field.get ({identity, field});
+      cg_range_lite refined = existing ? existing->range : cg_range_lite ();
+      bool conveyor_established = existing ? existing->conveyor_established : true;
+      cg_tighten_range_bound (refined, code, wi::to_widest (const_val));
+      state.field.put ({identity, field}, { refined, conveyor_established });
+    }
+}
+
 /* IN_STATE is computed identically by both the fixed-point loop below
    (which must recompute it, possibly several times, for every block)
    and the final diagnostic pass (which needs the very same computation
@@ -2416,13 +2607,22 @@ cg_compute_in_state (basic_block bb,
       cg_dom_fact_state **pred_out = block_out.get (e->src);
       if (!pred_out)
 	continue;
+      /* Refine a copy of the predecessor's own OUT state along this
+	 specific edge (cg_refine_edge_into is a no-op unless E is a
+	 true/false edge of a recognized field/call-range GIMPLE_COND),
+	 so a fact this refinement adds is visible only down the branch
+	 it's actually sound for, not merged in from every predecessor
+	 indiscriminately.  */
+      cg_dom_fact_state refined;
+      cg_dom_fact_state_assign (&refined, **pred_out);
+      cg_refine_edge_into (e, refined);
       if (first)
 	{
-	  cg_dom_fact_state_assign (in_state, **pred_out);
+	  cg_dom_fact_state_assign (in_state, refined);
 	  first = false;
 	}
       else
-	cg_dom_fact_state_merge (in_state, **pred_out);
+	cg_dom_fact_state_merge (in_state, refined);
     }
   if (first)  /* ENTRY itself, or no predecessor processed yet at all.  */
     cg_dom_fact_state_assign (in_state, seed);
