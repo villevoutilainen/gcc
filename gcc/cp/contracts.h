@@ -306,14 +306,16 @@ extern bool oa_match_comparison_against_param
 
 /* The call analogue of oa_match_comparison_against_param immediately
    above: "PARAM OP RECEIVER.ACCESSOR ()" (e.g. 'i < v.size ()'), where
-   ACCESSOR is a DECL_DECLARED_CONVEYOR_P accessor rather than another
-   of the callee's own parameters. RHS_RECEIVER_OUT/RHS_CALLEE_OUT are
-   not resolved values; the caller substitutes RHS_RECEIVER_OUT with a
-   specific call site's own argument and consults a *call-relational*
-   fact, the call-shaped counterpart of oa_env::relational_map.  */
+   ACCESSOR is a DECL_DECLARED_CONVEYOR_P accessor, or, when ALLOW_
+   SYMBOLIC_ACCESSOR is true, a DECL_DECLARED_SYMBOLIC_P one instead,
+   rather than another of the callee's own parameters. RHS_RECEIVER_OUT/
+   RHS_CALLEE_OUT are not resolved values; the caller substitutes RHS_
+   RECEIVER_OUT with a specific call site's own argument and consults a
+   *call-relational* fact, the call-shaped counterpart of oa_env::
+   relational_map.  */
 extern bool oa_match_comparison_against_call
   (tree conjunct, tree *param_out, tree_code *code_out,
-   tree *rhs_receiver_out, tree *rhs_callee_out);
+   tree *rhs_receiver_out, tree *rhs_callee_out, bool allow_symbolic_accessor);
 
 /* The call-vs-call analogue of oa_match_comparison_against_call
    immediately above: "RECEIVER_1.CALLEE_1 () OP RECEIVER_2.CALLEE_2 ()"
@@ -326,7 +328,8 @@ extern bool oa_match_comparison_against_call
    a *call-call-relational* fact.  */
 extern bool oa_match_call_against_call
   (tree conjunct, tree *lhs_receiver_out, tree *lhs_callee_out,
-   tree_code *code_out, tree *rhs_receiver_out, tree *rhs_callee_out);
+   tree_code *code_out, tree *rhs_receiver_out, tree *rhs_callee_out,
+   bool allow_symbolic_accessor);
 
 /* If CONJUNCT has the shape "RESULT_ID OP other", where RESULT_ID is a
    postcondition's own already-known return-value binder and "other" is
@@ -346,7 +349,7 @@ extern bool oa_match_result_relation
    parameters.  */
 extern bool oa_match_result_call_relation
   (tree conjunct, tree result_id, tree_code *code_out,
-   tree *rhs_receiver_out, tree *rhs_callee_out);
+   tree *rhs_receiver_out, tree *rhs_callee_out, bool allow_symbolic_accessor);
 
 /* True if an established relational fact of code ESTABLISHED (e.g.
    LT_EXPR) is strong enough to satisfy a required comparison of code
@@ -551,14 +554,15 @@ extern tree oa_strip_symbolic_ptr_expr_public (tree ptr_expr);
 /* Recognize CONJUNCT as "RECEIVER.ACCESSOR () OP const" -- the call-
    range analogue of oa_match_field_range_comparison immediately above,
    for a call to a DECL_DECLARED_CONVEYOR_P accessor (e.g. 'i < v.size
-   ()') rather than a ptr->field access.  See the definition (contracts.cc)
-   for the full rationale, including why a 'symbolic'-declared function
-   is never accepted here.  Exported for the same reason as that
-   function: a GIMPLE-pass-based or plugin consumer that needs this
-   shape directly.  */
+   ()'), or, when ALLOW_SYMBOLIC_ACCESSOR is true, a DECL_DECLARED_
+   SYMBOLIC_P one instead, rather than a ptr->field access.  See the
+   definition (contracts.cc) for the full rationale on the two-tag gate
+   and why a plain, untagged accessor is never accepted either way.
+   Exported for the same reason as that function: a GIMPLE-pass-based or
+   plugin consumer that needs this shape directly.  */
 extern bool oa_match_call_range_comparison
   (tree conjunct, tree *receiver_out, tree *callee_out, tree_code *code_out,
-   tree *const_val_out);
+   tree *const_val_out, bool allow_symbolic_accessor);
 
 /* True if A and B are both non-__restrict pointer/reference PARM_DECLs
    with the same (or void-compatible) pointee type, i.e. a caller could

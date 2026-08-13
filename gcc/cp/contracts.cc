@@ -8235,7 +8235,97 @@ static bool oa_symbolic_comparison_conjunct_shape
 static tree oa_strip_symbolic_ptr_expr (tree ptr_expr);
 static bool oa_call_range_conjunct_shape
   (tree conjunct, tree *receiver_out, tree *callee_out, tree_code *code_out,
-   tree *const_val_out);
+   tree *const_val_out, bool allow_symbolic_accessor);
+
+/* The last-resort fallback inside oa_refine_single_comparison below:
+   "DECL OP <exactly-known point>" refined into ENV's own plain, untagged
+   range map (m_range_map) -- factored out into its own function because
+   it's also needed by oa_handle_precondition_stmt's own SYMBOLIC_OK
+   block (see that call site's own comment): unlike the ptr->field/call-
+   range/relational/call-relational blocks earlier in oa_refine_single_
+   comparison (each hardcoding CONVEYOR_ESTABLISHED true, or gated on
+   ALLOW_SYMBOLIC_ACCESSOR false, because they're the "if-condition
+   establishment, real executed code" shapes), a plain range fact carries
+   no provenance tag at all -- it's trusted uniformly everywhere once
+   established, exactly like an ordinary 'if (i < N)' branch's own range
+   refinement. So this one piece is safe to reuse verbatim for a
+   symbolic-only precondition's own self-trust, while the rest of
+   oa_refine_single_comparison is not (calling the whole function again
+   there would re-establish the ptr->field/call-range/relational/call-
+   relational facts oa_establish_shared_substrate_self_trust already
+   established correctly, but with the wrong CONVEYOR_ESTABLISHED tag and
+   the wrong accessor gate).  */
+
+static void
+oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  enum tree_code code = TREE_CODE (c);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return;
+
+  tree op0_scalar = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  tree op1_scalar = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+  tree op0 = oa_strip_conversion_call (op0_scalar);
+  tree op1 = oa_strip_conversion_call (op1_scalar);
+
+  tree decl0 = (TREE_CODE (op0) == INIT_EXPR || TREE_CODE (op0) == MODIFY_EXPR)
+    ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op0, 0)) : op0;
+  tree decl1 = (TREE_CODE (op1) == INIT_EXPR || TREE_CODE (op1) == MODIFY_EXPR)
+    ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op1, 0)) : op1;
+
+  tree decl, other;
+  bool flipped;
+  if ((VAR_P (decl0) || TREE_CODE (decl0) == PARM_DECL)
+      && INTEGRAL_TYPE_P (TREE_TYPE (op0_scalar)))
+    decl = decl0, other = op1, flipped = false;
+  else if ((VAR_P (decl1) || TREE_CODE (decl1) == PARM_DECL)
+	   && INTEGRAL_TYPE_P (TREE_TYPE (op1_scalar)))
+    decl = decl1, other = op0, flipped = true;
+  else
+    return;
+
+  oa_range_fact other_fact;
+  if (!oa_get_range (other, env, &other_fact) || other_fact.base != NULL_TREE
+      || !other_fact.has_lo || !other_fact.has_hi
+      || other_fact.lo != other_fact.hi)
+    return;
+  widest_int val = other_fact.lo;
+
+  if (flipped)
+    switch (code)
+      {
+      case LT_EXPR: code = GT_EXPR; break;
+      case LE_EXPR: code = GE_EXPR; break;
+      case GT_EXPR: code = LT_EXPR; break;
+      case GE_EXPR: code = LE_EXPR; break;
+      default: break;
+      }
+
+  if (!asserted_true)
+    switch (code)
+      {
+      case LT_EXPR: code = GE_EXPR; break;
+      case LE_EXPR: code = GT_EXPR; break;
+      case GT_EXPR: code = LE_EXPR; break;
+      case GE_EXPR: code = LT_EXPR; break;
+      default: return; /* NOT(decl == val) is decl != val -- skip.  */
+      }
+
+  oa_range_fact refined;
+  if (!env.range_get (decl, &refined))
+    {
+      refined.base = NULL_TREE;
+      refined.has_lo = refined.has_hi = false;
+    }
+
+  oa_tighten_range_bound (refined, code, val);
+  env.range_set (decl, refined);
+}
 
 static void
 oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
@@ -8308,7 +8398,8 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
     tree receiver_expr, callee, call_const;
     tree_code call_code;
     if (oa_call_range_conjunct_shape (conjunct, &receiver_expr, &callee,
-				       &call_code, &call_const)
+				       &call_code, &call_const,
+				       /*allow_symbolic_accessor=*/false)
 	&& TREE_CODE (call_const) == INTEGER_CST)
       {
 	receiver_expr = oa_strip_symbolic_ptr_expr (receiver_expr);
@@ -8388,7 +8479,8 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
     tree param, rhs_receiver, rhs_callee;
     tree_code rel_code;
     if (oa_match_comparison_against_call (conjunct, &param, &rel_code,
-					    &rhs_receiver, &rhs_callee))
+					    &rhs_receiver, &rhs_callee,
+					    /*allow_symbolic_accessor=*/false))
       {
 	if (!asserted_true)
 	  switch (rel_code)
@@ -8410,7 +8502,8 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
     tree lhs_receiver, lhs_callee, rhs_receiver, rhs_callee;
     tree_code call_code;
     if (oa_match_call_against_call (conjunct, &lhs_receiver, &lhs_callee,
-				      &call_code, &rhs_receiver, &rhs_callee))
+				      &call_code, &rhs_receiver, &rhs_callee,
+				      /*allow_symbolic_accessor=*/false))
       {
 	/* Only the three-function chain self-trust establishment already
 	   uses (contracts.cc:12889's own establishment loop), not the
@@ -8441,107 +8534,7 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
       }
   }
 
-  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
-  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
-    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
-
-  enum tree_code code = TREE_CODE (c);
-  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
-      && code != GE_EXPR && code != EQ_EXPR)
-    return;
-
-  /* A class-typed operand reached via its own implicit conversion
-     operator (e.g. 'q.operator int() < 5') is recognized the same way
-     a bare scalar-typed operand already is -- OP0_SCALAR/OP1_SCALAR
-     (the actual, already-scalar-typed expression the comparison itself
-     operates on) are kept around alongside OP0/OP1 (conversion-
-     unwrapped down to the underlying, possibly class-typed decl) since
-     the INTEGRAL_TYPE_P check just below needs the former, not the
-     class type the latter might now have.  */
-  tree op0_scalar = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
-  tree op1_scalar = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
-  tree op0 = oa_strip_conversion_call (op0_scalar);
-  tree op1 = oa_strip_conversion_call (op1_scalar);
-
-  /* An assignment written directly as this comparison's own operand
-     ('(i = compute ()) > 0') evaluates to its LHS's newly assigned
-     value -- so for refinement purposes it plays the exact same role
-     the bare decl would.  Safe to unwrap here (into DECL0/DECL1, kept
-     separate from OP0/OP1 themselves): this function is only ever
-     invoked (via oa_refine_range_for_condition) on the top-level
-     condition or a top-level &&-conjunct of it, so reaching the
-     then-branch already guarantees this operand's assignment was
-     actually evaluated. Deliberately does *not* also substitute this
-     unwrapped form into the *other* (non-decl) operand's role below --
-     if a comparison assigns on both sides ('(i = f()) > (j = g())'),
-     the non-tracked side's own freshly assigned value is unknown here
-     (oa_track_condition_assignment only ever tracks one, the first
-     found), and must not be resolved via ENV's possibly-stale prior
-     fact for that decl.  */
-  tree decl0 = (TREE_CODE (op0) == INIT_EXPR || TREE_CODE (op0) == MODIFY_EXPR)
-    ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op0, 0)) : op0;
-  tree decl1 = (TREE_CODE (op1) == INIT_EXPR || TREE_CODE (op1) == MODIFY_EXPR)
-    ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op1, 0)) : op1;
-
-  /* The INTEGRAL_TYPE_P check below deliberately looks at OP0_SCALAR/
-     OP1_SCALAR's own type, not DECL0/DECL1's -- DECL0/DECL1 may now
-     legitimately be class-typed (reached via a conversion operator),
-     while OP0_SCALAR/OP1_SCALAR is always the actual, already-scalar
-     expression the comparison itself operates on (the conversion
-     call's own return type, or the same type as DECL0/DECL1 in every
-     case that isn't a conversion at all).  */
-  tree decl, other;
-  bool flipped;
-  if ((VAR_P (decl0) || TREE_CODE (decl0) == PARM_DECL)
-      && INTEGRAL_TYPE_P (TREE_TYPE (op0_scalar)))
-    decl = decl0, other = op1, flipped = false;
-  else if ((VAR_P (decl1) || TREE_CODE (decl1) == PARM_DECL)
-	   && INTEGRAL_TYPE_P (TREE_TYPE (op1_scalar)))
-    decl = decl1, other = op0, flipped = true;
-  else
-    return;
-
-  oa_range_fact other_fact;
-  if (!oa_get_range (other, env, &other_fact) || other_fact.base != NULL_TREE
-      || !other_fact.has_lo || !other_fact.has_hi
-      || other_fact.lo != other_fact.hi)
-    /* The comparison's other side must resolve to a single, exactly-
-       known point (a literal, or a decl whose own range is already an
-       exact point) -- comparing against a genuine, non-degenerate
-       range on both sides is a further generalization not attempted in
-       E1.  */
-    return;
-  widest_int val = other_fact.lo;
-
-  if (flipped)
-    switch (code)
-      {
-      case LT_EXPR: code = GT_EXPR; break;
-      case LE_EXPR: code = GE_EXPR; break;
-      case GT_EXPR: code = LT_EXPR; break;
-      case GE_EXPR: code = LE_EXPR; break;
-      default: break;
-      }
-
-  if (!asserted_true)
-    switch (code)
-      {
-      case LT_EXPR: code = GE_EXPR; break;
-      case LE_EXPR: code = GT_EXPR; break;
-      case GT_EXPR: code = LE_EXPR; break;
-      case GE_EXPR: code = LT_EXPR; break;
-      default: return; /* NOT(decl == val) is decl != val -- skip.  */
-      }
-
-  oa_range_fact refined;
-  if (!env.range_get (decl, &refined))
-    {
-      refined.base = NULL_TREE;
-      refined.has_lo = refined.has_hi = false;
-    }
-
-  oa_tighten_range_bound (refined, code, val);
-  env.range_set (decl, refined);
+  oa_refine_scalar_range_only (conjunct, env, asserted_true);
 }
 
 /* D4324/P2680: closes the "assignment-in-condition" gap left open when
@@ -10003,7 +9996,9 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	    tree_code rel_code2;
 	    if (oa_match_comparison_against_call (*conjuncts[i], &rel_param2,
 						   &rel_code2, &rhs_receiver,
-						   &rhs_callee)
+						   &rhs_callee,
+						   /*allow_symbolic_accessor=*/
+						     false)
 		&& TREE_CODE (rhs_receiver) == PARM_DECL)
 	      {
 		tree sub_param = oa_substitute_call_arg (callee, call, rel_param2);
@@ -10040,7 +10035,8 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	    tree_code call_code;
 	    if (oa_match_call_against_call (*conjuncts[i], &lhs_receiver,
 					      &lhs_callee, &call_code,
-					      &rhs_receiver, &rhs_callee)
+					      &rhs_receiver, &rhs_callee,
+					      /*allow_symbolic_accessor=*/false)
 		&& TREE_CODE (lhs_receiver) == PARM_DECL
 		&& TREE_CODE (rhs_receiver) == PARM_DECL)
 	      {
@@ -10231,13 +10227,13 @@ static bool oa_symbolic_comparison_conjunct_shape
    call_ranges.  */
 static bool oa_call_range_conjunct_shape
   (tree conjunct, tree *receiver_out, tree *callee_out, tree_code *code_out,
-   tree *const_val_out);
+   tree *const_val_out, bool allow_symbolic_accessor);
 
 /* Forward-declared for the same reason: needed by oa_match_result_
    call_relation below, full definition much further below (alongside
    oa_call_range_conjunct_shape, which shares it).  */
 static bool oa_underlying_call_range_operand
-  (tree op, tree *receiver_out, tree *callee_out);
+  (tree op, tree *receiver_out, tree *callee_out, bool allow_symbolic_accessor);
 
 /* Forward-declared: full definition is below oa_match_result_relation
    (whose call-shaped analogue this is), but oa_call_postcondition_
@@ -10246,7 +10242,7 @@ static bool oa_underlying_call_range_operand
    can reuse it for its own postcondition-range composition.  */
 bool oa_match_result_call_relation
   (tree conjunct, tree result_id, tree_code *code_out,
-   tree *rhs_receiver_out, tree *rhs_callee_out);
+   tree *rhs_receiver_out, tree *rhs_callee_out, bool allow_symbolic_accessor);
 
 /* Forward-declared: full definition is much further below (it needs
    oa_match_result_call_relation immediately above), but oa_walk_stmt's
@@ -10366,7 +10362,8 @@ struct oa_symbolic_call_group
 
 static void
 oa_collect_contract_call_ranges (tree condition,
-				  vec<oa_symbolic_call_group> *out)
+				  vec<oa_symbolic_call_group> *out,
+				  bool allow_symbolic_accessor)
 {
   auto_vec<tree *> conjuncts;
   oa_collect_conjuncts (&condition, &conjuncts);
@@ -10375,7 +10372,8 @@ oa_collect_contract_call_ranges (tree condition,
       tree receiver_expr, callee, const_val;
       tree_code code;
       if (!oa_call_range_conjunct_shape (*conjuncts[i], &receiver_expr,
-					  &callee, &code, &const_val)
+					  &callee, &code, &const_val,
+					  allow_symbolic_accessor)
 	  || TREE_CODE (const_val) != INTEGER_CST)
 	continue;
       /* RECEIVER_EXPR, like PTR_EXPR in the field case, is presented
@@ -10580,7 +10578,9 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 		 count () < 100)'), establishing a fact for the caller's own
 		 receiver the same way.  */
 	      auto_vec<oa_symbolic_call_group> call_groups;
-	      oa_collect_contract_call_ranges (cond, &call_groups);
+	      oa_collect_contract_call_ranges (cond, &call_groups,
+						/*allow_symbolic_accessor=*/
+						  !conveyor_established);
 	      for (unsigned i = 0; i < call_groups.length (); ++i)
 		{
 		  if (TREE_CODE (call_groups[i].receiver_expr) != PARM_DECL)
@@ -10737,7 +10737,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	  tree_code rel_code;
 	  if (!oa_match_comparison_against_call (*conjuncts[i], &rel_param,
 						  &rel_code, &rhs_receiver,
-						  &rhs_callee)
+						  &rhs_callee,
+						  /*allow_symbolic_accessor=*/true)
 	      || TREE_CODE (rhs_receiver) != PARM_DECL)
 	    continue;
 
@@ -10775,7 +10776,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	  tree_code call_code;
 	  if (!oa_match_call_against_call (*conjuncts[i], &lhs_receiver,
 					     &lhs_callee, &call_code,
-					     &rhs_receiver, &rhs_callee)
+					     &rhs_receiver, &rhs_callee,
+					     /*allow_symbolic_accessor=*/true)
 	      || TREE_CODE (lhs_receiver) != PARM_DECL
 	      || TREE_CODE (rhs_receiver) != PARM_DECL)
 	    continue;
@@ -10950,7 +10952,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		 (oa_handle_call_conveyor_call_range_obligation below),
 		 which requires conveyor_established specifically.  */
 	      auto_vec<oa_symbolic_call_group> call_groups;
-	      oa_collect_contract_call_ranges (cond, &call_groups);
+	      oa_collect_contract_call_ranges (cond, &call_groups,
+						/*allow_symbolic_accessor=*/true);
 	      for (unsigned i = 0; i < call_groups.length (); ++i)
 		{
 		  if (TREE_CODE (call_groups[i].receiver_expr) != PARM_DECL)
@@ -11135,7 +11138,8 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
 	continue;
 
       auto_vec<oa_symbolic_call_group> call_groups;
-      oa_collect_contract_call_ranges (cond, &call_groups);
+      oa_collect_contract_call_ranges (cond, &call_groups,
+					/*allow_symbolic_accessor=*/false);
       for (unsigned i = 0; i < call_groups.length (); ++i)
 	{
 	  if (TREE_CODE (call_groups[i].receiver_expr) != PARM_DECL)
@@ -11748,7 +11752,8 @@ oa_call_postcondition_range_p (tree call, oa_env &env, oa_range_fact *out,
 	  tree_code rcode;
 	  tree rhs_receiver, rhs_callee;
 	  if (!oa_match_result_call_relation (*conjuncts[i], result_id, &rcode,
-					       &rhs_receiver, &rhs_callee)
+					       &rhs_receiver, &rhs_callee,
+					       /*allow_symbolic_accessor=*/false)
 	      || TREE_CODE (rhs_receiver) != PARM_DECL)
 	    continue;
 	  tree sub_receiver = oa_substitute_call_arg (callee, call, rhs_receiver);
@@ -12333,8 +12338,17 @@ oa_precondition_call_range_obligations
       if (cond == NULL_TREE || cond == error_mark_node)
 	continue;
 
+      /* This export serves both conveyor's and symbolic's own plugin-
+	 side consumers, filtering matches to its own flavor via CONTRACT
+	 itself once handed to CALLBACK (see the comment above) -- so the
+	 shape's own accessor gate must widen exactly when CONTRACT itself
+	 is symbolic-, not conveyor-, active, the same per-contract flavor
+	 rule used everywhere else in this file.  */
       auto_vec<oa_symbolic_call_group> call_groups;
-      oa_collect_contract_call_ranges (cond, &call_groups);
+      oa_collect_contract_call_ranges
+	(cond, &call_groups,
+	 /*allow_symbolic_accessor=*/
+	   !oa_contract_conveyor_active_p (contract, callee));
       for (unsigned i = 0; i < call_groups.length (); ++i)
 	{
 	  if (TREE_CODE (call_groups[i].receiver_expr) != PARM_DECL)
@@ -13077,7 +13091,9 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
       tree param, rhs_receiver, rhs_callee;
       tree_code code;
       if (oa_match_comparison_against_call (*conjuncts[i], &param, &code,
-					     &rhs_receiver, &rhs_callee))
+					     &rhs_receiver, &rhs_callee,
+					     /*allow_symbolic_accessor=*/
+					       !conveyor_ok))
 	env.call_relational_set (param, code, rhs_receiver, rhs_callee,
 				  conveyor_ok, oa_range_fact_exact (0));
     }
@@ -13098,7 +13114,8 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
       tree_code code;
       if (!oa_match_call_against_call (*conjuncts[i], &lhs_receiver,
 					 &lhs_callee, &code, &rhs_receiver,
-					 &rhs_callee))
+					 &rhs_callee,
+					 /*allow_symbolic_accessor=*/!conveyor_ok))
 	continue;
       tree identity;
       if (!oa_object_identity_decl (lhs_receiver, &identity)
@@ -13153,7 +13170,8 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
      'pre<ctrl>(n < this->size ())') for the rest of this function's own
      body, the same "trust your own precondition" principle.  */
   auto_vec<oa_symbolic_call_group> call_groups;
-  oa_collect_contract_call_ranges (cond, &call_groups);
+  oa_collect_contract_call_ranges (cond, &call_groups,
+				    /*allow_symbolic_accessor=*/!conveyor_ok);
   for (unsigned i = 0; i < call_groups.length (); ++i)
     {
       tree identity;
@@ -13316,6 +13334,23 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 	}
       for (unsigned i = 0; i < nz_facts.length (); ++i)
 	env.symbolic_nz_set (nz_facts[i], true);
+      /* A plain scalar-range conjunct ('k <= 0') carries no provenance
+	 tag at all (unlike is_object_address/nonzero-ness just above, or
+	 the ptr->field/call-range/relational/call-relational shapes
+	 oa_establish_shared_substrate_self_trust already handled for both
+	 flavors) -- it's trusted uniformly once established, so a
+	 symbolic-only precondition's own conjunct seeds ENV's real range
+	 map exactly like a conveyor one does above.  Found via direct
+	 testing: without this, a symbolic-only precondition's own 'k <=
+	 0' was invisible to oa_get_range/oa_get_call_relational's own
+	 arithmetic-shift fallback for a *later* statement in the same
+	 body ('int j = i + k;'), even though the exact same shape works
+	 for a conveyor-active precondition.  oa_refine_scalar_range_only
+	 is oa_refine_single_comparison's own last-resort fallback,
+	 factored out for reuse here -- see its own comment for why only
+	 this one piece, not the whole function, is safe to reuse.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	oa_refine_scalar_range_only (*conjuncts[i], env, /*asserted_true=*/true);
     }
 }
 
@@ -13594,6 +13629,12 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 	}
       for (unsigned i = 0; i < nz_facts.length (); ++i)
 	env.symbolic_nz_set (nz_facts[i], true);
+      /* See the identical fix and comment in oa_handle_precondition_stmt
+	 above: a plain scalar-range conjunct carries no provenance tag,
+	 so it's safe (and, per that comment, necessary) to seed it for a
+	 symbolic-only contract_assert too, not just a conveyor one.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	oa_refine_scalar_range_only (*conjuncts[i], env, /*asserted_true=*/true);
     }
 }
 
@@ -16127,7 +16168,8 @@ oa_match_result_relation (tree conjunct, tree result_id, tree_code *code_out,
 
 bool
 oa_match_result_call_relation (tree conjunct, tree result_id, tree_code *code_out,
-				 tree *rhs_receiver_out, tree *rhs_callee_out)
+				 tree *rhs_receiver_out, tree *rhs_callee_out,
+				 bool allow_symbolic_accessor)
 {
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
   while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
@@ -16144,10 +16186,12 @@ oa_match_result_call_relation (tree conjunct, tree result_id, tree_code *code_ou
   tree receiver, callee;
   bool flipped;
   if (op0 == result_id
-      && oa_underlying_call_range_operand (op1, &receiver, &callee))
+      && oa_underlying_call_range_operand (op1, &receiver, &callee,
+					    allow_symbolic_accessor))
     flipped = false;
   else if (op1 == result_id
-	   && oa_underlying_call_range_operand (op0, &receiver, &callee))
+	   && oa_underlying_call_range_operand (op0, &receiver, &callee,
+						 allow_symbolic_accessor))
     flipped = true;
   else
     return false;
@@ -16225,7 +16269,8 @@ oa_compose_call_result_range (tree lhs, tree rhs, oa_env &env)
 	  tree_code rcode;
 	  tree rhs_receiver, rhs_callee;
 	  if (!oa_match_result_call_relation (*conjuncts[i], result_id, &rcode,
-					       &rhs_receiver, &rhs_callee)
+					       &rhs_receiver, &rhs_callee,
+					       /*allow_symbolic_accessor=*/false)
 	      || TREE_CODE (rhs_receiver) != PARM_DECL)
 	    continue;
 	  tree sub_receiver = oa_substitute_call_arg (callee, rhs, rhs_receiver);
@@ -16867,17 +16912,31 @@ oa_symbolic_comparison_conjunct_shape (tree conjunct, tree *field_out,
 
 /* Shared by oa_call_range_conjunct_shape below and oa_match_comparison_
    against_call further below: is OP (one side of a top-level
-   comparison, not yet stripped) a call to a DECL_DECLARED_CONVEYOR_P
-   accessor with no extra arguments (RECEIVER.ACCESSOR())? If so,
-   RECEIVER_OUT/CALLEE_OUT describe it -- RECEIVER_OUT presented the way
-   a call's own implicit-object argument actually appears in the tree
-   (see oa_call_range_conjunct_shape's own comment on that). Never
-   DECL_DECLARED_SYMBOLIC_P -- a 'symbolic' function has no definition
-   at all and can never genuinely execute, so it has no real value
-   either of these two shapes could ever compare against.  */
+   comparison, not yet stripped) a call to an accessor with no extra
+   arguments (RECEIVER.ACCESSOR())? If so, RECEIVER_OUT/CALLEE_OUT
+   describe it -- RECEIVER_OUT presented the way a call's own implicit-
+   object argument actually appears in the tree (see oa_call_range_
+   conjunct_shape's own comment on that).
+
+   The accessor must be DECL_DECLARED_CONVEYOR_P, or, when
+   ALLOW_SYMBOLIC_ACCESSOR is true, may instead be DECL_DECLARED_
+   SYMBOLIC_P. Either tag is what licenses treating two textual mentions
+   of RECEIVER.ACCESSOR() as denoting the same value: conveyor via
+   verified purity, symbolic by fiat (it's an axiom, no real body to
+   disagree with). A plain, untagged accessor gives neither guarantee
+   and is never accepted, regardless of ALLOW_SYMBOLIC_ACCESSOR -- this
+   analysis never walks a callee's own definition to find out what it
+   actually does. ALLOW_SYMBOLIC_ACCESSOR is true only when matching a
+   symbolic-flavored contract's own condition (self-trust/consult of a
+   contract already known to be symbolic-active, never conveyor-active);
+   a conveyor-flavored contract's condition really executes at runtime,
+   and a symbolic accessor (no definition at all) could never do that,
+   so conveyor's own gate never widens. See .claude/plans/lazy-stirring-
+   pearl.md for the full rationale.  */
 
 static bool
-oa_underlying_call_range_operand (tree op, tree *receiver_out, tree *callee_out)
+oa_underlying_call_range_operand (tree op, tree *receiver_out, tree *callee_out,
+				    bool allow_symbolic_accessor)
 {
   tree comp = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (op));
   if (TREE_CODE (comp) != CALL_EXPR || call_expr_nargs (comp) != 1)
@@ -16889,7 +16948,8 @@ oa_underlying_call_range_operand (tree op, tree *receiver_out, tree *callee_out)
     return false;
 
   maybe_instantiate_conveyor (callee);
-  if (!DECL_DECLARED_CONVEYOR_P (callee))
+  if (!DECL_DECLARED_CONVEYOR_P (callee)
+      && !(allow_symbolic_accessor && DECL_DECLARED_SYMBOLIC_P (callee)))
     return false;
 
   /* The implicit-object argument is presented wrapped for const-
@@ -16913,7 +16973,7 @@ oa_underlying_call_range_operand (tree op, tree *receiver_out, tree *callee_out)
 static bool
 oa_call_range_conjunct_shape (tree conjunct, tree *receiver_out,
 			       tree *callee_out, tree_code *code_out,
-			       tree *const_val_out)
+			       tree *const_val_out, bool allow_symbolic_accessor)
 {
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
   while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
@@ -16937,7 +16997,8 @@ oa_call_range_conjunct_shape (tree conjunct, tree *receiver_out,
     return false;
 
   tree receiver, callee;
-  if (!oa_underlying_call_range_operand (comp, &receiver, &callee))
+  if (!oa_underlying_call_range_operand (comp, &receiver, &callee,
+					  allow_symbolic_accessor))
     return false;
 
   if (flipped)
@@ -16974,7 +17035,8 @@ oa_call_range_conjunct_shape (tree conjunct, tree *receiver_out,
 bool
 oa_match_comparison_against_call (tree conjunct, tree *param_out,
 				    tree_code *code_out, tree *rhs_receiver_out,
-				    tree *rhs_callee_out)
+				    tree *rhs_callee_out,
+				    bool allow_symbolic_accessor)
 {
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
   while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
@@ -16991,10 +17053,12 @@ oa_match_comparison_against_call (tree conjunct, tree *param_out,
   tree param, receiver, callee;
   bool flipped;
   if ((param = oa_underlying_param_operand (op0))
-      && oa_underlying_call_range_operand (op1, &receiver, &callee))
+      && oa_underlying_call_range_operand (op1, &receiver, &callee,
+					    allow_symbolic_accessor))
     flipped = false;
   else if ((param = oa_underlying_param_operand (op1))
-	   && oa_underlying_call_range_operand (op0, &receiver, &callee))
+	   && oa_underlying_call_range_operand (op0, &receiver, &callee,
+						 allow_symbolic_accessor))
     flipped = true;
   else
     return false;
@@ -17024,10 +17088,12 @@ oa_match_comparison_against_call (tree conjunct, tree *param_out,
 bool
 oa_match_call_range_comparison (tree conjunct, tree *receiver_out,
 				  tree *callee_out, tree_code *code_out,
-				  tree *const_val_out)
+				  tree *const_val_out,
+				  bool allow_symbolic_accessor)
 {
   return oa_call_range_conjunct_shape (conjunct, receiver_out, callee_out,
-					code_out, const_val_out);
+					code_out, const_val_out,
+					allow_symbolic_accessor);
 }
 
 /* Recognize CONJUNCT as "RECEIVER_1.CALLEE_1 () OP RECEIVER_2.CALLEE_2 ()"
@@ -17044,7 +17110,8 @@ oa_match_call_range_comparison (tree conjunct, tree *receiver_out,
 bool
 oa_match_call_against_call (tree conjunct, tree *lhs_receiver_out,
 			      tree *lhs_callee_out, tree_code *code_out,
-			      tree *rhs_receiver_out, tree *rhs_callee_out)
+			      tree *rhs_receiver_out, tree *rhs_callee_out,
+			      bool allow_symbolic_accessor)
 {
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
   while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
@@ -17059,8 +17126,10 @@ oa_match_call_against_call (tree conjunct, tree *lhs_receiver_out,
   tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
 
   tree lhs_receiver, lhs_callee, rhs_receiver, rhs_callee;
-  if (!oa_underlying_call_range_operand (op0, &lhs_receiver, &lhs_callee)
-      || !oa_underlying_call_range_operand (op1, &rhs_receiver, &rhs_callee))
+  if (!oa_underlying_call_range_operand (op0, &lhs_receiver, &lhs_callee,
+					  allow_symbolic_accessor)
+      || !oa_underlying_call_range_operand (op1, &rhs_receiver, &rhs_callee,
+					     allow_symbolic_accessor))
     return false;
 
   *lhs_receiver_out = lhs_receiver;
