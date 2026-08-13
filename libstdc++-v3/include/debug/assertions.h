@@ -32,6 +32,17 @@
 #include <bits/c++config.h>
 
 #ifndef _GLIBCXX_DEBUG
+// Under _GLIBCXX_PRECONDITION_ASSERTIONS, these three shared, mechanical
+// shapes are instead declared as pre<>() on the calling function's own
+// declaration (see bits/c++config's own _GLIBCXX_PRECONDITION_SUBSCRIPT
+// and friends) -- so the in-body assert below is disabled here, rather
+// than double-checking the same condition both as a declared precondition
+// and again inside the body.
+# if defined _GLIBCXX_PRECONDITION_ASSERTIONS
+#  define __glibcxx_requires_non_empty_range(_First,_Last)
+#  define __glibcxx_requires_subscript(_N)
+#  define __glibcxx_requires_nonempty()
+# else
 // Verify that [_First, _Last) forms a non-empty iterator range.
 //
 // Both of these conditions mix a parameter substituted from the real
@@ -44,16 +55,17 @@
 // macro-expansion-independent way the pre-contracts diagnostic always
 // was: # stringification of just the real, call-site-supplied tokens,
 // string-literal-concatenated with this macro's own literal text.
-# define __glibcxx_requires_non_empty_range(_First,_Last)	\
-  __glibcxx_assert_msg(_First != _Last, #_First " != " #_Last)
-# define __glibcxx_requires_subscript(_N)	\
-  __glibcxx_assert_msg(_N < this->size(), #_N " < this->size()")
+#  define __glibcxx_requires_non_empty_range(_First,_Last)	\
+   __glibcxx_assert_msg(_First != _Last, #_First " != " #_Last)
+#  define __glibcxx_requires_subscript(_N)	\
+   __glibcxx_assert_msg(_N < this->size(), #_N " < this->size()")
 // Verify that the container is nonempty. Unlike the two above, this
 // condition is entirely this macro's own literal text -- no call-site
 // tokens involved at all -- so the usual __glibcxx_assert already
 // reports it correctly with no message needed.
-# define __glibcxx_requires_nonempty()		\
-  __glibcxx_assert(!this->empty())
+#  define __glibcxx_requires_nonempty()		\
+   __glibcxx_assert(!this->empty())
+# endif
 #else // Use the more verbose Debug Mode checks.
 # define __glibcxx_requires_non_empty_range(_First,_Last) \
   __glibcxx_check_non_empty_range(_First,_Last)
