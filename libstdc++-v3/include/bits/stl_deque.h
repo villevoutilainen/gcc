@@ -95,7 +95,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #define _GLIBCXX_DEQUE_BUF_SIZE 512
 #endif
 
-  _GLIBCXX_CONSTEXPR inline size_t
+  _GLIBCXX20_CONSTEXPR inline size_t
   __deque_buf_size(size_t __size) _GLIBCXX_CONVEYOR
   {
     if (__size < 1)
