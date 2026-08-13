@@ -16,6 +16,19 @@
 // non-vector demos for that shape) needs no shift at all and is proven
 // outright; this test's own point is specifically the shift-tracking
 // interaction with a genuinely mandatory, real-library precondition.
+//
+// use_definitely_unsound is a *third* tier, deliberately different from
+// the "past the margin" case above: that one only ever yields a one-
+// sided lower bound on idx (a shifted-past margin can fail to be proven
+// safe, but can't be disproven from a one-sided fact alone), so it can
+// only ever reach "cannot verify," never "provably violates." Getting an
+// outright, provable violation needs *exact*, independent ranges on both
+// sides of the precondition: 'v.size () == 5' pins size ()'s own range to
+// a single point (the pre-existing, non-Part-4 "CALL () OP LITERAL"
+// shape), and 'idx = 100' pins idx's own plain range the same way; the
+// range-vs-range fact fallback (oa_env_check_call_relational_fact_1, from
+// this branch's own earlier "range-vs-range" work) then finds the two
+// ranges provably disjoint and reports a hard error, not a warning.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -D_GLIBCXX_CONVEYOR_ASSERTIONS -D_GLIBCXX_PRECONDITION_ASSERTIONS" }
 
@@ -41,8 +54,18 @@ int use_unsound (std::vector<int>& v, int idx)
   return -1;
 }
 
+int use_definitely_unsound (std::vector<int>& v)
+{
+  if (v.size () == 5)
+    {
+      int idx = 100; // nowhere close to size (), no margin involved at all
+      return v[idx]; // { dg-error "provably violates the precondition" }
+    }
+  return -1;
+}
+
 int main ()
 {
   std::vector<int> v(20);
-  return use_sound (v, 0) + use_unsound (v, 0);
+  return use_sound (v, 0) + use_unsound (v, 0) + use_definitely_unsound (v);
 }
