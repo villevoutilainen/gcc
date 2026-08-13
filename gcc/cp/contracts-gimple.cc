@@ -1072,7 +1072,9 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	  tree_code rel_code;
 	  if (!oa_match_comparison_against_call (*conjuncts[i], &rel_param,
 						  &rel_code, &rhs_receiver,
-						  &rhs_callee))
+						  &rhs_callee,
+						  /*allow_symbolic_accessor=*/
+						    !conveyor_enabled))
 	    continue;
 	  tree key_param = cg_self_trust_key (fun, rel_param);
 	  tree key_receiver = cg_self_trust_key (fun, rhs_receiver);
@@ -1095,7 +1097,9 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	  tree_code call_code;
 	  if (!oa_match_call_against_call (*conjuncts[i], &lhs_receiver,
 					     &lhs_callee, &call_code,
-					     &rhs_receiver, &rhs_callee))
+					     &rhs_receiver, &rhs_callee,
+					     /*allow_symbolic_accessor=*/
+					       !conveyor_enabled))
 	    continue;
 	  tree key_lhs_receiver = cg_self_trust_key (fun, lhs_receiver);
 	  tree key_rhs_receiver = cg_self_trust_key (fun, rhs_receiver);
@@ -1724,7 +1728,9 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  tree_code rel_code;
 	  if (!oa_match_comparison_against_call (*conjuncts[i], &rel_param,
 						  &rel_code, &rhs_receiver,
-						  &rhs_callee))
+						  &rhs_callee,
+						  /*allow_symbolic_accessor=*/
+						    !require_conveyor))
 	    continue;
 
 	  unsigned param_argno, receiver_argno;
@@ -1770,7 +1776,9 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  tree_code call_code;
 	  if (!oa_match_call_against_call (*conjuncts[i], &lhs_receiver,
 					     &lhs_callee, &call_code,
-					     &rhs_receiver, &rhs_callee))
+					     &rhs_receiver, &rhs_callee,
+					     /*allow_symbolic_accessor=*/
+					       !require_conveyor))
 	    continue;
 
 	  unsigned lhs_argno, rhs_argno;
@@ -2273,7 +2281,8 @@ cg_collect_field_range_groups (tree cond, vec<cg_field_group_lite> *out)
 struct cg_call_group_lite { tree callee; tree receiver_expr; cg_range_lite range; };
 
 static void
-cg_collect_call_range_groups (tree cond, vec<cg_call_group_lite> *out)
+cg_collect_call_range_groups (tree cond, vec<cg_call_group_lite> *out,
+			       bool allow_symbolic_accessor)
 {
   auto_vec<tree *> conjuncts;
   oa_collect_conjuncts_public (&cond, &conjuncts);
@@ -2282,7 +2291,8 @@ cg_collect_call_range_groups (tree cond, vec<cg_call_group_lite> *out)
       tree receiver_expr, callee, const_val;
       tree_code code;
       if (!oa_match_call_range_comparison (*conjuncts[i], &receiver_expr,
-					    &callee, &code, &const_val)
+					    &callee, &code, &const_val,
+					    allow_symbolic_accessor)
 	  || TREE_CODE (const_val) != INTEGER_CST)
 	continue;
       receiver_expr = oa_strip_symbolic_ptr_expr_public (receiver_expr);
@@ -2356,7 +2366,8 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
 	}
 
       auto_vec<cg_call_group_lite> call_groups;
-      cg_collect_call_range_groups (cond, &call_groups);
+      cg_collect_call_range_groups (cond, &call_groups,
+				     /*allow_symbolic_accessor=*/!conveyor_enabled);
       for (unsigned g = 0; g < call_groups.length (); ++g)
 	{
 	  tree ssa = ssa_default_def (fun, call_groups[g].receiver_expr);
@@ -2481,7 +2492,8 @@ cg_consult_persistent_facts (gcall *call,
 	}
 
       auto_vec<cg_call_group_lite> call_groups;
-      cg_collect_call_range_groups (cond, &call_groups);
+      cg_collect_call_range_groups (cond, &call_groups,
+				     /*allow_symbolic_accessor=*/!require_conveyor);
       for (unsigned g = 0; g < call_groups.length (); ++g)
 	{
 	  unsigned argno;
@@ -2765,7 +2777,8 @@ cg_establish_persistent_facts_for_call (gcall *call,
 	}
 
       auto_vec<cg_call_group_lite> call_groups;
-      cg_collect_call_range_groups (cond, &call_groups);
+      cg_collect_call_range_groups (cond, &call_groups,
+				     /*allow_symbolic_accessor=*/!conveyor_enabled);
       for (unsigned g = 0; g < call_groups.length (); ++g)
 	{
 	  unsigned argno;
@@ -3412,7 +3425,8 @@ cg_compose_call_result_range (gcall *call, cg_dom_fact_state &state,
 	  tree_code rcode;
 	  tree rhs_receiver, rhs_callee;
 	  if (!oa_match_result_call_relation (*conjuncts[i], result_id, &rcode,
-					       &rhs_receiver, &rhs_callee)
+					       &rhs_receiver, &rhs_callee,
+					       /*allow_symbolic_accessor=*/false)
 	      || TREE_CODE (rhs_receiver) != PARM_DECL)
 	    continue;
 
