@@ -214,6 +214,49 @@ mismatched_contracts_p (tree old_contract, tree new_contract)
       return true;
     }
 
+  /* The control object (pre<A>/pre<B>) must also match across
+     declarations of "the same" contract -- otherwise which control
+     object actually governs a precondition/postcondition/contract_
+     assert would silently depend on which declaration a given caller
+     (or the definition itself) happens to see, exactly the hazard the
+     condition check just above already guards against. NULL_TREE on
+     both sides (-fcontract-control-objects off) trivially matches; with
+     the flag on, a bare pre/post/contract_assert is already resolved to
+     std::contracts::default_v before this point (see CONTRACT_CONTROL_
+     OBJECT's own comment in contracts.h), so within a single
+     translation unit this never compares "explicit vs absent," only
+     "which object" -- mirroring the strict, symmetric matching this
+     fork already requires for its own conveyor/symbolic specifiers.  */
+  tree c1 = CONTRACT_CONTROL_OBJECT (old_contract);
+  tree c2 = CONTRACT_CONTROL_OBJECT (new_contract);
+  if ((c1 != NULL_TREE) != (c2 != NULL_TREE))
+    {
+      auto_diagnostic_group d;
+      error_at (EXPR_LOCATION (new_contract),
+		"mismatched contract control object in declaration");
+      inform (EXPR_LOCATION (old_contract), "previous contract here");
+      return true;
+    }
+  if (c1 != NULL_TREE)
+    {
+      tree cf1 = cp_fully_fold_init (c1);
+      tree cf2 = cp_fully_fold_init (c2);
+
+      saved_comparing_contracts = comparing_contracts;
+      comparing_contracts = true;
+      bool ctrl_matching_p = cp_tree_equal (cf1, cf2);
+      comparing_contracts = saved_comparing_contracts;
+
+      if (!ctrl_matching_p)
+	{
+	  auto_diagnostic_group d;
+	  error_at (EXPR_LOCATION (new_contract),
+		    "mismatched contract control object in declaration");
+	  inform (EXPR_LOCATION (old_contract), "previous contract here");
+	  return true;
+	}
+    }
+
   return false;
 }
 
