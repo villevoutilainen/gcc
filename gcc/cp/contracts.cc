@@ -17011,6 +17011,101 @@ oa_env_check_relational_fact (oa_analysis_env *env, tree substituted_param,
 					  substituted_other, require_conveyor);
 }
 
+/* Does an established call-relational fact of code ESTABLISHED_CODE and
+   shift OFFSET (see oa_call_relational_fact's own OFFSET comment: the
+   fact holds for "(PARAM - OFFSET) ESTABLISHED_CODE RECEIVER.CALLEE ()")
+   *contradict* REQUIRED_CODE ("PARAM REQUIRED_CODE RECEIVER.CALLEE ()",
+   offset implicitly 0)? Complements oa_relational_code_implies (which
+   only ever answers "does established still imply required," i.e. only
+   ever proves TRUE): this answers the opposite question, needed to
+   prove FALSE directly from a symbolic call-relational fact whose own
+   receiver/callee were never independently pinned to an absolute
+   number -- the only other route to FALSE, the range-vs-range fallback
+   just below this function's own sole caller, needs exactly that and so
+   can't fire here. E.g. an established 'idx > size () + 10' (GT_EXPR,
+   offset +10) flatly contradicts a required 'idx < size ()' (LT_EXPR),
+   regardless of what size () actually is, since size ()+10 can never be
+   less than size () itself -- found missing via direct testing: a
+   margin fact shifted arbitrarily far past a required upper bound still
+   only ever produced "cannot verify," never "provably violates," since
+   oa_relational_code_implies alone has no way to notice this.
+
+   Reduces both sides to a single shared variable D = PARAM - RECEIVER.
+   CALLEE () (so "ESTABLISHED_CODE, OFFSET" becomes "D ESTABLISHED_CODE
+   OFFSET" and REQUIRED_CODE becomes "D REQUIRED_CODE 0"), converts each
+   to an inclusive [lo, hi] bound via the same code-to-bound
+   normalization oa_tighten_range_bound already uses for a plain decl's
+   own range, and checks for empty intersection. OFFSET's own
+   uncertainty (Commit 4: it may be an interval, not a single point) is
+   resolved to whichever endpoint makes the established side as
+   *permissive* as possible before checking for contradiction --
+   OFFSET.hi for an upper-bound-defining code (LT/LE), OFFSET.lo for a
+   lower-bound-defining one (GT/GE) -- so a genuinely uncertain shift
+   only ever loses a real contradiction, never invents a spurious one;
+   missing the needed bound (!has_hi/!has_lo) declines (returns false)
+   rather than guessing, the same discipline used throughout this pass.  */
+
+static bool
+oa_call_relational_contradicts_p (tree_code established_code,
+				    const oa_range_fact &offset,
+				    tree_code required_code)
+{
+  oa_range_fact est_d;
+  est_d.base = NULL_TREE;
+  est_d.has_lo = est_d.has_hi = false;
+
+  switch (established_code)
+    {
+    case LT_EXPR:
+    case LE_EXPR:
+      if (!offset.has_hi)
+	return false;
+      oa_tighten_range_bound (est_d, established_code, offset.hi);
+      break;
+    case GT_EXPR:
+    case GE_EXPR:
+      if (!offset.has_lo)
+	return false;
+      oa_tighten_range_bound (est_d, established_code, offset.lo);
+      break;
+    case EQ_EXPR:
+      if (!offset.has_lo || !offset.has_hi)
+	return false;
+      est_d.has_lo = est_d.has_hi = true;
+      est_d.lo = offset.lo;
+      est_d.hi = offset.hi;
+      break;
+    default:
+      return false;
+    }
+
+  oa_range_fact req_d;
+  req_d.base = NULL_TREE;
+  req_d.has_lo = req_d.has_hi = false;
+  switch (required_code)
+    {
+    case LT_EXPR:
+    case LE_EXPR:
+    case GT_EXPR:
+    case GE_EXPR:
+    case EQ_EXPR:
+      oa_tighten_range_bound (req_d, required_code, 0);
+      break;
+    default:
+      return false;
+    }
+
+  /* Two inclusive [lo, hi] integer ranges are disjoint iff one's hi is
+     below the other's lo (in either direction); a bound that's still
+     unknown (!has_*) on either side can never itself prove
+     disjointness.  */
+  if (est_d.has_hi && req_d.has_lo && est_d.hi < req_d.lo)
+    return true;
+  if (req_d.has_hi && est_d.has_lo && req_d.hi < est_d.lo)
+    return true;
+  return false;
+}
+
 /* The call analogue of oa_env_check_relational_fact_1 immediately
    above, for a required relation against a call (SUBSTITUTED_RHS_
    RECEIVER.SUBSTITUTED_RHS_CALLEE ()) rather than another parameter.
@@ -17026,14 +17121,24 @@ oa_env_check_call_relational_fact_1 (oa_env &env, tree substituted_param,
 				       bool require_conveyor)
 {
   oa_call_relational_fact fact;
-  if (oa_get_call_relational (substituted_param, env, &fact)
-      && oa_relational_code_implies (fact.code, required_code)
-      && oa_offset_compatible_with_code (fact.offset, required_code)
-      && (!require_conveyor || fact.conveyor_established)
+  bool have_fact = oa_get_call_relational (substituted_param, env, &fact);
+  bool same_accessor
+    = have_fact
       && fact.rhs_callee == substituted_rhs_callee
       && (oa_strip_to_relational_operand (fact.rhs_receiver)
-	  == oa_strip_to_relational_operand (substituted_rhs_receiver)))
+	  == oa_strip_to_relational_operand (substituted_rhs_receiver));
+
+  if (have_fact && same_accessor
+      && oa_relational_code_implies (fact.code, required_code)
+      && oa_offset_compatible_with_code (fact.offset, required_code)
+      && (!require_conveyor || fact.conveyor_established))
     return OA_PROVEN_TRUE;
+
+  if (have_fact && same_accessor
+      && (!require_conveyor || fact.conveyor_established)
+      && oa_call_relational_contradicts_p (fact.code, fact.offset,
+					     required_code))
+    return OA_PROVEN_FALSE;
 
   /* Bounds-proving demo (see .claude/plans/lazy-stirring-pearl.md): no
      explicit linked fact -- but SUBSTITUTED_PARAM's own independently-
