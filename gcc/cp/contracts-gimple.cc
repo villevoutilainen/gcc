@@ -3305,14 +3305,104 @@ cg_cond_operand_shape (tree val, bool *is_call, tree *field_out, tree *base_out,
    operand actually appearing in a GIMPLE_COND is virtually always an
    SSA name already (it's a value being compared, not an address-taken
    aggregate) -- matching this file's own "safe, occasionally
-   conservative" discipline rather than chasing full generality.  */
+   conservative" discipline rather than chasing full generality.
+
+   Strips one hop of an integer-promoting CONVERT_EXPR/NOP_EXPR first
+   (mirroring cg_get_call_relational's own identical CONVERT_EXPR_CODE_P
+   unwrap a few hundred lines above, and contracts.cc's own oa_strip_to_
+   relational_operand on the AST side): comparing a signed int parameter
+   against an unsigned std::size_t-returning accessor (e.g. 'idx <
+   v.size ()', idx an int) gimplifies with idx's own read materialized
+   into a separate 'widened = (size_t) idx;' assignment first, so the
+   GIMPLE_COND's own operand is WIDENED's own SSA name, not idx's --
+   found via direct testing against the real std::vector (whose size()
+   returns size_t, unlike this pass's own earlier, int-returning test-
+   only fixtures, which never exercised this at all before now: an
+   int-vs-int comparison needs no such cast, so this gap was invisible
+   until a real, unsigned-returning accessor was used).  */
 
 static bool
-cg_cond_is_bare_param (tree val)
+cg_cond_is_bare_param (tree val, tree *out = NULL)
 {
-  return TREE_CODE (val) == SSA_NAME
-	 && SSA_NAME_IS_DEFAULT_DEF (val)
-	 && TREE_CODE (SSA_NAME_VAR (val)) == PARM_DECL;
+  if (TREE_CODE (val) == SSA_NAME && !SSA_NAME_IS_DEFAULT_DEF (val))
+    {
+      gimple *def = SSA_NAME_DEF_STMT (val);
+      if (def && is_gimple_assign (def)
+	  && CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def)))
+	val = gimple_assign_rhs1 (def);
+    }
+  bool ok = TREE_CODE (val) == SSA_NAME
+	    && SSA_NAME_IS_DEFAULT_DEF (val)
+	    && TREE_CODE (SSA_NAME_VAR (val)) == PARM_DECL;
+  if (ok && out)
+    *out = val;
+  return ok;
+}
+
+/* D4324 (see .claude/plans/lazy-stirring-pearl.md, Part 4): the GIMPLE-
+   native analogue of contracts.cc's own oa_match_shifted_comparison_
+   against_call -- is OTHER (an operand that already failed cg_cond_
+   operand_shape directly, i.e. it's not itself a bare call/field load)
+   an SSA name whose own def-stmt is 'CALL () - PARAM' or 'PARAM - CALL
+   ()' (a MINUS_EXPR combining a bare-param operand, cg_cond_is_bare_
+   param, and a call-shaped one, cg_cond_operand_shape with IS_CALL
+   true)? If so, PARAM_OUT/RHS_RECEIVER_OUT/RHS_CALLEE_OUT describe it,
+   and NEGATE_OUT tells the caller whether solving for PARAM negates the
+   comparison direction (true for 'CALL () - PARAM', since that divides
+   by -1; false for 'PARAM - CALL ()') -- the caller applies that flip
+   to CODE itself, alongside its own existing FLIPPED/ASSERTED_TRUE
+   flips (all three are the same self-inverse LT<->GT/LE<->GE swap, so
+   applying them in any order gives the same result), and negates the
+   literal the same way to get OFFSET. See that AST-side function's own
+   comment for the full algebra table this mirrors.
+
+   No PLUS_EXPR counterpart: 'v.size () - idx' and 'idx - v.size ()' are
+   both written with a literal MINUS_EXPR in the source (matching the
+   AST-side recognizer's own identical restriction) -- a PLUS_EXPR here
+   would be a structurally different expression ('v.size () + idx'),
+   not a mirror image of this same shape.  */
+
+static bool
+cg_match_shifted_comparison_against_call (tree other, tree *param_out,
+					    tree *rhs_receiver_out,
+					    tree *rhs_callee_out,
+					    bool *negate_out)
+{
+  if (TREE_CODE (other) != SSA_NAME)
+    return false;
+  gimple *def = SSA_NAME_DEF_STMT (other);
+  if (!def || !is_gimple_assign (def)
+      || gimple_assign_rhs_code (def) != MINUS_EXPR)
+    return false;
+
+  tree op0 = gimple_assign_rhs1 (def);
+  tree op1 = gimple_assign_rhs2 (def);
+
+  bool is_call;
+  tree field, base, callee, receiver, param;
+  if (cg_cond_is_bare_param (op1, &param)
+      && cg_cond_operand_shape (op0, &is_call, &field, &base, &callee,
+				 &receiver)
+      && is_call)
+    {
+      *param_out = param;
+      *rhs_receiver_out = receiver;
+      *rhs_callee_out = callee;
+      *negate_out = true;
+      return true;
+    }
+  if (cg_cond_is_bare_param (op0, &param)
+      && cg_cond_operand_shape (op1, &is_call, &field, &base, &callee,
+				 &receiver)
+      && is_call)
+    {
+      *param_out = param;
+      *rhs_receiver_out = receiver;
+      *rhs_callee_out = callee;
+      *negate_out = false;
+      return true;
+    }
+  return false;
 }
 
 /* D4324 Commit 3: the relational analogue of cg_refine_edge_into's own
@@ -3331,7 +3421,21 @@ static void
 cg_refine_relational_edge_into (tree lhs, tree rhs, tree_code code,
 				  bool asserted_true, cg_dom_fact_state &state)
 {
-  if (cg_cond_is_bare_param (lhs) && cg_cond_is_bare_param (rhs))
+  /* Canonicalize LHS/RHS to the bare param's own default-def SSA name
+     when either is one -- see cg_cond_is_bare_param's own comment on
+     why a signed-vs-unsigned comparison (e.g. against a real, size_t-
+     returning accessor) needs this unwrap, and why every established
+     fact must be keyed on that same canonical name a later consult
+     will look up again, not on a one-off cast temporary.  */
+  tree lhs_param, rhs_param;
+  bool lhs_is_param = cg_cond_is_bare_param (lhs, &lhs_param);
+  bool rhs_is_param = cg_cond_is_bare_param (rhs, &rhs_param);
+  if (lhs_is_param)
+    lhs = lhs_param;
+  if (rhs_is_param)
+    rhs = rhs_param;
+
+  if (lhs_is_param && rhs_is_param)
     {
       tree_code rel_code = code;
       if (!asserted_true)
@@ -3347,8 +3451,6 @@ cg_refine_relational_edge_into (tree lhs, tree rhs, tree_code code,
       return;
     }
 
-  bool lhs_is_param = cg_cond_is_bare_param (lhs);
-  bool rhs_is_param = cg_cond_is_bare_param (rhs);
   if (!lhs_is_param && !rhs_is_param)
     return;
 
@@ -3466,8 +3568,32 @@ cg_refine_edge_into (edge e, cg_dom_fact_state &state)
 
   bool is_call;
   tree field, base, callee, receiver;
+  bool shifted = false;
+  tree shifted_param = NULL_TREE;
+  bool shifted_negate = false;
   if (!cg_cond_operand_shape (other, &is_call, &field, &base, &callee, &receiver))
-    return;
+    {
+      /* D4324 Part 4: OTHER isn't itself a bare call/field load, but it
+	 may be 'CALL () - PARAM'/'PARAM - CALL ()' -- see cg_match_
+	 shifted_comparison_against_call's own comment for the shape and
+	 algebra this recognizes, feeding the *existing* state.call_rel
+	 establishment path a nonzero OFFSET instead of state.call/
+	 state.field's own always-zero-offset range refinement.  */
+      if (!cg_match_shifted_comparison_against_call (other, &shifted_param,
+							&receiver, &callee,
+							&shifted_negate))
+	return;
+      shifted = true;
+      if (shifted_negate)
+	switch (code)
+	  {
+	  case LT_EXPR: code = GT_EXPR; break;
+	  case LE_EXPR: code = GE_EXPR; break;
+	  case GT_EXPR: code = LT_EXPR; break;
+	  case GE_EXPR: code = LE_EXPR; break;
+	  default: break;
+	  }
+    }
 
   if (flipped)
     switch (code)
@@ -3487,6 +3613,17 @@ cg_refine_edge_into (edge e, cg_dom_fact_state &state)
       case GE_EXPR: code = LT_EXPR; break;
       default: return; /* NOT(x == val) -- skip.  */
       }
+
+  if (shifted)
+    {
+      widest_int offset = wi::to_widest (const_val);
+      if (shifted_negate)
+	offset = -offset;
+      state.call_rel.put (shifted_param,
+			   { code, receiver, callee,
+			     cg_range_lite_exact (offset), true });
+      return;
+    }
 
   if (is_call)
     {
