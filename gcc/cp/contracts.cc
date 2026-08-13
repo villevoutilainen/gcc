@@ -10407,6 +10407,108 @@ oa_collect_contract_call_ranges (tree condition,
     }
 }
 
+/* The range-vs-range analogue of oa_tighten_range_bound above: folds
+   OTHER's own worst-case bound (not a single literal point) into REFINED,
+   oriented per CODE -- used only by oa_collect_contract_call_ranges_
+   parametric below, where the "other side" of a call-range conjunct is
+   itself a range (a substituted parameter's own established range), not
+   an already-known literal.  */
+
+static void
+oa_tighten_range_bound_from_range (oa_range_fact &refined, tree_code code,
+				     const oa_range_fact &other)
+{
+  switch (code)
+    {
+    case LT_EXPR:
+      if (other.has_hi && (!refined.has_hi || refined.hi > other.hi - 1))
+	{ refined.has_hi = true; refined.hi = other.hi - 1; }
+      break;
+    case LE_EXPR:
+      if (other.has_hi && (!refined.has_hi || refined.hi > other.hi))
+	{ refined.has_hi = true; refined.hi = other.hi; }
+      break;
+    case GT_EXPR:
+      if (other.has_lo && (!refined.has_lo || refined.lo < other.lo + 1))
+	{ refined.has_lo = true; refined.lo = other.lo + 1; }
+      break;
+    case GE_EXPR:
+      if (other.has_lo && (!refined.has_lo || refined.lo < other.lo))
+	{ refined.has_lo = true; refined.lo = other.lo; }
+      break;
+    case EQ_EXPR:
+      if (other.has_lo && (!refined.has_lo || refined.lo < other.lo))
+	{ refined.has_lo = true; refined.lo = other.lo; }
+      if (other.has_hi && (!refined.has_hi || refined.hi > other.hi))
+	{ refined.has_hi = true; refined.hi = other.hi; }
+      break;
+    default:
+      break;
+    }
+}
+
+/* Bounds-proving demo (see .claude/plans/lazy-stirring-pearl.md, Part 3):
+   the parametric analogue of oa_collect_contract_call_ranges above, for a
+   postcondition's own call-range conjunct whose "other side" is another
+   parameter of the postcondition-owning function (e.g. 'post<>(size ()
+   == n)'), not a literal. CALLEE/CALL/ENV let each such conjunct's own
+   parameter be positionally substituted through to this specific call
+   site's own argument (oa_substitute_call_arg) and then resolved to a
+   range (oa_get_range) -- e.g. 'v.resize (5)' substitutes N to the
+   literal 5, giving an exact-point range, exactly equivalent to today's
+   literal-postcondition case; 'v.resize (m)' for some other tracked
+   variable M works too, if M's own range is known at this call site.
+   Deliberately separate from oa_collect_contract_call_ranges itself (kept
+   a pure, substitution-free shape collector, with no call site to
+   substitute through at all when called from self-trust establishment or
+   precondition-side consult): only a postcondition being established at
+   an actual call site can ever resolve a parametric bound this way. Folds
+   into the SAME OUT groups oa_collect_contract_call_ranges itself
+   populates (the caller runs both, into one vector), via oa_tighten_
+   range_bound_from_range instead of oa_tighten_range_bound.  */
+
+static void
+oa_collect_contract_call_ranges_parametric (tree condition, tree callee,
+					      tree call, oa_env &env,
+					      vec<oa_symbolic_call_group> *out)
+{
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts (&condition, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree receiver_expr, call_callee, other;
+      tree_code code;
+      if (!oa_call_range_conjunct_shape (*conjuncts[i], &receiver_expr,
+					   &call_callee, &code, &other,
+					   /*allow_symbolic_accessor=*/false)
+	  || TREE_CODE (other) != PARM_DECL)
+	continue;
+      tree substituted_other = oa_substitute_call_arg (callee, call, other);
+      oa_range_fact other_range;
+      if (!substituted_other || !oa_get_range (substituted_other, env, &other_range))
+	continue;
+
+      receiver_expr = oa_strip_symbolic_ptr_expr (receiver_expr);
+      oa_symbolic_call_group *found = NULL;
+      for (unsigned j = 0; j < out->length () && !found; ++j)
+	if ((*out)[j].callee == call_callee
+	    && cp_tree_equal ((*out)[j].receiver_expr, receiver_expr))
+	  found = &(*out)[j];
+      if (!found)
+	{
+	  oa_symbolic_call_group g;
+	  g.callee = call_callee;
+	  g.receiver_expr = receiver_expr;
+	  g.range.base = NULL_TREE;
+	  g.range.has_lo = false;
+	  g.range.has_hi = false;
+	  out->safe_push (g);
+	  found = &out->last ();
+	}
+      oa_tighten_range_bound_from_range (found->range, code, other_range);
+    }
+}
+
 /* -fcontract-symbolic-proofs: three-way outcome shared by both new
    range-based consult loops below (the bare-scalar one in oa_handle_
    call_symbolic_precondition_obligation's sibling, and the ptr->field one
@@ -10632,6 +10734,12 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 	      oa_collect_contract_call_ranges (cond, &call_groups,
 						/*allow_symbolic_accessor=*/
 						  !conveyor_established);
+	      /* Bounds-proving demo, Part 3: a parametric call-range
+		 conjunct (e.g. 'post<>(size () == n)') folds into the same
+		 CALL_GROUPS, resolved through this specific call site's own
+		 argument for N.  */
+	      oa_collect_contract_call_ranges_parametric (cond, callee, call,
+							    env, &call_groups);
 	      for (unsigned i = 0; i < call_groups.length (); ++i)
 		{
 		  if (TREE_CODE (call_groups[i].receiver_expr) != PARM_DECL)
@@ -17123,12 +17231,40 @@ oa_call_range_conjunct_shape (tree conjunct, tree *receiver_out,
   tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
   tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
 
+  /* CONST_VAL_OUT's own name predates the bounds-proving demo (see
+     .claude/plans/lazy-stirring-pearl.md, Part 3): it may now also be a
+     bare PARM_DECL of the conjunct-owning function, not just a literal --
+     e.g. a postcondition's own 'size () == n', where N is resolved
+     through positional substitution (and then, if not itself a literal
+     at the substituting call site, that substituted expression's own
+     established range) only by a caller that actually has a call site to
+     substitute through (postcondition establishment) -- self-trust/
+     precondition-consult callers have no such call site and keep
+     requiring an already-known INTEGER_CST exactly as before, simply by
+     continuing to check for one themselves.  */
+  /* A PARM_DECL "other side" read from a postcondition's own const-
+     qualified evaluation context arrives wrapped the same way a
+     receiver/ptr_expr already does (see oa_strip_symbolic_ptr_expr's own
+     comment; confirmed via direct testing here too -- a bare
+     'TREE_CODE (op1) == PARM_DECL' check otherwise silently never fired
+     for a postcondition's own 'size () == m'). Strip before checking,
+     but keep OP0/OP1 themselves (not the stripped form) as COMP/CONST_
+     VAL_OUT's own stored value below, matching the receiver side's own
+     "present it the way it actually appears" discipline for what gets
+     returned, since a literal never needs this stripping anyway.  */
+  tree op0_stripped = oa_strip_symbolic_ptr_expr (op0);
+  tree op1_stripped = oa_strip_symbolic_ptr_expr (op1);
+
   tree comp, const_val;
   bool flipped;
   if (TREE_CODE (op1) == INTEGER_CST)
     comp = op0, const_val = op1, flipped = false;
   else if (TREE_CODE (op0) == INTEGER_CST)
     comp = op1, const_val = op0, flipped = true;
+  else if (TREE_CODE (op1_stripped) == PARM_DECL)
+    comp = op0, const_val = op1_stripped, flipped = false;
+  else if (TREE_CODE (op0_stripped) == PARM_DECL)
+    comp = op1, const_val = op0_stripped, flipped = true;
   else
     return false;
 
