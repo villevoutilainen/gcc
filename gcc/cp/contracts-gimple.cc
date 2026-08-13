@@ -278,6 +278,93 @@ cg_tighten_range_bound (cg_range_lite &r, tree_code code, const widest_int &val)
     }
 }
 
+/* The range-vs-range analogue of cg_tighten_range_bound above: folds
+   OTHER's own worst-case bound (not a single literal point) into R --
+   mirrors contracts.cc's own oa_tighten_range_bound_from_range, used only
+   by cg_collect_call_range_groups_parametric below, where the "other
+   side" of a call-range conjunct is itself a range (a substituted
+   parameter's own established range), not an already-known literal.  */
+
+static void
+cg_tighten_range_bound_from_range (cg_range_lite &r, tree_code code,
+				     const cg_range_lite &other)
+{
+  switch (code)
+    {
+    case LT_EXPR:
+      if (other.has_hi && (!r.has_hi || r.hi > other.hi - 1))
+	{ r.has_hi = true; r.hi = other.hi - 1; }
+      break;
+    case LE_EXPR:
+      if (other.has_hi && (!r.has_hi || r.hi > other.hi))
+	{ r.has_hi = true; r.hi = other.hi; }
+      break;
+    case GT_EXPR:
+      if (other.has_lo && (!r.has_lo || r.lo < other.lo + 1))
+	{ r.has_lo = true; r.lo = other.lo + 1; }
+      break;
+    case GE_EXPR:
+      if (other.has_lo && (!r.has_lo || r.lo < other.lo))
+	{ r.has_lo = true; r.lo = other.lo; }
+      break;
+    case EQ_EXPR:
+      if (other.has_lo && (!r.has_lo || r.lo < other.lo))
+	{ r.has_lo = true; r.lo = other.lo; }
+      if (other.has_hi && (!r.has_hi || r.hi > other.hi))
+	{ r.has_hi = true; r.hi = other.hi; }
+      break;
+    default:
+      break;
+    }
+}
+
+/* The GIMPLE mirror of contracts.cc's own oa_range_pair_relation (see the
+   bounds-proving demo, .claude/plans/lazy-stirring-pearl.md) -- compares
+   two independently-tracked cg_range_lite values related by an arbitrary
+   comparison CODE, reusing oa_range_subsumption_result (contracts.h, now
+   shared with the AST engine for exactly this reuse) rather than a
+   parallel enum. A deliberate, small duplication of the AST helper's own
+   logic operating on GIMPLE's own range struct, matching this file's
+   existing convention of mirroring AST helpers with GIMPLE's own types
+   (e.g. cg_tighten_range_bound above already mirrors oa_tighten_range_
+   bound the same way) rather than reaching across the AST/GIMPLE
+   boundary for the computation itself.  */
+
+static enum oa_range_subsumption_result
+cg_range_pair_relation (const cg_range_lite &a, tree_code code,
+			  const cg_range_lite &b)
+{
+  switch (code)
+    {
+    case LT_EXPR:
+      if (a.has_hi && b.has_lo && a.hi < b.lo) return OA_RANGE_SUBSUMED;
+      if (a.has_lo && b.has_hi && a.lo >= b.hi) return OA_RANGE_DISJOINT;
+      return OA_RANGE_PARTIAL;
+    case LE_EXPR:
+      if (a.has_hi && b.has_lo && a.hi <= b.lo) return OA_RANGE_SUBSUMED;
+      if (a.has_lo && b.has_hi && a.lo > b.hi) return OA_RANGE_DISJOINT;
+      return OA_RANGE_PARTIAL;
+    case GT_EXPR:
+      if (a.has_lo && b.has_hi && a.lo > b.hi) return OA_RANGE_SUBSUMED;
+      if (a.has_hi && b.has_lo && a.hi <= b.lo) return OA_RANGE_DISJOINT;
+      return OA_RANGE_PARTIAL;
+    case GE_EXPR:
+      if (a.has_lo && b.has_hi && a.lo >= b.hi) return OA_RANGE_SUBSUMED;
+      if (a.has_hi && b.has_lo && a.hi < b.lo) return OA_RANGE_DISJOINT;
+      return OA_RANGE_PARTIAL;
+    case EQ_EXPR:
+      if (a.has_lo && a.has_hi && b.has_lo && b.has_hi
+	  && a.lo == a.hi && b.lo == b.hi && a.lo == b.lo)
+	return OA_RANGE_SUBSUMED;
+      if ((a.has_hi && b.has_lo && a.hi < b.lo)
+	  || (a.has_lo && b.has_hi && a.lo > b.hi))
+	return OA_RANGE_DISJOINT;
+      return OA_RANGE_PARTIAL;
+    default:
+      return OA_RANGE_PARTIAL;
+    }
+}
+
 /* Accumulate every 'TARGET OP const'-shaped conjunct of CONJUNCTS
    naming TARGET into a single combined range in *OUT -- e.g. 'x >= 20
    && x < 100' becomes [20, 100).  Returns false (leaving *OUT
@@ -1575,7 +1662,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		hash_map<tree, cg_range_lite> &scalar_range_cache,
 		hash_map<tree, cg_rel_fact> &scalar_rel_cache,
 		hash_map<tree, cg_call_rel_fact> &scalar_call_rel_cache,
-		gimple_ranger *ranger)
+		gimple_ranger *ranger,
+		hash_set<gimple *> *call_relational_verdict)
 {
   tree callee = gimple_call_fndecl (call);
   if (!callee)
@@ -1712,6 +1800,40 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      && fact_rhs == sub_other)
 	    continue; /* Proven true: silently discharged.  */
 
+	  /* Bounds-proving demo (see .claude/plans/lazy-stirring-pearl.md):
+	     no explicit linked fact -- but both sides' own independently-
+	     tracked scalar ranges might still settle this numerically,
+	     mirroring contracts.cc's own oa_env_check_relational_fact_1
+	     range-vs-range fallback. Both sides are plain scalars here
+	     (unlike the call analogue just below), so this pass's own
+	     established_range/scalar_range_cache/ranger are already
+	     enough -- no architectural barrier the way call-range facts
+	     have (see cg_predicate_facts_walk's own comment on that).  */
+	  {
+	    cg_range_lite param_range, other_range;
+	    if (cg_established_range_of (sub_param, established_range,
+					   scalar_range_cache, ranger,
+					   check_as_conveyor, check_as_symbolic,
+					   &param_range)
+		&& cg_established_range_of (sub_other, established_range,
+					      scalar_range_cache, ranger,
+					      check_as_conveyor, check_as_symbolic,
+					      &other_range))
+	      {
+		enum oa_range_subsumption_result r
+		  = cg_range_pair_relation (param_range, rel_code, other_range);
+		if (r == OA_RANGE_SUBSUMED)
+		  continue; /* Proven true: silently discharged.  */
+		if (r == OA_RANGE_DISJOINT)
+		  {
+		    error_at (gimple_location (call),
+			      "argument %qE provably violates the "
+			      "precondition of %qD", sub_param, callee);
+		    continue;
+		  }
+	      }
+	  }
+
 	  warning_at (gimple_location (call), 0,
 		      "cannot verify that %qE satisfies the "
 		      "precondition of %qD", sub_param, callee);
@@ -1760,6 +1882,17 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      && fact_rhs_callee == rhs_callee
 	      && fact_rhs_receiver == sub_receiver)
 	    continue; /* Proven true: silently discharged.  */
+
+	  /* Bounds-proving demo: this exact shape ("param vs call") also
+	     has its own, separate range-vs-range fallback, but it can only
+	     run from cg_predicate_facts_walk's own final pass (see cg_
+	     check_call_range_relational's own comment for why) -- if that
+	     pass already reached a definitive verdict for this call (a
+	     silent proof, or its own hard "provably violates" error),
+	     don't also warn "cannot verify" here for what's already been
+	     resolved one way or the other.  */
+	  if (call_relational_verdict->contains (call))
+	    continue;
 
 	  warning_at (gimple_location (call), 0,
 		      "cannot verify that %qE satisfies the "
@@ -2316,6 +2449,79 @@ cg_collect_call_range_groups (tree cond, vec<cg_call_group_lite> *out,
     }
 }
 
+/* Bounds-proving demo (see .claude/plans/lazy-stirring-pearl.md, Part 3):
+   the parametric analogue of cg_collect_call_range_groups above, for a
+   postcondition's own call-range conjunct whose "other side" is another
+   parameter of the postcondition-owning function (e.g. 'post<>(size ()
+   == n)'), not a literal -- mirrors contracts.cc's own oa_collect_
+   contract_call_ranges_parametric. CALLEE/CALL let each such conjunct's
+   own parameter be positionally substituted through to this specific
+   call site's own argument (cg_find_param_position/gimple_call_arg, the
+   same positional-substitution convention cg_establish_persistent_facts_
+   for_call's own callers already use for RECEIVER_EXPR two lines below),
+   then resolved to a range via cg_established_range_of. Deliberately
+   passes empty ESTABLISHED_RANGE/SCALAR_RANGE_CACHE maps and a NULL
+   ranger: this walk (cg_predicate_facts_walk) has none of its own to
+   offer here (unlike the *other*, simple linear pass), so this only ever
+   resolves a substituted argument that's already an exact literal at this
+   call site (cg_established_range_of's own first, no-lookup-needed case)
+   -- e.g. 'v.resize (5)' -- not a fully general tracked-variable argument,
+   which would need a real ranger threaded in, separate, not-yet-needed
+   work. Folds into the SAME OUT groups cg_collect_call_range_groups
+   itself populates (the caller runs both, into one vector), via
+   cg_tighten_range_bound_from_range instead of cg_tighten_range_bound.  */
+
+static void
+cg_collect_call_range_groups_parametric (tree cond, tree callee, gcall *call,
+					   vec<cg_call_group_lite> *out)
+{
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree receiver_expr, call_callee, other;
+      tree_code code;
+      if (!oa_match_call_range_comparison (*conjuncts[i], &receiver_expr,
+					     &call_callee, &code, &other,
+					     /*allow_symbolic_accessor=*/false)
+	  || TREE_CODE (other) != PARM_DECL)
+	continue;
+
+      unsigned argno;
+      if (!cg_find_param_position (callee, other, &argno)
+	  || argno >= gimple_call_num_args (call))
+	continue;
+      tree substituted_other = gimple_call_arg (call, argno);
+
+      hash_map<tree, cg_range_lite> empty_established_range;
+      hash_map<tree, cg_range_lite> empty_scalar_range_cache;
+      cg_range_lite other_range;
+      if (!cg_established_range_of (substituted_other, empty_established_range,
+				      empty_scalar_range_cache, NULL, false,
+				      false, &other_range))
+	continue;
+
+      receiver_expr = oa_strip_symbolic_ptr_expr_public (receiver_expr);
+      if (TREE_CODE (receiver_expr) != PARM_DECL)
+	continue;
+
+      cg_call_group_lite *found = NULL;
+      for (unsigned j = 0; j < out->length () && !found; ++j)
+	if ((*out)[j].callee == call_callee
+	    && (*out)[j].receiver_expr == receiver_expr)
+	  found = &(*out)[j];
+      if (!found)
+	{
+	  cg_call_group_lite g;
+	  g.callee = call_callee;
+	  g.receiver_expr = receiver_expr;
+	  out->safe_push (g);
+	  found = &out->last ();
+	}
+      cg_tighten_range_bound_from_range (found->range, code, other_range);
+    }
+}
+
 /* Seed SEED from FNDECL's own declared precondition -- self-trust, the
    persistent-fact analogue of cg_seed_self_trust.  */
 
@@ -2779,6 +2985,10 @@ cg_establish_persistent_facts_for_call (gcall *call,
       auto_vec<cg_call_group_lite> call_groups;
       cg_collect_call_range_groups (cond, &call_groups,
 				     /*allow_symbolic_accessor=*/!conveyor_enabled);
+      /* Bounds-proving demo, Part 3: a parametric call-range conjunct
+	 (e.g. 'post<>(size () == n)') folds into the same CALL_GROUPS,
+	 resolved through this specific call site's own argument for N.  */
+      cg_collect_call_range_groups_parametric (cond, callee, call, &call_groups);
       for (unsigned g = 0; g < call_groups.length (); ++g)
 	{
 	  unsigned argno;
@@ -3483,10 +3693,143 @@ cg_compose_call_result_range (gcall *call, cg_dom_fact_state &state,
     }
 }
 
+/* Bounds-proving demo (see .claude/plans/lazy-stirring-pearl.md, Part 2):
+   the "param vs call" relational range-vs-range fallback, for the one
+   consult path that genuinely cannot live in cg_check_call -- unlike the
+   param-vs-param case (both sides plain scalars, handled directly inside
+   cg_check_call itself with no architectural issue), this one needs
+   STATE.call, which is dominator-tracked and deliberately never
+   flattened into a function-wide cache the way relational facts are (see
+   cg_predicate_facts_walk's own comment on .rel/.call_rel, immediately
+   below, for exactly why -- object-identity-keyed facts can be
+   invalidated by a later mutation, so only the dominator-correct STATE
+   at this exact call is safe to consult, never a global snapshot).  So
+   this runs from cg_predicate_facts_walk's own final pass instead, where
+   STATE is already correct for CALL specifically. RANGER is
+   pass_contracts_gimple::execute's own single, function-wide instance,
+   created before cg_predicate_facts_walk's own call and passed straight
+   through -- giving this walk a second, separate ranger instance of its
+   own was tried first and reverted, found via direct testing to make
+   this whole pass's own diagnostics genuinely non-deterministic between
+   identical runs of the same compilation (see execute's own comment on
+   why one shared instance avoids that).
+
+   Only ever handles the "param vs call" shape itself; it does not
+   attempt the "explicit linked fact" check cg_check_call's own
+   cg_get_call_relational-based block already does (self-trust and
+   branch-derived facts are unaffected by this addition). When this
+   reaches a definitive verdict (SUBSUMED or DISJOINT), CALL is recorded
+   in VERDICT_OUT so cg_check_call's own later, separate pass over the
+   same call knows not to *also* warn "cannot verify" for a conjunct this
+   pass already resolved one way or the other -- see cg_check_call's own
+   use of VERDICT_OUT. A DISJOINT verdict reports the same hard
+   "provably violates" error contracts.cc's own oa_handle_call_conveyor_
+   proof_obligation already does for this outcome, right here (this is
+   the only place with the data to detect it at all).
+
+   Deliberately keyed per-CALL, not per-(CALL, conjunct): a callee with
+   more than one "param vs call" conjunct on the same call site (rare,
+   untested) could have a second, independently-unprovable conjunct's own
+   "cannot verify" warning suppressed merely because a first conjunct on
+   the same call was resolved here -- an accepted, documented imprecision
+   (a warning could be missed), never a soundness gap (a genuine
+   violation this function itself finds is always reported here
+   directly, unconditionally, regardless of any other conjunct on the
+   same call).  */
+
+static void
+cg_check_call_range_relational (gcall *call,
+				  hash_map<cg_field_key_hash, tree> &field_object_cache,
+				  cg_dom_fact_state &state,
+				  gimple_ranger *ranger,
+				  hash_set<gimple *> *verdict_out)
+{
+  tree callee = gimple_call_fndecl (call);
+  if (!callee)
+    return;
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract))
+	continue;
+      bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
+      bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
+      bool check_as_conveyor = conveyor_active && flag_contract_conveyor_proofs_gimple;
+      bool check_as_symbolic = symbolic_active && flag_contract_symbolic_proofs_gimple;
+      if (!check_as_conveyor && !check_as_symbolic)
+	continue;
+      bool require_conveyor = check_as_conveyor;
+
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree rel_param, rhs_receiver, rhs_callee;
+	  tree_code rel_code;
+	  if (!oa_match_comparison_against_call (*conjuncts[i], &rel_param,
+						  &rel_code, &rhs_receiver,
+						  &rhs_callee,
+						  /*allow_symbolic_accessor=*/
+						    !require_conveyor))
+	    continue;
+
+	  unsigned param_argno, receiver_argno;
+	  if (!cg_find_param_position (callee, rel_param, &param_argno)
+	      || !cg_find_param_position (callee, rhs_receiver, &receiver_argno)
+	      || param_argno >= gimple_call_num_args (call)
+	      || receiver_argno >= gimple_call_num_args (call))
+	    continue;
+
+	  tree sub_param = cg_resolve_call_argument (call, param_argno);
+	  tree sub_receiver = cg_resolve_call_argument (call, receiver_argno);
+
+	  hash_map<tree, cg_range_lite> empty_established_range;
+	  hash_map<tree, cg_range_lite> empty_scalar_range_cache;
+	  cg_range_lite param_range;
+	  if (!cg_established_range_of (sub_param, empty_established_range,
+					  empty_scalar_range_cache, ranger,
+					  check_as_conveyor, check_as_symbolic,
+					  &param_range))
+	    continue;
+
+	  tree identity = cg_field_slot_identity (sub_receiver, state);
+	  if (!identity)
+	    identity = cg_field_object_identity (sub_receiver, field_object_cache);
+	  if (!identity)
+	    identity = cg_gimple_object_identity (sub_receiver);
+	  if (!identity)
+	    continue;
+	  cg_field_fact *callee_fact = state.call.get ({identity, rhs_callee});
+	  if (!callee_fact
+	      || (require_conveyor && !callee_fact->conveyor_established))
+	    continue;
+
+	  enum oa_range_subsumption_result r
+	    = cg_range_pair_relation (param_range, rel_code, callee_fact->range);
+	  if (r == OA_RANGE_SUBSUMED)
+	    verdict_out->add (call);
+	  else if (r == OA_RANGE_DISJOINT)
+	    {
+	      verdict_out->add (call);
+	      error_at (gimple_location (call),
+			"argument %qE provably violates the precondition "
+			"of %qD", sub_param, callee);
+	    }
+	}
+    }
+}
+
 static bool
 cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_range_cache_out,
 			   hash_map<tree, cg_rel_fact> *scalar_rel_cache_out,
-			   hash_map<tree, cg_call_rel_fact> *scalar_call_rel_cache_out)
+			   hash_map<tree, cg_call_rel_fact> *scalar_call_rel_cache_out,
+			   hash_set<gimple *> *call_relational_verdict_out,
+			   gimple_ranger *ranger)
 {
   int *rpo = XNEWVEC (int, n_basic_blocks_for_fn (fun));
   int rpo_num = pre_and_rev_post_order_compute (NULL, rpo, false);
@@ -3613,6 +3956,13 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 	    {
 	      gcall *call = as_a <gcall *> (stmt);
 	      cg_consult_persistent_facts (call, field_object_cache, state);
+	      /* Bounds-proving demo, Part 2: STATE is dominator-correct for
+		 CALL exactly here, before any of this same call's own
+		 invalidation below -- see cg_check_call_range_relational's
+		 own comment for why this specific check can't live in
+		 cg_check_call instead.  */
+	      cg_check_call_range_relational (call, field_object_cache, state,
+						ranger, call_relational_verdict_out);
 	      /* Before this same call's own argument invalidation just
 		 below, so it sees the receiver's facts exactly as the
 		 caller left them -- see cg_compose_call_result_range's
@@ -3695,8 +4045,29 @@ pass_contracts_gimple::execute (function *fun)
      comment on why flattening is sound for these two shapes.  */
   hash_map<tree, cg_rel_fact> scalar_rel_cache;
   hash_map<tree, cg_call_rel_fact> scalar_call_rel_cache;
+  /* Bounds-proving demo, Part 2: every call site where cg_predicate_
+     facts_walk's own new range-vs-range fallback (cg_check_call_range_
+     relational) already reached a definitive verdict for a "param vs
+     call" conjunct -- cg_check_call's own, separate pass over the same
+     calls below must not also warn "cannot verify" for one of those
+     (see cg_check_call_range_relational's own comment for why this
+     check can't simply live inside cg_check_call to begin with, and for
+     the known, accepted per-call (not per-conjunct) imprecision).  */
+  hash_set<gimple *> call_relational_verdict;
+  /* Bounds-proving demo, Part 2: created here, before cg_predicate_facts_
+     walk's own call, rather than in each of the two passes separately --
+     found via direct testing that giving cg_predicate_facts_walk its own,
+     second, sequential (not nested) gimple_ranger instance over the same
+     function made this whole pass's own diagnostics non-deterministic
+     between identical runs of the same compilation (see cg_check_call_
+     range_relational's own comment). One ranger, shared by both passes,
+     disabled once at the very end, avoids that entirely.  */
+  calculate_dominance_info (CDI_DOMINATORS);
+  gimple_ranger *ranger = enable_ranger (fun, false);
+
   cg_predicate_facts_walk (fun, &scalar_range_cache, &scalar_rel_cache,
-			     &scalar_call_rel_cache);
+			     &scalar_call_rel_cache, &call_relational_verdict,
+			     ranger);
 
   hash_map<tree, cg_fact> established;
   hash_map<tree, cg_fact> established_nz;
@@ -3707,9 +4078,6 @@ pass_contracts_gimple::execute (function *fun)
   cg_seed_self_trust (fun, established, established_nz, established_range,
 		       established_rel, established_call_rel,
 		       established_call_call_rel);
-
-  calculate_dominance_info (CDI_DOMINATORS);
-  gimple_ranger *ranger = enable_ranger (fun, false);
 
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
@@ -3722,7 +4090,8 @@ pass_contracts_gimple::execute (function *fun)
 			 established_range, established_rel,
 			 established_call_rel, established_call_call_rel,
 			 scalar_range_cache, scalar_rel_cache,
-			 scalar_call_rel_cache, ranger);
+			 scalar_call_rel_cache, ranger,
+			 &call_relational_verdict);
       }
 
   disable_ranger (fun);
