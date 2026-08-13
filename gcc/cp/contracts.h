@@ -229,6 +229,24 @@ struct oa_analysis_env;
    verify" signal and must not be reported with the same severity.  */
 enum oa_proof_result { OA_PROVEN_TRUE, OA_PROVEN_FALSE, OA_UNKNOWN };
 
+/* Three-way outcome shared by every range-based consult in contracts.cc
+   (field-range/call-range subsumption, and, since the bounds-proving
+   demo, the range-vs-range relational fallback) -- unlike a named-
+   predicate obligation's own strict true/false, two *ranges* can also
+   merely partially overlap: ESTABLISHED might satisfy REQUIRED for some
+   but not all of its own possible values, which is neither a proof of
+   correctness nor a proof of violation, just "cannot verify."  Declared
+   here (not contracts.cc, where it originated) so contracts-gimple.cc's
+   own range-based consult can reuse it too, rather than a separately-
+   maintained duplicate -- see oa_proof_result immediately above for the
+   same reasoning.  */
+enum oa_range_subsumption_result
+{
+  OA_RANGE_SUBSUMED,    /* ESTABLISHED fully satisfies REQUIRED: proven.  */
+  OA_RANGE_DISJOINT,    /* No possible overlap: provably violates.  */
+  OA_RANGE_PARTIAL      /* Neither of the above: cannot verify.  */
+};
+
 /* Walk FNDECL's own pre-genericize body using the existing oa_walk_stmt
    machinery unchanged (so IILE recursion, loop-header/if-else merging,
    and existing fact tracking, including a callee's postcondition

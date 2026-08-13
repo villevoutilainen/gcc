@@ -10521,14 +10521,9 @@ oa_collect_contract_call_ranges_parametric (tree condition, tree callee,
    verify" -- the same "must be provable, else treated as unconstrained"
    discipline used everywhere else in this file, extended to have a
    distinct provably-false case only when the two ranges cannot possibly
-   overlap at all.  */
-
-enum oa_range_subsumption_result
-{
-  OA_RANGE_SUBSUMED,    /* ESTABLISHED fully satisfies REQUIRED: proven.  */
-  OA_RANGE_DISJOINT,    /* No possible overlap: provably violates.  */
-  OA_RANGE_PARTIAL      /* Neither of the above: cannot verify.  */
-};
+   overlap at all. The outcome enum itself now lives in contracts.h (see
+   its own comment there): contracts-gimple.cc's own range-based consult
+   needs it too, since the bounds-proving demo.  */
 
 static oa_range_subsumption_result
 oa_range_subsumption (const oa_range_fact &established,
