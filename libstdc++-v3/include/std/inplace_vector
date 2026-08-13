@@ -424,7 +424,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       // element access
       [[nodiscard]]
       constexpr reference
-      operator[](size_type __n)
+      operator[](size_type __n) _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
       {
 	__glibcxx_requires_subscript(__n);
 	return _M_elems[__n];
@@ -432,7 +432,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       [[nodiscard]]
       constexpr const_reference
-      operator[](size_type __n) const
+      operator[](size_type __n) const _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
       {
 	__glibcxx_requires_subscript(__n);
 	return _M_elems[__n];
@@ -464,7 +464,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       [[nodiscard]]
       constexpr reference
-      front()
+      front() _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return _M_elems[0];
@@ -472,7 +472,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       [[nodiscard]]
       constexpr const_reference
-      front() const
+      front() const _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return _M_elems[0];
@@ -480,7 +480,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       [[nodiscard]]
       constexpr reference
-      back()
+      back() _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return _M_elems[_M_size - 1];
@@ -488,7 +488,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       [[nodiscard]]
       constexpr const_reference
-      back() const
+      back() const _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return _M_elems[_M_size - 1];
@@ -548,7 +548,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	}
 
       constexpr void
-      pop_back()
+      pop_back() _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	--_M_size;

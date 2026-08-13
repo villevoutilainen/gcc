@@ -1645,7 +1645,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_NODISCARD
       reference
-      front() _GLIBCXX_NOEXCEPT
+      front() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1657,7 +1657,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_NODISCARD
       const_reference
-      front() const _GLIBCXX_NOEXCEPT
+      front() const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1669,7 +1669,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_NODISCARD
       reference
-      back() _GLIBCXX_NOEXCEPT
+      back() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	iterator __tmp = end();
@@ -1683,7 +1683,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_NODISCARD
       const_reference
-      back() const _GLIBCXX_NOEXCEPT
+      back() const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	const_iterator __tmp = end();
@@ -1783,7 +1783,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        *  called.
        */
       void
-      pop_front() _GLIBCXX_NOEXCEPT
+      pop_front() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	this->_M_erase(begin());
@@ -1835,7 +1835,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        *  is needed, it should be retrieved before pop_back() is called.
        */
       void
-      pop_back() _GLIBCXX_NOEXCEPT
+      pop_back() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	this->_M_erase(iterator(this->_M_impl._M_node._M_prev));

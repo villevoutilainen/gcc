@@ -284,6 +284,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     _GLIBCXX20_CONSTEXPR
     inline void
     pop_heap(_RandomAccessIterator __first, _RandomAccessIterator __last)
+      _GLIBCXX_PRECONDITION_NON_EMPTY_RANGE(__first, __last)
     {
       // concept requirements
       __glibcxx_function_requires(_Mutable_RandomAccessIteratorConcept<
@@ -319,6 +320,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline void
     pop_heap(_RandomAccessIterator __first,
 	     _RandomAccessIterator __last, _Compare __comp)
+      _GLIBCXX_PRECONDITION_NON_EMPTY_RANGE(__first, __last)
     {
       // concept requirements
       __glibcxx_function_requires(_Mutable_RandomAccessIteratorConcept<

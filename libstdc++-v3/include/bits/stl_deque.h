@@ -96,9 +96,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #endif
 
   _GLIBCXX_CONSTEXPR inline size_t
-  __deque_buf_size(size_t __size)
-  { return (__size < _GLIBCXX_DEQUE_BUF_SIZE
-	    ? size_t(_GLIBCXX_DEQUE_BUF_SIZE / __size) : size_t(1)); }
+  __deque_buf_size(size_t __size) _GLIBCXX_CONVEYOR
+  {
+    if (__size < 1)
+      __builtin_unreachable();
+    if (__size < _GLIBCXX_DEQUE_BUF_SIZE)
+      return size_t(_GLIBCXX_DEQUE_BUF_SIZE / __size);
+    return size_t(1);
+  }
 
 
   /**
@@ -132,7 +137,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #endif
 
       _GLIBCXX26_CONSTEXPR
-      static size_t _S_buffer_size() _GLIBCXX_NOEXCEPT
+      static size_t _S_buffer_size() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return __deque_buf_size(sizeof(_Tp)); }
 
       typedef std::random_access_iterator_tag	iterator_category;
@@ -278,6 +283,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD
       friend _GLIBCXX26_CONSTEXPR bool
       operator==(const _Self& __x, const _Self& __y) _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR
       { return __x._M_cur == __y._M_cur; }
 
       // Note: we also provide overloads whose operands are of the same type in
@@ -376,6 +382,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD
       friend _GLIBCXX26_CONSTEXPR difference_type
       operator-(const _Self& __x, const _Self& __y) _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR
       {
 	return difference_type(_S_buffer_size())
 	  * (__x._M_node - __y._M_node - bool(__x._M_node))
@@ -624,11 +631,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       };
 
       _GLIBCXX26_CONSTEXPR _Tp_alloc_type&
-      _M_get_Tp_allocator() _GLIBCXX_NOEXCEPT
+      _M_get_Tp_allocator() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return this->_M_impl; }
 
       _GLIBCXX26_CONSTEXPR const _Tp_alloc_type&
-      _M_get_Tp_allocator() const _GLIBCXX_NOEXCEPT
+      _M_get_Tp_allocator() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return this->_M_impl; }
 
       _GLIBCXX26_CONSTEXPR _Map_alloc_type
@@ -1400,7 +1407,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       /**  Returns the number of elements in the %deque.  */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR size_type
-      size() const _GLIBCXX_NOEXCEPT
+      size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       {
 	size_type __sz = this->_M_impl._M_finish - this->_M_impl._M_start;
 	if (__sz > max_size ())
@@ -1411,7 +1418,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       /**  Returns the size() of the largest possible %deque.  */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR size_type
-      max_size() const _GLIBCXX_NOEXCEPT
+      max_size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return _S_max_size(_M_get_Tp_allocator()); }
 
 #if __cplusplus >= 201103L
@@ -1485,7 +1492,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR bool
-      empty() const _GLIBCXX_NOEXCEPT
+      empty() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return this->_M_impl._M_finish == this->_M_impl._M_start; }
 
       // element access
@@ -1502,7 +1509,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR reference
-      operator[](size_type __n) _GLIBCXX_NOEXCEPT
+      operator[](size_type __n) _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
       {
 	__glibcxx_requires_subscript(__n);
 	return this->_M_impl._M_start[difference_type(__n)];
@@ -1521,7 +1528,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR const_reference
-      operator[](size_type __n) const _GLIBCXX_NOEXCEPT
+      operator[](size_type __n) const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
       {
 	__glibcxx_requires_subscript(__n);
 	return this->_M_impl._M_start[difference_type(__n)];
@@ -1582,7 +1589,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR reference
-      front() _GLIBCXX_NOEXCEPT
+      front() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1594,7 +1601,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR const_reference
-      front() const _GLIBCXX_NOEXCEPT
+      front() const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1606,7 +1613,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR reference
-      back() _GLIBCXX_NOEXCEPT
+      back() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	iterator __tmp = end();
@@ -1620,7 +1627,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR const_reference
-      back() const _GLIBCXX_NOEXCEPT
+      back() const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	const_iterator __tmp = end();
@@ -1712,7 +1719,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  needed, it should be retrieved before pop_front() is called.
        */
       _GLIBCXX26_CONSTEXPR void
-      pop_front() _GLIBCXX_NOEXCEPT
+      pop_front() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	if (this->_M_impl._M_start._M_cur
@@ -1735,7 +1742,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  needed, it should be retrieved before pop_back() is called.
        */
       _GLIBCXX26_CONSTEXPR void
-      pop_back() _GLIBCXX_NOEXCEPT
+      pop_back() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	if (this->_M_impl._M_finish._M_cur
@@ -2046,7 +2053,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       }
 
       static _GLIBCXX26_CONSTEXPR size_type
-      _S_max_size(const _Tp_alloc_type& __a) _GLIBCXX_NOEXCEPT
+      _S_max_size(const _Tp_alloc_type& __a) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       {
 	const size_t __diffmax = __gnu_cxx::__numeric_traits<ptrdiff_t>::__max;
 	const size_t __allocmax = _Alloc_traits::max_size(__a);

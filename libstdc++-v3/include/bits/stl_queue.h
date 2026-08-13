@@ -252,7 +252,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR bool
-      empty() const
+      empty() const _GLIBCXX_CONVEYOR
       { return c.empty(); }
 
       /**  Returns the number of elements in the %queue.  */
@@ -267,7 +267,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR reference
-      front()
+      front() _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return c.front();
@@ -279,7 +279,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR const_reference
-      front() const
+      front() const _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return c.front();
@@ -291,7 +291,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR reference
-      back()
+      back() _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return c.back();
@@ -303,7 +303,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR const_reference
-      back() const
+      back() const _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return c.back();
@@ -364,7 +364,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  called.
        */
       _GLIBCXX26_CONSTEXPR void
-      pop()
+      pop() _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	c.pop_front();
@@ -838,7 +838,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR bool
-      empty() const
+      empty() const _GLIBCXX_CONVEYOR
       { return c.empty(); }
 
       /**  Returns the number of elements in the %queue.  */
@@ -853,7 +853,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR const_reference
-      top() const
+      top() const _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return c.front();
@@ -916,7 +916,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  called.
        */
       _GLIBCXX26_CONSTEXPR void
-      pop()
+      pop() _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	std::pop_heap(c.begin(), c.end(), comp);

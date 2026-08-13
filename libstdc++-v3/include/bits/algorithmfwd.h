@@ -535,12 +535,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _RAIter>
     _GLIBCXX20_CONSTEXPR
     void
-    pop_heap(_RAIter, _RAIter);
+    pop_heap(_RAIter __first, _RAIter __last)
+      _GLIBCXX_PRECONDITION_NON_EMPTY_RANGE(__first, __last);
 
   template<typename _RAIter, typename _Compare>
     _GLIBCXX20_CONSTEXPR
     void
-    pop_heap(_RAIter, _RAIter, _Compare);
+    pop_heap(_RAIter __first, _RAIter __last, _Compare)
+      _GLIBCXX_PRECONDITION_NON_EMPTY_RANGE(__first, __last);
 
   template<typename _BIter>
     _GLIBCXX20_CONSTEXPR

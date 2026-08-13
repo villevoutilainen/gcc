@@ -1300,7 +1300,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
-      operator[](size_type __n) _GLIBCXX_NOEXCEPT
+      operator[](size_type __n) _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
       {
 	__glibcxx_requires_subscript(__n);
 	return *(this->_M_impl._M_start + __n);
@@ -1319,7 +1319,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reference
-      operator[](size_type __n) const _GLIBCXX_NOEXCEPT
+      operator[](size_type __n) const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
       {
 	__glibcxx_requires_subscript(__n);
 	return *(this->_M_impl._M_start + __n);
@@ -1383,7 +1383,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
-      front() _GLIBCXX_NOEXCEPT
+      front() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1395,7 +1395,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reference
-      front() const _GLIBCXX_NOEXCEPT
+      front() const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1407,7 +1407,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
-      back() _GLIBCXX_NOEXCEPT
+      back() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return *(end() - 1);
@@ -1419,7 +1419,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reference
-      back() const _GLIBCXX_NOEXCEPT
+      back() const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return *(end() - 1);
@@ -1496,7 +1496,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX20_CONSTEXPR
       void
-      pop_back() _GLIBCXX_NOEXCEPT
+      pop_back() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	--this->_M_impl._M_finish;
