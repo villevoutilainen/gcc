@@ -330,7 +330,9 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	    tree_code rel_code2;
 	    if (oa_match_comparison_against_call (*conjuncts[i], &rel_param2,
 						   &rel_code2, &rhs_receiver,
-						   &rhs_callee))
+						   &rhs_callee,
+						   /*allow_symbolic_accessor=*/
+						     false))
 	      {
 		tree sub_param = substitute_call_arg (callee, call, rel_param2);
 		tree sub_receiver = substitute_call_arg (callee, call, rhs_receiver);
@@ -368,7 +370,8 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	    tree_code call_code;
 	    if (oa_match_call_against_call (*conjuncts[i], &lhs_receiver,
 					      &lhs_callee, &call_code,
-					      &rhs_receiver, &rhs_callee))
+					      &rhs_receiver, &rhs_callee,
+					      /*allow_symbolic_accessor=*/false))
 	      {
 		tree sub_lhs_receiver
 		  = substitute_call_arg (callee, call, lhs_receiver);
