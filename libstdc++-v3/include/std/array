@@ -201,12 +201,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[__nodiscard__, __gnu__::__const__, __gnu__::__always_inline__]]
       constexpr bool
-      empty() const noexcept { return size() == 0; }
+      empty() const noexcept _GLIBCXX_CONVEYOR { return size() == 0; }
 
       // Element access.
       [[__nodiscard__]]
       _GLIBCXX17_CONSTEXPR reference
-      operator[](size_type __n) noexcept
+      operator[](size_type __n) noexcept _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
       {
 	__glibcxx_requires_subscript(__n);
 	return _M_elems[__n];
@@ -214,7 +214,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[__nodiscard__]]
       constexpr const_reference
-      operator[](size_type __n) const noexcept
+      operator[](size_type __n) const noexcept _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
       {
 #if __cplusplus >= 201402L
 	__glibcxx_requires_subscript(__n);
@@ -246,7 +246,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[__nodiscard__]]
       _GLIBCXX17_CONSTEXPR reference
-      front() noexcept
+      front() noexcept _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return _M_elems[(size_type)0];
@@ -254,7 +254,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[__nodiscard__]]
       constexpr const_reference
-      front() const noexcept
+      front() const noexcept _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 #if __cplusplus >= 201402L
 	__glibcxx_requires_nonempty();
@@ -264,7 +264,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[__nodiscard__]]
       _GLIBCXX17_CONSTEXPR reference
-      back() noexcept
+      back() noexcept _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return _M_elems[_Nm - 1];
@@ -272,7 +272,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[__nodiscard__]]
       constexpr const_reference
-      back() const noexcept
+      back() const noexcept _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 #if __cplusplus >= 201402L
 	__glibcxx_requires_nonempty();

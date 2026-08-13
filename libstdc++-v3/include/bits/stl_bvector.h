@@ -201,7 +201,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     }
 
     _GLIBCXX20_CONSTEXPR
-    _Bit_iterator_base(_Bit_type * __x, unsigned int __y)
+    _Bit_iterator_base(_Bit_type * __x, unsigned int __y) _GLIBCXX_CONVEYOR
     : _M_p(__x), _M_offset(__y) { }
 
     _GLIBCXX20_CONSTEXPR
@@ -432,7 +432,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     _Bit_const_iterator() : _Bit_iterator_base(0, 0) { }
 
     _GLIBCXX20_CONSTEXPR
-    _Bit_const_iterator(_Bit_type * __x, unsigned int __y)
+    _Bit_const_iterator(_Bit_type * __x, unsigned int __y) _GLIBCXX_CONVEYOR
     : _Bit_iterator_base(__x, __y) { }
 
     _GLIBCXX20_CONSTEXPR
@@ -1070,7 +1070,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_iterator
-      begin() const _GLIBCXX_NOEXCEPT
+      begin() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return const_iterator(this->_M_impl._M_start._M_p, 0); }
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
@@ -1080,7 +1080,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_iterator
-      end() const _GLIBCXX_NOEXCEPT
+      end() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return this->_M_impl._M_finish; }
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
@@ -1127,7 +1127,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
-      size() const _GLIBCXX_NOEXCEPT
+      size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return size_type(end() - begin()); }
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
@@ -1151,12 +1151,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       bool
-      empty() const _GLIBCXX_NOEXCEPT
+      empty() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return begin() == end(); }
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
-      operator[](size_type __n)
+      operator[](size_type __n) _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
       {
 	__glibcxx_requires_subscript(__n);
 	return _Bit_reference (this->_M_impl._M_start._M_p
@@ -1166,7 +1166,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reference
-      operator[](size_type __n) const
+      operator[](size_type __n) const _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
       {
 	__glibcxx_requires_subscript(__n);
 	return _Bit_reference (this->_M_impl._M_start._M_p
@@ -1215,7 +1215,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
-      front()
+      front() _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1223,7 +1223,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reference
-      front() const
+      front() const _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1231,7 +1231,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
-      back()
+      back() _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return *(end() - 1);
@@ -1239,7 +1239,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reference
-      back() const
+      back() const _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return *(end() - 1);

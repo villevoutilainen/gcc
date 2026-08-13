@@ -86,23 +86,23 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       __attribute__((__always_inline__))
       _GLIBCXX20_CONSTEXPR
-      __new_allocator() _GLIBCXX_USE_NOEXCEPT { }
+      __new_allocator() _GLIBCXX_USE_NOEXCEPT _GLIBCXX_CONVEYOR { }
 
       __attribute__((__always_inline__))
       _GLIBCXX20_CONSTEXPR
-      __new_allocator(const __new_allocator&) _GLIBCXX_USE_NOEXCEPT { }
+      __new_allocator(const __new_allocator&) _GLIBCXX_USE_NOEXCEPT _GLIBCXX_CONVEYOR { }
 
       template<typename _Tp1>
 	__attribute__((__always_inline__))
 	_GLIBCXX20_CONSTEXPR
-	__new_allocator(const __new_allocator<_Tp1>&) _GLIBCXX_USE_NOEXCEPT { }
+	__new_allocator(const __new_allocator<_Tp1>&) _GLIBCXX_USE_NOEXCEPT _GLIBCXX_CONVEYOR { }
 
 #if __cplusplus >= 201103L
       __new_allocator& operator=(const __new_allocator&) = default;
 #endif
 
 #if __cplusplus <= 201703L
-      ~__new_allocator() _GLIBCXX_USE_NOEXCEPT { }
+      ~__new_allocator() _GLIBCXX_USE_NOEXCEPT _GLIBCXX_CONVEYOR { }
 
       pointer
       address(reference __x) const _GLIBCXX_NOEXCEPT

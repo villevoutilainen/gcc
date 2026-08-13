@@ -240,7 +240,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  Returns true if the %stack is empty.
        */
       _GLIBCXX_NODISCARD bool
-      empty() const
+      empty() const _GLIBCXX_CONVEYOR
       { return c.empty(); }
 
       /**  Returns the number of elements in the %stack.  */
@@ -255,7 +255,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       _GLIBCXX_NODISCARD
       reference
-      top()
+      top() _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return c.back();
@@ -267,7 +267,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       _GLIBCXX_NODISCARD
       const_reference
-      top() const
+      top() const _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	return c.back();
@@ -328,7 +328,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  called.
        */
       void
-      pop()
+      pop() _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	c.pop_back();

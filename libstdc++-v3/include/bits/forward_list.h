@@ -1276,7 +1276,7 @@ namespace __fwdlist
        */
       [[__nodiscard__]]
       reference
-      front()
+      front() _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	_Node& __front = static_cast<_Node&>(*this->_M_impl._M_head._M_next);
@@ -1289,7 +1289,7 @@ namespace __fwdlist
        */
       [[__nodiscard__]]
       const_reference
-      front() const
+      front() const _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	_Node& __front = static_cast<_Node&>(*this->_M_impl._M_head._M_next);
@@ -1385,7 +1385,7 @@ namespace __fwdlist
        *  called.
        */
       void
-      pop_front()
+      pop_front() _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
 	this->_M_erase_after(this->_M_impl._M_head._M_base_ptr());
