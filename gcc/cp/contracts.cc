@@ -8236,6 +8236,10 @@ static tree oa_strip_symbolic_ptr_expr (tree ptr_expr);
 static bool oa_call_range_conjunct_shape
   (tree conjunct, tree *receiver_out, tree *callee_out, tree_code *code_out,
    tree *const_val_out, bool allow_symbolic_accessor);
+static bool oa_match_shifted_comparison_against_call
+  (tree conjunct, tree *param_out, tree_code *code_out,
+   tree *rhs_receiver_out, tree *rhs_callee_out, widest_int *offset_out,
+   bool allow_symbolic_accessor);
 
 /* The last-resort fallback inside oa_refine_single_comparison below:
    "DECL OP <exactly-known point>" refined into ENV's own plain, untagged
@@ -8494,6 +8498,39 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
 	env.call_relational_set (param, rel_code, rhs_receiver, rhs_callee,
 				   /*conveyor_established=*/true,
 				   oa_range_fact_exact (0));
+	return;
+      }
+  }
+
+  /* D4324 Part 4: 'RECEIVER.ACCESSOR () - PARAM OP <literal>' (or its
+     mirror 'PARAM - RECEIVER.ACCESSOR () OP <literal>') -- a genuinely
+     fresh observation feeding the same call_relational_set path as the
+     bare "PARAM OP CALL ()" block just above, but with a nonzero OFFSET
+     (see oa_match_shifted_comparison_against_call's own comment for the
+     algebra). Tried after that block (mutually exclusive with it and
+     the other two above by construction -- this one requires a MINUS_
+     EXPR on one side, which none of the other three shapes have).  */
+  {
+    tree param, rhs_receiver, rhs_callee;
+    tree_code rel_code;
+    widest_int offset;
+    if (oa_match_shifted_comparison_against_call (conjunct, &param, &rel_code,
+						     &rhs_receiver, &rhs_callee,
+						     &offset,
+						     /*allow_symbolic_accessor=*/false))
+      {
+	if (!asserted_true)
+	  switch (rel_code)
+	    {
+	    case LT_EXPR: rel_code = GE_EXPR; break;
+	    case LE_EXPR: rel_code = GT_EXPR; break;
+	    case GT_EXPR: rel_code = LE_EXPR; break;
+	    case GE_EXPR: rel_code = LT_EXPR; break;
+	    default: return;
+	    }
+	env.call_relational_set (param, rel_code, rhs_receiver, rhs_callee,
+				   /*conveyor_established=*/true,
+				   oa_range_fact_exact (offset));
 	return;
       }
   }
@@ -12990,6 +13027,48 @@ oa_get_range_derivation (tree expr, oa_env &env)
 static void (*oa_call_site_callback) (tree, tree, oa_env *, void *);
 static void *oa_call_site_callback_data;
 
+/* D4324 (see .claude/plans/lazy-stirring-pearl.md, Part 4): a callee-
+   must-satisfy-its-own-precondition check (oa_handle_call_conveyor_
+   proof_obligation and its symbolic/plain siblings, all reached from
+   oa_scan_calls_in_expr's own shared per-call dispatch just below) can
+   run before a template callee's own BODY -- and therefore its own
+   contract specifiers' *substitution* (tsubst_contract_specifiers,
+   only ever run as part of regenerate_decl_from_template during body
+   instantiation, pt.cc) -- has happened: only the callee's signature is
+   needed to resolve the call itself, so GCC's ordinary deferred-
+   instantiation model can (and, found via direct testing with a
+   template member function's own pre<>(), reliably does) leave the
+   callee's own get_fn_contract_specifiers still pointing at the
+   *pattern*'s raw, unsubstituted, still-template-dependent condition
+   tree at the exact point this pass reads it -- every shape recognizer
+   below silently fails to match a dependent-typed condition, so the
+   whole obligation is (silently, wrongly) treated as if the callee had
+   no precondition at all, rather than "cannot verify."  Mirrors maybe_
+   instantiate_conveyor's own, narrower fix for the exact same "callee-
+   must-be-conveyor can run before a template body is instantiated"
+   problem (build_over_call's own check, pt.cc's own comment on that
+   function) -- this is the analogue for *reading a callee's contract
+   condition* rather than *reading its conveyor bit*, needed at every
+   one of this pass's own call-site dispatch points instead of just
+   build_over_call's single one, hence living here (the single, shared
+   per-call entry point) rather than duplicated at each handler.  A no-
+   op for anything that isn't an as-yet-body-uninstantiated template
+   specialization (instantiate_decl's own DECL_TEMPLATE_INSTANTIATED
+   check, mirrored here first to avoid DECL_TI_TEMPLATE on a decl with
+   no template info at all, makes a redundant call harmless otherwise).  */
+
+static void
+oa_maybe_instantiate_contracts (tree fn)
+{
+  if (fn == NULL_TREE || fn == error_mark_node || TREE_CODE (fn) != FUNCTION_DECL)
+    return;
+  if (DECL_CLONED_FUNCTION_P (fn))
+    fn = DECL_CLONED_FUNCTION (fn);
+  if (!DECL_TEMPLATE_INFO (fn) || DECL_TEMPLATE_INSTANTIATED (fn))
+    return;
+  instantiate_decl (fn, /*defer_ok=*/false, /*expl_inst_class_mem_p=*/false);
+}
+
 /* Scan *EXPR (an arbitrary expression, not necessarily a full
    statement -- e.g. a RETURN_EXPR's value or an INIT_EXPR/MODIFY_EXPR's
    RHS) for every CALL_EXPR it contains, including nested calls within
@@ -13038,6 +13117,7 @@ oa_scan_calls_in_expr (tree *expr, oa_env &env, tree *extra = NULL,
       tree arg;
       if (is_object_address_call_p (t, &arg))
 	return NULL_TREE;
+      oa_maybe_instantiate_contracts (cp_get_callee_fndecl_nofold (t));
       oa_handle_call_precondition_obligation (t, *e);
       if (flag_contract_conveyor_proofs)
 	oa_handle_call_conveyor_proof_obligation (t, *e);
@@ -15002,6 +15082,8 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   or what some other call's arguments may have just changed.  */
 	tree pre_extra = NULL_TREE;
 	tree post_extra = NULL_TREE;
+	oa_relational_fact eager_rel_fact;
+	oa_call_relational_fact eager_call_rel_fact;
 	/* Postcondition-side call-range composition (see oa_call_
 	   postcondition_range_p's own comment on this exact ordering
 	   problem, and contracts-gimple.cc's own cg_compose_call_result_
@@ -15018,6 +15100,24 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   after running (found via direct testing: without this, LHS's
 	   own range came back exactly as if this call never happened).  */
 	bool eager_range_composed = oa_compose_call_result_range (lhs, rhs, env);
+	/* D4324: a self-referential reassignment ('idx = idx + 5;', from
+	   'idx += 5;') has RHS mention the very same decl Rule 1 below is
+	   about to invalidate -- so, exactly like EAGER_RANGE_COMPOSED just
+	   above (same underlying problem, same fix shape), RHS's own
+	   relational/call-relational fact must be read *now*, before that
+	   invalidation, or the "shift an existing fact by a constant"
+	   handling much further below (which runs after invalidation) would
+	   always see nothing, silently discarding a fact that should have
+	   carried over shifted -- found via direct testing of exactly this
+	   shape while building the bounds-proving demo (see .claude/plans/
+	   lazy-stirring-pearl.md, Part 4): 'if (v.size () - idx > 10) { idx
+	   += 5; return v[idx]; }' never verified even though the shift is
+	   provably still within the established margin, because idx's own
+	   just-established call-relational fact was gone by the time the
+	   shift lookup ran.  */
+	bool eager_rel_ok = oa_get_relational (rhs, env, &eager_rel_fact);
+	bool eager_call_rel_ok
+	  = !eager_rel_ok && oa_get_call_relational (rhs, env, &eager_call_rel_fact);
 	/* The RHS commonly flows directly from a call (e.g.
 	   'int* q = deref(p);') -- discharge any call-site precondition
 	   obligation (item 7) for every call reached from here, for the
@@ -15309,22 +15409,22 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       oa_establish_relational_from_call just above (Rule 1 already
 	       invalidated). Call-relational tried only if the plain shape
 	       didn't already resolve something (a fact is only ever one
-	       shape at a time).  */
-	    oa_relational_fact rel_fact;
-	    if (oa_get_relational (rhs, env, &rel_fact))
-	      env.relational_set (lhs, rel_fact.code, rel_fact.rhs,
-				    rel_fact.conveyor_established,
-				    rel_fact.offset);
-	    else
-	      {
-		oa_call_relational_fact call_rel_fact;
-		if (oa_get_call_relational (rhs, env, &call_rel_fact))
-		  env.call_relational_set (lhs, call_rel_fact.code,
-					     call_rel_fact.rhs_receiver,
-					     call_rel_fact.rhs_callee,
-					     call_rel_fact.conveyor_established,
-					     call_rel_fact.offset);
-	      }
+	       shape at a time). Uses EAGER_REL_OK/EAGER_CALL_REL_OK's own
+	       pre-invalidation lookup (see that variable's own comment),
+	       not a fresh oa_get_relational/oa_get_call_relational call
+	       against ENV here -- Rule 1, above, has since invalidated
+	       exactly the fact a self-referential RHS like 'idx + 5' would
+	       need to find for itself.  */
+	    if (eager_rel_ok)
+	      env.relational_set (lhs, eager_rel_fact.code, eager_rel_fact.rhs,
+				    eager_rel_fact.conveyor_established,
+				    eager_rel_fact.offset);
+	    else if (eager_call_rel_ok)
+	      env.call_relational_set (lhs, eager_call_rel_fact.code,
+					 eager_call_rel_fact.rhs_receiver,
+					 eager_call_rel_fact.rhs_callee,
+					 eager_call_rel_fact.conveyor_established,
+					 eager_call_rel_fact.offset);
 	    /* -fcontract-conveyor-proof-provenance: mirror the numeric
 	       tracking just above, one level up -- a no-op entirely when
 	       provenance tracking is inactive.  */
@@ -17344,6 +17444,111 @@ oa_match_comparison_against_call (tree conjunct, tree *param_out,
   *code_out = code;
   *rhs_receiver_out = receiver;
   *rhs_callee_out = callee;
+  return true;
+}
+
+/* D4324 (see .claude/plans/lazy-stirring-pearl.md, Part 4): recognize
+   CONJUNCT as "RECEIVER.ACCESSOR () - PARAM OP <literal>" or its mirror
+   "PARAM - RECEIVER.ACCESSOR () OP <literal>" (plus the usual literal-
+   on-the-left flip of either), e.g. 'v.size () - idx < 10'. Unlike oa_
+   get_relational/oa_get_call_relational's own PLUS_EXPR/MINUS_EXPR
+   handling just above (which *shifts* an already-established fact for
+   one operand), this recognizes a genuinely fresh, direct observation
+   -- there is no pre-existing fact on PARAM here -- so it produces
+   (PARAM, CODE, RECEIVER, CALLEE, OFFSET) suitable for feeding straight
+   into the *existing* call_relational_set establishment path (oa_call_
+   relational_fact's own OFFSET already means "the fact holds for
+   (LHS - OFFSET) CODE RHS", which accommodates a nonzero value at
+   establishment just as well as at shift time, so no new storage is
+   needed, only this recognizer).
+
+   Algebra (CODE_OUT/OFFSET_OUT normalized so the established fact reads
+   "(PARAM - OFFSET_OUT) CODE_OUT RECEIVER.CALLEE ()"):
+     CALL () - PARAM CODE L  ->  PARAM <flip CODE> CALL (), offset -L
+     PARAM - CALL () CODE L  ->  PARAM CODE CALL (), offset +L
+   (the first negates the comparison direction, since solving for PARAM
+   divides by -1; the second doesn't -- mirroring oa_call_range_
+   conjunct_shape's own negate-on-flip discipline for its own literal-
+   position flip, applied here to the CALL()-vs-PARAM position instead).  */
+
+static bool
+oa_match_shifted_comparison_against_call (tree conjunct, tree *param_out,
+					    tree_code *code_out,
+					    tree *rhs_receiver_out,
+					    tree *rhs_callee_out,
+					    widest_int *offset_out,
+					    bool allow_symbolic_accessor)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  enum tree_code code = TREE_CODE (c);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return false;
+
+  tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+
+  tree diff, lit;
+  if (TREE_CODE (op1) == INTEGER_CST)
+    diff = op0, lit = op1;
+  else if (TREE_CODE (op0) == INTEGER_CST)
+    {
+      /* Literal on the left ('L < C - P'): mirror the comparison the
+	 same way oa_call_range_conjunct_shape's own flipped branch
+	 does, before any of this function's own algebraic flip below.  */
+      diff = op1, lit = op0;
+      switch (code)
+	{
+	case LT_EXPR: code = GT_EXPR; break;
+	case LE_EXPR: code = GE_EXPR; break;
+	case GT_EXPR: code = LT_EXPR; break;
+	case GE_EXPR: code = LE_EXPR; break;
+	default: break;
+	}
+    }
+  else
+    return false;
+
+  diff = oa_strip_to_relational_operand (diff);
+  if (TREE_CODE (diff) != MINUS_EXPR)
+    return false;
+
+  tree lhs = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (diff, 0));
+  tree rhs = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (diff, 1));
+
+  tree param, receiver, callee;
+  widest_int offset;
+  if ((param = oa_underlying_param_operand (rhs))
+      && oa_underlying_call_range_operand (lhs, &receiver, &callee,
+					     allow_symbolic_accessor))
+    {
+      /* CALL () - PARAM: solving for PARAM negates the direction.  */
+      switch (code)
+	{
+	case LT_EXPR: code = GT_EXPR; break;
+	case LE_EXPR: code = GE_EXPR; break;
+	case GT_EXPR: code = LT_EXPR; break;
+	case GE_EXPR: code = LE_EXPR; break;
+	default: break;
+	}
+      offset = -wi::to_widest (lit);
+    }
+  else if ((param = oa_underlying_param_operand (lhs))
+	   && oa_underlying_call_range_operand (rhs, &receiver, &callee,
+						  allow_symbolic_accessor))
+    /* PARAM - CALL (): no direction change.  */
+    offset = wi::to_widest (lit);
+  else
+    return false;
+
+  *param_out = param;
+  *code_out = code;
+  *rhs_receiver_out = receiver;
+  *rhs_callee_out = callee;
+  *offset_out = offset;
   return true;
 }
 
