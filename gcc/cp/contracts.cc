@@ -10447,6 +10447,57 @@ oa_range_subsumption (const oa_range_fact &established,
   return disjoint ? OA_RANGE_DISJOINT : OA_RANGE_PARTIAL;
 }
 
+/* Bounds-proving demo (see .claude/plans/lazy-stirring-pearl.md): unlike
+   oa_range_subsumption immediately above (one established range against
+   one required [lo,hi] bound), this compares two independently-tracked
+   ranges related by an arbitrary comparison CODE -- e.g. a plain local's
+   own scalar range against a receiver's own established call-range fact,
+   never explicitly linked to each other by any if-condition or self-trust
+   (that's oa_env_check_call_relational_fact_1's own existing "linked
+   fact" check, tried first; this is the fallback for when no such link
+   was ever established, only two separate facts that might still settle
+   the question numerically). SUBSUMED requires A's own worst-case bound
+   in the direction that could break the relation to still satisfy it
+   against B's own worst-case bound; DISJOINT requires the mirror-image
+   worst case to already violate it unconditionally -- the same "use the
+   interval's own worst case" discipline oa_offset_compatible_with_code
+   already applies to a single interval, extended to two.  */
+
+static oa_range_subsumption_result
+oa_range_pair_relation (const oa_range_fact &a, tree_code code,
+			  const oa_range_fact &b)
+{
+  switch (code)
+    {
+    case LT_EXPR:
+      if (a.has_hi && b.has_lo && a.hi < b.lo) return OA_RANGE_SUBSUMED;
+      if (a.has_lo && b.has_hi && a.lo >= b.hi) return OA_RANGE_DISJOINT;
+      return OA_RANGE_PARTIAL;
+    case LE_EXPR:
+      if (a.has_hi && b.has_lo && a.hi <= b.lo) return OA_RANGE_SUBSUMED;
+      if (a.has_lo && b.has_hi && a.lo > b.hi) return OA_RANGE_DISJOINT;
+      return OA_RANGE_PARTIAL;
+    case GT_EXPR:
+      if (a.has_lo && b.has_hi && a.lo > b.hi) return OA_RANGE_SUBSUMED;
+      if (a.has_hi && b.has_lo && a.hi <= b.lo) return OA_RANGE_DISJOINT;
+      return OA_RANGE_PARTIAL;
+    case GE_EXPR:
+      if (a.has_lo && b.has_hi && a.lo >= b.hi) return OA_RANGE_SUBSUMED;
+      if (a.has_hi && b.has_lo && a.hi < b.lo) return OA_RANGE_DISJOINT;
+      return OA_RANGE_PARTIAL;
+    case EQ_EXPR:
+      if (a.has_lo && a.has_hi && b.has_lo && b.has_hi
+	  && a.lo == a.hi && b.lo == b.hi && a.lo == b.lo)
+	return OA_RANGE_SUBSUMED;
+      if ((a.has_hi && b.has_lo && a.hi < b.lo)
+	  || (a.has_lo && b.has_hi && a.lo > b.hi))
+	return OA_RANGE_DISJOINT;
+      return OA_RANGE_PARTIAL;
+    default:
+      return OA_RANGE_PARTIAL;
+    }
+}
+
 /* For each of CALL's callee's own active (conveyor- or symbolic-,
    non-ignored) postconditions, record the fact it establishes -- e.g.
    'post<ctrl>(is_opened(this))' called as 'f.open()' records "is_opened
@@ -16673,6 +16724,25 @@ oa_env_check_relational_fact_1 (oa_env &env, tree substituted_param,
       && oa_strip_to_relational_operand (fact.rhs) == stripped_other)
     return OA_PROVEN_TRUE;
 
+  /* Bounds-proving demo: no explicit linked fact -- but both sides' own
+     independently-tracked scalar ranges might still settle this
+     numerically (e.g. both are plain locals, never compared to each
+     other by any if-condition or self-trust). Plain ranges carry no
+     provenance tag at all (see oa_refine_scalar_range_only's own
+     comment: trusted uniformly once established, regardless of
+     REQUIRE_CONVEYOR), so no extra provenance check is needed here.  */
+  oa_range_fact param_range, other_range;
+  if (oa_get_range (substituted_param, env, &param_range)
+      && oa_get_range (substituted_other, env, &other_range))
+    {
+      enum oa_range_subsumption_result r
+	= oa_range_pair_relation (param_range, required_code, other_range);
+      if (r == OA_RANGE_SUBSUMED)
+	return OA_PROVEN_TRUE;
+      if (r == OA_RANGE_DISJOINT)
+	return OA_PROVEN_FALSE;
+    }
+
   return OA_UNKNOWN;
 }
 
@@ -16718,6 +16788,40 @@ oa_env_check_call_relational_fact_1 (oa_env &env, tree substituted_param,
       && (oa_strip_to_relational_operand (fact.rhs_receiver)
 	  == oa_strip_to_relational_operand (substituted_rhs_receiver)))
     return OA_PROVEN_TRUE;
+
+  /* Bounds-proving demo (see .claude/plans/lazy-stirring-pearl.md): no
+     explicit linked fact -- but SUBSTITUTED_PARAM's own independently-
+     tracked scalar range and SUBSTITUTED_RHS_RECEIVER.SUBSTITUTED_RHS_
+     CALLEE ()'s own independently-established call-range fact (e.g. from
+     an earlier call's own postcondition) might still settle this
+     numerically, even though nothing ever explicitly linked the two
+     (no if-condition, no matching self-trust).  */
+  oa_range_fact param_range;
+  if (oa_get_range (substituted_param, env, &param_range))
+    {
+      tree stripped_receiver = oa_strip_conversion_call (substituted_rhs_receiver);
+      tree identity;
+      if (oa_object_identity_decl (stripped_receiver, &identity)
+	  || oa_field_slot_identity (stripped_receiver, env, &identity)
+	  || oa_array_slot_identity (stripped_receiver, env, &identity)
+	  || oa_field_object_identity (stripped_receiver, env, &identity))
+	{
+	  identity = env.alias_find (identity);
+	  oa_contract_field_range_fact callee_fact;
+	  if (env.contract_call_range_get (identity, substituted_rhs_callee,
+					    &callee_fact)
+	      && (!require_conveyor || callee_fact.conveyor_established))
+	    {
+	      enum oa_range_subsumption_result r
+		= oa_range_pair_relation (param_range, required_code,
+					   callee_fact.range);
+	      if (r == OA_RANGE_SUBSUMED)
+		return OA_PROVEN_TRUE;
+	      if (r == OA_RANGE_DISJOINT)
+		return OA_PROVEN_FALSE;
+	    }
+	}
+    }
 
   return OA_UNKNOWN;
 }
@@ -16776,6 +16880,38 @@ oa_env_check_call_call_relational_fact_1 (oa_env &env,
       && (oa_strip_to_relational_operand (fact.rhs_receiver)
 	  == oa_strip_to_relational_operand (substituted_rhs_receiver)))
     return OA_PROVEN_TRUE;
+
+  /* Bounds-proving demo: no explicit linked fact -- but each side's own
+     independently-established call-range fact might still settle this
+     numerically (mirroring oa_env_check_call_relational_fact_1's own
+     identical fallback, generalized to both sides being calls).  */
+  oa_contract_field_range_fact lhs_fact;
+  if (env.contract_call_range_get (identity, substituted_lhs_callee, &lhs_fact)
+      && (!require_conveyor || lhs_fact.conveyor_established))
+    {
+      tree rhs_stripped = oa_strip_conversion_call (substituted_rhs_receiver);
+      tree rhs_identity;
+      if (oa_object_identity_decl (rhs_stripped, &rhs_identity)
+	  || oa_field_slot_identity (rhs_stripped, env, &rhs_identity)
+	  || oa_array_slot_identity (rhs_stripped, env, &rhs_identity)
+	  || oa_field_object_identity (rhs_stripped, env, &rhs_identity))
+	{
+	  rhs_identity = env.alias_find (rhs_identity);
+	  oa_contract_field_range_fact rhs_fact;
+	  if (env.contract_call_range_get (rhs_identity, substituted_rhs_callee,
+					    &rhs_fact)
+	      && (!require_conveyor || rhs_fact.conveyor_established))
+	    {
+	      enum oa_range_subsumption_result r
+		= oa_range_pair_relation (lhs_fact.range, required_code,
+					   rhs_fact.range);
+	      if (r == OA_RANGE_SUBSUMED)
+		return OA_PROVEN_TRUE;
+	      if (r == OA_RANGE_DISJOINT)
+		return OA_PROVEN_FALSE;
+	    }
+	}
+    }
 
   return OA_UNKNOWN;
 }
