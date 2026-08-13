@@ -613,6 +613,28 @@ namespace std
 # endif
 #endif
 
+// _GLIBCXX_PRECONDITION_ASSERTIONS opts a further step beyond
+// _GLIBCXX_CONVEYOR_ASSERTIONS: the library's own conveyor-routed asserts
+// (see __glibcxx_assert/__glibcxx_assert_msg below) become genuine declared
+// preconditions (pre<>()) on the function's own declaration, with the
+// in-body assert disabled, rather than an assertion_STMT inside the body --
+// letting the static prover reason about ordinary caller code, not just
+// verify the library's own body. Nested under _GLIBCXX_CONVEYOR_ASSERTIONS,
+// not an independent mode: a declared precondition here is only ever
+// meaningful once its own accessor (e.g. size()) is conveyor-tagged in the
+// first place, and pre<>()'s own control object is the same conveyor_
+// assert_v this file's own __glibcxx_assert already routes through under
+// that flag -- so this has no effect at all unless conveyor-assertions
+// mode is also active. A single #undef here, rather than repeating "&&
+// defined(_GLIBCXX_CONVEYOR_ASSERTIONS)" at every downstream use of this
+// macro (bits/version.h's own contract-assert routing below,
+// debug/assertions.h's own three shared macros, every library header this
+// gradually rolls out to -- see _GLIBCXX_PRECONDITION_SUBSCRIPT and
+// friends further below for the first three, "Stage P1" of that rollout).
+#if defined(_GLIBCXX_PRECONDITION_ASSERTIONS) && !defined(_GLIBCXX_CONVEYOR_ASSERTIONS)
+# undef _GLIBCXX_PRECONDITION_ASSERTIONS
+#endif
+
 // Disable std::string explicit instantiation declarations in order to assert.
 #ifdef _GLIBCXX_ASSERTIONS
 # undef _GLIBCXX_EXTERN_TEMPLATE
@@ -799,6 +821,29 @@ namespace std
 # else
 #  define _GLIBCXX_CONVEYOR
 # endif
+#endif
+
+// Declaration-level macros for _GLIBCXX_PRECONDITION_ASSERTIONS: turn a
+// library function's own already-conveyor-routed in-body assert (see
+// debug/assertions.h's own __glibcxx_requires_subscript and friends, which
+// these are named after) into a genuine declared pre<>() on that same
+// function's declaration, so callers -- not just the function's own body --
+// are subject to static proof. Reuses std::contracts::conveyor_assert_v
+// directly: it's the same stateless, unconditionally-checking control
+// object debug/assertions.h's own __glibcxx_assert already routes through
+// under _GLIBCXX_CONVEYOR_ASSERTIONS, and nothing about its own behavior is
+// assert-specific vs precondition-specific.
+#if defined(_GLIBCXX_PRECONDITION_ASSERTIONS) && defined(__cpp_contract_control_objects)
+# define _GLIBCXX_PRECONDITION_SUBSCRIPT(_N) \
+    pre<std::contracts::conveyor_assert_v>(_N < size())
+# define _GLIBCXX_PRECONDITION_NONEMPTY() \
+    pre<std::contracts::conveyor_assert_v>(!empty())
+# define _GLIBCXX_PRECONDITION_NON_EMPTY_RANGE(_First, _Last) \
+    pre<std::contracts::conveyor_assert_v>(_First != _Last)
+#else
+# define _GLIBCXX_PRECONDITION_SUBSCRIPT(_N)
+# define _GLIBCXX_PRECONDITION_NONEMPTY()
+# define _GLIBCXX_PRECONDITION_NON_EMPTY_RANGE(_First, _Last)
 #endif
 
 // Same as _GLIBCXX_CONVEYOR just above, but for a function template
