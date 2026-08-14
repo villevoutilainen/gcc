@@ -10574,6 +10574,54 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	      }
 	  }
 
+	  /* A nonzero-shaped conjunct ('param != 0'/'0 != param') -- the
+	     motivating case is std::saturating_div's own declared
+	     precondition (see bits/sat_arith.h/_GLIBCXX_PRECONDITION_
+	     NONZERO_DIVISOR), which oa_match_simple_comparison/oa_match_
+	     comparison_against_param can never match at all (NE_EXPR isn't
+	     among either matcher's own recognized comparison codes -- a
+	     range or a relational fact both model a contiguous interval,
+	     which "everything except one point" isn't), silently leaving
+	     this precondition shape completely unchecked at any call site
+	     before this. Mirrors oa_handle_call_symbolic_precondition_
+	     obligation's own, pre-existing nz-conjunct branch further down
+	     in this file -- same oa_nonzero_conjunct_p matcher, same oa_
+	     provably_nonzero_p consult -- except for the literal-argument
+	     case just below, which that symbolic-side branch doesn't need
+	     (see its own comment on why nonzero-ness "has no provably
+	     false case of their own"): a *literal* substituted argument's
+	     value is always fully known, and known-zero is exactly what
+	     the precondition rules out, so this is sharpened past "cannot
+	     verify" all the way to "provably violates" for that one case,
+	     matching the range/relational branches' own PROVEN_FALSE
+	     handling above.  */
+	  tree nz_arg;
+	  if (oa_nonzero_conjunct_p (*conjuncts[i], &nz_arg))
+	    {
+	      tree substituted = oa_substitute_call_arg (callee, call, nz_arg);
+	      if (!substituted)
+		continue;
+	      substituted = oa_strip_conversion_call (substituted);
+	      tree stripped = STRIP_ANY_LOCATION_WRAPPER (substituted);
+	      if (TREE_CODE (stripped) == INTEGER_CST)
+		{
+		  if (!integer_zerop (stripped))
+		    continue; /* Proven true: silently discharged.  */
+		  error_at (EXPR_LOCATION (call),
+			    "argument %qE provably violates the precondition "
+			    "of %qD", substituted, callee);
+		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  continue;
+		}
+	      if (oa_provably_nonzero_p (substituted, env))
+		continue; /* Proven true: silently discharged.  */
+	      warning_at (EXPR_LOCATION (call), 0,
+			  "cannot verify that %qE is nonzero, as required by "
+			  "the precondition of %qD", substituted, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      continue;
+	    }
+
 	  tree pred_fn, arg_decl;
 	  bool negated;
 	  if (!oa_predicate_conjunct_shape (*conjuncts[i], &pred_fn, &arg_decl,

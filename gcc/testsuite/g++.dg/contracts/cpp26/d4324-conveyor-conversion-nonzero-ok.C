@@ -5,6 +5,13 @@
 // dividing by need_nonzero (m)'s own substituted argument is then
 // provable without ever resolving wrap's own value. See .claude/
 // plans/well-we-last-discussed-ethereal-duckling.md.
+// main's own call to f is the unrelated, already-established boundary
+// case (a fresh, class-typed argument with no decl or fact behind it
+// at all -- same shape and same reason as d4324-conveyor-conversion-
+// simple-ok.C's own main() call) and is expected to warn, now that
+// oa_handle_call_conveyor_proof_obligation's own nz-conjunct branch
+// actually checks a callee's "!= 0" precondition at the call site at
+// all (previously silently unchecked for this comparison shape).
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
 
@@ -34,4 +41,4 @@ int f (int a, wrap m) pre<ctrl_v> (m != 0)
   return divide (a, m);
 }
 
-int main () { return f (10, wrap (2)) - 5; }
+int main () { return f (10, wrap (2)) - 5; } // { dg-warning "cannot verify" }
