@@ -8846,6 +8846,39 @@ oa_track_condition_assignment (tree cond, oa_env &env)
     }
 }
 
+/* D4324, item 8: whether oa_scan_div_mod_in_expr/oa_scan_array_bounds_
+   in_expr/oa_scan_overflow_in_expr (all three, below and further down)
+   should actually call error_at right now. Default true; saved,
+   cleared, and restored around each of oa_handle_loop's own
+   "invalidated re-walk" fixed-point passes (mirroring how OA_RETURN_
+   TRACKING/OA_SYMBOLIC_CODEGEN_ACTIVE are already saved/cleared/
+   restored around those exact same calls, for the exact same reason:
+   those re-walks exist purely to compute a compile-time fact by
+   re-walking the loop's own repeated part with one decl artificially
+   invalidated -- they do not represent any real execution of the loop,
+   so nothing about them should be user-visible).
+
+   Found via direct testing, while fixing oa_collect_loop_targets's own
+   pre-existing gap (see that function's own comment) to correctly
+   recognize a loop counter written as '++i' rather than 'i = i + 1' as
+   a reassignment target: making that recognition correct meant a
+   decl's own item-8 violation, reachable from the loop's repeated
+   part, is now walked once for the real diagnostic pass *and* once per
+   invalidated re-walk (one per distinct reassigned decl, across both
+   the boolean-provability and range fixed-point loops) -- each with no
+   suppression of its own, so the exact same error_at call fired once
+   per walk, with no deduplication, printing the identical diagnostic
+   two to five times over for what should be a single, real violation.
+   This was already latently true before that fix too (confirmed via
+   direct testing with two plainly '='-reassigned decls, no '++'/'--'
+   involved at all) -- simply never triggered by any existing test,
+   since the "excess errors" mismatch this produces would have failed
+   any dg-error-asserting test that happened to combine a genuinely
+   unprovable item-8 violation with more than one reassigned decl in
+   the same loop.  */
+
+static bool oa_diagnostics_active = true;
+
 /* D4324/P2680 item 8, narrow version: check every TRUNC_DIV_EXPR/
    TRUNC_MOD_EXPR div/mod operation within *EXPR (an arbitrary
    sub-expression -- a RETURN_EXPR's value or an INIT_EXPR/MODIFY_EXPR's
@@ -8858,6 +8891,8 @@ oa_track_condition_assignment (tree cond, oa_env &env)
 static void
 oa_scan_div_mod_in_expr (tree *expr, oa_env &env)
 {
+  if (!oa_diagnostics_active)
+    return;
   cp_walk_tree (expr, [](tree *tp, int *, void *data_) -> tree
     {
       oa_env *e = (oa_env *) data_;
@@ -8977,6 +9012,8 @@ oa_check_offset_in_bounds (tree t, tree array_type, const oa_range_fact &total,
 static void
 oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 {
+  if (!oa_diagnostics_active)
+    return;
   cp_walk_tree (expr, [](tree *tp, int *, void *data_) -> tree
     {
       oa_env *e = (oa_env *) data_;
@@ -9104,6 +9141,161 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 				     /*allow_one_past_end=*/true);
 	  return NULL_TREE;
 	}
+
+      return NULL_TREE;
+    }, &env, NULL);
+}
+
+/* D4324, item 8's overflow check: is a shift of exactly 1 (INCREASING
+   true for '++x'/'x++'/'x + 1', false for '--x'/'x--'/'x - 1')
+   provably safe for X? Two independent routes, either sufficient:
+
+   1. Numeric: X's own established range (oa_get_range, the same lookup
+      div/mod/array-bounds already use) already proves it -- for
+      INCREASING, X's own upper bound is at least one below TYPE's own
+      max; for decreasing, X's own lower bound is at least one above
+      TYPE's own min.
+   2. Type-bound witness (see oa_type_bound_fact's own comment): X has,
+      at some point still in scope, been compared less-than (for
+      INCREASING) or greater-than (for decreasing) *something* of a
+      no-wider integral type -- sufficient by the type invariant alone,
+      no numeric fact about that something ever needed.
+
+   Neither route succeeding means this is genuinely unprovable, not
+   merely "this particular check didn't think to look" -- the caller
+   errors in that case, matching this pass's own "must be provable, else
+   treated as unprovable" discipline throughout.  */
+
+static bool
+oa_provably_safe_unit_shift_p (tree x, bool increasing, oa_env &env)
+{
+  /* X, as handed in from oa_scan_overflow_in_expr, is TREE_OPERAND of a
+     raw INCREMENT/DECREMENT_EXPR node -- often a bare decl, but not
+     always: a by-value parameter's own access can
+     arrive wrapped in a value-preserving NOP_EXPR/VIEW_CONVERT_EXPR
+     (see oa_underlying_param_operand's own comment for the same shape
+     and why), which env.type_bound_get's own raw, pointer-identity-
+     keyed hash_map lookup would never match against the *canonical*
+     decl the witness was actually established under. Strip to the same
+     canonical form oa_underlying_param_operand itself resolves to
+     before either lookup, so both consult the same key establishment
+     used (found via direct testing: without this, a by-value
+     parameter's own wrapped access silently never found its own type-
+     bound witness, always falling through to "unprovable").  */
+  x = oa_strip_to_relational_operand (x);
+  tree type = TREE_TYPE (x);
+  oa_range_fact fact;
+  if (oa_get_range (x, env, &fact))
+    {
+      if (increasing && fact.has_hi
+	  && fact.hi + 1 <= wi::to_widest (TYPE_MAX_VALUE (type)))
+	return true;
+      if (!increasing && fact.has_lo
+	  && fact.lo - 1 >= wi::to_widest (TYPE_MIN_VALUE (type)))
+	return true;
+    }
+  oa_type_bound_fact witness;
+  if (env.type_bound_get (x, &witness))
+    {
+      if (increasing && witness.has_upper_witness)
+	return true;
+      if (!increasing && witness.has_lower_witness)
+	return true;
+    }
+  return false;
+}
+
+/* D4324/P2680 item 8: the third mandatory UB-freedom scan, alongside
+   oa_scan_div_mod_in_expr/oa_scan_array_bounds_in_expr immediately
+   above -- signed-integer-overflow-capable operators. This increment
+   covers only the unary shift-by-one operators (INCREMENT/DECREMENT,
+   pre and post) -- the concrete motivating case (see the plan's own
+   Context section: 'pre<conveyor_assert_v>(x++ < 2048)'). NEGATE_EXPR
+   ('-x') and binary PLUS_EXPR/MINUS_EXPR/MULT_EXPR ('x + 1', 'a + b',
+   etc.) are deliberately not handled at all here, not even a 'x + 1'
+   shift-by-1 special case that would otherwise seem to mirror '++x' --
+   see the dedicated comment at the bottom of this function's own
+   callback for why both turned out to be far more aggressive in
+   practice than intended, found via direct testing against the full
+   existing corpus (including already-passing, genuinely conveyor-
+   marked library code).
+
+   Only ever applies to INTEGRAL_TYPE_P operands for which overflow is
+   actually undefined behavior at all (TYPE_OVERFLOW_UNDEFINED, GCC's
+   own existing test -- correctly excludes unsigned types, and respects
+   -fwrapv/-ftrapv, rather than this scan reimplementing that logic).
+   Pointer increment/arithmetic is a different UB category entirely,
+   already oa_scan_array_bounds_in_expr's own POINTER_PLUS_EXPR territory
+   (disjoint tree codes from this scan's own, so there is no double-
+   checking or gap between the two).  */
+
+static void
+oa_scan_overflow_in_expr (tree *expr, oa_env &env)
+{
+  if (!oa_diagnostics_active)
+    return;
+  cp_walk_tree (expr, [](tree *tp, int *, void *data_) -> tree
+    {
+      oa_env *e = (oa_env *) data_;
+      tree t = *tp;
+      if (t == NULL_TREE || t == error_mark_node)
+	return NULL_TREE;
+
+      enum tree_code code = TREE_CODE (t);
+
+      if (code == PREINCREMENT_EXPR || code == POSTINCREMENT_EXPR
+	  || code == PREDECREMENT_EXPR || code == POSTDECREMENT_EXPR)
+	{
+	  tree x = TREE_OPERAND (t, 0);
+	  /* See oa_provably_safe_unit_shift_p's own comment on why a
+	     by-value parameter's own wrapped access needs stripping to
+	     its canonical form before any fact lookup -- applies to this
+	     type gate too, though const-qualification alone would not
+	     actually change either answer.  */
+	  tree stripped = oa_strip_to_relational_operand (x);
+	  if (!INTEGRAL_TYPE_P (TREE_TYPE (stripped))
+	      || !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (stripped)))
+	    return NULL_TREE;
+	  bool increasing
+	    = code == PREINCREMENT_EXPR || code == POSTINCREMENT_EXPR;
+	  if (!oa_provably_safe_unit_shift_p (x, increasing, *e))
+	    error_at (EXPR_LOCATION (t), increasing
+		      ? G_("increment of %qE not provably free of overflow "
+			   "in a conveyor function")
+		      : G_("decrement of %qE not provably free of overflow "
+			   "in a conveyor function"), x);
+	  return NULL_TREE;
+	}
+
+      /* NEGATE_EXPR ('-x', overflowing at TYPE_MIN) is deliberately NOT
+	 handled here either, for the same reason as binary arithmetic
+	 below: found via direct testing against the full existing corpus
+	 that unconstrained negation is common in already-passing conveyor
+	 code, including genuinely conveyor-marked *library* code (e.g.
+	 libstdc++-v3/libsupc++/compare's own 'operator<=>' for
+	 std::strong_ordering negates its own tag value, whose actual
+	 legal range -- {-1, 0, 1} -- has no established range fact this
+	 scan can see, since nothing declares one). See the plan's own
+	 follow-up discussion for negation, alongside binary arithmetic.
+
+	 Binary PLUS_EXPR/MINUS_EXPR/MULT_EXPR (e.g. 'x + 1', 'a + b',
+	 spelled-out arithmetic rather than '++'/'--'/'-x') is deliberately
+	 NOT handled here at all, not even the shift-by-1 case ('x + 1')
+	 that would otherwise seem to mirror '++x' exactly. Found via
+	 direct testing against the full existing test corpus: ordinary,
+	 unconstrained arithmetic like 'int y = x + 1;' on a bare parameter
+	 is ubiquitous in existing, already-passing conveyor code (e.g.
+	 d4324-conveyor-ok-baseline.C itself, the single most foundational
+	 "ordinary conveyor function" test in the suite) -- ++/--/negation
+	 read as an unambiguous, deliberate "step this value" operation
+	 wherever they appear, but a bare binary + or - is not read as
+	 having any similarly narrow, well-defined intent, and flagging it
+	 with the same fail-closed "must be provable, else error"
+	 discipline the other operators use turns out to be far too
+	 aggressive in practice, not merely narrower than ideal. General
+	 binary-arithmetic overflow coverage needs its own, separately
+	 considered design (see the plan's own follow-up discussion) rather
+	 than reusing this scan's existing shift-by-1 machinery.  */
 
       return NULL_TREE;
     }, &env, NULL);
@@ -13645,6 +13837,7 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
       {
 	oa_scan_div_mod_in_expr (conjuncts[i], env);
 	oa_scan_array_bounds_in_expr (conjuncts[i], env);
+	oa_scan_overflow_in_expr (conjuncts[i], env);
       }
 
   auto_vec<tree> facts;
@@ -13953,6 +14146,7 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
       {
 	oa_scan_div_mod_in_expr (conjuncts[i], env);
 	oa_scan_array_bounds_in_expr (conjuncts[i], env);
+	oa_scan_overflow_in_expr (conjuncts[i], env);
       }
 
   auto_vec<tree> facts;
@@ -14031,8 +14225,9 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 
 /* Collect, into PTR_OUT/NZ_OUT (each deduplicated), every pointer-typed
    (respectively integer-typed) VAR_DECL/PARM_DECL that is the target of
-   a plain INIT_EXPR/MODIFY_EXPR assignment anywhere within *STMT -- a
-   plain syntactic scan, independent of provability, used only to
+   a plain INIT_EXPR/MODIFY_EXPR assignment, *or* the operand of a
+   PRE/POSTINCREMENT_EXPR/PRE/POSTDECREMENT_EXPR, anywhere within *STMT
+   -- a plain syntactic scan, independent of provability, used only to
    determine which decls the loop-header merge rule (item 4, and its
    div/mod-nonzero-fact counterpart, Increment E-divmod) needs to
    consider at all. A decl freshly declared *inside* the loop body (via
@@ -14043,7 +14238,20 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
    assignment to this syntactic scan, but including it in an OUT vec is
    harmless (at worst a dead, never-looked-up entry ends up in the
    enclosing env after the loop, since the decl itself is out of scope
-   there).  */
+   there).
+
+   The increment/decrement case was a genuine, pre-existing gap (found
+   via direct testing while adding item 8's overflow scan, but not
+   specific to it -- the div/mod and array-bounds scans were equally
+   affected): a `for (int i = 0; i < n; ++i)` loop's own counter, almost
+   always written this way rather than as `i = i + 1`, was never added
+   to either OUT vec at all, so the loop-header merge rule below never
+   ran for it -- its own pre-loop fact (e.g. the `[0, 0]` range from its
+   own initializer) simply persisted, stale and unwidened, through the
+   diagnostic-producing pass that scans the loop's *entire* repeated
+   part, wrongly treating `i` as if it could never be anything other
+   than its initial value anywhere in the loop body/condition/increment-
+   expression.  */
 
 struct oa_loop_target_data { vec<tree> *ptr_out; vec<tree> *nz_out; };
 
@@ -14057,15 +14265,29 @@ oa_collect_loop_targets (tree *stmt, vec<tree> *ptr_out, vec<tree> *nz_out)
       tree t = *tp;
       if (t == NULL_TREE || t == error_mark_node)
 	return NULL_TREE;
-      if (TREE_CODE (t) != INIT_EXPR && TREE_CODE (t) != MODIFY_EXPR)
+      tree target;
+      switch (TREE_CODE (t))
+	{
+	case INIT_EXPR:
+	case MODIFY_EXPR:
+	  target = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
+	  break;
+	case PREINCREMENT_EXPR:
+	case POSTINCREMENT_EXPR:
+	case PREDECREMENT_EXPR:
+	case POSTDECREMENT_EXPR:
+	  target = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
+	  break;
+	default:
+	  return NULL_TREE;
+	}
+      if (!(VAR_P (target) || TREE_CODE (target) == PARM_DECL))
 	return NULL_TREE;
-      tree lhs = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
-      if (!(VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL))
-	return NULL_TREE;
-      if (POINTER_TYPE_P (TREE_TYPE (lhs)) && !d->ptr_out->contains (lhs))
-	d->ptr_out->safe_push (lhs);
-      else if (INTEGRAL_TYPE_P (TREE_TYPE (lhs)) && !d->nz_out->contains (lhs))
-	d->nz_out->safe_push (lhs);
+      if (POINTER_TYPE_P (TREE_TYPE (target)) && !d->ptr_out->contains (target))
+	d->ptr_out->safe_push (target);
+      else if (INTEGRAL_TYPE_P (TREE_TYPE (target))
+	       && !d->nz_out->contains (target))
+	d->nz_out->safe_push (target);
       return NULL_TREE;
     }, &data, NULL);
 }
@@ -14203,7 +14425,10 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	 oa_symbolic_codegen_active's own comment.  */
       bool saved_symbolic_codegen = oa_symbolic_codegen_active;
       oa_symbolic_codegen_active = false;
+      bool saved_diagnostics_active = oa_diagnostics_active;
+      oa_diagnostics_active = false;
       walk_parts (checkenv);
+      oa_diagnostics_active = saved_diagnostics_active;
       oa_symbolic_codegen_active = saved_symbolic_codegen;
       oa_return_tracking = saved_tracking;
 
@@ -14235,7 +14460,10 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       oa_return_tracking = false;
       bool saved_symbolic_codegen = oa_symbolic_codegen_active;
       oa_symbolic_codegen_active = false;
+      bool saved_diagnostics_active = oa_diagnostics_active;
+      oa_diagnostics_active = false;
       walk_parts (checkenv);
+      oa_diagnostics_active = saved_diagnostics_active;
       oa_symbolic_codegen_active = saved_symbolic_codegen;
       oa_return_tracking = saved_tracking;
 
@@ -14333,7 +14561,10 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       oa_return_tracking = false;
       bool saved_symbolic_codegen = oa_symbolic_codegen_active;
       oa_symbolic_codegen_active = false;
+      bool saved_diagnostics_active = oa_diagnostics_active;
+      oa_diagnostics_active = false;
       walk_parts (checkenv);
+      oa_diagnostics_active = saved_diagnostics_active;
       oa_symbolic_codegen_active = saved_symbolic_codegen;
       oa_return_tracking = saved_tracking;
 
@@ -14471,6 +14702,7 @@ oa_process_condition (tree cond, oa_env &env,
 	{
 	  oa_scan_div_mod_in_expr (conjuncts[i], cond_env);
 	  oa_scan_array_bounds_in_expr (conjuncts[i], cond_env);
+	  oa_scan_overflow_in_expr (conjuncts[i], cond_env);
 	}
       oa_scan_stray_is_object_address (conjuncts[i]);
       oa_scan_stray_symbolic_call (conjuncts[i]);
@@ -14870,6 +15102,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	{
 	  oa_scan_div_mod_in_expr (&TREE_OPERAND (t, 0), env);
 	  oa_scan_array_bounds_in_expr (&TREE_OPERAND (t, 0), env);
+	  oa_scan_overflow_in_expr (&TREE_OPERAND (t, 0), env);
 	}
       /* Still scan the return value expression itself for a stray
 	 is_object_address call (e.g. 'return std::is_object_address(p);'
@@ -15064,6 +15297,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      {
 		oa_scan_div_mod_in_expr (&DECL_INITIAL (decl), env);
 		oa_scan_array_bounds_in_expr (&DECL_INITIAL (decl), env);
+		oa_scan_overflow_in_expr (&DECL_INITIAL (decl), env);
 	      }
 	  }
 	/* Return-value predicate establishment (see oa_call_symbolic_
@@ -15297,6 +15531,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  {
 	    oa_scan_div_mod_in_expr (&TREE_OPERAND (t, 1), env);
 	    oa_scan_array_bounds_in_expr (&TREE_OPERAND (t, 1), env);
+	    oa_scan_overflow_in_expr (&TREE_OPERAND (t, 1), env);
 	  }
 	/* Shared-substrate invalidation rule 1: any reassignment of a
 	   tracked object's identity invalidates its predicate/field-range
@@ -15876,6 +16111,22 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    *stmt = new_list;
 	  }
       }
+      /* Item 8's narrow div/mod, array-bound, and overflow restrictions
+	 -- a bare call statement's own arguments (e.g. 'some_call (x++);')
+	 are exactly as much this scan's business as any other expression-
+	 statement's, and this CALL_EXPR case is one of only two (the
+	 other being RETURN_EXPR above) that fall through to the shared
+	 OA_DEFAULT_SCAN label below, so it must run this scan explicitly
+	 itself, on T specifically (not *STMT, which the restructuring
+	 just above may have replaced with a wrapper STATEMENT_LIST) --
+	 see OA_DEFAULT_SCAN's own comment for why it does not repeat this
+	 scan for either of these two cases.  */
+      if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
+	{
+	  oa_scan_div_mod_in_expr (&t, env);
+	  oa_scan_array_bounds_in_expr (&t, env);
+	  oa_scan_overflow_in_expr (&t, env);
+	}
       goto oa_default_scan;
 
     case FOR_STMT:
@@ -15913,6 +16164,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  {
 	    oa_scan_div_mod_in_expr (&SWITCH_STMT_COND (t), env);
 	    oa_scan_array_bounds_in_expr (&SWITCH_STMT_COND (t), env);
+	    oa_scan_overflow_in_expr (&SWITCH_STMT_COND (t), env);
 	  }
 	oa_scan_stray_is_object_address (&SWITCH_STMT_COND (t));
 	oa_scan_stray_symbolic_call (&SWITCH_STMT_COND (t));
@@ -16072,6 +16324,32 @@ oa_walk_stmt (tree *stmt, oa_env &env)
       return;
 
     default:
+      /* D4324, item 8: this default case is exactly where a bare,
+	 top-level expression-statement lands when it's neither an
+	 assignment/return/condition nor any other specifically-handled
+	 shape -- an ordinary 'x++;'/'--x;'/'a / b;'/'arr[i];' used as its
+	 own complete statement, or (via oa_handle_loop's own walk_parts,
+	 which passes a FOR_STMT's own FOR_EXPR through oa_walk_stmt with
+	 no dedicated case of its own, exactly like BODY) a for-loop's own
+	 increment-clause, e.g. the '++i' in 'for (...; ...; ++i)'. Found
+	 via direct testing that neither the two pre-existing item-8 scans
+	 nor the new overflow one ever reached either shape before this --
+	 a real, practically significant gap for the overflow scan
+	 specifically, since a bare increment/decrement statement and a
+	 for-loop's own increment-clause are the two most common ways
+	 '++'/'--' actually appear in real code, far more so than as a
+	 sub-expression of an assignment or return.
+
+	 T here is only ever the whole node reached by this fallback, so
+	 scanning it (unlike the two sites below that jump here via GOTO
+	 OA_DEFAULT_SCAN) cannot double up with any more specific, already-
+	 scanned sub-expression.  */
+      if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
+	{
+	  oa_scan_div_mod_in_expr (&t, env);
+	  oa_scan_array_bounds_in_expr (&t, env);
+	  oa_scan_overflow_in_expr (&t, env);
+	}
     oa_default_scan:
       /* Anything else (TRY_BLOCK, SWITCH_STMT, ordinary
 	 expression statements, a RETURN_EXPR's own value expression
@@ -16086,7 +16364,10 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	 error: there is no "proper" resolution path for it here.
 	 Unconditionally scan the whole subtree (not just T itself) so
 	 nothing nested inside an unhandled construct silently passes
-	 through unchecked.  */
+	 through unchecked. RETURN_EXPR and CALL_EXPR above both jump
+	 directly to this label, skipping the item-8 scan just above --
+	 both already ran it themselves, on their own more specific sub-
+	 expression, before jumping here (see each one's own comment).  */
       oa_scan_stray_is_object_address (&t);
       oa_scan_stray_symbolic_call (&t);
       return;
@@ -16167,6 +16448,7 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 	{
 	  oa_scan_div_mod_in_expr (conjuncts[i], scan_env);
 	  oa_scan_array_bounds_in_expr (conjuncts[i], scan_env);
+	  oa_scan_overflow_in_expr (conjuncts[i], scan_env);
 	}
     }
 
