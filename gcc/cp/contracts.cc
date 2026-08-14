@@ -7879,10 +7879,18 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
      via direct testing that a const-qualified parameter's own fact
      otherwise silently failed to be recognized in a contract
      condition.  */
+  /* Also strips CLEANUP_POINT_EXPR (the full-expression temporary-
+     cleanup scope a compound-assignment operator's own RHS call can
+     arrive wrapped in -- confirmed via direct testing: 'x += v.size ()'
+     reached here with the CALL_EXPR wrapped this way, while the
+     equivalent spelled-out 'x = x + v.size ()' did not, silently
+     defeating the CALL_EXPR case below's own oa_call_postcondition_
+     range_p purely due to that wrapping).  */
   while (TREE_CODE (expr) == NON_LVALUE_EXPR
 	 || TREE_CODE (expr) == NOP_EXPR
 	 || TREE_CODE (expr) == CONVERT_EXPR
-	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
+	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR
+	 || TREE_CODE (expr) == CLEANUP_POINT_EXPR)
     expr = TREE_OPERAND (expr, 0);
 
   /* A class-typed operand reached via an implicit conversion operator
@@ -9207,18 +9215,20 @@ oa_provably_safe_unit_shift_p (tree x, bool increasing, oa_env &env)
 
 /* D4324/P2680 item 8: the third mandatory UB-freedom scan, alongside
    oa_scan_div_mod_in_expr/oa_scan_array_bounds_in_expr immediately
-   above -- signed-integer-overflow-capable operators. This increment
-   covers only the unary shift-by-one operators (INCREMENT/DECREMENT,
-   pre and post) -- the concrete motivating case (see the plan's own
-   Context section: 'pre<conveyor_assert_v>(x++ < 2048)'). NEGATE_EXPR
-   ('-x') and binary PLUS_EXPR/MINUS_EXPR/MULT_EXPR ('x + 1', 'a + b',
-   etc.) are deliberately not handled at all here, not even a 'x + 1'
-   shift-by-1 special case that would otherwise seem to mirror '++x' --
-   see the dedicated comment at the bottom of this function's own
-   callback for why both turned out to be far more aggressive in
-   practice than intended, found via direct testing against the full
-   existing corpus (including already-passing, genuinely conveyor-
-   marked library code).
+   above -- signed-integer-overflow-capable operators. Covers the unary
+   shift-by-one operators (INCREMENT/DECREMENT, pre and post) -- the
+   concrete motivating case (see the plan's own Context section:
+   'pre<conveyor_assert_v>(x++ < 2048)') -- and general binary
+   PLUS_EXPR/MINUS_EXPR/MULT_EXPR ('a + b', 'x + 1', etc.), each with
+   their own proof strategy (see each case's own comment below).
+   NEGATE_EXPR ('-x') is the one operator deliberately not handled at
+   all here: found via direct testing against the full existing corpus
+   to be far more aggressive in practice than intended (including
+   against already-passing, genuinely conveyor-marked library code),
+   and, unlike binary arithmetic, has no cheap way to phase in
+   gradually -- see that case's own comment for why it's left as a
+   disclosed, deferred gap instead of repeating the same discover-and-
+   revert cycle a third time.
 
    Only ever applies to INTEGRAL_TYPE_P operands for which overflow is
    actually undefined behavior at all (TYPE_OVERFLOW_UNDEFINED, GCC's
@@ -9268,34 +9278,139 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 	}
 
       /* NEGATE_EXPR ('-x', overflowing at TYPE_MIN) is deliberately NOT
-	 handled here either, for the same reason as binary arithmetic
-	 below: found via direct testing against the full existing corpus
-	 that unconstrained negation is common in already-passing conveyor
-	 code, including genuinely conveyor-marked *library* code (e.g.
-	 libstdc++-v3/libsupc++/compare's own 'operator<=>' for
-	 std::strong_ordering negates its own tag value, whose actual
-	 legal range -- {-1, 0, 1} -- has no established range fact this
-	 scan can see, since nothing declares one). See the plan's own
-	 follow-up discussion for negation, alongside binary arithmetic.
+	 handled here: found via direct testing against the full existing
+	 corpus that unconstrained negation is common in already-passing
+	 conveyor code, including genuinely conveyor-marked *library* code
+	 (e.g. libstdc++-v3/libsupc++/compare's own 'operator<=>' for
+	 std::strong_ordering negates its own tag value, whose actual legal
+	 range -- {-1, 0, 1} -- has no established range fact this scan can
+	 see, since nothing declares one). Unlike binary arithmetic below,
+	 there's no cheap way to phase this one in gradually (a single
+	 operand, a single check), so it's left as a disclosed, deferred
+	 gap rather than repeating the same discover-and-revert cycle a
+	 third time without first discussing scope.
 
-	 Binary PLUS_EXPR/MINUS_EXPR/MULT_EXPR (e.g. 'x + 1', 'a + b',
-	 spelled-out arithmetic rather than '++'/'--'/'-x') is deliberately
-	 NOT handled here at all, not even the shift-by-1 case ('x + 1')
-	 that would otherwise seem to mirror '++x' exactly. Found via
-	 direct testing against the full existing test corpus: ordinary,
-	 unconstrained arithmetic like 'int y = x + 1;' on a bare parameter
-	 is ubiquitous in existing, already-passing conveyor code (e.g.
-	 d4324-conveyor-ok-baseline.C itself, the single most foundational
-	 "ordinary conveyor function" test in the suite) -- ++/--/negation
-	 read as an unambiguous, deliberate "step this value" operation
-	 wherever they appear, but a bare binary + or - is not read as
-	 having any similarly narrow, well-defined intent, and flagging it
-	 with the same fail-closed "must be provable, else error"
-	 discipline the other operators use turns out to be far too
-	 aggressive in practice, not merely narrower than ideal. General
-	 binary-arithmetic overflow coverage needs its own, separately
-	 considered design (see the plan's own follow-up discussion) rather
-	 than reusing this scan's existing shift-by-1 machinery.  */
+	 Binary PLUS_EXPR/MINUS_EXPR/MULT_EXPR ('x + 1', 'a + b', etc.): a
+	 literal shift of exactly 1 gets first refusal via the same unit-
+	 shift rescue '++x'/'--x' use (numeric range OR type-bound witness,
+	 see the dedicated comment just below this one, right before that
+	 rescue's own call); everything else -- both operands variable, or
+	 a literal shift by anything other than 1 -- falls to a numeric-
+	 only route (oa_get_range on both operands, interval arithmetic in
+	 widest_int -- wide enough that this check's own arithmetic can't
+	 itself overflow, the same type OA_RANGE_FACT's own LO/HI already
+	 use). An *unconstrained* 'x + 1' (no witness, no range at all on
+	 x -- see d4324-conveyor-ok-baseline.C's own history, the single
+	 most foundational "ordinary conveyor function" test in the suite)
+	 is still, correctly, unprovable by either route: same as the rest
+	 of item 8, unprovable is always an error, never silently skipped;
+	 any fallout this surfaces against real code (library or test) is
+	 fixed on its own merits (an added precondition/range fact, or a
+	 narrower scan if a whole category turns out unfixable), not
+	 avoided by narrowing the check preemptively.  */
+      if (code == PLUS_EXPR || code == MINUS_EXPR || code == MULT_EXPR)
+	{
+	  tree op0 = TREE_OPERAND (t, 0);
+	  tree op1 = TREE_OPERAND (t, 1);
+	  if (!INTEGRAL_TYPE_P (TREE_TYPE (t))
+	      || !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (t)))
+	    return NULL_TREE;
+	  tree type = TREE_TYPE (t);
+	  widest_int type_min = wi::to_widest (TYPE_MIN_VALUE (type));
+	  widest_int type_max = wi::to_widest (TYPE_MAX_VALUE (type));
+
+	  /* A literal shift of exactly 1 ('x + 1'/'1 + x'/'x - 1') gets the
+	     same rescue as '++x'/'--x' before falling to the general,
+	     numeric-only route below: the type-bound witness route (sound
+	     only for a shift of exactly 1, see oa_provably_safe_unit_shift_
+	     p's own header) can prove this even when neither operand has a
+	     full numeric range -- e.g. 'pre<>(i < v.size ())' then 'i + 1'
+	     has only a witness on i, never a numeric bound on v.size ()'s
+	     own return value, which the general route below can't use at
+	     all.  This is exactly the part-3 shape the design doc calls out
+	     as needing "first refusal" before the general fallback; it was
+	     originally paired with '++x' in the unit-shift scan itself but
+	     pulled from there (see d4324-conveyor-ok-baseline.C's history)
+	     since binary arithmetic wasn't yet handled *at all* at that
+	     point -- an unconstrained 'x + 1' with no witness or range
+	     either was, correctly, still unprovable regardless, so nothing
+	     about restoring it here reopens that regression.  */
+	  if (code == PLUS_EXPR || code == MINUS_EXPR)
+	    {
+	      /* 'x - 1' is already constant-folded to 'x + -1' (a PLUS_EXPR
+		 with a literal -1 operand) well before this scan ever runs
+		 -- found via direct testing (d4324-conveyor-call-relational-
+		 arithmetic-shift.C's own 'i - 1' arrived here as PLUS_EXPR,
+		 not MINUS_EXPR, so a check for MINUS_EXPR alone silently
+		 never matched it). The MINUS_EXPR/integer_onep case is kept
+		 anyway for whatever un-folded shape might still reach here
+		 from a path that doesn't constant-fold first.  */
+	      tree var_side = NULL_TREE;
+	      bool increasing = false;
+	      if (code == PLUS_EXPR && integer_onep (op1))
+		{ var_side = op0; increasing = true; }
+	      else if (code == PLUS_EXPR && integer_onep (op0))
+		{ var_side = op1; increasing = true; }
+	      else if (code == PLUS_EXPR && integer_minus_onep (op1))
+		{ var_side = op0; increasing = false; }
+	      else if (code == PLUS_EXPR && integer_minus_onep (op0))
+		{ var_side = op1; increasing = false; }
+	      else if (code == MINUS_EXPR && integer_onep (op1))
+		{ var_side = op0; increasing = false; }
+	      if (var_side
+		  && oa_provably_safe_unit_shift_p (var_side, increasing, *e))
+		return NULL_TREE;
+	    }
+
+	  oa_range_fact a;
+	  oa_range_fact b;
+	  bool have_a = oa_get_range (op0, *e, &a);
+	  bool have_b = oa_get_range (op1, *e, &b);
+
+	  bool safe = false;
+	  if (code == PLUS_EXPR)
+	    {
+	      bool hi_ok = have_a && have_b && a.has_hi && b.has_hi
+			   && a.hi + b.hi <= type_max;
+	      bool lo_ok = have_a && have_b && a.has_lo && b.has_lo
+			   && a.lo + b.lo >= type_min;
+	      safe = hi_ok && lo_ok;
+	    }
+	  else if (code == MINUS_EXPR)
+	    {
+	      bool hi_ok = have_a && have_b && a.has_hi && b.has_lo
+			   && a.hi - b.lo <= type_max;
+	      bool lo_ok = have_a && have_b && a.has_lo && b.has_hi
+			   && a.lo - b.hi >= type_min;
+	      safe = hi_ok && lo_ok;
+	    }
+	  else /* MULT_EXPR: needs a fully two-sided range on both operands
+		  -- a one-sided bound isn't enough to bound a product the
+		  way it is for a sum/difference (e.g. a huge positive upper
+		  bound on one side combined with no lower bound at all
+		  leaves the product's own lower extreme totally open).
+		  Standard interval multiplication: the result's own two
+		  extremes are always among the four corner products.  */
+	    {
+	      if (have_a && have_b && a.has_lo && a.has_hi && b.has_lo && b.has_hi)
+		{
+		  widest_int corner0 = a.lo * b.lo;
+		  widest_int corner1 = a.lo * b.hi;
+		  widest_int corner2 = a.hi * b.lo;
+		  widest_int corner3 = a.hi * b.hi;
+		  widest_int lo = wi::smin (wi::smin (corner0, corner1),
+					      wi::smin (corner2, corner3));
+		  widest_int hi = wi::smax (wi::smax (corner0, corner1),
+					      wi::smax (corner2, corner3));
+		  safe = lo >= type_min && hi <= type_max;
+		}
+	    }
+
+	  if (!safe)
+	    error_at (EXPR_LOCATION (t), "result of %qE not provably free of "
+		      "overflow in a conveyor function", t);
+	  return NULL_TREE;
+	}
 
       return NULL_TREE;
     }, &env, NULL);

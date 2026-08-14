@@ -23,13 +23,13 @@ struct S {
   int get (int n) const conveyor pre<conveyor_ctrl_v>(n < size ()) { return n; }
 };
 
-int use_unsound (S& v, int i) conveyor pre<conveyor_ctrl_v>(i < v.size ())
+int use_unsound (S& v, int i) conveyor pre<conveyor_ctrl_v>(i < v.size () && i > 0)
 {
   int j = i + 1;
   return v.get (j); // { dg-warning "cannot verify that .j. satisfies" }
 }
 
-int use_sound (S& v, int i) conveyor pre<conveyor_ctrl_v>(i < v.size ())
+int use_sound (S& v, int i) conveyor pre<conveyor_ctrl_v>(i < v.size () && i > 0)
 {
   int j = i - 1;
   return v.get (j);

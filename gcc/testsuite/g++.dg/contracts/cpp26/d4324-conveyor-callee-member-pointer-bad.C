@@ -7,7 +7,7 @@
 
 struct S
 {
-  int helper (int x) conveyor { return x + 1; }
+  int helper (int x) conveyor { return x; }
 };
 
 int f (S *s, int x) conveyor

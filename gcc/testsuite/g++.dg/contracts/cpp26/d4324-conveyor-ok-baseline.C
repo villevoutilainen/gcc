@@ -6,8 +6,8 @@
 
 int f (int x) conveyor
 {
-  int y = x + 1;
+  int y = x;
   return y;
 }
 
-int main () { return f (1) - 2; }
+int main () { return f (1) - 1; }

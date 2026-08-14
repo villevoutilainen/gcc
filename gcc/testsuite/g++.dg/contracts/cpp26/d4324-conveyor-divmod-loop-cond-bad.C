@@ -7,6 +7,8 @@
 
 int f (int n, int i) conveyor
 {
+  if (i < 0)
+    return 0;
   int total = 0;
   for (; i < 10 && 10 / n > 0; i++) // { dg-error "divisor .n. not provably nonzero in a conveyor function" }
     total += i;

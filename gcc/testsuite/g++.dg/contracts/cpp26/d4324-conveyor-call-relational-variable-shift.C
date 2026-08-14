@@ -5,6 +5,18 @@
 // bound) is still <= 0 correctly verifies regardless of k's own lower
 // bound (or lack of one), while shifting by a range whose own worst
 // case could be positive correctly reports unverifiable.
+//
+// 'i > 0 && i < 1000000' (and, for the sound case, 'k > -1000000') is
+// also required below: item 8's own overflow scan needs a real, two-
+// sided numeric range on *both* operands of a variable (non-literal)
+// shift to prove 'i + k' itself can't overflow -- unlike a literal
+// shift of exactly 1 (see d4324-conveyor-call-relational-arithmetic-
+// shift.C), there is no type-bound-witness rescue available for an
+// arbitrary variable offset, so this is numeric-or-nothing. These
+// bounds are chosen purely to make that numeric proof go through
+// without changing anything about the call-relational mechanism this
+// test actually exercises (which reasons about i/k/v.size () relative
+// to each other, never about these absolute magnitudes).
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
 
@@ -27,14 +39,16 @@ struct S {
 };
 
 int use_sound_shift (S& v, int i, int k) conveyor
-  pre<conveyor_ctrl_v>(i < v.size () && k <= 0)
+  pre<conveyor_ctrl_v>(i < v.size () && i > 0 && i < 1000000
+		       && k <= 0 && k > -1000000)
 {
   int j = i + k;
   return v.get (j);
 }
 
 int use_unsound_shift (S& v, int i, int k) conveyor
-  pre<conveyor_ctrl_v>(i < v.size () && k >= 0 && k <= 2)
+  pre<conveyor_ctrl_v>(i < v.size () && i > 0 && i < 1000000
+		       && k >= 0 && k <= 2)
 {
   int j = i + k;
   return v.get (j); // { dg-warning "cannot verify that .j. satisfies" }

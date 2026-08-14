@@ -14,11 +14,11 @@
 
 template<typename _Tp>
 int
-countdown (_Tp x, int depth) conveyor(auto)
+countdown (_Tp x, unsigned depth) conveyor(auto)
 {
-  if (depth <= 0)
-    return 0;
-  return 1 + countdown (x, depth - 1);
+  if (depth == 0)
+    return x;
+  return countdown (x, depth - 1);
 }
 
 int user (int x) conveyor
@@ -27,5 +27,5 @@ int user (int x) conveyor
 int
 main ()
 {
-  return user (1) == 3 ? 0 : 1;
+  return user (1) == 1 ? 0 : 1;
 }

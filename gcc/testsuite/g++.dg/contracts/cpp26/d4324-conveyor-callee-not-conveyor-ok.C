@@ -5,11 +5,11 @@
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
-int helper (int x) conveyor { return x + 1; }
+int helper (int x) conveyor { return x; }
 
 int f (int x) conveyor
 {
   return helper (x);
 }
 
-int main () { return f (1) - 2; }
+int main () { return f (1) - 1; }

@@ -21,7 +21,7 @@ f (int x) conveyor
   if constexpr (B)
     return x;
   else
-    return x + 1;
+    return x;
 }
 
 int main () { return f<true> (1) + f<false> (1); }

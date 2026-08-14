@@ -8,10 +8,10 @@
 
 int f (int n) conveyor
 {
-  int sum = 0;
+  int last = 0;
   for (int i = 1; i < n; ++i)
-    sum = sum + 10 / i;
-  return sum;
+    last = 10 / i;
+  return last;
 }
 
-int main () { return f (5) - (10 + 5 + 3 + 2); }
+int main () { return f (5) - 2; }

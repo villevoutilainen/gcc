@@ -36,8 +36,8 @@ int g (int x) conveyor
   if (sizeof (not_conveyor::f ()) == sizeof (not_conveyor::true_type))
     return x;
   if constexpr (requires { not_conveyor::f (); })
-    return x + 1;
-  return not_conveyor::Or<int>::value ? x : x + 2;
+    return x;
+  return not_conveyor::Or<int>::value ? x : x;
 }
 
 int main () { return g (1); }
