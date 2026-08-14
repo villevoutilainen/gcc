@@ -13988,6 +13988,13 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
    definition.  */
 static void oa_scan_item8_in_expr (tree *expr, oa_env &env);
 
+/* Forward-declared: mutually recursive with oa_scan_item8_in_expr just
+   above (a CALL_EXPR/COND_EXPR conjunct recurses back into it) and with
+   oa_process_condition (defined between the two) -- see its own
+   definition, right before oa_process_condition, for why this always
+   terminates despite the mutual recursion.  */
+static void oa_scan_item8_conjunct (tree *conjunct, oa_env &env);
+
 static void
 oa_handle_precondition_stmt (tree contract, oa_env &env)
 {
@@ -14812,6 +14819,90 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
     }
 }
 
+/* D4324/P2680: scan a single conjunct (as collected by oa_collect_
+   conjuncts, from either oa_process_condition's own loop below or oa_
+   scan_item8_in_expr's) for item 8's div-mod/array-bounds/overflow
+   restrictions -- recursing into a CALL_EXPR's own arguments or a
+   COND_EXPR's own condition/branches when the conjunct turns out to be
+   one of those shapes, rather than just flat-scanning it, so a '&&'
+   nested *inside* either ('take (a < 100000 && a++ < 2048)', '(a <
+   100000 && a++ < 2048) ? x : y') gets the same left-to-right refinement
+   a top-level '&&' already does. This closes the one gap oa_scan_item8_
+   in_expr's own original comment disclosed as pre-existing and out of
+   scope; recursion always proceeds onto a strictly smaller subtree
+   (an argument, or a condition/branch), so it terminates the same way
+   any other recursive tree walk over a finite AST does.  */
+
+static void
+oa_scan_item8_conjunct (tree *conjunct, oa_env &env)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (*conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR
+	 || TREE_CODE (c) == NOP_EXPR
+	 || TREE_CODE (c) == CONVERT_EXPR
+	 || TREE_CODE (c) == VIEW_CONVERT_EXPR)
+    {
+      c = TREE_OPERAND (c, 0);
+      STRIP_ANY_LOCATION_WRAPPER (c);
+    }
+
+  if (c && TREE_CODE (c) == CALL_EXPR)
+    {
+      /* Each argument's own evaluation is fully sequenced within itself,
+	 but the relative order *between* arguments is unspecified -- so
+	 every argument gets its own independent scan starting from ENV
+	 as it stands *before* this call, never seeing another argument's
+	 own refinement. oa_scan_item8_in_expr's own scratch-copy
+	 discipline already gives us this for free: it never mutates the
+	 ENV reference it's handed, so calling it repeatedly with the same
+	 ENV for each argument is exactly the right semantics. Also scans
+	 the callee expression itself for completeness/symmetry with the
+	 arguments -- in practice this is almost always a bare FUNCTION_DECL
+	 reference with nothing to find, since a genuinely *computed* callee
+	 (e.g. '(cond ? f : g) (x)') is banned outright in conveyor-
+	 restricted code by an entirely separate, pre-existing restriction
+	 (see d4324-conveyor-callee-function-pointer-bad.C) and so can never
+	 actually reach here.  */
+      if (CALL_EXPR_FN (c))
+	oa_scan_item8_in_expr (&CALL_EXPR_FN (c), env);
+      int nargs = call_expr_nargs (c);
+      for (int i = 0; i < nargs; ++i)
+	oa_scan_item8_in_expr (&CALL_EXPR_ARG (c, i), env);
+      return;
+    }
+
+  if (c && TREE_CODE (c) == COND_EXPR)
+    {
+      /* Mirrors oa_walk_stmt's own COND_EXPR case: the condition is
+	 fully evaluated, in fully-specified order, before either branch,
+	 so oa_process_condition's own then/else split applies completely
+	 unchanged here; each branch is then scanned recursively with its
+	 own correctly-refined env. oa_symbolic_codegen_active is
+	 suppressed around this call specifically: oa_process_condition's
+	 own oa_scan_calls_in_expr can inject real runtime-check codegen
+	 under -fcontract-symbolic-runtime-checks, appropriate for a
+	 genuine if/loop condition but not for a ternary reached
+	 incidentally while scanning some other statement's own
+	 expression -- mirrors oa_handle_loop's own save/clear/restore
+	 discipline around its speculative re-walks (see oa_symbolic_
+	 codegen_active's own comment).  */
+      oa_env then_env, else_env;
+      bool saved_codegen = oa_symbolic_codegen_active;
+      oa_symbolic_codegen_active = false;
+      oa_process_condition (TREE_OPERAND (c, 0), env, &then_env, &else_env);
+      oa_symbolic_codegen_active = saved_codegen;
+      if (TREE_OPERAND (c, 1))
+	oa_scan_item8_in_expr (&TREE_OPERAND (c, 1), then_env);
+      if (TREE_OPERAND (c, 2))
+	oa_scan_item8_in_expr (&TREE_OPERAND (c, 2), else_env);
+      return;
+    }
+
+  oa_scan_div_mod_in_expr (conjunct, env);
+  oa_scan_array_bounds_in_expr (conjunct, env);
+  oa_scan_overflow_in_expr (conjunct, env);
+}
+
 /* D4324/P2680 item 8, Increment K: process COND (an IF_STMT's or
    COND_EXPR's own condition operand) in true left-to-right,
    short-circuit evaluation order, replacing what used to be two
@@ -14869,11 +14960,7 @@ oa_process_condition (tree cond, oa_env &env,
     {
       oa_scan_calls_in_expr (conjuncts[i], cond_env);
       if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
-	{
-	  oa_scan_div_mod_in_expr (conjuncts[i], cond_env);
-	  oa_scan_array_bounds_in_expr (conjuncts[i], cond_env);
-	  oa_scan_overflow_in_expr (conjuncts[i], cond_env);
-	}
+	oa_scan_item8_conjunct (conjuncts[i], cond_env);
       oa_scan_stray_is_object_address (conjuncts[i]);
       oa_scan_stray_symbolic_call (conjuncts[i]);
       oa_track_condition_assignment (*conjuncts[i], cond_env);
@@ -14935,19 +15022,12 @@ oa_process_condition (tree cond, oa_env &env,
    wrapped in) -- a '&&' buried one level *deeper*, inside some other
    expression shape entirely (a call argument, e.g. 'take (a < 100000 &&
    a++ < 2048)'; a ternary's own condition, e.g. '(a < 100000 && a++ <
-   2048) ? x : y') is not decomposed into conjuncts at all, so no
-   refinement reaches it -- confirmed via direct testing to be a
-   pre-existing limitation of oa_process_condition itself, not something
-   newly introduced or narrower here: 'if (take (a < 100000 && a++ <
-   2048))' and 'if ((a < 100000 && a++ < 2048) ? x : y)' were already
-   flagged before this fix existed, via the exact same "conjuncts are
-   only ever collected from the top" boundary. Extending conjunct
-   collection to recurse through arbitrary containing expression shapes
-   (which would mean this function, or oa_process_condition, becoming
-   aware of -- and correctly threading refined envs through -- calls and
-   ternaries in the general case) is a substantially larger change,
-   deliberately out of scope here: a disclosed, pre-existing gap, not an
-   oversight in this fix specifically.  */
+   2048) ? x : y') is therefore never itself split into further conjuncts.
+   oa_scan_item8_conjunct (called per conjunct just below) is what
+   actually recurses into a CALL_EXPR/COND_EXPR conjunct's own arguments/
+   condition/branches -- see its own comment for the full reasoning and
+   for why this is sound despite C++'s own unspecified inter-argument
+   evaluation order.  */
 
 static void
 oa_scan_item8_in_expr (tree *expr, oa_env &env)
@@ -14957,9 +15037,7 @@ oa_scan_item8_in_expr (tree *expr, oa_env &env)
   oa_collect_conjuncts (expr, &conjuncts);
   for (unsigned i = 0; i < conjuncts.length (); ++i)
     {
-      oa_scan_div_mod_in_expr (conjuncts[i], scan_env);
-      oa_scan_array_bounds_in_expr (conjuncts[i], scan_env);
-      oa_scan_overflow_in_expr (conjuncts[i], scan_env);
+      oa_scan_item8_conjunct (conjuncts[i], scan_env);
       tree nz_decl;
       if (oa_nonzero_conjunct_p (*conjuncts[i], &nz_decl))
 	scan_env.nz_set (nz_decl, true);
