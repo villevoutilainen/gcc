@@ -18,7 +18,7 @@ int f (bool flag) conveyor
   if (flag)
     return s.v;
   else
-    return -s.v;
+    return 0;
 }
 
 int main () { return f (true) - 1; }
