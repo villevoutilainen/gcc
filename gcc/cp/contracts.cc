@@ -9509,14 +9509,26 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
    previously defeated decomposition entirely: the top-level code was
    CLEANUP_POINT_EXPR, never TRUTH_ANDIF_EXPR/TRUTH_AND_EXPR, so the
    whole condition was treated as a single opaque "conjunct" no matter
-   how many real && operands it contained.  */
+   how many real && operands it contained.
+
+   D4324/P2680: also strips NOP_EXPR/CONVERT_EXPR/VIEW_CONVERT_EXPR on
+   that same local copy, for the same reason -- found via oa_scan_item8_
+   in_expr's own new callers reaching SWITCH_STMT_COND, whose own '&&'
+   condition arrives as 'CLEANUP_POINT_EXPR (CONVERT_EXPR (TRUTH_ANDIF_
+   EXPR (...)))' (the extra CONVERT_EXPR converts the '&&' to the
+   switch's own integral selector type, a conversion an ordinary 'if'
+   condition never needs, which is why oa_process_condition's own,
+   longer-standing use of this function never exposed the gap).  */
 
 static void
 oa_collect_conjuncts (tree *cond, vec<tree *> *conjuncts)
 {
   tree c = *cond;
   STRIP_ANY_LOCATION_WRAPPER (c);
-  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR
+	 || TREE_CODE (c) == NOP_EXPR
+	 || TREE_CODE (c) == CONVERT_EXPR
+	 || TREE_CODE (c) == VIEW_CONVERT_EXPR)
     {
       c = TREE_OPERAND (c, 0);
       STRIP_ANY_LOCATION_WRAPPER (c);
@@ -13969,6 +13981,13 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
    -- unlike the is_object_address/nonzero/range facts below, this
    half also fires for a symbolic-only precondition.  */
 
+/* Forward-declared: full definition is much further below, right after
+   oa_process_condition (whose own per-conjunct discipline it factors
+   out the item-8-relevant slice of), but this function and
+   oa_handle_assertion_stmt below both need it here, ahead of that
+   definition.  */
+static void oa_scan_item8_in_expr (tree *expr, oa_env &env);
+
 static void
 oa_handle_precondition_stmt (tree contract, oa_env &env)
 {
@@ -13983,25 +14002,18 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
   oa_collect_conjuncts (&cond, &conjuncts);
 
   /* D4324/P2680, Increment V: the narrow item-8 dataflow checks (div/mod
-     nonzero-divisor, fixed-size-array-bound) are conveyor-scoped the
-     same way the point-of-construction checks are, but unlike those,
+     nonzero-divisor, fixed-size-array-bound, overflow) are conveyor-scoped
+     the same way the point-of-construction checks are, but unlike those,
      they previously only ever fired inside a function actually declared
      'conveyor' -- never for an is_conveyor contract condition living
-     inside an otherwise-ordinary function.  Scanned here against ENV as
-     it stands from *prior* code only (this condition's own conjuncts
-     haven't seeded any fact into ENV yet at this point) -- conservative
-     but sound: a later conjunct in *this same* condition doesn't yet
-     benefit from an earlier one's own fact (the intra-condition
-     left-to-right ordering refinement Increment K gave ordinary if/loop
-     conditions is not attempted here), a documented, narrower-than-
-     ideal scope decision, not a soundness gap.  */
+     inside an otherwise-ordinary function.  oa_scan_item8_in_expr gives
+     this the same left-to-right, per-'&&'-conjunct refinement discipline
+     oa_process_condition's own "Increment K" already gives ordinary
+     if/loop conditions -- see its own comment for why a flat, unrefined
+     scan of every conjunct (what used to be here) missed real cases like
+     'pre<conveyor_assert_v>(x < 100000 && x++ < 2048)'.  */
   if (conveyor_ok)
-    for (unsigned i = 0; i < conjuncts.length (); ++i)
-      {
-	oa_scan_div_mod_in_expr (conjuncts[i], env);
-	oa_scan_array_bounds_in_expr (conjuncts[i], env);
-	oa_scan_overflow_in_expr (conjuncts[i], env);
-      }
+    oa_scan_item8_in_expr (&cond, env);
 
   auto_vec<tree> facts;
   auto_vec<tree> nz_facts;
@@ -14302,15 +14314,10 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 
   /* D4324/P2680, Increment V: see the identical comment in
      oa_handle_precondition_stmt -- same narrow item-8 dataflow checks,
-     same conservative (sound but not intra-condition-ordering-aware)
-     scan against ENV as it stands from prior code only.  */
+     now given the same left-to-right, per-conjunct refinement via
+     oa_scan_item8_in_expr.  */
   if (conveyor_ok)
-    for (unsigned i = 0; i < conjuncts.length (); ++i)
-      {
-	oa_scan_div_mod_in_expr (conjuncts[i], env);
-	oa_scan_array_bounds_in_expr (conjuncts[i], env);
-	oa_scan_overflow_in_expr (conjuncts[i], env);
-      }
+    oa_scan_item8_in_expr (&cond, env);
 
   auto_vec<tree> facts;
   auto_vec<tree> nz_facts;
@@ -14895,6 +14902,71 @@ oa_process_condition (tree cond, oa_env &env,
     }
 }
 
+/* D4324/P2680: the item-8-relevant slice of oa_process_condition's own
+   per-conjunct discipline just above, factored out for every OTHER item-8
+   call site in this file -- every one of them used to just scan the whole
+   of EXPR (or, for precondition/assertion/postcondition, each of its own
+   pre-collected top-level '&&' conjuncts) against a single, unrefined env,
+   never applying what an *earlier* conjunct in the very same '&&'-chain
+   establishes before scanning a *later* one. Found via a real user report
+   (https://godbolt.org/z/vjfxK7Psz, https://godbolt.org/z/MWvnjP9bG):
+   'pre<conveyor_assert_v>(x < 100000 && x++ < 2048)' flagged 'x++' as
+   possibly overflowing even though, by '&&'s own short-circuit semantics,
+   reaching the second conjunct at all already proves 'x < 100000' true --
+   plainly enough to bound 'x++' -- yet nothing here ever saw that.
+
+   '&&'/'||' short-circuit identically regardless of *why* the expression
+   is being evaluated -- a condition, a return value, an initializer, a
+   switch's own discriminant, anything -- so this refinement is a property
+   of the language's own evaluation order, not something to special-case
+   to "looks like a condition" the way this scan's other call sites used
+   to. EXPR is scanned, and refined for the *next* conjunct's own scan,
+   against a scratch copy -- never the caller's own real, ambient ENV --
+   mirroring oa_process_condition's own COND_ENV discipline exactly: this
+   function's refinement must never leak into whatever the caller does
+   with its real ENV afterward (self-trust/condition-resolution logic for
+   precondition/assertion/postcondition, ordinary subsequent statements
+   for everything else).
+
+   oa_collect_conjuncts only ever looks at EXPR's own *top level* (after
+   stripping CLEANUP_POINT_EXPR/NOP_EXPR/CONVERT_EXPR/VIEW_CONVERT_EXPR,
+   and, at a couple of call sites that need it, the hidden-result-
+   temporary INIT_EXPR/MODIFY_EXPR a RETURN_EXPR's own value can arrive
+   wrapped in) -- a '&&' buried one level *deeper*, inside some other
+   expression shape entirely (a call argument, e.g. 'take (a < 100000 &&
+   a++ < 2048)'; a ternary's own condition, e.g. '(a < 100000 && a++ <
+   2048) ? x : y') is not decomposed into conjuncts at all, so no
+   refinement reaches it -- confirmed via direct testing to be a
+   pre-existing limitation of oa_process_condition itself, not something
+   newly introduced or narrower here: 'if (take (a < 100000 && a++ <
+   2048))' and 'if ((a < 100000 && a++ < 2048) ? x : y)' were already
+   flagged before this fix existed, via the exact same "conjuncts are
+   only ever collected from the top" boundary. Extending conjunct
+   collection to recurse through arbitrary containing expression shapes
+   (which would mean this function, or oa_process_condition, becoming
+   aware of -- and correctly threading refined envs through -- calls and
+   ternaries in the general case) is a substantially larger change,
+   deliberately out of scope here: a disclosed, pre-existing gap, not an
+   oversight in this fix specifically.  */
+
+static void
+oa_scan_item8_in_expr (tree *expr, oa_env &env)
+{
+  oa_env scan_env = env.copy ();
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts (expr, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      oa_scan_div_mod_in_expr (conjuncts[i], scan_env);
+      oa_scan_array_bounds_in_expr (conjuncts[i], scan_env);
+      oa_scan_overflow_in_expr (conjuncts[i], scan_env);
+      tree nz_decl;
+      if (oa_nonzero_conjunct_p (*conjuncts[i], &nz_decl))
+	scan_env.nz_set (nz_decl, true);
+      oa_refine_single_comparison (*conjuncts[i], scan_env, /*asserted_true=*/true);
+    }
+}
+
 /* D4324/P2680, Increment L: true if COND (a loop's condition --
    WHILE_COND/DO_COND, or NULL_TREE for a FOR_STMT with none, i.e.
    'for (;;)') is a compile-time constant that is always true.
@@ -15259,13 +15331,24 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	 a call never stands alone as its own expression-statement and so
 	 would otherwise never reach the CALL_EXPR case below.  */
       oa_scan_calls_in_expr (&TREE_OPERAND (t, 0), env);
-      /* Item 8's narrow div/mod and array-bound restrictions, only
-	 within a function actually declared 'conveyor'.  */
+      /* Item 8's narrow div/mod, array-bound, and overflow restrictions,
+	 only within a function actually declared 'conveyor' -- given the
+	 same left-to-right, per-'&&'-conjunct refinement as every other
+	 item-8 call site (oa_scan_item8_in_expr's own comment), so
+	 'return a < 100000 && a++ < 2048;' is provable the same way the
+	 equivalent 'if' condition already was. Same INIT_EXPR/MODIFY_EXPR
+	 unwrapping as VAL above (the hidden-result-temporary assignment
+	 idiom): without it, oa_collect_conjuncts sees the *assignment* at
+	 the top, not the '&&' it wraps, and never splits it into
+	 conjuncts at all.  */
       if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
 	{
-	  oa_scan_div_mod_in_expr (&TREE_OPERAND (t, 0), env);
-	  oa_scan_array_bounds_in_expr (&TREE_OPERAND (t, 0), env);
-	  oa_scan_overflow_in_expr (&TREE_OPERAND (t, 0), env);
+	  tree *ret_val_slot = &TREE_OPERAND (t, 0);
+	  if (*ret_val_slot
+	      && (TREE_CODE (*ret_val_slot) == INIT_EXPR
+		  || TREE_CODE (*ret_val_slot) == MODIFY_EXPR))
+	    ret_val_slot = &TREE_OPERAND (*ret_val_slot, 1);
+	  oa_scan_item8_in_expr (ret_val_slot, env);
 	}
       /* Still scan the return value expression itself for a stray
 	 is_object_address call (e.g. 'return std::is_object_address(p);'
@@ -15457,11 +15540,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    oa_scan_calls_in_expr (&DECL_INITIAL (decl), env);
 	    if (current_function_decl
 		&& DECL_DECLARED_CONVEYOR_P (current_function_decl))
-	      {
-		oa_scan_div_mod_in_expr (&DECL_INITIAL (decl), env);
-		oa_scan_array_bounds_in_expr (&DECL_INITIAL (decl), env);
-		oa_scan_overflow_in_expr (&DECL_INITIAL (decl), env);
-	      }
+	      oa_scan_item8_in_expr (&DECL_INITIAL (decl), env);
 	  }
 	/* Return-value predicate establishment (see oa_call_symbolic_
 	   predicate_p's own comment): the direct-initialization shape's
@@ -15688,14 +15767,10 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   nesting depth, the same reach oa_handle_call_symbolic_scalar_
 	   obligation above already gets through PRE_EXTRA.  */
 	oa_scan_calls_in_expr (&TREE_OPERAND (t, 1), env, &pre_extra, &post_extra);
-	/* Item 8's narrow div/mod and array-bound restrictions, only
-	   within a function actually declared 'conveyor'.  */
+	/* Item 8's narrow div/mod, array-bound, and overflow restrictions,
+	   only within a function actually declared 'conveyor'.  */
 	if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
-	  {
-	    oa_scan_div_mod_in_expr (&TREE_OPERAND (t, 1), env);
-	    oa_scan_array_bounds_in_expr (&TREE_OPERAND (t, 1), env);
-	    oa_scan_overflow_in_expr (&TREE_OPERAND (t, 1), env);
-	  }
+	  oa_scan_item8_in_expr (&TREE_OPERAND (t, 1), env);
 	/* Shared-substrate invalidation rule 1: any reassignment of a
 	   tracked object's identity invalidates its predicate/field-range
 	   facts, whatever the object's type -- unlike the is_object_
@@ -16285,11 +16360,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	 see OA_DEFAULT_SCAN's own comment for why it does not repeat this
 	 scan for either of these two cases.  */
       if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
-	{
-	  oa_scan_div_mod_in_expr (&t, env);
-	  oa_scan_array_bounds_in_expr (&t, env);
-	  oa_scan_overflow_in_expr (&t, env);
-	}
+	oa_scan_item8_in_expr (&t, env);
       goto oa_default_scan;
 
     case FOR_STMT:
@@ -16324,11 +16395,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   scan, item 8's narrow scans, the stray-use gate).  */
 	oa_scan_calls_in_expr (&SWITCH_STMT_COND (t), env);
 	if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
-	  {
-	    oa_scan_div_mod_in_expr (&SWITCH_STMT_COND (t), env);
-	    oa_scan_array_bounds_in_expr (&SWITCH_STMT_COND (t), env);
-	    oa_scan_overflow_in_expr (&SWITCH_STMT_COND (t), env);
-	  }
+	  oa_scan_item8_in_expr (&SWITCH_STMT_COND (t), env);
 	oa_scan_stray_is_object_address (&SWITCH_STMT_COND (t));
 	oa_scan_stray_symbolic_call (&SWITCH_STMT_COND (t));
 
@@ -16508,11 +16575,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	 OA_DEFAULT_SCAN) cannot double up with any more specific, already-
 	 scanned sub-expression.  */
       if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
-	{
-	  oa_scan_div_mod_in_expr (&t, env);
-	  oa_scan_array_bounds_in_expr (&t, env);
-	  oa_scan_overflow_in_expr (&t, env);
-	}
+	oa_scan_item8_in_expr (&t, env);
     oa_default_scan:
       /* Anything else (TRY_BLOCK, SWITCH_STMT, ordinary
 	 expression statements, a RETURN_EXPR's own value expression
@@ -16599,20 +16662,16 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
      its nonzero-ness or range, which nothing yet seeds for a named
      result; a conjunct needing those for the result identifier itself
      is conservatively left unprovable, a documented, narrower-than-
-     ideal scope, not a soundness gap).  */
+     ideal scope, not a soundness gap). Now given the same left-to-right,
+     per-conjunct refinement as every other item-8 call site via
+     oa_scan_item8_in_expr (which makes its own further scratch copy of
+     SCAN_ENV internally -- a copy of an already-scratch copy, harmless).  */
   if (conveyor_ok)
     {
       oa_env scan_env = env.copy ();
       if (result_id && (VAR_P (result_id) || TREE_CODE (result_id) == PARM_DECL))
 	scan_env.set (result_id, oa_return_seen && oa_return_all_provable);
-      auto_vec<tree *> conjuncts;
-      oa_collect_conjuncts (&cond, &conjuncts);
-      for (unsigned i = 0; i < conjuncts.length (); ++i)
-	{
-	  oa_scan_div_mod_in_expr (conjuncts[i], scan_env);
-	  oa_scan_array_bounds_in_expr (conjuncts[i], scan_env);
-	  oa_scan_overflow_in_expr (conjuncts[i], scan_env);
-	}
+      oa_scan_item8_in_expr (&cond, scan_env);
     }
 
   if (!oa_resolve_condition (&cond, ret_env, conveyor_ok, symbolic_ok))
