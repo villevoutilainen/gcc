@@ -75,6 +75,22 @@
   __glibcxx_check_subscript(_N)
 #endif
 
+// Verify that a divisor is nonzero. Unlike the three shapes above, this
+// one has no Debug Mode counterpart to route to under _GLIBCXX_DEBUG --
+// it isn't about container/iterator bounds at all, just a plain scalar
+// argument to a free function (see bits/sat_arith.h's own saturating_div),
+// so it doesn't participate in the _GLIBCXX_DEBUG split above; the same
+// definition applies whether or not Debug Mode is active. Still disabled
+// under _GLIBCXX_PRECONDITION_ASSERTIONS, for the same double-checking
+// reason as the three shapes above (see bits/c++config's own
+// _GLIBCXX_PRECONDITION_NONZERO_DIVISOR).
+#if defined _GLIBCXX_PRECONDITION_ASSERTIONS
+# define __glibcxx_requires_nonzero_divisor(_Y)
+#else
+# define __glibcxx_requires_nonzero_divisor(_Y)	\
+  __glibcxx_assert_msg(_Y != 0, #_Y " != 0")
+#endif
+
 #if defined _GLIBCXX_DEBUG && _GLIBCXX_HOSTED
 
 # define _GLIBCXX_DEBUG_ASSERT(_Condition) __glibcxx_assert(_Condition)
