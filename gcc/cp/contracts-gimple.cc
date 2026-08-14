@@ -1721,7 +1721,6 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		hash_map<cg_field_key_hash, cg_call_call_rel_fact>
 		  &established_call_call_rel,
 		hash_map<tree, cg_range_lite> &scalar_range_cache,
-		hash_map<tree, cg_rel_fact> &scalar_rel_cache,
 		gimple_ranger *ranger,
 		hash_set<gimple *> *call_relational_verdict)
 {
@@ -1801,7 +1800,23 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	 parameters (e.g. 'pre<ctrl>(x < q)') -- both PARM_DECLs
 	 substituted positionally, mirroring contracts.cc's own
 	 oa_handle_call_conveyor_proof_obligation/oa_handle_call_
-	 symbolic_precondition_obligation.  */
+	 symbolic_precondition_obligation.
+
+	 Unlike the plain relational loop's own literal-vs-literal and
+	 numeric range-vs-range cases below (both branch-independent, so
+	 safe to keep here), the "explicit fact vs REL_CODE" check for a
+	 *branch*-derived fact does not live here at all -- it runs from
+	 cg_predicate_facts_walk's own final pass instead, against
+	 dominator-correct STATE.rel (see cg_check_call_relational_fact's
+	 own comment for why: this loop has no dominator-tree awareness of
+	 its own, and the flattened, function-wide cache that would
+	 otherwise be the only thing available here can hold two genuinely
+	 conflicting facts, from different arms of the same branch, under
+	 the same key). A *self-trust*-derived fact is different: it is
+	 never branch-dependent, so ESTABLISHED_REL alone -- with no
+	 flattened-cache fallback (a fresh, empty map, so a genuinely
+	 branch-derived fact is never picked up here by accident) -- is
+	 sound to consult directly.  */
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree rel_param, rel_other;
@@ -1845,20 +1860,23 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	     arrive as q's own converted SSA result, not q itself, and
 	     never match FACT_RHS (q, as self-trust originally recorded
 	     it).  */
-	  tree_code fact_code;
-	  tree fact_rhs;
-	  cg_range_lite fact_offset;
-	  bool fact_conveyor_established;
-	  if (cg_get_relational (sub_param, established_rel, scalar_rel_cache,
-				  established_range, scalar_range_cache, ranger,
-				  check_as_conveyor, check_as_symbolic,
-				  &fact_code, &fact_rhs, &fact_offset,
-				  &fact_conveyor_established)
-	      && oa_relational_code_implies (fact_code, rel_code)
-	      && cg_offset_compatible_with_code (fact_offset, rel_code)
-	      && (!require_conveyor || fact_conveyor_established)
-	      && fact_rhs == sub_other)
-	    continue; /* Proven true: silently discharged.  */
+	  {
+	    hash_map<tree, cg_rel_fact> empty_rel_cache;
+	    tree_code fact_code;
+	    tree fact_rhs;
+	    cg_range_lite fact_offset;
+	    bool fact_conveyor_established;
+	    if (cg_get_relational (sub_param, established_rel, empty_rel_cache,
+				     established_range, scalar_range_cache, ranger,
+				     check_as_conveyor, check_as_symbolic,
+				     &fact_code, &fact_rhs, &fact_offset,
+				     &fact_conveyor_established)
+		&& oa_relational_code_implies (fact_code, rel_code)
+		&& cg_offset_compatible_with_code (fact_offset, rel_code)
+		&& (!require_conveyor || fact_conveyor_established)
+		&& fact_rhs == sub_other)
+	      continue; /* Proven true: silently discharged.  */
+	  }
 
 	  /* Bounds-proving demo (see .claude/plans/lazy-stirring-pearl.md):
 	     no explicit linked fact -- but both sides' own independently-
@@ -1893,6 +1911,16 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		  }
 	      }
 	  }
+
+	  /* Bounds-proving demo: this exact shape ("param vs param") also
+	     has its own, separate branch-derived explicit-fact check, but
+	     it can only run from cg_predicate_facts_walk's own final pass
+	     (see cg_check_call_relational_fact's own comment for why) -- if
+	     that pass already reached a definitive verdict for this call,
+	     don't also warn "cannot verify" here for what's already been
+	     resolved.  */
+	  if (call_relational_verdict->contains (call))
+	    continue;
 
 	  warning_at (gimple_location (call), 0,
 		      "cannot verify that %qE satisfies the "
@@ -4185,12 +4213,69 @@ cg_check_call_relational_fact (gcall *call,
 			"of %qD", sub_param, callee);
 	    }
 	}
+
+      /* The plain param-vs-param analogue of the call-relational loop
+	 just above (e.g. 'pre<ctrl>(x < q)'), same architectural reason:
+	 cg_check_call's own attempt at this shape reads SCALAR_REL_CACHE,
+	 cg_predicate_facts_walk's own flattened union of every block's
+	 own .rel -- found via direct testing (d4324-gimple-conveyor-
+	 relational-ifcond.C, intermittently, run to run) to have exactly
+	 the same false-negative failure mode already fixed for .call_rel
+	 above: a function whose own if-condition establishes 'x < q' in
+	 the then-arm (and, via De Morgan, 'x >= q' in the else-arm) can
+	 have the *else* arm's own negated fact win the flattening's own
+	 non-deterministic last-write-wins union, so a call inside the
+	 then-arm -- where 'x < q' provably holds -- occasionally, wrongly
+	 fails to prove it and falls through to "cannot verify". Unlike
+	 .call_rel, this shape has no contradiction check on either engine
+	 (oa_match_comparison_against_param's own AST-side consumer only
+	 ever proves true too), so only that one direction is needed here.
+	 STATE.rel is dominator-correct for CALL specifically, exactly like
+	 STATE.call_rel above, for the same reason.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree rel_param, rel_other;
+	  tree_code rel_code;
+	  if (!oa_match_comparison_against_param (*conjuncts[i], &rel_param,
+						   &rel_code, &rel_other))
+	    continue;
+
+	  unsigned param_argno, other_argno;
+	  if (!cg_find_param_position (callee, rel_param, &param_argno)
+	      || !cg_find_param_position (callee, rel_other, &other_argno)
+	      || param_argno >= gimple_call_num_args (call)
+	      || other_argno >= gimple_call_num_args (call))
+	    continue;
+
+	  tree sub_param = cg_resolve_call_argument (call, param_argno);
+	  tree sub_other = cg_resolve_call_argument (call, other_argno);
+
+	  if (TREE_CODE (sub_param) == INTEGER_CST && TREE_CODE (sub_other) == INTEGER_CST)
+	    continue; /* cg_check_call's own literal-vs-literal case handles this.  */
+
+	  hash_map<tree, cg_rel_fact> empty_rel_cache;
+	  hash_map<tree, cg_range_lite> empty_scalar_range_cache2;
+
+	  tree_code fact_code;
+	  tree fact_rhs;
+	  cg_range_lite fact_offset;
+	  bool fact_conveyor_established;
+	  if (cg_get_relational (sub_param, state.rel, empty_rel_cache,
+				   established_range, empty_scalar_range_cache2,
+				   ranger, check_as_conveyor, check_as_symbolic,
+				   &fact_code, &fact_rhs, &fact_offset,
+				   &fact_conveyor_established)
+	      && oa_relational_code_implies (fact_code, rel_code)
+	      && cg_offset_compatible_with_code (fact_offset, rel_code)
+	      && (!require_conveyor || fact_conveyor_established)
+	      && fact_rhs == sub_other)
+	    verdict_out->add (call); /* Proven true: silently discharged.  */
+	}
     }
 }
 
 static bool
 cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_range_cache_out,
-			   hash_map<tree, cg_rel_fact> *scalar_rel_cache_out,
 			   hash_map<tree, cg_range_lite> &established_range,
 			   hash_set<gimple *> *call_relational_verdict_out,
 			   gimple_ranger *ranger)
@@ -4271,19 +4356,11 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 	}
     }
 
-  /* D4324 Commit 3: flatten every block's own, now-fully-converged .rel
-     entries into SCALAR_REL_CACHE_OUT -- the relational analogue of
-     SCALAR_RANGE_CACHE (see cg_compose_call_result_range's own comment
-     on that one), letting the *other*, simple linear pass's own cg_get_
-     relational (used by cg_check_call, which has no dominator-tree
-     awareness of its own) see a branch-derived fact, not just a self-
-     trust-established one.
-
-     .call_rel has no such flattened cache of its own here, unlike an
-     earlier version of this pass: a PARM_DECL/SSA name compared in an
-     if-condition can genuinely carry two different, even De Morgan-
-     negated, facts across the then and else arms of the very same
-     branch -- unlike a plain SSA name defined once by an ordinary
+  /* D4324 Commit 3, since superseded: neither .rel nor .call_rel is
+     flattened into a function-wide cache any more. A PARM_DECL/SSA name
+     compared in an if-condition can genuinely carry two different, even
+     De Morgan-negated, facts across the then and else arms of the very
+     same branch -- unlike a plain SSA name defined once by an ordinary
      assignment, whose value (and so whose fact) truly is permanent from
      that point on. Flattening a union of every block's own entries into
      one function-wide map necessarily picks whichever block's entry
@@ -4291,32 +4368,24 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
      (hash_map iteration order depends on block pointer addresses, hence
      non-deterministic run to run), which is not necessarily the one
      valid at any given consult site. Found via direct testing to be a
-     genuine, two-directional soundness gap for .call_rel's own
-     consumer, not mere imprecision: it first surfaced as a false hard
-     "provably violates" (wrong branch's fact flatly contradicted the
-     required code), and, once traced here, as a false *silent proof* of
-     a genuinely unprovable call in the other direction (wrong branch's
-     fact happened to imply the required code). The "explicit fact vs
-     REL_CODE" check for this shape is therefore never wired into cg_
-     check_call at all any more -- see cg_check_call_relational_fact's
-     own comment for where it runs instead, against dominator-correct
-     STATE.call_rel directly (which needs no flattening of its own: a
-     per-block dominator-tracked map is exactly the right level of
-     precision already).
-
-     .rel retains its own flattened cache and cg_check_call's own
-     "explicit fact vs REL_CODE" consumer for it (see that loop, just
-     above the call-relational one) -- an if-condition comparing two
-     plain scalars can establish a .rel fact the same branch-dependent
-     way .call_rel's own facts are established, so that consumer is not
-     obviously immune to the identical two-directional issue just fixed
-     for .call_rel. Not yet confirmed either way by a failing test, and
-     out of scope for this fix; worth the same scrutiny (and likely the
-     same relocation to a dominator-correct, final-pass consult) if one
-     ever turns up.  */
-  for (auto it : block_out)
-    for (auto rel_it : it.second->rel)
-      scalar_rel_cache_out->put (rel_it.first, rel_it.second);
+     genuine, two-directional soundness gap, not mere imprecision, for
+     *both* maps' own former consumer in cg_check_call (which has no
+     dominator-tree awareness of its own): first for .call_rel, as a
+     false hard "provably violates" (wrong branch's fact flatly
+     contradicted the required code) and a false *silent proof* of a
+     genuinely unprovable call (wrong branch's fact happened to imply
+     the required code); then, found the same way once this comment's
+     own earlier version flagged .rel as "not yet confirmed... worth the
+     same scrutiny if one ever turns up" -- one did
+     (d4324-gimple-conveyor-relational-ifcond.C, intermittently) -- the
+     same false-silent-proof direction for .rel too (.rel has no
+     contradiction check on either engine, so only that one direction
+     applies to it). Both shapes' own "explicit fact vs REL_CODE" checks
+     now run only from this function's own final pass below, against
+     dominator-correct STATE.rel/STATE.call_rel directly (see cg_check_
+     call_relational_fact's own comment) -- no flattening of either map
+     needed at all any more, since a per-block dominator-tracked map is
+     exactly the right level of precision already.  */
 
   /* Final pass, over the now-stable BLOCK_OUT: re-derive each block's
      own IN state one more time and run the full per-statement dispatch,
@@ -4426,16 +4495,6 @@ pass_contracts_gimple::execute (function *fun)
      literal-bounded postcondition's own item 6 already answers from
      ESTABLISHED_RANGE alone.  */
   hash_map<tree, cg_range_lite> scalar_range_cache;
-  /* D4324 Commit 3: SCALAR_REL_CACHE -- the relational analogue of
-     SCALAR_RANGE_CACHE just above, letting a branch-derived param-vs-
-     param fact (cg_predicate_facts_walk's own cg_refine_edge_into,
-     dominator-tracked) be seen by this function's own simple, self-
-     trust-only established_rel below. The call analogue of this,
-     SCALAR_CALL_REL_CACHE, no longer exists: see cg_predicate_facts_
-     walk's own comment on why flattening a call-relational fact this
-     way is unsound, and cg_check_call_relational_fact's own comment for
-     where that shape's own check runs instead.  */
-  hash_map<tree, cg_rel_fact> scalar_rel_cache;
   /* Bounds-proving demo, Part 2: every call site where cg_predicate_
      facts_walk's own new range-vs-range fallback (cg_check_call_range_
      relational) already reached a definitive verdict for a "param vs
@@ -4475,7 +4534,7 @@ pass_contracts_gimple::execute (function *fun)
   calculate_dominance_info (CDI_DOMINATORS);
   gimple_ranger *ranger = enable_ranger (fun, false);
 
-  cg_predicate_facts_walk (fun, &scalar_range_cache, &scalar_rel_cache,
+  cg_predicate_facts_walk (fun, &scalar_range_cache,
 			     established_range, &call_relational_verdict,
 			     ranger);
 
@@ -4489,7 +4548,7 @@ pass_contracts_gimple::execute (function *fun)
 	  cg_check_call (as_a <gcall *> (stmt), established, established_nz,
 			 established_range, established_rel,
 			 established_call_rel, established_call_call_rel,
-			 scalar_range_cache, scalar_rel_cache, ranger,
+			 scalar_range_cache, ranger,
 			 &call_relational_verdict);
       }
 
