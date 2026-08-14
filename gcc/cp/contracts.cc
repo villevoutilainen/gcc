@@ -5580,6 +5580,30 @@ struct oa_call_call_relational_fact
   bool conveyor_established;
 };
 
+/* D4324, item 8's overflow check (oa_scan_overflow_in_expr): "this decl
+   has, at some point still in scope, been compared as less-than (or
+   greater-than) an expression of an integral type no wider than its
+   own". Deliberately unlike oa_relational_fact/oa_call_relational_fact,
+   this does NOT record the other side's identity, value, or shape at
+   all -- only whether *some* suitably-typed witness was ever seen, in
+   which direction. That's a strictly weaker fact than a full relational
+   fact, but it's also strictly more general on the *witness* side: the
+   proof it backs ("this decl's own current value is <= wi::max_value(T)
+   - 1", from the type invariant that *any* value of an integral type is
+   already <= that type's own max) only ever needs the witness's type,
+   never its identity, so it can be established from a bare decl, a
+   CALL_EXPR ('i < v.size ()'), or any other expression shape uniformly,
+   with no per-shape special-casing and no separate fact family for each
+   shape a bound could be written in. See oa_match_type_bounded_
+   comparison's own comment for how this gets established, and oa_
+   provably_safe_unit_shift_p (near oa_scan_overflow_in_expr) for its
+   only consumer.  */
+struct oa_type_bound_fact
+{
+  bool has_upper_witness;
+  bool has_lower_witness;
+};
+
 /* Composite key for m_contract_field_range_map, (object identity,
    FIELD_DECL) -- pair_hash (hash-traits.h)
    combines two ordinary pointer-hash traits, the same idiom used
@@ -6085,6 +6109,61 @@ public:
       m_relational_map.put (to_keep[i], kept_facts[i]);
   }
 
+  /* oa_type_bound_fact's own get/set/invalidate/merge_with -- see that
+     struct's own comment. No "invalidate_involving" variant, unlike
+     relational_get/set's own family: the other side's identity is never
+     recorded in the first place, so nothing could ever need to sweep
+     this map for entries referencing a just-reassigned decl on their
+     own RHS the way relational_invalidate_involving does. Merge is per-
+     field AND (a witness survives a join only if both incoming paths
+     independently have it), the same "union of independently-AND'd
+     booleans" shape range_merge_with already uses for has_lo/has_hi,
+     just without that function's own BASE-equality gate (this struct
+     has no base to compare).  */
+  bool type_bound_get (tree decl, oa_type_bound_fact *out)
+  {
+    oa_type_bound_fact *v = m_type_bound_map.get (decl);
+    if (!v)
+      return false;
+    *out = *v;
+    return true;
+  }
+  void type_bound_set (tree decl, bool upper, bool lower)
+  {
+    oa_type_bound_fact *v = m_type_bound_map.get (decl);
+    oa_type_bound_fact fact = v ? *v : oa_type_bound_fact { false, false };
+    fact.has_upper_witness |= upper;
+    fact.has_lower_witness |= lower;
+    m_type_bound_map.put (decl, fact);
+  }
+  void type_bound_invalidate (tree decl) { m_type_bound_map.remove (decl); }
+  void type_bound_merge_with (oa_env &other)
+  {
+    auto_vec<tree> to_remove;
+    auto_vec<tree> to_keep;
+    auto_vec<oa_type_bound_fact> kept_facts;
+    for (auto it : m_type_bound_map)
+      {
+	oa_type_bound_fact *ov = other.m_type_bound_map.get (it.first);
+	oa_type_bound_fact merged;
+	merged.has_upper_witness
+	  = it.second.has_upper_witness && ov && ov->has_upper_witness;
+	merged.has_lower_witness
+	  = it.second.has_lower_witness && ov && ov->has_lower_witness;
+	if (!merged.has_upper_witness && !merged.has_lower_witness)
+	  to_remove.safe_push (it.first);
+	else
+	  {
+	    to_keep.safe_push (it.first);
+	    kept_facts.safe_push (merged);
+	  }
+      }
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_type_bound_map.remove (to_remove[i]);
+    for (unsigned i = 0; i < to_keep.length (); ++i)
+      m_type_bound_map.put (to_keep[i], kept_facts[i]);
+  }
+
   /* The call-relational analogue of relational_get/set/invalidate/
      merge_with immediately above, for oa_call_relational_fact instead
      of oa_relational_fact -- see that struct's own comment for why this
@@ -6515,6 +6594,8 @@ public:
       r.m_predicate_fact_map.put (it.first, it.second);
     for (auto it : m_relational_map)
       r.m_relational_map.put (it.first, it.second);
+    for (auto it : m_type_bound_map)
+      r.m_type_bound_map.put (it.first, it.second);
     for (auto it : m_call_relational_map)
       r.m_call_relational_map.put (it.first, it.second);
     for (auto it : m_call_call_relational_map)
@@ -6566,6 +6647,9 @@ public:
     m_relational_map.empty ();
     for (auto it : other.m_relational_map)
       m_relational_map.put (it.first, it.second);
+    m_type_bound_map.empty ();
+    for (auto it : other.m_type_bound_map)
+      m_type_bound_map.put (it.first, it.second);
     m_call_relational_map.empty ();
     for (auto it : other.m_call_relational_map)
       m_call_relational_map.put (it.first, it.second);
@@ -6696,6 +6780,7 @@ private:
   hash_map<tree, oa_derivation *> m_deriv_map;
   hash_map<tree, oa_predicate_fact> m_predicate_fact_map;
   hash_map<tree, oa_relational_fact> m_relational_map;
+  hash_map<tree, oa_type_bound_fact> m_type_bound_map;
   hash_map<tree, oa_call_relational_fact> m_call_relational_map;
   hash_map<oa_field_key_hash, oa_call_call_relational_fact> m_call_call_relational_map;
   hash_map<tree, oa_range_fact> m_contract_scalar_range_map;
@@ -8283,6 +8368,8 @@ static bool oa_match_shifted_comparison_against_call
   (tree conjunct, tree *param_out, tree_code *code_out,
    tree *rhs_receiver_out, tree *rhs_callee_out, widest_int *offset_out,
    bool allow_symbolic_accessor);
+static bool oa_match_type_bounded_comparison
+  (tree conjunct, tree *decl_out, tree_code *code_out);
 
 /* The last-resort fallback inside oa_refine_single_comparison below:
    "DECL OP <exactly-known point>" refined into ENV's own plain, untagged
@@ -8377,6 +8464,33 @@ oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
 static void
 oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
 {
+  /* D4324, item 8's overflow check: establish a type-bound witness (see
+     oa_type_bound_fact's own comment) independently of, and before, the
+     mutually-exclusive-by-construction blocks below -- unlike those,
+     this doesn't return on a match, since a conjunct recognized here
+     can also, separately, be recognized by one of them (e.g. 'i < n'
+     with i a PARM_DECL matches both this and oa_match_comparison_
+     against_param below), and both facts are wanted side by side, not
+     just whichever one happens to run first.  */
+  {
+    tree decl;
+    tree_code code;
+    if (oa_match_type_bounded_comparison (conjunct, &decl, &code))
+      {
+	if (!asserted_true)
+	  switch (code)
+	    {
+	    case LT_EXPR: code = GE_EXPR; break;
+	    case LE_EXPR: code = GT_EXPR; break;
+	    case GT_EXPR: code = LE_EXPR; break;
+	    case GE_EXPR: code = LT_EXPR; break;
+	    default: gcc_unreachable ();
+	    }
+	env.type_bound_set (decl, /*upper=*/code == LT_EXPR || code == LE_EXPR,
+			      /*lower=*/code == GT_EXPR || code == GE_EXPR);
+      }
+  }
+
   /* D4324: a ptr->field or call-range conjunct in an ordinary runtime
      'if'/ternary condition (e.g. 'if (ptr->count < N)' / 'if (i < v.size
      ())') refines the same shared substrate a declared contract already
@@ -14857,6 +14971,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.range_merge_with (result);
 		merged.predicate_fact_merge_with (result);
 		merged.relational_merge_with (result);
+		merged.type_bound_merge_with (result);
 		merged.call_relational_merge_with (result);
 		merged.call_call_relational_merge_with (result);
 		merged.contract_scalar_range_merge_with (result);
@@ -15209,6 +15324,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		   trusted to still equal whatever it aliased before this
 		   assignment (see oa_env::alias_find's own comment).  */
 		env.predicate_fact_invalidate (identity);
+		env.type_bound_invalidate (identity);
 		env.relational_invalidate_involving (identity);
 		env.call_relational_invalidate_involving (identity);
 		env.call_call_relational_invalidate_involving (identity);
@@ -15624,6 +15740,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       own comment.  */
 	    then_env.predicate_fact_merge_with (else_env);
 	    then_env.relational_merge_with (else_env);
+	    then_env.type_bound_merge_with (else_env);
 	    then_env.call_relational_merge_with (else_env);
 	    then_env.call_call_relational_merge_with (else_env);
 	    /* -fcontract-symbolic-proofs: same intersect-and-widen merge as
@@ -15697,6 +15814,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       above.  */
 	    then_env.predicate_fact_merge_with (else_env);
 	    then_env.relational_merge_with (else_env);
+	    then_env.type_bound_merge_with (else_env);
 	    then_env.call_relational_merge_with (else_env);
 	    then_env.call_call_relational_merge_with (else_env);
 	    /* -fcontract-symbolic-proofs: same as COND_EXPR above.  */
@@ -15842,6 +15960,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		   if/else case.  */
 		merged.predicate_fact_merge_with (current);
 		merged.relational_merge_with (current);
+		merged.type_bound_merge_with (current);
 		merged.call_relational_merge_with (current);
 		merged.call_call_relational_merge_with (current);
 		/* -fcontract-symbolic-proofs: same as the if/else case.  */
@@ -15913,6 +16032,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.range_merge_with (env);
 		merged.predicate_fact_merge_with (env);
 		merged.relational_merge_with (env);
+		merged.type_bound_merge_with (env);
 		merged.call_relational_merge_with (env);
 		merged.call_call_relational_merge_with (env);
 		merged.contract_scalar_range_merge_with (env);
@@ -16295,10 +16415,20 @@ oa_contract_conveyor_active_public (tree contract, tree owner_fn)
    otherwise NULL_TREE.  Purely structural: this never inspects the
    PARM_DECL's own type or value, only *which* parameter a comparison
    operand refers to -- see oa_match_comparison_against_param's own
-   comment for why that distinction matters.  */
+   comment for why that distinction matters.
+
+   ALLOW_VAR_DECL (default false, preserving every existing caller's
+   behavior byte-for-byte): also accept a bare VAR_DECL, not just a
+   PARM_DECL. Only oa_match_type_bounded_comparison (below) passes
+   true, for resolving a *local control-flow refinement's* own subject
+   decl (e.g. a for-loop's own induction variable) -- never appropriate
+   for oa_match_comparison_against_param's own callers, which parse a
+   *callee's declared contract text* and need each side to be
+   positionally substitutable with a caller's actual argument at a call
+   site, something only ever true of a PARM_DECL.  */
 
 static tree
-oa_underlying_param_operand (tree op)
+oa_underlying_param_operand (tree op, bool allow_var_decl = false)
 {
   /* A contract condition's own access to a by-value parameter is
      wrapped in ordinary value-preserving conversions (NOP_EXPR/
@@ -16312,7 +16442,9 @@ oa_underlying_param_operand (tree op)
      parameter's own implicit conversion operator/by-value copy
      materialization in one shared step.  */
   op = oa_strip_to_relational_operand (op);
-  return TREE_CODE (op) == PARM_DECL ? op : NULL_TREE;
+  if (TREE_CODE (op) == PARM_DECL || (allow_var_decl && VAR_P (op)))
+    return op;
+  return NULL_TREE;
 }
 
 /* Recognize CONJUNCT as "paramA OP paramB", where *both* sides are
@@ -16387,6 +16519,82 @@ oa_match_comparison_against_param (tree conjunct, tree *param_out,
   *param_out = param;
   *code_out = code;
   *other_out = other;
+  return true;
+}
+
+/* D4324, item 8's overflow check: recognize CONJUNCT as "DECL OP other"
+   or "other OP DECL", where DECL is a bare PARM_DECL or VAR_DECL (via
+   oa_underlying_param_operand, with its own ALLOW_VAR_DECL argument set
+   -- see that function's own comment for why only this caller passes
+   true) and
+   OTHER is *any* expression at all of an INTEGRAL_TYPE_P no wider than
+   DECL's own type (TYPE_PRECISION/TYPE_UNSIGNED) -- deliberately never
+   resolved, stripped for identity, or inspected any further. Unlike
+   oa_match_comparison_against_param immediately above, OTHER need not
+   be a decl, let alone a PARM_DECL: a bare comparison ('i < n'), a call
+   ('i < v.size ()'), or any other expression shape are all recognized
+   identically, since the only thing this needs from OTHER is its type
+   -- see oa_type_bound_fact's own comment for why. CODE_OUT is oriented
+   so the returned relation always reads "DECL CODE_OUT other", flipping
+   analogously to oa_match_comparison_against_param's own FLIPPED
+   handling when OTHER appears on the left.
+
+   Called from oa_refine_single_comparison, mutually exclusive with the
+   other matchers there by construction (a conjunct already recognized
+   as "param OP param"/"param OP call ()"/etc. can still separately
+   satisfy this one too -- e.g. 'i < n' matches both this and, once i is
+   itself a PARM_DECL, oa_match_comparison_against_param -- so both
+   facts get established side by side, which is fine: they answer
+   different questions and neither invalidates the other).  */
+
+static bool
+oa_match_type_bounded_comparison (tree conjunct, tree *decl_out,
+				    tree_code *code_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  enum tree_code code = TREE_CODE (c);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR && code != GE_EXPR)
+    return false;
+
+  tree op0 = oa_strip_to_relational_operand (TREE_OPERAND (c, 0));
+  tree op1 = oa_strip_to_relational_operand (TREE_OPERAND (c, 1));
+
+  tree decl, other;
+  bool flipped;
+  if ((decl = oa_underlying_param_operand (op0, /*allow_var_decl=*/true)))
+    {
+      other = op1;
+      flipped = false;
+    }
+  else if ((decl = oa_underlying_param_operand (op1, /*allow_var_decl=*/true)))
+    {
+      other = op0;
+      flipped = true;
+    }
+  else
+    return false;
+
+  if (!INTEGRAL_TYPE_P (TREE_TYPE (other))
+      || TYPE_PRECISION (TREE_TYPE (other)) > TYPE_PRECISION (TREE_TYPE (decl))
+      || (TYPE_PRECISION (TREE_TYPE (other)) == TYPE_PRECISION (TREE_TYPE (decl))
+	  && !TYPE_UNSIGNED (TREE_TYPE (decl)) && TYPE_UNSIGNED (TREE_TYPE (other))))
+    return false;
+
+  if (flipped)
+    switch (code)
+      {
+      case LT_EXPR: code = GT_EXPR; break;
+      case LE_EXPR: code = GE_EXPR; break;
+      case GT_EXPR: code = LT_EXPR; break;
+      case GE_EXPR: code = LE_EXPR; break;
+      default: gcc_unreachable ();
+      }
+
+  *decl_out = decl;
+  *code_out = code;
   return true;
 }
 
