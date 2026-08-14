@@ -74,6 +74,50 @@ namespace std _GLIBCXX_VISIBILITY(default)
       __make(_Ord __o) noexcept
       { return _Ordering(__o); }
 
+    // D4324: strong_ordering/weak_ordering's own reversed-comparison
+    // operators (below) negate _M_value directly to flip the ordering --
+    // for either of those two types _M_value is always exactly -1, 0, or
+    // 1, so the negation can never actually overflow, but nothing
+    // declares that range anywhere a static prover could see it, so a
+    // conveyor UB-freedom check has no way to tell. This provably-safe
+    // alternative saturates instead of negating outright, at zero cost
+    // outside a conveyor-checked build (the branch below only exists
+    // under _GLIBCXX_CONVEYOR_ASSERTIONS; otherwise this compiles to the
+    // exact same single negation as writing '-__x' directly). Tagged
+    // conveyor itself since its own caller already is, and conveyor code
+    // may only call other conveyor code.
+    //
+    // Deliberately NOT used by partial_ordering's own reversal (_M_reverse,
+    // below): partial_ordering's fourth state, unordered, is specifically
+    // encoded as _Ord::unordered == -__SCHAR_MAX__ - 1 (i.e. exactly this
+    // type's own TYPE_MIN) so that negating it is a documented no-op via
+    // two's-complement wraparound ("value remains unchanged when negated",
+    // above) -- saturating that same value would incorrectly produce
+    // __SCHAR_MAX__ instead, corrupting unordered into a bogus ordering.
+    // partial_ordering isn't conveyor-tagged today, so this doesn't come
+    // up in practice, but the two negations are not interchangeable.
+    [[__gnu__::__always_inline__]]
+    constexpr type
+    __saturating_negate(type __x) noexcept _GLIBCXX_CONVEYOR
+    {
+#ifdef _GLIBCXX_CONVEYOR_ASSERTIONS
+      // Phrased as an ordering comparison ('> TYPE_MIN'), not the
+      // equivalent equality test ('!= TYPE_MIN'): a conveyor UB-freedom
+      // check can turn 'x > TYPE_MIN' into a genuine numeric range
+      // (x's own lower bound becomes TYPE_MIN + 1) for the branch below,
+      // proving the negation there safe -- '!=' has no such range
+      // representation (a single excluded point isn't a contiguous
+      // interval), so the equality-test spelling this replaced left the
+      // negation just as unprovable as the raw, unguarded '-__x' it was
+      // meant to fix.
+      if (__x > -__SCHAR_MAX__ - 1)
+	return static_cast<type>(-__x);
+      return __SCHAR_MAX__;
+#else
+      return static_cast<type>(-__x);
+#endif
+    }
+
     struct __literal_zero
     {
       consteval __literal_zero(__literal_zero*) noexcept _GLIBCXX_CONVEYOR { }
@@ -365,7 +409,7 @@ namespace std _GLIBCXX_VISIBILITY(default)
     [[nodiscard]]
     friend constexpr strong_ordering
     operator<=>(__cmp_cat::__literal_zero, strong_ordering __v) noexcept _GLIBCXX_CONVEYOR
-    { return strong_ordering(__cmp_cat::_Ord(-__v._M_value)); }
+    { return strong_ordering(__cmp_cat::_Ord(__cmp_cat::__saturating_negate(__v._M_value))); }
   };
 
   // valid values' definitions

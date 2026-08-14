@@ -9218,17 +9218,10 @@ oa_provably_safe_unit_shift_p (tree x, bool increasing, oa_env &env)
    above -- signed-integer-overflow-capable operators. Covers the unary
    shift-by-one operators (INCREMENT/DECREMENT, pre and post) -- the
    concrete motivating case (see the plan's own Context section:
-   'pre<conveyor_assert_v>(x++ < 2048)') -- and general binary
-   PLUS_EXPR/MINUS_EXPR/MULT_EXPR ('a + b', 'x + 1', etc.), each with
-   their own proof strategy (see each case's own comment below).
-   NEGATE_EXPR ('-x') is the one operator deliberately not handled at
-   all here: found via direct testing against the full existing corpus
-   to be far more aggressive in practice than intended (including
-   against already-passing, genuinely conveyor-marked library code),
-   and, unlike binary arithmetic, has no cheap way to phase in
-   gradually -- see that case's own comment for why it's left as a
-   disclosed, deferred gap instead of repeating the same discover-and-
-   revert cycle a third time.
+   'pre<conveyor_assert_v>(x++ < 2048)') -- NEGATE_EXPR ('-x'), and
+   general binary PLUS_EXPR/MINUS_EXPR/MULT_EXPR ('a + b', 'x + 1',
+   etc.), each with their own proof strategy (see each case's own
+   comment below).
 
    Only ever applies to INTEGRAL_TYPE_P operands for which overflow is
    actually undefined behavior at all (TYPE_OVERFLOW_UNDEFINED, GCC's
@@ -9277,20 +9270,42 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 	  return NULL_TREE;
 	}
 
-      /* NEGATE_EXPR ('-x', overflowing at TYPE_MIN) is deliberately NOT
-	 handled here: found via direct testing against the full existing
-	 corpus that unconstrained negation is common in already-passing
-	 conveyor code, including genuinely conveyor-marked *library* code
-	 (e.g. libstdc++-v3/libsupc++/compare's own 'operator<=>' for
-	 std::strong_ordering negates its own tag value, whose actual legal
-	 range -- {-1, 0, 1} -- has no established range fact this scan can
-	 see, since nothing declares one). Unlike binary arithmetic below,
-	 there's no cheap way to phase this one in gradually (a single
-	 operand, a single check), so it's left as a disclosed, deferred
-	 gap rather than repeating the same discover-and-revert cycle a
-	 third time without first discussing scope.
+      /* NEGATE_EXPR ('-x'): overflows iff x == TYPE_MIN (negating any
+	 other value stays representable), so safe iff x's own established
+	 range excludes TYPE_MIN -- i.e. a strict lower bound greater than
+	 TYPE_MIN (TYPE_MIN itself must be excluded; TYPE_MIN + 1 negates
+	 fine, giving TYPE_MAX). Numeric route only, no type-bound-witness
+	 rescue: unlike the unit-shift case above, nothing in this project
+	 has ever needed one for negation specifically (no "loop guard"-
+	 style pattern motivates one the way it does for '++'/'--').
 
-	 Binary PLUS_EXPR/MINUS_EXPR/MULT_EXPR ('x + 1', 'a + b', etc.): a
+	 Previously disclosed as a deliberately deferred gap: an earlier
+	 attempt found this genuinely rejected already-shipped library code
+	 (libstdc++-v3/libsupc++/compare's own 'operator<=>' for
+	 std::strong_ordering negated its own tag value, whose actual legal
+	 range -- {-1, 0, 1} -- had no established range fact this scan
+	 could see). Fixed at the source instead of narrowing the check:
+	 that call site now uses __cmp_cat::__saturating_negate, which is
+	 provably safe by construction (saturates instead of negating
+	 TYPE_MIN outright) rather than relying on an implicit range this
+	 scan could never have seen.  */
+      if (code == NEGATE_EXPR)
+	{
+	  tree x = TREE_OPERAND (t, 0);
+	  if (!INTEGRAL_TYPE_P (TREE_TYPE (x))
+	      || !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (x)))
+	    return NULL_TREE;
+	  oa_range_fact fact;
+	  bool safe = oa_get_range (x, *e, &fact)
+		      && fact.has_lo
+		      && fact.lo > wi::to_widest (TYPE_MIN_VALUE (TREE_TYPE (x)));
+	  if (!safe)
+	    error_at (EXPR_LOCATION (t), "negation of %qE not provably free "
+		      "of overflow in a conveyor function", x);
+	  return NULL_TREE;
+	}
+
+      /* Binary PLUS_EXPR/MINUS_EXPR/MULT_EXPR ('x + 1', 'a + b', etc.): a
 	 literal shift of exactly 1 gets first refusal via the same unit-
 	 shift rescue '++x'/'--x' use (numeric range OR type-bound witness,
 	 see the dedicated comment just below this one, right before that
