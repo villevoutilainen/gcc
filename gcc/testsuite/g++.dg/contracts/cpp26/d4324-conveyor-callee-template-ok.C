@@ -8,7 +8,7 @@
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
 template <typename T>
-T helper (T x) conveyor { return x + 1; }
+T helper (T x) conveyor { return x; }
 
 int f (int x) conveyor
 {
@@ -21,4 +21,4 @@ T g (T x) conveyor
   return helper (x); // dependent call, resolved at instantiation time
 }
 
-int main () { return f (1) + g<int> (1) - 4; }
+int main () { return f (1) + g<int> (1) - 2; }

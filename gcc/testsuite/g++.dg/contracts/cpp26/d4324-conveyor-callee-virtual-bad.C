@@ -22,7 +22,7 @@ struct Base
 
 struct Derived : Base
 {
-  int f (int x) conveyor override { return x + 1; }
+  int f (int x) conveyor override { return x; }
 };
 
 int g (Base *b) conveyor

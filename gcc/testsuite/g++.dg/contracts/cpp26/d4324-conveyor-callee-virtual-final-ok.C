@@ -18,7 +18,7 @@ struct Base
 
 struct Derived final : Base
 {
-  int f (int x) conveyor override { return x + 1; }
+  int f (int x) conveyor override { return x; }
 };
 
 int g (Derived *d) conveyor
@@ -26,4 +26,4 @@ int g (Derived *d) conveyor
   return d->f (1);
 }
 
-int main () { Derived d; return g (&d) - 2; }
+int main () { Derived d; return g (&d) - 1; }

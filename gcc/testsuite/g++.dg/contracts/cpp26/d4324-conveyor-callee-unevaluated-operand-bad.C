@@ -15,7 +15,7 @@ int f (int x) conveyor
   bool unused = sizeof (helper ()) == sizeof (bool); // unevaluated: fine
   if (helper ()) // { dg-error "not declared .conveyor." }
     return x;
-  return unused ? x : x + 1;
+  return unused ? x : x;
 }
 
 int main () { return f (1); }

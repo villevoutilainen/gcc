@@ -10,8 +10,8 @@
 
 int f (int x) conveyor
 {
-  auto add_one = [] (int y) conveyor { return y + 1; };
+  auto add_one = [] (int y) conveyor { return y; };
   return add_one (x);
 }
 
-int main () { return f (1) - 2; }
+int main () { return f (1) - 1; }

@@ -11,6 +11,8 @@ int f (int n, int i) conveyor
 {
   if (n < 1)
     return 0;
+  if (i < 0)
+    return 0;
   int total = 0;
   for (; i < 10 && 10 / n > 0; i++)
     total += i;

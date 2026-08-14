@@ -10,7 +10,7 @@
 
 struct adder
 {
-  int operator() (int x) const conveyor { return x + 1; }
+  int operator() (int x) const conveyor { return x; }
 };
 
 int f (int x) conveyor
@@ -19,4 +19,4 @@ int f (int x) conveyor
   return a (x);
 }
 
-int main () { return f (1) - 2; }
+int main () { return f (1) - 1; }

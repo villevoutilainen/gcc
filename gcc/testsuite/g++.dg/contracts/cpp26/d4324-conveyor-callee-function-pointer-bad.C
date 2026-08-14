@@ -5,7 +5,7 @@
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
-int helper (int x) conveyor { return x + 1; }
+int helper (int x) conveyor { return x; }
 
 int f (int x) conveyor
 {

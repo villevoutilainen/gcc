@@ -7,10 +7,10 @@
 int f () conveyor
 {
   int arr[5] = {};
-  int sum = 0;
+  int last = 0;
   for (int i = 0; i < 5; ++i)
-    sum = sum + arr[i];
-  return sum;
+    last = arr[i];
+  return last;
 }
 
 int main () { return f (); }

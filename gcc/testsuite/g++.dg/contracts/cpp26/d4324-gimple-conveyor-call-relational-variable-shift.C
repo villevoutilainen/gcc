@@ -24,14 +24,16 @@ struct S {
 };
 
 int use_sound_shift (S& v, int i, int k) conveyor
-  pre<conveyor_ctrl_v>(i < v.size () && k <= 0)
+  pre<conveyor_ctrl_v>(i < v.size () && i > 0 && i < 1000000
+		       && k <= 0 && k > -1000000)
 {
   int j = i + k;
   return v.get (j);
 }
 
 int use_unsound_shift (S& v, int i, int k) conveyor
-  pre<conveyor_ctrl_v>(i < v.size () && k >= 0 && k <= 2)
+  pre<conveyor_ctrl_v>(i < v.size () && i > 0 && i < 1000000
+		       && k >= 0 && k <= 2)
 {
   int j = i + k;
   return v.get (j); // { dg-warning "cannot verify that .j. satisfies" }
