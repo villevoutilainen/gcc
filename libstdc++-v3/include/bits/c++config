@@ -840,10 +840,13 @@ namespace std
     pre<std::contracts::conveyor_assert_v>(!empty())
 # define _GLIBCXX_PRECONDITION_NON_EMPTY_RANGE(_First, _Last) \
     pre<std::contracts::conveyor_assert_v>(_First != _Last)
+# define _GLIBCXX_PRECONDITION_NONZERO_DIVISOR(_Y) \
+    pre<std::contracts::conveyor_assert_v>(_Y != 0)
 #else
 # define _GLIBCXX_PRECONDITION_SUBSCRIPT(_N)
 # define _GLIBCXX_PRECONDITION_NONEMPTY()
 # define _GLIBCXX_PRECONDITION_NON_EMPTY_RANGE(_First, _Last)
+# define _GLIBCXX_PRECONDITION_NONZERO_DIVISOR(_Y)
 #endif
 
 // Same as _GLIBCXX_CONVEYOR just above, but for a function template
@@ -865,6 +868,28 @@ namespace std
 #  define _GLIBCXX_CONVEYOR_AUTO conveyor(auto)
 # else
 #  define _GLIBCXX_CONVEYOR_AUTO
+# endif
+#endif
+
+// Same as _GLIBCXX_CONVEYOR above, but for a function whose safety as a
+// conveyor function depends on a *declared* precondition (one of the
+// _GLIBCXX_PRECONDITION_* macros just above), not on being unconditionally
+// safe. Gated on _GLIBCXX_PRECONDITION_ASSERTIONS rather than plain
+// _GLIBCXX_CONVEYOR_ASSERTIONS: since the former only holds when the latter
+// also does (see this file's own auto-#undef a few hundred lines up), a
+// function tagged with this macro can never end up 'conveyor' without its
+// own backing pre<>() also being present -- unlike using plain
+// _GLIBCXX_CONVEYOR here, which would let a build with
+// _GLIBCXX_CONVEYOR_ASSERTIONS defined but not _GLIBCXX_PRECONDITION_
+// ASSERTIONS tag the function conveyor while its own precondition macro
+// independently collapses to nothing, leaving a conveyor function with an
+// undeclared obligation backing its own body. See bits/sat_arith.h's own
+// saturating_div for the first user of this macro.
+#ifndef _GLIBCXX_CONVEYOR_PRE
+# if defined(_GLIBCXX_PRECONDITION_ASSERTIONS) && defined(__cpp_contract_control_objects)
+#  define _GLIBCXX_CONVEYOR_PRE conveyor
+# else
+#  define _GLIBCXX_CONVEYOR_PRE
 # endif
 #endif
 

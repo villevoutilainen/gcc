@@ -39,6 +39,7 @@
 #ifdef __glibcxx_saturation_arithmetic // C++ >= 26
 
 #include <concepts>
+#include <debug/assertions.h>
 #include <ext/numeric_traits.h>
 
 namespace std _GLIBCXX_VISIBILITY(default)
@@ -48,9 +49,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   /// Add two integers, with saturation in case of overflow.
   template<typename _Tp> requires __is_signed_or_unsigned_integer<_Tp>::value
     constexpr _Tp
-    saturating_add(_Tp __x, _Tp __y) noexcept
+    saturating_add(_Tp __x, _Tp __y) noexcept _GLIBCXX_CONVEYOR
     {
-      _Tp __z;
+      _Tp __z{};
       if (!__builtin_add_overflow(__x, __y, &__z))
 	return __z;
       if constexpr (is_unsigned_v<_Tp>)
@@ -64,9 +65,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   /// Subtract one integer from another, with saturation in case of overflow.
   template<typename _Tp> requires __is_signed_or_unsigned_integer<_Tp>::value
     constexpr _Tp
-    saturating_sub(_Tp __x, _Tp __y) noexcept
+    saturating_sub(_Tp __x, _Tp __y) noexcept _GLIBCXX_CONVEYOR
     {
-      _Tp __z;
+      _Tp __z{};
       if (!__builtin_sub_overflow(__x, __y, &__z))
 	return __z;
       if constexpr (is_unsigned_v<_Tp>)
@@ -80,9 +81,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   /// Multiply two integers, with saturation in case of overflow.
   template<typename _Tp> requires __is_signed_or_unsigned_integer<_Tp>::value
     constexpr _Tp
-    saturating_mul(_Tp __x, _Tp __y) noexcept
+    saturating_mul(_Tp __x, _Tp __y) noexcept _GLIBCXX_CONVEYOR
     {
-      _Tp __z;
+      _Tp __z{};
       if (!__builtin_mul_overflow(__x, __y, &__z))
 	return __z;
       if constexpr (is_unsigned_v<_Tp>)
@@ -96,9 +97,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   /// Divide one integer by another, with saturation in case of overflow.
   template<typename _Tp> requires __is_signed_or_unsigned_integer<_Tp>::value
     constexpr _Tp
-    saturating_div(_Tp __x, _Tp __y) noexcept
+    saturating_div(_Tp __x, _Tp __y) noexcept _GLIBCXX_CONVEYOR_PRE
+      _GLIBCXX_PRECONDITION_NONZERO_DIVISOR(__y)
     {
-      __glibcxx_assert(__y != 0);
+      __glibcxx_requires_nonzero_divisor(__y);
       if constexpr (is_signed_v<_Tp>)
 	if (__x == __gnu_cxx::__int_traits<_Tp>::__min && __y == _Tp(-1))
 	  return __gnu_cxx::__int_traits<_Tp>::__max;
@@ -110,7 +112,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     requires __is_signed_or_unsigned_integer<_Res>::value
       && __is_signed_or_unsigned_integer<_Tp>::value
     constexpr _Res
-    saturating_cast(_Tp __x) noexcept
+    saturating_cast(_Tp __x) noexcept _GLIBCXX_CONVEYOR
     {
       constexpr int __digits_R = __gnu_cxx::__int_traits<_Res>::__digits;
       constexpr int __digits_T = __gnu_cxx::__int_traits<_Tp>::__digits;
