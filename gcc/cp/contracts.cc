@@ -304,6 +304,185 @@ match_contract_specifiers (location_t oldloc, tree old_contracts,
   return true;
 }
 
+/* -Wfunction-pointer-contract-mismatch: silent counterpart of
+   mismatched_contracts_p above, comparing two CONTRACT_STATEMENTs for
+   structural equality without emitting any diagnostics -- used to
+   decide whether copying a function-pointer value between two decls
+   that each carry their own contract should warn, not to accept/reject
+   a redeclaration.  */
+
+static bool
+contracts_equal_p (tree c1, tree c2)
+{
+  if (TREE_CODE (c1) != TREE_CODE (c2))
+    return false;
+
+  tree t1 = cp_fully_fold_init (CONTRACT_CONDITION (c1));
+  tree t2 = cp_fully_fold_init (CONTRACT_CONDITION (c2));
+
+  bool saved_comparing_contracts = comparing_contracts;
+  comparing_contracts = true;
+  bool matching_p = cp_tree_equal (t1, t2);
+  comparing_contracts = saved_comparing_contracts;
+  if (!matching_p)
+    return false;
+
+  tree ctrl1 = CONTRACT_CONTROL_OBJECT (c1);
+  tree ctrl2 = CONTRACT_CONTROL_OBJECT (c2);
+  if ((ctrl1 != NULL_TREE) != (ctrl2 != NULL_TREE))
+    return false;
+  if (ctrl1 != NULL_TREE)
+    {
+      tree cf1 = cp_fully_fold_init (ctrl1);
+      tree cf2 = cp_fully_fold_init (ctrl2);
+
+      saved_comparing_contracts = comparing_contracts;
+      comparing_contracts = true;
+      bool ctrl_matching_p = cp_tree_equal (cf1, cf2);
+      comparing_contracts = saved_comparing_contracts;
+      if (!ctrl_matching_p)
+	return false;
+    }
+
+  return true;
+}
+
+/* -Wfunction-pointer-contract-mismatch: silent counterpart of
+   match_contract_specifiers above: true iff SPEC1 and SPEC2 (each a
+   chain as returned by get_fn_contract_specifiers) carry the exact same
+   sequence of contracts, with no diagnostics.  Two NULL chains are
+   equal (neither decl has a contract of its own).  */
+
+static bool
+contract_specifiers_equal_p (tree spec1, tree spec2)
+{
+  while (spec1 && spec2)
+    {
+      if (!contract_specifier_valid_p (spec1)
+	  || !contract_specifier_valid_p (spec2))
+	return false;
+      if (!contracts_equal_p (CONTRACT_STATEMENT (spec1),
+			       CONTRACT_STATEMENT (spec2)))
+	return false;
+      spec1 = TREE_CHAIN (spec1);
+      spec2 = TREE_CHAIN (spec2);
+    }
+  return !spec1 && !spec2;
+}
+
+/* -Wfunction-pointer-contract-mismatch: resolve EXPR down to the single
+   decl whose own get_fn_contract_specifiers entry should be consulted
+   when EXPR is copied into a function-pointer/reference-typed
+   destination -- a bare function name or '&fn' (both collapse to the
+   same ADDR_EXPR (FUNCTION_DECL) shape after decay_conversion), or a
+   function-pointer-typed VAR_DECL/PARM_DECL used directly, or a
+   FIELD_DECL named via a COMPONENT_REF.  NULL_TREE for anything else
+   (a computed/complex expression), so the warning stays silent rather
+   than guessing.  Modeled on oa_object_identity_decl's own stripping
+   idiom above.  Exported (declared in contracts.h) so callers outside
+   this file (typeck.cc's assignment handling, which only has the raw
+   LHS expression, not an already-resolved decl) can resolve a
+   destination the same way maybe_warn_fnptr_contract_mismatch resolves
+   a source.  */
+
+tree
+fnptr_contract_owner (tree expr)
+{
+  if (expr == NULL_TREE || expr == error_mark_node)
+    return NULL_TREE;
+
+  expr = STRIP_ANY_LOCATION_WRAPPER (expr);
+  while (TREE_CODE (expr) == NON_LVALUE_EXPR
+	 || TREE_CODE (expr) == NOP_EXPR
+	 || TREE_CODE (expr) == CONVERT_EXPR
+	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
+    expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+
+  if (TREE_CODE (expr) == ADDR_EXPR)
+    expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+
+  if (TREE_CODE (expr) == FUNCTION_DECL
+      || VAR_P (expr)
+      || TREE_CODE (expr) == PARM_DECL)
+    return expr;
+
+  if (TREE_CODE (expr) == COMPONENT_REF)
+    return TREE_OPERAND (expr, 1);
+
+  return NULL_TREE;
+}
+
+/* -Wfunction-pointer-contract-mismatch: warn at LOC if copying SRC_EXPR
+   into DEST_DECL (a function-pointer/reference-typed VAR_DECL, PARM_
+   DECL, or FIELD_DECL) would silently change which contract governs
+   calls made through the destination.
+
+   Deliberately asymmetric, matching this fork's own object-decl-
+   callable semantics (a contract attached to a function-pointer object
+   always governs calls made through that object, regardless of what's
+   currently assigned to it -- see maybe_object_contract_check_call):
+
+     - destination has no contract, source does: warn.  The source
+       function's contract is real, but nothing will check it once
+       called only through the (uncontracted) destination -- a real,
+       silent loss of enforcement.
+     - destination has a contract, source doesn't: silent.  This is the
+       ordinary, intended idiom -- the destination's own contract keeps
+       governing regardless of what gets assigned to it.
+     - both have contracts, and they differ: warn.  The destination's
+       contract still governs at runtime, but this is likely a mistake
+       worth flagging.
+     - both have the same contract, or neither has one: silent.
+
+   No subsumption reasoning anywhere -- purely structural equality via
+   contract_specifiers_equal_p, or nothing.  */
+
+void
+maybe_warn_fnptr_contract_mismatch (location_t loc, tree dest_decl,
+				     tree src_expr)
+{
+  if (!warn_function_pointer_contract_mismatch)
+    return;
+  if (dest_decl == NULL_TREE || dest_decl == error_mark_node)
+    return;
+  if (src_expr == NULL_TREE || src_expr == error_mark_node)
+    return;
+
+  tree dest_type = TREE_TYPE (dest_decl);
+  if (dest_type == NULL_TREE
+      || (!TYPE_PTRFN_P (dest_type)
+	  && !TYPE_REFFN_P (dest_type)
+	  && !TYPE_PTRMEMFUNC_P (dest_type)))
+    return;
+
+  if (warning_suppressed_p (src_expr, OPT_Wfunction_pointer_contract_mismatch))
+    return;
+
+  tree src_owner = fnptr_contract_owner (src_expr);
+  if (src_owner == NULL_TREE)
+    return;
+
+  tree dest_spec = get_fn_contract_specifiers (dest_decl);
+  tree src_spec = get_fn_contract_specifiers (src_owner);
+
+  if (dest_spec == NULL_TREE)
+    {
+      if (src_spec != NULL_TREE)
+	warning_at (loc, OPT_Wfunction_pointer_contract_mismatch,
+		    "assigning %qD, which has its own contract, to "
+		    "%qD, which has none", src_owner, dest_decl);
+      return;
+    }
+
+  if (src_spec == NULL_TREE)
+    return;
+
+  if (!contract_specifiers_equal_p (dest_spec, src_spec))
+    warning_at (loc, OPT_Wfunction_pointer_contract_mismatch,
+		"assigning %qD, whose contract differs from that of "
+		"%qD", src_owner, dest_decl);
+}
+
 static bool contract_control_is_ignored (tree, contract_check_side);
 static bool contract_control_assumable (tree, contract_check_side);
 static bool contract_control_forces_client_side (tree, contract_check_side);

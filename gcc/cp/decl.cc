@@ -8566,6 +8566,10 @@ check_initializer (tree decl, tree init, int flags, vec<tree, va_gc> **cleanups)
     /* We will have already complained.  */
     return NULL_TREE;
 
+  if (init != NULL_TREE)
+    maybe_warn_fnptr_contract_mismatch (DECL_SOURCE_LOCATION (decl), decl,
+					init);
+
   if (TREE_CODE (type) == ARRAY_TYPE)
     {
       if (check_array_initializer (decl, type, init))

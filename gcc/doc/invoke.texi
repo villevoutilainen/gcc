@@ -278,7 +278,8 @@ in the following sections.
 -Wno-deprecated-literal-operator  -Wdeprecated-variadic-comma-omission
 -Weffc++  -Wno-elaborated-enum-base
 -Wno-exceptions  -Wno-expose-global-module-tu-local  -Wno-external-tu-local
--Wextra-semi  -Wno-global-module  -Wno-inaccessible-base
+-Wextra-semi  -Wfunction-pointer-contract-mismatch
+-Wno-global-module  -Wno-inaccessible-base
 -Wno-inherited-variadic-ctor  -Wno-init-list-lifetime
 -Winvalid-constexpr  -Winvalid-imported-macros
 -Wno-invalid-offsetof  -Wno-invalid-specialization  -Wno-literal-suffix
@@ -4210,6 +4211,40 @@ The warning can be disabled by using the @code{gnu::no_dangling} attribute
 (@pxref{C++ Attributes}).
 
 This warning is enabled by @option{-Wextra}.
+
+@opindex Wfunction-pointer-contract-mismatch
+@opindex Wno-function-pointer-contract-mismatch
+@item -Wfunction-pointer-contract-mismatch @r{(C++ and Objective-C++ only)}
+Warn when a function-pointer value is copied (by assignment,
+initialization, or as a function-call argument) between a source and a
+destination that each carry their own, independently-declared D4324
+contract specifier, and those contracts differ.
+Function-pointer-typed variables, parameters, and static data members
+can each carry their own @code{pre}/@code{post} clause, independent of
+whatever function is currently assigned to them; that clause governs
+every call made through the object, regardless of what it points to.
+
+@smallexample
+int f (int x) pre<>(x > 0) @{ return x; @}
+int (*fp) (int x); // fp has no contract of its own
+fp = f; // warns: f's contract is silently unenforced through fp
+@end smallexample
+
+Assigning a plain, uncontracted function into a function pointer that
+already has its own contract does not warn, since the destination's own
+contract keeps governing regardless of the source. Assigning between
+two pointers that both carry contracts, but different ones, does warn,
+even though the destination's contract still governs at run time, since
+this is likely a mistake. No attempt is made to reason about whether
+one contract implies another; only exact matches are considered
+equivalent.
+
+The warning can be silenced for a specific copy with an explicit
+@code{static_cast}, @code{reinterpret_cast}, or C-style cast to the
+destination's type.
+
+This is a fork-specific, non-standard extension and is not enabled by
+@option{-Wall} or @option{-Wextra}.
 
 @opindex Wdelete-non-virtual-dtor
 @opindex Wno-delete-non-virtual-dtor

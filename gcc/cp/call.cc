@@ -10707,6 +10707,11 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
     {
       tree current_arg = (*args)[arg_index];
 
+      if (parmd)
+	maybe_warn_fnptr_contract_mismatch
+	  (cp_expr_loc_or_loc (current_arg, input_location),
+	   parmd, current_arg);
+
       /* If the argument is NULL and used to (implicitly) instantiate a
          template function (and bind one of the template arguments to
          the type of 'long int'), we don't want to warn about passing NULL

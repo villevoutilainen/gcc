@@ -1591,6 +1591,8 @@ digest_nsdmi_init (tree decl, tree init, tsubst_flags_t complain)
 {
   gcc_assert (TREE_CODE (decl) == FIELD_DECL);
 
+  maybe_warn_fnptr_contract_mismatch (DECL_SOURCE_LOCATION (decl), decl, init);
+
   tree type = TREE_TYPE (decl);
   if (DECL_BIT_FIELD_TYPE (decl))
     type = DECL_BIT_FIELD_TYPE (decl);

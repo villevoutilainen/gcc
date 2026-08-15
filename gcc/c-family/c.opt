@@ -875,6 +875,10 @@ Wfree-labels
 C ObjC Var(warn_free_labels) Init(-1) Warning
 Warn about labels on declarations and at the end of compound statements.
 
+Wfunction-pointer-contract-mismatch
+C++ ObjC++ Var(warn_function_pointer_contract_mismatch) Warning
+Warn when a function-pointer value is copied between a source and destination whose own declared D4324 contract specifiers differ.
+
 Wglobal-module
 C++ ObjC++ Var(warn_global_module) Warning Init(1)
 Warn about the global module fragment not containing only preprocessing directives.

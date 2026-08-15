@@ -9301,6 +9301,12 @@ build_static_cast (location_t loc, tree type, tree oexpr,
 	{
 	  maybe_warn_about_useless_cast (loc, type, expr, complain);
 	  maybe_warn_about_cast_ignoring_quals (loc, type, complain);
+	  /* An explicit static_cast is this fork's escape hatch for
+	     -Wfunction-pointer-contract-mismatch: the user has said
+	     explicitly what they want, so don't second-guess them.  */
+	  if (TYPE_PTRFN_P (type) || TYPE_REFFN_P (type)
+	      || TYPE_PTRMEMFUNC_P (type))
+	    suppress_warning (result, OPT_Wfunction_pointer_contract_mismatch);
 	}
       if (processing_template_decl)
 	goto tmpl;
@@ -9637,6 +9643,12 @@ build_reinterpret_cast (location_t loc, tree type, tree expr,
     {
       maybe_warn_about_useless_cast (loc, type, expr, complain);
       maybe_warn_about_cast_ignoring_quals (loc, type, complain);
+      /* An explicit reinterpret_cast is this fork's escape hatch for
+	 -Wfunction-pointer-contract-mismatch: the user has said
+	 explicitly what they want, so don't second-guess them.  */
+      if (TYPE_PTRFN_P (type) || TYPE_REFFN_P (type)
+	  || TYPE_PTRMEMFUNC_P (type))
+	suppress_warning (r, OPT_Wfunction_pointer_contract_mismatch);
     }
   protected_set_expr_location (r, loc);
   return r;
@@ -9932,6 +9944,16 @@ cp_build_c_cast (location_t loc, tree type, tree expr,
 	{
 	  maybe_warn_about_useless_cast (loc, type, value, complain);
 	  maybe_warn_about_cast_ignoring_quals (loc, type, complain);
+	  /* An explicit C-style cast is this fork's escape hatch for
+	     -Wfunction-pointer-contract-mismatch: the user has said
+	     explicitly what they want, so don't second-guess them.
+	     (This is the common case: casting to a function pointer
+	     type that's already identical except possibly for its
+	     attached D4324 contract resolves here, as a trivial
+	     const_cast.)  */
+	  if (TYPE_PTRFN_P (type) || TYPE_REFFN_P (type)
+	      || TYPE_PTRMEMFUNC_P (type))
+	    suppress_warning (result, OPT_Wfunction_pointer_contract_mismatch);
 	}
       else if (complain & tf_error)
 	build_const_cast_1 (loc, type, value, tf_error, &valid_p);
@@ -9957,6 +9979,13 @@ cp_build_c_cast (location_t loc, tree type, tree expr,
       maybe_warn_about_useless_cast (loc, type, value, complain);
       maybe_warn_about_cast_ignoring_quals (loc, type, complain);
 
+      /* An explicit C-style cast is this fork's escape hatch for
+	 -Wfunction-pointer-contract-mismatch: the user has said
+	 explicitly what they want, so don't second-guess them.  */
+      if (TYPE_PTRFN_P (type) || TYPE_REFFN_P (type)
+	  || TYPE_PTRMEMFUNC_P (type))
+	suppress_warning (result, OPT_Wfunction_pointer_contract_mismatch);
+
       /* Non-class rvalues always have cv-unqualified type.  */
       if (!CLASS_TYPE_P (type))
 	type = TYPE_MAIN_VARIANT (type);
@@ -9972,6 +10001,7 @@ cp_build_c_cast (location_t loc, tree type, tree expr,
 	{
 	  result = build_const_cast_1 (loc, type, result, tf_none, &valid_p);
 	  gcc_assert (valid_p);
+	  suppress_warning (result, OPT_Wfunction_pointer_contract_mismatch);
 	}
       return result;
     }
@@ -10424,6 +10454,9 @@ cp_build_modify_expr (location_t loc, tree lhs, enum tree_code modifycode,
 			       from_array, complain);
       goto ret;
     }
+
+  if (tree lhs_owner = fnptr_contract_owner (olhs))
+    maybe_warn_fnptr_contract_mismatch (loc, lhs_owner, rhs);
 
   if (modifycode == INIT_EXPR)
     /* Calls with INIT_EXPR are all direct-initialization, so don't set
