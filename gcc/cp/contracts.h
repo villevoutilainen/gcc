@@ -736,6 +736,20 @@ extern void remove_decl_with_fn_contracts_specifiers (tree);
 extern void remove_fn_contract_specifiers	(tree);
 extern void update_contract_arguments		(tree, tree);
 
+/* -Wfunction-pointer-contract-mismatch: resolve EXPR down to the decl
+   whose own get_fn_contract_specifiers entry governs it (a function
+   name/'&fn', or a function-pointer-typed VAR_DECL/PARM_DECL/
+   FIELD_DECL used directly), or NULL_TREE if EXPR isn't that simple.
+   See the function's own comment in contracts.cc.  */
+extern tree fnptr_contract_owner		(tree);
+
+/* -Wfunction-pointer-contract-mismatch: warn when copying SRC_EXPR into
+   function-pointer/reference-typed DEST_DECL would change which
+   contract governs calls made through the destination.  See the
+   function's own comment in contracts.cc for the exact (deliberately
+   asymmetric) semantics.  */
+extern void maybe_warn_fnptr_contract_mismatch	(location_t, tree, tree);
+
 extern tree make_postcondition_variable		(cp_expr);
 extern tree make_postcondition_variable		(cp_expr, tree);
 extern void check_param_in_postcondition	(tree, location_t);
