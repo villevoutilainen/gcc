@@ -452,15 +452,29 @@ namespace contracts
 
   inline constexpr review review_v{};
 
+  // Unlike default_control/review above, mandatory really does mean
+  // mandatory: is_ignored is unconditionally false (not just false-under-
+  // enforce/observe, the way it used to be) and assumable is
+  // unconditionally false too -- there is no -fcontract-evaluation-
+  // semantic=ignore escape hatch that turns this into an unchecked
+  // optimizer assumption instead of a real runtime check. Previously,
+  // is_ignored returned true under =ignore specifically (with assumable
+  // true alongside it, so the predicate was still handed to the optimizer
+  // as an assumption even though never actually evaluated -- see
+  // std::contracts::assume_v's own, deliberately different, "always
+  // ignored+assumed regardless of TU config" contrast); found to
+  // contradict this type's own name and its operator()'s own behavior
+  // (which already unconditionally terminates on failure, "regardless of
+  // semantic," independent of is_ignored/assumable). Every evaluation
+  // semantic now gets the identical, real, enforced check below.
   struct mandatory {
     static constexpr bool
-    is_ignored(assertion_static_info __info) noexcept
-    { return __info.semantic() == evaluation_semantic::ignore; }
+    is_ignored(assertion_static_info) noexcept { return false; }
 
     static constexpr bool
     constify(assertion_static_info) noexcept { return false; }
     static constexpr bool
-    assumable(assertion_static_info) noexcept { return true; }
+    assumable(assertion_static_info) noexcept { return false; }
 
     constexpr void
     operator()(const assertion_context& __ctx) const noexcept
@@ -485,12 +499,13 @@ namespace contracts
   inline constexpr mandatory mandatory_v{};
 
   // Backs libstdc++'s own internal precondition checks (__glibcxx_assert,
-  // active under _GLIBCXX_ASSERTIONS): unlike every other control type
-  // above, is_ignored is unconditionally false, not just false-under-
-  // ignore-like mandatory -- there is no "observe" or "ignore" behavior
-  // for this type at all, ever, regardless of -fcontract-evaluation-
-  // semantic=. What differs is only *how* it reports/terminates on
-  // failure, controlled by two separate, purely compile-time macros:
+  // active under _GLIBCXX_ASSERTIONS): unlike default_control/review
+  // above, is_ignored is unconditionally false -- there is no "observe" or
+  // "ignore" behavior for this type at all, ever, regardless of
+  // -fcontract-evaluation-semantic= (the same is now true of mandatory
+  // above too). What differs from mandatory is only *how* it reports/
+  // terminates on failure, controlled by two separate, purely compile-time
+  // macros:
   //
   //   _GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER, together with
   //   _GLIBCXX_ASSERTIONS itself, routes through the same replaceable
