@@ -483,10 +483,10 @@ maybe_warn_fnptr_contract_mismatch (location_t loc, tree dest_decl,
 		"%qD", src_owner, dest_decl);
 }
 
-static bool contract_control_is_ignored (tree, contract_check_side);
-static bool contract_control_assumable (tree, contract_check_side);
-static bool contract_control_forces_client_side (tree, contract_check_side);
-static bool contract_control_forces_definition_side (tree, contract_check_side);
+static bool contract_control_is_ignored (tree, contract_check_side, bool = false);
+static bool contract_control_assumable (tree, contract_check_side, bool = false);
+static bool contract_control_forces_client_side (tree, contract_check_side, bool = false);
+static bool contract_control_forces_definition_side (tree, contract_check_side, bool = false);
 static bool contract_is_inherited_p (tree);
 static bool contract_inherited_runs_on_side (tree, contract_check_side);
 
@@ -4558,11 +4558,25 @@ build_assertion_static_info_value (contract_check_side side, tree info_type)
    it folds to a compile-time true, 0 if it folds to false, and -1 if CTRL
    has no such usable compile-time member (no member by that name, not a
    static function, not callable with one assertion_static_info argument,
-   or doesn't constant-fold to a bool).  */
+   or doesn't constant-fold to a bool).
+
+   Once the member is confirmed to genuinely exist (past the checks
+   above), failing to constant-fold it is a real bug in CTRL -- a throw,
+   a call to a non-constexpr function, anything -- not a "this trait
+   wasn't provided" default, and unless QUIET is diagnosed as a hard
+   error rather than silently collapsed into the same -1 that an
+   absent member returns. QUIET must stay true for callers that may
+   run while some unrelated, syntactically enclosing expression is
+   itself being speculatively, quietly constant-evaluated (see
+   build_contract_control_constexpr_check's own callers): in that
+   case a real failure here must stay silent too, exactly like any
+   other quiet constexpr evaluation attempt, since the ordinary
+   (non-speculative) dispatch will raise this same error for real
+   if/when the trait is actually consulted outside such a context.  */
 
 static int
 contract_control_bool_member (tree ctrl, const char *name,
-			       contract_check_side side)
+			       contract_check_side side, bool quiet = false)
 {
   ctrl = contract_control_naming_type (ctrl);
   if (!ctrl || !CLASS_TYPE_P (ctrl))
@@ -4615,6 +4629,41 @@ contract_control_bool_member (tree ctrl, const char *name,
 				     LOOKUP_NORMAL, NULL, tf_none);
   tree val = (call && call != error_mark_node)
     ? maybe_constant_value (call) : NULL_TREE;
+  if (call && call != error_mark_node
+      && (!val || TREE_CODE (val) != INTEGER_CST)
+      && !quiet
+      && !processing_template_decl)
+    {
+      /* The member genuinely exists and is callable -- past this
+	 point a fold failure is a real bug in CTRL, not a "this trait
+	 wasn't provided" default, and must be diagnosed instead of
+	 silently collapsing to the same -1 sentinel absence uses.
+	 Re-run non-quiet purely to obtain the diagnostic: same idiom
+	 as cp_fold_immediate's consteval-escalation check
+	 (cp-gimplify.cc).
+
+	 The processing_template_decl guard matters independently of
+	 QUIET: this same query also runs while merely analyzing an
+	 uninstantiated template's own body (e.g. a control object
+	 used inside __glibcxx_assert within a template function that
+	 is never actually instantiated in this TU) -- GCC's
+	 cp_adjust_diagnostic_info (error.cc) automatically retags any
+	 error_at issued in that context as -Wtemplate-body, meant to
+	 be a downgradable, re-diagnosed-for-real-at-instantiation
+	 check, not an unconditional hard error the way a bare
+	 error_at here would be.  Skipping the loud path entirely
+	 during template-body-only analysis defers correctly to
+	 whatever real, non-dependent evaluation happens once (if
+	 ever) the template is actually instantiated with concrete
+	 arguments, matching that intended "speculative during the
+	 template body, real at instantiation" behavior instead of
+	 fighting it.  */
+      auto_diagnostic_group d;
+      location_t loc = cp_expr_loc_or_input_loc (call);
+      error_at (loc, "%qs for control object of type %qT does not "
+		"produce a constant expression", name, ctrl);
+      cxx_constant_value (call, tf_error);
+    }
   suppress_conveyor_restrictions_for_trait_query_p = saved_suppress;
   if (!call || call == error_mark_node)
     return -1;
@@ -4632,9 +4681,9 @@ contract_control_bool_member (tree ctrl, const char *name,
    existing evaluation-semantic path is used instead.  */
 
 static bool
-contract_control_is_ignored (tree ctrl, contract_check_side side)
+contract_control_is_ignored (tree ctrl, contract_check_side side, bool quiet)
 {
-  return contract_control_bool_member (ctrl, "is_ignored", side) == 1;
+  return contract_control_bool_member (ctrl, "is_ignored", side, quiet) == 1;
 }
 
 /* True if the control type CTRL opts into constification
@@ -4643,9 +4692,9 @@ contract_control_is_ignored (tree ctrl, contract_check_side side)
    constify.  */
 
 bool
-contract_control_constifies (tree ctrl, contract_check_side side)
+contract_control_constifies (tree ctrl, contract_check_side side, bool quiet)
 {
-  return contract_control_bool_member (ctrl, "constify", side) == 1;
+  return contract_control_bool_member (ctrl, "constify", side, quiet) == 1;
 }
 
 /* True if the control type CTRL's is_conveyor(cfg) returns true for the
@@ -4655,9 +4704,9 @@ contract_control_constifies (tree ctrl, contract_check_side side)
    is_conveyor getter, is not conveyor.  */
 
 bool
-contract_control_is_conveyor (tree ctrl, contract_check_side side)
+contract_control_is_conveyor (tree ctrl, contract_check_side side, bool quiet)
 {
-  return contract_control_bool_member (ctrl, "is_conveyor", side) == 1;
+  return contract_control_bool_member (ctrl, "is_conveyor", side, quiet) == 1;
 }
 
 /* True if the control type CTRL's is_symbolic(cfg) returns true for the
@@ -4669,9 +4718,9 @@ contract_control_is_conveyor (tree ctrl, contract_check_side side)
    usable is_symbolic getter, is not symbolic.  */
 
 bool
-contract_control_is_symbolic (tree ctrl, contract_check_side side)
+contract_control_is_symbolic (tree ctrl, contract_check_side side, bool quiet)
 {
-  return contract_control_bool_member (ctrl, "is_symbolic", side) == 1;
+  return contract_control_bool_member (ctrl, "is_symbolic", side, quiet) == 1;
 }
 
 /* True if the control type CTRL's assumable(cfg) returns true for the TU's
@@ -4679,9 +4728,9 @@ contract_control_is_symbolic (tree ctrl, contract_check_side side)
    optimizer as an assumption.  */
 
 static bool
-contract_control_assumable (tree ctrl, contract_check_side side)
+contract_control_assumable (tree ctrl, contract_check_side side, bool quiet)
 {
-  return contract_control_bool_member (ctrl, "assumable", side) == 1;
+  return contract_control_bool_member (ctrl, "assumable", side, quiet) == 1;
 }
 
 /* True if the control type CTRL's omit_comment(cfg) returns true for the
@@ -4691,9 +4740,10 @@ contract_control_assumable (tree ctrl, contract_check_side side)
    keeps the existing behaviour of always storing it.  */
 
 static bool
-contract_control_omits_comment (tree ctrl, contract_check_side side)
+contract_control_omits_comment (tree ctrl, contract_check_side side,
+				 bool quiet = false)
 {
-  return contract_control_bool_member (ctrl, "omit_comment", side) == 1;
+  return contract_control_bool_member (ctrl, "omit_comment", side, quiet) == 1;
 }
 
 /* True if the control type CTRL's omit_source_location(cfg) returns true
@@ -4702,9 +4752,11 @@ contract_control_omits_comment (tree ctrl, contract_check_side side)
    Optional, same default-false behaviour as contract_control_omits_comment.  */
 
 static bool
-contract_control_omits_source_location (tree ctrl, contract_check_side side)
+contract_control_omits_source_location (tree ctrl, contract_check_side side,
+					 bool quiet = false)
 {
-  return contract_control_bool_member (ctrl, "omit_source_location", side) == 1;
+  return contract_control_bool_member (ctrl, "omit_source_location", side,
+					quiet) == 1;
 }
 
 /* True if the control type CTRL's force_client_side_check(cfg) returns true
@@ -4715,9 +4767,11 @@ contract_control_omits_source_location (tree ctrl, contract_check_side side)
    default-false behaviour as contract_control_omits_comment.  */
 
 static bool
-contract_control_forces_client_side (tree ctrl, contract_check_side side)
+contract_control_forces_client_side (tree ctrl, contract_check_side side,
+				      bool quiet)
 {
-  return contract_control_bool_member (ctrl, "force_client_side_check", side) == 1;
+  return contract_control_bool_member (ctrl, "force_client_side_check", side,
+					quiet) == 1;
 }
 
 /* True if the control type CTRL's force_definition_side_check(cfg) returns
@@ -4726,9 +4780,11 @@ contract_control_forces_client_side (tree ctrl, contract_check_side side)
    only at the function's own definition, never via a caller-side wrapper.  */
 
 static bool
-contract_control_forces_definition_side (tree ctrl, contract_check_side side)
+contract_control_forces_definition_side (tree ctrl, contract_check_side side,
+					  bool quiet)
 {
-  return contract_control_bool_member (ctrl, "force_definition_side_check", side) == 1;
+  return contract_control_bool_member (ctrl, "force_definition_side_check",
+					side, quiet) == 1;
 }
 
 /* True if the control type CTRL's inherited(cfg) returns true for SIDE,
@@ -4738,9 +4794,10 @@ contract_control_forces_definition_side (tree ctrl, contract_check_side side)
    maybe_inherit_virtual_contract.  */
 
 static bool
-contract_control_inherited (tree ctrl, contract_check_side side)
+contract_control_inherited (tree ctrl, contract_check_side side,
+			     bool quiet = false)
 {
-  return contract_control_bool_member (ctrl, "inherited", side) == 1;
+  return contract_control_bool_member (ctrl, "inherited", side, quiet) == 1;
 }
 
 /* If the control type CTRL provides the D4324 dispatch operator
@@ -19583,7 +19640,7 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
   gcc_checking_assert (ctrl);
   contract_check_side side = contract_side_of (contract, fndecl);
 
-  if (contract_control_is_ignored (ctrl, side))
+  if (contract_control_is_ignored (ctrl, side, quiet))
     return void_node;
 
   tree op = contract_control_operator (ctrl);
@@ -19616,7 +19673,7 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
      build_predicate_constexpr_thunk on why this thunk must never be
      scheduled for real code generation.  */
 
-  tree comment = contract_control_omits_comment (ctrl, side)
+  tree comment = contract_control_omits_comment (ctrl, side, quiet)
     ? NULL_TREE : CONTRACT_COMMENT (contract);
   if (!comment)
     /* Empty, not null: matches the "static empty string, never a null
@@ -19646,7 +19703,7 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
   tree ctor = build_constructor_va
     (ctx_type, 7,
      f0, comment,
-     f1, (contract_control_omits_source_location (ctrl, side)
+     f1, (contract_control_omits_source_location (ctrl, side, quiet)
 	  ? build_constructor (TREE_TYPE (f1), NULL)
 	  : build_real_source_location_value
 	      (loc, TREE_TYPE (f1),

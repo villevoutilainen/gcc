@@ -203,9 +203,9 @@ extern tree copy_and_remap_contracts		(tree, tree, contract_match_kind = cmk_all
 extern tree constify_contract_access		(tree);
 extern tree view_as_const			(tree);
 extern contract_check_side contract_side_of	(tree, tree);
-extern bool contract_control_constifies		(tree, contract_check_side);
-extern bool contract_control_is_conveyor		(tree, contract_check_side);
-extern bool contract_control_is_symbolic		(tree, contract_check_side);
+extern bool contract_control_constifies		(tree, contract_check_side, bool = false);
+extern bool contract_control_is_conveyor		(tree, contract_check_side, bool = false);
+extern bool contract_control_is_symbolic		(tree, contract_check_side, bool = false);
 extern tree contract_default_control_object		(location_t);
 extern void maybe_inherit_virtual_contract		(tree, tree);
 extern void resolve_object_address_in_function		(tree);
