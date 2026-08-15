@@ -766,10 +766,16 @@ namespace contracts
     template <typename _Tp>
     concept semantic_computation_label
       = assertion_control_object<_Tp>
-	// Static, not an instance call: consulted from is_ignored,
-	// which the compiler always dispatches statically, with no
-	// real instance available (see label_base::is_ignored).
-	&& requires (evaluation_semantic __s) { _Tp::compute_semantic (__s); };
+	// A genuine instance call, matching the paper's own
+	// semantic_computation_label concept (which additionally requires
+	// the result to be exactly evaluation_semantic -- not checked
+	// here, same tradeoff as every other facet concept in this file:
+	// see the "dependency-free" comment above): the compiler now
+	// dispatches is_ignored (see label_base::is_ignored) against the
+	// real control object, so compute_semantic can be a real,
+	// per-instance member instead of being forced static.
+	&& requires (const _Tp __t, evaluation_semantic __s)
+	     { __t.compute_semantic (__s); };
 
     template <typename... _Dims>
     struct dimension_list { };
@@ -788,9 +794,11 @@ namespace contracts
 
     template <typename _Tp>
     concept identification_label
-      // Also static, for the same reason as semantic_computation_label
-      // above.
-      = assertion_control_object<_Tp> && requires { _Tp::group_names; };
+      // Instance access, matching the paper: group_names may be a real,
+      // per-instance member now (see semantic_computation_label above
+      // for why this no longer needs to be static).
+      = assertion_control_object<_Tp>
+	&& requires (const _Tp __t) { __t.group_names; };
 
     template <typename _Tp>
     concept compute_comment_label
@@ -1010,6 +1018,15 @@ namespace contracts
     // operator() itself -- only whichever P3400-shaped facet members it
     // wants to opt into. Third-party label authors are meant to use
     // this exactly the same way.
+    //
+    // is_ignored/constify/assumable/__configured_semantic/
+    // __effective_semantic are non-static (const instance) methods,
+    // matching the paper: the compiler dispatches all of these against
+    // the real, constant-evaluated control object (see
+    // contract_control_bool_member in gcc/cp/contracts.cc), not a
+    // dummy placeholder, so compute_semantic/group_names below are free
+    // to be genuine per-instance members instead of being forced
+    // static.
     template <typename _Self>
     struct label_base
     {
@@ -1022,30 +1039,31 @@ namespace contracts
       // assertion_static_info (ctx.static_info()), decides both
       // whether to skip entirely (is_ignored) and, when not skipped,
       // what to report and whether to terminate (operator()).
-      static constexpr evaluation_semantic
-      __configured_semantic (assertion_static_info __info) noexcept
+      constexpr evaluation_semantic
+      __configured_semantic (assertion_static_info __info) const noexcept
       {
 	evaluation_semantic __configured = __info.semantic ();
 	if constexpr (identification_label<_Self>)
 	  {
 	    evaluation_semantic __override;
-	    if (__group_config_lookup (_Self::group_names, __override))
+	    if (__group_config_lookup (static_cast<const _Self&> (*this).group_names,
+					__override))
 	      __configured = __override;
 	  }
 	return __configured;
       }
 
-      static constexpr evaluation_semantic
-      __effective_semantic (evaluation_semantic __configured) noexcept
+      constexpr evaluation_semantic
+      __effective_semantic (evaluation_semantic __configured) const noexcept
       {
 	if constexpr (semantic_computation_label<_Self>)
-	  return _Self::compute_semantic (__configured);
+	  return static_cast<const _Self&> (*this).compute_semantic (__configured);
 	else
 	  return __configured;
       }
 
-      static constexpr bool
-      is_ignored (assertion_static_info __info)
+      constexpr bool
+      is_ignored (assertion_static_info __info) const
       {
 	evaluation_semantic __effective
 	  = __effective_semantic (__configured_semantic (__info));
@@ -1070,14 +1088,14 @@ namespace contracts
       // Matches real C++26/P2900 constification semantics
       // unconditionally, unlike this branch's own default_control
       // (which deviates for reasons specific to its own design).
-      static constexpr bool
-      constify (assertion_static_info) noexcept { return true; }
+      constexpr bool
+      constify (assertion_static_info) const noexcept { return true; }
 
       // P3400 doesn't standardize an "assume" semantic yet; this
       // branch's existing, separate assume_v is untouched and not
       // combinable with this label framework.
-      static constexpr bool
-      assumable (assertion_static_info) noexcept { return false; }
+      constexpr bool
+      assumable (assertion_static_info) const noexcept { return false; }
 
       void
       operator() (const assertion_context& __ctx) const
@@ -1191,8 +1209,8 @@ namespace contracts
       using assertion_control_object = __always_t;
       static constexpr evaluation_semantic_set allowed_semantics
 	= evaluation_semantic_set (_Sem);
-      static constexpr evaluation_semantic
-      compute_semantic (evaluation_semantic) noexcept { return _Sem; }
+      constexpr evaluation_semantic
+      compute_semantic (evaluation_semantic) const noexcept { return _Sem; }
     };
     inline constexpr __always_t<evaluation_semantic::enforce> always_enforce{};
     inline constexpr __always_t<evaluation_semantic::quick_enforce> always_quick_enforce{};
@@ -1215,8 +1233,8 @@ namespace contracts
     struct review_t : label_base<review_t>
     {
       using assertion_control_object = review_t;
-      static constexpr evaluation_semantic
-      compute_semantic (evaluation_semantic __in) noexcept
+      constexpr evaluation_semantic
+      compute_semantic (evaluation_semantic __in) const noexcept
       { return is_terminating (__in) ? evaluation_semantic::observe : __in; }
     };
     inline constexpr review_t review{};
@@ -1238,8 +1256,8 @@ namespace contracts
     struct hardened_t : label_base<hardened_t>
     {
       using assertion_control_object = hardened_t;
-      static constexpr evaluation_semantic
-      compute_semantic (evaluation_semantic __in) noexcept
+      constexpr evaluation_semantic
+      compute_semantic (evaluation_semantic __in) const noexcept
       {
 	if (hardening_enabled ())
 	  return evaluation_semantic::quick_enforce;
@@ -1416,9 +1434,36 @@ namespace contracts
       _LHS _M_lhs;
       _RHS _M_rhs;
 
+      // Computed from the real _M_lhs/_M_rhs instances (unlike
+      // allowed_semantics/dimensions below, group_names can be a
+      // genuine per-instance member of _LHS/_RHS now -- see
+      // identification_label's own comment), so this must be a regular
+      // data member initialized at construction time, not a class-scope
+      // static constant: the identification_label concept requires bare
+      // member access (t.group_names, no call syntax), so it can't
+      // become a plain member function either. Declared after _M_lhs/
+      // _M_rhs so it's guaranteed to be constructed after them (C++
+      // initializes members in declaration order regardless of
+      // mem-initializer-list order).
+      __combined_group_names group_names;
+
+      static constexpr __combined_group_names
+      __compute_group_names (const _LHS& __l, const _RHS& __r) noexcept
+      {
+	group_name_view __lv{};
+	group_name_view __rv{};
+	if constexpr (identification_label<_LHS>)
+	  __lv = __l.group_names;
+	if constexpr (identification_label<_RHS>)
+	  __rv = __r.group_names;
+	return { __lv, __rv };
+      }
+
       constexpr
       combined_label (const _LHS& __lhs, const _RHS& __rhs) noexcept
-      : _M_lhs (__lhs), _M_rhs (__rhs) { }
+      : _M_lhs (__lhs), _M_rhs (__rhs),
+	group_names (__compute_group_names (_M_lhs, _M_rhs))
+      { }
 
       using dimensions = typename __combined_dimensions<_LHS, _RHS>::type;
 
@@ -1449,34 +1494,20 @@ namespace contracts
 	    return evaluation_semantic_set::all ();
 	} ();
 
-      // Static, not instance methods: both are consulted from
-      // label_base::is_ignored, which the compiler always dispatches
-      // statically (see the semantic_computation_label/
-      // identification_label concepts' own comments above). Computed
-      // purely from _LHS/_RHS's own static members -- never from
-      // _M_lhs/_M_rhs's instance values, which combined_label only
-      // keeps around for the operator()-driven facets below.
-      static constexpr evaluation_semantic
-      compute_semantic (evaluation_semantic __s) noexcept
+      // Non-static, matching the paper's own semantic_computation_label
+      // concept (see its comment above): chained left to right over the
+      // real _M_lhs/_M_rhs instances, exactly like compute_comment/
+      // compute_message below, so a stateful operand's compute_semantic
+      // genuinely sees its own instance data, not just its type.
+      constexpr evaluation_semantic
+      compute_semantic (evaluation_semantic __s) const noexcept
       {
 	if constexpr (semantic_computation_label<_LHS>)
-	  __s = _LHS::compute_semantic (__s);
+	  __s = _M_lhs.compute_semantic (__s);
 	if constexpr (semantic_computation_label<_RHS>)
-	  __s = _RHS::compute_semantic (__s);
+	  __s = _M_rhs.compute_semantic (__s);
 	return __s;
       }
-
-      static constexpr __combined_group_names group_names =
-	[] () constexpr
-	{
-	  group_name_view __l{};
-	  group_name_view __r{};
-	  if constexpr (identification_label<_LHS>)
-	    __l = _LHS::group_names;
-	  if constexpr (identification_label<_RHS>)
-	    __r = _RHS::group_names;
-	  return __combined_group_names{__l, __r};
-	} ();
 
       // Chained right to left, per the paper: the right operand's
       // handler runs first; if it returns handled, the left operand's
