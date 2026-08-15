@@ -4504,10 +4504,11 @@ contract_evaluation_semantic_value ()
 /* CTRL is the constant-expression naming a control OBJECT for
    pre<...>/post<...>/contract_assert<...> (including the implicit
    std::contracts::default_v substituted for a bare pre/post/contract_assert
-   under -fcontract-control-objects), or NULL_TREE.  The
-   is_ignored/constify/assumable/operator() members looked up below are
-   always static, so only CTRL's type is ever needed for member lookup;
-   return it.  */
+   under -fcontract-control-objects), or NULL_TREE.  Return CTRL's type,
+   used for member lookup by every caller below (some of those members may
+   be non-static, in which case the caller also needs CTRL's own value --
+   see contract_control_bool_member -- but the type alone is always enough
+   to find the member in the first place).  */
 
 static tree
 contract_control_naming_type (tree ctrl)
@@ -4552,13 +4553,19 @@ build_assertion_static_info_value (contract_check_side side, tree info_type)
 }
 
 /* Constant-evaluate CTRL::NAME(info) for the current translation unit's
-   evaluation_semantic and the given SIDE, where NAME is a static member
-   function taking a single std::contracts::assertion_static_info parameter
-   (e.g. is_ignored, constify, assumable, omit_comment, ...).  Returns 1 if
-   it folds to a compile-time true, 0 if it folds to false, and -1 if CTRL
-   has no such usable compile-time member (no member by that name, not a
-   static function, not callable with one assertion_static_info argument,
-   or doesn't constant-fold to a bool).
+   evaluation_semantic and the given SIDE, where NAME is a static *or
+   non-static* member function taking a single
+   std::contracts::assertion_static_info parameter (e.g. is_ignored,
+   constify, assumable, omit_comment, ...).  For a non-static NAME, CTRL
+   itself -- the real object, exactly as parsed -- is used as the call's
+   instance (not a dummy placeholder), so instance-level state (e.g. a
+   label that carries its own configuration data) is genuinely visible.
+   Returns 1 if it folds to a compile-time true, 0 if it folds to false,
+   and -1 if CTRL has no such usable compile-time member (no member by
+   that name, not callable with one assertion_static_info argument, or
+   the resulting call doesn't constant-fold to a bool -- including CTRL
+   itself still being dependent, e.g. while merely analyzing an
+   uninstantiated template body).
 
    Once the member is confirmed to genuinely exist (past the checks
    above), failing to constant-fold it is a real bug in CTRL -- a throw,
@@ -4578,6 +4585,7 @@ static int
 contract_control_bool_member (tree ctrl, const char *name,
 			       contract_check_side side, bool quiet = false)
 {
+  tree ctrl_expr = ctrl;
   ctrl = contract_control_naming_type (ctrl);
   if (!ctrl || !CLASS_TYPE_P (ctrl))
     return -1;
@@ -4591,7 +4599,7 @@ contract_control_bool_member (tree ctrl, const char *name,
     return -1;
 
   tree fn = OVL_FIRST (BASELINK_FUNCTIONS (member));
-  if (!fn || TREE_CODE (fn) != FUNCTION_DECL || !DECL_STATIC_FUNCTION_P (fn))
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL)
     return -1;
 
   /* The single parameter must be std::contracts::assertion_static_info
@@ -4604,8 +4612,13 @@ contract_control_bool_member (tree ctrl, const char *name,
      -1 -- build_assertion_static_info_value below assumes its type
      argument is assertion_static_info's own class type unconditionally
      (TYPE_FIELDS on anything else, e.g. an enum, is an ICE, not a
-     graceful failure), so that assumption must be checked here first.  */
-  tree parm_types = TYPE_ARG_TYPES (TREE_TYPE (fn));
+     graceful failure), so that assumption must be checked here first.
+     FN may be static (TREE_TYPE a FUNCTION_TYPE) or non-static (a
+     METHOD_TYPE, whose TYPE_ARG_TYPES has a leading implicit 'this'
+     entry) -- FUNCTION_FIRST_USER_PARMTYPE skips that implicit entry
+     for non-static FN and is a no-op for static FN, so no other change
+     is needed to support both uniformly.  */
+  tree parm_types = FUNCTION_FIRST_USER_PARMTYPE (fn);
   if (!parm_types || parm_types == void_list_node)
     return -1;
   tree info_type = non_reference (TREE_VALUE (parm_types));
@@ -4617,15 +4630,37 @@ contract_control_bool_member (tree ctrl, const char *name,
 
   releasing_vec args;
   vec_safe_push (args, cfg_arg);
-  tree obj = build_dummy_object (ctrl);
-  /* See suppress_conveyor_restrictions_for_trait_query_p's own comment:
+  /* Use CTRL_EXPR itself -- the real object, exactly as parsed -- as the
+     call's instance, rather than a build_dummy_object placeholder, so a
+     non-static NAME can read genuine instance state.  No re-derivation
+     (e.g. constant-evaluating CTRL_EXPR up front to build a fresh
+     stand-in object) is needed or wanted: CTRL_EXPR is already either an
+     lvalue naming a real control object (the common case, e.g. a
+     pre<my_label>(...) referring to a named constexpr variable) or a
+     prvalue temporary control object (e.g. an inline
+     pre<my_label_t{...}>(...)), and in either case it is already exactly
+     the same well-formed object expression build_new_method_call handles
+     for any ordinary obj.method()/Temp{...}.method() call -- ordinary
+     overload resolution and, for the prvalue case, ordinary temporary
+     materialization apply unchanged.  Constant-folding the *whole*
+     resulting call (including evaluating CTRL_EXPR as its object
+     argument) happens uniformly afterward, via maybe_constant_value
+     below, exactly like evaluating any other constant-expression call.
+     This also stays correct while merely analyzing an uninstantiated
+     template's own body (CTRL_EXPR still dependent): build_new_method_call
+     already handles a dependent instance by deferring, same as it does
+     for any other member call inside a template, and the later
+     maybe_constant_value simply fails to fold, giving this function's
+     usual -1 "not yet known" result.
+
+     See suppress_conveyor_restrictions_for_trait_query_p's own comment:
      this call -- and its evaluation just below, in case the trait
      method's own body itself calls something else -- must never be
      subject to conveyor_restrictions_active_p's restrictions, which
      have nothing to do with this internal, compile-time-only probe.  */
   bool saved_suppress = suppress_conveyor_restrictions_for_trait_query_p;
   suppress_conveyor_restrictions_for_trait_query_p = true;
-  tree call = build_new_method_call (obj, member, &args, NULL_TREE,
+  tree call = build_new_method_call (ctrl_expr, member, &args, NULL_TREE,
 				     LOOKUP_NORMAL, NULL, tf_none);
   tree val = (call && call != error_mark_node)
     ? maybe_constant_value (call) : NULL_TREE;
