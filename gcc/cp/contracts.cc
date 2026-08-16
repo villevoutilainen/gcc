@@ -5990,6 +5990,82 @@ struct oa_range_fact
   widest_int lo = 0, hi = 0;
 };
 
+/* D4324: standard interval multiplication -- the product A*B's own two
+   extremes are always among the four corner products (a.lo*b.lo,
+   a.lo*b.hi, a.hi*b.lo, a.hi*b.hi), correct for every sign combination
+   of A/B without needing explicit case analysis (a negative operand on
+   either side naturally flips which corner produces the new lo/hi,
+   entirely via the min/max below -- no special-casing needed for
+   negative or zero multipliers). Requires a FULLY two-sided range on
+   both A and B -- a one-sided bound isn't enough to bound a product the
+   way it is for a sum/difference (e.g. a huge positive upper bound on
+   one side combined with no lower bound at all leaves the product's
+   own lower extreme totally open) -- and declines a pointer-tracked
+   (array-offset) range on either side, since multiplying a pointer's
+   own tracked offset has no meaning. Shared by oa_get_range's own
+   MULT_EXPR composition (below) and oa_scan_overflow_in_expr's
+   identical, pre-existing overflow-safety use (previously duplicated
+   inline there; factored out here so both stay in sync, and so a
+   caller wanting the actual composed range -- not just a safety
+   boolean -- has somewhere to get it).  */
+
+static bool
+oa_range_multiply (const oa_range_fact &a, const oa_range_fact &b,
+		    widest_int *lo_out, widest_int *hi_out)
+{
+  if (a.base != NULL_TREE || b.base != NULL_TREE)
+    return false;
+  if (!a.has_lo || !a.has_hi || !b.has_lo || !b.has_hi)
+    return false;
+
+  widest_int corner0 = a.lo * b.lo;
+  widest_int corner1 = a.lo * b.hi;
+  widest_int corner2 = a.hi * b.lo;
+  widest_int corner3 = a.hi * b.hi;
+  *lo_out = wi::smin (wi::smin (corner0, corner1), wi::smin (corner2, corner3));
+  *hi_out = wi::smax (wi::smax (corner0, corner1), wi::smax (corner2, corner3));
+  return true;
+}
+
+/* D4324: standard interval division -- mirrors oa_range_multiply's own
+   corner-based approach exactly (A/B's extremes are among the four
+   corner quotients a.lo/b.lo, a.lo/b.hi, a.hi/b.lo, a.hi/b.hi), sound
+   for the same reason: A/B is A * (1/B), and 1/B's own range, for B
+   entirely one sign, is itself bounded (monotonically, just reversed)
+   by B's own two endpoints, so the same "evaluate at all four corners,
+   take min/max" reasoning applies. Computed with the same truncating-
+   toward-zero division C++'s own '/' uses on integers -- widest_int's
+   own operator/ already truncates the same way, and truncation only
+   ever moves a quotient closer to zero (never past the exact corner
+   bound in magnitude), so the corner bounds still soundly enclose every
+   truncated result, not just the exact real quotients. Requires B's
+   own range to be entirely one sign -- B.lo > 0 or B.hi < 0, not merely
+   nonzero -- since a divisor range that includes (or straddles) zero
+   makes the result potentially unbounded, which a single [lo,hi]
+   interval can't represent; declines rather than guessing.  Also
+   requires a fully two-sided range on both operands, same as
+   multiplication.  */
+
+static bool
+oa_range_divide (const oa_range_fact &a, const oa_range_fact &b,
+		  widest_int *lo_out, widest_int *hi_out)
+{
+  if (a.base != NULL_TREE || b.base != NULL_TREE)
+    return false;
+  if (!a.has_lo || !a.has_hi || !b.has_lo || !b.has_hi)
+    return false;
+  if (b.lo <= 0 && b.hi >= 0)
+    return false;
+
+  widest_int corner0 = a.lo / b.lo;
+  widest_int corner1 = a.lo / b.hi;
+  widest_int corner2 = a.hi / b.lo;
+  widest_int corner3 = a.hi / b.hi;
+  *lo_out = wi::smin (wi::smin (corner0, corner1), wi::smin (corner2, corner3));
+  *hi_out = wi::smax (wi::smax (corner0, corner1), wi::smax (corner2, corner3));
+  return true;
+}
+
 /* -fcontract-symbolic-proofs: a symbolic contract's own established
    fact -- "PRED_FN holds (POLARITY true) or its negation holds
    (POLARITY false) for this object identity", e.g. for
@@ -8437,41 +8513,147 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
       return env.range_get (expr, out);
     }
 
+  /* D4324: general interval-vs-interval arithmetic -- both operands are
+     resolved via a recursive oa_get_range call, unconditionally (a
+     literal INTEGER_CST already resolves to the degenerate one-point
+     interval [k,k] via this same function's own INTEGER_CST case above,
+     so the previous special-casing of "one side must literally be a
+     constant" was never a distinct capability, just an unnecessarily
+     narrow path to the exact same result). This is a strict
+     generalization, not merely a refactor: it was previously not
+     recognized at all whether BOTH operands were tracked decls (rather
+     than one being a bare literal), and '<constant> - decl' was
+     explicitly declined ("negates the whole range rather than
+     shifting it") even though real interval subtraction handles it
+     correctly for free (a literal is just [k,k], and
+     [k,k] - [lo,hi] = [k-hi, k-lo] is exactly the negated-and-shifted
+     range that shape needs).
+
+     Gated on TYPE_OVERFLOW_UNDEFINED, matching MULT_EXPR/TRUNC_DIV_EXPR
+     below: treating the mathematically-exact sum/difference as the
+     actual runtime value is only licensed by the language's own "signed
+     overflow is UB" rule (which permits assuming it doesn't happen);
+     for a type where overflow instead wraps (unsigned) or otherwise
+     doesn't apply, the exact value computed here would not necessarily
+     be the real one, so declining is the sound choice.  Previously
+     unchecked for this same PLUS_EXPR/MINUS_EXPR case -- tightened here
+     for consistency with the new operators, applying one uniform
+     invariant across all four rather than leaving three of them
+     stricter than the fourth.
+
+     TYPE_OVERFLOW_UNDEFINED only licenses *assuming* overflow doesn't
+     happen -- it doesn't make an out-of-[type_min,type_max] exact
+     result somehow safe to report as-is: if it occurred, the language's
+     own UB rule means anything could happen at runtime (not that the
+     value gets clamped to the type's own bound, which would itself be
+     an unjustified, potentially unsound extra claim), so each computed
+     bound is independently checked against the type's own representable
+     range below and dropped (not clamped) if it falls outside either
+     direction -- overflow (exceeding type_max) and underflow (falling
+     below type_min) are symmetric here, exactly like the pre-existing
+     item-8 overflow scan (oa_scan_overflow_in_expr) already checks
+     both.  */
   if (TREE_CODE (expr) == PLUS_EXPR || TREE_CODE (expr) == MINUS_EXPR)
     {
+      if (!INTEGRAL_TYPE_P (TREE_TYPE (expr))
+	  || !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (expr)))
+	return false;
+      tree type = TREE_TYPE (expr);
+      widest_int type_min = wi::to_widest (TYPE_MIN_VALUE (type));
+      widest_int type_max = wi::to_widest (TYPE_MAX_VALUE (type));
+
       tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
       tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 1));
 
-      oa_range_fact base_fact;
-      widest_int k;
-      if (TREE_CODE (op1) == INTEGER_CST && oa_get_range (op0, env, &base_fact))
-	k = wi::to_widest (op1);
-      else if (TREE_CODE (expr) == PLUS_EXPR && TREE_CODE (op0) == INTEGER_CST
-	       && oa_get_range (op1, env, &base_fact))
-	k = wi::to_widest (op0);
-      else
-	/* '<constant> - decl' negates the whole range rather than
-	   shifting it -- not a simple shift, left unrecognized.  */
+      oa_range_fact a, b;
+      if (!oa_get_range (op0, env, &a) || !oa_get_range (op1, env, &b))
 	return false;
-
-      if (base_fact.base != NULL_TREE)
+      if (a.base != NULL_TREE || b.base != NULL_TREE)
 	/* A pointer's own array-offset shifting through plain PLUS_EXPR/
 	   MINUS_EXPR doesn't happen at this stage -- see POINTER_PLUS_EXPR
 	   below, confirmed empirically to be what pointer arithmetic
 	   actually lowers to here, unlike plain integer addition.  */
 	return false;
 
-      if (TREE_CODE (expr) == MINUS_EXPR)
-	k = -k;
-
       out->base = NULL_TREE;
-      out->has_lo = base_fact.has_lo;
-      out->has_hi = base_fact.has_hi;
+      if (TREE_CODE (expr) == PLUS_EXPR)
+	{
+	  out->has_lo = a.has_lo && b.has_lo;
+	  out->has_hi = a.has_hi && b.has_hi;
+	  if (out->has_lo)
+	    out->lo = a.lo + b.lo;
+	  if (out->has_hi)
+	    out->hi = a.hi + b.hi;
+	}
+      else /* MINUS_EXPR */
+	{
+	  out->has_lo = a.has_lo && b.has_hi;
+	  out->has_hi = a.has_hi && b.has_lo;
+	  if (out->has_lo)
+	    out->lo = a.lo - b.hi;
+	  if (out->has_hi)
+	    out->hi = a.hi - b.lo;
+	}
+      /* Each bound is checked against BOTH thresholds, not just its own
+	 "natural" one -- found via direct testing (x near INT_MAX,
+	 x * 2): the exact lo can itself exceed type_max just as easily
+	 as hi can, since both corners of an overflowing product/sum can
+	 land on the same, wrong side of zero (a huge positive lo is
+	 trivially ">= type_min" while still being just as unrepresentable
+	 as an out-of-range hi would be) -- checking lo only against
+	 type_min (and hi only against type_max) let exactly this case
+	 through, incorrectly keeping an overflowed value as a "known"
+	 bound.  */
+      if (out->has_lo && (out->lo < type_min || out->lo > type_max))
+	out->has_lo = false;
+      if (out->has_hi && (out->hi < type_min || out->hi > type_max))
+	out->has_hi = false;
+      return out->has_lo || out->has_hi;
+    }
+
+  /* D4324: interval multiplication/division, via oa_range_multiply/
+     oa_range_divide (own comments, near oa_range_fact's definition) --
+     a genuinely new composition, not a generalization of any prior
+     special case (MULT_EXPR/TRUNC_DIV_EXPR were not recognized by this
+     function at all before). Same TYPE_OVERFLOW_UNDEFINED gate as
+     PLUS_EXPR/MINUS_EXPR above, and the same post-computation
+     type_min/type_max check (both directions), for the same reasons.  */
+  if (TREE_CODE (expr) == MULT_EXPR || TREE_CODE (expr) == TRUNC_DIV_EXPR)
+    {
+      if (!INTEGRAL_TYPE_P (TREE_TYPE (expr))
+	  || !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (expr)))
+	return false;
+      tree type = TREE_TYPE (expr);
+      widest_int type_min = wi::to_widest (TYPE_MIN_VALUE (type));
+      widest_int type_max = wi::to_widest (TYPE_MAX_VALUE (type));
+
+      tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 1));
+
+      oa_range_fact a, b;
+      if (!oa_get_range (op0, env, &a) || !oa_get_range (op1, env, &b))
+	return false;
+
+      widest_int lo, hi;
+      bool composed = (TREE_CODE (expr) == MULT_EXPR)
+	? oa_range_multiply (a, b, &lo, &hi)
+	: oa_range_divide (a, b, &lo, &hi);
+      if (!composed)
+	return false;
+
+      /* Each bound checked against BOTH thresholds, not just its own
+	 "natural" one -- see the identical fix and comment in
+	 PLUS_EXPR/MINUS_EXPR just above (found via the same direct
+	 testing: a product's exact lo can itself exceed type_max just
+	 as easily as its hi can).  */
+      out->base = NULL_TREE;
+      out->has_lo = lo >= type_min && lo <= type_max;
+      out->has_hi = hi >= type_min && hi <= type_max;
       if (out->has_lo)
-	out->lo = base_fact.lo + k;
+	out->lo = lo;
       if (out->has_hi)
-	out->hi = base_fact.hi + k;
-      return true;
+	out->hi = hi;
+      return out->has_lo || out->has_hi;
     }
 
   /* Increment E2: '&arr[index]', forming a pointer's initial tracked
@@ -9949,26 +10131,16 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 			   && a.lo - b.hi >= type_min;
 	      safe = hi_ok && lo_ok;
 	    }
-	  else /* MULT_EXPR: needs a fully two-sided range on both operands
-		  -- a one-sided bound isn't enough to bound a product the
-		  way it is for a sum/difference (e.g. a huge positive upper
-		  bound on one side combined with no lower bound at all
-		  leaves the product's own lower extreme totally open).
-		  Standard interval multiplication: the result's own two
-		  extremes are always among the four corner products.  */
+	  else /* MULT_EXPR: oa_range_multiply (own comment, near
+		  oa_range_fact's definition) -- the corner-product interval-
+		  multiplication algorithm this used to duplicate inline,
+		  factored out so oa_get_range's own MULT_EXPR composition
+		  can share it too.  */
 	    {
-	      if (have_a && have_b && a.has_lo && a.has_hi && b.has_lo && b.has_hi)
-		{
-		  widest_int corner0 = a.lo * b.lo;
-		  widest_int corner1 = a.lo * b.hi;
-		  widest_int corner2 = a.hi * b.lo;
-		  widest_int corner3 = a.hi * b.hi;
-		  widest_int lo = wi::smin (wi::smin (corner0, corner1),
-					      wi::smin (corner2, corner3));
-		  widest_int hi = wi::smax (wi::smax (corner0, corner1),
-					      wi::smax (corner2, corner3));
-		  safe = lo >= type_min && hi <= type_max;
-		}
+	      widest_int lo;
+	      widest_int hi;
+	      if (have_a && have_b && oa_range_multiply (a, b, &lo, &hi))
+		safe = lo >= type_min && hi <= type_max;
 	    }
 
 	  if (!safe)
