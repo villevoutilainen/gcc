@@ -8769,6 +8769,16 @@ static bool oa_match_shifted_comparison_against_call
 static bool oa_match_type_bounded_comparison
   (tree conjunct, tree *decl_out, tree_code *code_out);
 
+/* Forward-declared: full definition is much further below (needs the
+   VAR_DECL-admitting sibling matchers, defined near the exported
+   matchers they mirror); needed here by oa_handle_assertion_stmt to
+   check a contract_assert's own condition against already-established
+   ambient facts before trusting it (see that function's own comment,
+   and this helper's own comment further below, for the full
+   rationale).  */
+static oa_proof_result oa_check_assertion_conjunct_against_env
+  (tree conjunct, oa_env &env, bool require_conveyor);
+
 /* The last-resort fallback inside oa_refine_single_comparison below:
    "DECL OP <exactly-known point>" refined into ENV's own plain, untagged
    range map (m_range_map) -- factored out into its own function because
@@ -14755,12 +14765,62 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 	  nz_facts.safe_push (arg);
       }
 
+  /* D4324: unlike every other fact-establishing step in this function,
+     this one *checks* first -- a contract_assert's own condition is
+     the one place in the whole conveyor/symbolic proof pass that both
+     consumes ambient facts (like a precondition) and, once checked,
+     re-establishes itself as a fact for subsequent code (like a
+     postcondition) -- see oa_check_assertion_conjunct_against_env's
+     own comment for why this is achievable here (no callee/call site,
+     so no substitution needed) where the equivalent fix for an actual
+     postcondition is not (a postcondition is checked once, at a single
+     shared exit point downstream of every return, not per-program-point
+     during the walk -- out of scope here). Gated on the proofs flags,
+     exactly like the call-obligation family: an ordinary compile with
+     neither flag sees no behavior change at all, and a merely-
+     unprovable (OA_UNKNOWN) or consistent (OA_PROVEN_TRUE) conjunct
+     falls through unchanged to the existing self-trust establishment
+     below.  */
+  bool any_conjunct_proven_false = false;
+  if (flag_contract_conveyor_proofs && conveyor_ok)
+    for (unsigned i = 0; i < conjuncts.length (); ++i)
+      if (oa_check_assertion_conjunct_against_env (*conjuncts[i], env,
+						    /*require_conveyor=*/true)
+	  == OA_PROVEN_FALSE)
+	{
+	  error_at (EXPR_LOCATION (*conjuncts[i]),
+		    "%<contract_assert%> condition %qE is provably false",
+		    *conjuncts[i]);
+	  any_conjunct_proven_false = true;
+	}
+  if (flag_contract_symbolic_proofs && symbolic_ok)
+    for (unsigned i = 0; i < conjuncts.length (); ++i)
+      if (oa_check_assertion_conjunct_against_env (*conjuncts[i], env,
+						    /*require_conveyor=*/false)
+	  == OA_PROVEN_FALSE)
+	{
+	  error_at (EXPR_LOCATION (*conjuncts[i]),
+		    "%<contract_assert%> condition %qE is provably false",
+		    *conjuncts[i]);
+	  any_conjunct_proven_false = true;
+	}
+
   if (!oa_resolve_condition (&cond, env, conveyor_ok, symbolic_ok))
     {
       CONTRACT_CONDITION (stmt) = error_mark_node;
       return;
     }
   CONTRACT_CONDITION (stmt) = cond;
+
+  /* A conjunct just proven false above must not also be established as
+     a trusted fact below -- doing so would inject a known-contradictory
+     "fact" into ENV for the rest of the function, silently corrupting
+     later analysis (e.g. suppressing a genuinely separate, later
+     violation's own diagnostic) on top of the error already reported.
+     The whole condition is false regardless of which conjunct did it
+     (it's a conjunction), so nothing from it should be trusted onward.  */
+  if (any_conjunct_proven_false)
+    return;
 
   oa_establish_shared_substrate_self_trust (cond, env, tracking_ok, conveyor_ok);
 
@@ -17119,7 +17179,30 @@ oa_has_active_postcondition (tree fndecl)
    oa_provable_p's env lookup otherwise tracks.
 
    CONTRACT is the actual node embedded in the body, for the same
-   sharing reason explained on oa_handle_precondition_stmt above.  */
+   sharing reason explained on oa_handle_precondition_stmt above.
+
+   D4324: "this is proven" above is currently only true for is_object_
+   address claims (via OA_RETURN_ALL_PROVABLE/OA_RETURN_SEEN) -- for an
+   ordinary relational/range claim (e.g. 'post<ctrl>(r: r > 0)'), this
+   function -- like oa_resolve_condition it calls into -- has no
+   equivalent verification at all, the same gap
+   oa_check_assertion_conjunct_against_env (above, this file) closes
+   for a bare contract_assert. Fixing it here is NOT the same size of
+   change: a contract_assert sits at one real program point reached
+   during the ordinary walk, where the already-sound per-point ENV is
+   simply consulted in place; a postcondition is checked once, at a
+   single shared exit point downstream of *every* return (see the
+   TRY_FINALLY_EXPR/EH_ELSE_EXPR comment above), and the ENV that
+   reaches it is an artifact of walk order, not a genuine multi-exit
+   join. The one thing that IS correctly merged across every return
+   today is OA_RETURN_RANGE_FACT (see oa_return_range_tracking's own
+   comment further up) -- but it's scoped to exactly one fact about the
+   return expression itself, isn't even enabled for a self-postcondition
+   check today (only for oa_resolve_iile_call's own, different, IILE-body
+   analysis), and has no analog for a postcondition naming an ordinary
+   parameter directly. Making this sound would need new per-exit-point
+   fact-merging infrastructure generalized well beyond that one
+   accumulator -- a real, separate undertaking, not attempted here.  */
 
 static void
 oa_handle_postcondition_stmt (tree contract, oa_env &env)
@@ -18953,6 +19036,307 @@ oa_match_call_against_call (tree conjunct, tree *lhs_receiver_out,
   *rhs_receiver_out = rhs_receiver;
   *rhs_callee_out = rhs_callee;
   return true;
+}
+
+/* D4324: VAR_DECL-admitting sibling of oa_match_simple_comparison, for
+   a contract_assert's own condition -- unlike that function's own
+   callers (a plugin's precondition-obligation checking, or self-trust
+   fact-seeding for LATER code), there is no callee/call site here to
+   positionally substitute a matched operand into, so the PARM_DECL-
+   only restriction that protects oa_substitute_call_arg elsewhere
+   (see oa_underlying_param_operand's own comment) doesn't apply: the
+   conjunct's own operand already IS the exact decl to consult in ENV
+   directly (substitution is the identity function). Otherwise
+   identical logic.  */
+
+static bool
+oa_match_simple_comparison_var (tree conjunct, tree *decl_out,
+				 tree_code *code_out, tree *const_val_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  enum tree_code code = TREE_CODE (c);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return false;
+
+  tree op0 = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0)));
+  tree op1 = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1)));
+
+  tree decl, const_val;
+  bool flipped;
+  if ((VAR_P (op0) || TREE_CODE (op0) == PARM_DECL) && TREE_CODE (op1) == INTEGER_CST)
+    decl = op0, const_val = op1, flipped = false;
+  else if ((VAR_P (op1) || TREE_CODE (op1) == PARM_DECL) && TREE_CODE (op0) == INTEGER_CST)
+    decl = op1, const_val = op0, flipped = true;
+  else
+    return false;
+
+  if (flipped)
+    switch (code)
+      {
+      case LT_EXPR: code = GT_EXPR; break;
+      case LE_EXPR: code = GE_EXPR; break;
+      case GT_EXPR: code = LT_EXPR; break;
+      case GE_EXPR: code = LE_EXPR; break;
+      default: break;
+      }
+
+  *decl_out = decl;
+  *code_out = code;
+  *const_val_out = const_val;
+  return true;
+}
+
+/* D4324: VAR_DECL-admitting sibling of oa_match_comparison_against_param,
+   for the same reason oa_match_simple_comparison_var exists (see its
+   own comment) -- calls the shared oa_underlying_param_operand helper
+   with ALLOW_VAR_DECL true on both sides instead of relying on its
+   default.  */
+
+static bool
+oa_match_comparison_against_decl (tree conjunct, tree *decl_out,
+				   tree_code *code_out, tree *other_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  enum tree_code code = TREE_CODE (c);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return false;
+
+  tree op0 = oa_strip_to_relational_operand (TREE_OPERAND (c, 0));
+  tree op1 = oa_strip_to_relational_operand (TREE_OPERAND (c, 1));
+
+  tree decl, other;
+  bool flipped;
+  if ((decl = oa_underlying_param_operand (op0, /*allow_var_decl=*/true))
+      && (other = oa_underlying_param_operand (op1, /*allow_var_decl=*/true)))
+    flipped = false;
+  else if ((decl = oa_underlying_param_operand (op1, /*allow_var_decl=*/true))
+	   && (other = oa_underlying_param_operand (op0, /*allow_var_decl=*/true)))
+    flipped = true;
+  else
+    return false;
+
+  /* A decl compared against itself isn't a useful relation.  */
+  if (decl == other)
+    return false;
+
+  if (flipped)
+    switch (code)
+      {
+      case LT_EXPR: code = GT_EXPR; break;
+      case LE_EXPR: code = GE_EXPR; break;
+      case GT_EXPR: code = LT_EXPR; break;
+      case GE_EXPR: code = LE_EXPR; break;
+      default: break;
+      }
+
+  *decl_out = decl;
+  *code_out = code;
+  *other_out = other;
+  return true;
+}
+
+/* D4324: VAR_DECL-admitting sibling of oa_match_comparison_against_call,
+   for the same reason the two matchers above exist. Only the PARAM_OUT
+   side needs relaxing -- oa_underlying_call_range_operand (the
+   RHS_RECEIVER_OUT side, shared with oa_match_call_against_call, which
+   therefore needs no sibling of its own at all) already imposes no
+   decl-kind restriction of its own.  */
+
+static bool
+oa_match_comparison_against_call_var (tree conjunct, tree *decl_out,
+				       tree_code *code_out,
+				       tree *rhs_receiver_out,
+				       tree *rhs_callee_out,
+				       bool allow_symbolic_accessor)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  enum tree_code code = TREE_CODE (c);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return false;
+
+  tree op0 = oa_strip_to_relational_operand (TREE_OPERAND (c, 0));
+  tree op1 = oa_strip_to_relational_operand (TREE_OPERAND (c, 1));
+
+  tree decl, receiver, callee;
+  bool flipped;
+  if ((decl = oa_underlying_param_operand (op0, /*allow_var_decl=*/true))
+      && oa_underlying_call_range_operand (op1, &receiver, &callee,
+					   allow_symbolic_accessor))
+    flipped = false;
+  else if ((decl = oa_underlying_param_operand (op1, /*allow_var_decl=*/true))
+	   && oa_underlying_call_range_operand (op0, &receiver, &callee,
+						 allow_symbolic_accessor))
+    flipped = true;
+  else
+    return false;
+
+  if (flipped)
+    switch (code)
+      {
+      case LT_EXPR: code = GT_EXPR; break;
+      case LE_EXPR: code = GE_EXPR; break;
+      case GT_EXPR: code = LT_EXPR; break;
+      case GE_EXPR: code = LE_EXPR; break;
+      default: break;
+      }
+
+  *decl_out = decl;
+  *code_out = code;
+  *rhs_receiver_out = receiver;
+  *rhs_callee_out = callee;
+  return true;
+}
+
+/* D4324: check CONJUNCT (part of a contract_assert's own condition)
+   against whatever ENV already has established at this program point
+   -- the ambient-fact counterpart of the call-obligation family
+   (oa_handle_call_conveyor_proof_obligation and siblings) used at an
+   actual call site, minus their positional-substitution step: there is
+   no callee/call site here, so the conjunct's own operands already ARE
+   the decls to consult directly (see the three _var/_decl matchers
+   above). Returns OA_PROVEN_FALSE only when some already-tracked fact
+   category flatly contradicts CONJUNCT; OA_PROVEN_TRUE/OA_UNKNOWN are
+   not separately actionable to the caller (oa_handle_assertion_stmt) --
+   an unprovable, or merely consistent, conjunct is simply trusted
+   onward exactly as it always was, this only adds the "provably false"
+   diagnostic path. REQUIRE_CONVEYOR mirrors the same parameter already
+   threaded through every reused *_1 helper below: true for the
+   conveyor-flavored check, false for the symbolic one, exactly
+   matching how the paired call-obligation functions already
+   distinguish conveyor vs. symbolic mode.
+
+   Tries each fact shape in turn, the same sequence (and mutual
+   exclusivity, by construction) oa_refine_single_comparison's own
+   establishing side already relies on for its ptr->field/call-range/
+   relational/call-relational blocks.  */
+
+static oa_proof_result
+oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
+					  bool require_conveyor)
+{
+  tree decl, other, const_val;
+  tree_code code;
+
+  if (oa_match_simple_comparison_var (conjunct, &decl, &code, &const_val))
+    {
+      oa_range_fact req;
+      req.base = NULL_TREE;
+      req.has_lo = req.has_hi = false;
+      oa_tighten_range_bound (req, code, wi::to_widest (const_val));
+      return oa_env_check_range_subsumption (env, decl, req);
+    }
+
+  if (oa_match_comparison_against_decl (conjunct, &decl, &code, &other))
+    return oa_env_check_relational_fact_1 (env, decl, code, other,
+					    require_conveyor);
+
+  {
+    tree rhs_receiver, rhs_callee;
+    if (oa_match_comparison_against_call_var (conjunct, &decl, &code,
+					       &rhs_receiver, &rhs_callee,
+					       /*allow_symbolic_accessor=*/
+						 !require_conveyor))
+      return oa_env_check_call_relational_fact_1 (env, decl, code,
+						   rhs_receiver, rhs_callee,
+						   require_conveyor);
+  }
+
+  {
+    tree lhs_receiver, lhs_callee, rhs_receiver, rhs_callee;
+    if (oa_match_call_against_call (conjunct, &lhs_receiver, &lhs_callee,
+				     &code, &rhs_receiver, &rhs_callee,
+				     /*allow_symbolic_accessor=*/
+				       !require_conveyor))
+      return oa_env_check_call_call_relational_fact_1
+	(env, lhs_receiver, lhs_callee, code, rhs_receiver, rhs_callee,
+	 require_conveyor);
+  }
+
+  {
+    tree pred_fn, arg_decl;
+    bool negated;
+    if (oa_predicate_conjunct_shape (conjunct, &pred_fn, &arg_decl, &negated))
+      return oa_env_predicate_result (env, arg_decl, pred_fn, !negated,
+				       require_conveyor);
+  }
+
+  {
+    tree field, ptr_expr, field_const;
+    tree_code field_code;
+    if (oa_symbolic_comparison_conjunct_shape (conjunct, &field, &ptr_expr,
+						&field_code, &field_const)
+	&& TREE_CODE (field_const) == INTEGER_CST)
+      {
+	ptr_expr = oa_strip_symbolic_ptr_expr (ptr_expr);
+	tree identity;
+	if (oa_object_identity_decl (ptr_expr, &identity)
+	    || oa_field_slot_identity (ptr_expr, env, &identity)
+	    || oa_array_slot_identity (ptr_expr, env, &identity)
+	    || oa_field_object_identity (ptr_expr, env, &identity))
+	  {
+	    identity = env.alias_find (identity);
+	    oa_contract_field_range_fact established;
+	    if (env.contract_field_range_get (identity, field, &established)
+		&& (!require_conveyor || established.conveyor_established))
+	      {
+		oa_range_fact req;
+		req.base = NULL_TREE;
+		req.has_lo = req.has_hi = false;
+		oa_tighten_range_bound (req, field_code,
+					 wi::to_widest (field_const));
+		return oa_range_subsumption_result (established.range, req);
+	      }
+	  }
+	return OA_UNKNOWN;
+      }
+  }
+
+  {
+    tree receiver_expr, callee, call_const;
+    tree_code call_code;
+    if (oa_call_range_conjunct_shape (conjunct, &receiver_expr, &callee,
+				       &call_code, &call_const,
+				       /*allow_symbolic_accessor=*/
+					 !require_conveyor)
+	&& TREE_CODE (call_const) == INTEGER_CST)
+      {
+	receiver_expr = oa_strip_symbolic_ptr_expr (receiver_expr);
+	tree identity;
+	if (oa_object_identity_decl (receiver_expr, &identity)
+	    || oa_field_slot_identity (receiver_expr, env, &identity)
+	    || oa_array_slot_identity (receiver_expr, env, &identity)
+	    || oa_field_object_identity (receiver_expr, env, &identity))
+	  {
+	    identity = env.alias_find (identity);
+	    oa_contract_field_range_fact established;
+	    if (env.contract_call_range_get (identity, callee, &established)
+		&& (!require_conveyor || established.conveyor_established))
+	      {
+		oa_range_fact req;
+		req.base = NULL_TREE;
+		req.has_lo = req.has_hi = false;
+		oa_tighten_range_bound (req, call_code,
+					 wi::to_widest (call_const));
+		return oa_range_subsumption_result (established.range, req);
+	      }
+	  }
+	return OA_UNKNOWN;
+      }
+  }
+
+  return OA_UNKNOWN;
 }
 
 /* One recognized, codegen-ready action for -fcontract-symbolic-runtime-
