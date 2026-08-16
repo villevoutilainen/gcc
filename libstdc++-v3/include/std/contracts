@@ -94,6 +94,48 @@ namespace contracts
     client = 2,
   };
 
+  // D4324: one group-name -> evaluation_semantic override rule, sourced
+  // from -fcontracts-group-evaluation-semantic=group:semantic (real
+  // compiler-provided data, not the P3400 namespace's own
+  // identification_label facet -- this type is usable by any control
+  // type, not just a P3400 label; see assertion_static_info below).
+  // Unlike group_name_view further down (which ordinary label code
+  // *does* construct directly, via aggregate-init, hence its public
+  // fields), a group_semantic_rule is only ever constructed by the
+  // compiler -- by directly filling these private fields, the same
+  // technique already used for assertion_static_info/
+  // std::source_location elsewhere in this header -- and only ever
+  // read by library code, so it stays properly encapsulated, matching
+  // assertion_static_info's own private-fields-plus-accessors style.
+  class group_semantic_rule
+  {
+    const char* _M_group_name = nullptr;
+    evaluation_semantic _M_semantic = evaluation_semantic::ignore;
+
+  public:
+    constexpr const char* group_name() const noexcept { return _M_group_name; }
+    constexpr evaluation_semantic semantic() const noexcept { return _M_semantic; }
+  };
+
+  // A minimal, dependency-free view over an array of group_semantic_rule
+  // -- deliberately not std::span: <span> transitively reaches <concepts>
+  // (via <array>/<compare>), which re-enters this header (see
+  // <concepts>'s own assertion_control comment for the identical
+  // <type_traits> hazard) while it's still mid-body, a real,
+  // confirmed circular-include failure. Also only ever compiler-
+  // constructed (see group_semantic_rule above), so it stays
+  // encapsulated too: private fields, begin()/end()/size() only.
+  class group_semantic_rules_view
+  {
+    const group_semantic_rule* _M_data = nullptr;
+    __SIZE_TYPE__ _M_size = 0;
+
+  public:
+    constexpr const group_semantic_rule* begin() const noexcept { return _M_data; }
+    constexpr const group_semantic_rule* end() const noexcept { return _M_data + _M_size; }
+    constexpr __SIZE_TYPE__ size() const noexcept { return _M_size; }
+  };
+
   // D4324: static (compile-time-known) properties of where a contract
   // occurs, independent of any one particular runtime evaluation.
   // is_virtual()/overrides_virtual() are groundwork for later work on
@@ -104,12 +146,18 @@ namespace contracts
     assertion_check_side _M_side;
     bool _M_is_virtual;
     bool _M_overrides_virtual;
+    group_semantic_rules_view _M_group_rules;
 
   public:
     constexpr evaluation_semantic semantic() const noexcept { return _M_semantic; }
     constexpr assertion_check_side side() const noexcept { return _M_side; }
     constexpr bool is_virtual() const noexcept { return _M_is_virtual; }
     constexpr bool overrides_virtual() const noexcept { return _M_overrides_virtual; }
+
+    // The whole -fcontracts-group-evaluation-semantic= table for this
+    // TU (the same for every assertion in it), in command-line order.
+    constexpr group_semantic_rules_view group_semantic_rules() const noexcept
+    { return _M_group_rules; }
   };
 
   using __vendor_ext = void;
