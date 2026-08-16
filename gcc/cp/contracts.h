@@ -206,6 +206,8 @@ extern contract_check_side contract_side_of	(tree, tree);
 extern bool contract_control_constifies		(tree, contract_check_side, bool = false);
 extern bool contract_control_is_conveyor		(tree, contract_check_side, bool = false);
 extern bool contract_control_is_symbolic		(tree, contract_check_side, bool = false);
+extern bool contract_control_conveyor_like		(tree, contract_check_side, bool = false);
+extern bool contract_control_symbolic_like		(tree, contract_check_side, bool = false);
 extern tree contract_default_control_object		(location_t);
 extern void maybe_inherit_virtual_contract		(tree, tree);
 extern void resolve_object_address_in_function		(tree);
