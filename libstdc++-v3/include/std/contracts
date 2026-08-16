@@ -866,6 +866,29 @@ namespace contracts
 	&& requires (const _Tp __t, const void* __k, __SIZE_TYPE__ __i)
 	     { __t.query (__k, __i); };
 
+    // Not a real P3400 facet (unlike every other concept in this file) --
+    // this branch's own demonstration that a strongly-typed alternative
+    // to queryable_label/query_control_object above needs no new
+    // infrastructure beyond an ordinary hook, the same shape as
+    // local_violation_label. query's own void*/key/index type erasure
+    // exists only because the real paper commits to squeezing arbitrary
+    // per-label data through one universal, generically-compiled
+    // interception point (handle_contract_violation) whose signature can
+    // never change per label -- a decoupled, replaceable extension point
+    // doesn't inherently need that. A label modeling this facet can call
+    // any ordinary, strongly-typed function it likes from notify() --
+    // its own real data type, its own real handler function (declared
+    // once, defined in exactly one TU, called from as many others as
+    // want it: plain one-definition-rule linkage, nothing new) -- with
+    // zero type erasure anywhere. The concept itself knows nothing about
+    // what data a label constructs or what it calls: that's ordinary,
+    // fully type-checked C++ inside notify()'s own body.
+    template <typename _Tp>
+    concept notify_label
+      = assertion_control_object<_Tp>
+	&& requires (const _Tp __t, const assertion_context& __ctx)
+	     { __t.notify (__ctx); };
+
     // ---- Utilities (Section 3.4.4/3.4.6) ----
 
     // A set of evaluation_semantic values, backed by a plain bitmask
@@ -1088,6 +1111,14 @@ namespace contracts
       {
 	if (__ctx.check ())
 	  return;
+	// Always notified on a real violation, independent of whether
+	// local_violation_label (just below) goes on to suppress the
+	// global handler -- matching the real paper's own owner_label
+	// example, which combines alongside whatever else a label does
+	// ("mail both committees on violations") rather than being
+	// something the rest of the dispatch can skip.
+	if constexpr (notify_label<_Self>)
+	  static_cast<const _Self&> (*this).notify (__ctx);
 	if constexpr (local_violation_label<_Self>)
 	  {
 	    if (static_cast<const _Self&> (*this).handle_contract_violation (__ctx)
@@ -1544,6 +1575,19 @@ namespace contracts
 	if constexpr (queryable_label<_RHS>)
 	  return _M_rhs.query (__key, __index);
 	return nullptr;
+      }
+
+      // Independent side effects, not a chained/composed value like
+      // compute_comment/compute_message above -- order doesn't affect
+      // correctness, but left-to-right matches this class's own
+      // convention for the other left-to-right facets.
+      constexpr void
+      notify (const assertion_context& __ctx) const
+      {
+	if constexpr (notify_label<_LHS>)
+	  _M_lhs.notify (__ctx);
+	if constexpr (notify_label<_RHS>)
+	  _M_rhs.notify (__ctx);
       }
     };
 
