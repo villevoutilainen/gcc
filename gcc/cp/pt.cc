@@ -12476,7 +12476,7 @@ tsubst_contract (tree decl, tree t, tree args, tsubst_flags_t complain,
   auto conveyor_ovr
     = make_temp_override (contract_condition_conveyor_p,
 			  flag_contract_control_objects
-			  && contract_control_is_conveyor
+			  && contract_control_conveyor_like
 			       (ctrl, contract_side_of (t, decl)));
 
   /* Instantiate the condition.  If the return type is undeduced, process

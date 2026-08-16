@@ -3245,8 +3245,8 @@ rebuild_postconditions (tree fndecl)
 	= make_temp_override (contract_condition_constify_p, constify_p);
 
       bool conveyor_p = flag_contract_control_objects
-	&& contract_control_is_conveyor (CONTRACT_CONTROL_OBJECT (contract),
-					  contract_side_of (contract, fndecl));
+	&& contract_control_conveyor_like (CONTRACT_CONTROL_OBJECT (contract),
+					    contract_side_of (contract, fndecl));
       auto conveyor_ovr
 	= make_temp_override (contract_condition_conveyor_p, conveyor_p);
 
@@ -4924,6 +4924,86 @@ bool
 contract_control_is_symbolic (tree ctrl, contract_check_side side, bool quiet)
 {
   return contract_control_bool_member (ctrl, "is_symbolic", side, quiet) == 1;
+}
+
+/* True if the control type CTRL's never_proven(cfg) returns true --
+   exempts a contract_assert naming CTRL from ever being checked against
+   ambient facts (oa_handle_assertion_stmt's own "check" step), regardless
+   of any proofs flag or analyzed_conveyor/proven_conveyor elsewhere; it
+   still establishes itself as a trusted fact for later code, same as any
+   other conveyor/symbolic contract_assert (see std::never_proven_conveyor
+   in <contracts> for the intended use: the library's own internal,
+   not-yet-migrated defensive assertions).  */
+
+static bool
+contract_control_never_proven (tree ctrl, contract_check_side side, bool quiet = false)
+{
+  return contract_control_bool_member (ctrl, "never_proven", side, quiet) == 1;
+}
+
+/* True if the control type CTRL's analyzed_conveyor(cfg)/proven_
+   conveyor(cfg) returns true -- each implies is_conveyor, and
+   additionally forces -fcontract-conveyor-proofs-equivalent analysis on
+   for any contract naming it, regardless of the command-line flag.
+   analyzed_conveyor is lenient (an unprovable conjunct is a warning);
+   proven_conveyor is strict (unprovable is also an error, matching WG14
+   P4021R2's compile_assert() outcome table).  Symbolic siblings mirror
+   both exactly.  */
+
+static bool
+contract_control_analyzed_conveyor (tree ctrl, contract_check_side side, bool quiet = false)
+{
+  return contract_control_bool_member (ctrl, "analyzed_conveyor", side, quiet) == 1;
+}
+
+static bool
+contract_control_proven_conveyor (tree ctrl, contract_check_side side, bool quiet = false)
+{
+  return contract_control_bool_member (ctrl, "proven_conveyor", side, quiet) == 1;
+}
+
+static bool
+contract_control_analyzed_symbolic (tree ctrl, contract_check_side side, bool quiet = false)
+{
+  return contract_control_bool_member (ctrl, "analyzed_symbolic", side, quiet) == 1;
+}
+
+static bool
+contract_control_proven_symbolic (tree ctrl, contract_check_side side, bool quiet = false)
+{
+  return contract_control_bool_member (ctrl, "proven_symbolic", side, quiet) == 1;
+}
+
+/* True if CTRL is conveyor for *any* reason -- is_conveyor, or either of
+   the two D4324 traits that additionally force optional analysis on
+   (analyzed_conveyor/proven_conveyor, see their own comment in
+   <contracts>) but are also, in every other respect, conveyor
+   themselves.  The single, shared answer to "is this conveyor" that
+   every direct consultation site should use instead of contract_
+   control_is_conveyor alone -- every place that used to check is_
+   conveyor by itself (conveyor syntactic restrictions during parsing/
+   substitution, oa_contract_conveyor_active_p, build_contract_check's
+   own runtime-codegen gate) goes through this, so a contract tagged
+   analyzed_conveyor/proven_conveyor is conveyor everywhere
+   consistently, not just for the static analysis pass.  */
+
+bool
+contract_control_conveyor_like (tree ctrl, contract_check_side side, bool quiet)
+{
+  return contract_control_is_conveyor (ctrl, side, quiet)
+	 || contract_control_analyzed_conveyor (ctrl, side, quiet)
+	 || contract_control_proven_conveyor (ctrl, side, quiet);
+}
+
+/* Symbolic mirror of contract_control_conveyor_like immediately
+   above.  */
+
+bool
+contract_control_symbolic_like (tree ctrl, contract_check_side side, bool quiet)
+{
+  return contract_control_is_symbolic (ctrl, side, quiet)
+	 || contract_control_analyzed_symbolic (ctrl, side, quiet)
+	 || contract_control_proven_symbolic (ctrl, side, quiet);
 }
 
 /* True if the control type CTRL's assumable(cfg) returns true for the TU's
@@ -10117,7 +10197,7 @@ oa_contract_conveyor_active_p (tree contract, tree owner_fn = NULL_TREE)
   if (!owner_fn)
     owner_fn = current_function_decl;
   contract_check_side side = contract_side_of (contract, owner_fn);
-  if (!contract_control_is_conveyor (ctrl, side))
+  if (!contract_control_conveyor_like (ctrl, side))
     return false;
   return !contract_control_is_ignored (ctrl, side);
 }
@@ -10137,9 +10217,71 @@ oa_contract_symbolic_active_p (tree contract, tree owner_fn = NULL_TREE)
   if (!owner_fn)
     owner_fn = current_function_decl;
   contract_check_side side = contract_side_of (contract, owner_fn);
-  if (!contract_control_is_symbolic (ctrl, side))
+  if (!contract_control_symbolic_like (ctrl, side))
     return false;
   return !contract_control_is_ignored (ctrl, side);
+}
+
+/* True if CONTRACT's own analysis should run regardless of flag_contract_
+   conveyor_proofs -- i.e. its control object is analyzed_conveyor or
+   proven_conveyor (see those traits' own comment in <contracts>).  Does
+   not itself imply conveyor-active; callers already gate on oa_contract_
+   conveyor_active_p separately (which now also recognizes both of these
+   traits as conveyor).  Symbolic mirror immediately below.  */
+
+static bool
+oa_contract_conveyor_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE)
+{
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  if (!ctrl || !flag_contract_control_objects)
+    return false;
+  if (!owner_fn)
+    owner_fn = current_function_decl;
+  contract_check_side side = contract_side_of (contract, owner_fn);
+  return contract_control_analyzed_conveyor (ctrl, side)
+	 || contract_control_proven_conveyor (ctrl, side);
+}
+
+static bool
+oa_contract_symbolic_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE)
+{
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  if (!ctrl || !flag_contract_control_objects)
+    return false;
+  if (!owner_fn)
+    owner_fn = current_function_decl;
+  contract_check_side side = contract_side_of (contract, owner_fn);
+  return contract_control_analyzed_symbolic (ctrl, side)
+	 || contract_control_proven_symbolic (ctrl, side);
+}
+
+/* True if CONTRACT's control object is proven_conveyor specifically (not
+   just analyzed_conveyor): an unproven (OA_UNKNOWN) result for this
+   contract is *also* an error, not merely a warning.  Symbolic mirror
+   immediately below.  */
+
+static bool
+oa_contract_conveyor_strict_p (tree contract, tree owner_fn = NULL_TREE)
+{
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  if (!ctrl || !flag_contract_control_objects)
+    return false;
+  if (!owner_fn)
+    owner_fn = current_function_decl;
+  contract_check_side side = contract_side_of (contract, owner_fn);
+  return contract_control_proven_conveyor (ctrl, side);
+}
+
+static bool
+oa_contract_symbolic_strict_p (tree contract, tree owner_fn = NULL_TREE)
+{
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  if (!ctrl || !flag_contract_control_objects)
+    return false;
+  if (!owner_fn)
+    owner_fn = current_function_decl;
+  contract_check_side side = contract_side_of (contract, owner_fn);
+  return contract_control_proven_symbolic (ctrl, side);
 }
 
 /* Is CONTRACT active for the shared fact-tracking substrate (m_predicate_
@@ -10194,6 +10336,56 @@ oa_contract_fact_tracking_active_p (tree contract, tree owner_fn = NULL_TREE)
    for failing to discharge one only fires when a matching bare
    parameter reference *is* found and its substituted argument isn't
    provable).  */
+
+/* Scan CALL's own callee for any conveyor-active precondition that
+   forces -fcontract-conveyor-proofs-equivalent analysis on regardless
+   of the command-line flag (analyzed_conveyor/proven_conveyor), and/or
+   is strict (proven_conveyor specifically) -- both OR'd across every
+   such precondition the callee has, since whether to analyze a call at
+   all is an all-or-nothing decision per call site, not selectively per
+   precondition (matching how oa_contract_fact_tracking_active_p already
+   treats conveyor/symbolic activity as a shared, non-selective
+   substrate). FORCED_OUT/STRICT_OUT are only ever set to true, never
+   reset, and either may be NULL if the caller only wants the other.
+   Symbolic mirror immediately below.  */
+
+static void
+oa_call_conveyor_obligation_status (tree call, bool *forced_out, bool *strict_out)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return;
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract)
+	  || !oa_contract_conveyor_active_p (contract, callee))
+	continue;
+      if (forced_out && oa_contract_conveyor_analysis_forced_p (contract, callee))
+	*forced_out = true;
+      if (strict_out && oa_contract_conveyor_strict_p (contract, callee))
+	*strict_out = true;
+    }
+}
+
+static void
+oa_call_symbolic_obligation_status (tree call, bool *forced_out, bool *strict_out)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return;
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract)
+	  || !oa_contract_symbolic_active_p (contract, callee))
+	continue;
+      if (forced_out && oa_contract_symbolic_analysis_forced_p (contract, callee))
+	*forced_out = true;
+      if (strict_out && oa_contract_symbolic_strict_p (contract, callee))
+	*strict_out = true;
+    }
+}
 
 static void
 oa_handle_call_precondition_obligation (tree call, oa_env &env)
@@ -10892,6 +11084,14 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
 
+  /* Strict (proven_conveyor) vs lenient (analyzed_conveyor, or plain
+     is_conveyor under the ordinary command-line flag) -- OR'd across
+     every one of the callee's own conveyor-active preconditions, since
+     this whole function processes them all together, not selectively
+     (see oa_call_conveyor_obligation_status's own comment).  */
+  bool strict = false;
+  oa_call_conveyor_obligation_status (call, NULL, &strict);
+
   auto_vec<tree> range_parms;
   auto_vec<oa_range_fact> range_facts;
 
@@ -10958,10 +11158,16 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		  break;
 		case OA_UNKNOWN:
-		  warning_at (EXPR_LOCATION (call), 0,
-			      "cannot verify that %qE satisfies the "
+		  if (strict)
+		    error_at (EXPR_LOCATION (call),
+			      "cannot prove that %qE satisfies the "
 			      "precondition of %qD",
 			      sub_param ? sub_param : rel_param, callee);
+		  else
+		    warning_at (EXPR_LOCATION (call), 0,
+				"cannot verify that %qE satisfies the "
+				"precondition of %qD",
+				sub_param ? sub_param : rel_param, callee);
 		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		  break;
 		}
@@ -10996,10 +11202,16 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  case OA_UNKNOWN:
-		    warning_at (EXPR_LOCATION (call), 0,
-				"cannot verify that %qE satisfies the "
+		    if (strict)
+		      error_at (EXPR_LOCATION (call),
+				"cannot prove that %qE satisfies the "
 				"precondition of %qD",
 				sub_param ? sub_param : rel_param2, callee);
+		    else
+		      warning_at (EXPR_LOCATION (call), 0,
+				  "cannot verify that %qE satisfies the "
+				  "precondition of %qD",
+				  sub_param ? sub_param : rel_param2, callee);
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  }
@@ -11038,11 +11250,18 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  case OA_UNKNOWN:
-		    warning_at (EXPR_LOCATION (call), 0,
-				"cannot verify that %qD called on %qE satisfies "
+		    if (strict)
+		      error_at (EXPR_LOCATION (call),
+				"cannot prove that %qD called on %qE satisfies "
 				"the precondition of %qD", lhs_callee,
 				sub_lhs_receiver ? sub_lhs_receiver : lhs_receiver,
 				callee);
+		    else
+		      warning_at (EXPR_LOCATION (call), 0,
+				  "cannot verify that %qD called on %qE satisfies "
+				  "the precondition of %qD", lhs_callee,
+				  sub_lhs_receiver ? sub_lhs_receiver : lhs_receiver,
+				  callee);
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  }
@@ -11091,9 +11310,14 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		}
 	      if (oa_provably_nonzero_p (substituted, env))
 		continue; /* Proven true: silently discharged.  */
-	      warning_at (EXPR_LOCATION (call), 0,
-			  "cannot verify that %qE is nonzero, as required by "
+	      if (strict)
+		error_at (EXPR_LOCATION (call),
+			  "cannot prove that %qE is nonzero, as required by "
 			  "the precondition of %qD", substituted, callee);
+	      else
+		warning_at (EXPR_LOCATION (call), 0,
+			    "cannot verify that %qE is nonzero, as required by "
+			    "the precondition of %qD", substituted, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
@@ -11147,9 +11371,14 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 						/*proven_false=*/true);
 	      break;
 	    case OA_UNKNOWN:
-	      warning_at (EXPR_LOCATION (call), 0,
-			  "cannot verify that %qD (%qE) holds, as required by "
+	      if (strict)
+		error_at (EXPR_LOCATION (call),
+			  "cannot prove that %qD (%qE) holds, as required by "
 			  "the precondition of %qD", pred_fn, substituted, callee);
+	      else
+		warning_at (EXPR_LOCATION (call), 0,
+			    "cannot verify that %qD (%qE) holds, as required by "
+			    "the precondition of %qD", pred_fn, substituted, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
@@ -11203,9 +11432,14 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	    }
 	  break;
 	case OA_UNKNOWN:
-	  warning_at (EXPR_LOCATION (call), 0,
-		      "cannot verify that %qE satisfies the "
+	  if (strict)
+	    error_at (EXPR_LOCATION (call),
+		      "cannot prove that %qE satisfies the "
 		      "precondition of %qD", substituted, callee);
+	  else
+	    warning_at (EXPR_LOCATION (call), 0,
+			"cannot verify that %qE satisfies the "
+			"precondition of %qD", substituted, callee);
 	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	  break;
 	}
@@ -11802,6 +12036,11 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
 
+  /* See oa_handle_call_conveyor_proof_obligation's own identical
+     comment -- symbolic mirror.  */
+  bool strict = false;
+  oa_call_symbolic_obligation_status (call, NULL, &strict);
+
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
       tree contract = CONTRACT_STATEMENT (as);
@@ -11848,9 +12087,14 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	  oa_predicate_fact fact;
 	  if (!env.predicate_fact_get (identity, &fact) || fact.pred_fn != pred_fn)
 	    {
-	      warning_at (EXPR_LOCATION (call), 0,
-			  "cannot verify that %qD (%qE) holds, as required by "
+	      if (strict)
+		error_at (EXPR_LOCATION (call),
+			  "cannot prove that %qD (%qE) holds, as required by "
 			  "the precondition of %qD", pred_fn, substituted, callee);
+	      else
+		warning_at (EXPR_LOCATION (call), 0,
+			    "cannot verify that %qD (%qE) holds, as required by "
+			    "the precondition of %qD", pred_fn, substituted, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
@@ -11899,10 +12143,16 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    case OA_UNKNOWN:
-	      warning_at (EXPR_LOCATION (call), 0,
-			  "cannot verify that %qE satisfies the "
+	      if (strict)
+		error_at (EXPR_LOCATION (call),
+			  "cannot prove that %qE satisfies the "
 			  "precondition of %qD",
 			  sub_param ? sub_param : rel_param, callee);
+	      else
+		warning_at (EXPR_LOCATION (call), 0,
+			    "cannot verify that %qE satisfies the "
+			    "precondition of %qD",
+			    sub_param ? sub_param : rel_param, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
@@ -11938,10 +12188,16 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    case OA_UNKNOWN:
-	      warning_at (EXPR_LOCATION (call), 0,
-			  "cannot verify that %qE satisfies the "
+	      if (strict)
+		error_at (EXPR_LOCATION (call),
+			  "cannot prove that %qE satisfies the "
 			  "precondition of %qD",
 			  sub_param ? sub_param : rel_param, callee);
+	      else
+		warning_at (EXPR_LOCATION (call), 0,
+			    "cannot verify that %qE satisfies the "
+			    "precondition of %qD",
+			    sub_param ? sub_param : rel_param, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
@@ -11982,11 +12238,18 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    case OA_UNKNOWN:
-	      warning_at (EXPR_LOCATION (call), 0,
-			  "cannot verify that %qD called on %qE satisfies "
+	      if (strict)
+		error_at (EXPR_LOCATION (call),
+			  "cannot prove that %qD called on %qE satisfies "
 			  "the precondition of %qD", lhs_callee,
 			  sub_lhs_receiver ? sub_lhs_receiver : lhs_receiver,
 			  callee);
+	      else
+		warning_at (EXPR_LOCATION (call), 0,
+			    "cannot verify that %qD called on %qE satisfies "
+			    "the precondition of %qD", lhs_callee,
+			    sub_lhs_receiver ? sub_lhs_receiver : lhs_receiver,
+			    callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
@@ -12026,10 +12289,16 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	      if (oa_object_identity_decl (substituted, &identity)
 		  && env.symbolic_object_address_provable_p (identity))
 		continue; /* Proven true: silently discharged.  */
-	      warning_at (EXPR_LOCATION (call), 0,
-			  "cannot verify %<is_object_address%> for %qE, as "
+	      if (strict)
+		error_at (EXPR_LOCATION (call),
+			  "cannot prove %<is_object_address%> for %qE, as "
 			  "required by the precondition of %qD",
 			  substituted, callee);
+	      else
+		warning_at (EXPR_LOCATION (call), 0,
+			    "cannot verify %<is_object_address%> for %qE, as "
+			    "required by the precondition of %qD",
+			    substituted, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
@@ -12056,9 +12325,14 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		  && ((scalar_range.has_lo && scalar_range.lo > 0)
 		      || (scalar_range.has_hi && scalar_range.hi < 0)))
 		continue; /* Proven true: silently discharged.  */
-	      warning_at (EXPR_LOCATION (call), 0,
-			  "cannot verify that %qE is nonzero, as required by "
+	      if (strict)
+		error_at (EXPR_LOCATION (call),
+			  "cannot prove that %qE is nonzero, as required by "
 			  "the precondition of %qD", substituted, callee);
+	      else
+		warning_at (EXPR_LOCATION (call), 0,
+			    "cannot verify that %qE is nonzero, as required by "
+			    "the precondition of %qD", substituted, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	}
@@ -12091,10 +12365,16 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		  if (!env.contract_field_range_get (identity, field_groups[i].field,
 						      &established))
 		    {
-		      warning_at (EXPR_LOCATION (call), 0,
-				  "cannot verify that field %qD of %qE satisfies "
+		      if (strict)
+			error_at (EXPR_LOCATION (call),
+				  "cannot prove that field %qD of %qE satisfies "
 				  "the precondition of %qD", field_groups[i].field,
 				  substituted, callee);
+		      else
+			warning_at (EXPR_LOCATION (call), 0,
+				    "cannot verify that field %qD of %qE satisfies "
+				    "the precondition of %qD", field_groups[i].field,
+				    substituted, callee);
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		      continue;
 		    }
@@ -12112,6 +12392,14 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 				"argument %qE provably violates the precondition "
 				"of %qD: %qD is established outside the required "
 				"range", substituted, callee, field_groups[i].field);
+		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    }
+		  else if (strict)
+		    {
+		      error_at (EXPR_LOCATION (call),
+				"cannot prove that field %qD of %qE satisfies "
+				"the precondition of %qD", field_groups[i].field,
+				substituted, callee);
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		  else
@@ -12155,10 +12443,16 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		  if (!env.contract_call_range_get (identity, call_groups[i].callee,
 						     &established))
 		    {
-		      warning_at (EXPR_LOCATION (call), 0,
-				  "cannot verify that %qD called on %qE satisfies "
+		      if (strict)
+			error_at (EXPR_LOCATION (call),
+				  "cannot prove that %qD called on %qE satisfies "
 				  "the precondition of %qD", call_groups[i].callee,
 				  substituted, callee);
+		      else
+			warning_at (EXPR_LOCATION (call), 0,
+				    "cannot verify that %qD called on %qE satisfies "
+				    "the precondition of %qD", call_groups[i].callee,
+				    substituted, callee);
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		      continue;
 		    }
@@ -12173,6 +12467,14 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 				"argument %qE provably violates the precondition "
 				"of %qD: %qD is established outside the required "
 				"range", substituted, callee, call_groups[i].callee);
+		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    }
+		  else if (strict)
+		    {
+		      error_at (EXPR_LOCATION (call),
+				"cannot prove that %qD called on %qE satisfies "
+				"the precondition of %qD", call_groups[i].callee,
+				substituted, callee);
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		  else
@@ -12208,6 +12510,11 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
   tree callee = cp_get_callee_fndecl_nofold (call);
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
+
+  /* See oa_handle_call_conveyor_proof_obligation's own identical
+     comment.  */
+  bool strict = false;
+  oa_call_conveyor_obligation_status (call, NULL, &strict);
 
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
@@ -12252,10 +12559,16 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 					      &established)
 	      || !established.conveyor_established)
 	    {
-	      warning_at (EXPR_LOCATION (call), 0,
-			  "cannot verify that field %qD of %qE satisfies "
+	      if (strict)
+		error_at (EXPR_LOCATION (call),
+			  "cannot prove that field %qD of %qE satisfies "
 			  "the precondition of %qD", field_groups[i].field,
 			  substituted, callee);
+	      else
+		warning_at (EXPR_LOCATION (call), 0,
+			    "cannot verify that field %qD of %qE satisfies "
+			    "the precondition of %qD", field_groups[i].field,
+			    substituted, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
@@ -12270,6 +12583,14 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 			"argument %qE provably violates the precondition "
 			"of %qD: %qD is established outside the required "
 			"range", substituted, callee, field_groups[i].field);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    }
+	  else if (strict)
+	    {
+	      error_at (EXPR_LOCATION (call),
+			"cannot prove that field %qD of %qE satisfies "
+			"the precondition of %qD", field_groups[i].field,
+			substituted, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else
@@ -12303,6 +12624,11 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
   tree callee = cp_get_callee_fndecl_nofold (call);
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
+
+  /* See oa_handle_call_conveyor_proof_obligation's own identical
+     comment.  */
+  bool strict = false;
+  oa_call_conveyor_obligation_status (call, NULL, &strict);
 
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
@@ -12345,10 +12671,16 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
 					     &established)
 	      || !established.conveyor_established)
 	    {
-	      warning_at (EXPR_LOCATION (call), 0,
-			  "cannot verify that %qD called on %qE satisfies "
+	      if (strict)
+		error_at (EXPR_LOCATION (call),
+			  "cannot prove that %qD called on %qE satisfies "
 			  "the precondition of %qD", call_groups[i].callee,
 			  substituted, callee);
+	      else
+		warning_at (EXPR_LOCATION (call), 0,
+			    "cannot verify that %qD called on %qE satisfies "
+			    "the precondition of %qD", call_groups[i].callee,
+			    substituted, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
@@ -12363,6 +12695,14 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
 			"argument %qE provably violates the precondition "
 			"of %qD: %qD is established outside the required "
 			"range", substituted, callee, call_groups[i].callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    }
+	  else if (strict)
+	    {
+	      error_at (EXPR_LOCATION (call),
+			"cannot prove that %qD called on %qE satisfies "
+			"the precondition of %qD", call_groups[i].callee,
+			substituted, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else
@@ -13188,15 +13528,22 @@ oa_handle_call_symbolic_scalar_precondition_obligation (tree call, oa_env &env)
       if (!VAR_P (arg_decl) && TREE_CODE (arg_decl) != PARM_DECL)
 	continue;
 
+      bool strict = oa_contract_symbolic_strict_p (contract, callee);
+
       oa_range_fact established;
       if (!env.contract_scalar_range_get (arg_decl, &established))
 	{
 	  oa_range_fact fallback;
 	  if (!env.range_get (arg_decl, &fallback) || fallback.base != NULL_TREE)
 	    {
-	      warning_at (EXPR_LOCATION (call), 0,
-			  "cannot verify that %qE satisfies the precondition "
+	      if (strict)
+		error_at (EXPR_LOCATION (call),
+			  "cannot prove that %qE satisfies the precondition "
 			  "of %qD", substituted, callee);
+	      else
+		warning_at (EXPR_LOCATION (call), 0,
+			    "cannot verify that %qE satisfies the precondition "
+			    "of %qD", substituted, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
@@ -13213,6 +13560,13 @@ oa_handle_call_symbolic_scalar_precondition_obligation (tree call, oa_env &env)
 		    substituted, callee);
 	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	}
+      else if (strict)
+	{
+	  error_at (EXPR_LOCATION (call),
+		    "cannot prove that %qE satisfies the precondition "
+		    "of %qD", substituted, callee);
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	}
       else
 	{
 	  warning_at (EXPR_LOCATION (call), 0,
@@ -13220,7 +13574,6 @@ oa_handle_call_symbolic_scalar_precondition_obligation (tree call, oa_env &env)
 		      "of %qD", substituted, callee);
 	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	}
-      (void) contract;
     }
 }
 
@@ -14154,9 +14507,17 @@ oa_scan_calls_in_expr (tree *expr, oa_env &env, tree *extra = NULL,
 	return NULL_TREE;
       oa_maybe_instantiate_contracts (cp_get_callee_fndecl_nofold (t));
       oa_handle_call_precondition_obligation (t, *e);
-      if (flag_contract_conveyor_proofs)
+      /* analyzed_conveyor/proven_conveyor (resp. symbolic) on any one of
+	 the callee's own preconditions forces this call's own obligation
+	 discharge on regardless of the command-line flag -- see those
+	 traits' own comment in <contracts>.  */
+      bool conveyor_forced = false;
+      oa_call_conveyor_obligation_status (t, &conveyor_forced, NULL);
+      if (flag_contract_conveyor_proofs || conveyor_forced)
 	oa_handle_call_conveyor_proof_obligation (t, *e);
-      if (flag_contract_symbolic_proofs)
+      bool symbolic_forced = false;
+      oa_call_symbolic_obligation_status (t, &symbolic_forced, NULL);
+      if (flag_contract_symbolic_proofs || symbolic_forced)
 	{
 	  oa_handle_call_symbolic_precondition_obligation (t, *e);
 	  oa_handle_call_symbolic_scalar_precondition_obligation (t, *e);
@@ -14184,7 +14545,7 @@ oa_scan_calls_in_expr (tree *expr, oa_env &env, tree *extra = NULL,
 	 own feature (see oa_contract_fact_tracking_active_p's own
 	 comment).  */
       if (flag_contract_symbolic_proofs || flag_contract_conveyor_proofs
-	  || oa_call_site_callback)
+	  || oa_call_site_callback || conveyor_forced || symbolic_forced)
 	{
 	  oa_invalidate_symbolic_facts_for_call_args (t, *e);
 	  oa_invalidate_symbolic_scalar_range_for_call_args (t, *e);
@@ -14871,35 +15232,96 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
      so no substitution needed) where the equivalent fix for an actual
      postcondition is not (a postcondition is checked once, at a single
      shared exit point downstream of every return, not per-program-point
-     during the walk -- out of scope here). Gated on the proofs flags,
-     exactly like the call-obligation family: an ordinary compile with
-     neither flag sees no behavior change at all, and a merely-
-     unprovable (OA_UNKNOWN) or consistent (OA_PROVEN_TRUE) conjunct
-     falls through unchanged to the existing self-trust establishment
-     below.  */
+     during the walk -- out of scope here).
+
+     never_proven exempts this contract_assert from this whole step,
+     unconditionally, regardless of any flag or analyzed_conveyor/
+     proven_conveyor -- ANY_CONJUNCT_PROVEN_FALSE simply never gets set,
+     so the fact collection/establishment above and below proceeds
+     exactly as it would for any other conveyor/symbolic contract_assert
+     (see std::never_proven_conveyor in <contracts>: this still
+     establishes itself as a trusted fact, it just never gets checked or
+     diagnosed itself).
+
+     Otherwise, gated on the proofs flags *or* analyzed_conveyor/
+     proven_conveyor forcing analysis on regardless of the flag: an
+     ordinary compile with neither flag (and no forcing trait) sees no
+     behavior change at all. Matches the call-obligation family's own
+     three-way outcome (contracts.cc's own relational/scalar-range
+     call-obligation checks, e.g. ~line 10950): a provable conjunct is
+     silently discharged, a provably false one is always a hard error,
+     and a merely-unprovable (OA_UNKNOWN) one is a warning by default --
+     unless this specific contract is proven_conveyor/proven_symbolic
+     (strict), in which case unproven is *also* a hard error, matching
+     WG14 P4021R2's compile_assert() outcome table exactly.  */
   bool any_conjunct_proven_false = false;
-  if (flag_contract_conveyor_proofs && conveyor_ok)
-    for (unsigned i = 0; i < conjuncts.length (); ++i)
-      if (oa_check_assertion_conjunct_against_env (*conjuncts[i], env,
-						    /*require_conveyor=*/true)
-	  == OA_PROVEN_FALSE)
-	{
-	  error_at (EXPR_LOCATION (*conjuncts[i]),
-		    "%<contract_assert%> condition %qE is provably false",
-		    *conjuncts[i]);
-	  any_conjunct_proven_false = true;
-	}
-  if (flag_contract_symbolic_proofs && symbolic_ok)
-    for (unsigned i = 0; i < conjuncts.length (); ++i)
-      if (oa_check_assertion_conjunct_against_env (*conjuncts[i], env,
-						    /*require_conveyor=*/false)
-	  == OA_PROVEN_FALSE)
-	{
-	  error_at (EXPR_LOCATION (*conjuncts[i]),
-		    "%<contract_assert%> condition %qE is provably false",
-		    *conjuncts[i]);
-	  any_conjunct_proven_false = true;
-	}
+  if (!contract_control_never_proven (CONTRACT_CONTROL_OBJECT (stmt),
+				       contract_side_of (stmt, current_function_decl)))
+    {
+      bool conveyor_analysis = conveyor_ok
+	&& (flag_contract_conveyor_proofs
+	    || oa_contract_conveyor_analysis_forced_p (stmt));
+      bool conveyor_strict = oa_contract_conveyor_strict_p (stmt);
+      if (conveyor_analysis)
+	for (unsigned i = 0; i < conjuncts.length (); ++i)
+	  switch (oa_check_assertion_conjunct_against_env (*conjuncts[i], env,
+							     /*require_conveyor=*/true))
+	    {
+	    case OA_PROVEN_TRUE:
+	      break;
+	    case OA_PROVEN_FALSE:
+	      error_at (EXPR_LOCATION (*conjuncts[i]),
+			"%<contract_assert%> condition %qE is provably false",
+			*conjuncts[i]);
+	      any_conjunct_proven_false = true;
+	      break;
+	    case OA_UNKNOWN:
+	      if (conveyor_strict)
+		{
+		  error_at (EXPR_LOCATION (*conjuncts[i]),
+			    "cannot prove %<contract_assert%> condition %qE",
+			    *conjuncts[i]);
+		  any_conjunct_proven_false = true;
+		}
+	      else
+		warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
+			    "cannot verify %<contract_assert%> condition %qE",
+			    *conjuncts[i]);
+	      break;
+	    }
+
+      bool symbolic_analysis = symbolic_ok
+	&& (flag_contract_symbolic_proofs
+	    || oa_contract_symbolic_analysis_forced_p (stmt));
+      bool symbolic_strict = oa_contract_symbolic_strict_p (stmt);
+      if (symbolic_analysis)
+	for (unsigned i = 0; i < conjuncts.length (); ++i)
+	  switch (oa_check_assertion_conjunct_against_env (*conjuncts[i], env,
+							     /*require_conveyor=*/false))
+	    {
+	    case OA_PROVEN_TRUE:
+	      break;
+	    case OA_PROVEN_FALSE:
+	      error_at (EXPR_LOCATION (*conjuncts[i]),
+			"%<contract_assert%> condition %qE is provably false",
+			*conjuncts[i]);
+	      any_conjunct_proven_false = true;
+	      break;
+	    case OA_UNKNOWN:
+	      if (symbolic_strict)
+		{
+		  error_at (EXPR_LOCATION (*conjuncts[i]),
+			    "cannot prove %<contract_assert%> condition %qE",
+			    *conjuncts[i]);
+		  any_conjunct_proven_false = true;
+		}
+	      else
+		warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
+			    "cannot verify %<contract_assert%> condition %qE",
+			    *conjuncts[i]);
+	      break;
+	    }
+    }
 
   if (!oa_resolve_condition (&cond, env, conveyor_ok, symbolic_ok))
     {
@@ -20745,7 +21167,7 @@ build_contract_check (tree contract)
      CONDITION has gone through the same remap_dummy_this/remap_retval
      processing as every other contract.  */
   bool symbolic_runtime = false;
-  if (ctrl && contract_control_is_symbolic (ctrl, side))
+  if (ctrl && contract_control_symbolic_like (ctrl, side))
     {
       if (!flag_contract_symbolic_runtime_checks)
 	return void_node;

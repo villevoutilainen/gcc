@@ -33910,8 +33910,8 @@ cp_parser_late_contract_condition (cp_parser *parser, tree fn, tree contract)
     current_class_ref = view_as_const (current_class_ref);
 
   bool conveyor_p = flag_contract_control_objects
-    && contract_control_is_conveyor (CONTRACT_CONTROL_OBJECT (contract),
-				      contract_side_of (contract, fn));
+    && contract_control_conveyor_like (CONTRACT_CONTROL_OBJECT (contract),
+					contract_side_of (contract, fn));
   auto conveyor_ovr = make_temp_override (contract_condition_conveyor_p,
 					  conveyor_p);
 
@@ -34171,7 +34171,7 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
     current_class_ref = view_as_const (current_class_ref);
 
   bool conveyor_p = flag_contract_control_objects
-    && contract_control_is_conveyor (control_object, ccs_not_applicable);
+    && contract_control_conveyor_like (control_object, ccs_not_applicable);
   auto conveyor_ovr = make_temp_override (contract_condition_conveyor_p,
 					  conveyor_p);
 
@@ -34533,7 +34533,7 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
 	current_class_ref = view_as_const (current_class_ref);
 
       bool conveyor_p = flag_contract_control_objects
-	&& contract_control_is_conveyor (control_object, ccs_definition);
+	&& contract_control_conveyor_like (control_object, ccs_definition);
       auto conveyor_ovr = make_temp_override (contract_condition_conveyor_p,
 					      conveyor_p);
 
