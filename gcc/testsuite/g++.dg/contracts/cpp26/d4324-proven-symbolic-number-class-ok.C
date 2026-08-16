@@ -12,19 +12,31 @@
 // anywhere in dg-additional-options, since proven_symbolic forces this
 // analysis on by itself.
 //
-// A postcondition's own claim is never verified against its function's
-// own body under proven_symbolic (self-check is conveyor-only) -- it is
-// trusted outright and established for callers, exactly like an
-// ordinary precondition is trusted for a function's own body. This is
-// why the constructor and both mutators each declare an explicit
-// post<>(this->m_value >= 0.0): a plain field write ('m_value = ...;')
-// does not itself establish a field-range fact the way a plain scalar
-// assignment does (see d4324-conveyor-proof-field-range-ok.C's own
-// convention) -- only a declared contract or a real if-condition does.
+// D4324 correction: a symbolic postcondition's self-check is no longer
+// blanket-exempt -- it is now checked with the same rigor a conveyor
+// postcondition's self-check already gets (only a conjunct calling a
+// function declared 'symbolic' stays a trusted axiom; a plain field
+// comparison like this->m_value >= 0.0 does not). The constructor's own
+// post<>(this->m_value >= 0.0) is provable from its body (a plain field
+// write with a precondition-bounded RHS). increase_by/decrease_by's own
+// post<>(this->m_value >= 0.0) is NOT provable from their own bodies,
+// even with a precondition establishing this->m_value's own range at
+// entry (confirmed by direct testing) -- this->m_value *= (1.0 +/-
+// percentage/100.0) is a genuine interval-multiplication limitation of
+// this engine (the same one already documented for the conveyor
+// flavor of this identical class, e.g. the Number-demo godbolt
+// investigation), not a bug this correction is expected to fix.
 //
 // See d4324-proven-symbolic-number-class-bad.C for the genuine
-// violation this same class also demonstrates.
-// { dg-do run { target c++26 } }
+// precondition violation this same class also demonstrates. Switched
+// from 'dg-do run' to 'dg-do compile': increase_by/decrease_by's own
+// postcondition self-check now correctly fails (a hard error under
+// proven_symbolic's own strictness), so this no longer produces a
+// runnable executable -- the file's real purpose (field-range
+// establishment/discharge across separate calls, the bare-parameter
+// combined-range precondition obligation) is still fully exercised at
+// compile time regardless.
+// { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
 #include <contracts>
@@ -41,12 +53,12 @@ struct Number
 
   void increase_by (double percentage)
     pre<sc::proven_symbolic_v>(percentage >= 0.0 && percentage <= 100.0)
-    post<sc::proven_symbolic_v>(this->m_value >= 0.0)
+    post<sc::proven_symbolic_v>(this->m_value >= 0.0) // { dg-error "cannot prove postcondition condition" }
   { m_value *= (1.0 + percentage / 100.0); }
 
   void decrease_by (double percentage)
     pre<sc::proven_symbolic_v>(percentage >= 0.0 && percentage <= 100.0)
-    post<sc::proven_symbolic_v>(this->m_value >= 0.0)
+    post<sc::proven_symbolic_v>(this->m_value >= 0.0) // { dg-error "cannot prove postcondition condition" }
   { m_value *= (1.0 - percentage / 100.0); }
 
   double value () const { return m_value; }
