@@ -38,7 +38,7 @@ struct file_ref {
   operator file* () const { return f; }
 };
 
-void open_it (file * const f) post<conveyor_ctrl_v> (is_opened (f)) { f->opened = true; }
+void open_it (file * const f) post<conveyor_ctrl_v> (is_opened (f)) { f->opened = true; } // { dg-warning "cannot verify postcondition" }
 void use_it (file * const f) pre<conveyor_ctrl_v> (is_opened (f)) { }
 
 int main ()

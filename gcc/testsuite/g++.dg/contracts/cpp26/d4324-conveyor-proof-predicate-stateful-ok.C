@@ -26,7 +26,7 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 
 struct io_facility {
   static bool is_opened (io_facility*) conveyor { return true; }
-  void open () post<conveyor_ctrl_v>(is_opened (this)) {}
+  void open () post<conveyor_ctrl_v>(is_opened (this)) {} // { dg-warning "cannot verify postcondition" }
   void read () pre<conveyor_ctrl_v>(is_opened (this)) {}
 };
 

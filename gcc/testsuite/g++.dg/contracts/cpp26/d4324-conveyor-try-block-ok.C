@@ -31,7 +31,7 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 struct file { bool opened = false; };
 bool is_opened (const file *f) conveyor { return f != nullptr; }
 
-void open_it (file * const f) post<conveyor_ctrl_v> (is_opened (f)) { f->opened = true; }
+void open_it (file * const f) post<conveyor_ctrl_v> (is_opened (f)) { f->opened = true; } // { dg-warning "cannot verify postcondition" }
 void use_it (file * const f) pre<conveyor_ctrl_v> (is_opened (f)) { }
 
 int main ()

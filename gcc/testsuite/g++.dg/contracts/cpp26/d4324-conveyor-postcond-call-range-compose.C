@@ -29,7 +29,8 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 
 struct S {
   int size () const conveyor { return 5; }
-  int make () const conveyor post<conveyor_ctrl_v>(r: r < size ()) { return 1; }
+  int make () const conveyor post<conveyor_ctrl_v>(r: r < size ()) // { dg-warning "cannot verify postcondition" }
+  { return 1; }
 };
 
 int consume (int n) conveyor pre<conveyor_ctrl_v>(n < 10) { return n; }

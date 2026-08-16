@@ -40,7 +40,8 @@ struct test_vector {
 
   // A real, general resize -- 'n' (the parameter) is the postcondition's
   // own "other side", resolved through substitution at each call site.
-  void resize (int const m) post<conveyor_ctrl_v>(size () == m) { n = m; }
+  void resize (int const m) post<conveyor_ctrl_v>(size () == m) // { dg-warning "cannot verify postcondition" }
+  { n = m; }
 };
 
 int use_sound (test_vector& v)

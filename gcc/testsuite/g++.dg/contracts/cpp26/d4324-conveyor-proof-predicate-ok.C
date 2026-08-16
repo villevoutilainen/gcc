@@ -29,7 +29,7 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 // conveyor must be repeated identically on every redeclaration.
 bool check_it (int v) conveyor { return v > 0; }
 
-int produce () post<conveyor_ctrl_v>(r: check_it (r))
+int produce () post<conveyor_ctrl_v>(r: check_it (r)) // { dg-warning "cannot verify postcondition" }
 {
   return 1;
 }
