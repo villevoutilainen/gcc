@@ -8908,6 +8908,13 @@ static bool oa_match_type_bounded_comparison
 static oa_proof_result oa_check_assertion_conjunct_against_env
   (tree conjunct, oa_env &env, bool require_conveyor);
 
+/* Forward-declared for the same reason as the function just above;
+   needed by oa_handle_postcondition_stmt to decide, per-conjunct,
+   whether its new conveyor check should even attempt
+   oa_check_assertion_conjunct_against_env at all -- see this helper's
+   own comment further below for the full rationale.  */
+static bool oa_conjunct_numeric_shape_p (tree conjunct);
+
 /* The last-resort fallback inside oa_refine_single_comparison below:
    "DECL OP <exactly-known point>" refined into ENV's own plain, untagged
    range map (m_range_map) -- factored out into its own function because
@@ -15099,6 +15106,35 @@ static bool oa_return_range_has_fact;
 static bool oa_return_range_seen;
 static oa_range_fact oa_return_range_fact;
 
+/* D4324: postcondition proof-checking, generalized beyond the single
+   is_object_address bool/range-fact pair above -- a full oa_env, merged
+   across every RETURN_EXPR via the same assign()-then-*_merge_with-family
+   idiom TRY_BLOCK/SWITCH_STMT already use for their own N-arm joins (see
+   their own record()/merged/any_result closures), instead of one bespoke
+   scalar accumulator per fact category. Deliberately separate state from
+   OA_RETURN_TRACKING/OA_RETURN_RANGE_TRACKING above -- those stay exactly
+   as they are, still driving oa_resolve_iile_call/oa_resolve_iile_range's
+   own, unrelated IILE-body analysis; this is the postcondition-checking
+   feature's own, parallel mechanism. OA_POSTCONDITION_MERGE_ENV is
+   non-NULL only while walking a function with at least one active
+   postcondition (mirroring OA_IILE_OUTER_ENV's own "pointer into the
+   current top-level walk's own stack frame" shape, not heap-allocated);
+   OA_POSTCONDITION_MERGE_ANY_RESULT parallels TRY_BLOCK's own ANY_RESULT
+   (false until the first RETURN_EXPR is seen); OA_POSTCONDITION_RESULT_IDS
+   holds every distinct POSTCONDITION_IDENTIFIER among this function's own
+   active postconditions (almost always 0 or 1), so each RETURN_EXPR can
+   bind facts about the returned value under every name a postcondition
+   might know it by. Set/cleared and saved/restored around a single
+   function's walk (and around a nested oa_resolve_iile_call/
+   oa_resolve_iile_range walk, exactly like OA_RETURN_TRACKING itself,
+   since a closure body's own returns must not pollute the enclosing
+   function's postcondition merge) by oa_resolve_object_address_in_
+   function_1.  */
+
+static oa_env *oa_postcondition_merge_env;
+static bool oa_postcondition_merge_any_result;
+static auto_vec<tree> *oa_postcondition_result_ids;
+
 /* Resolve CALL (already confirmed by oa_iile_call_p) by walking the
    invoked closure's own operator() body: provable only if the returned
    value is provable on *every* return path (the same merge discipline
@@ -15133,6 +15169,16 @@ oa_resolve_iile_call (tree call, oa_env &env)
      and keeps the two mechanisms cleanly independent regardless).  */
   bool saved_range_tracking = oa_return_range_tracking;
   oa_return_range_tracking = false;
+  /* D4324: suppress the postcondition merge too, for the same reason --
+     this closure body's own returns are not the enclosing function's
+     own returns, and have nothing to do with whatever postcondition the
+     enclosing function may have.  */
+  oa_env *saved_postcondition_merge_env = oa_postcondition_merge_env;
+  bool saved_postcondition_merge_any_result = oa_postcondition_merge_any_result;
+  auto_vec<tree> *saved_postcondition_result_ids = oa_postcondition_result_ids;
+  oa_postcondition_merge_env = NULL;
+  oa_postcondition_merge_any_result = false;
+  oa_postcondition_result_ids = NULL;
 
   oa_iile_outer_env = &env;
   oa_return_tracking = true;
@@ -15154,6 +15200,9 @@ oa_resolve_iile_call (tree call, oa_env &env)
   oa_return_all_provable = saved_all_provable;
   oa_return_seen = saved_seen;
   oa_return_range_tracking = saved_range_tracking;
+  oa_postcondition_merge_env = saved_postcondition_merge_env;
+  oa_postcondition_merge_any_result = saved_postcondition_merge_any_result;
+  oa_postcondition_result_ids = saved_postcondition_result_ids;
 
   return result;
 }
@@ -15181,6 +15230,14 @@ oa_resolve_iile_range (tree call, oa_env &env, oa_range_fact *out)
      same reason oa_resolve_iile_call suppresses this one.  */
   bool saved_tracking = oa_return_tracking;
   oa_return_tracking = false;
+  /* D4324: suppress the postcondition merge too -- see
+     oa_resolve_iile_call's own identical suppression and its comment.  */
+  oa_env *saved_postcondition_merge_env = oa_postcondition_merge_env;
+  bool saved_postcondition_merge_any_result = oa_postcondition_merge_any_result;
+  auto_vec<tree> *saved_postcondition_result_ids = oa_postcondition_result_ids;
+  oa_postcondition_merge_env = NULL;
+  oa_postcondition_merge_any_result = false;
+  oa_postcondition_result_ids = NULL;
 
   oa_iile_outer_env = &env;
   oa_return_range_tracking = true;
@@ -15202,6 +15259,9 @@ oa_resolve_iile_range (tree call, oa_env &env, oa_range_fact *out)
   oa_return_range_seen = saved_range_seen;
   oa_return_range_fact = saved_range_fact;
   oa_return_tracking = saved_tracking;
+  oa_postcondition_merge_env = saved_postcondition_merge_env;
+  oa_postcondition_merge_any_result = saved_postcondition_merge_any_result;
+  oa_postcondition_result_ids = saved_postcondition_result_ids;
 
   return result;
 }
@@ -15626,6 +15686,12 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 
       bool saved_tracking = oa_return_tracking;
       oa_return_tracking = false;
+      /* D4324: suppress the postcondition merge too -- this speculative
+	 re-walk doesn't represent any real execution, so a RETURN_EXPR
+	 reached inside the loop body here (e.g. 'for (...) { if (c) return
+	 x; ... }') must not feed a snapshot into the real, shared merge.  */
+      oa_env *saved_postcondition_merge_env = oa_postcondition_merge_env;
+      oa_postcondition_merge_env = NULL;
       /* -fcontract-symbolic-runtime-checks (Mechanism B): this re-walk
 	 exists purely to compute a compile-time fact (does D stay
 	 provable independent of its own prior value) -- it never
@@ -15641,6 +15707,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       oa_diagnostics_active = saved_diagnostics_active;
       oa_symbolic_codegen_active = saved_symbolic_codegen;
       oa_return_tracking = saved_tracking;
+      oa_postcondition_merge_env = saved_postcondition_merge_env;
 
       result_decls.safe_push (d);
       result_provable.safe_push (pre_ok && checkenv.provable_p (d));
@@ -15668,6 +15735,10 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 
       bool saved_tracking = oa_return_tracking;
       oa_return_tracking = false;
+      /* D4324: suppress the postcondition merge too -- see the
+	 REASSIGNED loop's own identical suppression and its comment.  */
+      oa_env *saved_postcondition_merge_env = oa_postcondition_merge_env;
+      oa_postcondition_merge_env = NULL;
       bool saved_symbolic_codegen = oa_symbolic_codegen_active;
       oa_symbolic_codegen_active = false;
       bool saved_diagnostics_active = oa_diagnostics_active;
@@ -15676,6 +15747,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       oa_diagnostics_active = saved_diagnostics_active;
       oa_symbolic_codegen_active = saved_symbolic_codegen;
       oa_return_tracking = saved_tracking;
+      oa_postcondition_merge_env = saved_postcondition_merge_env;
 
       nz_result_decls.safe_push (d);
       nz_result_provable.safe_push (pre_ok && checkenv.nz_provable_p (d));
@@ -15769,6 +15841,10 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 
       bool saved_tracking = oa_return_tracking;
       oa_return_tracking = false;
+      /* D4324: suppress the postcondition merge too -- see the
+	 REASSIGNED loop's own identical suppression and its comment.  */
+      oa_env *saved_postcondition_merge_env = oa_postcondition_merge_env;
+      oa_postcondition_merge_env = NULL;
       bool saved_symbolic_codegen = oa_symbolic_codegen_active;
       oa_symbolic_codegen_active = false;
       bool saved_diagnostics_active = oa_diagnostics_active;
@@ -15777,6 +15853,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       oa_diagnostics_active = saved_diagnostics_active;
       oa_symbolic_codegen_active = saved_symbolic_codegen;
       oa_return_tracking = saved_tracking;
+      oa_postcondition_merge_env = saved_postcondition_merge_env;
 
       oa_range_fact post_fact;
       bool post_ok = checkenv.range_get (d, &post_fact);
@@ -16378,7 +16455,8 @@ oa_walk_stmt (tree *stmt, oa_env &env)
       return;
 
     case RETURN_EXPR:
-      if (oa_return_tracking || oa_return_range_tracking)
+      if (oa_return_tracking || oa_return_range_tracking
+	  || oa_postcondition_merge_env)
 	{
 	  /* The return value: TREE_OPERAND (t, 0) is either the plain
 	     value expression (void-returning path not relevant here) or
@@ -16433,6 +16511,82 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		  if (oa_return_range_fact.has_hi)
 		    oa_return_range_fact.hi
 		      = wi::smax (oa_return_range_fact.hi, this_fact.hi);
+		}
+	    }
+
+	  /* D4324: postcondition proof-checking -- capture a full snapshot
+	     of ENV as it stands at this specific return (already a sound,
+	     per-path env: every branch/loop/try join earlier in the walk
+	     has already merged whatever it needed to, by the time control
+	     reaches any one RETURN_EXPR), bind each active postcondition's
+	     own named result identifier's facts from VAL the same way an
+	     ordinary assignment binds its own LHS's facts from its RHS
+	     (mirrors the INIT_EXPR/MODIFY_EXPR case's own per-category
+	     binding blocks exactly, just keyed on RESULT_ID instead of
+	     LHS, reading from VAL/ENV instead of RHS/ENV), then fold this
+	     one snapshot into the running merge the same way TRY_BLOCK/
+	     SWITCH_STMT already fold each of their own N arms: assign()
+	     seeds it on the first return seen, every subsequent return
+	     merges via the full *_merge_with family -- see
+	     OA_POSTCONDITION_MERGE_ENV's own comment.  */
+	  if (oa_postcondition_merge_env)
+	    {
+	      oa_env snap = env.copy ();
+	      for (unsigned i = 0; i < oa_postcondition_result_ids->length ();
+		   ++i)
+		{
+		  tree result_id = (*oa_postcondition_result_ids)[i];
+		  snap.set (result_id, oa_provable_p (val, env));
+		  oa_range_fact fact;
+		  if (oa_get_range (val, env, &fact))
+		    snap.range_set (result_id, fact);
+		  else
+		    snap.range_invalidate (result_id);
+		  if (INTEGRAL_TYPE_P (TREE_TYPE (result_id)))
+		    snap.nz_set (result_id, oa_provably_nonzero_p (val, env));
+		  oa_relational_fact rel_fact;
+		  if (oa_get_relational (val, env, &rel_fact))
+		    snap.relational_set (result_id, rel_fact.code, rel_fact.rhs,
+					  rel_fact.conveyor_established,
+					  rel_fact.offset);
+		  oa_call_relational_fact call_rel_fact;
+		  if (oa_get_call_relational (val, env, &call_rel_fact))
+		    snap.call_relational_set (result_id, call_rel_fact.code,
+					      call_rel_fact.rhs_receiver,
+					      call_rel_fact.rhs_callee,
+					      call_rel_fact.conveyor_established,
+					      call_rel_fact.offset);
+		  tree stripped_val = STRIP_ANY_LOCATION_WRAPPER (val);
+		  tree pred_fn;
+		  bool polarity, pred_conveyor_established;
+		  if (TREE_CODE (stripped_val) == CALL_EXPR
+		      && oa_call_symbolic_predicate_p (stripped_val, &pred_fn,
+							&polarity,
+							&pred_conveyor_established))
+		    snap.predicate_fact_set (result_id, pred_fn, polarity,
+					      pred_conveyor_established);
+		}
+	      if (!oa_postcondition_merge_any_result)
+		{
+		  oa_postcondition_merge_env->assign (snap);
+		  oa_postcondition_merge_any_result = true;
+		}
+	      else
+		{
+		  oa_postcondition_merge_env->merge_with (snap);
+		  oa_postcondition_merge_env->range_merge_with (snap);
+		  oa_postcondition_merge_env->predicate_fact_merge_with (snap);
+		  oa_postcondition_merge_env->relational_merge_with (snap);
+		  oa_postcondition_merge_env->type_bound_merge_with (snap);
+		  oa_postcondition_merge_env->call_relational_merge_with (snap);
+		  oa_postcondition_merge_env->call_call_relational_merge_with (snap);
+		  oa_postcondition_merge_env->contract_scalar_range_merge_with (snap);
+		  oa_postcondition_merge_env->contract_field_range_merge_with (snap);
+		  oa_postcondition_merge_env->contract_call_range_merge_with (snap);
+		  oa_postcondition_merge_env->shadow_decls_merge_with (snap);
+		  oa_postcondition_merge_env->alias_merge_with (snap);
+		  oa_postcondition_merge_env->field_alias_merge_with (snap);
+		  oa_postcondition_merge_env->array_alias_merge_with (snap);
 		}
 	    }
 	}
@@ -17749,28 +17903,37 @@ oa_has_active_postcondition (tree fndecl)
    CONTRACT is the actual node embedded in the body, for the same
    sharing reason explained on oa_handle_precondition_stmt above.
 
-   D4324: "this is proven" above is currently only true for is_object_
-   address claims (via OA_RETURN_ALL_PROVABLE/OA_RETURN_SEEN) -- for an
-   ordinary relational/range claim (e.g. 'post<ctrl>(r: r > 0)'), this
-   function -- like oa_resolve_condition it calls into -- has no
-   equivalent verification at all, the same gap
-   oa_check_assertion_conjunct_against_env (above, this file) closes
-   for a bare contract_assert. Fixing it here is NOT the same size of
-   change: a contract_assert sits at one real program point reached
-   during the ordinary walk, where the already-sound per-point ENV is
-   simply consulted in place; a postcondition is checked once, at a
-   single shared exit point downstream of *every* return (see the
-   TRY_FINALLY_EXPR/EH_ELSE_EXPR comment above), and the ENV that
-   reaches it is an artifact of walk order, not a genuine multi-exit
-   join. The one thing that IS correctly merged across every return
-   today is OA_RETURN_RANGE_FACT (see oa_return_range_tracking's own
-   comment further up) -- but it's scoped to exactly one fact about the
-   return expression itself, isn't even enabled for a self-postcondition
-   check today (only for oa_resolve_iile_call's own, different, IILE-body
-   analysis), and has no analog for a postcondition naming an ordinary
-   parameter directly. Making this sound would need new per-exit-point
-   fact-merging infrastructure generalized well beyond that one
-   accumulator -- a real, separate undertaking, not attempted here.  */
+   D4324: "this is proven" above was previously only true for is_object_
+   address claims (via OA_RETURN_ALL_PROVABLE/OA_RETURN_SEEN) -- an
+   ordinary relational/range/named-predicate claim (e.g. 'post<ctrl>(r:
+   r > 0)') was never checked against anything at all, the same gap
+   oa_check_assertion_conjunct_against_env (above, this file) closes for
+   a bare contract_assert. That fix couldn't just be reused directly: a
+   contract_assert sits at one real program point reached once during
+   the ordinary walk, where the already-sound per-point ENV is simply
+   consulted in place; a postcondition is checked once, at a single
+   shared exit point downstream of *every* return (see the
+   TRY_FINALLY_EXPR/EH_ELSE_EXPR comment above), so the naive ENV
+   reaching this point is just an artifact of walk order, not a genuine
+   multi-exit join. Closed via OA_POSTCONDITION_MERGE_ENV (own comment,
+   near OA_RETURN_TRACKING): a full oa_env merged across every
+   RETURN_EXPR the same way TRY_BLOCK/SWITCH_STMT already merge their
+   own N arms, with each active postcondition's own named result
+   identifier bound from the actual returned value at each return, the
+   same way an ordinary assignment binds its own LHS from its RHS.
+
+   Conveyor-only -- symbolic postconditions stay exempt, unlike
+   contract_assert's own two-pass conveyor+symbolic check: a
+   postcondition's job is to hand *callers* a trusted fact (item 6); for
+   conveyor that handed-off fact is backed by the same real, mandatory
+   UB-freedom substrate everything else conveyor relies on, so checking
+   it here is that same machinery applied reflexively to its own
+   declaration. Symbolic facts have no such backing anywhere in this
+   file -- a symbolic postcondition's established fact is a pure,
+   first-class axiom the user vouches for outright, and checking it here
+   would only ever consult this same function's own internal symbolic
+   bookkeeping, not anything conveyor-grounded, so it stays trusted and
+   established exactly as before, never checked.  */
 
 static void
 oa_handle_postcondition_stmt (tree contract, oa_env &env)
@@ -17781,9 +17944,20 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
   if (cond == NULL_TREE || cond == error_mark_node)
     return;
 
-  oa_env ret_env;
+  /* The real, merged-across-every-return env when one exists (i.e. the
+     function reached at least one RETURN_EXPR); otherwise fall back to
+     today's exact prior behavior (a fresh, near-empty env with only the
+     is_object_address boolean seeded false) -- the same conservative
+     "nothing provable" outcome as before for a function with no return
+     statement at all (e.g. every path throws).  */
+  oa_env empty_ret_env;
+  oa_env &ret_env
+    = (oa_postcondition_merge_env && oa_postcondition_merge_any_result)
+      ? *oa_postcondition_merge_env : empty_ret_env;
   tree result_id = POSTCONDITION_IDENTIFIER (contract);
-  if (result_id && (VAR_P (result_id) || TREE_CODE (result_id) == PARM_DECL))
+  bool have_result_id
+    = result_id && (VAR_P (result_id) || TREE_CODE (result_id) == PARM_DECL);
+  if (have_result_id && &ret_env == &empty_ret_env)
     ret_env.set (result_id, oa_return_seen && oa_return_all_provable);
 
   /* D4324/P2680, Increment V: the narrow item-8 dataflow checks, same as
@@ -17803,9 +17977,68 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
   if (conveyor_ok)
     {
       oa_env scan_env = env.copy ();
-      if (result_id && (VAR_P (result_id) || TREE_CODE (result_id) == PARM_DECL))
+      if (have_result_id)
 	scan_env.set (result_id, oa_return_seen && oa_return_all_provable);
       oa_scan_item8_in_expr (&cond, scan_env);
+    }
+
+  /* D4324: check the postcondition's own condition against RET_ENV,
+     conveyor-only (see this function's own comment above for why
+     symbolic stays exempt), mirroring oa_handle_assertion_stmt's own
+     conveyor pass exactly -- never_proven exempts this postcondition
+     from the check entirely (still established for callers as always,
+     via the separate, unrelated item-6 mechanism elsewhere in this
+     file), analyzed_conveyor/proven_conveyor force the check on
+     regardless of -fcontract-conveyor-proofs, and proven_conveyor's own
+     strictness makes an unprovable (not just provably-false) conjunct a
+     hard error too, matching every other proven_conveyor site in this
+     file.  */
+  if (conveyor_ok
+      && !contract_control_never_proven (
+	   CONTRACT_CONTROL_OBJECT (contract),
+	   contract_side_of (contract, current_function_decl)))
+    {
+      bool conveyor_analysis
+	= flag_contract_conveyor_proofs
+	  || oa_contract_conveyor_analysis_forced_p (contract);
+      bool conveyor_strict = oa_contract_conveyor_strict_p (contract);
+      if (conveyor_analysis)
+	{
+	  auto_vec<tree *> conjuncts;
+	  oa_collect_conjuncts (&cond, &conjuncts);
+	  for (unsigned i = 0; i < conjuncts.length (); ++i)
+	    {
+	      /* See oa_conjunct_numeric_shape_p's own comment: only a
+		 plain numeric-range/relational conjunct is checked here --
+		 a named-predicate/field-range/call-range one is a
+		 deliberate, unverifiable-by-design axiom, exactly like a
+		 symbolic fact, and must stay trusted and established, not
+		 flagged.  */
+	      if (!oa_conjunct_numeric_shape_p (*conjuncts[i]))
+		continue;
+	      switch (oa_check_assertion_conjunct_against_env (*conjuncts[i], ret_env,
+								 /*require_conveyor=*/true))
+		{
+		case OA_PROVEN_TRUE:
+		  break;
+		case OA_PROVEN_FALSE:
+		  error_at (EXPR_LOCATION (*conjuncts[i]),
+			    "postcondition condition %qE is provably false",
+			    *conjuncts[i]);
+		  break;
+		case OA_UNKNOWN:
+		  if (conveyor_strict)
+		    error_at (EXPR_LOCATION (*conjuncts[i]),
+			      "cannot prove postcondition condition %qE",
+			      *conjuncts[i]);
+		  else
+		    warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
+				"cannot verify postcondition condition %qE",
+				*conjuncts[i]);
+		  break;
+		}
+	    }
+	}
     }
 
   if (!oa_resolve_condition (&cond, ret_env, conveyor_ok, symbolic_ok))
@@ -18038,6 +18271,41 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
   oa_return_all_provable = false;
   oa_return_seen = false;
 
+  /* D4324: arm the postcondition merge on the same condition as the
+     OA_RETURN_TRACKING boolean/range accumulators just above -- see
+     OA_POSTCONDITION_MERGE_ENV's own comment.  POSTCONDITION_MERGE_ENV/
+     POSTCONDITION_RESULT_IDS are local to this one top-level walk (this
+     function is the sole top-level driver, never nested), so no
+     save/restore is needed, only arm-then-reset, matching OA_RETURN_
+     TRACKING's own discipline just above.  */
+  oa_env postcondition_merge_env;
+  auto_vec<tree> postcondition_result_ids;
+  if (oa_return_tracking)
+    {
+      for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+	{
+	  tree contract = CONTRACT_STATEMENT (as);
+	  if (!POSTCONDITION_P (contract))
+	    continue;
+	  tree result_id = POSTCONDITION_IDENTIFIER (contract);
+	  if (!result_id
+	      || (!VAR_P (result_id) && TREE_CODE (result_id) != PARM_DECL))
+	    continue;
+	  bool already_have = false;
+	  for (unsigned i = 0; i < postcondition_result_ids.length (); ++i)
+	    if (postcondition_result_ids[i] == result_id)
+	      {
+		already_have = true;
+		break;
+	      }
+	  if (!already_have)
+	    postcondition_result_ids.safe_push (result_id);
+	}
+      oa_postcondition_merge_env = &postcondition_merge_env;
+      oa_postcondition_result_ids = &postcondition_result_ids;
+    }
+  oa_postcondition_merge_any_result = false;
+
   /* -fcontract-symbolic-runtime-checks (Mechanism B): active for this
      one top-level walk whenever the flag is on -- saved/restored (not
      just set unconditionally false at the end) for the same reason
@@ -18065,6 +18333,9 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
   oa_active_provenance = saved_provenance;
   oa_return_tracking = false;
   oa_symbolic_codegen_active = saved_symbolic_codegen;
+  oa_postcondition_merge_env = NULL;
+  oa_postcondition_merge_any_result = false;
+  oa_postcondition_result_ids = NULL;
 }
 
 /* Top-level entry point, called from finish_function alongside
@@ -19843,6 +20114,41 @@ oa_match_comparison_against_call_var (tree conjunct, tree *decl_out,
   *rhs_receiver_out = receiver;
   *rhs_callee_out = callee;
   return true;
+}
+
+/* D4324: does CONJUNCT have a shape whose truth is something this
+   pass's own reasoning could plausibly have derived from real,
+   computed values -- a plain numeric-range or relational comparison,
+   the same two shapes oa_check_assertion_conjunct_against_env's own
+   first two branches try (oa_match_simple_comparison_var/
+   oa_match_comparison_against_decl) -- as opposed to a named-
+   predicate/field-range/call-range/call-relational shape, whose truth
+   instead comes from trusting some *other* function's own opaque
+   contract, never from anything this pass itself computes?
+
+   Used only by oa_handle_postcondition_stmt's own new conveyor check
+   (see its own comment): unlike a contract_assert (which checks every
+   shape oa_check_assertion_conjunct_against_env recognizes, since a
+   false contract_assert conjunct there is a bug regardless of shape),
+   a postcondition asserting an opaque predicate about its own
+   parameters or return value -- e.g. 'post<ctrl>(is_opened (f))' -- is
+   routinely a deliberate, unverifiable-by-design axiom the function
+   declares for callers to trust, exactly like a symbolic fact;
+   checking it here would falsely flag the ordinary, intended use of a
+   named predicate as a postcondition. Confirmed by direct testing:
+   before this scoping was added, d4324-conveyor-try-block-ok.C's own
+   'post<conveyor_ctrl_v> (is_opened (f))' -- open_it's body never
+   calls anything that would establish it -- incorrectly warned "cannot
+   verify", and d4324-conveyor-proof-predicate-ok.C's own 'post<ctrl>(r:
+   check_it (r))' likewise, both existing, correct tests.  */
+
+static bool
+oa_conjunct_numeric_shape_p (tree conjunct)
+{
+  tree decl, other, const_val;
+  tree_code code;
+  return oa_match_simple_comparison_var (conjunct, &decl, &code, &const_val)
+	 || oa_match_comparison_against_decl (conjunct, &decl, &code, &other);
 }
 
 /* D4324: check CONJUNCT (part of a contract_assert's own condition)
