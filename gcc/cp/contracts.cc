@@ -17291,6 +17291,88 @@ oa_cache_contract_flavors (tree fndecl)
     }
 }
 
+/* Cheap pre-scan: does FNDECL's own analysis potentially need the full
+   oa_walk_stmt pass at all?  Conservative by design (a later increment
+   may make this lazier still) -- true whenever anything below *might*
+   need proving/checking, so the only thing skipping the full walk
+   buys is a function where nothing here is present at all.  BODY is
+   FNDECL's own (non-NULL, non-error) DECL_SAVED_TREE.
+
+   Deliberately does *not* try to special-case "a pre/post/assert is
+   present but not itself conveyor/symbolic-active" as still skippable:
+   such a contract's own condition still needs oa_resolve_condition's
+   well-formedness check (e.g. a non-active pre<> containing
+   is_object_address is still an error), and replicating that check
+   standalone here would just be a second, narrower copy of the real
+   walk -- "any contract present at all, active or not" is the
+   simplest answer that stays correct.
+
+   The two call-obligation cases below (a callee's own active
+   precondition, discharged at this call site regardless of whether
+   *this* function has any contracts of its own -- see oa_handle_call_
+   precondition_obligation's own comment) are the reason this can't
+   just check FNDECL's own contracts: gcc.dg/.../d4324-object-address-
+   callsite-bad.C is exactly a contract-free caller that still must be
+   walked because its callee isn't.  */
+
+static bool
+oa_function_needs_walk_p (tree fndecl, tree body)
+{
+  /* Both orthogonal to per-function contract activity -- never skip
+     when either could observe/mutate this function's own walk (see
+     oa_symbolic_codegen_active's/oa_call_site_callback's own
+     comments).  */
+  if (flag_contract_symbolic_runtime_checks || oa_call_site_callback)
+    return true;
+
+  if (get_fn_contract_specifiers (fndecl))
+    return true;
+
+  if (DECL_DECLARED_CONVEYOR_P (fndecl))
+    return true;
+
+  /* One combined body scan: any contract_assert of its own, or any
+     call whose callee has an active conveyor/symbolic precondition.
+     oa_maybe_instantiate_contracts first, exactly like oa_scan_calls_
+     in_expr itself does, so a template callee's own contracts are
+     never mis-read as absent.  */
+  bool found = false;
+  cp_walk_tree (&body, [](tree *tp, int *, void *data) -> tree
+    {
+      bool *found = (bool *) data;
+      tree t = *tp;
+      if (t == NULL_TREE || t == error_mark_node)
+	return NULL_TREE;
+      if (TREE_CODE (t) == ASSERTION_STMT)
+	{
+	  *found = true;
+	  return t;
+	}
+      if (TREE_CODE (t) == CALL_EXPR)
+	{
+	  tree callee = cp_get_callee_fndecl_nofold (t);
+	  if (callee && TREE_CODE (callee) == FUNCTION_DECL)
+	    {
+	      oa_maybe_instantiate_contracts (callee);
+	      for (tree as = get_fn_contract_specifiers (callee); as;
+		   as = TREE_CHAIN (as))
+		{
+		  tree contract = CONTRACT_STATEMENT (as);
+		  if (PRECONDITION_P (contract)
+		      && (oa_contract_conveyor_active_p (contract, callee)
+			  || oa_contract_symbolic_active_p (contract, callee)))
+		    {
+		      *found = true;
+		      return t;
+		    }
+		}
+	    }
+	}
+      return NULL_TREE;
+    }, &found, NULL);
+  return found;
+}
+
 /* Plugin-facing (and, prospectively, in-tree-GIMPLE-pass-facing)
    readers of the cache oa_cache_contract_flavors populates -- pure
    lookups, no semantic analysis, safe to call at any time after the
@@ -17335,6 +17417,20 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
   tree body = DECL_SAVED_TREE (fndecl);
   if (body == NULL_TREE || body == error_mark_node)
     return;
+
+  if (!oa_function_needs_walk_p (fndecl, body))
+    {
+      /* Nothing here could possibly need proving -- but a stray,
+	 always-illegal is_object_address/symbolic-declared call can
+	 still be anywhere in this body, and since oa_function_needs_
+	 walk_p just proved there is no ASSERTION_STMT/PRECONDITION_STMT/
+	 POSTCONDITION_STMT anywhere in it either, every such call found
+	 here is necessarily stray (no legitimate contract condition
+	 exists anywhere in this function to legally contain one).  */
+      oa_scan_stray_is_object_address (&body);
+      oa_scan_stray_symbolic_call (&body);
+      return;
+    }
 
   oa_env env;
   /* Stage 5: the shared, cross-branch, cross-nested-walk cache backing
