@@ -8844,6 +8844,46 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
       return env.range_get (expr, out);
     }
 
+  /* D4324: a field access ('this->field'/'obj.field'), resolved against
+     the same established m_contract_field_range_map a declared contract
+     or an if-condition refinement already populates -- lets a compound
+     expression naming a field (e.g. 'percentage + this->m_value', via
+     the PLUS_EXPR case below recursing back into this function) resolve
+     the field's own share of it, not just a bare field access reached
+     directly. Gated on CONVEYOR_ESTABLISHED unconditionally, unlike the
+     plain VAR_P/PARM_DECL case above: m_range_map's own facts are
+     trusted regardless of provenance because they only ever come from
+     real, actually-executed control flow or arithmetic, but a field
+     fact can *also* come from a purely symbolic (never verified)
+     postcondition's own claim -- and this function has no
+     REQUIRE_CONVEYOR parameter to let a caller ask for the weaker
+     trust (adding one would touch on the order of 150 existing call
+     sites). Conservative rather than unsound: this only ever makes the
+     function decline more often for a symbolic-only fact, never accept
+     something it shouldn't.  */
+  if (TREE_CODE (expr) == COMPONENT_REF)
+    {
+      tree field = TREE_OPERAND (expr, 1);
+      tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (TREE_CODE (field) != FIELD_DECL)
+	return false;
+      tree obj_expr = TREE_CODE (obj) == INDIRECT_REF
+	? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0)) : obj;
+      tree identity;
+      if (!oa_object_identity_decl (obj_expr, &identity)
+	  && !oa_field_slot_identity (obj_expr, env, &identity)
+	  && !oa_array_slot_identity (obj_expr, env, &identity)
+	  && !oa_field_object_identity (obj_expr, env, &identity))
+	return false;
+      identity = env.alias_find (identity);
+      oa_contract_field_range_fact established;
+      if (!env.contract_field_range_get (identity, field, &established)
+	  || !established.conveyor_established)
+	return false;
+      *out = established.range;
+      return true;
+    }
+
   /* D4324: general interval-vs-interval arithmetic -- both operands are
      resolved via a recursive oa_get_range call, unconditionally (a
      literal INTEGER_CST already resolves to the degenerate one-point
@@ -9203,6 +9243,32 @@ oa_get_float_range (tree expr, oa_env &env, oa_float_range_fact *out)
 	    return oa_get_float_range (captured, *oa_iile_outer_env, out);
 	}
       return env.float_range_get (expr, out);
+    }
+
+  /* D4324: the floating-point analogue of oa_get_range's own identical
+     COMPONENT_REF case just above -- same CONVEYOR_ESTABLISHED gate,
+     for the same reason (see that case's own comment).  */
+  if (TREE_CODE (expr) == COMPONENT_REF)
+    {
+      tree field = TREE_OPERAND (expr, 1);
+      tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (TREE_CODE (field) != FIELD_DECL)
+	return false;
+      tree obj_expr = TREE_CODE (obj) == INDIRECT_REF
+	? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0)) : obj;
+      tree identity;
+      if (!oa_object_identity_decl (obj_expr, &identity)
+	  && !oa_field_slot_identity (obj_expr, env, &identity)
+	  && !oa_array_slot_identity (obj_expr, env, &identity)
+	  && !oa_field_object_identity (obj_expr, env, &identity))
+	return false;
+      identity = env.alias_find (identity);
+      oa_contract_float_field_range_fact established;
+      if (!env.contract_float_field_range_get (identity, field, &established)
+	  || !established.conveyor_established)
+	return false;
+      *out = established.range;
+      return true;
     }
 
   /* PLUS_EXPR/MINUS_EXPR/MULT_EXPR are shared tree codes between
@@ -11814,6 +11880,18 @@ static void oa_handle_call_conveyor_call_range_obligation
    own two parameters at this specific call site.  */
 static tree oa_substitute_call_arg (tree callee, tree call, tree param);
 
+/* Forward-declared: defined right after oa_substitute_call_arg above,
+   needed here (oa_handle_precondition_simple_range_obligation below)
+   for its own general-expression precondition fallback.  */
+static tree oa_substitute_call_expr (tree callee, tree call, tree expr);
+
+/* Forward-declared: defined near oa_match_simple_comparison (its own
+   more-restrictive sibling), needed here for the same reason as
+   oa_substitute_call_expr immediately above.  */
+static bool oa_match_general_comparison (tree conjunct, tree *expr_out,
+					  tree_code *code_out,
+					  tree *const_val_out);
+
 /* Forward-declared: full definition is much further below, near
    oa_env_check_comparison_1 (its own non-relational sibling), but both
    oa_handle_call_conveyor_proof_obligation here and oa_handle_call_
@@ -11946,43 +12024,140 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 	{
 	  tree param, const_val;
 	  tree_code code;
-	  if (!oa_match_simple_comparison (*conjuncts[i], &param, &code,
-					    &const_val))
-	    continue;
-
-	  if (TREE_CODE (const_val) == REAL_CST)
+	  if (oa_match_simple_comparison (*conjuncts[i], &param, &code,
+					   &const_val))
 	    {
-	      unsigned idx;
-	      for (idx = 0; idx < float_range_parms.length (); ++idx)
-		if (float_range_parms[idx] == param)
-		  break;
-	      if (idx == float_range_parms.length ())
+	      if (TREE_CODE (const_val) == REAL_CST)
 		{
-		  float_range_parms.safe_push (param);
-		  oa_float_range_fact fresh;
-		  fresh.has_lo = fresh.has_hi = false;
-		  float_range_facts.safe_push (fresh);
+		  unsigned idx;
+		  for (idx = 0; idx < float_range_parms.length (); ++idx)
+		    if (float_range_parms[idx] == param)
+		      break;
+		  if (idx == float_range_parms.length ())
+		    {
+		      float_range_parms.safe_push (param);
+		      oa_float_range_fact fresh;
+		      fresh.has_lo = fresh.has_hi = false;
+		      float_range_facts.safe_push (fresh);
+		    }
+		  oa_float_tighten_range_bound (float_range_facts[idx], code,
+						 TREE_REAL_CST (const_val),
+						 TREE_TYPE (param));
+		  continue;
 		}
-	      oa_float_tighten_range_bound (float_range_facts[idx], code,
-					     TREE_REAL_CST (const_val),
-					     TREE_TYPE (param));
+
+	      unsigned idx;
+	      for (idx = 0; idx < range_parms.length (); ++idx)
+		if (range_parms[idx] == param)
+		  break;
+	      if (idx == range_parms.length ())
+		{
+		  range_parms.safe_push (param);
+		  oa_range_fact fresh;
+		  fresh.base = NULL_TREE;
+		  fresh.has_lo = fresh.has_hi = false;
+		  range_facts.safe_push (fresh);
+		}
+	      oa_tighten_range_bound (range_facts[idx], code,
+				      wi::to_widest (const_val));
 	      continue;
 	    }
 
-	  unsigned idx;
-	  for (idx = 0; idx < range_parms.length (); ++idx)
-	    if (range_parms[idx] == param)
-	      break;
-	  if (idx == range_parms.length ())
+	  /* D4324: a compound expression compared to a literal (e.g.
+	     'percentage + this->m_value >= 0.0'), matching neither the
+	     bare-parameter shape just above nor a field/relational/call
+	     shape any other conjunct handler in this file recognizes --
+	     previously such a conjunct was silently dropped with no
+	     diagnostic at all (found via direct testing: present or
+	     absent, it changed nothing about the compile output), which
+	     is worse than declining, since it looks like something is
+	     being checked when nothing is. Checked per-conjunct
+	     independently here (no cross-conjunct combining into one
+	     interval, unlike the bare-parameter accumulation above) via
+	     oa_substitute_call_expr's own recursive substitution feeding
+	     oa_env_check_range_subsumption/oa_env_check_float_range_
+	     subsumption, which already accept an arbitrary expression, not
+	     just a bare decl.  A substitution failure (the expression
+	     names something other than one of CALLEE's own parameters or
+	     fields) is treated as OA_UNKNOWN, the same "cannot verify"/
+	     "cannot prove" outcome as any other unresolvable fact in this
+	     function, rather than silently skipped.
+
+	     A *bare* field access ('this->field OP const') or a *bare*
+	     call-range accessor ('this->accessor () OP const') both also
+	     match oa_match_general_comparison's own, deliberately broad
+	     "any expression vs literal" shape -- but each already has its
+	     own dedicated obligation handler elsewhere in this same
+	     oa_scan_calls_in_expr pass (oa_handle_call_conveyor_field_
+	     range_obligation / oa_handle_call_conveyor_call_range_
+	     obligation), so this fallback must explicitly decline both,
+	     or the same conjunct gets diagnosed twice -- confirmed as a
+	     real, duplicate-diagnostic regression by direct testing
+	     before this guard was added.  */
+	  {
+	    tree dummy_field, dummy_ptr, dummy_const, dummy_receiver, dummy_callee;
+	    tree_code dummy_code;
+	    if (oa_symbolic_comparison_conjunct_shape (*conjuncts[i], &dummy_field,
+							&dummy_ptr, &dummy_code,
+							&dummy_const)
+		|| oa_call_range_conjunct_shape (*conjuncts[i], &dummy_receiver,
+						  &dummy_callee, &dummy_code,
+						  &dummy_const,
+						  /*allow_symbolic_accessor=*/
+						    !conveyor))
+	      continue;
+	  }
+
+	  tree gen_expr, gen_const;
+	  tree_code gen_code;
+	  if (oa_match_general_comparison (*conjuncts[i], &gen_expr, &gen_code,
+					    &gen_const))
 	    {
-	      range_parms.safe_push (param);
-	      oa_range_fact fresh;
-	      fresh.base = NULL_TREE;
-	      fresh.has_lo = fresh.has_hi = false;
-	      range_facts.safe_push (fresh);
+	      tree substituted = oa_substitute_call_expr (callee, call, gen_expr);
+	      oa_proof_result r;
+	      if (!substituted)
+		r = OA_UNKNOWN;
+	      else if (TREE_CODE (gen_const) == REAL_CST)
+		{
+		  oa_float_range_fact req;
+		  req.has_lo = req.has_hi = false;
+		  oa_float_tighten_range_bound (req, gen_code,
+						 TREE_REAL_CST (gen_const),
+						 TREE_TYPE (gen_expr));
+		  r = oa_env_check_float_range_subsumption (env, substituted, req);
+		}
+	      else
+		{
+		  oa_range_fact req;
+		  req.base = NULL_TREE;
+		  req.has_lo = req.has_hi = false;
+		  oa_tighten_range_bound (req, gen_code, wi::to_widest (gen_const));
+		  r = oa_env_check_range_subsumption (env, substituted, req);
+		}
+	      tree diag_expr = substituted ? substituted : *conjuncts[i];
+	      switch (r)
+		{
+		case OA_PROVEN_TRUE:
+		  break; /* Silently discharged.  */
+		case OA_PROVEN_FALSE:
+		  error_at (EXPR_LOCATION (call),
+			    "argument %qE provably violates the precondition "
+			    "of %qD", diag_expr, callee);
+		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  break;
+		case OA_UNKNOWN:
+		  if (strict)
+		    error_at (EXPR_LOCATION (call),
+			      "cannot prove that %qE satisfies the "
+			      "precondition of %qD", diag_expr, callee);
+		  else
+		    warning_at (EXPR_LOCATION (call), 0,
+				"cannot verify that %qE satisfies the "
+				"precondition of %qD", diag_expr, callee);
+		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  break;
+		}
 	    }
-	  oa_tighten_range_bound (range_facts[idx], code,
-				  wi::to_widest (const_val));
 	}
     }
 
@@ -12418,6 +12593,93 @@ oa_substitute_call_arg (tree callee, tree call, tree param)
     if (p == param)
       return argno < (unsigned) call_expr_nargs (call)
 	? CALL_EXPR_ARG (call, argno) : NULL_TREE;
+  return NULL_TREE;
+}
+
+/* D4324: recursively rebuilds an arbitrary compound expression drawn
+   from one of CALLEE's own declared contracts into the caller's own
+   terms -- unlike oa_substitute_call_arg above (which only ever
+   substitutes a single, already-known-to-be-a-parameter decl), this
+   walks PLUS_EXPR/MINUS_EXPR/MULT_EXPR/RDIV_EXPR/TRUNC_DIV_EXPR and a
+   'param.field'/'param->field' COMPONENT_REF (including the implicit
+   'this->field' shape a bare field access inside a member function
+   desugars to), recursing into each operand, so a conjunct like
+   'percentage + this->m_value >= 0.0' can be resolved as a whole by
+   oa_get_range/oa_get_float_range's own existing arithmetic
+   composition and COMPONENT_REF case, once substituted. Returns
+   NULL_TREE for anything it doesn't recognize -- a field reached
+   through something other than one of CALLEE's own parameters, a
+   call, or any other shape -- rather than guessing. A literal passes
+   through unchanged (already caller-independent).  */
+
+static tree
+oa_substitute_call_expr (tree callee, tree call, tree expr)
+{
+  expr = STRIP_ANY_LOCATION_WRAPPER (expr);
+  /* A contract condition's own access to a by-value parameter (or an
+     implicit 'this') is wrapped in ordinary value-preserving
+     conversions, to present it as const-qualified -- see oa_get_
+     range's own identical stripping and comment.  Confirmed necessary
+     here by direct testing: without it, 'this' (wrapped in a NOP_EXPR
+     before the INDIRECT_REF unwrap below ever sees it) never matched
+     PARM_DECL at all, so every field-involving compound expression
+     silently failed to substitute.  */
+  while (TREE_CODE (expr) == NON_LVALUE_EXPR || TREE_CODE (expr) == NOP_EXPR
+	 || TREE_CODE (expr) == CONVERT_EXPR
+	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR
+	 || TREE_CODE (expr) == CLEANUP_POINT_EXPR)
+    expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+
+  if (TREE_CODE (expr) == INTEGER_CST || TREE_CODE (expr) == REAL_CST)
+    return expr;
+
+  if (TREE_CODE (expr) == PARM_DECL)
+    return oa_substitute_call_arg (callee, call, expr);
+
+  if (TREE_CODE (expr) == COMPONENT_REF)
+    {
+      tree field = TREE_OPERAND (expr, 1);
+      tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (TREE_CODE (field) != FIELD_DECL)
+	return NULL_TREE;
+      tree base = TREE_CODE (obj) == INDIRECT_REF
+	? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0)) : obj;
+      while (TREE_CODE (base) == NON_LVALUE_EXPR || TREE_CODE (base) == NOP_EXPR
+	     || TREE_CODE (base) == CONVERT_EXPR
+	     || TREE_CODE (base) == VIEW_CONVERT_EXPR
+	     || TREE_CODE (base) == CLEANUP_POINT_EXPR)
+	base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (base, 0));
+      if (TREE_CODE (base) != PARM_DECL)
+	return NULL_TREE;
+      tree receiver = oa_substitute_call_arg (callee, call, base);
+      if (!receiver)
+	return NULL_TREE;
+      /* RECEIVER is the actual argument expression at the call site --
+	 for 'this' (or any by-pointer parameter) that's a pointer value
+	 (e.g. '&n'), which needs dereferencing to rebuild the same
+	 '(*obj).field' shape the original expression had; a by-value or
+	 by-reference parameter's own substituted argument is already the
+	 object itself and must NOT be re-wrapped.  */
+      tree receiver_base = POINTER_TYPE_P (TREE_TYPE (receiver))
+	? build1 (INDIRECT_REF, TREE_TYPE (TREE_TYPE (receiver)), receiver)
+	: receiver;
+      return build3 (COMPONENT_REF, TREE_TYPE (field), receiver_base, field,
+		      NULL_TREE);
+    }
+
+  if (TREE_CODE (expr) == PLUS_EXPR || TREE_CODE (expr) == MINUS_EXPR
+      || TREE_CODE (expr) == MULT_EXPR || TREE_CODE (expr) == RDIV_EXPR
+      || TREE_CODE (expr) == TRUNC_DIV_EXPR)
+    {
+      tree op0 = oa_substitute_call_expr (callee, call, TREE_OPERAND (expr, 0));
+      if (!op0)
+	return NULL_TREE;
+      tree op1 = oa_substitute_call_expr (callee, call, TREE_OPERAND (expr, 1));
+      if (!op1)
+	return NULL_TREE;
+      return build2 (TREE_CODE (expr), TREE_TYPE (expr), op0, op1);
+    }
+
   return NULL_TREE;
 }
 
@@ -18405,8 +18667,54 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 			       whatever OBJ_EXPR currently aliases, not just
 			       OBJ_EXPR's own raw key.  */
 			    field_identity = env.alias_find (field_identity);
-			    env.contract_field_range_invalidate (field_identity, field);
-			    env.contract_float_field_range_invalidate (field_identity, field);
+			    /* D4324: try to *establish* a fresh field-range fact
+			       from RHS's own range before falling back to plain
+			       invalidation -- mirrors the plain scalar assignment
+			       case's own oa_get_range/range_set pattern exactly
+			       (INIT_EXPR/MODIFY_EXPR's INTEGRAL_TYPE_P/SCALAR_
+			       FLOAT_TYPE_P branches above in this same case), just
+			       applied to a field instead of a bare decl. Without
+			       this, even a trivially-true postcondition like
+			       'pre(v >= 0.0) post(this->m_value >= 0.0) { m_value
+			       = v; }' could never be proven from its own body --
+			       confirmed by direct testing. CONVEYOR_ESTABLISHED is
+			       true unconditionally on a fresh establishment (not
+			       preserving whatever the old fact's provenance was):
+			       this is a full overwrite by real, executed code,
+			       exactly like the ptr->field if-condition refinement
+			       above already treats a brand new fact.  */
+			    if (SCALAR_FLOAT_TYPE_P (TREE_TYPE (field)))
+			      {
+				oa_float_range_fact ffact;
+				if (oa_get_float_range (rhs, env, &ffact))
+				  env.contract_float_field_range_set
+				    (field_identity, field, ffact,
+				     /*conveyor_established=*/true);
+				else
+				  env.contract_float_field_range_invalidate
+				    (field_identity, field);
+				env.contract_field_range_invalidate (field_identity,
+								      field);
+			      }
+			    else if (INTEGRAL_TYPE_P (TREE_TYPE (field)))
+			      {
+				oa_range_fact fact;
+				if (oa_get_range (rhs, env, &fact))
+				  env.contract_field_range_set (field_identity, field,
+								 fact,
+								 /*conveyor_established=*/true);
+				else
+				  env.contract_field_range_invalidate (field_identity,
+									field);
+				env.contract_float_field_range_invalidate
+				  (field_identity, field);
+			      }
+			    else
+			      {
+				env.contract_field_range_invalidate (field_identity, field);
+				env.contract_float_field_range_invalidate (field_identity,
+									    field);
+			      }
 			    /* Stage 4a: a named predicate (e.g. 'is_opened')
 			       is opaque and could depend on any field, so
 			       a direct write to *any* field must invalidate
@@ -20291,6 +20599,57 @@ oa_match_simple_comparison (tree conjunct, tree *param_out, tree_code *code_out,
       }
 
   *param_out = param;
+  *code_out = code;
+  *const_val_out = const_val;
+  return true;
+}
+
+/* D4324: oa_match_simple_comparison immediately above, with its own
+   "must be a bare PARM_DECL" restriction on the non-literal side
+   dropped -- accepts *any* expression (e.g. 'percentage + this->
+   m_value < 100.0'), matched only as a fallback once oa_match_simple_
+   comparison itself has already declined, so the two never doubly
+   match (and doubly diagnose) the same conjunct. EXPR_OUT still needs
+   oa_substitute_call_expr's own recursive substitution before it means
+   anything at a specific call site -- this function only recognizes
+   the shape, it doesn't resolve it.  */
+
+static bool
+oa_match_general_comparison (tree conjunct, tree *expr_out,
+			      tree_code *code_out, tree *const_val_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  enum tree_code code = TREE_CODE (c);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return false;
+
+  tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+
+  tree expr, const_val;
+  bool flipped;
+  if (TREE_CODE (op1) == INTEGER_CST || TREE_CODE (op1) == REAL_CST)
+    expr = op0, const_val = op1, flipped = false;
+  else if (TREE_CODE (op0) == INTEGER_CST || TREE_CODE (op0) == REAL_CST)
+    expr = op1, const_val = op0, flipped = true;
+  else
+    return false;
+
+  if (flipped)
+    switch (code)
+      {
+      case LT_EXPR: code = GT_EXPR; break;
+      case LE_EXPR: code = GE_EXPR; break;
+      case GT_EXPR: code = LT_EXPR; break;
+      case GE_EXPR: code = LE_EXPR; break;
+      default: break;
+      }
+
+  *expr_out = expr;
   *code_out = code;
   *const_val_out = const_val;
   return true;

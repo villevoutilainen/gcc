@@ -1,12 +1,17 @@
 // Axiom contracts (~/gcc-axiom-contracts.md): -fcontract-symbolic-proofs,
-// ptr->field shape -- a direct field write ('t.count = 5;') invalidates
-// just that one field's own established range, not the whole object's:
+// ptr->field shape -- a direct field write whose own RHS has no
+// statically-known range ('t.count = opaque();') invalidates just that
+// one field's own established range, not the whole object's:
 // consume_both()'s own combined precondition (checked in a single call,
 // so no *other* contracted call's own implicit 'this' argument gets a
 // chance to separately, conservatively invalidate everything first --
 // see this new shape's own established-vs-runtime parity report) sees
 // 'count' as no longer verifiable, while 'other' -- untouched -- is still
-// established and subsumed, silently discharged.
+// established and subsumed, silently discharged.  A field write whose
+// RHS range *is* known (e.g. a literal) instead re-establishes a fresh,
+// precise fact rather than invalidating -- see the field-write self-
+// check fix in oa_walk_stmt; that case is exercised by d4324-conveyor-
+// proof-field-range-*.C.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-symbolic-proofs" }
 
@@ -19,6 +24,8 @@ struct symbolic_ctrl {
   { if (!ctx.check ()) __builtin_trap (); }
 };
 inline constexpr symbolic_ctrl symbolic_ctrl_v{};
+
+int opaque ();
 
 struct thing {
   int count;
@@ -37,7 +44,7 @@ int main ()
 {
   thing t;
   t.produce_both ();
-  t.count = 5;
+  t.count = opaque ();
   t.consume_both (); // { dg-warning "cannot verify that field 'thing::count'" }
   return 0;
 }

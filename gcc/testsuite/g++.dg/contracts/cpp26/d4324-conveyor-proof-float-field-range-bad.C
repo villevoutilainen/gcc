@@ -20,8 +20,8 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 struct thing {
   double value;
   void produce_value ()
-    post<conveyor_ctrl_v>(this->value >= 40.0 // { dg-warning "cannot verify postcondition" }
-			  && this->value < 100.0) // { dg-warning "cannot verify postcondition" }
+    post<conveyor_ctrl_v>(this->value >= 40.0
+			  && this->value < 100.0)
   { value = 55.0; }
   void consume_value ()
     pre<conveyor_ctrl_v>(this->value >= 200.0)

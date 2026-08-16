@@ -35,8 +35,8 @@ struct thing_ref { thing *t; operator thing* () const { return t; } };
 
 void produce_count (thing * const t)
   pre<conveyor_ctrl_v> (std::is_object_address (t))
-  post<conveyor_ctrl_v> (t->count >= 40 // { dg-warning "cannot verify postcondition" }
-			 && t->count < 100) // { dg-warning "cannot verify postcondition" }
+  post<conveyor_ctrl_v> (t->count >= 40
+			 && t->count < 100)
 { t->count = 55; }
 void consume_count (thing * const t)
   pre<conveyor_ctrl_v> (std::is_object_address (t))

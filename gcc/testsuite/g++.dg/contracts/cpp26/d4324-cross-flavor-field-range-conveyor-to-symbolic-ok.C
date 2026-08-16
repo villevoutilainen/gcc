@@ -33,8 +33,8 @@ inline constexpr symbolic_ctrl symbolic_ctrl_v{};
 struct thing {
   int count;
   void produce_count_conveyor ()
-    post<conveyor_ctrl_v>(this->count >= 40 // { dg-warning "cannot verify postcondition" }
-			  && this->count < 100) // { dg-warning "cannot verify postcondition" }
+    post<conveyor_ctrl_v>(this->count >= 40
+			  && this->count < 100)
   { count = 55; }
   void consume_count_symbolic ()
     pre<symbolic_ctrl_v>(this->count >= 20 && this->count < 1000)
