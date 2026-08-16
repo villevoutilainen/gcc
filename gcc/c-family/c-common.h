@@ -1737,6 +1737,20 @@ extern bool compatible_types_for_indirection_note_p (tree type1, tree type2);
 
 extern tree braced_lists_to_strings (tree, tree);
 
+/* D4324: one -fcontracts-group-evaluation-semantic=group:semantic entry,
+   accumulated by c-opts.cc's option handling and consumed by
+   cp/contracts.cc.  Declared here (rather than in cp/contracts.h, which
+   c-family code must not include) since this is the one shared boundary
+   header both sides already reach: cp-tree.h includes this header, and
+   c-opts.cc is compiled as part of c-family regardless of front end.
+   SEMANTIC matches contract_evaluation_semantic's own numbering
+   (cp/contracts.h) -- kept as a plain unsigned here since that enum
+   itself is cp-only.  The table is empty and unused for a non-C++
+   front end, exactly like flag_contract_evaluation_semantic and the
+   other -fcontract*= globals already are.  */
+struct contract_group_semantic_entry { const char *name; unsigned semantic; };
+extern vec<contract_group_semantic_entry> contract_group_semantic_table;
+
 #if CHECKING_P
 namespace selftest {
   /* Declarations for specific families of tests within c-family,

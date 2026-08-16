@@ -131,6 +131,7 @@ static void set_std_c23 (int);
 static void set_std_c2y (int);
 static void check_deps_environment_vars (void);
 static void handle_deferred_opts (void);
+static void handle_contract_group_semantics (void);
 static void sanitize_cpp_opts (void);
 static void add_prefixed_path (const char *, incpath_kind);
 static void push_command_line_include (void);
@@ -604,6 +605,13 @@ c_common_handle_option (size_t scode, const char *arg, HOST_WIDE_INT value,
       defer_opt (code, arg);
       break;
 
+    case OPT_fcontracts_group_evaluation_semantic_:
+      /* Repeatable; each occurrence is parsed (and validated) once, by
+	 handle_contract_group_semantics, after option processing --
+	 see that function's own comment.  */
+      defer_opt (code, arg);
+      break;
+
     case OPT_imultilib:
       imultilib = arg;
       break;
@@ -872,6 +880,7 @@ c_common_post_options (const char **pfilename)
     check_deps_environment_vars ();
 
   handle_deferred_opts ();
+  handle_contract_group_semantics ();
 
   sanitize_cpp_opts ();
 
@@ -1602,6 +1611,68 @@ handle_deferred_opts (void)
 	else if (opt->code == OPT_fdeps_target_)
 	  fdeps_add_target (deps, opt->arg, true);
       }
+}
+
+/* Storage for the table declared in c-family/c-common.h: cp/contracts.cc
+   (the eventual consumer) is only linked into the C++ front end, while
+   this file is shared, so the table lives here, empty and unused for a
+   non-C++ front end.  */
+vec<contract_group_semantic_entry> contract_group_semantic_table;
+
+/* Parse and validate every deferred
+   -fcontracts-group-evaluation-semantic=group:semantic occurrence (see
+   this file's own OPT_fcontracts_group_evaluation_semantic_ case,
+   above), appending each to contract_group_semantic_table in
+   command-line order -- first rule in order wins for a group named by
+   more than one rule (or a label belonging to more than one group),
+   matching this option's library consumer's own existing "first match
+   wins" semantics. A malformed occurrence (no ':', an empty group name,
+   or an unrecognized semantic spelling) is a real, diagnosed error:
+   unlike the library-level macro emulation this option is replacing,
+   this is a real command-line option, and bad input to it should not
+   silently become a no-op.  SEMANTIC's numbering matches
+   cp/contracts.h's contract_evaluation_semantic exactly (a plain magic
+   number here, not that enum, since this file has no dependency on
+   cp/).  */
+static void
+handle_contract_group_semantics (void)
+{
+  for (unsigned i = 0; i < deferred_count; i++)
+    {
+      struct deferred_opt *opt = &deferred_opts[i];
+      if (opt->code != OPT_fcontracts_group_evaluation_semantic_)
+	continue;
+
+      const char *arg = opt->arg;
+      const char *colon = strchr (arg, ':');
+      if (!colon || colon == arg)
+	{
+	  error ("invalid argument %qs to %<-fcontracts-group-evaluation-"
+		 "semantic=%>: expected %<<group>:<semantic>%>", arg);
+	  continue;
+	}
+
+      unsigned semantic;
+      if (!strcmp (colon + 1, "ignore"))
+	semantic = 1;
+      else if (!strcmp (colon + 1, "observe"))
+	semantic = 2;
+      else if (!strcmp (colon + 1, "enforce"))
+	semantic = 3;
+      else if (!strcmp (colon + 1, "quick_enforce"))
+	semantic = 4;
+      else
+	{
+	  error ("invalid contract evaluation semantic %qs in "
+		 "%<-fcontracts-group-evaluation-semantic=%s%>",
+		 colon + 1, arg);
+	  continue;
+	}
+
+      contract_group_semantic_entry entry
+	= { xstrndup (arg, colon - arg), semantic };
+      contract_group_semantic_table.safe_push (entry);
+    }
 }
 
 /* These settings are appropriate for GCC, but not necessarily so for

@@ -2004,6 +2004,17 @@ fcontract-evaluation-semantic=
 C++ ObjC++ Joined RejectNegative Enum(contract_semantic) Var(flag_contract_evaluation_semantic) Init(3)
 -fcontract-evaluation-semantic=[ignore|observe|enforce|quick_enforce]	Select the contract evaluation semantic (defaults to enforce).
 
+; Repeatable: -fcontracts-group-evaluation-semantic=safety:observe
+; -fcontracts-group-evaluation-semantic=perf:ignore accumulates one
+; override rule per occurrence into contract_group_semantic_table (see
+; c-family/c-common.h), unlike the single-valued Enum flag above, so
+; this isn't Enum-backed itself; each occurrence is deferred (like
+; -include/-imacros) and parsed once, in c-opts.cc's
+; handle_contract_group_semantics, right after option processing.
+fcontracts-group-evaluation-semantic=
+C++ ObjC++ Joined RejectNegative
+-fcontracts-group-evaluation-semantic=<group>:<semantic>	Override the evaluation semantic for contract assertions in <group> (ignore|observe|enforce|quick_enforce); may be given multiple times.
+
 fcontracts-conservative-ipa
 C++ ObjC++ Var(flag_contracts_conservative_ipa) Init(1)
 -fcontracts-conservative-ipa	Do not allow certain optimisations between
