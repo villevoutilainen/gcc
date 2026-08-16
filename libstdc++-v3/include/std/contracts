@@ -759,24 +759,26 @@ namespace contracts
   inline constexpr assume assume_v{};
 
   // D4324: a library-only, best-effort approximation of WG21 P3400
-  // ("Controlling Contract-Assertion Properties"), built entirely on
-  // top of this branch's existing is_ignored/constify/assumable/
-  // operator() control-object dispatch above -- no compiler changes
-  // beyond the one, independently-motivated fix that makes a present-
-  // but-broken trait a real diagnosed error instead of silently
-  // defaulting (see contract_control_bool_member in gcc/cp/
-  // contracts.cc). The control-object slot already accepts an
-  // arbitrary constant-expression, not just a bare name, so
-  // pre<terminating | review>(...) below already parses with no
-  // parser changes at all, as long as the expression yields a class
+  // ("Controlling Contract-Assertion Properties"), built on top of
+  // this branch's existing is_ignored/constify/assumable/operator()
+  // control-object dispatch above, plus three independently-motivated
+  // compiler changes: contract_control_bool_member (gcc/cp/
+  // contracts.cc) makes a present-but-broken trait a real diagnosed
+  // error instead of silently defaulting, and no longer requires these
+  // traits to be static (label_base's own is_ignored/constify/
+  // assumable, and compute_semantic/group_names below, are genuine
+  // instance methods, matching the paper); and
+  // -fcontracts-group-evaluation-semantic=group:semantic, wired
+  // through assertion_static_info::group_semantic_rules() (see
+  // __group_config_lookup below), gives group_names-driven build
+  // configuration a real compiler hook. The control-object slot
+  // already accepts an arbitrary constant-expression, not just a bare
+  // name, so pre<terminating | review>(...) below already parses with
+  // no parser changes at all, as long as the expression yields a class
   // type providing is_ignored/constify/assumable/operator() -- which
   // every label here gets, for free, by deriving from label_base.
   //
   // Disclosed, deliberate departures from the real paper:
-  //  - group_names-driven build-configuration is emulated via the
-  //    optional _P3400_FAKE_GROUP_CONFIG macro (see
-  //    __group_config_lookup below), not a real command-line/build-
-  //    tool hook -- there is no such hook in this branch to plug into.
   //  - local_violation_label's own handler receives this library's
   //    assertion_context, not a real std::contracts::contract_violation
   //    (that type's fields are private; building one is a compiler
@@ -963,98 +965,33 @@ namespace contracts
       constexpr __SIZE_TYPE__ size () const noexcept { return _M_size; }
     };
 
-    // ---- _P3400_FAKE_GROUP_CONFIG emulation (disclosed limitation 1) ----
+    // ---- group_semantic_rules()-driven group configuration ----
     //
-    // A stand-in for real build-system group-based semantic selection:
-    // an optional macro, a string of ';'-separated "groupname=semantic"
-    // rules (an empty group name before '=' is a wildcard matching any
-    // label, even one with no group_names at all -- mirrors the paper's
-    // own bare fallback rule), consulted in rule order, first match
-    // wins. Absent, this is a complete no-op.
-    constexpr bool
-    __group_config_name_eq (const char* __a, const char* __b, __SIZE_TYPE__ __n) noexcept
-    {
-      for (__SIZE_TYPE__ __i = 0; __i != __n; ++__i)
-	if (__a[__i] != __b[__i])
-	  return false;
-      return true;
-    }
-
+    // Real, compiler-provided data now (see
+    // assertion_static_info::group_semantic_rules(),
+    // -fcontracts-group-evaluation-semantic=group:semantic): no text to
+    // parse, no macro, no "unrecognized spelling" fallback needed --
+    // the compiler already validated every rule's semantic spelling,
+    // so RULES's own elements are already real evaluation_semantic
+    // values.  Consulted in RULES's own order (== command-line order),
+    // first match wins, against any of the label's own group names.
+    //
     // _Names may be group_name_view (a simple label) or
     // __combined_group_names (see combined_label further down) -- both
     // are merely required to support range-for iteration over
     // const char*, so this is templated rather than fixed to one type.
     template <typename _Names>
     constexpr bool
-    __group_config_rule_matches (const char* __rule_group, __SIZE_TYPE__ __rule_group_len,
-				 const _Names& __names) noexcept
+    __group_config_lookup (const _Names& __names, group_semantic_rules_view __rules,
+			   evaluation_semantic& __out) noexcept
     {
-      if (__rule_group_len == 0)
-	return true; // wildcard
-      for (const char* __name : __names)
-	{
-	  __SIZE_TYPE__ __len = 0;
-	  while (__name[__len] != '\0')
-	    ++__len;
-	  if (__len == __rule_group_len
-	      && __group_config_name_eq (__name, __rule_group, __len))
-	    return true;
-	}
-      return false;
-    }
-
-    constexpr evaluation_semantic
-    __group_config_parse_semantic (const char* __s, __SIZE_TYPE__ __n) noexcept
-    {
-      // Matches the four enumerator spellings exactly; anything else
-      // (a typo in the macro) is treated as "no override" rather than
-      // a hard error, since this is a best-effort emulation, not a
-      // real, validated build-tool configuration format.
-      auto __eq = [__s, __n] (const char* __lit) constexpr noexcept
-	{
-	  __SIZE_TYPE__ __i = 0;
-	  for (; __i != __n; ++__i)
-	    if (__lit[__i] == '\0' || __s[__i] != __lit[__i])
-	      return false;
-	  return __lit[__i] == '\0';
-	};
-      if (__eq ("ignore")) return evaluation_semantic::ignore;
-      if (__eq ("observe")) return evaluation_semantic::observe;
-      if (__eq ("enforce")) return evaluation_semantic::enforce;
-      if (__eq ("quick_enforce")) return evaluation_semantic::quick_enforce;
-      return evaluation_semantic::ignore; // unrecognized: harmless fallback
-    }
-
-    template <typename _Names>
-    constexpr bool
-    __group_config_lookup (const _Names& __names, evaluation_semantic& __out) noexcept
-    {
-#if defined (_P3400_FAKE_GROUP_CONFIG)
-      const char* __cfg = _P3400_FAKE_GROUP_CONFIG;
-      __SIZE_TYPE__ __i = 0;
-      while (__cfg[__i] != '\0')
-	{
-	  __SIZE_TYPE__ __group_start = __i;
-	  while (__cfg[__i] != '\0' && __cfg[__i] != '=')
-	    ++__i;
-	  __SIZE_TYPE__ __group_len = __i - __group_start;
-	  if (__cfg[__i] != '=')
-	    break; // malformed trailing text: stop, don't misparse
-	  __SIZE_TYPE__ __sem_start = ++__i;
-	  while (__cfg[__i] != '\0' && __cfg[__i] != ';')
-	    ++__i;
-	  if (__group_config_rule_matches (__cfg + __group_start, __group_len, __names))
+      for (auto& __rule : __rules)
+	for (const char* __name : __names)
+	  if (__builtin_strcmp (__name, __rule.group_name ()) == 0)
 	    {
-	      __out = __group_config_parse_semantic (__cfg + __sem_start, __i - __sem_start);
+	      __out = __rule.semantic ();
 	      return true;
 	    }
-	  if (__cfg[__i] == ';')
-	    ++__i;
-	}
-#else
-      (void) __names;
-      (void) __out;
-#endif
       return false;
     }
 
@@ -1095,6 +1032,7 @@ namespace contracts
 	  {
 	    evaluation_semantic __override;
 	    if (__group_config_lookup (static_cast<const _Self&> (*this).group_names,
+					__info.group_semantic_rules (),
 					__override))
 	      __configured = __override;
 	  }

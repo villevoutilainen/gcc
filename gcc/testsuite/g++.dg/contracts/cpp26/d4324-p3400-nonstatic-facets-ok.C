@@ -11,7 +11,7 @@
 // facets had to be static (shared by the whole type, never the
 // instance).
 // { dg-do run { target c++26 } }
-// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=observe -D_P3400_FAKE_GROUP_CONFIG=\"only_first=ignore\"" }
+// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=observe -fcontracts-group-evaluation-semantic=only_first:ignore" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
 
 #include <contracts>
@@ -65,8 +65,8 @@ inline constexpr const char* const only_second_names[] = { "only_second" };
 inline constexpr dynamic_group_t first_group (only_first_names, 1);
 inline constexpr dynamic_group_t second_group (only_second_names, 1);
 
-// _P3400_FAKE_GROUP_CONFIG="only_first=ignore" (see dg-additional-options
-// above): first_group's own instance group_names matches and is ignored
+// -fcontracts-group-evaluation-semantic=only_first:ignore (see
+// dg-additional-options above): first_group's own instance group_names matches and is ignored
 // entirely; second_group -- the exact same type, different instance
 // data -- doesn't match and stays fully checked (observe: continues
 // after the violation). This is only possible because the group-config
