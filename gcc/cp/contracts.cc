@@ -2344,6 +2344,15 @@ update_contract_arguments (tree srcdecl, tree destdecl)
     }
 }
 
+/* Forward-declared: full definitions are much further below (need the
+   shared oa_* fact-tracking substrate's own declarations first); needed
+   here by maybe_contract_wrap_call, which runs at ordinary call-
+   resolution time, well before any of that substrate is otherwise
+   reached.  */
+static void oa_maybe_instantiate_contracts (tree fn);
+static bool oa_contract_conveyor_active_p (tree contract, tree owner_fn);
+static bool oa_contract_symbolic_active_p (tree contract, tree owner_fn);
+
 /* Checks if a contract check wrapper is needed for fndecl.  DO_PRE/DO_POST
    (computed with side ccs_wrapper) already fold in both the ordinary
    -fcontracts-client-check policy and any per-contract
@@ -2371,6 +2380,34 @@ maybe_contract_wrap_call (tree fndecl, tree call)
 
   if (!handle_contracts_p (fndecl))
     return call;
+
+  /* D4324: mark the caller (current_function_decl) as possibly needing
+     the oa_* walk if FNDECL's own precondition is conveyor- or
+     symbolic-active -- a different, narrower notion than the has_
+     active_preconditions/has_active_postconditions check just below
+     (which cares about wrapper generation, not conveyor/symbolic
+     classification), so this sits alongside that check, not instead
+     of it.  oa_maybe_instantiate_contracts first, exactly like oa_
+     scan_calls_in_expr/oa_function_needs_walk_p, since FNDECL's own
+     contract specifiers can still be pointing at an uninstantiated
+     template pattern at this, ordinary call-resolution, timing.  See
+     DECL_MIGHT_NEED_OA_SCAN_P's own comment for the full list of
+     touch points feeding this bit.  */
+  if (current_function_decl)
+    {
+      oa_maybe_instantiate_contracts (fndecl);
+      for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+	{
+	  tree contract = CONTRACT_STATEMENT (as);
+	  if (PRECONDITION_P (contract)
+	      && (oa_contract_conveyor_active_p (contract, fndecl)
+		  || oa_contract_symbolic_active_p (contract, fndecl)))
+	    {
+	      SET_DECL_MIGHT_NEED_OA_SCAN_P (current_function_decl);
+	      break;
+	    }
+	}
+    }
 
   bool do_pre = has_active_preconditions (fndecl, ccs_wrapper);
   bool do_post = has_active_postconditions (fndecl, ccs_wrapper);
@@ -3265,6 +3302,18 @@ grok_contract (tree contract_spec, tree mode, tree result, cp_expr condition,
     {
       code = ASSERTION_STMT;
       kind = CAK_ASSERT;
+      /* D4324: mark the enclosing function as possibly needing the
+	 oa_* walk -- see DECL_MIGHT_NEED_OA_SCAN_P's own comment (cp-
+	 tree.h) for the full list of touch points feeding this bit.
+	 Set here, before the DEFERRED_PARSE early-return below, since
+	 this same code path is reached identically on both a deferred
+	 contract_assert's first pass and its later re-parse with the
+	 real condition -- idempotent either way, accumulate-only bit.
+	 A precondition/postcondition's own presence is instead picked
+	 up cheaply via get_fn_contract_specifiers directly, with no
+	 walk needed, so this only fires for contract_assert.  */
+      if (current_function_decl)
+	SET_DECL_MIGHT_NEED_OA_SCAN_P (current_function_decl);
     }
   else if (id_equal (contract_spec, "pre"))
     {
@@ -14008,6 +14057,53 @@ oa_maybe_instantiate_contracts (tree fn)
   instantiate_decl (fn, /*defer_ok=*/false, /*expl_inst_class_mem_p=*/false);
 }
 
+/* If EXPR (or any subexpression) calls a function whose own precondition
+   is conveyor- or symbolic-active, mark FNDECL (via DECL_MIGHT_NEED_OA_
+   SCAN_P) as possibly needing the oa_* walk -- one of the touch points
+   feeding that bit (see its own comment in cp-tree.h for the full list),
+   this one specifically for a call reached only via an already-resolved
+   expression being spliced somewhere new rather than through ordinary
+   call resolution (build_cxx_call's own touch point, maybe_contract_
+   wrap_call): a default argument's own resolved expression reused at
+   an omitting call site (convert_default_arg, call.cc), and a member's
+   own resolved NSDMI reused at a constructor that needs it (get_nsdmi,
+   init.cc). Both splice an already-fully-resolved tree into a new
+   context without re-running build_cxx_call for it, so this is the
+   only place either FNDECL ever gets a chance to be marked for such a
+   call. oa_maybe_instantiate_contracts first, exactly like oa_scan_
+   calls_in_expr/oa_function_needs_walk_p, so a template callee's own
+   contracts are never mis-read as absent.  */
+
+void
+oa_mark_fn_if_expr_calls_active_contract (tree fndecl, tree expr)
+{
+  if (fndecl == NULL_TREE || fndecl == error_mark_node || expr == NULL_TREE
+      || expr == error_mark_node)
+    return;
+  cp_walk_tree (&expr, [](tree *tp, int *, void *data) -> tree
+    {
+      tree t = *tp;
+      if (t == NULL_TREE || t == error_mark_node || TREE_CODE (t) != CALL_EXPR)
+	return NULL_TREE;
+      tree callee = cp_get_callee_fndecl_nofold (t);
+      if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+	return NULL_TREE;
+      oa_maybe_instantiate_contracts (callee);
+      for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+	{
+	  tree contract = CONTRACT_STATEMENT (as);
+	  if (PRECONDITION_P (contract)
+	      && (oa_contract_conveyor_active_p (contract, callee)
+		  || oa_contract_symbolic_active_p (contract, callee)))
+	    {
+	      SET_DECL_MIGHT_NEED_OA_SCAN_P ((tree) data);
+	      return t;
+	    }
+	}
+      return NULL_TREE;
+    }, fndecl, NULL);
+}
+
 /* Scan *EXPR (an arbitrary expression, not necessarily a full
    statement -- e.g. a RETURN_EXPR's value or an INIT_EXPR/MODIFY_EXPR's
    RHS) for every CALL_EXPR it contains, including nested calls within
@@ -17292,11 +17388,20 @@ oa_cache_contract_flavors (tree fndecl)
 }
 
 /* Cheap pre-scan: does FNDECL's own analysis potentially need the full
-   oa_walk_stmt pass at all?  Conservative by design (a later increment
-   may make this lazier still) -- true whenever anything below *might*
-   need proving/checking, so the only thing skipping the full walk
-   buys is a function where nothing here is present at all.  BODY is
-   FNDECL's own (non-NULL, non-error) DECL_SAVED_TREE.
+   oa_walk_stmt pass at all?  True whenever anything below *might* need
+   proving/checking, so the only thing skipping the full walk buys is
+   a function where nothing here is present at all.
+
+   Formerly a dedicated cp_walk_tree over the whole body (looking for
+   an ASSERTION_STMT or a call to an active-precondition callee);
+   replaced by a direct read of DECL_MIGHT_NEED_OA_SCAN_P, set
+   incrementally at the several places that information is already
+   naturally produced -- see that bit's own comment (cp-tree.h) for
+   the full, audited list of touch points (contract_assert parsing/
+   re-instantiation, ordinary call resolution, and the two splice
+   sites -- NSDMI reuse, default-argument reuse -- that reuse an
+   already-resolved expression without re-running ordinary call
+   resolution for it).
 
    Deliberately does *not* try to special-case "a pre/post/assert is
    present but not itself conveyor/symbolic-active" as still skippable:
@@ -17307,16 +17412,27 @@ oa_cache_contract_flavors (tree fndecl)
    walk -- "any contract present at all, active or not" is the
    simplest answer that stays correct.
 
-   The two call-obligation cases below (a callee's own active
-   precondition, discharged at this call site regardless of whether
-   *this* function has any contracts of its own -- see oa_handle_call_
-   precondition_obligation's own comment) are the reason this can't
-   just check FNDECL's own contracts: gcc.dg/.../d4324-object-address-
-   callsite-bad.C is exactly a contract-free caller that still must be
-   walked because its callee isn't.  */
+   The call-obligation case (a callee's own active precondition,
+   discharged at the call site regardless of whether *this* function
+   has any contracts of its own -- see oa_handle_call_precondition_
+   obligation's own comment) is why this can't just check FNDECL's own
+   contracts: gcc.dg/.../d4324-object-address-callsite-bad.C is
+   exactly a contract-free caller that still must be walked because
+   its callee isn't -- DECL_MIGHT_NEED_OA_SCAN_P's own call-resolution
+   touch point (maybe_contract_wrap_call) covers this the same way the
+   old body scan's own CALL_EXPR case did.
+
+   DECL_CONTRACT_WRAPPER is its own, separate "always walk" trigger,
+   alongside DECL_DECLARED_CONVEYOR_P: a contract-check wrapper's own
+   call to the real function it wraps is built via build_thunk_like_
+   call/build_call_a, bypassing build_cxx_call (and so DECL_MIGHT_
+   NEED_OA_SCAN_P's own touch point there) entirely -- conservatively
+   always walking any wrapper, rather than duplicating the activity
+   check at that construction site too, since a wrapper's whole
+   purpose is calling something whose contracts matter.  */
 
 static bool
-oa_function_needs_walk_p (tree fndecl, tree body)
+oa_function_needs_walk_p (tree fndecl)
 {
   /* Both orthogonal to per-function contract activity -- never skip
      when either could observe/mutate this function's own walk (see
@@ -17328,49 +17444,11 @@ oa_function_needs_walk_p (tree fndecl, tree body)
   if (get_fn_contract_specifiers (fndecl))
     return true;
 
-  if (DECL_DECLARED_CONVEYOR_P (fndecl))
+  if (DECL_DECLARED_CONVEYOR_P (fndecl)
+      || (DECL_LANG_SPECIFIC (fndecl) && DECL_CONTRACT_WRAPPER (fndecl)))
     return true;
 
-  /* One combined body scan: any contract_assert of its own, or any
-     call whose callee has an active conveyor/symbolic precondition.
-     oa_maybe_instantiate_contracts first, exactly like oa_scan_calls_
-     in_expr itself does, so a template callee's own contracts are
-     never mis-read as absent.  */
-  bool found = false;
-  cp_walk_tree (&body, [](tree *tp, int *, void *data) -> tree
-    {
-      bool *found = (bool *) data;
-      tree t = *tp;
-      if (t == NULL_TREE || t == error_mark_node)
-	return NULL_TREE;
-      if (TREE_CODE (t) == ASSERTION_STMT)
-	{
-	  *found = true;
-	  return t;
-	}
-      if (TREE_CODE (t) == CALL_EXPR)
-	{
-	  tree callee = cp_get_callee_fndecl_nofold (t);
-	  if (callee && TREE_CODE (callee) == FUNCTION_DECL)
-	    {
-	      oa_maybe_instantiate_contracts (callee);
-	      for (tree as = get_fn_contract_specifiers (callee); as;
-		   as = TREE_CHAIN (as))
-		{
-		  tree contract = CONTRACT_STATEMENT (as);
-		  if (PRECONDITION_P (contract)
-		      && (oa_contract_conveyor_active_p (contract, callee)
-			  || oa_contract_symbolic_active_p (contract, callee)))
-		    {
-		      *found = true;
-		      return t;
-		    }
-		}
-	    }
-	}
-      return NULL_TREE;
-    }, &found, NULL);
-  return found;
+  return DECL_MIGHT_NEED_OA_SCAN_P (fndecl);
 }
 
 /* Plugin-facing (and, prospectively, in-tree-GIMPLE-pass-facing)
@@ -17418,7 +17496,7 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
   if (body == NULL_TREE || body == error_mark_node)
     return;
 
-  if (!oa_function_needs_walk_p (fndecl, body))
+  if (!oa_function_needs_walk_p (fndecl))
     {
       /* Nothing here could possibly need proving -- but a stray,
 	 always-illegal is_object_address/symbolic-declared call can

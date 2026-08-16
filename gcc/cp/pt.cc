@@ -12406,6 +12406,21 @@ tsubst_contract (tree decl, tree t, tree args, tsubst_flags_t complain,
 
   tree r = copy_node (t);
 
+  /* D4324: mark the enclosing (instantiated, never the template
+     pattern -- current_function_decl is already rebound to the real
+     instantiation by instantiate_body's own start_preparsed_function
+     call before this is ever reached) function as possibly needing
+     the oa_* walk, for a re-instantiated contract_assert -- see
+     DECL_MIGHT_NEED_OA_SCAN_P's own comment (cp-tree.h) for the full
+     list of touch points.  A precondition/postcondition's own
+     presence is instead picked up cheaply via get_fn_contract_
+     specifiers directly, with no walk needed, so this only fires for
+     contract_assert (T is the original, not-yet-substituted contract,
+     but its ASSERTION_STMT/PRECONDITION_STMT/POSTCONDITION_STMT code
+     is preserved verbatim through substitution either way).  */
+  if (TREE_CODE (t) == ASSERTION_STMT && current_function_decl)
+    SET_DECL_MIGHT_NEED_OA_SCAN_P (current_function_decl);
+
   /* Rebuild the result variable, if present.  */
   tree oldvar = NULL_TREE;
   tree newvar = NULL_TREE;

@@ -725,6 +725,22 @@ get_nsdmi (tree member, bool in_ctor, tsubst_flags_t complain)
 
   current_class_ptr = save_ccp;
   current_class_ref = save_ccr;
+
+  /* D4324: INIT may be an already-resolved expression -- built once,
+     the first time this member's NSDMI was needed -- being spliced
+     into a new constructor here without going through ordinary call
+     resolution (build_cxx_call) again, so this is the only place this
+     constructor (current_function_decl, when IN_CTOR) ever gets a
+     chance to be marked for a call INIT contains.  Safe to call
+     unconditionally (including when !in_ctor, e.g. constexpr
+     evaluation with no real enclosing constructor): oa_mark_fn_if_
+     expr_calls_active_contract is a no-op if current_function_decl is
+     NULL, and marking an unrelated function that happens to be
+     current at some other call site is harmless.  See DECL_MIGHT_
+     NEED_OA_SCAN_P's own comment (cp-tree.h) for the full list of
+     touch points feeding this bit.  */
+  oa_mark_fn_if_expr_calls_active_contract (current_function_decl, init);
+
   return init;
 }
 

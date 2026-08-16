@@ -3332,7 +3332,18 @@ struct GTY(()) lang_decl_fn {
      once resolved, is never recomputed either).  */
   unsigned conveyor_auto_resolved_p : 1;
 
-  /* 32-bits padding on 64-bit host.  */
+  /* True if this function's own contracts/calls might need the
+     oa_* static-analysis walk (resolve_object_address_in_function) --
+     set incrementally, at each place a contract_assert is built or
+     re-instantiated, or a call to a conveyor-/symbolic-active-
+     precondition function is resolved, spliced, or otherwise made
+     against this decl.  Accumulate-only: never cleared, since it is
+     read exactly once, at finish_function time.  See
+     oa_resolve_object_address_in_function_1's own comment for the
+     full list of touch points that set this bit.  */
+  unsigned might_need_oa_scan_p : 1;
+
+  /* 31-bits padding on 64-bit host.  */
 
   /* For a non-thunk function decl, this is a tree list of
      friendly classes. For a thunk function decl, it is the
@@ -3919,6 +3930,18 @@ struct GTY(()) lang_decl {
 #define CLEAR_DECL_DECLARED_CONVEYOR_P(NODE) \
   (retrofit_lang_decl (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE))),	\
    LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->conveyor_p = false)
+
+/* True if NODE's own contracts/calls might need the oa_* static-
+   analysis walk -- see lang_decl_fn's own might_need_oa_scan_p for
+   the full rationale.  Accumulate-only: no CLEAR_ macro, since this
+   is only ever set, never unset.  */
+#define DECL_MIGHT_NEED_OA_SCAN_P(NODE) \
+  (DECL_LANG_SPECIFIC (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE)))	\
+   ? LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->might_need_oa_scan_p	\
+   : false)
+#define SET_DECL_MIGHT_NEED_OA_SCAN_P(NODE) \
+  (retrofit_lang_decl (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE))),	\
+   LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->might_need_oa_scan_p = true)
 
 /* True if FNDECL was declared with the D4324 'conveyor(auto)' form
    rather than plain 'conveyor': its conveyor-ness is deduced per

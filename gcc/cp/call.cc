@@ -9791,6 +9791,16 @@ convert_default_arg (tree type, tree arg, tree fn, int parmnum,
 
   pop_defarg_context ();
 
+  /* D4324: ARG may be an already-resolved expression -- built once,
+     the first time this default argument was needed -- being spliced
+     into a new, omitting call site here without going through
+     ordinary call resolution (build_cxx_call) again for THIS caller,
+     so this is the only place the calling function (current_function_
+     decl) ever gets a chance to be marked for a call ARG contains.
+     See DECL_MIGHT_NEED_OA_SCAN_P's own comment (cp-tree.h) for the
+     full list of touch points feeding this bit.  */
+  oa_mark_fn_if_expr_calls_active_contract (current_function_decl, arg);
+
   return arg;
 }
 
