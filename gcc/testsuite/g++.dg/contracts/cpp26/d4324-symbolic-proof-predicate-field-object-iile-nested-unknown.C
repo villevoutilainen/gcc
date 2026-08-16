@@ -26,6 +26,15 @@
 // sound "cannot verify" -- never a crash, and never a silently wrong
 // "verified" -- which is what this fix is actually responsible for.
 // See .claude/plans/well-we-last-discussed-ethereal-duckling.md.
+//
+// The CONTRACT_ASSERT's own condition (line 53) now also warns "cannot
+// verify" in its own right (see the never_proven/analyzed_conveyor
+// discrepancy fix, same session): std::is_object_address of an IILE
+// call's own return value is simply never provable from ambient facts
+// at that point, unrelated to the capture-proxy gap above -- it still
+// establishes itself as a trusted fact regardless, which is what lets
+// the IILE's own postcondition-establishment (the actual subject of
+// this test) proceed at all.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-symbolic-proofs" }
 
@@ -50,7 +59,7 @@ void g (holder *h)
 {
   int dummy;
   contract_assert<symbolic_ctrl_v>
-    (std::is_object_address ([&]{ open_it (&h->f); return &dummy; }()));
+    (std::is_object_address ([&]{ open_it (&h->f); return &dummy; }())); // { dg-warning "cannot verify" }
   use_it (&h->f); // { dg-warning "cannot verify" }
 }
 
