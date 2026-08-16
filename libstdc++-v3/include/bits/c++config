@@ -622,15 +622,21 @@ namespace std
 // verify the library's own body. Nested under _GLIBCXX_CONVEYOR_ASSERTIONS,
 // not an independent mode: a declared precondition here is only ever
 // meaningful once its own accessor (e.g. size()) is conveyor-tagged in the
-// first place, and pre<>()'s own control object is the same conveyor_
-// assert_v this file's own __glibcxx_assert already routes through under
-// that flag -- so this has no effect at all unless conveyor-assertions
-// mode is also active. A single #undef here, rather than repeating "&&
-// defined(_GLIBCXX_CONVEYOR_ASSERTIONS)" at every downstream use of this
-// macro (bits/version.h's own contract-assert routing below,
-// debug/assertions.h's own three shared macros, every library header this
-// gradually rolls out to -- see _GLIBCXX_PRECONDITION_SUBSCRIPT and
-// friends further below for the first three, "Stage P1" of that rollout).
+// first place -- so this has no effect at all unless conveyor-assertions
+// mode is also active. pre<>()'s own control object here is plain std::
+// contracts::conveyor_assert_v, deliberately *not* the std::contracts::
+// never_proven_conveyor_v __glibcxx_assert itself routes through below:
+// a declared precondition is meant to stay checkable at its own call
+// sites (never_proven only ever exempts a mid-body contract_assert's own
+// "check against ambient facts" step, which a precondition doesn't go
+// through anyway, but using the same never_proven-tagged object here
+// regardless would blur that intent). A single #undef here, rather than
+// repeating "&& defined(_GLIBCXX_CONVEYOR_ASSERTIONS)" at every
+// downstream use of this macro (bits/version.h's own contract-assert
+// routing below, debug/assertions.h's own three shared macros, every
+// library header this gradually rolls out to -- see _GLIBCXX_
+// PRECONDITION_SUBSCRIPT and friends further below for the first three,
+// "Stage P1" of that rollout).
 #if defined(_GLIBCXX_PRECONDITION_ASSERTIONS) && !defined(_GLIBCXX_CONVEYOR_ASSERTIONS)
 # undef _GLIBCXX_PRECONDITION_ASSERTIONS
 #endif
@@ -742,9 +748,9 @@ namespace std
 // yet, so making this the default would break the untagged remainder.
 # if defined(_GLIBCXX_CONVEYOR_ASSERTIONS)
 #  define __glibcxx_assert(cond) \
-     contract_assert<std::contracts::conveyor_assert_v>(cond)
+     contract_assert<std::contracts::never_proven_conveyor_v>(cond)
 #  define __glibcxx_assert_msg(cond, msg) \
-     contract_assert<std::contracts::conveyor_assert(msg)>(cond)
+     contract_assert<std::contracts::never_proven_conveyor(msg)>(cond)
 # else
 #  define __glibcxx_assert(cond) \
      contract_assert<std::contracts::noexcept_assert_v>(cond)
@@ -828,11 +834,12 @@ namespace std
 // debug/assertions.h's own __glibcxx_requires_subscript and friends, which
 // these are named after) into a genuine declared pre<>() on that same
 // function's declaration, so callers -- not just the function's own body --
-// are subject to static proof. Reuses std::contracts::conveyor_assert_v
-// directly: it's the same stateless, unconditionally-checking control
-// object debug/assertions.h's own __glibcxx_assert already routes through
-// under _GLIBCXX_CONVEYOR_ASSERTIONS, and nothing about its own behavior is
-// assert-specific vs precondition-specific.
+// are subject to static proof. Uses plain std::contracts::conveyor_
+// assert_v directly, deliberately not the std::contracts::never_proven_
+// conveyor_v that __glibcxx_assert itself routes through under
+// _GLIBCXX_CONVEYOR_ASSERTIONS: a declared precondition is meant to stay
+// checkable at its own call sites, unlike the library's own not-yet-
+// migrated internal asserts (see that macro's own comment above).
 #if defined(_GLIBCXX_PRECONDITION_ASSERTIONS) && defined(__cpp_contract_control_objects)
 # define _GLIBCXX_PRECONDITION_SUBSCRIPT(_N) \
     pre<std::contracts::conveyor_assert_v>(_N < size())
