@@ -18639,6 +18639,84 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    else
 	      env.float_range_invalidate (decl);
 	  }
+	else if (VAR_P (decl) && TREE_CODE (TREE_TYPE (decl)) == RECORD_TYPE
+		 && DECL_INITIAL (decl))
+	  {
+	    /* D4324: a genuine aggregate (no user-declared constructor,
+	       e.g. 'struct Point { double x; double y; };') initialized via
+	       brace-init ('Point p = { 50.0, 2.0 };') has no constructor to
+	       call at all -- its own DECL_INITIAL is a plain CONSTRUCTOR
+	       tree (a list of (FIELD_DECL, value) pairs), never a CALL_EXPR/
+	       AGGR_INIT_EXPR, so it was never in scope for either the clone-
+	       contract-propagation fix or the AGGR_INIT_EXPR fix above (both
+	       are specifically about *calling* a constructor). Confirmed via
+	       gdb: nothing previously walked a CONSTRUCTOR node's own
+	       elements to establish field-range facts, so even a trivially,
+	       staticaly known field value (literally '50.0' here) reported
+	       "cannot prove" for any later precondition/contract_assert
+	       consulting it. Mirrors the existing field-write establishment
+	       block's own dispatch exactly (the INIT_EXPR/MODIFY_EXPR case's
+	       "a direct field write" block above), just driven by every
+	       element of a CONSTRUCTOR instead of a single assignment's RHS.
+	       DECL is already directly usable as its own identity here --
+	       oa_object_identity_decl's own VAR_P branch returns a bare
+	       VAR_DECL unchanged, no this/ADDR_EXPR/field-slot resolution
+	       needed, unlike every other establishment site in this file.
+	       No else-invalidate branch: a freshly-declared decl has no
+	       prior fact to go stale, same reasoning as this case's own
+	       relational-fact block above.
+
+	       Deliberately narrower in scope than it could be: a
+	       CONSTRUCTOR wrapped in a TARGET_EXPR (as seen for
+	       'return Point{50.0, 2.0};' or a by-value call argument
+	       'consume(Point{50.0, 2.0})') is not unwrapped and handled
+	       here -- neither shape has a caller-side identity to establish
+	       a fact against in the first place (a return value's own
+	       destination isn't fixed at this point, exactly as for
+	       AGGR_INIT_EXPR; a call argument's value is only needed for
+	       that one precondition check, which wants literal-value
+	       extraction, not fact establishment -- an architecturally
+	       different, separate fix). An array of aggregates
+	       ('Point pts[2] = {{1.0,2.0},{3.0,4.0}};', confirmed via gdb to
+	       be a single, non-unrolled CONSTRUCTOR-of-CONSTRUCTORs, not the
+	       build_vec_init/INDIRECT_REF-unrolled shape a constructor-
+	       *call* array uses) is also not handled here: oa_object_
+	       identity_decl has no ARRAY_REF case, so establishing a fact
+	       for 'pts[0]'/'pts[1]' individually needs identity-resolution
+	       work this fix's existing primitives don't cover.  */
+	    tree init = STRIP_ANY_LOCATION_WRAPPER (DECL_INITIAL (decl));
+	    if (TREE_CODE (init) == CONSTRUCTOR)
+	      {
+		tree identity;
+		if (oa_object_identity_decl (decl, &identity))
+		  {
+		    identity = env.alias_find (identity);
+		    unsigned HOST_WIDE_INT i;
+		    tree field, value;
+		    FOR_EACH_CONSTRUCTOR_ELT (CONSTRUCTOR_ELTS (init), i, field, value)
+		      {
+			if (!field || TREE_CODE (field) != FIELD_DECL || !value)
+			  continue;
+			if (SCALAR_FLOAT_TYPE_P (TREE_TYPE (field)))
+			  {
+			    oa_float_range_fact ffact;
+			    if (oa_get_float_range (value, env, &ffact))
+			      env.contract_float_field_range_set
+				(identity, field, ffact,
+				 /*conveyor_established=*/true);
+			  }
+			else if (INTEGRAL_TYPE_P (TREE_TYPE (field)))
+			  {
+			    oa_range_fact fact;
+			    if (oa_get_range (value, env, &fact))
+			      env.contract_field_range_set
+				(identity, field, fact,
+				 /*conveyor_established=*/true);
+			  }
+		      }
+		  }
+	      }
+	  }
 	return;
       }
 
@@ -21456,9 +21534,21 @@ oa_symbolic_comparison_conjunct_shape (tree conjunct, tree *field_out,
   if (TREE_CODE (field) != FIELD_DECL)
     return false;
   tree base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (comp, 0));
-  if (TREE_CODE (base) != INDIRECT_REF)
-    return false;
-  tree ptr_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (base, 0));
+  /* D4324: a field access through a plain, by-value object ('p.x', no
+     pointer involved at all -- e.g. a by-value struct/aggregate
+     parameter's own precondition, 'pre(p.x >= 0.0)') is a bare
+     COMPONENT_REF with no INDIRECT_REF underneath, unlike 'p->x'/
+     '(*p).x'. Previously required INDIRECT_REF unconditionally, so a
+     by-value parameter's own field-based precondition was invisible to
+     oa_collect_contract_field_ranges entirely -- confirmed by direct
+     testing: 'p.x >= 0.0' on a by-value 'Point p' parameter matched no
+     shape here at all, so no established field-range fact for 'p' (an
+     aggregate's own brace-init, or anything else) could ever satisfy
+     it.  Mirrors the exact same ternary already used for this identical
+     ptr-vs-object distinction in oa_get_range/oa_get_float_range's own
+     COMPONENT_REF case.  */
+  tree ptr_expr = TREE_CODE (base) == INDIRECT_REF
+    ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (base, 0)) : base;
 
   if (flipped)
     switch (code)
