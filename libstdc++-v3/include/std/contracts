@@ -294,6 +294,48 @@ namespace contracts
   // the program, not a runtime behavior. Defaults to false when absent,
   // so existing control types are unaffected.
   //
+  // A control type may also optionally declare any of the following five
+  // (D4324), each defaulting to false when absent so existing control
+  // types are unaffected:
+  //
+  //   static constexpr bool never_proven(assertion_static_info) { return true; }
+  // Exempts a contract_assert naming this control type from ever being
+  // checked against already-established facts -- no diagnostic of its
+  // own, ever, regardless of -fcontract-conveyor-proofs/-fcontract-
+  // symbolic-proofs or analyzed_conveyor/proven_conveyor below. It still
+  // establishes itself as a trusted fact for later code in the same
+  // function, exactly like any other conveyor/symbolic contract_assert --
+  // this only ever suppresses the "am I actually true" half, never the
+  // "trust me from here on" half. Meant for a library's own internal,
+  // defensive assertions deep in generic code, evaluated in a context
+  // where they are essentially never provable and were never meant to
+  // be -- see std::never_proven_conveyor below.
+  //
+  //   static constexpr bool analyzed_conveyor(assertion_static_info) { return true; }
+  //   static constexpr bool proven_conveyor(assertion_static_info) { return true; }
+  // Each implies is_conveyor (conveyor UB-freedom restrictions and
+  // is_object_address eligibility both apply) and *additionally* forces
+  // -fcontract-conveyor-proofs-equivalent analysis on for this specific
+  // contract, regardless of the command-line flag -- "in the context it
+  // appears in": a contract_assert naming one gets its own condition
+  // checked against ambient facts even in an otherwise-unanalyzed TU; a
+  // precondition naming one makes every caller's own argument obligation
+  // checked too. analyzed_conveyor is lenient (an unprovable conjunct is
+  // a warning); proven_conveyor is strict (unprovable is also an error,
+  // matching WG14 P4021R2's compile_assert() outcome table exactly:
+  // proof true, proof false, or cannot prove are the only three
+  // outcomes, and only the first compiles clean -- except deterministic,
+  // since this runs through the same static analysis as everything else
+  // here, not an optimizer's own dead-code elimination). No separate
+  // compiler-wide "error instead of warn" mode exists for the lenient
+  // form: that's just -Werror.
+  //
+  //   static constexpr bool analyzed_symbolic(assertion_static_info) { return true; }
+  //   static constexpr bool proven_symbolic(assertion_static_info) { return true; }
+  // The is_symbolic-flavor mirror of the two immediately above, in every
+  // respect (implies is_symbolic; analyzed_symbolic lenient, proven_
+  // symbolic strict).
+
   // The assertion_control concept that checks the three mandatory traits
   // above (is_ignored/constify/assumable) plus a callable operator() now
   // lives in <concepts> instead of here -- see that header's own comment
@@ -716,6 +758,338 @@ namespace contracts
   };
 
   inline constexpr conveyor_assert conveyor_assert_v{};
+
+  // Identical to conveyor_assert above in every respect but one: this
+  // additionally declares never_proven() true, exempting a contract_
+  // assert naming it from ever being checked against ambient facts (no
+  // diagnostic of its own, ever -- it still establishes itself as a
+  // trusted fact for later code, same as conveyor_assert's own
+  // contract_asserts do). __glibcxx_assert (bits/c++config) routes
+  // through this, not conveyor_assert_v: the library's own internal,
+  // defensive assertions are deep in generic code, evaluated in a
+  // context where they are essentially never provable and were never
+  // meant to be -- conveyor_assert_v itself stays untouched for anyone
+  // relying on its own, already-shipped behavior.
+  struct never_proven_conveyor {
+    const char* message = nullptr;
+
+    static constexpr bool
+    is_ignored(assertion_static_info) noexcept { return false; }
+
+    static constexpr bool
+    constify(assertion_static_info) noexcept { return false; }
+    static constexpr bool
+    assumable(assertion_static_info) noexcept { return false; }
+
+    static constexpr bool
+    is_conveyor(assertion_static_info) noexcept { return true; }
+    static constexpr bool
+    never_proven(assertion_static_info) noexcept { return true; }
+
+    constexpr void
+    operator()(const assertion_context& __ctx) const noexcept
+    {
+      if (__ctx.check())
+	return;
+
+      const char* __text = message ? message : __ctx.comment();
+
+#if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
+      if consteval
+	{
+	  __d4324_consteval_diagnose_violation (true, __text, __ctx.location());
+	}
+      else
+	{
+	  try
+	    {
+	      invoke_violation_handler
+		(__ctx.kind(), evaluation_semantic::enforce,
+		 detection_mode::predicate_false, __text, __ctx.location());
+	    }
+	  catch (...) { }
+	  __d4324_terminate_wrapper();
+	}
+#else
+      if consteval
+	{
+	  __d4324_consteval_diagnose_violation (true, __text, __ctx.location());
+	}
+      else
+	{
+#ifdef _GLIBCXX_VERBOSE_ASSERT
+	  std::__glibcxx_assert_fail (__ctx.location().file_name(),
+				       __ctx.location().line(),
+				       __ctx.location().function_name(),
+				       __text);
+#else
+	  __builtin_abort();
+#endif
+	}
+#endif
+    }
+  };
+
+  inline constexpr never_proven_conveyor never_proven_conveyor_v{};
+
+  // Identical to conveyor_assert above, but declares analyzed_conveyor()
+  // true instead of (in addition to being) is_conveyor(): forces
+  // -fcontract-conveyor-proofs-equivalent analysis on for any contract
+  // naming this, regardless of the command-line flag, with a lenient
+  // outcome on an unprovable conjunct (a warning, not an error) -- see
+  // this header's own analyzed_conveyor documentation above.
+  struct analyzed_conveyor_t {
+    const char* message = nullptr;
+
+    static constexpr bool
+    is_ignored(assertion_static_info) noexcept { return false; }
+
+    static constexpr bool
+    constify(assertion_static_info) noexcept { return false; }
+    static constexpr bool
+    assumable(assertion_static_info) noexcept { return false; }
+
+    static constexpr bool
+    analyzed_conveyor(assertion_static_info) noexcept { return true; }
+
+    constexpr void
+    operator()(const assertion_context& __ctx) const noexcept
+    {
+      if (__ctx.check())
+	return;
+
+      const char* __text = message ? message : __ctx.comment();
+
+#if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
+      if consteval
+	{
+	  __d4324_consteval_diagnose_violation (true, __text, __ctx.location());
+	}
+      else
+	{
+	  try
+	    {
+	      invoke_violation_handler
+		(__ctx.kind(), evaluation_semantic::enforce,
+		 detection_mode::predicate_false, __text, __ctx.location());
+	    }
+	  catch (...) { }
+	  __d4324_terminate_wrapper();
+	}
+#else
+      if consteval
+	{
+	  __d4324_consteval_diagnose_violation (true, __text, __ctx.location());
+	}
+      else
+	{
+#ifdef _GLIBCXX_VERBOSE_ASSERT
+	  std::__glibcxx_assert_fail (__ctx.location().file_name(),
+				       __ctx.location().line(),
+				       __ctx.location().function_name(),
+				       __text);
+#else
+	  __builtin_abort();
+#endif
+	}
+#endif
+    }
+  };
+
+  inline constexpr analyzed_conveyor_t analyzed_conveyor_v{};
+
+  // Identical to analyzed_conveyor_t above, but declares proven_
+  // conveyor() true instead: same forced-on analysis, but strict --
+  // an unprovable conjunct is also an error, not just a warning. See
+  // this header's own proven_conveyor documentation above.
+  struct proven_conveyor_t {
+    const char* message = nullptr;
+
+    static constexpr bool
+    is_ignored(assertion_static_info) noexcept { return false; }
+
+    static constexpr bool
+    constify(assertion_static_info) noexcept { return false; }
+    static constexpr bool
+    assumable(assertion_static_info) noexcept { return false; }
+
+    static constexpr bool
+    proven_conveyor(assertion_static_info) noexcept { return true; }
+
+    constexpr void
+    operator()(const assertion_context& __ctx) const noexcept
+    {
+      if (__ctx.check())
+	return;
+
+      const char* __text = message ? message : __ctx.comment();
+
+#if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
+      if consteval
+	{
+	  __d4324_consteval_diagnose_violation (true, __text, __ctx.location());
+	}
+      else
+	{
+	  try
+	    {
+	      invoke_violation_handler
+		(__ctx.kind(), evaluation_semantic::enforce,
+		 detection_mode::predicate_false, __text, __ctx.location());
+	    }
+	  catch (...) { }
+	  __d4324_terminate_wrapper();
+	}
+#else
+      if consteval
+	{
+	  __d4324_consteval_diagnose_violation (true, __text, __ctx.location());
+	}
+      else
+	{
+#ifdef _GLIBCXX_VERBOSE_ASSERT
+	  std::__glibcxx_assert_fail (__ctx.location().file_name(),
+				       __ctx.location().line(),
+				       __ctx.location().function_name(),
+				       __text);
+#else
+	  __builtin_abort();
+#endif
+	}
+#endif
+    }
+  };
+
+  inline constexpr proven_conveyor_t proven_conveyor_v{};
+
+  // The is_symbolic-flavor mirror of analyzed_conveyor_t above: declares
+  // analyzed_symbolic() true, forcing -fcontract-symbolic-proofs-
+  // equivalent analysis on regardless of the command-line flag, lenient
+  // (unprovable warns). Not a P3400 label (deliberately outside label_
+  // base's own dispatch, exactly like conveyor_assert/never_proven_
+  // conveyor/analyzed_conveyor_t/proven_conveyor_t above, and exactly
+  // like this file's own pre-existing is_symbolic precedent).
+  struct analyzed_symbolic_t {
+    const char* message = nullptr;
+
+    static constexpr bool
+    is_ignored(assertion_static_info) noexcept { return false; }
+
+    static constexpr bool
+    constify(assertion_static_info) noexcept { return false; }
+    static constexpr bool
+    assumable(assertion_static_info) noexcept { return false; }
+
+    static constexpr bool
+    analyzed_symbolic(assertion_static_info) noexcept { return true; }
+
+    constexpr void
+    operator()(const assertion_context& __ctx) const noexcept
+    {
+      if (__ctx.check())
+	return;
+
+      const char* __text = message ? message : __ctx.comment();
+
+#if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
+      if consteval
+	{
+	  __d4324_consteval_diagnose_violation (true, __text, __ctx.location());
+	}
+      else
+	{
+	  try
+	    {
+	      invoke_violation_handler
+		(__ctx.kind(), evaluation_semantic::enforce,
+		 detection_mode::predicate_false, __text, __ctx.location());
+	    }
+	  catch (...) { }
+	  __d4324_terminate_wrapper();
+	}
+#else
+      if consteval
+	{
+	  __d4324_consteval_diagnose_violation (true, __text, __ctx.location());
+	}
+      else
+	{
+#ifdef _GLIBCXX_VERBOSE_ASSERT
+	  std::__glibcxx_assert_fail (__ctx.location().file_name(),
+				       __ctx.location().line(),
+				       __ctx.location().function_name(),
+				       __text);
+#else
+	  __builtin_abort();
+#endif
+	}
+#endif
+    }
+  };
+
+  inline constexpr analyzed_symbolic_t analyzed_symbolic_v{};
+
+  // Identical to analyzed_symbolic_t above, but declares proven_
+  // symbolic() true instead: same forced-on analysis, but strict.
+  struct proven_symbolic_t {
+    const char* message = nullptr;
+
+    static constexpr bool
+    is_ignored(assertion_static_info) noexcept { return false; }
+
+    static constexpr bool
+    constify(assertion_static_info) noexcept { return false; }
+    static constexpr bool
+    assumable(assertion_static_info) noexcept { return false; }
+
+    static constexpr bool
+    proven_symbolic(assertion_static_info) noexcept { return true; }
+
+    constexpr void
+    operator()(const assertion_context& __ctx) const noexcept
+    {
+      if (__ctx.check())
+	return;
+
+      const char* __text = message ? message : __ctx.comment();
+
+#if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
+      if consteval
+	{
+	  __d4324_consteval_diagnose_violation (true, __text, __ctx.location());
+	}
+      else
+	{
+	  try
+	    {
+	      invoke_violation_handler
+		(__ctx.kind(), evaluation_semantic::enforce,
+		 detection_mode::predicate_false, __text, __ctx.location());
+	    }
+	  catch (...) { }
+	  __d4324_terminate_wrapper();
+	}
+#else
+      if consteval
+	{
+	  __d4324_consteval_diagnose_violation (true, __text, __ctx.location());
+	}
+      else
+	{
+#ifdef _GLIBCXX_VERBOSE_ASSERT
+	  std::__glibcxx_assert_fail (__ctx.location().file_name(),
+				       __ctx.location().line(),
+				       __ctx.location().function_name(),
+				       __text);
+#else
+	  __builtin_abort();
+#endif
+	}
+#endif
+    }
+  };
+
+  inline constexpr proven_symbolic_t proven_symbolic_v{};
 
   struct ignore {
     static constexpr bool
