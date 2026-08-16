@@ -10337,17 +10337,34 @@ oa_contract_fact_tracking_active_p (tree contract, tree owner_fn = NULL_TREE)
    parameter reference *is* found and its substituted argument isn't
    provable).  */
 
-/* Scan CALL's own callee for any conveyor-active precondition that
-   forces -fcontract-conveyor-proofs-equivalent analysis on regardless
-   of the command-line flag (analyzed_conveyor/proven_conveyor), and/or
-   is strict (proven_conveyor specifically) -- both OR'd across every
-   such precondition the callee has, since whether to analyze a call at
-   all is an all-or-nothing decision per call site, not selectively per
-   precondition (matching how oa_contract_fact_tracking_active_p already
+/* Scan CALL's own callee for any conveyor-active contract that forces
+   -fcontract-conveyor-proofs-equivalent analysis on regardless of the
+   command-line flag (analyzed_conveyor/proven_conveyor), and/or is
+   strict (proven_conveyor specifically) -- both OR'd across every such
+   contract the callee has, since whether to analyze a call at all is
+   an all-or-nothing decision per call site, not selectively per
+   contract (matching how oa_contract_fact_tracking_active_p already
    treats conveyor/symbolic activity as a shared, non-selective
-   substrate). FORCED_OUT/STRICT_OUT are only ever set to true, never
-   reset, and either may be NULL if the caller only wants the other.
-   Symbolic mirror immediately below.  */
+   substrate).
+
+   FORCED_OUT considers *both* preconditions and postconditions: a
+   postcondition tagged analyzed_conveyor/proven_conveyor must still
+   force the shared bookkeeping (fact establishment from that very
+   postcondition, in oa_scan_calls_in_expr) on for this call, regardless
+   of the flag -- found by direct testing, not assumed: a postcondition-
+   only proven_symbolic scenario silently stayed "cannot prove" without
+   this, because postcondition establishment never happened without
+   flag_contract_symbolic_proofs, even though the precondition
+   discharging it upstream was checked correctly regardless.  STRICT_OUT
+   stays scoped to preconditions only, since strictness only ever
+   affects the precondition-obligation-discharge diagnostics below --
+   there is no analogous "unknown" outcome for postcondition
+   establishment itself (it either establishes a fact or doesn't; there
+   is nothing to warn or error about at the establishing call site).
+
+   FORCED_OUT/STRICT_OUT are only ever set to true, never reset, and
+   either may be NULL if the caller only wants the other.  Symbolic
+   mirror immediately below.  */
 
 static void
 oa_call_conveyor_obligation_status (tree call, bool *forced_out, bool *strict_out)
@@ -10358,12 +10375,12 @@ oa_call_conveyor_obligation_status (tree call, bool *forced_out, bool *strict_ou
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
       tree contract = CONTRACT_STATEMENT (as);
-      if (!PRECONDITION_P (contract)
-	  || !oa_contract_conveyor_active_p (contract, callee))
+      if (!oa_contract_conveyor_active_p (contract, callee))
 	continue;
       if (forced_out && oa_contract_conveyor_analysis_forced_p (contract, callee))
 	*forced_out = true;
-      if (strict_out && oa_contract_conveyor_strict_p (contract, callee))
+      if (strict_out && PRECONDITION_P (contract)
+	  && oa_contract_conveyor_strict_p (contract, callee))
 	*strict_out = true;
     }
 }
@@ -10377,12 +10394,12 @@ oa_call_symbolic_obligation_status (tree call, bool *forced_out, bool *strict_ou
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
       tree contract = CONTRACT_STATEMENT (as);
-      if (!PRECONDITION_P (contract)
-	  || !oa_contract_symbolic_active_p (contract, callee))
+      if (!oa_contract_symbolic_active_p (contract, callee))
 	continue;
       if (forced_out && oa_contract_symbolic_analysis_forced_p (contract, callee))
 	*forced_out = true;
-      if (strict_out && oa_contract_symbolic_strict_p (contract, callee))
+      if (strict_out && PRECONDITION_P (contract)
+	  && oa_contract_symbolic_strict_p (contract, callee))
 	*strict_out = true;
     }
 }
