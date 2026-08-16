@@ -6396,6 +6396,18 @@ struct oa_contract_field_range_fact
   bool conveyor_established;
 };
 
+/* D4324: the floating-point analogue of oa_contract_field_range_fact
+   immediately above, for a scalar-float-typed field's own tracked
+   range (needed for e.g. 'this->m_value' in a class wrapping a
+   double) -- same composite (identity, FIELD_DECL) key via
+   oa_field_key_hash, reused as-is (it's already fully generic over any
+   two tree pointers).  */
+struct oa_contract_float_field_range_fact
+{
+  oa_float_range_fact range;
+  bool conveyor_established;
+};
+
 /* Forward-declared: oa_derivation's full definition (contract-conveyor-
    proof-provenance's own "why does this range fact hold" node, see its
    own comment further below) isn't needed here, only pointers to it --
@@ -7238,6 +7250,75 @@ public:
       m_contract_field_range_map.put (to_keep[i], kept_facts[i]);
   }
 
+  /* D4324: the floating-point analogue of the (identity, FIELD_DECL)
+     range map immediately above, for a scalar-float-typed field (see
+     oa_contract_float_field_range_fact's own comment).  */
+  bool contract_float_field_range_get (tree identity, tree field,
+					oa_contract_float_field_range_fact *out)
+  {
+    oa_contract_float_field_range_fact *v
+      = m_contract_float_field_range_map.get ({identity, field});
+    if (!v)
+      return false;
+    *out = *v;
+    return true;
+  }
+  void contract_float_field_range_set (tree identity, tree field,
+					const oa_float_range_fact &range,
+					bool conveyor_established)
+  {
+    oa_contract_float_field_range_fact fact = { range, conveyor_established };
+    m_contract_float_field_range_map.put ({identity, field}, fact);
+  }
+  void contract_float_field_range_invalidate (tree identity, tree field)
+  {
+    m_contract_float_field_range_map.remove ({identity, field});
+  }
+  void contract_float_field_range_invalidate_all (tree identity)
+  {
+    auto_vec<std::pair<tree, tree>> to_remove;
+    for (auto it : m_contract_float_field_range_map)
+      if (it.first.first == identity)
+	to_remove.safe_push (it.first);
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_contract_float_field_range_map.remove (to_remove[i]);
+  }
+  void contract_float_field_range_merge_with (oa_env &other)
+  {
+    auto_vec<std::pair<tree, tree>> to_remove;
+    auto_vec<std::pair<tree, tree>> to_keep;
+    auto_vec<oa_contract_float_field_range_fact> kept_facts;
+    for (auto it : m_contract_float_field_range_map)
+      {
+	oa_contract_float_field_range_fact *ov
+	  = other.m_contract_float_field_range_map.get (it.first);
+	if (!ov)
+	  {
+	    to_remove.safe_push (it.first);
+	    continue;
+	  }
+	oa_contract_float_field_range_fact merged;
+	merged.range.has_lo = it.second.range.has_lo && ov->range.has_lo;
+	merged.range.has_hi = it.second.range.has_hi && ov->range.has_hi;
+	if (merged.range.has_lo)
+	  merged.range.lo = real_less (&it.second.range.lo, &ov->range.lo)
+	    ? it.second.range.lo : ov->range.lo;
+	if (merged.range.has_hi)
+	  merged.range.hi = real_less (&it.second.range.hi, &ov->range.hi)
+	    ? ov->range.hi : it.second.range.hi;
+	merged.range.maybe_nan
+	  = it.second.range.maybe_nan || ov->range.maybe_nan;
+	merged.conveyor_established
+	  = it.second.conveyor_established && ov->conveyor_established;
+	to_keep.safe_push (it.first);
+	kept_facts.safe_push (merged);
+      }
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_contract_float_field_range_map.remove (to_remove[i]);
+    for (unsigned i = 0; i < to_keep.length (); ++i)
+      m_contract_float_field_range_map.put (to_keep[i], kept_facts[i]);
+  }
+
   /* The call-range analogue of the ptr->field range map immediately
      above -- keyed by (receiver identity, FUNCTION_DECL) rather than
      (identity, FIELD_DECL), for a call to a DECL_DECLARED_CONVEYOR_P
@@ -7401,6 +7482,8 @@ public:
       r.m_contract_scalar_range_map.put (it.first, it.second);
     for (auto it : m_contract_field_range_map)
       r.m_contract_field_range_map.put (it.first, it.second);
+    for (auto it : m_contract_float_field_range_map)
+      r.m_contract_float_field_range_map.put (it.first, it.second);
     for (auto it : m_contract_call_range_map)
       r.m_contract_call_range_map.put (it.first, it.second);
     r.m_outermost_bind = m_outermost_bind;
@@ -7462,6 +7545,9 @@ public:
     m_contract_field_range_map.empty ();
     for (auto it : other.m_contract_field_range_map)
       m_contract_field_range_map.put (it.first, it.second);
+    m_contract_float_field_range_map.empty ();
+    for (auto it : other.m_contract_float_field_range_map)
+      m_contract_float_field_range_map.put (it.first, it.second);
     m_contract_call_range_map.empty ();
     for (auto it : other.m_contract_call_range_map)
       m_contract_call_range_map.put (it.first, it.second);
@@ -7624,6 +7710,7 @@ private:
   hash_map<oa_field_key_hash, oa_call_call_relational_fact> m_call_call_relational_map;
   hash_map<tree, oa_range_fact> m_contract_scalar_range_map;
   hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_contract_field_range_map;
+  hash_map<oa_field_key_hash, oa_contract_float_field_range_fact> m_contract_float_field_range_map;
   hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_contract_call_range_map;
   tree m_outermost_bind = NULL_TREE;
   hash_map<tree, tree> m_shadow_decls;
@@ -9699,7 +9786,8 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
     tree_code field_code;
     if (oa_symbolic_comparison_conjunct_shape (conjunct, &field, &ptr_expr,
 						&field_code, &field_const)
-	&& TREE_CODE (field_const) == INTEGER_CST)
+	&& (TREE_CODE (field_const) == INTEGER_CST
+	    || TREE_CODE (field_const) == REAL_CST))
       {
 	ptr_expr = oa_strip_symbolic_ptr_expr (ptr_expr);
 	tree identity;
@@ -9718,6 +9806,29 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
 		case GE_EXPR: field_code = LT_EXPR; break;
 		default: return; /* NOT(field == val) -- skip.  */
 		}
+	    /* D4324: the floating-point analogue of the block below --
+	       same shape, dispatched to the float field-range map when
+	       FIELD_CONST is a REAL_CST.  */
+	    if (TREE_CODE (field_const) == REAL_CST)
+	      {
+		oa_contract_float_field_range_fact established;
+		oa_float_range_fact refined;
+		bool conveyor_established = true;
+		if (env.contract_float_field_range_get (identity, field,
+							 &established))
+		  {
+		    refined = established.range;
+		    conveyor_established = established.conveyor_established;
+		  }
+		else
+		  refined.has_lo = refined.has_hi = false;
+		oa_float_tighten_range_bound (refined, field_code,
+					       TREE_REAL_CST (field_const),
+					       TREE_TYPE (field));
+		env.contract_float_field_range_set (identity, field, refined,
+						     conveyor_established);
+		return;
+	      }
 	    oa_contract_field_range_fact established;
 	    oa_range_fact refined;
 	    bool conveyor_established = true;
@@ -12421,6 +12532,55 @@ oa_collect_contract_field_ranges (tree condition,
     }
 }
 
+/* D4324: the floating-point analogue of oa_symbolic_field_group/
+   oa_collect_contract_field_ranges immediately above, for a
+   scalar-float-typed field.  A separate struct/function pair (not a
+   REAL_CST branch folded into the existing one) since RANGE's own type
+   differs (oa_float_range_fact, not oa_range_fact).  */
+
+struct oa_symbolic_float_field_group
+{
+  tree field;
+  tree ptr_expr;
+  oa_float_range_fact range;
+};
+
+static void
+oa_collect_contract_float_field_ranges (tree condition,
+					 vec<oa_symbolic_float_field_group> *out)
+{
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts (&condition, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree field, ptr_expr, const_val;
+      tree_code code;
+      if (!oa_symbolic_comparison_conjunct_shape (*conjuncts[i], &field,
+						   &ptr_expr, &code, &const_val)
+	  || TREE_CODE (const_val) != REAL_CST)
+	continue;
+
+      oa_symbolic_float_field_group *found = NULL;
+      for (unsigned j = 0; j < out->length () && !found; ++j)
+	if ((*out)[j].field == field
+	    && cp_tree_equal ((*out)[j].ptr_expr, ptr_expr))
+	  found = &(*out)[j];
+      if (!found)
+	{
+	  oa_symbolic_float_field_group g;
+	  g.field = field;
+	  g.ptr_expr = ptr_expr;
+	  g.range.has_lo = false;
+	  g.range.has_hi = false;
+	  out->safe_push (g);
+	  found = &out->last ();
+	}
+      oa_float_tighten_range_bound (found->range, code,
+				     TREE_REAL_CST (const_val),
+				     TREE_TYPE (field));
+    }
+}
+
 /* The call-range analogue of oa_symbolic_field_group/oa_collect_
    contract_field_ranges immediately above -- one (RECEIVER_EXPR,
    CALLEE) pair's own combined range, as written in a single contract's
@@ -12619,6 +12779,33 @@ oa_range_subsumption (const oa_range_fact &established,
     = (established.has_hi && required.has_lo && established.hi < required.lo)
       || (established.has_lo && required.has_hi
 	  && established.lo > required.hi);
+  return disjoint ? OA_RANGE_DISJOINT : OA_RANGE_PARTIAL;
+}
+
+/* D4324: the floating-point analogue of oa_range_subsumption
+   immediately above, via real_less instead of widest_int comparisons
+   (same three-way SUBSUMED/DISJOINT/PARTIAL outcome, used by
+   oa_handle_call_conveyor_field_range_obligation's own float field-
+   range consult, mirroring how oa_range_subsumption itself feeds that
+   function's integer consult).  */
+
+static oa_range_subsumption_result
+oa_float_range_subsumption (const oa_float_range_fact &established,
+			     const oa_float_range_fact &required)
+{
+  bool subsumed
+    = (!required.has_lo
+       || (established.has_lo && !real_less (&established.lo, &required.lo)))
+      && (!required.has_hi
+	  || (established.has_hi && !real_less (&required.hi, &established.hi)));
+  if (subsumed)
+    return OA_RANGE_SUBSUMED;
+
+  bool disjoint
+    = (established.has_hi && required.has_lo
+       && real_less (&established.hi, &required.lo))
+      || (established.has_lo && required.has_hi
+	  && real_less (&required.hi, &established.lo));
   return disjoint ? OA_RANGE_DISJOINT : OA_RANGE_PARTIAL;
 }
 
@@ -12873,6 +13060,38 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 		  env.contract_field_range_set (identity, field_groups[i].field,
 						field_groups[i].range,
 						conveyor_established);
+		}
+
+	      /* D4324: the floating-point analogue of the field-range
+		 establishment block just above -- without this, a
+		 REAL_CST-bounded postcondition field conjunct (e.g.
+		 'post<ctrl>(this->value >= 40.0)') was collected but never
+		 actually written into any map, leaving m_contract_float_
+		 field_range_map permanently empty and every caller-side
+		 consult of it declining as "cannot verify" even right after
+		 the establishing call -- confirmed by direct testing.  */
+	      auto_vec<oa_symbolic_float_field_group> float_field_groups;
+	      oa_collect_contract_float_field_ranges (cond, &float_field_groups);
+	      for (unsigned i = 0; i < float_field_groups.length (); ++i)
+		{
+		  tree ptr_expr
+		    = oa_strip_symbolic_ptr_expr (float_field_groups[i].ptr_expr);
+		  if (TREE_CODE (ptr_expr) != PARM_DECL)
+		    continue;
+		  tree substituted = oa_substitute_call_arg (callee, call, ptr_expr);
+		  if (!substituted)
+		    continue;
+		  tree identity;
+		  if (!oa_object_identity_decl (substituted, &identity)
+		      && !oa_field_slot_identity (substituted, env, &identity)
+		      && !oa_array_slot_identity (substituted, env, &identity)
+		      && !oa_field_object_identity (substituted, env, &identity))
+		    continue;
+		  identity = env.alias_find (identity);
+		  env.contract_float_field_range_set (identity,
+						       float_field_groups[i].field,
+						       float_field_groups[i].range,
+						       conveyor_established);
 		}
 
 	      /* The call-range analogue of the field-range block just
@@ -13498,6 +13717,84 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	}
+
+      /* D4324: the floating-point analogue of the field-range consult
+	 loop just above -- same shape, over oa_collect_contract_float_
+	 field_ranges/m_contract_float_field_range_map instead.  Without
+	 this, a field precondition using a REAL_CST bound (e.g.
+	 'pre<ctrl>(this->value >= 0.0)') was collected by neither loop
+	 and the whole obligation silently went unchecked -- confirmed by
+	 direct testing (an entirely unestablished float field produced no
+	 diagnostic at all, not even "cannot verify").  */
+      auto_vec<oa_symbolic_float_field_group> float_field_groups;
+      oa_collect_contract_float_field_ranges (cond, &float_field_groups);
+      for (unsigned i = 0; i < float_field_groups.length (); ++i)
+	{
+	  tree ptr_expr
+	    = oa_strip_symbolic_ptr_expr (float_field_groups[i].ptr_expr);
+	  if (TREE_CODE (ptr_expr) != PARM_DECL)
+	    continue;
+	  tree substituted = oa_substitute_call_arg (callee, call, ptr_expr);
+	  if (!substituted)
+	    continue;
+	  substituted = oa_strip_conversion_call (substituted);
+	  tree identity;
+	  if (!oa_object_identity_decl (substituted, &identity)
+	      && !oa_field_slot_identity (substituted, env, &identity)
+	      && !oa_array_slot_identity (substituted, env, &identity)
+	      && !oa_field_object_identity (substituted, env, &identity))
+	    continue;
+	  identity = env.alias_find (identity);
+
+	  oa_contract_float_field_range_fact established;
+	  if (!env.contract_float_field_range_get
+		(identity, float_field_groups[i].field, &established)
+	      || !established.conveyor_established)
+	    {
+	      if (strict)
+		error_at (EXPR_LOCATION (call),
+			  "cannot prove that field %qD of %qE satisfies "
+			  "the precondition of %qD",
+			  float_field_groups[i].field, substituted, callee);
+	      else
+		warning_at (EXPR_LOCATION (call), 0,
+			    "cannot verify that field %qD of %qE satisfies "
+			    "the precondition of %qD",
+			    float_field_groups[i].field, substituted, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      continue;
+	    }
+
+	  oa_range_subsumption_result r = oa_float_range_subsumption
+	    (established.range, float_field_groups[i].range);
+	  if (r == OA_RANGE_SUBSUMED)
+	    continue; /* Proven true: silently discharged.  */
+	  if (r == OA_RANGE_DISJOINT)
+	    {
+	      error_at (EXPR_LOCATION (call),
+			"argument %qE provably violates the precondition "
+			"of %qD: %qD is established outside the required "
+			"range", substituted, callee,
+			float_field_groups[i].field);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    }
+	  else if (strict)
+	    {
+	      error_at (EXPR_LOCATION (call),
+			"cannot prove that field %qD of %qE satisfies "
+			"the precondition of %qD",
+			float_field_groups[i].field, substituted, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    }
+	  else
+	    {
+	      warning_at (EXPR_LOCATION (call), 0,
+			  "cannot verify that field %qD of %qE satisfies "
+			  "the precondition of %qD",
+			  float_field_groups[i].field, substituted, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    }
+	}
     }
 }
 
@@ -13818,6 +14115,7 @@ oa_invalidate_parameter_alias_group (tree identity, oa_env &env)
 	continue;
       env.predicate_fact_invalidate (parm);
       env.contract_field_range_invalidate_all (parm);
+      env.contract_float_field_range_invalidate_all (parm);
       env.contract_call_range_invalidate_all (parm);
       env.field_alias_invalidate_all (parm);
       env.array_alias_invalidate_all (parm);
@@ -13857,6 +14155,7 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 	  identity = env.alias_find (identity);
 	  env.predicate_fact_invalidate (identity);
 	  env.contract_field_range_invalidate_all (identity);
+	  env.contract_float_field_range_invalidate_all (identity);
 	  env.contract_call_range_invalidate_all (identity);
 	  env.field_alias_invalidate_all (identity);
 	  env.array_alias_invalidate_all (identity);
@@ -16672,6 +16971,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	 no-ops for whichever one D isn't.  */
       checkenv.contract_scalar_range_invalidate (d);
       checkenv.contract_field_range_invalidate_all (d);
+      checkenv.contract_float_field_range_invalidate_all (d);
       checkenv.contract_call_range_invalidate_all (d);
       checkenv.field_alias_invalidate_all (d);
       checkenv.array_alias_invalidate_all (d);
@@ -16760,6 +17060,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	 the two new static-only symbolic range maps, for the same reason.  */
       env.contract_scalar_range_invalidate (range_result_decls[i]);
       env.contract_field_range_invalidate_all (range_result_decls[i]);
+      env.contract_float_field_range_invalidate_all (range_result_decls[i]);
       env.contract_call_range_invalidate_all (range_result_decls[i]);
       env.field_alias_invalidate_all (range_result_decls[i]);
       env.array_alias_invalidate_all (range_result_decls[i]);
@@ -17422,6 +17723,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		  oa_postcondition_merge_env->call_call_relational_merge_with (snap);
 		  oa_postcondition_merge_env->contract_scalar_range_merge_with (snap);
 		  oa_postcondition_merge_env->contract_field_range_merge_with (snap);
+		  oa_postcondition_merge_env->contract_float_field_range_merge_with (snap);
 		  oa_postcondition_merge_env->contract_call_range_merge_with (snap);
 		  oa_postcondition_merge_env->shadow_decls_merge_with (snap);
 		  oa_postcondition_merge_env->alias_merge_with (snap);
@@ -17514,6 +17816,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      oa_postcondition_merge_env->call_call_relational_merge_with (env);
 	      oa_postcondition_merge_env->contract_scalar_range_merge_with (env);
 	      oa_postcondition_merge_env->contract_field_range_merge_with (env);
+	      oa_postcondition_merge_env->contract_float_field_range_merge_with (env);
 	      oa_postcondition_merge_env->contract_call_range_merge_with (env);
 	      oa_postcondition_merge_env->shadow_decls_merge_with (env);
 	      oa_postcondition_merge_env->alias_merge_with (env);
@@ -17614,6 +17917,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.call_call_relational_merge_with (result);
 		merged.contract_scalar_range_merge_with (result);
 		merged.contract_field_range_merge_with (result);
+		merged.contract_float_field_range_merge_with (result);
 		merged.contract_call_range_merge_with (result);
 		merged.shadow_decls_merge_with (result);
 		merged.alias_merge_with (result);
@@ -17974,6 +18278,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		env.call_relational_invalidate_involving (identity);
 		env.call_call_relational_invalidate_involving (identity);
 		env.contract_field_range_invalidate_all (identity);
+		env.contract_float_field_range_invalidate_all (identity);
 		env.contract_call_range_invalidate_all (identity);
 		env.field_alias_invalidate_all (identity);
 		env.array_alias_invalidate_all (identity);
@@ -18014,6 +18319,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 			       OBJ_EXPR's own raw key.  */
 			    field_identity = env.alias_find (field_identity);
 			    env.contract_field_range_invalidate (field_identity, field);
+			    env.contract_float_field_range_invalidate (field_identity, field);
 			    /* Stage 4a: a named predicate (e.g. 'is_opened')
 			       is opaque and could depend on any field, so
 			       a direct write to *any* field must invalidate
@@ -18416,6 +18722,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       maps (bare-scalar and ptr->field).  */
 	    then_env.contract_scalar_range_merge_with (else_env);
 	    then_env.contract_field_range_merge_with (else_env);
+	    then_env.contract_float_field_range_merge_with (else_env);
 	    then_env.contract_call_range_merge_with (else_env);
 	    /* -fcontract-symbolic-runtime-checks (Mechanism B): a shadow's
 	       own *existence* is a plain set union across branches, not
@@ -18489,6 +18796,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    /* -fcontract-symbolic-proofs: same as COND_EXPR above.  */
 	    then_env.contract_scalar_range_merge_with (else_env);
 	    then_env.contract_field_range_merge_with (else_env);
+	    then_env.contract_float_field_range_merge_with (else_env);
 	    then_env.contract_call_range_merge_with (else_env);
 	    /* -fcontract-symbolic-runtime-checks (Mechanism B): same union
 	       rule as COND_EXPR above.  */
@@ -18645,6 +18953,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		/* -fcontract-symbolic-proofs: same as the if/else case.  */
 		merged.contract_scalar_range_merge_with (current);
 		merged.contract_field_range_merge_with (current);
+		merged.contract_float_field_range_merge_with (current);
 		merged.contract_call_range_merge_with (current);
 		/* -fcontract-symbolic-runtime-checks (Mechanism B): same
 		   union rule as the if/else case.  */
@@ -18717,6 +19026,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.call_call_relational_merge_with (env);
 		merged.contract_scalar_range_merge_with (env);
 		merged.contract_field_range_merge_with (env);
+		merged.contract_float_field_range_merge_with (env);
 		merged.contract_call_range_merge_with (env);
 		merged.shadow_decls_merge_with (env);
 		merged.alias_merge_with (env);
@@ -20518,11 +20828,15 @@ oa_symbolic_comparison_conjunct_shape (tree conjunct, tree *field_out,
   tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
   tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
 
+  /* D4324: REAL_CST admitted alongside INTEGER_CST -- see oa_match_
+     simple_comparison_var's own identical extension for why CONST_VAL_
+     OUT (a plain tree) needs no signature change to carry either
+     kind.  */
   tree comp, const_val;
   bool flipped;
-  if (TREE_CODE (op1) == INTEGER_CST)
+  if (TREE_CODE (op1) == INTEGER_CST || TREE_CODE (op1) == REAL_CST)
     comp = op0, const_val = op1, flipped = false;
-  else if (TREE_CODE (op0) == INTEGER_CST)
+  else if (TREE_CODE (op0) == INTEGER_CST || TREE_CODE (op0) == REAL_CST)
     comp = op1, const_val = op0, flipped = true;
   else
     return false;
@@ -21419,7 +21733,8 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
     tree_code field_code;
     if (oa_symbolic_comparison_conjunct_shape (conjunct, &field, &ptr_expr,
 						&field_code, &field_const)
-	&& TREE_CODE (field_const) == INTEGER_CST)
+	&& (TREE_CODE (field_const) == INTEGER_CST
+	    || TREE_CODE (field_const) == REAL_CST))
       {
 	ptr_expr = oa_strip_symbolic_ptr_expr (ptr_expr);
 	tree identity;
@@ -21429,6 +21744,23 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
 	    || oa_field_object_identity (ptr_expr, env, &identity))
 	  {
 	    identity = env.alias_find (identity);
+	    /* D4324: the floating-point analogue of the block below.  */
+	    if (TREE_CODE (field_const) == REAL_CST)
+	      {
+		oa_contract_float_field_range_fact established;
+		if (env.contract_float_field_range_get (identity, field,
+							 &established)
+		    && (!require_conveyor || established.conveyor_established))
+		  {
+		    oa_float_range_fact req;
+		    oa_float_tighten_range_bound (req, field_code,
+						   TREE_REAL_CST (field_const),
+						   TREE_TYPE (field));
+		    return oa_float_range_subsumption_result (established.range,
+							       req);
+		  }
+		return OA_UNKNOWN;
+	      }
 	    oa_contract_field_range_fact established;
 	    if (env.contract_field_range_get (identity, field, &established)
 		&& (!require_conveyor || established.conveyor_established))
@@ -21541,8 +21873,16 @@ oa_collect_symbolic_actions (location_t loc, tree condition,
 	{
 	  if (TREE_CODE (const_val) != INTEGER_CST)
 	    {
-	      error_at (loc, "non-constant bound in a comparison conjunct of "
-			"a symbolic contract");
+	      /* D4324: oa_symbolic_comparison_conjunct_shape now also
+		 recognizes a REAL_CST bound (for the static-only float
+		 field-range work), which this runtime-codegen path still
+		 can't support -- its own shadow struct fields are
+		 long-long only (see assign_field's own callers below).
+		 Diagnose precisely (a float bound is still a constant,
+		 just not an integer one) rather than reusing the
+		 INTEGER_CST-only wording verbatim.  */
+	      error_at (loc, "non-integer constant bound in a comparison "
+			"conjunct of a symbolic contract");
 	      return false;
 	    }
 	  long long val = TREE_INT_CST_LOW (const_val);
