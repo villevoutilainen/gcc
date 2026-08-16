@@ -11885,6 +11885,210 @@ oa_relational_literal_holds (tree_code code, tree a, tree b)
     }
 }
 
+/* D4324: shared "collect + consult" combined-range obligation for a bare
+   'param OP literal' precondition conjunct (e.g. 'pre<ctrl>(percentage
+   >= 0 && percentage <= 100)') -- the diagnostics and subsumption logic
+   here are identical between the conveyor and symbolic flavors; the
+   *only* thing that differs is which of the callee's own preconditions
+   count as "active" (CONVEYOR selects oa_contract_conveyor_active_p vs
+   oa_contract_symbolic_active_p). Factored into one function so the two
+   flavors can no longer drift apart on this specific mechanism the way
+   they already had: this used to live only inside oa_handle_call_
+   conveyor_proof_obligation, and oa_handle_call_symbolic_precondition_
+   obligation had no equivalent at all (a proven_symbolic precondition
+   using a bare parameter-vs-literal bound was silently never checked
+   at any call site, for either int or float) -- found via direct user
+   report, not proactively.
+
+   CONVEYOR also gates -fdump-contract-proofs certificate emission,
+   kept conveyor-only to match that feature's own existing, tested
+   behavior -- a symbolic-aware dump format is a separate, later
+   concern, not a regression in scope here (symbolic gained none of
+   this dump support before either).
+
+   STRICT is computed by each caller from its own status function
+   (oa_call_conveyor_obligation_status / oa_call_symbolic_obligation_
+   status) -- the one piece that can't be shared, since those two
+   functions have different names/signatures; keeping STRICT a plain
+   parameter here sidesteps that entirely.  */
+
+static void
+oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
+						 bool conveyor, bool strict)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return;
+
+  auto_vec<tree> range_parms;
+  auto_vec<oa_range_fact> range_facts;
+  auto_vec<tree> float_range_parms;
+  auto_vec<oa_float_range_fact> float_range_facts;
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract))
+	continue;
+      bool active = conveyor
+	? oa_contract_conveyor_active_p (contract, callee)
+	: oa_contract_symbolic_active_p (contract, callee);
+      if (!active)
+	continue;
+
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree param, const_val;
+	  tree_code code;
+	  if (!oa_match_simple_comparison (*conjuncts[i], &param, &code,
+					    &const_val))
+	    continue;
+
+	  if (TREE_CODE (const_val) == REAL_CST)
+	    {
+	      unsigned idx;
+	      for (idx = 0; idx < float_range_parms.length (); ++idx)
+		if (float_range_parms[idx] == param)
+		  break;
+	      if (idx == float_range_parms.length ())
+		{
+		  float_range_parms.safe_push (param);
+		  oa_float_range_fact fresh;
+		  fresh.has_lo = fresh.has_hi = false;
+		  float_range_facts.safe_push (fresh);
+		}
+	      oa_float_tighten_range_bound (float_range_facts[idx], code,
+					     TREE_REAL_CST (const_val),
+					     TREE_TYPE (param));
+	      continue;
+	    }
+
+	  unsigned idx;
+	  for (idx = 0; idx < range_parms.length (); ++idx)
+	    if (range_parms[idx] == param)
+	      break;
+	  if (idx == range_parms.length ())
+	    {
+	      range_parms.safe_push (param);
+	      oa_range_fact fresh;
+	      fresh.base = NULL_TREE;
+	      fresh.has_lo = fresh.has_hi = false;
+	      range_facts.safe_push (fresh);
+	    }
+	  oa_tighten_range_bound (range_facts[idx], code,
+				  wi::to_widest (const_val));
+	}
+    }
+
+  for (unsigned idx = 0; idx < range_parms.length (); ++idx)
+    {
+      tree param = range_parms[idx];
+
+      tree substituted = NULL_TREE;
+      unsigned argno = 0;
+      for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
+	if (p == param)
+	  {
+	    if (argno < (unsigned) call_expr_nargs (call))
+	      substituted = CALL_EXPR_ARG (call, argno);
+	    break;
+	  }
+      if (!substituted)
+	continue;
+
+      oa_proof_result r
+	= oa_env_check_range_subsumption (env, substituted, range_facts[idx]);
+      switch (r)
+	{
+	case OA_PROVEN_TRUE:
+	  if (conveyor && flag_dump_contract_proofs)
+	    {
+	      oa_range_fact established;
+	      if (oa_get_range (substituted, env, &established))
+		oa_emit_range_certificate (EXPR_LOCATION (call), callee,
+					   established, range_facts[idx],
+					   /*proven_false=*/false,
+					   oa_get_range_derivation (substituted, env));
+	    }
+	  break;
+	case OA_PROVEN_FALSE:
+	  error_at (EXPR_LOCATION (call),
+		    "argument %qE provably violates the precondition "
+		    "of %qD", substituted, callee);
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  if (conveyor && flag_dump_contract_proofs)
+	    {
+	      oa_range_fact established;
+	      if (oa_get_range (substituted, env, &established))
+		oa_emit_range_certificate (EXPR_LOCATION (call), callee,
+					   established, range_facts[idx],
+					   /*proven_false=*/true,
+					   oa_get_range_derivation (substituted, env));
+	    }
+	  break;
+	case OA_UNKNOWN:
+	  if (strict)
+	    error_at (EXPR_LOCATION (call),
+		      "cannot prove that %qE satisfies the "
+		      "precondition of %qD", substituted, callee);
+	  else
+	    warning_at (EXPR_LOCATION (call), 0,
+			"cannot verify that %qE satisfies the "
+			"precondition of %qD", substituted, callee);
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  break;
+	}
+    }
+
+  for (unsigned idx = 0; idx < float_range_parms.length (); ++idx)
+    {
+      tree param = float_range_parms[idx];
+
+      tree substituted = NULL_TREE;
+      unsigned argno = 0;
+      for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
+	if (p == param)
+	  {
+	    if (argno < (unsigned) call_expr_nargs (call))
+	      substituted = CALL_EXPR_ARG (call, argno);
+	    break;
+	  }
+      if (!substituted)
+	continue;
+
+      oa_proof_result r = oa_env_check_float_range_subsumption
+	(env, substituted, float_range_facts[idx]);
+      switch (r)
+	{
+	case OA_PROVEN_TRUE:
+	  break;
+	case OA_PROVEN_FALSE:
+	  error_at (EXPR_LOCATION (call),
+		    "argument %qE provably violates the precondition "
+		    "of %qD", substituted, callee);
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  break;
+	case OA_UNKNOWN:
+	  if (strict)
+	    error_at (EXPR_LOCATION (call),
+		      "cannot prove that %qE satisfies the "
+		      "precondition of %qD", substituted, callee);
+	  else
+	    warning_at (EXPR_LOCATION (call), 0,
+			"cannot verify that %qE satisfies the "
+			"precondition of %qD", substituted, callee);
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  break;
+	}
+    }
+}
+
 static void
 oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 {
@@ -11900,10 +12104,11 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
   bool strict = false;
   oa_call_conveyor_obligation_status (call, NULL, &strict);
 
-  auto_vec<tree> range_parms;
-  auto_vec<oa_range_fact> range_facts;
-  auto_vec<tree> float_range_parms;
-  auto_vec<oa_float_range_fact> float_range_facts;
+  /* D4324: the bare 'param OP literal' combined-range obligation now
+     lives in one function shared with the symbolic flavor -- see its
+     own comment for why.  */
+  oa_handle_precondition_simple_range_obligation (call, env,
+						   /*conveyor=*/true, strict);
 
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
@@ -11924,52 +12129,13 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	  tree already_arg;
 	  if (is_object_address_call_p (*conjuncts[i], &already_arg))
 	    continue;
-
-	  tree param, const_val;
-	  tree_code code;
-	  if (oa_match_simple_comparison (*conjuncts[i], &param, &code,
-					  &const_val))
-	    {
-	      /* D4324: the floating-point analogue of the combined-range
-		 accumulation just below -- same idea (fold every conjunct
-		 on the same parameter into one required interval), a
-		 separate PARMS/FACTS pair since oa_float_range_fact isn't
-		 oa_range_fact.  */
-	      if (TREE_CODE (const_val) == REAL_CST)
-		{
-		  unsigned idx;
-		  for (idx = 0; idx < float_range_parms.length (); ++idx)
-		    if (float_range_parms[idx] == param)
-		      break;
-		  if (idx == float_range_parms.length ())
-		    {
-		      float_range_parms.safe_push (param);
-		      oa_float_range_fact fresh;
-		      fresh.has_lo = fresh.has_hi = false;
-		      float_range_facts.safe_push (fresh);
-		    }
-		  oa_float_tighten_range_bound (float_range_facts[idx], code,
-						 TREE_REAL_CST (const_val),
-						 TREE_TYPE (param));
-		  continue;
-		}
-
-	      unsigned idx;
-	      for (idx = 0; idx < range_parms.length (); ++idx)
-		if (range_parms[idx] == param)
-		  break;
-	      if (idx == range_parms.length ())
-		{
-		  range_parms.safe_push (param);
-		  oa_range_fact fresh;
-		  fresh.base = NULL_TREE;
-		  fresh.has_lo = fresh.has_hi = false;
-		  range_facts.safe_push (fresh);
-		}
-	      oa_tighten_range_bound (range_facts[idx], code,
-				      wi::to_widest (const_val));
-	      continue;
-	    }
+	  {
+	    tree dummy_param, dummy_const;
+	    tree_code dummy_code;
+	    if (oa_match_simple_comparison (*conjuncts[i], &dummy_param,
+					     &dummy_code, &dummy_const))
+	      continue; /* Handled by the shared function above.  */
+	  }
 
 	  tree rel_param, rel_other;
 	  tree_code rel_code;
@@ -12228,114 +12394,6 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
-	}
-    }
-
-  for (unsigned idx = 0; idx < range_parms.length (); ++idx)
-    {
-      tree param = range_parms[idx];
-
-      tree substituted = NULL_TREE;
-      unsigned argno = 0;
-      for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
-	if (p == param)
-	  {
-	    if (argno < (unsigned) call_expr_nargs (call))
-	      substituted = CALL_EXPR_ARG (call, argno);
-	    break;
-	  }
-      if (!substituted)
-	continue;
-
-      oa_proof_result r
-	= oa_env_check_range_subsumption (env, substituted, range_facts[idx]);
-      switch (r)
-	{
-	case OA_PROVEN_TRUE:
-	  if (flag_dump_contract_proofs)
-	    {
-	      oa_range_fact established;
-	      if (oa_get_range (substituted, env, &established))
-		oa_emit_range_certificate (EXPR_LOCATION (call), callee,
-					   established, range_facts[idx],
-					   /*proven_false=*/false,
-					   oa_get_range_derivation (substituted, env));
-	    }
-	  break;
-	case OA_PROVEN_FALSE:
-	  error_at (EXPR_LOCATION (call),
-		    "argument %qE provably violates the precondition "
-		    "of %qD", substituted, callee);
-	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
-	  if (flag_dump_contract_proofs)
-	    {
-	      oa_range_fact established;
-	      if (oa_get_range (substituted, env, &established))
-		oa_emit_range_certificate (EXPR_LOCATION (call), callee,
-					   established, range_facts[idx],
-					   /*proven_false=*/true,
-					   oa_get_range_derivation (substituted, env));
-	    }
-	  break;
-	case OA_UNKNOWN:
-	  if (strict)
-	    error_at (EXPR_LOCATION (call),
-		      "cannot prove that %qE satisfies the "
-		      "precondition of %qD", substituted, callee);
-	  else
-	    warning_at (EXPR_LOCATION (call), 0,
-			"cannot verify that %qE satisfies the "
-			"precondition of %qD", substituted, callee);
-	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
-	  break;
-	}
-    }
-
-  /* D4324: the floating-point analogue of the combined-range consult
-     loop immediately above.  No flag_dump_contract_proofs certificate
-     emission -- oa_emit_range_certificate's own dump format is
-     widest_int-specific; a float-aware certificate format is out of
-     Milestone 1's scope and left for later, alongside the rest of the
-     dump-file family.  */
-  for (unsigned idx = 0; idx < float_range_parms.length (); ++idx)
-    {
-      tree param = float_range_parms[idx];
-
-      tree substituted = NULL_TREE;
-      unsigned argno = 0;
-      for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
-	if (p == param)
-	  {
-	    if (argno < (unsigned) call_expr_nargs (call))
-	      substituted = CALL_EXPR_ARG (call, argno);
-	    break;
-	  }
-      if (!substituted)
-	continue;
-
-      oa_proof_result r = oa_env_check_float_range_subsumption
-	(env, substituted, float_range_facts[idx]);
-      switch (r)
-	{
-	case OA_PROVEN_TRUE:
-	  break;
-	case OA_PROVEN_FALSE:
-	  error_at (EXPR_LOCATION (call),
-		    "argument %qE provably violates the precondition "
-		    "of %qD", substituted, callee);
-	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
-	  break;
-	case OA_UNKNOWN:
-	  if (strict)
-	    error_at (EXPR_LOCATION (call),
-		      "cannot prove that %qE satisfies the "
-		      "precondition of %qD", substituted, callee);
-	  else
-	    warning_at (EXPR_LOCATION (call), 0,
-			"cannot verify that %qE satisfies the "
-			"precondition of %qD", substituted, callee);
-	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
-	  break;
 	}
     }
 
@@ -13155,6 +13213,17 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
      comment -- symbolic mirror.  */
   bool strict = false;
   oa_call_symbolic_obligation_status (call, NULL, &strict);
+
+  /* D4324: previously missing entirely -- a bare 'param OP literal'
+     precondition conjunct (e.g. 'pre<ctrl>(percentage >= 0 && percentage
+     <= 100)') was never checked at any call site under proven_symbolic,
+     for either int or float, since no other block in this function
+     recognizes that shape (oa_match_comparison_against_param, used just
+     below, deliberately requires BOTH sides to be parameters, never a
+     literal).  See oa_handle_precondition_simple_range_obligation's own
+     comment.  */
+  oa_handle_precondition_simple_range_obligation (call, env,
+						   /*conveyor=*/false, strict);
 
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
@@ -14292,7 +14361,16 @@ oa_call_postcondition_object_address_p (tree call)
       tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
-      if (!oa_contract_conveyor_active_p (contract, callee))
+      /* D4324: m_map (is_object_address) carries no per-fact provenance
+	 tag of its own, unlike e.g. oa_contract_field_range_fact's
+	 conveyor_established -- so, exactly like oa_call_symbolic_
+	 predicate_p's own already-correct gate, either flavor's
+	 established postcondition is trusted equally here. Previously
+	 conveyor-only, which silently starved this fallback for any
+	 purely-symbolic postcondition (confirmed via a user-supplied
+	 repro: a proven_symbolic postcondition's own fact never reaching
+	 a later contract_assert at all).  */
+      if (!oa_contract_fact_tracking_active_p (contract, callee))
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
       if (!result_id || (!VAR_P (result_id) && TREE_CODE (result_id) != PARM_DECL))
@@ -14338,7 +14416,9 @@ oa_call_postcondition_nonzero_p (tree call)
       tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
-      if (!oa_contract_conveyor_active_p (contract, callee))
+      /* D4324: m_nz_map carries no per-fact provenance tag -- see oa_call_
+	 postcondition_object_address_p's own identical fix/comment.  */
+      if (!oa_contract_fact_tracking_active_p (contract, callee))
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
       if (!result_id || (!VAR_P (result_id) && TREE_CODE (result_id) != PARM_DECL))
@@ -14398,7 +14478,14 @@ oa_call_postcondition_range_p (tree call, oa_env &env, oa_range_fact *out,
       tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
-      if (!oa_contract_conveyor_active_p (contract, callee))
+      /* D4324: m_range_map carries no per-fact provenance tag -- see
+	 oa_call_postcondition_object_address_p's own identical fix/
+	 comment.  This was the direct cause of a user-supplied repro: a
+	 proven_symbolic postcondition's own established fact
+	 ('post<ctrl>(r: r == 666)') never reached a later contract_assert
+	 at all, since this function -- oa_get_range's own item-6
+	 fallback -- only ever considered conveyor-active postconditions.  */
+      if (!oa_contract_fact_tracking_active_p (contract, callee))
 	continue;
       tree rid = POSTCONDITION_IDENTIFIER (contract);
       if (!rid || (!VAR_P (rid) && TREE_CODE (rid) != PARM_DECL))
@@ -19980,7 +20067,10 @@ oa_compose_call_result_range (tree lhs, tree rhs, oa_env &env)
       tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
-      if (!oa_contract_conveyor_active_p (contract, callee))
+      /* D4324: m_range_map carries no per-fact provenance tag -- see
+	 oa_call_postcondition_object_address_p's own identical fix/
+	 comment.  */
+      if (!oa_contract_fact_tracking_active_p (contract, callee))
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
       if (!result_id)
@@ -21462,7 +21552,19 @@ oa_call_postcondition_predicate_range_p (tree call, oa_env &env,
       tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
-      if (!oa_contract_conveyor_active_p (contract, callee))
+      /* D4324: this function already takes REQUIRE_CONVEYOR -- previously
+	 ignored, hardcoding the conveyor-only check regardless of what
+	 the caller actually asked for.  A conveyor-requiring caller keeps
+	 today's exact behavior; a symbolic-legitimate caller (REQUIRE_
+	 CONVEYOR false) now also accepts a symbolic-active postcondition's
+	 own established claim, matching "symbolic's own consult: any
+	 established fact satisfies it, whichever flavor established it"
+	 (the same rule already applied to the analogous field-range
+	 consult elsewhere in this file).  */
+      bool active = require_conveyor
+	? oa_contract_conveyor_active_p (contract, callee)
+	: oa_contract_fact_tracking_active_p (contract, callee);
+      if (!active)
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
       if (!result_id || (!VAR_P (result_id) && TREE_CODE (result_id) != PARM_DECL))
@@ -21533,7 +21635,13 @@ oa_predicate_result_from_declared_relation (tree pred_fn, tree actual_arg,
       tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
-      if (!oa_contract_conveyor_active_p (contract, pred_fn))
+      /* D4324: same REQUIRE_CONVEYOR fix as oa_call_postcondition_
+	 predicate_range_p immediately above -- previously ignored this
+	 parameter entirely.  */
+      bool active = require_conveyor
+	? oa_contract_conveyor_active_p (contract, pred_fn)
+	: oa_contract_fact_tracking_active_p (contract, pred_fn);
+      if (!active)
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
       if (!result_id || (!VAR_P (result_id) && TREE_CODE (result_id) != PARM_DECL))

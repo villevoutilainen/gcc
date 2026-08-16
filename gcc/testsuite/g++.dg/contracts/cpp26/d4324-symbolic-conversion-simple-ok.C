@@ -1,11 +1,21 @@
 // D4324: -fcontract-symbolic-proofs' own axis of the same conversion-
 // lookthrough covered for -fcontract-conveyor-proofs by
-// d4324-conveyor-conversion-simple-ok.C -- oa_handle_call_symbolic_
-// precondition_obligation shares oa_match_simple_comparison/oa_get_
-// range/oa_env_check_comparison with the conveyor path, so a class-
-// typed parameter reaching a scalar comparison via its own conversion
-// operator is recognized here too, entirely at compile time. See
-// .claude/plans/well-we-last-discussed-ethereal-duckling.md.
+// d4324-conveyor-conversion-simple-ok.C -- oa_handle_precondition_
+// simple_range_obligation (shared between the conveyor and symbolic
+// flavors) recognizes a class-typed parameter reaching a scalar
+// comparison via its own conversion operator the same way for both. f's
+// own precondition "q < 5" self-trust-seeds a range fact for q; that
+// fact is then consulted when f calls need_small (q), whose own
+// precondition requires "x < 10" -- provable since [., 5) is a subset
+// of [., 10), entirely via the class-typed parameter's own conversion,
+// never resolving wrap's value from its type (the call inside f's own
+// body is the mechanism under test, and must be silent). main's own
+// call to f is the unrelated, already-established boundary case (a
+// fresh, class-typed argument with no decl or fact behind it at all --
+// see d4324-conveyor-conversion-unknown-boundary.C) and is expected to
+// warn, exactly mirroring d4324-conveyor-conversion-simple-ok.C's own
+// identical boundary case. See .claude/plans/well-we-last-discussed-
+// ethereal-duckling.md.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-symbolic-proofs" }
 
@@ -34,5 +44,5 @@ int f (wrap q) pre<symbolic_ctrl_v> (q < 5)
 
 int main ()
 {
-  return f (wrap (2));
+  return f (wrap (2)); // { dg-warning "cannot verify" }
 }
