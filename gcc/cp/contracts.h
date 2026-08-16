@@ -210,6 +210,7 @@ extern tree contract_default_control_object		(location_t);
 extern void maybe_inherit_virtual_contract		(tree, tree);
 extern void resolve_object_address_in_function		(tree);
 extern bool oa_stmt_terminates_p			(tree);
+extern void oa_mark_fn_if_expr_calls_active_contract	(tree, tree);
 
 /* A standalone GCC plugin's own entry points into the object-address
    ("oa_*") analysis engine (see
