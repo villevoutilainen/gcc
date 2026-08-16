@@ -2056,6 +2056,52 @@ copy_and_remap_contracts (tree dest, tree source,
   return contracts_copy;
 }
 
+/* A constructor or destructor call always resolves (via
+   cp_get_callee_fndecl_nofold/CALL_EXPR_FN) to one of FN's own clones
+   (__ct_comp/__ct_base/__dt_comp/__dt_base/__dt_del, built by
+   build_cdtor_clones/build_clone in class.cc) -- never to FN itself.
+   Cloning (copy_fndecl_with_name) never copies FN's own contract_decl_map
+   entry onto the new clone decl, so without this, get_fn_contract_
+   specifiers (callee) at any call site returns NULL for every
+   constructor/destructor call, and no precondition-obligation check or
+   postcondition-based fact establishment ever runs for one -- even
+   though the self-check of FN's own contracts against FN's own body
+   (done once, at FN's own definition) works fine, since that operates
+   on FN directly, never through a clone.
+
+   Must be called only once FN's own contracts are a real, fully-parsed
+   condition, not a DEFERRED_PARSE placeholder -- an in-class-defined
+   constructor/destructor's contracts are parsed late (well after
+   build_cdtor_clones has already run during finish_struct), so calling
+   this from build_clone itself hits remap_contract's own walk_tree over
+   a DEFERRED_PARSE node, confirmed via direct testing (ICE: "tree check:
+   expected tree that contains 'typed' structure, have 'deferred_parse'
+   in copy_tree_body_r"). Called instead from every point a constructor/
+   destructor's contracts become a real condition: cp_parser_late_
+   contracts's own caller (parser.cc, in-class deferred contracts) and
+   grokfndecl (decl.cc, an out-of-class definition's own eagerly-parsed
+   contracts, reached only after the class -- and so FN's own clones --
+   already exist).  A safe no-op otherwise: FOR_EACH_CLONE itself
+   declines any FN that isn't DECL_MAYBE_IN_CHARGE_CDTOR_P, and the
+   DEFERRED_PARSE guard below declines an as-yet-unparsed condition
+   (harmless whether or not FN's clones exist yet at this particular
+   call site).  */
+
+void
+propagate_cdtor_contracts_to_clones (tree fn)
+{
+  if (fn == NULL_TREE || fn == error_mark_node || TREE_CODE (fn) != FUNCTION_DECL)
+    return;
+  tree contracts = get_fn_contract_specifiers (fn);
+  if (!contracts || contract_any_deferred_p (contracts))
+    return;
+  tree clone;
+  FOR_EACH_CLONE (clone, fn)
+    {
+      set_fn_contract_specifiers (clone, copy_and_remap_contracts (clone, fn));
+    }
+}
+
 /* Set the (maybe) parsed contract specifier LIST for DECL.  */
 
 void
@@ -18334,10 +18380,6 @@ oa_walk_stmt (tree *stmt, oa_env &env)
     case DECL_EXPR:
       {
 	tree decl = DECL_EXPR_DECL (t);
-	bool tracked = (VAR_P (decl)
-			&& (POINTER_TYPE_P (TREE_TYPE (decl))
-			    || INTEGRAL_TYPE_P (TREE_TYPE (decl))
-			    || SCALAR_FLOAT_TYPE_P (TREE_TYPE (decl))));
 	/* A declaration's own initializer ('int c = 10 / q;') is a
 	   distinct shape from an ordinary assignment statement ('int c;
 	   c = 10 / q;', reaching the INIT_EXPR/MODIFY_EXPR case below) --
@@ -18347,8 +18389,23 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   E-divmod's IILE support (a direct-initialization local inside
 	   a closure body went completely unchecked). Mirrors the exact
 	   same three calls RETURN_EXPR's value and INIT_EXPR/MODIFY_
-	   EXPR's RHS already use.  */
-	if (tracked && DECL_INITIAL (decl))
+	   EXPR's RHS already use.
+	   Gated on VAR_P alone, not on the declared variable's own type
+	   (this used to be gated on a POINTER_TYPE_P/INTEGRAL_TYPE_P/
+	   SCALAR_FLOAT_TYPE_P "tracked" check, matching the range/pointer/
+	   nz-specific tracking blocks below): that excluded every class-
+	   typed declaration, which silently skipped oa_scan_calls_in_expr
+	   for a constructor call in a direct-initialization's own
+	   initializer ('Number n (50.0);') -- meaning no precondition-
+	   obligation check or postcondition-based field-range
+	   establishment ever ran for any constructor call.  Confirmed via
+	   gdb against the actual failing case: the old TRACKED check was
+	   false for exactly this shape, and oa_scan_calls_in_expr was
+	   consequently never invoked on the constructor call at all.
+	   Scanning for calls must not depend on the declared variable's
+	   own type -- RETURN_EXPR and INIT_EXPR/MODIFY_EXPR already scan
+	   their own value/RHS unconditionally, with no such type check.  */
+	if (VAR_P (decl) && DECL_INITIAL (decl))
 	  {
 	    oa_scan_calls_in_expr (&DECL_INITIAL (decl), env);
 	    if (current_function_decl
@@ -22274,6 +22331,53 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
 	      }
 	  }
 	return OA_UNKNOWN;
+      }
+  }
+
+  /* D4324: a field access through a plain object, not a pointer (e.g.
+     'n.m_value >= 0.0', reached via a direct-initialization's own
+     constructor call rather than 'this->field'/'ptr->field') matches
+     none of the shapes above: oa_match_simple_comparison_var requires a
+     bare decl, and oa_symbolic_comparison_conjunct_shape's own COMPONENT_
+     REF check requires its base to be an INDIRECT_REF specifically (see
+     its own comment: "reached through a persistent pointer"), so a
+     directly-named object's own field is never tried at all -- found via
+     direct testing: a constructor's postcondition correctly establishes
+     n's own m_value field-range fact (confirmed reaching oa_handle_call_
+     symbolic_postcondition_establishment successfully), yet a contract_
+     assert immediately consulting 'n.m_value' still reported "cannot
+     prove", because this function never even attempted the lookup.
+     oa_get_range/oa_get_float_range's own COMPONENT_REF case already
+     handles a plain-object base exactly as well as a pointer one (see
+     its own comment), so oa_match_general_comparison (oa_match_simple_
+     comparison with the bare-PARM_DECL restriction lifted) plus a direct
+     oa_env_check_range_subsumption/oa_env_check_float_range_subsumption
+     call -- no substitution needed, unlike the call-obligation family's
+     own use of this same pair of matcher/checker: CONJUNCT's own decls
+     already are in ENV's own terms, there is no callee/call site to
+     cross -- closes this the same way.  Tried last, after every more
+     specific shape above has already declined, so this can never double-
+     match/double-diagnose the same conjunct.  */
+  {
+    tree gen_expr, gen_const;
+    tree_code gen_code;
+    if (oa_match_general_comparison (conjunct, &gen_expr, &gen_code, &gen_const))
+      {
+	if (TREE_CODE (gen_const) == REAL_CST)
+	  {
+	    if (real_isnan (TREE_REAL_CST_PTR (gen_const)))
+	      return OA_UNKNOWN;
+	    oa_float_range_fact req;
+	    req.has_lo = req.has_hi = false;
+	    oa_float_tighten_range_bound (req, gen_code, TREE_REAL_CST (gen_const),
+					   TREE_TYPE (gen_expr));
+	    return oa_env_check_float_range_subsumption (env, gen_expr, req);
+	  }
+	oa_range_fact req;
+	req.base = NULL_TREE;
+	req.has_lo = req.has_hi = false;
+	oa_tighten_range_bound (req, gen_code, wi::to_widest (gen_const));
+	return oa_env_check_range_subsumption (env, gen_expr, req);
       }
   }
 

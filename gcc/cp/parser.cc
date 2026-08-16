@@ -30327,6 +30327,11 @@ cp_parser_class_specifier (cp_parser* parser)
 
 	  /* Now we can parse contract conditions.  */
 	  cp_parser_late_contracts (parser, decl);
+	  /* D4324: DECL's own contracts are only just now a real, parsed
+	     condition (see propagate_cdtor_contracts_to_clones's own
+	     comment) -- if DECL is a constructor/destructor, its clones
+	     (built earlier, during finish_struct) still need them.  */
+	  propagate_cdtor_contracts_to_clones (decl);
 
 	  /* Restore the state of local_variables_forbidden_p.  */
 	  parser->local_variables_forbidden_p = local_variables_forbidden_p;

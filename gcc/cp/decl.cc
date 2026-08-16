@@ -12857,6 +12857,13 @@ grokfndecl (tree ctype,
 	t = DECL_TEMPLATE_RESULT (decl);
       set_fn_contract_specifiers (t, contract_specifiers);
       rebuild_postconditions (t);
+      /* D4324: an out-of-class constructor/destructor definition's own
+	 contracts are parsed eagerly (the class, and so T's own clones,
+	 already exist by now) -- see propagate_cdtor_contracts_to_clones's
+	 own comment.  A safe no-op for an in-class declaration reaching
+	 here instead, whose condition (if any) is still a DEFERRED_PARSE
+	 placeholder at this point.  */
+      propagate_cdtor_contracts_to_clones (t);
     }
 
   if (declared_conveyor_p)
