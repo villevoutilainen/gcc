@@ -200,6 +200,7 @@ extern tree build_call_operator_contract_params (tree);
 extern tree invalidate_contract			(tree);
 extern tree copy_and_remap_contracts		(tree, tree, contract_match_kind = cmk_all,
 						 bool for_wrapper = false);
+extern void propagate_cdtor_contracts_to_clones	(tree);
 extern tree constify_contract_access		(tree);
 extern tree view_as_const			(tree);
 extern contract_check_side contract_side_of	(tree, tree);
