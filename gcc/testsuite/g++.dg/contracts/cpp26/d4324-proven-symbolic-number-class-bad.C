@@ -6,6 +6,12 @@
 // original compile_assert-based file used compile_assert to merely
 // *describe*, never actually enforce, since compile_assert's own checks
 // are no-ops outside a constant-evaluated context).
+//
+// D4324 correction: also carries the same two increase_by/decrease_by
+// postcondition self-check failures as the -ok.C sibling now does (see
+// that file's own comment) -- a separate, pre-existing interval-
+// multiplication limitation, not something this file's own genuine
+// violation depends on.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
@@ -23,12 +29,12 @@ struct Number
 
   void increase_by (double percentage)
     pre<sc::proven_symbolic_v>(percentage >= 0.0 && percentage <= 100.0)
-    post<sc::proven_symbolic_v>(this->m_value >= 0.0)
+    post<sc::proven_symbolic_v>(this->m_value >= 0.0) // { dg-error "cannot prove postcondition condition" }
   { m_value *= (1.0 + percentage / 100.0); }
 
   void decrease_by (double percentage)
     pre<sc::proven_symbolic_v>(percentage >= 0.0 && percentage <= 100.0)
-    post<sc::proven_symbolic_v>(this->m_value >= 0.0)
+    post<sc::proven_symbolic_v>(this->m_value >= 0.0) // { dg-error "cannot prove postcondition condition" }
   { m_value *= (1.0 - percentage / 100.0); }
 
   double value () const { return m_value; }

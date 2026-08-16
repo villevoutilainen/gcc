@@ -19735,8 +19735,20 @@ oa_walk_stmt (tree *stmt, oa_env &env)
     }
 }
 
-/* True if FNDECL has at least one active (conveyor, non-ignored)
-   postcondition.  */
+/* True if FNDECL has at least one active (conveyor or symbolic,
+   non-ignored) postcondition.
+
+   D4324 correction: this used to check oa_contract_conveyor_active_p
+   only, matching oa_handle_postcondition_stmt's own former conveyor-only
+   self-check gate. Now that self-check runs for both flavors (see that
+   function's own header comment), a symbolic-only postcondition also
+   needs OA_RETURN_TRACKING/OA_POSTCONDITION_MERGE_ENV armed -- otherwise
+   RET_ENV there always falls back to the "nothing provable" empty case,
+   even for a trivially-provable symbolic postcondition (e.g. 'void f()
+   post<ctrl>(this->count >= 40) { count = 55; }' with a symbolic control
+   object) -- found via direct testing: the merge was never even armed to
+   capture the field write's own established fact in the first place,
+   independent of and prior to oa_handle_postcondition_stmt's own gate.  */
 
 static bool
 oa_has_active_postcondition (tree fndecl)
@@ -19744,7 +19756,9 @@ oa_has_active_postcondition (tree fndecl)
   for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
     {
       tree contract = CONTRACT_STATEMENT (as);
-      if (POSTCONDITION_P (contract) && oa_contract_conveyor_active_p (contract))
+      if (POSTCONDITION_P (contract)
+	  && (oa_contract_conveyor_active_p (contract)
+	      || oa_contract_symbolic_active_p (contract)))
 	return true;
     }
   return false;
@@ -19792,18 +19806,31 @@ oa_has_active_postcondition (tree fndecl)
    identifier bound from the actual returned value at each return, the
    same way an ordinary assignment binds its own LHS from its RHS.
 
-   Conveyor-only -- symbolic postconditions stay exempt, unlike
-   contract_assert's own two-pass conveyor+symbolic check: a
-   postcondition's job is to hand *callers* a trusted fact (item 6); for
-   conveyor that handed-off fact is backed by the same real, mandatory
-   UB-freedom substrate everything else conveyor relies on, so checking
-   it here is that same machinery applied reflexively to its own
-   declaration. Symbolic facts have no such backing anywhere in this
-   file -- a symbolic postcondition's established fact is a pure,
-   first-class axiom the user vouches for outright, and checking it here
-   would only ever consult this same function's own internal symbolic
-   bookkeeping, not anything conveyor-grounded, so it stays trusted and
-   established exactly as before, never checked.  */
+   D4324 correction: this was previously conveyor-only, with symbolic
+   postconditions exempted from this check in their entirety -- a design
+   mistake, corrected here. A postcondition's job is to hand *callers* a
+   trusted fact (item 6) regardless of flavor, but "trusted" was
+   conflated with "unconditionally true, never checked against the
+   function's own body" for the symbolic flavor specifically. The only
+   part of a symbolic postcondition that is genuinely uncheckable is a
+   conjunct that is itself a call to a function declared 'symbolic': such
+   a function has no body at all (axiom by construction, nothing to
+   verify it against). Every OTHER conjunct in a symbolic postcondition
+   -- a plain field/value comparison, a call to an ordinary (non-
+   symbolic) function -- is just as checkable against the function's own
+   body as a conveyor postcondition's conjuncts are, and must be checked
+   with the same rigor: found via a real bug in the Number godbolt demo,
+   where a member function's body could provably push a field outside
+   the range its own post<proven_symbolic_v>(...) claimed, and this
+   compiled clean because the whole postcondition was blanket-exempted.
+   So this now mirrors oa_handle_assertion_stmt's own two-pass conveyor+
+   symbolic shape exactly, with one addition: the symbolic pass skips
+   (trusts unconditionally) any conjunct matching oa_predicate_conjunct_
+   shape whose own callee is DECL_DECLARED_SYMBOLIC_P -- see that pass's
+   own comment below for why this exception is inlined here rather than
+   pushed into the shared oa_check_assertion_conjunct_against_env/
+   oa_predicate_conjunct_shape helpers (contract_assert reuses both
+   verbatim and must NOT get this exception).  */
 
 static void
 oa_handle_postcondition_stmt (tree contract, oa_env &env)
@@ -19852,52 +19879,138 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
       oa_scan_item8_in_expr (&cond, scan_env);
     }
 
-  /* D4324: check the postcondition's own condition against RET_ENV,
-     conveyor-only (see this function's own comment above for why
-     symbolic stays exempt), mirroring oa_handle_assertion_stmt's own
-     conveyor pass exactly -- never_proven exempts this postcondition
-     from the check entirely (still established for callers as always,
-     via the separate, unrelated item-6 mechanism elsewhere in this
-     file), analyzed_conveyor/proven_conveyor force the check on
-     regardless of -fcontract-conveyor-proofs, and proven_conveyor's own
-     strictness makes an unprovable (not just provably-false) conjunct a
-     hard error too, matching every other proven_conveyor site in this
+  /* D4324: check the postcondition's own condition against RET_ENV, now
+     for both flavors -- see this function's own header comment for the
+     correction this represents. never_proven exempts this postcondition
+     from the check entirely, for either flavor (still established for
+     callers as always, via the separate, unrelated item-6 mechanism
+     elsewhere in this file); analyzed_conveyor/proven_conveyor (resp.
+     analyzed_symbolic/proven_symbolic) force the check on regardless of
+     the command-line flag; each flavor's own strictness makes an
+     unprovable (not just provably-false) conjunct a hard error too,
+     matching every other proven_conveyor/proven_symbolic site in this
      file.  */
-  if (conveyor_ok
-      && !contract_control_never_proven (
-	   CONTRACT_CONTROL_OBJECT (contract),
-	   contract_side_of (contract, current_function_decl)))
+  if (!contract_control_never_proven (
+	CONTRACT_CONTROL_OBJECT (contract),
+	contract_side_of (contract, current_function_decl)))
     {
-      bool conveyor_analysis
-	= flag_contract_conveyor_proofs
-	  || oa_contract_conveyor_analysis_forced_p (contract);
-      bool conveyor_strict = oa_contract_conveyor_strict_p (contract);
-      if (conveyor_analysis)
+      if (conveyor_ok)
 	{
-	  auto_vec<tree *> conjuncts;
-	  oa_collect_conjuncts (&cond, &conjuncts);
-	  for (unsigned i = 0; i < conjuncts.length (); ++i)
+	  bool conveyor_analysis
+	    = flag_contract_conveyor_proofs
+	      || oa_contract_conveyor_analysis_forced_p (contract);
+	  bool conveyor_strict = oa_contract_conveyor_strict_p (contract);
+	  if (conveyor_analysis)
 	    {
-	      switch (oa_check_assertion_conjunct_against_env (*conjuncts[i], ret_env,
-								 /*require_conveyor=*/true))
+	      auto_vec<tree *> conjuncts;
+	      oa_collect_conjuncts (&cond, &conjuncts);
+	      for (unsigned i = 0; i < conjuncts.length (); ++i)
 		{
-		case OA_PROVEN_TRUE:
-		  break;
-		case OA_PROVEN_FALSE:
-		  error_at (EXPR_LOCATION (*conjuncts[i]),
-			    "postcondition condition %qE is provably false",
-			    *conjuncts[i]);
-		  break;
-		case OA_UNKNOWN:
-		  if (conveyor_strict)
-		    error_at (EXPR_LOCATION (*conjuncts[i]),
-			      "cannot prove postcondition condition %qE",
-			      *conjuncts[i]);
-		  else
-		    warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
-				"cannot verify postcondition condition %qE",
+		  /* D4324: a bare 'std::is_object_address(E)' conjunct (E
+		     other than the postcondition's own named result, e.g.
+		     'post<ctrl>(std::is_object_address(this))') matches none
+		     of oa_check_assertion_conjunct_against_env's own shapes
+		     (oa_predicate_conjunct_shape explicitly excludes it) --
+		     it falls to OA_UNKNOWN here every time, even when
+		     genuinely provable (e.g. 'this' always is), producing a
+		     spurious "cannot verify" moments before oa_resolve_
+		     condition below -- the actual, correct, dedicated
+		     handler for this exact shape -- would have proven it
+		     silently via oa_provable_p. Skip it here entirely;
+		     found via direct testing once the symbolic pass below
+		     started reaching this same shape for the first time
+		     (previously masked: no existing conveyor postcondition
+		     used this shape outside the separately-handled named-
+		     result case).  */
+		  tree oa_arg;
+		  if (is_object_address_call_p (*conjuncts[i], &oa_arg))
+		    continue;
+		  switch (oa_check_assertion_conjunct_against_env (*conjuncts[i], ret_env,
+								     /*require_conveyor=*/true))
+		    {
+		    case OA_PROVEN_TRUE:
+		      break;
+		    case OA_PROVEN_FALSE:
+		      error_at (EXPR_LOCATION (*conjuncts[i]),
+				"postcondition condition %qE is provably false",
 				*conjuncts[i]);
-		  break;
+		      break;
+		    case OA_UNKNOWN:
+		      if (conveyor_strict)
+			error_at (EXPR_LOCATION (*conjuncts[i]),
+				  "cannot prove postcondition condition %qE",
+				  *conjuncts[i]);
+		      else
+			warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
+				    "cannot verify postcondition condition %qE",
+				    *conjuncts[i]);
+		      break;
+		    }
+		}
+	    }
+	}
+
+      if (symbolic_ok)
+	{
+	  bool symbolic_analysis
+	    = flag_contract_symbolic_proofs
+	      || oa_contract_symbolic_analysis_forced_p (contract);
+	  bool symbolic_strict = oa_contract_symbolic_strict_p (contract);
+	  if (symbolic_analysis)
+	    {
+	      auto_vec<tree *> conjuncts;
+	      oa_collect_conjuncts (&cond, &conjuncts);
+	      for (unsigned i = 0; i < conjuncts.length (); ++i)
+		{
+		  /* D4324: the ONLY legitimate exemption -- a conjunct
+		     that is itself a call to a function declared
+		     'symbolic' has no body at all to check it against, so
+		     it stays a trusted axiom. Deliberately inline here,
+		     not inside oa_check_assertion_conjunct_against_env/
+		     oa_predicate_conjunct_shape: contract_assert reuses
+		     both verbatim and must NOT get this exception --
+		     confirmed by existing tests (d4324-analyzed-symbolic-
+		     unknown-ok.C, d4324-proven-symbolic-unknown-bad.C): a
+		     bare contract_assert(is_opened(p)) with is_opened
+		     declared symbolic and nothing establishing it still
+		     correctly reports "cannot verify"/"cannot prove", and
+		     must keep doing so. Every other conjunct here -- a
+		     plain comparison, a call to an ordinary function --
+		     gets checked exactly like the conveyor pass above.  */
+		  tree pred_fn, arg_decl;
+		  bool negated;
+		  if (oa_predicate_conjunct_shape (*conjuncts[i], &pred_fn,
+						    &arg_decl, &negated)
+		      && DECL_DECLARED_SYMBOLIC_P (pred_fn))
+		    continue;
+		  /* D4324: see the conveyor pass's own identical guard just
+		     above -- oa_resolve_condition below is the correct,
+		     dedicated handler for a bare is_object_address(E)
+		     conjunct, not this loop.  */
+		  tree oa_arg;
+		  if (is_object_address_call_p (*conjuncts[i], &oa_arg))
+		    continue;
+		  switch (oa_check_assertion_conjunct_against_env (*conjuncts[i], ret_env,
+								     /*require_conveyor=*/false))
+		    {
+		    case OA_PROVEN_TRUE:
+		      break;
+		    case OA_PROVEN_FALSE:
+		      error_at (EXPR_LOCATION (*conjuncts[i]),
+				"postcondition condition %qE is provably false",
+				*conjuncts[i]);
+		      break;
+		    case OA_UNKNOWN:
+		      if (symbolic_strict)
+			error_at (EXPR_LOCATION (*conjuncts[i]),
+				  "cannot prove postcondition condition %qE",
+				  *conjuncts[i]);
+		      else
+			warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
+				    "cannot verify postcondition condition %qE",
+				    *conjuncts[i]);
+		      break;
+		    }
 		}
 	    }
 	}

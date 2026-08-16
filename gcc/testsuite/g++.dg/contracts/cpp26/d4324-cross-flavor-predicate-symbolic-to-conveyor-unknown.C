@@ -9,6 +9,13 @@
 // conveyor()'s CONVEYOR-flavored precondition requires the same fact on
 // the same object -- must report "cannot verify", not silently pass.
 // See .claude/plans/well-we-last-discussed-ethereal-duckling.md.
+//
+// D4324 correction: a symbolic postcondition's self-check is no longer
+// blanket-exempt (only a conjunct calling a function declared 'symbolic'
+// is trusted unconditionally). is_opened is declared 'conveyor', not
+// 'symbolic', and has no declared relation of its own to derive from, so
+// open_symbolic()'s own postcondition self-check now also, correctly,
+// cannot verify is_opened(this) from its own trivial body.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -fcontract-symbolic-proofs" }
 
@@ -34,7 +41,7 @@ inline constexpr symbolic_ctrl symbolic_ctrl_v{};
 
 struct io_facility {
   static bool is_opened (io_facility*) conveyor { return true; }
-  void open_symbolic () post<symbolic_ctrl_v>(is_opened (this)) {}
+  void open_symbolic () post<symbolic_ctrl_v>(is_opened (this)) {} // { dg-warning "cannot verify" }
   void read_conveyor () pre<conveyor_ctrl_v>(is_opened (this)) {}
 };
 
