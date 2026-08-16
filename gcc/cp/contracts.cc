@@ -10305,6 +10305,39 @@ oa_contract_fact_tracking_active_p (tree contract, tree owner_fn = NULL_TREE)
 	 || oa_contract_conveyor_active_p (contract, owner_fn);
 }
 
+/* Whether oa_walk_stmt's own bookkeeping (establishment and
+   invalidation alike) into that same shared substrate should run at
+   all, at each of the several sites in oa_walk_stmt's DECL_EXPR/
+   INIT_EXPR/MODIFY_EXPR handling (and oa_establish_relational_from_
+   call) that populate/invalidate it from an ordinary declaration or
+   assignment statement -- as opposed to oa_contract_fact_tracking_
+   active_p just above, which answers the question for one specific
+   contract.
+
+   Deliberately unconditional, always true: unlike the two flags this
+   replaced (flag_contract_conveyor_proofs/flag_contract_symbolic_
+   proofs) plus oa_call_site_callback, every actual *consultation* of
+   these maps is already, independently gated at its own use site --
+   oa_handle_assertion_stmt's own conveyor_analysis/symbolic_analysis
+   (itself flag-or-forced), and the call-obligation family's own
+   forced_out/oa_contract_*_active_p checks. So a fact established or
+   invalidated here that nothing ever consults is merely a wasted
+   hash_map operation, never a wrong answer -- but *skipping* this
+   bookkeeping when neither flag is set was a real gap: analyzed_
+   conveyor/proven_conveyor/analyzed_symbolic/proven_symbolic force
+   analysis on per contract, not per translation unit, so a contract
+   using one of them still needs whatever this function's own earlier
+   statements would have established, with neither global flag on.
+   Named as its own predicate, rather than just deleting the callers'
+   guards, so this reasoning lives in exactly one place, easily
+   revisited if a real cost is ever measured.  */
+
+static inline bool
+oa_fact_tracking_bookkeeping_active_p ()
+{
+  return true;
+}
+
 /* Discharge the call-site precondition-obligation mechanism (item 7):
    the complement of a postcondition being a trusted fact for the caller
    (item 6) -- here, a *precondition's* is_object_address(E) conjunct
@@ -16630,8 +16663,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   No invalidation needed first: a freshly declared decl never had
 	   a prior entry.  */
 	if (VAR_P (decl) && DECL_INITIAL (decl)
-	    && (flag_contract_symbolic_proofs || flag_contract_conveyor_proofs
-		|| oa_call_site_callback))
+	    && oa_fact_tracking_bookkeeping_active_p ())
 	  {
 	    tree stripped_init_pred = STRIP_ANY_LOCATION_WRAPPER (DECL_INITIAL (decl));
 	    tree pred_fn;
@@ -16855,8 +16887,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   address/range tracking below, these facts can be keyed on a
 	   class-typed decl (e.g. 'f = io_facility();'), which neither the
 	   pointer nor the integral branch below ever reaches.  */
-	if (flag_contract_symbolic_proofs || flag_contract_conveyor_proofs
-	    || oa_call_site_callback)
+	if (oa_fact_tracking_bookkeeping_active_p ())
 	  {
 	    tree identity;
 	    if (oa_object_identity_decl (lhs, &identity))
@@ -17046,8 +17077,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   restricted to a numeric type -- a predicate fact isn't tied to
 	   one.  Rule 1 just above already invalidated LHS unconditionally;
 	   this may immediately re-establish it.  */
-	if ((flag_contract_symbolic_proofs || flag_contract_conveyor_proofs
-	     || oa_call_site_callback)
+	if (oa_fact_tracking_bookkeeping_active_p ()
 	    && (VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL))
 	  {
 	    tree stripped_rhs_pred = STRIP_ANY_LOCATION_WRAPPER (rhs);
@@ -17222,13 +17252,16 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   only if a fact already exists, never establish just to
 	   invalidate" discipline, just updating ENV's own compile-time map
 	   directly instead of emitting code.  Entirely independent of
-	   oa_symbolic_codegen_active.  The outer condition widens beyond
-	   flag_contract_symbolic_proofs alone so invalidation (the "else"
-	   branch below) stays correct whenever a plugin might be
-	   consulting this map via oa_env_check_scalar_range_fact, even
-	   though establishment itself stays symbolic-only.  */
-	if ((flag_contract_symbolic_proofs || flag_contract_conveyor_proofs
-	     || oa_call_site_callback)
+	   oa_symbolic_codegen_active.  The outer condition is
+	   oa_fact_tracking_bookkeeping_active_p's own unconditional gate
+	   (see its own comment) so invalidation (the "else" branch below)
+	   stays correct whenever anything -- a plugin, or an analyzed_
+	   symbolic/proven_symbolic contract elsewhere in this same
+	   function forcing analysis on without either global flag --
+	   might be consulting this map via oa_env_check_scalar_range_fact/
+	   oa_contract_scalar_range_get, even though establishment itself
+	   stays symbolic-only.  */
+	if (oa_fact_tracking_bookkeeping_active_p ()
 	    && (VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 	    && INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
 	  {
@@ -18537,20 +18570,20 @@ oa_compose_call_result_range (tree lhs, tree rhs, oa_env &env)
    postcondition relating the return value to a parameter is a
    materially different, harder problem than a precondition doing the
    same, and this covers only the direct, single-hop case).  A no-op
-   (ENV untouched) for anything else, including when neither opt-in
-   prover nor a plugin is active at all -- relational facts are never
-   part of the mandatory, always-on substrate.  Gated on OA_CALL_SITE_
-   CALLBACK too, not just the two built-in flags -- matching oa_handle_
-   call_symbolic_postcondition_establishment's own identical gating in
-   oa_scan_calls_in_expr, for the same reason: a plugin driving oa_walk_
-   function_calls needs this bookkeeping done on its behalf even with
-   neither -fcontract-conveyor-proofs nor -fcontract-symbolic-proofs on.  */
+   (ENV untouched) for anything else -- relational facts are never
+   part of the mandatory, always-on substrate.  Gated on oa_fact_
+   tracking_bookkeeping_active_p (see its own comment), not on either
+   built-in flag or OA_CALL_SITE_CALLBACK directly: a plugin driving
+   oa_walk_function_calls, or an analyzed_conveyor/proven_conveyor/
+   analyzed_symbolic/proven_symbolic postcondition elsewhere in CALLEE
+   forcing analysis on without either global flag, both need this
+   bookkeeping done on their behalf the same way -fcontract-conveyor-
+   proofs/-fcontract-symbolic-proofs themselves already did.  */
 
 static void
 oa_establish_relational_from_call (tree lhs, tree rhs, oa_env &env)
 {
-  if (!flag_contract_conveyor_proofs && !flag_contract_symbolic_proofs
-      && !oa_call_site_callback)
+  if (!oa_fact_tracking_bookkeeping_active_p ())
     return;
   if (rhs == NULL_TREE)
     return;
