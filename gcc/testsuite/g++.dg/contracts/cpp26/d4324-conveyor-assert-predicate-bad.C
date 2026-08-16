@@ -13,7 +13,7 @@ struct file { bool opened = false; };
 bool is_opened (file *f) conveyor { return f != nullptr; }
 
 void
-open_it (file * const f) post<sc::conveyor_assert_v> (is_opened (f))
+open_it (file * const f) post<sc::conveyor_assert_v> (is_opened (f)) // { dg-warning "cannot verify postcondition" }
 {
   f->opened = true;
 }

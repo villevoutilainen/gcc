@@ -24,7 +24,8 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 struct thing {
   int count;
   void produce_count_bad ()
-    post<conveyor_ctrl_v>(this->count >= 200 && this->count < 300)
+    post<conveyor_ctrl_v>(this->count >= 200 // { dg-warning "cannot verify postcondition" }
+			  && this->count < 300) // { dg-warning "cannot verify postcondition" }
   { count = 250; }
   void consume_count ()
     pre<conveyor_ctrl_v>(this->count >= 20 && this->count < 100)

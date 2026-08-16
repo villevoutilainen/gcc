@@ -8908,12 +8908,26 @@ static bool oa_match_type_bounded_comparison
 static oa_proof_result oa_check_assertion_conjunct_against_env
   (tree conjunct, oa_env &env, bool require_conveyor);
 
-/* Forward-declared for the same reason as the function just above;
-   needed by oa_handle_postcondition_stmt to decide, per-conjunct,
-   whether its new conveyor check should even attempt
-   oa_check_assertion_conjunct_against_env at all -- see this helper's
-   own comment further below for the full rationale.  */
-static bool oa_conjunct_numeric_shape_p (tree conjunct);
+/* Forward-declared: full definition is much further below (needs
+   oa_match_result_defining_relation, defined alongside the matchers it
+   mirrors); needed here by oa_handle_call_conveyor_proof_obligation's
+   own predicate branch (a callee's own precondition conjunct, checked
+   at its call site) to derive a predicate call's concrete truth value
+   from the callee's own postcondition, not just an already-established
+   m_predicate_fact_map entry -- see this function's own comment further
+   below for the full rationale.  */
+static bool oa_call_postcondition_predicate_range_p
+  (tree call, oa_env &env, bool *out_value, bool require_conveyor);
+
+/* Forward-declared for the same reason as the function just above (and
+   defined right after it, sharing oa_match_result_defining_relation) --
+   needed here by the same oa_handle_call_conveyor_proof_obligation
+   predicate branch, for the case where there is no real CALL_EXPR to
+   PRED_FN to derive from -- see its own comment further below for the
+   full rationale.  */
+static bool oa_predicate_result_from_declared_relation
+  (tree pred_fn, tree actual_arg, oa_env &env, bool *out_value,
+   bool require_conveyor);
 
 /* The last-resort fallback inside oa_refine_single_comparison below:
    "DECL OP <exactly-known point>" refined into ENV's own plain, untagged
@@ -10560,7 +10574,8 @@ static oa_derivation *oa_get_range_derivation (tree expr, oa_env &env);
 
 static bool
 oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
-			     tree *arg_decl_out, bool *negated_out)
+			     tree *arg_decl_out, bool *negated_out,
+			     tree *call_out = NULL)
 {
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
   while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
@@ -10613,6 +10628,8 @@ oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
   *pred_fn_out = fn;
   *arg_decl_out = arg;
   *negated_out = negated;
+  if (call_out)
+    *call_out = c;
   return true;
 }
 
@@ -11400,6 +11417,18 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	  oa_proof_result pr
 	    = oa_env_predicate_result (env, substituted, pred_fn, !negated,
 				       /*require_conveyor=*/true);
+	  if (pr == OA_UNKNOWN)
+	    {
+	      /* D4324: no established identity-based fact -- fall back to
+		 deriving PRED_FN's own concrete truth from its own
+		 declared postcondition (see oa_predicate_result_from_
+		 declared_relation's own comment).  */
+	      bool derived_value;
+	      if (oa_predicate_result_from_declared_relation
+		    (pred_fn, substituted, env, &derived_value,
+		     /*require_conveyor=*/true))
+		pr = (derived_value == !negated) ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
+	    }
 	  switch (pr)
 	    {
 	    case OA_PROVEN_TRUE:
@@ -11524,6 +11553,42 @@ oa_substitute_call_arg (tree callee, tree call, tree param)
       return argno < (unsigned) call_expr_nargs (call)
 	? CALL_EXPR_ARG (call, argno) : NULL_TREE;
   return NULL_TREE;
+}
+
+/* D4324: OPERAND's own call-site substitution, for a conjunct's operand
+   that might or might not actually be one of CALLEE's own parameters --
+   unlike oa_substitute_call_arg above (which always expects PARAM to be
+   a real parameter, returning NULL_TREE as a "not found" signal), this
+   is meant for an operand pulled out of an arbitrary comparison shape
+   (oa_match_result_defining_relation's own LHS/RHS) that could just as
+   well be a literal or some other non-parameter expression, in which
+   case it passes straight through unchanged -- oa_env_check_relational_
+   fact_1 already tolerates an unsubstituted literal/expression on either
+   side (that's the whole point of it accepting two independent,
+   arbitrary SUBSTITUTED_* expressions rather than requiring both to
+   name a real decl), so there is nothing else to do for those cases.
+   Stripped the same way oa_get_range strips before its own VAR_P/
+   PARM_DECL check, so a parameter reached through a const-qualifying
+   wrapper (see the VIEW_CONVERT_EXPR comment elsewhere in this file)
+   is still recognized.  */
+
+static tree
+oa_substitute_call_operand (tree callee, tree call, tree operand)
+{
+  tree stripped = STRIP_ANY_LOCATION_WRAPPER (operand);
+  while (TREE_CODE (stripped) == NON_LVALUE_EXPR || TREE_CODE (stripped) == NOP_EXPR
+	 || TREE_CODE (stripped) == CONVERT_EXPR || TREE_CODE (stripped) == VIEW_CONVERT_EXPR
+	 || TREE_CODE (stripped) == CLEANUP_POINT_EXPR)
+    stripped = TREE_OPERAND (stripped, 0);
+  stripped = oa_strip_conversion_call (stripped);
+
+  if (VAR_P (stripped) || TREE_CODE (stripped) == PARM_DECL)
+    {
+      tree substituted = oa_substitute_call_arg (callee, call, stripped);
+      if (substituted)
+	return substituted;
+    }
+  return operand;
 }
 
 /* Forward-declared: full definition (and the runtime-checking-only
@@ -16629,6 +16694,58 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	 (which is where the postcondition itself lives, see EH_ELSE_EXPR
 	 below) is reached.  */
       oa_walk_stmt (&TREE_OPERAND (t, 0), env);
+
+      /* D4324: a function whose real body (operand 0, NOT this whole
+	 TRY_FINALLY_EXPR -- oa_stmt_terminates_p's own TRY_FINALLY_EXPR
+	 handling, if any, is not what's being asked here) can fall off
+	 its own end without an explicit RETURN_EXPR (necessarily void, or
+	 a non-void function already relying on UB -- see oa_stmt_
+	 terminates_p's own comment: "a non-void conveyor function's body
+	 never falling through its own end" is exactly this same property)
+	 reaches oa_handle_postcondition_stmt (inside operand 1, about to
+	 be walked below) via an implicit return oa_walk_stmt's own
+	 RETURN_EXPR case never sees at all -- found via direct testing:
+	 'void f() post<ctrl>(this->count >= 40) { count = 55; }', with no
+	 return statement at all, incorrectly reported "cannot verify"
+	 despite the assignment right above establishing exactly the
+	 required field-range fact, because OA_POSTCONDITION_MERGE_ANY_
+	 RESULT stayed false forever. ENV here is exactly OPERAND 0's own
+	 fall-through state, captured at exactly the right moment (after
+	 walking operand 0, before walking operand 1's own postcondition
+	 check) -- the same state TRY_BLOCK's own N-arm join already folds
+	 in under the identical "!oa_stmt_terminates_p (...) -> record
+	 (...)" guard -- so folding it into the merge the same way as any
+	 other RETURN_EXPR's own snap (no result-identifier binding: a void
+	 function's postcondition never has one, and a non-void function
+	 reaching here is already in UB territory this pass makes no
+	 soundness promises for) closes the gap.  */
+      if (oa_postcondition_merge_env
+	  && !oa_stmt_terminates_p (TREE_OPERAND (t, 0)))
+	{
+	  if (!oa_postcondition_merge_any_result)
+	    {
+	      oa_postcondition_merge_env->assign (env);
+	      oa_postcondition_merge_any_result = true;
+	    }
+	  else
+	    {
+	      oa_postcondition_merge_env->merge_with (env);
+	      oa_postcondition_merge_env->range_merge_with (env);
+	      oa_postcondition_merge_env->predicate_fact_merge_with (env);
+	      oa_postcondition_merge_env->relational_merge_with (env);
+	      oa_postcondition_merge_env->type_bound_merge_with (env);
+	      oa_postcondition_merge_env->call_relational_merge_with (env);
+	      oa_postcondition_merge_env->call_call_relational_merge_with (env);
+	      oa_postcondition_merge_env->contract_scalar_range_merge_with (env);
+	      oa_postcondition_merge_env->contract_field_range_merge_with (env);
+	      oa_postcondition_merge_env->contract_call_range_merge_with (env);
+	      oa_postcondition_merge_env->shadow_decls_merge_with (env);
+	      oa_postcondition_merge_env->alias_merge_with (env);
+	      oa_postcondition_merge_env->field_alias_merge_with (env);
+	      oa_postcondition_merge_env->array_alias_merge_with (env);
+	    }
+	}
+
       oa_walk_stmt (&TREE_OPERAND (t, 1), env);
       return;
 
@@ -18008,14 +18125,6 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 	  oa_collect_conjuncts (&cond, &conjuncts);
 	  for (unsigned i = 0; i < conjuncts.length (); ++i)
 	    {
-	      /* See oa_conjunct_numeric_shape_p's own comment: only a
-		 plain numeric-range/relational conjunct is checked here --
-		 a named-predicate/field-range/call-range one is a
-		 deliberate, unverifiable-by-design axiom, exactly like a
-		 symbolic fact, and must stay trusted and established, not
-		 flagged.  */
-	      if (!oa_conjunct_numeric_shape_p (*conjuncts[i]))
-		continue;
 	      switch (oa_check_assertion_conjunct_against_env (*conjuncts[i], ret_env,
 								 /*require_conveyor=*/true))
 		{
@@ -20060,6 +20169,209 @@ oa_match_comparison_against_decl (tree conjunct, tree *decl_out,
   return true;
 }
 
+/* D4324: recognizes CONJUNCT as 'RESULT_ID == (LHS CMP RHS)' (either
+   operand order for the outer EQ_EXPR) -- a predicate-returning
+   callee's own postcondition *defining* its boolean result as a
+   comparison of its own parameter(s), e.g. 'bool check_it(int v)
+   post<ctrl>(r: r == (v > 0))', or equally 'r == (v > w)' comparing two
+   of its own parameters. Deliberately shape-agnostic about LHS/RHS --
+   unlike oa_match_simple_comparison_var/oa_match_comparison_against_decl
+   just above (each scoped to one specific operand kind), this hands
+   LHS/RHS back completely unexamined, whatever they are (a bare
+   parameter, a literal, anything else); oa_call_postcondition_
+   predicate_range_p below substitutes each independently via
+   oa_substitute_call_operand and defers *all* shape-specific reasoning
+   to oa_env_check_relational_fact_1, which already handles literal-vs-
+   literal, decl-vs-decl (via an established relational fact), and a
+   range-vs-range fallback uniformly -- so this matcher itself never
+   needs to special-case "compared against a literal" vs "compared
+   against another parameter".  */
+
+static bool
+oa_match_result_defining_relation (tree conjunct, tree result_id,
+				    tree *lhs_out, tree_code *code_out,
+				    tree *rhs_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  if (TREE_CODE (c) != EQ_EXPR)
+    return false;
+
+  tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+
+  tree inner;
+  if (oa_strip_conversion_call (op0) == result_id)
+    inner = op1;
+  else if (oa_strip_conversion_call (op1) == result_id)
+    inner = op0;
+  else
+    return false;
+
+  inner = STRIP_ANY_LOCATION_WRAPPER (inner);
+  while (TREE_CODE (inner) == CLEANUP_POINT_EXPR)
+    inner = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (inner, 0));
+
+  enum tree_code code = TREE_CODE (inner);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return false;
+
+  *lhs_out = TREE_OPERAND (inner, 0);
+  *code_out = code;
+  *rhs_out = TREE_OPERAND (inner, 1);
+  return true;
+}
+
+/* D4324: derive a predicate-returning CALL's own concrete boolean
+   result from its callee's own postcondition (matched via
+   oa_match_result_defining_relation just above), substituting the
+   actual argument expression(s) at THIS call site for whichever of the
+   callee's own parameters the matched relation names (via
+   oa_substitute_call_operand), then deferring to oa_env_check_
+   relational_fact_1 -- which already covers literal-vs-literal,
+   decl-vs-decl (an established relational fact), and a range-vs-range
+   fallback -- for the actual proof. This is a genuinely new, separate
+   fallback: it neither regresses nor duplicates the pre-existing
+   identity-based predicate chaining (oa_call_symbolic_predicate_p/
+   m_predicate_fact_map, e.g. 'int r = produce(); consume(r);'), which
+   answers "the same value, already known to satisfy this predicate"
+   without ever needing the predicate's own declared definition at all;
+   this instead answers "a value whose own range/relation is known,
+   checked against the predicate's own declared definition" -- useful
+   even for an argument with no chain to any prior predicate fact
+   whatsoever (e.g. a bare literal, or a value only ever compared
+   numerically).  Only ever consulted when the plain identity-based
+   lookup already came back unknown (see both call sites below).  */
+
+static bool
+oa_call_postcondition_predicate_range_p (tree call, oa_env &env,
+					  bool *out_value, bool require_conveyor)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return false;
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      if (!oa_contract_conveyor_active_p (contract, callee))
+	continue;
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      if (!result_id || (!VAR_P (result_id) && TREE_CODE (result_id) != PARM_DECL))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree lhs, rhs;
+	  tree_code code;
+	  if (!oa_match_result_defining_relation (*conjuncts[i], result_id,
+						   &lhs, &code, &rhs))
+	    continue;
+
+	  tree sub_lhs = oa_substitute_call_operand (callee, call, lhs);
+	  tree sub_rhs = oa_substitute_call_operand (callee, call, rhs);
+	  switch (oa_env_check_relational_fact_1 (env, sub_lhs, code, sub_rhs,
+						   require_conveyor))
+	    {
+	    case OA_PROVEN_TRUE:
+	      *out_value = true;
+	      return true;
+	    case OA_PROVEN_FALSE:
+	      *out_value = false;
+	      return true;
+	    default:
+	      break;
+	    }
+	}
+    }
+  return false;
+}
+
+/* D4324: sibling of oa_call_postcondition_predicate_range_p just above,
+   for the precondition call-obligation-discharge site (oa_handle_call_
+   conveyor_proof_obligation's own predicate branch) -- there, the
+   predicate conjunct being discharged (e.g. 'check_it(x)' inside
+   consume's own precondition) is never itself an actual call to
+   PRED_FN anywhere in the caller's source; only PRED_FN itself and the
+   caller's own already-substituted argument expression for consume's
+   parameter (ACTUAL_ARG) are in hand, so there is no real CALL_EXPR to
+   derive PRED_FN from or to positionally substitute through -- the same
+   reason oa_predicate_conjunct_shape itself only ever recognizes a
+   single-argument call (see its own comment): a default-valued second
+   parameter would already have been materialized into extra
+   CALL_EXPR_ARGs by the front end, so any predicate function reachable
+   through this shape has, in practice, exactly the one parameter this
+   substitutes.  Requires exactly one parameter for that reason (a
+   predicate function with more could never have matched
+   oa_predicate_conjunct_shape's own conjunct in the first place, so
+   this could never usefully fire for one anyway).  */
+
+static bool
+oa_predicate_result_from_declared_relation (tree pred_fn, tree actual_arg,
+					     oa_env &env, bool *out_value,
+					     bool require_conveyor)
+{
+  tree own_param = DECL_ARGUMENTS (pred_fn);
+  if (!own_param || DECL_CHAIN (own_param))
+    return false;
+
+  for (tree as = get_fn_contract_specifiers (pred_fn); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      if (!oa_contract_conveyor_active_p (contract, pred_fn))
+	continue;
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      if (!result_id || (!VAR_P (result_id) && TREE_CODE (result_id) != PARM_DECL))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree lhs, rhs;
+	  tree_code code;
+	  if (!oa_match_result_defining_relation (*conjuncts[i], result_id,
+						   &lhs, &code, &rhs))
+	    continue;
+
+	  tree sub_lhs
+	    = (oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (lhs)) == own_param)
+	      ? actual_arg : lhs;
+	  tree sub_rhs
+	    = (oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (rhs)) == own_param)
+	      ? actual_arg : rhs;
+	  switch (oa_env_check_relational_fact_1 (env, sub_lhs, code, sub_rhs,
+						   require_conveyor))
+	    {
+	    case OA_PROVEN_TRUE:
+	      *out_value = true;
+	      return true;
+	    case OA_PROVEN_FALSE:
+	      *out_value = false;
+	      return true;
+	    default:
+	      break;
+	    }
+	}
+    }
+  return false;
+}
+
 /* D4324: VAR_DECL-admitting sibling of oa_match_comparison_against_call,
    for the same reason the two matchers above exist. Only the PARAM_OUT
    side needs relaxing -- oa_underlying_call_range_operand (the
@@ -20114,41 +20426,6 @@ oa_match_comparison_against_call_var (tree conjunct, tree *decl_out,
   *rhs_receiver_out = receiver;
   *rhs_callee_out = callee;
   return true;
-}
-
-/* D4324: does CONJUNCT have a shape whose truth is something this
-   pass's own reasoning could plausibly have derived from real,
-   computed values -- a plain numeric-range or relational comparison,
-   the same two shapes oa_check_assertion_conjunct_against_env's own
-   first two branches try (oa_match_simple_comparison_var/
-   oa_match_comparison_against_decl) -- as opposed to a named-
-   predicate/field-range/call-range/call-relational shape, whose truth
-   instead comes from trusting some *other* function's own opaque
-   contract, never from anything this pass itself computes?
-
-   Used only by oa_handle_postcondition_stmt's own new conveyor check
-   (see its own comment): unlike a contract_assert (which checks every
-   shape oa_check_assertion_conjunct_against_env recognizes, since a
-   false contract_assert conjunct there is a bug regardless of shape),
-   a postcondition asserting an opaque predicate about its own
-   parameters or return value -- e.g. 'post<ctrl>(is_opened (f))' -- is
-   routinely a deliberate, unverifiable-by-design axiom the function
-   declares for callers to trust, exactly like a symbolic fact;
-   checking it here would falsely flag the ordinary, intended use of a
-   named predicate as a postcondition. Confirmed by direct testing:
-   before this scoping was added, d4324-conveyor-try-block-ok.C's own
-   'post<conveyor_ctrl_v> (is_opened (f))' -- open_it's body never
-   calls anything that would establish it -- incorrectly warned "cannot
-   verify", and d4324-conveyor-proof-predicate-ok.C's own 'post<ctrl>(r:
-   check_it (r))' likewise, both existing, correct tests.  */
-
-static bool
-oa_conjunct_numeric_shape_p (tree conjunct)
-{
-  tree decl, other, const_val;
-  tree_code code;
-  return oa_match_simple_comparison_var (conjunct, &decl, &code, &const_val)
-	 || oa_match_comparison_against_decl (conjunct, &decl, &code, &other);
 }
 
 /* D4324: check CONJUNCT (part of a contract_assert's own condition)
@@ -20217,11 +20494,26 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
   }
 
   {
-    tree pred_fn, arg_decl;
+    tree pred_fn, arg_decl, call;
     bool negated;
-    if (oa_predicate_conjunct_shape (conjunct, &pred_fn, &arg_decl, &negated))
-      return oa_env_predicate_result (env, arg_decl, pred_fn, !negated,
-				       require_conveyor);
+    if (oa_predicate_conjunct_shape (conjunct, &pred_fn, &arg_decl, &negated,
+				      &call))
+      {
+	oa_proof_result result
+	  = oa_env_predicate_result (env, arg_decl, pred_fn, !negated,
+				      require_conveyor);
+	if (result != OA_UNKNOWN)
+	  return result;
+	/* D4324: no established identity-based fact -- fall back to
+	   deriving CALL's own concrete truth from its callee's own
+	   postcondition (see oa_call_postcondition_predicate_range_p's
+	   own comment).  */
+	bool derived_value;
+	if (oa_call_postcondition_predicate_range_p (call, env, &derived_value,
+						      require_conveyor))
+	  return (derived_value == !negated) ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
+	return OA_UNKNOWN;
+      }
   }
 
   {

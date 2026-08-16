@@ -30,7 +30,7 @@ struct file { bool opened = false; };
 bool is_opened (const file *f) conveyor { return f != nullptr; }
 struct holder { file *ptr; };
 
-void open_it (file * const f) post<conveyor_ctrl_v> (is_opened (f)) { f->opened = true; }
+void open_it (file * const f) post<conveyor_ctrl_v> (is_opened (f)) { f->opened = true; } // { dg-warning "cannot verify postcondition" }
 void mutate_via_alias (file *f) { f->opened = true; }
 void use_it (file * const f) pre<conveyor_ctrl_v> (is_opened (f)) { }
 
