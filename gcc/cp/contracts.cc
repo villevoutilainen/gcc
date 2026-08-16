@@ -46,6 +46,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "output.h"
 #include "context.h"
 #include "tree-pass.h"
+#include "real.h"
 
 /*  Design notes.
 
@@ -6066,6 +6067,185 @@ oa_range_divide (const oa_range_fact &a, const oa_range_fact &b,
   return true;
 }
 
+/* D4324: floating-point analogue of oa_range_fact -- a provable value
+   range for a scalar-float-typed decl.  No BASE field: unlike a
+   pointer's tracked array offset (oa_range_fact::base), a floating
+   value never has pointer/array-offset semantics.  MAYBE_NAN is
+   deliberately its own flag rather than folded into LO/HI (mirrors
+   GCC's own frange class, gcc/value-range.h, which never stores NaN in
+   its own min/max either) -- a composed fact with HAS_LO/HAS_HI true
+   is therefore *never* NaN-tainted by construction (composition below
+   declines instead of setting HAS_LO/HAS_HI when NaN is possible), so
+   the comparison/subsumption layer built on top of this struct never
+   needs frange's own richer true/false/both NaN-aware tri-state
+   handling -- ordinary real_compare-based subsumption is already
+   sound.  This is a deliberate scope reduction versus frange's full
+   NaN/Inf lattice: declining is always sound, so the loss is only ever
+   in precision at the extreme edges of representable range, never in
+   correctness.  */
+
+struct oa_float_range_fact
+{
+  bool has_lo = false, has_hi = false;
+  REAL_VALUE_TYPE lo = dconst0, hi = dconst0;
+  bool maybe_nan = false;
+};
+
+/* D4324: CODE (OP1, OP2) in TYPE's own precision, rounded toward INF
+   (dconstninf for a sound lower bound, dconstinf for a sound upper
+   bound) rather than round-to-nearest -- the floating-point analogue of
+   why oa_range_multiply/oa_range_divide's exact widest_int corner
+   arithmetic is sound for integers, adapted for the fact that no
+   floating-point format can exactly represent every real arithmetic
+   result.  Mirrors the approach GCC's own frange_arithmetic
+   (gcc/range-op-float.cc) uses for the gimple-range/VRP2 ranger, but
+   reimplemented standalone here with zero dependency on that
+   machinery, using only real.h's own public primitives -- this file
+   only needs the core "sound directed-rounding result of one operator"
+   primitive, not the ranger's own SSA/lattice plumbing.
+
+   real_arithmetic computes CODE at real.cc's own wide internal
+   precision -- effectively exact for add/sub/mul of two finite target-format
+   values (a product of two P-bit significands needs at most 2P bits,
+   comfortably inside real.cc's own much wider internal significand);
+   only genuinely lossy for /, whose exact quotient is rarely
+   representable in any finite precision.  real_convert then rounds
+   that internal-precision result down to TYPE's own actual precision
+   using round-to-nearest, which can round either toward or away from
+   INF's own direction.  If the round-to-nearest conversion already
+   rounded toward INF (or lost no precision at all), the result is
+   already a sound bound in that direction and is used as-is;
+   otherwise it's nudged one further ULP toward INF via real_nextafter,
+   guaranteeing a bound that can never be tighter than the true
+   mathematical result.
+
+   Returns false (decline) if the result is NaN or infinite -- the
+   caller then treats the whole composition as unbounded/unknown in
+   that direction rather than tracking NaN/Inf explicitly, per
+   oa_float_range_fact's own comment above.  */
+
+static bool
+oa_float_arithmetic (tree_code code, tree type, REAL_VALUE_TYPE *result,
+		      const REAL_VALUE_TYPE &op1, const REAL_VALUE_TYPE &op2,
+		      const REAL_VALUE_TYPE &inf)
+{
+  REAL_VALUE_TYPE value;
+  bool inexact = real_arithmetic (&value, (int) code, &op1, &op2);
+  real_convert (result, TYPE_MODE (type), &value);
+
+  if (real_isnan (result))
+    return false;
+
+  bool low = real_isneg (&inf);
+  bool wrong_direction = low ? !real_less (result, &value)
+			      : !real_less (&value, result);
+  if (wrong_direction && (inexact || !real_identical (result, &value)))
+    {
+      REAL_VALUE_TYPE nudged;
+      real_nextafter (&nudged, TYPE_MODE (type), result, &inf);
+      *result = nudged;
+    }
+
+  return !real_isnan (result) && real_isfinite (result);
+}
+
+/* D4324: floating-point analogue of oa_range_multiply -- the same
+   four-corner-then-extremes shape (sound for any sign combination of
+   A/B without case analysis), except each corner is computed *twice*
+   via oa_float_arithmetic (once rounded toward -inf for a lo
+   candidate, once toward +inf for a hi candidate) rather than once
+   exactly, since no floating-point corner product is generally exact.
+   Directly mirrors GCC's own foperator_mult's 8-value cross product
+   (gcc/range-op-float.cc).  Declines (returns false) if either operand
+   may be NaN, or if any corner's rounded result is non-finite --
+   see oa_float_range_fact's own comment for why this is a sound,
+   deliberately conservative simplification rather than a full NaN/Inf
+   lattice.  */
+
+static bool
+oa_float_range_multiply (const oa_float_range_fact &a,
+			  const oa_float_range_fact &b, tree type,
+			  REAL_VALUE_TYPE *lo_out, REAL_VALUE_TYPE *hi_out)
+{
+  if (a.maybe_nan || b.maybe_nan)
+    return false;
+  if (!a.has_lo || !a.has_hi || !b.has_lo || !b.has_hi)
+    return false;
+
+  const REAL_VALUE_TYPE *aops[4] = { &a.lo, &a.lo, &a.hi, &a.hi };
+  const REAL_VALUE_TYPE *bops[4] = { &b.lo, &b.hi, &b.lo, &b.hi };
+  REAL_VALUE_TYPE lo_corner[4], hi_corner[4];
+  for (int i = 0; i < 4; ++i)
+    {
+      if (!oa_float_arithmetic (MULT_EXPR, type, &lo_corner[i],
+				 *aops[i], *bops[i], dconstninf))
+	return false;
+      if (!oa_float_arithmetic (MULT_EXPR, type, &hi_corner[i],
+				 *aops[i], *bops[i], dconstinf))
+	return false;
+    }
+
+  *lo_out = lo_corner[0];
+  *hi_out = hi_corner[0];
+  for (int i = 1; i < 4; ++i)
+    {
+      if (real_less (&lo_corner[i], lo_out))
+	*lo_out = lo_corner[i];
+      if (real_less (hi_out, &hi_corner[i]))
+	*hi_out = hi_corner[i];
+    }
+  return true;
+}
+
+/* D4324: floating-point analogue of oa_range_divide -- mirrors
+   oa_float_range_multiply's own doubled-corner approach via RDIV_EXPR
+   instead of MULT_EXPR, with the same "divisor must be entirely one
+   sign" restriction oa_range_divide itself requires (a divisor
+   interval that contains or touches zero makes the quotient
+   potentially unbounded, and for floats also potentially +-Inf/NaN at
+   the boundary itself, so this declines up front rather than letting
+   oa_float_arithmetic's own per-corner non-finite check discover it
+   the hard way).  */
+
+static bool
+oa_float_range_divide (const oa_float_range_fact &a,
+			const oa_float_range_fact &b, tree type,
+			REAL_VALUE_TYPE *lo_out, REAL_VALUE_TYPE *hi_out)
+{
+  if (a.maybe_nan || b.maybe_nan)
+    return false;
+  if (!a.has_lo || !a.has_hi || !b.has_lo || !b.has_hi)
+    return false;
+  bool lo_le_zero = !real_less (&dconst0, &b.lo);
+  bool hi_ge_zero = !real_less (&b.hi, &dconst0);
+  if (lo_le_zero && hi_ge_zero)
+    return false;
+
+  const REAL_VALUE_TYPE *aops[4] = { &a.lo, &a.lo, &a.hi, &a.hi };
+  const REAL_VALUE_TYPE *bops[4] = { &b.lo, &b.hi, &b.lo, &b.hi };
+  REAL_VALUE_TYPE lo_corner[4], hi_corner[4];
+  for (int i = 0; i < 4; ++i)
+    {
+      if (!oa_float_arithmetic (RDIV_EXPR, type, &lo_corner[i],
+				 *aops[i], *bops[i], dconstninf))
+	return false;
+      if (!oa_float_arithmetic (RDIV_EXPR, type, &hi_corner[i],
+				 *aops[i], *bops[i], dconstinf))
+	return false;
+    }
+
+  *lo_out = lo_corner[0];
+  *hi_out = hi_corner[0];
+  for (int i = 1; i < 4; ++i)
+    {
+      if (real_less (&lo_corner[i], lo_out))
+	*lo_out = lo_corner[i];
+      if (real_less (hi_out, &hi_corner[i]))
+	*hi_out = hi_corner[i];
+    }
+  return true;
+}
+
 /* -fcontract-symbolic-proofs: a symbolic contract's own established
    fact -- "PRED_FN holds (POLARITY true) or its negation holds
    (POLARITY false) for this object identity", e.g. for
@@ -6320,6 +6500,26 @@ public:
     m_range_map.put (decl, fact);
   }
   void range_invalidate (tree decl) { m_range_map.remove (decl); }
+
+  /* D4324: the floating-point analogue of range_get/set/invalidate just
+     above, for a scalar-float-typed decl's own oa_float_range_fact
+     (see that struct's own comment) -- a separate map rather than a
+     generalization of m_range_map itself, so the ~150 existing
+     m_range_map-based call sites (all integer/widest_int-typed) stay
+     completely untouched.  */
+  bool float_range_get (tree decl, oa_float_range_fact *out)
+  {
+    oa_float_range_fact *v = m_float_range_map.get (decl);
+    if (!v)
+      return false;
+    *out = *v;
+    return true;
+  }
+  void float_range_set (tree decl, const oa_float_range_fact &fact)
+  {
+    m_float_range_map.put (decl, fact);
+  }
+  void float_range_invalidate (tree decl) { m_float_range_map.remove (decl); }
 
   /* Another independent per-decl fact -- see oa_predicate_fact's own
      comment.  A shared substrate: populated whenever a contract is
@@ -7183,6 +7383,8 @@ public:
       r.m_symbolic_nz_map.put (it.first, it.second);
     for (auto it : m_range_map)
       r.m_range_map.put (it.first, it.second);
+    for (auto it : m_float_range_map)
+      r.m_float_range_map.put (it.first, it.second);
     for (auto it : m_deriv_map)
       r.m_deriv_map.put (it.first, it.second);
     for (auto it : m_predicate_fact_map)
@@ -7233,6 +7435,9 @@ public:
     m_range_map.empty ();
     for (auto it : other.m_range_map)
       m_range_map.put (it.first, it.second);
+    m_float_range_map.empty ();
+    for (auto it : other.m_float_range_map)
+      m_float_range_map.put (it.first, it.second);
     m_deriv_map.empty ();
     for (auto it : other.m_deriv_map)
       m_deriv_map.put (it.first, it.second);
@@ -7366,12 +7571,51 @@ public:
       m_range_map.put (to_keep[i], kept_facts[i]);
   }
 
+  /* D4324: the floating-point analogue of range_merge_with immediately
+     above, widening (union of intervals) via real_compare instead of
+     wi::smin/smax.  MAYBE_NAN merges by OR -- if either branch's own
+     fact could be NaN, the joined fact could be too (moot in practice
+     for Milestone 1, since composition below declines outright rather
+     than ever setting MAYBE_NAN true, but kept for the same
+     completeness/forward-compatibility reasons oa_float_range_fact's
+     own field exists at all).  */
+  void float_range_merge_with (oa_env &other)
+  {
+    auto_vec<tree> to_remove;
+    auto_vec<tree> to_keep;
+    auto_vec<oa_float_range_fact> kept_facts;
+    for (auto it : m_float_range_map)
+      {
+	oa_float_range_fact *ov = other.m_float_range_map.get (it.first);
+	if (!ov)
+	  {
+	    to_remove.safe_push (it.first);
+	    continue;
+	  }
+	oa_float_range_fact merged;
+	merged.has_lo = it.second.has_lo && ov->has_lo;
+	merged.has_hi = it.second.has_hi && ov->has_hi;
+	if (merged.has_lo)
+	  merged.lo = real_less (&it.second.lo, &ov->lo) ? it.second.lo : ov->lo;
+	if (merged.has_hi)
+	  merged.hi = real_less (&it.second.hi, &ov->hi) ? ov->hi : it.second.hi;
+	merged.maybe_nan = it.second.maybe_nan || ov->maybe_nan;
+	to_keep.safe_push (it.first);
+	kept_facts.safe_push (merged);
+      }
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_float_range_map.remove (to_remove[i]);
+    for (unsigned i = 0; i < to_keep.length (); ++i)
+      m_float_range_map.put (to_keep[i], kept_facts[i]);
+  }
+
 private:
   hash_map<tree, bool> m_map;
   hash_map<tree, bool> m_nz_map;
   hash_map<tree, bool> m_symbolic_object_address_map;
   hash_map<tree, bool> m_symbolic_nz_map;
   hash_map<tree, oa_range_fact> m_range_map;
+  hash_map<tree, oa_float_range_fact> m_float_range_map;
   hash_map<tree, oa_derivation *> m_deriv_map;
   hash_map<tree, oa_predicate_fact> m_predicate_fact_map;
   hash_map<tree, oa_relational_fact> m_relational_map;
@@ -8810,6 +9054,131 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
   return false;
 }
 
+/* D4324: the floating-point analogue of oa_get_range immediately above,
+   for a scalar-float-typed EXPR's own oa_float_range_fact.  A separate,
+   structurally parallel function rather than a branch inside
+   oa_get_range itself -- oa_get_range's own OUT parameter is
+   oa_range_fact*, which has no way to carry a REAL_VALUE_TYPE bound, so
+   a genuinely float-typed fact cannot flow through its existing
+   signature; keeping this as its own function also means oa_get_range's
+   own, already-verified integer path (above) is completely untouched.
+
+   Deliberately a narrower slice than oa_get_range's own full
+   capability set for Milestone 1: no pointer/array-offset scaling (a
+   float can never be a pointer's own tracked offset), no IILE
+   recursion (Increment E4), and no call-postcondition range derivation
+   (item 6) -- none of those are needed for the plain-scalar-decl
+   arithmetic composition this increment targets, and each can be added
+   later the same way its integer counterpart was, without disturbing
+   anything here.  */
+
+static bool
+oa_get_float_range (tree expr, oa_env &env, oa_float_range_fact *out)
+{
+  if (expr == NULL_TREE || expr == error_mark_node)
+    return false;
+
+  STRIP_ANY_LOCATION_WRAPPER (expr);
+
+  if (oa_iile_outer_env && TREE_CODE (expr) == INDIRECT_REF)
+    {
+      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (VAR_P (op) && TREE_CODE (TREE_TYPE (op)) == REFERENCE_TYPE
+	  && is_capture_proxy (op))
+	expr = op;
+    }
+
+  while (TREE_CODE (expr) == NON_LVALUE_EXPR
+	 || TREE_CODE (expr) == NOP_EXPR
+	 || TREE_CODE (expr) == CONVERT_EXPR
+	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR
+	 || TREE_CODE (expr) == CLEANUP_POINT_EXPR)
+    expr = TREE_OPERAND (expr, 0);
+
+  expr = oa_strip_conversion_call (expr);
+
+  if (TREE_CODE (expr) == REAL_CST)
+    {
+      if (real_isnan (TREE_REAL_CST_PTR (expr)))
+	return false;
+      out->has_lo = out->has_hi = true;
+      out->lo = out->hi = TREE_REAL_CST (expr);
+      out->maybe_nan = false;
+      return true;
+    }
+
+  if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
+    {
+      if (oa_iile_outer_env && is_capture_proxy (expr))
+	{
+	  tree captured = DECL_CAPTURED_VARIABLE (expr);
+	  if (captured)
+	    return oa_get_float_range (captured, *oa_iile_outer_env, out);
+	}
+      return env.float_range_get (expr, out);
+    }
+
+  /* PLUS_EXPR/MINUS_EXPR/MULT_EXPR are shared tree codes between
+     integer and floating arithmetic (unlike division, which splits into
+     TRUNC_DIV_EXPR for integers and RDIV_EXPR for floats) -- reaching
+     here at all already means EXPR's own type failed oa_get_range's
+     INTEGRAL_TYPE_P gate, so no ambiguity with the integer path.  */
+  if (TREE_CODE (expr) == PLUS_EXPR || TREE_CODE (expr) == MINUS_EXPR
+      || TREE_CODE (expr) == MULT_EXPR || TREE_CODE (expr) == RDIV_EXPR)
+    {
+      tree type = TREE_TYPE (expr);
+      if (!SCALAR_FLOAT_TYPE_P (type))
+	return false;
+
+      tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 1));
+
+      oa_float_range_fact a, b;
+      if (!oa_get_float_range (op0, env, &a) || !oa_get_float_range (op1, env, &b))
+	return false;
+
+      out->maybe_nan = false;
+      if (TREE_CODE (expr) == PLUS_EXPR || TREE_CODE (expr) == MINUS_EXPR)
+	{
+	  if (a.maybe_nan || b.maybe_nan || !a.has_lo || !a.has_hi
+	      || !b.has_lo || !b.has_hi)
+	    return false;
+	  /* real_arithmetic's own MINUS_EXPR computes op1 - op2 directly
+	     (no separate negate-then-add step needed), so -- exactly
+	     like oa_range_fact's own integer MINUS_EXPR case -- only
+	     which of B's two bounds pairs with which of A's needs to
+	     swap between PLUS_EXPR and MINUS_EXPR, not the tree code
+	     passed through to oa_float_arithmetic itself.  */
+	  tree_code code = TREE_CODE (expr);
+	  const REAL_VALUE_TYPE &b_lo_side = (code == PLUS_EXPR) ? b.lo : b.hi;
+	  const REAL_VALUE_TYPE &b_hi_side = (code == PLUS_EXPR) ? b.hi : b.lo;
+	  REAL_VALUE_TYPE lo, hi;
+	  if (!oa_float_arithmetic (code, type, &lo, a.lo, b_lo_side, dconstninf)
+	      || !oa_float_arithmetic (code, type, &hi, a.hi, b_hi_side, dconstinf))
+	    return false;
+	  out->has_lo = out->has_hi = true;
+	  out->lo = lo;
+	  out->hi = hi;
+	  return true;
+	}
+      else
+	{
+	  REAL_VALUE_TYPE lo, hi;
+	  bool composed = (TREE_CODE (expr) == MULT_EXPR)
+	    ? oa_float_range_multiply (a, b, type, &lo, &hi)
+	    : oa_float_range_divide (a, b, type, &lo, &hi);
+	  if (!composed)
+	    return false;
+	  out->has_lo = out->has_hi = true;
+	  out->lo = lo;
+	  out->hi = hi;
+	  return true;
+	}
+    }
+
+  return false;
+}
+
 /* Strip EXPR the same way oa_get_relational below does, without
    consulting any fact -- used to normalize both sides of a relational
    obligation's own substituted call-site arguments down to a bare
@@ -9049,6 +9418,53 @@ oa_tighten_range_bound (oa_range_fact &refined, tree_code code, widest_int val)
     }
 }
 
+/* D4324: the floating-point analogue of oa_tighten_range_bound
+   immediately above.  LT_EXPR/GT_EXPR tighten by one ULP (via
+   real_nextafter) rather than integer -1/+1, the same "as tight as
+   representable" precision the integer version gets from its own
+   -1/+1 adjustment -- not merely using LE_EXPR/GE_EXPR's own inclusive
+   bound as a looser stand-in, which would also be sound but needlessly
+   imprecise given real_nextafter is already on hand.  */
+
+static void
+oa_float_tighten_range_bound (oa_float_range_fact &refined, tree_code code,
+			       const REAL_VALUE_TYPE &val, tree type)
+{
+  switch (code)
+    {
+    case LT_EXPR:
+      {
+	REAL_VALUE_TYPE bound;
+	real_nextafter (&bound, TYPE_MODE (type), &val, &dconstninf);
+	if (!refined.has_hi || real_less (&bound, &refined.hi))
+	  { refined.has_hi = true; refined.hi = bound; }
+      }
+      break;
+    case LE_EXPR:
+      if (!refined.has_hi || real_less (&val, &refined.hi))
+	{ refined.has_hi = true; refined.hi = val; }
+      break;
+    case GT_EXPR:
+      {
+	REAL_VALUE_TYPE bound;
+	real_nextafter (&bound, TYPE_MODE (type), &val, &dconstinf);
+	if (!refined.has_lo || real_less (&refined.lo, &bound))
+	  { refined.has_lo = true; refined.lo = bound; }
+      }
+      break;
+    case GE_EXPR:
+      if (!refined.has_lo || real_less (&refined.lo, &val))
+	{ refined.has_lo = true; refined.lo = val; }
+      break;
+    case EQ_EXPR:
+      refined.has_lo = refined.has_hi = true;
+      refined.lo = refined.hi = val;
+      break;
+    default:
+      break;
+    }
+}
+
 /* D4324/P2680 item 8, Increment E1: refine a single top-level
    comparison CONJUNCT ('<', '<=', '>', '>=', '=='; '!=' isn't usefully
    representable as a single interval and is left alone) between a
@@ -9153,22 +9569,26 @@ oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
     ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op1, 0)) : op1;
 
   tree decl, other;
-  bool flipped;
+  bool flipped, is_float;
   if ((VAR_P (decl0) || TREE_CODE (decl0) == PARM_DECL)
       && INTEGRAL_TYPE_P (TREE_TYPE (op0_scalar)))
-    decl = decl0, other = op1, flipped = false;
+    decl = decl0, other = op1, flipped = false, is_float = false;
   else if ((VAR_P (decl1) || TREE_CODE (decl1) == PARM_DECL)
 	   && INTEGRAL_TYPE_P (TREE_TYPE (op1_scalar)))
-    decl = decl1, other = op0, flipped = true;
+    decl = decl1, other = op0, flipped = true, is_float = false;
+  /* D4324: the floating-point analogue of the two branches just above --
+     same shape (decl compared against an exactly-known point), tried
+     only once neither integral branch matched, dispatching the rest of
+     this function to oa_float_tighten_range_bound/float_range_set
+     instead of their integer counterparts.  */
+  else if ((VAR_P (decl0) || TREE_CODE (decl0) == PARM_DECL)
+	   && SCALAR_FLOAT_TYPE_P (TREE_TYPE (op0_scalar)))
+    decl = decl0, other = op1, flipped = false, is_float = true;
+  else if ((VAR_P (decl1) || TREE_CODE (decl1) == PARM_DECL)
+	   && SCALAR_FLOAT_TYPE_P (TREE_TYPE (op1_scalar)))
+    decl = decl1, other = op0, flipped = true, is_float = true;
   else
     return;
-
-  oa_range_fact other_fact;
-  if (!oa_get_range (other, env, &other_fact) || other_fact.base != NULL_TREE
-      || !other_fact.has_lo || !other_fact.has_hi
-      || other_fact.lo != other_fact.hi)
-    return;
-  widest_int val = other_fact.lo;
 
   if (flipped)
     switch (code)
@@ -9189,6 +9609,31 @@ oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
       case GE_EXPR: code = LT_EXPR; break;
       default: return; /* NOT(decl == val) is decl != val -- skip.  */
       }
+
+  if (is_float)
+    {
+      oa_float_range_fact other_fact;
+      if (!oa_get_float_range (other, env, &other_fact)
+	  || !other_fact.has_lo || !other_fact.has_hi
+	  || !real_identical (&other_fact.lo, &other_fact.hi))
+	return;
+      REAL_VALUE_TYPE val = other_fact.lo;
+
+      oa_float_range_fact refined;
+      if (!env.float_range_get (decl, &refined))
+	refined.has_lo = refined.has_hi = false;
+
+      oa_float_tighten_range_bound (refined, code, val, TREE_TYPE (decl));
+      env.float_range_set (decl, refined);
+      return;
+    }
+
+  oa_range_fact other_fact;
+  if (!oa_get_range (other, env, &other_fact) || other_fact.base != NULL_TREE
+      || !other_fact.has_lo || !other_fact.has_hi
+      || other_fact.lo != other_fact.hi)
+    return;
+  widest_int val = other_fact.lo;
 
   oa_range_fact refined;
   if (!env.range_get (decl, &refined))
@@ -10698,6 +11143,12 @@ static oa_proof_result oa_env_check_comparison_1
 static oa_proof_result oa_env_check_range_subsumption
   (oa_env &env, tree expr, oa_range_fact &req);
 
+/* Forward-declared: the floating-point analogue of the two immediately
+   above, for the same reason (oa_handle_call_conveyor_proof_obligation
+   below needs it before its own later definition point).  */
+static oa_proof_result oa_env_check_float_range_subsumption
+  (oa_env &env, tree expr, oa_float_range_fact &req);
+
 /* Forward-declared: defined later, right after oa_call_postcondition_
    range_p; oa_handle_call_conveyor_proof_obligation below needs it
    before that point in the file.  */
@@ -11340,6 +11791,8 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 
   auto_vec<tree> range_parms;
   auto_vec<oa_range_fact> range_facts;
+  auto_vec<tree> float_range_parms;
+  auto_vec<oa_float_range_fact> float_range_facts;
 
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
@@ -11366,6 +11819,30 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	  if (oa_match_simple_comparison (*conjuncts[i], &param, &code,
 					  &const_val))
 	    {
+	      /* D4324: the floating-point analogue of the combined-range
+		 accumulation just below -- same idea (fold every conjunct
+		 on the same parameter into one required interval), a
+		 separate PARMS/FACTS pair since oa_float_range_fact isn't
+		 oa_range_fact.  */
+	      if (TREE_CODE (const_val) == REAL_CST)
+		{
+		  unsigned idx;
+		  for (idx = 0; idx < float_range_parms.length (); ++idx)
+		    if (float_range_parms[idx] == param)
+		      break;
+		  if (idx == float_range_parms.length ())
+		    {
+		      float_range_parms.safe_push (param);
+		      oa_float_range_fact fresh;
+		      fresh.has_lo = fresh.has_hi = false;
+		      float_range_facts.safe_push (fresh);
+		    }
+		  oa_float_tighten_range_bound (float_range_facts[idx], code,
+						 TREE_REAL_CST (const_val),
+						 TREE_TYPE (param));
+		  continue;
+		}
+
 	      unsigned idx;
 	      for (idx = 0; idx < range_parms.length (); ++idx)
 		if (range_parms[idx] == param)
@@ -11688,6 +12165,54 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 					   /*proven_false=*/true,
 					   oa_get_range_derivation (substituted, env));
 	    }
+	  break;
+	case OA_UNKNOWN:
+	  if (strict)
+	    error_at (EXPR_LOCATION (call),
+		      "cannot prove that %qE satisfies the "
+		      "precondition of %qD", substituted, callee);
+	  else
+	    warning_at (EXPR_LOCATION (call), 0,
+			"cannot verify that %qE satisfies the "
+			"precondition of %qD", substituted, callee);
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  break;
+	}
+    }
+
+  /* D4324: the floating-point analogue of the combined-range consult
+     loop immediately above.  No flag_dump_contract_proofs certificate
+     emission -- oa_emit_range_certificate's own dump format is
+     widest_int-specific; a float-aware certificate format is out of
+     Milestone 1's scope and left for later, alongside the rest of the
+     dump-file family.  */
+  for (unsigned idx = 0; idx < float_range_parms.length (); ++idx)
+    {
+      tree param = float_range_parms[idx];
+
+      tree substituted = NULL_TREE;
+      unsigned argno = 0;
+      for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
+	if (p == param)
+	  {
+	    if (argno < (unsigned) call_expr_nargs (call))
+	      substituted = CALL_EXPR_ARG (call, argno);
+	    break;
+	  }
+      if (!substituted)
+	continue;
+
+      oa_proof_result r = oa_env_check_float_range_subsumption
+	(env, substituted, float_range_facts[idx]);
+      switch (r)
+	{
+	case OA_PROVEN_TRUE:
+	  break;
+	case OA_PROVEN_FALSE:
+	  error_at (EXPR_LOCATION (call),
+		    "argument %qE provably violates the precondition "
+		    "of %qD", substituted, callee);
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	  break;
 	case OA_UNKNOWN:
 	  if (strict)
@@ -12145,6 +12670,83 @@ oa_range_pair_relation (const oa_range_fact &a, tree_code code,
       return OA_RANGE_PARTIAL;
     default:
       return OA_RANGE_PARTIAL;
+    }
+}
+
+/* D4324: the floating-point analogue of oa_range_pair_relation
+   immediately above, via real_less/real_compare instead of widest_int
+   comparisons.  */
+
+static oa_range_subsumption_result
+oa_float_range_pair_relation (const oa_float_range_fact &a, tree_code code,
+			       const oa_float_range_fact &b)
+{
+  switch (code)
+    {
+    case LT_EXPR:
+      if (a.has_hi && b.has_lo && real_less (&a.hi, &b.lo))
+	return OA_RANGE_SUBSUMED;
+      if (a.has_lo && b.has_hi && !real_less (&a.lo, &b.hi))
+	return OA_RANGE_DISJOINT;
+      return OA_RANGE_PARTIAL;
+    case LE_EXPR:
+      if (a.has_hi && b.has_lo && !real_less (&b.lo, &a.hi))
+	return OA_RANGE_SUBSUMED;
+      if (a.has_lo && b.has_hi && real_less (&b.hi, &a.lo))
+	return OA_RANGE_DISJOINT;
+      return OA_RANGE_PARTIAL;
+    case GT_EXPR:
+      if (a.has_lo && b.has_hi && real_less (&b.hi, &a.lo))
+	return OA_RANGE_SUBSUMED;
+      if (a.has_hi && b.has_lo && !real_less (&b.lo, &a.hi))
+	return OA_RANGE_DISJOINT;
+      return OA_RANGE_PARTIAL;
+    case GE_EXPR:
+      if (a.has_lo && b.has_hi && !real_less (&a.lo, &b.hi))
+	return OA_RANGE_SUBSUMED;
+      if (a.has_hi && b.has_lo && real_less (&a.hi, &b.lo))
+	return OA_RANGE_DISJOINT;
+      return OA_RANGE_PARTIAL;
+    case EQ_EXPR:
+      if (a.has_lo && a.has_hi && b.has_lo && b.has_hi
+	  && real_identical (&a.lo, &a.hi) && real_identical (&b.lo, &b.hi)
+	  && real_identical (&a.lo, &b.lo))
+	return OA_RANGE_SUBSUMED;
+      if ((a.has_hi && b.has_lo && real_less (&a.hi, &b.lo))
+	  || (a.has_lo && b.has_hi && real_less (&b.hi, &a.lo)))
+	return OA_RANGE_DISJOINT;
+      return OA_RANGE_PARTIAL;
+    default:
+      return OA_RANGE_PARTIAL;
+    }
+}
+
+/* D4324: the floating-point analogue of oa_relational_literal_holds
+   (own comment, near oa_relational_code_implies) -- "A CODE B" for two
+   ordinary compile-time REAL_CST literals, via real_compare directly on
+   TREE_REAL_CST_PTR, matching fold_relational_const's own approach
+   (gcc/fold-const.cc) with no ranger/frange involvement needed.  A NaN
+   literal's own value is exactly known (not merely "maybe NaN" the way
+   a composed range's own MAYBE_NAN flag is), so unlike that flag this
+   isn't a decline: IEEE 754 defines every comparison against NaN
+   (including NaN == NaN) as false, so returning false outright here is
+   the correct, decided answer, not a conservative fallback.  */
+
+static bool
+oa_float_relational_literal_holds (tree_code code, tree a, tree b)
+{
+  const REAL_VALUE_TYPE *ra = TREE_REAL_CST_PTR (a);
+  const REAL_VALUE_TYPE *rb = TREE_REAL_CST_PTR (b);
+  if (real_isnan (ra) || real_isnan (rb))
+    return false;
+  switch (code)
+    {
+    case LT_EXPR: return real_less (ra, rb);
+    case LE_EXPR: return !real_less (rb, ra);
+    case GT_EXPR: return real_less (rb, ra);
+    case GE_EXPR: return !real_less (ra, rb);
+    case EQ_EXPR: return real_identical (ra, rb);
+    default: return false;
     }
 }
 
@@ -16812,6 +17414,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		{
 		  oa_postcondition_merge_env->merge_with (snap);
 		  oa_postcondition_merge_env->range_merge_with (snap);
+		  oa_postcondition_merge_env->float_range_merge_with (snap);
 		  oa_postcondition_merge_env->predicate_fact_merge_with (snap);
 		  oa_postcondition_merge_env->relational_merge_with (snap);
 		  oa_postcondition_merge_env->type_bound_merge_with (snap);
@@ -16903,6 +17506,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    {
 	      oa_postcondition_merge_env->merge_with (env);
 	      oa_postcondition_merge_env->range_merge_with (env);
+	      oa_postcondition_merge_env->float_range_merge_with (env);
 	      oa_postcondition_merge_env->predicate_fact_merge_with (env);
 	      oa_postcondition_merge_env->relational_merge_with (env);
 	      oa_postcondition_merge_env->type_bound_merge_with (env);
@@ -17002,6 +17606,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      {
 		merged.merge_with (result);
 		merged.range_merge_with (result);
+		merged.float_range_merge_with (result);
 		merged.predicate_fact_merge_with (result);
 		merged.relational_merge_with (result);
 		merged.type_bound_merge_with (result);
@@ -17078,7 +17683,8 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	tree decl = DECL_EXPR_DECL (t);
 	bool tracked = (VAR_P (decl)
 			&& (POINTER_TYPE_P (TREE_TYPE (decl))
-			    || INTEGRAL_TYPE_P (TREE_TYPE (decl))));
+			    || INTEGRAL_TYPE_P (TREE_TYPE (decl))
+			    || SCALAR_FLOAT_TYPE_P (TREE_TYPE (decl))));
 	/* A declaration's own initializer ('int c = 10 / q;') is a
 	   distinct shape from an ordinary assignment statement ('int c;
 	   c = 10 / q;', reaching the INIT_EXPR/MODIFY_EXPR case below) --
@@ -17227,6 +17833,20 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      env.deriv_set (decl, deriv);
 	    else
 	      env.deriv_invalidate (decl);
+	  }
+	else if (VAR_P (decl) && SCALAR_FLOAT_TYPE_P (TREE_TYPE (decl)))
+	  {
+	    /* D4324: the floating-point analogue of the INTEGRAL_TYPE_P
+	       branch above's own Increment E1 value-range tracking --
+	       Milestone 1 scope only, so no nz/relational/call-relational/
+	       derivation tracking counterpart yet (see oa_get_float_range's
+	       own comment on why those aren't needed for plain arithmetic
+	       composition).  */
+	    oa_float_range_fact fact;
+	    if (DECL_INITIAL (decl) && oa_get_float_range (DECL_INITIAL (decl), env, &fact))
+	      env.float_range_set (decl, fact);
+	    else
+	      env.float_range_invalidate (decl);
 	  }
 	return;
       }
@@ -17617,6 +18237,26 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    else
 	      env.deriv_invalidate (lhs);
 	  }
+	else if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
+		 && SCALAR_FLOAT_TYPE_P (TREE_TYPE (lhs)))
+	  {
+	    /* D4324: the floating-point analogue of the INTEGRAL_TYPE_P
+	       branch's own Increment E1 value-range tracking immediately
+	       above -- unconditionally re-derives LHS's own fact from RHS
+	       on every assignment (establish if oa_get_float_range
+	       succeeds, invalidate otherwise), the same self-contained
+	       discipline that branch's own range_set/range_invalidate pair
+	       already uses, needing no separate prior "Rule 1" invalidation
+	       step of its own.  Milestone 1 scope only -- see
+	       oa_get_float_range's own comment on what's deliberately not
+	       yet mirrored here (nz/relational/call-relational/derivation/
+	       Mechanism B runtime shadows).  */
+	    oa_float_range_fact fact;
+	    if (oa_get_float_range (rhs, env, &fact))
+	      env.float_range_set (lhs, fact);
+	    else
+	      env.float_range_invalidate (lhs);
+	  }
 
 	/* -fcontract-symbolic-runtime-checks (Mechanism B): a bare
 	   scalar's own runtime-tracked range fact -- entirely independent
@@ -17756,6 +18396,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  {
 	    then_env.merge_with (else_env);
 	    then_env.range_merge_with (else_env);
+	    then_env.float_range_merge_with (else_env);
 	    /* -fcontract-conveyor-proof-provenance: mirror the numeric
 	       merge just above, one level up -- see oa_env::deriv_merge_
 	       with's own comment; a no-op entirely when provenance
@@ -17832,6 +18473,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  {
 	    then_env.merge_with (else_env);
 	    then_env.range_merge_with (else_env);
+	    then_env.float_range_merge_with (else_env);
 	    /* -fcontract-conveyor-proof-provenance: mirror the numeric
 	       merge just above, one level up -- see oa_env::deriv_merge_
 	       with's own comment; a no-op entirely when provenance
@@ -17992,6 +18634,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      {
 		merged.merge_with (current);
 		merged.range_merge_with (current);
+		merged.float_range_merge_with (current);
 		/* -fcontract-symbolic-proofs: same merge rule as the
 		   if/else case.  */
 		merged.predicate_fact_merge_with (current);
@@ -18066,6 +18709,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      {
 		merged.merge_with (env);
 		merged.range_merge_with (env);
+		merged.float_range_merge_with (env);
 		merged.predicate_fact_merge_with (env);
 		merged.relational_merge_with (env);
 		merged.type_bound_merge_with (env);
@@ -19221,11 +19865,17 @@ oa_match_simple_comparison (tree conjunct, tree *param_out, tree_code *code_out,
   tree op0 = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0)));
   tree op1 = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1)));
 
+  /* D4324: REAL_CST admitted alongside INTEGER_CST -- see oa_match_
+     simple_comparison_var's own identical extension for why CONST_VAL_
+     OUT (a plain tree, not a widest_int) needs no signature change to
+     carry either kind.  */
   tree param, const_val;
   bool flipped;
-  if (TREE_CODE (op0) == PARM_DECL && TREE_CODE (op1) == INTEGER_CST)
+  if (TREE_CODE (op0) == PARM_DECL
+      && (TREE_CODE (op1) == INTEGER_CST || TREE_CODE (op1) == REAL_CST))
     param = op0, const_val = op1, flipped = false;
-  else if (TREE_CODE (op1) == PARM_DECL && TREE_CODE (op0) == INTEGER_CST)
+  else if (TREE_CODE (op1) == PARM_DECL
+	   && (TREE_CODE (op0) == INTEGER_CST || TREE_CODE (op0) == REAL_CST))
     param = op1, const_val = op0, flipped = true;
   else
     return false;
@@ -19358,6 +20008,41 @@ oa_env_check_range_subsumption (oa_env &env, tree expr, oa_range_fact &req)
   return oa_range_subsumption_result (fact, req);
 }
 
+/* D4324: the floating-point analogue of oa_range_subsumption_result/
+   oa_env_check_range_subsumption immediately above, via real_less
+   instead of widest_int comparisons.  No pointer/array-base case to
+   decline (oa_float_range_fact has no BASE field at all -- see its own
+   comment).  */
+
+static oa_proof_result
+oa_float_range_subsumption_result (oa_float_range_fact &arg,
+				    oa_float_range_fact &req)
+{
+  bool subsumed
+    = (!req.has_lo || (arg.has_lo && !real_less (&arg.lo, &req.lo)))
+      && (!req.has_hi || (arg.has_hi && !real_less (&req.hi, &arg.hi)));
+  if (subsumed)
+    return OA_PROVEN_TRUE;
+
+  bool disjoint
+    = (req.has_hi && arg.has_lo && real_less (&req.hi, &arg.lo))
+      || (req.has_lo && arg.has_hi && real_less (&arg.hi, &req.lo));
+  if (disjoint)
+    return OA_PROVEN_FALSE;
+
+  return OA_UNKNOWN;
+}
+
+static oa_proof_result
+oa_env_check_float_range_subsumption (oa_env &env, tree expr,
+				       oa_float_range_fact &req)
+{
+  oa_float_range_fact fact;
+  if (!oa_get_float_range (expr, env, &fact))
+    return OA_UNKNOWN;
+  return oa_float_range_subsumption_result (fact, req);
+}
+
 /* The three-way answer a relational obligation's own consult needs: is
    SUBSTITUTED_PARAM provably REQUIRED_CODE SUBSTITUTED_OTHER, given
    ENV's current facts? Tries, in order: both sides already ordinary
@@ -19438,6 +20123,13 @@ oa_env_check_relational_fact_1 (oa_env &env, tree substituted_param,
 					 stripped_other)
 	   ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
 
+  if (stripped_param && stripped_other
+      && TREE_CODE (stripped_param) == REAL_CST
+      && TREE_CODE (stripped_other) == REAL_CST)
+    return oa_float_relational_literal_holds (required_code, stripped_param,
+					       stripped_other)
+	   ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
+
   oa_relational_fact fact;
   if (oa_get_relational (substituted_param, env, &fact)
       && oa_relational_code_implies (fact.code, required_code)
@@ -19459,6 +20151,25 @@ oa_env_check_relational_fact_1 (oa_env &env, tree substituted_param,
     {
       enum oa_range_subsumption_result r
 	= oa_range_pair_relation (param_range, required_code, other_range);
+      if (r == OA_RANGE_SUBSUMED)
+	return OA_PROVEN_TRUE;
+      if (r == OA_RANGE_DISJOINT)
+	return OA_PROVEN_FALSE;
+    }
+
+  /* D4324: the floating-point analogue of the bounds-proving demo
+     fallback immediately above -- same reasoning, via
+     oa_get_float_range/oa_float_range_pair_relation instead.  Needed
+     for e.g. a precondition like 'pre(percentage >= 0.0)' where
+     PERCENTAGE was substituted with a caller-side argument whose own
+     range (not a bare literal) already settles the question.  */
+  oa_float_range_fact float_param_range, float_other_range;
+  if (oa_get_float_range (substituted_param, env, &float_param_range)
+      && oa_get_float_range (substituted_other, env, &float_other_range))
+    {
+      enum oa_range_subsumption_result r
+	= oa_float_range_pair_relation (float_param_range, required_code,
+					 float_other_range);
       if (r == OA_RANGE_SUBSUMED)
 	return OA_PROVEN_TRUE;
       if (r == OA_RANGE_DISJOINT)
@@ -20263,11 +20974,17 @@ oa_match_simple_comparison_var (tree conjunct, tree *decl_out,
   tree op0 = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0)));
   tree op1 = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1)));
 
+  /* D4324: REAL_CST admitted alongside INTEGER_CST -- CONST_VAL_OUT is
+     already a plain tree (not a widest_int), so the caller dispatches
+     on its own TREE_CODE to the integer or floating-point subsumption
+     path; nothing here needs to know which.  */
   tree decl, const_val;
   bool flipped;
-  if ((VAR_P (op0) || TREE_CODE (op0) == PARM_DECL) && TREE_CODE (op1) == INTEGER_CST)
+  if ((VAR_P (op0) || TREE_CODE (op0) == PARM_DECL)
+      && (TREE_CODE (op1) == INTEGER_CST || TREE_CODE (op1) == REAL_CST))
     decl = op0, const_val = op1, flipped = false;
-  else if ((VAR_P (op1) || TREE_CODE (op1) == PARM_DECL) && TREE_CODE (op0) == INTEGER_CST)
+  else if ((VAR_P (op1) || TREE_CODE (op1) == PARM_DECL)
+	   && (TREE_CODE (op0) == INTEGER_CST || TREE_CODE (op0) == REAL_CST))
     decl = op1, const_val = op0, flipped = true;
   else
     return false;
@@ -20632,6 +21349,15 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
 
   if (oa_match_simple_comparison_var (conjunct, &decl, &code, &const_val))
     {
+      if (TREE_CODE (const_val) == REAL_CST)
+	{
+	  if (real_isnan (TREE_REAL_CST_PTR (const_val)))
+	    return OA_UNKNOWN;
+	  oa_float_range_fact req;
+	  oa_float_tighten_range_bound (req, code, TREE_REAL_CST (const_val),
+					 TREE_TYPE (decl));
+	  return oa_env_check_float_range_subsumption (env, decl, req);
+	}
       oa_range_fact req;
       req.base = NULL_TREE;
       req.has_lo = req.has_hi = false;
