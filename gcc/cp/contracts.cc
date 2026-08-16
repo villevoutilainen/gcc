@@ -11331,12 +11331,22 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env)
 	     VTT artificial parameters aren't specially reconciled here --
 	     out of scope for this increment, matching the plan's free-
 	     function-oriented item 7 examples).  */
+	  /* D4324: CALL can also be an AGGR_INIT_EXPR (see oa_substitute_
+	     call_arg's own comment) -- ARGNO 0 (a constructor's implicit
+	     'this') always declines, since AGGR_INIT_EXPR_ARG(call, 0) is a
+	     meaningless placeholder at this stage, not a real object
+	     address to check is_object_address against anyway.  */
 	  tree substituted = NULL_TREE;
 	  unsigned argno = 0;
 	  for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
 	    if (p == arg)
 	      {
-		if (argno < (unsigned) call_expr_nargs (call))
+		if (TREE_CODE (call) == AGGR_INIT_EXPR)
+		  {
+		    if (argno >= 1 && argno < (unsigned) aggr_init_expr_nargs (call))
+		      substituted = AGGR_INIT_EXPR_ARG (call, argno);
+		  }
+		else if (argno < (unsigned) call_expr_nargs (call))
 		  substituted = CALL_EXPR_ARG (call, argno);
 		break;
 	      }
@@ -12207,19 +12217,17 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 	}
     }
 
+  /* D4324: this used to be its own inlined copy of the DECL_ARGUMENTS-
+     to-CALL_EXPR_ARG lookup oa_substitute_call_arg already encapsulates
+     -- switched to calling it directly so CALL being an AGGR_INIT_EXPR
+     (see that function's own comment) is handled correctly here too,
+     found via a real ICE (tree_check: expected call_expr, have
+     aggr_init_expr) hit by direct testing of 'return Number(-5.0);'.  */
   for (unsigned idx = 0; idx < range_parms.length (); ++idx)
     {
       tree param = range_parms[idx];
 
-      tree substituted = NULL_TREE;
-      unsigned argno = 0;
-      for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
-	if (p == param)
-	  {
-	    if (argno < (unsigned) call_expr_nargs (call))
-	      substituted = CALL_EXPR_ARG (call, argno);
-	    break;
-	  }
+      tree substituted = oa_substitute_call_arg (callee, call, param);
       if (!substituted)
 	continue;
 
@@ -12271,15 +12279,7 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
     {
       tree param = float_range_parms[idx];
 
-      tree substituted = NULL_TREE;
-      unsigned argno = 0;
-      for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
-	if (p == param)
-	  {
-	    if (argno < (unsigned) call_expr_nargs (call))
-	      substituted = CALL_EXPR_ARG (call, argno);
-	    break;
-	  }
+      tree substituted = oa_substitute_call_arg (callee, call, param);
       if (!substituted)
 	continue;
 
@@ -12549,6 +12549,10 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 					    &negated))
 	    continue;
 
+	  /* D4324: CALL can also be an AGGR_INIT_EXPR (see oa_substitute_
+	     call_arg's own comment) -- ARGNO 0 ('this') always declines,
+	     since AGGR_INIT_EXPR_ARG(call, 0) is a meaningless placeholder
+	     at this stage.  */
 	  tree matched_parm = NULL_TREE;
 	  unsigned argno = 0;
 	  for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
@@ -12557,10 +12561,15 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		matched_parm = p;
 		break;
 	      }
-	  if (!matched_parm || argno >= (unsigned) call_expr_nargs (call))
+	  bool call_is_aggr_init = TREE_CODE (call) == AGGR_INIT_EXPR;
+	  if (!matched_parm
+	      || (call_is_aggr_init
+		  ? (argno < 1 || argno >= (unsigned) aggr_init_expr_nargs (call))
+		  : argno >= (unsigned) call_expr_nargs (call)))
 	    continue;
 
-	  tree substituted = CALL_EXPR_ARG (call, argno);
+	  tree substituted = call_is_aggr_init
+	    ? AGGR_INIT_EXPR_ARG (call, argno) : CALL_EXPR_ARG (call, argno);
 	  oa_proof_result pr
 	    = oa_env_predicate_result (env, substituted, pred_fn, !negated,
 				       /*require_conveyor=*/true);
@@ -12629,7 +12638,29 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
    CALL_EXPR_ARG correspondence used throughout this file's other call-
    site checks.  Returns NULL_TREE if PARAM isn't actually one of
    CALLEE's own parameters, or CALL doesn't supply that many
-   arguments.  */
+   arguments.
+
+   D4324: CALL can also be an AGGR_INIT_EXPR -- a constructor call that
+   materializes a temporary whose final destination isn't fixed yet
+   ('return Number(50.0);', 'take(Number(3.0))', an array/aggregate
+   element initializer).  AGGR_INIT_EXPR_ARG(call, 0) occupies the same
+   positional slot 'this' does in DECL_ARGUMENTS, but its own value is a
+   meaningless placeholder (confirmed via gdb: a bare 'convert_expr
+   <void_cst>') -- the real receiver, AGGR_INIT_EXPR_SLOT, is a fresh
+   anonymous compiler temporary at this stage in every such shape, never
+   a stable, resolvable identity (that mapping is only established
+   later, during gimplification) -- so ARGNO 0 must decline here rather
+   than return that placeholder.  ARGNO >= 1 maps directly and correctly
+   to AGGR_INIT_EXPR_ARG(call, argno) (confirmed via gdb: argument 1 is
+   exactly the real, user-written constructor argument), which is why
+   this one change alone is enough to make every OTHER caller of this
+   function -- none of which ever substitute anything but a genuine,
+   non-'this' parameter for a field-range/call-range/predicate
+   consultation -- correctly AGGR_INIT_EXPR-aware with no further
+   changes: substituting 'this' (argno 0) is the only shape any of them
+   would ever need to resolve a *receiver* identity from, and that's
+   exactly the shape declined here, precisely because no such identity
+   exists yet to resolve to.  */
 
 static tree
 oa_substitute_call_arg (tree callee, tree call, tree param)
@@ -12637,8 +12668,13 @@ oa_substitute_call_arg (tree callee, tree call, tree param)
   unsigned argno = 0;
   for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
     if (p == param)
-      return argno < (unsigned) call_expr_nargs (call)
-	? CALL_EXPR_ARG (call, argno) : NULL_TREE;
+      {
+	if (TREE_CODE (call) == AGGR_INIT_EXPR)
+	  return (argno >= 1 && argno < (unsigned) aggr_init_expr_nargs (call))
+	    ? AGGR_INIT_EXPR_ARG (call, argno) : NULL_TREE;
+	return argno < (unsigned) call_expr_nargs (call)
+	  ? CALL_EXPR_ARG (call, argno) : NULL_TREE;
+      }
   return NULL_TREE;
 }
 
@@ -14520,14 +14556,22 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 {
   if (oa_call_is_conversion_operator_call (call))
     return;
-  int nargs = call_expr_nargs (call);
-  for (int i = 0; i < nargs; ++i)
+  /* D4324: CALL can also be an AGGR_INIT_EXPR (see oa_substitute_call_
+     arg's own comment) -- start at 1, explicitly skipping index 0 (the
+     receiver's own meaningless placeholder slot) rather than relying on
+     it harmlessly failing to match any of the identity resolvers
+     below.  */
+  bool call_is_aggr_init = TREE_CODE (call) == AGGR_INIT_EXPR;
+  int nargs = call_is_aggr_init ? aggr_init_expr_nargs (call) : call_expr_nargs (call);
+  for (int i = call_is_aggr_init ? 1 : 0; i < nargs; ++i)
     {
+      tree call_arg = call_is_aggr_init
+	? AGGR_INIT_EXPR_ARG (call, i) : CALL_EXPR_ARG (call, i);
       tree identity;
-      if (oa_invalidation_identity_decl (CALL_EXPR_ARG (call, i), &identity)
-	  || oa_field_slot_identity (CALL_EXPR_ARG (call, i), env, &identity)
-	  || oa_array_slot_identity (CALL_EXPR_ARG (call, i), env, &identity)
-	  || oa_field_object_identity (CALL_EXPR_ARG (call, i), env, &identity))
+      if (oa_invalidation_identity_decl (call_arg, &identity)
+	  || oa_field_slot_identity (call_arg, env, &identity)
+	  || oa_array_slot_identity (call_arg, env, &identity)
+	  || oa_field_object_identity (call_arg, env, &identity))
 	{
 	  identity = env.alias_find (identity);
 	  env.predicate_fact_invalidate (identity);
@@ -14555,10 +14599,15 @@ oa_invalidate_symbolic_scalar_range_for_call_args (tree call, oa_env &env)
 {
   if (oa_call_is_conversion_operator_call (call))
     return;
-  int nargs = call_expr_nargs (call);
-  for (int i = 0; i < nargs; ++i)
+  /* D4324: CALL can also be an AGGR_INIT_EXPR -- see oa_invalidate_
+     symbolic_facts_for_call_args's own identical comment.  */
+  bool call_is_aggr_init = TREE_CODE (call) == AGGR_INIT_EXPR;
+  int nargs = call_is_aggr_init ? aggr_init_expr_nargs (call) : call_expr_nargs (call);
+  for (int i = call_is_aggr_init ? 1 : 0; i < nargs; ++i)
     {
-      tree arg = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (call, i));
+      tree arg = STRIP_ANY_LOCATION_WRAPPER (call_is_aggr_init
+					      ? AGGR_INIT_EXPR_ARG (call, i)
+					      : CALL_EXPR_ARG (call, i));
       while (TREE_CODE (arg) == NON_LVALUE_EXPR || TREE_CODE (arg) == NOP_EXPR
 	     || TREE_CODE (arg) == CONVERT_EXPR
 	     || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
@@ -16026,7 +16075,8 @@ oa_mark_fn_if_expr_calls_active_contract (tree fndecl, tree expr)
   cp_walk_tree (&expr, [](tree *tp, int *, void *data) -> tree
     {
       tree t = *tp;
-      if (t == NULL_TREE || t == error_mark_node || TREE_CODE (t) != CALL_EXPR)
+      if (t == NULL_TREE || t == error_mark_node
+	  || (TREE_CODE (t) != CALL_EXPR && TREE_CODE (t) != AGGR_INIT_EXPR))
 	return NULL_TREE;
       tree callee = cp_get_callee_fndecl_nofold (t);
       if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
@@ -16090,7 +16140,24 @@ oa_scan_calls_in_expr (tree *expr, oa_env &env, tree *extra = NULL,
       oa_scan_calls_data *d = (oa_scan_calls_data *) data_;
       oa_env *e = d->env;
       tree t = *tp;
-      if (t == NULL_TREE || t == error_mark_node || TREE_CODE (t) != CALL_EXPR)
+      /* D4324: AGGR_INIT_EXPR alongside CALL_EXPR -- a constructor call
+	 that materializes a temporary whose final destination isn't fixed
+	 yet ('return Number(50.0);', 'take(Number(3.0))', an array/
+	 aggregate element initializer) is represented this way at this
+	 pre-genericize stage, and was previously invisible here entirely,
+	 so its own precondition was never checked against the actual
+	 argument. AGGR_INIT_EXPR_SLOT (the real receiver) is confirmed,
+	 via direct gdb inspection, to always be a fresh anonymous compiler
+	 temporary at this stage in every such shape -- never a stable,
+	 resolvable identity (that mapping is only established later,
+	 during gimplification) -- so postcondition-based fact
+	 establishment for the caller remains genuinely out of reach here;
+	 only precondition-obligation checking is achievable, and that's
+	 all this change enables (see oa_substitute_call_arg's own
+	 AGGR_INIT_EXPR branch, which declines argno 0 -- the receiver's
+	 own positional slot -- for exactly this reason).  */
+      if (t == NULL_TREE || t == error_mark_node
+	  || (TREE_CODE (t) != CALL_EXPR && TREE_CODE (t) != AGGR_INIT_EXPR))
 	return NULL_TREE;
       tree arg;
       if (is_object_address_call_p (t, &arg))
@@ -16141,10 +16208,23 @@ oa_scan_calls_in_expr (tree *expr, oa_env &env, tree *extra = NULL,
 	  oa_invalidate_symbolic_scalar_range_for_call_args (t, *e);
 	  oa_handle_call_symbolic_postcondition_establishment (t, *e);
 	}
-      if (d->extra)
-	oa_handle_call_symbolic_scalar_obligation (t, *e, d->extra);
-      if (d->invalidate_extra && oa_symbolic_codegen_active)
-	oa_invalidate_scalar_shadow_for_call_args (t, *e, d->invalidate_extra);
+      /* Mechanism B (-fcontract-symbolic-runtime-checks, injected runtime
+	 check codegen) is deliberately kept CALL_EXPR-only here, even
+	 though T can now also be an AGGR_INIT_EXPR: both of these read
+	 CALL_EXPR_ARG/call_expr_nargs directly rather than through
+	 oa_substitute_call_arg, so handing either an AGGR_INIT_EXPR would
+	 tree_check-ICE. Generating a runtime check around a constructor
+	 call into an as-yet-unresolved temporary is a materially separate,
+	 larger design question (there is no stable object to check
+	 against, exactly per oa_substitute_call_arg's own AGGR_INIT_EXPR
+	 comment) -- out of scope here.  */
+      if (TREE_CODE (t) == CALL_EXPR)
+	{
+	  if (d->extra)
+	    oa_handle_call_symbolic_scalar_obligation (t, *e, d->extra);
+	  if (d->invalidate_extra && oa_symbolic_codegen_active)
+	    oa_invalidate_scalar_shadow_for_call_args (t, *e, d->invalidate_extra);
+	}
       return NULL_TREE;
     }, &data, NULL);
 }
@@ -16201,7 +16281,8 @@ oa_scan_stray_symbolic_call (tree *expr)
   tree found = cp_walk_tree (expr, [](tree *tp, int *, void *) -> tree
     {
       tree t = *tp;
-      if (t == NULL_TREE || t == error_mark_node || TREE_CODE (t) != CALL_EXPR)
+      if (t == NULL_TREE || t == error_mark_node
+	  || (TREE_CODE (t) != CALL_EXPR && TREE_CODE (t) != AGGR_INIT_EXPR))
 	return NULL_TREE;
       tree callee = cp_get_callee_fndecl_nofold (t);
       if (callee && TREE_CODE (callee) == FUNCTION_DECL
@@ -18574,11 +18655,27 @@ oa_walk_stmt (tree *stmt, oa_env &env)
     case MUST_NOT_THROW_EXPR:
     case CONVERT_EXPR:
     case NOP_EXPR:
+    case INDIRECT_REF:
       /* Transparent wrappers introduced around ordinary statements at
 	 this pre-genericize stage (a full-expression's temporary cleanup
 	 scope; a noexcept boundary; a discarded expression-statement's
 	 value converted to void) -- none of these change what's
-	 provable, so just recurse into the operand underneath.  */
+	 provable, so just recurse into the operand underneath.
+	 D4324: INDIRECT_REF added alongside the others -- an array/
+	 aggregate element initializer ('Number arr[2] = { Number(1.0),
+	 Number(2.0) };') is represented, at this pre-genericize stage, as
+	 build_vec_init's own compile-time-unrolled statement sequence
+	 wrapped in exactly this INDIRECT_REF(NOP_EXPR(STATEMENT_LIST))
+	 shape -- confirmed via direct gdb inspection. Previously
+	 unhandled, this fell to the generic default case below, which
+	 never recurses into an unrecognized code's own operands at all,
+	 so the STATEMENT_LIST nested inside -- and every constructor call
+	 in it -- was completely unreachable, independent of and prior to
+	 whatever oa_scan_calls_in_expr's own AGGR_INIT_EXPR handling can
+	 do once actually reached.  Strictly additive: the default case's
+	 own item-8/stray-call scans still ran over the whole node before
+	 this fix and would have found nothing recursing that deep either,
+	 so nothing already working is lost by handling it here instead.  */
       oa_walk_stmt (&TREE_OPERAND (t, 0), env);
       return;
 
