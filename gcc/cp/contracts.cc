@@ -4516,6 +4516,123 @@ contract_control_naming_type (tree ctrl)
   return ctrl ? TREE_TYPE (ctrl) : NULL_TREE;
 }
 
+/* Cached, once-per-TU: a static, internal-linkage array of
+   std::contracts::group_semantic_rule holding every
+   -fcontracts-group-evaluation-semantic= entry
+   (contract_group_semantic_table, c-family/c-common.h), in
+   command-line order -- built lazily (most TUs never use the option at
+   all) and referenced, not rebuilt, from every per-assertion
+   assertion_static_info value (see build_group_rules_value below).  */
+static GTY(()) tree group_rule_array_decl;
+
+/* Build (once, cached in GROUP_RULE_ARRAY_DECL above) a static array of
+   RULE_TYPE (std::contracts::group_semantic_rule), one element per
+   contract_group_semantic_table entry.  Each element is a plain, flat,
+   2-field CONSTRUCTOR directly filling group_semantic_rule's own
+   private fields -- the same raw-field-filling technique
+   build_assertion_static_info_value already uses for
+   assertion_static_info itself (not a real constructor call: nothing
+   needs calling, since RULE_TYPE has no user-declared constructors,
+   and this bypasses its fields' own access control entirely, same as
+   build_real_source_location_value already does for
+   std::source_location's private _M_impl).  */
+
+static tree
+get_group_rule_array_decl (location_t loc, tree rule_type)
+{
+  if (group_rule_array_decl)
+    return group_rule_array_decl;
+
+  tree name_field = next_aggregate_field (TYPE_FIELDS (rule_type));
+  tree sem_field = next_aggregate_field (DECL_CHAIN (name_field));
+
+  vec<constructor_elt, va_gc> *elts = NULL;
+  unsigned ix;
+  contract_group_semantic_entry *entry;
+  FOR_EACH_VEC_ELT (contract_group_semantic_table, ix, entry)
+    {
+      tree name_cst = build_string_literal (strlen (entry->name) + 1,
+					    entry->name);
+      tree rule_ctor = build_constructor_va
+	(rule_type, 2,
+	 name_field, name_cst,
+	 sem_field, build_int_cst (TREE_TYPE (sem_field), entry->semantic));
+      CONSTRUCTOR_APPEND_ELT (elts, size_int (ix), rule_ctor);
+    }
+
+  tree array_type = build_array_type_nelts
+    (rule_type, contract_group_semantic_table.length ());
+  tree ctor = build_constructor (array_type, elts);
+  TREE_CONSTANT (ctor) = 1;
+  TREE_STATIC (ctor) = 1;
+
+  tree decl = build_decl (loc, VAR_DECL,
+			  get_identifier ("__contracts_group_rules"),
+			  array_type);
+  DECL_ARTIFICIAL (decl) = 1;
+  DECL_IGNORED_P (decl) = 1;
+  TREE_STATIC (decl) = 1;
+  TREE_READONLY (decl) = 1;
+  /* Internal linkage: this is this TU's own, possibly TU-specific,
+     command-line configuration -- unlike get_symbolic_key_decl's
+     comdat-folded keys, there is nothing to safely fold across TUs
+     here (a different TU may legitimately set different rules).  */
+  TREE_PUBLIC (decl) = 0;
+  /* group_semantic_rules() is read at compile time (from is_ignored/
+     compute_semantic), not just at runtime, so this array must itself
+     be usable in a constant expression -- a plain TREE_READONLY isn't
+     enough for a class-type array (only "const variables of integral
+     or enumeration type" get that for free); mark it constexpr
+     directly, the same way a compiler-synthesized constant temporary
+     already does (build_over_call's reference-temporary handling,
+     call.cc).  */
+  DECL_DECLARED_CONSTEXPR_P (decl) = 1;
+  DECL_INITIALIZED_BY_CONSTANT_EXPRESSION_P (decl) = 1;
+  TREE_CONSTANT (decl) = 1;
+  DECL_INITIAL (decl) = ctor;
+  pushdecl_top_level_and_finish (decl, ctor);
+
+  group_rule_array_decl = decl;
+  return decl;
+}
+
+/* Build a group_semantic_rules_view CONSTRUCTOR of type VIEW_TYPE for
+   this TU's -fcontracts-group-evaluation-semantic= table -- empty (null
+   data pointer, zero size) if the option was never given (the common
+   case), without ever needing a zero-length array.  */
+
+static tree
+build_group_rules_value (tree view_type)
+{
+  tree data_field = next_aggregate_field (TYPE_FIELDS (view_type));
+  tree size_field = next_aggregate_field (DECL_CHAIN (data_field));
+
+  if (contract_group_semantic_table.is_empty ())
+    return build_constructor_va
+      (view_type, 2,
+       data_field, build_zero_cst (TREE_TYPE (data_field)),
+       size_field, build_int_cst (TREE_TYPE (size_field), 0));
+
+  /* TREE_TYPE (data_field) is a pointer to group_semantic_rule; its own
+     TREE_TYPE is that pointee type.  */
+  tree rule_type = TREE_TYPE (TREE_TYPE (data_field));
+  tree array_decl = get_group_rule_array_decl (input_location, rule_type);
+
+  /* Array-to-pointer decay: the address of the array's first element,
+     not of the array object itself (which would have array, not
+     pointer, type).  */
+  tree first_elt = build4 (ARRAY_REF, rule_type, array_decl,
+			   size_zero_node, NULL_TREE, NULL_TREE);
+  tree addr = fold_convert (TREE_TYPE (data_field),
+			    build_fold_addr_expr (first_elt));
+
+  return build_constructor_va
+    (view_type, 2,
+     data_field, addr,
+     size_field, build_int_cst (TREE_TYPE (size_field),
+				contract_group_semantic_table.length ()));
+}
+
 /* Build an assertion_static_info CONSTRUCTOR of type INFO_TYPE for a
    contract being evaluated for SIDE.  Shared by contract_control_bool_member
    below (evaluating a control-object query) and the assertion_context
@@ -4532,6 +4649,7 @@ build_assertion_static_info_value (contract_check_side side, tree info_type)
   tree f1 = next_aggregate_field (DECL_CHAIN (f0));
   tree f2 = next_aggregate_field (DECL_CHAIN (f1));
   tree f3 = next_aggregate_field (DECL_CHAIN (f2));
+  tree f4 = next_aggregate_field (DECL_CHAIN (f3));
 
   /* Matches std::contracts::assertion_check_side's enumerator values
      exactly (see the library header).  */
@@ -4545,11 +4663,12 @@ build_assertion_static_info_value (contract_check_side side, tree info_type)
     }
 
   return build_constructor_va
-    (info_type, 4,
+    (info_type, 5,
      f0, build_int_cst (TREE_TYPE (f0), contract_evaluation_semantic_value ()),
      f1, build_int_cst (TREE_TYPE (f1), side_val),
      f2, boolean_false_node,
-     f3, boolean_false_node);
+     f3, boolean_false_node,
+     f4, build_group_rules_value (TREE_TYPE (f4)));
 }
 
 /* Constant-evaluate CTRL::NAME(info) for the current translation unit's
