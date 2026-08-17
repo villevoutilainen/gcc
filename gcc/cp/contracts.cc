@@ -14262,6 +14262,92 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		    }
 		}
 
+	      /* D4324: the floating-point analogue of the field-range
+		 consult loop just above -- same shape, over oa_collect_
+		 contract_float_field_ranges/m_contract_float_field_range_map
+		 instead, mirroring oa_handle_call_conveyor_field_range_
+		 obligation's own identical pairing of an int loop with a
+		 float one. Without this, a symbolic field precondition
+		 using a REAL_CST bound (e.g. 'pre<proven_symbolic_v>(this->
+		 m_value >= 0.0)') was collected by neither this loop nor
+		 the int one just above, and the whole obligation silently
+		 went unchecked at every call site -- confirmed by direct
+		 testing (an object whose field was directly, provably
+		 negative produced no diagnostic at all calling such a
+		 function, where the identical shape under proven_conveyor
+		 was already correctly caught).  */
+	      auto_vec<oa_symbolic_float_field_group> float_field_groups;
+	      oa_collect_contract_float_field_ranges (cond, &float_field_groups);
+	      for (unsigned i = 0; i < float_field_groups.length (); ++i)
+		{
+		  tree ptr_expr
+		    = oa_strip_symbolic_ptr_expr (float_field_groups[i].ptr_expr);
+		  if (TREE_CODE (ptr_expr) != PARM_DECL)
+		    continue;
+		  tree substituted = oa_substitute_call_arg (callee, call, ptr_expr);
+		  if (!substituted)
+		    continue;
+		  substituted = oa_strip_conversion_call (substituted);
+		  tree identity;
+		  if (!oa_object_identity_decl (substituted, &identity)
+		      && !oa_field_slot_identity (substituted, env, &identity)
+		      && !oa_array_slot_identity (substituted, env, &identity)
+		      && !oa_field_object_identity (substituted, env, &identity))
+		    continue;
+		  identity = env.alias_find (identity);
+
+		  oa_contract_float_field_range_fact established;
+		  if (!env.contract_float_field_range_get
+			(identity, float_field_groups[i].field, &established))
+		    {
+		      if (strict)
+			error_at (EXPR_LOCATION (call),
+				  "cannot prove that field %qD of %qE satisfies "
+				  "the precondition of %qD",
+				  float_field_groups[i].field, substituted, callee);
+		      else
+			warning_at (EXPR_LOCATION (call), 0,
+				    "cannot verify that field %qD of %qE satisfies "
+				    "the precondition of %qD",
+				    float_field_groups[i].field, substituted, callee);
+		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      continue;
+		    }
+		  /* Symbolic's own consult: any established fact satisfies
+		     it, whichever flavor established it -- see the int loop
+		     just above's own identical comment.  */
+
+		  oa_range_subsumption_result r = oa_float_range_subsumption
+		    (established.range, float_field_groups[i].range);
+		  if (r == OA_RANGE_SUBSUMED)
+		    continue; /* Proven true: silently discharged.  */
+		  if (r == OA_RANGE_DISJOINT)
+		    {
+		      error_at (EXPR_LOCATION (call),
+				"argument %qE provably violates the precondition "
+				"of %qD: %qD is established outside the required "
+				"range", substituted, callee,
+				float_field_groups[i].field);
+		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    }
+		  else if (strict)
+		    {
+		      error_at (EXPR_LOCATION (call),
+				"cannot prove that field %qD of %qE satisfies "
+				"the precondition of %qD",
+				float_field_groups[i].field, substituted, callee);
+		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    }
+		  else
+		    {
+		      warning_at (EXPR_LOCATION (call), 0,
+				  "cannot verify that field %qD of %qE satisfies "
+				  "the precondition of %qD",
+				  float_field_groups[i].field, substituted, callee);
+		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    }
+		}
+
 	      /* The call-range analogue of the field-range consult loop
 		 just above: symbolic's own consult accepts an established
 		 fact regardless of provenance, whichever flavor of
