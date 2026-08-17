@@ -16788,6 +16788,39 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
 				     field_groups[i].range, conveyor_ok);
     }
 
+  /* D4324: the floating-point analogue of the int field_groups block
+     just above -- this function previously only ever established an
+     INTEGER field's own range this way, via oa_collect_contract_field_
+     ranges/contract_field_range_set. oa_collect_contract_float_field_
+     ranges/contract_float_field_range_set (both already existed, used
+     by oa_check_assertion_conjunct_against_env's own consult side --
+     see its REAL_CST branch) were simply never called from here, so a
+     scalar-float-typed field precondition conjunct (e.g.
+     'this->m_value >= 0.0') was never established for a symbolic-only
+     precondition at all -- a conveyor-active one still got it, via
+     oa_handle_precondition_stmt's own separate classic self-trust
+     block (oa_refine_single_comparison), which has no such int-only
+     restriction. Found via a proven_symbolic Number-class port: even a
+     bare contract_assert right after an identical, immediately
+     preceding precondition conjunct could not see the field's own
+     value.  */
+  auto_vec<oa_symbolic_float_field_group> float_field_groups;
+  oa_collect_contract_float_field_ranges (cond, &float_field_groups);
+  for (unsigned i = 0; i < float_field_groups.length (); ++i)
+    {
+      tree ptr_expr
+	= oa_strip_symbolic_ptr_expr (float_field_groups[i].ptr_expr);
+      tree identity;
+      if (!oa_object_identity_decl (ptr_expr, &identity)
+	  && !oa_field_slot_identity (ptr_expr, env, &identity)
+	  && !oa_array_slot_identity (ptr_expr, env, &identity))
+	continue;
+      identity = env.alias_find (identity);
+      env.contract_float_field_range_set (identity, float_field_groups[i].field,
+					   float_field_groups[i].range,
+					   conveyor_ok);
+    }
+
   /* The call-range analogue of the field-range block just above: trust
      a call-range conjunct naming this function's own precondition (e.g.
      'pre<ctrl>(n < this->size ())') for the rest of this function's own
