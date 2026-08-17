@@ -6043,35 +6043,115 @@ struct oa_range_fact
    of A/B without needing explicit case analysis (a negative operand on
    either side naturally flips which corner produces the new lo/hi,
    entirely via the min/max below -- no special-casing needed for
-   negative or zero multipliers). Requires a FULLY two-sided range on
-   both A and B -- a one-sided bound isn't enough to bound a product the
-   way it is for a sum/difference (e.g. a huge positive upper bound on
-   one side combined with no lower bound at all leaves the product's
-   own lower extreme totally open) -- and declines a pointer-tracked
-   (array-offset) range on either side, since multiplying a pointer's
-   own tracked offset has no meaning. Shared by oa_get_range's own
-   MULT_EXPR composition (below) and oa_scan_overflow_in_expr's
-   identical, pre-existing overflow-safety use (previously duplicated
-   inline there; factored out here so both stay in sync, and so a
-   caller wanting the actual composed range -- not just a safety
-   boolean -- has somewhere to get it).  */
+   negative or zero multipliers). When both A and B are fully two-sided,
+   this exact 4-corner method is used directly, tightest for any sign
+   combination.
+
+   D4324 correction: when at least one side isn't fully two-sided, this
+   used to decline entirely (a one-sided bound isn't enough to bound a
+   product the way it is for a sum/difference in general -- e.g. a huge
+   positive upper bound on one side combined with no lower bound at all
+   leaves the product's own lower extreme totally open) -- but that's
+   only true when an operand's own *sign* isn't known either. When each
+   operand's sign IS known (its lower bound is known and >= 0, or its
+   upper bound is known and <= 0), a partial result is still derivable
+   without needing the missing bound at all, via whichever single
+   corner is both sound and available -- found via direct testing of the
+   Number-demo shape this was blocking ('this->m_value >= 0.0' with no
+   upper bound, times 'percentage' known only via a precondition to be
+   in a bounded positive range: the product's own lower bound of 0.0 is
+   perfectly derivable from lo*lo alone, needing neither upper bound).
+   Declines a pointer-tracked (array-offset) range on either side, since
+   multiplying a pointer's own tracked offset has no meaning. Shared by
+   oa_get_range's own MULT_EXPR composition (below) and oa_scan_
+   overflow_in_expr's identical, pre-existing overflow-safety use
+   (previously duplicated inline there; factored out here so both stay
+   in sync, and so a caller wanting the actual composed range -- not
+   just a safety boolean -- has somewhere to get it). The overflow-
+   safety caller only ever accepts a fully-bounded result (checks both
+   HAS_LO_OUT and HAS_HI_OUT itself), so it is entirely unaffected by
+   this correction -- it simply never asked for a partial result.  */
 
 static bool
 oa_range_multiply (const oa_range_fact &a, const oa_range_fact &b,
-		    widest_int *lo_out, widest_int *hi_out)
+		    bool *has_lo_out, widest_int *lo_out,
+		    bool *has_hi_out, widest_int *hi_out)
 {
+  *has_lo_out = *has_hi_out = false;
   if (a.base != NULL_TREE || b.base != NULL_TREE)
     return false;
-  if (!a.has_lo || !a.has_hi || !b.has_lo || !b.has_hi)
-    return false;
 
-  widest_int corner0 = a.lo * b.lo;
-  widest_int corner1 = a.lo * b.hi;
-  widest_int corner2 = a.hi * b.lo;
-  widest_int corner3 = a.hi * b.hi;
-  *lo_out = wi::smin (wi::smin (corner0, corner1), wi::smin (corner2, corner3));
-  *hi_out = wi::smax (wi::smax (corner0, corner1), wi::smax (corner2, corner3));
-  return true;
+  if (a.has_lo && a.has_hi && b.has_lo && b.has_hi)
+    {
+      widest_int corner0 = a.lo * b.lo;
+      widest_int corner1 = a.lo * b.hi;
+      widest_int corner2 = a.hi * b.lo;
+      widest_int corner3 = a.hi * b.hi;
+      *lo_out = wi::smin (wi::smin (corner0, corner1), wi::smin (corner2, corner3));
+      *hi_out = wi::smax (wi::smax (corner0, corner1), wi::smax (corner2, corner3));
+      *has_lo_out = *has_hi_out = true;
+      return true;
+    }
+
+  bool a_nonneg = a.has_lo && a.lo >= 0;
+  bool a_nonpos = a.has_hi && a.hi <= 0;
+  bool b_nonneg = b.has_lo && b.lo >= 0;
+  bool b_nonpos = b.has_hi && b.hi <= 0;
+
+  if (a_nonneg && b_nonneg)
+    {
+      /* Both non-negative: product is non-negative, minimized at the
+	 smallest magnitudes (the two lower bounds), maximized at the
+	 largest (the two upper bounds, if both known).  */
+      *lo_out = a.lo * b.lo;
+      *has_lo_out = true;
+      if (a.has_hi && b.has_hi)
+	{
+	  *hi_out = a.hi * b.hi;
+	  *has_hi_out = true;
+	}
+    }
+  else if (a_nonpos && b_nonpos)
+    {
+      /* Both non-positive: product is non-negative, minimized at the
+	 smallest magnitudes (the two upper bounds, closest to zero),
+	 maximized at the largest (the two lower bounds, if both
+	 known).  */
+      *lo_out = a.hi * b.hi;
+      *has_lo_out = true;
+      if (a.has_lo && b.has_lo)
+	{
+	  *hi_out = a.lo * b.lo;
+	  *has_hi_out = true;
+	}
+    }
+  else if (a_nonneg && b_nonpos)
+    {
+      /* One of each sign: product is non-positive, maximized (closest
+	 to zero) at the smallest magnitudes (A's lower bound, B's upper
+	 bound), minimized (most negative) at the largest magnitudes (if
+	 both known).  */
+      *hi_out = a.lo * b.hi;
+      *has_hi_out = true;
+      if (a.has_hi && b.has_lo)
+	{
+	  *lo_out = a.hi * b.lo;
+	  *has_lo_out = true;
+	}
+    }
+  else if (a_nonpos && b_nonneg)
+    {
+      /* Mirror of the case just above, operands swapped.  */
+      *hi_out = a.hi * b.lo;
+      *has_hi_out = true;
+      if (a.has_lo && b.has_hi)
+	{
+	  *lo_out = a.lo * b.hi;
+	  *has_lo_out = true;
+	}
+    }
+
+  return *has_lo_out || *has_hi_out;
 }
 
 /* D4324: standard interval division -- mirrors oa_range_multiply's own
@@ -6089,28 +6169,91 @@ oa_range_multiply (const oa_range_fact &a, const oa_range_fact &b,
    own range to be entirely one sign -- B.lo > 0 or B.hi < 0, not merely
    nonzero -- since a divisor range that includes (or straddles) zero
    makes the result potentially unbounded, which a single [lo,hi]
-   interval can't represent; declines rather than guessing.  Also
-   requires a fully two-sided range on both operands, same as
-   multiplication.  */
+   interval can't represent; declines rather than guessing.  This
+   requirement on B is unchanged and not relaxed by the correction
+   below.
+
+   D4324 correction: mirrors oa_range_multiply's own identical
+   correction -- when A (the dividend) isn't fully two-sided but its own
+   sign is still known, a partial (one-sided) quotient bound is derived
+   from whichever single corner is sound and available, rather than
+   declining entirely (found via the same Number-demo shape as the
+   multiplication case: 'percentage / 100.0' with percentage only known
+   >= 0.0, no upper bound, dividing by the fully-bounded, sign-
+   determinate constant 100.0).  B itself must still be fully two-sided
+   and one-signed -- only A's requirement is relaxed.  */
 
 static bool
 oa_range_divide (const oa_range_fact &a, const oa_range_fact &b,
-		  widest_int *lo_out, widest_int *hi_out)
+		  bool *has_lo_out, widest_int *lo_out,
+		  bool *has_hi_out, widest_int *hi_out)
 {
+  *has_lo_out = *has_hi_out = false;
   if (a.base != NULL_TREE || b.base != NULL_TREE)
     return false;
-  if (!a.has_lo || !a.has_hi || !b.has_lo || !b.has_hi)
+  if (!b.has_lo || !b.has_hi)
     return false;
   if (b.lo <= 0 && b.hi >= 0)
     return false;
 
-  widest_int corner0 = a.lo / b.lo;
-  widest_int corner1 = a.lo / b.hi;
-  widest_int corner2 = a.hi / b.lo;
-  widest_int corner3 = a.hi / b.hi;
-  *lo_out = wi::smin (wi::smin (corner0, corner1), wi::smin (corner2, corner3));
-  *hi_out = wi::smax (wi::smax (corner0, corner1), wi::smax (corner2, corner3));
-  return true;
+  if (a.has_lo && a.has_hi)
+    {
+      widest_int corner0 = a.lo / b.lo;
+      widest_int corner1 = a.lo / b.hi;
+      widest_int corner2 = a.hi / b.lo;
+      widest_int corner3 = a.hi / b.hi;
+      *lo_out = wi::smin (wi::smin (corner0, corner1), wi::smin (corner2, corner3));
+      *hi_out = wi::smax (wi::smax (corner0, corner1), wi::smax (corner2, corner3));
+      *has_lo_out = *has_hi_out = true;
+      return true;
+    }
+
+  bool a_nonneg = a.has_lo && a.lo >= 0;
+  bool a_nonpos = a.has_hi && a.hi <= 0;
+  bool b_pos = b.lo > 0;
+
+  if (a_nonneg && b_pos)
+    {
+      *lo_out = a.lo / b.hi;
+      *has_lo_out = true;
+      if (a.has_hi)
+	{
+	  *hi_out = a.hi / b.lo;
+	  *has_hi_out = true;
+	}
+    }
+  else if (a_nonneg && !b_pos)
+    {
+      *hi_out = a.lo / b.lo;
+      *has_hi_out = true;
+      if (a.has_hi)
+	{
+	  *lo_out = a.hi / b.hi;
+	  *has_lo_out = true;
+	}
+    }
+  else if (a_nonpos && b_pos)
+    {
+      *hi_out = a.hi / b.hi;
+      *has_hi_out = true;
+      if (a.has_lo)
+	{
+	  *lo_out = a.lo / b.lo;
+	  *has_lo_out = true;
+	}
+    }
+  else if (a_nonpos && !b_pos)
+    {
+      *lo_out = a.hi / b.hi;
+      *has_lo_out = true;
+      if (a.has_lo)
+	{
+	  *hi_out = a.lo / b.lo;
+	  *has_hi_out = true;
+	}
+    }
+
+  return *has_lo_out || *has_hi_out;
 }
 
 /* D4324: floating-point analogue of oa_range_fact -- a provable value
@@ -6202,45 +6345,109 @@ oa_float_arithmetic (tree_code code, tree type, REAL_VALUE_TYPE *result,
    candidate, once toward +inf for a hi candidate) rather than once
    exactly, since no floating-point corner product is generally exact.
    Directly mirrors GCC's own foperator_mult's 8-value cross product
-   (gcc/range-op-float.cc).  Declines (returns false) if either operand
-   may be NaN, or if any corner's rounded result is non-finite --
-   see oa_float_range_fact's own comment for why this is a sound,
+   (gcc/range-op-float.cc). Declines (returns false) if either operand
+   may be NaN, or if any corner's rounded result is non-finite -- see
+   oa_float_range_fact's own comment for why this is a sound,
    deliberately conservative simplification rather than a full NaN/Inf
-   lattice.  */
+   lattice. When both A and B are fully two-sided, this exact 4-corner
+   method is used directly, tightest for any sign combination.
+
+   D4324 correction: mirrors oa_range_multiply's own identical
+   correction (see its comment) -- when at least one side isn't fully
+   two-sided but each operand's own SIGN is still known (its lower bound
+   is known and >= 0, or its upper bound is known and <= 0), a partial
+   result is derived from whichever single corner is both sound and
+   available, rather than declining entirely.  */
 
 static bool
 oa_float_range_multiply (const oa_float_range_fact &a,
 			  const oa_float_range_fact &b, tree type,
-			  REAL_VALUE_TYPE *lo_out, REAL_VALUE_TYPE *hi_out)
+			  bool *has_lo_out, REAL_VALUE_TYPE *lo_out,
+			  bool *has_hi_out, REAL_VALUE_TYPE *hi_out)
 {
+  *has_lo_out = *has_hi_out = false;
   if (a.maybe_nan || b.maybe_nan)
     return false;
-  if (!a.has_lo || !a.has_hi || !b.has_lo || !b.has_hi)
-    return false;
 
-  const REAL_VALUE_TYPE *aops[4] = { &a.lo, &a.lo, &a.hi, &a.hi };
-  const REAL_VALUE_TYPE *bops[4] = { &b.lo, &b.hi, &b.lo, &b.hi };
-  REAL_VALUE_TYPE lo_corner[4], hi_corner[4];
-  for (int i = 0; i < 4; ++i)
+  if (a.has_lo && a.has_hi && b.has_lo && b.has_hi)
     {
-      if (!oa_float_arithmetic (MULT_EXPR, type, &lo_corner[i],
-				 *aops[i], *bops[i], dconstninf))
-	return false;
-      if (!oa_float_arithmetic (MULT_EXPR, type, &hi_corner[i],
-				 *aops[i], *bops[i], dconstinf))
-	return false;
+      const REAL_VALUE_TYPE *aops[4] = { &a.lo, &a.lo, &a.hi, &a.hi };
+      const REAL_VALUE_TYPE *bops[4] = { &b.lo, &b.hi, &b.lo, &b.hi };
+      REAL_VALUE_TYPE lo_corner[4], hi_corner[4];
+      for (int i = 0; i < 4; ++i)
+	{
+	  if (!oa_float_arithmetic (MULT_EXPR, type, &lo_corner[i],
+				     *aops[i], *bops[i], dconstninf))
+	    return false;
+	  if (!oa_float_arithmetic (MULT_EXPR, type, &hi_corner[i],
+				     *aops[i], *bops[i], dconstinf))
+	    return false;
+	}
+
+      *lo_out = lo_corner[0];
+      *hi_out = hi_corner[0];
+      for (int i = 1; i < 4; ++i)
+	{
+	  if (real_less (&lo_corner[i], lo_out))
+	    *lo_out = lo_corner[i];
+	  if (real_less (hi_out, &hi_corner[i]))
+	    *hi_out = hi_corner[i];
+	}
+      *has_lo_out = *has_hi_out = true;
+      return true;
     }
 
-  *lo_out = lo_corner[0];
-  *hi_out = hi_corner[0];
-  for (int i = 1; i < 4; ++i)
+  bool a_nonneg = a.has_lo && !real_less (&a.lo, &dconst0);
+  bool a_nonpos = a.has_hi && !real_less (&dconst0, &a.hi);
+  bool b_nonneg = b.has_lo && !real_less (&b.lo, &dconst0);
+  bool b_nonpos = b.has_hi && !real_less (&dconst0, &b.hi);
+
+  if (a_nonneg && b_nonneg)
     {
-      if (real_less (&lo_corner[i], lo_out))
-	*lo_out = lo_corner[i];
-      if (real_less (hi_out, &hi_corner[i]))
-	*hi_out = hi_corner[i];
+      /* Both non-negative: product is non-negative, minimized at the
+	 smallest magnitudes (the two lower bounds), maximized at the
+	 largest (the two upper bounds, if both known).  */
+      if (oa_float_arithmetic (MULT_EXPR, type, lo_out, a.lo, b.lo, dconstninf))
+	*has_lo_out = true;
+      if (a.has_hi && b.has_hi
+	  && oa_float_arithmetic (MULT_EXPR, type, hi_out, a.hi, b.hi, dconstinf))
+	*has_hi_out = true;
     }
-  return true;
+  else if (a_nonpos && b_nonpos)
+    {
+      /* Both non-positive: product is non-negative, minimized at the
+	 smallest magnitudes (the two upper bounds, closest to zero),
+	 maximized at the largest (the two lower bounds, if both
+	 known).  */
+      if (oa_float_arithmetic (MULT_EXPR, type, lo_out, a.hi, b.hi, dconstninf))
+	*has_lo_out = true;
+      if (a.has_lo && b.has_lo
+	  && oa_float_arithmetic (MULT_EXPR, type, hi_out, a.lo, b.lo, dconstinf))
+	*has_hi_out = true;
+    }
+  else if (a_nonneg && b_nonpos)
+    {
+      /* One of each sign: product is non-positive, maximized (closest
+	 to zero) at the smallest magnitudes (A's lower bound, B's upper
+	 bound), minimized (most negative) at the largest magnitudes (if
+	 both known).  */
+      if (oa_float_arithmetic (MULT_EXPR, type, hi_out, a.lo, b.hi, dconstinf))
+	*has_hi_out = true;
+      if (a.has_hi && b.has_lo
+	  && oa_float_arithmetic (MULT_EXPR, type, lo_out, a.hi, b.lo, dconstninf))
+	*has_lo_out = true;
+    }
+  else if (a_nonpos && b_nonneg)
+    {
+      /* Mirror of the case just above, operands swapped.  */
+      if (oa_float_arithmetic (MULT_EXPR, type, hi_out, a.hi, b.lo, dconstinf))
+	*has_hi_out = true;
+      if (a.has_lo && b.has_hi
+	  && oa_float_arithmetic (MULT_EXPR, type, lo_out, a.lo, b.hi, dconstninf))
+	*has_lo_out = true;
+    }
+
+  return *has_lo_out || *has_hi_out;
 }
 
 /* D4324: floating-point analogue of oa_range_divide -- mirrors
@@ -6251,45 +6458,97 @@ oa_float_range_multiply (const oa_float_range_fact &a,
    potentially unbounded, and for floats also potentially +-Inf/NaN at
    the boundary itself, so this declines up front rather than letting
    oa_float_arithmetic's own per-corner non-finite check discover it
-   the hard way).  */
+   the hard way).  This requirement on B is unchanged.
+
+   D4324 correction: mirrors oa_float_range_multiply's own identical
+   correction -- when A (the dividend) isn't fully two-sided but its own
+   sign is still known, a partial (one-sided) quotient bound is derived
+   from whichever single corner is sound and available, rather than
+   declining entirely.  B itself must still be fully two-sided and
+   one-signed -- only A's requirement is relaxed.  */
 
 static bool
 oa_float_range_divide (const oa_float_range_fact &a,
 			const oa_float_range_fact &b, tree type,
-			REAL_VALUE_TYPE *lo_out, REAL_VALUE_TYPE *hi_out)
+			bool *has_lo_out, REAL_VALUE_TYPE *lo_out,
+			bool *has_hi_out, REAL_VALUE_TYPE *hi_out)
 {
+  *has_lo_out = *has_hi_out = false;
   if (a.maybe_nan || b.maybe_nan)
     return false;
-  if (!a.has_lo || !a.has_hi || !b.has_lo || !b.has_hi)
+  if (!b.has_lo || !b.has_hi)
     return false;
   bool lo_le_zero = !real_less (&dconst0, &b.lo);
   bool hi_ge_zero = !real_less (&b.hi, &dconst0);
   if (lo_le_zero && hi_ge_zero)
     return false;
 
-  const REAL_VALUE_TYPE *aops[4] = { &a.lo, &a.lo, &a.hi, &a.hi };
-  const REAL_VALUE_TYPE *bops[4] = { &b.lo, &b.hi, &b.lo, &b.hi };
-  REAL_VALUE_TYPE lo_corner[4], hi_corner[4];
-  for (int i = 0; i < 4; ++i)
+  if (a.has_lo && a.has_hi)
     {
-      if (!oa_float_arithmetic (RDIV_EXPR, type, &lo_corner[i],
-				 *aops[i], *bops[i], dconstninf))
-	return false;
-      if (!oa_float_arithmetic (RDIV_EXPR, type, &hi_corner[i],
-				 *aops[i], *bops[i], dconstinf))
-	return false;
+      const REAL_VALUE_TYPE *aops[4] = { &a.lo, &a.lo, &a.hi, &a.hi };
+      const REAL_VALUE_TYPE *bops[4] = { &b.lo, &b.hi, &b.lo, &b.hi };
+      REAL_VALUE_TYPE lo_corner[4], hi_corner[4];
+      for (int i = 0; i < 4; ++i)
+	{
+	  if (!oa_float_arithmetic (RDIV_EXPR, type, &lo_corner[i],
+				     *aops[i], *bops[i], dconstninf))
+	    return false;
+	  if (!oa_float_arithmetic (RDIV_EXPR, type, &hi_corner[i],
+				     *aops[i], *bops[i], dconstinf))
+	    return false;
+	}
+
+      *lo_out = lo_corner[0];
+      *hi_out = hi_corner[0];
+      for (int i = 1; i < 4; ++i)
+	{
+	  if (real_less (&lo_corner[i], lo_out))
+	    *lo_out = lo_corner[i];
+	  if (real_less (hi_out, &hi_corner[i]))
+	    *hi_out = hi_corner[i];
+	}
+      *has_lo_out = *has_hi_out = true;
+      return true;
     }
 
-  *lo_out = lo_corner[0];
-  *hi_out = hi_corner[0];
-  for (int i = 1; i < 4; ++i)
+  bool a_nonneg = a.has_lo && !real_less (&a.lo, &dconst0);
+  bool a_nonpos = a.has_hi && !real_less (&dconst0, &a.hi);
+  bool b_pos = real_less (&dconst0, &b.lo);
+
+  if (a_nonneg && b_pos)
     {
-      if (real_less (&lo_corner[i], lo_out))
-	*lo_out = lo_corner[i];
-      if (real_less (hi_out, &hi_corner[i]))
-	*hi_out = hi_corner[i];
+      if (oa_float_arithmetic (RDIV_EXPR, type, lo_out, a.lo, b.hi, dconstninf))
+	*has_lo_out = true;
+      if (a.has_hi
+	  && oa_float_arithmetic (RDIV_EXPR, type, hi_out, a.hi, b.lo, dconstinf))
+	*has_hi_out = true;
     }
-  return true;
+  else if (a_nonneg && !b_pos)
+    {
+      if (oa_float_arithmetic (RDIV_EXPR, type, hi_out, a.lo, b.lo, dconstinf))
+	*has_hi_out = true;
+      if (a.has_hi
+	  && oa_float_arithmetic (RDIV_EXPR, type, lo_out, a.hi, b.hi, dconstninf))
+	*has_lo_out = true;
+    }
+  else if (a_nonpos && b_pos)
+    {
+      if (oa_float_arithmetic (RDIV_EXPR, type, hi_out, a.hi, b.hi, dconstinf))
+	*has_hi_out = true;
+      if (a.has_lo
+	  && oa_float_arithmetic (RDIV_EXPR, type, lo_out, a.lo, b.lo, dconstninf))
+	*has_lo_out = true;
+    }
+  else if (a_nonpos && !b_pos)
+    {
+      if (oa_float_arithmetic (RDIV_EXPR, type, lo_out, a.hi, b.hi, dconstninf))
+	*has_lo_out = true;
+      if (a.has_lo
+	  && oa_float_arithmetic (RDIV_EXPR, type, hi_out, a.lo, b.lo, dconstinf))
+	*has_hi_out = true;
+    }
+
+  return *has_lo_out || *has_hi_out;
 }
 
 /* -fcontract-symbolic-proofs: a symbolic contract's own established
@@ -9051,26 +9310,46 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
       if (!oa_get_range (op0, env, &a) || !oa_get_range (op1, env, &b))
 	return false;
 
-      widest_int lo, hi;
-      bool composed = (TREE_CODE (expr) == MULT_EXPR)
-	? oa_range_multiply (a, b, &lo, &hi)
-	: oa_range_divide (a, b, &lo, &hi);
-      if (!composed)
-	return false;
-
-      /* Each bound checked against BOTH thresholds, not just its own
-	 "natural" one -- see the identical fix and comment in
-	 PLUS_EXPR/MINUS_EXPR just above (found via the same direct
-	 testing: a product's exact lo can itself exceed type_max just
-	 as easily as its hi can).  */
       out->base = NULL_TREE;
-      out->has_lo = lo >= type_min && lo <= type_max;
-      out->has_hi = hi >= type_min && hi <= type_max;
-      if (out->has_lo)
-	out->lo = lo;
-      if (out->has_hi)
-	out->hi = hi;
-      return out->has_lo || out->has_hi;
+      if (TREE_CODE (expr) == MULT_EXPR)
+	{
+	  /* D4324: oa_range_multiply now derives partial (one-sided)
+	     results too -- see its own comment.  */
+	  bool has_lo, has_hi;
+	  widest_int lo, hi;
+	  if (!oa_range_multiply (a, b, &has_lo, &lo, &has_hi, &hi))
+	    return false;
+	  out->has_lo = has_lo && lo >= type_min && lo <= type_max;
+	  out->has_hi = has_hi && hi >= type_min && hi <= type_max;
+	  if (out->has_lo)
+	    out->lo = lo;
+	  if (out->has_hi)
+	    out->hi = hi;
+	  return out->has_lo || out->has_hi;
+	}
+      else
+	{
+	  /* D4324: oa_range_divide now derives partial (one-sided)
+	     results too, for a partially-bounded dividend -- see its own
+	     comment.  */
+	  bool has_lo, has_hi;
+	  widest_int lo, hi;
+	  if (!oa_range_divide (a, b, &has_lo, &lo, &has_hi, &hi))
+	    return false;
+
+	  /* Each bound checked against BOTH thresholds, not just its own
+	     "natural" one -- see the identical fix and comment in
+	     PLUS_EXPR/MINUS_EXPR just above (found via the same direct
+	     testing: a product's exact lo can itself exceed type_max just
+	     as easily as its hi can).  */
+	  out->has_lo = has_lo && lo >= type_min && lo <= type_max;
+	  out->has_hi = has_hi && hi >= type_min && hi <= type_max;
+	  if (out->has_lo)
+	    out->lo = lo;
+	  if (out->has_hi)
+	    out->hi = hi;
+	  return out->has_lo || out->has_hi;
+	}
     }
 
   /* Increment E2: '&arr[index]', forming a pointer's initial tracked
@@ -9339,39 +9618,74 @@ oa_get_float_range (tree expr, oa_env &env, oa_float_range_fact *out)
       out->maybe_nan = false;
       if (TREE_CODE (expr) == PLUS_EXPR || TREE_CODE (expr) == MINUS_EXPR)
 	{
-	  if (a.maybe_nan || b.maybe_nan || !a.has_lo || !a.has_hi
-	      || !b.has_lo || !b.has_hi)
+	  if (a.maybe_nan || b.maybe_nan)
 	    return false;
-	  /* real_arithmetic's own MINUS_EXPR computes op1 - op2 directly
-	     (no separate negate-then-add step needed), so -- exactly
-	     like oa_range_fact's own integer MINUS_EXPR case -- only
-	     which of B's two bounds pairs with which of A's needs to
+	  /* D4324: each bound derived independently, mirroring the
+	     integer PLUS_EXPR/MINUS_EXPR case's own already-correct
+	     partial-bound support (a few lines above, in oa_get_range) --
+	     this float case previously required all four of A/B's own
+	     bounds unconditionally, even though addition/subtraction (
+	     unlike multiplication) never needs the *other* side's bound to
+	     derive one side of the result (e.g. 'percentage + m_value'
+	     with percentage in [0,100] and m_value only known to be
+	     >= 0.0, no upper bound, still soundly derives a result lower
+	     bound of 0.0 -- found via direct testing of exactly the
+	     Number-demo shape this asymmetry with the integer case was
+	     blocking). real_arithmetic's own MINUS_EXPR computes op1 -
+	     op2 directly (no separate negate-then-add step needed), so --
+	     exactly like oa_range_fact's own integer MINUS_EXPR case --
+	     only which of B's two bounds pairs with which of A's needs to
 	     swap between PLUS_EXPR and MINUS_EXPR, not the tree code
 	     passed through to oa_float_arithmetic itself.  */
 	  tree_code code = TREE_CODE (expr);
+	  bool b_lo_side_has = (code == PLUS_EXPR) ? b.has_lo : b.has_hi;
+	  bool b_hi_side_has = (code == PLUS_EXPR) ? b.has_hi : b.has_lo;
 	  const REAL_VALUE_TYPE &b_lo_side = (code == PLUS_EXPR) ? b.lo : b.hi;
 	  const REAL_VALUE_TYPE &b_hi_side = (code == PLUS_EXPR) ? b.hi : b.lo;
+	  out->has_lo = a.has_lo && b_lo_side_has;
+	  out->has_hi = a.has_hi && b_hi_side_has;
+	  if (out->has_lo
+	      && !oa_float_arithmetic (code, type, &out->lo, a.lo, b_lo_side,
+					dconstninf))
+	    out->has_lo = false;
+	  if (out->has_hi
+	      && !oa_float_arithmetic (code, type, &out->hi, a.hi, b_hi_side,
+					dconstinf))
+	    out->has_hi = false;
+	  return out->has_lo || out->has_hi;
+	}
+      else if (TREE_CODE (expr) == MULT_EXPR)
+	{
+	  /* D4324: oa_float_range_multiply now derives partial (one-
+	     sided) results too -- see its own comment.  */
+	  bool has_lo, has_hi;
 	  REAL_VALUE_TYPE lo, hi;
-	  if (!oa_float_arithmetic (code, type, &lo, a.lo, b_lo_side, dconstninf)
-	      || !oa_float_arithmetic (code, type, &hi, a.hi, b_hi_side, dconstinf))
+	  if (!oa_float_range_multiply (a, b, type, &has_lo, &lo, &has_hi, &hi))
 	    return false;
-	  out->has_lo = out->has_hi = true;
-	  out->lo = lo;
-	  out->hi = hi;
-	  return true;
+	  out->has_lo = has_lo;
+	  out->has_hi = has_hi;
+	  if (has_lo)
+	    out->lo = lo;
+	  if (has_hi)
+	    out->hi = hi;
+	  return out->has_lo || out->has_hi;
 	}
       else
 	{
+	  /* D4324: oa_float_range_divide now derives partial (one-sided)
+	     results too, for a partially-bounded dividend -- see its own
+	     comment.  */
+	  bool has_lo, has_hi;
 	  REAL_VALUE_TYPE lo, hi;
-	  bool composed = (TREE_CODE (expr) == MULT_EXPR)
-	    ? oa_float_range_multiply (a, b, type, &lo, &hi)
-	    : oa_float_range_divide (a, b, type, &lo, &hi);
-	  if (!composed)
+	  if (!oa_float_range_divide (a, b, type, &has_lo, &lo, &has_hi, &hi))
 	    return false;
-	  out->has_lo = out->has_hi = true;
-	  out->lo = lo;
-	  out->hi = hi;
-	  return true;
+	  out->has_lo = has_lo;
+	  out->has_hi = has_hi;
+	  if (has_lo)
+	    out->lo = lo;
+	  if (has_hi)
+	    out->hi = hi;
+	  return out->has_lo || out->has_hi;
 	}
     }
 
@@ -10803,11 +11117,19 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 		  oa_range_fact's definition) -- the corner-product interval-
 		  multiplication algorithm this used to duplicate inline,
 		  factored out so oa_get_range's own MULT_EXPR composition
-		  can share it too.  */
+		  can share it too. oa_range_multiply can now return a
+		  partial (one-sided) result -- overflow-safety needs both
+		  sides fully bounded and in range, so check HAS_LO/HAS_HI
+		  explicitly rather than relying on the return value alone
+		  (which is now true whenever EITHER side was derived).  */
 	    {
+	      bool has_lo = false;
+	      bool has_hi = false;
 	      widest_int lo;
 	      widest_int hi;
-	      if (have_a && have_b && oa_range_multiply (a, b, &lo, &hi))
+	      if (have_a && have_b
+		  && oa_range_multiply (a, b, &has_lo, &lo, &has_hi, &hi)
+		  && has_lo && has_hi)
 		safe = lo >= type_min && hi <= type_max;
 	    }
 
@@ -18158,6 +18480,25 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		    snap.range_set (result_id, fact);
 		  else
 		    snap.range_invalidate (result_id);
+		  /* D4324: the float counterpart of the integer range_set
+		     just above was missing entirely -- a postcondition
+		     naming a floating-point result (e.g. 'post(r: r >=
+		     0.0)') never got r's own float range fact established
+		     at all, so any composed range fact for it (including one
+		     newly reachable via the interval-multiplication/division
+		     partial-bound fix above) could never actually reach the
+		     postcondition's own result-range check.  Found via the
+		     Number-demo shape once the multiplication/division fix
+		     itself was already confirmed correct against a local
+		     variable.  */
+		  if (SCALAR_FLOAT_TYPE_P (TREE_TYPE (result_id)))
+		    {
+		      oa_float_range_fact ffact;
+		      if (oa_get_float_range (val, env, &ffact))
+			snap.float_range_set (result_id, ffact);
+		      else
+			snap.float_range_invalidate (result_id);
+		    }
 		  if (INTEGRAL_TYPE_P (TREE_TYPE (result_id)))
 		    snap.nz_set (result_id, oa_provably_nonzero_p (val, env));
 		  oa_relational_fact rel_fact;
