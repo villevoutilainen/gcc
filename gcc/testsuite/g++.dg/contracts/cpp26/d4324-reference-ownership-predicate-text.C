@@ -11,6 +11,18 @@
 // function's own 'pre<ctrl>(use_val_mut (y))', y a borrowed reference
 // parameter, compiled clean with no ownership error at all before this
 // fix, found by direct testing.
+//
+// RECONSIDERED after discussion with the P2680 paper's author (see
+// d4324-reference-ownership-basic.C): a RECEIVED reference parameter is
+// now owned from the enclosing FUNCTION's own perspective, so Y below
+// is no longer borrowed "everywhere" the way it used to be -- but it is
+// still not owned specifically from a PREDICATE's/assert's perspective,
+// which never received Y as its own, only has visibility into the
+// enclosing function's. So these three rejections below still hold, now
+// for that more specific reason. See the asymmetry-demonstrating
+// functions further down for the explicit contrast against the same
+// parameter's own function body -- and, separately, for why POINTERS
+// have no such asymmetry at all (they're exempt from Q2 everywhere).
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
 
@@ -74,10 +86,41 @@ accept_const_in_precondition (const T& y)
   return 0;
 }
 
+int use_ptr_mut (T* q) conveyor
+  pre<conveyor_ctrl_v>(std::is_object_address (q))
+{ return q->v > 0; }
+
+// The ASYMMETRY, explicit: the same REFERENCE parameter Y is owned
+// (forwardable) from the function's own BODY, but NOT owned from its
+// PRECONDITION's condition text -- a predicate never received Y as its
+// own, it only has visibility into the enclosing function's.
+int
+accept_in_body_reject_in_precondition (T& y)
+  pre<conveyor_ctrl_v>(std::is_object_address (&y))
+  pre<conveyor_ctrl_v>(use_val_mut (y)) // { dg-error "is not owned by the calling function" }
+{
+  return use_val_mut (y); // accepted: the function's own body may forward its own received parameter
+}
+
+// POINTERS have NO such asymmetry: pointer aliasing is categorically
+// the calling function's own concern, never the callee's, in EITHER
+// context -- accepted both in the function's own body and in its
+// precondition's condition text (unlike the reference case just above).
+// A widened Q2 that also restricted pointers here was tried and
+// reverted -- see d4324-reference-ownership-member-receiver.C for why.
+int
+accept_ptr_in_body_and_in_precondition (T* p)
+  pre<conveyor_ctrl_v>(std::is_object_address (p))
+  pre<conveyor_ctrl_v>(use_ptr_mut (p))
+{
+  return use_ptr_mut (p);
+}
+
 int
 main ()
 {
   T t{1};
   accept_const_in_precondition (t); // { dg-warning "cannot verify that" }
+  accept_ptr_in_body_and_in_precondition (&t);
   return 0;
 }
