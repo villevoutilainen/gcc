@@ -900,6 +900,33 @@ namespace std
 # endif
 #endif
 
+// D4324/P2680: obtain a pointer to X for passing to a conveyor call that
+// takes a pointer rather than a reference (see bits/ranges_base.h's own
+// __possibly_const_range for the motivating case). Under conveyor
+// assertions, expands to __builtin_addressof(X) -- an ADDR_EXPR-shaped
+// compiler intrinsic, never a CALL_EXPR, so Q2's non-const-reference-
+// parameter ownership rule never sees a call to apply to at all (unlike
+// calling std::__addressof itself, which takes X by non-const reference
+// and so is itself subject to Q2 when X is borrowed). Degrades to plain
+// std::__addressof(X) otherwise, matching this call's behavior before
+// D4324 exactly.
+//
+// MUST NOT be used inside a template's own noexcept-specification or
+// trailing requires-clause: those need to be mangled for constraint/
+// exception-specification matching across a template's instantiations,
+// and ADDRESSOF_EXPR (__builtin_addressof's own dependent-context tree
+// shape) has no mangling support implemented -- "sorry, unimplemented:
+// mangling addressof_expr", found by direct testing. Only ever safe in
+// an ordinary, unmangled function body statement; use std::__addressof
+// directly in the two constraint positions instead (those are
+// unevaluated operands, so Q2 -- keyed on the call actually running --
+// doesn't apply to them regardless).
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+# define _GLIBCXX_CONVEYOR_ADDRESSOF(x) __builtin_addressof (x)
+#else
+# define _GLIBCXX_CONVEYOR_ADDRESSOF(x) std::__addressof (x)
+#endif
+
 // Macro indicating that TSAN is in use.
 #if __SANITIZE_THREAD__
 #  define _GLIBCXX_TSAN 1

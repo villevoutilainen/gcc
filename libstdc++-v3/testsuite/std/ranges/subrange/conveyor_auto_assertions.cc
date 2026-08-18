@@ -58,14 +58,24 @@ template std::basic_const_iterator<int*>::basic_const_iterator(int*) conveyor;
 template const int&
   std::basic_const_iterator<int*>::operator*() const conveyor;
 
-int front (SR& sr) conveyor { return sr.front (); }
-int back (SR& sr) conveyor { return sr.back (); }
-int subscript (SR& sr) conveyor { return sr[2]; }
-bool is_empty (SR& sr) conveyor { return sr.empty (); }
-std::size_t size (SR& sr) conveyor { return sr.size (); }
-bool as_bool (SR& sr) conveyor { return bool (sr); }
-bool data_nonnull (SR& sr) conveyor { return sr.data () != nullptr; }
-int cbegin_deref (SR& sr) conveyor { return *sr.cbegin (); }
+// D4324/P2680: each 'sr' here is a CONST reference, deliberately -- none
+// of these ever write through it, and view_interface's own explicit-
+// object-parameter ('this _Self&&') methods deduce _Self from the
+// argument's own value category, so calling front()/back()/etc. on a
+// mutable 'SR&' deduces a NON-const '_Self', which then needs 'sr' to
+// be OWNED by whichever of these wrapper functions calls it (P2680
+// 9.1's cone-of-evaluation rule, Q2) -- a borrowed parameter, however
+// validly proven, never satisfies that. A const reference sidesteps
+// the question entirely: _Self deduces const, and Q2 only ever applies
+// to non-const references in the first place.
+int front (const SR& sr) conveyor { return sr.front (); }
+int back (const SR& sr) conveyor { return sr.back (); }
+int subscript (const SR& sr) conveyor { return sr[2]; }
+bool is_empty (const SR& sr) conveyor { return sr.empty (); }
+std::size_t size (const SR& sr) conveyor { return sr.size (); }
+bool as_bool (const SR& sr) conveyor { return bool (sr); }
+bool data_nonnull (const SR& sr) conveyor { return sr.data () != nullptr; }
+int cbegin_deref (const SR& sr) conveyor { return *sr.cbegin (); }
 
 int main ()
 {

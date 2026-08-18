@@ -6,6 +6,10 @@
 // cg_predicate_facts_walk's own comment on why). Deliberately no
 // call-vs-call case here: see cg_dom_fact_state's own comment on why
 // that shape has no dominator-tracked counterpart on the GIMPLE side.
+//
+// GET_CHECKED's 'S' parameter is a CONST reference -- see d4324-
+// conveyor-relational-ifcond.C's own identical comment for why (P2680
+// 9.1's ownership rule, unrelated to what this test is about).
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs-gimple" }
 
@@ -42,19 +46,19 @@ struct S {
 };
 
 // param-vs-call.
-int get_checked (S& v, int i) conveyor pre<conveyor_ctrl_v>(i < v.size ())
+int get_checked (const S& v, int i) conveyor pre<conveyor_ctrl_v>(i < v.size ())
 {
   return i;
 }
 
-int use_checked_call (S& v, int i) conveyor
+int use_checked_call (const S& v, int i) conveyor
 {
   if (i < v.size ())
     return get_checked (v, i);
   return -1;
 }
 
-int use_unchecked_call (S& v, int i) conveyor
+int use_unchecked_call (const S& v, int i) conveyor
 {
   return get_checked (v, i); // { dg-warning "cannot verify that .i. satisfies" }
 }

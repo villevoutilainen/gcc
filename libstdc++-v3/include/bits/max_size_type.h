@@ -86,11 +86,11 @@ namespace ranges
       { return *this; }
 
       constexpr __max_size_type
-      operator~() const noexcept
+      operator~() const noexcept _GLIBCXX_CONVEYOR
       { return __max_size_type{~_M_val, !_M_msb}; }
 
       constexpr __max_size_type
-      operator-() const noexcept
+      operator-() const noexcept _GLIBCXX_CONVEYOR
       { return operator~() + 1; }
 
       constexpr __max_size_type&
@@ -118,7 +118,7 @@ namespace ranges
       }
 
       constexpr __max_size_type&
-      operator+=(const __max_size_type& __r) noexcept
+      operator+=(const __max_size_type& __r) noexcept _GLIBCXX_CONVEYOR
       {
 	const auto __sum = _M_val + __r._M_val;
 	const bool __overflow = (__sum < _M_val);
@@ -128,11 +128,11 @@ namespace ranges
       }
 
       constexpr __max_size_type&
-      operator-=(const __max_size_type& __r) noexcept
+      operator-=(const __max_size_type& __r) noexcept _GLIBCXX_CONVEYOR
       { return *this += -__r; }
 
       constexpr __max_size_type&
-      operator*=(__max_size_type __r) noexcept
+      operator*=(__max_size_type __r) noexcept _GLIBCXX_CONVEYOR
       {
 	constexpr __max_size_type __threshold
 	  = __rep(1) << (_S_rep_bits / 2 - 1);
@@ -152,16 +152,29 @@ namespace ranges
 	    _M_val = (2 * _M_val * __r._M_val
 		      + _M_val * __rlsb + __r._M_val * __lsb);
 	    *this <<= 1;
-	    *this += __rlsb * __lsb;
+	    // '__rlsb'/'__lsb' are bool, so their product is exactly their
+	    // bitwise AND -- spelled that way (rather than '__rlsb * __lsb')
+	    // because the mandatory conveyor overflow check only scans
+	    // +/-/* and has no notion of a bool-typed operand's inherent
+	    // [0,1] range, so it can't rule out overflow for the
+	    // multiplication even though it plainly can't happen; '&' sides
+	    // steps the check instead of needing that range fact.
+	    *this += __rlsb & __lsb;
 	  }
 
 	return *this;
       }
 
       constexpr __max_size_type&
-      operator/=(const __max_size_type& __r) noexcept
+      operator/=(const __max_size_type& __r) noexcept _GLIBCXX_CONVEYOR
       {
 	__glibcxx_assert(__r != 0);
+	// The whole-object '__r != 0' assert above doesn't (yet) establish
+	// the field-level '__r._M_val != 0' fact the divisor-nonzero check
+	// below needs -- tracing a whole-object fact to its constituent
+	// field facts (or vice versa) is a separate piece of future work.
+	// Assert the field directly for now.
+	__glibcxx_assert(__r._M_val != 0);
 
 	if (!_M_msb && !__r._M_msb) [[likely]]
 	  _M_val /= __r._M_val;
@@ -180,6 +193,15 @@ namespace ranges
 	    // quotient or one less than the true quotient.
 	    const auto __orig = *this;
 	    *this >>= 1;
+	    // 'this' and '&__r' are both '__max_size_type', so the compiler
+	    // conservatively treats them as potentially the same object
+	    // (legal: 'x /= x' aliases 'this'/'&__r') -- the call above
+	    // mutates 'this', so it also drops whatever was established
+	    // about '__r' in case they really do alias. They provably don't
+	    // here ('_M_msb && !__r._M_msb' can't hold under aliasing, which
+	    // would force the two to be equal), but the analysis can't see
+	    // that, so re-assert the fact the check just below needs.
+	    __glibcxx_assert(__r._M_val != 0);
 	    _M_val /= __r._M_val;
 	    *this <<= 1;
 	    if (__orig - *this * __r >= __r)
@@ -199,7 +221,7 @@ namespace ranges
       }
 
       constexpr __max_size_type&
-      operator<<=(const __max_size_type& __r) noexcept
+      operator<<=(const __max_size_type& __r) noexcept _GLIBCXX_CONVEYOR
       {
 	__glibcxx_assert(__r <= _S_rep_bits);
 	if (__r != 0)
@@ -215,7 +237,7 @@ namespace ranges
       }
 
       constexpr __max_size_type&
-      operator>>=(const __max_size_type& __r) noexcept
+      operator>>=(const __max_size_type& __r) noexcept _GLIBCXX_CONVEYOR
       {
 	__glibcxx_assert(__r <= _S_rep_bits);
 	if (__r != 0)
@@ -310,6 +332,7 @@ namespace ranges
 
       friend constexpr __max_size_type
       operator+(__max_size_type __l, const __max_size_type& __r) noexcept
+	_GLIBCXX_CONVEYOR
       {
 	__l += __r;
 	return __l;
@@ -317,6 +340,7 @@ namespace ranges
 
       friend constexpr __max_size_type
       operator-(__max_size_type __l, const __max_size_type& __r) noexcept
+	_GLIBCXX_CONVEYOR
       {
 	__l -= __r;
 	return __l;
@@ -324,6 +348,7 @@ namespace ranges
 
       friend constexpr __max_size_type
       operator*(__max_size_type __l, const __max_size_type& __r) noexcept
+	_GLIBCXX_CONVEYOR
       {
 	__l *= __r;
 	return __l;
@@ -431,7 +456,7 @@ namespace ranges
 
     private:
       constexpr explicit
-      __max_size_type(__rep __val, int __msb) noexcept
+      __max_size_type(__rep __val, int __msb) noexcept _GLIBCXX_CONVEYOR
 	: _M_val(__val), _M_msb(__msb)
       { }
 
@@ -524,6 +549,33 @@ namespace ranges
 
       constexpr __max_diff_type&
       operator/=(const __max_diff_type& __r) noexcept
+      // D4324/P2680: __r != 0 below calls operator!=/operator==, both
+      // conveyor-declared (see their own definitions further down), whose
+      // reference parameters need is_object_address proven at every call
+      // site (item 7) -- an ordinary, unconditional guarantee for any
+      // reference parameter, but only established *implicitly* for a
+      // function itself declared conveyor (this one isn't). A PRECONDITION,
+      // not a body assert: only a precondition's own is_object_address
+      // conjunct is trusted unconditionally (oa_resolve_condition's TRUST
+      // mode) -- a contract_assert's is independently re-proven even under
+      // never_proven (that trait only exempts the assert's own overall
+      // boolean truth, not this), so it can never establish a fact that
+      // wasn't already provable, confirmed by direct testing (an earlier
+      // revision of this fix, using __glibcxx_assert in the body instead,
+      // failed with "cannot prove is_object_address for '&__r'" -- the
+      // establishing statement failing to prove itself). This is the
+      // documented way a non-conveyor function hands that proof to a
+      // conveyor callee for its own reference parameter (see
+      // d4324-call-range-cross-provenance.C's own use_it/consume_conveyor
+      // pair for the same pattern). Gated exactly like every other
+      // is_object_address use in this codebase: is_object_address is
+      // illegal (a "stray" use) outside a conveyor- or symbolic-flavored
+      // condition, which this isn't without _GLIBCXX_CONVEYOR_ASSERTIONS --
+      // confirmed by direct testing (a yet-earlier, ungated revision broke
+      // ordinary non-conveyor -fcontracts builds).
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__r))
+#endif
       {
 	__glibcxx_assert (__r != 0);
 	const bool __neg = *this < 0;
@@ -541,6 +593,10 @@ namespace ranges
 
       constexpr __max_diff_type&
       operator%=(const __max_diff_type& __r) noexcept
+      // D4324/P2680: see operator/= just above's identical comment.
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__r))
+#endif
       {
 	__glibcxx_assert (__r != 0);
 	if (*this >= 0 && __r > 0)
