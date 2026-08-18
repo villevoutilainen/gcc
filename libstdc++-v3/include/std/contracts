@@ -1710,10 +1710,24 @@ namespace contracts
       static constexpr group_name_view group_names{ _S_names, 1 };
     };
 
+    // operator""group's own suffix ("group") isn't underscore-prefixed
+    // -- like every other genuinely-reserved literal-operator suffix
+    // this library defines (see basic_string's own operator""s in
+    // bits/basic_string.h for the identical push/ignored/pop pattern),
+    // this needs an explicit -Wliteral-suffix suppression: the warning
+    // is a blanket "no non-underscore suffix" check with no built-in
+    // notion of which suffixes are actually standard-reserved -- that
+    // distinction only exists by convention, enforced here by hand.
+    // Without this, a -pedantic-errors build fails to compile any
+    // translation unit that transitively includes <contracts> at all,
+    // found via a full, unfiltered testsuite sweep.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wliteral-suffix"
     template <assertion_group_label_t _Label>
     constexpr auto
     operator""group () noexcept
     { return __group_result_t<_Label>{}; }
+#pragma GCC diagnostic pop
 
     // ---- dimension_list<...> combination utilities (Section 3.3.3) ----
 
