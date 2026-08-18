@@ -11977,25 +11977,51 @@ oa_call_symbolic_obligation_status (tree call, bool *forced_out, bool *strict_ou
     }
 }
 
-/* D4324: reference-safety Q2 (P2680 9.1's cone-of-evaluation
-   restriction) -- true if EXPR, evaluated in the *caller's* own ENV, is
-   OWNED by the currently-analyzed function rather than merely borrowed
-   from it. Owned means EXPR's own canonical identity resolves to a
-   VAR_DECL declared within current_function_decl's own body (a local
-   the current function created itself, and so may freely lend a
-   non-const reference to) OR a BY-VALUE (non-REFERENCE_TYPE) PARM_DECL
-   of this same function (its own independent copy, exactly as owned as
-   a VAR_DECL it declared itself -- see the by-value/owned_by_value_parm
-   check below) OR 'this' (owned, not borrowed -- see the is_this_
-   parameter check below for why re-lending it further is always safe);
-   anything else -- a REFERENCE_TYPE PARM_DECL (aliasing THIS function's
-   own caller's object, however validly proven, per Q1 above), or an
-   unresolvable identity -- is conservatively borrowed.
+/* D4324/P2680: reference-safety Q2 (cone-of-evaluation restriction),
+   RECONSIDERED after discussion with the P2680 paper's author -- see
+   .claude/plans/lazy-stirring-pearl.md for the full reasoning. Ownership
+   is keyed on RECEIVEDNESS, not on static type (reference vs. pointer):
+   a caller handing a reference or pointer into a conveyor call is the
+   one responsible for not letting it alias something outside that
+   call's legitimate cone; once received, re-lending it further doesn't
+   extend the cone, so it stays safe regardless of whether its static
+   type is 'T&' or 'T*'.
+
+   Two different rulesets, selected by IN_PREDICATE_CONTEXT:
+
+   - Function-body context (the default, IN_PREDICATE_CONTEXT false):
+     EXPR is owned if its own canonical identity resolves to a VAR_DECL
+     declared within current_function_decl's own body (a local the
+     function created itself), OR any PARM_DECL of this same function --
+     by-value, pointer, or REFERENCE_TYPE alike, all equally "received
+     as my own parameter" -- OR 'this' (re-lending it further never
+     extends the cone: no new party gains access, it's still the exact
+     object this function was already given). Anything else -- a
+     directly-named global/'static'/'thread_local', or an unresolvable
+     identity -- is conservatively borrowed.
+
+   - Predicate/assert condition text (IN_PREDICATE_CONTEXT true, see
+     oa_scan_item7_in_expr): none of the above activation-level grants
+     apply. A predicate/assert didn't RECEIVE any parameter or 'this' of
+     its own -- it merely has VISIBILITY into the enclosing function's,
+     which is not the same thing. Only what the predicate/assert's own
+     expression evaluation materializes (a temporary -- see the TARGET_
+     EXPR case below, and the recursive COMPONENT_REF/INDIRECT_REF cases
+     that inherit this same context) can be owned. This closes a real
+     hazard a plain function-body rule doesn't have: a check whose own
+     evaluation can mutate something that outlives the check (the
+     enclosing function's own parameter, 'this', or a local) makes
+     "checking whether it's safe to call f" itself capable of changing
+     what f sees, or makes postcondition-conjunct evaluation order
+     semantically load-bearing.
+
    Deliberately single-level: never asks whether some caller further up
    the chain owns it, since that would require reaching into a caller's
    own body, breaking this pass's modular, per-function analysis (see
    the plan's own worked example: 'middle (T& y)' must treat Y as
-   borrowed even when the actual caller passed a local IT owns).
+   borrowed even when the actual caller passed a local IT owns) --
+   'middle' itself, however, may now freely re-lend Y further, since Y
+   is one of middle's own received parameters.
 
    Ownership-laundering fix: a local reference/pointer whose own binding
    traces back to a conveyor call's return value (e.g. 'T& view =
@@ -12005,7 +12031,13 @@ oa_call_symbolic_obligation_status (tree call, bool *forced_out, bool *strict_ou
    the rule; env.borrowed_p (identity) is where that rule's answer is
    recorded, established at every DECL_EXPR/reassignment site that binds
    a pointer or reference identity (see oa_call_result_owned_p's callers
-   for the exact sites).  */
+   for the exact sites). This also correctly catches a pointer/reference
+   FRESHLY bound from a directly-named global ('T* p = &global_var;'):
+   env.alias_set/alias_find already track pointer identity exactly like
+   reference identity (see the DECL_EXPR/reassignment establishment
+   sites), so P's identity resolves straight through to GLOBAL_VAR,
+   whose DECL_CONTEXT is never current_function_decl -- not owned,
+   exactly as if P had been a reference instead.  */
 
 static bool oa_call_result_owned_p (tree call, oa_env &env);
 
@@ -12031,7 +12063,8 @@ static bool oa_call_result_owned_p (tree call, oa_env &env);
 
 static bool
 oa_reference_owned_p (tree expr, oa_env &env,
-		       bool asking_about_pointer_value = false)
+		       bool asking_about_pointer_value = false,
+		       bool in_predicate_context = false)
 {
   expr = STRIP_ANY_LOCATION_WRAPPER (expr);
   while (TREE_CODE (expr) == NON_LVALUE_EXPR || TREE_CODE (expr) == NOP_EXPR
@@ -12072,10 +12105,12 @@ oa_reference_owned_p (tree expr, oa_env &env,
 	  tree base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
 	  if (TREE_CODE (base) == INDIRECT_REF)
 	    return oa_reference_owned_p (TREE_OPERAND (base, 0), env,
-					  /*asking_about_pointer_value=*/true);
+					  /*asking_about_pointer_value=*/true,
+					  in_predicate_context);
 	  if (DECL_P (base))
 	    return oa_reference_owned_p (base, env,
-					  /*asking_about_pointer_value=*/true);
+					  /*asking_about_pointer_value=*/true,
+					  in_predicate_context);
 	}
     }
   /* Ownership-laundering fix: '*p''s own ownership is exactly P's own
@@ -12094,7 +12129,9 @@ oa_reference_owned_p (tree expr, oa_env &env,
      whatever other, non-substitution context might still reach here
      with a genuine INDIRECT_REF.  */
   if (TREE_CODE (expr) == INDIRECT_REF)
-    return oa_reference_owned_p (TREE_OPERAND (expr, 0), env);
+    return oa_reference_owned_p (TREE_OPERAND (expr, 0), env,
+				  /*asking_about_pointer_value=*/false,
+				  in_predicate_context);
   /* Whether EXPR, after the generic-conversion strip above, is exactly
      'ADDR_EXPR (decl)' -- i.e. whether the question being asked is
      "is DECL's own storage/address owned" (true here) as opposed to
@@ -12133,41 +12170,58 @@ oa_reference_owned_p (tree expr, oa_env &env,
   if (!oa_object_identity_decl (expr, &identity))
     return false;
   identity = env.alias_find (identity);
-  /* D4324/P2680: 'this' is owned, not borrowed -- re-lending it further,
-     whether as the receiver of another non-const member conveyor call
-     ('this->mutate()') or as an ordinary non-const reference argument
-     derived from '*this' ('foo (*this)'), never extends the cone of
-     evaluation the way handing off a genuinely borrowed reference
-     parameter does: there's no chance 'this' was invalidated by
-     anything reachable from here (the invalidation cascade already
+  /* D4324/P2680: 'this' is owned, not borrowed, in FUNCTION-BODY context
+     -- re-lending it further, whether as the receiver of another
+     non-const member conveyor call ('this->mutate()') or as an ordinary
+     non-const reference argument derived from '*this' ('foo (*this)'),
+     never extends the cone of evaluation the way handing off something
+     genuinely external would: there's no chance 'this' was invalidated
+     by anything reachable from here (the invalidation cascade already
      exempts it, see oa_invalidate_parameter_alias_group's own comment),
      and no new party gains access -- it's still the exact same object
-     this function itself was already given. Previously returned false
-     (borrowed) unconditionally here, which made a member function
-     calling another non-const method on its own 'this' -- an entirely
-     ordinary, safe pattern -- wrongly rejected once the receiver's own
-     ownership got checked at all (see oa_handle_call_precondition_
-     obligation's own THIS-receiver block).  */
+     this function itself was already given. In PREDICATE/ASSERT context,
+     by contrast, 'this' is NOT owned: a predicate never received 'this'
+     as its own -- it merely has visibility into the enclosing function's,
+     same as any other parameter it didn't create (see this function's
+     own leading comment).  */
   if (is_this_parameter (identity))
-    return true;
+    return !in_predicate_context;
+  /* PREDICATE/ASSERT context: none of the function-activation grants
+     below apply -- a predicate/assert didn't receive any parameter or
+     local of its own, it only has visibility into the enclosing
+     function's. Only the earlier TARGET_EXPR-temporary and recursive
+     COMPONENT_REF/INDIRECT_REF cases (which propagate this same
+     IN_PREDICATE_CONTEXT) can resolve to owned from here on.  */
+  if (in_predicate_context)
+    return false;
   bool owned_var = VAR_P (identity)
     && DECL_CONTEXT (identity) == current_function_decl;
-  /* A BY-VALUE parameter (any type, not REFERENCE_TYPE) is this
-     function's own independent copy, exactly as owned as a local
-     VAR_DECL it declared itself -- distinct from a REFERENCE_TYPE
-     parameter, which aliases the caller's own object and stays
-     genuinely borrowed. Gated on ADDR_OF_DECL (see above): only when
-     the parameter's own storage/address is what's actually being asked
-     about. Still consulted through env.borrowed_p below like every
-     other identity, since a by-value parameter can itself be reassigned
-     from a conveyor call's return value later in the body (the
-     INIT_EXPR/MODIFY_EXPR reassignment site already tracks PARM_DECL
-     and VAR_DECL lhs identically for exactly this reason).  */
+  /* A REFERENCE_TYPE parameter is exactly as owned as a by-value one --
+     both are "received as my own parameter," and forwarding either
+     doesn't extend the cone (see this function's own leading comment).
+     No ADDR_OF_DECL gating needed here, unlike the by-value/pointer case
+     below: for a reference identity, "its own value" and "what it
+     designates" are the same tracked identity via env.borrowed_p, same
+     as for a reference VAR_DECL local.  */
+  bool owned_reference_parm = TREE_CODE (identity) == PARM_DECL
+    && DECL_CONTEXT (identity) == current_function_decl
+    && TREE_CODE (TREE_TYPE (identity)) == REFERENCE_TYPE;
+  /* A BY-VALUE or POINTER parameter is this function's own independent
+     copy (of the value itself, for a pointer -- not necessarily of its
+     pointee), exactly as owned as a local VAR_DECL it declared itself.
+     Gated on ADDR_OF_DECL (see above): only when the parameter's own
+     storage/address is what's actually being asked about. Still
+     consulted through env.borrowed_p below like every other identity,
+     since a by-value/pointer parameter can itself be reassigned from a
+     conveyor call's return value, or from a directly-named global's
+     address, later in the body (the INIT_EXPR/MODIFY_EXPR reassignment
+     site already tracks PARM_DECL and VAR_DECL lhs identically for
+     exactly this reason).  */
   bool owned_by_value_parm = addr_of_decl
     && TREE_CODE (identity) == PARM_DECL
     && DECL_CONTEXT (identity) == current_function_decl
     && TREE_CODE (TREE_TYPE (identity)) != REFERENCE_TYPE;
-  if (!owned_var && !owned_by_value_parm)
+  if (!owned_var && !owned_reference_parm && !owned_by_value_parm)
     return false;
   return !env.borrowed_p (identity);
 }
@@ -12230,7 +12284,8 @@ oa_strip_to_call (tree init)
 }
 
 static void
-oa_handle_call_precondition_obligation (tree call, oa_env &env)
+oa_handle_call_precondition_obligation (tree call, oa_env &env,
+					 bool in_predicate_context = false)
 {
   tree callee = cp_get_callee_fndecl_nofold (call);
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
@@ -12294,20 +12349,49 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env)
 	}
     }
 
-  /* D4324: reference-safety Q1+Q2 -- every reference-typed parameter of
-     a conveyor callee implicitly carries the same is_object_address
-     obligation an explicit precondition conjunct already gets above,
-     triggered by parameter TYPE rather than requiring the callee to
-     have written one out (see [[project_conveyor_rules_functions_and_
-     predicates]] and the plan this implements). Runs once per call,
-     independent of the per-precondition-statement loop above, since
-     this obligation comes from the callee's own DECLARATION, not from
-     any particular precondition's text. A non-const reference
-     additionally requires the caller's own argument to be OWNED (a
-     local of the *caller's* own body, oa_reference_owned_p above), not
-     merely proven valid -- P2680 9.1's cone-of-evaluation restriction:
-     a borrowed reference/pointer, however validly proven, may never be
-     re-lent as non-const to a further conveyor call.  */
+  /* D4324/P2680: reference-safety Q1+Q2, RECONSIDERED (see
+     oa_reference_owned_p's own leading comment and .claude/plans/
+     lazy-stirring-pearl.md for the full reasoning). Every
+     reference-typed parameter of a conveyor callee implicitly carries
+     the same is_object_address obligation an explicit precondition
+     conjunct already gets above, triggered by parameter TYPE rather
+     than requiring the callee to have written one out. Runs once per
+     call, independent of the per-precondition-statement loop above,
+     since this obligation comes from the callee's own DECLARATION, not
+     from any particular precondition's text.
+
+     Deliberately REFERENCE-ONLY, both for Q1 and Q2: a pointer --
+     including the implicit 'this' receiver of a member conveyor call --
+     gets NEITHER. Q1 was always opt-in-only for pointers (confirmed by
+     direct testing during the original this-receiver fix: requiring one
+     broke dozens of pre-existing tests calling a method through a
+     plain, never-annotated pointer parameter). Q2 was briefly widened to
+     cover pointers uniformly (including a standalone THIS-receiver
+     block, both since removed), on the theory that closing a
+     fresh-pointer-to-global gap was worth it -- reverted after directly
+     confirmed by testing that (a) the exact same gap is already fully
+     closed by a wholly separate, independent restriction (conveyor code
+     may never odr-use a mutable global at all, in any shape -- pointer,
+     reference, or direct field access, in either a function body or
+     predicate/assert text), making the pointer-Q2 widening redundant for
+     that case, and (b) it broke the widely-used "named predicate" query
+     pattern throughout this whole engine (e.g. 'is_opened (f) conveyor
+     { return f != nullptr; }', f an ordinary non-const pointer parameter
+     used read-only): calling it from predicate/assert text, with the
+     enclosing function's own by-value/pointer parameter as the argument,
+     was wrongly rejected, since a plain pointer parameter is never
+     "received" from a predicate's own perspective. Pointer aliasing is
+     categorically the calling function's own concern, never the
+     callee's -- matching Q1's own pre-existing boundary exactly, not
+     just approximately.
+
+     A non-const REFERENCE target additionally requires the caller's own
+     argument to be OWNED (oa_reference_owned_p above), not merely proven
+     valid -- P2680 9.1's cone-of-evaluation restriction, keyed on
+     receivedness rather than merely "was this a local." IN_PREDICATE_
+     CONTEXT is threaded through so a call reached from predicate/assert
+     condition text (see oa_scan_item7_in_expr) gets the stricter,
+     non-inheriting ruleset.  */
   if (DECL_DECLARED_CONVEYOR_P (callee))
     {
       unsigned argno = 0;
@@ -12339,73 +12423,16 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env)
 	    }
 
 	  bool is_const_ref = TYPE_READONLY (TREE_TYPE (TREE_TYPE (parm)));
-	  if (!is_const_ref && !oa_reference_owned_p (substituted, env))
-	    {
-	      error_at (EXPR_LOCATION (call),
-			"argument %qE is not owned by the calling function, "
-			"so it may not be passed as the non-const reference "
-			"parameter %qD of %qD", substituted, parm, callee);
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
-	    }
-	}
-
-      /* D4324/P2680 Q2 for THIS: the implicit receiver of a traditional
-	 (implicit-object, not explicit-object/"deducing this") member
-	 conveyor call. DECL_ARGUMENTS's own first parm for such a callee
-	 is 'this', always POINTER-typed (never REFERENCE_TYPE) at this
-	 representation, so the loop just above (gated on REFERENCE_TYPE)
-	 never reaches it -- a real, separate gap confirmed by direct
-	 testing: 'obj.mutate ()' (obj a borrowed reference parameter,
-	 mutate a non-const member conveyor function) silently re-lent
-	 'this' non-const with no check at all, exactly the danger Q2
-	 exists to forbid for an ordinary non-const reference argument.
-	 DECL_IOBJ_MEMBER_FUNCTION_P, not DECL_NONSTATIC_MEMBER_FUNCTION_P
-	 (removed; deliberately errors out to name one of DECL_IOBJ_/
-	 DECL_XOBJ_MEMBER_FUNCTION_P instead) -- an explicit-object-
-	 parameter member function's own receiver is already an ordinary
-	 (possibly REFERENCE_TYPE) parameter, already covered by the loop
-	 above; this block is only for the implicit-'this' shape that
-	 loop can never reach. AGGR_INIT_EXPR (a constructor call) is
-	 deliberately excluded here, matching oa_substitute_call_arg's
-	 own established rule: its own argno 0 is a meaningless
-	 placeholder at this stage (the object being constructed, not yet
-	 a stable, resolvable identity), never a real receiver to check
-	 ownership of.
-
-	 Q2 ONLY, deliberately no Q1 (is_object_address) check here --
-	 unlike an ordinary REFERENCE_TYPE parameter (which gets Q1
-	 implicitly via task #140's own per-parameter synthesis), a
-	 POINTER receiver never has -- and never had, before this fix --
-	 any implicit Q1 obligation at all, matching every other raw
-	 pointer in this framework (Q1 for a pointer is always opt-in,
-	 via an explicit declared precondition, never automatic). Adding
-	 one here would be a real scope expansion, not just closing the
-	 Q2 gap: confirmed by direct testing, an earlier revision of this
-	 fix that also required proving is_object_address for the
-	 receiver broke dozens of pre-existing, legitimate tests calling
-	 a method through a plain pointer parameter with no such
-	 precondition (e.g. 'int g (Derived* d) conveyor { return d->f
-	 (1); }', d never proven and never meant to be).  */
-      if (DECL_IOBJ_MEMBER_FUNCTION_P (callee)
-	  && TREE_CODE (call) == CALL_EXPR
-	  && call_expr_nargs (call) >= 1)
-	{
-	  tree this_parm = DECL_ARGUMENTS (callee);
-	  tree substituted = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (call, 0));
-	  bool is_const_this = TYPE_READONLY (TREE_TYPE (TREE_TYPE (this_parm)));
-	  /* THIS's own type is always a pointer, so a bare pointer decl
-	     substituted here (the common case, no ADDR_EXPR) is asking
-	     "is this pointer's own value owned", not "is its pointee
-	     owned" -- see oa_reference_owned_p's own leading comment.  */
-	  if (!is_const_this
+	  if (!is_const_ref
 	      && !oa_reference_owned_p (substituted, env,
-					/*asking_about_pointer_value=*/true))
+					/*asking_about_pointer_value=*/false,
+					in_predicate_context))
 	    {
 	      error_at (EXPR_LOCATION (call),
-			"receiver %qE is not owned by the calling "
+			"argument %qE is not owned by the calling "
 			"function, so it may not be passed as the "
-			"non-const receiver of %qD",
-			substituted, callee);
+			"non-const reference parameter %qD of %qD",
+			substituted, parm, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	}
@@ -12456,7 +12483,8 @@ oa_scan_item7_in_expr (tree *expr, oa_env &env)
       if (is_object_address_call_p (t, &arg))
 	return NULL_TREE;
       oa_maybe_instantiate_contracts (cp_get_callee_fndecl_nofold (t));
-      oa_handle_call_precondition_obligation (t, *e);
+      oa_handle_call_precondition_obligation (t, *e,
+					       /*in_predicate_context=*/true);
       return NULL_TREE;
     }, &env, NULL);
 }

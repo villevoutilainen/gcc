@@ -1,9 +1,25 @@
-// D4324/P2680 Q2 (the cone-of-evaluation ownership rule): a reference or
-// pointer parameter, however validly proven (Q1), is BORROWED from this
-// function's own caller and may never be re-lent as a NON-CONST
-// reference to a further conveyor call -- only a local this function
-// itself created may be. A CONST reference sidesteps the question
-// entirely: Q2 only ever restricts non-const re-lending.
+// D4324/P2680 Q2 (the cone-of-evaluation ownership rule), RECONSIDERED
+// after discussion with the P2680 paper's author: ownership is keyed on
+// RECEIVEDNESS, not on static type, but only ever applies to
+// REFERENCES. A reference parameter RECEIVED by this function is OWNED
+// -- forwarding it non-const to a further conveyor call doesn't extend
+// the cone, since the caller already handed it over legitimately; the
+// caller (all the way up the chain) is the one responsible for not
+// letting it alias something outside the cone in the first place.
+//
+// POINTERS -- including the implicit 'this' receiver of a member
+// conveyor call -- are entirely EXEMPT from this whole analysis, in any
+// context: pointer aliasing is categorically the calling function's own
+// concern, never the callee's, matching Q1's own pre-existing boundary
+// (a pointer never gets an implicit is_object_address obligation
+// either). Widening Q2 to cover pointers was tried and reverted: the
+// exact gap it aimed to close (a fresh pointer bound to a directly-
+// named global) is already fully closed by a wholly separate,
+// independent restriction (conveyor code may never odr-use a mutable
+// global at all, in any shape), and the widening broke the widely-used
+// "named predicate" query pattern throughout this engine (an ordinary,
+// read-only, non-const pointer parameter used for querying, not
+// mutation) -- see d4324-reference-ownership-member-receiver.C.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
 
@@ -25,18 +41,23 @@ struct T { int v; };
 int use_val_mut (T& x) conveyor { return x.v; }
 int use_val_const (const T& x) conveyor { return x.v; }
 
-// A REFERENCE parameter, dereferenced back out to another conveyor
-// call's non-const reference parameter: rejected, no intermediate call
-// or local at all -- the most direct shape Q2 restricts.
+// A REFERENCE parameter, forwarded directly to another conveyor call's
+// non-const reference parameter: accepted -- Y was received as this
+// function's own parameter, so re-lending it doesn't extend the cone.
 int
-reject_ref_param (T& y) conveyor
+accept_ref_param (T& y) conveyor
 {
-  return use_val_mut (y); // { dg-error "is not owned by the calling function" }
+  return use_val_mut (y);
 }
 
-// Same, but through a POINTER parameter and an explicit dereference.
+// A POINTER parameter's own POINTEE, dereferenced back out to another
+// conveyor call's non-const REFERENCE parameter: still rejected -- P's
+// own storage is this function's private copy, but *P is still the
+// caller's own, unrelated object. (This is Q2 restricting the
+// REFERENCE-typed target of use_val_mut, not anything about P itself --
+// P's own value, used directly, would be entirely unchecked.)
 int
-reject_ptr_param (T* p) conveyor
+reject_ptr_param_dereference (T* p) conveyor
   pre<conveyor_ctrl_v>(std::is_object_address (p))
 {
   return use_val_mut (*p); // { dg-error "is not owned by the calling function" }
@@ -56,5 +77,6 @@ main ()
 {
   T t{1};
   accept_const_ref_param (t);
+  accept_ref_param (t);
   return 0;
 }
