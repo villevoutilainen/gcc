@@ -3263,7 +3263,19 @@ enum lang_contract_helper
 {
   ldf_contract_none = 0,
   ldf_contract_pre,
-  ldf_contract_post
+  ldf_contract_post,
+  /* D4324/P2680: a generated "pred"/"thunk"/consteval-thunk helper
+     function (build_predicate_core_function_1, build_predicate_thunk_
+     function, build_predicate_constexpr_thunk, contracts.cc) that
+     mechanically re-embeds an already-guarded function's own contract
+     condition -- verbatim, with no PRECONDITION_STMT/POSTCONDITION_
+     STMT/ASSERTION_STMT wrapper of its own -- purely to let that same
+     condition be re-evaluated (at runtime, or during constant
+     evaluation for a dependent noexcept-specifier/requires-clause).
+     Distinct from ldf_contract_pre/_post, which mark a *guarded
+     function's own* precondition/postcondition-checking wrapper, not
+     one of these condition-re-embedding helpers.  */
+  ldf_contract_predicate_helper
 };
 
 /* Additional DECL_LANG_SPECIFIC information for functions.  */

@@ -21092,24 +21092,43 @@ finish_function (bool inline_p)
   if (!processing_template_decl)
     cp_fold_function_non_odr_use (fndecl);
 
-  /* Save constexpr function body before it gets munged by
-     the NRV transformation.   */
-  maybe_save_constexpr_fundef (fndecl);
-
   /* D4324: check the syntactic conveyor-function restrictions, if this
      function was declared 'conveyor'.  Also pre-genericize, like the
-     constexpr check above.  */
-  check_conveyor_function_body (fndecl);
+     constexpr check below.
 
-  /* D4324/P2680: resolve every std::is_object_address(...) call in this
+     D4324/P2680: resolve every std::is_object_address(...) call in this
      function's contracts to a literal 'true' (or diagnose it), before
      any later genericization-time outlining
      (get_or_build_predicate_core_function) can copy referenced locals
      into a separate FUNCTION_DECL and discard the very assignment
      history this needs to see -- see resolve_object_address_in_function's
      own comment in contracts.cc for why this has to happen exactly
-     here, at this same pre-genericize timing.  */
+     here, at this same pre-genericize timing.
+
+     Both of these must run *before* maybe_save_constexpr_fundef, just
+     below -- not after, as they previously did. maybe_save_constexpr_
+     fundef snapshots this function's own body for the constexpr
+     evaluator's own, entirely separate later use (e.g. evaluating a
+     call to this function from within another function's own
+     speculative constant-folding, via build_contract_control_
+     constexpr_check/build_predicate_constexpr_thunk in contracts.cc);
+     that snapshot is a distinct copy from DECL_SAVED_TREE, taken once,
+     and never revisited. Resolving is_object_address *after* the
+     snapshot was already taken (the previous order) left the snapshot
+     permanently holding the unresolved call -- confirmed via real code
+     (libstdc++-v3's own __possibly_const_range, a conveyor, constexpr
+     template function whose postcondition names is_object_address):
+     any later constant evaluation of a call to such a function (e.g.
+     from a dependent noexcept-specifier/requires-clause elsewhere)
+     would still find, and reject, a "stray" is_object_address call in
+     that stale snapshot, even though DECL_SAVED_TREE itself had
+     already been correctly resolved for every other purpose.  */
+  check_conveyor_function_body (fndecl);
   resolve_object_address_in_function (fndecl);
+
+  /* Save constexpr function body before it gets munged by
+     the NRV transformation.   */
+  maybe_save_constexpr_fundef (fndecl);
 
   /* Perform delayed folding before NRV transformation.  */
   if (!processing_template_decl

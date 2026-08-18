@@ -5,6 +5,10 @@
 // RECEIVER_2.CALLEE_2 ()" established via a function's own declared
 // precondition (self-trust only, never from an ordinary branch, on
 // either the AST or the GIMPLE side -- matching scope exactly).
+//
+// Every 'S' parameter below is a CONST reference -- see d4324-conveyor-
+// relational-ifcond.C's own identical comment for why (P2680 9.1's
+// ownership rule, unrelated to what this test is about).
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs-gimple" }
 
@@ -25,17 +29,17 @@ struct S {
   int size () const conveyor { return 5; }
 };
 
-int use_it (S& a, S& b) conveyor pre<conveyor_ctrl_v>(a.size () < b.size ())
+int use_it (const S& a, const S& b) conveyor pre<conveyor_ctrl_v>(a.size () < b.size ())
 {
   return 0;
 }
 
-int get_checked (S& v, S& w) conveyor pre<conveyor_ctrl_v>(v.size () < w.size ())
+int get_checked (const S& v, const S& w) conveyor pre<conveyor_ctrl_v>(v.size () < w.size ())
 {
   return use_it (v, w);
 }
 
-int get_unchecked (S& v, S& w) conveyor
+int get_unchecked (const S& v, const S& w) conveyor
 {
   return use_it (v, w); // { dg-warning "cannot verify that .int S::size\\(\\) const." }
 }

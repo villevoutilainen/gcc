@@ -665,18 +665,42 @@ namespace ranges
   namespace __access
   {
 #if __glibcxx_ranges_as_const // >= C++23
+    // D4324/P2680: takes and returns a pointer, not a reference, so this
+    // call itself never has a non-const-reference argument for Q2's
+    // cone-of-evaluation ownership rule to apply to (that rule is
+    // deliberately scoped to REFERENCE_TYPE parameters only) -- all this
+    // function actually does is a conditional cast, and a caller passing
+    // a genuinely borrowed argument (e.g. a forwarding-reference
+    // parameter's own address, '_CBegin::operator()''s usual case) is
+    // still, correctly, unable to re-lend a genuinely non-const *result*
+    // further to another conveyor call afterward (ownership is inferred
+    // from the call's own arguments, not sidestepped by this rewrite) --
+    // see .claude/plans/lazy-stirring-pearl.md for the full reasoning.
+    // Callers should keep the result in pointer form for as long as
+    // possible and dereference only at the point a reference is actually
+    // required, per the same plan.
     template<input_range _Range>
       [[__gnu__::__always_inline__]]
-      constexpr auto&
-      __possibly_const_range(_Range& __r) noexcept
+      constexpr auto*
+      __possibly_const_range(_Range* __p) noexcept
       _GLIBCXX_CONVEYOR
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address(__p))
+      // The return is always either '__p' itself or a const_cast of it --
+      // never a pointer into anything else -- so it's exactly as valid
+      // an object address as '__p' already is. Trusted (never_proven)
+      // rather than self-checked, same reasoning as the precondition
+      // just above: this body's own trivial-return shape isn't (yet)
+      // one item 6's own postcondition self-check can follow.
+      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address(r))
+#endif
       {
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
 	// 4027. possibly-const-range should prefer returning const R&
 	if constexpr (input_range<const _Range>)
-	  return const_cast<const _Range&>(__r);
+	  return const_cast<const _Range*>(__p);
 	else
-	  return __r;
+	  return __p;
       }
 #else
     // If _To is an lvalue-reference, return const _Tp&, otherwise const _Tp&&.
@@ -702,12 +726,18 @@ namespace ranges
 	constexpr auto
 	operator()(_Tp&& __t) const
 	noexcept(noexcept(std::make_const_iterator
-			  (ranges::begin(__access::__possibly_const_range(__t)))))
+			  (ranges::begin(*__access::__possibly_const_range
+					 (std::__addressof (__t))))))
 	requires requires { std::make_const_iterator
-			    (ranges::begin(__access::__possibly_const_range(__t))); }
+			    (ranges::begin(*__access::__possibly_const_range
+					   (std::__addressof (__t)))); }
 	_GLIBCXX_CONVEYOR_AUTO
 	{
-	  auto& __r = __access::__possibly_const_range(__t);
+	  // D4324/P2680: kept as a pointer for as long as possible --
+	  // see __possibly_const_range's own comment -- and only
+	  // dereferenced here, right at the point a reference is
+	  // actually required.
+	  auto& __r = *__access::__possibly_const_range (_GLIBCXX_CONVEYOR_ADDRESSOF (__t));
 	  return const_iterator<decltype(ranges::begin(__r))>(ranges::begin(__r));
 	}
 #else
@@ -731,11 +761,13 @@ namespace ranges
 	constexpr auto
 	operator()(_Tp&& __t) const
 	noexcept(noexcept(std::make_const_sentinel
-			  (ranges::end(__access::__possibly_const_range(__t)))))
+			  (ranges::end(*__access::__possibly_const_range
+				       (std::__addressof (__t))))))
 	requires requires { std::make_const_sentinel
-			    (ranges::end(__access::__possibly_const_range(__t))); }
+			    (ranges::end(*__access::__possibly_const_range
+					 (std::__addressof (__t)))); }
 	{
-	  auto& __r = __access::__possibly_const_range(__t);
+	  auto& __r = *__access::__possibly_const_range (_GLIBCXX_CONVEYOR_ADDRESSOF (__t));
 	  return const_sentinel<decltype(ranges::end(__r))>(ranges::end(__r));
 	}
 #else
@@ -759,11 +791,13 @@ namespace ranges
 	constexpr auto
 	operator()(_Tp&& __t) const
 	noexcept(noexcept(std::make_const_iterator
-			  (ranges::rbegin(__access::__possibly_const_range(__t)))))
+			  (ranges::rbegin(*__access::__possibly_const_range
+					  (std::__addressof (__t))))))
 	requires requires { std::make_const_iterator
-			    (ranges::rbegin(__access::__possibly_const_range(__t))); }
+			    (ranges::rbegin(*__access::__possibly_const_range
+					    (std::__addressof (__t)))); }
 	{
-	  auto& __r = __access::__possibly_const_range(__t);
+	  auto& __r = *__access::__possibly_const_range (_GLIBCXX_CONVEYOR_ADDRESSOF (__t));
 	  return const_iterator<decltype(ranges::rbegin(__r))>(ranges::rbegin(__r));
 	}
 #else
@@ -787,11 +821,13 @@ namespace ranges
 	constexpr auto
 	operator()(_Tp&& __t) const
 	noexcept(noexcept(std::make_const_sentinel
-			  (ranges::rend(__access::__possibly_const_range(__t)))))
+			  (ranges::rend(*__access::__possibly_const_range
+					(std::__addressof (__t))))))
 	requires requires { std::make_const_sentinel
-			    (ranges::rend(__access::__possibly_const_range(__t))); }
+			    (ranges::rend(*__access::__possibly_const_range
+					  (std::__addressof (__t)))); }
 	{
-	  auto& __r = __access::__possibly_const_range(__t);
+	  auto& __r = *__access::__possibly_const_range (_GLIBCXX_CONVEYOR_ADDRESSOF (__t));
 	  return const_sentinel<decltype(ranges::rend(__r))>(ranges::rend(__r));
 	}
 #else
@@ -814,9 +850,12 @@ namespace ranges
 	[[nodiscard]]
 	constexpr const auto*
 	operator()(_Tp&& __t) const
-	noexcept(noexcept(ranges::data(__access::__possibly_const_range(__t))))
-	requires requires { ranges::data(__access::__possibly_const_range(__t)); }
-	{ return ranges::data(__access::__possibly_const_range(__t)); }
+	noexcept(noexcept(ranges::data(*__access::__possibly_const_range
+					(std::__addressof (__t)))))
+	requires requires { ranges::data(*__access::__possibly_const_range
+					  (std::__addressof (__t))); }
+	{ return ranges::data(*__access::__possibly_const_range
+			       (_GLIBCXX_CONVEYOR_ADDRESSOF (__t))); }
 #else
       template<typename _Tp>
 	[[nodiscard]]

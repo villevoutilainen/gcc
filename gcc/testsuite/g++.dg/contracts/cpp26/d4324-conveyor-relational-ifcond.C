@@ -5,6 +5,14 @@
 // from a declared pre<>, never from an ordinary runtime 'if (...)'
 // check, unlike the field-range/call-range shapes (which already got
 // this treatment in an earlier commit).
+//
+// Every 'S' parameter below is a CONST reference: none of these
+// functions ever write through it (only S::size(), a const method, is
+// ever called), and P2680 9.1's cone-of-evaluation ownership rule (Q2)
+// would otherwise make GET_CHECKED/USE_IT's own non-const 'S&'
+// parameter impossible to satisfy from a caller that merely proves
+// (rather than owns) its own argument -- unrelated to what this test
+// is actually about.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
 
@@ -41,37 +49,37 @@ struct S {
 };
 
 // param-vs-call.
-int get_checked (S& v, int i) conveyor pre<conveyor_ctrl_v>(i < v.size ())
+int get_checked (const S& v, int i) conveyor pre<conveyor_ctrl_v>(i < v.size ())
 {
   return i;
 }
 
-int use_checked_call (S& v, int i) conveyor
+int use_checked_call (const S& v, int i) conveyor
 {
   if (i < v.size ())
     return get_checked (v, i);
   return -1;
 }
 
-int use_unchecked_call (S& v, int i) conveyor
+int use_unchecked_call (const S& v, int i) conveyor
 {
   return get_checked (v, i); // { dg-warning "cannot verify that .i. satisfies" }
 }
 
 // call-vs-call.
-int use_it (S& a, S& b) conveyor pre<conveyor_ctrl_v>(a.size () < b.size ())
+int use_it (const S& a, const S& b) conveyor pre<conveyor_ctrl_v>(a.size () < b.size ())
 {
   return 0;
 }
 
-int use_checked_call_call (S& v, S& w) conveyor
+int use_checked_call_call (const S& v, const S& w) conveyor
 {
   if (v.size () < w.size ())
     return use_it (v, w);
   return -1;
 }
 
-int use_unchecked_call_call (S& v, S& w) conveyor
+int use_unchecked_call_call (const S& v, const S& w) conveyor
 {
   return use_it (v, w); // { dg-warning "cannot verify that .int S::size\\(\\) const. called on" }
 }

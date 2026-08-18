@@ -1162,6 +1162,49 @@ contracts_fixup_names (tree new_fn, tree old_fn, bool pre, bool wrapper)
   free (nn);
 }
 
+/* Both build_contract_condition_function (just below) and
+   build_predicate_core_function_1 (further down this file) build a
+   checking function's own parameter list by copying every one of the
+   real, guarded function's parameters verbatim, then appending one
+   more, artificial parameter -- hardcoded named "__r" -- to carry a
+   postcondition's return value across the call to the checking
+   function. If the real function already happens to have a parameter
+   actually named "__r", the two collide: the checking function fails
+   to even parse ("redeclaration of '__r'"), with a diagnostic that
+   never mentions the real cause. Confirmed via real code
+   (libstdc++-v3/include/bits/ranges_base.h's own __possibly_const_
+   range, whose sole parameter is named '__r') and reduced to a
+   minimal, unrelated-to-contracts-features repro: any function with a
+   postcondition and a parameter literally named "__r" hits this,
+   regardless of that parameter's type or whether it's a reference.
+
+   COPIED_PARMS is the checking function's own parameter chain *after*
+   the real parameters have already been copied into it (so every name
+   that could collide is already present to check against). Returns an
+   identifier guaranteed to not collide with any of them: "__r" itself
+   when that's already free, otherwise "__r" with an increasing numeric
+   suffix until one is.  */
+
+static tree
+oa_unique_result_parm_identifier (tree copied_parms)
+{
+  for (int suffix = 0; ; ++suffix)
+    {
+      char *buf = suffix == 0 ? xstrdup ("__r") : xasprintf ("__r%d", suffix);
+      tree candidate = get_identifier (buf);
+      free (buf);
+      bool collide = false;
+      for (tree p = copied_parms; p; p = TREE_CHAIN (p))
+	if (DECL_NAME (p) == candidate)
+	  {
+	    collide = true;
+	    break;
+	  }
+      if (!collide)
+	return candidate;
+    }
+}
+
 /* Build a declaration for the pre- or postcondition of a guarded FNDECL.  */
 
 static tree
@@ -1224,8 +1267,10 @@ build_contract_condition_function (tree fndecl, bool pre)
   if (!pre && !VOID_TYPE_P (orig_fn_value_type))
     {
       /* For post contracts that deal with a non-void function, append a
-	 parameter to pass the return value.  */
-      tree name = get_identifier ("__r");
+	 parameter to pass the return value. See oa_unique_result_parm_
+	 identifier's own comment for why this can't just be "__r"
+	 unconditionally.  */
+      tree name = oa_unique_result_parm_identifier (DECL_ARGUMENTS (fn));
       tree parm = build_lang_decl (PARM_DECL, name, orig_fn_value_type);
       DECL_CONTEXT (parm) = fn;
       DECL_ARTIFICIAL (parm) = true;
@@ -4877,8 +4922,31 @@ contract_control_bool_member (tree ctrl, const char *name,
   suppress_conveyor_restrictions_for_trait_query_p = true;
   tree call = build_new_method_call (ctrl_expr, member, &args, NULL_TREE,
 				     LOOKUP_NORMAL, NULL, tf_none);
+  /* mce_true forces a genuine attempt to evaluate CALL, overriding
+     maybe_constant_value's own default policy of declining real work
+     (falling back to a syntactic-only fold_to_constant, which can never
+     reduce an actual method call) whenever this query happens to be
+     reached from within an unevaluated operand -- a noexcept-specifier
+     or requires-expression elsewhere, e.g. 'noexcept(noexcept(f(x)))'
+     for a conveyor F with a control-object-bearing contract. That
+     default policy exists to honor "no observable evaluation inside an
+     unevaluated operand" for arbitrary expressions, which is the right
+     conservative default in general -- but CALL is never arbitrary
+     user code: it always resolves to one specific, compiler-recognized
+     trait getter (is_ignored/constify/is_conveyor/etc.), a pure,
+     side-effect-free query over the TU's own static configuration, the
+     same reasoning suppress_conveyor_restrictions_for_trait_query_p
+     just above already applies to this identical call for a different
+     aspect. Found via real code: libstdc++-v3's own __possibly_const_
+     range, whose postcondition's control object query only needs to
+     fold here because __possibly_const_range is itself called from
+     within another function's own dependent noexcept-specifier/
+     requires-clause (_CBegin::operator()) -- confirmed via a minimal,
+     <ranges>-free repro reproducing the identical "does not produce a
+     constant expression" failure, and confirmed fixed by this same
+     change.  */
   tree val = (call && call != error_mark_node)
-    ? maybe_constant_value (call) : NULL_TREE;
+    ? maybe_constant_value (call, NULL_TREE, mce_true) : NULL_TREE;
   if (call && call != error_mark_node
       && (!val || TREE_CODE (val) != INTEGER_CST)
       && !quiet
@@ -5358,7 +5426,10 @@ build_predicate_core_function_1 (tree contract, tree orig)
   tree result_parm = NULL_TREE;
   if (has_result)
     {
-      result_parm = build_lang_decl (PARM_DECL, get_identifier ("__r"),
+      /* See oa_unique_result_parm_identifier's own comment for why this
+	 can't just be "__r" unconditionally.  */
+      result_parm = build_lang_decl (PARM_DECL,
+				     oa_unique_result_parm_identifier (new_args),
 				     result_type);
       DECL_CONTEXT (result_parm) = fn;
       DECL_ARTIFICIAL (result_parm) = true;
@@ -5375,6 +5446,14 @@ build_predicate_core_function_1 (tree contract, tree orig)
   TREE_PUBLIC (fn) = 0;
   DECL_EXTERNAL (fn) = 0;
   DECL_INTERFACE_KNOWN (fn) = 1;
+  /* D4324/P2680: see ldf_contract_predicate_helper's own comment --
+     this "pred" function's own body is about to become a verbatim
+     re-embedding of CONTRACT's condition, with no contract-statement
+     wrapper of its own, so it must never independently re-run
+     resolve_object_address_in_function's own std::is_object_address
+     well-formedness scan (which would misidentify that condition's own
+     already-legitimate call as a "stray" one).  */
+  CONTRACT_HELPER (fn) = ldf_contract_predicate_helper;
   suppress_warning (fn);
 
   /* Remap CONTRACT's condition from ORIG's real decls (parameters, and for a
@@ -6713,6 +6792,29 @@ struct oa_contract_float_field_range_fact
   bool conveyor_established;
 };
 
+/* D4324/P2680 item 8, Increment E-divmod: the field-expression analogue
+   of m_nz_map, for a fact like '__r._M_val != 0' -- found missing while
+   tagging real libstdc++ conveyor functions (max_size_type.h's
+   operator/=): neither oa_nonzero_conjunct_p nor oa_provably_nonzero_p
+   recognized a COMPONENT_REF at all (only a bare VAR_P/PARM_DECL), so a
+   field-level nonzero fact could never be established or consulted,
+   mirroring the exact gap oa_contract_field_range_fact was added to
+   close for range facts. Same (identity, FIELD_DECL) key via
+   oa_field_key_hash. Unlike the range map, there is no "value" beyond
+   nonzero-ness itself (no "provably zero" counterpart fact is ever
+   stored, matching m_nz_map's own asymmetry) -- so the map's value type
+   is just the CONVEYOR_ESTABLISHED provenance tag directly, no wrapper
+   struct needed. Shared between conveyor/symbolic establishment (never
+   split into two maps the way m_nz_map/m_symbolic_nz_map are) for the
+   identical reason m_contract_field_range_map is shared: this fact can
+   be established either from real, actually-executed control flow
+   (oa_refine_single_comparison's own NE_EXPR handling would be the
+   analogous site, always trustworthy) or from a precondition/
+   contract_assert conjunct that might be symbolic-only (not
+   trustworthy for conveyor's own item-8 consult) -- the tag is what
+   lets oa_provably_nonzero_p's own COMPONENT_REF consult tell those
+   apart.  */
+
 /* Forward-declared: oa_derivation's full definition (contract-conveyor-
    proof-provenance's own "why does this range fact hold" node, see its
    own comment further below) isn't needed here, only pointers to it --
@@ -7555,6 +7657,67 @@ public:
       m_contract_field_range_map.put (to_keep[i], kept_facts[i]);
   }
 
+  /* D4324/P2680 item 8: accessors for m_contract_field_nz_map (own
+     comment above) -- same (identity, FIELD_DECL) key shape as the
+     range map immediately above, just a bool (CONVEYOR_ESTABLISHED)
+     value instead of a range.  */
+  bool contract_field_nz_get (tree identity, tree field,
+			       bool *conveyor_established_out)
+  {
+    bool *v = m_contract_field_nz_map.get ({identity, field});
+    if (!v)
+      return false;
+    *conveyor_established_out = *v;
+    return true;
+  }
+  void contract_field_nz_set (tree identity, tree field,
+			       bool conveyor_established)
+  {
+    m_contract_field_nz_map.put ({identity, field}, conveyor_established);
+  }
+  void contract_field_nz_invalidate (tree identity, tree field)
+  {
+    m_contract_field_nz_map.remove ({identity, field});
+  }
+  /* Same whole-object granularity as contract_field_range_invalidate_all
+     immediately above -- a reassignment or a call taking IDENTITY's
+     address invalidates every tracked field's nonzero fact, not just
+     whichever one happens to already be tracked.  */
+  void contract_field_nz_invalidate_all (tree identity)
+  {
+    auto_vec<std::pair<tree, tree>> to_remove;
+    for (auto it : m_contract_field_nz_map)
+      if (it.first.first == identity)
+	to_remove.safe_push (it.first);
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_contract_field_nz_map.remove (to_remove[i]);
+  }
+  /* AND-of-booleans merge, matching m_nz_map's own lattice (own comment
+     on nz_provable_p) rather than the range map's interval-union --
+     a fact survives a branch merge only if both sides independently
+     established it.  */
+  void contract_field_nz_merge_with (oa_env &other)
+  {
+    auto_vec<std::pair<tree, tree>> to_remove;
+    auto_vec<std::pair<tree, tree>> to_keep;
+    auto_vec<bool> kept_facts;
+    for (auto it : m_contract_field_nz_map)
+      {
+	bool *ov = other.m_contract_field_nz_map.get (it.first);
+	if (!ov)
+	  {
+	    to_remove.safe_push (it.first);
+	    continue;
+	  }
+	to_keep.safe_push (it.first);
+	kept_facts.safe_push (it.second && *ov);
+      }
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_contract_field_nz_map.remove (to_remove[i]);
+    for (unsigned i = 0; i < to_keep.length (); ++i)
+      m_contract_field_nz_map.put (to_keep[i], kept_facts[i]);
+  }
+
   /* D4324: the floating-point analogue of the (identity, FIELD_DECL)
      range map immediately above, for a scalar-float-typed field (see
      oa_contract_float_field_range_fact's own comment).  */
@@ -7791,6 +7954,8 @@ public:
       r.m_contract_float_field_range_map.put (it.first, it.second);
     for (auto it : m_contract_call_range_map)
       r.m_contract_call_range_map.put (it.first, it.second);
+    for (auto it : m_contract_field_nz_map)
+      r.m_contract_field_nz_map.put (it.first, it.second);
     r.m_outermost_bind = m_outermost_bind;
     for (auto it : m_shadow_decls)
       r.m_shadow_decls.put (it.first, it.second);
@@ -7801,6 +7966,8 @@ public:
     for (auto it : m_array_alias_target)
       r.m_array_alias_target.put (it.first, it.second);
     r.m_field_object_key = m_field_object_key;
+    for (auto it : m_borrowed_map)
+      r.m_borrowed_map.put (it.first, it.second);
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -7856,6 +8023,9 @@ public:
     m_contract_call_range_map.empty ();
     for (auto it : other.m_contract_call_range_map)
       m_contract_call_range_map.put (it.first, it.second);
+    m_contract_field_nz_map.empty ();
+    for (auto it : other.m_contract_field_nz_map)
+      m_contract_field_nz_map.put (it.first, it.second);
     m_outermost_bind = other.m_outermost_bind;
     m_shadow_decls.empty ();
     for (auto it : other.m_shadow_decls)
@@ -7870,6 +8040,9 @@ public:
     for (auto it : other.m_array_alias_target)
       m_array_alias_target.put (it.first, it.second);
     m_field_object_key = other.m_field_object_key;
+    m_borrowed_map.empty ();
+    for (auto it : other.m_borrowed_map)
+      m_borrowed_map.put (it.first, it.second);
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -8017,6 +8190,7 @@ private:
   hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_contract_field_range_map;
   hash_map<oa_field_key_hash, oa_contract_float_field_range_fact> m_contract_float_field_range_map;
   hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_contract_call_range_map;
+  hash_map<oa_field_key_hash, bool> m_contract_field_nz_map;
   tree m_outermost_bind = NULL_TREE;
   hash_map<tree, tree> m_shadow_decls;
   hash_map<tree, tree> m_alias_target;
@@ -8026,6 +8200,40 @@ private:
   /* Never owned/allocated here -- see field_object_identity_key's own
      comment for why this must be a shared pointer, not an embedded map.  */
   hash_map<oa_field_key_hash, tree> *m_field_object_key = nullptr;
+  /* D4324: reference-safety Q2, ownership-laundering fix -- see
+     oa_reference_owned_p's own comment. A decl present here with value
+     TRUE is known BORROWED despite otherwise looking like a plain local
+     of the current function (its own identity was bound, at some
+     reassignment reached along the way here, from a conveyor call that
+     wasn't provably self-contained) -- absence means "not known
+     borrowed", preserving the previous default-owned behavior for every
+     other case (fresh locals, direct aliases, which resolve through
+     m_alias_target instead and never need an entry here at all).  */
+  hash_map<tree, bool> m_borrowed_map;
+public:
+  bool borrowed_p (tree decl)
+  {
+    bool *v = m_borrowed_map.get (decl);
+    return v && *v;
+  }
+  void borrowed_set (tree decl) { m_borrowed_map.put (decl, true); }
+  void borrowed_clear (tree decl) { m_borrowed_map.remove (decl); }
+  /* Union, "once true (on either incoming branch) stays true" -- exactly
+     shadow_decls_merge_with's own already-vetted pattern, not the AND-
+     of-booleans merge_with uses for m_map: here the *safe* default is
+     false (owned), so a merge must never quietly drop a TRUE reached via
+     only one predecessor. Not the DSU-union-find shape m_alias_target's
+     own comment warns away from: reassigning a decl always calls
+     borrowed_set/borrowed_clear fresh (a real overwrite, exactly like
+     alias_set/alias_invalidate already do on reassignment), so no
+     history ever fuses across an unrelated later reassignment -- this
+     union only ever combines two branches' *current* states at a join.  */
+  void borrowed_merge_with (oa_env &other)
+  {
+    for (auto it : other.m_borrowed_map)
+      if (it.second)
+	m_borrowed_map.put (it.first, true);
+  }
 };
 
 /* An empty, no-added-members subclass, purely so a plugin (which only
@@ -8730,8 +8938,70 @@ oa_provable_p (tree expr, oa_env &env)
 
   if (TREE_CODE (expr) == ADDR_EXPR)
     {
-      tree op = TREE_OPERAND (expr, 0);
-      return DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL);
+      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
+	return true;
+      /* D4324: reference-safety -- '&TARGET_EXPR<slot, init>' is how a
+	 reference bound directly to a temporary (a by-value call result,
+	 or a literal/converting-constructor expression, e.g. 'reads_only
+	 (make ())' or 'reads_only (T{2})' for a 'const T&' parameter)
+	 arrives at this stage -- confirmed via -fdump-tree-original.
+	 Always provable: the temporary's storage is freshly materialized
+	 for exactly this one expression evaluation, so nothing else in
+	 the program could possibly already hold a competing reference
+	 into it. Found via the real, already-shipping library sweep
+	 (std::ranges::__detail::__max_size_type's own comparison
+	 operators, libstdc++-v3/include/bits/max_size_type.h) --
+	 binding a const reference to a temporary is one of the most
+	 common patterns in ordinary C++, so this must be provable, not
+	 merely a hypothetical edge case.  */
+      if (TREE_CODE (op) == TARGET_EXPR)
+	return true;
+      /* D4324: '&obj.field'/'&obj->field' -- a field of an object whose
+	 own address is itself provable is just as live as the object
+	 itself.  Needed for the common 'T& get_field () { return
+	 m_field; }' pattern (its own implicit 'return' is exactly this
+	 shape). Mirrors oa_field_object_identity's own COMPONENT_REF/
+	 INDIRECT_REF unwrapping (a different determination -- object-
+	 address provability here, vs. that function's own stable
+	 per-field identity key, so this can't just call it directly),
+	 then recurses via a freshly-built ADDR_EXPR of the object operand
+	 so every other case this function already handles for an
+	 ordinary object address (this, an already-established fact, a
+	 further chain of field accesses) applies to the object being
+	 accessed here too, not just the bare-decl case handled above.  */
+      if (TREE_CODE (op) == COMPONENT_REF
+	  && TREE_CODE (TREE_OPERAND (op, 1)) == FIELD_DECL)
+	{
+	  tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
+	  tree obj_expr = TREE_CODE (obj) == INDIRECT_REF
+	    ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0)) : obj;
+	  /* An *implicit* 'this->field' access (plain 'field', no explicit
+	     'this->') binds 'this' one layer deeper than an explicit
+	     dereference does: 'field' alone arrives as COMPONENT_REF
+	     (INDIRECT_REF (NOP_EXPR (this)), field) -- confirmed via
+	     debug_tree -- with a NOP_EXPR between the INDIRECT_REF and the
+	     bare 'this' PARM_DECL that an explicit 'this->field'/'r.field'
+	     (for an ordinary reference parameter r) never has. Strip it
+	     (and any other conversion wrapper) the same way oa_provable_p's
+	     own top-level stripping loop does for its outermost EXPR --
+	     that loop never reaches in here, since it only strips wrappers
+	     at EXPR's own top, not inside a freshly-built ADDR_EXPR this
+	     recursive call constructs below. Without this, an implicit
+	     'this->field' passed to another conveyor call was silently
+	     never provable at all (found via the real, already-shipping
+	     library sweep, __max_diff_type::operator<=>'s own '_M_rep').  */
+	  while (TREE_CODE (obj_expr) == NON_LVALUE_EXPR
+		 || TREE_CODE (obj_expr) == NOP_EXPR
+		 || TREE_CODE (obj_expr) == CONVERT_EXPR
+		 || TREE_CODE (obj_expr) == VIEW_CONVERT_EXPR)
+	    obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj_expr, 0));
+	  return oa_provable_p (build1 (ADDR_EXPR,
+					build_pointer_type (TREE_TYPE (obj_expr)),
+					obj_expr),
+				env);
+	}
+      return false;
     }
 
   if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
@@ -9052,6 +9322,36 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
 	  && ((fact.has_lo && fact.lo > 0) || (fact.has_hi && fact.hi < 0)))
 	return true;
       return false;
+    }
+
+  /* D4324/P2680 item 8: a field access ('this->field'/'obj.field'),
+     resolved against m_contract_field_nz_map -- mirrors oa_get_range's
+     own COMPONENT_REF case immediately below in this file exactly,
+     including the CONVEYOR_ESTABLISHED gate (own comment on that map
+     for why: this consult has no REQUIRE_CONVEYOR parameter, so a
+     symbolic-only-established fact must not satisfy it).  Closes the
+     gap found while tagging max_size_type.h's operator/= as conveyor:
+     '__glibcxx_assert(__r._M_val != 0);' established nothing at all
+     for '_M_val /= __r._M_val;' below it, since neither this function
+     nor oa_nonzero_conjunct_p recognized a COMPONENT_REF before this.  */
+  if (TREE_CODE (expr) == COMPONENT_REF)
+    {
+      tree field = TREE_OPERAND (expr, 1);
+      tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (TREE_CODE (field) != FIELD_DECL)
+	return false;
+      tree obj_expr = TREE_CODE (obj) == INDIRECT_REF
+	? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0)) : obj;
+      tree identity;
+      if (!oa_object_identity_decl (obj_expr, &identity)
+	  && !oa_field_slot_identity (obj_expr, env, &identity)
+	  && !oa_array_slot_identity (obj_expr, env, &identity)
+	  && !oa_field_object_identity (obj_expr, env, &identity))
+	return false;
+      identity = env.alias_find (identity);
+      bool conveyor_established;
+      return env.contract_field_nz_get (identity, field, &conveyor_established)
+	&& conveyor_established;
     }
 
   /* Item 6: an ordinary call whose callee's own non-ignored, conveyor
@@ -11358,6 +11658,63 @@ oa_nonzero_conjunct_p (tree conjunct, tree *decl_out)
   return true;
 }
 
+/* D4324/P2680 item 8, Increment E-divmod: the field-expression analogue
+   of oa_nonzero_conjunct_p immediately above -- true if CONJUNCT is of
+   the form 'E != 0'/'0 != E' where E is a field access ('obj.field'/
+   'obj->field', i.e. a COMPONENT_REF naming a FIELD_DECL), with
+   *OBJ_OUT / *FIELD_OUT set to E's own object operand and FIELD_DECL
+   respectively -- the fact-seeding counterpart of m_contract_field_nz_
+   map's own comment. oa_nonzero_conjunct_p itself declines this shape
+   (its own decl_out must be a bare VAR_P/PARM_DECL) -- callers try both,
+   exactly the way is_object_address_call_p and this pair are already
+   tried in sequence at every existing call site.  Deliberately narrow,
+   matching oa_nonzero_conjunct_p's own scope: OBJ_OUT is returned
+   unresolved (not yet turned into an identity), since that resolution
+   needs an ENV this purely-syntactic matcher doesn't take -- every
+   caller resolves it the same way oa_get_range's own COMPONENT_REF case
+   does (oa_object_identity_decl/oa_field_slot_identity/oa_array_slot_
+   identity/oa_field_object_identity, tried in that order).  */
+
+static bool
+oa_field_nonzero_conjunct_p (tree conjunct, tree *obj_out, tree *field_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  if (TREE_CODE (c) != NE_EXPR)
+    return false;
+
+  tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+  while (TREE_CODE (op0) == NOP_EXPR || TREE_CODE (op0) == CONVERT_EXPR
+	 || TREE_CODE (op0) == NON_LVALUE_EXPR
+	 || TREE_CODE (op0) == VIEW_CONVERT_EXPR)
+    op0 = TREE_OPERAND (op0, 0);
+  while (TREE_CODE (op1) == NOP_EXPR || TREE_CODE (op1) == CONVERT_EXPR
+	 || TREE_CODE (op1) == NON_LVALUE_EXPR
+	 || TREE_CODE (op1) == VIEW_CONVERT_EXPR)
+    op1 = TREE_OPERAND (op1, 0);
+  op0 = oa_strip_conversion_call (op0);
+  op1 = oa_strip_conversion_call (op1);
+  tree expr, zero;
+  if (TREE_CODE (op1) == INTEGER_CST)
+    expr = op0, zero = op1;
+  else if (TREE_CODE (op0) == INTEGER_CST)
+    expr = op1, zero = op0;
+  else
+    return false;
+
+  if (!integer_zerop (zero) || TREE_CODE (expr) != COMPONENT_REF)
+    return false;
+  tree field = TREE_OPERAND (expr, 1);
+  if (TREE_CODE (field) != FIELD_DECL)
+    return false;
+
+  *obj_out = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+  *field_out = field;
+  return true;
+}
+
 /* True if CONTRACT (an ASSERTION_STMT/PRECONDITION_STMT/POSTCONDITION_STMT)
    is both conveyor and statically non-ignored -- the explicit
    well-formedness gate every is_object_address consultation site must
@@ -11620,6 +11977,258 @@ oa_call_symbolic_obligation_status (tree call, bool *forced_out, bool *strict_ou
     }
 }
 
+/* D4324: reference-safety Q2 (P2680 9.1's cone-of-evaluation
+   restriction) -- true if EXPR, evaluated in the *caller's* own ENV, is
+   OWNED by the currently-analyzed function rather than merely borrowed
+   from it. Owned means EXPR's own canonical identity resolves to a
+   VAR_DECL declared within current_function_decl's own body (a local
+   the current function created itself, and so may freely lend a
+   non-const reference to) OR a BY-VALUE (non-REFERENCE_TYPE) PARM_DECL
+   of this same function (its own independent copy, exactly as owned as
+   a VAR_DECL it declared itself -- see the by-value/owned_by_value_parm
+   check below) OR 'this' (owned, not borrowed -- see the is_this_
+   parameter check below for why re-lending it further is always safe);
+   anything else -- a REFERENCE_TYPE PARM_DECL (aliasing THIS function's
+   own caller's object, however validly proven, per Q1 above), or an
+   unresolvable identity -- is conservatively borrowed.
+   Deliberately single-level: never asks whether some caller further up
+   the chain owns it, since that would require reaching into a caller's
+   own body, breaking this pass's modular, per-function analysis (see
+   the plan's own worked example: 'middle (T& y)' must treat Y as
+   borrowed even when the actual caller passed a local IT owns).
+
+   Ownership-laundering fix: a local reference/pointer whose own binding
+   traces back to a conveyor call's return value (e.g. 'T& view =
+   identity_view (&y);') is NOT automatically owned just because it's a
+   VAR_DECL of this function -- it may simply be a borrowed argument
+   handed back unchanged. See oa_call_result_owned_p's own comment for
+   the rule; env.borrowed_p (identity) is where that rule's answer is
+   recorded, established at every DECL_EXPR/reassignment site that binds
+   a pointer or reference identity (see oa_call_result_owned_p's callers
+   for the exact sites).  */
+
+static bool oa_call_result_owned_p (tree call, oa_env &env);
+
+/* ASKING_ABOUT_POINTER_VALUE disambiguates a case the tree shape alone
+   can't: whether a bare, wrapper-free EXPR (no ADDR_EXPR, no
+   INDIRECT_REF -- e.g. a plain 'd', a pointer PARM_DECL/VAR_DECL used
+   directly) is being asked about as "is D's own value/handle owned"
+   (true; matches a POINTER-typed callee parameter -- 'this', whose own
+   type is always a pointer, is the motivating case: 'd->f()' passes D's
+   own value directly as THIS, no ADDR_EXPR needed since the types
+   already match) or "is what D's value currently designates owned"
+   (false, the default -- matches a REFERENCE-typed callee parameter
+   bound from a dereferenced pointer argument, '*p' reinterpreted in
+   place for a 'T&' parameter, no ADDR_EXPR either, but asking about
+   P's pointee, not P's own value). Both shapes reduce, after the strip
+   below, to the exact same bare-decl tree -- confirmed by direct
+   testing that relying on ADDR_EXPR-presence alone got this wrong:
+   'int g (Derived* d) conveyor { return d->f (1); }' (own7's shape,
+   D used directly as THIS) wrongly rejected as borrowed, needing this
+   parameter set true by its caller (oa_handle_call_precondition_
+   obligation's own THIS-receiver check) to be told which question is
+   actually being asked.  */
+
+static bool
+oa_reference_owned_p (tree expr, oa_env &env,
+		       bool asking_about_pointer_value = false)
+{
+  expr = STRIP_ANY_LOCATION_WRAPPER (expr);
+  while (TREE_CODE (expr) == NON_LVALUE_EXPR || TREE_CODE (expr) == NOP_EXPR
+	 || TREE_CODE (expr) == CONVERT_EXPR || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
+    expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+  /* D4324: a reference bound directly to a temporary is owned by
+     whoever materializes it -- see oa_provable_p's own identical
+     TARGET_EXPR case for the full rationale.  */
+  if (TREE_CODE (expr) == ADDR_EXPR
+      && TREE_CODE (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0)))
+	   == TARGET_EXPR)
+    return true;
+  /* A field of an owned object is itself owned -- '&(BASE.field)''s own
+     ownership is exactly BASE's: a member conveyor call's own receiver
+     ('this->f1.mutate()') or a defaulted special member's own implicit
+     subobject initialization ('&this->f1' as HasCtor's own receiver)
+     reach here, and oa_object_identity_decl deliberately has no
+     COMPONENT_REF case (out of its own, much wider-reaching scope), so
+     without this a field of THIS (now owned, see the is_this_parameter
+     check below) or of any other owned object would fall into the
+     "unresolvable -> conservatively borrowed" default for the wrong
+     reason -- confirmed by direct testing (found via the real-code
+     regression sweep this fix's own broader change required running:
+     'HasConveyorCtor::HasConveyorCtor()' construction of a conveyor-
+     tagged member field, and several existing predicate/field-object
+     tests calling a conveyor method on 'this->some_field', both wrongly
+     rejected without this). BASE reached through a pointer ('this->f1',
+     BASE itself 'INDIRECT_REF (this)') asks about the pointer's own
+     value, matching THIS's own receiver-check semantics; a deeper field
+     chain ('a.b.c') isn't specially handled here and falls through to
+     the conservative default below -- imprecise but safe, the same
+     documented boundary the field-slot alias mechanism already has.  */
+  if (TREE_CODE (expr) == ADDR_EXPR)
+    {
+      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (TREE_CODE (op) == COMPONENT_REF)
+	{
+	  tree base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
+	  if (TREE_CODE (base) == INDIRECT_REF)
+	    return oa_reference_owned_p (TREE_OPERAND (base, 0), env,
+					  /*asking_about_pointer_value=*/true);
+	  if (DECL_P (base))
+	    return oa_reference_owned_p (base, env,
+					  /*asking_about_pointer_value=*/true);
+	}
+    }
+  /* Ownership-laundering fix: '*p''s own ownership is exactly P's own
+     ownership -- oa_object_identity_decl deliberately never resolves a
+     bare dereference (out of its own, much wider-reaching scope), so
+     without this a pointer argument dereferenced through an intervening
+     local (e.g. 'T* p2 = identity_view (&y); T& r = *p2;') would fall
+     into the "unresolvable -> conservatively borrowed" default below
+     for the wrong reason, and, worse, would do so even when P is
+     genuinely owned. Scoped to this function only, not the shared
+     oa_object_identity_decl, to keep this fix's blast radius contained
+     to Q2 ownership alone. In practice this INDIRECT_REF shape isn't
+     what a dereferenced pointer argument arrives as when substituted for
+     a REFERENCE-typed parameter (see the ADDR_EXPR-vs-bare-decl
+     distinction below for that far more common shape) -- kept for
+     whatever other, non-substitution context might still reach here
+     with a genuine INDIRECT_REF.  */
+  if (TREE_CODE (expr) == INDIRECT_REF)
+    return oa_reference_owned_p (TREE_OPERAND (expr, 0), env);
+  /* Whether EXPR, after the generic-conversion strip above, is exactly
+     'ADDR_EXPR (decl)' -- i.e. whether the question being asked is
+     "is DECL's own storage/address owned" (true here) as opposed to
+     "is whatever DECL's own value currently designates owned" (false
+     here, DECL resolved as a bare decl with no ADDR_EXPR at all).
+     These are genuinely different questions that happen to share the
+     same identity-resolution machinery below, and the distinction only
+     matters for a PARM_DECL (a VAR_DECL of this function is owned
+     either way, since for a reference/pointer VAR_DECL "its own value"
+     and "what it designates" are the same tracked identity via
+     env.borrowed_p): binding a REFERENCE_TYPE parameter of some OTHER
+     conveyor call from a dereferenced pointer argument ('*p' passed to
+     a 'T&' parameter, T the pointee type) reuses P's own pointer VALUE
+     directly, reinterpreted in place -- no ADDR_EXPR, exactly like a
+     reference's own address needing no ADDR_EXPR wrapper elsewhere in
+     this file -- and asks about *p's pointee, which is NOT the same as
+     asking whether P's own storage is owned. Binding a REFERENCE-TO-
+     POINTER parameter ('_Tp&&' deduced as '_It&' with _It a pointer
+     type) from a plain by-value pointer parameter, by contrast, takes
+     that parameter's own address explicitly (an ADDR_EXPR) -- see
+     basic_const_iterator's own '_M_current (std::move (__current))',
+     found by direct testing to need this exact distinction: without it,
+     either both cases wrongly reject (this fix's earlier, retracted
+     "any PARM_DECL is borrowed" default) or both wrongly accept (an
+     earlier, also-retracted revision of this same fix that treated any
+     by-value PARM_DECL as owned unconditionally, which let 'int middle
+     (T* p) { return use_val_mut (*p); }' -- p a plain, never-reassigned
+     by-value pointer parameter -- wrongly compile clean).  ASKING_ABOUT_
+     POINTER_VALUE (see this function's own leading comment) is the same
+     question as this ADDR_EXPR check, just told explicitly rather than
+     inferred from EXPR's own shape, for the one case where the shape is
+     ambiguous (a POINTER-typed callee parameter, i.e. THIS, bound
+     directly from a bare pointer decl with no ADDR_EXPR at all).  */
+  bool addr_of_decl = TREE_CODE (expr) == ADDR_EXPR || asking_about_pointer_value;
+  tree identity;
+  if (!oa_object_identity_decl (expr, &identity))
+    return false;
+  identity = env.alias_find (identity);
+  /* D4324/P2680: 'this' is owned, not borrowed -- re-lending it further,
+     whether as the receiver of another non-const member conveyor call
+     ('this->mutate()') or as an ordinary non-const reference argument
+     derived from '*this' ('foo (*this)'), never extends the cone of
+     evaluation the way handing off a genuinely borrowed reference
+     parameter does: there's no chance 'this' was invalidated by
+     anything reachable from here (the invalidation cascade already
+     exempts it, see oa_invalidate_parameter_alias_group's own comment),
+     and no new party gains access -- it's still the exact same object
+     this function itself was already given. Previously returned false
+     (borrowed) unconditionally here, which made a member function
+     calling another non-const method on its own 'this' -- an entirely
+     ordinary, safe pattern -- wrongly rejected once the receiver's own
+     ownership got checked at all (see oa_handle_call_precondition_
+     obligation's own THIS-receiver block).  */
+  if (is_this_parameter (identity))
+    return true;
+  bool owned_var = VAR_P (identity)
+    && DECL_CONTEXT (identity) == current_function_decl;
+  /* A BY-VALUE parameter (any type, not REFERENCE_TYPE) is this
+     function's own independent copy, exactly as owned as a local
+     VAR_DECL it declared itself -- distinct from a REFERENCE_TYPE
+     parameter, which aliases the caller's own object and stays
+     genuinely borrowed. Gated on ADDR_OF_DECL (see above): only when
+     the parameter's own storage/address is what's actually being asked
+     about. Still consulted through env.borrowed_p below like every
+     other identity, since a by-value parameter can itself be reassigned
+     from a conveyor call's return value later in the body (the
+     INIT_EXPR/MODIFY_EXPR reassignment site already tracks PARM_DECL
+     and VAR_DECL lhs identically for exactly this reason).  */
+  bool owned_by_value_parm = addr_of_decl
+    && TREE_CODE (identity) == PARM_DECL
+    && DECL_CONTEXT (identity) == current_function_decl
+    && TREE_CODE (TREE_TYPE (identity)) != REFERENCE_TYPE;
+  if (!owned_var && !owned_by_value_parm)
+    return false;
+  return !env.borrowed_p (identity);
+}
+
+/* D4324: reference-safety Q2, ownership inference through a conveyor
+   call's return value. A conveyor can't allocate and can't produce an
+   address "from thin air", so whatever pointer/reference CALL returns
+   must alias something already reachable to its callee: one of its own
+   pointer/reference-typed arguments (including an implicit 'this'
+   receiver, which for an ordinary member-function CALL_EXPR is simply
+   CALL_EXPR_ARG (call, 0)), or something self-contained (no such
+   arguments at all, a global, a 'this'-reachable member when 'this'
+   itself is owned). So: CALL's return value is owned iff none of the
+   pointer/reference-typed arguments actually passed at this call site
+   are themselves borrowed -- if it took zero such arguments, or all of
+   them are owned, the return value can only be self-contained.
+   Single-level, matching oa_reference_owned_p's own documented scope:
+   only inspects the argument expressions actually present at THIS call
+   site (via oa_reference_owned_p itself, recursively), never reaches
+   into the callee's own body.  */
+
+static bool
+oa_call_result_owned_p (tree call, oa_env &env)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL
+      || !DECL_DECLARED_CONVEYOR_P (callee))
+    return false;
+  if (TREE_CODE (call) != CALL_EXPR)
+    return false;
+
+  unsigned nargs = call_expr_nargs (call);
+  for (unsigned i = 0; i < nargs; ++i)
+    {
+      tree arg = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (call, i));
+      tree arg_type = TREE_TYPE (arg);
+      if (!POINTER_TYPE_P (arg_type) && TREE_CODE (arg_type) != REFERENCE_TYPE)
+	continue;
+      if (!oa_reference_owned_p (arg, env))
+	return false;
+    }
+  return true;
+}
+
+/* D4324: shared helper for the DECL_EXPR/reassignment establishment
+   sites below -- strips INIT's own conversions the same way
+   oa_object_identity_decl does, and reports whether what remains is a
+   CALL_EXPR (the only shape oa_call_result_owned_p understands).  */
+
+static tree
+oa_strip_to_call (tree init)
+{
+  if (!init)
+    return NULL_TREE;
+  init = STRIP_ANY_LOCATION_WRAPPER (init);
+  while (TREE_CODE (init) == NON_LVALUE_EXPR || TREE_CODE (init) == NOP_EXPR
+	 || TREE_CODE (init) == CONVERT_EXPR || TREE_CODE (init) == VIEW_CONVERT_EXPR)
+    init = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (init, 0));
+  return TREE_CODE (init) == CALL_EXPR ? init : NULL_TREE;
+}
+
 static void
 oa_handle_call_precondition_obligation (tree call, oa_env &env)
 {
@@ -11684,6 +12293,172 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env)
 	    }
 	}
     }
+
+  /* D4324: reference-safety Q1+Q2 -- every reference-typed parameter of
+     a conveyor callee implicitly carries the same is_object_address
+     obligation an explicit precondition conjunct already gets above,
+     triggered by parameter TYPE rather than requiring the callee to
+     have written one out (see [[project_conveyor_rules_functions_and_
+     predicates]] and the plan this implements). Runs once per call,
+     independent of the per-precondition-statement loop above, since
+     this obligation comes from the callee's own DECLARATION, not from
+     any particular precondition's text. A non-const reference
+     additionally requires the caller's own argument to be OWNED (a
+     local of the *caller's* own body, oa_reference_owned_p above), not
+     merely proven valid -- P2680 9.1's cone-of-evaluation restriction:
+     a borrowed reference/pointer, however validly proven, may never be
+     re-lent as non-const to a further conveyor call.  */
+  if (DECL_DECLARED_CONVEYOR_P (callee))
+    {
+      unsigned argno = 0;
+      for (tree parm = DECL_ARGUMENTS (callee); parm;
+	   parm = DECL_CHAIN (parm), ++argno)
+	{
+	  if (TREE_CODE (TREE_TYPE (parm)) != REFERENCE_TYPE)
+	    continue;
+	  tree substituted = NULL_TREE;
+	  if (TREE_CODE (call) == AGGR_INIT_EXPR)
+	    {
+	      if (argno >= 1 && argno < (unsigned) aggr_init_expr_nargs (call))
+		substituted = AGGR_INIT_EXPR_ARG (call, argno);
+	    }
+	  else if (argno < (unsigned) call_expr_nargs (call))
+	    substituted = CALL_EXPR_ARG (call, argno);
+	  if (!substituted)
+	    continue;
+	  substituted = STRIP_ANY_LOCATION_WRAPPER (substituted);
+
+	  if (!oa_provable_p (substituted, env))
+	    {
+	      error_at (EXPR_LOCATION (call),
+			"cannot prove %<is_object_address%> for %qE, "
+			"implicitly required by reference parameter %qD "
+			"of %qD", substituted, parm, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      continue;
+	    }
+
+	  bool is_const_ref = TYPE_READONLY (TREE_TYPE (TREE_TYPE (parm)));
+	  if (!is_const_ref && !oa_reference_owned_p (substituted, env))
+	    {
+	      error_at (EXPR_LOCATION (call),
+			"argument %qE is not owned by the calling function, "
+			"so it may not be passed as the non-const reference "
+			"parameter %qD of %qD", substituted, parm, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    }
+	}
+
+      /* D4324/P2680 Q2 for THIS: the implicit receiver of a traditional
+	 (implicit-object, not explicit-object/"deducing this") member
+	 conveyor call. DECL_ARGUMENTS's own first parm for such a callee
+	 is 'this', always POINTER-typed (never REFERENCE_TYPE) at this
+	 representation, so the loop just above (gated on REFERENCE_TYPE)
+	 never reaches it -- a real, separate gap confirmed by direct
+	 testing: 'obj.mutate ()' (obj a borrowed reference parameter,
+	 mutate a non-const member conveyor function) silently re-lent
+	 'this' non-const with no check at all, exactly the danger Q2
+	 exists to forbid for an ordinary non-const reference argument.
+	 DECL_IOBJ_MEMBER_FUNCTION_P, not DECL_NONSTATIC_MEMBER_FUNCTION_P
+	 (removed; deliberately errors out to name one of DECL_IOBJ_/
+	 DECL_XOBJ_MEMBER_FUNCTION_P instead) -- an explicit-object-
+	 parameter member function's own receiver is already an ordinary
+	 (possibly REFERENCE_TYPE) parameter, already covered by the loop
+	 above; this block is only for the implicit-'this' shape that
+	 loop can never reach. AGGR_INIT_EXPR (a constructor call) is
+	 deliberately excluded here, matching oa_substitute_call_arg's
+	 own established rule: its own argno 0 is a meaningless
+	 placeholder at this stage (the object being constructed, not yet
+	 a stable, resolvable identity), never a real receiver to check
+	 ownership of.
+
+	 Q2 ONLY, deliberately no Q1 (is_object_address) check here --
+	 unlike an ordinary REFERENCE_TYPE parameter (which gets Q1
+	 implicitly via task #140's own per-parameter synthesis), a
+	 POINTER receiver never has -- and never had, before this fix --
+	 any implicit Q1 obligation at all, matching every other raw
+	 pointer in this framework (Q1 for a pointer is always opt-in,
+	 via an explicit declared precondition, never automatic). Adding
+	 one here would be a real scope expansion, not just closing the
+	 Q2 gap: confirmed by direct testing, an earlier revision of this
+	 fix that also required proving is_object_address for the
+	 receiver broke dozens of pre-existing, legitimate tests calling
+	 a method through a plain pointer parameter with no such
+	 precondition (e.g. 'int g (Derived* d) conveyor { return d->f
+	 (1); }', d never proven and never meant to be).  */
+      if (DECL_IOBJ_MEMBER_FUNCTION_P (callee)
+	  && TREE_CODE (call) == CALL_EXPR
+	  && call_expr_nargs (call) >= 1)
+	{
+	  tree this_parm = DECL_ARGUMENTS (callee);
+	  tree substituted = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (call, 0));
+	  bool is_const_this = TYPE_READONLY (TREE_TYPE (TREE_TYPE (this_parm)));
+	  /* THIS's own type is always a pointer, so a bare pointer decl
+	     substituted here (the common case, no ADDR_EXPR) is asking
+	     "is this pointer's own value owned", not "is its pointee
+	     owned" -- see oa_reference_owned_p's own leading comment.  */
+	  if (!is_const_this
+	      && !oa_reference_owned_p (substituted, env,
+					/*asking_about_pointer_value=*/true))
+	    {
+	      error_at (EXPR_LOCATION (call),
+			"receiver %qE is not owned by the calling "
+			"function, so it may not be passed as the "
+			"non-const receiver of %qD",
+			substituted, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    }
+	}
+    }
+}
+
+/* D4324/P2680 item 7: like oa_scan_calls_in_expr, but discharges ONLY
+   item 7's own call-site obligation above (a conveyor callee's implicit
+   reference-parameter Q1 obligation, and Q2's ownership check for a
+   non-const one) -- deliberately none of oa_scan_calls_in_expr's own
+   invalidation/establishment side effects (oa_invalidate_symbolic_
+   facts_for_call_args and friends), which are correct for an ordinary,
+   *executed* statement but wrong for a call reached from CONTRACT
+   CONDITION TEXT specifically: a named-predicate call like 'is_opened
+   (f)' inside a contract_assert's own condition is meant to be a pure,
+   read-only consult of an already-established fact (that's the whole
+   point of a named-predicate conjunct), not an ordinary call whose
+   argument might have been mutated. Confirmed via direct testing that
+   reusing the full oa_scan_calls_in_expr for this (an earlier revision
+   of this fix) incorrectly invalidated exactly that kind of fact: a
+   postcondition-established named-predicate fact for 'f', consulted by
+   a LATER contract_assert's own condition text in the same function,
+   was silently invalidated by that later contract_assert's own
+   is_opened(f) call reaching this scan -- downgrading a genuine
+   "provably false" hard error to a mere "cannot verify" warning
+   (d4324-conveyor-assert-predicate-bad.C, found by the regression sweep
+   this fix's own broader change required running).  Used by oa_handle_
+   precondition_stmt/oa_handle_postcondition_stmt/oa_handle_assertion_
+   stmt for their own condition text, per the project's own standing
+   principle that a conveyor restriction always applies to both
+   conveyor functions and conveyor predicates (see [[project_conveyor_
+   rules_functions_and_predicates]]) -- ordinary if/loop conditions
+   still go through the full oa_scan_calls_in_expr via oa_process_
+   condition, unaffected by this narrower, contract-condition-only
+   scan.  */
+
+static void
+oa_scan_item7_in_expr (tree *expr, oa_env &env)
+{
+  cp_walk_tree (expr, [](tree *tp, int *, void *data_) -> tree
+    {
+      oa_env *e = (oa_env *) data_;
+      tree t = *tp;
+      if (t == NULL_TREE || t == error_mark_node
+	  || (TREE_CODE (t) != CALL_EXPR && TREE_CODE (t) != AGGR_INIT_EXPR))
+	return NULL_TREE;
+      tree arg;
+      if (is_object_address_call_p (t, &arg))
+	return NULL_TREE;
+      oa_maybe_instantiate_contracts (cp_get_callee_fndecl_nofold (t));
+      oa_handle_call_precondition_obligation (t, *e);
+      return NULL_TREE;
+    }, &env, NULL);
 }
 
 /* Forward-declared: defined later, alongside its public, plugin-facing
@@ -14924,7 +15699,8 @@ oa_could_alias_as_parameters_public (tree a, tree b)
    inspection), so the loop below already enumerates it.  */
 
 static void
-oa_invalidate_parameter_alias_group (tree identity, oa_env &env)
+oa_invalidate_parameter_alias_group (tree identity, oa_env &env,
+				      bool invalidate_object_address = true)
 {
   if (!current_function_decl || TREE_CODE (identity) != PARM_DECL
       || DECL_CONTEXT (identity) != current_function_decl)
@@ -14938,9 +15714,32 @@ oa_invalidate_parameter_alias_group (tree identity, oa_env &env)
       env.contract_field_range_invalidate_all (parm);
       env.contract_float_field_range_invalidate_all (parm);
       env.contract_call_range_invalidate_all (parm);
+      /* D4324/P2680 item 8: m_contract_field_nz_map needs the same
+	 whole-object invalidation as the field-range maps just above --
+	 see its own comment for why it's a real, separate fact map, not
+	 folded into one of those.  */
+      env.contract_field_nz_invalidate_all (parm);
       env.field_alias_invalidate_all (parm);
       env.array_alias_invalidate_all (parm);
       env.field_object_predicate_invalidate_all (parm);
+      /* D4324: m_map (is_object_address) and m_range_map (array-offset)
+	 were never invalidated here, unlike every other fact map above --
+	 a real, pre-existing gap found while designing reference-safety
+	 obligations (a reference's own is_object_address fact needs the
+	 same per-argument invalidation discipline to be trustworthy).
+	 Same whole-object granularity as the other invalidations in this
+	 loop. INVALIDATE_OBJECT_ADDRESS is false when the identity whose
+	 alias group is being invalidated was itself exempted from this
+	 pair (see oa_invalidate_symbolic_facts_for_call_args's own
+	 comment on why a conveyor callee can't invalidate object-address
+	 validity at all) -- if IDENTITY's own fact didn't actually
+	 change, there's nothing to propagate to whatever might alias it
+	 either.  */
+      if (invalidate_object_address)
+	{
+	  env.invalidate (parm);
+	  env.range_invalidate (parm);
+	}
     }
 }
 
@@ -14971,6 +15770,30 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
      below.  */
   bool call_is_aggr_init = TREE_CODE (call) == AGGR_INIT_EXPR;
   int nargs = call_is_aggr_init ? aggr_init_expr_nargs (call) : call_expr_nargs (call);
+  /* D4324/P2680: a conveyor callee can never invalidate object-address
+     validity for ANY reference or pointer it's handed -- its own
+     'this' for a member call, a const reference/pointer, or a non-
+     const one alike. The mandatory conveyor UB-freedom rules already
+     forbid 'delete'/'delete this'/an explicit destructor call anywhere
+     in its own reachable call graph (the same reasoning that justified
+     extending m_map's own invalidation to fire on every call in the
+     first place -- see the plan's item 3), so nothing a conveyor
+     callee does can actually end an argument's lifetime, regardless of
+     which parameter position it arrived through. This is specific to
+     is_object_address/array-offset (m_map/m_range_map): a conveyor
+     callee genuinely CAN change an argument's own field/predicate
+     facts (real state, unlike whether it's still a live object at
+     all), so every other invalidation below still applies
+     unconditionally. Found via real code: 'if (i < v.size ()) return
+     get_checked (v, i);' inside a conveyor function -- S::size() const
+     conveyor's own call on 'v' was wiping 'v's is_object_address fact
+     before GET_CHECKED's own Q1 obligation on 'v' could be discharged,
+     even though a conveyor accessor call obviously can't invalidate
+     the very reference it was called through.  */
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  bool callee_is_conveyor = callee != NULL_TREE
+    && TREE_CODE (callee) == FUNCTION_DECL
+    && DECL_DECLARED_CONVEYOR_P (callee);
   for (int i = call_is_aggr_init ? 1 : 0; i < nargs; ++i)
     {
       tree call_arg = call_is_aggr_init
@@ -14986,10 +15809,23 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 	  env.contract_field_range_invalidate_all (identity);
 	  env.contract_float_field_range_invalidate_all (identity);
 	  env.contract_call_range_invalidate_all (identity);
+	  /* D4324/P2680 item 8: see oa_invalidate_parameter_alias_group's
+	     own identical addition just above.  */
+	  env.contract_field_nz_invalidate_all (identity);
 	  env.field_alias_invalidate_all (identity);
 	  env.array_alias_invalidate_all (identity);
 	  env.field_object_predicate_invalidate_all (identity);
-	  oa_invalidate_parameter_alias_group (identity, env);
+	  /* D4324: see oa_invalidate_parameter_alias_group's own identical
+	     addition just above -- m_map/m_range_map need the same
+	     per-argument invalidation discipline every other fact map here
+	     already gets. Exempted for a conveyor callee -- see this
+	     function's own comment above.  */
+	  if (!callee_is_conveyor)
+	    {
+	      env.invalidate (identity);
+	      env.range_invalidate (identity);
+	    }
+	  oa_invalidate_parameter_alias_group (identity, env, !callee_is_conveyor);
 	}
     }
 }
@@ -15151,9 +15987,33 @@ oa_call_postcondition_object_address_p (tree call)
 	  tree arg;
 	  if (is_object_address_call_p (*conjuncts[i], &arg))
 	    {
-	      STRIP_ANY_LOCATION_WRAPPER (arg);
+	      arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+	      /* D4324/P2680: a REFERENCE-returning function's own
+		 postcondition names its result as 'is_object_address(&r)'
+		 (matching the same '&reference' spelling Q1 already uses
+		 for a reference parameter's own implicit obligation), not
+		 bare 'is_object_address(r)' the way a pointer-returning
+		 function's does -- and R itself, being reference-typed,
+		 arrives as a bare CONVERT_EXPR/NOP_EXPR wrapping RESULT_ID
+		 (references need no ADDR_EXPR of their own, same as every
+		 other '&reference' shape this pass has already needed to
+		 unwrap), not literally ADDR_EXPR(RESULT_ID) the way
+		 '&plain_var' would. Strip that first, then also check the
+		 ADDR_EXPR shape for a pointer-typed result named the same
+		 way. Found via real code: __possibly_const_range's own
+		 'auto&' return.  */
+	      while (TREE_CODE (arg) == NON_LVALUE_EXPR || TREE_CODE (arg) == NOP_EXPR
+		     || TREE_CODE (arg) == CONVERT_EXPR
+		     || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+		arg = TREE_OPERAND (arg, 0);
 	      if (arg == result_id)
 		return true;
+	      if (TREE_CODE (arg) == ADDR_EXPR)
+		{
+		  tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+		  if (op == result_id)
+		    return true;
+		}
 	    }
 	}
     }
@@ -16992,6 +17852,33 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
   auto_vec<tree *> conjuncts;
   oa_collect_conjuncts (&cond, &conjuncts);
 
+  /* D4324/P2680 item 7: a call reached from a PRECONDITION's own
+     condition text (e.g. 'pre<ctrl>(some_conveyor_fn (y))') previously
+     never had its own item-7 obligation discharged at all -- this
+     function only ever pattern-matched specific conjunct shapes
+     (is_object_address(E), a named predicate, E != 0) below, never
+     scanned for an arbitrary call's own reference-parameter obligation
+     the way oa_process_condition already does (via oa_scan_calls_in_
+     expr) for an ordinary if/loop condition's own conjuncts. That meant
+     a conveyor callee's own implicit reference-parameter Q1 obligation,
+     and Q2's ownership check for a non-const one, were both silently
+     unenforced for any call made from inside a precondition's own text
+     -- an otherwise-ordinary function's 'pre<ctrl>(use_val_mut (y))', y
+     a borrowed reference parameter, compiled clean with no ownership
+     error at all, found by direct testing. oa_scan_item7_in_expr, not
+     the full oa_scan_calls_in_expr: see its own comment for why reusing
+     the full scan here is actively wrong (it invalidates facts a named-
+     predicate conjunct elsewhere in the same condition/function needs
+     to still read as established). Unconditional, matching oa_process_
+     condition's own identical, ungated call -- item 7's own check is
+     keyed on the CALLEE's DECL_DECLARED_CONVEYOR_P, not on whether this
+     condition or its enclosing function is itself conveyor, so it must
+     run regardless of CONVEYOR_OK/SYMBOLIC_OK here too. Per the
+     project's own standing principle that a conveyor restriction always
+     applies to both conveyor functions and conveyor predicates (see
+     [[project_conveyor_rules_functions_and_predicates]]).  */
+  oa_scan_item7_in_expr (&cond, env);
+
   /* D4324/P2680, Increment V: the narrow item-8 dataflow checks (div/mod
      nonzero-divisor, fixed-size-array-bound, overflow) are conveyor-scoped
      the same way the point-of-construction checks are, but unlike those,
@@ -17008,6 +17895,8 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 
   auto_vec<tree> facts;
   auto_vec<tree> nz_facts;
+  auto_vec<tree> field_nz_objs;
+  auto_vec<tree> field_nz_fields;
   if (conveyor_ok || symbolic_ok)
     for (unsigned i = 0; i < conjuncts.length (); ++i)
       {
@@ -17029,10 +17918,38 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 		   || TREE_CODE (arg) == CONVERT_EXPR
 		   || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
 	      arg = TREE_OPERAND (arg, 0);
+	    /* D4324/P2680: 'is_object_address(&r)' for a REFERENCE r -- the
+	       syntax Q1 uses, since a reference has no pointer value of its
+	       own to name directly the way is_object_address(p) does for a
+	       pointer p -- arrives here as ADDR_EXPR(r). Unwrap it so the
+	       fact below is established for 'r' itself (matching every
+	       other consult/establishment of a reference's own m_map entry,
+	       e.g. task #140's implicit per-parameter synthesis), not for
+	       the address expression, which the VAR_P/PARM_DECL check just
+	       below would never match. Without this, an explicit
+	       'is_object_address(&r)' precondition -- the only way a
+	       non-conveyor-declared function can hand a proof for its own
+	       reference parameter to a conveyor callee -- silently
+	       established nothing at all.  */
+	    if (TREE_CODE (arg) == ADDR_EXPR)
+	      {
+		tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+		if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
+		  arg = op;
+	      }
 	    facts.safe_push (arg);
 	  }
 	else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
 	  nz_facts.safe_push (arg);
+	else
+	  {
+	    tree fld_obj, fld;
+	    if (oa_field_nonzero_conjunct_p (*conjuncts[i], &fld_obj, &fld))
+	      {
+		field_nz_objs.safe_push (fld_obj);
+		field_nz_fields.safe_push (fld);
+	      }
+	  }
       }
 
   if (!oa_resolve_condition (&cond, env, conveyor_ok, symbolic_ok, /*trust=*/true))
@@ -17043,6 +17960,37 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
   CONTRACT_CONDITION (contract) = cond;
 
   oa_establish_shared_substrate_self_trust (cond, env, tracking_ok, conveyor_ok);
+
+  /* D4324/P2680 item 8: a 'this->field != 0'/'obj.field != 0' precondition
+     conjunct establishes m_contract_field_nz_map the same single-call-
+     site way oa_establish_shared_substrate_self_trust establishes
+     m_contract_field_range_map for a comparison-shaped field conjunct --
+     one shared map, tagged CONVEYOR_ESTABLISHED = CONVEYOR_OK, rather
+     than the two-separate-maps split facts/nz_facts get just below
+     (own comment on m_contract_field_nz_map for why).  */
+  if (conveyor_ok || symbolic_ok)
+    for (unsigned i = 0; i < field_nz_objs.length (); ++i)
+      {
+	/* 'r.field'/'r->field' for a reference parameter R arrives here
+	   as COMPONENT_REF (INDIRECT_REF (r), field) -- references are
+	   represented as pointers internally, so the object operand
+	   needs the same INDIRECT_REF unwrap oa_get_range's own
+	   COMPONENT_REF case (and oa_provably_nonzero_p's new one) apply
+	   before resolving an identity, or none of the resolvers below
+	   (which only ever match a bare decl/ADDR_EXPR/COMPONENT_REF
+	   shape, never an INDIRECT_REF) would recognize it.  */
+	tree fld_obj = field_nz_objs[i];
+	tree obj_expr = TREE_CODE (fld_obj) == INDIRECT_REF
+	  ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (fld_obj, 0)) : fld_obj;
+	tree identity;
+	if (!oa_object_identity_decl (obj_expr, &identity)
+	    && !oa_field_slot_identity (obj_expr, env, &identity)
+	    && !oa_array_slot_identity (obj_expr, env, &identity)
+	    && !oa_field_object_identity (obj_expr, env, &identity))
+	  continue;
+	identity = env.alias_find (identity);
+	env.contract_field_nz_set (identity, field_nz_fields[i], conveyor_ok);
+      }
 
   /* CONVEYOR_OK writes into env's own m_map/m_nz_map, SYMBOLIC_OK into
      the symbolic-only maps -- independently, since a control object
@@ -17356,6 +18304,18 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
   auto_vec<tree *> conjuncts;
   oa_collect_conjuncts (&cond, &conjuncts);
 
+  /* D4324/P2680 item 7: see the identical comment in oa_handle_
+     precondition_stmt -- a call reached from a contract_assert's own
+     condition text needs the same item-7 discharge an ordinary call
+     already gets, unconditionally (keyed on the CALLEE's own
+     DECL_DECLARED_CONVEYOR_P, not on CONVEYOR_OK/SYMBOLIC_OK here).
+     oa_scan_item7_in_expr, not the full oa_scan_calls_in_expr -- see
+     its own comment; this is exactly the contract_assert shape
+     (a named-predicate conjunct's own fact getting wrongly invalidated
+     by a later call in the same condition) that motivated the
+     narrower scan.  */
+  oa_scan_item7_in_expr (&cond, env);
+
   /* D4324/P2680, Increment V: see the identical comment in
      oa_handle_precondition_stmt -- same narrow item-8 dataflow checks,
      now given the same left-to-right, per-conjunct refinement via
@@ -17365,6 +18325,8 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 
   auto_vec<tree> facts;
   auto_vec<tree> nz_facts;
+  auto_vec<tree> field_nz_objs;
+  auto_vec<tree> field_nz_fields;
   if (conveyor_ok || symbolic_ok)
     for (unsigned i = 0; i < conjuncts.length (); ++i)
       {
@@ -17381,10 +18343,38 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 		   || TREE_CODE (arg) == CONVERT_EXPR
 		   || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
 	      arg = TREE_OPERAND (arg, 0);
+	    /* D4324/P2680: 'is_object_address(&r)' for a REFERENCE r -- the
+	       syntax Q1 uses, since a reference has no pointer value of its
+	       own to name directly the way is_object_address(p) does for a
+	       pointer p -- arrives here as ADDR_EXPR(r). Unwrap it so the
+	       fact below is established for 'r' itself (matching every
+	       other consult/establishment of a reference's own m_map entry,
+	       e.g. task #140's implicit per-parameter synthesis), not for
+	       the address expression, which the VAR_P/PARM_DECL check just
+	       below would never match. Without this, an explicit
+	       'is_object_address(&r)' precondition -- the only way a
+	       non-conveyor-declared function can hand a proof for its own
+	       reference parameter to a conveyor callee -- silently
+	       established nothing at all.  */
+	    if (TREE_CODE (arg) == ADDR_EXPR)
+	      {
+		tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+		if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
+		  arg = op;
+	      }
 	    facts.safe_push (arg);
 	  }
 	else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
 	  nz_facts.safe_push (arg);
+	else
+	  {
+	    tree fld_obj, fld;
+	    if (oa_field_nonzero_conjunct_p (*conjuncts[i], &fld_obj, &fld))
+	      {
+		field_nz_objs.safe_push (fld_obj);
+		field_nz_fields.safe_push (fld);
+	      }
+	  }
       }
 
   /* D4324: unlike every other fact-establishing step in this function,
@@ -17506,6 +18496,28 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
     return;
 
   oa_establish_shared_substrate_self_trust (cond, env, tracking_ok, conveyor_ok);
+
+  /* D4324/P2680 item 8: see oa_handle_precondition_stmt's own identical
+     addition -- one shared-map, single-call-site establishment for a
+     'this->field != 0'/'obj.field != 0' conjunct, tagged CONVEYOR_
+     ESTABLISHED = CONVEYOR_OK.  */
+  if (conveyor_ok || symbolic_ok)
+    for (unsigned i = 0; i < field_nz_objs.length (); ++i)
+      {
+	/* See oa_handle_precondition_stmt's own identical INDIRECT_REF
+	   unwrap and its comment for why it's needed.  */
+	tree fld_obj = field_nz_objs[i];
+	tree obj_expr = TREE_CODE (fld_obj) == INDIRECT_REF
+	  ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (fld_obj, 0)) : fld_obj;
+	tree identity;
+	if (!oa_object_identity_decl (obj_expr, &identity)
+	    && !oa_field_slot_identity (obj_expr, env, &identity)
+	    && !oa_array_slot_identity (obj_expr, env, &identity)
+	    && !oa_field_object_identity (obj_expr, env, &identity))
+	  continue;
+	identity = env.alias_find (identity);
+	env.contract_field_nz_set (identity, field_nz_fields[i], conveyor_ok);
+      }
 
   /* See the identical CONVEYOR_OK/SYMBOLIC_OK split in oa_handle_
      precondition_stmt above, and its own comment on why the two axes
@@ -17724,6 +18736,11 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
      itself just created.  A plain union, same as every other
      shadow_decls_merge_with call site.  */
   env.shadow_decls_merge_with (scratch);
+  /* D4324: reference-safety Q2's own borrowed-tracking needs the same
+     "loop body's scratch env, union back into env" treatment as shadow
+     decls just above -- a pointer reassigned to something borrowed
+     inside the loop body must still read as borrowed afterward.  */
+  env.borrowed_merge_with (scratch);
 
   auto_vec<tree> reassigned, reassigned_nz;
   for (unsigned i = 0; i < parts.length (); ++i)
@@ -17890,6 +18907,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       checkenv.contract_field_range_invalidate_all (d);
       checkenv.contract_float_field_range_invalidate_all (d);
       checkenv.contract_call_range_invalidate_all (d);
+      checkenv.contract_field_nz_invalidate_all (d);
       checkenv.field_alias_invalidate_all (d);
       checkenv.array_alias_invalidate_all (d);
       checkenv.field_object_predicate_invalidate_all (d);
@@ -17979,6 +18997,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       env.contract_field_range_invalidate_all (range_result_decls[i]);
       env.contract_float_field_range_invalidate_all (range_result_decls[i]);
       env.contract_call_range_invalidate_all (range_result_decls[i]);
+      env.contract_field_nz_invalidate_all (range_result_decls[i]);
       env.field_alias_invalidate_all (range_result_decls[i]);
       env.array_alias_invalidate_all (range_result_decls[i]);
       env.field_object_predicate_invalidate_all (range_result_decls[i]);
@@ -18141,6 +19160,38 @@ oa_process_condition (tree cond, oa_env &env,
       tree nz_decl;
       if (oa_nonzero_conjunct_p (*conjuncts[i], &nz_decl))
 	cond_env.nz_set (nz_decl, true);
+      else
+	{
+	  /* D4324/P2680 item 8: the field-expression analogue just above
+	     ('this->field != 0'/'obj.field != 0') -- a brand-new fact
+	     established this way is unconditionally CONVEYOR_ESTABLISHED
+	     (it comes from real, actually-executed control flow, exactly
+	     like oa_refine_single_comparison's own identical rule for a
+	     comparison-shaped field conjunct), but tightening an existing
+	     fact must not upgrade whatever provenance it already had.  */
+	  tree fld_obj, fld;
+	  if (oa_field_nonzero_conjunct_p (*conjuncts[i], &fld_obj, &fld))
+	    {
+	      /* See oa_handle_precondition_stmt's own identical INDIRECT_REF
+		 unwrap and its comment for why it's needed.  */
+	      tree obj_expr = TREE_CODE (fld_obj) == INDIRECT_REF
+		? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (fld_obj, 0))
+		: fld_obj;
+	      tree identity;
+	      if (oa_object_identity_decl (obj_expr, &identity)
+		  || oa_field_slot_identity (obj_expr, cond_env, &identity)
+		  || oa_array_slot_identity (obj_expr, cond_env, &identity)
+		  || oa_field_object_identity (obj_expr, cond_env, &identity))
+		{
+		  identity = cond_env.alias_find (identity);
+		  bool conveyor_established = true;
+		  cond_env.contract_field_nz_get (identity, fld,
+						   &conveyor_established);
+		  cond_env.contract_field_nz_set (identity, fld,
+						   conveyor_established);
+		}
+	    }
+	}
       oa_refine_single_comparison (*conjuncts[i], cond_env, /*asserted_true=*/true);
     }
 
@@ -18208,6 +19259,33 @@ oa_scan_item8_in_expr (tree *expr, oa_env &env)
       tree nz_decl;
       if (oa_nonzero_conjunct_p (*conjuncts[i], &nz_decl))
 	scan_env.nz_set (nz_decl, true);
+      else
+	{
+	  /* D4324/P2680 item 8: see oa_process_condition's own identical
+	     addition for the reasoning.  */
+	  tree fld_obj, fld;
+	  if (oa_field_nonzero_conjunct_p (*conjuncts[i], &fld_obj, &fld))
+	    {
+	      /* See oa_handle_precondition_stmt's own identical INDIRECT_REF
+		 unwrap and its comment for why it's needed.  */
+	      tree obj_expr = TREE_CODE (fld_obj) == INDIRECT_REF
+		? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (fld_obj, 0))
+		: fld_obj;
+	      tree identity;
+	      if (oa_object_identity_decl (obj_expr, &identity)
+		  || oa_field_slot_identity (obj_expr, scan_env, &identity)
+		  || oa_array_slot_identity (obj_expr, scan_env, &identity)
+		  || oa_field_object_identity (obj_expr, scan_env, &identity))
+		{
+		  identity = scan_env.alias_find (identity);
+		  bool conveyor_established = true;
+		  scan_env.contract_field_nz_get (identity, fld,
+						   &conveyor_established);
+		  scan_env.contract_field_nz_set (identity, fld,
+						   conveyor_established);
+		}
+	    }
+	}
       oa_refine_single_comparison (*conjuncts[i], scan_env, /*asserted_true=*/true);
     }
 }
@@ -18659,12 +19737,14 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		  oa_postcondition_merge_env->call_call_relational_merge_with (snap);
 		  oa_postcondition_merge_env->contract_scalar_range_merge_with (snap);
 		  oa_postcondition_merge_env->contract_field_range_merge_with (snap);
+		  oa_postcondition_merge_env->contract_field_nz_merge_with (snap);
 		  oa_postcondition_merge_env->contract_float_field_range_merge_with (snap);
 		  oa_postcondition_merge_env->contract_call_range_merge_with (snap);
 		  oa_postcondition_merge_env->shadow_decls_merge_with (snap);
 		  oa_postcondition_merge_env->alias_merge_with (snap);
 		  oa_postcondition_merge_env->field_alias_merge_with (snap);
 		  oa_postcondition_merge_env->array_alias_merge_with (snap);
+		  oa_postcondition_merge_env->borrowed_merge_with (snap);
 		}
 	    }
 	}
@@ -18752,12 +19832,14 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      oa_postcondition_merge_env->call_call_relational_merge_with (env);
 	      oa_postcondition_merge_env->contract_scalar_range_merge_with (env);
 	      oa_postcondition_merge_env->contract_field_range_merge_with (env);
+	      oa_postcondition_merge_env->contract_field_nz_merge_with (env);
 	      oa_postcondition_merge_env->contract_float_field_range_merge_with (env);
 	      oa_postcondition_merge_env->contract_call_range_merge_with (env);
 	      oa_postcondition_merge_env->shadow_decls_merge_with (env);
 	      oa_postcondition_merge_env->alias_merge_with (env);
 	      oa_postcondition_merge_env->field_alias_merge_with (env);
 	      oa_postcondition_merge_env->array_alias_merge_with (env);
+	      oa_postcondition_merge_env->borrowed_merge_with (env);
 	    }
 	}
 
@@ -18853,12 +19935,14 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.call_call_relational_merge_with (result);
 		merged.contract_scalar_range_merge_with (result);
 		merged.contract_field_range_merge_with (result);
+		merged.contract_field_nz_merge_with (result);
 		merged.contract_float_field_range_merge_with (result);
 		merged.contract_call_range_merge_with (result);
 		merged.shadow_decls_merge_with (result);
 		merged.alias_merge_with (result);
 		merged.field_alias_merge_with (result);
 		merged.array_alias_merge_with (result);
+		merged.borrowed_merge_with (result);
 	      }
 	  };
 
@@ -19005,9 +20089,22 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    if (DECL_INITIAL (decl)
 		&& oa_object_identity_decl (DECL_INITIAL (decl), &alias_rhs_identity)
 		&& alias_rhs_identity != decl)
-	      env.alias_set (decl, env.alias_find (alias_rhs_identity));
+	      {
+		env.alias_set (decl, env.alias_find (alias_rhs_identity));
+		/* Ownership now derives via the alias target itself.  */
+		env.borrowed_clear (decl);
+	      }
 	    else
-	      env.alias_invalidate (decl);
+	      {
+		env.alias_invalidate (decl);
+		/* D4324: Q2 ownership-laundering fix -- see oa_call_result_
+		   owned_p's own comment.  */
+		tree call = oa_strip_to_call (DECL_INITIAL (decl));
+		if (call && !oa_call_result_owned_p (call, env))
+		  env.borrowed_set (decl);
+		else
+		  env.borrowed_clear (decl);
+	      }
 	  }
 	else if (VAR_P (decl) && TREE_CODE (TREE_TYPE (decl)) == REFERENCE_TYPE
 		 && DECL_INITIAL (decl))
@@ -19023,7 +20120,29 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    tree alias_rhs_identity;
 	    if (oa_object_identity_decl (DECL_INITIAL (decl), &alias_rhs_identity)
 		&& alias_rhs_identity != decl)
-	      env.alias_set (decl, env.alias_find (alias_rhs_identity));
+	      {
+		env.alias_set (decl, env.alias_find (alias_rhs_identity));
+		env.borrowed_clear (decl);
+	      }
+	    else
+	      {
+		/* D4324: Q2 ownership-laundering fix, reference-declaration
+		   analogue of the pointer case above.  */
+		tree call = oa_strip_to_call (DECL_INITIAL (decl));
+		if (call && !oa_call_result_owned_p (call, env))
+		  env.borrowed_set (decl);
+		else
+		  env.borrowed_clear (decl);
+	      }
+	    /* D4324: reference-safety, Q1's "by construction" case for a
+	       LOCAL reference declaration -- the same is_object_address
+	       establishment the pointer case above already does
+	       unconditionally (not gated on conveyor-ness; consumers decide
+	       whether/how to use the fact). Without this, 'T& r = *p;'
+	       never recorded whether r's own binding was itself provable,
+	       even though a pointer initialized the identical way already
+	       does.  */
+	    env.set (decl, oa_provable_p (DECL_INITIAL (decl), env));
 	  }
 	else if (VAR_P (decl) && INTEGRAL_TYPE_P (TREE_TYPE (decl)))
 	  {
@@ -19321,6 +20440,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		env.contract_field_range_invalidate_all (identity);
 		env.contract_float_field_range_invalidate_all (identity);
 		env.contract_call_range_invalidate_all (identity);
+		env.contract_field_nz_invalidate_all (identity);
 		env.field_alias_invalidate_all (identity);
 		env.array_alias_invalidate_all (identity);
 		env.field_object_predicate_invalidate_all (identity);
@@ -19570,9 +20690,26 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    tree alias_rhs_identity;
 	    if (oa_object_identity_decl (rhs, &alias_rhs_identity)
 		&& alias_rhs_identity != lhs)
-	      env.alias_set (lhs, env.alias_find (alias_rhs_identity));
+	      {
+		env.alias_set (lhs, env.alias_find (alias_rhs_identity));
+		env.borrowed_clear (lhs);
+	      }
 	    else
-	      env.alias_invalidate (lhs);
+	      {
+		env.alias_invalidate (lhs);
+		/* D4324: Q2 ownership-laundering fix -- the reassignment
+		   analogue of the DECL_EXPR pointer case's identical
+		   addition; this is the site that makes reassignment sound,
+		   not just declaration (a stale borrowed flag from an
+		   earlier binding must not survive an owned reassignment,
+		   and a stale owned/absent entry must not survive a
+		   borrowed one).  */
+		tree call = oa_strip_to_call (rhs);
+		if (call && !oa_call_result_owned_p (call, env))
+		  env.borrowed_set (lhs);
+		else
+		  env.borrowed_clear (lhs);
+	      }
 	  }
 	else if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 		 && INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
@@ -19809,6 +20946,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	       maps (bare-scalar and ptr->field).  */
 	    then_env.contract_scalar_range_merge_with (else_env);
 	    then_env.contract_field_range_merge_with (else_env);
+	    then_env.contract_field_nz_merge_with (else_env);
 	    then_env.contract_float_field_range_merge_with (else_env);
 	    then_env.contract_call_range_merge_with (else_env);
 	    /* -fcontract-symbolic-runtime-checks (Mechanism B): a shadow's
@@ -19821,6 +20959,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    then_env.alias_merge_with (else_env);
 	    then_env.field_alias_merge_with (else_env);
 	    then_env.array_alias_merge_with (else_env);
+	    then_env.borrowed_merge_with (else_env);
 	    env.assign (then_env);
 	  }
 	return;
@@ -19883,6 +21022,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    /* -fcontract-symbolic-proofs: same as COND_EXPR above.  */
 	    then_env.contract_scalar_range_merge_with (else_env);
 	    then_env.contract_field_range_merge_with (else_env);
+	    then_env.contract_field_nz_merge_with (else_env);
 	    then_env.contract_float_field_range_merge_with (else_env);
 	    then_env.contract_call_range_merge_with (else_env);
 	    /* -fcontract-symbolic-runtime-checks (Mechanism B): same union
@@ -19893,6 +21033,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	    then_env.alias_merge_with (else_env);
 	    then_env.field_alias_merge_with (else_env);
 	    then_env.array_alias_merge_with (else_env);
+	    then_env.borrowed_merge_with (else_env);
 	    env.assign (then_env);
 	  }
 	return;
@@ -20040,6 +21181,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		/* -fcontract-symbolic-proofs: same as the if/else case.  */
 		merged.contract_scalar_range_merge_with (current);
 		merged.contract_field_range_merge_with (current);
+		merged.contract_field_nz_merge_with (current);
 		merged.contract_float_field_range_merge_with (current);
 		merged.contract_call_range_merge_with (current);
 		/* -fcontract-symbolic-runtime-checks (Mechanism B): same
@@ -20050,6 +21192,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.alias_merge_with (current);
 		merged.field_alias_merge_with (current);
 		merged.array_alias_merge_with (current);
+		merged.borrowed_merge_with (current);
 	      }
 	  };
 
@@ -20113,12 +21256,14 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		merged.call_call_relational_merge_with (env);
 		merged.contract_scalar_range_merge_with (env);
 		merged.contract_field_range_merge_with (env);
+		merged.contract_field_nz_merge_with (env);
 		merged.contract_float_field_range_merge_with (env);
 		merged.contract_call_range_merge_with (env);
 		merged.shadow_decls_merge_with (env);
 		merged.alias_merge_with (env);
 		merged.field_alias_merge_with (env);
 		merged.array_alias_merge_with (env);
+		merged.borrowed_merge_with (env);
 	      }
 	    any_result = true;
 	  }
@@ -20316,6 +21461,23 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
     = result_id && (VAR_P (result_id) || TREE_CODE (result_id) == PARM_DECL);
   if (have_result_id && &ret_env == &empty_ret_env)
     ret_env.set (result_id, oa_return_seen && oa_return_all_provable);
+
+  /* D4324/P2680 item 7: see the identical comment in oa_handle_
+     precondition_stmt -- a call reached from a POSTCONDITION's own
+     condition text needs the same item-7 discharge too, unconditionally.
+     Scanned against RET_ENV, not ENV/SCAN_ENV below: the postcondition's
+     own condition is checked against RET_ENV just below (the real state
+     at the function's exit, merged across every return), so a call
+     reached from within it is likewise evaluated at that same point --
+     matching item 7's own semantics (is this argument provably valid
+     and, if lent non-const, owned, AT THE POINT OF THIS CALL), not
+     item 8's deliberately different choice of ENV (which needs
+     everything established throughout the function's own body, not
+     just at exit, for an ordinary local the postcondition references).
+     oa_scan_item7_in_expr, not the full oa_scan_calls_in_expr -- see
+     its own comment for why the full scan's invalidation side effects
+     are wrong for a call reached from contract condition text.  */
+  oa_scan_item7_in_expr (&cond, ret_env);
 
   /* D4324/P2680, Increment V: the narrow item-8 dataflow checks, same as
      oa_handle_precondition_stmt/oa_handle_assertion_stmt above -- scanned
@@ -20623,6 +21785,24 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
   if (!flag_contract_control_objects)
     return;
 
+  /* D4324/P2680: a generated "pred"/"thunk"/consteval-thunk helper
+     function (see ldf_contract_predicate_helper's own comment) never
+     independently needs this scan: its own body is a mechanical,
+     verbatim re-embedding of some OTHER, already-guarded function's
+     own contract condition, with no contract-statement wrapper of its
+     own -- oa_scan_stray_is_object_address's "no recognized wrapper
+     means illegitimate" reasoning does not apply to it, and by the
+     time one of these helpers is built, the ORIGINAL condition it
+     copies has already been through this exact resolution (via the
+     guarded function's own, earlier finish_function/resolve_object_
+     address_in_function call) -- see also the reordering in decl.cc's
+     finish_function (maybe_save_constexpr_fundef now runs after, not
+     before, this call), which fixes the specific ordering hazard that
+     could otherwise let one of these helpers observe a not-yet-
+     resolved copy.  */
+  if (CONTRACT_HELPER (fndecl) != ldf_contract_none)
+    return;
+
   oa_cache_contract_flavors (fndecl);
   /* Skip an uninstantiated template pattern, exactly like
      maybe_save_constexpr_fundef/check_conveyor_function_body -- this
@@ -20762,6 +21942,30 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
   oa_active_provenance
     = (flag_contract_conveyor_proofs && flag_contract_conveyor_proof_provenance)
       ? &prov_env : NULL;
+
+  /* D4324: reference-safety, Q1 -- every reference-typed parameter of a
+     conveyor-declared function is treated as if it implicitly carried
+     'pre<ctrl>(is_object_address(&x))', mirroring how an explicit such
+     precondition already establishes env.set(x, true) for a POINTER
+     parameter (oa_handle_precondition_stmt). Established here,
+     unconditionally, rather than only inside oa_handle_precondition_
+     stmt, because that function only ever runs when a PRECONDITION_STMT
+     node actually exists in the body -- a conveyor function with no
+     explicit precondition at all (still fully subject to every other
+     mandatory UB-freedom check via DECL_DECLARED_CONVEYOR_P) would
+     otherwise never get this fact for its own reference parameters,
+     even though item 7 (below) still requires every one of its callers
+     to prove it. Deliberately scoped to DECL_DECLARED_CONVEYOR_P here --
+     the same, narrower "conveyor-flavored predicate text on an
+     otherwise-ordinary function" scope is handled separately, inline
+     where that predicate text is processed, per the project's own
+     standing principle that a conveyor restriction always applies to
+     both conveyor functions and conveyor predicates (see [[project_
+     conveyor_rules_functions_and_predicates]]).  */
+  if (DECL_DECLARED_CONVEYOR_P (fndecl))
+    for (tree parm = DECL_ARGUMENTS (fndecl); parm; parm = DECL_CHAIN (parm))
+      if (TREE_CODE (TREE_TYPE (parm)) == REFERENCE_TYPE)
+	env.set (parm, true);
 
   oa_walk_stmt (&body, env);
 
@@ -23555,6 +24759,12 @@ build_predicate_thunk_function (tree contract, tree core_fn, tree struct_type)
   TREE_PUBLIC (fn) = 0;
   DECL_EXTERNAL (fn) = 0;
   DECL_INTERFACE_KNOWN (fn) = 1;
+  /* D4324/P2680: see ldf_contract_predicate_helper's own comment. This
+     particular helper's own body never embeds a bare is_object_address
+     call directly (it just forwards to CORE_FN, itself already marked),
+     but it's the same family of internal-only plumbing, so it gets the
+     same blanket exemption for consistency/defense-in-depth.  */
+  CONTRACT_HELPER (fn) = ldf_contract_predicate_helper;
   suppress_warning (fn);
 
   tree struct_ptr_type = build_pointer_type (struct_type);
@@ -23911,6 +25121,22 @@ build_predicate_constexpr_thunk (tree contract)
   TREE_PUBLIC (fn) = 0;
   DECL_EXTERNAL (fn) = 0;
   DECL_INTERFACE_KNOWN (fn) = 1;
+  /* D4324/P2680: see ldf_contract_predicate_helper's own comment --
+     this thunk's own body (below) is about to become a verbatim
+     re-embedding of CONTRACT's condition, with no contract-statement
+     wrapper of its own, so it must never independently re-run
+     resolve_object_address_in_function's own std::is_object_address
+     well-formedness scan. Confirmed via real code: a TEMPLATE
+     function's own postcondition, evaluated through exactly this
+     thunk from within a dependent noexcept-specifier/requires-clause
+     (e.g. libstdc++-v3's own __possibly_const_range, reached from
+     _CBegin::operator()'s own noexcept-specifier) -- unlike an
+     ordinary, non-template call, this can run before -- or entirely
+     outside of -- the owning instantiation's own normal finish_
+     function-time resolution pass, so this thunk's own copy of the
+     condition may still contain an *unresolved* is_object_address call
+     the scan would otherwise misidentify as stray.  */
+  CONTRACT_HELPER (fn) = ldf_contract_predicate_helper;
   /* Unlike the runtime-only core/thunk functions, this one must actually be
      usable from a constant expression -- and, unlike them, must NEVER be
      scheduled for real code generation: its body borrows CONTRACT's
