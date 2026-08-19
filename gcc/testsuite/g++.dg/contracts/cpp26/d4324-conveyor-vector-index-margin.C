@@ -29,12 +29,27 @@
 // range-vs-range fact fallback (oa_env_check_call_relational_fact_1, from
 // this branch's own earlier "range-vs-range" work) then finds the two
 // ranges provably disjoint and reports a hard error, not a warning.
+//
+// use_sound/use_unsound use an UNSIGNED idx (std::vector<int>::size_type)
+// deliberately: 'v.size () - idx' performs the subtraction in size_type
+// itself with no value-changing conversion of idx at all, so the
+// established margin fact is genuinely sound. use_signed_idx_declines
+// documents a real, fixed soundness bug: with a *signed* 'int idx',
+// 'v.size () - idx' first converts idx to size_type via the usual
+// arithmetic conversions (a negative idx wraps to a huge value), so a
+// fact derived by naively stripping that conversion back to the bare
+// signed idx would be unsound -- oa_match_shifted_comparison_against_
+// call's own oa_integral_conversion_value_preserving_p guard now
+// declines to establish it at all in this case, correctly falling back
+// to "cannot verify" rather than wrongly proving v[idx] safe for a
+// negative idx (see that guard's own comment for the concrete repro
+// that motivated it).
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -D_GLIBCXX_CONVEYOR_ASSERTIONS -D_GLIBCXX_PRECONDITION_ASSERTIONS" }
 
 #include <vector>
 
-int use_sound (std::vector<int>& v, int idx)
+int use_sound (std::vector<int>& v, std::vector<int>::size_type idx)
 {
   if (v.size () - idx > 10)
     {
@@ -44,12 +59,29 @@ int use_sound (std::vector<int>& v, int idx)
   return -1;
 }
 
-int use_unsound (std::vector<int>& v, int idx)
+int use_unsound (std::vector<int>& v, std::vector<int>::size_type idx)
 {
   if (v.size () - idx > 10)
     {
       idx += 15; // past the established margin
-      return v[idx]; // { dg-warning "cannot verify that .* satisfies the precondition" }
+      return v[idx]; // { dg-warning "cannot verify that [^\n]* satisfies the precondition" }
+    }
+  return -1;
+}
+
+int use_signed_idx_declines (std::vector<int>& v, int idx)
+{
+  if (v.size () - idx > 10)
+    {
+      // idx is signed here -- the subtraction above converts it to
+      // size_type first, so no fact can be soundly attributed to the
+      // raw signed idx (it could be negative). Correctly declines
+      // rather than wrongly proving this safe. Regex includes the
+      // '(...)idx' cast prefix (present only for a signed idx) to stay
+      // distinct from use_unsound's own identically-worded warning
+      // above -- dejagnu's dg-warning matching gets confused by two
+      // byte-identical regexes in the same file.
+      return v[idx]; // { dg-warning "cannot verify that [^\n]*\\)idx[^\n]* satisfies the precondition" }
     }
   return -1;
 }
@@ -67,5 +99,6 @@ int use_definitely_unsound (std::vector<int>& v)
 int main ()
 {
   std::vector<int> v(20);
-  return use_sound (v, 0) + use_unsound (v, 0) + use_definitely_unsound (v);
+  return use_sound (v, 0) + use_unsound (v, 0)
+	 + use_signed_idx_declines (v, 0) + use_definitely_unsound (v);
 }

@@ -4459,6 +4459,8 @@ cg_match_shifted_comparison_against_call (tree other, tree *param_out,
   bool is_call;
   tree field, base, callee, receiver, param;
   if (cg_cond_is_bare_param (op1, &param)
+      && oa_integral_conversion_value_preserving_p (TREE_TYPE (param),
+						      TREE_TYPE (op1))
       && cg_cond_operand_shape (op0, &is_call, &field, &base, &callee,
 				 &receiver)
       && is_call)
@@ -4470,6 +4472,8 @@ cg_match_shifted_comparison_against_call (tree other, tree *param_out,
       return true;
     }
   if (cg_cond_is_bare_param (op0, &param)
+      && oa_integral_conversion_value_preserving_p (TREE_TYPE (param),
+						      TREE_TYPE (op0))
       && cg_cond_operand_shape (op1, &is_call, &field, &base, &callee,
 				 &receiver)
       && is_call)

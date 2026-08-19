@@ -24448,6 +24448,43 @@ oa_match_comparison_against_call (tree conjunct, tree *param_out,
   return true;
 }
 
+/* True if every value FROM_TYPE can represent converts to TO_TYPE
+   without changing its mathematical value -- i.e. the conversion can
+   never silently reinterpret a value (as converting a negative signed
+   value to an unsigned type does, e.g. 'int' -> 'size_t'). Both must
+   be INTEGRAL_TYPE_P; declines (false) for anything else, the safe
+   direction for every caller below (all of which only ever *decline*
+   to establish a fact on a false return, never proceed unsoundly).
+
+   Needed because oa_underlying_param_operand (via oa_strip_to_
+   relational_operand/oa_strip_conversion_call) unconditionally strips
+   *any* NOP_EXPR/CONVERT_EXPR down to a bare PARM_DECL, including a
+   genuinely value-changing one introduced by the usual arithmetic
+   conversions (e.g. 'v.size () - idx' promotes 'idx' to 'size_type'
+   before subtracting) -- a caller that wants to attribute an
+   arithmetic fact observed in the *converted* type back to the raw,
+   unconverted PARM_DECL must first confirm the conversion it just
+   stripped through couldn't have changed the value, or the resulting
+   fact is unsound (found via direct testing: 'v.size () - idx > 10'
+   for a *signed* 'idx' was wrongly treated as establishing 'idx <
+   v.size () - 10' in the signed sense, when a negative 'idx' actually
+   wraps the unsigned subtraction that is genuinely performed).  */
+
+bool
+oa_integral_conversion_value_preserving_p (tree from_type, tree to_type)
+{
+  if (!INTEGRAL_TYPE_P (from_type) || !INTEGRAL_TYPE_P (to_type))
+    return false;
+  if (TYPE_UNSIGNED (from_type) == TYPE_UNSIGNED (to_type))
+    return TYPE_PRECISION (to_type) >= TYPE_PRECISION (from_type);
+  /* Unsigned -> wider signed is safe (room left for the sign bit);
+     every other signedness-changing direction (signed -> unsigned, or
+     unsigned -> same-width-or-narrower signed) can reinterpret a
+     value the source type could actually hold.  */
+  return TYPE_UNSIGNED (from_type) && !TYPE_UNSIGNED (to_type)
+	 && TYPE_PRECISION (to_type) > TYPE_PRECISION (from_type);
+}
+
 /* D4324 (see .claude/plans/lazy-stirring-pearl.md, Part 4): recognize
    CONJUNCT as "RECEIVER.ACCESSOR () - PARAM OP <literal>" or its mirror
    "PARAM - RECEIVER.ACCESSOR () OP <literal>" (plus the usual literal-
@@ -24523,6 +24560,8 @@ oa_match_shifted_comparison_against_call (tree conjunct, tree *param_out,
   tree param, receiver, callee;
   widest_int offset;
   if ((param = oa_underlying_param_operand (rhs))
+      && oa_integral_conversion_value_preserving_p (TREE_TYPE (param),
+						      TREE_TYPE (rhs))
       && oa_underlying_call_range_operand (lhs, &receiver, &callee,
 					     allow_symbolic_accessor))
     {
@@ -24538,6 +24577,8 @@ oa_match_shifted_comparison_against_call (tree conjunct, tree *param_out,
       offset = -wi::to_widest (lit);
     }
   else if ((param = oa_underlying_param_operand (lhs))
+	   && oa_integral_conversion_value_preserving_p (TREE_TYPE (param),
+							   TREE_TYPE (lhs))
 	   && oa_underlying_call_range_operand (rhs, &receiver, &callee,
 						  allow_symbolic_accessor))
     /* PARAM - CALL (): no direction change.  */
