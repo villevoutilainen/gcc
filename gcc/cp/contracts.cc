@@ -10331,6 +10331,74 @@ oa_range_fact_equal (const oa_range_fact &a, const oa_range_fact &b)
    oa_env_check_relational_fact_1's own comment for why OFFSET's sign
    must be checked at consult time, since it's no longer always 0.  */
 
+/* Is it safe to trust CODE's own exact-arithmetic accumulation of
+   OFFSET by SHIFT, for a BASE expression of type ARITHMETIC_TYPE?
+
+   Always true for a signed (TYPE_OVERFLOW_UNDEFINED) type, exactly like
+   oa_get_range's own identical PLUS_EXPR/MINUS_EXPR gate -- the
+   language's own "signed overflow is UB" rule licenses assuming it
+   never wraps. For an unsigned type, overflow is legal and the
+   composition is unsound in general (see oa_get_relational's own
+   comment for the concrete repro) -- UNLESS BASE's own value is
+   independently, numerically bounded (via BASE_RANGE, oa_get_range on
+   the same expression whose relational fact was just retrieved) tightly
+   enough that the *exact*, unbounded-precision result of CODE (BASE,
+   SHIFT) provably cannot leave [type_min, type_max] -- in which case no
+   wraparound occurs for any value BASE could actually take, regardless
+   of signedness (this is a genuine proof, not an assumption: widest_int
+   arithmetic cannot itself overflow, so checking the computed bound
+   against the type's own representable range is exact).
+
+   For an UNSIGNED type specifically, only ONE direction ever needs a
+   witness: both operands of a PLUS_EXPR are already guaranteed
+   nonnegative (an unsigned type's own values can never be negative), so
+   only overflow (exceeding type_max) is possible -- a lower-bound
+   witness on BASE is never needed, and its absence must not decline the
+   whole check (found via direct testing: requiring both bounds
+   unconditionally silently declined the common 'if (idx < K) { ...
+   idx += k2; ...}' shape, which only ever established idx's own UPPER
+   bound). Symmetrically, MINUS_EXPR (BASE always the minuend -- see the
+   "'<constant> - decl' negates rather than shifts" case just below,
+   which never reaches this helper at all) can only underflow, needing
+   only BASE's lower bound and SHIFT's upper bound. A non-unsigned,
+   non-overflow-undefined integral type (unusual -- e.g. wrapping signed
+   under -fwrapv) is not assumed nonnegative, so both directions are
+   still checked there.  */
+
+static bool
+oa_shift_arithmetic_no_wrap_ok_p (tree_code code, tree arithmetic_type,
+				    const oa_range_fact &base_range,
+				    const oa_range_fact &shift)
+{
+  if (!INTEGRAL_TYPE_P (arithmetic_type))
+    return false;
+  if (TYPE_OVERFLOW_UNDEFINED (arithmetic_type))
+    return true;
+
+  widest_int type_min = wi::to_widest (TYPE_MIN_VALUE (arithmetic_type));
+  widest_int type_max = wi::to_widest (TYPE_MAX_VALUE (arithmetic_type));
+  bool unsigned_type = TYPE_UNSIGNED (arithmetic_type);
+
+  if (code == PLUS_EXPR)
+    {
+      if (!base_range.has_hi || !shift.has_hi
+	  || base_range.hi + shift.hi > type_max)
+	return false;
+      return unsigned_type
+	     || (base_range.has_lo && shift.has_lo
+		 && base_range.lo + shift.lo >= type_min);
+    }
+  else /* MINUS_EXPR: BASE is always the minuend.  */
+    {
+      if (!base_range.has_lo || !shift.has_hi
+	  || base_range.lo - shift.hi < type_min)
+	return false;
+      return unsigned_type
+	     || (base_range.has_hi && shift.has_lo
+		 && base_range.hi - shift.lo <= type_max);
+    }
+}
+
 static bool
 oa_get_relational (tree expr, oa_env &env, oa_relational_fact *out)
 {
@@ -10343,12 +10411,16 @@ oa_get_relational (tree expr, oa_env &env, oa_relational_fact *out)
 
   if (TREE_CODE (e) == PLUS_EXPR || TREE_CODE (e) == MINUS_EXPR)
     {
+      if (!INTEGRAL_TYPE_P (TREE_TYPE (e)))
+	return false;
       tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
       tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 1));
 
+      tree base;
       oa_range_fact shift;
       if (oa_get_relational (op0, env, out))
 	{
+	  base = op0;
 	  /* D4324 Commit 4: OP1 (the shift amount) need not itself be a
 	     literal -- a second tracked variable's own established range
 	     works too, using its interval directly instead of a single
@@ -10360,6 +10432,7 @@ oa_get_relational (tree expr, oa_env &env, oa_relational_fact *out)
 	}
       else if (TREE_CODE (e) == PLUS_EXPR && oa_get_relational (op1, env, out))
 	{
+	  base = op1;
 	  if (TREE_CODE (op0) == INTEGER_CST)
 	    shift = oa_range_fact_exact (wi::to_widest (op0));
 	  else if (!oa_get_range (op0, env, &shift) || shift.base != NULL_TREE)
@@ -10368,6 +10441,17 @@ oa_get_relational (tree expr, oa_env &env, oa_relational_fact *out)
       else
 	/* '<constant> - decl' negates rather than shifts -- not a simple
 	   shift, left unrecognized, same as oa_get_range.  */
+	return false;
+
+      /* See oa_shift_arithmetic_no_wrap_ok_p's own comment: for a
+	 signed type this is a no-op (always true); for an unsigned type,
+	 BASE's own independently-established numeric range (if any) may
+	 still prove no wraparound occurs.  */
+      oa_range_fact base_num_range;
+      if (!oa_shift_arithmetic_no_wrap_ok_p
+	    (TREE_CODE (e), TREE_TYPE (e),
+	     oa_get_range (base, env, &base_num_range)
+	       ? base_num_range : oa_range_fact (), shift))
 	return false;
 
       if (TREE_CODE (e) == MINUS_EXPR)
@@ -10394,12 +10478,16 @@ oa_get_call_relational (tree expr, oa_env &env, oa_call_relational_fact *out)
 
   if (TREE_CODE (e) == PLUS_EXPR || TREE_CODE (e) == MINUS_EXPR)
     {
+      if (!INTEGRAL_TYPE_P (TREE_TYPE (e)))
+	return false;
       tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
       tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 1));
 
+      tree base;
       oa_range_fact shift;
       if (oa_get_call_relational (op0, env, out))
 	{
+	  base = op0;
 	  if (TREE_CODE (op1) == INTEGER_CST)
 	    shift = oa_range_fact_exact (wi::to_widest (op1));
 	  else if (!oa_get_range (op1, env, &shift) || shift.base != NULL_TREE)
@@ -10408,12 +10496,23 @@ oa_get_call_relational (tree expr, oa_env &env, oa_call_relational_fact *out)
       else if (TREE_CODE (e) == PLUS_EXPR
 	       && oa_get_call_relational (op1, env, out))
 	{
+	  base = op1;
 	  if (TREE_CODE (op0) == INTEGER_CST)
 	    shift = oa_range_fact_exact (wi::to_widest (op0));
 	  else if (!oa_get_range (op0, env, &shift) || shift.base != NULL_TREE)
 	    return false;
 	}
       else
+	return false;
+
+      /* Same TYPE_OVERFLOW_UNDEFINED-or-independently-bounded gate as
+	 oa_get_relational's own identical case above -- see oa_shift_
+	 arithmetic_no_wrap_ok_p's own comment.  */
+      oa_range_fact base_num_range;
+      if (!oa_shift_arithmetic_no_wrap_ok_p
+	    (TREE_CODE (e), TREE_TYPE (e),
+	     oa_get_range (base, env, &base_num_range)
+	       ? base_num_range : oa_range_fact (), shift))
 	return false;
 
       if (TREE_CODE (e) == MINUS_EXPR)
@@ -10691,6 +10790,58 @@ oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
   env.range_set (decl, refined);
 }
 
+/* D4324: is it safe to trust the algebraic "solve for PARAM" step
+   oa_match_shifted_comparison_against_call's own callers perform on a
+   MINUS_EXPR of type ARITHMETIC_TYPE, given PARAM_IS_MINUEND tells us
+   which operand PARAM was?
+
+   For a signed (TYPE_OVERFLOW_UNDEFINED) type this is always safe: the
+   language's own "signed overflow is UB" rule licenses assuming the
+   subtraction never wraps, exactly like oa_get_range's own identical
+   PLUS_EXPR/MINUS_EXPR gate. For an unsigned type, overflow (wraparound)
+   is legal, well-defined behavior the analysis cannot assume away --
+   found via direct testing that 'v.size () - idx > 10' for an UNSIGNED
+   idx (no signed/unsigned conversion at all, so oa_integral_conversion_
+   value_preserving_p alone doesn't catch this) is satisfied whenever
+   'idx > v.size ()' too, since the wrapped difference is astronomically
+   larger than any realistic literal threshold -- the single observed
+   conjunct carries no information ruling that out on its own.
+
+   The user's own proposed fix: require the caller to ALSO establish,
+   independently, that no wrap occurred -- PARAM <= CALL () when PARAM is
+   the subtrahend ('CALL () - PARAM'), or PARAM >= CALL () when PARAM is
+   the minuend ('PARAM - CALL ()'). Looked up as an already-established,
+   *exact* (offset-0) call-relational fact for the same PARAM/RECEIVER/
+   CALLEE -- e.g. a companion 'v.size () > idx' conjunct, which is sound
+   to establish on its own (a wrapped, huge idx would make that direct
+   comparison false, not true) via oa_match_comparison_against_call.
+   Both establishment sites for the shifted shape process every conjunct
+   shape in its own separate pass over all conjuncts (not conjunct-by-
+   conjunct in source order), so the companion fact does not need to
+   appear before the shifted one in the source text.  */
+
+static bool
+oa_shifted_comparison_no_wrap_ok_p (oa_env &env, tree param, tree receiver,
+				      tree callee, tree arithmetic_type,
+				      bool param_is_minuend)
+{
+  if (!INTEGRAL_TYPE_P (arithmetic_type) || TYPE_OVERFLOW_UNDEFINED (arithmetic_type))
+    return true;
+
+  oa_call_relational_fact fact;
+  if (!env.call_relational_get (param, &fact))
+    return false;
+  if (fact.rhs_callee != callee
+      || (oa_strip_to_relational_operand (fact.rhs_receiver)
+	  != oa_strip_to_relational_operand (receiver)))
+    return false;
+  if (!oa_range_fact_equal (fact.offset, oa_range_fact_exact (0)))
+    return false;
+
+  tree_code required = param_is_minuend ? GE_EXPR : LE_EXPR;
+  return oa_relational_code_implies (fact.code, required);
+}
+
 static void
 oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
 {
@@ -10922,13 +11073,19 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
      the other two above by construction -- this one requires a MINUS_
      EXPR on one side, which none of the other three shapes have).  */
   {
-    tree param, rhs_receiver, rhs_callee;
+    tree param, rhs_receiver, rhs_callee, arithmetic_type;
     tree_code rel_code;
     widest_int offset;
+    bool param_is_minuend;
     if (oa_match_shifted_comparison_against_call (conjunct, &param, &rel_code,
 						     &rhs_receiver, &rhs_callee,
 						     &offset,
-						     /*allow_symbolic_accessor=*/false))
+						     /*allow_symbolic_accessor=*/false,
+						     &arithmetic_type,
+						     &param_is_minuend)
+	&& oa_shifted_comparison_no_wrap_ok_p (env, param, rhs_receiver,
+						 rhs_callee, arithmetic_type,
+						 param_is_minuend))
       {
 	if (!asserted_true)
 	  switch (rel_code)
@@ -18285,12 +18442,17 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
      handling); this is the self-trust (own-precondition) analogue.  */
   for (unsigned i = 0; i < conjuncts.length (); ++i)
     {
-      tree param, rhs_receiver, rhs_callee;
+      tree param, rhs_receiver, rhs_callee, arithmetic_type;
       tree_code code;
       widest_int offset;
+      bool param_is_minuend;
       if (oa_match_shifted_comparison_against_call
 	    (*conjuncts[i], &param, &code, &rhs_receiver, &rhs_callee,
-	     &offset, /*allow_symbolic_accessor=*/!conveyor_ok))
+	     &offset, /*allow_symbolic_accessor=*/!conveyor_ok,
+	     &arithmetic_type, &param_is_minuend)
+	  && oa_shifted_comparison_no_wrap_ok_p (env, param, rhs_receiver,
+						   rhs_callee, arithmetic_type,
+						   param_is_minuend))
 	env.call_relational_set (param, code, rhs_receiver, rhs_callee,
 				  conveyor_ok, oa_range_fact_exact (offset));
     }
@@ -24515,7 +24677,9 @@ oa_match_shifted_comparison_against_call (tree conjunct, tree *param_out,
 					    tree *rhs_receiver_out,
 					    tree *rhs_callee_out,
 					    widest_int *offset_out,
-					    bool allow_symbolic_accessor)
+					    bool allow_symbolic_accessor,
+					    tree *arithmetic_type_out,
+					    bool *param_is_minuend_out)
 {
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
   while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
@@ -24575,14 +24739,20 @@ oa_match_shifted_comparison_against_call (tree conjunct, tree *param_out,
 	default: break;
 	}
       offset = -wi::to_widest (lit);
+      if (param_is_minuend_out)
+	*param_is_minuend_out = false;
     }
   else if ((param = oa_underlying_param_operand (lhs))
 	   && oa_integral_conversion_value_preserving_p (TREE_TYPE (param),
 							   TREE_TYPE (lhs))
 	   && oa_underlying_call_range_operand (rhs, &receiver, &callee,
 						  allow_symbolic_accessor))
-    /* PARAM - CALL (): no direction change.  */
-    offset = wi::to_widest (lit);
+    {
+      /* PARAM - CALL (): no direction change.  */
+      offset = wi::to_widest (lit);
+      if (param_is_minuend_out)
+	*param_is_minuend_out = true;
+    }
   else
     return false;
 
@@ -24591,6 +24761,8 @@ oa_match_shifted_comparison_against_call (tree conjunct, tree *param_out,
   *rhs_receiver_out = receiver;
   *rhs_callee_out = callee;
   *offset_out = offset;
+  if (arithmetic_type_out)
+    *arithmetic_type_out = TREE_TYPE (diff);
   return true;
 }
 

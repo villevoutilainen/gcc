@@ -6,12 +6,25 @@
 // "param vs call" consult block, right alongside the existing "explicit
 // fact implies REL_CODE" check that only ever proves TRUE.
 //
-// All three use an UNSIGNED idx (std::vector<int>::size_type), matching
-// the AST-side sibling test's own identical fix -- see
-// idx_signed_declines below and that test's own comment for the real,
-// fixed soundness bug this documents (cg_match_shifted_comparison_
-// against_call now declines via oa_integral_conversion_value_preserving_p,
-// exported from contracts.cc, when idx is signed).
+// All four use an UNSIGNED idx (std::vector<int>::size_type), matching
+// the AST-side sibling test's own identical setup, including its own
+// companion ('v.size () > idx') and numeric-cap ('idx < 1000') facts --
+// see that test's own comment for why both are independently needed
+// (the subtraction itself, and the follow-on '+15'/'+4'/'+1' shift, can
+// each wrap on their own) and why neither weakens what this test
+// demonstrates. idx_signed_declines documents the real, fixed soundness
+// bug this all traces back to (cg_match_shifted_comparison_against_call
+// declines via oa_integral_conversion_value_preserving_p, exported from
+// contracts.cc, when idx is signed).
+//
+// Every multi-fact function below nests its conditions as separate 'if'
+// statements rather than joining them with '&&' -- see the AST-side
+// sibling margin test's own comment for why: GIMPLE's own dominator-
+// based fact propagation (cg_dom_fact_state.call_rel) does not currently
+// carry a fact established in one conjunct of a single '&&' through to
+// a later conjunct's own dominated block (a separate, pre-existing gap,
+// unrelated to this fix; nested ifs are a mechanically equivalent way to
+// write the same conditions that isn't affected by it).
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs-gimple -D_GLIBCXX_CONVEYOR_ASSERTIONS -D_GLIBCXX_PRECONDITION_ASSERTIONS" }
 
@@ -20,33 +33,39 @@
 int shifted_past_the_boundary (std::vector<int>& v,
 				 std::vector<int>::size_type idx)
 {
-  if ((v.size () - idx) < 5)
-    {
-      idx += 15;
-      return v[idx]; // { dg-error "provably violates the precondition" }
-    }
+  if (v.size () > idx)
+    if (v.size () - idx < 5)
+      if (idx < 1000)
+	{
+	  idx += 15;
+	  return v[idx]; // { dg-error "provably violates the precondition" }
+	}
   return -1;
 }
 
 int exactly_at_the_edge (std::vector<int>& v,
 			   std::vector<int>::size_type idx)
 {
-  if ((v.size () - idx) < 5)
-    {
-      idx += 4;
-      return v[idx]; // { dg-error "provably violates the precondition" }
-    }
+  if (v.size () > idx)
+    if (v.size () - idx < 5)
+      if (idx < 1000)
+	{
+	  idx += 4;
+	  return v[idx]; // { dg-error "provably violates the precondition" }
+	}
   return -1;
 }
 
 int genuinely_ambiguous (std::vector<int>& v,
 			   std::vector<int>::size_type idx)
 {
-  if ((v.size () - idx) < 5)
-    {
-      idx += 1;
-      return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
-    }
+  if (v.size () > idx)
+    if (v.size () - idx < 5)
+      if (idx < 1000)
+	{
+	  idx += 1;
+	  return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
+	}
   return -1;
 }
 
