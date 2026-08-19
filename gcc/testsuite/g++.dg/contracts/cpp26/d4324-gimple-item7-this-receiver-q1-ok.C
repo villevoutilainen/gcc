@@ -7,7 +7,7 @@
 // purely on flag_contract_control_objects), so this only demonstrates
 // "compilation succeeds with both engines active," matching this
 // directory's own item7/item8 testing limitation.
-// { dg-do run { target c++26 } }
+// { dg-do run }
 // { dg-options "-std=c++26 -fcontracts -fcontract-control-objects -fcontract-conveyor-proofs-gimple" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
 
