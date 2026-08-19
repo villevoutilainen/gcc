@@ -227,6 +227,15 @@ extern void oa_mark_fn_if_expr_calls_active_contract	(tree, tree);
 /* Opaque; a plugin only ever holds a pointer, never the definition.  */
 struct oa_analysis_env;
 
+/* The built-in engine's own internal environment type (contracts.cc),
+   forward-declared here only so a handful of contracts.cc-internal
+   functions can be declared extern (for use across this same file's own
+   later sections, e.g. oa_match_shifted_comparison_against_call below)
+   -- never given a body here, and never exposed to a plugin the way
+   oa_analysis_env above deliberately is (see that struct's own
+   comment); a plugin never sees this name at all.  */
+class oa_env;
+
 /* A static checker's answer is never just binary -- see the "Diagnostics"
    discussion in .claude/plans/stateless-jumping-shore.md.  OA_PROVEN_FALSE
    is a real, confirmed violation; OA_UNKNOWN is a much weaker "couldn't
@@ -427,9 +436,22 @@ extern bool oa_match_comparison_against_call
    established fact. See the two establishment call sites in
    contracts.cc (oa_refine_single_comparison's own branch-derived
    establishment, and the self-trust precondition loop) for the actual
-   gate.  */
+   gate.
+
+   ENV is consulted directly (not merely for the no-wrap gate above):
+   when PARAM's own side of the subtraction is wrapped in a value-
+   changing signed-to-unsigned conversion, this now checks PARAM's own
+   established range (oa_get_range) rather than declining outright --
+   provably non-negative (e.g. from an 'idx >= 0' conjunct established
+   elsewhere) makes the conversion exact for that value, so the match
+   still succeeds; a genuinely unknown or straddling sign still
+   declines. Opaque to plugins (oa_env's own definition stays private
+   to contracts.cc) -- ENV is forward-declared just for this reference
+   parameter; no plugin calls this function (grep-confirmed), so this
+   requires no opaque-handle wrapper the way the plugin-facing API
+   does.  */
 extern bool oa_match_shifted_comparison_against_call
-  (tree conjunct, tree *param_out, tree_code *code_out,
+  (tree conjunct, oa_env &env, tree *param_out, tree_code *code_out,
    tree *rhs_receiver_out, tree *rhs_callee_out, widest_int *offset_out,
    bool allow_symbolic_accessor, tree *arithmetic_type_out = nullptr,
    bool *param_is_minuend_out = nullptr);
