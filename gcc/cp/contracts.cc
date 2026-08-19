@@ -10525,10 +10525,6 @@ static tree oa_strip_symbolic_ptr_expr (tree ptr_expr);
 static bool oa_call_range_conjunct_shape
   (tree conjunct, tree *receiver_out, tree *callee_out, tree_code *code_out,
    tree *const_val_out, bool allow_symbolic_accessor);
-static bool oa_match_shifted_comparison_against_call
-  (tree conjunct, tree *param_out, tree_code *code_out,
-   tree *rhs_receiver_out, tree *rhs_callee_out, widest_int *offset_out,
-   bool allow_symbolic_accessor);
 static bool oa_match_type_bounded_comparison
   (tree conjunct, tree *decl_out, tree_code *code_out);
 
@@ -13384,11 +13380,14 @@ static oa_proof_result oa_env_check_relational_fact_1
    tree substituted_other, bool require_conveyor);
 
 /* Forward-declared for the same reason as oa_env_check_relational_
-   fact_1 immediately above: the call analogue.  */
+   fact_1 immediately above: the call analogue. REQUIRED_OFFSET
+   defaults to 0 (the plain shape); see the real definition's own
+   comment for the shifted-shape case (oa_match_shifted_comparison_
+   against_call) it also covers.  */
 static oa_proof_result oa_env_check_call_relational_fact_1
   (oa_env &env, tree substituted_param, tree_code required_code,
    tree substituted_rhs_receiver, tree substituted_rhs_callee,
-   bool require_conveyor);
+   bool require_conveyor, widest_int required_offset = 0);
 
 /* Forward-declared for the same reason as oa_env_check_relational_
    fact_1 above: the call-vs-call analogue.  */
@@ -13575,10 +13574,22 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 	     obligation), so this fallback must explicitly decline both,
 	     or the same conjunct gets diagnosed twice -- confirmed as a
 	     real, duplicate-diagnostic regression by direct testing
-	     before this guard was added.  */
+	     before this guard was added.
+
+	     A shift-shaped call-relational conjunct ('idx - v.size () OP
+	     const', oa_match_shifted_comparison_against_call) has the same
+	     problem for the same reason: it always has a literal on one
+	     side (structurally required by its own shape), so it always
+	     matches oa_match_general_comparison too, but it already has
+	     its own dedicated obligation handler in oa_handle_call_
+	     conveyor_proof_obligation/oa_handle_call_symbolic_precondition_
+	     obligation -- confirmed as a real duplicate-diagnostic
+	     regression by direct testing, the same way the two shapes
+	     above already were.  */
 	  {
 	    tree dummy_field, dummy_ptr, dummy_const, dummy_receiver, dummy_callee;
 	    tree_code dummy_code;
+	    widest_int dummy_offset;
 	    if (oa_symbolic_comparison_conjunct_shape (*conjuncts[i], &dummy_field,
 							&dummy_ptr, &dummy_code,
 							&dummy_const)
@@ -13586,7 +13597,11 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 						  &dummy_callee, &dummy_code,
 						  &dummy_const,
 						  /*allow_symbolic_accessor=*/
-						    !conveyor))
+						    !conveyor)
+		|| oa_match_shifted_comparison_against_call
+		     (*conjuncts[i], &dummy_ptr, &dummy_code, &dummy_receiver,
+		      &dummy_callee, &dummy_offset,
+		      /*allow_symbolic_accessor=*/!conveyor))
 	      continue;
 	  }
 
@@ -13838,6 +13853,57 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		  = oa_env_check_call_relational_fact_1 (env, sub_param, rel_code2,
 							  sub_receiver, rhs_callee,
 							  /*require_conveyor=*/true);
+		switch (rel_pr)
+		  {
+		  case OA_PROVEN_TRUE:
+		    break; /* Silently discharged.  */
+		  case OA_PROVEN_FALSE:
+		    error_at (EXPR_LOCATION (call),
+			      "argument %qE provably violates the precondition "
+			      "of %qD", sub_param, callee);
+		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    break;
+		  case OA_UNKNOWN:
+		    if (strict)
+		      error_at (EXPR_LOCATION (call),
+				"cannot prove that %qE satisfies the "
+				"precondition of %qD",
+				sub_param ? sub_param : rel_param2, callee);
+		    else
+		      warning_at (EXPR_LOCATION (call), 0,
+				  "cannot verify that %qE satisfies the "
+				  "precondition of %qD",
+				  sub_param ? sub_param : rel_param2, callee);
+		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    break;
+		  }
+		continue;
+	      }
+	  }
+
+	  /* The shift-shaped sibling of the block just above (e.g.
+	     'pre<ctrl>(v.size () - idx < 10)'), tried only once the plain
+	     shape declines (mutually exclusive with it by construction --
+	     see oa_match_shifted_comparison_against_call's own comment: it
+	     requires a MINUS_EXPR on one side, which the plain shape never
+	     has).  */
+	  {
+	    tree rel_param2, rhs_receiver, rhs_callee;
+	    tree_code rel_code2;
+	    widest_int offset;
+	    if (oa_match_shifted_comparison_against_call
+		  (*conjuncts[i], &rel_param2, &rel_code2, &rhs_receiver,
+		   &rhs_callee, &offset, /*allow_symbolic_accessor=*/false)
+		&& TREE_CODE (rhs_receiver) == PARM_DECL)
+	      {
+		tree sub_param = oa_substitute_call_arg (callee, call, rel_param2);
+		tree sub_receiver
+		  = oa_substitute_call_arg (callee, call, rhs_receiver);
+		oa_proof_result rel_pr
+		  = oa_env_check_call_relational_fact_1 (env, sub_param, rel_code2,
+							  sub_receiver, rhs_callee,
+							  /*require_conveyor=*/true,
+							  offset);
 		switch (rel_pr)
 		  {
 		  case OA_PROVEN_TRUE:
@@ -15131,6 +15197,54 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	    = oa_env_check_call_relational_fact_1 (env, sub_param, rel_code,
 						    sub_receiver, rhs_callee,
 						    /*require_conveyor=*/false);
+	  switch (rel_pr)
+	    {
+	    case OA_PROVEN_TRUE:
+	      break; /* Silently discharged.  */
+	    case OA_PROVEN_FALSE:
+	      error_at (EXPR_LOCATION (call),
+			"argument %qE provably violates the precondition "
+			"of %qD", sub_param, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      break;
+	    case OA_UNKNOWN:
+	      if (strict)
+		error_at (EXPR_LOCATION (call),
+			  "cannot prove that %qE satisfies the "
+			  "precondition of %qD",
+			  sub_param ? sub_param : rel_param, callee);
+	      else
+		warning_at (EXPR_LOCATION (call), 0,
+			    "cannot verify that %qE satisfies the "
+			    "precondition of %qD",
+			    sub_param ? sub_param : rel_param, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      break;
+	    }
+	}
+
+      /* The shift-shaped sibling of the call-relational loop just above
+	 (e.g. 'pre<ctrl>(v.size () - idx < 10)'), same allowed-direction
+	 discipline -- see the conveyor side's own identical block
+	 (oa_handle_call_conveyor_proof_obligation) for the algebra.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree rel_param, rhs_receiver, rhs_callee;
+	  tree_code rel_code;
+	  widest_int offset;
+	  if (!oa_match_shifted_comparison_against_call
+		(*conjuncts[i], &rel_param, &rel_code, &rhs_receiver,
+		 &rhs_callee, &offset, /*allow_symbolic_accessor=*/true)
+	      || TREE_CODE (rhs_receiver) != PARM_DECL)
+	    continue;
+
+	  tree sub_param = oa_substitute_call_arg (callee, call, rel_param);
+	  tree sub_receiver = oa_substitute_call_arg (callee, call, rhs_receiver);
+	  oa_proof_result rel_pr
+	    = oa_env_check_call_relational_fact_1 (env, sub_param, rel_code,
+						    sub_receiver, rhs_callee,
+						    /*require_conveyor=*/false,
+						    offset);
 	  switch (rel_pr)
 	    {
 	    case OA_PROVEN_TRUE:
@@ -18085,6 +18199,24 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
 					       !conveyor_ok))
 	env.call_relational_set (param, code, rhs_receiver, rhs_callee,
 				  conveyor_ok, oa_range_fact_exact (0));
+    }
+
+  /* The shift-shaped sibling of the call-relational block just above
+     (e.g. 'pre<ctrl>(v.size () - idx < 10)') -- trust it unconditionally
+     for the rest of this function's own body, same principle. Mirrors
+     the identical establishment oa_refine_single_comparison already
+     does for a branch-derived fact (contracts.cc's own if-condition
+     handling); this is the self-trust (own-precondition) analogue.  */
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree param, rhs_receiver, rhs_callee;
+      tree_code code;
+      widest_int offset;
+      if (oa_match_shifted_comparison_against_call
+	    (*conjuncts[i], &param, &code, &rhs_receiver, &rhs_callee,
+	     &offset, /*allow_symbolic_accessor=*/!conveyor_ok))
+	env.call_relational_set (param, code, rhs_receiver, rhs_callee,
+				  conveyor_ok, oa_range_fact_exact (offset));
     }
 
   /* The call-vs-call analogue of the two relational blocks above (e.g.
@@ -23510,12 +23642,22 @@ oa_env_check_relational_fact (oa_analysis_env *env, tree substituted_param,
    lower-bound-defining one (GT/GE) -- so a genuinely uncertain shift
    only ever loses a real contradiction, never invents a spurious one;
    missing the needed bound (!has_hi/!has_lo) declines (returns false)
-   rather than guessing, the same discipline used throughout this pass.  */
+   rather than guessing, the same discipline used throughout this pass.
+
+   REQUIRED_OFFSET generalizes REQUIRED_CODE's own implicit "offset 0"
+   to a genuinely nonzero shift, needed once a callee's own declared
+   precondition can itself be shift-shaped (e.g. 'pre<ctrl>(v.size ()
+   - idx < 10)', recognized by oa_match_shifted_comparison_against_
+   call) rather than only ever the plain 'idx < v.size ()' oa_match_
+   comparison_against_call recognizes -- see oa_env_check_call_
+   relational_fact_1's own comment for why this is a plain literal
+   shift of REQ_D, not a new algebraic case.  */
 
 static bool
 oa_call_relational_contradicts_p (tree_code established_code,
 				    const oa_range_fact &offset,
-				    tree_code required_code)
+				    tree_code required_code,
+				    widest_int required_offset = 0)
 {
   oa_range_fact est_d;
   est_d.base = NULL_TREE;
@@ -23556,7 +23698,7 @@ oa_call_relational_contradicts_p (tree_code established_code,
     case GT_EXPR:
     case GE_EXPR:
     case EQ_EXPR:
-      oa_tighten_range_bound (req_d, required_code, 0);
+      oa_tighten_range_bound (req_d, required_code, required_offset);
       break;
     default:
       return false;
@@ -23578,14 +23720,32 @@ oa_call_relational_contradicts_p (tree_code established_code,
    RECEIVER.SUBSTITUTED_RHS_CALLEE ()) rather than another parameter.
    No "both sides already literal" fast path here (unlike that
    function): a call can never fold to a literal at this level, so
-   there is nothing to fold.  */
+   there is nothing to fold.
+
+   REQUIRED_OFFSET generalizes REQUIRED_CODE's own implicit "offset 0"
+   ("SUBSTITUTED_PARAM REQUIRED_CODE RECEIVER.CALLEE ()") to a genuinely
+   nonzero shift ("(SUBSTITUTED_PARAM - REQUIRED_OFFSET) REQUIRED_CODE
+   RECEIVER.CALLEE ()"), needed once a callee's own declared
+   precondition can itself be shift-shaped (oa_match_shifted_
+   comparison_against_call, e.g. 'pre<ctrl>(v.size () - idx < 10)')
+   rather than only ever the plain shape oa_match_comparison_against_
+   call recognizes. Established FACT.OFFSET and REQUIRED_OFFSET are
+   both shifts of the *same* two quantities (SUBSTITUTED_PARAM and the
+   call), so subtracting one from the other before the existing offset-
+   compatibility/contradiction checks is enough -- no new algebra, just
+   folding REQUIRED_OFFSET into the interval those checks already
+   consult (their own REQUIRED_CODE arm already assumed a literal,
+   constant "0" for this same slot; a nonzero literal works identically).
+   Defaulted to 0 so every pre-existing caller (only ever checking the
+   plain, unshifted shape) is unaffected.  */
 
 static oa_proof_result
 oa_env_check_call_relational_fact_1 (oa_env &env, tree substituted_param,
 				       tree_code required_code,
 				       tree substituted_rhs_receiver,
 				       tree substituted_rhs_callee,
-				       bool require_conveyor)
+				       bool require_conveyor,
+				       widest_int required_offset /* = 0 */)
 {
   oa_call_relational_fact fact;
   bool have_fact = oa_get_call_relational (substituted_param, env, &fact);
@@ -23595,16 +23755,28 @@ oa_env_check_call_relational_fact_1 (oa_env &env, tree substituted_param,
       && (oa_strip_to_relational_operand (fact.rhs_receiver)
 	  == oa_strip_to_relational_operand (substituted_rhs_receiver));
 
+  /* FACT.OFFSET is a shift of SUBSTITUTED_PARAM relative to the call
+     ("(PARAM - FACT.OFFSET) FACT.CODE CALL ()"); REQUIRED_OFFSET is a
+     second, independent shift of the same PARAM/CALL pair. Subtracting
+     the two folds both into a single effective offset relative to the
+     (offset-0) shape oa_offset_compatible_with_code/oa_call_
+     relational_contradicts_p already know how to check.  */
+  oa_range_fact adjusted_offset = fact.offset;
+  if (adjusted_offset.has_lo)
+    adjusted_offset.lo -= required_offset;
+  if (adjusted_offset.has_hi)
+    adjusted_offset.hi -= required_offset;
+
   if (have_fact && same_accessor
       && oa_relational_code_implies (fact.code, required_code)
-      && oa_offset_compatible_with_code (fact.offset, required_code)
+      && oa_offset_compatible_with_code (adjusted_offset, required_code)
       && (!require_conveyor || fact.conveyor_established))
     return OA_PROVEN_TRUE;
 
   if (have_fact && same_accessor
       && (!require_conveyor || fact.conveyor_established)
       && oa_call_relational_contradicts_p (fact.code, fact.offset,
-					     required_code))
+					     required_code, required_offset))
     return OA_PROVEN_FALSE;
 
   /* Bounds-proving demo (see .claude/plans/lazy-stirring-pearl.md): no
@@ -23630,9 +23802,20 @@ oa_env_check_call_relational_fact_1 (oa_env &env, tree substituted_param,
 					    &callee_fact)
 	      && (!require_conveyor || callee_fact.conveyor_established))
 	    {
+	      /* Required: "(PARAM - REQUIRED_OFFSET) REQUIRED_CODE CALL ()",
+		 i.e. "PARAM REQUIRED_CODE (CALL () + REQUIRED_OFFSET)" --
+		 shift CALLEE_FACT's own independently-tracked range up by
+		 REQUIRED_OFFSET before comparing against PARAM_RANGE
+		 directly, rather than PARAM_RANGE against the unshifted
+		 call range.  */
+	      oa_range_fact shifted_callee_range = callee_fact.range;
+	      if (shifted_callee_range.has_lo)
+		shifted_callee_range.lo += required_offset;
+	      if (shifted_callee_range.has_hi)
+		shifted_callee_range.hi += required_offset;
 	      enum oa_range_subsumption_result r
 		= oa_range_pair_relation (param_range, required_code,
-					   callee_fact.range);
+					   shifted_callee_range);
 	      if (r == OA_RANGE_SUBSUMED)
 		return OA_PROVEN_TRUE;
 	      if (r == OA_RANGE_DISJOINT)
@@ -23646,20 +23829,25 @@ oa_env_check_call_relational_fact_1 (oa_env &env, tree substituted_param,
 
 /* Public, plugin-facing wrapper over oa_env_check_call_relational_
    fact_1 immediately above, mirroring oa_env_check_relational_fact's
-   own identical role.  */
+   own identical role. REQUIRED_OFFSET defaults to 0 (the plain,
+   unshifted shape oa_match_comparison_against_call recognizes); pass
+   the OFFSET_OUT oa_match_shifted_comparison_against_call fills in
+   when checking that shape instead -- see oa_env_check_call_
+   relational_fact_1's own comment.  */
 
 oa_proof_result
 oa_env_check_call_relational_fact (oa_analysis_env *env, tree substituted_param,
 				     tree_code required_code,
 				     tree substituted_rhs_receiver,
 				     tree substituted_rhs_callee,
-				     bool require_conveyor)
+				     bool require_conveyor,
+				     widest_int required_offset /* = 0 */)
 {
   return oa_env_check_call_relational_fact_1 (*reinterpret_cast<oa_env *> (env),
 					       substituted_param, required_code,
 					       substituted_rhs_receiver,
 					       substituted_rhs_callee,
-					       require_conveyor);
+					       require_conveyor, required_offset);
 }
 
 /* The call-vs-call analogue of oa_env_check_call_relational_fact_1
@@ -24102,7 +24290,7 @@ oa_match_comparison_against_call (tree conjunct, tree *param_out,
    conjunct_shape's own negate-on-flip discipline for its own literal-
    position flip, applied here to the CALL()-vs-PARAM position instead).  */
 
-static bool
+bool
 oa_match_shifted_comparison_against_call (tree conjunct, tree *param_out,
 					    tree_code *code_out,
 					    tree *rhs_receiver_out,
