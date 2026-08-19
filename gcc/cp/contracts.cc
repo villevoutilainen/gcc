@@ -17809,6 +17809,28 @@ oa_get_range_derivation (tree expr, oa_env &env)
 static void (*oa_call_site_callback) (tree, tree, oa_env *, void *);
 static void *oa_call_site_callback_data;
 
+/* D4324 (see .claude/plans/lazy-stirring-pearl.md, Tier 3b): the
+   contract_assert analogue of oa_call_site_callback immediately above
+   -- a standalone plugin has no way to observe a plain contract_assert
+   statement at all (oa_call_site_callback only ever fires for a
+   CALL_EXPR/AGGR_INIT_EXPR, never an ASSERTION_STMT), even though the
+   built-in engine's own oa_handle_assertion_stmt performs real,
+   substitution-free static checking of its condition using exactly the
+   same fact-consulting primitives (oa_match_simple_comparison/oa_env_
+   check_comparison/etc.) already exported for call-site obligations --
+   a contract_assert's own condition needs no positional-argument
+   substitution at all, since it already refers directly to the
+   enclosing function's own live decls, unlike a callee's precondition.
+   Set/cleared by oa_walk_function_calls around a single function's
+   walk, the same discipline as OA_CALL_SITE_CALLBACK.  Fires with ENV
+   exactly as it stands *before* oa_handle_assertion_stmt processes
+   STMT (establishes facts, resolves is_object_address calls in place),
+   mirroring oa_call_site_callback's own "before this call's own
+   invalidation" ordering.  */
+
+static void (*oa_assert_site_callback) (tree, oa_env *, void *);
+static void *oa_assert_site_callback_data;
+
 /* D4324 (see .claude/plans/lazy-stirring-pearl.md, Part 4): a callee-
    must-satisfy-its-own-precondition check (oa_handle_call_conveyor_
    proof_obligation and its symbolic/plain siblings, all reached from
@@ -21592,6 +21614,8 @@ oa_walk_stmt (tree *stmt, oa_env &env)
       }
 
     case ASSERTION_STMT:
+      if (oa_assert_site_callback)
+	oa_assert_site_callback (t, &env, oa_assert_site_callback_data);
       oa_handle_assertion_stmt (t, env);
       return;
 
@@ -22303,8 +22327,13 @@ oa_function_needs_walk_p (tree fndecl)
   /* Both orthogonal to per-function contract activity -- never skip
      when either could observe/mutate this function's own walk (see
      oa_symbolic_codegen_active's/oa_call_site_callback's own
-     comments).  */
-  if (flag_contract_symbolic_runtime_checks || oa_call_site_callback)
+     comments). OA_ASSERT_SITE_CALLBACK is the same "always walk"
+     trigger for a plugin that only wants contract_assert observation
+     (CALLBACK NULL, ASSERT_CALLBACK set) -- without this, such a
+     plugin would silently see nothing in a function with a
+     contract_assert but no calls and no contracts of its own.  */
+  if (flag_contract_symbolic_runtime_checks || oa_call_site_callback
+      || oa_assert_site_callback)
     return true;
 
   if (get_fn_contract_specifiers (fndecl))
@@ -22578,24 +22607,41 @@ resolve_object_address_in_function (tree fndecl)
    unconditionally as part of the walk (see the INIT_EXPR/MODIFY_EXPR
    case in oa_walk_stmt).  Never invoked from anywhere in the compiler
    itself; CALLBACK is always NULL when resolve_object_address_in_function
-   runs, so that mandatory pass is entirely unaffected.  */
+   runs, so that mandatory pass is entirely unaffected.
+
+   ASSERT_CALLBACK (see .claude/plans/lazy-stirring-pearl.md, Tier 3b)
+   is CALLBACK's contract_assert analogue: fires once per ASSERTION_
+   STMT the walk finds, in program order, with the environment as it
+   stands *before* oa_handle_assertion_stmt processes that statement --
+   see oa_assert_site_callback's own comment for why a contract_assert's
+   own condition needs no positional substitution, unlike a call's.
+   Defaults to NULL (no plugin passing it is unaffected).  */
 
 void
 oa_walk_function_calls (tree fndecl,
 			 void (*callback) (tree, tree, oa_analysis_env *, void *),
-			 void *data)
+			 void *data,
+			 void (*assert_callback) (tree, oa_analysis_env *, void *),
+			 void *assert_data)
 {
   void (*saved_callback) (tree, tree, oa_env *, void *) = oa_call_site_callback;
   void *saved_data = oa_call_site_callback_data;
+  void (*saved_assert_callback) (tree, oa_env *, void *) = oa_assert_site_callback;
+  void *saved_assert_data = oa_assert_site_callback_data;
 
   oa_call_site_callback
     = reinterpret_cast<void (*) (tree, tree, oa_env *, void *)> (callback);
   oa_call_site_callback_data = data;
+  oa_assert_site_callback
+    = reinterpret_cast<void (*) (tree, oa_env *, void *)> (assert_callback);
+  oa_assert_site_callback_data = assert_data;
 
   oa_resolve_object_address_in_function_1 (fndecl);
 
   oa_call_site_callback = saved_callback;
   oa_call_site_callback_data = saved_data;
+  oa_assert_site_callback = saved_assert_callback;
+  oa_assert_site_callback_data = saved_assert_data;
 }
 
 /* Thin wrapper over oa_collect_conjuncts, for a plugin (see
@@ -22605,6 +22651,28 @@ void
 oa_collect_conjuncts_public (tree *cond, vec<tree *> *out)
 {
   oa_collect_conjuncts (cond, out);
+}
+
+/* Thin wrapper over oa_collect_disjuncts, for a plugin (see
+   .claude/plans/lazy-stirring-pearl.md, Tier 3b) -- lets a plugin
+   recognize a top-level '||'-shaped conjunct (e.g. from a
+   contract_assert's own condition, via the new ASSERT_CALLBACK
+   oa_walk_function_calls now supports) and check each disjunct
+   independently through the same matcher/query functions it already
+   uses for an ordinary conjunct: PROVEN_TRUE if any one disjunct is
+   independently provable, PROVEN_FALSE only if every disjunct is
+   independently provable false (this file's own conjunct matchers
+   already decline, rather than guess, whenever they can't decide one
+   way or the other, so combining their verdicts this way stays sound).
+   A disjunct that itself contains a nested '&&' is returned whole (as
+   with oa_collect_conjuncts's own symmetric treatment of a nested
+   '||') -- further decomposing it is the caller's own job, via
+   oa_collect_conjuncts_public on that one disjunct.  */
+
+void
+oa_collect_disjuncts_public (tree *cond, vec<tree *> *out)
+{
+  oa_collect_disjuncts (cond, out);
 }
 
 /* Thin wrapper over oa_substitute_call_arg, for a plugin (see
@@ -25046,6 +25114,28 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
   }
 
   return OA_UNKNOWN;
+}
+
+/* Public, plugin-facing wrapper over oa_check_assertion_conjunct_
+   against_env immediately above (see .claude/plans/lazy-stirring-
+   pearl.md, Tier 3b) -- the contract_assert analogue of oa_env_check_
+   comparison/oa_env_check_predicate_fact/etc. for a plugin observing
+   ASSERTION_STMT nodes via oa_walk_function_calls's new ASSERT_
+   CALLBACK parameter. CONJUNCT is one of CONTRACT_CONDITION (STMT)'s
+   own top-level '&&' conjuncts (oa_collect_conjuncts_public) -- or, for
+   a disjunctive conjunct, one of ITS OWN top-level '||' disjuncts
+   (oa_collect_disjuncts_public) -- consulted directly against ENV with
+   no positional substitution at all, unlike every other exported
+   consult function in this file: a contract_assert's own condition
+   already refers to the enclosing function's own live decls, not
+   another function's parameters.  */
+
+oa_proof_result
+oa_check_assertion_conjunct_public (oa_analysis_env *env, tree conjunct,
+				     bool require_conveyor)
+{
+  return oa_check_assertion_conjunct_against_env
+    (conjunct, *reinterpret_cast<oa_env *> (env), require_conveyor);
 }
 
 /* One recognized, codegen-ready action for -fcontract-symbolic-runtime-

@@ -257,11 +257,29 @@ enum oa_range_subsumption_result
    becoming a trusted fact at an assignment from its call, are all
    inherited for free) -- but additionally invoke CALLBACK at every call
    site encountered, in program order, with the environment as it stands
-   at that exact point.  */
+   at that exact point.
+
+   ASSERT_CALLBACK, if non-NULL, additionally fires once per plain
+   contract_assert statement (ASSERTION_STMT) the walk finds, in program
+   order, with the environment as it stands just *before* the built-in
+   engine's own oa_handle_assertion_stmt processes that statement.
+   Unlike a callee's precondition conjunct, a contract_assert's own
+   condition needs no positional-argument substitution at all -- it
+   already refers directly to the enclosing function's own live decls
+   -- so a plugin can consult it with the very same matcher/query
+   functions used for a call's own conjuncts (oa_match_simple_
+   comparison/oa_env_check_comparison, oa_match_predicate_conjunct/
+   oa_env_check_predicate_fact, etc.), just without ever calling
+   oa_substitute_call_arg/oa_substitute_call_expr first. Both new
+   parameters default to NULL, so every existing caller wanting only
+   call-site observation is unaffected.  */
 extern void oa_walk_function_calls
   (tree fndecl,
    void (*callback) (tree call, tree callee, oa_analysis_env *env, void *data),
-   void *data);
+   void *data,
+   void (*assert_callback) (tree stmt, oa_analysis_env *env,
+			     void *data) = nullptr,
+   void *assert_data = nullptr);
 
 /* Is EXPR, evaluated under ENV's current facts, provably CMP CONST_VAL
    for every value it could take, provably CMP CONST_VAL for no value it
@@ -315,6 +333,34 @@ extern oa_proof_result oa_env_check_call_call_relational_fact
 
 /* Split COND into its top-level '&&' conjuncts.  */
 extern void oa_collect_conjuncts_public (tree *cond, vec<tree *> *out);
+
+/* Split COND into its top-level '||' disjuncts -- the De Morgan's-dual
+   sibling of oa_collect_conjuncts_public immediately above, for a
+   plugin that wants to check a disjunctive conjunct (e.g. a
+   contract_assert's own 'x > 0 || x < -10') by trying each disjunct
+   independently through oa_check_assertion_conjunct_public below:
+   PROVEN_TRUE if any one disjunct is independently provable,
+   PROVEN_FALSE only if every disjunct is independently provable false,
+   else UNKNOWN.  */
+extern void oa_collect_disjuncts_public (tree *cond, vec<tree *> *out);
+
+/* Check CONJUNCT -- one of a contract_assert's own top-level '&&'
+   conjuncts (oa_collect_conjuncts_public), or one of a disjunctive
+   conjunct's own top-level '||' disjuncts (oa_collect_disjuncts_public)
+   -- against ENV's current facts, given the plugin's own new ASSERT_
+   CALLBACK (oa_walk_function_calls). Unlike every other consult
+   function in this file, CONJUNCT is never positionally substituted:
+   a contract_assert's own condition already refers directly to the
+   enclosing function's own live decls, not another function's
+   parameters, so this tries the full family of shapes this file's own
+   built-in contract_assert checking recognizes (bare-scalar, ptr->
+   field, call-range, relational, call-relational, call-call-
+   relational, named-predicate, and the general compound-expression
+   fallback) directly against those decls. REQUIRE_CONVEYOR: same
+   one-way-trust meaning as oa_env_check_predicate_fact above -- pass
+   true from the conveyor plugin, false from the symbolic plugin.  */
+extern oa_proof_result oa_check_assertion_conjunct_public
+  (oa_analysis_env *env, tree conjunct, bool require_conveyor);
 
 /* Positionally substitute PARAM (one of CALLEE's own PARM_DECLs,
    including its implicit 'this') to CALL's actual argument expression
