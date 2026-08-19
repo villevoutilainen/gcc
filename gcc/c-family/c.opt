@@ -1941,8 +1941,13 @@ C++ ObjC++ Var(flag_contract_conveyor_proofs_gimple) Init(0)
 Experimental: perform -fcontract-conveyor-proofs's own checking as a GIMPLE
 pass (run once SSA is built, before any optimization pass) instead of the
 default AST walk; independent of -fcontract-conveyor-proofs itself, so
-either, both, or neither may be active. See
-~/gimple-contract-analysis.md for the design rationale. Requires
+either, both, or neither may be active. Enabling both together is
+intentionally allowed; the two engines share no state and neither
+suppresses the other, so an obligation both would independently discharge
+could in principle be reported by each -- this is accepted, not a bug, if
+it ever occurs (the two passes don't check identical shapes in every case,
+so this isn't guaranteed to be observable for any specific obligation).
+See ~/gimple-contract-analysis.md for the design rationale. Requires
 -fcontract-control-objects to have any effect.
 
 fcontract-symbolic-proofs
@@ -1957,8 +1962,13 @@ C++ ObjC++ Var(flag_contract_symbolic_proofs_gimple) Init(0)
 Experimental: perform -fcontract-symbolic-proofs's own checking as a GIMPLE
 pass (run once SSA is built, before any optimization pass) instead of the
 default AST walk; independent of -fcontract-symbolic-proofs itself, so
-either, both, or neither may be active. See
-~/gimple-contract-analysis.md for the design rationale. Requires
+either, both, or neither may be active. Enabling both together is
+intentionally allowed; the two engines share no state and neither
+suppresses the other, so an obligation both would independently discharge
+could in principle be reported by each -- this is accepted, not a bug, if
+it ever occurs (the two passes don't check identical shapes in every case,
+so this isn't guaranteed to be observable for any specific obligation).
+See ~/gimple-contract-analysis.md for the design rationale. Requires
 -fcontract-control-objects to have any effect.
 
 fcontract-symbolic-runtime-checks

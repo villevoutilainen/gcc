@@ -1067,6 +1067,16 @@ static GTY(()) hash_map<tree, tree> *contract_predicate_core_fn;
 static GTY(()) hash_set<tree> *oa_conveyor_active_contract_cache;
 static GTY(()) hash_set<tree> *oa_symbolic_active_contract_cache;
 
+/* Same caching need, same reason, for CONTRACT's own strict status
+   (oa_contract_conveyor_strict_p/oa_contract_symbolic_strict_p, i.e. its
+   control object is proven_conveyor/proven_symbolic specifically, not
+   just analyzed_conveyor/analyzed_symbolic) -- these also call into
+   contract_control_bool_member, so they're just as unreliable at
+   GIMPLE-pass timing as the active-status check above, for the same
+   reason.  */
+static GTY(()) hash_set<tree> *oa_conveyor_strict_contract_cache;
+static GTY(()) hash_set<tree> *oa_symbolic_strict_contract_cache;
+
 /* Makes PRE the precondition function for FNDECL.  */
 
 static void
@@ -8851,6 +8861,8 @@ oa_field_object_identity (tree expr, oa_env &env, tree *decl_out)
   return true;
 }
 
+static bool oa_get_range (tree expr, oa_env &env, oa_range_fact *out);
+
 /* True if EXPR (evaluated in ENV) is provably an object address:
    'this'; '&obj' where obj is a parameter/variable of object type; a
    VAR_DECL/PARM_DECL whose current value ENV already knows to be
@@ -8939,6 +8951,26 @@ oa_provable_p (tree expr, oa_env &env)
   if (TREE_CODE (expr) == ADDR_EXPR)
     {
       tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      /* D4324: a reference-typed argument is itself passed as the
+	 address of whatever it's bound to -- so when that reference is
+	 produced by a conversion operator (e.g. a wrapper's own
+	 'operator T&()', substituted for a callee's own reference
+	 parameter at a call site), the conversion call sits *underneath*
+	 this ADDR_EXPR. Mirrors oa_object_identity_decl's own identical
+	 strip (see its leading comment for the "found via direct
+	 testing" case this closes) -- oa_provable_p was the one function
+	 in the shared-helper comment's own list of ten unified functions
+	 that never got it, so a wrapper type's 'operator T&()' bound to a
+	 conveyor callee's 'T&' parameter hit a hard "cannot prove
+	 is_object_address" error where every sibling function already
+	 recognized the identical shape. Deliberately the conversion-
+	 operator-only twin, not the fuller oa_strip_conversion_call
+	 (which also peels a TARGET_EXPR/AGGR_INIT_EXPR copy-construction
+	 materialization) -- this function already has its own, separate
+	 TARGET_EXPR handling immediately below, so stripping that here
+	 too would be redundant, not additive.  */
+      op = oa_strip_conversion_operator_call (op);
+      STRIP_ANY_LOCATION_WRAPPER (op);
       if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
 	return true;
       /* D4324: reference-safety -- '&TARGET_EXPR<slot, init>' is how a
@@ -8974,7 +9006,8 @@ oa_provable_p (tree expr, oa_env &env)
 	  && TREE_CODE (TREE_OPERAND (op, 1)) == FIELD_DECL)
 	{
 	  tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
-	  tree obj_expr = TREE_CODE (obj) == INDIRECT_REF
+	  bool via_pointer = TREE_CODE (obj) == INDIRECT_REF;
+	  tree obj_expr = via_pointer
 	    ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0)) : obj;
 	  /* An *implicit* 'this->field' access (plain 'field', no explicit
 	     'this->') binds 'this' one layer deeper than an explicit
@@ -8996,10 +9029,96 @@ oa_provable_p (tree expr, oa_env &env)
 		 || TREE_CODE (obj_expr) == CONVERT_EXPR
 		 || TREE_CODE (obj_expr) == VIEW_CONVERT_EXPR)
 	    obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj_expr, 0));
+	  /* VIA_POINTER: the field is reached by DEREFERENCING a pointer
+	     ('p->f'), so what needs to be provable is the POINTER'S OWN
+	     VALUE as a live address, not the (always-trivially-valid)
+	     storage location of the pointer variable itself. Recursing via
+	     a freshly-built 'ADDR_EXPR (obj_expr)' asks the wrong question
+	     here -- it lands back on the "ADDR_EXPR of a bare decl is
+	     trivially provable" case just above (a variable's own storage
+	     is always live), completely bypassing env.provable_p(obj_expr)
+	     -- the real, established-fact check for whether OBJ_EXPR's own
+	     VALUE is a proven object address (found by direct testing:
+	     'f (p->f)', f taking a reference, demanded no proof that P
+	     itself was ever established as valid, while the equivalent
+	     'f (*p)' correctly demanded full proof of P -- the same
+	     ADDR_EXPR-presence-alone mistake oa_reference_owned_p's own
+	     ASKING_ABOUT_POINTER_VALUE parameter exists to avoid, see that
+	     function's leading comment). Recursing on OBJ_EXPR directly
+	     reaches the ordinary VAR_P/PARM_DECL case below, which does
+	     consult env.provable_p -- and still resolves 'this' correctly
+	     via the IS_THIS_PARAMETER check above that recursion reaches
+	     too. When NOT via a pointer ('h.f'), OBJ_EXPR is the object
+	     itself, whose own storage address genuinely is trivially valid,
+	     so the ADDR_EXPR wrap remains correct there (and lets a further
+	     field chain, 'a.b.c', keep resolving through the COMPONENT_REF
+	     case here recursively).  */
+	  if (via_pointer)
+	    return oa_provable_p (obj_expr, env);
 	  return oa_provable_p (build1 (ADDR_EXPR,
 					build_pointer_type (TREE_TYPE (obj_expr)),
 					obj_expr),
 				env);
+	}
+      /* D4324: '&arr[index]' -- a directly-named array's element address
+	 is provable exactly when INDEX is provably within [0, N) of ARR's
+	 own declared bound: the same "actual access, strict bound" rule
+	 item 8's own ARRAY_REF validation already applies to plain
+	 'arr[index]' (see oa_scan_array_bounds_in_expr's own comment: a
+	 one-past-end pointer is well-defined to *form* via pointer
+	 arithmetic, but subscript syntax is always treated as an access),
+	 not the more permissive one-past-end allowance pointer-arithmetic
+	 formation gets -- '&arr[index]' is subscript syntax, addressing a
+	 specific element, not 'arr + index'. oa_get_range already
+	 recognizes this exact shape (ADDR_EXPR(ARRAY_REF(arr, index)),
+	 confirmed empirically there) for tracking a pointer's own base+
+	 offset fact; this is the same shape asked as an is_object_address
+	 question instead -- previously unhandled here entirely, silently
+	 rejecting 'g (arr[0])' for a conveyor callee taking 'T&'.  */
+      if (TREE_CODE (op) == ARRAY_REF)
+	{
+	  tree arr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
+	  while (TREE_CODE (arr) == NON_LVALUE_EXPR || TREE_CODE (arr) == NOP_EXPR
+		 || TREE_CODE (arr) == CONVERT_EXPR
+		 || TREE_CODE (arr) == VIEW_CONVERT_EXPR)
+	    arr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arr, 0));
+	  tree index = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 1));
+	  /* D4324: requiring VAR_P (ARR), not just an ARRAY_TYPE base, means
+	     a struct-embedded array ('hp->arr[i]'/'h.arr[i]', ARR itself a
+	     COMPONENT_REF) is deliberately declined here -- the same
+	     "struct-embedded arrays are out of scope" boundary
+	     oa_array_slot_base's own comment above already documents for
+	     oa_array_slot_identity, for the identical reason: a struct-
+	     embedded array's own slots would need a 3-tuple (struct_identity,
+	     FIELD_DECL, index) key that neither resolver attempts. Kept
+	     consistent with oa_get_range's own '&arr[index]' case below,
+	     which has the same restriction for the same reason.  */
+	  if (VAR_P (arr) && TREE_CODE (TREE_TYPE (arr)) == ARRAY_TYPE)
+	    {
+	      tree domain = TYPE_DOMAIN (TREE_TYPE (arr));
+	      tree max = domain ? TYPE_MAX_VALUE (domain) : NULL_TREE;
+	      /* Mirrors oa_index_range's own two cases (a literal constant,
+		 or a plain, non-array-based tracked range) -- not called
+		 directly since it's defined later in this file than this
+		 function is.  */
+	      oa_range_fact idx_fact;
+	      bool idx_known;
+	      if (TREE_CODE (index) == INTEGER_CST)
+		{
+		  idx_fact.base = NULL_TREE;
+		  idx_fact.has_lo = idx_fact.has_hi = true;
+		  idx_fact.lo = idx_fact.hi = wi::to_widest (index);
+		  idx_known = true;
+		}
+	      else
+		idx_known = oa_get_range (index, env, &idx_fact)
+		  && idx_fact.base == NULL_TREE;
+	      if (max && TREE_CODE (max) == INTEGER_CST && idx_known
+		  && idx_fact.has_lo && idx_fact.has_hi
+		  && idx_fact.lo >= 0 && idx_fact.hi <= wi::to_widest (max))
+		return true;
+	    }
+	  return false;
 	}
       return false;
     }
@@ -9039,6 +9158,19 @@ oa_provable_p (tree expr, oa_env &env)
   if (TREE_CODE (expr) == CALL_EXPR
       && oa_call_postcondition_object_address_p (expr))
     return true;
+
+  /* D4324: 'cond ? a : b' is provable iff BOTH arms are -- the value-
+     level lattice-join analogue of oa_walk_stmt's own COND_EXPR case,
+     which already refines and merges a real per-arm env at the join
+     point for ordinary statement flow; this is the same join, just
+     asked as a single expression-level question instead. Previously
+     unhandled by any of this function/oa_provably_nonzero_p/
+     oa_get_range/oa_reference_owned_p, so 'p = c ? &a : &b;' or
+     'f (c ? &a : &b)' silently gave up regardless of whether both A and
+     B were individually owned/provable.  */
+  if (TREE_CODE (expr) == COND_EXPR)
+    return oa_provable_p (TREE_OPERAND (expr, 1), env)
+      && oa_provable_p (TREE_OPERAND (expr, 2), env);
 
   return false;
 }
@@ -9303,6 +9435,24 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
   if (TREE_CODE (expr) == INTEGER_CST)
     return !integer_zerop (expr);
 
+  /* D4324: 'this' and '&decl' are oa_provable_p's own two primary base
+     cases (is_object_address axioms), and both are just as trivially
+     PROVABLY NONZERO as they are provably valid addresses -- neither a
+     live 'this' receiver nor the address of a real variable/parameter
+     can ever be a null pointer. Previously missing here entirely
+     (unlike oa_provable_p, which has always treated both as axioms), so
+     a conveyor callee's 'pre (p != 0)' spuriously failed to verify for
+     'f (&x)' or 'f (this)'.  */
+  if (is_this_parameter (expr))
+    return true;
+  if (TREE_CODE (expr) == ADDR_EXPR)
+    {
+      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
+	return true;
+      return false;
+    }
+
   if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
     {
       if (oa_iile_outer_env && is_capture_proxy (expr))
@@ -9342,6 +9492,22 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
 	return false;
       tree obj_expr = TREE_CODE (obj) == INDIRECT_REF
 	? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0)) : obj;
+      /* Deeper field chain ('a.b.c') documented boundary: OBJ_EXPR is
+	 handed to oa_field_object_identity RAW here, but that resolver
+	 requires its own argument to literally be an ADDR_EXPR
+	 (TREE_CODE (expr) != ADDR_EXPR -> return false, see its own
+	 definition) -- so a nested COMPONENT_REF base (OBJ_EXPR itself
+	 being 'a.b', not a bare decl) never resolves via any of the four
+	 chained resolvers, imprecise but safe (same conservative "falls
+	 through and declines" shape oa_reference_owned_p's own multi-level
+	 chain boundary already has, see that function's leading comment).
+	 Not aligned with oa_provable_p's own unbounded recursion (which
+	 rebuilds a fresh ADDR_EXPR around OBJ_EXPR specifically so nested
+	 chains keep resolving) because that fix's blast radius would
+	 extend well past this one function: the identical raw-OBJ_EXPR
+	 pattern appears at every other consult site sharing this same
+	 four-resolver chain, and aligning just this one function would
+	 create a new, narrower asymmetry rather than removing one.  */
       tree identity;
       if (!oa_object_identity_decl (obj_expr, &identity)
 	  && !oa_field_slot_identity (obj_expr, env, &identity)
@@ -9363,6 +9529,13 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
      interval.  */
   if (TREE_CODE (expr) == CALL_EXPR && oa_call_postcondition_nonzero_p (expr))
     return true;
+
+  /* D4324: 'cond ? a : b' is provably nonzero iff BOTH arms are --
+     mirrors oa_provable_p's own identical COND_EXPR case (see its
+     leading comment for the full rationale).  */
+  if (TREE_CODE (expr) == COND_EXPR)
+    return oa_provably_nonzero_p (TREE_OPERAND (expr, 1), env)
+      && oa_provably_nonzero_p (TREE_OPERAND (expr, 2), env);
 
   return false;
 }
@@ -9474,6 +9647,17 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 	return false;
       tree obj_expr = TREE_CODE (obj) == INDIRECT_REF
 	? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0)) : obj;
+      /* Deeper field chain ('a.b.c') documented boundary -- see the
+	 identical comment on oa_provably_nonzero_p's own COMPONENT_REF
+	 case just above this function for the full rationale: OBJ_EXPR is
+	 handed to oa_field_object_identity raw, which requires its own
+	 argument to literally be an ADDR_EXPR, so a nested COMPONENT_REF
+	 base never resolves via any of the four chained resolvers here --
+	 imprecise but safe, and deliberately not aligned with
+	 oa_provable_p's own unbounded recursion for the same reason (this
+	 exact raw-OBJ_EXPR pattern is shared by every sibling consult site
+	 in this file; fixing just this one would trade one asymmetry for
+	 another).  */
       tree identity;
       if (!oa_object_identity_decl (obj_expr, &identity)
 	  && !oa_field_slot_identity (obj_expr, env, &identity)
@@ -9682,6 +9866,13 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 		 || TREE_CODE (arr) == VIEW_CONVERT_EXPR)
 	    arr = TREE_OPERAND (arr, 0);
 	  tree index = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 1));
+	  /* D4324: same VAR_P restriction, same reason, as oa_provable_p's
+	     mirror of this exact shape above -- a struct-embedded array
+	     ('hp->arr[i]', ARR a COMPONENT_REF) is declined, matching
+	     oa_array_slot_identity's own already-documented "struct-embedded
+	     arrays are out of scope" boundary (see oa_array_slot_base's
+	     comment: it would need a 3-tuple (struct_identity, FIELD_DECL,
+	     index) key that no resolver here attempts).  */
 	  if (VAR_P (arr) && TREE_CODE (TREE_TYPE (arr)) == ARRAY_TYPE)
 	    {
 	      oa_range_fact idx_fact;
@@ -9803,6 +9994,34 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
   if (TREE_CODE (expr) == CALL_EXPR && oa_call_postcondition_range_p (expr, env, out))
     return true;
 
+  /* D4324: 'cond ? a : b''s own range is the lattice join of both arms'
+     ranges -- mirrors oa_walk_stmt's own COND_EXPR case, which already
+     refines and merges a real per-arm env for ordinary statement flow;
+     this is the same join, just asked as a single expression-level
+     range instead. Declines (rather than guesses) if either arm itself
+     tracks an array-offset BASE -- joining two different bases, or a
+     based range with a non-based one, isn't a single array-relative
+     offset any more, matching how PLUS_EXPR/MINUS_EXPR above already
+     treat a BASE-carrying operand as disqualifying for this same
+     reason.  */
+  if (TREE_CODE (expr) == COND_EXPR)
+    {
+      oa_range_fact arm1, arm2;
+      if (!oa_get_range (TREE_OPERAND (expr, 1), env, &arm1)
+	  || arm1.base != NULL_TREE
+	  || !oa_get_range (TREE_OPERAND (expr, 2), env, &arm2)
+	  || arm2.base != NULL_TREE)
+	return false;
+      out->base = NULL_TREE;
+      out->has_lo = arm1.has_lo && arm2.has_lo;
+      out->has_hi = arm1.has_hi && arm2.has_hi;
+      if (out->has_lo)
+	out->lo = arm1.lo < arm2.lo ? arm1.lo : arm2.lo;
+      if (out->has_hi)
+	out->hi = arm1.hi > arm2.hi ? arm1.hi : arm2.hi;
+      return out->has_lo || out->has_hi;
+    }
+
   return false;
 }
 
@@ -9881,6 +10100,10 @@ oa_get_float_range (tree expr, oa_env &env, oa_float_range_fact *out)
 	return false;
       tree obj_expr = TREE_CODE (obj) == INDIRECT_REF
 	? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0)) : obj;
+      /* Deeper field chain ('a.b.c') documented boundary -- see the
+	 identical comment on oa_provably_nonzero_p's own COMPONENT_REF
+	 case for the full rationale (this is the float analogue of the
+	 same shared, raw-OBJ_EXPR four-resolver-chain pattern).  */
       tree identity;
       if (!oa_object_identity_decl (obj_expr, &identity)
 	  && !oa_field_slot_identity (obj_expr, env, &identity)
@@ -12070,6 +12293,18 @@ oa_reference_owned_p (tree expr, oa_env &env,
   while (TREE_CODE (expr) == NON_LVALUE_EXPR || TREE_CODE (expr) == NOP_EXPR
 	 || TREE_CODE (expr) == CONVERT_EXPR || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
     expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+  /* D4324: 'cond ? a : b' is owned iff BOTH arms are -- mirrors
+     oa_provable_p's own identical COND_EXPR case (see its leading
+     comment for the full rationale); ASKING_ABOUT_POINTER_VALUE and
+     IN_PREDICATE_CONTEXT both thread through unchanged, since the
+     question being asked ("is this pointer's own value owned" vs. "is
+     what it designates owned", and which ruleset applies) doesn't
+     change just because EXPR happens to be a ternary.  */
+  if (TREE_CODE (expr) == COND_EXPR)
+    return oa_reference_owned_p (TREE_OPERAND (expr, 1), env,
+				  asking_about_pointer_value, in_predicate_context)
+      && oa_reference_owned_p (TREE_OPERAND (expr, 2), env,
+				asking_about_pointer_value, in_predicate_context);
   /* D4324: a reference bound directly to a temporary is owned by
      whoever materializes it -- see oa_provable_p's own identical
      TARGET_EXPR case for the full rationale.  */
@@ -12112,6 +12347,26 @@ oa_reference_owned_p (tree expr, oa_env &env,
 					  /*asking_about_pointer_value=*/true,
 					  in_predicate_context);
 	}
+      /* D4324: '&arr[index]' -- an array element's ownership is exactly
+	 the array's own: owned if ARR itself (a local this function
+	 created, a received parameter, etc.) is, matching the field-of-
+	 owned-object treatment just above. oa_object_identity_decl
+	 deliberately has no ARRAY_REF case either (same wider-scope
+	 reasoning as its COMPONENT_REF omission), so without this an
+	 array element fell into the same "unresolvable -> conservatively
+	 borrowed" default for the wrong reason. Mirrors oa_get_range's/
+	 oa_provable_p's own identical ADDR_EXPR(ARRAY_REF) recognition,
+	 previously missing here entirely. Recursing on the bare ARR decl
+	 (not asking_about_pointer_value) is correct regardless of ARR's
+	 own type -- the ordinary VAR_P/PARM_DECL resolution further down
+	 doesn't gate on addr_of_decl for a VAR_DECL identity, only a
+	 PARM_DECL one, and an array can't be a by-value PARM_DECL to
+	 begin with (it decays to a pointer parameter, a completely
+	 different, already-handled shape).  */
+      if (TREE_CODE (op) == ARRAY_REF)
+	return oa_reference_owned_p (TREE_OPERAND (op, 0), env,
+				      /*asking_about_pointer_value=*/false,
+				      in_predicate_context);
     }
   /* Ownership-laundering fix: '*p''s own ownership is exactly P's own
      ownership -- oa_object_identity_decl deliberately never resolves a
@@ -12166,8 +12421,38 @@ oa_reference_owned_p (tree expr, oa_env &env,
      ambiguous (a POINTER-typed callee parameter, i.e. THIS, bound
      directly from a bare pointer decl with no ADDR_EXPR at all).  */
   bool addr_of_decl = TREE_CODE (expr) == ADDR_EXPR || asking_about_pointer_value;
+  /* Full four-resolver chain, matching every other consult site in this
+     file (e.g. oa_get_range's own COMPONENT_REF case) -- previously this
+     was the only consult site using just the first resolver, missing the
+     other three's own alias-tracking entirely: a field-slot alias
+     (a pointer/reference-typed field, e.g. 'h.ptr', recorded via
+     oa_field_slot_identity's own map as aliasing an owned identity when
+     assigned) or an array-slot alias (a pointer/reference-typed array
+     element similarly recorded via oa_array_slot_identity) fell into
+     "unresolvable -> conservatively borrowed" purely because this
+     function's own identity resolution never asked those two maps, even
+     when the alias target really was owned. oa_field_object_identity is
+     included too for uniformity with the shared pattern, though the
+     shapes it resolves (ADDR_EXPR of a COMPONENT_REF) are already
+     handled by this function's own earlier, dedicated block above.
+
+     NOTE: this specific pair (field-slot/array-slot alias reached
+     through a dereference substituted for a reference parameter) could
+     not be exercised end-to-end by direct testing: oa_provable_p has no
+     equivalent tracking for a field/array slot's own VALUE (only for
+     its ADDRESS, via the COMPONENT_REF-under-ADDR_EXPR case elsewhere
+     in that function), so item 7's implicit Q1 obligation always fails
+     first and 'continue's past this Q2 check entirely before it can run
+     -- a separate, deeper gap, out of this fix's own scope. This change
+     is still correct and applied on the same "match every other consult
+     site's chain" principle the rest of this fix follows, and is
+     confirmed not to regress the existing suite; closing the Q1 gap
+     that would make it independently observable is a follow-up.  */
   tree identity;
-  if (!oa_object_identity_decl (expr, &identity))
+  if (!oa_object_identity_decl (expr, &identity)
+      && !oa_field_slot_identity (expr, env, &identity)
+      && !oa_array_slot_identity (expr, env, &identity)
+      && !oa_field_object_identity (expr, env, &identity))
     return false;
   identity = env.alias_find (identity);
   /* D4324/P2680: 'this' is owned, not borrowed, in FUNCTION-BODY context
@@ -12250,13 +12535,27 @@ oa_call_result_owned_p (tree call, oa_env &env)
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL
       || !DECL_DECLARED_CONVEYOR_P (callee))
     return false;
-  if (TREE_CODE (call) != CALL_EXPR)
+  /* D4324: CALL can also be an AGGR_INIT_EXPR (a constructor call) --
+     matching every other call-shape consumer in this file (e.g.
+     oa_substitute_call_arg's own AGGR_INIT_EXPR branch). ARGNO 0 is
+     always skipped for that shape: AGGR_INIT_EXPR_ARG (call, 0) is a
+     meaningless placeholder at this stage (the object being
+     constructed, not yet a stable, resolvable identity), never a real
+     argument to check ownership of -- previously this function was the
+     only call-shape consumer in the file that never got this treatment,
+     rejecting (as merely "not owned", the conservative default) the
+     result of any conveyor constructor call instead of actually
+     inspecting its real arguments.  */
+  bool is_aggr_init = TREE_CODE (call) == AGGR_INIT_EXPR;
+  if (!is_aggr_init && TREE_CODE (call) != CALL_EXPR)
     return false;
 
-  unsigned nargs = call_expr_nargs (call);
-  for (unsigned i = 0; i < nargs; ++i)
+  unsigned nargs = is_aggr_init ? aggr_init_expr_nargs (call) : call_expr_nargs (call);
+  for (unsigned i = is_aggr_init ? 1 : 0; i < nargs; ++i)
     {
-      tree arg = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (call, i));
+      tree arg = STRIP_ANY_LOCATION_WRAPPER (is_aggr_init
+					      ? AGGR_INIT_EXPR_ARG (call, i)
+					      : CALL_EXPR_ARG (call, i));
       tree arg_type = TREE_TYPE (arg);
       if (!POINTER_TYPE_P (arg_type) && TREE_CODE (arg_type) != REFERENCE_TYPE)
 	continue;
@@ -12269,7 +12568,8 @@ oa_call_result_owned_p (tree call, oa_env &env)
 /* D4324: shared helper for the DECL_EXPR/reassignment establishment
    sites below -- strips INIT's own conversions the same way
    oa_object_identity_decl does, and reports whether what remains is a
-   CALL_EXPR (the only shape oa_call_result_owned_p understands).  */
+   CALL_EXPR or AGGR_INIT_EXPR (the two shapes oa_call_result_owned_p
+   understands).  */
 
 static tree
 oa_strip_to_call (tree init)
@@ -12280,7 +12580,8 @@ oa_strip_to_call (tree init)
   while (TREE_CODE (init) == NON_LVALUE_EXPR || TREE_CODE (init) == NOP_EXPR
 	 || TREE_CODE (init) == CONVERT_EXPR || TREE_CODE (init) == VIEW_CONVERT_EXPR)
     init = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (init, 0));
-  return TREE_CODE (init) == CALL_EXPR ? init : NULL_TREE;
+  return TREE_CODE (init) == CALL_EXPR || TREE_CODE (init) == AGGR_INIT_EXPR
+    ? init : NULL_TREE;
 }
 
 static void
@@ -16657,6 +16958,53 @@ oa_env_check_field_range_fact (oa_analysis_env *env, tree base_expr,
     }
 }
 
+/* The floating-point analogue of oa_env_check_field_range_fact
+   immediately above, for a float-typed FIELD (m_contract_float_field_
+   range_map) -- previously missing entirely from the plugin-facing
+   surface: oa_precondition_field_range_obligations only ever collects
+   INTEGER_CST-bounded field conjuncts (oa_collect_contract_field_ranges
+   itself filters to that), so a float-bounded field precondition (e.g.
+   'pre<ctrl>(this->value >= 0.0)') was silently unchecked by any
+   existing plugin, exactly the gap the built-in checker's own separate
+   float loop exists to close (see oa_handle_call_conveyor_field_range_
+   obligation's own comment). LO/HI are REAL_CST trees, matching what
+   oa_precondition_float_field_range_obligations below now hands a
+   plugin.  */
+
+oa_proof_result
+oa_env_check_float_field_range_fact (oa_analysis_env *env, tree base_expr,
+				      tree field, bool has_lo, tree lo,
+				      bool has_hi, tree hi,
+				      bool require_conveyor)
+{
+  oa_env &e = *reinterpret_cast<oa_env *> (env);
+  base_expr = oa_strip_conversion_call (base_expr);
+  tree identity;
+  if (!oa_object_identity_decl (base_expr, &identity)
+      && !oa_field_slot_identity (base_expr, e, &identity)
+      && !oa_array_slot_identity (base_expr, e, &identity)
+      && !oa_field_object_identity (base_expr, e, &identity))
+    return OA_UNKNOWN;
+  identity = e.alias_find (identity);
+  oa_contract_float_field_range_fact established;
+  if (!e.contract_float_field_range_get (identity, field, &established)
+      || (require_conveyor && !established.conveyor_established))
+    return OA_UNKNOWN;
+  oa_float_range_fact required;
+  required.has_lo = has_lo;
+  required.has_hi = has_hi;
+  if (has_lo)
+    required.lo = TREE_REAL_CST (lo);
+  if (has_hi)
+    required.hi = TREE_REAL_CST (hi);
+  switch (oa_float_range_subsumption (established.range, required))
+    {
+    case OA_RANGE_SUBSUMED: return OA_PROVEN_TRUE;
+    case OA_RANGE_DISJOINT: return OA_PROVEN_FALSE;
+    default: return OA_UNKNOWN;
+    }
+}
+
 /* The call-range analogue of oa_env_check_field_range_fact immediately
    above, for a call to CALLEE_FN (a DECL_DECLARED_CONVEYOR_P accessor)
    on the object identified by RECEIVER_EXPR (m_contract_call_range_map)
@@ -16770,6 +17118,50 @@ oa_precondition_field_range_obligations
 	    ? wide_int_to_tree (long_long_integer_type_node, r.lo) : NULL_TREE;
 	  tree hi = r.has_hi
 	    ? wide_int_to_tree (long_long_integer_type_node, r.hi) : NULL_TREE;
+	  callback (contract, field_groups[i].field, ptr_expr, r.has_lo, lo,
+		    r.has_hi, hi, data);
+	}
+    }
+}
+
+/* The floating-point analogue of oa_precondition_field_range_obligations
+   immediately above, via oa_collect_contract_float_field_ranges instead
+   of the integer collector -- previously missing entirely, so no
+   plugin could ever be handed a float-bounded field precondition
+   conjunct at all (see oa_env_check_float_field_range_fact's own
+   comment for the motivating gap). LO/HI are REAL_CST trees, built in
+   FIELD's own type so a 'float' field's own precision is preserved
+   rather than always widening to double.  */
+
+void
+oa_precondition_float_field_range_obligations
+  (tree callee,
+   void (*callback) (tree, tree, tree, bool, tree, bool, tree, void *),
+   void *data)
+{
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract))
+	continue;
+      if (!oa_contract_fact_tracking_active_p (contract, callee))
+	continue;
+
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+
+      auto_vec<oa_symbolic_float_field_group> field_groups;
+      oa_collect_contract_float_field_ranges (cond, &field_groups);
+      for (unsigned i = 0; i < field_groups.length (); ++i)
+	{
+	  tree ptr_expr = oa_strip_symbolic_ptr_expr (field_groups[i].ptr_expr);
+	  if (TREE_CODE (ptr_expr) != PARM_DECL)
+	    continue;
+	  oa_float_range_fact &r = field_groups[i].range;
+	  tree field_type = TREE_TYPE (field_groups[i].field);
+	  tree lo = r.has_lo ? build_real (field_type, r.lo) : NULL_TREE;
+	  tree hi = r.has_hi ? build_real (field_type, r.hi) : NULL_TREE;
 	  callback (contract, field_groups[i].field, ptr_expr, r.has_lo, lo,
 		    r.has_hi, hi, data);
 	}
@@ -21714,6 +22106,18 @@ oa_cache_contract_flavors (tree fndecl)
 	    oa_symbolic_active_contract_cache = hash_set<tree>::create_ggc (37);
 	  oa_symbolic_active_contract_cache->add (contract);
 	}
+      if (oa_contract_conveyor_strict_p (contract, fndecl))
+	{
+	  if (!oa_conveyor_strict_contract_cache)
+	    oa_conveyor_strict_contract_cache = hash_set<tree>::create_ggc (37);
+	  oa_conveyor_strict_contract_cache->add (contract);
+	}
+      if (oa_contract_symbolic_strict_p (contract, fndecl))
+	{
+	  if (!oa_symbolic_strict_contract_cache)
+	    oa_symbolic_strict_contract_cache = hash_set<tree>::create_ggc (37);
+	  oa_symbolic_strict_contract_cache->add (contract);
+	}
     }
 }
 
@@ -21798,6 +22202,24 @@ oa_contract_symbolic_active_cached_p (tree contract)
 {
   return oa_symbolic_active_contract_cache
 	 && oa_symbolic_active_contract_cache->contains (contract);
+}
+
+/* Cached mirrors of oa_contract_conveyor_strict_p/oa_contract_symbolic_
+   strict_p, for the same GIMPLE-pass-timing reason as the active-status
+   accessors above -- see oa_cache_contract_flavors's own comment.  */
+
+bool
+oa_contract_conveyor_strict_cached_p (tree contract)
+{
+  return oa_conveyor_strict_contract_cache
+	 && oa_conveyor_strict_contract_cache->contains (contract);
+}
+
+bool
+oa_contract_symbolic_strict_cached_p (tree contract)
+{
+  return oa_symbolic_strict_contract_cache
+	 && oa_symbolic_strict_contract_cache->contains (contract);
 }
 
 /* Shared body for resolve_object_address_in_function and
@@ -22053,12 +22475,59 @@ oa_collect_conjuncts_public (tree *cond, vec<tree *> *out)
   oa_collect_conjuncts (cond, out);
 }
 
+/* Thin wrapper over oa_substitute_call_arg, for a plugin (see
+   .claude/plans/lazy-stirring-pearl.md). Every existing front-end
+   plugin hand-rolls this exact positional substitution directly via
+   CALL_EXPR_ARG/call_expr_nargs, which is unsafe for an AGGR_INIT_EXPR
+   call (a constructor call, e.g. 'return Number(50.0);', which
+   oa_scan_calls_in_expr's own callback deliberately reaches too): a
+   checking build's CALL_EXPR_ARG hits tree_check and ICEs on an
+   AGGR_INIT_EXPR, and a release build silently reads the wrong slot.
+   This gives a plugin the same correctly AGGR_INIT_EXPR-aware
+   substitution the compiler's own built-in obligation checking already
+   uses, instead of reimplementing it unsafely.  */
+
+tree
+oa_substitute_call_arg_public (tree callee, tree call, tree param)
+{
+  return oa_substitute_call_arg (callee, call, param);
+}
+
 /* Thin wrapper over oa_contract_conveyor_active_p, for a plugin.  */
 
 bool
 oa_contract_conveyor_active_public (tree contract, tree owner_fn)
 {
   return oa_contract_conveyor_active_p (contract, owner_fn);
+}
+
+/* Thin wrapper over oa_match_general_comparison, for a plugin. Every
+   existing front-end plugin only ever recognized "param OP const"
+   (oa_match_simple_comparison, a bare PARM_DECL required on the non-
+   literal side), so a compound-expression conjunct (e.g. 'percentage +
+   this->m_value < 100.0') was silently skipped entirely, with no
+   diagnostic -- the built-in checker has recognized this shape for a
+   while (see .claude/plans/lazy-stirring-pearl.md).  */
+
+bool
+oa_match_general_comparison_public (tree conjunct, tree *expr_out,
+				     tree_code *code_out, tree *const_val_out)
+{
+  return oa_match_general_comparison (conjunct, expr_out, code_out,
+				       const_val_out);
+}
+
+/* Thin wrapper over oa_substitute_call_expr, for a plugin -- the
+   companion oa_match_general_comparison_public above needs: EXPR_OUT
+   from that matcher only names the *shape*, not a specific call site's
+   own value, and needs this recursive substitution (unlike a bare
+   PARM_DECL, which oa_substitute_call_arg_public alone already
+   handles) before it can be hijacked to oa_env_check_comparison.  */
+
+tree
+oa_substitute_call_expr_public (tree callee, tree call, tree expr)
+{
+  return oa_substitute_call_expr (callee, call, expr);
 }
 
 /* If OP is (a) a bare PARM_DECL, or (b) a call through an implicit,
@@ -22715,6 +23184,21 @@ static oa_proof_result
 oa_env_check_comparison_1 (oa_env &env, tree expr, tree_code cmp,
 			    tree const_val)
 {
+  /* D4324: this function's own [lo,hi] interval machinery (oa_get_range,
+     widest_int) is integer-only -- a REAL_CST reaching here would hit
+     wi::to_widest's own INTEGER_CST_CHECK, an ICE in a checking build or
+     silent garbage bounds otherwise. The exported matcher this function
+     is fed from (oa_match_simple_comparison) deliberately admits REAL_CST
+     alongside INTEGER_CST for a plugin's own shape-recognition purposes
+     (see that function's own comment), but this query has no float
+     counterpart to hand off to (unlike the built-in's own conveyor-proof
+     obligation checking, which runs a completely separate float-tracking
+     loop alongside this integer one) -- decline rather than misbehave,
+     matching this whole API surface's existing "floats are silently out
+     of scope" boundary elsewhere (see .claude/plans/lazy-stirring-pearl.md).  */
+  if (TREE_CODE (const_val) != INTEGER_CST)
+    return OA_UNKNOWN;
+
   oa_range_fact fact;
   if (!oa_get_range (expr, env, &fact) || fact.base != NULL_TREE)
     return OA_UNKNOWN;

@@ -3,8 +3,18 @@
 // relational, the call-vs-call analogue of the existing cg_call_rel_
 // fact/cg_get_call_relational mechanism) -- "RECEIVER_1.CALLEE_1 () OP
 // RECEIVER_2.CALLEE_2 ()" established via a function's own declared
-// precondition (self-trust only, never from an ordinary branch, on
-// either the AST or the GIMPLE side -- matching scope exactly).
+// precondition (self-trust). GIMPLE-side scope is self-trust only,
+// never from an ordinary branch (cg_refine_relational_edge_into
+// deliberately has no call-vs-call member: such a fact is keyed on an
+// object's identity, not an SSA name, so it can't be safely flattened).
+// This does NOT match the AST side's own scope, despite an earlier
+// revision of this comment claiming it did: oa_refine_single_
+// comparison's own oa_match_call_against_call branch DOES establish
+// this fact from an ordinary 'if', see d4324-conveyor-relational-
+// ifcond.C's own third section, which this GIMPLE mirror has no
+// equivalent of at all (found via the sweep documented in
+// .claude/plans/lazy-stirring-pearl.md) -- a real, accepted AST/GIMPLE
+// asymmetry, not "matching scope."
 //
 // Every 'S' parameter below is a CONST reference -- see d4324-conveyor-
 // relational-ifcond.C's own identical comment for why (P2680 9.1's

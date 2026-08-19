@@ -309,6 +309,16 @@ extern oa_proof_result oa_env_check_call_call_relational_fact
 /* Split COND into its top-level '&&' conjuncts.  */
 extern void oa_collect_conjuncts_public (tree *cond, vec<tree *> *out);
 
+/* Positionally substitute PARAM (one of CALLEE's own PARM_DECLs,
+   including its implicit 'this') to CALL's actual argument expression
+   at this call site. Returns NULL_TREE if PARAM isn't actually one of
+   CALLEE's own parameters, or CALL doesn't supply that many arguments.
+   Correctly handles CALL being an AGGR_INIT_EXPR (a constructor call) --
+   use this instead of indexing CALL_EXPR_ARG/AGGR_INIT_EXPR_ARG
+   directly, which is unsafe (an ICE in a checking build, a wrong
+   argument silently read otherwise) for that shape.  */
+extern tree oa_substitute_call_arg_public (tree callee, tree call, tree param);
+
 /* If CONJUNCT has the shape "param OP const" (bare PARM_DECL only, same
    restriction as the compiler's own is_object_address(param) matching),
    recognize it and fill PARAM_OUT/CODE_OUT/CONST_VAL_OUT.  */
@@ -387,6 +397,30 @@ extern bool oa_relational_literal_holds (tree_code code, tree a, tree b);
    OWNER_FN) currently conveyor-active (non-ignored)?  */
 extern bool oa_contract_conveyor_active_public (tree contract, tree owner_fn);
 
+/* oa_match_simple_comparison above, with its own "must be a bare
+   PARM_DECL" restriction on the non-literal side dropped -- accepts
+   *any* expression (e.g. 'percentage + this->m_value < 100.0'). Match
+   only as a fallback once oa_match_simple_comparison has already
+   declined, so the two never doubly match the same conjunct. EXPR_OUT
+   still needs oa_substitute_call_expr_public's own recursive
+   substitution below before it means anything at a specific call
+   site -- this only recognizes the shape.  */
+extern bool oa_match_general_comparison_public
+  (tree conjunct, tree *expr_out, tree_code *code_out, tree *const_val_out);
+
+/* Positionally substitute every PARM_DECL reached within EXPR (an
+   arbitrary compound expression, e.g. one just recognized by
+   oa_match_general_comparison_public above) to CALL's own actual
+   argument expressions, recursing through PLUS_EXPR/MINUS_EXPR and a
+   'param.field'/'param->field' COMPONENT_REF (including the implicit
+   'this->field' shape). Returns NULL_TREE for anything it doesn't
+   recognize -- a field reached through something other than one of
+   CALLEE's own parameters, a call, or any other shape -- rather than
+   guessing. The result can be handed straight to oa_env_check_
+   comparison, which already knows how to resolve an arbitrary
+   substituted expression's own range.  */
+extern tree oa_substitute_call_expr_public (tree callee, tree call, tree expr);
+
 /* Mirrors oa_contract_conveyor_active_public immediately above, for the
    symbolic side.  */
 extern bool oa_contract_symbolic_active_public (tree contract, tree owner_fn);
@@ -406,6 +440,18 @@ extern bool oa_contract_symbolic_active_public (tree contract, tree owner_fn);
    might run post-front-end.  */
 extern bool oa_contract_conveyor_active_cached_p (tree contract);
 extern bool oa_contract_symbolic_active_cached_p (tree contract);
+
+/* Same cached, GIMPLE-pass-safe pattern as the active-status pair above,
+   but for CONTRACT's own strict status (its control object is
+   proven_conveyor/proven_symbolic specifically, not just analyzed_
+   conveyor/analyzed_symbolic): an OA_UNKNOWN result for a strict
+   contract is escalated from a warning ("cannot verify") to a hard
+   error ("cannot prove"), mirroring the built-in engine's own
+   oa_contract_conveyor_strict_p/oa_contract_symbolic_strict_p and the
+   'strict' parameter threaded through oa_handle_precondition_simple_
+   range_obligation and its siblings.  */
+extern bool oa_contract_conveyor_strict_cached_p (tree contract);
+extern bool oa_contract_symbolic_strict_cached_p (tree contract);
 
 /* Recognize CONJUNCT as "pred_fn (decl)" or its negation "!pred_fn
    (decl)" -- the named-predicate shape both -fcontract-conveyor-proofs
@@ -508,6 +554,18 @@ extern oa_proof_result oa_env_check_call_range_fact
   (oa_analysis_env *env, tree receiver_expr, tree callee_fn, bool has_lo,
    tree lo, bool has_hi, tree hi, bool require_conveyor);
 
+/* The floating-point analogue of oa_env_check_field_range_fact: same
+   ptr->field consult, but against a float-typed field's own tracked
+   range (m_contract_float_field_range_map). LO/HI are REAL_CST trees
+   (see oa_precondition_float_field_range_obligations below, which
+   supplies them in exactly this shape). Without this, a float-bounded
+   field precondition (e.g. 'pre<ctrl>(this->value >= 0.0)') was
+   invisible to every plugin -- oa_env_check_field_range_fact's own
+   [lo,hi] machinery is integer-only.  */
+extern oa_proof_result oa_env_check_float_field_range_fact
+  (oa_analysis_env *env, tree base_expr, tree field, bool has_lo, tree lo,
+   bool has_hi, tree hi, bool require_conveyor);
+
 /* Collect every distinct PARM_DECL compared by a bare-scalar conjunct of
    CALLEE's own active *symbolic* preconditions, and the combined
    [lo,hi] each implies -- hides oa_range_fact behind plain tree bounds
@@ -534,6 +592,19 @@ extern void oa_precondition_scalar_range_obligations
    conveyor_active_public/oa_contract_symbolic_active_public on the
    CONTRACT passed to its own callback.  */
 extern void oa_precondition_field_range_obligations
+  (tree callee,
+   void (*callback) (tree contract, tree field, tree base_parm,
+		      bool has_lo, tree lo, bool has_hi, tree hi,
+		      void *data),
+   void *data);
+
+/* The floating-point analogue of oa_precondition_field_range_obligations
+   immediately above -- CALLBACK receives REAL_CST (not INTEGER_CST)
+   LO/HI bounds, built in the matched field's own type. Previously there
+   was no way for a plugin to ever observe a float-bounded field
+   precondition conjunct at all; see oa_env_check_float_field_range_fact's
+   own comment for the consult-side half of this pair.  */
+extern void oa_precondition_float_field_range_obligations
   (tree callee,
    void (*callback) (tree contract, tree field, tree base_parm,
 		      bool has_lo, tree lo, bool has_hi, tree hi,

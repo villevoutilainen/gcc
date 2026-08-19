@@ -1745,6 +1745,19 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	 obligation, so there is nothing further to check twice.  */
       bool require_conveyor = check_as_conveyor;
 
+      /* D4324: strict (proven_conveyor/proven_symbolic) vs lenient
+	 (analyzed_conveyor/analyzed_symbolic, or plain is_conveyor/is_
+	 symbolic under the ordinary command-line flag) -- mirrors
+	 contracts.cc's own 'strict' (see oa_handle_call_conveyor_proof_
+	 obligation/oa_call_conveyor_obligation_status): an OA_UNKNOWN
+	 result is escalated from a warning to a hard error. Computed per-
+	 CONTRACT here (unlike the built-in engine's own OR-across-all-of-
+	 the-callee's-preconditions scope), which is at least as precise.  */
+      bool strict = (check_as_conveyor
+		     && oa_contract_conveyor_strict_cached_p (contract))
+		    || (check_as_symbolic
+			&& oa_contract_symbolic_strict_cached_p (contract));
+
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
 	continue;
@@ -1780,19 +1793,47 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      if (cg_provable_object_address_p (substituted, established,
 						 require_conveyor, in_progress))
 		continue; /* Proven true: silently discharged.  */
-	      warning_at (gimple_location (call), 0,
-			  "cannot verify %<is_object_address%> for %qE, as "
+	      if (strict)
+		error_at (gimple_location (call),
+			  "cannot prove %<is_object_address%> for %qE, as "
 			  "required by the precondition of %qD",
 			  substituted, callee);
+	      else
+		warning_at (gimple_location (call), 0,
+			    "cannot verify %<is_object_address%> for %qE, as "
+			    "required by the precondition of %qD",
+			    substituted, callee);
 	    }
 	  else
 	    {
+	      /* D4324: a *literal* substituted argument's value is always
+		 fully known, and known-zero is exactly what the
+		 precondition rules out -- sharpened past "cannot verify"
+		 all the way to a hard, unconditional "provably violates"
+		 error for that one case, mirroring contracts.cc's own
+		 identical literal-argument sharpening in its nonzero-
+		 conjunct branch (oa_handle_call_conveyor_proof_obligation).  */
+	      tree stripped_nz = STRIP_ANY_LOCATION_WRAPPER (substituted);
+	      if (TREE_CODE (stripped_nz) == INTEGER_CST)
+		{
+		  if (!integer_zerop (stripped_nz))
+		    continue; /* Proven true: silently discharged.  */
+		  error_at (gimple_location (call),
+			    "argument %qE provably violates the "
+			    "precondition of %qD", substituted, callee);
+		  continue;
+		}
 	      if (cg_provable_nonzero_p (substituted, established_nz,
 					 require_conveyor, in_progress))
 		continue; /* Proven true: silently discharged.  */
-	      warning_at (gimple_location (call), 0,
-			  "cannot verify that %qE is nonzero, as required by "
+	      if (strict)
+		error_at (gimple_location (call),
+			  "cannot prove that %qE is nonzero, as required by "
 			  "the precondition of %qD", substituted, callee);
+	      else
+		warning_at (gimple_location (call), 0,
+			    "cannot verify that %qE is nonzero, as required by "
+			    "the precondition of %qD", substituted, callee);
 	    }
 	}
 
@@ -1844,9 +1885,14 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	    {
 	      if (oa_relational_literal_holds (rel_code, sub_param, sub_other))
 		continue; /* Proven true: silently discharged.  */
-	      warning_at (gimple_location (call), 0,
-			  "argument %qE provably violates the precondition "
-			  "of %qD", sub_param, callee);
+	      /* D4324: both sides are fully known literals, so this is a
+		 genuine, provable violation, not merely "unknown" -- fixed
+		 from an (inconsistent) warning_at to match this loop's own
+		 OA_RANGE_DISJOINT sibling case below, and contracts.cc's own
+		 error_at for the identical shape.  */
+	      error_at (gimple_location (call),
+			"argument %qE provably violates the precondition "
+			"of %qD", sub_param, callee);
 	      continue;
 	    }
 
@@ -1922,9 +1968,14 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  if (call_relational_verdict->contains (call))
 	    continue;
 
-	  warning_at (gimple_location (call), 0,
-		      "cannot verify that %qE satisfies the "
+	  if (strict)
+	    error_at (gimple_location (call),
+		      "cannot prove that %qE satisfies the "
 		      "precondition of %qD", sub_param, callee);
+	  else
+	    warning_at (gimple_location (call), 0,
+			"cannot verify that %qE satisfies the "
+			"precondition of %qD", sub_param, callee);
 	}
 
       /* The call analogue of the relational loop just above (e.g.
@@ -2009,9 +2060,14 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  if (call_relational_verdict->contains (call))
 	    continue;
 
-	  warning_at (gimple_location (call), 0,
-		      "cannot verify that %qE satisfies the "
+	  if (strict)
+	    error_at (gimple_location (call),
+		      "cannot prove that %qE satisfies the "
 		      "precondition of %qD", sub_param, callee);
+	  else
+	    warning_at (gimple_location (call), 0,
+			"cannot verify that %qE satisfies the "
+			"precondition of %qD", sub_param, callee);
 	}
 
       /* The call-vs-call analogue of the call-relational loop just
@@ -2053,10 +2109,16 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      && fact_rhs_receiver == sub_rhs_receiver)
 	    continue; /* Proven true: silently discharged.  */
 
-	  warning_at (gimple_location (call), 0,
-		      "cannot verify that %qD called on %qE satisfies the "
+	  if (strict)
+	    error_at (gimple_location (call),
+		      "cannot prove that %qD called on %qE satisfies the "
 		      "precondition of %qD", lhs_callee, sub_lhs_receiver,
 		      callee);
+	  else
+	    warning_at (gimple_location (call), 0,
+			"cannot verify that %qD called on %qE satisfies the "
+			"precondition of %qD", lhs_callee, sub_lhs_receiver,
+			callee);
 	}
 
       /* Range obligations: same per-param grouping as
@@ -2096,9 +2158,14 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		  || (established_r.has_hi && established_r.hi <= required.hi)))
 	    continue; /* Proven true: silently discharged.  */
 
-	  warning_at (gimple_location (call), 0,
-		      "cannot verify that %qE satisfies the precondition "
+	  if (strict)
+	    error_at (gimple_location (call),
+		      "cannot prove that %qE satisfies the precondition "
 		      "of %qD", substituted, callee);
+	  else
+	    warning_at (gimple_location (call), 0,
+			"cannot verify that %qE satisfies the precondition "
+			"of %qD", substituted, callee);
 	}
     }
 }
@@ -2725,6 +2792,12 @@ cg_consult_persistent_facts (gcall *call,
 	continue;
       bool require_conveyor = check_as_conveyor;
 
+      /* D4324: see cg_check_call's own identical 'strict' computation.  */
+      bool strict = (check_as_conveyor
+		     && oa_contract_conveyor_strict_cached_p (contract))
+		    || (check_as_symbolic
+			&& oa_contract_symbolic_strict_cached_p (contract));
+
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
 	continue;
@@ -2767,13 +2840,33 @@ cg_consult_persistent_facts (gcall *call,
 
 	  bool required = !negated;
 	  cg_pred_fact *fact = identity ? state.pred.get (identity) : NULL;
-	  if (fact && fact->pred_fn == pred_fn && fact->polarity == required
+	  if (fact && fact->pred_fn == pred_fn
 	      && (!require_conveyor || fact->conveyor_established))
-	    continue; /* Proven true: silently discharged.  */
+	    {
+	      if (fact->polarity == required)
+		continue; /* Proven true: silently discharged.  */
+	      /* D4324: PRED_FN is established at the *opposite* polarity --
+		 a genuine, provable contradiction, not merely "unknown" --
+		 mirroring contracts.cc's own OA_PROVEN_FALSE tier for this
+		 same shape (oa_env_predicate_result's own comment).  */
+	      error_at (gimple_location (call),
+			"argument %qE provably violates the precondition of "
+			"%qD: %qD (%qE) is established %s, but the "
+			"precondition requires it to be %s",
+			substituted, callee, pred_fn, substituted,
+			fact->polarity ? "true" : "false",
+			required ? "true" : "false");
+	      continue;
+	    }
 
-	  warning_at (gimple_location (call), 0,
-		      "cannot verify that %qD (%qE) holds, as required by "
+	  if (strict)
+	    error_at (gimple_location (call),
+		      "cannot prove that %qD (%qE) holds, as required by "
 		      "the precondition of %qD", pred_fn, substituted, callee);
+	  else
+	    warning_at (gimple_location (call), 0,
+			"cannot verify that %qD (%qE) holds, as required by "
+			"the precondition of %qD", pred_fn, substituted, callee);
 	}
 
       auto_vec<cg_field_group_lite> field_groups;
@@ -2806,10 +2899,16 @@ cg_consult_persistent_facts (gcall *call,
 		      && established->range.hi <= required.hi)))
 	    continue; /* Proven true: silently discharged.  */
 
-	  warning_at (gimple_location (call), 0,
-		      "cannot verify that field %qD of %qE satisfies the "
+	  if (strict)
+	    error_at (gimple_location (call),
+		      "cannot prove that field %qD of %qE satisfies the "
 		      "precondition of %qD",
 		      field_groups[g].field, substituted, callee);
+	  else
+	    warning_at (gimple_location (call), 0,
+			"cannot verify that field %qD of %qE satisfies the "
+			"precondition of %qD",
+			field_groups[g].field, substituted, callee);
 	}
 
       auto_vec<cg_call_group_lite> call_groups;
@@ -2842,10 +2941,16 @@ cg_consult_persistent_facts (gcall *call,
 		      && established->range.hi <= required.hi)))
 	    continue; /* Proven true: silently discharged.  */
 
-	  warning_at (gimple_location (call), 0,
-		      "cannot verify that %qD called on %qE satisfies the "
+	  if (strict)
+	    error_at (gimple_location (call),
+		      "cannot prove that %qD called on %qE satisfies the "
 		      "precondition of %qD",
 		      call_groups[g].callee, substituted, callee);
+	  else
+	    warning_at (gimple_location (call), 0,
+			"cannot verify that %qD called on %qE satisfies the "
+			"precondition of %qD",
+			call_groups[g].callee, substituted, callee);
 	}
     }
 }
