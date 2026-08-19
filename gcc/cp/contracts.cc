@@ -8945,8 +8945,21 @@ oa_provable_p (tree expr, oa_env &env)
 	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
     expr = TREE_OPERAND (expr, 0);
 
-  if (is_this_parameter (expr))
-    return true;
+  /* D4324/P2680 author correction (2026-08-19): 'this' is deliberately
+     NOT an unconditional axiom here anymore (it used to be -- "if
+     (is_this_parameter (expr)) return true;" sat right here). A member
+     conveyor function's own 'this' now carries the same implicit
+     is_object_address obligation an explicit reference parameter always
+     has: PROVABLE only via the ordinary env.provable_p (expr) consult
+     the VAR_P/PARM_DECL case below already gives every reference
+     parameter ('this' is itself a bare PARM_DECL, so it reaches that
+     exact case with no special-casing needed here at all) -- seeded as
+     self-trusted for the DURATION of the function's own body by
+     oa_resolve_object_address_in_function_1 (mirroring that same
+     function's own reference-parameter seeding), and required of every
+     CALLER at each call site by oa_handle_call_precondition_obligation's
+     own is_this_parameter block, mirroring an explicit reference
+     parameter's own call-site obligation exactly.  */
 
   if (TREE_CODE (expr) == ADDR_EXPR)
     {
@@ -12657,30 +12670,47 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
      since this obligation comes from the callee's own DECLARATION, not
      from any particular precondition's text.
 
-     Deliberately REFERENCE-ONLY, both for Q1 and Q2: a pointer --
-     including the implicit 'this' receiver of a member conveyor call --
-     gets NEITHER. Q1 was always opt-in-only for pointers (confirmed by
-     direct testing during the original this-receiver fix: requiring one
-     broke dozens of pre-existing tests calling a method through a
-     plain, never-annotated pointer parameter). Q2 was briefly widened to
-     cover pointers uniformly (including a standalone THIS-receiver
-     block, both since removed), on the theory that closing a
-     fresh-pointer-to-global gap was worth it -- reverted after directly
-     confirmed by testing that (a) the exact same gap is already fully
-     closed by a wholly separate, independent restriction (conveyor code
-     may never odr-use a mutable global at all, in any shape -- pointer,
-     reference, or direct field access, in either a function body or
-     predicate/assert text), making the pointer-Q2 widening redundant for
-     that case, and (b) it broke the widely-used "named predicate" query
-     pattern throughout this whole engine (e.g. 'is_opened (f) conveyor
-     { return f != nullptr; }', f an ordinary non-const pointer parameter
-     used read-only): calling it from predicate/assert text, with the
-     enclosing function's own by-value/pointer parameter as the argument,
-     was wrongly rejected, since a plain pointer parameter is never
-     "received" from a predicate's own perspective. Pointer aliasing is
-     categorically the calling function's own concern, never the
-     callee's -- matching Q1's own pre-existing boundary exactly, not
-     just approximately.
+     Deliberately REFERENCE-ONLY for an ORDINARY pointer parameter, both
+     for Q1 and Q2 -- a plain pointer gets NEITHER. Q1 was always
+     opt-in-only for pointers (confirmed by direct testing during the
+     original this-receiver fix: requiring one broke dozens of
+     pre-existing tests calling a method through a plain, never-annotated
+     pointer parameter). Q2 was briefly widened to cover pointers
+     uniformly (including a standalone THIS-receiver block, both since
+     removed), on the theory that closing a fresh-pointer-to-global gap
+     was worth it -- reverted after directly confirmed by testing that
+     (a) the exact same gap is already fully closed by a wholly separate,
+     independent restriction (conveyor code may never odr-use a mutable
+     global at all, in any shape -- pointer, reference, or direct field
+     access, in either a function body or predicate/assert text), making
+     the pointer-Q2 widening redundant for that case, and (b) it broke
+     the widely-used "named predicate" query pattern throughout this
+     whole engine (e.g. 'is_opened (f) conveyor { return f != nullptr;
+     }', f an ordinary non-const pointer parameter used read-only):
+     calling it from predicate/assert text, with the enclosing function's
+     own by-value/pointer parameter as the argument, was wrongly
+     rejected, since a plain pointer parameter is never "received" from a
+     predicate's own perspective. Pointer aliasing is categorically the
+     calling function's own concern, never the callee's -- matching Q1's
+     own pre-existing boundary exactly, not just approximately.
+
+     The implicit 'this' receiver of a member conveyor call is handled
+     separately, just below this loop's own REFERENCE_TYPE filter: unlike
+     an ordinary pointer parameter, 'this' now gets Q1 (P2680 author
+     correction, 2026-08-19) -- a member conveyor call's own receiver
+     implicitly carries 'pre<ctrl>(is_object_address(this))' exactly like
+     an explicit reference parameter does, no longer trusted as an axiom
+     purely because it's the callee's own 'this'. Still gets NO Q2: 'this'
+     is never re-lent in a way that extends the cone of evaluation the
+     way handing off something genuinely external would (see oa_
+     reference_owned_p's own is_this_parameter check, unaffected by this
+     change), and a conveyor callee can never invalidate the object-
+     address validity of its own 'this' either (the mandatory conveyor
+     UB-freedom rules already forbid 'delete'/'delete this'/an explicit
+     destructor call anywhere in its own reachable call graph -- see oa_
+     invalidate_symbolic_facts_for_call_args's own CALLEE_IS_CONVEYOR
+     exemption, which already covers 'this' along with every other
+     argument position and needed no change for this).
 
      A non-const REFERENCE target additionally requires the caller's own
      argument to be OWNED (oa_reference_owned_p above), not merely proven
@@ -12695,6 +12725,30 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
       for (tree parm = DECL_ARGUMENTS (callee); parm;
 	   parm = DECL_CHAIN (parm), ++argno)
 	{
+	  /* 'this', Q1 only (see this block's own leading comment for why
+	     Q2 stays exempt). AGGR_INIT_EXPR (a constructor call) is
+	     excluded entirely: its own argno-0 slot is a meaningless
+	     placeholder pre-construction (the object doesn't exist yet to
+	     prove valid), matching the identical exclusion the explicit
+	     is_object_address-conjunct loop above already applies.  */
+	  if (is_this_parameter (parm))
+	    {
+	      if (TREE_CODE (call) != AGGR_INIT_EXPR
+		  && argno < (unsigned) call_expr_nargs (call))
+		{
+		  tree substituted
+		    = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (call, argno));
+		  if (!oa_provable_p (substituted, env))
+		    {
+		      error_at (EXPR_LOCATION (call),
+				"cannot prove %<is_object_address%> for %qE, "
+				"implicitly required by the receiver of %qD",
+				substituted, callee);
+		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    }
+		}
+	      continue;
+	    }
 	  if (TREE_CODE (TREE_TYPE (parm)) != REFERENCE_TYPE)
 	    continue;
 	  tree substituted = NULL_TREE;
@@ -22570,29 +22624,73 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
     = (flag_contract_conveyor_proofs && flag_contract_conveyor_proof_provenance)
       ? &prov_env : NULL;
 
-  /* D4324: reference-safety, Q1 -- every reference-typed parameter of a
-     conveyor-declared function is treated as if it implicitly carried
+  /* D4324: reference-safety, Q1 -- every reference-typed parameter of
+     ANY function (not just a conveyor-declared one -- see the P2680
+     author correction below) is treated as if it implicitly carried
      'pre<ctrl>(is_object_address(&x))', mirroring how an explicit such
      precondition already establishes env.set(x, true) for a POINTER
-     parameter (oa_handle_precondition_stmt). Established here,
-     unconditionally, rather than only inside oa_handle_precondition_
-     stmt, because that function only ever runs when a PRECONDITION_STMT
-     node actually exists in the body -- a conveyor function with no
-     explicit precondition at all (still fully subject to every other
-     mandatory UB-freedom check via DECL_DECLARED_CONVEYOR_P) would
-     otherwise never get this fact for its own reference parameters,
-     even though item 7 (below) still requires every one of its callers
-     to prove it. Deliberately scoped to DECL_DECLARED_CONVEYOR_P here --
-     the same, narrower "conveyor-flavored predicate text on an
-     otherwise-ordinary function" scope is handled separately, inline
-     where that predicate text is processed, per the project's own
-     standing principle that a conveyor restriction always applies to
-     both conveyor functions and conveyor predicates (see [[project_
-     conveyor_rules_functions_and_predicates]]).  */
-  if (DECL_DECLARED_CONVEYOR_P (fndecl))
-    for (tree parm = DECL_ARGUMENTS (fndecl); parm; parm = DECL_CHAIN (parm))
-      if (TREE_CODE (TREE_TYPE (parm)) == REFERENCE_TYPE)
-	env.set (parm, true);
+     parameter (oa_handle_precondition_stmt). Sound for every ordinary
+     function too, not just a conveyor one: a bound reference is
+     guaranteed valid for its own entire lifetime by the language itself
+     (the exact same guarantee item 8's own dereference check already
+     relies on to exempt REFERENCE_TYPE unconditionally, see oa_scan_
+     array_bounds_in_expr's own comment) -- the caller could only have
+     bound it from something already valid at the call site, so trusting
+     it here merely recognizes a fact the language itself already
+     enforces, regardless of whether this particular function happens to
+     be conveyor-declared.
+
+     P2680 author correction (2026-08-19): originally scoped to
+     DECL_DECLARED_CONVEYOR_P (FNDECL) -- "we only need this fact for a
+     conveyor function's OWN reference parameters, since only it has
+     item-7 callers to satisfy" -- but that framing missed a real case:
+     an ORDINARY function's own reference parameter, forwarded from ITS
+     OWN precondition/postcondition/assert text to ANOTHER conveyor
+     call's reference parameter (or, since this same correction gives
+     'this' its own Q1 obligation too, to a conveyor MEMBER call's own
+     receiver), needs exactly this same self-trust regardless of whether
+     the FORWARDING function is itself conveyor-declared. Confirmed as a
+     genuinely pre-existing gap, independent of the 'this' correction
+     below: a plain function 'pre<ctrl>(use_val_mut (y))' (y its own
+     by-reference parameter, use_val_mut a conveyor function taking
+     'int&') already failed to prove is_object_address(y) on stock,
+     unmodified GCC, before any of this correction's own changes. Widened
+     to unconditional (every function this walk ever reaches, not just a
+     conveyor-declared one) rather than patched narrowly for the new
+     'this'-receiver case alone, since the underlying reasoning ("the
+     caller already had to prove this to call US, so we may as well
+     trust it for our own further calls too") applies identically either
+     way.
+
+     'this' gets the exact same treatment, for the exact same reason,
+     just no longer via oa_provable_p's own unconditional axiom (see
+     that function's own comment) -- both are now ordinary self-trusted
+     ENV facts rather than one being a hardcoded axiom and the other an
+     ENV fact. Confirmed necessary by direct testing: an ordinary,
+     non-conveyor-declared constructor with a merely conveyor-FLAVORED
+     postcondition (e.g. 'post<proven_conveyor_v>(this->m_value >=
+     0.0)') needs 'this' trusted here too, or every ordinary,
+     unremarkable 'this->field' access anywhere in such a function's own
+     body/contract text would spuriously fail item 8's own mandatory
+     pointer-dereference-validity fallback (oa_scan_array_bounds_in_
+     expr's "Increment W2") the moment that check runs on conveyor-
+     flavored condition text -- 'this' has no equivalent exemption from
+     that check the way a REFERENCE_TYPE parameter does (that check is
+     POINTER-specific, and 'this' is itself a POINTER_TYPE PARM_DECL at
+     the tree level), which is why 'this' could not simply rely on the
+     same reasoning paragraph above without also being seeded here
+     directly.
+
+     Either way, the NEW restriction this correction actually adds --
+     "is EVERY member conveyor call's own receiver, 'this' or otherwise,
+     proven valid before the call" -- lives entirely at the call site
+     instead (oa_handle_call_precondition_obligation's own is_this_
+     parameter block), unaffected by either widening here: this seeding
+     only ever makes a function trust its OWN parameters *within its own
+     body*, never what its OWN callers must separately prove.  */
+  for (tree parm = DECL_ARGUMENTS (fndecl); parm; parm = DECL_CHAIN (parm))
+    if (TREE_CODE (TREE_TYPE (parm)) == REFERENCE_TYPE || is_this_parameter (parm))
+      env.set (parm, true);
 
   oa_walk_stmt (&body, env);
 
