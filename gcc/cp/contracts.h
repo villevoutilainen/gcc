@@ -288,11 +288,18 @@ extern oa_proof_result oa_env_check_relational_fact
    is SUBSTITUTED_PARAM provably REQUIRED_CODE SUBSTITUTED_RHS_RECEIVER.
    SUBSTITUTED_RHS_CALLEE () (both already positionally substituted at
    the plugin's own call site), given ENV's current facts? Same
-   REQUIRE_CONVEYOR meaning as that function.  */
+   REQUIRE_CONVEYOR meaning as that function.
+
+   REQUIRED_OFFSET defaults to 0, checking the plain "SUBSTITUTED_PARAM
+   REQUIRED_CODE CALL ()" shape oa_match_comparison_against_call
+   recognizes. Pass a nonzero value -- the OFFSET_OUT oa_match_
+   shifted_comparison_against_call fills in -- to instead check
+   "(SUBSTITUTED_PARAM - REQUIRED_OFFSET) REQUIRED_CODE CALL ()", e.g.
+   for a callee precondition shaped 'v.size () - idx < 10'.  */
 extern oa_proof_result oa_env_check_call_relational_fact
   (oa_analysis_env *env, tree substituted_param, tree_code required_code,
    tree substituted_rhs_receiver, tree substituted_rhs_callee,
-   bool require_conveyor);
+   bool require_conveyor, widest_int required_offset = 0);
 
 /* The call-vs-call analogue of oa_env_check_call_relational_fact
    immediately above: is SUBSTITUTED_LHS_RECEIVER.SUBSTITUTED_LHS_
@@ -348,6 +355,19 @@ extern bool oa_match_comparison_against_param
 extern bool oa_match_comparison_against_call
   (tree conjunct, tree *param_out, tree_code *code_out,
    tree *rhs_receiver_out, tree *rhs_callee_out, bool allow_symbolic_accessor);
+
+/* The shift-shaped sibling of oa_match_comparison_against_call
+   immediately above: "RECEIVER.ACCESSOR () - PARAM OP <literal>" or its
+   mirror "PARAM - RECEIVER.ACCESSOR () OP <literal>" (e.g. 'v.size ()
+   - idx < 10'), normalized so the recognized fact reads "(PARAM -
+   OFFSET_OUT) CODE_OUT RECEIVER.ACCESSOR ()" -- feed OFFSET_OUT to
+   oa_env_check_call_relational_fact's own REQUIRED_OFFSET parameter to
+   consult it. Neither PARAM_OUT/RHS_RECEIVER_OUT/RHS_CALLEE_OUT is a
+   resolved value, same as that function.  */
+extern bool oa_match_shifted_comparison_against_call
+  (tree conjunct, tree *param_out, tree_code *code_out,
+   tree *rhs_receiver_out, tree *rhs_callee_out, widest_int *offset_out,
+   bool allow_symbolic_accessor);
 
 /* The call-vs-call analogue of oa_match_comparison_against_call
    immediately above: "RECEIVER_1.CALLEE_1 () OP RECEIVER_2.CALLEE_2 ()"
