@@ -104,6 +104,10 @@ set plugin_test_list [list \
 	  conveyor-proof-field-range-ok.C \
 	  conveyor-proof-field-range-bad.C \
 	  conveyor-proof-field-range-unknown.C \
+	  conveyor-proof-float-field-range-ok.C \
+	  conveyor-proof-float-field-range-bad.C \
+	  conveyor-proof-general-comparison-ok.C \
+	  conveyor-proof-general-comparison-bad.C \
 	  conveyor-proof-relational-ok.C \
 	  conveyor-proof-relational-bad.C \
 	  conveyor-proof-relational-unknown.C } \

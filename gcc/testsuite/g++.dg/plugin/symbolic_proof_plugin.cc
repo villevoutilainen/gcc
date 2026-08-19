@@ -74,21 +74,6 @@ struct range_ctx
   oa_analysis_env *env;
 };
 
-/* Positional correspondence between CALLEE's own PARM_DECLs and CALL's
-   actual argument expressions -- same convention every other call-site
-   check in this file (and its conveyor sibling) uses.  */
-
-static tree
-substitute_arg (tree callee, tree call, tree param)
-{
-  unsigned argno = 0;
-  for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
-    if (p == param)
-      return argno < (unsigned) call_expr_nargs (call)
-	? CALL_EXPR_ARG (call, argno) : NULL_TREE;
-  return NULL_TREE;
-}
-
 /* oa_precondition_scalar_range_obligations's own callback: one
    (CONTRACT, PARAM, required [lo,hi]) match for one of CALLEE's own
    bare-scalar symbolic preconditions.  */
@@ -98,7 +83,7 @@ scalar_range_callback (tree /*contract*/, tree param, bool has_lo, tree lo,
 			bool has_hi, tree hi, void *data)
 {
   range_ctx *ctx = (range_ctx *) data;
-  tree substituted = substitute_arg (ctx->callee, ctx->call, param);
+  tree substituted = oa_substitute_call_arg_public (ctx->callee, ctx->call, param);
   if (!substituted)
     return;
 
@@ -139,7 +124,7 @@ field_range_callback (tree contract, tree field, tree base_parm,
      this plugin's obligation to check.  */
   if (!oa_contract_symbolic_active_public (contract, ctx->callee))
     return;
-  tree substituted = substitute_arg (ctx->callee, ctx->call, base_parm);
+  tree substituted = oa_substitute_call_arg_public (ctx->callee, ctx->call, base_parm);
   if (!substituted)
     return;
 
@@ -181,7 +166,7 @@ call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
   range_ctx *ctx = (range_ctx *) data;
   if (!oa_contract_symbolic_active_public (contract, ctx->callee))
     return;
-  tree substituted = substitute_arg (ctx->callee, ctx->call, receiver_parm);
+  tree substituted = oa_substitute_call_arg_public (ctx->callee, ctx->call, receiver_parm);
   if (!substituted)
     return;
 
@@ -248,7 +233,7 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	       below, or is_object_address, already mandatory.  */
 	    continue;
 
-	  tree substituted = substitute_arg (callee, call, arg_decl);
+	  tree substituted = oa_substitute_call_arg_public (callee, call, arg_decl);
 	  if (!substituted)
 	    continue;
 
@@ -295,8 +280,8 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 						   &rel_code, &rel_other))
 	    continue;
 
-	  tree sub_param = substitute_arg (callee, call, rel_param);
-	  tree sub_other = substitute_arg (callee, call, rel_other);
+	  tree sub_param = oa_substitute_call_arg_public (callee, call, rel_param);
+	  tree sub_other = oa_substitute_call_arg_public (callee, call, rel_other);
 	  oa_proof_result r
 	    = oa_env_check_relational_fact (env, sub_param, rel_code,
 					     sub_other, /*require_conveyor=*/false);
@@ -334,8 +319,8 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 						  /*allow_symbolic_accessor=*/true))
 	    continue;
 
-	  tree sub_param = substitute_arg (callee, call, rel_param);
-	  tree sub_receiver = substitute_arg (callee, call, rhs_receiver);
+	  tree sub_param = oa_substitute_call_arg_public (callee, call, rel_param);
+	  tree sub_receiver = oa_substitute_call_arg_public (callee, call, rhs_receiver);
 	  oa_proof_result r
 	    = oa_env_check_call_relational_fact (env, sub_param, rel_code,
 						  sub_receiver, rhs_callee,
@@ -374,8 +359,8 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 					     /*allow_symbolic_accessor=*/true))
 	    continue;
 
-	  tree sub_lhs_receiver = substitute_arg (callee, call, lhs_receiver);
-	  tree sub_rhs_receiver = substitute_arg (callee, call, rhs_receiver);
+	  tree sub_lhs_receiver = oa_substitute_call_arg_public (callee, call, lhs_receiver);
+	  tree sub_rhs_receiver = oa_substitute_call_arg_public (callee, call, rhs_receiver);
 	  oa_proof_result r
 	    = oa_env_check_call_call_relational_fact
 		(env, sub_lhs_receiver, lhs_callee, call_code,
