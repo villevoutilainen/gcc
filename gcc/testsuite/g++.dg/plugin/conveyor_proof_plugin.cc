@@ -100,21 +100,6 @@ struct range_ctx
   oa_analysis_env *env;
 };
 
-/* Positional correspondence between CALLEE's own PARM_DECLs and CALL's
-   actual argument expressions -- same convention check_call's own two
-   inline loops below use.  */
-
-static tree
-substitute_arg (tree callee, tree call, tree param)
-{
-  unsigned argno = 0;
-  for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
-    if (p == param)
-      return argno < (unsigned) call_expr_nargs (call)
-	? CALL_EXPR_ARG (call, argno) : NULL_TREE;
-  return NULL_TREE;
-}
-
 /* oa_precondition_field_range_obligations's own callback: one
    (CONTRACT, FIELD, BASE_PARM, required [lo,hi]) match for one of
    CALLEE's own ptr->field preconditions -- CONTRACT could belong to
@@ -128,7 +113,7 @@ field_range_callback (tree contract, tree field, tree base_parm,
   range_ctx *ctx = (range_ctx *) data;
   if (!oa_contract_conveyor_active_public (contract, ctx->callee))
     return;
-  tree substituted = substitute_arg (ctx->callee, ctx->call, base_parm);
+  tree substituted = oa_substitute_call_arg_public (ctx->callee, ctx->call, base_parm);
   if (!substituted)
     return;
 
@@ -136,6 +121,50 @@ field_range_callback (tree contract, tree field, tree base_parm,
 						      field, has_lo, lo,
 						      has_hi, hi,
 						      /*require_conveyor=*/true);
+  switch (r)
+    {
+    case OA_PROVEN_TRUE:
+      /* Nothing to report: the obligation is discharged.  */
+      break;
+    case OA_PROVEN_FALSE:
+      error_at (EXPR_LOCATION (ctx->call),
+		"argument %qE provably violates the precondition of %qD: "
+		"%qD is established outside the required range",
+		substituted, ctx->callee, field);
+      inform (DECL_SOURCE_LOCATION (ctx->callee), "declared here");
+      break;
+    case OA_UNKNOWN:
+      warning_at (EXPR_LOCATION (ctx->call), 0,
+		  "cannot verify that field %qD of %qE satisfies the "
+		  "precondition of %qD", field, substituted, ctx->callee);
+      inform (DECL_SOURCE_LOCATION (ctx->callee), "declared here");
+      break;
+    }
+}
+
+/* The floating-point analogue of field_range_callback immediately
+   above, via oa_precondition_float_field_range_obligations/oa_env_
+   check_float_field_range_fact -- without this, a float-bounded field
+   precondition (e.g. 'pre<ctrl>(this->value >= 0.0)') was invisible to
+   this plugin entirely, since field_range_callback's own [lo,hi]
+   machinery is integer-only.  */
+
+static void
+float_field_range_callback (tree contract, tree field, tree base_parm,
+			     bool has_lo, tree lo, bool has_hi, tree hi,
+			     void *data)
+{
+  range_ctx *ctx = (range_ctx *) data;
+  if (!oa_contract_conveyor_active_public (contract, ctx->callee))
+    return;
+  tree substituted = oa_substitute_call_arg_public (ctx->callee, ctx->call, base_parm);
+  if (!substituted)
+    return;
+
+  oa_proof_result r = oa_env_check_float_field_range_fact (ctx->env, substituted,
+							     field, has_lo, lo,
+							     has_hi, hi,
+							     /*require_conveyor=*/true);
   switch (r)
     {
     case OA_PROVEN_TRUE:
@@ -169,7 +198,7 @@ call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
   range_ctx *ctx = (range_ctx *) data;
   if (!oa_contract_conveyor_active_public (contract, ctx->callee))
     return;
-  tree substituted = substitute_arg (ctx->callee, ctx->call, receiver_parm);
+  tree substituted = oa_substitute_call_arg_public (ctx->callee, ctx->call, receiver_parm);
   if (!substituted)
     return;
 
@@ -196,24 +225,6 @@ call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
       inform (DECL_SOURCE_LOCATION (ctx->callee), "declared here");
       break;
     }
-}
-
-/* Positional correspondence between CALLEE's own PARM_DECLs and CALL's
-   actual argument expressions -- the same bare-parameter-only scope
-   the two inline duplicates of this loop already have in check_call
-   below, factored out once for the new relational check's own use
-   (oa_substitute_call_arg, the engine's own internal equivalent, isn't
-   exported -- this plugin has always had its own copy).  */
-
-static tree
-substitute_call_arg (tree callee, tree call, tree param)
-{
-  unsigned argno = 0;
-  for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
-    if (p == param)
-      return argno < (unsigned) call_expr_nargs (call)
-	     ? CALL_EXPR_ARG (call, argno) : NULL_TREE;
-  return NULL_TREE;
 }
 
 /* One call site's precondition-obligation check, invoked by
@@ -243,19 +254,7 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	  if (oa_match_simple_comparison (*conjuncts[i], &param, &code,
 					  &const_val))
 	    {
-	      /* Positional correspondence between CALLEE's own PARM_DECLs
-		 and CALL's actual argument expressions -- same bare-
-		 parameter-only scope limit the existing engine's own
-		 is_object_address matching has.  */
-	      tree substituted = NULL_TREE;
-	      unsigned argno = 0;
-	      for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
-		if (p == param)
-		  {
-		    if (argno < (unsigned) call_expr_nargs (call))
-		      substituted = CALL_EXPR_ARG (call, argno);
-		    break;
-		  }
+	      tree substituted = oa_substitute_call_arg_public (callee, call, param);
 	      if (!substituted)
 		continue;
 
@@ -282,6 +281,59 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	      continue;
 	    }
 
+	  /* Not a bare "param OP const" -- try the general, compound-
+	     expression form (e.g. 'percentage + this->m_value < 100.0'),
+	     via oa_match_general_comparison_public/oa_substitute_call_
+	     expr_public. Previously unrecognized by this plugin entirely,
+	     with no diagnostic at all -- see .claude/plans/lazy-stirring-
+	     pearl.md.  */
+	  {
+	    tree gen_expr, gen_const_val;
+	    tree_code gen_code;
+	    if (oa_match_general_comparison_public (*conjuncts[i], &gen_expr,
+						     &gen_code, &gen_const_val))
+	      {
+		/* A REAL_CST bound here is the dedicated float-field-range
+		   mechanism's own obligation (oa_precondition_float_field_
+		   range_obligations/float_field_range_callback above,
+		   consulted separately after this loop) -- oa_env_check_
+		   comparison's own [lo,hi] machinery is integer-only, so
+		   deliberately skip (not warn) here rather than double-
+		   diagnose the same conjunct the dedicated path already
+		   handles correctly.  */
+		if (TREE_CODE (gen_const_val) == REAL_CST)
+		  continue;
+
+		tree substituted
+		  = oa_substitute_call_expr_public (callee, call, gen_expr);
+		if (!substituted)
+		  continue;
+
+		oa_proof_result r
+		  = oa_env_check_comparison (env, substituted, gen_code,
+					     gen_const_val);
+		switch (r)
+		  {
+		  case OA_PROVEN_TRUE:
+		    /* Nothing to report: the obligation is discharged.  */
+		    break;
+		  case OA_PROVEN_FALSE:
+		    error_at (EXPR_LOCATION (call),
+			      "argument %qE provably violates the precondition "
+			      "of %qD", substituted, callee);
+		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    break;
+		  case OA_UNKNOWN:
+		    warning_at (EXPR_LOCATION (call), 0,
+				"cannot verify that %qE satisfies the "
+				"precondition of %qD", substituted, callee);
+		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    break;
+		  }
+		continue;
+	      }
+	  }
+
 	  /* Not a comparison against a literal -- try "param OP another of
 	     CALLEE's own parameters" instead (e.g. 'pre<ctrl>(x < q)'),
 	     via the engine's own oa_match_comparison_against_param/
@@ -296,8 +348,8 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	  if (oa_match_comparison_against_param (*conjuncts[i], &rel_param,
 						  &rel_code, &rel_other))
 	    {
-	      tree sub_param = substitute_call_arg (callee, call, rel_param);
-	      tree sub_other = substitute_call_arg (callee, call, rel_other);
+	      tree sub_param = oa_substitute_call_arg_public (callee, call, rel_param);
+	      tree sub_other = oa_substitute_call_arg_public (callee, call, rel_other);
 	      oa_proof_result r
 		= oa_env_check_relational_fact (env, sub_param, rel_code,
 						 sub_other, /*require_conveyor=*/true);
@@ -334,8 +386,8 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 						   /*allow_symbolic_accessor=*/
 						     false))
 	      {
-		tree sub_param = substitute_call_arg (callee, call, rel_param2);
-		tree sub_receiver = substitute_call_arg (callee, call, rhs_receiver);
+		tree sub_param = oa_substitute_call_arg_public (callee, call, rel_param2);
+		tree sub_receiver = oa_substitute_call_arg_public (callee, call, rhs_receiver);
 		oa_proof_result r
 		  = oa_env_check_call_relational_fact (env, sub_param, rel_code2,
 							sub_receiver, rhs_callee,
@@ -374,9 +426,9 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 					      /*allow_symbolic_accessor=*/false))
 	      {
 		tree sub_lhs_receiver
-		  = substitute_call_arg (callee, call, lhs_receiver);
+		  = oa_substitute_call_arg_public (callee, call, lhs_receiver);
 		tree sub_rhs_receiver
-		  = substitute_call_arg (callee, call, rhs_receiver);
+		  = oa_substitute_call_arg_public (callee, call, rhs_receiver);
 		oa_proof_result r
 		  = oa_env_check_call_call_relational_fact
 		      (env, sub_lhs_receiver, lhs_callee, call_code,
@@ -419,18 +471,10 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	       obligation to discharge.  */
 	    continue;
 
-	  tree matched_parm = NULL_TREE;
-	  unsigned argno = 0;
-	  for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++argno)
-	    if (p == arg_decl)
-	      {
-		matched_parm = p;
-		break;
-	      }
-	  if (!matched_parm || argno >= (unsigned) call_expr_nargs (call))
+	  tree substituted = oa_substitute_call_arg_public (callee, call, arg_decl);
+	  if (!substituted)
 	    continue;
 
-	  tree substituted = CALL_EXPR_ARG (call, argno);
 	  oa_proof_result pr
 	    = oa_env_check_predicate_fact (env, substituted, pred_fn, !negated,
 					    /*require_conveyor=*/true);
@@ -462,6 +506,8 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 
   range_ctx ctx = { call, callee, env };
   oa_precondition_field_range_obligations (callee, field_range_callback, &ctx);
+  oa_precondition_float_field_range_obligations (callee, float_field_range_callback,
+						  &ctx);
   oa_precondition_call_range_obligations (callee, call_range_callback, &ctx);
 }
 
