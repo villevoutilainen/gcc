@@ -829,18 +829,15 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
   if (TREE_CODE (val) != SSA_NAME)
     return false;
 
-  /* 'this', used directly (its own initial SSA value) -- an axiom, not
-     an established fact, mirroring contracts.cc's own oa_provable_p
-     ("if (is_this_parameter (expr)) return true;"). Needed for e.g.
-     '*this' dereferenced for another conveyor call's reference
-     parameter (cg_provably_owned_p's own identical is_this_parameter
-     exception handles Q2 for this same shape; without this, Q1 would
-     wrongly reject it first).  */
-  {
-    tree var = SSA_NAME_VAR (val);
-    if (var && SSA_NAME_IS_DEFAULT_DEF (val) && is_this_parameter (var))
-      return true;
-  }
+  /* D4324/P2680 author correction (2026-08-19): 'this' is deliberately
+     NOT an unconditional axiom here anymore -- mirrors contracts.cc's
+     own identical removal from oa_provable_p (see that function's own
+     comment for the full reasoning). 'this', used directly, is now a
+     bare SSA_NAME falling through to the ordinary ESTABLISHED.get
+     consult just below like any other self-trusted fact -- seeded
+     unconditionally (for ANY function this pass ever reaches, not just
+     a conveyor-declared one) by cg_seed_self_trust, mirroring that
+     function's own identical widening.  */
 
   if (cg_fact *fact = established.get (val))
     if (!require_conveyor || fact->conveyor_established)
@@ -1511,24 +1508,48 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 
   /* D4324/P2680 item 7's Q1 axiom, mirroring contracts.cc's own
      oa_resolve_object_address_in_function_1 (the AST engine's identical
-     "every reference-typed parameter of a conveyor function is itself
-     provably is_object_address" seeding) -- without this, FNDECL's own
-     reference parameters, forwarded unchanged to another conveyor call,
-     would be flagged by cg_check_call_reference_safety's own Q1 check
-     as unprovable, even though a reference parameter's own value is
+     "every reference-typed parameter... is itself provably is_object_
+     address" seeding) -- without this, FNDECL's own reference
+     parameters, forwarded unchanged to another conveyor call, would be
+     flagged by cg_check_call_reference_safety's own Q1 check as
+     unprovable, even though a reference parameter's own value is
      already a validated address by construction (whatever proved it
      valid for THIS function's own call is exactly why it's valid to
-     forward). Unconditional on DECL_DECLARED_CONVEYOR_P alone, not
-     gated on any per-contract flavor/flag, matching cg_check_call_
-     reference_safety's own unconditional-per-conveyor-callee scope.  */
-  if (DECL_DECLARED_CONVEYOR_P (fndecl))
-    for (tree parm = DECL_ARGUMENTS (fndecl); parm; parm = DECL_CHAIN (parm))
-      if (TREE_CODE (TREE_TYPE (parm)) == REFERENCE_TYPE)
-	{
-	  tree key = cg_self_trust_key (fun, parm);
-	  if (key)
-	    established.put (key, { /*conveyor_established=*/true });
-	}
+     forward).
+
+     P2680 author correction (2026-08-19): widened from DECL_DECLARED_
+     CONVEYOR_P (FNDECL)-gated to unconditional (every function this
+     pass ever reaches), mirroring the identical widening in contracts.cc
+     -- a non-conveyor-declared function with its own contract
+     specifiers (cg_function_might_need_reference_safety_walk_p's own
+     broader trigger, which the call-site CONSULT side already uses) can
+     just as easily forward its own reference parameter, or 'this', to a
+     nested conveyor call from its own precondition/postcondition text;
+     the original DECL_DECLARED_CONVEYOR_P gate here was narrower than
+     that consult-side trigger, a real, independently-confirmed gap
+     (contracts.cc's own identical comment has the concrete repro). Sound
+     for the same reason as always: a bound reference is guaranteed
+     valid for its own entire lifetime by the language itself, and
+     'this' is trusted for the ENTIRE duration of the function whose
+     'this' it is -- neither depends on that function being conveyor-
+     declared.
+
+     'this' gets the exact same treatment now too, not the unconditional
+     cg_provable_object_address_p axiom it used to be (see that
+     function's own comment) -- both are now ordinary self-trusted
+     ESTABLISHED facts. The NEW restriction this correction actually adds
+     -- a member conveyor call's own receiver must be proven by its
+     CALLER -- lives entirely at the call site instead (cg_check_call_
+     reference_safety's own is_this_parameter handling, below), unaffected
+     by this seeding: this only ever makes a function trust its OWN
+     parameters *within its own body*.  */
+  for (tree parm = DECL_ARGUMENTS (fndecl); parm; parm = DECL_CHAIN (parm))
+    if (TREE_CODE (TREE_TYPE (parm)) == REFERENCE_TYPE || is_this_parameter (parm))
+      {
+	tree key = cg_self_trust_key (fun, parm);
+	if (key)
+	  established.put (key, { /*conveyor_established=*/true });
+      }
 }
 
 /* Item 6 for relational facts: does CALL's own callee have a
@@ -2053,12 +2074,30 @@ cg_function_might_need_reference_safety_walk_p (function *fun)
    GIMPLE pass as a whole, not something this specific check tries to
    fix.)
 
-   Deliberately REFERENCE-ONLY for both Q1 and Q2, matching contracts.cc
-   exactly: a pointer -- including the implicit 'this' receiver -- gets
-   neither (see oa_handle_call_precondition_obligation's own comment for
-   the full rationale already worked out and tested at the AST level).
-   A non-const reference additionally requires Q2 (ownership); a const
-   reference only ever needs Q1.
+   Deliberately REFERENCE-ONLY for both Q1 and Q2 for an ORDINARY
+   pointer parameter, matching contracts.cc exactly: a plain pointer
+   gets neither. A non-const reference additionally requires Q2
+   (ownership); a const reference only ever needs Q1.
+
+   P2680 author correction (2026-08-19): the implicit 'this' receiver of
+   a member conveyor call is handled separately, just below this loop's
+   own REFERENCE_TYPE filter -- unlike an ordinary pointer parameter,
+   'this' now gets Q1 (mirroring contracts.cc's own identical
+   is_this_parameter block in oa_handle_call_precondition_obligation),
+   no longer trusted as an axiom purely because it's the callee's own
+   'this'. Still gets NO Q2, for the same reason contracts.cc's own
+   comment gives: 'this' is never re-lent in a way that extends the cone
+   of evaluation, and a conveyor callee can never invalidate its own
+   'this' either way (see cg_provably_owned_p's own identical is_this_
+   parameter exemption, unaffected by this correction). No AGGR_INIT_
+   EXPR-style exclusion is needed here the way the AST engine's own port
+   needs one for a constructor call's own meaningless argno-0 placeholder
+   -- GIMPLE has no AGGR_INIT_EXPR at all (a constructor call is already
+   just an ordinary GIMPLE_CALL by this pass point, its own 'this'
+   argument the REAL target address, not a placeholder), and the
+   overwhelmingly common case (constructing a named local/member) is
+   already covered by cg_provable_object_address_p's own pre-existing
+   'ADDR_EXPR is always trivially provable' axiom regardless.
 
    Only ever invoked (see this function's own caller in pass_contracts_
    gimple::execute) when cg_function_might_need_reference_safety_walk_p
@@ -2091,6 +2130,22 @@ cg_check_call_reference_safety (gcall *call, function *fun,
   for (tree parm = DECL_ARGUMENTS (callee); parm;
        parm = DECL_CHAIN (parm), ++argno)
     {
+      if (is_this_parameter (parm))
+	{
+	  if (argno < gimple_call_num_args (call))
+	    {
+	      tree substituted = cg_resolve_call_argument (call, argno);
+	      hash_set<tree> in_progress;
+	      if (!cg_provable_object_address_p (substituted, established,
+						  /*require_conveyor=*/true,
+						  in_progress))
+		error_at (gimple_location (call),
+			  "cannot prove %<is_object_address%> for %qE, "
+			  "implicitly required by the receiver of %qD",
+			  substituted, callee);
+	    }
+	  continue;
+	}
       if (TREE_CODE (TREE_TYPE (parm)) != REFERENCE_TYPE)
 	continue;
       if (argno >= gimple_call_num_args (call))
