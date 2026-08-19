@@ -73,7 +73,24 @@
    discussed-ethereal-duckling.md), closing what used to be a silent
    gap: neither the plain-comparison check above (which requires an
    already-literal bound) nor any other check here recognized this
-   shape at all.  */
+   shape at all.
+
+   A fifth check (see .claude/plans/lazy-stirring-pearl.md, Tier 3b)
+   covers a plain contract_assert statement's own condition -- entirely
+   invisible to this plugin before, since oa_walk_function_calls only
+   ever fired CHECK_CALL at a CALL_EXPR/AGGR_INIT_EXPR, never at a
+   contract_assert (ASSERTION_STMT). Uses oa_walk_function_calls's new
+   ASSERT_CALLBACK parameter plus the new oa_check_assertion_conjunct_
+   public/oa_collect_disjuncts_public exports: unlike every check above,
+   a contract_assert's own condition needs no positional-argument
+   substitution at all (it already refers directly to the enclosing
+   function's own live decls), so oa_check_assertion_conjunct_public
+   consults ENV with the conjunct's own operands unchanged. Also the
+   first check here to recognize a top-level '||' at all: a disjunctive
+   conjunct ('x > 0 || x < -10') is split via oa_collect_disjuncts_
+   public and each disjunct checked independently -- PROVEN_TRUE if any
+   one disjunct alone is provable, PROVEN_FALSE only if every disjunct
+   is independently provable false, else UNKNOWN.  */
 
 #include "gcc-plugin.h"
 #include "config.h"
@@ -562,6 +579,79 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
   oa_precondition_call_range_obligations (callee, call_range_callback, &ctx);
 }
 
+/* One contract_assert statement's own condition, invoked by
+   oa_walk_function_calls's new ASSERT_CALLBACK parameter at every
+   ASSERTION_STMT in program order (see this file's own top comment,
+   fifth check). Filtered to this plugin's own conveyor-active asserts,
+   exactly as check_call filters to conveyor-active preconditions.  */
+
+static void
+check_assert (tree stmt, oa_analysis_env *env, void * /*data*/)
+{
+  if (!oa_contract_conveyor_active_public (stmt, NULL_TREE))
+    return;
+
+  tree cond = CONTRACT_CONDITION (stmt);
+  if (cond == NULL_TREE || cond == error_mark_node)
+    return;
+
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      auto_vec<tree *> disjuncts;
+      oa_collect_disjuncts_public (conjuncts[i], &disjuncts);
+
+      oa_proof_result verdict;
+      tree diag_expr;
+      if (disjuncts.length () <= 1)
+	{
+	  /* Not actually disjunctive -- oa_collect_disjuncts_public's own
+	     "no top-level '||' is a single disjunct of itself" fallback
+	     (mirroring oa_collect_conjuncts_public's identical treatment
+	     of a nested '&&'), so this is just an ordinary conjunct.  */
+	  diag_expr = *conjuncts[i];
+	  verdict = oa_check_assertion_conjunct_public (env, diag_expr,
+							 /*require_conveyor=*/true);
+	}
+      else
+	{
+	  diag_expr = *conjuncts[i];
+	  verdict = OA_PROVEN_FALSE;
+	  for (unsigned d = 0; d < disjuncts.length (); ++d)
+	    {
+	      oa_proof_result r
+		= oa_check_assertion_conjunct_public (env, *disjuncts[d],
+						       /*require_conveyor=*/true);
+	      if (r == OA_PROVEN_TRUE)
+		{
+		  verdict = OA_PROVEN_TRUE;
+		  break;
+		}
+	      if (r == OA_UNKNOWN)
+		verdict = OA_UNKNOWN;
+	    }
+	}
+
+      switch (verdict)
+	{
+	case OA_PROVEN_TRUE:
+	  /* Nothing to report: the assertion is discharged.  */
+	  break;
+	case OA_PROVEN_FALSE:
+	  error_at (EXPR_LOCATION (diag_expr),
+		    "%<contract_assert%> condition %qE is provably false",
+		    diag_expr);
+	  break;
+	case OA_UNKNOWN:
+	  warning_at (EXPR_LOCATION (diag_expr), 0,
+		      "cannot verify %<contract_assert%> condition %qE",
+		      diag_expr);
+	  break;
+	}
+    }
+}
+
 /* PLUGIN_PRE_GENERICIZE: fires once per non-template function, body
    still in its pre-genericize GENERIC form -- exactly when
    oa_walk_function_calls needs it (see contracts.h).  */
@@ -572,7 +662,7 @@ conveyor_proof_pre_genericize (void *event_data, void * /*data*/)
   tree fndecl = (tree) event_data;
   if (TREE_CODE (fndecl) != FUNCTION_DECL)
     return;
-  oa_walk_function_calls (fndecl, check_call, NULL);
+  oa_walk_function_calls (fndecl, check_call, NULL, check_assert, NULL);
 }
 
 int
