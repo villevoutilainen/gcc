@@ -24,12 +24,25 @@
 // oa_tighten_range_bound. genuinely_ambiguous (+1 instead) still only
 // reaches "cannot verify," confirming the fix doesn't overreach into
 // cases that remain genuinely undecidable.
+//
+// All three use an UNSIGNED idx (std::vector<int>::size_type)
+// deliberately: 'v.size () - idx' performs the subtraction in size_type
+// itself with no value-changing conversion, so the contradiction this
+// test demonstrates is genuinely sound. idx_signed_declines documents a
+// real, fixed soundness bug: for a *signed* 'int idx', the same source
+// shape converts idx to size_type before subtracting (a negative idx
+// wraps), so oa_match_shifted_comparison_against_call's own oa_
+// integral_conversion_value_preserving_p guard now declines to
+// establish any fact at all rather than risk an unsound "provably
+// violates" conclusion -- see that guard's own comment for the concrete
+// repro that motivated it.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -D_GLIBCXX_CONVEYOR_ASSERTIONS -D_GLIBCXX_PRECONDITION_ASSERTIONS" }
 
 #include <vector>
 
-int shifted_past_the_boundary (std::vector<int>& v, int idx)
+int shifted_past_the_boundary (std::vector<int>& v,
+				 std::vector<int>::size_type idx)
 {
   if ((v.size () - idx) < 5)
     {
@@ -39,7 +52,8 @@ int shifted_past_the_boundary (std::vector<int>& v, int idx)
   return -1;
 }
 
-int exactly_at_the_edge (std::vector<int>& v, int idx)
+int exactly_at_the_edge (std::vector<int>& v,
+			   std::vector<int>::size_type idx)
 {
   if ((v.size () - idx) < 5)
     {
@@ -49,12 +63,28 @@ int exactly_at_the_edge (std::vector<int>& v, int idx)
   return -1;
 }
 
-int genuinely_ambiguous (std::vector<int>& v, int idx)
+int genuinely_ambiguous (std::vector<int>& v,
+			   std::vector<int>::size_type idx)
 {
   if ((v.size () - idx) < 5)
     {
       idx += 1;
-      return v[idx]; // { dg-warning "cannot verify that .* satisfies the precondition" }
+      return v[idx]; // { dg-warning "cannot verify that [^\n]* satisfies the precondition" }
+    }
+  return -1;
+}
+
+int idx_signed_declines (std::vector<int>& v, int idx)
+{
+  if ((v.size () - idx) < 5)
+    {
+      idx += 15; // would be past the boundary if idx were unsigned
+      // Regex includes the '(...)idx' cast prefix (present only for a
+      // signed idx) to stay distinct from genuinely_ambiguous's own
+      // identically-worded warning above -- dejagnu's dg-warning
+      // matching gets confused by two byte-identical regexes in the
+      // same file.
+      return v[idx]; // { dg-warning "cannot verify that [^\n]*\\)idx[^\n]* satisfies the precondition" }
     }
   return -1;
 }
@@ -64,5 +94,6 @@ int main ()
   std::vector<int> v (20);
   return shifted_past_the_boundary (v, 0)
 	 + exactly_at_the_edge (v, 0)
-	 + genuinely_ambiguous (v, 0);
+	 + genuinely_ambiguous (v, 0)
+	 + idx_signed_declines (v, 0);
 }

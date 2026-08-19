@@ -415,6 +415,19 @@ extern bool oa_match_shifted_comparison_against_call
    tree *rhs_receiver_out, tree *rhs_callee_out, widest_int *offset_out,
    bool allow_symbolic_accessor);
 
+/* True if every value FROM_TYPE can represent converts to TO_TYPE
+   without changing its mathematical value (e.g. safe for 'unsigned' ->
+   wider 'long', unsafe for 'int' -> same-or-wider unsigned, which can
+   reinterpret a negative value). Both must be INTEGRAL_TYPE_P; declines
+   (false) for anything else. Exported so contracts-gimple.cc's own
+   GIMPLE-native shifted-comparison matcher can guard against the exact
+   same value-changing-conversion hazard this file's own oa_match_
+   shifted_comparison_against_call guards against -- see that function's
+   own definition for the full rationale and the concrete repro that
+   motivated it ('v.size () - idx > 10' for a signed 'idx').  */
+extern bool oa_integral_conversion_value_preserving_p (tree from_type,
+							 tree to_type);
+
 /* The call-vs-call analogue of oa_match_comparison_against_call
    immediately above: "RECEIVER_1.CALLEE_1 () OP RECEIVER_2.CALLEE_2 ()"
    (e.g. 'v.size () < w.size ()'), two calls compared against each other
