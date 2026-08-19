@@ -4526,8 +4526,63 @@ cg_cond_is_bare_param (tree val, tree *out = NULL)
    would be a structurally different expression ('v.size () + idx'),
    not a mirror image of this same shape.  */
 
+/* The GIMPLE-native analogue of contracts.cc's own oa_shifted_operand_
+   conversion_ok_p -- true unconditionally when the conversion can't
+   change PARAM's value regardless of what it holds (the fast, common
+   path), otherwise true only when PARAM's own NATIVE range (its
+   pre-conversion type) is provably entirely non-negative, which makes
+   the conversion exact for its actual value (e.g. an 'idx >= 0'
+   conjunct established elsewhere).
+
+   Deliberately queries PARAM's own range, not OPERAND's (the already-
+   converted value) -- unlike contracts.cc's own oa_get_range,
+   cg_established_range_of's own gimple_ranger fallback essentially
+   always succeeds for a converted, unsigned-typed SSA name, typically
+   with nothing more than that type's own full range (e.g. [0,
+   2^64-1]), which conveys no real sign information at all; checking
+   "did a range lookup on OPERAND succeed" would therefore be far too
+   permissive (confirmed via direct testing: it accepted a completely
+   unconstrained PARAM). Checking PARAM's own range for an explicit
+   lo >= 0 is robust against that same fallback: an unconstrained
+   PARAM's own native-type range has a negative lower bound (e.g.
+   INT_MIN), so this correctly declines instead.
+
+   AT_STMT (the GIMPLE_COND this shifted comparison came from) is
+   required, not optional: without it, cg_established_range_of's own
+   ranger query answers a *whole-function* question ("what could PARAM
+   be at any call site"), which for a plain parameter is always
+   unconstrained/varying regardless of any 'idx >= 0' check dominating
+   this specific point -- confirmed via direct testing (an 'idx >= 0'
+   guard had no effect at all until this was added), matching item 8's
+   own identical discovery for its div/mod check.  */
+
 static bool
-cg_match_shifted_comparison_against_call (tree other, tree *param_out,
+cg_shifted_operand_conversion_ok_p (tree operand, tree param,
+				      hash_map<tree, cg_range_lite> &established_range,
+				      gimple_ranger *ranger, bool require_conveyor,
+				      bool require_symbolic, gimple *at_stmt)
+{
+  if (oa_integral_conversion_value_preserving_p (TREE_TYPE (param),
+						   TREE_TYPE (operand)))
+    return true;
+  if (TYPE_UNSIGNED (TREE_TYPE (param)) || !TYPE_UNSIGNED (TREE_TYPE (operand)))
+    return false;
+  hash_map<tree, cg_range_lite> empty_scalar_range_cache;
+  cg_range_lite param_range;
+  return cg_established_range_of (param, established_range,
+				    empty_scalar_range_cache, ranger,
+				    require_conveyor, require_symbolic,
+				    &param_range, at_stmt)
+	 && param_range.has_lo && param_range.lo >= 0;
+}
+
+static bool
+cg_match_shifted_comparison_against_call (tree other,
+					    hash_map<tree, cg_range_lite> &established_range,
+					    gimple_ranger *ranger,
+					    bool require_conveyor, bool require_symbolic,
+					    gimple *at_stmt,
+					    tree *param_out,
 					    tree *rhs_receiver_out,
 					    tree *rhs_callee_out,
 					    bool *negate_out,
@@ -4546,8 +4601,9 @@ cg_match_shifted_comparison_against_call (tree other, tree *param_out,
   bool is_call;
   tree field, base, callee, receiver, param;
   if (cg_cond_is_bare_param (op1, &param)
-      && oa_integral_conversion_value_preserving_p (TREE_TYPE (param),
-						      TREE_TYPE (op1))
+      && cg_shifted_operand_conversion_ok_p (op1, param, established_range,
+					       ranger, require_conveyor,
+					       require_symbolic, at_stmt)
       && cg_cond_operand_shape (op0, &is_call, &field, &base, &callee,
 				 &receiver)
       && is_call)
@@ -4560,8 +4616,9 @@ cg_match_shifted_comparison_against_call (tree other, tree *param_out,
       return true;
     }
   if (cg_cond_is_bare_param (op0, &param)
-      && oa_integral_conversion_value_preserving_p (TREE_TYPE (param),
-						      TREE_TYPE (op0))
+      && cg_shifted_operand_conversion_ok_p (op0, param, established_range,
+					       ranger, require_conveyor,
+					       require_symbolic, at_stmt)
       && cg_cond_operand_shape (op1, &is_call, &field, &base, &callee,
 				 &receiver)
       && is_call)
@@ -4706,7 +4763,10 @@ cg_refine_relational_edge_into (tree lhs, tree rhs, tree_code code,
    comparison) -- this mirrors that same scope exactly.  */
 
 static void
-cg_refine_edge_into (edge e, cg_dom_fact_state &state)
+cg_refine_edge_into (edge e, cg_dom_fact_state &state,
+		      hash_map<tree, cg_range_lite> &established_range,
+		      gimple_ranger *ranger, bool require_conveyor,
+		      bool require_symbolic)
 {
   if (!(e->flags & (EDGE_TRUE_VALUE | EDGE_FALSE_VALUE)))
     return;
@@ -4783,7 +4843,10 @@ cg_refine_edge_into (edge e, cg_dom_fact_state &state)
 	 algebra this recognizes, feeding the *existing* state.call_rel
 	 establishment path a nonzero OFFSET instead of state.call/
 	 state.field's own always-zero-offset range refinement.  */
-      if (!cg_match_shifted_comparison_against_call (other, &shifted_param,
+      if (!cg_match_shifted_comparison_against_call (other, established_range,
+							ranger, require_conveyor,
+							require_symbolic, stmt,
+							&shifted_param,
 							&receiver, &callee,
 							&shifted_negate,
 							&shifted_arithmetic_type))
@@ -4875,7 +4938,10 @@ cg_refine_edge_into (edge e, cg_dom_fact_state &state)
 static void
 cg_compute_in_state (basic_block bb,
 		      hash_map<basic_block, cg_dom_fact_state *> &block_out,
-		      cg_dom_fact_state &seed, cg_dom_fact_state *in_state)
+		      cg_dom_fact_state &seed, cg_dom_fact_state *in_state,
+		      hash_map<tree, cg_range_lite> &established_range,
+		      gimple_ranger *ranger, bool require_conveyor,
+		      bool require_symbolic)
 {
   bool first = true;
   edge e;
@@ -4902,7 +4968,8 @@ cg_compute_in_state (basic_block bb,
 	 indiscriminately.  */
       cg_dom_fact_state refined;
       cg_dom_fact_state_assign (&refined, **pred_out);
-      cg_refine_edge_into (e, refined);
+      cg_refine_edge_into (e, refined, established_range, ranger,
+			    require_conveyor, require_symbolic);
       if (first)
 	{
 	  cg_dom_fact_state_assign (in_state, refined);
@@ -5413,7 +5480,19 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 	{
 	  basic_block bb = BASIC_BLOCK_FOR_FN (fun, rpo[i]);
 	  cg_dom_fact_state in_state;
-	  cg_compute_in_state (bb, block_out, seed, &in_state);
+	  /* REQUIRE_CONVEYOR/REQUIRE_SYMBOLIC both false: this
+	     range lookup is for a plain branch-derived/self-trust
+	     numeric fact (e.g. 'idx >= 0'), never a postcondition-
+	     derived one -- cg_call_postcondition_range_p's own
+	     "!require_conveyor && !require_symbolic" skip means
+	     this correctly never trusts a postcondition fact here,
+	     which is the right, conservative behavior: nothing
+	     about this lookup should depend on which proof flavor
+	     happens to be active.  */
+	  cg_compute_in_state (bb, block_out, seed, &in_state,
+				established_range, ranger,
+				/*require_conveyor=*/false,
+				/*require_symbolic=*/false);
 
 	  cg_dom_fact_state out_state;
 	  cg_dom_fact_state_assign (&out_state, in_state);
@@ -5497,7 +5576,9 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
     {
       basic_block bb = BASIC_BLOCK_FOR_FN (fun, rpo[i]);
       cg_dom_fact_state state;
-      cg_compute_in_state (bb, block_out, seed, &state);
+      cg_compute_in_state (bb, block_out, seed, &state, established_range,
+			    ranger, /*require_conveyor=*/false,
+			    /*require_symbolic=*/false);
       for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
 	   gsi_next (&gsi))
 	{

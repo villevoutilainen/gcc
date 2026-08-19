@@ -70,6 +70,18 @@
 // separate, pre-existing GIMPLE-engine gap, not something this fix
 // introduces or is required to close; nested ifs are a mechanically
 // equivalent, unaffected way to write the same set of conditions.
+//
+// use_signed_idx_declines's own type-level decline was later found to be
+// overly blunt -- see the AST-side sibling test's own comment for the
+// full rationale (oa_convert_range_across_signedness, shared via
+// cg_established_range_of here rather than duplicated). use_signed_idx_
+// nonneg_ok demonstrates the rescue: an 'idx >= 0' conjunct makes idx's
+// own range (queried at this exact program point -- cg_established_
+// range_of's own AT_STMT parameter, without which a plain parameter's
+// range is always the whole, unconstrained function-wide answer,
+// regardless of any dominating check -- confirmed via direct testing)
+// provably non-negative, so the conversion is exact and this verifies
+// exactly like the unsigned case.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs-gimple -D_GLIBCXX_CONVEYOR_ASSERTIONS -D_GLIBCXX_PRECONDITION_ASSERTIONS" }
 
@@ -143,6 +155,15 @@ int use_signed_idx_declines (std::vector<int>& v, int idx)
   return -1;
 }
 
+int use_signed_idx_nonneg_ok (std::vector<int>& v, int idx)
+{
+  if (idx >= 0)
+    if (v.size () > idx)
+      if (v.size () - idx > 10)
+	return v[idx]; // proven safe, no diagnostic
+  return -1;
+}
+
 int use_definitely_unsound (std::vector<int>& v)
 {
   if (v.size () == 5)
@@ -159,5 +180,6 @@ int main ()
   return use_margin_only_declines (v, 0) + use_margin_with_companion_ok (v, 0)
 	 + use_shift_without_numeric_cap_ok (v, 0)
 	 + use_sound (v, 0) + use_unsound (v, 0)
-	 + use_signed_idx_declines (v, 0) + use_definitely_unsound (v);
+	 + use_signed_idx_declines (v, 0) + use_signed_idx_nonneg_ok (v, 0)
+	 + use_definitely_unsound (v);
 }

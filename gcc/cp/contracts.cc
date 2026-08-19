@@ -9572,6 +9572,63 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
    (item 5) -- an even narrower residual gap than oa_provably_nonzero_p
    already has, noted for a future increment rather than this one.  */
 
+/* Convert IN (an oa_range_fact for a value of type FROM_TYPE, itself
+   already sound) into the range that value's conversion to TO_TYPE
+   actually produces, when that conversion is NOT value-preserving per
+   oa_integral_conversion_value_preserving_p (the caller's job to check
+   first) -- i.e. specifically the signed-to-unsigned direction, since
+   that is the only genuinely value-changing conversion this engine
+   ever needs to reason through (a narrowing conversion is a separate,
+   unhandled concern; declines here like everything else this function
+   doesn't recognize).
+
+   The real, exact conversion semantics: a non-negative signed value
+   converts unchanged; a negative one converts by adding 2^M (M = the
+   unsigned type's own bit width) -- sign extension followed by
+   reinterpretation. Both directions are exact and fully sound when
+   IN's own range falls ENTIRELY on one side of zero. When IN straddles
+   zero, the true converted set is two disjoint pieces at OPPOSITE ends
+   of the unsigned range (the non-negative half stays near 0; the
+   negative half lands near 2^M), and there is no single interval that
+   soundly covers both -- oa_range_fact has no disjoint-union support
+   (confirmed: nothing in this file represents a range any other way),
+   and unlike an ordinary interval-arithmetic case, using either end
+   alone is actively wrong, not merely imprecise: e.g. for idx in
+   [-5, 20] converted to a 64-bit unsigned type, claiming an upper bound
+   of 20 is false for idx = -1 (which converts to 2^64-1). Declining is
+   the only sound answer in that case -- found and confirmed together
+   with the user via exactly this concrete counterexample.  */
+
+static bool
+oa_convert_range_across_signedness (tree from_type, tree to_type,
+				      const oa_range_fact &in, oa_range_fact *out)
+{
+  out->base = NULL_TREE;
+  if (TYPE_UNSIGNED (from_type) || !TYPE_UNSIGNED (to_type))
+    return false;
+
+  widest_int modulus = wi::to_widest (TYPE_MAX_VALUE (to_type)) + 1;
+  if (in.has_lo && in.lo >= 0)
+    {
+      /* Entirely non-negative: the conversion is exact, an ordinary
+	 passthrough -- this is the case that lets 'idx >= 0 && ...'
+	 make an otherwise-declined signed/unsigned shape work.  */
+      out->has_lo = in.has_lo; out->lo = in.lo;
+      out->has_hi = in.has_hi; out->hi = in.hi;
+      return out->has_lo || out->has_hi;
+    }
+  if (in.has_hi && in.hi < 0)
+    {
+      /* Entirely negative: shifts up by the modulus, exactly.  */
+      out->has_lo = in.has_lo; out->lo = in.has_lo ? in.lo + modulus : 0;
+      out->has_hi = in.has_hi; out->hi = in.has_hi ? in.hi + modulus : 0;
+      return out->has_lo || out->has_hi;
+    }
+  /* Straddles zero, or sign not established either way -- see this
+     function's own comment for why no sound single interval exists.  */
+  return false;
+}
+
 static bool
 oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 {
@@ -9602,7 +9659,34 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
      reached here with the CALL_EXPR wrapped this way, while the
      equivalent spelled-out 'x = x + v.size ()' did not, silently
      defeating the CALL_EXPR case below's own oa_call_postcondition_
-     range_p purely due to that wrapping).  */
+     range_p purely due to that wrapping).
+
+     Checked first, before the blind strip below: a genuinely value-
+     changing NOP_EXPR/CONVERT_EXPR (signed -> unsigned, e.g. 'idx'
+     converted to 'size_type' before a subtraction) needs real
+     conversion semantics, not a no-op strip-through -- see oa_convert_
+     range_across_signedness's own comment for the algebra and its own
+     limits. Only intercepts the TOP-level conversion; recursing into
+     oa_get_range on the inner operand handles anything further beneath
+     it the normal way, including a chain that bottoms out on a plain
+     value-preserving hop.  */
+  if ((TREE_CODE (expr) == NOP_EXPR || TREE_CODE (expr) == CONVERT_EXPR)
+      && INTEGRAL_TYPE_P (TREE_TYPE (expr)))
+    {
+      tree inner = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (INTEGRAL_TYPE_P (TREE_TYPE (inner))
+	  && !oa_integral_conversion_value_preserving_p (TREE_TYPE (inner),
+							   TREE_TYPE (expr)))
+	{
+	  oa_range_fact inner_range;
+	  if (!oa_get_range (inner, env, &inner_range) || inner_range.base != NULL_TREE)
+	    return false;
+	  return oa_convert_range_across_signedness (TREE_TYPE (inner),
+						       TREE_TYPE (expr),
+						       inner_range, out);
+	}
+    }
+
   while (TREE_CODE (expr) == NON_LVALUE_EXPR
 	 || TREE_CODE (expr) == NOP_EXPR
 	 || TREE_CODE (expr) == CONVERT_EXPR
@@ -11077,7 +11161,7 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
     tree_code rel_code;
     widest_int offset;
     bool param_is_minuend;
-    if (oa_match_shifted_comparison_against_call (conjunct, &param, &rel_code,
+    if (oa_match_shifted_comparison_against_call (conjunct, env, &param, &rel_code,
 						     &rhs_receiver, &rhs_callee,
 						     &offset,
 						     /*allow_symbolic_accessor=*/false,
@@ -13810,7 +13894,7 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 						  /*allow_symbolic_accessor=*/
 						    !conveyor)
 		|| oa_match_shifted_comparison_against_call
-		     (*conjuncts[i], &dummy_ptr, &dummy_code, &dummy_receiver,
+		     (*conjuncts[i], env, &dummy_ptr, &dummy_code, &dummy_receiver,
 		      &dummy_callee, &dummy_offset,
 		      /*allow_symbolic_accessor=*/!conveyor))
 	      continue;
@@ -14103,7 +14187,7 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	    tree_code rel_code2;
 	    widest_int offset;
 	    if (oa_match_shifted_comparison_against_call
-		  (*conjuncts[i], &rel_param2, &rel_code2, &rhs_receiver,
+		  (*conjuncts[i], env, &rel_param2, &rel_code2, &rhs_receiver,
 		   &rhs_callee, &offset, /*allow_symbolic_accessor=*/false)
 		&& TREE_CODE (rhs_receiver) == PARM_DECL)
 	      {
@@ -15444,7 +15528,7 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	  tree_code rel_code;
 	  widest_int offset;
 	  if (!oa_match_shifted_comparison_against_call
-		(*conjuncts[i], &rel_param, &rel_code, &rhs_receiver,
+		(*conjuncts[i], env, &rel_param, &rel_code, &rhs_receiver,
 		 &rhs_callee, &offset, /*allow_symbolic_accessor=*/true)
 	      || TREE_CODE (rhs_receiver) != PARM_DECL)
 	    continue;
@@ -18447,7 +18531,7 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
       widest_int offset;
       bool param_is_minuend;
       if (oa_match_shifted_comparison_against_call
-	    (*conjuncts[i], &param, &code, &rhs_receiver, &rhs_callee,
+	    (*conjuncts[i], env, &param, &code, &rhs_receiver, &rhs_callee,
 	     &offset, /*allow_symbolic_accessor=*/!conveyor_ok,
 	     &arithmetic_type, &param_is_minuend)
 	  && oa_shifted_comparison_no_wrap_ok_p (env, param, rhs_receiver,
@@ -24671,8 +24755,32 @@ oa_integral_conversion_value_preserving_p (tree from_type, tree to_type)
    conjunct_shape's own negate-on-flip discipline for its own literal-
    position flip, applied here to the CALL()-vs-PARAM position instead).  */
 
+/* Is it safe to attribute an algebraic fact solved from OPERAND (one
+   side of the MINUS_EXPR, still wrapped in whatever conversion it
+   arrived in) back to the bare PARAM it was stripped down to? True
+   unconditionally when the conversion can't change the value regardless
+   of what PARAM's own value is (the fast, common path -- e.g. PARAM
+   already exactly matches the arithmetic type, no established range
+   needed at all). Otherwise falls back to oa_get_range on the full,
+   unstripped OPERAND -- which, via oa_convert_range_across_signedness,
+   succeeds exactly when PARAM's own established range proves the
+   conversion happens to be exact for its actual value (e.g. an
+   'idx >= 0' conjunct established elsewhere) -- and correctly declines
+   when PARAM's sign isn't known.  */
+
+static bool
+oa_shifted_operand_conversion_ok_p (tree operand, tree param, oa_env &env)
+{
+  if (oa_integral_conversion_value_preserving_p (TREE_TYPE (param),
+						   TREE_TYPE (operand)))
+    return true;
+  oa_range_fact throwaway;
+  return oa_get_range (operand, env, &throwaway);
+}
+
 bool
-oa_match_shifted_comparison_against_call (tree conjunct, tree *param_out,
+oa_match_shifted_comparison_against_call (tree conjunct, oa_env &env,
+					    tree *param_out,
 					    tree_code *code_out,
 					    tree *rhs_receiver_out,
 					    tree *rhs_callee_out,
@@ -24724,8 +24832,7 @@ oa_match_shifted_comparison_against_call (tree conjunct, tree *param_out,
   tree param, receiver, callee;
   widest_int offset;
   if ((param = oa_underlying_param_operand (rhs))
-      && oa_integral_conversion_value_preserving_p (TREE_TYPE (param),
-						      TREE_TYPE (rhs))
+      && oa_shifted_operand_conversion_ok_p (rhs, param, env)
       && oa_underlying_call_range_operand (lhs, &receiver, &callee,
 					     allow_symbolic_accessor))
     {
@@ -24743,8 +24850,7 @@ oa_match_shifted_comparison_against_call (tree conjunct, tree *param_out,
 	*param_is_minuend_out = false;
     }
   else if ((param = oa_underlying_param_operand (lhs))
-	   && oa_integral_conversion_value_preserving_p (TREE_TYPE (param),
-							   TREE_TYPE (lhs))
+	   && oa_shifted_operand_conversion_ok_p (lhs, param, env)
 	   && oa_underlying_call_range_operand (rhs, &receiver, &callee,
 						  allow_symbolic_accessor))
     {

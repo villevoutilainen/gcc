@@ -53,6 +53,25 @@
 // declines shows the margin+companion alone still isn't enough once a
 // further shift is involved; use_sound adds the missing numeric cap
 // ('idx < 5') and the shift verifies.
+//
+// use_signed_idx_declines's own type-level decline (the FIRST bug above)
+// was later found to be overly blunt: it refuses ANY signed idx, even
+// when the analysis already knows enough to rule out the unsound case.
+// oa_get_range gained real signed-to-unsigned conversion semantics
+// (oa_convert_range_across_signedness): a NOP_EXPR/CONVERT_EXPR that
+// isn't value-preserving by type alone is no longer blindly stripped --
+// its own inner (pre-conversion) range is computed and mapped through
+// the actual conversion, exactly when that range falls entirely on one
+// side of zero (entirely non-negative: passes through unchanged, exact;
+// entirely negative: shifts up by 2^M, exact). A range that straddles
+// zero still correctly declines -- confirmed together with the user via
+// a concrete counterexample that no single interval can soundly cover
+// both halves (the negative half's own converted value lands near the
+// type's opposite end, not anywhere near the non-negative half).
+// use_signed_idx_nonneg_ok demonstrates the rescue: same shape as use_
+// signed_idx_declines, with an added 'idx >= 0' conjunct establishing
+// idx's own range as entirely non-negative, verifies exactly like the
+// unsigned case now.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -D_GLIBCXX_CONVEYOR_ASSERTIONS -D_GLIBCXX_PRECONDITION_ASSERTIONS" }
 
@@ -131,6 +150,19 @@ int use_signed_idx_declines (std::vector<int>& v, int idx)
   return -1;
 }
 
+int use_signed_idx_nonneg_ok (std::vector<int>& v, int idx)
+{
+  if (idx >= 0 && v.size () > idx && v.size () - idx > 10)
+    {
+      // idx is signed, but its own range (established by 'idx >= 0') is
+      // now provably entirely non-negative, so the conversion to
+      // size_type is exact for its actual value -- verifies exactly
+      // like the unsigned case.
+      return v[idx]; // proven safe, no diagnostic
+    }
+  return -1;
+}
+
 int use_definitely_unsound (std::vector<int>& v)
 {
   if (v.size () == 5)
@@ -147,5 +179,6 @@ int main ()
   return use_margin_only_declines (v, 0) + use_margin_with_companion_ok (v, 0)
 	 + use_shift_without_numeric_cap_declines (v, 0)
 	 + use_sound (v, 0) + use_unsound (v, 0)
-	 + use_signed_idx_declines (v, 0) + use_definitely_unsound (v);
+	 + use_signed_idx_declines (v, 0) + use_signed_idx_nonneg_ok (v, 0)
+	 + use_definitely_unsound (v);
 }
