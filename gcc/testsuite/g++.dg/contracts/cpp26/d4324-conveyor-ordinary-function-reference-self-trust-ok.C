@@ -21,7 +21,14 @@
 // (see oa_reference_owned_p's own "PREDICATE/ASSERT context" comment).
 // A non-const-reference-target version of this test would fail for that
 // unrelated reason, not the one this test is about.
-// { dg-do compile { target c++26 } }
+//
+// Originally dg-do compile only: this exact shape (a precondition calling
+// a nested conveyor function from its own condition text) also tripped a
+// separate, genuinely pre-existing runtime codegen bug in
+// build_predicate_arg_struct_var (a reference parameter's own args-struct
+// field was computed via one level of indirection too many, see that
+// function's own comment) -- now fixed, so this runs for real too.
+// { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
 #include <contracts>
