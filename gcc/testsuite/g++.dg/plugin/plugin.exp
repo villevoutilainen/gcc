@@ -110,7 +110,8 @@ set plugin_test_list [list \
 	  conveyor-proof-general-comparison-bad.C \
 	  conveyor-proof-relational-ok.C \
 	  conveyor-proof-relational-bad.C \
-	  conveyor-proof-relational-unknown.C } \
+	  conveyor-proof-relational-unknown.C \
+	  conveyor-proof-combined-range-unknown.C } \
     { symbolic_proof_plugin.cc \
 	  symbolic-proof-predicate-ok.C \
 	  symbolic-proof-predicate-bad.C \
