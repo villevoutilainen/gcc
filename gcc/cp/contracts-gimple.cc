@@ -2409,6 +2409,103 @@ cg_check_overflow_ub (gimple *stmt,
 	      "overflow in a conveyor function", lhs);
 }
 
+/* D4324/P2680 item 8's array-bounds/pointer-arithmetic check, GIMPLE
+   side -- the counterpart of oa_scan_array_bounds_in_expr, but scoped
+   much narrower: "Increment 1" (deliberately named the same way item
+   8's other two checks were, per this file's own established pattern of
+   incremental growth) covers ONLY pointer-dereference provability --
+   the ARRAY_TYPE/tracked-array-offset-POINTER_TYPE cases and the
+   POINTER_PLUS_EXPR pointer-arithmetic-*formation* check are NOT ported
+   (see below for why), so this is closer to just AST's own INDIRECT_REF
+   "Increment W2" fallback (a dereferenced pointer with no tracked
+   array-offset fact needs is_object_address provability instead) than
+   to the full function.
+
+   Why the rest isn't ported: AST's ARRAY_TYPE/POINTER_TYPE cases both
+   depend on a pointer's own TRACKED ARRAY-OFFSET FACT (oa_range_fact's
+   own BASE field -- "this pointer denotes some offset into array X,
+   with a numeric range for exactly which offset") -- a whole fact KIND
+   this file's own cg_range_lite has never had at all (no BASE field,
+   confirmed by that struct's own definition) -- adding it is a new
+   piece of infrastructure in its own right (establishment from an
+   array-decl-to-pointer assignment, consult/composition through
+   POINTER_PLUS_EXPR, etc.), not a mechanical port, and is deferred as
+   its own future increment. Confirmed empirically (this file's own
+   Stage 4c comment, near cg_field_slot_identity) that by this pass
+   point array indexing has ALREADY been lowered to a MEM_REF with a
+   byte offset -- 'arr[i]' and a hand-written '*(p + i)' are
+   indistinguishable tree shapes here, so without that tracked-offset
+   fact there is nothing further to check beyond the base pointer's own
+   provability, which is exactly this increment's own scope.
+
+   A GIMPLE memory reference reaching this pass point is either a bare
+   MEM_REF, or a MEM_REF wrapped in one or more COMPONENT_REFs (a field
+   access through a pointer, 'p->a.b' -- confirmed by the same Stage 4c
+   comment: 'COMPONENT_REF (MEM_REF (base, byte_offset), field)').
+   CG_EXTRACT_DEREF_BASE peels through any such COMPONENT_REF wrapping
+   to find the underlying MEM_REF's own base pointer -- this is a
+   deliberately unconditional peel regardless of the MEM_REF's own byte
+   offset (a nonzero offset, e.g. a field access or an already-folded
+   array slot, still requires the SAME base pointer to be provably
+   valid; it just isn't itself bounds-checked any further here, matching
+   this increment's own stated scope).  */
+
+static bool
+cg_extract_deref_base (tree ref, tree *base_out)
+{
+  if (ref == NULL_TREE)
+    return false;
+  while (TREE_CODE (ref) == COMPONENT_REF)
+    ref = TREE_OPERAND (ref, 0);
+  if (TREE_CODE (ref) != MEM_REF)
+    return false;
+  *base_out = TREE_OPERAND (ref, 0);
+  return true;
+}
+
+/* Check CANDIDATE (a GIMPLE_ASSIGN's own LHS or RHS1, or a GIMPLE_CALL's
+   own LHS) for a pointer dereference needing is_object_address
+   provability -- see this section's own leading comment.  */
+
+static void
+cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
+				      hash_map<tree, cg_fact> &established)
+{
+  tree base;
+  if (!cg_extract_deref_base (candidate, &base))
+    return;
+  if (TREE_CODE (base) != SSA_NAME)
+    return;
+  /* POINTER_TYPE only, excluding REFERENCE_TYPE -- a bound reference is
+     guaranteed valid for its own entire lifetime by the language itself,
+     never itself the unprovable-UB case this check exists for, mirroring
+     oa_scan_array_bounds_in_expr's own identical exclusion (see that
+     function's own comment for the lambda-by-reference-capture case
+     that motivated it).  */
+  if (TREE_CODE (TREE_TYPE (base)) != POINTER_TYPE)
+    return;
+
+  hash_set<tree> in_progress;
+  if (!cg_provable_object_address_p (base, established, /*require_conveyor=*/true,
+				       in_progress))
+    error_at (gimple_location (stmt), "pointer dereference of %qE not "
+	      "provably valid in a conveyor function", base);
+}
+
+static void
+cg_check_dereference_ub (gimple *stmt, hash_map<tree, cg_fact> &established)
+{
+  if (is_gimple_assign (stmt))
+    {
+      cg_check_one_dereference_candidate (stmt, gimple_assign_lhs (stmt),
+					    established);
+      cg_check_one_dereference_candidate (stmt, gimple_assign_rhs1 (stmt),
+					    established);
+    }
+  else if (is_gimple_call (stmt))
+    cg_check_one_dereference_candidate (stmt, gimple_call_lhs (stmt), established);
+}
+
 /* CALL's own callee, checked against ESTABLISHED/ESTABLISHED_NZ as
    they stand right before CALL -- the consult side. Each of the
    callee's own preconditions is only checked against the flag whose
@@ -5366,6 +5463,7 @@ pass_contracts_gimple::execute (function *fun)
 				  scalar_range_cache, ranger);
 	    cg_check_overflow_ub (stmt, established_type_bound,
 				   established_range, scalar_range_cache, ranger);
+	    cg_check_dereference_ub (stmt, established);
 	  }
 	if (is_gimple_call (stmt))
 	  {
