@@ -429,6 +429,21 @@ extern bool oa_match_call_against_call
    tree_code *code_out, tree *rhs_receiver_out, tree *rhs_callee_out,
    bool allow_symbolic_accessor);
 
+/* D4324, item 8's overflow check: recognize CONJUNCT as "DECL OP other"
+   or "other OP DECL", where DECL is a bare PARM_DECL or VAR_DECL and
+   OTHER is *any* expression at all of an INTEGRAL_TYPE_P no wider than
+   DECL's own type -- deliberately never resolved, stripped for
+   identity, or inspected any further (its own declared type is all
+   this needs; see this function's own definition, near oa_scan_
+   overflow_in_expr's own type-bound-witness rescue, for the full
+   soundness argument and worked example). CODE_OUT is oriented so the
+   returned relation always reads "DECL CODE_OUT other". Exported so
+   contracts-gimple.cc's own type-bound-witness rescue can establish the
+   same fact from a conveyor function's own self-trusted precondition
+   conjuncts, rather than duplicating this purely syntactic matcher.  */
+extern bool oa_match_type_bounded_comparison
+  (tree conjunct, tree *decl_out, tree_code *code_out);
+
 /* If CONJUNCT has the shape "RESULT_ID OP other", where RESULT_ID is a
    postcondition's own already-known return-value binder and "other" is
    one of the postcondition-owning function's own parameters, recognize

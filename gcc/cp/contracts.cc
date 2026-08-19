@@ -10525,7 +10525,7 @@ static tree oa_strip_symbolic_ptr_expr (tree ptr_expr);
 static bool oa_call_range_conjunct_shape
   (tree conjunct, tree *receiver_out, tree *callee_out, tree_code *code_out,
    tree *const_val_out, bool allow_symbolic_accessor);
-static bool oa_match_type_bounded_comparison
+bool oa_match_type_bounded_comparison
   (tree conjunct, tree *decl_out, tree_code *code_out);
 
 /* Forward-declared: full definition is much further below (needs the
@@ -22870,7 +22870,7 @@ oa_match_comparison_against_param (tree conjunct, tree *param_out,
    facts get established side by side, which is fine: they answer
    different questions and neither invalidates the other).  */
 
-static bool
+bool
 oa_match_type_bounded_comparison (tree conjunct, tree *decl_out,
 				    tree_code *code_out)
 {

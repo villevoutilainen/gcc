@@ -163,6 +163,15 @@ struct cg_range_lite
    relational's own comment for the transfer function.  */
 struct cg_rel_fact { tree_code code; tree rhs; cg_range_lite offset; bool conveyor_established; };
 
+/* Item 8's overflow check: mirrors contracts.cc's own oa_type_bound_fact
+   exactly -- a decl has been compared less-than (HAS_UPPER_WITNESS) or
+   greater-than (HAS_LOWER_WITNESS) *something* of a no-wider integral
+   type, established via oa_match_type_bounded_comparison (shared,
+   exported from contracts.cc -- a pure tree-shape matcher, no oa_env
+   involved, so no reimplementation needed here). See cg_provably_safe_
+   unit_shift_p's own comment for the full soundness argument.  */
+struct cg_type_bound_fact { bool has_upper_witness = false, has_lower_witness = false; };
+
 /* The call analogue of cg_rel_fact immediately above -- "the SSA name
    this is keyed on CODE RHS_RECEIVER.RHS_CALLEE () holds", e.g. for
    'pre<ctrl>(i < v.size ())'.  Mirrors contracts.cc's own oa_call_
@@ -247,6 +256,81 @@ cg_range_lite_equal (const cg_range_lite &a, const cg_range_lite &b)
 {
   return a.has_lo == b.has_lo && a.has_hi == b.has_hi
 	 && (!a.has_lo || a.lo == b.lo) && (!a.has_hi || a.hi == b.hi);
+}
+
+/* Standard interval multiplication -- mirrors contracts.cc's own
+   oa_range_multiply exactly (see that function's own comment for the
+   full corner-product rationale, including the partial/one-sided-
+   result correction), just for cg_range_lite instead of oa_range_fact
+   (no BASE field to decline here -- cg_range_lite never had one, so
+   there is no pointer-tracked-range case to rule out).  */
+
+static bool
+cg_range_lite_multiply (const cg_range_lite &a, const cg_range_lite &b,
+			  bool *has_lo_out, widest_int *lo_out,
+			  bool *has_hi_out, widest_int *hi_out)
+{
+  *has_lo_out = *has_hi_out = false;
+
+  if (a.has_lo && a.has_hi && b.has_lo && b.has_hi)
+    {
+      widest_int corner0 = a.lo * b.lo;
+      widest_int corner1 = a.lo * b.hi;
+      widest_int corner2 = a.hi * b.lo;
+      widest_int corner3 = a.hi * b.hi;
+      *lo_out = wi::smin (wi::smin (corner0, corner1), wi::smin (corner2, corner3));
+      *hi_out = wi::smax (wi::smax (corner0, corner1), wi::smax (corner2, corner3));
+      *has_lo_out = *has_hi_out = true;
+      return true;
+    }
+
+  bool a_nonneg = a.has_lo && a.lo >= 0;
+  bool a_nonpos = a.has_hi && a.hi <= 0;
+  bool b_nonneg = b.has_lo && b.lo >= 0;
+  bool b_nonpos = b.has_hi && b.hi <= 0;
+
+  if (a_nonneg && b_nonneg)
+    {
+      *lo_out = a.lo * b.lo;
+      *has_lo_out = true;
+      if (a.has_hi && b.has_hi)
+	{
+	  *hi_out = a.hi * b.hi;
+	  *has_hi_out = true;
+	}
+    }
+  else if (a_nonpos && b_nonpos)
+    {
+      *lo_out = a.hi * b.hi;
+      *has_lo_out = true;
+      if (a.has_lo && b.has_lo)
+	{
+	  *hi_out = a.lo * b.lo;
+	  *has_hi_out = true;
+	}
+    }
+  else if (a_nonneg && b_nonpos)
+    {
+      *hi_out = a.lo * b.hi;
+      *has_hi_out = true;
+      if (a.has_hi && b.has_lo)
+	{
+	  *lo_out = a.hi * b.lo;
+	  *has_lo_out = true;
+	}
+    }
+  else if (a_nonpos && b_nonneg)
+    {
+      *hi_out = a.hi * b.lo;
+      *has_hi_out = true;
+      if (a.has_lo && b.has_hi)
+	{
+	  *lo_out = a.lo * b.hi;
+	  *has_lo_out = true;
+	}
+    }
+
+  return *has_lo_out || *has_hi_out;
 }
 
 /* Combine CODE/VAL (one comparison conjunct, e.g. 'x >= 20') into R --
@@ -552,13 +636,25 @@ cg_resolve_call_argument (gcall *call, unsigned argno)
    answer, unconditionally (real code, not a flavor-tagged axiom -- see
    this file's own top comment). A multi-sub-range irange's own outer
    envelope (lowest lower_bound, highest upper_bound) is a sound, if
-   slightly coarser, stand-in for the full value set.  */
+   slightly coarser, stand-in for the full value set.
+
+   AT_STMT (default NULL, preserving every pre-existing caller's own
+   behavior unchanged) makes RANGER's own query context-sensitive to one
+   specific program point rather than VAL's whole-function range --
+   passed straight through to range_of_expr's own identical STMT
+   parameter. Needed by any caller reasoning about a branch-derived
+   refinement visible only right before one particular use (e.g. 'if (b
+   > 0) return a / b;' -- the divisor's own *global* SSA range is not
+   provably nonzero, but its range right at the division is); found via
+   direct testing that omitting STMT silently answers a different,
+   coarser question instead of merely being slightly less precise.  */
 
 static bool
 cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_range,
 			  hash_map<tree, cg_range_lite> &scalar_range_cache,
 			  gimple_ranger *ranger, bool require_conveyor,
-			  bool require_symbolic, cg_range_lite *out)
+			  bool require_symbolic, cg_range_lite *out,
+			  gimple *at_stmt = NULL)
 {
   if (val == NULL_TREE)
     return false;
@@ -626,7 +722,8 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
       if (receiver != val
 	  && cg_established_range_of (receiver, established_range,
 				       scalar_range_cache, ranger,
-				       require_conveyor, require_symbolic, out))
+				       require_conveyor, require_symbolic, out,
+				       at_stmt))
 	return true;
     }
   else if (def && is_gimple_assign (def))
@@ -635,14 +732,14 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
       if ((CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
 	  && cg_established_range_of (gimple_assign_rhs1 (def), established_range,
 				       scalar_range_cache, ranger, require_conveyor,
-				       require_symbolic, out))
+				       require_symbolic, out, at_stmt))
 	return true;
     }
 
   if (ranger)
     {
       int_range_max vr;
-      if (ranger->range_of_expr (vr, val) && !vr.undefined_p ()
+      if (ranger->range_of_expr (vr, val, at_stmt) && !vr.undefined_p ()
 	  && !vr.varying_p ())
 	{
 	  unsigned n = vr.num_pairs ();
@@ -1239,7 +1336,8 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 		     hash_map<tree, cg_rel_fact> &established_rel,
 		     hash_map<tree, cg_call_rel_fact> &established_call_rel,
 		     hash_map<cg_field_key_hash, cg_call_call_rel_fact>
-		       &established_call_call_rel)
+		       &established_call_call_rel,
+		     hash_map<tree, cg_type_bound_fact> &established_type_bound)
 {
   tree fndecl = fun->decl;
   for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
@@ -1330,6 +1428,35 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 						    rhs_callee,
 						    cg_range_lite_exact (0),
 						    conveyor_enabled });
+	}
+
+      /* Item 8's overflow check: a type-bound-witness conjunct (e.g.
+	 'pre<ctrl>(i < v.size ())', 'pre<ctrl>(i > 0)') -- see cg_type_
+	 bound_fact's own comment. Unlike the two loops just above, this
+	 one is not mutually exclusive with either -- the SAME conjunct
+	 (e.g. 'i < v.size ()') can, and typically does, ALSO satisfy
+	 oa_match_comparison_against_call above, and both facts are wanted
+	 side by side (mirrors contracts.cc's own oa_refine_single_
+	 comparison, which establishes its own type-bound witness
+	 unconditionally, before, and independently of, its own mutually-
+	 exclusive relational-shape blocks).  No conveyor_established tag
+	 here either, matching the range-conjunct loop just below: item 8
+	 is a mandatory UB-freedom obligation, not itself flavor-gated the
+	 way a one-way-trust FACT is (only whether this precondition is
+	 CONVEYOR_ENABLED or SYMBOLIC_ENABLED at all gates entry to this
+	 whole PRECONDITION_P branch, already checked above).  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree tb_decl;
+	  tree_code tb_code;
+	  if (!oa_match_type_bounded_comparison (*conjuncts[i], &tb_decl, &tb_code))
+	    continue;
+	  tree key = cg_self_trust_key (fun, tb_decl);
+	  if (!key)
+	    continue;
+	  cg_type_bound_fact &fact = established_type_bound.get_or_insert (key);
+	  fact.has_upper_witness |= (tb_code == LT_EXPR || tb_code == LE_EXPR);
+	  fact.has_lower_witness |= (tb_code == GT_EXPR || tb_code == GE_EXPR);
 	}
 
       /* The call-vs-call analogue of the call-relational loop just
@@ -1991,6 +2118,295 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 		      "parameter %qD of %qD", substituted, parm, callee);
 	}
     }
+}
+
+/* D4324/P2680 item 8's mandatory UB-freedom scans, GIMPLE-native
+   counterparts of contracts.cc's own oa_scan_div_mod_in_expr/oa_scan_
+   overflow_in_expr/oa_scan_array_bounds_in_expr (part of the GIMPLE/AST
+   parity effort: see .claude/plans/lazy-stirring-pearl.md's Tier 3a
+   correction). Like item 8 at the AST level, this is gated PURELY on
+   the enclosing function itself being DECL_DECLARED_CONVEYOR_P -- see
+   this file's own top comment and contracts.cc's own identical gate at
+   every oa_scan_item8_in_expr call site ("if (current_function_decl &&
+   DECL_DECLARED_CONVEYOR_P (current_function_decl))") -- unlike item
+   7/Q2's own gate (cg_function_might_need_reference_safety_walk_p),
+   there is no "or has its own declared contract" alternative trigger
+   here, matching the AST engine's own narrower, unambiguous scope for
+   this specific mandatory scan (confirmed by direct reading of every
+   call site: item 8 never uses oa_function_needs_walk_p's broader
+   trigger set at all).
+
+   Div/mod only, in this first increment (Increment 1 of this porting
+   piece) -- overflow and array-bounds/pointer-arithmetic are their own,
+   separate follow-ups (the latter needs a different mechanism than a
+   direct port, per this same plan file's own note: array indexing
+   syntax leaves no trace by GIMPLE time, already lowered to ordinary
+   pointer arithmetic indistinguishable from a user's own).  */
+
+/* Is VAL, used at STMT's own program point, provably nonzero? Tries
+   (in order) the same fact-based check item 7 already has
+   (cg_provable_nonzero_p) and then, as a supplementary source
+   (mirroring oa_provably_nonzero_p's own "Increment E1" range-fact
+   fallback), VAL's own established/ranger-derived numeric range *at
+   STMT* -- via cg_established_range_of's own AT_STMT parameter, so a
+   self-trusted/postcondition-derived fact is tried first, falling back
+   to RANGER's context-sensitive query only if no such fact exists.
+   Context-sensitivity matters here specifically because a plain
+   'ranger->range_of_expr (vr, val)' with no STMT argument answers a
+   different, coarser question -- VAL's range across every use in the
+   whole function, not specifically the range a branch-derived
+   refinement establishes right before this one particular division;
+   confirmed by direct testing that 'if (b > 0) return a / b;' was
+   wrongly rejected without STMT.  */
+
+static bool
+cg_provably_nonzero_for_ub_p (tree val, gimple *stmt,
+				hash_map<tree, cg_fact> &established_nz,
+				hash_map<tree, cg_range_lite> &established_range,
+				hash_map<tree, cg_range_lite> &scalar_range_cache,
+				gimple_ranger *ranger)
+{
+  hash_set<tree> in_progress;
+  if (cg_provable_nonzero_p (val, established_nz, /*require_conveyor=*/true,
+			      in_progress))
+    return true;
+
+  cg_range_lite r;
+  if (cg_established_range_of (val, established_range, scalar_range_cache,
+				 ranger, /*require_conveyor=*/true,
+				 /*require_symbolic=*/false, &r, stmt))
+    {
+      if (r.has_lo && r.lo > 0)
+	return true;
+      if (r.has_hi && r.hi < 0)
+	return true;
+    }
+  return false;
+}
+
+/* Check every div/mod operation in one GIMPLE_ASSIGN statement's own
+   RHS, erroring on any whose divisor isn't provably nonzero. Only ever
+   called for a DECL_DECLARED_CONVEYOR_P function's own body (see this
+   section's own leading comment) -- checked by the caller, not here,
+   matching oa_scan_div_mod_in_expr's own identical division of
+   responsibility.
+
+   A GIMPLE_ASSIGN's own RHS is already a single, non-recursive
+   operation (SSA form has no nested sub-expressions the way the AST's
+   own arbitrary-depth cp_walk_tree needs to descend into) -- so, unlike
+   oa_scan_div_mod_in_expr's own tree walk, this needs no recursion at
+   all, just a single rhs-code check per statement; the FOR_EACH_BB_FN
+   loop that calls this once per statement already provides the
+   "every div/mod anywhere in the function" coverage a recursive walk
+   would otherwise need to provide itself.  */
+
+static void
+cg_check_div_mod_ub (gimple *stmt, hash_map<tree, cg_fact> &established_nz,
+		       hash_map<tree, cg_range_lite> &established_range,
+		       hash_map<tree, cg_range_lite> &scalar_range_cache,
+		       gimple_ranger *ranger)
+{
+  if (!is_gimple_assign (stmt))
+    return;
+  enum tree_code code = gimple_assign_rhs_code (stmt);
+  if (code != TRUNC_DIV_EXPR && code != TRUNC_MOD_EXPR)
+    return;
+
+  tree divisor = gimple_assign_rhs2 (stmt);
+  if (!cg_provably_nonzero_for_ub_p (divisor, stmt, established_nz,
+				      established_range, scalar_range_cache,
+				      ranger))
+    error_at (gimple_location (stmt),
+	      "divisor %qE not provably nonzero in a conveyor function",
+	      divisor);
+}
+
+/* D4324, item 8's overflow check, GIMPLE side: is a shift of exactly 1
+   (INCREASING true for 'x + 1', false for 'x - 1') provably safe for X
+   via the type-bound-witness route: does X have an established cg_type_
+   bound_fact (see that struct's own comment) with the matching
+   direction's own witness set?
+
+   VAL is stripped to its own canonical, pre-copy/conversion form first
+   (cg_type_bound_get, immediately below) rather than the lookup itself
+   walking the chain -- mirrors oa_provably_safe_unit_shift_p's own
+   identical ordering (it strips X via oa_strip_to_relational_operand
+   *before* consulting env.type_bound_get's own flat, pointer-identity-
+   keyed lookup, rather than teaching that lookup to walk chains
+   itself).  */
+
+static bool
+cg_type_bound_get (tree val, hash_map<tree, cg_type_bound_fact> &established_type_bound,
+		     cg_type_bound_fact *out)
+{
+  if (val == NULL_TREE)
+    return false;
+
+  if (VAR_P (val) || TREE_CODE (val) == PARM_DECL)
+    {
+      cg_type_bound_fact *found = established_type_bound.get (val);
+      if (!found)
+	return false;
+      *out = *found;
+      return true;
+    }
+
+  if (TREE_CODE (val) != SSA_NAME)
+    return false;
+
+  if (cg_type_bound_fact *found = established_type_bound.get (val))
+    {
+      *out = *found;
+      return true;
+    }
+
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (def && is_gimple_assign (def))
+    {
+      enum tree_code code = gimple_assign_rhs_code (def);
+      if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
+	return cg_type_bound_get (gimple_assign_rhs1 (def), established_type_bound,
+				    out);
+    }
+  return false;
+}
+
+static bool
+cg_provably_safe_unit_shift_p (tree x, bool increasing,
+				 hash_map<tree, cg_type_bound_fact> &established_type_bound)
+{
+  cg_type_bound_fact fact;
+  if (!cg_type_bound_get (x, established_type_bound, &fact))
+    return false;
+  return increasing ? fact.has_upper_witness : fact.has_lower_witness;
+}
+
+/* D4324/P2680 item 8's overflow check, GIMPLE side -- the counterpart of
+   oa_scan_overflow_in_expr. "Increment 1" of this piece: the NUMERIC
+   route for NEGATE_EXPR and binary PLUS_EXPR/MINUS_EXPR/MULT_EXPR (all
+   ordinary GIMPLE_ASSIGN rhs codes), plus the type-bound-witness rescue
+   above for a literal +/-1 shift specifically -- see cg_provably_safe_
+   unit_shift_p's own comment for its scope relative to AST's.
+
+   No separate INCREMENT/DECREMENT_EXPR case is needed here the way
+   oa_scan_overflow_in_expr has one: by the time this pass runs, GIMPLE
+   has already lowered 'x++'/'x--' to an ordinary PLUS_EXPR/MINUS_EXPR
+   GIMPLE_ASSIGN with a literal +/-1 operand (confirmed by direct
+   testing) -- so the general binary-arithmetic case below already
+   covers it.  */
+
+static void
+cg_check_overflow_ub (gimple *stmt,
+			hash_map<tree, cg_type_bound_fact> &established_type_bound,
+			hash_map<tree, cg_range_lite> &established_range,
+			hash_map<tree, cg_range_lite> &scalar_range_cache,
+			gimple_ranger *ranger)
+{
+  if (!is_gimple_assign (stmt))
+    return;
+  enum tree_code code = gimple_assign_rhs_code (stmt);
+  tree lhs = gimple_assign_lhs (stmt);
+  tree type = TREE_TYPE (lhs);
+
+  if (code == NEGATE_EXPR)
+    {
+      if (!INTEGRAL_TYPE_P (type) || !TYPE_OVERFLOW_UNDEFINED (type))
+	return;
+      tree op = gimple_assign_rhs1 (stmt);
+      cg_range_lite r;
+      bool safe = cg_established_range_of (op, established_range,
+					     scalar_range_cache, ranger,
+					     /*require_conveyor=*/true,
+					     /*require_symbolic=*/false, &r,
+					     stmt)
+		  && r.has_lo
+		  && r.lo > wi::to_widest (TYPE_MIN_VALUE (type));
+      if (!safe)
+	error_at (gimple_location (stmt), "negation of %qE not provably "
+		  "free of overflow in a conveyor function", op);
+      return;
+    }
+
+  if (code != PLUS_EXPR && code != MINUS_EXPR && code != MULT_EXPR)
+    return;
+  if (!INTEGRAL_TYPE_P (type) || !TYPE_OVERFLOW_UNDEFINED (type))
+    return;
+
+  tree op0 = gimple_assign_rhs1 (stmt);
+  tree op1 = gimple_assign_rhs2 (stmt);
+  widest_int type_min = wi::to_widest (TYPE_MIN_VALUE (type));
+  widest_int type_max = wi::to_widest (TYPE_MAX_VALUE (type));
+
+  /* A literal shift of exactly 1 ('x + 1'/'1 + x'/'x - 1') gets first
+     refusal via the type-bound-witness rescue, mirroring oa_scan_
+     overflow_in_expr's own identical ordering, before falling to the
+     general numeric-only route below.  */
+  if (code == PLUS_EXPR || code == MINUS_EXPR)
+    {
+      tree var_side = NULL_TREE;
+      bool increasing = false;
+      if (code == PLUS_EXPR && integer_onep (op1))
+	{ var_side = op0; increasing = true; }
+      else if (code == PLUS_EXPR && integer_onep (op0))
+	{ var_side = op1; increasing = true; }
+      else if (code == PLUS_EXPR && integer_minus_onep (op1))
+	{ var_side = op0; increasing = false; }
+      else if (code == PLUS_EXPR && integer_minus_onep (op0))
+	{ var_side = op1; increasing = false; }
+      else if (code == MINUS_EXPR && integer_onep (op1))
+	{ var_side = op0; increasing = false; }
+      if (var_side
+	  && cg_provably_safe_unit_shift_p (var_side, increasing,
+					      established_type_bound))
+	return;
+    }
+
+  cg_range_lite a, b;
+  bool have_a = cg_established_range_of (op0, established_range,
+					   scalar_range_cache, ranger,
+					   /*require_conveyor=*/true,
+					   /*require_symbolic=*/false, &a, stmt);
+  bool have_b = cg_established_range_of (op1, established_range,
+					   scalar_range_cache, ranger,
+					   /*require_conveyor=*/true,
+					   /*require_symbolic=*/false, &b, stmt);
+
+  bool safe = false;
+  if (code == PLUS_EXPR)
+    {
+      bool hi_ok = have_a && have_b && a.has_hi && b.has_hi
+		   && a.hi + b.hi <= type_max;
+      bool lo_ok = have_a && have_b && a.has_lo && b.has_lo
+		   && a.lo + b.lo >= type_min;
+      safe = hi_ok && lo_ok;
+    }
+  else if (code == MINUS_EXPR)
+    {
+      bool hi_ok = have_a && have_b && a.has_hi && b.has_lo
+		   && a.hi - b.lo <= type_max;
+      bool lo_ok = have_a && have_b && a.has_lo && b.has_hi
+		   && a.lo - b.hi >= type_min;
+      safe = hi_ok && lo_ok;
+    }
+  else /* MULT_EXPR: cg_range_lite_multiply, mirroring oa_range_multiply
+	  (contracts.cc) exactly -- see that function's own comment for
+	  the corner-product rationale; overflow-safety needs both sides
+	  fully bounded, so HAS_LO/HAS_HI are checked explicitly rather
+	  than relying on the return value alone (true whenever either
+	  side was derived, for a caller wanting a partial result -- not
+	  this one).  */
+    {
+      bool has_lo = false, has_hi = false;
+      widest_int lo, hi;
+      if (have_a && have_b
+	  && cg_range_lite_multiply (a, b, &has_lo, &lo, &has_hi, &hi)
+	  && has_lo && has_hi)
+	safe = lo >= type_min && hi <= type_max;
+    }
+
+  if (!safe)
+    error_at (gimple_location (stmt), "result of %qE not provably free of "
+	      "overflow in a conveyor function", lhs);
 }
 
 /* CALL's own callee, checked against ESTABLISHED/ESTABLISHED_NZ as
@@ -4922,9 +5338,10 @@ pass_contracts_gimple::execute (function *fun)
   hash_map<tree, cg_rel_fact> established_rel;
   hash_map<tree, cg_call_rel_fact> established_call_rel;
   hash_map<cg_field_key_hash, cg_call_call_rel_fact> established_call_call_rel;
+  hash_map<tree, cg_type_bound_fact> established_type_bound;
   cg_seed_self_trust (fun, established, established_nz, established_range,
 		       established_rel, established_call_rel,
-		       established_call_call_rel);
+		       established_call_call_rel, established_type_bound);
 
   calculate_dominance_info (CDI_DOMINATORS);
   gimple_ranger *ranger = enable_ranger (fun, false);
@@ -4935,6 +5352,7 @@ pass_contracts_gimple::execute (function *fun)
 
   bool check_reference_safety
     = cg_function_might_need_reference_safety_walk_p (fun);
+  bool check_item8_ub = DECL_DECLARED_CONVEYOR_P (fun->decl);
 
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
@@ -4942,6 +5360,13 @@ pass_contracts_gimple::execute (function *fun)
 	 gsi_next (&gsi))
       {
 	gimple *stmt = gsi_stmt (gsi);
+	if (check_item8_ub)
+	  {
+	    cg_check_div_mod_ub (stmt, established_nz, established_range,
+				  scalar_range_cache, ranger);
+	    cg_check_overflow_ub (stmt, established_type_bound,
+				   established_range, scalar_range_cache, ranger);
+	  }
 	if (is_gimple_call (stmt))
 	  {
 	    gcall *call = as_a <gcall *> (stmt);
