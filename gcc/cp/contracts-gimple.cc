@@ -732,6 +732,19 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
   if (TREE_CODE (val) != SSA_NAME)
     return false;
 
+  /* 'this', used directly (its own initial SSA value) -- an axiom, not
+     an established fact, mirroring contracts.cc's own oa_provable_p
+     ("if (is_this_parameter (expr)) return true;"). Needed for e.g.
+     '*this' dereferenced for another conveyor call's reference
+     parameter (cg_provably_owned_p's own identical is_this_parameter
+     exception handles Q2 for this same shape; without this, Q1 would
+     wrongly reject it first).  */
+  {
+    tree var = SSA_NAME_VAR (val);
+    if (var && SSA_NAME_IS_DEFAULT_DEF (val) && is_this_parameter (var))
+      return true;
+  }
+
   if (cg_fact *fact = established.get (val))
     if (!require_conveyor || fact->conveyor_established)
       return true;
@@ -773,6 +786,153 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
 	result = cg_call_postcondition_guarantees_p
 	  (callee, require_conveyor, !require_conveyor,
 	   is_object_address_call_p);
+    }
+
+  in_progress.remove (val);
+  return result;
+}
+
+/* D4324/P2680 item 7's Q2 (cone-of-evaluation restriction), the
+   GIMPLE-native counterpart of contracts.cc's own oa_reference_owned_p
+   -- see that function's own extensive comment for the full rule this
+   ports (part of the GIMPLE/AST parity effort: see .claude/plans/
+   lazy-stirring-pearl.md's Tier 3a correction). Ownership is a pure
+   provenance property of VAL's own SSA def-chain, not something a
+   declared precondition establishes, so (unlike is_object_address/
+   nonzero/range above) there is no ESTABLISHED map to consult at all
+   here -- walking the SSA def-use chain directly already gives this
+   pass, for free, what contracts.cc's own m_borrowed_map/alias-tracking
+   needs a separate, hand-rolled mechanism to reconstruct at the tree
+   level (the "ownership-laundering" fix that function's own comment
+   describes).
+
+   VAL is owned if:
+   - it's the address of a decl (VAR_DECL or PARM_DECL -- by-value,
+     pointer, or reference alike) whose own DECL_CONTEXT is FUN -- a
+     local this function created, or any of its own received
+     parameters, including 'this' (simply the first PARM_DECL of a
+     member function) -- mirroring oa_reference_owned_p's own "any
+     PARM_DECL of this same function... OR 'this'" rule in one unified
+     check, since DECL_CONTEXT already distinguishes "belongs to this
+     function" cleanly at the GIMPLE level; OR
+   - (PHI) every incoming argument is independently owned -- mirrors
+     oa_reference_owned_p's own COND_EXPR "both arms" rule, generalized
+     to however many arms a real CFG merge has; OR
+   - (a copy/conversion assignment, or an ADDR_EXPR materialized into an
+     SSA name one hop back) its own single operand is owned; OR
+   - (a call result) CALLEE is DECL_DECLARED_CONVEYOR_P and every one of
+     its own pointer/reference-typed arguments is independently owned
+     (mirrors oa_call_result_owned_p: a conveyor call can't allocate or
+     produce an address from thin air, so its own return value must
+     alias one of its own inputs or be self-contained).
+
+   Deliberately does NOT yet recognize a field of an owned object
+   ('&this->field') or an array element of an owned array
+   ('&arr[index]') as owned in their own right -- oa_reference_owned_p
+   itself gained these as later, separate refinements (see its own
+   comment), and porting them here is a documented, deferred follow-up,
+   not attempted in this first GIMPLE port. Also, unlike oa_reference_
+   owned_p, there is no separate IN_PREDICATE_CONTEXT ruleset here:
+   contract_assert isn't ported to GIMPLE yet either (a separate, later
+   item in this same porting effort), so that distinction has nothing
+   to apply to yet.
+
+   Confirmed by direct testing that this same "field of an owned
+   object" gap also covers a base-class SUBOBJECT access: '*this' in a
+   member of a DERIVED class, forwarded to another conveyor call's
+   reference parameter, needs an implicit upcast to the base class --
+   GCC represents this the same way as an ordinary field access
+   ('ADDR_EXPR (COMPONENT_REF (...)))', not a bare 'ADDR_EXPR (decl)'
+   -- so it falls into this function's own conservative default (NOT
+   owned) today, even though it should be, by the exact same "'this'
+   never extends the cone" reasoning as the non-inheritance case just
+   above. A member of a class with no base class at all is unaffected
+   (no upcast needed, so 'this' reaches here unwrapped).  */
+
+static bool
+cg_provably_owned_p (tree val, function *fun, hash_set<tree> &in_progress)
+{
+  if (val == NULL_TREE)
+    return false;
+
+  if (TREE_CODE (val) == ADDR_EXPR)
+    {
+      tree base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (val, 0));
+      return DECL_P (base) && DECL_CONTEXT (base) == fun->decl;
+    }
+
+  if (TREE_CODE (val) != SSA_NAME)
+    return false;
+
+  /* The function's own parameter, used directly (its own initial SSA
+     value), with no ADDR_EXPR at all -- this function (see its own
+     caller, cg_check_call_reference_safety) only ever asks this about a
+     REFERENCE-typed *target*, i.e. always "what does this value
+     designate," never "is this pointer's own value owned" (a target
+     that's itself a pointer, including 'this' used as an ordinary
+     receiver, is entirely exempt from Q2 -- see this function's own
+     leading comment). Mirrors oa_reference_owned_p's own ASKING_ABOUT_
+     POINTER_VALUE disambiguation: a REFERENCE-typed parameter used
+     directly IS "received as my own" (accept_ref_param's own shape) --
+     but a POINTER-typed parameter's bare value, asked about this way,
+     means its own POINTEE is being bound to the reference target
+     (reject_ptr_param_dereference's own shape: P's own storage is this
+     function's private copy, but *P is still the caller's own,
+     unrelated object) -- NOT owned, unless it's specifically 'this'
+     (re-lending 'this' further, even dereferenced, never extends the
+     cone: no new party gains access, it's still the exact object this
+     function was already given).  */
+  tree var = SSA_NAME_VAR (val);
+  if (var && TREE_CODE (var) == PARM_DECL && SSA_NAME_IS_DEFAULT_DEF (val)
+      && (TREE_CODE (TREE_TYPE (var)) == REFERENCE_TYPE
+	  || is_this_parameter (var)))
+    return true;
+
+  if (in_progress.contains (val))
+    return false;
+  in_progress.add (val);
+  bool result = false;
+
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (def && gimple_code (def) == GIMPLE_PHI)
+    {
+      result = true;
+      unsigned n = gimple_phi_num_args (def);
+      for (unsigned i = 0; i < n; ++i)
+	if (!cg_provably_owned_p (gimple_phi_arg_def (def, i), fun, in_progress))
+	  {
+	    result = false;
+	    break;
+	  }
+    }
+  else if (def && is_gimple_assign (def))
+    {
+      enum tree_code code = gimple_assign_rhs_code (def);
+      if (code == ADDR_EXPR || CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
+	result = cg_provably_owned_p (gimple_assign_rhs1 (def), fun, in_progress);
+    }
+  else if (def && is_gimple_call (def))
+    {
+      gcall *call = as_a <gcall *> (def);
+      tree callee = gimple_call_fndecl (call);
+      if (callee && DECL_DECLARED_CONVEYOR_P (callee))
+	{
+	  result = true;
+	  unsigned nargs = gimple_call_num_args (call);
+	  for (unsigned i = 0; i < nargs; ++i)
+	    {
+	      tree arg = gimple_call_arg (call, i);
+	      tree arg_type = TREE_TYPE (arg);
+	      if (!POINTER_TYPE_P (arg_type)
+		  && TREE_CODE (arg_type) != REFERENCE_TYPE)
+		continue;
+	      if (!cg_provably_owned_p (arg, fun, in_progress))
+		{
+		  result = false;
+		  break;
+		}
+	    }
+	}
     }
 
   in_progress.remove (val);
@@ -1221,6 +1381,27 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	    established_range.put (key, range);
 	}
     }
+
+  /* D4324/P2680 item 7's Q1 axiom, mirroring contracts.cc's own
+     oa_resolve_object_address_in_function_1 (the AST engine's identical
+     "every reference-typed parameter of a conveyor function is itself
+     provably is_object_address" seeding) -- without this, FNDECL's own
+     reference parameters, forwarded unchanged to another conveyor call,
+     would be flagged by cg_check_call_reference_safety's own Q1 check
+     as unprovable, even though a reference parameter's own value is
+     already a validated address by construction (whatever proved it
+     valid for THIS function's own call is exactly why it's valid to
+     forward). Unconditional on DECL_DECLARED_CONVEYOR_P alone, not
+     gated on any per-contract flavor/flag, matching cg_check_call_
+     reference_safety's own unconditional-per-conveyor-callee scope.  */
+  if (DECL_DECLARED_CONVEYOR_P (fndecl))
+    for (tree parm = DECL_ARGUMENTS (fndecl); parm; parm = DECL_CHAIN (parm))
+      if (TREE_CODE (TREE_TYPE (parm)) == REFERENCE_TYPE)
+	{
+	  tree key = cg_self_trust_key (fun, parm);
+	  if (key)
+	    established.put (key, { /*conveyor_established=*/true });
+	}
 }
 
 /* Item 6 for relational facts: does CALL's own callee have a
@@ -1701,6 +1882,115 @@ cg_call_relational_contradicts_p (tree_code established_code,
   if (req_d.has_hi && est_d.has_lo && req_d.hi < est_d.lo)
     return true;
   return false;
+}
+
+/* Does FUN itself warrant cg_check_call_reference_safety being run for
+   its own calls at all? Mirrors the two most reliable triggers of
+   contracts.cc's own oa_function_needs_walk_p (DECL_DECLARED_CONVEYOR_P
+   and a non-empty get_fn_contract_specifiers) -- deliberately does NOT
+   attempt that function's third trigger, DECL_MIGHT_NEED_OA_SCAN_P
+   ("this function calls some conveyor function"), since direct testing
+   found the AST engine itself does NOT reliably act on that trigger in
+   practice (a plain, uncontracted, non-conveyor function calling a
+   conveyor function's reference parameter with an unprovable argument
+   was empirically NOT flagged by contracts.cc, even though that trigger
+   reads as if it should be) -- matching that observed real scope, not
+   the trigger's own literal description, avoids re-introducing the
+   exact libstdc++-internals regression this whole gate exists to
+   prevent (see cg_check_call_reference_safety's own comment).  */
+
+static bool
+cg_function_might_need_reference_safety_walk_p (function *fun)
+{
+  tree fndecl = fun->decl;
+  return DECL_DECLARED_CONVEYOR_P (fndecl)
+	 || get_fn_contract_specifiers (fndecl) != NULL_TREE;
+}
+
+/* D4324/P2680 items 7 (Q1's implicit is_object_address) and Q2
+   (ownership), the GIMPLE-native counterpart of contracts.cc's own
+   oa_handle_call_precondition_obligation -- see that function's own
+   trailing comment (from its "RECONSIDERED" pass) for the exact rule
+   this ports, and cg_provably_owned_p's own comment for what's
+   deliberately not yet covered.
+
+   Unlike every other check in this file, this one is NOT gated behind
+   CHECK_AS_CONVEYOR/CHECK_AS_SYMBOLIC or any per-contract activity at
+   all: every reference-typed parameter of a DECL_DECLARED_CONVEYOR_P
+   callee implicitly carries this obligation, triggered by parameter
+   TYPE alone, regardless of whether the callee has written any
+   precondition mentioning it -- exactly mirroring the AST engine's own
+   unconditional-per-conveyor-callee scope. (This is still bounded by
+   this whole pass's own gate(), unlike the AST engine's always-on
+   mandatory pass -- a separate, known, pre-existing limitation of the
+   GIMPLE pass as a whole, not something this specific check tries to
+   fix.)
+
+   Deliberately REFERENCE-ONLY for both Q1 and Q2, matching contracts.cc
+   exactly: a pointer -- including the implicit 'this' receiver -- gets
+   neither (see oa_handle_call_precondition_obligation's own comment for
+   the full rationale already worked out and tested at the AST level).
+   A non-const reference additionally requires Q2 (ownership); a const
+   reference only ever needs Q1.
+
+   Only ever invoked (see this function's own caller in pass_contracts_
+   gimple::execute) when cg_function_might_need_reference_safety_walk_p
+   says the CALLING function itself warrants it -- see that function's
+   own comment for why this scoping is load-bearing, not optional: an
+   earlier, unconditional version of this check (run for every call in
+   every function in the TU, matching how cg_check_call's own existing
+   checks already ran) surfaced a real regression deep in libstdc++
+   internals (std::vector<int> constructing __new_allocator's own
+   _GLIBCXX_CONVEYOR-tagged copy constructor from a plain, uncontracted,
+   non-conveyor helper function) -- confirmed, by direct testing, that
+   contracts.cc's own AST engine does NOT flag this same call either,
+   even though its own item 7/Q2 check is *also* unconditional on any
+   proof flag (only gated on flag_contract_control_objects): the AST
+   engine's own oa_function_needs_walk_p never triggers the walk for
+   that specific internal calling function to begin with. Matching that
+   same calling-function-level gate here keeps this port at genuine
+   parity with the AST engine's own real, observed scope -- not
+   *stricter* than it.  */
+
+static void
+cg_check_call_reference_safety (gcall *call, function *fun,
+				 hash_map<tree, cg_fact> &established)
+{
+  tree callee = gimple_call_fndecl (call);
+  if (!callee || !DECL_DECLARED_CONVEYOR_P (callee))
+    return;
+
+  unsigned argno = 0;
+  for (tree parm = DECL_ARGUMENTS (callee); parm;
+       parm = DECL_CHAIN (parm), ++argno)
+    {
+      if (TREE_CODE (TREE_TYPE (parm)) != REFERENCE_TYPE)
+	continue;
+      if (argno >= gimple_call_num_args (call))
+	continue;
+
+      tree substituted = cg_resolve_call_argument (call, argno);
+      hash_set<tree> in_progress;
+      if (!cg_provable_object_address_p (substituted, established,
+					  /*require_conveyor=*/true, in_progress))
+	{
+	  error_at (gimple_location (call),
+		    "cannot prove %<is_object_address%> for %qE, "
+		    "required by the precondition of %qD", substituted, callee);
+	  continue;
+	}
+
+      bool is_const_ref = TYPE_READONLY (TREE_TYPE (TREE_TYPE (parm)));
+      if (!is_const_ref)
+	{
+	  hash_set<tree> owned_in_progress;
+	  if (!cg_provably_owned_p (substituted, fun, owned_in_progress))
+	    error_at (gimple_location (call),
+		      "argument %qE is not owned by the calling function, "
+		      "so it may not be passed as the non-const reference "
+		      "parameter %qD of %qD", substituted, parm, callee);
+	}
+    }
 }
 
 /* CALL's own callee, checked against ESTABLISHED/ESTABLISHED_NZ as
@@ -4643,6 +4933,9 @@ pass_contracts_gimple::execute (function *fun)
 			     established_range, &call_relational_verdict,
 			     ranger);
 
+  bool check_reference_safety
+    = cg_function_might_need_reference_safety_walk_p (fun);
+
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
     for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
@@ -4650,11 +4943,16 @@ pass_contracts_gimple::execute (function *fun)
       {
 	gimple *stmt = gsi_stmt (gsi);
 	if (is_gimple_call (stmt))
-	  cg_check_call (as_a <gcall *> (stmt), established, established_nz,
-			 established_range, established_rel,
-			 established_call_rel, established_call_call_rel,
-			 scalar_range_cache, ranger,
-			 &call_relational_verdict);
+	  {
+	    gcall *call = as_a <gcall *> (stmt);
+	    if (check_reference_safety)
+	      cg_check_call_reference_safety (call, fun, established);
+	    cg_check_call (call, established, established_nz,
+			   established_range, established_rel,
+			   established_call_rel, established_call_call_rel,
+			   scalar_range_cache, ranger,
+			   &call_relational_verdict);
+	  }
       }
 
   disable_ranger (fun);
