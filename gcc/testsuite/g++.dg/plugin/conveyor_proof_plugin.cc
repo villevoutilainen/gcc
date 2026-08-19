@@ -247,6 +247,27 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 
       auto_vec<tree *> conjuncts;
       oa_collect_conjuncts_public (&cond, &conjuncts);
+
+      /* D4324 (see .claude/plans/lazy-stirring-pearl.md, Tier 3b):
+	 combine every bare "param OP const" conjunct about the SAME
+	 parameter into one overall verdict before diagnosing, mirroring
+	 contracts.cc's own oa_handle_precondition_simple_range_
+	 obligation (which groups all such conjuncts into a single
+	 [lo,hi] interval and checks/diagnoses that once) -- this plugin
+	 used to check and diagnose each conjunct independently, so a
+	 two-conjunct bound like 'percentage >= 0 && percentage <= 100'
+	 could get two separate diagnostics where the built-in engine
+	 emits (at most) one. Each direction is still checked exactly as
+	 before (oa_env_check_comparison already consults the substituted
+	 expression's own full established range per call, the same data
+	 a combined check would use); only the DIAGNOSIS is deferred and
+	 merged, not the proof itself. FALSE dominates (a single
+	 contradicting conjunct makes the whole precondition false,
+	 regardless of what any other conjunct about the same parameter
+	 says); otherwise UNKNOWN dominates TRUE.  */
+      auto_vec<tree> range_params;
+      auto_vec<oa_proof_result> range_verdicts;
+      auto_vec<tree> range_diag_exprs;
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree param, const_val;
@@ -260,23 +281,30 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 
 	      oa_proof_result r
 		= oa_env_check_comparison (env, substituted, code, const_val);
-	      switch (r)
+
+	      unsigned idx;
+	      for (idx = 0; idx < range_params.length (); ++idx)
+		if (range_params[idx] == param)
+		  break;
+	      if (idx == range_params.length ())
 		{
-		case OA_PROVEN_TRUE:
-		  /* Nothing to report: the obligation is discharged.  */
-		  break;
-		case OA_PROVEN_FALSE:
-		  error_at (EXPR_LOCATION (call),
-			    "argument %qE provably violates the precondition "
-			    "of %qD", substituted, callee);
-		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
-		  break;
-		case OA_UNKNOWN:
-		  warning_at (EXPR_LOCATION (call), 0,
-			      "cannot verify that %qE satisfies the "
-			      "precondition of %qD", substituted, callee);
-		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
-		  break;
+		  range_params.safe_push (param);
+		  range_verdicts.safe_push (OA_PROVEN_TRUE);
+		  range_diag_exprs.safe_push (substituted);
+		}
+
+	      if (range_verdicts[idx] == OA_PROVEN_FALSE)
+		/* Already provably false from an earlier conjunct about
+		   this same parameter -- stays false regardless.  */;
+	      else if (r == OA_PROVEN_FALSE)
+		{
+		  range_verdicts[idx] = OA_PROVEN_FALSE;
+		  range_diag_exprs[idx] = substituted;
+		}
+	      else if (r == OA_UNKNOWN)
+		{
+		  range_verdicts[idx] = OA_UNKNOWN;
+		  range_diag_exprs[idx] = substituted;
 		}
 	      continue;
 	    }
@@ -498,6 +526,29 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	      warning_at (EXPR_LOCATION (call), 0,
 			  "cannot verify that %qD (%qE) holds, as required by "
 			  "the precondition of %qD", pred_fn, substituted, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      break;
+	    }
+	}
+
+      for (unsigned p = 0; p < range_params.length (); ++p)
+	{
+	  switch (range_verdicts[p])
+	    {
+	    case OA_PROVEN_TRUE:
+	      /* Nothing to report: every conjunct about this parameter
+		 was discharged.  */
+	      break;
+	    case OA_PROVEN_FALSE:
+	      error_at (EXPR_LOCATION (call),
+			"argument %qE provably violates the precondition "
+			"of %qD", range_diag_exprs[p], callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      break;
+	    case OA_UNKNOWN:
+	      warning_at (EXPR_LOCATION (call), 0,
+			  "cannot verify that %qE satisfies the "
+			  "precondition of %qD", range_diag_exprs[p], callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
