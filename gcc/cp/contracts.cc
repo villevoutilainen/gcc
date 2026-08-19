@@ -20979,9 +20979,25 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   obligation above already gets through PRE_EXTRA.  */
 	oa_scan_calls_in_expr (&TREE_OPERAND (t, 1), env, &pre_extra, &post_extra);
 	/* Item 8's narrow div/mod, array-bound, and overflow restrictions,
-	   only within a function actually declared 'conveyor'.  */
+	   only within a function actually declared 'conveyor'. Scans LHS as
+	   well as RHS -- found via direct testing (motivated by a GIMPLE-
+	   side fix that caught this first, see contracts-gimple.cc's own
+	   cg_check_dereference_ub) that this scan was previously RHS-only,
+	   so a store *through* an unprovable pointer/array-bound violation
+	   on the assignment target itself ('*p = 5;', 'arr[i] = 5;', 'p->
+	   field = 5;') was silently never checked at all: LHS is never
+	   otherwise passed to oa_scan_item8_in_expr or oa_scan_calls_in_expr
+	   anywhere else in this case, so this is a genuine gap, not a
+	   duplicate scan of something already covered. A plain scalar LHS
+	   ('x = 5;') has no ARRAY_REF/INDIRECT_REF/div-mod/overflow-prone
+	   operator to find, so this is a no-op for the overwhelmingly common
+	   case; it only ever fires for a genuinely dereferencing/indexing/
+	   arithmetic-computing LHS.  */
 	if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
-	  oa_scan_item8_in_expr (&TREE_OPERAND (t, 1), env);
+	  {
+	    oa_scan_item8_in_expr (&TREE_OPERAND (t, 0), env);
+	    oa_scan_item8_in_expr (&TREE_OPERAND (t, 1), env);
+	  }
 	/* Shared-substrate invalidation rule 1: any reassignment of a
 	   tracked object's identity invalidates its predicate/field-range
 	   facts, whatever the object's type -- unlike the is_object_
