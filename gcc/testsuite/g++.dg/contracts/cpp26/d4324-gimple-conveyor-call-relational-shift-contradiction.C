@@ -45,7 +45,7 @@ int genuinely_ambiguous (std::vector<int>& v,
   if ((v.size () - idx) < 5)
     {
       idx += 1;
-      return v[idx]; // { dg-warning "cannot verify that [^\n]* satisfies the precondition" }
+      return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
     }
   return -1;
 }
@@ -55,12 +55,12 @@ int idx_signed_declines (std::vector<int>& v, int idx)
   if ((v.size () - idx) < 5)
     {
       idx += 15;
-      // Regex includes the '(...)idx' cast prefix (present only for a
-      // signed idx) to stay distinct from genuinely_ambiguous's own
-      // identically-worded warning above -- dejagnu's dg-warning
-      // matching gets confused by two byte-identical regexes in the
-      // same file.
-      return v[idx]; // { dg-warning "cannot verify that [^\n]*\\)idx[^\n]* satisfies the precondition" }
+      // Uses [^\n]*, not .*, even though the text is byte-identical to
+      // genuinely_ambiguous's own warning above: Tcl's regexp lets '.'
+      // cross newlines by default, so a plain '.*' here would greedily
+      // swallow all the way through to genuinely_ambiguous's own
+      // message and leave this one unmatched.
+      return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
     }
   return -1;
 }

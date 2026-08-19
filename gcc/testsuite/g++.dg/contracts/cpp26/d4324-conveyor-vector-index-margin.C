@@ -64,7 +64,7 @@ int use_unsound (std::vector<int>& v, std::vector<int>::size_type idx)
   if (v.size () - idx > 10)
     {
       idx += 15; // past the established margin
-      return v[idx]; // { dg-warning "cannot verify that [^\n]* satisfies the precondition" }
+      return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
     }
   return -1;
 }
@@ -76,12 +76,13 @@ int use_signed_idx_declines (std::vector<int>& v, int idx)
       // idx is signed here -- the subtraction above converts it to
       // size_type first, so no fact can be soundly attributed to the
       // raw signed idx (it could be negative). Correctly declines
-      // rather than wrongly proving this safe. Regex includes the
-      // '(...)idx' cast prefix (present only for a signed idx) to stay
-      // distinct from use_unsound's own identically-worded warning
-      // above -- dejagnu's dg-warning matching gets confused by two
-      // byte-identical regexes in the same file.
-      return v[idx]; // { dg-warning "cannot verify that [^\n]*\\)idx[^\n]* satisfies the precondition" }
+      // rather than wrongly proving this safe. Regex uses [^\n]* (not
+      // .*) and the '(...)idx' cast prefix distinguishing it from use_
+      // unsound's own warning above: Tcl's regexp lets '.' cross
+      // newlines by default, so two dg-warnings this close together
+      // with a plain '.*' can have the first one's match greedily
+      // swallow the second's text too.
+      return v[idx]; // { dg-warning {cannot verify that [^\n]*\)idx[^\n]* satisfies the precondition} }
     }
   return -1;
 }
