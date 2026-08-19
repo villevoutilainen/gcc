@@ -25751,11 +25751,16 @@ build_predicate_arg_struct_type (tree core_fn, location_t loc)
    parameter -- or, for STRUCT_TYPE's trailing field when CONTRACT is a
    postcondition, the address of DECL_RESULT (CURRENT_FUNCTION_DECL).  No
    explicit "spill to memory" step is needed: taking a parameter's (or
-   DECL_RESULT's) address is ordinary C++ semantics -- a reference
-   parameter's address is already the address of its referent -- and GCC's
-   own gimplifier forces the addressed decl onto the stack automatically
-   once the ADDR_EXPR is built.  Returns the address of the new struct
-   variable.  */
+   DECL_RESULT's) address is ordinary C++ semantics, and GCC's own
+   gimplifier forces the addressed decl onto the stack automatically once
+   the ADDR_EXPR is built.  Returns the address of the new struct
+   variable.
+
+   A REFERENCE-typed REAL_VAL needs no ADDR_EXPR at all -- its own value
+   already IS the referent's address (see FILL_ONE's own comment for a
+   real, previously-shipped bug this guards against: naively calling
+   build_fold_addr_expr on a bare REFERENCE_TYPE decl does NOT reliably
+   fold back down to just the reference's own value).  */
 
 static tree
 build_predicate_arg_struct_var (tree contract, tree struct_type, tree cc_bind,
@@ -25776,8 +25781,51 @@ build_predicate_arg_struct_var (tree contract, tree struct_type, tree cc_bind,
     {
       tree field_ref = build3 (COMPONENT_REF, TREE_TYPE (field), struct_var,
 				field, NULL_TREE);
-      tree addr = fold_convert (TREE_TYPE (field),
-				build_fold_addr_expr (real_val));
+      /* D4324 fix (2026-08-19): a GENUINE, SOURCE-LEVEL reference REAL_VAL
+	 (a reference parameter, or a captured reference-typed local --
+	 excluding DECL_BY_REFERENCE, see below) is used DIRECTLY here (a
+	 plain NOP_EXPR reinterpretation, no ADDR_EXPR at all) -- its own
+	 value already is the address STRUCT_TYPE's field wants to hold.
+	 Handing such a REAL_VAL to build_fold_addr_expr directly instead
+	 (the previous code, for every REAL_VAL uniformly) is a genuine,
+	 confirmed miscompile: build_fold_addr_expr on a bare REFERENCE_TYPE
+	 decl does not fold cleanly back down to the reference's own value
+	 -- downstream genericization instead materializes an intermediate
+	 reference-typed temporary (e.g. 'int & y.2; y.2 = y;', visible in
+	 -fdump-tree-original) and takes THAT TEMPORARY'S OWN STACK-SLOT
+	 ADDRESS, not its value -- one level of indirection too many.
+	 Confirmed via direct memory inspection under gdb: the struct field
+	 ends up holding a pointer to an 8-byte slot that itself contains
+	 the real address, so a predicate that actually reads the
+	 parameter's value (e.g. 'pre<ctrl>(some_conveyor_fn (y) >= 0)',
+	 calling a nested contracted function from a precondition's own
+	 condition text, evaluated via this struct's own lazy-check
+	 callback) silently reads the low bytes of a stack address instead,
+	 a real, nondeterministic (stack-garbage-dependent) runtime bug --
+	 previously invisible whenever the predicate's own body never
+	 actually needed the value (e.g. is_object_address(&x), resolved to
+	 a compile-time constant by the static analysis, ignoring its own
+	 parameter entirely).
+
+	 DECL_BY_REFERENCE is deliberately EXCLUDED from this new path and
+	 kept on the ordinary build_fold_addr_expr (real_val) route below,
+	 unchanged: cp_genericize's own "fix up the types of parms passed by
+	 invisible reference" step (see its own comment) rewrites a BY-VALUE
+	 parameter of a non-trivially-copyable class type (e.g. 'wrap x',
+	 wrap having a user-provided copy ctor/dtor) to have a REFERENCE_TYPE
+	 too, well before this code runs -- syntactically indistinguishable
+	 from a genuine 'T&' parameter by TYPE_REF_P alone, but semantically
+	 an ABI-lowering detail the middle end already knows how to take the
+	 address of correctly (that's the whole point of DECL_BY_REFERENCE),
+	 unlike an ordinary reference. Confirmed by direct testing that
+	 applying this same NOP_EXPR treatment to a DECL_BY_REFERENCE decl
+	 ICEs downstream (create_tmp_var, gimple-expr.cc) -- some other part
+	 of the pipeline, downstream of THIS code, still expects the ordinary
+	 build_fold_addr_expr (real_val) shape for that specific case and
+	 mishandles this file's own more direct alternative.  */
+      tree addr = (TYPE_REF_P (TREE_TYPE (real_val)) && !DECL_BY_REFERENCE (real_val))
+	? build1 (NOP_EXPR, TREE_TYPE (field), real_val)
+	: fold_convert (TREE_TYPE (field), build_fold_addr_expr (real_val));
       finish_expr_stmt (cp_build_init_expr (field_ref, addr));
       field = DECL_CHAIN (field);
     };
