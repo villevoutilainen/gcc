@@ -25,17 +25,23 @@
 // reaches "cannot verify," confirming the fix doesn't overreach into
 // cases that remain genuinely undecidable.
 //
-// All three use an UNSIGNED idx (std::vector<int>::size_type)
-// deliberately: 'v.size () - idx' performs the subtraction in size_type
-// itself with no value-changing conversion, so the contradiction this
-// test demonstrates is genuinely sound. idx_signed_declines documents a
-// real, fixed soundness bug: for a *signed* 'int idx', the same source
-// shape converts idx to size_type before subtracting (a negative idx
-// wraps), so oa_match_shifted_comparison_against_call's own oa_
-// integral_conversion_value_preserving_p guard now declines to
-// establish any fact at all rather than risk an unsound "provably
-// violates" conclusion -- see that guard's own comment for the concrete
-// repro that motivated it.
+// All four use an UNSIGNED idx (std::vector<int>::size_type), and (see
+// d4324-conveyor-vector-index-margin.C's own comment for the full
+// rationale) need TWO additional, independently-sound facts before any
+// of this is trustworthy: a companion direct comparison ('v.size () >
+// idx', ruling out the subtraction itself wrapping) and a numeric cap
+// ('idx < 1000', ruling out the FOLLOW-ON shift -- '+15'/'+4'/'+1' --
+// itself overflowing size_type). Neither weakens what this test
+// demonstrates: both facts are independently, separately sound (see
+// oa_shifted_comparison_no_wrap_ok_p/oa_shift_arithmetic_no_wrap_ok_p's
+// own comments), and the contradiction/ambiguity being tested is exactly
+// as before, just no longer built on an unsound foundation.
+// idx_signed_declines documents a real, fixed soundness bug: for a
+// *signed* 'int idx', the same source shape converts idx to size_type
+// before subtracting (a negative idx wraps), so oa_match_shifted_
+// comparison_against_call's own oa_integral_conversion_value_preserving_p
+// guard declines to establish any fact at all rather than risk an
+// unsound "provably violates" conclusion.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -D_GLIBCXX_CONVEYOR_ASSERTIONS -D_GLIBCXX_PRECONDITION_ASSERTIONS" }
 
@@ -44,7 +50,7 @@
 int shifted_past_the_boundary (std::vector<int>& v,
 				 std::vector<int>::size_type idx)
 {
-  if ((v.size () - idx) < 5)
+  if (v.size () > idx && (v.size () - idx) < 5 && idx < 1000)
     {
       idx += 15;
       return v[idx]; // { dg-error "provably violates the precondition" }
@@ -55,7 +61,7 @@ int shifted_past_the_boundary (std::vector<int>& v,
 int exactly_at_the_edge (std::vector<int>& v,
 			   std::vector<int>::size_type idx)
 {
-  if ((v.size () - idx) < 5)
+  if (v.size () > idx && (v.size () - idx) < 5 && idx < 1000)
     {
       idx += 4;
       return v[idx]; // { dg-error "provably violates the precondition" }
@@ -66,7 +72,7 @@ int exactly_at_the_edge (std::vector<int>& v,
 int genuinely_ambiguous (std::vector<int>& v,
 			   std::vector<int>::size_type idx)
 {
-  if ((v.size () - idx) < 5)
+  if (v.size () > idx && (v.size () - idx) < 5 && idx < 1000)
     {
       idx += 1;
       return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }

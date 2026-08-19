@@ -1614,6 +1614,48 @@ cg_call_postcondition_relation_p (gcall *call, tree_code *code_out,
   return false;
 }
 
+/* The GIMPLE-native analogue of contracts.cc's own oa_shift_arithmetic_
+   no_wrap_ok_p -- see that function's own comment for the full
+   soundness rationale, including why only ONE direction's witness is
+   required for an unsigned ARITHMETIC_TYPE (both operands already
+   guaranteed nonnegative, so only the direction that can actually
+   overflow/underflow needs a bound).  */
+
+static bool
+cg_shift_arithmetic_no_wrap_ok_p (tree_code code, tree arithmetic_type,
+				    const cg_range_lite &base_range,
+				    const cg_range_lite &shift)
+{
+  if (!INTEGRAL_TYPE_P (arithmetic_type))
+    return false;
+  if (TYPE_OVERFLOW_UNDEFINED (arithmetic_type))
+    return true;
+
+  widest_int type_min = wi::to_widest (TYPE_MIN_VALUE (arithmetic_type));
+  widest_int type_max = wi::to_widest (TYPE_MAX_VALUE (arithmetic_type));
+  bool unsigned_type = TYPE_UNSIGNED (arithmetic_type);
+
+  if (code == PLUS_EXPR)
+    {
+      if (!base_range.has_hi || !shift.has_hi
+	  || base_range.hi + shift.hi > type_max)
+	return false;
+      return unsigned_type
+	     || (base_range.has_lo && shift.has_lo
+		 && base_range.lo + shift.lo >= type_min);
+    }
+  else /* MINUS_EXPR: BASE is always the minuend (see cg_get_relational's
+	  own comment).  */
+    {
+      if (!base_range.has_lo || !shift.has_hi
+	  || base_range.lo - shift.hi < type_min)
+	return false;
+      return unsigned_type
+	     || (base_range.has_hi && shift.has_lo
+		 && base_range.hi - shift.lo <= type_max);
+    }
+}
+
 /* VAL's own established relational fact, if any -- tries, in order: a
    self-trusted fact in ESTABLISHED_REL (keyed exactly like ESTABLISHED/
    ESTABLISHED_NZ elsewhere in this file); a copy/conversion one hop
@@ -1718,18 +1760,35 @@ cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
 	 own oa_get_range gets) when K isn't itself a literal. Unlike the
 	 AST-level version, GIMPLE is already flat 3-address form, so the
 	 two operands come directly from gimple_assign_rhs1/2 rather than
-	 TREE_OPERAND on a PLUS_EXPR node.  */
+	 TREE_OPERAND on a PLUS_EXPR node.
+
+	 Same TYPE_OVERFLOW_UNDEFINED-or-independently-bounded gate as
+	 contracts.cc's own oa_get_relational (see oa_shift_arithmetic_
+	 no_wrap_ok_p's own comment) -- checked against VAL's own type,
+	 the SSA name being defined by this PLUS_EXPR/MINUS_EXPR
+	 (equivalent to the AST side's TREE_TYPE of the arithmetic node
+	 itself, since VAL's type IS that node's result type). The
+	 independent numeric-bound rescue queries BASE's own range with
+	 DEF as the program point (cg_established_range_of's own AT_STMT),
+	 the sharpest context-sensitive query available here -- see item
+	 8's own overflow-check discovery, a few thousand lines below,
+	 for why AT_STMT matters (a whole-function query can miss a bound
+	 only true at this exact point).  */
       if (code == PLUS_EXPR || code == MINUS_EXPR)
 	{
+	  if (!INTEGRAL_TYPE_P (TREE_TYPE (val)))
+	    return false;
 	  tree op0 = gimple_assign_rhs1 (def);
 	  tree op1 = gimple_assign_rhs2 (def);
 
+	  tree base = NULL_TREE;
 	  cg_range_lite shift;
 	  if (cg_get_relational (op0, established_rel, scalar_rel_cache,
 				  established_range, scalar_range_cache,
 				  ranger, require_conveyor, require_symbolic,
 				  code_out, rhs_out, offset_out, conveyor_out))
 	    {
+	      base = op0;
 	      if (TREE_CODE (op1) == INTEGER_CST)
 		shift = cg_range_lite_exact (wi::to_widest (op1));
 	      else if (!cg_established_range_of (op1, established_range,
@@ -1745,6 +1804,7 @@ cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
 					  require_symbolic, code_out, rhs_out,
 					  offset_out, conveyor_out))
 	    {
+	      base = op1;
 	      if (TREE_CODE (op0) == INTEGER_CST)
 		shift = cg_range_lite_exact (wi::to_widest (op0));
 	      else if (!cg_established_range_of (op0, established_range,
@@ -1754,6 +1814,16 @@ cg_get_relational (tree val, hash_map<tree, cg_rel_fact> &established_rel,
 		return false;
 	    }
 	  else
+	    return false;
+
+	  cg_range_lite base_num_range;
+	  if (!cg_shift_arithmetic_no_wrap_ok_p
+		(code, TREE_TYPE (val),
+		 cg_established_range_of (base, established_range,
+					    scalar_range_cache, ranger,
+					    require_conveyor, require_symbolic,
+					    &base_num_range, def)
+		   ? base_num_range : cg_range_lite (), shift))
 	    return false;
 
 	  if (code == MINUS_EXPR)
@@ -1836,12 +1906,16 @@ cg_get_call_relational (tree val, hash_map<tree, cg_call_rel_fact> &established_
 					offset_out, conveyor_out);
       /* D4324 Commit 2 (generalized to a variable shift in Commit 4):
 	 same transfer as cg_get_relational's own identical addition
-	 just above.  */
+	 just above, including its own identical no-wrap gate (see
+	 cg_shift_arithmetic_no_wrap_ok_p's own comment).  */
       if (code == PLUS_EXPR || code == MINUS_EXPR)
 	{
+	  if (!INTEGRAL_TYPE_P (TREE_TYPE (val)))
+	    return false;
 	  tree op0 = gimple_assign_rhs1 (def);
 	  tree op1 = gimple_assign_rhs2 (def);
 
+	  tree base = NULL_TREE;
 	  cg_range_lite shift;
 	  if (cg_get_call_relational (op0, established_call_rel,
 				       scalar_call_rel_cache, established_range,
@@ -1850,6 +1924,7 @@ cg_get_call_relational (tree val, hash_map<tree, cg_call_rel_fact> &established_
 				       code_out, rhs_receiver_out, rhs_callee_out,
 				       offset_out, conveyor_out))
 	    {
+	      base = op0;
 	      if (TREE_CODE (op1) == INTEGER_CST)
 		shift = cg_range_lite_exact (wi::to_widest (op1));
 	      else if (!cg_established_range_of (op1, established_range,
@@ -1868,6 +1943,7 @@ cg_get_call_relational (tree val, hash_map<tree, cg_call_rel_fact> &established_
 					       rhs_callee_out, offset_out,
 					       conveyor_out))
 	    {
+	      base = op1;
 	      if (TREE_CODE (op0) == INTEGER_CST)
 		shift = cg_range_lite_exact (wi::to_widest (op0));
 	      else if (!cg_established_range_of (op0, established_range,
@@ -1877,6 +1953,16 @@ cg_get_call_relational (tree val, hash_map<tree, cg_call_rel_fact> &established_
 		return false;
 	    }
 	  else
+	    return false;
+
+	  cg_range_lite base_num_range;
+	  if (!cg_shift_arithmetic_no_wrap_ok_p
+		(code, TREE_TYPE (val),
+		 cg_established_range_of (base, established_range,
+					    scalar_range_cache, ranger,
+					    require_conveyor, require_symbolic,
+					    &base_num_range, def)
+		   ? base_num_range : cg_range_lite (), shift))
 	    return false;
 
 	  if (code == MINUS_EXPR)
@@ -4444,7 +4530,8 @@ static bool
 cg_match_shifted_comparison_against_call (tree other, tree *param_out,
 					    tree *rhs_receiver_out,
 					    tree *rhs_callee_out,
-					    bool *negate_out)
+					    bool *negate_out,
+					    tree *arithmetic_type_out)
 {
   if (TREE_CODE (other) != SSA_NAME)
     return false;
@@ -4469,6 +4556,7 @@ cg_match_shifted_comparison_against_call (tree other, tree *param_out,
       *rhs_receiver_out = receiver;
       *rhs_callee_out = callee;
       *negate_out = true;
+      *arithmetic_type_out = TREE_TYPE (other);
       return true;
     }
   if (cg_cond_is_bare_param (op0, &param)
@@ -4482,9 +4570,42 @@ cg_match_shifted_comparison_against_call (tree other, tree *param_out,
       *rhs_receiver_out = receiver;
       *rhs_callee_out = callee;
       *negate_out = false;
+      *arithmetic_type_out = TREE_TYPE (other);
       return true;
     }
   return false;
+}
+
+/* The GIMPLE-native analogue of contracts.cc's own oa_shifted_
+   comparison_no_wrap_ok_p -- see that function's own comment for the
+   full soundness rationale (an unsigned MINUS_EXPR can wrap regardless
+   of PARAM's own type, so the algebraic "solve for PARAM" step needs an
+   independently-established, exact, offset-0 companion fact ruling that
+   out). Consults STATE.CALL_REL directly (the same dominator-scoped map
+   the caller, cg_refine_edge_into, is about to populate), not
+   ESTABLISHED_CALL_REL -- GIMPLE only ever establishes this shifted
+   shape from a branch condition, never from self-trust (no PLUS_EXPR
+   counterpart's own comment, a few hundred lines above), so there is
+   only the one map to check.  */
+
+static bool
+cg_shifted_comparison_no_wrap_ok_p (hash_map<tree, cg_call_rel_fact> &call_rel,
+				      tree param, tree receiver, tree callee,
+				      tree arithmetic_type, bool param_is_minuend)
+{
+  if (!INTEGRAL_TYPE_P (arithmetic_type) || TYPE_OVERFLOW_UNDEFINED (arithmetic_type))
+    return true;
+
+  cg_call_rel_fact *fact = call_rel.get (param);
+  if (!fact)
+    return false;
+  if (fact->rhs_callee != callee || fact->rhs_receiver != receiver)
+    return false;
+  if (!cg_range_lite_equal (fact->offset, cg_range_lite_exact (0)))
+    return false;
+
+  tree_code required = param_is_minuend ? GE_EXPR : LE_EXPR;
+  return oa_relational_code_implies (fact->code, required);
 }
 
 /* D4324 Commit 3: the relational analogue of cg_refine_edge_into's own
@@ -4653,6 +4774,7 @@ cg_refine_edge_into (edge e, cg_dom_fact_state &state)
   bool shifted = false;
   tree shifted_param = NULL_TREE;
   bool shifted_negate = false;
+  tree shifted_arithmetic_type = NULL_TREE;
   if (!cg_cond_operand_shape (other, &is_call, &field, &base, &callee, &receiver))
     {
       /* D4324 Part 4: OTHER isn't itself a bare call/field load, but it
@@ -4663,7 +4785,20 @@ cg_refine_edge_into (edge e, cg_dom_fact_state &state)
 	 state.field's own always-zero-offset range refinement.  */
       if (!cg_match_shifted_comparison_against_call (other, &shifted_param,
 							&receiver, &callee,
-							&shifted_negate))
+							&shifted_negate,
+							&shifted_arithmetic_type))
+	return;
+      /* See cg_shifted_comparison_no_wrap_ok_p's own comment: an
+	 unsigned MINUS_EXPR can wrap regardless of PARAM's own type,
+	 so this needs an independently-established, exact companion
+	 fact ruling that out before the algebraic solve above can be
+	 trusted. SHIFTED_NEGATE true means 'CALL () - PARAM' (PARAM is
+	 the subtrahend, so PARAM_IS_MINUEND is false); false means
+	 'PARAM - CALL ()' (PARAM is the minuend).  */
+      if (!cg_shifted_comparison_no_wrap_ok_p (state.call_rel, shifted_param,
+						 receiver, callee,
+						 shifted_arithmetic_type,
+						 /*param_is_minuend=*/!shifted_negate))
 	return;
       shifted = true;
       if (shifted_negate)

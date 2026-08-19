@@ -409,11 +409,30 @@ extern bool oa_match_comparison_against_call
    OFFSET_OUT) CODE_OUT RECEIVER.ACCESSOR ()" -- feed OFFSET_OUT to
    oa_env_check_call_relational_fact's own REQUIRED_OFFSET parameter to
    consult it. Neither PARAM_OUT/RHS_RECEIVER_OUT/RHS_CALLEE_OUT is a
-   resolved value, same as that function.  */
+   resolved value, same as that function.
+
+   ARITHMETIC_TYPE_OUT/PARAM_IS_MINUEND_OUT (both optional, default
+   nullptr so every pre-existing, parse-only caller is unaffected): the
+   MINUS_EXPR's own result type, and whether PARAM was its minuend
+   ('PARAM - CALL ()', true) or its subtrahend ('CALL () - PARAM',
+   false). A caller that is about to *establish* a new fact from this
+   match (not merely parse a callee's already-declared contract text)
+   needs both: when ARITHMETIC_TYPE_OUT is an unsigned/wrapping type,
+   the subtraction that was actually performed can itself wrap (e.g.
+   'v.size () - idx' with idx > v.size ()) regardless of PARAM's own
+   type -- solving the inequality as if it were exact, non-wrapping
+   arithmetic is unsound unless the caller separately confirms no wrap
+   occurred (PARAM <= CALL () when PARAM is the subtrahend, PARAM >=
+   CALL () when PARAM is the minuend) via some other already-
+   established fact. See the two establishment call sites in
+   contracts.cc (oa_refine_single_comparison's own branch-derived
+   establishment, and the self-trust precondition loop) for the actual
+   gate.  */
 extern bool oa_match_shifted_comparison_against_call
   (tree conjunct, tree *param_out, tree_code *code_out,
    tree *rhs_receiver_out, tree *rhs_callee_out, widest_int *offset_out,
-   bool allow_symbolic_accessor);
+   bool allow_symbolic_accessor, tree *arithmetic_type_out = nullptr,
+   bool *param_is_minuend_out = nullptr);
 
 /* True if every value FROM_TYPE can represent converts to TO_TYPE
    without changing its mathematical value (e.g. safe for 'unsigned' ->

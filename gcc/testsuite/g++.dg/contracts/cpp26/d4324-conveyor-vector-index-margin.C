@@ -3,57 +3,100 @@
 // type -- operator[]'s own precondition comes from _GLIBCXX_PRECONDITION_
 // ASSERTIONS (Stage P1), not a hand-written pre<>(). The if-condition
 // establishes a margin via oa_match_shifted_comparison_against_call's own
-// new "RECEIVER.ACCESSOR () - PARAM OP <literal>" shape: 'v.size () - idx
-// > 10' means idx has strictly more than 10 elements of room before
+// "RECEIVER.ACCESSOR () - PARAM OP <literal>" shape: 'v.size () - idx >
+// 10' means idx has strictly more than 10 elements of room before
 // reaching size (), i.e. idx < size () - 10 (code LT_EXPR, offset -10 --
-// see that function's own comment for the algebra). A subsequent shift
-// within the margin (+5) still verifies; a shift past it (+15) no longer
-// does, since the established fact and its own offset can no longer be
-// shown to entail idx < size () -- showing the boundary exactly as
-// requested.
-//
-// The first, unshifted access (not shown here -- see the sibling
-// non-vector demos for that shape) needs no shift at all and is proven
-// outright; this test's own point is specifically the shift-tracking
-// interaction with a genuinely mandatory, real-library precondition.
+// see that function's own comment for the algebra).
 //
 // use_definitely_unsound is a *third* tier, deliberately different from
-// the "past the margin" case above: that one only ever yields a one-
-// sided lower bound on idx (a shifted-past margin can fail to be proven
-// safe, but can't be disproven from a one-sided fact alone), so it can
-// only ever reach "cannot verify," never "provably violates." Getting an
-// outright, provable violation needs *exact*, independent ranges on both
-// sides of the precondition: 'v.size () == 5' pins size ()'s own range to
-// a single point (the pre-existing, non-Part-4 "CALL () OP LITERAL"
-// shape), and 'idx = 100' pins idx's own plain range the same way; the
-// range-vs-range fact fallback (oa_env_check_call_relational_fact_1, from
-// this branch's own earlier "range-vs-range" work) then finds the two
-// ranges provably disjoint and reports a hard error, not a warning.
+// the margin-based cases below: an outright, provable violation needs
+// *exact*, independent ranges on both sides of the precondition:
+// 'v.size () == 5' pins size ()'s own range to a single point (the pre-
+// existing, non-Part-4 "CALL () OP LITERAL" shape), and 'idx = 100' pins
+// idx's own plain range the same way; the range-vs-range fact fallback
+// (oa_env_check_call_relational_fact_1, from this branch's own earlier
+// "range-vs-range" work) then finds the two ranges provably disjoint and
+// reports a hard error, not a warning.
 //
-// use_sound/use_unsound use an UNSIGNED idx (std::vector<int>::size_type)
-// deliberately: 'v.size () - idx' performs the subtraction in size_type
-// itself with no value-changing conversion of idx at all, so the
-// established margin fact is genuinely sound. use_signed_idx_declines
-// documents a real, fixed soundness bug: with a *signed* 'int idx',
-// 'v.size () - idx' first converts idx to size_type via the usual
-// arithmetic conversions (a negative idx wraps to a huge value), so a
-// fact derived by naively stripping that conversion back to the bare
-// signed idx would be unsound -- oa_match_shifted_comparison_against_
-// call's own oa_integral_conversion_value_preserving_p guard now
-// declines to establish it at all in this case, correctly falling back
-// to "cannot verify" rather than wrongly proving v[idx] safe for a
-// negative idx (see that guard's own comment for the concrete repro
-// that motivated it).
+// All the margin-based functions use an UNSIGNED idx (std::vector<int>::
+// size_type) deliberately: 'v.size () - idx' performs the subtraction in
+// size_type itself with no value-changing conversion of idx at all.
+// use_signed_idx_declines documents a real, fixed soundness bug: with a
+// *signed* 'int idx', 'v.size () - idx' first converts idx to size_type
+// via the usual arithmetic conversions (a negative idx wraps to a huge
+// value), so a fact derived by naively stripping that conversion back to
+// the bare signed idx would be unsound -- oa_match_shifted_comparison_
+// against_call's own oa_integral_conversion_value_preserving_p guard
+// declines to establish it at all in this case.
+//
+// A SECOND, deeper soundness bug applies even to a genuinely unsigned
+// idx: 'v.size () - idx' itself can wrap (regardless of idx's type) if
+// idx > v.size (), since the wrapped difference is astronomically larger
+// than any realistic literal threshold -- the single observed conjunct
+// carries no information ruling that out. Fixed by requiring a
+// companion, independently-sound direct fact ('v.size () > idx',
+// established via oa_match_comparison_against_call, which is safe on its
+// own: a wrapped idx would make it false, not true) before trusting the
+// subtraction (oa_shifted_comparison_no_wrap_ok_p). use_margin_only_
+// declines demonstrates the margin ALONE, without that companion, no
+// longer verifies even the plain (unshifted) access.
+//
+// A THIRD, related limit: shifting an already-established margin fact by
+// further arithmetic ('idx += 5') is it own separate composition
+// (oa_get_call_relational's own PLUS_EXPR handling), which can ALSO wrap
+// even once the margin itself is trustworthy -- idx could still be
+// arbitrarily close to size_type's own max. This also needs an
+// independently-provable NUMERIC bound on idx (not merely a symbolic
+// relation to size ()) tight enough that the shift provably can't
+// overflow (oa_shift_arithmetic_no_wrap_ok_p, consulting idx's own
+// established range via oa_get_range). use_shift_without_numeric_cap_
+// declines shows the margin+companion alone still isn't enough once a
+// further shift is involved; use_sound adds the missing numeric cap
+// ('idx < 5') and the shift verifies.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -D_GLIBCXX_CONVEYOR_ASSERTIONS -D_GLIBCXX_PRECONDITION_ASSERTIONS" }
 
 #include <vector>
 
-int use_sound (std::vector<int>& v, std::vector<int>::size_type idx)
+int use_margin_only_declines (std::vector<int>& v, std::vector<int>::size_type idx)
 {
   if (v.size () - idx > 10)
     {
-      idx += 5; // still within the established >10-element margin
+      // No companion 'v.size () > idx' fact -- the subtraction itself
+      // could have wrapped (idx > v.size ()), so even this plain,
+      // unshifted access can no longer be proven safe.
+      return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
+    }
+  return -1;
+}
+
+int use_margin_with_companion_ok (std::vector<int>& v, std::vector<int>::size_type idx)
+{
+  if (v.size () > idx && v.size () - idx > 10)
+    {
+      return v[idx]; // proven safe, no diagnostic
+    }
+  return -1;
+}
+
+int use_shift_without_numeric_cap_declines (std::vector<int>& v,
+					      std::vector<int>::size_type idx)
+{
+  if (v.size () > idx && v.size () - idx > 10)
+    {
+      idx += 5; // no numeric cap on idx -- could still be near size_type's
+		// own max, so this shift can't be proven not to overflow
+      return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
+    }
+  return -1;
+}
+
+int use_sound (std::vector<int>& v, std::vector<int>::size_type idx)
+{
+  if (v.size () > idx && v.size () - idx > 10 && idx < 5)
+    {
+      idx += 5; // idx < 5, so idx+5 < 10 -- provably far from overflow,
+		// and still within the established >10-element margin
       return v[idx]; // proven safe, no diagnostic
     }
   return -1;
@@ -61,9 +104,10 @@ int use_sound (std::vector<int>& v, std::vector<int>::size_type idx)
 
 int use_unsound (std::vector<int>& v, std::vector<int>::size_type idx)
 {
-  if (v.size () - idx > 10)
+  if (v.size () > idx && v.size () - idx > 10 && idx < 5)
     {
-      idx += 15; // past the established margin
+      idx += 15; // past the established margin (idx+15 could be as large
+		 // as size ()+4)
       return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
     }
   return -1;
@@ -77,11 +121,11 @@ int use_signed_idx_declines (std::vector<int>& v, int idx)
       // size_type first, so no fact can be soundly attributed to the
       // raw signed idx (it could be negative). Correctly declines
       // rather than wrongly proving this safe. Regex uses [^\n]* (not
-      // .*) and the '(...)idx' cast prefix distinguishing it from use_
-      // unsound's own warning above: Tcl's regexp lets '.' cross
-      // newlines by default, so two dg-warnings this close together
-      // with a plain '.*' can have the first one's match greedily
-      // swallow the second's text too.
+      // .*) and the '(...)idx' cast prefix distinguishing it from the
+      // other warnings above: Tcl's regexp lets '.' cross newlines by
+      // default, so two dg-warnings this close together with a plain
+      // '.*' can have the first one's match greedily swallow the
+      // second's text too.
       return v[idx]; // { dg-warning {cannot verify that [^\n]*\)idx[^\n]* satisfies the precondition} }
     }
   return -1;
@@ -100,6 +144,8 @@ int use_definitely_unsound (std::vector<int>& v)
 int main ()
 {
   std::vector<int> v(20);
-  return use_sound (v, 0) + use_unsound (v, 0)
+  return use_margin_only_declines (v, 0) + use_margin_with_companion_ok (v, 0)
+	 + use_shift_without_numeric_cap_declines (v, 0)
+	 + use_sound (v, 0) + use_unsound (v, 0)
 	 + use_signed_idx_declines (v, 0) + use_definitely_unsound (v);
 }
