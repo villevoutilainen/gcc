@@ -5605,7 +5605,7 @@ cg_check_call_range_relational (gcall *call,
 			"of %qD", sub_param, callee);
 	      inform (gimple_location (call),
 		      "%qE is established %s, but the precondition requires "
-		      "it to be %s %qD ()", sub_param, established_buf,
+		      "it to be %s the result of %qD", sub_param, established_buf,
 		      op_symbol_code (rel_code), rhs_callee);
 	    }
 	}
@@ -5767,7 +5767,7 @@ cg_check_call_relational_fact (gcall *call,
 		}
 	      inform (gimple_location (call),
 		      "%qE is established %s, but the precondition requires "
-		      "it to be %s %qD ()", sub_param, established_buf,
+		      "it to be %s the result of %qD", sub_param, established_buf,
 		      op_symbol_code (rel_code), rhs_callee);
 	    }
 	}
