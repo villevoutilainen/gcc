@@ -14399,7 +14399,7 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 			      "of %qD", sub_param, callee);
 		    inform (EXPR_LOCATION (call),
 			    "%qE is established %s, but the precondition "
-			    "requires it to be %s %qD ()", sub_param, established_buf,
+			    "requires it to be %s the result of %qD", sub_param, established_buf,
 			    op_symbol_code (rel_code2), rhs_callee);
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
@@ -14462,12 +14462,12 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		    if (offset == 0)
 		      inform (EXPR_LOCATION (call),
 			      "%qE is established %s, but the precondition "
-			      "requires it to be %s %qD ()", sub_param,
+			      "requires it to be %s the result of %qD", sub_param,
 			      established_buf, op_symbol_code (rel_code2), rhs_callee);
 		    else
 		      inform (EXPR_LOCATION (call),
 			      "%qE is established %s, but the precondition "
-			      "requires it to be %s %qD () plus %wd", sub_param,
+			      "requires it to be %s the result of %qD, plus %wd", sub_param,
 			      established_buf, op_symbol_code (rel_code2), rhs_callee,
 			      offset.to_shwi ());
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
@@ -15796,7 +15796,7 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 			"of %qD", sub_param, callee);
 	      inform (EXPR_LOCATION (call),
 		      "%qE is established %s, but the precondition "
-		      "requires it to be %s %qD ()", sub_param, established_buf,
+		      "requires it to be %s the result of %qD", sub_param, established_buf,
 		      op_symbol_code (rel_code), rhs_callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
@@ -15854,12 +15854,12 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	      if (offset == 0)
 		inform (EXPR_LOCATION (call),
 			"%qE is established %s, but the precondition "
-			"requires it to be %s %qD ()", sub_param, established_buf,
+			"requires it to be %s the result of %qD", sub_param, established_buf,
 			op_symbol_code (rel_code), rhs_callee);
 	      else
 		inform (EXPR_LOCATION (call),
 			"%qE is established %s, but the precondition "
-			"requires it to be %s %qD () plus %wd", sub_param,
+			"requires it to be %s the result of %qD, plus %wd", sub_param,
 			established_buf, op_symbol_code (rel_code), rhs_callee,
 			offset.to_shwi ());
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
@@ -25438,7 +25438,13 @@ static char *
 oa_float_range_fact_text (const oa_float_range_fact &fact, char *buf,
 			   size_t n)
 {
-  char lo_str[64], hi_str[64];
+  /* 32 is comfortably large enough for any double's shortest round-trip
+     decimal form (the longest realistic case, +/-DBL_MAX, is 25 chars
+     including sign/exponent) -- kept deliberately small (rather than a
+     rounder 64) so the "in [%s, %s]" snprintf below has a tight enough
+     static bound for -Wformat-truncation to verify it always fits
+     within a typical 128-byte destination buffer.  */
+  char lo_str[32], hi_str[32];
   if (fact.has_lo && fact.has_hi
       && real_identical (&fact.lo, &fact.hi))
     {
