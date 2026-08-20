@@ -26,6 +26,7 @@ int use_val_const (const T& x) conveyor { return x.v; }
 int q1_bad (T *p) conveyor
 {
   return use_val_const (*p); // { dg-error "cannot prove .is_object_address." }
+                             // { dg-message "no fact relating this value" "unprovable reason" { target *-*-* } .-1 }
 }
 
 int main () { return 0; }

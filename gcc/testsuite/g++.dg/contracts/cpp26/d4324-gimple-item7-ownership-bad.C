@@ -32,6 +32,7 @@ int reject_ptr_param_dereference (T *p) conveyor
   pre<conveyor_ctrl_v>(std::is_object_address (p))
 {
   return use_val_mut (*p); // { dg-error "is not owned by the calling function" }
+                           // { dg-message "does not name a parameter or local" "unprovable reason" { target *-*-* } .-1 }
 }
 
 int main () { return 0; }
