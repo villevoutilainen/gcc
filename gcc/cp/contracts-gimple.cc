@@ -4762,6 +4762,133 @@ cg_refine_relational_edge_into (tree lhs, tree rhs, tree_code code,
    oa_establish_shared_substrate_self_trust, never oa_refine_single_
    comparison) -- this mirrors that same scope exactly.  */
 
+/* Is E a true/false edge of a GIMPLE_COND that merely tests some SSA
+   name against integer zero -- the boolean-temp shape this whole
+   file's edge refinement relies on (see cg_refine_edge_into's own
+   comment on why 'if (v.size () > 3)' lowers this way)? If so,
+   *TESTED_OUT is that SSA name and *WANT_NONZERO_OUT is whether taking
+   E requires it to be nonzero (a '_2 == 0' test flips which edge means
+   "the tested value is nonzero", unlike a '_2 != 0' test). Returns
+   false for any other shape, including E not being a true/false edge
+   at all, in which case neither output is touched.
+
+   Factored out of cg_refine_edge_into's own former inline version of
+   this same check so it and cg_bool_phi_source_edges' own caller
+   immediately below can never drift apart on this extraction --
+   mirrors this file's own stated rationale for factoring out cg_
+   compute_in_state's IN-state computation a bit further down ("so the
+   two can never drift apart").  */
+
+static bool
+cg_gimple_cond_zero_test (edge e, tree *tested_out, bool *want_nonzero_out)
+{
+  if (!(e->flags & (EDGE_TRUE_VALUE | EDGE_FALSE_VALUE)))
+    return false;
+  gimple *stmt = gsi_stmt (gsi_last_bb (e->src));
+  if (!stmt || gimple_code (stmt) != GIMPLE_COND)
+    return false;
+  gcond *cond = as_a <gcond *> (stmt);
+
+  tree_code code = gimple_cond_code (cond);
+  tree lhs = gimple_cond_lhs (cond);
+  tree rhs = gimple_cond_rhs (cond);
+  if ((code != NE_EXPR && code != EQ_EXPR)
+      || TREE_CODE (rhs) != INTEGER_CST || !integer_zerop (rhs)
+      || TREE_CODE (lhs) != SSA_NAME)
+    return false;
+
+  bool want_nonzero = (e->flags & EDGE_TRUE_VALUE) != 0;
+  if (code == EQ_EXPR)
+    want_nonzero = !want_nonzero;
+  *tested_out = lhs;
+  *want_nonzero_out = want_nonzero;
+  return true;
+}
+
+/* TESTED is known (via cg_gimple_cond_zero_test) to be compared against
+   integer zero on some GIMPLE_COND edge; WANT_NONZERO is the polarity
+   that edge requires. Chases TESTED through a chain of plain 'x = y;'
+   copies -- exactly the shape the gimplifier's own short-circuit
+   '&&'/'||' lowering produces (a final straight copy, e.g. 'retval.0 =
+   iftmp.1;', on top of the PHI that actually carries the two arms' own
+   1/0 constants -- confirmed by direct testing of 2-conjunct,
+   3-conjunct, mixed '&&'/'||', and negated compound conditions: every
+   one of them collapses to exactly this single flat PHI-of-constants
+   shape, regardless of how deeply nested the original boolean
+   expression was, so this is not a partial recognizer for the
+   compound-condition problem, it's a complete one) -- until it lands
+   on a GIMPLE_PHI, or declines (returns false) at the first
+   unrecognized shape.
+
+   Once a PHI is found, EVERY argument must be an INTEGER_CST -- if
+   even one is not (e.g. a non-constant value merged in from some
+   genuinely different computation, not a short-circuit artifact), this
+   declines entirely: it is meant to precisely characterize the
+   short-circuit lowering shape, not speculate about any other PHI.
+   For each argument whose zero/nonzero-ness matches WANT_NONZERO, the
+   incoming edge is pushed onto EDGES_OUT. Returns true (EDGES_OUT
+   possibly empty, e.g. an always-false conjunct) once a qualifying PHI
+   is found at all.  */
+
+static bool
+cg_bool_phi_source_edges (tree tested, bool want_nonzero,
+			    vec<edge> *edges_out)
+{
+  hash_set<tree> seen;
+  while (true)
+    {
+      if (seen.add (tested))
+	return false; /* Cycle guard; not expected on a copy chain.  */
+      if (TREE_CODE (tested) != SSA_NAME || virtual_operand_p (tested))
+	return false;
+      if (SSA_NAME_IS_DEFAULT_DEF (tested))
+	return false;
+      gimple *def = SSA_NAME_DEF_STMT (tested);
+      if (!def)
+	return false;
+
+      if (gimple_code (def) == GIMPLE_PHI)
+	{
+	  gphi *phi = as_a <gphi *> (def);
+	  unsigned n = gimple_phi_num_args (phi);
+	  for (unsigned i = 0; i < n; ++i)
+	    {
+	      /* Each argument is itself an SSA name (e.g. 'iftmp.1_14'),
+		 not a raw INTEGER_CST embedded directly in the PHI --
+		 confirmed by direct testing (this recognizer never
+		 matched at all until this hop was added): the constant
+		 only appears one hop further back, at that SSA name's
+		 own single, trivial def ('iftmp.1_14 = 1;') in its own
+		 incoming block. Resolve that one hop here; anything
+		 else (not an SSA name at all, or an SSA name whose own
+		 def isn't a bare constant assignment) declines, same
+		 discipline as the outer copy-chase above.  */
+	      tree arg = gimple_phi_arg_def (phi, i);
+	      if (TREE_CODE (arg) == SSA_NAME && !virtual_operand_p (arg)
+		  && !SSA_NAME_IS_DEFAULT_DEF (arg))
+		{
+		  gimple *arg_def = SSA_NAME_DEF_STMT (arg);
+		  if (arg_def && gimple_assign_single_p (arg_def)
+		      && TREE_CODE (gimple_assign_rhs1 (arg_def)) == INTEGER_CST)
+		    arg = gimple_assign_rhs1 (arg_def);
+		}
+	      if (TREE_CODE (arg) != INTEGER_CST)
+		return false;
+	      if (integer_zerop (arg) == !want_nonzero)
+		edges_out->safe_push (gimple_phi_arg_edge (phi, i));
+	    }
+	  return true;
+	}
+
+      if (is_gimple_assign (def) && gimple_assign_rhs_code (def) == SSA_NAME)
+	{
+	  tested = gimple_assign_rhs1 (def);
+	  continue;
+	}
+      return false;
+    }
+}
+
 static void
 cg_refine_edge_into (edge e, cg_dom_fact_state &state,
 		      hash_map<tree, cg_range_lite> &established_range,
@@ -4795,19 +4922,18 @@ cg_refine_edge_into (edge e, cg_dom_fact_state &state,
      produced here; anything deeper is left unrecognized, the same
      "safe, just occasionally conservative" discipline used throughout
      this whole engine.  */
-  if ((code == NE_EXPR || code == EQ_EXPR)
-      && TREE_CODE (rhs) == INTEGER_CST && integer_zerop (rhs)
-      && TREE_CODE (lhs) == SSA_NAME)
+  tree zero_tested;
+  bool zero_want_nonzero;
+  if (cg_gimple_cond_zero_test (e, &zero_tested, &zero_want_nonzero))
     {
-      gimple *def = SSA_NAME_DEF_STMT (lhs);
+      gimple *def = SSA_NAME_DEF_STMT (zero_tested);
       if (!def || !is_gimple_assign (def))
 	return;
       tree_code def_code = gimple_assign_rhs_code (def);
       if (def_code != LT_EXPR && def_code != LE_EXPR && def_code != GT_EXPR
 	  && def_code != GE_EXPR && def_code != EQ_EXPR)
 	return;
-      if (code == EQ_EXPR)
-	asserted_true = !asserted_true;
+      asserted_true = zero_want_nonzero;
       code = def_code;
       lhs = gimple_assign_rhs1 (def);
       rhs = gimple_assign_rhs2 (def);
@@ -4967,7 +5093,60 @@ cg_compute_in_state (basic_block bb,
 	 it's actually sound for, not merged in from every predecessor
 	 indiscriminately.  */
       cg_dom_fact_state refined;
-      cg_dom_fact_state_assign (&refined, **pred_out);
+
+      /* E->src's own OUT state (**pred_out, about to become the basis
+	 for REFINED below) is already the agreement-merge of ALL of
+	 E->src's own predecessors -- for a short-circuit '&&'/'||'
+	 condition's own boolean-materialize-then-retest join block
+	 (see cg_bool_phi_source_edges' own comment for the exact shape
+	 and why it's the general one for this problem, not a 2-conjunct
+	 special case), that merge has ALREADY discarded exactly the
+	 fact this edge needs: only ONE (or a specific few, for '||') of
+	 those predecessors is actually reachable when this edge's own
+	 condition holds, and that predecessor's own, still-precise OUT
+	 state is what should seed REFINED instead of E->src's own
+	 already-lossy one.
+
+	 Sound to substitute rather than merely supplement: each
+	 qualifying edge's own source block is a direct predecessor of
+	 E->src (gimple_phi_arg_edge returns exactly that), and the
+	 gimplifier's own short-circuit lowering never introduces a back
+	 edge inside that local diamond, so every qualifying source
+	 strictly precedes E->src in this walk's own RPO order. Since
+	 BLOCK_OUT entries are created in that same RPO order and only
+	 ever updated in place, never removed, a qualifying source's own
+	 entry is guaranteed already present whenever E->src's own entry
+	 (PRED_OUT, just checked above) is -- so the "not yet available"
+	 fallback below can't actually trigger for this shape in
+	 practice; it exists purely as a defensive no-op, not because
+	 facts could otherwise grow between fixed-point iterations
+	 (which would break this whole walk's own monotonic-decrease
+	 termination argument, were it ever reachable).  */
+      tree tested;
+      bool want_nonzero;
+      auto_vec<edge> qualifying_edges;
+      bool used_qualifying = false;
+      if (cg_gimple_cond_zero_test (e, &tested, &want_nonzero)
+	  && cg_bool_phi_source_edges (tested, want_nonzero, &qualifying_edges))
+	{
+	  for (unsigned i = 0; i < qualifying_edges.length (); ++i)
+	    {
+	      cg_dom_fact_state **q_out
+		= block_out.get (qualifying_edges[i]->src);
+	      if (!q_out)
+		continue;
+	      if (!used_qualifying)
+		{
+		  cg_dom_fact_state_assign (&refined, **q_out);
+		  used_qualifying = true;
+		}
+	      else
+		cg_dom_fact_state_merge (&refined, **q_out);
+	    }
+	}
+      if (!used_qualifying)
+	cg_dom_fact_state_assign (&refined, **pred_out);
+
       cg_refine_edge_into (e, refined, established_range, ranger,
 			    require_conveyor, require_symbolic);
       if (first)
