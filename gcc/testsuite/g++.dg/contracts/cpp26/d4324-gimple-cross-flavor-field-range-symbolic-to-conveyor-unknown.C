@@ -48,6 +48,7 @@ void caller ()
   thing t;
   t.produce_count_symbolic ();
   t.consume_count_conveyor (); // { dg-warning "cannot verify that field .*count.*satisfies" }
+                                // { dg-message "weaker .non-conveyor. trust" "unprovable reason" { target *-*-* } .-1 }
 }
 
 int main () { caller (); return 0; }

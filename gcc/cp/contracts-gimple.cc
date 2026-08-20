@@ -3900,6 +3900,13 @@ cg_consult_persistent_facts (gcall *call,
 			"cannot verify that field %qD of %qE satisfies the "
 			"precondition of %qD",
 			field_groups[g].field, substituted, callee);
+	  oa_unprovable_reason reason
+	    = !established ? OA_UNPROVABLE_NO_FACT
+	      : (require_conveyor && !established->conveyor_established)
+		? OA_UNPROVABLE_WEAKER_PROVENANCE
+		: OA_UNPROVABLE_RANGE_PARTIAL;
+	  if (const char *why = oa_unprovable_reason_text (reason))
+	    inform (gimple_location (call), "%s", _(why));
 	}
 
       auto_vec<cg_call_group_lite> call_groups;
@@ -3942,6 +3949,13 @@ cg_consult_persistent_facts (gcall *call,
 			"cannot verify that %qD called on %qE satisfies the "
 			"precondition of %qD",
 			call_groups[g].callee, substituted, callee);
+	  oa_unprovable_reason reason
+	    = !established ? OA_UNPROVABLE_NO_FACT
+	      : (require_conveyor && !established->conveyor_established)
+		? OA_UNPROVABLE_WEAKER_PROVENANCE
+		: OA_UNPROVABLE_RANGE_PARTIAL;
+	  if (const char *why = oa_unprovable_reason_text (reason))
+	    inform (gimple_location (call), "%s", _(why));
 	}
     }
 }
