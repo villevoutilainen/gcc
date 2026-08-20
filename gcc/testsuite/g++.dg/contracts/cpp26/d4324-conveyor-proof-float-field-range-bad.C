@@ -34,5 +34,6 @@ main ()
   thing t;
   t.produce_value ();
   t.consume_value (); // { dg-error "provably violates the precondition" }
+                      // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
   return 0;
 }
