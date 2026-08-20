@@ -24,5 +24,6 @@ int main ()
 {
   thing t (250);
   t.consume_count (); // { dg-error "provably violates the precondition" }
+                      // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
   return 0;
 }

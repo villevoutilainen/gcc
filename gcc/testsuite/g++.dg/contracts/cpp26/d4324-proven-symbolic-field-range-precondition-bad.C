@@ -22,5 +22,6 @@ main ()
   F f;
   f.m_value = -5.0;
   f.check (); // { dg-error "provably violates the precondition" }
+              // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
   return 0;
 }

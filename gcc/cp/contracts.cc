@@ -16099,6 +16099,14 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 				"argument %qE provably violates the precondition "
 				"of %qD: %qD is established outside the required "
 				"range", substituted, callee, field_groups[i].field);
+		      char est_buf[128], req_buf[128];
+		      inform (EXPR_LOCATION (call),
+			      "%qD is established %s, but the precondition "
+			      "requires it to be %s", field_groups[i].field,
+			      oa_range_fact_text (established.range, est_buf,
+						   sizeof (est_buf)),
+			      oa_range_fact_text (field_groups[i].range, req_buf,
+						   sizeof (req_buf)));
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		  else if (strict)
@@ -16191,6 +16199,14 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 				"of %qD: %qD is established outside the required "
 				"range", substituted, callee,
 				float_field_groups[i].field);
+		      char est_buf[128], req_buf[128];
+		      inform (EXPR_LOCATION (call),
+			      "%qD is established %s, but the precondition "
+			      "requires it to be %s", float_field_groups[i].field,
+			      oa_float_range_fact_text (established.range, est_buf,
+							 sizeof (est_buf)),
+			      oa_float_range_fact_text (float_field_groups[i].range,
+							 req_buf, sizeof (req_buf)));
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		  else if (strict)
@@ -16272,6 +16288,14 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 				"argument %qE provably violates the precondition "
 				"of %qD: %qD is established outside the required "
 				"range", substituted, callee, call_groups[i].callee);
+		      char est_buf[128], req_buf[128];
+		      inform (EXPR_LOCATION (call),
+			      "%qD is established %s, but the precondition "
+			      "requires it to be %s", call_groups[i].callee,
+			      oa_range_fact_text (established.range, est_buf,
+						   sizeof (est_buf)),
+			      oa_range_fact_text (call_groups[i].range, req_buf,
+						   sizeof (req_buf)));
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		  else if (strict)
@@ -16399,6 +16423,14 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 			"argument %qE provably violates the precondition "
 			"of %qD: %qD is established outside the required "
 			"range", substituted, callee, field_groups[i].field);
+	      char est_buf[128], req_buf[128];
+	      inform (EXPR_LOCATION (call),
+		      "%qD is established %s, but the precondition "
+		      "requires it to be %s", field_groups[i].field,
+		      oa_range_fact_text (established.range, est_buf,
+					   sizeof (est_buf)),
+		      oa_range_fact_text (field_groups[i].range, req_buf,
+					   sizeof (req_buf)));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else if (strict)
@@ -16485,6 +16517,14 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 			"of %qD: %qD is established outside the required "
 			"range", substituted, callee,
 			float_field_groups[i].field);
+	      char est_buf[128], req_buf[128];
+	      inform (EXPR_LOCATION (call),
+		      "%qD is established %s, but the precondition "
+		      "requires it to be %s", float_field_groups[i].field,
+		      oa_float_range_fact_text (established.range, est_buf,
+						 sizeof (est_buf)),
+		      oa_float_range_fact_text (float_field_groups[i].range,
+						 req_buf, sizeof (req_buf)));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else if (strict)
@@ -16606,6 +16646,14 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
 			"argument %qE provably violates the precondition "
 			"of %qD: %qD is established outside the required "
 			"range", substituted, callee, call_groups[i].callee);
+	      char est_buf[128], req_buf[128];
+	      inform (EXPR_LOCATION (call),
+		      "%qD is established %s, but the precondition "
+		      "requires it to be %s", call_groups[i].callee,
+		      oa_range_fact_text (established.range, est_buf,
+					   sizeof (est_buf)),
+		      oa_range_fact_text (call_groups[i].range, req_buf,
+					   sizeof (req_buf)));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else if (strict)
