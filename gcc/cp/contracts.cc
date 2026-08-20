@@ -15847,6 +15847,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 				    "cannot verify that field %qD of %qE satisfies "
 				    "the precondition of %qD", field_groups[i].field,
 				    substituted, callee);
+		      inform (EXPR_LOCATION (call), "%s",
+			      _(oa_unprovable_reason_text (OA_UNPROVABLE_NO_FACT)));
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		      continue;
 		    }
@@ -15872,6 +15874,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 				"cannot prove that field %qD of %qE satisfies "
 				"the precondition of %qD", field_groups[i].field,
 				substituted, callee);
+		      inform (EXPR_LOCATION (call), "%s",
+			      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		  else
@@ -15880,6 +15884,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 				  "cannot verify that field %qD of %qE satisfies "
 				  "the precondition of %qD", field_groups[i].field,
 				  substituted, callee);
+		      inform (EXPR_LOCATION (call), "%s",
+			      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		}
@@ -15932,6 +15938,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 				    "cannot verify that field %qD of %qE satisfies "
 				    "the precondition of %qD",
 				    float_field_groups[i].field, substituted, callee);
+		      inform (EXPR_LOCATION (call), "%s",
+			      _(oa_unprovable_reason_text (OA_UNPROVABLE_NO_FACT)));
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		      continue;
 		    }
@@ -15958,6 +15966,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 				"cannot prove that field %qD of %qE satisfies "
 				"the precondition of %qD",
 				float_field_groups[i].field, substituted, callee);
+		      inform (EXPR_LOCATION (call), "%s",
+			      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		  else
@@ -15966,6 +15976,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 				  "cannot verify that field %qD of %qE satisfies "
 				  "the precondition of %qD",
 				  float_field_groups[i].field, substituted, callee);
+		      inform (EXPR_LOCATION (call), "%s",
+			      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		}
@@ -16011,6 +16023,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 				    "cannot verify that %qD called on %qE satisfies "
 				    "the precondition of %qD", call_groups[i].callee,
 				    substituted, callee);
+		      inform (EXPR_LOCATION (call), "%s",
+			      _(oa_unprovable_reason_text (OA_UNPROVABLE_NO_FACT)));
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		      continue;
 		    }
@@ -16033,6 +16047,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 				"cannot prove that %qD called on %qE satisfies "
 				"the precondition of %qD", call_groups[i].callee,
 				substituted, callee);
+		      inform (EXPR_LOCATION (call), "%s",
+			      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		  else
@@ -16041,6 +16057,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 				  "cannot verify that %qD called on %qE satisfies "
 				  "the precondition of %qD", call_groups[i].callee,
 				  substituted, callee);
+		      inform (EXPR_LOCATION (call), "%s",
+			      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		}
@@ -16112,10 +16130,13 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	  /* Conveyor's own consult: a fact backed only by a symbolic
 	     contract's own, unverified trust must not satisfy a conveyor
 	     obligation -- see oa_predicate_fact's own comment.  Treated
-	     identically to "no fact found at all".  */
-	  if (!env.contract_field_range_get (identity, field_groups[i].field,
-					      &established)
-	      || !established.conveyor_established)
+	     identically to "no fact found at all" for proof purposes
+	     (never silently accepted either way), but distinguished for
+	     diagnostic purposes below (OA_UNPROVABLE_NO_FACT vs
+	     OA_UNPROVABLE_WEAKER_PROVENANCE).  */
+	  bool field_found = env.contract_field_range_get
+	    (identity, field_groups[i].field, &established);
+	  if (!field_found || !established.conveyor_established)
 	    {
 	      if (strict)
 		error_at (EXPR_LOCATION (call),
@@ -16127,6 +16148,10 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 			    "cannot verify that field %qD of %qE satisfies "
 			    "the precondition of %qD", field_groups[i].field,
 			    substituted, callee);
+	      if (const char *why = oa_unprovable_reason_text
+		    (field_found ? OA_UNPROVABLE_WEAKER_PROVENANCE
+				 : OA_UNPROVABLE_NO_FACT))
+		inform (EXPR_LOCATION (call), "%s", _(why));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
@@ -16149,6 +16174,8 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 			"cannot prove that field %qD of %qE satisfies "
 			"the precondition of %qD", field_groups[i].field,
 			substituted, callee);
+	      inform (EXPR_LOCATION (call), "%s",
+		      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else
@@ -16157,6 +16184,8 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 			  "cannot verify that field %qD of %qE satisfies "
 			  "the precondition of %qD", field_groups[i].field,
 			  substituted, callee);
+	      inform (EXPR_LOCATION (call), "%s",
+		      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	}
@@ -16190,9 +16219,9 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	  identity = env.alias_find (identity);
 
 	  oa_contract_float_field_range_fact established;
-	  if (!env.contract_float_field_range_get
-		(identity, float_field_groups[i].field, &established)
-	      || !established.conveyor_established)
+	  bool float_field_found = env.contract_float_field_range_get
+	    (identity, float_field_groups[i].field, &established);
+	  if (!float_field_found || !established.conveyor_established)
 	    {
 	      if (strict)
 		error_at (EXPR_LOCATION (call),
@@ -16204,6 +16233,10 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 			    "cannot verify that field %qD of %qE satisfies "
 			    "the precondition of %qD",
 			    float_field_groups[i].field, substituted, callee);
+	      if (const char *why = oa_unprovable_reason_text
+		    (float_field_found ? OA_UNPROVABLE_WEAKER_PROVENANCE
+				       : OA_UNPROVABLE_NO_FACT))
+		inform (EXPR_LOCATION (call), "%s", _(why));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
@@ -16227,6 +16260,8 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 			"cannot prove that field %qD of %qE satisfies "
 			"the precondition of %qD",
 			float_field_groups[i].field, substituted, callee);
+	      inform (EXPR_LOCATION (call), "%s",
+		      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else
@@ -16235,6 +16270,8 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 			  "cannot verify that field %qD of %qE satisfies "
 			  "the precondition of %qD",
 			  float_field_groups[i].field, substituted, callee);
+	      inform (EXPR_LOCATION (call), "%s",
+		      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	}
@@ -16302,10 +16339,11 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
 	  /* Conveyor's own consult: a fact backed only by a symbolic
 	     contract's own, unverified trust must not satisfy a conveyor
 	     obligation -- see oa_predicate_fact's own comment.  Treated
-	     identically to "no fact found at all".  */
-	  if (!env.contract_call_range_get (identity, call_groups[i].callee,
-					     &established)
-	      || !established.conveyor_established)
+	     identically to "no fact found at all" for proof purposes, but
+	     distinguished for diagnostic purposes below.  */
+	  bool call_found = env.contract_call_range_get
+	    (identity, call_groups[i].callee, &established);
+	  if (!call_found || !established.conveyor_established)
 	    {
 	      if (strict)
 		error_at (EXPR_LOCATION (call),
@@ -16317,6 +16355,10 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
 			    "cannot verify that %qD called on %qE satisfies "
 			    "the precondition of %qD", call_groups[i].callee,
 			    substituted, callee);
+	      if (const char *why = oa_unprovable_reason_text
+		    (call_found ? OA_UNPROVABLE_WEAKER_PROVENANCE
+				: OA_UNPROVABLE_NO_FACT))
+		inform (EXPR_LOCATION (call), "%s", _(why));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
@@ -16339,6 +16381,8 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
 			"cannot prove that %qD called on %qE satisfies "
 			"the precondition of %qD", call_groups[i].callee,
 			substituted, callee);
+	      inform (EXPR_LOCATION (call), "%s",
+		      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else
@@ -16347,6 +16391,8 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
 			  "cannot verify that %qD called on %qE satisfies "
 			  "the precondition of %qD", call_groups[i].callee,
 			  substituted, callee);
+	      inform (EXPR_LOCATION (call), "%s",
+		      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	}

@@ -36,6 +36,7 @@ struct thing {
 void relay (thing *p)
 {
   p->consume (); // { dg-warning "cannot verify that field .*count.*satisfies" }
+                 // { dg-message "no fact relating this value" "unprovable reason" { target *-*-* } .-1 }
 }
 
 int main () { thing t; t.count = 50; relay (&t); return 0; }

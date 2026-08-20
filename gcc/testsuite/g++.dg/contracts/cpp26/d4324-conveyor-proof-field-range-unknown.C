@@ -36,5 +36,6 @@ int main ()
   thing t;
   t.count = opaque ();
   t.consume_count (); // { dg-warning "cannot verify" }
+                      // { dg-message "no fact relating this value" "unprovable reason" { target *-*-* } .-1 }
   return 0;
 }
