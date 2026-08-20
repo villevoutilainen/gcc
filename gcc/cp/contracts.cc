@@ -13166,13 +13166,15 @@ static oa_proof_result oa_env_check_comparison_1
    oa_handle_call_conveyor_proof_obligation below needs it before that
    point in the file.  */
 static oa_proof_result oa_env_check_range_subsumption
-  (oa_env &env, tree expr, oa_range_fact &req);
+  (oa_env &env, tree expr, oa_range_fact &req,
+   oa_unprovable_reason *reason_out = nullptr);
 
 /* Forward-declared: the floating-point analogue of the two immediately
    above, for the same reason (oa_handle_call_conveyor_proof_obligation
    below needs it before its own later definition point).  */
 static oa_proof_result oa_env_check_float_range_subsumption
-  (oa_env &env, tree expr, oa_float_range_fact &req);
+  (oa_env &env, tree expr, oa_float_range_fact &req,
+   oa_unprovable_reason *reason_out = nullptr);
 
 /* Forward-declared: defined later, right after oa_call_postcondition_
    range_p; oa_handle_call_conveyor_proof_obligation below needs it
@@ -13995,6 +13997,7 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 	    {
 	      tree substituted = oa_substitute_call_expr (callee, call, gen_expr);
 	      oa_proof_result r;
+	      oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
 	      if (!substituted)
 		r = OA_UNKNOWN;
 	      else if (TREE_CODE (gen_const) == REAL_CST)
@@ -14004,7 +14007,8 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 		  oa_float_tighten_range_bound (req, gen_code,
 						 TREE_REAL_CST (gen_const),
 						 TREE_TYPE (gen_expr));
-		  r = oa_env_check_float_range_subsumption (env, substituted, req);
+		  r = oa_env_check_float_range_subsumption (env, substituted, req,
+							     &reason);
 		}
 	      else
 		{
@@ -14012,7 +14016,7 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 		  req.base = NULL_TREE;
 		  req.has_lo = req.has_hi = false;
 		  oa_tighten_range_bound (req, gen_code, wi::to_widest (gen_const));
-		  r = oa_env_check_range_subsumption (env, substituted, req);
+		  r = oa_env_check_range_subsumption (env, substituted, req, &reason);
 		}
 	      tree diag_expr = substituted ? substituted : *conjuncts[i];
 	      switch (r)
@@ -14034,6 +14038,8 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 		    warning_at (EXPR_LOCATION (call), 0,
 				"cannot verify that %qE satisfies the "
 				"precondition of %qD", diag_expr, callee);
+		  if (const char *why = oa_unprovable_reason_text (reason))
+		    inform (EXPR_LOCATION (call), "%s", _(why));
 		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		  break;
 		}
@@ -14055,8 +14061,10 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
       if (!substituted)
 	continue;
 
+      oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
       oa_proof_result r
-	= oa_env_check_range_subsumption (env, substituted, range_facts[idx]);
+	= oa_env_check_range_subsumption (env, substituted, range_facts[idx],
+					   &reason);
       switch (r)
 	{
 	case OA_PROVEN_TRUE:
@@ -14094,6 +14102,8 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 	    warning_at (EXPR_LOCATION (call), 0,
 			"cannot verify that %qE satisfies the "
 			"precondition of %qD", substituted, callee);
+	  if (const char *why = oa_unprovable_reason_text (reason))
+	    inform (EXPR_LOCATION (call), "%s", _(why));
 	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	  break;
 	}
@@ -14107,8 +14117,9 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
       if (!substituted)
 	continue;
 
+      oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
       oa_proof_result r = oa_env_check_float_range_subsumption
-	(env, substituted, float_range_facts[idx]);
+	(env, substituted, float_range_facts[idx], &reason);
       switch (r)
 	{
 	case OA_PROVEN_TRUE:
@@ -14128,6 +14139,8 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 	    warning_at (EXPR_LOCATION (call), 0,
 			"cannot verify that %qE satisfies the "
 			"precondition of %qD", substituted, callee);
+	  if (const char *why = oa_unprovable_reason_text (reason))
+	    inform (EXPR_LOCATION (call), "%s", _(why));
 	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	  break;
 	}
@@ -17344,6 +17357,8 @@ oa_handle_call_symbolic_scalar_precondition_obligation (tree call, oa_env &env)
 		warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify that %qE satisfies the precondition "
 			    "of %qD", substituted, callee);
+	      inform (EXPR_LOCATION (call), "%s",
+		      _(oa_unprovable_reason_text (OA_UNPROVABLE_NO_FACT)));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
@@ -17365,6 +17380,8 @@ oa_handle_call_symbolic_scalar_precondition_obligation (tree call, oa_env &env)
 	  error_at (EXPR_LOCATION (call),
 		    "cannot prove that %qE satisfies the precondition "
 		    "of %qD", substituted, callee);
+	  inform (EXPR_LOCATION (call), "%s",
+		  _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
 	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	}
       else
@@ -17372,6 +17389,8 @@ oa_handle_call_symbolic_scalar_precondition_obligation (tree call, oa_env &env)
 	  warning_at (EXPR_LOCATION (call), 0,
 		      "cannot verify that %qE satisfies the precondition "
 		      "of %qD", substituted, callee);
+	  inform (EXPR_LOCATION (call), "%s",
+		  _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
 	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	}
     }
@@ -24004,12 +24023,20 @@ oa_range_subsumption_result (oa_range_fact &arg, oa_range_fact &req)
    oa_range_subsumption_result.  */
 
 static oa_proof_result
-oa_env_check_range_subsumption (oa_env &env, tree expr, oa_range_fact &req)
+oa_env_check_range_subsumption (oa_env &env, tree expr, oa_range_fact &req,
+				 oa_unprovable_reason *reason_out)
 {
   oa_range_fact fact;
   if (!oa_get_range (expr, env, &fact))
-    return OA_UNKNOWN;
-  return oa_range_subsumption_result (fact, req);
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_NO_FACT;
+      return OA_UNKNOWN;
+    }
+  oa_proof_result r = oa_range_subsumption_result (fact, req);
+  if (r == OA_UNKNOWN && reason_out)
+    *reason_out = OA_UNPROVABLE_RANGE_PARTIAL;
+  return r;
 }
 
 /* D4324: the floating-point analogue of oa_range_subsumption_result/
@@ -24039,12 +24066,20 @@ oa_float_range_subsumption_result (oa_float_range_fact &arg,
 
 static oa_proof_result
 oa_env_check_float_range_subsumption (oa_env &env, tree expr,
-				       oa_float_range_fact &req)
+				       oa_float_range_fact &req,
+				       oa_unprovable_reason *reason_out)
 {
   oa_float_range_fact fact;
   if (!oa_get_float_range (expr, env, &fact))
-    return OA_UNKNOWN;
-  return oa_float_range_subsumption_result (fact, req);
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_NO_FACT;
+      return OA_UNKNOWN;
+    }
+  oa_proof_result r = oa_float_range_subsumption_result (fact, req);
+  if (r == OA_UNKNOWN && reason_out)
+    *reason_out = OA_UNPROVABLE_RANGE_PARTIAL;
+  return r;
 }
 
 /* The three-way answer a relational obligation's own consult needs: is

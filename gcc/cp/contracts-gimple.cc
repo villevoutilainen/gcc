@@ -3133,10 +3133,12 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  tree substituted = cg_resolve_call_argument (call, argno);
 
 	  cg_range_lite established_r;
-	  if (cg_established_range_of (substituted, established_range,
+	  bool have_range
+	    = cg_established_range_of (substituted, established_range,
 					scalar_range_cache, ranger,
 					check_as_conveyor,
-					check_as_symbolic, &established_r)
+					check_as_symbolic, &established_r);
+	  if (have_range
 	      && (!required.has_lo
 		  || (established_r.has_lo && established_r.lo >= required.lo))
 	      && (!required.has_hi
@@ -3151,6 +3153,17 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qE satisfies the precondition "
 			"of %qD", substituted, callee);
+	  /* See oa_unprovable_reason's own comment: cg_established_range_of
+	     tries several independent sources internally and collapses all
+	     of their own failures into one bare "false" -- UNRESOLVED_
+	     OPERAND is as specific as this consult can get without
+	     threading a reason through that function and each of its own
+	     sources individually (not done here, per .claude/plans/
+	     lazy-stirring-pearl.md's own Phase 4 scope).  */
+	  if (const char *why = oa_unprovable_reason_text
+		(have_range ? OA_UNPROVABLE_RANGE_PARTIAL
+			    : OA_UNPROVABLE_UNRESOLVED_OPERAND))
+	    inform (gimple_location (call), "%s", _(why));
 	}
     }
 }
