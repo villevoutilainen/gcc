@@ -34,6 +34,7 @@ void caller ()
 {
   int r = compute_negative ();
   use_positive (r); // { dg-error "provably violates the precondition" }
+                    // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
 }
 
 int main () { caller (); return 0; }

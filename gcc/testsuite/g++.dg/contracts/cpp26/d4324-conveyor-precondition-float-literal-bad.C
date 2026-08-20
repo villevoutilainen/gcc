@@ -26,6 +26,7 @@ void
 bad_call ()
 {
   take_percentage (150.0); // { dg-error "provably violates the precondition" }
+                           // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
 }
 
 int main () { return 0; }
