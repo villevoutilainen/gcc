@@ -106,6 +106,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "gimple-range.h"
 #include "cfganal.h"
 #include "hash-traits.h"
+#include "tree-pretty-print.h"
 
 /* Positional correspondence between CALLEE's own PARM_DECLs and CALL's
    actual argument expressions -- the GIMPLE-level analogue of
@@ -2805,6 +2806,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		  error_at (gimple_location (call),
 			    "argument %qE provably violates the "
 			    "precondition of %qD", substituted, callee);
+		  inform (gimple_location (call),
+			  "%qE is established to be exactly zero, but the "
+			  "precondition requires it to be nonzero",
+			  substituted);
 		  continue;
 		}
 	      if (cg_provable_nonzero_p (substituted, established_nz,
@@ -2877,6 +2882,9 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      error_at (gimple_location (call),
 			"argument %qE provably violates the precondition "
 			"of %qD", sub_param, callee);
+	      inform (gimple_location (call),
+		      "the required comparison %qE %s %qE does not hold",
+		      sub_param, op_symbol_code (rel_code), sub_other);
 	      continue;
 	    }
 

@@ -47,6 +47,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "context.h"
 #include "tree-pass.h"
 #include "real.h"
+#include "tree-pretty-print.h"
 
 /*  Design notes.
 
@@ -13786,6 +13787,17 @@ static void oa_handle_call_conveyor_field_range_obligation
 static void oa_handle_call_conveyor_call_range_obligation
   (tree call, oa_env &env);
 
+/* Forward-declared: full definitions are much further below (right
+   after oa_unprovable_reason_text, their own mirror-image sibling for
+   the OA_PROVEN_FALSE outcome -- see .claude/plans/lazy-stirring-
+   pearl.md), but oa_handle_precondition_simple_range_obligation below
+   and the relational-fact consult functions much further down both
+   need them before that point in the file.  */
+static char *oa_range_fact_text (const oa_range_fact &fact, char *buf,
+				  size_t n);
+static char *oa_float_range_fact_text (const oa_float_range_fact &fact,
+					char *buf, size_t n);
+
 /* Forward-declared for the same reason: defined just below this
    function, but needed here to substitute a relational obligation's
    own two parameters at this specific call site.  */
@@ -14048,25 +14060,28 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 	      tree substituted = oa_substitute_call_expr (callee, call, gen_expr);
 	      oa_proof_result r;
 	      oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
+	      bool gen_is_float = TREE_CODE (gen_const) == REAL_CST;
+	      oa_range_fact gen_req;
+	      oa_float_range_fact gen_float_req;
 	      if (!substituted)
 		r = OA_UNKNOWN;
-	      else if (TREE_CODE (gen_const) == REAL_CST)
+	      else if (gen_is_float)
 		{
-		  oa_float_range_fact req;
-		  req.has_lo = req.has_hi = false;
-		  oa_float_tighten_range_bound (req, gen_code,
+		  gen_float_req.has_lo = gen_float_req.has_hi = false;
+		  oa_float_tighten_range_bound (gen_float_req, gen_code,
 						 TREE_REAL_CST (gen_const),
 						 TREE_TYPE (gen_expr));
-		  r = oa_env_check_float_range_subsumption (env, substituted, req,
-							     &reason);
+		  r = oa_env_check_float_range_subsumption
+			(env, substituted, gen_float_req, &reason);
 		}
 	      else
 		{
-		  oa_range_fact req;
-		  req.base = NULL_TREE;
-		  req.has_lo = req.has_hi = false;
-		  oa_tighten_range_bound (req, gen_code, wi::to_widest (gen_const));
-		  r = oa_env_check_range_subsumption (env, substituted, req, &reason);
+		  gen_req.base = NULL_TREE;
+		  gen_req.has_lo = gen_req.has_hi = false;
+		  oa_tighten_range_bound (gen_req, gen_code,
+					   wi::to_widest (gen_const));
+		  r = oa_env_check_range_subsumption (env, substituted, gen_req,
+						       &reason);
 		}
 	      tree diag_expr = substituted ? substituted : *conjuncts[i];
 	      switch (r)
@@ -14074,10 +14089,39 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 		case OA_PROVEN_TRUE:
 		  break; /* Silently discharged.  */
 		case OA_PROVEN_FALSE:
-		  error_at (EXPR_LOCATION (call),
-			    "argument %qE provably violates the precondition "
-			    "of %qD", diag_expr, callee);
-		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  {
+		    error_at (EXPR_LOCATION (call),
+			      "argument %qE provably violates the "
+			      "precondition of %qD", diag_expr, callee);
+		    char est_buf[128], req_buf[128];
+		    if (gen_is_float)
+		      {
+			oa_float_range_fact established;
+			if (oa_get_float_range (substituted, env, &established))
+			  inform (EXPR_LOCATION (call),
+				  "%qE is established %s, but the "
+				  "precondition requires it to be %s",
+				  diag_expr,
+				  oa_float_range_fact_text (established, est_buf,
+							     sizeof (est_buf)),
+				  oa_float_range_fact_text (gen_float_req, req_buf,
+							     sizeof (req_buf)));
+		      }
+		    else
+		      {
+			oa_range_fact established;
+			if (oa_get_range (substituted, env, &established))
+			  inform (EXPR_LOCATION (call),
+				  "%qE is established %s, but the "
+				  "precondition requires it to be %s",
+				  diag_expr,
+				  oa_range_fact_text (established, est_buf,
+						       sizeof (est_buf)),
+				  oa_range_fact_text (gen_req, req_buf,
+						       sizeof (req_buf)));
+		      }
+		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  }
 		  break;
 		case OA_UNKNOWN:
 		  if (strict)
@@ -14129,19 +14173,30 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 	    }
 	  break;
 	case OA_PROVEN_FALSE:
-	  error_at (EXPR_LOCATION (call),
-		    "argument %qE provably violates the precondition "
-		    "of %qD", substituted, callee);
-	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
-	  if (conveyor && flag_dump_contract_proofs)
-	    {
-	      oa_range_fact established;
-	      if (oa_get_range (substituted, env, &established))
-		oa_emit_range_certificate (EXPR_LOCATION (call), callee,
-					   established, range_facts[idx],
-					   /*proven_false=*/true,
-					   oa_get_range_derivation (substituted, env));
-	    }
+	  {
+	    error_at (EXPR_LOCATION (call),
+		      "argument %qE provably violates the precondition "
+		      "of %qD", substituted, callee);
+	    oa_range_fact established;
+	    bool have_established = oa_get_range (substituted, env, &established);
+	    if (have_established)
+	      {
+		char est_buf[128], req_buf[128];
+		inform (EXPR_LOCATION (call),
+			"%qE is established %s, but the precondition "
+			"requires it to be %s", substituted,
+			oa_range_fact_text (established, est_buf,
+					     sizeof (est_buf)),
+			oa_range_fact_text (range_facts[idx], req_buf,
+					     sizeof (req_buf)));
+	      }
+	    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    if (conveyor && flag_dump_contract_proofs && have_established)
+	      oa_emit_range_certificate (EXPR_LOCATION (call), callee,
+					 established, range_facts[idx],
+					 /*proven_false=*/true,
+					 oa_get_range_derivation (substituted, env));
+	  }
 	  break;
 	case OA_UNKNOWN:
 	  if (strict)
@@ -14175,10 +14230,24 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 	case OA_PROVEN_TRUE:
 	  break;
 	case OA_PROVEN_FALSE:
-	  error_at (EXPR_LOCATION (call),
-		    "argument %qE provably violates the precondition "
-		    "of %qD", substituted, callee);
-	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  {
+	    error_at (EXPR_LOCATION (call),
+		      "argument %qE provably violates the precondition "
+		      "of %qD", substituted, callee);
+	    oa_float_range_fact established;
+	    if (oa_get_float_range (substituted, env, &established))
+	      {
+		char est_buf[128], req_buf[128];
+		inform (EXPR_LOCATION (call),
+			"%qE is established %s, but the precondition "
+			"requires it to be %s", substituted,
+			oa_float_range_fact_text (established, est_buf,
+						   sizeof (est_buf)),
+			oa_float_range_fact_text (float_range_facts[idx],
+						   req_buf, sizeof (req_buf)));
+	      }
+	    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  }
 	  break;
 	case OA_UNKNOWN:
 	  if (strict)
@@ -25068,6 +25137,74 @@ oa_unprovable_reason_text (oa_unprovable_reason reason)
 		 "source, not created by the calling function itself");
     }
   gcc_unreachable ();
+}
+
+/* D4324 (see .claude/plans/lazy-stirring-pearl.md): the mirror-image
+   helper to oa_unprovable_reason_text above, for the OTHER outcome --
+   OA_PROVEN_FALSE, "provably violates," rather than OA_UNKNOWN, "cannot
+   verify." There the useful "why" was a decline *category*, since no
+   concrete value exists to show; here the engine already has a
+   concrete contradicting interval in hand at the exact point it
+   concludes OA_PROVEN_FALSE, so the useful "why" is to print that
+   interval directly rather than name a category. FACT is rendered as
+   a short clause suitable as a %s inside a sentence like "established
+   %s, but requires %s" -- both the established and required sides of
+   any given obligation are formatted with this same function, so the
+   two clauses always read consistently. Returns BUF itself so callers
+   can use the call expression directly as a printf argument.  */
+
+static char *
+oa_range_fact_text (const oa_range_fact &fact, char *buf, size_t n)
+{
+  if (fact.has_lo && fact.has_hi && fact.lo == fact.hi)
+    snprintf (buf, n, "exactly " HOST_WIDE_INT_PRINT_DEC,
+	      fact.lo.to_shwi ());
+  else if (fact.has_lo && fact.has_hi)
+    snprintf (buf, n, "in [" HOST_WIDE_INT_PRINT_DEC ", "
+	      HOST_WIDE_INT_PRINT_DEC "]",
+	      fact.lo.to_shwi (), fact.hi.to_shwi ());
+  else if (fact.has_lo)
+    snprintf (buf, n, ">= " HOST_WIDE_INT_PRINT_DEC, fact.lo.to_shwi ());
+  else if (fact.has_hi)
+    snprintf (buf, n, "<= " HOST_WIDE_INT_PRINT_DEC, fact.hi.to_shwi ());
+  else
+    snprintf (buf, n, "unconstrained");
+  return buf;
+}
+
+/* The floating-point analogue of oa_range_fact_text immediately above
+   -- same calling convention, same rationale.  */
+
+static char *
+oa_float_range_fact_text (const oa_float_range_fact &fact, char *buf,
+			   size_t n)
+{
+  char lo_str[64], hi_str[64];
+  if (fact.has_lo && fact.has_hi
+      && real_identical (&fact.lo, &fact.hi))
+    {
+      real_to_decimal (lo_str, &fact.lo, sizeof (lo_str), 0, 1);
+      snprintf (buf, n, "exactly %s", lo_str);
+    }
+  else if (fact.has_lo && fact.has_hi)
+    {
+      real_to_decimal (lo_str, &fact.lo, sizeof (lo_str), 0, 1);
+      real_to_decimal (hi_str, &fact.hi, sizeof (hi_str), 0, 1);
+      snprintf (buf, n, "in [%s, %s]", lo_str, hi_str);
+    }
+  else if (fact.has_lo)
+    {
+      real_to_decimal (lo_str, &fact.lo, sizeof (lo_str), 0, 1);
+      snprintf (buf, n, ">= %s", lo_str);
+    }
+  else if (fact.has_hi)
+    {
+      real_to_decimal (hi_str, &fact.hi, sizeof (hi_str), 0, 1);
+      snprintf (buf, n, "<= %s", hi_str);
+    }
+  else
+    snprintf (buf, n, "unconstrained");
+  return buf;
 }
 
 /* D4324 (see .claude/plans/lazy-stirring-pearl.md, Part 4): recognize

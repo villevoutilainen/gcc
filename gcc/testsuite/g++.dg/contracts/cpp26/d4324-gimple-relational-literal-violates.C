@@ -25,5 +25,6 @@ inline constexpr conveyor_ctrl ctrl_v{};
 int f (int x, int const q) pre<ctrl_v> (x < q) { return x; }
 
 int caller () { return f (5, 2); } // { dg-error "provably violates the precondition" }
+                                    // { dg-message "the required comparison" "established fact" { target *-*-* } .-1 }
 
 int main () { return 0; }

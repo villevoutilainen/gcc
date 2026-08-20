@@ -1,9 +1,11 @@
-// D4324/P2680: -fcontract-conveyor-proofs, comparison-conjunct proof,
-// OA_PROVEN_FALSE case -- compute_negative's postcondition establishes a
-// range (< 0) that provably violates use_positive's "x > 0" precondition
-// for every possible value.  A genuine, confirmed bug the compiler's
-// mandatory pass has no way to catch without this flag (it only ever
-// recognizes std::is_object_address conjuncts).
+// D4324/P2680: -fcontract-conveyor-proofs, the general-comparison
+// fallback (oa_match_general_comparison, for a conjunct shaped as
+// "EXPR OP <literal>" where EXPR isn't a bare parameter -- here a
+// value-preserving cast, '(long) x > 0') hitting OA_PROVEN_FALSE, not
+// just the bare-parameter range_parms case d4324-conveyor-proof-
+// comparison-bad.C already covers. Exercises the established-fact
+// follow-up note's own general-comparison branch specifically (see
+// .claude/plans/lazy-stirring-pearl.md).
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
 
@@ -25,7 +27,7 @@ int compute_negative () post<conveyor_ctrl_v>(r: r < 0)
   return -1;
 }
 
-void use_positive (int x) pre<conveyor_ctrl_v>(x > 0)
+void use_positive_long (int x) pre<conveyor_ctrl_v>((long) x > 0)
 {
   (void) x;
 }
@@ -33,8 +35,8 @@ void use_positive (int x) pre<conveyor_ctrl_v>(x > 0)
 void caller ()
 {
   int r = compute_negative ();
-  use_positive (r); // { dg-error "provably violates the precondition" }
-                    // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
+  use_positive_long (r); // { dg-error "provably violates the precondition" }
+                         // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
 }
 
 int main () { caller (); return 0; }

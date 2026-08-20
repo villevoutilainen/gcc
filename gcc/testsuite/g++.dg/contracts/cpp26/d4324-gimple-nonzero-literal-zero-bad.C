@@ -29,6 +29,7 @@ int consumer (int n) pre<conveyor_ctrl_v>(n != 0) { return 10 / n; }
 int caller ()
 {
   return consumer (0); // { dg-error "provably violates the precondition" }
+                       // { dg-message "is established to be exactly zero" "established fact" { target *-*-* } .-1 }
 }
 
 int main () { return 0; }
