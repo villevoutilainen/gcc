@@ -510,7 +510,8 @@ extern bool oa_match_shifted_comparison_against_call
   (tree conjunct, oa_env &env, tree *param_out, tree_code *code_out,
    tree *rhs_receiver_out, tree *rhs_callee_out, widest_int *offset_out,
    bool allow_symbolic_accessor, tree *arithmetic_type_out = nullptr,
-   bool *param_is_minuend_out = nullptr);
+   bool *param_is_minuend_out = nullptr,
+   oa_unprovable_reason *reason_out = nullptr);
 
 /* True if every value FROM_TYPE can represent converts to TO_TYPE
    without changing its mathematical value (e.g. safe for 'unsigned' ->

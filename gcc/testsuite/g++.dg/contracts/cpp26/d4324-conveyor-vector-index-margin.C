@@ -85,6 +85,7 @@ int use_margin_only_declines (std::vector<int>& v, std::vector<int>::size_type i
       // could have wrapped (idx > v.size ()), so even this plain,
       // unshifted access can no longer be proven safe.
       return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
+                     // { dg-message "arithmetic could itself wrap" "unprovable reason" { target *-*-* } .-1 }
     }
   return -1;
 }
@@ -128,6 +129,7 @@ int use_unsound (std::vector<int>& v, std::vector<int>::size_type idx)
       idx += 15; // past the established margin (idx+15 could be as large
 		 // as size ()+4)
       return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
+                     // { dg-message "does not fully cover" "unprovable reason" { target *-*-* } .-1 }
     }
   return -1;
 }
