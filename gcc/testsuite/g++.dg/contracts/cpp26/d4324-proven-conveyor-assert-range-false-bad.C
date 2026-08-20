@@ -21,6 +21,7 @@ demo_false ()
   int i = 20;
   contract_assert<sc::proven_conveyor_v>(i >= 0
 					  && i < 10); // { dg-error "is provably false" }
+                                              // { dg-message "established \[^\n\]*" "established fact" { target *-*-* } .-1 }
   return 0;
 }
 
