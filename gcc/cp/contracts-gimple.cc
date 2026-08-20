@@ -153,6 +153,29 @@ struct cg_range_lite
   widest_int lo = 0, hi = 0;
 };
 
+/* This engine's own local mirror of contracts.cc's oa_range_fact_text
+   (see .claude/plans/lazy-stirring-pearl.md) -- same rationale and
+   calling convention, just over this file's own CG_RANGE_LITE rather
+   than sharing contracts.cc's private OA_RANGE_FACT type.  */
+
+static char *
+cg_range_lite_text (const cg_range_lite &fact, char *buf, size_t n)
+{
+  if (fact.has_lo && fact.has_hi && fact.lo == fact.hi)
+    snprintf (buf, n, "exactly " HOST_WIDE_INT_PRINT_DEC, fact.lo.to_shwi ());
+  else if (fact.has_lo && fact.has_hi)
+    snprintf (buf, n, "in [" HOST_WIDE_INT_PRINT_DEC ", "
+	      HOST_WIDE_INT_PRINT_DEC "]",
+	      fact.lo.to_shwi (), fact.hi.to_shwi ());
+  else if (fact.has_lo)
+    snprintf (buf, n, ">= " HOST_WIDE_INT_PRINT_DEC, fact.lo.to_shwi ());
+  else if (fact.has_hi)
+    snprintf (buf, n, "<= " HOST_WIDE_INT_PRINT_DEC, fact.hi.to_shwi ());
+  else
+    snprintf (buf, n, "unconstrained");
+  return buf;
+}
+
 /* OFFSET (D4324 Commit 2, generalized to an interval in Commit 4):
    mirrors contracts.cc's own oa_relational_fact exactly -- the fact
    actually holds for '(the SSA name this is keyed on - OFFSET) CODE
@@ -2949,9 +2972,17 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		  continue; /* Proven true: silently discharged.  */
 		if (r == OA_RANGE_DISJOINT)
 		  {
+		    char established_buf[128];
+		    cg_range_lite_text (param_range, established_buf,
+					 sizeof (established_buf));
 		    error_at (gimple_location (call),
 			      "argument %qE provably violates the "
 			      "precondition of %qD", sub_param, callee);
+		    inform (gimple_location (call),
+			    "%qE is established %s, but the precondition "
+			    "requires it to be %s %qE", sub_param,
+			    established_buf, op_symbol_code (rel_code),
+			    sub_other);
 		    continue;
 		  }
 		if (reason == OA_UNPROVABLE_NO_FACT)
@@ -5566,9 +5597,16 @@ cg_check_call_range_relational (gcall *call,
 	  else if (r == OA_RANGE_DISJOINT)
 	    {
 	      verdict_out->add (call);
+	      char established_buf[128];
+	      cg_range_lite_text (param_range, established_buf,
+				   sizeof (established_buf));
 	      error_at (gimple_location (call),
 			"argument %qE provably violates the precondition "
 			"of %qD", sub_param, callee);
+	      inform (gimple_location (call),
+		      "%qE is established %s, but the precondition requires "
+		      "it to be %s %qD ()", sub_param, established_buf,
+		      op_symbol_code (rel_code), rhs_callee);
 	    }
 	}
     }
@@ -5709,6 +5747,28 @@ cg_check_call_relational_fact (gcall *call,
 	      error_at (gimple_location (call),
 			"argument %qE provably violates the precondition "
 			"of %qD", sub_param, callee);
+	      char established_buf[128];
+	      if (fact_offset.has_lo && fact_offset.has_hi
+		  && fact_offset.lo == fact_offset.hi && fact_offset.lo == 0)
+		snprintf (established_buf, sizeof (established_buf),
+			  "%s the call's result", op_symbol_code (fact_code));
+	      else if (fact_offset.has_lo && fact_offset.has_hi
+		       && fact_offset.lo == fact_offset.hi)
+		snprintf (established_buf, sizeof (established_buf),
+			  "%s the call's result plus " HOST_WIDE_INT_PRINT_DEC,
+			  op_symbol_code (fact_code), fact_offset.lo.to_shwi ());
+	      else
+		{
+		  char off_buf[64];
+		  cg_range_lite_text (fact_offset, off_buf, sizeof (off_buf));
+		  snprintf (established_buf, sizeof (established_buf),
+			    "%s the call's result plus an offset %s",
+			    op_symbol_code (fact_code), off_buf);
+		}
+	      inform (gimple_location (call),
+		      "%qE is established %s, but the precondition requires "
+		      "it to be %s %qD ()", sub_param, established_buf,
+		      op_symbol_code (rel_code), rhs_callee);
 	    }
 	}
 

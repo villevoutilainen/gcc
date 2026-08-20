@@ -61,6 +61,7 @@ int use_unsound (test_vector& v)
 		// size () fact (unrelated to this change -- see the
 		// sibling, fixed-literal test's own comment)
   return first + v[idx]; // { dg-error "provably violates the precondition" }
+                          // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
 }
 
 int main ()
