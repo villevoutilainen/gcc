@@ -16,6 +16,13 @@
 // 'symbolic', and has no declared relation of its own to derive from, so
 // open_symbolic()'s own postcondition self-check now also, correctly,
 // cannot verify is_opened(this) from its own trivial body.
+//
+// The follow-up dg-message on read_conveyor()'s own call demonstrates
+// the diagnostic-precision work (oa_unprovable_reason, contracts.h):
+// this is OA_UNPROVABLE_WEAKER_PROVENANCE specifically -- a fact *is*
+// established (by open_symbolic()'s own postcondition) and it's for the
+// right object and the right predicate, it's just not conveyor-strict,
+// which is exactly the one-way-trust rule this whole test demonstrates.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -fcontract-symbolic-proofs" }
 
@@ -50,6 +57,7 @@ void caller ()
   io_facility f;
   f.open_symbolic ();
   f.read_conveyor (); // { dg-warning "cannot verify" }
+                      // { dg-message "weaker .non-conveyor. trust" "unprovable reason" { target *-*-* } .-1 }
 }
 
 int main () { caller (); return 0; }

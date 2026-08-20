@@ -101,6 +101,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-pass.h"
 #include "context.h"
 #include "diagnostic.h"
+#include "intl.h"
 #include "stringpool.h"
 #include "gimple-range.h"
 #include "cfganal.h"
@@ -3811,6 +3812,12 @@ cg_consult_persistent_facts (gcall *call,
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qD (%qE) holds, as required by "
 			"the precondition of %qD", pred_fn, substituted, callee);
+	  oa_unprovable_reason reason
+	    = !fact ? OA_UNPROVABLE_NO_FACT
+	      : fact->pred_fn != pred_fn ? OA_UNPROVABLE_WRONG_IDENTITY
+	      : OA_UNPROVABLE_WEAKER_PROVENANCE;
+	  if (const char *why = oa_unprovable_reason_text (reason))
+	    inform (gimple_location (call), "%s", _(why));
 	}
 
       auto_vec<cg_field_group_lite> field_groups;

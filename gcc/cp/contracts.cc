@@ -13240,7 +13240,8 @@ oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
 
 static oa_proof_result
 oa_env_predicate_result (oa_env &env, tree substituted, tree pred_fn,
-			  bool required_polarity, bool require_conveyor)
+			  bool required_polarity, bool require_conveyor,
+			  oa_unprovable_reason *reason_out = nullptr)
 {
   /* Consult-only copy-construction lookthrough -- see oa_handle_call_
      symbolic_precondition_obligation's own predicate block for why
@@ -13254,13 +13255,23 @@ oa_env_predicate_result (oa_env &env, tree substituted, tree pred_fn,
       && !oa_field_slot_identity (substituted, env, &identity)
       && !oa_array_slot_identity (substituted, env, &identity)
       && !oa_field_object_identity (substituted, env, &identity))
-    return OA_UNKNOWN;
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_NO_FACT;
+      return OA_UNKNOWN;
+    }
   identity = env.alias_find (identity);
   oa_predicate_fact fact;
   bool found = env.predicate_fact_get (identity, &fact);
   if (!found || fact.pred_fn != pred_fn
       || (require_conveyor && !fact.conveyor_established))
-    return OA_UNKNOWN;
+    {
+      if (reason_out)
+	*reason_out = !found ? OA_UNPROVABLE_NO_FACT
+		      : fact.pred_fn != pred_fn ? OA_UNPROVABLE_WRONG_IDENTITY
+		      : OA_UNPROVABLE_WEAKER_PROVENANCE;
+      return OA_UNKNOWN;
+    }
   return (fact.polarity == required_polarity) ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
 }
 
@@ -14357,9 +14368,10 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 
 	  tree substituted = call_is_aggr_init
 	    ? AGGR_INIT_EXPR_ARG (call, argno) : CALL_EXPR_ARG (call, argno);
+	  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 	  oa_proof_result pr
 	    = oa_env_predicate_result (env, substituted, pred_fn, !negated,
-				       /*require_conveyor=*/true);
+				       /*require_conveyor=*/true, &reason);
 	  if (pr == OA_UNKNOWN)
 	    {
 	      /* D4324: no established identity-based fact -- fall back to
@@ -14408,6 +14420,8 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify that %qD (%qE) holds, as required by "
 			    "the precondition of %qD", pred_fn, substituted, callee);
+	      if (const char *why = oa_unprovable_reason_text (reason))
+		inform (EXPR_LOCATION (call), "%s", _(why));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
@@ -15400,7 +15414,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 
 	  bool required = !negated;
 	  oa_predicate_fact fact;
-	  if (!env.predicate_fact_get (identity, &fact) || fact.pred_fn != pred_fn)
+	  bool found = env.predicate_fact_get (identity, &fact);
+	  if (!found || fact.pred_fn != pred_fn)
 	    {
 	      if (strict)
 		error_at (EXPR_LOCATION (call),
@@ -15410,6 +15425,9 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify that %qD (%qE) holds, as required by "
 			    "the precondition of %qD", pred_fn, substituted, callee);
+	      if (const char *why = oa_unprovable_reason_text
+		    (!found ? OA_UNPROVABLE_NO_FACT : OA_UNPROVABLE_WRONG_IDENTITY))
+		inform (EXPR_LOCATION (call), "%s", _(why));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
@@ -24729,6 +24747,44 @@ oa_integral_conversion_value_preserving_p (tree from_type, tree to_type)
      value the source type could actually hold.  */
   return TYPE_UNSIGNED (from_type) && !TYPE_UNSIGNED (to_type)
 	 && TYPE_PRECISION (to_type) > TYPE_PRECISION (from_type);
+}
+
+/* See oa_unprovable_reason's own comment (contracts.h) for the full
+   rationale and calling convention.  Every string here is meant to
+   stand alone as a short, complete inform() sentence fragment, since
+   that's how every caller uses it (a follow-up note right after the
+   primary "cannot verify"/"cannot prove" diagnostic).  */
+
+const char *
+oa_unprovable_reason_text (oa_unprovable_reason reason)
+{
+  switch (reason)
+    {
+    case OA_UNPROVABLE_NONE:
+      return NULL;
+    case OA_UNPROVABLE_NO_FACT:
+      return G_("no fact relating this value to the required comparison "
+		 "has been established");
+    case OA_UNPROVABLE_WRONG_IDENTITY:
+      return G_("an established fact exists, but for a different object "
+		 "or accessor");
+    case OA_UNPROVABLE_WEAKER_PROVENANCE:
+      return G_("an established fact exists, but only under weaker "
+		 "(non-conveyor) trust than this check requires");
+    case OA_UNPROVABLE_RANGE_PARTIAL:
+      return G_("a numeric range is known but does not fully cover the "
+		 "required bound");
+    case OA_UNPROVABLE_SIGN_AMBIGUOUS:
+      return G_("the value's own sign is not established, so its "
+		 "conversion cannot be shown value-preserving");
+    case OA_UNPROVABLE_NO_WRAP_COMPANION:
+      return G_("the arithmetic could itself wrap without an independent "
+		 "fact bounding it first");
+    case OA_UNPROVABLE_UNRESOLVED_OPERAND:
+      return G_("one of the operands has no determinable range at this "
+		 "point");
+    }
+  gcc_unreachable ();
 }
 
 /* D4324 (see .claude/plans/lazy-stirring-pearl.md, Part 4): recognize
