@@ -13823,7 +13823,8 @@ static bool oa_match_general_comparison (tree conjunct, tree *expr_out,
 static oa_proof_result oa_env_check_relational_fact_1
   (oa_env &env, tree substituted_param, tree_code required_code,
    tree substituted_other, bool require_conveyor,
-   oa_unprovable_reason *reason_out = nullptr);
+   oa_unprovable_reason *reason_out = nullptr,
+   char *established_out = nullptr, size_t established_out_size = 0);
 
 /* Forward-declared for the same reason as oa_env_check_relational_
    fact_1 immediately above: the call analogue. REQUIRED_OFFSET
@@ -13834,14 +13835,17 @@ static oa_proof_result oa_env_check_call_relational_fact_1
   (oa_env &env, tree substituted_param, tree_code required_code,
    tree substituted_rhs_receiver, tree substituted_rhs_callee,
    bool require_conveyor, widest_int required_offset = 0,
-   oa_unprovable_reason *reason_out = nullptr);
+   oa_unprovable_reason *reason_out = nullptr,
+   char *established_out = nullptr, size_t established_out_size = 0);
 
 /* Forward-declared for the same reason as oa_env_check_relational_
    fact_1 above: the call-vs-call analogue.  */
 static oa_proof_result oa_env_check_call_call_relational_fact_1
   (oa_env &env, tree substituted_lhs_receiver, tree substituted_lhs_callee,
    tree_code required_code, tree substituted_rhs_receiver,
-   tree substituted_rhs_callee, bool require_conveyor);
+   tree substituted_rhs_callee, bool require_conveyor,
+   oa_unprovable_reason *reason_out = nullptr,
+   char *established_out = nullptr, size_t established_out_size = 0);
 
 /* True if an established relational fact of code ESTABLISHED is
    strong enough to satisfy a required comparison of code REQUIRED --
@@ -14322,9 +14326,11 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	      tree sub_param = oa_substitute_call_arg (callee, call, rel_param);
 	      tree sub_other = oa_substitute_call_arg (callee, call, rel_other);
 	      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+	      char established_buf[128];
 	      oa_proof_result rel_pr
 		= oa_env_check_relational_fact_1 (env, sub_param, rel_code, sub_other,
-					   /*require_conveyor=*/true, &reason);
+					   /*require_conveyor=*/true, &reason,
+					   established_buf, sizeof (established_buf));
 	      switch (rel_pr)
 		{
 		case OA_PROVEN_TRUE:
@@ -14333,6 +14339,10 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		  error_at (EXPR_LOCATION (call),
 			    "argument %qE provably violates the precondition "
 			    "of %qD", sub_param, callee);
+		  inform (EXPR_LOCATION (call),
+			  "%qE is established %s, but the precondition "
+			  "requires it to be %s %qE", sub_param, established_buf,
+			  op_symbol_code (rel_code), sub_other);
 		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		  break;
 		case OA_UNKNOWN:
@@ -14368,11 +14378,13 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		tree sub_receiver
 		  = oa_substitute_call_arg (callee, call, rhs_receiver);
 		oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+		char established_buf[128];
 		oa_proof_result rel_pr
 		  = oa_env_check_call_relational_fact_1 (env, sub_param, rel_code2,
 							  sub_receiver, rhs_callee,
 							  /*require_conveyor=*/true,
-							  0, &reason);
+							  0, &reason, established_buf,
+							  sizeof (established_buf));
 		switch (rel_pr)
 		  {
 		  case OA_PROVEN_TRUE:
@@ -14381,6 +14393,10 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		    error_at (EXPR_LOCATION (call),
 			      "argument %qE provably violates the precondition "
 			      "of %qD", sub_param, callee);
+		    inform (EXPR_LOCATION (call),
+			    "%qE is established %s, but the precondition "
+			    "requires it to be %s %qD ()", sub_param, established_buf,
+			    op_symbol_code (rel_code2), rhs_callee);
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  case OA_UNKNOWN:
@@ -14424,11 +14440,13 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		tree sub_receiver
 		  = oa_substitute_call_arg (callee, call, rhs_receiver);
 		oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+		char established_buf[128];
 		oa_proof_result rel_pr
 		  = oa_env_check_call_relational_fact_1 (env, sub_param, rel_code2,
 							  sub_receiver, rhs_callee,
 							  /*require_conveyor=*/true,
-							  offset, &reason);
+							  offset, &reason, established_buf,
+							  sizeof (established_buf));
 		switch (rel_pr)
 		  {
 		  case OA_PROVEN_TRUE:
@@ -14437,6 +14455,17 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		    error_at (EXPR_LOCATION (call),
 			      "argument %qE provably violates the precondition "
 			      "of %qD", sub_param, callee);
+		    if (offset == 0)
+		      inform (EXPR_LOCATION (call),
+			      "%qE is established %s, but the precondition "
+			      "requires it to be %s %qD ()", sub_param,
+			      established_buf, op_symbol_code (rel_code2), rhs_callee);
+		    else
+		      inform (EXPR_LOCATION (call),
+			      "%qE is established %s, but the precondition "
+			      "requires it to be %s %qD () plus %wd", sub_param,
+			      established_buf, op_symbol_code (rel_code2), rhs_callee,
+			      offset.to_shwi ());
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  case OA_UNKNOWN:
@@ -14477,10 +14506,13 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		tree sub_rhs_receiver
 		  = oa_strip_conversion_call
 		      (oa_substitute_call_arg (callee, call, rhs_receiver));
+		oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+		char established_buf[128];
 		oa_proof_result rel_pr
 		  = oa_env_check_call_call_relational_fact_1
 		      (env, sub_lhs_receiver, lhs_callee, call_code,
-		       sub_rhs_receiver, rhs_callee, /*require_conveyor=*/true);
+		       sub_rhs_receiver, rhs_callee, /*require_conveyor=*/true,
+		       &reason, established_buf, sizeof (established_buf));
 		switch (rel_pr)
 		  {
 		  case OA_PROVEN_TRUE:
@@ -14489,6 +14521,11 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		    error_at (EXPR_LOCATION (call),
 			      "argument %qE provably violates the precondition "
 			      "of %qD", sub_lhs_receiver, callee);
+		    inform (EXPR_LOCATION (call),
+			    "%qD called on %qE is established %s, but the "
+			    "precondition requires it to be %s %qD called on %qE",
+			    lhs_callee, sub_lhs_receiver, established_buf,
+			    op_symbol_code (call_code), rhs_callee, sub_rhs_receiver);
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  case OA_UNKNOWN:
@@ -14504,6 +14541,8 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 				  "the precondition of %qD", lhs_callee,
 				  sub_lhs_receiver ? sub_lhs_receiver : lhs_receiver,
 				  callee);
+		    if (const char *why = oa_unprovable_reason_text (reason))
+		      inform (EXPR_LOCATION (call), "%s", _(why));
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  }
@@ -15685,9 +15724,11 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 
 	  tree sub_param = oa_substitute_call_arg (callee, call, rel_param);
 	  tree sub_other = oa_substitute_call_arg (callee, call, rel_other);
+	  char established_buf[128];
 	  oa_proof_result rel_pr
 	    = oa_env_check_relational_fact_1 (env, sub_param, rel_code, sub_other,
-					/*require_conveyor=*/false);
+					/*require_conveyor=*/false, nullptr,
+					established_buf, sizeof (established_buf));
 	  switch (rel_pr)
 	    {
 	    case OA_PROVEN_TRUE:
@@ -15696,6 +15737,10 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	      error_at (EXPR_LOCATION (call),
 			"argument %qE provably violates the precondition "
 			"of %qD", sub_param, callee);
+	      inform (EXPR_LOCATION (call),
+		      "%qE is established %s, but the precondition "
+		      "requires it to be %s %qE", sub_param, established_buf,
+		      op_symbol_code (rel_code), sub_other);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    case OA_UNKNOWN:
@@ -15729,10 +15774,14 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 
 	  tree sub_param = oa_substitute_call_arg (callee, call, rel_param);
 	  tree sub_receiver = oa_substitute_call_arg (callee, call, rhs_receiver);
+	  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+	  char established_buf[128];
 	  oa_proof_result rel_pr
 	    = oa_env_check_call_relational_fact_1 (env, sub_param, rel_code,
 						    sub_receiver, rhs_callee,
-						    /*require_conveyor=*/false);
+						    /*require_conveyor=*/false,
+						    0, &reason, established_buf,
+						    sizeof (established_buf));
 	  switch (rel_pr)
 	    {
 	    case OA_PROVEN_TRUE:
@@ -15741,6 +15790,10 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	      error_at (EXPR_LOCATION (call),
 			"argument %qE provably violates the precondition "
 			"of %qD", sub_param, callee);
+	      inform (EXPR_LOCATION (call),
+		      "%qE is established %s, but the precondition "
+		      "requires it to be %s %qD ()", sub_param, established_buf,
+		      op_symbol_code (rel_code), rhs_callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    case OA_UNKNOWN:
@@ -15754,6 +15807,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 			    "cannot verify that %qE satisfies the "
 			    "precondition of %qD",
 			    sub_param ? sub_param : rel_param, callee);
+	      if (const char *why = oa_unprovable_reason_text (reason))
+		inform (EXPR_LOCATION (call), "%s", _(why));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
@@ -15776,11 +15831,14 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 
 	  tree sub_param = oa_substitute_call_arg (callee, call, rel_param);
 	  tree sub_receiver = oa_substitute_call_arg (callee, call, rhs_receiver);
+	  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+	  char established_buf[128];
 	  oa_proof_result rel_pr
 	    = oa_env_check_call_relational_fact_1 (env, sub_param, rel_code,
 						    sub_receiver, rhs_callee,
 						    /*require_conveyor=*/false,
-						    offset);
+						    offset, &reason, established_buf,
+						    sizeof (established_buf));
 	  switch (rel_pr)
 	    {
 	    case OA_PROVEN_TRUE:
@@ -15789,6 +15847,17 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	      error_at (EXPR_LOCATION (call),
 			"argument %qE provably violates the precondition "
 			"of %qD", sub_param, callee);
+	      if (offset == 0)
+		inform (EXPR_LOCATION (call),
+			"%qE is established %s, but the precondition "
+			"requires it to be %s %qD ()", sub_param, established_buf,
+			op_symbol_code (rel_code), rhs_callee);
+	      else
+		inform (EXPR_LOCATION (call),
+			"%qE is established %s, but the precondition "
+			"requires it to be %s %qD () plus %wd", sub_param,
+			established_buf, op_symbol_code (rel_code), rhs_callee,
+			offset.to_shwi ());
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    case OA_UNKNOWN:
@@ -15802,6 +15871,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 			    "cannot verify that %qE satisfies the "
 			    "precondition of %qD",
 			    sub_param ? sub_param : rel_param, callee);
+	      if (const char *why = oa_unprovable_reason_text (reason))
+		inform (EXPR_LOCATION (call), "%s", _(why));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
@@ -15827,10 +15898,13 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	  tree sub_rhs_receiver
 	    = oa_strip_conversion_call
 		(oa_substitute_call_arg (callee, call, rhs_receiver));
+	  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+	  char established_buf[128];
 	  oa_proof_result rel_pr
 	    = oa_env_check_call_call_relational_fact_1
 		(env, sub_lhs_receiver, lhs_callee, call_code,
-		 sub_rhs_receiver, rhs_callee, /*require_conveyor=*/false);
+		 sub_rhs_receiver, rhs_callee, /*require_conveyor=*/false,
+		 &reason, established_buf, sizeof (established_buf));
 	  switch (rel_pr)
 	    {
 	    case OA_PROVEN_TRUE:
@@ -15839,6 +15913,11 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	      error_at (EXPR_LOCATION (call),
 			"argument %qE provably violates the precondition "
 			"of %qD", sub_lhs_receiver, callee);
+	      inform (EXPR_LOCATION (call),
+		      "%qD called on %qE is established %s, but the "
+		      "precondition requires it to be %s %qD called on %qE",
+		      lhs_callee, sub_lhs_receiver, established_buf,
+		      op_symbol_code (call_code), rhs_callee, sub_rhs_receiver);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    case OA_UNKNOWN:
@@ -15854,6 +15933,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 			    "the precondition of %qD", lhs_callee,
 			    sub_lhs_receiver ? sub_lhs_receiver : lhs_receiver,
 			    callee);
+	      if (const char *why = oa_unprovable_reason_text (reason))
+		inform (EXPR_LOCATION (call), "%s", _(why));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
@@ -24273,7 +24354,9 @@ static oa_proof_result
 oa_env_check_relational_fact_1 (oa_env &env, tree substituted_param,
 				 tree_code required_code, tree substituted_other,
 				 bool require_conveyor,
-				 oa_unprovable_reason *reason_out)
+				 oa_unprovable_reason *reason_out,
+				 char *established_out,
+				 size_t established_out_size)
 {
   tree stripped_param = oa_strip_to_relational_operand (substituted_param);
   tree stripped_other = oa_strip_to_relational_operand (substituted_other);
@@ -24281,16 +24364,34 @@ oa_env_check_relational_fact_1 (oa_env &env, tree substituted_param,
   if (stripped_param && stripped_other
       && TREE_CODE (stripped_param) == INTEGER_CST
       && TREE_CODE (stripped_other) == INTEGER_CST)
-    return oa_relational_literal_holds (required_code, stripped_param,
-					 stripped_other)
-	   ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
+    {
+      if (oa_relational_literal_holds (required_code, stripped_param,
+					stripped_other))
+	return OA_PROVEN_TRUE;
+      if (established_out)
+	snprintf (established_out, established_out_size,
+		  "exactly " HOST_WIDE_INT_PRINT_DEC,
+		  wi::to_widest (stripped_param).to_shwi ());
+      return OA_PROVEN_FALSE;
+    }
 
   if (stripped_param && stripped_other
       && TREE_CODE (stripped_param) == REAL_CST
       && TREE_CODE (stripped_other) == REAL_CST)
-    return oa_float_relational_literal_holds (required_code, stripped_param,
-					       stripped_other)
-	   ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
+    {
+      if (oa_float_relational_literal_holds (required_code, stripped_param,
+					      stripped_other))
+	return OA_PROVEN_TRUE;
+      if (established_out)
+	{
+	  char num_buf[64];
+	  real_to_decimal (num_buf, TREE_REAL_CST_PTR (stripped_param),
+			    sizeof (num_buf), 0, 1);
+	  snprintf (established_out, established_out_size, "exactly %s",
+		    num_buf);
+	}
+      return OA_PROVEN_FALSE;
+    }
 
   oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
   oa_relational_fact fact;
@@ -24323,7 +24424,12 @@ oa_env_check_relational_fact_1 (oa_env &env, tree substituted_param,
       if (r == OA_RANGE_SUBSUMED)
 	return OA_PROVEN_TRUE;
       if (r == OA_RANGE_DISJOINT)
-	return OA_PROVEN_FALSE;
+	{
+	  if (established_out)
+	    oa_range_fact_text (param_range, established_out,
+				 established_out_size);
+	  return OA_PROVEN_FALSE;
+	}
       if (reason == OA_UNPROVABLE_NO_FACT)
 	reason = OA_UNPROVABLE_RANGE_PARTIAL;
     }
@@ -24344,7 +24450,12 @@ oa_env_check_relational_fact_1 (oa_env &env, tree substituted_param,
       if (r == OA_RANGE_SUBSUMED)
 	return OA_PROVEN_TRUE;
       if (r == OA_RANGE_DISJOINT)
-	return OA_PROVEN_FALSE;
+	{
+	  if (established_out)
+	    oa_float_range_fact_text (float_param_range, established_out,
+				       established_out_size);
+	  return OA_PROVEN_FALSE;
+	}
       if (reason == OA_UNPROVABLE_NO_FACT)
 	reason = OA_UNPROVABLE_RANGE_PARTIAL;
     }
@@ -24509,7 +24620,9 @@ oa_env_check_call_relational_fact_1 (oa_env &env, tree substituted_param,
 				       tree substituted_rhs_callee,
 				       bool require_conveyor,
 				       widest_int required_offset /* = 0 */,
-				       oa_unprovable_reason *reason_out)
+				       oa_unprovable_reason *reason_out,
+				       char *established_out,
+				       size_t established_out_size)
 {
   oa_call_relational_fact fact;
   bool have_fact = oa_get_call_relational (substituted_param, env, &fact);
@@ -24559,7 +24672,29 @@ oa_env_check_call_relational_fact_1 (oa_env &env, tree substituted_param,
       && (!require_conveyor || fact.conveyor_established)
       && oa_call_relational_contradicts_p (fact.code, fact.offset,
 					     required_code, required_offset))
-    return OA_PROVEN_FALSE;
+    {
+      if (established_out)
+	{
+	  if (fact.offset.has_lo && fact.offset.has_hi
+	      && fact.offset.lo == fact.offset.hi && fact.offset.lo == 0)
+	    snprintf (established_out, established_out_size,
+		      "%s the call's result", op_symbol_code (fact.code));
+	  else if (fact.offset.has_lo && fact.offset.has_hi
+		   && fact.offset.lo == fact.offset.hi)
+	    snprintf (established_out, established_out_size,
+		      "%s the call's result plus " HOST_WIDE_INT_PRINT_DEC,
+		      op_symbol_code (fact.code), fact.offset.lo.to_shwi ());
+	  else
+	    {
+	      char off_buf[64];
+	      oa_range_fact_text (fact.offset, off_buf, sizeof (off_buf));
+	      snprintf (established_out, established_out_size,
+			"%s the call's result plus an offset %s",
+			op_symbol_code (fact.code), off_buf);
+	    }
+	}
+      return OA_PROVEN_FALSE;
+    }
 
   /* Bounds-proving demo (see .claude/plans/lazy-stirring-pearl.md): no
      explicit linked fact -- but SUBSTITUTED_PARAM's own independently-
@@ -24601,7 +24736,12 @@ oa_env_check_call_relational_fact_1 (oa_env &env, tree substituted_param,
 	      if (r == OA_RANGE_SUBSUMED)
 		return OA_PROVEN_TRUE;
 	      if (r == OA_RANGE_DISJOINT)
-		return OA_PROVEN_FALSE;
+		{
+		  if (established_out)
+		    oa_range_fact_text (param_range, established_out,
+					 established_out_size);
+		  return OA_PROVEN_FALSE;
+		}
 	      if (reason == OA_UNPROVABLE_NO_FACT)
 		reason = OA_UNPROVABLE_RANGE_PARTIAL;
 	    }
@@ -24653,7 +24793,10 @@ oa_env_check_call_call_relational_fact_1 (oa_env &env,
 					    tree_code required_code,
 					    tree substituted_rhs_receiver,
 					    tree substituted_rhs_callee,
-					    bool require_conveyor)
+					    bool require_conveyor,
+					    oa_unprovable_reason *reason_out,
+					    char *established_out,
+					    size_t established_out_size)
 {
   tree stripped = oa_strip_conversion_call (substituted_lhs_receiver);
   tree identity;
@@ -24661,17 +24804,32 @@ oa_env_check_call_call_relational_fact_1 (oa_env &env,
       && !oa_field_slot_identity (stripped, env, &identity)
       && !oa_array_slot_identity (stripped, env, &identity)
       && !oa_field_object_identity (stripped, env, &identity))
-    return OA_UNKNOWN;
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_NO_FACT;
+      return OA_UNKNOWN;
+    }
   identity = env.alias_find (identity);
 
+  oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
   oa_call_call_relational_fact fact;
-  if (env.call_call_relational_get (identity, substituted_lhs_callee, &fact)
-      && oa_relational_code_implies (fact.code, required_code)
-      && (!require_conveyor || fact.conveyor_established)
-      && fact.rhs_callee == substituted_rhs_callee
-      && (oa_strip_to_relational_operand (fact.rhs_receiver)
-	  == oa_strip_to_relational_operand (substituted_rhs_receiver)))
-    return OA_PROVEN_TRUE;
+  bool have_fact = env.call_call_relational_get (identity, substituted_lhs_callee,
+						  &fact);
+  if (have_fact)
+    {
+      bool same_accessor
+	= fact.rhs_callee == substituted_rhs_callee
+	  && (oa_strip_to_relational_operand (fact.rhs_receiver)
+	      == oa_strip_to_relational_operand (substituted_rhs_receiver));
+      if (!same_accessor)
+	reason = OA_UNPROVABLE_WRONG_IDENTITY;
+      else if (require_conveyor && !fact.conveyor_established)
+	reason = OA_UNPROVABLE_WEAKER_PROVENANCE;
+      else if (oa_relational_code_implies (fact.code, required_code))
+	return OA_PROVEN_TRUE;
+      else
+	reason = OA_UNPROVABLE_RANGE_PARTIAL;
+    }
 
   /* Bounds-proving demo: no explicit linked fact -- but each side's own
      independently-established call-range fact might still settle this
@@ -24700,11 +24858,20 @@ oa_env_check_call_call_relational_fact_1 (oa_env &env,
 	      if (r == OA_RANGE_SUBSUMED)
 		return OA_PROVEN_TRUE;
 	      if (r == OA_RANGE_DISJOINT)
-		return OA_PROVEN_FALSE;
+		{
+		  if (established_out)
+		    oa_range_fact_text (lhs_fact.range, established_out,
+					 established_out_size);
+		  return OA_PROVEN_FALSE;
+		}
+	      if (reason == OA_UNPROVABLE_NO_FACT)
+		reason = OA_UNPROVABLE_RANGE_PARTIAL;
 	    }
 	}
     }
 
+  if (reason_out)
+    *reason_out = reason;
   return OA_UNKNOWN;
 }
 

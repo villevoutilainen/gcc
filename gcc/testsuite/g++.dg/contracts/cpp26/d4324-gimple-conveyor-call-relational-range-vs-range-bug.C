@@ -55,6 +55,7 @@ int use_unsound (test_vector& v)
   v.resize (5); // re-affirm: v[idx] above already invalidated v's own
 		// size () fact (unrelated to this change)
   return first + v[idx]; // { dg-error "provably violates the precondition" }
+                          // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
 }
 
 int main ()

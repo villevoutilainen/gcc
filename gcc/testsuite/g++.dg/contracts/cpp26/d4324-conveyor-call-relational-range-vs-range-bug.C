@@ -70,6 +70,7 @@ int use_unsound (test_vector& v)
   idx += 10;
   v.resize_to_5 ();
   return first + v[idx]; // { dg-error "provably violates the precondition" }
+                          // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
 }
 
 int main ()

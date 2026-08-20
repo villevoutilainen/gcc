@@ -63,6 +63,7 @@ int shifted_past_the_boundary (std::vector<int>& v,
     {
       idx += 15;
       return v[idx]; // { dg-error "provably violates the precondition" }
+                      // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
     }
   return -1;
 }
@@ -74,6 +75,7 @@ int exactly_at_the_edge (std::vector<int>& v,
     {
       idx += 4;
       return v[idx]; // { dg-error "provably violates the precondition" }
+                      // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
     }
   return -1;
 }
@@ -110,6 +112,7 @@ int idx_signed_nonneg_violates (std::vector<int>& v, int idx)
     {
       idx += 15; // past the boundary, same as shifted_past_the_boundary
       return v[idx]; // { dg-error "provably violates the precondition" }
+                      // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
     }
   return -1;
 }
