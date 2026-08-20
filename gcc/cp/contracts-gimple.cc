@@ -2851,6 +2851,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	     arrive as q's own converted SSA result, not q itself, and
 	     never match FACT_RHS (q, as self-trust originally recorded
 	     it).  */
+	  oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
 	  {
 	    hash_map<tree, cg_rel_fact> empty_rel_cache;
 	    tree_code fact_code;
@@ -2861,12 +2862,18 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 				     established_range, scalar_range_cache, ranger,
 				     check_as_conveyor, check_as_symbolic,
 				     &fact_code, &fact_rhs, &fact_offset,
-				     &fact_conveyor_established)
-		&& oa_relational_code_implies (fact_code, rel_code)
-		&& cg_offset_compatible_with_code (fact_offset, rel_code)
-		&& (!require_conveyor || fact_conveyor_established)
-		&& fact_rhs == sub_other)
-	      continue; /* Proven true: silently discharged.  */
+				     &fact_conveyor_established))
+	      {
+		if (fact_rhs != sub_other)
+		  reason = OA_UNPROVABLE_WRONG_IDENTITY;
+		else if (require_conveyor && !fact_conveyor_established)
+		  reason = OA_UNPROVABLE_WEAKER_PROVENANCE;
+		else if (oa_relational_code_implies (fact_code, rel_code)
+			 && cg_offset_compatible_with_code (fact_offset, rel_code))
+		  continue; /* Proven true: silently discharged.  */
+		else
+		  reason = OA_UNPROVABLE_RANGE_PARTIAL;
+	      }
 	  }
 
 	  /* Bounds-proving demo (see .claude/plans/lazy-stirring-pearl.md):
@@ -2900,6 +2907,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 			      "precondition of %qD", sub_param, callee);
 		    continue;
 		  }
+		if (reason == OA_UNPROVABLE_NO_FACT)
+		  reason = OA_UNPROVABLE_RANGE_PARTIAL;
 	      }
 	  }
 
@@ -2921,6 +2930,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qE satisfies the "
 			"precondition of %qD", sub_param, callee);
+	  if (const char *why = oa_unprovable_reason_text (reason))
+	    inform (gimple_location (call), "%s", _(why));
 	}
 
       /* The call analogue of the relational loop just above (e.g.
@@ -2985,8 +2996,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 				       &fact_code, &fact_rhs_receiver,
 				       &fact_rhs_callee, &fact_offset,
 				       &fact_conveyor_established);
-	  if (have_fact && fact_rhs_callee == rhs_callee
-	      && fact_rhs_receiver == sub_receiver
+	  bool same_accessor
+	    = have_fact && fact_rhs_callee == rhs_callee
+	      && fact_rhs_receiver == sub_receiver;
+	  if (same_accessor
 	      && oa_relational_code_implies (fact_code, rel_code)
 	      && cg_offset_compatible_with_code (fact_offset, rel_code)
 	      && (!require_conveyor || fact_conveyor_established))
@@ -3013,6 +3026,33 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qE satisfies the "
 			"precondition of %qD", sub_param, callee);
+	  /* NOTE: unlike contracts.cc's own oa_env_check_call_relational_
+	     fact_1 (which can consult oa_env::unprovable_reason_hint_get to
+	     enrich a bare "no fact" with why a branch-derived margin fact
+	     failed to establish, via a hint oa_refine_single_comparison
+	     records directly into the same, single, shared oa_env), this
+	     function runs in a separate, later pass from cg_predicate_
+	     facts_walk's own dominator-scoped fixed point (see this pass's
+	     own two-phase structure, pass_contracts_gimple::execute) --
+	     any such hint recorded into a per-block cg_dom_fact_state
+	     during that earlier walk would already be out of scope by the
+	     time this later, independent pass runs, unless cg_predicate_
+	     facts_walk were extended to flatten and export it the same way
+	     it already does for SCALAR_RANGE_CACHE_OUT. Not done here -- a
+	     known, GIMPLE-specific asymmetry, left as a documented gap
+	     rather than chased in this pass; NO_FACT is still strictly
+	     more precise than nothing for every other case below.  */
+	  oa_unprovable_reason reason;
+	  if (!have_fact)
+	    reason = OA_UNPROVABLE_NO_FACT;
+	  else if (!same_accessor)
+	    reason = OA_UNPROVABLE_WRONG_IDENTITY;
+	  else if (require_conveyor && !fact_conveyor_established)
+	    reason = OA_UNPROVABLE_WEAKER_PROVENANCE;
+	  else
+	    reason = OA_UNPROVABLE_RANGE_PARTIAL;
+	  if (const char *why = oa_unprovable_reason_text (reason))
+	    inform (gimple_location (call), "%s", _(why));
 	}
 
       /* The call-vs-call analogue of the call-relational loop just
@@ -4567,20 +4607,29 @@ static bool
 cg_shifted_operand_conversion_ok_p (tree operand, tree param,
 				      hash_map<tree, cg_range_lite> &established_range,
 				      gimple_ranger *ranger, bool require_conveyor,
-				      bool require_symbolic, gimple *at_stmt)
+				      bool require_symbolic, gimple *at_stmt,
+				      oa_unprovable_reason *reason_out = nullptr)
 {
   if (oa_integral_conversion_value_preserving_p (TREE_TYPE (param),
 						   TREE_TYPE (operand)))
     return true;
   if (TYPE_UNSIGNED (TREE_TYPE (param)) || !TYPE_UNSIGNED (TREE_TYPE (operand)))
-    return false;
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_SIGN_AMBIGUOUS;
+      return false;
+    }
   hash_map<tree, cg_range_lite> empty_scalar_range_cache;
   cg_range_lite param_range;
-  return cg_established_range_of (param, established_range,
-				    empty_scalar_range_cache, ranger,
-				    require_conveyor, require_symbolic,
-				    &param_range, at_stmt)
-	 && param_range.has_lo && param_range.lo >= 0;
+  if (cg_established_range_of (param, established_range,
+				 empty_scalar_range_cache, ranger,
+				 require_conveyor, require_symbolic,
+				 &param_range, at_stmt)
+      && param_range.has_lo && param_range.lo >= 0)
+    return true;
+  if (reason_out)
+    *reason_out = OA_UNPROVABLE_SIGN_AMBIGUOUS;
+  return false;
 }
 
 static bool
@@ -4593,7 +4642,8 @@ cg_match_shifted_comparison_against_call (tree other,
 					    tree *rhs_receiver_out,
 					    tree *rhs_callee_out,
 					    bool *negate_out,
-					    tree *arithmetic_type_out)
+					    tree *arithmetic_type_out,
+					    oa_unprovable_reason *reason_out = nullptr)
 {
   if (TREE_CODE (other) != SSA_NAME)
     return false;
@@ -4610,7 +4660,8 @@ cg_match_shifted_comparison_against_call (tree other,
   if (cg_cond_is_bare_param (op1, &param)
       && cg_shifted_operand_conversion_ok_p (op1, param, established_range,
 					       ranger, require_conveyor,
-					       require_symbolic, at_stmt)
+					       require_symbolic, at_stmt,
+					       reason_out)
       && cg_cond_operand_shape (op0, &is_call, &field, &base, &callee,
 				 &receiver)
       && is_call)
@@ -4625,7 +4676,8 @@ cg_match_shifted_comparison_against_call (tree other,
   if (cg_cond_is_bare_param (op0, &param)
       && cg_shifted_operand_conversion_ok_p (op0, param, established_range,
 					       ranger, require_conveyor,
-					       require_symbolic, at_stmt)
+					       require_symbolic, at_stmt,
+					       reason_out)
       && cg_cond_operand_shape (op1, &is_call, &field, &base, &callee,
 				 &receiver)
       && is_call)
@@ -4655,21 +4707,38 @@ cg_match_shifted_comparison_against_call (tree other,
 static bool
 cg_shifted_comparison_no_wrap_ok_p (hash_map<tree, cg_call_rel_fact> &call_rel,
 				      tree param, tree receiver, tree callee,
-				      tree arithmetic_type, bool param_is_minuend)
+				      tree arithmetic_type, bool param_is_minuend,
+				      oa_unprovable_reason *reason_out = nullptr)
 {
   if (!INTEGRAL_TYPE_P (arithmetic_type) || TYPE_OVERFLOW_UNDEFINED (arithmetic_type))
     return true;
 
   cg_call_rel_fact *fact = call_rel.get (param);
   if (!fact)
-    return false;
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_NO_WRAP_COMPANION;
+      return false;
+    }
   if (fact->rhs_callee != callee || fact->rhs_receiver != receiver)
-    return false;
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_WRONG_IDENTITY;
+      return false;
+    }
   if (!cg_range_lite_equal (fact->offset, cg_range_lite_exact (0)))
-    return false;
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_NO_WRAP_COMPANION;
+      return false;
+    }
 
   tree_code required = param_is_minuend ? GE_EXPR : LE_EXPR;
-  return oa_relational_code_implies (fact->code, required);
+  if (oa_relational_code_implies (fact->code, required))
+    return true;
+  if (reason_out)
+    *reason_out = OA_UNPROVABLE_NO_WRAP_COMPANION;
+  return false;
 }
 
 /* D4324 Commit 3: the relational analogue of cg_refine_edge_into's own

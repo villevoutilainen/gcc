@@ -7458,6 +7458,35 @@ public:
       m_call_relational_map.put (to_keep[i], kept_facts[i]);
   }
 
+  /* A diagnostic-only side channel (see oa_unprovable_reason's own
+     comment, contracts.h): when an *establishment* site (oa_refine_
+     single_comparison's or oa_establish_shared_substrate_self_trust's
+     own shift-shaped block) declines to record a margin fact for DECL
+     because oa_shifted_comparison_no_wrap_ok_p/oa_shifted_operand_
+     conversion_ok_p found a specific reason (e.g. no independent fact
+     rules out the subtraction itself wrapping), that reason would
+     otherwise be lost by the time a *later*, separate consult site
+     (oa_env_check_call_relational_fact_1) discovers "no fact" for the
+     very same DECL and has to fall back to a generic OA_UNPROVABLE_
+     NO_FACT. This map bridges the two: set once at the declining
+     establishment site, consulted (never itself gating any proof
+     decision -- purely explanatory) at the point a consult would
+     otherwise report the bare, less specific NO_FACT.  Overwritten,
+     never accumulated, matching every other per-DECL fact in this
+     class; never invalidated on its own (a stale hint pointing at the
+     wrong reason for an unrelated later "no fact" is merely a slightly
+     less helpful note, never a soundness concern, so it isn't worth
+     the bookkeeping every other real fact's own invalidation needs).  */
+  void unprovable_reason_hint_set (tree decl, oa_unprovable_reason reason)
+  {
+    m_unprovable_reason_hint_map.put (decl, reason);
+  }
+  oa_unprovable_reason unprovable_reason_hint_get (tree decl)
+  {
+    oa_unprovable_reason *v = m_unprovable_reason_hint_map.get (decl);
+    return v ? *v : OA_UNPROVABLE_NONE;
+  }
+
   /* The call-vs-call analogue of call_relational_get/set/invalidate/
      merge_with immediately above, for oa_call_call_relational_fact keyed
      on (lhs_receiver identity, lhs_callee) instead of a single decl --
@@ -8018,6 +8047,9 @@ public:
     m_call_relational_map.empty ();
     for (auto it : other.m_call_relational_map)
       m_call_relational_map.put (it.first, it.second);
+    m_unprovable_reason_hint_map.empty ();
+    for (auto it : other.m_unprovable_reason_hint_map)
+      m_unprovable_reason_hint_map.put (it.first, it.second);
     m_call_call_relational_map.empty ();
     for (auto it : other.m_call_call_relational_map)
       m_call_call_relational_map.put (it.first, it.second);
@@ -8060,6 +8092,17 @@ public:
      from the read pass, rather than mutating m_map while iterating it.  */
   void merge_with (oa_env &other)
   {
+    /* Diagnostic-only (see unprovable_reason_hint_set's own comment):
+       a plain, permissive union rather than this function's own
+       agreement-based discipline for every other map below -- a hint
+       surviving from only one arm is still strictly more helpful than
+       none at all, and (unlike every other fact here) can never itself
+       cause an unsound proof if it happens to be stale in the other
+       arm.  */
+    for (auto it : other.m_unprovable_reason_hint_map)
+      if (!m_unprovable_reason_hint_map.get (it.first))
+	m_unprovable_reason_hint_map.put (it.first, it.second);
+
     auto_vec<tree> to_invalidate;
     for (auto it : m_map)
       if (it.second)
@@ -8195,6 +8238,7 @@ private:
   hash_map<tree, oa_relational_fact> m_relational_map;
   hash_map<tree, oa_type_bound_fact> m_type_bound_map;
   hash_map<tree, oa_call_relational_fact> m_call_relational_map;
+  hash_map<tree, oa_unprovable_reason> m_unprovable_reason_hint_map;
   hash_map<oa_field_key_hash, oa_call_call_relational_fact> m_call_call_relational_map;
   hash_map<tree, oa_range_fact> m_contract_scalar_range_map;
   hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_contract_field_range_map;
@@ -10907,23 +10951,40 @@ oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
 static bool
 oa_shifted_comparison_no_wrap_ok_p (oa_env &env, tree param, tree receiver,
 				      tree callee, tree arithmetic_type,
-				      bool param_is_minuend)
+				      bool param_is_minuend,
+				      oa_unprovable_reason *reason_out = nullptr)
 {
   if (!INTEGRAL_TYPE_P (arithmetic_type) || TYPE_OVERFLOW_UNDEFINED (arithmetic_type))
     return true;
 
   oa_call_relational_fact fact;
   if (!env.call_relational_get (param, &fact))
-    return false;
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_NO_WRAP_COMPANION;
+      return false;
+    }
   if (fact.rhs_callee != callee
       || (oa_strip_to_relational_operand (fact.rhs_receiver)
 	  != oa_strip_to_relational_operand (receiver)))
-    return false;
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_WRONG_IDENTITY;
+      return false;
+    }
   if (!oa_range_fact_equal (fact.offset, oa_range_fact_exact (0)))
-    return false;
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_NO_WRAP_COMPANION;
+      return false;
+    }
 
   tree_code required = param_is_minuend ? GE_EXPR : LE_EXPR;
-  return oa_relational_code_implies (fact.code, required);
+  if (oa_relational_code_implies (fact.code, required))
+    return true;
+  if (reason_out)
+    *reason_out = OA_UNPROVABLE_NO_WRAP_COMPANION;
+  return false;
 }
 
 static void
@@ -11166,24 +11227,38 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
 						     &offset,
 						     /*allow_symbolic_accessor=*/false,
 						     &arithmetic_type,
-						     &param_is_minuend)
-	&& oa_shifted_comparison_no_wrap_ok_p (env, param, rhs_receiver,
-						 rhs_callee, arithmetic_type,
-						 param_is_minuend))
+						     &param_is_minuend))
       {
-	if (!asserted_true)
-	  switch (rel_code)
-	    {
-	    case LT_EXPR: rel_code = GE_EXPR; break;
-	    case LE_EXPR: rel_code = GT_EXPR; break;
-	    case GT_EXPR: rel_code = LE_EXPR; break;
-	    case GE_EXPR: rel_code = LT_EXPR; break;
-	    default: return;
-	    }
-	env.call_relational_set (param, rel_code, rhs_receiver, rhs_callee,
-				   /*conveyor_established=*/true,
-				   oa_range_fact_exact (offset));
-	return;
+	oa_unprovable_reason no_wrap_reason = OA_UNPROVABLE_NONE;
+	if (!oa_shifted_comparison_no_wrap_ok_p (env, param, rhs_receiver,
+						   rhs_callee, arithmetic_type,
+						   param_is_minuend,
+						   &no_wrap_reason))
+	  {
+	    /* See oa_env::unprovable_reason_hint_set's own comment: this
+	       margin fact is about to go unestablished, which a much
+	       later, separate consult site would otherwise only ever see
+	       as a bare "no fact" -- record why here, while the reason is
+	       still known, so that consult can surface it instead.  */
+	    if (no_wrap_reason != OA_UNPROVABLE_NONE)
+	      env.unprovable_reason_hint_set (param, no_wrap_reason);
+	  }
+	else
+	  {
+	    if (!asserted_true)
+	      switch (rel_code)
+		{
+		case LT_EXPR: rel_code = GE_EXPR; break;
+		case LE_EXPR: rel_code = GT_EXPR; break;
+		case GT_EXPR: rel_code = LE_EXPR; break;
+		case GE_EXPR: rel_code = LT_EXPR; break;
+		default: return;
+		}
+	    env.call_relational_set (param, rel_code, rhs_receiver, rhs_callee,
+				       /*conveyor_established=*/true,
+				       oa_range_fact_exact (offset));
+	    return;
+	  }
       }
   }
 
@@ -13683,7 +13758,8 @@ static bool oa_match_general_comparison (tree conjunct, tree *expr_out,
    file.  */
 static oa_proof_result oa_env_check_relational_fact_1
   (oa_env &env, tree substituted_param, tree_code required_code,
-   tree substituted_other, bool require_conveyor);
+   tree substituted_other, bool require_conveyor,
+   oa_unprovable_reason *reason_out = nullptr);
 
 /* Forward-declared for the same reason as oa_env_check_relational_
    fact_1 immediately above: the call analogue. REQUIRED_OFFSET
@@ -13693,7 +13769,8 @@ static oa_proof_result oa_env_check_relational_fact_1
 static oa_proof_result oa_env_check_call_relational_fact_1
   (oa_env &env, tree substituted_param, tree_code required_code,
    tree substituted_rhs_receiver, tree substituted_rhs_callee,
-   bool require_conveyor, widest_int required_offset = 0);
+   bool require_conveyor, widest_int required_offset = 0,
+   oa_unprovable_reason *reason_out = nullptr);
 
 /* Forward-declared for the same reason as oa_env_check_relational_
    fact_1 above: the call-vs-call analogue.  */
@@ -14112,9 +14189,10 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	    {
 	      tree sub_param = oa_substitute_call_arg (callee, call, rel_param);
 	      tree sub_other = oa_substitute_call_arg (callee, call, rel_other);
+	      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 	      oa_proof_result rel_pr
 		= oa_env_check_relational_fact_1 (env, sub_param, rel_code, sub_other,
-					   /*require_conveyor=*/true);
+					   /*require_conveyor=*/true, &reason);
 	      switch (rel_pr)
 		{
 		case OA_PROVEN_TRUE:
@@ -14136,6 +14214,8 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 				"cannot verify that %qE satisfies the "
 				"precondition of %qD",
 				sub_param ? sub_param : rel_param, callee);
+		  if (const char *why = oa_unprovable_reason_text (reason))
+		    inform (EXPR_LOCATION (call), "%s", _(why));
 		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		  break;
 		}
@@ -14155,10 +14235,12 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		tree sub_param = oa_substitute_call_arg (callee, call, rel_param2);
 		tree sub_receiver
 		  = oa_substitute_call_arg (callee, call, rhs_receiver);
+		oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 		oa_proof_result rel_pr
 		  = oa_env_check_call_relational_fact_1 (env, sub_param, rel_code2,
 							  sub_receiver, rhs_callee,
-							  /*require_conveyor=*/true);
+							  /*require_conveyor=*/true,
+							  0, &reason);
 		switch (rel_pr)
 		  {
 		  case OA_PROVEN_TRUE:
@@ -14180,6 +14262,8 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 				  "cannot verify that %qE satisfies the "
 				  "precondition of %qD",
 				  sub_param ? sub_param : rel_param2, callee);
+		    if (const char *why = oa_unprovable_reason_text (reason))
+		      inform (EXPR_LOCATION (call), "%s", _(why));
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  }
@@ -14197,19 +14281,22 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	    tree rel_param2, rhs_receiver, rhs_callee;
 	    tree_code rel_code2;
 	    widest_int offset;
+	    oa_unprovable_reason match_reason = OA_UNPROVABLE_NONE;
 	    if (oa_match_shifted_comparison_against_call
 		  (*conjuncts[i], env, &rel_param2, &rel_code2, &rhs_receiver,
-		   &rhs_callee, &offset, /*allow_symbolic_accessor=*/false)
+		   &rhs_callee, &offset, /*allow_symbolic_accessor=*/false,
+		   nullptr, nullptr, &match_reason)
 		&& TREE_CODE (rhs_receiver) == PARM_DECL)
 	      {
 		tree sub_param = oa_substitute_call_arg (callee, call, rel_param2);
 		tree sub_receiver
 		  = oa_substitute_call_arg (callee, call, rhs_receiver);
+		oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 		oa_proof_result rel_pr
 		  = oa_env_check_call_relational_fact_1 (env, sub_param, rel_code2,
 							  sub_receiver, rhs_callee,
 							  /*require_conveyor=*/true,
-							  offset);
+							  offset, &reason);
 		switch (rel_pr)
 		  {
 		  case OA_PROVEN_TRUE:
@@ -14231,6 +14318,10 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 				  "cannot verify that %qE satisfies the "
 				  "precondition of %qD",
 				  sub_param ? sub_param : rel_param2, callee);
+		    if (const char *why
+			  = oa_unprovable_reason_text
+			      (reason != OA_UNPROVABLE_NONE ? reason : match_reason))
+		      inform (EXPR_LOCATION (call), "%s", _(why));
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  }
@@ -18551,12 +18642,21 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
       if (oa_match_shifted_comparison_against_call
 	    (*conjuncts[i], env, &param, &code, &rhs_receiver, &rhs_callee,
 	     &offset, /*allow_symbolic_accessor=*/!conveyor_ok,
-	     &arithmetic_type, &param_is_minuend)
-	  && oa_shifted_comparison_no_wrap_ok_p (env, param, rhs_receiver,
-						   rhs_callee, arithmetic_type,
-						   param_is_minuend))
-	env.call_relational_set (param, code, rhs_receiver, rhs_callee,
-				  conveyor_ok, oa_range_fact_exact (offset));
+	     &arithmetic_type, &param_is_minuend))
+	{
+	  oa_unprovable_reason no_wrap_reason = OA_UNPROVABLE_NONE;
+	  if (oa_shifted_comparison_no_wrap_ok_p (env, param, rhs_receiver,
+						    rhs_callee, arithmetic_type,
+						    param_is_minuend,
+						    &no_wrap_reason))
+	    env.call_relational_set (param, code, rhs_receiver, rhs_callee,
+				      conveyor_ok, oa_range_fact_exact (offset));
+	  else if (no_wrap_reason != OA_UNPROVABLE_NONE)
+	    /* See oa_env::unprovable_reason_hint_set's own comment (also
+	       used by oa_refine_single_comparison's identical branch-
+	       derived case).  */
+	    env.unprovable_reason_hint_set (param, no_wrap_reason);
+	}
     }
 
   /* The call-vs-call analogue of the two relational blocks above (e.g.
@@ -23969,7 +24069,8 @@ oa_offset_compatible_with_code (const oa_range_fact &offset,
 static oa_proof_result
 oa_env_check_relational_fact_1 (oa_env &env, tree substituted_param,
 				 tree_code required_code, tree substituted_other,
-				 bool require_conveyor)
+				 bool require_conveyor,
+				 oa_unprovable_reason *reason_out)
 {
   tree stripped_param = oa_strip_to_relational_operand (substituted_param);
   tree stripped_other = oa_strip_to_relational_operand (substituted_other);
@@ -23988,13 +24089,20 @@ oa_env_check_relational_fact_1 (oa_env &env, tree substituted_param,
 					       stripped_other)
 	   ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
 
+  oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
   oa_relational_fact fact;
-  if (oa_get_relational (substituted_param, env, &fact)
-      && oa_relational_code_implies (fact.code, required_code)
-      && oa_offset_compatible_with_code (fact.offset, required_code)
-      && (!require_conveyor || fact.conveyor_established)
-      && oa_strip_to_relational_operand (fact.rhs) == stripped_other)
-    return OA_PROVEN_TRUE;
+  if (oa_get_relational (substituted_param, env, &fact))
+    {
+      if (oa_strip_to_relational_operand (fact.rhs) != stripped_other)
+	reason = OA_UNPROVABLE_WRONG_IDENTITY;
+      else if (require_conveyor && !fact.conveyor_established)
+	reason = OA_UNPROVABLE_WEAKER_PROVENANCE;
+      else if (oa_relational_code_implies (fact.code, required_code)
+	       && oa_offset_compatible_with_code (fact.offset, required_code))
+	return OA_PROVEN_TRUE;
+      else
+	reason = OA_UNPROVABLE_RANGE_PARTIAL;
+    }
 
   /* Bounds-proving demo: no explicit linked fact -- but both sides' own
      independently-tracked scalar ranges might still settle this
@@ -24013,6 +24121,8 @@ oa_env_check_relational_fact_1 (oa_env &env, tree substituted_param,
 	return OA_PROVEN_TRUE;
       if (r == OA_RANGE_DISJOINT)
 	return OA_PROVEN_FALSE;
+      if (reason == OA_UNPROVABLE_NO_FACT)
+	reason = OA_UNPROVABLE_RANGE_PARTIAL;
     }
 
   /* D4324: the floating-point analogue of the bounds-proving demo
@@ -24032,8 +24142,12 @@ oa_env_check_relational_fact_1 (oa_env &env, tree substituted_param,
 	return OA_PROVEN_TRUE;
       if (r == OA_RANGE_DISJOINT)
 	return OA_PROVEN_FALSE;
+      if (reason == OA_UNPROVABLE_NO_FACT)
+	reason = OA_UNPROVABLE_RANGE_PARTIAL;
     }
 
+  if (reason_out)
+    *reason_out = reason;
   return OA_UNKNOWN;
 }
 
@@ -24191,7 +24305,8 @@ oa_env_check_call_relational_fact_1 (oa_env &env, tree substituted_param,
 				       tree substituted_rhs_receiver,
 				       tree substituted_rhs_callee,
 				       bool require_conveyor,
-				       widest_int required_offset /* = 0 */)
+				       widest_int required_offset /* = 0 */,
+				       oa_unprovable_reason *reason_out)
 {
   oa_call_relational_fact fact;
   bool have_fact = oa_get_call_relational (substituted_param, env, &fact);
@@ -24200,6 +24315,24 @@ oa_env_check_call_relational_fact_1 (oa_env &env, tree substituted_param,
       && fact.rhs_callee == substituted_rhs_callee
       && (oa_strip_to_relational_operand (fact.rhs_receiver)
 	  == oa_strip_to_relational_operand (substituted_rhs_receiver));
+  oa_unprovable_reason reason;
+  if (have_fact)
+    reason = !same_accessor ? OA_UNPROVABLE_WRONG_IDENTITY
+	     : (require_conveyor && !fact.conveyor_established)
+	       ? OA_UNPROVABLE_WEAKER_PROVENANCE
+	       : OA_UNPROVABLE_RANGE_PARTIAL;
+  else
+    {
+      /* See oa_env::unprovable_reason_hint_set's own comment: an
+	 establishment site may already know exactly why this quantity
+	 has no fact at all (e.g. a margin fact declined for lack of an
+	 independent no-wrap companion) -- prefer that over the bare,
+	 generic NO_FACT this consult would otherwise report.  */
+      oa_unprovable_reason hint
+	= env.unprovable_reason_hint_get
+	    (oa_strip_to_relational_operand (substituted_param));
+      reason = hint != OA_UNPROVABLE_NONE ? hint : OA_UNPROVABLE_NO_FACT;
+    }
 
   /* FACT.OFFSET is a shift of SUBSTITUTED_PARAM relative to the call
      ("(PARAM - FACT.OFFSET) FACT.CODE CALL ()"); REQUIRED_OFFSET is a
@@ -24266,10 +24399,14 @@ oa_env_check_call_relational_fact_1 (oa_env &env, tree substituted_param,
 		return OA_PROVEN_TRUE;
 	      if (r == OA_RANGE_DISJOINT)
 		return OA_PROVEN_FALSE;
+	      if (reason == OA_UNPROVABLE_NO_FACT)
+		reason = OA_UNPROVABLE_RANGE_PARTIAL;
 	    }
 	}
     }
 
+  if (reason_out)
+    *reason_out = reason;
   return OA_UNKNOWN;
 }
 
@@ -24825,13 +24962,18 @@ oa_unprovable_reason_text (oa_unprovable_reason reason)
    when PARAM's sign isn't known.  */
 
 static bool
-oa_shifted_operand_conversion_ok_p (tree operand, tree param, oa_env &env)
+oa_shifted_operand_conversion_ok_p (tree operand, tree param, oa_env &env,
+				     oa_unprovable_reason *reason_out = nullptr)
 {
   if (oa_integral_conversion_value_preserving_p (TREE_TYPE (param),
 						   TREE_TYPE (operand)))
     return true;
   oa_range_fact throwaway;
-  return oa_get_range (operand, env, &throwaway);
+  if (oa_get_range (operand, env, &throwaway))
+    return true;
+  if (reason_out)
+    *reason_out = OA_UNPROVABLE_SIGN_AMBIGUOUS;
+  return false;
 }
 
 bool
@@ -24843,7 +24985,8 @@ oa_match_shifted_comparison_against_call (tree conjunct, oa_env &env,
 					    widest_int *offset_out,
 					    bool allow_symbolic_accessor,
 					    tree *arithmetic_type_out,
-					    bool *param_is_minuend_out)
+					    bool *param_is_minuend_out,
+					    oa_unprovable_reason *reason_out)
 {
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
   while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
@@ -24888,7 +25031,7 @@ oa_match_shifted_comparison_against_call (tree conjunct, oa_env &env,
   tree param, receiver, callee;
   widest_int offset;
   if ((param = oa_underlying_param_operand (rhs))
-      && oa_shifted_operand_conversion_ok_p (rhs, param, env)
+      && oa_shifted_operand_conversion_ok_p (rhs, param, env, reason_out)
       && oa_underlying_call_range_operand (lhs, &receiver, &callee,
 					     allow_symbolic_accessor))
     {
@@ -24906,7 +25049,7 @@ oa_match_shifted_comparison_against_call (tree conjunct, oa_env &env,
 	*param_is_minuend_out = false;
     }
   else if ((param = oa_underlying_param_operand (lhs))
-	   && oa_shifted_operand_conversion_ok_p (lhs, param, env)
+	   && oa_shifted_operand_conversion_ok_p (lhs, param, env, reason_out)
 	   && oa_underlying_call_range_operand (rhs, &receiver, &callee,
 						  allow_symbolic_accessor))
     {
