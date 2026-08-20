@@ -18,5 +18,6 @@ main ()
   int x = 42;
   x = 172;
   contract_assert<sc::conveyor_assert_v>(x < 30); // { dg-error "condition .*x < 30.* is provably false" }
+                                                   // { dg-message "established \[^\n\]*" "established fact" { target *-*-* } .-1 }
   return 0;
 }

@@ -18,6 +18,7 @@ int
 f (int a, int b) conveyor pre<sc::conveyor_assert_v>(a < 5 && b > 10)
 {
   contract_assert<sc::conveyor_assert_v>(a > b); // { dg-error "condition .*a > b.* is provably false" }
+                                                  // { dg-message "established \[^\n\]*" "established fact" { target *-*-* } .-1 }
   return 0;
 }
 

@@ -18,6 +18,7 @@ int
 identity (int const x)
   pre<sc::proven_conveyor_v> (x < 0)
   post<sc::proven_conveyor_v> (x > 0) // { dg-error "provably false" }
+                                       // { dg-message "established \[^\n\]*" "established fact" { target *-*-* } .-1 }
 {
   return x;
 }

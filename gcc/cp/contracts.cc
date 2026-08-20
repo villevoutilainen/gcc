@@ -10783,7 +10783,9 @@ bool oa_match_type_bounded_comparison
    and this helper's own comment further below, for the full
    rationale).  */
 static oa_proof_result oa_check_assertion_conjunct_against_env
-  (tree conjunct, oa_env &env, bool require_conveyor);
+  (tree conjunct, oa_env &env, bool require_conveyor,
+   oa_unprovable_reason *reason_out = nullptr,
+   char *established_out = nullptr, size_t established_out_size = 0);
 
 /* Forward-declared: full definition is much further below (needs
    oa_match_result_defining_relation, defined alongside the matchers it
@@ -13218,14 +13220,16 @@ static oa_proof_result oa_env_check_comparison_1
    point in the file.  */
 static oa_proof_result oa_env_check_range_subsumption
   (oa_env &env, tree expr, oa_range_fact &req,
-   oa_unprovable_reason *reason_out = nullptr);
+   oa_unprovable_reason *reason_out = nullptr,
+   char *established_out = nullptr, size_t established_out_size = 0);
 
 /* Forward-declared: the floating-point analogue of the two immediately
    above, for the same reason (oa_handle_call_conveyor_proof_obligation
    below needs it before its own later definition point).  */
 static oa_proof_result oa_env_check_float_range_subsumption
   (oa_env &env, tree expr, oa_float_range_fact &req,
-   oa_unprovable_reason *reason_out = nullptr);
+   oa_unprovable_reason *reason_out = nullptr,
+   char *established_out = nullptr, size_t established_out_size = 0);
 
 /* Forward-declared: defined later, right after oa_call_postcondition_
    range_p; oa_handle_call_conveyor_proof_obligation below needs it
@@ -19727,31 +19731,40 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
       bool conveyor_strict = oa_contract_conveyor_strict_p (stmt);
       if (conveyor_analysis)
 	for (unsigned i = 0; i < conjuncts.length (); ++i)
-	  switch (oa_check_assertion_conjunct_against_env (*conjuncts[i], env,
-							     /*require_conveyor=*/true))
-	    {
-	    case OA_PROVEN_TRUE:
-	      break;
-	    case OA_PROVEN_FALSE:
-	      error_at (EXPR_LOCATION (*conjuncts[i]),
-			"%<contract_assert%> condition %qE is provably false",
-			*conjuncts[i]);
-	      any_conjunct_proven_false = true;
-	      break;
-	    case OA_UNKNOWN:
-	      if (conveyor_strict)
-		{
-		  error_at (EXPR_LOCATION (*conjuncts[i]),
-			    "cannot prove %<contract_assert%> condition %qE",
-			    *conjuncts[i]);
-		  any_conjunct_proven_false = true;
-		}
-	      else
-		warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
-			    "cannot verify %<contract_assert%> condition %qE",
-			    *conjuncts[i]);
-	      break;
-	    }
+	  {
+	    oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+	    char established_buf[128];
+	    switch (oa_check_assertion_conjunct_against_env
+		      (*conjuncts[i], env, /*require_conveyor=*/true, &reason,
+		       established_buf, sizeof (established_buf)))
+	      {
+	      case OA_PROVEN_TRUE:
+		break;
+	      case OA_PROVEN_FALSE:
+		error_at (EXPR_LOCATION (*conjuncts[i]),
+			  "%<contract_assert%> condition %qE is provably false",
+			  *conjuncts[i]);
+		inform (EXPR_LOCATION (*conjuncts[i]), "established %s",
+			established_buf);
+		any_conjunct_proven_false = true;
+		break;
+	      case OA_UNKNOWN:
+		if (conveyor_strict)
+		  {
+		    error_at (EXPR_LOCATION (*conjuncts[i]),
+			      "cannot prove %<contract_assert%> condition %qE",
+			      *conjuncts[i]);
+		    any_conjunct_proven_false = true;
+		  }
+		else
+		  warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
+			      "cannot verify %<contract_assert%> condition %qE",
+			      *conjuncts[i]);
+		if (const char *why = oa_unprovable_reason_text (reason))
+		  inform (EXPR_LOCATION (*conjuncts[i]), "%s", _(why));
+		break;
+	      }
+	  }
 
       bool symbolic_analysis = symbolic_ok
 	&& (flag_contract_symbolic_proofs
@@ -19759,31 +19772,40 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
       bool symbolic_strict = oa_contract_symbolic_strict_p (stmt);
       if (symbolic_analysis)
 	for (unsigned i = 0; i < conjuncts.length (); ++i)
-	  switch (oa_check_assertion_conjunct_against_env (*conjuncts[i], env,
-							     /*require_conveyor=*/false))
-	    {
-	    case OA_PROVEN_TRUE:
-	      break;
-	    case OA_PROVEN_FALSE:
-	      error_at (EXPR_LOCATION (*conjuncts[i]),
-			"%<contract_assert%> condition %qE is provably false",
-			*conjuncts[i]);
-	      any_conjunct_proven_false = true;
-	      break;
-	    case OA_UNKNOWN:
-	      if (symbolic_strict)
-		{
-		  error_at (EXPR_LOCATION (*conjuncts[i]),
-			    "cannot prove %<contract_assert%> condition %qE",
-			    *conjuncts[i]);
-		  any_conjunct_proven_false = true;
-		}
-	      else
-		warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
-			    "cannot verify %<contract_assert%> condition %qE",
-			    *conjuncts[i]);
-	      break;
-	    }
+	  {
+	    oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+	    char established_buf[128];
+	    switch (oa_check_assertion_conjunct_against_env
+		      (*conjuncts[i], env, /*require_conveyor=*/false, &reason,
+		       established_buf, sizeof (established_buf)))
+	      {
+	      case OA_PROVEN_TRUE:
+		break;
+	      case OA_PROVEN_FALSE:
+		error_at (EXPR_LOCATION (*conjuncts[i]),
+			  "%<contract_assert%> condition %qE is provably false",
+			  *conjuncts[i]);
+		inform (EXPR_LOCATION (*conjuncts[i]), "established %s",
+			established_buf);
+		any_conjunct_proven_false = true;
+		break;
+	      case OA_UNKNOWN:
+		if (symbolic_strict)
+		  {
+		    error_at (EXPR_LOCATION (*conjuncts[i]),
+			      "cannot prove %<contract_assert%> condition %qE",
+			      *conjuncts[i]);
+		    any_conjunct_proven_false = true;
+		  }
+		else
+		  warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
+			      "cannot verify %<contract_assert%> condition %qE",
+			      *conjuncts[i]);
+		if (const char *why = oa_unprovable_reason_text (reason))
+		  inform (EXPR_LOCATION (*conjuncts[i]), "%s", _(why));
+		break;
+	      }
+	  }
     }
 
   if (!oa_resolve_condition (&cond, env, conveyor_ok, symbolic_ok))
@@ -22873,8 +22895,11 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 		  tree oa_arg;
 		  if (is_object_address_call_p (*conjuncts[i], &oa_arg))
 		    continue;
-		  switch (oa_check_assertion_conjunct_against_env (*conjuncts[i], ret_env,
-								     /*require_conveyor=*/true))
+		  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+		  char established_buf[128];
+		  switch (oa_check_assertion_conjunct_against_env
+			    (*conjuncts[i], ret_env, /*require_conveyor=*/true, &reason,
+			     established_buf, sizeof (established_buf)))
 		    {
 		    case OA_PROVEN_TRUE:
 		      break;
@@ -22882,6 +22907,8 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 		      error_at (EXPR_LOCATION (*conjuncts[i]),
 				"postcondition condition %qE is provably false",
 				*conjuncts[i]);
+		      inform (EXPR_LOCATION (*conjuncts[i]), "established %s",
+			      established_buf);
 		      break;
 		    case OA_UNKNOWN:
 		      if (conveyor_strict)
@@ -22892,6 +22919,8 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 			warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
 				    "cannot verify postcondition condition %qE",
 				    *conjuncts[i]);
+		      if (const char *why = oa_unprovable_reason_text (reason))
+			inform (EXPR_LOCATION (*conjuncts[i]), "%s", _(why));
 		      break;
 		    }
 		}
@@ -22938,8 +22967,11 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 		  tree oa_arg;
 		  if (is_object_address_call_p (*conjuncts[i], &oa_arg))
 		    continue;
-		  switch (oa_check_assertion_conjunct_against_env (*conjuncts[i], ret_env,
-								     /*require_conveyor=*/false))
+		  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+		  char established_buf[128];
+		  switch (oa_check_assertion_conjunct_against_env
+			    (*conjuncts[i], ret_env, /*require_conveyor=*/false, &reason,
+			     established_buf, sizeof (established_buf)))
 		    {
 		    case OA_PROVEN_TRUE:
 		      break;
@@ -22947,6 +22979,8 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 		      error_at (EXPR_LOCATION (*conjuncts[i]),
 				"postcondition condition %qE is provably false",
 				*conjuncts[i]);
+		      inform (EXPR_LOCATION (*conjuncts[i]), "established %s",
+			      established_buf);
 		      break;
 		    case OA_UNKNOWN:
 		      if (symbolic_strict)
@@ -22957,6 +22991,8 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 			warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
 				    "cannot verify postcondition condition %qE",
 				    *conjuncts[i]);
+		      if (const char *why = oa_unprovable_reason_text (reason))
+			inform (EXPR_LOCATION (*conjuncts[i]), "%s", _(why));
 		      break;
 		    }
 		}
@@ -24275,7 +24311,9 @@ oa_range_subsumption_result (oa_range_fact &arg, oa_range_fact &req)
 
 static oa_proof_result
 oa_env_check_range_subsumption (oa_env &env, tree expr, oa_range_fact &req,
-				 oa_unprovable_reason *reason_out)
+				 oa_unprovable_reason *reason_out,
+				 char *established_out,
+				 size_t established_out_size)
 {
   oa_range_fact fact;
   if (!oa_get_range (expr, env, &fact))
@@ -24285,6 +24323,8 @@ oa_env_check_range_subsumption (oa_env &env, tree expr, oa_range_fact &req,
       return OA_UNKNOWN;
     }
   oa_proof_result r = oa_range_subsumption_result (fact, req);
+  if (r == OA_PROVEN_FALSE && established_out)
+    oa_range_fact_text (fact, established_out, established_out_size);
   if (r == OA_UNKNOWN && reason_out)
     *reason_out = OA_UNPROVABLE_RANGE_PARTIAL;
   return r;
@@ -24318,7 +24358,9 @@ oa_float_range_subsumption_result (oa_float_range_fact &arg,
 static oa_proof_result
 oa_env_check_float_range_subsumption (oa_env &env, tree expr,
 				       oa_float_range_fact &req,
-				       oa_unprovable_reason *reason_out)
+				       oa_unprovable_reason *reason_out,
+				       char *established_out,
+				       size_t established_out_size)
 {
   oa_float_range_fact fact;
   if (!oa_get_float_range (expr, env, &fact))
@@ -24328,6 +24370,8 @@ oa_env_check_float_range_subsumption (oa_env &env, tree expr,
       return OA_UNKNOWN;
     }
   oa_proof_result r = oa_float_range_subsumption_result (fact, req);
+  if (r == OA_PROVEN_FALSE && established_out)
+    oa_float_range_fact_text (fact, established_out, established_out_size);
   if (r == OA_UNKNOWN && reason_out)
     *reason_out = OA_UNPROVABLE_RANGE_PARTIAL;
   return r;
@@ -26042,7 +26086,10 @@ oa_match_comparison_against_call_var (tree conjunct, tree *decl_out,
 
 static oa_proof_result
 oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
-					  bool require_conveyor)
+					  bool require_conveyor,
+					  oa_unprovable_reason *reason_out,
+					  char *established_out,
+					  size_t established_out_size)
 {
   tree decl, other, const_val;
   tree_code code;
@@ -26056,18 +26103,21 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
 	  oa_float_range_fact req;
 	  oa_float_tighten_range_bound (req, code, TREE_REAL_CST (const_val),
 					 TREE_TYPE (decl));
-	  return oa_env_check_float_range_subsumption (env, decl, req);
+	  return oa_env_check_float_range_subsumption
+	    (env, decl, req, reason_out, established_out, established_out_size);
 	}
       oa_range_fact req;
       req.base = NULL_TREE;
       req.has_lo = req.has_hi = false;
       oa_tighten_range_bound (req, code, wi::to_widest (const_val));
-      return oa_env_check_range_subsumption (env, decl, req);
+      return oa_env_check_range_subsumption
+	(env, decl, req, reason_out, established_out, established_out_size);
     }
 
   if (oa_match_comparison_against_decl (conjunct, &decl, &code, &other))
-    return oa_env_check_relational_fact_1 (env, decl, code, other,
-					    require_conveyor);
+    return oa_env_check_relational_fact_1
+      (env, decl, code, other, require_conveyor, reason_out, established_out,
+       established_out_size);
 
   {
     tree rhs_receiver, rhs_callee;
@@ -26075,9 +26125,9 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
 					       &rhs_receiver, &rhs_callee,
 					       /*allow_symbolic_accessor=*/
 						 !require_conveyor))
-      return oa_env_check_call_relational_fact_1 (env, decl, code,
-						   rhs_receiver, rhs_callee,
-						   require_conveyor);
+      return oa_env_check_call_relational_fact_1
+	(env, decl, code, rhs_receiver, rhs_callee, require_conveyor, 0,
+	 reason_out, established_out, established_out_size);
   }
 
   {
@@ -26088,7 +26138,7 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
 				       !require_conveyor))
       return oa_env_check_call_call_relational_fact_1
 	(env, lhs_receiver, lhs_callee, code, rhs_receiver, rhs_callee,
-	 require_conveyor);
+	 require_conveyor, reason_out, established_out, established_out_size);
   }
 
   {
@@ -26099,7 +26149,10 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
       {
 	oa_proof_result result
 	  = oa_env_predicate_result (env, arg_decl, pred_fn, !negated,
-				      require_conveyor);
+				      require_conveyor, reason_out);
+	if (result == OA_PROVEN_FALSE && established_out)
+	  snprintf (established_out, established_out_size, "%s",
+		    negated ? "true" : "false");
 	if (result != OA_UNKNOWN)
 	  return result;
 	/* D4324: no established identity-based fact -- fall back to
@@ -26109,7 +26162,14 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
 	bool derived_value;
 	if (oa_call_postcondition_predicate_range_p (call, env, &derived_value,
 						      require_conveyor))
-	  return (derived_value == !negated) ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
+	  {
+	    if (derived_value == !negated)
+	      return OA_PROVEN_TRUE;
+	    if (established_out)
+	      snprintf (established_out, established_out_size, "%s",
+			derived_value ? "true" : "false");
+	    return OA_PROVEN_FALSE;
+	  }
 	return OA_UNKNOWN;
       }
   }
@@ -26134,31 +26194,58 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
 	    if (TREE_CODE (field_const) == REAL_CST)
 	      {
 		oa_contract_float_field_range_fact established;
-		if (env.contract_float_field_range_get (identity, field,
-							 &established)
-		    && (!require_conveyor || established.conveyor_established))
+		bool field_found = env.contract_float_field_range_get
+		  (identity, field, &established);
+		if (field_found && (!require_conveyor || established.conveyor_established))
 		  {
 		    oa_float_range_fact req;
 		    oa_float_tighten_range_bound (req, field_code,
 						   TREE_REAL_CST (field_const),
 						   TREE_TYPE (field));
-		    return oa_float_range_subsumption_result (established.range,
-							       req);
+		    enum oa_range_subsumption_result r
+		      = oa_float_range_subsumption (established.range, req);
+		    if (r == OA_RANGE_DISJOINT && established_out)
+		      oa_float_range_fact_text (established.range, established_out,
+						 established_out_size);
+		    if (reason_out && r == OA_RANGE_PARTIAL)
+		      *reason_out = OA_UNPROVABLE_RANGE_PARTIAL;
+		    return r == OA_RANGE_SUBSUMED ? OA_PROVEN_TRUE
+			   : r == OA_RANGE_DISJOINT ? OA_PROVEN_FALSE
+			   : OA_UNKNOWN;
 		  }
+		if (reason_out)
+		  *reason_out = field_found ? OA_UNPROVABLE_WEAKER_PROVENANCE
+					     : OA_UNPROVABLE_NO_FACT;
 		return OA_UNKNOWN;
 	      }
 	    oa_contract_field_range_fact established;
-	    if (env.contract_field_range_get (identity, field, &established)
-		&& (!require_conveyor || established.conveyor_established))
+	    bool field_found = env.contract_field_range_get (identity, field,
+							       &established);
+	    if (field_found && (!require_conveyor || established.conveyor_established))
 	      {
 		oa_range_fact req;
 		req.base = NULL_TREE;
 		req.has_lo = req.has_hi = false;
 		oa_tighten_range_bound (req, field_code,
 					 wi::to_widest (field_const));
-		return oa_range_subsumption_result (established.range, req);
+		enum oa_range_subsumption_result r
+		  = oa_range_subsumption (established.range, req);
+		if (r == OA_RANGE_DISJOINT && established_out)
+		  oa_range_fact_text (established.range, established_out,
+				       established_out_size);
+		if (reason_out && r == OA_RANGE_PARTIAL)
+		  *reason_out = OA_UNPROVABLE_RANGE_PARTIAL;
+		return r == OA_RANGE_SUBSUMED ? OA_PROVEN_TRUE
+		       : r == OA_RANGE_DISJOINT ? OA_PROVEN_FALSE
+		       : OA_UNKNOWN;
 	      }
+	    if (reason_out)
+	      *reason_out = field_found ? OA_UNPROVABLE_WEAKER_PROVENANCE
+					 : OA_UNPROVABLE_NO_FACT;
+	    return OA_UNKNOWN;
 	  }
+	if (reason_out)
+	  *reason_out = OA_UNPROVABLE_NO_FACT;
 	return OA_UNKNOWN;
       }
   }
@@ -26181,17 +26268,33 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
 	  {
 	    identity = env.alias_find (identity);
 	    oa_contract_field_range_fact established;
-	    if (env.contract_call_range_get (identity, callee, &established)
-		&& (!require_conveyor || established.conveyor_established))
+	    bool call_found = env.contract_call_range_get (identity, callee,
+							     &established);
+	    if (call_found && (!require_conveyor || established.conveyor_established))
 	      {
 		oa_range_fact req;
 		req.base = NULL_TREE;
 		req.has_lo = req.has_hi = false;
 		oa_tighten_range_bound (req, call_code,
 					 wi::to_widest (call_const));
-		return oa_range_subsumption_result (established.range, req);
+		enum oa_range_subsumption_result r
+		  = oa_range_subsumption (established.range, req);
+		if (r == OA_RANGE_DISJOINT && established_out)
+		  oa_range_fact_text (established.range, established_out,
+				       established_out_size);
+		if (reason_out && r == OA_RANGE_PARTIAL)
+		  *reason_out = OA_UNPROVABLE_RANGE_PARTIAL;
+		return r == OA_RANGE_SUBSUMED ? OA_PROVEN_TRUE
+		       : r == OA_RANGE_DISJOINT ? OA_PROVEN_FALSE
+		       : OA_UNKNOWN;
 	      }
+	    if (reason_out)
+	      *reason_out = call_found ? OA_UNPROVABLE_WEAKER_PROVENANCE
+					: OA_UNPROVABLE_NO_FACT;
+	    return OA_UNKNOWN;
 	  }
+	if (reason_out)
+	  *reason_out = OA_UNPROVABLE_NO_FACT;
 	return OA_UNKNOWN;
       }
   }
@@ -26233,13 +26336,16 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
 	    req.has_lo = req.has_hi = false;
 	    oa_float_tighten_range_bound (req, gen_code, TREE_REAL_CST (gen_const),
 					   TREE_TYPE (gen_expr));
-	    return oa_env_check_float_range_subsumption (env, gen_expr, req);
+	    return oa_env_check_float_range_subsumption
+	      (env, gen_expr, req, reason_out, established_out,
+	       established_out_size);
 	  }
 	oa_range_fact req;
 	req.base = NULL_TREE;
 	req.has_lo = req.has_hi = false;
 	oa_tighten_range_bound (req, gen_code, wi::to_widest (gen_const));
-	return oa_env_check_range_subsumption (env, gen_expr, req);
+	return oa_env_check_range_subsumption
+	  (env, gen_expr, req, reason_out, established_out, established_out_size);
       }
   }
 

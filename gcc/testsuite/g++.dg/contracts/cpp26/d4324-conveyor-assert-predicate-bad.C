@@ -25,5 +25,6 @@ main ()
   file *f = &obj;
   open_it (f);
   contract_assert<sc::conveyor_assert_v>(!is_opened (f)); // { dg-error "condition .*is_opened.*f.*is provably false" }
+                                                           // { dg-message "established \[^\n\]*" "established fact" { target *-*-* } .-1 }
   return 0;
 }

@@ -16,6 +16,7 @@ int
 f (int x, S& v) conveyor pre<sc::conveyor_assert_v>(x < v.size ())
 {
   contract_assert<sc::conveyor_assert_v>(x > v.size ()); // { dg-error "condition .*size.*is provably false" }
+                                                          // { dg-message "established \[^\n\]*" "established fact" { target *-*-* } .-1 }
   return 0;
 }
 

@@ -36,6 +36,7 @@ int
 f (int x, S& v) pre<symbolic_ctrl_v>(x < v.size ())
 {
   contract_assert<symbolic_ctrl_v>(x > v.size ()); // { dg-error "condition .*size.*is provably false" }
+                                                    // { dg-message "established \[^\n\]*" "established fact" { target *-*-* } .-1 }
   return 0;
 }
 

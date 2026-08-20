@@ -21,5 +21,6 @@ int main ()
 {
   Number n (50.0);
   contract_assert<sc::proven_conveyor_v>(n.m_value >= 200.0); // { dg-error "is provably false" }
+                                                                // { dg-message "established \[^\n\]*" "established fact" { target *-*-* } .-1 }
   return 0;
 }
