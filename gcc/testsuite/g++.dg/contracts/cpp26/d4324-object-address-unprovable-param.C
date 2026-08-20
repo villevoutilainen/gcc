@@ -25,6 +25,7 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 int f (int* p)
 {
   contract_assert<conveyor_ctrl_v>(std::is_object_address(p)); // { dg-error "cannot prove .is_object_address. for .p." }
+                                                                // { dg-message "no fact relating this value" "unprovable reason" { target *-*-* } .-1 }
   return *p;
 }
 

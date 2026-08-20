@@ -61,6 +61,7 @@ reject_ptr_param_dereference (T* p) conveyor
   pre<conveyor_ctrl_v>(std::is_object_address (p))
 {
   return use_val_mut (*p); // { dg-error "is not owned by the calling function" }
+                           // { dg-message "does not name a parameter or local" "unprovable reason" { target *-*-* } .-1 }
 }
 
 // A CONST reference parameter re-lent as const: Q2 doesn't apply to

@@ -8919,7 +8919,7 @@ static bool oa_get_range (tree expr, oa_env &env, oa_range_fact *out);
    stored/passed-around closure invoked here).  */
 
 static bool
-oa_provable_p (tree expr, oa_env &env)
+oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullptr)
 {
   if (expr == NULL_TREE || expr == error_mark_node)
     return false;
@@ -9196,9 +9196,13 @@ oa_provable_p (tree expr, oa_env &env)
 	{
 	  tree captured = DECL_CAPTURED_VARIABLE (expr);
 	  if (captured)
-	    return oa_provable_p (captured, *oa_iile_outer_env);
+	    return oa_provable_p (captured, *oa_iile_outer_env, reason_out);
 	}
-      return env.provable_p (expr);
+      if (env.provable_p (expr))
+	return true;
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_NO_FACT;
+      return false;
     }
 
   /* Recurse into a statically-resolvable, immediately-invoked closure
@@ -9226,9 +9230,11 @@ oa_provable_p (tree expr, oa_env &env)
      'f (c ? &a : &b)' silently gave up regardless of whether both A and
      B were individually owned/provable.  */
   if (TREE_CODE (expr) == COND_EXPR)
-    return oa_provable_p (TREE_OPERAND (expr, 1), env)
-      && oa_provable_p (TREE_OPERAND (expr, 2), env);
+    return oa_provable_p (TREE_OPERAND (expr, 1), env, reason_out)
+      && oa_provable_p (TREE_OPERAND (expr, 2), env, reason_out);
 
+  if (reason_out)
+    *reason_out = OA_UNPROVABLE_NOT_ADDRESS_SHAPE;
   return false;
 }
 
@@ -12046,10 +12052,13 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
 	  return NULL_TREE;
 	}
 
-      if (!d->trust && !oa_provable_p (arg, *d->env))
+      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+      if (!d->trust && !oa_provable_p (arg, *d->env, &reason))
 	{
 	  error_at (EXPR_LOCATION (*tp),
 		    "cannot prove %<is_object_address%> for %qE", arg);
+	  if (const char *why = oa_unprovable_reason_text (reason))
+	    inform (EXPR_LOCATION (*tp), "%s", _(why));
 	  if (DECL_P (STRIP_ANY_LOCATION_WRAPPER (arg)))
 	    inform (DECL_SOURCE_LOCATION (STRIP_ANY_LOCATION_WRAPPER (arg)),
 		    "declared here");
@@ -12612,7 +12621,8 @@ static bool oa_call_result_owned_p (tree call, oa_env &env);
 static bool
 oa_reference_owned_p (tree expr, oa_env &env,
 		       bool asking_about_pointer_value = false,
-		       bool in_predicate_context = false)
+		       bool in_predicate_context = false,
+		       oa_unprovable_reason *reason_out = nullptr)
 {
   expr = STRIP_ANY_LOCATION_WRAPPER (expr);
   while (TREE_CODE (expr) == NON_LVALUE_EXPR || TREE_CODE (expr) == NOP_EXPR
@@ -12627,9 +12637,11 @@ oa_reference_owned_p (tree expr, oa_env &env,
      change just because EXPR happens to be a ternary.  */
   if (TREE_CODE (expr) == COND_EXPR)
     return oa_reference_owned_p (TREE_OPERAND (expr, 1), env,
-				  asking_about_pointer_value, in_predicate_context)
+				  asking_about_pointer_value, in_predicate_context,
+				  reason_out)
       && oa_reference_owned_p (TREE_OPERAND (expr, 2), env,
-				asking_about_pointer_value, in_predicate_context);
+				asking_about_pointer_value, in_predicate_context,
+				reason_out);
   /* D4324: a reference bound directly to a temporary is owned by
      whoever materializes it -- see oa_provable_p's own identical
      TARGET_EXPR case for the full rationale.  */
@@ -12666,11 +12678,11 @@ oa_reference_owned_p (tree expr, oa_env &env,
 	  if (TREE_CODE (base) == INDIRECT_REF)
 	    return oa_reference_owned_p (TREE_OPERAND (base, 0), env,
 					  /*asking_about_pointer_value=*/true,
-					  in_predicate_context);
+					  in_predicate_context, reason_out);
 	  if (DECL_P (base))
 	    return oa_reference_owned_p (base, env,
 					  /*asking_about_pointer_value=*/true,
-					  in_predicate_context);
+					  in_predicate_context, reason_out);
 	}
       /* D4324: '&arr[index]' -- an array element's ownership is exactly
 	 the array's own: owned if ARR itself (a local this function
@@ -12691,7 +12703,7 @@ oa_reference_owned_p (tree expr, oa_env &env,
       if (TREE_CODE (op) == ARRAY_REF)
 	return oa_reference_owned_p (TREE_OPERAND (op, 0), env,
 				      /*asking_about_pointer_value=*/false,
-				      in_predicate_context);
+				      in_predicate_context, reason_out);
     }
   /* Ownership-laundering fix: '*p''s own ownership is exactly P's own
      ownership -- oa_object_identity_decl deliberately never resolves a
@@ -12711,7 +12723,7 @@ oa_reference_owned_p (tree expr, oa_env &env,
   if (TREE_CODE (expr) == INDIRECT_REF)
     return oa_reference_owned_p (TREE_OPERAND (expr, 0), env,
 				  /*asking_about_pointer_value=*/false,
-				  in_predicate_context);
+				  in_predicate_context, reason_out);
   /* Whether EXPR, after the generic-conversion strip above, is exactly
      'ADDR_EXPR (decl)' -- i.e. whether the question being asked is
      "is DECL's own storage/address owned" (true here) as opposed to
@@ -12778,7 +12790,11 @@ oa_reference_owned_p (tree expr, oa_env &env,
       && !oa_field_slot_identity (expr, env, &identity)
       && !oa_array_slot_identity (expr, env, &identity)
       && !oa_field_object_identity (expr, env, &identity))
-    return false;
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_NOT_RECEIVED;
+      return false;
+    }
   identity = env.alias_find (identity);
   /* D4324/P2680: 'this' is owned, not borrowed, in FUNCTION-BODY context
      -- re-lending it further, whether as the receiver of another
@@ -12795,7 +12811,15 @@ oa_reference_owned_p (tree expr, oa_env &env,
      same as any other parameter it didn't create (see this function's
      own leading comment).  */
   if (is_this_parameter (identity))
-    return !in_predicate_context;
+    {
+      if (in_predicate_context)
+	{
+	  if (reason_out)
+	    *reason_out = OA_UNPROVABLE_PREDICATE_CONTEXT;
+	  return false;
+	}
+      return true;
+    }
   /* PREDICATE/ASSERT context: none of the function-activation grants
      below apply -- a predicate/assert didn't receive any parameter or
      local of its own, it only has visibility into the enclosing
@@ -12803,7 +12827,11 @@ oa_reference_owned_p (tree expr, oa_env &env,
      COMPONENT_REF/INDIRECT_REF cases (which propagate this same
      IN_PREDICATE_CONTEXT) can resolve to owned from here on.  */
   if (in_predicate_context)
-    return false;
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_PREDICATE_CONTEXT;
+      return false;
+    }
   bool owned_var = VAR_P (identity)
     && DECL_CONTEXT (identity) == current_function_decl;
   /* A REFERENCE_TYPE parameter is exactly as owned as a by-value one --
@@ -12832,8 +12860,18 @@ oa_reference_owned_p (tree expr, oa_env &env,
     && DECL_CONTEXT (identity) == current_function_decl
     && TREE_CODE (TREE_TYPE (identity)) != REFERENCE_TYPE;
   if (!owned_var && !owned_reference_parm && !owned_by_value_parm)
-    return false;
-  return !env.borrowed_p (identity);
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_NOT_RECEIVED;
+      return false;
+    }
+  if (env.borrowed_p (identity))
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_LAUNDERED_BORROWED;
+      return false;
+    }
+  return true;
 }
 
 /* D4324: reference-safety Q2, ownership inference through a conveyor
@@ -12965,11 +13003,14 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
 	  if (!substituted)
 	    continue;
 
-	  if (!oa_provable_p (substituted, env))
+	  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+	  if (!oa_provable_p (substituted, env, &reason))
 	    {
 	      error_at (EXPR_LOCATION (call),
 			"cannot prove %<is_object_address%> for %qE, "
 			"required by the precondition of %qD", substituted, callee);
+	      if (const char *why = oa_unprovable_reason_text (reason))
+		inform (EXPR_LOCATION (call), "%s", _(why));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	}
@@ -13054,12 +13095,15 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
 		{
 		  tree substituted
 		    = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (call, argno));
-		  if (!oa_provable_p (substituted, env))
+		  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+		  if (!oa_provable_p (substituted, env, &reason))
 		    {
 		      error_at (EXPR_LOCATION (call),
 				"cannot prove %<is_object_address%> for %qE, "
 				"implicitly required by the receiver of %qD",
 				substituted, callee);
+		      if (const char *why = oa_unprovable_reason_text (reason))
+			inform (EXPR_LOCATION (call), "%s", _(why));
 		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		}
@@ -13079,27 +13123,33 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
 	    continue;
 	  substituted = STRIP_ANY_LOCATION_WRAPPER (substituted);
 
-	  if (!oa_provable_p (substituted, env))
+	  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+	  if (!oa_provable_p (substituted, env, &reason))
 	    {
 	      error_at (EXPR_LOCATION (call),
 			"cannot prove %<is_object_address%> for %qE, "
 			"implicitly required by reference parameter %qD "
 			"of %qD", substituted, parm, callee);
+	      if (const char *why = oa_unprovable_reason_text (reason))
+		inform (EXPR_LOCATION (call), "%s", _(why));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
 
 	  bool is_const_ref = TYPE_READONLY (TREE_TYPE (TREE_TYPE (parm)));
+	  oa_unprovable_reason own_reason = OA_UNPROVABLE_NONE;
 	  if (!is_const_ref
 	      && !oa_reference_owned_p (substituted, env,
 					/*asking_about_pointer_value=*/false,
-					in_predicate_context))
+					in_predicate_context, &own_reason))
 	    {
 	      error_at (EXPR_LOCATION (call),
 			"argument %qE is not owned by the calling "
 			"function, so it may not be passed as the "
 			"non-const reference parameter %qD of %qD",
 			substituted, parm, callee);
+	      if (const char *why = oa_unprovable_reason_text (own_reason))
+		inform (EXPR_LOCATION (call), "%s", _(why));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	}
@@ -15768,7 +15818,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 					   STRIP_ANY_LOCATION_WRAPPER (arg));
 	      if (!substituted)
 		continue;
-	      if (oa_provable_p (substituted, env))
+	      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+	      if (oa_provable_p (substituted, env, &reason))
 		continue; /* Proven true: silently discharged.  */
 	      tree identity;
 	      if (oa_object_identity_decl (substituted, &identity)
@@ -15784,6 +15835,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 			    "cannot verify %<is_object_address%> for %qE, as "
 			    "required by the precondition of %qD",
 			    substituted, callee);
+	      if (const char *why = oa_unprovable_reason_text (reason))
+		inform (EXPR_LOCATION (call), "%s", _(why));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
@@ -25001,6 +25054,18 @@ oa_unprovable_reason_text (oa_unprovable_reason reason)
     case OA_UNPROVABLE_UNRESOLVED_OPERAND:
       return G_("one of the operands has no determinable range at this "
 		 "point");
+    case OA_UNPROVABLE_NOT_ADDRESS_SHAPE:
+      return G_("this is not a recognized address-taking or "
+		 "provable-object expression");
+    case OA_UNPROVABLE_NOT_RECEIVED:
+      return G_("this does not name a parameter or local that the "
+		 "calling function itself received or created");
+    case OA_UNPROVABLE_PREDICATE_CONTEXT:
+      return G_("predicate or assert condition text never owns "
+		 "anything, only the enclosing function does");
+    case OA_UNPROVABLE_LAUNDERED_BORROWED:
+      return G_("this was reassigned from a borrowed or external "
+		 "source, not created by the calling function itself");
     }
   gcc_unreachable ();
 }

@@ -819,7 +819,8 @@ cg_call_postcondition_guarantees_p (tree callee, bool require_conveyor,
 static bool
 cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
 			       bool require_conveyor,
-			       hash_set<tree> &in_progress)
+			       hash_set<tree> &in_progress,
+			       oa_unprovable_reason *reason_out = nullptr)
 {
   if (val == NULL_TREE)
     return false;
@@ -828,7 +829,11 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
     return true;
 
   if (TREE_CODE (val) != SSA_NAME)
-    return false;
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_NOT_ADDRESS_SHAPE;
+      return false;
+    }
 
   /* D4324/P2680 author correction (2026-08-19): 'this' is deliberately
      NOT an unconditional axiom here anymore -- mirrors contracts.cc's
@@ -858,7 +863,7 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
       for (unsigned i = 0; i < n; ++i)
 	if (!cg_provable_object_address_p (gimple_phi_arg_def (def, i),
 					    established, require_conveyor,
-					    in_progress))
+					    in_progress, reason_out))
 	  {
 	    result = false;
 	    break;
@@ -872,7 +877,7 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
       else if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
 	result = cg_provable_object_address_p (gimple_assign_rhs1 (def),
 						established, require_conveyor,
-						in_progress);
+						in_progress, reason_out);
     }
   else if (def && is_gimple_call (def))
     {
@@ -884,6 +889,8 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
     }
 
   in_progress.remove (val);
+  if (!result && reason_out && *reason_out == OA_UNPROVABLE_NONE)
+    *reason_out = OA_UNPROVABLE_NO_FACT;
   return result;
 }
 
@@ -945,7 +952,8 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
    (no upcast needed, so 'this' reaches here unwrapped).  */
 
 static bool
-cg_provably_owned_p (tree val, function *fun, hash_set<tree> &in_progress)
+cg_provably_owned_p (tree val, function *fun, hash_set<tree> &in_progress,
+		      oa_unprovable_reason *reason_out = nullptr)
 {
   if (val == NULL_TREE)
     return false;
@@ -953,11 +961,19 @@ cg_provably_owned_p (tree val, function *fun, hash_set<tree> &in_progress)
   if (TREE_CODE (val) == ADDR_EXPR)
     {
       tree base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (val, 0));
-      return DECL_P (base) && DECL_CONTEXT (base) == fun->decl;
+      if (DECL_P (base) && DECL_CONTEXT (base) == fun->decl)
+	return true;
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_NOT_RECEIVED;
+      return false;
     }
 
   if (TREE_CODE (val) != SSA_NAME)
-    return false;
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_NOT_RECEIVED;
+      return false;
+    }
 
   /* The function's own parameter, used directly (its own initial SSA
      value), with no ADDR_EXPR at all -- this function (see its own
@@ -994,7 +1010,8 @@ cg_provably_owned_p (tree val, function *fun, hash_set<tree> &in_progress)
       result = true;
       unsigned n = gimple_phi_num_args (def);
       for (unsigned i = 0; i < n; ++i)
-	if (!cg_provably_owned_p (gimple_phi_arg_def (def, i), fun, in_progress))
+	if (!cg_provably_owned_p (gimple_phi_arg_def (def, i), fun, in_progress,
+				   reason_out))
 	  {
 	    result = false;
 	    break;
@@ -1004,7 +1021,8 @@ cg_provably_owned_p (tree val, function *fun, hash_set<tree> &in_progress)
     {
       enum tree_code code = gimple_assign_rhs_code (def);
       if (code == ADDR_EXPR || CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
-	result = cg_provably_owned_p (gimple_assign_rhs1 (def), fun, in_progress);
+	result = cg_provably_owned_p (gimple_assign_rhs1 (def), fun, in_progress,
+				       reason_out);
     }
   else if (def && is_gimple_call (def))
     {
@@ -1021,7 +1039,7 @@ cg_provably_owned_p (tree val, function *fun, hash_set<tree> &in_progress)
 	      if (!POINTER_TYPE_P (arg_type)
 		  && TREE_CODE (arg_type) != REFERENCE_TYPE)
 		continue;
-	      if (!cg_provably_owned_p (arg, fun, in_progress))
+	      if (!cg_provably_owned_p (arg, fun, in_progress, reason_out))
 		{
 		  result = false;
 		  break;
@@ -1031,6 +1049,8 @@ cg_provably_owned_p (tree val, function *fun, hash_set<tree> &in_progress)
     }
 
   in_progress.remove (val);
+  if (!result && reason_out && *reason_out == OA_UNPROVABLE_NONE)
+    *reason_out = OA_UNPROVABLE_NOT_RECEIVED;
   return result;
 }
 
@@ -2223,13 +2243,18 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 	    {
 	      tree substituted = cg_resolve_call_argument (call, argno);
 	      hash_set<tree> in_progress;
+	      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 	      if (!cg_provable_object_address_p (substituted, established,
 						  /*require_conveyor=*/true,
-						  in_progress))
-		error_at (gimple_location (call),
-			  "cannot prove %<is_object_address%> for %qE, "
-			  "implicitly required by the receiver of %qD",
-			  substituted, callee);
+						  in_progress, &reason))
+		{
+		  error_at (gimple_location (call),
+			    "cannot prove %<is_object_address%> for %qE, "
+			    "implicitly required by the receiver of %qD",
+			    substituted, callee);
+		  if (const char *why = oa_unprovable_reason_text (reason))
+		    inform (gimple_location (call), "%s", _(why));
+		}
 	    }
 	  continue;
 	}
@@ -2240,12 +2265,16 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 
       tree substituted = cg_resolve_call_argument (call, argno);
       hash_set<tree> in_progress;
+      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
       if (!cg_provable_object_address_p (substituted, established,
-					  /*require_conveyor=*/true, in_progress))
+					  /*require_conveyor=*/true, in_progress,
+					  &reason))
 	{
 	  error_at (gimple_location (call),
 		    "cannot prove %<is_object_address%> for %qE, "
 		    "required by the precondition of %qD", substituted, callee);
+	  if (const char *why = oa_unprovable_reason_text (reason))
+	    inform (gimple_location (call), "%s", _(why));
 	  continue;
 	}
 
@@ -2253,11 +2282,17 @@ cg_check_call_reference_safety (gcall *call, function *fun,
       if (!is_const_ref)
 	{
 	  hash_set<tree> owned_in_progress;
-	  if (!cg_provably_owned_p (substituted, fun, owned_in_progress))
-	    error_at (gimple_location (call),
-		      "argument %qE is not owned by the calling function, "
-		      "so it may not be passed as the non-const reference "
-		      "parameter %qD of %qD", substituted, parm, callee);
+	  oa_unprovable_reason own_reason = OA_UNPROVABLE_NONE;
+	  if (!cg_provably_owned_p (substituted, fun, owned_in_progress,
+				     &own_reason))
+	    {
+	      error_at (gimple_location (call),
+			"argument %qE is not owned by the calling function, "
+			"so it may not be passed as the non-const reference "
+			"parameter %qD of %qD", substituted, parm, callee);
+	      if (const char *why = oa_unprovable_reason_text (own_reason))
+		inform (gimple_location (call), "%s", _(why));
+	    }
 	}
     }
 }
@@ -2735,8 +2770,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  hash_set<tree> in_progress;
 	  if (is_oa)
 	    {
+	      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 	      if (cg_provable_object_address_p (substituted, established,
-						 require_conveyor, in_progress))
+						 require_conveyor, in_progress,
+						 &reason))
 		continue; /* Proven true: silently discharged.  */
 	      if (strict)
 		error_at (gimple_location (call),
@@ -2748,6 +2785,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 			    "cannot verify %<is_object_address%> for %qE, as "
 			    "required by the precondition of %qD",
 			    substituted, callee);
+	      if (const char *why = oa_unprovable_reason_text (reason))
+		inform (gimple_location (call), "%s", _(why));
 	    }
 	  else
 	    {

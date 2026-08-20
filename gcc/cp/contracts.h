@@ -306,8 +306,32 @@ enum oa_unprovable_reason
   OA_UNPROVABLE_NO_WRAP_COMPANION,   /* An arithmetic composition (e.g. a
 					 subtraction) lacks an independent
 					 fact ruling out its own wraparound.  */
-  OA_UNPROVABLE_UNRESOLVED_OPERAND   /* Couldn't determine a range/value for
+  OA_UNPROVABLE_UNRESOLVED_OPERAND,  /* Couldn't determine a range/value for
 					 an operand at all.  */
+  /* The remaining four are specific to the is_object_address/reference-
+     ownership (P2680 Q1/Q2) obligations (oa_provable_p/oa_reference_
+     owned_p) -- a genuinely different *kind* of question ("is this
+     provably an object address"/"is this owned, not borrowed") than
+     every category above (all of which are about a numeric/relational
+     proof falling short), but reusing the same enum/text-lookup
+     mechanism rather than standing up a parallel one.  */
+  OA_UNPROVABLE_NOT_ADDRESS_SHAPE,   /* Not a recognized address-taking or
+					 provable-object expression shape at
+					 all (is_object_address specifically).  */
+  OA_UNPROVABLE_NOT_RECEIVED,        /* Resolved to a real identity, but not
+					 a parameter/local this function
+					 itself received or created (e.g. a
+					 global) -- so it can't be "owned" by
+					 this function's own activation.  */
+  OA_UNPROVABLE_PREDICATE_CONTEXT,   /* Would be owned in ordinary function-
+					 body context, but predicate/assert
+					 condition text never owns anything --
+					 it only has visibility into the
+					 enclosing function's own state.  */
+  OA_UNPROVABLE_LAUNDERED_BORROWED   /* This function's own parameter/local,
+					 but its current value was reassigned
+					 from a borrowed/external source
+					 (ownership-laundering).  */
 };
 
 /* Text for a short, standalone inform() sentence fragment explaining
