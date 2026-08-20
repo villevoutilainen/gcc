@@ -58,18 +58,37 @@
 // numeric cap ('idx < 5') to demonstrate the mechanism this fix actually
 // added, independent of whatever the ranger can also prove on its own.
 //
-// Every multi-fact function below nests its conditions as separate 'if'
-// statements rather than joining them with '&&': found via direct
-// testing that GIMPLE's own dominator-based fact propagation
-// (cg_dom_fact_state.call_rel, populated per edge by cg_refine_edge_
-// into) does not currently carry a fact established in one conjunct of
-// a single '&&' condition through to a *later* conjunct's own dominated
-// block -- confirmed with a minimal, completely unrelated repro ('if
-// (idx < 100 && idx < v.size ()) return v[idx];' fails to verify even
-// though the second conjunct alone is already sufficient). This is a
-// separate, pre-existing GIMPLE-engine gap, not something this fix
-// introduces or is required to close; nested ifs are a mechanically
-// equivalent, unaffected way to write the same set of conditions.
+// Most multi-fact functions below nest their conditions as separate
+// 'if' statements rather than joining them with '&&' -- this was, for a
+// while, a required workaround: a fact established in one conjunct of a
+// single '&&'/'||' condition did not propagate through to a later
+// conjunct's own dominated block, root-caused to the exact GIMPLE shape
+// '&&'/'||' actually lowers to right after the "ssa" pass (this pass's
+// own insertion point) -- NOT a simple dominator chain of GIMPLE_CONDs
+// the way nested ifs produce, but two (or more) real comparisons
+// feeding a PHI node that merges a literal 1/0 per arm, followed by a
+// *separate*, later 'if (merged != 0)' retest gating entry to the body.
+// cg_compute_in_state's own per-edge loop was seeding that retest
+// edge's own analysis state from the PHI's own merge-point block's OUT
+// state -- which, being an ordinary multi-predecessor merge, had
+// already discarded exactly the fact only one of the PHI's own
+// predecessors actually established. Fixed by cg_bool_phi_source_edges
+// (recognizes this exact "boolean tested against zero, copy-chased to
+// a PHI whose arguments -- after one more hop through each argument's
+// own single, trivial constant-assignment def -- are literal 0/1
+// constants" shape) plus cg_gimple_cond_zero_test (the shared zero-test
+// extraction): for such a retest edge, cg_compute_in_state now seeds
+// its analysis state directly from the *qualifying* PHI-argument
+// predecessors' own already-computed, still-precise OUT states instead
+// of the merge point's own lossy one. Verified via direct testing (not
+// assumed) that this is the complete shape for arbitrary '&&'/'||'
+// composition, not a 2-conjunct special case: 3-conjunct, mixed
+// '&&'/'||' with parenthesized nesting, and negation were each dumped
+// and all collapse to this same single flat PHI, regardless of nesting
+// depth. use_signed_idx_nonneg_ok_and and use_or_case below use '&&'/
+// '||' directly, verifying exactly like their nested-if counterparts;
+// the nested-if functions themselves are kept as-is (still correct,
+// just no longer the only way to write these).
 //
 // use_signed_idx_declines's own type-level decline was later found to be
 // overly blunt -- see the AST-side sibling test's own comment for the
@@ -174,6 +193,32 @@ int use_definitely_unsound (std::vector<int>& v)
   return -1;
 }
 
+// The fix's own '&&' demo: same shape as use_signed_idx_nonneg_ok above
+// (the user's own original motivating example), joined with '&&'
+// instead of nested ifs -- verifies exactly the same way.
+int use_signed_idx_nonneg_ok_and (std::vector<int>& v, int idx)
+{
+  if (idx >= 0 && v.size () > idx && v.size () - idx > 10)
+    return v[idx]; // proven safe, no diagnostic
+  return -1;
+}
+
+// The fix's own '||' demo: either disjunct alone already implies
+// 'idx < v.size ()' (a small literal bound, or the accessor directly),
+// so the PHI's own qualifying-predecessor merge covers two source
+// blocks here, not one -- exercising the agreement-merge path for
+// multiple qualifying predecessors, not just the '&&' single-qualifier
+// case above.
+int use_or_case (std::vector<int>& v, std::vector<int>::size_type idx)
+{
+  if (idx < 3 || idx < v.size ())
+    {
+      if (idx < v.size ())
+	return v[idx]; // proven safe, no diagnostic
+    }
+  return -1;
+}
+
 int main ()
 {
   std::vector<int> v(20);
@@ -181,5 +226,6 @@ int main ()
 	 + use_shift_without_numeric_cap_ok (v, 0)
 	 + use_sound (v, 0) + use_unsound (v, 0)
 	 + use_signed_idx_declines (v, 0) + use_signed_idx_nonneg_ok (v, 0)
-	 + use_definitely_unsound (v);
+	 + use_definitely_unsound (v)
+	 + use_signed_idx_nonneg_ok_and (v, 0) + use_or_case (v, 0);
 }
