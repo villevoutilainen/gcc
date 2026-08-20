@@ -260,6 +260,62 @@ enum oa_range_subsumption_result
   OA_RANGE_PARTIAL      /* Neither of the above: cannot verify.  */
 };
 
+/* A handful of recurring reasons an OA_UNKNOWN/"cannot verify" outcome
+   above actually happened, general enough to apply to any of this
+   file's obligation kinds (predicate, relational, field/call-range,
+   bare-scalar range) rather than any one of them specifically -- an
+   obligation handler that already has to fall back to a generic
+   "cannot verify"/"cannot prove" diagnostic can additionally consult
+   this (via an optional, defaulted trailing out-parameter on whichever
+   matcher/consult helper it called) to emit a short, specific follow-up
+   inform() alongside it, the same way the existing predicate-conjunct
+   "is established %s, but requires %s" diagnostic already does for its
+   own one case (OA_UNPROVABLE_NONE is deliberately not used for that
+   case -- it already has fully-worded, precedent-setting text of its
+   own and doesn't need this generic lookup).
+
+   Declared here (not contracts.cc, where the text lookup lives) so
+   contracts-gimple.cc's own consult/handler functions can use the exact
+   same vocabulary and message text, never a separately-maintained
+   duplicate -- see oa_proof_result/oa_range_subsumption_result
+   immediately above for the same reasoning.  Every wiring site follows
+   the same pattern: an optional `oa_unprovable_reason *reason_out =
+   nullptr` parameter, set only at the function's own specific decline
+   point(s), left untouched (OA_UNPROVABLE_NONE) when the conjunct
+   simply isn't this shape at all -- that's "wrong idiom entirely," not
+   a reason belonging to this family.  */
+enum oa_unprovable_reason
+{
+  OA_UNPROVABLE_NONE,                /* No specific reason captured -- message
+					 unchanged, no follow-up note.  */
+  OA_UNPROVABLE_NO_FACT,             /* Nothing at all established about this
+					 quantity/identity.  */
+  OA_UNPROVABLE_WRONG_IDENTITY,      /* A fact exists, but for a different
+					 object/receiver/callee.  */
+  OA_UNPROVABLE_WEAKER_PROVENANCE,   /* A fact exists and matches, but only
+					 under weaker (symbolic/unverified)
+					 trust than this check requires
+					 (conveyor-strict).  */
+  OA_UNPROVABLE_RANGE_PARTIAL,       /* A fact/range exists, matches, and has
+					 the right polarity, but doesn't fully
+					 cover the required bound.  */
+  OA_UNPROVABLE_SIGN_AMBIGUOUS,      /* A value's own sign/range isn't
+					 established, so a signedness-changing
+					 conversion can't be shown
+					 value-preserving.  */
+  OA_UNPROVABLE_NO_WRAP_COMPANION,   /* An arithmetic composition (e.g. a
+					 subtraction) lacks an independent
+					 fact ruling out its own wraparound.  */
+  OA_UNPROVABLE_UNRESOLVED_OPERAND   /* Couldn't determine a range/value for
+					 an operand at all.  */
+};
+
+/* Text for a short, standalone inform() sentence fragment explaining
+   REASON, or NULL for OA_UNPROVABLE_NONE (meaning: emit no follow-up
+   note at all).  See oa_unprovable_reason's own comment immediately
+   above for the calling convention every wiring site follows.  */
+extern const char *oa_unprovable_reason_text (oa_unprovable_reason reason);
+
 /* Walk FNDECL's own pre-genericize body using the existing oa_walk_stmt
    machinery unchanged (so IILE recursion, loop-header/if-else merging,
    and existing fact tracking, including a callee's postcondition
