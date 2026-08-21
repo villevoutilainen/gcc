@@ -24,11 +24,14 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 
 struct thing {
   int count;
-  void consume () pre<conveyor_ctrl_v>(this->count >= 20 && this->count < 1000)
+  void consume ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
+    pre<conveyor_ctrl_v>(this->count >= 20 && this->count < 1000)
   { }
 };
 
 void relay (thing *p)
+  pre<conveyor_ctrl_v>(std::is_object_address (p))
 {
   p->consume (); // { dg-warning "gimple-oa: cannot verify" }
 }
