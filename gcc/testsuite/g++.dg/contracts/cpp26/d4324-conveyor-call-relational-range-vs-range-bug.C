@@ -48,14 +48,21 @@ struct test_vector {
 
   int size () const conveyor { return n; }
 
-  int& operator[] (int idx) pre<conveyor_ctrl_v>(idx < size ())
+  int& operator[] (int idx)
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
+    post<conveyor_ctrl_v>(std::is_object_address (this))
+    pre<conveyor_ctrl_v>(idx < size ())
   { return data[idx]; }
 
-  void resize_to_5 () post<conveyor_ctrl_v>(size () == 5) // { dg-warning "cannot verify postcondition" }
+  void resize_to_5 ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
+    post<conveyor_ctrl_v>(std::is_object_address (this))
+    post<conveyor_ctrl_v>(size () == 5) // { dg-warning "cannot verify postcondition" }
   { n = 5; }
 };
 
 int use_sound (test_vector& v)
+  pre<conveyor_ctrl_v>(std::is_object_address (&v))
 {
   v.resize_to_5 ();
   int idx = 3;
@@ -63,6 +70,7 @@ int use_sound (test_vector& v)
 }
 
 int use_unsound (test_vector& v)
+  pre<conveyor_ctrl_v>(std::is_object_address (&v))
 {
   v.resize_to_5 ();
   int idx = 3;

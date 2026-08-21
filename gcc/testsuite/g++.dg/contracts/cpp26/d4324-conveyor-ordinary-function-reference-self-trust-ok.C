@@ -1,17 +1,18 @@
-// D4324/P2680: a genuinely pre-existing gap, found (and fixed) while
-// implementing the 'this'-receiver Q1 correction, but independent of it:
-// an ORDINARY (non-conveyor-declared) function's own reference
-// parameter, forwarded from its OWN precondition/postcondition/assert
-// text to another conveyor call's reference parameter, needs the same
-// self-trust a conveyor-declared function's own reference parameter
-// already gets -- previously this was scoped to DECL_DECLARED_CONVEYOR_P
-// of the FORWARDING function, so this exact shape failed to prove
-// is_object_address on stock, unmodified GCC, confirmed by direct
-// testing. Widened to unconditional (every function's own reference
-// parameters, not just a conveyor-declared one's), matching a bound
-// reference's own "valid for its entire lifetime" language guarantee,
-// which holds regardless of whether the referencing function happens to
-// be conveyor-declared.
+// D4324/P2680 soundness fix (see ~/soundness-fixes-for-conveyors.md): an
+// ORDINARY (non-conveyor-declared) function's own reference parameter
+// gets NO automatic self-trust at all when forwarded from its OWN
+// precondition/postcondition/assert text to another conveyor call's
+// reference parameter -- only a conveyor-declared function's own
+// reference parameters/'this' carry an implicit, compiler-synthesized
+// is_object_address precondition (oa_synthesize_implicit_reference_
+// safety_preconditions), discharged by ITS OWN callers; an ordinary
+// function has no such synthesized precondition; forwarding its own
+// reference parameter to a conveyor callee is exactly as unproven as
+// forwarding an unrelated pointer would be. 'forward' below is the
+// FORWARDING function, still not itself conveyor-declared, but now
+// gives an explicit is_object_address(&y) precondition of its own so
+// the call to use_val(y) can be discharged -- the only way a non-
+// conveyor function can ever hand such a proof to a conveyor callee.
 //
 // Deliberately uses a CONST reference target (Q1 only, no Q2): Q2's own
 // ownership check unconditionally returns false for ANY parameter (not
@@ -53,6 +54,9 @@ int use_val (const int &x) conveyor
 // Plain (non-conveyor) function whose own precondition forwards its own
 // reference parameter to another conveyor function's const reference
 // parameter.
-int forward (int &y) pre<conveyor_ctrl_v>(use_val (y) >= 0) { return y; }
+int forward (int &y)
+  pre<conveyor_ctrl_v>(std::is_object_address (&y))
+  pre<conveyor_ctrl_v>(use_val (y) >= 0)
+{ return y; }
 
 int main () { int v = 1; return forward (v) - 1; }

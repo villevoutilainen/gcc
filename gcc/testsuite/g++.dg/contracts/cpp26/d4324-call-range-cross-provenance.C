@@ -45,7 +45,10 @@ struct S {
 };
 
 int consume_conveyor (const S& s) conveyor pre<conveyor_ctrl_v>(s.size () > 3) { return 0; }
-int consume_symbolic (const S& s) pre<symbolic_ctrl_v>(s.size () > 3) { return 0; }
+int consume_symbolic (const S& s)
+  pre<conveyor_ctrl_v>(std::is_object_address (&s))
+  pre<symbolic_ctrl_v>(s.size () > 3)
+{ return 0; }
 
 // USE_IT's own precondition establishes a *symbolic*-only call-range
 // fact for 's' (self-trust), for the rest of its own body. The extra

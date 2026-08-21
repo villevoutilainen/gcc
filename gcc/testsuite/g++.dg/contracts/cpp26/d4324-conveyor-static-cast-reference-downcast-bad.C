@@ -4,6 +4,8 @@
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
+#include <contracts>
+
 struct Base { virtual ~Base () {} };
 struct Derived : Base { int v; };
 

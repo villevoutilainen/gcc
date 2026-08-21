@@ -1,10 +1,13 @@
-// D4324/P2680 author correction (2026-08-19): a member conveyor call's
-// own receiver ('this' of the callee) now carries the same implicit
-// is_object_address obligation an explicit reference parameter always
-// has -- previously 'this' was an unconditional axiom, needing no proof
-// from any caller at all. This test covers the OK shapes: a receiver
-// that's provably valid, via each of the ways oa_provable_p already
-// recognizes one.
+// D4324/P2680 author correction (2026-08-19), refined by the later
+// soundness fix in ~/soundness-fixes-for-conveyors.md: a member conveyor
+// call's own receiver ('this' of the callee) carries the same implicit
+// is_object_address obligation an explicit reference parameter does --
+// 'this' is never an unconditional axiom, and neither is an ordinary
+// (non-conveyor) function's own reference parameter. This test covers
+// the OK shapes: a receiver that's provably valid, via each of the ways
+// oa_provable_p already recognizes one (including an ordinary function
+// giving an explicit precondition of its own for its reference
+// parameter, the only way it can ever discharge such a call).
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
@@ -40,8 +43,12 @@ int via_pointer_precondition (S *p) conveyor
   return p->bump ();
 }
 
-// A reference parameter (always implicitly trusted, unconditionally).
+// A reference parameter of a non-conveyor function: no automatic
+// self-trust (D4324/P2680 soundness fix) -- needs its own explicit
+// is_object_address(&r) precondition to discharge r.bump()'s own
+// implicit receiver obligation.
 int via_reference_parameter (S &r)
+  pre<conveyor_ctrl_v>(std::is_object_address (&r))
 {
   return r.bump ();
 }

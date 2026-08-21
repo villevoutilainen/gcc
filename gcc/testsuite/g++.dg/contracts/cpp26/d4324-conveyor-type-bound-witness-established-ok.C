@@ -13,6 +13,8 @@
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
+#include <contracts>
+
 struct S { int size () const conveyor { return 5; } };
 
 int use_for_loop_guard (int n) conveyor

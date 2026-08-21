@@ -33,7 +33,10 @@ int use_val (const int &x) conveyor
   return x;
 }
 
-int forward (int &y) pre<conveyor_ctrl_v>(use_val (y) >= 0) { return y; }
+int forward (int &y)
+  pre<conveyor_ctrl_v>(std::is_object_address (&y))
+  pre<conveyor_ctrl_v>(use_val (y) >= 0)
+{ return y; }
 
 int main ()
 {

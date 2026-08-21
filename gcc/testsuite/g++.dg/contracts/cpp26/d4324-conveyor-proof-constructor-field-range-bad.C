@@ -16,6 +16,7 @@ struct thing {
     post<sc::proven_conveyor_v>(this->count >= 200 && this->count < 300)
   { count = c; }
   void consume_count ()
+    pre<sc::proven_conveyor_v>(std::is_object_address (this))
     pre<sc::proven_conveyor_v>(this->count >= 20 && this->count < 100)
   { }
 };

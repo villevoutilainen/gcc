@@ -10,6 +10,8 @@
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
+#include <contracts>
+
 struct S { int v; ~S () conveyor {} };
 
 int f (bool flag) conveyor

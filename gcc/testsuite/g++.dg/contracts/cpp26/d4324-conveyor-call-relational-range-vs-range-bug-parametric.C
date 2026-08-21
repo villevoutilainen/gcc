@@ -35,16 +35,23 @@ struct test_vector {
   // Deliberately NOT conveyor -- the caller-obligation check is driven by
   // -fcontract-conveyor-proofs and this precondition's own control
   // object, never by whether operator[] itself is conveyor-declared.
-  int& operator[] (int idx) pre<conveyor_ctrl_v>(idx < size ())
+  int& operator[] (int idx)
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
+    post<conveyor_ctrl_v>(std::is_object_address (this))
+    pre<conveyor_ctrl_v>(idx < size ())
   { return data[idx]; }
 
   // A real, general resize -- 'n' (the parameter) is the postcondition's
   // own "other side", resolved through substitution at each call site.
-  void resize (int const m) post<conveyor_ctrl_v>(size () == m) // { dg-warning "cannot verify postcondition" }
+  void resize (int const m)
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
+    post<conveyor_ctrl_v>(std::is_object_address (this))
+    post<conveyor_ctrl_v>(size () == m) // { dg-warning "cannot verify postcondition" }
   { n = m; }
 };
 
 int use_sound (test_vector& v)
+  pre<conveyor_ctrl_v>(std::is_object_address (&v))
 {
   v.resize (5);
   int idx = 3;
@@ -52,6 +59,7 @@ int use_sound (test_vector& v)
 }
 
 int use_unsound (test_vector& v)
+  pre<conveyor_ctrl_v>(std::is_object_address (&v))
 {
   v.resize (5);
   int idx = 3;

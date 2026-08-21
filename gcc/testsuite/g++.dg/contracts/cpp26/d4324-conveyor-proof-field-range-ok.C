@@ -27,10 +27,12 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 struct thing {
   int count;
   void produce_count ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
     post<conveyor_ctrl_v>(this->count >= 40
 			  && this->count < 100)
   { count = 55; }
   void consume_count ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
     pre<conveyor_ctrl_v>(this->count >= 20 && this->count < 1000)
   { }
 };

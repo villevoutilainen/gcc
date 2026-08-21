@@ -26,6 +26,7 @@ reject_ternary_one_arm_unproven (bool c, T* p) conveyor
 {
   T a{1};
   return use_val_mut (c ? a : *p); // { dg-error "cannot prove .is_object_address." }
+					  // { dg-error "is not owned by the calling function" "ownership" { target *-*-* } .-1 }
 }
 
 int main () { return 0; }

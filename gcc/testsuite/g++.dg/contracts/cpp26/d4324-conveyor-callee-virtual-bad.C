@@ -14,6 +14,8 @@
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
+#include <contracts>
+
 struct Base
 {
   virtual int f (int x) conveyor { return x; }

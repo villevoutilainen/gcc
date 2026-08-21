@@ -48,6 +48,7 @@ struct Number
   { m_value = value; }
 
   void increase_by (double percentage)
+    pre<sc::proven_conveyor_v>(std::is_object_address (this))
     pre<sc::proven_conveyor_v>(percentage >= 0.0
 				 && this->m_value >= 0.0 && this->m_value <= 100.0)
     post<sc::proven_conveyor_v>(this->m_value >= 0.0 && this->m_value <= 100.0)
@@ -58,12 +59,14 @@ struct Number
   }
 
   void decrease_by (double percentage)
+    pre<sc::proven_conveyor_v>(std::is_object_address (this))
     pre<sc::proven_conveyor_v>(percentage >= 0.0 && percentage <= 100.0
 				 && this->m_value >= 0.0 && this->m_value <= 100.0)
     post<sc::proven_conveyor_v>(this->m_value >= 0.0 && this->m_value <= 100.0)
   { m_value *= (1.0 - percentage / 100.0); }
 
   double value () const
+    pre<sc::proven_conveyor_v>(std::is_object_address (this))
     pre<sc::proven_conveyor_v>(this->m_value >= 0.0 && this->m_value <= 100.0)
     post<sc::proven_conveyor_v>(r: r >= 0.0 && r <= 100.0)
   { return m_value; }

@@ -26,7 +26,18 @@ struct A {
   int data[8];
   int n = 0;
   int size () const conveyor { return n; }
-  void resize_to_100 () post<conveyor_ctrl_v>(size () == 100) // { dg-warning "cannot verify postcondition" }
+  // Not itself conveyor-declared, so calling it through a reference
+  // conservatively invalidates that reference's own tracked
+  // is_object_address fact; the explicit post<>(is_object_address(this))
+  // re-vouches for 'this' once RESIZE_TO_100 itself returns, re-exported
+  // to the caller the same way its own field-range postcondition
+  // already re-establishes a fact -- see oa_handle_call_symbolic_
+  // postcondition_establishment's own conveyor_established/
+  // is_object_address block.
+  void resize_to_100 ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
+    post<conveyor_ctrl_v>(std::is_object_address (this))
+    post<conveyor_ctrl_v>(size () == 100) // { dg-warning "cannot verify postcondition" }
   { n = 100; }
 };
 
@@ -34,13 +45,22 @@ struct B {
   int data[8];
   int n = 0;
   int size () const conveyor { return n; }
-  void resize_to_5 () post<conveyor_ctrl_v>(size () == 5) // { dg-warning "cannot verify postcondition" }
+  void resize_to_5 ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
+    post<conveyor_ctrl_v>(std::is_object_address (this))
+    post<conveyor_ctrl_v>(size () == 5) // { dg-warning "cannot verify postcondition" }
   { n = 5; }
 };
 
-int use_it (A& a, B& b) pre<conveyor_ctrl_v>(a.size () < b.size ()) { return 0; }
+int use_it (A& a, B& b)
+  pre<conveyor_ctrl_v>(std::is_object_address (&a))
+  pre<conveyor_ctrl_v>(std::is_object_address (&b))
+  pre<conveyor_ctrl_v>(a.size () < b.size ())
+{ return 0; }
 
 int caller (A& a, B& b)
+  pre<conveyor_ctrl_v>(std::is_object_address (&a))
+  pre<conveyor_ctrl_v>(std::is_object_address (&b))
 {
   a.resize_to_100 ();
   b.resize_to_5 ();

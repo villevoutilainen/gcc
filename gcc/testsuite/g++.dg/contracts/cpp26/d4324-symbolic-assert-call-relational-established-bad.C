@@ -24,6 +24,16 @@ struct symbolic_ctrl {
 };
 inline constexpr symbolic_ctrl symbolic_ctrl_v{};
 
+struct conveyor_ctrl {
+  static constexpr bool is_ignored (sc::assertion_static_info) { return false; }
+  static constexpr bool constify (sc::assertion_static_info) { return false; }
+  static constexpr bool assumable (sc::assertion_static_info) { return false; }
+  static constexpr bool is_conveyor (sc::assertion_static_info) { return true; }
+  void operator() (const sc::assertion_context& ctx) const
+  { if (!ctx.check ()) __builtin_trap (); }
+};
+inline constexpr conveyor_ctrl conveyor_ctrl_v{};
+
 struct S {
   int size () const conveyor { return 5; }
 };
@@ -33,7 +43,9 @@ struct S {
 // conveyor_established == false, since the *establishing* control
 // object here is symbolic-only.
 int
-f (int x, S& v) pre<symbolic_ctrl_v>(x < v.size ())
+f (int x, S& v)
+  pre<conveyor_ctrl_v>(std::is_object_address (&v))
+  pre<symbolic_ctrl_v>(x < v.size ())
 {
   contract_assert<symbolic_ctrl_v>(x > v.size ()); // { dg-error "condition .*size.*is provably false" }
                                                     // { dg-message "established \[^\n\]*" "established fact" { target *-*-* } .-1 }
