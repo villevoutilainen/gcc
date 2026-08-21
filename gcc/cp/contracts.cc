@@ -23433,12 +23433,46 @@ oa_contract_symbolic_strict_cached_p (tree contract)
 	 && oa_symbolic_strict_contract_cache->contains (contract);
 }
 
+/* Every FNDECL this walk has already fully processed (see the
+   idempotency guard just below oa_resolve_object_address_in_function_1's
+   own early exits). Lazily allocated, never cleared -- a FUNCTION_DECL's
+   identity is stable and unique for the whole compilation, and this
+   walk's own job (resolve every is_object_address call in FNDECL's
+   contracts to a literal true, in place) is a true one-time operation:
+   its own oa_resolve_condition mutates CONTRACT_CONDITION destructively,
+   so a second walk over an already-resolved body can no longer
+   recognize the very CALL_EXPRs it needs to re-establish the facts a
+   later conjunct/item-8 check in that same second walk might depend
+   on -- see the "double-invocation" gap this guards against, below.  */
+static hash_set<tree> *oa_resolved_functions;
+
 /* Shared body for resolve_object_address_in_function and
    oa_walk_function_calls below: both need exactly the same early exits
    and the same fresh, freshly-tracked oa_env walk over FNDECL's own
    pre-genericize body -- they differ only in whether a plugin's own
    call-site callback is armed (via oa_call_site_callback) around the
-   walk, which is oa_walk_function_calls's own, sole addition.  */
+   walk, which is oa_walk_function_calls's own, sole addition.
+
+   D4324/P2680: a testsuite plugin using oa_walk_function_calls (e.g.
+   conveyor_proof_plugin.cc, symbolic_proof_plugin.cc,
+   gimple_object_address_plugin.cc) registers a PLUGIN_PRE_GENERICIZE
+   callback, which finish_function (decl.cc) invokes *before* its own,
+   official resolve_object_address_in_function call for the very same
+   FNDECL -- so, under such a plugin, this function would otherwise run
+   twice for the same function: once via the plugin's own callback, once
+   via the official pass. Whichever run happens first does the complete,
+   correct job (resolving/establishing every fact, emitting every
+   diagnostic, and invoking any armed call-site/assert-site callback);
+   the second is not merely redundant but actively broken, since the
+   first run's in-place CONTRACT_CONDITION mutation means the second can
+   no longer recognize an already-resolved is_object_address call to
+   re-establish it. Guarding here (rather than, say, only in the
+   official, callback-free path) keeps a plugin's own callback ordering
+   and observations completely unaffected either way -- the plugin
+   simply "wins" the race by construction (PLUGIN_PRE_GENERICIZE always
+   fires first), and the official call becomes the redundant no-op
+   instead, matching the pre-existing behavior for every other caller
+   (which was already, in practice, calling this exactly once).  */
 
 static void
 oa_resolve_object_address_in_function_1 (tree fndecl)
@@ -23471,6 +23505,13 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
      again for the instantiated body with concrete types and real,
      non-dependent local variables to trace.  */
   if (processing_template_decl)
+    return;
+
+  /* D4324/P2680 double-invocation guard -- see this function's own
+     leading comment above for the plugin scenario this prevents.  */
+  if (!oa_resolved_functions)
+    oa_resolved_functions = new hash_set<tree> ();
+  if (oa_resolved_functions->add (fndecl))
     return;
 
   tree body = DECL_SAVED_TREE (fndecl);
