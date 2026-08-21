@@ -1553,48 +1553,52 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 
   /* D4324/P2680 item 7's Q1 axiom, mirroring contracts.cc's own
      oa_resolve_object_address_in_function_1 (the AST engine's identical
-     "every reference-typed parameter... is itself provably is_object_
-     address" seeding) -- without this, FNDECL's own reference
-     parameters, forwarded unchanged to another conveyor call, would be
-     flagged by cg_check_call_reference_safety's own Q1 check as
-     unprovable, even though a reference parameter's own value is
-     already a validated address by construction (whatever proved it
-     valid for THIS function's own call is exactly why it's valid to
-     forward).
+     "every reference-typed parameter of a CONVEYOR-DECLARED function...
+     is itself provably is_object_address" seeding) -- without this,
+     FNDECL's own reference parameters, forwarded unchanged to another
+     conveyor call, would be flagged by cg_check_call_reference_safety's
+     own Q1 check as unprovable, even though a reference parameter's own
+     value is already a validated address by construction. This is the
+     assumption side of the implicit precondition item 7's own call-site
+     check enforces as the proof side -- sound only because DECL_
+     DECLARED_CONVEYOR_P (FNDECL) is exactly what makes that check
+     require every caller of *this* function to have proven it first.
 
-     P2680 author correction (2026-08-19): widened from DECL_DECLARED_
-     CONVEYOR_P (FNDECL)-gated to unconditional (every function this
-     pass ever reaches), mirroring the identical widening in contracts.cc
-     -- a non-conveyor-declared function with its own contract
-     specifiers (cg_function_might_need_reference_safety_walk_p's own
-     broader trigger, which the call-site CONSULT side already uses) can
-     just as easily forward its own reference parameter, or 'this', to a
-     nested conveyor call from its own precondition/postcondition text;
-     the original DECL_DECLARED_CONVEYOR_P gate here was narrower than
-     that consult-side trigger, a real, independently-confirmed gap
-     (contracts.cc's own identical comment has the concrete repro). Sound
-     for the same reason as always: a bound reference is guaranteed
-     valid for its own entire lifetime by the language itself, and
-     'this' is trusted for the ENTIRE duration of the function whose
-     'this' it is -- neither depends on that function being conveyor-
-     declared.
+     D4324/P2680 soundness fix (2026-08-21, see ~/soundness-fixes-for-
+     conveyors.md): a prior "P2680 author correction" (faaa6e6a921f,
+     2026-08-19) widened this loop to unconditional (every function this
+     pass ever reaches, not just a conveyor-declared one), mirroring an
+     identical widening in contracts.cc, reasoning that a bound
+     reference/'this' is valid for its own entire lifetime regardless of
+     whether the enclosing function is conveyor-declared. That conflates
+     "valid once bound" with "was ever validly bound by every possible
+     caller" -- a non-conveyor function imposes no obligation on its own
+     callers, so it has no basis to assume the latter about its own
+     parameters. Confirmed by direct testing: a non-conveyor function
+     forwarding its own reference parameters into a nested conveyor call,
+     with no precondition of its own, compiled clean under the widening.
+     Reverted to the original DECL_DECLARED_CONVEYOR_P gate -- see
+     contracts.cc's own identical comment for the two motivating cases
+     the widening was trying to fix, and why each needs an explicit
+     precondition on the forwarding/dereferencing function instead.
 
-     'this' gets the exact same treatment now too, not the unconditional
-     cg_provable_object_address_p axiom it used to be (see that
-     function's own comment) -- both are now ordinary self-trusted
-     ESTABLISHED facts. The NEW restriction this correction actually adds
-     -- a member conveyor call's own receiver must be proven by its
-     CALLER -- lives entirely at the call site instead (cg_check_call_
-     reference_safety's own is_this_parameter handling, below), unaffected
-     by this seeding: this only ever makes a function trust its OWN
-     parameters *within its own body*.  */
-  for (tree parm = DECL_ARGUMENTS (fndecl); parm; parm = DECL_CHAIN (parm))
-    if (TREE_CODE (TREE_TYPE (parm)) == REFERENCE_TYPE || is_this_parameter (parm))
-      {
-	tree key = cg_self_trust_key (fun, parm);
-	if (key)
-	  established.put (key, { /*conveyor_established=*/true });
-      }
+     'this' is consulted via the same ordinary self-trust path as a
+     reference parameter (see cg_provable_object_address_p's own comment
+     for why it is deliberately not a hardcoded axiom); the NEW
+     restriction faaa6e6a921f actually added on top of this seed -- a
+     member conveyor call's own receiver must be proven by its CALLER --
+     lives entirely at the call site instead (cg_check_call_reference_
+     safety's own is_this_parameter handling, below) and is correct,
+     unaffected by this revert: this seeding only ever makes a function
+     trust its OWN parameters *within its own body*.  */
+  if (DECL_DECLARED_CONVEYOR_P (fndecl))
+    for (tree parm = DECL_ARGUMENTS (fndecl); parm; parm = DECL_CHAIN (parm))
+      if (TREE_CODE (TREE_TYPE (parm)) == REFERENCE_TYPE || is_this_parameter (parm))
+	{
+	  tree key = cg_self_trust_key (fun, parm);
+	  if (key)
+	    established.put (key, { /*conveyor_established=*/true });
+	}
 }
 
 /* Item 6 for relational facts: does CALL's own callee have a

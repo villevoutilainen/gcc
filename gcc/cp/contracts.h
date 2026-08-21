@@ -212,6 +212,7 @@ extern bool contract_control_symbolic_like		(tree, contract_check_side, bool = f
 extern tree contract_default_control_object		(location_t);
 extern void maybe_inherit_virtual_contract		(tree, tree);
 extern void resolve_object_address_in_function		(tree);
+extern void oa_synthesize_implicit_reference_safety_preconditions (tree);
 extern bool oa_stmt_terminates_p			(tree);
 extern void oa_mark_fn_if_expr_calls_active_contract	(tree, tree);
 
