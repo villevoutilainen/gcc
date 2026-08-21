@@ -17,9 +17,11 @@
 struct thing {
   int count;
   void produce_count ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
     post<conveyor_ctrl_v>(this->count >= 10 && this->count < 20)
   { count = 15; }
   void consume_count ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
     pre<conveyor_ctrl_v>(this->count < 30)
   { }
 };

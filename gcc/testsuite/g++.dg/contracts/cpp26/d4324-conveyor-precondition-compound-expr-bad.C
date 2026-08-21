@@ -12,10 +12,12 @@ struct thing {
   double m_value;
 
   void set_value ()
+    pre<sc::proven_conveyor_v>(std::is_object_address (this))
     post<sc::proven_conveyor_v>(this->m_value >= 0.0 && this->m_value <= 100.0)
   { m_value = 50.0; }
 
   void bump_bad (double delta)
+    pre<sc::proven_conveyor_v>(std::is_object_address (this))
     pre<sc::proven_conveyor_v>(m_value - delta >= 0.0)
   { }
 };

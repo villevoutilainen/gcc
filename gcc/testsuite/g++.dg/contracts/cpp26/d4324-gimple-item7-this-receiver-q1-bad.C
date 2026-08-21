@@ -30,7 +30,7 @@ struct S {
 
 int via_unasserted_pointer (S *p) conveyor
 {
-  return p->bump (); // { dg-error "cannot prove .is_object_address. for .p., implicitly required by the receiver" }
+  return p->bump (); // { dg-error "cannot prove .is_object_address. for .p., required by the precondition" }
 }
 
 int main () { return 0; }

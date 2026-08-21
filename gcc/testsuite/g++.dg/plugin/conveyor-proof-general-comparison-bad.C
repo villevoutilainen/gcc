@@ -12,9 +12,11 @@
 struct thing {
   int count;
   void produce_count_bad ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
     post<conveyor_ctrl_v>(this->count >= 30 && this->count < 40)
   { count = 35; }
   void consume_count ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
     pre<conveyor_ctrl_v>(this->count < 30)
   { }
 };

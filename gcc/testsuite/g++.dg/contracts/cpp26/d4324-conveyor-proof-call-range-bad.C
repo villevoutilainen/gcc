@@ -25,17 +25,33 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 struct thing {
   int count = 0;
   int get_count () const conveyor { return count; }
-  void set_to_200 () post<conveyor_ctrl_v>(get_count () == 200) // { dg-warning "cannot verify postcondition" }
+  // SET_TO_200 isn't itself conveyor-declared, so calling it through a
+  // reference conservatively invalidates that reference's own tracked
+  // is_object_address fact (oa_invalidate_symbolic_facts_for_call_args's
+  // own "any call might end this argument's lifetime" rule -- only a
+  // real conveyor callee, structurally forbidden from anything like
+  // 'delete this', is exempted). The explicit post<>(is_object_address
+  // (this)) below re-vouches for 'this' once SET_TO_200 itself returns,
+  // re-exported to the caller exactly like a field-range postcondition
+  // already re-establishes a fact after an invalidating intervening
+  // call -- see oa_handle_call_symbolic_postcondition_establishment's
+  // own conveyor_established/is_object_address block.
+  void set_to_200 ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
+    post<conveyor_ctrl_v>(std::is_object_address (this))
+    post<conveyor_ctrl_v>(get_count () == 200) // { dg-warning "cannot verify postcondition" }
   { count = 200; }
 };
 
 void consume (thing& t)
+  pre<conveyor_ctrl_v>(std::is_object_address (&t))
   pre<conveyor_ctrl_v>(t.get_count () >= 20 && t.get_count () <= 99)
 {
   (void) t;
 }
 
 void caller (thing& t)
+  pre<conveyor_ctrl_v>(std::is_object_address (&t))
 {
   t.set_to_200 ();
   consume (t); // { dg-error "provably violates the precondition" }

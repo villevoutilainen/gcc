@@ -26,6 +26,7 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 struct thing {
   double value;
   void consume_value ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
     pre<conveyor_ctrl_v>(this->value >= 20.0 && this->value < 1000.0)
   { }
 };

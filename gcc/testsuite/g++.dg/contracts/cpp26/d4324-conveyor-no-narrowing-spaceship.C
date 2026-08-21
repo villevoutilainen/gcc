@@ -9,6 +9,8 @@
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
+#include <contracts>
+
 namespace std {
 struct strong_ordering {
   int _v;

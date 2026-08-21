@@ -20,10 +20,12 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 struct thing {
   double value;
   void produce_value ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
     post<conveyor_ctrl_v>(this->value >= 40.0
 			  && this->value < 100.0)
   { value = 55.0; }
   void consume_value ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
     pre<conveyor_ctrl_v>(this->value >= 200.0)
   { }
 };

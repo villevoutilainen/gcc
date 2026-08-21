@@ -8,6 +8,8 @@
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
+#include <contracts>
+
 int f (int x) conveyor
 {
   auto add_one = [] (int y) conveyor { return y; };

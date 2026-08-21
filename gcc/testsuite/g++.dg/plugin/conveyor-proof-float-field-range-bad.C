@@ -11,9 +11,11 @@
 struct thing {
   double value;
   void produce_value_bad ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
     post<conveyor_ctrl_v>(this->value >= 200.0 && this->value < 300.0)
   { value = 250.0; }
   void consume_value ()
+    pre<conveyor_ctrl_v>(std::is_object_address (this))
     pre<conveyor_ctrl_v>(this->value >= 20.0 && this->value < 100.0)
   { }
 };
