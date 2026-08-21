@@ -13809,6 +13809,12 @@ cp_parser_lambda_body (cp_parser* parser, tree lambda_expr)
     /* We need to parse deferred contract conditions before we try to call
        finish_function (which will try to emit the contracts).  */
     cp_parser_late_contracts (parser, fco);
+    /* D4324/P2680 soundness fix: see the identical call/comment at
+       cp_parser_late_contracts's other call site (cp_parser_class_
+       specifier) -- a conveyor-declared closure's own call operator
+       needs the same follow-up now that its contracts are no longer
+       deferred.  */
+    oa_synthesize_implicit_reference_safety_preconditions (fco);
 
     /* Check that we have not caused captures that only relate to contracts.
        [expr.prim.lambda.closure] / P10.  */
@@ -30327,6 +30333,23 @@ cp_parser_class_specifier (cp_parser* parser)
 
 	  /* Now we can parse contract conditions.  */
 	  cp_parser_late_contracts (parser, decl);
+	  /* D4324/P2680 soundness fix (see ~/soundness-fixes-for-
+	     conveyors.md): grokfndecl's own attempt to synthesize DECL's
+	     implicit reference-safety/'this' preconditions was a no-op
+	     for an in-class member function definition (its own contracts
+	     were still DEFERRED_PARSE placeholders at that point) -- now
+	     that cp_parser_late_contracts has resolved them, try again.
+	     Must run BEFORE propagate_cdtor_contracts_to_clones just below:
+	     that call copies whatever's currently on DECL's own specifier
+	     list onto DECL's clones (__dt_comp/__dt_base/__dt_del etc), so
+	     synthesizing afterward would leave the clones -- the decls a
+	     destructor/constructor CALL actually resolves to -- without
+	     the implicit precondition (confirmed via direct testing: an
+	     empty, conveyor-declared '~S () conveyor {}' otherwise still
+	     fails item 8's mandatory 'this' dereference check, since the
+	     dtor call the compiler generates resolves to a clone that
+	     never received the synthesized fact).  */
+	  oa_synthesize_implicit_reference_safety_preconditions (decl);
 	  /* D4324: DECL's own contracts are only just now a real, parsed
 	     condition (see propagate_cdtor_contracts_to_clones's own
 	     comment) -- if DECL is a constructor/destructor, its clones

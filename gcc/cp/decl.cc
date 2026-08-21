@@ -12857,13 +12857,6 @@ grokfndecl (tree ctype,
 	t = DECL_TEMPLATE_RESULT (decl);
       set_fn_contract_specifiers (t, contract_specifiers);
       rebuild_postconditions (t);
-      /* D4324: an out-of-class constructor/destructor definition's own
-	 contracts are parsed eagerly (the class, and so T's own clones,
-	 already exist by now) -- see propagate_cdtor_contracts_to_clones's
-	 own comment.  A safe no-op for an in-class declaration reaching
-	 here instead, whose condition (if any) is still a DEFERRED_PARSE
-	 placeholder at this point.  */
-      propagate_cdtor_contracts_to_clones (t);
     }
 
   if (declared_conveyor_p)
@@ -12872,6 +12865,41 @@ grokfndecl (tree ctype,
       if (TREE_CODE (decl) == TEMPLATE_DECL)
 	t = DECL_TEMPLATE_RESULT (decl);
       SET_DECL_DECLARED_CONVEYOR_P (t);
+      /* D4324/P2680 soundness fix (see ~/soundness-fixes-for-conveyors.md
+	 and oa_synthesize_implicit_reference_safety_preconditions's own
+	 comment, contracts.cc): DECL_ARGUMENTS (T) is fully materialized
+	 by this point, including a member function's own 'this'
+	 (build_this_parm already ran, earlier in this same function), so
+	 this is the earliest point both T's own conveyor bit and its
+	 final parameter list are known -- exactly what's needed to
+	 synthesize T's own implicit reference-safety preconditions.  Must
+	 run BEFORE propagate_cdtor_contracts_to_clones below: that call
+	 copies whatever's currently on T's own specifier list onto T's
+	 clones, so a T that's a constructor/destructor needs the
+	 synthesized precondition already prepended (onto the user's own
+	 contract_specifiers, just set above) before its clones -- the
+	 decls a constructor/destructor CALL actually resolves to -- copy
+	 it.  */
+      oa_synthesize_implicit_reference_safety_preconditions (t);
+    }
+
+  if (contract_specifiers || declared_conveyor_p)
+    {
+      tree t = decl;
+      if (TREE_CODE (decl) == TEMPLATE_DECL)
+	t = DECL_TEMPLATE_RESULT (decl);
+      /* D4324: an out-of-class constructor/destructor definition's own
+	 contracts are parsed eagerly (the class, and so T's own clones,
+	 already exist by now) -- see propagate_cdtor_contracts_to_clones's
+	 own comment.  A safe no-op for an in-class declaration reaching
+	 here instead, whose condition (if any) is still a DEFERRED_PARSE
+	 placeholder at this point.  Runs whenever T has EITHER a real,
+	 user-written contract_specifiers OR just picked up a synthesized
+	 implicit precondition above (declared_conveyor_p, with no user-
+	 written contracts of its own at all -- e.g. a bare '~S () conveyor
+	 {}') -- both cases leave something on T's own specifier list that
+	 T's clones need too.  */
+      propagate_cdtor_contracts_to_clones (t);
     }
 
   if (declared_conveyor_auto_p)

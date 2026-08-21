@@ -21,6 +21,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "system.h"
 #include "coretypes.h"
 #include "cp-tree.h"
+#include "contracts.h"
 
 /* Friend data structures are described in cp-tree.h.  */
 
@@ -678,6 +679,31 @@ do_friend (tree scope, tree declarator, tree decl,
   add_friend (current_class_type,
 	      (!ctype && friend_depth) ? DECL_TI_TEMPLATE (decl) : decl,
 	      /*complain=*/true);
+
+  /* D4324/P2680 soundness fix (see ~/soundness-fixes-for-conveyors.md):
+     grokfndecl's own attempt to synthesize DECL's implicit reference-
+     safety/'this' preconditions never runs for a friend declaration at
+     all -- grokdeclarator calls grokfndecl with CHECK < 0 for FRIENDP,
+     which takes an early-return path (the "caller will do the rest of
+     this" branch) that only sets DECL_DECLARED_CONVEYOR_P itself, never
+     synthesizing anything (confirmed via direct testing: a conveyor-
+     tagged in-class friend operator forwarding its own reference
+     parameter to another conveyor call failed to prove is_object_
+     address for it, exactly the shape every non-friend member/free
+     function already gets automatic self-trust for). DO_FRIEND is
+     that "rest of it", called once for every friend declaration
+     regardless of shape, so this is the one place that reaches
+     everything grokfndecl's own call site does for a non-friend --
+     matching FUNCTION_DECL only (not a friend CLASS/TEMPLATE_DECL)
+     unwraps a template friend's own pattern the same way every other
+     call site in this file does.  */
+  {
+    tree t = decl;
+    if (TREE_CODE (t) == TEMPLATE_DECL)
+      t = DECL_TEMPLATE_RESULT (t);
+    if (TREE_CODE (t) == FUNCTION_DECL)
+      oa_synthesize_implicit_reference_safety_preconditions (t);
+  }
 
   return decl;
 }

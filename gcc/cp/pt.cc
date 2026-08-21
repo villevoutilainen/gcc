@@ -29003,6 +29003,28 @@ instantiate_body (tree pattern, tree args, tree d, bool nested_p)
        by a subsequent redeclaration.  */
     regenerate_decl_from_template (d, td, args);
 
+  /* D4324/P2680 soundness fix (see ~/soundness-fixes-for-conveyors.md):
+     if D is an unresolved 'conveyor(auto)' specialization currently
+     being probed (conveyor_auto_deduction_sentinel, constructed by our
+     caller before this function was even called, already tentatively
+     set DECL_DECLARED_CONVEYOR_P), synthesize D's own implicit
+     reference-safety/'this' precondition now -- mirroring grokfndecl's
+     own call for a bare 'conveyor' declaration -- so the oa_* walk of
+     D's body below (via finish_function, later in this same function)
+     sees the same self-trust a non-auto conveyor function's body
+     already gets, and D's own future callers get the matching
+     obligation.  Must run here, after regenerate_decl_from_template
+     just above has finished substituting D's real parameter list and
+     any of D's own genuine contract specifiers against ARGS -- doing
+     this any earlier (e.g. in the sentinel's own constructor) attaches
+     an already-resolved specifier that regenerate_decl_from_template's
+     tsubst_contract_specifiers would then wrongly try to re-substitute
+     as if it were still template-dependent (confirmed via an ICE in
+     tsubst_expr).  */
+  if (TREE_CODE (d) == FUNCTION_DECL && DECL_CONVEYOR_AUTO_P (d)
+      && !DECL_CONVEYOR_AUTO_RESOLVED_P (d) && DECL_DECLARED_CONVEYOR_P (d))
+    oa_synthesize_implicit_reference_safety_preconditions (d);
+
   /* We already set the file and line above.  Reset them now in case
      they changed as a result of calling regenerate_decl_from_template.  */
   input_location = DECL_SOURCE_LOCATION (d);
@@ -29169,6 +29191,19 @@ class conveyor_auto_deduction_sentinel
 	return false;
       }
     SET_DECL_DECLARED_CONVEYOR_P (d);
+    /* D4324/P2680 soundness fix (see ~/soundness-fixes-for-conveyors.md):
+       D's own implicit reference-safety/'this' precondition (mirroring
+       grokfndecl's own call for a bare 'conveyor' declaration) is
+       synthesized later, in instantiate_body right after regenerate_
+       decl_from_template -- NOT here.  Here, D's parameter list/contract
+       specifiers are still the UNSUBSTITUTED template pattern's own
+       (regenerate_decl_from_template hasn't run yet, since this probe
+       starts before instantiate_body is even called), so synthesizing
+       now would attach an already-resolved specifier that regenerate_
+       decl_from_template's own tsubst_contract_specifiers call would
+       then try to re-substitute as if it were still template-dependent
+       -- confirmed via an ICE in tsubst_expr.  See instantiate_body's
+       own comment for why that point is correct instead.  */
     return true;
   }
 
