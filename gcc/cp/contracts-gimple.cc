@@ -859,6 +859,26 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
       return false;
     }
 
+  /* A by-value class parameter with a non-trivial copy ctor/dtor is
+     ABI-lowered to an invisible reference: at this pass's point (post-
+     genericization) its own PARM_DECL already has REFERENCE_TYPE, and a
+     use of it is the bare default-def SSA_NAME, not an ADDR_EXPR -- so
+     the ADDR_EXPR axiom above never fires for it, unlike the AST engine
+     (contracts.cc's own oa_provable_p), which sees this same parameter
+     pre-lowering, still by value, and matches its ADDR_EXPR-of-PARM_DECL
+     axiom trivially. This is a structural fact about the parameter's own
+     storage (a function's own by-value parameter is always a real,
+     owned object for its whole body), not a self-trust assumption about
+     what some caller proved -- so, unlike a genuine reference parameter
+     a few lines below in cg_seed_self_trust, it holds unconditionally,
+     regardless of DECL_DECLARED_CONVEYOR_P (fndecl).  */
+  if (SSA_NAME_IS_DEFAULT_DEF (val))
+    {
+      tree var = SSA_NAME_VAR (val);
+      if (var && TREE_CODE (var) == PARM_DECL && DECL_BY_REFERENCE (var))
+	return true;
+    }
+
   /* D4324/P2680 author correction (2026-08-19): 'this' is deliberately
      NOT an unconditional axiom here anymore -- mirrors contracts.cc's
      own identical removal from oa_provable_p (see that function's own
@@ -6054,6 +6074,23 @@ public:
 unsigned int
 pass_contracts_gimple::execute (function *fun)
 {
+  /* D4324/P2680: mirrors contracts.cc's oa_resolve_object_address_in_
+     function_1 -- a generated "pred"/"thunk"/consteval-thunk helper
+     function (see ldf_contract_predicate_helper's own comment) is a
+     mechanical, verbatim re-embedding of some OTHER, already-guarded
+     function's own contract condition, over that helper's OWN
+     reference-typed parameters (aliasing back to the guarded
+     function's own locals) with none of the guarded function's own
+     self-trust ever seeded for them. Without this exemption, e.g. a
+     synthesized 'pre<>(is_object_address(this))' on a callee read by
+     cg_check_call's own precondition-text consult fails to verify for
+     such a helper's own aliasing parameter, even though the ORIGINAL,
+     guarded function (whose body this helper mechanically copies) has
+     already had this exact condition resolved against ITS OWN,
+     correctly-seeded parameters.  */
+  if (CONTRACT_HELPER (fun->decl) != ldf_contract_none)
+    return 0;
+
   /* Named-predicate and field/call-range facts get their own, separate
      fixed-point RPO walk (see cg_predicate_facts_walk's own comment)
      rather than folding into the FOR_EACH_BB_FN loop below: that loop's
