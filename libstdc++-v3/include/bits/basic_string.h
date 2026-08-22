@@ -965,20 +965,73 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	if (__str._M_is_local())
 	  {
 	    _M_init_local_buf();
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	    // D4324/P2680: '_M_init_local_buf ()' touches 'this' as its
+	    // own receiver -- a non-conveyor call, so the mandatory
+	    // alias-group invalidation sweep conservatively treats it as
+	    // possibly ending '__str's own lifetime too (same-typed
+	    // reference parameter that "could alias" 'this'), even though
+	    // this constructor never does so. A pre/post pair on
+	    // _M_init_local_buf () alone only re-advertises 'this' itself
+	    // for the caller, not a DIFFERENT, merely-aliased parameter
+	    // like '__str' (this is the known, open "cross-parameter
+	    // alias invalidation" gap -- see project_self_invalidation_
+	    // and_out_of_class_fixes.md). Re-assert '__str's own is_
+	    // object_address fact here, trusted unconditionally
+	    // (never_proven, matching the constructor's own precondition
+	    // on '__str' this re-derives from), so 'traits_type::copy's
+	    // own '__str.length ()' argument just below can still be
+	    // proven.
+	    contract_assert<std::contracts::never_proven_conveyor_v>
+	      (std::is_object_address (&__str));
+#endif
 	    traits_type::copy(_M_local_buf, __str._M_local_buf,
 			      __str.length() + 1);
 	  }
 	else
 	  {
-	    _M_data(__str._M_data());
+	    // D4324/P2680: '_M_data (__str._M_data ())' would put the
+	    // call that touches 'this' (the mandatory alias-invalidation
+	    // trigger) and the call that needs '__str's own fact in the
+	    // SAME statement, with the outer, invalidating call visited
+	    // before the inner argument gets a chance to use '__str' --
+	    // splitting into two statements moves the '__str'-dependent
+	    // read before the invalidating write, so no re-assert is
+	    // needed here (entering this branch, '__str's own fact is
+	    // still the constructor's own, never-yet-invalidated
+	    // precondition).
+	    pointer __p = __str._M_data();
+	    _M_data(__p);
 	    _M_capacity(__str._M_allocated_capacity);
 	  }
 
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// D4324/P2680: whichever branch above ran, 'this' was touched at
+	// least once (_M_init_local_buf ()/_M_data ()), invalidating
+	// '__str's own fact yet again -- re-assert it before reading
+	// '__str' below, same reasoning as the branch above.
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__str));
+#endif
 	// Must use _M_length() here not _M_set_length() because
 	// basic_stringbuf relies on writing into unallocated capacity so
 	// we mess up the contents if we put a '\0' in the string.
-	_M_length(__str.length());
-	__str._M_data(__str._M_use_local_data());
+	//
+	// Both of '__str's own reads below are taken before '_M_length'
+	// (a 'this'-touching call) invalidates '__str' one more time, so
+	// neither needs its own, separate re-assert.
+	size_type __len = __str.length();
+	pointer __local = __str._M_use_local_data();
+	_M_length(__len);
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// D4324/P2680: '_M_length (__len)' just above touches 'this'
+	// again, re-invalidating '__str' one more time before the final
+	// two calls, which are themselves ON '__str' and need its own
+	// fact proven for their own preconditions.
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__str));
+#endif
+	__str._M_data(__local);
 	__str._M_set_length(0);
       }
 
