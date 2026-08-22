@@ -28761,7 +28761,7 @@ tsubst_capture_proxy_for_contract (tree pat_parm, tree decl)
    instantiation of) and ARGS.  A no-op if DECL has no contract-
    specifiers of its own.  */
 
-static void
+void
 tsubst_regenerated_contract_specifiers (tree decl, tree code_pattern, tree args)
 {
   tree attr = get_fn_contract_specifiers (decl);
@@ -28774,6 +28774,74 @@ tsubst_regenerated_contract_specifiers (tree decl, tree code_pattern, tree args)
   tree tmpl = DECL_TI_TEMPLATE (decl);
   if (DECL_TEMPLATE_SPECIALIZATION (tmpl))
     attr = get_fn_contract_specifiers (code_pattern);
+
+  /* D4324/P2680: idempotency guard. Under stock GCC, this function is
+     only ever reached once per DECL: instantiate_body sets DECL_
+     TEMPLATE_INSTANTIATED (d) = 1 BEFORE calling regenerate_decl_from_
+     template, and instantiate_decl's own top-level early return
+     (DECL_TEMPLATE_INSTANTIATED (d) -> return d) means no later call
+     can ever reach this function again for the same DECL. contracts.cc's
+     own oa_maybe_instantiate_contracts, though, deliberately calls this
+     function directly for a callee instantiate_decl declines to fully
+     instantiate at all (DECL_REALLY_EXTERN, so no local body -- see its
+     own comment) -- and, just as deliberately, does NOT set DECL_
+     TEMPLATE_INSTANTIATED afterward (that would incorrectly assert "this
+     decl's body has been generated" and permanently block a genuine
+     later instantiation of it). Confirmed via direct testing that such
+     a later, genuine instantiate_decl call for the SAME decl really
+     does happen for some _M_construct overloads (the extern-template
+     declaration doesn't cover every member function template
+     instantiation), reaching regenerate_decl_from_template again --
+     which would otherwise re-run the whole substitution below on ATTR's
+     OWN now-already-substituted condition text (no longer dependent on
+     any template parameter at all): find_contract_parm_decls_r's walk
+     then finds DECL's own, already-concrete parameter (planted there by
+     the FIRST substitution) as its own "unmatched" entry, the name-
+     match fallback loop finds that SAME parameter again by name in
+     DECL_ARGUMENTS (DECL), and register_local_specialization (dp,
+     pat_parm) crashes its own tmpl != spec assert since dp and pat_parm
+     are now literally the same node.
+
+     Two earlier approaches were tried and both proven unreliable by
+     direct testing. (1) Comparing ATTR's own tree identity against
+     CODE_PATTERN's specifiers (attr != get_fn_contract_specifiers
+     (code_pattern)) assumed a not-yet-substituted DECL's own contract
+     specifiers are, by construction, literally the SAME shared list as
+     the template pattern's own -- true only for a member function
+     template with template parameters of its own beyond the enclosing
+     class's (_M_construct<_FwdIterator>'s own shape); for an ordinary
+     member of a class template with NO additional template parameters
+     of its own (_M_create_plus's own shape), CODE_PATTERN (computed by
+     template_for_substitution) does not reliably name the exact same
+     node DECL's specifiers were originally copied from, so the
+     identity check could be wrongly true OR false even on the very
+     FIRST, legitimate call. (2) Asking each conjunct's own condition
+     whether it is still TYPE-DEPENDENT (type_dependent_expression_p)
+     looked promising -- true exactly when substitution is genuinely
+     needed, independent of CODE_PATTERN's own identity -- but that
+     predicate unconditionally returns false whenever !processing_
+     template_decl (its very first line), and processing_template_decl
+     is already back to 0 by the time regenerate_decl_from_template
+     calls this function during an ordinary, real instantiate_decl (the
+     template-processing region has already been exited before this
+     point in that call path) -- confirmed via direct testing:
+     _M_data()'s own is_object_address (this) conjunct, still the
+     literal, unsubstituted pattern node on its very first and ONLY
+     legitimate call, was wrongly reported as "not dependent", silently
+     skipping its one chance at substitution and leaving a raw,
+     template-parameter-typed 'this' to crash genericize's own fold_
+     convert much later.
+
+     The robust fix tracks the fact directly instead of inferring it
+     from tree shape or compiler state: a decl-keyed hash_set records
+     which DECLs have already had this function's substitution run for
+     them, regardless of which caller got there first or what ambient
+     template-processing state was active at the time.  */
+  static hash_set<tree> *contract_specifiers_substituted;
+  if (!contract_specifiers_substituted)
+    contract_specifiers_substituted = new hash_set<tree> ();
+  if (contract_specifiers_substituted->add (decl))
+    return;
 
   /* D4324/P2680: for a member function template of a class template,
      or an ordinary "unique friend" member of one, ATTR's own condition

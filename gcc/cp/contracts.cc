@@ -19543,6 +19543,107 @@ oa_maybe_instantiate_contracts (tree fn)
   if (cp_unevaluated_operand || processing_contract_condition)
     return;
   instantiate_decl (fn, /*defer_ok=*/false, /*expl_inst_class_mem_p=*/false);
+
+  /* D4324/P2680: instantiate_decl's own EXTERNAL_P early return (an
+     "extern template"/explicit-instantiation-declaration callee -- e.g.
+     any basic_string<char>/basic_string<wchar_t> member function
+     template; ordinary user code relies on the pre-built libstdc++.so's
+     own explicit instantiation, never locally instantiating such a
+     body) means the call above can leave FN exactly as it started: not
+     DECL_TEMPLATE_INSTANTIATED, and, critically, its own contract
+     specifiers still literally the SAME (unsubstituted, still template-
+     dependent) list as the template pattern's own -- regenerate_decl_
+     from_template, and with it tsubst_regenerated_contract_specifiers,
+     is only ever reached from *inside* instantiate_decl's own body,
+     strictly after that early return, so it never runs for such a
+     callee at all. Confirmed via direct testing: basic_string's own
+     _M_construct<_FwdIterator> overloads, called from an ordinary
+     '(const _CharT*, size_type, const _Alloc&)'-style constructor, left
+     'is_object_address (this)' an unresolved OVERLOAD node forever,
+     silently failing to match in every shape-recognizer that consults
+     it -- both as a caller-side precondition-obligation check and as
+     postcondition-based re-establishment for the caller -- since a
+     dependent, unresolved condition looks like "no is_object_address
+     conjunct here at all" to every one of them, not "cannot verify".
+
+     Directly force just the contract-specifier substitution here, never
+     the body (see tsubst_regenerated_contract_specifiers's own comment
+     for why DECL_TEMPLATE_INSTANTIATED must stay untouched by this),
+     using the exact same helper regenerate_decl_from_template itself
+     calls -- this is the identical substitution logic that already runs
+     for a callee whose body DOES get instantiated locally, not a
+     parallel, narrower reimplementation prone to its own divergent
+     bugs. push_tinst_level/maybe_push_to_top_level establish the same
+     ambient template-instantiation context (current_function_decl,
+     access-checking deferral, etc.) instantiate_body normally provides
+     before ever reaching this same substitution -- omitting them is
+     safe for this specific substitution's own correctness (confirmed:
+     the actual bug this session found and fixed was a missing
+     idempotency guard inside tsubst_regenerated_contract_specifiers
+     itself, not missing context here), but they cost nothing and match
+     the normal calling convention this function otherwise never sees
+     itself invoked outside of.
+
+     No attempt is made here to first check whether FN's specifiers
+     still need substituting (an earlier version tried a pointer-
+     identity comparison against CODE_PATTERN's own specifiers, then a
+     type_dependent_expression_p-based check on each conjunct -- both
+     proven unreliable by direct testing, see tsubst_regenerated_
+     contract_specifiers's own comment for the full story on each).
+     Instead, this always attempts the call whenever FN has any
+     specifiers at all and a real CODE_PATTERN distinct from FN itself;
+     tsubst_regenerated_contract_specifiers's own decl-keyed hash_set
+     idempotency guard makes a redundant or premature call here always
+     safe (a cheap no-op), so correctness does not depend on getting
+     this gate exactly right -- only on not skipping the one legitimate
+     call a given FN needs, which an always-attempt policy trivially
+     guarantees.  */
+  /* D4324/P2680: restricted to an ordinary IMPLICIT instantiation of a
+     template pattern (the _M_construct<_FwdIterator>/_M_create_plus
+     shape this fallback exists for) -- excludes an explicit
+     specialization, e.g. 'template<> int body<double>(int a)
+     pre (a > 1) {...}': DECL_TEMPLATE_SPECIALIZATION is checked on FN
+     itself here, mirroring instantiate_decl's own identical early-return
+     test ('DECL_TEMPLATE_SPECIALIZATION (d)', pt.cc, using D directly,
+     not DECL_TI_TEMPLATE (d) -- an earlier version of this guard checked
+     the wrong tree, DECL_TI_TEMPLATE (fn), which is a TEMPLATE_DECL and
+     never satisfies this predicate the way FN itself does, so the guard
+     silently never fired). Confirmed via direct testing
+     (contracts-tmpl-spec2.C, an ordinary, non-conveyor contracts test
+     with no extern-template involvement at all): calling this fallback
+     for such a decl computes CODE_PATTERN via TEMPLATE_FOR_SUBSTITUTION
+     the same way as for an implicit instantiation, but an explicit
+     specialization's own contract specifiers are ALREADY its own,
+     definition-site-parsed text, not a shared, not-yet-substituted copy
+     of the primary template's pattern the way an implicit
+     instantiation's are -- substituting them again here, using a CODE_
+     PATTERN this shape was never designed for, re-triggers the exact
+     register_local_specialization tmpl != spec crash this fallback's
+     own idempotency guard exists to prevent, since ordinary
+     instantiate_decl handling already fully manages an explicit
+     specialization's own contracts (via its own, separate early return)
+     with no help needed from this fallback at all.  */
+  if (!DECL_TEMPLATE_INSTANTIATED (fn) && DECL_TEMPLATE_INFO (fn)
+      && get_fn_contract_specifiers (fn)
+      && !DECL_TEMPLATE_SPECIALIZATION (fn))
+    {
+      /* template_for_substitution, not a naive DECL_TI_TEMPLATE (fn) --
+	 for a member function template of a class template (exactly
+	 _M_construct's own shape), DECL_TI_TEMPLATE (fn) names FN's own
+	 template AS SPECIALIZED FOR THIS CLASS INSTANTIATION, which can
+	 itself be a DECL_TEMPLATE_INSTANTIATION of the true, most-general
+	 pattern -- template_for_substitution is the exact helper
+	 instantiate_decl itself uses to find the real one.  */
+      tree td = template_for_substitution (fn);
+      tree code_pattern = DECL_TEMPLATE_RESULT (td);
+      if (code_pattern && code_pattern != fn && push_tinst_level (fn))
+	{
+	  bool push_to_top = maybe_push_to_top_level (fn);
+	  tsubst_regenerated_contract_specifiers (fn, code_pattern, DECL_TI_ARGS (fn));
+	  maybe_pop_from_top_level (push_to_top);
+	  pop_tinst_level ();
+	}
+    }
 }
 
 /* If EXPR (or any subexpression) calls a function whose own precondition
