@@ -994,7 +994,31 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
 	     already uses to distinguish the standard non-replaceable
 	     placement overload from every allocating one -- see that
 	     function's own comment).  */
-	  if (DECL_IS_OPERATOR_NEW_P (callee) && !std_placement_new_fn_p (callee))
+	  /* D4324/P2680: 'throw T(...)' lowers, by this pass's point, to a
+	     GIMPLE_CALL to '__cxa_allocate_exception' whose result feeds the
+	     thrown object's own constructor call directly, the same shape
+	     as 'new T()' feeding operator new's result into T's own
+	     constructor -- confirmed via direct testing: 'std::
+	     __throw_bad_alloc ()' ('{ throw bad_alloc (); }', bad_alloc
+	     deriving from the polymorphic std::exception) failed this
+	     pass's own mandatory cdtor receiver check with no established
+	     fact for the exception storage pointer, while the identical
+	     AST-side test file never reaches this call shape at all (a
+	     'throw' expression's own construction site isn't walked by
+	     contracts.cc's mandatory item-7 scan the way an ordinary call or
+	     'new'-expression is -- a separate, narrower AST-side scope
+	     boundary, not something this fix widens). '__cxa_allocate_
+	     exception's own result is axiomatically a valid, non-null
+	     object address exactly like a real (non-placement) operator
+	     new's -- both are runtime allocators handing back fresh storage
+	     -- identified by name (an ordinary extern "C" library function
+	     declared lazily by except.cc's own build_throw, not a GCC
+	     builtin with a dedicated DECL flag the way operator new has).  */
+	  if ((DECL_IS_OPERATOR_NEW_P (callee) && !std_placement_new_fn_p (callee))
+	      || (DECL_NAME (callee)
+		  && id_equal (DECL_NAME (callee), "__cxa_allocate_exception")
+		  && CP_DECL_CONTEXT (callee) == global_namespace
+		  && DECL_EXTERN_C_P (callee)))
 	    result = true;
 	  else
 	    result = cg_call_postcondition_guarantees_p
