@@ -12544,6 +12544,44 @@ tsubst_contract_specifier (tree decl, tree t, tree args,
      of template parameters.  */
   args = DECL_TI_ARGS (decl);
 
+  /* D4324/P2680-unrelated general fix: for a *generic lambda*'s own
+     call operator nested inside a member function of a class
+     template (itself possibly nested inside further enclosing class
+     templates), DECL_TI_ARGS (decl) above only ever carries the
+     lambda's own single, innermost template-argument level -- unlike
+     an ordinary nested member template, a lambda's closure type
+     doesn't chain its own template info to its enclosing scope the
+     way a real member template does, so the outer levels the
+     deferred-parsed condition text still references (having been
+     parsed once, while the enclosing class template(s) were still
+     generic) are missing entirely from ARGS as computed above.
+     Confirmed via a minimal, non-D4324 repro (an ordinary 'pre()'
+     contract, no is_object_address involved at all, on a generic
+     lambda's own declarator, defined inside a member function of a
+     class template nested inside another class template) crashing
+     tsubst's own TEMPLATE_TYPE_PARM case (gcc_assert (TYPE_P (arg)))
+     trying to substitute the outer class's own type parameter using
+     this single-level ARGS, which only has the lambda's own <Idx>
+     level -- the fetched "argument" at that (wrong) level turned out
+     to be an unrelated sibling parameter's own value, tripping the
+     assert. Prepend the enclosing function's own template arguments
+     (already recorded on it via its own membership in an
+     instantiated class template, real or not itself a template),
+     mirroring how an ordinary nested member template's own args are
+     already combined with its enclosing class's elsewhere.  */
+  if (LAMBDA_FUNCTION_P (decl))
+    {
+      tree closure_type = DECL_CONTEXT (decl);
+      tree enclosing_fn = TYPE_CONTEXT (closure_type);
+      if (enclosing_fn && TREE_CODE (enclosing_fn) == FUNCTION_DECL
+	  && DECL_TEMPLATE_INFO (enclosing_fn))
+	{
+	  tree enclosing_args = DECL_TI_ARGS (enclosing_fn);
+	  if (enclosing_args)
+	    args = add_to_template_args (enclosing_args, args);
+	}
+    }
+
   /* For member functions, make this available for semantic analysis.  */
   tree save_ccp = current_class_ptr;
   tree save_ccr = current_class_ref;
