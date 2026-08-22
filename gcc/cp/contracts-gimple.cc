@@ -1434,6 +1434,22 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	  else
 	    continue;
 
+	  /* D4324/P2680: is_object_address_call_p/oa_nonzero_conjunct_p
+	     return CALL_EXPR_ARG's own raw operand, unstripped -- a
+	     reference parameter's own 'is_object_address(&v)' conjunct
+	     arrives with 'v' wrapped in a value-preserving NOP_EXPR/
+	     CONVERT_EXPR (const-qualification, the same shape contracts.cc's
+	     own oa_substitute_call_arg already strips for the identical
+	     reason), which the bare 'TREE_CODE (arg) != PARM_DECL' check
+	     just below silently declined without this -- confirmed via a
+	     real test (d4324-gimple-conveyor-vector-index-margin.C): every
+	     one of its ordinary functions' own 'pre<>(is_object_address
+	     (&v))' seeded nothing at all, so every accessor call on 'v'
+	     inside the function body failed its own Q1 obligation.  */
+	  while (TREE_CODE (arg) == NON_LVALUE_EXPR || TREE_CODE (arg) == NOP_EXPR
+		 || TREE_CODE (arg) == CONVERT_EXPR || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+
 	  if (TREE_CODE (arg) != PARM_DECL)
 	    continue;
 	  tree key = cg_self_trust_key (fun, arg);
@@ -4599,6 +4615,31 @@ cg_cond_operand_shape (tree val, bool *is_call, tree *field_out, tree *base_out,
   gimple *def = SSA_NAME_DEF_STMT (val);
   if (!def)
     return false;
+
+  /* D4324: a call used directly in an 'if' condition's own boolean
+     comparison (e.g. 'if (s.size () > 3)') gimplifies with one more
+     level of indirection than a field load in the same position (e.g.
+     'if (s.count > 3)') -- confirmed via direct SSA-dump comparison:
+     the field case's own comparison operand is the field-load SSA name
+     itself ('_1 = s->count; if (_1 > 3)'), but the call case's is a
+     PLAIN COPY of the call's result ('_26 = S::size (s); _1 = _26; ...
+     if (_1 > 3)'), not the call statement itself. Left unchased, VAL's
+     own def-stmt here is that copy assignment, never a GIMPLE_CALL nor
+     a field load, so this always declined the call shape entirely --
+     confirmed via a real test (d4324-gimple-conveyor-call-range-
+     ifcond.C's own checked_call) where the field analogue (checked_
+     field) already worked. Chase exactly one such copy hop, matching
+     this file's own established "single hop, not a general SSA copy-
+     chase" discipline (see cg_refine_edge_into's own zero-test unwrap
+     just above this function's caller).  */
+  if (is_gimple_assign (def) && gimple_assign_single_p (def)
+      && TREE_CODE (gimple_assign_rhs1 (def)) == SSA_NAME)
+    {
+      val = gimple_assign_rhs1 (def);
+      def = SSA_NAME_DEF_STMT (val);
+      if (!def)
+	return false;
+    }
 
   if (is_gimple_call (def))
     {
