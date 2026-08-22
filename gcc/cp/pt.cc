@@ -28683,6 +28683,76 @@ find_contract_parm_decls_r (tree *tp, int *, void *data)
   return NULL_TREE;
 }
 
+/* PAT_PARM is an ordinary (field-backed) lambda capture-proxy VAR_DECL
+   referenced by a generic lambda's own contract-specifier text, found
+   unmatched by the loop below. Identity-mapping it (as we still do for
+   e.g. a captured 'this', see the caller) is only sound when the proxy's
+   own type doesn't itself depend on the specific instantiation -- but an
+   ordinary by-value/by-reference capture's proxy has a type computed from
+   the closure's *pattern* field (lambda_proxy_type, possibly a
+   DECLTYPE_TYPE wrapping a COMPONENT_REF into that still-templated
+   closure) even though DECL's own closure (DECL_CONTEXT (decl)) was
+   already fully instantiated, with concrete field types, when the
+   enclosing scope's LAMBDA_EXPR itself was substituted. Identity-mapping
+   such a proxy leaves its address-of/uses with a stale, dependent type,
+   which in turn leaves a call like 'is_object_address(&cap)' unresolved
+   (an OVERLOAD, never a FUNCTION_DECL) -- confirmed via a minimal repro
+   crashing fold_convert_loc in build_predicate_core_function_1 during
+   genericize. Build a fresh proxy that reads the exact same field, but
+   through DECL's own already-substituted closure parameter (DECL_
+   ARGUMENTS), mirroring what build_capture_proxy would eventually build
+   for the real body -- without any of that routine's scope-pushing or
+   pending-proxy side effects, since this proxy is only ever consulted
+   while substituting the already-detached contract condition tree, never
+   pushed as a real local. Returns NULL_TREE (and the caller falls back to
+   identity-mapping) for anything that isn't this ordinary shape, e.g. a
+   captured 'this'.  */
+
+static tree
+tsubst_capture_proxy_for_contract (tree pat_parm, tree decl)
+{
+  if (!DECL_HAS_VALUE_EXPR_P (pat_parm))
+    return NULL_TREE;
+  tree value_expr = DECL_VALUE_EXPR (pat_parm);
+  if (TREE_CODE (value_expr) != COMPONENT_REF)
+    return NULL_TREE;
+  tree pat_field = TREE_OPERAND (value_expr, 1);
+  if (TREE_CODE (pat_field) != FIELD_DECL)
+    return NULL_TREE;
+
+  tree closure_this = DECL_ARGUMENTS (decl);
+  if (!closure_this || !INDIRECT_TYPE_P (TREE_TYPE (closure_this)))
+    return NULL_TREE;
+  tree closure_type = TREE_TYPE (TREE_TYPE (closure_this));
+
+  tree member = NULL_TREE;
+  for (tree f = TYPE_FIELDS (closure_type); f; f = DECL_CHAIN (f))
+    if (TREE_CODE (f) == FIELD_DECL && DECL_NAME (f) == DECL_NAME (pat_field))
+      {
+	member = f;
+	break;
+      }
+  if (!member)
+    return NULL_TREE;
+
+  tree object = build_fold_indirect_ref (closure_this);
+  object = finish_non_static_data_member (member, object, NULL_TREE);
+  if (object == error_mark_node)
+    return NULL_TREE;
+  if (REFERENCE_REF_P (object))
+    object = TREE_OPERAND (object, 0);
+
+  tree type = lambda_proxy_type (object);
+  tree var = build_decl (DECL_SOURCE_LOCATION (pat_parm), VAR_DECL,
+			  DECL_NAME (pat_parm), type);
+  SET_DECL_VALUE_EXPR (var, object);
+  DECL_HAS_VALUE_EXPR_P (var) = 1;
+  DECL_ARTIFICIAL (var) = 1;
+  TREE_USED (var) = 1;
+  DECL_CONTEXT (var) = decl;
+  return var;
+}
+
 /* Substitute DECL's own contract-specifiers (a member function template
    of a class template, e.g. basic_string<_CharT,...>::resize_and_
    overwrite<_Operation>, or an ordinary "unique friend" member such as
@@ -28739,15 +28809,22 @@ tsubst_regenerated_contract_specifiers (tree decl, tree code_pattern, tree args)
       if (local_specializations->get (pat_parm))
 	continue;
       /* A lambda capture proxy isn't one of DECL's own parameters at
-	 all (see find_contract_parm_decls_r's own comment) -- it's the
-	 same closure capture regardless of which template argument
-	 this particular generic-lambda operator() specialization is
-	 being generated for, so map it to itself (register_local_
-	 specialization itself asserts tmpl != spec, precisely to catch
-	 this identity-mapping case and route it here instead).  */
+	 all (see find_contract_parm_decls_r's own comment). For an
+	 ordinary field-backed capture, build a proxy retyped against
+	 DECL's own already-instantiated closure (see
+	 tsubst_capture_proxy_for_contract's own comment); otherwise
+	 (e.g. a captured 'this') it's the same closure capture
+	 regardless of which template argument this particular
+	 generic-lambda operator() specialization is being generated
+	 for, so map it to itself (register_local_specialization itself
+	 asserts tmpl != spec, precisely to catch this identity-mapping
+	 case and route it here instead).  */
       if (VAR_P (pat_parm) && is_capture_proxy (pat_parm))
 	{
-	  register_local_identity (pat_parm);
+	  if (tree fresh = tsubst_capture_proxy_for_contract (pat_parm, decl))
+	    register_local_specialization (fresh, pat_parm);
+	  else
+	    register_local_identity (pat_parm);
 	  continue;
 	}
       tree name = DECL_NAME (pat_parm);
