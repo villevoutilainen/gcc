@@ -1221,6 +1221,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       operator=(basic_string&& __str)
       noexcept(_Alloc_traits::_S_nothrow_move())
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
       {
 	const bool __equal_allocs = _Alloc_traits::_S_always_equal()
 	  || _M_get_allocator() == __str._M_get_allocator();
@@ -1235,6 +1239,19 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	// Replace allocator if POCMA is true.
 	std::__alloc_on_move(_M_get_allocator(), __str._M_get_allocator());
 
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// D4324/P2680: same "cross-parameter alias invalidation" pattern
+	// as the move constructor (see its own comment) -- the branch
+	// above, if taken, touches 'this' via _M_destroy ()/_M_data ()/
+	// _M_set_length (), each invalidating '__str's own fact too
+	// (same-typed alias-group sweep), since a pre/post pair only
+	// re-advertises the CALLEE's own receiver, not a different,
+	// merely-aliased parameter. Re-assert '__str' here, trusted
+	// unconditionally (never_proven), before the '__str'-dependent
+	// reads below.
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__str));
+#endif
 	if (__str._M_is_local())
 	  {
 	    // We've always got room for a short string, just copy it
@@ -1242,9 +1259,25 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	    // char_traits::copy precondition that the ranges don't overlap).
 	    if (__builtin_expect(std::__addressof(__str) != this, true))
 	      {
-		if (__str.size())
-		  this->_S_copy(_M_data(), __str._M_data(), __str.size());
-		_M_set_length(__str.size());
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+		// D4324/P2680: 'std::__addressof (__str)' just above takes
+		// '__str' as its own argument to a non-conveyor call --
+		// re-assert defensively in case that invalidates it too.
+		contract_assert<std::contracts::never_proven_conveyor_v>
+		  (std::is_object_address (&__str));
+#endif
+		// D4324/P2680: read '__str's own size/data into locals
+		// before the 'this'-touching '_M_data ()' argument to
+		// _S_copy below would otherwise invalidate them mid-
+		// statement (same shape as the move constructor's own
+		// '_M_data (__str._M_data ())' fix).
+		size_type __sz = __str.size();
+		if (__sz)
+		  {
+		    pointer __sp = __str._M_data();
+		    this->_S_copy(_M_data(), __sp, __sz);
+		  }
+		_M_set_length(__sz);
 	      }
 	  }
 	else if (_Alloc_traits::_S_propagate_on_move_assign() || __equal_allocs)
@@ -1264,19 +1297,57 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 		  _M_destroy(_M_allocated_capacity);
 	      }
 
-	    _M_data(__str._M_data());
-	    _M_length(__str.length());
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	    // D4324/P2680: '!_M_is_local ()' above touches 'this' as its
+	    // own receiver (a non-conveyor call), invalidating '__str'
+	    // again regardless of which way its own branch went --
+	    // re-assert before reading '__str' below.
+	    contract_assert<std::contracts::never_proven_conveyor_v>
+	      (std::is_object_address (&__str));
+#endif
+	    // D4324/P2680: split, same reasoning as the move constructor's
+	    // own 'else' branch -- evaluate '__str'-dependent reads before
+	    // the 'this'-touching writes that would otherwise invalidate
+	    // them mid-statement.
+	    pointer __sp2 = __str._M_data();
+	    size_type __slen = __str.length();
+	    _M_data(__sp2);
+	    _M_length(__slen);
 	    _M_capacity(__str._M_allocated_capacity);
 	    if (__data)
 	      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+		// D4324/P2680: '_M_capacity ()' just above touches 'this'
+		// again, invalidating '__str' before these final,
+		// '__str'-receiver calls.
+		contract_assert<std::contracts::never_proven_conveyor_v>
+		  (std::is_object_address (&__str));
+#endif
 		__str._M_data(__data);
 		__str._M_capacity(__capacity);
 	      }
 	    else
-	      __str._M_data(__str._M_use_local_data());
+	      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+		contract_assert<std::contracts::never_proven_conveyor_v>
+		  (std::is_object_address (&__str));
+#endif
+		// D4324/P2680: split -- '__str._M_data (__str._M_use_local_
+		// data ())' is the same self-referential nested-call shape
+		// already fixed in the move constructor.
+		pointer __local = __str._M_use_local_data();
+		__str._M_data(__local);
+	      }
 	  }
 	else // Need to do a deep copy
 	  _M_assign(__str);
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// D4324/P2680: whichever branch above ran, '__str's own fact may
+	// have been invalidated by a preceding 'this'-touching call --
+	// re-assert before the final, shared '__str.clear ()' below.
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__str));
+#endif
 	__str.clear();
 	return *this;
       }
