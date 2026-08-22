@@ -23971,70 +23971,138 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
      destructor's own body has no PRECONDITION_STMT at all, just the
      raw user statements under an unrelated temporary-variable shape --
      even a bare 'pre<never_proven_conveyor_v>(is_object_address(this))'
-     never survives). The clone's own get_fn_contract_specifiers list
-     IS still correct (propagate_cdtor_contracts_to_clones sets it
-     independently, at parse time, unaffected by whatever clone_body
-     does to the body) -- establish its own is_object_address conjuncts
-     directly from that list here, bypassing the missing PRECONDITION_
-     STMT wrapper entirely. The walk below still needs this fact for
-     its own body's call-site obligation checks (e.g. a sibling method
-     call inside the clone's own body): those run unconditionally,
-     driven by the body's own call statements, regardless of whether a
-     real PRECONDITION_STMT was ever found to establish anything.
-     Mirrors oa_handle_precondition_stmt's own explicit-is_object_
+     never survives).
+
+     D4324/P2680: this is NOT actually clone-specific -- maybe_apply_
+     function_contracts (decl.cc/contracts.cc) only weaves a real
+     PRECONDITION_STMT into a function's OWN body when has_active_
+     preconditions(fndecl, ccs_definition) is true, which additionally
+     requires contract_runs_on_side to hold for DEFINITION-side checking
+     specifically (flag_contracts_definition_check, or a control object
+     forcing definition-side) -- an ORDINARY, non-cloned function whose
+     declaration and out-of-class definition both separately repeat the
+     same explicit pre<>(is_object_address(...)), with runtime
+     definition-side checking left at its default (off), gets NO
+     PRECONDITION_STMT in its own body either, for the exact same
+     "nothing to weave in" reason, confirmed via direct testing (a
+     minimal, non-template, non-cloned 'S::create_plus', declared in-
+     class and defined out-of-class with a matching pre<>, could not
+     prove its own 'this' was is_object_address from ANY conjunct in
+     its own precondition -- a contract_assert added directly in its
+     body for diagnosis confirmed the fact was never established at
+     all). This is a real, general gap: whether the STANDARD's own
+     runtime check is emitted is a policy question entirely orthogonal
+     to whether this STATIC analysis pass may trust the same
+     precondition text -- item 8's own mandatory UB-freedom checks are
+     already documented elsewhere in this file as needing to run
+     unconditionally, independent of command-line flags, for the exact
+     same reason.
+
+     Fixed by no longer gating this establishing loop on DECL_CLONED_
+     FUNCTION_P at all: it now runs for every function, unconditionally.
+     Safe to run even when a real PRECONDITION_STMT ALSO exists later in
+     the body (the ordinary, has-a-real-PRECONDITION_STMT case): env.set
+     is idempotent, so re-establishing the same already-true fact from
+     here first, before oa_walk_stmt reaches the real PRECONDITION_STMT
+     and does so again, has no observable effect either way.  The
+     clone's own get_fn_contract_specifiers list is unaffected by
+     whatever clone_body does to the body (propagate_cdtor_contracts_
+     to_clones sets it independently, at parse time) -- establish its
+     own is_object_address conjuncts directly from that list here,
+     bypassing the missing PRECONDITION_STMT wrapper entirely, exactly
+     mirroring oa_handle_precondition_stmt's own explicit-is_object_
      address-conjunct establishing loop (including its COMPONENT_REF/
      field-identity case, for a pointer-typed field precondition like
      basic_string::_M_construct's own exception-safety _Guard), reading
      the same conjuncts from the specifier list instead of from a body
      statement.  */
-  if (DECL_CLONED_FUNCTION_P (fndecl))
-    for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
-      {
-	tree contract = CONTRACT_STATEMENT (as);
-	if (!PRECONDITION_P (contract))
-	  continue;
-	if (!oa_contract_conveyor_active_p (contract))
-	  continue;
-	tree cond = CONTRACT_CONDITION (contract);
-	if (cond == NULL_TREE || cond == error_mark_node)
-	  continue;
-	auto_vec<tree *> conjuncts;
-	oa_collect_conjuncts (&cond, &conjuncts);
-	for (unsigned i = 0; i < conjuncts.length (); ++i)
-	  {
-	    tree arg;
-	    if (!is_object_address_call_p (*conjuncts[i], &arg))
-	      continue;
-	    arg = STRIP_ANY_LOCATION_WRAPPER (arg);
-	    while (TREE_CODE (arg) == NON_LVALUE_EXPR || TREE_CODE (arg) == NOP_EXPR
-		   || TREE_CODE (arg) == CONVERT_EXPR
-		   || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
-	      arg = TREE_OPERAND (arg, 0);
-	    if (TREE_CODE (arg) == ADDR_EXPR)
-	      {
-		tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
-		if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
-		  arg = op;
-	      }
-	    else if (TREE_CODE (arg) == COMPONENT_REF)
-	      {
-		tree obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
-		if (TREE_CODE (obj_expr) == INDIRECT_REF)
-		  obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj_expr, 0));
-		tree field = TREE_OPERAND (arg, 1);
-		tree identity;
-		if (oa_object_identity_decl (obj_expr, &identity)
-		    || oa_field_slot_identity (obj_expr, env, &identity)
-		    || oa_array_slot_identity (obj_expr, env, &identity)
-		    || oa_field_object_identity (obj_expr, env, &identity))
-		  {
-		    identity = env.alias_find (identity);
-		    arg = env.field_object_identity_key (identity, field);
-		  }
-	      }
-	    env.set (arg, true);
-	  }
-      }
+  for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract))
+	continue;
+      if (!oa_contract_conveyor_active_p (contract))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree arg;
+	  if (!is_object_address_call_p (*conjuncts[i], &arg))
+	    continue;
+	  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+	  while (TREE_CODE (arg) == NON_LVALUE_EXPR || TREE_CODE (arg) == NOP_EXPR
+		 || TREE_CODE (arg) == CONVERT_EXPR
+		 || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+	    arg = TREE_OPERAND (arg, 0);
+	  if (TREE_CODE (arg) == ADDR_EXPR)
+	    {
+	      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	      if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
+		arg = op;
+	    }
+	  else if (TREE_CODE (arg) == COMPONENT_REF)
+	    {
+	      tree obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	      if (TREE_CODE (obj_expr) == INDIRECT_REF)
+		obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj_expr, 0));
+	      tree field = TREE_OPERAND (arg, 1);
+	      tree identity;
+	      if (oa_object_identity_decl (obj_expr, &identity)
+		  || oa_field_slot_identity (obj_expr, env, &identity)
+		  || oa_array_slot_identity (obj_expr, env, &identity)
+		  || oa_field_object_identity (obj_expr, env, &identity))
+		{
+		  identity = env.alias_find (identity);
+		  arg = env.field_object_identity_key (identity, field);
+		}
+	    }
+	  /* D4324/P2680: for a function declared separately from its
+	     (out-of-class) definition, with the same explicit pre<>()
+	     text repeated on both, GET_FN_CONTRACT_SPECIFIERS's own
+	     condition text still references the DECLARATION's own PARM_
+	     DECLs -- distinct tree nodes from FNDECL's own DECL_ARGUMENTS
+	     (the definition's, canonical ones, which is what the body
+	     walk below and every ordinary consult site actually key on)
+	     -- confirmed via direct testing (a minimal, non-cloned,
+	     non-template 'S::create_plus', declared in-class and defined
+	     out-of-class with a matching pre<>(is_object_address(this)):
+	     establishing against the declaration's own 'this' PARM_DECL
+	     left the definition's own 'this' -- a different pointer --
+	     with no fact at all). Remap ARG to FNDECL's own matching
+	     parameter before establishing: 'this' needs no positional
+	     search (is_this_parameter is a name-based check, identical
+	     for either copy), an ordinary named parameter is remapped by
+	     position instead, matching oa_substitute_call_arg's own
+	     'position, not identity' approach to the same declaration-
+	     vs-definition PARM_DECL split.  */
+	  if (TREE_CODE (arg) == PARM_DECL && DECL_CONTEXT (arg) != fndecl)
+	    {
+	      if (is_this_parameter (arg))
+		arg = DECL_ARGUMENTS (fndecl);
+	      else
+		{
+		  tree orig_context = DECL_CONTEXT (arg);
+		  unsigned pos = 0;
+		  tree p = orig_context ? DECL_ARGUMENTS (orig_context) : NULL_TREE;
+		  for (; p && p != arg; p = DECL_CHAIN (p))
+		    ++pos;
+		  if (p == arg)
+		    {
+		      tree q = DECL_ARGUMENTS (fndecl);
+		      for (unsigned j = 0; j < pos && q; ++j)
+			q = DECL_CHAIN (q);
+		      if (q)
+			arg = q;
+		    }
+		}
+	    }
+	  env.set (arg, true);
+	}
+    }
 
   oa_walk_stmt (&body, env);
 
