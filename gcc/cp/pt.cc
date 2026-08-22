@@ -29025,6 +29025,30 @@ instantiate_body (tree pattern, tree args, tree d, bool nested_p)
       && !DECL_CONVEYOR_AUTO_RESOLVED_P (d) && DECL_DECLARED_CONVEYOR_P (d))
     oa_synthesize_implicit_reference_safety_preconditions (d);
 
+  /* D4324/P2680: propagate_cdtor_contracts_to_clones (contracts.cc) is
+     otherwise only ever called from grokfndecl/cp_parser_late_contracts
+     -- both firing once, at the TEMPLATE PATTERN's own definition time,
+     copying its contract specifiers onto the pattern's own clone DECLs
+     (also template-level placeholders at that point). Regenerate_decl_
+     from_template above already gave D itself (the "maybe-in-charge"
+     decl of THIS instantiation) its own, correctly-substituted contract
+     specifiers -- but D's own clones (built alongside D, if D is a
+     constructor/destructor) never independently go through this same
+     substitution, since nothing re-invokes propagate_cdtor_contracts_
+     to_clones per instantiation. Confirmed via direct testing: a class
+     template's destructor with an explicit or synthesized is_object_
+     address(this) precondition compiles clean for the primary,
+     maybe-in-charge instantiated decl, but every one of its own clones
+     (__dt_base/__dt_comp) has a NULL get_fn_contract_specifiers -- and,
+     separately, its own body (built by optimize.cc's clone_body, not a
+     real re-instantiation) never contains a PRECONDITION_STMT node
+     either way (see oa_resolve_object_address_in_function_1's own
+     DECL_CLONED_FUNCTION_P fallback, which reads directly from this
+     list to work around that). Re-running it here, once D's own
+     specifiers are final, gives D's own clones the same list.  */
+  if (TREE_CODE (d) == FUNCTION_DECL && DECL_MAYBE_IN_CHARGE_CDTOR_P (d))
+    propagate_cdtor_contracts_to_clones (d);
+
   /* We already set the file and line above.  Reset them now in case
      they changed as a result of calling regenerate_decl_from_template.  */
   input_location = DECL_SOURCE_LOCATION (d);

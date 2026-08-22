@@ -3901,12 +3901,36 @@ static tree lookup_is_object_address_template ();
    correctly for each instantiation exactly like any other precondition,
    with no separate per-instantiation logic needed here.  */
 
+/* Every FNDECL this has already synthesized preconditions for -- see the
+   idempotency guard just below. Lazily allocated, never cleared (a
+   FUNCTION_DECL's identity is stable for the whole compilation).  */
+static hash_set<tree> *oa_synthesized_functions;
+
 void
 oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
 {
   if (!DECL_DECLARED_CONVEYOR_P (fndecl))
     return;
 
+  /* D4324/P2680: this is called from multiple, independent sites for the
+     same in-class member function declaration -- grokfndecl's own main
+     path (skipped via the contract_any_deferred_p check just below, for
+     a member whose own contract text is still a DEFERRED_PARSE
+     placeholder) AND parser.cc's own retry call after cp_parser_late_
+     contracts resolves that placeholder. For a conveyor member with NO
+     user-written contract text of its own at all (e.g. a bare 'void f
+     (const T&) conveyor;'), there is nothing to defer in the first
+     place, so grokfndecl's own main-path call already runs to
+     completion -- and the parser.cc retry call, unconditionally issued
+     for every in-class member regardless of whether IT specifically
+     needed deferral, would otherwise run again and duplicate every
+     synthesized conjunct, corrupting the specifier list (confirmed via
+     direct testing: an out-of-class definition of such a member,
+     synthesized exactly once, then fails duplicate_decls's contract-
+     count check against the in-class declaration's now-doubled list).
+     Guard here, not by trying to make each call site smarter about
+     whether it's "the first" -- simplest and matches this file's own
+     identical guard in oa_resolve_object_address_in_function_1.  */
   /* An in-class member function definition's own contracts are DEFERRED_
      PARSE placeholders until cp_parser_late_contracts resolves them once
      the enclosing class is complete (they may reference not-yet-declared
@@ -3915,8 +3939,25 @@ oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
      eagerly-built, already-resolved specifier here would violate that
      invariant and ICE. Skip for now; called again after cp_parser_late_
      contracts finishes (both of its own call sites, parser.cc), by which
-     point nothing in the list is deferred anymore.  */
+     point nothing in the list is deferred anymore.
+
+     D4324/P2680: the idempotency guard just below (oa_synthesized_
+     functions) must come AFTER this check, not before -- a deferred
+     call that hits the early return above never actually synthesizes
+     anything, so marking FNDECL as "already synthesized" at that point
+     would cause the LATER, REAL retry call (once the deferred contracts
+     are resolved) to be wrongly skipped, leaving such a member with NO
+     synthesized precondition at all. Confirmed via direct testing: a
+     conveyor member function with a real, deferred in-class contract
+     (e.g. 'int get () const conveyor pre<ctrl>(size () > 3) { ... }')
+     silently lost its own synthesized is_object_address(this) entirely
+     when this guard was (incorrectly) placed before this check.  */
   if (contract_any_deferred_p (get_fn_contract_specifiers (fndecl)))
+    return;
+
+  if (!oa_synthesized_functions)
+    oa_synthesized_functions = new hash_set<tree> ();
+  if (oa_synthesized_functions->add (fndecl))
     return;
 
   /* A constructor's own 'this' names an object that doesn't exist yet --
@@ -3972,7 +4013,45 @@ oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
       if (!is_this && TREE_CODE (TREE_TYPE (parm)) != REFERENCE_TYPE)
 	continue;
 
-      tree arg = is_this ? parm : cp_build_addr_expr (parm, tf_warning_or_error);
+      /* D4324/P2680: a forwarding-reference parameter ('T&& t', T still an
+	 unresolved template parameter at this point) is TYPE-DEPENDENT even
+	 though its own TREE_TYPE is already a REFERENCE_TYPE -- and for a
+	 dependent operand, cp_build_addr_expr resolves '&t' EAGERLY, baking
+	 in a CONVERT_EXPR whose type is 'pointer to T' (correctly stripping
+	 the current reference-ness, since 'T' -- not 'T&&' -- is what a
+	 reference variable's own address always points to). That baked-in
+	 'pointer to T' type is then subject to ordinary structural tsubst
+	 when this whole precondition is later instantiated -- and if T ends
+	 up being DEDUCED AS A REFERENCE TYPE ITSELF (forwarding-reference
+	 collapsing, e.g. T=S& for an lvalue argument, exactly std::move's
+	 own shape), substituting T=S& into the ALREADY-BAKED 'pointer to T'
+	 tries to form 'pointer to (S&)' -- a hard, unconditional [temp.
+	 deduct] error ("forming pointer to reference type"), since ordinary
+	 structural tsubst has no way to re-derive "strip the now-known
+	 reference-ness before pointing to it" the way fresh semantic
+	 construction would.
+
+	 Ordinary, hand-written '&t' inside a template body never hits this:
+	 build_x_unary_op (the parser's own entry point for unary '&', see
+	 its own processing_template_decl/type_dependent_expression_p check)
+	 defers a dependent operand entirely, returning an unresolved,
+	 minimally-typed placeholder node instead of resolving anything
+	 eagerly -- so the LATER instantiation's own tsubst_copy_and_build
+	 re-invokes the full address-of construction FRESH, on the by-then-
+	 concrete (already-collapsed) operand type, correctly deriving
+	 'pointer to S' (not 'pointer to S&') with no baked-in dependent
+	 pointer type ever coming into play. This code called cp_build_
+	 addr_expr directly, bypassing that deferral -- use build_x_unary_op
+	 instead so a dependent PARM gets the exact same safe, deferred
+	 treatment ordinary source-level '&t' already has. Confirmed via a
+	 minimal repro (a conveyor function template with a forwarding-
+	 reference parameter, instantiated with a reference type) and via
+	 the real, already-shipping library case that surfaced this:
+	 std::move itself, tagged conveyor under _GLIBCXX_CONVEYOR_ASSERTIONS,
+	 instantiated for basic_string's own 'std::move(__str._M_get_
+	 allocator())'-style forwarding of an lvalue reference.  */
+      tree arg = is_this ? parm
+	: build_x_unary_op (loc, ADDR_EXPR, parm, NULL_TREE, tf_warning_or_error);
       if (arg == error_mark_node)
 	continue;
 
@@ -9178,7 +9257,51 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
      function's own reference-parameter seeding), and required of every
      CALLER at each call site by oa_handle_call_precondition_obligation's
      own is_this_parameter block, mirroring an explicit reference
-     parameter's own call-site obligation exactly.  */
+     parameter's own call-site obligation exactly.
+
+     D4324/P2680: that obligation still doesn't apply to a CONSTRUCTOR's
+     own 'this', even when it's being forwarded as the receiver argument
+     of some OTHER (non-constructor) callee's own explicit is_object_
+     address(this) precondition -- oa_synthesize_implicit_reference_
+     safety_preconditions's own is_ctor exemption already establishes
+     that a constructor's 'this' names an object that doesn't fully
+     exist yet, so no *caller* of the constructor is ever asked to
+     prove it; by that same reasoning, the constructor's own body may
+     freely call an ordinary helper method on that same 'this' mid-
+     construction (an extremely common pattern -- e.g. libstdc++'s own
+     basic_string constructors calling _M_construct) without that
+     helper's own is_object_address(this) precondition becoming
+     unprovable. Confirmed via direct testing (a minimal constructor
+     calling a sibling method with an explicit is_object_address(this)
+     precondition failed here before this exemption, unconditionally,
+     regardless of the callee's own conveyor status).
+
+     The same reasoning applies to a DESTRUCTOR's own 'this', if anything
+     more strongly: by the time any destructor body runs, 'this' names a
+     fully-constructed, still-live object (the language itself guarantees
+     this -- the outermost call into the destructor chain was already
+     required to prove it, via this same is_this_parameter obligation at
+     that outer call site), so it may freely be forwarded into base- or
+     member-subobject destructor calls without re-proof. This matters most
+     for IMPLICITLY-DEFINED destructors (e.g. a class with no user-written
+     destructor but a conveyor-declared base or member), which are never
+     conveyor-declared themselves and so never get self-trust seeding for
+     'this' -- yet the compiler still synthesizes calls from them into
+     each base/member subobject's own destructor, and those calls go
+     through the ordinary via-pointer COMPONENT_REF composition above
+     (confirmed via debug_tree: an implicit subobject destructor call's
+     receiver arrives as 'ADDR_EXPR (COMPONENT_REF (INDIRECT_REF (this),
+     base_or_member_field)))', recursing back into this exact check for
+     'this' itself). Found via the real, already-shipping library sweep:
+     libstdc++'s '_Alloc_hider : allocator<T>' (empty-base-optimized) has
+     no user-written destructor, so its implicitly-defined one -- called
+     transitively from basic_string's own destructor -- must be able to
+     call the base 'allocator<T>::~allocator()' subobject destructor.  */
+
+  if (is_this_parameter (expr) && current_function_decl
+      && (DECL_CONSTRUCTOR_P (current_function_decl)
+	  || DECL_DESTRUCTOR_P (current_function_decl)))
+    return true;
 
   if (TREE_CODE (expr) == ADDR_EXPR)
     {
@@ -9353,6 +9476,30 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
 	  return false;
 	}
       return false;
+    }
+
+  /* D4324/P2680: a POINTER-TYPED FIELD read directly as a value (e.g.
+     'this->m_ptr', no '&') -- see oa_handle_precondition_stmt's own
+     identical COMPONENT_REF case (establishing side) for the full
+     rationale; this is its consulting counterpart, resolving the same
+     (base identity, FIELD_DECL) pair to the same synthesized
+     field_object_identity_key before falling through to the ordinary
+     env.provable_p consult below.  */
+  if (TREE_CODE (expr) == COMPONENT_REF)
+    {
+      tree obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (TREE_CODE (obj_expr) == INDIRECT_REF)
+	obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj_expr, 0));
+      tree field = TREE_OPERAND (expr, 1);
+      tree identity;
+      if (oa_object_identity_decl (obj_expr, &identity)
+	  || oa_field_slot_identity (obj_expr, env, &identity)
+	  || oa_array_slot_identity (obj_expr, env, &identity)
+	  || oa_field_object_identity (obj_expr, env, &identity))
+	{
+	  identity = env.alias_find (identity);
+	  expr = env.field_object_identity_key (identity, field);
+	}
     }
 
   if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
@@ -12834,7 +12981,8 @@ oa_call_symbolic_obligation_status (tree call, bool *forced_out, bool *strict_ou
    whose DECL_CONTEXT is never current_function_decl -- not owned,
    exactly as if P had been a reference instead.  */
 
-static bool oa_call_result_owned_p (tree call, oa_env &env);
+static bool oa_call_result_owned_p (tree call, oa_env &env,
+				     bool in_predicate_context = false);
 
 /* ASKING_ABOUT_POINTER_VALUE disambiguates a case the tree shape alone
    can't: whether a bare, wrapper-free EXPR (no ADDR_EXPR, no
@@ -12880,6 +13028,29 @@ oa_reference_owned_p (tree expr, oa_env &env,
       && oa_reference_owned_p (TREE_OPERAND (expr, 2), env,
 				asking_about_pointer_value, in_predicate_context,
 				reason_out);
+  /* D4324/P2680 Q2: a conveyor call's own return value, used DIRECTLY as
+     an argument (no intervening named local/parameter binding) -- see
+     oa_call_result_owned_p's own leading comment for the full ownership-
+     inference rule (owned iff every one of the callee's own pointer/
+     reference arguments at THIS call site is itself owned). Previously
+     oa_call_result_owned_p was only ever consulted at a DECL_EXPR/
+     reassignment BINDING site (establishing env.borrowed_p for the newly
+     bound decl) -- never here, so a call's result used straight through,
+     with no local in between, fell into the "unresolvable ->
+     conservatively borrowed" default below for the wrong reason (a bare
+     CALL_EXPR/AGGR_INIT_EXPR matches none of oa_object_identity_decl's
+     own four resolvers). Found via the real, already-shipping library
+     pattern this blocked entirely: 'std::move (some_accessor ())' --
+     e.g. basic_string's own 'std::move (__str._M_get_allocator ())' --
+     since std::move's own single reference parameter is (correctly)
+     subject to Q2 like any other non-const reference parameter, and the
+     accessor's own result is never bound to a local first. Placed here,
+     before the ADDR_EXPR/COMPONENT_REF/identity-resolution cases below
+     (none of which match a bare CALL_EXPR/AGGR_INIT_EXPR anyway), and
+     after the COND_EXPR case above so 'cond ? f () : g ()' still
+     recurses through both arms correctly.  */
+  if (TREE_CODE (expr) == CALL_EXPR || TREE_CODE (expr) == AGGR_INIT_EXPR)
+    return oa_call_result_owned_p (expr, env, in_predicate_context);
   /* D4324: a reference bound directly to a temporary is owned by
      whoever materializes it -- see oa_provable_p's own identical
      TARGET_EXPR case for the full rationale.  */
@@ -13127,10 +13298,18 @@ oa_reference_owned_p (tree expr, oa_env &env,
    Single-level, matching oa_reference_owned_p's own documented scope:
    only inspects the argument expressions actually present at THIS call
    site (via oa_reference_owned_p itself, recursively), never reaches
-   into the callee's own body.  */
+   into the callee's own body.
+
+   IN_PREDICATE_CONTEXT threads through to each recursive oa_reference_
+   owned_p call unchanged, matching every other consult in this file:
+   a call reached from CALL's own use inside predicate/assert condition
+   text must apply the same stricter, non-inheriting ruleset to ITS OWN
+   arguments too, not silently fall back to the ordinary function-body
+   ruleset just because the recursion happens to go through this
+   function.  */
 
 static bool
-oa_call_result_owned_p (tree call, oa_env &env)
+oa_call_result_owned_p (tree call, oa_env &env, bool in_predicate_context)
 {
   tree callee = cp_get_callee_fndecl_nofold (call);
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL
@@ -13160,7 +13339,8 @@ oa_call_result_owned_p (tree call, oa_env &env)
       tree arg_type = TREE_TYPE (arg);
       if (!POINTER_TYPE_P (arg_type) && TREE_CODE (arg_type) != REFERENCE_TYPE)
 	continue;
-      if (!oa_reference_owned_p (arg, env))
+      if (!oa_reference_owned_p (arg, env, /*asking_about_pointer_value=*/false,
+				  in_predicate_context))
 	return false;
     }
   return true;
@@ -17189,7 +17369,34 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
   bool callee_is_conveyor = callee != NULL_TREE
     && TREE_CODE (callee) == FUNCTION_DECL
     && DECL_DECLARED_CONVEYOR_P (callee);
-  for (int i = call_is_aggr_init ? 1 : 0; i < nargs; ++i)
+  /* D4324/P2680: a second, narrower exemption alongside CALLEE_IS_CONVEYOR
+     above -- an argument passed via a CONST reference can't be deleted or
+     reseated through THAT parameter by a well-formed callee (the same
+     "can't act as a conduit for ending the referent's lifetime" reasoning
+     oa_handle_call_precondition_obligation's own Q2 check already applies
+     when it skips a const reference's ownership obligation, see its
+     IS_CONST_REF check), independent of whether the callee is itself
+     'conveyor'-declared. Needed for the library's own documented idiom
+     (see max_size_type.h's operator/= comment): a small, non-conveyor
+     helper with an explicit 'pre<never_proven_conveyor_v>(is_object_
+     address(&r))' clause on a const reference parameter, whose body then
+     forwards that same reference into ANOTHER such helper. Without this,
+     the FIRST helper call's own invalidation (CALLEE_IS_CONVEYOR is false
+     for either helper, neither being 'conveyor'-declared) wiped the
+     reference's own is_object_address fact before the SECOND helper call
+     needed it, even though nothing between the two calls could possibly
+     have ended the reference's lifetime -- confirmed via direct testing
+     ('__max_diff_type::operator%='s own '*this -= (*this / __r) * __r',
+     chaining 'operator/' then 'operator*', both taking 'const
+     __max_diff_type& __r') and targeted fact-tracking instrumentation
+     showing the fact literally flip from provable to unprovable between
+     the two calls.  */
+  tree callee_parm = callee != NULL_TREE && TREE_CODE (callee) == FUNCTION_DECL
+    ? DECL_ARGUMENTS (callee) : NULL_TREE;
+  if (call_is_aggr_init && callee_parm)
+    callee_parm = DECL_CHAIN (callee_parm);
+  for (int i = call_is_aggr_init ? 1 : 0; i < nargs;
+       ++i, callee_parm = callee_parm ? DECL_CHAIN (callee_parm) : NULL_TREE)
     {
       tree call_arg = call_is_aggr_init
 	? AGGR_INIT_EXPR_ARG (call, i) : CALL_EXPR_ARG (call, i);
@@ -17210,17 +17417,23 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 	  env.field_alias_invalidate_all (identity);
 	  env.array_alias_invalidate_all (identity);
 	  env.field_object_predicate_invalidate_all (identity);
+	  bool arg_is_const_ref = callee_parm != NULL_TREE
+	    && TREE_CODE (TREE_TYPE (callee_parm)) == REFERENCE_TYPE
+	    && TYPE_READONLY (TREE_TYPE (TREE_TYPE (callee_parm)));
 	  /* D4324: see oa_invalidate_parameter_alias_group's own identical
 	     addition just above -- m_map/m_range_map need the same
 	     per-argument invalidation discipline every other fact map here
-	     already gets. Exempted for a conveyor callee -- see this
-	     function's own comment above.  */
-	  if (!callee_is_conveyor)
+	     already gets. Exempted for a conveyor callee or a const
+	     reference parameter -- see this function's own comments
+	     above.  */
+	  if (!callee_is_conveyor && !arg_is_const_ref)
 	    {
 	      env.invalidate (identity);
 	      env.range_invalidate (identity);
 	    }
-	  oa_invalidate_parameter_alias_group (identity, env, !callee_is_conveyor);
+	  oa_invalidate_parameter_alias_group (identity, env,
+						!callee_is_conveyor
+						&& !arg_is_const_ref);
 	}
     }
 }
@@ -19483,6 +19696,42 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 		if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
 		  arg = op;
 	      }
+	    /* D4324/P2680: 'is_object_address(p)' for a POINTER-TYPED FIELD
+	       p (e.g. 'this->m_ptr', read directly as a value, no '&') --
+	       neither the ADDR_EXPR unwrap just above nor the plain VAR_P/
+	       PARM_DECL case oa_provable_p's own consult falls through to
+	       apply, since a field is a COMPONENT_REF, not a bare decl, and
+	       two syntactically distinct occurrences of 'this->m_ptr' are
+	       two different, non-interned tree nodes -- so establishing the
+	       fact under the raw COMPONENT_REF itself would never be found
+	       again by a *different* occurrence's own consult. Same
+	       "identity, not tree pointer" problem field_nz_objs/
+	       field_nz_fields just below already solve for a 'field != 0'
+	       conjunct -- reuse the exact same resolvers, but plug the
+	       result into env's existing field_object_identity_key/m_map
+	       pair (built for exactly this purpose, see that function's own
+	       comment: "plugged into the *existing* ... map, not a new
+	       parallel map") rather than adding a third, is_object_address-
+	       specific field map. Confirmed via direct testing: libstdc++'s
+	       own basic_string::_M_construct's exception-safety _Guard
+	       (a local RAII helper storing 'basic_string* m_guarded') needs
+	       exactly this shape for its own destructor's precondition.  */
+	    else if (TREE_CODE (arg) == COMPONENT_REF)
+	      {
+		tree obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+		if (TREE_CODE (obj_expr) == INDIRECT_REF)
+		  obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj_expr, 0));
+		tree field = TREE_OPERAND (arg, 1);
+		tree identity;
+		if (oa_object_identity_decl (obj_expr, &identity)
+		    || oa_field_slot_identity (obj_expr, env, &identity)
+		    || oa_array_slot_identity (obj_expr, env, &identity)
+		    || oa_field_object_identity (obj_expr, env, &identity))
+		  {
+		    identity = env.alias_find (identity);
+		    arg = env.field_object_identity_key (identity, field);
+		  }
+	      }
 	    facts.safe_push (arg);
 	  }
 	else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
@@ -19907,6 +20156,42 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 		tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
 		if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
 		  arg = op;
+	      }
+	    /* D4324/P2680: 'is_object_address(p)' for a POINTER-TYPED FIELD
+	       p (e.g. 'this->m_ptr', read directly as a value, no '&') --
+	       neither the ADDR_EXPR unwrap just above nor the plain VAR_P/
+	       PARM_DECL case oa_provable_p's own consult falls through to
+	       apply, since a field is a COMPONENT_REF, not a bare decl, and
+	       two syntactically distinct occurrences of 'this->m_ptr' are
+	       two different, non-interned tree nodes -- so establishing the
+	       fact under the raw COMPONENT_REF itself would never be found
+	       again by a *different* occurrence's own consult. Same
+	       "identity, not tree pointer" problem field_nz_objs/
+	       field_nz_fields just below already solve for a 'field != 0'
+	       conjunct -- reuse the exact same resolvers, but plug the
+	       result into env's existing field_object_identity_key/m_map
+	       pair (built for exactly this purpose, see that function's own
+	       comment: "plugged into the *existing* ... map, not a new
+	       parallel map") rather than adding a third, is_object_address-
+	       specific field map. Confirmed via direct testing: libstdc++'s
+	       own basic_string::_M_construct's exception-safety _Guard
+	       (a local RAII helper storing 'basic_string* m_guarded') needs
+	       exactly this shape for its own destructor's precondition.  */
+	    else if (TREE_CODE (arg) == COMPONENT_REF)
+	      {
+		tree obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+		if (TREE_CODE (obj_expr) == INDIRECT_REF)
+		  obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj_expr, 0));
+		tree field = TREE_OPERAND (arg, 1);
+		tree identity;
+		if (oa_object_identity_decl (obj_expr, &identity)
+		    || oa_field_slot_identity (obj_expr, env, &identity)
+		    || oa_array_slot_identity (obj_expr, env, &identity)
+		    || oa_field_object_identity (obj_expr, env, &identity))
+		  {
+		    identity = env.alias_find (identity);
+		    arg = env.field_object_identity_key (identity, field);
+		  }
 	      }
 	    facts.safe_push (arg);
 	  }
@@ -23672,6 +23957,84 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
      obligation's own is_object_address-conjunct loop) -- the dedicated
      "implicit Q1" REFERENCE_TYPE/is_this_parameter block that used to
      live there is similarly gone now, for the identical reason.  */
+
+  /* D4324/P2680: a constructor/destructor CLONE's own body, as built by
+     optimize.cc's own clone_body (a copy_body_data-based generic tree
+     copy, not a real re-parse of the original source), never contains
+     a PRECONDITION_STMT node at all -- decl.cc's own finish_function
+     unconditionally skips maybe_apply_function_contracts (the step
+     that would normally weave one in) for any DECL_CLONED_FUNCTION_P
+     decl, on the assumption that clone_body already copied "everything
+     we need" from the original (see that call site's own comment);
+     that assumption holds for ordinary statements but not for this
+     specific node kind (confirmed via direct testing: a cloned
+     destructor's own body has no PRECONDITION_STMT at all, just the
+     raw user statements under an unrelated temporary-variable shape --
+     even a bare 'pre<never_proven_conveyor_v>(is_object_address(this))'
+     never survives). The clone's own get_fn_contract_specifiers list
+     IS still correct (propagate_cdtor_contracts_to_clones sets it
+     independently, at parse time, unaffected by whatever clone_body
+     does to the body) -- establish its own is_object_address conjuncts
+     directly from that list here, bypassing the missing PRECONDITION_
+     STMT wrapper entirely. The walk below still needs this fact for
+     its own body's call-site obligation checks (e.g. a sibling method
+     call inside the clone's own body): those run unconditionally,
+     driven by the body's own call statements, regardless of whether a
+     real PRECONDITION_STMT was ever found to establish anything.
+     Mirrors oa_handle_precondition_stmt's own explicit-is_object_
+     address-conjunct establishing loop (including its COMPONENT_REF/
+     field-identity case, for a pointer-typed field precondition like
+     basic_string::_M_construct's own exception-safety _Guard), reading
+     the same conjuncts from the specifier list instead of from a body
+     statement.  */
+  if (DECL_CLONED_FUNCTION_P (fndecl))
+    for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+      {
+	tree contract = CONTRACT_STATEMENT (as);
+	if (!PRECONDITION_P (contract))
+	  continue;
+	if (!oa_contract_conveyor_active_p (contract))
+	  continue;
+	tree cond = CONTRACT_CONDITION (contract);
+	if (cond == NULL_TREE || cond == error_mark_node)
+	  continue;
+	auto_vec<tree *> conjuncts;
+	oa_collect_conjuncts (&cond, &conjuncts);
+	for (unsigned i = 0; i < conjuncts.length (); ++i)
+	  {
+	    tree arg;
+	    if (!is_object_address_call_p (*conjuncts[i], &arg))
+	      continue;
+	    arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+	    while (TREE_CODE (arg) == NON_LVALUE_EXPR || TREE_CODE (arg) == NOP_EXPR
+		   || TREE_CODE (arg) == CONVERT_EXPR
+		   || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+	      arg = TREE_OPERAND (arg, 0);
+	    if (TREE_CODE (arg) == ADDR_EXPR)
+	      {
+		tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+		if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
+		  arg = op;
+	      }
+	    else if (TREE_CODE (arg) == COMPONENT_REF)
+	      {
+		tree obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+		if (TREE_CODE (obj_expr) == INDIRECT_REF)
+		  obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj_expr, 0));
+		tree field = TREE_OPERAND (arg, 1);
+		tree identity;
+		if (oa_object_identity_decl (obj_expr, &identity)
+		    || oa_field_slot_identity (obj_expr, env, &identity)
+		    || oa_array_slot_identity (obj_expr, env, &identity)
+		    || oa_field_object_identity (obj_expr, env, &identity))
+		  {
+		    identity = env.alias_find (identity);
+		    arg = env.field_object_identity_key (identity, field);
+		  }
+	      }
+	    env.set (arg, true);
+	  }
+      }
 
   oa_walk_stmt (&body, env);
 

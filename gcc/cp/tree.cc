@@ -4160,6 +4160,32 @@ cp_tree_equal (tree t1, tree t2)
 	  t2 = TREE_OPERAND(t2, 0);
 	  code2 = TREE_CODE(t2);
 	}
+
+      /* D4324/P2680: a synthesized 'is_object_address (this)' conjunct
+	 (oa_synthesize_implicit_reference_safety_preconditions,
+	 contracts.cc) built for an out-of-class member function
+	 definition wraps its own 'this' PARM_DECL in a NOP_EXPR -- a
+	 harmless pointer-type bridge (the out-of-class definition's own
+	 'this' pointer type is a distinct, but equivalent, type node
+	 from the in-class declaration's, since the latter is built while
+	 the class is still incomplete) -- whereas the same synthesis
+	 call for the in-class declaration leaves 'this' bare. Confirmed
+	 via direct testing (debug_tree on both sides of a "mismatched
+	 contract condition" false positive for a trivial out-of-class
+	 conveyor member function taking a reference parameter): unwrap
+	 exactly like the VIEW_CONVERT_EXPR case just above, so the two
+	 sides compare the same underlying 'this' by position instead of
+	 spuriously differing by tree shape.  */
+      if (code1 == NOP_EXPR && TREE_CODE (TREE_OPERAND (t1, 0)) == PARM_DECL)
+	{
+	  t1 = TREE_OPERAND (t1, 0);
+	  code1 = TREE_CODE (t1);
+	}
+      if (code2 == NOP_EXPR && TREE_CODE (TREE_OPERAND (t2, 0)) == PARM_DECL)
+	{
+	  t2 = TREE_OPERAND (t2, 0);
+	  code2 = TREE_CODE (t2);
+	}
     }
 
   if (code1 != code2)
