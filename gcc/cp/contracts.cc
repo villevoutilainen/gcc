@@ -9412,6 +9412,38 @@ oa_operator_new_call_provable_p (tree call)
 	 && DECL_IS_OPERATOR_NEW_P (callee) && !std_placement_new_fn_p (callee);
 }
 
+/* D4324/P2680: true if CALL is a call to std::forward<T>(x), with *ARG
+   set to its own single argument (x). std::forward is functionally
+   identity-preserving for is_object_address purposes -- 'return
+   static_cast<T&&>(__t);', the exact same trivial reference-cast shape
+   std::move already has -- but unlike std::move, it does not fold away
+   to a plain conversion node early enough to already fall through
+   oa_provable_p's own ordinary NOP_EXPR/CONVERT_EXPR stripping: a real
+   CALL_EXPR to a std::forward specialization survives to this point
+   (confirmed via direct testing, root cause not otherwise pinned down --
+   plausibly std::forward's explicit template argument changing how
+   early the always_inline/constexpr body gets folded, versus std::move's
+   argument-deduced one). Recognized by name + namespace only (no single
+   canonical TEMPLATE_DECL to key on the way std::is_object_address's own
+   recognizer does, since std::forward is two distinct overloads, one per
+   value category) -- std::forward's own trivial, unconditional identity-
+   preservation makes this safe regardless of which overload resolved.  */
+
+static bool
+oa_std_forward_call_p (tree call, tree *arg)
+{
+  if (call == NULL_TREE || TREE_CODE (call) != CALL_EXPR
+      || call_expr_nargs (call) != 1)
+    return false;
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL || !DECL_NAME (callee)
+      || !id_equal (DECL_NAME (callee), "forward")
+      || !decl_in_std_namespace_p (callee))
+    return false;
+  *arg = CALL_EXPR_ARG (call, 0);
+  return true;
+}
+
 /* True if EXPR (evaluated in ENV) is provably an object address:
    'this'; '&obj' where obj is a parameter/variable of object type; a
    VAR_DECL/PARM_DECL whose current value ENV already knows to be
@@ -9430,6 +9462,35 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
     return false;
 
   STRIP_ANY_LOCATION_WRAPPER (expr);
+
+  /* D4324/P2680: 'std::forward<T>(x)' pass-through -- see oa_std_forward_
+     call_p's own comment for why this needs an explicit strip here,
+     unlike std::move. Loops (a chain of nested std::forward calls is
+     legal C++ too), and peeks through the ordinary conversion-wrapper
+     strip on a LOCAL working copy first (a call site substituting a
+     forwarding-reference parameter commonly wraps the whole
+     'std::forward<T>(x)' call in an extra reference-adjustment
+     conversion) -- but only actually commits that stripping to EXPR
+     itself once a real std::forward call is confirmed underneath.
+     Unconditionally overwriting EXPR with the stripped form even when no
+     std::forward call is found regressed several IILE-resolution tests
+     (found via direct testing): further down, this same function
+     pattern-matches an UNSTRIPPED NOP_EXPR/CONVERT_EXPR directly (e.g.
+     the by-reference lambda-capture-proxy case), and permanently
+     stripping it here first, as an unconditional side effect of merely
+     checking for std::forward, silently broke that later, more specific
+     recognition for every ordinary (non-std::forward) caller.  */
+  for (;;)
+    {
+      tree stripped = expr;
+      while (TREE_CODE (stripped) == NON_LVALUE_EXPR || TREE_CODE (stripped) == NOP_EXPR
+	     || TREE_CODE (stripped) == CONVERT_EXPR || TREE_CODE (stripped) == VIEW_CONVERT_EXPR)
+	stripped = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (stripped, 0));
+      tree fwd_arg;
+      if (!oa_std_forward_call_p (stripped, &fwd_arg))
+	break;
+      expr = STRIP_ANY_LOCATION_WRAPPER (fwd_arg);
+    }
 
   /* D4324/P2680, "conversion-operator-returned provable field": a
      wrapper's own conversion operator, called directly (not under an

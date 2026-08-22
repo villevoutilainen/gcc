@@ -196,6 +196,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		   std::input_iterator_tag)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
       {
 	size_type __len = 0;
@@ -261,6 +262,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		   std::forward_iterator_tag)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
       {
 	size_type __dnew = static_cast<size_type>(std::distance(__beg, __end));
@@ -306,6 +308,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     _M_construct(size_type __n, _CharT __c)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
     {
       if (__n > size_type(_S_local_capacity))
@@ -329,6 +332,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     _M_construct(const _CharT* __str, size_type __n)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
     {
       if (__n > size_type(_S_local_capacity))
@@ -349,6 +353,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr void
     basic_string<_CharT, _Traits, _Alloc>::
     _M_construct(basic_string&& __str, size_type __pos,  size_type __n)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
     {
       const _CharT* __start = __str._M_data() + __pos;
       if (__n <= _S_local_capacity)
