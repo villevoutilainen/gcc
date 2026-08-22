@@ -357,6 +357,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr int
       compare(basic_string_view __str) const noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	const size_type __rlen = std::min(this->_M_len, __str._M_len);
 	int __ret = traits_type::compare(this->_M_str, __str._M_str, __rlen);
