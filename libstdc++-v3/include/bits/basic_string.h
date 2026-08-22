@@ -220,6 +220,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
 	_GLIBCXX20_CONSTEXPR
 	_Alloc_hider(pointer __dat, _Alloc&& __a = _Alloc())
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+#endif
 	: allocator_type(std::move(__a)), _M_p(__dat) { }
 #endif
 
@@ -237,24 +240,73 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	size_type        _M_allocated_capacity;
       };
 
+      // See _M_data (the getter, just below)'s own comment for why this
+      // pre/post pair is here -- applies equally to a void-returning
+      // setter: the postcondition isn't about a return value here, just
+      // advertising that 'this' is still valid for whatever the CALLER
+      // does next, exactly as needed.
       _GLIBCXX20_CONSTEXPR
       void
       _M_data(pointer __p)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       { _M_dataplus._M_p = __p; }
 
+      // See _M_data's own comment just above.
       _GLIBCXX20_CONSTEXPR
       void
       _M_length(size_type __length)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       { _M_string_length = __length; }
 
+      // D4324/P2680: this trivial, this-only accessor is neither
+      // 'conveyor' itself (its own body has nothing to verify) nor
+      // reachable from outside as an argument needing Q1/Q2 -- but
+      // calling it as an ordinary (non-conveyor) method still
+      // conservatively invalidates 'this'-and-anything-that-could-alias-
+      // it's own is_object_address fact (oa_invalidate_symbolic_facts_
+      // for_call_args's own "any call might end this argument's
+      // lifetime" rule), same as any other non-conveyor call. The
+      // explicit pre/post pair here breaks that: the precondition
+      // establishes 'this' (trusted, never_proven) for this function's
+      // own analysis, and the postcondition re-advertises it for the
+      // CALLER once this call returns -- oa_handle_call_symbolic_
+      // postcondition_establishment already re-establishes a conveyor-
+      // active post<>(is_object_address(E)) fact for its caller
+      // unconditionally (see its own comment: "the callee is vouching
+      // that E is STILL a valid object address when it returns"), so
+      // this needs no new engine support, just the explicit contract.
+      // Needed for exactly the pattern basic_string's own methods use
+      // pervasively -- e.g. '_M_dispose''s own 'if (!_M_is_local ())
+      // _M_destroy (...)': _M_is_local's own internal '_M_data () ==
+      // _M_local_data ()' calls these same accessors, which would
+      // otherwise invalidate 'this' before _M_is_local's own
+      // postcondition (and, transitively, _M_dispose's later call to
+      // the conveyor _M_destroy) could be discharged. Confirmed via
+      // direct testing.
       _GLIBCXX20_CONSTEXPR
       pointer
       _M_data() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       { return _M_dataplus._M_p; }
 
+      // See _M_data's own comment just above for why this pre/post pair
+      // is here.
       _GLIBCXX20_CONSTEXPR
       pointer
       _M_local_data()
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 #if __cplusplus >= 201103L
 	return std::pointer_traits<pointer>::pointer_to(*_M_local_buf);
@@ -263,9 +315,15 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #endif
       }
 
+      // See _M_data's own comment above for why this pre/post pair is
+      // here.
       _GLIBCXX20_CONSTEXPR
       const_pointer
       _M_local_data() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 #if __cplusplus >= 201103L
 	return std::pointer_traits<const_pointer>::pointer_to(*_M_local_buf);
@@ -274,22 +332,37 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #endif
       }
 
+      // See _M_data's own comment above.
       _GLIBCXX20_CONSTEXPR
       void
       _M_capacity(size_type __capacity)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       { _M_allocated_capacity = __capacity; }
 
       _GLIBCXX20_CONSTEXPR
       void
       _M_set_length(size_type __n)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	traits_type::assign(_M_data()[__n], _CharT());
 	_M_length(__n);
       }
 
+      // See _M_data's own comment above for why this pre/post pair is
+      // here.
       _GLIBCXX20_CONSTEXPR
       bool
       _M_is_local() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	if (_M_data() == _M_local_data())
 	  {
@@ -303,12 +376,21 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // Create & Destroy
       _GLIBCXX20_CONSTEXPR
       _Alloc_result
-      _M_create_plus(size_type __new_capacity, size_type __old_capacity);
+      _M_create_plus(size_type __new_capacity, size_type __old_capacity)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+      ;
 
       __attribute__((__always_inline__))
       _GLIBCXX20_CONSTEXPR
       void
       _M_create_and_place(size_type __new_capacity, size_type __old_capacity)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
 	{
 	  _Alloc_result __r = _M_create_plus(__new_capacity, __old_capacity);
 	  _M_data(__r.__ptr);
@@ -318,11 +400,19 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // This must remain for ABI stability though unused.
       _GLIBCXX20_CONSTEXPR
       pointer
-      _M_create(size_type&, size_type);
+      _M_create(size_type&, size_type)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+      ;
 
       _GLIBCXX20_CONSTEXPR
       void
       _M_dispose()
+      // D4324/P2680: see _M_destroy's own comment just below.
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	if (!_M_is_local())
 	  _M_destroy(_M_allocated_capacity);
@@ -331,6 +421,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       void
       _M_destroy(size_type __size) throw()
+      // D4324/P2680: see __max_diff_type::operator/='s own comment
+      // (bits/max_size_type.h) for why this is a precondition, not a body
+      // assert, and why it's gated on _GLIBCXX_CONVEYOR_ASSERTIONS.
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       { _Alloc_traits::deallocate(_M_get_allocator(), _M_data(), __size + 1); }
 
 #if __cplusplus < 201103L || defined _GLIBCXX_DEFINING_STRING_INSTANTIATIONS
@@ -362,7 +458,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_GLIBCXX20_CONSTEXPR
         void
         _M_construct(_InIterator __beg, _InIterator __end,
-		     std::input_iterator_tag);
+		     std::input_iterator_tag)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+	;
 
       // For forward_iterators up to random_access_iterators, used for
       // string::iterator, _CharT*, etc.
@@ -370,18 +470,30 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_GLIBCXX20_CONSTEXPR
         void
         _M_construct(_FwdIterator __beg, _FwdIterator __end,
-		     std::forward_iterator_tag);
+		     std::forward_iterator_tag)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+	;
 
       _GLIBCXX20_CONSTEXPR
       void
-      _M_construct(size_type __req, _CharT __c);
+      _M_construct(size_type __req, _CharT __c)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+      ;
 
       // Construct using block of memory of known size.
       // If _Terminated is true assume that source is already 0 terminated.
       template<bool _Terminated>
 	_GLIBCXX20_CONSTEXPR
 	void
-	_M_construct(const _CharT *__c, size_type __n);
+	_M_construct(const _CharT *__c, size_type __n)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+	;
 
 #if __cplusplus >= 202302L
       constexpr void
@@ -391,18 +503,35 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       allocator_type&
       _M_get_allocator() _GLIBCXX_CONVEYOR
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      // The return is always '_M_dataplus' itself (an _Alloc_hider base-
+      // class subobject of 'this'), never a reference to anything else --
+      // exactly as valid an object address as 'this' already is. Trusted
+      // (never_proven) rather than self-checked, matching __possibly_
+      // const_range's own identical pattern (bits/ranges_base.h).
+      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address(&r))
+#endif
       { return _M_dataplus; }
 
       _GLIBCXX20_CONSTEXPR
       const allocator_type&
       _M_get_allocator() const _GLIBCXX_CONVEYOR
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address(&r))
+#endif
       { return _M_dataplus; }
 
       // Ensure that _M_local_buf is the active member of the union.
+      // See _M_data's own comment above for why this pre/post pair is
+      // here.
       __attribute__((__always_inline__))
       _GLIBCXX14_CONSTEXPR
       void
       _M_init_local_buf() _GLIBCXX_NOEXCEPT
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 #if __glibcxx_is_constant_evaluated
 	if (std::is_constant_evaluated())
@@ -411,10 +540,15 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #endif
       }
 
+      // See _M_data's own comment above.
       __attribute__((__always_inline__))
       _GLIBCXX14_CONSTEXPR
       pointer
       _M_use_local_data() _GLIBCXX_NOEXCEPT
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 #if __cpp_lib_is_constant_evaluated
 	_M_init_local_buf();
@@ -645,8 +779,16 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX20_CONSTEXPR
       basic_string(const basic_string& __str)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+      // '_M_local_data ()' inlined here -- see the move constructor's own
+      // identical comment just above for why.
+      : _M_dataplus(std::pointer_traits<pointer>::pointer_to(*_M_local_buf),
+		    _Alloc_traits::_S_select_on_copy(__str._M_get_allocator()))
+#else
       : _M_dataplus(_M_local_data(),
 		    _Alloc_traits::_S_select_on_copy(__str._M_get_allocator()))
+#endif
       {
 	_M_construct<true>(__str._M_data(), __str.length());
       }
@@ -794,7 +936,31 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX20_CONSTEXPR
       basic_string(basic_string&& __str) noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+      // D4324/P2680: '_M_local_data ()' inlined here (rather than called
+      // as its own method) specifically under _GLIBCXX_CONVEYOR_ASSERTIONS
+      // -- calling it as an ordinary method implicitly passes 'this' as
+      // its own receiver argument, and since it isn't itself 'conveyor',
+      // that invalidates every OTHER same-typed reference parameter's own
+      // is_object_address fact that could alias 'this' (oa_invalidate_
+      // parameter_alias_group's own conservative "could alias as
+      // parameters" sweep) -- including '__str' right here, BEFORE
+      // 'std::move (__str._M_get_allocator ())' (the SECOND mem-
+      // initializer argument, scanned after the first) gets a chance to
+      // use it. Inlining removes the 'this'-carrying call entirely: the
+      // argument to 'pointer_traits<...>::pointer_to' is a FIELD access
+      // ('*_M_local_buf'), which resolves to a field identity, not a
+      // bare 'this' PARM_DECL, so it never triggers the same alias-group
+      // sweep. Confirmed via a minimal, non-basic_string repro (the same
+      // shape, method call vs. inlined field access, either side of an
+      // is_object_address-dependent sibling argument). Behaviorally
+      // identical to calling _M_local_data () -- this is its exact body.
+      : _M_dataplus(std::pointer_traits<pointer>::pointer_to(*_M_local_buf),
+		    std::move(__str._M_get_allocator()))
+#else
       : _M_dataplus(_M_local_data(), std::move(__str._M_get_allocator()))
+#endif
       {
 	if (__str._M_is_local())
 	  {
@@ -947,6 +1113,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX20_CONSTEXPR
       ~basic_string()
+      // D4324/P2680: see _M_destroy's own comment just below.
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       { _M_dispose(); }
 
       /**
@@ -1088,6 +1258,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX20_CONSTEXPR
       operator __sv_type() const noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       { return __sv_type(data(), size()); }
 #endif // C++17
 
@@ -1227,6 +1400,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       length() const _GLIBCXX_NOEXCEPT
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       { return size(); }
 
       ///  Returns the size() of the largest possible %string.
@@ -1329,6 +1506,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       capacity() const _GLIBCXX_NOEXCEPT
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	size_t __sz = _M_is_local() ? size_type(_S_local_capacity)
 				     : _M_allocated_capacity;
@@ -2966,6 +3146,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const _CharT*
       data() const _GLIBCXX_NOEXCEPT
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       { return _M_data(); }
 
 #if __cplusplus >= 201703L

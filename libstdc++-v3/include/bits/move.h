@@ -137,6 +137,21 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr typename std::remove_reference<_Tp>::type&&
     move(_Tp&& __t) noexcept
     _GLIBCXX_CONVEYOR
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    // The precondition here is otherwise auto-synthesized from the
+    // 'conveyor' tag above for any reference parameter/'this' (see
+    // oa_synthesize_implicit_reference_safety_preconditions) -- stated
+    // explicitly anyway so both halves of move's own is_object_address
+    // contract (what it requires of its argument, what it guarantees of
+    // its return) are visible together at the declaration, matching
+    // __possibly_const_range's own identical pair (bits/ranges_base.h).
+    // The return is always '__t' itself (a cast, never a reference to
+    // anything else), so it's exactly as valid an object address as
+    // '__t' already is -- trusted (never_proven) rather than self-
+    // checked, same reasoning as the precondition.
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__t))
+    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+#endif
     { return static_cast<typename std::remove_reference<_Tp>::type&&>(__t); }
 
 

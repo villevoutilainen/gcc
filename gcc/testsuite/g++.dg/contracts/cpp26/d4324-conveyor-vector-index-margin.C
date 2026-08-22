@@ -78,6 +78,7 @@
 #include <vector>
 
 int use_margin_only_declines (std::vector<int>& v, std::vector<int>::size_type idx)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&v))
 {
   if (v.size () - idx > 10)
     {
@@ -91,6 +92,7 @@ int use_margin_only_declines (std::vector<int>& v, std::vector<int>::size_type i
 }
 
 int use_margin_with_companion_ok (std::vector<int>& v, std::vector<int>::size_type idx)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&v))
 {
   if (v.size () > idx && v.size () - idx > 10)
     {
@@ -101,6 +103,7 @@ int use_margin_with_companion_ok (std::vector<int>& v, std::vector<int>::size_ty
 
 int use_shift_without_numeric_cap_declines (std::vector<int>& v,
 					      std::vector<int>::size_type idx)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&v))
 {
   if (v.size () > idx && v.size () - idx > 10)
     {
@@ -112,6 +115,7 @@ int use_shift_without_numeric_cap_declines (std::vector<int>& v,
 }
 
 int use_sound (std::vector<int>& v, std::vector<int>::size_type idx)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&v))
 {
   if (v.size () > idx && v.size () - idx > 10 && idx < 5)
     {
@@ -123,6 +127,7 @@ int use_sound (std::vector<int>& v, std::vector<int>::size_type idx)
 }
 
 int use_unsound (std::vector<int>& v, std::vector<int>::size_type idx)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&v))
 {
   if (v.size () > idx && v.size () - idx > 10 && idx < 5)
     {
@@ -135,6 +140,7 @@ int use_unsound (std::vector<int>& v, std::vector<int>::size_type idx)
 }
 
 int use_signed_idx_declines (std::vector<int>& v, int idx)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&v))
 {
   if (v.size () - idx > 10)
     {
@@ -153,6 +159,7 @@ int use_signed_idx_declines (std::vector<int>& v, int idx)
 }
 
 int use_signed_idx_nonneg_ok (std::vector<int>& v, int idx)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&v))
 {
   if (idx >= 0 && v.size () > idx && v.size () - idx > 10)
     {
@@ -166,6 +173,7 @@ int use_signed_idx_nonneg_ok (std::vector<int>& v, int idx)
 }
 
 int use_definitely_unsound (std::vector<int>& v)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&v))
 {
   if (v.size () == 5)
     {
