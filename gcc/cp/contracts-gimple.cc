@@ -978,9 +978,29 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
     {
       tree callee = gimple_call_fndecl (as_a <gcall *> (def));
       if (callee)
-	result = cg_call_postcondition_guarantees_p
-	  (callee, require_conveyor, !require_conveyor,
-	   is_object_address_call_p);
+	{
+	  /* D4324/P2680, Phase 1.5 GIMPLE port: mirrors contracts.cc's own
+	     oa_provable_p operator-new axiom, but far simpler here -- by
+	     this pass's point (post-gimplification), 'new T()' is just an
+	     ordinary GIMPLE_CALL to operator new whose result feeds the
+	     constructor call's own receiver argument directly (no
+	     TARGET_EXPR/AGGR_INIT_EXPR wrapper survives gimplification, so
+	     no separate receiver-correlation step is needed the way the
+	     AST engine's own COMPOUND_EXPR/TARGET_EXPR recognizer needs).
+	     A real, non-placement allocation's own result is axiomatically
+	     a valid object address; placement new's result is only as
+	     provable as the pointer its caller supplied (std_placement_
+	     new_fn_p is the exact, existing structural test GCC itself
+	     already uses to distinguish the standard non-replaceable
+	     placement overload from every allocating one -- see that
+	     function's own comment).  */
+	  if (DECL_IS_OPERATOR_NEW_P (callee) && !std_placement_new_fn_p (callee))
+	    result = true;
+	  else
+	    result = cg_call_postcondition_guarantees_p
+	      (callee, require_conveyor, !require_conveyor,
+	       is_object_address_call_p);
+	}
     }
 
   in_progress.remove (val);
@@ -1686,6 +1706,35 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	  if (key)
 	    established.put (key, { /*conveyor_established=*/true });
 	}
+
+  /* D4324/P2680, ctor/dtor 'this' soundness correction: mirrors
+     contracts.cc's own identical widening in oa_resolve_object_address_
+     in_function_1 -- a bare, non-conveyor constructor/destructor has no
+     contract specifiers of its own for the loop above (or the DECL_
+     DECLARED_CONVEYOR_P-gated block just above) to ever find, so 'this'
+     never got seeded here at all. Unlike that general reference-
+     parameter seeding (correctly reverted to a DECL_DECLARED_CONVEYOR_P
+     gate, per this function's own comment above, since a non-conveyor
+     function imposes no obligation on its own callers), a constructor
+     or destructor is structurally different: EVERY caller of a cdtor
+     now owes a real, unconditional proof obligation of its own for the
+     receiver (cg_check_call's own identical addition, mirroring
+     contracts.cc's oa_handle_call_precondition_obligation), so seeding
+     'this' as self-trusted here, unconditionally, reopens no loophole.
+     Confirmed via direct testing: -fcontract-conveyor-proofs-gimple
+     silently accepted an explicit destructor call / 'delete' / placement
+     new, each on a wholly unproven pointer, before this addition (the
+     AST engine's own repro battery, recompiled with the GIMPLE flavor)
+     -- the exact same soundness hole contracts.cc's own fix closes,
+     confirmed to exist in this pass too, independently, since neither
+     pass shares any state with the other.  */
+  if (DECL_CONSTRUCTOR_P (fndecl) || DECL_DESTRUCTOR_P (fndecl))
+    if (tree this_parm = DECL_ARGUMENTS (fndecl))
+      {
+	tree key = cg_self_trust_key (fun, this_parm);
+	if (key)
+	  established.put (key, { /*conveyor_established=*/true });
+      }
 }
 
 /* Item 6 for relational facts: does CALL's own callee have a
@@ -3332,6 +3381,48 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  if (const char *why = oa_unprovable_reason_text
 		(have_range ? OA_UNPROVABLE_RANGE_PARTIAL
 			    : OA_UNPROVABLE_UNRESOLVED_OPERAND))
+	    inform (gimple_location (call), "%s", _(why));
+	}
+    }
+
+  /* D4324/P2680, ctor/dtor 'this' soundness correction: mirrors
+     contracts.cc's own oa_handle_call_precondition_obligation, and this
+     pass's own identical cg_seed_self_trust addition just above -- EVERY
+     constructor/destructor's own receiver needs a REAL, unconditional
+     is_object_address obligation at each call site, regardless of
+     whether CALLEE has any contract specifier of its own for the loop
+     above to have found.  Simpler here than the AST engine's own
+     equivalent: by this pass's point (post-gimplification),
+     AGGR_INIT_EXPR/TARGET_EXPR are long gone -- 'new T()', placement
+     new, 'delete', an explicit destructor call, and ordinary automatic-
+     duration construction/destruction are ALL just an ordinary
+     GIMPLE_CALL to the cdtor with the receiver pointer as arg 0, so no
+     separate AGGR_INIT_EXPR-receiver-correlation step is needed at all.
+     REQUIRE_CONVEYOR is unconditionally true: this obligation has no
+     CONTRACT of its own to derive a flavor/strictness from the way the
+     loop above does, and is_object_address is fundamentally a conveyor-
+     flavored notion (oa_contract_conveyor_active_p's own primary
+     domain) -- matches contracts.cc's own is_object_address handling,
+     which likewise never accepts a merely-symbolic-trusted fact here.
+     Confirmed via direct testing: -fcontract-conveyor-proofs-gimple
+     silently accepted an explicit destructor call / 'delete' / placement
+     new, each on a wholly unproven pointer, before this addition (the
+     same repro battery contracts.cc's own fix was verified against).  */
+  if ((flag_contract_conveyor_proofs_gimple || flag_contract_symbolic_proofs_gimple)
+      && gimple_call_num_args (call) >= 1
+      && (DECL_CONSTRUCTOR_P (callee) || DECL_DESTRUCTOR_P (callee)))
+    {
+      tree receiver = gimple_call_arg (call, 0);
+      hash_set<tree> in_progress;
+      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+      if (!cg_provable_object_address_p (receiver, established,
+					  /*require_conveyor=*/true,
+					  in_progress, &reason))
+	{
+	  error_at (gimple_location (call),
+		    "cannot prove %<is_object_address%> for %qE, as "
+		    "required by the precondition of %qD", receiver, callee);
+	  if (const char *why = oa_unprovable_reason_text (reason))
 	    inform (gimple_location (call), "%s", _(why));
 	}
     }
