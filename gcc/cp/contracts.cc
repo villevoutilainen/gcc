@@ -2481,16 +2481,22 @@ maybe_contract_wrap_call (tree fndecl, tree call)
   if (error_operand_p (fndecl) || !call || call == error_mark_node)
     return error_mark_node;
 
-  if (!handle_contracts_p (fndecl))
-    return call;
-
   /* D4324: mark the caller (current_function_decl) as possibly needing
      the oa_* walk if FNDECL's own precondition is conveyor- or
      symbolic-active -- a different, narrower notion than the has_
-     active_preconditions/has_active_postconditions check just below
+     active_preconditions/has_active_postconditions check further below
      (which cares about wrapper generation, not conveyor/symbolic
-     classification), so this sits alongside that check, not instead
-     of it.  oa_maybe_instantiate_contracts first, exactly like oa_
+     classification).  This whole block sits ahead of the handle_
+     contracts_p early-return below (rather than after, as it used to):
+     handle_contracts_p requires contract_any_active_p (FNDECL), which is
+     false for a bare, non-conveyor constructor/destructor with no
+     contract specifiers of its own -- the overwhelmingly common case --
+     so the ctor/dtor marking a few lines down was previously dead code
+     for exactly the callees that matter most here.  oa_maybe_
+     instantiate_contracts is a no-op unless FNDECL is an as-yet-
+     uninstantiated template specialization, so hoisting it above
+     handle_contracts_p is harmless for every other caller of this
+     function.  oa_maybe_instantiate_contracts first, exactly like oa_
      scan_calls_in_expr/oa_function_needs_walk_p, since FNDECL's own
      contract specifiers can still be pointing at an uninstantiated
      template pattern at this, ordinary call-resolution, timing.  See
@@ -2519,6 +2525,26 @@ maybe_contract_wrap_call (tree fndecl, tree call)
       && !processing_contract_condition)
     {
       oa_maybe_instantiate_contracts (fndecl);
+      /* D4324/P2680, ctor/dtor 'this' soundness correction: a call to
+	 ANY constructor/destructor always needs this caller marked,
+	 regardless of whether FNDECL has an active precondition of its
+	 own to find below -- oa_handle_call_precondition_obligation's
+	 own unconditional cdtor receiver check (see that function's own
+	 comment) must actually run for it.  Gated on the same global
+	 flag(s) that gate is_object_address checking everywhere else in
+	 this file (matching oa_scan_calls_visitor's own identical gate):
+	 without -fcontract-conveyor-proofs/-fcontract-symbolic-proofs,
+	 'conveyor'/is_object_address are never even reachable from any
+	 real conjunct, so there is nothing for this synthesized,
+	 no-conjunct-needed obligation to ever meaningfully enforce --
+	 unconditionally marking every ordinary, contract-free
+	 constructor/destructor call regardless of these flags (found via
+	 direct testing) wrongly forced a full oa_* walk, and consequently
+	 a real is_object_address(this) proof obligation, onto plain C++
+	 code that never opted into any of this checking at all.  */
+      if ((flag_contract_conveyor_proofs || flag_contract_symbolic_proofs)
+	  && (DECL_CONSTRUCTOR_P (fndecl) || DECL_DESTRUCTOR_P (fndecl)))
+	SET_DECL_MIGHT_NEED_OA_SCAN_P (current_function_decl);
       for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
 	{
 	  tree contract = CONTRACT_STATEMENT (as);
@@ -2531,6 +2557,9 @@ maybe_contract_wrap_call (tree fndecl, tree call)
 	    }
 	}
     }
+
+  if (!handle_contracts_p (fndecl))
+    return call;
 
   bool do_pre = has_active_preconditions (fndecl, ccs_wrapper);
   bool do_post = has_active_postconditions (fndecl, ccs_wrapper);
@@ -9414,6 +9443,55 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
 	}
     }
 
+  /* D4324/P2680, ctor/dtor 'this' soundness correction, Phase 1.4/1.5:
+     'new T()' (no placement) lowers, at this pre-genericize stage, to a
+     COMPOUND_EXPR chain -- 'TARGET_EXPR<D, operator new(size)>, *D =
+     {CLOBBER}, ..., *D = AGGR_INIT_EXPR(ctor, D, ...), ..., (T*) D' --
+     confirmed via direct -fdump-tree-original inspection.  The chain's
+     own first operand (after unwrapping nested COMPOUND_EXPRs down its
+     left spine) is the allocation itself; its last operand/value is the
+     resulting pointer.  D's own is_object_address is exactly as provable
+     as the allocation call that produced it: recognized here only when
+     that call's callee is a real, non-placement 'operator new' overload
+     (DECL_IS_OPERATOR_NEW_P but NOT std_placement_new_fn_p -- the latter
+     is the exact, existing structural test GCC itself already uses to
+     single out the standard 'operator new (size_t, void*)' overload,
+     whose result is only as provable as whatever pointer the caller
+     supplied, not unconditionally true the way a real allocation is),
+     and only once the chain's own final value is confirmed to still
+     refer to that SAME slot D (stripped of ordinary conversions) rather
+     than something else entirely. This is deliberately narrow -- it does
+     not attempt to validate the AGGR_INIT_EXPR construction step itself
+     (a separate concern, this function's ordinary CALL_EXPR/AGGR_INIT_
+     EXPR handling elsewhere already covers a constructor's own
+     correctness; this recognizer only answers "is D itself a valid
+     object address").  */
+  if (TREE_CODE (expr) == COMPOUND_EXPR)
+    {
+      tree head = expr;
+      while (TREE_CODE (head) == COMPOUND_EXPR)
+	head = TREE_OPERAND (head, 0);
+      tree tail = expr;
+      while (TREE_CODE (tail) == COMPOUND_EXPR)
+	tail = TREE_OPERAND (tail, 1);
+      tree stripped_tail = STRIP_ANY_LOCATION_WRAPPER (tail);
+      while (TREE_CODE (stripped_tail) == NON_LVALUE_EXPR
+	     || TREE_CODE (stripped_tail) == NOP_EXPR
+	     || TREE_CODE (stripped_tail) == CONVERT_EXPR
+	     || TREE_CODE (stripped_tail) == VIEW_CONVERT_EXPR)
+	stripped_tail = TREE_OPERAND (stripped_tail, 0);
+      if (TREE_CODE (head) == TARGET_EXPR
+	  && stripped_tail == TREE_OPERAND (head, 0))
+	{
+	  tree init = TREE_OPERAND (head, 1);
+	  tree callee = init ? cp_get_callee_fndecl_nofold (init) : NULL_TREE;
+	  if (callee && TREE_CODE (callee) == FUNCTION_DECL
+	      && DECL_IS_OPERATOR_NEW_P (callee)
+	      && !std_placement_new_fn_p (callee))
+	    return true;
+	}
+    }
+
   /* 'return &a;' where 'a' is a by-reference lambda-capture proxy
      arrives here as NOP_EXPR/CONVERT_EXPR converting the proxy's own
      reference type directly to a pointer type -- taking the address of
@@ -9493,49 +9571,41 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
      own is_this_parameter block, mirroring an explicit reference
      parameter's own call-site obligation exactly.
 
-     D4324/P2680: that obligation still doesn't apply to a CONSTRUCTOR's
-     own 'this', even when it's being forwarded as the receiver argument
-     of some OTHER (non-constructor) callee's own explicit is_object_
-     address(this) precondition -- oa_synthesize_implicit_reference_
-     safety_preconditions's own is_ctor exemption already establishes
-     that a constructor's 'this' names an object that doesn't fully
-     exist yet, so no *caller* of the constructor is ever asked to
-     prove it; by that same reasoning, the constructor's own body may
-     freely call an ordinary helper method on that same 'this' mid-
-     construction (an extremely common pattern -- e.g. libstdc++'s own
-     basic_string constructors calling _M_construct) without that
-     helper's own is_object_address(this) precondition becoming
-     unprovable. Confirmed via direct testing (a minimal constructor
-     calling a sibling method with an explicit is_object_address(this)
-     precondition failed here before this exemption, unconditionally,
-     regardless of the callee's own conveyor status).
-
-     The same reasoning applies to a DESTRUCTOR's own 'this', if anything
-     more strongly: by the time any destructor body runs, 'this' names a
-     fully-constructed, still-live object (the language itself guarantees
-     this -- the outermost call into the destructor chain was already
-     required to prove it, via this same is_this_parameter obligation at
-     that outer call site), so it may freely be forwarded into base- or
-     member-subobject destructor calls without re-proof. This matters most
-     for IMPLICITLY-DEFINED destructors (e.g. a class with no user-written
-     destructor but a conveyor-declared base or member), which are never
-     conveyor-declared themselves and so never get self-trust seeding for
-     'this' -- yet the compiler still synthesizes calls from them into
-     each base/member subobject's own destructor, and those calls go
-     through the ordinary via-pointer COMPONENT_REF composition above
-     (confirmed via debug_tree: an implicit subobject destructor call's
-     receiver arrives as 'ADDR_EXPR (COMPONENT_REF (INDIRECT_REF (this),
-     base_or_member_field)))', recursing back into this exact check for
-     'this' itself). Found via the real, already-shipping library sweep:
-     libstdc++'s '_Alloc_hider : allocator<T>' (empty-base-optimized) has
-     no user-written destructor, so its implicitly-defined one -- called
-     transitively from basic_string's own destructor -- must be able to
-     call the base 'allocator<T>::~allocator()' subobject destructor.  */
-
-  if (is_this_parameter (expr) && current_function_decl
-      && (DECL_CONSTRUCTOR_P (current_function_decl)
-	  || DECL_DESTRUCTOR_P (current_function_decl)))
-    return true;
+     D4324/P2680, second soundness correction: a CONSTRUCTOR's or
+     DESTRUCTOR's own 'this' used to get an unconditional axiom right
+     here ("return true" unconditionally, no seeding/consult at all),
+     on the theory that a constructor's 'this' names an object that
+     doesn't yet exist (so proving it is a "category error") and a
+     destructor's 'this' was already proven by whatever called it. Both
+     halves of that reasoning are false: a constructor or destructor can
+     be invoked through an arbitrary, unproven pointer -- explicit
+     placement new ('new (p) T()'), an explicit destructor call
+     ('p->~T()'), or even an entirely ordinary 'delete p;' where p is
+     never independently proven -- and none of that was ever checked
+     anywhere. Confirmed via direct testing: all three compiled with
+     zero diagnostics even though the constructor/destructor body
+     forwarded 'this'/a field of it into another conveyor call. Whether
+     or not a live T object exists yet, the pointer must still denote
+     genuinely valid storage of the right size and alignment for
+     writing/reading through it not to be UB -- exactly the same
+     property is_object_address already guarantees for every other
+     pointer, so a constructor/destructor gets no special exemption here
+     either: like a member conveyor function's 'this' above, it falls
+     through to the ordinary env.provable_p (expr) consult, backed now
+     by a REAL caller-side obligation for every construction/destruction
+     call shape (oa_handle_call_precondition_obligation's own cdtor
+     handling) instead of an unconditional pass. Self-trust for 'this'
+     *within* a constructor/destructor's own body is still seeded
+     unconditionally (not gated on DECL_DECLARED_CONVEYOR_P the way an
+     ordinary member function's self-trust is) by oa_resolve_object_
+     address_in_function_1 -- every caller of a cdtor now has to prove
+     it instead, so there is no non-conveyor loophole being reopened by
+     trusting it inside the body; this is also what keeps an implicitly-
+     defined destructor with a conveyor base/member (e.g. libstdc++'s
+     own '_Alloc_hider : allocator<T>', no user-written destructor,
+     called transitively from basic_string's own destructor) able to
+     call each base/member subobject's own destructor via the ordinary
+     "&this->field" provable shape.  */
 
   if (TREE_CODE (expr) == ADDR_EXPR)
     {
@@ -12251,22 +12321,13 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 
 	     D4324/P2680 soundness fix (see ~/soundness-fixes-for-
 	     conveyors.md): 'this' gets NO exemption here in general --
-	     dereferencing 'this' in an ordinary (non-constructor) member
-	     function needs the exact same proof any other pointer does,
-	     precisely so 'static_cast<X*>(0)->member_func()'-style abuse
-	     is caught statically, per direct confirmation from the P2680
-	     author. Two exceptions:
+	     dereferencing 'this' in an ordinary member function needs the
+	     exact same proof any other pointer does, precisely so
+	     'static_cast<X*>(0)->member_func()'-style abuse is caught
+	     statically, per direct confirmation from the P2680 author. One
+	     exception remains:
 
-	     1) A CONSTRUCTOR's own 'this': there is no already-constructed
-	     object at that address yet to prove valid -- the whole point
-	     of a constructor is to bring one into existence -- so asking
-	     is_object_address(this) there is a category error, not a real
-	     obligation. Mirrors the identical, pre-existing exclusion for
-	     a constructor's own AGGR_INIT_EXPR argno-0 slot in oa_handle_
-	     call_precondition_obligation ("the object doesn't exist yet to
-	     prove valid").
-
-	     2) Any DECL_DECLARED_CONVEYOR_P function's own 'this' -- such a
+	     Any DECL_DECLARED_CONVEYOR_P function's own 'this' -- such a
 	     function always carries a compiler-synthesized 'pre<conveyor_
 	     assert_v>(is_object_address(this))' of its own (oa_synthesize_
 	     implicit_reference_safety_preconditions), which ordinarily
@@ -12289,7 +12350,29 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 	     this same-function fallback ever needed to fire, so no caller
 	     of such a function ever gets to skip proving its 'this' is
 	     valid -- only this function's own, already-guaranteed-checked-
-	     by-its-callers body is affected.  */
+	     by-its-callers body is affected.
+
+	     D4324/P2680, second soundness correction: a bare CONSTRUCTOR's
+	     own 'this' used to get an unconditional exemption right here
+	     too, on the theory that there is no already-constructed object
+	     at that address yet to prove valid -- a "category error," not a
+	     real obligation. False: a constructor can be invoked through an
+	     arbitrary, unproven pointer (placement new on garbage), and
+	     writing through 'this' to initialize a member is still UB if
+	     the pointer doesn't denote genuinely valid storage, whether or
+	     not a live T is there yet -- exactly the same property is_
+	     object_address already guarantees for every other pointer. That
+	     exemption is removed; a bare (non-conveyor) constructor's own
+	     'this' now falls through to the ordinary oa_provable_p (base,
+	     *e) consult just below, backed by the unconditional self-trust
+	     seeding oa_resolve_object_address_in_function_1 now gives every
+	     constructor/destructor's own body (see oa_provable_p's own
+	     identical correction for the full reasoning) -- so this needs
+	     no special-casing here at all anymore, the same way a
+	     destructor's own 'this' already didn't (DECL_DESTRUCTOR_P was
+	     never part of this OR-condition to begin with, since a non-
+	     conveyor destructor's 'this' already fell through to
+	     oa_provable_p unconditionally).  */
 	  {
 	    /* An *implicit* 'this->field' access (plain 'field', no
 	       explicit 'this->') binds 'this' one layer deeper than an
@@ -12304,8 +12387,7 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 	      stripped_base = TREE_OPERAND (stripped_base, 0);
 	    bool this_self_trusted
 	      = is_this_parameter (stripped_base) && current_function_decl
-		&& (DECL_CONSTRUCTOR_P (current_function_decl)
-		    || DECL_DECLARED_CONVEYOR_P (current_function_decl));
+		&& DECL_DECLARED_CONVEYOR_P (current_function_decl);
 	    if (!this_self_trusted && !oa_provable_p (base, *e))
 	    /* The implicit INDIRECT_REF inside 'p->field' (as opposed to
 	       an explicit '*p') is compiler-synthesized with no location
@@ -13700,6 +13782,56 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
 		inform (EXPR_LOCATION (call), "%s", _(why));
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
+	}
+    }
+
+  /* D4324/P2680, ctor/dtor 'this' soundness correction: EVERY
+     constructor/destructor's own receiver needs a REAL caller-side
+     is_object_address obligation, regardless of whether CALLEE is
+     conveyor-declared (so has any conjunct of its own for the loop
+     above to have found) -- see oa_provable_p's own identical
+     correction for the full reasoning: a constructor/destructor can be
+     invoked through an arbitrary, unproven pointer (explicit placement
+     new, an explicit destructor call, or an entirely ordinary 'delete'
+     on an unproven parameter), and none of that used to be checked
+     anywhere, since oa_synthesize_implicit_reference_safety_
+     preconditions's own is_ctor exemption means a constructor never
+     gets a synthesized 'this' conjunct even when conveyor-declared, and
+     a bare (non-conveyor) constructor/destructor gets no synthesized
+     conjunct at all regardless. Only the plain CALL_EXPR shape is
+     handled here ('T::T (&obj)', 'T::~T (p)', an explicit destructor
+     call, a base/member subobject cdtor call) -- the AGGR_INIT_EXPR
+     shape ('new T()'/placement new) has no usable arg 0 at all (a
+     meaningless placeholder, see the AGGR_INIT_EXPR-argno-0 comment
+     just below) and is instead checked directly in oa_walk_stmt's own
+     INIT_EXPR/MODIFY_EXPR case, the one place the real receiver (the
+     enclosing TARGET_EXPR's own slot, from the '*D = AGGR_INIT_EXPR
+     (...)' assignment wrapping it) is still reachable.
+
+     Gated on the same global flag(s) checked at every other engine-wide
+     (not per-conjunct) activity decision in this file -- without either
+     flag, is_object_address/'conveyor' are never reachable from any
+     real conjunct anywhere in the translation unit, so this synthesized
+     obligation would otherwise fire for perfectly ordinary constructors/
+     destructors in code that never opted into any of this checking at
+     all (found via direct testing against the existing, unrelated
+     d4324-object-decl-class-callable.C-style tests, which use plain
+     -fcontracts/-fcontract-control-objects with no conveyor/symbolic
+     flag whatsoever).  */
+  if ((flag_contract_conveyor_proofs || flag_contract_symbolic_proofs)
+      && TREE_CODE (call) == CALL_EXPR && call_expr_nargs (call) >= 1
+      && (DECL_CONSTRUCTOR_P (callee) || DECL_DESTRUCTOR_P (callee)))
+    {
+      tree receiver = CALL_EXPR_ARG (call, 0);
+      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+      if (!oa_provable_p (receiver, env, &reason))
+	{
+	  error_at (EXPR_LOCATION (call),
+		    "cannot prove %<is_object_address%> for %qE, "
+		    "required by the precondition of %qD", receiver, callee);
+	  if (const char *why = oa_unprovable_reason_text (reason))
+	    inform (EXPR_LOCATION (call), "%s", _(why));
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	}
     }
 
@@ -22554,6 +22686,63 @@ oa_walk_stmt (tree *stmt, oa_env &env)
       oa_walk_stmt (&EXPR_STMT_EXPR (t), env);
       return;
 
+    case COMPOUND_EXPR:
+      /* D4324/P2680, ctor/dtor 'this' soundness correction: 'delete p;'
+	 lowers, at this pre-genericize stage, to exactly this shape --
+	 'TARGET_EXPR<D, p>, if (D != 0) { try { T::~T(D); } finally
+	 { operator delete(D, size); } }' -- a COMPOUND_EXPR whose first
+	 operand materializes D and whose second is the guarded destructor
+	 call.  Previously entirely unhandled here, this fell to the
+	 default case below, which -- unlike this one -- never recurses
+	 into an unrecognized node's own operands, so the COND_EXPR (and
+	 the destructor CALL_EXPR nested inside its TRY_FINALLY_EXPR) was
+	 completely unreachable: no item-7 call-precondition-obligation
+	 scan, no item-8 scan, nothing. Confirmed via direct testing that
+	 'delete p;' on a wholly unproven parameter still silently compiled
+	 clean even after oa_handle_call_precondition_obligation's own
+	 unconditional cdtor receiver check was added and correctly wired
+	 to run -- this structural gap, not that check, was the reason.
+	 An ordinary comma-operator expression-statement ('a, b;') takes
+	 the same shape and is handled correctly by the same fix.  */
+      oa_walk_stmt (&TREE_OPERAND (t, 0), env);
+      oa_walk_stmt (&TREE_OPERAND (t, 1), env);
+      return;
+
+    case TARGET_EXPR:
+      /* D4324/P2680, ctor/dtor 'this' soundness correction: the other
+	 half of the 'delete p;' shape above -- TARGET_EXPR's own slot
+	 (D) must have its is_object_address fact established from its
+	 initializer (here, a plain copy of P) the same way an ordinary
+	 direct-initialization DECL_EXPR does just below, or a later read
+	 of D (the destructor call's own receiver argument) finds no fact
+	 at all and is conservatively treated as unprovable -- which
+	 happens to give the right answer for THIS repro (P is itself
+	 unproven) but would wrongly reject 'delete' on an
+	 already-provable pointer otherwise.  Mirrors the DECL_EXPR
+	 pointer-tracking block's core rule only (not its alias/range/
+	 predicate bookkeeping, which a synthesized, never-named compiler
+	 temporary has no other use for): a bare TARGET_EXPR reaching here
+	 as its own sub-statement was previously unreachable at all (see
+	 the COMPOUND_EXPR case above), so this is strictly new coverage,
+	 not a behavior change to any previously-reached case.  Also scans
+	 the initializer itself for calls (item 7), since it can be an
+	 arbitrary expression (e.g. a function call materializing its
+	 return value into this very temporary), not just a plain copy.  */
+      {
+	tree slot = TREE_OPERAND (t, 0);
+	tree init = TREE_OPERAND (t, 1);
+	if (init && TREE_CODE (init) != AGGR_INIT_EXPR)
+	  oa_scan_calls_in_expr (&TREE_OPERAND (t, 1), env);
+	if (slot && VAR_P (slot) && POINTER_TYPE_P (TREE_TYPE (slot)))
+	  {
+	    if (init && TREE_CODE (init) != AGGR_INIT_EXPR)
+	      env.set (slot, oa_provable_p (init, env));
+	    else
+	      env.invalidate (slot);
+	  }
+      }
+      return;
+
     case CLEANUP_POINT_EXPR:
     case MUST_NOT_THROW_EXPR:
     case CONVERT_EXPR:
@@ -22650,6 +22839,62 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   nesting depth, the same reach oa_handle_call_symbolic_scalar_
 	   obligation above already gets through PRE_EXTRA.  */
 	oa_scan_calls_in_expr (&TREE_OPERAND (t, 1), env, &pre_extra, &post_extra);
+	/* D4324/P2680, ctor/dtor 'this' soundness correction, Phase 1.4:
+	   '*D = AGGR_INIT_EXPR (ctor, ...)' is how a constructor call whose
+	   own destination is a TARGET_EXPR's slot ('new T()'/placement
+	   new's already-allocated receiver, an array/aggregate element, ...)
+	   is represented at this pre-genericize stage.  AGGR_INIT_EXPR's own
+	   SLOT operand (AGGR_INIT_EXPR_SLOT) is a SEPARATE, unrelated
+	   internal compiler temporary here -- confirmed via direct
+	   -fdump-tree-original inspection that it is NOT this assignment's
+	   own D -- so the real receiver D is only reachable via this very
+	   MODIFY_EXPR's own LHS.  D's own is_object_address fact was already
+	   established when its own TARGET_EXPR was walked (see the
+	   TARGET_EXPR case above, which runs earlier in program order, since
+	   'new'/placement-new's own TARGET_EXPR always precedes the
+	   AGGR_INIT_EXPR assignment that consumes its slot) -- via the
+	   Phase 1.5 operator-new axiom for 'new T()', or correctly left
+	   unprovable for placement new on an unproven pointer. Without this
+	   check, 'new (static_cast<void*>(0)) T()' -- a placement-new-on-
+	   null, the same soundness hole as an explicit destructor call or
+	   'delete' on an unproven pointer -- silently compiled clean: the
+	   AGGR_INIT_EXPR shape has no other enforcement point at all
+	   (oa_handle_call_precondition_obligation's own unconditional
+	   cdtor-receiver check is CALL_EXPR-only, precisely because
+	   AGGR_INIT_EXPR's own arg 0 is the documented meaningless
+	   placeholder, not a real receiver -- see its own comment).
+
+	   Gated on the same global flag(s) as that CALL_EXPR-shape check
+	   (see its own comment for why) -- otherwise this fires for
+	   ordinary 'new T()'/placement-new construction in code that never
+	   requested any conveyor/symbolic checking at all.  */
+	if ((flag_contract_conveyor_proofs || flag_contract_symbolic_proofs))
+	{
+	  tree stripped_rhs = STRIP_ANY_LOCATION_WRAPPER (rhs);
+	  if (TREE_CODE (stripped_rhs) == AGGR_INIT_EXPR && TREE_CODE (lhs) == INDIRECT_REF)
+	    {
+	      tree ctor_callee = cp_get_callee_fndecl_nofold (stripped_rhs);
+	      if (ctor_callee && TREE_CODE (ctor_callee) == FUNCTION_DECL
+		  && DECL_CONSTRUCTOR_P (ctor_callee))
+		{
+		  tree slot = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (lhs, 0));
+		  while (TREE_CODE (slot) == NON_LVALUE_EXPR || TREE_CODE (slot) == NOP_EXPR
+			 || TREE_CODE (slot) == CONVERT_EXPR || TREE_CODE (slot) == VIEW_CONVERT_EXPR)
+		    slot = TREE_OPERAND (slot, 0);
+		  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+		  if (!oa_provable_p (slot, env, &reason))
+		    {
+		      error_at (EXPR_LOCATION (t),
+				"cannot prove %<is_object_address%> for %qE, "
+				"required by the precondition of %qD",
+				slot, ctor_callee);
+		      if (const char *why = oa_unprovable_reason_text (reason))
+			inform (EXPR_LOCATION (t), "%s", _(why));
+		      inform (DECL_SOURCE_LOCATION (ctor_callee), "declared here");
+		    }
+		}
+	    }
+	}
 	/* Item 8's narrow div/mod, array-bound, and overflow restrictions,
 	   only within a function actually declared 'conveyor'. Scans LHS as
 	   well as RHS -- found via direct testing (motivated by a GIMPLE-
@@ -24528,6 +24773,35 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
      basic_string::_M_construct's own exception-safety _Guard), reading
      the same conjuncts from the specifier list instead of from a body
      statement.  */
+  /* D4324/P2680, ctor/dtor 'this' soundness correction: a constructor or
+     destructor's own 'this' is now self-trusted for the duration of its
+     own body unconditionally -- not gated on DECL_DECLARED_CONVEYOR_P
+     the way an ordinary member function's self-trust is, and not
+     dependent on FNDECL having any contract specifiers of its own at
+     all (an entirely bare, non-conveyor destructor like '~T () { take_
+     this (&x); }' has none, so the establishing loop just below, which
+     only ever iterates FNDECL's own specifier list, would never reach
+     it). This is what replaces oa_provable_p's own former unconditional
+     axiom for a cdtor's 'this' (see that function's own comment for the
+     full reasoning: a cdtor can be invoked through an arbitrary,
+     unproven pointer -- explicit placement new, an explicit destructor
+     call, or an entirely ordinary 'delete' on an unproven parameter --
+     and none of that used to be checked anywhere) -- trusting it
+     unconditionally *within the body* is still sound precisely because
+     removing that axiom also makes oa_handle_call_precondition_
+     obligation's own cdtor handling into a REAL caller-side obligation
+     now (see that function's own comment), so every caller of this
+     cdtor is required to prove 'this' at the call site instead; there
+     is no non-conveyor loophole being reopened by trusting it here.
+     This also covers a constructor/destructor's own CLONES the same
+     way the loop just below covers them for an explicit precondition
+     conjunct -- unlike that loop, this needs no PRECONDITION_STMT/
+     specifier-list workaround at all, since it never depended on either
+     to begin with.  */
+  if (DECL_CONSTRUCTOR_P (fndecl) || DECL_DESTRUCTOR_P (fndecl))
+    if (tree this_parm = DECL_ARGUMENTS (fndecl))
+      env.set (this_parm, true);
+
   for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
     {
       tree contract = CONTRACT_STATEMENT (as);
