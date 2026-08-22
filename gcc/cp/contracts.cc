@@ -9383,6 +9383,35 @@ oa_conversion_operator_returned_field (tree fndecl, tree *field_out)
   return true;
 }
 
+/* D4324/P2680, ctor/dtor 'this' soundness correction, Phase 1.5: true if
+   CALL is a direct call to a real, non-placement 'operator new' overload
+   -- DECL_IS_OPERATOR_NEW_P flags every operator new overload, including
+   the standard placement one, whose own result is only as provable as
+   whatever pointer the caller supplied (never unconditionally true);
+   std_placement_new_fn_p is the existing, exact structural test GCC
+   itself already uses to single that one out. Shared by oa_provable_p's
+   own COMPOUND_EXPR recognizer below (the 'T* p = new T();'/'p = new
+   T(args);' shape, where CALL is nested inside a TARGET_EXPR reached
+   through a comma-expression chain) and oa_scan_calls_visitor's own
+   TARGET_EXPR handling (the same allocation call seen directly, as a
+   TARGET_EXPR's own initializer, before any enclosing comma-chain
+   wrapper is inspected -- the shape a field assignment or any other
+   context oa_scan_calls_in_expr reaches takes, found via direct testing
+   that 'p = new T(v);' for a FIELD 'p' silently failed even though the
+   otherwise-identical 'T* p = new T();' local-variable shape already
+   worked, precisely because only the COMPOUND_EXPR-wrapped recognizer
+   existed until now).  */
+
+static bool
+oa_operator_new_call_provable_p (tree call)
+{
+  if (call == NULL_TREE || TREE_CODE (call) != CALL_EXPR)
+    return false;
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  return callee && TREE_CODE (callee) == FUNCTION_DECL
+	 && DECL_IS_OPERATOR_NEW_P (callee) && !std_placement_new_fn_p (callee);
+}
+
 /* True if EXPR (evaluated in ENV) is provably an object address:
    'this'; '&obj' where obj is a parameter/variable of object type; a
    VAR_DECL/PARM_DECL whose current value ENV already knows to be
@@ -9481,16 +9510,20 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
 	     || TREE_CODE (stripped_tail) == VIEW_CONVERT_EXPR)
 	stripped_tail = TREE_OPERAND (stripped_tail, 0);
       if (TREE_CODE (head) == TARGET_EXPR
-	  && stripped_tail == TREE_OPERAND (head, 0))
-	{
-	  tree init = TREE_OPERAND (head, 1);
-	  tree callee = init ? cp_get_callee_fndecl_nofold (init) : NULL_TREE;
-	  if (callee && TREE_CODE (callee) == FUNCTION_DECL
-	      && DECL_IS_OPERATOR_NEW_P (callee)
-	      && !std_placement_new_fn_p (callee))
-	    return true;
-	}
+	  && stripped_tail == TREE_OPERAND (head, 0)
+	  && oa_operator_new_call_provable_p (TREE_OPERAND (head, 1)))
+	return true;
     }
+
+  /* D4324/P2680, ctor/dtor 'this' soundness correction, Phase 1.4/1.5
+     follow-up: the bare, unwrapped form of the same allocation call --
+     reached when something consults a TARGET_EXPR's own initializer
+     directly (oa_scan_calls_visitor's own TARGET_EXPR handling, for a
+     'new'-expression seen outside the COMPOUND_EXPR-wrapped shape just
+     above, e.g. assigned to a FIELD rather than a local variable) rather
+     than the whole enclosing comma-chain.  */
+  if (TREE_CODE (expr) == CALL_EXPR && oa_operator_new_call_provable_p (expr))
+    return true;
 
   /* 'return &a;' where 'a' is a by-reference lambda-capture proxy
      arrives here as NOP_EXPR/CONVERT_EXPR converting the proxy's own
@@ -19568,6 +19601,50 @@ oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
       oa_scan_calls_data *d = (oa_scan_calls_data *) data_;
       oa_env *e = d->env;
       tree t = *tp;
+      /* D4324/P2680, ctor/dtor 'this' soundness correction, Phase 1.4/1.5
+	 follow-up: a TARGET_EXPR reached here (a 'new'-expression assigned
+	 to anything OTHER than a bare local variable's own DECL_EXPR --
+	 e.g. a FIELD, 'p = new T (v);' -- since a local variable's own
+	 DECL_INITIAL is consulted directly via oa_provable_p, whole, and
+	 never reaches this generic per-node visitor at all) needs its own
+	 slot's is_object_address fact established from its initializer
+	 the same way oa_walk_stmt's own TARGET_EXPR case already does for
+	 a bare top-level statement ('delete p;'/a standalone placement-
+	 new) -- that case is reached only when a TARGET_EXPR is itself a
+	 full statement's own top-level node, structurally unreachable from
+	 an ordinary expression context like a field assignment's RHS or a
+	 call argument, which is scanned via this shared, universal
+	 substrate instead. Recurse into the initializer FIRST (so any
+	 calls nested inside it -- e.g. an allocator's own 'operator new'
+	 call, or the eventual constructor call this slot is about to feed
+	 -- get their own obligations discharged/facts established using
+	 already-correct evaluation order, matching the CALL_EXPR/AGGR_
+	 INIT_EXPR case's own identical reasoning just below), THEN resolve
+	 the slot's own fact from the (now fully processed) initializer.
+	 Found via direct testing: 'p = new T (v);' for a FIELD 'p' failed
+	 to prove is_object_address for T's own constructor call even
+	 though the otherwise-identical 'T* p = new T ();' local-variable
+	 shape already worked -- only the DECL_EXPR path, and oa_provable_p's
+	 own COMPOUND_EXPR-wrapped recognizer it consults, existed until
+	 now; a TARGET_EXPR encountered directly (not as part of an
+	 enclosing comma-chain some OTHER consult already inspected whole)
+	 had no fact-establishing treatment anywhere in this shared scan.  */
+      if (t != NULL_TREE && TREE_CODE (t) == TARGET_EXPR)
+	{
+	  tree slot = TREE_OPERAND (t, 0);
+	  tree init = TREE_OPERAND (t, 1);
+	  if (init && init != error_mark_node)
+	    cp_walk_tree (&TREE_OPERAND (t, 1), oa_scan_calls_visitor, data_, NULL);
+	  if (slot && VAR_P (slot) && POINTER_TYPE_P (TREE_TYPE (slot)))
+	    {
+	      if (init && TREE_CODE (init) != AGGR_INIT_EXPR)
+		e->set (slot, oa_provable_p (init, *e));
+	      else
+		e->invalidate (slot);
+	    }
+	  *walk_subtrees = 0;
+	  return NULL_TREE;
+	}
       /* D4324: AGGR_INIT_EXPR alongside CALL_EXPR -- a constructor call
 	 that materializes a temporary whose final destination isn't fixed
 	 yet ('return Number(50.0);', 'take(Number(3.0))', an array/
