@@ -58,6 +58,7 @@
 
 int shifted_past_the_boundary (std::vector<int>& v,
 				 std::vector<int>::size_type idx)
+  pre<std::contracts::conveyor_assert_v>(std::is_object_address (&v))
 {
   if (v.size () > idx && (v.size () - idx) < 5 && idx < 1000)
     {
@@ -70,6 +71,7 @@ int shifted_past_the_boundary (std::vector<int>& v,
 
 int exactly_at_the_edge (std::vector<int>& v,
 			   std::vector<int>::size_type idx)
+  pre<std::contracts::conveyor_assert_v>(std::is_object_address (&v))
 {
   if (v.size () > idx && (v.size () - idx) < 5 && idx < 1000)
     {
@@ -82,6 +84,7 @@ int exactly_at_the_edge (std::vector<int>& v,
 
 int genuinely_ambiguous (std::vector<int>& v,
 			   std::vector<int>::size_type idx)
+  pre<std::contracts::conveyor_assert_v>(std::is_object_address (&v))
 {
   if (v.size () > idx && (v.size () - idx) < 5 && idx < 1000)
     {
@@ -92,6 +95,7 @@ int genuinely_ambiguous (std::vector<int>& v,
 }
 
 int idx_signed_declines (std::vector<int>& v, int idx)
+  pre<std::contracts::conveyor_assert_v>(std::is_object_address (&v))
 {
   if ((v.size () - idx) < 5)
     {
@@ -107,6 +111,7 @@ int idx_signed_declines (std::vector<int>& v, int idx)
 }
 
 int idx_signed_nonneg_violates (std::vector<int>& v, int idx)
+  pre<std::contracts::conveyor_assert_v>(std::is_object_address (&v))
 {
   if (idx >= 0 && v.size () > idx && (v.size () - idx) < 5 && idx < 1000)
     {
