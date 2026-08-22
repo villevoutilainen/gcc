@@ -28,7 +28,7 @@
 // itself exercises (the converted-constant-expression exemption).
 auto
 use (std::map<int, int>& m, std::map<int, int>::iterator it)
-  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&m))
+  pre<std::contracts::conveyor_assert_v>(std::is_object_address (&m))
 {
   return m.erase (it);
 }
