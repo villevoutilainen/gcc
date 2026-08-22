@@ -412,6 +412,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // D4324/P2680: see _M_destroy's own comment just below.
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
       {
 	if (!_M_is_local())
@@ -1649,6 +1650,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       capacity() const _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
       {
 	size_t __sz = _M_is_local() ? size_type(_S_local_capacity)
@@ -1680,6 +1682,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       reserve(size_type __res_arg)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
       ;
 
@@ -3278,6 +3281,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const _CharT*
       c_str() const _GLIBCXX_NOEXCEPT
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       { return _M_data(); }
 
       /**
@@ -4894,51 +4901,81 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   // 21.4 Numeric Conversions [string.conversions].
   inline int
   stoi(const string& __str, size_t* __idx = 0, int __base = 10)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa<long, int>(&std::strtol, "stoi", __str.c_str(),
 					__idx, __base); }
 
   inline long
   stol(const string& __str, size_t* __idx = 0, int __base = 10)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa(&std::strtol, "stol", __str.c_str(),
 			     __idx, __base); }
 
   inline unsigned long
   stoul(const string& __str, size_t* __idx = 0, int __base = 10)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa(&std::strtoul, "stoul", __str.c_str(),
 			     __idx, __base); }
 
 #if _GLIBCXX_USE_C99_STDLIB
   inline long long
   stoll(const string& __str, size_t* __idx = 0, int __base = 10)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa(&std::strtoll, "stoll", __str.c_str(),
 			     __idx, __base); }
 
   inline unsigned long long
   stoull(const string& __str, size_t* __idx = 0, int __base = 10)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa(&std::strtoull, "stoull", __str.c_str(),
 			     __idx, __base); }
 #elif __LONG_WIDTH__ == __LONG_LONG_WIDTH__
   inline long long
   stoll(const string& __str, size_t* __idx = 0, int __base = 10)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return std::stol(__str, __idx, __base); }
 
   inline unsigned long long
   stoull(const string& __str, size_t* __idx = 0, int __base = 10)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return std::stoul(__str, __idx, __base); }
 #endif
 
   inline double
   stod(const string& __str, size_t* __idx = 0)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa(&std::strtod, "stod", __str.c_str(), __idx); }
 
 #if _GLIBCXX_HAVE_STRTOF
   // NB: strtof vs strtod.
   inline float
   stof(const string& __str, size_t* __idx = 0)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa(&std::strtof, "stof", __str.c_str(), __idx); }
 #else
   inline float
   stof(const string& __str, size_t* __idx = 0)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   {
     double __d = std::stod(__str, __idx);
     if (__builtin_isfinite(__d) && __d != 0.0)
@@ -4957,10 +4994,16 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #if _GLIBCXX_HAVE_STRTOLD && ! _GLIBCXX_HAVE_BROKEN_STRTOLD
   inline long double
   stold(const string& __str, size_t* __idx = 0)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa(&std::strtold, "stold", __str.c_str(), __idx); }
 #elif __DBL_MANT_DIG__ == __LDBL_MANT_DIG__
   inline long double
   stold(const string& __str, size_t* __idx = 0)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return std::stod(__str, __idx); }
 #endif
 
@@ -5171,40 +5214,64 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #if defined(_GLIBCXX_USE_WCHAR_T) && _GLIBCXX_USE_C99_WCHAR
   inline int
   stoi(const wstring& __str, size_t* __idx = 0, int __base = 10)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa<long, int>(&std::wcstol, "stoi", __str.c_str(),
 					__idx, __base); }
 
   inline long
   stol(const wstring& __str, size_t* __idx = 0, int __base = 10)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa(&std::wcstol, "stol", __str.c_str(),
 			     __idx, __base); }
 
   inline unsigned long
   stoul(const wstring& __str, size_t* __idx = 0, int __base = 10)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa(&std::wcstoul, "stoul", __str.c_str(),
 			     __idx, __base); }
 
   inline long long
   stoll(const wstring& __str, size_t* __idx = 0, int __base = 10)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa(&std::wcstoll, "stoll", __str.c_str(),
 			     __idx, __base); }
 
   inline unsigned long long
   stoull(const wstring& __str, size_t* __idx = 0, int __base = 10)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa(&std::wcstoull, "stoull", __str.c_str(),
 			     __idx, __base); }
 
   // NB: wcstof vs wcstod.
   inline float
   stof(const wstring& __str, size_t* __idx = 0)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa(&std::wcstof, "stof", __str.c_str(), __idx); }
 
   inline double
   stod(const wstring& __str, size_t* __idx = 0)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa(&std::wcstod, "stod", __str.c_str(), __idx); }
 
   inline long double
   stold(const wstring& __str, size_t* __idx = 0)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
   { return __gnu_cxx::__stoa(&std::wcstold, "stold", __str.c_str(), __idx); }
 #endif
 
