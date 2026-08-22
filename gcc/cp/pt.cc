@@ -28576,6 +28576,87 @@ any_lambdas_p (tree t)
    first parameter, and the wrong type for the second.  So, when we go
    to instantiate the DECL, we regenerate it.  */
 
+/* walk_tree callback collecting every non-'this' PARM_DECL reachable from
+   *TP into the auto_vec<tree> pointed to by DATA -- used by
+   regenerate_decl_from_template to find which of a contract's own
+   parameters need a name-matched local_specialization fallback.  */
+
+static tree
+find_contract_parm_decls_r (tree *tp, int *, void *data)
+{
+  if (TREE_CODE (*tp) == PARM_DECL && !is_this_parameter (*tp))
+    static_cast<auto_vec<tree> *> (data)->safe_push (*tp);
+  return NULL_TREE;
+}
+
+/* Substitute DECL's own contract-specifiers (a member function template
+   of a class template, e.g. basic_string<_CharT,...>::resize_and_
+   overwrite<_Operation>, or an ordinary "unique friend" member such as
+   _Rb_tree_iterator's own hidden-friend operator==) for this particular
+   instantiation, given CODE_PATTERN (the template result DECL is an
+   instantiation of) and ARGS.  A no-op if DECL has no contract-
+   specifiers of its own.  */
+
+static void
+tsubst_regenerated_contract_specifiers (tree decl, tree code_pattern, tree args)
+{
+  tree attr = get_fn_contract_specifiers (decl);
+  if (!attr)
+    return;
+
+  /* If we're regenerating a specialization, the contracts will have
+     been copied from the most general template. Replace those with
+     the ones from the actual specialization.  */
+  tree tmpl = DECL_TI_TEMPLATE (decl);
+  if (DECL_TEMPLATE_SPECIALIZATION (tmpl))
+    attr = get_fn_contract_specifiers (code_pattern);
+
+  /* D4324/P2680: for a member function template of a class template,
+     or an ordinary "unique friend" member of one, ATTR's own condition
+     text can still refer to a DIFFERENT "generation" of PARM_DECL than
+     CODE_PATTERN's own current DECL_ARGUMENTS (a declaration/definition
+     split, or a class-instantiation-time parameter rebuild) -- but
+     tsubst_contract_specifier's own internal register_parameter_
+     specializations call maps only the *most general* template's own
+     parameters (or, when that coincides with CODE_PATTERN, CODE_
+     PATTERN's own CURRENT ones), per its own comment ("contracts ...
+     are still written in terms of the parameters of the most general
+     template"). Without a name-matched fallback, a contract naming any
+     parameter other than 'this' (which has its own, separate lookup
+     fallback) can't be found via retrieve_local_specialization when
+     tsubst_expr later substitutes it, and falls into the "must be an
+     unevaluated operand" assumption -- wrongly, for this ordinary,
+     executed instantiation -- crashing the cp_unevaluated_operand
+     assert. Register the identity-based (CODE_PATTERN-to-DECL) mapping
+     first, then walk ATTR's own embedded PARM_DECLs and fall back to
+     matching any that identity missed by name against DECL's own,
+     freshly-substituted parameters.  */
+  local_specialization_stack lss (lss_copy);
+  register_parameter_specializations (code_pattern, decl);
+  auto_vec<tree> unmatched;
+  for (tree as = attr; as; as = TREE_CHAIN (as))
+    {
+      tree cond = CONTRACT_CONDITION (CONTRACT_STATEMENT (as));
+      cp_walk_tree (&cond, find_contract_parm_decls_r, &unmatched, NULL);
+    }
+  for (tree pat_parm : unmatched)
+    {
+      if (local_specializations->get (pat_parm))
+	continue;
+      tree name = DECL_NAME (pat_parm);
+      if (!name)
+	continue;
+      for (tree dp = DECL_ARGUMENTS (decl); dp; dp = DECL_CHAIN (dp))
+	if (DECL_NAME (dp) == name)
+	  {
+	    register_local_specialization (dp, pat_parm);
+	    break;
+	  }
+    }
+
+  tsubst_contract_specifiers (attr, decl, args, tf_warning_or_error, code_pattern);
+}
+
 static void
 regenerate_decl_from_template (tree decl, tree tmpl, tree args)
 {
@@ -28592,10 +28673,26 @@ regenerate_decl_from_template (tree decl, tree tmpl, tree args)
       int args_depth;
       int parms_depth;
 
-      /* Don't bother with this for unique friends that can't be redeclared and
-	 might change type if regenerated (PR69836).  */
+      /* Don't bother with most of this for unique friends that can't be
+	 redeclared and might change type if regenerated (PR69836) --
+	 EXCEPT contract-specifier substitution: PR69836's own concern is
+	 about mutating DECL's own type/signature (the parameter-merging
+	 and exception-specification blocks below), not about contracts,
+	 which don't touch either. Skipping contracts here unconditionally
+	 left them as the ORIGINAL, unsubstituted, still-template-dependent
+	 pattern text forever for a unique friend (a hidden-friend
+	 comparison operator of a class template, e.g. _Rb_tree_iterator's
+	 own operator==) -- confirmed via direct testing: cp_genericize's
+	 own later build_contract_check, which does no substitution of its
+	 own, then crashes fold_convert-ing a still-dependent (ADDR_EXPR of
+	 dependent_operator_type) condition tree. Run just the
+	 contract-specifier substitution here, then skip everything else
+	 exactly as before.  */
       if (DECL_UNIQUE_FRIEND_P (decl))
-	goto done;
+	{
+	  tsubst_regenerated_contract_specifiers (decl, code_pattern, args);
+	  goto done;
+	}
 
       /* A template with a lambda in the signature also changes type if
 	 regenerated (PR119401).  */
@@ -28645,18 +28742,7 @@ regenerate_decl_from_template (tree decl, tree tmpl, tree args)
 	      OLD_PARM_DECL_P (t) = 1;
 	}
 
-      if (tree attr = get_fn_contract_specifiers (decl))
-	{
-	  /* If we're regenerating a specialization, the contracts will have
-	     been copied from the most general template. Replace those with
-	     the ones from the actual specialization.  */
-	  tree tmpl = DECL_TI_TEMPLATE (decl);
-	  if (DECL_TEMPLATE_SPECIALIZATION (tmpl))
-	    attr = get_fn_contract_specifiers (code_pattern);
-
-	  tsubst_contract_specifiers (attr, decl, args,
-				      tf_warning_or_error, code_pattern);
-	}
+      tsubst_regenerated_contract_specifiers (decl, code_pattern, args);
 
       /* Merge additional specifiers from the CODE_PATTERN.  */
       if (DECL_DECLARED_INLINE_P (code_pattern)

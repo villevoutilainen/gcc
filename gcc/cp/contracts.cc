@@ -2495,8 +2495,28 @@ maybe_contract_wrap_call (tree fndecl, tree call)
      contract specifiers can still be pointing at an uninstantiated
      template pattern at this, ordinary call-resolution, timing.  See
      DECL_MIGHT_NEED_OA_SCAN_P's own comment for the full list of
-     touch points feeding this bit.  */
-  if (current_function_decl)
+     touch points feeding this bit.  Also skip entirely while
+     cp_unevaluated_operand is set (e.g. a requires-expression's
+     compound-requirement, satisfied via satisfy_normalized_constraints'
+     own cp_unevaluated sentinel), or while processing_contract_condition
+     (tsubst_contract's own sk_contract scope, active while substituting
+     a DIFFERENT function's own precondition/postcondition/assert text
+     and this call is reached from within it, e.g. an iterator's
+     operator!= called from _Rb_tree::erase's own __glibcxx_assert):
+     oa_maybe_instantiate_contracts below can force a full, "real"
+     instantiate_body/finish_function of FNDECL as a side effect, but
+     both of these are re-entrant/speculative contexts, not FNDECL's
+     own real, executed call site -- any synthesized contract condition
+     built against FNDECL's own (possibly still-incomplete, never fully
+     resolved this deep into another substitution already in progress)
+     instantiation can be left with a dependent-typed operand no later
+     pass ever resolves, which then crashes build_predicate_core_
+     function_1's own fold_convert on the unresolved tree.  A real,
+     non-speculative call to FNDECL reaches this same function again
+     outside any such context and instantiates its contracts normally
+     then.  */
+  if (current_function_decl && !cp_unevaluated_operand
+      && !processing_contract_condition)
     {
       oa_maybe_instantiate_contracts (fndecl);
       for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
@@ -19040,6 +19060,28 @@ oa_maybe_instantiate_contracts (tree fn)
   if (DECL_CLONED_FUNCTION_P (fn))
     fn = DECL_CLONED_FUNCTION (fn);
   if (!DECL_TEMPLATE_INFO (fn) || DECL_TEMPLATE_INSTANTIATED (fn))
+    return;
+  /* D4324/P2680: skip entirely while cp_unevaluated_operand is set (a
+     requires-expression's own compound-requirement satisfaction, via
+     satisfy_normalized_constraints' cp_unevaluated sentinel) or while
+     processing_contract_condition (tsubst_contract's own sk_contract
+     scope) or already mid-instantiation of some OTHER function's body
+     (this pass's own oa_resolve_object_address_in_function_1, walking
+     an assertion/precondition/postcondition's condition text via oa_
+     scan_item7_in_expr, calls back in here for every call found in it,
+     with no caller-side guard of its own -- this is the single, shared
+     entry point precisely so a guard here covers all such callers at
+     once). Forcing a full, "real" instantiate_decl of FN in any of
+     these re-entrant/speculative contexts can leave a contract
+     synthesized against FN's own not-yet-fully-substituted
+     instantiation with a dependent-typed operand no later pass ever
+     resolves, crashing build_predicate_core_function_1's own
+     fold_convert on the unresolved tree (confirmed via three distinct,
+     independent repros reaching this exact crash through three
+     different callers of this function). A real, non-speculative call
+     to FN reaches this same function again outside any such context
+     and instantiates its contracts normally then.  */
+  if (cp_unevaluated_operand || processing_contract_condition)
     return;
   instantiate_decl (fn, /*defer_ok=*/false, /*expl_inst_class_mem_p=*/false);
 }
