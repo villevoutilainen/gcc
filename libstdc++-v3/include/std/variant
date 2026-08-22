@@ -126,19 +126,35 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
   template<size_t _Np, typename... _Types>
     constexpr variant_alternative_t<_Np, variant<_Types...>>&
-    get(variant<_Types...>&);
+    get(variant<_Types...>& __v)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__v))
+#endif
+    ;
 
   template<size_t _Np, typename... _Types>
     constexpr variant_alternative_t<_Np, variant<_Types...>>&&
-    get(variant<_Types...>&&);
+    get(variant<_Types...>&& __v)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__v))
+#endif
+    ;
 
   template<size_t _Np, typename... _Types>
     constexpr variant_alternative_t<_Np, variant<_Types...>> const&
-    get(const variant<_Types...>&);
+    get(const variant<_Types...>& __v)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__v))
+#endif
+    ;
 
   template<size_t _Np, typename... _Types>
     constexpr variant_alternative_t<_Np, variant<_Types...>> const&&
-    get(const variant<_Types...>&&);
+    get(const variant<_Types...>&& __v)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__v))
+#endif
+    ;
 
   template<typename _Result_type, typename _Visitor, typename... _Variants>
     constexpr decltype(auto)
@@ -1253,6 +1269,10 @@ namespace __detail::__variant
   template<typename _Ret, typename _Vp, typename _Op>
     constexpr _Ret
     __compare(_Ret __ret, const _Vp& __lhs, const _Vp& __rhs, _Op __op)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__lhs))
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__rhs))
+#endif
     {
       __variant::__raw_idx_visit(
 	[&__ret, &__lhs, __op] (auto&& __rhs_mem, auto __rhs_index) mutable
@@ -1280,6 +1300,10 @@ namespace __detail::__variant
     constexpr bool
     operator== [[nodiscard]] (const variant<_Types...>& __lhs,
 			      const variant<_Types...>& __rhs)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__lhs))
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__rhs))
+#endif
     {
       namespace __variant = __detail::__variant;
       return __variant::__compare(true, __lhs, __rhs,

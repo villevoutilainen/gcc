@@ -119,19 +119,48 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
   template<size_t __i, typename... _Elements>
     constexpr __tuple_element_t<__i, tuple<_Elements...>>&
-    get(tuple<_Elements...>& __t) noexcept;
+    get(tuple<_Elements...>& __t) noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    // D4324/P2680: the return is always a subobject of __t itself, never
+    // a reference to anything else -- exactly as valid an object
+    // address as __t already is. Trusted (never_proven) rather than
+    // self-checked, matching basic_string's own _M_get_allocator's
+    // identical pattern (bits/basic_string.h). Without this, any caller
+    // relying on get<N>(t)'s own result being a provable object address
+    // (e.g. ranges::concat_view's own std::get<N>(_M_views) feeding
+    // ranges::begin/end) has no way to establish that fact at all,
+    // since oa_provable_p has no general way to trace an arbitrary
+    // function call's return value back to its argument's own storage.
+    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+#endif
+    ;
 
   template<size_t __i, typename... _Elements>
     constexpr const __tuple_element_t<__i, tuple<_Elements...>>&
-    get(const tuple<_Elements...>& __t) noexcept;
+    get(const tuple<_Elements...>& __t) noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    // See the non-const overload's own identical comment above.
+    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+#endif
+    ;
 
   template<size_t __i, typename... _Elements>
     constexpr __tuple_element_t<__i, tuple<_Elements...>>&&
-    get(tuple<_Elements...>&& __t) noexcept;
+    get(tuple<_Elements...>&& __t) noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    // See the lvalue-reference overload's own identical comment above.
+    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+#endif
+    ;
 
   template<size_t __i, typename... _Elements>
     constexpr const __tuple_element_t<__i, tuple<_Elements...>>&&
-    get(const tuple<_Elements...>&& __t) noexcept;
+    get(const tuple<_Elements...>&& __t) noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    // See the lvalue-reference overload's own identical comment above.
+    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+#endif
+    ;
 
   template<size_t _Int, typename _Tp, size_t _Nm>
     constexpr _Tp&
