@@ -21,9 +21,14 @@
 // Deliberately NOT declared conveyor -- _GLIBCXX_CONVEYOR_ASSERTIONS
 // routes every __glibcxx_assert condition through the conveyor-checked
 // control object regardless of whether the *enclosing* function is
-// itself conveyor, exactly like the erase() overload this calls.
+// itself conveyor, exactly like the erase() overload this calls. An
+// explicit is_object_address(&m) precondition is needed regardless of
+// that -- a separate, ordinary Q1 caller obligation for erase()'s own
+// is_object_address(this) precondition, unrelated to what this test
+// itself exercises (the converted-constant-expression exemption).
 auto
 use (std::map<int, int>& m, std::map<int, int>::iterator it)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&m))
 {
   return m.erase (it);
 }

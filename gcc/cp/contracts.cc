@@ -8898,6 +8898,27 @@ oa_object_identity_decl (tree expr, tree *decl_out)
 	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
     expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
 
+  /* D4324/P2680: a member of an anonymous union/struct (e.g. libstdc++'s
+     own '__cow_constexpr_string::_M_str', a member of an unnamed
+     'union { const char* _M_p; ...; string* _M_str; };') is represented
+     as COMPONENT_REF (COMPONENT_REF (w, <anon-subobject>), _M_str) --
+     one extra hop through the anonymous subobject itself, compared to
+     an ordinary named member ('w.p', a single COMPONENT_REF) -- found
+     via direct testing (debug_tree) that this extra hop is exactly why
+     'w._M_str' used as a value (e.g. inside is_object_address(w._M_str))
+     was never recognized at all, unlike an identically-shaped access to
+     an ordinary (non-anonymous-union) struct field, which this same
+     function already resolves correctly. Every caller of this function
+     that walks a COMPONENT_REF's own base operand (there are several,
+     all mirroring this one) passes that base -- the anonymous
+     subobject itself, of ANON_AGGR_TYPE_P type -- in here, so collapsing
+     it centrally, right after the ordinary conversion-stripping loop
+     just above, fixes every one of them at once rather than needing the
+     identical fix repeated at each call site.  */
+  while (TREE_CODE (expr) == COMPONENT_REF
+	 && ANON_AGGR_TYPE_P (TREE_TYPE (expr)))
+    expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+
   /* A class-typed operand reached via its own implicit conversion
      operator (e.g. a smart-pointer-like wrapper converting to a
      reference to the object a predicate/field-range fact is actually
@@ -9364,6 +9385,23 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
 	 merely a hypothetical edge case.  */
       if (TREE_CODE (op) == TARGET_EXPR)
 	return true;
+      /* D4324/P2680: '&*p' (address-of-dereference) -- e.g. a reference
+	 parameter's own is_object_address(&r) precondition, substituted
+	 at a call site binding 'r' to '*ptr' (an explicit dereference,
+	 or a pointer-typed field read used as a reference argument, e.g.
+	 '__cow_constexpr_string::_M_str'). '&*ptr' is exactly 'ptr'
+	 itself (the language guarantees this identity for any non-null
+	 ptr), so the real question is whether PTR's own value is a
+	 proven object address -- recurse on it directly, rather than
+	 falling through to the COMPONENT_REF-shaped '&obj.field' case
+	 just below (which asks a DIFFERENT question: whether the FIELD's
+	 own storage location, not the pointer VALUE it holds, is live --
+	 wrong here, and previously left this whole shape unrecognized,
+	 "not a recognized address-taking or provable-object expression",
+	 for any pointer-typed field/local/parameter reached through an
+	 explicit or implicit dereference).  */
+      if (TREE_CODE (op) == INDIRECT_REF)
+	return oa_provable_p (TREE_OPERAND (op, 0), env, reason_out);
       /* D4324: '&obj.field'/'&obj->field' -- a field of an object whose
 	 own address is itself provable is just as live as the object
 	 itself.  Needed for the common 'T& get_field () { return
@@ -19166,14 +19204,40 @@ oa_mark_fn_if_expr_calls_active_contract (tree fndecl, tree expr)
    Defaults to NULL for call sites with no splice point to offer, same
    as EXTRA above.  */
 
-static void
-oa_scan_calls_in_expr (tree *expr, oa_env &env, tree *extra = NULL,
-			tree *invalidate_extra = NULL)
+struct oa_scan_calls_data { oa_env *env; tree *extra; tree *invalidate_extra; };
+
+/* D4324/P2680: named (rather than the anonymous lambda this replaced)
+   specifically so it can recurse into its own CALL_EXPR/AGGR_INIT_EXPR
+   node's own callee/argument subtrees *before* running that node's own
+   precondition-check/invalidate/establish bookkeeping below -- the
+   opposite of cp_walk_tree's own default pre-order behavior (a parent
+   node's callback runs, and so is fully processed, before the walker
+   ever descends into that same node's children). Real C++ evaluation
+   order is the other way around: every argument finishes evaluating
+   before the call consuming them is ever entered. Left as plain pre-
+   order, a call whose own callee is an ordinary (non-conveyor)
+   function taking 'this'/a same-typed pointer or reference invalidates
+   every OTHER same-typed parameter that could alias it (oa_invalidate_
+   parameter_alias_group's own conservative sweep) *before* a nested
+   call inside one of ITS OWN arguments -- which needs that very fact
+   -- ever got its own turn. Found via real code: basic_string's own
+   copy constructor, 'this->_M_construct<true>(__str._M_data(), __str.
+   length());' -- _M_construct is ordinary (non-conveyor) and takes
+   'this', so processing IT first (pre-order) invalidated '__str's own
+   is_object_address fact (a same-typed, potentially-aliasing reference
+   parameter) before '__str._M_data()'/'__str.length()' -- this same
+   call's own ARGUMENTS -- ever ran their own Q1 check/postcondition-
+   based re-establishment, even though both arguments actually finish
+   evaluating, at runtime, strictly before _M_construct is ever entered.
+   Manually recursing into T's own callee/argument subtrees here first
+   (via this same visitor), then doing T's own processing, then setting
+   *WALK_SUBTREES to 0 so the generic walker that called us doesn't
+   redundantly re-descend into what this call already fully handled,
+   fixes the ordering to match real evaluation semantics.  */
+
+static tree
+oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
 {
-  struct oa_scan_calls_data { oa_env *env; tree *extra; tree *invalidate_extra; };
-  oa_scan_calls_data data = { &env, extra, invalidate_extra };
-  cp_walk_tree (expr, [](tree *tp, int *, void *data_) -> tree
-    {
       oa_scan_calls_data *d = (oa_scan_calls_data *) data_;
       oa_env *e = d->env;
       tree t = *tp;
@@ -19199,6 +19263,24 @@ oa_scan_calls_in_expr (tree *expr, oa_env &env, tree *extra = NULL,
       tree arg;
       if (is_object_address_call_p (t, &arg))
 	return NULL_TREE;
+      /* Recurse into T's own callee/argument subtrees first -- see this
+	 function's own comment above for why.  Skips AGGR_INIT_EXPR's
+	 own argno 0 (the receiver's own meaningless placeholder slot,
+	 never a real source-level argument expression), matching every
+	 other AGGR_INIT_EXPR-aware helper in this file.  */
+      {
+	bool is_aggr_init = TREE_CODE (t) == AGGR_INIT_EXPR;
+	tree *fnp = is_aggr_init ? &AGGR_INIT_EXPR_FN (t) : &CALL_EXPR_FN (t);
+	cp_walk_tree (fnp, oa_scan_calls_visitor, data_, NULL);
+	int nargs = is_aggr_init ? aggr_init_expr_nargs (t) : call_expr_nargs (t);
+	for (int i = is_aggr_init ? 1 : 0; i < nargs; ++i)
+	  {
+	    tree *argp = is_aggr_init
+	      ? &AGGR_INIT_EXPR_ARG (t, i) : &CALL_EXPR_ARG (t, i);
+	    cp_walk_tree (argp, oa_scan_calls_visitor, data_, NULL);
+	  }
+      }
+      *walk_subtrees = 0;
       oa_maybe_instantiate_contracts (cp_get_callee_fndecl_nofold (t));
       oa_handle_call_precondition_obligation (t, *e);
       /* analyzed_conveyor/proven_conveyor (resp. symbolic) on any one of
@@ -19263,7 +19345,14 @@ oa_scan_calls_in_expr (tree *expr, oa_env &env, tree *extra = NULL,
 	    oa_invalidate_scalar_shadow_for_call_args (t, *e, d->invalidate_extra);
 	}
       return NULL_TREE;
-    }, &data, NULL);
+}
+
+static void
+oa_scan_calls_in_expr (tree *expr, oa_env &env, tree *extra = NULL,
+			tree *invalidate_extra = NULL)
+{
+  oa_scan_calls_data data = { &env, extra, invalidate_extra };
+  cp_walk_tree (expr, oa_scan_calls_visitor, &data, NULL);
 }
 
 /* Scan *EXPR for a stray std::is_object_address(...) call -- one
@@ -20283,8 +20372,9 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
      (strict), in which case unproven is *also* a hard error, matching
      WG14 P4021R2's compile_assert() outcome table exactly.  */
   bool any_conjunct_proven_false = false;
-  if (!contract_control_never_proven (CONTRACT_CONTROL_OBJECT (stmt),
-				       contract_side_of (stmt, current_function_decl)))
+  bool never_proven = contract_control_never_proven
+    (CONTRACT_CONTROL_OBJECT (stmt), contract_side_of (stmt, current_function_decl));
+  if (!never_proven)
     {
       bool conveyor_analysis = conveyor_ok
 	&& (flag_contract_conveyor_proofs
@@ -20369,7 +20459,24 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 	  }
     }
 
-  if (!oa_resolve_condition (&cond, env, conveyor_ok, symbolic_ok))
+  /* D4324/P2680: unlike a precondition (always trust=true, see
+     oa_handle_precondition_stmt's own call) or a postcondition, a
+     contract_assert's is_object_address conjuncts were never trusted
+     here even when its own control object is never_proven -- ANY_
+     CONJUNCT_PROVEN_FALSE above is correctly never set for one (the
+     verification loop is skipped entirely, per that block's own
+     comment), but this call, unconditionally passing the trust=false
+     default, still ran oa_provable_p against EXPR and hard-errored the
+     moment it wasn't already independently provable -- defeating the
+     entire point of a never_proven contract_assert as a fact-
+     (re-)establishment mechanism for is_object_address specifically
+     (confirmed via direct testing: 'contract_assert<never_proven_
+     conveyor_v>(is_object_address(p))' for an ordinary pointer
+     parameter/local unconditionally failed to compile, even though the
+     identical fact stated as a precondition works exactly as intended).
+     Trust exactly when the verification loop above was skipped for the
+     same reason.  */
+  if (!oa_resolve_condition (&cond, env, conveyor_ok, symbolic_ok, /*trust=*/never_proven))
     {
       CONTRACT_CONDITION (stmt) = error_mark_node;
       return;
@@ -23421,9 +23528,10 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
      unprovable (not just provably-false) conjunct a hard error too,
      matching every other proven_conveyor/proven_symbolic site in this
      file.  */
-  if (!contract_control_never_proven (
+  bool never_proven = contract_control_never_proven (
 	CONTRACT_CONTROL_OBJECT (contract),
-	contract_side_of (contract, current_function_decl)))
+	contract_side_of (contract, current_function_decl));
+  if (!never_proven)
     {
       if (conveyor_ok)
 	{
@@ -23591,7 +23699,20 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
   oa_env is_object_address_env = env.copy ();
   if (have_result_id)
     is_object_address_env.set (result_id, oa_return_seen && oa_return_all_provable);
-  if (!oa_resolve_condition (&cond, is_object_address_env, conveyor_ok, symbolic_ok))
+  /* D4324/P2680: same fix, same reasoning, as oa_handle_assertion_stmt's
+     identical one just above -- a never_proven postcondition's own
+     is_object_address(E) conjunct was never trusted here either, so a
+     postcondition using it as a pure "this is still valid" advertisement
+     (the entire point of never_proven_conveyor_v for this pattern, used
+     pervasively throughout basic_string.h's own trivial accessors) hard-
+     errored the moment E wasn't already independently provable by
+     is_object_address_env -- defeating that pattern for any accessor
+     whose OWN precondition doesn't happen to already leave 'this'/E in a
+     provable state by the time the postcondition is checked (confirmed:
+     basic_string::_M_create_plus, pre+post both is_object_address(this),
+     failed on its own postcondition alone).  */
+  if (!oa_resolve_condition (&cond, is_object_address_env, conveyor_ok, symbolic_ok,
+			      /*trust=*/never_proven))
     {
       CONTRACT_CONDITION (contract) = error_mark_node;
       return;
