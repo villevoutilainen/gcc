@@ -570,6 +570,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     constexpr _Iterator&
     operator+=(difference_type __n)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
     {
       if (_M_rep != nullptr)
 	{
@@ -597,6 +601,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     constexpr _Iterator&
     operator-=(difference_type __n)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
     {
       using _Traits = __gnu_cxx::__int_traits<difference_type>;
       if (__n == _Traits::__min) [[unlikely]]
@@ -606,6 +614,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     constexpr difference_type
     operator-(const _Iterator& __i) const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__i))
+#endif
     {
       if (_M_id == __i._M_id)
 	return _M_rep - __i._M_rep;
@@ -622,6 +634,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     constexpr strong_ordering
     operator<=>(const _Iterator& __i) const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__i))
+#endif
     {
       __glibcxx_assert(_M_id == __i._M_id);
       return _M_rep <=> __i._M_rep;
