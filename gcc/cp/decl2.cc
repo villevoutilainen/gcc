@@ -5431,6 +5431,25 @@ no_linkage_error (tree decl)
   if (TREE_CODE (decl) == FUNCTION_DECL && metafunction_p (decl))
     return;
 
+  /* D4324/P2680: std::is_object_address is the same kind of magic --
+     a compiler-recognized intrinsic that resolve_object_address_in_
+     function_1 always resolves or erases before genericization, never
+     actually emitted or linked regardless of what it's instantiated
+     with. A conveyor-declared lambda's own operator() gets an
+     implicit, synthesized 'pre<>(is_object_address(this))' just like
+     an ordinary named conveyor function does (oa_synthesize_implicit_
+     reference_safety_preconditions) -- built the same way an ordinary
+     call is, via finish_call_expr, which marks the specialization
+     used the same way a real call would. 'this' there has the
+     lambda's own closure type, a local (no-linkage) class, so this
+     specialization would otherwise be flagged here as a used-but-
+     never-defined specialization of a no-linkage type -- a false
+     positive: it was never going to be emitted either way. Confirmed
+     via d4324-conveyor-callee-lambda-conveyor-ok.C, a stored (non-
+     immediately-invoked) conveyor lambda.  */
+  if (TREE_CODE (decl) == FUNCTION_DECL && is_object_address_fndecl_p (decl))
+    return;
+
   tree t = no_linkage_check (TREE_TYPE (decl), /*relaxed_p=*/false);
   if (t == NULL_TREE)
     /* The type that got us on no_linkage_decls must have gotten a name for
