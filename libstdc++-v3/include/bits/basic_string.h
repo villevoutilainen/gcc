@@ -822,7 +822,25 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 		    _Alloc_traits::_S_select_on_copy(__str._M_get_allocator()))
 #endif
       {
-	_M_construct<true>(__str._M_data(), __str.length());
+	// D4324/P2680: '_M_construct<true> (__str._M_data (), __str.length ())'
+	// would put the call that touches '__str' (the mandatory alias-
+	// invalidation trigger) and the call whose OWN precondition needs
+	// 'this' in the SAME statement, with the argument evaluated before
+	// the outer call's precondition-obligation check gets a chance to
+	// see any re-assertion placed just before the statement -- splitting
+	// the '__str'-dependent reads into their own statements first, then
+	// re-asserting 'this' immediately before the call that needs it,
+	// avoids the ordering trap (mirrors the substring constructor's own
+	// pre-existing '__start' local just below, and the move
+	// constructor's own re-assertion discipline for the same underlying
+	// reason).
+	const _CharT* __start = __str._M_data();
+	const size_type __len = __str.length();
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	_M_construct<true>(__start, __len);
       }
 
       // _GLIBCXX_RESOLVE_LIB_DEFECTS
