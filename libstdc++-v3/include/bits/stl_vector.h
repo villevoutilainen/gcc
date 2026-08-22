@@ -150,6 +150,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
 	_GLIBCXX20_CONSTEXPR
 	_Vector_impl(_Tp_alloc_type const& __a) _GLIBCXX_NOEXCEPT
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+#endif
 	: _Tp_alloc_type(__a)
 	{ }
 
@@ -338,6 +341,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX20_CONSTEXPR
       _Vector_base(const allocator_type& __a) _GLIBCXX_NOEXCEPT
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+#endif
       : _M_impl(__a) { }
 
       // Kept for ABI compatibility.
@@ -350,6 +356,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX20_CONSTEXPR
       _Vector_base(size_t __n, const allocator_type& __a)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+#endif
       : _M_impl(__a)
       { _M_create_storage(__n); }
 
@@ -364,6 +373,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX20_CONSTEXPR
       _Vector_base(_Vector_base&& __x, const allocator_type& __a)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+#endif
       : _M_impl(__a)
       {
 	if (__x.get_allocator() == __a)
@@ -378,6 +390,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX20_CONSTEXPR
       _Vector_base(const allocator_type& __a, _Vector_base&& __x)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+#endif
       : _M_impl(_Tp_alloc_type(__a), std::move(__x._M_impl))
       { }
 #endif
@@ -389,21 +404,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	if (__n < 0)
 	  __builtin_unreachable();
 	_M_deallocate(_M_impl._M_start, size_t(__n));
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	// D4324/P2680: '_M_deallocate (...)' above touches 'this' as its
-	// own receiver -- a non-conveyor call, so the mandatory alias-group
-	// invalidation sweep invalidates 'this' too. The compiler-generated
-	// member cleanup that follows this body ('_M_impl's own
-	// ~_Vector_impl (), a CLEANUP_STMT walked through this same,
-	// unforked env) sees whatever 'this's fact happens to be at the
-	// very end of this destructor's own source-level statements -- see
-	// basic_string's move constructor's own identical re-assertion
-	// (project_self_invalidation_and_out_of_class_fixes.md) for the
-	// full reasoning. Re-assert 'this' here so the implicit member
-	// destructor call can still be proven.
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
       }
 
     public:
@@ -457,6 +457,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       void
       _M_deallocate(pointer __p, size_t __n)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	typedef __gnu_cxx::__alloc_traits<_Tp_alloc_type> _Tr;
 	if (__p)
@@ -468,6 +472,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       void
       _M_create_storage(size_t __n)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	_Alloc_result __r = this->_M_allocate_at_least(__n);
 	this->_M_impl._M_finish = this->_M_impl._M_start = __r.__ptr;
@@ -645,27 +653,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
 #endif
       : _Base(_S_check_init_len(__n, __a), __a)
-      {
-	_M_default_initialize(__n);
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	// D4324/P2680: the base-class mem-initializer above is wrapped in a
-	// CLEANUP_STMT whose CLEANUP_BODY (this constructor's own body,
-	// i.e. the '_M_default_initialize (__n)' call just above) and
-	// CLEANUP_EXPR (the implicit '~_Vector_base ()' call that undoes
-	// the already-constructed base if this body throws) are walked
-	// sequentially through the SAME, unforked env -- unlike TRY_BLOCK/
-	// HANDLER, which correctly forks a pre-try snapshot (see
-	// basic_string's own move constructor and project_self_
-	// invalidation_and_out_of_class_fixes.md for the identical
-	// CLEANUP_STMT ordering issue). '_M_default_initialize' touches
-	// 'this' as its own receiver (a non-conveyor call), invalidating
-	// 'this' for the rest of this same env -- re-assert it here, at
-	// the end of the body, so the implicit base-cleanup call can still
-	// be proven.
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
-      }
+      { _M_default_initialize(__n); }
 
       /**
        *  @brief  Creates a %vector with copies of an exemplar element.
@@ -888,21 +876,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	std::_Destroy(this->_M_impl._M_start, this->_M_impl._M_finish,
 		      _M_get_Tp_allocator());
 	_GLIBCXX_ASAN_ANNOTATE_BEFORE_DEALLOC;
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	// D4324/P2680: '_M_get_Tp_allocator ()' above touches 'this' as its
-	// own receiver -- a non-conveyor call, so the mandatory alias-group
-	// invalidation sweep invalidates 'this' too. The compiler-generated
-	// base-class cleanup that follows this body (~_Vector_base (), a
-	// CLEANUP_STMT walked through this same, unforked env) sees whatever
-	// 'this's fact happens to be at the very end of this destructor's
-	// own source-level statements -- see basic_string's move
-	// constructor's own identical re-assertion (project_self_
-	// invalidation_and_out_of_class_fixes.md) for the full reasoning.
-	// Re-assert 'this' here so the implicit base-class destructor call
-	// can still be proven.
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
       }
 
       /**
@@ -2135,6 +2108,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       void
       _M_default_initialize(size_type __n)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	this->_M_impl._M_finish =
 	  std::__uninitialized_default_n_a(this->_M_impl._M_start, __n,
