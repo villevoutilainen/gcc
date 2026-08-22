@@ -410,6 +410,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     reserve(size_type __res)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
     {
       const size_type __capacity = capacity();

@@ -1837,6 +1837,9 @@ namespace __rb_tree
       _GLIBCXX_ABI_TAG_CXX11
       iterator
       erase(const_iterator __position)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	__glibcxx_assert(__position != end());
 	const_iterator __result = __position;
@@ -1849,6 +1852,9 @@ namespace __rb_tree
       _GLIBCXX_ABI_TAG_CXX11
       iterator
       erase(iterator __position)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	__glibcxx_assert(__position != end());
 	iterator __result = __position;

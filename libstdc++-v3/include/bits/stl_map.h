@@ -1262,12 +1262,18 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       iterator
       erase(const_iterator __position)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       { return _M_t.erase(__position); }
 
       // LWG 2059
       _GLIBCXX_ABI_TAG_CXX11
       iterator
       erase(iterator __position)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       { return _M_t.erase(__position); }
       /// @}
 #else
