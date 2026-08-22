@@ -218,7 +218,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	struct _Guard
 	{
 	  _GLIBCXX20_CONSTEXPR
-	  explicit _Guard(basic_string* __s) : _M_guarded(__s) { }
+	  explicit _Guard(basic_string* const __s)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (__s))
+	  post<std::contracts::never_proven_conveyor_v>(std::is_object_address (__s))
+#endif
+	  : _M_guarded(__s) { }
 
 	  _GLIBCXX20_CONSTEXPR
 	  ~_Guard()
@@ -275,7 +280,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	struct _Guard
 	{
 	  _GLIBCXX20_CONSTEXPR
-	  explicit _Guard(basic_string* __s) : _M_guarded(__s) { }
+	  explicit _Guard(basic_string* const __s)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (__s))
+	  post<std::contracts::never_proven_conveyor_v>(std::is_object_address (__s))
+#endif
+	  : _M_guarded(__s) { }
 
 	  _GLIBCXX20_CONSTEXPR
 	  ~_Guard()
