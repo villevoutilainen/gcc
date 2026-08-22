@@ -840,10 +840,23 @@ namespace std
 // _GLIBCXX_CONVEYOR_ASSERTIONS: a declared precondition is meant to stay
 // checkable at its own call sites, unlike the library's own not-yet-
 // migrated internal asserts (see that macro's own comment above).
-#if defined(_GLIBCXX_PRECONDITION_ASSERTIONS) && defined(__cpp_contract_control_objects)
+// D4324/P2680: SUBSCRIPT/NONEMPTY's own condition calls size()/empty(),
+// both _GLIBCXX_CONVEYOR-tagged -- under the reference/this self-trust
+// soundness fix, that mandates is_object_address(this) proven at every
+// call site, including this macro's own member function (never
+// conveyor-declared itself). Adding it here, once, covers every
+// container using either macro instead of needing the same fix at each
+// individual call site. Gated identically to max_size_type.h's own
+// analogous fix (see that header's own comment for the never_proven_
+// conveyor_v rationale); a "for now" pattern, not a final design --
+// see task #176's own follow-up. NON_EMPTY_RANGE/NONZERO_DIVISOR are
+// used from free functions with no 'this' in scope and don't call any
+// conveyor accessor, so they're left unchanged.
 # define _GLIBCXX_PRECONDITION_SUBSCRIPT(_N) \
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)) \
     pre<std::contracts::conveyor_assert_v>(_N < size())
 # define _GLIBCXX_PRECONDITION_NONEMPTY() \
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)) \
     pre<std::contracts::conveyor_assert_v>(!empty())
 # define _GLIBCXX_PRECONDITION_NON_EMPTY_RANGE(_First, _Last) \
     pre<std::contracts::conveyor_assert_v>(_First != _Last)
