@@ -28576,15 +28576,45 @@ any_lambdas_p (tree t)
    first parameter, and the wrong type for the second.  So, when we go
    to instantiate the DECL, we regenerate it.  */
 
-/* walk_tree callback collecting every non-'this' PARM_DECL reachable from
-   *TP into the auto_vec<tree> pointed to by DATA -- used by
-   regenerate_decl_from_template to find which of a contract's own
-   parameters need a name-matched local_specialization fallback.  */
+/* walk_tree callback collecting every PARM_DECL reachable from *TP
+   (including an implied 'this') into the auto_vec<tree> pointed to by
+   DATA -- used by regenerate_decl_from_template to find which of a
+   contract's own parameters need a name-matched local_specialization
+   fallback.
+
+   D4324/P2680: 'this' used to be excluded here, on the assumption
+   that it always has its own, separate resolution path independent of
+   this name-matched fallback. That assumption does not hold for a
+   member function template of a class template whose contracts are
+   *repeated* (matching) on an out-of-class definition: merging the
+   declaration's and definition's contracts (update_contract_arguments/
+   copy_and_remap_contracts, at ordinary, non-template redeclaration-
+   matching time, before any instantiation) produces a condition tree
+   whose 'this' reference is a fresh PARM_DECL copy, not literally
+   CODE_PATTERN's own current DECL_ARGUMENTS entry -- so register_
+   parameter_specializations's identity-based mapping below never
+   covers it, and it was never a member of PAT_PARM's own eventual name-
+   matched fallback loop either, being filtened out right here. Left
+   this way, such a 'this' reference is never resolved to the actual
+   instantiated specialization's own 'this' at all: it keeps pointing
+   at the orphaned copy (DECL_CONTEXT left null, never substituted),
+   silently breaking any analysis that walks the instantiated contract
+   looking for 'this' (confirmed via a minimal template repro: a
+   postcondition's own 'is_object_address(this)' conjunct, meant to
+   re-establish that fact for a caller after the call returns, never
+   matches the callee's real 'this' parameter). 'this' shares the same
+   name-matching mechanism every other parameter already uses here
+   (is_this_parameter itself is defined as exactly a DECL_NAME ==
+   this_identifier check), so no special-casing is needed once it is
+   simply not excluded from this walk -- decl's own first PARM_DECL is
+   always named 'this' too, so the fallback loop below finds it
+   trivially, exactly the way it already finds a name-matched ordinary
+   parameter.  */
 
 static tree
 find_contract_parm_decls_r (tree *tp, int *, void *data)
 {
-  if (TREE_CODE (*tp) == PARM_DECL && !is_this_parameter (*tp))
+  if (TREE_CODE (*tp) == PARM_DECL)
     static_cast<auto_vec<tree> *> (data)->safe_push (*tp);
   return NULL_TREE;
 }
@@ -28622,9 +28652,10 @@ tsubst_regenerated_contract_specifiers (tree decl, tree code_pattern, tree args)
      PATTERN's own CURRENT ones), per its own comment ("contracts ...
      are still written in terms of the parameters of the most general
      template"). Without a name-matched fallback, a contract naming any
-     parameter other than 'this' (which has its own, separate lookup
-     fallback) can't be found via retrieve_local_specialization when
-     tsubst_expr later substitutes it, and falls into the "must be an
+     parameter -- including 'this', which find_contract_parm_decls_r's
+     own comment explains needs exactly the same treatment -- can't be
+     found via retrieve_local_specialization when tsubst_expr later
+     substitutes it, and falls into the "must be an
      unevaluated operand" assumption -- wrongly, for this ordinary,
      executed instantiation -- crashing the cp_unevaluated_operand
      assert. Register the identity-based (CODE_PATTERN-to-DECL) mapping
