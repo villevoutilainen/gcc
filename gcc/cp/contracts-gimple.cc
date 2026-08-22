@@ -552,24 +552,75 @@ cg_call_postcondition_range_p (tree callee, bool require_conveyor,
    GIMPLE_CALL def-stmt, and by cg_check_call's own relational
    obligation check (which needs to resolve a *second*, non-recursed-
    into operand the same way before comparing it against an already-
-   established fact's own RHS).  */
+   established fact's own RHS).
+
+   Also chases a plain SSA copy/conversion hop (an ordinary GIMPLE_ASSIGN
+   whose own rhs code is CONVERT_EXPR-like or a bare SSA_NAME copy)
+   before/between conversion-operator calls, and keeps going until
+   neither shape applies -- mirroring cg_get_relational's own identical
+   def-stmt walk. Found via direct testing (d4324-gimple-conversion-
+   relational-ok.C, debug-instrumented): a multi-argument call's own
+   argument-evaluation order can leave one argument's conversion-operator
+   result referenced *directly* by the call (so cg_get_relational's own
+   internal, self-recursing walk -- used for the first, "sub_param" side
+   of a relational obligation -- resolves it fine) while another
+   argument's identical conversion-operator result first gets copied
+   through an extra SSA temp before being passed (so this function's own
+   single-shot, non-looping version -- used standalone for the *second*,
+   "sub_other" side, which has no such internal recursion of its own --
+   stopped one hop early, at the copy, never reaching the call
+   underneath). The two operands must resolve through an *equally deep*
+   walk or a genuinely identical value is spuriously reported as two
+   different objects.  */
 
 static tree
 cg_resolve_conversion_receiver (tree val)
 {
-  if (val == NULL_TREE || TREE_CODE (val) != SSA_NAME)
-    return val;
-  gimple *def = SSA_NAME_DEF_STMT (val);
-  if (!def || !is_gimple_call (def))
-    return val;
-  gcall *call = as_a <gcall *> (def);
-  tree callee = gimple_call_fndecl (call);
-  if (!callee || !DECL_CONV_FN_P (callee) || gimple_call_num_args (call) != 1)
-    return val;
-  tree receiver = gimple_call_arg (call, 0);
-  if (TREE_CODE (receiver) == ADDR_EXPR)
-    receiver = TREE_OPERAND (receiver, 0);
-  return receiver;
+  tree cur = val;
+  bool saw_conversion_call = false;
+  while (cur != NULL_TREE && TREE_CODE (cur) == SSA_NAME)
+    {
+      gimple *def = SSA_NAME_DEF_STMT (cur);
+      if (!def)
+	break;
+      if (is_gimple_assign (def))
+	{
+	  enum tree_code code = gimple_assign_rhs_code (def);
+	  if (!CONVERT_EXPR_CODE_P (code) && code != SSA_NAME)
+	    break;
+	  cur = gimple_assign_rhs1 (def);
+	  continue;
+	}
+      if (!is_gimple_call (def))
+	break;
+      gcall *call = as_a <gcall *> (def);
+      tree callee = gimple_call_fndecl (call);
+      if (!callee || !DECL_CONV_FN_P (callee) || gimple_call_num_args (call) != 1)
+	break;
+      tree receiver = gimple_call_arg (call, 0);
+      if (TREE_CODE (receiver) == ADDR_EXPR)
+	receiver = TREE_OPERAND (receiver, 0);
+      cur = receiver;
+      saw_conversion_call = true;
+    }
+  /* Only commit to whatever CUR ended up at if the walk actually passed
+     through a real conversion-operator call somewhere along the way --
+     an ordinary value with no such call anywhere in its own def chain
+     (e.g. a plain 'int y = make_val (x, q);' with no conversion operator
+     in sight) must come back completely unresolved, VAL itself, not
+     whatever unrelated SSA name a *plain* copy/convert hop happened to
+     land on. Confirmed via direct testing (a genuine regression caught
+     by the full narrow contracts suite): chasing a plain copy hop
+     unconditionally, with no such gate, made this function -- now also
+     reached generically via cg_resolve_call_argument for every call
+     argument, not just ones actually involving a conversion operator --
+     walk straight past an ordinary decl-keyed relational fact's own
+     recognizable identity into its own value-producing call's opaque
+     result, breaking both the self-trust key match (a spurious "wrong
+     identity" where the two sides used to agree) and this argument's
+     own diagnostic name (printed as '<unknown>' instead of the real
+     parameter name).  */
+  return saw_conversion_call ? cur : val;
 }
 
 /* If ARG is 'ADDR_EXPR (temp)' for some local VAR_DECL TEMP -- the
