@@ -1489,14 +1489,31 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       template<typename _Operation>
 	constexpr void
-	resize_and_overwrite(size_type __n, _Operation __op);
+	resize_and_overwrite(size_type __n, _Operation __op)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+	// '_Operation' is explicitly instantiated as a reference type
+	// ('resize_and_overwrite<_Operation&>') by __resize_and_overwrite's
+	// own forwarding call below, making '__op' a reference parameter
+	// there -- needs the same explicit proof obligation as any other
+	// reference parameter. For the ordinary, directly-called, by-value
+	// instantiation this is trivially satisfied ('&__op' is a bare
+	// PARM_DECL's own address).
+	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__op))
+#endif
+	;
 #endif
 
 #if __cplusplus >= 201103L
       /// Non-standard version of resize_and_overwrite for C++11 and above.
       template<typename _Operation>
 	_GLIBCXX20_CONSTEXPR void
-	__resize_and_overwrite(size_type __n, _Operation __op);
+	__resize_and_overwrite(size_type __n, _Operation __op)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__op))
+#endif
+	;
 #endif
 
       /**
@@ -1536,7 +1553,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX20_CONSTEXPR
       void
-      reserve(size_type __res_arg);
+      reserve(size_type __res_arg)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+      ;
 
       /**
        *  Equivalent to shrink_to_fit().

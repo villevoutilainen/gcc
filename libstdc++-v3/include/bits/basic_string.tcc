@@ -408,6 +408,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     void
     basic_string<_CharT, _Traits, _Alloc>::
     reserve(size_type __res)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
     {
       const size_type __capacity = capacity();
       // _GLIBCXX_RESOLVE_LIB_DEFECTS
@@ -687,6 +690,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr void
     basic_string<_CharT, _Traits, _Alloc>::
     __resize_and_overwrite(const size_type __n, _Operation __op)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__op))
+#endif
     { resize_and_overwrite<_Operation&>(__n, __op); }
 #endif
 
@@ -700,6 +707,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #else
     __resize_and_overwrite(const size_type __n, _Operation __op)
 #endif
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__op))
+#endif
     {
       reserve(__n);
       _CharT* const __p = _M_data();
@@ -708,7 +719,27 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	traits_type::assign(__p + size(), __n - size(), _CharT());
 #endif
       struct _Terminator {
-	_GLIBCXX20_CONSTEXPR ~_Terminator() { _M_this->_M_set_length(_M_r); }
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// See _M_construct's own _Guard (above in this file) for why this
+	// constructor -- otherwise implicit, this struct being a plain
+	// aggregate -- and its explicit pre/post pair on the captured
+	// pointer are here: constructing this struct with 'this' as a
+	// plain pointer argument would otherwise unconditionally
+	// invalidate 'this' for the rest of resize_and_overwrite's own
+	// body, and the destructor's own call into _M_set_length needs
+	// _M_this's own fact proven at THAT point regardless.
+	_GLIBCXX20_CONSTEXPR
+	_Terminator(basic_string* const __t, size_type __r)
+	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (__t))
+	post<std::contracts::never_proven_conveyor_v>(std::is_object_address (__t))
+	: _M_this(__t), _M_r(__r) { }
+#endif
+	_GLIBCXX20_CONSTEXPR ~_Terminator()
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (_M_this))
+#endif
+	{ _M_this->_M_set_length(_M_r); }
 	basic_string* _M_this;
 	size_type _M_r;
       };
