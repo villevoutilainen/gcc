@@ -1275,7 +1275,10 @@ namespace __detail::__variant
 #endif
     {
       __variant::__raw_idx_visit(
-	[&__ret, &__lhs, __op] (auto&& __rhs_mem, auto __rhs_index) mutable
+	[&__ret, &__lhs, &__op] (auto&& __rhs_mem, auto __rhs_index)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__lhs))
+#endif
 	{
 	  if constexpr (__rhs_index != variant_npos)
 	    {
