@@ -852,6 +852,7 @@ namespace std
 // see task #176's own follow-up. NON_EMPTY_RANGE/NONZERO_DIVISOR are
 // used from free functions with no 'this' in scope and don't call any
 // conveyor accessor, so they're left unchanged.
+#if defined(_GLIBCXX_PRECONDITION_ASSERTIONS) && defined(__cpp_contract_control_objects)
 # define _GLIBCXX_PRECONDITION_SUBSCRIPT(_N) \
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)) \
     pre<std::contracts::conveyor_assert_v>(_N < size())
