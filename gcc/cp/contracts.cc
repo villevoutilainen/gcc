@@ -7116,13 +7116,62 @@ static bool oa_range_fact_equal (const oa_range_fact &a, const oa_range_fact &b)
 class oa_env
 {
 public:
+  /* D4324/P2680: canonicalize ANY lambda capture-proxy VAR_DECL (an
+     ordinary by-value/by-reference capture, or 'this') to a single,
+     stable, per-(enclosing lambda, capture name) synthesized key, for
+     is_object_address (m_map) purposes only. Confirmed via direct
+     testing (minimal generic-lambda repros, debug-instrumented) that
+     the front end can synthesize MULTIPLE, distinct capture-proxy
+     VAR_DECLs denoting the exact same logical capture of the exact
+     same lambda instantiation -- one built when the body's own capture
+     DECL_EXPR is substituted, and a completely separate one built
+     fresh at some *other* reference site (confirmed for 'this' used as
+     an implicit method-call receiver, and separately for an ordinary
+     by-reference capture forwarded into another call from inside a
+     *generic* lambda's own runtime-index-dispatched body) -- both
+     structurally identical (same closure, same field), but different
+     tree pointers, so raw pointer-identity keying (every other decl
+     this file ever tracks relies on exactly that) can never match a
+     fact established through one against a consult through the other.
+     Mirrors field_object_identity_key's own synthesized-placeholder-
+     cache design exactly (see that method's own comment for why the
+     cache must be shared, not per-branch-copied), just keyed on
+     (enclosing FUNCTION_DECL, capture name) instead of (object
+     identity, FIELD_DECL) -- a capture proxy's own DECL_CONTEXT is
+     already the lambda's call-operator FUNCTION_DECL (is_capture_
+     proxy's own LAMBDA_FUNCTION_P check), and DECL_NAME is the
+     capture's own (interned, stable) name.  */
+  tree capture_key (tree decl)
+  {
+    if (!VAR_P (decl) || !is_capture_proxy (decl))
+      return decl;
+    tree fn = DECL_CONTEXT (decl);
+    tree name = DECL_NAME (decl);
+    if (!name)
+      return decl;
+    tree *existing = m_capture_proxy_key->get ({fn, name});
+    if (existing)
+      return *existing;
+    tree key = build_decl (UNKNOWN_LOCATION, VAR_DECL, NULL_TREE, ptr_type_node);
+    m_capture_proxy_key->put ({fn, name}, key);
+    return key;
+  }
+  hash_map<oa_field_key_hash, tree> *capture_proxy_key_cache ()
+  {
+    return m_capture_proxy_key;
+  }
+  void set_capture_proxy_key_cache (hash_map<oa_field_key_hash, tree> *cache)
+  {
+    m_capture_proxy_key = cache;
+  }
+
   bool provable_p (tree decl)
   {
-    bool *v = m_map.get (decl);
+    bool *v = m_map.get (capture_key (decl));
     return v && *v;
   }
-  void set (tree decl, bool provable) { m_map.put (decl, provable); }
-  void invalidate (tree decl) { m_map.put (decl, false); }
+  void set (tree decl, bool provable) { m_map.put (capture_key (decl), provable); }
+  void invalidate (tree decl) { m_map.put (capture_key (decl), false); }
 
   /* A second, independent per-decl fact -- "provably nonzero" -- for
      item 8's narrow div/mod restriction (see oa_provably_nonzero_p
@@ -8304,6 +8353,7 @@ public:
     for (auto it : m_array_alias_target)
       r.m_array_alias_target.put (it.first, it.second);
     r.m_field_object_key = m_field_object_key;
+    r.m_capture_proxy_key = m_capture_proxy_key;
     for (auto it : m_borrowed_map)
       r.m_borrowed_map.put (it.first, it.second);
     return r;
@@ -8381,6 +8431,7 @@ public:
     for (auto it : other.m_array_alias_target)
       m_array_alias_target.put (it.first, it.second);
     m_field_object_key = other.m_field_object_key;
+    m_capture_proxy_key = other.m_capture_proxy_key;
     m_borrowed_map.empty ();
     for (auto it : other.m_borrowed_map)
       m_borrowed_map.put (it.first, it.second);
@@ -8553,6 +8604,8 @@ private:
   /* Never owned/allocated here -- see field_object_identity_key's own
      comment for why this must be a shared pointer, not an embedded map.  */
   hash_map<oa_field_key_hash, tree> *m_field_object_key = nullptr;
+  /* Never owned/allocated here -- see capture_key's own comment.  */
+  hash_map<oa_field_key_hash, tree> *m_capture_proxy_key = nullptr;
   /* D4324: reference-safety Q2, ownership-laundering fix -- see
      oa_reference_owned_p's own comment. A decl present here with value
      TRUE is known BORROWED despite otherwise looking like a plain local
@@ -20262,6 +20315,7 @@ oa_resolve_iile_call (tree call, oa_env &env)
      crash/UB path for '&h->f' first resolved inside this closure's own
      body (see oa_env::field_object_identity_key's own comment).  */
   inner_env.set_field_object_key_cache (env.field_object_key_cache ());
+  inner_env.set_capture_proxy_key_cache (env.capture_proxy_key_cache ());
   oa_walk_stmt (&body, inner_env);
 
   bool result = oa_return_seen && oa_return_all_provable;
@@ -20318,6 +20372,7 @@ oa_resolve_iile_range (tree call, oa_env &env, oa_range_fact *out)
   oa_env inner_env;
   /* Stage 5: see oa_resolve_iile_call's own identical propagation.  */
   inner_env.set_field_object_key_cache (env.field_object_key_cache ());
+  inner_env.set_capture_proxy_key_cache (env.capture_proxy_key_cache ());
   oa_walk_stmt (&body, inner_env);
 
   bool result = oa_return_range_seen && oa_return_range_has_fact;
@@ -24282,6 +24337,11 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
      that always happens synchronously within this same call.  */
   hash_map<oa_field_key_hash, tree> field_object_key_cache;
   env.set_field_object_key_cache (&field_object_key_cache);
+  /* Same shared, cross-branch, cross-nested-walk discipline as
+     FIELD_OBJECT_KEY_CACHE just above, backing oa_env::capture_key --
+     see that method's own comment.  */
+  hash_map<oa_field_key_hash, tree> capture_proxy_key_cache;
+  env.set_capture_proxy_key_cache (&capture_proxy_key_cache);
 
   /* -fcontract-symbolic-runtime-checks (Mechanism B): every shadow
      variable get_or_build_scalar_shadow ever creates for this function
@@ -24493,6 +24553,25 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
 	  if (TREE_CODE (arg) == ADDR_EXPR)
 	    {
 	      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	      /* D4324/P2680: '&*p' (address-of-dereference) -- e.g. a
+		 reference-typed lambda capture's own is_object_address(&r)
+		 conjunct, where R's capture proxy is itself REFERENCE_TYPE:
+		 reading it as an expression auto-dereferences (convert_
+		 from_reference), so '&r' arrives as ADDR_EXPR(INDIRECT_REF
+		 (proxy)), not a bare ADDR_EXPR(proxy) the way a pointer-
+		 typed capture's own '&p' would. Mirrors oa_provable_p's own
+		 identical INDIRECT_REF case (see that function's own
+		 comment for the general '&*ptr is exactly ptr' reasoning) --
+		 without this, establishing self-trust for a *reference*
+		 parameter/capture's own is_object_address precondition here
+		 silently registered the fact against the ADDR_EXPR node
+		 itself (a one-off, never looked up again by identity),
+		 leaving the real proxy decl permanently unestablished.
+		 Confirmed via direct testing: a generic lambda's own
+		 explicit 'pre<>(is_object_address(&lhs))' for a captured
+		 reference 'lhs' was never actually recorded here at all.  */
+	      if (TREE_CODE (op) == INDIRECT_REF)
+		op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
 	      if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
 		arg = op;
 	    }
