@@ -10193,7 +10193,22 @@ namespace ranges
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
     {
-      _M_invoke_with_runtime_index([this]<size_t _Idx>() {
+      // D4324/P2680: this lambda is passed to _M_invoke_with_runtime_index,
+      // which forwards it into _S_invoke_with_runtime_index's own outer
+      // (immediately-invoked) closure, where it's called via a stored
+      // reference several calls away from this capture site -- not
+      // immediately invoked in the same expression as its own
+      // construction, so it doesn't get the benefit of the IILE
+      // mechanism's caller-env access the way that outer closure does.
+      // Its own body is walked standalone with no access to operator++'s
+      // established facts, so its own captured 'this' needs its own
+      // explicit precondition, exactly as any other ordinary (non-
+      // conveyor) function forwarding a reference/this needs one.
+      _M_invoke_with_runtime_index([this]<size_t _Idx>()
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+      {
 	++std::get<_Idx>(_M_it);
 	_M_satisfy<_Idx>();
       });
@@ -10218,7 +10233,15 @@ namespace ranges
       requires __detail::__concat_is_bidirectional<_Const, _Vs...>
     {
       __glibcxx_assert(!_M_it.valueless_by_exception());
-      _M_invoke_with_runtime_index([this]<size_t _Idx>() {
+      // D4324/P2680: see operator++'s own identical comment -- this
+      // lambda is forwarded the same way, several calls away from its
+      // own capture site, so its own 'this' needs its own explicit
+      // precondition too.
+      _M_invoke_with_runtime_index([this]<size_t _Idx>()
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+      {
 	_M_prev<_Idx>();
       });
       return *this;
@@ -10238,7 +10261,16 @@ namespace ranges
       requires __detail::__concat_is_random_access<_Const, _Vs...>
     {
       __glibcxx_assert(!_M_it.valueless_by_exception());
-      _M_invoke_with_runtime_index([this, __n]<size_t _Idx>() {
+      // D4324/P2680: see operator++'s own identical comment -- this
+      // lambda is forwarded the same way, several calls away from its
+      // own capture site, so its own 'this' needs its own explicit
+      // precondition too ('__n' is captured by value, not by reference,
+      // so it needs no such precondition of its own).
+      _M_invoke_with_runtime_index([this, __n]<size_t _Idx>()
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+      {
 	auto __begin = ranges::begin(std::get<_Idx>(_M_parent->_M_views));
 	if (__n > 0)
 	  _M_advance_fwd<_Idx>(std::get<_Idx>(_M_it) - __begin, __n);
