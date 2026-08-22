@@ -168,7 +168,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	string* __p = _M_str;
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	// See the copy constructor's own comment just above for why
-	// '__o._M_str' is copied into a plain local first.
+	// '__o._M_str'/'_M_str' are each copied into a plain local first
+	// before their own is_object_address is asserted -- needed for
+	// '__p' too now, not just '__op': the D4324/P2680 ctor/dtor
+	// soundness fix gives 'delete __p;' below a real caller-side
+	// obligation on '__p' itself, which a raw union-member read has
+	// never satisfied on its own (same reasoning as '__op').
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (__p));
 	string* const __op = __o._M_str;
 	contract_assert<std::contracts::never_proven_conveyor_v>
 	  (std::is_object_address (__op));
@@ -187,7 +194,18 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     ~__cow_constexpr_string()
     {
       if consteval {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// See the copy constructor's own comment above for why '_M_str'
+	// is copied into a plain local first before its own is_object_
+	// address is asserted -- the D4324/P2680 ctor/dtor soundness fix
+	// gives 'delete' a real caller-side obligation on its own operand.
+	string* const __p = _M_str;
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (__p));
+	delete __p;
+#else
 	delete _M_str;
+#endif
       } else {
 	__detail::_ZNSt12__cow_stringD2Ev(this);
       }
@@ -229,7 +247,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       if consteval {
 	string* __p = _M_str;
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	// See the move constructor's own comment just above.
+	// See the move constructor's own comment just above, and the
+	// copy-assignment operator's own identical addition, for why
+	// '__p' (not just '__op') needs its own is_object_address
+	// asserted before the 'delete __p;' below.
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (__p));
 	string* const __op = __o._M_str;
 	contract_assert<std::contracts::never_proven_conveyor_v>
 	  (std::is_object_address (__op));
@@ -241,7 +264,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	return *this;
       } else {
 	return __detail::_ZNSt12__cow_stringaSEOS_(this, std::move(__o));
-      }	
+      }
     }
 
     [[__gnu__::__always_inline__]] constexpr const char*

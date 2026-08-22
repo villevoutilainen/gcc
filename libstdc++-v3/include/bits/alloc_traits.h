@@ -763,6 +763,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[__gnu__::__always_inline__]]
       static _GLIBCXX20_CONSTEXPR allocator_type
       select_on_container_copy_construction(const allocator_type& __rhs)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__rhs))
+#endif
       { return __rhs; }
     };
 
@@ -875,6 +878,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[__gnu__::__always_inline__]]
       static _GLIBCXX20_CONSTEXPR allocator_type
       select_on_container_copy_construction(const allocator_type& __rhs)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__rhs))
+#endif
       { return __rhs; }
     };
 #endif // _GLIBCXX_HOSTED

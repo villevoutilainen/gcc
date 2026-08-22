@@ -894,6 +894,9 @@ namespace views
       constexpr auto
       operator() [[nodiscard]] (_Tp&& __e) const
       noexcept(noexcept(single_view<decay_t<_Tp>>(std::forward<_Tp>(__e))))
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__e))
+#endif
       { return single_view<decay_t<_Tp>>(std::forward<_Tp>(__e)); }
   };
 
