@@ -129,6 +129,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     get(variant<_Types...>& __v)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__v))
+      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
 #endif
     ;
 
@@ -137,6 +138,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     get(variant<_Types...>&& __v)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__v))
+      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
 #endif
     ;
 
@@ -145,6 +147,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     get(const variant<_Types...>& __v)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__v))
+      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
 #endif
     ;
 
@@ -153,6 +156,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     get(const variant<_Types...>&& __v)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__v))
+      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
 #endif
     ;
 
@@ -1310,7 +1314,31 @@ namespace __detail::__variant
     {
       namespace __variant = __detail::__variant;
       return __variant::__compare(true, __lhs, __rhs,
-				  [](auto&& __l, auto&& __r) -> bool {
+				  /* D4324: no explicit '-> bool' trailing
+				     return type here (unlike this lambda's
+				     sibling comparator functors below) --
+				     GCC's parser currently fails to parse a
+				     lambda's own trailing-return-type
+				     immediately followed by a control-object
+				     contract-specifier (confirmed via a
+				     minimal, non-D4324 repro: '[](auto&&x)
+				     -> bool pre<ctrl>(cond) {...}' fails
+				     "expected '{'", the same parser-bug
+				     family as 'mutable' immediately followed
+				     by one -- see std/variant's own
+				     __compare comment for that case). Return
+				     type deduction already gives 'bool' here
+				     ('__l == __r' always does, for every
+				     instantiation this lambda is actually
+				     used with), so dropping the redundant
+				     explicit annotation sidesteps the parser
+				     bug without changing behavior.  */
+				  [](auto&& __l, auto&& __r)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+				    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__l))
+				    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__r))
+#endif
+				  {
 				    return __l == __r;
 				  });
     }
@@ -1652,6 +1680,9 @@ namespace __detail::__variant
 	enable_if_t<is_constructible_v<__to_type<_Np>, _Args...>,
 		    __to_type<_Np>&>
 	emplace(_Args&&... __args)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
 	{
 	  namespace __variant = std::__detail::__variant;
 	  using type = typename _Nth_type<_Np, _Types...>::type;
