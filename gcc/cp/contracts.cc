@@ -7533,6 +7533,31 @@ public:
       if (it.first.first == base)
 	predicate_fact_invalidate (it.second);
   }
+  /* D4324/P2680: the is_object_address (m_map) analogue of the two
+     predicate-fact invalidators just above -- a pointer-typed field's
+     own is_object_address fact (established either from an explicit
+     'pre<>(is_object_address(obj->field))' conjunct, or, per Increment
+     "conversion-operator-returned provable field", from a local
+     aggregate's own direct-initialization) is stored under the exact
+     same field_object_identity_key placeholder, in m_map rather than
+     m_predicate_fact_map -- so it needs the same invalidate/invalidate_
+     all pair, called alongside the predicate ones at every site that
+     already calls those (a field write, or any reassignment/opaque call
+     invalidating a whole object's own facts). Without this, a pointer
+     field proven live once could be silently trusted forever after,
+     even past a later write that replaces it with something unprovable.  */
+  void field_object_address_invalidate (tree base, tree field)
+  {
+    tree *key = m_field_object_key->get ({base, field});
+    if (key)
+      invalidate (*key);
+  }
+  void field_object_address_invalidate_all (tree base)
+  {
+    for (auto it : *m_field_object_key)
+      if (it.first.first == base)
+	invalidate (it.second);
+  }
   hash_map<oa_field_key_hash, tree> *field_object_key_cache ()
   {
     return m_field_object_key;
@@ -9202,6 +9227,80 @@ oa_field_object_identity (tree expr, oa_env &env, tree *decl_out)
 
 static bool oa_get_range (tree expr, oa_env &env, oa_range_fact *out);
 
+/* D4324/P2680, "conversion-operator-returned provable field": if FNDECL
+   is a conversion operator (DECL_CONV_FN_P) whose entire body is a
+   single 'return <this->field>;' -- e.g. 'operator thing* () const
+   { return t; }' -- set *FIELD_OUT to that FIELD_DECL and return true.
+   Declines (returns false) for anything else: a computed expression, a
+   multi-statement body, a return of something other than one of the
+   receiver's own fields, or a still-uninstantiated/undefined body
+   (DECL_SAVED_TREE null) -- conservatively, not merely "not yet
+   handled," since this is used to decide whether the field's own
+   established fact (if any) may stand in for the conversion call's
+   return value; anything more elaborate than a bare field read could
+   return a value unrelated to the receiver's own stored state, which
+   this simple structural check cannot rule out.
+
+   Needed because a wrapper's own pointer-typed field, once established
+   as a provable object address (from its own direct-initialization, see
+   the DECL_EXPR case's own CONSTRUCTOR handling, or from an explicit
+   'pre<>(is_object_address(obj->field))' conjunct elsewhere), is
+   otherwise never connected to a *conversion-operator call* reading
+   that exact field: oa_object_identity_decl's own conversion-operator
+   strip (oa_strip_conversion_operator_call) resolves to the RECEIVER's
+   identity, appropriate for a reference-returning conversion operator
+   (see oa_provable_p's own ADDR_EXPR case), but a plain pointer value
+   returned by-value has no such receiver-address shortcut available --
+   the actual VALUE returned must be traced back to the specific field
+   it reads.  */
+
+static bool
+oa_conversion_operator_returned_field (tree fndecl, tree *field_out)
+{
+  if (!DECL_CONV_FN_P (fndecl))
+    return false;
+  tree body = DECL_SAVED_TREE (fndecl);
+  if (body == NULL_TREE || body == error_mark_node)
+    return false;
+  while (TREE_CODE (body) == BIND_EXPR)
+    body = BIND_EXPR_BODY (body);
+  if (TREE_CODE (body) == STATEMENT_LIST)
+    {
+      tree_stmt_iterator i = tsi_start (body);
+      if (tsi_end_p (i))
+	return false;
+      body = tsi_stmt (i);
+      tsi_next (&i);
+      if (!tsi_end_p (i))
+	return false;
+    }
+  while (TREE_CODE (body) == CLEANUP_POINT_EXPR || TREE_CODE (body) == EXPR_STMT)
+    body = TREE_OPERAND (body, 0);
+  if (TREE_CODE (body) != RETURN_EXPR || !TREE_OPERAND (body, 0))
+    return false;
+  tree retval = TREE_OPERAND (body, 0);
+  if (TREE_CODE (retval) == INIT_EXPR || TREE_CODE (retval) == MODIFY_EXPR)
+    retval = TREE_OPERAND (retval, 1);
+  while (TREE_CODE (retval) == NON_LVALUE_EXPR || TREE_CODE (retval) == NOP_EXPR
+	 || TREE_CODE (retval) == CONVERT_EXPR || TREE_CODE (retval) == VIEW_CONVERT_EXPR)
+    retval = TREE_OPERAND (retval, 0);
+  if (TREE_CODE (retval) != COMPONENT_REF)
+    return false;
+  tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (retval, 0));
+  if (TREE_CODE (obj) == INDIRECT_REF)
+    obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
+  while (TREE_CODE (obj) == NON_LVALUE_EXPR || TREE_CODE (obj) == NOP_EXPR
+	 || TREE_CODE (obj) == CONVERT_EXPR || TREE_CODE (obj) == VIEW_CONVERT_EXPR)
+    obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
+  if (!is_this_parameter (obj))
+    return false;
+  tree field = TREE_OPERAND (retval, 1);
+  if (TREE_CODE (field) != FIELD_DECL)
+    return false;
+  *field_out = field;
+  return true;
+}
+
 /* True if EXPR (evaluated in ENV) is provably an object address:
    'this'; '&obj' where obj is a parameter/variable of object type; a
    VAR_DECL/PARM_DECL whose current value ENV already knows to be
@@ -9220,6 +9319,47 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
     return false;
 
   STRIP_ANY_LOCATION_WRAPPER (expr);
+
+  /* D4324/P2680, "conversion-operator-returned provable field": a
+     wrapper's own conversion operator, called directly (not under an
+     ADDR_EXPR -- that shape is the reference-returning case handled
+     separately above) and returning a plain pointer value rather than a
+     reference, needs its own RETURN VALUE traced back to whichever
+     field it reads -- unlike the reference case, there is no sound
+     "the receiver is real, so trust whatever it returns" shortcut here
+     (a pointer-returning conversion operator could compute or return
+     anything; only recognizing the field it literally, structurally
+     reads keeps this sound). Rewrite EXPR into the same synthesized
+     field-identity key the COMPONENT_REF case just below already
+     resolves an ordinary 'obj.field' read to, so a fact established for
+     that field (from the DECL_EXPR CONSTRUCTOR case, or an explicit
+     'pre<>(is_object_address(obj->field))' conjunct) is found exactly
+     as if the field had been read directly, no conversion operator in
+     the way. Falls through to the ordinary COMPONENT_REF/decl handling
+     below if the callee isn't recognized as this exact trivial shape,
+     or if no established fact exists.  */
+  if (TREE_CODE (expr) == CALL_EXPR && call_expr_nargs (expr) == 1)
+    {
+      tree fn = CALL_EXPR_FN (expr);
+      tree field;
+      if (fn && TREE_CODE (fn) == ADDR_EXPR
+	  && TREE_CODE (TREE_OPERAND (fn, 0)) == FUNCTION_DECL
+	  && oa_conversion_operator_returned_field (TREE_OPERAND (fn, 0), &field))
+	{
+	  tree receiver = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (expr, 0));
+	  if (TREE_CODE (receiver) == ADDR_EXPR)
+	    receiver = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (receiver, 0));
+	  tree identity;
+	  if (oa_object_identity_decl (receiver, &identity)
+	      || oa_field_slot_identity (receiver, env, &identity)
+	      || oa_array_slot_identity (receiver, env, &identity)
+	      || oa_field_object_identity (receiver, env, &identity))
+	    {
+	      identity = env.alias_find (identity);
+	      expr = env.field_object_identity_key (identity, field);
+	    }
+	}
+    }
 
   /* 'return &a;' where 'a' is a by-reference lambda-capture proxy
      arrives here as NOP_EXPR/CONVERT_EXPR converting the proxy's own
@@ -17372,6 +17512,7 @@ oa_invalidate_parameter_alias_group (tree identity, oa_env &env,
 	{
 	  env.invalidate (parm);
 	  env.range_invalidate (parm);
+	  env.field_object_address_invalidate_all (parm);
 	}
     }
 }
@@ -17488,6 +17629,7 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 	    {
 	      env.invalidate (identity);
 	      env.range_invalidate (identity);
+	      env.field_object_address_invalidate_all (identity);
 	    }
 	  oa_invalidate_parameter_alias_group (identity, env,
 						!callee_is_conveyor
@@ -20909,6 +21051,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       checkenv.field_alias_invalidate_all (d);
       checkenv.array_alias_invalidate_all (d);
       checkenv.field_object_predicate_invalidate_all (d);
+      checkenv.field_object_address_invalidate_all (d);
       oa_invalidate_parameter_alias_group (d, checkenv);
 
       bool saved_tracking = oa_return_tracking;
@@ -20999,6 +21142,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       env.field_alias_invalidate_all (range_result_decls[i]);
       env.array_alias_invalidate_all (range_result_decls[i]);
       env.field_object_predicate_invalidate_all (range_result_decls[i]);
+      env.field_object_address_invalidate_all (range_result_decls[i]);
       oa_invalidate_parameter_alias_group (range_result_decls[i], env);
     }
 }
@@ -22319,6 +22463,26 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 				(identity, field, fact,
 				 /*conveyor_established=*/true);
 			  }
+			/* D4324/P2680, "conversion-operator-returned provable
+			   field": a pointer-typed field initialized directly
+			   from a provable object address (e.g. 'thing_ref ref
+			   {&t};') is itself a provable object address for as
+			   long as it isn't overwritten -- the same reasoning
+			   the pointer/reference DECL_EXPR branches above
+			   already apply to a *bare* pointer-typed local, just
+			   one field hop further, via the same field_object_
+			   identity_key placeholder oa_provable_p's own
+			   COMPONENT_REF case already consults (see that
+			   case's own comment). Needed for a wrapper struct
+			   with no user-declared constructor at all: nothing
+			   else in this file ever establishes is_object_
+			   address for a field, only for a bare decl or from
+			   an explicit 'pre<>(is_object_address(obj->field))'
+			   conjunct -- neither applies to a locally
+			   aggregate-initialized wrapper's own field.  */
+			else if (POINTER_TYPE_P (TREE_TYPE (field)))
+			  env.set (env.field_object_identity_key (identity, field),
+				   oa_provable_p (value, env));
 		      }
 		  }
 	      }
@@ -22487,6 +22651,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		env.field_alias_invalidate_all (identity);
 		env.array_alias_invalidate_all (identity);
 		env.field_object_predicate_invalidate_all (identity);
+		env.field_object_address_invalidate_all (identity);
 		oa_invalidate_parameter_alias_group (identity, env);
 		env.alias_invalidate (identity);
 	      }
@@ -22591,6 +22756,30 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 			       object sweep above, same granularity distinction
 			       contract_field_range_invalidate already draws.  */
 			    env.field_object_predicate_invalidate (field_identity, field);
+			    /* D4324/P2680: this field's own is_object_address fact
+			       (m_map, via the same synthesized key) is equally
+			       stale the instant its own slot is overwritten --
+			       mirrors the predicate invalidation just above, one
+			       map over.  */
+			    env.field_object_address_invalidate (field_identity, field);
+			    /* D4324/P2680, "conversion-operator-returned provable
+			       field": a pointer-typed field write establishes a
+			       fresh is_object_address fact for the field's own
+			       slot, mirroring the DECL_EXPR CONSTRUCTOR case's
+			       own identical establishment for the "field
+			       initialized via brace-init" shape -- needed
+			       because 'thing_ref ref{&t};' (an aggregate with
+			       no user-declared constructor, direct-list-init,
+			       no '=') was confirmed via direct testing to NOT
+			       populate DECL_INITIAL with a CONSTRUCTOR the way
+			       'Point p = {50.0, 2.0};' does; it lowers to a
+			       bare DECL_EXPR (no initializer at all) followed
+			       by this exact per-field MODIFY_EXPR/INIT_EXPR
+			       write instead, so the DECL_EXPR branch alone
+			       never sees it.  */
+			    if (POINTER_TYPE_P (TREE_TYPE (field)))
+			      env.set (env.field_object_identity_key (field_identity, field),
+				       oa_provable_p (rhs, env));
 			    /* Stage 2a: LHS ('h.ptr' or 'hp->ptr') is a
 			       pointer/reference-typed field slot -- record
 			       what it now aliases (RHS resolved via either
