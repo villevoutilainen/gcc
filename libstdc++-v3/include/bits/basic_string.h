@@ -465,6 +465,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 		     std::input_iterator_tag)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+	  post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
 	;
 
@@ -477,6 +478,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 		     std::forward_iterator_tag)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+	  post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
 	;
 
@@ -485,6 +487,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _M_construct(size_type __req, _CharT __c)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
       ;
 
@@ -496,12 +499,18 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_M_construct(const _CharT *__c, size_type __n)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+	  post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
 	;
 
 #if __cplusplus >= 202302L
       constexpr void
-      _M_construct(basic_string&& __str, size_type __pos,  size_type __n);
+      _M_construct(basic_string&& __str, size_type __pos,  size_type __n)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+      ;
 #endif
 
       _GLIBCXX20_CONSTEXPR
@@ -1008,6 +1017,25 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       {
 	if (__str._M_is_local())
 	  {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	    // D4324/P2680: the if-condition's own '__str._M_is_local ()'
+	    // call just above ('__str' as receiver, non-conveyor) invalidates
+	    // 'this' too, symmetrically with why it invalidates '__str'
+	    // itself below -- 'this' and '__str' are the exact same struct
+	    // type, so the mandatory alias-group sweep can't distinguish
+	    // them. Before this constructor's own 'this' participated in
+	    // ordinary is_object_address fact-tracking (D4324/P2680's ctor/
+	    // dtor soundness fix), this never mattered -- 'this' inside any
+	    // constructor/destructor was an unconditional axiom, immune to
+	    // invalidation. Now that it is a real, trackable fact like any
+	    // other, it needs the same explicit re-assertion discipline
+	    // '__str' already uses throughout this same function. Re-assert
+	    // 'this' here (trusted, never_proven, matching the same "sound
+	    // but not independently re-verified" idiom) so '_M_init_local_
+	    // buf ()' just below can still be proven.
+	    contract_assert<std::contracts::never_proven_conveyor_v>
+	      (std::is_object_address (this));
+#endif
 	    _M_init_local_buf();
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	    // D4324/P2680: '_M_init_local_buf ()' touches 'this' as its
@@ -1045,6 +1073,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	    // still the constructor's own, never-yet-invalidated
 	    // precondition).
 	    pointer __p = __str._M_data();
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	    // D4324/P2680: same reasoning as the 'if' branch above -- the
+	    // if-condition's own call and '__str._M_data ()' just above
+	    // (both non-conveyor, receiver '__str') invalidated 'this' too;
+	    // re-assert before '_M_data' needs it.
+	    contract_assert<std::contracts::never_proven_conveyor_v>
+	      (std::is_object_address (this));
+#endif
 	    _M_data(__p);
 	    _M_capacity(__str._M_allocated_capacity);
 	  }
@@ -1066,6 +1102,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	// neither needs its own, separate re-assert.
 	size_type __len = __str.length();
 	pointer __local = __str._M_use_local_data();
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// D4324/P2680: '__str.length ()'/'__str._M_use_local_data ()' just
+	// above (non-conveyor, receiver '__str') invalidated 'this' again
+	// (same reasoning as above); re-assert before '_M_length' needs it.
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	_M_length(__len);
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	// D4324/P2680: '_M_length (__len)' just above touches 'this'
@@ -1077,6 +1120,24 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #endif
 	__str._M_data(__local);
 	__str._M_set_length(0);
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// D4324/P2680: the two calls just above (non-conveyor, receiver
+	// '__str') invalidated 'this' one final time -- unlike every
+	// earlier invalidation in this same constructor, nothing written
+	// in this function's own source needs 'this' again after this
+	// point, but the compiler-generated member-cleanup path for
+	// '_M_dataplus' (run if some earlier statement in this now-
+	// exited-via-exception constructor had thrown) is walked using
+	// this SAME, now-invalidated env -- 'this' must be freshly
+	// re-asserted here, as the constructor's own last statement, so
+	// that implicit '_Alloc_hider::~_Alloc_hider ()' cleanup call can
+	// still be proven.  Found via direct testing: this exact
+	// constructor's own closing brace failed to prove is_object_
+	// address for '&this->_M_dataplus' even after every explicit
+	// call above was already correctly covered.
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
       }
 
 #if __glibcxx_containers_ranges // C++ >= 23
