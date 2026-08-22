@@ -576,6 +576,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       size_type
       _M_check(size_type __pos, const char* __s) const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	if (__pos > this->size())
 	  __throw_out_of_range_fmt(__N("%s: __pos (which is %zu) > "
@@ -587,6 +590,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       void
       _M_check_length(size_type __n1, size_type __n2, const char* __s) const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	if (this->max_size() - (this->size() - __n1) < __n2)
 	  __throw_length_error(__N(__s));
@@ -597,6 +603,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       size_type
       _M_limit(size_type __pos, size_type __off) const _GLIBCXX_NOEXCEPT
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	const bool __testoff =  __off < this->size() - __pos;
 	return __testoff ? __off : this->size() - __pos;
@@ -605,6 +614,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // True if _Rep and source do not overlap.
       bool
       _M_disjunct(const _CharT* __s) const _GLIBCXX_NOEXCEPT
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	return (less<const _CharT*>()(__s, _M_data())
 		|| less<const _CharT*>()(_M_data() + this->size(), __s));
@@ -736,7 +748,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       void
       _M_mutate(size_type __pos, size_type __len1, const _CharT* __s,
-		size_type __len2);
+		size_type __len2)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+      ;
 
       _GLIBCXX20_CONSTEXPR
       void
@@ -2556,6 +2572,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       insert(size_type __pos1, const basic_string& __str)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__str))
+#endif
       { return this->replace(__pos1, size_type(0),
 			     __str._M_data(), __str.size()); }
 
@@ -2624,6 +2644,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       insert(size_type __pos, const _CharT* __s)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	__glibcxx_requires_string(__s);
 	return this->replace(__pos, size_type(0), __s,
@@ -2867,6 +2890,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       replace(size_type __pos, size_type __n1, const _CharT* __s,
 	      size_type __n2)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	__glibcxx_requires_string_len(__s, __n2);
 	return _M_replace(_M_check(__pos, "basic_string::replace"),
@@ -3236,7 +3262,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       _M_replace(size_type __pos, size_type __len1, const _CharT* __s,
-		 const size_type __len2);
+		 const size_type __len2)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+      ;
 
       _GLIBCXX20_CONSTEXPR
       basic_string&
@@ -4370,6 +4400,10 @@ _GLIBCXX_END_NAMESPACE_CXX11
     inline basic_string<_CharT, _Traits, _Alloc>
     operator+(basic_string<_CharT, _Traits, _Alloc>&& __lhs,
 	      const basic_string<_CharT, _Traits, _Alloc>& __rhs)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__lhs))
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__rhs))
+#endif
     { return std::move(__lhs.append(__rhs)); }
 
   template<typename _CharT, typename _Traits, typename _Alloc>
@@ -4377,13 +4411,38 @@ _GLIBCXX_END_NAMESPACE_CXX11
     inline basic_string<_CharT, _Traits, _Alloc>
     operator+(const basic_string<_CharT, _Traits, _Alloc>& __lhs,
 	      basic_string<_CharT, _Traits, _Alloc>&& __rhs)
-    { return std::move(__rhs.insert(0, __lhs)); }
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__lhs))
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__rhs))
+#endif
+    {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      // D4324/P2680: std::move's own Q2 ownership check requires its
+      // argument to be a parameter/local the calling function itself
+      // received or created, which a raw member-call expression's own
+      // return value ('__rhs.insert(...)', a CALL_EXPR) is not, even
+      // when bound to a local reference first (still resolves back to
+      // the same non-owned call expression). insert()'s own return is
+      // always '*this' (see its own definition), so discarding it and
+      // moving '__rhs' itself directly -- a parameter, unconditionally
+      // owned -- is exactly equivalent and sidesteps the check
+      // entirely.
+      __rhs.insert(0, __lhs);
+      return std::move(__rhs);
+#else
+      return std::move(__rhs.insert(0, __lhs));
+#endif
+    }
 
   template<typename _CharT, typename _Traits, typename _Alloc>
     _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
     inline basic_string<_CharT, _Traits, _Alloc>
     operator+(basic_string<_CharT, _Traits, _Alloc>&& __lhs,
 	      basic_string<_CharT, _Traits, _Alloc>&& __rhs)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__lhs))
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__rhs))
+#endif
     {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wc++17-extensions" // if constexpr
@@ -4398,7 +4457,16 @@ _GLIBCXX_END_NAMESPACE_CXX11
 	{
 	  const auto __size = __lhs.size() + __rhs.size();
 	  if (__size > __lhs.capacity() && __size <= __rhs.capacity())
-	    return std::move(__rhs.insert(0, __lhs));
+	    {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	      // See operator+(const basic_string&, basic_string&&)'s own
+	      // identical-shaped comment above.
+	      __rhs.insert(0, __lhs);
+	      return std::move(__rhs);
+#else
+	      return std::move(__rhs.insert(0, __lhs));
+#endif
+	    }
 	}
       return std::move(__lhs.append(__rhs));
 #pragma GCC diagnostic pop
@@ -4409,7 +4477,19 @@ _GLIBCXX_END_NAMESPACE_CXX11
     inline basic_string<_CharT, _Traits, _Alloc>
     operator+(const _CharT* __lhs,
 	      basic_string<_CharT, _Traits, _Alloc>&& __rhs)
-    { return std::move(__rhs.insert(0, __lhs)); }
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__rhs))
+#endif
+    {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      // See operator+(const basic_string&, basic_string&&)'s own
+      // identical-shaped comment above.
+      __rhs.insert(0, __lhs);
+      return std::move(__rhs);
+#else
+      return std::move(__rhs.insert(0, __lhs));
+#endif
+    }
 
   template<typename _CharT, typename _Traits, typename _Alloc>
     _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
