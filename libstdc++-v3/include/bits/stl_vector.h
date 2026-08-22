@@ -389,6 +389,21 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	if (__n < 0)
 	  __builtin_unreachable();
 	_M_deallocate(_M_impl._M_start, size_t(__n));
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// D4324/P2680: '_M_deallocate (...)' above touches 'this' as its
+	// own receiver -- a non-conveyor call, so the mandatory alias-group
+	// invalidation sweep invalidates 'this' too. The compiler-generated
+	// member cleanup that follows this body ('_M_impl's own
+	// ~_Vector_impl (), a CLEANUP_STMT walked through this same,
+	// unforked env) sees whatever 'this's fact happens to be at the
+	// very end of this destructor's own source-level statements -- see
+	// basic_string's move constructor's own identical re-assertion
+	// (project_self_invalidation_and_out_of_class_fixes.md) for the
+	// full reasoning. Re-assert 'this' here so the implicit member
+	// destructor call can still be proven.
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
       }
 
     public:
@@ -626,8 +641,31 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       explicit
       _GLIBCXX20_CONSTEXPR
       vector(size_type __n, const allocator_type& __a = allocator_type())
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+#endif
       : _Base(_S_check_init_len(__n, __a), __a)
-      { _M_default_initialize(__n); }
+      {
+	_M_default_initialize(__n);
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// D4324/P2680: the base-class mem-initializer above is wrapped in a
+	// CLEANUP_STMT whose CLEANUP_BODY (this constructor's own body,
+	// i.e. the '_M_default_initialize (__n)' call just above) and
+	// CLEANUP_EXPR (the implicit '~_Vector_base ()' call that undoes
+	// the already-constructed base if this body throws) are walked
+	// sequentially through the SAME, unforked env -- unlike TRY_BLOCK/
+	// HANDLER, which correctly forks a pre-try snapshot (see
+	// basic_string's own move constructor and project_self_
+	// invalidation_and_out_of_class_fixes.md for the identical
+	// CLEANUP_STMT ordering issue). '_M_default_initialize' touches
+	// 'this' as its own receiver (a non-conveyor call), invalidating
+	// 'this' for the rest of this same env -- re-assert it here, at
+	// the end of the body, so the implicit base-cleanup call can still
+	// be proven.
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+      }
 
       /**
        *  @brief  Creates a %vector with copies of an exemplar element.
@@ -640,6 +678,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       vector(size_type __n, const value_type& __value,
 	     const allocator_type& __a = allocator_type())
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+#endif
       : _Base(_S_check_init_len(__n, __a), __a)
       { _M_fill_initialize(__n, __value); }
 #else
@@ -654,6 +695,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       explicit
       vector(size_type __n, const value_type& __value = value_type(),
 	     const allocator_type& __a = allocator_type())
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+#endif
       : _Base(_S_check_init_len(__n, __a), __a)
       { _M_fill_initialize(__n, __value); }
 #endif
@@ -844,6 +888,21 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	std::_Destroy(this->_M_impl._M_start, this->_M_impl._M_finish,
 		      _M_get_Tp_allocator());
 	_GLIBCXX_ASAN_ANNOTATE_BEFORE_DEALLOC;
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// D4324/P2680: '_M_get_Tp_allocator ()' above touches 'this' as its
+	// own receiver -- a non-conveyor call, so the mandatory alias-group
+	// invalidation sweep invalidates 'this' too. The compiler-generated
+	// base-class cleanup that follows this body (~_Vector_base (), a
+	// CLEANUP_STMT walked through this same, unforked env) sees whatever
+	// 'this's fact happens to be at the very end of this destructor's
+	// own source-level statements -- see basic_string's move
+	// constructor's own identical re-assertion (project_self_
+	// invalidation_and_out_of_class_fixes.md) for the full reasoning.
+	// Re-assert 'this' here so the implicit base-class destructor call
+	// can still be proven.
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
       }
 
       /**
@@ -2285,6 +2344,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       // Called by constructors to check initial size.
       static _GLIBCXX20_CONSTEXPR size_type
       _S_check_init_len(size_type __n, const allocator_type& __a)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+#endif
       {
 	if (__n > _Base::_S_max_size(_Tp_alloc_type(__a)))
 	  __throw_length_error(
