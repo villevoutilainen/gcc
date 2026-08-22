@@ -22056,7 +22056,36 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	      env.predicate_fact_set (env.alias_find (decl), pred_fn, polarity,
 				       pred_conveyor_established);
 	  }
-	if (VAR_P (decl) && POINTER_TYPE_P (TREE_TYPE (decl)))
+	/* D4324/P2680: POINTER_TYPE_P also matches REFERENCE_TYPE (see its
+	   own definition in tree.h) -- so a lambda's own by-reference
+	   capture proxy (a REFERENCE_TYPE VAR_DECL) reaches this branch
+	   too, not just an ordinary pointer-typed local. Such a proxy is
+	   compiler-synthesized bookkeeping: its DECL_EXPR is never really
+	   "initialized" the way a hand-written 'T& r = *p;' is (that
+	   shape is DECL_INITIAL-bearing and reaches the REFERENCE_TYPE-
+	   and-DECL_INITIAL case much further below instead) -- its actual
+	   value is redirected entirely via DECL_VALUE_EXPR, so DECL_
+	   INITIAL here is always NULL. Without this exemption, the
+	   'else env.invalidate (decl)' below fires unconditionally for
+	   every such proxy, silently wiping any is_object_address fact
+	   the enclosing lambda's own explicit contract-specifier text
+	   already established for it moments earlier (oa_resolve_object_
+	   address_in_function_1's own specifier-list establishing loop,
+	   which runs before this walk starts) -- confirmed via direct
+	   testing: a lambda declared '[&v]() pre<ctrl>(is_object_address
+	   (&v)) {...}' had that precondition's own fact clobbered back to
+	   "unprovable" the instant this DECL_EXPR for v's proxy was
+	   reached. A capture proxy has no other legitimate source for
+	   this fact at all (it isn't itself a parameter, so no caller-
+	   side obligation ever proves it either) -- skip this whole
+	   block for it instead, leaving whatever the specifier-list loop
+	   already established (or its default "no fact" absence)
+	   untouched.  A capture proxy that genuinely does carry its own
+	   DECL_INITIAL (a by-VALUE pointer capture, copying the captured
+	   pointer's own value) is unaffected by this guard and still
+	   takes the ordinary env.set path below.  */
+	if (VAR_P (decl) && POINTER_TYPE_P (TREE_TYPE (decl))
+	    && !(is_capture_proxy (decl) && !DECL_INITIAL (decl)))
 	  {
 	    if (DECL_INITIAL (decl))
 	      env.set (decl, oa_provable_p (DECL_INITIAL (decl), env));
