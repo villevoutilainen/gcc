@@ -215,6 +215,9 @@ namespace ranges
 	constexpr explicit
 	__box(_Tp&& __t)
 	noexcept(is_nothrow_move_constructible_v<_Tp>)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__t))
+#endif
 	: _M_value(std::move(__t))
 	{ }
 
@@ -446,6 +449,9 @@ namespace ranges
       constexpr explicit
       single_view(_Tp&& __t)
       noexcept(is_nothrow_move_constructible_v<_Tp>)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__t))
+#endif
       : _M_value(std::move(__t))
       { }
 
@@ -1375,11 +1381,38 @@ namespace views::__adaptor
 
       constexpr iterator_t<_Range>
       begin() const
-      { return ranges::begin(*_M_r); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// D4324/P2680: _M_r's own validity as an object address is an
+	// axiom of this wrapper's own invariant (constructed from a real
+	// reference, see the constructor above), not something derivable
+	// from anything else in scope -- copy it into a local first
+	// (matching this project's established pattern elsewhere for a
+	// pointer-typed field, e.g. __cow_constexpr_string's own _M_str)
+	// so is_object_address has a plain pointer value, not a field
+	// access, to trust.
+	_Range* const __p = _M_r;
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (__p));
+	return ranges::begin(*__p);
+#else
+	return ranges::begin(*_M_r);
+#endif
+      }
 
       constexpr sentinel_t<_Range>
       end() const
-      { return ranges::end(*_M_r); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// See begin()'s own identical comment above.
+	_Range* const __p = _M_r;
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (__p));
+	return ranges::end(*__p);
+#else
+	return ranges::end(*_M_r);
+#endif
+      }
 
       constexpr bool
       empty() const requires requires { ranges::empty(*_M_r); }
@@ -9888,6 +9921,9 @@ namespace ranges
 
     constexpr _Iterator<false>
     begin() requires (!(__detail::__simple_view<_Vs> && ...))
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
     {
       _Iterator<false> __it(this, in_place_index<0>, ranges::begin(std::get<0>(_M_views)));
       __it.template _M_satisfy<0>();
@@ -9896,6 +9932,9 @@ namespace ranges
 
     constexpr _Iterator<true>
     begin() const requires (range<const _Vs> && ...) && __detail::__concatable<const _Vs...>
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
     {
       _Iterator<true> __it(this, in_place_index<0>, ranges::begin(std::get<0>(_M_views)));
       __it.template _M_satisfy<0>();
@@ -9904,6 +9943,9 @@ namespace ranges
 
     constexpr auto
     end() requires (!(__detail::__simple_view<_Vs> && ...))
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
     {
       constexpr auto __n = sizeof...(_Vs);
       if constexpr (__detail::__all_forward<false, _Vs...>
@@ -9916,6 +9958,9 @@ namespace ranges
 
     constexpr auto
     end() const requires (range<const _Vs> && ...) && __detail::__concatable<const _Vs...>
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
     {
       constexpr auto __n = sizeof...(_Vs);
       if constexpr (__detail::__all_forward<true, _Vs...>
@@ -10018,6 +10063,9 @@ namespace ranges
     template<size_t _Nm>
       constexpr void
       _M_satisfy()
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
       {
 	if constexpr (_Nm < (sizeof...(_Vs) - 1))
 	  {
@@ -10141,6 +10189,9 @@ namespace ranges
 
     constexpr _Iterator&
     operator++()
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
     {
       _M_invoke_with_runtime_index([this]<size_t _Idx>() {
 	++std::get<_Idx>(_M_it);
@@ -10213,6 +10264,10 @@ namespace ranges
     friend constexpr bool
     operator==(const _Iterator& __x, const _Iterator& __y)
       requires (equality_comparable<iterator_t<__maybe_const_t<_Const, _Vs>>> && ...)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__x))
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__y))
+#endif
     {
       __glibcxx_assert(!__x._M_it.valueless_by_exception());
       __glibcxx_assert(!__y._M_it.valueless_by_exception());
@@ -10221,6 +10276,9 @@ namespace ranges
 
     friend constexpr bool
     operator==(const _Iterator& __it, default_sentinel_t)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__it))
+#endif
     {
       __glibcxx_assert(!__it._M_it.valueless_by_exception());
       constexpr auto __last_idx = sizeof...(_Vs) - 1;
