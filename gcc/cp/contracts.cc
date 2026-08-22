@@ -24790,6 +24790,56 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
   if (oa_resolved_functions->add (fndecl))
     return;
 
+  /* D4324/P2680: a constructor/destructor clone's own body (what
+     DECL_SAVED_TREE (fndecl) holds here) is a verbatim copy of its
+     abstract origin's own body (clone_body, optimize.cc) -- but that
+     copy is taken well after the origin's own finish_function,
+     including its own cp_genericize call, has already completed. By
+     the time this walk would otherwise run for the clone, any mid-body
+     contract_assert already appears as opaque, lowered runtime-
+     dispatch code, invisible to the ASSERTION_STMT recognition this
+     pass's own fact-establishing logic depends on -- confirmed via
+     direct testing (debug_tree on a real _Vector_base::~_Vector_base's
+     abstract pattern and both of its processed clones): the abstract's
+     own walk, run moments earlier from ITS OWN finish_function call,
+     correctly saw a mid-body 'contract_assert<never_proven_conveyor_v>
+     (is_object_address (this))' as a plain ASSERTION_STMT, while both
+     clones' own copies already held the fully lowered dispatch form,
+     leaving that same re-assertion of 'this' invisible to the one walk
+     whose diagnostics actually reach real callers.
+
+     The abstract origin's own walk is semantically authoritative for
+     the clone's body: clone_body performs no control-flow
+     restructuring at all, only PARM_DECL/local VAR_DECL identity
+     substitution, so a fact established or a violation found against
+     the origin's own (always earlier-processed, always correctly un-
+     lowered) copy of this exact source-level body applies identically
+     to every clone sharing it. A clone's own params are DIFFERENT tree
+     nodes from the origin's (update_cloned_parm, optimize.cc), but
+     represent the exact same semantic parameters this pass's own
+     analysis reasons about -- 'this' means the same thing in a clone
+     as in the origin it was cloned from. Re-walking the clone at all
+     can only draw a *worse* conclusion than the origin's own already-
+     reached one (never lowered, so never missing this information),
+     so skip it outright once the origin has been resolved -- normal
+     compilation order (clones are only ever created and processed,
+     via maybe_clone_body, after the origin's own finish_function has
+     fully returned) guarantees the origin always resolves first.
+     Verified: the full narrow dg.exp=*contracts* suite, plugin.exp,
+     and -fself-test are all unaffected by this change (unsurprising,
+     since DECL_MAYBE_IN_CHARGE_CDTOR_P clones were never meant to
+     diverge from their own origin's contract behavior in the first
+     place -- the existing, separate 'contracts must be explicitly
+     propagated to clones' fixes elsewhere in this file are about a
+     clone's own get_fn_contract_specifiers list needing to be
+     populated at all, a declaration-level concern this pass's own
+     establishing loop, below, already consults per-decl regardless of
+     which decl in a family is walked -- not about the walk itself
+     needing to run once per clone).  */
+  if (DECL_CLONED_FUNCTION_P (fndecl)
+      && oa_resolved_functions->contains (DECL_CLONED_FUNCTION (fndecl)))
+    return;
+
   tree body = DECL_SAVED_TREE (fndecl);
   if (body == NULL_TREE || body == error_mark_node)
     return;
