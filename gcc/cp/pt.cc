@@ -28577,7 +28577,8 @@ any_lambdas_p (tree t)
    to instantiate the DECL, we regenerate it.  */
 
 /* walk_tree callback collecting every PARM_DECL reachable from *TP
-   (including an implied 'this') into the auto_vec<tree> pointed to by
+   (including an implied 'this'), and every lambda capture-proxy
+   VAR_DECL, reachable from *TP into the auto_vec<tree> pointed to by
    DATA -- used by regenerate_decl_from_template to find which of a
    contract's own parameters need a name-matched local_specialization
    fallback.
@@ -28609,12 +28610,37 @@ any_lambdas_p (tree t)
    simply not excluded from this walk -- decl's own first PARM_DECL is
    always named 'this' too, so the fallback loop below finds it
    trivially, exactly the way it already finds a name-matched ordinary
-   parameter.  */
+   parameter.
+
+   D4324/P2680: a lambda capture-proxy VAR_DECL (is_capture_proxy)
+   needs to be collected here too, for a *generic* lambda's own
+   explicit contract specifier (e.g. '[this]<size_t _Idx>() pre<ctrl>
+   (is_object_address(this)) {...}') -- unlike an ordinary named
+   function, unqualified 'this'/a captured reference inside such a
+   lambda's own (late-parsed) condition text resolves through its
+   capture proxy, not directly to a PARM_DECL, so the PARM_DECL-only
+   walk above never saw it and it was never a candidate for either
+   register_parameter_specializations's identity mapping (proxies
+   aren't parameters at all) or this walk's own name-matched fallback.
+   Left uncollected, tsubst_expr's own local_variable_p substitution
+   path can't find any local_specialization for it at all when
+   regenerate_decl_from_template later re-substitutes this generic
+   operator()'s own condition for a concrete '_Idx' -- confirmed via a
+   minimal repro ICE (gcc_assert (cp_unevaluated_operand) firing in
+   tsubst_expr, cp/pt.cc, for a generic lambda's own pre<> referencing
+   'this'). Unlike an ordinary parameter, a capture proxy doesn't
+   change across different instantiations of the *same* generic
+   lambda's operator() for different template arguments -- it's the
+   same closure object's same capture regardless of '_Idx' -- so the
+   fallback loop below registers it as its own identity mapping
+   instead of name-matching it against DECL's own parameters (it isn't
+   one).  */
 
 static tree
 find_contract_parm_decls_r (tree *tp, int *, void *data)
 {
-  if (TREE_CODE (*tp) == PARM_DECL)
+  if (TREE_CODE (*tp) == PARM_DECL
+      || (VAR_P (*tp) && is_capture_proxy (*tp)))
     static_cast<auto_vec<tree> *> (data)->safe_push (*tp);
   return NULL_TREE;
 }
@@ -28674,6 +28700,18 @@ tsubst_regenerated_contract_specifiers (tree decl, tree code_pattern, tree args)
     {
       if (local_specializations->get (pat_parm))
 	continue;
+      /* A lambda capture proxy isn't one of DECL's own parameters at
+	 all (see find_contract_parm_decls_r's own comment) -- it's the
+	 same closure capture regardless of which template argument
+	 this particular generic-lambda operator() specialization is
+	 being generated for, so map it to itself (register_local_
+	 specialization itself asserts tmpl != spec, precisely to catch
+	 this identity-mapping case and route it here instead).  */
+      if (VAR_P (pat_parm) && is_capture_proxy (pat_parm))
+	{
+	  register_local_identity (pat_parm);
+	  continue;
+	}
       tree name = DECL_NAME (pat_parm);
       if (!name)
 	continue;

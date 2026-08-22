@@ -4790,8 +4790,26 @@ process_outer_var_ref (tree decl, tsubst_flags_t complain,
 	}
       return error_mark_node;
     }
-  else if (processing_contract_condition && TREE_CODE (decl) == PARM_DECL)
-    /* Use of a parameter in a contract condition is fine.  */
+  else if (processing_contract_condition
+	   && (TREE_CODE (decl) == PARM_DECL || is_capture_proxy (decl)))
+    /* Use of a parameter in a contract condition is fine -- and so is a
+       lambda's own capture proxy, for exactly the same reason: D4324/
+       P2680, re-substituting a *generic* lambda's own explicit contract
+       specifier for a concrete template argument (regenerate_decl_
+       from_template, at instantiation time) runs current_function_decl
+       set to whatever the outer calling context happened to be, not to
+       the lambda's own operator() being instantiated -- so the ordinary
+       "walk outward through enclosing lambdas" logic just above can't
+       recognize this VAR_DECL as a legitimate capture of the CURRENT
+       (correct) lambda at all, and falls through to this function's
+       generic "not from this scope" diagnostic. A capture is available
+       throughout its own lambda's body unconditionally, the same as a
+       parameter is throughout its own function's body -- confirmed via
+       a minimal repro ('[this]<size_t _Idx>() pre<ctrl>(is_object_
+       address(this)) {...}', instantiated for a concrete _Idx) that
+       this substitution path is exercised for *any* generic lambda with
+       its own explicit contract specifier referencing a capture, not
+       just this project's own conveyor lambdas.  */
     return decl;
   else
     {

@@ -23951,6 +23951,77 @@ static hash_set<tree> *oa_resolved_functions;
    instead, matching the pre-existing behavior for every other caller
    (which was already, in practice, calling this exactly once).  */
 
+/* walk_tree callback: *TP matches and stops the walk (returning the
+   found proxy, per walk_tree_1's own "non-null callback return"
+   contract) when it's a DECL_EXPR whose own declared decl is a
+   capture-proxy VAR_DECL with DECL_NAME equal to DATA (the
+   IDENTIFIER_NODE being searched for) -- see oa_find_capture_proxy_
+   by_name's own comment for why this by-name search is needed at
+   all, and specifically why it must match the DECL_EXPR's own
+   declared decl rather than any expression-level reference to a
+   same-named proxy.  */
+
+static tree
+oa_capture_proxy_name_search_r (tree *tp, int *, void *data)
+{
+  if (TREE_CODE (*tp) == DECL_EXPR)
+    {
+      tree decl = DECL_EXPR_DECL (*tp);
+      if (VAR_P (decl) && is_capture_proxy (decl) && DECL_NAME (decl) == (tree) data)
+	return decl;
+    }
+  return NULL_TREE;
+}
+
+/* D4324/P2680: find the capture-proxy VAR_DECL in FNDECL's own
+   (already fully substituted) BODY whose DECL_NAME matches NAME, or
+   NULL_TREE if none is found.
+
+   For a *generic* lambda's own operator()<Idx> (a member template),
+   regenerate_decl_from_template substitutes its explicit contract
+   specifiers (tsubst_regenerated_contract_specifiers) *before* its
+   body is ever instantiated -- at that point, this particular
+   instantiation's own capture proxies don't exist yet, so a
+   capture referenced in the condition text has nothing correct to
+   resolve to and gets mapped to the *pattern*'s own (single, shared)
+   proxy instead (register_local_identity, tsubst.cc's own fallback
+   for exactly this case -- see find_contract_parm_decls_r's own
+   comment). That pattern-owned proxy is a *different* tree node from
+   the fresh, this-instantiation-scoped proxy the body itself creates
+   once it's later substituted (confirmed via direct testing: a
+   generic lambda '[this]<size_t _Idx>() pre<ctrl>(is_object_address
+   (this)) { helper(); }' established the fact on the pattern's own
+   'this' proxy, but the call to helper() inside the body consulted a
+   completely different, freshly-substituted 'this' proxy -- the two
+   never matching). Unlike an ordinary PARM_DECL's declaration-vs-
+   definition split (remapped by name/position against FNDECL's own
+   DECL_ARGUMENTS, just above this function's own call site), a
+   capture proxy isn't a parameter at all, so that existing remap
+   doesn't apply -- but by the time THIS analysis pass runs (from
+   finish_function, always after the body has been fully substituted),
+   the correct, this-instantiation-scoped proxy already exists
+   somewhere in FNDECL's own BODY. Find it the same way the PARM_DECL
+   case matches "the same capture" across two copies: by name (a
+   capture proxy's own DECL_NAME is stable across every copy of it,
+   this-instantiation's included).
+
+   Specifically the DECL_EXPR that *declares* the proxy for this
+   instantiation, not any expression-level reference to a same-named
+   proxy found elsewhere in BODY: confirmed via direct testing that a
+   generic lambda's regenerated body can still contain an incidental,
+   structurally-embedded reference to the *pattern*'s own same-named
+   proxy too (e.g. within the call's own precondition-check
+   scaffolding) -- matching the first same-named node found, rather
+   than specifically the DECL_EXPR's own declared decl, could return
+   that stale reference right back, silently undoing the whole point
+   of this remap.  */
+
+static tree
+oa_find_capture_proxy_by_name (tree body, tree name)
+{
+  return cp_walk_tree (&body, oa_capture_proxy_name_search_r, (void *) name, NULL);
+}
+
 static void
 oa_resolve_object_address_in_function_1 (tree fndecl)
 {
@@ -24291,6 +24362,25 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
 			arg = q;
 		    }
 		}
+	    }
+	  /* D4324/P2680: the identical declaration-vs-definition split
+	     just above, for a *generic* lambda's own capture proxy
+	     instead of an ordinary parameter -- see oa_find_capture_
+	     proxy_by_name's own comment for the full mechanism (tsubst's
+	     register_local_identity fallback maps a capture referenced
+	     in a generic lambda's own contract text to the *pattern*'s
+	     shared proxy, since this instantiation's own proxy doesn't
+	     exist yet at contract-substitution time) -- find THIS
+	     instantiation's own matching proxy, by name, in FNDECL's own
+	     already-substituted BODY (available by now: this whole
+	     function only ever runs after the body is fully
+	     instantiated).  */
+	  else if (VAR_P (arg) && is_capture_proxy (arg)
+		   && DECL_CONTEXT (arg) != fndecl)
+	    {
+	      tree real_proxy = oa_find_capture_proxy_by_name (body, DECL_NAME (arg));
+	      if (real_proxy)
+		arg = real_proxy;
 	    }
 	  env.set (arg, true);
 	}
