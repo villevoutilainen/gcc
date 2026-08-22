@@ -165,11 +165,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       // 3035. std::allocator's constructors should be constexpr
       __attribute__((__always_inline__))
       _GLIBCXX20_CONSTEXPR
-      allocator() _GLIBCXX_NOTHROW { }
+      allocator() _GLIBCXX_NOTHROW _GLIBCXX_CONVEYOR { }
 
       __attribute__((__always_inline__))
       _GLIBCXX20_CONSTEXPR
-      allocator(const allocator& __a) _GLIBCXX_NOTHROW
+      allocator(const allocator& __a) _GLIBCXX_NOTHROW _GLIBCXX_CONVEYOR
       : __allocator_base<_Tp>(__a) { }
 
 #if __cplusplus >= 201103L
