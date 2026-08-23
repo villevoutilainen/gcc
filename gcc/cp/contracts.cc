@@ -2484,6 +2484,15 @@ should_contract_wrap_call (bool do_pre, bool do_post)
 tree
 maybe_contract_wrap_call (tree fndecl, tree call)
 {
+  /* Missing gate found and fixed 2026-08-23: this function is called
+     from call.cc's ordinary call-resolution path (build_over_call/
+     build_cxx_call) completely unconditionally -- every other contract-
+     related entry point in this file (check_redecl_contract, etc.)
+     starts with this exact '!flag_contracts' early return; this one
+     never did.  */
+  if (!flag_contracts)
+    return call;
+
   /* We can be called from build_cxx_call without a known callee.  */
   if (!fndecl)
     return call;
@@ -19674,9 +19683,58 @@ oa_maybe_instantiate_contracts (tree fn)
 {
   if (fn == NULL_TREE || fn == error_mark_node || TREE_CODE (fn) != FUNCTION_DECL)
     return;
+  /* Missing gate found and fixed 2026-08-23, same night and same bug
+     class as the two guards already added to this same function below:
+     this whole function exists purely to serve D4324/P2680's own
+     is_object_address/conveyor static-analysis pass -- nothing it does
+     has any bearing on stock, non-D4324 contract checking (ordinary
+     caller-side precondition/postcondition wrapping, P2900's own
+     is_ignored/contract_active_p machinery) at all. The correct,
+     matching gate is the SAME one that pass's own top-level entry
+     point already uses -- see oa_resolve_object_address_in_function_1's
+     own "if (!flag_contract_control_objects) return;" a few thousand
+     lines below, which is what actually turns basic is_object_address
+     checking on or off. (An earlier version of this fix used
+     flag_contract_conveyor_proofs/flag_contract_symbolic_proofs
+     instead, modeled on maybe_contract_wrap_call's own
+     SET_DECL_MIGHT_NEED_OA_SCAN_P check a few hundred lines above --
+     that was wrong: those two flags only *extend* is_object_address
+     checking beyond the basics to general comparison conjuncts and
+     predicate-chaining, they don't gate the basics themselves, and
+     using them here broke plain is_object_address checking for
+     ordinary code built with just -fcontract-control-objects, e.g.
+     std::locale::~locale()'s own precondition.) Confirmed via direct
+     testing: both of this session's two ICEs (callerside-checks-all.C,
+     dcl.contract.res.p1-NT.C) test only stock P2900 caller-side
+     checking (-fcontracts[-client-check=...], no
+     -fcontract-control-objects at all) -- ordinary, real, working
+     C++26 template-instantiation semantics for a contract-bearing
+     template callee already handle this correctly on their own, given
+     the chance; this pass's own eager, unconditional forcing was pure,
+     unjustified interference with that already-correct stock behavior,
+     not something stock behavior was relying on this pass to fix.  */
+  if (!flag_contract_control_objects)
+    return;
   if (DECL_CLONED_FUNCTION_P (fn))
     fn = DECL_CLONED_FUNCTION (fn);
   if (!DECL_TEMPLATE_INFO (fn) || DECL_TEMPLATE_INSTANTIATED (fn))
+    return;
+  /* Missing gate found and fixed 2026-08-23: there is nothing for this
+     pass to substitute or read on a callee with zero contract
+     specifiers of its own (e.g. std::unique_ptr's own destructor/
+     default_delete::operator(), reached from an ordinary pimpl
+     constructor destroying its by-value unique_ptr<Incomplete>
+     parameter) -- forcing it to be eagerly, fully instantiated here is
+     pure, unjustified collateral damage: it defeats ordinary C++'s
+     deferred-implicit-instantiation guarantee for completely contract-
+     free code, breaking any "pimpl whose destructor/deleter is only
+     usable once the pointee is later defined" pattern (confirmed: this
+     exact shape is std::chrono::time_zone/tzdb.cc's own -- the actual
+     bug that broke Compiler Explorer's real, from-scratch nightly
+     libstdc++ build). Skip entirely -- let FN's instantiation proceed
+     on its own ordinary, normally-deferred schedule -- whenever FN has
+     no contract specifiers of its own to substitute at all.  */
+  if (!get_fn_contract_specifiers (fn))
     return;
   /* D4324/P2680: skip entirely while cp_unevaluated_operand is set (a
      requires-expression's own compound-requirement satisfaction, via
@@ -19697,8 +19755,27 @@ oa_maybe_instantiate_contracts (tree fn)
      independent repros reaching this exact crash through three
      different callers of this function). A real, non-speculative call
      to FN reaches this same function again outside any such context
-     and instantiates its contracts normally then.  */
-  if (cp_unevaluated_operand || processing_contract_condition)
+     and instantiates its contracts normally then.
+
+     Also skip while PROCESSING_TEMPLATE_DECL: the call site being
+     examined is then itself only the still-uninstantiated PATTERN of
+     some enclosing template -- a non-dependent call inside a template's
+     own body is genuinely resolved at definition time per ordinary
+     two-phase lookup, which is how build_over_call/maybe_contract_
+     wrap_call can reach here at all before the enclosing template is
+     ever instantiated, but forcing FN to be eagerly, fully instantiated
+     at that point instantiates it for a call that may never actually
+     happen with any concrete template arguments the enclosing template
+     ends up being used with, and, worse, defeats ordinary C++'s
+     deferred-implicit-instantiation guarantee even for FN's own
+     unrelated, contract-free callers elsewhere, for a call this pass
+     cannot even usefully analyze yet (no concrete types to reason
+     about). A real instantiation of the enclosing template reaches this
+     same call site, and this same function, again with PROCESSING_
+     TEMPLATE_DECL correctly back to 0, and instantiates FN's contracts
+     normally then.  */
+  if (cp_unevaluated_operand || processing_contract_condition
+      || processing_template_decl)
     return;
   instantiate_decl (fn, /*defer_ok=*/false, /*expl_inst_class_mem_p=*/false);
 
