@@ -216,9 +216,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  _GLIBCXX20_CONSTEXPR
 	  explicit _Guard(basic_string* const __s)
+	  // D4324/P2680: real (conveyor_assert_v) postcondition -- trivial
+	  // ctor, body only stores '__s' into a field, no call touches it.
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (__s))
-	  post<std::contracts::never_proven_conveyor_v>(std::is_object_address (__s))
+	  post<std::contracts::conveyor_assert_v>(std::is_object_address (__s))
 #endif
 	  : _M_guarded(__s) { }
 
@@ -279,9 +281,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  _GLIBCXX20_CONSTEXPR
 	  explicit _Guard(basic_string* const __s)
+	  // D4324/P2680: real (conveyor_assert_v) postcondition -- trivial
+	  // ctor, body only stores '__s' into a field, no call touches it.
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (__s))
-	  post<std::contracts::never_proven_conveyor_v>(std::is_object_address (__s))
+	  post<std::contracts::conveyor_assert_v>(std::is_object_address (__s))
 #endif
 	  : _M_guarded(__s) { }
 
