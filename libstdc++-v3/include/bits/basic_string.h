@@ -517,9 +517,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       void
       _M_construct(size_type __req, _CharT __c)
+      // D4324/P2680: real (conveyor_assert_v) postcondition -- body (defined
+      // out-of-line in basic_string.tcc) only calls _M_create_and_place,
+      // _M_init_local_buf, _M_set_length (all now real) and the static
+      // _S_assign (takes a pointer argument, not 'this').
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       ;
 
