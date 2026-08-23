@@ -407,9 +407,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       void
       _M_create_and_place(size_type __new_capacity, size_type __old_capacity)
+      // D4324/P2680: real (conveyor_assert_v) postcondition -- all three
+      // calls in this body (_M_create_plus, _M_data, _M_capacity) now have
+      // their own real postconditions re-establishing 'this'.
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
 	{
 	  _Alloc_result __r = _M_create_plus(__new_capacity, __old_capacity);
