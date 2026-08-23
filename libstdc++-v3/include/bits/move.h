@@ -147,10 +147,17 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     // __possibly_const_range's own identical pair (bits/ranges_base.h).
     // The return is always '__t' itself (a cast, never a reference to
     // anything else), so it's exactly as valid an object address as
-    // '__t' already is -- trusted (never_proven) rather than self-
-    // checked, same reasoning as the precondition.
+    // '__t' already is -- and, unlike when this pair was first written,
+    // the engine can now actually verify that identity itself: the
+    // postcondition's own self-check traces the return expression back
+    // through the reference-cast wrapper to '__t' directly, whose own
+    // is_object_address fact is already self-trusted from the
+    // precondition above. Real (conveyor_assert_v), not never_proven --
+    // never_proven only changes postcondition/contract_assert self-
+    // checking, never a precondition's own caller obligation, so this
+    // pair's own precondition stays as-is regardless.
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__t))
-    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+    post<std::contracts::conveyor_assert_v>(r: std::is_object_address (&r))
 #endif
     { return static_cast<typename std::remove_reference<_Tp>::type&&>(__t); }
 
