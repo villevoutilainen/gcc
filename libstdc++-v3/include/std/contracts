@@ -1134,14 +1134,21 @@ namespace contracts
 
   // D4324: a library-only, best-effort approximation of WG21 P3400
   // ("Controlling Contract-Assertion Properties"), built on top of
-  // this branch's existing is_ignored/constify/assumable/operator()
-  // control-object dispatch above, plus three independently-motivated
-  // compiler changes: contract_control_bool_member (gcc/cp/
+  // this branch's existing is_ignored/constify/assumable/validate/
+  // operator() control-object dispatch above, plus four independently-
+  // motivated compiler changes: contract_control_bool_member (gcc/cp/
   // contracts.cc) makes a present-but-broken trait a real diagnosed
   // error instead of silently defaulting, and no longer requires these
   // traits to be static (label_base's own is_ignored/constify/
-  // assumable, and compute_semantic/group_names below, are genuine
-  // instance methods, matching the paper); and
+  // assumable/validate, and compute_semantic/group_names below, are
+  // genuine instance methods, matching the paper); validate() itself
+  // is a dedicated, optional acceptability gate the compiler dispatches
+  // like any other trait, except that a clean fold to false is *itself*
+  // diagnosed as a hard error (see label_base::validate's own comment)
+  // -- used here so a disallowed evaluation semantic is rejected
+  // directly, instead of is_ignored() having to break its own constant-
+  // evaluation to smuggle that rejection through the "trait exists but
+  // doesn't fold" diagnostic meant for genuine control-object bugs; and
   // -fcontracts-group-evaluation-semantic=group:semantic, wired
   // through assertion_static_info::group_semantic_rules() (see
   // __group_config_lookup below), gives group_names-driven build
@@ -1149,8 +1156,9 @@ namespace contracts
   // already accepts an arbitrary constant-expression, not just a bare
   // name, so pre<terminating | review>(...) below already parses with
   // no parser changes at all, as long as the expression yields a class
-  // type providing is_ignored/constify/assumable/operator() -- which
-  // every label here gets, for free, by deriving from label_base.
+  // type providing is_ignored/constify/assumable/validate/operator()
+  // -- which every label here gets, for free, by deriving from
+  // label_base.
   //
   // Disclosed, deliberate departures from the real paper:
   //  - local_violation_label's own handler receives this library's
@@ -1165,6 +1173,14 @@ namespace contracts
   //    implement and combined_label can delegate through, but there is
   //    no cross-TU ABI hook the way the real paper's
   //    contract_violation::query_control_object has.
+  //  - validate() is not a P3400 facet at all: it is a general, D4324-
+  //    only fifth Contract Control Object member (see label_base's own
+  //    comment just below), used here to implement allowed_semantics'
+  //    rejection cleanly instead of is_ignored() breaking its own
+  //    constant-evaluation to do it. Any real P3400 implementation
+  //    would need its own, unspecified way to reject an unacceptable
+  //    configuration; this branch's own answer to that is validate(),
+  //    not something the paper itself defines.
   //  - Deliberately dependency-free beyond what this header already
   //    includes (no <concepts>/<type_traits>/<ranges>/<bitset>/
   //    <initializer_list>): every "concept" below uses only bare
@@ -1397,11 +1413,11 @@ namespace contracts
     // Every label below (and combined_label further down) derives from
     // this directly (struct my_label : label_base<my_label> { ... };)
     // and thereby never has to declare is_ignored/constify/assumable/
-    // operator() itself -- only whichever P3400-shaped facet members it
-    // wants to opt into. Third-party label authors are meant to use
-    // this exactly the same way.
+    // validate/operator() itself -- only whichever P3400-shaped facet
+    // members it wants to opt into. Third-party label authors are meant
+    // to use this exactly the same way.
     //
-    // is_ignored/constify/assumable/__configured_semantic/
+    // is_ignored/constify/assumable/validate/__configured_semantic/
     // __effective_semantic are non-static (const instance) methods,
     // matching the paper: the compiler dispatches all of these against
     // the real, constant-evaluated control object (see
@@ -1450,21 +1466,6 @@ namespace contracts
       {
 	evaluation_semantic __effective
 	  = __effective_semantic (__configured_semantic (__info));
-	if constexpr (allowed_semantics_label<_Self>)
-	  {
-	    if (!evaluation_semantic_set (_Self::allowed_semantics).contains (__effective))
-	      throw "disallowed evaluation semantic for this P3400 control object";
-	    // The Phase 0 compiler fix makes this a real, diagnosed
-	    // compile error -- for a lone label or a combined one
-	    // alike, since is_ignored is dispatched identically either
-	    // way -- whenever this TU's actual configured (or
-	    // group-config-overridden) semantic falls outside the
-	    // label's own allowed_semantics. A *different*, purely
-	    // static check -- do two labels' allowed_semantics sets
-	    // even overlap with each other, entirely independent of
-	    // any TU's configuration -- lives in combined_label's own
-	    // class template further down instead.
-	  }
 	return __effective == evaluation_semantic::ignore;
       }
 
@@ -1473,6 +1474,31 @@ namespace contracts
       // (which deviates for reasons specific to its own design).
       constexpr bool
       constify (assertion_static_info) const noexcept { return true; }
+
+      // Whenever this TU's actual configured (or group-config-overridden)
+      // semantic falls outside an allowed_semantics_label's own allowed
+      // set, that configuration is unacceptable for this assertion --
+      // exactly the question validate() exists for, entirely separate
+      // from is_ignored's own "should this run" question above. The
+      // compiler's own contract_control_bool_member (gcc/cp/contracts.cc)
+      // dispatches validate() like any other optional trait, but treats a
+      // clean fold to false as its own hard, diagnosed error (unlike a
+      // fold to true/false for is_ignored/constify/etc., which are both
+      // ordinary, benign answers) -- so returning false here, plainly,
+      // is enough; no throw or other constant-evaluation-breaking trick
+      // needed. A *different*, purely static check -- do two labels'
+      // allowed_semantics sets even overlap with each other, entirely
+      // independent of any TU's configuration -- lives in combined_
+      // label's own class template further down instead.
+      constexpr bool
+      validate (assertion_static_info __info) const
+      {
+	if constexpr (allowed_semantics_label<_Self>)
+	  return evaluation_semantic_set (_Self::allowed_semantics)
+		   .contains (__effective_semantic (__configured_semantic (__info)));
+	else
+	  return true;
+      }
 
       // P3400 doesn't standardize an "assume" semantic yet; this
       // branch's existing, separate assume_v is untouched and not
@@ -1877,8 +1903,9 @@ namespace contracts
       // check is a STATIC, build-independent property of the two
       // operands' own fixed allowed_semantics members -- genuinely
       // achievable as a real static_assert here, unlike the *dynamic*
-      // (this-TU's-configured-semantic) check in label_base::is_ignored,
-      // which needs the Phase 0 compiler fix instead.
+      // (this-TU's-configured-semantic) check in label_base::validate,
+      // which needs the Phase 0 compiler fix's own validate()-rejection
+      // handling instead.
       static constexpr evaluation_semantic_set allowed_semantics =
 	[] () constexpr
 	{
