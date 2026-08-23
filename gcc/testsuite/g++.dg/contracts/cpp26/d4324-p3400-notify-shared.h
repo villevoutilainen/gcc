@@ -10,7 +10,7 @@
 #ifndef D4324_P3400_NOTIFY_SHARED_H
 #define D4324_P3400_NOTIFY_SHARED_H
 
-#include <contracts>
+#include <contract_labels>
 
 namespace P3400 = std::contracts::P3400;
 

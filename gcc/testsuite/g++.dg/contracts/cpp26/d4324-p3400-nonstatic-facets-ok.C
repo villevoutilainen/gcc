@@ -14,7 +14,7 @@
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=observe -fcontracts-group-evaluation-semantic=only_first:ignore" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
 
-#include <contracts>
+#include <contract_labels>
 #include <exception>
 #include <cstdlib>
 

@@ -12,14 +12,18 @@
 // -fcontract-evaluation-semantic= and applies identically to a lone
 // label or a combined one.
 // { dg-do compile { target c++26 } }
-// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=observe" }
+// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=observe -freflection" }
 
-#include <contracts>
+#include <contract_labels>
 namespace P3400 = std::contracts::P3400;
 
 // terminating only allows {enforce, quick_enforce}; this TU is built
-// with -fcontract-evaluation-semantic=observe, outside that set.
-// { dg-error "rejected this assertion" "" { target *-*-* } 0 }
+// with -fcontract-evaluation-semantic=observe, outside that set. With
+// -freflection, label_base::validate names both the specific label
+// (via std::meta::display_string_of) and the specific rejected
+// semantic in its own message, rather than the generic fixed text
+// used when reflection isn't enabled.
+// { dg-error "terminating_t rejects the configured evaluation semantic 'observe'" "" { target *-*-* } 0 }
 int
 f (int x) pre<P3400::terminating>(x > 0)
 { return x; }
