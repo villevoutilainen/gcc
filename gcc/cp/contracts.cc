@@ -3909,9 +3909,9 @@ contract_conveyor_assert_control_object (location_t loc)
   if (!res || res == error_mark_node || TREE_CODE (res) != VAR_DECL)
     {
       error_at (loc, "%<std::contracts::conveyor_assert_v%> has not been "
-		"declared; a %<conveyor%> function's reference parameters "
-		"and %<this%> need an implicit precondition that requires "
-		"including %<<contracts>%>");
+		"declared; the reference parameters and %<this%> of a "
+		"%<conveyor%> function need an implicit precondition that "
+		"requires including %<<contracts>%>");
       return error_mark_node;
     }
   return res;
@@ -4056,8 +4056,8 @@ oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
   if (!is_oa_tmpl)
     {
       error_at (loc, "%<std::is_object_address%> has not been declared; "
-		"a %<conveyor%> function's reference parameters and "
-		"%<this%> need an implicit precondition that requires "
+		"the reference parameters and %<this%> of a %<conveyor%> "
+		"function need an implicit precondition that requires "
 		"including %<<contracts>%>");
       return;
     }
