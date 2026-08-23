@@ -48,6 +48,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-pass.h"
 #include "real.h"
 #include "tree-pretty-print.h"
+#include "fold-const.h"
 
 /*  Design notes.
 
@@ -5163,21 +5164,13 @@ build_assertion_static_info_value (contract_check_side side, tree info_type)
    (non-speculative) dispatch will raise this same error for real
    if/when the trait is actually consulted outside such a context.
 
-   REJECT_FALSE additionally diagnoses a clean fold to false as its own
-   hard error too -- unlike every other trait, where 0 is an entirely
-   ordinary, benign answer.  Currently only set by contract_control_
-   validates for "validate": a control object opting into that trait and
-   returning false is deliberately declaring its own configuration
-   unacceptable, which must always be diagnosed, not silently treated
-   like "trait not provided, business as usual".  Distinct from the
-   fold-*failure* diagnostic above, which stays reserved for a genuine
-   bug in CTRL (a throw, a call to a non-constexpr function) rather than
-   a clean, deliberate false answer.  */
+   Not used for "validate" -- that trait returns std::contracts::
+   contract_validation_result, not a plain bool, so it has its own,
+   separate dispatch (contract_control_validates below).  */
 
 static int
 contract_control_bool_member (tree ctrl, const char *name,
-			       contract_check_side side, bool quiet = false,
-			       bool reject_false = false)
+			       contract_check_side side, bool quiet = false)
 {
   tree ctrl_expr = ctrl;
   ctrl = contract_control_naming_type (ctrl);
@@ -5316,22 +5309,6 @@ contract_control_bool_member (tree ctrl, const char *name,
 		"produce a constant expression", name, ctrl);
       cxx_constant_value (call, tf_error);
     }
-  else if (reject_false
-	   && call && call != error_mark_node
-	   && val && TREE_CODE (val) == INTEGER_CST && integer_zerop (val)
-	   && !quiet && !processing_template_decl)
-    {
-      /* Mutually exclusive with the fold-failure branch above (that one
-	 requires VAL to *not* be a usable INTEGER_CST; this one requires
-	 it to be one, and exactly zero) -- see this function's own
-	 top-of-file comment for REJECT_FALSE's rationale.  Same QUIET/
-	 processing_template_decl discipline as the branch above, for the
-	 same reasons.  */
-      auto_diagnostic_group d;
-      location_t loc = cp_expr_loc_or_input_loc (call);
-      error_at (loc, "control object of type %qT rejected this assertion "
-		"(%qs returned false)", ctrl, name);
-    }
   suppress_conveyor_restrictions_for_trait_query_p = saved_suppress;
   if (!call || call == error_mark_node)
     return -1;
@@ -5357,20 +5334,145 @@ contract_control_is_ignored (tree ctrl, contract_check_side side, bool quiet)
 /* If the assertion names a control type CTRL, constant-evaluate
    CTRL::validate(cfg) for the current translation unit's cfg -- a
    compile-time-only acceptability gate, entirely separate from
-   is_ignored's own "should this run at all" question.  Returns false
-   (and, via contract_control_bool_member's own REJECT_FALSE handling,
-   has already produced a diagnosed hard error) only when CTRL provides
-   a usable validate member that cleanly folds to false, meaning CTRL
-   itself has decided its own configuration is unacceptable for this
-   assertion.  A bare contract, or a control type without a usable
-   validate member, is unconditionally accepted (returns true) --
-   validate is optional, matching every other trait's default.  */
+   is_ignored's own "should this run at all" question.  Unlike every
+   other trait dispatched via contract_control_bool_member, validate's
+   own return type is std::contracts::contract_validation_result (a
+   { bool valid; const char* message; } aggregate), not a plain bool, so
+   it needs its own dispatch: a member by this name with any other
+   return type (e.g. a plain bool, from code written against an earlier
+   draft of this mechanism) is exactly the "not usable" case, silently
+   accepted like any other absent/mismatched trait -- only a genuinely
+   usable validate member's own RESULT folding to valid == false is
+   diagnosed (using its own message, if provided) and causes this
+   function to return false.  A bare contract, or a control type without
+   a usable validate member, is unconditionally accepted -- validate is
+   optional, matching every other trait's default.  QUIET suppresses the
+   "does not produce a constant expression" diagnostic exactly like
+   contract_control_bool_member's own QUIET, for the identical
+   speculative-evaluation reasons documented there.  */
 
 static bool
 contract_control_validates (tree ctrl, contract_check_side side, bool quiet)
 {
-  return contract_control_bool_member (ctrl, "validate", side, quiet,
-					/*reject_false=*/true) != 0;
+  tree ctrl_expr = ctrl;
+  tree ctrl_type = contract_control_naming_type (ctrl);
+  if (!ctrl_type || !CLASS_TYPE_P (ctrl_type))
+    return true;
+  complete_type (ctrl_type);
+  if (!COMPLETE_TYPE_P (ctrl_type))
+    return true;
+
+  tree member = lookup_member (ctrl_type, get_identifier ("validate"),
+				/*protect=*/1, /*want_type=*/false, tf_none);
+  if (!member || member == error_mark_node || !BASELINK_P (member))
+    return true;
+
+  tree fn = OVL_FIRST (BASELINK_FUNCTIONS (member));
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL)
+    return true;
+
+  /* Same reasoning as contract_control_bool_member's own identical
+     parameter-type check -- see its comment.  */
+  tree parm_types = FUNCTION_FIRST_USER_PARMTYPE (fn);
+  if (!parm_types || parm_types == void_list_node)
+    return true;
+  tree info_type = non_reference (TREE_VALUE (parm_types));
+  tree real_info_type
+    = lookup_std_contracts_type (get_identifier ("assertion_static_info"));
+  if (!same_type_ignoring_top_level_qualifiers_p (info_type, real_info_type))
+    return true;
+
+  /* validate's own return type must be exactly std::contracts::
+     contract_validation_result -- TREE_TYPE of a FUNCTION_TYPE (static
+     NAME) or METHOD_TYPE (non-static NAME) is its return type either
+     way, no FUNCTION_FIRST_USER_PARMTYPE-style adjustment needed.  */
+  tree result_type = non_reference (TREE_TYPE (TREE_TYPE (fn)));
+  tree real_result_type
+    = lookup_std_contracts_type (get_identifier ("contract_validation_result"));
+  if (!same_type_ignoring_top_level_qualifiers_p (result_type, real_result_type))
+    return true;
+
+  tree cfg_arg = build_assertion_static_info_value (side, info_type);
+  releasing_vec args;
+  vec_safe_push (args, cfg_arg);
+
+  /* See contract_control_bool_member's own identical comment for why
+     CTRL_EXPR itself is used as the instance, and why this whole
+     build-and-fold sequence must run under suppress_conveyor_
+     restrictions_for_trait_query_p.  */
+  bool saved_suppress = suppress_conveyor_restrictions_for_trait_query_p;
+  suppress_conveyor_restrictions_for_trait_query_p = true;
+  tree call = build_new_method_call (ctrl_expr, member, &args, NULL_TREE,
+				      LOOKUP_NORMAL, NULL, tf_none);
+  tree val = (call && call != error_mark_node)
+    ? maybe_constant_value (call, NULL_TREE, mce_true) : NULL_TREE;
+
+  /* A folded class-type return value is a TARGET_EXPR wrapping its own
+     CONSTRUCTOR (ordinary shape for any by-value class-type result, not
+     specific to this being a manifestly constant one) -- unwrap that
+     first.  The CONSTRUCTOR itself is keyed by FIELD_DECL, not by
+     position -- matched by name here rather than assumed order, unlike
+     build_assertion_static_info_value's own forward direction (which
+     builds a CONSTRUCTOR for a compiler-owned type whose field order
+     this file already controls) since contract_validation_result is an
+     ordinary aggregate a user's own validate() body constructs.  */
+  tree ctor = val;
+  if (ctor && TREE_CODE (ctor) == TARGET_EXPR)
+    ctor = TARGET_EXPR_INITIAL (ctor);
+  tree valid_val = NULL_TREE, message_val = NULL_TREE;
+  if (ctor && TREE_CODE (ctor) == CONSTRUCTOR)
+    {
+      unsigned HOST_WIDE_INT idx;
+      tree field, elt_val;
+      FOR_EACH_CONSTRUCTOR_ELT (CONSTRUCTOR_ELTS (ctor), idx, field, elt_val)
+	{
+	  if (!field)
+	    continue;
+	  if (id_equal (DECL_NAME (field), "valid"))
+	    valid_val = elt_val;
+	  else if (id_equal (DECL_NAME (field), "message"))
+	    message_val = elt_val;
+	}
+    }
+
+  if (call && call != error_mark_node
+      && (!valid_val || TREE_CODE (valid_val) != INTEGER_CST)
+      && !quiet && !processing_template_decl)
+    {
+      /* Same "genuine bug in CTRL" reasoning and QUIET/processing_
+	 template_decl discipline as contract_control_bool_member's own
+	 identical diagnostic -- see its comment.  */
+      auto_diagnostic_group d;
+      location_t loc = cp_expr_loc_or_input_loc (call);
+      error_at (loc, "%qs for control object of type %qT does not "
+		"produce a constant expression", "validate", ctrl_type);
+      cxx_constant_value (call, tf_error);
+    }
+  else if (valid_val && TREE_CODE (valid_val) == INTEGER_CST
+	   && integer_zerop (valid_val)
+	   && !quiet && !processing_template_decl)
+    {
+      /* Unlike every bool-returning trait (where 0 is an entirely
+	 ordinary, benign answer), validate() cleanly folding to
+	 valid == false is a control object deliberately declaring its
+	 own configuration unacceptable -- always diagnosed, using its
+	 own message string when it provided one.  */
+      auto_diagnostic_group d;
+      location_t loc = cp_expr_loc_or_input_loc (call);
+      const char *msg = NULL;
+      if (message_val && reduced_constant_expression_p (message_val))
+	msg = c_getstr (message_val);
+      if (msg)
+	error_at (loc, "control object of type %qT rejected this "
+		  "assertion: %s", ctrl_type, msg);
+      else
+	error_at (loc, "control object of type %qT rejected this "
+		  "assertion", ctrl_type);
+    }
+  suppress_conveyor_restrictions_for_trait_query_p = saved_suppress;
+  if (!valid_val || TREE_CODE (valid_val) != INTEGER_CST)
+    return true;
+  return !integer_zerop (valid_val);
 }
 
 /* True if the control type CTRL opts into constification
