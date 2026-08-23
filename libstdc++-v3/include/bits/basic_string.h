@@ -253,7 +253,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _M_data(pointer __p)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { _M_dataplus._M_p = __p; }
 
@@ -263,7 +263,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _M_length(size_type __length)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { _M_string_length = __length; }
 
@@ -292,12 +292,23 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // postcondition (and, transitively, _M_dispose's later call to
       // the conveyor _M_destroy) could be discharged. Confirmed via
       // direct testing.
+      //
+      // D4324/P2680: the POSTCONDITION half of this pair (never the
+      // precondition -- see bits/move.h's own comment on why never_
+      // proven vs. conveyor_assert_v never affects a precondition's own
+      // caller obligation or self-trust establishment either way) is now
+      // conveyor_assert_v, not never_proven, for this trivial accessor
+      // group and _M_get_allocator below: each body is a plain field
+      // read/write with no other call touching 'this', so the
+      // precondition's own self-trusted fact for 'this' trivially
+      // survives to the return, and the engine can verify that directly
+      // -- confirmed via direct testing, one accessor at a time.
       _GLIBCXX20_CONSTEXPR
       pointer
       _M_data() const
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return _M_dataplus._M_p; }
 
@@ -308,7 +319,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _M_local_data()
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 #if __cplusplus >= 201103L
@@ -325,7 +336,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _M_local_data() const
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 #if __cplusplus >= 201103L
@@ -341,7 +352,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _M_capacity(size_type __capacity)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { _M_allocated_capacity = __capacity; }
 
@@ -350,7 +361,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _M_set_length(size_type __n)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	traits_type::assign(_M_data()[__n], _CharT());
@@ -364,7 +375,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _M_is_local() const
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	if (_M_data() == _M_local_data())
@@ -522,7 +533,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // exactly as valid an object address as 'this' already is. Trusted
       // (never_proven) rather than self-checked, matching __possibly_
       // const_range's own identical pattern (bits/ranges_base.h).
-      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address(&r))
+      post<std::contracts::conveyor_assert_v>(r: std::is_object_address(&r))
 #endif
       { return _M_dataplus; }
 
@@ -530,7 +541,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       const allocator_type&
       _M_get_allocator() const _GLIBCXX_CONVEYOR
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address(&r))
+      post<std::contracts::conveyor_assert_v>(r: std::is_object_address(&r))
 #endif
       { return _M_dataplus; }
 
@@ -543,7 +554,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _M_init_local_buf() _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 #if __glibcxx_is_constant_evaluated
@@ -560,7 +571,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _M_use_local_data() _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 #if __cpp_lib_is_constant_evaluated
