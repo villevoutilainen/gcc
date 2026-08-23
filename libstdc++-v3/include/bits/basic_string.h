@@ -548,7 +548,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _M_construct(basic_string&& __str, size_type __pos,  size_type __n)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       ;
 #endif
