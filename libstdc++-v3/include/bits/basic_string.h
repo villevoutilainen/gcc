@@ -391,9 +391,15 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       _Alloc_result
       _M_create_plus(size_type __new_capacity, size_type __old_capacity)
+      // D4324/P2680: real (conveyor_assert_v) postcondition -- max_size ()'s
+      // own (now also real, see above) postcondition re-establishes 'this'
+      // after each of the two calls to it in this function's body (defined
+      // out-of-line in basic_string.tcc); _S_allocate_at_least is static and
+      // takes _M_get_allocator ()'s own return *value* as an argument, never
+      // 'this' itself, so 'this' is never invalidated by that call either.
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       ;
 
@@ -1692,6 +1698,18 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       max_size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
+      // D4324/P2680: real (conveyor_assert_v) postcondition, added new (this
+      // function previously had none at all, relying solely on the
+      // auto-synthesized Q1 precondition): the body's only call is
+      // _M_get_allocator ()'s own (already real, see above) accessor, whose
+      // receiver is 'this' but which re-establishes 'this' via its own
+      // postcondition; _Alloc_traits::max_size is static and takes the
+      // allocator by value, not 'this'. Needed so callers like
+      // _M_create_plus (basic_string.tcc) can keep 'this' established across
+      // a call to max_size ().
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+#endif
       {
 	const size_t __diffmax
 	  = __gnu_cxx::__numeric_traits<ptrdiff_t>::__max / sizeof(_CharT);
