@@ -459,7 +459,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _M_deallocate(pointer __p, size_t __n)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      // D4324/P2680: real (conveyor_assert_v), not never_proven -- 'this'
+      // itself is never reassigned by this body, and _Tr::deallocate's
+      // own receiver is _M_impl (a field, passed by reference), not
+      // 'this', so 'this' is never invalidated mid-body either. The
+      // engine can now verify this directly.
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	typedef __gnu_cxx::__alloc_traits<_Tp_alloc_type> _Tr;
@@ -2110,7 +2115,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _M_default_initialize(size_type __n)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      // D4324/P2680: real (conveyor_assert_v), not never_proven -- same
+      // reasoning as _M_deallocate's own identical pair just above:
+      // 'this' is never reassigned, and __uninitialized_default_n_a's
+      // own arguments (this->_M_impl._M_start, a field read, and
+      // _M_get_Tp_allocator(), a one-hop trivial accessor already
+      // exempt from the mandatory alias-invalidation sweep) never touch
+      // 'this' as a receiver either. Verifiable directly.
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	this->_M_impl._M_finish =
