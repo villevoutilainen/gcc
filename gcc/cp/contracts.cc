@@ -486,6 +486,7 @@ maybe_warn_fnptr_contract_mismatch (location_t loc, tree dest_decl,
 }
 
 static bool contract_control_is_ignored (tree, contract_check_side, bool = false);
+static bool contract_control_validates (tree, contract_check_side, bool = false);
 static bool contract_control_assumable (tree, contract_check_side, bool = false);
 static bool contract_control_forces_client_side (tree, contract_check_side, bool = false);
 static bool contract_control_forces_definition_side (tree, contract_check_side, bool = false);
@@ -521,6 +522,14 @@ contract_active_p (tree contract, contract_check_side side)
      optimizer assumption is emitted).  */
   if (tree ctrl = CONTRACT_CONTROL_OBJECT (contract))
     {
+      /* validate() is a compile-time-only acceptability gate, entirely
+	 separate from is_ignored()'s own "should this run" question --
+	 checked first, and unconditionally (never short-circuited by
+	 is_ignored/assumable below), so a control object that rejects
+	 its own configuration is diagnosed regardless of what those
+	 other traits would otherwise decide.  */
+      if (!contract_control_validates (ctrl, side))
+	return false;
       if (!contract_control_is_ignored (ctrl, side))
 	return true;
       return contract_control_assumable (ctrl, side);
@@ -5152,11 +5161,23 @@ build_assertion_static_info_value (contract_check_side side, tree info_type)
    case a real failure here must stay silent too, exactly like any
    other quiet constexpr evaluation attempt, since the ordinary
    (non-speculative) dispatch will raise this same error for real
-   if/when the trait is actually consulted outside such a context.  */
+   if/when the trait is actually consulted outside such a context.
+
+   REJECT_FALSE additionally diagnoses a clean fold to false as its own
+   hard error too -- unlike every other trait, where 0 is an entirely
+   ordinary, benign answer.  Currently only set by contract_control_
+   validates for "validate": a control object opting into that trait and
+   returning false is deliberately declaring its own configuration
+   unacceptable, which must always be diagnosed, not silently treated
+   like "trait not provided, business as usual".  Distinct from the
+   fold-*failure* diagnostic above, which stays reserved for a genuine
+   bug in CTRL (a throw, a call to a non-constexpr function) rather than
+   a clean, deliberate false answer.  */
 
 static int
 contract_control_bool_member (tree ctrl, const char *name,
-			       contract_check_side side, bool quiet = false)
+			       contract_check_side side, bool quiet = false,
+			       bool reject_false = false)
 {
   tree ctrl_expr = ctrl;
   ctrl = contract_control_naming_type (ctrl);
@@ -5295,6 +5316,22 @@ contract_control_bool_member (tree ctrl, const char *name,
 		"produce a constant expression", name, ctrl);
       cxx_constant_value (call, tf_error);
     }
+  else if (reject_false
+	   && call && call != error_mark_node
+	   && val && TREE_CODE (val) == INTEGER_CST && integer_zerop (val)
+	   && !quiet && !processing_template_decl)
+    {
+      /* Mutually exclusive with the fold-failure branch above (that one
+	 requires VAL to *not* be a usable INTEGER_CST; this one requires
+	 it to be one, and exactly zero) -- see this function's own
+	 top-of-file comment for REJECT_FALSE's rationale.  Same QUIET/
+	 processing_template_decl discipline as the branch above, for the
+	 same reasons.  */
+      auto_diagnostic_group d;
+      location_t loc = cp_expr_loc_or_input_loc (call);
+      error_at (loc, "control object of type %qT rejected this assertion "
+		"(%qs returned false)", ctrl, name);
+    }
   suppress_conveyor_restrictions_for_trait_query_p = saved_suppress;
   if (!call || call == error_mark_node)
     return -1;
@@ -5315,6 +5352,25 @@ static bool
 contract_control_is_ignored (tree ctrl, contract_check_side side, bool quiet)
 {
   return contract_control_bool_member (ctrl, "is_ignored", side, quiet) == 1;
+}
+
+/* If the assertion names a control type CTRL, constant-evaluate
+   CTRL::validate(cfg) for the current translation unit's cfg -- a
+   compile-time-only acceptability gate, entirely separate from
+   is_ignored's own "should this run at all" question.  Returns false
+   (and, via contract_control_bool_member's own REJECT_FALSE handling,
+   has already produced a diagnosed hard error) only when CTRL provides
+   a usable validate member that cleanly folds to false, meaning CTRL
+   itself has decided its own configuration is unacceptable for this
+   assertion.  A bare contract, or a control type without a usable
+   validate member, is unconditionally accepted (returns true) --
+   validate is optional, matching every other trait's default.  */
+
+static bool
+contract_control_validates (tree ctrl, contract_check_side side, bool quiet)
+{
+  return contract_control_bool_member (ctrl, "validate", side, quiet,
+					/*reject_false=*/true) != 0;
 }
 
 /* True if the control type CTRL opts into constification
