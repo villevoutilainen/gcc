@@ -688,10 +688,14 @@ namespace ranges
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address(&__r))
       // The return is always either '__r' itself or a const_cast of it --
       // never a reference to anything else -- so it's exactly as valid
-      // an object address as '__r' already is. Trusted (never_proven)
-      // rather than self-checked, same reasoning as the precondition
-      // just above.
-      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address(&r))
+      // an object address as '__r' already is, and (unlike when this
+      // pair was first written) the engine can now verify that identity
+      // itself for both branches: a const_cast to a reference is a
+      // qualification-only conversion the postcondition's own self-check
+      // sees straight through to '__r' directly. Real (conveyor_assert_v),
+      // not never_proven -- see bits/move.h's own identical pair for why
+      // the precondition just above is unaffected either way.
+      post<std::contracts::conveyor_assert_v>(r: std::is_object_address(&r))
 #endif
       {
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
