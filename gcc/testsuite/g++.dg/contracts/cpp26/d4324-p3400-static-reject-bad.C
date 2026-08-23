@@ -6,7 +6,7 @@
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
-#include <contracts>
+#include <contract_labels>
 namespace P3400 = std::contracts::P3400;
 
 // always_ignore restricts to {ignore}; terminating restricts to

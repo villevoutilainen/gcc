@@ -7,7 +7,7 @@
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=enforce" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
 
-#include <contracts>
+#include <contract_labels>
 namespace P3400 = std::contracts::P3400;
 
 int f_terminating (int x) pre<P3400::terminating>(x > 0) { return x; }
