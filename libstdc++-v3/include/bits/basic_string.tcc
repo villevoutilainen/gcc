@@ -753,8 +753,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	// _M_this's own fact proven at THAT point regardless.
 	_GLIBCXX20_CONSTEXPR
 	_Terminator(basic_string* const __t, size_type __r)
+	// D4324/P2680: real (conveyor_assert_v) postcondition -- trivial
+	// ctor, body only stores '__t' into a field, no call touches it.
 	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (__t))
-	post<std::contracts::never_proven_conveyor_v>(std::is_object_address (__t))
+	post<std::contracts::conveyor_assert_v>(std::is_object_address (__t))
 	: _M_this(__t), _M_r(__r) { }
 #endif
 	_GLIBCXX20_CONSTEXPR ~_Terminator()
