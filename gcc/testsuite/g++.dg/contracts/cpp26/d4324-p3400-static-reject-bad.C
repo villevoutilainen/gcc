@@ -12,13 +12,12 @@ namespace P3400 = std::contracts::P3400;
 // always_ignore restricts to {ignore}; terminating restricts to
 // {enforce, quick_enforce} -- disjoint, so their combination's own
 // allowed_semantics would be empty. The primary static_assert failure
-// cascades into secondary errors (is_ignored's own use of the
-// now-ill-formed allowed_semantics member fails to constant-fold in
-// turn) -- matched by message text rather than by line, same
-// technique used for the Phase 0 tests.
+// cascades into a secondary error: validate() still cleanly evaluates
+// (an empty set contains nothing) to false, which is itself diagnosed
+// as a rejected assertion -- matched by message text rather than by
+// line, same technique used for the Phase 0 tests.
 // { dg-error "combining labels with disjoint allowed_semantics is ill-formed" "" { target *-*-* } 0 }
-// { dg-error "does not produce a constant expression" "" { target *-*-* } 0 }
-// { dg-error "uncaught exception" "" { target *-*-* } 0 }
+// { dg-error "rejected this assertion" "" { target *-*-* } 0 }
 int
 f (int x) pre<P3400::always_ignore | P3400::terminating>(x > 0)
 { return x; }
