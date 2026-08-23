@@ -572,7 +572,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     operator+=(difference_type __n)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-    post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    // D4324/P2680: real (conveyor_assert_v), not never_proven -- 'this'
+    // itself is never reassigned by this body ('*this = _Iterator{}'
+    // reassigns the pointee's own field state via operator=, not the
+    // 'this' pointer identity), so the precondition's own self-trusted
+    // fact for 'this' survives unconditionally to the end of the body.
+    // Verifiable directly.
+    post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
     {
       if (_M_rep != nullptr)
@@ -603,7 +609,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     operator-=(difference_type __n)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-    post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    // D4324/P2680: real (conveyor_assert_v) -- same reasoning as
+    // operator+=' own identical pair just above; this body only
+    // delegates to operator+= (whose own postcondition, now also real,
+    // re-establishes 'this' for this caller) or returns immediately.
+    post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
     {
       using _Traits = __gnu_cxx::__int_traits<difference_type>;
