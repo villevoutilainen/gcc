@@ -264,7 +264,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		   std::forward_iterator_tag)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	size_type __dnew = static_cast<size_type>(std::distance(__beg, __end));
