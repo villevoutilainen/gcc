@@ -3491,9 +3491,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const _CharT*
       c_str() const _GLIBCXX_NOEXCEPT
+      // D4324/P2680: real (conveyor_assert_v) postcondition -- trivial
+      // one-hop delegation to _M_data () (already real).
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return _M_data(); }
 
@@ -3508,9 +3510,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const _CharT*
       data() const _GLIBCXX_NOEXCEPT
+      // D4324/P2680: real (conveyor_assert_v) postcondition -- trivial
+      // one-hop delegation to _M_data () (already real).
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return _M_data(); }
 
