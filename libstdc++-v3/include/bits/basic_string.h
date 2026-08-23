@@ -1838,9 +1838,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       capacity() const _GLIBCXX_NOEXCEPT
+      // D4324/P2680: real (conveyor_assert_v) postcondition -- body only
+      // calls _M_is_local () and max_size () (both now real).
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	size_t __sz = _M_is_local() ? size_type(_S_local_capacity)
@@ -1870,9 +1872,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       void
       reserve(size_type __res_arg)
+      // D4324/P2680: real (conveyor_assert_v) postcondition -- body (in
+      // basic_string.tcc) only calls capacity (), _M_create_plus, length (),
+      // _M_dispose, _M_data, _M_capacity (all now real) and the static
+      // _S_copy (takes a pointer argument, not 'this').
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       ;
 
