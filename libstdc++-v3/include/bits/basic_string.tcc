@@ -142,9 +142,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     typename basic_string<_CharT, _Traits, _Alloc>::_Alloc_result
     basic_string<_CharT, _Traits, _Alloc>::
     _M_create_plus(size_type __capacity, size_type __old_capacity)
+    // D4324/P2680: see this function's own declaration in basic_string.h
+    // for why this is now conveyor_assert_v.
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-    post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
     {
       // _GLIBCXX_RESOLVE_LIB_DEFECTS
