@@ -423,10 +423,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       void
       _M_dispose()
-      // D4324/P2680: see _M_destroy's own comment just below.
+      // D4324/P2680: see _M_destroy's own comment just below. Real
+      // (conveyor_assert_v) postcondition: _M_is_local ()'s own
+      // (already real) postcondition re-establishes 'this' after that
+      // call, and _M_destroy's own (now also real) postcondition does
+      // the same for the branch that calls it.
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	if (!_M_is_local())
@@ -441,6 +445,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // assert, and why it's gated on _GLIBCXX_CONVEYOR_ASSERTIONS.
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      // D4324/P2680: real (conveyor_assert_v) -- _M_get_allocator ()/
+      // _M_data ()'s own postconditions (now also real) re-establish
+      // 'this' right after each call; _Alloc_traits::deallocate's own
+      // receiver is the allocator/pointer *values* those calls return,
+      // never 'this' itself, so 'this' is never invalidated. Needed so
+      // _M_dispose's own postcondition, below, can see 'this' still
+      // established after calling this function.
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { _Alloc_traits::deallocate(_M_get_allocator(), _M_data(), __size + 1); }
 
