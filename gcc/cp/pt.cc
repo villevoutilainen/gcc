@@ -28753,6 +28753,121 @@ tsubst_capture_proxy_for_contract (tree pat_parm, tree decl)
   return var;
 }
 
+/* Plain tree-identity find-and-replace, for oa_reanchor_stale_contract_
+   parms's own use below -- deliberately NOT a substitution (no type or
+   context handling at all), just repointing one specific leaf.  */
+
+struct oa_replace_tree_data { tree old_tree; tree new_tree; };
+
+static tree
+oa_replace_tree_r (tree *tp, int *, void *data_)
+{
+  oa_replace_tree_data *data = static_cast<oa_replace_tree_data *> (data_);
+  if (*tp == data->old_tree)
+    *tp = data->new_tree;
+  return NULL_TREE;
+}
+
+/* DECL's own already-substituted (non-dependent) contract-specifier
+   list ATTR was substituted once already, at a point before DECL's own
+   parameter list, DECL_ARGUMENTS (decl), was rebuilt by a later, real
+   regenerate_decl_from_template call (its own "Merge parameter
+   declarations" step, above, replaces the non-artificial tail of
+   DECL_ARGUMENTS (decl) with fresh PARM_DECLs via tsubst_decl -- e.g.
+   any ordinary parameter beyond an implicit 'this' -- see its own
+   comment on OLD_PARM_DECL_P for the same fact from a different
+   angle). ATTR's own embedded PARM_DECL leaves, planted by that earlier
+   substitution, still point at the now-orphaned, pre-rebuild nodes.
+
+   Found and fixed 2026-08-23, chasing oa_maybe_instantiate_contracts's
+   own "trust the declared contract without forcing the callee's body
+   to instantiate early" fallback (its own comment explains why: a
+   contract-bearing callee can have the same tzdb.cc-shaped "body only
+   completable once an incomplete type finishes" hazard a contract-free
+   callee does): that fallback deliberately runs this same substitution
+   EARLY, before DECL's own real instantiation, precisely so DECL's own
+   contract text is available to a caller without forcing DECL's body.
+   When DECL is later, genuinely instantiated for real (its own
+   ordinary, normally-deferred schedule, not forced by that fallback),
+   regenerate_decl_from_template's parameter-merging step above runs
+   for the first time and replaces DECL's own parameters wholesale --
+   orphaning ATTR's already-substituted references to the old ones.
+   Confirmed via a minimal repro: a template constructor's own
+   'pre<conveyor_assert_v>(is_object_address (&v))' self-trust silently
+   stopped matching its own body's real, rebuilt 'v' reference, "no fact
+   relating this value... has been established" for a call the
+   constructor's own body makes using that exact, same-named parameter.
+
+   Re-pointing the stale leaves in place (a plain find-and-replace by
+   name) is the fix, NOT re-running tsubst_contract_specifiers on ATTR
+   a second time: ATTR is already fully non-dependent text at this
+   point, and re-substituting concrete PARM_DECL leaves that no local_
+   specializations entry maps (this isn't inside a fresh template
+   substitution pass at all) is exactly the crash the original
+   idempotency guard below was added to avoid -- see its own comment
+   for the specific register_local_specialization tmpl != spec assert
+   this would otherwise re-trigger. This function is deliberately much
+   narrower than that: it never calls tsubst_expr, only replaces PARM_
+   DECL tree pointers directly.  A capture-proxy VAR_DECL (the other
+   kind of leaf find_contract_parm_decls_r collects) has no stable name
+   to re-anchor by the same means and is left alone -- narrower than
+   the ordinary-parameter case, but this exact shape (a generic
+   lambda's own postcondition, substituted early via the same fallback,
+   later needing re-anchoring against a rebuilt closure) has not been
+   observed in practice; the general full-substitution path already
+   handles a capture proxy correctly on its first, ordinary pass.  */
+
+static void
+oa_reanchor_stale_contract_parms (tree attr, tree decl)
+{
+  auto_vec<tree> refs;
+  for (tree as = attr; as; as = TREE_CHAIN (as))
+    {
+      tree cond = CONTRACT_CONDITION (CONTRACT_STATEMENT (as));
+      cp_walk_tree (&cond, find_contract_parm_decls_r, &refs, NULL);
+    }
+
+  auto_vec<tree> stale;
+  for (tree ref : refs)
+    {
+      if (TREE_CODE (ref) != PARM_DECL)
+	continue;
+      bool current = false;
+      for (tree dp = DECL_ARGUMENTS (decl); dp; dp = DECL_CHAIN (dp))
+	if (dp == ref)
+	  {
+	    current = true;
+	    break;
+	  }
+      if (!current)
+	stale.safe_push (ref);
+    }
+  if (stale.is_empty ())
+    return;
+
+  for (tree old_parm : stale)
+    {
+      tree name = DECL_NAME (old_parm);
+      if (!name)
+	continue;
+      tree fresh = NULL_TREE;
+      for (tree dp = DECL_ARGUMENTS (decl); dp; dp = DECL_CHAIN (dp))
+	if (DECL_NAME (dp) == name)
+	  {
+	    fresh = dp;
+	    break;
+	  }
+      if (!fresh)
+	continue;
+      for (tree as = attr; as; as = TREE_CHAIN (as))
+	{
+	  tree *cond_p = &CONTRACT_CONDITION (CONTRACT_STATEMENT (as));
+	  oa_replace_tree_data data = { old_parm, fresh };
+	  cp_walk_tree (cond_p, oa_replace_tree_r, &data, NULL);
+	}
+    }
+}
+
 /* Substitute DECL's own contract-specifiers (a member function template
    of a class template, e.g. basic_string<_CharT,...>::resize_and_
    overwrite<_Operation>, or an ordinary "unique friend" member such as
@@ -28836,12 +28951,28 @@ tsubst_regenerated_contract_specifiers (tree decl, tree code_pattern, tree args)
      from tree shape or compiler state: a decl-keyed hash_set records
      which DECLs have already had this function's substitution run for
      them, regardless of which caller got there first or what ambient
-     template-processing state was active at the time.  */
+     template-processing state was active at the time.
+
+     A repeat call for the same DECL is not always a pure no-op, though
+     (see oa_reanchor_stale_contract_parms's own comment above): DECL's
+     own parameter list can have been rebuilt, by a real regenerate_
+     decl_from_template call, since this function's own EARLIER
+     substitution for the same DECL ran (oa_maybe_instantiate_contracts's
+     "trust without forcing the body" fallback deliberately substitutes
+     early, before DECL's real instantiation, so a caller can see DECL's
+     contract text without forcing DECL's body to instantiate too soon).
+     Re-anchor any now-stale PARM_DECL leaves ATTR still references
+     before declining to redo the full substitution -- cheap and safe
+     even when nothing has actually gone stale (the scan finds nothing
+     to do and returns immediately).  */
   static hash_set<tree> *contract_specifiers_substituted;
   if (!contract_specifiers_substituted)
     contract_specifiers_substituted = new hash_set<tree> ();
   if (contract_specifiers_substituted->add (decl))
-    return;
+    {
+      oa_reanchor_stale_contract_parms (attr, decl);
+      return;
+    }
 
   /* D4324/P2680: for a member function template of a class template,
      or an ordinary "unique friend" member of one, ATTR's own condition

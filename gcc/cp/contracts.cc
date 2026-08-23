@@ -19777,47 +19777,97 @@ oa_maybe_instantiate_contracts (tree fn)
   if (cp_unevaluated_operand || processing_contract_condition
       || processing_template_decl)
     return;
-  instantiate_decl (fn, /*defer_ok=*/false, /*expl_inst_class_mem_p=*/false);
 
-  /* D4324/P2680: instantiate_decl's own EXTERNAL_P early return (an
+  /* Found and fixed 2026-08-23, after the flag-gate fix above already
+     closed the confirmed contract-free tzdb.cc bug: a callee that DOES
+     have contract specifiers of its own can hit the exact same
+     "body only completable later in the TU" shape (confirmed by a
+     direct repro: a pimpl-style destructor template carrying a trivial
+     post<> specifier, whose pointee type is only completed later in
+     the TU -- the eager instantiate_decl this function used to call
+     unconditionally forced its body to instantiate immediately,
+     hitting 'operator delete used on incomplete type'; an identical
+     control with no contract at all compiles clean under ordinary
+     deferred-instantiation semantics, confirming the eager call, not
+     any real two-phase-lookup requirement, was the cause).
+
+     Ville's own direct challenge to this whole design settled the fix:
+     call-site fact-tracking (is_object_address preconditions/
+     postconditions consulted at a call site) only ever needs FN's
+     *declared*, substituted contract text -- confirmed by a targeted
+     probe with a declared-only (zero body anywhere in the TU) callee,
+     whose declared postcondition was fully trusted and correctly
+     bounded call-site fact-tracking with no body access at all. FN's
+     own postcondition SELF-verification (checking the postcondition
+     actually holds, given FN's own body) is a different consumer with
+     a different, later, natural timing -- confirmed via decl.cc's own
+     resolve_object_address_in_function call site (finish_function,
+     pre-genericize): that self-check only ever runs when FN's body is
+     genuinely compiled, whether as an ordinary definition or via
+     instantiate_body during FN's own, real (not-forced-by-this-pass)
+     instantiation. So this pass never needs FN's body instantiated,
+     only its contract specifiers substituted against FN's own concrete
+     template arguments -- exactly the lighter-weight substitution
+     below, applied unconditionally now instead of only as an
+     EXTERNAL_P fallback.
+
+     A first attempt at exactly this (unconditional light substitution,
+     no eager instantiate_decl at all) caused a large, unrelated
+     regression -- not proof the body is needed after all, but a
+     distinct bug this change exposed: substituting FN's contract text
+     EARLY, before FN's own real instantiation, anchors it to FN's
+     PARM_DECLs as they exist at that moment; regenerate_decl_from_
+     template's later, real "merge parameter declarations" step (pt.cc)
+     replaces those very nodes with fresh ones, and this function's own
+     idempotency guard then skipped ever re-anchoring FN's already-
+     substituted text to them -- silently orphaning FN's own self-trust
+     for whichever of its own parameters got rebuilt (confirmed via a
+     minimal repro: a template constructor's own precondition-based
+     self-trust for a parameter stopped matching that same parameter's
+     real, rebuilt appearance in its own body once instantiated for
+     real). Fixed at the root, in oa_reanchor_stale_contract_parms
+     (tsubst_regenerated_contract_specifiers's own idempotency guard,
+     pt.cc) -- not by reintroducing the eager call here.
+
+     D4324/P2680: instantiate_decl's own EXTERNAL_P early return (an
      "extern template"/explicit-instantiation-declaration callee -- e.g.
      any basic_string<char>/basic_string<wchar_t> member function
      template; ordinary user code relies on the pre-built libstdc++.so's
      own explicit instantiation, never locally instantiating such a
-     body) means the call above can leave FN exactly as it started: not
-     DECL_TEMPLATE_INSTANTIATED, and, critically, its own contract
-     specifiers still literally the SAME (unsubstituted, still template-
-     dependent) list as the template pattern's own -- regenerate_decl_
-     from_template, and with it tsubst_regenerated_contract_specifiers,
-     is only ever reached from *inside* instantiate_decl's own body,
-     strictly after that early return, so it never runs for such a
-     callee at all. Confirmed via direct testing: basic_string's own
-     _M_construct<_FwdIterator> overloads, called from an ordinary
-     '(const _CharT*, size_type, const _Alloc&)'-style constructor, left
-     'is_object_address (this)' an unresolved OVERLOAD node forever,
-     silently failing to match in every shape-recognizer that consults
-     it -- both as a caller-side precondition-obligation check and as
-     postcondition-based re-establishment for the caller -- since a
-     dependent, unresolved condition looks like "no is_object_address
-     conjunct here at all" to every one of them, not "cannot verify".
+     body) used to mean the eager call above could leave FN exactly as
+     it started: not DECL_TEMPLATE_INSTANTIATED, and, critically, its
+     own contract specifiers still literally the SAME (unsubstituted,
+     still template-dependent) list as the template pattern's own --
+     regenerate_decl_from_template, and with it tsubst_regenerated_
+     contract_specifiers, is only ever reached from *inside* instantiate_
+     decl's own body, strictly after that early return, so it never ran
+     for such a callee at all. Confirmed via direct testing: basic_
+     string's own _M_construct<_FwdIterator> overloads, called from an
+     ordinary '(const _CharT*, size_type, const _Alloc&)'-style
+     constructor, left 'is_object_address (this)' an unresolved OVERLOAD
+     node forever, silently failing to match in every shape-recognizer
+     that consults it -- both as a caller-side precondition-obligation
+     check and as postcondition-based re-establishment for the caller --
+     since a dependent, unresolved condition looks like "no is_object_
+     address conjunct here at all" to every one of them, not "cannot
+     verify". Now the ONLY path this function takes for any callee with
+     contract specifiers, extern-template or not.
 
      Directly force just the contract-specifier substitution here, never
      the body (see tsubst_regenerated_contract_specifiers's own comment
      for why DECL_TEMPLATE_INSTANTIATED must stay untouched by this),
      using the exact same helper regenerate_decl_from_template itself
      calls -- this is the identical substitution logic that already runs
-     for a callee whose body DOES get instantiated locally, not a
-     parallel, narrower reimplementation prone to its own divergent
-     bugs. push_tinst_level/maybe_push_to_top_level establish the same
-     ambient template-instantiation context (current_function_decl,
-     access-checking deferral, etc.) instantiate_body normally provides
-     before ever reaching this same substitution -- omitting them is
-     safe for this specific substitution's own correctness (confirmed:
-     the actual bug this session found and fixed was a missing
-     idempotency guard inside tsubst_regenerated_contract_specifiers
-     itself, not missing context here), but they cost nothing and match
-     the normal calling convention this function otherwise never sees
-     itself invoked outside of.
+     for a callee whose body DOES get instantiated locally (during FN's
+     own real, later, normally-deferred instantiation), not a parallel,
+     narrower reimplementation prone to its own divergent bugs. push_
+     tinst_level/maybe_push_to_top_level establish the same ambient
+     template-instantiation context (current_function_decl, access-
+     checking deferral, etc.) instantiate_body normally provides before
+     ever reaching this same substitution -- omitting them is safe for
+     this specific substitution's own correctness, but they cost
+     nothing and match the normal calling convention this function
+     otherwise never sees itself invoked outside of.
 
      No attempt is made here to first check whether FN's specifiers
      still need substituting (an earlier version tried a pointer-
