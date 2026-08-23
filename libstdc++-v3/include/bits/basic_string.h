@@ -1691,9 +1691,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       length() const _GLIBCXX_NOEXCEPT
+      // D4324/P2680: real (conveyor_assert_v) postcondition -- size ()'s own
+      // receiver is 'this', but it's a trivial one-hop accessor (a field
+      // read plus a call to max_size (), itself now real), confirmed via
+      // direct testing not to invalidate 'this' here.
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return size(); }
 
