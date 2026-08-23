@@ -194,6 +194,21 @@ namespace contracts
 
   void invoke_default_contract_violation_handler(const contract_violation&) noexcept;
 
+  // D4324: the return type of an optional validate(assertion_static_info)
+  // Contract Control Object member (see label_base::validate below for a
+  // real user, and contract_control_validates in gcc/cp/contracts.cc for
+  // the compiler-side dispatch) -- a compile-time-only acceptability gate
+  // for a control object's own configuration, entirely separate from
+  // is_ignored's "should this run" question. valid == false is diagnosed
+  // as a hard, compile-time error; message, if non-null, is folded into
+  // that diagnostic instead of a generic fallback, so a control object
+  // can explain *why* it rejected an assertion. Not part of P2900/P3400
+  // -- a general, D4324-only fifth CCO member.
+  struct contract_validation_result {
+    bool valid;
+    const char* message = nullptr;
+  };
+
   // D4324 "Minimum Language, Maximum Library" control-object surface.
 
   // A control object's call operator returns void: returning means the
@@ -1490,14 +1505,24 @@ namespace contracts
       // allowed_semantics sets even overlap with each other, entirely
       // independent of any TU's configuration -- lives in combined_
       // label's own class template further down instead.
-      constexpr bool
+      constexpr contract_validation_result
       validate (assertion_static_info __info) const
       {
 	if constexpr (allowed_semantics_label<_Self>)
-	  return evaluation_semantic_set (_Self::allowed_semantics)
-		   .contains (__effective_semantic (__configured_semantic (__info)));
+	  {
+	    if (evaluation_semantic_set (_Self::allowed_semantics)
+		  .contains (__effective_semantic (__configured_semantic (__info))))
+	      return { true };
+	    // A fixed, static message -- this header stays dependency-free
+	    // (no <string>), so the message can't name the specific
+	    // semantic value dynamically, only explain the general shape
+	    // of the rejection.
+	    return { false, "this TU's configured (or group-overridden) "
+			     "evaluation semantic is outside this control "
+			     "object's own allowed_semantics set" };
+	  }
 	else
-	  return true;
+	  return { true };
       }
 
       // P3400 doesn't standardize an "assume" semantic yet; this
