@@ -47,17 +47,6 @@
 #include <contracts>
 namespace sc = std::contracts;
 
-// No built-in "never_proven_symbolic" object ships (never_proven is an
-// independent trait, not a fourth flavor of its own) -- same hand-rolled
-// pattern as d4324-never-proven-symbolic-ok.C.
-struct never_proven_symbolic_ctrl {
-  static constexpr bool is_symbolic (sc::assertion_static_info) { return true; }
-  static constexpr bool never_proven (sc::assertion_static_info) { return true; }
-  void operator() (const sc::assertion_context& ctx) const
-  { if (!ctx.check ()) __builtin_trap (); }
-};
-inline constexpr never_proven_symbolic_ctrl never_proven_symbolic_ctrl_v{};
-
 struct Number
 {
   double m_value;
@@ -76,18 +65,18 @@ struct Number
   // self-checkable from this body under symbolic (see file header).
   void increase_by (double percentage)
     pre<sc::proven_symbolic_v>(percentage >= 0.0 && this->m_value >= 0.0)
-    post<never_proven_symbolic_ctrl_v>(this->m_value >= 0.0)
+    post<sc::never_proven_symbolic_v>(this->m_value >= 0.0)
   { m_value *= (1.0 + percentage / 100.0); }
 
   void decrease_by (double percentage)
     pre<sc::proven_symbolic_v>(percentage >= 0.0 && percentage <= 100.0
 				 && this->m_value >= 0.0)
-    post<never_proven_symbolic_ctrl_v>(this->m_value >= 0.0)
+    post<sc::never_proven_symbolic_v>(this->m_value >= 0.0)
   { m_value *= (1.0 - percentage / 100.0); }
 
   double value () const
     pre<sc::proven_symbolic_v>(this->m_value >= 0.0)
-    post<never_proven_symbolic_ctrl_v>(r: r >= 0.0)
+    post<sc::never_proven_symbolic_v>(r: r >= 0.0)
   { return m_value; }
 };
 
