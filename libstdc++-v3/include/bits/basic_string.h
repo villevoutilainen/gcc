@@ -2190,6 +2190,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       append(const _CharT* __s, size_type __n)
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	__glibcxx_requires_string_len(__s, __n);
 	_M_check_length(size_type(0), __n, "basic_string::append");
 	return _M_append(__s, __n);
@@ -2221,7 +2225,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       append(size_type __n, _CharT __c)
-      { return _M_replace_aux(this->size(), size_type(0), __n, __c); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return _M_replace_aux(this->size(), size_type(0), __n, __c);
+      }
 
 #if __glibcxx_containers_ranges // C++ >= 23
       /**
@@ -2465,6 +2475,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       assign(const _CharT* __s, size_type __n)
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	__glibcxx_requires_string_len(__s, __n);
 	return _M_replace(size_type(0), this->size(), __s, __n);
       }
@@ -2905,8 +2919,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       insert(size_type __pos, size_type __n, _CharT __c)
-      { return _M_replace_aux(_M_check(__pos, "basic_string::insert"),
-			      size_type(0), __n, __c); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return _M_replace_aux(_M_check(__pos, "basic_string::insert"),
+			      size_type(0), __n, __c);
+      }
 
       /**
        *  @brief  Insert one character.

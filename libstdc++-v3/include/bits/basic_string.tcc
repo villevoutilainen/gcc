@@ -637,6 +637,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     basic_string<_CharT, _Traits, _Alloc>::
     _M_append(const _CharT* __s, size_type __n)
     {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (this));
+#endif
       const size_type __len = __n + this->size();
 
       if (__len <= this->capacity())
