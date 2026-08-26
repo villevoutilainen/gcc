@@ -158,7 +158,7 @@ It looks different from literature pseudocode for two main reasons:
 	      auto __expect = __old_phase;
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	      contract_assert<std::contracts::never_proven_conveyor_v>
-		(std::is_object_address (__state));
+		(std::is_object_address (&__state[__current]));
 #endif
 	      __atomic_phase_ref_t __phase(&__state[__current]
 					      .__tickets[__round]);
