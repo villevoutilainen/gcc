@@ -2376,6 +2376,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       void
       push_back(_CharT __c)
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	const size_type __size = this->size();
 	if (__size + 1 > this->capacity())
 	  this->_M_mutate(__size, size_type(0), 0, size_type(1));
