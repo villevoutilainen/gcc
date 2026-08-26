@@ -175,29 +175,58 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       _GLIBCXX23_CONSTEXPR
       __uniq_ptr_impl(__uniq_ptr_impl&& __u) noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__u))
+#endif
       : _M_t(std::move(__u._M_t))
       { __u._M_ptr() = nullptr; }
 
       _GLIBCXX23_CONSTEXPR
       __uniq_ptr_impl& operator=(__uniq_ptr_impl&& __u) noexcept
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this) && std::is_object_address (&__u));
+#endif
 	reset(__u.release());
 	_M_deleter() = std::forward<_Dp>(__u._M_deleter());
 	return *this;
       }
 
       _GLIBCXX23_CONSTEXPR
-      pointer&   _M_ptr() noexcept { return std::get<0>(_M_t); }
+      pointer&   _M_ptr() noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+#endif
+      { return std::get<0>(_M_t); }
       _GLIBCXX23_CONSTEXPR
-      pointer    _M_ptr() const noexcept { return std::get<0>(_M_t); }
+      pointer    _M_ptr() const noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+      { return std::get<0>(_M_t); }
       _GLIBCXX23_CONSTEXPR
-      _Dp&       _M_deleter() noexcept { return std::get<1>(_M_t); }
+      _Dp&       _M_deleter() noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+#endif
+      { return std::get<1>(_M_t); }
       _GLIBCXX23_CONSTEXPR
-      const _Dp& _M_deleter() const noexcept { return std::get<1>(_M_t); }
+      const _Dp& _M_deleter() const noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+      { return std::get<1>(_M_t); }
 
       _GLIBCXX23_CONSTEXPR
       void reset(pointer __p) noexcept
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	const pointer __old_p = _M_ptr();
 	_M_ptr() = __p;
 	if (__old_p)
@@ -207,6 +236,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX23_CONSTEXPR
       pointer release() noexcept
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	pointer __p = _M_ptr();
 	_M_ptr() = nullptr;
 	return __p;
@@ -216,6 +249,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       void
       swap(__uniq_ptr_impl& __rhs) noexcept
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this) && std::is_object_address (&__rhs));
+#endif
 	using std::swap;
 	swap(this->_M_ptr(), __rhs._M_ptr());
 	swap(this->_M_deleter(), __rhs._M_deleter());
@@ -403,6 +440,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 	static_assert(__is_invocable<deleter_type&, pointer>::value,
 		      "unique_ptr's deleter must be invocable with a pointer");
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	auto& __ptr = _M_t._M_ptr();
 	if (__ptr != nullptr)
 	  get_deleter()(std::move(__ptr));
@@ -471,7 +512,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	static_assert(!__reference_converts_from_temporary(_ResT, _DerefT),
 		      "operator* must not return a dangling reference");
 #endif
-	__glibcxx_assert(get() != pointer());
+	__glibcxx_assert_noconveyor(get() != pointer());
 	return *get();
       }
 
@@ -488,19 +529,37 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX23_CONSTEXPR
       pointer
       get() const noexcept
-      { return _M_t._M_ptr(); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return _M_t._M_ptr();
+      }
 
       /// Return a reference to the stored deleter.
       _GLIBCXX23_CONSTEXPR
       deleter_type&
       get_deleter() noexcept
-      { return _M_t._M_deleter(); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return _M_t._M_deleter();
+      }
 
       /// Return a reference to the stored deleter.
       _GLIBCXX23_CONSTEXPR
       const deleter_type&
       get_deleter() const noexcept
-      { return _M_t._M_deleter(); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return _M_t._M_deleter();
+      }
 
       /// Return @c true if the stored pointer is not null.
       _GLIBCXX23_CONSTEXPR
@@ -698,6 +757,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #endif
       ~unique_ptr()
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	auto& __ptr = _M_t._M_ptr();
 	if (__ptr != nullptr)
 	  get_deleter()(__ptr);
@@ -750,7 +813,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       typename std::add_lvalue_reference<element_type>::type
       operator[](size_t __i) const
       {
-	__glibcxx_assert(get() != pointer());
+	__glibcxx_assert_noconveyor(get() != pointer());
 	return get()[__i];
       }
 
@@ -758,19 +821,37 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX23_CONSTEXPR
       pointer
       get() const noexcept
-      { return _M_t._M_ptr(); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return _M_t._M_ptr();
+      }
 
       /// Return a reference to the stored deleter.
       _GLIBCXX23_CONSTEXPR
       deleter_type&
       get_deleter() noexcept
-      { return _M_t._M_deleter(); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return _M_t._M_deleter();
+      }
 
       /// Return a reference to the stored deleter.
       _GLIBCXX23_CONSTEXPR
       const deleter_type&
       get_deleter() const noexcept
-      { return _M_t._M_deleter(); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return _M_t._M_deleter();
+      }
 
       /// Return @c true if the stored pointer is not null.
       _GLIBCXX23_CONSTEXPR
