@@ -348,6 +348,10 @@ namespace __detail
       constexpr copy_result<borrowed_iterator_t<_Range>, _Out>
       operator()(_Range&& __r, _Out __result) const
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__r));
+#endif
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__result));
       }

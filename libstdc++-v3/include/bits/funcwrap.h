@@ -407,6 +407,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
      void
      _M_move(_Mo_base& __x) noexcept
      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+       contract_assert<std::contracts::never_proven_conveyor_v>
+	 (std::is_object_address (this) && std::is_object_address (&__x));
+#endif
        using _Op = _Manager::_Op;
        _M_manage = std::__exchange(__x._M_manage, _Manager::_S_empty);
        _M_manage(_Op::_Move, _M_storage, &__x._M_storage);
@@ -436,6 +440,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
      void
      swap(_Mo_base& __x) noexcept
      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+       contract_assert<std::contracts::never_proven_conveyor_v>
+	 (std::is_object_address (this) && std::is_object_address (&__x));
+#endif
        using _Op = _Manager::_Op;
        // Order of operations here is more efficient if __x is empty.
        _Storage __s;

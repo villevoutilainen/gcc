@@ -110,6 +110,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __wait_for(const void* __addr, __wait_args_base& __args,
 		 const chrono::duration<_Rep, _Period>& __rtime) noexcept
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__rtime));
+#endif
 	if (!__rtime.count())
 	  {
 	    // no rtime supplied, just spin a bit

@@ -213,6 +213,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  static constexpr _ToDur
 	  __cast(const duration<_Rep, _Period>& __d)
 	  {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	    contract_assert<std::contracts::never_proven_conveyor_v>
+	      (std::is_object_address (&__d));
+#endif
 	    typedef typename _ToDur::rep			__to_rep;
 	    return _ToDur(static_cast<__to_rep>(
 	      static_cast<_CR>(__d.count()) / static_cast<_CR>(_CF::den)));
@@ -226,6 +230,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  static constexpr _ToDur
 	  __cast(const duration<_Rep, _Period>& __d)
 	  {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	    contract_assert<std::contracts::never_proven_conveyor_v>
+	      (std::is_object_address (&__d));
+#endif
 	    typedef typename _ToDur::rep			__to_rep;
 	    return _ToDur(static_cast<__to_rep>(
 	      static_cast<_CR>(__d.count()) * static_cast<_CR>(_CF::num)));
