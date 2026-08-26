@@ -128,6 +128,10 @@ namespace __unicode
       requires bidirectional_iterator<_Iter>
       : _M_first_and_curr{__first, __it}, _M_last(__last)
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	if (_M_curr() != _M_last)
 	  _M_read();
 	else
@@ -139,6 +143,10 @@ namespace __unicode
       requires (!bidirectional_iterator<_Iter>)
       : _M_first_and_curr{__it}, _M_last(__last)
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	if (_M_curr() != _M_last)
 	  _M_read();
 	else
@@ -733,10 +741,22 @@ namespace __unicode
       _Utf_view(_View __r) : _M_base(std::move(__r)) { }
 
       constexpr auto begin()
-      { return _M_begin(ranges::begin(_M_base), ranges::end(_M_base)); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return _M_begin(ranges::begin(_M_base), ranges::end(_M_base));
+      }
 
       constexpr auto end()
-      { return _M_end(ranges::begin(_M_base), ranges::end(_M_base)); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return _M_end(ranges::begin(_M_base), ranges::end(_M_base));
+      }
 
       constexpr bool empty() const { return ranges::empty(_M_base); }
     };

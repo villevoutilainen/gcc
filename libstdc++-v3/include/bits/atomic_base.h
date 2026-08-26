@@ -560,7 +560,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       compare_exchange_weak(__int_type& __i1, __int_type __i2,
 			    memory_order __m1, memory_order __m2) noexcept
       {
-	__glibcxx_assert(__is_valid_cmpexch_failure_order(__m2));
+	__glibcxx_assert_noconveyor(__is_valid_cmpexch_failure_order(__m2));
 
 	return __atomic_compare_exchange_n(&_M_i, &__i1, __i2, 1,
 					   int(__m1), int(__m2));
@@ -571,7 +571,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 			    memory_order __m1,
 			    memory_order __m2) volatile noexcept
       {
-	__glibcxx_assert(__is_valid_cmpexch_failure_order(__m2));
+	__glibcxx_assert_noconveyor(__is_valid_cmpexch_failure_order(__m2));
 
 	return __atomic_compare_exchange_n(&_M_i, &__i1, __i2, 1,
 					   int(__m1), int(__m2));
@@ -597,7 +597,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       compare_exchange_strong(__int_type& __i1, __int_type __i2,
 			      memory_order __m1, memory_order __m2) noexcept
       {
-	__glibcxx_assert(__is_valid_cmpexch_failure_order(__m2));
+	__glibcxx_assert_noconveyor(__is_valid_cmpexch_failure_order(__m2));
 
 	return __atomic_compare_exchange_n(&_M_i, &__i1, __i2, 0,
 					   int(__m1), int(__m2));
@@ -608,7 +608,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 			      memory_order __m1,
 			      memory_order __m2) volatile noexcept
       {
-	__glibcxx_assert(__is_valid_cmpexch_failure_order(__m2));
+	__glibcxx_assert_noconveyor(__is_valid_cmpexch_failure_order(__m2));
 
 	return __atomic_compare_exchange_n(&_M_i, &__i1, __i2, 0,
 					   int(__m1), int(__m2));
@@ -915,7 +915,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 			    memory_order __m1,
 			    memory_order __m2) noexcept
       {
-	__glibcxx_assert(__is_valid_cmpexch_failure_order(__m2));
+	__glibcxx_assert_noconveyor(__is_valid_cmpexch_failure_order(__m2));
 
 	return __atomic_compare_exchange_n(&_M_p, &__p1, __p2, 1,
 					   int(__m1), int(__m2));
@@ -926,7 +926,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 			    memory_order __m1,
 			    memory_order __m2) volatile noexcept
       {
-	__glibcxx_assert(__is_valid_cmpexch_failure_order(__m2));
+	__glibcxx_assert_noconveyor(__is_valid_cmpexch_failure_order(__m2));
 
 	return __atomic_compare_exchange_n(&_M_p, &__p1, __p2, 1,
 					   int(__m1), int(__m2));
@@ -937,7 +937,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 			      memory_order __m1,
 			      memory_order __m2) noexcept
       {
-	__glibcxx_assert(__is_valid_cmpexch_failure_order(__m2));
+	__glibcxx_assert_noconveyor(__is_valid_cmpexch_failure_order(__m2));
 
 	return __atomic_compare_exchange_n(&_M_p, &__p1, __p2, 0,
 					   int(__m1), int(__m2));
@@ -948,7 +948,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 			      memory_order __m1,
 			      memory_order __m2) volatile noexcept
       {
-	__glibcxx_assert(__is_valid_cmpexch_failure_order(__m2));
+	__glibcxx_assert_noconveyor(__is_valid_cmpexch_failure_order(__m2));
 
 	return __atomic_compare_exchange_n(&_M_p, &__p1, __p2, 0,
 					   int(__m1), int(__m2));
@@ -1061,7 +1061,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 			 bool __is_weak,
 			 memory_order __s, memory_order __f) noexcept
       {
-	__glibcxx_assert(__is_valid_cmpexch_failure_order(__f));
+	__glibcxx_assert_noconveyor(__is_valid_cmpexch_failure_order(__f));
 
 	using _Vp = _Val<_Tp>;
 	_Tp* const __pval = std::__addressof(__val);
