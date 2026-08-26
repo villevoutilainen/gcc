@@ -6,6 +6,18 @@
 // obligation check exists for them at all, same as nonzero/general
 // ranges), so this compiles and runs successfully with only this
 // prototype's own warning. See ~/gimple-contract-analysis.md.
+//
+// relay's own is_object_address(p) conjunct (2026-08-26, alongside the
+// fix making a conveyor-active pre/post on a non-'conveyor'-declared
+// function synthesize the same implicit reference/'this'-safety
+// precondition a real 'conveyor' function already gets -- see the
+// identical fix to the built-in engine's own d4324-gimple-predicate-
+// unknown.C): read()'s own 'pre<conveyor_ctrl_v>(is_opened(this))' is
+// conveyor-active even though read() itself has no 'conveyor' keyword,
+// so it now correctly gets its own synthesized 'is_object_address
+// (this)' obligation too -- relay must establish that for 'p'
+// explicitly, or this test would be exercising an unsound call rather
+// than the OA_UNKNOWN case it's actually about.
 // { dg-do run }
 // { dg-options "-std=c++26 -fcontracts -fcontract-control-objects" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
@@ -28,7 +40,7 @@ struct io_facility {
   void read () pre<conveyor_ctrl_v>(is_opened (this)) {}
 };
 
-void relay (io_facility *p)
+void relay (io_facility *p) pre<conveyor_ctrl_v>(std::is_object_address (p))
 {
   p->read (); // { dg-warning "gimple-oa: cannot verify" }
 }

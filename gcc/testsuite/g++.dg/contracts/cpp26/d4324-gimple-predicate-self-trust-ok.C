@@ -5,6 +5,17 @@
 // dominator walk's own root/seed state), so the read() call inside
 // g's own body is discharged purely from that seeded fact. See
 // gcc/cp/contracts-gimple.cc and ~/gimple-contract-analysis.md.
+//
+// g's own is_object_address(p) conjunct (2026-08-26, alongside the fix
+// making a conveyor-active pre/post on a non-'conveyor'-declared
+// function synthesize the same implicit reference/'this'-safety
+// precondition a real 'conveyor' function already gets): read()'s own
+// 'pre<conveyor_ctrl_v>(is_opened(this))' is conveyor-active even
+// though read() itself has no 'conveyor' keyword, so it now correctly
+// gets its own synthesized 'is_object_address(this)' obligation too --
+// g must establish that for 'p' explicitly (its own 'is_opened(p)'
+// conjunct alone never implied it), or this test would be exercising
+// an unsound call rather than the self-trust case it's actually about.
 // { dg-do run }
 // { dg-options "-std=c++26 -fcontracts -fcontract-control-objects -fcontract-conveyor-proofs-gimple" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
@@ -28,7 +39,8 @@ struct io_facility {
   void read () pre<conveyor_ctrl_v>(is_opened (this)) {}
 };
 
-void g (io_facility *p) pre<conveyor_ctrl_v>(io_facility::is_opened (p))
+void g (io_facility *p)
+pre<conveyor_ctrl_v>(std::is_object_address (p) && io_facility::is_opened (p))
 {
   p->read ();
 }

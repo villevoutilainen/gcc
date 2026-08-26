@@ -14,6 +14,19 @@
 // as opposed to a fact existing for a different predicate/object, or
 // under weaker trust than required -- see cg_consult_persistent_facts'
 // own predicate loop for where all three are now distinguished).
+//
+// relay's own is_object_address(p) conjunct (2026-08-26, alongside the
+// fix making a conveyor-active pre/post on a non-'conveyor'-declared
+// function synthesize the same implicit reference/'this'-safety
+// precondition a real 'conveyor' function already gets): read()'s own
+// 'pre<conveyor_ctrl_v>(is_opened(this))' is conveyor-active even
+// though read() itself has no 'conveyor' keyword, so it now correctly
+// gets its own synthesized 'is_object_address(this)' obligation too --
+// relay must establish that for 'p' explicitly, exactly like any other
+// caller of a conveyor-checked function would, or this test would be
+// exercising an unsound call (an unproven 'p' dereferenced through
+// read()'s own 'this') rather than the OA_UNKNOWN case it's actually
+// about.
 // { dg-do run }
 // { dg-options "-std=c++26 -fcontracts -fcontract-control-objects -fcontract-conveyor-proofs-gimple" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
@@ -36,7 +49,7 @@ struct io_facility {
   void read () pre<conveyor_ctrl_v>(is_opened (this)) {}
 };
 
-void relay (io_facility *p)
+void relay (io_facility *p) pre<conveyor_ctrl_v>(std::is_object_address (p))
 {
   p->read (); // { dg-warning "cannot verify that .*is_opened.*holds" }
               // { dg-message "no fact relating this value" "unprovable reason" { target *-*-* } .-1 }
