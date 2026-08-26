@@ -209,6 +209,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     _GLIBCXX20_CONSTEXPR
     inline _Tp
     __exchange(_Tp& __obj, _Up&& __new_val)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__obj))
+#endif
     {
       _Tp __old_val = std::move(__obj);
       __obj = std::forward<_Up>(__new_val);
@@ -253,6 +256,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     swap(_Tp& __a, _Tp& __b)
     _GLIBCXX_NOEXCEPT_IF(__and_<is_nothrow_move_constructible<_Tp>,
 				is_nothrow_move_assignable<_Tp>>::value)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a)
+      && std::is_object_address (&__b))
+#endif
     {
 #if __cplusplus < 201103L
       // concept requirements
