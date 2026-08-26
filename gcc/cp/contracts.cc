@@ -7838,6 +7838,31 @@ public:
     for (auto it : *m_field_object_key)
       if (it.first.first == base)
 	predicate_fact_invalidate (it.second);
+    /* D4324, Increment 2 of the pointer-indexing follow-on: sweep
+       M_ARRAY_OBJECT_KEY here too, not just at a separate call site --
+       every caller of this function already means "base's own facts,
+       of every kind, are no longer trustworthy" (a reassignment, an
+       opaque call, a scope exit), which applies equally to an
+       array-slot-identity fact for the same base. See array_object_
+       identity_key's own comment for what this key represents.
+
+       Checked against BOTH key components, not just the first (the
+       array pointer) -- unlike a FIELD_DECL (m_field_object_key's own
+       second component, never reassigned, so only ever needing a
+       first-component check), an array-slot key's own second component
+       is a decl identity too (the INDEX), which can itself be
+       reassigned ('current = current + 1;') just as easily as the
+       array pointer can -- confirmed via direct testing that a fact
+       established for '&st[current]' was otherwise silently still
+       trusted after 'current' was reassigned, a real soundness gap.
+       Every existing caller of this function already means "identity X
+       is no longer trustworthy in any tracked map," which is exactly
+       as true when X was tracked as an index as when it was tracked as
+       a base -- no new call sites needed.  */
+    if (m_array_object_key)
+      for (auto it : *m_array_object_key)
+	if (it.first.first == base || it.first.second == base)
+	  predicate_fact_invalidate (it.second);
   }
   /* D4324/P2680: the is_object_address (m_map) analogue of the two
      predicate-fact invalidators just above -- a pointer-typed field's
@@ -7863,6 +7888,13 @@ public:
     for (auto it : *m_field_object_key)
       if (it.first.first == base)
 	invalidate (it.second);
+    /* See field_object_predicate_invalidate_all's own identical
+       Increment 2 addition just above -- same reasoning, including the
+       both-key-components check.  */
+    if (m_array_object_key)
+      for (auto it : *m_array_object_key)
+	if (it.first.first == base || it.first.second == base)
+	  invalidate (it.second);
   }
   hash_map<oa_field_key_hash, tree> *field_object_key_cache ()
   {
@@ -7871,6 +7903,52 @@ public:
   void set_field_object_key_cache (hash_map<oa_field_key_hash, tree> *cache)
   {
     m_field_object_key = cache;
+  }
+  /* D4324, Increment 2 of the pointer-indexing follow-on: the array-
+     slot analogue of field_object_identity_key just above -- '&ptr
+     [index]' for a POINTER_TYPE ptr and a dynamic (non-constant) INDEX
+     that itself resolves to a stable decl identity (see oa_array_
+     object_identity's own comment: deliberately narrower than a fully
+     general expression key, matching this increment's own documented
+     scope boundary) names a fixed logical slot for as long as neither
+     PTR nor INDEX is reassigned, exactly the same "no natural single
+     tree identity, synthesize a stable placeholder once and reuse it"
+     situation field_object_identity_key exists for -- reuses the exact
+     same oa_field_key_hash pair-keyed shape (it's already fully
+     generic over any tree pair, per that type's own comment), plugged
+     into the same *existing* m_predicate_fact_map/m_map pair so every
+     other establish/consult/invalidate/merge site keeps working
+     unmodified. This is the mechanism that actually closes std::
+     barrier/__unicode's own gap: unlike Increment 1's oa_get_range-
+     based composition (which can only ever prove an index is in
+     bounds for a pointer with traceable, named-array provenance), this
+     lets a library author assert the fact directly for an opaque
+     heap-allocated array (e.g. 'contract_assert<never_proven_conveyor_
+     v>(is_object_address(&__state[__current]))'), the same escape-
+     hatch philosophy used pervasively elsewhere in this engine.
+     M_ARRAY_OBJECT_KEY has the identical shared-pointer, never-deep-
+     copied lifetime discipline as M_FIELD_OBJECT_KEY -- see that
+     member's own comment for why (two sibling branches synthesizing
+     different keys for the same logical slot would silently break
+     predicate_fact_merge_with's pointer-identity agreement forever
+     after).  */
+  tree array_object_identity_key (tree base, tree index_identity)
+  {
+    tree *existing = m_array_object_key->get ({base, index_identity});
+    if (existing)
+      return *existing;
+    tree key = build_decl (UNKNOWN_LOCATION, VAR_DECL, NULL_TREE,
+			    ptr_type_node);
+    m_array_object_key->put ({base, index_identity}, key);
+    return key;
+  }
+  hash_map<oa_field_key_hash, tree> *array_object_key_cache ()
+  {
+    return m_array_object_key;
+  }
+  void set_array_object_key_cache (hash_map<oa_field_key_hash, tree> *cache)
+  {
+    m_array_object_key = cache;
   }
 
   /* A shared substrate, same gating and shape as m_predicate_fact_map
@@ -8610,6 +8688,7 @@ public:
     for (auto it : m_array_alias_target)
       r.m_array_alias_target.put (it.first, it.second);
     r.m_field_object_key = m_field_object_key;
+    r.m_array_object_key = m_array_object_key;
     r.m_capture_proxy_key = m_capture_proxy_key;
     for (auto it : m_borrowed_map)
       r.m_borrowed_map.put (it.first, it.second);
@@ -8688,6 +8767,7 @@ public:
     for (auto it : other.m_array_alias_target)
       m_array_alias_target.put (it.first, it.second);
     m_field_object_key = other.m_field_object_key;
+    m_array_object_key = other.m_array_object_key;
     m_capture_proxy_key = other.m_capture_proxy_key;
     m_borrowed_map.empty ();
     for (auto it : other.m_borrowed_map)
@@ -8861,6 +8941,9 @@ private:
   /* Never owned/allocated here -- see field_object_identity_key's own
      comment for why this must be a shared pointer, not an embedded map.  */
   hash_map<oa_field_key_hash, tree> *m_field_object_key = nullptr;
+  /* Never owned/allocated here -- see array_object_identity_key's own
+     comment for why this must be a shared pointer, not an embedded map.  */
+  hash_map<oa_field_key_hash, tree> *m_array_object_key = nullptr;
   /* Never owned/allocated here -- see capture_key's own comment.  */
   hash_map<oa_field_key_hash, tree> *m_capture_proxy_key = nullptr;
   /* D4324: reference-safety Q2, ownership-laundering fix -- see
@@ -9535,6 +9618,123 @@ oa_field_object_identity (tree expr, oa_env &env, tree *decl_out)
   return true;
 }
 
+/* D4324, Increment 2 of the pointer-indexing follow-on: the array-
+   slot analogue of oa_field_object_identity just above -- '&ptr[index]'
+   for a POINTER_TYPE ptr and a dynamic (non-constant) INDEX names a
+   fixed logical slot for as long as neither PTR nor INDEX is
+   reassigned, resolved to a synthesized, stable, cached placeholder
+   tree via ENV's own array_object_identity_key (see that method's own
+   comment for why the cache must be shared, not per-branch-copied, and
+   for why this exists at all: oa_range_fact::base can only ever be a
+   directly-named ARRAY_TYPE decl, so a heap-allocated, runtime-sized
+   array -- std::barrier's own __state, populated via make_unique
+   <state_t[]>(n) -- has no fact Increment 1's own oa_get_range-based
+   composition could ever derive; this lets a library author assert one
+   into existence instead).
+
+   Deliberately narrow, matching this increment's own documented scope
+   boundary: INDEX must itself resolve to a simple, stable identity (a
+   VAR_DECL/PARM_DECL, via oa_object_identity_decl -- the same untyped
+   "any object has an identity" resolver oa_field_object_identity uses
+   for its own base, reused here for the index too since nothing about
+   it needs to be a pointer or object address, just a stable identity)
+   rather than an arbitrary expression like 'i + 1' -- two syntactically
+   identical 'i + 1' subtrees are two different, non-interned tree
+   nodes, the same non-interning problem this whole key-synthesis
+   design exists to work around for the BASE, so accepting an arbitrary
+   index expression here would need its own further interning scheme,
+   not attempted by this increment. Covers the real cases (a simple
+   loop/atomic counter, e.g. std::barrier's own __current) without it.
+
+   PTR's own base identity is resolved via oa_object_identity_decl only
+   (not the fuller oa_field_slot_identity/oa_array_slot_identity/oa_
+   field_object_identity fallback chain oa_field_object_identity's own
+   COMPONENT_REF-establishing callers use for FIELD's own base) --
+   deliberately narrower for the same reason: the real, motivating case
+   is a plain local/member pointer variable (already resolved by
+   oa_object_identity_decl alone), and widening this to a further
+   composed base is unexplored, disclosed scope, not silently
+   dropped.  */
+
+static bool
+oa_array_object_identity (tree expr, oa_env &env, tree *decl_out)
+{
+  expr = STRIP_ANY_LOCATION_WRAPPER (expr);
+  tree arr, index;
+  if (TREE_CODE (expr) == ADDR_EXPR)
+    {
+      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (TREE_CODE (op) != ARRAY_REF)
+	return false;
+      arr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
+      while (TREE_CODE (arr) == NON_LVALUE_EXPR || TREE_CODE (arr) == NOP_EXPR
+	     || TREE_CODE (arr) == CONVERT_EXPR || TREE_CODE (arr) == VIEW_CONVERT_EXPR)
+	arr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arr, 0));
+      if (!POINTER_TYPE_P (TREE_TYPE (arr)))
+	return false;
+      index = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 1));
+    }
+  else if (TREE_CODE (expr) == POINTER_PLUS_EXPR)
+    {
+      /* D4324, Increment 2 of the pointer-indexing follow-on (continued):
+	 'ptr[index]' bound to a reference parameter (or itself the
+	 direct argument of 'is_object_address(ptr[index])'/'&ptr[index]'
+	 substituted through a reference) does NOT arrive as '&ARRAY_REF
+	 (ptr, index)' -- see oa_provable_p's own identical finding, by
+	 direct testing, for its top-level POINTER_PLUS_EXPR case: it's
+	 already lowered to 'ptr + index*sizeof(T)'. Decodes the same
+	 'index*elt_size' shape oa_get_range's own POINTER_PLUS_EXPR case
+	 already recognizes (see that function's own comment for the two
+	 shapes, confirmed empirically: a literal offset stays a single
+	 INTEGER_CST, a variable one is NOP_EXPR(MULT_EXPR(index,
+	 elt_size))) -- but extracts the raw INDEX subexpression itself,
+	 not a value range, since all this needs is INDEX's own stable
+	 identity, not its bounds. A literal (constant-index) offset is
+	 declined here, not decoded into a fake INTEGER_CST "identity" --
+	 oa_object_identity_decl has no such case and rightly wouldn't
+	 accept one; a constant pointer offset has no dynamic index
+	 needing an assertable identity in the first place (Increment 1's
+	 own range-based path is the relevant mechanism for a constant, if
+	 it applies at all).  */
+      arr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      tree byte_off = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 1));
+      if (TREE_CODE (byte_off) == INTEGER_CST)
+	return false;
+      tree pointee = TREE_TYPE (TREE_TYPE (expr));
+      tree elt_size_tree = TYPE_SIZE_UNIT (pointee);
+      if (!elt_size_tree || TREE_CODE (elt_size_tree) != INTEGER_CST)
+	return false;
+      widest_int elt_size = wi::to_widest (elt_size_tree);
+      if (elt_size == 0)
+	return false;
+      tree inner = byte_off;
+      while (TREE_CODE (inner) == NOP_EXPR || TREE_CODE (inner) == CONVERT_EXPR)
+	inner = TREE_OPERAND (inner, 0);
+      if (TREE_CODE (inner) != MULT_EXPR)
+	return false;
+      tree mop0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (inner, 0));
+      tree mop1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (inner, 1));
+      if (TREE_CODE (mop1) == INTEGER_CST && wi::to_widest (mop1) == elt_size)
+	index = mop0;
+      else if (TREE_CODE (mop0) == INTEGER_CST
+	       && wi::to_widest (mop0) == elt_size)
+	index = mop1;
+      else
+	return false;
+    }
+  else
+    return false;
+
+  tree base_identity, index_identity;
+  if (!oa_object_identity_decl (arr, &base_identity))
+    return false;
+  if (!oa_object_identity_decl (index, &index_identity))
+    return false;
+  base_identity = env.alias_find (base_identity);
+  *decl_out = env.array_object_identity_key (base_identity, index_identity);
+  return true;
+}
+
 static bool oa_get_range (tree expr, oa_env &env, oa_range_fact *out);
 
 /* D4324/P2680, "conversion-operator-returned provable field": if FNDECL
@@ -10115,8 +10315,120 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
 		  && idx_fact.has_lo && idx_fact.has_hi
 		  && idx_fact.lo >= 0 && idx_fact.hi <= wi::to_widest (max))
 		return true;
+	      return false;
+	    }
+	  /* D4324, Increment 1 of the pointer-indexing follow-on: the same
+	     question as above, but ARR is a POINTER_TYPE whose own value is
+	     itself tracked (oa_get_range) as an offset into a named array --
+	     mirrors oa_scan_array_bounds_in_expr's own POINTER_TYPE_P branch
+	     for ARRAY_REF exactly (base+index interval addition, checked
+	     against the tracked array's own declared bound), just asked as
+	     an is_object_address question rather than a bounds-safety one.
+	     Deliberately does NOT close the general "heap pointer with a
+	     runtime element count" case (e.g. std::barrier's own array of
+	     make_unique<T[]>(n)) -- oa_range_fact::base can only ever be a
+	     directly-named ARRAY_TYPE VAR_DECL, never an opaque allocation,
+	     so a pointer with no traceable named-array provenance simply
+	     never reaches this branch at all (oa_get_range returns false or
+	     a NULL_TREE base for it). That case needs the library author to
+	     assert an array-slot identity explicitly instead -- see
+	     array_object_identity_key's own comment.  */
+	  if (POINTER_TYPE_P (TREE_TYPE (arr)))
+	    {
+	      /* D4324, Increment 2 of the pointer-indexing follow-on: try
+		 an explicitly-asserted array-slot identity first (see
+		 oa_array_object_identity/array_object_identity_key's own
+		 comments) -- this is what actually closes std::barrier/
+		 __unicode's own gap, an opaque heap-allocated array with no
+		 traceable named-array provenance for the range-based check
+		 just below to ever succeed on. Tried before the range-based
+		 check purely because it's cheaper (a single map lookup) and
+		 the two are mutually exclusive in practice (a pointer with
+		 real named-array provenance has no need for an explicit
+		 assertion), not because of any soundness ordering
+		 requirement between them.  */
+	      tree identity;
+	      if (oa_array_object_identity (expr, env, &identity)
+		  && env.provable_p (identity))
+		return true;
+	      oa_range_fact base_fact;
+	      if (oa_get_range (arr, env, &base_fact) && base_fact.base != NULL_TREE)
+		{
+		  oa_range_fact idx_fact;
+		  bool idx_known;
+		  if (TREE_CODE (index) == INTEGER_CST)
+		    {
+		      idx_fact.base = NULL_TREE;
+		      idx_fact.has_lo = idx_fact.has_hi = true;
+		      idx_fact.lo = idx_fact.hi = wi::to_widest (index);
+		      idx_known = true;
+		    }
+		  else
+		    idx_known = oa_get_range (index, env, &idx_fact)
+		      && idx_fact.base == NULL_TREE;
+		  tree domain = TYPE_DOMAIN (TREE_TYPE (base_fact.base));
+		  tree max = domain ? TYPE_MAX_VALUE (domain) : NULL_TREE;
+		  if (idx_known && max && TREE_CODE (max) == INTEGER_CST
+		      && base_fact.has_lo && base_fact.has_hi
+		      && idx_fact.has_lo && idx_fact.has_hi)
+		    {
+		      widest_int lo = base_fact.lo + idx_fact.lo;
+		      widest_int hi = base_fact.hi + idx_fact.hi;
+		      if (lo >= 0 && hi <= wi::to_widest (max))
+			return true;
+		    }
+		}
+	      return false;
 	    }
 	  return false;
+	}
+      return false;
+    }
+
+  /* D4324, Increment 1 of the pointer-indexing follow-on (continued):
+     'p[index]' bound to a reference parameter does NOT arrive here as
+     '&ARRAY_REF(p, index)' the way an explicit '&arr[index]' does --
+     confirmed by direct testing ('f (p[i])' for a 'const T&' parameter,
+     'p' itself a T*): it's already lowered to a plain POINTER_PLUS_EXPR
+     ('p + index*sizeof(T)'), reached here via this function's own
+     INDIRECT_REF case just above ('&*(p+off)' unwraps to asking whether
+     'p+off' itself is a provable object address). oa_get_range already
+     fully knows how to compose a POINTER_PLUS_EXPR's own tracked base+
+     offset fact (including recursing through a further chain of
+     pointer arithmetic) -- reuse it directly rather than re-deriving
+     the same composition here, then apply the identical strict (no
+     one-past-end) bound check every other ARRAY_REF-shaped case in
+     this function already applies, since reaching this point always
+     means the pointer is about to be dereferenced (bound to a
+     reference), not merely formed.  */
+  if (TREE_CODE (expr) == POINTER_PLUS_EXPR)
+    {
+      /* D4324, Increment 2 of the pointer-indexing follow-on: as above,
+	 try an explicitly-asserted array-slot identity before the
+	 range-based check -- oa_array_object_identity recognizes this
+	 exact POINTER_PLUS_EXPR shape too (see its own comment), so a
+	 fact established under an explicit '&ptr[index]' assertion (an
+	 ADDR_EXPR/ARRAY_REF at the point it was asserted) is still found
+	 here even though 'ptr[index]' bound to a *further* reference
+	 (e.g. '.field', composed through the COMPONENT_REF/via_pointer
+	 case just above) reaches this point already lowered to plain
+	 pointer arithmetic instead -- confirmed by direct testing this
+	 matters: std::barrier-shaped '&__state[__current].__tickets
+	 [__round]' reaches here for its own '__state[__current]' half
+	 exactly this way, not as ADDR_EXPR(ARRAY_REF(...)).  */
+      tree identity;
+      if (oa_array_object_identity (expr, env, &identity)
+	  && env.provable_p (identity))
+	return true;
+      oa_range_fact fact;
+      if (oa_get_range (expr, env, &fact) && fact.base != NULL_TREE
+	  && fact.has_lo && fact.has_hi)
+	{
+	  tree domain = TYPE_DOMAIN (TREE_TYPE (fact.base));
+	  tree max = domain ? TYPE_MAX_VALUE (domain) : NULL_TREE;
+	  if (max && TREE_CODE (max) == INTEGER_CST
+	      && fact.lo >= 0 && fact.hi <= wi::to_widest (max))
+	    return true;
 	}
       return false;
     }
@@ -20838,6 +21150,23 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 		tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
 		if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
 		  arg = op;
+		/* D4324, Increment 2 of the pointer-indexing follow-on:
+		   'is_object_address(&ptr[index])' -- see oa_array_object_
+		   identity/array_object_identity_key's own comments. Tried
+		   here, ahead of the COMPONENT_REF case just below, for the
+		   same reason that case is checked ahead of the plain VAR_P/
+		   PARM_DECL fallback: two syntactically identical '&ptr
+		   [index]' expressions are different, non-interned tree
+		   nodes, so establishing the fact under the raw ARRAY_REF
+		   itself would never be found again by a different
+		   occurrence's own consult (oa_provable_p's own matching
+		   ADDR_EXPR/ARRAY_REF/POINTER_TYPE_P case).  */
+		else if (TREE_CODE (op) == ARRAY_REF)
+		  {
+		    tree identity;
+		    if (oa_array_object_identity (arg, env, &identity))
+		      arg = identity;
+		  }
 	      }
 	    /* D4324/P2680: 'is_object_address(p)' for a POINTER-TYPED FIELD
 	       p (e.g. 'this->m_ptr', read directly as a value, no '&') --
@@ -20874,6 +21203,27 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 		    identity = env.alias_find (identity);
 		    arg = env.field_object_identity_key (identity, field);
 		  }
+	      }
+	    /* D4324, Increment 2 of the pointer-indexing follow-on: 'p
+	       [index]' for a POINTER-TYPED p (as opposed to a genuine
+	       fixed-size array) is never actually ADDR_EXPR(ARRAY_REF(...))
+	       in the first place -- '&p[index]' means '&*(p+index)', which
+	       cp_build_addr_expr's own "cancel &* " simplification folds
+	       straight down to the plain pointer arithmetic 'p+index'
+	       (POINTER_PLUS_EXPR), with no ADDR_EXPR/ARRAY_REF/INDIRECT_REF
+	       surviving at all -- confirmed by direct testing: the ADDR_EXPR
+	       branch above's own ARRAY_REF case is reachable only for a
+	       genuine fixed-size ARRAY_TYPE base (oa_array_object_identity's
+	       own ADDR_EXPR/ARRAY_REF case still exists for that shape, and
+	       for symmetry with oa_provable_p's own consulting side, which
+	       tries both shapes for the identical reason), while std::
+	       barrier's own real, motivating 'ptr[index]' shape reaches
+	       here as this bare POINTER_PLUS_EXPR instead.  */
+	    else if (TREE_CODE (arg) == POINTER_PLUS_EXPR)
+	      {
+		tree identity;
+		if (oa_array_object_identity (arg, env, &identity))
+		  arg = identity;
 	      }
 	    facts.safe_push (arg);
 	  }
@@ -21132,6 +21482,7 @@ oa_resolve_iile_call (tree call, oa_env &env)
      crash/UB path for '&h->f' first resolved inside this closure's own
      body (see oa_env::field_object_identity_key's own comment).  */
   inner_env.set_field_object_key_cache (env.field_object_key_cache ());
+  inner_env.set_array_object_key_cache (env.array_object_key_cache ());
   inner_env.set_capture_proxy_key_cache (env.capture_proxy_key_cache ());
   oa_walk_stmt (&body, inner_env);
 
@@ -21189,6 +21540,7 @@ oa_resolve_iile_range (tree call, oa_env &env, oa_range_fact *out)
   oa_env inner_env;
   /* Stage 5: see oa_resolve_iile_call's own identical propagation.  */
   inner_env.set_field_object_key_cache (env.field_object_key_cache ());
+  inner_env.set_array_object_key_cache (env.array_object_key_cache ());
   inner_env.set_capture_proxy_key_cache (env.capture_proxy_key_cache ());
   oa_walk_stmt (&body, inner_env);
 
@@ -21314,6 +21666,23 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 		tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
 		if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
 		  arg = op;
+		/* D4324, Increment 2 of the pointer-indexing follow-on:
+		   'is_object_address(&ptr[index])' -- see oa_array_object_
+		   identity/array_object_identity_key's own comments. Tried
+		   here, ahead of the COMPONENT_REF case just below, for the
+		   same reason that case is checked ahead of the plain VAR_P/
+		   PARM_DECL fallback: two syntactically identical '&ptr
+		   [index]' expressions are different, non-interned tree
+		   nodes, so establishing the fact under the raw ARRAY_REF
+		   itself would never be found again by a different
+		   occurrence's own consult (oa_provable_p's own matching
+		   ADDR_EXPR/ARRAY_REF/POINTER_TYPE_P case).  */
+		else if (TREE_CODE (op) == ARRAY_REF)
+		  {
+		    tree identity;
+		    if (oa_array_object_identity (arg, env, &identity))
+		      arg = identity;
+		  }
 	      }
 	    /* D4324/P2680: 'is_object_address(p)' for a POINTER-TYPED FIELD
 	       p (e.g. 'this->m_ptr', read directly as a value, no '&') --
@@ -21350,6 +21719,27 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 		    identity = env.alias_find (identity);
 		    arg = env.field_object_identity_key (identity, field);
 		  }
+	      }
+	    /* D4324, Increment 2 of the pointer-indexing follow-on: 'p
+	       [index]' for a POINTER-TYPED p (as opposed to a genuine
+	       fixed-size array) is never actually ADDR_EXPR(ARRAY_REF(...))
+	       in the first place -- '&p[index]' means '&*(p+index)', which
+	       cp_build_addr_expr's own "cancel &* " simplification folds
+	       straight down to the plain pointer arithmetic 'p+index'
+	       (POINTER_PLUS_EXPR), with no ADDR_EXPR/ARRAY_REF/INDIRECT_REF
+	       surviving at all -- confirmed by direct testing: the ADDR_EXPR
+	       branch above's own ARRAY_REF case is reachable only for a
+	       genuine fixed-size ARRAY_TYPE base (oa_array_object_identity's
+	       own ADDR_EXPR/ARRAY_REF case still exists for that shape, and
+	       for symmetry with oa_provable_p's own consulting side, which
+	       tries both shapes for the identical reason), while std::
+	       barrier's own real, motivating 'ptr[index]' shape reaches
+	       here as this bare POINTER_PLUS_EXPR instead.  */
+	    else if (TREE_CODE (arg) == POINTER_PLUS_EXPR)
+	      {
+		tree identity;
+		if (oa_array_object_identity (arg, env, &identity))
+		  arg = identity;
 	      }
 	    facts.safe_push (arg);
 	  }
@@ -25339,6 +25729,11 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
   hash_map<oa_field_key_hash, tree> field_object_key_cache;
   env.set_field_object_key_cache (&field_object_key_cache);
   /* Same shared, cross-branch, cross-nested-walk discipline as
+     FIELD_OBJECT_KEY_CACHE just above, backing oa_env::array_object_
+     identity_key -- see that method's own comment.  */
+  hash_map<oa_field_key_hash, tree> array_object_key_cache;
+  env.set_array_object_key_cache (&array_object_key_cache);
+  /* Same shared, cross-branch, cross-nested-walk discipline as
      FIELD_OBJECT_KEY_CACHE just above, backing oa_env::capture_key --
      see that method's own comment.  */
   hash_map<oa_field_key_hash, tree> capture_proxy_key_cache;
@@ -25604,6 +25999,18 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
 		op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
 	      if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
 		arg = op;
+	      /* D4324, Increment 2 of the pointer-indexing follow-on: see
+		 oa_handle_precondition_stmt/oa_handle_assertion_stmt's own
+		 identical addition -- self-trust for a declared, conveyor-
+		 active 'pre<>(is_object_address(&ptr[index]))' needs the
+		 same array-slot-identity establishment those two get for a
+		 body contract_assert/precondition-obligation conjunct.  */
+	      else if (TREE_CODE (op) == ARRAY_REF)
+		{
+		  tree identity;
+		  if (oa_array_object_identity (arg, env, &identity))
+		    arg = identity;
+		}
 	    }
 	  else if (TREE_CODE (arg) == COMPONENT_REF)
 	    {
@@ -25620,6 +26027,18 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
 		  identity = env.alias_find (identity);
 		  arg = env.field_object_identity_key (identity, field);
 		}
+	    }
+	  /* D4324, Increment 2 of the pointer-indexing follow-on: see
+	     oa_handle_precondition_stmt/oa_handle_assertion_stmt's own
+	     identical POINTER_PLUS_EXPR addition for the full rationale
+	     (a POINTER-TYPED 'p[index]' -- as opposed to a genuine
+	     fixed-size array -- never actually arrives as ADDR_EXPR
+	     (ARRAY_REF(...)) in the first place).  */
+	  else if (TREE_CODE (arg) == POINTER_PLUS_EXPR)
+	    {
+	      tree identity;
+	      if (oa_array_object_identity (arg, env, &identity))
+		arg = identity;
 	    }
 	  /* D4324/P2680: for a function declared separately from its
 	     (out-of-class) definition, with the same explicit pre<>()
