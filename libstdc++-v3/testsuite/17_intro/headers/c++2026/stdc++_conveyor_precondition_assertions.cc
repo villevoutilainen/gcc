@@ -32,10 +32,19 @@
 // of one flag combination per file (see e.g. 26_numerics/saturation/
 // conveyor_assertions.cc vs. div_conveyor_proofs.cc).
 //
-// Same two known, deferred loop-body gaps as stdc++_conveyor_assertions.cc
-// (is_object_address facts don't survive into a loop body); see that
-// file's own comment for the full explanation. Remove this dg-xfail-if
-// once that engine gap is closed.
-// { dg-xfail-if "is_object_address facts don't survive into a loop body" { *-*-* } }
+// One known, deferred gap remains, only reached under this file's own
+// stricter flag combination: std::barrier's __tree_barrier_base::
+// _M_arrive indexes __state[__current].__tickets[__round], which needs
+// is_object_address composed through pointer ARITHMETIC/INDEXING
+// (__state + __current), not just through 'this'-based field access --
+// a distinct, deeper, already-known-and-deferred engine limitation
+// (see project memory: "full array-offset tracking deferred"),
+// unrelated to the loop-body diagnostics-suppression bug
+// stdc++_conveyor_assertions.cc's own comment describes (that one is
+// fixed; confirmed this file's previously-xfailed fs_path.h error is
+// gone too, this is the one error site that remains). No library-only
+// workaround exists (the pointer/index are otherwise legitimately
+// valid). Remove this dg-xfail-if once that engine gap is closed.
+// { dg-xfail-if "is_object_address can't compose through pointer indexing" { *-*-* } }
 
 #include <bits/stdc++.h>
