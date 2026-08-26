@@ -11,14 +11,13 @@
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-D_GLIBCXX_CONVEYOR_ASSERTIONS -fcontracts -fcontract-control-objects" }
 //
-// One known, deferred gap: is_object_address can't compose through
-// pointer ARITHMETIC/INDEXING (e.g. std::barrier's own __state
-// [__current].__tickets[__round], or __unicode::_Utf_iterator's own
-// array-indexed internal buffer), only through 'this'-based field
-// access -- see stdc++_conveyor_assertions.cc's own comment for the
-// full explanation. Remove this dg-xfail-if once that engine gap is
-// closed.
-// { dg-xfail-if "is_object_address can't compose through pointer indexing" { *-*-* } }
+// Previously xfailed here for is_object_address failing to compose
+// through pointer ARITHMETIC/INDEXING (e.g. std::barrier's own __state
+// [__current].__tickets[__round]), and then for a different, unrelated
+// gap only reached once that fix let std::barrier/__unicode's own
+// array access reach std::array::operator[] for the first time --
+// both CLOSED 2026-08-26, see the libstdc++ testsuite copies' own
+// comments for the full explanation of both fixes. Clean now.
 
 #include <bits/stdc++.h>
 

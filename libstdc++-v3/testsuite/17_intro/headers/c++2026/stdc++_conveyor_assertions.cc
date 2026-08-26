@@ -38,16 +38,27 @@
 // d4324-loop-speculative-rewalk-diagnostics-ok.C for the minimal
 // regression test.
 //
-// One different, unrelated gap remains: std::barrier's own
-// __tree_barrier_base::_M_arrive indexes __state[__current].
-// __tickets[__round], which needs is_object_address composed through
-// pointer ARITHMETIC/INDEXING (__state + __current), not just through
-// 'this'-based field access -- a distinct, deeper, already-known-and-
-// deferred engine limitation (see project memory: "full array-offset
-// tracking deferred"). See stdc++_conveyor_precondition_assertions.cc
-// in this same directory for the fuller explanation (that file hits
-// the identical error). No library-only workaround exists. Remove
-// this dg-xfail-if once that engine gap is closed.
-// { dg-xfail-if "is_object_address can't compose through pointer indexing" { *-*-* } }
+// Previously xfailed here too for std::barrier's own pointer-indexing
+// gap (__state[__current].__tickets[__round]) -- CLOSED 2026-08-26, see
+// stdc++_conveyor_precondition_assertions.cc's own updated comment for
+// the full explanation of the fix.
+//
+// Also previously xfailed for a different, unrelated gap reached only
+// under this file's own weaker flag combination (CONVEYOR_ASSERTIONS
+// without PRECONDITION_ASSERTIONS) once the fix above let std::barrier/
+// __unicode's own array access reach std::array::operator[] for the
+// first time: operator[]'s own in-body __glibcxx_requires_subscript
+// assert (debug/assertions.h) calls this->size() (a _GLIBCXX_CONVEYOR-
+// tagged accessor), needing is_object_address(this) -- but operator[]
+// is not itself conveyor-declared, and _GLIBCXX_PRECONDITION_SUBSCRIPT
+// (bits/c++config.h), which supplies that self-trust as a declared
+// pre<>(), only does so under _GLIBCXX_PRECONDITION_ASSERTIONS. Also
+// CLOSED 2026-08-26: debug/assertions.h's own in-body __glibcxx_
+// requires_subscript/_nonempty now establish the identical is_object_
+// address(this) self-trust directly, via a body contract_assert<never_
+// proven_conveyor_v>, gated on _GLIBCXX_CONVEYOR_ASSERTIONS alone (not
+// on _GLIBCXX_PRECONDITION_ASSERTIONS) -- so this file's own flag
+// combination no longer needs the declared-precondition form to supply
+// it. Clean under both flag combinations now.
 
 #include <bits/stdc++.h>

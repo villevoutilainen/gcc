@@ -11,11 +11,11 @@
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-D_GLIBCXX_CONVEYOR_ASSERTIONS -D_GLIBCXX_PRECONDITION_ASSERTIONS -fcontracts -fcontract-control-objects" }
 //
-// Same known, deferred gap as d4324-megaheader-conveyor-assertions.C
-// (is_object_address can't compose through pointer arithmetic/
-// indexing); see that file's own comment for the full explanation.
-// Remove this dg-xfail-if once that engine gap is closed.
-// { dg-xfail-if "is_object_address can't compose through pointer indexing" { *-*-* } }
+// Previously xfailed here too, for the identical, now-closed pointer-
+// indexing gap d4324-megaheader-conveyor-assertions.C's own comment
+// describes -- see that file's own comment, and the libstdc++ testsuite
+// copies' own fuller explanation, for what fixed it. Clean under this
+// file's own (stricter) flag combination now.
 
 #include <bits/stdc++.h>
 

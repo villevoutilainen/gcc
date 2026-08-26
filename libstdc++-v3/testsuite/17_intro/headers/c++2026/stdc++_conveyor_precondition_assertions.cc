@@ -32,19 +32,24 @@
 // of one flag combination per file (see e.g. 26_numerics/saturation/
 // conveyor_assertions.cc vs. div_conveyor_proofs.cc).
 //
-// One known, deferred gap remains, only reached under this file's own
-// stricter flag combination: std::barrier's __tree_barrier_base::
-// _M_arrive indexes __state[__current].__tickets[__round], which needs
-// is_object_address composed through pointer ARITHMETIC/INDEXING
-// (__state + __current), not just through 'this'-based field access --
-// a distinct, deeper, already-known-and-deferred engine limitation
-// (see project memory: "full array-offset tracking deferred"),
-// unrelated to the loop-body diagnostics-suppression bug
-// stdc++_conveyor_assertions.cc's own comment describes (that one is
-// fixed; confirmed this file's previously-xfailed fs_path.h error is
-// gone too, this is the one error site that remains). No library-only
-// workaround exists (the pointer/index are otherwise legitimately
-// valid). Remove this dg-xfail-if once that engine gap is closed.
-// { dg-xfail-if "is_object_address can't compose through pointer indexing" { *-*-* } }
+// Previously xfailed here too for std::barrier's own __tree_barrier_
+// base::_M_arrive, which indexes __state[__current].__tickets[__round]
+// -- is_object_address composed through pointer ARITHMETIC/INDEXING
+// (__state + __current), not just through 'this'-based field access.
+// Closed 2026-08-26: contracts.cc gained (1) an oa_provable_p pointer-
+// parity fix mirroring oa_scan_array_bounds_in_expr's own existing
+// POINTER_TYPE_P branch, and (2) a new assertable array-slot-identity
+// mechanism (oa_array_object_identity/array_object_identity_key,
+// modeled directly on the existing field_object_identity_key) that lets
+// a library author assert is_object_address(&ptr[dynamic_index]) into
+// existence for an opaque, heap-allocated array with no traceable
+// named-array provenance -- exactly std::barrier's own __state, see
+// std::barrier's own updated contract_assert. See gcc/testsuite/g++.dg/
+// contracts/cpp26/d4324-array-slot-identity-*.C for the minimal
+// regression tests. Clean under this file's own flag combination now;
+// see stdc++_conveyor_assertions.cc's own comment for the one, separate,
+// already-known gap that remains under ITS weaker flag combination
+// specifically (not reached here: this file's own _GLIBCXX_PRECONDITION_
+// SUBSCRIPT already self-trusts the 'this' that gap is about).
 
 #include <bits/stdc++.h>
