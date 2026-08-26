@@ -3974,12 +3974,64 @@ static tree lookup_is_object_address_template ();
    FUNCTION_DECL's identity is stable for the whole compilation).  */
 static hash_set<tree> *oa_synthesized_functions;
 
+/* True if FNDECL has at least one of its own precondition/postcondition
+   specifiers whose control object is conveyor-like (is_conveyor, or
+   either of the two traits that imply it -- analyzed_conveyor/
+   proven_conveyor, see contract_control_conveyor_like's own comment)
+   and not statically ignored.
+
+   Found and fixed 2026-08-26, Ville: "The pre is a conveyor pre, and
+   should follow conveyor rules, and should require that is_object_
+   address(&x) is true" -- reported against a function with NO 'conveyor'
+   keyword of its own, but a 'pre<conveyor_assert_v>(...)' clause. Before
+   this fix, oa_synthesize_implicit_reference_safety_preconditions below
+   was gated purely on DECL_DECLARED_CONVEYOR_P (fndecl), so such a
+   function got no synthesized is_object_address obligation on its own
+   reference parameters/'this' at all -- confirmed via direct testing: a
+   caller passing an entirely unproven '*p' as the argument produced no
+   diagnostic whatsoever, even though the function's own 'pre<conveyor_
+   assert_v>(x < 2048)' clause was, on its own, genuinely conveyor-active
+   (its condition IS checked against ambient facts -- confirmed via the
+   same test, which does warn "cannot verify ... x < 2048"). This is
+   exactly the standing principle from an earlier session, stated
+   explicitly for future reference and naming this exact feature as an
+   example: "any conveyor restriction always applies to BOTH conveyor-
+   declared functions AND conveyor predicates (contract condition text),
+   never one alone" -- gating the Q1 reference-safety synthesis on the
+   FUNCTION's own DECL_DECLARED_CONVEYOR_P bit alone violated that
+   principle.
+
+   Mirrors oa_contract_conveyor_active_p (defined much later in this
+   file, needs machinery not yet declared this early) using only
+   contract_control_conveyor_like/contract_control_is_ignored/contract_
+   side_of, all already available this early (grokfndecl time) via their
+   own forward declarations/header exports. Quiet probing throughout:
+   this is a "does ANY specifier qualify" check, not the place to
+   diagnose a malformed control object -- the real, diagnosed evaluation
+   happens at each contract's own normal consultation sites, same as
+   every other quiet pre-check in this file.  */
+
+static bool
+oa_fndecl_has_conveyor_active_contract_p (tree fndecl)
+{
+  for (tree c = get_fn_contract_specifiers (fndecl); c; c = TREE_CHAIN (c))
+    {
+      tree contract = CONTRACT_STATEMENT (c);
+      tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+      if (!ctrl || !flag_contract_control_objects)
+	continue;
+      contract_check_side side = contract_side_of (contract, fndecl);
+      if (!contract_control_conveyor_like (ctrl, side, /*quiet=*/true))
+	continue;
+      if (!contract_control_is_ignored (ctrl, side, /*quiet=*/true))
+	return true;
+    }
+  return false;
+}
+
 void
 oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
 {
-  if (!DECL_DECLARED_CONVEYOR_P (fndecl))
-    return;
-
   /* D4324/P2680: this is called from multiple, independent sites for the
      same in-class member function declaration -- grokfndecl's own main
      path (skipped via the contract_any_deferred_p check just below, for
@@ -4019,8 +4071,17 @@ oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
      conveyor member function with a real, deferred in-class contract
      (e.g. 'int get () const conveyor pre<ctrl>(size () > 3) { ... }')
      silently lost its own synthesized is_object_address(this) entirely
-     when this guard was (incorrectly) placed before this check.  */
+     when this guard was (incorrectly) placed before this check.
+
+     Moved ahead of the DECL_DECLARED_CONVEYOR_P/conveyor-active-contract
+     check below (2026-08-26): the new check inspects FNDECL's own
+     specifier list's CONTRACT_CONTROL_OBJECTs, which must not be
+     examined while still a DEFERRED_PARSE placeholder either.  */
   if (contract_any_deferred_p (get_fn_contract_specifiers (fndecl)))
+    return;
+
+  if (!DECL_DECLARED_CONVEYOR_P (fndecl)
+      && !oa_fndecl_has_conveyor_active_contract_p (fndecl))
     return;
 
   if (!oa_synthesized_functions)

@@ -12865,21 +12865,39 @@ grokfndecl (tree ctype,
       if (TREE_CODE (decl) == TEMPLATE_DECL)
 	t = DECL_TEMPLATE_RESULT (decl);
       SET_DECL_DECLARED_CONVEYOR_P (t);
-      /* D4324/P2680 soundness fix (see ~/soundness-fixes-for-conveyors.md
-	 and oa_synthesize_implicit_reference_safety_preconditions's own
-	 comment, contracts.cc): DECL_ARGUMENTS (T) is fully materialized
-	 by this point, including a member function's own 'this'
-	 (build_this_parm already ran, earlier in this same function), so
-	 this is the earliest point both T's own conveyor bit and its
-	 final parameter list are known -- exactly what's needed to
-	 synthesize T's own implicit reference-safety preconditions.  Must
-	 run BEFORE propagate_cdtor_contracts_to_clones below: that call
-	 copies whatever's currently on T's own specifier list onto T's
-	 clones, so a T that's a constructor/destructor needs the
-	 synthesized precondition already prepended (onto the user's own
-	 contract_specifiers, just set above) before its clones -- the
-	 decls a constructor/destructor CALL actually resolves to -- copy
-	 it.  */
+    }
+
+  /* D4324/P2680 soundness fix (see ~/soundness-fixes-for-conveyors.md and
+     oa_synthesize_implicit_reference_safety_preconditions's own comment,
+     contracts.cc): DECL_ARGUMENTS (T) is fully materialized by this
+     point, including a member function's own 'this' (build_this_parm
+     already ran, earlier in this same function), so this is the
+     earliest point both T's own conveyor bit and its final parameter
+     list are known -- exactly what's needed to synthesize T's own
+     implicit reference-safety preconditions.  Must run BEFORE
+     propagate_cdtor_contracts_to_clones below: that call copies
+     whatever's currently on T's own specifier list onto T's clones, so
+     a T that's a constructor/destructor needs the synthesized
+     precondition already prepended (onto the user's own contract_
+     specifiers, just set above) before its clones -- the decls a
+     constructor/destructor CALL actually resolves to -- copy it.
+
+     Found and fixed 2026-08-26: this call used to be gated on
+     'declared_conveyor_p' alone, so a function with no 'conveyor'
+     keyword of its own but a conveyor-flavored pre/post clause never
+     even reached oa_synthesize_implicit_reference_safety_preconditions,
+     regardless of that function's own internal gate (contracts.cc) --
+     confirmed via direct testing (a debug trace inside that function
+     never fired at all for such a declaration). Widened to also call
+     whenever T has ANY contract_specifiers at all -- cheap even when
+     none of them turn out to be conveyor-active, since the callee's own
+     first act is exactly that check (oa_fndecl_has_conveyor_active_
+     contract_p) before doing anything further.  */
+  if (declared_conveyor_p || contract_specifiers)
+    {
+      tree t = decl;
+      if (TREE_CODE (decl) == TEMPLATE_DECL)
+	t = DECL_TEMPLATE_RESULT (decl);
       oa_synthesize_implicit_reference_safety_preconditions (t);
     }
 
