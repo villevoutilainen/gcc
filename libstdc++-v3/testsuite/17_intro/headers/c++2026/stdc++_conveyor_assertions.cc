@@ -28,15 +28,26 @@
 // see 17_intro/headers/c++2011/stdc++.cc's own identical megaheader
 // inclusion for the non-conveyor precedent.
 //
-// Two known, deferred gaps remain: an is_object_address fact established
-// before a loop does not survive into the loop's own body (confirmed in
-// two independent, unrelated places: bits/fs_path.h's generic_string()
-// range-for loop over *this, and std::barrier's __tree_barrier_base::
-// _M_arrive's nested for-loop over __state[__current].__tickets[__round]).
-// This is a genuine engine limitation, not a library bug -- neither site
-// has any reasonable library-only workaround (the loop variable/pointer
-// in each case is otherwise legitimately valid). Remove this dg-xfail-if
-// once that engine gap is closed.
-// { dg-xfail-if "is_object_address facts don't survive into a loop body" { *-*-* } }
+// Previously xfailed here for a loop-body is_object_address gap
+// (bits/fs_path.h's generic_string() range-for loop over *this) --
+// that was actually a real engine bug (oa_handle_call_precondition_
+// obligation missing the oa_diagnostics_active guard its own sibling
+// scans already had, so oa_handle_loop's speculative per-reassigned-
+// decl re-walk could leak a spurious diagnostic), now fixed in
+// gcc/cp/contracts.cc; see gcc/testsuite/g++.dg/contracts/cpp26/
+// d4324-loop-speculative-rewalk-diagnostics-ok.C for the minimal
+// regression test.
+//
+// One different, unrelated gap remains: std::barrier's own
+// __tree_barrier_base::_M_arrive indexes __state[__current].
+// __tickets[__round], which needs is_object_address composed through
+// pointer ARITHMETIC/INDEXING (__state + __current), not just through
+// 'this'-based field access -- a distinct, deeper, already-known-and-
+// deferred engine limitation (see project memory: "full array-offset
+// tracking deferred"). See stdc++_conveyor_precondition_assertions.cc
+// in this same directory for the fuller explanation (that file hits
+// the identical error). No library-only workaround exists. Remove
+// this dg-xfail-if once that engine gap is closed.
+// { dg-xfail-if "is_object_address can't compose through pointer indexing" { *-*-* } }
 
 #include <bits/stdc++.h>
