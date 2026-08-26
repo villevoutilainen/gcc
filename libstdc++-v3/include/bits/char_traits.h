@@ -1006,6 +1006,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	else
 	  return static_cast<weak_ordering>(__cmp <=> 0);
       }
+
+    template<typename _ChTraits>
+      using __char_traits_cmp_cat_t
+	= decltype(__char_traits_cmp_cat<_ChTraits>(0));
   } // namespace __detail
 #endif // C++20
 

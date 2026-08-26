@@ -63,79 +63,134 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     void
     basic_string<_CharT, _Traits, _Alloc>::
     swap(basic_string& __s) _GLIBCXX_NOEXCEPT
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
+      && std::is_object_address (&__s))
+#endif
     {
       if (this == std::__addressof(__s))
 	return;
 
+      // D4324/P2680: 'this' and '__s' are the exact same struct type, so
+      // the mandatory alias-group invalidation sweep conservatively
+      // treats any conveyor call touching one as possibly ending the
+      // other's own lifetime too (see project_self_invalidation_and_
+      // out_of_class_fixes.md) -- re-assert both, trusted, before each
+      // group of statements that needs them, matching the identical
+      // idiom already used throughout this same file's move
+      // constructor/move-assign.
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+#define _GLIBCXX_SWAP_REASSERT \
+      contract_assert<std::contracts::never_proven_conveyor_v> \
+	(std::is_object_address (this) && std::is_object_address (&__s))
+#else
+#define _GLIBCXX_SWAP_REASSERT
+#endif
+
+      _GLIBCXX_SWAP_REASSERT;
       _Alloc_traits::_S_on_swap(_M_get_allocator(), __s._M_get_allocator());
 
+      _GLIBCXX_SWAP_REASSERT;
       if (_M_is_local())
 	if (__s._M_is_local())
 	  {
+	    _GLIBCXX_SWAP_REASSERT;
 	    if (length() && __s.length())
 	      {
+		_GLIBCXX_SWAP_REASSERT;
 		_CharT __tmp_data[_S_local_capacity + 1];
 		traits_type::copy(__tmp_data, __s._M_local_buf,
 				  __s.length() + 1);
+		_GLIBCXX_SWAP_REASSERT;
 		traits_type::copy(__s._M_local_buf, _M_local_buf,
 				  length() + 1);
+		_GLIBCXX_SWAP_REASSERT;
 		traits_type::copy(_M_local_buf, __tmp_data,
 				  __s.length() + 1);
 	      }
 	    else if (__s.length())
 	      {
+		_GLIBCXX_SWAP_REASSERT;
 		_M_init_local_buf();
+		_GLIBCXX_SWAP_REASSERT;
 		traits_type::copy(_M_local_buf, __s._M_local_buf,
 				  __s.length() + 1);
+		_GLIBCXX_SWAP_REASSERT;
 		_M_length(__s.length());
+		_GLIBCXX_SWAP_REASSERT;
 		__s._M_set_length(0);
 		return;
 	      }
 	    else if (length())
 	      {
+		_GLIBCXX_SWAP_REASSERT;
 		__s._M_init_local_buf();
+		_GLIBCXX_SWAP_REASSERT;
 		traits_type::copy(__s._M_local_buf, _M_local_buf,
 				  length() + 1);
+		_GLIBCXX_SWAP_REASSERT;
 		__s._M_length(length());
+		_GLIBCXX_SWAP_REASSERT;
 		_M_set_length(0);
 		return;
 	      }
 	  }
 	else
 	  {
+	    _GLIBCXX_SWAP_REASSERT;
 	    const size_type __tmp_capacity = __s._M_allocated_capacity;
+	    _GLIBCXX_SWAP_REASSERT;
 	    __s._M_init_local_buf();
+	    _GLIBCXX_SWAP_REASSERT;
 	    traits_type::copy(__s._M_local_buf, _M_local_buf,
 			      length() + 1);
+	    _GLIBCXX_SWAP_REASSERT;
 	    _M_data(__s._M_data());
+	    _GLIBCXX_SWAP_REASSERT;
 	    __s._M_data(__s._M_local_buf);
+	    _GLIBCXX_SWAP_REASSERT;
 	    _M_capacity(__tmp_capacity);
 	  }
       else
 	{
+	  _GLIBCXX_SWAP_REASSERT;
 	  const size_type __tmp_capacity = _M_allocated_capacity;
+	  _GLIBCXX_SWAP_REASSERT;
 	  if (__s._M_is_local())
 	    {
+	      _GLIBCXX_SWAP_REASSERT;
 	      _M_init_local_buf();
+	      _GLIBCXX_SWAP_REASSERT;
 	      traits_type::copy(_M_local_buf, __s._M_local_buf,
 				__s.length() + 1);
+	      _GLIBCXX_SWAP_REASSERT;
 	      __s._M_data(_M_data());
+	      _GLIBCXX_SWAP_REASSERT;
 	      _M_data(_M_local_buf);
 	    }
 	  else
 	    {
+	      _GLIBCXX_SWAP_REASSERT;
 	      pointer __tmp_ptr = _M_data();
+	      _GLIBCXX_SWAP_REASSERT;
 	      _M_data(__s._M_data());
+	      _GLIBCXX_SWAP_REASSERT;
 	      __s._M_data(__tmp_ptr);
+	      _GLIBCXX_SWAP_REASSERT;
 	      _M_capacity(__s._M_allocated_capacity);
 	    }
+	  _GLIBCXX_SWAP_REASSERT;
 	  __s._M_capacity(__tmp_capacity);
 	}
 
+      _GLIBCXX_SWAP_REASSERT;
       const size_type __tmp_length = length();
+      _GLIBCXX_SWAP_REASSERT;
       _M_length(__s.length());
+      _GLIBCXX_SWAP_REASSERT;
       __s._M_length(__tmp_length);
     }
+#undef _GLIBCXX_SWAP_REASSERT
 
   template<typename _CharT, typename _Traits, typename _Alloc>
     _GLIBCXX20_CONSTEXPR
@@ -401,25 +456,52 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     void
     basic_string<_CharT, _Traits, _Alloc>::
     _M_assign(const basic_string& __str)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
+      && std::is_object_address (&__str))
+#endif
     {
       if (this != std::__addressof(__str))
 	{
+	  // D4324/P2680: same "same-typed 'this'/reference parameter,
+	  // mandatory alias-group sweep can't distinguish them" reasoning
+	  // as swap()'s own identical reassertions just above -- see that
+	  // function's own comment, and project_self_invalidation_and_
+	  // out_of_class_fixes.md.
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+#define _GLIBCXX_ASSIGN_REASSERT \
+	  contract_assert<std::contracts::never_proven_conveyor_v> \
+	    (std::is_object_address (this) && std::is_object_address (&__str))
+#else
+#define _GLIBCXX_ASSIGN_REASSERT
+#endif
+	  _GLIBCXX_ASSIGN_REASSERT;
 	  const size_type __rsize = __str.length();
+	  _GLIBCXX_ASSIGN_REASSERT;
 	  const size_type __capacity = capacity();
 
 	  if (__rsize > __capacity)
 	    {
 	      // if _M_create_plus throws, there is no effect.
+	      _GLIBCXX_ASSIGN_REASSERT;
 	      _Alloc_result __tmp = _M_create_plus(__rsize, __capacity);
+	      _GLIBCXX_ASSIGN_REASSERT;
 	      _M_dispose();
+	      _GLIBCXX_ASSIGN_REASSERT;
 	      _M_data(__tmp.__ptr);
+	      _GLIBCXX_ASSIGN_REASSERT;
 	      _M_capacity(__tmp.__count - 1);
 	    }
 
 	  if (__rsize)
-	    this->_S_copy(_M_data(), __str._M_data(), __rsize);
+	    {
+	      _GLIBCXX_ASSIGN_REASSERT;
+	      this->_S_copy(_M_data(), __str._M_data(), __rsize);
+	    }
 
+	  _GLIBCXX_ASSIGN_REASSERT;
 	  _M_set_length(__rsize);
+#undef _GLIBCXX_ASSIGN_REASSERT
 	}
     }
 
@@ -538,6 +620,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     void
     basic_string<_CharT, _Traits, _Alloc>::
     resize(size_type __n, _CharT __c)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
     {
       const size_type __size = this->size();
       if (__size < __n)
@@ -589,6 +674,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     basic_string<_CharT, _Traits, _Alloc>::
     _M_replace_aux(size_type __pos1, size_type __n1, size_type __n2,
 		   _CharT __c)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
     {
       _M_check_length(__n1, __n2, "basic_string::_M_replace_aux");
 
