@@ -175,7 +175,13 @@ namespace __unicode
       [[nodiscard]]
       constexpr _Iter
       base() const requires forward_iterator<_Iter>
-      { return _M_curr(); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return _M_curr();
+      }
 
       [[nodiscard]]
       constexpr iter_difference_t<_Iter> 
@@ -184,11 +190,22 @@ namespace __unicode
 
       [[nodiscard]]
       constexpr value_type
-      operator*() const { return _M_buf[_M_buf_index]; }
+      operator*() const
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return _M_buf[_M_buf_index];
+      }
 
       constexpr _Utf_iterator&
       operator++()
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	if (_M_buf_index + 1 < _M_buf_last)
 	  ++_M_buf_index; // Move to the next code unit in the buffer.
 	else if (_M_curr() != _M_last)
@@ -217,6 +234,10 @@ namespace __unicode
       constexpr _Utf_iterator&
       operator--() requires bidirectional_iterator<_Iter>
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	if (_M_buf_index > 0)
 	  --_M_buf_index;
 	else if (_M_curr() != _M_first())
@@ -242,6 +263,10 @@ namespace __unicode
       operator==(_Utf_iterator __lhs, _Utf_iterator __rhs)
       requires forward_iterator<_Iter> || requires (_Iter __i) { __i != __i; }
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__lhs) && std::is_object_address (&__rhs));
+#endif
 	if constexpr (forward_iterator<_Iter>)
 	  return __lhs._M_curr() == __rhs._M_curr()
 		   && __lhs._M_buf_index == __rhs._M_buf_index;
@@ -304,7 +329,14 @@ namespace __unicode
       template<typename _It> requires forward_iterator<_It>
 	struct _Guard<_It>
 	{
-	  constexpr ~_Guard() { _M_this->_M_curr() = std::move(_M_orig); }
+	  constexpr ~_Guard()
+	  {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	    contract_assert<std::contracts::never_proven_conveyor_v>
+	      (std::is_object_address (_M_this));
+#endif
+	    _M_this->_M_curr() = std::move(_M_orig);
+	  }
 	  _Utf_iterator* _M_this;
 	  _It _M_orig;
 	};
@@ -312,12 +344,20 @@ namespace __unicode
       constexpr char32_t
       _M_read_utf8()
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	_Guard<_Iter> __g{this, _M_curr()};
 	char32_t __c{};
 	const uint8_t __lo_bound = 0x80, __hi_bound = 0xBF;
 	uint8_t __u = *_M_curr()++;
 	uint8_t __to_incr = 1;
 	auto __incr = [&, this] {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (this));
+#endif
 	  ++__to_incr;
 	  return ++_M_curr();
 	};
@@ -414,6 +454,10 @@ namespace __unicode
       constexpr void
       _M_read_utf16()
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	_Guard<_Iter> __g{this, _M_curr()};
 	char32_t __c{};
 	uint16_t __u = *_M_curr()++;
@@ -444,6 +488,10 @@ namespace __unicode
       constexpr void
       _M_read_utf32()
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	_Guard<_Iter> __g{this, _M_curr()};
 	char32_t __c = *_M_curr()++;
 	if (!__is_scalar_value(__c)) [[unlikely]]
@@ -454,6 +502,10 @@ namespace __unicode
       constexpr void
       _M_read_reverse_utf8() requires bidirectional_iterator<_Iter>
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	const auto __first = _M_first();
 	auto __curr = _M_curr();
 	// The code point we decode:
@@ -524,6 +576,10 @@ namespace __unicode
       constexpr void
       _M_read_reverse_utf16() requires bidirectional_iterator<_Iter>
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	_Guard<_Iter> __g{this, _M_curr()};
 	char32_t __c{};
 	uint16_t __u = *--_M_curr();
@@ -554,6 +610,10 @@ namespace __unicode
       constexpr void
       _M_read_reverse_utf32() requires bidirectional_iterator<_Iter>
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	_Guard<_Iter> __g{this, _M_curr()};
 	char32_t __c = *--_M_curr();
 	if (!__is_scalar_value(__c)) [[unlikely]]
@@ -565,6 +625,10 @@ namespace __unicode
       constexpr void
       _M_update(char32_t __c, uint8_t __to_incr)
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	_M_to_increment = __to_incr;
 	_M_buf_index = 0;
 	if constexpr (sizeof(_ToFmt) == sizeof(uint32_t))
@@ -640,10 +704,19 @@ namespace __unicode
       { return _M_first_and_curr._M_first; }
 
       constexpr _Iter&
-      _M_curr() { return _M_first_and_curr._M_curr; }
+      _M_curr()
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+#endif
+      { return _M_first_and_curr._M_curr; }
 
       constexpr _Iter
-      _M_curr() const { return _M_first_and_curr._M_curr; }
+      _M_curr() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+      { return _M_first_and_curr._M_curr; }
 
       // _M_first is not needed for non-bidirectional ranges.
       template<typename _It>
