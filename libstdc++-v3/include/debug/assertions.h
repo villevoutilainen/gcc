@@ -57,14 +57,44 @@
 // string-literal-concatenated with this macro's own literal text.
 #  define __glibcxx_requires_non_empty_range(_First,_Last)	\
    __glibcxx_assert_msg(_First != _Last, #_First " != " #_Last)
-#  define __glibcxx_requires_subscript(_N)	\
-   __glibcxx_assert_msg(_N < this->size(), #_N " < this->size()")
+// SUBSCRIPT/NONEMPTY's own condition calls size()/empty(), which may be
+// _GLIBCXX_CONVEYOR-tagged (see e.g. std/array) -- under the reference/
+// this self-trust soundness fix, that mandates is_object_address(this)
+// proven at THIS call's own site too, same as _GLIBCXX_PRECONDITION_
+// SUBSCRIPT/_NONEMPTY already establish it for the declared-precondition
+// form (bits/c++config.h) -- but this in-body form is exactly what's
+// still active when _GLIBCXX_PRECONDITION_ASSERTIONS is NOT defined
+// (see the #if just above), so it needs the identical self-trust
+// established here too, or a caller relying on the in-body form alone
+// hits an unprovable is_object_address(this) the declared-precondition
+// form would have quietly supplied. Uses std::contracts::never_proven_
+// conveyor_v, deliberately: 'this' being a live object is always true
+// by construction for an ordinary, already-called member function, the
+// same reasoning bits/c++config.h's own identical addition uses.
+// Gated on _GLIBCXX_CONVEYOR_ASSERTIONS specifically (not just this
+// branch's own guard), matching every other conveyor-only addition in
+// this file's own sibling headers -- under plain _GLIBCXX_ASSERTIONS
+// (no conveyor), is_object_address has no meaning to assert at all.
+#  if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+#   define __glibcxx_requires_subscript(_N)	\
+    contract_assert<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)); \
+    __glibcxx_assert_msg(_N < this->size(), #_N " < this->size()")
+#  else
+#   define __glibcxx_requires_subscript(_N)	\
+    __glibcxx_assert_msg(_N < this->size(), #_N " < this->size()")
+#  endif
 // Verify that the container is nonempty. Unlike the two above, this
 // condition is entirely this macro's own literal text -- no call-site
 // tokens involved at all -- so the usual __glibcxx_assert already
 // reports it correctly with no message needed.
-#  define __glibcxx_requires_nonempty()		\
-   __glibcxx_assert(!this->empty())
+#  if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+#   define __glibcxx_requires_nonempty()		\
+    contract_assert<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)); \
+    __glibcxx_assert(!this->empty())
+#  else
+#   define __glibcxx_requires_nonempty()		\
+    __glibcxx_assert(!this->empty())
+#  endif
 # endif
 #else // Use the more verbose Debug Mode checks.
 # define __glibcxx_requires_non_empty_range(_First,_Last) \
