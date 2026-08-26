@@ -14046,6 +14046,36 @@ static void
 oa_handle_call_precondition_obligation (tree call, oa_env &env,
 					 bool in_predicate_context = false)
 {
+  /* D4324: this function is pure diagnostic-emission (is_object_address/
+     ownership call-site obligation checking) with no ENV-mutating side
+     effects of its own, exactly like oa_scan_div_mod_in_expr/oa_scan_
+     array_bounds_in_expr/oa_scan_overflow_in_expr just above -- so it
+     needs the identical OA_DIAGNOSTICS_ACTIVE guard those three already
+     have, and for the same reason: oa_handle_loop's speculative per-
+     reassigned-decl re-walks (both the pointer-decl and nz-decl passes)
+     set this false specifically so a hypothetical, artificially-
+     invalidated re-walk of the loop body -- which exists purely to
+     compute a compile-time fact, never a real diagnostic -- cannot leak
+     a user-visible error. Missing here, this function was the one
+     diagnostic path in the whole per-statement walk that speculative
+     re-walk didn't actually silence: found via direct testing that a
+     reference bound from an ordinary (non-conveyor) call, re-asserted
+     is_object_address'd by name inside a loop body, and then passed to
+     a real conveyor precondition -- correctly accepted immediately
+     after the assert, and correctly accepted in an equivalent ordinary
+     (non-loop) statement sequence -- was nonetheless rejected the
+     moment the same code sat inside a loop with any other reassigned
+     pointer/integer decl (e.g. an accumulator in the same loop, which
+     is what triggers oa_handle_loop's per-decl re-walk machinery at
+     all): the re-walk's own checkenv never re-derives the assert's
+     fact (the assert's condition was already resolved to
+     boolean_true_node by pass 1, so nothing re-establishes it), and
+     this function then dutifully, but wrongly, reported that as a real
+     error against the hypothetical env instead of silently discarding
+     it like every other diagnostic reached from the same speculative
+     walk already does.  */
+  if (!oa_diagnostics_active)
+    return;
   tree callee = cp_get_callee_fndecl_nofold (call);
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
