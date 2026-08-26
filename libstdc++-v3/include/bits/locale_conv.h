@@ -57,6 +57,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		     _OutStr& __outstr, const _Codecvt& __cvt, _State& __state,
 		     size_t& __count, _Fn __fn)
     {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (&__outstr));
+#endif
       if (__first == __last)
 	{
 	  __outstr.clear();
