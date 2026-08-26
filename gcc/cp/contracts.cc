@@ -14207,8 +14207,34 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
      either (the mandatory conveyor UB-freedom rules already forbid
      'delete'/'delete this'/an explicit destructor call anywhere in its
      own reachable call graph -- see oa_invalidate_symbolic_facts_for_
-     call_args's own CALLEE_IS_CONVEYOR exemption).  */
-  if (DECL_DECLARED_CONVEYOR_P (callee))
+     call_args's own CALLEE_IS_CONVEYOR exemption).
+
+     Also gated on the CALLING context itself being conveyor-active --
+     either the enclosing function is itself DECL_DECLARED_CONVEYOR_P, or
+     this call was reached from conveyor-flavored predicate/assert
+     condition text (IN_PREDICATE_CONTEXT), matching every existing
+     ownership test (d4324-reference-ownership-*.C): each one's
+     violating call sits inside a 'conveyor' function's own body or
+     inside a conveyor predicate's own condition text, never in an
+     ordinary statement of an ordinary, non-conveyor caller. Q2 exists
+     to stop a conveyor callee/predicate -- which by definition gets no
+     runtime check -- from silently laundering access to something it
+     wasn't given standing to touch; that risk is specific to the
+     "no runtime check" zone itself. An ordinary, non-conveyor caller
+     handing a reference to a conveyor function like std::move (which
+     never writes through its parameter -- see the caller-owns-it
+     discussion this fixes) is an ordinary aliasing question, no
+     different from calling any other function: catchable by ordinary
+     means, not something Q2's static "can never be checked at runtime"
+     rationale applies to. Before this fix, Q2 fired for *any* caller
+     of a conveyor callee, conveyor or not, incorrectly flagging
+     e.g. unique_ptr's own (non-conveyor) destructor merely for calling
+     std::move on a reference to its own already-owned 'this' state,
+     reached through a non-conveyor accessor.  */
+  if (DECL_DECLARED_CONVEYOR_P (callee)
+      && (in_predicate_context
+	  || (current_function_decl
+	      && DECL_DECLARED_CONVEYOR_P (current_function_decl))))
     {
       unsigned argno = 0;
       for (tree parm = DECL_ARGUMENTS (callee); parm;
