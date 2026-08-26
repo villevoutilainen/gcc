@@ -12621,8 +12621,8 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 	      return NULL_TREE;
 	    }
 	  /* A REFERENCE_TYPE'd operand (POINTER_TYPE_P above matches both
-	     POINTER_TYPE and REFERENCE_TYPE) reaching here needs no
-	     is_object_address fallback below: unlike a raw pointer, a
+	     POINTER_TYPE and REFERENCE_TYPE) reaching here generally needs
+	     no is_object_address fallback below: unlike a raw pointer, a
 	     bound reference is guaranteed valid for its own entire
 	     lifetime by the language itself -- there is no "null"/
 	     "reseated" reference, so reading one is never itself the
@@ -12631,8 +12631,30 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 	     without this exclusion, reading an ordinary by-reference
 	     lambda-capture proxy (itself a REFERENCE_TYPE local, e.g.
 	     '[&]() { return b; }' reading a by-reference-captured 'b')
-	     was wrongly flagged as an unprovable "pointer" dereference.  */
-	  if (TREE_CODE (TREE_TYPE (base)) != POINTER_TYPE)
+	     was wrongly flagged as an unprovable "pointer" dereference.
+
+	     Found and fixed 2026-08-26, Ville: "a conveyor contract_
+	     assert's predicate requires object validity when the
+	     predicate... uses a reference." A REFERENCE-typed *parameter*
+	     specifically is NOT covered by the "guaranteed valid by the
+	     language itself" reasoning above -- unlike a local reference/
+	     capture (whose own binding, if ever unsafe, would already have
+	     been caught by this same mandatory pass at its own point of
+	     initialization), a reference parameter's binding comes from an
+	     external, unverified caller, exactly the case Q1/is_object_
+	     address exists to catch. Confirmed via direct testing: a bare
+	     reference-parameter read inside a conveyor contract_assert
+	     produced no diagnostic at all before this fix, in either a
+	     conveyor or non-conveyor function, unlike an equivalent raw
+	     pointer dereference or 'this'-via-member-access (already
+	     correctly required, via this same INDIRECT_REF path, for a
+	     POINTER_TYPE base regardless of DECL_DECLARED_CONVEYOR_P). Only
+	     a PARM_DECL is included here, not any other REFERENCE_TYPE
+	     expression shape, to keep the local-reference/capture exclusion
+	     above intact for everything else.  */
+	  bool is_ref_parm = TREE_CODE (TREE_TYPE (base)) == REFERENCE_TYPE
+			      && TREE_CODE (base) == PARM_DECL;
+	  if (TREE_CODE (TREE_TYPE (base)) != POINTER_TYPE && !is_ref_parm)
 	    return NULL_TREE;
 	  /* No tracked array-offset fact -- fall back to is_object_address
 	     provability (Increment W2): dereferencing a pointer proven to
