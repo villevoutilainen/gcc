@@ -2841,13 +2841,27 @@ cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
     return;
   if (TREE_CODE (base) != SSA_NAME)
     return;
-  /* POINTER_TYPE only, excluding REFERENCE_TYPE -- a bound reference is
-     guaranteed valid for its own entire lifetime by the language itself,
-     never itself the unprovable-UB case this check exists for, mirroring
-     oa_scan_array_bounds_in_expr's own identical exclusion (see that
-     function's own comment for the lambda-by-reference-capture case
-     that motivated it).  */
-  if (TREE_CODE (TREE_TYPE (base)) != POINTER_TYPE)
+  /* POINTER_TYPE, or a REFERENCE-typed PARAMETER specifically --
+     mirroring oa_scan_array_bounds_in_expr's own identical condition
+     (contracts.cc) after its own 2026-08-26 fix (Ville: "a conveyor
+     contract_assert's predicate requires object validity when the
+     predicate... uses a reference"). Any OTHER REFERENCE_TYPE operand
+     (a local reference/capture binding) is still excluded: it's
+     guaranteed valid for its own entire lifetime by the language
+     itself, and any unsafe binding would already have been caught by
+     this same mandatory pass at its own point of initialization -- see
+     that function's own comment for the lambda-by-reference-capture
+     case that motivated the original, narrower exclusion. A reference
+     PARAMETER is different: its binding comes from an external,
+     unverified caller, exactly the case Q1/is_object_address exists to
+     catch. SSA_NAME_VAR (base) recovers the original PARM_DECL for an
+     ordinary, unmodified parameter read (its own default-def SSA
+     name); guarded against NULL for an anonymous temporary with no
+     source-level variable at all.  */
+  bool is_ref_parm = TREE_CODE (TREE_TYPE (base)) == REFERENCE_TYPE
+		      && SSA_NAME_VAR (base)
+		      && TREE_CODE (SSA_NAME_VAR (base)) == PARM_DECL;
+  if (TREE_CODE (TREE_TYPE (base)) != POINTER_TYPE && !is_ref_parm)
     return;
 
   hash_set<tree> in_progress;
