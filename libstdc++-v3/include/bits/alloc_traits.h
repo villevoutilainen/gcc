@@ -914,6 +914,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     _GLIBCXX14_CONSTEXPR inline void
     __alloc_on_move(_Alloc& __one, _Alloc& __two)
     {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (&__one) && std::is_object_address (&__two));
+#endif
       using __traits = allocator_traits<_Alloc>;
       using __pocma
 	= typename __traits::propagate_on_container_move_assignment::type;

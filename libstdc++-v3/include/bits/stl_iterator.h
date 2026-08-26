@@ -1351,7 +1351,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       difference_type
       operator-(const __normal_iterator& __lhs, const __normal_iterator& __rhs)
 	_GLIBCXX_NOEXCEPT
-      { return __lhs.base() - __rhs.base(); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__lhs) && std::is_object_address (&__rhs));
+#endif
+	return __lhs.base() - __rhs.base();
+      }
 
       _GLIBCXX_NODISCARD __attribute__((__always_inline__))
       friend

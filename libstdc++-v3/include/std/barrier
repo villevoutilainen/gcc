@@ -140,6 +140,10 @@ It looks different from literature pseudocode for two main reasons:
       __current %= ((_M_expected + 1) >> 1);
 
       __state_t* const __state = _M_state.load(memory_order_relaxed);
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__state));
+#endif
 
       for (int __round = 0; ; ++__round)
 	{
@@ -152,6 +156,10 @@ It looks different from literature pseudocode for two main reasons:
 	      if (__current == __end_node)
 		__current = 0;
 	      auto __expect = __old_phase;
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	      contract_assert<std::contracts::never_proven_conveyor_v>
+		(std::is_object_address (__state));
+#endif
 	      __atomic_phase_ref_t __phase(&__state[__current]
 					      .__tickets[__round]);
 	      if (__current == __last_node && (__current_expected & 1))

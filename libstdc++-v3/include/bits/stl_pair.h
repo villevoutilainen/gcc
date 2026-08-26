@@ -1320,7 +1320,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<size_t _Int, class _Tp1, class _Tp2>
     constexpr typename tuple_element<_Int, pair<_Tp1, _Tp2>>::type&&
     get(pair<_Tp1, _Tp2>&& __in) noexcept
-    { return __pair_get<_Int>::__move_get(std::move(__in)); }
+    {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (&__in));
+#endif
+      return __pair_get<_Int>::__move_get(std::move(__in));
+    }
 
   template<size_t _Int, class _Tp1, class _Tp2>
     constexpr const typename tuple_element<_Int, pair<_Tp1, _Tp2>>::type&

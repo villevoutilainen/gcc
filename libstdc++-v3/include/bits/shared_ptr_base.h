@@ -1733,6 +1733,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       void
       swap(__shared_ptr<_Tp, _Lp>& __other) noexcept
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this) && std::is_object_address (&__other));
+#endif
 	std::swap(_M_ptr, __other._M_ptr);
 	_M_refcount._M_swap(__other._M_refcount);
       }
@@ -2123,6 +2127,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{ }
 
       __weak_ptr(__weak_ptr&& __r) noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__r))
+#endif
       : _M_ptr(__r._M_ptr), _M_refcount(std::move(__r._M_refcount))
       { __r._M_ptr = nullptr; }
 
@@ -2155,6 +2162,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __weak_ptr&
       operator=(__weak_ptr&& __r) noexcept
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this) && std::is_object_address (&__r));
+#endif
 	__weak_ptr(std::move(__r)).swap(*this);
 	return *this;
       }
@@ -2212,6 +2223,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       void
       swap(__weak_ptr& __s) noexcept
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this) && std::is_object_address (&__s));
+#endif
 	std::swap(_M_ptr, __s._M_ptr);
 	_M_refcount._M_swap(__s._M_refcount);
       }

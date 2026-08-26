@@ -76,6 +76,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       void
       swap(__basic_file& __f) noexcept
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this) && std::is_object_address (&__f));
+#endif
 	std::swap(_M_cfile, __f._M_cfile);
 	std::swap(_M_cfile_created, __f._M_cfile_created);
       }

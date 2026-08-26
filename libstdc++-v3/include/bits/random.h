@@ -7123,7 +7123,13 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 
     // property functions
     size_t size() const noexcept
-    { return _M_v.size(); }
+    {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (this));
+#endif
+      return _M_v.size();
+    }
 
     template<typename _OutputIterator>
       void

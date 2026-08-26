@@ -109,7 +109,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
     // constructors and destructor
     directory_entry() noexcept = default;
     directory_entry(const directory_entry&) = default;
-    directory_entry(directory_entry&&) noexcept = default;
+    directory_entry(directory_entry&& __e) noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__e))
+#endif
+    : _M_path(std::move(__e._M_path)), _M_type(__e._M_type)
+    { }
 
     explicit
     directory_entry(const filesystem::path& __p)
@@ -374,7 +379,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   {
     const directory_entry& operator*() const& noexcept { return _M_entry; }
 
-    directory_entry operator*() && noexcept { return std::move(_M_entry); }
+    directory_entry operator*() && noexcept
+    {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (this));
+#endif
+      return std::move(_M_entry);
+    }
 
   private:
     friend class directory_iterator;
@@ -382,6 +394,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
     explicit
     __directory_iterator_proxy(const directory_entry& __e) : _M_entry(__e) { }
+
+    __directory_iterator_proxy(__directory_iterator_proxy&& __other) noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__other))
+#endif
+    : _M_entry(std::move(__other._M_entry)) { }
 
     directory_entry _M_entry;
   };

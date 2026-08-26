@@ -708,7 +708,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	else
 	  __os << __desc;
 	if (!__file.empty()) [[likely]]
-	  __os << " at " << __file << ':' << __line;
+	  {
+	    __os << " at ";
+	    __os << __file;
+	    __os << ':' << __line;
+	  }
       }
 
     struct _Flag_guard // Set and restore hex format

@@ -491,6 +491,10 @@ namespace ranges
 	constexpr auto
 	operator()(_Tp&& __t) const noexcept(_S_noexcept<_Tp>())
 	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (&__t));
+#endif
 	  if constexpr (__member_data<_Tp>)
 	    return __t.data();
 	  else

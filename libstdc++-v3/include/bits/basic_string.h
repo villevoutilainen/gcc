@@ -2044,6 +2044,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       reference
       front() noexcept
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	__glibcxx_assert(!empty());
 	return operator[](0);
       }
@@ -2538,6 +2542,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	basic_string&
 	assign(_InputIterator __first, _InputIterator __last)
 	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (this));
+#endif
 	  using _IterTraits = iterator_traits<_InputIterator>;
 	  if constexpr (is_pointer<decltype(std::__niter_base(__first))>::value
 			  && is_same<typename _IterTraits::value_type,
