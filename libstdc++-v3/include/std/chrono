@@ -654,7 +654,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       friend constexpr day
       operator+(const day& __x, const days& __y) noexcept
-      { return day(unsigned{__x} + __y.count()); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__y));
+#endif
+	return day(unsigned{__x} + __y.count());
+      }
 
       friend constexpr day
       operator+(const days& __x, const day& __y) noexcept
@@ -762,6 +768,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       friend constexpr month
       operator+(const month& __x, const months& __y) noexcept
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__y));
+#endif
 	// modulo(x + (y - 1), 12) = modulo(x + (y - 1) + 12, 12)
 	//                         = modulo((x + 11) + y    , 12)
 	return month{1 + __detail::__add_modulo<12>(
@@ -775,6 +785,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       friend constexpr month
       operator-(const month& __x, const months& __y) noexcept
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__y));
+#endif
 	// modulo(x + (-y - 1), 12) = modulo(x + (-y - 1) + 12, 12)
 	//                          = modulo((x + 11) - y     , 12)
 	return month{1 + __detail::__sub_modulo<12>(
@@ -947,7 +961,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       friend constexpr year
       operator+(const year& __x, const years& __y) noexcept
-      { return year{int{__x} + static_cast<int>(__y.count())}; }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__y));
+#endif
+	return year{int{__x} + static_cast<int>(__y.count())};
+      }
 
       friend constexpr year
       operator+(const years& __x, const year& __y) noexcept
@@ -999,6 +1019,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       static constexpr weekday
       _S_from_days(const days& __d)
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__d));
+#endif
 	return weekday{__detail::__add_modulo<7>(4, __d.count())};
       }
 
@@ -1089,6 +1113,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       friend constexpr weekday
       operator+(const weekday& __x, const days& __y) noexcept
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__y));
+#endif
 	return weekday{__detail::__add_modulo<7>(__x._M_wd, __y.count())};
       }
 
@@ -1099,6 +1127,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       friend constexpr weekday
       operator-(const weekday& __x, const days& __y) noexcept
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__y));
+#endif
 	return weekday{__detail::__sub_modulo<7>(__x._M_wd, __y.count())};
       }
 
@@ -1748,6 +1780,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr year_month_day
     year_month_day::_S_from_days(const days& __dp) noexcept
     {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (&__dp));
+#endif
       constexpr auto __z2    = static_cast<uint32_t>(-1468000);
       constexpr auto __r2_e3 = static_cast<uint32_t>(536895458);
 
@@ -2097,6 +2133,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	days __d = (_M_wdi.weekday()
 		    - chrono::weekday{sys_days{_M_y / _M_m / 1}}
 		    + days((_M_wdi.index()-1)*7 + 1));
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__d));
+#endif
 	__glibcxx_assert(__d.count() >= 1);
 	return (unsigned)__d.count() <= (unsigned)(_M_y / _M_m / last).day();
       }
@@ -2648,7 +2688,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       ~time_zone();
 
       [[nodiscard]]
-      string_view name() const noexcept { return _M_name; }
+      string_view name() const noexcept
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return _M_name;
+      }
 
       template<typename _Duration>
 	sys_info
@@ -2701,11 +2748,23 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[nodiscard]] friend bool
       operator==(const time_zone& __x, const time_zone& __y) noexcept
-      { return __x._M_name == __y._M_name; }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__x) && std::is_object_address (&__y));
+#endif
+	return __x._M_name == __y._M_name;
+      }
 
       [[nodiscard]] friend strong_ordering
       operator<=>(const time_zone& __x, const time_zone& __y) noexcept
-      { return __x._M_name <=> __y._M_name; }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__x) && std::is_object_address (&__y));
+#endif
+	return __x._M_name <=> __y._M_name;
+      }
 
     private:
       sys_info _M_get_sys_info(sys_seconds) const;
@@ -2836,16 +2895,42 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       time_zone_link(time_zone_link&&) = default;
       time_zone_link& operator=(time_zone_link&&) = default;
 
-      string_view name() const noexcept { return _M_name; }
-      string_view target() const noexcept { return _M_target; }
+      string_view name() const noexcept
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return _M_name;
+      }
+      string_view target() const noexcept
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return _M_target;
+      }
 
       friend bool
       operator==(const time_zone_link& __x, const time_zone_link& __y) noexcept
-      { return __x.name() == __y.name(); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__x) && std::is_object_address (&__y));
+#endif
+	return __x.name() == __y.name();
+      }
 
       friend strong_ordering
       operator<=>(const time_zone_link& __x, const time_zone_link& __y) noexcept
-      { return __x.name() <=> __y.name(); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (&__x) && std::is_object_address (&__y));
+#endif
+	return __x.name() <=> __y.name();
+      }
 
     private:
       friend const tzdb& reload_tzdb();
