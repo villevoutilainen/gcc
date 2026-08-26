@@ -147,7 +147,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_DEFAULT_ABI_TAG
       static void
       _S_set(void* __dest, const char* __str)
-      { static_cast<string*>(__dest)->assign(__str); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (static_cast<string*>(__dest)));
+#endif
+	static_cast<string*>(__dest)->assign(__str);
+      }
 
       _Info(string* __desc, string* __file, int* __line)
       : _M_desc(__desc), _M_file(__file), _M_line(__line), _M_set(_S_set)
@@ -685,6 +691,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   inline ostream&
   operator<<(ostream& __os, const stacktrace_entry& __f)
   {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    contract_assert<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (&__os));
+#endif
     if (!__f) [[unlikely]]
       return __os << "<unknown>";
 
