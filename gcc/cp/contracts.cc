@@ -20669,6 +20669,25 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
   bool conveyor_ok = oa_contract_conveyor_active_p (contract);
   bool symbolic_ok = oa_contract_symbolic_active_p (contract);
   bool tracking_ok = oa_contract_fact_tracking_active_p (contract);
+  /* Found and fixed 2026-08-26, Ville: "a never_proven_conveyor needs
+     to be exempt from the reference/'this'/pointer validity. It's
+     intended to be such an escape hatch." Computed here, ahead of the
+     item-8 gate just below (unlike its own later, narrower use further
+     down in this file for the "am I actually true" check, which is
+     what its own doc comment in <contracts> was written around) --
+     confirmed via direct testing against the real library: __glibcxx_
+     assert (which routes through never_proven_conveyor_v specifically
+     so the library's own internal, defensive assertions deep in
+     generic code are never diagnosed) hits this exact mandatory
+     pointer/reference-dereference-validity check pervasively across
+     ordinary iterator/hashtable internals when compiled with
+     -D_GLIBCXX_CONVEYOR_ASSERTIONS, since none of those call sites
+     have (or need) any established is_object_address self-trust of
+     their own -- exactly the case never_proven exists to route around.
+     See also oa_handle_assertion_stmt/oa_handle_postcondition_stmt's
+     own identical fix.  */
+  bool never_proven = contract_control_never_proven
+    (CONTRACT_CONTROL_OBJECT (contract), contract_side_of (contract, current_function_decl));
   tree cond = CONTRACT_CONDITION (contract);
   if (cond == NULL_TREE || cond == error_mark_node)
     return;
@@ -20713,8 +20732,11 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
      oa_process_condition's own "Increment K" already gives ordinary
      if/loop conditions -- see its own comment for why a flat, unrefined
      scan of every conjunct (what used to be here) missed real cases like
-     'pre<conveyor_assert_v>(x < 100000 && x++ < 2048)'.  */
-  if (conveyor_ok)
+     'pre<conveyor_assert_v>(x < 100000 && x++ < 2048)'.
+
+     never_proven exempts this precondition from item 8's mandatory
+     scans too -- see this function's own leading comment.  */
+  if (conveyor_ok && !never_proven)
     oa_scan_item8_in_expr (&cond, env);
 
   auto_vec<tree> facts;
@@ -21153,6 +21175,16 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
   bool conveyor_ok = oa_contract_conveyor_active_p (stmt);
   bool symbolic_ok = oa_contract_symbolic_active_p (stmt);
   bool tracking_ok = oa_contract_fact_tracking_active_p (stmt);
+  /* Found and fixed 2026-08-26: moved up from its own, narrower use
+     further down in this function (the "am I actually true" check) so
+     it can also gate the item-8 mandatory scans just below -- see
+     oa_handle_precondition_stmt's own identical fix and comment for
+     the full rationale (Ville: never_proven is meant as an escape
+     hatch from reference/'this'/pointer validity too, confirmed
+     essential for __glibcxx_assert's own real-world use across the
+     library).  */
+  bool never_proven = contract_control_never_proven
+    (CONTRACT_CONTROL_OBJECT (stmt), contract_side_of (stmt, current_function_decl));
   tree cond = CONTRACT_CONDITION (stmt);
   if (cond == NULL_TREE || cond == error_mark_node)
     return;
@@ -21181,8 +21213,11 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
   /* D4324/P2680, Increment V: see the identical comment in
      oa_handle_precondition_stmt -- same narrow item-8 dataflow checks,
      now given the same left-to-right, per-conjunct refinement via
-     oa_scan_item8_in_expr.  */
-  if (conveyor_ok)
+     oa_scan_item8_in_expr.
+
+     never_proven exempts this contract_assert from item 8's mandatory
+     scans too -- see this function's own leading comment.  */
+  if (conveyor_ok && !never_proven)
     oa_scan_item8_in_expr (&cond, env);
 
   auto_vec<tree> facts;
@@ -21308,8 +21343,8 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
      (strict), in which case unproven is *also* a hard error, matching
      WG14 P4021R2's compile_assert() outcome table exactly.  */
   bool any_conjunct_proven_false = false;
-  bool never_proven = contract_control_never_proven
-    (CONTRACT_CONTROL_OBJECT (stmt), contract_side_of (stmt, current_function_decl));
+  /* never_proven already computed at this function's own top, ahead of
+     the item-8 gate above.  */
   if (!never_proven)
     {
       bool conveyor_analysis = conveyor_ok
@@ -24583,6 +24618,14 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 {
   bool conveyor_ok = oa_contract_conveyor_active_p (contract);
   bool symbolic_ok = oa_contract_symbolic_active_p (contract);
+  /* Found and fixed 2026-08-26: moved up from its own, narrower use
+     further down in this function (the "am I actually true" check) so
+     it can also gate the item-8 mandatory scans just below -- see
+     oa_handle_precondition_stmt's own identical fix and comment for
+     the full rationale.  */
+  bool never_proven = contract_control_never_proven (
+	CONTRACT_CONTROL_OBJECT (contract),
+	contract_side_of (contract, current_function_decl));
   tree cond = CONTRACT_CONDITION (contract);
   if (cond == NULL_TREE || cond == error_mark_node)
     return;
@@ -24633,8 +24676,11 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
      ideal scope, not a soundness gap). Now given the same left-to-right,
      per-conjunct refinement as every other item-8 call site via
      oa_scan_item8_in_expr (which makes its own further scratch copy of
-     SCAN_ENV internally -- a copy of an already-scratch copy, harmless).  */
-  if (conveyor_ok)
+     SCAN_ENV internally -- a copy of an already-scratch copy, harmless).
+
+     never_proven exempts this postcondition from item 8's mandatory
+     scans too -- see this function's own leading comment.  */
+  if (conveyor_ok && !never_proven)
     {
       oa_env scan_env = env.copy ();
       if (have_result_id)
@@ -24653,9 +24699,6 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
      unprovable (not just provably-false) conjunct a hard error too,
      matching every other proven_conveyor/proven_symbolic site in this
      file.  */
-  bool never_proven = contract_control_never_proven (
-	CONTRACT_CONTROL_OBJECT (contract),
-	contract_side_of (contract, current_function_decl));
   if (!never_proven)
     {
       if (conveyor_ok)
