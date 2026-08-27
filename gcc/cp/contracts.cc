@@ -11639,6 +11639,64 @@ oa_get_float_range (tree expr, oa_env &env, oa_float_range_fact *out)
   return false;
 }
 
+/* A REFERENCE_TYPE decl's own value is read as INDIRECT_REF (decl), never
+   the bare decl itself (references are transparent, unlike a pointer's
+   own '*p') -- so every matcher in this file that resolves a relational/
+   overflow-scan operand down to "the bare PARM_DECL/VAR_DECL this names,
+   for identity/keying purposes" needs to see through that one layer for
+   a reference parameter/local the same way it already does for a bare
+   value-typed one, or a reference's own facts (e.g. 'x < 2084' for
+   'int& x') are silently never established/consulted at all -- found via
+   direct testing (Ville, Godbolt): 'pre<conveyor_assert_v>(x < 2084 &&
+   x++ > 0)' is silently accepted for 'int x' but wrongly rejects 'int&
+   x' with "not provably free of overflow", even though the safety
+   argument is identical either way.
+
+   Generalizes the existing, narrower precedent for this exact shape in
+   oa_get_range (its own INDIRECT_REF branch, gated to only a lambda's
+   own by-reference capture proxy inside an IILE) to any reference decl.
+   Deliberately NOT folded into oa_object_identity_decl or oa_strip_
+   conversion_call themselves: TREE_TYPE of the result changes meaning
+   here (REFERENCE_TYPE instead of the referent's own value type), which
+   every caller of THIS function already expects to then need value-type
+   recovery for (see oa_decl_value_type's own comment) -- widening a
+   lower-level, far more broadly shared stripper instead would spread
+   that same obligation to callers never audited for it.  */
+
+static tree
+oa_strip_reference_read (tree op)
+{
+  if (TREE_CODE (op) != INDIRECT_REF)
+    return op;
+  tree decl = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
+  if ((VAR_P (decl) || TREE_CODE (decl) == PARM_DECL)
+      && TREE_CODE (TREE_TYPE (decl)) == REFERENCE_TYPE)
+    return decl;
+  return op;
+}
+
+/* The value type a relational/overflow-scan operand's own TREE_TYPE
+   should be reasoned about with, once it's been reduced to a bare decl
+   by oa_strip_to_relational_operand/oa_strip_reference_read above: DECL's
+   own declared type ordinarily, but the REFERENT's type when DECL itself
+   turned out to be the REFERENCE_TYPE decl a reference read was
+   stripped down to (its own TREE_TYPE is the reference type itself,
+   'int&', not the 'int' every INTEGRAL_TYPE_P/TYPE_PRECISION/TYPE_MAX_
+   VALUE/TYPE_MIN_VALUE/TYPE_UNSIGNED/TYPE_OVERFLOW_UNDEFINED consult in
+   this file actually means to ask about). Every caller downstream of the
+   widened stripping that reasons about a *value* type (not decl
+   identity) must use this instead of a bare TREE_TYPE (decl) -- see
+   oa_strip_reference_read's own comment for why this isn't needed before
+   that widening (an unstripped INDIRECT_REF's own TREE_TYPE was already
+   the referent's type, by construction).  */
+
+static tree
+oa_decl_value_type (tree decl)
+{
+  tree type = TREE_TYPE (decl);
+  return TREE_CODE (type) == REFERENCE_TYPE ? TREE_TYPE (type) : type;
+}
+
 /* Strip EXPR the same way oa_get_relational below does, without
    consulting any fact -- used to normalize both sides of a relational
    obligation's own substituted call-site arguments down to a bare
@@ -11650,7 +11708,8 @@ oa_get_float_range (tree expr, oa_env &env, oa_float_range_fact *out)
    materialization (oa_strip_conversion_call) -- a relational
    obligation's own substituted call argument goes through exactly
    that shape whenever the parameter it substitutes is class-typed,
-   not just a bare scalar decl.  */
+   not just a bare scalar decl.  And, per oa_strip_reference_read's own
+   comment, a reference decl's own transparent read.  */
 
 static tree
 oa_strip_to_relational_operand (tree expr)
@@ -11658,7 +11717,7 @@ oa_strip_to_relational_operand (tree expr)
   if (expr == NULL_TREE)
     return NULL_TREE;
   STRIP_ANY_LOCATION_WRAPPER (expr);
-  return oa_strip_conversion_call (expr);
+  return oa_strip_reference_read (oa_strip_conversion_call (expr));
 }
 
 /* D4324 Commit 4: an exact-point oa_range_fact for VAL -- a relational
@@ -12117,8 +12176,17 @@ oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
 
   tree op0_scalar = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
   tree op1_scalar = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
-  tree op0 = oa_strip_conversion_call (op0_scalar);
-  tree op1 = oa_strip_conversion_call (op1_scalar);
+  /* oa_strip_to_relational_operand, not oa_strip_conversion_call alone --
+     same reference-read generalization needed throughout this matcher
+     family (see that function's own comment). OP0_SCALAR/OP1_SCALAR
+     deliberately stay as the pre-strip form below, for the INTEGRAL_
+     TYPE_P/SCALAR_FLOAT_TYPE_P checks just below: an unstripped
+     INDIRECT_REF(ref_decl)'s own TREE_TYPE is already the referent's
+     correct value type (see oa_strip_reference_read's own comment for
+     why), so those checks need no oa_decl_value_type adjustment -- only
+     the DECL0/DECL1 identity resolved from OP0/OP1 does.  */
+  tree op0 = oa_strip_to_relational_operand (op0_scalar);
+  tree op1 = oa_strip_to_relational_operand (op1_scalar);
 
   tree decl0 = (TREE_CODE (op0) == INIT_EXPR || TREE_CODE (op0) == MODIFY_EXPR)
     ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op0, 0)) : op0;
@@ -12180,7 +12248,7 @@ oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
       if (!env.float_range_get (decl, &refined))
 	refined.has_lo = refined.has_hi = false;
 
-      oa_float_tighten_range_bound (refined, code, val, TREE_TYPE (decl));
+      oa_float_tighten_range_bound (refined, code, val, oa_decl_value_type (decl));
       env.float_range_set (decl, refined);
       return;
     }
@@ -13133,7 +13201,12 @@ oa_provably_safe_unit_shift_p (tree x, bool increasing, oa_env &env)
      parameter's own wrapped access silently never found its own type-
      bound witness, always falling through to "unprovable").  */
   x = oa_strip_to_relational_operand (x);
-  tree type = TREE_TYPE (x);
+  /* oa_decl_value_type, not a bare TREE_TYPE: X may now be the bare
+     REFERENCE_TYPE decl a reference read was stripped down to (see
+     oa_strip_reference_read's own comment) -- TYPE must be the
+     referent's own value type for TYPE_MAX_VALUE/TYPE_MIN_VALUE below
+     to mean anything.  */
+  tree type = oa_decl_value_type (x);
   oa_range_fact fact;
   if (oa_get_range (x, env, &fact))
     {
@@ -13198,8 +13271,11 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 	     type gate too, though const-qualification alone would not
 	     actually change either answer.  */
 	  tree stripped = oa_strip_to_relational_operand (x);
-	  if (!INTEGRAL_TYPE_P (TREE_TYPE (stripped))
-	      || !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (stripped)))
+	  /* oa_decl_value_type, not a bare TREE_TYPE -- see oa_strip_
+	     reference_read's own comment: STRIPPED may now be the bare
+	     REFERENCE_TYPE decl a reference read was reduced to.  */
+	  if (!INTEGRAL_TYPE_P (oa_decl_value_type (stripped))
+	      || !TYPE_OVERFLOW_UNDEFINED (oa_decl_value_type (stripped)))
 	    return NULL_TREE;
 	  bool increasing
 	    = code == PREINCREMENT_EXPR || code == POSTINCREMENT_EXPR;
@@ -13234,13 +13310,21 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
       if (code == NEGATE_EXPR)
 	{
 	  tree x = TREE_OPERAND (t, 0);
-	  if (!INTEGRAL_TYPE_P (TREE_TYPE (x))
-	      || !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (x)))
+	  /* Stripped (and OA_DECL_VALUE_TYPE, not a bare TREE_TYPE) for the
+	     same reason the unit-shift case above needs it: a reference
+	     operand's own read is INDIRECT_REF(ref_decl), which oa_get_
+	     range can't resolve to a range fact without first reducing it
+	     to the bare decl the fact was actually established under. X
+	     itself stays unstripped, purely for the diagnostic's own %qE
+	     below.  */
+	  tree stripped = oa_strip_to_relational_operand (x);
+	  tree value_type = oa_decl_value_type (stripped);
+	  if (!INTEGRAL_TYPE_P (value_type) || !TYPE_OVERFLOW_UNDEFINED (value_type))
 	    return NULL_TREE;
 	  oa_range_fact fact;
-	  bool safe = oa_get_range (x, *e, &fact)
+	  bool safe = oa_get_range (stripped, *e, &fact)
 		      && fact.has_lo
-		      && fact.lo > wi::to_widest (TYPE_MIN_VALUE (TREE_TYPE (x)));
+		      && fact.lo > wi::to_widest (TYPE_MIN_VALUE (value_type));
 	  if (!safe)
 	    error_at (EXPR_LOCATION (t), "negation of %qE not provably free "
 		      "of overflow in a conveyor function", x);
@@ -13319,10 +13403,14 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 		return NULL_TREE;
 	    }
 
+	  /* Stripped, same reason as the unit-shift/negation cases above:
+	     a reference operand's own read (INDIRECT_REF(ref_decl)) needs
+	     reducing to the bare decl before oa_get_range can find any
+	     fact established under it.  */
 	  oa_range_fact a;
 	  oa_range_fact b;
-	  bool have_a = oa_get_range (op0, *e, &a);
-	  bool have_b = oa_get_range (op1, *e, &b);
+	  bool have_a = oa_get_range (oa_strip_to_relational_operand (op0), *e, &a);
+	  bool have_b = oa_get_range (oa_strip_to_relational_operand (op1), *e, &b);
 
 	  bool safe = false;
 	  if (code == PLUS_EXPR)
@@ -15438,7 +15526,7 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 		    }
 		  oa_float_tighten_range_bound (float_range_facts[idx], code,
 						 TREE_REAL_CST (const_val),
-						 TREE_TYPE (param));
+						 oa_decl_value_type (param));
 		  continue;
 		}
 
@@ -26425,10 +26513,16 @@ oa_match_type_bounded_comparison (tree conjunct, tree *decl_out,
   else
     return false;
 
-  if (!INTEGRAL_TYPE_P (TREE_TYPE (other))
-      || TYPE_PRECISION (TREE_TYPE (other)) > TYPE_PRECISION (TREE_TYPE (decl))
-      || (TYPE_PRECISION (TREE_TYPE (other)) == TYPE_PRECISION (TREE_TYPE (decl))
-	  && !TYPE_UNSIGNED (TREE_TYPE (decl)) && TYPE_UNSIGNED (TREE_TYPE (other))))
+  /* oa_decl_value_type, not a bare TREE_TYPE, for both sides -- either
+     DECL or OTHER may now be the bare REFERENCE_TYPE decl a reference
+     read was stripped down to (OTHER too: it's already been through
+     oa_strip_to_relational_operand above, same as DECL).  */
+  tree decl_type = oa_decl_value_type (decl);
+  tree other_type = oa_decl_value_type (other);
+  if (!INTEGRAL_TYPE_P (other_type)
+      || TYPE_PRECISION (other_type) > TYPE_PRECISION (decl_type)
+      || (TYPE_PRECISION (other_type) == TYPE_PRECISION (decl_type)
+	  && !TYPE_UNSIGNED (decl_type) && TYPE_UNSIGNED (other_type)))
     return false;
 
   if (flipped)
@@ -26798,11 +26892,13 @@ oa_match_simple_comparison (tree conjunct, tree *param_out, tree_code *code_out,
 
   /* A class-typed parameter reached via its own implicit conversion
      operator (e.g. 'q.operator int() < 5') is recognized the same way
-     a bare scalar-typed parameter already is -- oa_strip_conversion_
-     call is a no-op for the already-bare case, so this is a strict
-     generalization.  */
-  tree op0 = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0)));
-  tree op1 = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1)));
+     a bare scalar-typed parameter already is, and likewise a reference
+     parameter's own transparent read -- oa_strip_to_relational_operand
+     is a no-op for the already-bare case, so this is a strict
+     generalization (see its own comment; was oa_strip_conversion_call
+     directly, missing the reference-read case).  */
+  tree op0 = oa_strip_to_relational_operand (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0)));
+  tree op1 = oa_strip_to_relational_operand (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1)));
 
   /* D4324: REAL_CST admitted alongside INTEGER_CST -- see oa_match_
      simple_comparison_var's own identical extension for why CONST_VAL_
@@ -28398,8 +28494,13 @@ oa_match_simple_comparison_var (tree conjunct, tree *decl_out,
       && code != GE_EXPR && code != EQ_EXPR)
     return false;
 
-  tree op0 = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0)));
-  tree op1 = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1)));
+  /* oa_strip_to_relational_operand, not oa_strip_conversion_call alone --
+     same reference-read generalization oa_match_simple_comparison's own
+     identical fix needed (see that function's own comment); this one
+     matters for a body contract_assert's own reference local/parameter
+     comparison, not just a declared pre<>.  */
+  tree op0 = oa_strip_to_relational_operand (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0)));
+  tree op1 = oa_strip_to_relational_operand (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1)));
 
   /* D4324: REAL_CST admitted alongside INTEGER_CST -- CONST_VAL_OUT is
      already a plain tree (not a widest_int), so the caller dispatches
@@ -28803,7 +28904,7 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
 	    return OA_UNKNOWN;
 	  oa_float_range_fact req;
 	  oa_float_tighten_range_bound (req, code, TREE_REAL_CST (const_val),
-					 TREE_TYPE (decl));
+					 oa_decl_value_type (decl));
 	  return oa_env_check_float_range_subsumption
 	    (env, decl, req, reason_out, established_out, established_out_size);
 	}
