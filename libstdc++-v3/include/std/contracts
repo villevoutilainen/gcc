@@ -223,6 +223,51 @@ namespace contracts
   // contain it, instead of the compiler always evaluating eagerly and
   // only calling the operator on failure.
 
+  // D4324 (paper reviewer feedback): the subset of assertion_context
+  // relevant to reporting a violation -- comment/location/semantic/kind,
+  // the same four fields invoke_violation_handler below used to take as
+  // four separate arguments. Deliberately a *different* kind of type from
+  // assertion_context: that type is given no public constructor on
+  // purpose, so ordinary user code can never grow an ABI dependency on
+  // its exact layout (it stays free to gain new private members across
+  // library versions); assertion_info has no such constraint, so it can
+  // be freely constructed, copied, and mutated by any control object,
+  // built-in or user-written -- from scratch, or seeded from an existing
+  // assertion_context via assertion_context::info() below and then
+  // adjusted (e.g. a per-instance message overriding the predicate's own
+  // auto-derived comment(), or a control type that always reports
+  // evaluation_semantic::enforce regardless of the ambient semantic).
+  class assertion_info
+  {
+  public:
+    constexpr
+    assertion_info (const char* __comment, std::source_location __location,
+		    evaluation_semantic __semantic, assertion_kind __kind) noexcept
+    : _M_comment(__comment), _M_location(__location),
+      _M_semantic(__semantic), _M_kind(__kind)
+    { }
+
+    constexpr const char* comment() const noexcept { return _M_comment; }
+    constexpr std::source_location location() const noexcept { return _M_location; }
+    constexpr evaluation_semantic semantic() const noexcept { return _M_semantic; }
+    constexpr assertion_kind kind() const noexcept { return _M_kind; }
+
+    constexpr void set_comment(const char* __comment) noexcept
+    { _M_comment = __comment; }
+    constexpr void set_location(std::source_location __location) noexcept
+    { _M_location = __location; }
+    constexpr void set_semantic(evaluation_semantic __semantic) noexcept
+    { _M_semantic = __semantic; }
+    constexpr void set_kind(assertion_kind __kind) noexcept
+    { _M_kind = __kind; }
+
+  private:
+    const char* _M_comment;
+    std::source_location _M_location;
+    evaluation_semantic _M_semantic;
+    assertion_kind _M_kind;
+  };
+
   struct assertion_context {
     constexpr const char* comment() const noexcept { return __comment; }
     constexpr std::source_location location() const noexcept { return __location; }
@@ -235,6 +280,12 @@ namespace contracts
     // may throw, and a control object may want that exception to
     // propagate rather than be forced into std::terminate() here.
     constexpr bool check() const { return __check(__args); }
+
+    // Bundles the four fields above into an assertion_info -- see that
+    // type's own comment for why it exists as a separate, freely
+    // user-constructible type rather than just widening this one.
+    constexpr assertion_info info() const noexcept
+    { return assertion_info(__comment, __location, __semantic, __kind); }
 
   private:
     const char* __comment;
@@ -426,11 +477,21 @@ namespace contracts
   // library code -- ends up inlined away at the call site, leaving only
   // the compiler-rewritten call behind. Not noexcept, for the same reason
   // as __d4324_invoke_violation_handler above.
+  //
+  // D4324 (paper reviewer feedback): takes an assertion_info bundling
+  // the four fields __d4324_invoke_violation_handler still wants
+  // separately, rather than four of this function's own five arguments
+  // -- __d4324_invoke_violation_handler itself is left untouched (the
+  // compiler recognizes and destructures its call by fixed argument
+  // position, see gcc/cp/contracts.cc's maybe_replace_d4324_violation_
+  // handler_call), so this is purely a library-side ergonomics change,
+  // just unpacking INFO into the same five arguments it always forwarded.
   inline void
-  invoke_violation_handler(assertion_kind kind, evaluation_semantic semantic,
-			    detection_mode mode, const char* comment,
-			    std::source_location loc)
-  { __d4324_invoke_violation_handler(kind, semantic, mode, comment, loc); }
+  invoke_violation_handler(const assertion_info& info, detection_mode mode)
+  {
+    __d4324_invoke_violation_handler(info.kind(), info.semantic(), mode,
+				      info.comment(), info.location());
+  }
 
   void __d4324_log_violation(const char*, std::source_location) noexcept;
   [[noreturn]] void __d4324_terminate() noexcept;
@@ -673,8 +734,8 @@ namespace contracts
 	  try
 	    {
 	      invoke_violation_handler
-		(__ctx.kind(), evaluation_semantic::enforce,
-		 detection_mode::predicate_false, __text, __ctx.location());
+		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
+		 detection_mode::predicate_false);
 	    }
 	  catch (...) { }
 	  __d4324_terminate_wrapper();
@@ -747,8 +808,8 @@ namespace contracts
 	  try
 	    {
 	      invoke_violation_handler
-		(__ctx.kind(), evaluation_semantic::enforce,
-		 detection_mode::predicate_false, __text, __ctx.location());
+		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
+		 detection_mode::predicate_false);
 	    }
 	  catch (...) { }
 	  __d4324_terminate_wrapper();
@@ -820,8 +881,8 @@ namespace contracts
 	  try
 	    {
 	      invoke_violation_handler
-		(__ctx.kind(), evaluation_semantic::enforce,
-		 detection_mode::predicate_false, __text, __ctx.location());
+		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
+		 detection_mode::predicate_false);
 	    }
 	  catch (...) { }
 	  __d4324_terminate_wrapper();
@@ -886,8 +947,8 @@ namespace contracts
 	  try
 	    {
 	      invoke_violation_handler
-		(__ctx.kind(), evaluation_semantic::enforce,
-		 detection_mode::predicate_false, __text, __ctx.location());
+		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
+		 detection_mode::predicate_false);
 	    }
 	  catch (...) { }
 	  __d4324_terminate_wrapper();
@@ -950,8 +1011,8 @@ namespace contracts
 	  try
 	    {
 	      invoke_violation_handler
-		(__ctx.kind(), evaluation_semantic::enforce,
-		 detection_mode::predicate_false, __text, __ctx.location());
+		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
+		 detection_mode::predicate_false);
 	    }
 	  catch (...) { }
 	  __d4324_terminate_wrapper();
@@ -1015,8 +1076,8 @@ namespace contracts
 	  try
 	    {
 	      invoke_violation_handler
-		(__ctx.kind(), evaluation_semantic::enforce,
-		 detection_mode::predicate_false, __text, __ctx.location());
+		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
+		 detection_mode::predicate_false);
 	    }
 	  catch (...) { }
 	  __d4324_terminate_wrapper();
@@ -1081,8 +1142,8 @@ namespace contracts
 	  try
 	    {
 	      invoke_violation_handler
-		(__ctx.kind(), evaluation_semantic::enforce,
-		 detection_mode::predicate_false, __text, __ctx.location());
+		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
+		 detection_mode::predicate_false);
 	    }
 	  catch (...) { }
 	  __d4324_terminate_wrapper();
@@ -1148,8 +1209,8 @@ namespace contracts
 	  try
 	    {
 	      invoke_violation_handler
-		(__ctx.kind(), evaluation_semantic::enforce,
-		 detection_mode::predicate_false, __text, __ctx.location());
+		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
+		 detection_mode::predicate_false);
 	    }
 	  catch (...) { }
 	  __d4324_terminate_wrapper();
@@ -1210,8 +1271,8 @@ namespace contracts
 	  try
 	    {
 	      invoke_violation_handler
-		(__ctx.kind(), evaluation_semantic::enforce,
-		 detection_mode::predicate_false, __text, __ctx.location());
+		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
+		 detection_mode::predicate_false);
 	    }
 	  catch (...) { }
 	  __d4324_terminate_wrapper();

@@ -70,9 +70,9 @@ struct calls_handler {
   {
     if (ctx.check ())
       return;
-    sc::invoke_violation_handler
-      (ctx.kind (), sc::evaluation_semantic::enforce,
-       sc::detection_mode::predicate_false, ctx.comment (), ctx.location ());
+    sc::assertion_info info = ctx.info ();
+    info.set_semantic (sc::evaluation_semantic::enforce);
+    sc::invoke_violation_handler (info, sc::detection_mode::predicate_false);
   }
 };
 
