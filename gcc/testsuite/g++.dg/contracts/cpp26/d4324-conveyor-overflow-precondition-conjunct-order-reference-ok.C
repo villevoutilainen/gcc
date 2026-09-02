@@ -14,14 +14,16 @@
 // sibling's own updated comment for why (a direct mutation of a
 // received, non-owned parameter inside conveyor-flavored condition
 // text is now a separate, unconditional violation, unrelated to this
-// test's own overflow-refinement purpose).
+// test's own overflow-refinement purpose). Needs both 'x >= 0' and
+// 'x < 100000' -- see that same sibling's own comment on why an upper
+// bound alone isn't enough to prove doubling safe.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
 #include <contracts>
 
 void f (int& x)
-pre<std::contracts::conveyor_assert_v>(x < 100000 && x + x < 2048)
+pre<std::contracts::conveyor_assert_v>(x >= 0 && x < 100000 && x + x < 2048)
 {}
 
 int main () { int v = 1; f (v); return 0; }

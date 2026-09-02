@@ -12,13 +12,20 @@
 // refinement and general-binary-arithmetic overflow proof this test
 // exists to cover, without mutating anything, so it stays a clean -ok
 // test of exactly that.
+//
+// Needs BOTH 'x >= 0' and 'x < 100000': unlike 'x++' (whose overflow
+// direction only ever depends on an upper bound), doubling X can also
+// overflow on the negative side for a sufficiently negative X, so an
+// upper bound alone is not enough to prove 'x + x' safe -- confirmed by
+// direct testing (the single-conjunct 'x < 100000' version left this
+// genuinely unprovable, correctly).
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
 #include <contracts>
 
 void f (int x)
-pre<std::contracts::conveyor_assert_v>(x < 100000 && x + x < 2048)
+pre<std::contracts::conveyor_assert_v>(x >= 0 && x < 100000 && x + x < 2048)
 {}
 
 int main () { f (1); return 0; }
