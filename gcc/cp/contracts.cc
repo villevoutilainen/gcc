@@ -14135,6 +14135,31 @@ oa_reference_owned_p (tree expr, oa_env &env,
       && TREE_CODE (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0)))
 	   == TARGET_EXPR)
     return true;
+  /* D4324, mandatory direct-mutation-ownership scan (Ville, 2026-09-02,
+     .claude/plans/lazy-stirring-pearl.md): a BARE TARGET_EXPR (no
+     ADDR_EXPR wrapper at all) is what a temporary looks like as the
+     direct target of an assignment/increment/decrement, e.g. 'Counter
+     {}.v = 5' -- a non-const reference can never bind directly to a
+     prvalue in the first place (ordinary C++, nothing to do with this
+     engine), so the ADDR_EXPR-wrapped case just above, alone, never
+     actually reaches a DIRECT mutation target the way it does an
+     argument-passing one. Same ownership reasoning either way: owned by
+     whoever materializes it. A field of that same temporary (a
+     COMPONENT_REF whose own base resolves to a bare TARGET_EXPR, the
+     realistic shape for 'Counter{}.v = 5') is owned for the identical
+     reason the ADDR_EXPR(COMPONENT_REF(...)) case further below already
+     grants a field of an owned object -- checked here, ahead of that
+     later, identity-resolution-based logic, since a TARGET_EXPR has no
+     decl identity for oa_object_identity_decl et al. to resolve at
+     all.  */
+  if (TREE_CODE (expr) == TARGET_EXPR)
+    return true;
+  if (TREE_CODE (expr) == COMPONENT_REF)
+    {
+      tree base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (TREE_CODE (base) == TARGET_EXPR)
+	return true;
+    }
   /* A field of an owned object is itself owned -- '&(BASE.field)''s own
      ownership is exactly BASE's: a member conveyor call's own receiver
      ('this->f1.mutate()') or a defaulted special member's own implicit
@@ -14421,6 +14446,106 @@ oa_call_result_owned_p (tree call, oa_env &env, bool in_predicate_context)
 	return false;
     }
   return true;
+}
+
+/* D4324/P2680 (Ville, 2026-09-02, .claude/plans/lazy-stirring-pearl.md):
+   a NEW mandatory scan -- a conveyor-flavored contract condition's own
+   text (pre<>/post<>/contract_assert<>, any of them, whichever ones are
+   is_conveyor()) must not have side effects that escape its own
+   evaluation: a direct assignment or increment/decrement whose target
+   isn't something the condition's OWN evaluation created (a temporary --
+   see oa_reference_owned_p's own TARGET_EXPR case) is a mandatory error.
+   The indirect case (passing such a target by non-const reference/
+   pointer to another call) was already correctly covered by Q2's
+   existing oa_reference_owned_p, called from oa_handle_call_precondition_
+   obligation for every call reached from condition text -- predicate/
+   assert context already treats a parameter/'this' of the ENCLOSING
+   function as not owned there (see that function's own leading comment:
+   a check whose own evaluation can mutate something that outlives the
+   check makes "checking whether it's safe to call f" itself capable of
+   changing what f sees, or makes conjunct evaluation order semantically
+   load-bearing) -- this scan enforces the exact same property for DIRECT
+   mutation, which nothing previously checked at all (confirmed via
+   direct testing: 'pre<conveyor_assert_v>((x = 5, true))' compiled
+   clean, for both a reference and a by-value parameter).
+
+   Gated purely on the condition's own conveyor-flavor (CONVEYOR_OK, see
+   oa_contract_conveyor_active_p), never on the enclosing function's own
+   DECL_DECLARED_CONVEYOR_P: ownership of the enclosing function's own
+   parameters/'this' is a body-level grant (see oa_reference_owned_p's
+   own comment) that never extends into predicate/assert text, regardless
+   of whether that enclosing function happens to be conveyor-declared
+   itself -- confirmed empirically that the existing Q2 indirect-mutation
+   check already has exactly this shape (a conveyor function's OWN
+   predicate mutating its OWN reference parameter via a call is already
+   rejected the same way a non-conveyor function's conveyor-flavored
+   predicate is). A non-conveyor condition is entirely outside this
+   scan's scope -- governed solely by the existing constify() CCO trait
+   (constify_contract_access) instead, which is by-design permissive
+   when constify() is off (a plain 'pre(++x)' compiles clean, and stays
+   that way; this scan has nothing to say about it either way).
+
+   Deliberately no never_proven exemption (unlike item 8's own scans
+   just above) unless the real library sweep proves one is actually
+   needed -- Ville: "no exemption unless we have to have it."
+
+   INIT_EXPR is deliberately excluded from the switch below: it
+   initializes a *freshly declared* entity (e.g. an IILE-local's own
+   'int y = x;'), never reassigns something that already existed --
+   nothing to own-check about writing to a decl at the exact moment it's
+   created. (IILE-local ownership recognition itself -- i.e. would 'y'
+   count as owned if later reassigned or forwarded -- is a separate,
+   disclosed, deferred gap: oa_reference_owned_p's own predicate-context
+   branch today only recognizes a TARGET_EXPR temporary as owned, not an
+   IILE's own local VAR_DECL.)  */
+
+static void
+oa_scan_predicate_mutation_ownership_in_expr (tree *expr, oa_env &env)
+{
+  if (!oa_diagnostics_active)
+    return;
+  cp_walk_tree (expr, [](tree *tp, int *, void *data_) -> tree
+    {
+      oa_env *e = (oa_env *) data_;
+      tree t = *tp;
+      if (t == NULL_TREE || t == error_mark_node)
+	return NULL_TREE;
+
+      tree target;
+      const char *what;
+      switch (TREE_CODE (t))
+	{
+	case MODIFY_EXPR:
+	  target = TREE_OPERAND (t, 0);
+	  what = G_("assignment to %qE not permitted in a conveyor "
+		    "predicate or assert condition");
+	  break;
+	case PREINCREMENT_EXPR:
+	case POSTINCREMENT_EXPR:
+	  target = TREE_OPERAND (t, 0);
+	  what = G_("increment of %qE not permitted in a conveyor "
+		    "predicate or assert condition");
+	  break;
+	case PREDECREMENT_EXPR:
+	case POSTDECREMENT_EXPR:
+	  target = TREE_OPERAND (t, 0);
+	  what = G_("decrement of %qE not permitted in a conveyor "
+		    "predicate or assert condition");
+	  break;
+	default:
+	  return NULL_TREE;
+	}
+
+      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+      if (!oa_reference_owned_p (target, *e, /*asking_about_pointer_value=*/false,
+				  /*in_predicate_context=*/true, &reason))
+	{
+	  error_at (EXPR_LOCATION (t), what, target);
+	  if (const char *why = oa_unprovable_reason_text (reason))
+	    inform (EXPR_LOCATION (t), "%s", _(why));
+	}
+      return NULL_TREE;
+    }, &env, NULL);
 }
 
 /* D4324: shared helper for the DECL_EXPR/reassignment establishment
@@ -21195,6 +21320,15 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
   if (conveyor_ok && !never_proven)
     oa_scan_item8_in_expr (&cond, env);
 
+  /* D4324/P2680: mandatory "no side effects escaping this condition's
+     own evaluation" scan -- see oa_scan_predicate_mutation_ownership_
+     in_expr's own leading comment. Gated on CONVEYOR_OK alone (a
+     non-conveyor precondition is constify()'s own domain), and
+     deliberately NOT exempted for NEVER_PROVEN -- see that function's
+     own comment on why this is unlike item 8's own exemption.  */
+  if (conveyor_ok)
+    oa_scan_predicate_mutation_ownership_in_expr (&cond, env);
+
   auto_vec<tree> facts;
   auto_vec<tree> nz_facts;
   auto_vec<tree> field_nz_objs;
@@ -21715,6 +21849,14 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
      scans too -- see this function's own leading comment.  */
   if (conveyor_ok && !never_proven)
     oa_scan_item8_in_expr (&cond, env);
+
+  /* D4324/P2680: see the identical comment in oa_handle_precondition_
+     stmt -- same mandatory "no side effects escaping this condition's
+     own evaluation" scan, applying identically to a conveyor-flavored
+     contract_assert (Ville was explicit this must be covered too, not
+     just pre<>/post<>).  */
+  if (conveyor_ok)
+    oa_scan_predicate_mutation_ownership_in_expr (&cond, env);
 
   auto_vec<tree> facts;
   auto_vec<tree> nz_facts;
@@ -25214,12 +25356,19 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 
      never_proven exempts this postcondition from item 8's mandatory
      scans too -- see this function's own leading comment.  */
-  if (conveyor_ok && !never_proven)
+  if (conveyor_ok)
     {
       oa_env scan_env = env.copy ();
       if (have_result_id)
 	scan_env.set (result_id, oa_return_seen && oa_return_all_provable);
-      oa_scan_item8_in_expr (&cond, scan_env);
+      if (!never_proven)
+	oa_scan_item8_in_expr (&cond, scan_env);
+      /* D4324/P2680: see the identical comment in oa_handle_
+	 precondition_stmt -- same mandatory "no side effects escaping
+	 this condition's own evaluation" scan, applying identically to
+	 a conveyor-flavored post<>. Deliberately outside the NEVER_PROVEN
+	 guard just above, unlike item 8's own call.  */
+      oa_scan_predicate_mutation_ownership_in_expr (&cond, scan_env);
     }
 
   /* D4324: check the postcondition's own condition against RET_ENV, now
