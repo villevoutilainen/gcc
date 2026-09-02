@@ -528,9 +528,10 @@ namespace contracts
 	// comment); that stays this label's own responsibility, same as
 	// every control type shipped in <contracts> (e.g.
 	// noexcept_assert).
-	invoke_violation_handler (__ctx.kind (), __effective,
-				  detection_mode::predicate_false,
-				  __comment, __ctx.location ());
+	assertion_info __info = __ctx.info ();
+	__info.set_comment (__comment);
+	__info.set_semantic (__effective);
+	invoke_violation_handler (__info, detection_mode::predicate_false);
 	if (is_terminating (__effective))
 	  __d4324_terminate_wrapper ();
       }

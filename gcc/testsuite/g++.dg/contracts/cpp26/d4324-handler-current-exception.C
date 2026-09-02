@@ -1,8 +1,9 @@
 // D4324: invoke_violation_handler needs no dedicated exception parameter
 // for a control object to hand a caught predicate exception to
-// handle_contract_violation. Calling the existing, unmodified
-// 5-argument invoke_violation_handler from within a catch (...) is
-// enough: the compiler rewrites that call into a call to
+// handle_contract_violation. Calling invoke_violation_handler (an
+// assertion_info plus a detection_mode) from within a catch (...) is
+// enough: the compiler rewrites the underlying
+// __d4324_invoke_violation_handler call into a call to
 // handle_contract_violation in place (see
 // maybe_replace_d4324_violation_handler_call in gcc/cp/contracts.cc),
 // so the real handler call stays dynamically nested inside that same
@@ -59,16 +60,11 @@ struct rethrows_naturally {
       {
         if (ctx.check ())
           return;
-        sc::invoke_violation_handler
-          (ctx.kind (), ctx.semantic (), sc::detection_mode::predicate_false,
-           ctx.comment (), ctx.location ());
+        sc::invoke_violation_handler (ctx.info (), sc::detection_mode::predicate_false);
       }
     catch (...)
       {
-        sc::invoke_violation_handler
-          (ctx.kind (), ctx.semantic (),
-           sc::detection_mode::evaluation_exception,
-           ctx.comment (), ctx.location ());
+        sc::invoke_violation_handler (ctx.info (), sc::detection_mode::evaluation_exception);
       }
   }
 };

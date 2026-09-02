@@ -37,9 +37,7 @@ struct catches_handler_throw {
       return;
     try
       {
-        sc::invoke_violation_handler
-          (ctx.kind (), ctx.semantic (), sc::detection_mode::predicate_false,
-           ctx.comment (), ctx.location ());
+        sc::invoke_violation_handler (ctx.info (), sc::detection_mode::predicate_false);
       }
     catch (int)
       {
