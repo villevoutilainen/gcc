@@ -9565,6 +9565,26 @@ maybe_diagnose_deallocation_noexcept_false (tree decl)
 
 static void cp_maybe_mangle_decomp (tree, cp_decomp *);
 
+/* P4222 Initialization profile, Phase 4: true if TYPE is a scalar
+   type, or an array (of any rank) whose ultimate element type is
+   scalar -- the two type shapes that leave genuinely indeterminate
+   memory when default-initialized/left uninitialized, as opposed to a
+   class type invoking a (possibly non-trivial) default constructor.
+   Used to decide whether [[uninit]] is required/recognized at all
+   (see cp_finish_decl's own check just below); an array's OWN element-
+   level access is separately restricted to bulk/recognized
+   initialization only (init-profile-gimple.cc's own random-access
+   ban), never verified element-by-element, matching P4222 S1.3's own
+   "random access to an uninitialized array must be banned" rule.  */
+
+static bool
+ip_scalar_or_scalar_array_p (tree type)
+{
+  while (TREE_CODE (type) == ARRAY_TYPE)
+    type = TREE_TYPE (type);
+  return SCALAR_TYPE_P (type);
+}
+
 /* Finish processing of a declaration;
    install its line number and initial value.
    If the length of an array type is not known before,
@@ -9640,19 +9660,20 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
 		  "conveyor function or predicate", decl);
     }
 
-  /* P4222 Initialization profile, Increment 1's local-variable-only
-     slice: a local automatic variable of scalar type left without an
-     initializer must be explicitly marked [[uninit]], the same way
-     D4324's own conveyor-restriction check just above works -- checked
-     here, with the as-parsed INIT, for the same reason given in that
-     check's own comment.  Scoped to SCALAR_TYPE_P only for this
-     increment: a class-type local without an initializer invokes its
-     default constructor, which may or may not actually leave it
-     indeterminate depending on whether that constructor is trivial --
-     distinguishing those cases is real, separate work for a later
-     increment (see the profiles plan's Phase 4), not silently folded
-     in here.  Arrays are likewise explicitly deferred (Phase 4).  */
-  if (VAR_P (decl) && !init && SCALAR_TYPE_P (type)
+  /* P4222 Initialization profile: a local automatic variable of
+     scalar type, or an array of scalar type (Phase 4: P4222 S5.5),
+     left without an initializer must be explicitly marked [[uninit]],
+     the same way D4324's own conveyor-restriction check just above
+     works -- checked here, with the as-parsed INIT, for the same
+     reason given in that check's own comment.  Scoped to
+     ip_scalar_or_scalar_array_p only: a class-type local without an
+     initializer invokes its default constructor, which may or may not
+     actually leave it indeterminate depending on whether that
+     constructor is trivial -- distinguishing those cases is real,
+     separate work still deferred (profiles plan Phase 4's own
+     remaining aggregate/constructor slice), not silently folded in
+     here.  */
+  if (VAR_P (decl) && !init && ip_scalar_or_scalar_array_p (type)
       && profiles_enforced_p ("std::init")
       && at_function_scope_p ()
       && !TREE_STATIC (decl) && !DECL_EXTERNAL (decl)

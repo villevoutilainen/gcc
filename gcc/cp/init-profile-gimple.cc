@@ -88,7 +88,30 @@ along with GCC; see the file COPYING3.  If not see
    expressions (arithmetic, PHI merges) -- see ip_arg_uninit_
    flavored_p's own comment for why that's real points-to reasoning,
    deliberately left to the profiles plan's Phase 7 (P3446/P4296
-   invalidation profile) rather than duplicated here.  */
+   invalidation profile) rather than duplicated here.
+
+   Phase 4 addition (arrays, P4222 S1.3/S4.9/S5.5): decl.cc's own
+   declaration-time check now also requires [[uninit]] for a local
+   array of scalar element type left without an initializer.  An array
+   is never is_gimple_reg (AGGREGATE_TYPE_P), so it always goes
+   through ip_check_address_taken_var like any other address-taken
+   [[uninit]] local -- array-to-pointer decay ('&arr' passed to a
+   [[must_init]]/[[ref_to_uninit]] bulk-initialization function like
+   uninitialized_fill()) is already recognized for free by that same
+   machinery, since it's the identical ADDR_EXPR-of-the-variable shape
+   as '&scalar_var'.  An element access (ip_array_ref_base, checked in
+   ip_scan_stmt_for_var alongside the existing read/write/address-of
+   cases) is NOT banned outright -- it's folded into the same
+   dominance check as an ordinary scalar read: P4222's own S4.9
+   example ('uninitialized_fill(a2,10); int x = a2[0]; // OK') shows
+   random access is fine once a recognized bulk-initialization call
+   has been proven to dominate it, and only unverifiable *before* that
+   point, matching S1.3's "random access... must be banned" in spirit
+   (banning the ad-hoc, unverifiable case) without banning ordinary use
+   of an already-initialized array.  An array element is never itself
+   an init_stmts entry (raw arrays have no whole-array assignment
+   syntax to begin with), so this can only ever be checked against
+   some other must_init call, never mistaken for one.  */
 
 #include "config.h"
 #include "system.h"
@@ -191,6 +214,18 @@ struct ip_addr_taken_scan
   bool other_addr_of;
 };
 
+/* P4222 Phase 4, S1.3/S5.5: the ultimate base of (possibly nested,
+   for a multi-dimensional array) ARRAY_REFs in T, or T itself if T is
+   not an ARRAY_REF at all.  */
+
+static tree
+ip_array_ref_base (tree t)
+{
+  while (t && TREE_CODE (t) == ARRAY_REF)
+    t = TREE_OPERAND (t, 0);
+  return t;
+}
+
 /* Record, in S, how STMT relates to S->var: a direct read, a direct
    write (an "initializing event", same as P4222 S4.6's "for a
    built-in type, [writing an uninitialized object is] simply a
@@ -262,6 +297,20 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	    continue;
 	  if (r == var)
 	    s->read_stmts.safe_push (stmt);
+	  else if (TREE_CODE (r) == ARRAY_REF && ip_array_ref_base (r) == var)
+	    /* An element access on an [[uninit]] array (P4222 S5.5) is
+	       checked exactly like a scalar read -- dominated by an
+	       initializing [[must_init]] call (the array's own
+	       elements are never individually "written" the way a
+	       scalar is, so this can never itself become an
+	       init_stmts entry, only ever something ip_read_dominated_
+	       by_init_p checks against those) -- not treated as its
+	       own separate "banned outright" category: P4222's own
+	       S4.9 example ('uninitialized_fill(a2,10); int x =
+	       a2[0]; // OK') shows random access is fine once the
+	       whole array is provably initialized, only *before* that
+	       point is it unverifiable.  */
+	    s->read_stmts.safe_push (stmt);
 	  else if (TREE_CODE (r) == ADDR_EXPR && TREE_OPERAND (r, 0) == var)
 	    {
 	      /* Legitimate (not an error, not an initializing event for
@@ -281,6 +330,8 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	}
       if (lhs == var && !ip_stmt_is_deferred_init_copy_p (stmt))
 	s->init_stmts.safe_push (stmt);
+      else if (TREE_CODE (lhs) == ARRAY_REF && ip_array_ref_base (lhs) == var)
+	s->read_stmts.safe_push (stmt);
     }
   else if (gimple_code (stmt) == GIMPLE_COND)
     {
@@ -295,6 +346,9 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	{
 	  tree arg = gimple_call_arg (stmt, i);
 	  if (arg == var)
+	    s->read_stmts.safe_push (stmt);
+	  else if (TREE_CODE (arg) == ARRAY_REF
+		   && ip_array_ref_base (arg) == var)
 	    s->read_stmts.safe_push (stmt);
 	  else if (TREE_CODE (arg) == ADDR_EXPR
 		   && TREE_OPERAND (arg, 0) == var)
@@ -321,14 +375,20 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 		s->other_addr_of = true;
 	    }
 	}
-      if (gimple_call_lhs (stmt) == var
-	  && !gimple_call_internal_p (stmt, IFN_DEFERRED_INIT))
+      tree call_lhs = gimple_call_lhs (stmt);
+      if (call_lhs == var && !gimple_call_internal_p (stmt, IFN_DEFERRED_INIT))
 	s->init_stmts.safe_push (stmt);
+      else if (call_lhs && TREE_CODE (call_lhs) == ARRAY_REF
+	       && ip_array_ref_base (call_lhs) == var)
+	s->read_stmts.safe_push (stmt);
     }
   else if (greturn *ret = dyn_cast <greturn *> (stmt))
     {
       tree val = gimple_return_retval (ret);
       if (val == var)
+	s->read_stmts.safe_push (stmt);
+      else if (val && TREE_CODE (val) == ARRAY_REF
+	       && ip_array_ref_base (val) == var)
 	s->read_stmts.safe_push (stmt);
       else if (val && TREE_CODE (val) == ADDR_EXPR
 	       && TREE_OPERAND (val, 0) == var)
