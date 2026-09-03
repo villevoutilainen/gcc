@@ -493,18 +493,306 @@ ip_check_address_taken_var (function *fun, tree var, bool *dominance_computed)
 		"%<std::init%> profile", var);
 }
 
-/* P4222 Phase 3, S4.3/S9.4: true if ARG (a call-argument expression)
-   is "uninit-flavored" -- either the address of a local marked
-   [[uninit]], or a direct pass-through of a pointer variable itself
-   marked [[ref_to_uninit]] or [[must_init]] (profiles_uninit_
-   pointee_p covers both, S9.3: "[[must_init]] implies [[ref_to_
-   uninit]]").  Conservatively false for anything else (arithmetic on
-   pointers, a PHI-merged pointer, a cast chain, etc.), matching
-   P4222's own default rule ("by default, a pointer... is considered
-   to point to memory initialized to some type", S4.3) -- propagating
-   flavor through arbitrary pointer expressions is real points-to
-   reasoning, which is what P3446/P4296's own invalidation-profile
-   psets exist for (profiles plan Phase 7), not duplicated here.  */
+/* P4222 Phase 4d (S5.1-S5.3): bookkeeping for ip_check_constructor_
+   member's own scan, for a single [[uninit]]/[[ref_to_uninit]]-marked
+   FIELD of the class THIS_PARM constructs, within one constructor's
+   body.  Structurally the member-access counterpart of ip_addr_taken_
+   scan/ip_scan_stmt_for_var -- kept as its own, purpose-built scan
+   rather than genericizing that one over "what counts as the
+   target": the two targets (a whole variable vs. one member accessed
+   through *this) differ enough in per-slot matching detail that
+   sharing code seemed likelier to introduce subtle bugs between the
+   two than to prevent them.  */
+
+struct ip_member_scan
+{
+  tree this_parm;
+  tree field;
+  auto_vec<gimple *> init_stmts;
+  auto_vec<gimple *> read_stmts;
+  bool other_escape;
+};
+
+/* True if T is exactly 'this->FIELD' (or an SSA-copy-of-THIS_PARM's
+   equivalent) -- a COMPONENT_REF selecting FIELD out of a MEM_REF (the
+   canonical GIMPLE dereference node) or INDIRECT_REF of THIS_PARM at
+   offset 0.  Confirmed against real GIMPLE output (a constructor's own
+   'this_4(D)->p = ...' / '_1 = this_4(D)->p;' shapes), not assumed.  */
+
+static bool
+ip_component_ref_of_this_field_p (tree t, tree this_parm, tree field)
+{
+  if (TREE_CODE (t) != COMPONENT_REF || TREE_OPERAND (t, 1) != field)
+    return false;
+  tree base = TREE_OPERAND (t, 0);
+  tree ptr;
+  if (TREE_CODE (base) == MEM_REF && integer_zerop (TREE_OPERAND (base, 1)))
+    ptr = TREE_OPERAND (base, 0);
+  else if (TREE_CODE (base) == INDIRECT_REF)
+    ptr = TREE_OPERAND (base, 0);
+  else
+    return false;
+  return ip_underlying_var (ptr) == this_parm;
+}
+
+/* '_1 = &this->field;' was just seen (LHS_SSA is '_1').  Unlike
+   '&local_var', '&this->field' needs a pointer-arithmetic computation
+   (adding FIELD's own byte offset to THIS_PARM) that GIMPLE never
+   inlines directly at the point of use -- confirmed by direct testing
+   -- so whether this is a recognized [[must_init]] pattern can only be
+   decided by walking LHS_SSA's own immediate uses forward, the same
+   must_init/ref_to_uninit recognition ip_scan_stmt_for_var's own
+   GIMPLE_CALL branch applies to a directly-inlined '&var' argument.
+   Every single use must be a safe one (a flavored call argument) for
+   this to be anything other than an escape: a temp used more than
+   once, or used anywhere else at all, can't be vouched for.  */
+
+static void
+ip_scan_member_addr_uses (tree lhs_ssa, ip_member_scan *s)
+{
+  if (TREE_CODE (lhs_ssa) != SSA_NAME)
+    {
+      s->other_escape = true;
+      return;
+    }
+
+  imm_use_iterator imm_iter;
+  use_operand_p use_p;
+  bool any_use = false;
+  bool ok = true;
+  FOR_EACH_IMM_USE_FAST (use_p, imm_iter, lhs_ssa)
+    {
+      any_use = true;
+      gimple *use_stmt = USE_STMT (use_p);
+      if (gimple_code (use_stmt) != GIMPLE_CALL)
+	{
+	  ok = false;
+	  continue;
+	}
+      tree callee = gimple_call_fndecl (use_stmt);
+      unsigned nargs = gimple_call_num_args (use_stmt);
+      bool matched = false;
+      for (unsigned ai = 0; ai < nargs; ++ai)
+	if (gimple_call_arg (use_stmt, ai) == lhs_ssa)
+	  {
+	    matched = true;
+	    if (callee
+		&& profiles_uninit_flavor_at_position_p (callee, ai + 1,
+							  /*must_init_only=*/true))
+	      s->init_stmts.safe_push (use_stmt);
+	    else if (callee
+		     && profiles_uninit_flavor_at_position_p (
+			  callee, ai + 1, /*must_init_only=*/false))
+	      ; /* Plain [[ref_to_uninit]]: neutral, see
+		   ip_scan_stmt_for_var's own identical case.  */
+	    else
+	      ok = false;
+	  }
+      if (!matched)
+	ok = false;
+    }
+  if (!ok || !any_use)
+    s->other_escape = true;
+}
+
+/* The member-access counterpart of ip_scan_stmt_for_var -- same
+   per-slot shape (assign rhs/lhs, cond operands, call args/lhs,
+   return retval), same must_init/ref_to_uninit call recognition, just
+   matching 'this->field' via ip_component_ref_of_this_field_p instead
+   of a bare VAR_DECL.  */
+
+static void
+ip_scan_stmt_for_member (gimple *stmt, ip_member_scan *s)
+{
+  tree this_parm = s->this_parm;
+  tree field = s->field;
+
+  if (is_gimple_assign (stmt))
+    {
+      tree lhs = gimple_assign_lhs (stmt);
+      tree rhs[3] = { gimple_assign_rhs1 (stmt), gimple_assign_rhs2 (stmt),
+		      gimple_assign_rhs3 (stmt) };
+      for (tree r : rhs)
+	{
+	  if (!r)
+	    continue;
+	  if (ip_component_ref_of_this_field_p (r, this_parm, field))
+	    s->read_stmts.safe_push (stmt);
+	  else if (TREE_CODE (r) == ADDR_EXPR
+		   && ip_component_ref_of_this_field_p (TREE_OPERAND (r, 0),
+							 this_parm, field))
+	    ip_scan_member_addr_uses (lhs, s);
+	}
+      if (ip_component_ref_of_this_field_p (lhs, this_parm, field)
+	  && !ip_stmt_is_deferred_init_copy_p (stmt))
+	s->init_stmts.safe_push (stmt);
+    }
+  else if (gimple_code (stmt) == GIMPLE_COND)
+    {
+      if (ip_component_ref_of_this_field_p (gimple_cond_lhs (stmt), this_parm,
+					     field)
+	  || ip_component_ref_of_this_field_p (gimple_cond_rhs (stmt),
+						this_parm, field))
+	s->read_stmts.safe_push (stmt);
+    }
+  else if (gimple_code (stmt) == GIMPLE_CALL)
+    {
+      tree callee = gimple_call_fndecl (stmt);
+      unsigned nargs = gimple_call_num_args (stmt);
+      for (unsigned i = 0; i < nargs; ++i)
+	{
+	  tree arg = gimple_call_arg (stmt, i);
+	  if (ip_component_ref_of_this_field_p (arg, this_parm, field))
+	    s->read_stmts.safe_push (stmt);
+	  else if (TREE_CODE (arg) == ADDR_EXPR
+		   && ip_component_ref_of_this_field_p (TREE_OPERAND (arg, 0),
+							 this_parm, field))
+	    {
+	      if (callee
+		  && profiles_uninit_flavor_at_position_p (callee, i + 1,
+							    /*must_init_only=*/true))
+		s->init_stmts.safe_push (stmt);
+	      else if (callee
+		       && profiles_uninit_flavor_at_position_p (
+			    callee, i + 1, /*must_init_only=*/false))
+		;
+	      else
+		s->other_escape = true;
+	    }
+	}
+      tree call_lhs = gimple_call_lhs (stmt);
+      if (call_lhs
+	  && ip_component_ref_of_this_field_p (call_lhs, this_parm, field)
+	  && !gimple_call_internal_p (stmt, IFN_DEFERRED_INIT))
+	s->init_stmts.safe_push (stmt);
+    }
+  else if (greturn *ret = dyn_cast <greturn *> (stmt))
+    {
+      tree val = gimple_return_retval (ret);
+      if (val && ip_component_ref_of_this_field_p (val, this_parm, field))
+	s->read_stmts.safe_push (stmt);
+      else if (val && TREE_CODE (val) == ADDR_EXPR
+	       && ip_component_ref_of_this_field_p (TREE_OPERAND (val, 0),
+						     this_parm, field))
+	s->other_escape = true;
+    }
+}
+
+/* True if every statement reaching BB is provably preceded by at
+   least one statement in INIT_STMTS -- the "is this exit point safe"
+   counterpart of ip_read_dominated_by_init_p (which asks "is this
+   read safe"): a same-block init_stmt is unconditionally sufficient
+   here (unlike a read, a basic block's own terminating statement --
+   the only kind that can lead to another block -- is always last, so
+   any init_stmt sharing that block necessarily precedes it).  */
+
+static bool
+ip_block_dominated_by_init_p (basic_block bb, vec<gimple *> &init_stmts)
+{
+  for (unsigned i = 0; i < init_stmts.length (); ++i)
+    {
+      basic_block init_bb = gimple_bb (init_stmts[i]);
+      if (bb == init_bb || dominated_by_p (CDI_DOMINATORS, bb, init_bb))
+	return true;
+    }
+  return false;
+}
+
+/* P4222 Phase 4d (S5.1-S5.3, the paper's own flagship 'X::p' example):
+   the constructor-body counterpart of ip_check_address_taken_var, for
+   a single [[uninit]]/[[ref_to_uninit]]-marked FIELD of the class
+   THIS_PARM constructs.  Phase 4b's own front-end check (init.cc)
+   already confirmed FIELD isn't covered by the member-initializer-
+   list or an NSDMI (that's exactly why it's still marked [[uninit]]
+   and reaches this function at all); this verifies the OTHER half of
+   S5.1's guarantee -- that a member so exempted really is
+   "initialized before [it is] exposed to users of the class" -- via
+   the same CFG-dominance-based DAA as an address-taken local.
+
+   Unlike ip_check_address_taken_var, "must be exposed initialized"
+   isn't only about protecting in-body reads -- every ordinary RETURN
+   point of the constructor itself must also be dominated by an
+   initializing write, since past that point the object is visible to
+   callers.  EH-unwind edges (EDGE_EH) are excluded: a constructor that
+   exits via an exception never actually brings the object into
+   existence from a caller's perspective, so nothing is "exposed"  on
+   that path.  */
+
+static void
+ip_check_constructor_member (function *fun, tree this_parm, tree field,
+			      bool *dominance_computed)
+{
+  ip_member_scan scan;
+  scan.this_parm = this_parm;
+  scan.field = field;
+  scan.other_escape = false;
+
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      ip_scan_stmt_for_member (gsi_stmt (gsi), &scan);
+
+  if (scan.other_escape)
+    {
+      error_at (DECL_SOURCE_LOCATION (fun->decl),
+		"cannot verify %<[[uninit]]%> member %qD under the "
+		"%<std::init%> profile: its address is taken outside a "
+		"recognized %<[[must_init]]%> call, which this checker "
+		"cannot yet analyze", field);
+      return;
+    }
+
+  if (!*dominance_computed)
+    {
+      calculate_dominance_info (CDI_DOMINATORS);
+      *dominance_computed = true;
+    }
+
+  for (gimple *read_stmt : scan.read_stmts)
+    if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts))
+      error_at (gimple_location (read_stmt),
+		"member %qD read before it is definitely assigned, under "
+		"the %<std::init%> profile", field);
+
+  bool exit_ok = true;
+  edge e;
+  edge_iterator ei;
+  FOR_EACH_EDGE (e, ei, EXIT_BLOCK_PTR_FOR_FN (fun)->preds)
+    {
+      if (e->flags & EDGE_EH)
+	continue;
+      if (!ip_block_dominated_by_init_p (e->src, scan.init_stmts))
+	{
+	  exit_ok = false;
+	  break;
+	}
+    }
+  if (!exit_ok)
+    error_at (DECL_SOURCE_LOCATION (fun->decl),
+	      "constructor may leave member %qD, marked %<[[uninit]]%>, "
+	      "not definitely assigned before %<*this%> is exposed, under "
+	      "the %<std::init%> profile", field);
+}
+
+/* P4222 Phase 3/4d, S4.3/S9.4: true if ARG (a call-argument
+   expression) is "uninit-flavored" -- the address of a local or
+   member marked [[uninit]] (a COMPONENT_REF's own FIELD_DECL operand,
+   for a member -- checked directly against FIELD_DECL's DECL_
+   ATTRIBUTES, since P4222 S5.3's [[uninit]] members are exactly as
+   valid an argument to a [[must_init]]/[[ref_to_uninit]] parameter as
+   an [[uninit]] local, and this is a property of the field itself, not
+   of whose object it belongs to), or a direct pass-through of a
+   pointer variable/member itself marked [[ref_to_uninit]] or
+   [[must_init]] (profiles_uninit_pointee_p covers both, S9.3:
+   "[[must_init]] implies [[ref_to_uninit]]").  Conservatively false
+   for anything else (arithmetic on pointers, a PHI-merged pointer, a
+   cast chain, etc.), matching P4222's own default rule ("by default,
+   a pointer... is considered to point to memory initialized to some
+   type", S4.3) -- propagating flavor through arbitrary pointer
+   expressions is real points-to reasoning, which is what P3446/P4296's
+   own invalidation-profile psets exist for (profiles plan Phase 7),
+   not duplicated here.  */
 
 static bool
 ip_arg_uninit_flavored_p (tree arg)
@@ -512,11 +800,28 @@ ip_arg_uninit_flavored_p (tree arg)
   if (TREE_CODE (arg) == ADDR_EXPR)
     {
       tree operand = TREE_OPERAND (arg, 0);
-      return VAR_P (operand)
-	     && lookup_attribute ("uninit", DECL_ATTRIBUTES (operand)) != NULL_TREE;
+      if (VAR_P (operand))
+	return lookup_attribute ("uninit", DECL_ATTRIBUTES (operand)) != NULL_TREE;
+      if (TREE_CODE (operand) == COMPONENT_REF)
+	{
+	  tree field = TREE_OPERAND (operand, 1);
+	  return lookup_attribute ("uninit", DECL_ATTRIBUTES (field)) != NULL_TREE;
+	}
+      return false;
     }
   if (TREE_CODE (arg) == SSA_NAME)
     {
+      /* Unlike '&local_var', '&this->field' needs a pointer-
+	 arithmetic computation GIMPLE never inlines directly at the
+	 point of use (confirmed by direct testing) -- if ARG's own
+	 reaching definition is exactly such an ADDR_EXPR assignment,
+	 apply the same ADDR_EXPR-shape check to what it computed the
+	 address of, rather than to ARG itself.  */
+      gimple *def = SSA_NAME_DEF_STMT (arg);
+      if (def && is_gimple_assign (def)
+	  && gimple_assign_rhs_code (def) == ADDR_EXPR)
+	return ip_arg_uninit_flavored_p (gimple_assign_rhs1 (def));
+
       tree var = SSA_NAME_VAR (arg);
       if (var
 	  && (VAR_P (var) || TREE_CODE (var) == PARM_DECL)
@@ -636,6 +941,30 @@ ip_check_function (function *fun)
 			  "%qD read before it is definitely assigned, "
 			  "under the %<std::init%> profile", var);
 	    }
+	}
+    }
+
+  /* P4222 Phase 4d (S5.1-S5.3): for a constructor specifically, check
+     every [[uninit]]/[[ref_to_uninit]]-marked member of the class it
+     constructs -- 'this' is always DECL_ARGUMENTS (fun->decl) itself
+     (the first entry grokfndecl inserts for any non-static member
+     function), safe to read directly here (unlike a CALLEE's
+     DECL_ARGUMENTS elsewhere in this file, FUN is the function this
+     pass is currently compiling, which always has a real body).  */
+  if (DECL_CONSTRUCTOR_P (fun->decl))
+    {
+      tree this_parm = DECL_ARGUMENTS (fun->decl);
+      tree class_type = TREE_TYPE (TREE_TYPE (this_parm));
+      for (tree field = TYPE_FIELDS (class_type); field;
+	   field = DECL_CHAIN (field))
+	{
+	  if (TREE_CODE (field) != FIELD_DECL || DECL_ARTIFICIAL (field))
+	    continue;
+	  if (!lookup_attribute ("uninit", DECL_ATTRIBUTES (field))
+	      && !profiles_uninit_pointee_p (field))
+	    continue;
+	  ip_check_constructor_member (fun, this_parm, field,
+					&dominance_computed);
 	}
     }
 
