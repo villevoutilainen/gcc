@@ -12937,12 +12937,32 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 {
   if (!oa_diagnostics_active)
     return;
-  cp_walk_tree (expr, [](tree *tp, int *, void *data_) -> tree
+  cp_walk_tree (expr, [](tree *tp, int *walk_subtrees_p, void *data_) -> tree
     {
       oa_env *e = (oa_env *) data_;
       tree t = *tp;
       if (t == NULL_TREE || t == error_mark_node)
 	return NULL_TREE;
+
+      /* D4324: a virtual call's OBJ_TYPE_REF wraps the compiler-
+	 synthesized vtable-pointer-chasing machinery build_vfn_ref
+	 (class.cc) builds to locate the actual callee -- no user code
+	 ever writes or can annotate this with its own is_object_address
+	 obligation. Trusted unconditionally and not walked into: reading
+	 a valid, constructed polymorphic object's own vtable pointer, and
+	 the vtable's own entries, is never itself the "arbitrary,
+	 unproven pointer" case this pass exists to catch, precisely
+	 because it's the compiler's own trusted implementation detail,
+	 not code a user wrote. This does not skip checking the call's
+	 actual receiver expression (OBJ_TYPE_REF_OBJECT, the same
+	 'instance_ptr' build_vfn_ref was given): that same expression is
+	 also the call's own first argument, an independent CALL_EXPR
+	 operand this walk still visits normally.  */
+      if (TREE_CODE (t) == OBJ_TYPE_REF)
+	{
+	  *walk_subtrees_p = 0;
+	  return NULL_TREE;
+	}
 
       if (TREE_CODE (t) == ARRAY_REF)
 	{

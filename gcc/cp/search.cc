@@ -2199,6 +2199,26 @@ check_final_overrider (tree overrider, tree basefn)
 	      "overridden function is %qD", basefn);
       return 0;
     }
+
+  /* D4324: conveyor-ness is never automatically inherited by an override
+     (unlike an ordinary contract, see maybe_inherit_virtual_contract) --
+     a conveyor virtual function may only be overridden by another
+     function itself declared 'conveyor'. This is what lets a call
+     through a base-class interface to a 'conveyor'-declared virtual
+     function trust that whichever override is actually invoked at
+     runtime is conveyor too, without needing to inspect every override
+     in the hierarchy at the call site (see the conveyor-restrictions
+     check in call.cc's build_over_call, which relies on exactly this
+     invariant to permit a virtual call to such a function).  */
+  if (DECL_DECLARED_CONVEYOR_P (basefn) && !DECL_DECLARED_CONVEYOR_P (overrider))
+    {
+      auto_diagnostic_group d;
+      error ("%q+D overriding %<conveyor%> virtual function must "
+	     "itself be declared %<conveyor%>", overrider);
+      inform (DECL_SOURCE_LOCATION (basefn),
+	      "overridden function is %qD", basefn);
+      return 0;
+    }
   return 1;
 }
 

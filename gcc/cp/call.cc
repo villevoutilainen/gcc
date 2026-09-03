@@ -11091,20 +11091,28 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
      condition's own syntax, never of whatever it actually calls into.
      Checked here, before ORIG_FN's own static identity could be replaced
      by a runtime vtable-load just below, so both branches still see the
-     real, named FUNCTION_DECL. A genuinely virtual call is banned
-     outright for now (temporary -- the compiler has no way to know every
-     override is itself conveyor, since that isn't yet a checked,
-     inherited property of an override; a devirtualized call, which
-     already reached this point with LOOKUP_NONVIRTUAL set, is treated as
-     an ordinary call instead, not banned here). Builtins are exempt via
-     fndecl_built_in_p: their behavior is fully known to the compiler,
-     the same trust the array-bounds/div-mod scanners already extend to
-     primitive operators, and a conveyor function may legitimately need
-     one (e.g. size()'s own existing use of __builtin_unreachable () as a
-     negative-result guard) -- this is a different, broader rule than
-     check_conveyor_function_body_r's own narrow, name-based ban on
-     std::unreachable() specifically, which is unaffected by this check
-     and still applies independently.  */
+     real, named FUNCTION_DECL.
+
+     A genuinely virtual call is no longer banned: check_final_overrider
+     (search.cc) now rejects, as ill-formed, any override of a
+     'conveyor'-declared virtual function that is not itself declared
+     'conveyor' -- conveyor-ness is never automatically inherited by an
+     override (unlike an ordinary contract, see maybe_inherit_virtual_
+     contract), so this must be satisfied explicitly by every override in
+     the hierarchy, all the way down. That makes it a checked invariant
+     that whichever override actually gets invoked at runtime through
+     FN's own vtable slot is conveyor too, so the same callee-must-be-
+     conveyor check below (keyed on FN, the statically-named, virtual-
+     dispatch-yet-unresolved target) is sufficient for a virtual call as
+     well as an ordinary one -- no separate ban needed. Builtins are
+     exempt via fndecl_built_in_p: their behavior is fully known to the
+     compiler, the same trust the array-bounds/div-mod scanners already
+     extend to primitive operators, and a conveyor function may
+     legitimately need one (e.g. size()'s own existing use of
+     __builtin_unreachable () as a negative-result guard) -- this is a
+     different, broader rule than check_conveyor_function_body_r's own
+     narrow, name-based ban on std::unreachable() specifically, which is
+     unaffected by this check and still applies independently.  */
   if (conveyor_restrictions_active_p ())
     {
       /* D4324: force a still-undecided 'conveyor(auto)' FN's deduction
@@ -11118,20 +11126,7 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
 	 (pt.cc).  A no-op for anything else.  */
       maybe_instantiate_conveyor (fn);
 
-      if (DECL_VINDEX (fn) && (flags & LOOKUP_NONVIRTUAL) == 0)
-	{
-	  if (conveyor_auto_probing_p ())
-	    note_conveyor_auto_violation ();
-	  else
-	    {
-	      if (complain & tf_error)
-		error_at (input_location, "virtual function call not "
-			  "permitted in a conveyor function or predicate; "
-			  "%qD is called virtually here", orig_fn);
-	      return error_mark_node;
-	    }
-	}
-      else if (!fndecl_built_in_p (fn) && !DECL_DECLARED_CONVEYOR_P (fn)
+      if (!fndecl_built_in_p (fn) && !DECL_DECLARED_CONVEYOR_P (fn)
 	       && !is_object_address_fndecl_p (fn)
 	       && !is_std_unreachable_fndecl_p (fn)
 	       && !(nargs && is_iile_operator_call_p (fn, argarray[0])))
