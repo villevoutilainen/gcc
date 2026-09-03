@@ -212,6 +212,7 @@ struct ip_addr_taken_scan
   auto_vec<gimple *> init_stmts;
   auto_vec<gimple *> read_stmts;
   bool other_addr_of;
+  bool member_access;
 };
 
 /* P4222 Phase 4, S1.3/S5.5: the ultimate base of (possibly nested,
@@ -222,6 +223,26 @@ static tree
 ip_array_ref_base (tree t)
 {
   while (t && TREE_CODE (t) == ARRAY_REF)
+    t = TREE_OPERAND (t, 0);
+  return t;
+}
+
+/* P4222 Phase 4e (S5.4): the ultimate base of (possibly nested, for a
+   'var.a.b'-style chain) COMPONENT_REFs in T, or T itself if T is not
+   a COMPONENT_REF at all.  Used only to detect that VAR (now
+   potentially a non-union class-type local with a trivial default
+   constructor, since ip_scalar_or_scalar_array_p's own Phase 4e
+   extension) had one of its own members accessed directly -- this
+   pass has no per-member DAA for an arbitrary local the way
+   ip_check_constructor_member has for 'this' inside a constructor
+   (Phase 4d), so any such access is honestly declined
+   (ip_addr_taken_scan's own member_access flag), never silently
+   passed as if it had been verified.  */
+
+static tree
+ip_component_ref_base (tree t)
+{
+  while (t && TREE_CODE (t) == COMPONENT_REF)
     t = TREE_OPERAND (t, 0);
   return t;
 }
@@ -311,6 +332,9 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	       whole array is provably initialized, only *before* that
 	       point is it unverifiable.  */
 	    s->read_stmts.safe_push (stmt);
+	  else if (TREE_CODE (r) == COMPONENT_REF
+		   && ip_component_ref_base (r) == var)
+	    s->member_access = true;
 	  else if (TREE_CODE (r) == ADDR_EXPR && TREE_OPERAND (r, 0) == var)
 	    {
 	      /* Legitimate (not an error, not an initializing event for
@@ -332,6 +356,9 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	s->init_stmts.safe_push (stmt);
       else if (TREE_CODE (lhs) == ARRAY_REF && ip_array_ref_base (lhs) == var)
 	s->read_stmts.safe_push (stmt);
+      else if (TREE_CODE (lhs) == COMPONENT_REF
+	       && ip_component_ref_base (lhs) == var)
+	s->member_access = true;
     }
   else if (gimple_code (stmt) == GIMPLE_COND)
     {
@@ -350,6 +377,9 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	  else if (TREE_CODE (arg) == ARRAY_REF
 		   && ip_array_ref_base (arg) == var)
 	    s->read_stmts.safe_push (stmt);
+	  else if (TREE_CODE (arg) == COMPONENT_REF
+		   && ip_component_ref_base (arg) == var)
+	    s->member_access = true;
 	  else if (TREE_CODE (arg) == ADDR_EXPR
 		   && TREE_OPERAND (arg, 0) == var)
 	    {
@@ -381,6 +411,9 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
       else if (call_lhs && TREE_CODE (call_lhs) == ARRAY_REF
 	       && ip_array_ref_base (call_lhs) == var)
 	s->read_stmts.safe_push (stmt);
+      else if (call_lhs && TREE_CODE (call_lhs) == COMPONENT_REF
+	       && ip_component_ref_base (call_lhs) == var)
+	s->member_access = true;
     }
   else if (greturn *ret = dyn_cast <greturn *> (stmt))
     {
@@ -390,6 +423,9 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
       else if (val && TREE_CODE (val) == ARRAY_REF
 	       && ip_array_ref_base (val) == var)
 	s->read_stmts.safe_push (stmt);
+      else if (val && TREE_CODE (val) == COMPONENT_REF
+	       && ip_component_ref_base (val) == var)
+	s->member_access = true;
       else if (val && TREE_CODE (val) == ADDR_EXPR
 	       && TREE_OPERAND (val, 0) == var)
 	s->other_addr_of = true;
@@ -454,6 +490,7 @@ ip_check_address_taken_var (function *fun, tree var, bool *dominance_computed)
   ip_addr_taken_scan scan;
   scan.var = var;
   scan.other_addr_of = false;
+  scan.member_access = false;
 
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
@@ -468,6 +505,22 @@ ip_check_address_taken_var (function *fun, tree var, bool *dominance_computed)
 		"%<std::init%> profile: its address is taken outside a "
 		"recognized %<[[must_init]]%> call, which this checker "
 		"cannot yet analyze", var);
+      return;
+    }
+
+  /* P4222 Phase 4e (S5.4): VAR can now be a non-union class-type
+     local with a trivial default constructor (ip_scalar_or_scalar_
+     array_p's own extension, decl.cc), not just a scalar or array --
+     but this pass has no per-member DAA for an arbitrary local the
+     way ip_check_constructor_member has for 'this' inside a
+     constructor (Phase 4d): honestly decline rather than silently
+     accept unverified member-level access.  */
+  if (scan.member_access)
+    {
+      error_at (DECL_SOURCE_LOCATION (var),
+		"cannot verify %<[[uninit]]%> on %qD under the "
+		"%<std::init%> profile: member-level access on this "
+		"aggregate is not yet analyzed", var);
       return;
     }
 
