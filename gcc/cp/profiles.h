@@ -52,4 +52,28 @@ extern bool profiles_enforced_p (const char *);
    no-op when its profile isn't enforced.  */
 extern void init_profiles (void);
 
+/* True if DECL (a PARM_DECL or VAR_DECL of pointer type) is flavored
+   "points to [[uninit]] memory" -- carries [[ref_to_uninit]] directly,
+   or [[must_init]], which implies it (P4222 S9.3: "[[must_init]]
+   implies [[ref_to_uninit]]").  Shared between the front-end
+   declaration-time check (decl.cc) and the GIMPLE-level call-site/
+   dominance checker (init-profile-gimple.cc), so both sides agree on
+   exactly one definition of "uninit-flavored".  */
+extern bool profiles_uninit_pointee_p (tree decl);
+
+/* True if FNDECL's parameter at 1-based POSITION carries
+   [[ref_to_uninit]] or [[must_init]] -- consults the synthesized
+   function-level "profiles_uninit_flavor" marker (grokfndecl, decl.cc)
+   rather than the PARM_DECL directly, so this still answers correctly
+   even when FNDECL is only declared, never defined, in this
+   translation unit (see that marker's own comment for why a direct
+   PARM_DECL lookup can't be trusted to survive that case).  If
+   MUST_INIT_ONLY, only a [[must_init]] parameter at that position
+   counts -- used by the caller-side postcondition check ("does this
+   call establish the argument as now-initialized"), which a plain
+   [[ref_to_uninit]] parameter does not.  */
+extern bool profiles_uninit_flavor_at_position_p (tree fndecl,
+						   unsigned position,
+						   bool must_init_only);
+
 #endif /* ! GCC_CP_PROFILES_H */
