@@ -5638,49 +5638,59 @@ handle_indeterminate_attribute (tree *node, tree name, tree, int,
   return NULL_TREE;
 }
 
-/* P4222's [[uninit]] attribute (Initialization profile, Increment 1's
-   local-variable-only slice).  Restricted to non-static automatic
-   VAR_DECLs for this increment -- PARM_DECL support ([[ref_to_uninit]]
-   is the paper's own separate attribute for parameters, not [[uninit]]
-   itself) is later work, see the profiles plan's Phase 3.  Marks the
-   declaration as one the Initialization profile's checker (a later,
-   GIMPLE-level pass -- see profiles.h) is allowed to leave without a
-   provable reaching definition before every use; this handler itself
-   only validates placement, it does no analysis.  */
+/* P4222's [[uninit]] attribute (Initialization profile).  Applies to
+   a non-static automatic VAR_DECL (Increment 1) or a non-static data
+   member FIELD_DECL (Phase 4b, P4222 S5.1-S5.3) -- PARM_DECL support
+   ([[ref_to_uninit]] is the paper's own separate attribute for
+   parameters, not [[uninit]] itself) stays out of scope, see the
+   profiles plan's Phase 3.  Marks the declaration as one the
+   Initialization profile's checker (a later, GIMPLE-level pass for
+   locals -- see profiles.h; a front-end constructor-coverage check
+   for members -- see init.cc's own emit_mem_initializers) is allowed
+   to leave without a provable reaching definition before every use;
+   this handler itself only validates placement, it does no analysis.
+   A FIELD_DECL is never "global" (no static-storage-duration concept
+   applies to it the way is_global_var checks for a VAR_DECL), so it
+   needs no analogous restriction of its own.  */
 
 static tree
 handle_uninit_attribute (tree *node, tree name, tree, int,
 			  bool *no_add_attrs)
 {
+  if (TREE_CODE (*node) == FIELD_DECL)
+    return NULL_TREE;
   if (!VAR_P (*node) || is_global_var (*node))
     {
       pedwarn (input_location, OPT_Wattributes,
-	       "%qE on declaration other than automatic variable", name);
+	       "%qE on declaration other than automatic variable or "
+	       "non-static data member", name);
       *no_add_attrs = true;
     }
   return NULL_TREE;
 }
 
 /* P4222's [[ref_to_uninit]] attribute (Initialization profile, Phase
-   3): marks a pointer PARM_DECL/VAR_DECL as referring to [[uninit]]
-   memory rather than the default-presumed-initialized pointee (P4222
-   S4.3).  Restricted to POINTER_TYPE for this increment -- the paper
-   also allows this on references and "smart pointers" (S4.3, S9.3),
-   but this project's checker (profiles.cc's own profiles_uninit_
-   pointee_p, and init-profile-gimple.cc) only reasons about raw
-   pointers so far; erroring here rather than silently accepting an
-   unchecked reference/smart-pointer use.  */
+   3/4b): marks a pointer PARM_DECL/VAR_DECL, or a pointer non-static
+   data member FIELD_DECL (Phase 4b, P4222 S5.3), as referring to
+   [[uninit]] memory rather than the default-presumed-initialized
+   pointee (P4222 S4.3).  Restricted to POINTER_TYPE for this
+   increment -- the paper also allows this on references and "smart
+   pointers" (S4.3, S9.3), but this project's checker (profiles.cc's
+   own profiles_uninit_pointee_p, and init-profile-gimple.cc) only
+   reasons about raw pointers so far; erroring here rather than
+   silently accepting an unchecked reference/smart-pointer use.  */
 
 static tree
 handle_ref_to_uninit_attribute (tree *node, tree name, tree, int,
 				 bool *no_add_attrs)
 {
-  if ((TREE_CODE (*node) != PARM_DECL && !VAR_P (*node))
+  if ((TREE_CODE (*node) != PARM_DECL && !VAR_P (*node)
+       && TREE_CODE (*node) != FIELD_DECL)
       || TREE_CODE (TREE_TYPE (*node)) != POINTER_TYPE)
     {
       error_at (input_location,
-		"%qE only supported on a pointer-typed parameter or "
-		"variable", name);
+		"%qE only supported on a pointer-typed parameter, "
+		"variable, or non-static data member", name);
       *no_add_attrs = true;
     }
   return NULL_TREE;
