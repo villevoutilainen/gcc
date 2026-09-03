@@ -25,7 +25,12 @@ along with GCC; see the file COPYING3.  If not see
 #include "stringpool.h"
 #include "diagnostic.h"
 #include "attribs.h"
+#include "context.h"
+#include "tree-pass.h"
 #include "profiles.h"
+
+/* Defined in init-profile-gimple.cc.  */
+extern gimple_opt_pass *make_pass_init_profile_gimple (gcc::context *ctxt);
 
 /* Increment 1: the profile registry is a minimal, fixed table -- one
    entry, "std::init", the informal name P4222's initialization
@@ -162,4 +167,15 @@ cp_finish_empty_declaration (location_t attrs_loc, tree std_attrs)
       && std_attrs != NULL_TREE
       && any_nonignored_attribute_p (std_attrs))
     warning_at (attrs_loc, OPT_Wattributes, "attribute ignored");
+}
+
+void
+init_profiles (void)
+{
+  struct register_pass_info pass_info;
+  pass_info.pass = make_pass_init_profile_gimple (g);
+  pass_info.reference_pass_name = "ssa";
+  pass_info.ref_pass_instance_number = 1;
+  pass_info.pos_op = PASS_POS_INSERT_AFTER;
+  register_pass (&pass_info);
 }
