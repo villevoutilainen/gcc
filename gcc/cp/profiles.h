@@ -42,4 +42,14 @@ extern void cp_finish_empty_declaration (location_t, tree);
    translation unit.  */
 extern bool profiles_enforced_p (const char *);
 
+/* Register the profile-checking GIMPLE passes (currently just the
+   P4222 Initialization profile's) -- called once, early, the same way
+   init_contracts (contracts.cc) registers D4324's own experimental
+   GIMPLE engine.  Unlike that engine, there is no command-line flag
+   to gate registration on: a profile is enabled from source
+   (profiles::enforce), not the command line, so registration itself
+   is unconditional and each pass's own gate () is what makes it a
+   no-op when its profile isn't enforced.  */
+extern void init_profiles (void);
+
 #endif /* ! GCC_CP_PROFILES_H */

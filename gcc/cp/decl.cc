@@ -5982,6 +5982,8 @@ cxx_init_decl_processing (void)
   if (flag_contracts)
     init_contracts ();
 
+  init_profiles ();
+
   if (modules_p ())
     init_modules (parse_in);
 

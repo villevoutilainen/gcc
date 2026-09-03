@@ -101,7 +101,7 @@ CXX_AND_OBJCXX_OBJS = \
 	cp/cvt.o cp/contracts.o cp/contracts-gimple.o cp/cxx-pretty-print.o \
 	cp/decl.o cp/decl2.o cp/dump.o \
 	cp/error.o cp/except.o cp/expr.o \
-	cp/friend.o cp/init.o \
+	cp/friend.o cp/init.o cp/init-profile-gimple.o \
 	cp/lambda.o cp/lex.o cp/logic.o \
 	cp/mangle.o cp/mapper-client.o cp/mapper-resolver.o \
 	cp/method.o cp/module.o \
