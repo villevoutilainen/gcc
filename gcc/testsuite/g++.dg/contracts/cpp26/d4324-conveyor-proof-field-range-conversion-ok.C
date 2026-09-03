@@ -31,7 +31,12 @@ struct conveyor_ctrl {
 inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 
 struct thing { int count; };
-struct thing_ref { thing *t; operator thing* () const { return t; } };
+struct thing_ref {
+  thing *t;
+  operator thing* () const
+    post<sc::never_proven_conveyor_v> (r: std::is_object_address (r))
+  { return t; }
+};
 
 void produce_count (thing * const t)
   pre<conveyor_ctrl_v> (std::is_object_address (t))
