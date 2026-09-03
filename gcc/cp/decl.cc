@@ -61,6 +61,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "langhooks-def.h"  /* For lhd_simulate_record_decl  */
 #include "coroutines.h"
 #include "contracts.h"
+#include "profiles.h"
 #include "gcc-urlifier.h"
 #include "diagnostic-highlight-colors.h"
 #include "pretty-print-markup.h"
@@ -9636,6 +9637,27 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
 		  "local variable %qD not explicitly initialized in a "
 		  "conveyor function or predicate", decl);
     }
+
+  /* P4222 Initialization profile, Increment 1's local-variable-only
+     slice: a local automatic variable of scalar type left without an
+     initializer must be explicitly marked [[uninit]], the same way
+     D4324's own conveyor-restriction check just above works -- checked
+     here, with the as-parsed INIT, for the same reason given in that
+     check's own comment.  Scoped to SCALAR_TYPE_P only for this
+     increment: a class-type local without an initializer invokes its
+     default constructor, which may or may not actually leave it
+     indeterminate depending on whether that constructor is trivial --
+     distinguishing those cases is real, separate work for a later
+     increment (see the profiles plan's Phase 4), not silently folded
+     in here.  Arrays are likewise explicitly deferred (Phase 4).  */
+  if (VAR_P (decl) && !init && SCALAR_TYPE_P (type)
+      && profiles_enforced_p ("std::init")
+      && at_function_scope_p ()
+      && !TREE_STATIC (decl) && !DECL_EXTERNAL (decl)
+      && !lookup_attribute ("uninit", DECL_ATTRIBUTES (decl)))
+    error_at (DECL_SOURCE_LOCATION (decl),
+	      "local variable %qD not initialized and not marked "
+	      "%<[[uninit]]%> under the %<std::init%> profile", decl);
 
   if (VAR_P (decl) && is_copy_initialization (init))
     flags |= LOOKUP_ONLYCONVERTING;

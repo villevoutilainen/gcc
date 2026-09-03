@@ -5638,6 +5638,29 @@ handle_indeterminate_attribute (tree *node, tree name, tree, int,
   return NULL_TREE;
 }
 
+/* P4222's [[uninit]] attribute (Initialization profile, Increment 1's
+   local-variable-only slice).  Restricted to non-static automatic
+   VAR_DECLs for this increment -- PARM_DECL support ([[ref_to_uninit]]
+   is the paper's own separate attribute for parameters, not [[uninit]]
+   itself) is later work, see the profiles plan's Phase 3.  Marks the
+   declaration as one the Initialization profile's checker (a later,
+   GIMPLE-level pass -- see profiles.h) is allowed to leave without a
+   provable reaching definition before every use; this handler itself
+   only validates placement, it does no analysis.  */
+
+static tree
+handle_uninit_attribute (tree *node, tree name, tree, int,
+			  bool *no_add_attrs)
+{
+  if (!VAR_P (*node) || is_global_var (*node))
+    {
+      pedwarn (input_location, OPT_Wattributes,
+	       "%qE on declaration other than automatic variable", name);
+      *no_add_attrs = true;
+    }
+  return NULL_TREE;
+}
+
 /* Table of valid C++ attributes.  */
 // clang-format off
 static const attribute_spec cxx_gnu_attributes[] =
@@ -5685,6 +5708,8 @@ static const attribute_spec std_attributes[] =
     handle_carries_dependency_attribute, NULL },
   { "indeterminate", 0, 0, true, false, false, false,
     handle_indeterminate_attribute, NULL },
+  { "uninit", 0, 0, true, false, false, false,
+    handle_uninit_attribute, NULL },
 };
 
 const scoped_attribute_specs std_attribute_table =
