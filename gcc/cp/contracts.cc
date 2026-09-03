@@ -9737,78 +9737,79 @@ oa_array_object_identity (tree expr, oa_env &env, tree *decl_out)
 
 static bool oa_get_range (tree expr, oa_env &env, oa_range_fact *out);
 
-/* D4324/P2680, "conversion-operator-returned provable field": if FNDECL
-   is a conversion operator (DECL_CONV_FN_P) whose entire body is a
-   single 'return <this->field>;' -- e.g. 'operator thing* () const
-   { return t; }' -- set *FIELD_OUT to that FIELD_DECL and return true.
-   Declines (returns false) for anything else: a computed expression, a
-   multi-statement body, a return of something other than one of the
-   receiver's own fields, or a still-uninstantiated/undefined body
-   (DECL_SAVED_TREE null) -- conservatively, not merely "not yet
-   handled," since this is used to decide whether the field's own
-   established fact (if any) may stand in for the conversion call's
-   return value; anything more elaborate than a bare field read could
-   return a value unrelated to the receiver's own stored state, which
-   this simple structural check cannot rule out.
+/* D4324/P2680: true if FNDECL -- any ordinary accessor, not just a
+   conversion operator -- has its own postcondition proving
+   is_object_address of its bound return value, e.g.
 
-   Needed because a wrapper's own pointer-typed field, once established
-   as a provable object address (from its own direct-initialization, see
-   the DECL_EXPR case's own CONSTRUCTOR handling, or from an explicit
-   'pre<>(is_object_address(obj->field))' conjunct elsewhere), is
-   otherwise never connected to a *conversion-operator call* reading
-   that exact field: oa_object_identity_decl's own conversion-operator
-   strip (oa_strip_conversion_operator_call) resolves to the RECEIVER's
-   identity, appropriate for a reference-returning conversion operator
-   (see oa_provable_p's own ADDR_EXPR case), but a plain pointer value
-   returned by-value has no such receiver-address shortcut available --
-   the actual VALUE returned must be traced back to the specific field
-   it reads.  */
+     T& accessor() post<conveyor_assert_v>(r: std::is_object_address(&r))
+     { return this->field; }
+
+   Generalizes oa_conversion_operator_returned_field's structural "the
+   callee's body literally returns a field" recognition (DECL_CONV_FN_P
+   only, requires reading the body) to any accessor whose CONTRACT, not
+   its implementation, vouches for its own result -- deliberately never
+   inspects FNDECL's own body, so it respects an ordinary named accessor
+   as a real abstraction boundary instead of reaching through it (unlike
+   the conversion-operator case, which has no contract to consult and so
+   has no choice but to look at the body).
+
+   Sound to trust unconditionally, regardless of what the caller can
+   independently prove about its own receiver: a postcondition holds
+   whenever the function successfully returns, by construction -- for a
+   conveyor_assert_v-flavored one, that's because it was independently
+   verified within FNDECL's own body (which enforces its own precondition
+   on 'this' by whatever means it uses, self-trust or otherwise, before
+   ever reaching a checked postcondition); for a never_proven_conveyor_v-
+   flavored one, it's the same unconditional-trust-by-fiat a mid-body
+   contract_assert<never_proven_conveyor_v> already is. Either way, no
+   separate proof of the receiver is needed here on top of that.
+
+   Found and fixed 2026-09-03, Ville: a real libstdc++ regression
+   (vector's _M_range_initialize_n failing to prove is_object_address for
+   _S_check_init_len's allocator parameter, via _M_get_Tp_allocator())
+   traced to this exact gap -- an ordinary accessor's own postcondition
+   was silently never consulted for this purpose at all, the only
+   existing composition path being the conversion-operator-specific one
+   above. The library-side call site was already fixed to route around
+   the accessor entirely (a legitimate rewrite, not this fix's reason for
+   existing), but the underlying gap -- any other ordinary accessor
+   carrying such a postcondition -- remained real and is fixed here
+   directly, not worked around a second time.  */
 
 static bool
-oa_conversion_operator_returned_field (tree fndecl, tree *field_out)
+oa_accessor_postcondition_object_address_p (tree fndecl)
 {
-  if (!DECL_CONV_FN_P (fndecl))
+  if (!fndecl || TREE_CODE (fndecl) != FUNCTION_DECL || !flag_contract_control_objects)
     return false;
-  tree body = DECL_SAVED_TREE (fndecl);
-  if (body == NULL_TREE || body == error_mark_node)
-    return false;
-  while (TREE_CODE (body) == BIND_EXPR)
-    body = BIND_EXPR_BODY (body);
-  if (TREE_CODE (body) == STATEMENT_LIST)
+  for (tree spec = get_fn_contract_specifiers (fndecl); spec; spec = TREE_CHAIN (spec))
     {
-      tree_stmt_iterator i = tsi_start (body);
-      if (tsi_end_p (i))
-	return false;
-      body = tsi_stmt (i);
-      tsi_next (&i);
-      if (!tsi_end_p (i))
-	return false;
+      tree contract = CONTRACT_STATEMENT (spec);
+      if (TREE_CODE (contract) != POSTCONDITION_STMT)
+	continue;
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      if (!result_id || result_id == error_mark_node)
+	continue;
+      tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+      if (!ctrl)
+	continue;
+      contract_check_side side = contract_side_of (contract, fndecl);
+      if (!contract_control_conveyor_like (ctrl, side, /*quiet=*/true))
+	continue;
+
+      tree cond = STRIP_ANY_LOCATION_WRAPPER (CONTRACT_CONDITION (contract));
+      if (cond == NULL_TREE || TREE_CODE (cond) != CALL_EXPR
+	  || call_expr_nargs (cond) != 1)
+	continue;
+      tree callee = cp_get_callee_fndecl_nofold (cond);
+      if (!callee || !is_object_address_fndecl_p (callee))
+	continue;
+      tree ia_arg = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (cond, 0));
+      if (TREE_CODE (ia_arg) == ADDR_EXPR)
+	ia_arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (ia_arg, 0));
+      if (ia_arg == result_id)
+	return true;
     }
-  while (TREE_CODE (body) == CLEANUP_POINT_EXPR || TREE_CODE (body) == EXPR_STMT)
-    body = TREE_OPERAND (body, 0);
-  if (TREE_CODE (body) != RETURN_EXPR || !TREE_OPERAND (body, 0))
-    return false;
-  tree retval = TREE_OPERAND (body, 0);
-  if (TREE_CODE (retval) == INIT_EXPR || TREE_CODE (retval) == MODIFY_EXPR)
-    retval = TREE_OPERAND (retval, 1);
-  while (TREE_CODE (retval) == NON_LVALUE_EXPR || TREE_CODE (retval) == NOP_EXPR
-	 || TREE_CODE (retval) == CONVERT_EXPR || TREE_CODE (retval) == VIEW_CONVERT_EXPR)
-    retval = TREE_OPERAND (retval, 0);
-  if (TREE_CODE (retval) != COMPONENT_REF)
-    return false;
-  tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (retval, 0));
-  if (TREE_CODE (obj) == INDIRECT_REF)
-    obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
-  while (TREE_CODE (obj) == NON_LVALUE_EXPR || TREE_CODE (obj) == NOP_EXPR
-	 || TREE_CODE (obj) == CONVERT_EXPR || TREE_CODE (obj) == VIEW_CONVERT_EXPR)
-    obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
-  if (!is_this_parameter (obj))
-    return false;
-  tree field = TREE_OPERAND (retval, 1);
-  if (TREE_CODE (field) != FIELD_DECL)
-    return false;
-  *field_out = field;
-  return true;
+  return false;
 }
 
 /* D4324/P2680, ctor/dtor 'this' soundness correction, Phase 1.5: true if
@@ -9920,45 +9921,30 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
       expr = STRIP_ANY_LOCATION_WRAPPER (fwd_arg);
     }
 
-  /* D4324/P2680, "conversion-operator-returned provable field": a
-     wrapper's own conversion operator, called directly (not under an
-     ADDR_EXPR -- that shape is the reference-returning case handled
-     separately above) and returning a plain pointer value rather than a
-     reference, needs its own RETURN VALUE traced back to whichever
-     field it reads -- unlike the reference case, there is no sound
-     "the receiver is real, so trust whatever it returns" shortcut here
-     (a pointer-returning conversion operator could compute or return
-     anything; only recognizing the field it literally, structurally
-     reads keeps this sound). Rewrite EXPR into the same synthesized
-     field-identity key the COMPONENT_REF case just below already
-     resolves an ordinary 'obj.field' read to, so a fact established for
-     that field (from the DECL_EXPR CONSTRUCTOR case, or an explicit
-     'pre<>(is_object_address(obj->field))' conjunct) is found exactly
-     as if the field had been read directly, no conversion operator in
-     the way. Falls through to the ordinary COMPONENT_REF/decl handling
-     below if the callee isn't recognized as this exact trivial shape,
-     or if no established fact exists.  */
+  /* D4324/P2680: a call to any accessor (conversion operator or
+     ordinary named function alike) whose own postcondition proves
+     is_object_address of its return value -- see
+     oa_accessor_postcondition_object_address_p's own comment for the
+     full rationale. Trusts the callee's CONTRACT only, never its body:
+     a caller-side proof must never read the definition of any function
+     it calls -- that's the whole soundness/separate-compilation point
+     of proving things about a callee via its declared contract instead
+     of its implementation. (This replaces a prior, unsound
+     'oa_conversion_operator_returned_field' that read
+     DECL_SAVED_TREE(fndecl) directly to recognize a literal 'return
+     this->field;' body shape -- a caller-side check has no business
+     looking at a callee's body at all, regardless of how trivial that
+     body is. Found and removed 2026-09-03, Ville, in the same pass as
+     adding this replacement.) There is no field to rewrite EXPR into
+     here, unlike that removed function's own field-identity
+     composition: the call's result is simply provable, full stop.  */
   if (TREE_CODE (expr) == CALL_EXPR && call_expr_nargs (expr) == 1)
     {
       tree fn = CALL_EXPR_FN (expr);
-      tree field;
       if (fn && TREE_CODE (fn) == ADDR_EXPR
 	  && TREE_CODE (TREE_OPERAND (fn, 0)) == FUNCTION_DECL
-	  && oa_conversion_operator_returned_field (TREE_OPERAND (fn, 0), &field))
-	{
-	  tree receiver = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (expr, 0));
-	  if (TREE_CODE (receiver) == ADDR_EXPR)
-	    receiver = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (receiver, 0));
-	  tree identity;
-	  if (oa_object_identity_decl (receiver, &identity)
-	      || oa_field_slot_identity (receiver, env, &identity)
-	      || oa_array_slot_identity (receiver, env, &identity)
-	      || oa_field_object_identity (receiver, env, &identity))
-	    {
-	      identity = env.alias_find (identity);
-	      expr = env.field_object_identity_key (identity, field);
-	    }
-	}
+	  && oa_accessor_postcondition_object_address_p (TREE_OPERAND (fn, 0)))
+	return true;
     }
 
   /* D4324/P2680, ctor/dtor 'this' soundness correction, Phase 1.4/1.5:

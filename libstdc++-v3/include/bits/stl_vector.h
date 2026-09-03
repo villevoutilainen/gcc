@@ -308,12 +308,36 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       _Tp_alloc_type&
       _M_get_Tp_allocator() _GLIBCXX_NOEXCEPT
-      { return this->_M_impl; }
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      // D4324/P2680: real (conveyor_assert_v), not never_proven -- 'this'
+      // is never reassigned by the mid-body self-trust assert below, and
+      // _M_impl is a plain field of it, so this is verifiable directly,
+      // same reasoning _M_default_initialize's own post<> already uses.
+      // Lets callers (e.g. _M_range_initialize_n) trust this accessor's
+      // result via its contract alone, never its implementation.
+      post<std::contracts::conveyor_assert_v> (r: std::is_object_address (&r))
+#endif
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return this->_M_impl;
+      }
 
       _GLIBCXX20_CONSTEXPR
       const _Tp_alloc_type&
       _M_get_Tp_allocator() const _GLIBCXX_NOEXCEPT
-      { return this->_M_impl; }
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      post<std::contracts::conveyor_assert_v> (r: std::is_object_address (&r))
+#endif
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return this->_M_impl;
+      }
 
       _GLIBCXX20_CONSTEXPR
       allocator_type
@@ -2086,6 +2110,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	void
 	_M_range_initialize_n(_Iterator __first, _Sentinel __last,
 			      size_type __n)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      // D4324/P2680: same reasoning as _M_default_initialize's own
+      // identical pair just above -- 'this' is never reassigned, and
+      // this function's own callees never touch 'this' as a receiver
+      // either. Verifiable directly.
+      post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+#endif
 	{
 	  _Alloc_result __r = this->_M_allocate_at_least(
 	    _S_check_init_len(__n, _M_get_Tp_allocator()));
