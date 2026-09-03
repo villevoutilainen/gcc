@@ -33346,6 +33346,47 @@ cp_parser_gnu_attribute_list (cp_parser* parser, bool exactly_one /* = false */)
   return nreverse (attribute_list);
 }
 
+/* D4324/P3589, Increment 1: parse a profiles::enforce or
+   profiles::suppress attribute's argument list.
+
+   Minimal grammar for this increment: a single bare profile-name
+   identifier, not subject to name lookup -- P3589's own rule ("Any
+   identifier used in a profile-argument is not subject to name lookup
+   rule"), matching how omp::directive's own argument text is handled
+   as opaque tokens rather than ordinary expressions. The full grammar
+   (profile-designator-list, dotted profile-name, profile-argument-list,
+   suppress's rule:/justification: arguments) is a later increment --
+   this deliberately declines anything more than one plain identifier,
+   the same "reject what isn't handled yet" posture the rest of this
+   file's D4324 work uses throughout.  */
+
+static void
+cp_parser_profiles_attribute_args (cp_parser *parser, tree attribute)
+{
+  matching_parens parens;
+  parens.consume_open (parser);
+
+  cp_token *token = cp_lexer_peek_token (parser->lexer);
+  if (token->type != CPP_NAME)
+    {
+      error_at (token->location, "expected profile name");
+      cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
+					     /*or_comma=*/false,
+					     /*consume_paren=*/true);
+      TREE_VALUE (attribute) = error_mark_node;
+      return;
+    }
+  tree name = token->u.value;
+  cp_lexer_consume_token (parser->lexer);
+
+  if (!parens.require_close (parser))
+    {
+      TREE_VALUE (attribute) = error_mark_node;
+      return;
+    }
+  TREE_VALUE (attribute) = build_tree_list (NULL_TREE, name);
+}
+
 /* Parse arguments of omp::directive attribute.
 
    ( directive-name ,[opt] clause-list[opt] )
@@ -33605,6 +33646,16 @@ cp_parser_std_attribute (cp_parser *parser, tree attr_ns)
 		    attr_id);
 	  return NULL_TREE;
 	}
+      if (attr_ns == profiles_identifier
+	  && (is_attribute_p ("enforce", attr_id)
+	      || is_attribute_p ("suppress", attr_id)
+	      || is_attribute_p ("require", attr_id)
+	      || is_attribute_p ("exempt", attr_id)))
+	{
+	  error_at (token->location, "%<profiles::%E%> attribute requires "
+		    "argument", attr_id);
+	  return NULL_TREE;
+	}
       return attribute;
     }
 
@@ -33670,6 +33721,22 @@ cp_parser_std_attribute (cp_parser *parser, tree attr_ns)
 		TREE_VALUE (attribute) = nreverse (TREE_VALUE (attribute));
 		return attribute;
 	      }
+	  }
+
+	/* D4324/P3589, Increment 1: profiles::enforce/profiles::suppress
+	   argument parsing -- see cp_parser_profiles_attribute_args's own
+	   comment for the (deliberately minimal, for now) grammar.
+	   profiles::require/profiles::exempt aren't implemented yet this
+	   increment; they fall through to the generic "skip balanced
+	   tokens" handling just below like any other not-yet-recognized
+	   attribute, same as they would if this whole namespace didn't
+	   exist at all.  */
+	if (attr_ns == profiles_identifier
+	    && (is_attribute_p ("enforce", attr_id)
+		|| is_attribute_p ("suppress", attr_id)))
+	  {
+	    cp_parser_profiles_attribute_args (parser, attribute);
+	    return attribute;
 	  }
 
 	/* For unknown attributes, just skip balanced tokens instead of
