@@ -5661,6 +5661,58 @@ handle_uninit_attribute (tree *node, tree name, tree, int,
   return NULL_TREE;
 }
 
+/* P4222's [[ref_to_uninit]] attribute (Initialization profile, Phase
+   3): marks a pointer PARM_DECL/VAR_DECL as referring to [[uninit]]
+   memory rather than the default-presumed-initialized pointee (P4222
+   S4.3).  Restricted to POINTER_TYPE for this increment -- the paper
+   also allows this on references and "smart pointers" (S4.3, S9.3),
+   but this project's checker (profiles.cc's own profiles_uninit_
+   pointee_p, and init-profile-gimple.cc) only reasons about raw
+   pointers so far; erroring here rather than silently accepting an
+   unchecked reference/smart-pointer use.  */
+
+static tree
+handle_ref_to_uninit_attribute (tree *node, tree name, tree, int,
+				 bool *no_add_attrs)
+{
+  if ((TREE_CODE (*node) != PARM_DECL && !VAR_P (*node))
+      || TREE_CODE (TREE_TYPE (*node)) != POINTER_TYPE)
+    {
+      error_at (input_location,
+		"%qE only supported on a pointer-typed parameter or "
+		"variable", name);
+      *no_add_attrs = true;
+    }
+  return NULL_TREE;
+}
+
+/* P4222's [[must_init]] attribute (Initialization profile, Phase 3):
+   parameter-only, implies [[ref_to_uninit]] (checked via profiles_
+   uninit_pointee_p testing both attributes together, not by also
+   setting ref_to_uninit here -- simpler, and avoids two attributes
+   racing to retrofit the same DECL_ATTRIBUTES list). Marks that,
+   after the call returns, what the parameter points to is guaranteed
+   initialized (P4222 S6.2, S9.3) -- an unconditional, callee-declared
+   postcondition the checker trusts without re-verifying the callee's
+   own body, the same "never read a callee's definition" boundary
+   D4324's own conveyor engine enforces (see contracts.cc's oa_
+   provable_p and this project's own standing rule on caller-side
+   proofs).  */
+
+static tree
+handle_must_init_attribute (tree *node, tree name, tree, int,
+			     bool *no_add_attrs)
+{
+  if (TREE_CODE (*node) != PARM_DECL
+      || TREE_CODE (TREE_TYPE (*node)) != POINTER_TYPE)
+    {
+      error_at (input_location,
+		"%qE only supported on a pointer-typed parameter", name);
+      *no_add_attrs = true;
+    }
+  return NULL_TREE;
+}
+
 /* Table of valid C++ attributes.  */
 // clang-format off
 static const attribute_spec cxx_gnu_attributes[] =
@@ -5710,6 +5762,10 @@ static const attribute_spec std_attributes[] =
     handle_indeterminate_attribute, NULL },
   { "uninit", 0, 0, true, false, false, false,
     handle_uninit_attribute, NULL },
+  { "ref_to_uninit", 0, 0, true, false, false, false,
+    handle_ref_to_uninit_attribute, NULL },
+  { "must_init", 0, 0, true, false, false, false,
+    handle_must_init_attribute, NULL },
 };
 
 const scoped_attribute_specs std_attribute_table =

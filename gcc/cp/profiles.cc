@@ -179,3 +179,24 @@ init_profiles (void)
   pass_info.pos_op = PASS_POS_INSERT_AFTER;
   register_pass (&pass_info);
 }
+
+bool
+profiles_uninit_pointee_p (tree decl)
+{
+  return lookup_attribute ("ref_to_uninit", DECL_ATTRIBUTES (decl)) != NULL_TREE
+	 || lookup_attribute ("must_init", DECL_ATTRIBUTES (decl)) != NULL_TREE;
+}
+
+bool
+profiles_uninit_flavor_at_position_p (tree fndecl, unsigned position,
+				      bool must_init_only)
+{
+  tree marker = lookup_attribute ("profiles_uninit_flavor",
+				  DECL_ATTRIBUTES (fndecl));
+  if (!marker)
+    return false;
+  for (tree e = TREE_VALUE (marker); e; e = TREE_CHAIN (e))
+    if (TREE_INT_CST_LOW (TREE_PURPOSE (e)) == position)
+      return !must_init_only || TREE_INT_CST_LOW (TREE_VALUE (e)) != 0;
+  return false;
+}

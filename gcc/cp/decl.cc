@@ -9661,6 +9661,44 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
 	      "local variable %qD not initialized and not marked "
 	      "%<[[uninit]]%> under the %<std::init%> profile", decl);
 
+  /* P4222 Initialization profile, Phase 3: a local pointer declaration
+     initialized directly from another local's address (the paper's
+     own primary [[ref_to_uninit]] examples, P4222 S4.3) must have its
+     own [[ref_to_uninit]]/[[must_init]] flavor agree with whether the
+     pointee is [[uninit]] -- in both directions: a flavored pointer
+     may only point to [[uninit]] memory, an unflavored (ordinary,
+     presumed-points-to-initialized) pointer may not.  Scoped to the
+     direct '&var' initializer shape only, matching the paper's own
+     examples; pointer-to-pointer copies and call-site argument
+     matching are checked separately, at the GIMPLE level (init-
+     profile-gimple.cc), where indirection has already been resolved.  */
+  if (VAR_P (decl) && init && TREE_TYPE (decl) != error_mark_node
+      && TREE_CODE (TREE_TYPE (decl)) == POINTER_TYPE
+      && profiles_enforced_p ("std::init")
+      && at_function_scope_p ())
+    {
+      tree e = init;
+      STRIP_ANY_LOCATION_WRAPPER (e);
+      STRIP_NOPS (e);
+      if (TREE_CODE (e) == ADDR_EXPR && VAR_P (TREE_OPERAND (e, 0)))
+	{
+	  tree pointee = TREE_OPERAND (e, 0);
+	  bool pointee_uninit
+	    = lookup_attribute ("uninit", DECL_ATTRIBUTES (pointee)) != NULL_TREE;
+	  bool decl_flavor = profiles_uninit_pointee_p (decl);
+	  if (decl_flavor && !pointee_uninit)
+	    error_at (DECL_SOURCE_LOCATION (decl),
+		      "%qD is marked %<[[ref_to_uninit]]%> but %qD is not "
+		      "marked %<[[uninit]]%>, under the %<std::init%> "
+		      "profile", decl, pointee);
+	  else if (!decl_flavor && pointee_uninit)
+	    error_at (DECL_SOURCE_LOCATION (decl),
+		      "%qD points to %qD, which is marked %<[[uninit]]%>, "
+		      "but %qD is not marked %<[[ref_to_uninit]]%>, under "
+		      "the %<std::init%> profile", decl, pointee, decl);
+	}
+    }
+
   if (VAR_P (decl) && is_copy_initialization (init))
     flags |= LOOKUP_ONLYCONVERTING;
 
@@ -12445,6 +12483,45 @@ grokfndecl (tree ctype,
 	    TREE_PURPOSE (val) = void_node;
 	  }
     }
+
+  /* P4222 Initialization profile, Phase 3: synthesize a function-level
+     record of which parameter POSITIONS carry [[ref_to_uninit]]/
+     [[must_init]] (profiles.cc's own profiles_uninit_flavor_at_
+     position_p) -- the same "positional, not per-PARM_DECL" pattern
+     GNU's own nonnull(1,2) attribute uses.  Necessary because, unlike
+     a defined function, DECL_ARGUMENTS (and every PARM_DECL hanging
+     off it) is discarded for a never-defined function by ipa-free-
+     lang-data.cc's own memory-saving cleanup, well before any GIMPLE-
+     level caller-side check (init-profile-gimple.cc) could otherwise
+     consult it -- exactly the common case of calling a function only
+     declared in a header.  The FUNCTION_DECL itself is never
+     discarded that way, so recording flavor here, at the one point
+     every function declarator (defining or not) passes through,
+     survives regardless.  P4222 is explicit that these attributes
+     must not become part of the type system (S4.3, S9.3): this is
+     attached to DECL, not TYPE, for exactly that reason.  */
+  {
+    tree flavor_list = NULL_TREE;
+    unsigned pos = 1;
+    for (t = parms; t; t = DECL_CHAIN (t), ++pos)
+      {
+	if (TREE_CODE (TREE_TYPE (t)) != POINTER_TYPE)
+	  continue;
+	bool must_init
+	  = lookup_attribute ("must_init", DECL_ATTRIBUTES (t)) != NULL_TREE;
+	bool ref_to_uninit
+	  = must_init
+	    || lookup_attribute ("ref_to_uninit", DECL_ATTRIBUTES (t)) != NULL_TREE;
+	if (ref_to_uninit)
+	  flavor_list = tree_cons (build_int_cst (integer_type_node, pos),
+				   build_int_cst (integer_type_node, must_init),
+				   flavor_list);
+      }
+    if (flavor_list)
+      DECL_ATTRIBUTES (decl)
+	= tree_cons (get_identifier ("profiles_uninit_flavor"), flavor_list,
+		     DECL_ATTRIBUTES (decl));
+  }
 
   /* Propagate volatile out from type to decl.  */
   if (TYPE_VOLATILE (type))
