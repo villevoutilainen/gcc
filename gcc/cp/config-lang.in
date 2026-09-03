@@ -50,7 +50,7 @@ gtfiles="\
 \$(srcdir)/cp/lambda.cc \$(srcdir)/cp/lex.cc \$(srcdir)/cp/logic.cc \
 \$(srcdir)/cp/mangle.cc \$(srcdir)/cp/method.cc \$(srcdir)/cp/module.cc \
 \$(srcdir)/cp/name-lookup.cc \
-\$(srcdir)/cp/parser.cc \$(srcdir)/cp/pt.cc \
+\$(srcdir)/cp/parser.cc \$(srcdir)/cp/profiles.cc \$(srcdir)/cp/pt.cc \
 \$(srcdir)/cp/reflect.cc \$(srcdir)/cp/rtti.cc \
 \$(srcdir)/cp/semantics.cc \
 \$(srcdir)/cp/tree.cc \$(srcdir)/cp/typeck2.cc \
