@@ -5651,14 +5651,48 @@ handle_indeterminate_attribute (tree *node, tree name, tree, int,
    this handler itself only validates placement, it does no analysis.
    A FIELD_DECL is never "global" (no static-storage-duration concept
    applies to it the way is_global_var checks for a VAR_DECL), so it
-   needs no analogous restriction of its own.  */
+   needs no analogous restriction of its own -- except a union member
+   (P4222 S5.6): the paper explicitly bans delayed initialization
+   tracking for unions outright ("To avoid treating union members of
+   different types dramatically different, [a member left uninitialized
+   by one constructor path] should also be banned"), since which member
+   is "active" can't be tracked without runtime state this profile
+   doesn't add; rejecting [[uninit]] on a union member here is the
+   simplest way to enforce that this profile simply doesn't apply to
+   unions at all, rather than partially and unsoundly.  */
+
+/* True if NODE (a FIELD_DECL) is a member of a union.  DECL_CONTEXT
+   (NODE) is not yet set at attribute-processing time during member
+   parsing (grokfield runs before the class is finished), so this
+   consults current_class_type -- the standard idiom for "what class
+   are we currently parsing members of" -- rather than NODE's own,
+   not-yet-populated context; DECL_CONTEXT is checked too, purely
+   defensively, for any call path where NODE's context already is
+   set.  */
+
+static bool
+ip_field_in_union_p (tree node)
+{
+  if (current_class_type && TREE_CODE (current_class_type) == UNION_TYPE)
+    return true;
+  return DECL_CONTEXT (node) && TREE_CODE (DECL_CONTEXT (node)) == UNION_TYPE;
+}
 
 static tree
 handle_uninit_attribute (tree *node, tree name, tree, int,
 			  bool *no_add_attrs)
 {
   if (TREE_CODE (*node) == FIELD_DECL)
-    return NULL_TREE;
+    {
+      if (ip_field_in_union_p (*node))
+	{
+	  error_at (input_location,
+		    "%qE not supported on a union member under the "
+		    "%<std::init%> profile", name);
+	  *no_add_attrs = true;
+	}
+      return NULL_TREE;
+    }
   if (!VAR_P (*node) || is_global_var (*node))
     {
       pedwarn (input_location, OPT_Wattributes,
@@ -5691,6 +5725,18 @@ handle_ref_to_uninit_attribute (tree *node, tree name, tree, int,
       error_at (input_location,
 		"%qE only supported on a pointer-typed parameter, "
 		"variable, or non-static data member", name);
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+  /* P4222 S5.6: same union restriction as [[uninit]] itself -- see
+     that attribute's own handler comment and ip_field_in_union_p's
+     own comment for why current_class_type, not DECL_CONTEXT, is
+     what's actually set at this point.  */
+  if (TREE_CODE (*node) == FIELD_DECL && ip_field_in_union_p (*node))
+    {
+      error_at (input_location,
+		"%qE not supported on a union member under the "
+		"%<std::init%> profile", name);
       *no_add_attrs = true;
     }
   return NULL_TREE;
