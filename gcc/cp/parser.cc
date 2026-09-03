@@ -50,6 +50,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "bitmap.h"
 #include "builtins.h"
 #include "contracts.h"
+#include "profiles.h"
 #include "analyzer/analyzer-language.h"
 
 
@@ -17643,13 +17644,21 @@ cp_parser_declaration (cp_parser* parser, tree prefix_attrs)
 	    }
 	}
 
-      if (std_attrs != NULL_TREE && any_nonignored_attribute_p (std_attrs))
-	warning_at (make_location (attrs_loc, attrs_loc, parser->lexer),
-		    OPT_Wattributes, "attribute ignored");
+      cp_finish_empty_declaration (make_location (attrs_loc, attrs_loc,
+						  parser->lexer),
+				   std_attrs);
       if (cp_lexer_next_token_is (parser->lexer, CPP_SEMICOLON))
 	cp_lexer_consume_token (parser->lexer);
       return;
     }
+
+  /* P3589: everything from here on is a non-empty declaration -- see
+     profiles_note_nonempty_declaration's own comment for why this
+     single spot, shared by every top-level/namespace-scope declaration
+     kind (this function's own grammar comment above lists them all as
+     alternatives of the same 'declaration' production), is a sound
+     placement-restriction signal for profiles::enforce.  */
+  profiles_note_nonempty_declaration ();
 
   /* Get the high-water mark for the DECLARATOR_OBSTACK.  */
   void *p = obstack_alloc (&declarator_obstack, 0);
@@ -33349,16 +33358,31 @@ cp_parser_gnu_attribute_list (cp_parser* parser, bool exactly_one /* = false */)
 /* D4324/P3589, Increment 1: parse a profiles::enforce or
    profiles::suppress attribute's argument list.
 
-   Minimal grammar for this increment: a single bare profile-name
-   identifier, not subject to name lookup -- P3589's own rule ("Any
-   identifier used in a profile-argument is not subject to name lookup
-   rule"), matching how omp::directive's own argument text is handled
-   as opaque tokens rather than ordinary expressions. The full grammar
-   (profile-designator-list, dotted profile-name, profile-argument-list,
-   suppress's rule:/justification: arguments) is a later increment --
-   this deliberately declines anything more than one plain identifier,
-   the same "reject what isn't handled yet" posture the rest of this
-   file's D4324 work uses throughout.  */
+   Minimal grammar for this increment: a single profile-name --
+
+     profile-name:
+       identifier
+       profile-name :: identifier
+
+   matching P3589's own grammar exactly (needed for any real profile
+   name at all: every one the paper actually proposes, std::init,
+   std::type, std::lib::hardened, is dotted). Not subject to name
+   lookup -- P3589's own rule ("Any identifier used in a profile-
+   argument is not subject to name lookup rule"), matching how
+   omp::directive's own argument text is handled as opaque tokens
+   rather than ordinary expressions. The rest of the full grammar
+   (profile-designator-list i.e. multiple comma-separated profile-
+   designators, a profile-argument-list in parens after the name,
+   suppress's rule:/justification: arguments) is later work -- this
+   deliberately declines anything past one, possibly-dotted name, the
+   same "reject what isn't handled yet" posture the rest of this
+   file's D4324 work uses throughout.
+
+   The dotted name is folded into a single new IDENTIFIER_NODE (e.g.
+   "std" "::" "init" becomes the identifier "std::init") rather than
+   kept as a chain of components, so the semantic layer (profiles.cc)
+   can look it up with a single IDENTIFIER_POINTER/strcmp, matching its
+   registry's own spelling.  */
 
 static void
 cp_parser_profiles_attribute_args (cp_parser *parser, tree attribute)
@@ -33376,14 +33400,40 @@ cp_parser_profiles_attribute_args (cp_parser *parser, tree attribute)
       TREE_VALUE (attribute) = error_mark_node;
       return;
     }
-  tree name = token->u.value;
+  char *name_str = xstrdup (IDENTIFIER_POINTER (token->u.value));
   cp_lexer_consume_token (parser->lexer);
+
+  while (cp_lexer_next_token_is (parser->lexer, CPP_SCOPE))
+    {
+      cp_lexer_consume_token (parser->lexer);
+      token = cp_lexer_peek_token (parser->lexer);
+      if (token->type != CPP_NAME)
+	{
+	  error_at (token->location, "expected profile name component "
+		    "after %<::%>");
+	  cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
+						 /*or_comma=*/false,
+						 /*consume_paren=*/true);
+	  free (name_str);
+	  TREE_VALUE (attribute) = error_mark_node;
+	  return;
+	}
+      char *joined = concat (name_str, "::",
+			     IDENTIFIER_POINTER (token->u.value),
+			     (char *) NULL);
+      free (name_str);
+      name_str = joined;
+      cp_lexer_consume_token (parser->lexer);
+    }
 
   if (!parens.require_close (parser))
     {
+      free (name_str);
       TREE_VALUE (attribute) = error_mark_node;
       return;
     }
+  tree name = get_identifier (name_str);
+  free (name_str);
   TREE_VALUE (attribute) = build_tree_list (NULL_TREE, name);
 }
 
