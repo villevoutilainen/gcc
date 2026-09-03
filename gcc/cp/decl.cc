@@ -9565,24 +9565,49 @@ maybe_diagnose_deallocation_noexcept_false (tree decl)
 
 static void cp_maybe_mangle_decomp (tree, cp_decomp *);
 
-/* P4222 Initialization profile, Phase 4: true if TYPE is a scalar
-   type, or an array (of any rank) whose ultimate element type is
-   scalar -- the two type shapes that leave genuinely indeterminate
-   memory when default-initialized/left uninitialized, as opposed to a
-   class type invoking a (possibly non-trivial) default constructor.
-   Used to decide whether [[uninit]] is required/recognized at all
-   (see cp_finish_decl's own check just below); an array's OWN element-
-   level access is separately restricted to bulk/recognized
-   initialization only (init-profile-gimple.cc's own random-access
-   ban), never verified element-by-element, matching P4222 S1.3's own
-   "random access to an uninitialized array must be banned" rule.  */
+/* P4222 Initialization profile: true if TYPE is a scalar type, an
+   array (of any rank) whose ultimate element type is scalar, or
+   (Phase 4e, S5.4) a non-union class type with no user-declared
+   constructor whose default construction is entirely trivial --
+   the type shapes that leave genuinely indeterminate memory when
+   default-initialized/left uninitialized, as opposed to a class type
+   that invokes some (possibly non-trivial) real default constructor
+   along the way.  Used to decide whether [[uninit]] is required/
+   recognized at all (see cp_finish_decl's own check just below); an
+   array's OWN element-level access is separately restricted to bulk/
+   recognized initialization only (init-profile-gimple.cc's own
+   random-access ban), never verified element-by-element, matching
+   P4222 S1.3's own "random access to an uninitialized array must be
+   banned" rule.
+
+   TYPE_HAS_TRIVIAL_DFLT already recurses through every base and
+   member (a class's default constructor is only trivial if every
+   member/base's own is too), so P4222 S5.4's own worked example --
+   'struct S { int x; string s; };' -- is correctly excluded here
+   without any hand-rolled member walk: default-constructing S
+   actually invokes string's own non-trivial constructor for s, so
+   TYPE_HAS_TRIVIAL_DFLT (S) is false, even though x alone would be
+   genuinely indeterminate.  Marking such a "mixed" aggregate
+   [[uninit]] as a whole would be exactly the contradiction the paper
+   itself flags ("declares s4.s as both initialized and
+   uninitialized") -- deliberately left unsupported here (neither
+   required nor forbidden) rather than getting either direction wrong;
+   a real fix needs Phase 4's own per-member [[uninit]] marking
+   extended to this kind of constructor-less aggregate, not attempted
+   in this increment.  Unions are excluded outright, matching
+   handle_uninit_attribute's own separate, unconditional ban on
+   [[uninit]] for anything union-related (P4222 S5.6).  */
 
 static bool
 ip_scalar_or_scalar_array_p (tree type)
 {
   while (TREE_CODE (type) == ARRAY_TYPE)
     type = TREE_TYPE (type);
-  return SCALAR_TYPE_P (type);
+  if (SCALAR_TYPE_P (type))
+    return true;
+  return NON_UNION_CLASS_TYPE_P (type)
+	 && !TYPE_HAS_USER_CONSTRUCTOR (type)
+	 && TYPE_HAS_TRIVIAL_DFLT (type);
 }
 
 /* Finish processing of a declaration;
