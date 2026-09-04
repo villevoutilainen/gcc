@@ -77,7 +77,7 @@ extern bool profiles_uninit_flavor_at_position_p (tree fndecl,
 						   bool must_init_only);
 
 /* P3589, Phase 5: true if LOC is exempt from PROFILE_NAME (e.g.
-   "std::init"). Two independent sources of exemption:
+   "std::init"). Three independent sources of exemption:
 
    1. LOC is in a system header (in_system_header_at) -- automatic,
       unconditional, no declaration needed. This is what makes
@@ -85,7 +85,12 @@ extern bool profiles_uninit_flavor_at_position_p (tree fndecl,
       header) usable at all under an enforced profile today, ahead of
       the standard library itself being annotated.
 
-   2. LOC's own file, OR ANY FILE ON ITS #include CHAIN UP TO THE MAIN
+   2. LOC falls within a '[[profiles::suppress(profile)]]' attached to
+      the enclosing declaration -- see profiles_register_suppression's
+      own comment for how that range gets established and what
+      "enclosing" means precisely.
+
+   3. LOC's own file, OR ANY FILE ON ITS #include CHAIN UP TO THE MAIN
       FILE, was named by an explicit
       '[[profiles::exempt(profile, angle_header: "NAME")]]' /
       quote_header: with a matching angle/quote-ness -- for user code
@@ -103,6 +108,24 @@ extern bool profiles_uninit_flavor_at_position_p (tree fndecl,
    via libcpp's cpp_get_include_spelling, not from line_map_ordinary
    alone.  */
 extern bool profiles_header_exempt_p (location_t loc, const char *profile_name);
+
+/* P3589: register that PROFILE_NAME's (e.g. "std::init") diagnostics
+   are suppressed for the source range [START, END] -- the real
+   semantic effect of '[[profiles::suppress(profile)]]' attached to an
+   ordinary declaration. Called from cp_finish_decl (decl.cc) once a
+   declaration carrying the attribute (tree.cc's own handle_profiles_
+   suppress_attribute lets it survive onto DECL_ATTRIBUTES, unlike
+   profiles::enforce/exempt) is fully parsed and its own extent is
+   therefore known: START is the declaration's own DECL_SOURCE_
+   LOCATION, END is input_location at that point (just past the
+   declaration's own trailing ';', the earliest point cp_finish_decl
+   can be reached). Diagnoses an unrecognized PROFILE_NAME at START,
+   matching profiles_handle_exempt_attribute's own "unknown profile"
+   error for the identical situation -- the attribute's own parse
+   accepts an arbitrary dotted identifier without validating it, so
+   this is the first point that can.  */
+extern void profiles_register_suppression (const char *profile_name,
+					    location_t start, location_t end);
 
 /* P3446R0/P4296R0, Phase 7a: true if EXP (an expression, taken
    verbatim from the delete-expression's own operand in decl2.cc's

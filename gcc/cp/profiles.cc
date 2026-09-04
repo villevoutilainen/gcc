@@ -357,6 +357,81 @@ profiles_spelling_exempt_p (unsigned bit, const char *resolved_path)
   return false;
 }
 
+/* P3589: registered profiles::suppress ranges -- one entry per
+   '[[profiles::suppress(profile)]]' attached to an ordinary
+   declaration, registered by profiles_register_suppression once
+   cp_finish_decl (decl.cc) knows the declaration's own full source
+   extent (unlike profiles::enforce/exempt, this attribute survives
+   parsing onto the DECL's own DECL_ATTRIBUTES -- see tree.cc's own
+   handle_profiles_suppress_attribute). A plain vec, not GTY-marked,
+   for the same reason profiles_exemptions above isn't.  */
+
+struct profiles_suppression
+{
+  unsigned profile_bit;
+  location_t start;
+  location_t end;
+};
+
+static vec<profiles_suppression> profiles_suppressions;
+
+void
+profiles_register_suppression (const char *profile_name, location_t start,
+				location_t end)
+{
+  unsigned bit = profiles_lookup (profile_name);
+  if (!bit)
+    {
+      error_at (start, "unknown profile %qs", profile_name);
+      return;
+    }
+
+  profiles_suppression s;
+  s.profile_bit = bit;
+  s.start = start;
+  s.end = end;
+  profiles_suppressions.safe_push (s);
+}
+
+/* True if LOC falls within [START, END] of some registered
+   profiles::suppress range for BIT (comparing (file, line, column)
+   triples directly -- there is no libcpp include-chain to walk the
+   way profiles_spelling_exempt_p needs, since a suppress range is
+   always within a single file by construction).  profiles::suppress's
+   own "dominion" is lexical -- the one declaration/statement it's
+   attached to -- not an interval reaching into later, unrelated code
+   the way profiles::exempt's header-based exemption is.  */
+
+static bool
+profiles_suppressed_at_p (unsigned bit, location_t loc)
+{
+  if (profiles_suppressions.is_empty ())
+    return false;
+
+  expanded_location eloc = expand_location (loc);
+  if (!eloc.file)
+    return false;
+
+  for (unsigned i = 0; i < profiles_suppressions.length (); ++i)
+    {
+      const profiles_suppression &s = profiles_suppressions[i];
+      if (s.profile_bit != bit)
+	continue;
+      expanded_location s_start = expand_location (s.start);
+      expanded_location s_end = expand_location (s.end);
+      if (!s_start.file || !s_end.file
+	  || strcmp (s_start.file, eloc.file) != 0
+	  || strcmp (s_end.file, eloc.file) != 0)
+	continue;
+      if ((eloc.line > s_start.line
+	   || (eloc.line == s_start.line && eloc.column >= s_start.column))
+	  && (eloc.line < s_end.line
+	      || (eloc.line == s_end.line && eloc.column <= s_end.column)))
+	return true;
+    }
+  return false;
+}
+
 bool
 profiles_header_exempt_p (location_t loc, const char *profile_name)
 {
@@ -384,6 +459,12 @@ profiles_header_exempt_p (location_t loc, const char *profile_name)
      should stop marking it as a system header, not fight this
      default.  */
   if (in_system_header_at (loc))
+    return true;
+
+  /* An explicit profiles::suppress on the enclosing declaration --
+     see profiles_suppressed_at_p's own comment for what "enclosing"
+     means here.  */
+  if (profiles_suppressed_at_p (bit, loc))
     return true;
 
   if (profiles_exemptions.is_empty ())
