@@ -432,37 +432,363 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
     }
 }
 
+/* Found and fixed 2026-09-04: plain CFG dominance ("does some SINGLE
+   statement in INIT_STMTS dominate this point") cannot express "these
+   SEVERAL statements, none of which individually dominates the merge
+   point, jointly cover every path" -- the textbook-safe 'if (c) x = 1;
+   else x = 2; use (x);' shape, where each branch's own write reaches
+   the merge point but neither dominates it alone. Confirmed via
+   direct testing: this incorrectly rejected that exact shape, for
+   both an address-taken [[uninit]] local (ip_check_address_taken_var)
+   and (by the same reused helper) a constructor's own member
+   (ip_check_constructor_member) -- previously unnoticed only because
+   no existing test exercised "both branches write a NON-register
+   [[uninit]] variable/member"; the SSA/PHI-based scalar path
+   (ip_definitely_assigned_p) has always handled this shape correctly,
+   since PHI nodes make CFG merges explicit.
+
+   Replaced with a real forward "must reach" dataflow analysis instead
+   -- the same shape classic definite-assignment analysis uses: one
+   boolean per basic block, meet-by-AND across predecessors (a block
+   is "reached" on entry only if EVERY predecessor is already
+   reached), updated to true the moment a block contains a statement
+   in INIT_STMTS, iterated to a fixed point.  Monotonic (a block's own
+   state only ever goes from unreached to reached, never back) and
+   bounded (finitely many blocks), so a worklist that keeps re-
+   visiting until nothing changes is guaranteed to terminate, in at
+   most O(blocks) full passes.  */
+
+struct ip_reach_info
+{
+  /* Indexed by basic_block->index (this covers the ENTRY block's own
+     index too, whose slot is simply never marked reached, exactly
+     modeling "nothing has happened yet at function entry").  TRUE if
+     every path from the function's entry to the START (block_in) or
+     END (block_out) of that block already passes through at least
+     one statement in the INIT_STMTS the info was computed for.  */
+  auto_vec<bool> block_in;
+  auto_vec<bool> block_out;
+};
+
+static void
+ip_compute_reach_info (function *fun, vec<gimple *> &init_stmts,
+			ip_reach_info *info)
+{
+  unsigned n = last_basic_block_for_fn (fun);
+  info->block_in.safe_grow_cleared (n);
+  info->block_out.safe_grow_cleared (n);
+
+  auto_vec<bool> block_has_init (n);
+  block_has_init.safe_grow_cleared (n);
+  for (unsigned i = 0; i < init_stmts.length (); ++i)
+    block_has_init[gimple_bb (init_stmts[i])->index] = true;
+
+  bool changed = true;
+  while (changed)
+    {
+      changed = false;
+      basic_block bb;
+      FOR_EACH_BB_FN (bb, fun)
+	{
+	  bool in = EDGE_COUNT (bb->preds) > 0;
+	  edge e;
+	  edge_iterator ei;
+	  FOR_EACH_EDGE (e, ei, bb->preds)
+	    if (!info->block_out[e->src->index])
+	      {
+		in = false;
+		break;
+	      }
+	  if (in && !info->block_in[bb->index])
+	    {
+	      info->block_in[bb->index] = true;
+	      changed = true;
+	    }
+
+	  bool out = info->block_in[bb->index] || block_has_init[bb->index];
+	  if (out && !info->block_out[bb->index])
+	    {
+	      info->block_out[bb->index] = true;
+	      changed = true;
+	    }
+	}
+    }
+}
+
 /* True if READ_STMT is provably reached, on every path from the
    function's entry, by at least one statement in INIT_STMTS -- either
-   a strictly dominating statement in a different basic block, or an
-   earlier statement in the very same block (plain basic-block
-   dominance doesn't order two statements within one block, so same-
-   block pairs need an explicit straight-line scan).  */
+   the block containing READ_STMT was already fully "reached" on
+   entry (INFO's own dataflow answer), or an earlier statement in the
+   very same block establishes it (block-level dataflow only tracks
+   block BOUNDARIES, not ordering within one block, so a same-block
+   pair still needs an explicit straight-line scan, exactly as
+   before).  */
 
 static bool
-ip_read_dominated_by_init_p (gimple *read_stmt, vec<gimple *> &init_stmts)
+ip_read_dominated_by_init_p (gimple *read_stmt, vec<gimple *> &init_stmts,
+			      const ip_reach_info &info)
 {
   basic_block read_bb = gimple_bb (read_stmt);
+  if (info.block_in[read_bb->index])
+    return true;
+
   for (unsigned i = 0; i < init_stmts.length (); ++i)
     {
       gimple *init_stmt = init_stmts[i];
-      basic_block init_bb = gimple_bb (init_stmt);
-      if (init_bb == read_bb)
+      if (gimple_bb (init_stmt) != read_bb)
+	continue;
+      for (gimple_stmt_iterator gsi = gsi_start_bb (read_bb);
+	   !gsi_end_p (gsi); gsi_next (&gsi))
 	{
-	  for (gimple_stmt_iterator gsi = gsi_start_bb (read_bb);
-	       !gsi_end_p (gsi); gsi_next (&gsi))
-	    {
-	      gimple *s = gsi_stmt (gsi);
-	      if (s == read_stmt)
-		break;
-	      if (s == init_stmt)
-		return true;
-	    }
+	  gimple *s = gsi_stmt (gsi);
+	  if (s == read_stmt)
+	    break;
+	  if (s == init_stmt)
+	    return true;
 	}
-      else if (dominated_by_p (CDI_DOMINATORS, read_bb, init_bb))
-	return true;
     }
   return false;
+}
+
+/* P4222 Phase 4f: bookkeeping for ip_check_local_aggregate_member's
+   own scan, for a single FIELD of a [[uninit]]-marked local aggregate
+   VAR (not 'this' inside a constructor -- ip_member_scan's own job,
+   Phase 4d, defined further down). Matches 'var.field' directly:
+   unlike a constructor's 'this->field', a local aggregate's own
+   members are never accessed through a pointer dereference.  */
+
+struct ip_local_member_scan
+{
+  tree var;
+  tree field;
+  auto_vec<gimple *> init_stmts;
+  auto_vec<gimple *> read_stmts;
+  bool other_escape;
+};
+
+/* True if T is exactly 'var.field' -- a COMPONENT_REF selecting FIELD
+   directly out of VAR (a VAR_DECL, not a pointer to one).  */
+
+static bool
+ip_component_ref_of_var_field_p (tree t, tree var, tree field)
+{
+  if (TREE_CODE (t) != COMPONENT_REF || TREE_OPERAND (t, 1) != field)
+    return false;
+  return ip_underlying_var (TREE_OPERAND (t, 0)) == var;
+}
+
+/* The local-aggregate-member counterpart of ip_scan_member_addr_uses
+   (defined further down, for 'this->field'), for '_1 = &var.field;'.
+   Every single use of the resulting address must be a safe one (a
+   flavored call argument) for this to be anything other than an
+   escape -- see that function's own comment for the full rationale,
+   identical here.  */
+
+static void
+ip_scan_local_member_addr_uses (tree lhs_ssa, ip_local_member_scan *s)
+{
+  if (TREE_CODE (lhs_ssa) != SSA_NAME)
+    {
+      s->other_escape = true;
+      return;
+    }
+
+  imm_use_iterator imm_iter;
+  use_operand_p use_p;
+  bool any_use = false;
+  bool ok = true;
+  FOR_EACH_IMM_USE_FAST (use_p, imm_iter, lhs_ssa)
+    {
+      any_use = true;
+      gimple *use_stmt = USE_STMT (use_p);
+      if (gimple_code (use_stmt) != GIMPLE_CALL)
+	{
+	  ok = false;
+	  continue;
+	}
+      tree callee = gimple_call_fndecl (use_stmt);
+      unsigned nargs = gimple_call_num_args (use_stmt);
+      bool matched = false;
+      for (unsigned ai = 0; ai < nargs; ++ai)
+	if (gimple_call_arg (use_stmt, ai) == lhs_ssa)
+	  {
+	    matched = true;
+	    if (callee
+		&& profiles_uninit_flavor_at_position_p (callee, ai + 1,
+							  /*must_init_only=*/true))
+	      s->init_stmts.safe_push (use_stmt);
+	    else if (callee
+		     && profiles_uninit_flavor_at_position_p (
+			  callee, ai + 1, /*must_init_only=*/false))
+	      ; /* Plain [[ref_to_uninit]]: neutral.  */
+	    else
+	      ok = false;
+	  }
+      if (!matched)
+	ok = false;
+    }
+  if (!ok || !any_use)
+    s->other_escape = true;
+}
+
+/* The local-aggregate-member counterpart of ip_scan_stmt_for_member
+   (defined further down, for 'this->field'), matching 'var.field'
+   instead.  Same per-slot shape: assign rhs/lhs, cond operands, call
+   args/lhs, return retval.  */
+
+static void
+ip_scan_stmt_for_local_member (gimple *stmt, ip_local_member_scan *s)
+{
+  tree var = s->var;
+  tree field = s->field;
+
+  if (is_gimple_assign (stmt))
+    {
+      tree lhs = gimple_assign_lhs (stmt);
+      tree rhs[3] = { gimple_assign_rhs1 (stmt), gimple_assign_rhs2 (stmt),
+		      gimple_assign_rhs3 (stmt) };
+      for (tree r : rhs)
+	{
+	  if (!r)
+	    continue;
+	  if (ip_component_ref_of_var_field_p (r, var, field))
+	    s->read_stmts.safe_push (stmt);
+	  else if (TREE_CODE (r) == ADDR_EXPR
+		   && ip_component_ref_of_var_field_p (TREE_OPERAND (r, 0),
+							var, field))
+	    ip_scan_local_member_addr_uses (lhs, s);
+	}
+      if (ip_component_ref_of_var_field_p (lhs, var, field)
+	  && !ip_stmt_is_deferred_init_copy_p (stmt))
+	s->init_stmts.safe_push (stmt);
+    }
+  else if (gimple_code (stmt) == GIMPLE_COND)
+    {
+      if (ip_component_ref_of_var_field_p (gimple_cond_lhs (stmt), var, field)
+	  || ip_component_ref_of_var_field_p (gimple_cond_rhs (stmt), var,
+					       field))
+	s->read_stmts.safe_push (stmt);
+    }
+  else if (gimple_code (stmt) == GIMPLE_CALL)
+    {
+      tree callee = gimple_call_fndecl (stmt);
+      unsigned nargs = gimple_call_num_args (stmt);
+      for (unsigned i = 0; i < nargs; ++i)
+	{
+	  tree arg = gimple_call_arg (stmt, i);
+	  if (ip_component_ref_of_var_field_p (arg, var, field))
+	    s->read_stmts.safe_push (stmt);
+	  else if (TREE_CODE (arg) == ADDR_EXPR
+		   && ip_component_ref_of_var_field_p (TREE_OPERAND (arg, 0),
+							var, field))
+	    {
+	      if (callee
+		  && profiles_uninit_flavor_at_position_p (callee, i + 1,
+							    /*must_init_only=*/true))
+		s->init_stmts.safe_push (stmt);
+	      else if (callee
+		       && profiles_uninit_flavor_at_position_p (
+			    callee, i + 1, /*must_init_only=*/false))
+		;
+	      else
+		s->other_escape = true;
+	    }
+	}
+      tree call_lhs = gimple_call_lhs (stmt);
+      if (call_lhs
+	  && ip_component_ref_of_var_field_p (call_lhs, var, field)
+	  && !gimple_call_internal_p (stmt, IFN_DEFERRED_INIT))
+	s->init_stmts.safe_push (stmt);
+    }
+  else if (greturn *ret = dyn_cast <greturn *> (stmt))
+    {
+      tree val = gimple_return_retval (ret);
+      if (val && ip_component_ref_of_var_field_p (val, var, field))
+	s->read_stmts.safe_push (stmt);
+      else if (val && TREE_CODE (val) == ADDR_EXPR
+	       && ip_component_ref_of_var_field_p (TREE_OPERAND (val, 0), var,
+						    field))
+	s->other_escape = true;
+    }
+}
+
+/* P4222 Phase 4f: the ordinary-local counterpart of ip_check_
+   constructor_member (Phase 4d, defined further down, for
+   'this->field' inside a constructor) -- real per-FIELD CFG-
+   dominance-based DAA for a single member of a [[uninit]]-marked
+   local aggregate VAR, so a local can genuinely be declared
+   uninitialized and filled in field-by-field (in whichever order,
+   across however many statements) before being read, the same way a
+   plain [[uninit]] scalar already can.
+
+   Unlike ip_check_constructor_member, there is no "every RETURN
+   dominated by init" requirement here: that exists specifically
+   because returning from a constructor exposes the object to callers,
+   who could then read any member with no further visibility into how
+   it was built.  An ordinary local's own scope simply ending is not
+   an analogous exposure point -- a field never read anywhere in this
+   function needs no write at all, exactly like a plain [[uninit]]
+   scalar that's never read.
+
+   OUTER_INIT_STMTS are ip_check_address_taken_var's own whole-object
+   init events for VAR (e.g. a whole-object assignment 'var = f();')
+   -- those legitimately establish every field's value at once too, so
+   a field read is safe if dominated by EITHER its own direct write or
+   one of these.  */
+
+static void
+ip_check_local_aggregate_member (function *fun, tree var, tree field,
+				  vec<gimple *> &outer_init_stmts)
+{
+  ip_local_member_scan scan;
+  scan.var = var;
+  scan.field = field;
+  scan.other_escape = false;
+
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      ip_scan_stmt_for_local_member (gsi_stmt (gsi), &scan);
+
+  if (scan.other_escape)
+    {
+      if (!profiles_header_exempt_p (DECL_SOURCE_LOCATION (var), "std::init"))
+	error_at (DECL_SOURCE_LOCATION (var),
+		  "cannot verify %<[[uninit]]%> member %qD of %qD under the "
+		  "%<std::init%> profile: its address is taken outside a "
+		  "recognized %<[[must_init]]%> call, which this checker "
+		  "cannot yet analyze", field, var);
+      return;
+    }
+
+  if (scan.read_stmts.is_empty ())
+    return;
+
+  for (gimple *init_stmt : outer_init_stmts)
+    scan.init_stmts.safe_push (init_stmt);
+
+  if (scan.init_stmts.is_empty ())
+    {
+      for (gimple *read_stmt : scan.read_stmts)
+	if (!profiles_header_exempt_p (gimple_location (read_stmt),
+					"std::init"))
+	  error_at (gimple_location (read_stmt),
+		    "member %qD of %qD read before it is definitely "
+		    "assigned, under the %<std::init%> profile", field, var);
+      return;
+    }
+
+  ip_reach_info info;
+  ip_compute_reach_info (fun, scan.init_stmts, &info);
+
+  for (gimple *read_stmt : scan.read_stmts)
+    if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts, info)
+	&& !profiles_header_exempt_p (gimple_location (read_stmt),
+				      "std::init"))
+      error_at (gimple_location (read_stmt),
+		"member %qD of %qD read before it is definitely assigned, "
+		"under the %<std::init%> profile", field, var);
 }
 
 /* P4222 Phase 3: the address-taken counterpart of ip_definitely_
@@ -485,7 +811,7 @@ ip_read_dominated_by_init_p (gimple *read_stmt, vec<gimple *> &init_stmts)
    rather than widening it past what's actually sound.  */
 
 static void
-ip_check_address_taken_var (function *fun, tree var, bool *dominance_computed)
+ip_check_address_taken_var (function *fun, tree var)
 {
   ip_addr_taken_scan scan;
   scan.var = var;
@@ -511,13 +837,29 @@ ip_check_address_taken_var (function *fun, tree var, bool *dominance_computed)
 
   /* P4222 Phase 4e (S5.4): VAR can now be a non-union class-type
      local with a trivial default constructor (ip_scalar_or_scalar_
-     array_p's own extension, decl.cc), not just a scalar or array --
-     but this pass has no per-member DAA for an arbitrary local the
-     way ip_check_constructor_member has for 'this' inside a
-     constructor (Phase 4d): honestly decline rather than silently
-     accept unverified member-level access.  */
+     array_p's own extension, decl.cc), not just a scalar or array.
+     For a genuine aggregate (RECORD_TYPE), Phase 4f's own per-FIELD
+     DAA (ip_check_local_aggregate_member, above) applies real CFG-
+     dominance-based verification to each member independently -- so
+     a local can be declared [[uninit]] and filled in field-by-field
+     before being read, the same way a plain [[uninit]] scalar
+     already can.  Anything else with a member-access on it (a union,
+     say -- those have their own separate story, d4324-profiles-
+     union-member-bad.C) is still honestly declined rather than
+     silently accepted.  */
   if (scan.member_access)
     {
+      if (TREE_CODE (TREE_TYPE (var)) == RECORD_TYPE)
+	{
+	  for (tree field = TYPE_FIELDS (TREE_TYPE (var)); field;
+	       field = DECL_CHAIN (field))
+	    {
+	      if (TREE_CODE (field) != FIELD_DECL || DECL_ARTIFICIAL (field))
+		continue;
+	      ip_check_local_aggregate_member (fun, var, field, scan.init_stmts);
+	    }
+	  return;
+	}
       if (!profiles_header_exempt_p (DECL_SOURCE_LOCATION (var), "std::init"))
 	error_at (DECL_SOURCE_LOCATION (var),
 		  "cannot verify %<[[uninit]]%> on %qD under the "
@@ -537,14 +879,11 @@ ip_check_address_taken_var (function *fun, tree var, bool *dominance_computed)
       return;
     }
 
-  if (!*dominance_computed)
-    {
-      calculate_dominance_info (CDI_DOMINATORS);
-      *dominance_computed = true;
-    }
+  ip_reach_info info;
+  ip_compute_reach_info (fun, scan.init_stmts, &info);
 
   for (gimple *read_stmt : scan.read_stmts)
-    if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts)
+    if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts, info)
 	&& !profiles_header_exempt_p (gimple_location (read_stmt),
 				      "std::init"))
       error_at (gimple_location (read_stmt),
@@ -737,24 +1076,20 @@ ip_scan_stmt_for_member (gimple *stmt, ip_member_scan *s)
     }
 }
 
-/* True if every statement reaching BB is provably preceded by at
-   least one statement in INIT_STMTS -- the "is this exit point safe"
-   counterpart of ip_read_dominated_by_init_p (which asks "is this
-   read safe"): a same-block init_stmt is unconditionally sufficient
-   here (unlike a read, a basic block's own terminating statement --
-   the only kind that can lead to another block -- is always last, so
-   any init_stmt sharing that block necessarily precedes it).  */
+/* True if every path reaching the END of BB is provably preceded by
+   at least one statement in the INIT_STMTS INFO was computed for --
+   the "is this exit point safe" counterpart of
+   ip_read_dominated_by_init_p (which asks "is this read safe").
+   INFO's own block_out already answers exactly this (a same-block
+   init_stmt is unconditionally sufficient there too: a basic block's
+   own terminating statement -- the only kind that can lead to another
+   block -- is always last, so any init_stmt sharing that block
+   necessarily precedes it, matching block_out's own definition).  */
 
 static bool
-ip_block_dominated_by_init_p (basic_block bb, vec<gimple *> &init_stmts)
+ip_block_dominated_by_init_p (basic_block bb, const ip_reach_info &info)
 {
-  for (unsigned i = 0; i < init_stmts.length (); ++i)
-    {
-      basic_block init_bb = gimple_bb (init_stmts[i]);
-      if (bb == init_bb || dominated_by_p (CDI_DOMINATORS, bb, init_bb))
-	return true;
-    }
-  return false;
+  return info.block_out[bb->index];
 }
 
 /* P4222 Phase 4d (S5.1-S5.3): the constructor-body counterpart of
@@ -795,8 +1130,7 @@ ip_block_dominated_by_init_p (basic_block bb, vec<gimple *> &init_stmts)
    cross-function work).  */
 
 static void
-ip_check_constructor_member (function *fun, tree this_parm, tree field,
-			      bool *dominance_computed)
+ip_check_constructor_member (function *fun, tree this_parm, tree field)
 {
   ip_member_scan scan;
   scan.this_parm = this_parm;
@@ -821,14 +1155,11 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field,
       return;
     }
 
-  if (!*dominance_computed)
-    {
-      calculate_dominance_info (CDI_DOMINATORS);
-      *dominance_computed = true;
-    }
+  ip_reach_info info;
+  ip_compute_reach_info (fun, scan.init_stmts, &info);
 
   for (gimple *read_stmt : scan.read_stmts)
-    if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts)
+    if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts, info)
 	&& !profiles_header_exempt_p (gimple_location (read_stmt),
 				      "std::init"))
       error_at (gimple_location (read_stmt),
@@ -850,7 +1181,7 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field,
     {
       if (e->flags & EDGE_EH)
 	continue;
-      if (!ip_block_dominated_by_init_p (e->src, scan.init_stmts))
+      if (!ip_block_dominated_by_init_p (e->src, info))
 	{
 	  exit_ok = false;
 	  break;
@@ -987,7 +1318,6 @@ ip_check_function (function *fun)
 	 gsi_next (&gsi))
       ip_check_call_flavor_consistency (gsi_stmt (gsi));
 
-  bool dominance_computed = false;
   unsigned i;
   tree var;
   FOR_EACH_LOCAL_DECL (fun, i, var)
@@ -997,7 +1327,7 @@ ip_check_function (function *fun)
 
       if (!is_gimple_reg (var))
 	{
-	  ip_check_address_taken_var (fun, var, &dominance_computed);
+	  ip_check_address_taken_var (fun, var);
 	  continue;
 	}
 
@@ -1057,13 +1387,9 @@ ip_check_function (function *fun)
 	  if (!lookup_attribute ("uninit", DECL_ATTRIBUTES (field))
 	      && !profiles_uninit_pointee_p (field))
 	    continue;
-	  ip_check_constructor_member (fun, this_parm, field,
-					&dominance_computed);
+	  ip_check_constructor_member (fun, this_parm, field);
 	}
     }
-
-  if (dominance_computed)
-    free_dominance_info (CDI_DOMINATORS);
 
   return 0;
 }
