@@ -27,6 +27,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "target.h"
 #include "cp-tree.h"
+#include "profiles.h"
 #include "timevar.h"
 #include "stringpool.h"
 #include "cgraph.h"
@@ -12445,6 +12446,19 @@ build_new_method_call (tree instance, tree fns, vec<tree, va_gc> **args,
 		 none-the-less evaluated.  */
 	      if (!is_dummy_object (instance))
 		call = keep_unused_object_arg (call, instance, fn);
+	      /* P3446R0/P4296R0's Phase 7a "explicit destructor call"
+		 check lives in finish_class_member_access_expr
+		 (typeck.cc) instead of here: by the time a destructor
+		 reaches CAND->FN, it has already been resolved to one
+		 of its complete/base-object *clones* -- the same clones
+		 build_dtor_call's own compiler-synthesized destruction
+		 calls (block-scope exit, delete-expression, subobject
+		 teardown) resolve to as well, for ordinary
+		 (non-virtual-base) classes.  There is no DECL-level
+		 signal left at this point that distinguishes "the user
+		 wrote x->~X()" from "the compiler is destroying x
+		 implicitly" -- confirmed by direct -fdump-tree-original
+		 inspection, not assumed.  */
 	      if (call != error_mark_node
 		  && DECL_DESTRUCTOR_P (cand->fn)
 		  && !VOID_TYPE_P (TREE_TYPE (call)))

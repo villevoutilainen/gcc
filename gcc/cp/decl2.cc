@@ -33,6 +33,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "target.h"
 #include "cp-tree.h"
 #include "c-family/c-common.h"
+#include "profiles.h"
 #include "timevar.h"
 #include "stringpool.h"
 #include "cgraph.h"
@@ -698,6 +699,22 @@ delete_sanity (location_t loc, tree exp, tree size, bool doing_vec,
     }
 
   location_t exp_loc = cp_expr_loc_or_loc (exp, loc);
+
+  /* P3446R0/P4296R0, Phase 7a Negative Baseline (S7.2,
+     [ub:expr.delete.mismatch]): 'delete'/'delete[]' of a pointer not
+     annotated [[owning_ptr]] is flagged unconditionally -- see
+     profiles_owning_ptr_p's own comment (profiles.h) for exactly what
+     it can and can't trace EXP back to.  Checked against EXP itself,
+     before build_expr_type_conversion below reshapes it, same as the
+     array-delete warning just above.  */
+  if (TREE_CODE (TREE_TYPE (exp)) == POINTER_TYPE
+      && profiles_enforced_p ("std::invalidation")
+      && !profiles_header_exempt_p (exp_loc, "std::invalidation")
+      && !profiles_owning_ptr_p (exp)
+      && (complain & tf_error))
+    error_at (exp_loc, "%<delete%> of a pointer not marked "
+	      "%<[[owning_ptr]]%> not permitted under the "
+	      "%<std::invalidation%> profile");
 
   /* An array can't have been allocated by new, so complain.  */
   if (TREE_CODE (TREE_TYPE (exp)) == ARRAY_TYPE

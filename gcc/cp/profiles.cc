@@ -34,12 +34,13 @@ along with GCC; see the file COPYING3.  If not see
 /* Defined in init-profile-gimple.cc.  */
 extern gimple_opt_pass *make_pass_init_profile_gimple (gcc::context *ctxt);
 
-/* Increment 1: the profile registry is a minimal, fixed table -- one
-   entry, "std::init", the informal name P4222's initialization
-   profile is already known by (see the CppCon 2026 "Profiles" talk).
-   Grows into a real, open-ended, string-keyed table (matching e.g.
-   gcc/opts.cc's own sanitizer_opts[] as a structural template) once a
-   second profile exists to justify the extra machinery.  */
+/* A minimal, fixed table -- "std::init" (P4222) and "std::invalidation"
+   (P3446/P4296), the informal names each profile is already known by
+   (see the CppCon 2026 "Profiles" talk).  Grows into a real,
+   open-ended, string-keyed table (matching e.g. gcc/opts.cc's own
+   sanitizer_opts[] as a structural template) if a third profile ever
+   needs more than a fixed handful of entries to justify the extra
+   machinery.  */
 
 struct profiles_registry_entry
 {
@@ -50,6 +51,7 @@ struct profiles_registry_entry
 static constexpr profiles_registry_entry profiles_registry[] =
 {
   { "std::init", 1u << 0 },
+  { "std::invalidation", 1u << 1 },
 };
 
 static unsigned
@@ -259,6 +261,32 @@ profiles_uninit_pointee_p (tree decl)
 {
   return lookup_attribute ("ref_to_uninit", DECL_ATTRIBUTES (decl)) != NULL_TREE
 	 || lookup_attribute ("must_init", DECL_ATTRIBUTES (decl)) != NULL_TREE;
+}
+
+/* True if EXP -- the operand of a delete-expression, after ordinary
+   expression semantics have run but before delete_sanity's own
+   pointer-conversion (decl2.cc) -- is a reference to a declaration
+   carrying [[owning_ptr]].  P4296R0's Negative Baseline (S7.2,
+   [ub:expr.delete.mismatch]) requires this of every deleted pointer;
+   anything this can't trace back to a single, directly-named
+   declaration (an arbitrary expression, a temporary, a call result)
+   is conservatively treated as NOT owning -- "erring on the safe
+   side", the same stance the paper itself takes throughout S7.2.  */
+
+bool
+profiles_owning_ptr_p (tree exp)
+{
+  STRIP_ANY_LOCATION_WRAPPER (exp);
+  while (CONVERT_EXPR_P (exp) || TREE_CODE (exp) == NON_LVALUE_EXPR)
+    {
+      exp = TREE_OPERAND (exp, 0);
+      STRIP_ANY_LOCATION_WRAPPER (exp);
+    }
+  if (TREE_CODE (exp) == COMPONENT_REF)
+    exp = TREE_OPERAND (exp, 1);
+  if (!DECL_P (exp))
+    return false;
+  return lookup_attribute ("owning_ptr", DECL_ATTRIBUTES (exp)) != NULL_TREE;
 }
 
 bool

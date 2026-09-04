@@ -3572,6 +3572,19 @@ build_new_1 (vec<tree, va_gc> **placement, tree type, tree nelts,
     = (type_num_arguments (TREE_TYPE (alloc_fn)) > 1
        || varargs_function_p (alloc_fn));
 
+  /* P3446R0/P4296R0, Phase 7a Negative Baseline (S7.2,
+     [ub:original.type.implicit.destructor] et al.): placement new is
+     flagged unconditionally, erring on the safe side -- it ends and
+     restarts an object's lifetime at an existing address, which can
+     invalidate outstanding pointers into that storage in ways this
+     profile's checker does not (yet) attempt to prove safe.  */
+  if (placement_allocation_fn_p
+      && (complain & tf_error)
+      && profiles_enforced_p ("std::invalidation")
+      && !profiles_header_exempt_p (input_location, "std::invalidation"))
+    error_at (input_location, "placement %<new%> not permitted under the "
+	      "%<std::invalidation%> profile");
+
   if (complain & tf_warning_or_error
       && warn_aligned_new
       && !placement_allocation_fn_p

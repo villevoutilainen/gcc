@@ -5769,6 +5769,33 @@ handle_must_init_attribute (tree *node, tree name, tree, int,
   return NULL_TREE;
 }
 
+/* P3446R0/P4296R0's [[owning_ptr]] attribute (Invalidation profile,
+   Phase 7a): marks a pointer PARM_DECL/VAR_DECL/FIELD_DECL as carrying
+   deletion obligation -- P4296R0 S7.2's Negative Baseline flags
+   'delete'/'delete[]' of any pointer NOT so annotated
+   ([ub:expr.delete.mismatch] et al.); see profiles_owning_ptr_p
+   (profiles.h) and its call site in decl2.cc's delete_sanity.
+   Restricted to POINTER_TYPE, same reasoning as [[ref_to_uninit]]
+   above: this project's checker only reasons about raw pointers so
+   far, not references or smart pointers (P4296R0 S8.2 notes the
+   latter needs its own, separate library-annotation pass).  */
+
+static tree
+handle_owning_ptr_attribute (tree *node, tree name, tree, int,
+			      bool *no_add_attrs)
+{
+  if ((TREE_CODE (*node) != PARM_DECL && !VAR_P (*node)
+       && TREE_CODE (*node) != FIELD_DECL)
+      || TREE_CODE (TREE_TYPE (*node)) != POINTER_TYPE)
+    {
+      error_at (input_location,
+		"%qE only supported on a pointer-typed parameter, "
+		"variable, or non-static data member", name);
+      *no_add_attrs = true;
+    }
+  return NULL_TREE;
+}
+
 /* Table of valid C++ attributes.  */
 // clang-format off
 static const attribute_spec cxx_gnu_attributes[] =
@@ -5822,6 +5849,8 @@ static const attribute_spec std_attributes[] =
     handle_ref_to_uninit_attribute, NULL },
   { "must_init", 0, 0, true, false, false, false,
     handle_must_init_attribute, NULL },
+  { "owning_ptr", 0, 0, true, false, false, false,
+    handle_owning_ptr_attribute, NULL },
 };
 
 const scoped_attribute_specs std_attribute_table =

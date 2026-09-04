@@ -18341,6 +18341,23 @@ grok_op_properties (tree decl, bool complain)
 
   if (op_flags & OVL_OP_FLAG_ALLOC)
     {
+      /* P3446R0/P4296R0, Phase 7a Negative Baseline (S7.2,
+	 [ub:basic.stc.alloc.dealloc.constraint] et al.): a
+	 user-defined operator new/new[]/delete/delete[] (member or
+	 global-scope) is flagged unconditionally -- this checker has
+	 no way to verify such a hand-written allocator/deallocator
+	 preserves the profile's guarantees, so the paper's own stance
+	 is to treat it, like placement new, as something requiring a
+	 manually-proven "safety perimeter" instead.  Only ever reached
+	 for a genuine source declaration: the compiler's own implicit
+	 global operator new/delete (cxx_init_decl_processing's
+	 push_cp_library_fn) is built directly via build_cp_library_fn/
+	 pushdecl, never through here.  */
+      if (profiles_enforced_p ("std::invalidation")
+	  && !profiles_header_exempt_p (loc, "std::invalidation"))
+	error_at (loc, "user-defined %qD not permitted under the "
+		  "%<std::invalidation%> profile", decl);
+
       /* operator new and operator delete are quite special.  */
       if (class_type)
 	switch (op_flags)

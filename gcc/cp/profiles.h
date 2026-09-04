@@ -90,4 +90,11 @@ extern bool profiles_uninit_flavor_at_position_p (tree fndecl,
    line_map_ordinary alone.  */
 extern bool profiles_header_exempt_p (location_t loc, const char *profile_name);
 
+/* P3446R0/P4296R0, Phase 7a: true if EXP (an expression, taken
+   verbatim from the delete-expression's own operand in decl2.cc's
+   delete_sanity) resolves to a declaration carrying [[owning_ptr]].
+   See profiles.cc's own definition for exactly how much of EXP's
+   shape this can see through.  */
+extern bool profiles_owning_ptr_p (tree exp);
+
 #endif /* ! GCC_CP_PROFILES_H */

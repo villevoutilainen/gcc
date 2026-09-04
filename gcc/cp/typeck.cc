@@ -30,6 +30,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "target.h"
 #include "cp-tree.h"
 #include "contracts.h"
+#include "profiles.h"
 #include "stor-layout.h"
 #include "varasm.h"
 #include "intl.h"
@@ -3505,6 +3506,31 @@ finish_class_member_access_expr (cp_expr object, tree name, bool template_p,
   if (object == error_mark_node || name == error_mark_node)
     return error_mark_node;
 
+  /* P3446R0/P4296R0, Phase 7a Negative Baseline (S7.2,
+     [ub:class.dtor.no.longer.exists] et al.): a genuinely explicit
+     destructor call ("obj.~X()"/"ptr->~X()", written by the user) is
+     flagged unconditionally.  This is the right chokepoint, not
+     build_new_method_call (call.cc): by the time a destructor call
+     reaches overload resolution there, it has already been resolved
+     to one of its complete/base-object *clones* -- the very same
+     clones the compiler's own implicit destruction (block-scope exit,
+     delete-expression, subobject teardown) resolves to as well for an
+     ordinary (non-virtual-base) class, so nothing distinguishes them
+     at that level (confirmed via direct -fdump-tree-original
+     inspection).  NAME itself, here, before any of that lookup
+     happens, is the one place that still carries "the user literally
+     wrote a dtor-name": the parser represents "obj.~X" as a
+     BIT_NOT_EXPR wrapping the named type (confirmed the same way, not
+     assumed) -- a shape this function's other, compiler-synthesized
+     callers (constexpr.cc's ".what()", the range-based for-loop's
+     synthesized ".begin()"/".end()") never produce.  */
+  if (TREE_CODE (name) == BIT_NOT_EXPR
+      && (complain & tf_error)
+      && profiles_enforced_p ("std::invalidation")
+      && !profiles_header_exempt_p (input_location, "std::invalidation"))
+    error_at (input_location, "explicit destructor call not permitted "
+	      "under the %<std::invalidation%> profile");
+
   /* If OBJECT is an ObjC class instance, we must obey ObjC access rules.  */
   if (!objc_is_public (object, name))
     return error_mark_node;
@@ -4036,6 +4062,33 @@ cp_build_indirect_ref_1 (location_t loc, tree ptr, ref_operator errorstring,
 
   if (INDIRECT_TYPE_P (type))
     {
+      /* P3446R0/P4296R0, Phase 7a Negative Baseline (S7.2's
+	 [ub:expr.unary.dereference]): "we'll be prohibiting ALL the
+	 dereferences of pointers (with 'Positive Rules' allowing
+	 dereferences if we can prove they're not null)" -- Rule #4
+	 (provable-non-null) is not yet implemented (see Phase 7b), so
+	 for now every genuine syntactic dereference of a real
+	 POINTER_TYPE is flagged.  errorstring != RO_NULL excludes the
+	 many purely-internal indirections this same function builds
+	 (e.g. cp_build_fold_indirect_ref) that don't correspond to
+	 anything the user wrote; TREE_CODE (type) == POINTER_TYPE
+	 (rather than the broader INDIRECT_TYPE_P just tested, which
+	 also covers REFERENCE_TYPE here) excludes reference decay --
+	 P3446R0 explicitly does not treat a raw reference as a
+	 "pointer" for invalidation purposes (S6.2: "there is no way to
+	 invalidate this container as such").  The current_class_ptr
+	 early return just above means an implicit or explicit *this is
+	 never reached here either -- a known, deliberate scope
+	 boundary for this increment, not yet revisited.  */
+      if (errorstring != RO_NULL
+	  && TREE_CODE (type) == POINTER_TYPE
+	  && (complain & tf_error)
+	  && profiles_enforced_p ("std::invalidation")
+	  && !profiles_header_exempt_p (loc, "std::invalidation"))
+	error_at (loc, "dereference of a pointer not permitted under the "
+		  "%<std::invalidation%> profile (no provable non-null "
+		  "annotation supported yet)");
+
       /* [expr.unary.op]
 
 	 If the type of the expression is "pointer to T," the type
@@ -9623,6 +9676,22 @@ build_reinterpret_cast (location_t loc, tree type, tree expr,
 	  return error_mark_node;
 	}
     }
+
+  /* P3446R0/P4296R0, Phase 7a Negative Baseline (S7.2's
+     [ub:intro.object.implicit.create]/[ub:intro.object.implicit.pointer]
+     discussion): a reinterpret_cast to pointer type is flagged
+     unconditionally, erring on the safe side -- it is this profile's
+     main tool for reusing storage as a different type without an
+     intervening placement-new, which the checker cannot verify is
+     safe.  Not template-dependent, so this only fires once TYPE is
+     known (mirrors the conveyor check just above, and is likewise
+     skipped in the processing_template_decl branch below).  */
+  if (TYPE_PTR_P (type)
+      && (complain & tf_error)
+      && profiles_enforced_p ("std::invalidation")
+      && !profiles_header_exempt_p (loc, "std::invalidation"))
+    error_at (loc, "%<reinterpret_cast%> to pointer type not permitted "
+	      "under the %<std::invalidation%> profile");
 
   if (processing_template_decl)
     {
