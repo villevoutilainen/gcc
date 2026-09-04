@@ -3,22 +3,20 @@
 // invalidation profile's analogue of std::now_init() for the
 // initialization profile -- wrapping the same WidgetFactory/Logger
 // call d4324-profiles-invalidation-escape-container-bad.C flags
-// suppresses that diagnostic.  <utility>'s own transitively-included
-// headers need exempting first: none of them are what this test is
-// actually about (confirmed via direct probing, not guessed).
+// suppresses that diagnostic.  Exemption is transitive
+// (profiles_header_exempt_p, profiles.cc): exempting <utility> itself
+// also covers every implementation-detail header it transitively
+// #includes (bits/stl_pair.h, bits/stl_algobase.h, etc., plus
+// <new>/<concepts>/<compare>/<type_traits>/<source_location>/
+// <contracts> at whichever dialect pulls them in) -- none of those
+// are what this test is actually about, and naming them individually
+// would be non-portable (implementation-detail header sets and names
+// are not part of the standard and can differ across implementations
+// or library versions).
 // { dg-do compile { target c++11 } }
 
 [[profiles::enforce(std::invalidation)]];
-[[profiles::exempt(std::invalidation, angle_header: "new")]];
-[[profiles::exempt(std::invalidation, angle_header: "concepts")]];
-[[profiles::exempt(std::invalidation, angle_header: "compare")]];
-[[profiles::exempt(std::invalidation, angle_header: "type_traits")]];
-[[profiles::exempt(std::invalidation, angle_header: "bits/stl_pair.h")]];
-[[profiles::exempt(std::invalidation, angle_header: "bits/stl_algobase.h")]];
-[[profiles::exempt(std::invalidation, angle_header: "bits/stl_iterator_base_types.h")]];
-[[profiles::exempt(std::invalidation, angle_header: "bits/stl_iterator_base_funcs.h")]];
-[[profiles::exempt(std::invalidation, angle_header: "source_location")]];
-[[profiles::exempt(std::invalidation, angle_header: "contracts")]];
+[[profiles::exempt(std::invalidation, angle_header: "utility")]];
 
 #include <utility>
 

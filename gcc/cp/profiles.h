@@ -76,14 +76,20 @@ extern bool profiles_uninit_flavor_at_position_p (tree fndecl,
 						   unsigned position,
 						   bool must_init_only);
 
-/* P3589, Phase 5: true if LOC's own file was reached via an #include
-   the translation unit has exempted from PROFILE_NAME (e.g.
+/* P3589, Phase 5: true if LOC's own file, OR ANY FILE ON ITS #include
+   CHAIN UP TO THE MAIN FILE, was exempted from PROFILE_NAME (e.g.
    "std::init") with a matching angle/quote-ness --
    '[[profiles::exempt(profile, angle_header: "NAME")]]' /
-   quote_header:.  Every diagnostic site across this project's own
-   profile checkers (decl.cc, tree.cc's attribute handlers, init.cc,
-   init-profile-gimple.cc) is expected to consult this before actually
-   emitting, the same "always check, never skip" discipline
+   quote_header:.  Transitive: exempting "vector" exempts LOC whether
+   LOC's own file is <vector> itself, or bits/stl_vector.h, or anything
+   else reached by following #includes down from <vector> arbitrarily
+   deep -- an exemption on a legacy umbrella header would otherwise be
+   useless the moment that header's own implementation detail files
+   are reached, which is precisely the case profiles::exempt exists
+   for in the first place. Every diagnostic site across this project's
+   own profile checkers (decl.cc, tree.cc's attribute handlers,
+   init.cc, init-profile-gimple.cc) is expected to consult this before
+   actually emitting, the same "always check, never skip" discipline
    profiles_enforced_p itself already has -- consult profiles.cc's own
    profiles_handle_exempt_attribute for why exemptions are only
    resolvable via libcpp's cpp_get_include_spelling, not from

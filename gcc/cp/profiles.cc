@@ -333,20 +333,14 @@ profiles_uninit_flavor_at_position_p (tree fndecl, unsigned position,
   return false;
 }
 
-bool
-profiles_header_exempt_p (location_t loc, const char *profile_name)
+/* True if RESOLVED_PATH's own #include spelling (as it was itself
+   named by whatever file #included it) matches a registered
+   exemption for BIT.  A single, non-transitive check of one file --
+   profiles_header_exempt_p below is what walks the whole chain.  */
+
+static bool
+profiles_spelling_exempt_p (unsigned bit, const char *resolved_path)
 {
-  if (profiles_exemptions.is_empty ())
-    return false;
-
-  unsigned bit = profiles_lookup (profile_name);
-  if (!bit)
-    return false;
-
-  const char *resolved_path = LOCATION_FILE (loc);
-  if (!resolved_path)
-    return false;
-
   const char *spelled_name;
   bool angle;
   if (!cpp_get_include_spelling (parse_in, resolved_path, &spelled_name,
@@ -361,4 +355,53 @@ profiles_header_exempt_p (location_t loc, const char *profile_name)
 	return true;
     }
   return false;
+}
+
+bool
+profiles_header_exempt_p (location_t loc, const char *profile_name)
+{
+  if (profiles_exemptions.is_empty ())
+    return false;
+
+  unsigned bit = profiles_lookup (profile_name);
+  if (!bit)
+    return false;
+
+  const char *resolved_path = LOCATION_FILE (loc);
+  if (!resolved_path)
+    return false;
+
+  if (profiles_spelling_exempt_p (bit, resolved_path))
+    return true;
+
+  /* Transitive: an exemption named against one header (e.g. <vector>)
+     must also cover every file THAT header transitively #includes
+     (bits/stl_vector.h, bits/stl_algobase.h, ...) -- otherwise
+     exempting a legacy umbrella header would stop being useful the
+     moment the diagnostic's own location is inside one of that
+     header's implementation-detail files rather than the umbrella
+     file itself, which is exactly the case this attribute exists to
+     cover. Walk from LOC's own ordinary map up through each
+     #include's own "included from" location (linemap_included_from),
+     to the file that did the including, checking THAT file's own
+     spelling in turn, all the way to the main file (included_from ==
+     0) -- same idiom module.cc's own remap code already uses to walk
+     this exact chain.  */
+  const line_map_ordinary *cur
+    = linemap_check_ordinary (linemap_lookup (line_table, loc));
+  if (!cur)
+    return false;
+
+  for (;;)
+    {
+      location_t from = linemap_included_from (cur);
+      if (from == 0)
+	return false;
+      cur = linemap_check_ordinary (linemap_lookup (line_table, from));
+      if (!cur)
+	return false;
+      const char *ancestor_path = ORDINARY_MAP_FILE_NAME (cur);
+      if (ancestor_path && profiles_spelling_exempt_p (bit, ancestor_path))
+	return true;
+    }
 }
