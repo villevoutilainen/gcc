@@ -212,8 +212,27 @@ struct ip_addr_taken_scan
   auto_vec<gimple *> init_stmts;
   auto_vec<gimple *> read_stmts;
   bool other_addr_of;
+  location_t other_addr_of_loc;
   bool member_access;
+  location_t member_access_loc;
 };
+
+/* Record STMT_LOC as the location of the first unverifiable occurrence
+   found for a scan flag, if one hasn't already been recorded -- shared
+   by ip_addr_taken_scan/ip_local_member_scan/ip_member_scan's own
+   "escape" flags below, so each family's "cannot verify" diagnostic can
+   point at the actual offending statement via a followup inform(),
+   not just (as before) the [[uninit]] declaration itself.  First
+   occurrence found wins, matching this file's general practice of
+   reporting the earliest problem rather than the last one seen.  */
+
+static inline void
+ip_record_first_loc (bool *flag, location_t *loc, location_t stmt_loc)
+{
+  if (!*flag)
+    *loc = stmt_loc;
+  *flag = true;
+}
 
 /* P4222 Phase 4, S1.3/S5.5: the ultimate base of (possibly nested,
    for a multi-dimensional array) ARRAY_REFs in T, or T itself if T is
@@ -334,7 +353,8 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	    s->read_stmts.safe_push (stmt);
 	  else if (TREE_CODE (r) == COMPONENT_REF
 		   && ip_component_ref_base (r) == var)
-	    s->member_access = true;
+	    ip_record_first_loc (&s->member_access, &s->member_access_loc,
+				 gimple_location (stmt));
 	  else if (TREE_CODE (r) == ADDR_EXPR && TREE_OPERAND (r, 0) == var)
 	    {
 	      /* Legitimate (not an error, not an initializing event for
@@ -349,7 +369,8 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	      tree lhs_var = ip_underlying_var (lhs);
 	      if (!(lhs_var && TREE_CODE (TREE_TYPE (lhs_var)) == POINTER_TYPE
 		    && profiles_uninit_pointee_p (lhs_var)))
-		s->other_addr_of = true;
+		ip_record_first_loc (&s->other_addr_of, &s->other_addr_of_loc,
+				     gimple_location (stmt));
 	    }
 	}
       if (lhs == var && !ip_stmt_is_deferred_init_copy_p (stmt))
@@ -358,7 +379,8 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	s->read_stmts.safe_push (stmt);
       else if (TREE_CODE (lhs) == COMPONENT_REF
 	       && ip_component_ref_base (lhs) == var)
-	s->member_access = true;
+	ip_record_first_loc (&s->member_access, &s->member_access_loc,
+			     gimple_location (stmt));
     }
   else if (gimple_code (stmt) == GIMPLE_COND)
     {
@@ -379,7 +401,8 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	    s->read_stmts.safe_push (stmt);
 	  else if (TREE_CODE (arg) == COMPONENT_REF
 		   && ip_component_ref_base (arg) == var)
-	    s->member_access = true;
+	    ip_record_first_loc (&s->member_access, &s->member_access_loc,
+				 gimple_location (stmt));
 	  else if (TREE_CODE (arg) == ADDR_EXPR
 		   && TREE_OPERAND (arg, 0) == var)
 	    {
@@ -402,7 +425,8 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 		   parameter's flavor; nothing more to do.  */
 		;
 	      else
-		s->other_addr_of = true;
+		ip_record_first_loc (&s->other_addr_of, &s->other_addr_of_loc,
+				     gimple_location (stmt));
 	    }
 	}
       tree call_lhs = gimple_call_lhs (stmt);
@@ -413,7 +437,8 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	s->read_stmts.safe_push (stmt);
       else if (call_lhs && TREE_CODE (call_lhs) == COMPONENT_REF
 	       && ip_component_ref_base (call_lhs) == var)
-	s->member_access = true;
+	ip_record_first_loc (&s->member_access, &s->member_access_loc,
+			     gimple_location (stmt));
     }
   else if (greturn *ret = dyn_cast <greturn *> (stmt))
     {
@@ -425,10 +450,12 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	s->read_stmts.safe_push (stmt);
       else if (val && TREE_CODE (val) == COMPONENT_REF
 	       && ip_component_ref_base (val) == var)
-	s->member_access = true;
+	ip_record_first_loc (&s->member_access, &s->member_access_loc,
+			     gimple_location (stmt));
       else if (val && TREE_CODE (val) == ADDR_EXPR
 	       && TREE_OPERAND (val, 0) == var)
-	s->other_addr_of = true;
+	ip_record_first_loc (&s->other_addr_of, &s->other_addr_of_loc,
+			     gimple_location (stmt));
     }
 }
 
@@ -564,6 +591,7 @@ struct ip_local_member_scan
   auto_vec<gimple *> init_stmts;
   auto_vec<gimple *> read_stmts;
   bool other_escape;
+  location_t other_escape_loc;
 };
 
 /* True if T is exactly 'var.field' -- a COMPONENT_REF selecting FIELD
@@ -585,11 +613,12 @@ ip_component_ref_of_var_field_p (tree t, tree var, tree field)
    identical here.  */
 
 static void
-ip_scan_local_member_addr_uses (tree lhs_ssa, ip_local_member_scan *s)
+ip_scan_local_member_addr_uses (tree lhs_ssa, ip_local_member_scan *s,
+				 location_t loc)
 {
   if (TREE_CODE (lhs_ssa) != SSA_NAME)
     {
-      s->other_escape = true;
+      ip_record_first_loc (&s->other_escape, &s->other_escape_loc, loc);
       return;
     }
 
@@ -628,7 +657,7 @@ ip_scan_local_member_addr_uses (tree lhs_ssa, ip_local_member_scan *s)
 	ok = false;
     }
   if (!ok || !any_use)
-    s->other_escape = true;
+    ip_record_first_loc (&s->other_escape, &s->other_escape_loc, loc);
 }
 
 /* The local-aggregate-member counterpart of ip_scan_stmt_for_member
@@ -656,7 +685,7 @@ ip_scan_stmt_for_local_member (gimple *stmt, ip_local_member_scan *s)
 	  else if (TREE_CODE (r) == ADDR_EXPR
 		   && ip_component_ref_of_var_field_p (TREE_OPERAND (r, 0),
 							var, field))
-	    ip_scan_local_member_addr_uses (lhs, s);
+	    ip_scan_local_member_addr_uses (lhs, s, gimple_location (stmt));
 	}
       if (ip_component_ref_of_var_field_p (lhs, var, field)
 	  && !ip_stmt_is_deferred_init_copy_p (stmt))
@@ -691,7 +720,8 @@ ip_scan_stmt_for_local_member (gimple *stmt, ip_local_member_scan *s)
 			    callee, i + 1, /*must_init_only=*/false))
 		;
 	      else
-		s->other_escape = true;
+		ip_record_first_loc (&s->other_escape, &s->other_escape_loc,
+				     gimple_location (stmt));
 	    }
 	}
       tree call_lhs = gimple_call_lhs (stmt);
@@ -708,7 +738,8 @@ ip_scan_stmt_for_local_member (gimple *stmt, ip_local_member_scan *s)
       else if (val && TREE_CODE (val) == ADDR_EXPR
 	       && ip_component_ref_of_var_field_p (TREE_OPERAND (val, 0), var,
 						    field))
-	s->other_escape = true;
+	ip_record_first_loc (&s->other_escape, &s->other_escape_loc,
+			     gimple_location (stmt));
     }
 }
 
@@ -744,6 +775,7 @@ ip_check_local_aggregate_member (function *fun, tree var, tree field,
   scan.var = var;
   scan.field = field;
   scan.other_escape = false;
+  scan.other_escape_loc = UNKNOWN_LOCATION;
 
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
@@ -754,11 +786,15 @@ ip_check_local_aggregate_member (function *fun, tree var, tree field,
   if (scan.other_escape)
     {
       if (!profiles_header_exempt_p (DECL_SOURCE_LOCATION (var), "std::init"))
-	error_at (DECL_SOURCE_LOCATION (var),
-		  "cannot verify %<[[uninit]]%> member %qD of %qD under the "
-		  "%<std::init%> profile: its address is taken outside a "
-		  "recognized %<[[must_init]]%> call, which this checker "
-		  "cannot yet analyze", field, var);
+	{
+	  error_at (DECL_SOURCE_LOCATION (var),
+		    "cannot verify %<[[uninit]]%> member %qD of %qD under the "
+		    "%<std::init%> profile: its address is taken outside a "
+		    "recognized %<[[must_init]]%> call, which this checker "
+		    "cannot yet analyze", field, var);
+	  inform (scan.other_escape_loc,
+		  "address of %qD is taken here", field);
+	}
       return;
     }
 
@@ -816,7 +852,9 @@ ip_check_address_taken_var (function *fun, tree var)
   ip_addr_taken_scan scan;
   scan.var = var;
   scan.other_addr_of = false;
+  scan.other_addr_of_loc = UNKNOWN_LOCATION;
   scan.member_access = false;
+  scan.member_access_loc = UNKNOWN_LOCATION;
 
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
@@ -827,11 +865,15 @@ ip_check_address_taken_var (function *fun, tree var)
   if (scan.other_addr_of)
     {
       if (!profiles_header_exempt_p (DECL_SOURCE_LOCATION (var), "std::init"))
-	error_at (DECL_SOURCE_LOCATION (var),
-		  "cannot verify %<[[uninit]]%> on %qD under the "
-		  "%<std::init%> profile: its address is taken outside a "
-		  "recognized %<[[must_init]]%> call, which this checker "
-		  "cannot yet analyze", var);
+	{
+	  error_at (DECL_SOURCE_LOCATION (var),
+		    "cannot verify %<[[uninit]]%> on %qD under the "
+		    "%<std::init%> profile: its address is taken outside a "
+		    "recognized %<[[must_init]]%> call, which this checker "
+		    "cannot yet analyze", var);
+	  inform (scan.other_addr_of_loc,
+		  "address of %qD is taken here", var);
+	}
       return;
     }
 
@@ -861,10 +903,14 @@ ip_check_address_taken_var (function *fun, tree var)
 	  return;
 	}
       if (!profiles_header_exempt_p (DECL_SOURCE_LOCATION (var), "std::init"))
-	error_at (DECL_SOURCE_LOCATION (var),
-		  "cannot verify %<[[uninit]]%> on %qD under the "
-		  "%<std::init%> profile: member-level access on this "
-		  "aggregate is not yet analyzed", var);
+	{
+	  error_at (DECL_SOURCE_LOCATION (var),
+		    "cannot verify %<[[uninit]]%> on %qD under the "
+		    "%<std::init%> profile: member-level access on this "
+		    "aggregate is not yet analyzed", var);
+	  inform (scan.member_access_loc,
+		  "member access on %qD occurs here", var);
+	}
       return;
     }
 
@@ -909,6 +955,7 @@ struct ip_member_scan
   auto_vec<gimple *> init_stmts;
   auto_vec<gimple *> read_stmts;
   bool other_escape;
+  location_t other_escape_loc;
 };
 
 /* True if T is exactly 'this->FIELD' (or an SSA-copy-of-THIS_PARM's
@@ -946,11 +993,11 @@ ip_component_ref_of_this_field_p (tree t, tree this_parm, tree field)
    once, or used anywhere else at all, can't be vouched for.  */
 
 static void
-ip_scan_member_addr_uses (tree lhs_ssa, ip_member_scan *s)
+ip_scan_member_addr_uses (tree lhs_ssa, ip_member_scan *s, location_t loc)
 {
   if (TREE_CODE (lhs_ssa) != SSA_NAME)
     {
-      s->other_escape = true;
+      ip_record_first_loc (&s->other_escape, &s->other_escape_loc, loc);
       return;
     }
 
@@ -990,7 +1037,7 @@ ip_scan_member_addr_uses (tree lhs_ssa, ip_member_scan *s)
 	ok = false;
     }
   if (!ok || !any_use)
-    s->other_escape = true;
+    ip_record_first_loc (&s->other_escape, &s->other_escape_loc, loc);
 }
 
 /* The member-access counterpart of ip_scan_stmt_for_var -- same
@@ -1019,7 +1066,7 @@ ip_scan_stmt_for_member (gimple *stmt, ip_member_scan *s)
 	  else if (TREE_CODE (r) == ADDR_EXPR
 		   && ip_component_ref_of_this_field_p (TREE_OPERAND (r, 0),
 							 this_parm, field))
-	    ip_scan_member_addr_uses (lhs, s);
+	    ip_scan_member_addr_uses (lhs, s, gimple_location (stmt));
 	}
       if (ip_component_ref_of_this_field_p (lhs, this_parm, field)
 	  && !ip_stmt_is_deferred_init_copy_p (stmt))
@@ -1055,7 +1102,8 @@ ip_scan_stmt_for_member (gimple *stmt, ip_member_scan *s)
 			    callee, i + 1, /*must_init_only=*/false))
 		;
 	      else
-		s->other_escape = true;
+		ip_record_first_loc (&s->other_escape, &s->other_escape_loc,
+				     gimple_location (stmt));
 	    }
 	}
       tree call_lhs = gimple_call_lhs (stmt);
@@ -1072,7 +1120,8 @@ ip_scan_stmt_for_member (gimple *stmt, ip_member_scan *s)
       else if (val && TREE_CODE (val) == ADDR_EXPR
 	       && ip_component_ref_of_this_field_p (TREE_OPERAND (val, 0),
 						     this_parm, field))
-	s->other_escape = true;
+	ip_record_first_loc (&s->other_escape, &s->other_escape_loc,
+			     gimple_location (stmt));
     }
 }
 
@@ -1136,6 +1185,7 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
   scan.this_parm = this_parm;
   scan.field = field;
   scan.other_escape = false;
+  scan.other_escape_loc = UNKNOWN_LOCATION;
 
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
@@ -1147,11 +1197,15 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
     {
       if (!profiles_header_exempt_p (DECL_SOURCE_LOCATION (fun->decl),
 				     "std::init"))
-	error_at (DECL_SOURCE_LOCATION (fun->decl),
-		  "cannot verify %<[[uninit]]%> member %qD under the "
-		  "%<std::init%> profile: its address is taken outside a "
-		  "recognized %<[[must_init]]%> call, which this checker "
-		  "cannot yet analyze", field);
+	{
+	  error_at (DECL_SOURCE_LOCATION (fun->decl),
+		    "cannot verify %<[[uninit]]%> member %qD under the "
+		    "%<std::init%> profile: its address is taken outside a "
+		    "recognized %<[[must_init]]%> call, which this checker "
+		    "cannot yet analyze", field);
+	  inform (scan.other_escape_loc,
+		  "address of %qD is taken here", field);
+	}
       return;
     }
 
