@@ -1702,7 +1702,9 @@ emit_mem_initializers (tree mem_inits)
 	 f = next_aggregate_field (DECL_CHAIN (f)))
       if (uninitialized.contains (f)
 	  && !lookup_attribute ("uninit", DECL_ATTRIBUTES (f))
-	  && !profiles_uninit_pointee_p (f))
+	  && !profiles_uninit_pointee_p (f)
+	  && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (current_function_decl),
+					"std::init"))
 	error_at (DECL_SOURCE_LOCATION (current_function_decl),
 		  "constructor does not initialize member %qD, which is "
 		  "not marked %<[[uninit]]%>, under the %<std::init%> "

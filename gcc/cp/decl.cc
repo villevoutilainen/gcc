@@ -9702,7 +9702,8 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
       && profiles_enforced_p ("std::init")
       && at_function_scope_p ()
       && !TREE_STATIC (decl) && !DECL_EXTERNAL (decl)
-      && !lookup_attribute ("uninit", DECL_ATTRIBUTES (decl)))
+      && !lookup_attribute ("uninit", DECL_ATTRIBUTES (decl))
+      && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (decl), "std::init"))
     error_at (DECL_SOURCE_LOCATION (decl),
 	      "local variable %qD not initialized and not marked "
 	      "%<[[uninit]]%> under the %<std::init%> profile", decl);
@@ -9726,7 +9727,9 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
       tree e = init;
       STRIP_ANY_LOCATION_WRAPPER (e);
       STRIP_NOPS (e);
-      if (TREE_CODE (e) == ADDR_EXPR && VAR_P (TREE_OPERAND (e, 0)))
+      if (TREE_CODE (e) == ADDR_EXPR && VAR_P (TREE_OPERAND (e, 0))
+	  && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (decl),
+					"std::init"))
 	{
 	  tree pointee = TREE_OPERAND (e, 0);
 	  bool pointee_uninit

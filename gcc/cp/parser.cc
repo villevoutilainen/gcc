@@ -33355,10 +33355,7 @@ cp_parser_gnu_attribute_list (cp_parser* parser, bool exactly_one /* = false */)
   return nreverse (attribute_list);
 }
 
-/* D4324/P3589, Increment 1: parse a profiles::enforce or
-   profiles::suppress attribute's argument list.
-
-   Minimal grammar for this increment: a single profile-name --
+/* D4324/P3589: parse a profile-name --
 
      profile-name:
        identifier
@@ -33370,35 +33367,28 @@ cp_parser_gnu_attribute_list (cp_parser* parser, bool exactly_one /* = false */)
    lookup -- P3589's own rule ("Any identifier used in a profile-
    argument is not subject to name lookup rule"), matching how
    omp::directive's own argument text is handled as opaque tokens
-   rather than ordinary expressions. The rest of the full grammar
-   (profile-designator-list i.e. multiple comma-separated profile-
-   designators, a profile-argument-list in parens after the name,
-   suppress's rule:/justification: arguments) is later work -- this
-   deliberately declines anything past one, possibly-dotted name, the
-   same "reject what isn't handled yet" posture the rest of this
-   file's D4324 work uses throughout.
+   rather than ordinary expressions.
 
    The dotted name is folded into a single new IDENTIFIER_NODE (e.g.
    "std" "::" "init" becomes the identifier "std::init") rather than
    kept as a chain of components, so the semantic layer (profiles.cc)
    can look it up with a single IDENTIFIER_POINTER/strcmp, matching its
-   registry's own spelling.  */
+   registry's own spelling.  Does not consume any enclosing
+   parenthesis -- shared between cp_parser_profiles_attribute_args
+   (enforce/suppress, whose own argument list is just this) and
+   cp_parser_profiles_exempt_args (exempt, whose own argument list
+   has more after the profile-name).  Returns error_mark_node, having
+   already diagnosed and skipped to the token PARSER was told to
+   recover to, on a malformed name.  */
 
-static void
-cp_parser_profiles_attribute_args (cp_parser *parser, tree attribute)
+static tree
+cp_parser_profile_designator (cp_parser *parser)
 {
-  matching_parens parens;
-  parens.consume_open (parser);
-
   cp_token *token = cp_lexer_peek_token (parser->lexer);
   if (token->type != CPP_NAME)
     {
       error_at (token->location, "expected profile name");
-      cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
-					     /*or_comma=*/false,
-					     /*consume_paren=*/true);
-      TREE_VALUE (attribute) = error_mark_node;
-      return;
+      return error_mark_node;
     }
   char *name_str = xstrdup (IDENTIFIER_POINTER (token->u.value));
   cp_lexer_consume_token (parser->lexer);
@@ -33411,12 +33401,8 @@ cp_parser_profiles_attribute_args (cp_parser *parser, tree attribute)
 	{
 	  error_at (token->location, "expected profile name component "
 		    "after %<::%>");
-	  cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
-						 /*or_comma=*/false,
-						 /*consume_paren=*/true);
 	  free (name_str);
-	  TREE_VALUE (attribute) = error_mark_node;
-	  return;
+	  return error_mark_node;
 	}
       char *joined = concat (name_str, "::",
 			     IDENTIFIER_POINTER (token->u.value),
@@ -33426,15 +33412,167 @@ cp_parser_profiles_attribute_args (cp_parser *parser, tree attribute)
       cp_lexer_consume_token (parser->lexer);
     }
 
-  if (!parens.require_close (parser))
+  tree name = get_identifier (name_str);
+  free (name_str);
+  return name;
+}
+
+/* D4324/P3589, Increment 1: parse a profiles::enforce or
+   profiles::suppress attribute's argument list -- just a single
+   profile-name (see cp_parser_profile_designator's own comment).  The
+   rest of the full grammar (profile-designator-list i.e. multiple
+   comma-separated profile-designators, a profile-argument-list in
+   parens after the name, suppress's rule:/justification: arguments)
+   is later work -- this deliberately declines anything past one,
+   possibly-dotted name, the same "reject what isn't handled yet"
+   posture the rest of this file's D4324 work uses throughout.  */
+
+static void
+cp_parser_profiles_attribute_args (cp_parser *parser, tree attribute)
+{
+  matching_parens parens;
+  parens.consume_open (parser);
+
+  tree name = cp_parser_profile_designator (parser);
+  if (name == error_mark_node)
     {
-      free (name_str);
+      cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
+					     /*or_comma=*/false,
+					     /*consume_paren=*/true);
       TREE_VALUE (attribute) = error_mark_node;
       return;
     }
-  tree name = get_identifier (name_str);
-  free (name_str);
+
+  if (!parens.require_close (parser))
+    {
+      TREE_VALUE (attribute) = error_mark_node;
+      return;
+    }
   TREE_VALUE (attribute) = build_tree_list (NULL_TREE, name);
+}
+
+/* P3589, Phase 5: parse a profiles::exempt attribute's argument list --
+
+     profiles-exempt-args:
+       profile-name , header-kind : string-literal
+       profiles-exempt-args , justification : string-literal
+
+     header-kind:
+       angle_header
+       quote_header
+
+   e.g. '[[profiles::exempt(std::init, angle_header: "vector")]]' or
+   '..., quote_header: "myheader.h", justification: "third-party"'.
+   justification, if present, is validated (must be a string literal)
+   but not stored anywhere -- it exists for human code review, not for
+   anything this checker itself consults.
+
+   TREE_VALUE (attribute) becomes a TREE_LIST: TREE_PURPOSE is the
+   profile-name identifier, TREE_VALUE is itself a TREE_LIST whose own
+   TREE_PURPOSE is an INTEGER_CST (1 for angle_header, 0 for
+   quote_header) and TREE_VALUE is the header-name STRING_CST --
+   consumed by profiles_handle_exempt_attribute (profiles.cc).  */
+
+static void
+cp_parser_profiles_exempt_args (cp_parser *parser, tree attribute)
+{
+  matching_parens parens;
+  parens.consume_open (parser);
+
+  tree profile_name = cp_parser_profile_designator (parser);
+  if (profile_name == error_mark_node)
+    {
+      cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
+					     /*or_comma=*/false,
+					     /*consume_paren=*/true);
+      TREE_VALUE (attribute) = error_mark_node;
+      return;
+    }
+
+  if (!cp_parser_require (parser, CPP_COMMA, RT_COMMA))
+    {
+      cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
+					     /*or_comma=*/false,
+					     /*consume_paren=*/true);
+      TREE_VALUE (attribute) = error_mark_node;
+      return;
+    }
+
+  cp_token *token = cp_lexer_peek_token (parser->lexer);
+  bool angle;
+  if (token->type == CPP_NAME && id_equal (token->u.value, "angle_header"))
+    angle = true;
+  else if (token->type == CPP_NAME && id_equal (token->u.value, "quote_header"))
+    angle = false;
+  else
+    {
+      error_at (token->location, "expected %<angle_header%> or "
+		"%<quote_header%>");
+      cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
+					     /*or_comma=*/false,
+					     /*consume_paren=*/true);
+      TREE_VALUE (attribute) = error_mark_node;
+      return;
+    }
+  cp_lexer_consume_token (parser->lexer);
+
+  if (!cp_parser_require (parser, CPP_COLON, RT_COLON))
+    {
+      cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
+					     /*or_comma=*/false,
+					     /*consume_paren=*/true);
+      TREE_VALUE (attribute) = error_mark_node;
+      return;
+    }
+
+  tree header_name = cp_parser_string_literal (parser, /*translate=*/false,
+					       /*wide_ok=*/false);
+  if (header_name == error_mark_node)
+    {
+      cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
+					     /*or_comma=*/false,
+					     /*consume_paren=*/true);
+      TREE_VALUE (attribute) = error_mark_node;
+      return;
+    }
+
+  if (cp_lexer_next_token_is (parser->lexer, CPP_COMMA))
+    {
+      cp_lexer_consume_token (parser->lexer);
+      cp_token *just_token = cp_lexer_peek_token (parser->lexer);
+      if (just_token->type != CPP_NAME
+	  || !id_equal (just_token->u.value, "justification"))
+	{
+	  error_at (just_token->location, "expected %<justification%>");
+	  cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
+						 /*or_comma=*/false,
+						 /*consume_paren=*/true);
+	  TREE_VALUE (attribute) = error_mark_node;
+	  return;
+	}
+      cp_lexer_consume_token (parser->lexer);
+      if (!cp_parser_require (parser, CPP_COLON, RT_COLON)
+	  || cp_parser_string_literal (parser, /*translate=*/false,
+				       /*wide_ok=*/false) == error_mark_node)
+	{
+	  cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
+						 /*or_comma=*/false,
+						 /*consume_paren=*/true);
+	  TREE_VALUE (attribute) = error_mark_node;
+	  return;
+	}
+    }
+
+  if (!parens.require_close (parser))
+    {
+      TREE_VALUE (attribute) = error_mark_node;
+      return;
+    }
+
+  TREE_VALUE (attribute)
+    = build_tree_list (profile_name,
+		       build_tree_list (build_int_cst (integer_type_node, angle),
+					header_name));
 }
 
 /* Parse arguments of omp::directive attribute.
@@ -33773,19 +33911,26 @@ cp_parser_std_attribute (cp_parser *parser, tree attr_ns)
 	      }
 	  }
 
-	/* D4324/P3589, Increment 1: profiles::enforce/profiles::suppress
-	   argument parsing -- see cp_parser_profiles_attribute_args's own
-	   comment for the (deliberately minimal, for now) grammar.
-	   profiles::require/profiles::exempt aren't implemented yet this
-	   increment; they fall through to the generic "skip balanced
-	   tokens" handling just below like any other not-yet-recognized
-	   attribute, same as they would if this whole namespace didn't
-	   exist at all.  */
+	/* D4324/P3589: profiles::enforce/profiles::suppress argument
+	   parsing -- see cp_parser_profiles_attribute_args's own comment
+	   for the (deliberately minimal, for now) grammar.
+	   profiles::require isn't implemented yet; it falls through to
+	   the generic "skip balanced tokens" handling just below like any
+	   other not-yet-recognized attribute, same as it would if this
+	   whole namespace didn't exist at all.  */
 	if (attr_ns == profiles_identifier
 	    && (is_attribute_p ("enforce", attr_id)
 		|| is_attribute_p ("suppress", attr_id)))
 	  {
 	    cp_parser_profiles_attribute_args (parser, attribute);
+	    return attribute;
+	  }
+
+	/* P3589, Phase 5: profiles::exempt argument parsing -- see
+	   cp_parser_profiles_exempt_args's own comment for the grammar.  */
+	if (attr_ns == profiles_identifier && is_attribute_p ("exempt", attr_id))
+	  {
+	    cp_parser_profiles_exempt_args (parser, attribute);
 	    return attribute;
 	  }
 

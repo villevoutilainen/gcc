@@ -76,4 +76,18 @@ extern bool profiles_uninit_flavor_at_position_p (tree fndecl,
 						   unsigned position,
 						   bool must_init_only);
 
+/* P3589, Phase 5: true if LOC's own file was reached via an #include
+   the translation unit has exempted from PROFILE_NAME (e.g.
+   "std::init") with a matching angle/quote-ness --
+   '[[profiles::exempt(profile, angle_header: "NAME")]]' /
+   quote_header:.  Every diagnostic site across this project's own
+   profile checkers (decl.cc, tree.cc's attribute handlers, init.cc,
+   init-profile-gimple.cc) is expected to consult this before actually
+   emitting, the same "always check, never skip" discipline
+   profiles_enforced_p itself already has -- consult profiles.cc's own
+   profiles_handle_exempt_attribute for why exemptions are only
+   resolvable via libcpp's cpp_get_include_spelling, not from
+   line_map_ordinary alone.  */
+extern bool profiles_header_exempt_p (location_t loc, const char *profile_name);
+
 #endif /* ! GCC_CP_PROFILES_H */

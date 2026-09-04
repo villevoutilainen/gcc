@@ -122,6 +122,26 @@ struct _cpp_file
   /* File loaded from #embed.  */
   bool embed : 1;
 
+  /* True if this file was found via '#include <NAME>' (angle
+     brackets); false for '#include "NAME"' (quotes).  Set once, from
+     _cpp_find_file's own ANGLE_BRACKETS parameter, at the point NAME
+     is first resolved to this _cpp_file -- P3589's own
+     [[profiles::exempt(profile, angle_header: "NAME")]] /
+     quote_header: needs exactly this distinction to answer "was this
+     file reached via the spelling the exemption names", which
+     line_map_ordinary itself never recorded (see cpp_get_include_
+     spelling's own comment for the full rationale).  Approximate, not
+     per-inclusion-site: if the exact same NAME is ever included both
+     ways (e.g. once via <foo.h> and once via "foo.h"), the file-name
+     hash/search-path cache (_cpp_find_file's own SEARCH_CACHE) may
+     return this same _cpp_file for both, in which case this reflects
+     whichever inclusion happened first -- a deliberately accepted,
+     narrow imprecision (mixing include styles for the identical
+     header name is rare in practice) rather than the considerably
+     larger undertaking of tracking angle/quote-ness per ordinary line
+     map instead of per resolved file.  */
+  bool angle : 1;
+
   /* > 0: Known C++ Module header unit, <0: known not.  ==0, unknown  */
   int header_unit : 2;
 };
@@ -554,6 +574,7 @@ _cpp_find_file (cpp_reader *pfile, const char *fname, cpp_dir *start_dir,
     = (kind == _cpp_FFK_PRE_INCLUDE
        || (pfile->buffer && pfile->buffer->file->implicit_preinclude));
   file->embed = is_embed;
+  file->angle = angle_brackets;
 
   if (kind == _cpp_FFK_FAKE)
     file->dont_read = true;
@@ -1254,6 +1275,30 @@ cpp_probe_header_unit (cpp_reader *pfile, const char *name, bool angle,
     return file->path;
 
   return nullptr;
+}
+
+/* See this function's own declaration in cpplib.h for the full
+   contract, including the one accepted imprecision.  ALL_FILES is a
+   singly-linked list of every _cpp_file this reader has ever created
+   (not just ones currently on the #include stack), so a linear walk
+   is correct regardless of when this is called relative to when
+   RESOLVED_PATH was originally opened; this is never a hot path (only
+   consulted when [[profiles::exempt]] is actually used, and then only
+   right before a diagnostic would otherwise fire), so the walk's cost
+   is not a concern.  */
+
+bool
+cpp_get_include_spelling (cpp_reader *pfile, const char *resolved_path,
+			 const char **name_out, bool *angle_out)
+{
+  for (_cpp_file *f = pfile->all_files; f; f = f->next_file)
+    if (f->path && filename_cmp (f->path, resolved_path) == 0)
+      {
+	*name_out = f->name;
+	*angle_out = f->angle;
+	return true;
+      }
+  return false;
 }
 
 /* Helper function for _cpp_stack_embed.  Finish #embed/__has_embed processing

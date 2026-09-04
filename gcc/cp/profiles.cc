@@ -27,6 +27,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "attribs.h"
 #include "context.h"
 #include "tree-pass.h"
+#include "input.h"
+#include "c-family/c-pragma.h"
 #include "profiles.h"
 
 /* Defined in init-profile-gimple.cc.  */
@@ -130,6 +132,72 @@ profiles_enforced_p (const char *name)
   return bit != 0 && (profiles_enforced_mask & bit) != 0;
 }
 
+/* P3589, Phase 5: registered exemptions -- one entry per
+   '[[profiles::exempt(profile, angle_header: "NAME")]]'/
+   quote_header:.  A plain vec, not GTY-marked: this bookkeeping is
+   pure front-end, compile-time-only state, exactly like profiles_
+   enforced_mask above -- never touched by the GC or persisted
+   anywhere.  */
+
+struct profiles_exemption
+{
+  unsigned profile_bit;
+  bool angle;
+  const char *header_name;
+};
+
+static vec<profiles_exemption> profiles_exemptions;
+
+/* ATTR is a profiles::exempt attribute (TREE_VALUE (ATTR) is the
+   nested TREE_LIST cp_parser_profiles_exempt_args built -- see that
+   function's own comment in parser.cc for the exact shape).
+   Validates placement (the same "before any declaration" restriction
+   profiles_handle_enforce_attribute has, and for the same reason: an
+   exemption must be visible before anything -- including the
+   exempted header's own contents, wherever it's #included -- gets
+   checked against it) and registers the exemption for the rest of
+   the translation unit.  */
+
+static void
+profiles_handle_exempt_attribute (tree attr, location_t loc)
+{
+  tree arg_list = TREE_VALUE (attr);
+  if (arg_list == NULL_TREE || arg_list == error_mark_node)
+    /* Parse error already diagnosed by cp_parser_profiles_exempt_args.  */
+    return;
+
+  tree profile_name_id = TREE_PURPOSE (arg_list);
+  tree rest = TREE_VALUE (arg_list);
+  tree angle_cst = TREE_PURPOSE (rest);
+  tree header_str = TREE_VALUE (rest);
+
+  if (current_namespace != global_namespace)
+    {
+      error_at (loc, "%<profiles::exempt%> only allowed at global scope");
+      return;
+    }
+  if (profiles_seen_nonempty_declaration_p)
+    {
+      error_at (loc, "%<profiles::exempt%> must appear before any "
+		"declaration in the translation unit");
+      return;
+    }
+
+  const char *profile_name = IDENTIFIER_POINTER (profile_name_id);
+  unsigned bit = profiles_lookup (profile_name);
+  if (!bit)
+    {
+      error_at (loc, "unknown profile %qs", profile_name);
+      return;
+    }
+
+  profiles_exemption exemption;
+  exemption.profile_bit = bit;
+  exemption.angle = !integer_zerop (angle_cst);
+  exemption.header_name = xstrdup (TREE_STRING_POINTER (header_str));
+  profiles_exemptions.safe_push (exemption);
+}
+
 /* Give STD_ATTRS -- the attribute-specifier-seq of an empty-declaration
    at location ATTRS_LOC -- real semantic meaning, matching what the
    standard actually says ("the attribute-specifier-seq appertains to
@@ -137,16 +205,17 @@ profiles_enforced_p (const char *name)
    ignored" warning cp_parser_declaration used to give it regardless of
    what the attribute was.
 
-   Only profiles::enforce is recognized so far. This deliberately does
-   not route through decl_attributes (attribs.cc): that function
-   requires a real decl/type as its own first argument and is used
-   throughout the compiler on that assumption, so making arbitrary
-   attribute-table entries (including plugin-registered ones) usable on
-   an empty-declaration -- which has no decl to attach to at all -- is
-   a separate, materially larger undertaking than this one attribute
-   namespace needs, not something to fold in here.  Anything this
-   function doesn't recognize keeps exactly the same generic warning
-   empty-declarations have always gotten.  */
+   profiles::enforce and profiles::exempt (Phase 5) are recognized so
+   far. This deliberately does not route through decl_attributes
+   (attribs.cc): that function requires a real decl/type as its own
+   first argument and is used throughout the compiler on that
+   assumption, so making arbitrary attribute-table entries (including
+   plugin-registered ones) usable on an empty-declaration -- which has
+   no decl to attach to at all -- is a separate, materially larger
+   undertaking than this one attribute namespace needs, not something
+   to fold in here.  Anything this function doesn't recognize keeps
+   exactly the same generic warning empty-declarations have always
+   gotten.  */
 
 void
 cp_finish_empty_declaration (location_t attrs_loc, tree std_attrs)
@@ -159,6 +228,11 @@ cp_finish_empty_declaration (location_t attrs_loc, tree std_attrs)
       if (ns == profiles_identifier && is_attribute_p ("enforce", name))
 	{
 	  profiles_handle_enforce_attribute (a, attrs_loc);
+	  recognized_any = true;
+	}
+      else if (ns == profiles_identifier && is_attribute_p ("exempt", name))
+	{
+	  profiles_handle_exempt_attribute (a, attrs_loc);
 	  recognized_any = true;
 	}
     }
@@ -198,5 +272,35 @@ profiles_uninit_flavor_at_position_p (tree fndecl, unsigned position,
   for (tree e = TREE_VALUE (marker); e; e = TREE_CHAIN (e))
     if (TREE_INT_CST_LOW (TREE_PURPOSE (e)) == position)
       return !must_init_only || TREE_INT_CST_LOW (TREE_VALUE (e)) != 0;
+  return false;
+}
+
+bool
+profiles_header_exempt_p (location_t loc, const char *profile_name)
+{
+  if (profiles_exemptions.is_empty ())
+    return false;
+
+  unsigned bit = profiles_lookup (profile_name);
+  if (!bit)
+    return false;
+
+  const char *resolved_path = LOCATION_FILE (loc);
+  if (!resolved_path)
+    return false;
+
+  const char *spelled_name;
+  bool angle;
+  if (!cpp_get_include_spelling (parse_in, resolved_path, &spelled_name,
+				 &angle))
+    return false;
+
+  for (unsigned i = 0; i < profiles_exemptions.length (); ++i)
+    {
+      const profiles_exemption &e = profiles_exemptions[i];
+      if (e.profile_bit == bit && e.angle == angle
+	  && strcmp (e.header_name, spelled_name) == 0)
+	return true;
+    }
   return false;
 }
