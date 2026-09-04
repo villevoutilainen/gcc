@@ -112,9 +112,14 @@ void array_bulk_init (int i)
 //     and a trivial default constructor is treated like a scalar --
 //     a full initializer at the declaration is enough. A constructor
 //     covering every member -- via the member-initializer-list, an
-//     NSDMI, or an explicit [[uninit]]/[[ref_to_uninit]] exemption --
-//     is accepted too, one flavor per struct below (checked when
-//     each constructor is defined, not only when one is called). ---
+//     NSDMI, or straight-line body code for a member marked
+//     [[uninit]]/[[ref_to_uninit]] to exempt it from the first two --
+//     is accepted too, one flavor per struct below. Each is actually
+//     instantiated (classes(), not just defined): an inline
+//     constructor that's declared but never called never gets
+//     GIMPLE-compiled at all, so merely defining these would never
+//     exercise the checker that verifies them
+//     (ip_check_constructor_member, init-profile-gimple.cc). ---
 
 struct Aggregate
 {
@@ -142,11 +147,19 @@ struct CoveredByNsdmi
   CoveredByNsdmi (int x) : m2{x} {}
 };
 
-struct MemberDeliberatelyUninit
+// [[uninit]] exempts m2 from the member-initializer-list/NSDMI
+// requirement -- it does not exempt it from ever needing a value:
+// straight-line body code still has to assign it on every path
+// before the constructor returns, exactly like an address-taken
+// [[uninit]] local does.
+struct MemberDefinitelyAssignedInBody
 {
   int m1;
   int m2 [[uninit]];
-  MemberDeliberatelyUninit (int x) : m1{x} {}
+  MemberDefinitelyAssignedInBody (int x) : m1{x}
+  {
+    m2 = x;
+  }
 };
 
 struct MemberPointsToUninit
@@ -155,3 +168,16 @@ struct MemberPointsToUninit
   int *m2 [[ref_to_uninit]];
   MemberPointsToUninit (int x, int *p) : m1{x}, m2{p} {}
 };
+
+void classes ()
+{
+  CoveredByCtorList c1 (1);
+  CoveredByNsdmi c2 (2);
+  MemberDefinitelyAssignedInBody c3 (3);
+  int scratch = 0;
+  MemberPointsToUninit c4 (4, &scratch);
+  (void) c1;
+  (void) c2;
+  (void) c3;
+  (void) c4;
+}
