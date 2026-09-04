@@ -217,6 +217,29 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     now_init_in_place(_Tp& __obj [[must_init]]) noexcept
     { return __obj; }
 
+  /// P4222 (Initialization profile): an address-taking escape hatch --
+  /// unlike now_init()/now_init_in_place() above (which assert
+  /// *initializedness*), this asserts nothing about __obj's contents.
+  /// It exists solely so an [[uninit]] object's address can legitimately
+  /// be passed to an arbitrary, unannotated function/constructor (one
+  /// the checker has no way to know is [[ref_to_uninit]]-aware, e.g. a
+  /// standard-library type not yet annotated for this profile) without
+  /// tripping the checker's blanket "address taken outside a recognized
+  /// [[must_init]]/[[ref_to_uninit]] call" rejection -- see this
+  /// project's own now_init_in_place addendum notes for why no
+  /// placement of profiles::suppress can substitute for this (that
+  /// diagnostic is anchored at the object's own declaration, not at
+  /// whichever statement actually escapes it).  Once escaped this way,
+  /// the object can later be proven initialized with now_init_in_place
+  /// (or now_init, through whatever pointer is actually doing the
+  /// writing) exactly as if the escape had never happened; this
+  /// function makes no promise of its own either way.
+  template<typename _Tp>
+    [[__gnu__::__always_inline__]]
+    constexpr _Tp&
+    escape_uninit(_Tp& __obj [[ref_to_uninit]]) noexcept
+    { return __obj; }
+
   /// P3446R0 (Invalidation profile): assert -- without proof -- that
   /// the returned value contains no dangling pointer.  A local
   /// suppression of the invalidation profile's pointer/container
