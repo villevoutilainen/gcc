@@ -5796,6 +5796,34 @@ handle_owning_ptr_attribute (tree *node, tree name, tree, int,
   return NULL_TREE;
 }
 
+/* P3446R0's [[not_invalidating]] attribute (Invalidation profile,
+   Phase 7b): marks a non-const member function as NOT invalidating
+   existing pointers/iterators into its receiver, opting it out of
+   P4296R0 S7.6's own default ("a non-const operation on a container
+   is assumed to invalidate existing element pointers/iterators
+   unless the operation is annotated [[not_invalidating]]" -- P3446R0
+   section 4's own naming, kept over P4296R0's inverse-polarity
+   [[may_invalidate]] framing since it is the one that lets the
+   DEFAULT stay "assume invalidating", matching this project's own
+   default-deny stance, rather than requiring every mutating method to
+   be annotated).  Function-only, no arguments: see invalidation-
+   profile-gimple.cc's own ip_mutating_call_p for the one place this
+   is consulted -- purely a classification input to Rule application,
+   not itself analyzed or proven.  */
+
+static tree
+handle_not_invalidating_attribute (tree *node, tree name, tree, int,
+				    bool *no_add_attrs)
+{
+  if (TREE_CODE (*node) != FUNCTION_DECL || !DECL_IOBJ_MEMBER_FUNCTION_P (*node))
+    {
+      error_at (input_location,
+		"%qE only supported on a non-static member function", name);
+      *no_add_attrs = true;
+    }
+  return NULL_TREE;
+}
+
 /* Table of valid C++ attributes.  */
 // clang-format off
 static const attribute_spec cxx_gnu_attributes[] =
@@ -5851,6 +5879,8 @@ static const attribute_spec std_attributes[] =
     handle_must_init_attribute, NULL },
   { "owning_ptr", 0, 0, true, false, false, false,
     handle_owning_ptr_attribute, NULL },
+  { "not_invalidating", 0, 0, true, false, false, false,
+    handle_not_invalidating_attribute, NULL },
 };
 
 const scoped_attribute_specs std_attribute_table =

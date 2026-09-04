@@ -1451,8 +1451,17 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       /**
        *  Returns a read/write iterator that points to the first element in the
        *  %list.  Iteration is done in ordinary element order.
+       *
+       *  [[not_invalidating]] (P3446R0/P4296R0's Invalidation profile,
+       *  gcc/cp/tree.cc): begin()/end()'s non-const overloads don't
+       *  actually mutate the list -- without this, the profile's own
+       *  default ("assume any non-const member call invalidates")
+       *  would treat merely calling begin() as if it invalidated
+       *  existing iterators.  Inert unless std::invalidation is
+       *  enforced.
        */
       _GLIBCXX_NODISCARD
+      [[not_invalidating]]
       iterator
       begin() _GLIBCXX_NOEXCEPT
       { return iterator(this->_M_impl._M_node._M_next); }
@@ -1473,6 +1482,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        *  order.
        */
       _GLIBCXX_NODISCARD
+      [[not_invalidating]]
       iterator
       end() _GLIBCXX_NOEXCEPT
       { return iterator(this->_M_impl._M_node._M_base()); }

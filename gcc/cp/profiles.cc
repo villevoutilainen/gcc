@@ -33,6 +33,8 @@ along with GCC; see the file COPYING3.  If not see
 
 /* Defined in init-profile-gimple.cc.  */
 extern gimple_opt_pass *make_pass_init_profile_gimple (gcc::context *ctxt);
+/* Defined in invalidation-profile-gimple.cc.  */
+extern gimple_opt_pass *make_pass_invalidation_profile_gimple (gcc::context *ctxt);
 
 /* A minimal, fixed table -- "std::init" (P4222) and "std::invalidation"
    (P3446/P4296), the informal names each profile is already known by
@@ -254,6 +256,13 @@ init_profiles (void)
   pass_info.ref_pass_instance_number = 1;
   pass_info.pos_op = PASS_POS_INSERT_AFTER;
   register_pass (&pass_info);
+
+  struct register_pass_info inv_pass_info;
+  inv_pass_info.pass = make_pass_invalidation_profile_gimple (g);
+  inv_pass_info.reference_pass_name = "ssa";
+  inv_pass_info.ref_pass_instance_number = 1;
+  inv_pass_info.pos_op = PASS_POS_INSERT_AFTER;
+  register_pass (&inv_pass_info);
 }
 
 bool
@@ -272,6 +281,13 @@ profiles_uninit_pointee_p (tree decl)
    declaration (an arbitrary expression, a temporary, a call result)
    is conservatively treated as NOT owning -- "erring on the safe
    side", the same stance the paper itself takes throughout S7.2.  */
+
+bool
+profiles_not_invalidating_p (tree fndecl)
+{
+  return lookup_attribute ("not_invalidating", DECL_ATTRIBUTES (fndecl))
+	 != NULL_TREE;
+}
 
 bool
 profiles_owning_ptr_p (tree exp)
