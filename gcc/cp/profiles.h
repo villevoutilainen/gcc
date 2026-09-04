@@ -97,4 +97,9 @@ extern bool profiles_header_exempt_p (location_t loc, const char *profile_name);
    shape this can see through.  */
 extern bool profiles_owning_ptr_p (tree exp);
 
+/* P3446R0, Phase 7b: true if FNDECL (a non-static member function)
+   carries [[not_invalidating]] -- see invalidation-profile-gimple.cc's
+   own ip_mutating_call_p for the single call site.  */
+extern bool profiles_not_invalidating_p (tree fndecl);
+
 #endif /* ! GCC_CP_PROFILES_H */
