@@ -116,20 +116,40 @@ extern bool profiles_header_exempt_p (location_t loc, const char *profile_name);
 /* P3589: register that PROFILE_NAME's (e.g. "std::init") diagnostics
    are suppressed for the source range [START, END] -- the real
    semantic effect of '[[profiles::suppress(profile)]]' attached to an
-   ordinary declaration. Called from cp_finish_decl (decl.cc) once a
-   declaration carrying the attribute (tree.cc's own handle_profiles_
-   suppress_attribute lets it survive onto DECL_ATTRIBUTES, unlike
-   profiles::enforce/exempt) is fully parsed and its own extent is
-   therefore known: START is the declaration's own DECL_SOURCE_
-   LOCATION, END is input_location at that point (just past the
-   declaration's own trailing ';', the earliest point cp_finish_decl
-   can be reached). Diagnoses an unrecognized PROFILE_NAME at START,
-   matching profiles_handle_exempt_attribute's own "unknown profile"
-   error for the identical situation -- the attribute's own parse
-   accepts an arbitrary dotted identifier without validating it, so
-   this is the first point that can.  */
+   ordinary declaration OR STATEMENT (the paper's own wording grants
+   both equally: "The dominion of a profile-suppression attribute is
+   the sequence of tokens starting after the attribute extending till
+   the last token of the declaration or statement to which the
+   attribute appertains"). Called from cp_finish_decl (decl.cc, for a
+   declaration -- tree.cc's own handle_profiles_suppress_attribute is
+   what lets the attribute survive parsing onto DECL_ATTRIBUTES in the
+   first place, unlike profiles::enforce/exempt) or cp_parser_statement
+   (parser.cc, for an ordinary statement) once the declaration/
+   statement carrying the attribute is fully parsed and its own extent
+   is therefore known: START is the declaration's own DECL_SOURCE_
+   LOCATION (or the statement's own first-token location), END is
+   input_location at that point (just past the trailing ';', the
+   earliest point either caller can be reached). Diagnoses an
+   unrecognized PROFILE_NAME at START, matching profiles_handle_exempt_
+   attribute's own "unknown profile" error for the identical situation
+   -- the attribute's own parse accepts an arbitrary dotted identifier
+   without validating it, so this is the first point that can.  */
 extern void profiles_register_suppression (const char *profile_name,
 					    location_t start, location_t end);
+
+/* Shared implementation for both call sites above: walk every
+   '[[profiles::suppress(profile)]]' found directly in ATTRS (a
+   DECL_ATTRIBUTES list or a parsed statement attribute-specifier-seq)
+   and register [START, END] as suppressed for each one's named
+   profile via profiles_register_suppression.  Does not strip the
+   found attributes back out of ATTRS -- callers that need that (e.g.
+   cp_parser_statement, so its own generic "attribute ignored" warning
+   doesn't also fire for an attribute this already gave real meaning
+   to) do so themselves with remove_attribute, same as this file's own
+   handling of [[fallthrough]]/[[assume]].  */
+extern void profiles_process_suppress_attributes (tree attrs,
+						   location_t start,
+						   location_t end);
 
 /* P3446R0/P4296R0, Phase 7a: true if EXP (an expression, taken
    verbatim from the delete-expression's own operand in decl2.cc's

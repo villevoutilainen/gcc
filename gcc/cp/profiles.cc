@@ -393,6 +393,28 @@ profiles_register_suppression (const char *profile_name, location_t start,
   profiles_suppressions.safe_push (s);
 }
 
+/* Shared by cp_finish_decl (decl.cc, for a declaration) and
+   cp_parser_statement (parser.cc, for an ordinary statement): walk
+   every '[[profiles::suppress(profile)]]' in ATTRS and register
+   [START, END] as suppressed for each one's named profile.  The paper
+   itself (P3589) states a suppression attribute's dominion is granted
+   equally to "a declaration or statement" it appertains to -- this is
+   the one place both call sites' identical loop lives, so they can't
+   drift apart from each other or from that wording.  */
+
+void
+profiles_process_suppress_attributes (tree attrs, location_t start,
+				       location_t end)
+{
+  for (tree attr = lookup_attribute ("profiles", "suppress", attrs);
+       attr; attr = lookup_attribute ("profiles", "suppress",
+				      TREE_CHAIN (attr)))
+    {
+      tree name = TREE_VALUE (TREE_VALUE (attr));
+      profiles_register_suppression (IDENTIFIER_POINTER (name), start, end);
+    }
+}
+
 /* True if LOC falls within [START, END] of some registered
    profiles::suppress range for BIT (comparing (file, line, column)
    triples directly -- there is no libcpp include-chain to walk the
