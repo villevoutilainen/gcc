@@ -1185,6 +1185,23 @@ extern const char *cpp_get_wide_charset_name (cpp_reader *) ATTRIBUTE_PURE;
 
 extern location_t cpp_get_diagnostic_override_loc (const cpp_reader *);
 
+/* P3589's [[profiles::exempt(profile, angle_header: "NAME")]] /
+   quote_header: needs to answer "was the file at RESOLVED_PATH
+   reached via an #include spelled NAME, with this angle/quote-ness"
+   -- information line_map_ordinary itself never records (it only
+   keeps the resolved path).  Returns false if RESOLVED_PATH doesn't
+   match any file this reader has ever opened; otherwise fills in
+   *NAME_OUT (the as-written header name, e.g. "vector") and
+   *ANGLE_OUT (true for '#include <NAME>', false for '#include
+   "NAME"') and returns true.  See _cpp_file's own 'angle' field
+   comment (files.cc) for this function's one accepted imprecision:
+   it reflects the first inclusion of a given name, not each
+   individual inclusion site, if the identical name is ever included
+   both ways.  */
+extern bool cpp_get_include_spelling (cpp_reader *pfile,
+				      const char *resolved_path,
+				      const char **name_out, bool *angle_out);
+
 /* This function reads the file, but does not start preprocessing.  It
    returns the name of the original file; this is the same as the
    input file, except for preprocessed input.  This will generate at

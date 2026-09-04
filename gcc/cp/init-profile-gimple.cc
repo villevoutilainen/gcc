@@ -500,11 +500,12 @@ ip_check_address_taken_var (function *fun, tree var, bool *dominance_computed)
 
   if (scan.other_addr_of)
     {
-      error_at (DECL_SOURCE_LOCATION (var),
-		"cannot verify %<[[uninit]]%> on %qD under the "
-		"%<std::init%> profile: its address is taken outside a "
-		"recognized %<[[must_init]]%> call, which this checker "
-		"cannot yet analyze", var);
+      if (!profiles_header_exempt_p (DECL_SOURCE_LOCATION (var), "std::init"))
+	error_at (DECL_SOURCE_LOCATION (var),
+		  "cannot verify %<[[uninit]]%> on %qD under the "
+		  "%<std::init%> profile: its address is taken outside a "
+		  "recognized %<[[must_init]]%> call, which this checker "
+		  "cannot yet analyze", var);
       return;
     }
 
@@ -517,19 +518,22 @@ ip_check_address_taken_var (function *fun, tree var, bool *dominance_computed)
      accept unverified member-level access.  */
   if (scan.member_access)
     {
-      error_at (DECL_SOURCE_LOCATION (var),
-		"cannot verify %<[[uninit]]%> on %qD under the "
-		"%<std::init%> profile: member-level access on this "
-		"aggregate is not yet analyzed", var);
+      if (!profiles_header_exempt_p (DECL_SOURCE_LOCATION (var), "std::init"))
+	error_at (DECL_SOURCE_LOCATION (var),
+		  "cannot verify %<[[uninit]]%> on %qD under the "
+		  "%<std::init%> profile: member-level access on this "
+		  "aggregate is not yet analyzed", var);
       return;
     }
 
   if (scan.init_stmts.is_empty ())
     {
       for (gimple *read_stmt : scan.read_stmts)
-	error_at (gimple_location (read_stmt),
-		  "%qD read before it is definitely assigned, under the "
-		  "%<std::init%> profile", var);
+	if (!profiles_header_exempt_p (gimple_location (read_stmt),
+					"std::init"))
+	  error_at (gimple_location (read_stmt),
+		    "%qD read before it is definitely assigned, under the "
+		    "%<std::init%> profile", var);
       return;
     }
 
@@ -540,7 +544,9 @@ ip_check_address_taken_var (function *fun, tree var, bool *dominance_computed)
     }
 
   for (gimple *read_stmt : scan.read_stmts)
-    if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts))
+    if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts)
+	&& !profiles_header_exempt_p (gimple_location (read_stmt),
+				      "std::init"))
       error_at (gimple_location (read_stmt),
 		"%qD read before it is definitely assigned, under the "
 		"%<std::init%> profile", var);
@@ -788,11 +794,13 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field,
 
   if (scan.other_escape)
     {
-      error_at (DECL_SOURCE_LOCATION (fun->decl),
-		"cannot verify %<[[uninit]]%> member %qD under the "
-		"%<std::init%> profile: its address is taken outside a "
-		"recognized %<[[must_init]]%> call, which this checker "
-		"cannot yet analyze", field);
+      if (!profiles_header_exempt_p (DECL_SOURCE_LOCATION (fun->decl),
+				     "std::init"))
+	error_at (DECL_SOURCE_LOCATION (fun->decl),
+		  "cannot verify %<[[uninit]]%> member %qD under the "
+		  "%<std::init%> profile: its address is taken outside a "
+		  "recognized %<[[must_init]]%> call, which this checker "
+		  "cannot yet analyze", field);
       return;
     }
 
@@ -803,7 +811,9 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field,
     }
 
   for (gimple *read_stmt : scan.read_stmts)
-    if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts))
+    if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts)
+	&& !profiles_header_exempt_p (gimple_location (read_stmt),
+				      "std::init"))
       error_at (gimple_location (read_stmt),
 		"member %qD read before it is definitely assigned, under "
 		"the %<std::init%> profile", field);
@@ -821,7 +831,9 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field,
 	  break;
 	}
     }
-  if (!exit_ok)
+  if (!exit_ok
+      && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (fun->decl),
+				    "std::init"))
     error_at (DECL_SOURCE_LOCATION (fun->decl),
 	      "constructor may leave member %qD, marked %<[[uninit]]%>, "
 	      "not definitely assigned before %<*this%> is exposed, under "
@@ -926,6 +938,8 @@ ip_check_call_flavor_consistency (gimple *stmt)
 						 /*must_init_only=*/false);
       bool arg_flavor = ip_arg_uninit_flavored_p (gimple_call_arg (stmt, i));
 
+      if (profiles_header_exempt_p (gimple_location (stmt), "std::init"))
+	continue;
       if (param_flavor && !arg_flavor)
 	error_at (gimple_location (stmt),
 		  "argument %u to %qD must refer to %<[[uninit]]%> memory, "
@@ -989,7 +1003,9 @@ ip_check_function (function *fun)
 		continue;
 
 	      hash_set<tree> in_progress;
-	      if (!ip_definitely_assigned_p (name, in_progress))
+	      if (!ip_definitely_assigned_p (name, in_progress)
+		  && !profiles_header_exempt_p (gimple_location (use_stmt),
+						"std::init"))
 		error_at (gimple_location (use_stmt),
 			  "%qD read before it is definitely assigned, "
 			  "under the %<std::init%> profile", var);
