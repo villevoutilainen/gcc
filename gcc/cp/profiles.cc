@@ -360,11 +360,33 @@ profiles_spelling_exempt_p (unsigned bit, const char *resolved_path)
 bool
 profiles_header_exempt_p (location_t loc, const char *profile_name)
 {
-  if (profiles_exemptions.is_empty ())
-    return false;
-
   unsigned bit = profiles_lookup (profile_name);
   if (!bit)
+    return false;
+
+  /* System headers -- anything reached via '-isystem'/the compiler's
+     own built-in library search path, or explicitly marked with
+     '#pragma GCC system_header' (which every libstdc++ header carries,
+     conditionally on _GLIBCXX_SYSHDR) -- are auto-exempt from every
+     profile, unconditionally, with no explicit profiles::exempt
+     needed. Until the standard library itself is annotated (see the
+     profiles plan's own Phase 7b "shared prerequisite" note), a
+     profile that couldn't compile any translation unit including so
+     much as <vector> would be useless in practice, and every user of
+     the profile would otherwise need to rediscover and hand-write the
+     same library-header exemption list d4324-profiles-invalidation-
+     no-dangling-ok.C used to need. User code is essentially never a
+     system header, so this can't accidentally exempt anything the
+     user actually wrote -- and if it genuinely is (an embedded/vendor
+     header a user wants checked anyway), an explicit profiles::exempt
+     list still only ever ADDS exemptions, never removes this one; a
+     user who wants their own system-header-flagged code checked
+     should stop marking it as a system header, not fight this
+     default.  */
+  if (in_system_header_at (loc))
+    return true;
+
+  if (profiles_exemptions.is_empty ())
     return false;
 
   const char *resolved_path = LOCATION_FILE (loc);
