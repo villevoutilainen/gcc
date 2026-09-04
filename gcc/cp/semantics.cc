@@ -35,6 +35,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "varasm.h"
 #include "stor-layout.h"
 #include "c-family/c-objc.h"
+#include "profiles.h"
 #include "tree-inline.h"
 #include "intl.h"
 #include "tree-iterator.h"
@@ -1610,6 +1611,31 @@ finish_return_stmt (tree expr)
 
   r = build_stmt (input_location, RETURN_EXPR, expr);
   RETURN_EXPR_LOCAL_ADDR_P (r) = dangling;
+
+  /* P3446R0 Invalidation profile, escape-from-scope check (CppCon
+     2026 "Profiles" talk, slide 45): a function must not return a
+     pointer to one of its own locals.  Checked here, at the exact
+     point -Wreturn-local-addr's own DANGLING flag is already
+     computed, rather than in invalidation-profile-gimple.cc's own
+     GIMPLE-level escape analysis: by the time any GIMPLE pass runs,
+     genericize/gimplify has already folded a directly-returned
+     "&local" into a null-pointer constant (confirmed via a direct
+     -fdump-tree-ssa-details reading -- the substitution is already
+     present in the very FIRST gimple dump, before any GIMPLE pass
+     executes, so no amount of pass reordering could expose the
+     original expression to a GIMPLE-level check).  This only covers
+     the shape -Wreturn-local-addr itself covers (a direct ADDR_EXPR
+     chain, or a std::move/std::forward wrapping one) -- an indirect
+     escape through a local pointer copy, a further function call, or
+     a container built from one is NOT set here (dangling is false for
+     those) and remains invalidation-profile-gimple.cc's own job.  */
+  if (dangling && !processing_template_decl
+      && profiles_enforced_p ("std::invalidation")
+      && !profiles_header_exempt_p (input_location, "std::invalidation"))
+    error_at (input_location, "returning a pointer or reference to a "
+	      "local, not permitted under the %<std::invalidation%> "
+	      "profile");
+
   if (no_warning)
     suppress_warning (r, OPT_Wreturn_type);
   r = maybe_cleanup_point_expr_void (r);

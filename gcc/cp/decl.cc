@@ -12572,6 +12572,30 @@ grokfndecl (tree ctype,
 		     DECL_ATTRIBUTES (decl));
   }
 
+  /* P3446R0 Invalidation profile: synthesize the same kind of
+     function-level positional record (see the P4222 comment just
+     above, and profiles.cc's own profiles_not_invalidating_at_
+     position_p) for [[not_invalidating]] on an ordinary (non-member)
+     function's parameter -- the free-function half of "a non-const
+     argument is assumed to invalidate" (CppCon 2026 "Profiles" talk,
+     slide 53), distinct from [[not_invalidating]] on a non-const
+     MEMBER function itself (tree.cc's handle_not_invalidating_
+     attribute), which invalidation-profile-gimple.cc's ip_mutating_
+     call_p already consults directly via DECL_ATTRIBUTES.  */
+  {
+    tree not_invalidating_list = NULL_TREE;
+    unsigned pos = 1;
+    for (t = parms; t; t = DECL_CHAIN (t), ++pos)
+      if (lookup_attribute ("not_invalidating", DECL_ATTRIBUTES (t)))
+	not_invalidating_list
+	  = tree_cons (build_int_cst (integer_type_node, pos), NULL_TREE,
+		       not_invalidating_list);
+    if (not_invalidating_list)
+      DECL_ATTRIBUTES (decl)
+	= tree_cons (get_identifier ("profiles_not_invalidating_flavor"),
+		     not_invalidating_list, DECL_ATTRIBUTES (decl));
+  }
+
   /* Propagate volatile out from type to decl.  */
   if (TYPE_VOLATILE (type))
     TREE_THIS_VOLATILE (decl) = 1;

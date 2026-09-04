@@ -290,6 +290,19 @@ profiles_not_invalidating_p (tree fndecl)
 }
 
 bool
+profiles_not_invalidating_at_position_p (tree fndecl, unsigned position)
+{
+  tree marker = lookup_attribute ("profiles_not_invalidating_flavor",
+				   DECL_ATTRIBUTES (fndecl));
+  if (!marker)
+    return false;
+  for (tree e = TREE_VALUE (marker); e; e = TREE_CHAIN (e))
+    if (TREE_INT_CST_LOW (TREE_PURPOSE (e)) == position)
+      return true;
+  return false;
+}
+
+bool
 profiles_owning_ptr_p (tree exp)
 {
   STRIP_ANY_LOCATION_WRAPPER (exp);
@@ -302,7 +315,8 @@ profiles_owning_ptr_p (tree exp)
     exp = TREE_OPERAND (exp, 1);
   if (!DECL_P (exp))
     return false;
-  return lookup_attribute ("owning_ptr", DECL_ATTRIBUTES (exp)) != NULL_TREE;
+  return lookup_attribute ("owning_ptr", DECL_ATTRIBUTES (exp)) != NULL_TREE
+	 || lookup_attribute ("owner", DECL_ATTRIBUTES (exp)) != NULL_TREE;
 }
 
 bool

@@ -102,4 +102,14 @@ extern bool profiles_owning_ptr_p (tree exp);
    own ip_mutating_call_p for the single call site.  */
 extern bool profiles_not_invalidating_p (tree fndecl);
 
+/* P3446R0: true if FNDECL's parameter at 1-based POSITION carries
+   [[not_invalidating]] -- consults the synthesized function-level
+   "profiles_not_invalidating_flavor" marker (grokfndecl, decl.cc),
+   the free-function analogue of profiles_not_invalidating_p above;
+   see that marker's own comment (tree.cc's handle_not_invalidating_
+   attribute) for why a direct PARM_DECL lookup can't be trusted to
+   survive a declared-but-never-defined function.  */
+extern bool profiles_not_invalidating_at_position_p (tree fndecl,
+						      unsigned position);
+
 #endif /* ! GCC_CP_PROFILES_H */

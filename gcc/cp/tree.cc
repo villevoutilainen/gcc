@@ -5778,7 +5778,14 @@ handle_must_init_attribute (tree *node, tree name, tree, int,
    Restricted to POINTER_TYPE, same reasoning as [[ref_to_uninit]]
    above: this project's checker only reasons about raw pointers so
    far, not references or smart pointers (P4296R0 S8.2 notes the
-   latter needs its own, separate library-annotation pass).  */
+   latter needs its own, separate library-annotation pass).
+
+   [[owner]] (below, same handler) is the exact same attribute under
+   Stroustrup's own CppCon 2026 "Profiles" talk's spelling (slides
+   50-53) -- kept as a second, alternate spelling alongside
+   [[owning_ptr]] rather than a rename, since both names are now in
+   active use across this project's own sources/tests and the talk
+   itself.  */
 
 static tree
 handle_owning_ptr_attribute (tree *node, tree name, tree, int,
@@ -5806,19 +5813,46 @@ handle_owning_ptr_attribute (tree *node, tree name, tree, int,
    [[may_invalidate]] framing since it is the one that lets the
    DEFAULT stay "assume invalidating", matching this project's own
    default-deny stance, rather than requiring every mutating method to
-   be annotated).  Function-only, no arguments: see invalidation-
-   profile-gimple.cc's own ip_mutating_call_p for the one place this
-   is consulted -- purely a classification input to Rule application,
-   not itself analyzed or proven.  */
+   be annotated).  See invalidation-profile-gimple.cc's own ip_
+   mutating_call_p for the one place a FUNCTION_DECL use of this is
+   consulted -- purely a classification input to Rule application, not
+   itself analyzed or proven.
+
+   Also valid on a PARAMETER (any function, member or free): the
+   CppCon 2026 "Profiles" talk's own extension of the same default to
+   ordinary functions (slide 53: "a function is assumed to invalidate
+   a non-const argument" -- slide 43's own example applies
+   [[not_invalidating]] to a parameter of an ordinary, non-member
+   function).  Recorded positionally at grokfndecl time (decl.cc) into
+   a synthesized "profiles_not_invalidating_flavor" marker, mirroring
+   [[must_init]]/[[ref_to_uninit]]'s own "profiles_uninit_flavor"
+   pattern and for the identical reason (DECL_ARGUMENTS is discarded
+   for a declared-but-never-defined function); see profiles.cc's own
+   profiles_not_invalidating_at_position_p.  */
 
 static tree
 handle_not_invalidating_attribute (tree *node, tree name, tree, int,
 				    bool *no_add_attrs)
 {
+  if (TREE_CODE (*node) == PARM_DECL)
+    {
+      tree type = TREE_TYPE (*node);
+      if (TREE_CODE (type) == REFERENCE_TYPE || TREE_CODE (type) == POINTER_TYPE)
+	type = TREE_TYPE (type);
+      if (!CLASS_TYPE_P (type))
+	{
+	  error_at (input_location,
+		    "%qE only supported on a parameter of class type, "
+		    "or reference/pointer to class type", name);
+	  *no_add_attrs = true;
+	}
+      return NULL_TREE;
+    }
   if (TREE_CODE (*node) != FUNCTION_DECL || !DECL_IOBJ_MEMBER_FUNCTION_P (*node))
     {
       error_at (input_location,
-		"%qE only supported on a non-static member function", name);
+		"%qE only supported on a non-static member function or a "
+		"parameter", name);
       *no_add_attrs = true;
     }
   return NULL_TREE;
@@ -5878,6 +5912,8 @@ static const attribute_spec std_attributes[] =
   { "must_init", 0, 0, true, false, false, false,
     handle_must_init_attribute, NULL },
   { "owning_ptr", 0, 0, true, false, false, false,
+    handle_owning_ptr_attribute, NULL },
+  { "owner", 0, 0, true, false, false, false,
     handle_owning_ptr_attribute, NULL },
   { "not_invalidating", 0, 0, true, false, false, false,
     handle_not_invalidating_attribute, NULL },
