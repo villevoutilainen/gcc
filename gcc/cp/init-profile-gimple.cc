@@ -767,6 +767,14 @@ ip_block_dominated_by_init_p (basic_block bb, vec<gimple *> &init_stmts)
    S5.1's guarantee -- that a member so exempted really is
    "initialized before [it is] exposed to users of the class" -- via
    the same CFG-dominance-based DAA as an address-taken local.
+   [[uninit]] only exempts FIELD from the member-initializer-list/
+   NSDMI requirement specifically (see member-body-daa-ok.C's own
+   "the paper's own flagship example" -- a [[uninit]] member
+   definitely assigned by every exit path via straight-line body code,
+   or via a recognized [[must_init]] call, is accepted; one left
+   completely untouched, member-body-daa-bad.C's own NeverInit, is
+   not) -- it does not exempt FIELD from ever needing initialization
+   by the time the object is exposed.
 
    Unlike ip_check_address_taken_var, "must be exposed initialized"
    isn't only about protecting in-body reads -- every ordinary RETURN
