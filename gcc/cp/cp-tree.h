@@ -3357,7 +3357,30 @@ struct GTY(()) lang_decl_fn {
      full list of touch points that set this bit.  */
   unsigned might_need_oa_scan_p : 1;
 
-  /* 31-bits padding on 64-bit host.  */
+  /* True once oa_synthesize_implicit_reference_safety_preconditions
+     (contracts.cc) has already synthesized this exact decl's own
+     implicit is_object_address precondition(s) for its reference
+     parameters/'this' -- the idempotency guard for that function's
+     "called from multiple, independent sites for the same decl" design
+     (see its own comment). Deliberately a bit ON the decl itself, not
+     an external hash_set<tree>: a hash_set of tree pointers is not GC-
+     rooted, so a discarded "trial" FUNCTION_DECL (e.g. grokfndecl's own
+     scratch decl for an out-of-class member definition, thrown away
+     once duplicate_decls resolves to the real, previously-declared
+     decl instead) can be collected and its address reused for a later,
+     completely unrelated decl -- which the old hash_set-based guard
+     then wrongly treated as "already synthesized", silently skipping
+     synthesis entirely. Found and fixed 2026-09-04: 'path::end()'s
+     out-of-class definition (bits/fs_path.h) got skipped this way
+     because its own trial decl happened to reuse the just-freed
+     address of 'path::begin()'s trial decl moments earlier, causing a
+     "mismatched contract control object" between its (correctly, 2-
+     entry) in-class declaration and its (wrongly, 1-entry) definition.
+     A per-decl bit can never collide this way: a freshly allocated
+     tree node always starts with every lang_decl_fn bit clear.  */
+  unsigned oa_refsafety_synthesized_p : 1;
+
+  /* 30-bits padding on 64-bit host.  */
 
   /* For a non-thunk function decl, this is a tree list of
      friendly classes. For a thunk function decl, it is the
@@ -3956,6 +3979,18 @@ struct GTY(()) lang_decl {
 #define SET_DECL_MIGHT_NEED_OA_SCAN_P(NODE) \
   (retrofit_lang_decl (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE))),	\
    LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->might_need_oa_scan_p = true)
+
+/* True once NODE's own implicit reference-safety preconditions have
+   already been synthesized -- see lang_decl_fn's own
+   oa_refsafety_synthesized_p for why this lives on the decl itself
+   rather than in an external hash_set<tree>.  */
+#define DECL_OA_REFSAFETY_SYNTHESIZED_P(NODE) \
+  (DECL_LANG_SPECIFIC (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE)))	\
+   ? LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->oa_refsafety_synthesized_p \
+   : false)
+#define SET_DECL_OA_REFSAFETY_SYNTHESIZED_P(NODE) \
+  (retrofit_lang_decl (FUNCTION_DECL_CHECK (STRIP_TEMPLATE (NODE))),	\
+   LANG_DECL_FN_CHECK (STRIP_TEMPLATE (NODE))->oa_refsafety_synthesized_p = true)
 
 /* True if FNDECL was declared with the D4324 'conveyor(auto)' form
    rather than plain 'conveyor': its conveyor-ness is deduced per

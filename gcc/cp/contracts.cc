@@ -3969,11 +3969,6 @@ static tree lookup_is_object_address_template ();
    correctly for each instantiation exactly like any other precondition,
    with no separate per-instantiation logic needed here.  */
 
-/* Every FNDECL this has already synthesized preconditions for -- see the
-   idempotency guard just below. Lazily allocated, never cleared (a
-   FUNCTION_DECL's identity is stable for the whole compilation).  */
-static hash_set<tree> *oa_synthesized_functions;
-
 /* True if FNDECL has at least one of its own precondition/postcondition
    specifiers whose control object is conveyor-like (is_conveyor, or
    either of the two traits that imply it -- analyzed_conveyor/
@@ -4061,8 +4056,8 @@ oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
      contracts finishes (both of its own call sites, parser.cc), by which
      point nothing in the list is deferred anymore.
 
-     D4324/P2680: the idempotency guard just below (oa_synthesized_
-     functions) must come AFTER this check, not before -- a deferred
+     D4324/P2680: the idempotency guard just below (DECL_OA_REFSAFETY_
+     SYNTHESIZED_P) must come AFTER this check, not before -- a deferred
      call that hits the early return above never actually synthesizes
      anything, so marking FNDECL as "already synthesized" at that point
      would cause the LATER, REAL retry call (once the deferred contracts
@@ -4084,10 +4079,33 @@ oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
       && !oa_fndecl_has_conveyor_active_contract_p (fndecl))
     return;
 
-  if (!oa_synthesized_functions)
-    oa_synthesized_functions = new hash_set<tree> ();
-  if (oa_synthesized_functions->add (fndecl))
+  /* D4324/P2680: found and fixed 2026-09-04 -- this guard used to be an
+     external 'hash_set<tree> *', keyed by FNDECL's own pointer. That set
+     is not GC-rooted, so a FNDECL referenced ONLY from it (e.g.
+     grokfndecl's own throwaway "trial" decl for an out-of-class member
+     definition, built to disambiguate against the class's in-class
+     declaration via check_classfn, then discarded once duplicate_decls
+     resolves to the real, previously-declared decl instead -- decl.cc,
+     around the 'return old_decl' after 'ok = duplicate_decls (...)')
+     could be collected, and its address later reused for a completely
+     unrelated decl. Confirmed via direct testing: 'std::filesystem::
+     path::end()'s own trial decl (bits/fs_path.h) was allocated at the
+     exact address 'path::begin()'s own (already-processed, by-then-
+     discarded) trial decl had just been freed from -- so this guard
+     wrongly treated 'end()' as already synthesized and skipped it
+     entirely, leaving its out-of-class definition with only its user-
+     written precondition where its in-class declaration had two (the
+     user's plus the synthesized one) -- a positional mismatch that
+     match_contract_specifiers (this file) reported as "mismatched
+     contract control object in declaration", comparing the
+     declaration's synthesized entry against the definition's user-
+     written one. A bit stored ON the decl itself, rather than in an
+     external set keyed by the decl's address, cannot suffer this: a
+     freshly allocated tree node always starts with the bit clear,
+     regardless of what address it happens to occupy.  */
+  if (DECL_OA_REFSAFETY_SYNTHESIZED_P (fndecl))
     return;
+  SET_DECL_OA_REFSAFETY_SYNTHESIZED_P (fndecl);
 
   /* A constructor's own 'this' names an object that doesn't exist yet --
      the whole point of a constructor is to bring one into existence --
