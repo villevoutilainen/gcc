@@ -112,14 +112,15 @@ void array_bulk_init (int i)
 //     and a trivial default constructor is treated like a scalar --
 //     a full initializer at the declaration is enough. A constructor
 //     covering every member -- via the member-initializer-list, an
-//     NSDMI, or straight-line body code for a member marked
-//     [[uninit]]/[[ref_to_uninit]] to exempt it from the first two --
-//     is accepted too, one flavor per struct below. Each is actually
-//     instantiated (classes(), not just defined): an inline
-//     constructor that's declared but never called never gets
-//     GIMPLE-compiled at all, so merely defining these would never
-//     exercise the checker that verifies them
-//     (ip_check_constructor_member, init-profile-gimple.cc). ---
+//     NSDMI, or (for a member marked literally [[uninit]]) not
+//     covering it at all, since the entire point of [[uninit]] is
+//     that no promise is made even by the constructor -- is accepted
+//     too, one flavor per struct below. Each is actually instantiated
+//     (classes(), not just defined): an inline constructor that's
+//     declared but never called never gets GIMPLE-compiled at all, so
+//     merely defining these would never exercise the checker that
+//     verifies them (ip_check_constructor_member, init-profile-
+//     gimple.cc). ---
 
 struct Aggregate
 {
@@ -147,21 +148,20 @@ struct CoveredByNsdmi
   CoveredByNsdmi (int x) : m2{x} {}
 };
 
-// [[uninit]] exempts m2 from the member-initializer-list/NSDMI
-// requirement -- it does not exempt it from ever needing a value:
-// straight-line body code still has to assign it on every path
-// before the constructor returns, exactly like an address-taken
-// [[uninit]] local does.
-struct MemberDefinitelyAssignedInBody
+// m2 is genuinely never assigned anywhere -- and that's fine: no
+// promise is made about a literally-[[uninit]] member even by its own
+// constructor, only checked (elsewhere, not yet by this pass) at
+// whatever point something actually reads it.
+struct MemberDeliberatelyUninit
 {
   int m1;
   int m2 [[uninit]];
-  MemberDefinitelyAssignedInBody (int x) : m1{x}
-  {
-    m2 = x;
-  }
+  MemberDeliberatelyUninit (int x) : m1{x} {}
 };
 
+// A [[ref_to_uninit]] member is different: its own pointer VALUE
+// still needs a real assignment (here, via the member-initializer-
+// list) -- only its pointee's content is exempted.
 struct MemberPointsToUninit
 {
   int m1;
@@ -173,7 +173,7 @@ void classes ()
 {
   CoveredByCtorList c1 (1);
   CoveredByNsdmi c2 (2);
-  MemberDefinitelyAssignedInBody c3 (3);
+  MemberDeliberatelyUninit c3 (3);
   int scratch = 0;
   MemberPointsToUninit c4 (4, &scratch);
   (void) c1;

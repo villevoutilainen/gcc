@@ -757,33 +757,42 @@ ip_block_dominated_by_init_p (basic_block bb, vec<gimple *> &init_stmts)
   return false;
 }
 
-/* P4222 Phase 4d (S5.1-S5.3, the paper's own flagship 'X::p' example):
-   the constructor-body counterpart of ip_check_address_taken_var, for
-   a single [[uninit]]/[[ref_to_uninit]]-marked FIELD of the class
-   THIS_PARM constructs.  Phase 4b's own front-end check (init.cc)
-   already confirmed FIELD isn't covered by the member-initializer-
-   list or an NSDMI (that's exactly why it's still marked [[uninit]]
-   and reaches this function at all); this verifies the OTHER half of
-   S5.1's guarantee -- that a member so exempted really is
-   "initialized before [it is] exposed to users of the class" -- via
-   the same CFG-dominance-based DAA as an address-taken local.
-   [[uninit]] only exempts FIELD from the member-initializer-list/
-   NSDMI requirement specifically (see member-body-daa-ok.C's own
-   "the paper's own flagship example" -- a [[uninit]] member
-   definitely assigned by every exit path via straight-line body code,
-   or via a recognized [[must_init]] call, is accepted; one left
-   completely untouched, member-body-daa-bad.C's own NeverInit, is
-   not) -- it does not exempt FIELD from ever needing initialization
-   by the time the object is exposed.
+/* P4222 Phase 4d (S5.1-S5.3): the constructor-body counterpart of
+   ip_check_address_taken_var, for a single [[uninit]]/[[ref_to_uninit]]-
+   marked FIELD of the class THIS_PARM constructs.  Phase 4b's own
+   front-end check (init.cc) already confirmed FIELD isn't covered by
+   the member-initializer-list or an NSDMI (that's exactly why it's
+   still marked [[uninit]]/[[ref_to_uninit]] and reaches this function
+   at all).
 
-   Unlike ip_check_address_taken_var, "must be exposed initialized"
-   isn't only about protecting in-body reads -- every ordinary RETURN
-   point of the constructor itself must also be dominated by an
-   initializing write, since past that point the object is visible to
-   callers.  EH-unwind edges (EDGE_EH) are excluded: a constructor that
-   exits via an exception never actually brings the object into
-   existence from a caller's perspective, so nothing is "exposed"  on
-   that path.  */
+   A member marked [[ref_to_uninit]]/[[must_init]] is a pointer/
+   reference whose POINTEE may be uninitialized -- the pointer VALUE
+   itself still has to exist before the object is exposed to callers,
+   exactly like any other member; only what it points to is exempted.
+   For such a FIELD, every ordinary RETURN point of the constructor
+   must be dominated by an initializing write, the "OTHER half of
+   S5.1's guarantee" this function's own read-before-write check
+   below only covers in-body reads for.  EH-unwind edges (EDGE_EH) are
+   excluded: a constructor that exits via an exception never actually
+   brings the object into existence from a caller's perspective, so
+   nothing is "exposed" on that path.
+
+   A member marked literally [[uninit]] (the object itself, not a
+   pointer to one, is uninitialized) has no such requirement: the
+   entire point of [[uninit]] is "no promise is made here, not even by
+   the constructor -- verify it later, at whatever point something
+   actually reads it" (confirmed directly, 2026-09-04, after an
+   earlier attempt in this same session to draw exactly this
+   distinction was itself reverted based on a since-corrected reading
+   of two now-fixed sibling tests, member-body-daa-ok.C/-bad.C, that
+   had encoded the OPPOSITE, wrong assumption). A read-before-write
+   within the SAME constructor body is still flagged regardless of
+   which kind of FIELD it is (the loop just below): that read is
+   something this pass CAN see and prove unsound, unlike a
+   member's eventual use from outside the constructor entirely, which
+   this function has no visibility into and doesn't attempt to check
+   (see ip_arg_uninit_flavored_p's own comment on that being future,
+   cross-function work).  */
 
 static void
 ip_check_constructor_member (function *fun, tree this_parm, tree field,
@@ -825,6 +834,14 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field,
       error_at (gimple_location (read_stmt),
 		"member %qD read before it is definitely assigned, under "
 		"the %<std::init%> profile", field);
+
+  /* A field marked literally [[uninit]] (as opposed to a pointer/
+     reference merely marked [[ref_to_uninit]]/[[must_init]], whose
+     own pointer VALUE still needs to exist) is exempt from ever
+     needing a write inside the constructor at all -- see this
+     function's own comment above.  */
+  if (lookup_attribute ("uninit", DECL_ATTRIBUTES (field)))
+    return;
 
   bool exit_ok = true;
   edge e;

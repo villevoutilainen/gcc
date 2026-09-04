@@ -1,26 +1,21 @@
 // P4222 Initialization profile, Phase 4b (S5.1-S5.3): a constructor
 // covering every member -- via the member-initializer-list, an NSDMI,
-// or straight-line body code for a member marked [[uninit]]/
-// [[ref_to_uninit]] to exempt it from the first two -- is accepted.
+// or (for a member marked literally [[uninit]]) not covering it at
+// all, since the entire point of [[uninit]] is that no promise is
+// made even by the constructor -- is accepted. A [[ref_to_uninit]]
+// member is different: its own pointer VALUE still needs to be
+// assigned somewhere (the member-initializer-list here), only its
+// pointee is exempted.
 //
 // Each struct is also actually instantiated below (use_them), not
 // just defined: an inline constructor that's declared but never
 // called never gets GIMPLE-compiled at all, so this file's own
 // per-member checker (ip_check_constructor_member, init-profile-
 // gimple.cc) previously never even ran on any of these, and this test
-// passed without ever exercising the thing it claims to verify.
-// Found 2026-09-04: OkUninitMember's own m2 was never actually
-// written anywhere -- an invalid example that only "passed" because
-// it was never instantiated. [[uninit]] exempts a member from the
-// member-initializer-list/NSDMI requirement specifically (S5.1); it
-// does NOT exempt it from ever needing initialization by the time the
-// object is exposed to callers -- that's still enforced via the same
-// CFG-dominance-based DAA an address-taken local gets, matching
-// member-body-daa-ok.C's own "paper's own flagship example" (a
-// [[uninit]] member assigned via straight-line body code) and
-// member-body-daa-bad.C's own NeverInit (one left untouched entirely,
-// correctly rejected). Fixed by giving OkUninitMember's own m2 that
-// same straight-line write, instead of loosening the checker itself.
+// passed without ever exercising the thing it claims to verify. See
+// member-body-daa-ok.C/-bad.C for the same distinction exercised via
+// real CFG-dominance-based DAA (conditionally-assigned, read-before-
+// write, and never-assigned-at-all member shapes).
 // { dg-do compile { target c++11 } }
 
 [[profiles::enforce(std::init)]];
@@ -40,10 +35,7 @@ struct OkNSDMI {
 struct OkUninitMember {
   int m1;
   int m2 [[uninit]];
-  OkUninitMember (int x) : m1{x}
-  {
-    m2 = x;
-  }
+  OkUninitMember (int x) : m1{x} {}
 };
 
 struct OkRefToUninitMember {
