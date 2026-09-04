@@ -9662,6 +9662,30 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
   if (type == error_mark_node)
     return;
 
+  /* P3589: profiles::suppress's real semantic effect -- register this
+     declaration's own source extent as suppressed for whichever
+     profile(s) an attached '[[profiles::suppress(profile)]]' names
+     (tree.cc's own handle_profiles_suppress_attribute is what lets the
+     attribute survive parsing onto DECL_ATTRIBUTES at all, unlike
+     profiles::enforce/exempt, which attach to nothing and are
+     consumed and discarded directly by the parser). Done as early as
+     possible in this function -- before any of the checks below, all
+     of which consult profiles_header_exempt_p (and so this registry)
+     -- so a diagnostic this SAME cp_finish_decl call might otherwise
+     raise against DECL itself is already covered by the time it's
+     checked. Multiple suppress attributes on the same declaration
+     (one per profile) are all honored, not just the first.  */
+  for (tree attr = lookup_attribute ("profiles", "suppress",
+				      DECL_ATTRIBUTES (decl));
+       attr; attr = lookup_attribute ("profiles", "suppress",
+				      TREE_CHAIN (attr)))
+    {
+      tree name = TREE_VALUE (TREE_VALUE (attr));
+      profiles_register_suppression (IDENTIFIER_POINTER (name),
+				      DECL_SOURCE_LOCATION (decl),
+				      input_location);
+    }
+
   /* D4324: every local variable in a conveyor function or predicate
      must be explicitly initialized at its point of declaration.
      Checked here (with the as-parsed INIT, before any of the

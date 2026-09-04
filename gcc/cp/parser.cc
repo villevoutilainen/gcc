@@ -33851,6 +33851,31 @@ cp_parser_std_attribute (cp_parser *parser, tree attr_ns)
     vec<tree, va_gc> *vec;
     int attr_flag = normal_attr;
 
+    /* D4324/P3589: profiles::enforce/profiles::suppress/profiles::exempt
+       argument parsing always uses these special-cased grammars
+       (a dotted profile-designator, or exempt's own identifier:
+       string-literal pairs), regardless of whether the attribute is
+       separately registered via decl_attributes -- checked here,
+       before that registration is even consulted, so that registering
+       profiles::suppress (needed so it can actually attach to a DECL
+       and survive into DECL_ATTRIBUTES, unlike enforce/exempt, which
+       are consumed and discarded by the parser itself with no DECL to
+       attach to) doesn't make this fall through to the generic
+       parenthesized-expression-list parsing further down, which
+       cannot parse 'std::init' as an ordinary expression at all.  */
+    if (attr_ns == profiles_identifier
+	&& (is_attribute_p ("enforce", attr_id)
+	    || is_attribute_p ("suppress", attr_id)))
+      {
+	cp_parser_profiles_attribute_args (parser, attribute);
+	return attribute;
+      }
+    if (attr_ns == profiles_identifier && is_attribute_p ("exempt", attr_id))
+      {
+	cp_parser_profiles_exempt_args (parser, attribute);
+	return attribute;
+      }
+
     /* Maybe we don't expect to see any arguments for this attribute.  */
     const attribute_spec *as
       = lookup_attribute_spec (TREE_PURPOSE (attribute));
@@ -33911,28 +33936,12 @@ cp_parser_std_attribute (cp_parser *parser, tree attr_ns)
 	      }
 	  }
 
-	/* D4324/P3589: profiles::enforce/profiles::suppress argument
-	   parsing -- see cp_parser_profiles_attribute_args's own comment
-	   for the (deliberately minimal, for now) grammar.
-	   profiles::require isn't implemented yet; it falls through to
+	/* profiles::enforce/profiles::suppress/profiles::exempt are
+	   handled unconditionally above, before AS is even looked up --
+	   profiles::require isn't implemented yet, and falls through to
 	   the generic "skip balanced tokens" handling just below like any
 	   other not-yet-recognized attribute, same as it would if this
 	   whole namespace didn't exist at all.  */
-	if (attr_ns == profiles_identifier
-	    && (is_attribute_p ("enforce", attr_id)
-		|| is_attribute_p ("suppress", attr_id)))
-	  {
-	    cp_parser_profiles_attribute_args (parser, attribute);
-	    return attribute;
-	  }
-
-	/* P3589, Phase 5: profiles::exempt argument parsing -- see
-	   cp_parser_profiles_exempt_args's own comment for the grammar.  */
-	if (attr_ns == profiles_identifier && is_attribute_p ("exempt", attr_id))
-	  {
-	    cp_parser_profiles_exempt_args (parser, attribute);
-	    return attribute;
-	  }
 
 	/* For unknown attributes, just skip balanced tokens instead of
 	   trying to parse the arguments.  Set TREE_VALUE (attribute) to

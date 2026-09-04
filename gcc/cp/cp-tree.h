@@ -9063,6 +9063,7 @@ extern bool is_byte_access_type_not_plain_char	(tree);
 extern const struct scoped_attribute_specs cxx_gnu_attribute_table;
 extern const struct scoped_attribute_specs cxx_clang_attribute_table;
 extern const struct scoped_attribute_specs std_attribute_table;
+extern const struct scoped_attribute_specs profiles_attribute_table;
 extern const struct scoped_attribute_specs internal_attribute_table;
 extern tree make_ptrmem_cst			(tree, tree);
 extern tree cp_build_type_attribute_variant     (tree, tree);

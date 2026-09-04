@@ -5858,6 +5858,30 @@ handle_not_invalidating_attribute (tree *node, tree name, tree, int,
   return NULL_TREE;
 }
 
+/* P3589's [[profiles::suppress(profile-designator)]]: suppresses the
+   named profile's diagnostics for the single declaration this
+   attribute is attached to (its own "dominion" -- a lexical scope,
+   not an interval spanning other, later code, unlike profiles::
+   exempt's own header-based one). Unlike profiles::enforce/exempt,
+   which attach to nothing (an empty-declaration) and are consumed and
+   discarded directly by the parser (cp_parser_profiles_attribute_args
+   et al.), this needs to actually survive onto the DECL's own
+   DECL_ATTRIBUTES so cp_finish_decl (decl.cc) can, once the
+   declaration is fully parsed and its own source extent is known,
+   register the suppression's real range (profiles_register_
+   suppression, profiles.cc). This handler itself does no real work --
+   TREE_VALUE (of the attribute's own TREE_VALUE, per cp_parser_
+   profiles_attribute_args's shape) is the parsed profile-name
+   identifier, read back out in cp_finish_decl, not here.  No
+   placement restriction: any declaration can plausibly want a
+   profile's diagnostics suppressed.  */
+
+static tree
+handle_profiles_suppress_attribute (tree *, tree, tree, int, bool *)
+{
+  return NULL_TREE;
+}
+
 /* Table of valid C++ attributes.  */
 // clang-format off
 static const attribute_spec cxx_gnu_attributes[] =
@@ -5922,6 +5946,24 @@ static const attribute_spec std_attributes[] =
 const scoped_attribute_specs std_attribute_table =
 {
   nullptr, { std_attributes }
+};
+
+/* Table of D4324/P3589 profiles:: namespace-scoped attributes.
+   profiles::enforce/profiles::exempt are NOT here: both attach only
+   to an empty-declaration (nothing to install DECL_ATTRIBUTES onto),
+   and are consumed directly by the parser instead -- see cp_parser_
+   declaration's own dispatch. profiles::suppress is different: it
+   attaches to an ordinary declaration and needs to actually survive
+   there, hence a real, registered attribute_spec.  */
+static const attribute_spec profiles_attributes[] =
+{
+  { "suppress", 1, 1, true, false, false, false,
+    handle_profiles_suppress_attribute, NULL },
+};
+
+const scoped_attribute_specs profiles_attribute_table =
+{
+  "profiles", { profiles_attributes }
 };
 
 /* Table of internal attributes.  */
