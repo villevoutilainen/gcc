@@ -9708,6 +9708,26 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
 	      "local variable %qD not initialized and not marked "
 	      "%<[[uninit]]%> under the %<std::init%> profile", decl);
 
+  /* P4222 Initialization profile: the opposite contradiction -- a
+     declaration marked [[uninit]] ("no promise is made about this
+     object's contents") that ALSO has a real initializer makes no
+     sense: the whole point of [[uninit]] is to opt out of requiring
+     one at all, not to be paired with one.  Unlike the check just
+     above, this applies to any VAR_DECL or FIELD_DECL carrying the
+     attribute (the latter covers a class member with a default
+     member initializer -- grokfield calls cp_finish_decl for a
+     FIELD_DECL the same way a local VAR_DECL reaches here), not only
+     local scalar/array automatic variables -- the contradiction is in
+     the attribute's own meaning, independent of storage duration,
+     type, or whether it's a local or a member.  */
+  if ((VAR_P (decl) || TREE_CODE (decl) == FIELD_DECL) && init
+      && lookup_attribute ("uninit", DECL_ATTRIBUTES (decl))
+      && profiles_enforced_p ("std::init")
+      && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (decl), "std::init"))
+    error_at (DECL_SOURCE_LOCATION (decl),
+	      "%qD is marked %<[[uninit]]%> but also has an initializer, "
+	      "under the %<std::init%> profile", decl);
+
   /* P4222 Initialization profile, Phase 3: a local pointer declaration
      initialized directly from another local's address (the paper's
      own primary [[ref_to_uninit]] examples, P4222 S4.3) must have its
