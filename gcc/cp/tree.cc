@@ -5704,15 +5704,20 @@ handle_uninit_attribute (tree *node, tree name, tree, int,
 }
 
 /* P4222's [[ref_to_uninit]] attribute (Initialization profile, Phase
-   3/4b): marks a pointer PARM_DECL/VAR_DECL, or a pointer non-static
-   data member FIELD_DECL (Phase 4b, P4222 S5.3), as referring to
-   [[uninit]] memory rather than the default-presumed-initialized
-   pointee (P4222 S4.3).  Restricted to POINTER_TYPE for this
-   increment -- the paper also allows this on references and "smart
-   pointers" (S4.3, S9.3), but this project's checker (profiles.cc's
-   own profiles_uninit_pointee_p, and init-profile-gimple.cc) only
-   reasons about raw pointers so far; erroring here rather than
-   silently accepting an unchecked reference/smart-pointer use.  */
+   3/4b): marks a pointer or reference PARM_DECL/VAR_DECL, or a pointer
+   or reference non-static data member FIELD_DECL (Phase 4b, P4222
+   S5.3), as referring to [[uninit]] memory rather than the
+   default-presumed-initialized pointee (P4222 S4.3).  Restricted to
+   POINTER_TYPE/REFERENCE_TYPE for this increment -- the paper also
+   allows this on "smart pointers" (S4.3, S9.3), but this project's
+   checker (profiles.cc's own profiles_uninit_pointee_p, and
+   init-profile-gimple.cc) only reasons about raw pointers/references so
+   far (REFERENCE_TYPE added specifically for std::now_init_in_place,
+   <utility>: a reference parameter is lowered to the exact same
+   ADDR_EXPR-of-the-argument GIMPLE shape a pointer parameter is, so the
+   existing call-site matching needs no changes of its own -- see that
+   function's own comment); erroring here rather than silently accepting
+   an unchecked smart-pointer use.  */
 
 static tree
 handle_ref_to_uninit_attribute (tree *node, tree name, tree, int,
@@ -5720,11 +5725,12 @@ handle_ref_to_uninit_attribute (tree *node, tree name, tree, int,
 {
   if ((TREE_CODE (*node) != PARM_DECL && !VAR_P (*node)
        && TREE_CODE (*node) != FIELD_DECL)
-      || TREE_CODE (TREE_TYPE (*node)) != POINTER_TYPE)
+      || (TREE_CODE (TREE_TYPE (*node)) != POINTER_TYPE
+	  && TREE_CODE (TREE_TYPE (*node)) != REFERENCE_TYPE))
     {
       error_at (input_location,
-		"%qE only supported on a pointer-typed parameter, "
-		"variable, or non-static data member", name);
+		"%qE only supported on a pointer- or reference-typed "
+		"parameter, variable, or non-static data member", name);
       *no_add_attrs = true;
       return NULL_TREE;
     }
@@ -5753,17 +5759,28 @@ handle_ref_to_uninit_attribute (tree *node, tree name, tree, int,
    own body, the same "never read a callee's definition" boundary
    D4324's own conveyor engine enforces (see contracts.cc's oa_
    provable_p and this project's own standing rule on caller-side
-   proofs).  */
+   proofs).  Allowed on REFERENCE_TYPE as well as POINTER_TYPE: a
+   reference parameter carrying this is std::now_init_in_place's
+   (<utility>) own mechanism for asserting that a *named object* --
+   not merely whatever pointer expression happens to reach it -- is now
+   initialized, precisely because a reference can't be re-seated to
+   alias something else the way a pointer can, and because it lowers to
+   the identical ADDR_EXPR-of-the-argument GIMPLE call shape a pointer
+   argument does (verified directly: see the profiles plan's own
+   now_init_in_place addendum) -- init-profile-gimple.cc's existing
+   call-site matching needs no changes to pick this up.  */
 
 static tree
 handle_must_init_attribute (tree *node, tree name, tree, int,
 			     bool *no_add_attrs)
 {
   if (TREE_CODE (*node) != PARM_DECL
-      || TREE_CODE (TREE_TYPE (*node)) != POINTER_TYPE)
+      || (TREE_CODE (TREE_TYPE (*node)) != POINTER_TYPE
+	  && TREE_CODE (TREE_TYPE (*node)) != REFERENCE_TYPE))
     {
       error_at (input_location,
-		"%qE only supported on a pointer-typed parameter", name);
+		"%qE only supported on a pointer- or reference-typed "
+		"parameter", name);
       *no_add_attrs = true;
     }
   return NULL_TREE;

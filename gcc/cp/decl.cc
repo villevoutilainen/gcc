@@ -12598,7 +12598,15 @@ grokfndecl (tree ctype,
     unsigned pos = 1;
     for (t = parms; t; t = DECL_CHAIN (t), ++pos)
       {
-	if (TREE_CODE (TREE_TYPE (t)) != POINTER_TYPE)
+	/* REFERENCE_TYPE alongside POINTER_TYPE: std::now_init_in_place's
+	   (<utility>) own [[must_init]] reference parameter needs its
+	   flavor recorded here exactly like a pointer parameter's --
+	   see handle_must_init_attribute's own comment (tree.cc) for why
+	   this is sound (a reference lowers to the same ADDR_EXPR call
+	   shape a pointer does, so nothing downstream needs to know
+	   which one it started as).  */
+	if (TREE_CODE (TREE_TYPE (t)) != POINTER_TYPE
+	    && TREE_CODE (TREE_TYPE (t)) != REFERENCE_TYPE)
 	  continue;
 	bool must_init
 	  = lookup_attribute ("must_init", DECL_ATTRIBUTES (t)) != NULL_TREE;

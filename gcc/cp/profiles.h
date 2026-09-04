@@ -52,13 +52,17 @@ extern bool profiles_enforced_p (const char *);
    no-op when its profile isn't enforced.  */
 extern void init_profiles (void);
 
-/* True if DECL (a PARM_DECL or VAR_DECL of pointer type) is flavored
-   "points to [[uninit]] memory" -- carries [[ref_to_uninit]] directly,
-   or [[must_init]], which implies it (P4222 S9.3: "[[must_init]]
-   implies [[ref_to_uninit]]").  Shared between the front-end
-   declaration-time check (decl.cc) and the GIMPLE-level call-site/
-   dominance checker (init-profile-gimple.cc), so both sides agree on
-   exactly one definition of "uninit-flavored".  */
+/* True if DECL (a PARM_DECL or VAR_DECL of pointer or reference type)
+   is flavored "points to [[uninit]] memory" -- carries
+   [[ref_to_uninit]] directly, or [[must_init]], which implies it
+   (P4222 S9.3: "[[must_init]] implies [[ref_to_uninit]]").  Shared
+   between the front-end declaration-time check (decl.cc) and the
+   GIMPLE-level call-site/dominance checker (init-profile-gimple.cc), so
+   both sides agree on exactly one definition of "uninit-flavored" --
+   this function itself never inspects DECL's type at all (a pure
+   attribute-presence check), so it already worked for a reference the
+   moment tree.cc's attribute handlers started accepting one; only they
+   ever actually gated on POINTER_TYPE.  */
 extern bool profiles_uninit_pointee_p (tree decl);
 
 /* True if FNDECL's parameter at 1-based POSITION carries
