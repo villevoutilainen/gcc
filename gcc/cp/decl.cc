@@ -9674,17 +9674,13 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
      -- so a diagnostic this SAME cp_finish_decl call might otherwise
      raise against DECL itself is already covered by the time it's
      checked. Multiple suppress attributes on the same declaration
-     (one per profile) are all honored, not just the first.  */
-  for (tree attr = lookup_attribute ("profiles", "suppress",
-				      DECL_ATTRIBUTES (decl));
-       attr; attr = lookup_attribute ("profiles", "suppress",
-				      TREE_CHAIN (attr)))
-    {
-      tree name = TREE_VALUE (TREE_VALUE (attr));
-      profiles_register_suppression (IDENTIFIER_POINTER (name),
-				      DECL_SOURCE_LOCATION (decl),
-				      input_location);
-    }
+     (one per profile) are all honored, not just the first -- see
+     profiles_process_suppress_attributes's own comment (profiles.h);
+     cp_parser_statement (parser.cc) is this function's statement-level
+     counterpart, sharing the same helper.  */
+  profiles_process_suppress_attributes (DECL_ATTRIBUTES (decl),
+					 DECL_SOURCE_LOCATION (decl),
+					 input_location);
 
   /* D4324: every local variable in a conveyor function or predicate
      must be explicitly initialized at its point of declaration.
@@ -21162,6 +21158,26 @@ finish_function (bool inline_p)
      current_function_decl, so cope.  */
   if (fndecl == NULL_TREE || fndecl == error_mark_node)
     return error_mark_node;
+
+  /* P3589: profiles::suppress's real semantic effect on a function
+     DEFINITION -- a function-definition is itself a kind of
+     declaration (the paper's own wording grants suppress's dominion to
+     "the declaration or statement" the attribute appertains to), but
+     cp_finish_decl (decl.cc's own statement-level counterpart to this)
+     is never reached for one: a function never flows through it the
+     way a VAR_DECL's initializer does. Registers the whole function's
+     own source extent, DECL_SOURCE_LOCATION (fndecl) (the function's
+     own name, the same starting convention cp_finish_decl already uses
+     for a variable, not literally "right after the attribute" the way
+     the paper's wording puts it -- an accepted, already-established
+     approximation, not a new one) through INPUT_LOCATION here (just
+     past the function's own closing '}', the earliest point this
+     function can be reached) -- covering every diagnostic the rest of
+     this pass, and the later GIMPLE-level checkers, could otherwise
+     raise anywhere in FNDECL's body.  */
+  profiles_process_suppress_attributes (DECL_ATTRIBUTES (fndecl),
+					 DECL_SOURCE_LOCATION (fndecl),
+					 input_location);
 
   if (!DECL_OMP_DECLARE_REDUCTION_P (fndecl))
     finish_lambda_scope ();

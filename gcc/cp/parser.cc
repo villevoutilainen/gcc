@@ -14625,6 +14625,28 @@ cp_parser_statement (cp_parser* parser, tree in_statement_expr,
   if (statement && STATEMENT_CODE_P (TREE_CODE (statement)))
     SET_EXPR_LOCATION (statement, statement_location);
 
+  /* P3589: profiles::suppress's real semantic effect on an ordinary
+     STATEMENT (as opposed to a declaration, cp_finish_decl's own job,
+     decl.cc) -- registers this statement's own source extent
+     (STATEMENT_LOCATION, its first token, through INPUT_LOCATION, just
+     past its last, the earliest point reachable here) as suppressed
+     for whichever profile(s) an attached
+     '[[profiles::suppress(profile)]]' names.  Reaches every kind of
+     statement this function parses -- not just an expression-statement
+     -- since this is the single shared point every branch above
+     converges on before the final "ignored" check below; a compound-
+     statement used as an ordinary statement (STATEMENT.type ==
+     CPP_OPEN_BRACE further up) is no exception, so
+     '[[profiles::suppress(std::init)]] { ... }' suppresses its own
+     entire nested block, same as any other statement.  Stripped back
+     out of STD_ATTRS with remove_attribute so the warning below
+     doesn't also fire for an attribute this just gave real meaning
+     to -- same idiom this function already uses for [[fallthrough]]/
+     [[assume]] above.  */
+  profiles_process_suppress_attributes (std_attrs, statement_location,
+					 input_location);
+  std_attrs = remove_attribute ("profiles", "suppress", std_attrs);
+
   /* Allow "[[fallthrough]];" or "[[assume(cond)]];", but warn otherwise.  */
   if (std_attrs != NULL_TREE && any_nonignored_attribute_p (std_attrs))
     warning_at (attrs_loc, OPT_Wattributes,
