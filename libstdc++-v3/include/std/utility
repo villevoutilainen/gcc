@@ -184,6 +184,33 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   }
 #endif
 
+  /// P4222 (Initialization profile): assert that the [[ref_to_uninit]]
+  /// memory *__p points to has been initialized (by some means the
+  /// checker can't itself see -- e.g. placement construction through
+  /// a differently-typed pointer, or a foreign/JIT-written buffer).
+  /// An ordinary function, not compiler magic: [[must_init]]'s own
+  /// semantics (the caller trusts the callee's declared postcondition
+  /// without re-verifying its body -- see profiles.h's own
+  /// profiles_uninit_flavor_at_position_p) are exactly what this
+  /// needs, so the body below is a plain identity return.
+  template<typename _Tp>
+    [[__gnu__::__always_inline__]]
+    constexpr _Tp*
+    now_init(_Tp* __p [[must_init]]) noexcept
+    { return __p; }
+
+  /// P3446R0 (Invalidation profile): assert -- without proof -- that
+  /// the returned value contains no dangling pointer.  A local
+  /// suppression of the invalidation profile's pointer/container
+  /// escape-from-scope check (see invalidation-profile-gimple.cc's
+  /// own recognition of a call to this exact function), the
+  /// invalidation profile's analogue of now_init() above.
+  template<typename _Tp>
+    [[__gnu__::__always_inline__]]
+    constexpr _Tp
+    no_dangling(_Tp __x)
+    { return __x; }
+
 _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace
 

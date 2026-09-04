@@ -109,17 +109,21 @@ along with GCC; see the file COPYING3.  If not see
    (P3446R0 S4's own stated default), which is why an accessor like
    begin()/end() needs the annotation to avoid being treated as
    mutating merely because its non-const overload exists to return a
-   mutable iterator.  Deliberately NOT implemented here: classifying a
-   plain (non-member) function call that takes a container by
-   non-const reference as mutating too (P4296R0's own broader statement
-   of this rule) -- this increment only reaches far enough to make its
-   own worked example (see the testsuite's own d4324-profiles-
-   invalidation-rule0-rule1-*.C) provably safe or provably flagged, not
-   the full breadth of P4296R0's Negative Baseline; a virtual
-   (indirectly-dispatched) mutating call is likewise not classified as
-   mutating for the same reason (gimple_call_fndecl returns NULL_TREE
-   for those) -- both are known, documented scope limits for this
-   increment, not silent gaps.
+   mutable iterator.  ip_collect_mutations also classifies a plain
+   (non-member) function call as mutating any argument bound to a
+   reference-to-non-const or pointer-to-non-const class-typed
+   parameter, not marked [[not_invalidating]] AT THAT PARAMETER
+   POSITION (the CppCon 2026 "Profiles" talk's own slide 53:
+   "a function is assumed to invalidate a non-const argument")
+   -- a distinct annotation position from the member-function case
+   above, tracked via a synthesized "profiles_not_invalidating_flavor"
+   marker (decl.cc's grokfndecl, profiles.cc's own profiles_not_
+   invalidating_at_position_p), the same reason [[must_init]]/
+   [[ref_to_uninit]] need their own analogous marker.  A virtual
+   (indirectly-dispatched) mutating call is not classified as mutating
+   either way, since gimple_call_fndecl returns NULL_TREE for those --
+   a known, documented scope limit for this increment, not a silent
+   gap.
 
    Diagnostic ordering ("did this mutation happen before this read")
    uses plain CFG dominance plus a same-block statement scan, the same
@@ -147,6 +151,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "attribs.h"
 #include "cfg.h"
 #include "dominance.h"
+#include "hash-set.h"
 
 /* Rule #0.  Returns the TEMPLATE_DECL TYPE is a specialization of, or
    TYPE itself if it is not a class-template specialization -- the
@@ -258,17 +263,31 @@ ip_receiver_decl (tree receiver)
 }
 
 /* True if STMT is a definition (write) of VAR -- a GIMPLE_CALL or
-   GIMPLE_ASSIGN whose own LHS is exactly VAR.  */
+   GIMPLE_ASSIGN whose own LHS is exactly VAR, or a constructor call
+   whose own "this" (first) argument is &VAR (a constructor returns
+   void and writes through its first argument instead of an ordinary
+   LHS).  */
 
 static bool
 ip_defines_var_p (gimple *stmt, tree var)
 {
-  tree lhs = NULL_TREE;
   if (gimple_code (stmt) == GIMPLE_CALL)
-    lhs = gimple_call_lhs (as_a<gcall *> (stmt));
-  else if (is_gimple_assign (stmt))
-    lhs = gimple_assign_lhs (stmt);
-  return lhs == var;
+    {
+      gcall *call = as_a<gcall *> (stmt);
+      if (gimple_call_lhs (call) == var)
+	return true;
+      tree fndecl = gimple_call_fndecl (call);
+      if (fndecl && DECL_CONSTRUCTOR_P (fndecl) && gimple_call_num_args (call) >= 1)
+	{
+	  tree this_arg = gimple_call_arg (call, 0);
+	  return TREE_CODE (this_arg) == ADDR_EXPR
+		 && TREE_OPERAND (this_arg, 0) == var;
+	}
+      return false;
+    }
+  if (is_gimple_assign (stmt))
+    return gimple_assign_lhs (stmt) == var;
+  return false;
 }
 
 /* The nearest definition of VAR that provably reaches POINT (a
@@ -307,6 +326,398 @@ ip_nearest_write_before (tree var, gimple *point)
 	return last;
     }
   return NULL;
+}
+
+/* ---- Pointer/container escape-from-scope analysis (CppCon 2026
+   "Profiles" talk, slides 45-49) ----
+
+   A function must not return a pointer to one of its own locals, nor
+   a container (a class/struct that might hold pointers) built from
+   one -- and, since this checker never reads a callee's own body
+   (the same standing rule the rest of this project follows), a
+   method call on a container that was itself built from a pointer to
+   a local is conservatively flagged too, even though the specific
+   field the call's result depends on is unknown (the WidgetFactory/
+   Logger example, slides 47-48) -- unless wrapped in
+   std::no_dangling(), a manual, unproven assertion (<utility>'s own
+   definition) exactly analogous to std::now_init() for the
+   initialization profile.
+
+   ip_escapes_locally_p/ip_call_escapes_locally_p/ip_var_contents_
+   escape_locally_p are mutually recursive over: (a) SSA copies/PHIs,
+   handled the ordinary way; (b) a class-typed local's own nearest
+   reaching write (ip_nearest_write_before, the same technique Rule #1
+   above uses); (c) a call's own arguments -- with one necessary
+   special case: the RECEIVER of an ordinary (non-constructor) member
+   call is not itself flagged merely for being a local variable's
+   address (calling a method on a local object is completely
+   ordinary), but its own CONTENTS are recursed into instead, since
+   those are what could actually hold a risky pointer.  A constructor
+   call's own "this" argument is skipped outright (it names the
+   object being initialized, not an incoming value).  Anything this
+   analysis cannot trace at all is conservatively treated as
+   escaping -- default-deny, the same stance as every other check in
+   this file.  */
+
+static bool ip_escapes_locally_p (tree expr, gimple *point, int depth);
+static bool ip_var_contents_escape_locally_p (tree var, gimple *point,
+					       int depth);
+
+/* True if DECL has automatic storage duration in the CURRENT
+   function -- the only kind of variable whose address cannot safely
+   escape it (CppCon 2026 talk, slide 38: "for an object on the stack
+   or for a static object, the owner is itself" -- but stack self-
+   ownership ends when the function returns).  is_global_var already
+   answers true for a function-local 'static', which is exactly the
+   "static object" case that must NOT be treated as escaping.  */
+
+static bool
+ip_local_var_p (tree decl)
+{
+  return VAR_P (decl) && !is_global_var (decl);
+}
+
+/* True if CALL is a call to std::no_dangling -- the invalidation
+   profile's manual, unproven "this doesn't dangle" assertion (see
+   <utility>'s own definition).  */
+
+static bool
+ip_no_dangling_call_p (gcall *call)
+{
+  tree fndecl = gimple_call_fndecl (call);
+  if (!fndecl || !decl_in_std_namespace_p (fndecl))
+    return false;
+  tree name = DECL_NAME (fndecl);
+  return name && id_equal (name, "no_dangling");
+}
+
+/* True if any of CALL's arguments resolves to something that would
+   dangle if a value derived from it escaped the current function --
+   shared by both "is this call's own return value unsafe" and "was
+   this local variable's contents built from anything unsafe" (see
+   this section's own top comment for the receiver/constructor special
+   cases).  FNDECL is CALL's callee, already known non-NULL by every
+   caller.  */
+
+static bool
+ip_call_args_escape_locally_p (gcall *call, tree fndecl, int depth)
+{
+  bool is_ctor = DECL_CONSTRUCTOR_P (fndecl);
+  bool is_member = DECL_IOBJ_MEMBER_FUNCTION_P (fndecl)
+		   && gimple_call_num_args (call) >= 1;
+
+  for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+    {
+      if (i == 0 && is_ctor)
+	continue; /* The object being initialized, not an incoming value.  */
+
+      tree arg = gimple_call_arg (call, i);
+      if (i == 0 && is_member && !is_ctor)
+	{
+	  tree stripped = arg;
+	  STRIP_NOPS (stripped);
+	  if (TREE_CODE (stripped) == ADDR_EXPR
+	      && VAR_P (TREE_OPERAND (stripped, 0)))
+	    {
+	      if (ip_var_contents_escape_locally_p
+		    (TREE_OPERAND (stripped, 0), call, depth + 1))
+		return true;
+	      continue;
+	    }
+	}
+      if (ip_escapes_locally_p (arg, call, depth + 1))
+	return true;
+    }
+  return false;
+}
+
+/* True if CALL's own return value would dangle if returned/stored
+   past the current function's end.  */
+
+static bool
+ip_call_escapes_locally_p (gcall *call, int depth)
+{
+  if (depth > 16)
+    return true; /* Defensive recursion guard; never expected to trigger.  */
+  if (ip_no_dangling_call_p (call))
+    return false;
+  tree fndecl = gimple_call_fndecl (call);
+  if (!fndecl)
+    return true; /* Indirectly-dispatched call: can't see its arguments
+		    at all -- conservative default-deny, the same known,
+		    documented scope limit as Rule #0/#1's own.  */
+  return ip_call_args_escape_locally_p (call, fndecl, depth);
+}
+
+/* Collect, into *OUT, the RHS of every "VAR.field = rhs"-shaped
+   assignment reaching POINT -- the field-by-field aggregate-
+   initialization counterpart of ip_nearest_write_before's own
+   whole-object write search, needed because a class-typed return
+   value or local is very often populated field-by-field (e.g. brace
+   initialization, "Widget{}") rather than via one single whole-object
+   call or copy ip_defines_var_p can see.  Same same-block-then-
+   dominator-chain technique as ip_nearest_write_before, but collects
+   every matching write found rather than stopping at the first,
+   since more than one field may need checking.  */
+
+static void
+ip_collect_component_writes_before (tree var, gimple *point, vec<tree> *out)
+{
+  basic_block bb = gimple_bb (point);
+  for (gimple_stmt_iterator gsi = gsi_for_stmt (point); !gsi_end_p (gsi);)
+    {
+      gsi_prev (&gsi);
+      if (gsi_end_p (gsi))
+	break;
+      gimple *s = gsi_stmt (gsi);
+      if (is_gimple_assign (s) && gimple_assign_single_p (s))
+	{
+	  tree lhs = gimple_assign_lhs (s);
+	  if (TREE_CODE (lhs) == COMPONENT_REF && TREE_OPERAND (lhs, 0) == var)
+	    out->safe_push (gimple_assign_rhs1 (s));
+	}
+    }
+  for (basic_block d = get_immediate_dominator (CDI_DOMINATORS, bb); d;
+       d = get_immediate_dominator (CDI_DOMINATORS, d))
+    for (gimple_stmt_iterator gsi = gsi_start_bb (d); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      {
+	gimple *s = gsi_stmt (gsi);
+	if (is_gimple_assign (s) && gimple_assign_single_p (s))
+	  {
+	    tree lhs = gimple_assign_lhs (s);
+	    if (TREE_CODE (lhs) == COMPONENT_REF && TREE_OPERAND (lhs, 0) == var)
+	      out->safe_push (gimple_assign_rhs1 (s));
+	  }
+      }
+}
+
+/* True if TYPE could, structurally, hold a pointer/reference
+   anywhere within it -- P3446R0's own definition of "container"
+   (S6.2: "any class/struct with a raw pointer or another container
+   within"), checked recursively through embedded class-typed fields,
+   with VISITED guarding against infinite recursion through a
+   self-referential or mutually-recursive type.  A class with no such
+   field at all (VISITED's own base case, and the common case for a
+   small "handle" class in this checker's own worked examples) simply
+   cannot leak a dangling pointer no matter how it was built, so there
+   is nothing for ip_var_contents_escape_locally_p to trace -- this is
+   what actually distinguishes "provably fine, nothing to check" from
+   "unprovable, conservatively dangles".  */
+
+static bool
+ip_type_may_hold_pointer_p (tree type, hash_set<tree> *visited)
+{
+  type = TYPE_MAIN_VARIANT (type);
+  if (TREE_CODE (type) == POINTER_TYPE || TREE_CODE (type) == REFERENCE_TYPE)
+    return true;
+  if (TREE_CODE (type) == ARRAY_TYPE)
+    return ip_type_may_hold_pointer_p (TREE_TYPE (type), visited);
+  if (TREE_CODE (type) != RECORD_TYPE && TREE_CODE (type) != UNION_TYPE)
+    return false;
+  if (visited->add (type))
+    return false; /* Already visited (or currently being visited): no NEW
+		      pointer-shaped field found via this cycle.  */
+  for (tree f = TYPE_FIELDS (type); f; f = TREE_CHAIN (f))
+    if (TREE_CODE (f) == FIELD_DECL
+	&& ip_type_may_hold_pointer_p (TREE_TYPE (f), visited))
+      return true;
+  return false;
+}
+
+/* True if VAR (a class-typed local -- never itself an SSA name, see
+   this file's own top comment) was, as of its nearest reaching write
+   before POINT, built from anything that would dangle if it escaped.  */
+
+static bool
+ip_var_contents_escape_locally_p (tree var, gimple *point, int depth)
+{
+  if (depth > 16)
+    return true;
+  {
+    hash_set<tree> visited;
+    if (!ip_type_may_hold_pointer_p (TREE_TYPE (var), &visited))
+      return false; /* Structurally cannot hold a pointer -- nothing to trace.  */
+  }
+  gimple *reaching = ip_nearest_write_before (var, point);
+  if (reaching)
+    {
+      if (gimple_code (reaching) == GIMPLE_CALL)
+	{
+	  gcall *call = as_a<gcall *> (reaching);
+	  if (ip_no_dangling_call_p (call))
+	    return false;
+	  tree fndecl = gimple_call_fndecl (call);
+	  if (!fndecl)
+	    return true;
+	  return ip_call_args_escape_locally_p (call, fndecl, depth + 1);
+	}
+      if (is_gimple_assign (reaching) && gimple_assign_single_p (reaching))
+	return ip_escapes_locally_p (gimple_assign_rhs1 (reaching), reaching,
+				      depth + 1);
+      return true;
+    }
+
+  auto_vec<tree> field_values;
+  ip_collect_component_writes_before (var, point, &field_values);
+  if (field_values.is_empty ())
+    return true; /* Truly nothing found -- conservative default-deny.  */
+  for (unsigned i = 0; i < field_values.length (); ++i)
+    if (ip_escapes_locally_p (field_values[i], point, depth + 1))
+      return true;
+  return false;
+}
+
+/* True if EXPR, evaluated at POINT, would dangle if it (or a value
+   derived from it) escaped the current function by being returned.  */
+
+static bool
+ip_escapes_locally_p (tree expr, gimple *point, int depth)
+{
+  if (depth > 16)
+    return true;
+  STRIP_NOPS (expr);
+
+  if (CONSTANT_CLASS_P (expr))
+    return false; /* A literal (e.g. a null-pointer constant) never dangles.  */
+
+  if (TREE_CODE (expr) == CONSTRUCTOR)
+    {
+      /* Whole-object zero/aggregate initialization ("Widget{}"): check
+	 each initialized element's own value (an empty CONSTRUCTOR, the
+	 common case, trivially has none).  */
+      unsigned HOST_WIDE_INT i;
+      tree val;
+      FOR_EACH_CONSTRUCTOR_VALUE (CONSTRUCTOR_ELTS (expr), i, val)
+	if (val && ip_escapes_locally_p (val, point, depth + 1))
+	  return true;
+      return false;
+    }
+
+  if (TREE_CODE (expr) == ADDR_EXPR)
+    {
+      tree base = TREE_OPERAND (expr, 0);
+      return VAR_P (base) && ip_local_var_p (base);
+    }
+  if (TREE_CODE (expr) == PARM_DECL)
+    return false;
+  if (TREE_CODE (expr) == SSA_NAME)
+    {
+      if (SSA_NAME_IS_DEFAULT_DEF (expr))
+	return false; /* A parameter's own default-def; never &local.  */
+      gimple *def = SSA_NAME_DEF_STMT (expr);
+      if (gimple_code (def) == GIMPLE_PHI)
+	{
+	  gphi *phi = as_a<gphi *> (def);
+	  for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+	    if (ip_escapes_locally_p (gimple_phi_arg_def (phi, i), point,
+				       depth + 1))
+	      return true;
+	  return false;
+	}
+      if (is_gimple_assign (def) && gimple_assign_single_p (def))
+	return ip_escapes_locally_p (gimple_assign_rhs1 (def), point, depth + 1);
+      if (gimple_code (def) == GIMPLE_CALL)
+	return ip_call_escapes_locally_p (as_a<gcall *> (def), depth + 1);
+      return false; /* Some other computed value -- not itself a pointer.  */
+    }
+  if (VAR_P (expr))
+    {
+      if (is_global_var (expr))
+	return false;
+      return ip_var_contents_escape_locally_p (expr, point, depth + 1);
+    }
+  return true; /* Unrecognized shape: conservative default-deny.  */
+}
+
+/* True if S is a "VAR ={v} {CLOBBER(...)}" end-of-storage marker for
+   a local VAR_DECL of TYPE (ignoring top-level qualifiers).  */
+
+static bool
+ip_clobber_of_type_p (gimple *s, tree type)
+{
+  if (!is_gimple_assign (s) || !gimple_clobber_p (s))
+    return false;
+  tree lhs = gimple_assign_lhs (s);
+  return VAR_P (lhs)
+	 && same_type_ignoring_top_level_qualifiers_p (TREE_TYPE (lhs), type);
+}
+
+/* RETVAL is a bare RESULT_DECL ("<retval>") -- Named Return Value
+   optimization has elided the copy from some local variable entirely
+   (there is no "<retval> = result;" statement anywhere to trace via
+   ip_nearest_write_before, confirmed via a direct -fdump-tree-ssa-
+   details reading, not assumed).  NRV requires there be exactly one
+   eligible local candidate, so the local VAR_DECL whose own end-of-
+   storage clobber is the nearest one preceding POINT is, in practice,
+   that variable: every local's storage ends with exactly such a
+   clobber at scope exit, and it is the last thing to happen before
+   the return for the one NRV actually elided.  Returns NULL_TREE if
+   no such clobber can be found at all (the safe, honestly-inconclusive
+   answer -- ip_escapes_locally_p's own final "unrecognized shape"
+   fallback still applies to the bare RESULT_DECL in that case).  */
+
+static tree
+ip_resolve_nrv_var (tree retval, gimple *point)
+{
+  basic_block bb = gimple_bb (point);
+  for (gimple_stmt_iterator gsi = gsi_for_stmt (point); !gsi_end_p (gsi);)
+    {
+      gsi_prev (&gsi);
+      if (gsi_end_p (gsi))
+	break;
+      gimple *s = gsi_stmt (gsi);
+      if (ip_clobber_of_type_p (s, TREE_TYPE (retval)))
+	return gimple_assign_lhs (s);
+    }
+  for (basic_block d = get_immediate_dominator (CDI_DOMINATORS, bb); d;
+       d = get_immediate_dominator (CDI_DOMINATORS, d))
+    for (gimple_stmt_iterator gsi = gsi_start_bb (d); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      if (ip_clobber_of_type_p (gsi_stmt (gsi), TREE_TYPE (retval)))
+	return gimple_assign_lhs (gsi_stmt (gsi));
+  return NULL_TREE;
+}
+
+/* Check a single RETURN_STMT (a GIMPLE_RETURN whose return type this
+   file's caller has already confirmed is worth checking): emit a
+   diagnostic, unless header-exempted, if the returned value would
+   dangle per ip_escapes_locally_p.
+
+   Known, discovered (not assumed) limitation: a return statement that
+   directly and unconditionally returns "&local" with no other use is
+   already replaced with a null-pointer constant during
+   gimplification itself, well before any GIMPLE pass -- including
+   this one -- ever runs; that exact shape is already diagnosed by
+   GCC's own pre-existing -Wreturn-local-addr warning instead
+   (confirmed via a direct -fdump-tree-ssa-details reading, not
+   assumed: the SSA dump for such a function already shows "_N = 0B;"
+   at the very first GIMPLE dump point).  Every other shape this
+   checker cares about -- a conditional return, a pointer threaded
+   through an intermediate variable/call, and critically the
+   container-escape case (ip_var_contents_escape_locally_p) -- is
+   unaffected and still reaches this function with the real
+   expression intact.  */
+
+static void
+ip_check_return_escape (gimple *return_stmt)
+{
+  tree retval = gimple_return_retval (as_a<greturn *> (return_stmt));
+  if (!retval)
+    return;
+  if (TREE_CODE (retval) == RESULT_DECL)
+    if (tree nrv_var = ip_resolve_nrv_var (retval, return_stmt))
+      retval = nrv_var;
+  if (!ip_escapes_locally_p (retval, return_stmt, 0))
+    return;
+  if (profiles_header_exempt_p (gimple_location (return_stmt),
+				 "std::invalidation"))
+    return;
+  error_at (gimple_location (return_stmt),
+	    "returning a pointer or container that may hold a pointer "
+	    "to a local, not permitted under the %<std::invalidation%> "
+	    "profile (wrap in %<std::no_dangling%> if this is provably "
+	    "safe)");
 }
 
 /* The container declaration DEF_STMT's own effect binds its LHS to
@@ -350,29 +761,75 @@ ip_binding_established_by (gimple *def_stmt)
   return NULL_TREE;
 }
 
-/* True if CALL is a "mutating operation" this checker treats as
-   capable of invalidating other values bound to its receiver: a
-   non-const member-function call, not marked [[not_invalidating]],
-   whose receiver resolves to a single, nameable DECL.  See this
-   file's own top comment for what this deliberately does not yet
-   cover.  On success, sets *MUTATED_DECL and *MUTATED_TYPE.  */
+/* One (DECL, TYPE) pair CALL is judged to mutate -- see
+   ip_collect_mutations's own comment for how these are found.  */
 
-static bool
-ip_mutating_call_p (gcall *call, tree *mutated_decl, tree *mutated_type)
+struct ip_mutation
+{
+  tree decl;
+  tree type;
+};
+
+/* Collect into *OUT every (decl, type) pair CALL is a "mutating
+   operation" for -- capable of invalidating other values bound to
+   that decl.  Two independent sources, per the CppCon 2026 "Profiles"
+   talk's own slide 53 ("Invalidation profile summary"):
+
+   - A non-const member-function call, not marked [[not_invalidating]]
+     on the function itself, whose receiver resolves to a single,
+     nameable DECL ("A non-const function is assumed to invalidate").
+
+   - Any function (member or free) call with an argument bound to a
+     parameter of reference-to-non-const or pointer-to-non-const class
+     type, not marked [[not_invalidating]] AT THAT PARAMETER POSITION,
+     whose argument itself resolves to a single, nameable DECL ("A
+     function is assumed to invalidate a non-const argument" -- the
+     free-function half slide 43's own vector<int>& arg2 example
+     shows, distinct from the member-function case above, which is
+     checked on the function itself, not per-parameter).  A single
+     call can mutate more than one such argument, hence a vector of
+     results rather than a single pair.
+
+   See this file's own top comment for what this deliberately does
+   not yet cover (indirectly-dispatched calls: gimple_call_fndecl
+   returns NULL_TREE for those, so neither source above ever fires).  */
+
+static void
+ip_collect_mutations (gcall *call, vec<ip_mutation> *out)
 {
   tree fndecl = gimple_call_fndecl (call);
-  if (!fndecl || !DECL_IOBJ_MEMBER_FUNCTION_P (fndecl)
-      || DECL_CONST_MEMFUNC_P (fndecl)
-      || profiles_not_invalidating_p (fndecl)
-      || gimple_call_num_args (call) < 1)
-    return false;
-  tree decl = ip_receiver_decl (gimple_call_arg (call, 0));
-  if (!decl)
-    return false;
-  tree this_ptr_type = TREE_VALUE (TYPE_ARG_TYPES (TREE_TYPE (fndecl)));
-  *mutated_decl = decl;
-  *mutated_type = TREE_TYPE (this_ptr_type);
-  return true;
+  if (!fndecl)
+    return;
+
+  if (DECL_IOBJ_MEMBER_FUNCTION_P (fndecl) && !DECL_CONST_MEMFUNC_P (fndecl)
+      && !profiles_not_invalidating_p (fndecl)
+      && gimple_call_num_args (call) >= 1)
+    if (tree decl = ip_receiver_decl (gimple_call_arg (call, 0)))
+      {
+	tree this_ptr_type = TREE_VALUE (TYPE_ARG_TYPES (TREE_TYPE (fndecl)));
+	out->safe_push ({ decl, TREE_TYPE (this_ptr_type) });
+      }
+
+  tree arg_type = TYPE_ARG_TYPES (TREE_TYPE (fndecl));
+  if (DECL_IOBJ_MEMBER_FUNCTION_P (fndecl) && arg_type)
+    arg_type = TREE_CHAIN (arg_type); /* Skip the already-handled 'this'.  */
+  unsigned first_arg = DECL_IOBJ_MEMBER_FUNCTION_P (fndecl) ? 1 : 0;
+  for (unsigned i = first_arg;
+       i < gimple_call_num_args (call) && arg_type
+       && TREE_VALUE (arg_type) != void_type_node;
+       ++i, arg_type = TREE_CHAIN (arg_type))
+    {
+      tree param_type = TREE_VALUE (arg_type);
+      tree pointee = (TREE_CODE (param_type) == REFERENCE_TYPE
+		      || TREE_CODE (param_type) == POINTER_TYPE)
+		     ? TREE_TYPE (param_type) : NULL_TREE;
+      if (!pointee || !CLASS_TYPE_P (pointee) || TYPE_READONLY (pointee))
+	continue;
+      if (profiles_not_invalidating_at_position_p (fndecl, i + 1))
+	continue;
+      if (tree decl = ip_receiver_decl (gimple_call_arg (call, i)))
+	out->safe_push ({ decl, pointee });
+    }
 }
 
 /* True if MUTATING_STMT is guaranteed to have already executed by the
@@ -472,9 +929,30 @@ struct ip_use
 };
 
 /* Main per-function check.  Collects every mutating call (as defined
-   by ip_mutating_call_p) once, then walks every statement's operands
-   looking for a trackable class-typed VAR_DECL/PARM_DECL read
-   (ip_check_operand_uses does the actual Rule #0/#1 work per use).  */
+   by ip_collect_mutations) once, then walks every statement's
+   operands looking for a trackable class-typed VAR_DECL/PARM_DECL
+   read (ip_check_operand_uses does the actual Rule #0/#1 work per
+   use).  */
+
+/* True if TYPE is worth running the escape-from-scope check
+   (ip_check_return_escape) against at all: a pointer/reference, or a
+   class/union that might itself hold one ("container", P3446R0's own
+   broad sense) -- a plain scalar return can never dangle.  */
+
+static bool
+ip_escape_checkable_type_p (tree type)
+{
+  switch (TREE_CODE (type))
+    {
+    case POINTER_TYPE:
+    case REFERENCE_TYPE:
+    case RECORD_TYPE:
+    case UNION_TYPE:
+      return true;
+    default:
+      return false;
+    }
+}
 
 static unsigned int
 ip_check_function (function *fun)
@@ -483,6 +961,10 @@ ip_check_function (function *fun)
   auto_vec<tree> mutated_decls;
   auto_vec<tree> mutated_types;
   auto_vec<ip_use> uses;
+  auto_vec<gimple *> returns_to_check;
+
+  bool check_returns
+    = ip_escape_checkable_type_p (TREE_TYPE (TREE_TYPE (fun->decl)));
 
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
@@ -492,12 +974,13 @@ ip_check_function (function *fun)
 	gimple *stmt = gsi_stmt (gsi);
 	if (gcall *call = dyn_cast<gcall *> (stmt))
 	  {
-	    tree decl, type;
-	    if (ip_mutating_call_p (call, &decl, &type))
+	    auto_vec<ip_mutation> muts;
+	    ip_collect_mutations (call, &muts);
+	    for (unsigned m = 0; m < muts.length (); ++m)
 	      {
 		mutating_calls.safe_push (call);
-		mutated_decls.safe_push (decl);
-		mutated_types.safe_push (type);
+		mutated_decls.safe_push (muts[m].decl);
+		mutated_types.safe_push (muts[m].type);
 	      }
 	    for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
 	      {
@@ -512,9 +995,12 @@ ip_check_function (function *fun)
 	    if (ip_trackable_operand_p (rhs))
 	      uses.safe_push ({ stmt, rhs });
 	  }
+	else if (check_returns && gimple_code (stmt) == GIMPLE_RETURN)
+	  returns_to_check.safe_push (stmt);
       }
 
-  if (mutating_calls.is_empty () || uses.is_empty ())
+  if ((mutating_calls.is_empty () || uses.is_empty ())
+      && returns_to_check.is_empty ())
     return 0;
 
   bool dominance_computed = false;
@@ -524,9 +1010,13 @@ ip_check_function (function *fun)
       dominance_computed = true;
     }
 
-  for (unsigned i = 0; i < uses.length (); ++i)
-    ip_check_operand_uses (uses[i].stmt, uses[i].var, mutating_calls,
-			    mutated_decls, mutated_types);
+  if (!mutating_calls.is_empty () && !uses.is_empty ())
+    for (unsigned i = 0; i < uses.length (); ++i)
+      ip_check_operand_uses (uses[i].stmt, uses[i].var, mutating_calls,
+			      mutated_decls, mutated_types);
+
+  for (unsigned i = 0; i < returns_to_check.length (); ++i)
+    ip_check_return_escape (returns_to_check[i]);
 
   if (dominance_computed)
     free_dominance_info (CDI_DOMINATORS);
