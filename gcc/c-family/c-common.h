@@ -1751,6 +1751,20 @@ extern tree braced_lists_to_strings (tree, tree);
 struct contract_group_semantic_entry { const char *name; unsigned semantic; };
 extern vec<contract_group_semantic_entry> contract_group_semantic_table;
 
+/* One entry per comma-separated profile name from a
+   -fprofiles-enforced=name[,name...] occurrence (c-opts.cc's own
+   OPT_fprofiles_enforced_ case/handle_profiles_enforced_option).
+   Storage lives in c-opts.cc for the same reason contract_group_
+   semantic_table's does (this header is shared regardless of front
+   end, but only the C++ front end -- cp/profiles.cc's own profiles_
+   process_command_line_enforcement -- ever consumes it); empty and
+   unused for a non-C++ front end.  No location field: an unrecognized
+   profile name here is reported the same way an unrecognized contract
+   group semantic is, via plain error(), not error_at() -- there's no
+   meaningful source location for a command-line argument.  */
+struct profiles_enforced_entry { const char *name; };
+extern vec<profiles_enforced_entry> profiles_enforced_table;
+
 #if CHECKING_P
 namespace selftest {
   /* Declarations for specific families of tests within c-family,
