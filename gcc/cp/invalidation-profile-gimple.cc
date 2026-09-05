@@ -267,76 +267,38 @@ ip_types_provably_unrelated_p (tree type_a, tree type_b)
   return ip_class_template_decl (type_a) != ip_class_template_decl (type_b);
 }
 
-/* Rule #1 support.  True if RETURN_TYPE and RECEIVER_TYPE are both
-   class-template specializations sharing at least one common type
-   template argument -- see this file's own top comment for why this,
-   not a nested-class/TYPE_CONTEXT check, is the structural stand-in
-   for "this method's return value is an iterator/handle associated
-   with its receiver".  */
+/* Rule #1 support: true if RETURN_TYPE is a shape that could possibly
+   reference/alias its receiver's own state -- a pointer, a reference,
+   or an object of class type (RECORD_TYPE/UNION_TYPE).  This is
+   deliberately NOT trying to structurally prove "this really is an
+   iterator/handle associated with its receiver" (an earlier version of
+   this function attempted exactly that, via template-argument-sharing
+   comparisons -- abandoned after direct testing showed it fails for
+   libstdc++'s own real iterators: __normal_iterator<_Iterator,
+   _Container>, e.g. vector<int>::iterator = __normal_iterator<int*,
+   vector<int>>, is parameterized on the CONTAINER TYPE ITSELF as its
+   second argument, not a shared element type the way the toy
+   iterator<T>/ToyListIterator<T> templates used elsewhere in this
+   project's own tests are -- silently failing to establish ANY binding
+   for real standard-library iterators is a far worse failure mode than
+   over-approximating).  The general, deliberately broad assumption
+   this checker takes instead: ANY pointer, reference, or class-typed
+   return value from a non-const-receiver member call is assumed
+   POSSIBLY bound to the receiver, the same "default deny" stance
+   P4296R0 already takes everywhere else in this file -- a scalar
+   return (int, bool, an enum, ...) cannot reference anything and is
+   the only shape excluded.  Provably narrowing this back down for
+   specific, structurally-recognizable safe shapes (the same way Rule
+   #0/#1 already narrow the blanket "assumed invalidating" default back
+   down elsewhere) is future work, not attempted here.  */
 
 static bool
-ip_shares_template_argument_p (tree return_type, tree receiver_type)
+ip_call_result_may_reference_receiver_p (tree return_type)
 {
-  return_type = TYPE_MAIN_VARIANT (return_type);
-  receiver_type = TYPE_MAIN_VARIANT (receiver_type);
-  if (!CLASS_TYPE_P (return_type) || !CLASS_TYPE_P (receiver_type))
-    return false;
-  tree info_a = CLASSTYPE_TEMPLATE_INFO (return_type);
-  tree info_b = CLASSTYPE_TEMPLATE_INFO (receiver_type);
-  if (!info_a || !info_b)
-    return false;
-
-  tree args_a = INNERMOST_TEMPLATE_ARGS (TI_ARGS (info_a));
-  tree args_b = INNERMOST_TEMPLATE_ARGS (TI_ARGS (info_b));
-  for (int i = 0; i < TREE_VEC_LENGTH (args_a); ++i)
-    {
-      tree ai = TREE_VEC_ELT (args_a, i);
-      if (!TYPE_P (ai))
-	continue;
-      ai = TYPE_MAIN_VARIANT (ai);
-      for (int j = 0; j < TREE_VEC_LENGTH (args_b); ++j)
-	{
-	  tree bj = TREE_VEC_ELT (args_b, j);
-	  if (TYPE_P (bj) && ai == TYPE_MAIN_VARIANT (bj))
-	    return true;
-	}
-    }
-  return false;
-}
-
-/* The raw-pointer-return analogue of ip_shares_template_argument_p
-   just above, for a container whose "begin()"-shaped accessor returns
-   a plain T* rather than a class-typed iterator (the P3446R0/P4296R0
-   worked example's own 'vector<int>::begin() -> int*' shape) --
-   RETURN_TYPE isn't itself a class-template specialization to compare
-   argument lists with, so the comparison here is simpler and more
-   direct: is RETURN_TYPE a pointer whose pointee is EXACTLY one of
-   RECEIVER_TYPE's own template arguments (e.g. 'int*' returned from
-   'vector<int>', where 'int' is vector's own element-type argument) --
-   the raw-pointer counterpart of "this method's return value is an
-   iterator/handle associated with its receiver".  */
-
-static bool
-ip_pointer_return_binds_p (tree return_type, tree receiver_type)
-{
-  if (TREE_CODE (return_type) != POINTER_TYPE)
-    return false;
-  receiver_type = TYPE_MAIN_VARIANT (receiver_type);
-  if (!CLASS_TYPE_P (receiver_type))
-    return false;
-  tree info = CLASSTYPE_TEMPLATE_INFO (receiver_type);
-  if (!info)
-    return false;
-
-  tree pointee = TYPE_MAIN_VARIANT (TREE_TYPE (return_type));
-  tree args = INNERMOST_TEMPLATE_ARGS (TI_ARGS (info));
-  for (int i = 0; i < TREE_VEC_LENGTH (args); ++i)
-    {
-      tree ai = TREE_VEC_ELT (args, i);
-      if (TYPE_P (ai) && pointee == TYPE_MAIN_VARIANT (ai))
-	return true;
-    }
-  return false;
+  return TREE_CODE (return_type) == POINTER_TYPE
+	 || TREE_CODE (return_type) == REFERENCE_TYPE
+	 || TREE_CODE (return_type) == RECORD_TYPE
+	 || TREE_CODE (return_type) == UNION_TYPE;
 }
 
 /* Resolve RECEIVER -- a call's "this" argument at the GIMPLE level --
@@ -708,6 +670,15 @@ ip_escapes_locally_p (tree expr, gimple *point, int depth)
       tree base = TREE_OPERAND (expr, 0);
       return VAR_P (base) && ip_local_var_p (base);
     }
+  if (TREE_CODE (expr) == POINTER_PLUS_EXPR)
+    /* Pointer arithmetic ('result + n', the common
+       '++result'-in-a-loop shape libstdc++'s own
+       __uninitialized_copy_a returns -- confirmed directly by reading
+       its source, bits/stl_uninitialized.h) never changes WHETHER the
+       pointer traces back to a local, only where within the same
+       storage it points -- so this inherits its base operand's own
+       answer exactly, ignoring the offset (operand 1) entirely.  */
+    return ip_escapes_locally_p (TREE_OPERAND (expr, 0), point, depth + 1);
   if (TREE_CODE (expr) == PARM_DECL)
     return false;
   if (TREE_CODE (expr) == SSA_NAME)
@@ -809,7 +780,7 @@ ip_resolve_nrv_var (tree retval, gimple *point)
    expression intact.  */
 
 static void
-ip_check_return_escape (gimple *return_stmt)
+ip_check_return_escape (gimple *return_stmt, tree enclosing_fndecl)
 {
   tree retval = gimple_return_retval (as_a<greturn *> (return_stmt));
   if (!retval)
@@ -819,8 +790,8 @@ ip_check_return_escape (gimple *return_stmt)
       retval = nrv_var;
   if (!ip_escapes_locally_p (retval, return_stmt, 0))
     return;
-  if (profiles_header_exempt_p (gimple_location (return_stmt),
-				 "std::invalidation"))
+  if (profiles_diagnostic_exempt_p (gimple_location (return_stmt),
+				    enclosing_fndecl, "std::invalidation"))
     return;
   error_at (gimple_location (return_stmt),
 	    "returning a pointer or container that may hold a pointer "
@@ -831,10 +802,9 @@ ip_check_return_escape (gimple *return_stmt)
 
 /* The container declaration DEF_STMT's own effect binds its LHS to
    (P4296R0 S7.6.2's "proven binding"), or NULL_TREE if this checker
-   cannot establish one: a container-returning member call
-   (ip_shares_template_argument_p, for a class-typed iterator, or
-   ip_pointer_return_binds_p, for a raw-pointer-returning accessor
-   like 'vector<int>::begin() -> int*') binds to its receiver
+   cannot establish one: a member call whose return value could
+   possibly reference its receiver's own state
+   (ip_call_result_may_reference_receiver_p) binds to that receiver
    (ip_receiver_decl); a plain copy from another class-typed or
    pointer-typed declaration (ip_trackable_decl's own SSA_NAME_VAR
    unwrap -- a raw pointer's own copy is normally 'q_2 = p_1;' at this
@@ -858,10 +828,7 @@ ip_binding_established_by (gimple *def_stmt)
       if (!fndecl || !lhs || !DECL_IOBJ_MEMBER_FUNCTION_P (fndecl)
 	  || gimple_call_num_args (call) < 1)
 	return NULL_TREE;
-      tree this_ptr_type = TREE_VALUE (TYPE_ARG_TYPES (TREE_TYPE (fndecl)));
-      tree receiver_type = TREE_TYPE (this_ptr_type);
-      if (!ip_shares_template_argument_p (TREE_TYPE (lhs), receiver_type)
-	  && !ip_pointer_return_binds_p (TREE_TYPE (lhs), receiver_type))
+      if (!ip_call_result_may_reference_receiver_p (TREE_TYPE (lhs)))
 	return NULL_TREE;
       return ip_receiver_decl (gimple_call_arg (call, 0));
     }
@@ -1048,7 +1015,8 @@ ip_use_after_mutation_p (gimple *mutating_stmt, gimple *use_stmt)
 static void
 ip_check_operand_uses (gimple *use_stmt, tree var,
 			vec<gimple *> &mutating_calls,
-			vec<tree> &mutated_decls, vec<tree> &mutated_types)
+			vec<tree> &mutated_decls, vec<tree> &mutated_types,
+			tree enclosing_fndecl)
 {
   gimple *reaching = ip_nearest_write_before (var, use_stmt);
   if (!reaching)
@@ -1072,8 +1040,8 @@ ip_check_operand_uses (gimple *use_stmt, tree var,
 							  TREE_TYPE (bound_decl))));
       if (safe)
 	continue;
-      if (!profiles_header_exempt_p (gimple_location (use_stmt),
-				      "std::invalidation"))
+      if (!profiles_diagnostic_exempt_p (gimple_location (use_stmt),
+					 enclosing_fndecl, "std::invalidation"))
 	error_at (gimple_location (use_stmt),
 		  "use of a value bound to %qD, potentially invalidated "
 		  "by an earlier mutation of %qD, not permitted under the "
@@ -1240,10 +1208,10 @@ ip_check_function (function *fun)
   if (!mutating_calls.is_empty () && !uses.is_empty ())
     for (unsigned i = 0; i < uses.length (); ++i)
       ip_check_operand_uses (uses[i].stmt, uses[i].var, mutating_calls,
-			      mutated_decls, mutated_types);
+			      mutated_decls, mutated_types, fun->decl);
 
   for (unsigned i = 0; i < returns_to_check.length (); ++i)
-    ip_check_return_escape (returns_to_check[i]);
+    ip_check_return_escape (returns_to_check[i], fun->decl);
 
   if (dominance_computed)
     free_dominance_info (CDI_DOMINATORS);

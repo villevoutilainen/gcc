@@ -785,7 +785,8 @@ ip_check_local_aggregate_member (function *fun, tree var, tree field,
 
   if (scan.other_escape)
     {
-      if (!profiles_header_exempt_p (DECL_SOURCE_LOCATION (var), "std::init"))
+      if (!profiles_diagnostic_exempt_p (DECL_SOURCE_LOCATION (var),
+					 fun->decl, "std::init"))
 	{
 	  error_at (DECL_SOURCE_LOCATION (var),
 		    "cannot verify %<[[uninit]]%> member %qD of %qD under the "
@@ -807,8 +808,8 @@ ip_check_local_aggregate_member (function *fun, tree var, tree field,
   if (scan.init_stmts.is_empty ())
     {
       for (gimple *read_stmt : scan.read_stmts)
-	if (!profiles_header_exempt_p (gimple_location (read_stmt),
-					"std::init"))
+	if (!profiles_diagnostic_exempt_p (gimple_location (read_stmt),
+					   fun->decl, "std::init"))
 	  error_at (gimple_location (read_stmt),
 		    "member %qD of %qD read before it is definitely "
 		    "assigned, under the %<std::init%> profile", field, var);
@@ -820,8 +821,8 @@ ip_check_local_aggregate_member (function *fun, tree var, tree field,
 
   for (gimple *read_stmt : scan.read_stmts)
     if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts, info)
-	&& !profiles_header_exempt_p (gimple_location (read_stmt),
-				      "std::init"))
+	&& !profiles_diagnostic_exempt_p (gimple_location (read_stmt),
+					  fun->decl, "std::init"))
       error_at (gimple_location (read_stmt),
 		"member %qD of %qD read before it is definitely assigned, "
 		"under the %<std::init%> profile", field, var);
@@ -864,7 +865,8 @@ ip_check_address_taken_var (function *fun, tree var)
 
   if (scan.other_addr_of)
     {
-      if (!profiles_header_exempt_p (DECL_SOURCE_LOCATION (var), "std::init"))
+      if (!profiles_diagnostic_exempt_p (DECL_SOURCE_LOCATION (var),
+					 fun->decl, "std::init"))
 	{
 	  error_at (DECL_SOURCE_LOCATION (var),
 		    "cannot verify %<[[uninit]]%> on %qD under the "
@@ -902,7 +904,8 @@ ip_check_address_taken_var (function *fun, tree var)
 	    }
 	  return;
 	}
-      if (!profiles_header_exempt_p (DECL_SOURCE_LOCATION (var), "std::init"))
+      if (!profiles_diagnostic_exempt_p (DECL_SOURCE_LOCATION (var),
+					 fun->decl, "std::init"))
 	{
 	  error_at (DECL_SOURCE_LOCATION (var),
 		    "cannot verify %<[[uninit]]%> on %qD under the "
@@ -917,8 +920,8 @@ ip_check_address_taken_var (function *fun, tree var)
   if (scan.init_stmts.is_empty ())
     {
       for (gimple *read_stmt : scan.read_stmts)
-	if (!profiles_header_exempt_p (gimple_location (read_stmt),
-					"std::init"))
+	if (!profiles_diagnostic_exempt_p (gimple_location (read_stmt),
+					   fun->decl, "std::init"))
 	  error_at (gimple_location (read_stmt),
 		    "%qD read before it is definitely assigned, under the "
 		    "%<std::init%> profile", var);
@@ -930,8 +933,8 @@ ip_check_address_taken_var (function *fun, tree var)
 
   for (gimple *read_stmt : scan.read_stmts)
     if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts, info)
-	&& !profiles_header_exempt_p (gimple_location (read_stmt),
-				      "std::init"))
+	&& !profiles_diagnostic_exempt_p (gimple_location (read_stmt),
+					  fun->decl, "std::init"))
       error_at (gimple_location (read_stmt),
 		"%qD read before it is definitely assigned, under the "
 		"%<std::init%> profile", var);
@@ -1195,8 +1198,8 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
 
   if (scan.other_escape)
     {
-      if (!profiles_header_exempt_p (DECL_SOURCE_LOCATION (fun->decl),
-				     "std::init"))
+      if (!profiles_diagnostic_exempt_p (DECL_SOURCE_LOCATION (fun->decl),
+					 fun->decl, "std::init"))
 	{
 	  error_at (DECL_SOURCE_LOCATION (fun->decl),
 		    "cannot verify %<[[uninit]]%> member %qD under the "
@@ -1214,8 +1217,8 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
 
   for (gimple *read_stmt : scan.read_stmts)
     if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts, info)
-	&& !profiles_header_exempt_p (gimple_location (read_stmt),
-				      "std::init"))
+	&& !profiles_diagnostic_exempt_p (gimple_location (read_stmt),
+					  fun->decl, "std::init"))
       error_at (gimple_location (read_stmt),
 		"member %qD read before it is definitely assigned, under "
 		"the %<std::init%> profile", field);
@@ -1242,8 +1245,8 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
 	}
     }
   if (!exit_ok
-      && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (fun->decl),
-				    "std::init"))
+      && !profiles_diagnostic_exempt_p (DECL_SOURCE_LOCATION (fun->decl),
+					fun->decl, "std::init"))
     error_at (DECL_SOURCE_LOCATION (fun->decl),
 	      "constructor may leave member %qD, marked %<[[uninit]]%>, "
 	      "not definitely assigned before %<*this%> is exposed, under "
@@ -1332,7 +1335,7 @@ ip_arg_uninit_flavored_p (tree arg)
    mismatch, without needing to know the parameter's type at all.  */
 
 static void
-ip_check_call_flavor_consistency (gimple *stmt)
+ip_check_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
 {
   if (gimple_code (stmt) != GIMPLE_CALL)
     return;
@@ -1348,7 +1351,8 @@ ip_check_call_flavor_consistency (gimple *stmt)
 						 /*must_init_only=*/false);
       bool arg_flavor = ip_arg_uninit_flavored_p (gimple_call_arg (stmt, i));
 
-      if (profiles_header_exempt_p (gimple_location (stmt), "std::init"))
+      if (profiles_diagnostic_exempt_p (gimple_location (stmt),
+					enclosing_fndecl, "std::init"))
 	continue;
       if (param_flavor && !arg_flavor)
 	error_at (gimple_location (stmt),
@@ -1370,7 +1374,7 @@ ip_check_function (function *fun)
   FOR_EACH_BB_FN (bb, fun)
     for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
 	 gsi_next (&gsi))
-      ip_check_call_flavor_consistency (gsi_stmt (gsi));
+      ip_check_call_flavor_consistency (gsi_stmt (gsi), fun->decl);
 
   unsigned i;
   tree var;
@@ -1413,8 +1417,8 @@ ip_check_function (function *fun)
 
 	      hash_set<tree> in_progress;
 	      if (!ip_definitely_assigned_p (name, in_progress)
-		  && !profiles_header_exempt_p (gimple_location (use_stmt),
-						"std::init"))
+		  && !profiles_diagnostic_exempt_p (gimple_location (use_stmt),
+						    fun->decl, "std::init"))
 		error_at (gimple_location (use_stmt),
 			  "%qD read before it is definitely assigned, "
 			  "under the %<std::init%> profile", var);
