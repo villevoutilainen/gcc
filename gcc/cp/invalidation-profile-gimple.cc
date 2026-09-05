@@ -1021,9 +1021,15 @@ ip_use_after_mutation_p (gimple *mutating_stmt, gimple *use_stmt)
 
 /* Check every trackable operand VAR is USE_STMT (a call argument, or
    an ordinary copy's RHS) against every mutating call in MUTATING_
-   CALLS/MUTATED_DECLS/MUTATED_TYPES that provably precedes it,
-   emitting a diagnostic (unless header-exempted) for the first one
-   Rule #0/#1 cannot clear.  */
+   CALLS/MUTATED_DECLS/MUTATED_TYPES that provably occurs strictly
+   between VAR's own binding's establishment (REACHING, below) and
+   USE_STMT, emitting a diagnostic (unless header-exempted) for the
+   first one Rule #0/#1 cannot clear.  A mutation that precedes
+   REACHING is irrelevant: the binding didn't even exist yet when it
+   happened, so it cannot be what invalidates THIS binding -- e.g.
+   'mutate(v); v = other; auto p = v.data() + 1; use(*p);' must stay
+   clean, since both mutations of 'v' happened before 'p' was ever
+   (re-)established.  */
 
 static void
 ip_check_operand_uses (gimple *use_stmt, tree var,
@@ -1042,7 +1048,9 @@ ip_check_operand_uses (gimple *use_stmt, tree var,
   for (unsigned i = 0; i < mutating_calls.length (); ++i)
     {
       gimple *m = mutating_calls[i];
-      if (use_stmt == m || m == origin || !ip_use_after_mutation_p (m, use_stmt))
+      if (use_stmt == m || m == origin
+	  || !ip_use_after_mutation_p (m, use_stmt)
+	  || !ip_use_after_mutation_p (reaching, m))
 	continue;
 
       tree mutated_decl = mutated_decls[i];
