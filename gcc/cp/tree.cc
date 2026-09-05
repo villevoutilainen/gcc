@@ -5717,12 +5717,56 @@ handle_uninit_attribute (tree *node, tree name, tree, int,
    ADDR_EXPR-of-the-argument GIMPLE shape a pointer parameter is, so the
    existing call-site matching needs no changes of its own -- see that
    function's own comment); erroring here rather than silently accepting
-   an unchecked smart-pointer use.  */
+   an unchecked smart-pointer use.
+
+   Also allowed directly on a FUNCTION_DECL, marking its own RETURN
+   value as referring to [[uninit]] memory (the "void* [[ref_to_uninit]]
+   malloc(size_t);"-shaped case) -- confirmed empirically that both of
+   C++'s two declaration-level attribute positions ("[[ref_to_uninit]]
+   void* f();" and "void* f [[ref_to_uninit]] ();") reach this handler
+   with *node already the FUNCTION_DECL itself (the third, syntactically
+   *type*-attribute position, "void* [[ref_to_uninit]] f();", is a
+   completely different, unrelated GCC mechanism this attribute was
+   never registered for, and is silently ignored with its own
+   -Wattributes warning, not routed here at all). No new query predicate
+   is needed for this: profiles_uninit_pointee_p (profiles.cc) already
+   does nothing but a bare DECL_ATTRIBUTES lookup, which works
+   identically for a FUNCTION_DECL as for any other decl kind --
+   init-profile-gimple.cc's ip_arg_uninit_flavored_p calls it directly on
+   a call's callee whenever an SSA_NAME's reaching definition is a
+   GIMPLE_CALL, which is the shape 'dst = flavored_fn();' actually takes
+   once SSA construction has run (confirmed empirically: the call's own
+   result is never assigned directly into a named destination, always
+   through an anonymous SSA temporary copied into it by a SEPARATE
+   statement afterward -- 'ip_check_call_flavor_consistency' checking
+   'gimple_call_lhs' directly was tried first and found completely
+   unreachable in every case tested, so it was removed rather than kept
+   as untested, unexercised speculative coverage).  [[must_init]] is
+   deliberately NOT extended
+   to FUNCTION_DECL alongside this: for a parameter, it asserts an
+   EXISTING object is now initialized as of the call's return (a real
+   postcondition on already-live storage); a return value has no such
+   prior existence to fix up, so "must_init" on a return would just mean
+   "an ordinary, unflavored pointer" -- nothing this profile's model
+   gives separate meaning to.  */
 
 static tree
 handle_ref_to_uninit_attribute (tree *node, tree name, tree, int,
 				 bool *no_add_attrs)
 {
+  if (TREE_CODE (*node) == FUNCTION_DECL)
+    {
+      tree ret_type = TREE_TYPE (TREE_TYPE (*node));
+      if (TREE_CODE (ret_type) != POINTER_TYPE
+	  && TREE_CODE (ret_type) != REFERENCE_TYPE)
+	{
+	  error_at (input_location,
+		    "%qE only supported on a function returning a pointer "
+		    "or reference, under the %<std::init%> profile", name);
+	  *no_add_attrs = true;
+	}
+      return NULL_TREE;
+    }
   if ((TREE_CODE (*node) != PARM_DECL && !VAR_P (*node)
        && TREE_CODE (*node) != FIELD_DECL)
       || (TREE_CODE (TREE_TYPE (*node)) != POINTER_TYPE
@@ -5730,7 +5774,8 @@ handle_ref_to_uninit_attribute (tree *node, tree name, tree, int,
     {
       error_at (input_location,
 		"%qE only supported on a pointer- or reference-typed "
-		"parameter, variable, or non-static data member", name);
+		"parameter, variable, or non-static data member, or a "
+		"function returning one", name);
       *no_add_attrs = true;
       return NULL_TREE;
     }
