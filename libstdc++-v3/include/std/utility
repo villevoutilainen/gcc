@@ -252,6 +252,25 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     no_dangling(_Tp __x)
     { return __x; }
 
+  /// P3446R0 (Invalidation profile): forcibly (re)validate __obj --
+  /// assert, without proof, that __obj is valid as of this exact call,
+  /// to be treated as freshly (re-)established here (see
+  /// invalidation-profile-gimple.cc's own recognition of a call to this
+  /// exact function). Strictly per-object, not transitive: calling this
+  /// on a container revalidates the container itself, but does NOT
+  /// (and structurally cannot) revalidate any pointer/iterator/
+  /// reference already bound to it elsewhere -- each such binding needs
+  /// its own now_valid() call. An escape hatch for cases this checker's
+  /// local, single-hop mutation-ordering analysis cannot itself prove
+  /// safe (e.g. the caller has independently confirmed no reallocation
+  /// occurred, or has refreshed __obj some other way this checker
+  /// cannot trace through).
+  template<typename _Tp>
+    [[__gnu__::__always_inline__]]
+    constexpr _Tp&
+    now_valid(_Tp& __obj [[not_invalidating]]) noexcept
+    { return __obj; }
+
 _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace
 
