@@ -4063,31 +4063,24 @@ cp_build_indirect_ref_1 (location_t loc, tree ptr, ref_operator errorstring,
   if (INDIRECT_TYPE_P (type))
     {
       /* P3446R0/P4296R0, Phase 7a Negative Baseline (S7.2's
-	 [ub:expr.unary.dereference]): "we'll be prohibiting ALL the
-	 dereferences of pointers (with 'Positive Rules' allowing
-	 dereferences if we can prove they're not null)" -- Rule #4
-	 (provable-non-null) is not yet implemented (see Phase 7b), so
-	 for now every genuine syntactic dereference of a real
-	 POINTER_TYPE is flagged.  errorstring != RO_NULL excludes the
-	 many purely-internal indirections this same function builds
-	 (e.g. cp_build_fold_indirect_ref) that don't correspond to
-	 anything the user wrote; TREE_CODE (type) == POINTER_TYPE
-	 (rather than the broader INDIRECT_TYPE_P just tested, which
-	 also covers REFERENCE_TYPE here) excludes reference decay --
-	 P3446R0 explicitly does not treat a raw reference as a
-	 "pointer" for invalidation purposes (S6.2: "there is no way to
-	 invalidate this container as such").  The current_class_ptr
-	 early return just above means an implicit or explicit *this is
-	 never reached here either -- a known, deliberate scope
-	 boundary for this increment, not yet revisited.  */
-      if (errorstring != RO_NULL
-	  && TREE_CODE (type) == POINTER_TYPE
-	  && (complain & tf_error)
-	  && profiles_enforced_p ("std::invalidation")
-	  && !profiles_header_exempt_p (loc, "std::invalidation"))
-	error_at (loc, "dereference of a pointer not permitted under the "
-		  "%<std::invalidation%> profile (no provable non-null "
-		  "annotation supported yet)");
+	 [ub:expr.unary.dereference]) used to prohibit EVERY syntactic
+	 dereference of a real POINTER_TYPE here, unconditionally,
+	 pending Rule #4 (provable-non-null). Removed: this construct
+	 no longer gets a blanket ban -- invalidation-profile-gimple.cc's
+	 own GIMPLE-level mutation tracking (Rule #0/#1 plus the
+	 "use of a value bound to ..., potentially invalidated by an
+	 earlier mutation of ..." diagnostic) now covers a raw pointer
+	 exactly the same way it already covered a class-typed iterator,
+	 flagging a dereference only when it's provably reached after a
+	 mutation of the container the pointer was bound to, rather than
+	 rejecting every dereference regardless of whether anything
+	 actually invalidated it.  Genuinely unprovable non-null safety
+	 (Rule #4's own, narrower concern -- a foreign/untraceable
+	 pointer with no established container binding at all) is a
+	 separate question this checker still does not attempt; such a
+	 pointer's dereference is simply not flagged either way, the
+	 same "not provably unsafe" default this profile's own
+	 Rule #0/#1 already apply elsewhere.  */
 
       /* [expr.unary.op]
 

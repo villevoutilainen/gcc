@@ -153,6 +153,46 @@ along with GCC; see the file COPYING3.  If not see
 #include "dominance.h"
 #include "hash-set.h"
 
+/* True if VAR (an operand of USE_STMT) is a class/union-typed or
+   raw-pointer-typed VAR_DECL or PARM_DECL worth checking at all --
+   excludes the LHS of USE_STMT's own definition (that is a write, not
+   a read) and anything not RECORD_TYPE/UNION_TYPE/POINTER_TYPE.
+   POINTER_TYPE was added alongside RECORD_TYPE/UNION_TYPE once
+   Phase 7a's own blanket dereference ban (typeck.cc's cp_build_
+   indirect_ref_1) was removed in favor of this file's own mutation
+   tracking covering a raw pointer the same way it already covers a
+   class-typed iterator/handle.  */
+
+static bool
+ip_trackable_operand_p (tree var)
+{
+  if (TREE_CODE (var) != VAR_DECL && TREE_CODE (var) != PARM_DECL)
+    return false;
+  tree type = TREE_TYPE (var);
+  return TREE_CODE (type) == RECORD_TYPE || TREE_CODE (type) == UNION_TYPE
+	 || TREE_CODE (type) == POINTER_TYPE;
+}
+
+/* If T is, or (through SSA_NAME_VAR) resolves to, a trackable
+   VAR_DECL/PARM_DECL (ip_trackable_operand_p), return that decl; else
+   NULL_TREE.  Needed because a raw pointer local, unlike a class-typed
+   one, almost always IS an SSA_NAME by this point (is_gimple_reg is
+   true for any non-aggregate register variable, see this file's own
+   top comment) -- every place below that used to compare a GIMPLE
+   operand directly against a plain VAR_DECL/PARM_DECL now goes through
+   this first, so a pointer's own SSA versioning doesn't hide it from
+   that comparison.  */
+
+static tree
+ip_trackable_decl (tree t)
+{
+  if (!t)
+    return NULL_TREE;
+  if (TREE_CODE (t) == SSA_NAME)
+    t = SSA_NAME_VAR (t);
+  return (t && ip_trackable_operand_p (t)) ? t : NULL_TREE;
+}
+
 /* Rule #0.  Returns the TEMPLATE_DECL TYPE is a specialization of, or
    TYPE itself if it is not a class-template specialization -- the
    structural stand-in this checker uses for "which family of
@@ -176,6 +216,38 @@ ip_class_template_decl (tree type)
    unrelated" answer, per this file's own top comment); two class
    types from genuinely different templates, with neither derived
    from the other, are the one case proven safe here.  */
+
+/* True if DECL_A and DECL_B (already confirmed != each other) are
+   provably distinct OBJECTS, independent of what type they happen to
+   share -- true whenever BOTH are ordinary local/static/global
+   variables (VAR_DECL, never PARM_DECL): each such declaration gets
+   its own storage, entirely independent of every other declaration,
+   so two DIFFERENT VAR_DECLs can never be the same object regardless
+   of type (barring non-standard linker-level aliasing tricks this
+   checker, like the rest of this project, does not attempt to defend
+   against).  This is a DIFFERENT, and strictly more direct, question
+   than ip_types_provably_unrelated_p's own template-family comparison
+   answers: that one exists specifically because a REFERENCE/POINTER
+   PARAMETER's own underlying object identity is supplied by the
+   CALLER and so genuinely could be the same object behind two
+   different parameter names in the SAME call (e.g.
+   'f(vector<int> &a, vector<int> &b)' called as 'f(vi, vi)') -- a
+   concern that simply does not apply to two locals this function
+   itself declared, which can never alias each other purely by being
+   declared.  ip_receiver_decl only ever returns a PARM_DECL directly,
+   or (via its own ADDR_EXPR branch) the VAR_DECL an address-of
+   expression names -- always the ultimate object itself, never a
+   reference variable -- so no separate REFERENCE_TYPE exclusion is
+   needed on top of VAR_P here.  A PARM_DECL on either side keeps the
+   conservative "not proven" default from ip_types_provably_
+   unrelated_p alone, since its own identity is not under this
+   function's control.  */
+
+static bool
+ip_decls_provably_distinct_objects_p (tree decl_a, tree decl_b)
+{
+  return VAR_P (decl_a) && VAR_P (decl_b);
+}
 
 static bool
 ip_types_provably_unrelated_p (tree type_a, tree type_b)
@@ -232,6 +304,41 @@ ip_shares_template_argument_p (tree return_type, tree receiver_type)
   return false;
 }
 
+/* The raw-pointer-return analogue of ip_shares_template_argument_p
+   just above, for a container whose "begin()"-shaped accessor returns
+   a plain T* rather than a class-typed iterator (the P3446R0/P4296R0
+   worked example's own 'vector<int>::begin() -> int*' shape) --
+   RETURN_TYPE isn't itself a class-template specialization to compare
+   argument lists with, so the comparison here is simpler and more
+   direct: is RETURN_TYPE a pointer whose pointee is EXACTLY one of
+   RECEIVER_TYPE's own template arguments (e.g. 'int*' returned from
+   'vector<int>', where 'int' is vector's own element-type argument) --
+   the raw-pointer counterpart of "this method's return value is an
+   iterator/handle associated with its receiver".  */
+
+static bool
+ip_pointer_return_binds_p (tree return_type, tree receiver_type)
+{
+  if (TREE_CODE (return_type) != POINTER_TYPE)
+    return false;
+  receiver_type = TYPE_MAIN_VARIANT (receiver_type);
+  if (!CLASS_TYPE_P (receiver_type))
+    return false;
+  tree info = CLASSTYPE_TEMPLATE_INFO (receiver_type);
+  if (!info)
+    return false;
+
+  tree pointee = TYPE_MAIN_VARIANT (TREE_TYPE (return_type));
+  tree args = INNERMOST_TEMPLATE_ARGS (TI_ARGS (info));
+  for (int i = 0; i < TREE_VEC_LENGTH (args); ++i)
+    {
+      tree ai = TREE_VEC_ELT (args, i);
+      if (TYPE_P (ai) && pointee == TYPE_MAIN_VARIANT (ai))
+	return true;
+    }
+  return false;
+}
+
 /* Resolve RECEIVER -- a call's "this" argument at the GIMPLE level --
    back to the single DECL it addresses: a direct address of a
    VAR_DECL/PARM_DECL, or (for a reference parameter, already a
@@ -263,10 +370,12 @@ ip_receiver_decl (tree receiver)
 }
 
 /* True if STMT is a definition (write) of VAR -- a GIMPLE_CALL or
-   GIMPLE_ASSIGN whose own LHS is exactly VAR, or a constructor call
-   whose own "this" (first) argument is &VAR (a constructor returns
-   void and writes through its first argument instead of an ordinary
-   LHS).  */
+   GIMPLE_ASSIGN whose own LHS is exactly VAR (through ip_trackable_
+   decl's own SSA_NAME_VAR unwrap, since a raw pointer's LHS is
+   normally an SSA name, not VAR itself, post-SSA), or a constructor
+   call whose own "this" (first) argument is &VAR (a constructor
+   returns void and writes through its first argument instead of an
+   ordinary LHS).  */
 
 static bool
 ip_defines_var_p (gimple *stmt, tree var)
@@ -274,7 +383,7 @@ ip_defines_var_p (gimple *stmt, tree var)
   if (gimple_code (stmt) == GIMPLE_CALL)
     {
       gcall *call = as_a<gcall *> (stmt);
-      if (gimple_call_lhs (call) == var)
+      if (ip_trackable_decl (gimple_call_lhs (call)) == var)
 	return true;
       tree fndecl = gimple_call_fndecl (call);
       if (fndecl && DECL_CONSTRUCTOR_P (fndecl) && gimple_call_num_args (call) >= 1)
@@ -286,7 +395,7 @@ ip_defines_var_p (gimple *stmt, tree var)
       return false;
     }
   if (is_gimple_assign (stmt))
-    return gimple_assign_lhs (stmt) == var;
+    return ip_trackable_decl (gimple_assign_lhs (stmt)) == var;
   return false;
 }
 
@@ -723,15 +832,20 @@ ip_check_return_escape (gimple *return_stmt)
 /* The container declaration DEF_STMT's own effect binds its LHS to
    (P4296R0 S7.6.2's "proven binding"), or NULL_TREE if this checker
    cannot establish one: a container-returning member call
-   (ip_shares_template_argument_p) binds to its receiver
-   (ip_receiver_decl); a plain copy from another class-typed
-   declaration inherits whatever binding the nearest reaching write to
-   THAT declaration, as of DEF_STMT's own position, itself establishes
-   -- recursing via ip_nearest_write_before, which is always called on
-   a strictly earlier statement than its caller's own DEF_STMT, so
-   this recursion is well-founded (no cycle-guard is needed the way
-   contracts-gimple.cc's PHI recursion needs one: there is no PHI node
-   here to create a cycle through).  */
+   (ip_shares_template_argument_p, for a class-typed iterator, or
+   ip_pointer_return_binds_p, for a raw-pointer-returning accessor
+   like 'vector<int>::begin() -> int*') binds to its receiver
+   (ip_receiver_decl); a plain copy from another class-typed or
+   pointer-typed declaration (ip_trackable_decl's own SSA_NAME_VAR
+   unwrap -- a raw pointer's own copy is normally 'q_2 = p_1;' at this
+   point, an SSA-to-SSA copy, not literally naming the VAR_DECL the
+   way a class-typed copy does) inherits whatever binding the nearest
+   reaching write to THAT declaration, as of DEF_STMT's own position,
+   itself establishes -- recursing via ip_nearest_write_before, which
+   is always called on a strictly earlier statement than its caller's
+   own DEF_STMT, so this recursion is well-founded (no cycle-guard is
+   needed the way contracts-gimple.cc's PHI recursion needs one: there
+   is no PHI node here to create a cycle through).  */
 
 static tree
 ip_binding_established_by (gimple *def_stmt)
@@ -746,19 +860,74 @@ ip_binding_established_by (gimple *def_stmt)
 	return NULL_TREE;
       tree this_ptr_type = TREE_VALUE (TYPE_ARG_TYPES (TREE_TYPE (fndecl)));
       tree receiver_type = TREE_TYPE (this_ptr_type);
-      if (!ip_shares_template_argument_p (TREE_TYPE (lhs), receiver_type))
+      if (!ip_shares_template_argument_p (TREE_TYPE (lhs), receiver_type)
+	  && !ip_pointer_return_binds_p (TREE_TYPE (lhs), receiver_type))
 	return NULL_TREE;
       return ip_receiver_decl (gimple_call_arg (call, 0));
     }
   if (is_gimple_assign (def_stmt) && gimple_assign_single_p (def_stmt))
     {
       tree rhs = gimple_assign_rhs1 (def_stmt);
-      if (TREE_CODE (rhs) != VAR_DECL && TREE_CODE (rhs) != PARM_DECL)
+      if (TREE_CODE (rhs) == SSA_NAME && !SSA_NAME_VAR (rhs))
+	{
+	  /* A pure SSA temporary -- e.g. a raw pointer's own
+	     'begin()' return value, held directly in an anonymous
+	     '_12' with no home VAR_DECL at all, rather than copied
+	     into one (confirmed via direct -fdump-tree-ssa reading:
+	     unlike a class-typed return, which mandatory copy elision
+	     constructs directly into the named local, a POINTER
+	     return's value commonly lives in a plain SSA temporary
+	     the gimplifier never names).  SSA form already gives the
+	     unique reaching definition directly here, no CFG walk
+	     (ip_nearest_write_before, which needs a real VAR_DECL to
+	     scan for) is needed or even possible.  */
+	  gimple *def = SSA_NAME_DEF_STMT (rhs);
+	  return def ? ip_binding_established_by (def) : NULL_TREE;
+	}
+      tree decl = ip_trackable_decl (rhs);
+      if (!decl)
 	return NULL_TREE;
-      gimple *reaching = ip_nearest_write_before (rhs, def_stmt);
+      gimple *reaching = ip_nearest_write_before (decl, def_stmt);
       return reaching ? ip_binding_established_by (reaching) : NULL_TREE;
     }
   return NULL_TREE;
+}
+
+/* The same chain of copies/anonymous-SSA-temp hops ip_binding_
+   established_by walks, but returning the ultimate GIMPLE_CALL it
+   traces back to (or NULL_TREE if that walk wouldn't establish a
+   binding at all) instead of what that call binds its result to.
+   Used so a value's own establishing call is never also counted as a
+   mutation that invalidates that SAME value: a call to a non-const,
+   unannotated accessor like 'begin()' is, by ip_collect_mutations's
+   own "assumed invalidating" default, itself a mutation of its
+   receiver -- but the fresh iterator/pointer it just returned cannot
+   have been invalidated by that same call's own side effect, only a
+   DIFFERENT, earlier-bound value could be.  Mirrors ip_binding_
+   established_by's own recursive structure exactly, for the same
+   reason (no cycle-guard needed: no PHI node here to create a cycle
+   through).  */
+
+static gimple *
+ip_originating_call (gimple *def_stmt)
+{
+  if (gimple_code (def_stmt) == GIMPLE_CALL)
+    return def_stmt;
+  if (is_gimple_assign (def_stmt) && gimple_assign_single_p (def_stmt))
+    {
+      tree rhs = gimple_assign_rhs1 (def_stmt);
+      if (TREE_CODE (rhs) == SSA_NAME && !SSA_NAME_VAR (rhs))
+	{
+	  gimple *def = SSA_NAME_DEF_STMT (rhs);
+	  return def ? ip_originating_call (def) : NULL;
+	}
+      tree decl = ip_trackable_decl (rhs);
+      if (!decl)
+	return NULL;
+      gimple *reaching = ip_nearest_write_before (decl, def_stmt);
+      return reaching ? ip_originating_call (reaching) : NULL;
+    }
+  return NULL;
 }
 
 /* One (DECL, TYPE) pair CALL is judged to mutate -- see
@@ -778,6 +947,12 @@ struct ip_mutation
    - A non-const member-function call, not marked [[not_invalidating]]
      on the function itself, whose receiver resolves to a single,
      nameable DECL ("A non-const function is assumed to invalidate").
+     A constructor call is excluded from this source specifically
+     (DECL_CONSTRUCTOR_P): it cannot invalidate anything bound to its
+     own receiver, since nothing could have been bound to an object
+     before that object is even constructed -- ip_defines_var_p
+     already treats a constructor call as a WRITE/definition of its
+     receiver for exactly this reason, not an ordinary mutating call.
 
    - Any function (member or free) call with an argument bound to a
      parameter of reference-to-non-const or pointer-to-non-const class
@@ -801,7 +976,8 @@ ip_collect_mutations (gcall *call, vec<ip_mutation> *out)
   if (!fndecl)
     return;
 
-  if (DECL_IOBJ_MEMBER_FUNCTION_P (fndecl) && !DECL_CONST_MEMFUNC_P (fndecl)
+  if (DECL_IOBJ_MEMBER_FUNCTION_P (fndecl) && !DECL_CONSTRUCTOR_P (fndecl)
+      && !DECL_CONST_MEMFUNC_P (fndecl)
       && !profiles_not_invalidating_p (fndecl)
       && gimple_call_num_args (call) >= 1)
     if (tree decl = ip_receiver_decl (gimple_call_arg (call, 0)))
@@ -862,21 +1038,6 @@ ip_use_after_mutation_p (gimple *mutating_stmt, gimple *use_stmt)
   return dominated_by_p (CDI_DOMINATORS, u_bb, m_bb);
 }
 
-/* True if VAR (an operand of USE_STMT) is a class/union-typed
-   VAR_DECL or PARM_DECL worth checking at all -- excludes the LHS of
-   USE_STMT's own definition (that is a write, not a read) and
-   anything not RECORD_TYPE/UNION_TYPE (this checker only reasons
-   about class-typed iterator/handle-shaped values; a raw pointer is
-   already wholly covered by Phase 7a's blanket dereference ban).  */
-
-static bool
-ip_trackable_operand_p (tree var)
-{
-  if (TREE_CODE (var) != VAR_DECL && TREE_CODE (var) != PARM_DECL)
-    return false;
-  tree type = TREE_TYPE (var);
-  return TREE_CODE (type) == RECORD_TYPE || TREE_CODE (type) == UNION_TYPE;
-}
 
 /* Check every trackable operand VAR is USE_STMT (a call argument, or
    an ordinary copy's RHS) against every mutating call in MUTATING_
@@ -895,17 +1056,20 @@ ip_check_operand_uses (gimple *use_stmt, tree var,
   tree bound_decl = ip_binding_established_by (reaching);
   if (!bound_decl)
     return;
+  gimple *origin = ip_originating_call (reaching);
 
   for (unsigned i = 0; i < mutating_calls.length (); ++i)
     {
       gimple *m = mutating_calls[i];
-      if (use_stmt == m || !ip_use_after_mutation_p (m, use_stmt))
+      if (use_stmt == m || m == origin || !ip_use_after_mutation_p (m, use_stmt))
 	continue;
 
       tree mutated_decl = mutated_decls[i];
       bool safe = (mutated_decl != bound_decl
-		   && ip_types_provably_unrelated_p (mutated_types[i],
-						      TREE_TYPE (bound_decl)));
+		   && (ip_decls_provably_distinct_objects_p (mutated_decl,
+							      bound_decl)
+		       || ip_types_provably_unrelated_p (mutated_types[i],
+							  TREE_TYPE (bound_decl))));
       if (safe)
 	continue;
       if (!profiles_header_exempt_p (gimple_location (use_stmt),
@@ -916,6 +1080,68 @@ ip_check_operand_uses (gimple *use_stmt, tree var,
 		  "%<std::invalidation%> profile", bound_decl, mutated_decl);
       break;
     }
+}
+
+/* If T is a MEM_REF/INDIRECT_REF/ARRAY_REF based on a trackable raw
+   pointer -- a raw pointer's own built-in dereference ('*p'/'p->m'/
+   'p[i]') -- return that pointer's decl; else NULL_TREE.  A
+   POINTER_PLUS_EXPR base (the common '_1 = p_2 + i_3; MEM[_1]' shape
+   a computed-index 'p[i]' lowers to) is unwrapped one level first.
+   Split out from ip_use_decl below so an assignment's own LHS can be
+   checked with JUST this, not that function's full set of shapes:
+   writing through a dereference ('*p = ...;') still reads p's own
+   value (to know where to write), but the bare trackable variable
+   itself, as a plain assignment's LHS ('q = ...;'), is being WRITTEN,
+   not read, and must not be treated as a use of q.  */
+
+static tree
+ip_deref_base_decl (tree t)
+{
+  if (TREE_CODE (t) != MEM_REF && TREE_CODE (t) != INDIRECT_REF
+      && TREE_CODE (t) != ARRAY_REF)
+    return NULL_TREE;
+  tree base = TREE_OPERAND (t, 0);
+  if (TREE_CODE (base) == POINTER_PLUS_EXPR)
+    base = TREE_OPERAND (base, 0);
+  tree decl = ip_trackable_decl (base);
+  return (decl && TREE_CODE (TREE_TYPE (decl)) == POINTER_TYPE)
+	 ? decl : NULL_TREE;
+}
+
+/* If T (a call argument, or an assignment's RHS) is a "read" of some
+   trackable VAR_DECL/PARM_DECL (ip_trackable_operand_p), in one of
+   three shapes this checker recognizes as such a read, return that
+   decl; else NULL_TREE.
+
+     - T itself (through ip_trackable_decl's own SSA_NAME unwrap):
+       passed by value/reference to another function, e.g.
+       'can_process (iter)'.
+
+     - ADDR_EXPR of one: the implicit "this" a class-typed value's own
+       member-function call takes its receiver by -- '*p'/'p.operator*
+       ()', 'p->m'/'p.operator-> ()->m', '++p'/'p.operator++ ()' are
+       all, at the GIMPLE level, a call whose first argument is &p,
+       not p directly.  This is ip_receiver_decl's own resolution
+       (already used for a MUTATING call's receiver) applied to an
+       ordinary, non-mutating USE of the same shape instead -- this is
+       exactly the gap that let a class-typed iterator's own
+       dereference through unchecked before this was added.
+
+     - MEM_REF/INDIRECT_REF/ARRAY_REF based on one (ip_deref_base_decl):
+       a raw pointer's own built-in dereference, which (unlike a
+       class-typed value's operator overloads above) never goes
+       through a function call at all.  Not used for an assignment's
+       own LHS -- see ip_deref_base_decl's own comment for why.  */
+
+static tree
+ip_use_decl (tree t)
+{
+  tree direct = ip_trackable_decl (t);
+  if (direct)
+    return direct;
+  if (TREE_CODE (t) == ADDR_EXPR)
+    return ip_trackable_decl (TREE_OPERAND (t, 0));
+  return ip_deref_base_decl (t);
 }
 
 /* One trackable operand read, recorded during the initial statement
@@ -930,9 +1156,9 @@ struct ip_use
 
 /* Main per-function check.  Collects every mutating call (as defined
    by ip_collect_mutations) once, then walks every statement's
-   operands looking for a trackable class-typed VAR_DECL/PARM_DECL
-   read (ip_check_operand_uses does the actual Rule #0/#1 work per
-   use).  */
+   operands looking for a trackable read (ip_use_decl) of a class-
+   typed or raw-pointer-typed VAR_DECL/PARM_DECL (ip_check_operand_
+   uses does the actual Rule #0/#1 work per use).  */
 
 /* True if TYPE is worth running the escape-from-scope check
    (ip_check_return_escape) against at all: a pointer/reference, or a
@@ -985,15 +1211,16 @@ ip_check_function (function *fun)
 	    for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
 	      {
 		tree arg = gimple_call_arg (call, i);
-		if (ip_trackable_operand_p (arg))
-		  uses.safe_push ({ stmt, arg });
+		if (tree decl = ip_use_decl (arg))
+		  uses.safe_push ({ stmt, decl });
 	      }
 	  }
 	else if (is_gimple_assign (stmt) && gimple_assign_single_p (stmt))
 	  {
-	    tree rhs = gimple_assign_rhs1 (stmt);
-	    if (ip_trackable_operand_p (rhs))
-	      uses.safe_push ({ stmt, rhs });
+	    if (tree decl = ip_use_decl (gimple_assign_rhs1 (stmt)))
+	      uses.safe_push ({ stmt, decl });
+	    if (tree decl = ip_deref_base_decl (gimple_assign_lhs (stmt)))
+	      uses.safe_push ({ stmt, decl });
 	  }
 	else if (check_returns && gimple_code (stmt) == GIMPLE_RETURN)
 	  returns_to_check.safe_push (stmt);
