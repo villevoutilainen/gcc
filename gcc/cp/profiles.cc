@@ -565,3 +565,14 @@ profiles_header_exempt_p (location_t loc, const char *profile_name)
 	return true;
     }
 }
+
+bool
+profiles_diagnostic_exempt_p (location_t loc, tree fndecl,
+			       const char *profile_name)
+{
+  if (profiles_header_exempt_p (loc, profile_name))
+    return true;
+  return fndecl
+	 && profiles_header_exempt_p (DECL_SOURCE_LOCATION (fndecl),
+				      profile_name);
+}

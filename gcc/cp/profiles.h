@@ -124,6 +124,32 @@ extern bool profiles_uninit_flavor_at_position_p (tree fndecl,
    alone.  */
 extern bool profiles_header_exempt_p (location_t loc, const char *profile_name);
 
+/* The GIMPLE-level checkers' (init-profile-gimple.cc, invalidation-
+   profile-gimple.cc) own counterpart to profiles_header_exempt_p above
+   -- not a fourth, independent exemption source, but a more robust way
+   of checking source (1) (system header) specifically for a GIMPLE
+   diagnostic, whose own triggering statement's location can be
+   missing/synthetic (an optimizer-merged or otherwise unattributed
+   block -- confirmed directly: a template instantiation's own body can
+   have a real statement with no valid location at all, even while
+   every OTHER statement in that same function correctly carries the
+   template's own header-based locations) in a way a front-end
+   declaration's own location never is.  FNDECL is the enclosing
+   function being checked (its own DECL_SOURCE_LOCATION, unlike a
+   specific statement's, is never subject to that degradation, and --
+   this is the key guarantee this function relies on -- a function
+   TEMPLATE's own instantiations keep DECL_SOURCE_LOCATION at the
+   template PATTERN's own definition site, not the instantiation point,
+   so a function whose template was written in an exempted header is
+   itself exempt via this fallback, regardless of which specific
+   per-statement location a given diagnostic would otherwise have
+   used). Checks LOC first (the precise, common case), falling back to
+   FNDECL's own location only if that fails -- this can only WIDEN
+   exemption coverage versus calling profiles_header_exempt_p (loc, ...)
+   directly, never narrow it.  */
+extern bool profiles_diagnostic_exempt_p (location_t loc, tree fndecl,
+					   const char *profile_name);
+
 /* P3589: register that PROFILE_NAME's (e.g. "std::init") diagnostics
    are suppressed for the source range [START, END] -- the real
    semantic effect of '[[profiles::suppress(profile)]]' attached to an
