@@ -1329,6 +1329,39 @@ ip_arg_uninit_flavored_p (tree arg)
   return false;
 }
 
+/* True if ARG (a call-argument or plain-assignment RHS expression) is,
+   provably, a null pointer constant -- possibly reached through the
+   same SSA-copy-chasing ip_arg_uninit_flavored_p above already
+   performs (confirmed via -fdump-tree-gimple: 'nullptr' itself lowers
+   to a plain zero INTEGER_CST of pointer type, '0B', and a local
+   'int* q = nullptr;' later passed as 'q' reaches this function as an
+   SSA_NAME whose own reaching definition is exactly such a constant).
+   A null pointer refers to no object at all, so it is compatible with
+   EITHER flavor: it is not itself [[ref_to_uninit]]-flavored (there is
+   no uninitialized memory it refers to), but it is also not the kind
+   of "a pointer to already-initialized memory" value flavor
+   consistency exists to keep out of a [[ref_to_uninit]] destination --
+   there is no memory of any kind being smuggled in.  Used by both
+   ip_check_call_flavor_consistency and ip_check_assign_flavor_
+   consistency below as an early exemption from their own mismatch
+   check, in either direction: 'take_uninit (nullptr);' and 'int* p
+   [[ref_to_uninit]] = nullptr;' must both be accepted regardless of
+   the destination's own flavor.  */
+
+static bool
+ip_arg_null_pointer_p (tree arg)
+{
+  if (TREE_CODE (arg) == INTEGER_CST)
+    return integer_zerop (arg);
+  if (TREE_CODE (arg) == SSA_NAME)
+    {
+      gimple *def = SSA_NAME_DEF_STMT (arg);
+      if (def && is_gimple_assign (def) && gimple_assign_single_p (def))
+	return ip_arg_null_pointer_p (gimple_assign_rhs1 (def));
+    }
+  return false;
+}
+
 /* P4222 Phase 3, S4.3/S9.4: for a direct call, check that every
    pointer argument's uninit-flavor (ip_arg_uninit_flavored_p) matches
    its corresponding parameter's ([[ref_to_uninit]]/[[must_init]] via
@@ -1366,10 +1399,13 @@ ip_check_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
   unsigned nargs = gimple_call_num_args (stmt);
   for (unsigned i = 0; i < nargs; ++i)
     {
+      tree arg = gimple_call_arg (stmt, i);
+      if (ip_arg_null_pointer_p (arg))
+	continue;
       bool param_flavor
 	= profiles_uninit_flavor_at_position_p (callee, i + 1,
 						 /*must_init_only=*/false);
-      bool arg_flavor = ip_arg_uninit_flavored_p (gimple_call_arg (stmt, i));
+      bool arg_flavor = ip_arg_uninit_flavored_p (arg);
 
       if (profiles_diagnostic_exempt_p (gimple_location (stmt),
 					enclosing_fndecl, "std::init"))
@@ -1421,9 +1457,12 @@ ip_check_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
   tree lhs_var = ip_underlying_var (lhs);
   if (!lhs_var)
     return;
+  tree rhs = gimple_assign_rhs1 (stmt);
+  if (ip_arg_null_pointer_p (rhs))
+    return;
 
   bool dst_flavor = profiles_uninit_pointee_p (lhs_var);
-  bool src_flavor = ip_arg_uninit_flavored_p (gimple_assign_rhs1 (stmt));
+  bool src_flavor = ip_arg_uninit_flavored_p (rhs);
 
   if (dst_flavor == src_flavor)
     return;
