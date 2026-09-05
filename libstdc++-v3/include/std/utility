@@ -240,6 +240,23 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     escape_uninit(_Tp& __obj [[ref_to_uninit]]) noexcept
     { return __obj; }
 
+  /// P4222 (Initialization profile): forcibly treat __x as referring to
+  /// [[uninit]] memory, regardless of its own declared flavor -- a
+  /// manual, unproven bridge for implementing a [[ref_to_uninit]]-
+  /// declared function in terms of an ordinary, unflavored primitive
+  /// this checker has no way to see is equivalent (e.g. the real,
+  /// unannotated ::malloc): "return now_ref_to_uninit(malloc(n));"
+  /// inside a "[[ref_to_uninit]] void* my_malloc(size_t);"-declared
+  /// function (see init-profile-gimple.cc's own recognition of a call
+  /// to this exact function). By-value, like no_dangling above, since
+  /// there is no existing addressable object to attach an assertion
+  /// to -- __x is an arbitrary value expression, not a named variable.
+  template<typename _Tp>
+    [[__gnu__::__always_inline__]]
+    constexpr _Tp
+    now_ref_to_uninit(_Tp __x)
+    { return __x; }
+
   /// P3446R0 (Invalidation profile): assert -- without proof -- that
   /// the returned value contains no dangling pointer.  A local
   /// suppression of the invalidation profile's pointer/container

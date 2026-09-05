@@ -1272,9 +1272,41 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
    own invalidation-profile psets exist for (profiles plan Phase 7),
    not duplicated here.  */
 
+/* True if CALL is a call to std::now_ref_to_uninit -- the
+   Initialization profile's manual, unproven "treat this value as
+   [[ref_to_uninit]]-flavored regardless of its own declared flavor"
+   assertion (see <utility>'s own definition), recognized by name
+   (decl_in_std_namespace_p + id_equal) the same way invalidation-
+   profile-gimple.cc's own ip_no_dangling_call_p/ip_now_valid_call_p
+   recognize their own escape hatches -- this file has no attribute of
+   its own to key off here, since what's being asserted isn't tied to
+   any one parameter position the way [[must_init]]/[[ref_to_uninit]]
+   normally are.  */
+
+static bool
+ip_now_ref_to_uninit_call_p (gcall *call)
+{
+  tree fndecl = gimple_call_fndecl (call);
+  return fndecl && decl_in_std_namespace_p (fndecl)
+	 && id_equal (DECL_NAME (fndecl), "now_ref_to_uninit");
+}
+
+static bool ip_arg_uninit_flavored_p_1 (tree arg, int depth);
+static bool ip_arg_null_pointer_p (tree arg);
+
 static bool
 ip_arg_uninit_flavored_p (tree arg)
 {
+  return ip_arg_uninit_flavored_p_1 (arg, 0);
+}
+
+static bool
+ip_arg_uninit_flavored_p_1 (tree arg, int depth)
+{
+  if (depth > 16)
+    return false; /* Defensive recursion guard; never expected to trigger
+		      in practice (see the GIMPLE_PHI case below for the
+		      only way a cycle could even arise).  */
   if (TREE_CODE (arg) == ADDR_EXPR)
     {
       tree operand = TREE_OPERAND (arg, 0);
@@ -1304,7 +1336,7 @@ ip_arg_uninit_flavored_p (tree arg)
 	 is no loop this recursion could run around.  */
       gimple *def = SSA_NAME_DEF_STMT (arg);
       if (def && is_gimple_assign (def) && gimple_assign_single_p (def))
-	return ip_arg_uninit_flavored_p (gimple_assign_rhs1 (def));
+	return ip_arg_uninit_flavored_p_1 (gimple_assign_rhs1 (def), depth + 1);
       /* Or, if ARG's own reaching definition is a GIMPLE_CALL, ARG is
 	 that call's own return value -- flavored exactly when CALLEE's
 	 own return is (P4222 S4.3's "void* [[ref_to_uninit]]
@@ -1320,13 +1352,51 @@ ip_arg_uninit_flavored_p (tree arg)
 	 unflavored.  No new predicate needed: profiles_uninit_pointee_p
 	 already does nothing but a bare DECL_ATTRIBUTES lookup, which
 	 works identically for a FUNCTION_DECL as for any other decl
-	 kind.  */
+	 kind.  A call to std::now_ref_to_uninit is checked FIRST and
+	 unconditionally overrides to true regardless of its own
+	 argument's flavor: that function is itself a generic, never-
+	 attributed identity template, so falling through to profiles_
+	 uninit_pointee_p on IT would incorrectly evaluate false -- see
+	 <utility>'s own definition and ip_now_ref_to_uninit_call_p above.  */
       if (def && gimple_code (def) == GIMPLE_CALL)
 	{
-	  tree callee = gimple_call_fndecl (as_a<gcall *> (def));
+	  gcall *call = as_a<gcall *> (def);
+	  if (ip_now_ref_to_uninit_call_p (call))
+	    return true;
+	  tree callee = gimple_call_fndecl (call);
 	  if (callee)
 	    return profiles_uninit_pointee_p (callee);
 	  return false;
+	}
+      /* Or, if ARG's own reaching definition is a GIMPLE_PHI -- the
+	 shape multiple 'return expr;' statements in the same function
+	 take once the compiler unifies them into one canonical exit
+	 block (confirmed via direct -fdump-tree-ssa reading: 'if (cond)
+	 return w.get(); return nullptr;' becomes a single '# _1 = PHI
+	 <_9(3), _4(4)>; return _1;', not two separate GIMPLE_RETURNs) --
+	 ARG is flavored iff EVERY incoming edge is either a null pointer
+	 constant (ip_arg_null_pointer_p; compatible with either flavor,
+	 so it never disqualifies) or itself flavored: one non-null,
+	 unflavored edge means the merged value could genuinely hold an
+	 ordinary, non-uninit-referring pointer on that path, which is
+	 exactly what must NOT be treated as flavored (matches this
+	 file's own "conservatively false/default-unflavored" philosophy
+	 -- see this function's own top comment).  DEPTH is threaded
+	 through (unlike the straight-line cases above) because a PHI can
+	 be loop-carried and reach its own def again through a back
+	 edge -- the one way this recursion could actually cycle.  */
+      if (def && gimple_code (def) == GIMPLE_PHI)
+	{
+	  gphi *phi = as_a<gphi *> (def);
+	  for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+	    {
+	      tree phi_arg = gimple_phi_arg_def (phi, i);
+	      if (ip_arg_null_pointer_p (phi_arg))
+		continue;
+	      if (!ip_arg_uninit_flavored_p_1 (phi_arg, depth + 1))
+		return false;
+	    }
+	  return true;
 	}
 
       tree var = SSA_NAME_VAR (arg);
@@ -1444,6 +1514,155 @@ ip_check_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
 		  "its parameter is not marked %<[[ref_to_uninit]]%>, under "
 		  "the %<std::init%> profile", i + 1, callee);
     }
+
+  /* The RETURN-value counterpart of the argument loop above (P4222
+     S4.3's "void* [[ref_to_uninit]] malloc(size_t);"-shaped case): when
+     this call's result is assigned DIRECTLY into a named pointer (the
+     call's own gimple_call_lhs, not a separate later statement), that
+     destination's own flavor must match CALLEE's declared return
+     flavor, bidirectionally, exactly like an argument/parameter pair.
+
+     This was tried once before and REMOVED as apparently-unreachable
+     dead code: for every explicitly-user-defined function tested (a
+     toy 'my_malloc', reused/single-assign/discarded-result variants),
+     a call's result is ALWAYS copied through an anonymous SSA temporary
+     first ('_2 = fn (); dst = _2;'), which ip_check_assign_flavor_
+     consistency alone already catches (ip_underlying_var returns
+     NULL_TREE for the temp here, so LHS_VAR below is NULL and this
+     block is a no-op for that far more common shape -- no double
+     diagnostic). It turned out to be reachable after all: confirmed
+     via direct -fdump-tree-ssa reading that for a function GCC
+     recognizes as an actual BUILTIN by name+signature (e.g. a real
+     'extern "C" void* malloc(size_t);' matching the true libc
+     signature), the gimplifier emits the call's result DIRECTLY into
+     the named destination ('p_3 = malloc (4);', no temp) -- exactly
+     the shape this block exists for.  */
+  tree lhs = gimple_call_lhs (stmt);
+  tree lhs_var = lhs ? ip_underlying_var (lhs) : NULL_TREE;
+  if (lhs_var && TREE_CODE (TREE_TYPE (lhs_var)) == POINTER_TYPE)
+    {
+      bool dst_flavor = profiles_uninit_pointee_p (lhs_var);
+      /* std::now_ref_to_uninit's own call is itself exactly this
+	 direct-LHS shape (it's an always-inline template, so its own
+	 call is never routed through an intermediate SSA temp either --
+	 confirmed via -fdump-tree-ssa: 'p = std::now_ref_to_uninit<void*>
+	 (_1);' directly) -- so this check must consult the SAME override
+	 ip_arg_uninit_flavored_p's SSA_NAME/GIMPLE_CALL branch already
+	 does, or it would silently disagree with that check and let the
+	 escape hatch's result flow into an unmarked destination
+	 unnoticed.  */
+      bool callee_flavor = ip_now_ref_to_uninit_call_p (as_a<gcall *> (stmt))
+			    ? true : profiles_uninit_pointee_p (callee);
+      if (dst_flavor != callee_flavor
+	  && !profiles_diagnostic_exempt_p (gimple_location (stmt),
+					     enclosing_fndecl, "std::init"))
+	{
+	  if (callee_flavor)
+	    error_at (gimple_location (stmt),
+		      "assigning a pointer marked %<[[ref_to_uninit]]%> into "
+		      "a pointer not marked %<[[ref_to_uninit]]%>, under the "
+		      "%<std::init%> profile");
+	  else
+	    error_at (gimple_location (stmt),
+		      "assigning a pointer not marked %<[[ref_to_uninit]]%> "
+		      "into a pointer marked %<[[ref_to_uninit]]%>, under "
+		      "the %<std::init%> profile");
+	}
+    }
+}
+
+/* Resolve T down to whatever VAR_DECL/PARM_DECL it ultimately traces
+   back to through a chain of plain single-operand copies (the shape
+   'return __p;' actually takes even for a single-statement function:
+   confirmed via -fdump-tree-ssa that it still assigns __p into an
+   anonymous SSA temporary first, '_2 = __p_1(D); return _2;', so a
+   bare SSA_NAME_VAR lookup on the return value alone finds nothing).
+   Used only by ip_check_return_flavor_consistency below, to recognize
+   when a return value IS one of the enclosing function's own
+   parameters, as opposed to ip_arg_uninit_flavored_p's own similar-
+   looking recursion, which answers a different question (is this
+   expression flavored) and must not be reused here for that reason --
+   see that function's own call site below for exactly why.  */
+
+static tree
+ip_resolve_underlying_decl (tree t)
+{
+  if (TREE_CODE (t) == SSA_NAME)
+    {
+      tree var = SSA_NAME_VAR (t);
+      if (var)
+	return var;
+      gimple *def = SSA_NAME_DEF_STMT (t);
+      if (def && is_gimple_assign (def) && gimple_assign_single_p (def))
+	return ip_resolve_underlying_decl (gimple_assign_rhs1 (def));
+      return NULL_TREE;
+    }
+  if (VAR_P (t) || TREE_CODE (t) == PARM_DECL)
+    return t;
+  return NULL_TREE;
+}
+
+/* The RETURN-statement counterpart of the checks above (P4222 S4.3):
+   a function declared [[ref_to_uninit]] on its own return must only
+   ever return a flavored value, and conversely, an unflavored function
+   must never return one, bidirectionally -- 'return malloc (n);' inside
+   a '[[ref_to_uninit]] void* my_malloc (size_t);'-declared function,
+   with an ordinary, unflavored 'malloc', was previously silently
+   accepted: nothing examined a function's own GIMPLE_RETURN statements
+   against its own declared flavor at all, only how CALLERS treat the
+   result (ip_check_call_flavor_consistency/ip_check_assign_flavor_
+   consistency above). No explicit "is the function's own return type a
+   pointer" guard is needed: a non-pointer return makes ip_arg_uninit_
+   flavored_p false, and profiles_uninit_pointee_p on a never-attributed
+   function is false too, so both sides already agree with no mismatch
+   -- the same reasoning ip_check_call_flavor_consistency's own comment
+   already gives for skipping an analogous "is this a pointer parameter"
+   guard.
+
+   Confirmed via direct testing this needs one exemption: std::now_init
+   ('_Tp* now_init(_Tp* __p [[must_init]]) { return __p; }') was flagged
+   -- __p's own flavor makes ip_arg_uninit_flavored_p true, but now_init
+   itself is correctly NOT marked [[ref_to_uninit]] on its own return
+   (its entire purpose is a POSTCONDITION about __p itself, not a
+   description of now_init's own return flavor; std::escape_uninit's
+   near-identical shape has the same property). When a return value
+   resolves directly to one of the ENCLOSING function's own parameters
+   that already carries an explicit [[ref_to_uninit]]/[[must_init]]
+   declaration, that parameter's own attribute is trusted completely
+   and the function's own return-flavor is not second-guessed against
+   it -- a direct, unmodified pass-through of an already-declared-
+   flavored parameter is exactly the shape this profile's own escape-
+   hatch functions are built from, not a mismatch to flag.  */
+
+static void
+ip_check_return_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
+{
+  if (gimple_code (stmt) != GIMPLE_RETURN)
+    return;
+  tree retval = gimple_return_retval (as_a<greturn *> (stmt));
+  if (!retval || ip_arg_null_pointer_p (retval))
+    return;
+  tree retval_decl = ip_resolve_underlying_decl (retval);
+  if (retval_decl && TREE_CODE (retval_decl) == PARM_DECL
+      && profiles_uninit_pointee_p (retval_decl))
+    return;
+  bool fn_flavor = profiles_uninit_pointee_p (enclosing_fndecl);
+  bool retval_flavor = ip_arg_uninit_flavored_p (retval);
+  if (fn_flavor == retval_flavor)
+    return;
+  if (profiles_diagnostic_exempt_p (gimple_location (stmt),
+				     enclosing_fndecl, "std::init"))
+    return;
+  if (retval_flavor)
+    error_at (gimple_location (stmt),
+	      "returning a pointer marked %<[[ref_to_uninit]]%> from a "
+	      "function not itself marked %<[[ref_to_uninit]]%>, under the "
+	      "%<std::init%> profile");
+  else
+    error_at (gimple_location (stmt),
+	      "returning a pointer not marked %<[[ref_to_uninit]]%> from a "
+	      "function marked %<[[ref_to_uninit]]%>, under the "
+	      "%<std::init%> profile");
 }
 
 /* The plain-assignment counterpart of ip_check_call_flavor_
@@ -1514,6 +1733,7 @@ ip_check_function (function *fun)
       {
 	ip_check_call_flavor_consistency (gsi_stmt (gsi), fun->decl);
 	ip_check_assign_flavor_consistency (gsi_stmt (gsi), fun->decl);
+	ip_check_return_flavor_consistency (gsi_stmt (gsi), fun->decl);
       }
 
   unsigned i;
