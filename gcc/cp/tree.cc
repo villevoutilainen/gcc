@@ -5856,6 +5856,21 @@ handle_not_invalidating_attribute (tree *node, tree name, tree, int,
       tree type = TREE_TYPE (*node);
       if (TREE_CODE (type) == REFERENCE_TYPE || TREE_CODE (type) == POINTER_TYPE)
 	type = TREE_TYPE (type);
+      /* A template's own, not-yet-instantiated parameter type (e.g.
+	 std::now_valid's '_Tp& __obj') can't be checked for being a
+	 class type at all -- CLASS_TYPE_P is false for a bare
+	 TEMPLATE_TYPE_PARM regardless of what it will later be
+	 instantiated as.  Defer to the real, per-instantiation gate
+	 instead: decl.cc's grokfndecl re-scans each concrete
+	 specialization's own substituted parameter types when
+	 synthesizing profiles_not_invalidating_flavor, and profiles.cc's
+	 profiles_not_invalidating_at_position_p/ip_collect_mutations
+	 only ever consult that marker for an actual, concrete
+	 CLASS_TYPE_P pointee -- mirrors how handle_must_init_attribute/
+	 handle_ref_to_uninit_attribute above never drill into the
+	 pointee at all, for the same reason.  */
+      if (dependent_type_p (type))
+	return NULL_TREE;
       if (!CLASS_TYPE_P (type))
 	{
 	  error_at (input_location,

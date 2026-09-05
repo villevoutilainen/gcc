@@ -331,13 +331,51 @@ ip_receiver_decl (tree receiver)
   return NULL_TREE;
 }
 
+/* True if CALL is a call to a std::-namespace function named NAME --
+   shared name-based recognition for this profile's manual escape
+   hatches (std::no_dangling, std::now_valid), which have no distinct
+   attribute of their own to key off (unlike std::init's [[must_init]]/
+   [[ref_to_uninit]]-parameter-attribute pair) since what they assert
+   isn't associated with any one parameter position.  */
+
+static bool
+ip_std_call_named_p (gcall *call, const char *name)
+{
+  tree fndecl = gimple_call_fndecl (call);
+  if (!fndecl || !decl_in_std_namespace_p (fndecl))
+    return false;
+  tree id = DECL_NAME (fndecl);
+  return id && id_equal (id, name);
+}
+
+/* True if CALL is a call to std::now_valid -- the invalidation
+   profile's manual "forcibly (re)validate this object" assertion (see
+   <utility>'s own definition): recognized by ip_defines_var_p below as
+   a fresh (re-)establishment of its own argument's binding, and by
+   ip_binding_established_by further down as inheriting whatever that
+   argument was already bound to as of just before this call.  */
+
+static bool
+ip_now_valid_call_p (gcall *call)
+{
+  return ip_std_call_named_p (call, "now_valid");
+}
+
 /* True if STMT is a definition (write) of VAR -- a GIMPLE_CALL or
    GIMPLE_ASSIGN whose own LHS is exactly VAR (through ip_trackable_
    decl's own SSA_NAME_VAR unwrap, since a raw pointer's LHS is
-   normally an SSA name, not VAR itself, post-SSA), or a constructor
+   normally an SSA name, not VAR itself, post-SSA), a constructor
    call whose own "this" (first) argument is &VAR (a constructor
    returns void and writes through its first argument instead of an
-   ordinary LHS).  */
+   ordinary LHS), or a std::now_valid call whose own argument is VAR
+   (recognized via its ARGUMENT, not its call-LHS: a reference-
+   returning call's LHS, if any, is a temporary holding the returned
+   reference, never VAR itself -- confirmed this is the only shape
+   that lets a manual revalidation of VAR register as a fresh write to
+   VAR without also needing 'VAR = std::now_valid (VAR);' at every call
+   site, since ip_check_operand_uses only ever asks "what is the
+   nearest write to VAR", never "what did this specific statement
+   assign to its LHS").  */
 
 static bool
 ip_defines_var_p (gimple *stmt, tree var)
@@ -354,6 +392,8 @@ ip_defines_var_p (gimple *stmt, tree var)
 	  return TREE_CODE (this_arg) == ADDR_EXPR
 		 && TREE_OPERAND (this_arg, 0) == var;
 	}
+      if (ip_now_valid_call_p (call) && gimple_call_num_args (call) >= 1)
+	return ip_receiver_decl (gimple_call_arg (call, 0)) == var;
       return false;
     }
   if (is_gimple_assign (stmt))
@@ -455,11 +495,7 @@ ip_local_var_p (tree decl)
 static bool
 ip_no_dangling_call_p (gcall *call)
 {
-  tree fndecl = gimple_call_fndecl (call);
-  if (!fndecl || !decl_in_std_namespace_p (fndecl))
-    return false;
-  tree name = DECL_NAME (fndecl);
-  return name && id_equal (name, "no_dangling");
+  return ip_std_call_named_p (call, "no_dangling");
 }
 
 /* True if any of CALL's arguments resolves to something that would
@@ -831,13 +867,20 @@ ip_resolve_defining_stmt (tree rhs, gimple *point)
 
 /* The container declaration DEF_STMT's own effect binds its LHS to
    (P4296R0 S7.6.2's "proven binding"), or NULL_TREE if this checker
-   cannot establish one: a member call whose return value could
-   possibly reference its receiver's own state
-   (ip_call_result_may_reference_receiver_p) binds to that receiver
-   (ip_receiver_decl); a plain copy, or pointer arithmetic on one
-   ('base + n', the common 'vec.data() + n' shape -- confirmed
-   directly: without this, the pointer-arithmetic assignment this
-   lowers to is neither a GIMPLE_CALL nor a single-operand copy, so
+   cannot establish one: a std::now_valid call inherits whatever
+   binding its own argument was ALREADY bound to, as of the nearest
+   write to that argument strictly before this call (deliberately
+   re-deriving the SAME, unchanged binding -- the point of this branch
+   isn't to change what the argument is bound to, only to let
+   ip_check_operand_uses's own caller-side ip_nearest_write_before see
+   THIS call as the argument's own current establishing statement, so
+   only a mutation strictly after it counts against future uses); a
+   member call whose return value could possibly reference its
+   receiver's own state (ip_call_result_may_reference_receiver_p) binds
+   to that receiver (ip_receiver_decl); a plain copy, or pointer
+   arithmetic on one ('base + n', the common 'vec.data() + n' shape --
+   confirmed directly: without this, the pointer-arithmetic assignment
+   this lowers to is neither a GIMPLE_CALL nor a single-operand copy, so
    binding establishment gave up immediately and never even recursed
    into 'vec.data()' itself), inherits whatever binding the nearest
    reaching write to the base declaration, as of DEF_STMT's own
@@ -854,6 +897,14 @@ ip_binding_established_by (gimple *def_stmt)
   if (gimple_code (def_stmt) == GIMPLE_CALL)
     {
       gcall *call = as_a<gcall *> (def_stmt);
+      if (ip_now_valid_call_p (call) && gimple_call_num_args (call) >= 1)
+	{
+	  tree var = ip_receiver_decl (gimple_call_arg (call, 0));
+	  if (!var)
+	    return NULL_TREE;
+	  gimple *reaching = ip_nearest_write_before (var, def_stmt);
+	  return reaching ? ip_binding_established_by (reaching) : NULL_TREE;
+	}
       tree fndecl = gimple_call_fndecl (call);
       tree lhs = gimple_call_lhs (call);
       if (!fndecl || !lhs || !DECL_IOBJ_MEMBER_FUNCTION_P (fndecl)
@@ -1197,12 +1248,21 @@ ip_check_function (function *fun)
 		mutated_decls.safe_push (muts[m].decl);
 		mutated_types.safe_push (muts[m].type);
 	      }
-	    for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
-	      {
-		tree arg = gimple_call_arg (call, i);
-		if (tree decl = ip_use_decl (arg))
-		  uses.safe_push ({ stmt, decl });
-	      }
+	    /* A std::now_valid call's own argument is never an ordinary
+	       read needing validation against past mutations -- the
+	       whole point of calling it is to supersede whatever the
+	       argument's prior binding state was, not to read through
+	       it one more time under the old rules (ip_defines_var_p/
+	       ip_binding_established_by above handle the WRITE side of
+	       this same call; this is what keeps the READ side from
+	       flagging the very call meant to fix things).  */
+	    if (!ip_now_valid_call_p (call))
+	      for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+		{
+		  tree arg = gimple_call_arg (call, i);
+		  if (tree decl = ip_use_decl (arg))
+		    uses.safe_push ({ stmt, decl });
+		}
 	  }
 	else if (is_gimple_assign (stmt) && gimple_assign_single_p (stmt))
 	  {
