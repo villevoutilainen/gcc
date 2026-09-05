@@ -5905,6 +5905,7 @@ cxx_init_decl_processing (void)
     init_contracts ();
 
   init_profiles ();
+  profiles_process_command_line_enforcement ();
 
   if (modules_p ())
     init_modules (parse_in);

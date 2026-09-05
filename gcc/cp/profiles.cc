@@ -136,6 +136,41 @@ profiles_enforced_p (const char *name)
   return bit != 0 && (profiles_enforced_mask & bit) != 0;
 }
 
+/* Non-intrusive command-line enforcement: apply every profile name
+   c-opts.cc's own handle_profiles_enforced_option split out of a
+   -fprofiles-enforced=name[,name...] occurrence
+   (profiles_enforced_table, c-family/c-common.h) directly to
+   profiles_enforced_mask, the same bit '[[profiles::enforce(name)]]'
+   itself would set -- letting an unmodified TU be compiled under an
+   enforced profile without adding that attribute to its source at
+   all. Called once, from cxx_init_decl_processing (decl.cc) right
+   after init_profiles registers the GIMPLE passes, and so before any
+   parsing has happened: unlike a contract group's evaluation
+   semantic (looked up lazily, only when a contract in that group is
+   actually checked), a profile has to be active from the TU's very
+   first declaration onward, the same as if the equivalent attribute
+   had appeared before it -- so this can't wait for first use the way
+   handle_contract_group_semantics's own table is allowed to.  An
+   unrecognized name is a plain error() (no source location makes
+   sense for a command-line argument), matching handle_contract_
+   group_semantics's own convention for the identical situation.  */
+
+void
+profiles_process_command_line_enforcement (void)
+{
+  for (unsigned i = 0; i < profiles_enforced_table.length (); ++i)
+    {
+      const char *name = profiles_enforced_table[i].name;
+      unsigned bit = profiles_lookup (name);
+      if (!bit)
+	{
+	  error ("unknown profile %qs in %<-fprofiles-enforced%>", name);
+	  continue;
+	}
+      profiles_enforced_mask |= bit;
+    }
+}
+
 /* P3589, Phase 5: registered exemptions -- one entry per
    '[[profiles::exempt(profile, angle_header: "NAME")]]'/
    quote_header:.  A plain vec, not GTY-marked: this bookkeeping is
