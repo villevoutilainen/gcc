@@ -1289,15 +1289,21 @@ ip_arg_uninit_flavored_p (tree arg)
     }
   if (TREE_CODE (arg) == SSA_NAME)
     {
-      /* Unlike '&local_var', '&this->field' needs a pointer-
-	 arithmetic computation GIMPLE never inlines directly at the
-	 point of use (confirmed by direct testing) -- if ARG's own
-	 reaching definition is exactly such an ADDR_EXPR assignment,
-	 apply the same ADDR_EXPR-shape check to what it computed the
-	 address of, rather than to ARG itself.  */
+      /* If ARG's own reaching definition is itself a single-operand
+	 assignment -- '&local_var'/'&this->field' (an ADDR_EXPR GIMPLE
+	 never inlines directly at the point of use, confirmed by direct
+	 testing), or a plain copy of another value into an anonymous
+	 SSA temporary (confirmed by direct testing: a GLOBAL pointer
+	 variable's read is first copied into one, e.g. 'src.0_1 = src;'
+	 followed by 'take (src.0_1);' -- the call never sees 'src'
+	 itself at all) -- recurse into whatever THAT assignment's own
+	 RHS is, rather than examining ARG itself.  Well-founded (no
+	 cycle-guard needed): a GIMPLE_ASSIGN's own reaching def is
+	 always a strictly earlier statement, and this branch only ever
+	 fires for an is_gimple_assign def, never a GIMPLE_PHI, so there
+	 is no loop this recursion could run around.  */
       gimple *def = SSA_NAME_DEF_STMT (arg);
-      if (def && is_gimple_assign (def)
-	  && gimple_assign_rhs_code (def) == ADDR_EXPR)
+      if (def && is_gimple_assign (def) && gimple_assign_single_p (def))
 	return ip_arg_uninit_flavored_p (gimple_assign_rhs1 (def));
 
       tree var = SSA_NAME_VAR (arg);
@@ -1305,7 +1311,21 @@ ip_arg_uninit_flavored_p (tree arg)
 	  && (VAR_P (var) || TREE_CODE (var) == PARM_DECL)
 	  && TREE_CODE (TREE_TYPE (var)) == POINTER_TYPE)
 	return profiles_uninit_pointee_p (var);
+      return false;
     }
+  /* A bare VAR_DECL/PARM_DECL (not wrapped in an SSA_NAME at all) --
+     the shape a memory-resident pointer variable's read produces, e.g.
+     a global/namespace-scope variable (never is_gimple_reg regardless
+     of its own scalar-ness, since its value can be observed/modified
+     from outside this function's own CFG) or a local whose address is
+     taken elsewhere in the function.  Confirmed directly: a [[ref_to_
+     uninit]]-marked GLOBAL pointer passed as a call argument was
+     silently treated as unflavored before this branch existed, purely
+     because it happens to reach this function as 'src' itself rather
+     than as 'SSA_NAME_VAR (src_N)'.  */
+  if ((VAR_P (arg) || TREE_CODE (arg) == PARM_DECL)
+      && TREE_CODE (TREE_TYPE (arg)) == POINTER_TYPE)
+    return profiles_uninit_pointee_p (arg);
   return false;
 }
 
@@ -1367,6 +1387,61 @@ ip_check_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
     }
 }
 
+/* The plain-assignment counterpart of ip_check_call_flavor_
+   consistency above, same bidirectional mismatch rule (S4.2), applied
+   to an ordinary 'dst = src;' between two named pointer variables/
+   parameters instead of a call argument/parameter pair. Covers a
+   declaration's own initializer for free, with no special-casing:
+   confirmed via direct -fdump-tree-gimple reading that 'T* q = p;'
+   written as an initializer and 'q = p;' written as a later, separate
+   assignment produce the identical GIMPLE_ASSIGN statement shape, so
+   there is no "is this an initializer" distinction to make at this
+   level in the first place. Also covers a cast ('(T*) src') exactly
+   like a plain copy, for the same reason ip_arg_uninit_flavored_p
+   already does: gimple_assign_rhs1 returns the actual operand
+   regardless of whether the assignment's own rhs_code is a bare copy
+   or a NOP_EXPR/CONVERT_EXPR wrapping it.
+
+   Without this, a [[ref_to_uninit]]-flavored pointer's flavor could be
+   silently discarded by one intervening copy into an unmarked pointer
+   variable -- nothing would then distinguish that unmarked copy from
+   an ordinary, definitely-safe pointer, so it could go on to be passed
+   anywhere (including to a plain, unflavored parameter) with zero
+   further checking, defeating the whole point of requiring the
+   flavor to be explicitly declared in the first place.  */
+
+static void
+ip_check_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
+{
+  if (!is_gimple_assign (stmt) || !gimple_assign_single_p (stmt))
+    return;
+  tree lhs = gimple_assign_lhs (stmt);
+  if (TREE_CODE (TREE_TYPE (lhs)) != POINTER_TYPE)
+    return;
+  tree lhs_var = ip_underlying_var (lhs);
+  if (!lhs_var)
+    return;
+
+  bool dst_flavor = profiles_uninit_pointee_p (lhs_var);
+  bool src_flavor = ip_arg_uninit_flavored_p (gimple_assign_rhs1 (stmt));
+
+  if (dst_flavor == src_flavor)
+    return;
+  if (profiles_diagnostic_exempt_p (gimple_location (stmt),
+				     enclosing_fndecl, "std::init"))
+    return;
+  if (src_flavor)
+    error_at (gimple_location (stmt),
+	      "assigning a pointer marked %<[[ref_to_uninit]]%> into a "
+	      "pointer not marked %<[[ref_to_uninit]]%>, under the "
+	      "%<std::init%> profile");
+  else
+    error_at (gimple_location (stmt),
+	      "assigning a pointer not marked %<[[ref_to_uninit]]%> into a "
+	      "pointer marked %<[[ref_to_uninit]]%>, under the %<std::init%> "
+	      "profile");
+}
+
 static unsigned int
 ip_check_function (function *fun)
 {
@@ -1374,7 +1449,10 @@ ip_check_function (function *fun)
   FOR_EACH_BB_FN (bb, fun)
     for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
 	 gsi_next (&gsi))
-      ip_check_call_flavor_consistency (gsi_stmt (gsi), fun->decl);
+      {
+	ip_check_call_flavor_consistency (gsi_stmt (gsi), fun->decl);
+	ip_check_assign_flavor_consistency (gsi_stmt (gsi), fun->decl);
+      }
 
   unsigned i;
   tree var;
