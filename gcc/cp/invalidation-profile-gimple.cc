@@ -800,22 +800,53 @@ ip_check_return_escape (gimple *return_stmt, tree enclosing_fndecl)
 	    "safe)");
 }
 
+/* Resolve RHS -- either the whole RHS of a single-copy assignment, or
+   a POINTER_PLUS_EXPR's own base operand (the offset itself never
+   matters: 'base + n' traces back to whatever 'base' does, just at a
+   different position within the same storage) -- to whichever
+   statement actually defines it, or NULL if that can't be done: a
+   pure anonymous SSA temporary (no home VAR_DECL at all -- e.g. a raw
+   pointer's own 'begin()'/'data()' return value, confirmed via direct
+   -fdump-tree-ssa reading: unlike a class-typed return, which
+   mandatory copy elision constructs directly into the named local, a
+   POINTER return's value commonly lives in a plain SSA temporary the
+   gimplifier never names) resolves directly via its own SSA_NAME_
+   DEF_STMT, since SSA form already gives the unique reaching
+   definition with no CFG walk needed or even possible; anything else
+   ip_trackable_decl resolves to a real VAR_DECL/PARM_DECL (through its
+   own SSA_NAME_VAR unwrap) is looked up via ip_nearest_write_before
+   instead, since a real declaration needs the same CFG-dominance walk
+   every other tracked binding does.  Shared by ip_binding_established_
+   by and ip_originating_call below, which differ only in what they do
+   with the statement this resolves to.  */
+
+static gimple *
+ip_resolve_defining_stmt (tree rhs, gimple *point)
+{
+  if (TREE_CODE (rhs) == SSA_NAME && !SSA_NAME_VAR (rhs))
+    return SSA_NAME_DEF_STMT (rhs);
+  tree decl = ip_trackable_decl (rhs);
+  return decl ? ip_nearest_write_before (decl, point) : NULL;
+}
+
 /* The container declaration DEF_STMT's own effect binds its LHS to
    (P4296R0 S7.6.2's "proven binding"), or NULL_TREE if this checker
    cannot establish one: a member call whose return value could
    possibly reference its receiver's own state
    (ip_call_result_may_reference_receiver_p) binds to that receiver
-   (ip_receiver_decl); a plain copy from another class-typed or
-   pointer-typed declaration (ip_trackable_decl's own SSA_NAME_VAR
-   unwrap -- a raw pointer's own copy is normally 'q_2 = p_1;' at this
-   point, an SSA-to-SSA copy, not literally naming the VAR_DECL the
-   way a class-typed copy does) inherits whatever binding the nearest
-   reaching write to THAT declaration, as of DEF_STMT's own position,
-   itself establishes -- recursing via ip_nearest_write_before, which
-   is always called on a strictly earlier statement than its caller's
-   own DEF_STMT, so this recursion is well-founded (no cycle-guard is
-   needed the way contracts-gimple.cc's PHI recursion needs one: there
-   is no PHI node here to create a cycle through).  */
+   (ip_receiver_decl); a plain copy, or pointer arithmetic on one
+   ('base + n', the common 'vec.data() + n' shape -- confirmed
+   directly: without this, the pointer-arithmetic assignment this
+   lowers to is neither a GIMPLE_CALL nor a single-operand copy, so
+   binding establishment gave up immediately and never even recursed
+   into 'vec.data()' itself), inherits whatever binding the nearest
+   reaching write to the base declaration, as of DEF_STMT's own
+   position, itself establishes -- recursing via ip_resolve_defining_
+   stmt/ip_nearest_write_before, which are always called on a strictly
+   earlier statement than this function's own DEF_STMT, so this
+   recursion is well-founded (no cycle-guard is needed the way
+   contracts-gimple.cc's PHI recursion needs one: there is no PHI node
+   here to create a cycle through).  */
 
 static tree
 ip_binding_established_by (gimple *def_stmt)
@@ -832,66 +863,48 @@ ip_binding_established_by (gimple *def_stmt)
 	return NULL_TREE;
       return ip_receiver_decl (gimple_call_arg (call, 0));
     }
+  if (is_gimple_assign (def_stmt)
+      && gimple_assign_rhs_code (def_stmt) == POINTER_PLUS_EXPR)
+    {
+      gimple *reaching = ip_resolve_defining_stmt (gimple_assign_rhs1 (def_stmt),
+						    def_stmt);
+      return reaching ? ip_binding_established_by (reaching) : NULL_TREE;
+    }
   if (is_gimple_assign (def_stmt) && gimple_assign_single_p (def_stmt))
     {
-      tree rhs = gimple_assign_rhs1 (def_stmt);
-      if (TREE_CODE (rhs) == SSA_NAME && !SSA_NAME_VAR (rhs))
-	{
-	  /* A pure SSA temporary -- e.g. a raw pointer's own
-	     'begin()' return value, held directly in an anonymous
-	     '_12' with no home VAR_DECL at all, rather than copied
-	     into one (confirmed via direct -fdump-tree-ssa reading:
-	     unlike a class-typed return, which mandatory copy elision
-	     constructs directly into the named local, a POINTER
-	     return's value commonly lives in a plain SSA temporary
-	     the gimplifier never names).  SSA form already gives the
-	     unique reaching definition directly here, no CFG walk
-	     (ip_nearest_write_before, which needs a real VAR_DECL to
-	     scan for) is needed or even possible.  */
-	  gimple *def = SSA_NAME_DEF_STMT (rhs);
-	  return def ? ip_binding_established_by (def) : NULL_TREE;
-	}
-      tree decl = ip_trackable_decl (rhs);
-      if (!decl)
-	return NULL_TREE;
-      gimple *reaching = ip_nearest_write_before (decl, def_stmt);
+      gimple *reaching = ip_resolve_defining_stmt (gimple_assign_rhs1 (def_stmt),
+						    def_stmt);
       return reaching ? ip_binding_established_by (reaching) : NULL_TREE;
     }
   return NULL_TREE;
 }
 
-/* The same chain of copies/anonymous-SSA-temp hops ip_binding_
-   established_by walks, but returning the ultimate GIMPLE_CALL it
-   traces back to (or NULL_TREE if that walk wouldn't establish a
-   binding at all) instead of what that call binds its result to.
-   Used so a value's own establishing call is never also counted as a
-   mutation that invalidates that SAME value: a call to a non-const,
-   unannotated accessor like 'begin()' is, by ip_collect_mutations's
-   own "assumed invalidating" default, itself a mutation of its
-   receiver -- but the fresh iterator/pointer it just returned cannot
-   have been invalidated by that same call's own side effect, only a
-   DIFFERENT, earlier-bound value could be.  Mirrors ip_binding_
-   established_by's own recursive structure exactly, for the same
-   reason (no cycle-guard needed: no PHI node here to create a cycle
-   through).  */
+/* The same chain of copies/pointer-arithmetic/anonymous-SSA-temp hops
+   ip_binding_established_by walks (via the identical ip_resolve_
+   defining_stmt helper), but returning the ultimate GIMPLE_CALL it
+   traces back to (or NULL if that walk wouldn't establish a binding at
+   all) instead of what that call binds its result to.  Used so a
+   value's own establishing call is never also counted as a mutation
+   that invalidates that SAME value: a call to a non-const, unannotated
+   accessor like 'begin()' is, by ip_collect_mutations's own "assumed
+   invalidating" default, itself a mutation of its receiver -- but the
+   fresh iterator/pointer it just returned cannot have been invalidated
+   by that same call's own side effect, only a DIFFERENT, earlier-bound
+   value could be.  Mirrors ip_binding_established_by's own recursive
+   structure exactly, for the same reason (no cycle-guard needed: no
+   PHI node here to create a cycle through).  */
 
 static gimple *
 ip_originating_call (gimple *def_stmt)
 {
   if (gimple_code (def_stmt) == GIMPLE_CALL)
     return def_stmt;
-  if (is_gimple_assign (def_stmt) && gimple_assign_single_p (def_stmt))
+  if (is_gimple_assign (def_stmt)
+      && (gimple_assign_rhs_code (def_stmt) == POINTER_PLUS_EXPR
+	  || gimple_assign_single_p (def_stmt)))
     {
-      tree rhs = gimple_assign_rhs1 (def_stmt);
-      if (TREE_CODE (rhs) == SSA_NAME && !SSA_NAME_VAR (rhs))
-	{
-	  gimple *def = SSA_NAME_DEF_STMT (rhs);
-	  return def ? ip_originating_call (def) : NULL;
-	}
-      tree decl = ip_trackable_decl (rhs);
-      if (!decl)
-	return NULL;
-      gimple *reaching = ip_nearest_write_before (decl, def_stmt);
+      gimple *reaching = ip_resolve_defining_stmt (gimple_assign_rhs1 (def_stmt),
+						    def_stmt);
       return reaching ? ip_originating_call (reaching) : NULL;
     }
   return NULL;
