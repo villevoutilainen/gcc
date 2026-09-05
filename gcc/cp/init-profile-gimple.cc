@@ -1305,6 +1305,29 @@ ip_arg_uninit_flavored_p (tree arg)
       gimple *def = SSA_NAME_DEF_STMT (arg);
       if (def && is_gimple_assign (def) && gimple_assign_single_p (def))
 	return ip_arg_uninit_flavored_p (gimple_assign_rhs1 (def));
+      /* Or, if ARG's own reaching definition is a GIMPLE_CALL, ARG is
+	 that call's own return value -- flavored exactly when CALLEE's
+	 own return is (P4222 S4.3's "void* [[ref_to_uninit]]
+	 malloc(size_t);"-shaped case, handle_ref_to_uninit_attribute's
+	 FUNCTION_DECL branch, tree.cc). Confirmed via direct testing
+	 this is the COMMON shape for 'p = flavored_fn ();' once SSA
+	 construction has run: the call's own result is NOT assigned
+	 directly into 'p' but into an anonymous SSA temporary first
+	 ('_2 = flavored_fn (); p = _2;'), so without this branch, the
+	 second, plain-copy statement's own RHS ('_2') would fall through
+	 to the SSA_NAME_VAR check below and find nothing (an anonymous
+	 temp has none), silently treating a flavored return as
+	 unflavored.  No new predicate needed: profiles_uninit_pointee_p
+	 already does nothing but a bare DECL_ATTRIBUTES lookup, which
+	 works identically for a FUNCTION_DECL as for any other decl
+	 kind.  */
+      if (def && gimple_code (def) == GIMPLE_CALL)
+	{
+	  tree callee = gimple_call_fndecl (as_a<gcall *> (def));
+	  if (callee)
+	    return profiles_uninit_pointee_p (callee);
+	  return false;
+	}
 
       tree var = SSA_NAME_VAR (arg);
       if (var
