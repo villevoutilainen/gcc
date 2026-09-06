@@ -539,15 +539,10 @@ profiles_uninit_pointee_p (tree decl)
 	 || lookup_attribute ("must_init", DECL_ATTRIBUTES (decl)) != NULL_TREE;
 }
 
-/* True if EXP -- the operand of a delete-expression, after ordinary
-   expression semantics have run but before delete_sanity's own
-   pointer-conversion (decl2.cc) -- is a reference to a declaration
-   carrying [[owning_ptr]].  P4296R0's Negative Baseline (S7.2,
-   [ub:expr.delete.mismatch]) requires this of every deleted pointer;
-   anything this can't trace back to a single, directly-named
-   declaration (an arbitrary expression, a temporary, a call result)
-   is conservatively treated as NOT owning -- "erring on the safe
-   side", the same stance the paper itself takes throughout S7.2.  */
+/* True if FNDECL (a non-static member function) carries
+   [[not_invalidating]] directly on itself (as opposed to on one of its
+   own parameters -- see profiles_not_invalidating_at_position_p just
+   below for that case).  */
 
 bool
 profiles_not_invalidating_p (tree fndecl)
@@ -555,6 +550,13 @@ profiles_not_invalidating_p (tree fndecl)
   return lookup_attribute ("not_invalidating", DECL_ATTRIBUTES (fndecl))
 	 != NULL_TREE;
 }
+
+/* True if FNDECL's parameter at 1-based POSITION carries
+   [[not_invalidating]] -- consults the synthesized function-level
+   "profiles_not_invalidating_flavor" marker (grokfndecl, decl.cc)
+   rather than the PARM_DECL directly, for the same "still correct for
+   a declared-but-undefined callee" reason profiles_uninit_flavor_at_
+   position_p does.  */
 
 bool
 profiles_not_invalidating_at_position_p (tree fndecl, unsigned position)
@@ -568,6 +570,25 @@ profiles_not_invalidating_at_position_p (tree fndecl, unsigned position)
       return true;
   return false;
 }
+
+/* True if EXP -- the operand of a delete-expression, after ordinary
+   expression semantics have run but before delete_sanity's own
+   pointer-conversion (decl2.cc) -- is a reference to a declaration
+   carrying [[owning_ptr]]/[[owner]].  P4296R0's Negative Baseline
+   (S7.2, [ub:expr.delete.mismatch]) requires this of every deleted
+   pointer; anything this can't trace back to a single, directly-named
+   declaration (an arbitrary expression, a temporary, a call result)
+   is conservatively treated as NOT owning -- "erring on the safe
+   side", the same stance the paper itself takes throughout S7.2.
+
+   Also used directly on a bare FUNCTION_DECL to answer "is this
+   function's own return value owner-flavored" -- a FUNCTION_DECL
+   argument is already DECL_P and isn't a location wrapper, CONVERT_
+   EXPR_P, NON_LVALUE_EXPR, or COMPONENT_REF, so it sails through the
+   stripping/unwrapping steps below unchanged and falls straight into
+   the same DECL_ATTRIBUTES lookup -- no separate predicate needed,
+   the same way profiles_uninit_pointee_p is reused as-is for
+   [[ref_to_uninit]]'s own return-flavor case.  */
 
 bool
 profiles_owning_ptr_p (tree exp)
@@ -584,6 +605,29 @@ profiles_owning_ptr_p (tree exp)
     return false;
   return lookup_attribute ("owning_ptr", DECL_ATTRIBUTES (exp)) != NULL_TREE
 	 || lookup_attribute ("owner", DECL_ATTRIBUTES (exp)) != NULL_TREE;
+}
+
+/* True if FNDECL's parameter at 1-based POSITION carries
+   [[owning_ptr]]/[[owner]] -- consults the synthesized function-level
+   "profiles_owning_flavor" marker (grokfndecl, decl.cc), the same
+   "still correct for a declared-but-undefined callee" reason
+   profiles_uninit_flavor_at_position_p/profiles_not_invalidating_at_
+   position_p both already rely on.  Used by the owner-consumption
+   checker (invalidation-profile-gimple.cc) to recognize "this call
+   argument is passed to an owner-accepting sink parameter" as a
+   consuming event.  */
+
+bool
+profiles_owning_ptr_at_position_p (tree fndecl, unsigned position)
+{
+  tree marker = lookup_attribute ("profiles_owning_flavor",
+				   DECL_ATTRIBUTES (fndecl));
+  if (!marker)
+    return false;
+  for (tree e = TREE_VALUE (marker); e; e = TREE_CHAIN (e))
+    if (TREE_INT_CST_LOW (TREE_PURPOSE (e)) == position)
+      return true;
+  return false;
 }
 
 bool

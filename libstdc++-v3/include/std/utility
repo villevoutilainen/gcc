@@ -288,6 +288,27 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     now_valid(_Tp& __obj [[not_invalidating]]) noexcept
     { return __obj; }
 
+  /// P3446R0/P4296R0 (Invalidation profile): assert -- without proof --
+  /// that __x (an [[owner]]/[[owning_ptr]] pointer value) has been
+  /// properly handed off for cleanup by some means this checker cannot
+  /// itself see (e.g. construction of a std::unique_ptr from it, or
+  /// any other RAII wrapper this checker doesn't recognize) -- see
+  /// invalidation-profile-gimple.cc's own recognition of a call to
+  /// this exact function. The owner-consumption analogue of no_dangling
+  /// above: this checker's definite-consumption analysis only
+  /// recognizes delete, an owner-accepting sink parameter/return, and
+  /// an [[owner]]-marked field as consuming events -- passing an owner
+  /// value through this function first lets any other hand-off count
+  /// too, e.g. "auto up = std::unique_ptr<T>(std::owner_consumed(p));".
+  /// By-value, like no_dangling: there is no existing addressable
+  /// object to attach an assertion to -- __x is an arbitrary owner
+  /// value expression, not a named variable.
+  template<typename _Tp>
+    [[__gnu__::__always_inline__]]
+    constexpr _Tp
+    owner_consumed(_Tp __x)
+    { return __x; }
+
 _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace
 

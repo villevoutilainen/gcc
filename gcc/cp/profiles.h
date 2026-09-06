@@ -202,8 +202,18 @@ extern void profiles_process_suppress_attributes (tree attrs,
    verbatim from the delete-expression's own operand in decl2.cc's
    delete_sanity) resolves to a declaration carrying [[owning_ptr]].
    See profiles.cc's own definition for exactly how much of EXP's
-   shape this can see through.  */
+   shape this can see through -- including a bare FUNCTION_DECL, used
+   to answer "is this function's own return owner-flavored".  */
 extern bool profiles_owning_ptr_p (tree exp);
+
+/* P3446R0/P4296R0: true if FNDECL's parameter at 1-based POSITION
+   carries [[owning_ptr]]/[[owner]] -- consults the synthesized
+   function-level "profiles_owning_flavor" marker (grokfndecl,
+   decl.cc), the same "still correct for a declared-but-undefined
+   callee" pattern profiles_uninit_flavor_at_position_p/profiles_not_
+   invalidating_at_position_p both already use.  */
+extern bool profiles_owning_ptr_at_position_p (tree fndecl,
+						unsigned position);
 
 /* P3446R0, Phase 7b: true if FNDECL (a non-static member function)
    carries [[not_invalidating]] -- see invalidation-profile-gimple.cc's
