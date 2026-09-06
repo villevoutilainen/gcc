@@ -5842,6 +5842,27 @@ handle_must_init_attribute (tree *node, tree name, tree, int,
    far, not references or smart pointers (P4296R0 S8.2 notes the
    latter needs its own, separate library-annotation pass).
 
+   Also allowed directly on a FUNCTION_DECL, marking its own RETURN
+   value as a fresh owning pointer (the "[[owner]] Foo* make_foo();"
+   shape) -- confirmed empirically that both declaration-level
+   attribute positions reach this handler with *node already the
+   FUNCTION_DECL itself, the same way handle_ref_to_uninit_attribute's
+   own FUNCTION_DECL branch does (see that function's own comment for
+   why the third, type-attribute position is a different, unrelated
+   GCC mechanism this attribute was never registered for).  Unlike
+   ref_to_uninit's return-value case, no REFERENCE_TYPE here: an
+   owning reference isn't a coherent concept under this profile's own
+   model -- it can neither be 'delete'd (delete_sanity's own check is
+   already POINTER_TYPE-only, decl2.cc) nor reseated to indicate
+   consumption the way a pointer can. No new query predicate is needed
+   for this case either: profiles_owning_ptr_p (profiles.cc) already
+   does nothing but a bare DECL_ATTRIBUTES lookup once it reaches a
+   DECL_P, which a bare FUNCTION_DECL argument already is -- calling
+   it directly on a callee FUNCTION_DECL is how invalidation-profile-
+   gimple.cc's own owner-consumption checker reads a call's return
+   flavor, the exact same reuse init-profile-gimple.cc's ip_arg_
+   uninit_flavored_p already established for [[ref_to_uninit]].
+
    [[owner]] (below, same handler) is the exact same attribute under
    Stroustrup's own CppCon 2026 "Profiles" talk's spelling (slides
    50-53) -- kept as a second, alternate spelling alongside
@@ -5853,13 +5874,26 @@ static tree
 handle_owning_ptr_attribute (tree *node, tree name, tree, int,
 			      bool *no_add_attrs)
 {
+  if (TREE_CODE (*node) == FUNCTION_DECL)
+    {
+      tree ret_type = TREE_TYPE (TREE_TYPE (*node));
+      if (TREE_CODE (ret_type) != POINTER_TYPE)
+	{
+	  error_at (input_location,
+		    "%qE only supported on a function returning a pointer, "
+		    "under the %<std::invalidation%> profile", name);
+	  *no_add_attrs = true;
+	}
+      return NULL_TREE;
+    }
   if ((TREE_CODE (*node) != PARM_DECL && !VAR_P (*node)
        && TREE_CODE (*node) != FIELD_DECL)
       || TREE_CODE (TREE_TYPE (*node)) != POINTER_TYPE)
     {
       error_at (input_location,
 		"%qE only supported on a pointer-typed parameter, "
-		"variable, or non-static data member", name);
+		"variable, or non-static data member, or a function "
+		"returning one", name);
       *no_add_attrs = true;
     }
   return NULL_TREE;

@@ -12645,6 +12645,38 @@ grokfndecl (tree ctype,
 		     not_invalidating_list, DECL_ATTRIBUTES (decl));
   }
 
+  /* P3446R0/P4296R0 Invalidation profile: synthesize the same kind of
+     function-level positional record (see the P4222 profiles_uninit_
+     flavor comment above, and profiles.cc's own profiles_owning_ptr_
+     at_position_p) for [[owning_ptr]]/[[owner]] on a parameter -- an
+     owner-consumption caller-side check ("is the sink parameter I'm
+     passing this owner pointer to itself owner-marked") needs to ask
+     this of a declared-but-not-yet-defined callee, whose real
+     PARM_DECLs are discarded the same way the P4222 comment above
+     explains.  Both spellings must be checked here -- unlike not_
+     invalidating just above, [[owning_ptr]]/[[owner]] has two active
+     spellings (profiles_owning_ptr_p, profiles.cc, already checks
+     both), and copying the single-spelling loop above without also
+     checking "owner" would silently miss it.  */
+  {
+    tree owning_list = NULL_TREE;
+    unsigned pos = 1;
+    for (t = parms; t; t = DECL_CHAIN (t), ++pos)
+      {
+	if (TREE_CODE (TREE_TYPE (t)) != POINTER_TYPE)
+	  continue;
+	if (lookup_attribute ("owning_ptr", DECL_ATTRIBUTES (t))
+	    || lookup_attribute ("owner", DECL_ATTRIBUTES (t)))
+	  owning_list
+	    = tree_cons (build_int_cst (integer_type_node, pos), NULL_TREE,
+			 owning_list);
+      }
+    if (owning_list)
+      DECL_ATTRIBUTES (decl)
+	= tree_cons (get_identifier ("profiles_owning_flavor"),
+		     owning_list, DECL_ATTRIBUTES (decl));
+  }
+
   /* Propagate volatile out from type to decl.  */
   if (TYPE_VOLATILE (type))
     TREE_THIS_VOLATILE (decl) = 1;
