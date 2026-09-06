@@ -266,6 +266,37 @@ ip_component_ref_base (tree t)
   return t;
 }
 
+/* True if PTR's own value is traceable through a straight-line chain
+   of plain single-operand copies all the way back to a literal
+   'ADDR_EXPR (var)' -- i.e. PTR is provably '&var', not merely some
+   pointer that MIGHT be. Pointer arithmetic, a PHI-merged pointer, or
+   a pointer read back out of some OTHER variable all conservatively
+   decline (return false), matching this file's default-decline stance
+   elsewhere for anything requiring real points-to reasoning (e.g.
+   ip_resolve_underlying_decl further down, for an unrelated purpose).
+   Shared by ip_mem_ref_targets_var_p below (PTR is a dereference's own
+   base operand) and ip_scan_stmt_for_var's std::construct_at
+   recognition (PTR is passed directly as a call argument, no
+   dereference involved at all).  */
+
+static bool
+ip_ptr_traces_to_var_p (tree ptr, tree var)
+{
+  if (TREE_CODE (ptr) == ADDR_EXPR)
+    return TREE_OPERAND (ptr, 0) == var;
+  while (TREE_CODE (ptr) == SSA_NAME)
+    {
+      gimple *def = SSA_NAME_DEF_STMT (ptr);
+      if (!def || !is_gimple_assign (def) || !gimple_assign_single_p (def))
+	return false;
+      tree rhs = gimple_assign_rhs1 (def);
+      if (TREE_CODE (rhs) == ADDR_EXPR)
+	return TREE_OPERAND (rhs, 0) == var;
+      ptr = rhs;
+    }
+  return false;
+}
+
 /* True if T is a MEM_REF (a raw pointer's own dereference, '*p') whose
    base pointer's reaching definition traces back to '&VAR' -- an
    access through a pointer this checker can prove points at VAR is
@@ -285,35 +316,39 @@ ip_component_ref_base (tree t)
    per-statement scan like this one -- nothing about the *shape* '*p'
    contains 'x' as a literal subtree, unlike '&x' or 'x.field' or
    'x[i]', which this file's existing ARRAY_REF/COMPONENT_REF/direct-
-   equality checks already catch. Deliberately narrow, matching this
-   file's default-decline stance for anything requiring real points-to
-   reasoning: only a ZERO-offset MEM_REF is considered (VAR is a
-   scalar, so any other offset reads/writes memory merely NEAR var,
-   not var itself), and only if the pointer's own value is traceable
-   through a straight-line chain of plain single-operand copies all
-   the way back to a literal 'ADDR_EXPR (var)' -- pointer arithmetic, a
-   PHI-merged pointer, or a pointer read back out of some OTHER
-   variable all conservatively decline (return false), same as this
-   file's other reaching-value traces (e.g. ip_resolve_underlying_decl
-   further down) already do for an unprovable case.  */
+   equality checks already catch. Deliberately narrow: only a
+   ZERO-offset MEM_REF is considered (VAR is a scalar, so any other
+   offset reads/writes memory merely NEAR var, not var itself).  */
 
 static bool
 ip_mem_ref_targets_var_p (tree t, tree var)
 {
   if (TREE_CODE (t) != MEM_REF || !integer_zerop (TREE_OPERAND (t, 1)))
     return false;
-  tree ptr = TREE_OPERAND (t, 0);
-  while (TREE_CODE (ptr) == SSA_NAME)
-    {
-      gimple *def = SSA_NAME_DEF_STMT (ptr);
-      if (!def || !is_gimple_assign (def) || !gimple_assign_single_p (def))
-	return false;
-      tree rhs = gimple_assign_rhs1 (def);
-      if (TREE_CODE (rhs) == ADDR_EXPR)
-	return TREE_OPERAND (rhs, 0) == var;
-      ptr = rhs;
-    }
-  return false;
+  return ip_ptr_traces_to_var_p (TREE_OPERAND (t, 0), var);
+}
+
+/* True if CALL is a call to std::construct_at -- recognized by name
+   (decl_in_std_namespace_p + id_equal, the same pattern invalidation-
+   profile-gimple.cc's own no_dangling/now_valid/now_ref_to_uninit
+   escape hatches use), not by any attribute on its own declared
+   signature. construct_at's real signature ('template<class T, class..
+   . Args> constexpr T* construct_at(T* p, Args&&... args);') cannot be
+   given [[ref_to_uninit]]/[[must_init]] on its own 'p' parameter the
+   way a purpose-built escape hatch like now_init can: unlike now_init,
+   construct_at is called constantly with an ORDINARY, unflavored
+   pointer (freshly-allocated storage, or storage being re-constructed
+   over), so requiring every caller's pointer to itself be flavored
+   would reject nearly all real, legitimate usage. See this function's
+   two call sites (ip_check_call_flavor_consistency, ip_scan_stmt_for_
+   var) for what's special-cased instead.  */
+
+static bool
+ip_construct_at_call_p (gcall *call)
+{
+  tree fndecl = gimple_call_fndecl (call);
+  return fndecl && decl_in_std_namespace_p (fndecl)
+	 && id_equal (DECL_NAME (fndecl), "construct_at");
 }
 
 /* Record, in S, how STMT relates to S->var: a direct read, a direct
@@ -449,7 +484,23 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
       for (unsigned i = 0; i < nargs; ++i)
 	{
 	  tree arg = gimple_call_arg (stmt, i);
-	  if (arg == var)
+	  /* std::construct_at(p, ...)'s own first argument, whether
+	     passed as a literal '&x' or as some pointer P provably
+	     traceable back to it (ip_ptr_traces_to_var_p), is an
+	     initializing event for VAR -- recognized by name
+	     (ip_construct_at_call_p), not by any attribute on
+	     construct_at's own signature, and deliberately does NOT
+	     touch P's own flavor (see ip_check_call_flavor_consistency's
+	     own matching special case): only the RETURN value of
+	     construct_at is meant to be trusted afterward, exactly like
+	     now_init's own by-value pass-through above, but recognized
+	     here purely so the argument itself is treated as having
+	     initialized VAR, without requiring construct_at's real,
+	     unmodified declaration to carry [[must_init]] at all.  */
+	  if (i == 0 && callee && ip_construct_at_call_p (as_a<gcall *> (stmt))
+	      && ip_ptr_traces_to_var_p (arg, var))
+	    s->init_stmts.safe_push (stmt);
+	  else if (arg == var)
 	    s->read_stmts.safe_push (stmt);
 	  else if (TREE_CODE (arg) == ARRAY_REF
 		   && ip_array_ref_base (arg) == var)
@@ -1557,6 +1608,15 @@ ip_check_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
     {
       tree arg = gimple_call_arg (stmt, i);
       if (ip_arg_null_pointer_p (arg))
+	continue;
+      /* std::construct_at's own first argument is deliberately exempt
+	 from this check in EITHER direction: its real signature has no
+	 [[ref_to_uninit]]/[[must_init]] of its own (see ip_construct_
+	 at_call_p's own comment for why it can't), so a flavored
+	 argument there is not a mismatch to report -- ip_scan_stmt_for_
+	 var separately recognizes this exact call as initializing
+	 whatever that argument traces back to.  */
+      if (i == 0 && ip_construct_at_call_p (as_a<gcall *> (stmt)))
 	continue;
       bool param_flavor
 	= profiles_uninit_flavor_at_position_p (callee, i + 1,
