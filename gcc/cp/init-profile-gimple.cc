@@ -266,6 +266,49 @@ ip_component_ref_base (tree t)
   return t;
 }
 
+/* True if T is a MEM_REF (a raw pointer's own dereference, '*p') whose
+   base pointer's reaching definition traces back to '&VAR' -- read
+   through a pointer this checker can prove points at VAR is exactly
+   as much a read of VAR as naming VAR directly, so it needs the same
+   DAA proof (dominated by an init_stmts entry, or VAR was never
+   [[uninit]] to begin with). Confirmed via direct testing this was a
+   real, silent gap: 'int x [[uninit]]; int* p [[ref_to_uninit]] = &x;
+   return *p;' compiled clean, since a dereference's operand is an
+   opaque SSA_NAME to a purely syntactic per-statement scan like this
+   one -- nothing about the *shape* '*p' contains 'x' as a literal
+   subtree, unlike '&x' or 'x.field' or 'x[i]', which this file's
+   existing ARRAY_REF/COMPONENT_REF/direct-equality checks already
+   catch. Deliberately narrow, matching this file's default-decline
+   stance for anything requiring real points-to reasoning: only a
+   ZERO-offset MEM_REF is considered (VAR is a scalar, so any other
+   offset reads memory merely NEAR var, not var itself), and only if
+   the pointer's own value is traceable through a straight-line chain
+   of plain single-operand copies all the way back to a literal
+   'ADDR_EXPR (var)' -- pointer arithmetic, a PHI-merged pointer, or a
+   pointer read back out of some OTHER variable all conservatively
+   decline (return false), same as this file's other reaching-value
+   traces (e.g. ip_resolve_underlying_decl further down) already do
+   for an unprovable case.  */
+
+static bool
+ip_mem_ref_reads_var_p (tree t, tree var)
+{
+  if (TREE_CODE (t) != MEM_REF || !integer_zerop (TREE_OPERAND (t, 1)))
+    return false;
+  tree ptr = TREE_OPERAND (t, 0);
+  while (TREE_CODE (ptr) == SSA_NAME)
+    {
+      gimple *def = SSA_NAME_DEF_STMT (ptr);
+      if (!def || !is_gimple_assign (def) || !gimple_assign_single_p (def))
+	return false;
+      tree rhs = gimple_assign_rhs1 (def);
+      if (TREE_CODE (rhs) == ADDR_EXPR)
+	return TREE_OPERAND (rhs, 0) == var;
+      ptr = rhs;
+    }
+  return false;
+}
+
 /* Record, in S, how STMT relates to S->var: a direct read, a direct
    write (an "initializing event", same as P4222 S4.6's "for a
    built-in type, [writing an uninitialized object is] simply a
@@ -355,6 +398,8 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 		   && ip_component_ref_base (r) == var)
 	    ip_record_first_loc (&s->member_access, &s->member_access_loc,
 				 gimple_location (stmt));
+	  else if (TREE_CODE (r) == MEM_REF && ip_mem_ref_reads_var_p (r, var))
+	    s->read_stmts.safe_push (stmt);
 	  else if (TREE_CODE (r) == ADDR_EXPR && TREE_OPERAND (r, 0) == var)
 	    {
 	      /* Legitimate (not an error, not an initializing event for
@@ -403,6 +448,8 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 		   && ip_component_ref_base (arg) == var)
 	    ip_record_first_loc (&s->member_access, &s->member_access_loc,
 				 gimple_location (stmt));
+	  else if (TREE_CODE (arg) == MEM_REF && ip_mem_ref_reads_var_p (arg, var))
+	    s->read_stmts.safe_push (stmt);
 	  else if (TREE_CODE (arg) == ADDR_EXPR
 		   && TREE_OPERAND (arg, 0) == var)
 	    {
@@ -452,6 +499,9 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	       && ip_component_ref_base (val) == var)
 	ip_record_first_loc (&s->member_access, &s->member_access_loc,
 			     gimple_location (stmt));
+      else if (val && TREE_CODE (val) == MEM_REF
+	       && ip_mem_ref_reads_var_p (val, var))
+	s->read_stmts.safe_push (stmt);
       else if (val && TREE_CODE (val) == ADDR_EXPR
 	       && TREE_OPERAND (val, 0) == var)
 	ip_record_first_loc (&s->other_addr_of, &s->other_addr_of_loc,
