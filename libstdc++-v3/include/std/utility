@@ -245,7 +245,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   /// manual, unproven bridge for implementing a [[ref_to_uninit]]-
   /// declared function in terms of an ordinary, unflavored primitive
   /// this checker has no way to see is equivalent (e.g. the real,
-  /// unannotated ::malloc): "return now_ref_to_uninit(malloc(n));"
+  /// unannotated ::malloc): "return now_uninit(malloc(n));"
   /// inside a "[[ref_to_uninit]] void* my_malloc(size_t);"-declared
   /// function (see init-profile-gimple.cc's own recognition of a call
   /// to this exact function). By-value, like no_dangling above, since
@@ -254,7 +254,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     [[__gnu__::__always_inline__]]
     constexpr _Tp
-    now_ref_to_uninit(_Tp __x)
+    now_uninit(_Tp __x)
     { return __x; }
 
   /// P3446R0 (Invalidation profile): assert -- without proof -- that
