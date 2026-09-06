@@ -330,7 +330,7 @@ ip_mem_ref_targets_var_p (tree t, tree var)
 
 /* True if CALL is a call to std::construct_at -- recognized by name
    (decl_in_std_namespace_p + id_equal, the same pattern invalidation-
-   profile-gimple.cc's own no_dangling/now_valid/now_ref_to_uninit
+   profile-gimple.cc's own no_dangling/now_valid/now_uninit
    escape hatches use), not by any attribute on its own declared
    signature. construct_at's real signature ('template<class T, class..
    . Args> constexpr T* construct_at(T* p, Args&&... args);') cannot be
@@ -1386,7 +1386,7 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
    own invalidation-profile psets exist for (profiles plan Phase 7),
    not duplicated here.  */
 
-/* True if CALL is a call to std::now_ref_to_uninit -- the
+/* True if CALL is a call to std::now_uninit -- the
    Initialization profile's manual, unproven "treat this value as
    [[ref_to_uninit]]-flavored regardless of its own declared flavor"
    assertion (see <utility>'s own definition), recognized by name
@@ -1398,11 +1398,11 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
    normally are.  */
 
 static bool
-ip_now_ref_to_uninit_call_p (gcall *call)
+ip_now_uninit_call_p (gcall *call)
 {
   tree fndecl = gimple_call_fndecl (call);
   return fndecl && decl_in_std_namespace_p (fndecl)
-	 && id_equal (DECL_NAME (fndecl), "now_ref_to_uninit");
+	 && id_equal (DECL_NAME (fndecl), "now_uninit");
 }
 
 static bool ip_arg_uninit_flavored_p_1 (tree arg, int depth);
@@ -1466,16 +1466,16 @@ ip_arg_uninit_flavored_p_1 (tree arg, int depth)
 	 unflavored.  No new predicate needed: profiles_uninit_pointee_p
 	 already does nothing but a bare DECL_ATTRIBUTES lookup, which
 	 works identically for a FUNCTION_DECL as for any other decl
-	 kind.  A call to std::now_ref_to_uninit is checked FIRST and
+	 kind.  A call to std::now_uninit is checked FIRST and
 	 unconditionally overrides to true regardless of its own
 	 argument's flavor: that function is itself a generic, never-
 	 attributed identity template, so falling through to profiles_
 	 uninit_pointee_p on IT would incorrectly evaluate false -- see
-	 <utility>'s own definition and ip_now_ref_to_uninit_call_p above.  */
+	 <utility>'s own definition and ip_now_uninit_call_p above.  */
       if (def && gimple_code (def) == GIMPLE_CALL)
 	{
 	  gcall *call = as_a<gcall *> (def);
-	  if (ip_now_ref_to_uninit_call_p (call))
+	  if (ip_now_uninit_call_p (call))
 	    return true;
 	  tree callee = gimple_call_fndecl (call);
 	  if (callee)
@@ -1665,16 +1665,16 @@ ip_check_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
   if (lhs_var && TREE_CODE (TREE_TYPE (lhs_var)) == POINTER_TYPE)
     {
       bool dst_flavor = profiles_uninit_pointee_p (lhs_var);
-      /* std::now_ref_to_uninit's own call is itself exactly this
+      /* std::now_uninit's own call is itself exactly this
 	 direct-LHS shape (it's an always-inline template, so its own
 	 call is never routed through an intermediate SSA temp either --
-	 confirmed via -fdump-tree-ssa: 'p = std::now_ref_to_uninit<void*>
+	 confirmed via -fdump-tree-ssa: 'p = std::now_uninit<void*>
 	 (_1);' directly) -- so this check must consult the SAME override
 	 ip_arg_uninit_flavored_p's SSA_NAME/GIMPLE_CALL branch already
 	 does, or it would silently disagree with that check and let the
 	 escape hatch's result flow into an unmarked destination
 	 unnoticed.  */
-      bool callee_flavor = ip_now_ref_to_uninit_call_p (as_a<gcall *> (stmt))
+      bool callee_flavor = ip_now_uninit_call_p (as_a<gcall *> (stmt))
 			    ? true : profiles_uninit_pointee_p (callee);
       if (dst_flavor != callee_flavor
 	  && !profiles_diagnostic_exempt_p (gimple_location (stmt),
