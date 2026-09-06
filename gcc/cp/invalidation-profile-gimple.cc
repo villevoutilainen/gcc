@@ -2044,6 +2044,102 @@ ip_owner_unconsumed_before_stmt_p (gimple *point, tree decl,
   return state;
 }
 
+/* A second, simpler, PURELY-MONOTONIC dataflow (GEN-only, never
+   killed, OR-across-predecessors): "has DECL's binding EVER become
+   owned reaching this point" -- function entry for a parameter, any
+   gen event for a local.  Needed to disambiguate ip_owner_unconsumed_
+   before_stmt_p's own FALSE result, which otherwise conflates two
+   different reasons: "already consumed" (a genuine double-
+   consumption) vs. simply "not yet owned here at all", which for a
+   LOCAL binding can be true at an EARLIER-in-program-order statement
+   that happens to look, syntactically, exactly like a consuming event
+   for the SAME decl name -- confirmed empirically: checking 'delete
+   p; p = g (); delete p;' as the is_parameter=false run tracking the
+   binding that starts at 'p = g ()' would otherwise misread the
+   FIRST, entirely unrelated delete (of the original PARAMETER's own
+   value, nothing to do with this run's own binding, which does not
+   exist yet at that point) as "already consumed" and falsely flag it.
+   Only ip_owner_ever_owned_before_stmt_p's own combination with
+   ip_owner_unconsumed_before_stmt_p -- ever-owned-but-not-currently-
+   unconsumed -- unambiguously means "already consumed".  */
+
+struct ip_owner_ever_owned_info
+{
+  auto_vec<bool> block_in;
+  auto_vec<bool> block_out;
+};
+
+static void
+ip_compute_owner_ever_owned_info (function *fun, tree decl, bool is_parameter,
+				   basic_block entry_succ,
+				   ip_owner_ever_owned_info *info)
+{
+  unsigned n = last_basic_block_for_fn (fun);
+  info->block_in.safe_grow_cleared (n);
+  info->block_out.safe_grow_cleared (n);
+
+  bool changed = true;
+  while (changed)
+    {
+      changed = false;
+      basic_block bb;
+      FOR_EACH_BB_FN (bb, fun)
+	{
+	  bool in = false;
+	  edge e;
+	  edge_iterator ei;
+	  FOR_EACH_EDGE (e, ei, bb->preds)
+	    if (info->block_out[e->src->index])
+	      {
+		in = true;
+		break;
+	      }
+	  if (in != info->block_in[bb->index])
+	    {
+	      info->block_in[bb->index] = in;
+	      changed = true;
+	    }
+
+	  bool out = info->block_in[bb->index] || (is_parameter && bb == entry_succ);
+	  if (!out && !is_parameter)
+	    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+		 gsi_next (&gsi))
+	      if (ip_owner_gen_lhs_decl (gsi_stmt (gsi)) == decl)
+		{
+		  out = true;
+		  break;
+		}
+	  if (out != info->block_out[bb->index])
+	    {
+	      info->block_out[bb->index] = out;
+	      changed = true;
+	    }
+	}
+    }
+}
+
+static bool
+ip_owner_ever_owned_before_stmt_p (gimple *point, tree decl, bool is_parameter,
+				    basic_block entry_succ,
+				    const ip_owner_ever_owned_info &info)
+{
+  basic_block bb = gimple_bb (point);
+  if (info.block_in[bb->index] || (is_parameter && bb == entry_succ))
+    return true;
+  if (is_parameter)
+    return false;
+  for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+       gsi_next (&gsi))
+    {
+      gimple *stmt = gsi_stmt (gsi);
+      if (stmt == point)
+	break;
+      if (ip_owner_gen_lhs_decl (stmt) == decl)
+	return true;
+    }
+  return false;
+}
+
 /* Run the definite-consumption check for one tracked binding: DECL is
    either an [[owner]]/[[owning_ptr]] PARM_DECL of FUN (IS_PARAMETER
    true, owned from function entry), or a local VAR_DECL some statement
@@ -2062,6 +2158,9 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
   ip_owner_reach_info info;
   ip_compute_owner_reach_info (fun, decl, is_parameter, fn_return_is_owner,
 				entry_succ, &info);
+  ip_owner_ever_owned_info ever_owned_info;
+  ip_compute_owner_ever_owned_info (fun, decl, is_parameter, entry_succ,
+				     &ever_owned_info);
 
   /* Leak point 1: some path reaches the function's own exit still
      owned-and-unconsumed.  Mirrors init-profile-gimple.cc's own
@@ -2100,6 +2199,7 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
      gen statement(s) (the statement that itself first establishes the
      binding is not a "reassignment" of anything).  */
   basic_block bb;
+  bool decl_reassigned = false;
   FOR_EACH_BB_FN (bb, fun)
     for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
 	 gsi_next (&gsi))
@@ -2109,6 +2209,7 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
 	  continue;
 	if (!is_parameter && ip_owner_gen_lhs_decl (stmt) == decl)
 	  continue;
+	decl_reassigned = true;
 	if (ip_owner_unconsumed_before_stmt_p (stmt, decl, is_parameter,
 						fn_return_is_owner, entry_succ,
 						info)
@@ -2118,6 +2219,86 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
 		    "%qD is reassigned here, discarding a not-yet-consumed "
 		    "%<[[owner]]%> pointer, under the %<std::invalidation%> "
 		    "profile", decl);
+      }
+
+  /* Leak point 3: DECL reaches a SECOND consuming event -- e.g. 'int
+     f (int *p [[owner]]); int g (int *p [[owner]]); h (f (x), g
+     (x));' -- with no intervening reassignment (that shape is leak
+     point 2's own territory: a fresh gen event resets state to true,
+     so a later consume of the NEW value is correctly not flagged
+     here).  Reuses ip_owner_unconsumed_before_stmt_p's own dataflow
+     query completely unchanged, just at every consuming-event
+     statement instead of only at reassignments: if it's FALSE right
+     before a NEW consuming event, that event's own value was already
+     given away on EVERY path reaching it, not merely possibly so
+     (the same "MAY be unconsumed" fact leak point 1 checks
+     existentially at exit is being checked here for its negation,
+     universally, at a narrower point) -- this is what keeps this
+     check from firing on a merely CONDITIONALLY-already-consumed
+     value ('if (c) f (x); g (x);' is NOT flagged: on the c-false
+     path g (x) is the legitimate first consumption, so state is
+     still "may be unconsumed" reaching it).  A raw delete/deleting-
+     destructor-dispatch CALL is deliberately skipped here: it is
+     always paired with, and dominated by, its own null-guard COND
+     (ip_owner_delete_guard_cond_p), which independently already
+     matches ip_owner_consuming_stmt_p for the exact same logical
+     delete-expression -- checking both would flag the same delete
+     twice, once at the guard and once, redundantly and always
+     falsely (state is already false there BECAUSE the guard just
+     consumed it), at the call itself.
+
+     Skipped entirely when IS_PARAMETER and DECL_REASSIGNED: a
+     PARM_DECL's own state, unlike a local's, is never re-armed by a
+     reassignment (ip_owner_block_transfer's GEN branch is deliberately
+     is_parameter-exclusive -- a reassigned parameter's new value is,
+     by design, tracked as its own separate is_parameter=false binding
+     instead, see ip_check_owner_consumption's own comment), so once
+     the ORIGINAL parameter value is consumed, this run's own state
+     never becomes true again for the rest of the function -- making
+     EVERY later consuming-shaped statement touching the same DECL
+     name look, to this is_parameter=true run alone, like a repeat
+     consumption of the (long since fully accounted for) original
+     value, even though it is legitimately consuming whatever DECL
+     holds *now*.  Confirmed empirically: 'delete p; p = g (); delete
+     p;' -- fully legitimate, the second delete consumes g()'s own
+     result -- otherwise false-positived on that second delete.  Leak
+     point 2 above already independently proves the original value
+     itself was safely consumed before any reassignment; the separate
+     is_parameter=false run this same reassignment seeds (its own GEN
+     event correctly re-arms ITS OWN state, so IT does not have this
+     problem) independently re-checks the new value from there on.  */
+  if (is_parameter && decl_reassigned)
+    return;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      {
+	gimple *stmt = gsi_stmt (gsi);
+	if (gcall *call = dyn_cast<gcall *> (stmt))
+	  if (ip_owner_delete_call_p (call, decl)
+	      || ip_owner_deleting_dtor_dispatch_p (call, decl))
+	    continue;
+	if (!ip_owner_consuming_stmt_p (stmt, decl, fn_return_is_owner))
+	  continue;
+	/* ever_owned_before_stmt_p is the disambiguating half: without
+	   it, a LOCAL binding's own check would also match an earlier,
+	   entirely unrelated, syntactically-identical-looking consuming
+	   statement that happens to precede this binding's own gen
+	   event in program order (state is "false" there too, but for
+	   the mundane reason that this run's own binding does not exist
+	   yet, not because anything was already consumed) -- see ip_
+	   owner_ever_owned_before_stmt_p's own comment.  */
+	if (ip_owner_ever_owned_before_stmt_p (stmt, decl, is_parameter,
+						entry_succ, ever_owned_info)
+	    && !ip_owner_unconsumed_before_stmt_p (stmt, decl, is_parameter,
+						    fn_return_is_owner,
+						    entry_succ, info)
+	    && !profiles_diagnostic_exempt_p (gimple_location (stmt),
+					       fun->decl, "std::invalidation"))
+	  error_at (gimple_location (stmt),
+		    "%qD is consumed again here, after already being "
+		    "consumed on every path reaching this point, under the "
+		    "%<std::invalidation%> profile", decl);
       }
 }
 
