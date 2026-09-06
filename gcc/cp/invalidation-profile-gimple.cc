@@ -1298,7 +1298,18 @@ ip_arg_owner_flavored_p_1 (tree arg, int depth)
       if (def && gimple_code (def) == GIMPLE_CALL)
 	{
 	  tree callee = gimple_call_fndecl (as_a<gcall *> (def));
-	  return callee && profiles_owning_ptr_p (callee);
+	  if (!callee)
+	    return false;
+	  /* A fresh 'new T' allocation is, by construction, an owning
+	     value -- the caller now holds the only pointer to it --
+	     even though operator new itself is never [[owner]]-marked.
+	     DECL_IS_OPERATOR_NEW_P is a plain FUNCTION_DECL property
+	     (a distinct field, unrelated to the CALL_FROM_NEW_OR_
+	     DELETE_P call-site flag that aliases CALL_FROM_THUNK_P/
+	     CALL_ALLOCA_FOR_VAR_P elsewhere -- see this project's own
+	     note on that), so no risk of misreading an unrelated call
+	     here.  */
+	  return profiles_owning_ptr_p (callee) || DECL_IS_OPERATOR_NEW_P (callee);
 	}
       if (def && gimple_code (def) == GIMPLE_PHI)
 	{
