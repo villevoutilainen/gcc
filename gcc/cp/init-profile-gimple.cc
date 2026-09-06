@@ -267,31 +267,38 @@ ip_component_ref_base (tree t)
 }
 
 /* True if T is a MEM_REF (a raw pointer's own dereference, '*p') whose
-   base pointer's reaching definition traces back to '&VAR' -- read
-   through a pointer this checker can prove points at VAR is exactly
-   as much a read of VAR as naming VAR directly, so it needs the same
-   DAA proof (dominated by an init_stmts entry, or VAR was never
-   [[uninit]] to begin with). Confirmed via direct testing this was a
-   real, silent gap: 'int x [[uninit]]; int* p [[ref_to_uninit]] = &x;
-   return *p;' compiled clean, since a dereference's operand is an
-   opaque SSA_NAME to a purely syntactic per-statement scan like this
-   one -- nothing about the *shape* '*p' contains 'x' as a literal
-   subtree, unlike '&x' or 'x.field' or 'x[i]', which this file's
-   existing ARRAY_REF/COMPONENT_REF/direct-equality checks already
-   catch. Deliberately narrow, matching this file's default-decline
-   stance for anything requiring real points-to reasoning: only a
-   ZERO-offset MEM_REF is considered (VAR is a scalar, so any other
-   offset reads memory merely NEAR var, not var itself), and only if
-   the pointer's own value is traceable through a straight-line chain
-   of plain single-operand copies all the way back to a literal
-   'ADDR_EXPR (var)' -- pointer arithmetic, a PHI-merged pointer, or a
-   pointer read back out of some OTHER variable all conservatively
-   decline (return false), same as this file's other reaching-value
-   traces (e.g. ip_resolve_underlying_decl further down) already do
-   for an unprovable case.  */
+   base pointer's reaching definition traces back to '&VAR' -- an
+   access through a pointer this checker can prove points at VAR is
+   exactly as much an access of VAR as naming VAR directly, whether T
+   is being READ (needs the same DAA proof VAR itself would: dominated
+   by an init_stmts entry, or VAR was never [[uninit]] to begin with)
+   or WRITTEN (IS itself an init_stmts entry for VAR, exactly like
+   'var = ...;' directly -- unlike an ARRAY_REF write, which only ever
+   covers one element, never the whole object, a MEM_REF write through
+   a pointer proven to equal '&var' covers the ENTIRE object, the same
+   as a direct scalar write does, so there is no "partial coverage"
+   reason to withhold it the way ip_array_ref_base's own callers
+   deliberately do for x[i]). Confirmed via direct testing the read
+   case was a real, silent gap: 'int x [[uninit]]; int* p
+   [[ref_to_uninit]] = &x; return *p;' compiled clean, since a
+   dereference's operand is an opaque SSA_NAME to a purely syntactic
+   per-statement scan like this one -- nothing about the *shape* '*p'
+   contains 'x' as a literal subtree, unlike '&x' or 'x.field' or
+   'x[i]', which this file's existing ARRAY_REF/COMPONENT_REF/direct-
+   equality checks already catch. Deliberately narrow, matching this
+   file's default-decline stance for anything requiring real points-to
+   reasoning: only a ZERO-offset MEM_REF is considered (VAR is a
+   scalar, so any other offset reads/writes memory merely NEAR var,
+   not var itself), and only if the pointer's own value is traceable
+   through a straight-line chain of plain single-operand copies all
+   the way back to a literal 'ADDR_EXPR (var)' -- pointer arithmetic, a
+   PHI-merged pointer, or a pointer read back out of some OTHER
+   variable all conservatively decline (return false), same as this
+   file's other reaching-value traces (e.g. ip_resolve_underlying_decl
+   further down) already do for an unprovable case.  */
 
 static bool
-ip_mem_ref_reads_var_p (tree t, tree var)
+ip_mem_ref_targets_var_p (tree t, tree var)
 {
   if (TREE_CODE (t) != MEM_REF || !integer_zerop (TREE_OPERAND (t, 1)))
     return false;
@@ -398,7 +405,7 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 		   && ip_component_ref_base (r) == var)
 	    ip_record_first_loc (&s->member_access, &s->member_access_loc,
 				 gimple_location (stmt));
-	  else if (TREE_CODE (r) == MEM_REF && ip_mem_ref_reads_var_p (r, var))
+	  else if (TREE_CODE (r) == MEM_REF && ip_mem_ref_targets_var_p (r, var))
 	    s->read_stmts.safe_push (stmt);
 	  else if (TREE_CODE (r) == ADDR_EXPR && TREE_OPERAND (r, 0) == var)
 	    {
@@ -426,6 +433,9 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	       && ip_component_ref_base (lhs) == var)
 	ip_record_first_loc (&s->member_access, &s->member_access_loc,
 			     gimple_location (stmt));
+      else if (TREE_CODE (lhs) == MEM_REF && ip_mem_ref_targets_var_p (lhs, var)
+	       && !ip_stmt_is_deferred_init_copy_p (stmt))
+	s->init_stmts.safe_push (stmt);
     }
   else if (gimple_code (stmt) == GIMPLE_COND)
     {
@@ -448,7 +458,7 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 		   && ip_component_ref_base (arg) == var)
 	    ip_record_first_loc (&s->member_access, &s->member_access_loc,
 				 gimple_location (stmt));
-	  else if (TREE_CODE (arg) == MEM_REF && ip_mem_ref_reads_var_p (arg, var))
+	  else if (TREE_CODE (arg) == MEM_REF && ip_mem_ref_targets_var_p (arg, var))
 	    s->read_stmts.safe_push (stmt);
 	  else if (TREE_CODE (arg) == ADDR_EXPR
 		   && TREE_OPERAND (arg, 0) == var)
@@ -486,6 +496,9 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	       && ip_component_ref_base (call_lhs) == var)
 	ip_record_first_loc (&s->member_access, &s->member_access_loc,
 			     gimple_location (stmt));
+      else if (call_lhs && TREE_CODE (call_lhs) == MEM_REF
+	       && ip_mem_ref_targets_var_p (call_lhs, var))
+	s->init_stmts.safe_push (stmt);
     }
   else if (greturn *ret = dyn_cast <greturn *> (stmt))
     {
@@ -500,7 +513,7 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	ip_record_first_loc (&s->member_access, &s->member_access_loc,
 			     gimple_location (stmt));
       else if (val && TREE_CODE (val) == MEM_REF
-	       && ip_mem_ref_reads_var_p (val, var))
+	       && ip_mem_ref_targets_var_p (val, var))
 	s->read_stmts.safe_push (stmt);
       else if (val && TREE_CODE (val) == ADDR_EXPR
 	       && TREE_OPERAND (val, 0) == var)
