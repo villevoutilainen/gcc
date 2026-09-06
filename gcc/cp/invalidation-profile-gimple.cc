@@ -1550,6 +1550,72 @@ ip_check_owner_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
 	      "profile");
 }
 
+/* P3446R0/P4296R0 Phase 7a: a single call passing the SAME [[owner]]
+   value to two DIFFERENT owner-accepting parameters is a real hazard
+   the definite-consumption layer alone can't see: 'void f (T *p
+   [[owner]], T *q [[owner]]);' declares two INDEPENDENT ownership
+   obligations, so a callee that (reasonably) assumes p and q never
+   alias and deletes each separately double-frees when called as 'f
+   (ptr, ptr)' -- and the consumption checker itself would see nothing
+   wrong, since ptr genuinely DOES reach an owner-sink argument
+   position (whichever ip_owner_passed_to_sink_p's own loop happens to
+   find first) and gets marked consumed, with no separate check that
+   OTHER owner-sink positions in that same call aren't the identical
+   value.  Checked by resolving (ip_owner_resolve_underlying_decl,
+   the same plain-copy-chain trace every other check here already
+   uses) every owner-marked argument position and comparing for exact,
+   syntactic identity -- deliberately NOT the more speculative "could
+   these alias" reasoning ip_decls_provably_distinct_objects_p answers
+   elsewhere in this file (a different question, about two syntactically
+   DIFFERENT decls); here the two arguments resolve to the literal SAME
+   decl, no speculation needed.  A null argument at multiple owner-sink
+   positions is exempt, same as everywhere else in this checker: null
+   represents no object at all, so aliasing is moot.  */
+
+static void
+ip_check_owner_call_arg_aliasing (gimple *stmt, tree enclosing_fndecl)
+{
+  if (gimple_code (stmt) != GIMPLE_CALL)
+    return;
+  gcall *call = as_a<gcall *> (stmt);
+  tree callee = gimple_call_fndecl (call);
+  if (!callee)
+    return;
+
+  unsigned nargs = gimple_call_num_args (call);
+  for (unsigned i = 0; i < nargs; ++i)
+    {
+      if (!profiles_owning_ptr_at_position_p (callee, i + 1))
+	continue;
+      tree arg_i = gimple_call_arg (call, i);
+      if (ip_owner_arg_null_pointer_p (arg_i))
+	continue;
+      tree decl_i = ip_owner_resolve_underlying_decl (arg_i);
+      if (!decl_i)
+	continue;
+
+      for (unsigned j = i + 1; j < nargs; ++j)
+	{
+	  if (!profiles_owning_ptr_at_position_p (callee, j + 1))
+	    continue;
+	  tree arg_j = gimple_call_arg (call, j);
+	  if (ip_owner_arg_null_pointer_p (arg_j))
+	    continue;
+	  if (ip_owner_resolve_underlying_decl (arg_j) != decl_i)
+	    continue;
+	  if (profiles_diagnostic_exempt_p (gimple_location (stmt),
+					     enclosing_fndecl,
+					     "std::invalidation"))
+	    continue;
+	  error_at (gimple_location (stmt),
+		    "the same %<[[owner]]%> pointer %qD passed to two "
+		    "different owner-accepting parameters (%u and %u) of "
+		    "%qD, under the %<std::invalidation%> profile",
+		    decl_i, i + 1, j + 1, callee);
+	}
+    }
+}
+
 /* -------------------------------------------------------------------
    Definite-consumption dataflow: the actual leak checker.  An
    [[owner]]/[[owning_ptr]] PARM_DECL, or a local VAR_DECL that
@@ -2126,6 +2192,7 @@ ip_check_function (function *fun)
 	ip_check_owner_call_flavor_consistency (stmt, fun->decl);
 	ip_check_owner_assign_flavor_consistency (stmt, fun->decl);
 	ip_check_owner_return_flavor_consistency (stmt, fun->decl);
+	ip_check_owner_call_arg_aliasing (stmt, fun->decl);
 
 	if (gcall *call = dyn_cast<gcall *> (stmt))
 	  {
