@@ -1775,6 +1775,37 @@ ip_owner_stored_into_field_p (gimple *stmt, tree v)
   return ip_owner_resolve_underlying_decl (gimple_assign_rhs1 (stmt)) == v;
 }
 
+/* True if STMT hands V's ownership off to ANOTHER, independently
+   tracked, owner-marked local/parameter via a plain copy -- e.g.
+   '[[owner]] int *y = x;' -- exactly like storing into an owner-
+   marked field (ip_owner_stored_into_field_p just above), just
+   var-to-var instead of var-to-field: the pointer's value is now
+   y's to consume, so this counts as consuming V just as much as any
+   other recognized hand-off does.  Required so that a KNOWN ALIAS of
+   V is tracked through: without this, 'y = x; delete y; delete x;'
+   (with x AND y both marked [[owner]]) reads as two independent,
+   both-satisfied obligations -- a real double-free that would
+   otherwise slip past every check (not a flavor mismatch, since y
+   IS owner-marked; not an unmarked delete, for the same reason; and
+   not a same-decl double-consumption, since x and y are different
+   decls) -- rather than V being correctly seen as already spent by
+   the time 'delete x;' is reached.  Copying V into a NON-owner-
+   marked local is a separate, already-diagnosed case (flavor
+   mismatch, ip_check_owner_call_flavor_consistency's sibling for
+   assignment) and is deliberately not handled here.  */
+
+static bool
+ip_owner_reassigned_into_owner_var_p (gimple *stmt, tree v)
+{
+  if (!is_gimple_assign (stmt) || !gimple_assign_single_p (stmt))
+    return false;
+  tree lhs = ip_trackable_decl (gimple_assign_lhs (stmt));
+  if (!lhs || lhs == v || TREE_CODE (TREE_TYPE (lhs)) != POINTER_TYPE
+      || !profiles_owning_ptr_p (lhs))
+    return false;
+  return ip_owner_resolve_underlying_decl (gimple_assign_rhs1 (stmt)) == v;
+}
+
 /* True if CALL is a call to std::owner_consumed -- the invalidation
    profile's manual, unproven "this owner value has been properly
    handed off for cleanup by some means this checker cannot itself
@@ -1849,7 +1880,13 @@ ip_owner_delete_guard_cond_p (gimple *stmt, tree v)
 /* True if STMT is a consuming event for the tracked owner value V, in
    the function whose own return-flavor is FN_RETURN_IS_OWNER
    (profiles_owning_ptr_p (fun->decl), passed in rather than
-   recomputed per statement).  */
+   recomputed per statement).  A std::owner_consumed (V) call only
+   counts here when its own result is actually captured (gimple_call_
+   lhs != NULL) -- a discarded 'std::owner_consumed (x);' statement
+   asserts nothing was really done with the value, so it must NOT be
+   trusted as a real hand-off (confirmed via -fdump-tree-gimple: a
+   discarded call's return value is never materialized into an LHS
+   at all, so this is a precise, not approximate, test).  */
 
 static bool
 ip_owner_consuming_stmt_p (gimple *stmt, tree v, bool fn_return_is_owner)
@@ -1865,6 +1902,7 @@ ip_owner_consuming_stmt_p (gimple *stmt, tree v, bool fn_return_is_owner)
       if (ip_owner_passed_to_sink_p (call, v))
 	return true;
       if (ip_owner_consumed_call_p (call) && gimple_call_num_args (call) >= 1
+	  && gimple_call_lhs (call) != NULL_TREE
 	  && (ip_owner_resolve_underlying_decl (gimple_call_arg (call, 0))
 	      == v))
 	return true;
@@ -1877,7 +1915,8 @@ ip_owner_consuming_stmt_p (gimple *stmt, tree v, bool fn_return_is_owner)
       tree retval = gimple_return_retval (as_a<greturn *> (stmt));
       return retval && ip_owner_resolve_underlying_decl (retval) == v;
     }
-  return ip_owner_stored_into_field_p (stmt, v);
+  return ip_owner_stored_into_field_p (stmt, v)
+	 || ip_owner_reassigned_into_owner_var_p (stmt, v);
 }
 
 /* If STMT assigns a FRESH owner-flavored value into some trackable
