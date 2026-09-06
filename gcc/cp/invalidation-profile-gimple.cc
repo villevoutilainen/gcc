@@ -1561,35 +1561,21 @@ ip_check_owner_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
    into, e.g. a std::unique_ptr's constructor" escape hatch) -- on
    EVERY path before the function exits or the binding is reassigned.
 
-   KNOWN, DELIBERATE GAP, confirmed empirically (-fdump-tree-ssa) and
-   consistent with this project's "never read a callee's definition"
-   boundary (see e.g. handle_must_init_attribute's own comment,
-   tree.cc): 'delete p;' where p's static type has a VIRTUAL
-   destructor lowers to an indirect OBJ_TYPE_REF virtual call to the
-   destructor itself, not to a recognizable operator-delete call at
-   the delete-expression's own call site at all -- the actual operator
-   delete call happens inside the destructor's own synthesized
-   "deleting destructor" clone, a SEPARATE function this checker does
-   not, and architecturally should not, look inside.  A non-virtual
-   'delete p;' (confirmed via the same dump: lowers directly to
-   'operator delete (p, size);' at the call site) is unaffected.  */
-
-/* True if CALL is a lowered 'delete expr;', for ANY expr -- recognized
-   via the compiler-wide gimple_call_from_new_or_delete/DECL_IS_
-   OPERATOR_DELETE_P idiom (gimple.h/tree.h; confirmed via -fdump-tree-
-   ssa this is exactly and only what a non-virtual delete-expression's
-   own lowering produces at its own call site: 'operator delete (_N,
-   size);') rather than by name -- more robust than matching "operator
-   delete" textually, and the one signal that generalizes across a
-   class's own overloaded operator delete, not just the global one.
-   Used both by ip_owner_delete_call_p below (which additionally traces
-   the deleted argument to a specific tracked value) and by ip_check_
-   owner_call_flavor_consistency's own exemption further up: operator
-   delete's real declaration is an ordinary, unattributed system
-   function, so its own argument must never be flavor-checked against
-   it the way an arbitrary callee's parameter would be -- deleting an
-   [[owner]] pointer is the entire point of the attribute, not a
-   mismatch to report.  */
+   For a delete-expression on a POLYMORPHIC type, the actual
+   deallocation happens inside the deleting destructor's own
+   synthesized clone (a separate function), reached here via an
+   indirect/virtual call -- confirmed via -fdump-tree-ssa: 'delete p;'
+   lowers to a null check followed by an indirect OBJ_TYPE_REF call to
+   the destructor, with NO directly-visible operator-delete call at
+   this call site at all (that call happens inside the deleting
+   destructor's own body instead).  Rather than trying to look inside
+   that separate function -- which would violate this project's
+   "never read a callee's definition" boundary (see e.g. handle_must_
+   init_attribute's own comment, tree.cc) -- ip_owner_deleting_dtor_
+   dispatch_p further down recognizes this shape directly, resolved
+   entirely from V's own known static type (no shared-infrastructure
+   changes needed; see that function's own comment for why an earlier
+   attempt to thread a new flag through gimplification was reverted).  */
 
 static bool
 ip_owner_delete_call_shape_p (gcall *call)
@@ -1613,6 +1599,78 @@ ip_owner_delete_call_p (gcall *call, tree v)
   if (gimple_call_num_args (call) < 1)
     return false;
   return ip_owner_resolve_underlying_decl (gimple_call_arg (call, 0)) == v;
+}
+
+/* True if CALL is an indirect (vtable) dispatch to V's own DELETING
+   destructor, for V's known STATIC type -- the shape a delete-
+   expression on a POLYMORPHIC type lowers to (confirmed via -fdump-
+   tree-ssa: no directly-resolvable operator-delete call is visible at
+   the delete-expression's own call site at all; the real deallocation
+   happens inside the deleting destructor's own body, a separate
+   function this checker does not, and per this project's "never read
+   a callee's definition" boundary should not, look inside).
+
+   Resolved entirely from already-known, already-resolved front-end
+   data -- V's own static pointee type -- with NO need to touch shared
+   compiler infrastructure (an earlier attempt to thread a new flag
+   through gimplification, marking build_delete's own deleting-
+   destructor call the same way build_op_delete_call marks a direct
+   operator-delete call, was reverted: CALL_FROM_NEW_OR_DELETE_P,
+   CALL_FROM_THUNK_P, and CALL_ALLOCA_FOR_VAR_P all alias the exact
+   same tree_base bit (tree.h), disambiguated only by the ORIGINAL
+   code's own fndecl-based dispatch -- setting it unconditionally
+   corrupted THUNK call information for unrelated non-trivial-
+   parameter-passing thunks, an ICE confirmed via the full contracts
+   suite, not a hypothetical risk).
+
+   Instead: CALL's own callee, if an OBJ_TYPE_REF, carries the
+   dispatched-through object (OBJ_TYPE_REF_OBJECT, traced back to V
+   the same way every other argument here is) and the vtable slot
+   TOKEN being dispatched (OBJ_TYPE_REF_TOKEN). V's own static pointee
+   type's destructor (CLASSTYPE_DESTRUCTOR) has a "deleting destructor"
+   clone (DECL_DELETING_DESTRUCTOR_P, found via FOR_EACH_CLONE -- the
+   same clone build_delete, init.cc, asks build_dtor_call for when
+   deleting a polymorphic object) whose own DECL_VINDEX is exactly the
+   vtable slot IT occupies. If CALL's own token matches THAT slot, this
+   call provably invokes -- for whatever V's DYNAMIC type turns out to
+   be at runtime, since virtual dispatch preserves "which special
+   member this slot is" across every override, not just V's own static
+   type -- the deleting destructor, i.e. this delete-expression's own
+   complete deallocation, exactly like a directly-visible operator-
+   delete call would.  */
+
+static bool
+ip_owner_deleting_dtor_dispatch_p (gcall *call, tree v)
+{
+  tree fn = gimple_call_fn (call);
+  if (!fn || TREE_CODE (fn) != OBJ_TYPE_REF)
+    return false;
+  if (ip_owner_resolve_underlying_decl (OBJ_TYPE_REF_OBJECT (fn)) != v)
+    return false;
+  tree token = OBJ_TYPE_REF_TOKEN (fn);
+  if (!token || TREE_CODE (token) != INTEGER_CST)
+    return false;
+
+  tree ptr_type = TREE_TYPE (v);
+  if (TREE_CODE (ptr_type) != POINTER_TYPE)
+    return false;
+  tree type = TREE_TYPE (ptr_type);
+  if (!CLASS_TYPE_P (type))
+    return false;
+  tree dtor = CLASSTYPE_DESTRUCTOR (type);
+  if (!dtor)
+    return false;
+
+  tree clone;
+  FOR_EACH_CLONE (clone, dtor)
+    {
+      if (!DECL_DELETING_DESTRUCTOR_P (clone))
+	continue;
+      tree vindex = DECL_VINDEX (clone);
+      return vindex && TREE_CODE (vindex) == INTEGER_CST
+	     && tree_int_cst_equal (vindex, token);
+    }
+  return false;
 }
 
 /* True if CALL passes V as an argument at a position the callee's own
@@ -1715,7 +1773,8 @@ ip_owner_delete_guard_cond_p (gimple *stmt, tree v)
       for (gimple_stmt_iterator gsi = gsi_start_bb (e->dest);
 	   !gsi_end_p (gsi); gsi_next (&gsi))
 	if (gcall *call = dyn_cast<gcall *> (gsi_stmt (gsi)))
-	  if (ip_owner_delete_call_p (call, v))
+	  if (ip_owner_delete_call_p (call, v)
+	      || ip_owner_deleting_dtor_dispatch_p (call, v))
 	    return true;
     }
   return false;
@@ -1734,6 +1793,8 @@ ip_owner_consuming_stmt_p (gimple *stmt, tree v, bool fn_return_is_owner)
   if (gcall *call = dyn_cast<gcall *> (stmt))
     {
       if (ip_owner_delete_call_p (call, v))
+	return true;
+      if (ip_owner_deleting_dtor_dispatch_p (call, v))
 	return true;
       if (ip_owner_passed_to_sink_p (call, v))
 	return true;
