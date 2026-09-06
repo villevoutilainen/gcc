@@ -713,7 +713,7 @@ delete_sanity (location_t loc, tree exp, tree size, bool doing_vec,
       && !profiles_owning_ptr_p (exp)
       && (complain & tf_error))
     error_at (exp_loc, "%<delete%> of a pointer not marked "
-	      "%<[[owning_ptr]]%> not permitted under the "
+	      "%<[[owner]]%> not permitted under the "
 	      "%<std::invalidation%> profile");
 
   /* An array can't have been allocated by new, so complain.  */
