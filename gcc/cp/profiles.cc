@@ -21,14 +21,23 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
+#include "target.h"
+#include "function.h"
+#include "basic-block.h"
 #include "cp-tree.h"
 #include "stringpool.h"
 #include "diagnostic.h"
 #include "attribs.h"
 #include "context.h"
 #include "tree-pass.h"
+#include "pass_manager.h"
 #include "input.h"
 #include "c-family/c-pragma.h"
+#include "cgraph.h"
+#include "cfghooks.h"
+#include "gimple.h"
+#include "gimple-ssa.h"
+#include "bitmap.h"
 #include "profiles.h"
 
 /* Defined in init-profile-gimple.cc.  */
@@ -285,19 +294,242 @@ cp_finish_empty_declaration (location_t attrs_loc, tree std_attrs)
 void
 init_profiles (void)
 {
-  struct register_pass_info pass_info;
-  pass_info.pass = make_pass_init_profile_gimple (g);
-  pass_info.reference_pass_name = "ssa";
-  pass_info.ref_pass_instance_number = 1;
-  pass_info.pos_op = PASS_POS_INSERT_AFTER;
-  register_pass (&pass_info);
+  /* Deliberately empty: both profile-checking passes are no longer
+     spliced into the normal whole-program "ssa"-relative pipeline
+     (that ran them only once the WHOLE translation unit had reached
+     end-of-compilation with zero errors anywhere in it -- see
+     profiles_eager_check_function's own comment for why).  The pass
+     *objects* (make_pass_init_profile_gimple, make_pass_
+     invalidation_profile_gimple) are still what actually get run --
+     just directly, per function, from profiles_eager_check_function,
+     never through register_pass/the pass manager's own pipeline.
 
-  struct register_pass_info inv_pass_info;
-  inv_pass_info.pass = make_pass_invalidation_profile_gimple (g);
-  inv_pass_info.reference_pass_name = "ssa";
-  inv_pass_info.ref_pass_instance_number = 1;
-  inv_pass_info.pos_op = PASS_POS_INSERT_AFTER;
-  register_pass (&inv_pass_info);
+     Registering them the old way would not just double-report: the
+     whole-program driver that normally runs anything spliced in next
+     to "ssa" (pass_build_ssa_passes, a SIMPLE_IPA_PASS in passes.cc)
+     has its own "bool gate () { return !seen_error () && !in_lto_p; }"
+     -- the exact same whole-TU error gate this eager mechanism exists
+     to route around -- so leaving the old registration in place would
+     silently reintroduce the very bug being fixed for every function
+     this eager hook did NOT already reach first.  */
+}
+
+/* Lazily-constructed, process-lifetime pass objects, run directly (via
+   execute_pass_list) from profiles_eager_check_function below rather
+   than through the pass manager's own registered pipeline -- see
+   init_profiles's comment for why they are no longer registered.  */
+
+static gimple_opt_pass *profiles_init_pass;
+static gimple_opt_pass *profiles_invalidation_pass;
+static gimple_opt_pass *profiles_build_ssa_pass;
+
+/* Run both profile-checking GIMPLE passes on FNDECL's own body right
+   now, eagerly, rather than waiting for the normal end-of-compilation
+   pipeline -- called from expand_or_defer_fn (semantics.cc) once
+   FNDECL's body is complete, the same choke point every kind of
+   function (ordinary, implicit special member, lambda, coroutine,
+   template instantiation, synthesized global initializer) already
+   funnels through.
+
+   Why: symbol_table::compile (cgraphunit.cc) gates SSA construction
+   and every GIMPLE pass -- including these two -- on the WHOLE
+   translation unit being free of front-end errors (a language-
+   agnostic, deliberately-conservative gate: once anything has gone
+   wrong anywhere, further GIMPLE-level work on unrelated functions is
+   normally not worth doing). That silently suppressed both profile
+   checkers' own diagnostics for every function in a TU that had even
+   one, unrelated, front-end error anywhere else in it. Running here
+   instead -- inside the C++ front end itself, per function, the
+   moment each function's own body is otherwise complete -- makes our
+   diagnostics depend only on that one function's own body, matching
+   how every other front-end error is already reported (the front end
+   keeps going after an error, function by function).  Deliberately
+   does not touch symbol_table::compile's own gate: that stays exactly
+   as conservative as before, for every other GIMPLE pass, in every
+   other language.  */
+
+/* profiles_eager_check_function itself (below) must never call
+   cgraph_node::analyze/execute_pass_list while ANOTHER call to it is
+   already on the C++ call stack: analyzing/gimplifying one function
+   can itself trigger implicit instantiation and finalization of
+   OTHER functions as a side effect (confirmed empirically -- a
+   single ordinary call to std::construct_at inside main(), under
+   -std=c++20, transitively finalizes enough of the standard library
+   that this happened many levels deep), each of which calls
+   expand_or_defer_fn, hence this function, again, *before* the outer
+   call has returned.  The normal (deferred-to-end-of-TU) pipeline
+   never has this problem: it processes functions off a flat
+   worklist, never recursively.  Doing the real work synchronously
+   and recursively here blew the compiler's own C++ stack (a genuine
+   stack overflow, reproduced directly: forcibly gimplifying enough
+   of <memory>'s implicitly-instantiated helpers this way, each
+   nested inside the last one's own gimplification, crashed with a
+   deeply repeating gimplify_stmt/gimplify_expr recursion in the
+   backtrace).  Fixed the same way the deferred pipeline avoids it:
+   a re-entrant call is queued instead of recursed into, and only the
+   OUTERMOST call drains the queue, iteratively.  */
+static bool profiles_eager_check_active;
+static vec<tree> profiles_eager_check_pending;
+
+static void profiles_eager_check_function_1 (tree fndecl);
+
+void
+profiles_eager_check_function (tree fndecl)
+{
+  /* Cheap, unconditional no-op for the overwhelmingly common case: no
+     profile enforced anywhere in this translation unit at all.  Must
+     come before anything else below -- no cgraph/GIMPLE work of any
+     kind happens when neither profile is enforced.  */
+  if (!profiles_enforced_p ("std::init")
+      && !profiles_enforced_p ("std::invalidation"))
+    return;
+
+  if (profiles_eager_check_active)
+    {
+      profiles_eager_check_pending.safe_push (fndecl);
+      return;
+    }
+
+  profiles_eager_check_active = true;
+  profiles_eager_check_function_1 (fndecl);
+  while (!profiles_eager_check_pending.is_empty ())
+    profiles_eager_check_function_1 (profiles_eager_check_pending.pop ());
+  profiles_eager_check_active = false;
+}
+
+static void
+profiles_eager_check_function_1 (tree fndecl)
+{
+
+  /* A body deserialized from an imported module's BMI never went
+     through this translation unit's own finish_function/expand_or_
+     defer_fn the first time around -- it was already (or will be)
+     checked while compiling the module it's defined in.  Re-checking
+     it here, in every importer, would be a real, additional scope
+     (C++20 modules support), not something P3446R0/P4222 profile
+     enforcement asks for -- skip it.  */
+  if (DECL_LANG_SPECIFIC (fndecl) && DECL_MODULE_IMPORT_P (fndecl))
+    return;
+
+  /* A function usable in a constant expression must keep its
+     DECL_SAVED_TREE around for as long as the rest of the translation
+     unit might still need to constant-evaluate a call to it -- which
+     gimplification (below, via cgraph_node::analyze) permanently
+     discards, storing only the GIMPLE form instead.  Ordinarily that
+     is fine: unmodified GCC only gimplifies this early once nothing
+     later in the TU could still need the GENERIC tree (at end of
+     compilation).  Doing it here, mid-parse, is not fine -- confirmed
+     empirically: eagerly analyzing a function as unrelated to any
+     user code as std::partial_ordering::_M_reverse() (constexpr,
+     always-inline, defined in <compare>, transitively pulled in by
+     <memory>/<utility>) reliably ICEs the moment anything later in
+     the same TU constant-evaluates a call to it (cxx_eval_call_
+     expression's own "gcc_assert (at_eof >= 3 && ctx->quiet)",
+     constexpr.cc -- at_eof < 3 this early, so the assert fires
+     instead of the quiet, at-eof-only failure it guards).  A
+     non-constexpr function can never appear in a constant expression
+     at all, so this restriction costs nothing for the ordinary,
+     runtime-only functions both profiles actually diagnose.  */
+  if (DECL_DECLARED_CONSTEXPR_P (fndecl))
+    return;
+
+  /* Nothing on this function's own body could ever be diagnosed
+     anyway, for any profile actually enforced, if its own location is
+     exempt from every one of them -- so there is no reason to risk
+     eagerly gimplifying it at all.  Deliberately reuses profiles_
+     header_exempt_p itself (the exact predicate every real diagnostic
+     site is already gated on) rather than a bare in_system_header_at
+     check: this project's own in-tree DejaGnu harness compiles
+     against libstdc++ with plain -I, not -isystem, specifically so
+     library-header warnings stay visible during testing -- meaning
+     none of its headers are actually marked as system headers at
+     all, and this eager mechanism needs the exact same "exempt in
+     practice" notion profiles_header_exempt_p already computes
+     (system header OR an explicit [[profiles::exempt]]), not the
+     narrower, purely-lexical one.  Confirmed empirically: a bare
+     in_system_header_at guard let a lambda deep inside <bits/basic_
+     string.h> (reached, transitively, from a construct_at test that
+     only exempts "memory" -- covering basic_string.h too, since it is
+     on <memory>'s own #include chain) through to eager gimplification
+     under the real harness, where it segfaulted; it was never
+     reached at all in isolated manual testing, which used -isystem
+     and so made in_system_header_at itself enough to hide the gap.  */
+  bool exempt_from_every_enforced_profile = true;
+  if (profiles_enforced_p ("std::init")
+      && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (fndecl),
+				     "std::init"))
+    exempt_from_every_enforced_profile = false;
+  if (profiles_enforced_p ("std::invalidation")
+      && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (fndecl),
+				     "std::invalidation"))
+    exempt_from_every_enforced_profile = false;
+  if (exempt_from_every_enforced_profile)
+    return;
+
+  if (!DECL_STRUCT_FUNCTION (fndecl))
+    return;
+
+  cgraph_node *node = cgraph_node::get_create (fndecl);
+  if (node->analyzed)
+    /* Already processed (e.g. reached a second time through a clone,
+       or a path that calls expand_or_defer_fn more than once for the
+       same decl).  */
+    return;
+
+  /* Mirrors cgraph_node::add_new_function's own FINISHED-state
+     handling (cgraphunit.cc) -- deliberately not calling that
+     function directly, which gcc_unreachable()s on any symtab->state
+     other than the handful it knows about, and the state for the
+     entire duration of front-end parsing (PARSING) isn't one of
+     them.  */
+  node->definition = true;
+  node->analyze ();
+  push_cfun (DECL_STRUCT_FUNCTION (fndecl));
+  gimple_register_cfg_hooks ();
+  bitmap_obstack_initialize (NULL);
+
+  /* Build SSA directly -- via pass_build_ssa itself (its own pass_data
+     is literally named "ssa", the exact pass name both checkers used
+     to be registered relative to) -- rather than through pass_
+     manager::execute_early_local_passes (which also runs pass_early_
+     inline and the whole early-optimization suite right after it,
+     PUSH_INSERT_PASSES_WITHIN (pass_local_optimization_passes) in
+     passes.def).  That matters here specifically: early inlining
+     requires an always_inline callee's body to already be gimplified
+     and ready, a guarantee that only holds once the WHOLE translation
+     unit has been through cgraph_node::analyze at least once (which
+     the normal, flat, end-of-TU worklist provides but this per-
+     function, mid-parse hook does not -- confirmed empirically,
+     "inlining failed in call to 'always_inline' ... function body
+     not available" followed by a genuine segfault, gimplifying a
+     libstdc++-internal always_inline helper (__gthread_active_p)
+     whose caller happened to be reached, eagerly, before it was).
+     Neither profile-checking pass needs anything beyond PROP_ssa
+     (see their own pass_data), so building SSA alone is sufficient
+     and sidesteps the whole hazard.  */
+  if (!gimple_in_ssa_p (DECL_STRUCT_FUNCTION (fndecl)))
+    {
+      if (!profiles_build_ssa_pass)
+	profiles_build_ssa_pass = make_pass_build_ssa (g);
+      execute_pass_list (cfun, profiles_build_ssa_pass);
+    }
+
+  /* Run our two checkers directly on this one function, right now --
+     not by relying on being spliced into any pass list (they no
+     longer are, see init_profiles) but by invoking the pass objects
+     themselves.  Each pass's own gate () already checks
+     profiles_enforced_p for its own profile name, so calling both
+     unconditionally here is safe and cheap even when only one of the
+     two profiles is actually enforced.  */
+  if (!profiles_init_pass)
+    profiles_init_pass = make_pass_init_profile_gimple (g);
+  if (!profiles_invalidation_pass)
+    profiles_invalidation_pass = make_pass_invalidation_profile_gimple (g);
+  execute_pass_list (cfun, profiles_init_pass);
+  execute_pass_list (cfun, profiles_invalidation_pass);
+
+  bitmap_obstack_release (NULL);
+  pop_cfun ();
 }
 
 bool
@@ -546,9 +778,21 @@ profiles_header_exempt_p (location_t loc, const char *profile_name)
      to the file that did the including, checking THAT file's own
      spelling in turn, all the way to the main file (included_from ==
      0) -- same idiom module.cc's own remap code already uses to walk
-     this exact chain.  */
+     this exact chain.  linemap_lookup can return a MACRO map (e.g.
+     LOC is inside a macro-expanded declarator -- confirmed directly:
+     a libstdc++ FUNCTION_DECL declared through a feature-test macro
+     like '_GLIBCXX_TO_STRING_CONSTEXPR' can have exactly this kind of
+     DECL_SOURCE_LOCATION), and linemap_check_ordinary hard-asserts
+     its argument is NOT one -- resolve through every macro expansion
+     down to the real spelling location first so this chain-walk always
+     has an ordinary map to start from, the same way in_system_header_
+     at/LOCATION_FILE above already cope with a macro location
+     transparently.  */
+  location_t spelling_loc
+    = linemap_resolve_location (line_table, loc, LRK_SPELLING_LOCATION,
+				 NULL);
   const line_map_ordinary *cur
-    = linemap_check_ordinary (linemap_lookup (line_table, loc));
+    = linemap_check_ordinary (linemap_lookup (line_table, spelling_loc));
   if (!cur)
     return false;
 
