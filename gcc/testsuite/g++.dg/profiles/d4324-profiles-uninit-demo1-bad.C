@@ -38,10 +38,15 @@ int needs_now_init ()
   return *p;
 }
 
-// (3) Identical shape, no assertion -- diagnosed.
+// (3) Identical shape, no assertion -- diagnosed.  Also trips the
+// GIMPLE-level assignment-flavor-consistency check, and taking x's
+// address that way makes it unverifiable -- both now fire alongside
+// the front-end declaration-time error, since the eager per-function
+// checking mechanism no longer lets it suppress them.
 int diagnosed ()
 {
-  int x [[uninit]];
-  int *p = &x; // { dg-error "not marked" }
+  int x [[uninit]]; // { dg-error "cannot verify" }
+  int *p = &x; // { dg-error "which is marked" }
+  // { dg-error "assigning a pointer marked" "" { target *-*-* } .-1 }
   return *p;
 }

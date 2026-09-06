@@ -63,6 +63,16 @@ extern void init_profiles (void);
    right after init_profiles, before any parsing begins.  */
 extern void profiles_process_command_line_enforcement (void);
 
+/* Run both profile-checking GIMPLE passes on FNDECL's body right now,
+   eagerly, rather than waiting for the normal end-of-compilation
+   pipeline -- see the definition in profiles.cc for why (in short:
+   that pipeline's own driver skips every function once the whole
+   translation unit has any front-end error anywhere in it).  Called
+   from expand_or_defer_fn (semantics.cc) once FNDECL's body is
+   otherwise complete.  A cheap no-op unless std::init or
+   std::invalidation is actually enforced.  */
+extern void profiles_eager_check_function (tree fndecl);
+
 /* True if DECL (a PARM_DECL or VAR_DECL of pointer or reference type)
    is flavored "points to [[uninit]] memory" -- carries
    [[ref_to_uninit]] directly, or [[must_init]], which implies it

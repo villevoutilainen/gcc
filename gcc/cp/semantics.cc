@@ -5819,6 +5819,14 @@ expand_or_defer_fn (tree fn)
       cgraph_node::finalize_function (fn, function_depth > 1);
       emit_associated_thunks (fn);
 
+      /* P3446R0/P4222 profiles: check this one function's own body
+	 right now, rather than only at the end of the whole
+	 translation unit's compilation (which skips all GIMPLE-level
+	 work entirely once any front-end error has been seen
+	 anywhere in the TU -- see profiles_eager_check_function's own
+	 comment).  */
+      profiles_eager_check_function (fn);
+
       function_depth--;
 
       if (DECL_IMMEDIATE_FUNCTION_P (fn))
