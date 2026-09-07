@@ -3096,6 +3096,17 @@ static void
 ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
 {
   bool fn_return_is_owner = profiles_owning_ptr_p (fun->decl);
+  /* DECL is not always itself declared '[[owner]]': a local that
+     merely captures a fresh source (S8.1 rule 1) is tracked and
+     checked here exactly like a genuinely owner-declared one, but
+     saying so in a diagnostic ("'[[owner]]' pointer 'p'") would be
+     false when the source reads 'int *p = new int(7);' with no
+     attribute anywhere on p -- confirmed as a real, user-visible
+     wording bug, not hypothetical.  IS_PARAMETER is always TRUE here
+     (ip_check_owner_consumption's own caller only ever invokes this
+     function on a PARM_DECL that already passed profiles_owning_ptr_p),
+     so this only actually varies for a local (is_parameter false).  */
+  bool decl_marked = profiles_owning_ptr_p (decl);
   basic_block entry_succ = single_succ (ENTRY_BLOCK_PTR_FOR_FN (fun));
 
   ip_owner_reach_info info;
@@ -3129,10 +3140,18 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
   if (leaks_at_exit
       && !profiles_diagnostic_exempt_p (DECL_SOURCE_LOCATION (decl),
 					 fun->decl, "std::invalidation"))
-    error_at (DECL_SOURCE_LOCATION (decl),
-	      "%<[[owner]]%> pointer %qD is never deleted or passed on "
-	      "before the function returns, under the "
-	      "%<std::invalidation%> profile", decl);
+    {
+      if (decl_marked)
+	error_at (DECL_SOURCE_LOCATION (decl),
+		  "%<[[owner]]%> pointer %qD is never deleted or passed on "
+		  "before the function returns, under the "
+		  "%<std::invalidation%> profile", decl);
+      else
+	error_at (DECL_SOURCE_LOCATION (decl),
+		  "the freshly-allocated value assigned to %qD is never "
+		  "deleted or passed on before the function returns, under "
+		  "the %<std::invalidation%> profile", decl);
+    }
 
   /* Leak point 2: DECL is reassigned (ip_defines_var_p) while its
      current value is still owned-and-unconsumed -- necessary for
@@ -3158,10 +3177,18 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
 						info)
 	    && !profiles_diagnostic_exempt_p (gimple_location (stmt),
 					       fun->decl, "std::invalidation"))
-	  error_at (gimple_location (stmt),
-		    "%qD is reassigned here, discarding a not-yet-consumed "
-		    "%<[[owner]]%> pointer, under the %<std::invalidation%> "
-		    "profile", decl);
+	  {
+	    if (decl_marked)
+	      error_at (gimple_location (stmt),
+			"%qD is reassigned here, discarding a not-yet-consumed "
+			"%<[[owner]]%> pointer, under the %<std::invalidation%> "
+			"profile", decl);
+	    else
+	      error_at (gimple_location (stmt),
+			"%qD is reassigned here, discarding a not-yet-consumed "
+			"freshly-allocated value, under the "
+			"%<std::invalidation%> profile", decl);
+	  }
       }
 
   /* Leak point 3: DECL reaches a SECOND consuming event -- e.g. 'int
