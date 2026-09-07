@@ -2409,6 +2409,64 @@ ip_owner_consuming_stmt_p (gimple *stmt, tree v, bool fn_return_is_owner)
 	 || ip_owner_reassigned_into_owner_var_p (stmt, v);
 }
 
+/* True if STMT reads V in a way this checker treats as dangerous once
+   V has already been consumed -- either a genuine dereference of V
+   (reads the POINTEE directly: '*v', 'v->m', 'v[i]', or a write
+   THROUGH it, '*v = ...;', which needs V to be valid just as much),
+   or handing V's own value to a call (any argument position, or a
+   RETURN in a non-owner-marked function) -- both lose this checker's
+   own visibility into what happens to the value next (the callee, or
+   the caller after return, might dereference it; "never read a
+   callee's definition" means we cannot know).  Deliberately NOT
+   flagged: a plain, same-function value-copy of V into another
+   ordinary variable ('tmp = v;', no dereference).  Copying a pointer
+   BIT PATTERN around is not itself unsafe -- only dereferencing it,
+   or losing visibility into it, is -- and treating a bare copy as
+   "a read" was tried first and produces a real false positive: a
+   delete-expression's own implicit null-guard temp-load ('D.1 = v;'
+   feeding 'if (D.1 != 0) ...') is exactly this shape, confirmed via
+   the mandatory suite catching it immediately.  (This does mean a
+   LATER dereference through that untracked copy, 'tmp = v; ...
+   *tmp;', is not itself caught here -- a documented, narrower
+   residual gap, the same kind of known-alias blind spot
+   ip_owner_reassigned_into_owner_var_p/CE5 already only closes for
+   the specific case of copying into ANOTHER owner-marked variable,
+   not an arbitrary unmarked one.)
+
+   Callers are expected to check ip_owner_consuming_stmt_p FIRST and
+   skip this entirely when it's true (checked at whole-statement
+   granularity, matching ip_owner_consuming_stmt_p's own granularity
+   -- a single statement that both consumes V via one argument and
+   reads it via a different, aliased argument is classified as
+   consuming only; a documented, narrower residual scope limit, not
+   fixed here).  GIMPLE_COND operands are not scanned, matching Rule
+   #0/#1's own use-collection, which likewise never inspects a
+   condition's own operands.  */
+
+static bool
+ip_owner_stmt_reads_decl_p (gimple *stmt, tree v)
+{
+  if (gcall *call = dyn_cast<gcall *> (stmt))
+    {
+      for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+	if (ip_use_decl (gimple_call_arg (call, i)) == v)
+	  return true;
+      return false;
+    }
+  if (is_gimple_assign (stmt) && gimple_assign_single_p (stmt))
+    {
+      if (ip_deref_base_decl (gimple_assign_rhs1 (stmt)) == v)
+	return true;
+      return ip_deref_base_decl (gimple_assign_lhs (stmt)) == v;
+    }
+  if (gimple_code (stmt) == GIMPLE_RETURN)
+    {
+      tree retval = gimple_return_retval (as_a<greturn *> (stmt));
+      return retval && ip_use_decl (retval) == v;
+    }
+  return false;
+}
+
 /* If STMT assigns a FRESH owner-flavored value into some trackable
    local VAR_DECL (either a plain 'lhs = owner_flavored_expr;', or a
    direct-LHS call 'lhs = owner_returning_fn (...);' -- the same rare
@@ -2796,6 +2854,31 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
      is_parameter=false run this same reassignment seeds (its own GEN
      event correctly re-arms ITS OWN state, so IT does not have this
      problem) independently re-checks the new value from there on.  */
+  /* Leak point 4: DECL is READ -- not consumed again, merely used as
+     an ordinary operand (a call argument at a non-owner-sink
+     position, an assignment's RHS, a dereference, a return operand
+     of a non-owner-marked return) -- at a point where it has already
+     been fully consumed on every path reaching it.  Whatever DECL was
+     handed to may have destroyed the object it denoted; the value is
+     not merely "no longer owned by DECL", it is not safe to read at
+     all (confirmed directly: 'delete p; int x = *p;' compiled with no
+     diagnostic whatsoever before this leak point existed).  Shares
+     the exact same "already spent" test leak point 3 uses --
+     ever_owned_before_stmt_p true, unconsumed_before_stmt_p false --
+     just applied to a read instead of a second consuming event; no
+     new dataflow, purely a new consumer of the two analyses already
+     computed above.  A statement is checked as EITHER a leak-point-3
+     candidate OR a leak-point-4 candidate, never both (the early
+     `continue` after the consuming-event branch below is what
+     guarantees this) -- the statement that itself performs a second
+     consumption is not also, redundantly, "a read of an already-spent
+     value" in this checker's own model.
+
+     Checked at whole-STATEMENT granularity (ip_owner_stmt_reads_decl_p
+     's own comment): a single statement that both consumes DECL via
+     one argument and reads it via a different, aliased argument is
+     classified as consuming only, a documented residual scope limit,
+     not fixed here.  */
   if (is_parameter && decl_reassigned)
     return;
   FOR_EACH_BB_FN (bb, fun)
@@ -2807,26 +2890,37 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
 	  if (ip_owner_delete_call_p (call, decl)
 	      || ip_owner_deleting_dtor_dispatch_p (call, decl))
 	    continue;
-	if (!ip_owner_consuming_stmt_p (stmt, decl, fn_return_is_owner))
-	  continue;
 	/* ever_owned_before_stmt_p is the disambiguating half: without
 	   it, a LOCAL binding's own check would also match an earlier,
 	   entirely unrelated, syntactically-identical-looking consuming
-	   statement that happens to precede this binding's own gen
-	   event in program order (state is "false" there too, but for
-	   the mundane reason that this run's own binding does not exist
-	   yet, not because anything was already consumed) -- see ip_
-	   owner_ever_owned_before_stmt_p's own comment.  */
-	if (ip_owner_ever_owned_before_stmt_p (stmt, decl, is_parameter,
+	   or reading statement that happens to precede this binding's
+	   own gen event in program order (state is "false" there too,
+	   but for the mundane reason that this run's own binding does
+	   not exist yet, not because anything was already consumed) --
+	   see ip_owner_ever_owned_before_stmt_p's own comment.  */
+	bool already_spent
+	  = ip_owner_ever_owned_before_stmt_p (stmt, decl, is_parameter,
 						entry_succ, ever_owned_info)
 	    && !ip_owner_unconsumed_before_stmt_p (stmt, decl, is_parameter,
 						    fn_return_is_owner,
-						    entry_succ, info)
+						    entry_succ, info);
+	if (ip_owner_consuming_stmt_p (stmt, decl, fn_return_is_owner))
+	  {
+	    if (already_spent
+		&& !profiles_diagnostic_exempt_p (gimple_location (stmt),
+						   fun->decl, "std::invalidation"))
+	      error_at (gimple_location (stmt),
+			"%qD is consumed again here, after already being "
+			"consumed on every path reaching this point, under the "
+			"%<std::invalidation%> profile", decl);
+	    continue;
+	  }
+	if (already_spent && ip_owner_stmt_reads_decl_p (stmt, decl)
 	    && !profiles_diagnostic_exempt_p (gimple_location (stmt),
 					       fun->decl, "std::invalidation"))
 	  error_at (gimple_location (stmt),
-		    "%qD is consumed again here, after already being "
-		    "consumed on every path reaching this point, under the "
+		    "%qD is read here, after already being consumed on "
+		    "every path reaching this point, under the "
 		    "%<std::invalidation%> profile", decl);
       }
 }
