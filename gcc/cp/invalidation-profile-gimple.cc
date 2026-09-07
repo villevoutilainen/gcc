@@ -120,10 +120,18 @@ along with GCC; see the file COPYING3.  If not see
    marker (decl.cc's grokfndecl, profiles.cc's own profiles_not_
    invalidating_at_position_p), the same reason [[must_init]]/
    [[ref_to_uninit]] need their own analogous marker.  A virtual
-   (indirectly-dispatched) mutating call is not classified as mutating
-   either way, since gimple_call_fndecl returns NULL_TREE for those --
-   a known, documented scope limit for this increment, not a silent
-   gap.
+   (indirectly-dispatched) call IS classified, exactly as a directly-
+   resolved one is: gimple_call_fndecl returns NULL_TREE for these
+   (there is no single, statically-known callee), but the call's own
+   OBJ_TYPE_REF still names the receiver's static type and the vtable
+   slot being dispatched through, which is enough on its own --
+   [class.virtual]'s own override rules require every valid override
+   at a given slot to share the exact same cv-qualification as the
+   function that first introduced it, so the DECLARED constness at
+   that fixed, statically-known slot is invariant across every
+   possible dynamic target, and is all this checker needs: it never
+   looks at a callee's definition for a direct call either, only its
+   declaration.  See ip_virtual_call_declared_target.
 
    Diagnostic ordering ("did this mutation happen before this read")
    uses plain CFG dominance plus a same-block statement scan, the same
@@ -1055,7 +1063,12 @@ ip_resolve_defining_stmt (tree rhs, gimple *point)
    only a mutation strictly after it counts against future uses); a
    member call whose return value could possibly reference its
    receiver's own state (ip_call_result_may_reference_receiver_p) binds
-   to that receiver (ip_receiver_decl); a plain copy, or pointer
+   to that receiver (ip_receiver_decl) -- including a virtually-
+   dispatched accessor (e.g. a polymorphic 'data()'), resolved via
+   ip_virtual_call_declared_target the same way ip_collect_mutations
+   resolves a virtual mutating call, since a covariant-return override
+   cannot change whether the return type has this pointer/reference/
+   class shape, only how derived the pointee is; a plain copy, or pointer
    arithmetic on one ('base + n', the common 'vec.data() + n' shape --
    confirmed directly: without this, the pointer-arithmetic assignment
    this lowers to is neither a GIMPLE_CALL nor a single-operand copy, so
@@ -1068,6 +1081,72 @@ ip_resolve_defining_stmt (tree rhs, gimple *point)
    recursion is well-founded (no cycle-guard is needed the way
    contracts-gimple.cc's PHI recursion needs one: there is no PHI node
    here to create a cycle through).  */
+
+/* If CALL is an indirect (OBJ_TYPE_REF) dispatch through a class-typed
+   receiver, return the FUNCTION_DECL declared, in the receiver's own
+   STATIC type, at the vtable slot the call's own token names -- or
+   NULL_TREE if CALL is not such a dispatch, or the slot can't be
+   resolved this way (no BINFO, e.g. an incomplete type).
+
+   Used by both ip_binding_established_by (a virtually-dispatched
+   accessor, e.g. a polymorphic 'data()', must still be able to
+   establish a binding to its receiver) and ip_collect_mutations (a
+   virtually-dispatched non-const call must still be classified as
+   mutating) -- the same underlying gap, closed once, here.
+
+   Reuses the exact same OBJ_TYPE_REF_OBJECT/OBJ_TYPE_REF_TOKEN
+   extraction ip_owner_deleting_dtor_dispatch_p already established for
+   the unrelated owner-consumption checker, generalized from "match one
+   specific known candidate function's own DECL_VINDEX" to "search the
+   static type's own BINFO_VIRTUALS for whichever entry's DECL_VINDEX
+   matches" -- needed here because, unlike that destructor-specific
+   caller, the candidate function isn't known in advance.
+
+   The result is safe to use only for reading a DECLARED, override-
+   invariant property off it, never for reasoning about what the call's
+   own definition does.  [class.virtual] requires every valid override
+   at a given vtable slot to share the identical parameter-type-list
+   and cv-qualification of the function that first introduced that slot
+   (a mismatch there means a DIFFERENT, hiding function with its own
+   separate slot, not an override reachable via this token at all) --
+   so the constness of whichever declaration this function returns is
+   guaranteed identical to whatever the call actually dispatches to at
+   runtime, regardless of dynamic type; likewise its return type's
+   POINTER_TYPE/REFERENCE_TYPE/RECORD_TYPE/UNION_TYPE shape, since a
+   covariant-return override may narrow to a more-derived pointee but
+   cannot change that shape.  [[not_invalidating]], by contrast, is a
+   library-only marker with no such language-enforced override
+   consistency -- callers must not trust it when FNDECL was found this
+   way (see ip_collect_mutations's own comment for how it avoids doing
+   so).  */
+
+static tree
+ip_virtual_call_declared_target (gcall *call)
+{
+  tree fn = gimple_call_fn (call);
+  if (!fn || TREE_CODE (fn) != OBJ_TYPE_REF)
+    return NULL_TREE;
+  tree token = OBJ_TYPE_REF_TOKEN (fn);
+  if (!token || TREE_CODE (token) != INTEGER_CST)
+    return NULL_TREE;
+  tree obj = OBJ_TYPE_REF_OBJECT (fn);
+  if (!obj
+      || (TREE_CODE (TREE_TYPE (obj)) != POINTER_TYPE
+	  && TREE_CODE (TREE_TYPE (obj)) != REFERENCE_TYPE))
+    return NULL_TREE;
+  tree type = TREE_TYPE (TREE_TYPE (obj));
+  if (!CLASS_TYPE_P (type) || !TYPE_BINFO (type))
+    return NULL_TREE;
+  for (tree bv = BINFO_VIRTUALS (TYPE_BINFO (type)); bv; bv = TREE_CHAIN (bv))
+    {
+      tree bv_fn = BV_FN (bv);
+      if (bv_fn && DECL_VINDEX (bv_fn)
+	  && TREE_CODE (DECL_VINDEX (bv_fn)) == INTEGER_CST
+	  && tree_int_cst_equal (DECL_VINDEX (bv_fn), token))
+	return bv_fn;
+    }
+  return NULL_TREE;
+}
 
 static tree
 ip_binding_established_by (gimple *def_stmt)
@@ -1084,6 +1163,8 @@ ip_binding_established_by (gimple *def_stmt)
 	  return reaching ? ip_binding_established_by (reaching) : NULL_TREE;
 	}
       tree fndecl = gimple_call_fndecl (call);
+      if (!fndecl)
+	fndecl = ip_virtual_call_declared_target (call);
       tree lhs = gimple_call_lhs (call);
       if (!fndecl || !lhs || !DECL_IOBJ_MEMBER_FUNCTION_P (fndecl)
 	  || gimple_call_num_args (call) < 1)
@@ -1174,20 +1255,36 @@ struct ip_mutation
      call can mutate more than one such argument, hence a vector of
      results rather than a single pair.
 
-   See this file's own top comment for what this deliberately does
-   not yet cover (indirectly-dispatched calls: gimple_call_fndecl
-   returns NULL_TREE for those, so neither source above ever fires).  */
+   A directly-unresolvable (virtual/indirect) CALL is handled too:
+   gimple_call_fndecl returns NULL_TREE for those, so FNDECL below
+   falls back to ip_virtual_call_declared_target.  When that fallback
+   is what found FNDECL (VIA_VIRTUAL_DISPATCH), [[not_invalidating]] is
+   deliberately NOT honored, on either source above, even if the
+   resolved declaration carries it: unlike constness, nothing enforces
+   that every override of a [[not_invalidating]]-marked virtual
+   function is itself [[not_invalidating]], so trusting a marking found
+   only via the receiver's STATIC type -- which may not be the type
+   whose override actually executes -- would be unsound, not merely
+   imprecise.  Every other property this function reads off FNDECL
+   (constness, parameter types) is override-invariant by
+   [class.virtual] itself and is trusted unconditionally either way.  */
 
 static void
 ip_collect_mutations (gcall *call, vec<ip_mutation> *out)
 {
+  bool via_virtual_dispatch = false;
   tree fndecl = gimple_call_fndecl (call);
+  if (!fndecl)
+    {
+      fndecl = ip_virtual_call_declared_target (call);
+      via_virtual_dispatch = fndecl != NULL_TREE;
+    }
   if (!fndecl)
     return;
 
   if (DECL_IOBJ_MEMBER_FUNCTION_P (fndecl) && !DECL_CONSTRUCTOR_P (fndecl)
       && !DECL_CONST_MEMFUNC_P (fndecl)
-      && !profiles_not_invalidating_p (fndecl)
+      && (via_virtual_dispatch || !profiles_not_invalidating_p (fndecl))
       && gimple_call_num_args (call) >= 1)
     if (tree decl = ip_receiver_decl (gimple_call_arg (call, 0)))
       {
@@ -1210,7 +1307,8 @@ ip_collect_mutations (gcall *call, vec<ip_mutation> *out)
 		     ? TREE_TYPE (param_type) : NULL_TREE;
       if (!pointee || !CLASS_TYPE_P (pointee) || TYPE_READONLY (pointee))
 	continue;
-      if (profiles_not_invalidating_at_position_p (fndecl, i + 1))
+      if (!via_virtual_dispatch
+	  && profiles_not_invalidating_at_position_p (fndecl, i + 1))
 	continue;
       if (tree decl = ip_receiver_decl (gimple_call_arg (call, i)))
 	out->safe_push ({ decl, pointee });
