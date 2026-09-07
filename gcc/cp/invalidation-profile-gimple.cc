@@ -152,6 +152,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "cfg.h"
 #include "dominance.h"
 #include "hash-set.h"
+#include "sbitmap.h"
 
 /* True if VAR (an operand of USE_STMT) is a class/union-typed or
    raw-pointer-typed VAR_DECL or PARM_DECL worth checking at all --
@@ -401,42 +402,219 @@ ip_defines_var_p (gimple *stmt, tree var)
   return false;
 }
 
-/* The nearest definition of VAR that provably reaches POINT (a
-   statement in the same function) -- an ordinary backward scan within
-   POINT's own basic block, else the nearest immediate-dominator-chain
-   ancestor block containing any definition of VAR (its own last such
-   definition).  See this file's own top comment for the known,
-   deliberate scope limit this implies (a diamond-shaped reassignment
-   is not soundly resolved).  Returns NULL_TREE if no such definition
-   is found at all (VAR is default-constructed or otherwise never
-   written before POINT on the path this technique can see).  */
+/* Forward "reaching definitions" dataflow for VAR alone -- which of
+   VAR's own defining statements (ip_defines_var_p) could still be the
+   value VAR holds at a given program point.  The classical technique
+   Definite Assignment Analysis is itself built from, scoped to one
+   tracked variable at a time (the same granularity every other query
+   in this file already operates at).  Replaces this file's former
+   single-answer ip_nearest_write_before (a same-block scan, then an
+   immediate-dominator-chain walk) -- confirmed, not assumed, to be a
+   genuine false negative on a diamond (two branches each establishing
+   a different binding, merging before a use): neither arm block is an
+   ancestor of the merge block in the dominator tree, so that walk
+   found nothing there and silently gave up, rather than correctly
+   reporting BOTH arms' definitions as simultaneously live.  This
+   dataflow reports exactly that set, however large, the same way
+   init-profile-gimple.cc's own block-level fixed-point DAA (added to
+   fix the identical dominance-only bug for [[uninit]] locals) already
+   does for its own, simpler single-boolean question -- see this
+   project's own invalidation-profile-spec.html for the full account
+   of why the single-answer technique was unsound here specifically,
+   not merely less precise.
 
-static gimple *
-ip_nearest_write_before (tree var, gimple *point)
+   Each of VAR's own defining statements is given a small integer
+   index (DEFS, discovered by one linear walk before the fixed-point
+   loop runs) and tracked as one bit of a small, per-block sbitmap --
+   ordinary reaching-definitions machinery, the same representation
+   GCC's own optimizer passes use for this exact kind of problem.
+   Monotonic and guaranteed to terminate for the same reason
+   ip_compute_owner_reach_info's own comment already gives for its
+   analogous loop: a finite, fixed number of blocks and definitions,
+   with each block's own "does it define VAR, and which definition is
+   its own last one" fact fixed for the whole computation -- only the
+   incoming (unioned) set can still change, and it can only grow.  */
+
+struct ip_var_reach_info
 {
-  basic_block bb = gimple_bb (point);
-  for (gimple_stmt_iterator gsi = gsi_for_stmt (point); !gsi_end_p (gsi);)
+  /* DEFS[i] is VAR's i-th own defining statement.  block_in[bb]/
+     block_out[bb] are DEFS.length()-bit sets: bit i set means DEFS[i]
+     could still be the value VAR holds at the start/end of that
+     block.  Owns its own per-block sbitmaps (freed in the
+     destructor); DEFS itself is just a lookup table, not owned
+     resources.  */
+  auto_vec<gimple *> defs;
+  auto_vec<sbitmap> block_in;
+  auto_vec<sbitmap> block_out;
+
+  ~ip_var_reach_info ()
+  {
+    for (unsigned i = 0; i < block_in.length (); ++i)
+      sbitmap_free (block_in[i]);
+    for (unsigned i = 0; i < block_out.length (); ++i)
+      sbitmap_free (block_out[i]);
+  }
+};
+
+static void
+ip_compute_var_reach_info (function *fun, tree var, ip_var_reach_info *info)
+{
+  unsigned n = last_basic_block_for_fn (fun);
+  auto_vec<int> own_def_index;
+  own_def_index.safe_grow (n);
+
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    {
+      own_def_index[bb->index] = -1;
+      for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	   gsi_next (&gsi))
+	if (ip_defines_var_p (gsi_stmt (gsi), var))
+	  {
+	    gimple *stmt = gsi_stmt (gsi);
+	    int idx = -1;
+	    for (unsigned i = 0; i < info->defs.length (); ++i)
+	      if (info->defs[i] == stmt)
+		{
+		  idx = (int) i;
+		  break;
+		}
+	    if (idx < 0)
+	      {
+		idx = (int) info->defs.length ();
+		info->defs.safe_push (stmt);
+	      }
+	    own_def_index[bb->index] = idx;
+	  }
+    }
+
+  unsigned k = info->defs.length ();
+  info->block_in.safe_grow (n);
+  info->block_out.safe_grow (n);
+  for (unsigned i = 0; i < n; ++i)
+    {
+      info->block_in[i] = sbitmap_alloc (MAX (k, 1u));
+      info->block_out[i] = sbitmap_alloc (MAX (k, 1u));
+      bitmap_clear (info->block_in[i]);
+      bitmap_clear (info->block_out[i]);
+    }
+  if (k == 0)
+    return;
+
+  bool changed = true;
+  while (changed)
+    {
+      changed = false;
+      FOR_EACH_BB_FN (bb, fun)
+	{
+	  auto_sbitmap in (k);
+	  bitmap_clear (in);
+	  edge e;
+	  edge_iterator ei;
+	  FOR_EACH_EDGE (e, ei, bb->preds)
+	    bitmap_ior (in, in, info->block_out[e->src->index]);
+	  if (!bitmap_equal_p (in, info->block_in[bb->index]))
+	    {
+	      bitmap_copy (info->block_in[bb->index], in);
+	      changed = true;
+	    }
+
+	  auto_sbitmap out (k);
+	  if (own_def_index[bb->index] >= 0)
+	    {
+	      bitmap_clear (out);
+	      bitmap_set_bit (out, own_def_index[bb->index]);
+	    }
+	  else
+	    bitmap_copy (out, info->block_in[bb->index]);
+	  if (!bitmap_equal_p (out, info->block_out[bb->index]))
+	    {
+	      bitmap_copy (info->block_out[bb->index], out);
+	      changed = true;
+	    }
+	}
+    }
+}
+
+/* The set of VAR's own defining statements that could still be live
+   immediately before STMT -- same-block backward scan first (a
+   single basic block never has an internal diamond, so this is
+   always exact and unambiguous when it finds anything), falling back
+   to INFO's own block_in set for STMT's block otherwise.  Pushes each
+   live definition's own gimple* onto *OUT (cleared first).  An empty
+   *OUT means "no definition reaches here at all" (the same meaning
+   the former ip_nearest_write_before's own NULL had); more than one
+   element means a diamond -- multiple, genuinely different
+   definitions are simultaneously live, which the former technique
+   could not represent.  */
+
+static void
+ip_var_reaching_defs_before_stmt (ip_var_reach_info *info, tree var,
+				   gimple *stmt, auto_vec<gimple *> *out)
+{
+  out->truncate (0);
+  basic_block bb = gimple_bb (stmt);
+  for (gimple_stmt_iterator gsi = gsi_for_stmt (stmt); !gsi_end_p (gsi);)
     {
       gsi_prev (&gsi);
       if (gsi_end_p (gsi))
 	break;
       gimple *s = gsi_stmt (gsi);
       if (ip_defines_var_p (s, var))
-	return s;
+	{
+	  out->safe_push (s);
+	  return;
+	}
     }
+  if ((unsigned) bb->index >= info->block_in.length ())
+    return;
+  sbitmap in = info->block_in[bb->index];
+  unsigned bit;
+  sbitmap_iterator sbi;
+  EXECUTE_IF_SET_IN_BITMAP (in, 0, bit, sbi)
+    out->safe_push (info->defs[bit]);
+}
 
-  for (basic_block d = get_immediate_dominator (CDI_DOMINATORS, bb); d;
-       d = get_immediate_dominator (CDI_DOMINATORS, d))
-    {
-      gimple *last = NULL;
-      for (gimple_stmt_iterator gsi = gsi_start_bb (d); !gsi_end_p (gsi);
-	   gsi_next (&gsi))
-	if (ip_defines_var_p (gsi_stmt (gsi), var))
-	  last = gsi_stmt (gsi);
-      if (last)
-	return last;
-    }
-  return NULL;
+/* Resolve DECL's own reaching definition(s) immediately before POINT
+   via ip_var_reach_info, computed fresh here for DECL (a lightweight,
+   on-demand computation -- this is only ever called from a handful of
+   shallow, depth-guarded recursive hops, never from a hot loop).
+   Returns the unique reaching definition when there is exactly one
+   (full precision, matching every case the former technique already
+   handled correctly); returns NULL when there are zero, OR when there
+   is more than one -- a diamond reached while resolving an internal
+   copy/pointer-arithmetic hop, not at the top-level use itself.  That
+   second case is a deliberate, narrower residual scope limit, not a
+   silent regression: it conservatively declines to establish a
+   binding at all, the same safe fallback this file already takes
+   whenever it can't prove something, one hop deeper than this
+   change's primary target (see this project's own plan notes for why
+   full precision through an arbitrarily deep alias chain is left as
+   a possible, separate follow-up).
+
+   Deliberately keeps its own original two-argument signature (no
+   FUNCTION * parameter) and consults the global cfun instead: this is
+   called from several places, including deep inside the mutually
+   recursive pointer/container escape-analysis group
+   (ip_var_contents_escape_locally_p and friends, further down), none
+   of which otherwise need a FUNCTION * of their own -- threading one
+   through that whole group just for this one leaf call would be a
+   much larger, unrelated-looking diff for no real benefit.  cfun is
+   safe to rely on here specifically: profiles_eager_check_function_1
+   (profiles.cc) brackets this entire pass's execution, this function
+   included, in push_cfun (DECL_STRUCT_FUNCTION (fndecl)) / pop_cfun
+   (), so cfun is always the exact same function this whole checker is
+   currently examining -- confirmed by reading that bracketing, not
+   assumed.  */
+
+static gimple *
+ip_nearest_write_before (tree decl, gimple *point)
+{
+  ip_var_reach_info info;
+  ip_compute_var_reach_info (cfun, decl, &info);
+  auto_vec<gimple *> reaching;
+  ip_var_reaching_defs_before_stmt (&info, decl, point, &reaching);
+  return reaching.length () == 1 ? reaching[0] : NULL;
 }
 
 /* ---- Pointer/container escape-from-scope analysis (CppCon 2026
@@ -1039,87 +1217,398 @@ ip_collect_mutations (gcall *call, vec<ip_mutation> *out)
     }
 }
 
-/* True if MUTATING_STMT is guaranteed to have already executed by the
-   time USE_STMT runs, on every path that reaches USE_STMT -- plain
-   basic-block dominance across blocks, an explicit forward scan for a
-   same-block pair (mirroring ip_read_dominated_by_init_p's own
-   technique in init-profile-gimple.cc, with the roles of "the
-   established fact" and "the read" reversed).  */
+/* One trackable operand read, recorded during the initial statement
+   walk in ip_check_function and checked afterward by ip_check_var_
+   uses, one distinct tracked variable at a time.  */
 
-static bool
-ip_use_after_mutation_p (gimple *mutating_stmt, gimple *use_stmt)
+struct ip_use
 {
-  if (mutating_stmt == use_stmt)
-    return false;
-  basic_block m_bb = gimple_bb (mutating_stmt);
-  basic_block u_bb = gimple_bb (use_stmt);
-  if (m_bb == u_bb)
-    {
-      for (gimple_stmt_iterator gsi = gsi_start_bb (m_bb); !gsi_end_p (gsi);
-	   gsi_next (&gsi))
-	{
-	  gimple *s = gsi_stmt (gsi);
-	  if (s == mutating_stmt)
-	    return true;
-	  if (s == use_stmt)
-	    return false;
-	}
-      return false;
-    }
-  return dominated_by_p (CDI_DOMINATORS, u_bb, m_bb);
+  gimple *stmt;
+  tree var;
+};
+
+/* If STMT is one of MUTATING_CALLS whose own recorded (decl, type)
+   pair (MUTATED_DECLS/MUTATED_TYPES, same index) isn't provably
+   distinct from/unrelated to BOUND_DECL, return that mutated decl;
+   else NULL_TREE.  The exact safety test Rule #0/#1 has always used,
+   factored out so both the block-transfer function and the query
+   function below share one definition instead of two copies that
+   could drift apart.  */
+
+static tree
+ip_first_relevant_mutation (gimple *stmt, tree bound_decl,
+			     const vec<gimple *> &mutating_calls,
+			     const vec<tree> &mutated_decls,
+			     const vec<tree> &mutated_types)
+{
+  for (unsigned i = 0; i < mutating_calls.length (); ++i)
+    if (mutating_calls[i] == stmt)
+      {
+	tree mutated_decl = mutated_decls[i];
+	bool safe = (mutated_decl != bound_decl
+		     && (ip_decls_provably_distinct_objects_p (mutated_decl,
+								bound_decl)
+			 || ip_types_provably_unrelated_p (mutated_types[i],
+							    TREE_TYPE (bound_decl))));
+	if (!safe)
+	  return mutated_decl;
+      }
+  return NULL_TREE;
 }
 
+/* Forward, monotonic, OR-across-predecessors dataflow (GEN-only, no
+   kill -- once possibly mutated since this specific binding, stays
+   possibly mutated for the rest of its relevance; the same "ever"
+   shape ip_compute_owner_ever_owned_info uses, not the GEN/KILL shape
+   ip_compute_owner_reach_info uses): "may BOUND_DECL have been
+   mutated since BINDING_STMT, on some path reaching this point".
+   Replaces this file's former ip_use_after_mutation_p, which used
+   dominated_by_p -- a UNIVERSAL "happens on every path" test -- to
+   answer what should be an EXISTENTIAL "could this happen on some
+   path" question: backwards for a default-deny profile, and a second,
+   independent diamond defect from ip_nearest_write_before's own (a
+   mutation present on only one arm between a binding and a use used
+   to fail that universal dominance test and be silently treated as
+   irrelevant).  Seeding at BINDING_STMT rather than function entry is
+   the one difference from ip_owner_block_transfer's own shape; see
+   ip_mutated_since_block_transfer's own ACTIVE gate below for how a
+   specific mid-block starting statement is handled without needing a
+   separate same-block special case (mirrors how ip_owner_block_
+   transfer's own per-statement GEN scan already handles "becomes true
+   starting at a specific statement, not before" for its own ordinary,
+   non-parameter case).  */
 
-/* Check every trackable operand VAR is USE_STMT (a call argument, or
-   an ordinary copy's RHS) against every mutating call in MUTATING_
-   CALLS/MUTATED_DECLS/MUTATED_TYPES that provably occurs strictly
-   between VAR's own binding's establishment (REACHING, below) and
-   USE_STMT, emitting a diagnostic (unless header-exempted) for the
-   first one Rule #0/#1 cannot clear.  A mutation that precedes
-   REACHING is irrelevant: the binding didn't even exist yet when it
-   happened, so it cannot be what invalidates THIS binding -- e.g.
-   'mutate(v); v = other; auto p = v.data() + 1; use(*p);' must stay
-   clean, since both mutations of 'v' happened before 'p' was ever
-   (re-)established.  */
+/* A second, simpler, purely monotonic dataflow (boolean OR-forward,
+   GEN-only, no kill): "is this program point definitely reachable via
+   a path that has already passed through BINDING_STMT".  Needed
+   because a plain per-block "bb == binding_stmt's own block" test is
+   NOT the same question and gets it wrong for any block that is a
+   sibling of, or otherwise unrelated to, binding_stmt's own block --
+   confirmed directly (not assumed) via a real diamond: with a two-arm
+   branch, one arm establishing a binding for VAR and the other
+   mutating a COMPLETELY UNRELATED container, an earlier draft of this
+   file's own ip_mutated_since_block_transfer treated the unrelated
+   arm as unconditionally "already past the binding" (since it isn't
+   binding_stmt's own block) and scanned it for mutations regardless
+   of whether it is even reachable from the binding at all -- which,
+   for a container genuinely unrelated to the tracked binding, still
+   produced the right answer by luck (ip_decls_provably_distinct_
+   objects_p correctly ruled it out), but for a PREDECESSOR block of
+   binding_stmt's own block containing a mutation of THE SAME decl
+   BEFORE the binding (e.g. 'v1.push_back(...); p = v1.data();' as two
+   separate statements in two separate blocks) it wrongly counted a
+   mutation that had already happened before the binding even started
+   as if it happened after -- a real, confirmed false positive this
+   dataflow exists specifically to close.  Every block other than
+   binding_stmt's own is a plain OR-passthrough (its own "reached"
+   state is exactly whatever reaches it from its predecessors, no GEN
+   of its own); binding_stmt's own block is the one and only place
+   reachability can newly become true, from function-internal flow
+   alone, partway through processing that one block.  */
+
+struct ip_reached_from_info
+{
+  auto_vec<bool> block_in;
+  auto_vec<bool> block_out;
+};
 
 static void
-ip_check_operand_uses (gimple *use_stmt, tree var,
-			vec<gimple *> &mutating_calls,
-			vec<tree> &mutated_decls, vec<tree> &mutated_types,
-			tree enclosing_fndecl)
+ip_compute_reached_from_info (function *fun, gimple *binding_stmt,
+			       ip_reached_from_info *info)
 {
-  gimple *reaching = ip_nearest_write_before (var, use_stmt);
-  if (!reaching)
-    return;
-  tree bound_decl = ip_binding_established_by (reaching);
-  if (!bound_decl)
-    return;
-  gimple *origin = ip_originating_call (reaching);
+  unsigned n = last_basic_block_for_fn (fun);
+  info->block_in.safe_grow_cleared (n);
+  info->block_out.safe_grow_cleared (n);
+  basic_block binding_bb = gimple_bb (binding_stmt);
 
-  for (unsigned i = 0; i < mutating_calls.length (); ++i)
+  bool changed = true;
+  while (changed)
     {
-      gimple *m = mutating_calls[i];
-      if (use_stmt == m || m == origin
-	  || !ip_use_after_mutation_p (m, use_stmt)
-	  || !ip_use_after_mutation_p (reaching, m))
-	continue;
-
-      tree mutated_decl = mutated_decls[i];
-      bool safe = (mutated_decl != bound_decl
-		   && (ip_decls_provably_distinct_objects_p (mutated_decl,
-							      bound_decl)
-		       || ip_types_provably_unrelated_p (mutated_types[i],
-							  TREE_TYPE (bound_decl))));
-      if (safe)
-	continue;
-      if (!profiles_diagnostic_exempt_p (gimple_location (use_stmt),
-					 enclosing_fndecl, "std::invalidation"))
-	error_at (gimple_location (use_stmt),
-		  "use of a value bound to %qD, potentially invalidated "
-		  "by an earlier mutation of %qD, not permitted under the "
-		  "%<std::invalidation%> profile", bound_decl, mutated_decl);
-      break;
+      changed = false;
+      basic_block bb;
+      FOR_EACH_BB_FN (bb, fun)
+	{
+	  bool in = false;
+	  edge e;
+	  edge_iterator ei;
+	  FOR_EACH_EDGE (e, ei, bb->preds)
+	    if (info->block_out[e->src->index])
+	      {
+		in = true;
+		break;
+	      }
+	  if (in != info->block_in[bb->index])
+	    {
+	      info->block_in[bb->index] = in;
+	      changed = true;
+	    }
+	  /* Reachability becomes true somewhere inside binding_bb itself
+	     regardless of IN (that block's own exit is always reached,
+	     since it contains binding_stmt), and simply propagates
+	     forward (OR) everywhere else -- the exact statement-level
+	     position within binding_bb is handled separately, by the
+	     ACTIVE gates in ip_mutated_since_block_transfer/ip_mutated_
+	     since_before_stmt_p below, which both already know to treat
+	     binding_bb as special.  */
+	  bool out = info->block_in[bb->index] || (bb == binding_bb);
+	  if (out != info->block_out[bb->index])
+	    {
+	      info->block_out[bb->index] = out;
+	      changed = true;
+	    }
+	}
     }
+}
+
+/* Forward, monotonic, OR-across-predecessors dataflow (GEN-only, no
+   kill -- once possibly mutated since this specific binding, stays
+   possibly mutated for the rest of its relevance; the same "ever"
+   shape ip_compute_owner_ever_owned_info uses, not the GEN/KILL shape
+   ip_compute_owner_reach_info uses): "may BOUND_DECL have been
+   mutated since BINDING_STMT, on some path reaching this point, given
+   that point is actually reachable from the binding at all"
+   (ip_reached_from_info above is what answers that last, necessary
+   qualifier).  Replaces this file's former ip_use_after_mutation_p,
+   which used dominated_by_p -- a UNIVERSAL "happens on every path"
+   test -- to answer what should be an EXISTENTIAL "could this happen
+   on some path" question: backwards for a default-deny profile, and a
+   second, independent diamond defect from ip_nearest_write_before's
+   own (a mutation present on only one arm between a binding and a use
+   used to fail that universal dominance test and be silently treated
+   as irrelevant).  */
+
+struct ip_mutated_since_info
+{
+  /* Indexed by basic_block->index.  NULL_TREE = provably not yet
+     mutated on any path reaching this point; otherwise, one concrete
+     mutated decl that broke the proof (arbitrary but stable choice
+     when more than one candidate exists -- soundness only needs SOME
+     witness for the diagnostic, not the first one in program order).  */
+  auto_vec<tree> block_in;
+  auto_vec<tree> block_out;
+};
+
+/* REACHED_AT_ENTRY is ip_reached_from_info's own block_in for BB --
+   whether BB's own start is already known-reachable from BINDING_STMT
+   (true for every block strictly downstream of binding_stmt's own
+   block, false for binding_stmt's own block itself on the common,
+   non-looping path, and for any block not reachable from the binding
+   at all).  Statements before ACTIVE becomes true are always
+   irrelevant, whether that's because they textually precede
+   BINDING_STMT within its own block, or because BB isn't reachable
+   from the binding yet at all -- both cases collapse to the same
+   ACTIVE-starts-false handling here.  */
+
+static tree
+ip_mutated_since_block_transfer (basic_block bb, tree in, gimple *binding_stmt,
+				  bool reached_at_entry, tree bound_decl,
+				  const vec<gimple *> &mutating_calls,
+				  const vec<tree> &mutated_decls,
+				  const vec<tree> &mutated_types)
+{
+  tree state = in;
+  bool active = reached_at_entry;
+  bool own_block = (gimple_bb (binding_stmt) == bb);
+  for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+       gsi_next (&gsi))
+    {
+      gimple *stmt = gsi_stmt (gsi);
+      if (!active)
+	{
+	  if (own_block && stmt == binding_stmt)
+	    active = true;
+	  continue;
+	}
+      if (!state)
+	state = ip_first_relevant_mutation (stmt, bound_decl, mutating_calls,
+					     mutated_decls, mutated_types);
+    }
+  return state;
+}
+
+static void
+ip_compute_mutated_since_info (function *fun, gimple *binding_stmt,
+				tree bound_decl,
+				const vec<gimple *> &mutating_calls,
+				const vec<tree> &mutated_decls,
+				const vec<tree> &mutated_types,
+				ip_mutated_since_info *info)
+{
+  ip_reached_from_info reached;
+  ip_compute_reached_from_info (fun, binding_stmt, &reached);
+
+  unsigned n = last_basic_block_for_fn (fun);
+  info->block_in.safe_grow_cleared (n);
+  info->block_out.safe_grow_cleared (n);
+
+  bool changed = true;
+  while (changed)
+    {
+      changed = false;
+      basic_block bb;
+      FOR_EACH_BB_FN (bb, fun)
+	{
+	  tree in = NULL_TREE;
+	  edge e;
+	  edge_iterator ei;
+	  FOR_EACH_EDGE (e, ei, bb->preds)
+	    if (info->block_out[e->src->index])
+	      {
+		in = info->block_out[e->src->index];
+		break;
+	      }
+	  if (in != info->block_in[bb->index])
+	    {
+	      info->block_in[bb->index] = in;
+	      changed = true;
+	    }
+
+	  tree out = ip_mutated_since_block_transfer (bb, info->block_in[bb->index],
+						       binding_stmt,
+						       reached.block_in[bb->index],
+						       bound_decl, mutating_calls,
+						       mutated_decls,
+						       mutated_types);
+	  if (out != info->block_out[bb->index])
+	    {
+	      info->block_out[bb->index] = out;
+	      changed = true;
+	    }
+	}
+    }
+}
+
+/* Same shape as ip_owner_unconsumed_before_stmt_p's own query
+   function: start from INFO's own block-level fact for POINT's block,
+   then re-run the identical per-statement scan ip_mutated_since_
+   block_transfer already uses, but stopping at POINT instead of
+   running to the block's end.  Returns the same "witness" mutated
+   decl ip_mutated_since_block_transfer would (or NULL_TREE if none),
+   directly usable in the caller's own diagnostic.  Recomputes ip_
+   reached_from_info fresh (cheap, and this is only ever called a
+   handful of times per binding, not from a hot loop) rather than
+   threading it through from ip_compute_mutated_since_info -- keeps
+   this function's own signature matching its former shape.  */
+
+static tree
+ip_mutated_since_before_stmt_p (function *fun, ip_mutated_since_info *info,
+				 gimple *binding_stmt, tree bound_decl,
+				 const vec<gimple *> &mutating_calls,
+				 const vec<tree> &mutated_decls,
+				 const vec<tree> &mutated_types,
+				 gimple *point)
+{
+  basic_block bb = gimple_bb (point);
+  ip_reached_from_info reached;
+  ip_compute_reached_from_info (fun, binding_stmt, &reached);
+
+  tree state = info->block_in[bb->index];
+  bool active = reached.block_in[bb->index];
+  bool own_block = (gimple_bb (binding_stmt) == bb);
+  for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+       gsi_next (&gsi))
+    {
+      gimple *stmt = gsi_stmt (gsi);
+      if (stmt == point)
+	break;
+      if (!active)
+	{
+	  if (own_block && stmt == binding_stmt)
+	    active = true;
+	  continue;
+	}
+      if (!state)
+	state = ip_first_relevant_mutation (stmt, bound_decl, mutating_calls,
+					     mutated_decls, mutated_types);
+    }
+  return state;
+}
+
+/* Rule #0/#1's own top-level driver for one tracked variable VAR:
+   USES holds every collected read of VAR (and any other variable --
+   filtered to VAR's own entries here) against MUTATING_CALLS/
+   MUTATED_DECLS/MUTATED_TYPES, the whole function's own flat list of
+   candidate mutations.
+
+   Computed once per VAR, not once per (use, mutation) pair the way
+   this file used to: a reaching-definitions dataflow for VAR itself
+   (ip_compute_var_reach_info) finds every statement that could still
+   be defining VAR at each use -- possibly more than one at a genuine
+   diamond -- and, for each such candidate binding, a fresh "may have
+   been mutated since" dataflow (ip_compute_mutated_since_info) is
+   computed once and then simply queried at every use it could reach.
+   A binding whose own ip_binding_established_by can't resolve a
+   container at all is skipped (nothing to check it against), the
+   same as before.  */
+
+static void
+ip_check_var_uses (function *fun, tree var, const vec<ip_use> &uses,
+		    const vec<gimple *> &mutating_calls,
+		    const vec<tree> &mutated_decls,
+		    const vec<tree> &mutated_types, tree enclosing_fndecl)
+{
+  ip_var_reach_info reach;
+  ip_compute_var_reach_info (fun, var, &reach);
+
+  unsigned k = reach.defs.length ();
+  auto_vec<tree> bound_decls;
+  auto_vec<ip_mutated_since_info *> mutated_infos;
+  bound_decls.safe_grow (k);
+  mutated_infos.safe_grow (k);
+  for (unsigned d = 0; d < k; ++d)
+    {
+      tree bound_decl = ip_binding_established_by (reach.defs[d]);
+      bound_decls[d] = bound_decl;
+      if (!bound_decl)
+	{
+	  mutated_infos[d] = NULL;
+	  continue;
+	}
+      mutated_infos[d] = new ip_mutated_since_info ();
+      ip_compute_mutated_since_info (fun, reach.defs[d], bound_decl,
+				      mutating_calls, mutated_decls,
+				      mutated_types, mutated_infos[d]);
+    }
+
+  for (unsigned u = 0; u < uses.length (); ++u)
+    {
+      if (uses[u].var != var)
+	continue;
+      gimple *use_stmt = uses[u].stmt;
+      auto_vec<gimple *> reaching;
+      ip_var_reaching_defs_before_stmt (&reach, var, use_stmt, &reaching);
+      for (unsigned r = 0; r < reaching.length (); ++r)
+	{
+	  unsigned idx = k;
+	  for (unsigned d = 0; d < k; ++d)
+	    if (reach.defs[d] == reaching[r])
+	      {
+		idx = d;
+		break;
+	      }
+	  if (idx == k || !bound_decls[idx] || use_stmt == reaching[r])
+	    continue;
+
+	  tree culprit
+	    = ip_mutated_since_before_stmt_p (fun, mutated_infos[idx],
+					       reach.defs[idx],
+					       bound_decls[idx], mutating_calls,
+					       mutated_decls, mutated_types,
+					       use_stmt);
+	  if (!culprit)
+	    continue;
+	  if (!profiles_diagnostic_exempt_p (gimple_location (use_stmt),
+					      enclosing_fndecl, "std::invalidation"))
+	    error_at (gimple_location (use_stmt),
+		      "use of a value bound to %qD, potentially invalidated "
+		      "by an earlier mutation of %qD, not permitted under the "
+		      "%<std::invalidation%> profile", bound_decls[idx], culprit);
+	  break;
+	}
+    }
+
+  for (unsigned d = 0; d < k; ++d)
+    delete mutated_infos[d];
 }
 
 /* If T is a MEM_REF/INDIRECT_REF/ARRAY_REF based on a trackable raw
@@ -1183,16 +1672,6 @@ ip_use_decl (tree t)
     return ip_trackable_decl (TREE_OPERAND (t, 0));
   return ip_deref_base_decl (t);
 }
-
-/* One trackable operand read, recorded during the initial statement
-   walk in ip_check_function and checked afterward once dominance
-   info is available.  */
-
-struct ip_use
-{
-  gimple *stmt;
-  tree var;
-};
 
 /* Main per-function check.  Collects every mutating call (as defined
    by ip_collect_mutations) once, then walks every statement's
@@ -2475,17 +2954,39 @@ ip_check_function (function *fun)
       && returns_to_check.is_empty ())
     return 0;
 
+  /* Only the escape-checking machinery below (ip_check_return_escape
+     and its own ip_collect_component_writes_before/ip_resolve_nrv_var
+     helpers) still needs GCC's dominator tree -- the mutation-
+     ordering check just above no longer does, now that it's built
+     entirely on ip_compute_var_reach_info/ip_compute_mutated_since_
+     info's own explicit fixed-point dataflow instead.  */
   bool dominance_computed = false;
-  if (!dom_info_available_p (CDI_DOMINATORS))
+  if (!returns_to_check.is_empty () && !dom_info_available_p (CDI_DOMINATORS))
     {
       calculate_dominance_info (CDI_DOMINATORS);
       dominance_computed = true;
     }
 
   if (!mutating_calls.is_empty () && !uses.is_empty ())
-    for (unsigned i = 0; i < uses.length (); ++i)
-      ip_check_operand_uses (uses[i].stmt, uses[i].var, mutating_calls,
-			      mutated_decls, mutated_types, fun->decl);
+    {
+      auto_vec<tree> seen_vars;
+      for (unsigned i = 0; i < uses.length (); ++i)
+	{
+	  tree var = uses[i].var;
+	  bool already = false;
+	  for (unsigned j = 0; j < seen_vars.length (); ++j)
+	    if (seen_vars[j] == var)
+	      {
+		already = true;
+		break;
+	      }
+	  if (already)
+	    continue;
+	  seen_vars.safe_push (var);
+	  ip_check_var_uses (fun, var, uses, mutating_calls, mutated_decls,
+			      mutated_types, fun->decl);
+	}
+    }
 
   for (unsigned i = 0; i < returns_to_check.length (); ++i)
     ip_check_return_escape (returns_to_check[i], fun->decl);
