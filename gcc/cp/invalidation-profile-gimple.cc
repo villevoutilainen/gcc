@@ -1850,15 +1850,62 @@ ip_arg_owner_flavored_p (tree arg)
   return ip_arg_owner_flavored_p_1 (arg, 0);
 }
 
+/* True if CALL is itself a fresh owner-flavored source: a 'new T'
+   allocation, or a call to a function whose own return is marked
+   [[owning_ptr]]/[[owner]].  Factored out so ip_arg_owner_flavored_p_1
+   (RHS-flavor recognition for local binding establishment, P3446R0
+   S7.6.2) and ip_owner_resolve_origin (multi-hop value-provenance
+   resolution, further down) test the exact same thing and can't drift
+   apart.  */
+
+static bool
+ip_owner_fresh_source_call_p (gcall *call)
+{
+  tree callee = gimple_call_fndecl (call);
+  if (!callee)
+    return false;
+  /* DECL_IS_OPERATOR_NEW_P is a plain FUNCTION_DECL property (a
+     distinct field, unrelated to the CALL_FROM_NEW_OR_DELETE_P
+     call-site flag that aliases CALL_FROM_THUNK_P/CALL_ALLOCA_FOR_
+     VAR_P elsewhere -- see this project's own note on that), so no
+     risk of misreading an unrelated call here.  */
+  return profiles_owning_ptr_p (callee) || DECL_IS_OPERATOR_NEW_P (callee);
+}
+
 /* True if ARG (a call-argument, plain-assignment RHS, or return-value
-   expression) is, provably, owner-flavored -- direct structural port
-   of init-profile-gimple.cc's own ip_arg_uninit_flavored_p_1, see that
-   function's own comment for the full rationale of each branch below.
-   Substitutes profiles_owning_ptr_p for profiles_uninit_pointee_p
-   throughout, and drops the ADDR_EXPR branch entirely: [[ref_to_
-   uninit]] tracks a POINTEE's state reached through '&var', but
-   [[owning_ptr]]/[[owner]] tracks the pointer VALUE itself, which is
-   never itself accessed via '&owner_var' in the relevant sense here.  */
+   expression) is, provably, a FRESH owner-flavored source: a
+   'new T' allocation, or a call to an owner-returning function --
+   never a bare reference to some OTHER, already-established owner
+   declaration (see ip_owner_resolve_origin below for why a plain copy
+   of an existing owner value must NOT, by itself, start a second,
+   independent tracked binding on its destination).
+
+   Deliberately stops the chase the instant it reaches an SSA_NAME
+   with a home variable (SSA_NAME_VAR), rather than continuing to
+   chase THROUGH that variable's own reaching definition the way
+   ip_owner_resolve_origin's multi-hop walk deliberately does: in SSA
+   form, every version of a NAMED variable has its own well-defined
+   SSA_NAME_DEF_STMT too, exactly like a pure anonymous temp does, so
+   naively chasing through it here (as an earlier version of this
+   function did) would keep walking straight through an existing,
+   already-tracked variable's OWN history and misclassify a plain
+   'y = x;' (x already owner-marked and already tracked) as ALSO
+   being a fresh capture for y -- confirmed as a real, reproducible
+   false positive, not a hypothetical one.  Only a genuinely anonymous
+   SSA temp (no home var -- the shape a 'new'-expression's own result,
+   or an owner-returning call's own result, is held in before being
+   copied into a named destination, including any number of
+   compiler-introduced anonymous-to-anonymous copies an EH cleanup
+   region's own lowering may insert along the way) is chased through
+   at all.
+
+   Direct structural port of init-profile-gimple.cc's own
+   ip_arg_uninit_flavored_p_1 for the SSA-copy/PHI-chasing shape only;
+   see that function's own comment for the full rationale.  Drops the
+   ADDR_EXPR branch entirely: [[ref_to_uninit]] tracks a POINTEE's
+   state reached through '&var', but [[owning_ptr]]/[[owner]] tracks
+   the pointer VALUE itself, which is never itself accessed via
+   '&owner_var' in the relevant sense here.  */
 
 static bool
 ip_arg_owner_flavored_p_1 (tree arg, int depth)
@@ -1867,97 +1914,203 @@ ip_arg_owner_flavored_p_1 (tree arg, int depth)
     return false; /* Defensive recursion guard, as in the uninit
 		      checker's own identical guard -- only a loop-carried
 		      PHI (below) could even threaten to cycle.  */
-  if (TREE_CODE (arg) == SSA_NAME)
-    {
-      gimple *def = SSA_NAME_DEF_STMT (arg);
-      if (def && is_gimple_assign (def) && gimple_assign_single_p (def))
-	return ip_arg_owner_flavored_p_1 (gimple_assign_rhs1 (def), depth + 1);
-      if (def && gimple_code (def) == GIMPLE_CALL)
-	{
-	  tree callee = gimple_call_fndecl (as_a<gcall *> (def));
-	  if (!callee)
-	    return false;
-	  /* A fresh 'new T' allocation is, by construction, an owning
-	     value -- the caller now holds the only pointer to it --
-	     even though operator new itself is never [[owner]]-marked.
-	     DECL_IS_OPERATOR_NEW_P is a plain FUNCTION_DECL property
-	     (a distinct field, unrelated to the CALL_FROM_NEW_OR_
-	     DELETE_P call-site flag that aliases CALL_FROM_THUNK_P/
-	     CALL_ALLOCA_FOR_VAR_P elsewhere -- see this project's own
-	     note on that), so no risk of misreading an unrelated call
-	     here.  */
-	  return profiles_owning_ptr_p (callee) || DECL_IS_OPERATOR_NEW_P (callee);
-	}
-      if (def && gimple_code (def) == GIMPLE_PHI)
-	{
-	  gphi *phi = as_a<gphi *> (def);
-	  for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
-	    {
-	      tree phi_arg = gimple_phi_arg_def (phi, i);
-	      if (ip_owner_arg_null_pointer_p (phi_arg))
-		continue;
-	      if (!ip_arg_owner_flavored_p_1 (phi_arg, depth + 1))
-		return false;
-	    }
-	  return true;
-	}
-      tree var = SSA_NAME_VAR (arg);
-      if (var
-	  && (VAR_P (var) || TREE_CODE (var) == PARM_DECL)
-	  && TREE_CODE (TREE_TYPE (var)) == POINTER_TYPE)
-	return profiles_owning_ptr_p (var);
-      return false;
-    }
-  if ((VAR_P (arg) || TREE_CODE (arg) == PARM_DECL)
-      && TREE_CODE (TREE_TYPE (arg)) == POINTER_TYPE)
-    return profiles_owning_ptr_p (arg);
-  return false;
+  if (TREE_CODE (arg) != SSA_NAME)
+    return false; /* A bare VAR_DECL/PARM_DECL (memory-resident, not
+		      SSA-registered): reading a named variable's
+		      current value is never itself a fresh source.  */
+  if (SSA_NAME_VAR (arg))
+    return false; /* A NAMED variable's own current value -- a read
+		      of an existing, already-established binding,
+		      never itself a fresh capture, regardless of how
+		      THAT variable's own value first came to be (its
+		      own freshness was already evaluated, once, at the
+		      point IT was established).  */
+  {
+    gimple *def = SSA_NAME_DEF_STMT (arg); /* Only reached for a pure
+						anonymous temp now.  */
+    if (def && is_gimple_assign (def) && gimple_assign_single_p (def))
+      return ip_arg_owner_flavored_p_1 (gimple_assign_rhs1 (def), depth + 1);
+    if (def && gimple_code (def) == GIMPLE_CALL)
+      return ip_owner_fresh_source_call_p (as_a<gcall *> (def));
+    if (def && gimple_code (def) == GIMPLE_PHI)
+      {
+	gphi *phi = as_a<gphi *> (def);
+	for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+	  {
+	    tree phi_arg = gimple_phi_arg_def (phi, i);
+	    if (ip_owner_arg_null_pointer_p (phi_arg))
+	      continue;
+	    if (!ip_arg_owner_flavored_p_1 (phi_arg, depth + 1))
+	      return false;
+	  }
+	return true;
+      }
+    return false;
+  }
 }
 
-/* Resolve T down to whatever VAR_DECL/PARM_DECL it ultimately traces
-   back to through a chain of plain single-operand copies -- direct
-   port of init-profile-gimple.cc's own ip_resolve_underlying_decl (see
-   that function's own comment: a call's result, or a return statement's
-   own operand, is never assigned/used directly, always through an
-   anonymous SSA temporary first).  Used both by the return-flavor
-   check below (to recognize a direct pass-through of an already-
-   owner-declared parameter) and by the definite-consumption checker
-   further down (to test whether a call argument/return/field-RHS
-   traces back to a SPECIFIC tracked binding).  */
+/* One shared classification of what a value's provenance resolves to
+   -- see ip_owner_resolve_origin below.  */
+
+struct ip_owner_origin
+{
+  /* The canonical VAR_DECL/PARM_DECL this value's provenance traces
+     back to, through any number of plain, single-operand copies --
+     NULL_TREE if unresolvable.  */
+  tree decl;
+  /* True iff DECL is itself a genuine owner origin: an [[owner]]
+     -marked PARM_DECL (owned unconditionally from function entry), or
+     a local whose own establishing statement is a fresh new-
+     expression or owner-returning call.  False for anything else (an
+     unmarked parameter, a local with no further resolvable
+     establishing write, or DECL == NULL_TREE).  */
+  bool genuine;
+};
+
+/* Resolve T (a call-argument, assignment RHS, return-value, or
+   similar operand expression) back to the canonical declaration its
+   value provenance ultimately traces to, chasing through as many
+   plain, single-operand copy assignments as needed -- not just the
+   first named variable found, the way an earlier, one-hop-only
+   version of this function did.  POINT is the statement T is being
+   read at (needed by ip_resolve_defining_stmt's own CFG-position-
+   aware reaching-write lookup, used uniformly here for both a pure
+   anonymous SSA temporary and a real, memory-resident named
+   variable).
+
+   Reuses ip_resolve_defining_stmt, this file's own general-purpose
+   "find the statement that most recently wrote this value" utility
+   (built for, and already proven correct by, the Rule #0/#1 diamond-
+   reassignment DAA fix -- a stateless utility, safe to reuse here
+   without coupling owner-consumption's own state to Rule #0/#1's,
+   matching this file's existing precedent of sharing ip_use_decl/
+   ip_deref_base_decl across both subsystems).
+
+   Deliberately does not resolve through a PHI merge (a pure-anonymous
+   SSA temp whose own def is a GIMPLE_PHI is not itself a plain,
+   single-operand assignment, so the walk stops there rather than
+   descending into each incoming arm) -- the same "documented,
+   permitted incompleteness" this file's own mechanical spec already
+   accepts for pointer-arithmetic chain resolution (S5.4): resolve
+   precisely through an unambiguous, straight-line chain of copies,
+   and conservatively give up at a genuine merge, rather than
+   attempting general points-to reasoning.  ip_nearest_write_before's
+   own single-reaching-definition contract gives the same treatment to
+   a diamond reached while resolving a NAMED variable's own nearest
+   write.
+
+   Also deliberately does not chase PAST a hop whose own destination
+   is itself [[owner]]-declared -- that destination is a genuine hand-
+   off boundary, paired exactly with ip_owner_reassigned_into_owner_
+   var_p/CE5's own identical gate and with ip_owner_gen_lhs_decl's own
+   matching GEN condition (both keyed on profiles_owning_ptr_p of the
+   assignment's LHS): the value's tracked IDENTITY changes there, from
+   whatever it traced back to before, to this destination's own new,
+   independent binding.  Confirmed as a real, reproducible regression
+   when this stop was missing: with the walk chasing straight through
+   an owner-declared intermediate the same way it chases through an
+   unmarked one, '[[owner]] int *y = x; f (y);' resolved 'y' in 'f
+   (y)' all the way back to x's own (already CE5-consumed) binding
+   instead of stopping at y's own, separately GEN'd one -- reporting x
+   as "consumed again" for what CE5 and ip_owner_gen_lhs_decl already
+   correctly modeled as one single, paired hand-off.  */
+
+static ip_owner_origin
+ip_owner_resolve_origin (tree t, gimple *point, int depth = 0)
+{
+  if (depth > 16)
+    return { NULL_TREE, false };
+
+  gimple *def_stmt = ip_resolve_defining_stmt (t, point);
+
+  if (def_stmt && is_gimple_assign (def_stmt) && gimple_assign_single_p (def_stmt))
+    {
+      tree hop_lhs = ip_trackable_decl (gimple_assign_lhs (def_stmt));
+      if (hop_lhs && profiles_owning_ptr_p (hop_lhs))
+	return { hop_lhs, true };
+      ip_owner_origin inner
+	= ip_owner_resolve_origin (gimple_assign_rhs1 (def_stmt), def_stmt,
+				    depth + 1);
+      if (inner.decl)
+	return inner;
+      if (!inner.genuine)
+	return { NULL_TREE, false };
+      /* The chain bottomed out at a fresh source with no named decl of
+	 its own yet (an anonymous-to-anonymous copy chain -- confirmed
+	 to occur for real: an SSA temp crossing a try/finally region
+	 boundary, the implicit EH cleanup a 'new'-expression's own
+	 lowering wraps its store in, gets an extra anonymous copy of
+	 this shape).  T's own named variable, if it has one, is the
+	 first name to capture it, and becomes the canonical origin --
+	 but genuineness itself must keep propagating regardless of
+	 whether T happens to have one: an intermediate anonymous hop
+	 (T itself also unnamed) is not a reason to give up, only a
+	 reason to keep VAR as NULL_TREE one level further up.  */
+      tree var = ip_trackable_decl (t);
+      return { var, true };
+    }
+
+  if (def_stmt && gimple_code (def_stmt) == GIMPLE_CALL
+      && ip_owner_fresh_source_call_p (as_a<gcall *> (def_stmt)))
+    {
+      tree var = ip_trackable_decl (t);
+      return { var, true }; /* VAR may be NULL_TREE for a pure
+				anonymous temp -- correctly "genuine, but
+				not yet named"; the caller one level up
+				(if any) is what names it.  */
+    }
+
+  tree var = ip_trackable_decl (t);
+  if (!var)
+    return { NULL_TREE, false };
+  if (TREE_CODE (var) == PARM_DECL)
+    return { var, profiles_owning_ptr_p (var) }; /* Owned from entry
+						      iff marked -- an
+						      unmarked parameter
+						      is not a valid
+						      owner origin.  */
+  return { var, false }; /* A named local with no further resolvable
+			     reaching write that's fresh -- not
+			     genuine (DEF_STMT may be NULL entirely,
+			     e.g. an address-taken var with no reaching
+			     write found at all, or some other,
+			     non-owner-related statement).  */
+}
+
+/* The DECL-only view of ip_owner_resolve_origin, used throughout
+   CE1-CE6 consuming-event recognition, LP3's double-consumption
+   check, LP4's read-after-consumption check, and same-call-arg-
+   aliasing -- genuineness doesn't matter at any of those call sites,
+   since a consuming/read check only ever compares the resolved decl
+   against a V that ip_check_owner_binding's own driver is ALREADY
+   iterating because it is a genuinely established binding; a
+   resolution landing on anything else is simply never matched by any
+   live driver iteration and has no effect.  The .genuine bit is used
+   only by the three reverse-direction flavor checks further down.  */
 
 static tree
-ip_owner_resolve_underlying_decl (tree t)
+ip_owner_resolve_underlying_decl (tree t, gimple *point)
 {
-  if (TREE_CODE (t) == SSA_NAME)
-    {
-      tree var = SSA_NAME_VAR (t);
-      if (var)
-	return var;
-      gimple *def = SSA_NAME_DEF_STMT (t);
-      if (def && is_gimple_assign (def) && gimple_assign_single_p (def))
-	return ip_owner_resolve_underlying_decl (gimple_assign_rhs1 (def));
-      return NULL_TREE;
-    }
-  if (VAR_P (t) || TREE_CODE (t) == PARM_DECL)
-    return t;
-  return NULL_TREE;
+  return ip_owner_resolve_origin (t, point).decl;
 }
 
-/* P3446R0/P4296R0 Phase 7a: for a direct call, check that every
-   pointer argument's owner-flavor (ip_arg_owner_flavored_p) matches
-   its corresponding parameter's (profiles_owning_ptr_at_position_p),
-   bidirectionally -- direct structural port of init-profile-gimple.cc's
-   own ip_check_call_flavor_consistency; see that function's own
-   comment for why this queries by ARGUMENT POSITION rather than
-   walking DECL_ARGUMENTS (callee), and why no separate "is this a
-   pointer parameter/argument" guard is needed.  No construct_at-style
-   exemption (irrelevant to ownership) and no "force owner-flavored"
-   override on the direct-LHS case below (unlike now_uninit's own
-   override in the sibling file): std::owner_consumed (see further
-   down) is a CONSUMING, not FLAVORING, escape hatch -- it asserts an
-   owner value has been handed off, not that some other, unattributed
-   value should retroactively be treated as owner-flavored -- so no
-   analogous override is needed or correct here.  */
+/* P3446R0/P4296R0 Phase 7a: for a direct call, check every argument at
+   an owner-*accepting* parameter position -- ownership genuinely
+   claimed by the callee.  Deliberately one-directional: an owner-
+   flavored value handed to a plain, non-owner-accepting parameter is
+   an ordinary, harmless "peek" (the destination isn't claiming
+   ownership, so there's nothing to be inconsistent about -- the
+   original binding stays responsible and stays checked by the
+   definite-consumption layer below), not checked here at all.  The
+   direction that DOES matter: the argument's own value provenance
+   (ip_owner_resolve_origin, the same multi-hop chase every consuming-
+   event check here already uses) must trace to a GENUINE owner
+   origin -- an [[owner]]-marked parameter, or a fresh 'new'/owner-
+   returning-call capture, however many plain, unmarked copies it
+   passed through on the way here.  If it doesn't, the callee will
+   eventually try to delete something this checker never saw allocated
+   -- unsound, regardless of how many hops away the actual allocation
+   (if any) might be.  */
 
 static bool ip_owner_delete_call_shape_p (gcall *call);
 
@@ -2001,25 +2154,20 @@ ip_check_owner_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
   unsigned nargs = gimple_call_num_args (stmt);
   for (unsigned i = 0; i < nargs; ++i)
     {
+      if (!profiles_owning_ptr_at_position_p (callee, i + 1))
+	continue;
       tree arg = gimple_call_arg (stmt, i);
       if (ip_owner_arg_null_pointer_p (arg))
 	continue;
-      bool param_flavor = profiles_owning_ptr_at_position_p (callee, i + 1);
-      bool arg_flavor = ip_arg_owner_flavored_p (arg);
-
+      if (ip_owner_resolve_origin (arg, stmt).genuine)
+	continue;
       if (profiles_diagnostic_exempt_p (gimple_location (stmt),
 					enclosing_fndecl, "std::invalidation"))
 	continue;
-      if (param_flavor && !arg_flavor)
-	error_at (gimple_location (stmt),
-		  "argument %u to %qD must be marked %<[[owner]]%>, matching "
-		  "its %<[[owner]]%> parameter, under the "
-		  "%<std::invalidation%> profile", i + 1, callee);
-      else if (!param_flavor && arg_flavor)
-	error_at (gimple_location (stmt),
-		  "argument %u to %qD is marked %<[[owner]]%> but its "
-		  "parameter is not marked %<[[owner]]%>, under the "
-		  "%<std::invalidation%> profile", i + 1, callee);
+      error_at (gimple_location (stmt),
+		"argument %u to %qD must be marked %<[[owner]]%>, matching "
+		"its %<[[owner]]%> parameter, under the "
+		"%<std::invalidation%> profile", i + 1, callee);
     }
 
   /* The RETURN-value counterpart, for a call whose result is assigned
@@ -2027,81 +2175,76 @@ ip_check_owner_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
      lowering, or any other callee GCC chooses not to route through an
      anonymous SSA temporary) -- see init-profile-gimple.cc's own
      identical block for why this shape, though rare, is real and not
-     dead code.  */
+     dead code.  No multi-hop resolution needed here: the call's own
+     result IS the value, with nothing yet to chase through -- just
+     ip_owner_fresh_source_call_p's own genuineness test directly,
+     the SAME test ip_owner_resolve_origin itself uses one level up
+     (NOT a bare profiles_owning_ptr_p (callee) check: that alone
+     would misclassify a direct-LHS 'new T' allocation, since operator
+     new is never itself [[owner]]-marked).  */
   tree lhs = gimple_call_lhs (stmt);
   tree lhs_var = lhs ? ip_trackable_decl (lhs) : NULL_TREE;
-  if (lhs_var && TREE_CODE (TREE_TYPE (lhs_var)) == POINTER_TYPE)
-    {
-      bool dst_flavor = profiles_owning_ptr_p (lhs_var);
-      bool callee_flavor = profiles_owning_ptr_p (callee);
-      if (dst_flavor != callee_flavor
-	  && !profiles_diagnostic_exempt_p (gimple_location (stmt),
-					     enclosing_fndecl,
-					     "std::invalidation"))
-	{
-	  if (callee_flavor)
-	    error_at (gimple_location (stmt),
-		      "assigning a pointer marked %<[[owner]]%> into a "
-		      "pointer not marked %<[[owner]]%>, under the "
-		      "%<std::invalidation%> profile");
-	  else
-	    error_at (gimple_location (stmt),
-		      "assigning a pointer not marked %<[[owner]]%> into a "
-		      "pointer marked %<[[owner]]%>, under the "
-		      "%<std::invalidation%> profile");
-	}
-    }
+  if (lhs_var && TREE_CODE (TREE_TYPE (lhs_var)) == POINTER_TYPE
+      && profiles_owning_ptr_p (lhs_var)
+      && !ip_owner_fresh_source_call_p (as_a<gcall *> (stmt))
+      && !profiles_diagnostic_exempt_p (gimple_location (stmt),
+					 enclosing_fndecl, "std::invalidation"))
+    error_at (gimple_location (stmt),
+	      "assigning a pointer not marked %<[[owner]]%> into a "
+	      "pointer marked %<[[owner]]%>, under the "
+	      "%<std::invalidation%> profile");
 }
 
 /* The RETURN-statement counterpart (P3446R0/P4296R0 Phase 7a): a
    function declared [[owner]] on its own return must only ever return
-   an owner-flavored value, and conversely, an unflavored function must
-   never return one -- direct structural port of init-profile-gimple.cc's
-   own ip_check_return_flavor_consistency, including its "trust a
-   direct pass-through of an already-owner-declared parameter" exemption
-   (see that function's own comment for the full rationale).  NOTE this
-   exemption's own interaction with the definite-consumption checker
-   further below: 'T* f([[owner]] T* p) { return p; }' with f's own
-   return NOT [[owner]]-marked passes THIS check (an exempt pass-
-   through) but must still be flagged by the consumption checker as a
-   genuine leak -- the caller now silently owns p with no marker saying
-   so.  */
+   a value whose provenance traces to a genuine owner origin -- same
+   one-directional reasoning as the call-argument check above, applied
+   to the return position.  Subsumes what used to be a special "trust
+   a direct pass-through of an already-owner-declared parameter"
+   exemption: ip_owner_resolve_origin already recognizes that shape
+   (and any number of plain, unmarked hops in front of it) as genuine,
+   with no separate carve-out needed.  NOTE this check's own
+   interaction with the definite-consumption checker further below:
+   'T* f([[owner]] T* p) { return p; }' with f's own return NOT
+   [[owner]]-marked isn't reached by this function at all (the forward
+   direction isn't checked here), but must still be flagged by the
+   consumption checker as a genuine leak -- the caller now silently
+   owns p with no marker saying so.  */
 
 static void
 ip_check_owner_return_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
 {
   if (gimple_code (stmt) != GIMPLE_RETURN)
     return;
+  if (!profiles_owning_ptr_p (enclosing_fndecl))
+    return;
   tree retval = gimple_return_retval (as_a<greturn *> (stmt));
   if (!retval || ip_owner_arg_null_pointer_p (retval))
     return;
-  tree retval_decl = ip_owner_resolve_underlying_decl (retval);
-  if (retval_decl && TREE_CODE (retval_decl) == PARM_DECL
-      && profiles_owning_ptr_p (retval_decl))
-    return;
-  bool fn_flavor = profiles_owning_ptr_p (enclosing_fndecl);
-  bool retval_flavor = ip_arg_owner_flavored_p (retval);
-  if (fn_flavor == retval_flavor)
+  if (ip_owner_resolve_origin (retval, stmt).genuine)
     return;
   if (profiles_diagnostic_exempt_p (gimple_location (stmt),
 				     enclosing_fndecl, "std::invalidation"))
     return;
-  if (retval_flavor)
-    error_at (gimple_location (stmt),
-	      "returning a pointer marked %<[[owner]]%> from a function not "
-	      "itself marked %<[[owner]]%>, under the %<std::invalidation%> "
-	      "profile");
-  else
-    error_at (gimple_location (stmt),
-	      "returning a pointer not marked %<[[owner]]%> from a function "
-	      "marked %<[[owner]]%>, under the %<std::invalidation%> "
-	      "profile");
+  error_at (gimple_location (stmt),
+	    "returning a pointer not marked %<[[owner]]%> from a function "
+	    "marked %<[[owner]]%>, under the %<std::invalidation%> "
+	    "profile");
 }
 
-/* The plain-assignment counterpart -- direct structural port of
-   init-profile-gimple.cc's own ip_check_assign_flavor_consistency; see
-   that function's own comment for why this covers a declaration's own
-   initializer and a cast for free, with no special-casing.  */
+/* The plain-assignment counterpart -- same one-directional reasoning
+   as the two checks above, applied to an ordinary 'dst = src;'
+   between a named pointer variable/parameter and any source
+   expression.  Covers a declaration's own initializer and a cast for
+   free, with no special-casing: 'T* q = p;' written as an initializer
+   and 'q = p;' written as a later, separate assignment produce the
+   identical GIMPLE_ASSIGN statement shape (confirmed via direct
+   -fdump-tree-gimple reading), so there is no "is this an initializer"
+   distinction to make at this level in the first place; a cast
+   ('(T*) src') is handled the same way, since gimple_assign_rhs1
+   returns the actual operand regardless of whether the assignment's
+   own rhs_code is a bare copy or a NOP_EXPR/CONVERT_EXPR wrapping
+   it.  */
 
 static void
 ip_check_owner_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
@@ -2112,30 +2255,20 @@ ip_check_owner_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
   if (TREE_CODE (TREE_TYPE (lhs)) != POINTER_TYPE)
     return;
   tree lhs_var = ip_trackable_decl (lhs);
-  if (!lhs_var)
+  if (!lhs_var || !profiles_owning_ptr_p (lhs_var))
     return;
   tree rhs = gimple_assign_rhs1 (stmt);
   if (ip_owner_arg_null_pointer_p (rhs))
     return;
-
-  bool dst_flavor = profiles_owning_ptr_p (lhs_var);
-  bool src_flavor = ip_arg_owner_flavored_p (rhs);
-
-  if (dst_flavor == src_flavor)
+  if (ip_owner_resolve_origin (rhs, stmt).genuine)
     return;
   if (profiles_diagnostic_exempt_p (gimple_location (stmt),
 				     enclosing_fndecl, "std::invalidation"))
     return;
-  if (src_flavor)
-    error_at (gimple_location (stmt),
-	      "assigning a pointer marked %<[[owner]]%> into a pointer not "
-	      "marked %<[[owner]]%>, under the %<std::invalidation%> "
-	      "profile");
-  else
-    error_at (gimple_location (stmt),
-	      "assigning a pointer not marked %<[[owner]]%> into a pointer "
-	      "marked %<[[owner]]%>, under the %<std::invalidation%> "
-	      "profile");
+  error_at (gimple_location (stmt),
+	    "assigning a pointer not marked %<[[owner]]%> into a pointer "
+	    "marked %<[[owner]]%>, under the %<std::invalidation%> "
+	    "profile");
 }
 
 /* P3446R0/P4296R0 Phase 7a: a single call passing the SAME [[owner]]
@@ -2178,7 +2311,7 @@ ip_check_owner_call_arg_aliasing (gimple *stmt, tree enclosing_fndecl)
       tree arg_i = gimple_call_arg (call, i);
       if (ip_owner_arg_null_pointer_p (arg_i))
 	continue;
-      tree decl_i = ip_owner_resolve_underlying_decl (arg_i);
+      tree decl_i = ip_owner_resolve_underlying_decl (arg_i, call);
       if (!decl_i)
 	continue;
 
@@ -2189,7 +2322,7 @@ ip_check_owner_call_arg_aliasing (gimple *stmt, tree enclosing_fndecl)
 	  tree arg_j = gimple_call_arg (call, j);
 	  if (ip_owner_arg_null_pointer_p (arg_j))
 	    continue;
-	  if (ip_owner_resolve_underlying_decl (arg_j) != decl_i)
+	  if (ip_owner_resolve_underlying_decl (arg_j, call) != decl_i)
 	    continue;
 	  if (profiles_diagnostic_exempt_p (gimple_location (stmt),
 					     enclosing_fndecl,
@@ -2252,7 +2385,7 @@ ip_owner_delete_call_p (gcall *call, tree v)
     return false;
   if (gimple_call_num_args (call) < 1)
     return false;
-  return ip_owner_resolve_underlying_decl (gimple_call_arg (call, 0)) == v;
+  return ip_owner_resolve_underlying_decl (gimple_call_arg (call, 0), call) == v;
 }
 
 /* True if CALL is an indirect (vtable) dispatch to V's own DELETING
@@ -2299,7 +2432,7 @@ ip_owner_deleting_dtor_dispatch_p (gcall *call, tree v)
   tree fn = gimple_call_fn (call);
   if (!fn || TREE_CODE (fn) != OBJ_TYPE_REF)
     return false;
-  if (ip_owner_resolve_underlying_decl (OBJ_TYPE_REF_OBJECT (fn)) != v)
+  if (ip_owner_resolve_underlying_decl (OBJ_TYPE_REF_OBJECT (fn), call) != v)
     return false;
   tree token = OBJ_TYPE_REF_TOKEN (fn);
   if (!token || TREE_CODE (token) != INTEGER_CST)
@@ -2327,6 +2460,45 @@ ip_owner_deleting_dtor_dispatch_p (gcall *call, tree v)
   return false;
 }
 
+/* True if CALL is a DIRECT (non-virtual, statically-resolved) call to
+   V's own destructor, with V as the "this" argument -- the shape
+   EVERY delete-expression's own lowering produces for a non-
+   polymorphic type (confirmed via -fdump-tree-gimple: 'delete p;'
+   always lowers to 'S::~S (p); operator delete (p, size);', in that
+   order, exactly like ip_owner_deleting_dtor_dispatch_p's own comment
+   already documents for the polymorphic case).  This destructor call
+   is part of the SAME delete-expression as the operator-delete call
+   that follows it -- it is the consuming event's own internal
+   machinery, not a separate, later use of V -- so it needs the exact
+   same exemption ip_owner_delete_call_p already gets from its own
+   caller below, and for the same reason: without it, the multi-hop
+   resolver (ip_owner_resolve_underlying_decl) correctly tracing V's
+   "this" argument back through whatever anonymous SSA copy the
+   destructor call's own argument-evaluation happens to introduce
+   would see V as already spent by the time this statement runs (the
+   guard condition ip_owner_delete_guard_cond_p recognizes ALREADY
+   killed MAYBE-UNCONSUMED one statement earlier, in the predecessor
+   block) and leak point 4 would misfire on the destructor call
+   itself -- confirmed as a real, reproducible false positive against
+   d4324-profiles-invalidation-implicit-dtor-ok.C, not a hypothetical
+   one.  Unconditional, matching ip_check_owner_call_flavor_
+   consistency's own DECL_DESTRUCTOR_P exemption: the Negative
+   Baseline already unconditionally bans every OTHER (explicit,
+   user-written) destructor call, so any destructor call this checker
+   ever sees is necessarily one of GCC's own implicitly-generated
+   end-of-lifetime calls, never a user-observable "read."  */
+
+static bool
+ip_owner_direct_dtor_call_p (gcall *call, tree v)
+{
+  tree callee = gimple_call_fndecl (call);
+  if (!callee || !DECL_DESTRUCTOR_P (callee))
+    return false;
+  if (gimple_call_num_args (call) < 1)
+    return false;
+  return ip_owner_resolve_underlying_decl (gimple_call_arg (call, 0), call) == v;
+}
+
 /* True if CALL passes V as an argument at a position the callee's own
    corresponding parameter marks [[owner]]/[[owning_ptr]] -- ownership
    transferred to the callee.  */
@@ -2340,7 +2512,7 @@ ip_owner_passed_to_sink_p (gcall *call, tree v)
   unsigned nargs = gimple_call_num_args (call);
   for (unsigned i = 0; i < nargs; ++i)
     if (profiles_owning_ptr_at_position_p (callee, i + 1)
-	&& ip_owner_resolve_underlying_decl (gimple_call_arg (call, i)) == v)
+	&& ip_owner_resolve_underlying_decl (gimple_call_arg (call, i), call) == v)
       return true;
   return false;
 }
@@ -2360,7 +2532,7 @@ ip_owner_stored_into_field_p (gimple *stmt, tree v)
   tree lhs = gimple_assign_lhs (stmt);
   if (TREE_CODE (lhs) != COMPONENT_REF || !profiles_owning_ptr_p (lhs))
     return false;
-  return ip_owner_resolve_underlying_decl (gimple_assign_rhs1 (stmt)) == v;
+  return ip_owner_resolve_underlying_decl (gimple_assign_rhs1 (stmt), stmt) == v;
 }
 
 /* True if STMT hands V's ownership off to ANOTHER, independently
@@ -2369,18 +2541,37 @@ ip_owner_stored_into_field_p (gimple *stmt, tree v)
    marked field (ip_owner_stored_into_field_p just above), just
    var-to-var instead of var-to-field: the pointer's value is now
    y's to consume, so this counts as consuming V just as much as any
-   other recognized hand-off does.  Required so that a KNOWN ALIAS of
-   V is tracked through: without this, 'y = x; delete y; delete x;'
-   (with x AND y both marked [[owner]]) reads as two independent,
+   other recognized hand-off does, IMMEDIATELY at this statement --
+   not merely "eventually, if y is itself later consumed somewhere."
+
+   This is NOT redundant with ip_owner_resolve_origin's own multi-hop
+   walk, despite both existing to solve "does a value handed to
+   another name stay tracked": the multi-hop walk resolves a LATER
+   consuming/reading event BACKWARD to whichever binding it ultimately
+   traces to (so a later 'delete y;' correctly consumes x's own
+   binding even without this function existing at all) -- but it says
+   nothing about V's OWN state in the WINDOW between the hand-off and
+   that later event.  Confirmed as a real, reproducible regression
+   when this function was removed on the theory that the multi-hop
+   walk alone was sufficient: 'y = x; int v = *x; delete y;' (x AND y
+   both [[owner]]-declared) must flag the read of x, immediately after
+   the hand-off and well before 'delete y;' ever runs -- without this
+   function, x's own dataflow has nothing to GEN a "consumed" state
+   from until 'delete y;' itself, so the read at 'int v = *x;' is
+   missed entirely.  Required so a KNOWN ALIAS of V is tracked from
+   the exact point of hand-off: without this, 'y = x; delete y; delete
+   x;' (both marked [[owner]]) would also read as two independent,
    both-satisfied obligations -- a real double-free that would
-   otherwise slip past every check (not a flavor mismatch, since y
-   IS owner-marked; not an unmarked delete, for the same reason; and
-   not a same-decl double-consumption, since x and y are different
-   decls) -- rather than V being correctly seen as already spent by
-   the time 'delete x;' is reached.  Copying V into a NON-owner-
-   marked local is a separate, already-diagnosed case (flavor
-   mismatch, ip_check_owner_call_flavor_consistency's sibling for
-   assignment) and is deliberately not handled here.  */
+   otherwise slip past every check (not a flavor mismatch, since that
+   layer is now one-directional and unconcerned with this shape; not
+   an unmarked delete, since y IS owner-marked; and not a same-decl
+   double-consumption, since x and y are different decls) -- rather
+   than x being correctly seen as already spent by the time 'delete
+   x;' is reached.  Copying V into a NON-owner-marked local is a
+   separate case, handled entirely by the multi-hop walk instead (no
+   immediate hand-off happens there -- the destination isn't claiming
+   ownership at all, so nothing should be GEN'd at that statement; see
+   ip_arg_owner_flavored_p_1's own comment).  */
 
 static bool
 ip_owner_reassigned_into_owner_var_p (gimple *stmt, tree v)
@@ -2391,7 +2582,7 @@ ip_owner_reassigned_into_owner_var_p (gimple *stmt, tree v)
   if (!lhs || lhs == v || TREE_CODE (TREE_TYPE (lhs)) != POINTER_TYPE
       || !profiles_owning_ptr_p (lhs))
     return false;
-  return ip_owner_resolve_underlying_decl (gimple_assign_rhs1 (stmt)) == v;
+  return ip_owner_resolve_underlying_decl (gimple_assign_rhs1 (stmt), stmt) == v;
 }
 
 /* True if CALL is a call to std::owner_consumed -- the invalidation
@@ -2442,7 +2633,7 @@ ip_owner_delete_guard_cond_p (gimple *stmt, tree v)
     ptr_operand = rhs;
   else
     return false;
-  if (ip_owner_resolve_underlying_decl (ptr_operand) != v)
+  if (ip_owner_resolve_underlying_decl (ptr_operand, stmt) != v)
     return false;
 
   basic_block bb = gimple_bb (stmt);
@@ -2491,7 +2682,7 @@ ip_owner_consuming_stmt_p (gimple *stmt, tree v, bool fn_return_is_owner)
 	return true;
       if (ip_owner_consumed_call_p (call) && gimple_call_num_args (call) >= 1
 	  && gimple_call_lhs (call) != NULL_TREE
-	  && (ip_owner_resolve_underlying_decl (gimple_call_arg (call, 0))
+	  && (ip_owner_resolve_underlying_decl (gimple_call_arg (call, 0), call)
 	      == v))
 	return true;
       return false;
@@ -2501,7 +2692,7 @@ ip_owner_consuming_stmt_p (gimple *stmt, tree v, bool fn_return_is_owner)
       if (!fn_return_is_owner)
 	return false;
       tree retval = gimple_return_retval (as_a<greturn *> (stmt));
-      return retval && ip_owner_resolve_underlying_decl (retval) == v;
+      return retval && ip_owner_resolve_underlying_decl (retval, stmt) == v;
     }
   return ip_owner_stored_into_field_p (stmt, v)
 	 || ip_owner_reassigned_into_owner_var_p (stmt, v);
@@ -2523,13 +2714,18 @@ ip_owner_consuming_stmt_p (gimple *stmt, tree v, bool fn_return_is_owner)
    "a read" was tried first and produces a real false positive: a
    delete-expression's own implicit null-guard temp-load ('D.1 = v;'
    feeding 'if (D.1 != 0) ...') is exactly this shape, confirmed via
-   the mandatory suite catching it immediately.  (This does mean a
-   LATER dereference through that untracked copy, 'tmp = v; ...
-   *tmp;', is not itself caught here -- a documented, narrower
-   residual gap, the same kind of known-alias blind spot
-   ip_owner_reassigned_into_owner_var_p/CE5 already only closes for
-   the specific case of copying into ANOTHER owner-marked variable,
-   not an arbitrary unmarked one.)
+   the mandatory suite catching it immediately.
+
+   The dereference base and the call-argument/return operand are both
+   resolved through ip_owner_resolve_underlying_decl's own multi-hop
+   chase, not just a single SSA_NAME_VAR unwrap -- so a LATER
+   dereference through an untracked plain copy ('tmp = v; ... *tmp;')
+   IS caught here, resolving 'tmp' back to V, exactly like every
+   consuming-event check (CE1-CE6) already does.  This used to be a
+   documented, narrower residual gap (a plain copy was only tracked
+   through when its destination also happened to be owner-marked);
+   generalizing the shared resolver closes it for reads the same way
+   it closes it for consuming events.
 
    Callers are expected to check ip_owner_consuming_stmt_p FIRST and
    skip this entirely when it's true (checked at whole-statement
@@ -2547,32 +2743,74 @@ ip_owner_stmt_reads_decl_p (gimple *stmt, tree v)
   if (gcall *call = dyn_cast<gcall *> (stmt))
     {
       for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
-	if (ip_use_decl (gimple_call_arg (call, i)) == v)
+	if (ip_owner_resolve_underlying_decl (gimple_call_arg (call, i), call)
+	    == v)
 	  return true;
       return false;
     }
   if (is_gimple_assign (stmt) && gimple_assign_single_p (stmt))
     {
-      if (ip_deref_base_decl (gimple_assign_rhs1 (stmt)) == v)
+      tree rhs_base = ip_deref_base_decl (gimple_assign_rhs1 (stmt));
+      if (rhs_base && ip_owner_resolve_underlying_decl (rhs_base, stmt) == v)
 	return true;
-      return ip_deref_base_decl (gimple_assign_lhs (stmt)) == v;
+      tree lhs_base = ip_deref_base_decl (gimple_assign_lhs (stmt));
+      return lhs_base && ip_owner_resolve_underlying_decl (lhs_base, stmt) == v;
     }
   if (gimple_code (stmt) == GIMPLE_RETURN)
     {
       tree retval = gimple_return_retval (as_a<greturn *> (stmt));
-      return retval && ip_use_decl (retval) == v;
+      return retval && ip_owner_resolve_underlying_decl (retval, stmt) == v;
     }
   return false;
 }
 
-/* If STMT assigns a FRESH owner-flavored value into some trackable
-   local VAR_DECL (either a plain 'lhs = owner_flavored_expr;', or a
-   direct-LHS call 'lhs = owner_returning_fn (...);' -- the same rare
-   but real GCC-recognized-builtin-shaped direct-assignment case ip_
-   check_owner_call_flavor_consistency's own direct-LHS block exists
-   for), return that VAR_DECL; else NULL_TREE.  This is how a local
-   variable "becomes owned" -- distinct from a PARM_DECL, which is
-   owned unconditionally from function entry instead.  */
+/* If STMT establishes a fresh, independently-tracked binding for some
+   trackable local VAR_DECL, return that VAR_DECL; else NULL_TREE.
+   This is how a local variable "becomes owned" -- distinct from a
+   PARM_DECL, which is owned unconditionally from function entry
+   instead.  Two, independent reasons a plain assignment establishes
+   one:
+
+   - The RHS is itself a FRESH owner-flavored source (ip_arg_owner_
+     flavored_p: a 'new'-expression, or a call to an owner-returning
+     function) -- a genuinely new obligation with nowhere else to
+     attach, so it starts tracking on whatever LOCAL variable first
+     captures it, regardless of that variable's own [[owner]] marking
+     (P3446R0/P4296R0's own point: 'int *q = new int (42);' must be
+     tracked and flagged if forgotten, even though 'q' itself carries
+     no attribute at all).
+
+   - The DESTINATION is itself explicitly [[owner]]-declared, and the
+     RHS traces to SOME already-tracked value ('[[owner]] int *y =
+     x;') -- a genuine hand-off, paired exactly with ip_owner_
+     reassigned_into_owner_var_p/CE5's own identical gate
+     (profiles_owning_ptr_p on the destination): CE5 recognizes this
+     same statement as consuming the SOURCE's binding immediately, and
+     this is what starts tracking the DESTINATION's own, independent
+     replacement binding, so a further use under y's own name (e.g. a
+     later 'f (y);') is checked against y, not incorrectly re-resolved
+     all the way back to x's already-spent binding by the multi-hop
+     walk (ip_owner_resolve_origin) and double-counted as consuming x
+     a second time -- confirmed as a real, reproducible regression
+     when this half was missing: with only the "fresh source" half of
+     this function, 'y = x; f (y);' saw 'f (y)' resolve straight
+     through to x's own binding (since y had no binding of its own to
+     stop at), reporting x as "consumed again" for what is really one
+     single, correctly-paired hand-off.
+
+     Deliberately NOT triggered by a plain copy into a destination
+     that is NOT itself [[owner]]-declared ('int *q = p;', p already
+     tracked) -- see ip_arg_owner_flavored_p_1's own comment for why:
+     that shape is an ordinary, harmless "peek", not a hand-off, and
+     must not start any tracking of its own.
+
+   A direct-LHS call ('lhs = owner_returning_fn (...);' -- the same
+   rare but real GCC-recognized-builtin-shaped direct-assignment case
+   ip_check_owner_call_flavor_consistency's own direct-LHS block
+   exists for) is handled by the second branch below, fresh-source
+   only (a call's own direct-LHS shape has no destination-owner-
+   declared counterpart to pair with here, since CE5 only ever
+   recognizes a plain, single-operand copy).  */
 
 static tree
 ip_owner_gen_lhs_decl (gimple *stmt)
@@ -2580,8 +2818,28 @@ ip_owner_gen_lhs_decl (gimple *stmt)
   if (is_gimple_assign (stmt) && gimple_assign_single_p (stmt))
     {
       tree d = ip_trackable_decl (gimple_assign_lhs (stmt));
-      if (d && TREE_CODE (TREE_TYPE (d)) == POINTER_TYPE
-	  && ip_arg_owner_flavored_p (gimple_assign_rhs1 (stmt)))
+      if (!d || TREE_CODE (TREE_TYPE (d)) != POINTER_TYPE)
+	return NULL_TREE;
+      tree rhs = gimple_assign_rhs1 (stmt);
+      if (ip_arg_owner_flavored_p (rhs))
+	return d;
+      /* The destination-owner-declared half (see this function's own
+	 comment) additionally requires RHS to resolve to SOME decl at
+	 all -- excludes 'p = nullptr;' and similar (a reassignment
+	 discarding ownership, or clearing an already-consumed
+	 parameter, is not a hand-off of anything and must not start a
+	 second, spurious tracked instance of P as if it were a fresh
+	 local; confirmed as a real regression otherwise, against
+	 d4324-profiles-invalidation-owner-reassigned-after-consume-
+	 ok.C's own 'delete p; p = nullptr;').  Genuineness itself is
+	 NOT required here (an ungenuine-but-resolvable RHS, e.g. an
+	 arbitrary untracked parameter, still starts tracking on D --
+	 ip_check_owner_assign_flavor_consistency's own reverse-
+	 direction check is what separately flags the assignment itself
+	 as invalid; this function only decides whether a binding
+	 exists to check at all).  */
+      if (profiles_owning_ptr_p (d) && !ip_owner_arg_null_pointer_p (rhs)
+	  && ip_owner_resolve_underlying_decl (rhs, stmt) != NULL_TREE)
 	return d;
       return NULL_TREE;
     }
@@ -2986,7 +3244,8 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
 	gimple *stmt = gsi_stmt (gsi);
 	if (gcall *call = dyn_cast<gcall *> (stmt))
 	  if (ip_owner_delete_call_p (call, decl)
-	      || ip_owner_deleting_dtor_dispatch_p (call, decl))
+	      || ip_owner_deleting_dtor_dispatch_p (call, decl)
+	      || ip_owner_direct_dtor_call_p (call, decl))
 	    continue;
 	/* ever_owned_before_stmt_p is the disambiguating half: without
 	   it, a LOCAL binding's own check would also match an earlier,
