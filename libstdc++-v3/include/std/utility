@@ -247,14 +247,23 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   /// this checker has no way to see is equivalent (e.g. the real,
   /// unannotated ::malloc): "return now_uninit(malloc(n));"
   /// inside a "[[ref_to_uninit]] void* my_malloc(size_t);"-declared
-  /// function (see init-profile-gimple.cc's own recognition of a call
-  /// to this exact function). By-value, like no_dangling above, since
-  /// there is no existing addressable object to attach an assertion
-  /// to -- __x is an arbitrary value expression, not a named variable.
+  /// function. Unlike no_dangling/now_valid above, this needs no by-
+  /// name recognition in init-profile-gimple.cc at all: what it
+  /// asserts is tied to a single position (its own return value), so
+  /// it just carries [[ref_to_uninit]] directly on that return, the
+  /// same "void* [[ref_to_uninit]] malloc(size_t);" shape any other
+  /// flavored-returning function already uses -- the checker's
+  /// existing, general "return through a flavored-returning function"
+  /// recognition (profiles_uninit_pointee_p on the callee) picks this
+  /// up with no special case. Restricted to pointer types (matching
+  /// [[ref_to_uninit]]'s own restriction) rather than now_uninit's
+  /// earlier, fully generic by-value signature, since a non-pointer
+  /// argument was never meaningfully usable under this attribute's own
+  /// semantics anyway.
   template<typename _Tp>
     [[__gnu__::__always_inline__]]
-    constexpr _Tp
-    now_uninit(_Tp __x)
+    constexpr _Tp*
+    now_uninit [[ref_to_uninit]] (_Tp* __x)
     { return __x; }
 
   /// P3446R0 (Invalidation profile): assert -- without proof -- that
