@@ -57,12 +57,16 @@ struct profiles_registry_entry
 {
   const char *name;
   unsigned bit;
+  /* The -Wprofiles-* option (c-family/c.opt) violations of this
+     profile are reported through when it is merely warned (-fprofiles-
+     warning=), not enforced -- see profiles_diagnostic_at below.  */
+  int warn_opt;
 };
 
 static constexpr profiles_registry_entry profiles_registry[] =
 {
-  { "std::init", 1u << 0 },
-  { "std::invalidation", 1u << 1 },
+  { "std::init", 1u << 0, OPT_Wprofiles_init },
+  { "std::invalidation", 1u << 1, OPT_Wprofiles_invalidation },
 };
 
 static unsigned
@@ -72,6 +76,19 @@ profiles_lookup (const char *name)
     if (strcmp (entry.name, name) == 0)
       return entry.bit;
   return 0;
+}
+
+/* NAME's own -Wprofiles-* option id, or -1 if NAME isn't registered
+   (never expected in practice -- every call site validates NAME via
+   profiles_lookup/profiles_active_p first).  */
+
+static int
+profiles_warn_opt (const char *name)
+{
+  for (const auto &entry : profiles_registry)
+    if (strcmp (entry.name, name) == 0)
+      return entry.warn_opt;
+  return -1;
 }
 
 /* Which profiles are enforced, for the whole translation unit.  Sound
@@ -84,6 +101,18 @@ profiles_lookup (const char *name)
    One bitmask per compilation, never reset: GCC only ever compiles one
    TU per process.  */
 static unsigned profiles_enforced_mask;
+
+/* Which profiles are merely WARNED (-fprofiles-warning=) for the
+   whole translation unit -- same one-bitmask-per-compilation shape
+   and rationale as profiles_enforced_mask above.  A bit set here for
+   a profile ALSO set in profiles_enforced_mask has no effect:
+   profiles_warned_p (below) explicitly excludes anything also
+   enforced, live at query time, so an explicit enforce request always
+   wins regardless of the order the two flags/the in-source attribute
+   were processed in -- see profiles_warned_p's own comment
+   (profiles.h) for why that's sound without needing to eagerly clear
+   this bit anywhere.  */
+static unsigned profiles_warned_mask;
 
 /* True once cp_parser_declaration (parser.cc) has processed anything
    other than an empty-declaration.  See profiles_note_nonempty_
@@ -145,6 +174,64 @@ profiles_enforced_p (const char *name)
   return bit != 0 && (profiles_enforced_mask & bit) != 0;
 }
 
+/* True if NAME is active at warning severity -- see profiles.h's own
+   comment for why the exclusion of an also-enforced bit is resolved
+   live, here, rather than eagerly.  */
+
+bool
+profiles_warned_p (const char *name)
+{
+  unsigned bit = profiles_lookup (name);
+  return bit != 0 && (profiles_warned_mask & bit) != 0
+	 && (profiles_enforced_mask & bit) == 0;
+}
+
+/* True if NAME should be checked at all, at either severity.  */
+
+bool
+profiles_active_p (const char *name)
+{
+  return profiles_enforced_p (name) || profiles_warned_p (name);
+}
+
+/* Report a profile violation -- the shared replacement for a bare
+   error_at (...) call at every one of this project's own diagnostic
+   sites, deciding severity from PROFILE's own state (profiles_
+   enforced_p) rather than requiring each site to.  Built the same way
+   gcc/c/c-typeck.cc's own error_init is: forward the caller's varargs
+   through to emit_diagnostic_valist untouched, so %qD/%qE/%<...%>-
+   style format-checking on GMSGID works identically to a direct
+   error_at/warning_at call (see profiles.h's own ATTRIBUTE_GCC_DIAG
+   tag on the declaration). -1 for the error case matches error_init's
+   own convention -- no -W option exists for an unconditional error;
+   PROFILE's own -Wprofiles-* option (profiles_warn_opt) is used for
+   the warning case, which is what actually gives the user -Werror=/
+   -Wno-error=/-Wno- control over these specific diagnostics, on top
+   of the blanket promotion any plain, global -Werror already applies
+   to every warning regardless of its own option.  */
+
+bool
+profiles_diagnostic_at (location_t loc, const char *profile,
+			 const char *gmsgid, ...)
+{
+  /* Every report_diagnostic call must be inside a begin_group/end_
+     group pair (diagnostics::context::report_diagnostic's own
+     gcc_assert, context.cc) -- error_at/warning_at each open one of
+     their own internally, but emit_diagnostic_valist, called directly
+     as error_init/pedwarn_permerror_init do, does not; confirmed the
+     hard way, via a real ICE at that exact assert, before this was
+     added.  */
+  auto_diagnostic_group d;
+  va_list ap;
+  va_start (ap, gmsgid);
+  bool ret = profiles_enforced_p (profile)
+    ? emit_diagnostic_valist (diagnostics::kind::error, loc, -1, gmsgid, &ap)
+    : emit_diagnostic_valist (diagnostics::kind::warning, loc,
+			       profiles_warn_opt (profile), gmsgid, &ap);
+  va_end (ap);
+  return ret;
+}
+
 /* Non-intrusive command-line enforcement: apply every profile name
    c-opts.cc's own handle_profiles_enforce_option split out of a
    -fprofiles-enforce=name[,name...] occurrence
@@ -177,6 +264,34 @@ profiles_process_command_line_enforcement (void)
 	  continue;
 	}
       profiles_enforced_mask |= bit;
+    }
+}
+
+/* The -fprofiles-warning= sibling of profiles_process_command_line_
+   enforcement just above -- identical shape and rationale, applying
+   profiles_warned_table (c-opts.cc's own handle_profiles_warning_
+   option) to profiles_warned_mask instead.  Called immediately after
+   the enforcement version, same call site (cxx_init_decl_processing,
+   decl.cc); passing the SAME profile name to both -fprofiles-enforce=
+   and -fprofiles-warning= needs no special handling here -- both bits
+   simply get set, and profiles_warned_p's own live exclusion of an
+   also-enforced bit means the net effect is silently "enforced",
+   exactly the precedence this project's own command-line contract
+   requires.  */
+
+void
+profiles_process_command_line_warning (void)
+{
+  for (unsigned i = 0; i < profiles_warned_table.length (); ++i)
+    {
+      const char *name = profiles_warned_table[i].name;
+      unsigned bit = profiles_lookup (name);
+      if (!bit)
+	{
+	  error ("unknown profile %qs in %<-fprofiles-warning%>", name);
+	  continue;
+	}
+      profiles_warned_mask |= bit;
     }
 }
 
@@ -377,11 +492,12 @@ void
 profiles_eager_check_function (tree fndecl)
 {
   /* Cheap, unconditional no-op for the overwhelmingly common case: no
-     profile enforced anywhere in this translation unit at all.  Must
-     come before anything else below -- no cgraph/GIMPLE work of any
-     kind happens when neither profile is enforced.  */
-  if (!profiles_enforced_p ("std::init")
-      && !profiles_enforced_p ("std::invalidation"))
+     profile active (enforced OR merely warned) anywhere in this
+     translation unit at all.  Must come before anything else below --
+     no cgraph/GIMPLE work of any kind happens when neither profile is
+     active.  */
+  if (!profiles_active_p ("std::init")
+      && !profiles_active_p ("std::invalidation"))
     return;
 
   if (profiles_eager_check_active)
@@ -454,16 +570,16 @@ profiles_eager_check_function_1 (tree fndecl)
      under the real harness, where it segfaulted; it was never
      reached at all in isolated manual testing, which used -isystem
      and so made in_system_header_at itself enough to hide the gap.  */
-  bool exempt_from_every_enforced_profile = true;
-  if (profiles_enforced_p ("std::init")
+  bool exempt_from_every_active_profile = true;
+  if (profiles_active_p ("std::init")
       && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (fndecl),
 				     "std::init"))
-    exempt_from_every_enforced_profile = false;
-  if (profiles_enforced_p ("std::invalidation")
+    exempt_from_every_active_profile = false;
+  if (profiles_active_p ("std::invalidation")
       && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (fndecl),
 				     "std::invalidation"))
-    exempt_from_every_enforced_profile = false;
-  if (exempt_from_every_enforced_profile)
+    exempt_from_every_active_profile = false;
+  if (exempt_from_every_active_profile)
     return;
 
   if (!DECL_STRUCT_FUNCTION (fndecl))
@@ -518,9 +634,9 @@ profiles_eager_check_function_1 (tree fndecl)
      not by relying on being spliced into any pass list (they no
      longer are, see init_profiles) but by invoking the pass objects
      themselves.  Each pass's own gate () already checks
-     profiles_enforced_p for its own profile name, so calling both
+     profiles_active_p for its own profile name, so calling both
      unconditionally here is safe and cheap even when only one of the
-     two profiles is actually enforced.  */
+     two profiles is actually active (enforced or merely warned).  */
   if (!profiles_init_pass)
     profiles_init_pass = make_pass_init_profile_gimple (g);
   if (!profiles_invalidation_pass)

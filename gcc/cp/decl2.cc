@@ -714,14 +714,15 @@ delete_sanity (location_t loc, tree exp, tree size, bool doing_vec,
      profiles_as_owner_call_p's own comment, profiles.h) still legally
      delete it.  */
   if (TREE_CODE (TREE_TYPE (exp)) == POINTER_TYPE
-      && profiles_enforced_p ("std::invalidation")
+      && profiles_active_p ("std::invalidation")
       && !profiles_header_exempt_p (exp_loc, "std::invalidation")
       && !profiles_owning_ptr_p (exp)
       && !profiles_as_owner_call_p (exp)
       && (complain & tf_error))
-    error_at (exp_loc, "%<delete%> of a pointer not marked "
-	      "%<[[owner]]%> not permitted under the "
-	      "%<std::invalidation%> profile");
+    profiles_diagnostic_at (exp_loc, "std::invalidation",
+			     "%<delete%> of a pointer not marked "
+			     "%<[[owner]]%> not permitted under the "
+			     "%<std::invalidation%> profile");
 
   /* An array can't have been allocated by new, so complain.  */
   if (TREE_CODE (TREE_TYPE (exp)) == ARRAY_TYPE

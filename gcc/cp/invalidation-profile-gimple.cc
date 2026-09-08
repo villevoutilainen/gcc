@@ -1015,7 +1015,7 @@ ip_check_return_escape (gimple *return_stmt, tree enclosing_fndecl)
   if (profiles_diagnostic_exempt_p (gimple_location (return_stmt),
 				    enclosing_fndecl, "std::invalidation"))
     return;
-  error_at (gimple_location (return_stmt),
+  profiles_diagnostic_at (gimple_location (return_stmt), "std::invalidation",
 	    "returning a pointer or container that may hold a pointer "
 	    "to a local, not permitted under the %<std::invalidation%> "
 	    "profile (wrap in %<std::no_dangling%> if this is provably "
@@ -1697,7 +1697,7 @@ ip_check_var_uses (function *fun, tree var, const vec<ip_use> &uses,
 	    continue;
 	  if (!profiles_diagnostic_exempt_p (gimple_location (use_stmt),
 					      enclosing_fndecl, "std::invalidation"))
-	    error_at (gimple_location (use_stmt),
+	    profiles_diagnostic_at (gimple_location (use_stmt), "std::invalidation",
 		      "use of a value bound to %qD, potentially invalidated "
 		      "by an earlier mutation of %qD, not permitted under the "
 		      "%<std::invalidation%> profile", bound_decls[idx], culprit);
@@ -2215,7 +2215,7 @@ ip_check_owner_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
       if (profiles_diagnostic_exempt_p (gimple_location (stmt),
 					enclosing_fndecl, "std::invalidation"))
 	continue;
-      error_at (gimple_location (stmt),
+      profiles_diagnostic_at (gimple_location (stmt), "std::invalidation",
 		"argument %u to %qD must be marked %<[[owner]]%>, matching "
 		"its %<[[owner]]%> parameter, under the "
 		"%<std::invalidation%> profile", i + 1, callee);
@@ -2240,7 +2240,7 @@ ip_check_owner_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
       && !ip_owner_fresh_source_call_p (as_a<gcall *> (stmt))
       && !profiles_diagnostic_exempt_p (gimple_location (stmt),
 					 enclosing_fndecl, "std::invalidation"))
-    error_at (gimple_location (stmt),
+    profiles_diagnostic_at (gimple_location (stmt), "std::invalidation",
 	      "assigning a pointer not marked %<[[owner]]%> into a "
 	      "pointer marked %<[[owner]]%>, under the "
 	      "%<std::invalidation%> profile");
@@ -2277,7 +2277,7 @@ ip_check_owner_return_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
   if (profiles_diagnostic_exempt_p (gimple_location (stmt),
 				     enclosing_fndecl, "std::invalidation"))
     return;
-  error_at (gimple_location (stmt),
+  profiles_diagnostic_at (gimple_location (stmt), "std::invalidation",
 	    "returning a pointer not marked %<[[owner]]%> from a function "
 	    "marked %<[[owner]]%>, under the %<std::invalidation%> "
 	    "profile");
@@ -2316,7 +2316,7 @@ ip_check_owner_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
   if (profiles_diagnostic_exempt_p (gimple_location (stmt),
 				     enclosing_fndecl, "std::invalidation"))
     return;
-  error_at (gimple_location (stmt),
+  profiles_diagnostic_at (gimple_location (stmt), "std::invalidation",
 	    "assigning a pointer not marked %<[[owner]]%> into a pointer "
 	    "marked %<[[owner]]%>, under the %<std::invalidation%> "
 	    "profile");
@@ -2379,7 +2379,7 @@ ip_check_owner_call_arg_aliasing (gimple *stmt, tree enclosing_fndecl)
 					     enclosing_fndecl,
 					     "std::invalidation"))
 	    continue;
-	  error_at (gimple_location (stmt),
+	  profiles_diagnostic_at (gimple_location (stmt), "std::invalidation",
 		    "the same %<[[owner]]%> pointer %qD passed to two "
 		    "different owner-accepting parameters (%u and %u) of "
 		    "%qD, under the %<std::invalidation%> profile",
@@ -3193,12 +3193,12 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
 					 fun->decl, "std::invalidation"))
     {
       if (decl_marked)
-	error_at (DECL_SOURCE_LOCATION (decl),
+	profiles_diagnostic_at (DECL_SOURCE_LOCATION (decl), "std::invalidation",
 		  "%<[[owner]]%> pointer %qD is never deleted or passed on "
 		  "before the function returns, under the "
 		  "%<std::invalidation%> profile", decl);
       else
-	error_at (DECL_SOURCE_LOCATION (decl),
+	profiles_diagnostic_at (DECL_SOURCE_LOCATION (decl), "std::invalidation",
 		  "the freshly-allocated value assigned to %qD is never "
 		  "deleted or passed on before the function returns, under "
 		  "the %<std::invalidation%> profile", decl);
@@ -3230,12 +3230,12 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
 					       fun->decl, "std::invalidation"))
 	  {
 	    if (decl_marked)
-	      error_at (gimple_location (stmt),
+	      profiles_diagnostic_at (gimple_location (stmt), "std::invalidation",
 			"%qD is reassigned here, discarding a not-yet-consumed "
 			"%<[[owner]]%> pointer, under the %<std::invalidation%> "
 			"profile", decl);
 	    else
-	      error_at (gimple_location (stmt),
+	      profiles_diagnostic_at (gimple_location (stmt), "std::invalidation",
 			"%qD is reassigned here, discarding a not-yet-consumed "
 			"freshly-allocated value, under the "
 			"%<std::invalidation%> profile", decl);
@@ -3344,7 +3344,7 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
 	    if (already_spent
 		&& !profiles_diagnostic_exempt_p (gimple_location (stmt),
 						   fun->decl, "std::invalidation"))
-	      error_at (gimple_location (stmt),
+	      profiles_diagnostic_at (gimple_location (stmt), "std::invalidation",
 			"%qD is consumed again here, after already being "
 			"consumed on every path reaching this point, under the "
 			"%<std::invalidation%> profile", decl);
@@ -3353,7 +3353,7 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
 	if (already_spent && ip_owner_stmt_reads_decl_p (stmt, decl)
 	    && !profiles_diagnostic_exempt_p (gimple_location (stmt),
 					       fun->decl, "std::invalidation"))
-	  error_at (gimple_location (stmt),
+	  profiles_diagnostic_at (gimple_location (stmt), "std::invalidation",
 		    "%qD is read here, after already being consumed on "
 		    "every path reaching this point, under the "
 		    "%<std::invalidation%> profile", decl);
@@ -3550,7 +3550,7 @@ public:
 
   bool gate (function *) final override
   {
-    return profiles_enforced_p ("std::invalidation");
+    return profiles_active_p ("std::invalidation");
   }
 
   unsigned int execute (function *fun) final override

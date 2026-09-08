@@ -1765,6 +1765,16 @@ extern vec<contract_group_semantic_entry> contract_group_semantic_table;
 struct profiles_enforced_entry { const char *name; };
 extern vec<profiles_enforced_entry> profiles_enforced_table;
 
+/* The -fprofiles-warning= sibling of profiles_enforced_table just
+   above: one entry per comma-separated profile name from a
+   -fprofiles-warning=name[,name...] occurrence (c-opts.cc's own
+   OPT_fprofiles_warning_ case/handle_profiles_warning_option),
+   consumed by cp/profiles.cc's own profiles_process_command_line_
+   warning.  Same shape, same rationale, same "no location field"
+   reasoning as profiles_enforced_entry.  */
+struct profiles_warned_entry { const char *name; };
+extern vec<profiles_warned_entry> profiles_warned_table;
+
 #if CHECKING_P
 namespace selftest {
   /* Declarations for specific families of tests within c-family,

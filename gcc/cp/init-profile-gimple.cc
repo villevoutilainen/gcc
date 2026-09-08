@@ -32,12 +32,14 @@ along with GCC; see the file COPYING3.  If not see
    register_pass-from-front-end-init approach D4324's own experimental
    GIMPLE engine uses (see contracts-gimple.cc's own top-of-file
    comment) -- gate () below is what actually makes this a no-op
-   whenever the std::init profile isn't enforced, so there's no
-   separate command-line flag the way that engine has: profiles are
-   enabled from source (profiles::enforce), not the command line, and
-   -- because Increment 1's placement restriction requires
-   profiles::enforce to appear before any declaration in the
-   translation unit -- profiles_enforced_p's answer is already
+   whenever the std::init profile isn't active at all (neither
+   enforced nor merely warned, profiles_active_p, profiles.cc): a
+   profile can be enabled from source (profiles::enforce) or, non-
+   intrusively, from the command line (-fprofiles-enforce=/-fprofiles-
+   warning=), and -- because Increment 1's placement restriction
+   requires profiles::enforce to appear before any declaration in the
+   translation unit, and both command-line flags are processed before
+   parsing even begins -- profiles_active_p's answer is already
    final by the time any function in the TU reaches this pass.
 
    Proof kernel (ip_definitely_assigned_p below) is directly modeled
@@ -902,7 +904,7 @@ ip_check_local_aggregate_member (function *fun, tree var, tree field,
       if (!profiles_diagnostic_exempt_p (DECL_SOURCE_LOCATION (var),
 					 fun->decl, "std::init"))
 	{
-	  error_at (DECL_SOURCE_LOCATION (var),
+	  profiles_diagnostic_at (DECL_SOURCE_LOCATION (var), "std::init",
 		    "cannot verify %<[[uninit]]%> member %qD of %qD under the "
 		    "%<std::init%> profile: its address is taken outside a "
 		    "recognized %<[[must_init]]%> call, which this checker "
@@ -924,7 +926,7 @@ ip_check_local_aggregate_member (function *fun, tree var, tree field,
       for (gimple *read_stmt : scan.read_stmts)
 	if (!profiles_diagnostic_exempt_p (gimple_location (read_stmt),
 					   fun->decl, "std::init"))
-	  error_at (gimple_location (read_stmt),
+	  profiles_diagnostic_at (gimple_location (read_stmt), "std::init",
 		    "member %qD of %qD read before it is definitely "
 		    "assigned, under the %<std::init%> profile", field, var);
       return;
@@ -937,7 +939,7 @@ ip_check_local_aggregate_member (function *fun, tree var, tree field,
     if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts, info)
 	&& !profiles_diagnostic_exempt_p (gimple_location (read_stmt),
 					  fun->decl, "std::init"))
-      error_at (gimple_location (read_stmt),
+      profiles_diagnostic_at (gimple_location (read_stmt), "std::init",
 		"member %qD of %qD read before it is definitely assigned, "
 		"under the %<std::init%> profile", field, var);
 }
@@ -982,7 +984,7 @@ ip_check_address_taken_var (function *fun, tree var)
       if (!profiles_diagnostic_exempt_p (DECL_SOURCE_LOCATION (var),
 					 fun->decl, "std::init"))
 	{
-	  error_at (DECL_SOURCE_LOCATION (var),
+	  profiles_diagnostic_at (DECL_SOURCE_LOCATION (var), "std::init",
 		    "cannot verify %<[[uninit]]%> on %qD under the "
 		    "%<std::init%> profile: its address is taken outside a "
 		    "recognized %<[[must_init]]%> call, which this checker "
@@ -1021,7 +1023,7 @@ ip_check_address_taken_var (function *fun, tree var)
       if (!profiles_diagnostic_exempt_p (DECL_SOURCE_LOCATION (var),
 					 fun->decl, "std::init"))
 	{
-	  error_at (DECL_SOURCE_LOCATION (var),
+	  profiles_diagnostic_at (DECL_SOURCE_LOCATION (var), "std::init",
 		    "cannot verify %<[[uninit]]%> on %qD under the "
 		    "%<std::init%> profile: member-level access on this "
 		    "aggregate is not yet analyzed", var);
@@ -1036,7 +1038,7 @@ ip_check_address_taken_var (function *fun, tree var)
       for (gimple *read_stmt : scan.read_stmts)
 	if (!profiles_diagnostic_exempt_p (gimple_location (read_stmt),
 					   fun->decl, "std::init"))
-	  error_at (gimple_location (read_stmt),
+	  profiles_diagnostic_at (gimple_location (read_stmt), "std::init",
 		    "%qD read before it is definitely assigned, under the "
 		    "%<std::init%> profile", var);
       return;
@@ -1049,7 +1051,7 @@ ip_check_address_taken_var (function *fun, tree var)
     if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts, info)
 	&& !profiles_diagnostic_exempt_p (gimple_location (read_stmt),
 					  fun->decl, "std::init"))
-      error_at (gimple_location (read_stmt),
+      profiles_diagnostic_at (gimple_location (read_stmt), "std::init",
 		"%qD read before it is definitely assigned, under the "
 		"%<std::init%> profile", var);
 }
@@ -1315,7 +1317,7 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
       if (!profiles_diagnostic_exempt_p (DECL_SOURCE_LOCATION (fun->decl),
 					 fun->decl, "std::init"))
 	{
-	  error_at (DECL_SOURCE_LOCATION (fun->decl),
+	  profiles_diagnostic_at (DECL_SOURCE_LOCATION (fun->decl), "std::init",
 		    "cannot verify %<[[uninit]]%> member %qD under the "
 		    "%<std::init%> profile: its address is taken outside a "
 		    "recognized %<[[must_init]]%> call, which this checker "
@@ -1333,7 +1335,7 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
     if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts, info)
 	&& !profiles_diagnostic_exempt_p (gimple_location (read_stmt),
 					  fun->decl, "std::init"))
-      error_at (gimple_location (read_stmt),
+      profiles_diagnostic_at (gimple_location (read_stmt), "std::init",
 		"member %qD read before it is definitely assigned, under "
 		"the %<std::init%> profile", field);
 
@@ -1361,7 +1363,7 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
   if (!exit_ok
       && !profiles_diagnostic_exempt_p (DECL_SOURCE_LOCATION (fun->decl),
 					fun->decl, "std::init"))
-    error_at (DECL_SOURCE_LOCATION (fun->decl),
+    profiles_diagnostic_at (DECL_SOURCE_LOCATION (fun->decl), "std::init",
 	      "constructor may leave member %qD, marked %<[[uninit]]%>, "
 	      "not definitely assigned before %<*this%> is exposed, under "
 	      "the %<std::init%> profile", field);
@@ -1619,12 +1621,12 @@ ip_check_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
 					enclosing_fndecl, "std::init"))
 	continue;
       if (param_flavor && !arg_flavor)
-	error_at (gimple_location (stmt),
+	profiles_diagnostic_at (gimple_location (stmt), "std::init",
 		  "argument %u to %qD must refer to %<[[uninit]]%> memory, "
 		  "matching its %<[[ref_to_uninit]]%> parameter, under the "
 		  "%<std::init%> profile", i + 1, callee);
       else if (!param_flavor && arg_flavor)
-	error_at (gimple_location (stmt),
+	profiles_diagnostic_at (gimple_location (stmt), "std::init",
 		  "argument %u to %qD refers to %<[[uninit]]%> memory but "
 		  "its parameter is not marked %<[[ref_to_uninit]]%>, under "
 		  "the %<std::init%> profile", i + 1, callee);
@@ -1671,12 +1673,12 @@ ip_check_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
 					     enclosing_fndecl, "std::init"))
 	{
 	  if (callee_flavor)
-	    error_at (gimple_location (stmt),
+	    profiles_diagnostic_at (gimple_location (stmt), "std::init",
 		      "assigning a pointer marked %<[[ref_to_uninit]]%> into "
 		      "a pointer not marked %<[[ref_to_uninit]]%>, under the "
 		      "%<std::init%> profile");
 	  else
-	    error_at (gimple_location (stmt),
+	    profiles_diagnostic_at (gimple_location (stmt), "std::init",
 		      "assigning a pointer not marked %<[[ref_to_uninit]]%> "
 		      "into a pointer marked %<[[ref_to_uninit]]%>, under "
 		      "the %<std::init%> profile");
@@ -1767,12 +1769,12 @@ ip_check_return_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
 				     enclosing_fndecl, "std::init"))
     return;
   if (retval_flavor)
-    error_at (gimple_location (stmt),
+    profiles_diagnostic_at (gimple_location (stmt), "std::init",
 	      "returning a pointer marked %<[[ref_to_uninit]]%> from a "
 	      "function not itself marked %<[[ref_to_uninit]]%>, under the "
 	      "%<std::init%> profile");
   else
-    error_at (gimple_location (stmt),
+    profiles_diagnostic_at (gimple_location (stmt), "std::init",
 	      "returning a pointer not marked %<[[ref_to_uninit]]%> from a "
 	      "function marked %<[[ref_to_uninit]]%>, under the "
 	      "%<std::init%> profile");
@@ -1825,12 +1827,12 @@ ip_check_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
 				     enclosing_fndecl, "std::init"))
     return;
   if (src_flavor)
-    error_at (gimple_location (stmt),
+    profiles_diagnostic_at (gimple_location (stmt), "std::init",
 	      "assigning a pointer marked %<[[ref_to_uninit]]%> into a "
 	      "pointer not marked %<[[ref_to_uninit]]%>, under the "
 	      "%<std::init%> profile");
   else
-    error_at (gimple_location (stmt),
+    profiles_diagnostic_at (gimple_location (stmt), "std::init",
 	      "assigning a pointer not marked %<[[ref_to_uninit]]%> into a "
 	      "pointer marked %<[[ref_to_uninit]]%>, under the %<std::init%> "
 	      "profile");
@@ -1892,7 +1894,7 @@ ip_check_function (function *fun)
 	      if (!ip_definitely_assigned_p (name, in_progress)
 		  && !profiles_diagnostic_exempt_p (gimple_location (use_stmt),
 						    fun->decl, "std::init"))
-		error_at (gimple_location (use_stmt),
+		profiles_diagnostic_at (gimple_location (use_stmt), "std::init",
 			  "%qD read before it is definitely assigned, "
 			  "under the %<std::init%> profile", var);
 	    }
@@ -1949,7 +1951,7 @@ public:
 
   bool gate (function *) final override
   {
-    return profiles_enforced_p ("std::init");
+    return profiles_active_p ("std::init");
   }
 
   unsigned int execute (function *fun) final override
