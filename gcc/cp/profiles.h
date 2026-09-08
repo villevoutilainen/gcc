@@ -48,13 +48,13 @@ extern bool profiles_enforced_p (const char *);
    GIMPLE engine.  Unlike that engine, registration itself is never
    gated on a command-line flag: a profile can be enabled from source
    (profiles::enforce) or, non-intrusively, from the command line
-   (-fprofiles-enforced=, see profiles_process_command_line_
+   (-fprofiles-enforce=, see profiles_process_command_line_
    enforcement just below), so registration stays unconditional and
    each pass's own gate () is what makes it a no-op when its profile
    isn't enforced by either means.  */
 extern void init_profiles (void);
 
-/* Apply every -fprofiles-enforced=name[,name...] occurrence
+/* Apply every -fprofiles-enforce=name[,name...] occurrence
    (c-family/c-opts.cc's own deferred profiles_enforced_table) to
    profiles_enforced_mask, the same bit '[[profiles::enforce(name)]]'
    itself sets -- letting an unmodified translation unit be compiled

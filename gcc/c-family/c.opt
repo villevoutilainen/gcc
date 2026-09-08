@@ -2035,15 +2035,17 @@ functions in contract assertions.
 ; if by a leading '[[profiles::enforce(PROFILE)]]' before any
 ; declaration, without needing to modify the source at all. Each
 ; occurrence is deferred and parsed once, in c-opts.cc's
-; handle_profiles_enforced_option, after option processing (like
+; handle_profiles_enforce_option, after option processing (like
 ; -fcontracts-group-evaluation-semantic= above); the resulting profile
 ; names are validated and applied even earlier than that option's own
 ; table is ever consulted -- see cp/profiles.cc's own profiles_process_
 ; command_line_enforcement for why this one can't be deferred until
-; first use the way a contract group's semantic can.
-fprofiles-enforced=
+; first use the way a contract group's semantic can.  Named
+; -fprofiles-enforce= (imperative), not -fprofiles-enforced=, to leave
+; room for a future -fprofiles-warning= sibling with parallel grammar.
+fprofiles-enforce=
 C++ ObjC++ Joined RejectNegative
--fprofiles-enforced=<profile>[,<profile>...]	Enforce the P3589 Profiles framework's named profile(s) (e.g. std::init, std::invalidation) for the whole translation unit, as if by a leading [[profiles::enforce]].
+-fprofiles-enforce=<profile>[,<profile>...]	Enforce the P3589 Profiles framework's named profile(s) (e.g. std::init, std::invalidation) for the whole translation unit, as if by a leading [[profiles::enforce]].
 
 fcontract-checks-outlined
 C++ ObjC++ Var(flag_contract_checks_outlined) Init(0)

@@ -146,8 +146,8 @@ profiles_enforced_p (const char *name)
 }
 
 /* Non-intrusive command-line enforcement: apply every profile name
-   c-opts.cc's own handle_profiles_enforced_option split out of a
-   -fprofiles-enforced=name[,name...] occurrence
+   c-opts.cc's own handle_profiles_enforce_option split out of a
+   -fprofiles-enforce=name[,name...] occurrence
    (profiles_enforced_table, c-family/c-common.h) directly to
    profiles_enforced_mask, the same bit '[[profiles::enforce(name)]]'
    itself would set -- letting an unmodified TU be compiled under an
@@ -173,7 +173,7 @@ profiles_process_command_line_enforcement (void)
       unsigned bit = profiles_lookup (name);
       if (!bit)
 	{
-	  error ("unknown profile %qs in %<-fprofiles-enforced%>", name);
+	  error ("unknown profile %qs in %<-fprofiles-enforce%>", name);
 	  continue;
 	}
       profiles_enforced_mask |= bit;
