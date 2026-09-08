@@ -330,9 +330,9 @@ ip_mem_ref_targets_var_p (tree t, tree var)
 
 /* True if CALL is a call to std::construct_at -- recognized by name
    (decl_in_std_namespace_p + id_equal, the same pattern invalidation-
-   profile-gimple.cc's own no_dangling/now_valid/now_uninit
-   escape hatches use), not by any attribute on its own declared
-   signature. construct_at's real signature ('template<class T, class..
+   profile-gimple.cc's own no_dangling/now_valid escape hatches use),
+   not by any attribute on its own declared signature. construct_at's
+   real signature ('template<class T, class..
    . Args> constexpr T* construct_at(T* p, Args&&... args);') cannot be
    given [[ref_to_uninit]]/[[must_init]] on its own 'p' parameter the
    way a purpose-built escape hatch like now_init can: unlike now_init,
@@ -1386,24 +1386,21 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
    own invalidation-profile psets exist for (profiles plan Phase 7),
    not duplicated here.  */
 
-/* True if CALL is a call to std::now_uninit -- the
-   Initialization profile's manual, unproven "treat this value as
-   [[ref_to_uninit]]-flavored regardless of its own declared flavor"
-   assertion (see <utility>'s own definition), recognized by name
-   (decl_in_std_namespace_p + id_equal) the same way invalidation-
-   profile-gimple.cc's own ip_no_dangling_call_p/ip_now_valid_call_p
-   recognize their own escape hatches -- this file has no attribute of
-   its own to key off here, since what's being asserted isn't tied to
-   any one parameter position the way [[must_init]]/[[ref_to_uninit]]
-   normally are.  */
-
-static bool
-ip_now_uninit_call_p (gcall *call)
-{
-  tree fndecl = gimple_call_fndecl (call);
-  return fndecl && decl_in_std_namespace_p (fndecl)
-	 && id_equal (DECL_NAME (fndecl), "now_uninit");
-}
+/* std::now_uninit -- the Initialization profile's manual, unproven
+   "treat this value as [[ref_to_uninit]]-flavored regardless of its
+   own declared flavor" assertion -- used to need its own by-name
+   recognition function here (removed): unlike std::construct_at just
+   above, what now_uninit asserts genuinely IS tied to a single
+   position (its own return value), so it can just carry
+   [[ref_to_uninit]] on that return directly (<utility>'s own
+   definition), the same "void* [[ref_to_uninit]] malloc(size_t);"
+   shape any other flavored-returning function already uses. Every
+   call site below that used to special-case now_uninit by name now
+   falls straight through to the ordinary profiles_uninit_pointee_p
+   (callee) check, unconditionally correct with no special case at
+   all -- confirmed empirically (a differently-named copy of now_
+   uninit's own template, carrying the same attribute, produces
+   identical diagnostics through the general path alone).  */
 
 static bool ip_arg_uninit_flavored_p_1 (tree arg, int depth);
 static bool ip_arg_null_pointer_p (tree arg);
@@ -1466,17 +1463,12 @@ ip_arg_uninit_flavored_p_1 (tree arg, int depth)
 	 unflavored.  No new predicate needed: profiles_uninit_pointee_p
 	 already does nothing but a bare DECL_ATTRIBUTES lookup, which
 	 works identically for a FUNCTION_DECL as for any other decl
-	 kind.  A call to std::now_uninit is checked FIRST and
-	 unconditionally overrides to true regardless of its own
-	 argument's flavor: that function is itself a generic, never-
-	 attributed identity template, so falling through to profiles_
-	 uninit_pointee_p on IT would incorrectly evaluate false -- see
-	 <utility>'s own definition and ip_now_uninit_call_p above.  */
+	 kind -- including std::now_uninit itself, which carries
+	 [[ref_to_uninit]] on its own return for exactly this reason
+	 (<utility>'s own definition), needing no special case here.  */
       if (def && gimple_code (def) == GIMPLE_CALL)
 	{
 	  gcall *call = as_a<gcall *> (def);
-	  if (ip_now_uninit_call_p (call))
-	    return true;
 	  tree callee = gimple_call_fndecl (call);
 	  if (callee)
 	    return profiles_uninit_pointee_p (callee);
@@ -1669,13 +1661,11 @@ ip_check_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
 	 direct-LHS shape (it's an always-inline template, so its own
 	 call is never routed through an intermediate SSA temp either --
 	 confirmed via -fdump-tree-ssa: 'p = std::now_uninit<void*>
-	 (_1);' directly) -- so this check must consult the SAME override
-	 ip_arg_uninit_flavored_p's SSA_NAME/GIMPLE_CALL branch already
-	 does, or it would silently disagree with that check and let the
-	 escape hatch's result flow into an unmarked destination
-	 unnoticed.  */
-      bool callee_flavor = ip_now_uninit_call_p (as_a<gcall *> (stmt))
-			    ? true : profiles_uninit_pointee_p (callee);
+	 (_1);' directly) -- correctly caught here with no special case,
+	 since its own return carries [[ref_to_uninit]] directly
+	 (<utility>'s own definition), same as any other flavored-
+	 returning function CALLEE_FLAVOR already checks below.  */
+      bool callee_flavor = profiles_uninit_pointee_p (callee);
       if (dst_flavor != callee_flavor
 	  && !profiles_diagnostic_exempt_p (gimple_location (stmt),
 					     enclosing_fndecl, "std::init"))
