@@ -607,6 +607,33 @@ profiles_owning_ptr_p (tree exp)
 	 || lookup_attribute ("owner", DECL_ATTRIBUTES (exp)) != NULL_TREE;
 }
 
+/* True if EXP -- after stripping the same location-wrapper/conversion
+   layers profiles_owning_ptr_p itself strips above -- is a call to
+   std::as_owner.  Unlike profiles_owning_ptr_p, this never needs to
+   reach a COMPONENT_REF/DECL_P: a call is recognized directly via its
+   own callee, the same cp_get_callee_fndecl_nofold + decl_in_std_
+   namespace_p pattern already used elsewhere in the front end for
+   AST-level std-call recognition (e.g. init.cc's own allocator-
+   argument scan).  See profiles.h's own comment for the full
+   rationale and the GIMPLE-level analogue this must stay paired
+   with.  */
+
+bool
+profiles_as_owner_call_p (tree exp)
+{
+  STRIP_ANY_LOCATION_WRAPPER (exp);
+  while (CONVERT_EXPR_P (exp) || TREE_CODE (exp) == NON_LVALUE_EXPR)
+    {
+      exp = TREE_OPERAND (exp, 0);
+      STRIP_ANY_LOCATION_WRAPPER (exp);
+    }
+  tree fn = cp_get_callee_fndecl_nofold (exp);
+  if (!fn || !decl_in_std_namespace_p (fn))
+    return false;
+  tree id = DECL_NAME (fn);
+  return id && id_equal (id, "as_owner");
+}
+
 /* True if FNDECL's parameter at 1-based POSITION carries
    [[owning_ptr]]/[[owner]] -- consults the synthesized function-level
    "profiles_owning_flavor" marker (grokfndecl, decl.cc), the same
