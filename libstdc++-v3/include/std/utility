@@ -309,6 +309,31 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     owner_consumed(_Tp __x)
     { return __x; }
 
+  /// P3446R0/P4296R0 (Invalidation profile): assert -- without proof --
+  /// that __x is a genuinely owner-worthy pointer value, even though it
+  /// is not itself [[owner]]/[[owning_ptr]]-marked (see
+  /// invalidation-profile-gimple.cc's own recognition of a call to
+  /// this exact function). Lets a function that only received a
+  /// plain, non-owner-marked pointer parameter -- typically because it
+  /// must be callable indirectly (through std::apply/std::invoke, a
+  /// function pointer, or any other shape this checker cannot resolve
+  /// a callee through -- see that file's own top comment) and so
+  /// cannot itself carry [[owner]] on that parameter -- still legally
+  /// delete what it received, e.g. "delete std::as_owner(p);". The
+  /// caller remains responsible for having genuinely discharged its
+  /// own ownership obligation some other way first (e.g.
+  /// std::owner_consumed() before the indirect hand-off); this
+  /// function only lifts the receiving side's own Negative-Baseline
+  /// restriction, it proves nothing about the value's actual history.
+  /// By-value, like owner_consumed: there is no existing addressable
+  /// object to attach an assertion to -- __x is an arbitrary pointer
+  /// value expression, not a named variable.
+  template<typename _Tp>
+    [[__gnu__::__always_inline__]]
+    constexpr _Tp
+    as_owner(_Tp __x)
+    { return __x; }
+
 _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace
 

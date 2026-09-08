@@ -706,11 +706,18 @@ delete_sanity (location_t loc, tree exp, tree size, bool doing_vec,
      profiles_owning_ptr_p's own comment (profiles.h) for exactly what
      it can and can't trace EXP back to.  Checked against EXP itself,
      before build_expr_type_conversion below reshapes it, same as the
-     array-delete warning just above.  */
+     array-delete warning just above.  A direct std::as_owner(...) call
+     as EXP is accepted as an alternative to profiles_owning_ptr_p: the
+     manual escape hatch letting a function that only received a
+     plain, non-owner-marked pointer (typically because it must be
+     callable indirectly and so cannot itself carry [[owner]] -- see
+     profiles_as_owner_call_p's own comment, profiles.h) still legally
+     delete it.  */
   if (TREE_CODE (TREE_TYPE (exp)) == POINTER_TYPE
       && profiles_enforced_p ("std::invalidation")
       && !profiles_header_exempt_p (exp_loc, "std::invalidation")
       && !profiles_owning_ptr_p (exp)
+      && !profiles_as_owner_call_p (exp)
       && (complain & tf_error))
     error_at (exp_loc, "%<delete%> of a pointer not marked "
 	      "%<[[owner]]%> not permitted under the "

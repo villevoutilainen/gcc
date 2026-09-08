@@ -206,6 +206,26 @@ extern void profiles_process_suppress_attributes (tree attrs,
    to answer "is this function's own return owner-flavored".  */
 extern bool profiles_owning_ptr_p (tree exp);
 
+/* P3446R0/P4296R0: true if EXP (same context as profiles_owning_ptr_p
+   above -- a delete-expression's own operand, at AST/semantic-
+   analysis time, before GIMPLE exists) is, after stripping the same
+   location-wrapper/conversion layers, a call to std::as_owner -- the
+   manual escape hatch letting a function that only received a plain,
+   non-owner-marked pointer (typically because it must be callable
+   indirectly, e.g. through std::apply/std::invoke or a function
+   pointer -- see invalidation-profile-gimple.cc's own top comment on
+   why such calls are otherwise invisible to this checker) still
+   legally delete it, by asserting -- without proof -- that the value
+   is genuinely owner-worthy.  Consulted alongside profiles_owning_
+   ptr_p at delete_sanity's own Negative-Baseline gate (decl2.cc);
+   ip_owner_fresh_source_call_p (invalidation-profile-gimple.cc) is
+   the GIMPLE-level analogue keeping the SAME recognition consistent
+   for tracked-binding purposes further down the pipeline -- the two
+   must not drift apart, matching this project's existing "fresh
+   source" vocabulary shared between profiles_owning_ptr_p and that
+   function.  */
+extern bool profiles_as_owner_call_p (tree exp);
+
 /* P3446R0/P4296R0: true if FNDECL's parameter at 1-based POSITION
    carries [[owning_ptr]]/[[owner]] -- consults the synthesized
    function-level "profiles_owning_flavor" marker (grokfndecl,

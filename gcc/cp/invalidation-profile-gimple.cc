@@ -1851,12 +1851,24 @@ ip_arg_owner_flavored_p (tree arg)
 }
 
 /* True if CALL is itself a fresh owner-flavored source: a 'new T'
-   allocation, or a call to a function whose own return is marked
-   [[owning_ptr]]/[[owner]].  Factored out so ip_arg_owner_flavored_p_1
-   (RHS-flavor recognition for local binding establishment, P3446R0
-   S7.6.2) and ip_owner_resolve_origin (multi-hop value-provenance
-   resolution, further down) test the exact same thing and can't drift
-   apart.  */
+   allocation, a call to a function whose own return is marked
+   [[owning_ptr]]/[[owner]], or a call to std::as_owner (the manual
+   escape hatch letting a function that only received a plain,
+   non-owner-marked pointer -- typically because it must be callable
+   indirectly, see this file's own top comment on indirect-call
+   blindness -- assert, without proof, that the value is genuinely
+   owner-worthy; profiles_as_owner_call_p, profiles.cc, is this same
+   recognition's AST-level counterpart, consulted at delete_sanity's
+   own Negative-Baseline gate, decl2.cc, before GIMPLE exists).
+   Deliberately unconditional for std::as_owner: unlike a plain copy
+   this function's own caller (ip_owner_resolve_origin) chases through
+   elsewhere, std::as_owner's whole purpose is to assert genuineness
+   the checker could not itself derive from its own argument's
+   history, so it is never itself chased into.  Factored out so
+   ip_arg_owner_flavored_p_1 (RHS-flavor recognition for local binding
+   establishment, P3446R0 S7.6.2) and ip_owner_resolve_origin
+   (multi-hop value-provenance resolution, further down) test the
+   exact same thing and can't drift apart.  */
 
 static bool
 ip_owner_fresh_source_call_p (gcall *call)
@@ -1869,7 +1881,8 @@ ip_owner_fresh_source_call_p (gcall *call)
      call-site flag that aliases CALL_FROM_THUNK_P/CALL_ALLOCA_FOR_
      VAR_P elsewhere -- see this project's own note on that), so no
      risk of misreading an unrelated call here.  */
-  return profiles_owning_ptr_p (callee) || DECL_IS_OPERATOR_NEW_P (callee);
+  return profiles_owning_ptr_p (callee) || DECL_IS_OPERATOR_NEW_P (callee)
+	 || ip_std_call_named_p (call, "as_owner");
 }
 
 /* True if ARG (a call-argument, plain-assignment RHS, or return-value
@@ -2050,14 +2063,52 @@ ip_owner_resolve_origin (tree t, gimple *point, int depth = 0)
       return { var, true };
     }
 
-  if (def_stmt && gimple_code (def_stmt) == GIMPLE_CALL
-      && ip_owner_fresh_source_call_p (as_a<gcall *> (def_stmt)))
+  if (def_stmt && gimple_code (def_stmt) == GIMPLE_CALL)
     {
-      tree var = ip_trackable_decl (t);
-      return { var, true }; /* VAR may be NULL_TREE for a pure
-				anonymous temp -- correctly "genuine, but
-				not yet named"; the caller one level up
-				(if any) is what names it.  */
+      gcall *call = as_a<gcall *> (def_stmt);
+      /* std::as_owner gets special handling BEFORE the general
+	 fresh-source check just below: unlike a genuine 'new'-
+	 expression or owner-returning call, its own argument may
+	 itself already be (or trace back to) a real, existing
+	 tracked binding -- e.g. wrapping an already [[owner]]-marked
+	 pointer's own delete in std::as_owner (harmless, if
+	 unnecessary, and confirmed to occur).  Try resolving THAT
+	 argument first; only fall back to treating the as_owner call
+	 itself as an independent fresh source (ip_owner_fresh_
+	 source_call_p's own unconditional treatment, still used
+	 as-is by ip_arg_owner_flavored_p_1 for binding
+	 establishment) when the argument does NOT itself resolve
+	 genuinely -- the actual, intended use: a plain, untracked
+	 parameter with no reaching fresh-source write of its own,
+	 typically because it can only be reached through an indirect
+	 call (see this file's own top comment).  Getting this
+	 backwards -- treating std::as_owner as unconditionally its
+	 OWN fresh source regardless of its argument -- was tried
+	 first and confirmed, empirically, to regress exactly the
+	 "wrap an existing binding" case: 'delete std::as_owner (p);'
+	 (p already [[owner]]-tracked via its own 'new'-capture)
+	 resolved to a nameless, disconnected source instead of p's
+	 own real binding, so CE1 never matched it and p was falsely
+	 reported as never deleted.  */
+      if (ip_std_call_named_p (call, "as_owner")
+	  && gimple_call_num_args (call) >= 1)
+	{
+	  ip_owner_origin arg_origin
+	    = ip_owner_resolve_origin (gimple_call_arg (call, 0), call,
+					depth + 1);
+	  if (arg_origin.decl && arg_origin.genuine)
+	    return arg_origin;
+	  tree var = ip_trackable_decl (t);
+	  return { var, true };
+	}
+      if (ip_owner_fresh_source_call_p (call))
+	{
+	  tree var = ip_trackable_decl (t);
+	  return { var, true }; /* VAR may be NULL_TREE for a pure
+				    anonymous temp -- correctly "genuine,
+				    but not yet named"; the caller one
+				    level up (if any) is what names it.  */
+	}
     }
 
   tree var = ip_trackable_decl (t);
