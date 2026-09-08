@@ -1752,8 +1752,8 @@ struct contract_group_semantic_entry { const char *name; unsigned semantic; };
 extern vec<contract_group_semantic_entry> contract_group_semantic_table;
 
 /* One entry per comma-separated profile name from a
-   -fprofiles-enforced=name[,name...] occurrence (c-opts.cc's own
-   OPT_fprofiles_enforced_ case/handle_profiles_enforced_option).
+   -fprofiles-enforce=name[,name...] occurrence (c-opts.cc's own
+   OPT_fprofiles_enforce_ case/handle_profiles_enforce_option).
    Storage lives in c-opts.cc for the same reason contract_group_
    semantic_table's does (this header is shared regardless of front
    end, but only the C++ front end -- cp/profiles.cc's own profiles_

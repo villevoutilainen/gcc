@@ -132,7 +132,7 @@ static void set_std_c2y (int);
 static void check_deps_environment_vars (void);
 static void handle_deferred_opts (void);
 static void handle_contract_group_semantics (void);
-static void handle_profiles_enforced_option (void);
+static void handle_profiles_enforce_option (void);
 static void sanitize_cpp_opts (void);
 static void add_prefixed_path (const char *, incpath_kind);
 static void push_command_line_include (void);
@@ -613,9 +613,9 @@ c_common_handle_option (size_t scode, const char *arg, HOST_WIDE_INT value,
       defer_opt (code, arg);
       break;
 
-    case OPT_fprofiles_enforced_:
+    case OPT_fprofiles_enforce_:
       /* Comma-separated profile list; split (and validated) once, by
-	 handle_profiles_enforced_option, after option processing --
+	 handle_profiles_enforce_option, after option processing --
 	 see that function's own comment.  */
       defer_opt (code, arg);
       break;
@@ -889,7 +889,7 @@ c_common_post_options (const char **pfilename)
 
   handle_deferred_opts ();
   handle_contract_group_semantics ();
-  handle_profiles_enforced_option ();
+  handle_profiles_enforce_option ();
 
   sanitize_cpp_opts ();
 
@@ -1689,8 +1689,8 @@ handle_contract_group_semantics (void)
    consumer, only linked into the C++ front end).  */
 vec<profiles_enforced_entry> profiles_enforced_table;
 
-/* Split every deferred -fprofiles-enforced=name[,name...] occurrence
-   (see this file's own OPT_fprofiles_enforced_ case, above) on commas,
+/* Split every deferred -fprofiles-enforce=name[,name...] occurrence
+   (see this file's own OPT_fprofiles_enforce_ case, above) on commas,
    appending one profiles_enforced_entry per name to profiles_enforced_
    table, in command-line order.  Unlike handle_contract_group_
    semantics, this file does not (and cannot -- profiles_lookup is
@@ -1702,12 +1702,12 @@ vec<profiles_enforced_entry> profiles_enforced_table;
    rejected here, though, since that's a syntax problem this file can
    already see without consulting the registry.  */
 static void
-handle_profiles_enforced_option (void)
+handle_profiles_enforce_option (void)
 {
   for (unsigned i = 0; i < deferred_count; i++)
     {
       struct deferred_opt *opt = &deferred_opts[i];
-      if (opt->code != OPT_fprofiles_enforced_)
+      if (opt->code != OPT_fprofiles_enforce_)
 	continue;
 
       const char *arg = opt->arg;
@@ -1718,7 +1718,7 @@ handle_profiles_enforced_option (void)
 	  size_t len = comma ? (size_t) (comma - p) : strlen (p);
 	  if (len == 0)
 	    {
-	      error ("empty profile name in %<-fprofiles-enforced=%s%>", arg);
+	      error ("empty profile name in %<-fprofiles-enforce=%s%>", arg);
 	      break;
 	    }
 	  profiles_enforced_entry entry = { xstrndup (p, len) };
