@@ -2047,6 +2047,40 @@ fprofiles-enforce=
 C++ ObjC++ Joined RejectNegative
 -fprofiles-enforce=<profile>[,<profile>...]	Enforce the P3589 Profiles framework's named profile(s) (e.g. std::init, std::invalidation) for the whole translation unit, as if by a leading [[profiles::enforce]].
 
+; The -fprofiles-enforce= sibling promised by that flag's own comment
+; above: enables PROFILE[,PROFILE...] non-intrusively, same as
+; -fprofiles-enforce=, but with every violation reported as a warning
+; (via the two -Wprofiles-* flags just below) rather than a hard
+; error. Deferred and parsed the same way, in c-opts.cc's handle_
+; profiles_warning_option; see cp/profiles.cc's own profiles_process_
+; command_line_warning for how precedence against an in-source
+; [[profiles::enforce(PROFILE)]] or -fprofiles-enforce=PROFILE for the
+; SAME profile is resolved (that always wins as an error -- this flag
+; can only ever weaken, never override, an explicit enforce request).
+fprofiles-warning=
+C++ ObjC++ Joined RejectNegative
+-fprofiles-warning=<profile>[,<profile>...]	Enable the P3589 Profiles framework's named profile(s) (e.g. std::init, std::invalidation) for the whole translation unit with violations reported as warnings rather than errors, unless overridden by a stronger enforce request (a leading [[profiles::enforce]] or -fprofiles-enforce=) for the same profile.
+
+; One per profiles_registry entry (cp/profiles.cc): the actual -W flag
+; each violation is emitted through once -fprofiles-warning= puts that
+; profile in warning mode, letting the user individually silence
+; (-Wno-profiles-init) or promote to an error (-Werror=profiles-init,
+; or a plain, global -Werror, which promotes any warning regardless of
+; its own option) each profile's own warnings independently. Neither
+; flag's own on/off state is read directly anywhere in this project's
+; code -- registering them is what gives profiles_diagnostic_at
+; (profiles.cc) a real option to classify/label/promote through;
+; whether a profile's checks run AT ALL is decided entirely by
+; -fprofiles-warning=/-fprofiles-enforce=/the in-source attribute, not
+; by these flags' own state.
+Wprofiles-init
+C++ ObjC++ Var(warn_profiles_init) Init(1) Warning
+Warn about std::init profile violations, instead of a hard error, when the profile is active via -fprofiles-warning=std::init.
+
+Wprofiles-invalidation
+C++ ObjC++ Var(warn_profiles_invalidation) Init(1) Warning
+Warn about std::invalidation profile violations, instead of a hard error, when the profile is active via -fprofiles-warning=std::invalidation.
+
 fcontract-checks-outlined
 C++ ObjC++ Var(flag_contract_checks_outlined) Init(0)
 -fcontract-checks-outlined	Build contract checks using outlined functions.

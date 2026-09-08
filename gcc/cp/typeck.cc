@@ -3526,10 +3526,11 @@ finish_class_member_access_expr (cp_expr object, tree name, bool template_p,
      synthesized ".begin()"/".end()") never produce.  */
   if (TREE_CODE (name) == BIT_NOT_EXPR
       && (complain & tf_error)
-      && profiles_enforced_p ("std::invalidation")
+      && profiles_active_p ("std::invalidation")
       && !profiles_header_exempt_p (input_location, "std::invalidation"))
-    error_at (input_location, "explicit destructor call not permitted "
-	      "under the %<std::invalidation%> profile");
+    profiles_diagnostic_at (input_location, "std::invalidation",
+			     "explicit destructor call not permitted "
+			     "under the %<std::invalidation%> profile");
 
   /* If OBJECT is an ObjC class instance, we must obey ObjC access rules.  */
   if (!objc_is_public (object, name))
@@ -9681,10 +9682,12 @@ build_reinterpret_cast (location_t loc, tree type, tree expr,
      skipped in the processing_template_decl branch below).  */
   if (TYPE_PTR_P (type)
       && (complain & tf_error)
-      && profiles_enforced_p ("std::invalidation")
+      && profiles_active_p ("std::invalidation")
       && !profiles_header_exempt_p (loc, "std::invalidation"))
-    error_at (loc, "%<reinterpret_cast%> to pointer type not permitted "
-	      "under the %<std::invalidation%> profile");
+    profiles_diagnostic_at (loc, "std::invalidation",
+			     "%<reinterpret_cast%> to pointer type not "
+			     "permitted under the %<std::invalidation%> "
+			     "profile");
 
   if (processing_template_decl)
     {

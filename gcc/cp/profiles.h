@@ -38,9 +38,51 @@ extern void profiles_note_nonempty_declaration (void);
    still falls back to the same generic warning as before.  */
 extern void cp_finish_empty_declaration (location_t, tree);
 
-/* True if the named profile (e.g. "std::init") is enforced for this
-   translation unit.  */
+/* True if the named profile (e.g. "std::init") is enforced -- active,
+   with violations reported as hard errors -- for this translation
+   unit.  Covers both an in-source [[profiles::enforce(name)]] and
+   -fprofiles-enforce=name; unchanged in meaning from before -fprofiles-
+   warning= existed, and every existing call site that already meant
+   "is this a hard error" needs no changes.  */
 extern bool profiles_enforced_p (const char *);
+
+/* True if the named profile is active for this translation unit with
+   violations reported as WARNINGS -- i.e. named by -fprofiles-warning=
+   and NOT also enforced (an explicit enforce request, from either
+   source, always wins over a mere warning request; resolved live here
+   rather than by eagerly clearing bits when they're set, so this is
+   correct regardless of the order -fprofiles-enforce=/-fprofiles-
+   warning=/an in-source [[profiles::enforce]] are processed in).  */
+extern bool profiles_warned_p (const char *);
+
+/* True if the named profile should be CHECKED AT ALL for this
+   translation unit, at either severity -- profiles_enforced_p (name)
+   || profiles_warned_p (name).  Every existing call site that used
+   profiles_enforced_p purely to decide "should this check run" (the
+   overwhelming majority, before -fprofiles-warning= existed, since
+   there was only one severity) needs to use this instead; only a site
+   that specifically needs to know whether a violation is an error
+   should still call profiles_enforced_p directly -- in practice, that
+   is now profiles_diagnostic_at's own job, not any individual call
+   site's.  */
+extern bool profiles_active_p (const char *);
+
+/* Report a profile violation, replacing a bare error_at(...) call at
+   every one of this project's own diagnostic sites: emits GMSGID (a
+   printf/GCC-diagnostic-style format string, exactly as error_at/
+   warning_at accept) as a hard error if PROFILE is enforced for this
+   translation unit, or as a real, individually-addressable warning
+   (through that profile's own -Wprofiles-* flag, profiles_registry,
+   profiles.cc) if PROFILE is merely warned. Callers keep their own
+   existing activation/exemption gating (profiles_active_p, !profiles_
+   header_exempt_p/!profiles_diagnostic_exempt_p, and -- where
+   applicable -- (complain & tf_error)) exactly as before; this
+   function only decides severity and emits, mirroring gcc/c/
+   c-typeck.cc's own error_init, built the same way on emit_diagnostic_
+   valist.  */
+extern bool profiles_diagnostic_at (location_t, const char *,
+				     const char *, ...)
+  ATTRIBUTE_GCC_DIAG (3, 4);
 
 /* Register the profile-checking GIMPLE passes (currently just the
    P4222 Initialization profile's) -- called once, early, the same way
@@ -62,6 +104,15 @@ extern void init_profiles (void);
    source.  Called once, from cxx_init_decl_processing (decl.cc)
    right after init_profiles, before any parsing begins.  */
 extern void profiles_process_command_line_enforcement (void);
+
+/* Apply every -fprofiles-warning=name[,name...] occurrence
+   (c-family/c-opts.cc's own deferred profiles_warned_table) to
+   profiles_warned_mask -- the -fprofiles-warning= sibling of
+   profiles_process_command_line_enforcement just above, called
+   immediately after it from the same place (cxx_init_decl_processing,
+   decl.cc), for the same "must be active from the TU's very first
+   declaration onward" reason.  */
+extern void profiles_process_command_line_warning (void);
 
 /* Run both profile-checking GIMPLE passes on FNDECL's body right now,
    eagerly, rather than waiting for the normal end-of-compilation

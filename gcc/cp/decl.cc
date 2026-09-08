@@ -5906,6 +5906,7 @@ cxx_init_decl_processing (void)
 
   init_profiles ();
   profiles_process_command_line_enforcement ();
+  profiles_process_command_line_warning ();
 
   if (modules_p ())
     init_modules (parse_in);
@@ -9720,14 +9721,15 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
      remaining aggregate/constructor slice), not silently folded in
      here.  */
   if (VAR_P (decl) && !init && ip_scalar_or_scalar_array_p (type)
-      && profiles_enforced_p ("std::init")
+      && profiles_active_p ("std::init")
       && at_function_scope_p ()
       && !TREE_STATIC (decl) && !DECL_EXTERNAL (decl)
       && !lookup_attribute ("uninit", DECL_ATTRIBUTES (decl))
       && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (decl), "std::init"))
-    error_at (DECL_SOURCE_LOCATION (decl),
-	      "local variable %qD not initialized and not marked "
-	      "%<[[uninit]]%> under the %<std::init%> profile", decl);
+    profiles_diagnostic_at (DECL_SOURCE_LOCATION (decl), "std::init",
+			     "local variable %qD not initialized and not "
+			     "marked %<[[uninit]]%> under the %<std::init%> "
+			     "profile", decl);
 
   /* P4222 Initialization profile: the opposite contradiction -- a
      declaration marked [[uninit]] ("no promise is made about this
@@ -9743,11 +9745,12 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
      type, or whether it's a local or a member.  */
   if ((VAR_P (decl) || TREE_CODE (decl) == FIELD_DECL) && init
       && lookup_attribute ("uninit", DECL_ATTRIBUTES (decl))
-      && profiles_enforced_p ("std::init")
+      && profiles_active_p ("std::init")
       && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (decl), "std::init"))
-    error_at (DECL_SOURCE_LOCATION (decl),
-	      "%qD is marked %<[[uninit]]%> but also has an initializer, "
-	      "under the %<std::init%> profile", decl);
+    profiles_diagnostic_at (DECL_SOURCE_LOCATION (decl), "std::init",
+			     "%qD is marked %<[[uninit]]%> but also has an "
+			     "initializer, under the %<std::init%> profile",
+			     decl);
 
   /* P4222 Initialization profile, Phase 3: a local pointer declaration
      initialized directly from another local's address (the paper's
@@ -9762,7 +9765,7 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
      profile-gimple.cc), where indirection has already been resolved.  */
   if (VAR_P (decl) && init && TREE_TYPE (decl) != error_mark_node
       && TREE_CODE (TREE_TYPE (decl)) == POINTER_TYPE
-      && profiles_enforced_p ("std::init")
+      && profiles_active_p ("std::init")
       && at_function_scope_p ())
     {
       tree e = init;
@@ -9777,15 +9780,16 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
 	    = lookup_attribute ("uninit", DECL_ATTRIBUTES (pointee)) != NULL_TREE;
 	  bool decl_flavor = profiles_uninit_pointee_p (decl);
 	  if (decl_flavor && !pointee_uninit)
-	    error_at (DECL_SOURCE_LOCATION (decl),
-		      "%qD is marked %<[[ref_to_uninit]]%> but %qD is not "
-		      "marked %<[[uninit]]%>, under the %<std::init%> "
-		      "profile", decl, pointee);
+	    profiles_diagnostic_at (DECL_SOURCE_LOCATION (decl), "std::init",
+				     "%qD is marked %<[[ref_to_uninit]]%> but "
+				     "%qD is not marked %<[[uninit]]%>, under "
+				     "the %<std::init%> profile", decl, pointee);
 	  else if (!decl_flavor && pointee_uninit)
-	    error_at (DECL_SOURCE_LOCATION (decl),
-		      "%qD points to %qD, which is marked %<[[uninit]]%>, "
-		      "but %qD is not marked %<[[ref_to_uninit]]%>, under "
-		      "the %<std::init%> profile", decl, pointee, decl);
+	    profiles_diagnostic_at (DECL_SOURCE_LOCATION (decl), "std::init",
+				     "%qD points to %qD, which is marked "
+				     "%<[[uninit]]%>, but %qD is not marked "
+				     "%<[[ref_to_uninit]]%>, under the "
+				     "%<std::init%> profile", decl, pointee, decl);
 	}
     }
 
@@ -18458,10 +18462,11 @@ grok_op_properties (tree decl, bool complain)
 	 global operator new/delete (cxx_init_decl_processing's
 	 push_cp_library_fn) is built directly via build_cp_library_fn/
 	 pushdecl, never through here.  */
-      if (profiles_enforced_p ("std::invalidation")
+      if (profiles_active_p ("std::invalidation")
 	  && !profiles_header_exempt_p (loc, "std::invalidation"))
-	error_at (loc, "user-defined %qD not permitted under the "
-		  "%<std::invalidation%> profile", decl);
+	profiles_diagnostic_at (loc, "std::invalidation",
+				 "user-defined %qD not permitted under the "
+				 "%<std::invalidation%> profile", decl);
 
       /* operator new and operator delete are quite special.  */
       if (class_type)

@@ -1244,7 +1244,7 @@ perform_member_init (tree member, tree init, hash_set<tree> &uninitialized)
     }
 
   if (member_initialized_p
-      && (warn_uninitialized || profiles_enforced_p ("std::init")))
+      && (warn_uninitialized || profiles_active_p ("std::init")))
     /* This member is now initialized, remove it from the uninitialized
        set.  */
     uninitialized.remove (member);
@@ -1565,16 +1565,17 @@ emit_mem_initializers (tree mem_inits)
   hash_set<tree> uninitialized;
 
   /* Initially that is all of them.  P4222 Initialization profile,
-     Phase 4b (S5.1): also populated under profiles_enforced_p
+     Phase 4b (S5.1): also populated under profiles_active_p
      ("std::init") -- this project's own reuse of -Wuninitialized's
      existing "which fields did this constructor actually cover"
      tracking (rather than duplicating it) for a stricter, unconditional
      check further down, once every mem-initializer has been processed:
      every member not marked [[uninit]]/[[ref_to_uninit]] must be
      initialized by every constructor (P4222's own guarantee, not just
-     a warning).  */
+     a warning -- though, per -fprofiles-warning=, "guarantee" may
+     itself now mean a warning rather than a hard error).  */
   bool track_uninit_members
-    = warn_uninitialized || profiles_enforced_p ("std::init");
+    = warn_uninitialized || profiles_active_p ("std::init");
   if (track_uninit_members)
     for (tree f = next_aggregate_field (TYPE_FIELDS (current_class_type));
 	 f != NULL_TREE;
@@ -1696,7 +1697,7 @@ emit_mem_initializers (tree mem_inits)
      member is permitted to be initialized later, e.g. in the
      constructor body, not yet verified by this increment: see the
      profiles plan's own Phase 4 notes), but a hard error otherwise.  */
-  if (profiles_enforced_p ("std::init"))
+  if (profiles_active_p ("std::init"))
     for (tree f = next_aggregate_field (TYPE_FIELDS (current_class_type));
 	 f != NULL_TREE;
 	 f = next_aggregate_field (DECL_CHAIN (f)))
@@ -1705,10 +1706,11 @@ emit_mem_initializers (tree mem_inits)
 	  && !profiles_uninit_pointee_p (f)
 	  && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (current_function_decl),
 					"std::init"))
-	error_at (DECL_SOURCE_LOCATION (current_function_decl),
-		  "constructor does not initialize member %qD, which is "
-		  "not marked %<[[uninit]]%>, under the %<std::init%> "
-		  "profile", f);
+	profiles_diagnostic_at (DECL_SOURCE_LOCATION (current_function_decl),
+				 "std::init",
+				 "constructor does not initialize member "
+				 "%qD, which is not marked %<[[uninit]]%>, "
+				 "under the %<std::init%> profile", f);
 }
 
 /* Returns the address of the vtable (i.e., the value that should be
@@ -3580,10 +3582,11 @@ build_new_1 (vec<tree, va_gc> **placement, tree type, tree nelts,
      profile's checker does not (yet) attempt to prove safe.  */
   if (placement_allocation_fn_p
       && (complain & tf_error)
-      && profiles_enforced_p ("std::invalidation")
+      && profiles_active_p ("std::invalidation")
       && !profiles_header_exempt_p (input_location, "std::invalidation"))
-    error_at (input_location, "placement %<new%> not permitted under the "
-	      "%<std::invalidation%> profile");
+    profiles_diagnostic_at (input_location, "std::invalidation",
+			     "placement %<new%> not permitted under the "
+			     "%<std::invalidation%> profile");
 
   if (complain & tf_warning_or_error
       && warn_aligned_new

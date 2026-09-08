@@ -1630,11 +1630,12 @@ finish_return_stmt (tree expr)
      a container built from one is NOT set here (dangling is false for
      those) and remains invalidation-profile-gimple.cc's own job.  */
   if (dangling && !processing_template_decl
-      && profiles_enforced_p ("std::invalidation")
+      && profiles_active_p ("std::invalidation")
       && !profiles_header_exempt_p (input_location, "std::invalidation"))
-    error_at (input_location, "returning a pointer or reference to a "
-	      "local, not permitted under the %<std::invalidation%> "
-	      "profile");
+    profiles_diagnostic_at (input_location, "std::invalidation",
+			     "returning a pointer or reference to a "
+			     "local, not permitted under the "
+			     "%<std::invalidation%> profile");
 
   if (no_warning)
     suppress_warning (r, OPT_Wreturn_type);
