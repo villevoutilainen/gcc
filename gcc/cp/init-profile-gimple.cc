@@ -213,7 +213,7 @@ struct ip_addr_taken_scan
   tree var;
   auto_vec<gimple *> init_stmts;
   auto_vec<gimple *> read_stmts;
-  auto_vec<location_t> other_addr_of_locs;
+  auto_vec<gimple *> other_addr_of_stmts;
   bool member_access;
   location_t member_access_loc;
 };
@@ -227,22 +227,18 @@ struct ip_addr_taken_scan
    occurrence found wins, matching this file's general practice of
    reporting the earliest problem rather than the last one seen.  */
 
-/* Record every unverifiable occurrence for a scan's location vector --
-   shared by ip_addr_taken_scan/ip_local_member_scan/ip_member_scan's
-   own "escape" vectors below, unlike ip_record_first_loc just below
-   (which is still used for cases where only a single representative
-   occurrence is ever reported, e.g. ip_addr_taken_scan's own
-   member_access).  Each occurrence recorded here gets its own,
-   independent diagnostic -- a variable can be escaped unverifiably
-   more than once in the same function, and each is its own separate,
-   independently annotatable/suppressible problem, not a repeat of the
-   same one.  */
-
-static inline void
-ip_record_loc (vec<location_t> *locs, location_t stmt_loc)
-{
-  locs->safe_push (stmt_loc);
-}
+/* Unlike ip_record_first_loc just below (still used for cases where
+   only a single representative occurrence is ever reported, e.g.
+   ip_addr_taken_scan's own member_access), every unverifiable
+   occurrence recorded into ip_addr_taken_scan/ip_local_member_scan/
+   ip_member_scan's own "escape" vectors is simply pushed as-is (plain
+   vec::safe_push, no helper needed) -- each occurrence gets its own,
+   independent diagnostic UNLESS it turns out to be dominated by an
+   initializing event for the same variable (see ip_check_address_
+   taken_var's own reach-info check below): a variable can be escaped
+   unverifiably more than once in the same function, and each is its
+   own separate, independently annotatable/suppressible/curable
+   problem, not a repeat of the same one.  */
 
 static inline void
 ip_record_first_loc (bool *flag, location_t *loc, location_t stmt_loc)
@@ -474,7 +470,7 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	      tree lhs_var = ip_underlying_var (lhs);
 	      if (!(lhs_var && TREE_CODE (TREE_TYPE (lhs_var)) == POINTER_TYPE
 		    && profiles_uninit_pointee_p (lhs_var)))
-		ip_record_loc (&s->other_addr_of_locs, gimple_location (stmt));
+		s->other_addr_of_stmts.safe_push (stmt);
 	    }
 	}
       if (lhs == var && !ip_stmt_is_deferred_init_copy_p (stmt))
@@ -550,7 +546,7 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 		   parameter's flavor; nothing more to do.  */
 		;
 	      else
-		ip_record_loc (&s->other_addr_of_locs, gimple_location (stmt));
+		s->other_addr_of_stmts.safe_push (stmt);
 	    }
 	}
       tree call_lhs = gimple_call_lhs (stmt);
@@ -584,7 +580,7 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	s->read_stmts.safe_push (stmt);
       else if (val && TREE_CODE (val) == ADDR_EXPR
 	       && TREE_OPERAND (val, 0) == var)
-	ip_record_loc (&s->other_addr_of_locs, gimple_location (stmt));
+	s->other_addr_of_stmts.safe_push (stmt);
     }
 }
 
@@ -719,7 +715,7 @@ struct ip_local_member_scan
   tree field;
   auto_vec<gimple *> init_stmts;
   auto_vec<gimple *> read_stmts;
-  auto_vec<location_t> other_escape_locs;
+  auto_vec<gimple *> other_escape_stmts;
 };
 
 /* True if T is exactly 'var.field' -- a COMPONENT_REF selecting FIELD
@@ -742,11 +738,11 @@ ip_component_ref_of_var_field_p (tree t, tree var, tree field)
 
 static void
 ip_scan_local_member_addr_uses (tree lhs_ssa, ip_local_member_scan *s,
-				 location_t loc)
+				 gimple *stmt)
 {
   if (TREE_CODE (lhs_ssa) != SSA_NAME)
     {
-      ip_record_loc (&s->other_escape_locs, loc);
+      s->other_escape_stmts.safe_push (stmt);
       return;
     }
 
@@ -785,7 +781,7 @@ ip_scan_local_member_addr_uses (tree lhs_ssa, ip_local_member_scan *s,
 	ok = false;
     }
   if (!ok || !any_use)
-    ip_record_loc (&s->other_escape_locs, loc);
+    s->other_escape_stmts.safe_push (stmt);
 }
 
 /* The local-aggregate-member counterpart of ip_scan_stmt_for_member
@@ -813,7 +809,7 @@ ip_scan_stmt_for_local_member (gimple *stmt, ip_local_member_scan *s)
 	  else if (TREE_CODE (r) == ADDR_EXPR
 		   && ip_component_ref_of_var_field_p (TREE_OPERAND (r, 0),
 							var, field))
-	    ip_scan_local_member_addr_uses (lhs, s, gimple_location (stmt));
+	    ip_scan_local_member_addr_uses (lhs, s, stmt);
 	}
       if (ip_component_ref_of_var_field_p (lhs, var, field)
 	  && !ip_stmt_is_deferred_init_copy_p (stmt))
@@ -848,7 +844,7 @@ ip_scan_stmt_for_local_member (gimple *stmt, ip_local_member_scan *s)
 			    callee, i + 1, /*must_init_only=*/false))
 		;
 	      else
-		ip_record_loc (&s->other_escape_locs, gimple_location (stmt));
+		s->other_escape_stmts.safe_push (stmt);
 	    }
 	}
       tree call_lhs = gimple_call_lhs (stmt);
@@ -865,7 +861,7 @@ ip_scan_stmt_for_local_member (gimple *stmt, ip_local_member_scan *s)
       else if (val && TREE_CODE (val) == ADDR_EXPR
 	       && ip_component_ref_of_var_field_p (TREE_OPERAND (val, 0), var,
 						    field))
-	ip_record_loc (&s->other_escape_locs, gimple_location (stmt));
+	s->other_escape_stmts.safe_push (stmt);
     }
 }
 
@@ -907,45 +903,45 @@ ip_check_local_aggregate_member (function *fun, tree var, tree field,
 	 gsi_next (&gsi))
       ip_scan_stmt_for_local_member (gsi_stmt (gsi), &scan);
 
-  if (!scan.other_escape_locs.is_empty ())
+  /* OUTER_INIT_STMTS folded in before computing reach info, so a
+     whole-object init event cures an unverifiable FIELD escape the
+     same way it already cures a FIELD read (see this function's own
+     top comment) -- [[uninit]] is not permanent for a field either.  */
+  for (gimple *init_stmt : outer_init_stmts)
+    scan.init_stmts.safe_push (init_stmt);
+
+  ip_reach_info info;
+  ip_compute_reach_info (fun, scan.init_stmts, &info);
+
+  if (!scan.other_escape_stmts.is_empty ())
     {
-      /* Anchored at each escape site, not at VAR's own declaration --
-	 see ip_check_address_taken_var's own identical, more detailed
-	 comment on this exact point (same rationale applies here,
-	 including reporting every occurrence, not just the first).  */
-      for (location_t loc : scan.other_escape_locs)
-	if (!profiles_diagnostic_exempt_p (loc, fun->decl, "std::init"))
-	  {
-	    profiles_diagnostic_at (loc, "std::init",
-		      "address of %<[[uninit]]%> member %qD of %qD is "
-		      "taken here without a %<[[must_init]]%> call to "
-		      "prove it initialized, under the %<std::init%> "
-		      "profile", field, var);
-	    inform (DECL_SOURCE_LOCATION (var),
-		    "%qD is declared %<[[uninit]]%> here", var);
-	  }
-      return;
+      /* Anchored at each surviving escape site, not at VAR's own
+	 declaration -- see ip_check_address_taken_var's own identical,
+	 more detailed comment on this exact point (same rationale
+	 applies here, including reporting every occurrence, not just
+	 the first, and curing an occurrence dominated by an
+	 initializing event rather than diagnosing it).  */
+      for (gimple *escape_stmt : scan.other_escape_stmts)
+	{
+	  if (ip_read_dominated_by_init_p (escape_stmt, scan.init_stmts,
+					   info))
+	    continue;
+	  location_t loc = gimple_location (escape_stmt);
+	  if (!profiles_diagnostic_exempt_p (loc, fun->decl, "std::init"))
+	    {
+	      profiles_diagnostic_at (loc, "std::init",
+			"address of %<[[uninit]]%> member %qD of %qD is "
+			"taken here without a %<[[must_init]]%> call to "
+			"prove it initialized, under the %<std::init%> "
+			"profile", field, var);
+	      inform (DECL_SOURCE_LOCATION (var),
+		      "%qD is declared %<[[uninit]]%> here", var);
+	    }
+	}
     }
 
   if (scan.read_stmts.is_empty ())
     return;
-
-  for (gimple *init_stmt : outer_init_stmts)
-    scan.init_stmts.safe_push (init_stmt);
-
-  if (scan.init_stmts.is_empty ())
-    {
-      for (gimple *read_stmt : scan.read_stmts)
-	if (!profiles_diagnostic_exempt_p (gimple_location (read_stmt),
-					   fun->decl, "std::init"))
-	  profiles_diagnostic_at (gimple_location (read_stmt), "std::init",
-		    "member %qD of %qD read before it is definitely "
-		    "assigned, under the %<std::init%> profile", field, var);
-      return;
-    }
-
-  ip_reach_info info;
-  ip_compute_reach_info (fun, scan.init_stmts, &info);
 
   for (gimple *read_stmt : scan.read_stmts)
     if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts, info)
@@ -989,32 +985,50 @@ ip_check_address_taken_var (function *fun, tree var)
 	 gsi_next (&gsi))
       ip_scan_stmt_for_var (gsi_stmt (gsi), &scan);
 
-  if (!scan.other_addr_of_locs.is_empty ())
+  /* Computed unconditionally, up front, so both the escape check just
+     below and the read check further down can share it: [[uninit]]
+     is not a permanent property of VAR's declaration -- a write
+     (IE-1), a call passing &VAR to a [[must_init]] parameter (IE-2),
+     a write through a provably-traced pointer (IE-3), or construct_at
+     (IE-4) all cure it, for an address-escape occurrence exactly the
+     same way they already do for a read.  */
+  ip_reach_info info;
+  ip_compute_reach_info (fun, scan.init_stmts, &info);
+
+  if (!scan.other_addr_of_stmts.is_empty ())
     {
-      /* Anchored at each escape site itself (where the address is
-	 actually taken), not at VAR's own declaration: this is what
-	 every other diagnostic in this checker already does (e.g. the
-	 "read before it is definitely assigned" case just below), and
-	 anchoring here specifically matters for [[profiles::suppress]]
-	 -- its dominion is the statement/declaration it appertains to,
-	 so a suppress attribute placed on the actual offending
-	 statement could never reach a diagnostic anchored elsewhere,
-	 confirmed as a real, reported limitation of the old anchor
-	 point.  VAR's own declaration is still surfaced, via the note
-	 below, for context.  Every occurrence is its own independent
-	 diagnostic, not just the first one found -- VAR can be escaped
-	 unverifiably more than once in the same function.  */
-      for (location_t loc : scan.other_addr_of_locs)
-	if (!profiles_diagnostic_exempt_p (loc, fun->decl, "std::init"))
-	  {
-	    profiles_diagnostic_at (loc, "std::init",
-		      "address of %<[[uninit]]%> variable %qD is taken "
-		      "here without a %<[[must_init]]%> call to prove it "
-		      "initialized, under the %<std::init%> profile", var);
-	    inform (DECL_SOURCE_LOCATION (var),
-		    "%qD is declared %<[[uninit]]%> here", var);
-	  }
-      return;
+      /* Anchored at each surviving escape site itself (where the
+	 address is actually taken), not at VAR's own declaration: this
+	 is what every other diagnostic in this checker already does
+	 (e.g. the "read before it is definitely assigned" case just
+	 below), and anchoring here specifically matters for
+	 [[profiles::suppress]] -- its dominion is the statement/
+	 declaration it appertains to, so a suppress attribute placed on
+	 the actual offending statement could never reach a diagnostic
+	 anchored elsewhere, confirmed as a real, reported limitation of
+	 the old anchor point.  VAR's own declaration is still surfaced,
+	 via the note below, for context.  Every non-cured occurrence is
+	 its own independent diagnostic, not just the first one found --
+	 VAR can be escaped unverifiably more than once in the same
+	 function.  An occurrence dominated by an initializing event is
+	 silently skipped, not diagnosed -- cured, same as a read past
+	 that point would be.  */
+      for (gimple *escape_stmt : scan.other_addr_of_stmts)
+	{
+	  if (ip_read_dominated_by_init_p (escape_stmt, scan.init_stmts,
+					   info))
+	    continue;
+	  location_t loc = gimple_location (escape_stmt);
+	  if (!profiles_diagnostic_exempt_p (loc, fun->decl, "std::init"))
+	    {
+	      profiles_diagnostic_at (loc, "std::init",
+			"address of %<[[uninit]]%> variable %qD is taken "
+			"here without a %<[[must_init]]%> call to prove it "
+			"initialized, under the %<std::init%> profile", var);
+	      inform (DECL_SOURCE_LOCATION (var),
+		      "%qD is declared %<[[uninit]]%> here", var);
+	    }
+	}
     }
 
   /* P4222 Phase 4e (S5.4): VAR can now be a non-union class-type
@@ -1055,20 +1069,9 @@ ip_check_address_taken_var (function *fun, tree var)
       return;
     }
 
-  if (scan.init_stmts.is_empty ())
-    {
-      for (gimple *read_stmt : scan.read_stmts)
-	if (!profiles_diagnostic_exempt_p (gimple_location (read_stmt),
-					   fun->decl, "std::init"))
-	  profiles_diagnostic_at (gimple_location (read_stmt), "std::init",
-		    "%qD read before it is definitely assigned, under the "
-		    "%<std::init%> profile", var);
-      return;
-    }
-
-  ip_reach_info info;
-  ip_compute_reach_info (fun, scan.init_stmts, &info);
-
+  /* INFO was already computed above, shared with the escape check --
+     valid even when scan.init_stmts is empty (everything simply comes
+     back "not dominated," same as the old dedicated fast path).  */
   for (gimple *read_stmt : scan.read_stmts)
     if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts, info)
 	&& !profiles_diagnostic_exempt_p (gimple_location (read_stmt),
@@ -1095,7 +1098,7 @@ struct ip_member_scan
   tree field;
   auto_vec<gimple *> init_stmts;
   auto_vec<gimple *> read_stmts;
-  auto_vec<location_t> other_escape_locs;
+  auto_vec<gimple *> other_escape_stmts;
 };
 
 /* True if T is exactly 'this->FIELD' (or an SSA-copy-of-THIS_PARM's
@@ -1133,11 +1136,11 @@ ip_component_ref_of_this_field_p (tree t, tree this_parm, tree field)
    once, or used anywhere else at all, can't be vouched for.  */
 
 static void
-ip_scan_member_addr_uses (tree lhs_ssa, ip_member_scan *s, location_t loc)
+ip_scan_member_addr_uses (tree lhs_ssa, ip_member_scan *s, gimple *stmt)
 {
   if (TREE_CODE (lhs_ssa) != SSA_NAME)
     {
-      ip_record_loc (&s->other_escape_locs, loc);
+      s->other_escape_stmts.safe_push (stmt);
       return;
     }
 
@@ -1177,7 +1180,7 @@ ip_scan_member_addr_uses (tree lhs_ssa, ip_member_scan *s, location_t loc)
 	ok = false;
     }
   if (!ok || !any_use)
-    ip_record_loc (&s->other_escape_locs, loc);
+    s->other_escape_stmts.safe_push (stmt);
 }
 
 /* The member-access counterpart of ip_scan_stmt_for_var -- same
@@ -1206,7 +1209,7 @@ ip_scan_stmt_for_member (gimple *stmt, ip_member_scan *s)
 	  else if (TREE_CODE (r) == ADDR_EXPR
 		   && ip_component_ref_of_this_field_p (TREE_OPERAND (r, 0),
 							 this_parm, field))
-	    ip_scan_member_addr_uses (lhs, s, gimple_location (stmt));
+	    ip_scan_member_addr_uses (lhs, s, stmt);
 	}
       if (ip_component_ref_of_this_field_p (lhs, this_parm, field)
 	  && !ip_stmt_is_deferred_init_copy_p (stmt))
@@ -1242,7 +1245,7 @@ ip_scan_stmt_for_member (gimple *stmt, ip_member_scan *s)
 			    callee, i + 1, /*must_init_only=*/false))
 		;
 	      else
-		ip_record_loc (&s->other_escape_locs, gimple_location (stmt));
+		s->other_escape_stmts.safe_push (stmt);
 	    }
 	}
       tree call_lhs = gimple_call_lhs (stmt);
@@ -1259,7 +1262,7 @@ ip_scan_stmt_for_member (gimple *stmt, ip_member_scan *s)
       else if (val && TREE_CODE (val) == ADDR_EXPR
 	       && ip_component_ref_of_this_field_p (TREE_OPERAND (val, 0),
 						     this_parm, field))
-	ip_record_loc (&s->other_escape_locs, gimple_location (stmt));
+	s->other_escape_stmts.safe_push (stmt);
     }
 }
 
@@ -1329,30 +1332,39 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
 	 gsi_next (&gsi))
       ip_scan_stmt_for_member (gsi_stmt (gsi), &scan);
 
-  if (!scan.other_escape_locs.is_empty ())
-    {
-      /* Anchored at each escape site, not at the enclosing constructor's
-	 own declaration (which was the previous anchor here -- even
-	 less useful than a sibling variable's own declaration would
-	 have been) -- see ip_check_address_taken_var's own identical,
-	 more detailed comment on this exact point, including reporting
-	 every occurrence, not just the first.  */
-      for (location_t loc : scan.other_escape_locs)
-	if (!profiles_diagnostic_exempt_p (loc, fun->decl, "std::init"))
-	  {
-	    profiles_diagnostic_at (loc, "std::init",
-		      "address of %<[[uninit]]%> member %qD is taken "
-		      "here without a %<[[must_init]]%> call to prove "
-		      "it initialized, under the %<std::init%> profile",
-		      field);
-	    inform (DECL_SOURCE_LOCATION (field),
-		    "%qD is declared %<[[uninit]]%> here", field);
-	  }
-      return;
-    }
-
+  /* Computed up front so the escape check, the read check, and the
+     exit-edge check further down all share it.  */
   ip_reach_info info;
   ip_compute_reach_info (fun, scan.init_stmts, &info);
+
+  if (!scan.other_escape_stmts.is_empty ())
+    {
+      /* Anchored at each surviving escape site, not at the enclosing
+	 constructor's own declaration (which was the previous anchor
+	 here -- even less useful than a sibling variable's own
+	 declaration would have been) -- see ip_check_address_taken_
+	 var's own identical, more detailed comment on this exact
+	 point, including reporting every occurrence, not just the
+	 first, and curing an occurrence dominated by an initializing
+	 event rather than diagnosing it.  */
+      for (gimple *escape_stmt : scan.other_escape_stmts)
+	{
+	  if (ip_read_dominated_by_init_p (escape_stmt, scan.init_stmts,
+					   info))
+	    continue;
+	  location_t loc = gimple_location (escape_stmt);
+	  if (!profiles_diagnostic_exempt_p (loc, fun->decl, "std::init"))
+	    {
+	      profiles_diagnostic_at (loc, "std::init",
+			"address of %<[[uninit]]%> member %qD is taken "
+			"here without a %<[[must_init]]%> call to prove "
+			"it initialized, under the %<std::init%> profile",
+			field);
+	      inform (DECL_SOURCE_LOCATION (field),
+		      "%qD is declared %<[[uninit]]%> here", field);
+	    }
+	}
+    }
 
   for (gimple *read_stmt : scan.read_stmts)
     if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts, info)
@@ -1427,17 +1439,119 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
    uninit's own template, carrying the same attribute, produces
    identical diagnostics through the general path alone).  */
 
-static bool ip_arg_uninit_flavored_p_1 (tree arg, int depth);
+/* [[uninit]] is not a permanent property of a declaration -- a write
+   (IE-1), a call passing &E to a [[must_init]] parameter (IE-2), a
+   write through a provably-traced pointer (IE-3), or construct_at
+   (IE-4) all cure it, for flavor-consistency purposes exactly the same
+   way they already cure a read (ip_check_address_taken_var and
+   friends) or an address-escape occurrence (same functions, extended
+   above).  This cache lets ip_arg_uninit_flavored_p_1's own ADDR_EXPR
+   branch ask "is BASE (or BASE's FIELD) still [[uninit]] AT_STMT" via
+   the same dominance machinery, instead of a bare, position-
+   independent DECL_ATTRIBUTES lookup -- computed lazily, once per
+   (BASE, FIELD) pair actually queried within one function, and reused
+   for the rest of that function's own flavor-consistency pass (built
+   fresh in ip_check_function, since a function's own CFG/statements
+   don't change mid-pass).  A linear scan is deliberately used instead
+   of a hash map: the number of distinct [[uninit]] entities actually
+   queried within one function is always small in practice, and a
+   plain vec of heap-allocated entries avoids any complication from
+   auto_vec-of-auto_vec copy semantics.  */
+
+struct ip_flavor_reach_entry
+{
+  tree base;
+  tree field; /* NULL_TREE for a plain variable, not a member.  */
+  auto_vec<gimple *> init_stmts;
+  ip_reach_info info;
+};
+
+struct ip_flavor_reach_cache
+{
+  auto_vec<ip_flavor_reach_entry *> entries;
+  ~ip_flavor_reach_cache ()
+  {
+    for (ip_flavor_reach_entry *e : entries)
+      delete e;
+  }
+};
+
+static ip_flavor_reach_entry *
+ip_get_flavor_reach_entry (function *fun, ip_flavor_reach_cache *cache,
+			    tree base, tree field)
+{
+  for (ip_flavor_reach_entry *e : cache->entries)
+    if (e->base == base && e->field == field)
+      return e;
+
+  ip_flavor_reach_entry *e = new ip_flavor_reach_entry ();
+  e->base = base;
+  e->field = field;
+
+  basic_block bb;
+  if (field == NULL_TREE)
+    {
+      /* Reuse ip_scan_stmt_for_var purely to collect BASE's own
+	 init_stmts -- the exact same IE-1..4 recognition already used
+	 for BASE's own DAA/address-escape checking, just re-run here
+	 (lazily, once) for flavor-consistency's own benefit.  */
+      ip_addr_taken_scan scan;
+      scan.var = base;
+      scan.member_access = false;
+      scan.member_access_loc = UNKNOWN_LOCATION;
+      FOR_EACH_BB_FN (bb, fun)
+	for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	     gsi_next (&gsi))
+	  ip_scan_stmt_for_var (gsi_stmt (gsi), &scan);
+      for (gimple *stmt : scan.init_stmts)
+	e->init_stmts.safe_push (stmt);
+    }
+  else
+    {
+      ip_local_member_scan scan;
+      scan.var = base;
+      scan.field = field;
+      FOR_EACH_BB_FN (bb, fun)
+	for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	     gsi_next (&gsi))
+	  ip_scan_stmt_for_local_member (gsi_stmt (gsi), &scan);
+      for (gimple *stmt : scan.init_stmts)
+	e->init_stmts.safe_push (stmt);
+    }
+
+  ip_compute_reach_info (fun, e->init_stmts, &e->info);
+  cache->entries.safe_push (e);
+  return e;
+}
+
+/* True if BASE (or BASE's FIELD, when FIELD is not NULL_TREE) is still
+   [[uninit]] AT_STMT -- i.e. AT_STMT is NOT dominated by an
+   initializing event for it.  */
+
+static bool
+ip_currently_uninit_p (function *fun, ip_flavor_reach_cache *cache,
+			gimple *at_stmt, tree base, tree field)
+{
+  ip_flavor_reach_entry *e
+    = ip_get_flavor_reach_entry (fun, cache, base, field);
+  return !ip_read_dominated_by_init_p (at_stmt, e->init_stmts, e->info);
+}
+
+static bool ip_arg_uninit_flavored_p_1 (tree arg, int depth, function *fun,
+					 gimple *at_stmt,
+					 ip_flavor_reach_cache *cache);
 static bool ip_arg_null_pointer_p (tree arg);
 
 static bool
-ip_arg_uninit_flavored_p (tree arg)
+ip_arg_uninit_flavored_p (tree arg, function *fun, gimple *at_stmt,
+			   ip_flavor_reach_cache *cache)
 {
-  return ip_arg_uninit_flavored_p_1 (arg, 0);
+  return ip_arg_uninit_flavored_p_1 (arg, 0, fun, at_stmt, cache);
 }
 
 static bool
-ip_arg_uninit_flavored_p_1 (tree arg, int depth)
+ip_arg_uninit_flavored_p_1 (tree arg, int depth, function *fun,
+			     gimple *at_stmt, ip_flavor_reach_cache *cache)
 {
   if (depth > 16)
     return false; /* Defensive recursion guard; never expected to trigger
@@ -1447,11 +1561,22 @@ ip_arg_uninit_flavored_p_1 (tree arg, int depth)
     {
       tree operand = TREE_OPERAND (arg, 0);
       if (VAR_P (operand))
-	return lookup_attribute ("uninit", DECL_ATTRIBUTES (operand)) != NULL_TREE;
+	return lookup_attribute ("uninit", DECL_ATTRIBUTES (operand)) != NULL_TREE
+	       && ip_currently_uninit_p (fun, cache, at_stmt, operand,
+					 NULL_TREE);
       if (TREE_CODE (operand) == COMPONENT_REF)
 	{
 	  tree field = TREE_OPERAND (operand, 1);
-	  return lookup_attribute ("uninit", DECL_ATTRIBUTES (field)) != NULL_TREE;
+	  if (lookup_attribute ("uninit", DECL_ATTRIBUTES (field)) == NULL_TREE)
+	    return false;
+	  tree base = ip_underlying_var (TREE_OPERAND (operand, 0));
+	  /* BASE unresolved (an expression this pass can't trace to a
+	     concrete local, e.g. through an opaque function call's
+	     result): fall back to the old, conservative "declaration
+	     alone decides" answer -- no dominance info to consult.  */
+	  if (!base)
+	    return true;
+	  return ip_currently_uninit_p (fun, cache, at_stmt, base, field);
 	}
       return false;
     }
@@ -1472,7 +1597,8 @@ ip_arg_uninit_flavored_p_1 (tree arg, int depth)
 	 is no loop this recursion could run around.  */
       gimple *def = SSA_NAME_DEF_STMT (arg);
       if (def && is_gimple_assign (def) && gimple_assign_single_p (def))
-	return ip_arg_uninit_flavored_p_1 (gimple_assign_rhs1 (def), depth + 1);
+	return ip_arg_uninit_flavored_p_1 (gimple_assign_rhs1 (def), depth + 1,
+					    fun, at_stmt, cache);
       /* Or, if ARG's own reaching definition is a GIMPLE_CALL, ARG is
 	 that call's own return value -- flavored exactly when CALLEE's
 	 own return is (P4222 S4.3's "void* [[ref_to_uninit]]
@@ -1524,7 +1650,8 @@ ip_arg_uninit_flavored_p_1 (tree arg, int depth)
 	      tree phi_arg = gimple_phi_arg_def (phi, i);
 	      if (ip_arg_null_pointer_p (phi_arg))
 		continue;
-	      if (!ip_arg_uninit_flavored_p_1 (phi_arg, depth + 1))
+	      if (!ip_arg_uninit_flavored_p_1 (phi_arg, depth + 1, fun, at_stmt,
+						cache))
 		return false;
 	    }
 	  return true;
@@ -1612,7 +1739,8 @@ ip_arg_null_pointer_p (tree arg)
    mismatch, without needing to know the parameter's type at all.  */
 
 static void
-ip_check_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
+ip_check_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl,
+				   function *fun, ip_flavor_reach_cache *cache)
 {
   if (gimple_code (stmt) != GIMPLE_CALL)
     return;
@@ -1638,7 +1766,7 @@ ip_check_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
       bool param_flavor
 	= profiles_uninit_flavor_at_position_p (callee, i + 1,
 						 /*must_init_only=*/false);
-      bool arg_flavor = ip_arg_uninit_flavored_p (arg);
+      bool arg_flavor = ip_arg_uninit_flavored_p (arg, fun, stmt, cache);
 
       if (profiles_diagnostic_exempt_p (gimple_location (stmt),
 					enclosing_fndecl, "std::init"))
@@ -1773,7 +1901,9 @@ ip_resolve_underlying_decl (tree t)
    hatch functions are built from, not a mismatch to flag.  */
 
 static void
-ip_check_return_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
+ip_check_return_flavor_consistency (gimple *stmt, tree enclosing_fndecl,
+				     function *fun,
+				     ip_flavor_reach_cache *cache)
 {
   if (gimple_code (stmt) != GIMPLE_RETURN)
     return;
@@ -1785,7 +1915,7 @@ ip_check_return_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
       && profiles_uninit_pointee_p (retval_decl))
     return;
   bool fn_flavor = profiles_uninit_pointee_p (enclosing_fndecl);
-  bool retval_flavor = ip_arg_uninit_flavored_p (retval);
+  bool retval_flavor = ip_arg_uninit_flavored_p (retval, fun, stmt, cache);
   if (fn_flavor == retval_flavor)
     return;
   if (profiles_diagnostic_exempt_p (gimple_location (stmt),
@@ -1827,7 +1957,9 @@ ip_check_return_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
    flavor to be explicitly declared in the first place.  */
 
 static void
-ip_check_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
+ip_check_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl,
+				     function *fun,
+				     ip_flavor_reach_cache *cache)
 {
   if (!is_gimple_assign (stmt) || !gimple_assign_single_p (stmt))
     return;
@@ -1842,7 +1974,7 @@ ip_check_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
     return;
 
   bool dst_flavor = profiles_uninit_pointee_p (lhs_var);
-  bool src_flavor = ip_arg_uninit_flavored_p (rhs);
+  bool src_flavor = ip_arg_uninit_flavored_p (rhs, fun, stmt, cache);
 
   if (dst_flavor == src_flavor)
     return;
@@ -1864,14 +1996,24 @@ ip_check_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
 static unsigned int
 ip_check_function (function *fun)
 {
+  /* One cache per function, shared across every statement's own
+     flavor-consistency check -- a given [[uninit]] variable/field's
+     own init_stmts/reach info don't change mid-pass, so this is
+     computed at most once per (base, field) pair actually queried,
+     not once per query.  */
+  ip_flavor_reach_cache flavor_cache;
+
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
     for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
 	 gsi_next (&gsi))
       {
-	ip_check_call_flavor_consistency (gsi_stmt (gsi), fun->decl);
-	ip_check_assign_flavor_consistency (gsi_stmt (gsi), fun->decl);
-	ip_check_return_flavor_consistency (gsi_stmt (gsi), fun->decl);
+	ip_check_call_flavor_consistency (gsi_stmt (gsi), fun->decl, fun,
+					   &flavor_cache);
+	ip_check_assign_flavor_consistency (gsi_stmt (gsi), fun->decl, fun,
+					     &flavor_cache);
+	ip_check_return_flavor_consistency (gsi_stmt (gsi), fun->decl, fun,
+					     &flavor_cache);
       }
 
   unsigned i;

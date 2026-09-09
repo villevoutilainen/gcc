@@ -7,7 +7,10 @@
 // anchored there, not at x's own declaration -- see
 // escape_uninit's own doc comment in <utility>): the address-taken
 // check and the separate, unconditional call-argument
-// flavor-consistency check.
+// flavor-consistency check.  write_somehow doesn't initialize x (it's
+// plain, unflavored), so the later read is flagged too: a third,
+// independent diagnostic no longer hidden behind the escape check's
+// own early return.
 // { dg-do compile { target c++11 } }
 
 [[profiles::enforce(std::init)]];
@@ -19,5 +22,5 @@ int use_it ()
   int x [[uninit]];
   write_somehow (x); // { dg-error "is not marked" }
   // { dg-error "call to prove it initialized" "" { target *-*-* } .-1 }
-  return x;
+  return x; // { dg-error "read before it is definitely assigned" }
 }
