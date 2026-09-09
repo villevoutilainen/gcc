@@ -14,8 +14,9 @@
 
 int without_now_init ()
 {
-  int x [[uninit]]; // { dg-error "cannot verify" }
+  int x [[uninit]];
   int *p = &x; // { dg-error "which is marked" }
   // { dg-error "assigning a pointer marked" "" { target *-*-* } .-1 }
+  // { dg-error "cannot be verified" "" { target *-*-* } .-2 }
   return *p;
 }

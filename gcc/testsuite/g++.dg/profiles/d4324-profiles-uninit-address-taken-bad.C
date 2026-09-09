@@ -14,7 +14,8 @@ void take_ptr (int *);
 
 void f ()
 {
-  [[uninit]] int x; // { dg-error "cannot verify" }
+  [[uninit]] int x;
   take_ptr (&x); // { dg-error "refers to \[^\n\]*memory but its parameter" }
+  // { dg-error "cannot be verified" "" { target *-*-* } .-1 }
   x = 5;
 }

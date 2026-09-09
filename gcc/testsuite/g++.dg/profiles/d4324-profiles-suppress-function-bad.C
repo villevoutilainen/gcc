@@ -15,6 +15,7 @@ void write_somehow (int &r);
 
 void f () [[profiles::suppress(std::init)]] // { dg-warning "does not apply to types" }
 {
-  int x [[uninit]]; // { dg-error "its address is taken outside a recognized" }
+  int x [[uninit]];
   write_somehow (x); // { dg-error "is not marked" }
+  // { dg-error "cannot be verified" "" { target *-*-* } .-1 }
 }
