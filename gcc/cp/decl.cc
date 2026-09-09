@@ -9753,45 +9753,20 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
 			     decl);
 
   /* P4222 Initialization profile, Phase 3: a local pointer declaration
-     initialized directly from another local's address (the paper's
-     own primary [[ref_to_uninit]] examples, P4222 S4.3) must have its
-     own [[ref_to_uninit]]/[[must_init]] flavor agree with whether the
-     pointee is [[uninit]] -- in both directions: a flavored pointer
-     may only point to [[uninit]] memory, an unflavored (ordinary,
-     presumed-points-to-initialized) pointer may not.  Scoped to the
-     direct '&var' initializer shape only, matching the paper's own
-     examples; pointer-to-pointer copies and call-site argument
-     matching are checked separately, at the GIMPLE level (init-
-     profile-gimple.cc), where indirection has already been resolved.  */
-  if (VAR_P (decl) && init && TREE_TYPE (decl) != error_mark_node
-      && TREE_CODE (TREE_TYPE (decl)) == POINTER_TYPE
-      && profiles_active_p ("std::init")
-      && at_function_scope_p ())
-    {
-      tree e = init;
-      STRIP_ANY_LOCATION_WRAPPER (e);
-      STRIP_NOPS (e);
-      if (TREE_CODE (e) == ADDR_EXPR && VAR_P (TREE_OPERAND (e, 0))
-	  && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (decl),
-					"std::init"))
-	{
-	  tree pointee = TREE_OPERAND (e, 0);
-	  bool pointee_uninit
-	    = lookup_attribute ("uninit", DECL_ATTRIBUTES (pointee)) != NULL_TREE;
-	  bool decl_flavor = profiles_uninit_pointee_p (decl);
-	  if (decl_flavor && !pointee_uninit)
-	    profiles_diagnostic_at (DECL_SOURCE_LOCATION (decl), "std::init",
-				     "%qD is marked %<[[ref_to_uninit]]%> but "
-				     "%qD is not marked %<[[uninit]]%>, under "
-				     "the %<std::init%> profile", decl, pointee);
-	  else if (!decl_flavor && pointee_uninit)
-	    profiles_diagnostic_at (DECL_SOURCE_LOCATION (decl), "std::init",
-				     "%qD points to %qD, which is marked "
-				     "%<[[uninit]]%>, but %qD is not marked "
-				     "%<[[ref_to_uninit]]%>, under the "
-				     "%<std::init%> profile", decl, pointee, decl);
-	}
-    }
+     initialized directly from another local's address used to be
+     flavor-checked here too (a front-end, parse-time counterpart of
+     ip_check_assign_flavor_consistency, gcc/cp/init-profile-gimple.cc)
+     -- removed once that GIMPLE-level check became DAA-aware ([[uninit]]
+     is not permanent; a write/[[must_init]] call/traced write/
+     construct_at all cure it -- see that file's own comment). Running
+     at parse time, before any CFG exists, this check could never know
+     whether an earlier statement had already cured the pointee, making
+     it both a genuine false positive once cured (confirmed directly:
+     '[[uninit]] int x; x = 5; int* p = &x;' was wrongly flagged) and
+     redundant with the GIMPLE-level check for every genuine violation
+     (confirmed directly: an uncured mismatch produced two diagnostics,
+     both anchored at the exact same location, before this was removed).
+     The GIMPLE-level check alone now covers this shape correctly.  */
 
   if (VAR_P (decl) && is_copy_initialization (init))
     flags |= LOOKUP_ONLYCONVERTING;
