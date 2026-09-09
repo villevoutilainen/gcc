@@ -213,8 +213,7 @@ struct ip_addr_taken_scan
   tree var;
   auto_vec<gimple *> init_stmts;
   auto_vec<gimple *> read_stmts;
-  bool other_addr_of;
-  location_t other_addr_of_loc;
+  auto_vec<location_t> other_addr_of_locs;
   bool member_access;
   location_t member_access_loc;
 };
@@ -227,6 +226,23 @@ struct ip_addr_taken_scan
    not just (as before) the [[uninit]] declaration itself.  First
    occurrence found wins, matching this file's general practice of
    reporting the earliest problem rather than the last one seen.  */
+
+/* Record every unverifiable occurrence for a scan's location vector --
+   shared by ip_addr_taken_scan/ip_local_member_scan/ip_member_scan's
+   own "escape" vectors below, unlike ip_record_first_loc just below
+   (which is still used for cases where only a single representative
+   occurrence is ever reported, e.g. ip_addr_taken_scan's own
+   member_access).  Each occurrence recorded here gets its own,
+   independent diagnostic -- a variable can be escaped unverifiably
+   more than once in the same function, and each is its own separate,
+   independently annotatable/suppressible problem, not a repeat of the
+   same one.  */
+
+static inline void
+ip_record_loc (vec<location_t> *locs, location_t stmt_loc)
+{
+  locs->safe_push (stmt_loc);
+}
 
 static inline void
 ip_record_first_loc (bool *flag, location_t *loc, location_t stmt_loc)
@@ -458,8 +474,7 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	      tree lhs_var = ip_underlying_var (lhs);
 	      if (!(lhs_var && TREE_CODE (TREE_TYPE (lhs_var)) == POINTER_TYPE
 		    && profiles_uninit_pointee_p (lhs_var)))
-		ip_record_first_loc (&s->other_addr_of, &s->other_addr_of_loc,
-				     gimple_location (stmt));
+		ip_record_loc (&s->other_addr_of_locs, gimple_location (stmt));
 	    }
 	}
       if (lhs == var && !ip_stmt_is_deferred_init_copy_p (stmt))
@@ -535,8 +550,7 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 		   parameter's flavor; nothing more to do.  */
 		;
 	      else
-		ip_record_first_loc (&s->other_addr_of, &s->other_addr_of_loc,
-				     gimple_location (stmt));
+		ip_record_loc (&s->other_addr_of_locs, gimple_location (stmt));
 	    }
 	}
       tree call_lhs = gimple_call_lhs (stmt);
@@ -570,8 +584,7 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	s->read_stmts.safe_push (stmt);
       else if (val && TREE_CODE (val) == ADDR_EXPR
 	       && TREE_OPERAND (val, 0) == var)
-	ip_record_first_loc (&s->other_addr_of, &s->other_addr_of_loc,
-			     gimple_location (stmt));
+	ip_record_loc (&s->other_addr_of_locs, gimple_location (stmt));
     }
 }
 
@@ -706,8 +719,7 @@ struct ip_local_member_scan
   tree field;
   auto_vec<gimple *> init_stmts;
   auto_vec<gimple *> read_stmts;
-  bool other_escape;
-  location_t other_escape_loc;
+  auto_vec<location_t> other_escape_locs;
 };
 
 /* True if T is exactly 'var.field' -- a COMPONENT_REF selecting FIELD
@@ -734,7 +746,7 @@ ip_scan_local_member_addr_uses (tree lhs_ssa, ip_local_member_scan *s,
 {
   if (TREE_CODE (lhs_ssa) != SSA_NAME)
     {
-      ip_record_first_loc (&s->other_escape, &s->other_escape_loc, loc);
+      ip_record_loc (&s->other_escape_locs, loc);
       return;
     }
 
@@ -773,7 +785,7 @@ ip_scan_local_member_addr_uses (tree lhs_ssa, ip_local_member_scan *s,
 	ok = false;
     }
   if (!ok || !any_use)
-    ip_record_first_loc (&s->other_escape, &s->other_escape_loc, loc);
+    ip_record_loc (&s->other_escape_locs, loc);
 }
 
 /* The local-aggregate-member counterpart of ip_scan_stmt_for_member
@@ -836,8 +848,7 @@ ip_scan_stmt_for_local_member (gimple *stmt, ip_local_member_scan *s)
 			    callee, i + 1, /*must_init_only=*/false))
 		;
 	      else
-		ip_record_first_loc (&s->other_escape, &s->other_escape_loc,
-				     gimple_location (stmt));
+		ip_record_loc (&s->other_escape_locs, gimple_location (stmt));
 	    }
 	}
       tree call_lhs = gimple_call_lhs (stmt);
@@ -854,8 +865,7 @@ ip_scan_stmt_for_local_member (gimple *stmt, ip_local_member_scan *s)
       else if (val && TREE_CODE (val) == ADDR_EXPR
 	       && ip_component_ref_of_var_field_p (TREE_OPERAND (val, 0), var,
 						    field))
-	ip_record_first_loc (&s->other_escape, &s->other_escape_loc,
-			     gimple_location (stmt));
+	ip_record_loc (&s->other_escape_locs, gimple_location (stmt));
     }
 }
 
@@ -890,8 +900,6 @@ ip_check_local_aggregate_member (function *fun, tree var, tree field,
   ip_local_member_scan scan;
   scan.var = var;
   scan.field = field;
-  scan.other_escape = false;
-  scan.other_escape_loc = UNKNOWN_LOCATION;
 
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
@@ -899,23 +907,23 @@ ip_check_local_aggregate_member (function *fun, tree var, tree field,
 	 gsi_next (&gsi))
       ip_scan_stmt_for_local_member (gsi_stmt (gsi), &scan);
 
-  if (scan.other_escape)
+  if (!scan.other_escape_locs.is_empty ())
     {
-      /* Anchored at the escape site, not at VAR's own declaration --
+      /* Anchored at each escape site, not at VAR's own declaration --
 	 see ip_check_address_taken_var's own identical, more detailed
-	 comment on this exact point (same rationale applies here).  */
-      if (!profiles_diagnostic_exempt_p (scan.other_escape_loc,
-					 fun->decl, "std::init"))
-	{
-	  profiles_diagnostic_at (scan.other_escape_loc, "std::init",
-		    "address of %<[[uninit]]%> member %qD of %qD is taken "
-		    "here in a way that cannot be verified under the "
-		    "%<std::init%> profile: only passing it to a "
-		    "%<[[must_init]]%>-marked parameter lets this checker "
-		    "treat it as later initialized", field, var);
-	  inform (DECL_SOURCE_LOCATION (var),
-		  "%qD is declared %<[[uninit]]%> here", var);
-	}
+	 comment on this exact point (same rationale applies here,
+	 including reporting every occurrence, not just the first).  */
+      for (location_t loc : scan.other_escape_locs)
+	if (!profiles_diagnostic_exempt_p (loc, fun->decl, "std::init"))
+	  {
+	    profiles_diagnostic_at (loc, "std::init",
+		      "address of %<[[uninit]]%> member %qD of %qD is "
+		      "taken here without a %<[[must_init]]%> call to "
+		      "prove it initialized, under the %<std::init%> "
+		      "profile", field, var);
+	    inform (DECL_SOURCE_LOCATION (var),
+		    "%qD is declared %<[[uninit]]%> here", var);
+	  }
       return;
     }
 
@@ -972,8 +980,6 @@ ip_check_address_taken_var (function *fun, tree var)
 {
   ip_addr_taken_scan scan;
   scan.var = var;
-  scan.other_addr_of = false;
-  scan.other_addr_of_loc = UNKNOWN_LOCATION;
   scan.member_access = false;
   scan.member_access_loc = UNKNOWN_LOCATION;
 
@@ -983,9 +989,9 @@ ip_check_address_taken_var (function *fun, tree var)
 	 gsi_next (&gsi))
       ip_scan_stmt_for_var (gsi_stmt (gsi), &scan);
 
-  if (scan.other_addr_of)
+  if (!scan.other_addr_of_locs.is_empty ())
     {
-      /* Anchored at the escape site itself (where the address is
+      /* Anchored at each escape site itself (where the address is
 	 actually taken), not at VAR's own declaration: this is what
 	 every other diagnostic in this checker already does (e.g. the
 	 "read before it is definitely assigned" case just below), and
@@ -995,19 +1001,19 @@ ip_check_address_taken_var (function *fun, tree var)
 	 statement could never reach a diagnostic anchored elsewhere,
 	 confirmed as a real, reported limitation of the old anchor
 	 point.  VAR's own declaration is still surfaced, via the note
-	 below, for context.  */
-      if (!profiles_diagnostic_exempt_p (scan.other_addr_of_loc,
-					 fun->decl, "std::init"))
-	{
-	  profiles_diagnostic_at (scan.other_addr_of_loc, "std::init",
-		    "address of %<[[uninit]]%> variable %qD is taken here "
-		    "in a way that cannot be verified under the "
-		    "%<std::init%> profile: only passing it to a "
-		    "%<[[must_init]]%>-marked parameter lets this checker "
-		    "treat it as later initialized", var);
-	  inform (DECL_SOURCE_LOCATION (var),
-		  "%qD is declared %<[[uninit]]%> here", var);
-	}
+	 below, for context.  Every occurrence is its own independent
+	 diagnostic, not just the first one found -- VAR can be escaped
+	 unverifiably more than once in the same function.  */
+      for (location_t loc : scan.other_addr_of_locs)
+	if (!profiles_diagnostic_exempt_p (loc, fun->decl, "std::init"))
+	  {
+	    profiles_diagnostic_at (loc, "std::init",
+		      "address of %<[[uninit]]%> variable %qD is taken "
+		      "here without a %<[[must_init]]%> call to prove it "
+		      "initialized, under the %<std::init%> profile", var);
+	    inform (DECL_SOURCE_LOCATION (var),
+		    "%qD is declared %<[[uninit]]%> here", var);
+	  }
       return;
     }
 
@@ -1089,8 +1095,7 @@ struct ip_member_scan
   tree field;
   auto_vec<gimple *> init_stmts;
   auto_vec<gimple *> read_stmts;
-  bool other_escape;
-  location_t other_escape_loc;
+  auto_vec<location_t> other_escape_locs;
 };
 
 /* True if T is exactly 'this->FIELD' (or an SSA-copy-of-THIS_PARM's
@@ -1132,7 +1137,7 @@ ip_scan_member_addr_uses (tree lhs_ssa, ip_member_scan *s, location_t loc)
 {
   if (TREE_CODE (lhs_ssa) != SSA_NAME)
     {
-      ip_record_first_loc (&s->other_escape, &s->other_escape_loc, loc);
+      ip_record_loc (&s->other_escape_locs, loc);
       return;
     }
 
@@ -1172,7 +1177,7 @@ ip_scan_member_addr_uses (tree lhs_ssa, ip_member_scan *s, location_t loc)
 	ok = false;
     }
   if (!ok || !any_use)
-    ip_record_first_loc (&s->other_escape, &s->other_escape_loc, loc);
+    ip_record_loc (&s->other_escape_locs, loc);
 }
 
 /* The member-access counterpart of ip_scan_stmt_for_var -- same
@@ -1237,8 +1242,7 @@ ip_scan_stmt_for_member (gimple *stmt, ip_member_scan *s)
 			    callee, i + 1, /*must_init_only=*/false))
 		;
 	      else
-		ip_record_first_loc (&s->other_escape, &s->other_escape_loc,
-				     gimple_location (stmt));
+		ip_record_loc (&s->other_escape_locs, gimple_location (stmt));
 	    }
 	}
       tree call_lhs = gimple_call_lhs (stmt);
@@ -1255,8 +1259,7 @@ ip_scan_stmt_for_member (gimple *stmt, ip_member_scan *s)
       else if (val && TREE_CODE (val) == ADDR_EXPR
 	       && ip_component_ref_of_this_field_p (TREE_OPERAND (val, 0),
 						     this_parm, field))
-	ip_record_first_loc (&s->other_escape, &s->other_escape_loc,
-			     gimple_location (stmt));
+	ip_record_loc (&s->other_escape_locs, gimple_location (stmt));
     }
 }
 
@@ -1319,8 +1322,6 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
   ip_member_scan scan;
   scan.this_parm = this_parm;
   scan.field = field;
-  scan.other_escape = false;
-  scan.other_escape_loc = UNKNOWN_LOCATION;
 
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
@@ -1328,25 +1329,25 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
 	 gsi_next (&gsi))
       ip_scan_stmt_for_member (gsi_stmt (gsi), &scan);
 
-  if (scan.other_escape)
+  if (!scan.other_escape_locs.is_empty ())
     {
-      /* Anchored at the escape site, not at the enclosing constructor's
+      /* Anchored at each escape site, not at the enclosing constructor's
 	 own declaration (which was the previous anchor here -- even
 	 less useful than a sibling variable's own declaration would
 	 have been) -- see ip_check_address_taken_var's own identical,
-	 more detailed comment on this exact point.  */
-      if (!profiles_diagnostic_exempt_p (scan.other_escape_loc,
-					 fun->decl, "std::init"))
-	{
-	  profiles_diagnostic_at (scan.other_escape_loc, "std::init",
-		    "address of %<[[uninit]]%> member %qD is taken here "
-		    "in a way that cannot be verified under the "
-		    "%<std::init%> profile: only passing it to a "
-		    "%<[[must_init]]%>-marked parameter lets this checker "
-		    "treat it as later initialized", field);
-	  inform (DECL_SOURCE_LOCATION (field),
-		  "%qD is declared %<[[uninit]]%> here", field);
-	}
+	 more detailed comment on this exact point, including reporting
+	 every occurrence, not just the first.  */
+      for (location_t loc : scan.other_escape_locs)
+	if (!profiles_diagnostic_exempt_p (loc, fun->decl, "std::init"))
+	  {
+	    profiles_diagnostic_at (loc, "std::init",
+		      "address of %<[[uninit]]%> member %qD is taken "
+		      "here without a %<[[must_init]]%> call to prove "
+		      "it initialized, under the %<std::init%> profile",
+		      field);
+	    inform (DECL_SOURCE_LOCATION (field),
+		    "%qD is declared %<[[uninit]]%> here", field);
+	  }
       return;
     }
 
