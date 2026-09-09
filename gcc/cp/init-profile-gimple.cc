@@ -901,16 +901,20 @@ ip_check_local_aggregate_member (function *fun, tree var, tree field,
 
   if (scan.other_escape)
     {
-      if (!profiles_diagnostic_exempt_p (DECL_SOURCE_LOCATION (var),
+      /* Anchored at the escape site, not at VAR's own declaration --
+	 see ip_check_address_taken_var's own identical, more detailed
+	 comment on this exact point (same rationale applies here).  */
+      if (!profiles_diagnostic_exempt_p (scan.other_escape_loc,
 					 fun->decl, "std::init"))
 	{
-	  profiles_diagnostic_at (DECL_SOURCE_LOCATION (var), "std::init",
-		    "cannot verify %<[[uninit]]%> member %qD of %qD under the "
-		    "%<std::init%> profile: its address is taken outside a "
-		    "recognized %<[[must_init]]%> call, which this checker "
-		    "cannot yet analyze", field, var);
-	  inform (scan.other_escape_loc,
-		  "address of %qD is taken here", field);
+	  profiles_diagnostic_at (scan.other_escape_loc, "std::init",
+		    "address of %<[[uninit]]%> member %qD of %qD is taken "
+		    "here in a way that cannot be verified under the "
+		    "%<std::init%> profile: only passing it to a "
+		    "%<[[must_init]]%>-marked parameter lets this checker "
+		    "treat it as later initialized", field, var);
+	  inform (DECL_SOURCE_LOCATION (var),
+		  "%qD is declared %<[[uninit]]%> here", var);
 	}
       return;
     }
@@ -981,16 +985,28 @@ ip_check_address_taken_var (function *fun, tree var)
 
   if (scan.other_addr_of)
     {
-      if (!profiles_diagnostic_exempt_p (DECL_SOURCE_LOCATION (var),
+      /* Anchored at the escape site itself (where the address is
+	 actually taken), not at VAR's own declaration: this is what
+	 every other diagnostic in this checker already does (e.g. the
+	 "read before it is definitely assigned" case just below), and
+	 anchoring here specifically matters for [[profiles::suppress]]
+	 -- its dominion is the statement/declaration it appertains to,
+	 so a suppress attribute placed on the actual offending
+	 statement could never reach a diagnostic anchored elsewhere,
+	 confirmed as a real, reported limitation of the old anchor
+	 point.  VAR's own declaration is still surfaced, via the note
+	 below, for context.  */
+      if (!profiles_diagnostic_exempt_p (scan.other_addr_of_loc,
 					 fun->decl, "std::init"))
 	{
-	  profiles_diagnostic_at (DECL_SOURCE_LOCATION (var), "std::init",
-		    "cannot verify %<[[uninit]]%> on %qD under the "
-		    "%<std::init%> profile: its address is taken outside a "
-		    "recognized %<[[must_init]]%> call, which this checker "
-		    "cannot yet analyze", var);
-	  inform (scan.other_addr_of_loc,
-		  "address of %qD is taken here", var);
+	  profiles_diagnostic_at (scan.other_addr_of_loc, "std::init",
+		    "address of %<[[uninit]]%> variable %qD is taken here "
+		    "in a way that cannot be verified under the "
+		    "%<std::init%> profile: only passing it to a "
+		    "%<[[must_init]]%>-marked parameter lets this checker "
+		    "treat it as later initialized", var);
+	  inform (DECL_SOURCE_LOCATION (var),
+		  "%qD is declared %<[[uninit]]%> here", var);
 	}
       return;
     }
@@ -1314,16 +1330,22 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
 
   if (scan.other_escape)
     {
-      if (!profiles_diagnostic_exempt_p (DECL_SOURCE_LOCATION (fun->decl),
+      /* Anchored at the escape site, not at the enclosing constructor's
+	 own declaration (which was the previous anchor here -- even
+	 less useful than a sibling variable's own declaration would
+	 have been) -- see ip_check_address_taken_var's own identical,
+	 more detailed comment on this exact point.  */
+      if (!profiles_diagnostic_exempt_p (scan.other_escape_loc,
 					 fun->decl, "std::init"))
 	{
-	  profiles_diagnostic_at (DECL_SOURCE_LOCATION (fun->decl), "std::init",
-		    "cannot verify %<[[uninit]]%> member %qD under the "
-		    "%<std::init%> profile: its address is taken outside a "
-		    "recognized %<[[must_init]]%> call, which this checker "
-		    "cannot yet analyze", field);
-	  inform (scan.other_escape_loc,
-		  "address of %qD is taken here", field);
+	  profiles_diagnostic_at (scan.other_escape_loc, "std::init",
+		    "address of %<[[uninit]]%> member %qD is taken here "
+		    "in a way that cannot be verified under the "
+		    "%<std::init%> profile: only passing it to a "
+		    "%<[[must_init]]%>-marked parameter lets this checker "
+		    "treat it as later initialized", field);
+	  inform (DECL_SOURCE_LOCATION (field),
+		  "%qD is declared %<[[uninit]]%> here", field);
 	}
       return;
     }

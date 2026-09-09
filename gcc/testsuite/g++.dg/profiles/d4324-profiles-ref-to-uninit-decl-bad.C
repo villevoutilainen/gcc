@@ -16,9 +16,10 @@ void f ()
   int* p1 [[ref_to_uninit]] = &x1; // { dg-error "but .x1. is not marked" }
   // { dg-error "assigning a pointer not marked" "" { target *-*-* } .-1 }
 
-  [[uninit]] int x2; // { dg-error "cannot verify" }
+  [[uninit]] int x2;
   int* p2 = &x2; // { dg-error "points to .x2., which is marked" }
   // { dg-error "assigning a pointer marked" "" { target *-*-* } .-1 }
+  // { dg-error "cannot be verified" "" { target *-*-* } .-2 }
 
   (void) p1;
   (void) p2;
