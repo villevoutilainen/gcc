@@ -18,6 +18,6 @@ int use_it ()
 {
   int x [[uninit]];
   write_somehow (x); // { dg-error "is not marked" }
-  // { dg-error "cannot be verified" "" { target *-*-* } .-1 }
+  // { dg-error "call to prove it initialized" "" { target *-*-* } .-1 }
   return x;
 }

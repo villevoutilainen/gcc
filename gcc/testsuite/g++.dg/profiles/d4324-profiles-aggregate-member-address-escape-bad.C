@@ -17,6 +17,6 @@ int f ()
 {
   X x [[uninit]];
   x.a = 1;
-  take_ptr (&x.b); // { dg-error "cannot be verified" }
+  take_ptr (&x.b); // { dg-error "call to prove it initialized" }
   return x.a;
 }

@@ -15,6 +15,6 @@ void take_ptr (int *);
 struct X
 {
   [[uninit]] int m;
-  X () { take_ptr (&m); } // { dg-error "cannot be verified" }
+  X () { take_ptr (&m); } // { dg-error "call to prove it initialized" }
   // { dg-error "refers to \[^\n\]*memory but its parameter" "" { target *-*-* } .-1 }
 };
