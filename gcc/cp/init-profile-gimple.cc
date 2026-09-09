@@ -865,6 +865,92 @@ ip_scan_stmt_for_local_member (gimple *stmt, ip_local_member_scan *s)
     }
 }
 
+/* Bookkeeping for ip_compute_field_reach_table below: one FIELD's own
+   init_stmts (OUTER_INIT_STMTS already folded in, exactly like
+   ip_check_local_aggregate_member's own internal scan) and the reach
+   info computed from them.  */
+
+struct ip_field_reach_entry
+{
+  tree field;
+  auto_vec<gimple *> init_stmts;
+  ip_reach_info info;
+};
+
+/* A whole-object write to a local aggregate VAR (e.g. 'var = f();') is
+   never the only way every field ends up provably initialized: GCC's
+   own gimplifier decomposes a simple aggregate assignment like
+   'var = {1, 2};' directly into per-field stores ('var.a = 1; var.b =
+   2;') before this pass ever sees a single whole-object GIMPLE_ASSIGN
+   (confirmed directly via -fdump-tree-gimple) -- so a set of per-field
+   writes that happens to cover every field is semantically equivalent
+   to a whole-object write, even though ip_scan_stmt_for_var's own IE-1
+   check can never see it as one.  This computes, for every non-
+   artificial FIELD_DECL of VAR's RECORD_TYPE, that field's own reach
+   info (the identical per-field scan ip_check_local_aggregate_member
+   already runs internally, duplicated here rather than threading out-
+   parameters through that existing, separately-tested function -- this
+   is a static-analysis pass, not hot codegen, so the extra scan is an
+   acceptable, low-risk tradeoff).  OUT_TABLE's entries are heap-
+   allocated; the caller owns them (see ip_free_field_reach_table).  */
+
+static void
+ip_compute_field_reach_table (function *fun, tree var,
+			       vec<gimple *> &outer_init_stmts,
+			       vec<ip_field_reach_entry *> *out_table)
+{
+  for (tree field = TYPE_FIELDS (TREE_TYPE (var)); field;
+       field = DECL_CHAIN (field))
+    {
+      if (TREE_CODE (field) != FIELD_DECL || DECL_ARTIFICIAL (field))
+	continue;
+
+      ip_local_member_scan scan;
+      scan.var = var;
+      scan.field = field;
+
+      basic_block bb;
+      FOR_EACH_BB_FN (bb, fun)
+	for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	     gsi_next (&gsi))
+	  ip_scan_stmt_for_local_member (gsi_stmt (gsi), &scan);
+
+      ip_field_reach_entry *e = new ip_field_reach_entry ();
+      e->field = field;
+      for (gimple *stmt : scan.init_stmts)
+	e->init_stmts.safe_push (stmt);
+      for (gimple *stmt : outer_init_stmts)
+	e->init_stmts.safe_push (stmt);
+      ip_compute_reach_info (fun, e->init_stmts, &e->info);
+      out_table->safe_push (e);
+    }
+}
+
+static void
+ip_free_field_reach_table (vec<ip_field_reach_entry *> &table)
+{
+  for (ip_field_reach_entry *e : table)
+    delete e;
+}
+
+/* True iff AT_STMT is dominated by EVERY entry in TABLE -- every field
+   of the aggregate TABLE was computed for is individually, provably
+   initialized by this point, the "per-field writes add up to a whole-
+   object write" fact ip_compute_field_reach_table exists to establish.
+   False (never vacuously true) for an empty TABLE -- this is only ever
+   called where at least one field genuinely needs checking.  */
+
+static bool
+ip_all_fields_dominate_p (gimple *at_stmt, vec<ip_field_reach_entry *> &table)
+{
+  if (table.is_empty ())
+    return false;
+  for (ip_field_reach_entry *e : table)
+    if (!ip_read_dominated_by_init_p (at_stmt, e->init_stmts, e->info))
+      return false;
+  return true;
+}
+
 /* P4222 Phase 4f: the ordinary-local counterpart of ip_check_
    constructor_member (Phase 4d, defined further down, for
    'this->field' inside a constructor) -- real per-FIELD CFG-
@@ -995,6 +1081,20 @@ ip_check_address_taken_var (function *fun, tree var)
   ip_reach_info info;
   ip_compute_reach_info (fun, scan.init_stmts, &info);
 
+  /* A local aggregate whose fields were each written individually (e.g.
+     'var = {1, 2};', which GCC's own gimplifier decomposes into per-
+     field stores before this pass ever sees a single whole-object
+     assignment -- confirmed directly via -fdump-tree-gimple) never
+     shows up in SCAN.INIT_STMTS above, even once every field has
+     provably been covered.  Computed once, up front, only when actually
+     needed (member-level access exists, on a genuine RECORD_TYPE), and
+     reused for every escape occurrence below.  */
+  auto_vec<ip_field_reach_entry *> field_reach;
+  bool have_field_reach
+    = scan.member_access && TREE_CODE (TREE_TYPE (var)) == RECORD_TYPE;
+  if (have_field_reach)
+    ip_compute_field_reach_table (fun, var, scan.init_stmts, &field_reach);
+
   if (!scan.other_addr_of_stmts.is_empty ())
     {
       /* Anchored at each surviving escape site itself (where the
@@ -1010,13 +1110,17 @@ ip_check_address_taken_var (function *fun, tree var)
 	 via the note below, for context.  Every non-cured occurrence is
 	 its own independent diagnostic, not just the first one found --
 	 VAR can be escaped unverifiably more than once in the same
-	 function.  An occurrence dominated by an initializing event is
-	 silently skipped, not diagnosed -- cured, same as a read past
-	 that point would be.  */
+	 function.  An occurrence dominated by an initializing event --
+	 either a genuine whole-object one, or every one of VAR's fields
+	 individually -- is silently skipped, not diagnosed -- cured,
+	 same as a read past that point would be.  */
       for (gimple *escape_stmt : scan.other_addr_of_stmts)
 	{
 	  if (ip_read_dominated_by_init_p (escape_stmt, scan.init_stmts,
 					   info))
+	    continue;
+	  if (have_field_reach
+	      && ip_all_fields_dominate_p (escape_stmt, field_reach))
 	    continue;
 	  location_t loc = gimple_location (escape_stmt);
 	  if (!profiles_diagnostic_exempt_p (loc, fun->decl, "std::init"))
@@ -1030,6 +1134,9 @@ ip_check_address_taken_var (function *fun, tree var)
 	    }
 	}
     }
+
+  if (have_field_reach)
+    ip_free_field_reach_table (field_reach);
 
   /* P4222 Phase 4e (S5.4): VAR can now be a non-union class-type
      local with a trivial default constructor (ip_scalar_or_scalar_
@@ -1534,7 +1641,27 @@ ip_currently_uninit_p (function *fun, ip_flavor_reach_cache *cache,
 {
   ip_flavor_reach_entry *e
     = ip_get_flavor_reach_entry (fun, cache, base, field);
-  return !ip_read_dominated_by_init_p (at_stmt, e->init_stmts, e->info);
+  if (ip_read_dominated_by_init_p (at_stmt, e->init_stmts, e->info))
+    return false;
+  /* Same fallback as ip_check_address_taken_var's own escape check,
+     for the identical reason: a whole-object BASE that was instead
+     initialized field-by-field (e.g. 'base = {1, 2};', decomposed by
+     the gimplifier into per-field stores before this pass ever sees a
+     single whole-object assignment) never shows up in E's own
+     init_stmts, even once every field has provably been covered.
+     Only meaningful for a whole-object query (FIELD == NULL_TREE) on
+     a genuine RECORD_TYPE -- a per-field query already has its own,
+     correct field-level init_stmts via E itself.  */
+  if (field == NULL_TREE && TREE_CODE (TREE_TYPE (base)) == RECORD_TYPE)
+    {
+      auto_vec<ip_field_reach_entry *> field_reach;
+      ip_compute_field_reach_table (fun, base, e->init_stmts, &field_reach);
+      bool cured = ip_all_fields_dominate_p (at_stmt, field_reach);
+      ip_free_field_reach_table (field_reach);
+      if (cured)
+	return false;
+    }
+  return true;
 }
 
 static bool ip_arg_uninit_flavored_p_1 (tree arg, int depth, function *fun,
