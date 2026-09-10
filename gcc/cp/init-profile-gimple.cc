@@ -792,30 +792,45 @@ ip_scan_local_member_addr_uses (tree lhs_ssa, ip_local_member_scan *s,
     {
       any_use = true;
       gimple *use_stmt = USE_STMT (use_p);
-      if (gimple_code (use_stmt) != GIMPLE_CALL)
+      if (gimple_code (use_stmt) == GIMPLE_CALL)
 	{
-	  ok = false;
-	  continue;
+	  tree callee = gimple_call_fndecl (use_stmt);
+	  unsigned nargs = gimple_call_num_args (use_stmt);
+	  bool matched = false;
+	  for (unsigned ai = 0; ai < nargs; ++ai)
+	    if (gimple_call_arg (use_stmt, ai) == lhs_ssa)
+	      {
+		matched = true;
+		if (callee
+		    && profiles_uninit_flavor_at_position_p (callee, ai + 1,
+							      /*must_init_only=*/true))
+		  s->init_stmts.safe_push (use_stmt);
+		else if (callee
+			 && profiles_uninit_flavor_at_position_p (
+			      callee, ai + 1, /*must_init_only=*/false))
+		  ; /* Plain [[ref_to_uninit]]: neutral.  */
+		else
+		  ok = false;
+	      }
+	  if (!matched)
+	    ok = false;
 	}
-      tree callee = gimple_call_fndecl (use_stmt);
-      unsigned nargs = gimple_call_num_args (use_stmt);
-      bool matched = false;
-      for (unsigned ai = 0; ai < nargs; ++ai)
-	if (gimple_call_arg (use_stmt, ai) == lhs_ssa)
-	  {
-	    matched = true;
-	    if (callee
-		&& profiles_uninit_flavor_at_position_p (callee, ai + 1,
-							  /*must_init_only=*/true))
-	      s->init_stmts.safe_push (use_stmt);
-	    else if (callee
-		     && profiles_uninit_flavor_at_position_p (
-			  callee, ai + 1, /*must_init_only=*/false))
-	      ; /* Plain [[ref_to_uninit]]: neutral.  */
-	    else
-	      ok = false;
-	  }
-      if (!matched)
+      else if (is_gimple_assign (use_stmt)
+	       && gimple_assign_single_p (use_stmt)
+	       && gimple_assign_rhs1 (use_stmt) == lhs_ssa)
+	{
+	  /* 'dst = lhs_ssa;' (a plain copy) is safe exactly when DST is
+	     itself declared flavored -- matching ip_scan_stmt_for_var's
+	     own identical exemption for the whole-object case just above.
+	     Flavor-consistency's own recursive chase picks up tracking
+	     from DST onward; this check only needs to answer whether
+	     THIS hop was safe.  */
+	  tree dst_var = ip_underlying_var (gimple_assign_lhs (use_stmt));
+	  if (!(dst_var && TREE_CODE (TREE_TYPE (dst_var)) == POINTER_TYPE
+		&& profiles_uninit_pointee_p (dst_var)))
+	    ok = false;
+	}
+      else
 	ok = false;
     }
   if (!ok || !any_use)
@@ -1296,31 +1311,43 @@ ip_scan_member_addr_uses (tree lhs_ssa, ip_member_scan *s, gimple *stmt)
     {
       any_use = true;
       gimple *use_stmt = USE_STMT (use_p);
-      if (gimple_code (use_stmt) != GIMPLE_CALL)
+      if (gimple_code (use_stmt) == GIMPLE_CALL)
 	{
-	  ok = false;
-	  continue;
+	  tree callee = gimple_call_fndecl (use_stmt);
+	  unsigned nargs = gimple_call_num_args (use_stmt);
+	  bool matched = false;
+	  for (unsigned ai = 0; ai < nargs; ++ai)
+	    if (gimple_call_arg (use_stmt, ai) == lhs_ssa)
+	      {
+		matched = true;
+		if (callee
+		    && profiles_uninit_flavor_at_position_p (callee, ai + 1,
+							      /*must_init_only=*/true))
+		  s->init_stmts.safe_push (use_stmt);
+		else if (callee
+			 && profiles_uninit_flavor_at_position_p (
+			      callee, ai + 1, /*must_init_only=*/false))
+		  ; /* Plain [[ref_to_uninit]]: neutral, see
+		       ip_scan_stmt_for_var's own identical case.  */
+		else
+		  ok = false;
+	      }
+	  if (!matched)
+	    ok = false;
 	}
-      tree callee = gimple_call_fndecl (use_stmt);
-      unsigned nargs = gimple_call_num_args (use_stmt);
-      bool matched = false;
-      for (unsigned ai = 0; ai < nargs; ++ai)
-	if (gimple_call_arg (use_stmt, ai) == lhs_ssa)
-	  {
-	    matched = true;
-	    if (callee
-		&& profiles_uninit_flavor_at_position_p (callee, ai + 1,
-							  /*must_init_only=*/true))
-	      s->init_stmts.safe_push (use_stmt);
-	    else if (callee
-		     && profiles_uninit_flavor_at_position_p (
-			  callee, ai + 1, /*must_init_only=*/false))
-	      ; /* Plain [[ref_to_uninit]]: neutral, see
-		   ip_scan_stmt_for_var's own identical case.  */
-	    else
-	      ok = false;
-	  }
-      if (!matched)
+      else if (is_gimple_assign (use_stmt)
+	       && gimple_assign_single_p (use_stmt)
+	       && gimple_assign_rhs1 (use_stmt) == lhs_ssa)
+	{
+	  /* 'dst = lhs_ssa;' is safe exactly when DST is itself declared
+	     flavored -- see ip_scan_local_member_addr_uses's identical
+	     case for the full rationale.  */
+	  tree dst_var = ip_underlying_var (gimple_assign_lhs (use_stmt));
+	  if (!(dst_var && TREE_CODE (TREE_TYPE (dst_var)) == POINTER_TYPE
+		&& profiles_uninit_pointee_p (dst_var)))
+	    ok = false;
+	}
+      else
 	ok = false;
     }
   if (!ok || !any_use)
