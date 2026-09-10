@@ -472,6 +472,28 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 		    && profiles_uninit_pointee_p (lhs_var)))
 		s->other_addr_of_stmts.safe_push (stmt);
 	    }
+	  else if (TREE_CODE (r) == ADDR_EXPR
+		   && TREE_CODE (TREE_OPERAND (r, 0)) == COMPONENT_REF
+		   && ip_component_ref_base (TREE_OPERAND (r, 0)) == var)
+	    /* '&var.field' -- unlike a direct read/write of var.field
+	       just above, this was previously invisible to this scan
+	       entirely (no case matched it at all): neither the
+	       COMPONENT_REF case above (R here is an ADDR_EXPR, not a
+	       COMPONENT_REF) nor the ADDR_EXPR-of-VAR case just above
+	       (TREE_OPERAND (R, 0) is a COMPONENT_REF, not VAR itself).
+	       MEMBER_ACCESS is not just informational -- it's what gates
+	       whether ip_check_local_aggregate_member ever runs at all
+	       for ANY field of VAR, so a field whose only access anywhere
+	       in the function was '&var.field' silently skipped all per-
+	       field escape/read verification for the whole aggregate, not
+	       just that one field (confirmed directly: 'X x [[uninit]];
+	       take_ptr (&x.a);' alone compiled clean). Treat '&var.field'
+	       as its own trigger for MEMBER_ACCESS, exactly like a direct
+	       read/write -- ip_scan_stmt_for_local_member's own ADDR_EXPR/
+	       COMPONENT_REF handling already correctly verifies (or
+	       cures) the occurrence itself once this actually runs.  */
+	    ip_record_first_loc (&s->member_access, &s->member_access_loc,
+				 gimple_location (stmt));
 	}
       if (lhs == var && !ip_stmt_is_deferred_init_copy_p (stmt))
 	s->init_stmts.safe_push (stmt);
@@ -548,6 +570,14 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	      else
 		s->other_addr_of_stmts.safe_push (stmt);
 	    }
+	  else if (TREE_CODE (arg) == ADDR_EXPR
+		   && TREE_CODE (TREE_OPERAND (arg, 0)) == COMPONENT_REF
+		   && ip_component_ref_base (TREE_OPERAND (arg, 0)) == var)
+	    /* '&var.field' as a call argument -- see the identical case
+	       in the assignment-rhs loop above for the full rationale;
+	       same gap, same fix.  */
+	    ip_record_first_loc (&s->member_access, &s->member_access_loc,
+				 gimple_location (stmt));
 	}
       tree call_lhs = gimple_call_lhs (stmt);
       if (call_lhs == var && !gimple_call_internal_p (stmt, IFN_DEFERRED_INIT))
@@ -581,6 +611,14 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
       else if (val && TREE_CODE (val) == ADDR_EXPR
 	       && TREE_OPERAND (val, 0) == var)
 	s->other_addr_of_stmts.safe_push (stmt);
+      else if (val && TREE_CODE (val) == ADDR_EXPR
+	       && TREE_CODE (TREE_OPERAND (val, 0)) == COMPONENT_REF
+	       && ip_component_ref_base (TREE_OPERAND (val, 0)) == var)
+	/* 'return &var.field;' -- see the identical case in the
+	   assignment-rhs loop above for the full rationale; same gap,
+	   same fix.  */
+	ip_record_first_loc (&s->member_access, &s->member_access_loc,
+			     gimple_location (stmt));
     }
 }
 
