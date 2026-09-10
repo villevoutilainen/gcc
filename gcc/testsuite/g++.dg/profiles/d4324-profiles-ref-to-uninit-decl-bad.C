@@ -6,9 +6,14 @@
 // (init-profile-gimple.cc's own comment on ip_arg_uninit_flavored_p_1),
 // since running before any CFG exists meant it could never know
 // whether [[uninit]] had already been cured by an earlier statement.
-// x2's address being taken by the mismatched p2 initialization also
-// makes it unverifiable, a second, independent diagnostic on the same
-// line.
+// x1 is already-initialized (ORDINARY), so p1's own mismatch (flavored
+// destination, unflavored source) is exclusively a flavor-consistency
+// finding -- no &E for the address-escape family to independently
+// diagnose. x2 is genuinely still [[uninit]], so p2's mismatch
+// (unflavored destination, flavored &x2 source) is instead exclusively
+// an address-escape finding -- the flavor-consistency check for THIS
+// direction is skipped as pure duplication for a direct &E (see
+// ip_arg_is_direct_addr_expr_p's own comment).
 // { dg-do compile { target c++11 } }
 
 [[profiles::enforce(std::init)]];
@@ -19,8 +24,7 @@ void f ()
   int* p1 [[ref_to_uninit]] = &x1; // { dg-error "assigning a pointer not marked" }
 
   [[uninit]] int x2;
-  int* p2 = &x2; // { dg-error "assigning a pointer marked" }
-  // { dg-error "before it is provably initialized" "" { target *-*-* } .-1 }
+  int* p2 = &x2; // { dg-error "before it is provably initialized" }
 
   (void) p1;
   (void) p2;

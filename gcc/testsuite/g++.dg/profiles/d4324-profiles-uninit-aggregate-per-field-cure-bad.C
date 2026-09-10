@@ -21,8 +21,7 @@ void tst ()
   X x [[uninit]];
   X y = {7};
   f (&x);
-  g (&x); // { dg-error "is not marked" }
-  // { dg-error "before it is provably initialized" "" { target *-*-* } .-1 }
+  g (&x); // { dg-error "before it is provably initialized" }
   f (&y); // { dg-error "must refer to" }
   g (&y);
   x = { 42 };

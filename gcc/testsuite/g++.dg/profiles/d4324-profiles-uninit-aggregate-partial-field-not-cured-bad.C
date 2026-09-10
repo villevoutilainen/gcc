@@ -16,6 +16,5 @@ void f ()
 {
   X x [[uninit]];
   x.a = 1;
-  other (&x); // { dg-error "is not marked" }
-  // { dg-error "before it is provably initialized" "" { target *-*-* } .-1 }
+  other (&x); // { dg-error "before it is provably initialized" }
 }

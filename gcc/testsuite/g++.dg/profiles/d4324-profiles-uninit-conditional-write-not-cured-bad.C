@@ -17,6 +17,5 @@ void f (bool cond)
   int x [[uninit]];
   if (cond)
     x = 5;
-  take_ptr (&x); // { dg-error "is not marked" }
-  // { dg-error "before it is provably initialized" "" { target *-*-* } .-1 }
+  take_ptr (&x); // { dg-error "before it is provably initialized" }
 }

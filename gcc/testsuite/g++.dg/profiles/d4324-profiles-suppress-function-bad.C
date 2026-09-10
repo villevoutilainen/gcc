@@ -16,6 +16,5 @@ void write_somehow (int &r);
 void f () [[profiles::suppress(std::init)]] // { dg-warning "does not apply to types" }
 {
   int x [[uninit]];
-  write_somehow (x); // { dg-error "is not marked" }
-  // { dg-error "before it is provably initialized" "" { target *-*-* } .-1 }
+  write_somehow (x); // { dg-error "before it is provably initialized" }
 }

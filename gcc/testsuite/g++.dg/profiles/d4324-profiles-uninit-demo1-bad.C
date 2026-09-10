@@ -38,15 +38,15 @@ int needs_now_init ()
   return *p;
 }
 
-// (3) Identical shape, no assertion -- diagnosed.  Trips the GIMPLE-
-// level assignment-flavor-consistency check, taking x's address that
-// way makes it unverifiable, and -- unlike (2) -- there is no
-// std::now_init() to cure it, so the eventual read through p is
-// itself flagged too: three independent diagnostics.
+// (3) Identical shape, no assertion -- diagnosed.  Taking x's address
+// that way makes it unverifiable (the GIMPLE-level assignment-flavor-
+// consistency check would report the identical fact for this exact
+// direct-&x shape, so it's skipped as pure duplication), and -- unlike
+// (2) -- there is no std::now_init() to cure it, so the eventual read
+// through p is itself flagged too: two independent diagnostics.
 int diagnosed ()
 {
   int x [[uninit]];
-  int *p = &x; // { dg-error "assigning a pointer marked" }
-  // { dg-error "before it is provably initialized" "" { target *-*-* } .-1 }
+  int *p = &x; // { dg-error "before it is provably initialized" }
   return *p; // { dg-error "read before it is definitely assigned" }
 }
