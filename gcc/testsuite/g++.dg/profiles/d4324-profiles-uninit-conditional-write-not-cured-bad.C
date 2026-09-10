@@ -18,5 +18,5 @@ void f (bool cond)
   if (cond)
     x = 5;
   take_ptr (&x); // { dg-error "is not marked" }
-  // { dg-error "call to prove it initialized" "" { target *-*-* } .-1 }
+  // { dg-error "before it is provably initialized" "" { target *-*-* } .-1 }
 }

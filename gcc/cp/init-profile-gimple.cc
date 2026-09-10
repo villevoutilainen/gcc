@@ -1017,9 +1017,8 @@ ip_check_local_aggregate_member (function *fun, tree var, tree field,
 	    {
 	      profiles_diagnostic_at (loc, "std::init",
 			"address of %<[[uninit]]%> member %qD of %qD is "
-			"taken here without a %<[[must_init]]%> call to "
-			"prove it initialized, under the %<std::init%> "
-			"profile", field, var);
+			"taken here before it is provably initialized, "
+			"under the %<std::init%> profile", field, var);
 	      inform (DECL_SOURCE_LOCATION (var),
 		      "%qD is declared %<[[uninit]]%> here", var);
 	    }
@@ -1127,8 +1126,8 @@ ip_check_address_taken_var (function *fun, tree var)
 	    {
 	      profiles_diagnostic_at (loc, "std::init",
 			"address of %<[[uninit]]%> variable %qD is taken "
-			"here without a %<[[must_init]]%> call to prove it "
-			"initialized, under the %<std::init%> profile", var);
+			"here before it is provably initialized, under the "
+			"%<std::init%> profile", var);
 	      inform (DECL_SOURCE_LOCATION (var),
 		      "%qD is declared %<[[uninit]]%> here", var);
 	    }
@@ -1464,9 +1463,8 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
 	    {
 	      profiles_diagnostic_at (loc, "std::init",
 			"address of %<[[uninit]]%> member %qD is taken "
-			"here without a %<[[must_init]]%> call to prove "
-			"it initialized, under the %<std::init%> profile",
-			field);
+			"here before it is provably initialized, under "
+			"the %<std::init%> profile", field);
 	      inform (DECL_SOURCE_LOCATION (field),
 		      "%qD is declared %<[[uninit]]%> here", field);
 	    }

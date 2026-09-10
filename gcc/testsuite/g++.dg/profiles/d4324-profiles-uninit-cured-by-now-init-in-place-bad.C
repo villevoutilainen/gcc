@@ -20,7 +20,7 @@ void tst ()
   X x [[uninit]];
   f (&x);
   g (&x); // { dg-error "is not marked" }
-  // { dg-error "call to prove it initialized" "" { target *-*-* } .-1 }
+  // { dg-error "before it is provably initialized" "" { target *-*-* } .-1 }
   std::now_init_in_place (x);
   g (&x);
 }
