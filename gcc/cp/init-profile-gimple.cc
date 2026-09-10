@@ -767,74 +767,102 @@ ip_component_ref_of_var_field_p (tree t, tree var, tree field)
   return ip_underlying_var (TREE_OPERAND (t, 0)) == var;
 }
 
-/* The local-aggregate-member counterpart of ip_scan_member_addr_uses
-   (defined further down, for 'this->field'), for '_1 = &var.field;'.
-   Every single use of the resulting address must be a safe one (a
-   flavored call argument) for this to be anything other than an
-   escape -- see that function's own comment for the full rationale,
-   identical here.  */
+/* True if DEST is itself a pointer variable/parameter declared
+   [[ref_to_uninit]]/[[must_init]] -- the single-hop test that decides
+   whether an assignment 'dest = &var.field;'/'dest = &this->field;' is
+   a legitimate formation of a flavored pointer, or an unverifiable
+   escape.  Identical in spirit to ip_scan_stmt_for_var's own ADDR_EXPR-
+   of-VAR case just above, and intentionally as simple: a [[ref_to_
+   uninit]]-declared pointer pointing at still-[[uninit]] memory is, by
+   definition, exactly flavor-consistent (§3) the moment it's formed --
+   nothing more needs verifying, regardless of how (or whether) the
+   pointer is subsequently used.  An earlier version of this check
+   instead walked every downstream SSA use of the resulting pointer,
+   requiring each one to independently look like a safe consumption (a
+   flavored call argument, or a copy into another flavored variable) --
+   solving a problem this simpler, whole-object-matching test doesn't
+   have, while also rejecting a declared-flavored pointer that simply
+   went unused, and separately accepting an UNflavored intermediate
+   pointer merely because of what it was later passed to (deferring
+   the real problem -- an unflavored variable holding a still-uninit
+   address -- to an unrelated later statement instead of catching it
+   where it's formed).  */
 
-static void
-ip_scan_local_member_addr_uses (tree lhs_ssa, ip_local_member_scan *s,
-				 gimple *stmt)
+static bool
+ip_addr_of_field_dest_flavored_p (tree dest)
 {
-  if (TREE_CODE (lhs_ssa) != SSA_NAME)
-    {
-      s->other_escape_stmts.safe_push (stmt);
-      return;
-    }
+  tree dest_var = ip_underlying_var (dest);
+  return dest_var && TREE_CODE (TREE_TYPE (dest_var)) == POINTER_TYPE
+	 && profiles_uninit_pointee_p (dest_var);
+}
+
+/* Extends ip_addr_of_field_dest_flavored_p for one confirmed, narrow
+   GIMPLE-lowering wrinkle: '&this->field''s address, when about to be
+   consumed immediately as a call argument, is never inlined directly
+   at the point of use -- GCC's own gimplifier always routes it through
+   an anonymous SSA temporary first ('_1 = &this->p; initialize (_1);',
+   confirmed via -fdump-tree-gimple), even though the equivalent local-
+   aggregate call, 'initialize (&x.a);', inlines the ADDR_EXPR directly
+   with no temporary at all, and even 'this->field' itself, when
+   assigned to a real named variable ('int* p = &this->a;'), also
+   inlines directly with no temporary. Such a temporary has no source-
+   level declaration of its own to check a flavor against, so the only
+   way to judge whether *this* address-of occurrence is safe is to look
+   at the single place the temporary's value is actually used: safe
+   exactly when that's a call argument at a parameter position declared
+   [[must_init]] (an initializing event, recorded into INIT_STMTS) or
+   plain [[ref_to_uninit]] (neutral); a temporary used more than once,
+   zero times, or any other way cannot be vouched for. This is a
+   bounded, single hop through a compiler-only intermediate -- not a
+   general walk over a real variable's downstream uses, which is what
+   an earlier, more permissive version of this whole check did for
+   every DEST regardless of whether it was a genuine source-level
+   variable, and got both directions wrong: rejecting an unused-but-
+   flavored real pointer, and separately accepting an UNflavored real
+   pointer purely because of what it was later passed to (see git
+   history for the full rationale of that simplification).  */
+
+static bool
+ip_addr_of_field_dest_ok_p (tree dest, auto_vec<gimple *> *init_stmts)
+{
+  if (ip_addr_of_field_dest_flavored_p (dest))
+    return true;
+
+  if (TREE_CODE (dest) != SSA_NAME || SSA_NAME_VAR (dest) != NULL_TREE)
+    return false;
 
   imm_use_iterator imm_iter;
   use_operand_p use_p;
-  bool any_use = false;
-  bool ok = true;
-  FOR_EACH_IMM_USE_FAST (use_p, imm_iter, lhs_ssa)
+  gimple *only_use = NULL;
+  unsigned use_count = 0;
+  FOR_EACH_IMM_USE_FAST (use_p, imm_iter, dest)
     {
-      any_use = true;
-      gimple *use_stmt = USE_STMT (use_p);
-      if (gimple_code (use_stmt) == GIMPLE_CALL)
-	{
-	  tree callee = gimple_call_fndecl (use_stmt);
-	  unsigned nargs = gimple_call_num_args (use_stmt);
-	  bool matched = false;
-	  for (unsigned ai = 0; ai < nargs; ++ai)
-	    if (gimple_call_arg (use_stmt, ai) == lhs_ssa)
-	      {
-		matched = true;
-		if (callee
-		    && profiles_uninit_flavor_at_position_p (callee, ai + 1,
-							      /*must_init_only=*/true))
-		  s->init_stmts.safe_push (use_stmt);
-		else if (callee
-			 && profiles_uninit_flavor_at_position_p (
-			      callee, ai + 1, /*must_init_only=*/false))
-		  ; /* Plain [[ref_to_uninit]]: neutral.  */
-		else
-		  ok = false;
-	      }
-	  if (!matched)
-	    ok = false;
-	}
-      else if (is_gimple_assign (use_stmt)
-	       && gimple_assign_single_p (use_stmt)
-	       && gimple_assign_rhs1 (use_stmt) == lhs_ssa)
-	{
-	  /* 'dst = lhs_ssa;' (a plain copy) is safe exactly when DST is
-	     itself declared flavored -- matching ip_scan_stmt_for_var's
-	     own identical exemption for the whole-object case just above.
-	     Flavor-consistency's own recursive chase picks up tracking
-	     from DST onward; this check only needs to answer whether
-	     THIS hop was safe.  */
-	  tree dst_var = ip_underlying_var (gimple_assign_lhs (use_stmt));
-	  if (!(dst_var && TREE_CODE (TREE_TYPE (dst_var)) == POINTER_TYPE
-		&& profiles_uninit_pointee_p (dst_var)))
-	    ok = false;
-	}
-      else
-	ok = false;
+      only_use = USE_STMT (use_p);
+      if (++use_count > 1)
+	return false;
     }
-  if (!ok || !any_use)
-    s->other_escape_stmts.safe_push (stmt);
+  if (use_count != 1 || gimple_code (only_use) != GIMPLE_CALL)
+    return false;
+
+  tree callee = gimple_call_fndecl (only_use);
+  unsigned nargs = gimple_call_num_args (only_use);
+  for (unsigned i = 0; i < nargs; ++i)
+    if (gimple_call_arg (only_use, i) == dest)
+      {
+	if (callee
+	    && profiles_uninit_flavor_at_position_p (callee, i + 1,
+						      /*must_init_only=*/true))
+	  {
+	    init_stmts->safe_push (only_use);
+	    return true;
+	  }
+	if (callee
+	    && profiles_uninit_flavor_at_position_p (callee, i + 1,
+						      /*must_init_only=*/false))
+	  return true;
+	return false;
+      }
+  return false;
 }
 
 /* The local-aggregate-member counterpart of ip_scan_stmt_for_member
@@ -862,7 +890,10 @@ ip_scan_stmt_for_local_member (gimple *stmt, ip_local_member_scan *s)
 	  else if (TREE_CODE (r) == ADDR_EXPR
 		   && ip_component_ref_of_var_field_p (TREE_OPERAND (r, 0),
 							var, field))
-	    ip_scan_local_member_addr_uses (lhs, s, stmt);
+	    {
+	      if (!ip_addr_of_field_dest_ok_p (lhs, &s->init_stmts))
+		s->other_escape_stmts.safe_push (stmt);
+	    }
 	}
       if (ip_component_ref_of_var_field_p (lhs, var, field)
 	  && !ip_stmt_is_deferred_init_copy_p (stmt))
@@ -1282,78 +1313,6 @@ ip_component_ref_of_this_field_p (tree t, tree this_parm, tree field)
   return ip_underlying_var (ptr) == this_parm;
 }
 
-/* '_1 = &this->field;' was just seen (LHS_SSA is '_1').  Unlike
-   '&local_var', '&this->field' needs a pointer-arithmetic computation
-   (adding FIELD's own byte offset to THIS_PARM) that GIMPLE never
-   inlines directly at the point of use -- confirmed by direct testing
-   -- so whether this is a recognized [[must_init]] pattern can only be
-   decided by walking LHS_SSA's own immediate uses forward, the same
-   must_init/ref_to_uninit recognition ip_scan_stmt_for_var's own
-   GIMPLE_CALL branch applies to a directly-inlined '&var' argument.
-   Every single use must be a safe one (a flavored call argument) for
-   this to be anything other than an escape: a temp used more than
-   once, or used anywhere else at all, can't be vouched for.  */
-
-static void
-ip_scan_member_addr_uses (tree lhs_ssa, ip_member_scan *s, gimple *stmt)
-{
-  if (TREE_CODE (lhs_ssa) != SSA_NAME)
-    {
-      s->other_escape_stmts.safe_push (stmt);
-      return;
-    }
-
-  imm_use_iterator imm_iter;
-  use_operand_p use_p;
-  bool any_use = false;
-  bool ok = true;
-  FOR_EACH_IMM_USE_FAST (use_p, imm_iter, lhs_ssa)
-    {
-      any_use = true;
-      gimple *use_stmt = USE_STMT (use_p);
-      if (gimple_code (use_stmt) == GIMPLE_CALL)
-	{
-	  tree callee = gimple_call_fndecl (use_stmt);
-	  unsigned nargs = gimple_call_num_args (use_stmt);
-	  bool matched = false;
-	  for (unsigned ai = 0; ai < nargs; ++ai)
-	    if (gimple_call_arg (use_stmt, ai) == lhs_ssa)
-	      {
-		matched = true;
-		if (callee
-		    && profiles_uninit_flavor_at_position_p (callee, ai + 1,
-							      /*must_init_only=*/true))
-		  s->init_stmts.safe_push (use_stmt);
-		else if (callee
-			 && profiles_uninit_flavor_at_position_p (
-			      callee, ai + 1, /*must_init_only=*/false))
-		  ; /* Plain [[ref_to_uninit]]: neutral, see
-		       ip_scan_stmt_for_var's own identical case.  */
-		else
-		  ok = false;
-	      }
-	  if (!matched)
-	    ok = false;
-	}
-      else if (is_gimple_assign (use_stmt)
-	       && gimple_assign_single_p (use_stmt)
-	       && gimple_assign_rhs1 (use_stmt) == lhs_ssa)
-	{
-	  /* 'dst = lhs_ssa;' is safe exactly when DST is itself declared
-	     flavored -- see ip_scan_local_member_addr_uses's identical
-	     case for the full rationale.  */
-	  tree dst_var = ip_underlying_var (gimple_assign_lhs (use_stmt));
-	  if (!(dst_var && TREE_CODE (TREE_TYPE (dst_var)) == POINTER_TYPE
-		&& profiles_uninit_pointee_p (dst_var)))
-	    ok = false;
-	}
-      else
-	ok = false;
-    }
-  if (!ok || !any_use)
-    s->other_escape_stmts.safe_push (stmt);
-}
-
 /* The member-access counterpart of ip_scan_stmt_for_var -- same
    per-slot shape (assign rhs/lhs, cond operands, call args/lhs,
    return retval), same must_init/ref_to_uninit call recognition, just
@@ -1380,7 +1339,10 @@ ip_scan_stmt_for_member (gimple *stmt, ip_member_scan *s)
 	  else if (TREE_CODE (r) == ADDR_EXPR
 		   && ip_component_ref_of_this_field_p (TREE_OPERAND (r, 0),
 							 this_parm, field))
-	    ip_scan_member_addr_uses (lhs, s, stmt);
+	    {
+	      if (!ip_addr_of_field_dest_ok_p (lhs, &s->init_stmts))
+		s->other_escape_stmts.safe_push (stmt);
+	    }
 	}
       if (ip_component_ref_of_this_field_p (lhs, this_parm, field)
 	  && !ip_stmt_is_deferred_init_copy_p (stmt))
