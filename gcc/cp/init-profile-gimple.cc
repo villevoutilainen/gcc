@@ -1510,23 +1510,47 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
 }
 
 /* P4222 Phase 3/4d, S4.3/S9.4: true if ARG (a call-argument
-   expression) is "uninit-flavored" -- the address of a local or
-   member marked [[uninit]] (a COMPONENT_REF's own FIELD_DECL operand,
-   for a member -- checked directly against FIELD_DECL's DECL_
-   ATTRIBUTES, since P4222 S5.3's [[uninit]] members are exactly as
-   valid an argument to a [[must_init]]/[[ref_to_uninit]] parameter as
-   an [[uninit]] local, and this is a property of the field itself, not
-   of whose object it belongs to), or a direct pass-through of a
-   pointer variable/member itself marked [[ref_to_uninit]] or
-   [[must_init]] (profiles_uninit_pointee_p covers both, S9.3:
-   "[[must_init]] implies [[ref_to_uninit]]").  Conservatively false
-   for anything else (arithmetic on pointers, a PHI-merged pointer, a
-   cast chain, etc.), matching P4222's own default rule ("by default,
-   a pointer... is considered to point to memory initialized to some
-   type", S4.3) -- propagating flavor through arbitrary pointer
-   expressions is real points-to reasoning, which is what P3446/P4296's
-   own invalidation-profile psets exist for (profiles plan Phase 7),
-   not duplicated here.  */
+   expression) is "uninit-flavored" -- deliberately one uniform model,
+   not two coincidentally-similar ones:
+
+   - The address of a local or member marked [[uninit]] (a
+     COMPONENT_REF's own FIELD_DECL operand, for a member -- gated on
+     FIELD's own attribute OR the containing variable's, since P4222
+     S5.3's [[uninit]] members are exactly as valid an argument to a
+     [[must_init]]/[[ref_to_uninit]] parameter as an [[uninit]] local,
+     and a field is just as subject to uninit-tracking when the WHOLE
+     aggregate is [[uninit]]-declared, S2.3, as when it individually
+     carries the attribute) is flavored *only if this exact occurrence
+     is not itself already provably initialized* -- checked via ip_
+     currently_uninit_p, the same CFG-dominance reach-info §2's own DAA
+     and §2.5's address-escape check already use.  [[uninit]] is not a
+     permanent property of a declaration; neither is being flavored.
+   - A direct pass-through of a pointer variable/member itself
+     PERMANENTLY marked [[ref_to_uninit]] or [[must_init]]
+     (profiles_uninit_pointee_p covers both, S9.3: "[[must_init]]
+     implies [[ref_to_uninit]]") is flavored unconditionally -- this
+     one part genuinely is a fact of the declaration's own type, not a
+     DAA question (a pointer declared [[ref_to_uninit]] doesn't stop
+     being so just because what it currently points to happens to be
+     initialized).
+
+   Because the recursive SSA-copy chase below reaches the first rule
+   regardless of how many plain-copy hops separate ARG from the literal
+   '&E' (e.g. 'q <- p <- &x'), both Assign-/Call-arg-/Return-flavor-
+   consistency already get the exact same DAA proof a direct '&E' at
+   that exact position would -- no cast or escape-hatch call is needed
+   in either case if the proof succeeds; if it can't even be attempted
+   (a parameter, a global, an unprovable merge), that failure to prove
+   is the reason a diagnostic (or an escape hatch) is still required,
+   not a special case.  Conservatively false for anything the chase
+   can't resolve to either rule (arithmetic on pointers, a genuinely
+   mixed PHI merge, a cast chain through an unrelated variable, etc.),
+   matching P4222's own default rule ("by default, a pointer... is
+   considered to point to memory initialized to some type", S4.3) --
+   propagating flavor through arbitrary pointer expressions beyond what
+   this straight-line/PHI chase already does is real points-to
+   reasoning, which is what P3446/P4296's own invalidation-profile
+   psets exist for (profiles plan Phase 7), not duplicated here.  */
 
 /* std::now_uninit -- the Initialization profile's manual, unproven
    "treat this value as [[ref_to_uninit]]-flavored regardless of its
@@ -1692,9 +1716,25 @@ ip_arg_uninit_flavored_p_1 (tree arg, int depth, function *fun,
       if (TREE_CODE (operand) == COMPONENT_REF)
 	{
 	  tree field = TREE_OPERAND (operand, 1);
-	  if (lookup_attribute ("uninit", DECL_ATTRIBUTES (field)) == NULL_TREE)
-	    return false;
 	  tree base = ip_underlying_var (TREE_OPERAND (operand, 0));
+	  /* Gate on FIELD *or* BASE carrying [[uninit]] -- not FIELD
+	     alone.  A field is just as much subject to uninit-tracking
+	     when the whole containing aggregate is [[uninit]]-declared
+	     (every field starts uninitialized, S2.3) as when the field
+	     itself individually carries the attribute; checking only
+	     FIELD's own attribute wrongly treated 'int* p
+	     [[ref_to_uninit]] = &x.a;' (x itself [[uninit]], a not
+	     individually marked) as a flavor mismatch -- FIELD_MARKED
+	     was false, so this returned false (ordinary) even though
+	     x.a was genuinely still uninit, the opposite of what BASE's
+	     own escape-checking (ip_check_local_aggregate_member)
+	     already correctly concludes for the exact same field.  */
+	  bool field_marked
+	    = lookup_attribute ("uninit", DECL_ATTRIBUTES (field)) != NULL_TREE;
+	  bool base_marked
+	    = base && lookup_attribute ("uninit", DECL_ATTRIBUTES (base)) != NULL_TREE;
+	  if (!field_marked && !base_marked)
+	    return false;
 	  /* BASE unresolved (an expression this pass can't trace to a
 	     concrete local, e.g. through an opaque function call's
 	     result): fall back to the old, conservative "declaration
@@ -1838,6 +1878,40 @@ ip_arg_null_pointer_p (tree arg)
   return false;
 }
 
+/* True if ARG (a call-argument, plain-assignment RHS, or return-value
+   expression, after STRIP_NOPS to see through an intervening cast) is
+   a direct '&E'/'&E.field' address-of expression -- as opposed to a
+   pre-existing pointer value (an SSA_NAME, however many hops of plain
+   copies it's chased through) merely being passed along.  Used by the
+   three flavor-consistency checks below to skip their own "refers to
+   [[uninit]] memory but its parameter/destination is not marked
+   [[ref_to_uninit]]" diagnostic for exactly this shape: the address-
+   escape family (ip_check_address_taken_var/ip_check_local_aggregate_
+   member/ip_check_constructor_member) already, unconditionally covers
+   every such occurrence, with -- since both sides now share ip_
+   currently_uninit_p/ip_all_fields_dominate_p -- a PROVABLY identical
+   firing condition for this one shape: same entity, same "is it
+   dominated by an initializing event" test, same anchor location.
+   Reporting both would be pure duplication, not two independent
+   findings.  This is NOT true for a pointer VALUE flowing in from
+   elsewhere (a declared-[[ref_to_uninit]] local copied into an
+   unflavored one, 'q = p;') -- the escape family only ever looks at
+   literal address-of expressions, so it has nothing to say about that
+   shape, and flavor-consistency remains the sole, necessary catch for
+   it.  Deliberately a simple, cheap, top-level-only syntactic test --
+   no need to thread anything through ip_arg_uninit_flavored_p_1's own
+   recursion: whichever rule fired to make arg_flavor true is exactly
+   as identifiable to the caller from ARG's own top-level shape here as
+   it would be from inside that recursion, without needing to expose
+   which internal rule matched.  */
+
+static bool
+ip_arg_is_direct_addr_expr_p (tree arg)
+{
+  STRIP_NOPS (arg);
+  return TREE_CODE (arg) == ADDR_EXPR;
+}
+
 /* P4222 Phase 3, S4.3/S9.4: for a direct call, check that every
    pointer argument's uninit-flavor (ip_arg_uninit_flavored_p) matches
    its corresponding parameter's ([[ref_to_uninit]]/[[must_init]] via
@@ -1901,7 +1975,14 @@ ip_check_call_flavor_consistency (gimple *stmt, tree enclosing_fndecl,
 		  "argument %u to %qD must refer to %<[[uninit]]%> memory, "
 		  "matching its %<[[ref_to_uninit]]%> parameter, under the "
 		  "%<std::init%> profile", i + 1, callee);
-      else if (!param_flavor && arg_flavor)
+      /* !param_flavor && arg_flavor, for a direct '&E'/'&E.field'
+	 argument, is skipped here: ip_check_address_taken_var and
+	 friends already, unconditionally, diagnose every such
+	 occurrence -- see ip_arg_is_direct_addr_expr_p's own comment
+	 for why the two are now provably testing the same condition
+	 for this one shape, not just usually agreeing.  */
+      else if (!param_flavor && arg_flavor
+	       && !ip_arg_is_direct_addr_expr_p (arg))
 	profiles_diagnostic_at (gimple_location (stmt), "std::init",
 		  "argument %u to %qD refers to %<[[uninit]]%> memory but "
 		  "its parameter is not marked %<[[ref_to_uninit]]%>, under "
@@ -2043,6 +2124,13 @@ ip_check_return_flavor_consistency (gimple *stmt, tree enclosing_fndecl,
   bool retval_flavor = ip_arg_uninit_flavored_p (retval, fun, stmt, cache);
   if (fn_flavor == retval_flavor)
     return;
+  /* !fn_flavor && retval_flavor, for a direct '&E'/'&E.field' return
+     value, is skipped here -- see ip_arg_is_direct_addr_expr_p's own
+     comment: the address-escape family already, unconditionally,
+     diagnoses every such occurrence, with a provably identical firing
+     condition for this shape.  */
+  if (!fn_flavor && retval_flavor && ip_arg_is_direct_addr_expr_p (retval))
+    return;
   if (profiles_diagnostic_exempt_p (gimple_location (stmt),
 				     enclosing_fndecl, "std::init"))
     return;
@@ -2102,6 +2190,13 @@ ip_check_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl,
   bool src_flavor = ip_arg_uninit_flavored_p (rhs, fun, stmt, cache);
 
   if (dst_flavor == src_flavor)
+    return;
+  /* !dst_flavor && src_flavor, for a direct '&E'/'&E.field' RHS, is
+     skipped here -- see ip_arg_is_direct_addr_expr_p's own comment:
+     the address-escape family already, unconditionally, diagnoses
+     every such occurrence, with a provably identical firing condition
+     for this shape.  */
+  if (!dst_flavor && src_flavor && ip_arg_is_direct_addr_expr_p (rhs))
     return;
   if (profiles_diagnostic_exempt_p (gimple_location (stmt),
 				     enclosing_fndecl, "std::init"))

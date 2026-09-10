@@ -14,9 +14,7 @@ void take_ptr (int *);
 void f ()
 {
   [[uninit]] int x;
-  take_ptr (&x); // { dg-error "refers to \[^\n\]*memory but its parameter" }
-  // { dg-error "before it is provably initialized" "" { target *-*-* } .-1 }
-  take_ptr (&x); // { dg-error "refers to \[^\n\]*memory but its parameter" }
-  // { dg-error "before it is provably initialized" "" { target *-*-* } .-1 }
+  take_ptr (&x); // { dg-error "before it is provably initialized" }
+  take_ptr (&x); // { dg-error "before it is provably initialized" }
   x = 5;
 }
