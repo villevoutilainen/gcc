@@ -22,7 +22,7 @@ void tst ()
   X y = {7};
   f (&x);
   g (&x); // { dg-error "is not marked" }
-  // { dg-error "call to prove it initialized" "" { target *-*-* } .-1 }
+  // { dg-error "before it is provably initialized" "" { target *-*-* } .-1 }
   f (&y); // { dg-error "must refer to" }
   g (&y);
   x = { 42 };

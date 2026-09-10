@@ -15,8 +15,8 @@ struct X
   X ()
   {
     take_ptr (&m); // { dg-error "refers to \[^\n\]*memory but its parameter" }
-    // { dg-error "call to prove it initialized" "" { target *-*-* } .-1 }
+    // { dg-error "before it is provably initialized" "" { target *-*-* } .-1 }
     take_ptr (&m); // { dg-error "refers to \[^\n\]*memory but its parameter" }
-    // { dg-error "call to prove it initialized" "" { target *-*-* } .-1 }
+    // { dg-error "before it is provably initialized" "" { target *-*-* } .-1 }
   }
 };

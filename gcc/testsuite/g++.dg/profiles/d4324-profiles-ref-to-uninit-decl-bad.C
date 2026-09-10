@@ -20,7 +20,7 @@ void f ()
 
   [[uninit]] int x2;
   int* p2 = &x2; // { dg-error "assigning a pointer marked" }
-  // { dg-error "call to prove it initialized" "" { target *-*-* } .-1 }
+  // { dg-error "before it is provably initialized" "" { target *-*-* } .-1 }
 
   (void) p1;
   (void) p2;

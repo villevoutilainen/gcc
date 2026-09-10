@@ -15,6 +15,6 @@ int without_now_init ()
 {
   int x [[uninit]];
   int *p = &x; // { dg-error "assigning a pointer marked" }
-  // { dg-error "call to prove it initialized" "" { target *-*-* } .-1 }
+  // { dg-error "before it is provably initialized" "" { target *-*-* } .-1 }
   return *p; // { dg-error "read before it is definitely assigned" }
 }
