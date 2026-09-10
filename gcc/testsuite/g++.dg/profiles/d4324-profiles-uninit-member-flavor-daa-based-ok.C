@@ -7,15 +7,13 @@
 // does), so gating on the field's own attribute alone wrongly rejected
 // this exact, legitimate pattern as a flavor mismatch before this fix
 // (found while investigating why this case double-diagnosed
-// differently from the scalar one). consume()'s own [[ref_to_uninit]]
-// parameter is what p is then used for -- a recognized-safe shape for
-// the SEPARATE address-escape check (ip_scan_local_member_addr_uses),
-// not itself what this test is about; an entirely unused p would still
-// trip that check regardless (it requires at least one recognized-safe
-// use, not zero), so a real use is needed here either way -- avoided
-// conflating that with what this test is actually verifying. See
-// d4324-profiles-uninit-member-addr-into-flavored-pointer-ok.C for the
-// "assigned into another declared-flavored pointer variable" shape.
+// differently from the scalar one). consume(p) here is just this test's
+// own way of using p -- unrelated to what's being verified: the
+// SEPARATE address-escape check ('p = &x.a;' itself) is unconditionally
+// clean regardless of whether/how p is later used at all, since p is
+// itself declared [[ref_to_uninit]] (see
+// d4324-profiles-uninit-member-addr-into-flavored-pointer-ok.C for that
+// check's own single-hop rationale).
 // { dg-do compile { target c++11 } }
 
 [[profiles::enforce(std::init)]];

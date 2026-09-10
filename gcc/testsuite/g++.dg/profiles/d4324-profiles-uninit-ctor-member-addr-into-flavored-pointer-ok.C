@@ -1,7 +1,7 @@
 // P4222 Initialization profile: constructor-member (this->field)
 // counterpart of d4324-profiles-uninit-member-addr-into-flavored-
-// pointer-ok.C -- ip_scan_member_addr_uses had the identical gap as its
-// local-aggregate sibling and got the identical fix.
+// pointer-ok.C -- 'p = &a;''s own single-hop destination-flavor check
+// (see that file's own comment) applies identically here.
 // { dg-do compile { target c++11 } }
 
 [[profiles::enforce(std::init)]];
