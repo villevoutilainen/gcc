@@ -1776,6 +1776,27 @@ is_late_template_attribute (tree attr, tree decl)
 	  && identifier_p (t))
 	continue;
 
+      /* D4324/P3589: profiles::suppress's own TREE_VALUE holds the
+	 profile-name identifier (cp_parser_profile_designator's own
+	 comment: "Any identifier used in a profile-argument is not
+	 subject to name lookup" -- it's read back out later via
+	 IDENTIFIER_POINTER/strcmp, never looked up or evaluated as an
+	 expression). value_dependent_expression_p's own IDENTIFIER_NODE
+	 case ("a name that has not been looked up -- must be dependent")
+	 assumes exactly the opposite: that a bare identifier appearing
+	 as an attribute argument is an unresolved expression referring
+	 to the current instantiation. Without this exemption, attaching
+	 '[[profiles::suppress(std::init)]]' to any template entity marks
+	 the attribute ATTR_IS_DEPENDENT, deferring it to instantiation
+	 time, where tsubst_attribute's generic tsubst_expr fallback then
+	 tries to look the profile-name identifier up as a real
+	 expression and fails with a bogus "'std::init' was not declared
+	 in this scope" instead of ever reaching profiles.cc's own
+	 checks.  */
+      if (get_attribute_namespace (attr) == profiles_identifier
+	  && is_attribute_p ("suppress", name))
+	continue;
+
       if (value_dependent_expression_p (t))
 	return true;
     }
