@@ -231,8 +231,14 @@ extern bool profiles_diagnostic_exempt_p (location_t loc, tree fndecl,
    unrecognized PROFILE_NAME at START, matching profiles_handle_exempt_
    attribute's own "unknown profile" error for the identical situation
    -- the attribute's own parse accepts an arbitrary dotted identifier
-   without validating it, so this is the first point that can.  */
+   without validating it, so this is the first point that can.
+   RULE_NAME is the optional 'rule: "..."' argument naming a single
+   sub-rule to suppress instead of the whole profile, or NULL if none
+   was given; since no profile currently registers any sub-rules, a
+   non-NULL RULE_NAME is unconditionally diagnosed as unknown at
+   START (profiles_valid_subrule_p, profiles.cc).  */
 extern void profiles_register_suppression (const char *profile_name,
+					    const char *rule_name,
 					    location_t start, location_t end);
 
 /* Shared implementation for both call sites above: walk every
