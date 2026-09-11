@@ -255,6 +255,32 @@ extern void profiles_process_suppress_attributes (tree attrs,
 						   location_t start,
 						   location_t end);
 
+/* P3589: a function-DEFINITION's own suppress attribute needs to cover
+   diagnostics raised on its own local declarations while its body is
+   still being parsed (cp_finish_decl's own "not initialized and not
+   marked [[uninit]]" check chief among them) -- diagnostics that fire
+   well before finish_function, the only point a plain profiles_
+   process_suppress_attributes call could otherwise register the
+   range from. Call this from start_preparsed_function (decl.cc),
+   before FNDECL's body is parsed, to open an unbounded suppression
+   range per suppress attribute found on FNDECL's own DECL_ATTRIBUTES
+   -- validating (unknown profile / bad sub-rule) right away, at
+   FNDECL's own DECL_SOURCE_LOCATION, exactly where profiles_register_
+   suppression already would. Paired with profiles_close_function_
+   suppressions below, which every call to this one requires calling
+   exactly once, later, once FNDECL's own END is known.  */
+extern void profiles_open_function_suppressions (tree fndecl);
+
+/* The other half of profiles_open_function_suppressions above -- call
+   from finish_function (decl.cc) once the function's own body is
+   fully parsed, with END (input_location at that point) now known.
+   Closes out the innermost still-open frame (matching however
+   function bodies themselves are currently nested -- a lambda's own
+   operator() body, parsed to completion, closes before its enclosing
+   function's own body does), replacing each of its entries' placeholder
+   END with the real one.  */
+extern void profiles_close_function_suppressions (location_t end);
+
 /* P3446R0/P4296R0, Phase 7a: true if EXP (an expression, taken
    verbatim from the delete-expression's own operand in decl2.cc's
    delete_sanity) resolves to a declaration carrying [[owning_ptr]].

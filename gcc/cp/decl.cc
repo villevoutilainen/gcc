@@ -20787,6 +20787,15 @@ start_preparsed_function (tree decl1, tree attrs, int flags)
   if (!DECL_OMP_DECLARE_REDUCTION_P (decl1))
     start_lambda_scope (decl1);
 
+  /* P3589: open DECL1's own '[[profiles::suppress(profile)]]' range
+     now, before its body is parsed -- see profiles_open_function_
+     suppressions's own comment (profiles.h) for why a function-level
+     suppress attribute cannot wait until finish_function the way
+     cp_finish_decl's own declaration/statement registration can.
+     Paired unconditionally with finish_function's own call to
+     profiles_close_function_suppressions.  */
+  profiles_open_function_suppressions (decl1);
+
   return true;
 }
 
@@ -21178,19 +21187,18 @@ finish_function (bool inline_p)
      "the declaration or statement" the attribute appertains to), but
      cp_finish_decl (decl.cc's own statement-level counterpart to this)
      is never reached for one: a function never flows through it the
-     way a VAR_DECL's initializer does. Registers the whole function's
-     own source extent, DECL_SOURCE_LOCATION (fndecl) (the function's
-     own name, the same starting convention cp_finish_decl already uses
-     for a variable, not literally "right after the attribute" the way
-     the paper's wording puts it -- an accepted, already-established
-     approximation, not a new one) through INPUT_LOCATION here (just
-     past the function's own closing '}', the earliest point this
-     function can be reached) -- covering every diagnostic the rest of
-     this pass, and the later GIMPLE-level checkers, could otherwise
-     raise anywhere in FNDECL's body.  */
-  profiles_process_suppress_attributes (DECL_ATTRIBUTES (fndecl),
-					 DECL_SOURCE_LOCATION (fndecl),
-					 input_location);
+     way a VAR_DECL's initializer does. The range itself was already
+     opened at DECL_SOURCE_LOCATION (fndecl) by start_preparsed_
+     function's own call to profiles_open_function_suppressions --
+     covering diagnostics raised while the body was still being parsed
+     (a local variable's own "not initialized" check chief among them,
+     which fires long before this point) -- so all that's left here is
+     to pin down the real END, INPUT_LOCATION (just past the function's
+     own closing '}', the earliest point this function can be reached),
+     closing out every diagnostic the rest of this pass, and the later
+     GIMPLE-level checkers, could otherwise raise anywhere in FNDECL's
+     body.  */
+  profiles_close_function_suppressions (input_location);
 
   if (!DECL_OMP_DECLARE_REDUCTION_P (fndecl))
     finish_lambda_scope ();
