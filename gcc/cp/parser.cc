@@ -33440,17 +33440,40 @@ cp_parser_profile_designator (cp_parser *parser)
 }
 
 /* D4324/P3589, Increment 1: parse a profiles::enforce or
-   profiles::suppress attribute's argument list -- just a single
-   profile-name (see cp_parser_profile_designator's own comment).  The
-   rest of the full grammar (profile-designator-list i.e. multiple
-   comma-separated profile-designators, a profile-argument-list in
-   parens after the name, suppress's rule:/justification: arguments)
-   is later work -- this deliberately declines anything past one,
-   possibly-dotted name, the same "reject what isn't handled yet"
-   posture the rest of this file's D4324 work uses throughout.  */
+   profiles::suppress attribute's argument list -- a profile-name (see
+   cp_parser_profile_designator's own comment), optionally followed,
+   for suppress only (IS_SUPPRESS), by a single 'rule: string-literal'
+   naming one sub-rule of the profile to suppress instead of the whole
+   thing, itself optionally followed by a 'justification: string-
+   literal' that is validated (must be a string literal) but not
+   otherwise consulted -- mirroring cp_parser_profiles_exempt_args's
+   own identifier: string-literal shape and its own comment on
+   justification.  The rest of the full grammar (profile-designator-
+   list, i.e. multiple comma-separated profile-designators, and a
+   profile-argument-list in parens after the name) is later work --
+   this deliberately declines anything past that, the same "reject
+   what isn't handled yet" posture the rest of this file's D4324 work
+   uses throughout.  Every error path skips to the closing parenthesis
+   before returning, matching cp_parser_profiles_exempt_args -- a
+   malformed argument list must never leave the token stream out of
+   sync with what the parser thinks it consumed, the way an earlier
+   version of this function did for its final "expected ')'" case,
+   which cascaded into spurious follow-on errors instead of a single
+   clean diagnostic.  A NULL rule-name in the built TREE_VALUE (see
+   below) means "suppress the whole profile"; whether any given
+   rule-name is actually known is for the semantic layer to decide
+   (profiles_register_suppression, profiles.cc), not this parser --
+   no profile currently has any, so every non-NULL rule-name is
+   rejected there today.
+
+   TREE_VALUE (attribute) becomes a TREE_LIST: TREE_PURPOSE is the
+   rule-name STRING_CST if 'rule:' was given, else NULL_TREE;
+   TREE_VALUE is the profile-name identifier -- read back out by
+   profiles_process_suppress_attributes (profiles.cc).  */
 
 static void
-cp_parser_profiles_attribute_args (cp_parser *parser, tree attribute)
+cp_parser_profiles_attribute_args (cp_parser *parser, tree attribute,
+				   bool is_suppress)
 {
   matching_parens parens;
   parens.consume_open (parser);
@@ -33465,12 +33488,94 @@ cp_parser_profiles_attribute_args (cp_parser *parser, tree attribute)
       return;
     }
 
+  tree rule = NULL_TREE;
+  if (is_suppress && cp_lexer_next_token_is (parser->lexer, CPP_COMMA))
+    {
+      cp_lexer_consume_token (parser->lexer);
+
+      cp_token *token = cp_lexer_peek_token (parser->lexer);
+      if (token->type != CPP_NAME || !id_equal (token->u.value, "rule"))
+	{
+	  error_at (token->location, "expected %<rule%>");
+	  cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
+						 /*or_comma=*/false,
+						 /*consume_paren=*/true);
+	  TREE_VALUE (attribute) = error_mark_node;
+	  return;
+	}
+      cp_lexer_consume_token (parser->lexer);
+
+      if (!cp_parser_require (parser, CPP_COLON, RT_COLON))
+	{
+	  cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
+						 /*or_comma=*/false,
+						 /*consume_paren=*/true);
+	  TREE_VALUE (attribute) = error_mark_node;
+	  return;
+	}
+
+      rule = cp_parser_string_literal (parser, /*translate=*/false,
+				       /*wide_ok=*/false);
+      if (rule == error_mark_node)
+	{
+	  cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
+						 /*or_comma=*/false,
+						 /*consume_paren=*/true);
+	  TREE_VALUE (attribute) = error_mark_node;
+	  return;
+	}
+
+      if (cp_lexer_next_token_is (parser->lexer, CPP_COMMA))
+	{
+	  cp_lexer_consume_token (parser->lexer);
+	  token = cp_lexer_peek_token (parser->lexer);
+	  if (token->type != CPP_NAME
+	      || !id_equal (token->u.value, "justification"))
+	    {
+	      error_at (token->location, "expected %<justification%>");
+	      cp_parser_skip_to_closing_parenthesis (parser,
+						     /*recovering=*/true,
+						     /*or_comma=*/false,
+						     /*consume_paren=*/true);
+	      TREE_VALUE (attribute) = error_mark_node;
+	      return;
+	    }
+	  cp_lexer_consume_token (parser->lexer);
+
+	  if (!cp_parser_require (parser, CPP_COLON, RT_COLON))
+	    {
+	      cp_parser_skip_to_closing_parenthesis (parser,
+						     /*recovering=*/true,
+						     /*or_comma=*/false,
+						     /*consume_paren=*/true);
+	      TREE_VALUE (attribute) = error_mark_node;
+	      return;
+	    }
+
+	  tree justification = cp_parser_string_literal (parser,
+							  /*translate=*/false,
+							  /*wide_ok=*/false);
+	  if (justification == error_mark_node)
+	    {
+	      cp_parser_skip_to_closing_parenthesis (parser,
+						     /*recovering=*/true,
+						     /*or_comma=*/false,
+						     /*consume_paren=*/true);
+	      TREE_VALUE (attribute) = error_mark_node;
+	      return;
+	    }
+	}
+    }
+
   if (!parens.require_close (parser))
     {
+      cp_parser_skip_to_closing_parenthesis (parser, /*recovering=*/true,
+					     /*or_comma=*/false,
+					     /*consume_paren=*/true);
       TREE_VALUE (attribute) = error_mark_node;
       return;
     }
-  TREE_VALUE (attribute) = build_tree_list (NULL_TREE, name);
+  TREE_VALUE (attribute) = build_tree_list (rule, name);
 }
 
 /* P3589, Phase 5: parse a profiles::exempt attribute's argument list --
@@ -33889,7 +33994,9 @@ cp_parser_std_attribute (cp_parser *parser, tree attr_ns)
 	&& (is_attribute_p ("enforce", attr_id)
 	    || is_attribute_p ("suppress", attr_id)))
       {
-	cp_parser_profiles_attribute_args (parser, attribute);
+	cp_parser_profiles_attribute_args (parser, attribute,
+					   is_attribute_p ("suppress",
+							   attr_id));
 	return attribute;
       }
     if (attr_ns == profiles_identifier && is_attribute_p ("exempt", attr_id))

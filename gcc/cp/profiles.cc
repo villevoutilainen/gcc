@@ -829,14 +829,38 @@ struct profiles_suppression
 
 static vec<profiles_suppression> profiles_suppressions;
 
+/* True if RULE_NAME names a sub-rule the profile identified by BIT
+   actually recognizes for individual suppression via suppress's
+   'rule: "..."' argument.  Neither std::init nor std::invalidation
+   register any sub-rules right now, so this unconditionally returns
+   false today -- it exists as the one place a future profile with
+   real sub-rules would list them, so a 'rule:' argument has somewhere
+   real to be checked against instead of being accepted uncritically
+   (or, before this, crashing further down the pipeline).  */
+
+static bool
+profiles_valid_subrule_p (unsigned bit ATTRIBUTE_UNUSED,
+			  const char *rule_name ATTRIBUTE_UNUSED)
+{
+  return false;
+}
+
 void
-profiles_register_suppression (const char *profile_name, location_t start,
-				location_t end)
+profiles_register_suppression (const char *profile_name,
+			       const char *rule_name,
+			       location_t start, location_t end)
 {
   unsigned bit = profiles_lookup (profile_name);
   if (!bit)
     {
       error_at (start, "unknown profile %qs", profile_name);
+      return;
+    }
+
+  if (rule_name && !profiles_valid_subrule_p (bit, rule_name))
+    {
+      error_at (start, "profile %qs has no sub-rule %qs to suppress",
+		profile_name, rule_name);
       return;
     }
 
@@ -854,7 +878,12 @@ profiles_register_suppression (const char *profile_name, location_t start,
    itself (P3589) states a suppression attribute's dominion is granted
    equally to "a declaration or statement" it appertains to -- this is
    the one place both call sites' identical loop lives, so they can't
-   drift apart from each other or from that wording.  */
+   drift apart from each other or from that wording.
+
+   TREE_VALUE (attr) is skipped whenever it is error_mark_node: a
+   malformed argument list (e.g. a 'rule:' the parser couldn't make
+   sense of) that cp_parser_profiles_attribute_args already diagnosed
+   and marked at parse time -- nothing left to register here.  */
 
 void
 profiles_process_suppress_attributes (tree attrs, location_t start,
@@ -864,8 +893,14 @@ profiles_process_suppress_attributes (tree attrs, location_t start,
        attr; attr = lookup_attribute ("profiles", "suppress",
 				      TREE_CHAIN (attr)))
     {
-      tree name = TREE_VALUE (TREE_VALUE (attr));
-      profiles_register_suppression (IDENTIFIER_POINTER (name), start, end);
+      tree args = TREE_VALUE (attr);
+      if (args == error_mark_node)
+	continue;
+      tree name = TREE_VALUE (args);
+      tree rule = TREE_PURPOSE (args);
+      profiles_register_suppression (IDENTIFIER_POINTER (name),
+				     rule ? TREE_STRING_POINTER (rule) : NULL,
+				     start, end);
     }
 }
 
