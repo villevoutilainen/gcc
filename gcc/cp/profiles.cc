@@ -825,9 +825,27 @@ struct profiles_suppression
   unsigned profile_bit;
   location_t start;
   location_t end;
+  /* True for a function-level suppression still being parsed (opened
+     by profiles_open_function_suppressions at the start of the
+     function's own body, before its END is knowable) -- see that
+     function's own comment.  END is meaningless while this is true;
+     profiles_suppressed_at_p treats an open range as unbounded from
+     START onward instead of consulting it.  Always false for a
+     suppression registered the ordinary way (profiles_register_
+     suppression), whose START and END are both already known.  */
+  bool open;
 };
 
 static vec<profiles_suppression> profiles_suppressions;
+
+/* One vec of profiles_suppressions indices per currently-being-parsed
+   function body, pushed by profiles_open_function_suppressions and
+   popped by profiles_close_function_suppressions -- a plain stack
+   because bodies nest (a lambda's own operator() is itself a
+   function whose body is parsed while its enclosing function's own
+   body is still open).  */
+
+static vec<vec<unsigned>> profiles_open_suppression_frames;
 
 /* True if RULE_NAME names a sub-rule the profile identified by BIT
    actually recognizes for individual suppression via suppress's
@@ -868,7 +886,92 @@ profiles_register_suppression (const char *profile_name,
   s.profile_bit = bit;
   s.start = start;
   s.end = end;
+  s.open = false;
   profiles_suppressions.safe_push (s);
+}
+
+/* P3589: a function-DEFINITION's own '[[profiles::suppress(profile)]]'
+   is registered here, at the very start of its body (called from
+   start_preparsed_function, decl.cc) rather than at the end
+   (finish_function, where profiles_close_function_suppressions below
+   does the corresponding close) the way every other suppress
+   attachment point (a declaration or statement, both fully parsed --
+   and so fully bounded -- before cp_finish_decl/cp_parser_statement
+   ever registers them) can afford to. A local variable declared
+   without an initializer is diagnosed immediately, in cp_finish_decl,
+   while the enclosing function's own body is still being parsed --
+   long before finish_function's own end-of-body hook would otherwise
+   register the suppression range covering it. Registering (uncertain,
+   open-ended) ranges here instead, and only pinning down their real
+   END once finish_function knows it, is what actually lets a
+   function-level suppress cover such a diagnostic; unlike
+   profiles_process_suppress_attributes, this also VALIDATES (unknown
+   profile / unrecognized sub-rule) at exactly the same point it always
+   has (DECL_SOURCE_LOCATION (fndecl), matching every other suppress
+   attachment point's own diagnostic location) despite opening earlier.  */
+
+void
+profiles_open_function_suppressions (tree fndecl)
+{
+  vec<unsigned> frame = vNULL;
+  location_t start = DECL_SOURCE_LOCATION (fndecl);
+
+  for (tree attr = lookup_attribute ("profiles", "suppress",
+				     DECL_ATTRIBUTES (fndecl));
+       attr; attr = lookup_attribute ("profiles", "suppress",
+				      TREE_CHAIN (attr)))
+    {
+      tree args = TREE_VALUE (attr);
+      if (args == error_mark_node)
+	continue;
+      tree name = TREE_VALUE (args);
+      tree rule = TREE_PURPOSE (args);
+      const char *profile_name = IDENTIFIER_POINTER (name);
+
+      unsigned bit = profiles_lookup (profile_name);
+      if (!bit)
+	{
+	  error_at (start, "unknown profile %qs", profile_name);
+	  continue;
+	}
+      if (rule && !profiles_valid_subrule_p (bit, TREE_STRING_POINTER (rule)))
+	{
+	  error_at (start, "profile %qs has no sub-rule %qs to suppress",
+		    profile_name, TREE_STRING_POINTER (rule));
+	  continue;
+	}
+
+      profiles_suppression s;
+      s.profile_bit = bit;
+      s.start = start;
+      s.end = start;
+      s.open = true;
+      frame.safe_push (profiles_suppressions.length ());
+      profiles_suppressions.safe_push (s);
+    }
+
+  profiles_open_suppression_frames.safe_push (frame);
+}
+
+/* The other half of profiles_open_function_suppressions above --
+   called from finish_function (decl.cc) once the function's own body
+   is fully parsed and END (input_location at that point) is finally
+   known. Pops this function's own frame (the innermost still-open
+   one, matching how function bodies themselves nest) and pins down
+   the real END, closing out every range that function's own call to
+   profiles_open_function_suppressions opened.  */
+
+void
+profiles_close_function_suppressions (location_t end)
+{
+  vec<unsigned> frame = profiles_open_suppression_frames.pop ();
+  for (unsigned i = 0; i < frame.length (); ++i)
+    {
+      profiles_suppression &s = profiles_suppressions[frame[i]];
+      s.end = end;
+      s.open = false;
+    }
+  frame.release ();
 }
 
 /* Shared by cp_finish_decl (decl.cc, for a declaration) and
@@ -929,15 +1032,22 @@ profiles_suppressed_at_p (unsigned bit, location_t loc)
       if (s.profile_bit != bit)
 	continue;
       expanded_location s_start = expand_location (s.start);
-      expanded_location s_end = expand_location (s.end);
-      if (!s_start.file || !s_end.file
-	  || strcmp (s_start.file, eloc.file) != 0
-	  || strcmp (s_end.file, eloc.file) != 0)
+      if (!s_start.file || strcmp (s_start.file, eloc.file) != 0)
 	continue;
-      if ((eloc.line > s_start.line
-	   || (eloc.line == s_start.line && eloc.column >= s_start.column))
-	  && (eloc.line < s_end.line
-	      || (eloc.line == s_end.line && eloc.column <= s_end.column)))
+      if (!(eloc.line > s_start.line
+	    || (eloc.line == s_start.line && eloc.column >= s_start.column)))
+	continue;
+      /* An open (still-being-parsed) function-level suppression has no
+	 usable END yet -- but every location checked while it's open is,
+	 by construction, still inside that same function's own body, so
+	 it's covered regardless.  */
+      if (s.open)
+	return true;
+      expanded_location s_end = expand_location (s.end);
+      if (!s_end.file || strcmp (s_end.file, eloc.file) != 0)
+	continue;
+      if (eloc.line < s_end.line
+	  || (eloc.line == s_end.line && eloc.column <= s_end.column))
 	return true;
     }
   return false;
