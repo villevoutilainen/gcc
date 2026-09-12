@@ -1856,6 +1856,27 @@ ip_arg_uninit_flavored_p_1 (tree arg, int depth, function *fun,
 	return profiles_uninit_pointee_p (var);
       return false;
     }
+  /* A bare COMPONENT_REF (a field read BY VALUE, e.g. 'this->elem' or
+     'mem.elem') -- the shape a [[ref_to_uninit]]-flavored pointer FIELD's
+     read produces once the SSA_NAME branch above has peeled off its
+     anonymous load temporary ('_1 = this_2(D)->elem; now_init (_1);').
+     Checks the innermost FIELD_DECL's own [[ref_to_uninit]]/[[must_init]]
+     attribute directly, exactly like the VAR_DECL/PARM_DECL fallback just
+     below does for a plain variable -- this is the field's own declared
+     POINTER FLAVOR, unrelated to the ADDR_EXPR (COMPONENT_REF) case above
+     (which answers a different question: whether the OBJECT is still
+     [[uninit]], DAA-based via ip_currently_uninit_p). Works for any
+     field-chain depth ('this->mem.elem') for free, with no recursion:
+     COMPONENT_REF's operand 1 is always the innermost field regardless of
+     how deeply operand 0 itself nests ('a.b.c' is COMPONENT_REF
+     (COMPONENT_REF (a, b), c) -- operand 1 is always 'c').  */
+  if (TREE_CODE (arg) == COMPONENT_REF)
+    {
+      tree field = TREE_OPERAND (arg, 1);
+      if (TREE_CODE (TREE_TYPE (field)) == POINTER_TYPE)
+	return profiles_uninit_pointee_p (field);
+      return false;
+    }
   /* A bare VAR_DECL/PARM_DECL (not wrapped in an SSA_NAME at all) --
      the shape a memory-resident pointer variable's read produces, e.g.
      a global/namespace-scope variable (never is_gimple_reg regardless
