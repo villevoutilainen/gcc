@@ -38,6 +38,25 @@ extern void profiles_note_nonempty_declaration (void);
    still falls back to the same generic warning as before.  */
 extern void cp_finish_empty_declaration (location_t, tree);
 
+/* Called by warn_misplaced_attr_for_class_type (decl.cc) before it
+   gives its own generic "attribute ignored" warning: if ATTRS (the
+   actual misplaced attribute-specifier-seq) contains a profiles::
+   enforce or profiles::exempt entry, gives the same clear "only
+   appertains to its own, standalone declaration" error decl_
+   attributes gives for every other misattachment shape instead, and
+   returns true.  */
+extern bool profiles_diagnose_misplaced_enforce_or_exempt (location_t loc,
+							    tree attrs);
+
+/* The one place the "you used profiles::enforce/exempt wrong" message
+   text lives -- shared by profiles_diagnose_misplaced_enforce_or_
+   exempt above and handle_profiles_declaration_only_attribute
+   (tree.cc, the decl_attributes-table handler for these same two
+   names), so the two call sites can never drift apart.  NAME is the
+   misused attribute's own identifier ("enforce" or "exempt").  */
+extern void profiles_error_declaration_only_attribute (location_t loc,
+							tree name);
+
 /* True if the named profile (e.g. "std::init") is enforced -- active,
    with violations reported as hard errors -- for this translation
    unit.  Covers both an in-source [[profiles::enforce(name)]] and
