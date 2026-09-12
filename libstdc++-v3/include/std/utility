@@ -240,6 +240,26 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     escape_uninit(_Tp& __obj [[ref_to_uninit]]) noexcept
     { return __obj; }
 
+  /// P4222 (Initialization profile): escape_uninit()'s own pointer-typed
+  /// sibling -- lets a [[ref_to_uninit]]-flavored pointer/iterator (as
+  /// opposed to a single named object's address) be passed to an
+  /// arbitrary, unannotated function/algorithm (e.g. the real,
+  /// unannotated std::uninitialized_fill) without tripping the
+  /// checker's flavor-consistency rejection. Asserts nothing about the
+  /// pointee's contents, exactly like escape_uninit() above -- a
+  /// distinct name rather than an overload of escape_uninit() itself,
+  /// since a _Tp&/_Tp* overload pair is genuinely ambiguous for a plain
+  /// pointer argument (deducing _Tp=pointee for this pointer form and
+  /// _Tp=pointer-type for the reference form above are equally good
+  /// matches, with neither template more specialized than the other) --
+  /// the same reason now_init() and now_init_in_place() above are
+  /// distinctly named rather than overloaded.
+  template<typename _Tp>
+    [[__gnu__::__always_inline__]]
+    constexpr _Tp*
+    escape_ref_to_uninit(_Tp* __p [[ref_to_uninit]]) noexcept
+    { return __p; }
+
   /// P4222 (Initialization profile): forcibly treat __x as referring to
   /// [[uninit]] memory, regardless of its own declared flavor -- a
   /// manual, unproven bridge for implementing a [[ref_to_uninit]]-
