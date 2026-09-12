@@ -6358,13 +6358,27 @@ fixup_anonymous_aggr (tree t)
 
 /* Warn for an attribute located at LOCATION that appertains to the
    class type CLASS_TYPE that has not been properly placed after its
-   class-key, in it class-specifier.  */
+   class-key, in it class-specifier.  ATTRS is the actual misplaced
+   attribute-specifier-seq (a TREE_LIST chain), needed so a profiles::
+   enforce/profiles::exempt attribute misattached this way (e.g. a
+   missing ';' after '[[profiles::enforce(profile)]]' letting it
+   attach to a following 'struct Foo {};' instead) gets the same clear
+   "only appertains to its own, standalone declaration" error
+   decl_attributes gives for every OTHER misattachment shape, rather
+   than the generic "attribute ignored" warning below -- see
+   profiles_diagnose_misplaced_enforce_or_exempt's own comment
+   (profiles.cc) for why this specific declaration shape (one that
+   defines/redeclares a class/union/enum type, with no separate
+   object being declared) never reaches decl_attributes at all.  */
 
 void
 warn_misplaced_attr_for_class_type (location_t location,
-				    tree class_type)
+				    tree class_type, tree attrs)
 {
   gcc_assert (OVERLOAD_TYPE_P (class_type));
+
+  if (profiles_diagnose_misplaced_enforce_or_exempt (location, attrs))
+    return;
 
   auto_diagnostic_group d;
   if (warning_at (location, OPT_Wattributes,
@@ -6556,7 +6570,8 @@ check_tag_decl (cp_decl_specifier_seq *declspecs,
 		    "an explicit instantiation");
 	}
       else
-	warn_misplaced_attr_for_class_type (loc, declared_type);
+	warn_misplaced_attr_for_class_type (loc, declared_type,
+					    declspecs->attributes);
     }
 
   if (declspecs->std_attributes

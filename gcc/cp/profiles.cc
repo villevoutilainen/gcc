@@ -406,6 +406,61 @@ cp_finish_empty_declaration (location_t attrs_loc, tree std_attrs)
     warning_at (attrs_loc, OPT_Wattributes, "attribute ignored");
 }
 
+/* Scan ATTRS (an ordinary attribute-specifier-seq's TREE_LIST chain)
+   for a profiles::enforce or profiles::exempt entry; if found, emit
+   the same "only appertains to its own, standalone declaration" error
+   handle_profiles_declaration_only_attribute (tree.cc) gives when
+   decl_attributes reaches one of these two names the ordinary way,
+   and return true.
+
+   Needed because a declaration that instead defines/redeclares a
+   class/union/enum type with no separate object being declared (a
+   bare 'struct Foo {};', the shape check_tag_decl, decl.cc,
+   processes) never calls decl_attributes for its own leading
+   attributes at all -- check_tag_decl and the "attribute following a
+   class-specifier" case (cp_parser_decl_specifier_seq, parser.cc)
+   both instead call warn_misplaced_attr_for_class_type directly,
+   which used to give only the same generic "attribute ignored"
+   warning no matter which attribute was actually misplaced.  Both of
+   those callers already have their own misplaced attribute list and
+   a real location on hand, so this takes both explicitly rather than
+   relying on input_location.  */
+
+bool
+profiles_diagnose_misplaced_enforce_or_exempt (location_t loc, tree attrs)
+{
+  for (tree a = attrs; a; a = TREE_CHAIN (a))
+    {
+      tree name = get_attribute_name (a);
+      tree ns = get_attribute_namespace (a);
+      if (ns == profiles_identifier
+	  && (is_attribute_p ("enforce", name)
+	      || is_attribute_p ("exempt", name)))
+	{
+	  profiles_error_declaration_only_attribute (loc, name);
+	  return true;
+	}
+    }
+  return false;
+}
+
+/* Shared by the scan above and handle_profiles_declaration_only_
+   attribute (tree.cc, the decl_attributes-table handler for these
+   same two names): the one place the actual "you used profiles::
+   enforce/exempt wrong" message text lives, so the two call sites
+   can never drift apart from each other.  */
+
+void
+profiles_error_declaration_only_attribute (location_t loc, tree name)
+{
+  error_at (loc,
+	    "%<profiles::%E%> only appertains to its own, standalone "
+	    "declaration terminated by %<;%> (e.g. "
+	    "%<[[profiles::%E(std::init)]];%>); it cannot attach to a "
+	    "following declaration, did you forget a semicolon?",
+	    name, name);
+}
+
 void
 init_profiles (void)
 {

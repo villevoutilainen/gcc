@@ -36,6 +36,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "attribs.h"
 #include "flags.h"
 #include "selftest.h"
+#include "profiles.h"
 
 static tree bot_manip (tree *, int *, void *);
 static tree bot_replace (tree *, int *, void *);
@@ -5993,6 +5994,34 @@ handle_profiles_suppress_attribute (tree *, tree, tree, int, bool *)
   return NULL_TREE;
 }
 
+/* profiles::enforce/profiles::exempt only ever have a well-formed
+   meaning as their own bare empty-declaration ('[[profiles::enforce
+   (profile)]];'/'[[profiles::exempt(profile, ...)]];') -- see
+   cp_finish_empty_declaration's own comment (profiles.cc) for why
+   correct usage never reaches this handler at all: it's processed
+   directly there, by scanning the parsed attribute list by name/
+   namespace and calling profiles_handle_enforce_attribute/profiles_
+   handle_exempt_attribute manually, deliberately never routing
+   through decl_attributes (there is no DECL to attach to for an
+   empty-declaration, and decl_attributes requires one).  Reaching
+   this handler at all is therefore itself proof of misuse -- most
+   commonly a missing ';' letting the attribute-specifier-seq attach
+   to the FOLLOWING declaration instead, which used to silently
+   produce nothing but a generic, unrelated-looking "attribute
+   ignored" warning while the named profile was never actually
+   enforced/exempted for the rest of the translation unit at all.
+   Unconditionally errors instead, explaining the fix, rather than
+   trying to validate or process NODE/ARGS in any way.  */
+
+static tree
+handle_profiles_declaration_only_attribute (tree *, tree name, tree, int,
+					    bool *no_add_attrs)
+{
+  profiles_error_declaration_only_attribute (input_location, name);
+  *no_add_attrs = true;
+  return NULL_TREE;
+}
+
 /* Table of valid C++ attributes.  */
 // clang-format off
 static const attribute_spec cxx_gnu_attributes[] =
@@ -6060,16 +6089,31 @@ const scoped_attribute_specs std_attribute_table =
 };
 
 /* Table of D4324/P3589 profiles:: namespace-scoped attributes.
-   profiles::enforce/profiles::exempt are NOT here: both attach only
-   to an empty-declaration (nothing to install DECL_ATTRIBUTES onto),
-   and are consumed directly by the parser instead -- see cp_parser_
-   declaration's own dispatch. profiles::suppress is different: it
-   attaches to an ordinary declaration and needs to actually survive
-   there, hence a real, registered attribute_spec.  */
+   profiles::suppress attaches to an ordinary declaration and needs to
+   actually survive there, hence a real, registered attribute_spec
+   with a handler that does real work. profiles::enforce/profiles::
+   exempt are different -- both attach only to an empty-declaration
+   (nothing to install DECL_ATTRIBUTES onto), and correct usage is
+   consumed directly by the parser instead, via cp_finish_empty_
+   declaration (profiles.cc), which deliberately never reaches this
+   table at all -- but they ARE registered here anyway, with a handler
+   (handle_profiles_declaration_only_attribute) that unconditionally
+   errors: reaching this table for either of those two names can only
+   mean they were attached to a real declaration, i.e. misused (most
+   commonly a missing ';'), which used to silently produce nothing but
+   a generic "attribute ignored" warning -- see that handler's own
+   comment.  Permissive decl_req/type_req (false, false) and arg-count
+   bounds (0, -1) so the attribute is accepted on any following
+   declaration shape, and no generic pre-check ever preempts this
+   handler's own clearer error with a different one.  */
 static const attribute_spec profiles_attributes[] =
 {
   { "suppress", 1, 1, true, false, false, false,
     handle_profiles_suppress_attribute, NULL },
+  { "enforce", 0, -1, false, false, false, false,
+    handle_profiles_declaration_only_attribute, NULL },
+  { "exempt", 0, -1, false, false, false, false,
+    handle_profiles_declaration_only_attribute, NULL },
 };
 
 const scoped_attribute_specs profiles_attribute_table =

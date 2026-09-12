@@ -18745,7 +18745,8 @@ cp_parser_decl_specifier_seq (cp_parser* parser,
 		    {
 		      /* This is an attribute following a class-specifier.  */
 		      warn_misplaced_attr_for_class_type (token->location,
-							  decl_specs->type);
+							  decl_specs->type,
+							  attrs);
 		      attrs = NULL_TREE;
 		    }
 		  else
