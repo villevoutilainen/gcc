@@ -1772,6 +1772,21 @@ ip_arg_uninit_flavored_p_1 (tree arg, int depth, function *fun,
 	}
       return false;
     }
+  if (TREE_CODE (arg) == POINTER_PLUS_EXPR)
+    /* Pointer arithmetic ('base + n') never changes WHETHER the
+       pointer traces back to [[ref_to_uninit]]/[[must_init]] memory,
+       only where within the same storage it points -- matching
+       invalidation-profile-gimple.cc's own identical POINTER_PLUS_EXPR
+       handling in ip_escapes_locally_p, and the paper's own "a
+       [[ref_to_uninit]] cast to a pointer yields a [[ref_to_uninit]]"
+       reasoning (confirmed as a real, reachable gap via a user report:
+       'p + i'/'&p[i]' -- the latter folding to the former, address-of-
+       dereference cancelling out -- on a [[ref_to_uninit]]-flavored
+       field silently lost the flavor with no case here at all).
+       Ignores the offset (operand 1) entirely and recurses into the
+       base (operand 0).  */
+    return ip_arg_uninit_flavored_p_1 (TREE_OPERAND (arg, 0), depth + 1,
+				       fun, at_stmt, cache);
   if (TREE_CODE (arg) == SSA_NAME)
     {
       /* If ARG's own reaching definition is itself a single-operand
@@ -1789,6 +1804,25 @@ ip_arg_uninit_flavored_p_1 (tree arg, int depth, function *fun,
 	 is no loop this recursion could run around.  */
       gimple *def = SSA_NAME_DEF_STMT (arg);
       if (def && is_gimple_assign (def) && gimple_assign_single_p (def))
+	return ip_arg_uninit_flavored_p_1 (gimple_assign_rhs1 (def), depth + 1,
+					    fun, at_stmt, cache);
+      /* Or, if ARG's own reaching definition is a POINTER_PLUS_EXPR
+	 ('_4 = _1 + _3;', the shape 'p + n'/'&p[n]' pointer arithmetic
+	 on an SSA-registered pointer takes once fully gimplified into
+	 SSA -- confirmed directly via gdb: unlike the plain-copy case
+	 just above, THIS is a two-operand GIMPLE_ASSIGN, so gimple_
+	 assign_single_p is false and the branch above never fires,
+	 previously falling through to "some other computed value" and
+	 silently losing the flavor) -- pointer arithmetic never changes
+	 WHETHER the pointer traces back to [[ref_to_uninit]]/[[must_
+	 init]] memory, only where within the same storage it points,
+	 matching invalidation-profile-gimple.cc's own identical
+	 POINTER_PLUS_EXPR handling in ip_escapes_locally_p and the
+	 paper's own "a [[ref_to_uninit]] cast to a pointer yields a
+	 [[ref_to_uninit]]" reasoning.  Ignores the offset (rhs2)
+	 entirely and recurses into the base (rhs1).  */
+      if (def && is_gimple_assign (def)
+	  && gimple_assign_rhs_code (def) == POINTER_PLUS_EXPR)
 	return ip_arg_uninit_flavored_p_1 (gimple_assign_rhs1 (def), depth + 1,
 					    fun, at_stmt, cache);
       /* Or, if ARG's own reaching definition is a GIMPLE_CALL, ARG is
