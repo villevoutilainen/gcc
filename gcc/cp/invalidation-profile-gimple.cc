@@ -659,6 +659,7 @@ ip_nearest_write_before (tree decl, gimple *point)
 static bool ip_escapes_locally_p (tree expr, gimple *point, int depth);
 static bool ip_var_contents_escape_locally_p (tree var, gimple *point,
 					       int depth);
+static gcall *ip_resolve_nrv_call (tree retval, gimple *point);
 
 /* True if DECL has automatic storage duration in the CURRENT
    function -- the only kind of variable whose address cannot safely
@@ -929,6 +930,28 @@ ip_escapes_locally_p (tree expr, gimple *point, int depth)
 	return false;
       return ip_var_contents_escape_locally_p (expr, point, depth + 1);
     }
+  if (TREE_CODE (expr) == RESULT_DECL)
+    {
+      /* Reached only once ip_check_return_escape's own call to
+	 ip_resolve_nrv_var has already failed to find a named
+	 substitute -- i.e. EXPR's contents were never separately
+	 written to any VAR_DECL at all, constructed instead via
+	 guaranteed copy elision straight through a chain of aggregate-
+	 returning calls (their own results never captured by an
+	 ordinary assignment anywhere -- confirmed directly: such a
+	 call's own gimple_call_lhs is genuinely NULL, not merely
+	 unprinted by the pretty-printer).  ip_resolve_nrv_call finds
+	 the nearest such call -- by construction, since nothing else
+	 could possibly consume an elided call's result, that call is
+	 the one actually producing EXPR's contents -- and this
+	 recurses into the SAME ip_call_escapes_locally_p every other
+	 call-shaped value already goes through, so a std::no_dangling()
+	 wrapping that call is recognized here exactly as it already is
+	 everywhere else in this file.  */
+      if (gcall *call = ip_resolve_nrv_call (expr, point))
+	return ip_call_escapes_locally_p (call, depth + 1);
+      return true;
+    }
   return true; /* Unrecognized shape: conservative default-deny.  */
 }
 
@@ -979,6 +1002,79 @@ ip_resolve_nrv_var (tree retval, gimple *point)
       if (ip_clobber_of_type_p (gsi_stmt (gsi), TREE_TYPE (retval)))
 	return gimple_assign_lhs (gsi_stmt (gsi));
   return NULL_TREE;
+}
+
+/* True if CALL is an elided aggregate-returning call -- its own
+   result never captured by an ordinary assignment (gimple_call_lhs is
+   NULL, the exact shape guaranteed copy elision produces for a class
+   prvalue constructed straight into its ultimate destination, the
+   Itanium ABI's own invisible-return-slot convention -- confirmed
+   directly via -fdump-tree-gimple-raw and live debugger inspection
+   that this is genuinely NULL, not merely unprinted by the pretty-
+   printer) -- whose callee's own return type matches TYPE.  */
+
+static bool
+ip_call_returns_type_p (gcall *call, tree type)
+{
+  if (gimple_call_lhs (call) != NULL_TREE)
+    return false;
+  tree fndecl = gimple_call_fndecl (call);
+  if (!fndecl)
+    return false; /* Indirect call: can't see its return type either. */
+  tree ret_type = TREE_TYPE (TREE_TYPE (fndecl));
+  return same_type_ignoring_top_level_qualifiers_p (ret_type, type);
+}
+
+/* ip_resolve_nrv_var's own counterpart for the case IT cannot handle:
+   RETVAL's contents were never separately named by any VAR_DECL at
+   all, because the value reaching it was constructed via guaranteed
+   copy elision straight through a CHAIN of aggregate-returning calls
+   (e.g. a member function's own "return Widget{...};" whose own
+   result is itself passed straight into "return
+   std::no_dangling(...);") -- ip_clobber_of_type_p never finds a
+   matching clobber in this shape because no separate local ever
+   exists to be clobbered at all. The nearest such call (scanning the
+   identical same-block-then-immediate-dominator-chain way
+   ip_resolve_nrv_var does just above -- a no_dangling wrapper call
+   commonly lands in an earlier block than the return statement
+   itself, confirmed directly, so the dominator-chain walk is not
+   optional here) whose own return type matches RETVAL's is, by
+   construction, the one actually producing RETVAL's contents: nothing
+   else could possibly consume an elided call's result, since it was
+   never given anywhere else to go. Returns NULL if no such call is
+   found (the safe, honestly-inconclusive answer -- ip_escapes_
+   locally_p's own final "unrecognized shape" fallback still applies
+   to the bare RESULT_DECL in that case, exactly as it already does
+   when ip_resolve_nrv_var itself comes up empty).  */
+
+static gcall *
+ip_resolve_nrv_call (tree retval, gimple *point)
+{
+  basic_block bb = gimple_bb (point);
+  for (gimple_stmt_iterator gsi = gsi_for_stmt (point); !gsi_end_p (gsi);)
+    {
+      gsi_prev (&gsi);
+      if (gsi_end_p (gsi))
+	break;
+      gimple *s = gsi_stmt (gsi);
+      if (is_gimple_call (s))
+	{
+	  gcall *call = as_a<gcall *> (s);
+	  if (ip_call_returns_type_p (call, TREE_TYPE (retval)))
+	    return call;
+	}
+    }
+  for (basic_block d = get_immediate_dominator (CDI_DOMINATORS, bb); d;
+       d = get_immediate_dominator (CDI_DOMINATORS, d))
+    for (gimple_stmt_iterator gsi = gsi_start_bb (d); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      if (is_gimple_call (gsi_stmt (gsi)))
+	{
+	  gcall *call = as_a<gcall *> (gsi_stmt (gsi));
+	  if (ip_call_returns_type_p (call, TREE_TYPE (retval)))
+	    return call;
+	}
+  return NULL;
 }
 
 /* Check a single RETURN_STMT (a GIMPLE_RETURN whose return type this
