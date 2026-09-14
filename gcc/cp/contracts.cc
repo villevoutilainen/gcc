@@ -19372,7 +19372,21 @@ oa_handle_call_symbolic_scalar_precondition_obligation (tree call, oa_env &env)
 	 no establish/invalidate-vs-consult asymmetry to worry about; a
 	 class-typed argument reached via a conversion operator, or
 	 forwarded by value through a real copy/move-constructor call,
-	 must resolve the same way oa_get_range itself already does.  */
+	 must resolve the same way oa_get_range itself already does.
+
+	 Deliberately NOT extended to also consult oa_call_symbolic_
+	 range_p here the way this function's runtime-codegen sibling
+	 (oa_handle_call_symbolic_scalar_obligation) now does for a
+	 CALL_EXPR argument: tried, and confirmed (by direct testing) to
+	 produce a genuine duplicate diagnostic for that shape --
+	 oa_handle_precondition_simple_range_obligation (this file's own
+	 general, non-decl-restricted range consult, shared with the
+	 conveyor flavor) already independently discovers the identical
+	 postcondition-derived range for a bare CALL_EXPR argument on its
+	 own, via oa_get_range's own postcondition-consulting fallback, so
+	 this function's own decl-only restriction for a CALL_EXPR is
+	 correctly redundant here, not a gap -- unlike on the codegen
+	 side, where nothing else ever provides the runtime dispatch.  */
       tree arg_decl = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (substituted));
       if (!VAR_P (arg_decl) && TREE_CODE (arg_decl) != PARM_DECL)
 	continue;
@@ -20170,6 +20184,62 @@ oa_build_symbolic_scalar_check_bind (tree contract, tree ctrl, tree op,
   return bind;
 }
 
+/* -fcontract-symbolic-runtime-checks: build a fresh, synthetic shadow
+   VAR_DECL (oa_symbolic_shadow_type's own 5-field is_valid/has_lo/lo/
+   has_hi/hi RECORD_TYPE) at LOC, populated via a compile-time
+   CONSTRUCTOR directly from FACT -- used by oa_handle_call_symbolic_
+   scalar_obligation for a call-site argument whose own value is
+   already fully known at compile time (a literal, or resolved through
+   a callee's own symbolic postcondition via oa_call_symbolic_range_p),
+   so unlike get_or_build_scalar_shadow's own runtime-assignment
+   codegen (contracts.cc:24674-24714, needed there because that shadow
+   tracks a variable whose value can change across statements), no
+   runtime code is needed to populate this one at all: it's correct by
+   construction from the moment it's declared, and never written to
+   again.  Mirrors the existing "never established" dummy shadow's own
+   construction (this function's caller, in the branch just below this
+   one) exactly, just with a real CONSTRUCTOR instead of an all-zero
+   one.  Returns the shadow and, via *WRAP_OUT, the small BIND_EXPR
+   that scopes it (matching the dummy's own DUMMY_WRAP), so the caller
+   can append the real check dispatch as its body and use *WRAP_OUT in
+   place of the dispatch itself, exactly as it already does for the
+   dummy case.  */
+
+static tree
+oa_build_symbolic_established_shadow (location_t loc, const oa_range_fact &fact,
+				      tree *wrap_out)
+{
+  tree type = oa_symbolic_shadow_type ();
+  tree shadow = build_decl (loc, VAR_DECL, NULL_TREE, type);
+  DECL_ARTIFICIAL (shadow) = 1;
+  DECL_IGNORED_P (shadow) = 1;
+  DECL_CONTEXT (shadow) = current_function_decl;
+
+  vec<constructor_elt, va_gc> *elts = NULL;
+  CONSTRUCTOR_APPEND_ELT (elts, oa_shadow_field (type, 0), boolean_true_node);
+  CONSTRUCTOR_APPEND_ELT (elts, oa_shadow_field (type, 1),
+			  fact.has_lo ? boolean_true_node : boolean_false_node);
+  CONSTRUCTOR_APPEND_ELT (elts, oa_shadow_field (type, 2),
+			  fact.has_lo
+			  ? wide_int_to_tree (long_long_integer_type_node, fact.lo)
+			  : build_zero_cst (long_long_integer_type_node));
+  CONSTRUCTOR_APPEND_ELT (elts, oa_shadow_field (type, 3),
+			  fact.has_hi ? boolean_true_node : boolean_false_node);
+  CONSTRUCTOR_APPEND_ELT (elts, oa_shadow_field (type, 4),
+			  fact.has_hi
+			  ? wide_int_to_tree (long_long_integer_type_node, fact.hi)
+			  : build_zero_cst (long_long_integer_type_node));
+  DECL_INITIAL (shadow) = build_constructor (type, elts);
+  layout_decl (shadow, 0);
+
+  tree wrap = build3 (BIND_EXPR, void_type_node, shadow, NULL_TREE, NULL_TREE);
+  tree stmt_list = alloc_stmt_list ();
+  append_to_statement_list_force (build_stmt (loc, DECL_EXPR, shadow), &stmt_list);
+  BIND_EXPR_BODY (wrap) = stmt_list;
+  *wrap_out = wrap;
+  return shadow;
+}
+
 /* -fcontract-symbolic-runtime-checks (Mechanism B): the consult side's
    own per-call-site obligation check, wired into oa_scan_calls_in_expr
    alongside the existing symbolic/conveyor handlers -- for CALL's
@@ -20206,17 +20276,6 @@ oa_handle_call_symbolic_scalar_obligation (tree call, oa_env &env, tree *extra)
       tree substituted = oa_substitute_call_arg (callee, call, param);
       if (!substituted)
 	continue;
-      /* Full lookthrough, same reasoning as this function's static-
-	 consult sibling (oa_handle_call_symbolic_scalar_precondition_
-	 obligation) just above -- ARG_DECL is only ever used below as a
-	 lookup key into ENV's own shadow map, never spliced into
-	 generated code as an expression, so resolving it further can
-	 only let more legitimate shadows be found, never change what
-	 code gets emitted.  */
-      tree arg_decl = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (substituted));
-      if (!VAR_P (arg_decl) && TREE_CODE (arg_decl) != PARM_DECL)
-	continue;
-
       tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
       tree control_op = contract_control_operator (ctrl);
       if (!control_op)
@@ -20224,10 +20283,53 @@ oa_handle_call_symbolic_scalar_obligation (tree call, oa_env &env, tree *extra)
       tree thunk_fn = get_or_build_scalar_precondition_thunk (contract, callee,
 							       required);
 
-      tree shadow = env.shadow_get (arg_decl);
-      tree args_ptr;
-      tree dummy_wrap = NULL_TREE;
+      /* Three ways this argument's own value can be known here, checked
+	 in this order (most-informative first): (1) it's itself a call
+	 whose own callee has an active symbolic postcondition
+	 establishing a range for its return value -- oa_call_symbolic_
+	 range_p, the exact mechanism that already makes 'int y =
+	 producer(); consumer(y);' work (contracts.cc:24674-24714), just
+	 applied directly to an INLINE call argument instead of through an
+	 intermediate named variable's own shadow; (2) it's a literal
+	 integer constant -- its value is already fully known, no lookup
+	 of any kind needed; (3) anything else falls through to ARG_DECL's
+	 own shadow lookup below, same as before.  Cases (1) and (2) both
+	 build a fresh shadow populated with a real, already-known-at-
+	 compile-time fact (a CONSTRUCTOR, no runtime codegen needed --
+	 unlike a shadow tracking an ordinary variable's value across
+	 statements, this one's value never changes after its own
+	 declaration) instead of taking the "never established" path
+	 below.  Without this, a literal or an inline call result used to
+	 fall straight through this whole dispatch, since neither is ever
+	 a VAR_DECL/PARM_DECL -- silently skipping the check entirely, not
+	 even reaching the "never established, dispatch anyway" fallback
+	 that correctly handles a genuinely opaque argument (see that
+	 fallback's own comment below).  */
       location_t loc = EXPR_LOCATION (call);
+      tree stripped = STRIP_ANY_LOCATION_WRAPPER (substituted);
+      tree arg_decl = oa_strip_conversion_call (stripped);
+      tree dummy_wrap = NULL_TREE;
+      tree shadow;
+      oa_range_fact call_fact;
+      if (TREE_CODE (stripped) == CALL_EXPR
+	  && oa_call_symbolic_range_p (stripped, &call_fact))
+	shadow = oa_build_symbolic_established_shadow (loc, call_fact, &dummy_wrap);
+      else if (TREE_CODE (arg_decl) == INTEGER_CST)
+	shadow = oa_build_symbolic_established_shadow
+	  (loc, oa_range_fact_exact (wi::to_widest (arg_decl)), &dummy_wrap);
+      else if (VAR_P (arg_decl) || TREE_CODE (arg_decl) == PARM_DECL)
+	/* Full lookthrough, same reasoning as this function's static-
+	   consult sibling (oa_handle_call_symbolic_scalar_precondition_
+	   obligation) just above -- ARG_DECL is only ever used below as a
+	   lookup key into ENV's own shadow map, never spliced into
+	   generated code as an expression, so resolving it further can
+	   only let more legitimate shadows be found, never change what
+	   code gets emitted.  */
+	shadow = env.shadow_get (arg_decl);
+      else
+	shadow = NULL_TREE;
+
+      tree args_ptr;
       if (shadow)
 	args_ptr = fold_convert (ptr_type_node, build_fold_addr_expr (shadow));
       else
