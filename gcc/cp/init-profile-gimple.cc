@@ -365,6 +365,32 @@ ip_construct_at_call_p (gcall *call)
 	 && id_equal (DECL_NAME (fndecl), "construct_at");
 }
 
+/* True if FNDECL is std::now_init or std::now_init_in_place
+   (<utility>) -- recognized by name, same pattern as ip_construct_at_
+   call_p just above. Used to exempt these two functions' own bodies
+   from ip_check_must_init_param below: their entire, documented
+   purpose is asserting that a [[must_init]] parameter's pointee was
+   already initialized through some OTHER means this pass has no way
+   to see (placement construction through a different pointer, a
+   foreign API) -- both bodies are deliberately pure identity/pass-
+   through reads ('return __p;' / 'return __obj;') that never
+   themselves write to their own [[must_init]] parameter, on any path,
+   by design. Without this exemption, checking every [[must_init]]
+   parameter's own definition against its declared postcondition
+   (added to close a real soundness hole: see ip_check_must_init_param's
+   own comment) would flag these two sanctioned escape hatches'
+   correct definitions unconditionally, on every build that even
+   instantiates them.  */
+
+static bool
+ip_must_init_body_check_exempt_p (tree fndecl)
+{
+  if (!fndecl || !decl_in_std_namespace_p (fndecl))
+    return false;
+  return id_equal (DECL_NAME (fndecl), "now_init")
+	 || id_equal (DECL_NAME (fndecl), "now_init_in_place");
+}
+
 /* Record, in S, how STMT relates to S->var: a direct read, a direct
    write (an "initializing event", same as P4222 S4.6's "for a
    built-in type, [writing an uninitialized object is] simply a
@@ -1536,6 +1562,189 @@ ip_check_constructor_member (function *fun, tree this_parm, tree field)
 	      "the %<std::init%> profile", field);
 }
 
+/* True if T is exactly '*PARAM' (or an SSA-copy-of-PARAM's
+   equivalent) -- a MEM_REF (the canonical GIMPLE dereference node) or
+   INDIRECT_REF of PARAM at offset 0. The parameter counterpart of
+   ip_component_ref_of_this_field_p just above, minus the
+   COMPONENT_REF/field-selection wrapper: a [[must_init]] parameter's
+   whole pointee is the target, not one member of it. This also
+   naturally matches a REFERENCE_TYPE parameter's own uses (as opposed
+   to only POINTER_TYPE, which [[must_init]] also allows -- see
+   handle_must_init_attribute's own comment, tree.cc): GCC lowers a
+   reference's uses to the identical MEM_REF-of-the-decl shape a
+   pointer's dereference gets, so no separate REFERENCE_TYPE case is
+   needed here either.  */
+
+static bool
+ip_is_deref_of_param_p (tree t, tree param)
+{
+  tree ptr;
+  if (TREE_CODE (t) == MEM_REF && integer_zerop (TREE_OPERAND (t, 1)))
+    ptr = TREE_OPERAND (t, 0);
+  else if (TREE_CODE (t) == INDIRECT_REF)
+    ptr = TREE_OPERAND (t, 0);
+  else
+    return false;
+  return ip_underlying_var (ptr) == param;
+}
+
+struct ip_param_scan
+{
+  tree param;
+  auto_vec<gimple *> init_stmts;
+  auto_vec<gimple *> read_stmts;
+};
+
+/* The [[must_init]]-parameter counterpart of ip_scan_stmt_for_member,
+   same per-slot shape (assign rhs/lhs, cond operands, call args/lhs,
+   return retval), just matching '*param' via ip_is_deref_of_param_p
+   instead of 'this->field'. One difference from the member scan:
+   there is no ADDR_EXPR-wrapped form to look for here (param is
+   already a pointer, so "the address of the pointee" is simply param
+   itself, not '&*param') -- so the call-argument case below matches a
+   bare, un-dereferenced use of param directly.
+
+   Deliberately no other_escape_stmts bucket, unlike ip_member_scan:
+   passing param itself (bare, unannotated-callee-bound) is already,
+   unconditionally, flagged by the existing ip_check_call_flavor_
+   consistency's own '!param_flavor && arg_flavor' branch -- confirmed
+   empirically (that check has no ordering/dominance notion at all, so
+   it fires for every such call regardless of what this function does
+   before or after it). A parallel escape diagnostic here would be
+   pure duplication, the same trap ip_arg_is_direct_addr_expr_p's own
+   comment already documents for the sibling '&E' shape.
+
+   Deliberately out of scope, like ip_scan_stmt_for_member's own
+   documented boundary: copying param into another named pointer
+   variable ('q = param;') is not tracked as its own escape category.
+   That is the same "single-hop, not general pointer-aliasing" limit
+   this project's own escape_uninit (<utility>) already accepts for
+   local variables; nothing here attempts to trace what q's own later
+   uses might do.  */
+
+static void
+ip_scan_stmt_for_param (gimple *stmt, ip_param_scan *s)
+{
+  tree param = s->param;
+
+  if (is_gimple_assign (stmt))
+    {
+      tree lhs = gimple_assign_lhs (stmt);
+      tree rhs[3] = { gimple_assign_rhs1 (stmt), gimple_assign_rhs2 (stmt),
+		      gimple_assign_rhs3 (stmt) };
+      for (tree r : rhs)
+	{
+	  if (r && ip_is_deref_of_param_p (r, param))
+	    s->read_stmts.safe_push (stmt);
+	}
+      if (ip_is_deref_of_param_p (lhs, param)
+	  && !ip_stmt_is_deferred_init_copy_p (stmt))
+	s->init_stmts.safe_push (stmt);
+    }
+  else if (gimple_code (stmt) == GIMPLE_COND)
+    {
+      if (ip_is_deref_of_param_p (gimple_cond_lhs (stmt), param)
+	  || ip_is_deref_of_param_p (gimple_cond_rhs (stmt), param))
+	s->read_stmts.safe_push (stmt);
+    }
+  else if (gimple_code (stmt) == GIMPLE_CALL)
+    {
+      tree callee = gimple_call_fndecl (stmt);
+      unsigned nargs = gimple_call_num_args (stmt);
+      for (unsigned i = 0; i < nargs; ++i)
+	{
+	  tree arg = gimple_call_arg (stmt, i);
+	  if (ip_is_deref_of_param_p (arg, param))
+	    s->read_stmts.safe_push (stmt);
+	  else if (callee && ip_underlying_var (arg) == param
+		   && profiles_uninit_flavor_at_position_p (
+			callee, i + 1, /*must_init_only=*/true))
+	    /* Delegation: passing param on to another [[must_init]]-
+	       flavored sink counts as the initializing event, exactly
+	       like passing &this->field to one does for a member.  */
+	    s->init_stmts.safe_push (stmt);
+	}
+      tree call_lhs = gimple_call_lhs (stmt);
+      if (call_lhs
+	  && ip_is_deref_of_param_p (call_lhs, param)
+	  && !gimple_call_internal_p (stmt, IFN_DEFERRED_INIT))
+	s->init_stmts.safe_push (stmt);
+    }
+  else if (greturn *ret = dyn_cast <greturn *> (stmt))
+    {
+      tree val = gimple_return_retval (ret);
+      if (val && ip_is_deref_of_param_p (val, param))
+	s->read_stmts.safe_push (stmt);
+    }
+}
+
+/* P4222 Phase 3, S6.2/S9.3: the definition-side counterpart of the
+   caller-side trust profiles_uninit_flavor_at_position_p already
+   grants a [[must_init]] parameter -- checks that FUN's own body
+   actually writes through PARAM's pointee, on every ordinary return
+   path, before FUN returns, mirroring ip_check_constructor_member's
+   own read-before-write and exit-dominance checks for a this->field
+   member (its third check, the address-escape one, has no
+   counterpart here -- see ip_scan_stmt_for_param's own comment on
+   why). Closes a real soundness hole: without this, any function
+   could declare
+   [[must_init]] on a parameter and never fulfill it, and every caller
+   would trust the declaration unconditionally regardless (confirmed
+   via https://godbolt.org/z/W3aP983bW: an empty-bodied 'void f(int* p
+   [[must_init]]) {}' let 'int x [[uninit]]; f(&x); return x;' compile
+   clean). ip_must_init_body_check_exempt_p's two exemptions
+   (std::now_init/std::now_init_in_place) are applied by this
+   function's own caller (ip_check_function), not here.
+
+   Unlike ip_check_constructor_member, there is no "plain [[uninit]],
+   exempt from the exit check" carve-out: every [[must_init]]-flavored
+   parameter's entire point is a promise about its pointee's value, so
+   the exit-dominance check always applies.  */
+
+static void
+ip_check_must_init_param (function *fun, tree param)
+{
+  ip_param_scan scan;
+  scan.param = param;
+
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      ip_scan_stmt_for_param (gsi_stmt (gsi), &scan);
+
+  ip_reach_info info;
+  ip_compute_reach_info (fun, scan.init_stmts, &info);
+
+  for (gimple *read_stmt : scan.read_stmts)
+    if (!ip_read_dominated_by_init_p (read_stmt, scan.init_stmts, info)
+	&& !profiles_diagnostic_exempt_p (gimple_location (read_stmt),
+					  fun->decl, "std::init"))
+      profiles_diagnostic_at (gimple_location (read_stmt), "std::init",
+		"the pointee of %qD is read before it is definitely "
+		"assigned, under the %<std::init%> profile", param);
+
+  bool exit_ok = true;
+  edge e;
+  edge_iterator ei;
+  FOR_EACH_EDGE (e, ei, EXIT_BLOCK_PTR_FOR_FN (fun)->preds)
+    {
+      if (e->flags & EDGE_EH)
+	continue;
+      if (!ip_block_dominated_by_init_p (e->src, info))
+	{
+	  exit_ok = false;
+	  break;
+	}
+    }
+  if (!exit_ok
+      && !profiles_diagnostic_exempt_p (DECL_SOURCE_LOCATION (fun->decl),
+					fun->decl, "std::init"))
+    profiles_diagnostic_at (DECL_SOURCE_LOCATION (fun->decl), "std::init",
+	      "function may return without the pointee of %qD being "
+	      "definitely assigned, under the %<std::init%> profile", param);
+}
+
 /* P4222 Phase 3/4d, S4.3/S9.4: true if ARG (a call-argument
    expression) is "uninit-flavored" -- deliberately one uniform model,
    not two coincidentally-similar ones:
@@ -2388,6 +2597,31 @@ ip_check_function (function *fun)
 	      && !profiles_uninit_pointee_p (field))
 	    continue;
 	  ip_check_constructor_member (fun, this_parm, field);
+	}
+    }
+
+  /* P4222 Phase 3 (S6.2/S9.3): for ANY function (not just a
+     constructor), check that its own body fulfills the postcondition
+     every caller already trusts for each of its [[must_init]]-flavored
+     parameters -- see ip_check_must_init_param's own comment for the
+     soundness hole this closes. std::now_init/std::now_init_in_place
+     are the two sanctioned exceptions (ip_must_init_body_check_
+     exempt_p). Position counting starts at 1 over DECL_ARGUMENTS
+     directly, already consistent with an implicit 'this' occupying
+     position 1 for a non-static member function, same as every
+     caller-side i + 1 GIMPLE-arg-index convention elsewhere in this
+     file (grokfndecl prepends 'this' to the parameter chain, decl.cc,
+     before computing the very same positional marker this consults).  */
+  if (!ip_must_init_body_check_exempt_p (fun->decl))
+    {
+      unsigned position = 1;
+      for (tree parm = DECL_ARGUMENTS (fun->decl); parm;
+	   parm = DECL_CHAIN (parm), ++position)
+	{
+	  if (!profiles_uninit_flavor_at_position_p (fun->decl, position,
+						      /*must_init_only=*/true))
+	    continue;
+	  ip_check_must_init_param (fun, parm);
 	}
     }
 
