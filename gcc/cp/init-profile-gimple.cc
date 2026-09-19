@@ -572,8 +572,7 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 				 gimple_location (stmt));
 	  else if (TREE_CODE (arg) == MEM_REF && ip_mem_ref_targets_var_p (arg, var))
 	    s->read_stmts.safe_push (stmt);
-	  else if (TREE_CODE (arg) == ADDR_EXPR
-		   && TREE_OPERAND (arg, 0) == var)
+	  else if (TREE_CODE (arg) == ADDR_EXPR && TREE_OPERAND (arg, 0) == var)
 	    {
 	      if (callee
 		  && profiles_uninit_flavor_at_position_p (callee, i + 1,
@@ -596,6 +595,36 @@ ip_scan_stmt_for_var (gimple *stmt, ip_addr_taken_scan *s)
 	      else
 		s->other_addr_of_stmts.safe_push (stmt);
 	    }
+	  else if (callee
+		   && profiles_uninit_flavor_at_position_p (callee, i + 1,
+							     /*must_init_only=*/true)
+		   && ip_ptr_traces_to_var_p (arg, var))
+	    /* The [[must_init]] case just above used to require ARG to
+	       be a literal '&var' -- confirmed a real gap (not
+	       deliberate): passing VAR's address through an
+	       intermediate pointer variable first ('int* p
+	       [[ref_to_uninit]] = &x; f (p);', ARG here is P's own
+	       SSA_NAME, not '&x' directly) silently fell through this
+	       whole dispatch, so calling a [[must_init]] function THIS
+	       way was never recognized as curing VAR at all.
+	       ip_ptr_traces_to_var_p is the exact same helper std::
+	       construct_at's own special case above already uses for
+	       this identical "provably &var, however it reached here"
+	       question. Deliberately narrower than the literal-ADDR_EXPR
+	       case above: only the [[must_init]]-cures shape is
+	       recognized for a traced (non-literal) pointer, NOT the
+	       plain-[[ref_to_uninit]] no-op or the other_addr_of_stmts
+	       escape fallback -- confirmed via testing that extending
+	       either of those to this shape duplicates the ordinary
+	       call-argument flavor-consistency check's own, already-
+	       correct diagnostic for passing a [[ref_to_uninit]]-
+	       flavored pointer variable to an unannotated function
+	       (ip_check_address_taken_var has nothing else to say about
+	       a traced, non-literal pointer either, matching the exact
+	       reasoning d4324-profiles-uninit-flavor-through-pointer-
+	       var-bad.C's own comment already documents for the
+	       assign/escape checks).  */
+	    s->init_stmts.safe_push (stmt);
 	  else if (TREE_CODE (arg) == ADDR_EXPR
 		   && TREE_CODE (TREE_OPERAND (arg, 0)) == COMPONENT_REF
 		   && ip_component_ref_base (TREE_OPERAND (arg, 0)) == var)
