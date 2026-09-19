@@ -162,15 +162,22 @@ along with GCC; see the file COPYING3.  If not see
 #include "hash-set.h"
 #include "sbitmap.h"
 
-/* True if VAR (an operand of USE_STMT) is a class/union-typed or
-   raw-pointer-typed VAR_DECL or PARM_DECL worth checking at all --
-   excludes the LHS of USE_STMT's own definition (that is a write, not
-   a read) and anything not RECORD_TYPE/UNION_TYPE/POINTER_TYPE.
-   POINTER_TYPE was added alongside RECORD_TYPE/UNION_TYPE once
-   Phase 7a's own blanket dereference ban (typeck.cc's cp_build_
-   indirect_ref_1) was removed in favor of this file's own mutation
-   tracking covering a raw pointer the same way it already covers a
-   class-typed iterator/handle.  */
+/* True if VAR (an operand of USE_STMT) is a class/union-typed,
+   raw-pointer-typed, or reference-typed VAR_DECL or PARM_DECL worth
+   checking at all -- excludes the LHS of USE_STMT's own definition
+   (that is a write, not a read) and anything not RECORD_TYPE/
+   UNION_TYPE/POINTER_TYPE/REFERENCE_TYPE.  POINTER_TYPE was added
+   alongside RECORD_TYPE/UNION_TYPE once Phase 7a's own blanket
+   dereference ban (typeck.cc's cp_build_indirect_ref_1) was removed
+   in favor of this file's own mutation tracking covering a raw
+   pointer the same way it already covers a class-typed iterator/
+   handle.  REFERENCE_TYPE was missing entirely until confirmed a real
+   gap (not deliberate): a local reference bound to a container
+   element ('int const& x = v[0];') reaches the identical MEM_REF-
+   shaped dereference GIMPLE a local raw pointer's own '*p' already
+   does -- nothing structurally distinguishes them at this level, so
+   there was no reason references alone should have been invisible to
+   this checker.  */
 
 static bool
 ip_trackable_operand_p (tree var)
@@ -179,7 +186,8 @@ ip_trackable_operand_p (tree var)
     return false;
   tree type = TREE_TYPE (var);
   return TREE_CODE (type) == RECORD_TYPE || TREE_CODE (type) == UNION_TYPE
-	 || TREE_CODE (type) == POINTER_TYPE;
+	 || TREE_CODE (type) == POINTER_TYPE
+	 || TREE_CODE (type) == REFERENCE_TYPE;
 }
 
 /* If T is, or (through SSA_NAME_VAR) resolves to, a trackable
@@ -1935,16 +1943,19 @@ ip_check_var_uses (function *fun, tree var, const vec<ip_use> &uses,
 }
 
 /* If T is a MEM_REF/INDIRECT_REF/ARRAY_REF based on a trackable raw
-   pointer -- a raw pointer's own built-in dereference ('*p'/'p->m'/
-   'p[i]') -- return that pointer's decl; else NULL_TREE.  A
-   POINTER_PLUS_EXPR base (the common '_1 = p_2 + i_3; MEM[_1]' shape
-   a computed-index 'p[i]' lowers to) is unwrapped one level first.
-   Split out from ip_use_decl below so an assignment's own LHS can be
-   checked with JUST this, not that function's full set of shapes:
-   writing through a dereference ('*p = ...;') still reads p's own
-   value (to know where to write), but the bare trackable variable
-   itself, as a plain assignment's LHS ('q = ...;'), is being WRITTEN,
-   not read, and must not be treated as a use of q.  */
+   pointer or reference -- a raw pointer's own built-in dereference
+   ('*p'/'p->m'/'p[i]'), or a reference's own implicit one (reading
+   'x' itself, for a reference-typed x, reaches this identical
+   GIMPLE shape) -- return that pointer/reference's decl; else
+   NULL_TREE.  A POINTER_PLUS_EXPR base (the common '_1 = p_2 + i_3;
+   MEM[_1]' shape a computed-index 'p[i]' lowers to) is unwrapped one
+   level first.  Split out from ip_use_decl below so an assignment's
+   own LHS can be checked with JUST this, not that function's full
+   set of shapes: writing through a dereference ('*p = ...;') still
+   reads p's own value (to know where to write), but the bare
+   trackable variable itself, as a plain assignment's LHS ('q =
+   ...;'), is being WRITTEN, not read, and must not be treated as a
+   use of q.  */
 
 static tree
 ip_deref_base_decl (tree t)
@@ -1956,7 +1967,8 @@ ip_deref_base_decl (tree t)
   if (TREE_CODE (base) == POINTER_PLUS_EXPR)
     base = TREE_OPERAND (base, 0);
   tree decl = ip_trackable_decl (base);
-  return (decl && TREE_CODE (TREE_TYPE (decl)) == POINTER_TYPE)
+  return (decl && (TREE_CODE (TREE_TYPE (decl)) == POINTER_TYPE
+		   || TREE_CODE (TREE_TYPE (decl)) == REFERENCE_TYPE))
 	 ? decl : NULL_TREE;
 }
 
