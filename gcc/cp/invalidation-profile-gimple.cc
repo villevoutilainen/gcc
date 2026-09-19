@@ -669,12 +669,43 @@ static bool ip_type_may_hold_pointer_p (tree type, hash_set<tree> *visited);
    or for a static object, the owner is itself" -- but stack self-
    ownership ends when the function returns).  is_global_var already
    answers true for a function-local 'static', which is exactly the
-   "static object" case that must NOT be treated as escaping.  */
+   "static object" case that must NOT be treated as escaping.
+
+   A PARM_DECL has automatic storage duration too, exactly like a
+   VAR_DECL -- confirmed a real gap (not a deliberate restriction) via
+   'View f(int x) { return View(&x); }' compiling clean despite '&x'
+   obviously dangling once f returns.  Two shapes, both real:
+
+   - An ordinary, non-reference-typed parameter (TYPE_REF_P false: a
+     plain scalar/pointer/small-class by-value parameter) -- its own
+     storage slot is exclusively local to this function no matter what
+     its own value points to, same as any VAR_DECL.
+
+   - A REFERENCE_TYPE parameter that is ALSO DECL_BY_REFERENCE: GCC's
+     invisible-reference ABI convention for an otherwise pass-by-value,
+     non-trivially-copyable parameter (confirmed via gdb on
+     'std::string_view f(std::string x) { return x; }': x's own
+     PARM_DECL has REFERENCE_TYPE *and* DECL_BY_REFERENCE, and TYPE_REF_P
+     alone cannot distinguish this from a genuine reference parameter --
+     both have REFERENCE_TYPE). Such a parameter is exclusively owned by
+     this one call, semantically identical to a local for lifetime
+     purposes, even though physically passed as a reference -- the same
+     distinction contracts-gimple.cc's own oa_provable_p-equivalent
+     reasoning already relies on DECL_BY_REFERENCE for (see its own
+     comment contrasting it against "a genuine reference parameter").
+
+   An ordinary REFERENCE_TYPE parameter that is NOT DECL_BY_REFERENCE
+   (a genuine 'T&'/'T&&') correctly falls through to false: its
+   referent belongs to the caller, not to this function.  */
 
 static bool
 ip_local_var_p (tree decl)
 {
-  return VAR_P (decl) && !is_global_var (decl);
+  if (VAR_P (decl))
+    return !is_global_var (decl);
+  if (TREE_CODE (decl) == PARM_DECL)
+    return DECL_BY_REFERENCE (decl) || !TYPE_REF_P (TREE_TYPE (decl));
+  return false;
 }
 
 /* True if CALL is a call to std::no_dangling -- the invalidation
@@ -934,7 +965,8 @@ ip_escapes_locally_p (tree expr, gimple *point, int depth)
   if (TREE_CODE (expr) == ADDR_EXPR)
     {
       tree base = TREE_OPERAND (expr, 0);
-      return VAR_P (base) && ip_local_var_p (base);
+      return (VAR_P (base) || TREE_CODE (base) == PARM_DECL)
+	     && ip_local_var_p (base);
     }
   if (TREE_CODE (expr) == POINTER_PLUS_EXPR)
     /* Pointer arithmetic ('result + n', the common
@@ -966,6 +998,23 @@ ip_escapes_locally_p (tree expr, gimple *point, int depth)
 	tree ssa_var = SSA_NAME_VAR (expr);
 	if (ssa_var && TREE_CODE (ssa_var) == RESULT_DECL)
 	  return ip_result_decl_escapes_locally_p (ssa_var, point, depth);
+	/* A DECL_BY_REFERENCE parameter's own default-def SSA_NAME
+	   already IS effectively "the address of a local" -- see
+	   ip_local_var_p's own comment -- not an ordinary value
+	   flowing in the way the blanket default-def rule just below
+	   assumes. Confirmed via gdb this is genuinely how 'std::
+	   string_view f(std::string x) { return x; }' reaches this
+	   function: no ADDR_EXPR at all, x's own default-def passed
+	   directly as the conversion operator's 'this' argument, since
+	   x's own type is already reference-shaped. Deliberately gated
+	   on DECL_BY_REFERENCE specifically, not "any PARM_DECL
+	   default-def": an ordinary pointer/reference parameter's own
+	   value ('int* f(int* p) { return p; }') must keep falling
+	   through to that rule unchanged -- its own value genuinely
+	   doesn't dangle.  */
+	if (ssa_var && TREE_CODE (ssa_var) == PARM_DECL
+	    && DECL_BY_REFERENCE (ssa_var))
+	  return ip_local_var_p (ssa_var);
       }
       if (SSA_NAME_IS_DEFAULT_DEF (expr))
 	return false; /* A parameter's own default-def; never &local.  */
