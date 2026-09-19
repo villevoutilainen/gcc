@@ -660,6 +660,8 @@ static bool ip_escapes_locally_p (tree expr, gimple *point, int depth);
 static bool ip_var_contents_escape_locally_p (tree var, gimple *point,
 					       int depth);
 static gcall *ip_resolve_nrv_call (tree retval, gimple *point);
+static tree ip_resolve_nrv_var (tree retval, gimple *point);
+static bool ip_type_may_hold_pointer_p (tree type, hash_set<tree> *visited);
 
 /* True if DECL has automatic storage duration in the CURRENT
    function -- the only kind of variable whose address cannot safely
@@ -740,6 +742,21 @@ ip_call_escapes_locally_p (gcall *call, int depth)
     return true; /* Indirectly-dispatched call: can't see its arguments
 		    at all -- conservative default-deny, the same known,
 		    documented scope limit as Rule #0/#1's own.  */
+  {
+    /* CALL's own declared return type structurally cannot hold a
+       pointer anywhere -- nothing for its arguments' escape-ness to
+       matter to, exactly like ip_var_contents_escape_locally_p's own,
+       identical gate on the var-materialized path (confirmed missing
+       here directly: an empty struct return elides its return-slot
+       local entirely, routing through this function instead of that
+       one, and without this gate 'X f(int const& m);' got flagged
+       merely for taking a local's address as an argument, even though
+       X itself can never carry it out).  */
+    hash_set<tree> visited;
+    if (!ip_type_may_hold_pointer_p (TREE_TYPE (TREE_TYPE (fndecl)),
+				      &visited))
+      return false;
+  }
   return ip_call_args_escape_locally_p (call, fndecl, depth);
 }
 
@@ -862,6 +879,32 @@ ip_var_contents_escape_locally_p (tree var, gimple *point, int depth)
   return false;
 }
 
+/* RESULT_DECL is this function's own return-value slot, reached
+   either directly (a bare '<retval>' GIMPLE_RETURN operand) or via an
+   SSA-name wrapper: a chained "return callee(...);" for a non-
+   trivially-copyable return type (e.g. std::vector<T>) routes
+   guaranteed copy elision through an invisible reference-to-return-
+   slot parameter instead of materializing a plain value, confirmed
+   directly via gdb inspection of the exact eager, pre-CFG GIMPLE this
+   pass itself walks: 'struct vector & _3(D); ... *_3(D) = f2 (&tmp);
+   return _3(D);' for a std::vector<int> return, unlike a plain-value
+   type's 'D.3006 = f1 (&tmp); return D.3006;'. Same two-step
+   resolution ip_check_return_escape's own top-level normalization
+   already applies to the bare case: try ip_resolve_nrv_var first (a
+   real named substitute may still exist), else ip_resolve_nrv_call
+   (the nearest call actually producing this value), else the safe,
+   honestly-inconclusive default-deny.  */
+
+static bool
+ip_result_decl_escapes_locally_p (tree result_decl, gimple *point, int depth)
+{
+  if (tree nrv_var = ip_resolve_nrv_var (result_decl, point))
+    return ip_escapes_locally_p (nrv_var, point, depth);
+  if (gcall *call = ip_resolve_nrv_call (result_decl, point))
+    return ip_call_escapes_locally_p (call, depth);
+  return true;
+}
+
 /* True if EXPR, evaluated at POINT, would dangle if it (or a value
    derived from it) escaped the current function by being returned.  */
 
@@ -906,6 +949,24 @@ ip_escapes_locally_p (tree expr, gimple *point, int depth)
     return false;
   if (TREE_CODE (expr) == SSA_NAME)
     {
+      {
+	/* The chained-elision shape ip_result_decl_escapes_locally_p's
+	   own comment documents -- a default-def SSA name whose
+	   SSA_NAME_VAR is this function's own RESULT_DECL, not an
+	   ordinary parameter. Confirmed via gdb this is genuinely a
+	   default-def (SSA_NAME_IS_DEFAULT_DEF true, def_stmt
+	   GIMPLE_NOP) for a non-trivially-copyable return type, so it
+	   must be checked BEFORE the blanket default-def rule just
+	   below -- that rule is correct only for an actual incoming
+	   parameter ("never &local"), and was, before this check
+	   existed, silently and wrongly applied to this shape too,
+	   treating ANY "return callee(...);" of such a type as
+	   automatically safe with zero analysis of callee's own
+	   arguments at all.  */
+	tree ssa_var = SSA_NAME_VAR (expr);
+	if (ssa_var && TREE_CODE (ssa_var) == RESULT_DECL)
+	  return ip_result_decl_escapes_locally_p (ssa_var, point, depth);
+      }
       if (SSA_NAME_IS_DEFAULT_DEF (expr))
 	return false; /* A parameter's own default-def; never &local.  */
       gimple *def = SSA_NAME_DEF_STMT (expr);
@@ -931,27 +992,18 @@ ip_escapes_locally_p (tree expr, gimple *point, int depth)
       return ip_var_contents_escape_locally_p (expr, point, depth + 1);
     }
   if (TREE_CODE (expr) == RESULT_DECL)
-    {
-      /* Reached only once ip_check_return_escape's own call to
-	 ip_resolve_nrv_var has already failed to find a named
-	 substitute -- i.e. EXPR's contents were never separately
-	 written to any VAR_DECL at all, constructed instead via
-	 guaranteed copy elision straight through a chain of aggregate-
-	 returning calls (their own results never captured by an
-	 ordinary assignment anywhere -- confirmed directly: such a
-	 call's own gimple_call_lhs is genuinely NULL, not merely
-	 unprinted by the pretty-printer).  ip_resolve_nrv_call finds
-	 the nearest such call -- by construction, since nothing else
-	 could possibly consume an elided call's result, that call is
-	 the one actually producing EXPR's contents -- and this
-	 recurses into the SAME ip_call_escapes_locally_p every other
-	 call-shaped value already goes through, so a std::no_dangling()
-	 wrapping that call is recognized here exactly as it already is
-	 everywhere else in this file.  */
-      if (gcall *call = ip_resolve_nrv_call (expr, point))
-	return ip_call_escapes_locally_p (call, depth + 1);
-      return true;
-    }
+    /* Typically (though no longer exclusively, see the SSA_NAME case
+       above) reached once ip_check_return_escape's own call to
+       ip_resolve_nrv_var has already failed to find a named
+       substitute -- i.e. EXPR's contents were never separately
+       written to any VAR_DECL at all, constructed instead via
+       guaranteed copy elision straight through a chain of aggregate-
+       returning calls. ip_result_decl_escapes_locally_p tries that
+       same resolution fresh (a redundant, quick, always-failing
+       lookup in that common case, but the one genuinely needed for a
+       RESULT_DECL reached some other way) before falling back to
+       ip_resolve_nrv_call exactly as before.  */
+    return ip_result_decl_escapes_locally_p (expr, point, depth + 1);
   return true; /* Unrecognized shape: conservative default-deny.  */
 }
 
@@ -1005,23 +1057,51 @@ ip_resolve_nrv_var (tree retval, gimple *point)
 }
 
 /* True if CALL is an elided aggregate-returning call -- its own
-   result never captured by an ordinary assignment (gimple_call_lhs is
-   NULL, the exact shape guaranteed copy elision produces for a class
-   prvalue constructed straight into its ultimate destination, the
-   Itanium ABI's own invisible-return-slot convention -- confirmed
-   directly via -fdump-tree-gimple-raw and live debugger inspection
-   that this is genuinely NULL, not merely unprinted by the pretty-
-   printer) -- whose callee's own return type matches TYPE.  */
+   result never captured by an ordinary NAMED-local assignment --
+   whose callee's own return type matches TYPE. Two distinct shapes
+   both count, both confirmed directly via -fdump-tree-gimple-raw and
+   live debugger inspection of the exact, eager GIMPLE this pass
+   itself walks:
+
+   - gimple_call_lhs genuinely NULL: guaranteed copy elision
+     constructing a class prvalue straight into its ultimate
+     destination with no return-slot argument at all (a trivially-
+     constructible/destructible, elided-entirely return, e.g. an empty
+     struct's "X f(); ... return f();").
+
+   - gimple_call_lhs a dereference of THIS function's own RESULT_DECL
+     (directly, or via the SSA-name wrapper a non-trivially-copyable
+     return type gets -- see ip_result_decl_escapes_locally_p's own
+     comment): return-slot optimization writing straight into the
+     CALLER's own result slot, chaining copy elision one level further
+     than the plain NULL-lhs case. Since this pass only ever scans
+     statements within the one function currently being compiled, any
+     RESULT_DECL appearing as an lhs here can only be that function's
+     own -- no identity check against a specific expected RESULT_DECL
+     is needed. TYPE may itself be a reference to the callee's real
+     return type in this shape (the RESULT_DECL's own declared type is
+     a reference under this convention, confirmed via gdb: 'struct
+     vector & _3(D);' for a std::vector<int> return) -- stripped
+     before comparing.  */
 
 static bool
 ip_call_returns_type_p (gcall *call, tree type)
 {
-  if (gimple_call_lhs (call) != NULL_TREE)
-    return false;
+  tree lhs = gimple_call_lhs (call);
+  if (lhs)
+    {
+      if (TREE_CODE (lhs) == MEM_REF || TREE_CODE (lhs) == INDIRECT_REF)
+	lhs = TREE_OPERAND (lhs, 0);
+      tree var = (TREE_CODE (lhs) == SSA_NAME) ? SSA_NAME_VAR (lhs) : lhs;
+      if (!var || TREE_CODE (var) != RESULT_DECL)
+	return false;
+    }
   tree fndecl = gimple_call_fndecl (call);
   if (!fndecl)
     return false; /* Indirect call: can't see its return type either. */
   tree ret_type = TREE_TYPE (TREE_TYPE (fndecl));
+  if (TREE_CODE (type) == REFERENCE_TYPE)
+    type = TREE_TYPE (type);
   return same_type_ignoring_top_level_qualifiers_p (ret_type, type);
 }
 
