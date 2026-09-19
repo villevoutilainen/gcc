@@ -38,6 +38,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "intl.h"
 #include "asan.h"
 #include "contracts.h"
+#include "profiles.h"
 
 /* Id for dumping the class hierarchy.  */
 int class_dump_id;
@@ -8408,6 +8409,12 @@ finish_struct (tree t, tree attributes)
      gets set; other local types might need keying anyway though.  */
   if (at_function_scope_p () && !LAMBDA_TYPE_P (t))
     maybe_key_decl (current_scope (), TYPE_NAME (t));
+
+  /* T is now genuinely complete (fields, size, and every qualified
+     variant's own copy of both, via fixup_type_variants above) --
+     see profiles_eager_check_type_complete's own comment for why a
+     lambda's call operator specifically needs this notification.  */
+  profiles_eager_check_type_complete (t);
 
   return t;
 }

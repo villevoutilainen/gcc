@@ -143,6 +143,16 @@ extern void profiles_process_command_line_warning (void);
    std::invalidation is actually enforced.  */
 extern void profiles_eager_check_function (tree fndecl);
 
+/* Called from finish_struct (class.cc) the moment TYPE is fully
+   complete -- retries any FUNCTION_DECL whose own call into
+   profiles_eager_check_function above was deferred because its
+   DECL_CONTEXT was still an incomplete class/union at the time (a
+   lambda's own call operator, reached before its closure type's
+   captures are finalized, is the one case this is reachable for -- see
+   profiles.cc's own comment for the crash this closes). A cheap no-op
+   for every other class completion in the program.  */
+extern void profiles_eager_check_type_complete (tree type);
+
 /* True if DECL (a PARM_DECL or VAR_DECL of pointer or reference type)
    is flavored "points to [[uninit]] memory" -- carries
    [[ref_to_uninit]] directly, or [[must_init]], which implies it

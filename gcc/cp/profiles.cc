@@ -541,7 +541,58 @@ static gimple_opt_pass *profiles_build_ssa_pass;
 static bool profiles_eager_check_active;
 static vec<tree> profiles_eager_check_pending;
 
+/* A distinct hazard from the re-entrancy one just above: a lambda's own
+   call operator reaches expand_or_defer_fn (via finish_lambda_function,
+   lambda.cc) the moment its body finishes parsing -- BEFORE the
+   enclosing cp_parser_lambda_expression (parser.cc) calls finish_struct
+   on the closure type itself, which is what actually adds the by-
+   reference/by-value CAPTURE fields and (via fixup_type_variants,
+   class.cc) propagates them to every qualified variant already built,
+   including the const-qualified one operator() const's own 'this'
+   parameter points to. Under the normal, deferred pipeline this
+   ordering is harmless (real gimplification never happens until end of
+   TU, long after finish_struct has run); calling cgraph_node::analyze
+   synchronously here can catch the closure type in this genuinely
+   incomplete, pre-finish_struct state instead -- confirmed directly via
+   gdb: the const-qualified variant's own TYPE_FIELDS still lacked the
+   capture field fixup_type_variants was about to add, so gimplifying a
+   COMPONENT_REF onto it (component_ref_field_offset, gimplify.cc)
+   returned NULL, crashing is_gimple_min_invariant. Any FUNCTION_DECL
+   whose own DECL_CONTEXT is still an incomplete class/union -- not
+   lambda-specific, though a lambda's call operator is the one case this
+   is actually reachable for, since an ordinary member function's class
+   is already complete by normal C++ deferred-body-parsing rules -- is
+   deferred here and retried by profiles_eager_check_type_complete once
+   finish_struct (class.cc) actually finishes that type.  */
+static vec<tree> profiles_eager_check_deferred_until_complete;
+
 static void profiles_eager_check_function_1 (tree fndecl);
+
+/* Called from finish_struct (class.cc) the moment TYPE is fully
+   complete -- retries any FUNCTION_DECL whose own eager check was
+   deferred above because its DECL_CONTEXT (this same TYPE, or perhaps
+   some other type that also happened to complete first) wasn't ready
+   yet. Routes back through the public profiles_eager_check_function
+   entry point, not _1 directly, so the existing re-entrancy guard above
+   still applies for free if finish_struct itself happens to run while
+   another eager check is already active; a retried fndecl whose type
+   is STILL incomplete (a different, still-open type) simply gets
+   re-deferred by the same check that pushed it here, to be retried
+   again at the next finish_struct completion -- safe, no infinite loop.
+   The is_empty () fast path keeps this a no-op for the overwhelming
+   majority of class completions, which never touch this list at all.  */
+
+void
+profiles_eager_check_type_complete (tree)
+{
+  if (profiles_eager_check_deferred_until_complete.is_empty ())
+    return;
+  auto_vec<tree> retry;
+  retry.safe_splice (profiles_eager_check_deferred_until_complete);
+  profiles_eager_check_deferred_until_complete.truncate (0);
+  for (tree fndecl : retry)
+    profiles_eager_check_function (fndecl);
+}
 
 void
 profiles_eager_check_function (tree fndecl)
@@ -639,6 +690,16 @@ profiles_eager_check_function_1 (tree fndecl)
 
   if (!DECL_STRUCT_FUNCTION (fndecl))
     return;
+
+  /* See profiles_eager_check_deferred_until_complete's own comment: a
+     lambda's call operator can reach here before its closure type's own
+     finish_struct has run.  */
+  tree ctx = DECL_CONTEXT (fndecl);
+  if (ctx && RECORD_OR_UNION_TYPE_P (ctx) && !COMPLETE_TYPE_P (ctx))
+    {
+      profiles_eager_check_deferred_until_complete.safe_push (fndecl);
+      return;
+    }
 
   cgraph_node *node = cgraph_node::get_create (fndecl);
   if (node->analyzed)
