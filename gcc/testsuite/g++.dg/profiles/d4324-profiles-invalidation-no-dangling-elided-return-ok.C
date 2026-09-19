@@ -31,7 +31,7 @@
 
 struct Window { };
 struct Logger { void log (const char *); };
-struct Widget { Widget (Window); };
+struct Widget { Widget (Window); int *w; };
 
 struct WidgetFactory
 {
