@@ -2520,6 +2520,60 @@ ip_check_owner_return_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
 	    "profile");
 }
 
+/* The opposite-direction counterpart of ip_check_owner_return_flavor_
+   consistency just above: a function NOT declared [[owner]] on its own
+   return must not return a value that is PROVABLY a fresh owner source
+   (a 'new T' allocation, a call to an [[owner]]-returning function, or
+   std::as_owner) -- doing so silently launders ownership through an
+   undeclared return type, with no way for any caller to ever recover
+   that the returned pointer needs to be owned/deleted (this engine
+   never reads a callee's body, and ip_owner_fresh_source_call_p's own
+   caller-side recognition requires the CALLEE's declared return to be
+   [[owner]]-marked -- so an unmarked function's internal 'new' stays
+   invisible unconditionally, no matter what any caller does with the
+   result: confirmed a real gap, 'int* f(){ return new int{9}; }'
+   compiled clean with no diagnostic anywhere, caller included).
+   Reuses ip_owner_resolve_origin, the exact same genuineness test
+   ip_check_owner_assign_flavor_consistency and the definite-
+   consumption checker already rely on for this question elsewhere.  */
+
+static void
+ip_check_owner_return_omission (gimple *stmt, tree enclosing_fndecl)
+{
+  if (gimple_code (stmt) != GIMPLE_RETURN)
+    return;
+  if (profiles_owning_ptr_p (enclosing_fndecl))
+    return; /* Already covered by ip_check_owner_return_flavor_consistency.  */
+  tree retval = gimple_return_retval (as_a<greturn *> (stmt));
+  if (!retval || TREE_CODE (TREE_TYPE (retval)) != POINTER_TYPE
+      || ip_owner_arg_null_pointer_p (retval))
+    return;
+  ip_owner_origin origin = ip_owner_resolve_origin (retval, stmt);
+  if (!origin.genuine || origin.decl)
+    /* A NAMED decl (a PARM_DECL, whether or not it's itself
+       [[owner]]-marked, or a local VAR_DECL) is already, separately
+       tracked as its own binding by the definite-consumption checker
+       below regardless of this function's own return marking -- see
+       d4324-profiles-invalidation-owner-returned-unflavored-bad.C's
+       own comment (CE3 requires the function's own return to be
+       [[owner]]-marked for a 'return' to count as consuming it, so an
+       unconsumed named binding is flagged there either way). Confirmed
+       empirically: reverting this check entirely still correctly
+       flags 'int* f(){ int* q = new int(9); return q; }' -- adding
+       this function's own diagnostic on top would just duplicate it.
+       Only a value that never got a named, trackable binding at all
+       (a bare 'return new int{9};'/'return helper();', ORIGIN.decl
+       NULL_TREE) has no other mechanism watching it.  */
+    return;
+  if (profiles_diagnostic_exempt_p (gimple_location (stmt),
+				     enclosing_fndecl, "std::invalidation"))
+    return;
+  profiles_diagnostic_at (gimple_location (stmt), "std::invalidation",
+	    "returning a freshly-allocated pointer from a function not "
+	    "marked %<[[owner]]%>, under the %<std::invalidation%> "
+	    "profile");
+}
+
 /* The plain-assignment counterpart -- same one-directional reasoning
    as the two checks above, applied to an ordinary 'dst = src;'
    between a named pointer variable/parameter and any source
@@ -3668,6 +3722,7 @@ ip_check_function (function *fun)
 	ip_check_owner_call_flavor_consistency (stmt, fun->decl);
 	ip_check_owner_assign_flavor_consistency (stmt, fun->decl);
 	ip_check_owner_return_flavor_consistency (stmt, fun->decl);
+	ip_check_owner_return_omission (stmt, fun->decl);
 	ip_check_owner_call_arg_aliasing (stmt, fun->decl);
 
 	if (gcall *call = dyn_cast<gcall *> (stmt))
