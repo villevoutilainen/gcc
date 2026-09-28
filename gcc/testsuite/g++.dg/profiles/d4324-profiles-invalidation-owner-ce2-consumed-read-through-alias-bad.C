@@ -17,5 +17,5 @@ int use ()
   int *p [[owner]] = new int (7);
   int *q = p;
   f (p);
-  return *q; // { dg-error "read here, after already being consumed" }
+  return *q; // { dg-error "read here, after possibly already being consumed" }
 }

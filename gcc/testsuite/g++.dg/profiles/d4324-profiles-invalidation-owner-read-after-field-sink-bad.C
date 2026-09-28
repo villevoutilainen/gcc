@@ -12,6 +12,6 @@ struct S { [[owner]] int *m; };
 void f ([[owner]] int *p, S &s)
 {
   s.m = p;
-  int x = *p; // { dg-error "is read here, after already being consumed" }
+  int x = *p; // { dg-error "read here, after possibly already being consumed" }
   (void) x;
 }

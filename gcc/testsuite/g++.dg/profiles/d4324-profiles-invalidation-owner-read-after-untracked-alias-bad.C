@@ -15,6 +15,6 @@ void read_after_untracked_alias_bad ([[owner]] int *x)
 {
   int *y = x;
   delete x;
-  int v = *y; // { dg-error "read here, after already being consumed" }
+  int v = *y; // { dg-error "read here, after possibly already being consumed" }
   (void) v;
 }
