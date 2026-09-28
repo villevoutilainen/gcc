@@ -414,7 +414,16 @@ ip_defines_var_p (gimple *stmt, tree var)
       return false;
     }
   if (is_gimple_assign (stmt))
-    return ip_trackable_decl (gimple_assign_lhs (stmt)) == var;
+    /* A clobber ('VAR ={v} {CLOBBER(eos)};') is a GIMPLE_ASSIGN whose
+       RHS is an empty CONSTRUCTOR, synthesized by the compiler to mark
+       VAR's storage dead at a scope-exit edge -- not a real write of
+       any value, so it must not count as a definition.  Confirmed via
+       gdb this shows up on ordinary [[owner]] locals whenever an
+       inlined callee's own cleanup scaffolding introduces a scope-exit
+       edge inside the enclosing function (e.g. push_back's inlined
+       construct call), misfiring "reassigned here" otherwise.  */
+    return !gimple_clobber_p (stmt)
+	   && ip_trackable_decl (gimple_assign_lhs (stmt)) == var;
   return false;
 }
 
@@ -2591,7 +2600,11 @@ ip_check_owner_return_omission (gimple *stmt, tree enclosing_fndecl)
 static void
 ip_check_owner_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
 {
-  if (!is_gimple_assign (stmt) || !gimple_assign_single_p (stmt))
+  if (!is_gimple_assign (stmt) || !gimple_assign_single_p (stmt)
+      || gimple_clobber_p (stmt))
+    /* A clobber's RHS is an empty CONSTRUCTOR marking VAR's storage
+       dead at a scope-exit edge, not a real write -- see the identical
+       exclusion and its rationale in ip_defines_var_p above.  */
     return;
   tree lhs = gimple_assign_lhs (stmt);
   if (TREE_CODE (TREE_TYPE (lhs)) != POINTER_TYPE)
@@ -2601,6 +2614,17 @@ ip_check_owner_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl)
     return;
   tree rhs = gimple_assign_rhs1 (stmt);
   if (ip_owner_arg_null_pointer_p (rhs))
+    return;
+  if (TREE_CODE (rhs) == SSA_NAME
+      && gimple_call_internal_p (SSA_NAME_DEF_STMT (rhs), IFN_DEFERRED_INIT))
+    /* Newer dialects' erroneous-behavior-for-uninitialized-reads
+       lowering can split a declaration's own initializer into an
+       initial '.DEFERRED_INIT' placeholder assignment (confirmed via
+       gdb: 'p = _1;' with '_1 = .DEFERRED_INIT (...);') ahead of the
+       real value -- this placeholder carries no genuine value at all,
+       so treating it as a non-owner value flowing in would misfire on
+       the declaration's own initialization rather than a real
+       reassignment.  */
     return;
   if (ip_owner_resolve_origin (rhs, stmt).genuine)
     return;
