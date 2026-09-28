@@ -3277,6 +3277,151 @@ ip_owner_block_transfer (basic_block bb, bool in, tree decl,
   return state;
 }
 
+/* If *OP is an SSA_NAME whose def is 'BIT_NOT_EXPR' on an operand with
+   1-bit precision (the exact shape '!b' for a genuine bool b lowers
+   to -- bitwise NOT on a single bit IS logical NOT, exactly, unlike
+   for any wider integer type), unwrap it: rewrite *OP to the
+   underlying operand and return the inverse of CODE (since testing
+   '~b != 0' is exactly testing 'b == 0'); otherwise leave *OP
+   unchanged and return CODE as-is.  Confirmed necessary via gdb: 'if
+   (!cond)' does NOT retest cond_N(D) with an inverted comparison the
+   way 'if (x < 0)' retests x -- it computes '_1 = ~cond_N(D); if (_1
+   != 0)', a fresh SSA temporary, so a plain 'same SSA_NAME' operand
+   match never fires for it without this one-hop unwrap.  Mirrors
+   contracts-gimple.cc's own cg_bool_phi_source_edges, which needed an
+   analogous single extra hop through a trivial def for a different
+   reason (a compound &&/|| condition's own PHI argument) -- confirms
+   this class of "one more hop through a trivial def" is a recurring,
+   bounded need, not scope creep.  */
+
+static tree_code
+ip_owner_unwrap_bool_not (tree *op, tree_code code)
+{
+  if (TREE_CODE (*op) != SSA_NAME)
+    return code;
+  gimple *def = SSA_NAME_DEF_STMT (*op);
+  if (!is_gimple_assign (def) || gimple_assign_rhs_code (def) != BIT_NOT_EXPR)
+    return code;
+  tree inner = gimple_assign_rhs1 (def);
+  if (TYPE_PRECISION (TREE_TYPE (inner)) != 1)
+    return code;
+  *op = inner;
+  return invert_tree_comparison (code, HONOR_NANS (TREE_TYPE (inner)));
+}
+
+/* If E's source block ends in a GIMPLE_COND that is the exact logical
+   inverse (invert_tree_comparison, same live SSA operand -- after
+   ip_owner_unwrap_bool_not's own one-hop unwrap on EITHER side -- and
+   same other operand) of a strictly-dominating GIMPLE_COND, return a
+   refined, more-precise boolean for this one edge's own contribution,
+   in place of E->src's own (possibly lossy, OR-merged) BLOCK_OUT:
+   the OR of BLOCK_OUT over exactly those of E->src's own real
+   predecessors that are NOT provably reachable only via the
+   dominator's own INCOMPATIBLE edge.
+
+   A predecessor P is excluded only when it is either the incompatible
+   edge itself, or P is dominated by BOTH the dominator (confirming P
+   sits entirely downstream of it, with no other, dom-bypassing route
+   in) AND the incompatible edge's own destination (confirming that,
+   given P is downstream of the dominator at all, it specifically went
+   the incompatible way) -- both conjuncts matter: the first alone
+   would wrongly exclude a predecessor merely dominated by the
+   incompatible target for some unrelated reason that has nothing to
+   do with this dominator's own branch.  Every other predecessor
+   (including any this can't rule out) is safely INCLUDED, matching
+   this profile's own soundness bar -- extra diagnostics are
+   acceptable, silently dropping a real hazard is not.
+
+   Motivating shape: 'if (cond) delete p; if (!cond) delete p;' (or
+   'if (x >= 0) ...; if (x < 0) ...;') -- two mutually-exclusive
+   conditions split across separate if-statements, where the SECOND
+   condition's own dataflow "in" would otherwise be a naive OR-merge
+   across BOTH of the first condition's arms, discarding the fact that
+   only one of them is actually compatible with having reached this
+   edge at all. A delete-expression's own implicit null-guard
+   (ip_owner_delete_guard_cond_p's own doc comment) means the
+   "compatible arm" in this shape is itself a small diamond with its
+   OWN branch, not a single block or a simple unbranched chain --
+   confirmed via gdb that an earlier, chain-walk-based version of this
+   function still missed one of the two relevant edges for exactly
+   this reason, which is why this iterates SRC's own real predecessors
+   with a dominance test instead of trying to walk a single path
+   between DOM and SRC. Shared by both ip_compute_owner_reach_info and
+   ip_compute_owner_maybe_consumed_info's own "in" loops, and by
+   ip_check_owner_binding's own leak-point-1 exit check -- the same
+   lossy merge affects all three (confirmed empirically). See the
+   d4324-profiles-invalidation-owner-mutually-exclusive-conds and
+   d4324-profiles-invalidation-owner-relational-inverse-ok.C tests for
+   the recognized shape.
+
+   Restricted to SSA_NAME operands specifically (after the bool-not
+   unwrap): SSA's own single-assignment guarantee is what makes "no
+   redefinition in between" free to assume without a separate liveness
+   check; a VAR_DECL operand could be reassigned between DOM and E's
+   source, so this never fires for one -- not a hole, a deliberate
+   scope limit matching this whole mechanism's "same operand, provably
+   unchanged" premise.  */
+
+static bool
+ip_owner_edge_refined_out (edge e, const auto_vec<bool> &block_out)
+{
+  basic_block src = e->src;
+  gimple *last = gsi_stmt (gsi_last_bb (src));
+  if (!last || gimple_code (last) != GIMPLE_COND)
+    return block_out[src->index];
+  gcond *c2 = as_a<gcond *> (last);
+  tree op2 = gimple_cond_lhs (c2), rhs2 = gimple_cond_rhs (c2);
+  tree_code code2 = ip_owner_unwrap_bool_not (&op2, gimple_cond_code (c2));
+  if (TREE_CODE (op2) != SSA_NAME)
+    return block_out[src->index];
+  bool polarity_true = (e->flags & EDGE_TRUE_VALUE) != 0;
+
+  for (basic_block dom = get_immediate_dominator (CDI_DOMINATORS, src); dom;
+       dom = get_immediate_dominator (CDI_DOMINATORS, dom))
+    {
+      gimple *dlast = gsi_stmt (gsi_last_bb (dom));
+      if (!dlast || gimple_code (dlast) != GIMPLE_COND)
+	continue;
+      gcond *c1 = as_a<gcond *> (dlast);
+      tree op1 = gimple_cond_lhs (c1), rhs1 = gimple_cond_rhs (c1);
+      tree_code code1 = ip_owner_unwrap_bool_not (&op1, gimple_cond_code (c1));
+      if (TREE_CODE (op1) != SSA_NAME || op1 != op2
+	  || !operand_equal_p (rhs1, rhs2, 0))
+	continue;
+      if (invert_tree_comparison (code1, HONOR_NANS (TREE_TYPE (op1)))
+	  != code2)
+	continue;
+
+      /* C2 == invert (C1): C2's TRUE edge is only reachable via C1's
+	 own FALSE edge, and vice versa.  */
+      bool want_true = !polarity_true;
+      edge compat = EDGE_SUCC (dom, 0);
+      if (((compat->flags & EDGE_TRUE_VALUE) != 0) != want_true)
+	compat = EDGE_SUCC (dom, 1);
+      edge incompat = (compat == EDGE_SUCC (dom, 0)) ? EDGE_SUCC (dom, 1)
+						      : EDGE_SUCC (dom, 0);
+
+      bool refined = false;
+      edge pe;
+      edge_iterator pei;
+      FOR_EACH_EDGE (pe, pei, src->preds)
+	{
+	  if (pe == incompat)
+	    continue;
+	  if (dominated_by_p (CDI_DOMINATORS, pe->src, dom)
+	      && dominated_by_p (CDI_DOMINATORS, pe->src, incompat->dest))
+	    continue;
+	  if (block_out[pe->src->index])
+	    {
+	      refined = true;
+	      break;
+	    }
+	}
+      return refined;
+    }
+  return block_out[src->index]; /* No matching dominator -- decline.  */
+}
+
 static void
 ip_compute_owner_reach_info (function *fun, tree decl, bool is_parameter,
 			      bool fn_return_is_owner,
@@ -3298,7 +3443,7 @@ ip_compute_owner_reach_info (function *fun, tree decl, bool is_parameter,
 	  edge e;
 	  edge_iterator ei;
 	  FOR_EACH_EDGE (e, ei, bb->preds)
-	    if (info->block_out[e->src->index])
+	    if (ip_owner_edge_refined_out (e, info->block_out))
 	      {
 		in = true;
 		break;
@@ -3422,7 +3567,7 @@ ip_compute_owner_maybe_consumed_info (function *fun, tree decl,
 	  edge e;
 	  edge_iterator ei;
 	  FOR_EACH_EDGE (e, ei, bb->preds)
-	    if (info->block_out[e->src->index])
+	    if (ip_owner_edge_refined_out (e, info->block_out))
 	      {
 		in = true;
 		break;
@@ -3621,7 +3766,7 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
     {
       if (e->flags & EDGE_EH)
 	continue;
-      if (info.block_out[e->src->index])
+      if (ip_owner_edge_refined_out (e, info.block_out))
 	{
 	  leaks_at_exit = true;
 	  break;
@@ -3946,6 +4091,26 @@ ip_check_function (function *fun)
 	  returns_to_check.safe_push (stmt);
       }
 
+  /* GCC's dominator tree is needed by two, otherwise-unrelated
+     consumers below: ip_check_return_escape's own machinery (as
+     before), and now also ip_check_owner_consumption's own leak
+     points 1-4, via ip_owner_edge_refined_out's dominator-chain walk
+     (the mutation-ordering check above still doesn't need it, built
+     entirely on ip_compute_var_reach_info/ip_compute_mutated_since_
+     info's own explicit fixed-point dataflow instead).  Computed once
+     upfront, unconditionally, since owner-consumption checking itself
+     runs unconditionally for every function -- ip_owner_edge_refined_
+     out's own cheap early-outs (no GIMPLE_COND, no SSA_NAME operand)
+     mean the dominator-chain walk itself is skipped entirely for the
+     common case, but CDI_DOMINATORS still needs to be validly
+     available before get_immediate_dominator can be called at all.  */
+  bool dominance_computed = false;
+  if (!dom_info_available_p (CDI_DOMINATORS))
+    {
+      calculate_dominance_info (CDI_DOMINATORS);
+      dominance_computed = true;
+    }
+
   /* P3446R0/P4296R0 Phase 7a: definite-consumption checking (the
      actual leak checker) must run regardless of whether this
      function has any Rule #0/#1-relevant mutating call/use/return at
@@ -3957,19 +4122,10 @@ ip_check_function (function *fun)
 
   if ((mutating_calls.is_empty () || uses.is_empty ())
       && returns_to_check.is_empty ())
-    return 0;
-
-  /* Only the escape-checking machinery below (ip_check_return_escape
-     and its own ip_collect_component_writes_before/ip_resolve_nrv_var
-     helpers) still needs GCC's dominator tree -- the mutation-
-     ordering check just above no longer does, now that it's built
-     entirely on ip_compute_var_reach_info/ip_compute_mutated_since_
-     info's own explicit fixed-point dataflow instead.  */
-  bool dominance_computed = false;
-  if (!returns_to_check.is_empty () && !dom_info_available_p (CDI_DOMINATORS))
     {
-      calculate_dominance_info (CDI_DOMINATORS);
-      dominance_computed = true;
+      if (dominance_computed)
+	free_dominance_info (CDI_DOMINATORS);
+      return 0;
     }
 
   if (!mutating_calls.is_empty () && !uses.is_empty ())
