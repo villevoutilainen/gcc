@@ -11,7 +11,7 @@
 void f ([[owner]] int *x)
 {
   [[owner]] int *y = x;
-  int v = *x; // { dg-error "is read here, after already being consumed" }
+  int v = *x; // { dg-error "read here, after possibly already being consumed" }
   (void) v;
   delete y;
 }

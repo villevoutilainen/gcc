@@ -3353,6 +3353,126 @@ ip_owner_unconsumed_before_stmt_p (gimple *point, tree decl,
   return state;
 }
 
+/* Mirror of ip_owner_reach_info/ip_owner_block_transfer above: MAY
+   DECL's binding already have been consumed along SOME path reaching
+   this point -- still OR-across-predecessors, but with GEN and KILL
+   swapped relative to the analysis above (a consuming event is THIS
+   analysis's own GEN; DECL's own gen/rebind event -- ip_owner_gen_lhs_
+   decl -- is THIS analysis's own KILL, since a fresh binding has
+   obviously not been consumed yet).
+
+   This is NOT simply the logical complement of ip_owner_reach_info's
+   own "may still be unconsumed" fact once branches merge: at a diamond
+   where one arm consumes DECL and the other does not, BOTH "may still
+   be unconsumed" (true via the non-consuming arm) and "may already be
+   consumed" (true via the consuming arm) hold simultaneously at the
+   merge point. ip_check_owner_binding's own leak points 1 and 2
+   genuinely want the existing fact (is there a path where a still-
+   valid value would leak, or be discarded by a reassignment); leak
+   points 3 and 4 want THIS one instead (is there a path where the
+   value has already been spent, making a further consumption or read
+   unsafe on that execution) -- distinct questions, not two views of
+   the same fact.  Confirmed via gcc/testsuite/g++.dg/profiles/d4324-
+   profiles-invalidation-owner-diamond-*.C.  */
+
+struct ip_owner_maybe_consumed_info
+{
+  auto_vec<bool> block_in;
+  auto_vec<bool> block_out;
+};
+
+static bool
+ip_owner_maybe_consumed_block_transfer (basic_block bb, bool in, tree decl,
+					 bool is_parameter,
+					 bool fn_return_is_owner,
+					 basic_block entry_succ)
+{
+  bool state = in && !(is_parameter && bb == entry_succ);
+  for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+       gsi_next (&gsi))
+    {
+      gimple *stmt = gsi_stmt (gsi);
+      if (!is_parameter && ip_owner_gen_lhs_decl (stmt) == decl)
+	state = false;
+      if (ip_owner_consuming_stmt_p (stmt, decl, fn_return_is_owner))
+	state = true;
+    }
+  return state;
+}
+
+static void
+ip_compute_owner_maybe_consumed_info (function *fun, tree decl,
+				       bool is_parameter,
+				       bool fn_return_is_owner,
+				       basic_block entry_succ,
+				       ip_owner_maybe_consumed_info *info)
+{
+  unsigned n = last_basic_block_for_fn (fun);
+  info->block_in.safe_grow_cleared (n);
+  info->block_out.safe_grow_cleared (n);
+
+  bool changed = true;
+  while (changed)
+    {
+      changed = false;
+      basic_block bb;
+      FOR_EACH_BB_FN (bb, fun)
+	{
+	  bool in = false;
+	  edge e;
+	  edge_iterator ei;
+	  FOR_EACH_EDGE (e, ei, bb->preds)
+	    if (info->block_out[e->src->index])
+	      {
+		in = true;
+		break;
+	      }
+	  if (in != info->block_in[bb->index])
+	    {
+	      info->block_in[bb->index] = in;
+	      changed = true;
+	    }
+
+	  bool out = ip_owner_maybe_consumed_block_transfer
+	    (bb, info->block_in[bb->index], decl, is_parameter,
+	     fn_return_is_owner, entry_succ);
+	  if (out != info->block_out[bb->index])
+	    {
+	      info->block_out[bb->index] = out;
+	      changed = true;
+	    }
+	}
+    }
+}
+
+/* Same-block refinement of ip_owner_maybe_consumed_info's own block_in,
+   the mirror counterpart of ip_owner_unconsumed_before_stmt_p above --
+   see that function's own comment for why the block-boundary dataflow
+   alone isn't enough at POINT's own statement granularity.  */
+
+static bool
+ip_owner_maybe_consumed_before_stmt_p (gimple *point, tree decl,
+					bool is_parameter,
+					bool fn_return_is_owner,
+					basic_block entry_succ,
+					const ip_owner_maybe_consumed_info &info)
+{
+  basic_block bb = gimple_bb (point);
+  bool state = info.block_in[bb->index] && !(is_parameter && bb == entry_succ);
+  for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+       gsi_next (&gsi))
+    {
+      gimple *stmt = gsi_stmt (gsi);
+      if (stmt == point)
+	break;
+      if (!is_parameter && ip_owner_gen_lhs_decl (stmt) == decl)
+	state = false;
+      if (ip_owner_consuming_stmt_p (stmt, decl, fn_return_is_owner))
+	state = true;
+    }
+  return state;
+}
+
 /* A second, simpler, PURELY-MONOTONIC dataflow (GEN-only, never
    killed, OR-across-predecessors): "has DECL's binding EVER become
    owned reaching this point" -- function entry for a parameter, any
@@ -3481,6 +3601,10 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
   ip_owner_ever_owned_info ever_owned_info;
   ip_compute_owner_ever_owned_info (fun, decl, is_parameter, entry_succ,
 				     &ever_owned_info);
+  ip_owner_maybe_consumed_info maybe_consumed_info;
+  ip_compute_owner_maybe_consumed_info (fun, decl, is_parameter,
+					 fn_return_is_owner, entry_succ,
+					 &maybe_consumed_info);
 
   /* Leak point 1: some path reaches the function's own exit still
      owned-and-unconsumed.  Mirrors init-profile-gimple.cc's own
@@ -3562,19 +3686,39 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
      (x));' -- with no intervening reassignment (that shape is leak
      point 2's own territory: a fresh gen event resets state to true,
      so a later consume of the NEW value is correctly not flagged
-     here).  Reuses ip_owner_unconsumed_before_stmt_p's own dataflow
-     query completely unchanged, just at every consuming-event
-     statement instead of only at reassignments: if it's FALSE right
-     before a NEW consuming event, that event's own value was already
-     given away on EVERY path reaching it, not merely possibly so
-     (the same "MAY be unconsumed" fact leak point 1 checks
-     existentially at exit is being checked here for its negation,
-     universally, at a narrower point) -- this is what keeps this
-     check from firing on a merely CONDITIONALLY-already-consumed
-     value ('if (c) f (x); g (x);' is NOT flagged: on the c-false
-     path g (x) is the legitimate first consumption, so state is
-     still "may be unconsumed" reaching it).  A raw delete/deleting-
-     destructor-dispatch CALL is deliberately skipped here: it is
+     here).  Uses ip_owner_maybe_consumed_before_stmt_p's own dataflow
+     query (the mirror of ip_owner_reach_info -- see its own comment):
+     if it's TRUE right before a NEW consuming event, that event's own
+     value was already given away on SOME path reaching it -- possibly,
+     not necessarily every path -- which is enough: per this profile's
+     own soundness requirement (silence must mean *provably* safe on
+     every path, not merely *not provably* unsafe), a double-consume
+     that is real on even one execution must be flagged, the same
+     EXISTENTIAL standard Rule #0/#1's own diamond-shaped mutation
+     tracking already applies (see d4324-profiles-invalidation-diamond-
+     single-arm-mutation-bad.C).  So 'if (c) f (x); g (x);' IS now
+     flagged: on the c-true path, g (x) genuinely is a double-consume,
+     even though on the c-false path it is the legitimate first one --
+     matches d4324-profiles-invalidation-owner-diamond-consumed-again-
+     bad.C.  This used to instead require consumption on EVERY path
+     (a universal test, the same class of unsoundness Rule #0/#1 had
+     and was fixed for); the old comment here about the c-false case
+     staying silent described the PRE-fix behavior, now corrected.
+
+     Known, accepted residual imprecision: two mutually-exclusive
+     conditions split across SEPARATE if-statements ('if (cond) delete
+     p; if (!cond) delete p;') get flagged too, since plain CFG-
+     reachability dataflow can't correlate 'cond' and '!cond' as
+     complements the way Rule #0/#1's own dedicated PHI-of-constants
+     recognizer does for a single compound &&/|| condition -- see
+     d4324-profiles-invalidation-owner-mutually-exclusive-conds-known-
+     limitation-bad.C.  A false positive on a rarer, more contrived
+     shape, not fixed here; this profile's own soundness bar tolerates
+     erring toward extra diagnostics far more than it tolerates
+     silence on a genuinely unsafe program.
+
+     A raw delete/deleting-destructor-dispatch CALL is deliberately
+     skipped here: it is
      always paired with, and dominated by, its own null-guard COND
      (ip_owner_delete_guard_cond_p), which independently already
      matches ip_owner_consuming_stmt_p for the exact same logical
@@ -3585,38 +3729,53 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
 
      Skipped entirely when IS_PARAMETER and DECL_REASSIGNED: a
      PARM_DECL's own state, unlike a local's, is never re-armed by a
-     reassignment (ip_owner_block_transfer's GEN branch is deliberately
-     is_parameter-exclusive -- a reassigned parameter's new value is,
-     by design, tracked as its own separate is_parameter=false binding
-     instead, see ip_check_owner_consumption's own comment), so once
-     the ORIGINAL parameter value is consumed, this run's own state
-     never becomes true again for the rest of the function -- making
-     EVERY later consuming-shaped statement touching the same DECL
-     name look, to this is_parameter=true run alone, like a repeat
-     consumption of the (long since fully accounted for) original
-     value, even though it is legitimately consuming whatever DECL
-     holds *now*.  Confirmed empirically: 'delete p; p = g (); delete
-     p;' -- fully legitimate, the second delete consumes g()'s own
-     result -- otherwise false-positived on that second delete.  Leak
-     point 2 above already independently proves the original value
-     itself was safely consumed before any reassignment; the separate
-     is_parameter=false run this same reassignment seeds (its own GEN
-     event correctly re-arms ITS OWN state, so IT does not have this
-     problem) independently re-checks the new value from there on.  */
+     reassignment (ip_owner_block_transfer's, and identically ip_owner_
+     maybe_consumed_block_transfer's own, GEN/KILL branches are
+     deliberately is_parameter-exclusive -- a reassigned parameter's
+     new value is, by design, tracked as its own separate
+     is_parameter=false binding instead, see ip_check_owner_
+     consumption's own comment), so once the ORIGINAL parameter value
+     is consumed, this run's own "maybe consumed" state never goes
+     back to false for the rest of the function -- making EVERY later
+     consuming-shaped statement touching the same DECL name look, to
+     this is_parameter=true run alone, like a repeat consumption of the
+     (long since fully accounted for) original value, even though it
+     is legitimately consuming whatever DECL holds *now*.  Confirmed
+     empirically, by hand-tracing before implementing and then again
+     against the built compiler: 'delete p; p = g (); delete p;' for a
+     LOCAL p -- fully legitimate, the second delete consumes g()'s own
+     result -- stays clean: the reassignment IS a gen event for a
+     local, correctly resetting "maybe consumed" back to false before
+     the second delete.  For a PARAMETER, this same shape is instead
+     handled by this whole-guard skip, not by the reassignment being a
+     gen event within one run.  Leak point 2 above already
+     independently proves the original value itself was safely
+     consumed before any reassignment; the separate is_parameter=false
+     run this same reassignment seeds (its own GEN event correctly
+     re-arms ITS OWN state, so IT does not have this problem)
+     independently re-checks the new value from there on.  */
   /* Leak point 4: DECL is READ -- not consumed again, merely used as
      an ordinary operand (a call argument at a non-owner-sink
      position, an assignment's RHS, a dereference, a return operand
-     of a non-owner-marked return) -- at a point where it has already
-     been fully consumed on every path reaching it.  Whatever DECL was
-     handed to may have destroyed the object it denoted; the value is
-     not merely "no longer owned by DECL", it is not safe to read at
-     all (confirmed directly: 'delete p; int x = *p;' compiled with no
-     diagnostic whatsoever before this leak point existed).  Shares
-     the exact same "already spent" test leak point 3 uses --
-     ever_owned_before_stmt_p true, unconsumed_before_stmt_p false --
-     just applied to a read instead of a second consuming event; no
-     new dataflow, purely a new consumer of the two analyses already
-     computed above.  A statement is checked as EITHER a leak-point-3
+     of a non-owner-marked return) -- at a point where it may already
+     have been consumed on SOME path reaching it (existential, per
+     this profile's own soundness requirement -- see leak point 3's
+     own comment above for the full reasoning and why "may on some
+     path" is the right question here, not "must on every path").
+     Whatever DECL was handed to may have destroyed the object it
+     denoted; the value is not merely "no longer owned by DECL", it is
+     not safe to read at all (confirmed directly: 'delete p; int x =
+     *p;' compiled with no diagnostic whatsoever before this leak
+     point existed; 'if (c) delete p; int x = *p;' compiled with no
+     diagnostic even after this leak point existed, until the
+     universal-vs-existential fix -- matches d4324-profiles-
+     invalidation-owner-diamond-read-after-delete-bad.C).  Shares the
+     exact same "already spent" test leak point 3 uses --
+     ever_owned_before_stmt_p true, maybe_consumed_before_stmt_p true
+     -- just applied to a read instead of a second consuming event; no
+     new dataflow beyond what leak point 3 already computes, purely a
+     new consumer of the analyses already computed above.  A statement
+     is checked as EITHER a leak-point-3
      candidate OR a leak-point-4 candidate, never both (the early
      `continue` after the consuming-event branch below is what
      guarantees this) -- the statement that itself performs a second
@@ -3651,26 +3810,27 @@ ip_check_owner_binding (function *fun, tree decl, bool is_parameter)
 	bool already_spent
 	  = ip_owner_ever_owned_before_stmt_p (stmt, decl, is_parameter,
 						entry_succ, ever_owned_info)
-	    && !ip_owner_unconsumed_before_stmt_p (stmt, decl, is_parameter,
-						    fn_return_is_owner,
-						    entry_succ, info);
+	    && ip_owner_maybe_consumed_before_stmt_p (stmt, decl, is_parameter,
+						       fn_return_is_owner,
+						       entry_succ,
+						       maybe_consumed_info);
 	if (ip_owner_consuming_stmt_p (stmt, decl, fn_return_is_owner))
 	  {
 	    if (already_spent
 		&& !profiles_diagnostic_exempt_p (gimple_location (stmt),
 						   fun->decl, "std::invalidation"))
 	      profiles_diagnostic_at (gimple_location (stmt), "std::invalidation",
-			"%qD is consumed again here, after already being "
-			"consumed on every path reaching this point, under the "
-			"%<std::invalidation%> profile", decl);
+			"%qD is consumed again here, after possibly already "
+			"being consumed on some path reaching this point, "
+			"under the %<std::invalidation%> profile", decl);
 	    continue;
 	  }
 	if (already_spent && ip_owner_stmt_reads_decl_p (stmt, decl)
 	    && !profiles_diagnostic_exempt_p (gimple_location (stmt),
 					       fun->decl, "std::invalidation"))
 	  profiles_diagnostic_at (gimple_location (stmt), "std::invalidation",
-		    "%qD is read here, after already being consumed on "
-		    "every path reaching this point, under the "
+		    "%qD is read here, after possibly already being "
+		    "consumed on some path reaching this point, under the "
 		    "%<std::invalidation%> profile", decl);
       }
 }

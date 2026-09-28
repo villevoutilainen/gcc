@@ -14,5 +14,5 @@
 void f ([[owner]] int *p)
 {
   delete p;
-  std::owner_consumed (p); // { dg-error "is read here, after already being consumed" }
+  std::owner_consumed (p); // { dg-error "read here, after possibly already being consumed" }
 }
