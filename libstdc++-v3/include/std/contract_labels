@@ -475,7 +475,7 @@ namespace contracts
 	    __msg += " rejects the configured evaluation semantic '";
 	    __msg += __semantic_name (__effective);
 	    __msg += "'";
-	    return { false, std::define_static_string (__msg) };
+	    return { false, std::define_static_string (__msg).data () };
 #else
 	    // No -freflection: fall back to the old, fixed, dependency-
 	    // free message (this header still works without reflection,
