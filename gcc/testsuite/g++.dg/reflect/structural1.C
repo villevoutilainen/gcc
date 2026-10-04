@@ -81,6 +81,73 @@ public:
 };
 static_assert (!std::meta::is_structural_type (^^Outer2));
 
+// Inheritance: next_aggregate_field enumerates base-class subobjects
+// (as FIELD_DECLs with DECL_FIELD_IS_BASE) uniformly with ordinary
+// members, so a base is subject to the exact same rules -- both when
+// it's PUBLICLY inherited but has its own private DATA, and when the
+// base-class SUBOBJECT itself is private (private inheritance), a
+// genuinely distinct case from either class having private members.
+class BaseWithPrivateData structural
+{
+  int bx;
+public:
+  constexpr BaseWithPrivateData (int x) : bx (x) {}
+  constexpr int get_bx () const { return bx; }
+};
+
+class PublicDerived structural : public BaseWithPrivateData
+{
+  int dy;
+public:
+  constexpr PublicDerived (int x, int y) : BaseWithPrivateData (x), dy (y) {}
+  constexpr int get_dy () const { return dy; }
+};
+static_assert (std::meta::is_structural_type (^^PublicDerived));
+template <PublicDerived D>
+constexpr int use_public_derived () { return D.get_bx () + D.get_dy (); }
+static_assert (use_public_derived <PublicDerived (3, 4)> () == 7);
+
+class PrivateDerived structural : private BaseWithPrivateData
+{
+  int dy;
+public:
+  constexpr PrivateDerived (int x, int y) : BaseWithPrivateData (x), dy (y) {}
+  constexpr int get_bx () const { return BaseWithPrivateData::get_bx (); }
+  constexpr int get_dy () const { return dy; }
+};
+static_assert (std::meta::is_structural_type (^^PrivateDerived));
+template <PrivateDerived D>
+constexpr int use_private_derived () { return D.get_bx () + D.get_dy (); }
+static_assert (use_private_derived <PrivateDerived (3, 4)> () == 7);
+
+// Negative control: an unmarked base with private data must still
+// disqualify a structural-marked derived class -- the recursive check
+// through the base's own type is unconditional, just like for members.
+class UnmarkedBase
+{
+  int bx;
+public:
+  constexpr UnmarkedBase (int x) : bx (x) {}
+};
+class DerivedFromUnmarked structural : public UnmarkedBase
+{
+  int dy;
+public:
+  constexpr DerivedFromUnmarked (int x, int y) : UnmarkedBase (x), dy (y) {}
+};
+static_assert (!std::meta::is_structural_type (^^DerivedFromUnmarked));
+
+// Negative control: marking the base must not "infect" an unmarked
+// derived class that has its own new private member -- each class
+// needs its own keyword.
+class UnmarkedDerived : public BaseWithPrivateData
+{
+  int dy;
+public:
+  constexpr UnmarkedDerived (int x, int y) : BaseWithPrivateData (x), dy (y) {}
+};
+static_assert (!std::meta::is_structural_type (^^UnmarkedDerived));
+
 // Templates: the keyword survives template instantiation.
 template <typename T>
 class Box structural
