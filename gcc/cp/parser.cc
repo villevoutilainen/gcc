@@ -30448,11 +30448,18 @@ cp_parser_class_specifier (cp_parser* parser)
 
    class-property-specifier:
      final
+     structural
+
+   CLASS_KEY is the class-key already parsed for this class-head (needed
+   here, rather than left to the caller, so the "not permitted on a
+   union" diagnostic for "structural" can be anchored at the specifier's
+   own token location instead of threading that location back out).
 
    Returns a bitmask representing the class-property-specifiers.  */
 
 static cp_virt_specifiers
-cp_parser_class_property_specifier_seq_opt (cp_parser *parser)
+cp_parser_class_property_specifier_seq_opt (cp_parser *parser,
+					     enum tag_types class_key)
 {
   cp_virt_specifiers virt_specifiers = VIRT_SPEC_UNSPECIFIED;
 
@@ -30480,6 +30487,18 @@ cp_parser_class_property_specifier_seq_opt (cp_parser *parser)
 	}
       else if (id_equal (token->u.value, "__final"))
 	virt_specifier = VIRT_SPEC_FINAL;
+      else if (cxx_dialect >= cxx26
+	       && id_equal (token->u.value, "structural"))
+	{
+	  if (class_key == union_type)
+	    {
+	      error_at (token->location,
+			"%<structural%> not permitted on a union");
+	      cp_lexer_consume_token (parser->lexer);
+	      continue;
+	    }
+	  virt_specifier = VIRT_SPEC_STRUCTURAL;
+	}
       else
 	break;
 
@@ -30696,7 +30715,8 @@ cp_parser_class_head (cp_parser* parser,
     cp_parser_check_for_invalid_template_id (parser, id,
 					     class_key,
 					     type_start_token->location);
-  virt_specifiers = cp_parser_class_property_specifier_seq_opt (parser);
+  virt_specifiers
+    = cp_parser_class_property_specifier_seq_opt (parser, class_key);
 
   /* If it's not a `:' or a `{' then we can't really be looking at a
      class-head, since a class-head only appears as part of a
@@ -31060,6 +31080,8 @@ cp_parser_class_head (cp_parser* parser,
     DECL_SOURCE_LOCATION (TYPE_NAME (type)) = type_start_token->location;
   if (type && (virt_specifiers & VIRT_SPEC_FINAL))
     CLASSTYPE_FINAL (type) = 1;
+  if (type && (virt_specifiers & VIRT_SPEC_STRUCTURAL))
+    CLASSTYPE_STRUCTURAL (type) = 1;
  out:
   parser->colon_corrects_to_scope_p = saved_colon_corrects_to_scope_p;
   return type;

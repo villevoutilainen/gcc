@@ -2779,6 +2779,20 @@ struct GTY(()) lang_type {
 #define CLASSTYPE_FINAL(NODE) \
   TYPE_FINAL_P (NODE)
 
+/* Nonzero means that NODE (a class or struct type, never a union) was
+   declared with the C++26 context-sensitive "structural" class-head
+   keyword: structural_type_p (tree.cc) treats its own private/protected
+   non-static data members and base classes as not disqualifying it from
+   being a structural type, as long as each one's own type is itself
+   structural.  TYPE_LANG_FLAG_3 is otherwise completely unused on a
+   RECORD_TYPE/UNION_TYPE anywhere in the C++ front end (confirmed by
+   grep) -- unlike CLASSTYPE_FINAL, which reuses the generic, core
+   TYPE_FINAL_P/base.default_def_flag bit, this is a genuinely new,
+   C++-specific property with no existing core-tree flag to piggyback
+   on.  */
+#define CLASSTYPE_STRUCTURAL(NODE) \
+  (TYPE_LANG_FLAG_3 (RECORD_OR_UNION_CHECK (NODE)))
+
 
 /* Nonzero means that this _CLASSTYPE node overloads operator=(X&).  */
 #define TYPE_HAS_COPY_ASSIGN(NODE) (LANG_TYPE_CLASS_CHECK (NODE)->has_copy_assign)
@@ -7074,7 +7088,15 @@ enum virt_specifier
   {
     VIRT_SPEC_UNSPECIFIED = 0x0,
     VIRT_SPEC_FINAL       = 0x1,
-    VIRT_SPEC_OVERRIDE    = 0x2
+    VIRT_SPEC_OVERRIDE    = 0x2,
+    /* Not actually a virtual-function specifier -- a class-head-only
+       property (C++26 "structural" class-head keyword) that happens to
+       reuse this same bitmask/parsing function
+       (cp_parser_class_property_specifier_seq_opt), since that function
+       is otherwise unrelated to cp_parser_virt_specifier_seq_opt (the
+       member-function final/override parser), which never sets or
+       consults this bit.  */
+    VIRT_SPEC_STRUCTURAL  = 0x4
   };
 
 /* A type-qualifier, or bitmask therefore, using the VIRT_SPEC

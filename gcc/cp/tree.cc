@@ -5406,7 +5406,11 @@ structural_type_p (tree t, bool explain)
   for (tree m = next_aggregate_field (TYPE_FIELDS (t)); m;
        m = next_aggregate_field (DECL_CHAIN (m)))
     {
-      if (TREE_PRIVATE (m) || TREE_PROTECTED (m))
+      /* A class declared with the C++26 "structural" class-head keyword
+	 (CLASSTYPE_STRUCTURAL) opts its own direct bases/members out of
+	 the public-only requirement -- but each one's own type must still,
+	 recursively, be structural (checked below, unconditionally).  */
+      if (!CLASSTYPE_STRUCTURAL (t) && (TREE_PRIVATE (m) || TREE_PROTECTED (m)))
 	{
 	  if (explain)
 	    {

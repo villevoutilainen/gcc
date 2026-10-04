@@ -633,11 +633,24 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
   // [meta.define.static], promoting to static storage strings
   template<ranges::input_range _Rg>
-    consteval const ranges::range_value_t<_Rg>*
+    consteval auto
     define_static_string(_Rg&& __r)
     {
+      using _Tp = ranges::range_value_t<_Rg>;
       auto __str = meta::reflect_constant_string(__r);
-      return meta::extract<const ranges::range_value_t<_Rg>*>(__str);
+      // reflect_constant_string guarantees the promoted storage is
+      // CharT()-terminated (either __r was already a string literal
+      // ending in one, or a terminator gets appended) -- construct the
+      // view via the single-pointer, null-terminated-length
+      // constructor, exactly as every caller of the old raw-pointer-
+      // returning overload had to do manually before this change.
+      // Deliberate choice, not an oversight: an embedded CharT() before
+      // the true end (e.g. a range explicitly including one) truncates
+      // the view there too, matching ordinary string-literal/C-string
+      // convention rather than trying to preserve such a range's exact
+      // length -- see the define_static_string1.C test for the
+      // consequences this has for a couple of its own assertions.
+      return basic_string_view<_Tp>(meta::extract<const _Tp*>(__str));
     }
 
   template<ranges::input_range _Rg>

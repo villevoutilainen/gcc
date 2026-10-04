@@ -21,7 +21,7 @@ public:
 	// first, we canonicalize the file
 	// Note, the paper uses just define_static_string(file), but that
 	// doesn't work, char const* argument isn't a valid input_range.
-	impl data = {.filename = std::define_static_string(std::string_view(file)), .line = line};
+	impl data = {.filename = std::define_static_string(std::string_view(file)).data(), .line = line};
 
 	// then we canonicalize the data
 	impl const* p = std::define_static_object(data);
