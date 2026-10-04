@@ -96,9 +96,22 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{ return _Extent; }
       };
 
+#if __cplusplus > 202302L
+# define _GLIBCXX_STRUCTURAL structural
+#else
+# define _GLIBCXX_STRUCTURAL
+#endif
+
+    // Needs marking too (not just span itself): span's own private
+    // _M_extent member has this type, and structural_type_p's
+    // recursive member-type check applies regardless of span's own
+    // CLASSTYPE_STRUCTURAL exemption -- the primary (non-dynamic-
+    // extent) template above has no data members at all, so it's
+    // already trivially structural without needing the keyword.
     template<>
-      class __extent_storage<dynamic_extent>
+      class __extent_storage<dynamic_extent> _GLIBCXX_STRUCTURAL
       {
+#undef _GLIBCXX_STRUCTURAL
       public:
 	[[__gnu__::__always_inline__]]
 	constexpr
@@ -119,9 +132,16 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
   } // namespace __detail
 
+#if __cplusplus > 202302L
+# define _GLIBCXX_STRUCTURAL structural
+#else
+# define _GLIBCXX_STRUCTURAL
+#endif
+
   template<typename _Type, size_t _Extent = dynamic_extent>
-    class span
+    class span _GLIBCXX_STRUCTURAL
     {
+#undef _GLIBCXX_STRUCTURAL
       template<size_t _Offset, size_t _Count>
 	static constexpr size_t
 	_S_subspan_extent()

@@ -60,7 +60,7 @@ test_value_range(Rg&& rg)
     error();
 
   info rs = reflect_constant_string(rg);
-  const V* vs = define_static_string(rg);
+  const V* vs = define_static_string(rg).data();
   if (extract<const V*>(rs) != vs)
     error();
 

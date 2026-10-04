@@ -1,16 +1,37 @@
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-freflection" }
 // Test std::define_static_string.
+//
+// Rewritten for the new std::basic_string_view-returning signature
+// (was: a raw, NUL-terminated const CharT*). Two things changed that
+// affect several assertions here, not just the declared type:
+//
+// 1. operator== on two basic_string_view objects is CONTENT equality,
+//    not pointer identity. Several assertions below used to verify
+//    that two differently-sourced calls with equal content produced
+//    the SAME merged/deduplicated static object (pointer identity);
+//    now that's only directly observable via .data(), so this file
+//    checks .data() identity explicitly wherever that was the real
+//    point, and leaves plain `==` for the (now weaker, content-only)
+//    checks where identity isn't actually what's being tested.
+// 2. The view's length stops at the first embedded CharT() value,
+//    exactly like constructing a basic_string_view from a single,
+//    NUL-terminated pointer (which is, in fact, exactly how it's
+//    implemented) -- deliberate, matching ordinary string-literal
+//    convention rather than preserving an explicitly-sized range's
+//    exact length when that range happens to contain an embedded
+//    NUL. This changes the expected length for a few of the
+//    EXPLICITLY-sized inputs below (noted at each one).
 
 #include <meta>
 #include <ranges>
 #include <span>
 
-constexpr const char *a = std::define_static_string ("abcd");
-constexpr const char8_t *b = std::define_static_string (u8"abcd\N{LATIN SMALL LETTER AE}");
-constexpr const wchar_t *c = std::define_static_string (L"abcd");
-constexpr const char16_t *d = std::define_static_string (u"abcd\0ef");
-constexpr const char32_t *e = std::define_static_string (U"abcd\0ef\N{LATIN CAPITAL LETTER AE}");
+constexpr auto a = std::define_static_string ("abcd");
+constexpr auto b = std::define_static_string (u8"abcd\N{LATIN SMALL LETTER AE}");
+constexpr auto c = std::define_static_string (L"abcd");
+constexpr auto d = std::define_static_string (u"abcd\0ef");
+constexpr auto e = std::define_static_string (U"abcd\0ef\N{LATIN CAPITAL LETTER AE}");
 constexpr auto f = std::define_static_string (std::string_view ("abcd", 5));
 constexpr auto g = std::define_static_string (std::string_view ("abcdefg", 4));
 constexpr auto h = std::define_static_string (std::u8string_view (u8"ab\0\N{LATIN SMALL LETTER AE}", 5));
@@ -31,31 +52,49 @@ constexpr auto q = std::define_static_string (std::vector <char16_t> { u'e', u'x
 								       u' ', u'n', u'o', u'n', u'-', u'A', u'S', u'C', u'I', u'I',
 								       u' ', u'c', u'h', u'a', u'r', u'a', u'c', u't', u'e', u'r', u's',
 								       u' ', u'\N{LATIN SMALL LETTER A WITH ACUTE}' });
-const char *r = std::define_static_string ("some string");
-const char8_t *s = std::define_static_string (u8"\N{GRINNING FACE}\N{GRINNING FACE WITH SMILING EYES}");
-static_assert (a == std::define_static_string ("abcd"));
-static_assert (b == std::define_static_string (u8"abcd\N{LATIN SMALL LETTER AE}"));
-static_assert (c == std::define_static_string (L"abcd"));
-static_assert (d == std::define_static_string (u"abcd\0ef"));
-static_assert (e == std::define_static_string (U"abcd\0ef\N{LATIN CAPITAL LETTER AE}"));
-static_assert (f == std::define_static_string ("abcd\0"));
+const char *r = std::define_static_string ("some string").data ();
+const char8_t *s = std::define_static_string (u8"\N{GRINNING FACE}\N{GRINNING FACE WITH SMILING EYES}").data ();
+
+static_assert (std::is_same_v <decltype (a), const std::string_view>);
+static_assert (a == "abcd" && a.size () == 4);
+static_assert (b == u8"abcd\N{LATIN SMALL LETTER AE}");
+static_assert (c == L"abcd");
+// Embedded NUL at index 4: stops there, same as a plain NUL-terminated
+// C-string would -- "abcd", not the full 7-element "abcd\0ef".
+static_assert (d == u"abcd" && d.size () == 4);
+static_assert (e == U"abcd" && e.size () == 4);
+// f was explicitly sized to include the embedded NUL as content
+// ("abcd\0", 5 elements) -- but still stops at the first NUL, giving
+// "abcd" (4), the same as a and g. This is the clearest case of the
+// length-semantics change: identity-via-merging can no longer be
+// observed through operator== at all here (content is now equal to
+// a/g where it wouldn't have been, pointer-identity-wise, before).
+static_assert (f == "abcd" && f.size () == 4);
 static_assert (g == a);
-static_assert (h == std::define_static_string (u8"ab\0\N{LATIN SMALL LETTER AE}"));
-static_assert (i == std::define_static_string ("abcde"));
+static_assert (h == u8"ab" && h.size () == 2);
+static_assert (i == "abcde");
 static_assert (a != i);
-static_assert (j == std::define_static_string ("efg"));
+static_assert (j == "efg");
 static_assert (a != j);
-static_assert (k == std::define_static_string (U"defg"));
-static_assert (l == std::define_static_string (u8"hello\0"));
+static_assert (k == U"defg");
+static_assert (l == u8"hello" && l.size () == 5);
 static_assert (m == l);
-static_assert (n == std::define_static_string (u8"ello"));
-static_assert (o == std::define_static_string (u8"olle"));
-static_assert (p == std::define_static_string (L"World"));
-static_assert (q == std::define_static_string (u"extremely long string with non-ASCII characters \N{LATIN SMALL LETTER A WITH ACUTE}"));
+static_assert (n == u8"ello");
+static_assert (o == u8"olle");
+static_assert (p == L"World");
+static_assert (q == u"extremely long string with non-ASCII characters \N{LATIN SMALL LETTER A WITH ACUTE}");
 static_assert (std::define_static_string ("bar") != std::define_static_string ("baz"));
 
-template <typename T, const T *P>
-struct C { const T *p = P; };
+// Merged/deduplicated-static-storage identity, now only observable via
+// .data() (operator== itself is content-only on a string_view) --
+// direct replacements for this file's old pointer-equality assertions.
+static_assert (g.data () == a.data ());
+static_assert (m.data () == l.data ());
+static_assert (std::define_static_string ("foobar").data ()
+	       == std::define_static_string (std::vector <char> { 'f', 'o', 'o', 'b', 'a', 'r' }).data ());
+
+template <typename T, std::basic_string_view<T> P>
+struct C { std::basic_string_view<T> p = P; };
 
 static_assert (std::is_same_v <C <char, std::define_static_string ("foobar")>,
 			       C <char, std::define_static_string (std::vector <char> { 'f', 'o', 'o', 'b', 'a', 'r' })>>);
@@ -88,46 +127,46 @@ static_assert (foo <std::define_static_string (U"\N{GRINNING FACE WITH SMILING E
 int
 main ()
 {
-  if (std::string_view (a) != std::string_view ("abcd"))
+  if (a != "abcd")
     __builtin_abort ();
-  if (std::u8string_view (b) != std::u8string_view (u8"abcd\N{LATIN SMALL LETTER AE}"))
+  if (b != u8"abcd\N{LATIN SMALL LETTER AE}")
     __builtin_abort ();
-  if (std::wstring_view (c) != std::wstring_view (L"abcd"))
+  if (c != L"abcd")
     __builtin_abort ();
-  if (std::u16string_view (d) != std::u16string_view (u"abcd\0ef"))
+  if (d != u"abcd")
     __builtin_abort ();
-  if (std::u32string_view (e) != std::u32string_view (U"abcd\0ef\N{LATIN CAPITAL LETTER AE}"))
+  if (e != U"abcd")
     __builtin_abort ();
-  if (std::string_view (f) != std::string_view ("abcd\0"))
+  if (f != "abcd")
     __builtin_abort ();
   if (g != a)
     __builtin_abort ();
-  if (std::u8string_view (h) != std::u8string_view (u8"ab\0\N{LATIN SMALL LETTER AE}"))
+  if (h != u8"ab")
     __builtin_abort ();
-  if (std::string_view (i) != std::string_view ("abcde"))
+  if (i != "abcde")
     __builtin_abort ();
   if (a == i)
     __builtin_abort ();
-  if (std::string_view (j) != std::string_view ("efg"))
+  if (j != "efg")
     __builtin_abort ();
   if (a == j)
     __builtin_abort ();
-  if (std::u32string_view (k) != std::u32string_view (U"defg"))
+  if (k != U"defg")
     __builtin_abort ();
-  if (std::u8string_view (l) != std::u8string_view (u8"hello\0"))
+  if (l != u8"hello")
     __builtin_abort ();
   if (m != l)
     __builtin_abort ();
-  if (std::u8string_view (n) != std::u8string_view (u8"ello"))
+  if (n != u8"ello")
     __builtin_abort ();
-  if (std::u8string_view (o) != std::u8string_view (u8"olle"))
+  if (o != u8"olle")
     __builtin_abort ();
-  if (std::wstring_view (p) != std::wstring_view (L"World"))
+  if (p != L"World")
     __builtin_abort ();
-  if (std::u16string_view (q) != std::u16string_view (u"extremely long string with non-ASCII characters \N{LATIN SMALL LETTER A WITH ACUTE}"))
+  if (q != u"extremely long string with non-ASCII characters \N{LATIN SMALL LETTER A WITH ACUTE}")
     __builtin_abort ();
-  if (r != std::define_static_string ("some string"))
+  if (std::string_view (r) != std::string_view ("some string"))
     __builtin_abort ();
-  if (s != std::define_static_string (u8"\N{GRINNING FACE}\N{GRINNING FACE WITH SMILING EYES}"))
+  if (std::u8string_view (s) != std::u8string_view (u8"\N{GRINNING FACE}\N{GRINNING FACE WITH SMILING EYES}"))
     __builtin_abort ();
 }

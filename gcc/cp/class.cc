@@ -2342,6 +2342,7 @@ fixup_type_variants (tree type, bool update_align /* = false */)
 
       TYPE_POLYMORPHIC_P (variant) = TYPE_POLYMORPHIC_P (type);
       CLASSTYPE_FINAL (variant) = CLASSTYPE_FINAL (type);
+      CLASSTYPE_STRUCTURAL (variant) = CLASSTYPE_STRUCTURAL (type);
 
       TYPE_BINFO (variant) = TYPE_BINFO (type);
 

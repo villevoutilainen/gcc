@@ -109,9 +109,16 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
    *    size_t     _M_len
    *  @endcode
    */
+#if __cplusplus > 202302L
+# define _GLIBCXX_STRUCTURAL structural
+#else
+# define _GLIBCXX_STRUCTURAL
+#endif
+
   template<typename _CharT, typename _Traits = std::char_traits<_CharT>>
-    class basic_string_view
+    class basic_string_view _GLIBCXX_STRUCTURAL
     {
+#undef _GLIBCXX_STRUCTURAL
       static_assert(!is_array_v<_CharT>);
       static_assert(is_trivially_copyable_v<_CharT>
 	  && is_trivially_default_constructible_v<_CharT>

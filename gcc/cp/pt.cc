@@ -13123,7 +13123,10 @@ instantiate_class_template (tree type)
       determine_visibility (TYPE_MAIN_DECL (type));
     }
   if (CLASS_TYPE_P (type))
-    CLASSTYPE_FINAL (type) = CLASSTYPE_FINAL (pattern);
+    {
+      CLASSTYPE_FINAL (type) = CLASSTYPE_FINAL (pattern);
+      CLASSTYPE_STRUCTURAL (type) = CLASSTYPE_STRUCTURAL (pattern);
+    }
 
   pbinfo = TYPE_BINFO (pattern);
 
