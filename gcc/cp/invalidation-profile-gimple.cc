@@ -397,6 +397,14 @@ ip_now_valid_call_p (gcall *call)
 static bool
 ip_defines_var_p (gimple *stmt, tree var)
 {
+  /* VAR here is an anonymous SSA temporary (ip_use_decl's own fallback
+     for one -- see its comment) rather than the usual VAR_DECL/
+     PARM_DECL: by SSA's own single-assignment invariant it has exactly
+     one definition, SSA_NAME_DEF_STMT, which dominates (and so
+     "reaches", trivially and unconditionally) every one of its uses.
+     No dataflow needed, unlike the general VAR_DECL case below.  */
+  if (TREE_CODE (var) == SSA_NAME)
+    return stmt == SSA_NAME_DEF_STMT (var);
   if (gimple_code (stmt) == GIMPLE_CALL)
     {
       gcall *call = as_a<gcall *> (stmt);
@@ -2014,7 +2022,30 @@ ip_use_decl (tree t)
     return direct;
   if (TREE_CODE (t) == ADDR_EXPR)
     return ip_trackable_decl (TREE_OPERAND (t, 0));
-  return ip_deref_base_decl (t);
+  if (tree base = ip_deref_base_decl (t))
+    return base;
+  /* An anonymous SSA temporary (no SSA_NAME_VAR at all) that was never
+     bound to a named local -- e.g. 'container.at(0).push_back(...)',
+     where at()'s own return value flows straight into push_back's own
+     receiver argument with nothing named in between. ip_trackable_
+     decl's own SSA_NAME_VAR requirement makes such a temporary
+     otherwise completely invisible here, even though it's exactly as
+     real a bound reference as a named 'auto &ref = container.at(0);'
+     would be.  Return T ITSELF (not whatever it's bound to) -- the
+     caller tracks this exactly like a named variable, one "var" at a
+     time, and ip_binding_established_by is applied to *its own*
+     reaching definition by ip_check_var_uses, same as for a named
+     variable; resolving straight through to the container here would
+     make ip_compute_var_reach_info compute the *container's own*
+     reaching defs instead (its constructor, etc.), which
+     ip_binding_established_by can't resolve a binding from at all, so
+     the check would silently find nothing to flag.  ip_defines_var_p
+     below has the matching SSA_NAME special case that makes this
+     work: an SSA name has exactly one definition, trivially "reaching"
+     every use it dominates by construction.  */
+  if (TREE_CODE (t) == SSA_NAME && !SSA_NAME_VAR (t))
+    return t;
+  return NULL_TREE;
 }
 
 /* Main per-function check.  Collects every mutating call (as defined
