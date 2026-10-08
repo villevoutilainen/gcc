@@ -378,13 +378,40 @@ ip_now_valid_call_p (gcall *call)
   return ip_std_call_named_p (call, "now_valid");
 }
 
+/* True if a call to FNDECL is assumed to mutate its own receiver --
+   "a non-const function is assumed to invalidate" (CppCon 2026
+   "Profiles" talk, slide 53), the exact condition ip_collect_mutations
+   further down applies for Rule #0/#1, factored out here so both that
+   use and ip_defines_var_p's own new branch just below share one
+   definition instead of two that could drift apart. VIA_VIRTUAL_
+   DISPATCH mirrors ip_collect_mutations's own reasoning for why
+   [[not_invalidating]] must not be trusted when FNDECL was only found
+   via ip_virtual_call_declared_target (a declared, not necessarily
+   executed, override) -- ip_defines_var_p's own caller below never
+   resolves virtual dispatch at all, so it always passes false.  */
+
+static bool
+ip_call_assumed_mutating_p (tree fndecl, bool via_virtual_dispatch)
+{
+  return DECL_IOBJ_MEMBER_FUNCTION_P (fndecl) && !DECL_CONSTRUCTOR_P (fndecl)
+	 && !DECL_CONST_MEMFUNC_P (fndecl)
+	 && (via_virtual_dispatch || !profiles_not_invalidating_p (fndecl));
+}
+
 /* True if STMT is a definition (write) of VAR -- a GIMPLE_CALL or
    GIMPLE_ASSIGN whose own LHS is exactly VAR (through ip_trackable_
    decl's own SSA_NAME_VAR unwrap, since a raw pointer's LHS is
    normally an SSA name, not VAR itself, post-SSA), a constructor
    call whose own "this" (first) argument is &VAR (a constructor
    returns void and writes through its first argument instead of an
-   ordinary LHS), or a std::now_valid call whose own argument is VAR
+   ordinary LHS), an ordinary (non-const, non-constructor) member call
+   assumed to mutate its own receiver -- e.g. 'v.push_back(p)' -- the
+   same assumption Rule #0/#1's own ip_collect_mutations already makes
+   (ip_call_assumed_mutating_p, just above), needed so the return-
+   escape checker's own reaching-write walk (ip_nearest_write_before,
+   via ip_var_contents_escape_locally_p further down) can see what was
+   actually inserted into a container rather than stopping at its
+   construction -- or a std::now_valid call whose own argument is VAR
    (recognized via its ARGUMENT, not its call-LHS: a reference-
    returning call's LHS, if any, is a temporary holding the returned
    reference, never VAR itself -- confirmed this is the only shape
@@ -417,6 +444,9 @@ ip_defines_var_p (gimple *stmt, tree var)
 	  return TREE_CODE (this_arg) == ADDR_EXPR
 		 && TREE_OPERAND (this_arg, 0) == var;
 	}
+      if (fndecl && ip_call_assumed_mutating_p (fndecl, false)
+	  && gimple_call_num_args (call) >= 1)
+	return ip_receiver_decl (gimple_call_arg (call, 0)) == var;
       if (ip_now_valid_call_p (call) && gimple_call_num_args (call) >= 1)
 	return ip_receiver_decl (gimple_call_arg (call, 0)) == var;
       return false;
@@ -687,6 +717,9 @@ static bool ip_var_contents_escape_locally_p (tree var, gimple *point,
 static gcall *ip_resolve_nrv_call (tree retval, gimple *point);
 static tree ip_resolve_nrv_var (tree retval, gimple *point);
 static bool ip_type_may_hold_pointer_p (tree type, hash_set<tree> *visited);
+static bool ip_hidden_retslot_contents_escape_locally_p (tree v_ptr,
+							  gimple *point,
+							  int depth);
 
 /* True if DECL has automatic storage duration in the CURRENT
    function -- the only kind of variable whose address cannot safely
@@ -720,8 +753,13 @@ static bool ip_type_may_hold_pointer_p (tree type, hash_set<tree> *visited);
      comment contrasting it against "a genuine reference parameter").
 
    An ordinary REFERENCE_TYPE parameter that is NOT DECL_BY_REFERENCE
-   (a genuine 'T&'/'T&&') correctly falls through to false: its
-   referent belongs to the caller, not to this function.  */
+   (a genuine 'T&'/'T&&') mostly falls through to false: its referent
+   belongs to the caller, not to this function -- EXCEPT 'const T&' and
+   'T&&' may themselves be bound to a temporary the CALLER materialized
+   for this call, whose lifetime ends by the time this function returns
+   at the latest (coherent-lifetime-rules-for-dangling.md, cases 4/6);
+   an ordinary 'T&' cannot bind an rvalue at all, so it alone is exempt
+   from this.  */
 
 static bool
 ip_local_var_p (tree decl)
@@ -729,7 +767,13 @@ ip_local_var_p (tree decl)
   if (VAR_P (decl))
     return !is_global_var (decl);
   if (TREE_CODE (decl) == PARM_DECL)
-    return DECL_BY_REFERENCE (decl) || !TYPE_REF_P (TREE_TYPE (decl));
+    {
+      if (DECL_BY_REFERENCE (decl) || !TYPE_REF_P (TREE_TYPE (decl)))
+	return true;
+      tree reftype = TREE_TYPE (decl);
+      return TYPE_REF_IS_RVALUE (reftype)
+	     || CP_TYPE_CONST_P (TREE_TYPE (reftype));
+    }
   return false;
 }
 
@@ -935,6 +979,146 @@ ip_var_contents_escape_locally_p (tree var, gimple *point, int depth)
   return false;
 }
 
+/* Returns 1 if STMT writes through V_PTR with contents that escape, 0
+   if it writes through V_PTR safely, -1 if STMT isn't a write through
+   V_PTR at all.
+
+   A call writes through V_PTR in one of two genuinely different GIMPLE
+   shapes -- confirmed via gdb, not assumed, after an earlier draft of
+   this function got it wrong by only checking the second one:
+
+   - The call's own return value is itself elided directly into
+     *V_PTR -- gimple_call_lhs is a MEM_REF/INDIRECT_REF of V_PTR, e.g.
+     '*ret_6(D) = g (ref_5); [return slot optimization]' for
+     'vector<int*> ret = g(ref);' once ret is itself NRVO-chained into
+     the caller's own hidden retslot. V_PTR here is NOT one of the
+     call's own gimple_call_arg()s at all -- so the existing, unmodified
+     ip_call_args_escape_locally_p already does exactly the right thing
+     applied as-is (it already knows how to walk a member call's own
+     receiver vs. a constructor's "this" vs. an ordinary free-function
+     argument; none of that is affected by WHERE the return value
+     itself is written).
+
+   - A void-returning mutating call whose receiver argument is V_PTR
+     directly (already a bare pointer, not '&something') -- e.g.
+     'std::vector<int*>::push_back (v_3(D), &p);'. Here V_PTR genuinely
+     IS gimple_call_arg(call, 0), so it must be skipped outright (never
+     recursed into -- it's the very thing whose escapability this is
+     computing), then every OTHER argument checked directly;
+     ip_call_args_escape_locally_p is NOT reusable here unchanged,
+     since its own receiver-special-case only recognizes '&var', not a
+     bare already-a-pointer SSA value.  */
+
+static int
+ip_hidden_retslot_write_safe_p (gimple *stmt, tree v_ptr, int depth)
+{
+  if (is_gimple_assign (stmt) && gimple_assign_single_p (stmt))
+    {
+      tree lhs = gimple_assign_lhs (stmt);
+      if ((TREE_CODE (lhs) == MEM_REF || TREE_CODE (lhs) == INDIRECT_REF)
+	  && TREE_OPERAND (lhs, 0) == v_ptr)
+	return ip_escapes_locally_p (gimple_assign_rhs1 (stmt), stmt,
+				      depth + 1) ? 1 : 0;
+      return -1;
+    }
+  if (gimple_code (stmt) == GIMPLE_CALL)
+    {
+      gcall *call = as_a<gcall *> (stmt);
+      tree lhs = gimple_call_lhs (call);
+      bool retslot_write
+	= lhs && (TREE_CODE (lhs) == MEM_REF || TREE_CODE (lhs) == INDIRECT_REF)
+	  && TREE_OPERAND (lhs, 0) == v_ptr;
+      bool receiver_write
+	= !lhs && gimple_call_num_args (call) >= 1
+	  && gimple_call_arg (call, 0) == v_ptr;
+      if (!retslot_write && !receiver_write)
+	return -1;
+      /* RETSLOT_WRITE: route through ip_call_escapes_locally_p (not
+	 ip_call_args_escape_locally_p directly) so this call's own
+	 return type gets the same type-capacity gate (and std::
+	 no_dangling recognition) every other "is THIS call's own
+	 return value safe" query already gets -- confirmed, not
+	 assumed, to matter: an earlier draft skipped straight to
+	 ip_call_args_escape_locally_p and wrongly flagged 'return
+	 f1(7);' chained into a hidden retslot for a fieldless,
+	 non-trivially-copyable return type (f1's own argument, a
+	 compiler temporary materialized to bind 'int const&', looks
+	 exactly like an escaping local -- but it's irrelevant, since
+	 f1's return type can't hold a pointer at all).  */
+      if (retslot_write)
+	return ip_call_escapes_locally_p (call, depth + 1) ? 1 : 0;
+      tree fndecl = gimple_call_fndecl (call);
+      if (!fndecl)
+	return 1; /* Indirect call: can't see its args -- default-deny.  */
+      for (unsigned i = 1; i < gimple_call_num_args (call); ++i)
+	if (ip_escapes_locally_p (gimple_call_arg (call, i), call, depth + 1))
+	  return 1;
+      return 0;
+    }
+  return -1;
+}
+
+/* V_PTR is the hidden "where to construct the return value" pointer
+   (confirmed by the caller: an SSA default-def whose SSA_NAME_VAR is
+   this function's own RESULT_DECL, DECL_BY_REFERENCE set). Unlike
+   ip_resolve_nrv_var/ip_resolve_nrv_call (for a RESULT_DECL reached as
+   a bare, SSA-less node, a different ABI shape), there is no
+   separately-named NRV-elided local to resolve here at all --
+   construction and every subsequent mutating call write directly
+   through V_PTR itself, in place, from the first statement. Walk
+   backward from POINT -- same block first, then up the dominator chain
+   (CDI_DOMINATORS is already computed unconditionally by
+   ip_check_function before any return is checked) -- collecting EVERY
+   write through V_PTR, not just the nearest: unlike a scalar's single
+   reaching definition, this is new code with no inherited "nearest
+   write" constraint, so it can soundly union all of them directly.
+   Known, scoped limitation: a purely linear walk, so a write on only
+   one conditional arm is found only if that arm dominates POINT (every
+   coherent-lifetime-rules-for-dangling.md example is straight-line;
+   not exercised).
+
+   Default-deny applies here too, same as everywhere else in this file:
+   finding at least one recognized write and confirming IT is safe is
+   what justifies returning false; finding NOTHING recognizable at all
+   (the walk reaches function entry with zero matches) means we simply
+   don't know how V_PTR's contents were established, and must default
+   to true -- exactly what ip_result_decl_escapes_locally_p's own final
+   'return true;' already does when neither of ITS resolution attempts
+   finds anything.  */
+
+static bool
+ip_hidden_retslot_contents_escape_locally_p (tree v_ptr, gimple *point,
+					      int depth)
+{
+  if (depth > 16)
+    return true;
+  bool found_any = false;
+  basic_block bb = gimple_bb (point);
+  for (gimple_stmt_iterator gsi = gsi_for_stmt (point); !gsi_end_p (gsi);)
+    {
+      gsi_prev (&gsi);
+      if (gsi_end_p (gsi))
+	break;
+      int r = ip_hidden_retslot_write_safe_p (gsi_stmt (gsi), v_ptr, depth);
+      if (r == 1)
+	return true;
+      if (r == 0)
+	found_any = true;
+    }
+  for (basic_block d = get_immediate_dominator (CDI_DOMINATORS, bb); d;
+       d = get_immediate_dominator (CDI_DOMINATORS, d))
+    for (gimple_stmt_iterator gsi = gsi_start_bb (d); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      {
+	int r = ip_hidden_retslot_write_safe_p (gsi_stmt (gsi), v_ptr, depth);
+	if (r == 1)
+	  return true;
+	if (r == 0)
+	  found_any = true;
+      }
+  return !found_any; /* Nothing recognizable found at all -- default-deny.  */
+}
+
 /* RESULT_DECL is this function's own return-value slot, reached
    either directly (a bare '<retval>' GIMPLE_RETURN operand) or via an
    SSA-name wrapper: a chained "return callee(...);" for a non-
@@ -1021,6 +1205,18 @@ ip_escapes_locally_p (tree expr, gimple *point, int depth)
 	   automatically safe with zero analysis of callee's own
 	   arguments at all.  */
 	tree ssa_var = SSA_NAME_VAR (expr);
+	/* The invisible-reference-return ABI shape specifically (DECL_BY_
+	   REFERENCE set): construction and every subsequent mutating call
+	   write directly through EXPR itself, in place, from the first
+	   statement -- no separately-named NRV-elided local to resolve at
+	   all, unlike the plain-RESULT_DECL case just below, so it needs
+	   its own, more specific resolution (ip_hidden_retslot_contents_
+	   escape_locally_p's own comment has the full story).  Checked
+	   first since the plain RESULT_DECL check below doesn't care about
+	   DECL_BY_REFERENCE at all and would otherwise always win.  */
+	if (ssa_var && TREE_CODE (ssa_var) == RESULT_DECL
+	    && DECL_BY_REFERENCE (ssa_var))
+	  return ip_hidden_retslot_contents_escape_locally_p (expr, point, depth);
 	if (ssa_var && TREE_CODE (ssa_var) == RESULT_DECL)
 	  return ip_result_decl_escapes_locally_p (ssa_var, point, depth);
 	/* A DECL_BY_REFERENCE parameter's own default-def SSA_NAME
@@ -1532,9 +1728,7 @@ ip_collect_mutations (gcall *call, vec<ip_mutation> *out)
   if (!fndecl)
     return;
 
-  if (DECL_IOBJ_MEMBER_FUNCTION_P (fndecl) && !DECL_CONSTRUCTOR_P (fndecl)
-      && !DECL_CONST_MEMFUNC_P (fndecl)
-      && (via_virtual_dispatch || !profiles_not_invalidating_p (fndecl))
+  if (ip_call_assumed_mutating_p (fndecl, via_virtual_dispatch)
       && gimple_call_num_args (call) >= 1)
     if (tree decl = ip_receiver_decl (gimple_call_arg (call, 0)))
       {
@@ -1906,6 +2100,22 @@ ip_check_var_uses (function *fun, tree var, const vec<ip_use> &uses,
   for (unsigned d = 0; d < k; ++d)
     {
       tree bound_decl = ip_binding_established_by (reach.defs[d]);
+      /* A container is always trivially "bound to itself" whenever one
+	 of its own non-const member calls (correctly, per this file's
+	 own "a non-const call is assumed to mutate/may reference its
+	 receiver" stance) is VAR's own reaching definition -- e.g. VAR's
+	 reach includes 'std::vector<int>::data (&vi)' when checking VAR
+	 == vi directly (not some separate pointer bound to vi). That is
+	 degenerate, not a real binding: using vi IS using vi, never "a
+	 stale reference into vi" -- there is no such thing as vi itself
+	 dangling relative to vi itself. Confirmed via gdb this produced a
+	 genuine duplicate false positive once gap B started recognizing
+	 ordinary mutating calls (like 'data()') as reaching definitions
+	 at all: vi's own two destructor calls (GCC's normal-path and EH-
+	 cleanup-path copies) each independently counted as a "use" of
+	 this self-binding, each firing the same diagnostic once.  */
+      if (bound_decl == var)
+	bound_decl = NULL_TREE;
       bound_decls[d] = bound_decl;
       if (!bound_decl)
 	{
