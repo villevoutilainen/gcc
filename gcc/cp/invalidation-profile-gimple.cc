@@ -787,6 +787,19 @@ ip_no_dangling_call_p (gcall *call)
   return ip_std_call_named_p (call, "no_dangling");
 }
 
+/* True if CALL is a call to std::no_escape -- the invalidation
+   profile's manual, unproven "the reference formed to bind this
+   argument is not retained past this call" assertion (see
+   <utility>'s own definition) -- distinct from ip_no_dangling_call_p,
+   which asserts the VALUE itself doesn't dangle, not merely that a
+   reference to it isn't kept.  */
+
+static bool
+ip_no_escape_call_p (gcall *call)
+{
+  return ip_std_call_named_p (call, "no_escape");
+}
+
 /* True if any of CALL's arguments resolves to something that would
    dangle if a value derived from it escaped the current function --
    shared by both "is this call's own return value unsafe" and "was
@@ -835,7 +848,7 @@ ip_call_escapes_locally_p (gcall *call, int depth)
 {
   if (depth > 16)
     return true; /* Defensive recursion guard; never expected to trigger.  */
-  if (ip_no_dangling_call_p (call))
+  if (ip_no_dangling_call_p (call) || ip_no_escape_call_p (call))
     return false;
   tree fndecl = gimple_call_fndecl (call);
   if (!fndecl)
@@ -956,7 +969,7 @@ ip_var_contents_escape_locally_p (tree var, gimple *point, int depth)
       if (gimple_code (reaching) == GIMPLE_CALL)
 	{
 	  gcall *call = as_a<gcall *> (reaching);
-	  if (ip_no_dangling_call_p (call))
+	  if (ip_no_dangling_call_p (call) || ip_no_escape_call_p (call))
 	    return false;
 	  tree fndecl = gimple_call_fndecl (call);
 	  if (!fndecl)

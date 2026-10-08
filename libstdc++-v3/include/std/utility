@@ -317,6 +317,57 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     now_valid(_Tp& __obj [[not_invalidating]]) noexcept
     { return __obj; }
 
+  /// P3446R0 (Invalidation profile): assert -- without proof -- that
+  /// the reference GCC forms to bind this argument to a reference
+  /// parameter is not retained past this call (only the value read
+  /// through it matters) -- distinct from no_dangling, which asserts
+  /// the VALUE ITSELF doesn't dangle. Binding any reference parameter
+  /// to a local/parameter requires taking that local's own address;
+  /// this checker cannot tell that apart from a genuinely retained,
+  /// escaping address without looking into the callee's body, so this
+  /// is an explicit, unproven, call-site assertion exactly like no_
+  /// dangling/now_valid above (see invalidation-profile-gimple.cc's
+  /// own recognition of a call to this exact function). By reference,
+  /// not by value like no_dangling: there IS an existing addressable
+  /// object here (the argument being bound), and taking it by
+  /// reference avoids materializing a second, unrelated temporary of
+  /// our own that would just recreate the same problem one level
+  /// out -- confirmed via gdb this produces a clean pass-through with
+  /// no extra address-of layer, for both lvalue and rvalue arguments
+  /// alike (a universal reference binds either; reference-collapsing
+  /// handles the lvalue case, a materialized temporary the rvalue
+  /// case, with no copy in between).
+  template<typename _Tp>
+    [[__gnu__::__always_inline__]]
+    constexpr _Tp&&
+    no_escape(_Tp&& __x) noexcept
+    { return static_cast<_Tp&&>(__x); }
+
+  /// Same assertion, for a braced-init-list argument specifically --
+  /// template argument deduction cannot deduce _Tp through a generic
+  /// _Tp&& from a braced-init-list at all; std::initializer_list<_Tp>
+  /// is the standard's own carve-out that permits it. By value,
+  /// matching initializer_list's own natural calling convention (a
+  /// small, trivially-copyable {pointer,size} handle) -- confirmed via
+  /// gdb this avoids ever needing to bind a reference to it at all,
+  /// sidestepping the by-reference overload's own dereference-on-the-
+  /// receiving-end shape entirely.
+  ///
+  /// -Winit-list-lifetime is a false positive here: that warning
+  /// exists for the general "returning a local initializer_list"
+  /// footgun, but this function doesn't change whose lifetime governs
+  /// the backing array at all -- it passes __il straight through
+  /// unchanged, exactly as safe (or not) as the caller's own original
+  /// braced-init-list already was.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winit-list-lifetime"
+  template<typename _Tp>
+    [[__gnu__::__always_inline__]]
+    constexpr std::initializer_list<_Tp>
+    no_escape(std::initializer_list<_Tp> __il) noexcept
+    { return __il; }
+#pragma GCC diagnostic pop
+
   /// P3446R0/P4296R0 (Invalidation profile): assert -- without proof --
   /// that __x (an [[owner]]/[[owning_ptr]] pointer value) has been
   /// properly handed off for cleanup by some means this checker cannot
