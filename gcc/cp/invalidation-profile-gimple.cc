@@ -39,14 +39,29 @@ along with GCC; see the file COPYING3.  If not see
    TEMPLATE (not the literal field-layout recursion the paper's own
    S7.6.1 describes) -- a deliberately narrower, but easier to verify
    and equally sound, stand-in: two different class templates (or two
-   unrelated, non-template classes) can be proven not to alias; this
-   increment does NOT attempt to additionally distinguish two
-   different instantiations of the SAME template (e.g. two distinct
-   vector<int>s) the way the paper's own field-recursion or origin/cset
-   machinery could -- a known, documented scope limit, not a
-   soundness gap (the answer for that case is simply "not provably
-   unrelated", the same conservative default as before this file
-   existed).
+   unrelated, non-template classes) can be proven not to alias.  Two
+   DIFFERENT specializations of the SAME template (e.g. vector<int> and
+   vector<double>) can ALSO be proven unrelated, via ip_type_
+   structurally_nests_p's own recursive template-argument walk --
+   PROVIDED neither specialization's own template arguments structurally
+   nest the other (vector<vector<int>> genuinely contains vector<int> as
+   its own element type, at any nesting depth, and must stay
+   conservative).  This is still a deliberately narrower stand-in than
+   the paper's own general field-recursion or origin/cset machinery --
+   e.g. it has nothing to say about two genuinely DIFFERENT, unrelated
+   templates where one happens to hold the other as an ordinary
+   non-template field member (a struct Wrapper { vector<int> data; }
+   does not "nest" vector<int> by this file's own definition, since
+   Wrapper isn't even a specialization of the SAME template "vector" to
+   begin with) -- a known, documented, pre-existing scope limit, not a
+   soundness gap introduced here (the answer for that case is simply
+   "not provably unrelated" via the different-template-family branch
+   above, the same conservative default as before this file existed).
+   The one case this file's own nesting check is NOT asked to tell
+   apart at all is two PARM_DECLs of the exact SAME specialization
+   (e.g. two 'vector<int>&' parameters) -- declined by the earlier,
+   simpler TYPE_MAIN_VARIANT equality test instead, since that case can
+   obviously always alias regardless of nesting.
 
    Rule #1 ("Patently Independent Containers don't Interact", S7.6.2):
    needs a "proven binding" step first -- establishing that a given
@@ -225,14 +240,69 @@ ip_class_template_decl (tree type)
   return info ? TI_TEMPLATE (info) : type;
 }
 
+/* True if NEEDLE could be reached by recursively walking HAYSTACK's own
+   template arguments -- the structural mechanism by which mutating one
+   container can genuinely invalidate a reference into an object of a
+   DIFFERENT specialization of the SAME template family (confirmed via
+   a throwaway instrumented build, not assumed: vector<vector<int>>'s
+   own first template argument is exactly vector<int>; vector<vector<
+   vector<int>>>'s is vector<vector<int>>, NOT vector<int> directly --
+   genuine recursion is required, a one-level-only check would wrongly
+   clear that 3-deep case).
+
+   Deliberately recurses only into template arguments that are
+   themselves CLASS TYPES, taken BY VALUE -- not through a POINTER or
+   REFERENCE template argument's own pointee/referent. A container
+   parameterized on a pointer type (vector<Foo*>) holds raw Foo*
+   values; mutating/reallocating the vector moves those POINTER VALUES
+   around, not the Foo objects they happen to point to (which have
+   independent, external lifetime) -- so chasing into a pointer
+   argument's pointee here would be reasoning about a different,
+   unrelated kind of relationship, not containment.
+
+   No cycle guard needed (unlike ip_type_may_hold_pointer_p's own
+   field-walk, which does need one): a type's own template-argument
+   list is a concrete, already-fully-instantiated, finite AST -- there
+   is no way for a real, well-formed type to have itself as its own
+   template argument (that would describe an infinitely-sized type),
+   so this recursion is naturally bounded by the nesting depth actually
+   written in the program.  */
+
+static bool
+ip_type_structurally_nests_p (tree haystack, tree needle)
+{
+  haystack = TYPE_MAIN_VARIANT (haystack);
+  if (haystack == needle)
+    return true;
+  if (!CLASS_TYPE_P (haystack) || !CLASSTYPE_TEMPLATE_INFO (haystack))
+    return false;
+  tree args = INNERMOST_TEMPLATE_ARGS (CLASSTYPE_TI_ARGS (haystack));
+  for (int i = 0; i < TREE_VEC_LENGTH (args); ++i)
+    {
+      tree arg = TREE_VEC_ELT (args, i);
+      if (CLASS_TYPE_P (arg) && ip_type_structurally_nests_p (arg, needle))
+	return true;
+    }
+  return false;
+}
+
 /* Rule #0 (P4296R0 S7.6.1): true if this checker can find no
    relationship between TYPE_A and TYPE_B that could make mutating an
-   object of one possibly affect an object of the other.  Same type,
-   inheritance, or the same underlying class template are all treated
-   as "related" (declined to the conservative "not provably
-   unrelated" answer, per this file's own top comment); two class
-   types from genuinely different templates, with neither derived
-   from the other, are the one case proven safe here.  */
+   object of one possibly affect an object of the other.  Same type and
+   inheritance are both treated as "related" (declined to the
+   conservative "not provably unrelated" answer, per this file's own
+   top comment); two class types from genuinely different templates,
+   with neither derived from the other, are proven safe here, and so
+   are two DIFFERENT specializations of the SAME template family
+   PROVIDED neither one's own template-argument tree structurally
+   nests the other (ip_type_structurally_nests_p above) -- e.g.
+   vector<int> and vector<double> are provably unrelated siblings, but
+   vector<vector<int>> and vector<int> are not (the former genuinely
+   contains the latter as its own element type, however deep the
+   nesting goes), and the exact same specialization twice over (e.g.
+   two PARM_DECLs both of type vector<int>&) is never reached by this
+   nesting check at all -- the early TYPE_MAIN_VARIANT equality test
+   below already declines that case first.  */
 
 /* True if DECL_A and DECL_B (already confirmed != each other) are
    provably distinct OBJECTS, independent of what type they happen to
@@ -281,7 +351,10 @@ ip_types_provably_unrelated_p (tree type_a, tree type_b)
     return false;
   if (DERIVED_FROM_P (type_a, type_b) || DERIVED_FROM_P (type_b, type_a))
     return false;
-  return ip_class_template_decl (type_a) != ip_class_template_decl (type_b);
+  if (ip_class_template_decl (type_a) != ip_class_template_decl (type_b))
+    return true;
+  return !ip_type_structurally_nests_p (type_a, type_b)
+	 && !ip_type_structurally_nests_p (type_b, type_a);
 }
 
 /* Rule #1 support: true if RETURN_TYPE is a shape that could possibly
