@@ -873,6 +873,86 @@ ip_no_escape_call_p (gcall *call)
   return ip_std_call_named_p (call, "no_escape");
 }
 
+/* ARG is one of CALL's own arguments; PARAM_TYPE is its declared
+   parameter type (NULL if unknown -- a variadic tail, or an
+   indirectly-dispatched call with no visible declaration).  Delegates
+   to the ordinary ip_escapes_locally_p UNLESS PARAM_TYPE is itself a
+   REFERENCE_TYPE *and* either const-qualified or an rvalue reference
+   (same gate ip_local_var_p's own const-ref/rvalue-ref extension
+   uses: TYPE_REF_IS_RVALUE || CP_TYPE_CONST_P) and ARG, stripped, is
+   directly an ADDR_EXPR of a VAR_DECL or PARM_DECL -- confirmed via
+   gdb this exact shape is structurally IDENTICAL whether the compiler
+   inserted the ADDR_EXPR purely to bind a reference parameter
+   ('push_back(p)', p already int*-typed, exactly matching push_back's
+   own value_type) or the user explicitly wrote it to pass an
+   ordinary, BY-VALUE pointer argument ('sink(&x)', sink's own
+   parameter a plain int*, not a reference) -- PARAM_TYPE is the only
+   way to tell these apart, since the GIMPLE argument expression
+   itself is bitwise identical either way.
+
+   The const-or-rvalue restriction is NOT optional: confirmed via a
+   real regression caught by d4324-profiles-invalidation-escape-
+   container-bad.C (the CppCon talk's own WidgetFactory/Logger
+   example) that a PLAIN, mutable lvalue reference parameter
+   ('WidgetFactory(Window &w, Logger &l)') must stay OUTSIDE this
+   trust entirely -- the whole premise below ("rare for a function
+   taking a reference-to-const/rvalue-reference parameter to
+   incorrectly retain it") explicitly excludes a plain 'T&', which
+   commonly exists precisely to let a callee retain or write through
+   it (an output parameter, a stored back-reference) -- retaining
+   '&l' into 'logger_' there is the exact bug this whole file exists
+   to catch, not a rare misuse to trust past.
+
+   When it IS a reference-binding artifact (const-ref/rvalue-ref
+   only), the trust already extended to anonymous materialization
+   temps elsewhere in this file (see ip_escapes_locally_p's own
+   ADDR_EXPR branch) now extends here too, symmetrically: the
+   callee's own reference parameter cannot itself tell, at runtime,
+   whether it's bound to a temporary or a persistent, named object --
+   there is no principled reason to trust one and not the other for
+   the question of whether the callee retains the reference itself.
+   See through this one layer (the address taken purely to bind the
+   reference) by recursing on the BASE directly, not the ADDR_EXPR --
+   ip_escapes_locally_p's own existing dispatch already answers the
+   right, narrower question for a bare decl (does ITS OWN VALUE
+   dangle) correctly for both VAR_DECL and PARM_DECL, without needing
+   ip_var_contents_escape_locally_p to be called explicitly here
+   (confirmed via gdb, not assumed: a bare PARM_DECL that's never
+   reassigned has no explicit reaching write at all, so that
+   function's own "nothing found" fallback would wrongly default-deny
+   it; ip_escapes_locally_p's own bare-PARM_DECL check already,
+   unconditionally, correctly answers false instead).
+
+   Deliberately NOT recursive past this one layer: a NESTED ADDR_EXPR
+   (e.g. '&local' found one level inside an anonymous temp's own
+   reaching write, not as a call's own direct argument) is a genuine,
+   explicit computation, not a binding artifact, and must keep going
+   through ip_escapes_locally_p's own, unmodified, conservative
+   ADDR_EXPR branch -- confirmed via gdb this is necessary: a naive,
+   uniform "see through" would wrongly clear push_back(&local), since
+   the real risk there is that &local itself (not local's own trivial
+   int value) is what's being stored.  */
+
+static bool
+ip_call_argument_escapes_locally_p (tree arg, tree param_type,
+				     gimple *call, int depth)
+{
+  if (param_type && TREE_CODE (param_type) == REFERENCE_TYPE
+      && (TYPE_REF_IS_RVALUE (param_type)
+	  || CP_TYPE_CONST_P (TREE_TYPE (param_type))))
+    {
+      tree stripped = arg;
+      STRIP_NOPS (stripped);
+      if (TREE_CODE (stripped) == ADDR_EXPR)
+	{
+	  tree base = TREE_OPERAND (stripped, 0);
+	  if (VAR_P (base) || TREE_CODE (base) == PARM_DECL)
+	    return ip_escapes_locally_p (base, call, depth + 1);
+	}
+    }
+  return ip_escapes_locally_p (arg, call, depth + 1);
+}
+
 /* True if any of CALL's arguments resolves to something that would
    dangle if a value derived from it escaped the current function --
    shared by both "is this call's own return value unsafe" and "was
@@ -888,7 +968,22 @@ ip_call_args_escape_locally_p (gcall *call, tree fndecl, int depth)
   bool is_member = DECL_IOBJ_MEMBER_FUNCTION_P (fndecl)
 		   && gimple_call_num_args (call) >= 1;
 
-  for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+  /* No pre-loop skip here, UNLIKE ip_collect_mutations's own second
+     loop (which starts at first_arg == 1 for a member call, having
+     already handled the receiver entirely separately, before its own
+     loop even begins) -- THIS loop starts at i == 0 and processes the
+     receiver's own position WITHIN this same loop (via the special
+     case just below), so TYPE_ARG_TYPES's own position 0 must stay
+     aligned with i == 0 from the very first iteration -- confirmed,
+     not assumed, a pre-loop skip here double-advances arg_type by the
+     time i == 1 runs (once from the skip itself, once more from this
+     loop's own i == 0 -> i == 1 increment, which fires regardless of
+     the 'continue's below), silently misaligning every subsequent
+     argument's own param_type by one position.  */
+  tree arg_type = TYPE_ARG_TYPES (TREE_TYPE (fndecl));
+
+  for (unsigned i = 0; i < gimple_call_num_args (call); ++i,
+       arg_type = arg_type ? TREE_CHAIN (arg_type) : NULL_TREE)
     {
       if (i == 0 && is_ctor)
 	continue; /* The object being initialized, not an incoming value.  */
@@ -906,8 +1001,28 @@ ip_call_args_escape_locally_p (gcall *call, tree fndecl, int depth)
 		return true;
 	      continue;
 	    }
+	  /* Falls through for a receiver that ISN'T '&var' (e.g. a bare
+	     reference-typed SSA value, or '&parm_decl' not yet handled
+	     above) -- deliberately still goes through the ORIGINAL,
+	     unmodified ip_escapes_locally_p directly, not ip_call_
+	     argument_escapes_locally_p's own widened-trust check, even
+	     though arg_type is now correctly aligned with i == 0 here
+	     (TYPE_ARG_TYPES's own position 0 IS the receiver's "this"
+	     type): the receiver is handled by its own, separate,
+	     already-established rules (this whole special-case block),
+	     not the ordinary reference-bound-argument trust the rest of
+	     this loop applies from i == 1 onward -- kept explicit rather
+	     than relying on "this" always happening to be a POINTER_TYPE
+	     (never REFERENCE_TYPE) for ip_call_argument_escapes_locally_p
+	     's own gate to naturally no-op here.  */
+	  if (ip_escapes_locally_p (arg, call, depth + 1))
+	    return true;
+	  continue;
 	}
-      if (ip_escapes_locally_p (arg, call, depth + 1))
+      tree param_type
+	= (arg_type && TREE_VALUE (arg_type) != void_type_node)
+	  ? TREE_VALUE (arg_type) : NULL_TREE;
+      if (ip_call_argument_escapes_locally_p (arg, param_type, call, depth + 1))
 	return true;
     }
   return false;
@@ -1145,9 +1260,34 @@ ip_hidden_retslot_write_safe_p (gimple *stmt, tree v_ptr, int depth)
       tree fndecl = gimple_call_fndecl (call);
       if (!fndecl)
 	return 1; /* Indirect call: can't see its args -- default-deny.  */
-      for (unsigned i = 1; i < gimple_call_num_args (call); ++i)
-	if (ip_escapes_locally_p (gimple_call_arg (call, i), call, depth + 1))
-	  return 1;
+      {
+	/* Unconditional skip here, UNLIKE ip_call_args_escape_locally_p's
+	   own is_member-gated one: that function's own loop always
+	   starts at i == 0, so its pre-loop skip must itself be gated on
+	   is_member to decide whether TYPE_ARG_TYPES's own first entry
+	   (the receiver's "this" type, for a member function only) needs
+	   skipping at all.  THIS loop always starts at i == 1 (GIMPLE
+	   arg 0, V_PTR, is unconditionally the one being skipped here,
+	   regardless of whether fndecl turns out to be a member function
+	   or -- this function's own doc comment assumes, but nothing
+	   structurally enforces -- a free one) -- so TYPE_ARG_TYPES's own
+	   first entry must ALWAYS be skipped to stay aligned with i == 1,
+	   whether that first entry is a receiver's "this" type or simply
+	   a free function's own first real parameter's type.  */
+	tree arg_type = TYPE_ARG_TYPES (TREE_TYPE (fndecl));
+	if (arg_type)
+	  arg_type = TREE_CHAIN (arg_type);
+	for (unsigned i = 1; i < gimple_call_num_args (call); ++i,
+	     arg_type = arg_type ? TREE_CHAIN (arg_type) : NULL_TREE)
+	  {
+	    tree param_type
+	      = (arg_type && TREE_VALUE (arg_type) != void_type_node)
+		? TREE_VALUE (arg_type) : NULL_TREE;
+	    if (ip_call_argument_escapes_locally_p (gimple_call_arg (call, i),
+						     param_type, call, depth + 1))
+	      return 1;
+	  }
+      }
       return 0;
     }
   return -1;
