@@ -1022,9 +1022,18 @@ ip_type_may_hold_pointer_p (tree type, hash_set<tree> *visited)
   return false;
 }
 
-/* True if VAR (a class-typed local -- never itself an SSA name, see
+/* True if VAR (a class-typed local, or an anonymous compiler-
+   synthesized VAR_DECL materializing a value/reference to bind some
+   call's own reference parameter -- never itself an SSA name, see
    this file's own top comment) was, as of its nearest reaching write
-   before POINT, built from anything that would dangle if it escaped.  */
+   before POINT, built from anything that would dangle if it escaped.
+   Nothing in this function's own logic actually requires a class
+   type -- its one type-specific gate, ip_type_may_hold_pointer_p,
+   already returns true unconditionally for a POINTER_TYPE, so a
+   pointer/reference-typed anonymous temp (see ip_escapes_locally_p's
+   own ADDR_EXPR branch, which routes such a temp here) falls through
+   to the exact same reaching-write recursion as a class-typed local
+   always has.  */
 
 static bool
 ip_var_contents_escape_locally_p (tree var, gimple *point, int depth)
@@ -1260,6 +1269,70 @@ ip_escapes_locally_p (tree expr, gimple *point, int depth)
   if (TREE_CODE (expr) == ADDR_EXPR)
     {
       tree base = TREE_OPERAND (expr, 0);
+      /* An anonymous, compiler-synthesized temporary (DECL_ARTIFICIAL,
+	 no user-given name) that exists solely to give some call's own
+	 reference parameter an addressable value to bind to -- e.g.
+	 'auto& ref = v[0]; container.push_back(&ref);' lowers to 'D.xxx
+	 = ref_7; push_back(&D.xxx);', or a literal/rvalue argument
+	 ('f(7)' binding 'const int&') materializes the same shape.
+	 Asking "is D.xxx's own slot local" (the fallback below) is
+	 always, uselessly, true for any VAR_DECL -- recurse into what
+	 was actually computed and stored into it instead, via the
+	 exact same reaching-write recursion ip_var_contents_escape_
+	 locally_p already performs for class-typed locals (confirmed
+	 via gdb this function's own logic never actually required a
+	 class type -- its one type gate, ip_type_may_hold_pointer_p,
+	 already returns true unconditionally for a POINTER_TYPE, and
+	 false for a type that structurally cannot hold one at all,
+	 e.g. a plain int or a stateless std::allocator).
+
+	 This recursion resolves two genuinely different questions, only
+	 one of which it actually proves:
+
+	 - "Does what was stored into the temp itself dangle" (e.g. does
+	   ref_7 trace to a local) -- this IS soundly proven, via the
+	   existing, unmodified escape logic (confirmed via gdb: false
+	   for a plain T& container parameter, true for const T&/T&&,
+	   fix C's own logic, reached one layer deeper through operator[]
+	   's own receiver-argument check). A literal, or a value whose
+	   type structurally cannot hold a pointer (TYPE gate above),
+	   trivially also answers false here.
+
+	 - "Does the CALLEE retain the reference's own address (the
+	   temp's transient storage itself), rather than reading through
+	   it once" -- this is NOT provable from the call site at all
+	   (the callee's body is never inspected, by this project's own
+	   standing rule) and is NOT what this recursion checks. Passing
+	   it is a deliberate, explicit trust decision, confirmed with
+	   the user: it should be rare for a function taking a reference-
+	   to-const/rvalue-reference parameter to incorrectly retain that
+	   reference (or its address) rather than just reading through
+	   it, and if it does, and that function is itself compiled under
+	   the invalidation profile, ITS OWN return-escape check (e.g.
+	   the direct-parameter-value fix just above this one in the
+	   file's own history) would independently catch it there. This
+	   trust applies uniformly to any callee bound this way -- a
+	   standard-library operation like push_back, or a wholly
+	   arbitrary, separately-declared opaque function alike (see the
+	   nonempty-return-type-bad.C/nontrivial-return-escape-bad.C
+	   tests' own comments for the deliberately-NOT-covered contrast:
+	   a GENUINELY-NAMED argument, not a temporary, gets none of this
+	   trust).
+
+	 A GENUINELY-NAMED decl (an ordinary parameter or local,
+	 DECL_ARTIFICIAL false) is deliberately excluded from the above
+	 and keeps falling through to ip_local_var_p unchanged -- this
+	 one, by contrast, IS still just as conservative as ever:
+	 confirmed via gdb 'push_back(p)'/'push_back(&local)' have no
+	 intermediate temp to see through at all (p/local are themselves
+	 already addressable lvalues, so their own address binds the
+	 reference parameter directly, with no anonymous VAR_DECL in
+	 between) -- p/local's own lifetime independently extends beyond
+	 this one call, so neither of the two questions above is even
+	 the right one to ask; there is nothing here for the trust
+	 premise above to apply to.  */
+      if (VAR_P (base) && DECL_ARTIFICIAL (base) && !DECL_NAME (base))
+	return ip_var_contents_escape_locally_p (base, point, depth + 1);
       return (VAR_P (base) || TREE_CODE (base) == PARM_DECL)
 	     && ip_local_var_p (base);
     }
