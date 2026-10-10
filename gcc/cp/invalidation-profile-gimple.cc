@@ -1847,6 +1847,136 @@ ip_check_return_escape (gimple *return_stmt, tree enclosing_fndecl)
 	    "safe)");
 }
 
+/* If STMT is "this->FIELD = rhs"-shaped, where FIELD is a POINTER_TYPE
+   or REFERENCE_TYPE member of the class FNDECL constructs and "this"
+   is FNDECL's own receiver parameter, return FIELD; else NULL_TREE.
+
+   Deliberately scoped to EXACTLY these two type shapes, not every
+   type ip_type_may_hold_pointer_p would recognize as pointer-capable
+   (a class-typed member with its own non-trivial constructor, e.g. a
+   std::vector member copy-constructed from an argument): initializing
+   such a member is a GIMPLE_CALL (a constructor invocation), never
+   this single-assignment shape at all, so it already falls outside
+   this check naturally -- but relying on that as an accident of
+   codegen would be the wrong boundary to design around. A POINTER_TYPE/
+   REFERENCE_TYPE member's own slot being plainly assigned is the only
+   shape this function is actually answering a sound question about;
+   anything structurally bigger needs the existing, proper whole-object
+   recursion (ip_var_contents_escape_locally_p/ip_type_may_hold_
+   pointer_p, reached via ip_check_return_escape's own CONSTRUCTOR-node
+   handling), not this narrow statement matcher.
+
+   Confirmed via gdb these are the two GIMPLE shapes a member's own
+   one-time*-binding takes: 'struct X { const int& ohnoes; X(const
+   int& r) : ohnoes(r) {} };' lowers 'ohnoes(r)' to 'this_2(D)->ohnoes
+   = r_3(D);'; 'struct Z { const int* p; Z(const int& r) : p(&r) {} };'
+   lowers 'p(&r)' to 'this_2(D)->p = &r_3(D);' -- both a direct
+   COMPONENT_REF write into the field's own storage slot (base a
+   MEM_REF/INDIRECT_REF of "this"), not a write THROUGH an
+   already-bound reference or an already-stored pointer (which would
+   instead dereference the field's own LOADED value -- a completely
+   different, unrelated shape).
+
+   *For a REFERENCE_TYPE field this shape is reachable ONLY from a
+   constructor: the language provides no syntax to rebind a reference
+   member afterward at all. A POINTER_TYPE field has no such
+   guarantee -- it CAN legitimately be reassigned later, in an
+   ordinary method -- so gating on DECL_CONSTRUCTOR_P below is load-
+   bearing for POINTER_TYPE specifically, not merely self-documenting:
+   it deliberately leaves a pointer member's own LATER reassignment
+   (outside construction) unchecked here, same as today, rather than
+   taking on a second, much harder problem (which of possibly several
+   writes across a class's whole lifetime is the "live" one by the
+   time some other function reads the member) this file has no
+   existing machinery for.  */
+
+static tree
+ip_member_init_target (gimple *stmt, tree fndecl)
+{
+  if (!DECL_CONSTRUCTOR_P (fndecl))
+    return NULL_TREE;
+  if (!is_gimple_assign (stmt) || !gimple_assign_single_p (stmt))
+    return NULL_TREE;
+  tree lhs = gimple_assign_lhs (stmt);
+  if (TREE_CODE (lhs) != COMPONENT_REF)
+    return NULL_TREE;
+  tree field = TREE_OPERAND (lhs, 1);
+  if (TREE_CODE (field) != FIELD_DECL
+      || (TREE_CODE (TREE_TYPE (field)) != REFERENCE_TYPE
+	  && TREE_CODE (TREE_TYPE (field)) != POINTER_TYPE))
+    return NULL_TREE;
+  tree base = TREE_OPERAND (lhs, 0);
+  if (TREE_CODE (base) != MEM_REF && TREE_CODE (base) != INDIRECT_REF)
+    return NULL_TREE;
+  tree ptr = TREE_OPERAND (base, 0);
+  tree this_parm = DECL_ARGUMENTS (fndecl);
+  if (!this_parm)
+    return NULL_TREE;
+  if (TREE_CODE (ptr) == SSA_NAME)
+    {
+      if (!SSA_NAME_IS_DEFAULT_DEF (ptr) || SSA_NAME_VAR (ptr) != this_parm)
+	return NULL_TREE;
+    }
+  else if (ptr != this_parm)
+    return NULL_TREE;
+  return field;
+}
+
+/* STMT initializes data member FIELD directly, within its own
+   constructor (see ip_member_init_target's own comment) -- the member
+   persists for the constructed object's own lifetime, which is
+   guaranteed to extend past THIS constructor call, so the exact same
+   question ip_check_return_escape asks of a return value applies
+   here too: does what's being stored escape the current function's
+   own activation?  This is the real, missing counterpart to the
+   reference-binding trust this file extends at call sites (see
+   ip_call_argument_escapes_locally_p's own comment) and to trusting a
+   reference member's later READ (see ip_escapes_locally_p's own
+   COMPONENT_REF branch): that read-site trust is sound only because a
+   too-short-lived binding is independently caught HERE, at the
+   binding's own construction site -- confirmed this was a real,
+   missing check, not a redundant one, via a genuine false negative
+   (https://godbolt.org/z/PPGWa13fM): 'struct X { const int& ohnoes;
+   X(const int& r) : ohnoes(r) {} const int& g() { return ohnoes; } };
+   const int& h() { int local = 7; X x(local); return x.g(); }' used
+   to compile clean end-to-end, structurally identical to the already-
+   caught WidgetFactory/Logger example, except nothing ever checked
+   'ohnoes(r)' itself -- a constructor has no return value for
+   ip_check_return_escape's own mechanism to examine, so the binding
+   went completely unchecked, and the read-site trust (correctly
+   assuming aggregate-init's own whole-object check already covers
+   this for 'struct Handle { int& value; }; Handle make() { int x = 5;
+   return Handle{x}; }') had nothing to lean on for a constructor-
+   bound member instead.
+
+   Also confirmed, separately, this same gap exists for a POINTER_TYPE
+   member storing an address taken from a reference parameter ('struct
+   Z { const int* p; Z(const int& r) : p(&r) {} };') when the whole
+   object, not just one member, is later returned directly ('Z make()
+   { int local = 7; return Z(local); }') -- that path checks the
+   CONSTRUCTOR CALL's own arguments (trusted, same reference-binding
+   trust as above) rather than reading any member at all, so a
+   pointer member's usual safety net (an ordinary member read staying
+   conservative, untouched by either of today's two read-site trusts)
+   never even came into play; this check covers that path too, by the
+   same reasoning, uniformly for both field type shapes.  */
+
+static void
+ip_check_member_init (gimple *stmt, tree field, tree enclosing_fndecl)
+{
+  tree rhs = gimple_assign_rhs1 (stmt);
+  if (!ip_escapes_locally_p (rhs, stmt, 0))
+    return;
+  if (profiles_diagnostic_exempt_p (gimple_location (stmt),
+				     enclosing_fndecl, "std::invalidation"))
+    return;
+  profiles_diagnostic_at (gimple_location (stmt), "std::invalidation",
+	    "initializing member %qD with a value that may not outlive "
+	    "this object, not permitted under the %<std::invalidation%> "
+	    "profile (wrap in %<std::no_dangling%> if this is provably "
+	    "safe)", field);
+}
+
 /* Resolve RHS -- either the whole RHS of a single-copy assignment, or
    a POINTER_PLUS_EXPR's own base operand (the offset itself never
    matters: 'base + n' traces back to whatever 'base' does, just at a
@@ -4652,6 +4782,8 @@ ip_check_function (function *fun)
   auto_vec<tree> mutated_types;
   auto_vec<ip_use> uses;
   auto_vec<gimple *> returns_to_check;
+  auto_vec<gimple *> ref_member_inits_to_check;
+  auto_vec<tree> ref_member_init_fields;
 
   bool check_returns
     = ip_escape_checkable_type_p (TREE_TYPE (TREE_TYPE (fun->decl)));
@@ -4673,6 +4805,19 @@ ip_check_function (function *fun)
 	ip_check_owner_return_flavor_consistency (stmt, fun->decl);
 	ip_check_owner_return_omission (stmt, fun->decl);
 	ip_check_owner_call_arg_aliasing (stmt, fun->decl);
+
+	/* A pointer/reference member's own direct initialization (see
+	   ip_member_init_target's own comment) -- unconditional over every
+	   statement, same reasoning as the owner-flavor checks just above:
+	   a constructor with no other Rule #0/#1-relevant mutating call/
+	   use/return at all (e.g. the minimal 'X(const int& r) :
+	   ohnoes(r) {}' from https://godbolt.org/z/PPGWa13fM) must not be
+	   skipped by that work's own early-exit further down.  */
+	if (tree field = ip_member_init_target (stmt, fun->decl))
+	  {
+	    ref_member_inits_to_check.safe_push (stmt);
+	    ref_member_init_fields.safe_push (field);
+	  }
 
 	if (gcall *call = dyn_cast<gcall *> (stmt))
 	  {
@@ -4739,6 +4884,16 @@ ip_check_function (function *fun)
      just below, which is specific to the (unrelated) dangling-pointer
      machinery.  */
   ip_check_owner_consumption (fun);
+
+  /* Pointer/reference member initialization checking (see
+     ip_check_member_init's own comment) must likewise run regardless
+     of whether this function has any Rule #0/#1-relevant mutating
+     call/use/return at all -- a constructor doing nothing but binding
+     a reference member ('X(const int& r) : ohnoes(r) {}') has none of
+     those either.  */
+  for (unsigned i = 0; i < ref_member_inits_to_check.length (); ++i)
+    ip_check_member_init (ref_member_inits_to_check[i],
+				     ref_member_init_fields[i], fun->decl);
 
   if ((mutating_calls.is_empty () || uses.is_empty ())
       && returns_to_check.is_empty ())
