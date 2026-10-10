@@ -1305,22 +1305,42 @@ ip_escapes_locally_p (tree expr, gimple *point, int depth)
 	  return ip_hidden_retslot_contents_escape_locally_p (expr, point, depth);
 	if (ssa_var && TREE_CODE (ssa_var) == RESULT_DECL)
 	  return ip_result_decl_escapes_locally_p (ssa_var, point, depth);
-	/* A DECL_BY_REFERENCE parameter's own default-def SSA_NAME
-	   already IS effectively "the address of a local" -- see
-	   ip_local_var_p's own comment -- not an ordinary value
-	   flowing in the way the blanket default-def rule just below
-	   assumes. Confirmed via gdb this is genuinely how 'std::
-	   string_view f(std::string x) { return x; }' reaches this
-	   function: no ADDR_EXPR at all, x's own default-def passed
-	   directly as the conversion operator's 'this' argument, since
-	   x's own type is already reference-shaped. Deliberately gated
-	   on DECL_BY_REFERENCE specifically, not "any PARM_DECL
-	   default-def": an ordinary pointer/reference parameter's own
-	   value ('int* f(int* p) { return p; }') must keep falling
-	   through to that rule unchanged -- its own value genuinely
-	   doesn't dangle.  */
+	/* Any REFERENCE-SHAPED parameter's own default-def SSA_NAME,
+	   read directly with no ADDR_EXPR at all, already IS
+	   effectively "an address" -- not an ordinary value flowing in
+	   the way the blanket default-def rule just below assumes.
+	   TYPE_REF_P is true for BOTH shapes this covers: a DECL_BY_
+	   REFERENCE parameter (confirmed via gdb this is genuinely how
+	   'std::string_view f(std::string x) { return x; }' reaches
+	   this function: no ADDR_EXPR at all, x's own default-def
+	   passed directly as the conversion operator's 'this'
+	   argument, since x's own type is already reference-shaped),
+	   and a GENUINE reference parameter read directly -- confirmed
+	   via gdb this is ALSO exactly how 'const int* f(const int& x)
+	   { return &x; }' reaches this function: since x is already
+	   reference-typed, '&x' lowers to simply reading x's own SSA
+	   value (a reference already holds its referent's address
+	   natively), producing no ADDR_EXPR to catch this via the
+	   ADDR_EXPR branch above at all.  This second shape was a
+	   genuine, previously-untested gap in ip_local_var_p's own
+	   const-ref/rvalue-ref extension: that extension was only ever
+	   reached via an ADDR_EXPR of a LOCAL reference variable
+	   needing a second materialization to bind yet another
+	   function's own reference parameter (e.g. 'ret.push_back
+	   (&ref)'), never via a reference PARAMETER's own value read
+	   directly, with nothing else involved.
+
+	   ip_local_var_p itself already has the right logic for every
+	   sub-case reached here (DECL_BY_REFERENCE; genuine const T&/
+	   T&&; genuine plain T&, which it correctly still reports as
+	   NOT local) -- so, unlike the old DECL_BY_REFERENCE-only gate,
+	   an ordinary, NON-reference-typed parameter's own value
+	   ('int* f(int* p) { return p; }') is the only shape excluded
+	   from this check now, correctly left to keep falling through
+	   to the blanket default-def rule below -- its own value
+	   genuinely doesn't dangle, same as always.  */
 	if (ssa_var && TREE_CODE (ssa_var) == PARM_DECL
-	    && DECL_BY_REFERENCE (ssa_var))
+	    && TYPE_REF_P (TREE_TYPE (ssa_var)))
 	  return ip_local_var_p (ssa_var);
       }
       if (SSA_NAME_IS_DEFAULT_DEF (expr))
