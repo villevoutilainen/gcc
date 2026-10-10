@@ -15,11 +15,17 @@
 // there (e.g. via the same direct-parameter-value check that already
 // catches 'const int* g(const int& x) { return &x; }'). This applies
 // uniformly to any callee bound this way, not just well-known standard
-// library operations -- see d4324-profiles-invalidation-nonempty-
-// return-type-bad.C/nontrivial-return-escape-bad.C's own comments for
-// the deliberately-NOT-trusted contrast: passing an already-named,
-// independently-long-lived local or parameter (not a temporary) gets
-// none of this trust at all, and stays exactly as conservative as ever.
+// library operations. This trust has since been widened to also cover
+// a genuinely-named decl's own address taken directly to bind a
+// reference parameter, not just a materialized temporary -- see
+// d4324-profiles-invalidation-escape-seethrough-named-arg-ok.C --
+// since a reference carries no runtime distinction between the two.
+// What stays excluded: an explicit, computed '&decl' passed to an
+// ORDINARY, non-reference parameter, and any argument that is not
+// itself a direct, top-level '&decl' at the call site (e.g. a
+// reference read directly, tracing back to something fragile) -- see
+// d4324-profiles-invalidation-escape-explicit-address-still-bad.C and
+// d4324-profiles-invalidation-nonempty-return-type-bad.C.
 // { dg-do compile { target c++11 } }
 
 [[profiles::enforce(std::invalidation)]];
