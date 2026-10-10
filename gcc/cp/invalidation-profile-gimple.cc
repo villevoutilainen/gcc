@@ -1061,16 +1061,34 @@ ip_call_escapes_locally_p (gcall *call, int depth)
   return ip_call_args_escape_locally_p (call, fndecl, depth);
 }
 
-/* Collect, into *OUT, the RHS of every "VAR.field = rhs"-shaped
-   assignment reaching POINT -- the field-by-field aggregate-
-   initialization counterpart of ip_nearest_write_before's own
-   whole-object write search, needed because a class-typed return
-   value or local is very often populated field-by-field (e.g. brace
-   initialization, "Widget{}") rather than via one single whole-object
-   call or copy ip_defines_var_p can see.  Same same-block-then-
-   dominator-chain technique as ip_nearest_write_before, but collects
-   every matching write found rather than stopping at the first,
-   since more than one field may need checking.  */
+/* True if LHS is a "VAR.field = ..." or "VAR[i] = ..."-shaped
+   assignment target directly into VAR's own storage -- the two GIMPLE
+   shapes a per-element/per-field aggregate-initialization write can
+   take, covering both a class/struct-typed VAR (COMPONENT_REF) and an
+   array-typed one (ARRAY_REF, e.g. the compiler-synthesized backing
+   array behind a 'std::initializer_list<T>', confirmed via gdb/
+   -fdump-tree-gimple this is exactly how 'return {p};' lowers:
+   'D.xxx[0] = p;' with D.xxx the backing array).  */
+
+static bool
+ip_component_write_target_p (tree lhs, tree var)
+{
+  return (TREE_CODE (lhs) == COMPONENT_REF || TREE_CODE (lhs) == ARRAY_REF)
+	 && TREE_OPERAND (lhs, 0) == var;
+}
+
+/* Collect, into *OUT, the RHS of every "VAR.field = rhs"/"VAR[i] =
+   rhs"-shaped assignment reaching POINT -- the field-by-field (or
+   element-by-element) aggregate-initialization counterpart of
+   ip_nearest_write_before's own whole-object write search, needed
+   because a class-typed return value or local is very often populated
+   field-by-field (e.g. brace initialization, "Widget{}"), and an
+   array-typed one element-by-element (e.g. a std::initializer_list's
+   own backing array), rather than via one single whole-object call or
+   copy ip_defines_var_p can see.  Same same-block-then-dominator-chain
+   technique as ip_nearest_write_before, but collects every matching
+   write found rather than stopping at the first, since more than one
+   field/element may need checking.  */
 
 static void
 ip_collect_component_writes_before (tree var, gimple *point, vec<tree> *out)
@@ -1085,7 +1103,7 @@ ip_collect_component_writes_before (tree var, gimple *point, vec<tree> *out)
       if (is_gimple_assign (s) && gimple_assign_single_p (s))
 	{
 	  tree lhs = gimple_assign_lhs (s);
-	  if (TREE_CODE (lhs) == COMPONENT_REF && TREE_OPERAND (lhs, 0) == var)
+	  if (ip_component_write_target_p (lhs, var))
 	    out->safe_push (gimple_assign_rhs1 (s));
 	}
     }
@@ -1098,7 +1116,7 @@ ip_collect_component_writes_before (tree var, gimple *point, vec<tree> *out)
 	if (is_gimple_assign (s) && gimple_assign_single_p (s))
 	  {
 	    tree lhs = gimple_assign_lhs (s);
-	    if (TREE_CODE (lhs) == COMPONENT_REF && TREE_OPERAND (lhs, 0) == var)
+	    if (ip_component_write_target_p (lhs, var))
 	      out->safe_push (gimple_assign_rhs1 (s));
 	  }
       }
