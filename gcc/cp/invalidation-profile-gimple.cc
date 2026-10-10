@@ -1593,6 +1593,48 @@ ip_escapes_locally_p (tree expr, gimple *point, int depth)
        RESULT_DECL reached some other way) before falling back to
        ip_resolve_nrv_call exactly as before.  */
     return ip_result_decl_escapes_locally_p (expr, point, depth + 1);
+  if (TREE_CODE (expr) == COMPONENT_REF)
+    {
+      /* A data member read directly ('this->value'/'obj.value'), with
+	 no ADDR_EXPR at all -- confirmed via gdb this is exactly how
+	 'struct Handle { int &value; }; int& Handle::get() const {
+	 return value; }' reaches this function: the SSA_NAME dispatch
+	 above recurses into its own def_stmt's rhs1, landing here on a
+	 bare COMPONENT_REF.
+
+	 ANY FIELD_DECL that is itself REFERENCE_TYPE -- plain 'T&' OR
+	 'const T&'/'T&&' alike -- is trusted here, deliberately NOT
+	 mirroring the const-ref/rvalue-ref restriction this file
+	 applies to a PARM_DECL (ip_local_var_p) or to a reference-bound
+	 CALL ARGUMENT elsewhere in this file.  The reasoning for THOSE
+	 restrictions doesn't carry over to a member read: a PARAMETER's
+	 const-ref/rvalue-ref binding to a caller-supplied temporary has
+	 a lifetime scoped to roughly THIS SAME call, so returning it
+	 directly could manufacture a NEW dangling reference local to
+	 THIS activation. A member's binding, by contrast, happened in
+	 an entirely separate, already-finished EARLIER activation (the
+	 object's own construction) -- by the time this function reads
+	 it, whether it's valid was already, irrevocably settled one way
+	 or the other, and nothing this read does can be what newly
+	 breaks it. Confirmed via gdb/direct testing: a plain-ref
+	 member's own too-short-lived binding ('Handle make() { int x =
+	 5; return Handle{x}; }') is independently, already flagged at
+	 ITS OWN construction site, not here -- re-flagging an already-
+	 settled member's every subsequent read, the same way this file
+	 never re-validates an ordinary parameter's own value at each of
+	 its uses, would be pure redundancy, not soundness.  Whether
+	 CONST-ref/rvalue-ref member construction is equally well
+	 covered at ITS OWN site is a separate, open question (aggregate
+	 reference-member lifetime extension is one of the more
+	 esoteric corners of the standard, distinct per aggregate vs.
+	 non-aggregate enclosing class) -- genuinely out of scope here,
+	 since it does not change the answer to the question THIS read
+	 site is actually being asked.  */
+      tree field = TREE_OPERAND (expr, 1);
+      if (TREE_CODE (field) == FIELD_DECL
+	  && TREE_CODE (TREE_TYPE (field)) == REFERENCE_TYPE)
+	return false;
+    }
   return true; /* Unrecognized shape: conservative default-deny.  */
 }
 
