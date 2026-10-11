@@ -1977,6 +1977,153 @@ ip_check_member_init (gimple *stmt, tree field, tree enclosing_fndecl)
 	    "safe)", field);
 }
 
+/* If STMT is a GIMPLE_CALL to a constructor whose own receiver
+   argument (argument 0) is "&this->FIELD" -- FNDECL's own receiver
+   parameter, dereferenced and addressed into some FIELD of the class
+   it constructs -- return FIELD; else NULL_TREE.  This is the GIMPLE
+   shape a class-typed member's own constructor-call initialization
+   takes (as opposed to ip_member_init_target's plain-assignment shape,
+   which only a POINTER_TYPE/REFERENCE_TYPE field's own direct binding
+   ever produces).
+
+   Confirmed via -fdump-tree-gimple the receiver is NOT necessarily a
+   literal ADDR_EXPR inline in the call's own argument list: 'struct X
+   { SomeWrapper w; X(const int& r) : w(&r) {} };' lowers 'w(&r)' to
+   '_1 = &this->w; SomeWrapper::SomeWrapper(_1, r);' -- the address is
+   computed into its own SSA temp first, so a bare ADDR_EXPR check on
+   gimple_call_arg(call, 0) directly would never match at all; this
+   resolves one step through the SSA_NAME's own def_stmt first.  */
+
+static tree
+ip_member_init_call_target (gimple *stmt, tree fndecl)
+{
+  if (!DECL_CONSTRUCTOR_P (fndecl))
+    return NULL_TREE;
+  gcall *call = dyn_cast<gcall *> (stmt);
+  if (!call || gimple_call_num_args (call) < 1)
+    return NULL_TREE;
+  tree callee = gimple_call_fndecl (call);
+  if (!callee || !DECL_CONSTRUCTOR_P (callee))
+    return NULL_TREE;
+  tree receiver = gimple_call_arg (call, 0);
+  if (TREE_CODE (receiver) == SSA_NAME)
+    {
+      gimple *def = SSA_NAME_DEF_STMT (receiver);
+      if (!is_gimple_assign (def) || !gimple_assign_single_p (def))
+	return NULL_TREE;
+      receiver = gimple_assign_rhs1 (def);
+    }
+  if (TREE_CODE (receiver) != ADDR_EXPR)
+    return NULL_TREE;
+  tree lhs = TREE_OPERAND (receiver, 0);
+  if (TREE_CODE (lhs) != COMPONENT_REF)
+    return NULL_TREE;
+  tree field = TREE_OPERAND (lhs, 1);
+  if (TREE_CODE (field) != FIELD_DECL)
+    return NULL_TREE;
+  tree base = TREE_OPERAND (lhs, 0);
+  if (TREE_CODE (base) != MEM_REF && TREE_CODE (base) != INDIRECT_REF)
+    return NULL_TREE;
+  tree ptr = TREE_OPERAND (base, 0);
+  tree this_parm = DECL_ARGUMENTS (fndecl);
+  if (!this_parm)
+    return NULL_TREE;
+  if (TREE_CODE (ptr) == SSA_NAME)
+    {
+      if (!SSA_NAME_IS_DEFAULT_DEF (ptr) || SSA_NAME_VAR (ptr) != this_parm)
+	return NULL_TREE;
+    }
+  else if (ptr != this_parm)
+    return NULL_TREE;
+  return field;
+}
+
+/* STMT is a member-initializer CALL into FIELD (see
+   ip_member_init_call_target's own comment) -- e.g. 'struct X {
+   SomeWrapper w; X(const int& r) : w(&r) {} };'.  Unlike
+   ip_check_member_init (a direct POINTER_TYPE/REFERENCE_TYPE field
+   write), this cannot generally know what SomeWrapper's own
+   constructor does with its argument -- that's the acknowledged
+   "reference->anythingwrapping" case, undecidable from the call site
+   alone, and no more resolvable here than anywhere else in this file
+   (SomeWrapper might copy a value, safe; might bind its own reference
+   member to it, where the existing self-trust story already applies).
+
+   What IS decidable, and exactly as suspect as the already-caught
+   'p(&r)' direct case: the caller EXPLICITLY computed '&r' and handed
+   that address to some constructor, regardless of what that
+   constructor's own parameter type or body looks like.  The moment
+   '&r' appears literally in the source, that is the same deliberate
+   "I formed a pointer here" signal that already makes
+   'push_back(&local)'/'sink(&x)' conservative everywhere else in this
+   file; there is no principled reason 'struct Z { const int* p;
+   Z(const int& r) : p(&r) {} };' (already caught) should be flagged
+   while 'struct X { SomeWrapper w; X(const int& r) : w(&r) {} };' (an
+   identical act by the same programmer, just wrapped one level
+   differently) gets a free pass.
+
+   Confirmed via -fdump-tree-gimple this does NOT mean looking for a
+   literal ADDR_EXPR among the call's own arguments: when R is already
+   reference-typed, '&r' produces no ADDR_EXPR at all -- R's own SSA
+   value already IS the address natively (same fact this file's own
+   SSA_NAME dispatch above already documents for a direct 'return
+   &x;'), so 'w(&r)' and 'w(r)' (passed to a reference-typed SomeWrapper
+   parameter instead) would be BITWISE IDENTICAL at this point even
+   though the user's INTENT differs ('&r' only even type-checks at all
+   when SomeWrapper's own parameter is POINTER_TYPE, never REFERENCE_
+   TYPE). So the only way to tell "the explicit &r shape" apart from
+   "a bare reference passed along" is the SAME signal this file already
+   relies on elsewhere for this exact ambiguity (see ip_call_argument_
+   escapes_locally_p's own comment): the CALLEE's OWN DECLARED
+   PARAMETER TYPE at that position. A POINTER_TYPE parameter means the
+   source had to write '&something' to satisfy the type system; this
+   check answers that position's own escape question (does what's
+   addressed outlive this object) exactly like ip_check_member_init
+   already does for a direct pointer-field write. A REFERENCE_TYPE (or
+   any other) parameter at that position is the "Wrapper(ref)" shape,
+   deliberately out of scope, for the same reason a bare 'w(r)' passed
+   to a reference-typed SomeWrapper parameter is: this checker cannot
+   know, and must not guess, whether SomeWrapper's own constructor
+   copies the value (safe) or retains the reference (where the
+   existing self-trust story, not this check, already applies).
+
+   This also delivers the "const-ref/rvalue-ref only" restriction for
+   free, with no separate gate needed: ip_local_var_p on a plain 'T&'
+   parameter already, correctly, returns false (can't have been bound
+   to a temporary), so 'w(&r)' for a plain-ref 'r' stays clean, exactly
+   mirroring how 'p(&r)' already does in ip_check_member_init.  */
+
+static void
+ip_check_member_init_call (gimple *stmt, tree field, tree enclosing_fndecl)
+{
+  gcall *call = as_a<gcall *> (stmt);
+  tree callee = gimple_call_fndecl (call);
+  tree arg_type = TYPE_ARG_TYPES (TREE_TYPE (callee));
+  if (arg_type)
+    arg_type = TREE_CHAIN (arg_type); /* Skip the receiver's own type.  */
+  for (unsigned i = 1; i < gimple_call_num_args (call); ++i,
+       arg_type = arg_type ? TREE_CHAIN (arg_type) : NULL_TREE)
+    {
+      tree param_type
+	= (arg_type && TREE_VALUE (arg_type) != void_type_node)
+	  ? TREE_VALUE (arg_type) : NULL_TREE;
+      if (!param_type || TREE_CODE (param_type) != POINTER_TYPE)
+	continue;
+      tree arg = gimple_call_arg (call, i);
+      if (!ip_escapes_locally_p (arg, call, 0))
+	continue;
+      if (profiles_diagnostic_exempt_p (gimple_location (stmt),
+					 enclosing_fndecl, "std::invalidation"))
+	return;
+      profiles_diagnostic_at (gimple_location (stmt), "std::invalidation",
+		"initializing member %qD with a value that may not outlive "
+		"this object, not permitted under the %<std::invalidation%> "
+		"profile (wrap in %<std::no_dangling%> if this is provably "
+		"safe)", field);
+      return;
+    }
+}
+
 /* Resolve RHS -- either the whole RHS of a single-copy assignment, or
    a POINTER_PLUS_EXPR's own base operand (the offset itself never
    matters: 'base + n' traces back to whatever 'base' does, just at a
@@ -4784,6 +4931,8 @@ ip_check_function (function *fun)
   auto_vec<gimple *> returns_to_check;
   auto_vec<gimple *> ref_member_inits_to_check;
   auto_vec<tree> ref_member_init_fields;
+  auto_vec<gimple *> member_init_calls_to_check;
+  auto_vec<tree> member_init_call_fields;
 
   bool check_returns
     = ip_escape_checkable_type_p (TREE_TYPE (TREE_TYPE (fun->decl)));
@@ -4817,6 +4966,16 @@ ip_check_function (function *fun)
 	  {
 	    ref_member_inits_to_check.safe_push (stmt);
 	    ref_member_init_fields.safe_push (field);
+	  }
+
+	/* A class-typed member's own constructor-call initialization,
+	   checked for an explicit '&decl'-shaped argument (see
+	   ip_member_init_call_target's own comment) -- unconditional for
+	   the same reason as the plain-assignment case just above.  */
+	if (tree field = ip_member_init_call_target (stmt, fun->decl))
+	  {
+	    member_init_calls_to_check.safe_push (stmt);
+	    member_init_call_fields.safe_push (field);
 	  }
 
 	if (gcall *call = dyn_cast<gcall *> (stmt))
@@ -4894,6 +5053,14 @@ ip_check_function (function *fun)
   for (unsigned i = 0; i < ref_member_inits_to_check.length (); ++i)
     ip_check_member_init (ref_member_inits_to_check[i],
 				     ref_member_init_fields[i], fun->decl);
+
+  /* Class-typed member constructor-call initialization checking (see
+     ip_check_member_init_call's own comment) -- same reasoning, must
+     run regardless of whether this function has any other Rule #0/#1-
+     relevant mutating call/use/return.  */
+  for (unsigned i = 0; i < member_init_calls_to_check.length (); ++i)
+    ip_check_member_init_call (member_init_calls_to_check[i],
+				member_init_call_fields[i], fun->decl);
 
   if ((mutating_calls.is_empty () || uses.is_empty ())
       && returns_to_check.is_empty ())
