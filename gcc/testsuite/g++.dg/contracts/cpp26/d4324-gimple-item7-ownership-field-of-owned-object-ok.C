@@ -5,15 +5,18 @@
 // its own leading comment as a deferred follow-up never yet attempted.
 // Every realistic trigger is a non-const REFERENCE parameter bound to a
 // class-typed (non-pointer) FIELD of an object this function itself
-// received or created -- 'this->field' (a member conveyor function), or
-// 'ptr->field' (an ordinary pointer parameter) -- both previously
-// rejected with "argument ... is not owned by the calling function,
-// ... does not name a parameter or local that the calling function
-// itself received or created", even though the AST engine (contracts.cc,
-// oa_reference_owned_p) already composed this correctly. Confirmed via
-// direct testing this was NOT about is_object_address (a separate,
-// already-correctly-composed obligation for a field of any type on
-// either engine) -- it was specifically Q2 ownership.
+// received or created -- 'this->field' (a member conveyor function),
+// 'ptr->field' (an ordinary pointer parameter), 'ref.field' (a received
+// REFERENCE parameter), or 'local.field' (a local object this function
+// created itself) -- all four previously rejected with "argument ...
+// is not owned by the calling function, ... does not name a parameter
+// or local that the calling function itself received or created", even
+// though the AST engine (contracts.cc, oa_reference_owned_p) already
+// composed this correctly for all four shapes (see this file's own AST
+// counterpart, d4324-reference-ownership-field-of-owned-object.C).
+// Confirmed via direct testing this was NOT about is_object_address (a
+// separate, already-correctly-composed obligation for a field of any
+// type on either engine) -- it was specifically Q2 ownership.
 // { dg-do run }
 // { dg-options "-std=c++26 -fcontracts -fcontract-control-objects -fcontract-conveyor-proofs-gimple" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
@@ -45,6 +48,17 @@ int via_pointer_parm (Outer *op) conveyor
   return use_val_mut (op->inner);
 }
 
+int via_reference_parm (Outer &obj) conveyor
+{
+  return use_val_mut (obj.inner);
+}
+
+int via_local () conveyor
+{
+  Outer local{{1}};
+  return use_val_mut (local.inner);
+}
+
 int main ()
 {
   Outer o1{{1}};
@@ -52,6 +66,11 @@ int main ()
     return 1;
   Outer o2{{1}};
   if (via_pointer_parm (&o2) != 5)
+    return 1;
+  Outer o3{{1}};
+  if (via_reference_parm (o3) != 5)
+    return 1;
+  if (via_local () != 5)
     return 1;
   return 0;
 }
