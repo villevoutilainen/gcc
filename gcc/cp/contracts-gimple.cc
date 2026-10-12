@@ -1071,28 +1071,36 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
      produce an address from thin air, so its own return value must
      alias one of its own inputs or be self-contained).
 
-   Deliberately does NOT yet recognize a field of an owned object
-   ('&this->field') or an array element of an owned array
-   ('&arr[index]') as owned in their own right -- oa_reference_owned_p
-   itself gained these as later, separate refinements (see its own
-   comment), and porting them here is a documented, deferred follow-up,
-   not attempted in this first GIMPLE port. Also, unlike oa_reference_
-   owned_p, there is no separate IN_PREDICATE_CONTEXT ruleset here:
-   contract_assert isn't ported to GIMPLE yet either (a separate, later
-   item in this same porting effort), so that distinction has nothing
-   to apply to yet.
+   - (D4324/P2680, GIMPLE/AST parity, 2026-10-12) a field of an owned
+     object ('&this->field'/'&op->field', OP any parameter or local of
+     THIS function, not just 'this') is itself owned -- see this
+     function's own ADDR_EXPR/COMPONENT_REF case for the full
+     port of oa_reference_owned_p's own identical refinement, closing
+     what used to be a documented, deferred gap here: a class-typed
+     (non-pointer) field could never satisfy a non-const reference
+     parameter's Q2 ownership obligation at all (every real-world
+     trigger is a non-const-reference *parameter*, regardless of the
+     passed field's own type, which is exactly what this ADDR_EXPR/
+     COMPONENT_REF shape always is -- is_object_address and ownership
+     are two separate obligations, and it is specifically this second
+     one, not the field's own type, that was missing this composition).
+     This same fix also covers a base-class SUBOBJECT access confirmed
+     via direct testing to need it for the identical reason: '*this' in
+     a member of a DERIVED class, forwarded to another conveyor call's
+     reference parameter, needs an implicit upcast to the base class --
+     GCC represents this the same way as an ordinary field access,
+     'ADDR_EXPR (COMPONENT_REF (...))', not a bare 'ADDR_EXPR (decl)' --
+     so it reaches this exact same case. (A member of a class with no
+     base class at all is unaffected either way -- no upcast needed, so
+     'this' reaches here unwrapped.)
 
-   Confirmed by direct testing that this same "field of an owned
-   object" gap also covers a base-class SUBOBJECT access: '*this' in a
-   member of a DERIVED class, forwarded to another conveyor call's
-   reference parameter, needs an implicit upcast to the base class --
-   GCC represents this the same way as an ordinary field access
-   ('ADDR_EXPR (COMPONENT_REF (...)))', not a bare 'ADDR_EXPR (decl)'
-   -- so it falls into this function's own conservative default (NOT
-   owned) today, even though it should be, by the exact same "'this'
-   never extends the cone" reasoning as the non-inheritance case just
-   above. A member of a class with no base class at all is unaffected
-   (no upcast needed, so 'this' reaches here unwrapped).  */
+   Still does NOT recognize an array element of an owned array
+   ('&arr[index]') as owned in its own right -- oa_reference_owned_p's
+   own separate refinement for that shape remains an un-ported,
+   documented follow-up. Also, unlike oa_reference_owned_p, there is no
+   separate IN_PREDICATE_CONTEXT ruleset here: contract_assert isn't
+   ported to GIMPLE yet either (a separate, later item in this same
+   porting effort), so that distinction has nothing to apply to yet.  */
 
 static bool
 cg_provably_owned_p (tree val, function *fun, hash_set<tree> &in_progress,
@@ -1106,6 +1114,66 @@ cg_provably_owned_p (tree val, function *fun, hash_set<tree> &in_progress,
       tree base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (val, 0));
       if (DECL_P (base) && DECL_CONTEXT (base) == fun->decl)
 	return true;
+      /* D4324/P2680, GIMPLE/AST parity (found via the comprehensive
+	 coverage sweep, 2026-10-12): a field of an owned object is itself
+	 owned -- the exact gap this function's own leading comment
+	 already documented as a deferred follow-up ("Deliberately does
+	 NOT yet recognize a field of an owned object"), closed here by
+	 porting oa_reference_owned_p's own identical ADDR_EXPR
+	 (COMPONENT_REF (...)) case (contracts.cc) -- see that function's
+	 own extensive comment for the full rationale. OBJ reached through
+	 a pointer ('this->f1'/'op->f1', OBJ = INDIRECT_REF (ptr)) asks
+	 about the POINTER's own value/identity (any parameter or local of
+	 THIS function, by-value/pointer/reference/'this' alike -- unlike
+	 the stricter, REFERENCE_TYPE-or-'this'-only gate the ordinary
+	 SSA_NAME/PARM_DECL check further below enforces for a direct,
+	 whole-pointee dereference substituted for a reference parameter;
+	 see that check's own leading comment for why the two cases are
+	 genuinely different questions that happen to share this
+	 function's own entry point). OBJ a bare DECL_P directly ('h.f1',
+	 no pointer at all) asks the identical question about OBJ's own
+	 address -- re-enters this exact ADDR_EXPR case above via a
+	 freshly built wrapper, rather than duplicating its DECL_CONTEXT
+	 check inline.  A deeper field chain ('a.b.c') and a base-class
+	 subobject upcast (confirmed via direct testing to have the exact
+	 same gap, by this function's own leading comment) both still fall
+	 through to the conservative default below when OBJ is itself
+	 another COMPONENT_REF -- imprecise but safe, matching
+	 oa_reference_owned_p's own documented boundary.  */
+      if (TREE_CODE (base) == COMPONENT_REF)
+	{
+	  tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (base, 0));
+	  /* By this pass's point (post-gimplification), an ordinary pointer
+	     dereference is a MEM_REF with a zero offset, not the AST
+	     engine's own INDIRECT_REF -- confirmed via direct testing
+	     ('op->inner' arrives as 'MEM_REF (op, 0).inner', not
+	     'INDIRECT_REF (op).inner'); a non-zero offset is some other,
+	     unrelated pointer-arithmetic shape this case does not attempt
+	     to handle, so it falls through to the conservative default
+	     below like any other unrecognized OBJ shape.  */
+	  bool via_pointer = (TREE_CODE (obj) == INDIRECT_REF
+			      || (TREE_CODE (obj) == MEM_REF
+				  && integer_zerop (TREE_OPERAND (obj, 1))));
+	  if (via_pointer)
+	    {
+	      tree ptr_val = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
+	      if (TREE_CODE (ptr_val) == SSA_NAME)
+		{
+		  tree var = SSA_NAME_VAR (ptr_val);
+		  if (var
+		      && (VAR_P (var) || TREE_CODE (var) == PARM_DECL)
+		      && DECL_CONTEXT (var) == fun->decl
+		      && SSA_NAME_IS_DEFAULT_DEF (ptr_val))
+		    return true;
+		}
+	      return cg_provably_owned_p (ptr_val, fun, in_progress, reason_out);
+	    }
+	  if (DECL_P (obj))
+	    return cg_provably_owned_p (build1 (ADDR_EXPR,
+						 build_pointer_type (TREE_TYPE (obj)),
+						 obj),
+					 fun, in_progress, reason_out);
+	}
       if (reason_out)
 	*reason_out = OA_UNPROVABLE_NOT_RECEIVED;
       return false;
