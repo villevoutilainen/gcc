@@ -6351,6 +6351,13 @@ c_parse_final_cleanups (void)
      a constexpr function specifically cannot be safely analyzed any
      earlier than this exact point.  */
   contracts_gimple_eager_check_drain_at_eof ();
+
+  /* P3446R0/P4222: any vague-linkage function whose own eager profile
+     check (profiles_eager_check_function, profiles.cc) was deferred
+     until now -- see profiles_eager_check_deferred_until_eof's own
+     comment (profiles.cc) for why a vague-linkage function specifically
+     cannot be safely analyzed any earlier than this exact point.  */
+  profiles_eager_check_drain_at_eof ();
 }
 
 /* Perform any post compilation-proper cleanups for the C++ front-end.
