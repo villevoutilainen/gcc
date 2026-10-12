@@ -7615,6 +7615,38 @@ cxx_fold_indirect_ref (const constexpr_ctx *ctx, location_t loc, tree type,
       /* *&CONST_DECL -> to the value of the const decl.  */
       if (TREE_CODE (op) == CONST_DECL)
 	return DECL_INITIAL (op);
+
+      /* D4324 fix (2026-10-12): a contract's own cached constexpr-
+	 evaluable body (e.g. a precondition's synthesized predicate-core
+	 clone, build_predicate_core_function_1, contracts.cc) can still
+	 contain a literal ADDR_EXPR of a by-value class-typed parameter,
+	 built back when that parameter's own declared type was still an
+	 ordinary by-value type -- before an out-of-order, LATER
+	 genericization of the very same shared PARM_DECL (cp_genericize's
+	 own "fix up the types of parms passed by invisible reference"
+	 step, cp-gimplify.cc) mutated its TREE_TYPE in place to
+	 REFERENCE_TYPE, for that same clone's own real (non-constexpr)
+	 compiled form.  OPTYPE above, read from that same (now-mutated)
+	 operand, no longer matches the ADDR_EXPR's own TYPE field (set
+	 correctly to a plain pointer-to-the-original-type at construction
+	 time and never updated to follow): the similar_type_p check just
+	 below wrongly concludes this isn't the ordinary "*&p -> p" case,
+	 returns NULL, and the caller's own DR1188 diagnostic-path fallback
+	 instead compares against the ADDR_EXPR's own (still-correct) type,
+	 finds the types similar after all, and trips its own internal-
+	 consistency gcc_assert -- a genuine ADDR_EXPR-vs-operand type
+	 divergence left behind by that out-of-order mutation, not an
+	 actual DR1188 type-punning case.  Recognize this exact shape --
+	 ADDR_EXPR of a by-value parameter since turned into an invisible-
+	 reference one -- and use the ADDR_EXPR's own type instead of the
+	 operand's, exactly like cp_genericize_r's own ADDR_EXPR case does
+	 for the real compiled form (cp-gimplify.cc), which folds such an
+	 ADDR_EXPR down to the parameter's own (reference) value directly;
+	 the rest of this evaluator already handles a genuine reference
+	 parameter in that shape correctly.  */
+      if (is_invisiref_parm (op))
+	optype = TREE_TYPE (TREE_TYPE (sub));
+
       /* *&p => p;  make sure to handle *&"str"[cst] here.  */
       if (similar_type_p (optype, type))
 	{
