@@ -487,10 +487,23 @@ extern bool oa_match_comparison_against_param
    RHS_CALLEE_OUT are not resolved values; the caller substitutes RHS_
    RECEIVER_OUT with a specific call site's own argument and consults a
    *call-relational* fact, the call-shaped counterpart of oa_env::
-   relational_map.  */
+   relational_map.
+
+   ALLOW_VAR_DECL (default false, preserving every existing caller's
+   behavior byte-for-byte): also accept a bare VAR_DECL for PARAM_OUT,
+   not just a PARM_DECL -- threaded straight through to this function's
+   own oa_underlying_param_operand calls (see that function's own
+   comment). Only appropriate for a caller establishing a purely LOCAL,
+   within-this-function fact from an ordinary if-condition (e.g.
+   oa_refine_single_comparison, mirroring oa_match_type_bounded_
+   comparison's own identical use) -- never for a caller parsing a
+   callee's own DECLARED CONTRACT TEXT for substitution at a call site
+   (PARAM_OUT there must positionally correspond to one of that
+   callee's own parameters, something only ever true of a PARM_DECL).  */
 extern bool oa_match_comparison_against_call
   (tree conjunct, tree *param_out, tree_code *code_out,
-   tree *rhs_receiver_out, tree *rhs_callee_out, bool allow_symbolic_accessor);
+   tree *rhs_receiver_out, tree *rhs_callee_out, bool allow_symbolic_accessor,
+   bool allow_var_decl = false);
 
 /* The shift-shaped sibling of oa_match_comparison_against_call
    immediately above: "RECEIVER.ACCESSOR () - PARAM OP <literal>" or its
