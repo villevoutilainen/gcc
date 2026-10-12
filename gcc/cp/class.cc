@@ -8416,6 +8416,7 @@ finish_struct (tree t, tree attributes)
      see profiles_eager_check_type_complete's own comment for why a
      lambda's call operator specifically needs this notification.  */
   profiles_eager_check_type_complete (t);
+  contracts_gimple_eager_check_type_complete (t);
 
   return t;
 }

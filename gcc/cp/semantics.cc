@@ -5828,6 +5828,12 @@ expand_or_defer_fn (tree fn)
 	 comment).  */
       profiles_eager_check_function (fn);
 
+      /* D4324/P2680: the GIMPLE contract-checking engine needs the
+	 identical eager, per-function treatment and for the identical
+	 reason -- see contracts_gimple_eager_check_function's own
+	 comment (contracts-gimple.cc).  */
+      contracts_gimple_eager_check_function (fn);
+
       function_depth--;
 
       if (DECL_IMMEDIATE_FUNCTION_P (fn))

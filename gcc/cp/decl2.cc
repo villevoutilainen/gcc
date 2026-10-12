@@ -6344,6 +6344,13 @@ c_parse_final_cleanups (void)
 
   /* Indicate that we're done with front end processing.  */
   at_eof = 3;
+
+  /* D4324/P2680: any constexpr function whose own eager GIMPLE-pass
+     check (contracts_gimple_eager_check_function, contracts-gimple.cc)
+     was deferred until now -- see that function's own comment for why
+     a constexpr function specifically cannot be safely analyzed any
+     earlier than this exact point.  */
+  contracts_gimple_eager_check_drain_at_eof ();
 }
 
 /* Perform any post compilation-proper cleanups for the C++ front-end.

@@ -41,7 +41,7 @@ int deref_bad (int *p) conveyor
 struct T { int v; };
 int deref_field_bad (T *p) conveyor
 {
-  return p->v;
+  return p->v; // { dg-error "not provably valid" }
 } // { dg-error "not provably valid" }
 
 int main () { return 0; }

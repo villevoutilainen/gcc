@@ -28,9 +28,14 @@ struct S {
   int bump () conveyor { v = 5; return v; }
 };
 
+// Reported twice at the identical call site: once by this engine's own
+// synthesized-precondition consult (below), and independently by its
+// separate, general receiver-is_object_address obligation -- both were
+// previously suppressed by the same whole-TU seen_error() bug this
+// engine's eager check now routes around, so both now correctly fire.
 int via_unasserted_pointer (S *p) conveyor
 {
-  return p->bump (); // { dg-error "cannot prove .is_object_address. for .p., required by the precondition" }
+  return p->bump (); // { dg-error "cannot prove .is_object_address. for .p., required by the precondition" } { dg-error "cannot prove .is_object_address. for .p., implicitly required by the receiver" }
 }
 
 int main () { return 0; }

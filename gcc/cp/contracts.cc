@@ -4724,26 +4724,27 @@ init_contracts ()
   init_terminate_fn ();
   init_builtin_contract_violation_type ();
 
-  /* Register the experimental GIMPLE-pass contract-checking engine
-     (-fcontract-conveyor-proofs-gimple / -fcontract-symbolic-proofs-gimple)
-     directly, the same way a plugin's own PLUGIN_PASS_MANAGER_SETUP
-     callback would, rather than listing it in passes.def.  passes.def is
-     shared by every language driver via libbackend.a, but
-     make_pass_contracts_gimple only exists in the C++ front end's own
-     object file, so referencing it from passes.def would leave cc1/lto1
-     with an unresolved symbol at link time.  This call site runs safely
-     before the pass list is ever iterated: general_init (toplev.cc)
-     constructs the pass manager before lang_hooks.init (which reaches
-     here via cxx_init_decl_processing) or initialize_plugins ever run.  */
-  if (flag_contract_conveyor_proofs_gimple || flag_contract_symbolic_proofs_gimple)
-    {
-      struct register_pass_info pass_info;
-      pass_info.pass = make_pass_contracts_gimple (g);
-      pass_info.reference_pass_name = "ssa";
-      pass_info.ref_pass_instance_number = 1;
-      pass_info.pos_op = PASS_POS_INSERT_AFTER;
-      register_pass (&pass_info);
-    }
+  /* The experimental GIMPLE-pass contract-checking engine (-fcontract-
+     conveyor-proofs-gimple / -fcontract-symbolic-proofs-gimple) is
+     deliberately NOT spliced into the normal whole-program "ssa"-
+     relative pipeline here anymore (as it once was, via register_pass,
+     the same way a plugin's own PLUGIN_PASS_MANAGER_SETUP callback
+     would). That pipeline only runs pass_contracts_gimple once the
+     WHOLE translation unit reaches end-of-compilation with zero
+     errors anywhere in it: pass_build_ssa_passes (a SIMPLE_IPA_PASS,
+     passes.cc) gates SSA construction -- and everything spliced in
+     next to it, this pass included -- on "!seen_error ()", so a
+     single, unrelated front-end error anywhere silently suppressed
+     this pass's own diagnostics for every OTHER function in the same
+     file. make_pass_contracts_gimple itself is unchanged and still
+     what actually runs -- just invoked directly, per function, from
+     contracts_gimple_eager_check_function (contracts-gimple.cc,
+     called from expand_or_defer_fn/finish_struct), never through
+     register_pass/the pass manager's own pipeline. Leaving the old
+     registration in place too would not just double-report: it would
+     silently reintroduce the exact bug this eager path exists to
+     route around, for every function the eager hook had not already
+     reached first.  */
 }
 
 static GTY(()) tree contracts_source_location_impl_type;
@@ -25849,7 +25850,7 @@ oa_cache_contract_flavors (tree fndecl)
    check at that construction site too, since a wrapper's whole
    purpose is calling something whose contracts matter.  */
 
-static bool
+bool
 oa_function_needs_walk_p (tree fndecl)
 {
   /* Both orthogonal to per-function contract activity -- never skip
