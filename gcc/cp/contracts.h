@@ -186,6 +186,35 @@ extern void init_contracts			(void);
 class gimple_opt_pass;
 extern gimple_opt_pass *make_pass_contracts_gimple (gcc::context *ctxt);
 
+/* Runs pass_contracts_gimple eagerly, per function, bypassing the
+   whole-TU seen_error () gate that otherwise silently suppresses it
+   for every function once ANY front-end error exists anywhere in the
+   TU -- see contracts_gimple_eager_check_function's own comment
+   (contracts-gimple.cc) for the full rationale.  Called from
+   expand_or_defer_fn (semantics.cc) and, for the deferred-until-
+   complete case, from finish_struct (class.cc).  */
+extern void contracts_gimple_eager_check_function (tree fndecl);
+extern void contracts_gimple_eager_check_type_complete (tree type);
+
+/* Drains every DECL_DECLARED_CONSTEXPR_P function whose own eager
+   check (above) was deferred until genuine end-of-TU -- called from
+   c_parse_final_cleanups (decl2.cc) right after at_eof is set to 3.
+   See contracts_gimple_eager_check_function's own comment
+   (contracts-gimple.cc) for why a constexpr function specifically
+   cannot be analyzed any earlier than this.  */
+extern void contracts_gimple_eager_check_drain_at_eof (void);
+
+/* Cheap, O(1) pre-scan ("might FNDECL's own body need the oa_* walk at
+   all") -- exported (previously static) so contracts_gimple_eager_
+   check_function can reuse it as its own pre-gimplification gate,
+   exactly matching the AST engine's own scope: a function with
+   nothing oa-relevant in it (no contract, no call to anything with an
+   active precondition, not itself conveyor/symbolic) is one neither
+   engine has any reason to analyze. See its own comment
+   (contracts.cc) for the full rationale and the touch points that
+   keep DECL_MIGHT_NEED_OA_SCAN_P accurate.  */
+extern bool oa_function_needs_walk_p (tree fndecl);
+
 extern tree grok_contract			(tree, tree, tree, cp_expr, location_t, tree = NULL_TREE);
 extern tree finish_contract_specifier 		(tree, tree);
 extern tree finish_contract_condition		(cp_expr);

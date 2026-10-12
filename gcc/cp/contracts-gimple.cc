@@ -107,6 +107,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "cfganal.h"
 #include "hash-traits.h"
 #include "tree-pretty-print.h"
+#include "cgraph.h"
+#include "cfghooks.h"
+#include "gimple-ssa.h"
+#include "bitmap.h"
 
 /* Positional correspondence between CALLEE's own PARM_DECLs and CALL's
    actual argument expressions -- the GIMPLE-level analogue of
@@ -6454,4 +6458,313 @@ gimple_opt_pass *
 make_pass_contracts_gimple (gcc::context *ctxt)
 {
   return new pass_contracts_gimple (ctxt);
+}
+
+/* D4324/P2680: run pass_contracts_gimple on FNDECL's own body right
+   now, eagerly, rather than waiting for the normal end-of-compilation
+   pipeline -- called from expand_or_defer_fn (semantics.cc) once
+   FNDECL's body is otherwise complete, the exact choke point and exact
+   rationale [[project_eager_profile_checking_fix]] already used for
+   the std::init/std::invalidation profile checkers: symbol_table::
+   compile (cgraphunit.cc) gates SSA construction and every GIMPLE
+   pass -- pass_build_ssa_passes's own "bool gate () { return !seen_
+   error () && !in_lto_p; }" (passes.cc) -- on the WHOLE translation
+   unit being free of front-end errors. Confirmed directly: a function
+   with a genuinely unguarded, out-of-bounds vector access silently
+   stopped being reported at all under -fcontract-conveyor-proofs-
+   gimple, purely because some OTHER, unrelated function anywhere else
+   in the same file had its own front-end error (e.g. an unprovable
+   is_object_address obligation) -- the exact same whole-TU
+   suppression already fixed once for the other two checkers.
+
+   Unlike those two, this pass cannot simply skip every DECL_DECLARED_
+   CONSTEXPR_P function the way profiles_eager_check_function_1 does:
+   several existing GIMPLE conveyor tests (e.g. d4324-gimple-
+   conversion-*-ok.C) rely on a constexpr conversion operator's own
+   body being checked here, and conveyor/symbolic proofs are about
+   ordinary runtime verification, not something constexpr code is
+   exempt from the way memory-safety profiles are.
+
+   A constexpr function specifically cannot be analyzed THIS early,
+   though, for a second, independent reason beyond the DECL_SAVED_TREE
+   clobbering an earlier version of this fix addressed by a save/
+   restore (removed again below, once this deferral made it
+   unnecessary): confirmed directly, via gdb, that even a CORRECT
+   diagnostic emitted here for a constexpr function (e.g. "cannot
+   prove is_object_address" for std::to_string's own call into
+   basic_string's constructor) can itself trigger cp_finish_decl's own
+   ordinary maybe_constant_init attempt on some unrelated local
+   variable's initializer elsewhere in the same constexpr function,
+   which ICEs deep inside cxx_eval_call_expression (a tree-check
+   failure recovering a constructor's own 'this' binding) -- but ONLY
+   when reached this early (mid-parse, at_eof == 0). The IDENTICAL
+   diagnostic, for the IDENTICAL reachable call, reached instead at
+   genuine end-of-TU (restoring the old register_pass_info splice
+   temporarily, as a controlled experiment) reports cleanly with no
+   crash at all -- conclusively ruling this out as a pre-existing,
+   latent bug independent of timing, and confirming it is specifically
+   the mid-parse timing itself that is unsafe, not anything about this
+   pass's own logic. Rather than chase down why cp_finish_decl's own
+   constant-folding machinery misbehaves only at this one, never-
+   before-exercised timing (a different subsystem entirely), a
+   constexpr function is instead deferred to the one point already
+   known to be safe: genuine end-of-TU (at_eof == 3,
+   c_parse_final_cleanups, decl2.cc) -- exactly where the OLD pipeline
+   always ran this pass for every function, constexpr or not, and
+   exactly the point cxx_eval_call_expression's own "at_eof >= 3"
+   assert (constexpr.cc) already documents as the one it expects
+   DECL_SAVED_TREE-clobbering work like this to happen at.
+
+   A THIRD hazard, found afterward, shares this exact DECL_SAVED_TREE
+   root cause but strikes ordinary (non-constexpr) comdat/inline
+   functions instead: see the deferral site's own comment below
+   (contracts_gimple_eager_check_function_1) for the full account --
+   gimplifying such a function here can leave its own vague-linkage
+   decision permanently stuck "assume external", silently dropping its
+   body at link time despite genuine callers.  */
+
+static bool cg_eager_check_active;
+static vec<tree> cg_eager_check_pending;
+
+/* Mirrors profiles_eager_check_deferred_until_complete's own comment:
+   a lambda's own call operator can reach expand_or_defer_fn before its
+   closure type's own finish_struct has actually completed, since
+   finish_lambda_function runs before the enclosing cp_parser_lambda_
+   expression calls finish_struct on the closure type itself.  */
+static vec<tree> cg_eager_check_deferred_until_complete;
+
+/* DECL_DECLARED_CONSTEXPR_P functions, deferred until genuine end-of-
+   TU -- see the big comment above for why.  Drained by contracts_
+   gimple_eager_check_drain_at_eof, called from c_parse_final_cleanups
+   (decl2.cc) right after at_eof is set to 3.  */
+static vec<tree> cg_eager_check_deferred_until_eof;
+
+static gimple_opt_pass *cg_eager_build_ssa_pass;
+static gimple_opt_pass *cg_eager_contracts_pass;
+
+static void contracts_gimple_eager_check_function_1 (tree fndecl,
+						      bool is_eof_drain = false);
+
+/* Called from finish_struct (class.cc) the moment TYPE is fully
+   complete -- retries any FUNCTION_DECL whose own eager check was
+   deferred above because its DECL_CONTEXT wasn't ready yet.  */
+
+void
+contracts_gimple_eager_check_type_complete (tree)
+{
+  if (cg_eager_check_deferred_until_complete.is_empty ())
+    return;
+  auto_vec<tree> retry;
+  retry.safe_splice (cg_eager_check_deferred_until_complete);
+  cg_eager_check_deferred_until_complete.truncate (0);
+  for (tree fndecl : retry)
+    contracts_gimple_eager_check_function (fndecl);
+}
+
+void
+contracts_gimple_eager_check_function (tree fndecl)
+{
+  /* Cheap, unconditional no-op for the overwhelmingly common case:
+     neither GIMPLE-pass engine is active at all.  Mirrors pass_
+     contracts_gimple::gate exactly, so this never does GIMPLE-level
+     work the pass itself wouldn't have done anyway.  */
+  if (!flag_contract_control_objects
+      || !(flag_contract_conveyor_proofs_gimple
+	   || flag_contract_symbolic_proofs_gimple))
+    return;
+
+  /* D4324/P2680: a generated "pred"/"thunk"/consteval-thunk helper
+     (ldf_contract_predicate_helper, see its own comment) is never
+     itself diagnosed -- pass_contracts_gimple::execute's own first
+     statement already skips it unconditionally once reached normally.
+     Skipping it HERE too is not just redundant-but-harmless: a helper
+     can be built and finish_function'd (reaching expand_or_defer_fn,
+     hence here) WHILE an entirely unrelated, OUTER contract check is
+     still being built on the C++ stack (build_contract_check's own
+     CC_BIND, a freshly allocated BIND_EXPR not yet attached to any GC
+     root) -- confirmed directly: eagerly gimplifying/analyzing such a
+     helper here triggered a GC collection as a side effect, collecting
+     that still-unrooted, in-progress CC_BIND out from under its own
+     caller (an ICE, "tree check: expected bind_expr, have ggc_freed",
+     build_predicate_arg_struct_var). The exact same general hazard
+     profiles_eager_check_function's own comment calls "recursive
+     re-entrancy" -- just manifesting as a collected stack-local tree
+     rather than a blown C++ stack -- and the active/pending queue
+     below cannot help here, since we are not re-entering THIS
+     function's own active call at all: finish_function (which builds
+     and completes a helper like this one) runs *before*
+     expand_or_defer_fn is ever reached for the OUTER function whose
+     own body is still mid-genericize.  */
+  if (CONTRACT_HELPER (fndecl) != ldf_contract_none)
+    return;
+
+  /* The gate the AST engine already applies before its own oa_walk_
+     stmt (oa_function_needs_walk_p, contracts.cc, exported for exactly
+     this reuse): a function with no contract of its own, no call to
+     anything with an active precondition, and that is not itself
+     conveyor/symbolic, is one neither engine has any reason to
+     analyze. This is not merely an optimization here -- it is what
+     keeps this eager hook's own blast radius matched to the AST
+     engine's own, long-established scope (see [[project_gimple_ast_
+     parity_direction]]), rather than every ordinary, uninvolved
+     function whose body simply happens to finish parsing while either
+     GIMPLE-pass flag is on. Confirmed empirically this is also what a
+     genuine, reproducible stack overflow needed: cgraph_node::analyze
+     (below) can itself trigger further template instantiation as a
+     side effect of resolving a function's own types, and running that
+     -- plus a full SSA build and this pass -- for library-internal
+     helpers (e.g. std::to_string/stoi, pulled in transitively by a
+     bare '#include <vector>', never called by the user's own code at
+     all) added enough extra, needless C++ call-stack depth, nested
+     inside the front end's own already-deep template-instantiation
+     recursion during ordinary parsing, to exhaust the stack on code
+     that this gate alone is enough to skip entirely -- cheaply (an
+     O(1) bitfield read, no tree walk of any kind, so this gate itself
+     can never be the one doing the stack-exhausting).  */
+  if (!oa_function_needs_walk_p (fndecl))
+    return;
+
+  if (cg_eager_check_active)
+    {
+      cg_eager_check_pending.safe_push (fndecl);
+      return;
+    }
+
+  cg_eager_check_active = true;
+  contracts_gimple_eager_check_function_1 (fndecl);
+  while (!cg_eager_check_pending.is_empty ())
+    contracts_gimple_eager_check_function_1 (cg_eager_check_pending.pop ());
+  cg_eager_check_active = false;
+}
+
+static void
+contracts_gimple_eager_check_function_1 (tree fndecl, bool is_eof_drain)
+{
+  /* A body deserialized from an imported module's BMI never went
+     through this translation unit's own expand_or_defer_fn the first
+     time around.  */
+  if (DECL_LANG_SPECIFIC (fndecl) && DECL_MODULE_IMPORT_P (fndecl))
+    return;
+
+  if (!DECL_STRUCT_FUNCTION (fndecl))
+    return;
+
+  tree ctx = DECL_CONTEXT (fndecl);
+  if (ctx && RECORD_OR_UNION_TYPE_P (ctx) && !COMPLETE_TYPE_P (ctx))
+    {
+      cg_eager_check_deferred_until_complete.safe_push (fndecl);
+      return;
+    }
+
+  cgraph_node *node = cgraph_node::get_create (fndecl);
+  if (node->analyzed)
+    /* Already processed (e.g. reached a second time through a clone,
+       or a path that calls expand_or_defer_fn more than once for the
+       same decl).  */
+    return;
+
+  /* See the big comment above contracts_gimple_eager_check_function's
+     own vec declarations for the constexpr-specific hazard (a
+     cxx_eval_call_expression crash) this deferral was first added for.
+     A SECOND, independent hazard shares the identical root cause and
+     the identical fix: gimplify_function_tree (called from node->
+     analyze () below) unconditionally clears DECL_SAVED_TREE
+     (gimplify.cc) the moment this eager hook analyzes a function --
+     but c_parse_final_cleanups's own deferred_fns sweep (decl2.cc,
+     "we lie to the back end, pretending that some functions are not
+     defined when they really are... but we must stop lying when the
+     functions are referenced" -- the one place that ever calls
+     import_export_decl to turn a vague-linkage function's own
+     TENTATIVE 'assume DECL_EXTERNAL, decide later' linkage, set by
+     tentative_decl_linkage at ordinary parse time for every comdat/
+     inline function, into the FINAL decision) silently skips any
+     entry whose own DECL_SAVED_TREE is already gone ("if (!DECL_
+     SAVED_TREE (decl)) continue;"). Skipped means DECL_EXTERNAL stays
+     stuck at its tentative 'true' forever, and the function's body is
+     silently never emitted -- confirmed directly via gdb: a real -ok
+     test's own io_facility::open()/read()/is_opened(), each genuinely
+     called from dot_receiver/pointer_receiver/main, each never once
+     reached import_export_decl at all (conditional breakpoint on its
+     own decl never fired), linking with "undefined reference" despite
+     the calls being real. The baseline (same file, no GIMPLE-pass flag
+     at all, so this hook never runs) was confirmed clean. This is not
+     specific to constexpr -- it is specific to ANY function whose
+     DECL_SAVED_TREE this hook clears before c_parse_final_cleanups's
+     own deferred_fns sweep (which, like the constexpr hazard's own
+     cxx_eval_call_expression, only runs safely at genuine end-of-TU)
+     gets to see it, so the SAME deferral is extended to cover it:
+     vague_linkage_p (decl2.cc) is the exact predicate tentative_decl_
+     linkage itself already uses to decide "this needs the deferred_
+     fns treatment" -- the natural, precise match for "needs this same
+     deferral", covering every comdat/weak/inline function (io_
+     facility::open() included) in addition to constexpr ones (the two
+     sets overlap but neither contains the other).  IS_EOF_DRAIN is
+     true only when contracts_gimple_eager_check_drain_at_eof is the
+     one calling this, i.e. we ARE already at that safe point (c_parse_
+     final_cleanups's own deferred_fns sweep, earlier in that same
+     function, has already run) -- process it for real rather than
+     deferring it right back to the same queue.  */
+  if ((DECL_DECLARED_CONSTEXPR_P (fndecl) || vague_linkage_p (fndecl))
+      && !is_eof_drain)
+    {
+      cg_eager_check_deferred_until_eof.safe_push (fndecl);
+      return;
+    }
+
+  /* Mirrors cgraph_node::add_new_function's own FINISHED-state
+     handling (cgraphunit.cc) -- see profiles_eager_check_function_1's
+     own identical comment for why that function isn't called
+     directly.  */
+  node->definition = true;
+  node->analyze ();
+  push_cfun (DECL_STRUCT_FUNCTION (fndecl));
+  gimple_register_cfg_hooks ();
+  bitmap_obstack_initialize (NULL);
+
+  /* Build SSA directly, not via the early-optimization pipeline --
+     see profiles_eager_check_function_1's own comment (the early-
+     inline hazard) for why.  This pass needs nothing beyond PROP_ssa
+     (see pass_data_contracts_gimple above).  */
+  if (!gimple_in_ssa_p (DECL_STRUCT_FUNCTION (fndecl)))
+    {
+      if (!cg_eager_build_ssa_pass)
+	cg_eager_build_ssa_pass = make_pass_build_ssa (g);
+      execute_pass_list (cfun, cg_eager_build_ssa_pass);
+    }
+
+  if (!cg_eager_contracts_pass)
+    cg_eager_contracts_pass = make_pass_contracts_gimple (g);
+  execute_pass_list (cfun, cg_eager_contracts_pass);
+
+  bitmap_obstack_release (NULL);
+  pop_cfun ();
+}
+
+/* Called from c_parse_final_cleanups (decl2.cc) right after at_eof is
+   set to 3 -- the one point already known to be safe (see the big
+   comment above) for analyzing every DECL_DECLARED_CONSTEXPR_P
+   function deferred above. Loops over both queues until both are
+   empty, not just cg_eager_check_deferred_until_eof alone: processing
+   one deferred function can itself reach expand_or_defer_fn for
+   another (ordinary re-entrancy, same as the normal eager path), which
+   routes back through the public entry point and so may push onto
+   EITHER queue while this is draining.  */
+
+void
+contracts_gimple_eager_check_drain_at_eof (void)
+{
+  if (cg_eager_check_deferred_until_eof.is_empty ())
+    return;
+
+  cg_eager_check_active = true;
+  while (!cg_eager_check_deferred_until_eof.is_empty ()
+	 || !cg_eager_check_pending.is_empty ())
+    {
+      if (!cg_eager_check_deferred_until_eof.is_empty ())
+	contracts_gimple_eager_check_function_1
+	  (cg_eager_check_deferred_until_eof.pop (), /*is_eof_drain=*/true);
+      else
+	contracts_gimple_eager_check_function_1 (cg_eager_check_pending.pop ());
+    }
+  cg_eager_check_active = false;
 }
