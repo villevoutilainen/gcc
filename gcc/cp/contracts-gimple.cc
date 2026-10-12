@@ -3254,7 +3254,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 				       &fact_conveyor_established);
 	  bool same_accessor
 	    = have_fact && fact_rhs_callee == rhs_callee
-	      && fact_rhs_receiver == sub_receiver;
+	      && (oa_strip_to_receiver_identity (fact_rhs_receiver)
+		  == oa_strip_to_receiver_identity (sub_receiver));
 	  if (same_accessor
 	      && oa_relational_code_implies (fact_code, rel_code)
 	      && cg_offset_compatible_with_code (fact_offset, rel_code)
@@ -3347,7 +3348,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      && oa_relational_code_implies (fact_code, call_code)
 	      && (!require_conveyor || fact_conveyor_established)
 	      && fact_rhs_callee == rhs_callee
-	      && fact_rhs_receiver == sub_rhs_receiver)
+	      && (oa_strip_to_receiver_identity (fact_rhs_receiver)
+		  == oa_strip_to_receiver_identity (sub_rhs_receiver)))
 	    continue; /* Proven true: silently discharged.  */
 
 	  if (strict)
@@ -4880,10 +4882,38 @@ cg_cond_operand_shape (tree val, bool *is_call, tree *field_out, tree *base_out,
    returns size_t, unlike this pass's own earlier, int-returning test-
    only fixtures, which never exercised this at all before now: an
    int-vs-int comparison needs no such cast, so this gap was invisible
-   until a real, unsigned-returning accessor was used).  */
+   until a real, unsigned-returning accessor was used).
+
+   ALLOW_VAR_DECL (default false, preserving every existing caller's
+   behavior byte-for-byte): also accept a bare VAR_DECL's own SSA value,
+   not just a PARM_DECL's -- found via a user-reported Godbolt link
+   (https://godbolt.org/z/nxE9xKdnj) that a LOCAL variable used as a
+   guard's own subject (e.g. 'int idx = get_index (); if (idx <
+   test.size ()) return test[idx];') failed to establish a fact at all,
+   the GIMPLE-side counterpart of the identical gap already fixed in
+   contracts.cc's own oa_match_comparison_against_call (see that
+   function's own comment for the full rationale: every caller of
+   cg_cond_is_bare_param is, unlike that AST-side function, already
+   exclusively the "within-function, branch-derived fact" family --
+   cg_match_shifted_comparison_against_call and cg_refine_relational_
+   edge_into -- so there is no separate "declared contract text,
+   substituted at a call site" caller here needing the stricter default
+   preserved; every one of this function's own 4 call sites passes true).
+
+   Deliberately NOT requiring SSA_NAME_IS_DEFAULT_DEF for the VAR_DECL
+   case, unlike the PARM_DECL one: that requirement exists specifically
+   to pick out a REASSIGNABLE parameter's one canonical (incoming-
+   argument) SSA version for a caller that substitutes it elsewhere: a
+   local variable has no such ambiguity to resolve at all -- its own SSA
+   name is already uniquely tied to its own one defining statement, and
+   the established fact is keyed on that exact SSA name here, not on
+   the decl, so SSA's own uniqueness guarantee alone is already sound
+   (a genuine reassignment produces a provably different SSA name, so a
+   later consult against the wrong version simply, safely finds nothing,
+   never a false match).  */
 
 static bool
-cg_cond_is_bare_param (tree val, tree *out = NULL)
+cg_cond_is_bare_param (tree val, tree *out = NULL, bool allow_var_decl = false)
 {
   if (TREE_CODE (val) == SSA_NAME && !SSA_NAME_IS_DEFAULT_DEF (val))
     {
@@ -4892,9 +4922,13 @@ cg_cond_is_bare_param (tree val, tree *out = NULL)
 	  && CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def)))
 	val = gimple_assign_rhs1 (def);
     }
-  bool ok = TREE_CODE (val) == SSA_NAME
-	    && SSA_NAME_IS_DEFAULT_DEF (val)
-	    && TREE_CODE (SSA_NAME_VAR (val)) == PARM_DECL;
+  if (TREE_CODE (val) != SSA_NAME)
+    return false;
+  bool ok;
+  if (SSA_NAME_IS_DEFAULT_DEF (val))
+    ok = TREE_CODE (SSA_NAME_VAR (val)) == PARM_DECL;
+  else
+    ok = allow_var_decl && SSA_NAME_VAR (val) && VAR_P (SSA_NAME_VAR (val));
   if (ok && out)
     *out = val;
   return ok;
@@ -5007,7 +5041,7 @@ cg_match_shifted_comparison_against_call (tree other,
 
   bool is_call;
   tree field, base, callee, receiver, param;
-  if (cg_cond_is_bare_param (op1, &param)
+  if (cg_cond_is_bare_param (op1, &param, /*allow_var_decl=*/true)
       && cg_shifted_operand_conversion_ok_p (op1, param, established_range,
 					       ranger, require_conveyor,
 					       require_symbolic, at_stmt,
@@ -5023,7 +5057,7 @@ cg_match_shifted_comparison_against_call (tree other,
       *arithmetic_type_out = TREE_TYPE (other);
       return true;
     }
-  if (cg_cond_is_bare_param (op0, &param)
+  if (cg_cond_is_bare_param (op0, &param, /*allow_var_decl=*/true)
       && cg_shifted_operand_conversion_ok_p (op0, param, established_range,
 					       ranger, require_conveyor,
 					       require_symbolic, at_stmt,
@@ -5070,7 +5104,9 @@ cg_shifted_comparison_no_wrap_ok_p (hash_map<tree, cg_call_rel_fact> &call_rel,
 	*reason_out = OA_UNPROVABLE_NO_WRAP_COMPANION;
       return false;
     }
-  if (fact->rhs_callee != callee || fact->rhs_receiver != receiver)
+  if (fact->rhs_callee != callee
+      || (oa_strip_to_receiver_identity (fact->rhs_receiver)
+	  != oa_strip_to_receiver_identity (receiver)))
     {
       if (reason_out)
 	*reason_out = OA_UNPROVABLE_WRONG_IDENTITY;
@@ -5114,8 +5150,10 @@ cg_refine_relational_edge_into (tree lhs, tree rhs, tree_code code,
      fact must be keyed on that same canonical name a later consult
      will look up again, not on a one-off cast temporary.  */
   tree lhs_param, rhs_param;
-  bool lhs_is_param = cg_cond_is_bare_param (lhs, &lhs_param);
-  bool rhs_is_param = cg_cond_is_bare_param (rhs, &rhs_param);
+  bool lhs_is_param = cg_cond_is_bare_param (lhs, &lhs_param,
+					       /*allow_var_decl=*/true);
+  bool rhs_is_param = cg_cond_is_bare_param (rhs, &rhs_param,
+					       /*allow_var_decl=*/true);
   if (lhs_is_param)
     lhs = lhs_param;
   if (rhs_is_param)
@@ -5975,7 +6013,8 @@ cg_check_call_relational_fact (gcall *call,
 				       &fact_rhs_callee, &fact_offset,
 				       &fact_conveyor_established);
 	  if (!have_fact || fact_rhs_callee != rhs_callee
-	      || fact_rhs_receiver != sub_receiver
+	      || (oa_strip_to_receiver_identity (fact_rhs_receiver)
+		  != oa_strip_to_receiver_identity (sub_receiver))
 	      || (require_conveyor && !fact_conveyor_established))
 	    continue;
 

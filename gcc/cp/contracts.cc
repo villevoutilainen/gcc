@@ -11752,9 +11752,18 @@ oa_strip_to_relational_operand (tree expr)
    wrap_ok_p, oa_env_check_call_relational_fact_1, and the call-call
    relational sibling) compare a RECEIVER for object identity; every
    other call site compares a scalar/value operand, where this
-   stripping must not apply.  */
+   stripping must not apply.
 
-static tree
+   Exported (not static) so contracts-gimple.cc's own built-in GIMPLE-
+   pass engine can reuse it: found via direct testing that its own
+   analogous receiver comparisons (cg_check_call_relational_fact and
+   three siblings) use a bare tree-pointer '!='/'==' with no stripping
+   at all, so two separately-allocated 'ADDR_EXPR (test)' nodes --
+   one materialized for 'test.size ()', another for 'test[x]' -- never
+   compare equal even though both denote the exact same object; this
+   is the AST-side fix's own missing counterpart there.  */
+
+tree
 oa_strip_to_receiver_identity (tree expr)
 {
   expr = oa_strip_to_relational_operand (expr);

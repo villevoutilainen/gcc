@@ -564,6 +564,18 @@ extern bool oa_match_shifted_comparison_against_call
 extern bool oa_integral_conversion_value_preserving_p (tree from_type,
 							 tree to_type);
 
+/* Like oa_strip_to_relational_operand (contracts.cc), but also strips a
+   top-level ADDR_EXPR of a VAR_DECL/PARM_DECL down to that decl -- the
+   receiver-identity counterpart of that function's own INDIRECT_REF
+   case, for comparing two RECEIVER expressions for object identity
+   (a same_accessor-style check), not for general scalar relational
+   values. Exported so contracts-gimple.cc's own built-in GIMPLE-pass
+   engine can reuse it for its own, analogous receiver comparisons,
+   which otherwise compare raw tree pointers with no stripping at all
+   -- see this function's own definition in contracts.cc for the full
+   rationale.  */
+extern tree oa_strip_to_receiver_identity (tree expr);
+
 /* The call-vs-call analogue of oa_match_comparison_against_call
    immediately above: "RECEIVER_1.CALLEE_1 () OP RECEIVER_2.CALLEE_2 ()"
    (e.g. 'v.size () < w.size ()'), two calls compared against each other
