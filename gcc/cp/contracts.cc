@@ -10444,22 +10444,85 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
      rationale; this is its consulting counterpart, resolving the same
      (base identity, FIELD_DECL) pair to the same synthesized
      field_object_identity_key before falling through to the ordinary
-     env.provable_p consult below.  */
+     env.provable_p consult below.
+
+     D4324/P2680, class-typed field composition gap (found via the
+     comprehensive coverage sweep, 2026-10-12): this same COMPONENT_REF
+     shape is also how a reference-parameter binding reaches this
+     function -- 'reads_ref (this->inner)' for 'void reads_ref (Inner&
+     r)' substitutes the argument for 'r' directly, with no explicit
+     '&', so the synthesized 'is_object_address (&r)' check consults
+     oa_provable_p on the bare COMPONENT_REF itself, never wrapped in an
+     ADDR_EXPR the way an explicit '&obj.field' is (the case handled
+     above, which already composes correctly for a field of ANY type).
+     For a POINTER- or REFERENCE-typed field, that's unambiguously a
+     VALUE read (the field's own stored address/reference, which the
+     established-fact lookup above is exactly for -- the field's own
+     storage being live says nothing about what garbage it might hold).
+     But for every OTHER field type, a bare 'this->field' can only ever
+     reach is_object_address via the reference-binding path -- there is
+     no other way to ask "is this pointer-shaped" about a non-pointer,
+     non-reference value -- so it is exactly the structural "address of
+     a field of a provable object" question the ADDR_EXPR/COMPONENT_REF
+     case above already answers for the explicit-'&' spelling, just
+     reached without that wrapper this time. Falls back to that same
+     structural composition (an address-of-OBJ_EXPR, recursed through
+     oa_provable_p exactly like that case's own via_pointer/non-
+     via_pointer split) only once the FIELD-VALUE established-fact
+     lookup below has already failed, and only for such a field -- a
+     provable POINTER/REFERENCE *value* fact, when one exists, still
+     takes priority, matching the ADDR_EXPR case's own INDIRECT_REF
+     special-case ("the real question is whether the pointer's own
+     value is proven", not the trivial storage-address one).  */
   if (TREE_CODE (expr) == COMPONENT_REF)
     {
-      tree obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
-      if (TREE_CODE (obj_expr) == INDIRECT_REF)
-	obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj_expr, 0));
       tree field = TREE_OPERAND (expr, 1);
+      /* PTR_BASE: the field's own base operand with (at most) one
+	 INDIRECT_REF peeled off -- used for the established-fact identity
+	 lookup below, exactly as before this fix.  */
+      tree ptr_base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (TREE_CODE (ptr_base) == INDIRECT_REF)
+	ptr_base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (ptr_base, 0));
       tree identity;
-      if (oa_object_identity_decl (obj_expr, &identity)
-	  || oa_field_slot_identity (obj_expr, env, &identity)
-	  || oa_array_slot_identity (obj_expr, env, &identity)
-	  || oa_field_object_identity (obj_expr, env, &identity))
+      tree field_key = NULL_TREE;
+      if (oa_object_identity_decl (ptr_base, &identity)
+	  || oa_field_slot_identity (ptr_base, env, &identity)
+	  || oa_array_slot_identity (ptr_base, env, &identity)
+	  || oa_field_object_identity (ptr_base, env, &identity))
 	{
 	  identity = env.alias_find (identity);
-	  expr = env.field_object_identity_key (identity, field);
+	  field_key = env.field_object_identity_key (identity, field);
 	}
+      if (!POINTER_TYPE_P (TREE_TYPE (field))
+	  && TREE_CODE (TREE_TYPE (field)) != REFERENCE_TYPE
+	  && !(field_key && env.provable_p (field_key)))
+	{
+	  /* Same structural recursion the ADDR_EXPR/COMPONENT_REF case
+	     above performs for an explicit '&obj.field' -- computed fresh
+	     from EXPR's own original base operand (not PTR_BASE, which
+	     already peeled the INDIRECT_REF unconditionally above; here
+	     VIA_POINTER itself needs to be known) and further NOP_EXPR-
+	     stripped the same way, for the same reason (an implicit
+	     'this->field' access binds one layer deeper than an explicit
+	     dereference -- see that case's own comment).  */
+	  tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+	  bool via_pointer = TREE_CODE (obj) == INDIRECT_REF;
+	  tree obj_expr = via_pointer
+	    ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0)) : obj;
+	  while (TREE_CODE (obj_expr) == NON_LVALUE_EXPR
+		 || TREE_CODE (obj_expr) == NOP_EXPR
+		 || TREE_CODE (obj_expr) == CONVERT_EXPR
+		 || TREE_CODE (obj_expr) == VIEW_CONVERT_EXPR)
+	    obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj_expr, 0));
+	  if (via_pointer)
+	    return oa_provable_p (obj_expr, env, reason_out);
+	  return oa_provable_p (build1 (ADDR_EXPR,
+					build_pointer_type (TREE_TYPE (obj_expr)),
+					obj_expr),
+				env, reason_out);
+	}
+      if (field_key)
+	expr = field_key;
     }
 
   if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
