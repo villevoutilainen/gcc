@@ -11724,6 +11724,49 @@ oa_strip_to_relational_operand (tree expr)
   return oa_strip_reference_read (oa_strip_conversion_call (expr));
 }
 
+/* Like oa_strip_to_relational_operand, but ALSO strips a top-level
+   ADDR_EXPR of a VAR_DECL/PARM_DECL down to that decl -- the receiver-
+   identity counterpart of oa_strip_reference_read's own INDIRECT_REF
+   case, for comparing two RECEIVER expressions for object identity
+   (a same_accessor-style check), not for general scalar relational
+   values. A dot-call's own receiver ('test.size ()') is captured as a
+   bare decl; a pointer-style 'this' receiver substituted at a call
+   site ('test[x]' calling operator[], whose own declared
+   precondition's 'this' is substituted with '&test') is an ADDR_EXPR
+   of the same decl -- both must normalize to the identical node for
+   "same object" comparisons to succeed. Confirmed via gdb this exact
+   asymmetry is why a local, value-typed container's own guarded index
+   access ('if (x < test.size ()) return test[x];') failed to verify,
+   even though every existing test only ever used a REFERENCE
+   parameter ('vector<int>& v'), where a reference's own value already
+   IS a pointer at the GIMPLE level, so no ADDR_EXPR ever entered the
+   picture on either side.
+
+   Deliberately NOT folded into oa_strip_to_relational_operand itself:
+   that function is also used for ordinary scalar relational-value
+   comparisons (e.g. 'idx < bound'), where an ADDR_EXPR is never a
+   legitimate operand shape to begin with, and conflating "the address
+   of X" with "X itself" would be a different, unjustified change
+   there -- confirmed by auditing every call site of that function:
+   only three (the same_accessor checks in oa_shifted_comparison_no_
+   wrap_ok_p, oa_env_check_call_relational_fact_1, and the call-call
+   relational sibling) compare a RECEIVER for object identity; every
+   other call site compares a scalar/value operand, where this
+   stripping must not apply.  */
+
+static tree
+oa_strip_to_receiver_identity (tree expr)
+{
+  expr = oa_strip_to_relational_operand (expr);
+  if (expr && TREE_CODE (expr) == ADDR_EXPR)
+    {
+      tree base = TREE_OPERAND (expr, 0);
+      if (VAR_P (base) || TREE_CODE (base) == PARM_DECL)
+	return base;
+    }
+  return expr;
+}
+
 /* D4324 Commit 4: an exact-point oa_range_fact for VAL -- a relational
    fact's own OFFSET at establishment time (always exactly 0: an
    actually-observed comparison, never yet shifted) or a literal
@@ -12322,8 +12365,8 @@ oa_shifted_comparison_no_wrap_ok_p (oa_env &env, tree param, tree receiver,
       return false;
     }
   if (fact.rhs_callee != callee
-      || (oa_strip_to_relational_operand (fact.rhs_receiver)
-	  != oa_strip_to_relational_operand (receiver)))
+      || (oa_strip_to_receiver_identity (fact.rhs_receiver)
+	  != oa_strip_to_receiver_identity (receiver)))
     {
       if (reason_out)
 	*reason_out = OA_UNPROVABLE_WRONG_IDENTITY;
@@ -12548,7 +12591,8 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
     tree_code rel_code;
     if (oa_match_comparison_against_call (conjunct, &param, &rel_code,
 					    &rhs_receiver, &rhs_callee,
-					    /*allow_symbolic_accessor=*/false))
+					    /*allow_symbolic_accessor=*/false,
+					    /*allow_var_decl=*/true))
       {
 	if (!asserted_true)
 	  switch (rel_code)
@@ -27787,8 +27831,8 @@ oa_env_check_call_relational_fact_1 (oa_env &env, tree substituted_param,
   bool same_accessor
     = have_fact
       && fact.rhs_callee == substituted_rhs_callee
-      && (oa_strip_to_relational_operand (fact.rhs_receiver)
-	  == oa_strip_to_relational_operand (substituted_rhs_receiver));
+      && (oa_strip_to_receiver_identity (fact.rhs_receiver)
+	  == oa_strip_to_receiver_identity (substituted_rhs_receiver));
   oa_unprovable_reason reason;
   if (have_fact)
     reason = !same_accessor ? OA_UNPROVABLE_WRONG_IDENTITY
@@ -27977,8 +28021,8 @@ oa_env_check_call_call_relational_fact_1 (oa_env &env,
     {
       bool same_accessor
 	= fact.rhs_callee == substituted_rhs_callee
-	  && (oa_strip_to_relational_operand (fact.rhs_receiver)
-	      == oa_strip_to_relational_operand (substituted_rhs_receiver));
+	  && (oa_strip_to_receiver_identity (fact.rhs_receiver)
+	      == oa_strip_to_receiver_identity (substituted_rhs_receiver));
       if (!same_accessor)
 	reason = OA_UNPROVABLE_WRONG_IDENTITY;
       else if (require_conveyor && !fact.conveyor_established)
@@ -28325,15 +28369,31 @@ oa_call_range_conjunct_shape (tree conjunct, tree *receiver_out,
    motivating 'n < v.size()'-style precondition doesn't match it at
    all). PARAM is recognized the same narrow way oa_match_comparison_
    against_param's own PARAM is (a bare PARM_DECL, via oa_underlying_
-   param_operand) -- deliberately no field/array-slot identity
-   resolution on either side, matching that function's own scope
-   exactly, not oa_call_range_conjunct_shape's broader one.  */
+   param_operand, unless ALLOW_VAR_DECL -- see this function's own
+   declaration in contracts.h) -- deliberately no field/array-slot
+   identity resolution on either side, matching that function's own
+   scope exactly, not oa_call_range_conjunct_shape's broader one.
+
+   Found by direct testing (a local, value-typed std::vector object,
+   indexed via an explicit 'if (idx < test.size ()) return test[idx];'
+   guard, where idx is itself a local assigned from an opaque call's
+   return value) that ALLOW_VAR_DECL defaulting to false left a real
+   gap for oa_refine_single_comparison's own within-function if-
+   condition establishment specifically: every OTHER caller of this
+   function parses a callee's own declared contract TEXT, where
+   PARAM_OUT must positionally correspond to one of that callee's own
+   parameters (a VAR_DECL would be meaningless there) -- but oa_refine_
+   single_comparison establishes a fact entirely local to the current
+   function's own dominator-scoped analysis, the exact same category
+   oa_match_type_bounded_comparison's own ALLOW_VAR_DECL use already
+   covers for a plain (non-call) relational conjunct.  */
 
 bool
 oa_match_comparison_against_call (tree conjunct, tree *param_out,
 				    tree_code *code_out, tree *rhs_receiver_out,
 				    tree *rhs_callee_out,
-				    bool allow_symbolic_accessor)
+				    bool allow_symbolic_accessor,
+				    bool allow_var_decl)
 {
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
   while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
@@ -28349,11 +28409,11 @@ oa_match_comparison_against_call (tree conjunct, tree *param_out,
 
   tree param, receiver, callee;
   bool flipped;
-  if ((param = oa_underlying_param_operand (op0))
+  if ((param = oa_underlying_param_operand (op0, allow_var_decl))
       && oa_underlying_call_range_operand (op1, &receiver, &callee,
 					    allow_symbolic_accessor))
     flipped = false;
-  else if ((param = oa_underlying_param_operand (op1))
+  else if ((param = oa_underlying_param_operand (op1, allow_var_decl))
 	   && oa_underlying_call_range_operand (op0, &receiver, &callee,
 						 allow_symbolic_accessor))
     flipped = true;
