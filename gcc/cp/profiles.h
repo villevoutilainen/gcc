@@ -153,6 +153,14 @@ extern void profiles_eager_check_function (tree fndecl);
    for every other class completion in the program.  */
 extern void profiles_eager_check_type_complete (tree type);
 
+/* Drains every vague-linkage function whose own eager check was
+   deferred until genuine end-of-TU -- called from c_parse_final_
+   cleanups (decl2.cc) right after at_eof is set to 3.  See profiles_
+   eager_check_function_1's own comment (profiles.cc) for why a vague-
+   linkage function specifically cannot be analyzed any earlier than
+   this.  */
+extern void profiles_eager_check_drain_at_eof (void);
+
 /* True if DECL (a PARM_DECL or VAR_DECL of pointer or reference type)
    is flavored "points to [[uninit]] memory" -- carries
    [[ref_to_uninit]] directly, or [[must_init]], which implies it

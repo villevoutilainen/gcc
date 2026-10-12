@@ -566,7 +566,36 @@ static vec<tree> profiles_eager_check_pending;
    finish_struct (class.cc) actually finishes that type.  */
 static vec<tree> profiles_eager_check_deferred_until_complete;
 
-static void profiles_eager_check_function_1 (tree fndecl);
+/* D4324/P2680: mirrors contracts_gimple_eager_check_function's own
+   identical, later-found hazard (contracts-gimple.cc) exactly --
+   confirmed directly, via a dedicated dg-do run regression test this
+   project's own profiles suite had never had before (every other test
+   here is dg-do compile only, so this exact bug was invisible to the
+   whole rest of this directory): gimplify_function_tree (called from
+   node->analyze () in profiles_eager_check_function_1 below)
+   unconditionally clears DECL_SAVED_TREE, which c_parse_final_
+   cleanups's own deferred_fns vague-linkage resolution sweep (decl2.cc,
+   "we lie to the back end, pretending that some functions are not
+   defined when they really are... but we must stop lying when the
+   functions are referenced") depends on still being intact outside of
+   genuine end-of-TU -- its own "if (!DECL_SAVED_TREE (decl)) continue;"
+   silently skips any entry whose DECL_SAVED_TREE is already gone,
+   leaving a vague-linkage (comdat/inline) function's own tentative
+   "assume DECL_EXTERNAL" linkage decision (tentative_decl_linkage,
+   decl2.cc) stuck forever -- its body silently never emitted, despite
+   a completely ordinary, genuinely-called definition. Unlike the
+   constexpr case just above (unconditionally skipped, never deferred:
+   profiles never needs a constexpr function's own body checked, so
+   there is no reason to risk this at all for it), an ordinary vague-
+   linkage function DOES need checking, so it is deferred instead, to
+   the one point already known to be safe: genuine end-of-TU, right
+   after c_parse_final_cleanups sets at_eof to 3 (mirroring exactly
+   where contracts_gimple_eager_check_drain_at_eof's own identical
+   queue is drained).  */
+static vec<tree> profiles_eager_check_deferred_until_eof;
+
+static void profiles_eager_check_function_1 (tree fndecl,
+					      bool is_eof_drain = false);
 
 /* Called from finish_struct (class.cc) the moment TYPE is fully
    complete -- retries any FUNCTION_DECL whose own eager check was
@@ -620,7 +649,7 @@ profiles_eager_check_function (tree fndecl)
 }
 
 static void
-profiles_eager_check_function_1 (tree fndecl)
+profiles_eager_check_function_1 (tree fndecl, bool is_eof_drain)
 {
 
   /* A body deserialized from an imported module's BMI never went
@@ -708,6 +737,17 @@ profiles_eager_check_function_1 (tree fndecl)
        same decl).  */
     return;
 
+  /* See profiles_eager_check_deferred_until_eof's own comment above for
+     the full rationale.  IS_EOF_DRAIN is true only when profiles_eager_
+     check_drain_at_eof is the one calling this, i.e. we ARE already at
+     that safe point -- process it for real rather than deferring it
+     right back to the same queue.  */
+  if (vague_linkage_p (fndecl) && !is_eof_drain)
+    {
+      profiles_eager_check_deferred_until_eof.safe_push (fndecl);
+      return;
+    }
+
   /* Mirrors cgraph_node::add_new_function's own FINISHED-state
      handling (cgraphunit.cc) -- deliberately not calling that
      function directly, which gcc_unreachable()s on any symtab->state
@@ -762,6 +802,37 @@ profiles_eager_check_function_1 (tree fndecl)
 
   bitmap_obstack_release (NULL);
   pop_cfun ();
+}
+
+/* Called from c_parse_final_cleanups (decl2.cc) right after at_eof is
+   set to 3 -- the one point already known to be safe (see profiles_
+   eager_check_deferred_until_eof's own comment above) for analyzing
+   every vague-linkage function deferred above.  Loops over both queues
+   until both are empty, not just profiles_eager_check_deferred_until_
+   eof alone: processing one deferred function can itself reach
+   expand_or_defer_fn for another (ordinary re-entrancy, same as the
+   normal eager path), which routes back through the public entry point
+   and so may push onto EITHER queue while this is draining.  Mirrors
+   contracts_gimple_eager_check_drain_at_eof (contracts-gimple.cc)
+   exactly.  */
+
+void
+profiles_eager_check_drain_at_eof (void)
+{
+  if (profiles_eager_check_deferred_until_eof.is_empty ())
+    return;
+
+  profiles_eager_check_active = true;
+  while (!profiles_eager_check_deferred_until_eof.is_empty ()
+	 || !profiles_eager_check_pending.is_empty ())
+    {
+      if (!profiles_eager_check_deferred_until_eof.is_empty ())
+	profiles_eager_check_function_1
+	  (profiles_eager_check_deferred_until_eof.pop (), /*is_eof_drain=*/true);
+      else
+	profiles_eager_check_function_1 (profiles_eager_check_pending.pop ());
+    }
+  profiles_eager_check_active = false;
 }
 
 bool
