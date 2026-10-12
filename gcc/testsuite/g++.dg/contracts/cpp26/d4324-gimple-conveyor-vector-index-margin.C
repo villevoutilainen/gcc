@@ -101,23 +101,21 @@
 // regardless of any dominating check -- confirmed via direct testing)
 // provably non-negative, so the conversion is exact and this verifies
 // exactly like the unsigned case.
-// D4324-FIXME, open regression (found 2026-10-12, tracked for a
-// follow-up fix -- NOT the margin-specific mechanism this file is
-// otherwise about): the GIMPLE engine's own eager, per-function check
-// (contracts_gimple_eager_check_function, contracts-gimple.cc) defers
-// std::vector<int>::operator[]/size () themselves (both constexpr,
-// hence vague-linkage) to genuine end-of-TU, while an ordinary,
-// non-deferred caller like every function below is checked eagerly,
-// mid-parse -- well before that. Confirmed directly: every single
-// "should warn/error" case below (every dg-error/dg-warning line)
-// currently emits NO diagnostic at all, while every "proven safe, no
-// diagnostic" case correctly stays silent too -- i.e. the check
-// appears to blanket-default to "no violation" whenever operator[]'s
-// own declared precondition hasn't been analyzed yet, rather than
-// correctly reporting "cannot verify". Every dg-error/dg-warning
-// directive below that is currently silenced by this is commented out
-// (text preserved verbatim) rather than deleted, so restoring real
-// coverage once this is fixed is a pure uncomment.
+// D4324 fix (2026-10-12): this file's own dg-error/dg-warning
+// directives were previously silenced entirely -- root cause was a
+// genuine instantiation-ordering bug (NOT the margin-specific
+// mechanism this file is otherwise about): an ordinary, non-template
+// caller gets its own GIMPLE contracts pass run eagerly, the moment
+// its own body is gimplified, well before GCC's own ordinary deferred-
+// template-instantiation schedule would otherwise instantiate
+// std::vector<int>::operator[]/size () (both template member
+// functions). Consulting a callee's own contract-activity cache
+// (populated once, at that callee's own finish_function time) before
+// the callee has even been instantiated silently found nothing and
+// treated every one of its obligations as inactive, with no
+// diagnostic at all. Fixed in pass_contracts_gimple::execute
+// (contracts-gimple.cc) by force-instantiating every callee this
+// function's own body calls before consulting that cache.
 // { dg-do compile { target c++26 } }
 // Unrelated noise from std::vector's own transitive <string>/<ranges>
 // include chain (std::to_string, __max_size_type, etc. -- all genuinely
@@ -135,7 +133,7 @@ int use_margin_only_declines (std::vector<int>& v, std::vector<int>::size_type i
 {
   if (v.size () - idx > 10)
     {
-      return v[idx]; // { D4324-FIXME-warning {cannot verify that [^\n]* satisfies the precondition} }
+      return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
     }
   return -1;
 }
@@ -185,7 +183,7 @@ int use_unsound (std::vector<int>& v, std::vector<int>::size_type idx)
       if (idx < 5)
 	{
 	  idx += 15; // past the established margin
-	  return v[idx]; // { D4324-FIXME-warning {cannot verify that [^\n]* satisfies the precondition} }
+	  return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
 	}
   return -1;
 }
@@ -199,7 +197,7 @@ int use_signed_idx_declines (std::vector<int>& v, int idx)
       // the other warnings above: Tcl's regexp lets '.' cross newlines
       // by default, so a plain '.*' here would greedily swallow all the
       // way through to a later message and leave this one unmatched.
-      return v[idx]; // { D4324-FIXME-warning {cannot verify that [^\n]* satisfies the precondition} }
+      return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
     }
   return -1;
 }
@@ -220,7 +218,7 @@ int use_definitely_unsound (std::vector<int>& v)
   if (v.size () == 5)
     {
       int idx = 100; // nowhere close to size (), no margin involved at all
-      return v[idx]; // { D4324-FIXME-error "provably violates the precondition" }
+      return v[idx]; // { dg-error "provably violates the precondition" }
     }
   return -1;
 }

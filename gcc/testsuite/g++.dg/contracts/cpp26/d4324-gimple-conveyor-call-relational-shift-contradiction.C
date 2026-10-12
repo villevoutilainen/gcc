@@ -37,23 +37,21 @@
 // program point, cg_established_range_of's own AT_STMT parameter --
 // provably non-negative, so this verifies exactly like the unsigned
 // shifted_past_the_boundary case above, including the error.
-// D4324-FIXME, open regression (found 2026-10-12, tracked for a
-// follow-up fix -- NOT the shift/margin-specific bug this file is
-// otherwise about): the GIMPLE engine's own eager, per-function check
-// (contracts_gimple_eager_check_function, contracts-gimple.cc) defers
-// std::vector<int>::operator[]/size () themselves (both constexpr,
-// hence vague-linkage) to genuine end-of-TU, while an ordinary,
-// non-deferred caller like every function below is checked eagerly,
-// mid-parse -- well before that. Confirmed directly: every single
-// "should warn/error" case below (every dg-error/dg-warning line)
-// currently emits NO diagnostic at all, while every "proven safe, no
-// diagnostic" case correctly stays silent too -- i.e. the check
-// appears to blanket-default to "no violation" whenever operator[]'s
-// own declared precondition hasn't been analyzed yet, rather than
-// correctly reporting "cannot verify". Every dg-error/dg-warning
-// directive below that is currently silenced by this is commented out
-// (text preserved verbatim) rather than deleted, so restoring real
-// coverage once this is fixed is a pure uncomment.
+// D4324 fix (2026-10-12): this file's own dg-error/dg-warning/dg-
+// message directives were previously silenced entirely -- root cause
+// was a genuine instantiation-ordering bug (NOT the shift/margin-
+// specific mechanism this file is otherwise about): an ordinary, non-
+// template caller gets its own GIMPLE contracts pass run eagerly, the
+// moment its own body is gimplified, well before GCC's own ordinary
+// deferred-template-instantiation schedule would otherwise instantiate
+// std::vector<int>::operator[]/size () (both template member
+// functions). Consulting a callee's own contract-activity cache
+// (populated once, at that callee's own finish_function time) before
+// the callee has even been instantiated silently found nothing and
+// treated every one of its obligations as inactive, with no
+// diagnostic at all. Fixed in pass_contracts_gimple::execute
+// (contracts-gimple.cc) by force-instantiating every callee this
+// function's own body calls before consulting that cache.
 // { dg-do compile { target c++26 } }
 // Unrelated noise from std::vector's own transitive <string>/<ranges>
 // include chain (std::to_string, __max_size_type, etc. -- all genuinely
@@ -75,8 +73,8 @@ int shifted_past_the_boundary (std::vector<int>& v,
       if (idx < 1000)
 	{
 	  idx += 15;
-	  return v[idx]; // { D4324-FIXME-error "provably violates the precondition" }
-                             // { D4324-FIXME-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
+	  return v[idx]; // { dg-error "provably violates the precondition" }
+                             // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
 	}
   return -1;
 }
@@ -90,8 +88,8 @@ int exactly_at_the_edge (std::vector<int>& v,
       if (idx < 1000)
 	{
 	  idx += 4;
-	  return v[idx]; // { D4324-FIXME-error "provably violates the precondition" }
-                             // { D4324-FIXME-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
+	  return v[idx]; // { dg-error "provably violates the precondition" }
+                             // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
 	}
   return -1;
 }
@@ -105,7 +103,7 @@ int genuinely_ambiguous (std::vector<int>& v,
       if (idx < 1000)
 	{
 	  idx += 1;
-	  return v[idx]; // { D4324-FIXME-warning {cannot verify that [^\n]* satisfies the precondition} }
+	  return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
 	}
   return -1;
 }
@@ -121,7 +119,7 @@ int idx_signed_declines (std::vector<int>& v, int idx)
       // cross newlines by default, so a plain '.*' here would greedily
       // swallow all the way through to genuinely_ambiguous's own
       // message and leave this one unmatched.
-      return v[idx]; // { D4324-FIXME-warning {cannot verify that [^\n]* satisfies the precondition} }
+      return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
     }
   return -1;
 }
@@ -135,8 +133,8 @@ int idx_signed_nonneg_violates (std::vector<int>& v, int idx)
 	if (idx < 1000)
 	  {
 	    idx += 15; // past the boundary, same as shifted_past_the_boundary
-	    return v[idx]; // { D4324-FIXME-error "provably violates the precondition" }
-	                   // { D4324-FIXME-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
+	    return v[idx]; // { dg-error "provably violates the precondition" }
+	                   // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
 	  }
   return -1;
 }
