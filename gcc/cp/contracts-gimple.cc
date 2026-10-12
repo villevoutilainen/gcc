@@ -6423,6 +6423,66 @@ pass_contracts_gimple::execute (function *fun)
   if (CONTRACT_HELPER (fun->decl) != ldf_contract_none)
     return 0;
 
+  /* D4324/P2680, GIMPLE/front-end instantiation-ordering fix (found via
+     the comprehensive coverage sweep, 2026-10-12): an ordinary,
+     non-template caller gets its own GIMPLE contracts pass run
+     EAGERLY, the moment its own body is gimplified (this file's own
+     eager-checking architecture, contracts_gimple_eager_check_
+     function) -- well before GCC's own, ordinary deferred-template-
+     instantiation schedule would otherwise instantiate a template
+     member function it calls (e.g. std::vector<int>::size ()/
+     operator[] ()), which normally waits until instantiate_pending_
+     templates, run from c_parse_final_cleanups right at the very end
+     of the whole translation unit. Every one of this file's own *_
+     active_cached_p consults (oa_contract_conveyor_active_cached_p/
+     oa_contract_symbolic_active_cached_p, used throughout this pass)
+     reads a cache that is only ever populated once, at the callee's
+     own finish_function time (oa_cache_contract_flavors, contracts.cc)
+     -- so consulting it for a callee that has not yet been
+     instantiated at all silently answers "no contract is active" (the
+     cache simply has no entry for it yet), not "unknown": every one of
+     that callee's own declared obligations is then silently skipped
+     at this call site, with no diagnostic at all. Confirmed via direct
+     testing: std::vector<int>::operator[]'s own synthesized '_N <
+     size ()' precondition (_GLIBCXX_PRECONDITION_ASSERTIONS) was being
+     silently treated as inactive at every call site in an eagerly-
+     checked, non-template caller, purely because its own template
+     instantiation (and hence its own contract-flavor cache entry) had
+     not happened yet at that point in the TU -- confirmed, within a
+     single gdb session (to keep the comparison address-valid, unlike
+     an earlier, invalid cross-process comparison this investigation
+     first made and then corrected), that cg_check_call's own
+     "CONSULTED ... conveyor_active=0" for this exact contract tree
+     pointer is reached strictly BEFORE oa_cache_contract_flavors's own
+     "ADDED_CONVEYOR" event for that identical pointer later instantiates
+     the same specialization.
+
+     Fixed by forcing every callee this function's own body actually
+     calls to be fully instantiated -- hence to have already run its
+     own finish_function/oa_cache_contract_flavors -- before any of the
+     checks below (cg_seed_self_trust, cg_predicate_facts_walk, the
+     FOR_EACH_BB_FN loop's own cg_check_call) ever consult that cache.
+     maybe_instantiate_decl (decl2.cc) is the existing, general-purpose
+     "instantiate this template specialization now, if it needs it and
+     hasn't already" helper (already used the same way by, e.g.,
+     build_over_call for an ordinary call's own callee, typeck.cc) --
+     a safe, cheap no-op for a callee that is not a template
+     specialization, or is already instantiated, so applying it
+     unconditionally to every call in this function's own body is
+     simpler and safer than trying to predict which of them might
+     matter.  */
+  basic_block instantiate_bb;
+  FOR_EACH_BB_FN (instantiate_bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (instantiate_bb);
+	 !gsi_end_p (gsi); gsi_next (&gsi))
+      {
+	gimple *stmt = gsi_stmt (gsi);
+	if (!is_gimple_call (stmt))
+	  continue;
+	if (tree callee = gimple_call_fndecl (as_a <gcall *> (stmt)))
+	  maybe_instantiate_decl (callee);
+      }
+
   /* Named-predicate and field/call-range facts get their own, separate
      fixed-point RPO walk (see cg_predicate_facts_walk's own comment)
      rather than folding into the FOR_EACH_BB_FN loop below: that loop's

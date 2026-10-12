@@ -38,22 +38,22 @@
 // callers is already the "within-function, branch-derived fact"
 // family, with no separate "declared contract text" caller needing the
 // stricter default preserved.
-// D4324-FIXME, open regression (found 2026-10-12, tracked for a
-// follow-up fix -- unrelated to this file's own receiver-identity
-// fix): the GIMPLE engine's own eager, per-function check
-// (contracts_gimple_eager_check_function, contracts-gimple.cc) defers
-// std::vector<int>::operator[]/size () themselves (both constexpr,
-// hence vague-linkage) to genuine end-of-TU, while
-// use_local_container_unguarded_bad below is checked eagerly,
-// mid-parse -- well before that. Confirmed directly: its own dg-
-// warning below currently emits NO diagnostic at all (the check
-// appears to blanket-default to "no violation" whenever operator[]'s
-// own declared precondition hasn't been analyzed yet, rather than
-// correctly reporting "cannot verify"); every "proven safe, no
-// diagnostic" case above it correctly stays silent too, so this file's
-// own original receiver-identity/local-index fixes are unaffected.
-// Commented out (text preserved verbatim), not deleted, so restoring
-// real coverage once this is fixed is a pure uncomment.
+// D4324 fix (2026-10-12), unrelated to this file's own receiver-
+// identity fix: use_local_container_unguarded_bad's own dg-warning
+// below was previously silenced entirely -- root cause was a genuine
+// instantiation-ordering bug: an ordinary, non-template caller gets
+// its own GIMPLE contracts pass run eagerly, the moment its own body
+// is gimplified, well before GCC's own ordinary deferred-template-
+// instantiation schedule would otherwise instantiate std::vector<int>
+// ::operator[]/size () (both template member functions). Consulting a
+// callee's own contract-activity cache (populated once, at that
+// callee's own finish_function time) before the callee has even been
+// instantiated silently found nothing and treated every one of its
+// obligations as inactive, with no diagnostic at all -- this file's
+// own original receiver-identity/local-index fixes above are
+// unaffected either way. Fixed in pass_contracts_gimple::execute
+// (contracts-gimple.cc) by force-instantiating every callee this
+// function's own body calls before consulting that cache.
 // { dg-do compile { target c++26 } }
 // Unrelated noise from std::vector's own transitive <string>/<ranges>
 // include chain (std::to_string, __max_size_type, etc. -- all genuinely
@@ -109,7 +109,7 @@ int use_local_container_unguarded_bad ()
 {
   std::vector<int> test{1, 2, 3};
   int idx = get_index ();
-  return test[idx]; // { D4324-FIXME-warning {cannot verify that [^\n]* satisfies the precondition} }
+  return test[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
 }
 
 int main ()
