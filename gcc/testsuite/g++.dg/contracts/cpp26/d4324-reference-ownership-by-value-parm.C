@@ -2,12 +2,16 @@
 // this function's own independent copy -- exactly as owned as a local
 // VAR_DECL it declared itself -- and so may be freely re-lent as a
 // non-const reference. This is genuinely different from a REFERENCE_TYPE
-// parameter (which aliases the caller's own object and stays borrowed),
-// and also different from DEREFERENCING a by-value POINTER parameter:
-// the pointer's own storage is owned (it's this function's own copy),
-// but what it currently points at is still the caller's own, unrelated
-// object, so that stays borrowed. Both distinctions must hold at once,
-// which is why this pins them together rather than separately.
+// parameter (which aliases the caller's own object and stays borrowed).
+//
+// D4324/P2680 (2026-10-15): DEREFERENCING a by-value POINTER parameter
+// is now ALSO owned, not just the pointer's own storage -- see
+// d4324-reference-ownership-basic.C's own updated header comment for
+// the full history/soundness argument (direct mutation through an
+// already-is_object_address-proven pointer was already unconditionally
+// legal with zero Q2 involvement, so this grants no new capability).
+// accept_by_value_pointer_dereference below used to be
+// reject_by_value_pointer_dereference, with a dg-error.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
 
@@ -47,16 +51,14 @@ accept_by_value_object (T local_copy) conveyor
   return use_val_mut (local_copy);
 }
 
-// P is a by-value POINTER parameter: P ITSELF (its own storage) is
-// owned, but *P (what it currently points at) is the caller's own,
-// entirely unrelated object -- still borrowed, exactly as if P were a
-// reference parameter. Confirms the by-value exception above doesn't
-// leak into pointee ownership.
+// P is a by-value POINTER parameter: both P ITSELF (its own storage)
+// and *P (what it currently points at) are owned, once P's own
+// is_object_address is proven.
 int
-reject_by_value_pointer_dereference (T* p) conveyor
+accept_by_value_pointer_dereference (T* p) conveyor
   pre<conveyor_ctrl_v>(std::is_object_address (p))
 {
-  return use_val_mut (*p); // { dg-error "is not owned by the calling function" }
+  return use_val_mut (*p);
 }
 
 // Passing P ITSELF (not *P, a by-value pointer parameter) to a
@@ -79,5 +81,6 @@ main ()
   T t{1};
   accept_by_value_object (t);
   accept_by_value_pointer_itself (&t);
+  accept_by_value_pointer_dereference (&t);
   return 0;
 }
