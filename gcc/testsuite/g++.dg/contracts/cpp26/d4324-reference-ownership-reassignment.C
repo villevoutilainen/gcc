@@ -6,11 +6,18 @@
 // alone would give the wrong answer the moment the pointer is later
 // reassigned to something with different provenance.
 //
-// BORROWED source: dereferencing a by-value pointer parameter (Q's own
-// pointee is still borrowed post-rework, see d4324-reference-ownership-
-// basic.C), laundered through a CONST reference parameter -- Q2 never
-// restricts const targets, so the call itself is legal, but the
-// callee's own return value is still correctly inferred as borrowed via
+// BORROWED source (2026-10-15, redesigned): the pointee of a
+// pointer-TYPED FIELD ('*(h->ptr)') -- a plain pointer PARAMETER's own
+// pointee no longer works for this, now that it's owned (see d4324-
+// reference-ownership-basic.C's own updated comment); a pointer-typed
+// field's pointee, by contrast, is still correctly borrowed (neither
+// that widening nor the earlier field-of-owned-object fix grants
+// ownership to it -- see d4324-gimple-item7-ownership-bad.C's own
+// updated comment), so it still exercises this file's actual point:
+// the reassignment/branch-merge *tracking mechanism itself*, laundered
+// through a CONST reference parameter -- Q2 never restricts const
+// targets, so the call itself is legal, but the callee's own return
+// value is still correctly inferred as borrowed via
 // oa_call_result_owned_p, which inspects every pointer/reference-typed
 // argument regardless of the callee's own parameter constness. (A
 // directly-named global would have been a simpler source, but conveyor
@@ -34,6 +41,7 @@ struct conveyor_ctrl {
 inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 
 struct T { int v; };
+struct Holder { T* ptr; };
 
 int use_val_mut (T& x) conveyor { return x.v; }
 
@@ -49,12 +57,13 @@ identity_view_ptr_from_const_ref (const T& cr) conveyor
 // borrowed call result -- the borrowed status from the reassignment
 // must win, not the stale "owned" from the original declaration.
 int
-reject_reassign_owned_to_borrowed (T* q) conveyor
-  pre<conveyor_ctrl_v>(std::is_object_address (q))
+reject_reassign_owned_to_borrowed (Holder* h) conveyor
+  pre<conveyor_ctrl_v>(std::is_object_address (h))
+  pre<conveyor_ctrl_v>(std::is_object_address (h->ptr))
 {
   T local{5};
   T* p = &local;
-  p = identity_view_ptr_from_const_ref (*q);
+  p = identity_view_ptr_from_const_ref (*(h->ptr));
   return use_val_mut (*p); // { dg-error "is not owned by the calling function" }
 }
 
@@ -62,11 +71,12 @@ reject_reassign_owned_to_borrowed (T* q) conveyor
 // local -- must accept; a stale borrowed flag must not survive an owned
 // reassignment either.
 int
-accept_reassign_borrowed_to_owned (T* q) conveyor
-  pre<conveyor_ctrl_v>(std::is_object_address (q))
+accept_reassign_borrowed_to_owned (Holder* h) conveyor
+  pre<conveyor_ctrl_v>(std::is_object_address (h))
+  pre<conveyor_ctrl_v>(std::is_object_address (h->ptr))
 {
   T local{5};
-  T* p = identity_view_ptr_from_const_ref (*q);
+  T* p = identity_view_ptr_from_const_ref (*(h->ptr));
   p = &local;
   return use_val_mut (*p);
 }
@@ -75,13 +85,14 @@ accept_reassign_borrowed_to_owned (T* q) conveyor
 // join, confirming the merge is a union (borrowed wins), not an
 // intersection or a "keep whichever branch ran last" guess.
 int
-reject_branch_merge (T* q, bool cond) conveyor
-  pre<conveyor_ctrl_v>(std::is_object_address (q))
+reject_branch_merge (Holder* h, bool cond) conveyor
+  pre<conveyor_ctrl_v>(std::is_object_address (h))
+  pre<conveyor_ctrl_v>(std::is_object_address (h->ptr))
 {
   T local{5};
   T* p = &local;
   if (cond)
-    p = identity_view_ptr_from_const_ref (*q);
+    p = identity_view_ptr_from_const_ref (*(h->ptr));
   return use_val_mut (*p); // { dg-error "is not owned by the calling function" }
 }
 
@@ -89,6 +100,7 @@ int
 main ()
 {
   T t{2};
-  accept_reassign_borrowed_to_owned (&t);
+  Holder h{&t};
+  accept_reassign_borrowed_to_owned (&h);
   return 0;
 }

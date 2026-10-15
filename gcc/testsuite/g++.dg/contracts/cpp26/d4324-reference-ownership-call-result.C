@@ -7,17 +7,22 @@
 // below is a trivial pass-through: its return value is exactly as owned
 // (or borrowed) as whatever pointer/reference argument it was given.
 //
-// BORROWED source: dereferencing a by-value pointer parameter, passed
-// through a CONST reference parameter -- Q2 never restricts const
-// targets, so the call site itself is legal, but oa_call_result_owned_p
-// still correctly infers the return as borrowed by inspecting the
-// argument's own ownership, independent of the callee's parameter
-// constness. (A directly-named global would have been a simpler
-// source, but conveyor code may never odr-use a mutable global at all
-// -- a separate, stricter, unrelated restriction -- so it can't reach
-// this analysis to test it.) A dedicated case below confirms call-
-// result inference correctly follows the ownership flip for a RECEIVED
-// parameter too (see d4324-reference-ownership-basic.C).
+// BORROWED source (2026-10-15, redesigned): the pointee of a
+// pointer-typed FIELD ('*(h->ptr)'), passed through a CONST reference
+// parameter -- Q2 never restricts const targets, so the call site
+// itself is legal, but oa_call_result_owned_p still correctly infers
+// the return as borrowed by inspecting the argument's own ownership,
+// independent of the callee's parameter constness. A plain pointer
+// PARAMETER's own pointee no longer works for this (see d4324-
+// reference-ownership-basic.C's own updated comment -- it's owned
+// now); a pointer-typed field's pointee is still correctly borrowed
+// (see d4324-gimple-item7-ownership-bad.C's own updated comment). (A
+// directly-named global would have been a simpler source, but conveyor
+// code may never odr-use a mutable global at all -- a separate,
+// stricter, unrelated restriction -- so it can't reach this analysis to
+// test it.) A dedicated case below confirms call-result inference
+// correctly follows the ownership flip for a RECEIVED parameter too
+// (see d4324-reference-ownership-basic.C).
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
 
@@ -35,6 +40,7 @@ struct conveyor_ctrl {
 inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 
 struct T { int v; };
+struct Holder { T* ptr; };
 
 int use_val_mut (T& x) conveyor { return x.v; }
 
@@ -55,23 +61,25 @@ identity_view_ptr (const T& cr) conveyor
 }
 
 // REFERENCE bound from a conveyor call, itself given a BORROWED
-// argument (Q's own pointee, dereferenced): the binding local must stay
-// borrowed too, not read as owned merely because it's this function's
-// own VAR_DECL.
+// argument (a pointer-typed field's pointee, dereferenced): the binding
+// local must stay borrowed too, not read as owned merely because it's
+// this function's own VAR_DECL.
 int
-reject_ref_from_call (T* q) conveyor
-  pre<conveyor_ctrl_v>(std::is_object_address (q))
+reject_ref_from_call (Holder* h) conveyor
+  pre<conveyor_ctrl_v>(std::is_object_address (h))
+  pre<conveyor_ctrl_v>(std::is_object_address (h->ptr))
 {
-  T& view = identity_view (*q);
+  T& view = identity_view (*(h->ptr));
   return use_val_mut (view); // { dg-error "is not owned by the calling function" }
 }
 
 // Same, but through a POINTER bound from the call and dereferenced.
 int
-reject_ptr_from_call (T* q) conveyor
-  pre<conveyor_ctrl_v>(std::is_object_address (q))
+reject_ptr_from_call (Holder* h) conveyor
+  pre<conveyor_ctrl_v>(std::is_object_address (h))
+  pre<conveyor_ctrl_v>(std::is_object_address (h->ptr))
 {
-  T* p = identity_view_ptr (*q);
+  T* p = identity_view_ptr (*(h->ptr));
   return use_val_mut (*p); // { dg-error "is not owned by the calling function" }
 }
 
@@ -80,10 +88,11 @@ reject_ptr_from_call (T* q) conveyor
 // pointer's own ownership (borrowed) must be visible through the extra
 // hop, not just through a direct call-result binding.
 int
-reject_two_hop (T* q) conveyor
-  pre<conveyor_ctrl_v>(std::is_object_address (q))
+reject_two_hop (Holder* h) conveyor
+  pre<conveyor_ctrl_v>(std::is_object_address (h))
+  pre<conveyor_ctrl_v>(std::is_object_address (h->ptr))
 {
-  T* p2 = identity_view_ptr (*q);
+  T* p2 = identity_view_ptr (*(h->ptr));
   T& r = *p2;
   return use_val_mut (r); // { dg-error "is not owned by the calling function" }
 }

@@ -1190,23 +1190,31 @@ cg_provably_owned_p (tree val, function *fun, hash_set<tree> &in_progress,
      value), with no ADDR_EXPR at all -- this function (see its own
      caller, cg_check_call_reference_safety) only ever asks this about a
      REFERENCE-typed *target*, i.e. always "what does this value
-     designate," never "is this pointer's own value owned" (a target
-     that's itself a pointer, including 'this' used as an ordinary
-     receiver, is entirely exempt from Q2 -- see this function's own
-     leading comment). Mirrors oa_reference_owned_p's own ASKING_ABOUT_
-     POINTER_VALUE disambiguation: a REFERENCE-typed parameter used
-     directly IS "received as my own" (accept_ref_param's own shape) --
-     but a POINTER-typed parameter's bare value, asked about this way,
-     means its own POINTEE is being bound to the reference target
-     (reject_ptr_param_dereference's own shape: P's own storage is this
-     function's private copy, but *P is still the caller's own,
-     unrelated object) -- NOT owned, unless it's specifically 'this'
-     (re-lending 'this' further, even dereferenced, never extends the
-     cone: no new party gains access, it's still the exact object this
-     function was already given).  */
+     designate" (a target that's itself a pointer, including 'this' used
+     as an ordinary receiver, is entirely exempt from Q2 -- see this
+     function's own leading comment, and cg_check_call_reference_safety's
+     own REFERENCE_TYPE-only gate: this function is never even invoked
+     for a pointer-typed callee target to begin with, so there is no
+     "pointer passed directly as a pointer-typed callee parameter"
+     ambiguity to disambiguate here the way oa_reference_owned_p's own
+     ASKING_ABOUT_POINTER_VALUE parameter has to on the AST side).
+
+     D4324/P2680 (2026-10-15): POINTER_TYPE_P granted here unconditionally
+     too -- a POINTER-typed parameter's own POINTEE is owned the same way
+     a REFERENCE parameter's designatum already is, mirroring contracts.cc's
+     own OWNED_BY_VALUE_PARM widening (see that comment for the full
+     soundness argument: direct mutation through an already-is_object_
+     address-proven pointer is already unconditionally legal with zero Q2
+     involvement, so this grants no new capability, only removes the need
+     for an extra indirection to reach it). IS_THIS_PARAMETER kept
+     alongside for clarity even though it's now implied by POINTER_TYPE_P
+     ('this' is always pointer-typed) -- 'this' had its own, independently
+     documented exemption first, and keeping it spelled out preserves that
+     history without affecting behavior.  */
   tree var = SSA_NAME_VAR (val);
   if (var && TREE_CODE (var) == PARM_DECL && SSA_NAME_IS_DEFAULT_DEF (val)
       && (TREE_CODE (TREE_TYPE (var)) == REFERENCE_TYPE
+	  || POINTER_TYPE_P (TREE_TYPE (var))
 	  || is_this_parameter (var)))
     return true;
 

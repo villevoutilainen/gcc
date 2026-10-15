@@ -32,16 +32,21 @@ struct conveyor_ctrl {
 inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 
 struct T { int v; };
+struct Holder { T* ptr; };
 
 int use_val_mut (T& x) conveyor { return x.v; }
 
 // Const-parameter identity view, matching d4324-reference-ownership-
 // call-result.C's own helper exactly: Q2 never restricts a CONST
-// target, so a call site passing a borrowed *q here is Q1-clean; the
-// const_cast'd return is what later trips Q2 when handed to a non-const
-// reference parameter (oa_call_result_owned_p inspecting the call's own
-// pointer/reference arguments, q's pointee among them, and finding it
-// unowned).
+// target, so a call site passing a borrowed *(h->ptr) here is Q1-clean;
+// the const_cast'd return is what later trips Q2 when handed to a
+// non-const reference parameter (oa_call_result_owned_p inspecting the
+// call's own pointer/reference arguments, the field's pointee among
+// them, and finding it unowned). A plain pointer PARAMETER's own
+// pointee no longer works as the borrowed source here (see d4324-
+// reference-ownership-basic.C's own updated comment -- it's owned
+// now); a pointer-typed FIELD's pointee is still correctly borrowed
+// (see d4324-gimple-item7-ownership-bad.C's own updated comment).
 T&
 identity_view (const T& cr) conveyor
   pre<conveyor_ctrl_v>(std::is_object_address (&cr))
@@ -86,10 +91,11 @@ accept_ownership_non_conveyor_caller (T& t)
 // an ordinary accessor like get_ref can't even be called from here --
 // a conveyor function may only call other conveyor functions.)
 int
-reject_ownership_still_enforced_in_conveyor_caller (T* q) conveyor
-  pre<conveyor_ctrl_v>(std::is_object_address (q))
+reject_ownership_still_enforced_in_conveyor_caller (Holder* h) conveyor
+  pre<conveyor_ctrl_v>(std::is_object_address (h))
+  pre<conveyor_ctrl_v>(std::is_object_address (h->ptr))
 {
-  T& view = identity_view (*q);
+  T& view = identity_view (*(h->ptr));
   return use_val_mut (view); // { dg-error "is not owned by the calling function" }
 }
 
@@ -98,9 +104,10 @@ reject_ownership_still_enforced_in_conveyor_caller (T* q) conveyor
 // must still reject it too, matching item 8's "functions AND
 // predicates" scope exactly (this is the predicate half).
 int
-reject_ownership_still_enforced_in_predicate_text (T* q)
-  pre<conveyor_ctrl_v>(std::is_object_address (q))
-  pre<conveyor_ctrl_v>(use_val_mut (identity_view (*q)) >= 0) // { dg-error "is not owned by the calling function" }
+reject_ownership_still_enforced_in_predicate_text (Holder* h)
+  pre<conveyor_ctrl_v>(std::is_object_address (h))
+  pre<conveyor_ctrl_v>(std::is_object_address (h->ptr))
+  pre<conveyor_ctrl_v>(use_val_mut (identity_view (*(h->ptr))) >= 0) // { dg-error "is not owned by the calling function" }
 {
   return 0;
 }

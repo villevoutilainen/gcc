@@ -14497,20 +14497,43 @@ oa_reference_owned_p (tree expr, oa_env &env,
     && DECL_CONTEXT (identity) == current_function_decl
     && TREE_CODE (TREE_TYPE (identity)) == REFERENCE_TYPE;
   /* A BY-VALUE or POINTER parameter is this function's own independent
-     copy (of the value itself, for a pointer -- not necessarily of its
-     pointee), exactly as owned as a local VAR_DECL it declared itself.
-     Gated on ADDR_OF_DECL (see above): only when the parameter's own
-     storage/address is what's actually being asked about. Still
-     consulted through env.borrowed_p below like every other identity,
-     since a by-value/pointer parameter can itself be reassigned from a
-     conveyor call's return value, or from a directly-named global's
-     address, later in the body (the INIT_EXPR/MODIFY_EXPR reassignment
-     site already tracks PARM_DECL and VAR_DECL lhs identically for
-     exactly this reason).  */
-  bool owned_by_value_parm = addr_of_decl
-    && TREE_CODE (identity) == PARM_DECL
-    && DECL_CONTEXT (identity) == current_function_decl
-    && TREE_CODE (TREE_TYPE (identity)) != REFERENCE_TYPE;
+     copy, exactly as owned as a local VAR_DECL it declared itself. For a
+     non-pointer by-value parameter, gated on ADDR_OF_DECL (see above):
+     only when the parameter's own storage/address is what's actually
+     being asked about -- there's no other question to ask about a
+     non-pointer value. Still consulted through env.borrowed_p below
+     like every other identity, since a by-value/pointer parameter can
+     itself be reassigned from a conveyor call's return value, or from a
+     directly-named global's address, later in the body (the INIT_EXPR/
+     MODIFY_EXPR reassignment site already tracks PARM_DECL and VAR_DECL
+     lhs identically for exactly this reason).
+
+     D4324/P2680 (2026-10-15): for a POINTER-typed parameter specifically,
+     ADDR_OF_DECL is NOT required -- "what it designates" (its pointee) is
+     granted ownership unconditionally too, the same way a REFERENCE
+     parameter's designatum already is (see OWNED_REFERENCE_PARM's own
+     comment). Previously, dereferencing a received, already-is_object_
+     address-proven pointer parameter and forwarding its pointee as a
+     non-const reference was rejected, even though direct mutation
+     through that exact same pointer (e.g. 'p->field = x;') was already,
+     unconditionally legal with no Q2 involvement at all -- so the
+     restriction granted no actual protection, only forced an extra
+     level of indirection (an intermediate local reference/pointer
+     rebinding) to reach the identical, already-available capability.
+     Confirmed via direct testing and an independent red-team pass: no
+     counterexample found for this narrower widening (the already-
+     reverted, broader "pointer-typed CALLEE parameters are subject to
+     Q2 too" widening remains reverted and is unaffected -- that one
+     changed which callee parameters trigger Q2 at all; this one only
+     changes what counts as owned once Q2 is already triggered by a
+     non-const reference callee parameter). See gcc/testsuite/g++.dg/
+     contracts/cpp26/d4324-reference-ownership-basic.C's own updated
+     comment for the fuller history.  */
+  bool owned_by_value_parm
+    = TREE_CODE (identity) == PARM_DECL
+      && DECL_CONTEXT (identity) == current_function_decl
+      && TREE_CODE (TREE_TYPE (identity)) != REFERENCE_TYPE
+      && (addr_of_decl || POINTER_TYPE_P (TREE_TYPE (identity)));
   if (!owned_var && !owned_reference_parm && !owned_by_value_parm)
     {
       if (reason_out)
