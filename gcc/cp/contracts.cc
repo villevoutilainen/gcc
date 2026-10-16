@@ -159,6 +159,7 @@ along with GCC; see the file COPYING3.  If not see
 /* Contract matching.  */
 
 bool comparing_contracts;
+bool comparing_contracts_ignore_parm_level;
 
 /* True if the contract is valid.  */
 
@@ -324,9 +325,12 @@ contracts_equal_p (tree c1, tree c2)
   tree t2 = cp_fully_fold_init (CONTRACT_CONDITION (c2));
 
   bool saved_comparing_contracts = comparing_contracts;
+  bool saved_ignore_parm_level = comparing_contracts_ignore_parm_level;
   comparing_contracts = true;
+  comparing_contracts_ignore_parm_level = true;
   bool matching_p = cp_tree_equal (t1, t2);
   comparing_contracts = saved_comparing_contracts;
+  comparing_contracts_ignore_parm_level = saved_ignore_parm_level;
   if (!matching_p)
     return false;
 
@@ -340,9 +344,12 @@ contracts_equal_p (tree c1, tree c2)
       tree cf2 = cp_fully_fold_init (ctrl2);
 
       saved_comparing_contracts = comparing_contracts;
+      saved_ignore_parm_level = comparing_contracts_ignore_parm_level;
       comparing_contracts = true;
+      comparing_contracts_ignore_parm_level = true;
       bool ctrl_matching_p = cp_tree_equal (cf1, cf2);
       comparing_contracts = saved_comparing_contracts;
+      comparing_contracts_ignore_parm_level = saved_ignore_parm_level;
       if (!ctrl_matching_p)
 	return false;
     }
