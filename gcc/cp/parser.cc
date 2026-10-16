@@ -34689,6 +34689,45 @@ cp_parser_late_object_contracts (cp_parser *parser, tree decl)
 	    }
 	}
 
+      /* A binder list (other than a postcondition's lone result name,
+	 handled above) names the parameters positionally, preceded by
+	 the result for a postcondition naming one more than there are
+	 parameters -- as in cp_parser_function_contract_specifier's
+	 eager path.  */
+      tree binders = get_contract_deferred_binders (contract);
+      bool binder_result_p = false;
+      if (binders)
+	{
+	  location_t bloc = cp_expr_location (contract);
+	  unsigned n_binders = list_length (binders);
+	  unsigned arity = 0;
+	  for (tree p = get_contract_positional_parms (contract); p;
+	       p = TREE_CHAIN (p))
+	    if (DECL_NAME (TREE_VALUE (p)) != this_identifier)
+	      arity++;
+	  binder_result_p = (POSTCONDITION_P (contract)
+			     && n_binders == arity + 1);
+	  bool ok = true;
+	  if (!binder_result_p && n_binders != arity)
+	    {
+	      error_at (bloc, "wrong number of names in contract binder list "
+			"(expected %u, got %u)", arity, n_binders);
+	      ok = false;
+	    }
+	  else if (binder_result_p && !ret_dependent
+		   && !object_contract_check_postcondition_result (ret_type,
+								   bloc))
+	    ok = false;
+	  if (!ok)
+	    {
+	      invalidate_contract (contract);
+	      tree list = tree_cons (TREE_PURPOSE (old_contracts),
+				     TREE_VALUE (old_contracts), NULL_TREE);
+	      new_contracts = chainon (new_contracts, list);
+	      continue;
+	    }
+	}
+
       /* No wrapper-FUNCTION_DECL/DECL_CONSTRUCTOR_P/DECL_DESTRUCTOR_P
 	 concept applies to an object-decl's own contract -- the side
 	 is always ccs_definition, and the only 'this' available is
@@ -34717,20 +34756,53 @@ cp_parser_late_object_contracts (cp_parser *parser, tree decl)
       processing_postcondition = POSTCONDITION_P (contract);
       tree result = NULL_TREE;
       bool dependent_result_p = ret_dependent || binder_names_parm_p;
-      if (r_ident)
+      if (binders)
+	{
+	  location_t bloc = cp_expr_location (contract);
+	  tree b = binders;
+	  if (binder_result_p)
+	    {
+	      result = make_postcondition_variable
+		(cp_expr (TREE_VALUE (b), bloc), ret_type);
+	      b = TREE_CHAIN (b);
+	    }
+	  /* The binder variables replace the parameters they name as
+	     this contract's positional parameters; a synthesized 'this'
+	     stays as it is.  */
+	  tree positional = NULL_TREE;
+	  tree *tail = &positional;
+	  for (tree p = get_contract_positional_parms (contract); p;
+	       p = TREE_CHAIN (p))
+	    {
+	      tree entry = TREE_VALUE (p);
+	      if (DECL_NAME (entry) != this_identifier)
+		{
+		  entry = make_postcondition_variable
+		    (cp_expr (TREE_VALUE (b), bloc), TREE_TYPE (entry));
+		  b = TREE_CHAIN (b);
+		}
+	      *tail = build_tree_list (NULL_TREE, entry);
+	      tail = &TREE_CHAIN (*tail);
+	    }
+	  set_contract_positional_parms (contract, positional);
+	  /* As for an eagerly parsed binder list.  */
+	  dependent_result_p = true;
+	  ++processing_template_decl;
+	}
+      else if (r_ident)
 	{
 	  cp_expr result_id (r_ident, r_loc);
 	  result = (binder_names_parm_p
 		    ? make_postcondition_variable (result_id)
 		    : make_postcondition_variable (result_id, ret_type));
-	  /* Deferred clauses only ever have a single-name binder list.  */
+	  /* A postcondition's lone binder name (see mark_single_post_binder).  */
 	  mark_single_post_binder (result);
 	  if (dependent_result_p)
 	    ++processing_template_decl;
 	}
       cp_expr parsed_condition = cp_parser_conditional_expression (parser);
       update_late_contract (contract, result, parsed_condition);
-      if (r_ident && dependent_result_p)
+      if ((binders || r_ident) && dependent_result_p)
 	--processing_template_decl;
       processing_postcondition = old_pc;
       gcc_checking_assert (scope_chain && scope_chain->bindings
@@ -35082,23 +35154,11 @@ cp_parser_maybe_class_contract_specifier_seq (cp_parser *parser, tree type)
       return NULL_TREE;
     }
 
+  /* PARAMS only types the parameter positions: the parameters are
+     unnamed, so the condition can refer to them only through a binder
+     list (see build_call_operator_contract_params).  */
   tree params = build_call_operator_contract_params (operator_fn);
-
-  /* Push PARAMS's own fresh PARM_DECLs into a temporary function-
-     parameter scope, exactly like cp_parser_direct_declarator already
-     does around an ordinary function declarator's own parameter-
-     declaration-clause: the shortcut (no binder list) contract
-     grammar resolves a plain-named condition like '(a > 0)' via
-     ordinary lookup, which needs these bound somewhere -- a class-
-     type callable has no declarator parameter-list of its own to have
-     already done this.  */
-  begin_scope (sk_function_parms, NULL_TREE);
-  for (tree p = params; p; p = TREE_CHAIN (p))
-    pushdecl (TREE_VALUE (p));
-  tree contract_specifiers = cp_parser_function_contract_specifier_seq (parser, params);
-  pop_bindings_and_leave_scope ();
-
-  return contract_specifiers;
+  return cp_parser_function_contract_specifier_seq (parser, params);
 }
 
 /* Parse a contract specifier.
@@ -35226,13 +35286,8 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
     if (binder_ids[i] == error_mark_node)
       binder_error_p = true;
 
-  if (binder_error_p
-      || (binder_ids.length () > 1 && deferred_p))
+  if (binder_error_p)
     {
-      if (!binder_error_p)
-	error_at (loc, "a contract binder list naming more than one "
-		  "parameter is not yet supported inside a class "
-		  "definition");
       cp_parser_skip_to_closing_parenthesis (parser,
 					     /*recovering=*/true,
 					     /*or_comma=*/false,
@@ -35243,11 +35298,12 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
   if (!binder_ids.is_empty ())
     cp_parser_require (parser, CPP_COLON, RT_COLON);
 
-  /* For a single-name binder list, keep the traditional postcondition
+  /* For a postcondition's single-name binder list, keep the traditional
      result-name identifier around too, for the deferred (class-body)
-     path below, which doesn't yet support a longer binder list.  */
-  cp_expr identifier
-    = binder_ids.length () == 1 ? binder_ids[0] : cp_expr ();
+     path below; any other binder list is recorded with the deferred
+     contract and resolved when it is reparsed.  */
+  bool single_post_name_p = binder_ids.length () == 1 && postcondition_p;
+  cp_expr identifier = single_post_name_p ? binder_ids[0] : cp_expr ();
 
   tree contract;
   if (deferred_p)
@@ -35301,6 +35357,13 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
 	      positional_tail = &TREE_CHAIN (*positional_tail);
 	    }
 	  set_contract_positional_parms (contract, positional_parms);
+	  if (!binder_ids.is_empty () && !single_post_name_p)
+	    {
+	      tree ids = NULL_TREE;
+	      for (unsigned i = binder_ids.length (); i-- > 0;)
+		ids = tree_cons (NULL_TREE, binder_ids[i].get_value (), ids);
+	      set_contract_deferred_binders (contract, ids);
+	    }
 	}
     }
   else

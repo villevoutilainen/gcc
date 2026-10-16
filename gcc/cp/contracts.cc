@@ -2296,6 +2296,32 @@ get_contract_positional_parms (tree contract)
   return NULL_TREE;
 }
 
+/* D4324: the binder list of a deferred (in-class) declaration-level
+   contract, as a TREE_LIST of IDENTIFIER_NODEs in source order; the
+   binder variables themselves can only be built when the condition is
+   reparsed, after the class is complete (cp_parser_late_object_
+   contracts).  A lone postcondition name is instead kept as the
+   contract's POSTCONDITION_IDENTIFIER, as for any function.  */
+
+static GTY(()) hash_map<tree, tree> *contract_deferred_binders_map;
+
+void
+set_contract_deferred_binders (tree contract, tree ids)
+{
+  if (!contract || contract == error_mark_node)
+    return;
+  hash_map_maybe_create<hm_ggc> (contract_deferred_binders_map);
+  contract_deferred_binders_map->put (contract, ids);
+}
+
+tree
+get_contract_deferred_binders (tree contract)
+{
+  if (tree *p = hash_map_safe_get (contract_deferred_binders_map, contract))
+    return *p;
+  return NULL_TREE;
+}
+
 /* A subroutine of duplicate_decls. Diagnose issues in the redeclaration of
    guarded functions.  */
 
@@ -2769,38 +2795,38 @@ resolve_single_call_operator (tree type)
   return found;
 }
 
-/* Build a TREE_LIST of fresh PARM_DECLs with the same names and types
+/* Build a TREE_LIST of fresh, unnamed PARM_DECLs with the same types
    as OPERATOR_FN's own real parameters (skipping any implicit object
    parameter), matching the shape the contract-specifier-seq grammar
    expects for its own PARAMS argument (a chain, via TREE_CHAIN, of
    TREE_LIST nodes each holding a PARM_DECL in TREE_VALUE -- the same
    shape a declarator's own u.function.parameters already has) -- see
-   resolve_single_call_operator and
-   .claude/plans/stateless-jumping-shore.md.  OPERATOR_FN is expected
-   to already be resolved by resolve_single_call_operator (non-NULL,
-   non-template, the one real operator()).
+   resolve_single_call_operator.  OPERATOR_FN is expected to already be
+   resolved by resolve_single_call_operator (non-NULL, non-template,
+   the one real operator()).
 
-   Fresh copies, rather than OPERATOR_FN's own real PARM_DECLs,
-   because the caller (the new grammar hooks in
-   cp_parser_init_declarator/cp_parser_parameter_declaration) needs to
-   push these by name into a temporary scope for the shortcut (no
-   binder list) grammar's ordinary-lookup condition-parsing to find
-   them -- exactly like an ordinary function declarator's own
-   parameter scope already does for the function-pointer case (see
-   cp_parser_direct_declarator's begin_scope (sk_function_parms, ...)
-   around its own parameter-declaration-clause parsing).  OPERATOR_FN's
-   real parameters are shared, permanent decls belonging to the class's
-   member function; pushing those directly into an unrelated temporary
-   scope would be a needless, surprising mutation of shared state.  */
+   They give each parameter position its type, for the binder list
+   that a contract on a class-type callable object must use to name
+   them; they are never found by name lookup.  Fresh copies, rather
+   than OPERATOR_FN's own real PARM_DECLs, because they are recorded as
+   the contract's positional parameters, and OPERATOR_FN's real
+   parameters are shared, permanent decls belonging to the class's
+   member function.  */
 
 tree
 build_call_operator_contract_params (tree operator_fn)
 {
   tree list = NULL_TREE;
   tree *tail = &list;
+  /* Deliberately unnamed: a contract on a class-type callable object
+     must introduce the parameter names itself, with a binder list
+     (adder a pre<>(x, y: x < y)).  Borrowing the names of the call
+     operator's own parameters would make the condition depend on a
+     declaration that is nowhere in sight of the contract.  These decls
+     only supply each position's type.  */
   for (tree p = FUNCTION_FIRST_USER_PARM (operator_fn); p; p = DECL_CHAIN (p))
     {
-      tree fresh = cp_build_parm_decl (NULL_TREE, DECL_NAME (p), TREE_TYPE (p));
+      tree fresh = cp_build_parm_decl (NULL_TREE, NULL_TREE, TREE_TYPE (p));
       DECL_SOURCE_LOCATION (fresh) = DECL_SOURCE_LOCATION (p);
       *tail = build_tree_list (NULL_TREE, fresh);
       tail = &TREE_CHAIN (*tail);

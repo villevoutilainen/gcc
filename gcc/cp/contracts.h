@@ -223,6 +223,8 @@ extern void check_redecl_contract		(tree, tree);
 extern void check_redecl_object_contract	(tree, tree);
 extern void set_contract_positional_parms	(tree, tree);
 extern tree get_contract_positional_parms	(tree);
+extern void set_contract_deferred_binders	(tree, tree);
+extern tree get_contract_deferred_binders	(tree);
 extern tree maybe_object_contract_check_call	(tree, tree, vec<tree, va_gc> *, unsigned = 0);
 extern tree resolve_single_call_operator	(tree);
 extern tree build_call_operator_contract_params (tree);

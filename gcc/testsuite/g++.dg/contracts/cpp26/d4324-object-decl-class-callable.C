@@ -24,8 +24,8 @@ struct adder {
 // Top-level variable of class-callable type, named-control and empty-control forms.
 // The shortcut form (no binder list) reuses operator()'s own real
 // parameter names ("a", "b") for ordinary lookup.
-adder ad1 pre<ctrl_v> (a > 0 && b > 0);
-adder ad2 pre<> (a > 0 && b > 0);
+adder ad1 pre<ctrl_v> (a, b: a > 0 && b > 0);
+adder ad2 pre<> (a, b: a > 0 && b > 0);
 
 // std::function -- its own operator()'s real parameter names aren't a
 // stable, guessable spelling, so use a binder list instead.
@@ -35,16 +35,16 @@ std::function<void (int)> fp2 post<> (x: x >= 0);
 // A non-generic lambda closure type; a lambda's own parameter is
 // named "x" here, so the shortcut form applies directly.
 auto lam = [] (int x) { return x > 0; };
-decltype(lam) lam_obj pre<> (x > 0);
+decltype(lam) lam_obj pre<> (x: x > 0);
 
 struct S
 {
   // Static data member of class-callable type.
-  static adder mad pre<> (a > 0 && b > 0);
+  static adder mad pre<> (a, b: a > 0 && b > 0);
 };
 
 // A function parameter of class-callable type.
-void f (adder cb pre<> (a > 0 && b > 0));
+void f (adder cb pre<> (a, b: a > 0 && b > 0));
 void g (std::function<void (int)> cb pre<> (v: v >= 0));
 
 // A class template instantiated down to a single, concrete, ordinary
@@ -53,6 +53,6 @@ void g (std::function<void (int)> cb pre<> (v: v >= 0));
 // function template, or a generic lambda) is out of scope.
 template<class T>
 struct generic { T operator() (T x) const { return x; } };
-generic<int> gen pre<> (x > 0);
+generic<int> gen pre<> (x: x > 0);
 
 int main () { return 0; }
