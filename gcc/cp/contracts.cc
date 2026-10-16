@@ -906,6 +906,17 @@ bool suppress_conveyor_restrictions_for_trait_query_p = false;
 
 bool suppress_conveyor_restrictions_for_converted_constant_expr_p = false;
 
+/* D4324: set while a deleting destructor's own call to the class's
+   operator delete is built (build_delete_destructor_body).  That call
+   is part of what a delete-expression does, not of the destructor:
+   the deleting destructor is only an implementation vehicle for
+   'delete p'.  Without this, every conveyor virtual destructor --
+   including a defaulted one deduced conveyor, so most classes with
+   'virtual ~T () = default;' -- would be rejected.  The class's operator delete is
+   trusted here; it is the user's responsibility for it to be free of
+   side effects that would matter to a conveyor caller.  */
+bool suppress_conveyor_restrictions_for_deleting_dtor_p = false;
+
 /* See contracts.h for the full rationale.  */
 bool *conveyor_auto_probe_violation_p = nullptr;
 
@@ -925,6 +936,8 @@ conveyor_restrictions_active_p ()
   if (suppress_conveyor_restrictions_for_trait_query_p)
     return false;
   if (suppress_conveyor_restrictions_for_converted_constant_expr_p)
+    return false;
+  if (suppress_conveyor_restrictions_for_deleting_dtor_p)
     return false;
   /* None of these checks exist to reject code that can never actually
      execute: they exist to prove the code that *does* run at runtime is
@@ -1909,12 +1922,13 @@ maybe_apply_function_contracts (tree fndecl)
 
   /* If the function is noexcept, the user's written body will be wrapped in a
      MUST_NOT_THROW expression.  In that case we leave the MUST_NOT_THROW in
-     place and do our replacement inside it.  */
+     place and do our replacement inside it.  A defaulted function has no
+     such wrapper even when noexcept (see use_eh_spec_block).  */
   tree fnbody;
-  if (TYPE_NOEXCEPT_P (TREE_TYPE (fndecl)))
+  tree m_n_t_expr = (TYPE_NOEXCEPT_P (TREE_TYPE (fndecl))
+		     ? expr_first (DECL_SAVED_TREE (fndecl)) : NULL_TREE);
+  if (m_n_t_expr && TREE_CODE (m_n_t_expr) == MUST_NOT_THROW_EXPR)
     {
-      tree m_n_t_expr = expr_first (DECL_SAVED_TREE (fndecl));
-      gcc_checking_assert (TREE_CODE (m_n_t_expr) == MUST_NOT_THROW_EXPR);
       fnbody = TREE_OPERAND (m_n_t_expr, 0);
       TREE_OPERAND (m_n_t_expr, 0) = push_stmt_list ();
     }

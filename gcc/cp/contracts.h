@@ -970,6 +970,10 @@ extern bool conveyor_restrictions_active_p		(void);
    call this check would otherwise flag.  */
 extern bool suppress_conveyor_restrictions_for_converted_constant_expr_p;
 
+/* Set while building a deleting destructor's call to operator delete;
+   see contracts.cc.  */
+extern bool suppress_conveyor_restrictions_for_deleting_dtor_p;
+
 /* RAII sentinel for the flag just above: covers every return path of
    whatever scope it's declared in, unlike a manual save/restore pair,
    which is easy to miss one of on a function with many early returns

@@ -28,6 +28,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "cgraph.h"
 #include "debug.h"
 #include "tree-inline.h"
+#include "contracts.h" // suppress_conveyor_restrictions_for_deleting_dtor_p
 #include "tree-iterator.h"
 #include "attribs.h"
 
@@ -137,7 +138,12 @@ build_delete_destructor_body (tree delete_dtor, tree complete_dtor)
   tree parm = DECL_ARGUMENTS (delete_dtor);
   tree virtual_size = cxx_sizeof (current_class_type);
 
-  /* Call the delete function.  */
+  /* Call the delete function.  This is the delete-expression's work,
+     exempt from the destructor's own conveyor restrictions (see
+     suppress_conveyor_restrictions_for_deleting_dtor_p).  */
+  auto conveyor_ovr
+    = make_temp_override (suppress_conveyor_restrictions_for_deleting_dtor_p,
+			  true);
   tree call_delete = build_op_delete_call (DELETE_EXPR, current_class_ptr,
 					   virtual_size,
 					   /*global_p=*/false,
