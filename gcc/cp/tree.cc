@@ -4363,8 +4363,20 @@ cp_tree_equal (tree t1, tree t2)
 	    return false;
 	  if (CONSTRAINT_VAR_P (t1) ^ CONSTRAINT_VAR_P (t2))
 	    return false;
+	  /* D4324: COMPARING_CONTRACTS_IGNORE_PARM_LEVEL (set only around
+	     contracts_equal_p's own calls here, for -Wfunction-pointer-
+	     contract-mismatch) relaxes the DECL_PARM_LEVEL requirement --
+	     that flag compares two *independent* declarations (e.g. a
+	     function-pointer variable's own contract vs. a function
+	     parameter's matching one), whose absolute nesting depth can
+	     legitimately differ by construction (a parameter's own nested
+	     parameters sit one level deeper than a plain variable's)
+	     even when they denote the same position within the pointed-to
+	     callable's own parameter list; DECL_PARM_INDEX alone already
+	     captures that position correctly.  */
 	  if (DECL_ARTIFICIAL (t1)
-	      || (DECL_PARM_LEVEL (t1) == DECL_PARM_LEVEL (t2)
+	      || ((comparing_contracts_ignore_parm_level
+		   || DECL_PARM_LEVEL (t1) == DECL_PARM_LEVEL (t2))
 		  && DECL_PARM_INDEX (t1) == DECL_PARM_INDEX (t2)))
 	    return true;
 	}

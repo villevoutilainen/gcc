@@ -6522,6 +6522,19 @@ extern int comparing_dependent_aliases;
    to be an invisible reference.  */
 extern bool comparing_contracts;
 
+/* D4324: true if, in addition to COMPARING_CONTRACTS, the two
+   conditions being compared belong to independent declarations whose
+   absolute PARM_DECL nesting depth (DECL_PARM_LEVEL) may legitimately
+   differ even though their position within the pointed-to callable's
+   own parameter list (DECL_PARM_INDEX) is the same -- e.g. a
+   function-pointer variable's own contract vs. a function parameter's
+   matching contract, the latter nested one level deeper purely by
+   virtue of being a parameter itself.  Set only around
+   contracts_equal_p's own cp_tree_equal calls (contracts.cc); left
+   false (the default, strict same-function-redeclaration behavior)
+   for mismatched_contracts_p's.  */
+extern bool comparing_contracts_ignore_parm_level;
+
 /* In parser.cc.  */
 
 extern bool cp_preserve_using_decl;
