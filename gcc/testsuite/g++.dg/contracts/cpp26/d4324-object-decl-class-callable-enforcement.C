@@ -52,9 +52,9 @@ struct suber {
 };
 
 // Ordinary functor objects.
-adder add_functor pre<pre_ctrl> (a > 0 && b > 0);
-adder add_post_functor post<post_ctrl> (r: r == a + b);
-suber sub_post_functor post<post_ctrl> (r: r == a + b);
+adder add_functor pre<pre_ctrl> (a, b: a > 0 && b > 0);
+adder add_post_functor post<post_ctrl> (r, a, b: r == a + b);
+suber sub_post_functor post<post_ctrl> (r, a, b: r == a + b);
 
 // std::function objects -- its own operator()'s real parameter names
 // aren't a stable, guessable spelling, so name them explicitly via a

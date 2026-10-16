@@ -75,15 +75,15 @@ struct suber {
 };
 
 struct FunctorObj {
-  adder add pre<pre_ctrl> (a > 0 && b > 0);
-  adder add_post post<post_ctrl> (r: r == a + b);
+  adder add pre<pre_ctrl> (a, b: a > 0 && b > 0);
+  adder add_post post<post_ctrl> (r, a, b: r == a + b);
 };
 
 // A separate object, carrying the "wrong" behavior under the same
 // contract, since a plain functor field (unlike a std::function) can't
 // be retargeted to a differently-typed callable at runtime.
 struct FunctorObjBad {
-  suber add_post post<post_ctrl> (r: r == a + b);
+  suber add_post post<post_ctrl> (r, a, b: r == a + b);
 };
 
 // --- static member, reached via ClassName::staticmember(args)
