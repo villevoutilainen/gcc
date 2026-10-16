@@ -4731,8 +4731,15 @@ cp_build_function_call_vec (tree function, vec<tree, va_gc> **params,
 
   /* D4324: FUNCTION here, before any decay to a pointer value below, is
      the callee as the caller actually wrote it (modulo the ObjC/NOP_EXPR
-     unwrapping just above) -- see maybe_object_contract_check_call.  */
-  tree contract_callee = function;
+     unwrapping just above) -- see maybe_object_contract_check_call.
+     Resolved through fnptr_contract_owner (originally written for the
+     separate -Wfunction-pointer-contract-mismatch warning, already
+     reused by the ptrmemfunc call-site enforcement in decl2.cc) so a
+     call through a contracted callable-typed FIELD ('obj.f(args)') is
+     recognized too, not just a bare name -- it already returns a bare
+     FUNCTION_DECL/VAR_P/PARM_DECL unchanged, so this is a pure
+     widening for every other case.  */
+  tree contract_callee = fnptr_contract_owner (function);
 
   if (TREE_CODE (function) == FUNCTION_DECL)
     {

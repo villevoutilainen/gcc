@@ -407,7 +407,8 @@ fnptr_contract_owner (tree expr)
   while (TREE_CODE (expr) == NON_LVALUE_EXPR
 	 || TREE_CODE (expr) == NOP_EXPR
 	 || TREE_CODE (expr) == CONVERT_EXPR
-	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
+	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR
+	 || REFERENCE_REF_P (expr))
     expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
 
   if (TREE_CODE (expr) == ADDR_EXPR)

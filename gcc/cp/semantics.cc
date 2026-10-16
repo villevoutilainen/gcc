@@ -3594,16 +3594,29 @@ finish_call_expr (tree fn, vec<tree, va_gc> **args, bool disallow_virtual,
 	 (typeck.cc), for the function-pointer/reference case -- see
 	 .claude/plans/stateless-jumping-shore.md.  */
       tree contract_callee = fn;
+      /* CONTRACT_OWNER resolves CONTRACT_CALLEE through fnptr_contract_
+	 owner so a call through a contracted callable-typed FIELD
+	 ('obj.f(args)') is recognized too, not just a bare name --
+	 mirroring the same fix in cp_build_function_call_vec (typeck.cc)
+	 and the pre-existing one in build_offset_ref_call_from_tree
+	 (decl2.cc).  Kept separate from CONTRACT_CALLEE itself: the
+	 re-verification just below needs TREE_TYPE of the *original*,
+	 unresolved expression (a COMPONENT_REF's own type reflects the
+	 accessing object's cv-qualification, which the resolved
+	 FIELD_DECL's own type would not -- see build_class_member_
+	 access_expr), so only the decl-requiring uses below switch to
+	 CONTRACT_OWNER.  */
+      tree contract_owner = fnptr_contract_owner (contract_callee);
 
       /* If the "function" is really an object of class type, it might
 	 have an overloaded `operator ()'.  */
       result = build_op_call (fn, args, complain);
 
       if (result && result != error_mark_node
-	  && DECL_P (contract_callee)
-	  && get_fn_contract_specifiers (contract_callee))
+	  && contract_owner
+	  && get_fn_contract_specifiers (contract_owner))
 	{
-	  /* CONTRACT_CALLEE's contract clause was checked, at its
+	  /* CONTRACT_OWNER's contract clause was checked, at its
 	     declaration, against exactly one non-template operator()
 	     (resolve_single_call_operator) -- but a class type can
 	     also have a conversion operator to a function pointer/
@@ -3626,7 +3639,7 @@ finish_call_expr (tree fn, vec<tree, va_gc> **args, bool disallow_virtual,
 		error_at (cp_expr_loc_or_input_loc (fn),
 			  "call does not resolve through the %<operator()%> "
 			  "declared for %qD, so its contract specifier does "
-			  "not apply to this call", contract_callee);
+			  "not apply to this call", contract_owner);
 	      result = error_mark_node;
 	    }
 	  else
@@ -3639,7 +3652,7 @@ finish_call_expr (tree fn, vec<tree, va_gc> **args, bool disallow_virtual,
 		 maybe_object_contract_check_call's own comment.  */
 	      unsigned arg_offset
 		= DECL_IOBJ_MEMBER_FUNCTION_P (expected_fn) ? 1 : 0;
-	      result = maybe_object_contract_check_call (contract_callee,
+	      result = maybe_object_contract_check_call (contract_owner,
 							  result, *args,
 							  arg_offset);
 	    }
