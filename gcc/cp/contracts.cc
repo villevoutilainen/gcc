@@ -377,9 +377,11 @@ contract_specifiers_equal_p (tree spec1, tree spec2)
    decl whose own get_fn_contract_specifiers entry should be consulted
    when EXPR is copied into a function-pointer/reference-typed
    destination -- a bare function name or '&fn' (both collapse to the
-   same ADDR_EXPR (FUNCTION_DECL) shape after decay_conversion), or a
-   function-pointer-typed VAR_DECL/PARM_DECL used directly, or a
-   FIELD_DECL named via a COMPONENT_REF.  NULL_TREE for anything else
+   same ADDR_EXPR (FUNCTION_DECL) shape after decay_conversion), '&C::
+   member_func' (a PTRMEM_CST, whose own PTRMEM_CST_MEMBER is the real
+   FUNCTION_DECL), or a function-pointer/pointer-to-member-function-typed
+   VAR_DECL/PARM_DECL used directly, or a FIELD_DECL named via a
+   COMPONENT_REF.  NULL_TREE for anything else
    (a computed/complex expression), so the warning stays silent rather
    than guessing.  Modeled on oa_object_identity_decl's own stripping
    idiom above.  Exported (declared in contracts.h) so callers outside
@@ -403,6 +405,12 @@ fnptr_contract_owner (tree expr)
 
   if (TREE_CODE (expr) == ADDR_EXPR)
     expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+
+  /* '&C::member_func' for a non-static, non-overloaded member is a
+     PTRMEM_CST, not an ADDR_EXPR (FUNCTION_DECL) -- its own designated
+     member is directly recoverable, no lookup needed.  */
+  if (TREE_CODE (expr) == PTRMEM_CST)
+    return PTRMEM_CST_MEMBER (expr);
 
   if (TREE_CODE (expr) == FUNCTION_DECL
       || VAR_P (expr)
@@ -2998,11 +3006,28 @@ build_object_contract_check_function (tree objdecl, bool is_post)
      .claude/plans/stateless-jumping-shore.md.  */
   tree fn_type;
   tree first_arg_type;
+  /* D4324: for a pointer-to-member-function, one extra leading
+     '__this' parameter (OBJDECL's own declared object type, i.e. the
+     'A' in 'R (A::*)(...)') is prepended below -- this is the one
+     structural difference from every other branch here, since this is
+     the only callable shape whose own declaration-level condition can
+     reference an object at all (see maybe_attach_object_contract_
+     specifiers, decl.cc, and the cdk_ptrmem 'this'-injection in
+     cp_parser_direct_declarator, parser.cc).  */
+  tree this_type = NULL_TREE;
   if (CLASS_TYPE_P (TREE_TYPE (objdecl)))
     {
       tree operator_fn = resolve_single_call_operator (TREE_TYPE (objdecl));
       fn_type = TREE_TYPE (operator_fn);
       first_arg_type = FUNCTION_FIRST_USER_PARMTYPE (operator_fn);
+    }
+  else if (TYPE_PTRMEMFUNC_P (TREE_TYPE (objdecl)))
+    {
+      tree method_type
+	= TREE_TYPE (TYPE_PTRMEMFUNC_FN_TYPE (TREE_TYPE (objdecl)));
+      this_type = TREE_VALUE (TYPE_ARG_TYPES (method_type));
+      first_arg_type = TREE_CHAIN (TYPE_ARG_TYPES (method_type));
+      fn_type = method_type;
     }
   else
     {
@@ -3039,6 +3064,17 @@ build_object_contract_check_function (tree objdecl, bool is_post)
   tree *parms_tail = &parms;
   tree arg_types = NULL_TREE;
   tree *at_tail = &arg_types;
+  if (this_type)
+    {
+      tree this_parm = cp_build_parm_decl (NULL_TREE,
+					    get_identifier ("__this"),
+					    this_type);
+      DECL_ARTIFICIAL (this_parm) = true;
+      *parms_tail = this_parm;
+      parms_tail = &DECL_CHAIN (this_parm);
+      *at_tail = build_tree_list (NULL_TREE, this_type);
+      at_tail = &TREE_CHAIN (*at_tail);
+    }
   unsigned i = 0;
   for (tree t = first_arg_type; t && t != void_list_node;
        t = TREE_CHAIN (t), i++)

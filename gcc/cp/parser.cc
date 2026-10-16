@@ -26918,9 +26918,36 @@ cp_parser_direct_declarator (cp_parser* parser,
 
 		  tree save_ccp = current_class_ptr;
 		  tree save_ccr = current_class_ref;
+		  /* D4324: for a pointer-to-member-function declarator
+		     (e.g. 'void (C::*mfp)(int) pre<ctrl>(...)'), make
+		     'this' available in its own pre<>/post<> condition
+		     too, denoting whatever object the pointer will
+		     eventually be invoked through at each call site --
+		     independent of whatever class (if any) lexically
+		     contains this declaration itself, unlike the DR 1207
+		     injection just below, which is about a real member
+		     function's own enclosing class.  Harmless to do even
+		     when no contract specifier follows (restored a few
+		     lines down regardless), matching the existing memfn
+		     branch's own unconditional style.  */
+		  tree ptrmem_this_parm = NULL_TREE;
 		  if (memfn && !friend_p && !static_p)
 		    /* DR 1207: 'this' is in scope after the cv-quals.  */
 		    inject_this_parameter (current_class_type, cv_quals);
+		  else if (declarator && declarator->kind == cdk_ptrmem
+			   && CLASS_TYPE_P (declarator->u.pointer.class_type))
+		    /* CLASS_TYPE_P excludes a dependent qualifying type
+		       (e.g. a class template's own '_Ret (_Tp::*)()'
+		       parameter, _Tp a template parameter) -- this
+		       feature doesn't support templates at all (see
+		       maybe_attach_object_contract_specifiers's own
+		       comment), and build_this_parm/type_of_this_parm
+		       below would ICE on a non-class type regardless.  */
+		    {
+		      inject_this_parameter (declarator->u.pointer.class_type,
+					     cv_quals);
+		      ptrmem_this_parm = current_class_ptr;
+		    }
 
 		  /* If it turned out that this is e.g. a pointer to a
 		     function, we don't want to delay noexcept parsing.  */
@@ -26977,6 +27004,26 @@ cp_parser_direct_declarator (cp_parser* parser,
 		    contract_specifiers
 		      = cp_parser_function_contract_specifier_seq (parser,
 								    params);
+
+		  /* D4324: PTRMEM_THIS_PARM (if any 'this' reference in
+		     the condition resolved to it above) isn't one of
+		     PARAMS, so cp_parser_function_contract_specifier's own
+		     positional-parms bookkeeping (keyed off each contract's
+		     own CONTRACT_STATEMENT, set against PARAMS alone) never
+		     recorded it -- prepend it here so remap_object_contract
+		     (contracts.cc) can later substitute it onto
+		     build_object_contract_check_function's own matching
+		     leading '__this' parameter, the same way it already
+		     substitutes each ordinary positional parameter.  */
+		  if (ptrmem_this_parm)
+		    for (tree c = contract_specifiers; c; c = TREE_CHAIN (c))
+		      {
+			tree stmt = CONTRACT_STATEMENT (c);
+			tree existing = get_contract_positional_parms (stmt);
+			set_contract_positional_parms
+			  (stmt, tree_cons (NULL_TREE, ptrmem_this_parm,
+					    existing));
+		      }
 
 		  location_t parens_loc = make_location (parens_start,
 							 parens_start,

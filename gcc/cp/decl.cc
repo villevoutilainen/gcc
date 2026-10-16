@@ -14503,10 +14503,17 @@ complain_about_incompatible_declspecs (const char *name_a, location_t loc_a,
 
 /* D4324: attach a parsed pre<>/post<> contract-specifier list to a
    non-function DECL of callable type (a function pointer or
-   reference-to-function object or parameter, or a class-type callable
-   object with a single, non-overloaded, non-template operator() --
-   the declaration-level-contracts-on-callables extension, see
-   .claude/plans/stateless-jumping-shore.md).  TYPE is DECL's final
+   reference-to-function object or parameter, a pointer-to-member-
+   function object or parameter, or a class-type callable object with
+   a single, non-overloaded, non-template operator() -- the
+   declaration-level-contracts-on-callables extension, see
+   .claude/plans/stateless-jumping-shore.md).  For a pointer-to-
+   member-function, 'this' is implicitly available in the condition,
+   denoting whatever object the call will eventually be made through
+   at each call site -- see the cdk_ptrmem handling alongside DR
+   1207's own 'this' injection in cp_parser_direct_declarator, and
+   build_object_contract_check_function's TYPE_PTRMEMFUNC_P branch.
+   TYPE is DECL's final
    resolved type.  A contract specifier can only ever be parsed here
    because the declarator either contained a function shape somewhere
    (see cp_parser_direct_declarator's trailing-specifier-seq for any
@@ -14529,7 +14536,7 @@ maybe_attach_object_contract_specifiers (tree decl, tree type,
 
   location_t loc = EXPR_LOCATION (CONTRACT_STATEMENT (contract_specifiers));
 
-  if (TYPE_PTRFN_P (type) || TYPE_REFFN_P (type))
+  if (TYPE_PTRFN_P (type) || TYPE_REFFN_P (type) || TYPE_PTRMEMFUNC_P (type))
     ;
   else if (CLASS_TYPE_P (type))
     {

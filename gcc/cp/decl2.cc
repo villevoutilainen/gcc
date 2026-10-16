@@ -6431,8 +6431,36 @@ build_offset_ref_call_from_tree (tree fn, vec<tree, va_gc> **args,
 	struct B { void g(); };
 	void (B::*p)();
 	void B::g() { (this->*p)(); }  */
+  /* D4324: MFP_EXPR is FN's own second operand, captured before FN is
+     overwritten below with the resolved callee -- if it's a reference
+     to a decl carrying a declaration-level pre<>/post<> clause (see
+     maybe_attach_object_contract_specifiers, decl.cc), check it below
+     using this call's own actual arguments, alongside the untouched
+     real call -- see maybe_object_contract_check_call's own comment.
+     Unlike the function-pointer/class-callable cases it already
+     handles, OBJECT (the object this call is made through) is
+     available here, and 'vec_safe_insert (*args, 0, object_addr)'
+     just below already always runs regardless of any contract, so
+     *ARGS already lines up 1:1 with the check functions' own '__this,
+     __a0, __a1, ...' parameter list (built by build_object_contract_
+     check_function's TYPE_PTRMEMFUNC_P branch) with no extra
+     arg_offset needed -- the shared-evaluation/save_expr discipline
+     maybe_object_contract_check_call already applies to every element
+     of *ARGS covers OBJECT_ADDR for free, the same as any other
+     argument.  */
+  tree contract_callee = NULL_TREE;
   if (TREE_CODE (fn) == OFFSET_REF)
     {
+      /* A plain reference to a contracted decl still reaches here
+	 wrapped (e.g. a VIEW_CONVERT_EXPR, for the record-type rvalue
+	 read of a ptrmemfunc-typed VAR_DECL) -- reuse fnptr_contract_
+	 owner's own stripping (originally written for the separate
+	 -Wfunction-pointer-contract-mismatch warning) rather than
+	 duplicating it here.  */
+      tree mfp_expr = fnptr_contract_owner (TREE_OPERAND (fn, 1));
+      if (mfp_expr && get_fn_contract_specifiers (mfp_expr))
+	contract_callee = mfp_expr;
+
       tree object_addr = cp_build_addr_expr (object, complain);
       fn = TREE_OPERAND (fn, 1);
       fn = get_member_function_from_ptrfunc (&object_addr, fn,
@@ -6444,6 +6472,8 @@ build_offset_ref_call_from_tree (tree fn, vec<tree, va_gc> **args,
     expr = build_op_call (fn, args, complain);
   else
     expr = cp_build_function_call_vec (fn, args, complain);
+  if (contract_callee && expr != error_mark_node)
+    expr = maybe_object_contract_check_call (contract_callee, expr, *args);
   if (processing_template_decl && expr != error_mark_node)
     expr = build_min_non_dep_call_vec (expr, orig_fn, orig_args);
 
