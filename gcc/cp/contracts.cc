@@ -4687,6 +4687,7 @@ static GTY(()) tree symbolic_establish_bool_decl;
 static GTY(()) tree symbolic_check_bool_decl;
 static GTY(()) tree symbolic_establish_range_decl;
 static GTY(()) tree symbolic_check_range_decl;
+static GTY(()) tree symbolic_invalidate_object_decl;
 
 static tree
 get_symbolic_establish_bool_fn (location_t loc)
@@ -4714,6 +4715,37 @@ get_symbolic_check_range_fn (location_t loc)
 {
   return lookup_symbolic_runtime_fn (loc, &symbolic_check_range_decl,
 				      "__contracts_symbolic_check_range");
+}
+
+/* -fcontract-symbolic-runtime-checks: the fifth runtime entry point,
+   called once at the start of the destructor of any class for which
+   class_has_symbolic_predicate_p (decl.cc) is true -- see that
+   function's own comment, and begin_destructor_body's call to
+   maybe_add_symbolic_invalidation_stmt, for why and where.  */
+
+static tree
+get_symbolic_invalidate_object_fn (location_t loc)
+{
+  return lookup_symbolic_runtime_fn (loc, &symbolic_invalidate_object_decl,
+				      "__contracts_symbolic_invalidate_object");
+}
+
+/* Build and return a call to __contracts_symbolic_invalidate_object for
+   OBJ_PTR (an expression of pointer type, e.g. current_class_ptr), or
+   NULL_TREE if the runtime entry point can't be found (diagnosed by
+   get_symbolic_invalidate_object_fn itself).  Exported for
+   begin_destructor_body (decl.cc); every other symbolic-runtime-checks
+   call site lives entirely within this file.  */
+
+tree
+build_symbolic_invalidate_object_call (location_t loc, tree obj_ptr)
+{
+  tree fn = get_symbolic_invalidate_object_fn (loc);
+  if (fn == error_mark_node)
+    return NULL_TREE;
+
+  tree obj = fold_convert (ptr_type_node, obj_ptr);
+  return build_call_n (fn, 1, obj);
 }
 
 /* Return the address of a stable, comdat-folded, per-declaration opaque

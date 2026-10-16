@@ -520,6 +520,20 @@ namespace contracts
 					 bool has_lo, long long lo,
 					 bool has_hi, long long hi) noexcept;
 
+  // -fcontract-symbolic-runtime-checks: called once at the start of the
+  // destructor of any class that declares at least one symbolic member
+  // predicate (see class_has_symbolic_predicate_p / begin_destructor_body,
+  // gcc/cp/decl.cc), so that a fact established for OBJ doesn't survive
+  // OBJ's own lifetime. Without this, a later object that happens to
+  // reuse OBJ's address (most commonly automatic storage duration: two
+  // sequential, non-overlapping local objects at the same stack offset)
+  // would silently inherit a stale fact it never established itself.
+  // Removes every record keyed by OBJ regardless of which predicate (KEY)
+  // established it, since a single destructor call is the right place to
+  // invalidate all of them at once, not just the one the compiler happens
+  // to already know this class declares.
+  void __contracts_symbolic_invalidate_object(const void* obj) noexcept;
+
   // Mirrors gcc/cp/contracts.cc's declare_terminate_wrapper /
   // __tu_terminate_wrapper, the existing P2900 workaround for GCC
   // PR121936 (see -fcontracts-conservative-ipa). default_control's and

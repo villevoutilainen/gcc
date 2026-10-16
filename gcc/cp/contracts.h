@@ -919,6 +919,15 @@ extern bool oa_match_field_range_comparison
    to its own real decl -- see that function's own comment.  */
 extern tree oa_strip_symbolic_ptr_expr_public (tree ptr_expr);
 
+/* -fcontract-symbolic-runtime-checks: build a call to
+   __contracts_symbolic_invalidate_object for OBJ_PTR, or NULL_TREE if
+   the runtime entry point can't be found.  Used by begin_destructor_body
+   (decl.cc) together with class_has_symbolic_predicate_p (also decl.cc)
+   to clear a destroyed object's own symbolic records so a later object
+   reusing its address can't inherit them -- see contracts.cc's own
+   definition for the full rationale.  */
+extern tree build_symbolic_invalidate_object_call (location_t, tree);
+
 /* Recognize CONJUNCT as "RECEIVER.ACCESSOR () OP const" -- the call-
    range analogue of oa_match_field_range_comparison immediately above,
    for a call to a DECL_DECLARED_CONVEYOR_P accessor (e.g. 'i < v.size

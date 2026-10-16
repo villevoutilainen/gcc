@@ -21012,6 +21012,47 @@ maybe_return_this ()
     }
 }
 
+/* -fcontract-symbolic-runtime-checks: true if TYPE declares at least one
+   member function (static or non-static; an overloaded name is checked
+   in full via its own member-vec slot) with the 'symbolic' specifier.
+   Such a class's destructor needs to invalidate any runtime record of a
+   symbolic fact established for 'this' -- see
+   build_symbolic_invalidate_object_call's own comment (contracts.h) for
+   why, and this function's only caller, begin_destructor_body, for
+   where.  A symbolic predicate declared as a free function taking a
+   pointer to TYPE, rather than as TYPE's own member, isn't detected
+   here and so isn't invalidated -- a known, narrower-than-ideal scope
+   for now.  */
+
+static bool
+class_has_symbolic_predicate_p (tree type)
+{
+  type = TYPE_MAIN_VARIANT (type);
+  if (!CLASS_TYPE_P (type) || !COMPLETE_TYPE_P (type))
+    return false;
+
+  vec<tree, va_gc> *member_vec = CLASSTYPE_MEMBER_VEC (type);
+  if (!member_vec)
+    return false;
+
+  tree slot;
+  for (unsigned i = 0; vec_safe_iterate (member_vec, i, &slot); ++i)
+    {
+      if (!slot || !is_overloaded_fn (slot))
+	continue;
+      for (ovl_iterator iter (slot); iter; ++iter)
+	{
+	  tree fn = *iter;
+	  if (TREE_CODE (fn) == TEMPLATE_DECL)
+	    fn = DECL_TEMPLATE_RESULT (fn);
+	  if (fn && TREE_CODE (fn) == FUNCTION_DECL
+	      && DECL_DECLARED_SYMBOLIC_P (fn))
+	    return true;
+	}
+    }
+  return false;
+}
+
 /* Do all the processing for the beginning of a destructor; set up the
    vtable pointers and cleanups for bases and members.  */
 
@@ -21031,6 +21072,22 @@ begin_destructor_body (void)
 	 classes point to CURRENT_CLASS_TYPE's virtual function
 	 tables.  */
       initialize_vtbl_ptrs (current_class_ptr);
+
+      /* -fcontract-symbolic-runtime-checks: invalidate this object's own
+	 symbolic records (see class_has_symbolic_predicate_p's own
+	 comment) at the very start of destruction, the same point
+	 initialize_vtbl_ptrs above already treats as "this object is no
+	 longer of a more-derived type" -- a symbolic fact is a per-
+	 object, per-exact-type fact exactly the way a vptr is.  */
+      if (flag_contract_symbolic_runtime_checks
+	  && class_has_symbolic_predicate_p (current_class_type))
+	{
+	  tree call = build_symbolic_invalidate_object_call
+	    (input_location, current_class_ptr);
+	  if (call)
+	    finish_expr_stmt (call);
+	}
+
       finish_compound_stmt (compound_stmt);
 
       if (flag_lifetime_dse
