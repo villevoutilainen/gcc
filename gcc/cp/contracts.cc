@@ -3120,6 +3120,8 @@ tsubst_object_contract_specifiers (tree pattern_decl, tree new_decl,
 	     -- confirmed via direct testing (a dependent floating-point
 	     return type ICE'd in exactly this way before this fix).  */
 	  newvar = copy_node (oldvar);
+	  if (single_post_binder_p (oldvar))
+	    mark_single_post_binder (newvar);
 	  POSTCONDITION_IDENTIFIER (new_stmt) = newvar;
 	}
 
@@ -3558,6 +3560,36 @@ make_postcondition_variable (cp_expr id)
   return make_postcondition_variable (id, make_auto ());
 }
 
+/* D4324: postcondition result variables introduced by a single-name
+   binder list (post(n: cond)) on a declaration-level contract.  On a
+   callable-typed object declaration whose callable returns void and
+   takes exactly one parameter, such a name has no result to refer to;
+   it names that single parameter instead (see rebuild_postconditions).
+   A result name on a void function is ill-formed in C++26, so giving
+   that form a meaning cannot change the meaning of any valid program.
+   Recorded on the variable itself, since contract statements are
+   copied (remap_object_contract, tsubst_object_contract_specifiers)
+   before the return type is known, while the variable is either
+   shared or copied in a single place.  */
+static GTY(()) hash_set<tree> *single_post_binder_vars;
+
+void
+mark_single_post_binder (tree var)
+{
+  if (!var || var == error_mark_node)
+    return;
+  if (!single_post_binder_vars)
+    single_post_binder_vars = hash_set<tree>::create_ggc (8);
+  single_post_binder_vars->add (var);
+}
+
+bool
+single_post_binder_p (tree var)
+{
+  return (var && single_post_binder_vars
+	  && single_post_binder_vars->contains (var));
+}
+
 /* Check that the TYPE is valid for a named postcondition variable on
    function decl FNDECL. Emit a diagnostic if it is not.  Returns TRUE if
    the result is OK and false otherwise.  */
@@ -3643,23 +3675,51 @@ rebuild_postconditions (tree fndecl)
 			   || DECL_CONTEXT (oldvar) == fndecl);
       DECL_CONTEXT (oldvar) = fndecl;
 
+      /* D4324: on a callable-typed object declaration, a single-name
+	 binder with no result to name (a void callable) names the
+	 callable's single parameter instead -- see mark_single_post_
+	 binder.  FNDECL is then that declaration's synthesized check
+	 function, whose parameters are the callable's own (after an
+	 optional leading '__this').  */
+      tree binder_parm = NULL_TREE;
+      if (VOID_TYPE_P (type)
+	  && single_post_binder_p (oldvar)
+	  && get_orig_objdecl_for_check_fn (fndecl))
+	{
+	  unsigned nparms = 0;
+	  for (tree t = DECL_ARGUMENTS (fndecl); t; t = DECL_CHAIN (t))
+	    if (DECL_NAME (t) != get_identifier ("__this"))
+	      {
+		binder_parm = t;
+		nparms++;
+	      }
+	  if (nparms != 1)
+	    binder_parm = NULL_TREE;
+	}
+
       /* Check the postcondition variable.  */
       location_t loc = DECL_SOURCE_LOCATION (oldvar);
-      if (!check_postcondition_result (fndecl, type, loc))
+      if (!binder_parm && !check_postcondition_result (fndecl, type, loc))
 	{
 	  invalidate_contract (contract);
 	  continue;
 	}
 
-      /* "Instantiate" the result variable using the known type.  */
-      tree newvar = copy_node (oldvar);
-      TREE_TYPE (newvar) = type;
+      /* "Instantiate" the result variable using the known type, or
+	 resolve it to the parameter it names.  */
+      tree newvar = NULL_TREE;
+      if (!binder_parm)
+	{
+	  newvar = copy_node (oldvar);
+	  TREE_TYPE (newvar) = type;
+	}
 
       /* Make parameters and result available for substitution.  */
       local_specialization_stack stack (lss_copy);
       for (tree t = DECL_ARGUMENTS (fndecl); t != NULL_TREE; t = TREE_CHAIN (t))
 	register_local_identity (t);
-      register_local_specialization (newvar, oldvar);
+      register_local_specialization (binder_parm ? binder_parm : newvar,
+				     oldvar);
 
       begin_scope (sk_contract, fndecl);
       bool old_pc = processing_postcondition;

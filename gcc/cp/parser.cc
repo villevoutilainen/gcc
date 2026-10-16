@@ -34657,6 +34657,7 @@ cp_parser_late_object_contracts (cp_parser *parser, tree decl)
       tree r_ident = NULL_TREE;
       if (TREE_CODE (contract) == POSTCONDITION_STMT)
 	r_ident = POSTCONDITION_IDENTIFIER (contract);
+      bool binder_names_parm_p = false;
 
       location_t r_loc = UNKNOWN_LOCATION;
       if (r_ident)
@@ -34665,7 +34666,19 @@ cp_parser_late_object_contracts (cp_parser *parser, tree decl)
 	  r_ident = tree_strip_any_location_wrapper (r_ident);
 	  if (r_loc == UNKNOWN_LOCATION)
 	    r_loc = cp_expr_location (contract);
-	  if (!ret_dependent
+	  /* A lone binder name on a void callable with a single parameter
+	     names that parameter, not a result (see mark_single_post_
+	     binder); leave it for rebuild_postconditions to resolve.  */
+	  if (VOID_TYPE_P (ret_type))
+	    {
+	      unsigned nparms = 0;
+	      for (tree p = get_contract_positional_parms (contract); p;
+		   p = TREE_CHAIN (p))
+		if (DECL_NAME (TREE_VALUE (p)) != this_identifier)
+		  nparms++;
+	      binder_names_parm_p = nparms == 1;
+	    }
+	  if (!ret_dependent && !binder_names_parm_p
 	      && !object_contract_check_postcondition_result (ret_type, r_loc))
 	    {
 	      invalidate_contract (contract);
@@ -34703,16 +34716,21 @@ cp_parser_late_object_contracts (cp_parser *parser, tree decl)
       bool old_pc = processing_postcondition;
       processing_postcondition = POSTCONDITION_P (contract);
       tree result = NULL_TREE;
+      bool dependent_result_p = ret_dependent || binder_names_parm_p;
       if (r_ident)
 	{
 	  cp_expr result_id (r_ident, r_loc);
-	  result = make_postcondition_variable (result_id, ret_type);
-	  if (ret_dependent)
+	  result = (binder_names_parm_p
+		    ? make_postcondition_variable (result_id)
+		    : make_postcondition_variable (result_id, ret_type));
+	  /* Deferred clauses only ever have a single-name binder list.  */
+	  mark_single_post_binder (result);
+	  if (dependent_result_p)
 	    ++processing_template_decl;
 	}
       cp_expr parsed_condition = cp_parser_conditional_expression (parser);
       update_late_contract (contract, result, parsed_condition);
-      if (r_ident && ret_dependent)
+      if (r_ident && dependent_result_p)
 	--processing_template_decl;
       processing_postcondition = old_pc;
       gcc_checking_assert (scope_chain && scope_chain->bindings
@@ -35353,6 +35371,11 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
 		{
 		  /* Build a fake variable for the result identifier.  */
 		  result = make_postcondition_variable (binder_ids[0]);
+		  /* A lone name may instead name the single parameter of a
+		     void callable, decided once the return type is known
+		     (see rebuild_postconditions).  */
+		  if (n_binders == 1)
+		    mark_single_post_binder (result);
 		  i = 1;
 		}
 	      tree p = params;

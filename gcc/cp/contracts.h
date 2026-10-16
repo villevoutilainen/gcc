@@ -1100,6 +1100,8 @@ extern void maybe_warn_fnptr_contract_mismatch	(location_t, tree, tree);
 
 extern tree make_postcondition_variable		(cp_expr);
 extern tree make_postcondition_variable		(cp_expr, tree);
+extern void mark_single_post_binder		(tree);
+extern bool single_post_binder_p		(tree);
 extern void check_param_in_postcondition	(tree, location_t);
 extern void check_postconditions_in_redecl	(tree, tree);
 extern void maybe_update_postconditions		(tree);

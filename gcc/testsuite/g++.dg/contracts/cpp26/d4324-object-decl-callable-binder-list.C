@@ -29,9 +29,10 @@ void (*fp4) (int) pre<> (x: x > 0);
 // post's own single-name binder keeps meaning "the result", exactly as
 // it always has, regardless of arity -- required for backward
 // compatibility with existing single-parameter, non-void functions
-// using post(r: cond) (see vaargs.C).  This is *not* a way to name a
-// single otherwise-unnamed parameter with no result; that combination
-// isn't expressible via post's binder list in this increment.
+// using post(r: cond) (see vaargs.C).  Only when there is no result to
+// name -- a void callable with exactly one parameter -- does the lone
+// name name that parameter instead (see
+// d4324-object-decl-callable-post-binder-void-param.C).
 int (*fp5) (int) post<> (r: r > 0);
 
 // A function parameter of function-pointer type, from the plan's own
