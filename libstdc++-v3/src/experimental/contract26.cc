@@ -251,6 +251,14 @@ __contracts_symbolic_check_range(const void* key, const void* obj,
   return true;
 }
 
+void
+__contracts_symbolic_invalidate_object(const void* obj) noexcept
+{
+  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  std::erase_if(symbolic_records,
+		[obj](const auto& entry) { return entry.first.obj == obj; });
+}
+
 }
 }
 
