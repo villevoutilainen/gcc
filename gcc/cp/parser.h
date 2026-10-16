@@ -185,6 +185,16 @@ struct GTY(()) cp_unparsed_functions_entry {
 
   /* Functions with contract attributes that require post-processing.  */
   vec<tree, va_gc> *contracts;
+
+  /* D4324 + templates: non-FUNCTION_DECL (VAR_DECL/FIELD_DECL)
+     callable-typed object decls with declaration-level contract
+     specifiers that require post-processing -- see
+     maybe_attach_object_contract_specifiers (decl.cc).  Can't share
+     CONTRACTS above: its own consumer (cp_parser_late_contracts)
+     assumes a real FUNCTION_DECL throughout (DECL_ARGUMENTS,
+     TYPE_ARG_TYPES (TREE_TYPE (decl)) being directly a function
+     type).  */
+  vec<tree, va_gc> *object_contracts;
 };
 
 

@@ -17487,6 +17487,15 @@ grokdeclarator (const cp_declarator *declarator,
 			    staticp ? false : inlinep, friendp,
 			    raises != NULL_TREE,
 			    declspecs->locations);
+
+	    /* D4324: unlike the PARM and "ordinary variable" branches
+	       above/below, this FIELD branch (a static OR non-static
+	       data member) never attached a declaration-level pre<>/
+	       post<> contract specifier to DECL at all -- CONTRACT_
+	       SPECIFIERS was parsed (cp_parser_member_declaration's own
+	       dedicated hook) but simply never consulted here.  */
+	    maybe_attach_object_contract_specifiers (decl, type,
+						     contract_specifiers);
 	  }
       }
     else if (FUNC_OR_METHOD_TYPE_P (type))

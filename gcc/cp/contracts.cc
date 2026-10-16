@@ -2982,6 +2982,186 @@ remap_object_contract (tree contract, tree dst_parms)
   return copy;
 }
 
+/* D4324 + templates: PATTERN_DECL is a VAR_DECL/PARM_DECL/FIELD_DECL
+   template pattern (TYPE_PTRFN_P/TYPE_REFFN_P/TYPE_PTRMEMFUNC_P)
+   carrying its own declaration-level pre<>/post<> contract-specifiers
+   (get_fn_contract_specifiers (PATTERN_DECL) is non-NULL -- checked by
+   the caller before this is called); NEW_DECL is its instantiation,
+   already carrying a fully substituted, concrete TREE_TYPE.  ARGS and
+   COMPLAIN are tsubst_decl's own -- the same ones already used to
+   substitute TREE_TYPE (PATTERN_DECL) into TREE_TYPE (NEW_DECL) at the
+   corresponding point in each of its VAR_DECL/PARM_DECL/FIELD_DECL
+   cases, which is what makes this symmetric with that substitution.
+
+   Builds NEW_DECL's own contract-specifier list and installs it via
+   set_fn_contract_specifiers, mirroring tsubst_contract's own
+   structure (pt.cc) for an ordinary FUNCTION_DECL, adapted for a
+   callable-typed *object* decl: there is no real DECL_ARGUMENTS chain
+   here (register_parameter_specializations doesn't apply -- these
+   parameters were never any FUNCTION_DECL's own), no DECL_IOBJ_
+   MEMBER_FUNCTION_P 'this' to inject (this feature's own synthesized
+   'this', for a TYPE_PTRMEMFUNC_P decl, is instead just another
+   positional-parameter substitution below, via get_contract_
+   positional_parms -- see the cdk_ptrmem 'this'-injection in
+   cp_parser_direct_declarator, parser.cc), and no contract_side_of
+   (which assumes a real FUNCTION_DECL via LANG_DECL_FN_CHECK) -- an
+   object-decl's own check always runs as ccs_definition, matching
+   every other parse point for this feature.  */
+
+void
+tsubst_object_contract_specifiers (tree pattern_decl, tree new_decl,
+				    tree args, tsubst_flags_t complain)
+{
+  tree specs = get_fn_contract_specifiers (pattern_decl);
+  gcc_checking_assert (specs);
+
+  tree this_type, ret_type;
+  tree first_arg_type
+    = object_contract_callable_pieces (TREE_TYPE (new_decl), &this_type,
+					&ret_type);
+  bool auto_p = type_uses_auto (ret_type);
+
+  /* Fresh positional parameter decls matching NEW_DECL's own, now-
+     concrete, callable type -- built once and shared across every
+     contract-spec entry below (they all describe the same callable
+     signature).  No name needed: these only ever serve as (1)
+     substitution targets right below, and (2) NEW_DECL's own "parsed
+     against" list for remap_object_contract/build_object_contract_
+     check_function once NEW_DECL's conditions are concrete and
+     non-dependent.  */
+  tree new_positional_parms = NULL_TREE;
+  tree *parms_tail = &new_positional_parms;
+  if (this_type)
+    {
+      tree this_parm = cp_build_parm_decl (NULL_TREE, this_identifier,
+					    this_type);
+      DECL_ARTIFICIAL (this_parm) = true;
+      *parms_tail = build_tree_list (NULL_TREE, this_parm);
+      parms_tail = &TREE_CHAIN (*parms_tail);
+    }
+  for (tree t = first_arg_type; t && t != void_list_node; t = TREE_CHAIN (t))
+    {
+      tree parm = cp_build_parm_decl (NULL_TREE, NULL_TREE, TREE_VALUE (t));
+      DECL_ARTIFICIAL (parm) = true;
+      *parms_tail = build_tree_list (NULL_TREE, parm);
+      parms_tail = &TREE_CHAIN (*parms_tail);
+    }
+
+  tree new_contracts = NULL_TREE;
+  tree *contracts_tail = &new_contracts;
+  for (tree c = specs; c; c = TREE_CHAIN (c))
+    {
+      tree orig_stmt = CONTRACT_STATEMENT (c);
+      tree orig_positional_parms = get_contract_positional_parms (orig_stmt);
+
+      tree copy = copy_node (c);
+      tree new_stmt = copy_node (orig_stmt);
+      TREE_VALUE (copy) = build_tree_list (TREE_PURPOSE (TREE_VALUE (c)),
+					    new_stmt);
+
+      /* Map each PATTERN positional parameter (and its own synthesized
+	 'this', if any -- already included in ORIG_POSITIONAL_PARMS)
+	 onto the corresponding fresh instantiation parameter.
+	 register_local_specialization, not register_parameter_
+	 specializations: these were never real DECL_ARGUMENTS of any
+	 FUNCTION_DECL.  */
+      local_specialization_stack lss (lss_copy);
+      tree np = new_positional_parms;
+      for (tree op = orig_positional_parms; op;
+	   op = TREE_CHAIN (op), np = TREE_CHAIN (np))
+	{
+	  gcc_checking_assert (np);
+	  register_local_specialization (TREE_VALUE (np), TREE_VALUE (op));
+	}
+
+      contract_check_side side = ccs_definition;
+
+      tree ctrl = CONTRACT_CONTROL_OBJECT (orig_stmt);
+      if (ctrl)
+	ctrl = tsubst_expr (ctrl, args, complain, pattern_decl);
+      CONTRACT_CONTROL_OBJECT (new_stmt) = ctrl;
+
+      auto constify_ovr
+	= make_temp_override (contract_condition_constify_p,
+			       flag_contract_control_objects
+			       ? contract_control_constifies (ctrl, side)
+			       : true);
+      auto conveyor_ovr
+	= make_temp_override (contract_condition_conveyor_p,
+			       flag_contract_control_objects
+			       && contract_control_conveyor_like (ctrl, side));
+
+      tree oldvar = NULL_TREE, newvar = NULL_TREE;
+      if (POSTCONDITION_P (orig_stmt) && POSTCONDITION_IDENTIFIER (orig_stmt))
+	{
+	  oldvar = POSTCONDITION_IDENTIFIER (orig_stmt);
+	  if (oldvar == error_mark_node)
+	    {
+	      *contracts_tail = invalidate_contract (copy);
+	      contracts_tail = &TREE_CHAIN (*contracts_tail);
+	      continue;
+	    }
+	  /* Deliberately NOT retyped (and NOT validated via
+	     object_contract_check_postcondition_result) here -- NEWVAR
+	     stays whatever type OLDVAR already had (ordinarily auto, per
+	     make_postcondition_variable's own parse-time default).
+	     build_object_contract_check_function's own, subsequent
+	     rebuild_postconditions call (run once NEW_DECL's check
+	     function actually exists) is the ONE place this feature,
+	     template or not, ever retypes and validates a postcondition's
+	     own result identifier -- see its own comment.  Retyping it
+	     here too would make this function's own CONDITION
+	     substitution below fully resolve (and possibly constant-fold
+	     into GENERIC tree codes, e.g. FLOAT_EXPR for an int-literal-
+	     to-floating-point conversion) the comparison against a
+	     concrete type, which rebuild_postconditions's own later
+	     tsubst_expr re-walk isn't designed to re-walk a second time
+	     -- confirmed via direct testing (a dependent floating-point
+	     return type ICE'd in exactly this way before this fix).  */
+	  newvar = copy_node (oldvar);
+	  POSTCONDITION_IDENTIFIER (new_stmt) = newvar;
+	}
+
+      begin_scope (sk_contract, new_decl);
+      bool old_pc = processing_postcondition;
+      processing_postcondition = POSTCONDITION_P (orig_stmt);
+      if (auto_p || newvar)
+	++processing_template_decl;
+      if (newvar)
+	register_local_specialization (newvar, oldvar);
+
+      location_t cond_l = EXPR_LOCATION (CONTRACT_CONDITION (orig_stmt));
+      tree cond_t
+	= tree_strip_any_location_wrapper (CONTRACT_CONDITION (orig_stmt));
+      cond_t = tsubst_expr (cond_t, args, complain, pattern_decl);
+      cp_expr new_condition (cond_t, cond_l);
+      CONTRACT_CONDITION (new_stmt) = finish_contract_condition (new_condition);
+
+      gcc_checking_assert
+	(!type_dependent_expression_p (CONTRACT_EVALUATION_SEMANTIC (new_stmt))
+	 && !type_dependent_expression_p (CONTRACT_ASSERTION_KIND (new_stmt))
+	 && !type_dependent_expression_p (CONTRACT_COMMENT (new_stmt)));
+
+      if (auto_p || newvar)
+	--processing_template_decl;
+      processing_postcondition = old_pc;
+      gcc_checking_assert (scope_chain && scope_chain->bindings
+			   && scope_chain->bindings->kind == sk_contract);
+      pop_bindings_and_leave_scope ();
+
+      /* So the EXISTING, unmodified remap_object_contract/
+	 build_object_contract_check_function machinery continues to
+	 work correctly later, once NEW_DECL is used at a real call
+	 site, operating on concrete, non-dependent decls by then.  */
+      set_contract_positional_parms (new_stmt, new_positional_parms);
+
+      *contracts_tail = copy;
+      contracts_tail = &TREE_CHAIN (*contracts_tail);
+    }
+
+  set_fn_contract_specifiers (new_decl, new_contracts);
+}
+
 /* Map from a callable-typed object decl to its (cached) pre-check or
    post-check function -- see build_object_contract_check_function.  */
 
@@ -3000,8 +3180,20 @@ static GTY(()) hash_map<tree, tree> *object_post_check_fn_map;
    finish_function) builds the actual check.  Returns NULL_TREE if
    OBJDECL has no contract of the requested kind.  */
 
-static tree
-build_object_contract_check_function (tree objdecl, bool is_post)
+/* Resolve TYPE (a callable-typed object decl's own TREE_TYPE --
+   TYPE_PTRFN_P, TYPE_REFFN_P, TYPE_PTRMEMFUNC_P, or CLASS_TYPE_P) to
+   its user-parameter TYPE_ARG_TYPES list (any implicit leading
+   'this'/object argument already stripped) and its return type, via
+   *RET_TYPE_OUT.  For a TYPE_PTRMEMFUNC_P TYPE, *THIS_TYPE_OUT
+   receives the leading 'this' type (the pointer-to-[cv-qualified]-
+   class type callers synthesize a parameter for); NULL_TREE for every
+   other shape.  Shared by build_object_contract_check_function (this
+   file) and tsubst_object_contract_specifiers/cp_parser_late_object_
+   contracts (D4324 + templates), hence extern rather than static.  */
+
+tree
+object_contract_callable_pieces (tree type, tree *this_type_out,
+				  tree *ret_type_out)
 {
   /* A class-type callable's own operator() has a METHOD_TYPE (an
      implicit leading 'this' entry in TYPE_ARG_TYPES), unlike a
@@ -3015,33 +3207,43 @@ build_object_contract_check_function (tree objdecl, bool is_post)
   tree first_arg_type;
   /* D4324: for a pointer-to-member-function, one extra leading
      '__this' parameter (OBJDECL's own declared object type, i.e. the
-     'A' in 'R (A::*)(...)') is prepended below -- this is the one
-     structural difference from every other branch here, since this is
-     the only callable shape whose own declaration-level condition can
-     reference an object at all (see maybe_attach_object_contract_
-     specifiers, decl.cc, and the cdk_ptrmem 'this'-injection in
-     cp_parser_direct_declarator, parser.cc).  */
+     'A' in 'R (A::*)(...)') is prepended by callers below -- this is
+     the one structural difference from every other branch here, since
+     this is the only callable shape whose own declaration-level
+     condition can reference an object at all (see maybe_attach_
+     object_contract_specifiers, decl.cc, and the cdk_ptrmem 'this'-
+     injection in cp_parser_direct_declarator, parser.cc).  */
   tree this_type = NULL_TREE;
-  if (CLASS_TYPE_P (TREE_TYPE (objdecl)))
+  if (CLASS_TYPE_P (type))
     {
-      tree operator_fn = resolve_single_call_operator (TREE_TYPE (objdecl));
+      tree operator_fn = resolve_single_call_operator (type);
       fn_type = TREE_TYPE (operator_fn);
       first_arg_type = FUNCTION_FIRST_USER_PARMTYPE (operator_fn);
     }
-  else if (TYPE_PTRMEMFUNC_P (TREE_TYPE (objdecl)))
+  else if (TYPE_PTRMEMFUNC_P (type))
     {
-      tree method_type
-	= TREE_TYPE (TYPE_PTRMEMFUNC_FN_TYPE (TREE_TYPE (objdecl)));
+      tree method_type = TREE_TYPE (TYPE_PTRMEMFUNC_FN_TYPE (type));
       this_type = TREE_VALUE (TYPE_ARG_TYPES (method_type));
       first_arg_type = TREE_CHAIN (TYPE_ARG_TYPES (method_type));
       fn_type = method_type;
     }
   else
     {
-      fn_type = TREE_TYPE (TREE_TYPE (objdecl));
+      fn_type = TREE_TYPE (type);
       first_arg_type = TYPE_ARG_TYPES (fn_type);
     }
-  tree ret_type = TREE_TYPE (fn_type);
+  *this_type_out = this_type;
+  *ret_type_out = TREE_TYPE (fn_type);
+  return first_arg_type;
+}
+
+static tree
+build_object_contract_check_function (tree objdecl, bool is_post)
+{
+  tree this_type, ret_type;
+  tree first_arg_type
+    = object_contract_callable_pieces (TREE_TYPE (objdecl), &this_type,
+					&ret_type);
   bool has_result = is_post && !VOID_TYPE_P (ret_type);
   location_t loc = DECL_SOURCE_LOCATION (objdecl);
 
@@ -3377,6 +3579,27 @@ check_postcondition_result (tree fndecl, tree type, location_t loc)
       return false;
     }
 
+  return true;
+}
+
+/* D4324 + templates: the same check as check_postcondition_result's own
+   VOID_TYPE_P case, for a declaration-level contract on a callable-
+   typed OBJECT decl (VAR_DECL/PARM_DECL/FIELD_DECL, never a FUNCTION_
+   DECL) -- check_postcondition_result itself can't be reused here, as
+   it unconditionally tree-checks its first argument as a FUNCTION_DECL
+   (DECL_CONSTRUCTOR_P/DECL_DESTRUCTOR_P), a concept this feature's
+   callable-typed objects have no equivalent of at all (a function
+   pointer/reference/pointer-to-member-function/class-type-callable can
+   never itself be a constructor or destructor).  */
+
+bool
+object_contract_check_postcondition_result (tree ret_type, location_t loc)
+{
+  if (VOID_TYPE_P (ret_type))
+    {
+      error_at (loc, "function does not return a value to test");
+      return false;
+    }
   return true;
 }
 

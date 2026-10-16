@@ -2507,12 +2507,14 @@ cp_parser_context_new (cp_parser_context* next)
   parser->unparsed_queues->last ().noexcepts
 #define unparsed_contracts \
   parser->unparsed_queues->last ().contracts
+#define unparsed_object_contracts \
+  parser->unparsed_queues->last ().object_contracts
 
 static void
 push_unparsed_function_queues (cp_parser *parser)
 {
   cp_unparsed_functions_entry e
-      = { NULL, make_tree_vector (), NULL, NULL, NULL };
+      = { NULL, make_tree_vector (), NULL, NULL, NULL, NULL };
   vec_safe_push (parser->unparsed_queues, e);
 }
 
@@ -3024,6 +3026,8 @@ static tree cp_parser_function_contract_specifier_seq
 static tree cp_parser_maybe_class_contract_specifier_seq
   (cp_parser *, tree);
 static void cp_parser_late_contracts
+  (cp_parser *, tree);
+static void cp_parser_late_object_contracts
   (cp_parser *, tree);
 
 enum pragma_context {
@@ -26931,22 +26935,76 @@ cp_parser_direct_declarator (cp_parser* parser,
 		     lines down regardless), matching the existing memfn
 		     branch's own unconditional style.  */
 		  tree ptrmem_this_parm = NULL_TREE;
-		  if (memfn && !friend_p && !static_p)
-		    /* DR 1207: 'this' is in scope after the cv-quals.  */
+		  if (memfn && !friend_p && !static_p
+		      && (declarator == NULL || declarator->kind == cdk_id))
+		    /* DR 1207: 'this' is in scope after the cv-quals.
+		       The declarator->kind == cdk_id check (matching the
+		       identical test used a few lines down for an
+		       unrelated purpose) excludes a ptrmemfunc-typed
+		       declarator that merely happens to be a class
+		       MEMBER (a data member, e.g. 'int (C::*mf)(int x);'
+		       as a non-static field) -- MEMFN alone doesn't
+		       distinguish "this declarator names a real member
+		       function" from "this declarator is itself a class
+		       member of pointer-to-member-function type," and
+		       conflating the two injected the wrong 'this' (the
+		       *enclosing* class, not the pointee class C) for the
+		       latter -- confirmed as a real, pre-existing bug
+		       (not template-specific) via direct testing of a
+		       non-static ptrmemfunc-typed data member's own
+		       contract.  */
 		    inject_this_parameter (current_class_type, cv_quals);
-		  else if (declarator && declarator->kind == cdk_ptrmem
-			   && CLASS_TYPE_P (declarator->u.pointer.class_type))
-		    /* CLASS_TYPE_P excludes a dependent qualifying type
-		       (e.g. a class template's own '_Ret (_Tp::*)()'
-		       parameter, _Tp a template parameter) -- this
-		       feature doesn't support templates at all (see
-		       maybe_attach_object_contract_specifiers's own
-		       comment), and build_this_parm/type_of_this_parm
-		       below would ICE on a non-class type regardless.  */
+		  else if (declarator && declarator->kind == cdk_ptrmem)
 		    {
-		      inject_this_parameter (declarator->u.pointer.class_type,
-					     cv_quals);
-		      ptrmem_this_parm = current_class_ptr;
+		      tree mem_class_type = declarator->u.pointer.class_type;
+		      if (CLASS_TYPE_P (mem_class_type))
+			{
+			  inject_this_parameter (mem_class_type, cv_quals);
+			  ptrmem_this_parm = current_class_ptr;
+			}
+		      else if (dependent_type_p (mem_class_type))
+			/* D4324 + templates: the qualifying class is
+			   dependent (e.g. a class template's own 'R
+			   (_Tp::*)()' parameter, _Tp a template
+			   parameter).  inject_this_parameter/
+			   build_this_parm's non-class branch assumes it
+			   was handed an already-built METHOD_TYPE
+			   (type_of_this_parm's own gcc_assert) -- the
+			   wrong branch for this caller, which only ever
+			   has the bare (possibly dependent) qualifying
+			   class type.  Build the qualified pointer type
+			   and PARM_DECL directly instead, mirroring
+			   build_this_parm's own CLASS_TYPE_P branch and
+			   inject_this_parameter's own current_class_ptr/
+			   current_class_ref bookkeeping, just without
+			   requiring CLASS_TYPE_P to hold yet --
+			   cp_build_qualified_type/build_pointer_type/
+			   cp_build_fold_indirect_ref all work fine on a
+			   dependent type already, the same way an
+			   ordinary 'T*' does throughout any other
+			   template.  */
+			{
+			  tree this_type
+			    = cp_build_qualified_type (mem_class_type,
+						       cv_quals
+						       & ~TYPE_QUAL_RESTRICT);
+			  this_type = build_pointer_type (this_type);
+			  cp_cv_quals this_quals
+			    = (cv_quals & TYPE_QUAL_RESTRICT)
+			      | TYPE_QUAL_CONST;
+			  this_type
+			    = cp_build_qualified_type (this_type, this_quals);
+			  tree this_parm
+			    = build_artificial_parm (NULL_TREE,
+						     this_identifier,
+						     this_type);
+			  cp_apply_type_quals_to_decl (this_quals, this_parm);
+			  current_class_ptr = NULL_TREE;
+			  current_class_ref
+			    = cp_build_fold_indirect_ref (this_parm);
+			  current_class_ptr = this_parm;
+			  ptrmem_this_parm = current_class_ptr;
+			}
 		    }
 
 		  /* If it turned out that this is e.g. a pointer to a
@@ -30446,6 +30504,64 @@ cp_parser_class_specifier (cp_parser* parser)
 	}
       vec_safe_truncate (unparsed_contracts, 0);
 
+      /* D4324 + templates: now contract specifiers on callable-typed
+	 object members (see maybe_attach_object_contract_specifiers,
+	 decl.cc) -- DECL here is never a FUNCTION_DECL, so this can't
+	 reuse inject_parm_decls/cp_parser_late_contracts above.  */
+      FOR_EACH_VEC_SAFE_ELT (unparsed_object_contracts, ix, decl)
+	{
+	  tree ctx = DECL_CONTEXT (decl);
+	  switch_to_class (ctx);
+
+	  /* Make sure that any template parameters are in scope.  */
+	  maybe_begin_member_template_processing (decl);
+
+	  current_class_ptr = current_class_ref = NULL_TREE;
+	  begin_scope (sk_function_parms, NULL_TREE);
+
+	  /* Re-push, BY IDENTITY (not fresh copies), the exact
+	     positional-parameter (and optional synthesized 'this')
+	     decls this declarator's own condition(s) were originally
+	     parsed against (see cp_parser_function_contract_specifier's
+	     deferred_p branch and the cdk_ptrmem 'this'-injection in
+	     cp_parser_direct_declarator) -- the reparsed condition must
+	     resolve names against these same decl objects, since get_
+	     contract_positional_parms already holds them for later use
+	     by remap_object_contract/tsubst_object_contract_specifiers.
+	     Every contract on DECL shares the same positional-parms
+	     list (they all come from the same declarator's own
+	     parameter-declaration-clause), so the first one suffices.  */
+	  tree first_contract = get_fn_contract_specifiers (decl);
+	  tree positional_parms
+	    = get_contract_positional_parms (CONTRACT_STATEMENT (first_contract));
+	  for (tree p = positional_parms; p; p = TREE_CHAIN (p))
+	    {
+	      tree parm = TREE_VALUE (p);
+	      if (DECL_NAME (parm))
+		pushdecl (parm);
+	      if (DECL_NAME (parm) == this_identifier)
+		{
+		  /* cp_build_indirect_ref_1 special-cases dereferencing
+		     CURRENT_CLASS_PTR itself by just returning the
+		     *existing* CURRENT_CLASS_REF -- so CURRENT_CLASS_PTR
+		     must still be NULL (or something else) when this
+		     computes the real INDIRECT_REF, matching
+		     inject_this_parameter's own ordering exactly.  */
+		  current_class_ref = cp_build_fold_indirect_ref (parm);
+		  current_class_ptr = parm;
+		}
+	    }
+
+	  cp_parser_late_object_contracts (parser, decl);
+
+	  pop_bindings_and_leave_scope ();
+	  current_class_ptr = current_class_ref = NULL_TREE;
+
+	  /* Remove any template parameters from the symbol table.  */
+	  maybe_end_member_template_processing ();
+	}
+      vec_safe_truncate (unparsed_object_contracts, 0);
+
       current_class_ptr = NULL_TREE;
       current_class_ref = NULL_TREE;
       switch_to_class (NULL_TREE);
@@ -32046,6 +32162,18 @@ cp_parser_member_declaration (cp_parser* parser)
 		       && DECL_INITIAL (decl))
 		/* Add DECL to the queue of NSDMI to be parsed later.  */
 		vec_safe_push (unparsed_nsdmis, decl);
+	      else if (DECL_HAS_CONTRACTS_P (decl))
+		/* D4324 + templates: a static/non-static data member of
+		   callable type whose own pre<>/post<> clause was
+		   necessarily deferred (DEFERRED_PARSE -- see
+		   cp_parser_function_contract_specifier's deferred_p)
+		   needs the same late-reparse treatment an ordinary
+		   member FUNCTION_DECL gets via cp_parser_save_default_
+		   args/unparsed_contracts, but DECL here is never a
+		   FUNCTION_DECL (that function assumes DECL_ARGUMENTS/
+		   TYPE_ARG_TYPES throughout) -- queue it on its own
+		   sibling worklist instead.  */
+		vec_safe_push (unparsed_object_contracts, decl);
 	    }
 
 	  if (assume_semicolon)
@@ -34484,6 +34612,126 @@ cp_parser_late_contracts (cp_parser *parser, tree fndecl)
   update_fn_contract_specifiers (fndecl, new_contracts);
 }
 
+/* D4324 + templates: parse deferred (DEFERRED_PARSE) contract
+   conditions on DECL, a callable-typed object decl (VAR_DECL/
+   PARM_DECL/FIELD_DECL, never a FUNCTION_DECL -- see maybe_attach_
+   object_contract_specifiers, decl.cc) whose pre<>/post<> clause(s)
+   were necessarily deferred because DECL is an in-class member.  A
+   trimmed sibling of cp_parser_late_contracts/cp_parser_late_contract_
+   condition above: those assume a real FUNCTION_DECL throughout
+   (DECL_ARGUMENTS, TREE_TYPE (TREE_TYPE (fn)) directly being the
+   return type, DECL_CONSTRUCTOR_P/DECL_DESTRUCTOR_P, contract_side_of
+   needing LANG_DECL_FN_CHECK) -- none of that applies here.  The
+   caller (cp_parser_class_specifier) has already pushed DECL's own
+   positional-parameter (and optional synthesized 'this') decls into
+   scope, by name, matching what cp_parser_function_contract_specifier
+   would have pushed had this not been deferred.
+
+   DECL's own callable type may still be template-dependent here (a
+   class template's own member, reparsed right after its pattern class
+   body completes, before any instantiation) -- in that case the
+   resulting CONTRACT_CONDITION is left as a genuinely dependent tree,
+   exactly like any other dependent expression, for tsubst_object_
+   contract_specifiers (contracts.cc) to resolve later, per
+   instantiation, via tsubst_decl.  */
+
+static void
+cp_parser_late_object_contracts (cp_parser *parser, tree decl)
+{
+  tree new_contracts = NULL_TREE;
+  tree old_contracts = get_fn_contract_specifiers (decl);
+
+  if (old_contracts == NULL_TREE || !contract_any_deferred_p (old_contracts))
+    return;
+
+  tree this_type, ret_type;
+  object_contract_callable_pieces (TREE_TYPE (decl), &this_type, &ret_type);
+  bool ret_dependent = dependent_type_p (ret_type);
+
+  for (; old_contracts; old_contracts = TREE_CHAIN (old_contracts))
+    {
+      tree contract = TREE_VALUE (TREE_VALUE (old_contracts));
+      tree condition = CONTRACT_CONDITION (contract);
+      gcc_checking_assert (TREE_CODE (condition) == DEFERRED_PARSE);
+
+      tree r_ident = NULL_TREE;
+      if (TREE_CODE (contract) == POSTCONDITION_STMT)
+	r_ident = POSTCONDITION_IDENTIFIER (contract);
+
+      location_t r_loc = UNKNOWN_LOCATION;
+      if (r_ident)
+	{
+	  r_loc = EXPR_LOCATION (r_ident);
+	  r_ident = tree_strip_any_location_wrapper (r_ident);
+	  if (r_loc == UNKNOWN_LOCATION)
+	    r_loc = cp_expr_location (contract);
+	  if (!ret_dependent
+	      && !object_contract_check_postcondition_result (ret_type, r_loc))
+	    {
+	      invalidate_contract (contract);
+	      tree list = tree_cons (TREE_PURPOSE (old_contracts),
+				     TREE_VALUE (old_contracts), NULL_TREE);
+	      new_contracts = chainon (new_contracts, list);
+	      continue;
+	    }
+	}
+
+      /* No wrapper-FUNCTION_DECL/DECL_CONSTRUCTOR_P/DECL_DESTRUCTOR_P
+	 concept applies to an object-decl's own contract -- the side
+	 is always ccs_definition, and the only 'this' available is
+	 whatever the caller already pushed as a named positional parm
+	 (no implicit contract_class_ptr).  */
+      contract_check_side side = ccs_definition;
+
+      push_unparsed_function_queues (parser);
+      cp_token_cache *tokens = DEFPARSE_TOKENS (condition);
+      cp_parser_push_lexer_for_tokens (parser, tokens);
+
+      bool constify_p = flag_contract_control_objects
+	? contract_control_constifies (CONTRACT_CONTROL_OBJECT (contract),
+					side)
+	: true;
+      auto constify_ovr = make_temp_override (contract_condition_constify_p,
+					      constify_p);
+      bool conveyor_p = flag_contract_control_objects
+	&& contract_control_conveyor_like (CONTRACT_CONTROL_OBJECT (contract),
+					    side);
+      auto conveyor_ovr = make_temp_override (contract_condition_conveyor_p,
+					      conveyor_p);
+
+      begin_scope (sk_contract, decl);
+      bool old_pc = processing_postcondition;
+      processing_postcondition = POSTCONDITION_P (contract);
+      tree result = NULL_TREE;
+      if (r_ident)
+	{
+	  cp_expr result_id (r_ident, r_loc);
+	  result = make_postcondition_variable (result_id, ret_type);
+	  if (ret_dependent)
+	    ++processing_template_decl;
+	}
+      cp_expr parsed_condition = cp_parser_conditional_expression (parser);
+      update_late_contract (contract, result, parsed_condition);
+      if (r_ident && ret_dependent)
+	--processing_template_decl;
+      processing_postcondition = old_pc;
+      gcc_checking_assert (scope_chain && scope_chain->bindings
+			   && scope_chain->bindings->kind == sk_contract);
+      pop_bindings_and_leave_scope ();
+
+      if (cp_lexer_next_token_is_not (parser->lexer, CPP_EOF))
+	error_at (input_location, "expected conditional-expression");
+      cp_parser_pop_lexer (parser);
+      pop_unparsed_function_queues (parser);
+
+      tree list = tree_cons (TREE_PURPOSE (old_contracts),
+			     TREE_VALUE (old_contracts), NULL_TREE);
+      new_contracts = chainon (new_contracts, list);
+    }
+
+  update_fn_contract_specifiers (decl, new_contracts);
+}
+
 /* Parse an optional contract control specifier appearing immediately after a
    contract introducer (pre / post / contract_assert):
 
@@ -35011,6 +35259,31 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
 	identifier.maybe_add_location_wrapper ();
       contract = grok_contract (contract_name, /*mode*/NULL_TREE, identifier,
 				condition, loc, control_object);
+
+      /* D4324 + templates: unlike the eager (non-deferred) branch below,
+	 this one never recorded PARAMS (the declarator's own real, named
+	 PARM_DECLs) as this contract's positional parameter list -- the
+	 only consumer of this bookkeeping (a declaration-level clause on
+	 a callable-typed object) needs it to later re-push these same
+	 decls, by name, into a fresh scope once the class is complete
+	 (see cp_parser_late_object_contracts), and to remap them onto a
+	 check function's/instantiation's own fresh parameters
+	 (remap_object_contract/tsubst_object_contract_specifiers).  A
+	 binder list naming more than one parameter is already rejected
+	 above when deferred_p, so this is always exactly PARAMS itself,
+	 identical to the eager branch's own "no binder list" case.  */
+      if (contract != error_mark_node)
+	{
+	  tree positional_parms = NULL_TREE;
+	  tree *positional_tail = &positional_parms;
+	  for (tree p = params; p && p != void_list_node
+	       && p != explicit_void_list_node; p = TREE_CHAIN (p))
+	    {
+	      *positional_tail = build_tree_list (NULL_TREE, TREE_VALUE (p));
+	      positional_tail = &TREE_CHAIN (*positional_tail);
+	    }
+	  set_contract_positional_parms (contract, positional_parms);
+	}
     }
   else
     {

@@ -16207,6 +16207,18 @@ tsubst_decl (tree t, tree args, tsubst_flags_t complain,
 						 args, complain, in_decl))
 	      return error_mark_node;
 
+	    /* D4324 + templates: carry forward (and substitute) this
+	       PARM_DECL's own declaration-level pre<>/post<> contract-
+	       specifiers, if any -- see tsubst_object_contract_specifiers
+	       (contracts.cc).  Only for a genuine, single (non-pack)
+	       parameter: this feature's grammar doesn't support attaching
+	       a contract to a pack parameter's own declarator, and get_
+	       contract_positional_parms's count-matching zip has no
+	       defined meaning against an expanded pack anyway.  */
+	    if (!DECL_PACK_P (t))
+	      if (get_fn_contract_specifiers (t))
+		tsubst_object_contract_specifiers (t, r, args, complain);
+
             /* Keep track of the first new parameter we
                generate. That's what will be returned to the
                caller.  */
@@ -16316,6 +16328,17 @@ tsubst_decl (tree t, tree args, tsubst_flags_t complain,
 	    if (!apply_late_template_attributes (&r, DECL_ATTRIBUTES (r), 0,
 						 args, complain, in_decl))
 	      return error_mark_node;
+
+	    /* D4324 + templates: carry forward (and substitute) this
+	       FIELD_DECL's own declaration-level pre<>/post<> contract-
+	       specifiers, if any (a static or non-static data member of
+	       callable type -- see maybe_attach_object_contract_
+	       specifiers, decl.cc).  Only for a genuine, non-pack-
+	       expanded member, same reasoning as the PARM_DECL case
+	       above.  */
+	    if (!vec)
+	      if (get_fn_contract_specifiers (t))
+		tsubst_object_contract_specifiers (t, r, args, complain);
 
 	    if (vec)
 	      TREE_VEC_ELT (vec, i) = r;
@@ -16698,6 +16721,18 @@ tsubst_decl (tree t, tree args, tsubst_flags_t complain,
 					     /*flags=*/0,
 					     args, complain, in_decl))
 	  return error_mark_node;
+
+	/* D4324 + templates: carry forward (and substitute) this
+	   VAR_DECL's own declaration-level pre<>/post<> contract-
+	   specifiers, if any -- see tsubst_object_contract_specifiers
+	   (contracts.cc).  Must run after TREE_TYPE (r) is already the
+	   fully substituted type (set above), since the positional
+	   parameter/'this' types this derives are read directly off
+	   TREE_TYPE (r).  A plain typedef/TYPE_DECL (also routed through
+	   this VAR_DECL case) never has contract specifiers, so this is
+	   a no-op for those.  */
+	if (get_fn_contract_specifiers (t))
+	  tsubst_object_contract_specifiers (t, r, args, complain);
 
 	/* Preserve a typedef that names a type.  */
 	if (is_typedef_decl (r) && type != error_mark_node)

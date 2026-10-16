@@ -226,6 +226,8 @@ extern tree get_contract_positional_parms	(tree);
 extern tree maybe_object_contract_check_call	(tree, tree, vec<tree, va_gc> *, unsigned = 0);
 extern tree resolve_single_call_operator	(tree);
 extern tree build_call_operator_contract_params (tree);
+extern tree object_contract_callable_pieces	(tree, tree *, tree *);
+extern void tsubst_object_contract_specifiers	(tree, tree, tree, tsubst_flags_t);
 extern tree invalidate_contract			(tree);
 extern tree copy_and_remap_contracts		(tree, tree, contract_match_kind = cmk_all,
 						 bool for_wrapper = false);
@@ -1103,6 +1105,7 @@ extern void check_postconditions_in_redecl	(tree, tree);
 extern void maybe_update_postconditions		(tree);
 extern void rebuild_postconditions		(tree);
 extern bool check_postcondition_result		(tree, tree, location_t);
+extern bool object_contract_check_postcondition_result (tree, location_t);
 
 extern bool contract_any_deferred_p 		(tree);
 
