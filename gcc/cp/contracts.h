@@ -477,6 +477,11 @@ extern bool oa_contract_self_check_mode_public (tree contract, tree owner_fn,
 						bool *symbolic_forced,
 						bool *symbolic_strict);
 
+/* If FN is a contract's predicate core function (the function that
+   evaluates its condition), return the contract and set *OWNER to the
+   function the contract belongs to; otherwise NULL_TREE.  */
+extern tree predicate_core_function_contract (tree fn, tree *owner);
+
 /* True if CONJUNCT is 'OBJ.FIELD != 0' (either operand order); sets
    *OBJ_OUT and *FIELD_OUT.  */
 extern bool oa_field_nonzero_conjunct_public (tree conjunct, tree *obj_out,

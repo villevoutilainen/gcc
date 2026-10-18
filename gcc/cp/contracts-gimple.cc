@@ -7926,6 +7926,128 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
   return ok;
 }
 
+/* The object STORE_LHS (a store's destination in a predicate core
+   function) names, in source terms, for a diagnostic: the parameter or
+   field it reaches through a reference parameter, else STORE_LHS.  */
+
+static tree
+cg_display_store_target (tree lhs)
+{
+  if (TREE_CODE (lhs) == MEM_REF && integer_zerop (TREE_OPERAND (lhs, 1))
+      && TREE_CODE (TREE_OPERAND (lhs, 0)) == SSA_NAME)
+    {
+      tree ptr = cg_display_value (TREE_OPERAND (lhs, 0));
+      if (DECL_P (ptr) && TYPE_REF_P (TREE_TYPE (ptr)))
+	return convert_from_reference (ptr);
+      if (DECL_P (ptr))
+	return build1 (INDIRECT_REF, TREE_TYPE (lhs), ptr);
+    }
+  if (TREE_CODE (lhs) == COMPONENT_REF)
+    {
+      tree base = cg_display_store_target (TREE_OPERAND (lhs, 0));
+      if (base != TREE_OPERAND (lhs, 0))
+	return build3 (COMPONENT_REF, TREE_TYPE (lhs), base,
+		       TREE_OPERAND (lhs, 1), NULL_TREE);
+    }
+  return lhs;
+}
+
+/* FUN is a helper function.  If it is the predicate core function of a
+   conveyor-flavored contract -- the function evaluating its condition --
+   reject a store to anything the evaluation didn't create itself, like
+   the AST engine's oa_scan_predicate_mutation_ownership_in_expr: the
+   core function's parameters refer to the guarded function's own
+   objects, so a store through one, or to a global, mutates something
+   that outlives the check.  */
+
+static void
+cg_check_predicate_mutation (function *fun)
+{
+  tree owner;
+  tree contract = predicate_core_function_contract (fun->decl, &owner);
+  if (!contract || !flag_contract_conveyor_proofs_gimple
+      || !oa_contract_conveyor_active_public (contract, owner))
+    return;
+
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      {
+	gimple *stmt = gsi_stmt (gsi);
+	tree lhs = (is_gimple_assign (stmt) ? gimple_assign_lhs (stmt)
+		    : is_gimple_call (stmt) ? gimple_call_lhs (stmt)
+		    : NULL_TREE);
+	if (!lhs)
+	  continue;
+	/* A by-value capture arrives as a parameter of its own: a new
+	   value for it is an assignment to the guarded function's
+	   variable, in the condition as written.  */
+	if (TREE_CODE (lhs) == SSA_NAME)
+	  {
+	    tree var = SSA_NAME_VAR (lhs);
+	    if (!var || TREE_CODE (var) != PARM_DECL
+		|| DECL_CONTEXT (var) != fun->decl)
+	      continue;
+	  }
+	else if (!gimple_vdef (stmt) || gimple_clobber_p (stmt))
+	  continue;
+	tree base = (TREE_CODE (lhs) == SSA_NAME ? NULL_TREE
+		     : get_base_address (lhs));
+	/* A local of the evaluation itself (a temporary, an IILE's own
+	   variable) is its own to write.  */
+	if (base && VAR_P (base) && !is_global_var (base)
+	    && DECL_CONTEXT (base) == fun->decl)
+	  continue;
+
+	/* 'x += 1', '++x': the stored value is the same location +/- 1.  */
+	const char *what = G_("assignment to %qE not permitted in a conveyor "
+			      "predicate or assert condition");
+	gimple *shift = NULL;
+	if (TREE_CODE (lhs) == SSA_NAME)
+	  shift = stmt;
+	else if (gimple_assign_single_p (stmt)
+		 && TREE_CODE (gimple_assign_rhs1 (stmt)) == SSA_NAME)
+	  shift = SSA_NAME_DEF_STMT (gimple_assign_rhs1 (stmt));
+	if (shift)
+	  {
+	    gimple *def = shift;
+	    if (def && is_gimple_assign (def)
+		&& (gimple_assign_rhs_code (def) == PLUS_EXPR
+		    || gimple_assign_rhs_code (def) == MINUS_EXPR)
+		&& TREE_CODE (gimple_assign_rhs1 (def)) == SSA_NAME
+		&& (integer_onep (gimple_assign_rhs2 (def))
+		    || integer_minus_onep (gimple_assign_rhs2 (def))))
+	      {
+		tree from = gimple_assign_rhs1 (def);
+		gimple *load = SSA_NAME_DEF_STMT (from);
+		/* A post-increment copies the old value first.  */
+		while (load && gimple_assign_ssa_name_copy_p (load))
+		  {
+		    from = gimple_assign_rhs1 (load);
+		    load = SSA_NAME_DEF_STMT (from);
+		  }
+		if ((TREE_CODE (lhs) == SSA_NAME
+		     && SSA_NAME_VAR (from) == SSA_NAME_VAR (lhs))
+		    || (load && gimple_assign_single_p (load)
+			&& operand_equal_p (gimple_assign_rhs1 (load), lhs, 0)))
+		  {
+		    bool up = ((gimple_assign_rhs_code (def) == PLUS_EXPR)
+			       == integer_onep (gimple_assign_rhs2 (def)));
+		    what = up
+		      ? G_("increment of %qE not permitted in a conveyor "
+			   "predicate or assert condition")
+		      : G_("decrement of %qE not permitted in a conveyor "
+			   "predicate or assert condition");
+		  }
+	      }
+	  }
+	error_at (gimple_location (stmt), what,
+		  TREE_CODE (lhs) == SSA_NAME ? SSA_NAME_VAR (lhs)
+		  : cg_display_store_target (lhs));
+      }
+}
+
 namespace {
 
 const pass_data pass_data_contracts_gimple =
@@ -7976,7 +8098,10 @@ pass_contracts_gimple::execute (function *fun)
      already had this exact condition resolved against ITS OWN,
      correctly-seeded parameters.  */
   if (CONTRACT_HELPER (fun->decl) != ldf_contract_none)
-    return 0;
+    {
+      cg_check_predicate_mutation (fun);
+      return 0;
+    }
 
   /* D4324/P2680, GIMPLE/front-end instantiation-ordering fix (found via
      the comprehensive coverage sweep, 2026-10-12): an ordinary,
@@ -8267,6 +8392,10 @@ static vec<tree> cg_eager_check_deferred_until_complete;
    (decl2.cc) right after at_eof is set to 3.  */
 static vec<tree> cg_eager_check_deferred_until_eof;
 
+/* Predicate helpers, of which the core functions are checked at the end
+   of the translation unit (see contracts_gimple_eager_check_function).  */
+static vec<tree> cg_eager_check_predicate_helpers;
+
 static gimple_opt_pass *cg_eager_build_ssa_pass;
 static gimple_opt_pass *cg_eager_contracts_pass;
 
@@ -8324,7 +8453,17 @@ contracts_gimple_eager_check_function (tree fndecl)
      expand_or_defer_fn is ever reached for the OUTER function whose
      own body is still mid-genericize.  */
   if (CONTRACT_HELPER (fndecl) != ldf_contract_none)
-    return;
+    {
+      /* A predicate core function is checked for mutation
+	 (cg_check_predicate_mutation) -- at the end of the translation
+	 unit, the safe point the comment above calls for.  Which helpers
+	 are core functions is only known once they're built, so all are
+	 queued.  */
+      if (flag_contract_conveyor_proofs_gimple
+	  && CONTRACT_HELPER (fndecl) == ldf_contract_predicate_helper)
+	cg_eager_check_predicate_helpers.safe_push (fndecl);
+      return;
+    }
 
   /* An immediate function is never genericized (finish_function) or
      emitted, so there is no GIMPLE body to analyze: gimplifying its
@@ -8488,6 +8627,13 @@ contracts_gimple_eager_check_function_1 (tree fndecl, bool is_eof_drain)
 void
 contracts_gimple_eager_check_drain_at_eof (void)
 {
+  for (tree fn : cg_eager_check_predicate_helpers)
+    {
+      tree owner;
+      if (predicate_core_function_contract (fn, &owner))
+	cg_eager_check_deferred_until_eof.safe_push (fn);
+    }
+  cg_eager_check_predicate_helpers.truncate (0);
   if (cg_eager_check_deferred_until_eof.is_empty ())
     return;
 
