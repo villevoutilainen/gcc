@@ -3264,6 +3264,15 @@ cg_range_comparison_verdict (const cg_range_lite &r, tree_code code,
   return CG_VERDICT_UNKNOWN;
 }
 
+/* Whether no value in range HAVE lies in range NEED.  */
+
+static bool
+cg_ranges_disjoint_p (const cg_range_lite &have, const cg_range_lite &need)
+{
+  return ((need.has_hi && have.has_lo && have.lo > need.hi)
+	  || (need.has_lo && have.has_hi && have.hi < need.lo));
+}
+
 /* The same for 'value != 0'.  */
 
 static cg_verdict
@@ -4015,6 +4024,21 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      && (!required.has_hi
 		  || (established_r.has_hi && established_r.hi <= required.hi)))
 	    continue; /* Proven true: silently discharged.  */
+	  if (have_range && cg_ranges_disjoint_p (established_r, required))
+	    {
+	      char have_text[64], need_text[64];
+	      error_at (gimple_location (call),
+			"argument %qE provably violates the precondition of %qD",
+			cg_display_value (substituted), callee);
+	      inform (gimple_location (call),
+		      "%qE is established %s, but the precondition requires "
+		      "it %s", cg_display_value (substituted),
+		      cg_range_lite_text (established_r, have_text,
+					  sizeof have_text),
+		      cg_range_lite_text (required, need_text,
+					  sizeof need_text));
+	      continue;
+	    }
 
 	  if (strict)
 	    error_at (gimple_location (call),
@@ -4926,6 +4950,24 @@ cg_consult_persistent_facts (gcall *call,
 		  || (established->range.has_hi
 		      && established->range.hi <= required.hi)))
 	    continue; /* Proven true: silently discharged.  */
+	  if (established
+	      && (!require_conveyor || established->conveyor_established)
+	      && cg_ranges_disjoint_p (established->range, required))
+	    {
+	      char have_text[64], need_text[64];
+	      error_at (gimple_location (call),
+			"argument %qE provably violates the precondition of %qD",
+			substituted, callee);
+	      inform (gimple_location (call),
+		      "field %qD of %qE is established %s, but the "
+		      "precondition requires it %s",
+		      field_groups[g].field, substituted,
+		      cg_range_lite_text (established->range, have_text,
+					  sizeof have_text),
+		      cg_range_lite_text (required, need_text,
+					  sizeof need_text));
+	      continue;
+	    }
 
 	  if (strict)
 	    error_at (gimple_location (call),
