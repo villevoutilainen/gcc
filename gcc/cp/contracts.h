@@ -548,9 +548,11 @@ extern bool oa_match_simple_comparison
    Unlike oa_match_simple_comparison above, OTHER_OUT is not a resolved
    value; the caller substitutes it with a specific call site's own
    argument and consults a *relational* fact (oa_env::relational_get),
-   never a value one.  */
+   never a value one.  With ALLOW_VAR_DECL, either side may also be a
+   VAR_DECL (e.g. a postcondition's result binding).  */
 extern bool oa_match_comparison_against_param
-  (tree conjunct, tree *param_out, tree_code *code_out, tree *other_out);
+  (tree conjunct, tree *param_out, tree_code *code_out, tree *other_out,
+   bool allow_var_decl = false);
 
 /* The call analogue of oa_match_comparison_against_param immediately
    above: "PARAM OP RECEIVER.ACCESSOR ()" (e.g. 'i < v.size ()'), where
