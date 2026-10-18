@@ -802,6 +802,15 @@ extern bool is_object_address_call_p (tree call, tree *arg);
    precondition on it (see contracts.cc).  */
 extern bool oa_defaulted_copy_source_parm_public (tree fn, tree *parm);
 
+/* If single-parameter predicate PRED_FN's (cached-active) postcondition
+   defines its result as a comparison of its parameter with a constant
+   ('post (r: r == (v > 0))'), set *CODE_OUT and *CONST_OUT so the result
+   is 'v *CODE_OUT *CONST_OUT'.  */
+extern bool oa_predicate_defining_relation_public (tree pred_fn,
+						   bool require_conveyor,
+						   tree_code *code_out,
+						   tree *const_out);
+
 /* D4324: is FN a specialization of std::is_object_address itself (as
    opposed to some other call)? Used by call.cc/typeck.cc's callee-must-
    be-conveyor check to exempt it -- see contracts.cc's own comment.  */

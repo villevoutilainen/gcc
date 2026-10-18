@@ -1005,6 +1005,39 @@ static bool cg_provable_object_address_p (tree, hash_map<tree, cg_fact> &,
 					  bool, hash_set<tree> &,
 					  oa_unprovable_reason *);
 
+/* Do SSA values A and B hold the same value because they're computed
+   alike from the same operands (or are the same)?  Only side-effect-free
+   arithmetic, conversions and address computations, not loads.  */
+
+static bool
+cg_same_computed_value_p (tree a, tree b, int depth)
+{
+  if (a == b)
+    return true;
+  if (TREE_CODE (a) == INTEGER_CST && TREE_CODE (b) == INTEGER_CST)
+    return tree_int_cst_equal (a, b);
+  if (TREE_CODE (a) != SSA_NAME || TREE_CODE (b) != SSA_NAME || depth > 6)
+    return false;
+  gimple *da = SSA_NAME_DEF_STMT (a), *db = SSA_NAME_DEF_STMT (b);
+  if (!is_gimple_assign (da) || !is_gimple_assign (db))
+    return false;
+  tree_code ca = gimple_assign_rhs_code (da);
+  if (ca != gimple_assign_rhs_code (db)
+      || !types_compatible_p (TREE_TYPE (a), TREE_TYPE (b)))
+    return false;
+  if (!(ca == POINTER_PLUS_EXPR || ca == PLUS_EXPR || ca == MINUS_EXPR
+	|| ca == MULT_EXPR || CONVERT_EXPR_CODE_P (ca) || ca == SSA_NAME))
+    return false;
+  unsigned n = gimple_num_ops (da);
+  if (n != gimple_num_ops (db))
+    return false;
+  for (unsigned i = 1; i < n; ++i)
+    if (!cg_same_computed_value_p (gimple_op (da, i), gimple_op (db, i),
+				   depth + 1))
+      return false;
+  return true;
+}
+
 /* Is ADDR, an ADDR_EXPR, an object's address: of a variable, parameter,
    return slot or literal, or of a subobject ('&p->field', '&p[i]') of an
    object a provable pointer P points to?  Like the AST engine's
@@ -1135,6 +1168,15 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
   if (cg_fact *fact = established.get (val))
     if (!require_conveyor || fact->conveyor_established)
       return true;
+  /* The same address computed again ('&st[i]' in an assert, then
+     'st[i].f'): -O0 GIMPLE doesn't share the computation.  */
+  if (TREE_CODE (val) == SSA_NAME && !SSA_NAME_IS_DEFAULT_DEF (val)
+      && is_gimple_assign (SSA_NAME_DEF_STMT (val)))
+    for (auto it : established)
+      if (it.first != val && TREE_CODE (it.first) == SSA_NAME
+	  && (!require_conveyor || it.second.conveyor_established)
+	  && cg_same_computed_value_p (it.first, val, 0))
+	return true;
 
   if (in_progress.contains (val))
     return false;
@@ -2630,13 +2672,6 @@ cg_call_relational_contradicts_p (tree_code established_code,
    exact libstdc++-internals regression this whole gate exists to
    prevent (see cg_check_call_reference_safety's own comment).  */
 
-static bool
-cg_function_might_need_reference_safety_walk_p (function *fun)
-{
-  tree fndecl = fun->decl;
-  return DECL_DECLARED_CONVEYOR_P (fndecl)
-	 || get_fn_contract_specifiers (fndecl) != NULL_TREE;
-}
 
 /* D4324/P2680 items 7 (Q1's implicit is_object_address) and Q2
    (ownership), the GIMPLE-native counterpart of contracts.cc's own
@@ -2682,24 +2717,12 @@ cg_function_might_need_reference_safety_walk_p (function *fun)
    already covered by cg_provable_object_address_p's own pre-existing
    'ADDR_EXPR is always trivially provable' axiom regardless.
 
-   Only ever invoked (see this function's own caller in pass_contracts_
-   gimple::execute) when cg_function_might_need_reference_safety_walk_p
-   says the CALLING function itself warrants it -- see that function's
-   own comment for why this scoping is load-bearing, not optional: an
-   earlier, unconditional version of this check (run for every call in
-   every function in the TU, matching how cg_check_call's own existing
-   checks already ran) surfaced a real regression deep in libstdc++
-   internals (std::vector<int> constructing __new_allocator's own
-   _GLIBCXX_CONVEYOR-tagged copy constructor from a plain, uncontracted,
-   non-conveyor helper function) -- confirmed, by direct testing, that
-   contracts.cc's own AST engine does NOT flag this same call either,
-   even though its own item 7/Q2 check is *also* unconditional on any
-   proof flag (only gated on flag_contract_control_objects): the AST
-   engine's own oa_function_needs_walk_p never triggers the walk for
-   that specific internal calling function to begin with. Matching that
-   same calling-function-level gate here keeps this port at genuine
-   parity with the AST engine's own real, observed scope -- not
-   *stricter* than it.  */
+   Run in every function the pass checks -- the ones the AST engine
+   walks (oa_function_needs_walk_p) -- whoever the caller is, as the AST
+   engine does: an earlier version ran it in every function of the
+   translation unit, flagging calls the AST engine never looks at, and a
+   later one only in a conveyor or contract-bearing caller, missing the
+   obligations of an ordinary caller the AST engine checks.  */
 
 static void
 cg_check_call_reference_safety (gcall *call, function *fun,
@@ -2789,7 +2812,7 @@ cg_check_call_reference_safety (gcall *call, function *fun,
    this file's own top comment and contracts.cc's own identical gate at
    every oa_scan_item8_in_expr call site ("if (current_function_decl &&
    DECL_DECLARED_CONVEYOR_P (current_function_decl))") -- unlike item
-   7/Q2's own gate (cg_function_might_need_reference_safety_walk_p),
+   7/Q2's own gate (the caller check in cg_check_call_reference_safety),
    there is no "or has its own declared contract" alternative trigger
    here, matching the AST engine's own narrower, unambiguous scope for
    this specific mandatory scan (confirmed by direct reading of every
@@ -3744,6 +3767,7 @@ cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
     return;
   if (TREE_CODE (base) != SSA_NAME)
     return;
+
   /* POINTER_TYPE, or a REFERENCE-typed PARAMETER specifically --
      mirroring oa_scan_array_bounds_in_expr's own identical condition
      (contracts.cc) after its own 2026-08-26 fix (Ville: "a conveyor
@@ -4159,22 +4183,20 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		    }
 		  if (def && is_gimple_call (def))
 		    result_of = gimple_call_fndecl (as_a <gcall *> (def));
+		  /* As the call: 'any (x)'.  */
+		  if (result_of)
+		    {
+		      gcall *dc = as_a <gcall *> (def);
+		      auto_vec<tree, 8> args;
+		      for (unsigned k = 0; k < gimple_call_num_args (dc); ++k)
+			args.safe_push (cg_display_value (gimple_call_arg (dc, k)));
+		      substituted
+			= build_call_expr_loc_array (UNKNOWN_LOCATION, result_of,
+						     args.length (),
+						     args.address ());
+		    }
 		}
-	      if (result_of)
-		{
-		  if (strict)
-		    error_at (gimple_location (call),
-			      "cannot prove that the result of %qD is nonzero, "
-			      "as required by the precondition of %qD",
-			      result_of, callee);
-		  else
-		    warning_at (gimple_location (call), 0,
-				"cannot verify that the result of %qD is "
-				"nonzero, as required by the precondition of "
-				"%qD",
-				result_of, callee);
-		}
-	      else if (strict)
+	      if (strict)
 		error_at (gimple_location (call),
 			  "cannot prove that %qE is nonzero, as required by "
 			  "the precondition of %qD", substituted, callee);
@@ -4314,8 +4336,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 			"argument %qE provably violates the precondition "
 			"of %qD", sub_param, callee);
 	      inform (gimple_location (call),
-		      "the required comparison %qE %s %qE does not hold",
-		      sub_param, op_symbol_code (rel_code), sub_other);
+		      "%qE is established exactly %wd, but the precondition "
+		      "requires it to be %s %qE", sub_param,
+		      wi::to_wide (sub_param).to_shwi (),
+		      op_symbol_code (rel_code), sub_other);
 	      continue;
 	    }
 
@@ -4672,7 +4696,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	     lazy-stirring-pearl.md's own Phase 4 scope).  */
 	  if (const char *why = oa_unprovable_reason_text
 		(have_range ? OA_UNPROVABLE_RANGE_PARTIAL
-			    : OA_UNPROVABLE_UNRESOLVED_OPERAND))
+			    : OA_UNPROVABLE_NO_FACT))
 	    inform (gimple_location (call), "%s", _(why));
 	}
     }
@@ -5673,6 +5697,9 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
    it stands right before CALL -- the consult side, for both facts,
    the persistent-fact analogue of cg_check_call.  */
 
+static cg_verdict cg_range_comparison_verdict (const cg_range_lite &,
+					       tree_code, const widest_int &);
+
 static void
 cg_consult_persistent_facts (gcall *call,
 			      hash_map<cg_field_key_hash, tree> &field_object_cache,
@@ -5751,6 +5778,54 @@ cg_consult_persistent_facts (gcall *call,
 
 	  bool required = !negated;
 	  cg_pred_fact *fact = identity ? state.pred.get (identity) : NULL;
+	  /* No fact about the argument: PRED_FN's postcondition may define
+	     its result as a comparison of its parameter with a constant
+	     ('post (r: r == (v > 0))'), decided by the argument's range,
+	     as the AST engine's oa_predicate_result_from_declared_relation
+	     does.  */
+	  tree_code rel_code;
+	  tree rel_const;
+	  if ((!fact || fact->pred_fn != pred_fn)
+	      && oa_predicate_defining_relation_public (pred_fn,
+							require_conveyor,
+							&rel_code, &rel_const))
+	    {
+	      cg_range_lite r;
+	      bool have = false;
+	      if (TREE_CODE (substituted) == INTEGER_CST)
+		{
+		  r.has_lo = r.has_hi = true;
+		  r.lo = r.hi = wi::to_widest (substituted);
+		  have = true;
+		}
+	      else if (TREE_CODE (substituted) == SSA_NAME
+		       && INTEGRAL_TYPE_P (TREE_TYPE (substituted))
+		       && cg_array_bounds)
+		have = cg_value_range_at (substituted, call,
+					  *cg_array_bounds->established_range,
+					  *cg_array_bounds->scalar_range_cache,
+					  cg_array_bounds->ranger,
+					  require_conveyor, &r);
+	      cg_verdict v = (have
+			      ? cg_range_comparison_verdict
+				  (r, rel_code, wi::to_widest (rel_const))
+			      : CG_VERDICT_UNKNOWN);
+	      if (v == CG_VERDICT_TRUE || v == CG_VERDICT_FALSE)
+		{
+		  bool value = v == CG_VERDICT_TRUE;
+		  if (value == required)
+		    continue; /* Proven true: silently discharged.  */
+		  error_at (gimple_location (call),
+			    "argument %qE provably violates the precondition "
+			    "of %qD: %qD (%qE) is established %s, but the "
+			    "precondition requires it to be %s",
+			    cg_display_value (substituted), callee, pred_fn,
+			    cg_display_value (substituted),
+			    value ? "true" : "false",
+			    required ? "true" : "false");
+		  continue;
+		}
+	    }
 	  if (fact && fact->pred_fn == pred_fn
 	      && (!require_conveyor || fact->conveyor_established))
 	    {
@@ -6183,6 +6258,10 @@ cg_invalidate_persistent_facts_for_call_arg (tree arg, function *fun,
 					     hash_map<cg_field_key_hash, tree> &field_object_cache,
 					     cg_dom_fact_state &state)
 {
+  /* An aggregate passed by value is a copy the callee can't change the
+     caller's object through.  */
+  if (AGGREGATE_TYPE_P (TREE_TYPE (arg)))
+    return;
   /* Ordering: cg_field_slot_identity, then cg_field_object_identity,
      then cg_gimple_object_identity last -- see cg_consult_persistent_
      facts's own identical comment for why the fallback resolver must
@@ -7063,6 +7142,65 @@ static bool cg_value_range_at (tree, gimple *, hash_map<tree, cg_range_lite> &,
 			       hash_map<tree, cg_range_lite> &, gimple_ranger *,
 			       bool, cg_range_lite *);
 
+/* The floating-point range of VAL at STMT in R: the ranger's, narrowed
+   by what is established for it (ESTABLISHED_FRANGE), and for an
+   arithmetic result folded from its operands' ranges -- the ranger alone
+   knows nothing of a precondition's or a field's facts about them.  */
+
+static bool
+cg_frange_of (tree val, gimple *stmt, gimple_ranger *ranger,
+	      hash_map<tree, frange> *established_frange, frange &r,
+	      int depth = 0)
+{
+  tree type = TREE_TYPE (val);
+  if (TREE_CODE (val) == REAL_CST)
+    {
+      r = frange (val, val);
+      if (!real_isnan (TREE_REAL_CST_PTR (val)))
+	r.clear_nan ();
+      return true;
+    }
+  if (TREE_CODE (val) != SSA_NAME || !SCALAR_FLOAT_TYPE_P (type))
+    return false;
+  r.set_varying (type);
+  frange q (type);
+  if (ranger->range_of_expr (q, val, stmt) && !q.undefined_p ())
+    r = q;
+  if (established_frange)
+    if (frange *known = established_frange->get (val))
+      r.intersect (*known);
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (depth < 6 && def && is_gimple_assign (def))
+    {
+      tree_code code = gimple_assign_rhs_code (def);
+      if (code == PLUS_EXPR || code == MINUS_EXPR || code == MULT_EXPR
+	  || code == RDIV_EXPR)
+	{
+	  frange a (type), b (type);
+	  range_op_handler handler (code);
+	  if (handler
+	      && cg_frange_of (gimple_assign_rhs1 (def), def, ranger,
+			       established_frange, a, depth + 1)
+	      && cg_frange_of (gimple_assign_rhs2 (def), def, ranger,
+			       established_frange, b, depth + 1))
+	    {
+	      frange res (type);
+	      if (handler.fold_range (res, type, a, b) && !res.undefined_p ())
+		r.intersect (res);
+	    }
+	}
+      else if (code == SSA_NAME || code == NOP_EXPR)
+	{
+	  frange a (type);
+	  if (cg_frange_of (gimple_assign_rhs1 (def), def, ranger,
+			    established_frange, a, depth + 1)
+	      && types_compatible_p (TREE_TYPE (gimple_assign_rhs1 (def)), type))
+	    r.intersect (a);
+	}
+    }
+  return !r.undefined_p ();
+}
+
 /* STMT stores an integral value to a field or a scalar in memory: the
    location now holds that value's range and nonzero-ness, which a
    later postcondition or load can rely on -- like the AST engine, which
@@ -7157,18 +7295,8 @@ cg_record_write_facts (gimple *stmt, cg_dom_fact_state &state,
   if (is_float)
     {
       frange r (TREE_TYPE (lhs));
-      if (TREE_CODE (rhs) == REAL_CST)
-	{
-	  r = frange (rhs, rhs);
-	  if (!real_isnan (TREE_REAL_CST_PTR (rhs)))
-	    r.clear_nan ();
-	}
-      else if (!ranger->range_of_expr (r, rhs, stmt) || r.undefined_p ())
-	return;
-      if (established_frange)
-	if (frange *known = established_frange->get (rhs))
-	  r.intersect (*known);
-      if (r.varying_p ())
+      if (!cg_frange_of (rhs, stmt, ranger, established_frange, r)
+	  || r.varying_p ())
 	return;
       fact.has_float = true;
       fact.float_range = r;
@@ -8848,6 +8976,11 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 	      gimple *stmt = gsi_stmt (gsi);
 	      if (gimple_assign_single_p (stmt))
 		{
+		  cg_record_field_load_facts (stmt, out_state,
+					      *scalar_range_cache_out,
+					      established_nz,
+					      established_frange,
+					      established_oa);
 		  cg_process_field_write (gimple_assign_lhs (stmt),
 					   gimple_assign_rhs1 (stmt), fun,
 					   field_object_cache, out_state);
@@ -9855,6 +9988,42 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
 		    }
 		}
 	    }
+	  /* 'check_it (r)' with check_it's postcondition defining its
+	     result as a comparison of its parameter with a constant
+	     ('post (r: r == (v > 0))'): decided by the argument's range,
+	     unless the walk knows the predicate's value
+	     (cg_compute_assert_memory_verdicts).  */
+	  tree pred_fn, pred_arg;
+	  bool pred_negated;
+	  tree_code rel_code;
+	  tree rel_const;
+	  if (verdict == CG_VERDICT_NONE
+	      && !(mem && i < cg_assert_memory_verdicts::max_conjuncts
+		   && (*mem)->verdict[i][flavor] != CG_VERDICT_NONE
+		   && (*mem)->verdict[i][flavor] != CG_VERDICT_UNKNOWN)
+	      && oa_match_predicate_conjunct (c, &pred_fn, &pred_arg,
+					      &pred_negated)
+	      && oa_predicate_defining_relation_public (pred_fn,
+							require_conveyor,
+							&rel_code, &rel_const))
+	    if (tree val = scalar_value_of (pred_arg))
+	      {
+		cg_range_lite r;
+		if (cg_value_range_at (val, call, established_range,
+				       scalar_range_cache, ranger,
+				       require_conveyor, &r))
+		  {
+		    cg_verdict v = cg_range_comparison_verdict
+				     (r, rel_code, wi::to_widest (rel_const));
+		    if (v == CG_VERDICT_TRUE || v == CG_VERDICT_FALSE)
+		      {
+			verdict = ((v == CG_VERDICT_TRUE) != pred_negated
+				   ? CG_VERDICT_TRUE : CG_VERDICT_FALSE);
+			cg_range_lite_text_for (r, TREE_TYPE (val), text,
+						sizeof text);
+		      }
+		  }
+	      }
 	  /* A floating-point comparison with a constant, decided from the
 	     ranger's floating-point range at the check.  */
 	  if (verdict == CG_VERDICT_NONE
@@ -10484,8 +10653,10 @@ pass_contracts_gimple::execute (function *fun)
 			     established_nz, &assert_memory_verdicts,
 			     &established_frange, &established);
 
-  bool check_reference_safety
-    = cg_function_might_need_reference_safety_walk_p (fun);
+  /* A conveyor callee's implicit reference-parameter and receiver
+     obligations are the callee's, whoever calls it, as in the AST engine
+     (Q2 is gated on the caller inside cg_check_call_reference_safety).  */
+  bool check_reference_safety = true;
   bool check_item8_ub = DECL_DECLARED_CONVEYOR_P (fun->decl) || predicate_core;
 
   /* Walk the dominator tree, so a contract_assert's facts are in the

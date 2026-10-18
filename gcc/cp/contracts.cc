@@ -27030,9 +27030,31 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
    reliance on front-end-only context, not in anything the oa_* fact-
    tracking layer itself does.  */
 
+static void oa_ensure_contract_flavors_cached (tree fndecl);
+
 static void
 oa_cache_contract_flavors (tree fndecl)
 {
+  /* And those of the predicates its contracts name ('pre (check_it
+     (x))'), whose own postconditions the GIMPLE engine may derive a
+     result from (oa_predicate_defining_relation_public).  */
+  for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+    {
+      tree cond = CONTRACT_CONDITION (CONTRACT_STATEMENT (as));
+      if (!cond || cond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree pred_fn, arg_decl;
+	  bool negated;
+	  if (oa_predicate_conjunct_shape (*conjuncts[i], &pred_fn, &arg_decl,
+					   &negated)
+	      && pred_fn != fndecl)
+	    oa_ensure_contract_flavors_cached (pred_fn);
+	}
+    }
   for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
     {
       tree contract = CONTRACT_STATEMENT (as);
@@ -30605,6 +30627,57 @@ oa_match_result_defining_relation (tree conjunct, tree result_id,
   *code_out = code;
   *rhs_out = TREE_OPERAND (inner, 1);
   return true;
+}
+
+/* See contracts.h.  */
+
+bool
+oa_predicate_defining_relation_public (tree pred_fn, bool require_conveyor,
+				       tree_code *code_out, tree *const_out)
+{
+  tree own_param = DECL_ARGUMENTS (pred_fn);
+  if (!own_param || DECL_CHAIN (own_param))
+    return false;
+  for (tree as = get_fn_contract_specifiers (pred_fn); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract))
+	continue;
+      bool active = (oa_contract_conveyor_active_cached_p (contract)
+		     || (!require_conveyor
+			 && oa_contract_symbolic_active_cached_p (contract)));
+      if (!active)
+	continue;
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      tree cond = CONTRACT_CONDITION (contract);
+      if (!result_id || cond == NULL_TREE || cond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree lhs, rhs;
+	  tree_code code;
+	  if (!oa_match_result_defining_relation (*conjuncts[i], result_id,
+						   &lhs, &code, &rhs))
+	    continue;
+	  lhs = oa_strip_conversion_call (oa_strip_to_relational_operand (lhs));
+	  rhs = oa_strip_conversion_call (oa_strip_to_relational_operand (rhs));
+	  if (lhs == own_param && TREE_CODE (rhs) == INTEGER_CST)
+	    {
+	      *code_out = code;
+	      *const_out = rhs;
+	      return true;
+	    }
+	  if (rhs == own_param && TREE_CODE (lhs) == INTEGER_CST)
+	    {
+	      *code_out = swap_tree_comparison (code);
+	      *const_out = lhs;
+	      return true;
+	    }
+	}
+    }
+  return false;
 }
 
 /* D4324: derive a predicate-returning CALL's own concrete boolean
