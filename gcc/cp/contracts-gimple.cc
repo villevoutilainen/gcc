@@ -5197,8 +5197,8 @@ cg_establish_assert_facts (gcall *call, cg_dom_fact_state &state)
     }
 }
 
-/* Record in VERDICTS what STATE says, at contract_assert check CALL,
-   about each of its conjuncts that is about memory -- before the assert
+/* What STATE says, at contract_assert or postcondition check CALL, about
+   each of its conjuncts that is about memory -- before an assert
    establishes them (cg_establish_assert_facts).  */
 
 static bool
@@ -5207,7 +5207,8 @@ cg_compute_assert_memory_verdicts (gcall *call, cg_dom_fact_state &state,
 {
   tree struct_var, cond, decls;
   tree contract = cg_contract_check_call_p (call, &struct_var, &cond, &decls);
-  if (!contract || TREE_CODE (contract) != ASSERTION_STMT
+  if (!contract
+      || (TREE_CODE (contract) != ASSERTION_STMT && !POSTCONDITION_P (contract))
       || cond == NULL_TREE || cond == error_mark_node)
     return false;
 
@@ -7284,6 +7285,13 @@ static tree
 cg_contract_check_decl_value (gcall *call, tree struct_var, tree decls,
 			      tree decl)
 {
+  /* A postcondition's result identifier names the result, which its
+     check captures last (DECL_RESULT).  */
+  tree contract = TREE_VEC_ELT (decls, 0);
+  if (POSTCONDITION_P (contract)
+      && decl == POSTCONDITION_IDENTIFIER (contract)
+      && TREE_VEC_LENGTH (decls) > 2)
+    decl = TREE_VEC_ELT (decls, TREE_VEC_LENGTH (decls) - 1);
   tree field = TYPE_FIELDS (TREE_TYPE (struct_var));
   for (int i = 2; i < TREE_VEC_LENGTH (decls) && field;
        ++i, field = DECL_CHAIN (field))
@@ -7550,24 +7558,44 @@ cg_assert_fact_scope::establish (gcall *call)
     }
 }
 
-/* Whether a GIMPLE check that the AST engine makes only under
-   -fcontract-conveyor-proofs / -fcontract-symbolic-proofs is on.  With
-   -fcontract-analysis-engine=, those flags mean what they mean for the
-   AST engine; with only the older -fcontract-*-proofs-gimple flags, the
-   GIMPLE flag itself turns them on.  */
+/* Whether the GIMPLE engine checks a contract's own condition (a
+   contract_assert's, or a postcondition's at the function's exit): as
+   for the AST engine, only under -fcontract-conveyor-proofs /
+   -fcontract-symbolic-proofs, or for a control object that forces
+   analysis.  The older -fcontract-*-proofs-gimple flags never included
+   these checks and don't turn them on.  */
 
 static bool
 cg_conveyor_proofs_p ()
 {
-  return flag_contract_analysis_engine != 0
-	 ? flag_contract_conveyor_proofs : flag_contract_conveyor_proofs_gimple;
+  return flag_contract_conveyor_proofs;
 }
 
 static bool
 cg_symbolic_proofs_p ()
 {
-  return flag_contract_analysis_engine != 0
-	 ? flag_contract_symbolic_proofs : flag_contract_symbolic_proofs_gimple;
+  return flag_contract_symbolic_proofs;
+}
+
+/* cg_range_lite_text for R, a range of a value of TYPE, leaving out a
+   bound that is only TYPE's own limit.  */
+
+static char *
+cg_range_lite_text_for (cg_range_lite r, tree type, char *buf, size_t n)
+{
+  if (INTEGRAL_TYPE_P (type))
+    {
+      signop sgn = TYPE_SIGN (type);
+      if (r.has_lo
+	  && r.lo == widest_int::from (wi::min_value (TYPE_PRECISION (type),
+						       sgn), sgn))
+	r.has_lo = false;
+      if (r.has_hi
+	  && r.hi == widest_int::from (wi::max_value (TYPE_PRECISION (type),
+						       sgn), sgn))
+	r.has_hi = false;
+    }
+  return cg_range_lite_text (r, buf, n);
 }
 
 /* The range of SSA value VAL at STMT: the facts established for it,
@@ -7625,7 +7653,8 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
 {
   tree struct_var, cond, decls;
   tree contract = cg_contract_check_call_p (call, &struct_var, &cond, &decls);
-  if (!contract || TREE_CODE (contract) != ASSERTION_STMT
+  bool is_post = POSTCONDITION_P (contract ? contract : error_mark_node);
+  if (!contract || (TREE_CODE (contract) != ASSERTION_STMT && !is_post)
       || cond == NULL_TREE || cond == error_mark_node)
     return true;
   tree owner = DECL_ORIGIN (current_function_decl);
@@ -7736,7 +7765,7 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
 		else if (have_range)
 		  {
 		    verdict = cg_range_nonzero_verdict (r);
-		    cg_range_lite_text (r, text, sizeof text);
+		    cg_range_lite_text_for (r, TREE_TYPE (val), text, sizeof text);
 		    reason = OA_UNPROVABLE_RANGE_PARTIAL;
 		  }
 		else
@@ -7755,7 +7784,7 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
 		  {
 		    verdict = cg_range_comparison_verdict
 				(r, code, wi::to_widest (const_val));
-		    cg_range_lite_text (r, text, sizeof text);
+		    cg_range_lite_text_for (r, TREE_TYPE (val), text, sizeof text);
 		    reason = OA_UNPROVABLE_RANGE_PARTIAL;
 		  }
 		else
@@ -7776,17 +7805,25 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
 	    {
 	    case CG_VERDICT_FALSE:
 	      ok = false;
-	      error_at (loc, "%<contract_assert%> condition %qE is provably false",
-			c);
+	      if (is_post)
+		error_at (loc, "postcondition condition %qE is provably false", c);
+	      else
+		error_at (loc, "%<contract_assert%> condition %qE is provably false",
+			  c);
 	      inform (loc, "established %s", text);
 	      break;
 	    case CG_VERDICT_UNKNOWN:
 	      if (strict)
 		{
 		  ok = false;
-		  error_at (loc, "cannot prove %<contract_assert%> condition %qE",
-			    c);
+		  if (is_post)
+		    error_at (loc, "cannot prove postcondition condition %qE", c);
+		  else
+		    error_at (loc, "cannot prove %<contract_assert%> condition %qE",
+			      c);
 		}
+	      else if (is_post)
+		warning_at (loc, 0, "cannot verify postcondition condition %qE", c);
 	      else
 		warning_at (loc, 0, "cannot verify %<contract_assert%> condition %qE",
 			    c);

@@ -13,7 +13,6 @@
 void f (int& x)
 {
   contract_assert<std::contracts::conveyor_assert_v> (x < 2048); // { dg-error "pointer dereference of .x. not provably valid" }
-						 // { dg-warning "cannot verify .contract_assert. condition" "" { target *-*-* } .-1 }
 }
 
 int main () { return 0; }
