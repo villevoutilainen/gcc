@@ -9465,6 +9465,77 @@ cg_record_predicate_site_facts (gcall *call,
     }
 }
 
+/* A contract never checked in this translation unit (its function has
+   no definition here) has no recorded facts: seed core function FUN's
+   parameters, which start with copies of its function's own, with what
+   that function's other preconditions say about them, as the AST engine
+   validates such a contract against the function's entry
+   (oa_seed_entry_env) -- e.g. the implicit is_object_address
+   precondition of a reference parameter.  */
+
+static void
+cg_seed_predicate_from_preconditions (function *fun,
+				      hash_map<tree, cg_fact> &established,
+				      hash_map<tree, cg_fact> &established_nz,
+				      hash_map<tree, cg_range_lite> &established_range)
+{
+  tree owner;
+  tree self = predicate_core_function_contract (fun->decl, &owner);
+  if (!self || !owner)
+    return;
+  /* OWNER's parameter -> FUN's parameter at the same position.  */
+  auto core_parm = [&] (tree parm) -> tree
+    {
+      tree c = DECL_ARGUMENTS (fun->decl);
+      for (tree p = DECL_ARGUMENTS (owner); p && c;
+	   p = DECL_CHAIN (p), c = DECL_CHAIN (c))
+	if (p == parm)
+	  return cg_self_trust_key (fun, c);
+      return NULL_TREE;
+    };
+  for (tree as = get_fn_contract_specifiers (owner); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (contract == self || !PRECONDITION_P (contract)
+	  || !oa_contract_conveyor_active_public (contract, owner))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree arg, const_val;
+	  tree_code code;
+	  if (is_object_address_call_p (*conjuncts[i], &arg))
+	    {
+	      arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+	      while (TREE_CODE (arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arg)
+		     || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+		arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	      if (TREE_CODE (arg) == PARM_DECL)
+		if (tree key = core_parm (arg))
+		  established.put (key, { true });
+	    }
+	  else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
+	    {
+	      if (TREE_CODE (arg) == PARM_DECL)
+		if (tree key = core_parm (arg))
+		  established_nz.put (key, { true });
+	    }
+	  else if (oa_match_simple_comparison (*conjuncts[i], &arg, &code,
+					       &const_val)
+		   && TREE_CODE (const_val) == INTEGER_CST)
+	    if (tree key = core_parm (arg))
+	      {
+		cg_range_lite &r = established_range.get_or_insert (key);
+		cg_tighten_range_bound (r, code, wi::to_widest (const_val));
+	      }
+	}
+    }
+}
+
 /* Seed predicate core function FUN's parameters with what the checks of
    its contract recorded about the values passed to them.  */
 
@@ -9478,7 +9549,11 @@ cg_seed_predicate_site_facts (function *fun,
   vec<cg_site_fact> **facts
     = cg_predicate_site_facts ? cg_predicate_site_facts->get (fun->decl) : NULL;
   if (!facts)
-    return;
+    {
+      cg_seed_predicate_from_preconditions (fun, established, established_nz,
+					    established_range);
+      return;
+    }
   unsigned i = 0;
   for (tree parm = DECL_ARGUMENTS (fun->decl); parm && i < (*facts)->length ();
        parm = DECL_CHAIN (parm), ++i)
@@ -10086,7 +10161,8 @@ contracts_gimple_eager_check_function (tree fndecl)
 	 are core functions is only known once they're built, so all are
 	 queued.  */
       if (flag_contract_conveyor_proofs_gimple
-	  && CONTRACT_HELPER (fndecl) == ldf_contract_predicate_helper)
+	  && CONTRACT_HELPER (fndecl) == ldf_contract_predicate_helper
+	  && !cg_eager_check_predicate_helpers.contains (fndecl))
 	cg_eager_check_predicate_helpers.safe_push (fndecl);
       return;
     }
@@ -10272,10 +10348,12 @@ contracts_gimple_eager_check_drain_at_eof (void)
       for (tree fn : cg_eager_check_predicate_helpers)
 	helpers.safe_push (fn);
       cg_eager_check_predicate_helpers.truncate (0);
+      static hash_set<tree> checked_cores;
       for (tree fn : helpers)
 	{
 	  tree owner;
-	  if (predicate_core_function_contract (fn, &owner))
+	  if (predicate_core_function_contract (fn, &owner)
+	      && !checked_cores.add (fn))
 	    contracts_gimple_eager_check_function_1 (fn, /*is_eof_drain=*/true);
 	}
     }

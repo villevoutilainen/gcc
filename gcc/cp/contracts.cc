@@ -27608,12 +27608,12 @@ oa_condition_not_yet_analyzable_p (tree cond)
 					  NULL) != NULL_TREE;
 }
 
-static void
+static bool
 oa_validate_contract_predicates (tree fndecl)
 {
   tree specs = get_fn_contract_specifiers (fndecl);
   if (!specs || contract_any_deferred_p (specs))
-    return;
+    return false;
 
   bool any_strict = false;
   {
@@ -27625,17 +27625,17 @@ oa_validate_contract_predicates (tree fndecl)
 	if (!cond || cond == error_mark_node)
 	  continue;
 	if (oa_condition_not_yet_analyzable_p (cond))
-	  return;
+	  return false;
 	if (POSTCONDITION_P (stmt))
 	  if (tree r = POSTCONDITION_IDENTIFIER (stmt))
 	    if (r != error_mark_node && type_uses_auto (TREE_TYPE (r)))
-	      return;
+	      return false;
 	if (oa_contract_conveyor_active_p (stmt, fndecl))
 	  any_strict = true;
       }
   }
   if (!any_strict)
-    return;
+    return false;
 
   auto cfd_ovr = make_temp_override (current_function_decl, fndecl);
   auto val_ovr = make_temp_override (oa_validating_declaration, fndecl);
@@ -27663,6 +27663,34 @@ oa_validate_contract_predicates (tree fndecl)
       else if (POSTCONDITION_P (copy))
 	oa_handle_postcondition_stmt (copy, env);
     }
+
+  /* The GIMPLE engine validates a condition through its predicate core
+     function (contracts-gimple.cc, cg_check_predicate_mutation and the
+     item 8 checks), so build one for each conveyor contract that has none
+     yet -- a function without a definition, or whose contract is never
+     checked.  */
+  bool built = false;
+  /* A definition's checks of its contracts build their own core
+     functions, from its own copies of them.  */
+  if (flag_contract_conveyor_proofs_gimple && !DECL_INITIAL (fndecl))
+    for (tree as = specs; as; as = TREE_CHAIN (as))
+      {
+	tree stmt = CONTRACT_STATEMENT (as);
+	tree cond = CONTRACT_CONDITION (stmt);
+	if (!cond || cond == error_mark_node
+	    || !oa_contract_conveyor_active_p (stmt, fndecl)
+	    || get_contract_predicate_core_fn (stmt))
+	  continue;
+	/* At the condition, not at the end of the file: the core
+	   function's statements without a location of their own get
+	   it.  */
+	auto loc_ovr = make_temp_override (input_location,
+					   EXPR_LOC_OR_LOC (cond,
+							    EXPR_LOCATION (stmt)));
+	get_or_build_predicate_core_function (stmt, fndecl);
+	built = true;
+      }
+  return built;
 }
 
 /* D4324: an object declaration's own contracts are validated through its
@@ -27764,7 +27792,7 @@ validate_pending_contract_predicates ()
 	      || (DECL_LANG_SPECIFIC (decl) && DECL_TEMPLATE_INSTANTIATION (decl)
 		  && !DECL_TEMPLATE_INSTANTIATED (decl)))
 	    continue;
-	  oa_validate_contract_predicates (decl);
+	  built |= oa_validate_contract_predicates (decl);
 	}
       else if (VAR_P (decl) || TREE_CODE (decl) == PARM_DECL
 	       || TREE_CODE (decl) == FIELD_DECL)
