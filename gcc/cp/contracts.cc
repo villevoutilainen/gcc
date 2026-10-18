@@ -15266,6 +15266,12 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
 
+  /* The callee parameters whose is_object_address obligation has been
+     reported for CALL already: several preconditions can require the
+     same one (an explicit one besides the implicit one a conveyor
+     function's reference parameter gets, say), and each unprovable
+     obligation should be reported once.  */
+  hash_set<tree> reported_parms;
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
       tree contract = CONTRACT_STATEMENT (as);
@@ -15333,7 +15339,8 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
 	    continue;
 
 	  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
-	  if (!oa_provable_p (substituted, env, &reason))
+	  if (!oa_provable_p (substituted, env, &reason)
+	      && !reported_parms.add (stripped_arg))
 	    {
 	      error_at (EXPR_LOCATION (call),
 			"cannot prove %<is_object_address%> for %qE, "
@@ -15384,7 +15391,8 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
     {
       tree receiver = CALL_EXPR_ARG (call, 0);
       oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
-      if (!oa_provable_p (receiver, env, &reason))
+      if (!oa_provable_p (receiver, env, &reason)
+	  && !reported_parms.add (DECL_ARGUMENTS (callee)))
 	{
 	  error_at (EXPR_LOCATION (call),
 		    "cannot prove %<is_object_address%> for %qE, "
@@ -16638,6 +16646,9 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
   oa_handle_precondition_simple_range_obligation (call, env,
 						   /*conveyor=*/true, strict);
 
+  /* The callee parameters whose nonzero obligation has been reported for
+     CALL already, so a repeated precondition reports it once.  */
+  hash_set<tree> reported_nz_parms;
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
       tree contract = CONTRACT_STATEMENT (as);
@@ -16938,6 +16949,8 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		}
 	      if (oa_provably_nonzero_p (substituted, env))
 		continue; /* Proven true: silently discharged.  */
+	      if (reported_nz_parms.add (nz_arg))
+		continue; /* Already reported for this call.  */
 	      if (strict)
 		error_at (EXPR_LOCATION (call),
 			  "cannot prove that %qE is nonzero, as required by "
@@ -18035,6 +18048,9 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
   oa_handle_precondition_simple_range_obligation (call, env,
 						   /*conveyor=*/false, strict);
 
+  /* The callee parameters whose nonzero obligation has been reported for
+     CALL already, so a repeated precondition reports it once.  */
+  hash_set<tree> reported_nz_parms;
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
       tree contract = CONTRACT_STATEMENT (as);
@@ -18425,6 +18441,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		  && ((scalar_range.has_lo && scalar_range.lo > 0)
 		      || (scalar_range.has_hi && scalar_range.hi < 0)))
 		continue; /* Proven true: silently discharged.  */
+	      if (reported_nz_parms.add (arg))
+		continue; /* Already reported for this call.  */
 	      if (strict)
 		error_at (EXPR_LOCATION (call),
 			  "cannot prove that %qE is nonzero, as required by "
