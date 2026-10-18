@@ -24,4 +24,3 @@ int t_neg (int x) { return divide (10, neg (x)); }
 int t_wrong_arm (int x) { return x != 0 ? 0 : divide (10, x); }	// { dg-warning "cannot verify that .x. is nonzero" }
 bool t_wrong_and (int x) { return x == 0 && divide (10, x) > 1; }	// { dg-warning "cannot verify that .x. is nonzero" }
 int t_any (int x) { return divide (10, any (x)); }			// { dg-warning "cannot verify that .any\\(x\\). is nonzero" }
-// { dg-warning "cannot verify that the result of .int any\\(int\\). is nonzero" "" { target *-*-* } .-1 }

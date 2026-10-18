@@ -30,6 +30,6 @@ int main ()
 {
   int y = opaque ();
   use_it (y); // { dg-warning "cannot verify" }
-              // { dg-message "no determinable range" "unprovable reason" { target *-*-* } .-1 }
+              // { dg-message "no fact relating this value" "unprovable reason" { target *-*-* } .-1 }
   return 0;
 }
