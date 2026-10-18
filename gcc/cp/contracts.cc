@@ -13361,6 +13361,20 @@ oa_track_condition_assignment (tree cond, oa_env &env)
 
 static bool oa_diagnostics_active = true;
 
+/* The index of CALL's first real argument: an AGGR_INIT_EXPR for a
+   constructor ('return T (x);') carries a placeholder for the object
+   being constructed as argument 0 at this stage, but one for an ordinary
+   function returning a class by value ('return make (a);') doesn't --
+   its argument 0 is the first real argument, or a member function's real
+   'this'.  0 for a CALL_EXPR.  */
+
+static int
+oa_call_first_real_arg (tree call)
+{
+  return (TREE_CODE (call) == AGGR_INIT_EXPR && AGGR_INIT_VIA_CTOR_P (call)
+	  ? 1 : 0);
+}
+
 /* error_at for a violation of the conveyor rules found while analyzing
    the body of the current function (the item 8 UB checks).  While that
    function is a conveyor(auto) specialization being deduced, the
@@ -15273,7 +15287,7 @@ oa_call_result_owned_p (tree call, oa_env &env, bool in_predicate_context)
     return false;
 
   unsigned nargs = is_aggr_init ? aggr_init_expr_nargs (call) : call_expr_nargs (call);
-  for (unsigned i = is_aggr_init ? 1 : 0; i < nargs; ++i)
+  for (unsigned i = oa_call_first_real_arg (call); i < nargs; ++i)
     {
       tree arg = STRIP_ANY_LOCATION_WRAPPER (is_aggr_init
 					      ? AGGR_INIT_EXPR_ARG (call, i)
@@ -15507,7 +15521,8 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
 	      {
 		if (TREE_CODE (call) == AGGR_INIT_EXPR)
 		  {
-		    if (argno >= 1 && argno < (unsigned) aggr_init_expr_nargs (call))
+		    if (argno >= (unsigned) oa_call_first_real_arg (call)
+		     && argno < (unsigned) aggr_init_expr_nargs (call))
 		      substituted = AGGR_INIT_EXPR_ARG (call, argno);
 		  }
 		else if (argno < (unsigned) call_expr_nargs (call))
@@ -15653,7 +15668,8 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
 	  tree substituted = NULL_TREE;
 	  if (TREE_CODE (call) == AGGR_INIT_EXPR)
 	    {
-	      if (argno >= 1 && argno < (unsigned) aggr_init_expr_nargs (call))
+	      if (argno >= (unsigned) oa_call_first_real_arg (call)
+		     && argno < (unsigned) aggr_init_expr_nargs (call))
 		substituted = AGGR_INIT_EXPR_ARG (call, argno);
 	    }
 	  else if (argno < (unsigned) call_expr_nargs (call))
@@ -17163,7 +17179,8 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	  bool call_is_aggr_init = TREE_CODE (call) == AGGR_INIT_EXPR;
 	  if (!matched_parm
 	      || (call_is_aggr_init
-		  ? (argno < 1 || argno >= (unsigned) aggr_init_expr_nargs (call))
+		  ? (argno < (unsigned) oa_call_first_real_arg (call)
+		     || argno >= (unsigned) aggr_init_expr_nargs (call))
 		  : argno >= (unsigned) call_expr_nargs (call)))
 	    continue;
 
@@ -17287,7 +17304,8 @@ oa_substitute_call_arg (tree callee, tree call, tree param)
     if (p == param)
       {
 	if (TREE_CODE (call) == AGGR_INIT_EXPR)
-	  return (argno >= 1 && argno < (unsigned) aggr_init_expr_nargs (call))
+	  return (argno >= (unsigned) oa_call_first_real_arg (call)
+		     && argno < (unsigned) aggr_init_expr_nargs (call))
 	    ? AGGR_INIT_EXPR_ARG (call, argno) : NULL_TREE;
 	return argno < (unsigned) call_expr_nargs (call)
 	  ? CALL_EXPR_ARG (call, argno) : NULL_TREE;
@@ -19586,9 +19604,9 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env,
      the two calls.  */
   tree callee_parm = callee != NULL_TREE && TREE_CODE (callee) == FUNCTION_DECL
     ? DECL_ARGUMENTS (callee) : NULL_TREE;
-  if (call_is_aggr_init && callee_parm)
+  if (oa_call_first_real_arg (call) && callee_parm)
     callee_parm = DECL_CHAIN (callee_parm);
-  for (int i = call_is_aggr_init ? 1 : 0; i < nargs;
+  for (int i = oa_call_first_real_arg (call); i < nargs;
        ++i, callee_parm = callee_parm ? DECL_CHAIN (callee_parm) : NULL_TREE)
     {
       tree call_arg = call_is_aggr_init
@@ -19653,9 +19671,9 @@ oa_invalidate_symbolic_scalar_range_for_call_args (tree call, oa_env &env)
   tree callee = cp_get_callee_fndecl_nofold (call);
   tree callee_parm = (callee && TREE_CODE (callee) == FUNCTION_DECL
 		      ? DECL_ARGUMENTS (callee) : NULL_TREE);
-  if (call_is_aggr_init && callee_parm)
+  if (oa_call_first_real_arg (call) && callee_parm)
     callee_parm = DECL_CHAIN (callee_parm);
-  for (int i = call_is_aggr_init ? 1 : 0; i < nargs;
+  for (int i = oa_call_first_real_arg (call); i < nargs;
        ++i, callee_parm = callee_parm ? DECL_CHAIN (callee_parm) : NULL_TREE)
     {
       tree arg = STRIP_ANY_LOCATION_WRAPPER (call_is_aggr_init
@@ -21904,7 +21922,7 @@ oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
 	tree *fnp = is_aggr_init ? &AGGR_INIT_EXPR_FN (t) : &CALL_EXPR_FN (t);
 	cp_walk_tree (fnp, oa_scan_calls_visitor, data_, NULL);
 	int nargs = is_aggr_init ? aggr_init_expr_nargs (t) : call_expr_nargs (t);
-	for (int i = is_aggr_init ? 1 : 0; i < nargs; ++i)
+	for (int i = oa_call_first_real_arg (t); i < nargs; ++i)
 	  {
 	    tree *argp = is_aggr_init
 	      ? &AGGR_INIT_EXPR_ARG (t, i) : &CALL_EXPR_ARG (t, i);
