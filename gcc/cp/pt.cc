@@ -29741,7 +29741,7 @@ class conveyor_auto_deduction_sentinel
 public:
   explicit conveyor_auto_deduction_sentinel (tree d)
     : m_active (try_start_probe (d)), m_decl (d),
-      m_probe (&m_violation, m_active)
+      m_probe (&m_violation, m_active, d)
   { }
 
   ~conveyor_auto_deduction_sentinel ()

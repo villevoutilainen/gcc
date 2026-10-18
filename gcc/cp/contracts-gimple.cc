@@ -2629,6 +2629,26 @@ cg_provably_nonzero_for_ub_p (tree val, gimple *stmt,
   return false;
 }
 
+/* error_at for a violation of the conveyor rules found in the body of the
+   function being analyzed (item 8 UB checks).  While that function is a
+   conveyor(auto) specialization being deduced, the violation only means
+   it isn't conveyor: record it instead, like the AST engine's
+   oa_conveyor_error_at.  */
+
+static void ATTRIBUTE_GCC_DIAG (2,3)
+cg_conveyor_error_at (location_t loc, const char *gmsgid, ...)
+{
+  if (conveyor_auto_note_violation_in (cfun ? cfun->decl
+				       : current_function_decl))
+    return;
+  auto_diagnostic_group d;
+  va_list ap;
+  va_start (ap, gmsgid);
+  emit_diagnostic_valist (diagnostics::kind::error, loc,
+			  diagnostics::option_id (), gmsgid, &ap);
+  va_end (ap);
+}
+
 /* Check every div/mod operation in one GIMPLE_ASSIGN statement's own
    RHS, erroring on any whose divisor isn't provably nonzero. Only ever
    called for a DECL_DECLARED_CONVEYOR_P function's own body (see this
@@ -2661,9 +2681,10 @@ cg_check_div_mod_ub (gimple *stmt, hash_map<tree, cg_fact> &established_nz,
   if (!cg_provably_nonzero_for_ub_p (divisor, stmt, established_nz,
 				      established_range, scalar_range_cache,
 				      ranger))
-    error_at (gimple_location (stmt),
-	      "divisor %qE not provably nonzero in a conveyor function",
-	      divisor);
+    cg_conveyor_error_at (gimple_location (stmt),
+			  "divisor %qE not provably nonzero in a "
+			  "conveyor function",
+			  divisor);
 }
 
 /* D4324, item 8's overflow check, GIMPLE side: is a shift of exactly 1
@@ -2767,8 +2788,9 @@ cg_check_overflow_ub (gimple *stmt,
 		  && r.has_lo
 		  && r.lo > wi::to_widest (TYPE_MIN_VALUE (type));
       if (!safe)
-	error_at (gimple_location (stmt), "negation of %qE not provably "
-		  "free of overflow in a conveyor function", op);
+	cg_conveyor_error_at (gimple_location (stmt),
+			      "negation of %qE not provably "
+			      "free of overflow in a conveyor function", op);
       return;
     }
 
@@ -2850,8 +2872,9 @@ cg_check_overflow_ub (gimple *stmt,
     }
 
   if (!safe)
-    error_at (gimple_location (stmt), "result of %qE not provably free of "
-	      "overflow in a conveyor function", lhs);
+    cg_conveyor_error_at (gimple_location (stmt),
+			  "result of %qE not provably free of "
+			  "overflow in a conveyor function", lhs);
 }
 
 /* D4324/P2680 item 8's array-bounds/pointer-arithmetic check, GIMPLE
@@ -2947,8 +2970,9 @@ cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
   hash_set<tree> in_progress;
   if (!cg_provable_object_address_p (base, established, /*require_conveyor=*/true,
 				       in_progress))
-    error_at (gimple_location (stmt), "pointer dereference of %qE not "
-	      "provably valid in a conveyor function", base);
+    cg_conveyor_error_at (gimple_location (stmt),
+			  "pointer dereference of %qE not "
+			  "provably valid in a conveyor function", base);
 }
 
 static void

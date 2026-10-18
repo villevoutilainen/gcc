@@ -920,6 +920,9 @@ bool suppress_conveyor_restrictions_for_deleting_dtor_p = false;
 /* See contracts.h for the full rationale.  */
 bool *conveyor_auto_probe_violation_p = nullptr;
 
+/* See contracts.h.  */
+tree conveyor_auto_probe_decl;
+
 /* True if constructs subject to the D4324 conveyor-function syntactic
    restrictions (gcc/cp/constexpr.cc's check_conveyor_function_body, and
    the point-of-construction checks alongside it) should be rejected
@@ -13322,6 +13325,25 @@ oa_track_condition_assignment (tree cond, oa_env &env)
 
 static bool oa_diagnostics_active = true;
 
+/* error_at for a violation of the conveyor rules found while analyzing
+   the body of the current function (the item 8 UB checks).  While that
+   function is a conveyor(auto) specialization being deduced, the
+   violation only means it isn't conveyor: record it instead
+   (conveyor_auto_note_violation_in).  */
+
+static void ATTRIBUTE_GCC_DIAG (2,3)
+oa_conveyor_error_at (location_t loc, const char *gmsgid, ...)
+{
+  if (conveyor_auto_note_violation_in (current_function_decl))
+    return;
+  auto_diagnostic_group d;
+  va_list ap;
+  va_start (ap, gmsgid);
+  emit_diagnostic_valist (diagnostics::kind::error, loc,
+			  diagnostics::option_id (), gmsgid, &ap);
+  va_end (ap);
+}
+
 /* D4324/P2680 item 8, narrow version: check every TRUNC_DIV_EXPR/
    TRUNC_MOD_EXPR div/mod operation within *EXPR (an arbitrary
    sub-expression -- a RETURN_EXPR's value or an INIT_EXPR/MODIFY_EXPR's
@@ -13355,8 +13377,9 @@ oa_scan_div_mod_in_expr (tree *expr, oa_env &env)
 	return NULL_TREE;
       tree divisor = TREE_OPERAND (t, 1);
       if (!oa_provably_nonzero_p (divisor, *e))
-	error_at (EXPR_LOCATION (t), "divisor %qE not provably nonzero in "
-		  "a conveyor function", divisor);
+	oa_conveyor_error_at (EXPR_LOCATION (t),
+			      "divisor %qE not provably nonzero in "
+			      "a conveyor function", divisor);
       return NULL_TREE;
     }, &env, NULL);
 }
@@ -13398,11 +13421,13 @@ oa_check_offset_in_bounds (tree t, tree array_type, const oa_range_fact &total,
   if (!total.has_lo || !total.has_hi || !max || TREE_CODE (max) != INTEGER_CST)
     {
       if (diag_expr)
-	error_at (EXPR_LOCATION (t), "%s %qE not provably in-bounds in a "
-		  "conveyor function", what, diag_expr);
+	oa_conveyor_error_at (EXPR_LOCATION (t),
+			      "%s %qE not provably in-bounds in a "
+			      "conveyor function", what, diag_expr);
       else
-	error_at (EXPR_LOCATION (t), "%s not provably in-bounds in a "
-		  "conveyor function", what);
+	oa_conveyor_error_at (EXPR_LOCATION (t),
+			      "%s not provably in-bounds in a "
+			      "conveyor function", what);
       return;
     }
   /* D4324/P2680 item 8, Increment W: forming a one-past-the-end pointer
@@ -13417,11 +13442,13 @@ oa_check_offset_in_bounds (tree t, tree array_type, const oa_range_fact &total,
   if (total.lo < 0 || total.hi > hi_limit)
     {
       if (diag_expr)
-	error_at (EXPR_LOCATION (t), "%s %qE out of bounds in a "
-		  "conveyor function", what, diag_expr);
+	oa_conveyor_error_at (EXPR_LOCATION (t),
+			      "%s %qE out of bounds in a " "conveyor function",
+			      what, diag_expr);
       else
-	error_at (EXPR_LOCATION (t), "%s out of bounds in a conveyor "
-		  "function", what);
+	oa_conveyor_error_at (EXPR_LOCATION (t),
+			      "%s out of bounds in a conveyor " "function",
+			      what);
     }
 }
 
@@ -13514,9 +13541,11 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 	      oa_range_fact idx_fact;
 	      if (!oa_index_range (index, *e, &idx_fact))
 		{
-		  error_at (EXPR_LOCATION (t), "array index %qE not "
-			    "provably in-bounds in a conveyor function",
-			    index);
+		  oa_conveyor_error_at (EXPR_LOCATION (t),
+					"array index %qE not "
+					"provably in-bounds in a "
+					"conveyor function",
+					index);
 		  return NULL_TREE;
 		}
 	      oa_check_offset_in_bounds (t, base_type, idx_fact, "array index", index);
@@ -13528,9 +13557,11 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 	      if (!oa_get_range (base, *e, &base_fact) || base_fact.base == NULL_TREE
 		  || !oa_index_range (index, *e, &idx_fact))
 		{
-		  error_at (EXPR_LOCATION (t), "array index %qE not "
-			    "provably in-bounds in a conveyor function",
-			    index);
+		  oa_conveyor_error_at (EXPR_LOCATION (t),
+					"array index %qE not "
+					"provably in-bounds in a "
+					"conveyor function",
+					index);
 		  return NULL_TREE;
 		}
 	      oa_range_fact total;
@@ -13680,9 +13711,10 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 	       falls back to INPUT_LOCATION the same way this file's
 	       neighboring diagnostics already do for a similar reason.  */
 	    {
-	      error_at (EXPR_LOC_OR_LOC (t, input_location), "pointer "
-			"dereference of %qE not provably valid in a "
-			"conveyor function", base);
+	      oa_conveyor_error_at (EXPR_LOC_OR_LOC (t, input_location),
+				    "pointer dereference of %qE not "
+				    "provably valid in a "
+				    "conveyor function", base);
 	    }
 	  }
 	  return NULL_TREE;
@@ -13709,8 +13741,9 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 	  oa_range_fact result_fact;
 	  if (!oa_get_range (t, *e, &result_fact))
 	    {
-	      error_at (EXPR_LOCATION (t), "pointer arithmetic not provably "
-			"in-bounds in a conveyor function");
+	      oa_conveyor_error_at (EXPR_LOCATION (t),
+				    "pointer arithmetic not provably "
+				    "in-bounds in a conveyor function");
 	      return NULL_TREE;
 	    }
 	  oa_check_offset_in_bounds (t, TREE_TYPE (result_fact.base), result_fact,
@@ -13848,11 +13881,11 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 	  bool increasing
 	    = code == PREINCREMENT_EXPR || code == POSTINCREMENT_EXPR;
 	  if (!oa_provably_safe_unit_shift_p (x, increasing, *e))
-	    error_at (EXPR_LOCATION (t), increasing
-		      ? G_("increment of %qE not provably free of overflow "
-			   "in a conveyor function")
-		      : G_("decrement of %qE not provably free of overflow "
-			   "in a conveyor function"), x);
+	    oa_conveyor_error_at (EXPR_LOCATION (t), increasing
+				  ? G_("increment of %qE not provably free of "
+				       "overflow in a conveyor function")
+				  : G_("decrement of %qE not provably free of "
+				       "overflow in a conveyor function"), x);
 	  return NULL_TREE;
 	}
 
@@ -13894,8 +13927,9 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 		      && fact.has_lo
 		      && fact.lo > wi::to_widest (TYPE_MIN_VALUE (value_type));
 	  if (!safe)
-	    error_at (EXPR_LOCATION (t), "negation of %qE not provably free "
-		      "of overflow in a conveyor function", x);
+	    oa_conveyor_error_at (EXPR_LOCATION (t),
+				  "negation of %qE not provably free "
+				  "of overflow in a conveyor function", x);
 	  return NULL_TREE;
 	}
 
@@ -14018,8 +14052,9 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 	    }
 
 	  if (!safe)
-	    error_at (EXPR_LOCATION (t), "result of %qE not provably free of "
-		      "overflow in a conveyor function", t);
+	    oa_conveyor_error_at (EXPR_LOCATION (t),
+				  "result of %qE not provably free of "
+				  "overflow in a conveyor function", t);
 	  return NULL_TREE;
 	}
 
@@ -15428,7 +15463,11 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
 	  oa_unprovable_reason own_reason = OA_UNPROVABLE_NONE;
 	  if (!oa_reference_owned_p (substituted, env,
 				     /*asking_about_pointer_value=*/false,
-				     in_predicate_context, &own_reason))
+				     in_predicate_context, &own_reason)
+	      /* Only a conveyor caller's rule: a conveyor(auto) caller being
+		 deduced just isn't conveyor.  */
+	      && (in_predicate_context
+		  || !conveyor_auto_note_violation_in (current_function_decl)))
 	    {
 	      error_at (EXPR_LOCATION (call),
 			"argument %qE is not owned by the calling "
@@ -26746,6 +26785,18 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
 {
   if (!flag_contract_control_objects)
     return;
+
+  /* This walk can be entered while another function's walk is in
+     progress, when analyzing a call there forces a conveyor(auto)
+     callee's deduction (maybe_instantiate_conveyor), which instantiates
+     and finishes the callee; keep the outer walk's per-function state
+     intact.  */
+  auto ovr_return_tracking = make_temp_override (oa_return_tracking);
+  auto ovr_return_all_provable = make_temp_override (oa_return_all_provable);
+  auto ovr_return_seen = make_temp_override (oa_return_seen);
+  auto ovr_merge_env = make_temp_override (oa_postcondition_merge_env);
+  auto ovr_result_ids = make_temp_override (oa_postcondition_result_ids);
+  auto ovr_merge_any = make_temp_override (oa_postcondition_merge_any_result);
 
   /* D4324/P2680: a generated "pred"/"thunk"/consteval-thunk helper
      function (see ldf_contract_predicate_helper's own comment) never
