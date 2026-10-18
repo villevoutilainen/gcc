@@ -30014,6 +30014,15 @@ oa_match_simple_comparison_var (tree conjunct, tree *decl_out,
 /* Exported for the GIMPLE engine (contracts-gimple.cc).  */
 
 bool
+oa_field_nonzero_conjunct_public (tree conjunct, tree *obj_out,
+				  tree *field_out)
+{
+  return oa_field_nonzero_conjunct_p (conjunct, obj_out, field_out);
+}
+
+/* Exported for the GIMPLE engine (contracts-gimple.cc).  */
+
+bool
 oa_match_simple_comparison_var_public (tree conjunct, tree *decl_out,
 				       tree_code *code_out,
 				       tree *const_val_out)

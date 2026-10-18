@@ -465,6 +465,11 @@ extern void oa_collect_conjuncts_public (tree *cond, vec<tree *> *out);
 extern tree contract_check_arg_struct_info (tree struct_type, tree *cond,
 					    tree *decls);
 
+/* True if CONJUNCT is 'OBJ.FIELD != 0' (either operand order); sets
+   *OBJ_OUT and *FIELD_OUT.  */
+extern bool oa_field_nonzero_conjunct_public (tree conjunct, tree *obj_out,
+					      tree *field_out);
+
 /* oa_match_simple_comparison, but admitting a VAR_DECL as well as a
    PARM_DECL on the non-constant side.  */
 extern bool oa_match_simple_comparison_var_public (tree conjunct,

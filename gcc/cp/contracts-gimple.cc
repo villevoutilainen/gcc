@@ -3721,7 +3721,14 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
    which -fcontract-*-proofs-gimple flags happen to be on).  */
 
 struct cg_pred_fact { tree pred_fn; bool polarity; bool conveyor_established; };
-struct cg_field_fact { cg_range_lite range; bool conveyor_established; };
+struct cg_field_fact
+{
+  cg_range_lite range;
+  bool conveyor_established;
+  /* The field is nonzero, a fact a range can't state for a signed
+     field: from a contract_assert's 'obj.field != 0'.  */
+  bool nonzero = false;
+};
 /* cg_field_key_hash itself is defined earlier in this file (alongside
    cg_call_call_rel_fact), which needs it before this point.  */
 
@@ -3898,6 +3905,25 @@ cg_field_object_predicate_invalidate_all (tree base,
   for (auto it : cache)
     if (it.first.first == base)
       state.pred.remove (it.second);
+}
+
+/* The key under which cg_dom_fact_state::field holds the facts about
+   the value of scalar DECL itself, for a scalar in memory.  */
+
+static inline std::pair<tree, tree>
+cg_scalar_memory_fact_key (tree decl)
+{
+  return { decl, NULL_TREE };
+}
+
+/* A store to LHS ends the facts about a scalar in memory's own value
+   (cg_scalar_memory_fact_key).  */
+
+static void
+cg_process_scalar_write (tree lhs, cg_dom_fact_state &state)
+{
+  if (VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
+    state.field.remove (cg_scalar_memory_fact_key (lhs));
 }
 
 static void
@@ -4629,6 +4655,9 @@ cg_invalidate_parameter_alias_group (tree identity, function *fun,
    already trusted as a same-object, non-mutating pass-through
    everywhere else in this pass).  */
 
+static void cg_invalidate_persistent_facts_for_call_arg
+  (tree, function *, hash_map<cg_field_key_hash, tree> &, cg_dom_fact_state &);
+
 static void
 cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
 					       hash_map<cg_field_key_hash, tree> &field_object_cache,
@@ -4638,46 +4667,77 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
   if (call_callee && DECL_CONV_FN_P (call_callee))
     return;
   unsigned n = gimple_call_num_args (call);
-  for (unsigned i = 0; i < n; ++i)
+  tree parm_types = (gimple_call_fntype (call)
+		     ? TYPE_ARG_TYPES (gimple_call_fntype (call)) : NULL_TREE);
+  for (unsigned i = 0; i < n;
+       ++i, parm_types = parm_types ? TREE_CHAIN (parm_types) : NULL_TREE)
     {
       tree arg = gimple_call_arg (call, i);
-      /* Ordering: cg_field_slot_identity, then cg_field_object_identity,
-	 then cg_gimple_object_identity last -- see cg_consult_persistent_
-	 facts's own identical comment for why the fallback resolver must
-	 stay last.  */
-      tree identity = cg_field_slot_identity (arg, state);
-      if (!identity)
-	identity = cg_field_object_identity (arg, field_object_cache);
-      if (!identity)
-	identity = cg_gimple_object_identity (arg);
-      if (!identity)
-	continue;
-      state.pred.remove (identity);
-      cg_field_object_predicate_invalidate_all (identity, field_object_cache, state);
-
-      auto_vec<std::pair<tree, tree>> to_remove;
-      for (auto it : state.field)
-	if (it.first.first == identity)
-	  to_remove.safe_push (it.first);
-      for (unsigned j = 0; j < to_remove.length (); ++j)
-	state.field.remove (to_remove[j]);
-
-      to_remove.truncate (0);
-      for (auto it : state.field_alias)
-	if (it.first.first == identity)
-	  to_remove.safe_push (it.first);
-      for (unsigned j = 0; j < to_remove.length (); ++j)
-	state.field_alias.remove (to_remove[j]);
-
-      to_remove.truncate (0);
-      for (auto it : state.call)
-	if (it.first.first == identity)
-	  to_remove.safe_push (it.first);
-      for (unsigned j = 0; j < to_remove.length (); ++j)
-	state.call.remove (to_remove[j]);
-
-      cg_invalidate_parameter_alias_group (identity, fun, field_object_cache, state);
+      /* A scalar in memory bound to a const reference keeps its value
+	 facts, as in the AST engine.  */
+      cg_field_fact kept;
+      bool keep = false;
+      if (TREE_CODE (arg) == ADDR_EXPR && DECL_P (TREE_OPERAND (arg, 0))
+	  && parm_types && TYPE_REF_P (TREE_VALUE (parm_types))
+	  && TYPE_READONLY (TREE_TYPE (TREE_VALUE (parm_types))))
+	if (cg_field_fact *f = state.field.get
+	      (cg_scalar_memory_fact_key (TREE_OPERAND (arg, 0))))
+	  {
+	    kept = *f;
+	    keep = true;
+	  }
+      cg_invalidate_persistent_facts_for_call_arg (arg, fun,
+						   field_object_cache, state);
+      if (keep)
+	state.field.put (cg_scalar_memory_fact_key (TREE_OPERAND (arg, 0)),
+			 kept);
     }
+}
+
+/* The body of cg_invalidate_persistent_facts_for_call_args, for one
+   argument ARG of CALL.  */
+
+static void
+cg_invalidate_persistent_facts_for_call_arg (tree arg, function *fun,
+					     hash_map<cg_field_key_hash, tree> &field_object_cache,
+					     cg_dom_fact_state &state)
+{
+  /* Ordering: cg_field_slot_identity, then cg_field_object_identity,
+     then cg_gimple_object_identity last -- see cg_consult_persistent_
+     facts's own identical comment for why the fallback resolver must
+     stay last.  */
+  tree identity = cg_field_slot_identity (arg, state);
+  if (!identity)
+    identity = cg_field_object_identity (arg, field_object_cache);
+  if (!identity)
+    identity = cg_gimple_object_identity (arg);
+  if (!identity)
+    return;
+  state.pred.remove (identity);
+  cg_field_object_predicate_invalidate_all (identity, field_object_cache, state);
+
+  auto_vec<std::pair<tree, tree>> to_remove;
+  for (auto it : state.field)
+    if (it.first.first == identity)
+      to_remove.safe_push (it.first);
+  for (unsigned j = 0; j < to_remove.length (); ++j)
+    state.field.remove (to_remove[j]);
+
+  to_remove.truncate (0);
+  for (auto it : state.field_alias)
+    if (it.first.first == identity)
+      to_remove.safe_push (it.first);
+  for (unsigned j = 0; j < to_remove.length (); ++j)
+    state.field_alias.remove (to_remove[j]);
+
+  to_remove.truncate (0);
+  for (auto it : state.call)
+    if (it.first.first == identity)
+      to_remove.safe_push (it.first);
+  for (unsigned j = 0; j < to_remove.length (); ++j)
+    state.call.remove (to_remove[j]);
+
+  cg_invalidate_parameter_alias_group (identity, fun, field_object_cache, state);
 }
 
 /* CALL's own callee's declared postcondition establishing a fact about
@@ -4784,6 +4844,291 @@ cg_establish_persistent_facts_for_call (gcall *call,
     }
 }
 
+static tree cg_contract_check_call_p (gcall *, tree *, tree *, tree *);
+static tree cg_contract_check_decl_value (gcall *, tree, tree, tree);
+
+/* Is DECL a scalar in memory (its address is taken) whose value the
+   walk can follow: every use of its address is a direct call argument
+   or the capture struct of a contract check, so it changes only through
+   a store to it or a call it is passed to, both of which end its facts
+   (cg_scalar_memory_fact_key).  */
+
+static bool
+cg_scalar_memory_tracking_p (function *fun, tree decl)
+{
+  if ((!VAR_P (decl) && TREE_CODE (decl) != PARM_DECL)
+      || !TREE_ADDRESSABLE (decl) || !SCALAR_TYPE_P (TREE_TYPE (decl))
+      || is_global_var (decl) || DECL_CONTEXT (decl) != fun->decl)
+    return false;
+  struct ctx { tree decl; bool ok; };
+  ctx c = { decl, true };
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      {
+	gimple *stmt = gsi_stmt (gsi);
+	if (is_gimple_call (stmt))
+	  {
+	    /* A direct argument is fine; anything else isn't.  */
+	    bool other_use = false;
+	    for (unsigned i = 0; i < gimple_call_num_args (stmt); ++i)
+	      {
+		tree arg = gimple_call_arg (stmt, i);
+		if (TREE_CODE (arg) == ADDR_EXPR
+		    && TREE_OPERAND (arg, 0) == decl)
+		  continue;
+		if (walk_tree_without_duplicates
+		      (&arg, [] (tree *tp, int *, void *d) -> tree
+			 {
+			   return (TREE_CODE (*tp) == ADDR_EXPR
+				   && TREE_OPERAND (*tp, 0) == (tree) d)
+				  ? *tp : NULL_TREE;
+			 }, decl))
+		  other_use = true;
+	      }
+	    tree lhs = gimple_call_lhs (stmt);
+	    if (lhs && TREE_CODE (lhs) != VAR_DECL && TREE_CODE (lhs) != SSA_NAME
+		&& walk_tree_without_duplicates
+		     (&lhs, [] (tree *tp, int *, void *d) -> tree
+			{
+			  return (TREE_CODE (*tp) == ADDR_EXPR
+				  && TREE_OPERAND (*tp, 0) == (tree) d)
+				 ? *tp : NULL_TREE;
+			}, decl))
+	      other_use = true;
+	    if (other_use)
+	      return false;
+	    continue;
+	  }
+	if (cg_stores_addr_into_args_field_p (stmt, decl))
+	  continue;
+	/* A contract check's capture struct field, which its predicate
+	   only reads through.  */
+	if (gimple_assign_single_p (stmt)
+	    && TREE_CODE (gimple_assign_rhs1 (stmt)) == ADDR_EXPR
+	    && TREE_OPERAND (gimple_assign_rhs1 (stmt), 0) == decl
+	    && TREE_CODE (gimple_assign_lhs (stmt)) == COMPONENT_REF)
+	  {
+	    tree cond, decls;
+	    tree base = TREE_OPERAND (gimple_assign_lhs (stmt), 0);
+	    if (VAR_P (base)
+		&& contract_check_arg_struct_info (TREE_TYPE (base), &cond,
+						   &decls))
+	      continue;
+	  }
+	walk_stmt_load_store_addr_ops
+	  (stmt, &c, NULL, NULL,
+	   [] (gimple *, tree op, tree, void *d) -> bool
+	     {
+	       ctx *c = (ctx *) d;
+	       if (op == c->decl)
+		 c->ok = false;
+	       return false;
+	     });
+	if (!c.ok)
+	  return false;
+      }
+  return true;
+}
+
+/* The object identity of the object DECL designates in a contract
+   condition at contract check CALL (STRUCT_VAR and DECLS as from
+   cg_contract_check_call_p): what a pointer or reference (including
+   'this') points to, or a local aggregate itself.  */
+
+static tree
+cg_contract_check_object_identity (gcall *call, tree struct_var, tree decls,
+				   tree decl)
+{
+  decl = STRIP_ANY_LOCATION_WRAPPER (decl);
+  if (!VAR_P (decl) && TREE_CODE (decl) != PARM_DECL)
+    return NULL_TREE;
+  tree type = TREE_TYPE (decl);
+  if (TYPE_REF_P (type) || POINTER_TYPE_P (type))
+    {
+      tree val = cg_contract_check_decl_value (call, struct_var, decls, decl);
+      return val && TREE_CODE (val) == SSA_NAME
+	     ? cg_gimple_object_identity (val) : NULL_TREE;
+    }
+  if (VAR_P (decl) && RECORD_OR_UNION_TYPE_P (type))
+    return cg_gimple_object_identity (decl);
+  return NULL_TREE;
+}
+
+/* The memory facts a conveyor or symbolic contract_assert check CALL
+   establishes in STATE: the field ranges and nonzero fields its
+   condition states, and its named-predicate facts -- the
+   contract_assert counterpart of cg_establish_persistent_facts_for_call.
+   Its facts about SSA values are cg_assert_fact_scope's.  */
+
+static void
+cg_establish_assert_facts (gcall *call, cg_dom_fact_state &state)
+{
+  tree struct_var, cond, decls;
+  tree contract = cg_contract_check_call_p (call, &struct_var, &cond, &decls);
+  if (!contract || TREE_CODE (contract) != ASSERTION_STMT
+      || cond == NULL_TREE || cond == error_mark_node)
+    return;
+  tree owner = DECL_ORIGIN (current_function_decl);
+  bool conveyor_enabled = (flag_contract_conveyor_proofs_gimple
+			   && oa_contract_conveyor_active_public (contract,
+								  owner));
+  bool symbolic_enabled = (flag_contract_symbolic_proofs_gimple
+			   && oa_contract_symbolic_active_public (contract,
+								  owner));
+  if (!conveyor_enabled && !symbolic_enabled)
+    return;
+
+  auto identity_of = [&] (tree decl)
+    {
+      return cg_contract_check_object_identity (call, struct_var, decls,
+						 decl);
+    };
+
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree c = *conjuncts[i];
+      tree pred_fn, arg_decl;
+      bool negated;
+      if (oa_match_predicate_conjunct (c, &pred_fn, &arg_decl, &negated))
+	{
+	  if (tree identity = identity_of (arg_decl))
+	    state.pred.put (identity, { pred_fn, !negated, conveyor_enabled });
+	  continue;
+	}
+
+      tree obj, field;
+      if (oa_field_nonzero_conjunct_public (c, &obj, &field))
+	{
+	  obj = STRIP_ANY_LOCATION_WRAPPER (obj);
+	  if (TREE_CODE (obj) == INDIRECT_REF)
+	    obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
+	  if (tree identity = identity_of (obj))
+	    {
+	      cg_field_fact *existing = state.field.get ({identity, field});
+	      cg_field_fact fact = existing ? *existing
+				   : cg_field_fact { {}, conveyor_enabled };
+	      fact.nonzero = true;
+	      state.field.put ({identity, field}, fact);
+	    }
+	  continue;
+	}
+
+      /* A scalar in memory: its nonzero-ness or range, until it's
+	 stored to or passed to a call.  */
+      tree decl, const_val;
+      tree_code code;
+      auto memory_scalar_p = [&] (tree d)
+	{
+	  d = STRIP_ANY_LOCATION_WRAPPER (d);
+	  return ((VAR_P (d) || TREE_CODE (d) == PARM_DECL)
+		  && !cg_contract_check_decl_value (call, struct_var, decls, d)
+		  && cg_scalar_memory_tracking_p (cfun, d));
+	};
+      if (oa_nonzero_conjunct_p (c, &decl))
+	{
+	  if (memory_scalar_p (decl))
+	    {
+	      decl = STRIP_ANY_LOCATION_WRAPPER (decl);
+	      cg_field_fact *existing
+		= state.field.get (cg_scalar_memory_fact_key (decl));
+	      cg_field_fact fact = existing ? *existing
+				   : cg_field_fact { {}, conveyor_enabled };
+	      fact.nonzero = true;
+	      state.field.put (cg_scalar_memory_fact_key (decl), fact);
+	    }
+	  continue;
+	}
+      if (oa_match_simple_comparison_var_public (c, &decl, &code, &const_val)
+	  && TREE_CODE (const_val) == INTEGER_CST)
+	{
+	  if (memory_scalar_p (decl))
+	    {
+	      decl = STRIP_ANY_LOCATION_WRAPPER (decl);
+	      cg_field_fact *existing
+		= state.field.get (cg_scalar_memory_fact_key (decl));
+	      cg_field_fact fact = existing ? *existing
+				   : cg_field_fact { {}, conveyor_enabled };
+	      cg_tighten_range_bound (fact.range, code,
+				      wi::to_widest (const_val));
+	      state.field.put (cg_scalar_memory_fact_key (decl), fact);
+	    }
+	  continue;
+	}
+
+      tree ptr_expr;
+      if (oa_match_field_range_comparison (c, &field, &ptr_expr, &code,
+					   &const_val)
+	  && TREE_CODE (const_val) == INTEGER_CST)
+	{
+	  ptr_expr = oa_strip_symbolic_ptr_expr_public (ptr_expr);
+	  if (tree identity = identity_of (ptr_expr))
+	    {
+	      cg_field_fact *existing = state.field.get ({identity, field});
+	      cg_field_fact fact = existing ? *existing
+				   : cg_field_fact { {}, conveyor_enabled };
+	      cg_tighten_range_bound (fact.range, code,
+				      wi::to_widest (const_val));
+	      state.field.put ({identity, field}, fact);
+	    }
+	}
+    }
+}
+
+/* STMT loads a field, or a scalar in memory, into an SSA name: give the
+   loaded value the facts STATE holds for it -- its range, in SCALAR_RANGE_CACHE, and
+   whether it is nonzero, in ESTABLISHED_NZ.  An SSA value never
+   changes, so the facts hold wherever it is used.  */
+
+static void
+cg_record_field_load_facts (gimple *stmt, cg_dom_fact_state &state,
+			    hash_map<tree, cg_range_lite> &scalar_range_cache,
+			    hash_map<tree, cg_fact> &established_nz)
+{
+  if (!gimple_assign_single_p (stmt))
+    return;
+  tree lhs = gimple_assign_lhs (stmt);
+  tree rhs = gimple_assign_rhs1 (stmt);
+  if (TREE_CODE (lhs) != SSA_NAME || !INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
+    return;
+  cg_field_fact *fact;
+  if (VAR_P (rhs) || TREE_CODE (rhs) == PARM_DECL)
+    fact = state.field.get (cg_scalar_memory_fact_key (rhs));
+  else if (TREE_CODE (rhs) == COMPONENT_REF)
+    {
+      tree field = TREE_OPERAND (rhs, 1);
+      tree obj = TREE_OPERAND (rhs, 0);
+      tree obj_expr = (TREE_CODE (obj) == MEM_REF
+		       && integer_zerop (TREE_OPERAND (obj, 1))
+		       ? TREE_OPERAND (obj, 0) : obj);
+      tree identity = cg_gimple_object_identity (obj_expr);
+      if (!identity)
+	return;
+      fact = state.field.get ({identity, field});
+    }
+  else
+    return;
+  if (!fact)
+    return;
+  if (fact->nonzero)
+    established_nz.put (lhs, { fact->conveyor_established });
+  if (fact->range.has_lo || fact->range.has_hi)
+    {
+      cg_range_lite merged = fact->range;
+      if (cg_range_lite *old = scalar_range_cache.get (lhs))
+	{
+	  if (old->has_lo && (!merged.has_lo || old->lo > merged.lo))
+	    merged.has_lo = true, merged.lo = old->lo;
+	  if (old->has_hi && (!merged.has_hi || old->hi < merged.hi))
+	    merged.has_hi = true, merged.hi = old->hi;
+	}
+      scalar_range_cache.put (lhs, merged);
+    }
+}
+
 /* The forward dataflow walk itself.
 
    An earlier design used a dom_walker subclass, computing each block's
@@ -4878,7 +5223,8 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src)
 	  || ov->range.has_hi != it.second.range.has_hi
 	  || (it.second.range.has_lo && ov->range.lo != it.second.range.lo)
 	  || (it.second.range.has_hi && ov->range.hi != it.second.range.hi)
-	  || ov->conveyor_established != it.second.conveyor_established)
+	  || ov->conveyor_established != it.second.conveyor_established
+	  || ov->nonzero != it.second.nonzero)
 	field_remove.safe_push (it.first);
     }
   for (auto k : field_remove)
@@ -4965,7 +5311,8 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
 	  || ov->range.has_hi != it.second.range.has_hi
 	  || (it.second.range.has_lo && ov->range.lo != it.second.range.lo)
 	  || (it.second.range.has_hi && ov->range.hi != it.second.range.hi)
-	  || ov->conveyor_established != it.second.conveyor_established)
+	  || ov->conveyor_established != it.second.conveyor_established
+	  || ov->nonzero != it.second.nonzero)
 	return false;
     }
   for (auto it : a.field_alias)
@@ -6357,7 +6704,8 @@ static bool
 cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_range_cache_out,
 			   hash_map<tree, cg_range_lite> &established_range,
 			   hash_set<gimple *> *call_relational_verdict_out,
-			   gimple_ranger *ranger)
+			   gimple_ranger *ranger,
+			   hash_map<tree, cg_fact> &established_nz)
 {
   int *rpo = XNEWVEC (int, n_basic_blocks_for_fn (fun));
   int rpo_num = pre_and_rev_post_order_compute (NULL, rpo, false);
@@ -6411,9 +6759,12 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 	    {
 	      gimple *stmt = gsi_stmt (gsi);
 	      if (gimple_assign_single_p (stmt))
-		cg_process_field_write (gimple_assign_lhs (stmt),
-					 gimple_assign_rhs1 (stmt), fun,
-					 field_object_cache, out_state);
+		{
+		  cg_process_field_write (gimple_assign_lhs (stmt),
+					   gimple_assign_rhs1 (stmt), fun,
+					   field_object_cache, out_state);
+		  cg_process_scalar_write (gimple_assign_lhs (stmt), out_state);
+		}
 	      else if (is_gimple_call (stmt))
 		{
 		  gcall *call = as_a <gcall *> (stmt);
@@ -6427,12 +6778,16 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 		     postcondition must win over its own, necessarily
 		     stale-by-then, argument invalidation).  */
 		  if (gimple_call_lhs (call))
-		    cg_process_field_write (gimple_call_lhs (call), NULL_TREE,
-					     fun, field_object_cache, out_state);
+		    {
+		      cg_process_field_write (gimple_call_lhs (call), NULL_TREE,
+					       fun, field_object_cache, out_state);
+		      cg_process_scalar_write (gimple_call_lhs (call), out_state);
+		    }
 		  cg_invalidate_persistent_facts_for_call_args
 		    (call, fun, field_object_cache, out_state);
 		  cg_establish_persistent_facts_for_call (call, field_object_cache,
 							   out_state);
+		  cg_establish_assert_facts (call, out_state);
 		}
 	    }
 
@@ -6494,9 +6849,14 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 	{
 	  gimple *stmt = gsi_stmt (gsi);
 	  if (gimple_assign_single_p (stmt))
-	    cg_process_field_write (gimple_assign_lhs (stmt),
-				     gimple_assign_rhs1 (stmt), fun,
-				     field_object_cache, state);
+	    {
+	      cg_record_field_load_facts (stmt, state, *scalar_range_cache_out,
+					  established_nz);
+	      cg_process_field_write (gimple_assign_lhs (stmt),
+				       gimple_assign_rhs1 (stmt), fun,
+				       field_object_cache, state);
+	      cg_process_scalar_write (gimple_assign_lhs (stmt), state);
+	    }
 	  else if (is_gimple_call (stmt))
 	    {
 	      gcall *call = as_a <gcall *> (stmt);
@@ -6521,11 +6881,15 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 		 own comment.  */
 	      cg_compose_call_result_range (call, state, *scalar_range_cache_out);
 	      if (gimple_call_lhs (call))
-		cg_process_field_write (gimple_call_lhs (call), NULL_TREE, fun,
-					 field_object_cache, state);
+		{
+		  cg_process_field_write (gimple_call_lhs (call), NULL_TREE, fun,
+					   field_object_cache, state);
+		  cg_process_scalar_write (gimple_call_lhs (call), state);
+		}
 	      cg_invalidate_persistent_facts_for_call_args (call, fun,
 							     field_object_cache, state);
 	      cg_establish_persistent_facts_for_call (call, field_object_cache, state);
+	      cg_establish_assert_facts (call, state);
 	    }
 	}
     }
@@ -7065,7 +7429,8 @@ pass_contracts_gimple::execute (function *fun)
 
   cg_predicate_facts_walk (fun, &scalar_range_cache,
 			     established_range, &call_relational_verdict,
-			     ranger);
+			     ranger,
+			     established_nz);
 
   bool check_reference_safety
     = cg_function_might_need_reference_safety_walk_p (fun);
