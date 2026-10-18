@@ -15,6 +15,9 @@
 // discharge, no diagnostic) so a future fix's own test can compare
 // against it, the same spirit as Stage 2a's own nested-declines-ok.C.
 // See .claude/plans/well-we-last-discussed-ethereal-duckling.md.
+// 2026-10-19: the call handed a pointer the engine can't name now ends
+// every fact about an object whose address escaped, so the gap is closed:
+// 'use_it (p)' is reported as unverifiable instead of silently proven.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-symbolic-proofs" }
 
@@ -44,6 +47,7 @@ int main ()
   h2.arr[0] = p;
   open_it (p);
   mutate_via_alias (h2.arr[0]);
-  use_it (p); // known gap: silently discharges, no diagnostic
+  use_it (p); // { dg-warning "cannot verify that .bool is_opened.const file... ..p.. holds" }
+  // { dg-message "no fact relating this value" "unprovable reason" { target *-*-* } .-1 }
   return 0;
 }

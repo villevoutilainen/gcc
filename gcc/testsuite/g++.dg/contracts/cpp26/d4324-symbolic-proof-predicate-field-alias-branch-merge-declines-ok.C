@@ -27,6 +27,12 @@
 // produce an *unexpected* "cannot verify" warning (caught as excess
 // errors) rather than this file's own expected silence. See
 // .claude/plans/well-we-last-discussed-ethereal-duckling.md.
+// 2026-10-19: an argument the engine can't resolve to an object is no
+// longer skipped silently -- that let a proven_* contract pass unproven --
+// but reported as unverifiable, with the "no fact" note.  So this now
+// expects that warning where it used to expect silence; a wrong merge or
+// sweep that left the argument resolving to the opened object would show
+// up as the warning going missing.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-symbolic-proofs" }
 
@@ -56,6 +62,7 @@ int main (int argc, char **)
   open_it (p);
   if (argc)
     h.ptr = &g;
-  use_it (h.ptr); // declines to check, no diagnostic -- see comment above
+  use_it (h.ptr); // { dg-warning "cannot verify that .bool is_opened.const file... \\(.\[^\n\]*.\\) holds" }
+  // { dg-message "no fact relating this value" "unprovable reason" { target *-*-* } .-1 }
   return 0;
 }
