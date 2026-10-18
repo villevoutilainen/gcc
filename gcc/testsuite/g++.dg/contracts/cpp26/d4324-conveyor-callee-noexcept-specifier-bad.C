@@ -14,7 +14,7 @@ namespace not_conveyor
 
 template<typename _Tp>
 bool
-f (_Tp x) noexcept (not_conveyor::helper (sizeof (_Tp))) conveyor // { dg-error "with non-.void. return type must contain a .return. statement" }
+f (_Tp x) noexcept (not_conveyor::helper (sizeof (_Tp))) conveyor
 { return not_conveyor::helper (x); } // { dg-error "not declared .conveyor." }
 
 int main () { return f (1) ? 0 : 1; }

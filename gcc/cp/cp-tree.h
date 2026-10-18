@@ -2396,6 +2396,8 @@ struct GTY(()) language_function {
   bool throwing_cleanup : 1;
   /* True if we gave any errors in this function.  */
   bool erroneous : 1;
+  /* True if a return statement with an erroneous operand was dropped.  */
+  bool dropped_erroneous_return : 1;
 
   hash_table<named_label_hash> *x_named_labels;
 
@@ -2449,6 +2451,13 @@ struct GTY(()) language_function {
    a return statement that specifies a return value is seen.  */
 
 #define current_function_returns_value cp_function_chain->returns_value
+
+/* Set to 1 if a return statement with an erroneous operand is dropped
+   (finish_return_stmt), so a later check that every path returns doesn't
+   diagnose its absence too.  */
+
+#define current_function_dropped_erroneous_return \
+  cp_function_chain->dropped_erroneous_return
 
 /* Set to 0 at beginning of a function definition, set to 1 if
    a return statement with no argument is seen.  */

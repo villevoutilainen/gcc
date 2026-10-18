@@ -1600,6 +1600,8 @@ finish_return_stmt (tree expr)
       /* Suppress -Wreturn-type for this function.  */
       if (warn_return_type)
 	suppress_warning (current_function_decl, OPT_Wreturn_type);
+      if (cfun && cp_function_chain)
+	current_function_dropped_erroneous_return = true;
       return error_mark_node;
     }
 
