@@ -11332,13 +11332,23 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
 
   /* Item 6: an ordinary call whose callee's own non-ignored, conveyor
      postcondition has a bare 'r != 0'/'0 != r' conjunct naming its
-     result identifier. A comparison-based guarantee (e.g. 'r > 0') is
-     already covered above, via oa_get_range's own item-6 fallback
-     (below) feeding the range-fact check just above -- this only
-     covers the literal-!= shape that isn't representable as a single
-     interval.  */
+     result identifier -- not representable as a single interval.  */
   if (TREE_CODE (expr) == CALL_EXPR && oa_call_postcondition_nonzero_p (expr))
     return true;
+
+  /* A call whose callee's postcondition guarantees a range excluding
+     zero, e.g. 'r > 0'.  Only for a call: for a variable, the range check
+     above is the one that respects how the walk invalidates its facts,
+     and an arbitrary expression's range may be derived from a variable
+     the expression is being assigned to (a loop's 'b = b + 1'), a
+     circular dependency the loop merge must reject.  */
+  if (TREE_CODE (expr) == CALL_EXPR)
+    {
+      oa_range_fact f;
+      if (oa_get_range (expr, env, &f) && !f.base
+	  && ((f.has_lo && f.lo > 0) || (f.has_hi && f.hi < 0)))
+	return true;
+    }
 
   /* D4324: 'cond ? a : b' is provably nonzero iff BOTH arms are --
      mirrors oa_provable_p's own identical COND_EXPR case (see its
@@ -14222,24 +14232,20 @@ oa_collect_disjuncts (tree *cond, vec<tree *> *disjuncts)
   disjuncts->safe_push (cond);
 }
 
-/* D4324/P2680 item 8, Increment E-divmod: true if CONJUNCT is of the
-   form 'E != 0' or '0 != E' (either operand order), with *DECL_OUT set
-   to E -- the fact-seeding counterpart of is_object_address_call_p,
-   used the same way by oa_handle_precondition_stmt/oa_handle_
-   assertion_stmt/oa_handle_postcondition_stmt to recognize a
-   nonzero-ness conjunct worth folding into the nz-fact map. Only a
-   direct decl reference is recognized as E (matching oa_provably_
-   nonzero_p's own scope); '==' is deliberately not handled the
-   symmetric way is_object_address's gate is, since 'E == 0' doesn't
-   establish nonzero-ness at all.  */
+/* True if CONJUNCT compares a variable or parameter X against zero with
+   CODE (NE_EXPR: "X != 0", EQ_EXPR: "X == 0"); X is stored in *DECL_OUT.
+   Only a direct decl reference is recognized as X (matching
+   oa_provably_nonzero_p's own scope).  Used to fold a nonzero-ness fact
+   into the nz-fact map: from "X != 0" being true, or from "X == 0" being
+   false.  */
 
-bool
-oa_nonzero_conjunct_p (tree conjunct, tree *decl_out)
+static bool
+oa_zero_comparison_p (tree conjunct, enum tree_code code, tree *decl_out)
 {
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
   while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
     c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
-  if (TREE_CODE (c) != NE_EXPR)
+  if (TREE_CODE (c) != code)
     return false;
 
   tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
@@ -14278,6 +14284,15 @@ oa_nonzero_conjunct_p (tree conjunct, tree *decl_out)
 
   *decl_out = decl;
   return true;
+}
+
+/* True if CONJUNCT is "X != 0" for a variable or parameter X, stored in
+   *DECL_OUT.  */
+
+bool
+oa_nonzero_conjunct_p (tree conjunct, tree *decl_out)
+{
+  return oa_zero_comparison_p (conjunct, NE_EXPR, decl_out);
 }
 
 /* D4324/P2680 item 8, Increment E-divmod: the field-expression analogue
@@ -16600,6 +16615,11 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 static void
 oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 {
+  /* Only diagnoses: nothing to do in a walk whose diagnostics are off
+     (a speculative loop re-walk, or a condition re-scanned only for its
+     facts, OA_COND_SCAN_ITEM8).  */
+  if (!oa_diagnostics_active)
+    return;
   tree callee = cp_get_callee_fndecl_nofold (call);
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
@@ -17973,6 +17993,8 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
     }
 }
 
+static bool oa_call_symbolic_range_p (tree call, oa_range_fact *out);
+
 /* -fcontract-symbolic-proofs: for each of CALL's callee's own active
    (non-ignored) symbolic preconditions, check that ENV already has a
    matching fact for the substituted argument's own object identity --
@@ -17988,6 +18010,11 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 static void
 oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 {
+  /* Only diagnoses: nothing to do in a walk whose diagnostics are off
+     (a speculative loop re-walk, or a condition re-scanned only for its
+     facts, OA_COND_SCAN_ITEM8).  */
+  if (!oa_diagnostics_active)
+    return;
   tree callee = cp_get_callee_fndecl_nofold (call);
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
@@ -18386,6 +18413,15 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	      oa_range_fact scalar_range;
 	      if ((VAR_P (stripped) || TREE_CODE (stripped) == PARM_DECL)
 		  && env.contract_scalar_range_get (stripped, &scalar_range)
+		  && ((scalar_range.has_lo && scalar_range.lo > 0)
+		      || (scalar_range.has_hi && scalar_range.hi < 0)))
+		continue; /* Proven true: silently discharged.  */
+	      /* A call whose callee's symbolic postcondition guarantees a
+		 range excluding zero (e.g. 'r > 0'); oa_provably_nonzero_p
+		 above covers the conveyor flavor.  */
+	      if (TREE_CODE (stripped) == CALL_EXPR
+		  && oa_call_symbolic_range_p (stripped, &scalar_range)
+		  && !scalar_range.base
 		  && ((scalar_range.has_lo && scalar_range.lo > 0)
 		      || (scalar_range.has_hi && scalar_range.hi < 0)))
 		continue; /* Proven true: silently discharged.  */
@@ -19590,12 +19626,11 @@ oa_call_postcondition_object_address_p (tree call)
 
 /* Same idea, for item 8's "provably nonzero" fact -- a bare
    'r != 0'/'0 != r' conjunct only. A comparison-based exclusion of
-   zero (e.g. 'r > 0') needs no separate handling here: it is already
-   covered by oa_provably_nonzero_p's own existing range-fact
-   supplementary check, once oa_call_postcondition_range_p below is
-   consulted from oa_get_range -- exactly why oa_nonzero_conjunct_p and
-   oa_refine_single_comparison are two separate mechanisms everywhere
-   else in this pass.  */
+   zero (e.g. 'r > 0') needs no separate handling here: oa_provably_
+   nonzero_p falls back to the call's range, which oa_get_range takes
+   from oa_call_postcondition_range_p below -- exactly why oa_nonzero_
+   conjunct_p and oa_refine_single_comparison are two separate mechanisms
+   everywhere else in this pass.  */
 
 static bool
 oa_call_postcondition_nonzero_p (tree call)
@@ -21429,6 +21464,71 @@ oa_mark_fn_if_expr_calls_active_contract (tree fndecl, tree expr)
 
 struct oa_scan_calls_data { oa_env *env; tree *extra; tree *invalidate_extra; };
 
+/* Merge the facts of the two arms of a conditional (THEN_ENV, ELSE_ENV),
+   both of which reach the code after it, into THEN_ENV.  COND is the
+   condition.  */
+
+/* Which scans oa_process_condition applies to a condition, besides
+   refining the environments of its two outcomes.  */
+enum oa_condition_scans
+{
+  /* A statement's condition: everything.  */
+  OA_COND_SCAN_ALL,
+  /* A condition inside an expression, reached from oa_scan_calls_visitor:
+     only the calls (the enclosing expression's own item 8 and stray-use
+     scans cover the condition already).  */
+  OA_COND_SCAN_CALLS,
+  /* A condition reached from oa_scan_item8_conjunct: only item 8, with
+     the calls scanned silently, for the facts they establish (the
+     enclosing expression's own call scan diagnoses them).  */
+  OA_COND_SCAN_ITEM8
+};
+
+static void oa_process_condition (tree cond, oa_env &env,
+				  oa_env *then_env_out, oa_env *else_env_out,
+				  oa_condition_scans scans = OA_COND_SCAN_ALL);
+
+static void
+oa_merge_branch_envs (oa_env &then_env, oa_env &else_env, tree cond)
+{
+  then_env.merge_with (else_env);
+  then_env.range_merge_with (else_env);
+  then_env.float_range_merge_with (else_env);
+  /* -fcontract-conveyor-proof-provenance: mirror the numeric
+     merge just above, one level up -- see oa_env::deriv_merge_
+     with's own comment; a no-op entirely when provenance
+     tracking is inactive.  */
+  then_env.deriv_merge_with (else_env, cond);
+  /* -fcontract-symbolic-proofs: a symbolic fact survives the
+     merge only if both branches agree on it exactly (same
+     PRED_FN, same polarity) -- see oa_env::predicate_fact_merge_with's
+     own comment.  */
+  then_env.predicate_fact_merge_with (else_env);
+  then_env.relational_merge_with (else_env);
+  then_env.type_bound_merge_with (else_env);
+  then_env.call_relational_merge_with (else_env);
+  then_env.call_call_relational_merge_with (else_env);
+  /* -fcontract-symbolic-proofs: same intersect-and-widen merge as
+     range_merge_with, for the two new static-only symbolic range
+     maps (bare-scalar and ptr->field).  */
+  then_env.contract_scalar_range_merge_with (else_env);
+  then_env.contract_field_range_merge_with (else_env);
+  then_env.contract_field_nz_merge_with (else_env);
+  then_env.contract_float_field_range_merge_with (else_env);
+  then_env.contract_call_range_merge_with (else_env);
+  /* -fcontract-symbolic-runtime-checks (Mechanism B): a shadow's
+     own *existence* is a plain set union across branches, not
+     an agreement check -- see oa_env::shadow_decls_merge_with's
+     own comment for why.  */
+  then_env.shadow_decls_merge_with (else_env);
+  /* Pointer-aliasing fix: agreement-based, same as predicate_
+     fact_merge_with -- see oa_env::alias_find's own comment.  */
+  then_env.alias_merge_with (else_env);
+  then_env.field_alias_merge_with (else_env);
+  then_env.array_alias_merge_with (else_env);
+  then_env.borrowed_merge_with (else_env);
+}
+
 /* D4324/P2680: named (rather than the anonymous lambda this replaced)
    specifically so it can recurse into its own CALL_EXPR/AGGR_INIT_EXPR
    node's own callee/argument subtrees *before* running that node's own
@@ -21464,6 +21564,45 @@ oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
       oa_scan_calls_data *d = (oa_scan_calls_data *) data_;
       oa_env *e = d->env;
       tree t = *tp;
+
+      /* A conditional inside an expression: each arm is evaluated only
+	 when the condition is true (or, for '||' and the else arm, false),
+	 so its calls are checked with the condition as a fact, as for an
+	 'if' statement; afterwards only what both paths establish holds.
+	 The condition itself is scanned by oa_process_condition, conjunct
+	 by conjunct.  */
+      if (t != NULL_TREE
+	  && (TREE_CODE (t) == COND_EXPR
+	      || TREE_CODE (t) == TRUTH_ANDIF_EXPR
+	      || TREE_CODE (t) == TRUTH_ORIF_EXPR))
+	{
+	  oa_env then_env, else_env;
+	  oa_process_condition (TREE_OPERAND (t, 0), *e, &then_env, &else_env,
+				OA_COND_SCAN_CALLS);
+	  oa_scan_calls_data then_data = *d;
+	  then_data.env = &then_env;
+	  oa_scan_calls_data else_data = *d;
+	  else_data.env = &else_env;
+	  if (TREE_CODE (t) == COND_EXPR)
+	    {
+	      if (TREE_OPERAND (t, 1))
+		cp_walk_tree (&TREE_OPERAND (t, 1), oa_scan_calls_visitor,
+			      &then_data, NULL);
+	      if (TREE_OPERAND (t, 2))
+		cp_walk_tree (&TREE_OPERAND (t, 2), oa_scan_calls_visitor,
+			      &else_data, NULL);
+	    }
+	  else if (TREE_CODE (t) == TRUTH_ANDIF_EXPR)
+	    cp_walk_tree (&TREE_OPERAND (t, 1), oa_scan_calls_visitor,
+			  &then_data, NULL);
+	  else
+	    cp_walk_tree (&TREE_OPERAND (t, 1), oa_scan_calls_visitor,
+			  &else_data, NULL);
+	  oa_merge_branch_envs (then_env, else_env, TREE_OPERAND (t, 0));
+	  e->assign (then_env);
+	  *walk_subtrees = 0;
+	  return NULL_TREE;
+	}
       /* D4324/P2680, ctor/dtor 'this' soundness correction, Phase 1.4/1.5
 	 follow-up: a TARGET_EXPR reached here (a 'new'-expression assigned
 	 to anything OTHER than a bare local variable's own DECL_EXPR --
@@ -22333,7 +22472,8 @@ static void oa_establish_relational_from_call (tree lhs, tree rhs, oa_env &env);
    (right before oa_stmt_terminates_p), the same way IF_STMT/COND_EXPR/
    SWITCH_STMT already do -- see oa_handle_loop's own comment on why.  */
 static void oa_process_condition (tree cond, oa_env &env,
-				   oa_env *then_env_out, oa_env *else_env_out);
+				  oa_env *then_env_out, oa_env *else_env_out,
+				  oa_condition_scans scans);
 
 /* Accumulates, across every RETURN_EXPR the walk encounters, whether
    the *returned value itself* is provably an object address on *every*
@@ -23475,7 +23615,8 @@ oa_scan_item8_conjunct (tree *conjunct, oa_env &env)
       oa_env then_env, else_env;
       bool saved_codegen = oa_symbolic_codegen_active;
       oa_symbolic_codegen_active = false;
-      oa_process_condition (TREE_OPERAND (c, 0), env, &then_env, &else_env);
+      oa_process_condition (TREE_OPERAND (c, 0), env, &then_env, &else_env,
+			    OA_COND_SCAN_ITEM8);
       oa_symbolic_codegen_active = saved_codegen;
       if (TREE_OPERAND (c, 1))
 	oa_scan_item8_in_expr (&TREE_OPERAND (c, 1), then_env);
@@ -23536,7 +23677,8 @@ oa_scan_item8_conjunct (tree *conjunct, oa_env &env)
 
 static void
 oa_process_condition (tree cond, oa_env &env,
-		       oa_env *then_env_out, oa_env *else_env_out)
+		       oa_env *then_env_out, oa_env *else_env_out,
+		       oa_condition_scans scans)
 {
   oa_env cond_env = env.copy ();
   tree cond_copy = cond;
@@ -23544,11 +23686,22 @@ oa_process_condition (tree cond, oa_env &env,
   oa_collect_conjuncts (&cond_copy, &conjuncts);
   for (unsigned i = 0; i < conjuncts.length (); ++i)
     {
-      oa_scan_calls_in_expr (conjuncts[i], cond_env);
-      if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
+      if (scans == OA_COND_SCAN_ITEM8)
+	{
+	  auto quiet = make_temp_override (oa_diagnostics_active, false);
+	  oa_scan_calls_in_expr (conjuncts[i], cond_env);
+	}
+      else
+	oa_scan_calls_in_expr (conjuncts[i], cond_env);
+      if (scans != OA_COND_SCAN_CALLS
+	  && current_function_decl
+	  && DECL_DECLARED_CONVEYOR_P (current_function_decl))
 	oa_scan_item8_conjunct (conjuncts[i], cond_env);
-      oa_scan_stray_is_object_address (conjuncts[i]);
-      oa_scan_stray_symbolic_call (conjuncts[i]);
+      if (scans == OA_COND_SCAN_ALL)
+	{
+	  oa_scan_stray_is_object_address (conjuncts[i]);
+	  oa_scan_stray_symbolic_call (conjuncts[i]);
+	}
       oa_track_condition_assignment (*conjuncts[i], cond_env);
       /* A bare 'E != 0'/'0 != E' conjunct seeds the nz-fact map
 	 directly, exactly as a precondition/contract_assert conjunct
@@ -23602,8 +23755,16 @@ oa_process_condition (tree cond, oa_env &env,
       auto_vec<tree *> disjuncts;
       oa_collect_disjuncts (conjuncts[0], &disjuncts);
       for (unsigned i = 0; i < disjuncts.length (); ++i)
-	oa_refine_single_comparison (*disjuncts[i], *else_env_out,
-				      /*asserted_true=*/false);
+	{
+	  oa_refine_single_comparison (*disjuncts[i], *else_env_out,
+					/*asserted_true=*/false);
+	  /* The condition is false when every disjunct is: "X == 0" being
+	     false makes X nonzero, which oa_refine_single_comparison can't
+	     express.  */
+	  tree zero_decl;
+	  if (oa_zero_comparison_p (*disjuncts[i], EQ_EXPR, &zero_decl))
+	    else_env_out->nz_set (zero_decl, true);
+	}
     }
 }
 
@@ -25527,42 +25688,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  env.assign (then_env);
 	else
 	  {
-	    then_env.merge_with (else_env);
-	    then_env.range_merge_with (else_env);
-	    then_env.float_range_merge_with (else_env);
-	    /* -fcontract-conveyor-proof-provenance: mirror the numeric
-	       merge just above, one level up -- see oa_env::deriv_merge_
-	       with's own comment; a no-op entirely when provenance
-	       tracking is inactive.  */
-	    then_env.deriv_merge_with (else_env, TREE_OPERAND (t, 0));
-	    /* -fcontract-symbolic-proofs: a symbolic fact survives the
-	       merge only if both branches agree on it exactly (same
-	       PRED_FN, same polarity) -- see oa_env::predicate_fact_merge_with's
-	       own comment.  */
-	    then_env.predicate_fact_merge_with (else_env);
-	    then_env.relational_merge_with (else_env);
-	    then_env.type_bound_merge_with (else_env);
-	    then_env.call_relational_merge_with (else_env);
-	    then_env.call_call_relational_merge_with (else_env);
-	    /* -fcontract-symbolic-proofs: same intersect-and-widen merge as
-	       range_merge_with, for the two new static-only symbolic range
-	       maps (bare-scalar and ptr->field).  */
-	    then_env.contract_scalar_range_merge_with (else_env);
-	    then_env.contract_field_range_merge_with (else_env);
-	    then_env.contract_field_nz_merge_with (else_env);
-	    then_env.contract_float_field_range_merge_with (else_env);
-	    then_env.contract_call_range_merge_with (else_env);
-	    /* -fcontract-symbolic-runtime-checks (Mechanism B): a shadow's
-	       own *existence* is a plain set union across branches, not
-	       an agreement check -- see oa_env::shadow_decls_merge_with's
-	       own comment for why.  */
-	    then_env.shadow_decls_merge_with (else_env);
-	    /* Pointer-aliasing fix: agreement-based, same as predicate_
-	       fact_merge_with -- see oa_env::alias_find's own comment.  */
-	    then_env.alias_merge_with (else_env);
-	    then_env.field_alias_merge_with (else_env);
-	    then_env.array_alias_merge_with (else_env);
-	    then_env.borrowed_merge_with (else_env);
+	    oa_merge_branch_envs (then_env, else_env, TREE_OPERAND (t, 0));
 	    env.assign (then_env);
 	  }
 	return;
@@ -25607,36 +25733,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  env.assign (then_env);
 	else
 	  {
-	    then_env.merge_with (else_env);
-	    then_env.range_merge_with (else_env);
-	    then_env.float_range_merge_with (else_env);
-	    /* -fcontract-conveyor-proof-provenance: mirror the numeric
-	       merge just above, one level up -- see oa_env::deriv_merge_
-	       with's own comment; a no-op entirely when provenance
-	       tracking is inactive.  */
-	    then_env.deriv_merge_with (else_env, IF_COND (t));
-	    /* -fcontract-symbolic-proofs: same merge rule as COND_EXPR
-	       above.  */
-	    then_env.predicate_fact_merge_with (else_env);
-	    then_env.relational_merge_with (else_env);
-	    then_env.type_bound_merge_with (else_env);
-	    then_env.call_relational_merge_with (else_env);
-	    then_env.call_call_relational_merge_with (else_env);
-	    /* -fcontract-symbolic-proofs: same as COND_EXPR above.  */
-	    then_env.contract_scalar_range_merge_with (else_env);
-	    then_env.contract_field_range_merge_with (else_env);
-	    then_env.contract_field_nz_merge_with (else_env);
-	    then_env.contract_float_field_range_merge_with (else_env);
-	    then_env.contract_call_range_merge_with (else_env);
-	    /* -fcontract-symbolic-runtime-checks (Mechanism B): same union
-	       rule as COND_EXPR above.  */
-	    then_env.shadow_decls_merge_with (else_env);
-	    /* Pointer-aliasing fix: same agreement-based merge as COND_EXPR
-	       above -- see oa_env::alias_find's own comment.  */
-	    then_env.alias_merge_with (else_env);
-	    then_env.field_alias_merge_with (else_env);
-	    then_env.array_alias_merge_with (else_env);
-	    then_env.borrowed_merge_with (else_env);
+	    oa_merge_branch_envs (then_env, else_env, IF_COND (t));
 	    env.assign (then_env);
 	  }
 	return;
