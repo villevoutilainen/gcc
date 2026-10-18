@@ -4803,6 +4803,39 @@ cg_gimple_object_identity (tree val)
   return cg_gimple_object_identity_1 (val, in_progress);
 }
 
+/* The SSA value scalar VAL is a copy of ('r_5 = _4'), for a fact
+   about the value itself, e.g. a predicate a call's postcondition
+   established about the value it returned.  */
+
+static tree
+cg_scalar_value_origin (tree val)
+{
+  while (TREE_CODE (val) == SSA_NAME)
+    {
+      gimple *def = SSA_NAME_DEF_STMT (val);
+      if (!def || !gimple_assign_single_p (def)
+	  || TREE_CODE (gimple_assign_rhs1 (def)) != SSA_NAME)
+	break;
+      val = gimple_assign_rhs1 (def);
+    }
+  return val;
+}
+
+/* The array named by array slot REF ('arr[k]'): an array variable
+   itself whose address is never taken -- not one reached through a
+   pointer, nor one a pointer could reach, whose slots a store through
+   that pointer could change unseen.  */
+
+static tree
+cg_array_slot_base_identity (tree ref)
+{
+  tree base = TREE_OPERAND (ref, 0);
+  if (VAR_P (base) && !TREE_ADDRESSABLE (base)
+      && TREE_CODE (TREE_TYPE (base)) == ARRAY_TYPE)
+    return base;
+  return NULL_TREE;
+}
+
 /* The object IDENTITY may have changed: drop every fact in STATE that
    compares against the result of an accessor called on it.  */
 
@@ -4893,6 +4926,38 @@ cg_process_field_write (tree lhs, tree rhs, function *fun,
 			 hash_map<cg_field_key_hash, tree> &field_object_cache,
 			 cg_dom_fact_state &state)
 {
+  /* A pointer stored to an array slot 'arr[k]': what the slot now
+     aliases, keyed {array, K} in state.field_alias -- K a (shared)
+     INTEGER_CST, never confused with a FIELD_DECL.  A store at an
+     unknown index may have replaced any slot.  */
+  if (TREE_CODE (lhs) == ARRAY_REF)
+    {
+      tree arr_identity = cg_array_slot_base_identity (lhs);
+      if (!arr_identity)
+	return;
+      tree index = TREE_OPERAND (lhs, 1);
+      if (TREE_CODE (index) != INTEGER_CST)
+	{
+	  auto_vec<std::pair<tree, tree>> to_remove;
+	  for (auto it : state.field_alias)
+	    if (it.first.first == arr_identity
+		&& TREE_CODE (it.first.second) == INTEGER_CST)
+	      to_remove.safe_push (it.first);
+	  for (auto k : to_remove)
+	    state.field_alias.remove (k);
+	  return;
+	}
+      if (!POINTER_TYPE_P (TREE_TYPE (lhs)))
+	return;
+      tree rhs_identity = rhs ? cg_field_slot_identity (rhs, state) : NULL_TREE;
+      if (!rhs_identity && rhs)
+	rhs_identity = cg_gimple_object_identity (rhs);
+      if (rhs_identity)
+	state.field_alias.put ({arr_identity, index}, rhs_identity);
+      else
+	state.field_alias.remove ({arr_identity, index});
+      return;
+    }
   if (TREE_CODE (lhs) != COMPONENT_REF)
     return;
   tree field = TREE_OPERAND (lhs, 1);
@@ -4991,6 +5056,18 @@ cg_field_slot_identity (tree val, cg_dom_fact_state &state)
       if (!def || !gimple_assign_single_p (def))
 	return NULL_TREE;
       val = gimple_assign_rhs1 (def);
+    }
+  /* A pointer loaded from array slot 'arr[k]' (cg_process_field_write).  */
+  if (TREE_CODE (val) == ARRAY_REF
+      && TREE_CODE (TREE_OPERAND (val, 1)) == INTEGER_CST
+      && POINTER_TYPE_P (TREE_TYPE (val)))
+    {
+      tree arr_identity = cg_array_slot_base_identity (val);
+      if (!arr_identity)
+	return NULL_TREE;
+      tree *target = state.field_alias.get ({arr_identity,
+					     TREE_OPERAND (val, 1)});
+      return target ? *target : NULL_TREE;
     }
   if (TREE_CODE (val) != COMPONENT_REF)
     return NULL_TREE;
@@ -5499,6 +5576,10 @@ cg_consult_persistent_facts (gcall *call,
 	    identity = cg_field_object_identity (substituted, field_object_cache);
 	  if (!identity)
 	    identity = cg_gimple_object_identity (substituted);
+	  /* A scalar value: the predicate's fact about it, e.g. from the
+	     postcondition of the call that returned it.  */
+	  if (!identity && TREE_CODE (substituted) == SSA_NAME)
+	    identity = cg_scalar_value_origin (substituted);
 
 	  bool required = !negated;
 	  cg_pred_fact *fact = identity ? state.pred.get (identity) : NULL;
@@ -5566,6 +5647,24 @@ cg_consult_persistent_facts (gcall *call,
 		  || (established->range.has_hi
 		      && established->range.hi <= required.hi)))
 	    continue; /* Proven true: silently discharged.  */
+	  if (established
+	      && (!require_conveyor || established->conveyor_established)
+	      && cg_ranges_disjoint_p (established->range, required))
+	    {
+	      char have_text[64], need_text[64];
+	      error_at (gimple_location (call),
+			"argument %qE provably violates the precondition of %qD",
+			substituted, callee);
+	      inform (gimple_location (call),
+		      "field %qD of %qE is established %s, but the "
+		      "precondition requires it %s",
+		      field_groups[g].field, substituted,
+		      cg_range_lite_text (established->range, have_text,
+					  sizeof have_text),
+		      cg_range_lite_text (required, need_text,
+					  sizeof need_text));
+	      continue;
+	    }
 
 	  if (strict)
 	    error_at (gimple_location (call),
@@ -5897,7 +5996,13 @@ cg_invalidate_persistent_facts_for_call_arg (tree arg, function *fun,
   if (!identity)
     identity = cg_gimple_object_identity (arg);
   if (!identity)
-    return;
+    {
+      /* A scalar handed to a call (a file descriptor to 'close'): a
+	 predicate about it may no longer hold, as in the AST engine.  */
+      if (TREE_CODE (arg) == SSA_NAME)
+	state.pred.remove (cg_scalar_value_origin (arg));
+      return;
+    }
   state.pred.remove (identity);
   cg_field_object_predicate_invalidate_all (identity, field_object_cache, state);
 
@@ -5969,6 +6074,14 @@ cg_establish_persistent_facts_for_call (gcall *call,
 					     &negated))
 	    continue;
 
+	  /* 'post (r: check_it (r))': about the value CALL returns.  */
+	  if (arg_decl == POSTCONDITION_IDENTIFIER (contract))
+	    {
+	      tree lhs = gimple_call_lhs (call);
+	      if (lhs && TREE_CODE (lhs) == SSA_NAME)
+		state.pred.put (lhs, { pred_fn, !negated, conveyor_enabled });
+	      continue;
+	    }
 	  unsigned argno;
 	  if (!cg_find_param_position (callee, arg_decl, &argno)
 	      || argno >= gimple_call_num_args (call))
