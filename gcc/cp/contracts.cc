@@ -13336,12 +13336,22 @@ oa_scan_div_mod_in_expr (tree *expr, oa_env &env)
 {
   if (!oa_diagnostics_active)
     return;
-  cp_walk_tree (expr, [](tree *tp, int *, void *data_) -> tree
+  cp_walk_tree (expr, [](tree *tp, int *walk_subtrees_p, void *data_) -> tree
     {
       oa_env *e = (oa_env *) data_;
       tree t = *tp;
-      if (t == NULL_TREE || t == error_mark_node
-	  || (TREE_CODE (t) != TRUNC_DIV_EXPR && TREE_CODE (t) != TRUNC_MOD_EXPR))
+      if (t == NULL_TREE || t == error_mark_node)
+	return NULL_TREE;
+
+      /* is_object_address is a compile-time query whose argument is
+	 never evaluated, so it can't have undefined behavior.  */
+      tree ioa_arg;
+      if (is_object_address_call_p (t, &ioa_arg))
+	{
+	  *walk_subtrees_p = 0;
+	  return NULL_TREE;
+	}
+      if (TREE_CODE (t) != TRUNC_DIV_EXPR && TREE_CODE (t) != TRUNC_MOD_EXPR)
 	return NULL_TREE;
       tree divisor = TREE_OPERAND (t, 1);
       if (!oa_provably_nonzero_p (divisor, *e))
@@ -13463,6 +13473,15 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
       tree t = *tp;
       if (t == NULL_TREE || t == error_mark_node)
 	return NULL_TREE;
+
+      /* is_object_address is a compile-time query whose argument is
+	 never evaluated, so it can't have undefined behavior.  */
+      tree ioa_arg;
+      if (is_object_address_call_p (t, &ioa_arg))
+	{
+	  *walk_subtrees_p = 0;
+	  return NULL_TREE;
+	}
 
       /* D4324: a virtual call's OBJ_TYPE_REF wraps the compiler-
 	 synthesized vtable-pointer-chasing machinery build_vfn_ref
@@ -13792,12 +13811,21 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 {
   if (!oa_diagnostics_active)
     return;
-  cp_walk_tree (expr, [](tree *tp, int *, void *data_) -> tree
+  cp_walk_tree (expr, [](tree *tp, int *walk_subtrees_p, void *data_) -> tree
     {
       oa_env *e = (oa_env *) data_;
       tree t = *tp;
       if (t == NULL_TREE || t == error_mark_node)
 	return NULL_TREE;
+
+      /* is_object_address is a compile-time query whose argument is
+	 never evaluated, so it can't have undefined behavior.  */
+      tree ioa_arg;
+      if (is_object_address_call_p (t, &ioa_arg))
+	{
+	  *walk_subtrees_p = 0;
+	  return NULL_TREE;
+	}
 
       enum tree_code code = TREE_CODE (t);
 
@@ -14287,6 +14315,23 @@ oa_field_nonzero_conjunct_p (tree conjunct, tree *obj_out, tree *field_out)
    oa_handle_call_precondition_obligation below, which explicitly
    passes the *callee*).  */
 
+/* D4324: the declaration whose declared strict contracts oa_validate_
+   contract_predicates is checking, if any.  A strict predicate's
+   restrictions hold regardless of whether, or on which side, it is ever
+   evaluated, so one of that declaration's own contracts counts as strict
+   then if its control object is conveyor on either side, ignored or not.
+   Contracts of other functions (the callees of calls made from the
+   predicate) keep their ordinary, side-dependent treatment.  */
+static tree oa_validating_declaration;
+
+/* D4324: true while walking a function body.  The predicates of a
+   function's own preconditions and postconditions are then not scanned
+   for their own conveyor restrictions (item 7 call obligations, item 8
+   UB checks, side effects): oa_validate_contract_predicates checks each
+   function's declared contracts once, independently of whether they are
+   woven into any body, and the body walk only sees copies of them.  */
+static bool oa_skip_predicate_scans;
+
 static bool
 oa_contract_conveyor_active_p (tree contract, tree owner_fn = NULL_TREE)
 {
@@ -14295,6 +14340,9 @@ oa_contract_conveyor_active_p (tree contract, tree owner_fn = NULL_TREE)
     return false;
   if (!owner_fn)
     owner_fn = current_function_decl;
+  if (oa_validating_declaration && owner_fn == oa_validating_declaration)
+    return (contract_control_conveyor_like (ctrl, ccs_definition)
+	    || contract_control_conveyor_like (ctrl, ccs_wrapper));
   contract_check_side side = contract_side_of (contract, owner_fn);
   if (!contract_control_conveyor_like (ctrl, side))
     return false;
@@ -21966,7 +22014,8 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
      project's own standing principle that a conveyor restriction always
      applies to both conveyor functions and conveyor predicates (see
      [[project_conveyor_rules_functions_and_predicates]]).  */
-  oa_scan_item7_in_expr (&cond, env);
+  if (!oa_skip_predicate_scans)
+    oa_scan_item7_in_expr (&cond, env);
 
   /* D4324/P2680, Increment V: the narrow item-8 dataflow checks (div/mod
      nonzero-divisor, fixed-size-array-bound, overflow) are conveyor-scoped
@@ -21982,7 +22031,7 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 
      never_proven exempts this precondition from item 8's mandatory
      scans too -- see this function's own leading comment.  */
-  if (conveyor_ok && !never_proven)
+  if (conveyor_ok && !never_proven && !oa_skip_predicate_scans)
     oa_scan_item8_in_expr (&cond, env);
 
   /* D4324/P2680: mandatory "no side effects escaping this condition's
@@ -21991,7 +22040,7 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
      non-conveyor precondition is constify()'s own domain), and
      deliberately NOT exempted for NEVER_PROVEN -- see that function's
      own comment on why this is unlike item 8's own exemption.  */
-  if (conveyor_ok)
+  if (conveyor_ok && !oa_skip_predicate_scans)
     oa_scan_predicate_mutation_ownership_in_expr (&cond, env);
 
   auto_vec<tree> facts;
@@ -25977,10 +26026,15 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
      is_object_address boolean seeded false) -- the same conservative
      "nothing provable" outcome as before for a function with no return
      statement at all (e.g. every path throws).  */
+  /* When validating a declaration (oa_validate_contract_predicates) there
+     is no body; the predicate is checked against what holds on entry
+     (the preconditions' facts, 'this'), which still holds on exit for
+     everything a postcondition may refer to.  */
   oa_env empty_ret_env;
   oa_env &ret_env
-    = (oa_postcondition_merge_env && oa_postcondition_merge_any_result)
-      ? *oa_postcondition_merge_env : empty_ret_env;
+    = (oa_validating_declaration ? env
+       : (oa_postcondition_merge_env && oa_postcondition_merge_any_result)
+       ? *oa_postcondition_merge_env : empty_ret_env);
   tree result_id = POSTCONDITION_IDENTIFIER (contract);
   bool have_result_id
     = result_id && (VAR_P (result_id) || TREE_CODE (result_id) == PARM_DECL);
@@ -26002,7 +26056,8 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
      oa_scan_item7_in_expr, not the full oa_scan_calls_in_expr -- see
      its own comment for why the full scan's invalidation side effects
      are wrong for a call reached from contract condition text.  */
-  oa_scan_item7_in_expr (&cond, ret_env);
+  if (!oa_skip_predicate_scans)
+    oa_scan_item7_in_expr (&cond, ret_env);
 
   /* D4324/P2680, Increment V: the narrow item-8 dataflow checks, same as
      oa_handle_precondition_stmt/oa_handle_assertion_stmt above -- scanned
@@ -26021,7 +26076,7 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 
      never_proven exempts this postcondition from item 8's mandatory
      scans too -- see this function's own leading comment.  */
-  if (conveyor_ok)
+  if (conveyor_ok && !oa_skip_predicate_scans)
     {
       oa_env scan_env = env.copy ();
       if (have_result_id)
@@ -26047,6 +26102,12 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
      unprovable (not just provably-false) conjunct a hard error too,
      matching every other proven_conveyor/proven_symbolic site in this
      file.  */
+  /* Whether the postcondition holds depends on the body; when validating a
+     declaration (oa_validate_contract_predicates) only the predicate's own
+     restrictions, scanned above, are checked.  */
+  if (oa_validating_declaration)
+    return;
+
   if (!never_proven)
     {
       if (conveyor_ok)
@@ -26460,6 +26521,177 @@ oa_capture_proxy_name_search_r (tree *tp, int *, void *data)
   return NULL_TREE;
 }
 
+/* Seed ENV with what FNDECL may assume on entry, before any of its own
+   precondition statements is reached: a constructor's or destructor's
+   'this', and every is_object_address conjunct of its conveyor-active
+   preconditions.  BODY, if non-null, is FNDECL's body, used to find a
+   generic lambda's own capture proxies.  Shared by the body walk
+   (oa_resolve_object_address_in_function_1) and the declaration-level
+   validation of FNDECL's contracts (oa_validate_contract_predicates), so
+   both see the same entry state.  */
+
+static tree oa_find_capture_proxy_by_name (tree body, tree name);
+
+static void
+oa_seed_entry_env (tree fndecl, tree body, oa_env &env)
+{
+  if (DECL_CONSTRUCTOR_P (fndecl) || DECL_DESTRUCTOR_P (fndecl))
+    if (tree this_parm = DECL_ARGUMENTS (fndecl))
+      env.set (this_parm, true);
+
+  for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract))
+	continue;
+      if (!oa_contract_conveyor_active_p (contract))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree arg;
+	  if (!is_object_address_call_p (*conjuncts[i], &arg))
+	    continue;
+	  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+	  while (TREE_CODE (arg) == NON_LVALUE_EXPR || TREE_CODE (arg) == NOP_EXPR
+		 || TREE_CODE (arg) == CONVERT_EXPR
+		 || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+	    arg = TREE_OPERAND (arg, 0);
+	  if (TREE_CODE (arg) == ADDR_EXPR)
+	    {
+	      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	      /* D4324/P2680: '&*p' (address-of-dereference) -- e.g. a
+		 reference-typed lambda capture's own is_object_address(&r)
+		 conjunct, where R's capture proxy is itself REFERENCE_TYPE:
+		 reading it as an expression auto-dereferences (convert_
+		 from_reference), so '&r' arrives as ADDR_EXPR(INDIRECT_REF
+		 (proxy)), not a bare ADDR_EXPR(proxy) the way a pointer-
+		 typed capture's own '&p' would. Mirrors oa_provable_p's own
+		 identical INDIRECT_REF case (see that function's own
+		 comment for the general '&*ptr is exactly ptr' reasoning) --
+		 without this, establishing self-trust for a *reference*
+		 parameter/capture's own is_object_address precondition here
+		 silently registered the fact against the ADDR_EXPR node
+		 itself (a one-off, never looked up again by identity),
+		 leaving the real proxy decl permanently unestablished.
+		 Confirmed via direct testing: a generic lambda's own
+		 explicit 'pre<>(is_object_address(&lhs))' for a captured
+		 reference 'lhs' was never actually recorded here at all.  */
+	      if (TREE_CODE (op) == INDIRECT_REF)
+		op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
+	      if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
+		arg = op;
+	      /* D4324, Increment 2 of the pointer-indexing follow-on: see
+		 oa_handle_precondition_stmt/oa_handle_assertion_stmt's own
+		 identical addition -- self-trust for a declared, conveyor-
+		 active 'pre<>(is_object_address(&ptr[index]))' needs the
+		 same array-slot-identity establishment those two get for a
+		 body contract_assert/precondition-obligation conjunct.  */
+	      else if (TREE_CODE (op) == ARRAY_REF)
+		{
+		  tree identity;
+		  if (oa_array_object_identity (arg, env, &identity))
+		    arg = identity;
+		}
+	    }
+	  else if (TREE_CODE (arg) == COMPONENT_REF)
+	    {
+	      tree obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	      if (TREE_CODE (obj_expr) == INDIRECT_REF)
+		obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj_expr, 0));
+	      tree field = TREE_OPERAND (arg, 1);
+	      tree identity;
+	      if (oa_object_identity_decl (obj_expr, &identity)
+		  || oa_field_slot_identity (obj_expr, env, &identity)
+		  || oa_array_slot_identity (obj_expr, env, &identity)
+		  || oa_field_object_identity (obj_expr, env, &identity))
+		{
+		  identity = env.alias_find (identity);
+		  arg = env.field_object_identity_key (identity, field);
+		}
+	    }
+	  /* D4324, Increment 2 of the pointer-indexing follow-on: see
+	     oa_handle_precondition_stmt/oa_handle_assertion_stmt's own
+	     identical POINTER_PLUS_EXPR addition for the full rationale
+	     (a POINTER-TYPED 'p[index]' -- as opposed to a genuine
+	     fixed-size array -- never actually arrives as ADDR_EXPR
+	     (ARRAY_REF(...)) in the first place).  */
+	  else if (TREE_CODE (arg) == POINTER_PLUS_EXPR)
+	    {
+	      tree identity;
+	      if (oa_array_object_identity (arg, env, &identity))
+		arg = identity;
+	    }
+	  /* D4324/P2680: for a function declared separately from its
+	     (out-of-class) definition, with the same explicit pre<>()
+	     text repeated on both, GET_FN_CONTRACT_SPECIFIERS's own
+	     condition text still references the DECLARATION's own PARM_
+	     DECLs -- distinct tree nodes from FNDECL's own DECL_ARGUMENTS
+	     (the definition's, canonical ones, which is what the body
+	     walk below and every ordinary consult site actually key on)
+	     -- confirmed via direct testing (a minimal, non-cloned,
+	     non-template 'S::create_plus', declared in-class and defined
+	     out-of-class with a matching pre<>(is_object_address(this)):
+	     establishing against the declaration's own 'this' PARM_DECL
+	     left the definition's own 'this' -- a different pointer --
+	     with no fact at all). Remap ARG to FNDECL's own matching
+	     parameter before establishing: 'this' needs no positional
+	     search (is_this_parameter is a name-based check, identical
+	     for either copy), an ordinary named parameter is remapped by
+	     position instead, matching oa_substitute_call_arg's own
+	     'position, not identity' approach to the same declaration-
+	     vs-definition PARM_DECL split.  */
+	  if (TREE_CODE (arg) == PARM_DECL && DECL_CONTEXT (arg) != fndecl)
+	    {
+	      if (is_this_parameter (arg))
+		arg = DECL_ARGUMENTS (fndecl);
+	      else
+		{
+		  tree orig_context = DECL_CONTEXT (arg);
+		  unsigned pos = 0;
+		  tree p = orig_context ? DECL_ARGUMENTS (orig_context) : NULL_TREE;
+		  for (; p && p != arg; p = DECL_CHAIN (p))
+		    ++pos;
+		  if (p == arg)
+		    {
+		      tree q = DECL_ARGUMENTS (fndecl);
+		      for (unsigned j = 0; j < pos && q; ++j)
+			q = DECL_CHAIN (q);
+		      if (q)
+			arg = q;
+		    }
+		}
+	    }
+	  /* D4324/P2680: the identical declaration-vs-definition split
+	     just above, for a *generic* lambda's own capture proxy
+	     instead of an ordinary parameter -- see oa_find_capture_
+	     proxy_by_name's own comment for the full mechanism (tsubst's
+	     register_local_identity fallback maps a capture referenced
+	     in a generic lambda's own contract text to the *pattern*'s
+	     shared proxy, since this instantiation's own proxy doesn't
+	     exist yet at contract-substitution time) -- find THIS
+	     instantiation's own matching proxy, by name, in FNDECL's own
+	     already-substituted BODY (available by now: this whole
+	     function only ever runs after the body is fully
+	     instantiated).  */
+	  else if (VAR_P (arg) && is_capture_proxy (arg)
+		   && DECL_CONTEXT (arg) != fndecl)
+	    {
+	      tree real_proxy
+		= (body ? oa_find_capture_proxy_by_name (body, DECL_NAME (arg))
+		   : NULL_TREE);
+	      if (real_proxy)
+		arg = real_proxy;
+	    }
+	  env.set (arg, true);
+	}
+    }
+}
+
 /* D4324/P2680: find the capture-proxy VAR_DECL in FNDECL's own
    (already fully substituted) BODY whose DECL_NAME matches NAME, or
    NULL_TREE if none is found.
@@ -26851,161 +27083,16 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
      conjunct -- unlike that loop, this needs no PRECONDITION_STMT/
      specifier-list workaround at all, since it never depended on either
      to begin with.  */
-  if (DECL_CONSTRUCTOR_P (fndecl) || DECL_DESTRUCTOR_P (fndecl))
-    if (tree this_parm = DECL_ARGUMENTS (fndecl))
-      env.set (this_parm, true);
+  oa_seed_entry_env (fndecl, body, env);
 
-  for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
-    {
-      tree contract = CONTRACT_STATEMENT (as);
-      if (!PRECONDITION_P (contract))
-	continue;
-      if (!oa_contract_conveyor_active_p (contract))
-	continue;
-      tree cond = CONTRACT_CONDITION (contract);
-      if (cond == NULL_TREE || cond == error_mark_node)
-	continue;
-      auto_vec<tree *> conjuncts;
-      oa_collect_conjuncts (&cond, &conjuncts);
-      for (unsigned i = 0; i < conjuncts.length (); ++i)
-	{
-	  tree arg;
-	  if (!is_object_address_call_p (*conjuncts[i], &arg))
-	    continue;
-	  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
-	  while (TREE_CODE (arg) == NON_LVALUE_EXPR || TREE_CODE (arg) == NOP_EXPR
-		 || TREE_CODE (arg) == CONVERT_EXPR
-		 || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
-	    arg = TREE_OPERAND (arg, 0);
-	  if (TREE_CODE (arg) == ADDR_EXPR)
-	    {
-	      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
-	      /* D4324/P2680: '&*p' (address-of-dereference) -- e.g. a
-		 reference-typed lambda capture's own is_object_address(&r)
-		 conjunct, where R's capture proxy is itself REFERENCE_TYPE:
-		 reading it as an expression auto-dereferences (convert_
-		 from_reference), so '&r' arrives as ADDR_EXPR(INDIRECT_REF
-		 (proxy)), not a bare ADDR_EXPR(proxy) the way a pointer-
-		 typed capture's own '&p' would. Mirrors oa_provable_p's own
-		 identical INDIRECT_REF case (see that function's own
-		 comment for the general '&*ptr is exactly ptr' reasoning) --
-		 without this, establishing self-trust for a *reference*
-		 parameter/capture's own is_object_address precondition here
-		 silently registered the fact against the ADDR_EXPR node
-		 itself (a one-off, never looked up again by identity),
-		 leaving the real proxy decl permanently unestablished.
-		 Confirmed via direct testing: a generic lambda's own
-		 explicit 'pre<>(is_object_address(&lhs))' for a captured
-		 reference 'lhs' was never actually recorded here at all.  */
-	      if (TREE_CODE (op) == INDIRECT_REF)
-		op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
-	      if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
-		arg = op;
-	      /* D4324, Increment 2 of the pointer-indexing follow-on: see
-		 oa_handle_precondition_stmt/oa_handle_assertion_stmt's own
-		 identical addition -- self-trust for a declared, conveyor-
-		 active 'pre<>(is_object_address(&ptr[index]))' needs the
-		 same array-slot-identity establishment those two get for a
-		 body contract_assert/precondition-obligation conjunct.  */
-	      else if (TREE_CODE (op) == ARRAY_REF)
-		{
-		  tree identity;
-		  if (oa_array_object_identity (arg, env, &identity))
-		    arg = identity;
-		}
-	    }
-	  else if (TREE_CODE (arg) == COMPONENT_REF)
-	    {
-	      tree obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
-	      if (TREE_CODE (obj_expr) == INDIRECT_REF)
-		obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj_expr, 0));
-	      tree field = TREE_OPERAND (arg, 1);
-	      tree identity;
-	      if (oa_object_identity_decl (obj_expr, &identity)
-		  || oa_field_slot_identity (obj_expr, env, &identity)
-		  || oa_array_slot_identity (obj_expr, env, &identity)
-		  || oa_field_object_identity (obj_expr, env, &identity))
-		{
-		  identity = env.alias_find (identity);
-		  arg = env.field_object_identity_key (identity, field);
-		}
-	    }
-	  /* D4324, Increment 2 of the pointer-indexing follow-on: see
-	     oa_handle_precondition_stmt/oa_handle_assertion_stmt's own
-	     identical POINTER_PLUS_EXPR addition for the full rationale
-	     (a POINTER-TYPED 'p[index]' -- as opposed to a genuine
-	     fixed-size array -- never actually arrives as ADDR_EXPR
-	     (ARRAY_REF(...)) in the first place).  */
-	  else if (TREE_CODE (arg) == POINTER_PLUS_EXPR)
-	    {
-	      tree identity;
-	      if (oa_array_object_identity (arg, env, &identity))
-		arg = identity;
-	    }
-	  /* D4324/P2680: for a function declared separately from its
-	     (out-of-class) definition, with the same explicit pre<>()
-	     text repeated on both, GET_FN_CONTRACT_SPECIFIERS's own
-	     condition text still references the DECLARATION's own PARM_
-	     DECLs -- distinct tree nodes from FNDECL's own DECL_ARGUMENTS
-	     (the definition's, canonical ones, which is what the body
-	     walk below and every ordinary consult site actually key on)
-	     -- confirmed via direct testing (a minimal, non-cloned,
-	     non-template 'S::create_plus', declared in-class and defined
-	     out-of-class with a matching pre<>(is_object_address(this)):
-	     establishing against the declaration's own 'this' PARM_DECL
-	     left the definition's own 'this' -- a different pointer --
-	     with no fact at all). Remap ARG to FNDECL's own matching
-	     parameter before establishing: 'this' needs no positional
-	     search (is_this_parameter is a name-based check, identical
-	     for either copy), an ordinary named parameter is remapped by
-	     position instead, matching oa_substitute_call_arg's own
-	     'position, not identity' approach to the same declaration-
-	     vs-definition PARM_DECL split.  */
-	  if (TREE_CODE (arg) == PARM_DECL && DECL_CONTEXT (arg) != fndecl)
-	    {
-	      if (is_this_parameter (arg))
-		arg = DECL_ARGUMENTS (fndecl);
-	      else
-		{
-		  tree orig_context = DECL_CONTEXT (arg);
-		  unsigned pos = 0;
-		  tree p = orig_context ? DECL_ARGUMENTS (orig_context) : NULL_TREE;
-		  for (; p && p != arg; p = DECL_CHAIN (p))
-		    ++pos;
-		  if (p == arg)
-		    {
-		      tree q = DECL_ARGUMENTS (fndecl);
-		      for (unsigned j = 0; j < pos && q; ++j)
-			q = DECL_CHAIN (q);
-		      if (q)
-			arg = q;
-		    }
-		}
-	    }
-	  /* D4324/P2680: the identical declaration-vs-definition split
-	     just above, for a *generic* lambda's own capture proxy
-	     instead of an ordinary parameter -- see oa_find_capture_
-	     proxy_by_name's own comment for the full mechanism (tsubst's
-	     register_local_identity fallback maps a capture referenced
-	     in a generic lambda's own contract text to the *pattern*'s
-	     shared proxy, since this instantiation's own proxy doesn't
-	     exist yet at contract-substitution time) -- find THIS
-	     instantiation's own matching proxy, by name, in FNDECL's own
-	     already-substituted BODY (available by now: this whole
-	     function only ever runs after the body is fully
-	     instantiated).  */
-	  else if (VAR_P (arg) && is_capture_proxy (arg)
-		   && DECL_CONTEXT (arg) != fndecl)
-	    {
-	      tree real_proxy = oa_find_capture_proxy_by_name (body, DECL_NAME (arg));
-	      if (real_proxy)
-		arg = real_proxy;
-	    }
-	  env.set (arg, true);
-	}
-    }
-
+  /* The predicates of FNDECL's own contracts are checked once, at
+     declaration level (oa_validate_contract_predicates), except for an
+     object declaration's check function: those are validated through the
+     check function's own walk.  */
+  bool saved_skip_predicate_scans = oa_skip_predicate_scans;
+  oa_skip_predicate_scans = !get_orig_objdecl_for_check_fn (fndecl);
   oa_walk_stmt (&body, env);
+  oa_skip_predicate_scans = saved_skip_predicate_scans;
 
   oa_active_provenance = saved_provenance;
   oa_return_tracking = false;
@@ -27022,6 +27109,230 @@ void
 resolve_object_address_in_function (tree fndecl)
 {
   oa_resolve_object_address_in_function_1 (fndecl);
+}
+
+/* D4324: check the predicates of FNDECL's declared strict contracts for
+   their own conveyor restrictions -- item 7 call obligations, item 8 UB
+   checks, and side effects -- once, at declaration level.  A strict
+   predicate's restrictions are a property of the declaration: they must
+   hold whether or not the contract is ever woven into a body (a function
+   that is only declared, a pure virtual function, a contract not checked
+   on the definition side) and regardless of which side evaluates it, and
+   call-site proofs rely on the declared predicates as facts.  The body
+   walk therefore no longer scans these predicates itself (see oa_skip_
+   predicate_scans).  Preconditions are processed in order, from the same
+   entry state the body walk starts from, so a later precondition may rely
+   on an earlier one; each is processed on an unshared copy, since the
+   handlers rewrite the conditions they resolve.  */
+
+/* walk_tree callback for oa_condition_not_yet_analyzable_p.  */
+
+static tree
+oa_condition_not_yet_analyzable_r (tree *tp, int *walk_subtrees, void *)
+{
+  tree t = *tp;
+  switch (TREE_CODE (t))
+    {
+    case TEMPLATE_PARM_INDEX:
+    case TEMPLATE_TYPE_PARM:
+    case TEMPLATE_TEMPLATE_PARM:
+    case BOUND_TEMPLATE_TEMPLATE_PARM:
+    case TYPENAME_TYPE:
+    case SCOPE_REF:
+    case DEPENDENT_OPERATOR_TYPE:
+    case OVERLOAD:
+      return t;
+    case FUNCTION_DECL:
+      if (undeduced_auto_decl (t))
+	return t;
+      *walk_subtrees = 0;
+      return NULL_TREE;
+    default:
+      if (TYPE_P (t) || DECL_P (t))
+	*walk_subtrees = 0;
+      return NULL_TREE;
+    }
+}
+
+/* True if COND still contains template parameters, or calls a function
+   whose return type hasn't been deduced; such a condition can't be
+   analyzed yet.  Unlike uses_template_parms, safe to ask about an
+   ordinary, non-template condition.  */
+
+static bool
+oa_condition_not_yet_analyzable_p (tree cond)
+{
+  return cp_walk_tree_without_duplicates (&cond,
+					  oa_condition_not_yet_analyzable_r,
+					  NULL) != NULL_TREE;
+}
+
+static void
+oa_validate_contract_predicates (tree fndecl)
+{
+  tree specs = get_fn_contract_specifiers (fndecl);
+  if (!specs || contract_any_deferred_p (specs))
+    return;
+
+  bool any_strict = false;
+  {
+    auto ovr = make_temp_override (oa_validating_declaration, fndecl);
+    for (tree as = specs; as; as = TREE_CHAIN (as))
+      {
+	tree stmt = CONTRACT_STATEMENT (as);
+	tree cond = CONTRACT_CONDITION (stmt);
+	if (!cond || cond == error_mark_node)
+	  continue;
+	if (oa_condition_not_yet_analyzable_p (cond))
+	  return;
+	if (POSTCONDITION_P (stmt))
+	  if (tree r = POSTCONDITION_IDENTIFIER (stmt))
+	    if (r != error_mark_node && type_uses_auto (TREE_TYPE (r)))
+	      return;
+	if (oa_contract_conveyor_active_p (stmt, fndecl))
+	  any_strict = true;
+      }
+  }
+  if (!any_strict)
+    return;
+
+  auto cfd_ovr = make_temp_override (current_function_decl, fndecl);
+  auto val_ovr = make_temp_override (oa_validating_declaration, fndecl);
+  auto skip_ovr = make_temp_override (oa_skip_predicate_scans, false);
+
+  oa_env env;
+  hash_map<oa_field_key_hash, tree> field_object_key_cache;
+  env.set_field_object_key_cache (&field_object_key_cache);
+  hash_map<oa_field_key_hash, tree> array_object_key_cache;
+  env.set_array_object_key_cache (&array_object_key_cache);
+  hash_map<oa_field_key_hash, tree> capture_proxy_key_cache;
+  env.set_capture_proxy_key_cache (&capture_proxy_key_cache);
+  oa_seed_entry_env (fndecl, NULL_TREE, env);
+
+  for (tree as = specs; as; as = TREE_CHAIN (as))
+    {
+      tree stmt = CONTRACT_STATEMENT (as);
+      tree cond = CONTRACT_CONDITION (stmt);
+      if (!cond || cond == error_mark_node)
+	continue;
+      tree copy = copy_node (stmt);
+      CONTRACT_CONDITION (copy) = unshare_expr (cond);
+      if (PRECONDITION_P (copy))
+	oa_handle_precondition_stmt (copy, env);
+      else if (POSTCONDITION_P (copy))
+	oa_handle_postcondition_stmt (copy, env);
+    }
+}
+
+/* D4324: an object declaration's own contracts are validated through its
+   check functions (build_object_contract_check_function), whose body walk
+   scans them; build those that no call has needed yet.  */
+
+static void
+oa_validate_object_contract_predicates (tree objdecl)
+{
+  tree specs = get_fn_contract_specifiers (objdecl);
+  if (!specs || contract_any_deferred_p (specs))
+    return;
+  /* Not a template pattern, nor a member or parameter of one: those are
+     validated per instantiation.  */
+  if (uses_template_parms (TREE_TYPE (objdecl))
+      || ((VAR_P (objdecl) || TREE_CODE (objdecl) == FIELD_DECL)
+	  && DECL_LANG_SPECIFIC (objdecl) && DECL_TEMPLATE_INFO (objdecl)
+	  && uses_template_parms (DECL_TI_ARGS (objdecl)))
+      || (DECL_CONTEXT (objdecl)
+	  && (TYPE_P (DECL_CONTEXT (objdecl))
+	      || TREE_CODE (DECL_CONTEXT (objdecl)) == FUNCTION_DECL)
+	  && uses_template_parms (DECL_CONTEXT (objdecl))))
+    return;
+  bool any_pre = false, any_post = false;
+  for (tree as = specs; as; as = TREE_CHAIN (as))
+    {
+      tree stmt = CONTRACT_STATEMENT (as);
+      tree cond = CONTRACT_CONDITION (stmt);
+      if (!cond || cond == error_mark_node)
+	continue;
+      if (oa_condition_not_yet_analyzable_p (cond))
+	return;
+      if (POSTCONDITION_P (stmt))
+	any_post = true;
+      else
+	any_pre = true;
+    }
+  if (any_pre)
+    get_or_build_object_contract_check_function (objdecl, false);
+  if (any_post)
+    get_or_build_object_contract_check_function (objdecl, true);
+}
+
+static GTY(()) hash_set<tree> *oa_validated_contract_decls;
+
+/* Validate the declared strict contracts of every declaration seen so far
+   that hasn't been validated yet (oa_validate_contract_predicates,
+   oa_validate_object_contract_predicates).  Called at end of translation
+   unit, after pending instantiations; returns true if that built new
+   functions, so the caller should reconsider.  */
+
+bool
+validate_pending_contract_predicates ()
+{
+  if (!flag_contract_control_objects || !contract_decl_map)
+    return false;
+
+  auto_vec<tree> decls;
+  for (auto it = contract_decl_map->begin (); it != contract_decl_map->end ();
+       ++it)
+    {
+      tree decl = (*it).first;
+      if (!(*it).second.contract_specifiers)
+	continue;
+      if (!oa_validated_contract_decls)
+	oa_validated_contract_decls = hash_set<tree>::create_ggc (37);
+      if (oa_validated_contract_decls->contains (decl))
+	continue;
+      decls.safe_push (decl);
+    }
+  if (decls.is_empty ())
+    return false;
+  /* Diagnose in declaration order, not hash order.  */
+  decls.qsort ([] (const void *a, const void *b)
+	       {
+		 int ua = DECL_UID (*(const tree *) a);
+		 int ub = DECL_UID (*(const tree *) b);
+		 return ua < ub ? -1 : ua > ub;
+	       });
+
+  bool built = false;
+  for (tree decl : decls)
+    {
+      oa_validated_contract_decls->add (decl);
+      if (TREE_CODE (decl) == FUNCTION_DECL)
+	{
+	  if (CONTRACT_HELPER (decl) != ldf_contract_none
+	      || DECL_CONTRACT_WRAPPER (decl)
+	      || DECL_CLONED_FUNCTION_P (decl)
+	      || get_orig_objdecl_for_check_fn (decl)
+	      || undeduced_auto_decl (decl)
+	      /* A template pattern, or a member of one: validated per
+		 instantiation.  */
+	      || (DECL_LANG_SPECIFIC (decl) && DECL_TEMPLATE_INFO (decl)
+		  && uses_template_parms (DECL_TI_ARGS (decl)))
+	      /* An implicit instantiation's contracts are only substituted
+		 when its definition is instantiated; until then they are
+		 the pattern's.  */
+	      || (DECL_LANG_SPECIFIC (decl) && DECL_TEMPLATE_INSTANTIATION (decl)
+		  && !DECL_TEMPLATE_INSTANTIATED (decl)))
+	    continue;
+	  oa_validate_contract_predicates (decl);
+	}
+      else if (VAR_P (decl) || TREE_CODE (decl) == PARM_DECL
+	       || TREE_CODE (decl) == FIELD_DECL)
+	{
+	  oa_validate_object_contract_predicates (decl);
+	  built = true;
+	}
+    }
+  return built;
 }
 
 /* A standalone plugin's own entry point (see

@@ -5972,6 +5972,11 @@ c_parse_final_cleanups (void)
       instantiate_pending_templates (retries);
       ggc_collect ();
 
+      /* D4324: validate declared strict contract predicates, including
+	 those of functions that are only declared.  */
+      if (validate_pending_contract_predicates ())
+	reconsider = true;
+
       if (header_module_p ())
 	/* A header modules initializations are handled in its
 	   importer.  */
