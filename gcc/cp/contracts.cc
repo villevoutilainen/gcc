@@ -27719,6 +27719,21 @@ oa_condition_not_yet_analyzable_r (tree *tp, int *walk_subtrees, void *)
     }
 }
 
+/* cp_walk_tree callback: replace each is_object_address call with what
+   a resolved one becomes (oa_resolved_object_address_call).  */
+
+static tree
+oa_resolve_object_address_calls_r (tree *tp, int *walk_subtrees, void *)
+{
+  tree arg;
+  if (is_object_address_call_p (*tp, &arg))
+    {
+      *tp = oa_resolved_object_address_call (arg);
+      *walk_subtrees = 0;
+    }
+  return NULL_TREE;
+}
+
 /* True if COND still contains template parameters, or calls a function
    whose return type hasn't been deduced; such a condition can't be
    analyzed yet.  Unlike uses_template_parms, safe to ask about an
@@ -27795,8 +27810,10 @@ oa_validate_contract_predicates (tree fndecl)
      checked.  */
   bool built = false;
   /* A definition's checks of its contracts build their own core
-     functions, from its own copies of them.  */
-  if (flag_contract_conveyor_proofs_gimple && !DECL_INITIAL (fndecl))
+     functions, from its own copies of them -- including a defaulted
+     function's, defined only once it is used.  */
+  if (flag_contract_conveyor_proofs_gimple && !DECL_INITIAL (fndecl)
+      && !DECL_DEFAULTED_FN (fndecl))
     for (tree as = specs; as; as = TREE_CHAIN (as))
       {
 	tree stmt = CONTRACT_STATEMENT (as);
@@ -27811,7 +27828,16 @@ oa_validate_contract_predicates (tree fndecl)
 	auto loc_ovr = make_temp_override (input_location,
 					   EXPR_LOC_OR_LOC (cond,
 							    EXPR_LOCATION (stmt)));
+	/* From the condition with its is_object_address calls resolved,
+	   as the AST walk resolves a walked one: a call to the core
+	   function (a caller's check) must not reach the intrinsic.  */
+	tree resolved = unshare_expr (cond);
+	cp_walk_tree_without_duplicates (&resolved,
+					 oa_resolve_object_address_calls_r,
+					 NULL);
+	CONTRACT_CONDITION (stmt) = resolved;
 	get_or_build_predicate_core_function (stmt, fndecl);
+	CONTRACT_CONDITION (stmt) = cond;
 	built = true;
       }
   return built;
