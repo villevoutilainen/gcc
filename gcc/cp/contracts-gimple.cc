@@ -3080,6 +3080,32 @@ cg_check_dereference_ub (gimple *stmt, hash_map<tree, cg_fact> &established)
     cg_check_one_dereference_candidate (stmt, gimple_call_lhs (stmt), established);
 }
 
+
+/* Whether the GIMPLE engine makes the proof checks (the ones beyond the
+   mandatory obligations) for CONTRACT, a precondition of CALLEE, in the
+   conveyor flavor if CONVEYOR, else the symbolic one.  Under
+   -fcontract-analysis-engine= they follow the AST engine's own gate: the
+   -fcontract-conveyor-proofs/-fcontract-symbolic-proofs flag, or a
+   control object that forces analysis (analyzed_X, proven_X).  With only
+   the older -fcontract-*-proofs-gimple flags, those flags themselves
+   turn them on.  */
+
+static bool
+cg_proof_checks_p (tree contract, tree callee, bool conveyor)
+{
+  if (flag_contract_analysis_engine == 0)
+    return true;
+  bool never_proven, conveyor_forced, conveyor_strict, symbolic_forced,
+    symbolic_strict;
+  if (!oa_contract_self_check_mode_public (contract, callee, &never_proven,
+					   &conveyor_forced, &conveyor_strict,
+					   &symbolic_forced, &symbolic_strict))
+    return false;
+  return (conveyor
+	  ? flag_contract_conveyor_proofs || conveyor_forced
+	  : flag_contract_symbolic_proofs || symbolic_forced);
+}
+
 /* CALL's own callee, checked against ESTABLISHED/ESTABLISHED_NZ as
    they stand right before CALL -- the consult side. Each of the
    callee's own preconditions is only checked against the flag whose
@@ -3140,6 +3166,16 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		     && oa_contract_conveyor_strict_cached_p (contract))
 		    || (check_as_symbolic
 			&& oa_contract_symbolic_strict_cached_p (contract));
+      /* Under -fcontract-analysis-engine=, a conveyor precondition's
+	 is_object_address conjunct is a mandatory obligation, as in the
+	 AST engine (oa_handle_call_precondition_obligation); everything
+	 else here is a proof check (cg_proof_checks_p).  */
+      bool mandatory_oa = (flag_contract_analysis_engine != 0
+			   && check_as_conveyor);
+      bool proofs = ((check_as_conveyor
+		      && cg_proof_checks_p (contract, callee, true))
+		     || (check_as_symbolic
+			 && cg_proof_checks_p (contract, callee, false)));
 
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
@@ -3159,6 +3195,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
 	    is_oa = false;
 	  else
+	    continue;
+	  if (!proofs && !(is_oa && mandatory_oa))
 	    continue;
 
 	  if (TREE_CODE (arg) != PARM_DECL)
@@ -3180,7 +3218,12 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		continue; /* Proven true: silently discharged.  */
 	      if (reported_oa_parms.add (arg))
 		continue; /* Already reported for this call.  */
-	      if (strict)
+	      if (mandatory_oa)
+		cg_conveyor_error_at (gimple_location (call),
+				      "cannot prove %<is_object_address%> for "
+				      "%qE, required by the precondition of %qD",
+				      substituted, callee);
+	      else if (strict)
 		error_at (gimple_location (call),
 			  "cannot prove %<is_object_address%> for %qE, as "
 			  "required by the precondition of %qD",
@@ -3285,6 +3328,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	 flattened-cache fallback (a fresh, empty map, so a genuinely
 	 branch-derived fact is never picked up here by accident) -- is
 	 sound to consult directly.  */
+      if (!proofs)
+	continue;
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree rel_param, rel_other;
@@ -4347,8 +4392,12 @@ cg_consult_persistent_facts (gcall *call,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
-      bool check_as_conveyor = conveyor_active && flag_contract_conveyor_proofs_gimple;
-      bool check_as_symbolic = symbolic_active && flag_contract_symbolic_proofs_gimple;
+      bool check_as_conveyor = (conveyor_active
+				&& flag_contract_conveyor_proofs_gimple
+				&& cg_proof_checks_p (contract, callee, true));
+      bool check_as_symbolic = (symbolic_active
+				&& flag_contract_symbolic_proofs_gimple
+				&& cg_proof_checks_p (contract, callee, false));
       if (!check_as_conveyor && !check_as_symbolic)
 	continue;
       bool require_conveyor = check_as_conveyor;
@@ -6633,8 +6682,12 @@ cg_check_call_range_relational (gcall *call,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
-      bool check_as_conveyor = conveyor_active && flag_contract_conveyor_proofs_gimple;
-      bool check_as_symbolic = symbolic_active && flag_contract_symbolic_proofs_gimple;
+      bool check_as_conveyor = (conveyor_active
+				&& flag_contract_conveyor_proofs_gimple
+				&& cg_proof_checks_p (contract, callee, true));
+      bool check_as_symbolic = (symbolic_active
+				&& flag_contract_symbolic_proofs_gimple
+				&& cg_proof_checks_p (contract, callee, false));
       if (!check_as_conveyor && !check_as_symbolic)
 	continue;
       bool require_conveyor = check_as_conveyor;
@@ -6778,8 +6831,12 @@ cg_check_call_relational_fact (gcall *call,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
-      bool check_as_conveyor = conveyor_active && flag_contract_conveyor_proofs_gimple;
-      bool check_as_symbolic = symbolic_active && flag_contract_symbolic_proofs_gimple;
+      bool check_as_conveyor = (conveyor_active
+				&& flag_contract_conveyor_proofs_gimple
+				&& cg_proof_checks_p (contract, callee, true));
+      bool check_as_symbolic = (symbolic_active
+				&& flag_contract_symbolic_proofs_gimple
+				&& cg_proof_checks_p (contract, callee, false));
       if (!check_as_conveyor && !check_as_symbolic)
 	continue;
       bool require_conveyor = check_as_conveyor;
