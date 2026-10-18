@@ -2740,6 +2740,62 @@ cg_conveyor_error_at (location_t loc, const char *gmsgid, ...)
   va_end (ap);
 }
 
+
+/* A tree to name SSA value VAL by in a diagnostic, as the AST engine
+   would: the variable, parameter or field it was read from, or the
+   arithmetic it was computed by, rather than an anonymous temporary
+   ('<unknown>').  VAL itself if nothing better is found.  */
+
+static tree
+cg_display_value (tree val, int depth = 0)
+{
+  if (TREE_CODE (val) != SSA_NAME || depth > 4)
+    return val;
+  if (tree var = SSA_NAME_VAR (val))
+    if (DECL_P (var) && !DECL_ARTIFICIAL (var) && DECL_NAME (var))
+      return var;
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (!def || !is_gimple_assign (def))
+    return val;
+  tree_code code = gimple_assign_rhs_code (def);
+  tree rhs1 = gimple_assign_rhs1 (def);
+  if (code == SSA_NAME || CONVERT_EXPR_CODE_P (code))
+    {
+      tree inner = cg_display_value (rhs1, depth + 1);
+      return inner != rhs1 ? inner : val;
+    }
+  if (gimple_assign_single_p (def))
+    {
+      if ((VAR_P (rhs1) || TREE_CODE (rhs1) == PARM_DECL)
+	  && !DECL_ARTIFICIAL (rhs1) && DECL_NAME (rhs1))
+	return rhs1;
+      if (TREE_CODE (rhs1) == COMPONENT_REF)
+	{
+	  tree obj = TREE_OPERAND (rhs1, 0);
+	  if (TREE_CODE (obj) == MEM_REF && integer_zerop (TREE_OPERAND (obj, 1))
+	      && TREE_CODE (TREE_OPERAND (obj, 0)) == SSA_NAME)
+	    {
+	      tree ptr = cg_display_value (TREE_OPERAND (obj, 0), depth + 1);
+	      if (!DECL_P (ptr))
+		return val;
+	      tree base = (TYPE_REF_P (TREE_TYPE (ptr))
+			   ? convert_from_reference (ptr)
+			   : build1 (INDIRECT_REF, TREE_TYPE (TREE_TYPE (ptr)),
+				     ptr));
+	      return build3 (COMPONENT_REF, TREE_TYPE (rhs1), base,
+			     TREE_OPERAND (rhs1, 1), NULL_TREE);
+	    }
+	  if (DECL_P (obj) && !DECL_ARTIFICIAL (obj))
+	    return rhs1;
+	}
+      return val;
+    }
+  if (TREE_CODE_CLASS (code) == tcc_binary)
+    return build2 (code, TREE_TYPE (val), cg_display_value (rhs1, depth + 1),
+		   cg_display_value (gimple_assign_rhs2 (def), depth + 1));
+  return val;
+}
+
 /* Check every div/mod operation in one GIMPLE_ASSIGN statement's own
    RHS, erroring on any whose divisor isn't provably nonzero. Only ever
    called for a DECL_DECLARED_CONVEYOR_P function's own body (see this
@@ -2775,7 +2831,7 @@ cg_check_div_mod_ub (gimple *stmt, hash_map<tree, cg_fact> &established_nz,
     cg_conveyor_error_at (gimple_location (stmt),
 			  "divisor %qE not provably nonzero in a "
 			  "conveyor function",
-			  divisor);
+			  cg_display_value (divisor));
 }
 
 /* D4324, item 8's overflow check, GIMPLE side: is a shift of exactly 1
@@ -2899,10 +2955,10 @@ cg_check_overflow_ub (gimple *stmt,
      refusal via the type-bound-witness rescue, mirroring oa_scan_
      overflow_in_expr's own identical ordering, before falling to the
      general numeric-only route below.  */
+  tree var_side = NULL_TREE;
+  bool increasing = false;
   if (code == PLUS_EXPR || code == MINUS_EXPR)
     {
-      tree var_side = NULL_TREE;
-      bool increasing = false;
       if (code == PLUS_EXPR && integer_onep (op1))
 	{ var_side = op0; increasing = true; }
       else if (code == PLUS_EXPR && integer_onep (op0))
@@ -2962,10 +3018,41 @@ cg_check_overflow_ub (gimple *stmt,
 	safe = lo >= type_min && hi <= type_max;
     }
 
-  if (!safe)
+  if (safe)
+    return;
+  /* '++x' or 'x += 1' is the AST engine's "increment of x": a unit shift
+     stored back into the variable it read.  */
+  tree target = NULL_TREE;
+  if (var_side && TREE_CODE (var_side) == SSA_NAME)
+    {
+      tree from = cg_display_value (var_side);
+      if (DECL_P (from))
+	{
+	  if (TREE_CODE (lhs) == SSA_NAME && SSA_NAME_VAR (lhs) == from)
+	    target = from;
+	  else if (TREE_CODE (lhs) == SSA_NAME)
+	    {
+	      use_operand_p use;
+	      gimple *use_stmt;
+	      if (single_imm_use (lhs, &use, &use_stmt)
+		  && gimple_assign_single_p (use_stmt)
+		  && gimple_assign_lhs (use_stmt) == from)
+		target = from;
+	    }
+	}
+    }
+  if (target)
+    cg_conveyor_error_at (gimple_location (stmt), increasing
+			  ? G_("increment of %qE not provably free of "
+			       "overflow in a conveyor function")
+			  : G_("decrement of %qE not provably free of "
+			       "overflow in a conveyor function"), target);
+  else
     cg_conveyor_error_at (gimple_location (stmt),
 			  "result of %qE not provably free of "
-			  "overflow in a conveyor function", lhs);
+			  "overflow in a conveyor function",
+			  build2 (code, type, cg_display_value (op0),
+				  cg_display_value (op1)));
 }
 
 /* D4324/P2680 item 8's array-bounds/pointer-arithmetic check, GIMPLE
@@ -3063,7 +3150,8 @@ cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
 				       in_progress))
     cg_conveyor_error_at (gimple_location (stmt),
 			  "pointer dereference of %qE not "
-			  "provably valid in a conveyor function", base);
+			  "provably valid in a conveyor function",
+			  cg_display_value (base));
 }
 
 static void
