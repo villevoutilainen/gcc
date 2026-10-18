@@ -1120,6 +1120,10 @@ check_conveyor_function_body (tree fun)
   if (!VOID_TYPE_P (return_type)
       && !DECL_CONSTRUCTOR_P (fun)
       && !DECL_DESTRUCTOR_P (fun)
+      /* A return statement whose operand was erroneous was dropped
+	 (finish_return_stmt); its error has already been reported.  */
+      && !(cfun && cp_function_chain
+	   && current_function_dropped_erroneous_return)
       && !oa_stmt_terminates_p (body))
     {
       if (conveyor_auto_probing_p ())

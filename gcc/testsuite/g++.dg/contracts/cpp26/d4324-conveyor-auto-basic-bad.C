@@ -21,7 +21,7 @@ bool
 call_get (_Tp const& t) conveyor(auto)
 { return t.get (); }
 
-bool user_of_not_conveyor (NotConveyor& n) conveyor // { dg-error "with non-.void. return type must contain a .return. statement" }
+bool user_of_not_conveyor (NotConveyor& n) conveyor
 { return call_get (n); } // { dg-error "not declared .conveyor." }
 
 int
