@@ -3169,6 +3169,126 @@ cg_check_dereference_ub (gimple *stmt, hash_map<tree, cg_fact> &established)
 }
 
 
+/* A contract_assert conjunct's verdict against the facts at the assert
+   (CG_VERDICT_NONE: not a shape this check decides).  */
+
+enum cg_verdict { CG_VERDICT_NONE, CG_VERDICT_TRUE, CG_VERDICT_FALSE,
+		  CG_VERDICT_UNKNOWN };
+
+/* Does every value in R satisfy 'value CODE C' (true), none (false), or
+   neither (unknown)?  */
+
+static cg_verdict
+cg_range_comparison_verdict (const cg_range_lite &r, tree_code code,
+			     const widest_int &c)
+{
+  switch (code)
+    {
+    case GT_EXPR:
+      if (r.has_lo && r.lo > c) return CG_VERDICT_TRUE;
+      if (r.has_hi && r.hi <= c) return CG_VERDICT_FALSE;
+      break;
+    case GE_EXPR:
+      if (r.has_lo && r.lo >= c) return CG_VERDICT_TRUE;
+      if (r.has_hi && r.hi < c) return CG_VERDICT_FALSE;
+      break;
+    case LT_EXPR:
+      if (r.has_hi && r.hi < c) return CG_VERDICT_TRUE;
+      if (r.has_lo && r.lo >= c) return CG_VERDICT_FALSE;
+      break;
+    case LE_EXPR:
+      if (r.has_hi && r.hi <= c) return CG_VERDICT_TRUE;
+      if (r.has_lo && r.lo > c) return CG_VERDICT_FALSE;
+      break;
+    case EQ_EXPR:
+      if (r.has_lo && r.has_hi && r.lo == c && r.hi == c)
+	return CG_VERDICT_TRUE;
+      if ((r.has_lo && r.lo > c) || (r.has_hi && r.hi < c))
+	return CG_VERDICT_FALSE;
+      break;
+    default:
+      break;
+    }
+  return CG_VERDICT_UNKNOWN;
+}
+
+/* The same for 'value != 0'.  */
+
+static cg_verdict
+cg_range_nonzero_verdict (const cg_range_lite &r)
+{
+  if ((r.has_lo && r.lo > 0) || (r.has_hi && r.hi < 0))
+    return CG_VERDICT_TRUE;
+  if (r.has_lo && r.has_hi && r.lo == 0 && r.hi == 0)
+    return CG_VERDICT_FALSE;
+  return CG_VERDICT_UNKNOWN;
+}
+
+/* The values satisfying 'x CODE C', C a REAL_CST, as a NaN-free range of
+   TYPE in *OUT.  False for a comparison that doesn't give one.  */
+
+static bool
+cg_frange_for_comparison (tree type, tree_code code, tree c, frange *out)
+{
+  REAL_VALUE_TYPE pinf, ninf, v = TREE_REAL_CST (c), lo, hi;
+  real_inf (&pinf);
+  real_inf (&ninf, true);
+  format_helper fmt (REAL_MODE_FORMAT (TYPE_MODE (type)));
+  switch (code)
+    {
+    case GE_EXPR: lo = v; hi = pinf; break;
+    case GT_EXPR: real_nextafter (&lo, fmt, &v, &pinf); hi = pinf; break;
+    case LE_EXPR: lo = ninf; hi = v; break;
+    case LT_EXPR: lo = ninf; real_nextafter (&hi, fmt, &v, &ninf); break;
+    case EQ_EXPR: lo = hi = v; break;
+    default: return false;
+    }
+  if (real_isnan (&v))
+    return false;
+  frange r (type, lo, hi);
+  r.clear_nan ();
+  *out = r;
+  return true;
+}
+/* Describe floating-point range R in BUF, as "in [LO, HI]".  */
+
+static char *
+cg_frange_text (const frange &r, char *buf, size_t n)
+{
+  if (r.undefined_p () || r.known_isnan ())
+    {
+      snprintf (buf, n, "%s", r.undefined_p () ? "impossible" : "NaN");
+      return buf;
+    }
+  char lo[40], hi[40];
+  real_to_decimal (lo, &r.lower_bound (), sizeof lo, 0, 1);
+  real_to_decimal (hi, &r.upper_bound (), sizeof hi, 0, 1);
+  snprintf (buf, n, "in [%s, %s]", lo, hi);
+  return buf;
+}
+
+/* Does established floating-point range HAVE satisfy required range
+   NEED: true if every value of HAVE is in NEED (so none is a NaN), false
+   if none can be, unknown otherwise.  */
+
+static cg_verdict
+cg_frange_requirement_verdict (const frange &have, const frange &need)
+{
+  if (have.undefined_p ())
+    return CG_VERDICT_UNKNOWN;
+  if (have.known_isnan ())
+    return CG_VERDICT_FALSE;
+  frange both = have;
+  both.intersect (need);
+  if (both.undefined_p ())
+    return CG_VERDICT_FALSE;
+  if (!have.maybe_isnan ()
+      && !real_less (&have.lower_bound (), &need.lower_bound ())
+      && !real_less (&need.upper_bound (), &have.upper_bound ()))
+    return CG_VERDICT_TRUE;
+  return CG_VERDICT_UNKNOWN;
+}
+
 /* Whether the GIMPLE engine makes the proof checks (the ones beyond the
    mandatory obligations) for CONTRACT, a precondition of CALLEE, in the
    conveyor flavor if CONVEYOR, else the symbolic one.  Under
@@ -3213,7 +3333,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		  &established_call_call_rel,
 		hash_map<tree, cg_range_lite> &scalar_range_cache,
 		gimple_ranger *ranger,
-		hash_set<gimple *> *call_relational_verdict)
+		hash_set<gimple *> *call_relational_verdict,
+		hash_map<tree, frange> *established_frange = NULL)
 {
   tree callee = gimple_call_fndecl (call);
   if (!callee)
@@ -3418,6 +3539,76 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	 sound to consult directly.  */
       if (!proofs)
 	continue;
+
+      /* A floating-point parameter compared with a constant
+	 ('pre (x <= 100.0)'): the argument's range -- a literal, or what
+	 the ranger and the established facts give for an SSA value --
+	 against the range the conjunct requires.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree parm, const_val;
+	  tree_code code;
+	  frange need;
+	  if (!oa_match_simple_comparison (*conjuncts[i], &parm, &code,
+					   &const_val)
+	      || TREE_CODE (const_val) != REAL_CST
+	      || TREE_CODE (parm) != PARM_DECL
+	      || !SCALAR_FLOAT_TYPE_P (TREE_TYPE (parm))
+	      || !cg_frange_for_comparison (TREE_TYPE (parm), code, const_val,
+					    &need))
+	    continue;
+	  unsigned argno;
+	  if (!cg_find_param_position (callee, parm, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree arg = cg_resolve_call_argument (call, argno);
+	  if (!SCALAR_FLOAT_TYPE_P (TREE_TYPE (arg)))
+	    continue;
+	  frange have (TREE_TYPE (arg));
+	  if (TREE_CODE (arg) == REAL_CST)
+	    {
+	      have = frange (arg, arg);
+	      if (!real_isnan (TREE_REAL_CST_PTR (arg)))
+		have.clear_nan ();
+	    }
+	  else if (TREE_CODE (arg) == SSA_NAME)
+	    {
+	      if (!ranger->range_of_expr (have, arg, call))
+		have.set_varying (TREE_TYPE (arg));
+	      if (established_frange)
+		if (frange *known = established_frange->get (arg))
+		  have.intersect (*known);
+	    }
+	  else
+	    continue;
+	  cg_verdict v = cg_frange_requirement_verdict (have, need);
+	  if (v == CG_VERDICT_TRUE)
+	    continue;
+	  if (v == CG_VERDICT_FALSE)
+	    {
+	      char have_text[96], need_text[96];
+	      error_at (gimple_location (call),
+			"argument %qE provably violates the precondition of %qD",
+			cg_display_value (arg), callee);
+	      inform (gimple_location (call),
+		      "%qE is established %s, but the precondition requires "
+		      "it %s", cg_display_value (arg),
+		      cg_frange_text (have, have_text, sizeof have_text),
+		      cg_frange_text (need, need_text, sizeof need_text));
+	      continue;
+	    }
+	  if (strict)
+	    error_at (gimple_location (call),
+		      "cannot prove that %qE satisfies the precondition of %qD",
+		      cg_display_value (arg), callee);
+	  else
+	    warning_at (gimple_location (call), 0,
+			"cannot verify that %qE satisfies the precondition of "
+			"%qD", cg_display_value (arg), callee);
+	  if (const char *why
+		= oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL))
+	    inform (gimple_location (call), "%s", _(why));
+	}
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree rel_param, rel_other;
@@ -3861,7 +4052,21 @@ struct cg_field_fact
   /* The field is nonzero, a fact a range can't state for a signed
      field: from a contract_assert's 'obj.field != 0'.  */
   bool nonzero = false;
+  /* For a floating-point field, its range.  */
+  bool has_float = false;
+  frange float_range = frange ();
 };
+
+/* Whether A and B, two facts about the same location, are the same
+   floating-point fact.  */
+
+static bool
+cg_field_fact_float_equal (const cg_field_fact &a, const cg_field_fact &b)
+{
+  return (a.has_float == b.has_float
+	  && (!a.has_float || a.float_range == b.float_range));
+}
+
 /* cg_field_key_hash itself is defined earlier in this file (alongside
    cg_call_call_rel_fact), which needs it before this point.  */
 
@@ -4277,6 +4482,67 @@ cg_collect_field_range_groups (tree cond, vec<cg_field_group_lite> *out)
     }
 }
 
+/* The floating-point sibling of cg_collect_field_range_groups: each
+   'ptr->field CODE C' conjunct of COND with C a REAL_CST, grouped by
+   (pointer, field) and intersected.  PTR_EXPR is a PARM_DECL, or with
+   ALLOW_VAR also a VAR_DECL.  */
+
+struct cg_float_field_group { tree field; tree ptr_expr; frange range; };
+
+static void
+cg_collect_field_float_groups (tree cond, vec<cg_float_field_group> *out,
+			       bool allow_var = false)
+{
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree field, ptr_expr, const_val;
+      tree_code code;
+      if (!oa_match_field_range_comparison (*conjuncts[i], &field, &ptr_expr,
+					     &code, &const_val)
+	  || TREE_CODE (const_val) != REAL_CST
+	  || !SCALAR_FLOAT_TYPE_P (TREE_TYPE (field)))
+	continue;
+      ptr_expr = oa_strip_symbolic_ptr_expr_public (ptr_expr);
+      if (TREE_CODE (ptr_expr) != PARM_DECL
+	  && !(allow_var && VAR_P (ptr_expr)))
+	continue;
+      frange r;
+      if (!cg_frange_for_comparison (TREE_TYPE (field), code, const_val, &r))
+	continue;
+      cg_float_field_group *found = NULL;
+      for (unsigned j = 0; j < out->length () && !found; ++j)
+	if ((*out)[j].field == field && (*out)[j].ptr_expr == ptr_expr)
+	  found = &(*out)[j];
+      if (found)
+	found->range.intersect (r);
+      else
+	out->safe_push ({ field, ptr_expr, r });
+    }
+}
+
+/* Add floating-point range R to the fact KEY has in STATE.  */
+
+static void
+cg_add_float_field_fact (cg_dom_fact_state &state,
+			 std::pair<tree, tree> key, const frange &r,
+			 bool conveyor_established)
+{
+  cg_field_fact *existing = state.field.get (key);
+  cg_field_fact fact = existing ? *existing
+		       : cg_field_fact { {}, conveyor_established };
+  if (fact.has_float)
+    fact.float_range.intersect (r);
+  else
+    {
+      fact.has_float = true;
+      fact.float_range = r;
+    }
+  state.field.put (key, fact);
+}
+
+
 /* The call-range analogue of cg_field_group_lite/cg_collect_field_
    range_groups immediately above, built from the exported oa_match_
    call_range_comparison primitive -- a call to a DECL_DECLARED_
@@ -4446,6 +4712,12 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
 	    seed.field.put ({ssa, field_groups[g].field},
 			     { field_groups[g].range, conveyor_enabled });
 	}
+      auto_vec<cg_float_field_group> float_groups;
+      cg_collect_field_float_groups (cond, &float_groups);
+      for (unsigned g = 0; g < float_groups.length (); ++g)
+	if (tree ssa = ssa_default_def (fun, float_groups[g].ptr_expr))
+	  cg_add_float_field_fact (seed, {ssa, float_groups[g].field},
+				   float_groups[g].range, conveyor_enabled);
 
       auto_vec<cg_call_group_lite> call_groups;
       cg_collect_call_range_groups (cond, &call_groups,
@@ -4618,6 +4890,61 @@ cg_consult_persistent_facts (gcall *call,
 	      : (require_conveyor && !established->conveyor_established)
 		? OA_UNPROVABLE_WEAKER_PROVENANCE
 		: OA_UNPROVABLE_RANGE_PARTIAL;
+	  if (const char *why = oa_unprovable_reason_text (reason))
+	    inform (gimple_location (call), "%s", _(why));
+	}
+
+      auto_vec<cg_float_field_group> float_groups;
+      cg_collect_field_float_groups (cond, &float_groups);
+      for (unsigned g = 0; g < float_groups.length (); ++g)
+	{
+	  unsigned argno;
+	  if (!cg_find_param_position (callee, float_groups[g].ptr_expr, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree substituted = cg_resolve_call_argument (call, argno);
+	  tree identity = cg_field_slot_identity (substituted, state);
+	  if (!identity)
+	    identity = cg_field_object_identity (substituted, field_object_cache);
+	  if (!identity)
+	    identity = cg_gimple_object_identity (substituted);
+	  cg_field_fact *established
+	    = identity ? state.field.get ({identity, float_groups[g].field}) : NULL;
+	  bool usable = (established && established->has_float
+			 && (!require_conveyor
+			     || established->conveyor_established));
+	  cg_verdict v = (usable
+			  ? cg_frange_requirement_verdict
+			      (established->float_range, float_groups[g].range)
+			  : CG_VERDICT_UNKNOWN);
+	  if (v == CG_VERDICT_TRUE)
+	    continue; /* Proven true: silently discharged.  */
+	  if (v == CG_VERDICT_FALSE)
+	    {
+	      char have[96], need[96];
+	      error_at (gimple_location (call),
+			"argument %qE provably violates the precondition of %qD",
+			substituted, callee);
+	      inform (gimple_location (call),
+		      "field %qD of %qE is established %s, but the precondition "
+		      "requires it %s", float_groups[g].field, substituted,
+		      cg_frange_text (established->float_range, have,
+				      sizeof have),
+		      cg_frange_text (float_groups[g].range, need, sizeof need));
+	      continue;
+	    }
+	  if (strict)
+	    error_at (gimple_location (call),
+		      "cannot prove that field %qD of %qE satisfies the "
+		      "precondition of %qD",
+		      float_groups[g].field, substituted, callee);
+	  else
+	    warning_at (gimple_location (call), 0,
+			"cannot verify that field %qD of %qE satisfies the "
+			"precondition of %qD",
+			float_groups[g].field, substituted, callee);
+	  oa_unprovable_reason reason
+	    = !usable ? OA_UNPROVABLE_NO_FACT : OA_UNPROVABLE_RANGE_PARTIAL;
 	  if (const char *why = oa_unprovable_reason_text (reason))
 	    inform (gimple_location (call), "%s", _(why));
 	}
@@ -4953,6 +5280,24 @@ cg_establish_persistent_facts_for_call (gcall *call,
 	    state.field.put ({identity, field_groups[g].field},
 			      { field_groups[g].range, conveyor_enabled });
 	}
+      auto_vec<cg_float_field_group> float_groups;
+      cg_collect_field_float_groups (cond, &float_groups);
+      for (unsigned g = 0; g < float_groups.length (); ++g)
+	{
+	  unsigned argno;
+	  if (!cg_find_param_position (callee, float_groups[g].ptr_expr, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree substituted = gimple_call_arg (call, argno);
+	  tree identity = cg_field_slot_identity (substituted, state);
+	  if (!identity)
+	    identity = cg_field_object_identity (substituted, field_object_cache);
+	  if (!identity)
+	    identity = cg_gimple_object_identity (substituted);
+	  if (identity)
+	    cg_add_float_field_fact (state, {identity, float_groups[g].field},
+				     float_groups[g].range, conveyor_enabled);
+	}
 
       auto_vec<cg_call_group_lite> call_groups;
       cg_collect_call_range_groups (cond, &call_groups,
@@ -4984,61 +5329,6 @@ cg_establish_persistent_facts_for_call (gcall *call,
 static tree cg_contract_check_call_p (gcall *, tree *, tree *, tree *);
 static tree cg_contract_check_decl_value (gcall *, tree, tree, tree);
 
-/* A contract_assert conjunct's verdict against the facts at the assert
-   (CG_VERDICT_NONE: not a shape this check decides).  */
-
-enum cg_verdict { CG_VERDICT_NONE, CG_VERDICT_TRUE, CG_VERDICT_FALSE,
-		  CG_VERDICT_UNKNOWN };
-
-/* Does every value in R satisfy 'value CODE C' (true), none (false), or
-   neither (unknown)?  */
-
-static cg_verdict
-cg_range_comparison_verdict (const cg_range_lite &r, tree_code code,
-			     const widest_int &c)
-{
-  switch (code)
-    {
-    case GT_EXPR:
-      if (r.has_lo && r.lo > c) return CG_VERDICT_TRUE;
-      if (r.has_hi && r.hi <= c) return CG_VERDICT_FALSE;
-      break;
-    case GE_EXPR:
-      if (r.has_lo && r.lo >= c) return CG_VERDICT_TRUE;
-      if (r.has_hi && r.hi < c) return CG_VERDICT_FALSE;
-      break;
-    case LT_EXPR:
-      if (r.has_hi && r.hi < c) return CG_VERDICT_TRUE;
-      if (r.has_lo && r.lo >= c) return CG_VERDICT_FALSE;
-      break;
-    case LE_EXPR:
-      if (r.has_hi && r.hi <= c) return CG_VERDICT_TRUE;
-      if (r.has_lo && r.lo > c) return CG_VERDICT_FALSE;
-      break;
-    case EQ_EXPR:
-      if (r.has_lo && r.has_hi && r.lo == c && r.hi == c)
-	return CG_VERDICT_TRUE;
-      if ((r.has_lo && r.lo > c) || (r.has_hi && r.hi < c))
-	return CG_VERDICT_FALSE;
-      break;
-    default:
-      break;
-    }
-  return CG_VERDICT_UNKNOWN;
-}
-
-/* The same for 'value != 0'.  */
-
-static cg_verdict
-cg_range_nonzero_verdict (const cg_range_lite &r)
-{
-  if ((r.has_lo && r.lo > 0) || (r.has_hi && r.hi < 0))
-    return CG_VERDICT_TRUE;
-  if (r.has_lo && r.has_hi && r.lo == 0 && r.hi == 0)
-    return CG_VERDICT_FALSE;
-  return CG_VERDICT_UNKNOWN;
-}
-
 /* Verdicts the dominator-ordered fact walk reaches for an assert's
    conjuncts about memory (fields, named predicates, scalars in memory),
    which the check pass reports along with the rest
@@ -5053,6 +5343,9 @@ struct cg_assert_memory_verdicts
 };
 
 typedef hash_map<gimple *, cg_assert_memory_verdicts *> cg_assert_memory_verdict_map;
+
+static cg_verdict cg_frange_comparison_verdict (const frange &, tree_code,
+						tree, char *, size_t);
 
 /* Is DECL a scalar in memory (its address is taken) whose value the
    walk can follow: every use of its address is a direct call argument
@@ -5269,6 +5562,18 @@ cg_establish_assert_facts (gcall *call, cg_dom_fact_state &state)
       tree ptr_expr;
       if (oa_match_field_range_comparison (c, &field, &ptr_expr, &code,
 					   &const_val)
+	  && TREE_CODE (const_val) == REAL_CST)
+	{
+	  frange r;
+	  ptr_expr = oa_strip_symbolic_ptr_expr_public (ptr_expr);
+	  if (cg_frange_for_comparison (TREE_TYPE (field), code, const_val, &r))
+	    if (tree identity = identity_of (ptr_expr))
+	      cg_add_float_field_fact (state, {identity, field}, r,
+				       conveyor_enabled);
+	  continue;
+	}
+      if (oa_match_field_range_comparison (c, &field, &ptr_expr, &code,
+					   &const_val)
 	  && TREE_CODE (const_val) == INTEGER_CST)
 	{
 	  ptr_expr = oa_strip_symbolic_ptr_expr_public (ptr_expr);
@@ -5370,6 +5675,26 @@ cg_compute_assert_memory_verdicts (gcall *call, cg_dom_fact_state &state,
 	}
       else if (oa_match_field_range_comparison (c, &field, &ptr_expr, &code,
 						&const_val)
+	       && TREE_CODE (const_val) == REAL_CST)
+	{
+	  ptr_expr = oa_strip_symbolic_ptr_expr_public (ptr_expr);
+	  tree identity = cg_contract_check_object_identity (call, struct_var,
+							     decls, ptr_expr);
+	  if (!identity)
+	    continue;
+	  fact = state.field.get ({identity, field});
+	  for (int flavor = 0; flavor < 2; ++flavor)
+	    v->verdict[i][flavor]
+	      = (fact && fact->has_float
+		 && (flavor == 1 || fact->conveyor_established)
+		 ? cg_frange_comparison_verdict (fact->float_range, code,
+						 const_val, v->text[i],
+						 sizeof v->text[i])
+		 : CG_VERDICT_UNKNOWN);
+	  continue;
+	}
+      else if (oa_match_field_range_comparison (c, &field, &ptr_expr, &code,
+						&const_val)
 	       && TREE_CODE (const_val) == INTEGER_CST)
 	{
 	  ptr_expr = oa_strip_symbolic_ptr_expr_public (ptr_expr);
@@ -5454,13 +5779,16 @@ cg_assert_memory_conjunct_false_p (gcall *call, cg_dom_fact_state &state)
 static void
 cg_record_field_load_facts (gimple *stmt, cg_dom_fact_state &state,
 			    hash_map<tree, cg_range_lite> &scalar_range_cache,
-			    hash_map<tree, cg_fact> &established_nz)
+			    hash_map<tree, cg_fact> &established_nz,
+			    hash_map<tree, frange> *established_frange)
 {
   if (!gimple_assign_single_p (stmt))
     return;
   tree lhs = gimple_assign_lhs (stmt);
   tree rhs = gimple_assign_rhs1 (stmt);
-  if (TREE_CODE (lhs) != SSA_NAME || !INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
+  if (TREE_CODE (lhs) != SSA_NAME
+      || (!INTEGRAL_TYPE_P (TREE_TYPE (lhs))
+	  && !SCALAR_FLOAT_TYPE_P (TREE_TYPE (lhs))))
     return;
   cg_field_fact *fact;
   if (VAR_P (rhs) || TREE_CODE (rhs) == PARM_DECL)
@@ -5481,6 +5809,16 @@ cg_record_field_load_facts (gimple *stmt, cg_dom_fact_state &state,
     return;
   if (!fact)
     return;
+  if (fact->has_float && established_frange)
+    {
+      bool existed;
+      frange &slot = established_frange->get_or_insert (lhs, &existed);
+      if (existed)
+	slot.intersect (fact->float_range);
+      else
+	slot = fact->float_range;
+      return;
+    }
   if (fact->nonzero)
     established_nz.put (lhs, { fact->conveyor_established });
   if (fact->range.has_lo || fact->range.has_hi)
@@ -5512,14 +5850,17 @@ cg_record_write_facts (gimple *stmt, cg_dom_fact_state &state,
 		       hash_map<tree, cg_range_lite> &established_range,
 		       hash_map<tree, cg_range_lite> &scalar_range_cache,
 		       gimple_ranger *ranger,
-		       hash_map<tree, cg_fact> &established_nz)
+		       hash_map<tree, cg_fact> &established_nz,
+		       hash_map<tree, frange> *established_frange)
 {
   if (!gimple_assign_single_p (stmt) || !ranger)
     return;
   tree lhs = gimple_assign_lhs (stmt);
   tree rhs = gimple_assign_rhs1 (stmt);
-  if (!INTEGRAL_TYPE_P (TREE_TYPE (lhs))
-      || (TREE_CODE (rhs) != SSA_NAME && TREE_CODE (rhs) != INTEGER_CST))
+  bool is_float = SCALAR_FLOAT_TYPE_P (TREE_TYPE (lhs));
+  if ((!INTEGRAL_TYPE_P (TREE_TYPE (lhs)) && !is_float)
+      || (TREE_CODE (rhs) != SSA_NAME && TREE_CODE (rhs) != INTEGER_CST
+	  && TREE_CODE (rhs) != REAL_CST))
     return;
 
   std::pair<tree, tree> key;
@@ -5541,6 +5882,27 @@ cg_record_write_facts (gimple *stmt, cg_dom_fact_state &state,
     return;
 
   cg_field_fact fact = { {}, /*conveyor_established=*/true };
+  if (is_float)
+    {
+      frange r (TREE_TYPE (lhs));
+      if (TREE_CODE (rhs) == REAL_CST)
+	{
+	  r = frange (rhs, rhs);
+	  if (!real_isnan (TREE_REAL_CST_PTR (rhs)))
+	    r.clear_nan ();
+	}
+      else if (!ranger->range_of_expr (r, rhs, stmt) || r.undefined_p ())
+	return;
+      if (established_frange)
+	if (frange *known = established_frange->get (rhs))
+	  r.intersect (*known);
+      if (r.varying_p ())
+	return;
+      fact.has_float = true;
+      fact.float_range = r;
+      state.field.put (key, fact);
+      return;
+    }
   if (TREE_CODE (rhs) == INTEGER_CST)
     {
       fact.range.has_lo = fact.range.has_hi = true;
@@ -5654,7 +6016,8 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src)
 	  || (it.second.range.has_lo && ov->range.lo != it.second.range.lo)
 	  || (it.second.range.has_hi && ov->range.hi != it.second.range.hi)
 	  || ov->conveyor_established != it.second.conveyor_established
-	  || ov->nonzero != it.second.nonzero)
+	  || ov->nonzero != it.second.nonzero
+	  || !cg_field_fact_float_equal (*ov, it.second))
 	field_remove.safe_push (it.first);
     }
   for (auto k : field_remove)
@@ -5742,7 +6105,8 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
 	  || (it.second.range.has_lo && ov->range.lo != it.second.range.lo)
 	  || (it.second.range.has_hi && ov->range.hi != it.second.range.hi)
 	  || ov->conveyor_established != it.second.conveyor_established
-	  || ov->nonzero != it.second.nonzero)
+	  || ov->nonzero != it.second.nonzero
+	  || !cg_field_fact_float_equal (*ov, it.second))
 	return false;
     }
   for (auto it : a.field_alias)
@@ -7144,7 +7508,8 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 			   hash_set<gimple *> *call_relational_verdict_out,
 			   gimple_ranger *ranger,
 			   hash_map<tree, cg_fact> &established_nz,
-			   cg_assert_memory_verdict_map *assert_memory_verdicts)
+			   cg_assert_memory_verdict_map *assert_memory_verdicts,
+			   hash_map<tree, frange> *established_frange)
 {
   int *rpo = XNEWVEC (int, n_basic_blocks_for_fn (fun));
   int rpo_num = pre_and_rev_post_order_compute (NULL, rpo, false);
@@ -7205,7 +7570,7 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 		  cg_process_scalar_write (gimple_assign_lhs (stmt), out_state);
 		  cg_record_write_facts (stmt, out_state, established_range,
 					 *scalar_range_cache_out, ranger,
-					 established_nz);
+					 established_nz, established_frange);
 		}
 	      else if (is_gimple_call (stmt))
 		{
@@ -7294,14 +7659,14 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 	  if (gimple_assign_single_p (stmt))
 	    {
 	      cg_record_field_load_facts (stmt, state, *scalar_range_cache_out,
-					  established_nz);
+					  established_nz, established_frange);
 	      cg_process_field_write (gimple_assign_lhs (stmt),
 				       gimple_assign_rhs1 (stmt), fun,
 				       field_object_cache, state);
 	      cg_process_scalar_write (gimple_assign_lhs (stmt), state);
 	      cg_record_write_facts (stmt, state, established_range,
 				     *scalar_range_cache_out, ranger,
-				     established_nz);
+				     established_nz, established_frange);
 	    }
 	  else if (is_gimple_call (stmt))
 	    {
@@ -7485,10 +7850,12 @@ public:
   cg_assert_fact_scope (hash_map<tree, cg_fact> &established,
 			hash_map<tree, cg_fact> &established_nz,
 			hash_map<tree, cg_range_lite> &established_range,
-			hash_map<tree, cg_type_bound_fact> &established_type_bound)
+			hash_map<tree, cg_type_bound_fact> &established_type_bound,
+			hash_map<tree, frange> &established_frange)
     : m_established (established), m_established_nz (established_nz),
       m_established_range (established_range),
-      m_established_type_bound (established_type_bound)
+      m_established_type_bound (established_type_bound),
+      m_established_frange (established_frange)
   {}
 
   unsigned mark () const { return m_undo.length (); }
@@ -7496,7 +7863,7 @@ public:
   void establish (gcall *call);
 
 private:
-  enum which { OA, NZ, RANGE, TYPE_BOUND };
+  enum which { OA, NZ, RANGE, TYPE_BOUND, FRANGE };
   struct undo
   {
     which map;
@@ -7505,24 +7872,42 @@ private:
     cg_fact fact;
     cg_range_lite range;
     cg_type_bound_fact type_bound;
+    frange float_range;
   };
 
   void put_fact (which map, tree key, cg_fact fact);
   void put_range (tree key, const cg_range_lite &range);
   void put_type_bound (tree key, const cg_type_bound_fact &tb);
+  void put_frange (tree key, const frange &r);
 
   hash_map<tree, cg_fact> &m_established;
   hash_map<tree, cg_fact> &m_established_nz;
   hash_map<tree, cg_range_lite> &m_established_range;
   hash_map<tree, cg_type_bound_fact> &m_established_type_bound;
+  hash_map<tree, frange> &m_established_frange;
   auto_vec<undo> m_undo;
 };
+
+void
+cg_assert_fact_scope::put_frange (tree key, const frange &r)
+{
+  undo u = { FRANGE, key, false, {}, {}, {}, frange () };
+  frange merged = r;
+  if (frange *old = m_established_frange.get (key))
+    {
+      u.had = true;
+      u.float_range = *old;
+      merged.intersect (*old);
+    }
+  m_undo.safe_push (u);
+  m_established_frange.put (key, merged);
+}
 
 void
 cg_assert_fact_scope::put_fact (which map, tree key, cg_fact fact)
 {
   hash_map<tree, cg_fact> &m = map == OA ? m_established : m_established_nz;
-  undo u = { map, key, false, {}, {}, {} };
+  undo u = { map, key, false, {}, {}, {}, frange () };
   if (cg_fact *old = m.get (key))
     {
       /* A conveyor-established fact stays one.  */
@@ -7538,7 +7923,7 @@ cg_assert_fact_scope::put_fact (which map, tree key, cg_fact fact)
 void
 cg_assert_fact_scope::put_range (tree key, const cg_range_lite &range)
 {
-  undo u = { RANGE, key, false, {}, {}, {} };
+  undo u = { RANGE, key, false, {}, {}, {}, frange () };
   cg_range_lite merged = range;
   if (cg_range_lite *old = m_established_range.get (key))
     {
@@ -7556,7 +7941,7 @@ cg_assert_fact_scope::put_range (tree key, const cg_range_lite &range)
 void
 cg_assert_fact_scope::put_type_bound (tree key, const cg_type_bound_fact &tb)
 {
-  undo u = { TYPE_BOUND, key, false, {}, {}, {} };
+  undo u = { TYPE_BOUND, key, false, {}, {}, {}, frange () };
   cg_type_bound_fact merged = tb;
   if (cg_type_bound_fact *old = m_established_type_bound.get (key))
     {
@@ -7600,6 +7985,12 @@ cg_assert_fact_scope::restore (unsigned mark)
 	    m_established_type_bound.put (u.key, u.type_bound);
 	  else
 	    m_established_type_bound.remove (u.key);
+	  break;
+	case FRANGE:
+	  if (u.had)
+	    m_established_frange.put (u.key, u.float_range);
+	  else
+	    m_established_frange.remove (u.key);
 	  break;
 	}
     }
@@ -7678,6 +8069,17 @@ cg_assert_fact_scope::establish (gcall *call)
 	  && TREE_CODE (const_val) == INTEGER_CST
 	  && scalar_decl_p (decl) && !range_decls.contains (decl))
 	range_decls.safe_push (decl);
+      if (oa_match_simple_comparison_var_public (c, &decl, &code, &const_val)
+	  && TREE_CODE (const_val) == REAL_CST && scalar_decl_p (decl))
+	if (tree key = value_of (decl))
+	  {
+	    frange r;
+	    if (TREE_CODE (key) == SSA_NAME
+		&& SCALAR_FLOAT_TYPE_P (TREE_TYPE (key))
+		&& cg_frange_for_comparison (TREE_TYPE (key), code, const_val,
+					     &r))
+	      put_frange (key, r);
+	  }
       if (oa_match_type_bounded_comparison (c, &decl, &code)
 	  && scalar_decl_p (decl))
 	if (tree key = value_of (decl))
@@ -7711,6 +8113,56 @@ cg_assert_fact_scope::establish (gcall *call)
 	}
       if (any)
 	put_range (key, range);
+    }
+}
+
+/* Seed ESTABLISHED_FRANGE with what FUN's own enabled preconditions
+   say about its floating-point parameters ('pre (x >= 0.0)'), the
+   floating-point counterpart of cg_seed_self_trust's ranges.  */
+
+static void
+cg_seed_float_self_trust (function *fun,
+			  hash_map<tree, frange> &established_frange)
+{
+  for (tree as = get_fn_contract_specifiers (fun->decl); as;
+       as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract))
+	continue;
+      if (!((oa_contract_conveyor_active_cached_p (contract)
+	     && flag_contract_conveyor_proofs_gimple)
+	    || (oa_contract_symbolic_active_cached_p (contract)
+		&& flag_contract_symbolic_proofs_gimple)))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree parm, const_val;
+	  tree_code code;
+	  if (!oa_match_simple_comparison (*conjuncts[i], &parm, &code,
+					   &const_val)
+	      || TREE_CODE (const_val) != REAL_CST
+	      || TREE_CODE (parm) != PARM_DECL
+	      || !SCALAR_FLOAT_TYPE_P (TREE_TYPE (parm)))
+	    continue;
+	  tree ssa = ssa_default_def (fun, parm);
+	  frange r;
+	  if (!ssa
+	      || !cg_frange_for_comparison (TREE_TYPE (parm), code, const_val,
+					    &r))
+	    continue;
+	  bool existed;
+	  frange &slot = established_frange.get_or_insert (ssa, &existed);
+	  if (existed)
+	    slot.intersect (r);
+	  else
+	    slot = r;
+	}
     }
 }
 
@@ -7788,18 +8240,15 @@ cg_value_range_at (tree val, gimple *stmt,
   return any;
 }
 
-/* The verdict on 'VAL CODE C' (C a REAL_CST) from the ranger's
-   floating-point range of VAL at STMT; TEXT describes the range.  A
-   value that may be a NaN makes every comparison false, so it only ever
-   rules a comparison out.  */
+/* The verdict on 'x CODE C' (C a REAL_CST) for x in floating-point range
+   FR; TEXT describes the range.  A value that may be a NaN makes every
+   comparison false, so it only ever rules a comparison out.  */
 
 static cg_verdict
-cg_float_comparison_verdict (tree val, gimple *stmt, gimple_ranger *ranger,
-			     tree_code code, tree c, char *text, size_t n)
+cg_frange_comparison_verdict (const frange &fr, tree_code code, tree c,
+			      char *text, size_t n)
 {
-  frange fr (TREE_TYPE (val));
-  if (!ranger->range_of_expr (fr, val, stmt) || fr.undefined_p ()
-      || fr.known_isnan ())
+  if (fr.undefined_p () || fr.known_isnan ())
     return CG_VERDICT_UNKNOWN;
   const REAL_VALUE_TYPE &lo = fr.lower_bound ();
   const REAL_VALUE_TYPE &hi = fr.upper_bound ();
@@ -7841,6 +8290,22 @@ cg_float_comparison_verdict (tree val, gimple *stmt, gimple_ranger *ranger,
   return CG_VERDICT_UNKNOWN;
 }
 
+/* The same for SSA value VAL at STMT: the ranger's range of it there,
+   narrowed by what is established for it (KNOWN, if any).  */
+
+static cg_verdict
+cg_float_comparison_verdict (tree val, gimple *stmt, gimple_ranger *ranger,
+			     const frange *known, tree_code code, tree c,
+			     char *text, size_t n)
+{
+  frange fr (TREE_TYPE (val));
+  if (!ranger->range_of_expr (fr, val, stmt))
+    fr.set_varying (TREE_TYPE (val));
+  if (known)
+    fr.intersect (*known);
+  return cg_frange_comparison_verdict (fr, code, c, text, n);
+}
+
 /* If CALL is a conveyor or symbolic contract_assert's check, check its
    condition against the facts at it, like the AST engine's
    oa_handle_assertion_stmt: an is_object_address conjunct must be
@@ -7858,7 +8323,8 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
 			  hash_map<tree, cg_range_lite> &established_range,
 			  hash_map<tree, cg_range_lite> &scalar_range_cache,
 			  gimple_ranger *ranger,
-			  cg_assert_memory_verdict_map &memory_verdicts)
+			  cg_assert_memory_verdict_map &memory_verdicts,
+			  hash_map<tree, frange> &established_frange)
 {
   tree struct_var, cond, decls;
   tree contract = cg_contract_check_call_p (call, &struct_var, &cond, &decls);
@@ -8017,9 +8483,9 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
 	      && TREE_CODE (const_val) == REAL_CST)
 	    if (tree val = float_value_of (decl))
 	      {
-		verdict = cg_float_comparison_verdict (val, call, ranger, code,
-						       const_val, text,
-						       sizeof text);
+		verdict = cg_float_comparison_verdict
+			    (val, call, ranger, established_frange.get (val),
+			     code, const_val, text, sizeof text);
 		reason = OA_UNPROVABLE_RANGE_PARTIAL;
 	      }
 	  if (verdict == CG_VERDICT_NONE && mem
@@ -8365,10 +8831,17 @@ pass_contracts_gimple::execute (function *fun)
   gimple_ranger *ranger = enable_ranger (fun, false);
 
   cg_assert_memory_verdict_map assert_memory_verdicts;
+  /* Floating-point ranges established for SSA values: by a
+     precondition of this function, by a load of a field with one, or
+     (while the check below is in its dominator subtree) by a
+     contract_assert.  */
+  hash_map<tree, frange> established_frange;
+  cg_seed_float_self_trust (fun, established_frange);
   cg_predicate_facts_walk (fun, &scalar_range_cache,
 			     established_range, &call_relational_verdict,
 			     ranger,
-			     established_nz, &assert_memory_verdicts);
+			     established_nz, &assert_memory_verdicts,
+			     &established_frange);
 
   bool check_reference_safety
     = cg_function_might_need_reference_safety_walk_p (fun);
@@ -8380,7 +8853,8 @@ pass_contracts_gimple::execute (function *fun)
      doesn't reach are checked afterwards, with no assertion facts.  */
   cg_assert_fact_scope assert_facts (established, established_nz,
 				     established_range,
-				     established_type_bound);
+				     established_type_bound,
+				     established_frange);
   auto check_block = [&] (basic_block bb)
     {
       for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
@@ -8405,11 +8879,12 @@ pass_contracts_gimple::execute (function *fun)
 			     established_range, established_rel,
 			     established_call_rel, established_call_call_rel,
 			     scalar_range_cache, ranger,
-			     &call_relational_verdict);
+			     &call_relational_verdict, &established_frange);
 	      if (cg_check_contract_assert (call, established, established_nz,
 					    established_range,
 					    scalar_range_cache, ranger,
-					    assert_memory_verdicts))
+					    assert_memory_verdicts,
+					    established_frange))
 		assert_facts.establish (call);
 	    }
 	}
