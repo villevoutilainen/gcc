@@ -2898,6 +2898,24 @@ cg_display_value (tree val, int depth = 0)
   return val;
 }
 
+/* How to name ARG, the value passed for parameter PARM, in a
+   diagnostic: for a reference parameter, the object the reference binds
+   to ('* p' for a pointer P, 'a' for '&a'), as the AST engine names it;
+   otherwise cg_display_value.  */
+
+static tree
+cg_display_argument (tree arg, tree parm)
+{
+  if (parm && TYPE_REF_P (TREE_TYPE (parm)) && POINTER_TYPE_P (TREE_TYPE (arg)))
+    {
+      if (TREE_CODE (arg) == ADDR_EXPR)
+	return TREE_OPERAND (arg, 0);
+      tree ptr = cg_display_value (arg);
+      return build1 (INDIRECT_REF, TREE_TYPE (TREE_TYPE (arg)), ptr);
+    }
+  return cg_display_value (arg);
+}
+
 /* Check every div/mod operation in one GIMPLE_ASSIGN statement's own
    RHS, erroring on any whose divisor isn't provably nonzero. Only ever
    called for a DECL_DECLARED_CONVEYOR_P function's own body (see this
@@ -3519,7 +3537,17 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  if (!proofs && !(is_oa && mandatory_oa))
 	    continue;
 
+	  /* '&r' for a reference parameter R (an explicit or synthesized
+	     precondition) arrives as a conversion of R.  A conveyor
+	     callee's reference parameters and 'this' are cg_check_call_
+	     reference_safety's to check.  */
+	  while (TREE_CODE (arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arg)
+		 || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
 	  if (TREE_CODE (arg) != PARM_DECL)
+	    continue;
+	  if ((TYPE_REF_P (TREE_TYPE (arg)) || is_this_parameter (arg))
+	      && DECL_DECLARED_CONVEYOR_P (callee))
 	    continue;
 
 	  unsigned argno;
@@ -3542,7 +3570,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		cg_conveyor_error_at (gimple_location (call),
 				      "cannot prove %<is_object_address%> for "
 				      "%qE, required by the precondition of %qD",
-				      substituted, callee);
+				      cg_display_argument (substituted, arg),
+				      callee);
 	      else if (strict)
 		error_at (gimple_location (call),
 			  "cannot prove %<is_object_address%> for %qE, as "
@@ -4093,11 +4122,13 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  if (strict)
 	    error_at (gimple_location (call),
 		      "cannot prove that %qE satisfies the precondition "
-		      "of %qD", substituted, callee);
+		      "of %qD", cg_display_argument (substituted, params[p]),
+		      callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qE satisfies the precondition "
-			"of %qD", substituted, callee);
+			"of %qD", cg_display_argument (substituted, params[p]),
+			callee);
 	  /* See oa_unprovable_reason's own comment: cg_established_range_of
 	     tries several independent sources internally and collapses all
 	     of their own failures into one bare "false" -- UNRESOLVED_
@@ -4610,6 +4641,33 @@ cg_collect_field_range_groups (tree cond, vec<cg_field_group_lite> *out)
     }
 }
 
+/* If ARG, an is_object_address argument in a contract condition, is a
+   pointer field of the object a parameter or local designates
+   ('this->_M_this', 'p->next', 'obj.ptr'), return that FIELD_DECL and set
+   *BASE to the parameter or local.  */
+
+static tree
+cg_object_address_field (tree arg, tree *base)
+{
+  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+  while (TREE_CODE (arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arg)
+	 || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+  if (TREE_CODE (arg) != COMPONENT_REF
+      || !POINTER_TYPE_P (TREE_TYPE (arg))
+      || TREE_CODE (TREE_OPERAND (arg, 1)) != FIELD_DECL)
+    return NULL_TREE;
+  tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+  if (TREE_CODE (obj) == INDIRECT_REF)
+    obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
+  while (TREE_CODE (obj) == NON_LVALUE_EXPR || CONVERT_EXPR_P (obj))
+    obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
+  if (!VAR_P (obj) && TREE_CODE (obj) != PARM_DECL)
+    return NULL_TREE;
+  *base = obj;
+  return TREE_OPERAND (arg, 1);
+}
+
 /* The floating-point sibling of cg_collect_field_range_groups: each
    'ptr->field CODE C' conjunct of COND with C a REAL_CST, grouped by
    (pointer, field) and intersected.  PTR_EXPR is a PARM_DECL, or with
@@ -4846,6 +4904,26 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
 	if (tree ssa = ssa_default_def (fun, float_groups[g].ptr_expr))
 	  cg_add_float_field_fact (seed, {ssa, float_groups[g].field},
 				   float_groups[g].range, conveyor_enabled);
+
+      /* 'is_object_address (this->ptr)': the field holds an object's
+	 address on entry.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree oa_arg, base;
+	  if (!is_object_address_call_p (*conjuncts[i], &oa_arg))
+	    continue;
+	  tree field = cg_object_address_field (oa_arg, &base);
+	  if (!field || TREE_CODE (base) != PARM_DECL)
+	    continue;
+	  if (tree ssa = ssa_default_def (fun, base))
+	    {
+	      cg_field_fact *existing = seed.field.get ({ssa, field});
+	      cg_field_fact fact = existing ? *existing
+				   : cg_field_fact { {}, conveyor_enabled };
+	      fact.object_address = true;
+	      seed.field.put ({ssa, field}, fact);
+	    }
+	}
 
       auto_vec<cg_call_group_lite> call_groups;
       cg_collect_call_range_groups (cond, &call_groups,
@@ -5680,7 +5758,19 @@ cg_establish_assert_facts (gcall *call, cg_dom_fact_state &state)
 	  oa_arg = STRIP_ANY_LOCATION_WRAPPER (oa_arg);
 	  while (TREE_CODE (oa_arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (oa_arg))
 	    oa_arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (oa_arg, 0));
-	  if (POINTER_TYPE_P (TREE_TYPE (oa_arg)) && memory_scalar_p (oa_arg))
+	  tree fbase;
+	  if (tree field = cg_object_address_field (oa_arg, &fbase))
+	    {
+	      if (tree identity = identity_of (fbase))
+		{
+		  cg_field_fact *existing = state.field.get ({identity, field});
+		  cg_field_fact fact = existing ? *existing
+				       : cg_field_fact { {}, conveyor_enabled };
+		  fact.object_address = true;
+		  state.field.put ({identity, field}, fact);
+		}
+	    }
+	  else if (POINTER_TYPE_P (TREE_TYPE (oa_arg)) && memory_scalar_p (oa_arg))
 	    {
 	      cg_field_fact *existing
 		= state.field.get (cg_scalar_memory_fact_key (oa_arg));
@@ -5974,9 +6064,20 @@ cg_record_field_load_facts (gimple *stmt, cg_dom_fact_state &state,
   tree lhs = gimple_assign_lhs (stmt);
   tree rhs = gimple_assign_rhs1 (stmt);
   if (TREE_CODE (lhs) == SSA_NAME && POINTER_TYPE_P (TREE_TYPE (lhs))
-      && (VAR_P (rhs) || TREE_CODE (rhs) == PARM_DECL) && established_oa)
+      && established_oa)
     {
-      cg_field_fact *fact = state.field.get (cg_scalar_memory_fact_key (rhs));
+      cg_field_fact *fact = NULL;
+      if (VAR_P (rhs) || TREE_CODE (rhs) == PARM_DECL)
+	fact = state.field.get (cg_scalar_memory_fact_key (rhs));
+      else if (TREE_CODE (rhs) == COMPONENT_REF)
+	{
+	  tree obj = TREE_OPERAND (rhs, 0);
+	  tree obj_expr = (TREE_CODE (obj) == MEM_REF
+			   && integer_zerop (TREE_OPERAND (obj, 1))
+			   ? TREE_OPERAND (obj, 0) : obj);
+	  if (tree identity = cg_gimple_object_identity (obj_expr))
+	    fact = state.field.get ({identity, TREE_OPERAND (rhs, 1)});
+	}
       if (fact && fact->object_address)
 	established_oa->put (lhs, { fact->conveyor_established });
       return;
@@ -6054,8 +6155,32 @@ cg_record_write_facts (gimple *stmt, cg_dom_fact_state &state,
   tree lhs = gimple_assign_lhs (stmt);
   tree rhs = gimple_assign_rhs1 (stmt);
 
-  /* A pointer in memory now holds an object address if what is stored
-     is one.  */
+  /* A pointer in memory, or a pointer field, now holds an object
+     address if what is stored is one.  */
+  if (POINTER_TYPE_P (TREE_TYPE (lhs)) && TREE_CODE (lhs) == COMPONENT_REF)
+    {
+      tree obj = TREE_OPERAND (lhs, 0);
+      tree obj_expr = (TREE_CODE (obj) == MEM_REF
+		       && integer_zerop (TREE_OPERAND (obj, 1))
+		       ? TREE_OPERAND (obj, 0) : obj);
+      tree identity = cg_gimple_object_identity (obj_expr);
+      bool oa = TREE_CODE (rhs) == ADDR_EXPR;
+      if (!oa && TREE_CODE (rhs) == SSA_NAME && established_oa)
+	{
+	  hash_set<tree> in_progress;
+	  oa = cg_provable_object_address_p (rhs, *established_oa,
+					     /*require_conveyor=*/true,
+					     in_progress);
+	}
+      if (identity && oa)
+	{
+	  std::pair<tree, tree> fkey = { identity, TREE_OPERAND (lhs, 1) };
+	  cg_field_fact fact = { {}, /*conveyor_established=*/true };
+	  fact.object_address = true;
+	  state.field.put (fkey, fact);
+	}
+      return;
+    }
   if (POINTER_TYPE_P (TREE_TYPE (lhs))
       && (VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
       && cg_scalar_memory_tracking_p (cfun, lhs))
