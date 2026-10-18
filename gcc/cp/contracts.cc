@@ -1098,6 +1098,11 @@ static GTY(()) hash_map<tree, tree> *orig_from_outlined;
    lazily otherwise, exactly as before this map existed.  */
 static GTY(()) hash_map<tree, tree> *contract_predicate_core_fn;
 
+/* The reverse of contract_predicate_core_fn: for each predicate core
+   function, a TREE_LIST whose TREE_PURPOSE is its contract and whose
+   TREE_VALUE is the function the contract belongs to.  */
+static GTY(()) hash_map<tree, tree> *predicate_core_fn_contract;
+
 /* Caches, per CONTRACT tree, whether it's conveyor-/symbolic-active --
    see oa_cache_contract_flavors's own comment (further below, near
    oa_resolve_object_address_in_function_1) for why a *cache* is needed
@@ -6530,7 +6535,21 @@ get_or_build_predicate_core_function (tree contract, tree orig)
   fn = build_predicate_core_function_1 (contract, orig);
   hash_map_maybe_create<hm_ggc> (contract_predicate_core_fn);
   contract_predicate_core_fn->put (contract, fn);
+  hash_map_maybe_create<hm_ggc> (predicate_core_fn_contract);
+  predicate_core_fn_contract->put (fn, build_tree_list (contract, orig));
   return fn;
+}
+
+/* See contracts.h.  */
+
+tree
+predicate_core_function_contract (tree fn, tree *owner)
+{
+  tree *v = hash_map_safe_get (predicate_core_fn_contract, fn);
+  if (!v)
+    return NULL_TREE;
+  *owner = TREE_VALUE (*v);
+  return TREE_PURPOSE (*v);
 }
 
 /* A synthesized (inherited) contract stashes its bookkeeping directly in
