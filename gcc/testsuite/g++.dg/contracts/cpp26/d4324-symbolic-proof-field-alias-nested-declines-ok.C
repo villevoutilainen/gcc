@@ -19,6 +19,9 @@
 // deeper -- a real limitation, honestly not covered by this stage,
 // not a false "safe" claim. See .claude/plans/well-we-last-discussed-
 // ethereal-duckling.md.
+// 2026-10-19: the call handed a pointer the engine can't name now ends
+// every fact about an object whose address escaped, so the gap is closed:
+// 'use_it (p)' is reported as unverifiable instead of silently proven.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-symbolic-proofs" }
 
@@ -49,6 +52,7 @@ int main ()
   o.holder_field.ptr = p;
   open_it (p);
   mutate_via_alias (o.holder_field.ptr);
-  use_it (p); // known gap: silently discharges, no diagnostic
+  use_it (p); // { dg-warning "cannot verify that .bool is_opened.const file... ..p.. holds" }
+  // { dg-message "no fact relating this value" "unprovable reason" { target *-*-* } .-1 }
   return 0;
 }

@@ -2890,6 +2890,10 @@ cg_display_value (tree val, int depth = 0)
 	  if (DECL_P (obj) && !DECL_ARTIFICIAL (obj))
 	    return rhs1;
 	}
+      /* 'arr[k]'.  */
+      if (TREE_CODE (rhs1) == ARRAY_REF && DECL_P (TREE_OPERAND (rhs1, 0))
+	  && !DECL_ARTIFICIAL (TREE_OPERAND (rhs1, 0)))
+	return rhs1;
       /* '*p', or a reference's referent.  */
       if (TREE_CODE (rhs1) == MEM_REF && integer_zerop (TREE_OPERAND (rhs1, 1))
 	  && TREE_CODE (TREE_OPERAND (rhs1, 0)) == SSA_NAME)
@@ -5596,7 +5600,8 @@ cg_consult_persistent_facts (gcall *call,
 			"argument %qE provably violates the precondition of "
 			"%qD: %qD (%qE) is established %s, but the "
 			"precondition requires it to be %s",
-			substituted, callee, pred_fn, substituted,
+			cg_display_value (substituted), callee, pred_fn,
+			cg_display_value (substituted),
 			fact->polarity ? "true" : "false",
 			required ? "true" : "false");
 	      continue;
@@ -5605,11 +5610,13 @@ cg_consult_persistent_facts (gcall *call,
 	  if (strict)
 	    error_at (gimple_location (call),
 		      "cannot prove that %qD (%qE) holds, as required by "
-		      "the precondition of %qD", pred_fn, substituted, callee);
+		      "the precondition of %qD", pred_fn,
+		      cg_display_value (substituted), callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qD (%qE) holds, as required by "
-			"the precondition of %qD", pred_fn, substituted, callee);
+			"the precondition of %qD", pred_fn,
+			cg_display_value (substituted), callee);
 	  oa_unprovable_reason reason
 	    = !fact ? OA_UNPROVABLE_NO_FACT
 	      : fact->pred_fn != pred_fn ? OA_UNPROVABLE_WRONG_IDENTITY
@@ -5972,6 +5979,34 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
 	       && TYPE_READONLY (TREE_TYPE (TREE_VALUE (parm_types)))))
 	if (tree identity = cg_gimple_object_identity (arg))
 	  cg_call_rel_invalidate_receiver (state, identity);
+      /* A pointer or reference to non-const whose object can't be named
+	 (loaded from memory, returned by a call): the callee may change
+	 any object whose address has escaped, as in the AST engine
+	 (oa_env::invalidate_all_object_state).  */
+      if (POINTER_TYPE_P (TREE_TYPE (arg))
+	  && !TYPE_READONLY (TREE_TYPE (TREE_TYPE (arg)))
+	  && !FUNC_OR_METHOD_TYPE_P (TREE_TYPE (TREE_TYPE (arg)))
+	  && TREE_CODE (arg) != INTEGER_CST
+	  && !(parm_types && POINTER_TYPE_P (TREE_VALUE (parm_types))
+	       && TYPE_READONLY (TREE_TYPE (TREE_VALUE (parm_types)))))
+	{
+	  tree identity = cg_field_slot_identity (arg, state);
+	  if (!identity)
+	    identity = cg_field_object_identity (arg, field_object_cache);
+	  if (!identity)
+	    identity = cg_gimple_object_identity (arg);
+	  if (!identity
+	      || (TREE_CODE (identity) == SSA_NAME
+		  && !SSA_NAME_IS_DEFAULT_DEF (identity)))
+	    {
+	      state.pred.empty ();
+	      state.field.empty ();
+	      state.field_alias.empty ();
+	      state.call.empty ();
+	      state.call_rel.empty ();
+	      keep = false;
+	    }
+	}
       if (keep)
 	state.field.put (cg_scalar_memory_fact_key (TREE_OPERAND (arg, 0)),
 			 kept);

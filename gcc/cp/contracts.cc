@@ -8223,6 +8223,43 @@ public:
   {
     m_array_alias_target.remove ({base, index});
   }
+  /* A call was handed a pointer or reference to non-const whose object
+     can't be named: it may change any object whose address has escaped,
+     so every fact about an object's state ends -- predicates, field and
+     accessor ranges, what a field or array slot points to, relations to
+     accessor results -- and the value facts of every scalar whose
+     address is taken.  Whether an object is still alive (m_map) is
+     not one of these.  */
+  void invalidate_all_object_state ()
+  {
+    m_predicate_fact_map.empty ();
+    m_contract_field_range_map.empty ();
+    m_contract_float_field_range_map.empty ();
+    m_contract_call_range_map.empty ();
+    m_contract_field_nz_map.empty ();
+    m_field_alias_target.empty ();
+    m_array_alias_target.empty ();
+    m_call_relational_map.empty ();
+    m_call_call_relational_map.empty ();
+    auto_vec<tree> scalars;
+    for (auto it : m_nz_map)
+      if (DECL_P (it.first) && TREE_ADDRESSABLE (it.first))
+	scalars.safe_push (it.first);
+    for (auto it : m_range_map)
+      if (DECL_P (it.first) && TREE_ADDRESSABLE (it.first)
+	  && INTEGRAL_TYPE_P (TREE_TYPE (it.first)))
+	scalars.safe_push (it.first);
+    for (auto it : m_contract_scalar_range_map)
+      if (DECL_P (it.first) && TREE_ADDRESSABLE (it.first))
+	scalars.safe_push (it.first);
+    for (tree d : scalars)
+      {
+	m_nz_map.remove (d);
+	if (INTEGRAL_TYPE_P (TREE_TYPE (d)))
+	  m_range_map.remove (d);
+	m_contract_scalar_range_map.remove (d);
+      }
+  }
   /* Mirrors field_alias_invalidate_all's own removal-by-first-key-
      component sweep -- also the rule an unprovable-index write itself
      uses (see the Rule 1 write-detection site's own comment): BASE's
@@ -18350,12 +18387,13 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	      && !oa_field_slot_identity (substituted, env, &identity)
 	      && !oa_array_slot_identity (substituted, env, &identity)
 	      && !oa_field_object_identity (substituted, env, &identity))
-	    continue;
-	  identity = env.alias_find (identity);
+	    identity = NULL_TREE;
+	  else
+	    identity = env.alias_find (identity);
 
 	  bool required = !negated;
 	  oa_predicate_fact fact;
-	  bool found = env.predicate_fact_get (identity, &fact);
+	  bool found = identity && env.predicate_fact_get (identity, &fact);
 	  if (!found || fact.pred_fn != pred_fn)
 	    {
 	      if (strict)
@@ -18736,12 +18774,15 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		      && !oa_field_slot_identity (substituted, env, &identity)
 		      && !oa_array_slot_identity (substituted, env, &identity)
 		      && !oa_field_object_identity (substituted, env, &identity))
-		    continue;
-		  identity = env.alias_find (identity);
+		    identity = NULL_TREE;
+		  else
+		    identity = env.alias_find (identity);
 
 		  oa_contract_field_range_fact established;
-		  if (!env.contract_field_range_get (identity, field_groups[i].field,
-						      &established))
+		  if (!identity
+		      || !env.contract_field_range_get (identity,
+							 field_groups[i].field,
+							 &established))
 		    {
 		      if (strict)
 			oa_error_at (EXPR_LOCATION (call),
@@ -18835,11 +18876,12 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		      && !oa_field_slot_identity (substituted, env, &identity)
 		      && !oa_array_slot_identity (substituted, env, &identity)
 		      && !oa_field_object_identity (substituted, env, &identity))
-		    continue;
-		  identity = env.alias_find (identity);
+		    identity = NULL_TREE;
+		  else
+		    identity = env.alias_find (identity);
 
 		  oa_contract_float_field_range_fact established;
-		  if (!env.contract_float_field_range_get
+		  if (!identity || !env.contract_float_field_range_get
 			(identity, float_field_groups[i].field, &established))
 		    {
 		      if (strict)
@@ -18928,12 +18970,15 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		      && !oa_field_slot_identity (substituted, env, &identity)
 		      && !oa_array_slot_identity (substituted, env, &identity)
 		      && !oa_field_object_identity (substituted, env, &identity))
-		    continue;
-		  identity = env.alias_find (identity);
+		    identity = NULL_TREE;
+		  else
+		    identity = env.alias_find (identity);
 
 		  oa_contract_field_range_fact established;
-		  if (!env.contract_call_range_get (identity, call_groups[i].callee,
-						     &established))
+		  if (!identity
+		      || !env.contract_call_range_get (identity,
+							call_groups[i].callee,
+							&established))
 		    {
 		      if (strict)
 			oa_error_at (EXPR_LOCATION (call),
@@ -19053,8 +19098,9 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	      && !oa_field_slot_identity (substituted, env, &identity)
 	      && !oa_array_slot_identity (substituted, env, &identity)
 	      && !oa_field_object_identity (substituted, env, &identity))
-	    continue;
-	  identity = env.alias_find (identity);
+	    identity = NULL_TREE;
+	  else
+	    identity = env.alias_find (identity);
 
 	  oa_contract_field_range_fact established;
 	  /* Conveyor's own consult: a fact backed only by a symbolic
@@ -19064,7 +19110,7 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	     (never silently accepted either way), but distinguished for
 	     diagnostic purposes below (OA_UNPROVABLE_NO_FACT vs
 	     OA_UNPROVABLE_WEAKER_PROVENANCE).  */
-	  bool field_found = env.contract_field_range_get
+	  bool field_found = identity && env.contract_field_range_get
 	    (identity, field_groups[i].field, &established);
 	  if (!field_found || !established.conveyor_established)
 	    {
@@ -19153,12 +19199,14 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	      && !oa_field_slot_identity (substituted, env, &identity)
 	      && !oa_array_slot_identity (substituted, env, &identity)
 	      && !oa_field_object_identity (substituted, env, &identity))
-	    continue;
-	  identity = env.alias_find (identity);
+	    identity = NULL_TREE;
+	  else
+	    identity = env.alias_find (identity);
 
 	  oa_contract_float_field_range_fact established;
-	  bool float_field_found = env.contract_float_field_range_get
-	    (identity, float_field_groups[i].field, &established);
+	  bool float_field_found
+	    = identity && env.contract_float_field_range_get
+			    (identity, float_field_groups[i].field, &established);
 	  if (!float_field_found || !established.conveyor_established)
 	    {
 	      if (strict)
@@ -19278,8 +19326,9 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
 	      && !oa_field_slot_identity (substituted, env, &identity)
 	      && !oa_array_slot_identity (substituted, env, &identity)
 	      && !oa_field_object_identity (substituted, env, &identity))
-	    continue;
-	  identity = env.alias_find (identity);
+	    identity = NULL_TREE;
+	  else
+	    identity = env.alias_find (identity);
 
 	  oa_contract_field_range_fact established;
 	  /* Conveyor's own consult: a fact backed only by a symbolic
@@ -19287,7 +19336,7 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
 	     obligation -- see oa_predicate_fact's own comment.  Treated
 	     identically to "no fact found at all" for proof purposes, but
 	     distinguished for diagnostic purposes below.  */
-	  bool call_found = env.contract_call_range_get
+	  bool call_found = identity && env.contract_call_range_get
 	    (identity, call_groups[i].callee, &established);
 	  if (!call_found || !established.conveyor_established)
 	    {
@@ -19545,6 +19594,28 @@ oa_could_alias_as_parameters_public (tree a, tree b)
    via method.cc's own build_this_parm, and by direct tree-dump
    inspection), so the loop below already enumerates it.  */
 
+/* Is ARG a pointer or reference to non-const ('o.inner.ptr', a call's
+   result) whose object no identity resolver could name?  */
+
+static bool
+oa_unnamed_mutable_pointer_arg_p (tree arg)
+{
+  tree type = TREE_TYPE (STRIP_ANY_LOCATION_WRAPPER (arg));
+  if (!type || !(POINTER_TYPE_P (type)) || TYPE_READONLY (TREE_TYPE (type)))
+    return false;
+  /* A function or a null pointer constant names no object.  */
+  tree a = tree_strip_nop_conversions (STRIP_ANY_LOCATION_WRAPPER (arg));
+  if (TREE_CODE (a) == INTEGER_CST || FUNC_OR_METHOD_TYPE_P (TREE_TYPE (type)))
+    return false;
+  /* The closure of an immediately invoked lambda: its body is walked in
+     place, which sees what it does through its captures.  */
+  if (TREE_CODE (a) == ADDR_EXPR
+      && TREE_CODE (TREE_OPERAND (a, 0)) == TARGET_EXPR
+      && LAMBDA_TYPE_P (TREE_TYPE (TREE_OPERAND (a, 0))))
+    return false;
+  return true;
+}
+
 static void
 oa_invalidate_parameter_alias_group (tree identity, oa_env &env,
 				      bool invalidate_object_address = true)
@@ -19723,6 +19794,8 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env,
 	  oa_invalidate_parameter_alias_group (identity, env,
 						end_object_addresses);
 	}
+      else if (oa_unnamed_mutable_pointer_arg_p (call_arg))
+	env.invalidate_all_object_state ();
     }
 }
 
