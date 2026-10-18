@@ -3068,6 +3068,12 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
   if (!callee)
     return;
 
+  /* The callee parameters whose is_object_address or nonzero obligation
+     has been reported for CALL already: several preconditions can
+     require the same one (an explicit one besides the implicit one a
+     conveyor function's reference parameter gets, say), and each
+     unprovable obligation should be reported once.  */
+  hash_set<tree> reported_oa_parms, reported_nz_parms;
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
       tree contract = CONTRACT_STATEMENT (as);
@@ -3135,6 +3141,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 						 require_conveyor, in_progress,
 						 &reason))
 		continue; /* Proven true: silently discharged.  */
+	      if (reported_oa_parms.add (arg))
+		continue; /* Already reported for this call.  */
 	      if (strict)
 		error_at (gimple_location (call),
 			  "cannot prove %<is_object_address%> for %qE, as "
@@ -3176,6 +3184,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		  || cg_excludes_zero_at_p (substituted, call, ranger,
 					    require_conveyor))
 		continue; /* Proven true: silently discharged.  */
+	      if (reported_nz_parms.add (arg))
+		continue; /* Already reported for this call.  */
 	      /* An anonymous SSA name prints as '<unknown>'; name the call
 		 it is the result of instead.  */
 	      tree result_of = NULL_TREE;
