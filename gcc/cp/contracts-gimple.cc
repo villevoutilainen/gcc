@@ -3229,6 +3229,399 @@ cg_extract_deref_base (tree ref, tree *base_out)
   return true;
 }
 
+/* Item 8's array bounds, GIMPLE side -- the counterpart of the AST
+   engine's oa_scan_array_bounds_in_expr: an index into a fixed-size
+   array must be provably in [0, N), a pointer formed into one ('&arr[i]',
+   'p + n') in [0, N], and a dereference of such a pointer in [0, N).  A
+   pointer is followed back to the array it points into
+   (cg_pointer_array_offset), its offset counted in elements.
+
+   The facts these consult, set for the duration of one function's
+   check.  */
+
+struct cg_array_bounds_ctx
+{
+  hash_map<tree, cg_range_lite> *established_range;
+  hash_map<tree, cg_range_lite> *scalar_range_cache;
+  gimple_ranger *ranger;
+};
+
+static cg_array_bounds_ctx *cg_array_bounds;
+
+static bool cg_value_range_at (tree, gimple *, hash_map<tree, cg_range_lite> &,
+			       hash_map<tree, cg_range_lite> &, gimple_ranger *,
+			       bool, cg_range_lite *);
+
+/* If VAL is a loop counter -- a PHI of an initial value and of itself
+   plus a nonzero constant -- the bound its start and direction give it:
+   never below the initial value when counting up, never above it when
+   counting down.  Wrapping past the type's end would be signed overflow,
+   which item 8 rejects on its own, and an unsigned counter is never
+   below zero anyway.  */
+
+static bool
+cg_induction_variable_bound (tree val, cg_range_lite *out)
+{
+  gphi *phi = dyn_cast <gphi *> (SSA_NAME_DEF_STMT (val));
+  if (!phi || gimple_phi_num_args (phi) != 2)
+    return false;
+  for (int step_arg = 0; step_arg < 2; ++step_arg)
+    {
+      tree next = gimple_phi_arg_def (phi, step_arg);
+      tree init = gimple_phi_arg_def (phi, 1 - step_arg);
+      if (TREE_CODE (next) != SSA_NAME)
+	continue;
+      gimple *inc = SSA_NAME_DEF_STMT (next);
+      if (!inc || !is_gimple_assign (inc)
+	  || (gimple_assign_rhs_code (inc) != PLUS_EXPR
+	      && gimple_assign_rhs_code (inc) != MINUS_EXPR)
+	  || gimple_assign_rhs1 (inc) != val
+	  || TREE_CODE (gimple_assign_rhs2 (inc)) != INTEGER_CST)
+	continue;
+      widest_int step = wi::to_widest (gimple_assign_rhs2 (inc));
+      if (gimple_assign_rhs_code (inc) == MINUS_EXPR)
+	step = -step;
+      if (step == 0)
+	return false;
+      cg_range_lite start;
+      if (TREE_CODE (init) == INTEGER_CST)
+	{
+	  start.has_lo = start.has_hi = true;
+	  start.lo = start.hi = wi::to_widest (init);
+	}
+      else if (!(TREE_CODE (init) == SSA_NAME
+		 && cg_value_range_at (init, phi,
+				       *cg_array_bounds->established_range,
+				       *cg_array_bounds->scalar_range_cache,
+				       cg_array_bounds->ranger,
+				       /*require_conveyor=*/true, &start)))
+	return false;
+      if (step > 0 && start.has_lo)
+	{
+	  out->has_lo = true;
+	  out->lo = start.lo;
+	  return true;
+	}
+      if (step < 0 && start.has_hi)
+	{
+	  out->has_hi = true;
+	  out->hi = start.hi;
+	  return true;
+	}
+      return false;
+    }
+  return false;
+}
+
+/* The range of integer VAL at STMT, in *OUT.  */
+
+static bool
+cg_bounds_value_range (tree val, gimple *stmt, cg_range_lite *out)
+{
+  if (TREE_CODE (val) == INTEGER_CST)
+    {
+      out->has_lo = out->has_hi = true;
+      out->lo = out->hi = wi::to_widest (val);
+      return true;
+    }
+  if (!cg_array_bounds || TREE_CODE (val) != SSA_NAME
+      || !INTEGRAL_TYPE_P (TREE_TYPE (val)))
+    return false;
+  bool any = cg_value_range_at (val, stmt, *cg_array_bounds->established_range,
+				*cg_array_bounds->scalar_range_cache,
+				cg_array_bounds->ranger,
+				/*require_conveyor=*/true, out);
+  /* A loop counter: the ranger, without loop information here, knows
+     the bound the loop's condition gives it but not the one its start
+     and direction do.  */
+  cg_range_lite iv;
+  if (cg_induction_variable_bound (val, &iv))
+    {
+      if (iv.has_lo && (!any || !out->has_lo || iv.lo > out->lo))
+	out->has_lo = true, out->lo = iv.lo;
+      if (iv.has_hi && (!any || !out->has_hi || iv.hi < out->hi))
+	out->has_hi = true, out->hi = iv.hi;
+      any = true;
+    }
+  return any && out->has_lo && out->has_hi;
+}
+
+/* BYTES, a POINTER_PLUS_EXPR's offset, as a range of elements of
+   ELT_SIZE bytes, at STMT.  The offset is a sizetype; its signed meaning
+   is recovered from what it was computed from: a constant, or an index
+   converted to sizetype and scaled by the element size (and possibly
+   negated, for 'p - i').  */
+
+static bool
+cg_element_offset_range (tree bytes, const widest_int &elt_size, gimple *stmt,
+			 cg_range_lite *out)
+{
+  if (elt_size <= 0)
+    return false;
+  if (TREE_CODE (bytes) == INTEGER_CST)
+    {
+      widest_int v = widest_int::from (wi::to_wide (bytes), SIGNED);
+      if (wi::smod_trunc (v, elt_size) != 0)
+	return false;
+      out->has_lo = out->has_hi = true;
+      out->lo = out->hi = wi::sdiv_trunc (v, elt_size);
+      return true;
+    }
+  if (TREE_CODE (bytes) != SSA_NAME)
+    return false;
+  gimple *def = SSA_NAME_DEF_STMT (bytes);
+  if (!def || !is_gimple_assign (def))
+    return false;
+  tree_code code = gimple_assign_rhs_code (def);
+  if (code == NEGATE_EXPR)
+    {
+      cg_range_lite r;
+      if (!cg_element_offset_range (gimple_assign_rhs1 (def), elt_size, stmt,
+				    &r))
+	return false;
+      out->has_lo = out->has_hi = true;
+      out->lo = -r.hi;
+      out->hi = -r.lo;
+      return true;
+    }
+  tree index = NULL_TREE;
+  if (code == MULT_EXPR
+      && TREE_CODE (gimple_assign_rhs2 (def)) == INTEGER_CST
+      && wi::to_widest (gimple_assign_rhs2 (def)) == elt_size)
+    index = gimple_assign_rhs1 (def);
+  else if (elt_size == 1)
+    index = bytes;
+  if (!index)
+    return false;
+  /* The index before its conversion to sizetype.  */
+  if (TREE_CODE (index) == SSA_NAME)
+    if (gimple *cv = SSA_NAME_DEF_STMT (index))
+      if (is_gimple_assign (cv)
+	  && CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (cv))
+	  && INTEGRAL_TYPE_P (TREE_TYPE (gimple_assign_rhs1 (cv))))
+	index = gimple_assign_rhs1 (cv);
+  if (TREE_CODE (index) == INTEGER_CST)
+    {
+      out->has_lo = out->has_hi = true;
+      out->lo = out->hi = widest_int::from (wi::to_wide (index),
+					    TYPE_SIGN (TREE_TYPE (index)));
+      return true;
+    }
+  return cg_bounds_value_range (index, stmt, out);
+}
+
+/* If pointer VAL points into a fixed-size array, set *ARRAY_TYPE to the
+   array's type and *OFF to the range of VAL's offset into it, in
+   elements, and return true.  */
+
+static bool
+cg_pointer_array_offset (tree val, gimple *at, tree *array_type,
+			 cg_range_lite *off, int depth = 0)
+{
+  if (depth > 8)
+    return false;
+  if (TREE_CODE (val) == ADDR_EXPR)
+    {
+      tree op = TREE_OPERAND (val, 0);
+      if (TREE_CODE (TREE_TYPE (op)) == ARRAY_TYPE)
+	{
+	  *array_type = TREE_TYPE (op);
+	  off->has_lo = off->has_hi = true;
+	  off->lo = off->hi = 0;
+	  return true;
+	}
+      if (TREE_CODE (op) == ARRAY_REF
+	  && TREE_CODE (TREE_TYPE (TREE_OPERAND (op, 0))) == ARRAY_TYPE)
+	{
+	  *array_type = TREE_TYPE (TREE_OPERAND (op, 0));
+	  return cg_bounds_value_range (TREE_OPERAND (op, 1), at, off);
+	}
+      return false;
+    }
+  if (TREE_CODE (val) != SSA_NAME)
+    return false;
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (gphi *phi = dyn_cast <gphi *> (def))
+    {
+      tree type = NULL_TREE;
+      cg_range_lite u;
+      for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+	{
+	  tree t;
+	  cg_range_lite r;
+	  if (!cg_pointer_array_offset (gimple_phi_arg_def (phi, i), phi, &t,
+					&r, depth + 1)
+	      || (type && !types_compatible_p (t, type)))
+	    return false;
+	  if (!type)
+	    u = r;
+	  else
+	    {
+	      if (r.lo < u.lo)
+		u.lo = r.lo;
+	      if (r.hi > u.hi)
+		u.hi = r.hi;
+	    }
+	  type = t;
+	}
+      if (!type)
+	return false;
+      *array_type = type;
+      *off = u;
+      return true;
+    }
+  if (!def || !is_gimple_assign (def))
+    return false;
+  tree_code code = gimple_assign_rhs_code (def);
+  tree rhs1 = gimple_assign_rhs1 (def);
+  if (code == ADDR_EXPR || code == SSA_NAME || CONVERT_EXPR_CODE_P (code))
+    return cg_pointer_array_offset (rhs1, def, array_type, off, depth + 1);
+  if (code == POINTER_PLUS_EXPR)
+    {
+      cg_range_lite base, delta;
+      tree t;
+      if (!cg_pointer_array_offset (rhs1, def, &t, &base, depth + 1))
+	return false;
+      tree elt = TREE_TYPE (t);
+      if (!TYPE_SIZE_UNIT (elt) || TREE_CODE (TYPE_SIZE_UNIT (elt)) != INTEGER_CST
+	  || !cg_element_offset_range (gimple_assign_rhs2 (def),
+				       wi::to_widest (TYPE_SIZE_UNIT (elt)),
+				       def, &delta))
+	return false;
+      *array_type = t;
+      off->has_lo = off->has_hi = true;
+      off->lo = base.lo + delta.lo;
+      off->hi = base.hi + delta.hi;
+      return true;
+    }
+  return false;
+}
+
+/* Is offset range OFF, into an array of type ARRAY_TYPE, within it --
+   [0, N) for an access, [0, N] for forming a pointer (one past the end
+   is formable)?  0 if provably, 2 if provably not -- a single offset, or
+   a range wholly outside -- and 1 otherwise.  A range here can be the
+   ranger's, which may just be the type's, so a range merely reaching
+   outside isn't taken as an out-of-bounds offset.  */
+
+static int
+cg_offset_in_bounds (const cg_range_lite &off, tree array_type, bool formation)
+{
+  tree dom = TYPE_DOMAIN (array_type);
+  tree max = dom ? TYPE_MAX_VALUE (dom) : NULL_TREE;
+  if (!off.has_lo || !off.has_hi || !max || TREE_CODE (max) != INTEGER_CST)
+    return 1;
+  widest_int limit = wi::to_widest (max) + (formation ? 1 : 0);
+  if (off.lo >= 0 && off.hi <= limit)
+    return 0;
+  if (off.lo == off.hi || off.hi < 0 || off.lo > limit)
+    return 2;
+  return 1;
+}
+
+/* Report an index, formation or dereference (WHAT, naming DIAG_EXPR if
+   not null) at STMT according to VERDICT (cg_offset_in_bounds).  */
+
+static void
+cg_report_bounds (gimple *stmt, int verdict, const char *what, tree diag_expr)
+{
+  if (verdict == 0)
+    return;
+  location_t loc = gimple_location (stmt);
+  if (verdict == 1)
+    {
+      if (diag_expr)
+	cg_conveyor_error_at (loc, "%s %qE not provably in-bounds in a "
+			      "conveyor function", what, diag_expr);
+      else
+	cg_conveyor_error_at (loc, "%s not provably in-bounds in a "
+			      "conveyor function", what);
+    }
+  else if (diag_expr)
+    cg_conveyor_error_at (loc, "%s %qE out of bounds in a conveyor function",
+			  what, diag_expr);
+  else
+    cg_conveyor_error_at (loc, "%s out of bounds in a conveyor function",
+			  what);
+}
+
+/* Check the array indexes in operand *TP of STMT, and the pointers it
+   forms into arrays; INSIDE_ADDR while under an ADDR_EXPR, where an
+   ARRAY_REF only forms a pointer.  */
+
+static void
+cg_check_array_refs_in (gimple *stmt, tree t, bool inside_addr)
+{
+  if (!t)
+    return;
+  if (TREE_CODE (t) == ADDR_EXPR)
+    {
+      cg_check_array_refs_in (stmt, TREE_OPERAND (t, 0), true);
+      return;
+    }
+  if (handled_component_p (t))
+    {
+      if (TREE_CODE (t) == ARRAY_REF
+	  && TREE_CODE (TREE_TYPE (TREE_OPERAND (t, 0))) == ARRAY_TYPE)
+	{
+	  tree index = TREE_OPERAND (t, 1);
+	  cg_range_lite r;
+	  int verdict = (cg_bounds_value_range (index, stmt, &r)
+			 ? cg_offset_in_bounds (r, TREE_TYPE (TREE_OPERAND (t, 0)),
+						/*formation=*/inside_addr)
+			 : 1);
+	  /* '&arr[k]' is an index in the source; 'arr + 3', folded to
+	     '&arr[3]', pointer arithmetic.  */
+	  bool arith = inside_addr && TREE_CODE (index) == INTEGER_CST;
+	  cg_report_bounds (stmt, verdict,
+			    arith ? "pointer arithmetic" : "array index",
+			    arith ? NULL_TREE : cg_display_value (index));
+	}
+      /* An outer reference only forms a pointer if it is the whole
+	 operand of the ADDR_EXPR; an inner one is an access path.  */
+      cg_check_array_refs_in (stmt, TREE_OPERAND (t, 0), inside_addr);
+    }
+}
+
+/* Item 8's array bounds for STMT: indexes, pointer formation
+   ('p + n'), and dereferences of pointers into arrays.  */
+
+static void
+cg_check_array_bounds_ub (gimple *stmt)
+{
+  if (is_gimple_assign (stmt))
+    {
+      if (gimple_assign_rhs_code (stmt) == POINTER_PLUS_EXPR)
+	{
+	  tree array_type;
+	  cg_range_lite off;
+	  /* Only a pointer already known to point into an array: an
+	     arbitrary pointer's arithmetic isn't tracked (as in the AST
+	     engine), only its dereference is checked.  */
+	  cg_range_lite base;
+	  if (cg_pointer_array_offset (gimple_assign_rhs1 (stmt), stmt,
+				       &array_type, &base))
+	    cg_report_bounds (stmt,
+			      cg_pointer_array_offset (gimple_assign_lhs (stmt),
+						       stmt, &array_type, &off)
+			      ? cg_offset_in_bounds (off, array_type,
+						     /*formation=*/true)
+			      : 1,
+			      "pointer arithmetic", NULL_TREE);
+	  return;
+	}
+      cg_check_array_refs_in (stmt, gimple_assign_lhs (stmt), false);
+      for (unsigned i = 1; i < gimple_num_ops (stmt); ++i)
+	cg_check_array_refs_in (stmt, gimple_op (stmt, i), false);
+    }
+  else if (gcall *call = dyn_cast <gcall *> (stmt))
+    {
+      cg_check_array_refs_in (stmt, gimple_call_lhs (call), false);
+      for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+	cg_check_array_refs_in (stmt, gimple_call_arg (call, i), false);
+    }
+}
+
 /* Check CANDIDATE (a GIMPLE_ASSIGN's own LHS or RHS1, or a GIMPLE_CALL's
    own LHS) for a pointer dereference needing is_object_address
    provability -- see this section's own leading comment.  */
@@ -3264,6 +3657,31 @@ cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
 		      && TREE_CODE (SSA_NAME_VAR (base)) == PARM_DECL;
   if (TREE_CODE (TREE_TYPE (base)) != POINTER_TYPE && !is_ref_parm)
     return;
+
+  /* A pointer into an array must stay within it.  */
+  tree array_type;
+  cg_range_lite off;
+  if (cg_pointer_array_offset (base, stmt, &array_type, &off))
+    {
+      if (TREE_CODE (candidate) == MEM_REF
+	  && TREE_CODE (TREE_OPERAND (candidate, 1)) == INTEGER_CST)
+	{
+	  /* A constant byte offset in the MEM_REF itself.  */
+	  cg_range_lite delta;
+	  tree elt = TREE_TYPE (array_type);
+	  if (TYPE_SIZE_UNIT (elt) && TREE_CODE (TYPE_SIZE_UNIT (elt)) == INTEGER_CST
+	      && cg_element_offset_range (TREE_OPERAND (candidate, 1),
+					  wi::to_widest (TYPE_SIZE_UNIT (elt)),
+					  stmt, &delta))
+	    {
+	      off.lo += delta.lo;
+	      off.hi += delta.hi;
+	    }
+	}
+      cg_report_bounds (stmt, cg_offset_in_bounds (off, array_type, false),
+			"pointer dereference", NULL_TREE);
+      return;
+    }
 
   hash_set<tree> in_progress;
   if (!cg_provable_object_address_p (base, established, /*require_conveyor=*/true,
@@ -9203,6 +9621,9 @@ pass_contracts_gimple::execute (function *fun)
   cg_assert_memory_verdict_map assert_memory_verdicts;
   hash_map<basic_block, auto_vec<edge> *> short_circuit_sources;
   cg_short_circuit_sources = &short_circuit_sources;
+  cg_array_bounds_ctx array_bounds_ctx
+    = { &established_range, &scalar_range_cache, ranger };
+  cg_array_bounds = &array_bounds_ctx;
   /* Floating-point ranges established for SSA values: by a
      precondition of this function, by a load of a field with one, or
      (while the check below is in its dominator subtree) by a
@@ -9241,6 +9662,7 @@ pass_contracts_gimple::execute (function *fun)
 				     established_range, scalar_range_cache,
 				     ranger);
 	      cg_check_dereference_ub (stmt, established);
+	      cg_check_array_bounds_ub (stmt);
 	    }
 	  if (is_gimple_call (stmt))
 	    {
@@ -9294,6 +9716,7 @@ pass_contracts_gimple::execute (function *fun)
   for (auto it : short_circuit_sources)
     delete it.second;
   cg_short_circuit_sources = NULL;
+  cg_array_bounds = NULL;
   disable_ranger (fun);
 
   return 0;
