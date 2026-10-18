@@ -994,6 +994,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  using _Tp2 = __remove_cv_t<_Tp>;
 	  using _Sp_cp_type = _Sp_counted_ptr_inplace<_Tp2, _Alloc, _Lp>;
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (&__a._M_a));
+#endif
 	  typename _Sp_cp_type::__allocator_type __a2(__a._M_a);
 	  auto __guard = std::__allocate_guarded(__a2);
 	  _Sp_cp_type* __mem = __guard.get();

@@ -810,6 +810,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       vector(initializer_list<value_type> __l,
 	     const allocator_type& __a = allocator_type())
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+#endif
       : _Base(__a)
       {
 	_M_range_initialize_n(__l.begin(), __l.end(), __l.size());
@@ -838,6 +841,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	_GLIBCXX20_CONSTEXPR
 	vector(_InputIterator __first, _InputIterator __last,
 	       const allocator_type& __a = allocator_type())
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+#endif
 	: _Base(__a)
 	{
 #if __glibcxx_concepts // C++ >= C++20

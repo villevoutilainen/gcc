@@ -351,7 +351,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr iterator
       begin() const noexcept
-      { return iterator(this->_M_ptr); }
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return iterator(this->_M_ptr);
+      }
 
       [[nodiscard]]
       constexpr iterator
