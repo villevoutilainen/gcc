@@ -708,6 +708,57 @@ cg_resolve_call_argument (gcall *call, unsigned argno)
   return arg;
 }
 
+
+/* Blocks entered only through the edge testing a short-circuit
+   condition's result ('if (retval != 0)' after 'a && b'), each with the
+   edges into the join that set that result to the value the edge needs
+   (cg_bool_phi_source_edges).  The fact walk takes its state from those
+   edges (cg_compute_in_state) and records them here, so a range query
+   can do the same: the ranger alone can't see through the PHI of
+   constants, so it loses what each conjunct established.  Set for the
+   duration of the check of one function.  */
+
+static hash_map<basic_block, auto_vec<edge> *> *cg_short_circuit_sources;
+
+/* Narrow VR, the ranger's range of VAL at STMT, by the union of VAL's
+   ranges along the short-circuit edges the nearest dominating recorded
+   block stands for -- every path to STMT passes through one of them.  */
+
+static void
+cg_narrow_by_short_circuit (vrange &vr, tree val, gimple *stmt,
+			    gimple_ranger *ranger)
+{
+  if (!cg_short_circuit_sources || !stmt || !gimple_bb (stmt)
+      || TREE_CODE (val) != SSA_NAME
+      || !dom_info_available_p (CDI_DOMINATORS))
+    return;
+  basic_block def_bb = (SSA_NAME_IS_DEFAULT_DEF (val) ? NULL
+			: gimple_bb (SSA_NAME_DEF_STMT (val)));
+  for (basic_block bb = gimple_bb (stmt); bb;
+       bb = get_immediate_dominator (CDI_DOMINATORS, bb))
+    {
+      auto_vec<edge> **srcs = cg_short_circuit_sources->get (bb);
+      if (!srcs)
+	continue;
+      value_range u (TREE_TYPE (val));
+      u.set_undefined ();
+      for (edge qe : **srcs)
+	{
+	  /* VAL must already be defined where the edge leaves.  */
+	  if (def_bb && !dominated_by_p (CDI_DOMINATORS, qe->src, def_bb))
+	    return;
+	  value_range r (TREE_TYPE (val));
+	  if (!ranger->range_on_edge (r, qe, val))
+	    return;
+	  u.union_ (r);
+	}
+      if (!u.undefined_p ())
+	vr.intersect (u);
+      return;
+    }
+}
+
+
 /* Resolve VAL's own range, trying, in order: a literal constant; a
    self-trusted/item-6 fact in ESTABLISHED_RANGE (keyed exactly like
    ESTABLISHED/ESTABLISHED_NZ elsewhere in this file, gated the same
@@ -820,8 +871,9 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
   if (ranger)
     {
       int_range_max vr;
-      if (ranger->range_of_expr (vr, val, at_stmt) && !vr.undefined_p ()
-	  && !vr.varying_p ())
+      if (ranger->range_of_expr (vr, val, at_stmt))
+	cg_narrow_by_short_circuit (vr, val, at_stmt, ranger);
+      if (!vr.undefined_p () && !vr.varying_p ())
 	{
 	  unsigned n = vr.num_pairs ();
 	  if (n > 0)
@@ -6988,6 +7040,15 @@ cg_compute_in_state (basic_block bb,
 	}
       if (!used_qualifying)
 	cg_dom_fact_state_assign (&refined, **pred_out);
+      else if (cg_short_circuit_sources && single_pred_p (bb))
+	{
+	  auto_vec<edge> **slot = &cg_short_circuit_sources->get_or_insert (bb);
+	  if (!*slot)
+	    *slot = new auto_vec<edge> ();
+	  (*slot)->truncate (0);
+	  for (edge qe : qualifying_edges)
+	    (*slot)->safe_push (qe);
+	}
 
       cg_refine_edge_into (e, refined, established_range, ranger,
 			    require_conveyor, require_symbolic);
@@ -8224,7 +8285,9 @@ cg_value_range_at (tree val, gimple *stmt,
 				      out, stmt);
   int_range_max vr;
   if (TREE_CODE (val) == SSA_NAME && INTEGRAL_TYPE_P (TREE_TYPE (val))
-      && ranger->range_of_expr (vr, val, stmt)
+      && ranger->range_of_expr (vr, val, stmt))
+    cg_narrow_by_short_circuit (vr, val, stmt, ranger);
+  if (TREE_CODE (val) == SSA_NAME && INTEGRAL_TYPE_P (TREE_TYPE (val))
       && !vr.undefined_p () && !vr.varying_p () && vr.num_pairs () > 0)
     {
       signop sgn = TYPE_SIGN (TREE_TYPE (val));
@@ -8831,6 +8894,8 @@ pass_contracts_gimple::execute (function *fun)
   gimple_ranger *ranger = enable_ranger (fun, false);
 
   cg_assert_memory_verdict_map assert_memory_verdicts;
+  hash_map<basic_block, auto_vec<edge> *> short_circuit_sources;
+  cg_short_circuit_sources = &short_circuit_sources;
   /* Floating-point ranges established for SSA values: by a
      precondition of this function, by a load of a field with one, or
      (while the check below is in its dominator subtree) by a
@@ -8919,6 +8984,9 @@ pass_contracts_gimple::execute (function *fun)
 
   for (auto it : assert_memory_verdicts)
     XDELETE (it.second);
+  for (auto it : short_circuit_sources)
+    delete it.second;
+  cg_short_circuit_sources = NULL;
   disable_ranger (fun);
 
   return 0;
