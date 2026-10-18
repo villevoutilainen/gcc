@@ -118,10 +118,16 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
     explicit
     directory_entry(const filesystem::path& __p)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__p))
+#endif
     : _M_path(__p)
     { refresh(); }
 
     directory_entry(const filesystem::path& __p, error_code& __ec)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__p))
+#endif
     : _M_path(__p)
     {
       refresh(__ec);
@@ -340,6 +346,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       { return __os << __d.path(); }
 
     directory_entry(const filesystem::path& __p, file_type __t)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__p))
+#endif
     : _M_path(__p), _M_type(__t)
     { }
 
@@ -393,7 +402,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
     friend class recursive_directory_iterator;
 
     explicit
-    __directory_iterator_proxy(const directory_entry& __e) : _M_entry(__e) { }
+    __directory_iterator_proxy(const directory_entry& __e)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__e))
+#endif
+    : _M_entry(__e) { }
 
     __directory_iterator_proxy(__directory_iterator_proxy&& __other) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
@@ -447,13 +460,28 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
     directory_iterator&
     operator=(directory_iterator&& __rhs) noexcept = default;
 
-    const directory_entry& operator*() const noexcept;
-    const directory_entry* operator->() const noexcept { return &**this; }
+    const directory_entry& operator*() const noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+#endif
+    ;
+    const directory_entry* operator->() const noexcept
+    {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (this));
+#endif
+      return &**this;
+    }
     directory_iterator&    operator++();
     directory_iterator&    increment(error_code& __ec);
 
     __directory_iterator_proxy operator++(int)
     {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (this));
+#endif
       __directory_iterator_proxy __pr{**this};
       ++*this;
       return __pr;
@@ -551,8 +579,19 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
     int                depth() const noexcept;
     bool               recursion_pending() const noexcept;
 
-    const directory_entry& operator*() const noexcept;
-    const directory_entry* operator->() const noexcept { return &**this; }
+    const directory_entry& operator*() const noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+#endif
+    ;
+    const directory_entry* operator->() const noexcept
+    {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (this));
+#endif
+      return &**this;
+    }
 
     // modifiers
     recursive_directory_iterator&
@@ -565,6 +604,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
     __directory_iterator_proxy operator++(int)
     {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (this));
+#endif
       __directory_iterator_proxy __pr{**this};
       ++*this;
       return __pr;

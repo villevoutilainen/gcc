@@ -488,13 +488,22 @@ namespace __detail
 
     // native format observers
 
-    const string_type&  native() const noexcept { return _M_pathname; }
+    const string_type&  native() const noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+#endif
+    { return _M_pathname; }
     const value_type*   c_str() const noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
     { return _M_pathname.c_str(); }
-    operator string_type() const { return _M_pathname; }
+    operator string_type() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    { return _M_pathname; }
 
     template<typename _CharT, typename _Traits = std::char_traits<_CharT>,
 	     typename _Allocator = std::allocator<_CharT>>
@@ -736,6 +745,9 @@ namespace __detail
 
     /// Append one path to another
     friend path operator/(const path& __lhs, const path& __rhs)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__lhs))
+#endif
     {
       path __result(__lhs);
       __result /= __rhs;
@@ -807,7 +819,11 @@ namespace __detail
 
     template<typename _CharT, typename _Traits, typename _Allocator>
       static basic_string<_CharT, _Traits, _Allocator>
-      _S_str_convert(basic_string_view<value_type>, const _Allocator&);
+      _S_str_convert(basic_string_view<value_type>, const _Allocator& __a)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+#endif
+      ;
 
     // Returns lhs.compare(rhs), but defined after path::iterator is complete.
     __attribute__((__always_inline__))
@@ -1105,8 +1121,19 @@ namespace __detail
     iterator(const iterator&) = default;
     iterator& operator=(const iterator&) = default;
 
-    reference operator*() const noexcept;
-    pointer   operator->() const noexcept { return std::__addressof(**this); }
+    reference operator*() const noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+#endif
+    ;
+    pointer   operator->() const noexcept
+    {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (this));
+#endif
+      return std::__addressof(**this);
+    }
 
     iterator& operator++() noexcept;
 
@@ -1273,6 +1300,9 @@ namespace __detail
     std::basic_string<_CharT, _Traits, _Allocator>
     path::_S_str_convert(basic_string_view<value_type> __str,
 			 const _Allocator& __a)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+#endif
     {
       static_assert(!is_same_v<_CharT, value_type>);
 
@@ -1684,6 +1714,9 @@ namespace __detail
 
   inline path::iterator::reference
   path::iterator::operator*() const noexcept
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+#endif
   {
     __glibcxx_assert(_M_path != nullptr);
     if (_M_is_multi())
