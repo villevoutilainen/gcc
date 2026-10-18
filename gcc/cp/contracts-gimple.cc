@@ -111,6 +111,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "cfghooks.h"
 #include "gimple-ssa.h"
 #include "bitmap.h"
+#include "sbitmap.h"
 
 /* Positional correspondence between CALLEE's own PARM_DECLs and CALL's
    actual argument expressions -- the GIMPLE-level analogue of
@@ -879,11 +880,39 @@ cg_call_postcondition_guarantees_p (tree callee, bool require_conveyor,
 	  if (!match_fn (*conjuncts[i], &arg))
 	    continue;
 	  STRIP_ANY_LOCATION_WRAPPER (arg);
+	  /* '&r' for a reference result R arrives as a conversion of R
+	     itself (references need no ADDR_EXPR); for a pointer or class
+	     result named the same way it is ADDR_EXPR (R).  Matches
+	     contracts.cc's own result-identifier match.  */
+	  while (TREE_CODE (arg) == NON_LVALUE_EXPR
+		 || CONVERT_EXPR_P (arg)
+		 || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+	    arg = TREE_OPERAND (arg, 0);
+	  if (TREE_CODE (arg) == ADDR_EXPR)
+	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	  if (REFERENCE_REF_P (arg))
+	    arg = TREE_OPERAND (arg, 0);
 	  if (arg == result_id)
 	    return true;
 	}
     }
   return false;
+}
+
+/* Is VAL the current function's return slot: its RESULT_DECL, when the
+   class it returns is returned by invisible reference (DECL_BY_REFERENCE,
+   so the RESULT_DECL is the pointer to the caller's storage), or that
+   RESULT_DECL's default definition?  */
+
+static bool
+cg_return_slot_p (tree val)
+{
+  if (TREE_CODE (val) == SSA_NAME && SSA_NAME_IS_DEFAULT_DEF (val))
+    val = SSA_NAME_VAR (val);
+  return (val
+	  && TREE_CODE (val) == RESULT_DECL
+	  && DECL_BY_REFERENCE (val)
+	  && DECL_CONTEXT (val) == current_function_decl);
 }
 
 /* Is VAL provably an object address, given ESTABLISHED (this
@@ -905,6 +934,14 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
     return false;
 
   if (TREE_CODE (val) == ADDR_EXPR)
+    return true;
+
+  /* The return slot of a function returning a class by invisible
+     reference: the object being returned, constructed in place (a
+     returned prvalue, or a named local under NRV).  Its storage is the
+     caller's, valid for the whole body -- the AST engine sees it as the
+     address of the RESULT_DECL or of the NRV local.  */
+  if (cg_return_slot_p (val))
     return true;
 
   if (TREE_CODE (val) != SSA_NAME)
@@ -6499,6 +6536,364 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
   return true;
 }
 
+/* contract_assert as a source of facts.  A conveyor or symbolic
+   contract_assert establishes its condition for the statements it
+   dominates, as the AST engine's walk does for the statements after it.
+   The facts recorded here are the ones keyed on an SSA value -- whether
+   an address is an object address, whether a scalar is nonzero, and a
+   scalar's range -- which, unlike a fact about memory, nothing later in
+   the function can invalidate.  They are added to the function-wide
+   fact maps while the checking walk is inside the asserting statement's
+   dominator subtree (cg_assert_fact_scope), so every existing consult
+   sees them exactly where they hold.
+
+   A check site (build_contract_check) hands the control object's
+   operator() the address of an assertion_context whose __args field
+   points to a capture struct; field I of that struct holds the address
+   (or, for a reference, the value) of the Ith decl that contracts.cc's
+   contract_check_arg_struct_info records for the struct's type, along
+   with the condition as written.  */
+
+/* The value stored to LHS (a COMPONENT_REF or a decl) by the nearest
+   preceding single assignment in AT's own block, or NULL_TREE.  */
+
+static tree
+cg_value_stored_before (gimple *at, tree lhs)
+{
+  gimple_stmt_iterator gsi = gsi_for_stmt (at);
+  for (gsi_prev (&gsi); !gsi_end_p (gsi); gsi_prev (&gsi))
+    {
+      gimple *stmt = gsi_stmt (gsi);
+      if (gimple_assign_single_p (stmt)
+	  && operand_equal_p (gimple_assign_lhs (stmt), lhs, 0))
+	return gimple_assign_rhs1 (stmt);
+    }
+  return NULL_TREE;
+}
+
+/* If CALL is a contract check's call to its control object's
+   operator(), return the contract and set *STRUCT_VAR_OUT to the
+   check's capture struct variable, *COND_OUT to its condition as
+   written, and *DECLS_OUT to the decls its fields capture (see
+   contract_check_arg_struct_info).  */
+
+static tree
+cg_contract_check_call_p (gcall *call, tree *struct_var_out, tree *cond_out,
+			  tree *decls_out)
+{
+  for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+    {
+      tree arg = gimple_call_arg (call, i);
+      if (TREE_CODE (arg) != ADDR_EXPR || !VAR_P (TREE_OPERAND (arg, 0)))
+	continue;
+      tree ctx = TREE_OPERAND (arg, 0);
+      /* The latest store of an address to CTX's '__args' field.  */
+      gimple_stmt_iterator gsi = gsi_for_stmt (call);
+      for (gsi_prev (&gsi); !gsi_end_p (gsi); gsi_prev (&gsi))
+	{
+	  gimple *stmt = gsi_stmt (gsi);
+	  if (!gimple_assign_single_p (stmt))
+	    continue;
+	  tree lhs = gimple_assign_lhs (stmt);
+	  if (TREE_CODE (lhs) != COMPONENT_REF
+	      || TREE_OPERAND (lhs, 0) != ctx)
+	    continue;
+	  tree field = TREE_OPERAND (lhs, 1);
+	  if (!DECL_NAME (field) || !id_equal (DECL_NAME (field), "__args"))
+	    continue;
+	  tree stored = gimple_assign_rhs1 (stmt);
+	  if (TREE_CODE (stored) != ADDR_EXPR
+	      || !VAR_P (TREE_OPERAND (stored, 0)))
+	    break;
+	  tree struct_var = TREE_OPERAND (stored, 0);
+	  tree contract
+	    = contract_check_arg_struct_info (TREE_TYPE (struct_var),
+					      cond_out, decls_out);
+	  if (!contract)
+	    break;
+	  *struct_var_out = struct_var;
+	  return contract;
+	}
+    }
+  return NULL_TREE;
+}
+
+/* The value DECL had at contract check CALL, as captured in STRUCT_VAR
+   (DECLS as from cg_contract_check_call_p): for a reference, the
+   address it is bound to; otherwise its scalar value, when that is an
+   SSA name or a constant.  NULL_TREE if DECL isn't captured or its
+   value isn't one of those -- e.g. it lives in memory.  */
+
+static tree
+cg_contract_check_decl_value (gcall *call, tree struct_var, tree decls,
+			      tree decl)
+{
+  tree field = TYPE_FIELDS (TREE_TYPE (struct_var));
+  for (int i = 2; i < TREE_VEC_LENGTH (decls) && field;
+       ++i, field = DECL_CHAIN (field))
+    {
+      if (TREE_VEC_ELT (decls, i) != decl)
+	continue;
+      tree ref = build3 (COMPONENT_REF, TREE_TYPE (field), struct_var, field,
+			 NULL_TREE);
+      tree stored = cg_value_stored_before (call, ref);
+      if (!stored)
+	return NULL_TREE;
+      if (TYPE_REF_P (TREE_TYPE (decl)) && !DECL_BY_REFERENCE (decl))
+	return TREE_CODE (stored) == SSA_NAME ? stored : NULL_TREE;
+      if (TREE_CODE (stored) != ADDR_EXPR)
+	return NULL_TREE;
+      tree slot = TREE_OPERAND (stored, 0);
+      /* DECL's own storage: its value is in memory.  */
+      if (slot == decl || !VAR_P (slot))
+	return NULL_TREE;
+      tree val = cg_value_stored_before (call, slot);
+      if (val && (TREE_CODE (val) == SSA_NAME || TREE_CODE (val) == INTEGER_CST))
+	return val;
+      return NULL_TREE;
+    }
+  return NULL_TREE;
+}
+
+/* The facts contract_assert checks add to the fact maps while the
+   checking walk is inside their dominator subtrees, with what each one
+   replaced so leaving the subtree can restore it.  */
+
+class cg_assert_fact_scope
+{
+public:
+  cg_assert_fact_scope (hash_map<tree, cg_fact> &established,
+			hash_map<tree, cg_fact> &established_nz,
+			hash_map<tree, cg_range_lite> &established_range,
+			hash_map<tree, cg_type_bound_fact> &established_type_bound)
+    : m_established (established), m_established_nz (established_nz),
+      m_established_range (established_range),
+      m_established_type_bound (established_type_bound)
+  {}
+
+  unsigned mark () const { return m_undo.length (); }
+  void restore (unsigned mark);
+  void establish (gcall *call);
+
+private:
+  enum which { OA, NZ, RANGE, TYPE_BOUND };
+  struct undo
+  {
+    which map;
+    tree key;
+    bool had;
+    cg_fact fact;
+    cg_range_lite range;
+    cg_type_bound_fact type_bound;
+  };
+
+  void put_fact (which map, tree key, cg_fact fact);
+  void put_range (tree key, const cg_range_lite &range);
+  void put_type_bound (tree key, const cg_type_bound_fact &tb);
+
+  hash_map<tree, cg_fact> &m_established;
+  hash_map<tree, cg_fact> &m_established_nz;
+  hash_map<tree, cg_range_lite> &m_established_range;
+  hash_map<tree, cg_type_bound_fact> &m_established_type_bound;
+  auto_vec<undo> m_undo;
+};
+
+void
+cg_assert_fact_scope::put_fact (which map, tree key, cg_fact fact)
+{
+  hash_map<tree, cg_fact> &m = map == OA ? m_established : m_established_nz;
+  undo u = { map, key, false, {}, {}, {} };
+  if (cg_fact *old = m.get (key))
+    {
+      /* A conveyor-established fact stays one.  */
+      if (old->conveyor_established || !fact.conveyor_established)
+	return;
+      u.had = true;
+      u.fact = *old;
+    }
+  m_undo.safe_push (u);
+  m.put (key, fact);
+}
+
+void
+cg_assert_fact_scope::put_range (tree key, const cg_range_lite &range)
+{
+  undo u = { RANGE, key, false, {}, {}, {} };
+  cg_range_lite merged = range;
+  if (cg_range_lite *old = m_established_range.get (key))
+    {
+      u.had = true;
+      u.range = *old;
+      if (old->has_lo && (!merged.has_lo || old->lo > merged.lo))
+	merged.has_lo = true, merged.lo = old->lo;
+      if (old->has_hi && (!merged.has_hi || old->hi < merged.hi))
+	merged.has_hi = true, merged.hi = old->hi;
+    }
+  m_undo.safe_push (u);
+  m_established_range.put (key, merged);
+}
+
+void
+cg_assert_fact_scope::put_type_bound (tree key, const cg_type_bound_fact &tb)
+{
+  undo u = { TYPE_BOUND, key, false, {}, {}, {} };
+  cg_type_bound_fact merged = tb;
+  if (cg_type_bound_fact *old = m_established_type_bound.get (key))
+    {
+      u.had = true;
+      u.type_bound = *old;
+      merged.has_upper_witness |= old->has_upper_witness;
+      merged.has_lower_witness |= old->has_lower_witness;
+    }
+  m_undo.safe_push (u);
+  m_established_type_bound.put (key, merged);
+}
+
+void
+cg_assert_fact_scope::restore (unsigned mark)
+{
+  while (m_undo.length () > mark)
+    {
+      undo u = m_undo.last ();
+      m_undo.pop ();
+      switch (u.map)
+	{
+	case OA:
+	case NZ:
+	  {
+	    hash_map<tree, cg_fact> &m
+	      = u.map == OA ? m_established : m_established_nz;
+	    if (u.had)
+	      m.put (u.key, u.fact);
+	    else
+	      m.remove (u.key);
+	    break;
+	  }
+	case RANGE:
+	  if (u.had)
+	    m_established_range.put (u.key, u.range);
+	  else
+	    m_established_range.remove (u.key);
+	  break;
+	case TYPE_BOUND:
+	  if (u.had)
+	    m_established_type_bound.put (u.key, u.type_bound);
+	  else
+	    m_established_type_bound.remove (u.key);
+	  break;
+	}
+    }
+}
+
+/* If CALL is a conveyor or symbolic contract_assert's check, establish
+   the facts its condition states about SSA values -- the same shapes
+   cg_seed_self_trust seeds from a precondition.  */
+
+void
+cg_assert_fact_scope::establish (gcall *call)
+{
+  tree struct_var, cond, decls;
+  tree contract = cg_contract_check_call_p (call, &struct_var, &cond, &decls);
+  if (!contract || TREE_CODE (contract) != ASSERTION_STMT)
+    return;
+  /* The flavor cache only holds function contracts.  */
+  tree owner = DECL_ORIGIN (current_function_decl);
+  bool conveyor_enabled = (flag_contract_conveyor_proofs_gimple
+			   && oa_contract_conveyor_active_public (contract,
+								  owner));
+  bool symbolic_enabled = (flag_contract_symbolic_proofs_gimple
+			   && oa_contract_symbolic_active_public (contract,
+								  owner));
+  if (!conveyor_enabled && !symbolic_enabled)
+    return;
+  if (cond == NULL_TREE || cond == error_mark_node)
+    return;
+
+  auto value_of = [&] (tree decl) -> tree
+    {
+      decl = STRIP_ANY_LOCATION_WRAPPER (decl);
+      if (!VAR_P (decl) && TREE_CODE (decl) != PARM_DECL)
+	return NULL_TREE;
+      return cg_contract_check_decl_value (call, struct_var, decls, decl);
+    };
+  auto scalar_decl_p = [] (tree decl)
+    {
+      return !TYPE_REF_P (TREE_TYPE (decl)) || DECL_BY_REFERENCE (decl);
+    };
+
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  auto_vec<tree> range_decls;
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree c = *conjuncts[i];
+      tree arg;
+      if (is_object_address_call_p (c, &arg))
+	{
+	  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+	  while (TREE_CODE (arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arg)
+		 || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	  /* '&r' for a reference R is R itself; 'p' for a pointer P.  */
+	  if ((VAR_P (arg) || TREE_CODE (arg) == PARM_DECL)
+	      && (TYPE_REF_P (TREE_TYPE (arg))
+		  || POINTER_TYPE_P (TREE_TYPE (arg))))
+	    if (tree key = value_of (arg))
+	      if (TREE_CODE (key) == SSA_NAME)
+		put_fact (OA, key, { conveyor_enabled });
+	  continue;
+	}
+      tree decl;
+      if (oa_nonzero_conjunct_p (c, &decl))
+	{
+	  if (scalar_decl_p (decl))
+	    if (tree key = value_of (decl))
+	      if (TREE_CODE (key) == SSA_NAME)
+		put_fact (NZ, key, { conveyor_enabled });
+	  continue;
+	}
+      tree_code code;
+      tree const_val;
+      if (oa_match_simple_comparison_var_public (c, &decl, &code, &const_val)
+	  && TREE_CODE (const_val) == INTEGER_CST
+	  && scalar_decl_p (decl) && !range_decls.contains (decl))
+	range_decls.safe_push (decl);
+      if (oa_match_type_bounded_comparison (c, &decl, &code)
+	  && scalar_decl_p (decl))
+	if (tree key = value_of (decl))
+	  if (TREE_CODE (key) == SSA_NAME)
+	    {
+	      cg_type_bound_fact tb;
+	      tb.has_upper_witness = (code == LT_EXPR || code == LE_EXPR);
+	      tb.has_lower_witness = (code == GT_EXPR || code == GE_EXPR);
+	      put_type_bound (key, tb);
+	    }
+    }
+
+  for (unsigned d = 0; d < range_decls.length (); ++d)
+    {
+      tree key = value_of (range_decls[d]);
+      if (!key || TREE_CODE (key) != SSA_NAME)
+	continue;
+      cg_range_lite range;
+      bool any = false;
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree decl, const_val;
+	  tree_code code;
+	  if (oa_match_simple_comparison_var_public (*conjuncts[i], &decl,
+						     &code, &const_val)
+	      && decl == range_decls[d] && TREE_CODE (const_val) == INTEGER_CST)
+	    {
+	      cg_tighten_range_bound (range, code, wi::to_widest (const_val));
+	      any = true;
+	    }
+	}
+      if (any)
+	put_range (key, range);
+    }
+}
+
 namespace {
 
 const pass_data pass_data_contracts_gimple =
@@ -6676,32 +7071,69 @@ pass_contracts_gimple::execute (function *fun)
     = cg_function_might_need_reference_safety_walk_p (fun);
   bool check_item8_ub = DECL_DECLARED_CONVEYOR_P (fun->decl);
 
+  /* Walk the dominator tree, so a contract_assert's facts are in the
+     fact maps exactly while its dominator subtree is being checked (see
+     cg_assert_fact_scope).  Blocks the dominator tree from the entry
+     doesn't reach are checked afterwards, with no assertion facts.  */
+  cg_assert_fact_scope assert_facts (established, established_nz,
+				     established_range,
+				     established_type_bound);
+  auto check_block = [&] (basic_block bb)
+    {
+      for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	   gsi_next (&gsi))
+	{
+	  gimple *stmt = gsi_stmt (gsi);
+	  if (check_item8_ub)
+	    {
+	      cg_check_div_mod_ub (stmt, established_nz, established_range,
+				    scalar_range_cache, ranger);
+	      cg_check_overflow_ub (stmt, established_type_bound,
+				     established_range, scalar_range_cache,
+				     ranger);
+	      cg_check_dereference_ub (stmt, established);
+	    }
+	  if (is_gimple_call (stmt))
+	    {
+	      gcall *call = as_a <gcall *> (stmt);
+	      if (check_reference_safety)
+		cg_check_call_reference_safety (call, fun, established);
+	      cg_check_call (call, established, established_nz,
+			     established_range, established_rel,
+			     established_call_rel, established_call_call_rel,
+			     scalar_range_cache, ranger,
+			     &call_relational_verdict);
+	      assert_facts.establish (call);
+	    }
+	}
+    };
+
+  auto_sbitmap visited (last_basic_block_for_fn (fun));
+  bitmap_clear (visited);
+  struct walk_item { basic_block bb; bool leave; unsigned mark; };
+  auto_vec<walk_item> stack;
+  stack.safe_push ({ ENTRY_BLOCK_PTR_FOR_FN (fun), false, 0 });
+  while (!stack.is_empty ())
+    {
+      walk_item item = stack.pop ();
+      if (item.leave)
+	{
+	  assert_facts.restore (item.mark);
+	  continue;
+	}
+      stack.safe_push ({ item.bb, true, assert_facts.mark () });
+      bitmap_set_bit (visited, item.bb->index);
+      if (item.bb != ENTRY_BLOCK_PTR_FOR_FN (fun)
+	  && item.bb != EXIT_BLOCK_PTR_FOR_FN (fun))
+	check_block (item.bb);
+      for (basic_block son = first_dom_son (CDI_DOMINATORS, item.bb); son;
+	   son = next_dom_son (CDI_DOMINATORS, son))
+	stack.safe_push ({ son, false, 0 });
+    }
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
-    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
-	 gsi_next (&gsi))
-      {
-	gimple *stmt = gsi_stmt (gsi);
-	if (check_item8_ub)
-	  {
-	    cg_check_div_mod_ub (stmt, established_nz, established_range,
-				  scalar_range_cache, ranger);
-	    cg_check_overflow_ub (stmt, established_type_bound,
-				   established_range, scalar_range_cache, ranger);
-	    cg_check_dereference_ub (stmt, established);
-	  }
-	if (is_gimple_call (stmt))
-	  {
-	    gcall *call = as_a <gcall *> (stmt);
-	    if (check_reference_safety)
-	      cg_check_call_reference_safety (call, fun, established);
-	    cg_check_call (call, established, established_nz,
-			   established_range, established_rel,
-			   established_call_rel, established_call_call_rel,
-			   scalar_range_cache, ranger,
-			   &call_relational_verdict);
-	  }
-      }
+    if (!bitmap_bit_p (visited, bb->index))
+      check_block (bb);
 
   disable_ranger (fun);
 
@@ -6852,6 +7284,13 @@ contracts_gimple_eager_check_function (tree fndecl)
      expand_or_defer_fn is ever reached for the OUTER function whose
      own body is still mid-genericize.  */
   if (CONTRACT_HELPER (fndecl) != ldf_contract_none)
+    return;
+
+  /* An immediate function is never genericized (finish_function) or
+     emitted, so there is no GIMPLE body to analyze: gimplifying its
+     C++ statement trees ICEs.  Every call to it is a constant
+     evaluation, which rejects core undefined behavior itself.  */
+  if (DECL_IMMEDIATE_FUNCTION_P (fndecl))
     return;
 
   /* The gate the AST engine already applies before its own oa_walk_

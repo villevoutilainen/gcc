@@ -458,6 +458,20 @@ extern oa_proof_result oa_env_check_call_call_relational_fact
 /* Split COND into its top-level '&&' conjuncts.  */
 extern void oa_collect_conjuncts_public (tree *cond, vec<tree *> *out);
 
+/* If STRUCT_TYPE is a contract check's capture struct type, return its
+   contract, set *COND to a copy of its condition as written, and set
+   *DECLS to a TREE_VEC whose element I+2 is the decl captured by the
+   struct's field I (contracts.cc).  */
+extern tree contract_check_arg_struct_info (tree struct_type, tree *cond,
+					    tree *decls);
+
+/* oa_match_simple_comparison, but admitting a VAR_DECL as well as a
+   PARM_DECL on the non-constant side.  */
+extern bool oa_match_simple_comparison_var_public (tree conjunct,
+						   tree *decl_out,
+						   tree_code *code_out,
+						   tree *const_val_out);
+
 /* Split COND into its top-level '||' disjuncts -- the De Morgan's-dual
    sibling of oa_collect_conjuncts_public immediately above, for a
    plugin that wants to check a disjunctive conjunct (e.g. a

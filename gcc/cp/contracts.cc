@@ -14132,6 +14132,40 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
     }, &env, NULL);
 }
 
+
+/* Each contract statement's condition as written, saved by the AST walk
+   before oa_resolve_condition rewrites the is_object_address calls it
+   resolves.  The GIMPLE engine reads a contract_assert's condition
+   through contract_check_arg_struct_info.  */
+
+static GTY(()) hash_map<tree, tree> *oa_condition_as_written_map;
+
+static void
+oa_record_condition_as_written (tree stmt)
+{
+  tree cond = CONTRACT_CONDITION (stmt);
+  if (cond == NULL_TREE || cond == error_mark_node)
+    return;
+  if (!oa_condition_as_written_map)
+    oa_condition_as_written_map = hash_map<tree, tree>::create_ggc (31);
+  bool existed;
+  tree &slot = oa_condition_as_written_map->get_or_insert (stmt, &existed);
+  if (!existed)
+    slot = unshare_expr (cond);
+}
+
+/* CONTRACT's condition as written: the saved copy if the AST walk has
+   rewritten it, else the condition itself.  */
+
+static tree
+oa_condition_as_written (tree contract)
+{
+  if (oa_condition_as_written_map)
+    if (tree *saved = oa_condition_as_written_map->get (contract))
+      return *saved;
+  return CONTRACT_CONDITION (contract);
+}
+
 /* Walk COND (an arbitrary boolean expression, e.g. a contract's
    condition) looking for std::is_object_address(...) calls; resolve
    each, replacing it in place with boolean_true_node if provable (or,
@@ -22438,6 +22472,7 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 	  }
       }
 
+  oa_record_condition_as_written (contract);
   if (!oa_resolve_condition (&cond, env, conveyor_ok, symbolic_ok, /*trust=*/true))
     {
       CONTRACT_CONDITION (contract) = error_mark_node;
@@ -23100,6 +23135,7 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
      identical fact stated as a precondition works exactly as intended).
      Trust exactly when the verification loop above was skipped for the
      same reason.  */
+  oa_record_condition_as_written (stmt);
   if (!oa_resolve_condition (&cond, env, conveyor_ok, symbolic_ok, /*trust=*/never_proven))
     {
       CONTRACT_CONDITION (stmt) = error_mark_node;
@@ -26508,6 +26544,7 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
      provable state by the time the postcondition is checked (confirmed:
      basic_string::_M_create_plus, pre+post both is_object_address(this),
      failed on its own postcondition alone).  */
+  oa_record_condition_as_written (contract);
   if (!oa_resolve_condition (&cond, is_object_address_env, conveyor_ok, symbolic_ok,
 			      /*trust=*/never_proven))
     {
@@ -29927,6 +29964,17 @@ oa_match_simple_comparison_var (tree conjunct, tree *decl_out,
   return true;
 }
 
+/* Exported for the GIMPLE engine (contracts-gimple.cc).  */
+
+bool
+oa_match_simple_comparison_var_public (tree conjunct, tree *decl_out,
+				       tree_code *code_out,
+				       tree *const_val_out)
+{
+  return oa_match_simple_comparison_var (conjunct, decl_out, code_out,
+					 const_val_out);
+}
+
 /* D4324: VAR_DECL-admitting sibling of oa_match_comparison_against_param,
    for the same reason oa_match_simple_comparison_var exists (see its
    own comment) -- calls the shared oa_underlying_param_operand helper
@@ -31080,6 +31128,33 @@ build_predicate_arg_struct_type (tree core_fn, location_t loc)
    build_fold_addr_expr on a bare REFERENCE_TYPE decl does NOT reliably
    fold back down to just the reference's own value).  */
 
+/* For each capture struct type (build_predicate_arg_struct_type), a
+   TREE_VEC: element 0 is the contract whose check fills it, element 1 a
+   copy of its condition as written, and element I+2 the decl whose
+   address (or reference value) field I holds.  Lets the GIMPLE engine
+   (contracts-gimple.cc) map a contract condition's decls to the values a
+   check site stores, in clones too: cloning a body remaps the struct
+   variable, but not its type.  The copy is needed because the AST walk
+   rewrites each is_object_address call it resolves in the contract's
+   own condition (see oa_condition_as_written).  */
+
+static GTY(()) hash_map<tree, tree> *contract_check_arg_struct_map;
+
+/* See contracts.h.  */
+
+tree
+contract_check_arg_struct_info (tree struct_type, tree *cond, tree *decls)
+{
+  if (!contract_check_arg_struct_map)
+    return NULL_TREE;
+  tree *v = contract_check_arg_struct_map->get (struct_type);
+  if (!v)
+    return NULL_TREE;
+  *cond = TREE_VEC_ELT (*v, 1);
+  *decls = *v;
+  return TREE_VEC_ELT (*v, 0);
+}
+
 static tree
 build_predicate_arg_struct_var (tree contract, tree struct_type, tree cc_bind,
 				location_t loc)
@@ -31094,9 +31169,11 @@ build_predicate_arg_struct_var (tree contract, tree struct_type, tree cc_bind,
   add_decl_expr (struct_var);
 
   tree field = TYPE_FIELDS (struct_type);
+  auto_vec<tree> filled;
 
   auto fill_one = [&] (tree real_val)
     {
+      filled.safe_push (real_val);
       tree field_ref = build3 (COMPONENT_REF, TREE_TYPE (field), struct_var,
 				field, NULL_TREE);
       /* D4324 fix (2026-08-19): a GENUINE, SOURCE-LEVEL reference REAL_VAL
@@ -31167,6 +31244,15 @@ build_predicate_arg_struct_var (tree contract, tree struct_type, tree cc_bind,
       fill_one (DECL_RESULT (current_function_decl));
     }
   gcc_checking_assert (!field);
+
+  tree info = make_tree_vec (filled.length () + 2);
+  TREE_VEC_ELT (info, 0) = contract;
+  TREE_VEC_ELT (info, 1) = unshare_expr (oa_condition_as_written (contract));
+  for (unsigned i = 0; i < filled.length (); ++i)
+    TREE_VEC_ELT (info, i + 2) = filled[i];
+  if (!contract_check_arg_struct_map)
+    contract_check_arg_struct_map = hash_map<tree, tree>::create_ggc (31);
+  contract_check_arg_struct_map->put (struct_type, info);
 
   return build_fold_addr_expr (struct_var);
 }
