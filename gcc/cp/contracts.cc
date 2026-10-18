@@ -21488,6 +21488,8 @@ static void oa_process_condition (tree cond, oa_env &env,
 				  oa_env *then_env_out, oa_env *else_env_out,
 				  oa_condition_scans scans = OA_COND_SCAN_ALL);
 
+static void oa_ensure_contract_flavors_cached (tree fndecl);
+
 static void
 oa_merge_branch_envs (oa_env &then_env, oa_env &else_env, tree cond)
 {
@@ -21564,6 +21566,10 @@ oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
       oa_scan_calls_data *d = (oa_scan_calls_data *) data_;
       oa_env *e = d->env;
       tree t = *tp;
+
+      if (t != NULL_TREE
+	  && (TREE_CODE (t) == CALL_EXPR || TREE_CODE (t) == AGGR_INIT_EXPR))
+	oa_ensure_contract_flavors_cached (cp_get_callee_fndecl_nofold (t));
 
       /* A conditional inside an expression: each arm is evaluated only
 	 when the condition is true (or, for '||' and the else arm, false),
@@ -26486,6 +26492,27 @@ oa_cache_contract_flavors (tree fndecl)
 	  oa_symbolic_strict_contract_cache->add (contract);
 	}
     }
+}
+
+/* oa_cache_contract_flavors for FNDECL, once.  Called for every callee a
+   walk meets, as well as for the walked function itself: the GIMPLE
+   engine checks a call against its callee's cached flavors, and a callee
+   that is only declared, or defined later in the translation unit, is
+   never walked itself.  */
+
+static GTY(()) hash_set<tree> *oa_contract_flavors_cached_fns;
+
+static void
+oa_ensure_contract_flavors_cached (tree fndecl)
+{
+  if (!fndecl || TREE_CODE (fndecl) != FUNCTION_DECL
+      || !get_fn_contract_specifiers (fndecl))
+    return;
+  if (!oa_contract_flavors_cached_fns)
+    oa_contract_flavors_cached_fns = hash_set<tree>::create_ggc (37);
+  if (oa_contract_flavors_cached_fns->add (fndecl))
+    return;
+  oa_cache_contract_flavors (fndecl);
 }
 
 /* Cheap pre-scan: does FNDECL's own analysis potentially need the full

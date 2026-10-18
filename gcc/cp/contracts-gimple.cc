@@ -2588,6 +2588,58 @@ cg_check_call_reference_safety (gcall *call, function *fun,
    syntax leaves no trace by GIMPLE time, already lowered to ordinary
    pointer arithmetic indistinguishable from a user's own).  */
 
+/* True if VAL, an operand at STMT, can't be zero for a reason the
+   function-wide facts don't capture: the result of a call whose callee's
+   flavor-matching postcondition guarantees a range excluding zero (e.g.
+   'r > 0'), or a value whose range at STMT, as computed by RANGER from the
+   conditions guarding STMT, excludes zero (e.g. under 'if (x != 0)').
+   The ranger is asked directly: cg_established_range_of collapses a
+   multi-pair range such as that of 'x != 0' to a single interval, which
+   includes zero again.  */
+
+static bool
+cg_excludes_zero_at_p (tree val, gimple *stmt, gimple_ranger *ranger,
+		       bool require_conveyor)
+{
+  if (val == NULL_TREE || !INTEGRAL_TYPE_P (TREE_TYPE (val)))
+    return false;
+  if (TREE_CODE (val) == SSA_NAME)
+    {
+      /* Through plain copies (a call result typically reaches its use
+	 through one) and conversions that can't change the value.  */
+      tree src = val;
+      gimple *def = SSA_NAME_DEF_STMT (src);
+      while (def && is_gimple_assign (def)
+	     && TREE_CODE (gimple_assign_rhs1 (def)) == SSA_NAME
+	     && (gimple_assign_rhs_code (def) == SSA_NAME
+		 || (CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def))
+		     && types_compatible_p (TREE_TYPE (src),
+					    TREE_TYPE (gimple_assign_rhs1
+						       (def))))))
+	{
+	  src = gimple_assign_rhs1 (def);
+	  def = SSA_NAME_DEF_STMT (src);
+	}
+      if (def && is_gimple_call (def))
+	if (tree callee = gimple_call_fndecl (as_a <gcall *> (def)))
+	  {
+	    cg_range_lite r;
+	    if (cg_call_postcondition_range_p (callee, require_conveyor,
+					       !require_conveyor, &r)
+		&& ((r.has_lo && r.lo > 0) || (r.has_hi && r.hi < 0)))
+	      return true;
+	  }
+    }
+  if (ranger && (TREE_CODE (val) == SSA_NAME || TREE_CODE (val) == INTEGER_CST))
+    {
+      int_range_max vr;
+      if (ranger->range_of_expr (vr, val, stmt) && !vr.undefined_p ()
+	  && !vr.contains_p (wi::zero (TYPE_PRECISION (TREE_TYPE (val)))))
+	return true;
+    }
+  return false;
+}
+
 /* Is VAL, used at STMT's own program point, provably nonzero? Tries
    (in order) the same fact-based check item 7 already has
    (cg_provable_nonzero_p) and then, as a supplementary source
@@ -2614,6 +2666,8 @@ cg_provably_nonzero_for_ub_p (tree val, gimple *stmt,
   hash_set<tree> in_progress;
   if (cg_provable_nonzero_p (val, established_nz, /*require_conveyor=*/true,
 			      in_progress))
+    return true;
+  if (cg_excludes_zero_at_p (val, stmt, ranger, /*require_conveyor=*/true))
     return true;
 
   cg_range_lite r;
@@ -3118,9 +3172,41 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		  continue;
 		}
 	      if (cg_provable_nonzero_p (substituted, established_nz,
-					 require_conveyor, in_progress))
+					 require_conveyor, in_progress)
+		  || cg_excludes_zero_at_p (substituted, call, ranger,
+					    require_conveyor))
 		continue; /* Proven true: silently discharged.  */
-	      if (strict)
+	      /* An anonymous SSA name prints as '<unknown>'; name the call
+		 it is the result of instead.  */
+	      tree result_of = NULL_TREE;
+	      if (TREE_CODE (substituted) == SSA_NAME
+		  && !SSA_NAME_VAR (substituted))
+		{
+		  tree src = substituted;
+		  gimple *def = SSA_NAME_DEF_STMT (src);
+		  while (def && gimple_assign_ssa_name_copy_p (def))
+		    {
+		      src = gimple_assign_rhs1 (def);
+		      def = SSA_NAME_DEF_STMT (src);
+		    }
+		  if (def && is_gimple_call (def))
+		    result_of = gimple_call_fndecl (as_a <gcall *> (def));
+		}
+	      if (result_of)
+		{
+		  if (strict)
+		    error_at (gimple_location (call),
+			      "cannot prove that the result of %qD is nonzero, "
+			      "as required by the precondition of %qD",
+			      result_of, callee);
+		  else
+		    warning_at (gimple_location (call), 0,
+				"cannot verify that the result of %qD is "
+				"nonzero, as required by the precondition of "
+				"%qD",
+				result_of, callee);
+		}
+	      else if (strict)
 		error_at (gimple_location (call),
 			  "cannot prove that %qE is nonzero, as required by "
 			  "the precondition of %qD", substituted, callee);
