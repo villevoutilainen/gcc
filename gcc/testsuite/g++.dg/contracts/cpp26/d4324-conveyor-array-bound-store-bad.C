@@ -17,16 +17,13 @@ void deref_store_bad (int *p) conveyor
 }
 
 /* A field access through a pointer ('p->v') compiles to a synthesized
-   INDIRECT_REF with no location of its own (see oa_scan_array_bounds_
-   in_expr's own comment on this exact shape) -- the dg-error below is
-   anchored to the closing brace, matching where the diagnostic actually
-   lands, same as this piece's own GIMPLE-side test (d4324-gimple-item8-
-   dereference-bad.C) already does for the identical reason.  */
+   INDIRECT_REF with no location of its own: the error takes the
+   statement's.  */
 struct T { int v; };
 
 void field_store_bad (T *p) conveyor
 {
-  p->v = 5;
-} // { dg-error "pointer dereference of .p. not provably valid in a conveyor function" }
+  p->v = 5; // { dg-error "pointer dereference of .p. not provably valid in a conveyor function" }
+}
 
 int main () { return 0; }

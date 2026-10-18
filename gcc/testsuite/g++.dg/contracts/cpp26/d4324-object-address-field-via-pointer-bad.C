@@ -32,6 +32,7 @@ int
 deref_field_unproven (T* p) conveyor
 {
   return use_int_mut (p->v); // { dg-error "cannot prove .is_object_address. for .p->T::v." }
-} // { dg-error "pointer dereference of .p. not provably valid" }
+  // { dg-error "pointer dereference of .p. not provably valid" "" { target *-*-* } .-1 }
+}
 
 int main () { return 0; }

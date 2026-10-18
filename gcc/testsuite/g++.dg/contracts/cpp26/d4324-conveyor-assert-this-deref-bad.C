@@ -15,12 +15,10 @@ struct S {
   void f ()
   {
     // The implicit 'this' INDIRECT_REF synthesized for 'this->m_value'
-    // has no location of its own, so the error below lands on the
-    // function's closing brace rather than this line -- matching this
-    // engine's existing, documented behavior for this exact shape (see
-    // oa_scan_array_bounds_in_expr's own comment, contracts.cc).
+    // has no location of its own; the error takes the statement's.
     contract_assert<std::contracts::conveyor_assert_v> (this->m_value < 2048); // { dg-warning "cannot verify .contract_assert. condition" }
-  } // { dg-error "pointer dereference of .\\(S\\*\\)this. not provably valid" }
+    // { dg-error "pointer dereference of .(\\(S\\*\\))?this. not provably valid" "" { target *-*-* } .-1 }
+  }
 };
 
 int main () { return 0; }

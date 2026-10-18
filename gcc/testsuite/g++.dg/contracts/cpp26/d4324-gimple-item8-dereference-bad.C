@@ -29,19 +29,12 @@ int deref_bad (int *p) conveyor
   return *p; // { dg-error "not provably valid" }
 }
 
-/* A field access through a pointer ('p->v') compiles to a GIMPLE
-   COMPONENT_REF (MEM_REF (...), field) whose own carrying statement has
-   lost its precise source location by this pass point (confirmed by
-   direct testing: gimple_location for it reports the function's own
-   closing brace, not the 'return' line -- the same class of location
-   imprecision item 7's own d4324-gimple-item7-ownership-bad.C avoids by
-   using a call-site error instead) -- the dg-error below is therefore
-   anchored to the closing brace, matching where the diagnostic actually
-   lands, not to the 'return' statement itself.  */
+/* A field access through a pointer ('p->v'): both engines report it at
+   the statement.  */
 struct T { int v; };
 int deref_field_bad (T *p) conveyor
 {
   return p->v; // { dg-error "not provably valid" }
-} // { dg-error "not provably valid" }
+}
 
 int main () { return 0; }

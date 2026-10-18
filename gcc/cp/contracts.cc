@@ -13687,6 +13687,9 @@ oa_check_offset_in_bounds (tree t, tree array_type, const oa_range_fact &total,
    Only meaningful within a function actually declared with the
    'conveyor' keyword -- checked by the caller, not here.  */
 
+/* The location of the statement oa_walk_stmt is walking.  */
+static location_t oa_current_stmt_loc = UNKNOWN_LOCATION;
+
 static void
 oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 {
@@ -13909,7 +13912,11 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 	       falls back to INPUT_LOCATION the same way this file's
 	       neighboring diagnostics already do for a similar reason.  */
 	    {
-	      oa_conveyor_error_at (EXPR_LOC_OR_LOC (t, input_location),
+	      oa_conveyor_error_at (EXPR_LOC_OR_LOC (t,
+						     oa_current_stmt_loc
+						     != UNKNOWN_LOCATION
+						     ? oa_current_stmt_loc
+						     : input_location),
 				    "pointer dereference of %qE not "
 				    "provably valid in a "
 				    "conveyor function", base);
@@ -24706,6 +24713,12 @@ oa_walk_stmt (tree *stmt, oa_env &env)
   tree t = *stmt;
   if (t == NULL_TREE || t == error_mark_node)
     return;
+
+  /* The location a diagnostic about a part of T that has none of its
+     own (the implicit '*' of 'p->field') falls back to.  */
+  auto stmt_loc = make_temp_override (oa_current_stmt_loc);
+  if (EXPR_HAS_LOCATION (t))
+    oa_current_stmt_loc = EXPR_LOCATION (t);
 
   switch (TREE_CODE (t))
     {
