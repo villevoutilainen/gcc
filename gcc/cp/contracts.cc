@@ -2527,6 +2527,7 @@ update_contract_arguments (tree srcdecl, tree destdecl)
    resolution time, well before any of that substrate is otherwise
    reached.  */
 static void oa_maybe_instantiate_contracts (tree fn);
+static bool oa_defaulted_copy_source_parm (tree fn, tree *parm);
 static bool oa_contract_conveyor_active_p (tree contract, tree owner_fn);
 static bool oa_contract_symbolic_active_p (tree contract, tree owner_fn);
 
@@ -2627,6 +2628,10 @@ maybe_contract_wrap_call (tree fndecl, tree call)
 	 code that never opted into any of this checking at all.  */
       if ((flag_contract_conveyor_proofs || flag_contract_symbolic_proofs)
 	  && (DECL_CONSTRUCTOR_P (fndecl) || DECL_DESTRUCTOR_P (fndecl)))
+	SET_DECL_MIGHT_NEED_OA_SCAN_P (current_function_decl);
+      /* A defaulted copy or move member's implicit precondition.  */
+      tree src_parm;
+      if (oa_defaulted_copy_source_parm (fndecl, &src_parm))
 	SET_DECL_MIGHT_NEED_OA_SCAN_P (current_function_decl);
       for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
 	{
@@ -14314,7 +14319,12 @@ oa_resolved_object_address_call (tree arg)
     a = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
   if (REFERENCE_REF_P (a))
     a = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
-  if (!VAR_P (a) || is_global_var (a) || TREE_CODE (TREE_TYPE (a)) == ARRAY_TYPE)
+  /* A lambda's capture proxy names the closure's field, in the lambda's
+     own body only -- not in the predicate core function the check
+     calls; the GIMPLE engine reads that field from the condition as
+     written (cg_object_address_field).  */
+  if (!VAR_P (a) || is_global_var (a) || TREE_CODE (TREE_TYPE (a)) == ARRAY_TYPE
+      || is_capture_proxy (a))
     return boolean_true_node;
   return build2 (COMPOUND_EXPR, boolean_type_node,
 		 build1 (NOP_EXPR, void_type_node, a), boolean_true_node);
@@ -15504,6 +15514,140 @@ oa_strip_to_call (tree init)
     ? init : NULL_TREE;
 }
 
+/* A defaulted copy or move constructor or assignment operator can carry
+   no contracts, and must stay as trivial as it is; its body still passes
+   the source object, or a part of it, on to its bases' and members' own
+   copy or move -- whose preconditions may require that it be an object
+   (std::is_object_address).  When one does, the analysis treats the
+   defaulted function as if it had 'pre<never_proven_conveyor_v>
+   (std::is_object_address (&source))': its body trusts the source, and
+   each caller must prove it.  Nothing is added to the function itself.
+
+   True if FN (a clone, or the function it is cloned from) is such a
+   function, setting *PARM to FN's own source parameter.  */
+
+static GTY(()) hash_map<tree, tree> *oa_defaulted_copy_needs_cache;
+
+static tree oa_substitute_call_arg (tree callee, tree call, tree param);
+
+static bool oa_defaulted_copy_body_needs_p (tree fn, tree src,
+					    hash_set<tree> &in_progress);
+
+static bool
+oa_defaulted_copy_source_parm_1 (tree fn, tree *parm,
+				 hash_set<tree> &in_progress)
+{
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL)
+    return false;
+  tree orig = DECL_CLONED_FUNCTION_P (fn) ? DECL_CLONED_FUNCTION (fn) : fn;
+  if (!DECL_DEFAULTED_FN (orig) || !DECL_IOBJ_MEMBER_FUNCTION_P (orig)
+      || !(DECL_CONSTRUCTOR_P (orig) || DECL_ASSIGNMENT_OPERATOR_P (orig))
+      || !(copy_fn_p (orig) > 0 || move_fn_p (orig)))
+    return false;
+  tree src = FUNCTION_FIRST_USER_PARM (orig);
+  tree fn_src = FUNCTION_FIRST_USER_PARM (fn);
+  if (!src || !fn_src || !TYPE_REF_P (TREE_TYPE (src)))
+    return false;
+  bool needs;
+  if (tree *cached = hash_map_safe_get (oa_defaulted_copy_needs_cache, orig))
+    needs = *cached == boolean_true_node;
+  else
+    {
+      /* No body yet (not yet implicitly defined): not decided yet.  */
+      if (!DECL_SAVED_TREE (orig) || in_progress.contains (orig))
+	return false;
+      in_progress.add (orig);
+      needs = oa_defaulted_copy_body_needs_p (orig, src, in_progress);
+      in_progress.remove (orig);
+      hash_map_maybe_create<hm_ggc> (oa_defaulted_copy_needs_cache);
+      oa_defaulted_copy_needs_cache->put (orig, needs ? boolean_true_node
+					  : boolean_false_node);
+    }
+  if (!needs)
+    return false;
+  *parm = fn_src;
+  return true;
+}
+
+static bool
+oa_defaulted_copy_source_parm (tree fn, tree *parm)
+{
+  hash_set<tree> in_progress;
+  return oa_defaulted_copy_source_parm_1 (fn, parm, in_progress);
+}
+
+/* Does defaulted FN's body pass SRC, or a part of it, to a call whose
+   callee requires an is_object_address of one of its parameters (a
+   precondition's, or another such defaulted function's)?  */
+
+static bool
+oa_defaulted_copy_body_needs_p (tree fn, tree src,
+				hash_set<tree> &in_progress)
+{
+  struct data_t { tree src; hash_set<tree> *in_progress; };
+  data_t data = { src, &in_progress };
+  tree body = DECL_SAVED_TREE (fn);
+  return cp_walk_tree_without_duplicates (&body, [](tree *tp, int *,
+						    void *d) -> tree
+    {
+      data_t *data = (data_t *) d;
+      tree t = *tp;
+      if (TREE_CODE (t) != CALL_EXPR && TREE_CODE (t) != AGGR_INIT_EXPR)
+	return NULL_TREE;
+      tree callee = cp_get_callee_fndecl_nofold (t);
+      if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+	return NULL_TREE;
+      tree src = data->src;
+      auto mentions_src = [src] (tree arg)
+	{
+	  return cp_walk_tree_without_duplicates
+		   (&arg, [](tree *tp, int *, void *s) -> tree
+		      { return *tp == (tree) s ? *tp : NULL_TREE; },
+		    src) != NULL_TREE;
+	};
+      bool passes_src = false;
+      int nargs = (TREE_CODE (t) == AGGR_INIT_EXPR ? aggr_init_expr_nargs (t)
+		   : call_expr_nargs (t));
+      for (int i = 0; i < nargs && !passes_src; ++i)
+	passes_src = mentions_src (TREE_CODE (t) == AGGR_INIT_EXPR
+				   ? AGGR_INIT_EXPR_ARG (t, i)
+				   : CALL_EXPR_ARG (t, i));
+      if (!passes_src)
+	return NULL_TREE;
+      tree parm;
+      if (oa_defaulted_copy_source_parm_1 (callee, &parm, *data->in_progress))
+	return t;
+      oa_maybe_instantiate_contracts (callee);
+      for (tree as = get_fn_contract_specifiers (callee); as;
+	   as = TREE_CHAIN (as))
+	{
+	  tree contract = CONTRACT_STATEMENT (as);
+	  if (!PRECONDITION_P (contract))
+	    continue;
+	  tree cond = CONTRACT_CONDITION (contract);
+	  if (!cond || cond == error_mark_node)
+	    continue;
+	  auto_vec<tree *> conjuncts;
+	  oa_collect_conjuncts (&cond, &conjuncts);
+	  for (unsigned i = 0; i < conjuncts.length (); ++i)
+	    {
+	      tree arg;
+	      if (is_object_address_call_p (*conjuncts[i], &arg))
+		return t;
+	    }
+	}
+      return NULL_TREE;
+    }, &data) != NULL_TREE;
+}
+
+/* See contracts.h.  */
+
+bool
+oa_defaulted_copy_source_parm_public (tree fn, tree *parm)
+{
+  return oa_defaulted_copy_source_parm (fn, parm);
+}
+
 static void
 oa_handle_call_precondition_obligation (tree call, oa_env &env,
 					 bool in_predicate_context = false)
@@ -15548,6 +15692,25 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
      function's reference parameter gets, say), and each unprovable
      obligation should be reported once.  */
   hash_set<tree> reported_parms;
+  /* A defaulted copy or move member's implicit is_object_address of its
+     source (oa_defaulted_copy_source_parm).  */
+  tree src_parm;
+  if (oa_defaulted_copy_source_parm (callee, &src_parm))
+    if (tree substituted = oa_substitute_call_arg (callee, call, src_parm))
+      {
+	oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+	if (!oa_provable_p (substituted, env, &reason)
+	    && !reported_parms.add (src_parm))
+	  {
+	    oa_conveyor_error_at (EXPR_LOCATION (call),
+				  "cannot prove %<is_object_address%> for "
+				  "%qE, required by the implicit precondition "
+				  "of %qD", substituted, callee);
+	    if (const char *why = oa_unprovable_reason_text (reason))
+	      oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	    oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  }
+      }
   for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
     {
       tree contract = CONTRACT_STATEMENT (as);
@@ -21746,6 +21909,22 @@ oa_maybe_instantiate_contracts (tree fn)
 	  tsubst_regenerated_contract_specifiers (fn, code_pattern, DECL_TI_ARGS (fn));
 	  maybe_pop_from_top_level (push_to_top);
 	  pop_tinst_level ();
+	  /* A constructor or destructor call resolves to one of FN's
+	     clones, which got no contracts when they were built (the
+	     class's instantiation, with FN's then unsubstituted) and get
+	     them otherwise only once FN's definition is instantiated
+	     (instantiate_decl), after a caller met earlier is checked:
+	     give them FN's substituted ones now.  */
+	  if (DECL_MAYBE_IN_CHARGE_CDTOR_P (fn))
+	    {
+	      bool missing = false;
+	      tree clone;
+	      FOR_EACH_CLONE (clone, fn)
+		if (!get_fn_contract_specifiers (clone))
+		  missing = true;
+	      if (missing)
+		propagate_cdtor_contracts_to_clones (fn);
+	    }
 	}
     }
 }
@@ -27091,6 +27270,11 @@ oa_seed_entry_env (tree fndecl, tree body, oa_env &env)
   if (DECL_CONSTRUCTOR_P (fndecl) || DECL_DESTRUCTOR_P (fndecl))
     if (tree this_parm = DECL_ARGUMENTS (fndecl))
       env.set (this_parm, true);
+  /* A defaulted copy or move member's implicit precondition on its
+     source (oa_defaulted_copy_source_parm).  */
+  tree src_parm;
+  if (oa_defaulted_copy_source_parm (fndecl, &src_parm))
+    env.set (src_parm, true);
 
   for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
     {
