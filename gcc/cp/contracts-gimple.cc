@@ -9882,7 +9882,7 @@ cg_seed_predicate_from_preconditions (function *fun,
   for (tree as = get_fn_contract_specifiers (owner); as; as = TREE_CHAIN (as))
     {
       tree contract = CONTRACT_STATEMENT (as);
-      if (contract == self || !PRECONDITION_P (contract)
+      if (!PRECONDITION_P (contract)
 	  || !oa_contract_conveyor_active_public (contract, owner))
 	continue;
       tree cond = CONTRACT_CONDITION (contract);
@@ -9894,6 +9894,11 @@ cg_seed_predicate_from_preconditions (function *fun,
 	{
 	  tree arg, const_val;
 	  tree_code code;
+	  /* The contract's own conditions other than is_object_address are
+	     what is being validated; its is_object_address conjuncts are
+	     trusted, as the AST engine trusts a precondition's own.  */
+	  if (contract == self && !is_object_address_call_p (*conjuncts[i], &arg))
+	    continue;
 	  if (is_object_address_call_p (*conjuncts[i], &arg))
 	    {
 	      arg = STRIP_ANY_LOCATION_WRAPPER (arg);
