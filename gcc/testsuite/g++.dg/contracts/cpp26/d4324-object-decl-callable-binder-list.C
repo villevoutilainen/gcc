@@ -37,7 +37,7 @@ int (*fp5) (int) post<> (r: r > 0);
 
 // A function parameter of function-pointer type, from the plan's own
 // worked example.
-void f (void (*) (int, int) post<> (r, x, y: r == x + y));
+void f (int (*) (int, int) post<> (r, x, y: r == x + y));
 
 // Wrong binder count against the callable's own arity is rejected.
 // (The condition itself doesn't reference any of the mis-sized binder
