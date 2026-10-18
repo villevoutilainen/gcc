@@ -4840,6 +4840,34 @@ cg_array_slot_base_identity (tree ref)
   return NULL_TREE;
 }
 
+/* Does pointer ARG, of object IDENTITY (cg_gimple_object_identity's),
+   point to an object no fact can name: one loaded from memory or
+   returned by a call, or either of two objects (a PHI)?  The address of
+   a decl, including a return slot being constructed, and a parameter's
+   incoming value are named.  */
+
+static bool
+cg_unnamed_pointer_identity_p (tree arg, tree identity)
+{
+  if (TREE_CODE (arg) == ADDR_EXPR)
+    return !DECL_P (get_base_address (TREE_OPERAND (arg, 0)));
+  if (!identity)
+    return true;
+  if (TREE_CODE (identity) != SSA_NAME || SSA_NAME_IS_DEFAULT_DEF (identity))
+    return false;
+  gimple *def = SSA_NAME_DEF_STMT (identity);
+  if (!def || gimple_code (def) == GIMPLE_PHI || is_gimple_call (def))
+    return true;
+  if (gimple_assign_single_p (def))
+    {
+      tree rhs = gimple_assign_rhs1 (def);
+      return (TREE_CODE (rhs) != ADDR_EXPR
+	      && (handled_component_p (rhs) || TREE_CODE (rhs) == MEM_REF
+		  || VAR_P (rhs) || TREE_CODE (rhs) == PARM_DECL));
+    }
+  return false;
+}
+
 /* The object IDENTITY may have changed: drop every fact in STATE that
    compares against the result of an accessor called on it.  */
 
@@ -5995,9 +6023,7 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
 	    identity = cg_field_object_identity (arg, field_object_cache);
 	  if (!identity)
 	    identity = cg_gimple_object_identity (arg);
-	  if (!identity
-	      || (TREE_CODE (identity) == SSA_NAME
-		  && !SSA_NAME_IS_DEFAULT_DEF (identity)))
+	  if (cg_unnamed_pointer_identity_p (arg, identity))
 	    {
 	      state.pred.empty ();
 	      state.field.empty ();
