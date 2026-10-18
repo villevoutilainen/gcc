@@ -5497,6 +5497,68 @@ cg_record_field_load_facts (gimple *stmt, cg_dom_fact_state &state,
     }
 }
 
+static bool cg_value_range_at (tree, gimple *, hash_map<tree, cg_range_lite> &,
+			       hash_map<tree, cg_range_lite> &, gimple_ranger *,
+			       bool, cg_range_lite *);
+
+/* STMT stores an integral value to a field or a scalar in memory: the
+   location now holds that value's range and nonzero-ness, which a
+   later postcondition or load can rely on -- like the AST engine, which
+   establishes a field's range from what is written to it.  Runs after
+   the store has ended the location's old facts.  */
+
+static void
+cg_record_write_facts (gimple *stmt, cg_dom_fact_state &state,
+		       hash_map<tree, cg_range_lite> &established_range,
+		       hash_map<tree, cg_range_lite> &scalar_range_cache,
+		       gimple_ranger *ranger,
+		       hash_map<tree, cg_fact> &established_nz)
+{
+  if (!gimple_assign_single_p (stmt) || !ranger)
+    return;
+  tree lhs = gimple_assign_lhs (stmt);
+  tree rhs = gimple_assign_rhs1 (stmt);
+  if (!INTEGRAL_TYPE_P (TREE_TYPE (lhs))
+      || (TREE_CODE (rhs) != SSA_NAME && TREE_CODE (rhs) != INTEGER_CST))
+    return;
+
+  std::pair<tree, tree> key;
+  if (TREE_CODE (lhs) == COMPONENT_REF)
+    {
+      tree obj = TREE_OPERAND (lhs, 0);
+      tree obj_expr = (TREE_CODE (obj) == MEM_REF
+		       && integer_zerop (TREE_OPERAND (obj, 1))
+		       ? TREE_OPERAND (obj, 0) : obj);
+      tree identity = cg_gimple_object_identity (obj_expr);
+      if (!identity)
+	return;
+      key = { identity, TREE_OPERAND (lhs, 1) };
+    }
+  else if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
+	   && cg_scalar_memory_tracking_p (cfun, lhs))
+    key = cg_scalar_memory_fact_key (lhs);
+  else
+    return;
+
+  cg_field_fact fact = { {}, /*conveyor_established=*/true };
+  if (TREE_CODE (rhs) == INTEGER_CST)
+    {
+      fact.range.has_lo = fact.range.has_hi = true;
+      fact.range.lo = fact.range.hi = wi::to_widest (rhs);
+    }
+  else
+    {
+      cg_value_range_at (rhs, stmt, established_range, scalar_range_cache,
+			 ranger, /*require_conveyor=*/true, &fact.range);
+      hash_set<tree> in_progress;
+      fact.nonzero = cg_provable_nonzero_p (rhs, established_nz,
+					    /*require_conveyor=*/true,
+					    in_progress);
+    }
+  if (fact.nonzero || fact.range.has_lo || fact.range.has_hi)
+    state.field.put (key, fact);
+}
+
 /* The forward dataflow walk itself.
 
    An earlier design used a dom_walker subclass, computing each block's
@@ -7141,6 +7203,9 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 					   gimple_assign_rhs1 (stmt), fun,
 					   field_object_cache, out_state);
 		  cg_process_scalar_write (gimple_assign_lhs (stmt), out_state);
+		  cg_record_write_facts (stmt, out_state, established_range,
+					 *scalar_range_cache_out, ranger,
+					 established_nz);
 		}
 	      else if (is_gimple_call (stmt))
 		{
@@ -7234,6 +7299,9 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 				       gimple_assign_rhs1 (stmt), fun,
 				       field_object_cache, state);
 	      cg_process_scalar_write (gimple_assign_lhs (stmt), state);
+	      cg_record_write_facts (stmt, state, established_range,
+				     *scalar_range_cache_out, ranger,
+				     established_nz);
 	    }
 	  else if (is_gimple_call (stmt))
 	    {
