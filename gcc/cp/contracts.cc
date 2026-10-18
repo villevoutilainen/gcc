@@ -13341,15 +13341,75 @@ static bool oa_diagnostics_active = true;
    violation only means it isn't conveyor: record it instead
    (conveyor_auto_note_violation_in).  */
 
+/* True if the AST engine's analysis diagnostics are silenced:
+   -fcontract-analysis-engine=gimple leaves the reporting to the GIMPLE
+   engine (contracts-gimple.cc).  The walk itself still runs, because its
+   other results are needed whichever engine reports: the resolved
+   is_object_address calls, the contract flavor caches the GIMPLE engine
+   reads, symbolic runtime-check code, and conveyor(auto) deduction.
+   Rules about where a construct may appear are not analysis and are
+   still reported.  */
+
+static bool
+oa_ast_diagnostics_muted_p ()
+{
+  return flag_contract_analysis_engine == 1;
+}
+
 static void ATTRIBUTE_GCC_DIAG (2,3)
 oa_conveyor_error_at (location_t loc, const char *gmsgid, ...)
 {
   if (conveyor_auto_note_violation_in (current_function_decl))
     return;
+  if (oa_ast_diagnostics_muted_p ())
+    return;
   auto_diagnostic_group d;
   va_list ap;
   va_start (ap, gmsgid);
   emit_diagnostic_valist (diagnostics::kind::error, loc,
+			  diagnostics::option_id (), gmsgid, &ap);
+  va_end (ap);
+}
+
+/* error_at, warning_at and inform for the AST engine's analysis
+   diagnostics, silenced when oa_ast_diagnostics_muted_p.  */
+
+static void ATTRIBUTE_GCC_DIAG (2,3)
+oa_error_at (location_t loc, const char *gmsgid, ...)
+{
+  if (oa_ast_diagnostics_muted_p ())
+    return;
+  auto_diagnostic_group d;
+  va_list ap;
+  va_start (ap, gmsgid);
+  emit_diagnostic_valist (diagnostics::kind::error, loc,
+			  diagnostics::option_id (), gmsgid, &ap);
+  va_end (ap);
+}
+
+static bool ATTRIBUTE_GCC_DIAG (3,4)
+oa_warning_at (location_t loc, int opt, const char *gmsgid, ...)
+{
+  if (oa_ast_diagnostics_muted_p ())
+    return false;
+  auto_diagnostic_group d;
+  va_list ap;
+  va_start (ap, gmsgid);
+  bool ret = emit_diagnostic_valist (diagnostics::kind::warning, loc,
+				     opt, gmsgid, &ap);
+  va_end (ap);
+  return ret;
+}
+
+static void ATTRIBUTE_GCC_DIAG (2,3)
+oa_inform (location_t loc, const char *gmsgid, ...)
+{
+  if (oa_ast_diagnostics_muted_p ())
+    return;
+  auto_diagnostic_group d;
+  va_list ap;
+  va_start (ap, gmsgid);
+  emit_diagnostic_valist (diagnostics::kind::note, loc,
 			  diagnostics::option_id (), gmsgid, &ap);
   va_end (ap);
 }
@@ -14130,12 +14190,12 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
       oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
       if (!d->trust && !oa_provable_p (arg, *d->env, &reason))
 	{
-	  error_at (EXPR_LOCATION (*tp),
+	  oa_error_at (EXPR_LOCATION (*tp),
 		    "cannot prove %<is_object_address%> for %qE", arg);
 	  if (const char *why = oa_unprovable_reason_text (reason))
-	    inform (EXPR_LOCATION (*tp), "%s", _(why));
+	    oa_inform (EXPR_LOCATION (*tp), "%s", _(why));
 	  if (DECL_P (STRIP_ANY_LOCATION_WRAPPER (arg)))
-	    inform (DECL_SOURCE_LOCATION (STRIP_ANY_LOCATION_WRAPPER (arg)),
+	    oa_inform (DECL_SOURCE_LOCATION (STRIP_ANY_LOCATION_WRAPPER (arg)),
 		    "declared here");
 	  *d->ok = false;
 	  *tp = error_mark_node;
@@ -15201,9 +15261,9 @@ oa_scan_predicate_mutation_ownership_in_expr (tree *expr, oa_env &env)
       if (!oa_reference_owned_p (target, *e, /*asking_about_pointer_value=*/false,
 				  /*in_predicate_context=*/true, &reason))
 	{
-	  error_at (EXPR_LOCATION (t), what, target);
+	  oa_error_at (EXPR_LOCATION (t), what, target);
 	  if (const char *why = oa_unprovable_reason_text (reason))
-	    inform (EXPR_LOCATION (t), "%s", _(why));
+	    oa_inform (EXPR_LOCATION (t), "%s", _(why));
 	}
       return NULL_TREE;
     }, &env, NULL);
@@ -15342,12 +15402,12 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
 	  if (!oa_provable_p (substituted, env, &reason)
 	      && !reported_parms.add (stripped_arg))
 	    {
-	      error_at (EXPR_LOCATION (call),
+	      oa_error_at (EXPR_LOCATION (call),
 			"cannot prove %<is_object_address%> for %qE, "
 			"required by the precondition of %qD", substituted, callee);
 	      if (const char *why = oa_unprovable_reason_text (reason))
-		inform (EXPR_LOCATION (call), "%s", _(why));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	}
     }
@@ -15394,12 +15454,12 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
       if (!oa_provable_p (receiver, env, &reason)
 	  && !reported_parms.add (DECL_ARGUMENTS (callee)))
 	{
-	  error_at (EXPR_LOCATION (call),
+	  oa_error_at (EXPR_LOCATION (call),
 		    "cannot prove %<is_object_address%> for %qE, "
 		    "required by the precondition of %qD", receiver, callee);
 	  if (const char *why = oa_unprovable_reason_text (reason))
-	    inform (EXPR_LOCATION (call), "%s", _(why));
-	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	}
     }
 
@@ -15492,14 +15552,14 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
 	      && (in_predicate_context
 		  || !conveyor_auto_note_violation_in (current_function_decl)))
 	    {
-	      error_at (EXPR_LOCATION (call),
+	      oa_error_at (EXPR_LOCATION (call),
 			"argument %qE is not owned by the calling "
 			"function, so it may not be passed as the "
 			"non-const reference parameter %qD of %qD",
 			substituted, parm, callee);
 	      if (const char *why = oa_unprovable_reason_text (own_reason))
-		inform (EXPR_LOCATION (call), "%s", _(why));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	}
     }
@@ -16444,7 +16504,7 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 		  break; /* Silently discharged.  */
 		case OA_PROVEN_FALSE:
 		  {
-		    error_at (EXPR_LOCATION (call),
+		    oa_error_at (EXPR_LOCATION (call),
 			      "argument %qE provably violates the "
 			      "precondition of %qD", diag_expr, callee);
 		    char est_buf[128], req_buf[128];
@@ -16452,7 +16512,7 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 		      {
 			oa_float_range_fact established;
 			if (oa_get_float_range (substituted, env, &established))
-			  inform (EXPR_LOCATION (call),
+			  oa_inform (EXPR_LOCATION (call),
 				  "%qE is established %s, but the "
 				  "precondition requires it to be %s",
 				  diag_expr,
@@ -16465,7 +16525,7 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 		      {
 			oa_range_fact established;
 			if (oa_get_range (substituted, env, &established))
-			  inform (EXPR_LOCATION (call),
+			  oa_inform (EXPR_LOCATION (call),
 				  "%qE is established %s, but the "
 				  "precondition requires it to be %s",
 				  diag_expr,
@@ -16474,21 +16534,21 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 				  oa_range_fact_text (gen_req, req_buf,
 						       sizeof (req_buf)));
 		      }
-		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		  }
 		  break;
 		case OA_UNKNOWN:
 		  if (strict)
-		    error_at (EXPR_LOCATION (call),
+		    oa_error_at (EXPR_LOCATION (call),
 			      "cannot prove that %qE satisfies the "
 			      "precondition of %qD", diag_expr, callee);
 		  else
-		    warning_at (EXPR_LOCATION (call), 0,
+		    oa_warning_at (EXPR_LOCATION (call), 0,
 				"cannot verify that %qE satisfies the "
 				"precondition of %qD", diag_expr, callee);
 		  if (const char *why = oa_unprovable_reason_text (reason))
-		    inform (EXPR_LOCATION (call), "%s", _(why));
-		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    oa_inform (EXPR_LOCATION (call), "%s", _(why));
+		  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		  break;
 		}
 	    }
@@ -16528,7 +16588,7 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 	  break;
 	case OA_PROVEN_FALSE:
 	  {
-	    error_at (EXPR_LOCATION (call),
+	    oa_error_at (EXPR_LOCATION (call),
 		      "argument %qE provably violates the precondition "
 		      "of %qD", substituted, callee);
 	    oa_range_fact established;
@@ -16536,7 +16596,7 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 	    if (have_established)
 	      {
 		char est_buf[128], req_buf[128];
-		inform (EXPR_LOCATION (call),
+		oa_inform (EXPR_LOCATION (call),
 			"%qE is established %s, but the precondition "
 			"requires it to be %s", substituted,
 			oa_range_fact_text (established, est_buf,
@@ -16544,7 +16604,7 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 			oa_range_fact_text (range_facts[idx], req_buf,
 					     sizeof (req_buf)));
 	      }
-	    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    if (conveyor && flag_dump_contract_proofs && have_established)
 	      oa_emit_range_certificate (EXPR_LOCATION (call), callee,
 					 established, range_facts[idx],
@@ -16554,16 +16614,16 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 	  break;
 	case OA_UNKNOWN:
 	  if (strict)
-	    error_at (EXPR_LOCATION (call),
+	    oa_error_at (EXPR_LOCATION (call),
 		      "cannot prove that %qE satisfies the "
 		      "precondition of %qD", substituted, callee);
 	  else
-	    warning_at (EXPR_LOCATION (call), 0,
+	    oa_warning_at (EXPR_LOCATION (call), 0,
 			"cannot verify that %qE satisfies the "
 			"precondition of %qD", substituted, callee);
 	  if (const char *why = oa_unprovable_reason_text (reason))
-	    inform (EXPR_LOCATION (call), "%s", _(why));
-	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	  break;
 	}
     }
@@ -16585,14 +16645,14 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 	  break;
 	case OA_PROVEN_FALSE:
 	  {
-	    error_at (EXPR_LOCATION (call),
+	    oa_error_at (EXPR_LOCATION (call),
 		      "argument %qE provably violates the precondition "
 		      "of %qD", substituted, callee);
 	    oa_float_range_fact established;
 	    if (oa_get_float_range (substituted, env, &established))
 	      {
 		char est_buf[128], req_buf[128];
-		inform (EXPR_LOCATION (call),
+		oa_inform (EXPR_LOCATION (call),
 			"%qE is established %s, but the precondition "
 			"requires it to be %s", substituted,
 			oa_float_range_fact_text (established, est_buf,
@@ -16600,21 +16660,21 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 			oa_float_range_fact_text (float_range_facts[idx],
 						   req_buf, sizeof (req_buf)));
 	      }
-	    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	  }
 	  break;
 	case OA_UNKNOWN:
 	  if (strict)
-	    error_at (EXPR_LOCATION (call),
+	    oa_error_at (EXPR_LOCATION (call),
 		      "cannot prove that %qE satisfies the "
 		      "precondition of %qD", substituted, callee);
 	  else
-	    warning_at (EXPR_LOCATION (call), 0,
+	    oa_warning_at (EXPR_LOCATION (call), 0,
 			"cannot verify that %qE satisfies the "
 			"precondition of %qD", substituted, callee);
 	  if (const char *why = oa_unprovable_reason_text (reason))
-	    inform (EXPR_LOCATION (call), "%s", _(why));
-	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	    oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	  break;
 	}
     }
@@ -16694,29 +16754,29 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		case OA_PROVEN_TRUE:
 		  break; /* Silently discharged.  */
 		case OA_PROVEN_FALSE:
-		  error_at (EXPR_LOCATION (call),
+		  oa_error_at (EXPR_LOCATION (call),
 			    "argument %qE provably violates the precondition "
 			    "of %qD", sub_param, callee);
-		  inform (EXPR_LOCATION (call),
+		  oa_inform (EXPR_LOCATION (call),
 			  "%qE is established %s, but the precondition "
 			  "requires it to be %s %qE", sub_param, established_buf,
 			  op_symbol_code (rel_code), sub_other);
-		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		  break;
 		case OA_UNKNOWN:
 		  if (strict)
-		    error_at (EXPR_LOCATION (call),
+		    oa_error_at (EXPR_LOCATION (call),
 			      "cannot prove that %qE satisfies the "
 			      "precondition of %qD",
 			      sub_param ? sub_param : rel_param, callee);
 		  else
-		    warning_at (EXPR_LOCATION (call), 0,
+		    oa_warning_at (EXPR_LOCATION (call), 0,
 				"cannot verify that %qE satisfies the "
 				"precondition of %qD",
 				sub_param ? sub_param : rel_param, callee);
 		  if (const char *why = oa_unprovable_reason_text (reason))
-		    inform (EXPR_LOCATION (call), "%s", _(why));
-		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    oa_inform (EXPR_LOCATION (call), "%s", _(why));
+		  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		  break;
 		}
 	      continue;
@@ -16748,29 +16808,29 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		  case OA_PROVEN_TRUE:
 		    break; /* Silently discharged.  */
 		  case OA_PROVEN_FALSE:
-		    error_at (EXPR_LOCATION (call),
+		    oa_error_at (EXPR_LOCATION (call),
 			      "argument %qE provably violates the precondition "
 			      "of %qD", sub_param, callee);
-		    inform (EXPR_LOCATION (call),
+		    oa_inform (EXPR_LOCATION (call),
 			    "%qE is established %s, but the precondition "
 			    "requires it to be %s the result of %qD", sub_param, established_buf,
 			    op_symbol_code (rel_code2), rhs_callee);
-		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  case OA_UNKNOWN:
 		    if (strict)
-		      error_at (EXPR_LOCATION (call),
+		      oa_error_at (EXPR_LOCATION (call),
 				"cannot prove that %qE satisfies the "
 				"precondition of %qD",
 				sub_param ? sub_param : rel_param2, callee);
 		    else
-		      warning_at (EXPR_LOCATION (call), 0,
+		      oa_warning_at (EXPR_LOCATION (call), 0,
 				  "cannot verify that %qE satisfies the "
 				  "precondition of %qD",
 				  sub_param ? sub_param : rel_param2, callee);
 		    if (const char *why = oa_unprovable_reason_text (reason))
-		      inform (EXPR_LOCATION (call), "%s", _(why));
-		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      oa_inform (EXPR_LOCATION (call), "%s", _(why));
+		    oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  }
 		continue;
@@ -16810,38 +16870,38 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		  case OA_PROVEN_TRUE:
 		    break; /* Silently discharged.  */
 		  case OA_PROVEN_FALSE:
-		    error_at (EXPR_LOCATION (call),
+		    oa_error_at (EXPR_LOCATION (call),
 			      "argument %qE provably violates the precondition "
 			      "of %qD", sub_param, callee);
 		    if (offset == 0)
-		      inform (EXPR_LOCATION (call),
+		      oa_inform (EXPR_LOCATION (call),
 			      "%qE is established %s, but the precondition "
 			      "requires it to be %s the result of %qD", sub_param,
 			      established_buf, op_symbol_code (rel_code2), rhs_callee);
 		    else
-		      inform (EXPR_LOCATION (call),
+		      oa_inform (EXPR_LOCATION (call),
 			      "%qE is established %s, but the precondition "
 			      "requires it to be %s the result of %qD, plus %wd", sub_param,
 			      established_buf, op_symbol_code (rel_code2), rhs_callee,
 			      offset.to_shwi ());
-		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  case OA_UNKNOWN:
 		    if (strict)
-		      error_at (EXPR_LOCATION (call),
+		      oa_error_at (EXPR_LOCATION (call),
 				"cannot prove that %qE satisfies the "
 				"precondition of %qD",
 				sub_param ? sub_param : rel_param2, callee);
 		    else
-		      warning_at (EXPR_LOCATION (call), 0,
+		      oa_warning_at (EXPR_LOCATION (call), 0,
 				  "cannot verify that %qE satisfies the "
 				  "precondition of %qD",
 				  sub_param ? sub_param : rel_param2, callee);
 		    if (const char *why
 			  = oa_unprovable_reason_text
 			      (reason != OA_UNPROVABLE_NONE ? reason : match_reason))
-		      inform (EXPR_LOCATION (call), "%s", _(why));
-		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      oa_inform (EXPR_LOCATION (call), "%s", _(why));
+		    oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  }
 		continue;
@@ -16876,32 +16936,32 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		  case OA_PROVEN_TRUE:
 		    break; /* Silently discharged.  */
 		  case OA_PROVEN_FALSE:
-		    error_at (EXPR_LOCATION (call),
+		    oa_error_at (EXPR_LOCATION (call),
 			      "argument %qE provably violates the precondition "
 			      "of %qD", sub_lhs_receiver, callee);
-		    inform (EXPR_LOCATION (call),
+		    oa_inform (EXPR_LOCATION (call),
 			    "%qD called on %qE is established %s, but the "
 			    "precondition requires it to be %s %qD called on %qE",
 			    lhs_callee, sub_lhs_receiver, established_buf,
 			    op_symbol_code (call_code), rhs_callee, sub_rhs_receiver);
-		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  case OA_UNKNOWN:
 		    if (strict)
-		      error_at (EXPR_LOCATION (call),
+		      oa_error_at (EXPR_LOCATION (call),
 				"cannot prove that %qD called on %qE satisfies "
 				"the precondition of %qD", lhs_callee,
 				sub_lhs_receiver ? sub_lhs_receiver : lhs_receiver,
 				callee);
 		    else
-		      warning_at (EXPR_LOCATION (call), 0,
+		      oa_warning_at (EXPR_LOCATION (call), 0,
 				  "cannot verify that %qD called on %qE satisfies "
 				  "the precondition of %qD", lhs_callee,
 				  sub_lhs_receiver ? sub_lhs_receiver : lhs_receiver,
 				  callee);
 		    if (const char *why = oa_unprovable_reason_text (reason))
-		      inform (EXPR_LOCATION (call), "%s", _(why));
-		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      oa_inform (EXPR_LOCATION (call), "%s", _(why));
+		    oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  }
 		continue;
@@ -16941,10 +17001,10 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		{
 		  if (!integer_zerop (stripped))
 		    continue; /* Proven true: silently discharged.  */
-		  error_at (EXPR_LOCATION (call),
+		  oa_error_at (EXPR_LOCATION (call),
 			    "argument %qE provably violates the precondition "
 			    "of %qD", substituted, callee);
-		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		  continue;
 		}
 	      if (oa_provably_nonzero_p (substituted, env))
@@ -16952,14 +17012,14 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	      if (reported_nz_parms.add (nz_arg))
 		continue; /* Already reported for this call.  */
 	      if (strict)
-		error_at (EXPR_LOCATION (call),
+		oa_error_at (EXPR_LOCATION (call),
 			  "cannot prove that %qE is nonzero, as required by "
 			  "the precondition of %qD", substituted, callee);
 	      else
-		warning_at (EXPR_LOCATION (call), 0,
+		oa_warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify that %qE is nonzero, as required by "
 			    "the precondition of %qD", substituted, callee);
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
 
@@ -17018,13 +17078,13 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 						/*proven_false=*/false);
 	      break;
 	    case OA_PROVEN_FALSE:
-	      error_at (EXPR_LOCATION (call),
+	      oa_error_at (EXPR_LOCATION (call),
 			"argument %qE provably violates the precondition of "
 			"%qD: %qD (%qE) is established %s, but the "
 			"precondition requires it to be %s",
 			substituted, callee, pred_fn, substituted,
 			negated ? "true" : "false", negated ? "false" : "true");
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      /* Opposite polarity -- established_value is therefore
 		 NEGATED (not !negated) here.  */
 	      if (flag_dump_contract_proofs)
@@ -17035,16 +17095,16 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	      break;
 	    case OA_UNKNOWN:
 	      if (strict)
-		error_at (EXPR_LOCATION (call),
+		oa_error_at (EXPR_LOCATION (call),
 			  "cannot prove that %qD (%qE) holds, as required by "
 			  "the precondition of %qD", pred_fn, substituted, callee);
 	      else
-		warning_at (EXPR_LOCATION (call), 0,
+		oa_warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify that %qD (%qE) holds, as required by "
 			    "the precondition of %qD", pred_fn, substituted, callee);
 	      if (const char *why = oa_unprovable_reason_text (reason))
-		inform (EXPR_LOCATION (call), "%s", _(why));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
 	}
@@ -18099,30 +18159,30 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	  if (!found || fact.pred_fn != pred_fn)
 	    {
 	      if (strict)
-		error_at (EXPR_LOCATION (call),
+		oa_error_at (EXPR_LOCATION (call),
 			  "cannot prove that %qD (%qE) holds, as required by "
 			  "the precondition of %qD", pred_fn, substituted, callee);
 	      else
-		warning_at (EXPR_LOCATION (call), 0,
+		oa_warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify that %qD (%qE) holds, as required by "
 			    "the precondition of %qD", pred_fn, substituted, callee);
 	      if (const char *why = oa_unprovable_reason_text
 		    (!found ? OA_UNPROVABLE_NO_FACT : OA_UNPROVABLE_WRONG_IDENTITY))
-		inform (EXPR_LOCATION (call), "%s", _(why));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
 
 	  if (fact.polarity == required)
 	    continue; /* Proven true: silently discharged.  */
 
-	  error_at (EXPR_LOCATION (call),
+	  oa_error_at (EXPR_LOCATION (call),
 		    "argument %qE provably violates the precondition of "
 		    "%qD: %qD (%qE) is established %s, but the "
 		    "precondition requires it to be %s",
 		    substituted, callee, pred_fn, substituted,
 		    fact.polarity ? "true" : "false", required ? "true" : "false");
-	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	}
 
       /* A relational conjunct against another of the callee's own
@@ -18153,27 +18213,27 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	    case OA_PROVEN_TRUE:
 	      break; /* Silently discharged.  */
 	    case OA_PROVEN_FALSE:
-	      error_at (EXPR_LOCATION (call),
+	      oa_error_at (EXPR_LOCATION (call),
 			"argument %qE provably violates the precondition "
 			"of %qD", sub_param, callee);
-	      inform (EXPR_LOCATION (call),
+	      oa_inform (EXPR_LOCATION (call),
 		      "%qE is established %s, but the precondition "
 		      "requires it to be %s %qE", sub_param, established_buf,
 		      op_symbol_code (rel_code), sub_other);
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    case OA_UNKNOWN:
 	      if (strict)
-		error_at (EXPR_LOCATION (call),
+		oa_error_at (EXPR_LOCATION (call),
 			  "cannot prove that %qE satisfies the "
 			  "precondition of %qD",
 			  sub_param ? sub_param : rel_param, callee);
 	      else
-		warning_at (EXPR_LOCATION (call), 0,
+		oa_warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify that %qE satisfies the "
 			    "precondition of %qD",
 			    sub_param ? sub_param : rel_param, callee);
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
 	}
@@ -18206,29 +18266,29 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	    case OA_PROVEN_TRUE:
 	      break; /* Silently discharged.  */
 	    case OA_PROVEN_FALSE:
-	      error_at (EXPR_LOCATION (call),
+	      oa_error_at (EXPR_LOCATION (call),
 			"argument %qE provably violates the precondition "
 			"of %qD", sub_param, callee);
-	      inform (EXPR_LOCATION (call),
+	      oa_inform (EXPR_LOCATION (call),
 		      "%qE is established %s, but the precondition "
 		      "requires it to be %s the result of %qD", sub_param, established_buf,
 		      op_symbol_code (rel_code), rhs_callee);
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    case OA_UNKNOWN:
 	      if (strict)
-		error_at (EXPR_LOCATION (call),
+		oa_error_at (EXPR_LOCATION (call),
 			  "cannot prove that %qE satisfies the "
 			  "precondition of %qD",
 			  sub_param ? sub_param : rel_param, callee);
 	      else
-		warning_at (EXPR_LOCATION (call), 0,
+		oa_warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify that %qE satisfies the "
 			    "precondition of %qD",
 			    sub_param ? sub_param : rel_param, callee);
 	      if (const char *why = oa_unprovable_reason_text (reason))
-		inform (EXPR_LOCATION (call), "%s", _(why));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
 	}
@@ -18263,36 +18323,36 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	    case OA_PROVEN_TRUE:
 	      break; /* Silently discharged.  */
 	    case OA_PROVEN_FALSE:
-	      error_at (EXPR_LOCATION (call),
+	      oa_error_at (EXPR_LOCATION (call),
 			"argument %qE provably violates the precondition "
 			"of %qD", sub_param, callee);
 	      if (offset == 0)
-		inform (EXPR_LOCATION (call),
+		oa_inform (EXPR_LOCATION (call),
 			"%qE is established %s, but the precondition "
 			"requires it to be %s the result of %qD", sub_param, established_buf,
 			op_symbol_code (rel_code), rhs_callee);
 	      else
-		inform (EXPR_LOCATION (call),
+		oa_inform (EXPR_LOCATION (call),
 			"%qE is established %s, but the precondition "
 			"requires it to be %s the result of %qD, plus %wd", sub_param,
 			established_buf, op_symbol_code (rel_code), rhs_callee,
 			offset.to_shwi ());
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    case OA_UNKNOWN:
 	      if (strict)
-		error_at (EXPR_LOCATION (call),
+		oa_error_at (EXPR_LOCATION (call),
 			  "cannot prove that %qE satisfies the "
 			  "precondition of %qD",
 			  sub_param ? sub_param : rel_param, callee);
 	      else
-		warning_at (EXPR_LOCATION (call), 0,
+		oa_warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify that %qE satisfies the "
 			    "precondition of %qD",
 			    sub_param ? sub_param : rel_param, callee);
 	      if (const char *why = oa_unprovable_reason_text (reason))
-		inform (EXPR_LOCATION (call), "%s", _(why));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
 	}
@@ -18329,32 +18389,32 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	    case OA_PROVEN_TRUE:
 	      break; /* Silently discharged.  */
 	    case OA_PROVEN_FALSE:
-	      error_at (EXPR_LOCATION (call),
+	      oa_error_at (EXPR_LOCATION (call),
 			"argument %qE provably violates the precondition "
 			"of %qD", sub_lhs_receiver, callee);
-	      inform (EXPR_LOCATION (call),
+	      oa_inform (EXPR_LOCATION (call),
 		      "%qD called on %qE is established %s, but the "
 		      "precondition requires it to be %s %qD called on %qE",
 		      lhs_callee, sub_lhs_receiver, established_buf,
 		      op_symbol_code (call_code), rhs_callee, sub_rhs_receiver);
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    case OA_UNKNOWN:
 	      if (strict)
-		error_at (EXPR_LOCATION (call),
+		oa_error_at (EXPR_LOCATION (call),
 			  "cannot prove that %qD called on %qE satisfies "
 			  "the precondition of %qD", lhs_callee,
 			  sub_lhs_receiver ? sub_lhs_receiver : lhs_receiver,
 			  callee);
 	      else
-		warning_at (EXPR_LOCATION (call), 0,
+		oa_warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify that %qD called on %qE satisfies "
 			    "the precondition of %qD", lhs_callee,
 			    sub_lhs_receiver ? sub_lhs_receiver : lhs_receiver,
 			    callee);
 	      if (const char *why = oa_unprovable_reason_text (reason))
-		inform (EXPR_LOCATION (call), "%s", _(why));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
 	}
@@ -18395,18 +18455,18 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		  && env.symbolic_object_address_provable_p (identity))
 		continue; /* Proven true: silently discharged.  */
 	      if (strict)
-		error_at (EXPR_LOCATION (call),
+		oa_error_at (EXPR_LOCATION (call),
 			  "cannot prove %<is_object_address%> for %qE, as "
 			  "required by the precondition of %qD",
 			  substituted, callee);
 	      else
-		warning_at (EXPR_LOCATION (call), 0,
+		oa_warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify %<is_object_address%> for %qE, as "
 			    "required by the precondition of %qD",
 			    substituted, callee);
 	      if (const char *why = oa_unprovable_reason_text (reason))
-		inform (EXPR_LOCATION (call), "%s", _(why));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
 	    {
@@ -18444,14 +18504,14 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	      if (reported_nz_parms.add (arg))
 		continue; /* Already reported for this call.  */
 	      if (strict)
-		error_at (EXPR_LOCATION (call),
+		oa_error_at (EXPR_LOCATION (call),
 			  "cannot prove that %qE is nonzero, as required by "
 			  "the precondition of %qD", substituted, callee);
 	      else
-		warning_at (EXPR_LOCATION (call), 0,
+		oa_warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify that %qE is nonzero, as required by "
 			    "the precondition of %qD", substituted, callee);
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	}
 
@@ -18484,18 +18544,18 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 						      &established))
 		    {
 		      if (strict)
-			error_at (EXPR_LOCATION (call),
+			oa_error_at (EXPR_LOCATION (call),
 				  "cannot prove that field %qD of %qE satisfies "
 				  "the precondition of %qD", field_groups[i].field,
 				  substituted, callee);
 		      else
-			warning_at (EXPR_LOCATION (call), 0,
+			oa_warning_at (EXPR_LOCATION (call), 0,
 				    "cannot verify that field %qD of %qE satisfies "
 				    "the precondition of %qD", field_groups[i].field,
 				    substituted, callee);
-		      inform (EXPR_LOCATION (call), "%s",
+		      oa_inform (EXPR_LOCATION (call), "%s",
 			      _(oa_unprovable_reason_text (OA_UNPROVABLE_NO_FACT)));
-		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		      continue;
 		    }
 		  /* Symbolic's own consult: any established fact satisfies
@@ -18508,39 +18568,39 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		    continue; /* Proven true: silently discharged.  */
 		  if (r == OA_RANGE_DISJOINT)
 		    {
-		      error_at (EXPR_LOCATION (call),
+		      oa_error_at (EXPR_LOCATION (call),
 				"argument %qE provably violates the precondition "
 				"of %qD: %qD is established outside the required "
 				"range", substituted, callee, field_groups[i].field);
 		      char est_buf[128], req_buf[128];
-		      inform (EXPR_LOCATION (call),
+		      oa_inform (EXPR_LOCATION (call),
 			      "%qD is established %s, but the precondition "
 			      "requires it to be %s", field_groups[i].field,
 			      oa_range_fact_text (established.range, est_buf,
 						   sizeof (est_buf)),
 			      oa_range_fact_text (field_groups[i].range, req_buf,
 						   sizeof (req_buf)));
-		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		  else if (strict)
 		    {
-		      error_at (EXPR_LOCATION (call),
+		      oa_error_at (EXPR_LOCATION (call),
 				"cannot prove that field %qD of %qE satisfies "
 				"the precondition of %qD", field_groups[i].field,
 				substituted, callee);
-		      inform (EXPR_LOCATION (call), "%s",
+		      oa_inform (EXPR_LOCATION (call), "%s",
 			      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		  else
 		    {
-		      warning_at (EXPR_LOCATION (call), 0,
+		      oa_warning_at (EXPR_LOCATION (call), 0,
 				  "cannot verify that field %qD of %qE satisfies "
 				  "the precondition of %qD", field_groups[i].field,
 				  substituted, callee);
-		      inform (EXPR_LOCATION (call), "%s",
+		      oa_inform (EXPR_LOCATION (call), "%s",
 			      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		}
 
@@ -18583,18 +18643,18 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 			(identity, float_field_groups[i].field, &established))
 		    {
 		      if (strict)
-			error_at (EXPR_LOCATION (call),
+			oa_error_at (EXPR_LOCATION (call),
 				  "cannot prove that field %qD of %qE satisfies "
 				  "the precondition of %qD",
 				  float_field_groups[i].field, substituted, callee);
 		      else
-			warning_at (EXPR_LOCATION (call), 0,
+			oa_warning_at (EXPR_LOCATION (call), 0,
 				    "cannot verify that field %qD of %qE satisfies "
 				    "the precondition of %qD",
 				    float_field_groups[i].field, substituted, callee);
-		      inform (EXPR_LOCATION (call), "%s",
+		      oa_inform (EXPR_LOCATION (call), "%s",
 			      _(oa_unprovable_reason_text (OA_UNPROVABLE_NO_FACT)));
-		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		      continue;
 		    }
 		  /* Symbolic's own consult: any established fact satisfies
@@ -18607,40 +18667,40 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		    continue; /* Proven true: silently discharged.  */
 		  if (r == OA_RANGE_DISJOINT)
 		    {
-		      error_at (EXPR_LOCATION (call),
+		      oa_error_at (EXPR_LOCATION (call),
 				"argument %qE provably violates the precondition "
 				"of %qD: %qD is established outside the required "
 				"range", substituted, callee,
 				float_field_groups[i].field);
 		      char est_buf[128], req_buf[128];
-		      inform (EXPR_LOCATION (call),
+		      oa_inform (EXPR_LOCATION (call),
 			      "%qD is established %s, but the precondition "
 			      "requires it to be %s", float_field_groups[i].field,
 			      oa_float_range_fact_text (established.range, est_buf,
 							 sizeof (est_buf)),
 			      oa_float_range_fact_text (float_field_groups[i].range,
 							 req_buf, sizeof (req_buf)));
-		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		  else if (strict)
 		    {
-		      error_at (EXPR_LOCATION (call),
+		      oa_error_at (EXPR_LOCATION (call),
 				"cannot prove that field %qD of %qE satisfies "
 				"the precondition of %qD",
 				float_field_groups[i].field, substituted, callee);
-		      inform (EXPR_LOCATION (call), "%s",
+		      oa_inform (EXPR_LOCATION (call), "%s",
 			      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		  else
 		    {
-		      warning_at (EXPR_LOCATION (call), 0,
+		      oa_warning_at (EXPR_LOCATION (call), 0,
 				  "cannot verify that field %qD of %qE satisfies "
 				  "the precondition of %qD",
 				  float_field_groups[i].field, substituted, callee);
-		      inform (EXPR_LOCATION (call), "%s",
+		      oa_inform (EXPR_LOCATION (call), "%s",
 			      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		}
 
@@ -18676,18 +18736,18 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 						     &established))
 		    {
 		      if (strict)
-			error_at (EXPR_LOCATION (call),
+			oa_error_at (EXPR_LOCATION (call),
 				  "cannot prove that %qD called on %qE satisfies "
 				  "the precondition of %qD", call_groups[i].callee,
 				  substituted, callee);
 		      else
-			warning_at (EXPR_LOCATION (call), 0,
+			oa_warning_at (EXPR_LOCATION (call), 0,
 				    "cannot verify that %qD called on %qE satisfies "
 				    "the precondition of %qD", call_groups[i].callee,
 				    substituted, callee);
-		      inform (EXPR_LOCATION (call), "%s",
+		      oa_inform (EXPR_LOCATION (call), "%s",
 			      _(oa_unprovable_reason_text (OA_UNPROVABLE_NO_FACT)));
-		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		      continue;
 		    }
 
@@ -18697,39 +18757,39 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		    continue; /* Proven true: silently discharged.  */
 		  if (r == OA_RANGE_DISJOINT)
 		    {
-		      error_at (EXPR_LOCATION (call),
+		      oa_error_at (EXPR_LOCATION (call),
 				"argument %qE provably violates the precondition "
 				"of %qD: %qD is established outside the required "
 				"range", substituted, callee, call_groups[i].callee);
 		      char est_buf[128], req_buf[128];
-		      inform (EXPR_LOCATION (call),
+		      oa_inform (EXPR_LOCATION (call),
 			      "%qD is established %s, but the precondition "
 			      "requires it to be %s", call_groups[i].callee,
 			      oa_range_fact_text (established.range, est_buf,
 						   sizeof (est_buf)),
 			      oa_range_fact_text (call_groups[i].range, req_buf,
 						   sizeof (req_buf)));
-		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		  else if (strict)
 		    {
-		      error_at (EXPR_LOCATION (call),
+		      oa_error_at (EXPR_LOCATION (call),
 				"cannot prove that %qD called on %qE satisfies "
 				"the precondition of %qD", call_groups[i].callee,
 				substituted, callee);
-		      inform (EXPR_LOCATION (call), "%s",
+		      oa_inform (EXPR_LOCATION (call), "%s",
 			      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		  else
 		    {
-		      warning_at (EXPR_LOCATION (call), 0,
+		      oa_warning_at (EXPR_LOCATION (call), 0,
 				  "cannot verify that %qD called on %qE satisfies "
 				  "the precondition of %qD", call_groups[i].callee,
 				  substituted, callee);
-		      inform (EXPR_LOCATION (call), "%s",
+		      oa_inform (EXPR_LOCATION (call), "%s",
 			      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-		      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    }
 		}
     }
@@ -18809,20 +18869,20 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	  if (!field_found || !established.conveyor_established)
 	    {
 	      if (strict)
-		error_at (EXPR_LOCATION (call),
+		oa_error_at (EXPR_LOCATION (call),
 			  "cannot prove that field %qD of %qE satisfies "
 			  "the precondition of %qD", field_groups[i].field,
 			  substituted, callee);
 	      else
-		warning_at (EXPR_LOCATION (call), 0,
+		oa_warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify that field %qD of %qE satisfies "
 			    "the precondition of %qD", field_groups[i].field,
 			    substituted, callee);
 	      if (const char *why = oa_unprovable_reason_text
 		    (field_found ? OA_UNPROVABLE_WEAKER_PROVENANCE
 				 : OA_UNPROVABLE_NO_FACT))
-		inform (EXPR_LOCATION (call), "%s", _(why));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
 
@@ -18832,39 +18892,39 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	    continue; /* Proven true: silently discharged.  */
 	  if (r == OA_RANGE_DISJOINT)
 	    {
-	      error_at (EXPR_LOCATION (call),
+	      oa_error_at (EXPR_LOCATION (call),
 			"argument %qE provably violates the precondition "
 			"of %qD: %qD is established outside the required "
 			"range", substituted, callee, field_groups[i].field);
 	      char est_buf[128], req_buf[128];
-	      inform (EXPR_LOCATION (call),
+	      oa_inform (EXPR_LOCATION (call),
 		      "%qD is established %s, but the precondition "
 		      "requires it to be %s", field_groups[i].field,
 		      oa_range_fact_text (established.range, est_buf,
 					   sizeof (est_buf)),
 		      oa_range_fact_text (field_groups[i].range, req_buf,
 					   sizeof (req_buf)));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else if (strict)
 	    {
-	      error_at (EXPR_LOCATION (call),
+	      oa_error_at (EXPR_LOCATION (call),
 			"cannot prove that field %qD of %qE satisfies "
 			"the precondition of %qD", field_groups[i].field,
 			substituted, callee);
-	      inform (EXPR_LOCATION (call), "%s",
+	      oa_inform (EXPR_LOCATION (call), "%s",
 		      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else
 	    {
-	      warning_at (EXPR_LOCATION (call), 0,
+	      oa_warning_at (EXPR_LOCATION (call), 0,
 			  "cannot verify that field %qD of %qE satisfies "
 			  "the precondition of %qD", field_groups[i].field,
 			  substituted, callee);
-	      inform (EXPR_LOCATION (call), "%s",
+	      oa_inform (EXPR_LOCATION (call), "%s",
 		      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	}
 
@@ -18902,20 +18962,20 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	  if (!float_field_found || !established.conveyor_established)
 	    {
 	      if (strict)
-		error_at (EXPR_LOCATION (call),
+		oa_error_at (EXPR_LOCATION (call),
 			  "cannot prove that field %qD of %qE satisfies "
 			  "the precondition of %qD",
 			  float_field_groups[i].field, substituted, callee);
 	      else
-		warning_at (EXPR_LOCATION (call), 0,
+		oa_warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify that field %qD of %qE satisfies "
 			    "the precondition of %qD",
 			    float_field_groups[i].field, substituted, callee);
 	      if (const char *why = oa_unprovable_reason_text
 		    (float_field_found ? OA_UNPROVABLE_WEAKER_PROVENANCE
 				       : OA_UNPROVABLE_NO_FACT))
-		inform (EXPR_LOCATION (call), "%s", _(why));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
 
@@ -18925,40 +18985,40 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
 	    continue; /* Proven true: silently discharged.  */
 	  if (r == OA_RANGE_DISJOINT)
 	    {
-	      error_at (EXPR_LOCATION (call),
+	      oa_error_at (EXPR_LOCATION (call),
 			"argument %qE provably violates the precondition "
 			"of %qD: %qD is established outside the required "
 			"range", substituted, callee,
 			float_field_groups[i].field);
 	      char est_buf[128], req_buf[128];
-	      inform (EXPR_LOCATION (call),
+	      oa_inform (EXPR_LOCATION (call),
 		      "%qD is established %s, but the precondition "
 		      "requires it to be %s", float_field_groups[i].field,
 		      oa_float_range_fact_text (established.range, est_buf,
 						 sizeof (est_buf)),
 		      oa_float_range_fact_text (float_field_groups[i].range,
 						 req_buf, sizeof (req_buf)));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else if (strict)
 	    {
-	      error_at (EXPR_LOCATION (call),
+	      oa_error_at (EXPR_LOCATION (call),
 			"cannot prove that field %qD of %qE satisfies "
 			"the precondition of %qD",
 			float_field_groups[i].field, substituted, callee);
-	      inform (EXPR_LOCATION (call), "%s",
+	      oa_inform (EXPR_LOCATION (call), "%s",
 		      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else
 	    {
-	      warning_at (EXPR_LOCATION (call), 0,
+	      oa_warning_at (EXPR_LOCATION (call), 0,
 			  "cannot verify that field %qD of %qE satisfies "
 			  "the precondition of %qD",
 			  float_field_groups[i].field, substituted, callee);
-	      inform (EXPR_LOCATION (call), "%s",
+	      oa_inform (EXPR_LOCATION (call), "%s",
 		      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	}
     }
@@ -19032,20 +19092,20 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
 	  if (!call_found || !established.conveyor_established)
 	    {
 	      if (strict)
-		error_at (EXPR_LOCATION (call),
+		oa_error_at (EXPR_LOCATION (call),
 			  "cannot prove that %qD called on %qE satisfies "
 			  "the precondition of %qD", call_groups[i].callee,
 			  substituted, callee);
 	      else
-		warning_at (EXPR_LOCATION (call), 0,
+		oa_warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify that %qD called on %qE satisfies "
 			    "the precondition of %qD", call_groups[i].callee,
 			    substituted, callee);
 	      if (const char *why = oa_unprovable_reason_text
 		    (call_found ? OA_UNPROVABLE_WEAKER_PROVENANCE
 				: OA_UNPROVABLE_NO_FACT))
-		inform (EXPR_LOCATION (call), "%s", _(why));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
 
@@ -19055,39 +19115,39 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
 	    continue; /* Proven true: silently discharged.  */
 	  if (r == OA_RANGE_DISJOINT)
 	    {
-	      error_at (EXPR_LOCATION (call),
+	      oa_error_at (EXPR_LOCATION (call),
 			"argument %qE provably violates the precondition "
 			"of %qD: %qD is established outside the required "
 			"range", substituted, callee, call_groups[i].callee);
 	      char est_buf[128], req_buf[128];
-	      inform (EXPR_LOCATION (call),
+	      oa_inform (EXPR_LOCATION (call),
 		      "%qD is established %s, but the precondition "
 		      "requires it to be %s", call_groups[i].callee,
 		      oa_range_fact_text (established.range, est_buf,
 					   sizeof (est_buf)),
 		      oa_range_fact_text (call_groups[i].range, req_buf,
 					   sizeof (req_buf)));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else if (strict)
 	    {
-	      error_at (EXPR_LOCATION (call),
+	      oa_error_at (EXPR_LOCATION (call),
 			"cannot prove that %qD called on %qE satisfies "
 			"the precondition of %qD", call_groups[i].callee,
 			substituted, callee);
-	      inform (EXPR_LOCATION (call), "%s",
+	      oa_inform (EXPR_LOCATION (call), "%s",
 		      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	  else
 	    {
-	      warning_at (EXPR_LOCATION (call), 0,
+	      oa_warning_at (EXPR_LOCATION (call), 0,
 			  "cannot verify that %qD called on %qE satisfies "
 			  "the precondition of %qD", call_groups[i].callee,
 			  substituted, callee);
-	      inform (EXPR_LOCATION (call), "%s",
+	      oa_inform (EXPR_LOCATION (call), "%s",
 		      _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	    }
 	}
     }
@@ -20079,16 +20139,16 @@ oa_handle_call_symbolic_scalar_precondition_obligation (tree call, oa_env &env)
 	  if (!env.range_get (arg_decl, &fallback) || fallback.base != NULL_TREE)
 	    {
 	      if (strict)
-		error_at (EXPR_LOCATION (call),
+		oa_error_at (EXPR_LOCATION (call),
 			  "cannot prove that %qE satisfies the precondition "
 			  "of %qD", substituted, callee);
 	      else
-		warning_at (EXPR_LOCATION (call), 0,
+		oa_warning_at (EXPR_LOCATION (call), 0,
 			    "cannot verify that %qE satisfies the precondition "
 			    "of %qD", substituted, callee);
-	      inform (EXPR_LOCATION (call), "%s",
+	      oa_inform (EXPR_LOCATION (call), "%s",
 		      _(oa_unprovable_reason_text (OA_UNPROVABLE_NO_FACT)));
-	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
 	    }
 	  established = fallback;
@@ -20099,28 +20159,28 @@ oa_handle_call_symbolic_scalar_precondition_obligation (tree call, oa_env &env)
 	continue; /* Proven true: silently discharged.  */
       if (r == OA_RANGE_DISJOINT)
 	{
-	  error_at (EXPR_LOCATION (call),
+	  oa_error_at (EXPR_LOCATION (call),
 		    "argument %qE provably violates the precondition of %qD",
 		    substituted, callee);
-	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	}
       else if (strict)
 	{
-	  error_at (EXPR_LOCATION (call),
+	  oa_error_at (EXPR_LOCATION (call),
 		    "cannot prove that %qE satisfies the precondition "
 		    "of %qD", substituted, callee);
-	  inform (EXPR_LOCATION (call), "%s",
+	  oa_inform (EXPR_LOCATION (call), "%s",
 		  _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	}
       else
 	{
-	  warning_at (EXPR_LOCATION (call), 0,
+	  oa_warning_at (EXPR_LOCATION (call), 0,
 		      "cannot verify that %qE satisfies the precondition "
 		      "of %qD", substituted, callee);
-	  inform (EXPR_LOCATION (call), "%s",
+	  oa_inform (EXPR_LOCATION (call), "%s",
 		  _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	}
     }
 }
@@ -22956,27 +23016,27 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 	      case OA_PROVEN_TRUE:
 		break;
 	      case OA_PROVEN_FALSE:
-		error_at (EXPR_LOCATION (*conjuncts[i]),
+		oa_error_at (EXPR_LOCATION (*conjuncts[i]),
 			  "%<contract_assert%> condition %qE is provably false",
 			  *conjuncts[i]);
-		inform (EXPR_LOCATION (*conjuncts[i]), "established %s",
+		oa_inform (EXPR_LOCATION (*conjuncts[i]), "established %s",
 			established_buf);
 		any_conjunct_proven_false = true;
 		break;
 	      case OA_UNKNOWN:
 		if (conveyor_strict)
 		  {
-		    error_at (EXPR_LOCATION (*conjuncts[i]),
+		    oa_error_at (EXPR_LOCATION (*conjuncts[i]),
 			      "cannot prove %<contract_assert%> condition %qE",
 			      *conjuncts[i]);
 		    any_conjunct_proven_false = true;
 		  }
 		else
-		  warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
+		  oa_warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
 			      "cannot verify %<contract_assert%> condition %qE",
 			      *conjuncts[i]);
 		if (const char *why = oa_unprovable_reason_text (reason))
-		  inform (EXPR_LOCATION (*conjuncts[i]), "%s", _(why));
+		  oa_inform (EXPR_LOCATION (*conjuncts[i]), "%s", _(why));
 		break;
 	      }
 	  }
@@ -22997,27 +23057,27 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 	      case OA_PROVEN_TRUE:
 		break;
 	      case OA_PROVEN_FALSE:
-		error_at (EXPR_LOCATION (*conjuncts[i]),
+		oa_error_at (EXPR_LOCATION (*conjuncts[i]),
 			  "%<contract_assert%> condition %qE is provably false",
 			  *conjuncts[i]);
-		inform (EXPR_LOCATION (*conjuncts[i]), "established %s",
+		oa_inform (EXPR_LOCATION (*conjuncts[i]), "established %s",
 			established_buf);
 		any_conjunct_proven_false = true;
 		break;
 	      case OA_UNKNOWN:
 		if (symbolic_strict)
 		  {
-		    error_at (EXPR_LOCATION (*conjuncts[i]),
+		    oa_error_at (EXPR_LOCATION (*conjuncts[i]),
 			      "cannot prove %<contract_assert%> condition %qE",
 			      *conjuncts[i]);
 		    any_conjunct_proven_false = true;
 		  }
 		else
-		  warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
+		  oa_warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
 			      "cannot verify %<contract_assert%> condition %qE",
 			      *conjuncts[i]);
 		if (const char *why = oa_unprovable_reason_text (reason))
-		  inform (EXPR_LOCATION (*conjuncts[i]), "%s", _(why));
+		  oa_inform (EXPR_LOCATION (*conjuncts[i]), "%s", _(why));
 		break;
 	      }
 	  }
@@ -25140,13 +25200,13 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 		  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 		  if (!oa_provable_p (slot, env, &reason))
 		    {
-		      error_at (EXPR_LOCATION (t),
+		      oa_error_at (EXPR_LOCATION (t),
 				"cannot prove %<is_object_address%> for %qE, "
 				"required by the precondition of %qD",
 				slot, ctor_callee);
 		      if (const char *why = oa_unprovable_reason_text (reason))
-			inform (EXPR_LOCATION (t), "%s", _(why));
-		      inform (DECL_SOURCE_LOCATION (ctor_callee), "declared here");
+			oa_inform (EXPR_LOCATION (t), "%s", _(why));
+		      oa_inform (DECL_SOURCE_LOCATION (ctor_callee), "declared here");
 		    }
 		}
 	    }
@@ -26310,23 +26370,23 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 		    case OA_PROVEN_TRUE:
 		      break;
 		    case OA_PROVEN_FALSE:
-		      error_at (EXPR_LOCATION (*conjuncts[i]),
+		      oa_error_at (EXPR_LOCATION (*conjuncts[i]),
 				"postcondition condition %qE is provably false",
 				*conjuncts[i]);
-		      inform (EXPR_LOCATION (*conjuncts[i]), "established %s",
+		      oa_inform (EXPR_LOCATION (*conjuncts[i]), "established %s",
 			      established_buf);
 		      break;
 		    case OA_UNKNOWN:
 		      if (conveyor_strict)
-			error_at (EXPR_LOCATION (*conjuncts[i]),
+			oa_error_at (EXPR_LOCATION (*conjuncts[i]),
 				  "cannot prove postcondition condition %qE",
 				  *conjuncts[i]);
 		      else
-			warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
+			oa_warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
 				    "cannot verify postcondition condition %qE",
 				    *conjuncts[i]);
 		      if (const char *why = oa_unprovable_reason_text (reason))
-			inform (EXPR_LOCATION (*conjuncts[i]), "%s", _(why));
+			oa_inform (EXPR_LOCATION (*conjuncts[i]), "%s", _(why));
 		      break;
 		    }
 		}
@@ -26382,23 +26442,23 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 		    case OA_PROVEN_TRUE:
 		      break;
 		    case OA_PROVEN_FALSE:
-		      error_at (EXPR_LOCATION (*conjuncts[i]),
+		      oa_error_at (EXPR_LOCATION (*conjuncts[i]),
 				"postcondition condition %qE is provably false",
 				*conjuncts[i]);
-		      inform (EXPR_LOCATION (*conjuncts[i]), "established %s",
+		      oa_inform (EXPR_LOCATION (*conjuncts[i]), "established %s",
 			      established_buf);
 		      break;
 		    case OA_UNKNOWN:
 		      if (symbolic_strict)
-			error_at (EXPR_LOCATION (*conjuncts[i]),
+			oa_error_at (EXPR_LOCATION (*conjuncts[i]),
 				  "cannot prove postcondition condition %qE",
 				  *conjuncts[i]);
 		      else
-			warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
+			oa_warning_at (EXPR_LOCATION (*conjuncts[i]), 0,
 				    "cannot verify postcondition condition %qE",
 				    *conjuncts[i]);
 		      if (const char *why = oa_unprovable_reason_text (reason))
-			inform (EXPR_LOCATION (*conjuncts[i]), "%s", _(why));
+			oa_inform (EXPR_LOCATION (*conjuncts[i]), "%s", _(why));
 		      break;
 		    }
 		}

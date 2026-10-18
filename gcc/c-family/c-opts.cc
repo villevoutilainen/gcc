@@ -1304,6 +1304,17 @@ c_common_post_options (const char **pfilename)
 			   flag_contract_control_objects, 1);
     }
 
+  /* -fcontract-analysis-engine=gimple or =both runs the GIMPLE engine
+     for both kinds of checking; =gimple also silences the AST engine's
+     analysis diagnostics (contracts.cc, oa_ast_diagnostics_muted_p).  */
+  if (flag_contract_analysis_engine != 0)
+    {
+      SET_OPTION_IF_UNSET (&global_options, &global_options_set,
+			   flag_contract_conveyor_proofs_gimple, 1);
+      SET_OPTION_IF_UNSET (&global_options, &global_options_set,
+			   flag_contract_symbolic_proofs_gimple, 1);
+    }
+
   /* EnabledBy unfortunately can't specify value to use if set and
      LangEnabledBy can't specify multiple options with &&.  For -Wunused
      or -Wunused -Wextra we want these to default to 3 unless user specified

@@ -1950,6 +1950,22 @@ so this isn't guaranteed to be observable for any specific obligation).
 See ~/gimple-contract-analysis.md for the design rationale. Requires
 -fcontract-control-objects to have any effect.
 
+Enum
+Name(contract_analysis_engine) Type(int) UnknownError(unrecognized contract analysis engine %qs)
+
+EnumValue
+Enum(contract_analysis_engine) String(ast) Value(0)
+
+EnumValue
+Enum(contract_analysis_engine) String(gimple) Value(1)
+
+EnumValue
+Enum(contract_analysis_engine) String(both) Value(2)
+
+fcontract-analysis-engine=
+C++ ObjC++ Joined RejectNegative Enum(contract_analysis_engine) Var(flag_contract_analysis_engine) Init(0)
+-fcontract-analysis-engine=[ast|gimple|both]	Select which engine reports conveyor and symbolic contract analysis diagnostics (defaults to ast).  gimple and both turn on -fcontract-conveyor-proofs-gimple and -fcontract-symbolic-proofs-gimple; gimple also silences the AST engine's analysis diagnostics, though the AST walk still runs for the results other parts of the compiler need from it.
+
 fcontract-symbolic-proofs
 C++ ObjC++ Var(flag_contract_symbolic_proofs) Init(0)
 Statically check that a symbolic contract's precondition is established
