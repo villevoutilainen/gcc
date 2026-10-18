@@ -796,6 +796,12 @@ extern bool oa_match_predicate_conjunct
    own, GIMPLE/SSA-native machinery instead.  */
 extern bool is_object_address_call_p (tree call, tree *arg);
 
+/* If FN is a defaulted copy or move constructor or assignment operator
+   whose body needs its source to be an object, set *PARM to that
+   parameter: the analysis treats FN as if it had an is_object_address
+   precondition on it (see contracts.cc).  */
+extern bool oa_defaulted_copy_source_parm_public (tree fn, tree *parm);
+
 /* D4324: is FN a specialization of std::is_object_address itself (as
    opposed to some other call)? Used by call.cc/typeck.cc's callee-must-
    be-conveyor check to exempt it -- see contracts.cc's own comment.  */

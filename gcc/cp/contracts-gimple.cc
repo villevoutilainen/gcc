@@ -1001,6 +1001,54 @@ cg_call_postcondition_guarantees_p (tree callee, bool require_conveyor,
   return false;
 }
 
+static bool cg_provable_object_address_p (tree, hash_map<tree, cg_fact> &,
+					  bool, hash_set<tree> &,
+					  oa_unprovable_reason *);
+
+/* Is ADDR, an ADDR_EXPR, an object's address: of a variable, parameter,
+   return slot or literal, or of a subobject ('&p->field', '&p[i]') of an
+   object a provable pointer P points to?  Like the AST engine's
+   oa_provable_p, which requires the base of '&p->field' to be provable
+   too.  */
+
+static bool
+cg_addr_provable_p (tree addr, hash_map<tree, cg_fact> &established,
+		    bool require_conveyor, hash_set<tree> &in_progress,
+		    oa_unprovable_reason *reason_out)
+{
+  tree base = get_base_address (TREE_OPERAND (addr, 0));
+  if (!base)
+    return false;
+  if (DECL_P (base) || CONSTANT_CLASS_P (base)
+      || TREE_CODE (base) == STRING_CST)
+    return true;
+  if (TREE_CODE (base) == MEM_REF)
+    return cg_provable_object_address_p (TREE_OPERAND (base, 0), established,
+					 require_conveyor, in_progress,
+					 reason_out);
+  return false;
+}
+
+/* If DEF is a call to std::forward, std::move or std::as_const -- a
+   reference cast spelled as a call, which at -O0 isn't folded away --
+   its argument, which it returns.  As contracts.cc's
+   oa_std_forward_call_p.  */
+
+static tree
+cg_std_identity_call_arg (gimple *def)
+{
+  gcall *call = def ? dyn_cast <gcall *> (def) : NULL;
+  if (!call || gimple_call_num_args (call) != 1)
+    return NULL_TREE;
+  tree callee = gimple_call_fndecl (call);
+  if (!callee || !DECL_NAME (callee) || !decl_in_std_namespace_p (callee)
+      || !(id_equal (DECL_NAME (callee), "forward")
+	   || id_equal (DECL_NAME (callee), "move")
+	   || id_equal (DECL_NAME (callee), "as_const")))
+    return NULL_TREE;
+  return gimple_call_arg (call, 0);
+}
+
 /* Is VAL the current function's return slot: its RESULT_DECL, when the
    class it returns is returned by invisible reference (DECL_BY_REFERENCE,
    so the RESULT_DECL is the pointer to the caller's storage), or that
@@ -1036,7 +1084,8 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
     return false;
 
   if (TREE_CODE (val) == ADDR_EXPR)
-    return true;
+    return cg_addr_provable_p (val, established, require_conveyor,
+			       in_progress, reason_out);
 
   /* The return slot of a function returning a class by invisible
      reference: the object being returned, constructed in place (a
@@ -1111,7 +1160,9 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
     {
       enum tree_code code = gimple_assign_rhs_code (def);
       if (code == ADDR_EXPR)
-	result = true;
+	result = cg_addr_provable_p (gimple_assign_rhs1 (def), established,
+				     require_conveyor, in_progress,
+				     reason_out);
       else if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
 	result = cg_provable_object_address_p (gimple_assign_rhs1 (def),
 						established, require_conveyor,
@@ -1157,7 +1208,12 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
 	     -- identified by name (an ordinary extern "C" library function
 	     declared lazily by except.cc's own build_throw, not a GCC
 	     builtin with a dedicated DECL flag the way operator new has).  */
-	  if ((DECL_IS_OPERATOR_NEW_P (callee) && !std_placement_new_fn_p (callee))
+	  if (tree arg = cg_std_identity_call_arg (def))
+	    result = cg_provable_object_address_p (arg, established,
+						    require_conveyor,
+						    in_progress, reason_out);
+	  else if ((DECL_IS_OPERATOR_NEW_P (callee)
+		    && !std_placement_new_fn_p (callee))
 	      || (DECL_NAME (callee)
 		  && id_equal (DECL_NAME (callee), "__cxa_allocate_exception")
 		  && CP_DECL_CONTEXT (callee) == global_namespace
@@ -1763,6 +1819,12 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	  while (TREE_CODE (arg) == NON_LVALUE_EXPR || TREE_CODE (arg) == NOP_EXPR
 		 || TREE_CODE (arg) == CONVERT_EXPR || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
 	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	  /* '&*r': the shape a function template's instantiation gives
+	     '&r' for a reference parameter R, the address R holds.  */
+	  if (TREE_CODE (arg) == ADDR_EXPR
+	      && TREE_CODE (TREE_OPERAND (arg, 0)) == INDIRECT_REF)
+	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (TREE_OPERAND (arg, 0),
+							   0));
 
 	  if (TREE_CODE (arg) != PARM_DECL)
 	    continue;
@@ -1978,6 +2040,13 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	if (key)
 	  established.put (key, { /*conveyor_established=*/true });
       }
+
+  /* A defaulted copy or move member's implicit precondition on its
+     source (contracts.cc, oa_defaulted_copy_source_parm).  */
+  tree src_parm;
+  if (oa_defaulted_copy_source_parm_public (fndecl, &src_parm))
+    if (tree key = cg_self_trust_key (fun, src_parm))
+      established.put (key, { /*conveyor_established=*/true });
 }
 
 /* Item 6 for relational facts: does CALL's own callee have a
@@ -2686,7 +2755,14 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 	}
 
       bool is_const_ref = TYPE_READONLY (TREE_TYPE (TREE_TYPE (parm)));
-      if (!is_const_ref)
+      /* Q2 is the rule of a conveyor caller or a predicate, which no
+	 runtime check covers, as in the AST engine
+	 (oa_handle_call_precondition_obligation): an ordinary caller's
+	 aliasing is ordinary.  */
+      bool q2_applies
+	= (DECL_DECLARED_CONVEYOR_P (fun->decl)
+	   || CONTRACT_HELPER (fun->decl) == ldf_contract_predicate_helper);
+      if (!is_const_ref && q2_applies)
 	{
 	  hash_set<tree> owned_in_progress;
 	  oa_unprovable_reason own_reason = OA_UNPROVABLE_NONE;
@@ -3903,6 +3979,9 @@ cg_proof_checks_p (tree contract, tree callee, bool conveyor)
    symbolic-active one is only checked when -fcontract-symbolic-proofs-
    gimple is on, and accepts either provenance).  */
 
+static bool cg_conveyor_proofs_p ();
+static bool cg_symbolic_proofs_p ();
+
 static void
 cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		hash_map<tree, cg_fact> &established_nz,
@@ -4621,7 +4700,42 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
      silently accepted an explicit destructor call / 'delete' / placement
      new, each on a wholly unproven pointer, before this addition (the
      same repro battery contracts.cc's own fix was verified against).  */
-  if ((flag_contract_conveyor_proofs_gimple || flag_contract_symbolic_proofs_gimple)
+  /* A defaulted copy or move member's implicit is_object_address of its
+     source (contracts.cc, oa_defaulted_copy_source_parm): mandatory, as
+     an explicit conveyor precondition's is_object_address is.  */
+  tree src_parm;
+  unsigned src_argno;
+  if ((flag_contract_analysis_engine != 0
+       || flag_contract_conveyor_proofs_gimple)
+      && oa_defaulted_copy_source_parm_public (callee, &src_parm)
+      && cg_find_param_position (callee, src_parm, &src_argno)
+      && src_argno < gimple_call_num_args (call))
+    {
+      tree substituted = cg_resolve_call_argument (call, src_argno);
+      hash_set<tree> in_progress;
+      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+      if (!cg_provable_object_address_p (substituted, established,
+					  /*require_conveyor=*/true,
+					  in_progress, &reason))
+	{
+	  cg_conveyor_error_at (gimple_location (call),
+				"cannot prove %<is_object_address%> for %qE, "
+				"required by the implicit precondition of %qD",
+				cg_display_argument (substituted, src_parm),
+				callee);
+	  if (const char *why = oa_unprovable_reason_text (reason))
+	    inform (gimple_location (call), "%s", _(why));
+	}
+    }
+
+  /* Under -fcontract-analysis-engine=, gated as the AST engine gates it:
+     on the proofs flags, not on the engine's own (always set).  */
+  bool cdtor_receiver_check
+    = (flag_contract_analysis_engine != 0
+       ? cg_conveyor_proofs_p () || cg_symbolic_proofs_p ()
+       : (flag_contract_conveyor_proofs_gimple
+	  || flag_contract_symbolic_proofs_gimple));
+  if (cdtor_receiver_check
       && gimple_call_num_args (call) >= 1
       && (DECL_CONSTRUCTOR_P (callee) || DECL_DESTRUCTOR_P (callee)))
     {
@@ -4792,6 +4906,11 @@ cg_gimple_object_identity_1 (tree val, hash_set<tree> &in_progress)
 						in_progress);
 	      return resolved ? resolved : val;
 	    }
+	}
+      if (tree arg = cg_std_identity_call_arg (def))
+	{
+	  tree resolved = cg_gimple_object_identity_1 (arg, in_progress);
+	  return resolved ? resolved : val;
 	}
       return val;
     }
@@ -5228,6 +5347,23 @@ cg_object_address_field (tree arg, tree *base)
   while (TREE_CODE (arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arg)
 	 || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
     arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+  /* A lambda's capture ('this', or '&r' for a capture by reference): the
+     closure's field holding the captured pointer or reference, which
+     each use of the capture loads anew.  */
+  if (TREE_CODE (arg) == ADDR_EXPR || REFERENCE_REF_P (arg))
+    {
+      tree inner = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+      if (REFERENCE_REF_P (inner))
+	inner = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (inner, 0));
+      if (is_capture_proxy (inner) && TYPE_REF_P (TREE_TYPE (inner)))
+	arg = inner;
+    }
+  if (is_capture_proxy (arg))
+    {
+      arg = DECL_VALUE_EXPR (arg);
+      if (REFERENCE_REF_P (arg))
+	arg = TREE_OPERAND (arg, 0);
+    }
   if (TREE_CODE (arg) != COMPONENT_REF
       || !POINTER_TYPE_P (TREE_TYPE (arg))
       || TREE_CODE (TREE_OPERAND (arg, 1)) != FIELD_DECL)
@@ -6343,6 +6479,12 @@ cg_contract_check_object_identity (gcall *call, tree struct_var, tree decls,
   if (TYPE_REF_P (type) || POINTER_TYPE_P (type))
     {
       tree val = cg_contract_check_decl_value (call, struct_var, decls, decl);
+      /* A const parameter of this function the check doesn't capture
+	 ('this', or a lambda's closure, reached through a capture's
+	 field): its incoming value.  */
+      if (!val && TREE_CODE (decl) == PARM_DECL && TREE_READONLY (decl)
+	  && DECL_CONTEXT (decl) == current_function_decl)
+	val = ssa_default_def (cfun, decl);
       return val && TREE_CODE (val) == SSA_NAME
 	     ? cg_gimple_object_identity (val) : NULL_TREE;
     }
@@ -6571,6 +6713,22 @@ cg_compute_assert_memory_verdicts (gcall *call, cg_dom_fact_state &state,
 	tree oa_arg;
 	if (is_object_address_call_p (c, &oa_arg))
 	  {
+	    /* A pointer field, or a lambda's capture of a pointer or a
+	       reference: what the walk knows the field holds.  */
+	    tree fbase;
+	    if (tree field = cg_object_address_field (oa_arg, &fbase))
+	      {
+		tree identity = cg_contract_check_object_identity
+				  (call, struct_var, decls, fbase);
+		cg_field_fact *f
+		  = identity ? state.field.get ({identity, field}) : NULL;
+		for (int flavor = 0; flavor < 2; ++flavor)
+		  v->verdict[i][flavor]
+		    = (f && f->object_address
+		       && (flavor == 1 || f->conveyor_established)
+		       ? CG_VERDICT_TRUE : CG_VERDICT_UNKNOWN);
+		continue;
+	      }
 	    oa_arg = STRIP_ANY_LOCATION_WRAPPER (oa_arg);
 	    while (TREE_CODE (oa_arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (oa_arg))
 	      oa_arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (oa_arg, 0));
@@ -9525,6 +9683,25 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
       while (TREE_CODE (a) == NON_LVALUE_EXPR || CONVERT_EXPR_P (a)
 	     || TREE_CODE (a) == VIEW_CONVERT_EXPR)
 	a = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
+      /* A pointer field, or a lambda's capture: what the walk found
+	 the field holds (cg_compute_assert_memory_verdicts).  */
+      tree fbase;
+      if (cg_object_address_field (arg, &fbase))
+	{
+	  cg_assert_memory_verdicts **mv = memory_verdicts.get (call);
+	  int flavor = conveyor_ok ? 0 : 1;
+	  if (mv && i < cg_assert_memory_verdicts::max_conjuncts
+	      && (*mv)->verdict[i][flavor] == CG_VERDICT_TRUE)
+	    continue;
+	  location_t loc = loc_of (*conjuncts[i]);
+	  ok = false;
+	  cg_conveyor_error_at (loc, "cannot prove %<is_object_address%> for "
+				"%qE", arg);
+	  if (const char *why = oa_unprovable_reason_text
+		(OA_UNPROVABLE_NO_FACT))
+	    inform (loc, "%s", _(why));
+	  continue;
+	}
       if (!(VAR_P (a) || TREE_CODE (a) == PARM_DECL)
 	  || !(TYPE_REF_P (TREE_TYPE (a)) || POINTER_TYPE_P (TREE_TYPE (a))))
 	continue;
