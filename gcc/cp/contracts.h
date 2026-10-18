@@ -482,6 +482,9 @@ extern bool oa_contract_self_check_mode_public (tree contract, tree owner_fn,
    function the contract belongs to; otherwise NULL_TREE.  */
 extern tree predicate_core_function_contract (tree fn, tree *owner);
 
+/* CONTRACT's predicate core function, if built yet; else NULL_TREE.  */
+extern tree contract_predicate_core_function (tree contract);
+
 /* True if CONJUNCT is 'OBJ.FIELD != 0' (either operand order); sets
    *OBJ_OUT and *FIELD_OUT.  */
 extern bool oa_field_nonzero_conjunct_public (tree conjunct, tree *obj_out,
