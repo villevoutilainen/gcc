@@ -14192,6 +14192,37 @@ oa_condition_as_written (tree contract)
   return CONTRACT_CONDITION (contract);
 }
 
+
+/* What a resolved 'is_object_address (ARG)' call is replaced with: true.
+   When the GIMPLE engine runs, though, a variable ARG names -- 'p', or
+   '&r' -- stays referenced, as '((void) p, true)', so the contract's
+   check still captures its value: the GIMPLE engine reads the condition
+   as written (oa_condition_as_written) and needs the value at the check
+   to verify or establish the fact.  Evaluating a variable has no
+   effect; an argument that could dereference something (e.g.
+   'this->m_ptr') is not kept, since the call itself never evaluates
+   it.  */
+
+static tree
+oa_resolved_object_address_call (tree arg)
+{
+  if (!(flag_contract_conveyor_proofs_gimple
+	|| flag_contract_symbolic_proofs_gimple))
+    return boolean_true_node;
+  tree a = STRIP_ANY_LOCATION_WRAPPER (arg);
+  while (TREE_CODE (a) == NON_LVALUE_EXPR || CONVERT_EXPR_P (a)
+	 || TREE_CODE (a) == VIEW_CONVERT_EXPR)
+    a = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
+  if (TREE_CODE (a) == ADDR_EXPR)
+    a = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
+  if (REFERENCE_REF_P (a))
+    a = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
+  if (!VAR_P (a) || is_global_var (a) || TREE_CODE (TREE_TYPE (a)) == ARRAY_TYPE)
+    return boolean_true_node;
+  return build2 (COMPOUND_EXPR, boolean_type_node,
+		 build1 (NOP_EXPR, void_type_node, a), boolean_true_node);
+}
+
 /* Walk COND (an arbitrary boolean expression, e.g. a contract's
    condition) looking for std::is_object_address(...) calls; resolve
    each, replacing it in place with boolean_true_node if provable (or,
@@ -14262,7 +14293,7 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
 	     it as if proven rather than dropping the contract.  */
 	  if (oa_ast_diagnostics_muted_p ())
 	    {
-	      *tp = boolean_true_node;
+	      *tp = oa_resolved_object_address_call (arg);
 	      return NULL_TREE;
 	    }
 	  *d->ok = false;
@@ -14270,7 +14301,7 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
 	  return NULL_TREE;
 	}
 
-      *tp = boolean_true_node;
+      *tp = oa_resolved_object_address_call (arg);
       /* Don't recurse into what we just replaced.  */
       return NULL_TREE;
     }, &data, NULL);

@@ -720,6 +720,56 @@ cg_resolve_call_argument (gcall *call, unsigned argno)
 
 static hash_map<basic_block, auto_vec<edge> *> *cg_short_circuit_sources;
 
+/* Is VAL, at STMT, provably an object address?  As
+   cg_provable_object_address_p, except that if VAL is a PHI in the join
+   of a short-circuit condition whose guarded block dominates STMT, only
+   the arguments arriving along the edges that make the condition true
+   matter: only those paths reach STMT ('if (a && (p = &x) != nullptr)'
+   leaves p null only where the condition is false).  */
+
+static bool cg_provable_object_address_p (tree, hash_map<tree, cg_fact> &,
+					  bool, hash_set<tree> &,
+					  oa_unprovable_reason *);
+
+static bool
+cg_provable_object_address_at_p (tree val, gimple *stmt,
+				 hash_map<tree, cg_fact> &established,
+				 bool require_conveyor,
+				 oa_unprovable_reason *reason)
+{
+  hash_set<tree> in_progress;
+  if (cg_provable_object_address_p (val, established, require_conveyor,
+				    in_progress, reason))
+    return true;
+  if (!cg_short_circuit_sources || TREE_CODE (val) != SSA_NAME
+      || !stmt || !gimple_bb (stmt) || !dom_info_available_p (CDI_DOMINATORS))
+    return false;
+  gphi *phi = dyn_cast <gphi *> (SSA_NAME_DEF_STMT (val));
+  if (!phi)
+    return false;
+  for (basic_block bb = gimple_bb (stmt); bb;
+       bb = get_immediate_dominator (CDI_DOMINATORS, bb))
+    {
+      auto_vec<edge> **srcs = cg_short_circuit_sources->get (bb);
+      if (!srcs)
+	continue;
+      if ((*srcs)->is_empty ())
+	return false;
+      for (edge qe : **srcs)
+	{
+	  if (qe->dest != gimple_bb (phi))
+	    return false;
+	  hash_set<tree> ip;
+	  if (!cg_provable_object_address_p (PHI_ARG_DEF_FROM_EDGE (phi, qe),
+					     established, require_conveyor, ip,
+					     NULL))
+	    return false;
+	}
+      return true;
+    }
+  return false;
+}
+
 /* Narrow VR, the ranger's range of VAL at STMT, by the union of VAL's
    ranges along the short-circuit edges the nearest dominating recorded
    block stands for -- every path to STMT passes through one of them.  */
@@ -4130,6 +4180,8 @@ struct cg_field_fact
   bool nonzero = false;
   /* For a floating-point field, its range.  */
   bool has_float = false;
+  /* For a pointer in memory: it holds an object address.  */
+  bool object_address = false;
   frange float_range = frange ();
 };
 
@@ -5622,6 +5674,23 @@ cg_establish_assert_facts (gcall *call, cg_dom_fact_state &state)
 		  && !cg_contract_check_decl_value (call, struct_var, decls, d)
 		  && cg_scalar_memory_tracking_p (cfun, d));
 	};
+      tree oa_arg;
+      if (is_object_address_call_p (c, &oa_arg))
+	{
+	  oa_arg = STRIP_ANY_LOCATION_WRAPPER (oa_arg);
+	  while (TREE_CODE (oa_arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (oa_arg))
+	    oa_arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (oa_arg, 0));
+	  if (POINTER_TYPE_P (TREE_TYPE (oa_arg)) && memory_scalar_p (oa_arg))
+	    {
+	      cg_field_fact *existing
+		= state.field.get (cg_scalar_memory_fact_key (oa_arg));
+	      cg_field_fact fact = existing ? *existing
+				   : cg_field_fact { {}, conveyor_enabled };
+	      fact.object_address = true;
+	      state.field.put (cg_scalar_memory_fact_key (oa_arg), fact);
+	    }
+	  continue;
+	}
       if (oa_nonzero_conjunct_p (c, &decl))
 	{
 	  if (memory_scalar_p (decl))
@@ -5709,6 +5778,29 @@ cg_compute_assert_memory_verdicts (gcall *call, cg_dom_fact_state &state,
       tree c = *conjuncts[i];
       cg_field_fact *fact = NULL;
       bool nonzero_conj = false;
+      {
+	tree oa_arg;
+	if (is_object_address_call_p (c, &oa_arg))
+	  {
+	    oa_arg = STRIP_ANY_LOCATION_WRAPPER (oa_arg);
+	    while (TREE_CODE (oa_arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (oa_arg))
+	      oa_arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (oa_arg, 0));
+	    if ((VAR_P (oa_arg) || TREE_CODE (oa_arg) == PARM_DECL)
+		&& POINTER_TYPE_P (TREE_TYPE (oa_arg))
+		&& !cg_contract_check_decl_value (call, struct_var, decls, oa_arg)
+		&& cg_scalar_memory_tracking_p (cfun, oa_arg))
+	      {
+		cg_field_fact *f
+		  = state.field.get (cg_scalar_memory_fact_key (oa_arg));
+		for (int flavor = 0; flavor < 2; ++flavor)
+		  v->verdict[i][flavor]
+		    = (f && f->object_address
+		       && (flavor == 1 || f->conveyor_established)
+		       ? CG_VERDICT_TRUE : CG_VERDICT_UNKNOWN);
+	      }
+	    continue;
+	  }
+      }
       tree_code code = ERROR_MARK;
       widest_int val = 0;
       tree pred_fn, arg_decl, obj, field, decl, ptr_expr, const_val;
@@ -5874,12 +5966,21 @@ static void
 cg_record_field_load_facts (gimple *stmt, cg_dom_fact_state &state,
 			    hash_map<tree, cg_range_lite> &scalar_range_cache,
 			    hash_map<tree, cg_fact> &established_nz,
-			    hash_map<tree, frange> *established_frange)
+			    hash_map<tree, frange> *established_frange,
+			    hash_map<tree, cg_fact> *established_oa)
 {
   if (!gimple_assign_single_p (stmt))
     return;
   tree lhs = gimple_assign_lhs (stmt);
   tree rhs = gimple_assign_rhs1 (stmt);
+  if (TREE_CODE (lhs) == SSA_NAME && POINTER_TYPE_P (TREE_TYPE (lhs))
+      && (VAR_P (rhs) || TREE_CODE (rhs) == PARM_DECL) && established_oa)
+    {
+      cg_field_fact *fact = state.field.get (cg_scalar_memory_fact_key (rhs));
+      if (fact && fact->object_address)
+	established_oa->put (lhs, { fact->conveyor_established });
+      return;
+    }
   if (TREE_CODE (lhs) != SSA_NAME
       || (!INTEGRAL_TYPE_P (TREE_TYPE (lhs))
 	  && !SCALAR_FLOAT_TYPE_P (TREE_TYPE (lhs))))
@@ -5945,12 +6046,36 @@ cg_record_write_facts (gimple *stmt, cg_dom_fact_state &state,
 		       hash_map<tree, cg_range_lite> &scalar_range_cache,
 		       gimple_ranger *ranger,
 		       hash_map<tree, cg_fact> &established_nz,
-		       hash_map<tree, frange> *established_frange)
+		       hash_map<tree, frange> *established_frange,
+		       hash_map<tree, cg_fact> *established_oa)
 {
   if (!gimple_assign_single_p (stmt) || !ranger)
     return;
   tree lhs = gimple_assign_lhs (stmt);
   tree rhs = gimple_assign_rhs1 (stmt);
+
+  /* A pointer in memory now holds an object address if what is stored
+     is one.  */
+  if (POINTER_TYPE_P (TREE_TYPE (lhs))
+      && (VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
+      && cg_scalar_memory_tracking_p (cfun, lhs))
+    {
+      bool oa = TREE_CODE (rhs) == ADDR_EXPR;
+      if (!oa && TREE_CODE (rhs) == SSA_NAME && established_oa)
+	{
+	  hash_set<tree> in_progress;
+	  oa = cg_provable_object_address_p (rhs, *established_oa,
+					     /*require_conveyor=*/true,
+					     in_progress);
+	}
+      if (oa)
+	{
+	  cg_field_fact fact = { {}, /*conveyor_established=*/true };
+	  fact.object_address = true;
+	  state.field.put (cg_scalar_memory_fact_key (lhs), fact);
+	}
+      return;
+    }
   bool is_float = SCALAR_FLOAT_TYPE_P (TREE_TYPE (lhs));
   if ((!INTEGRAL_TYPE_P (TREE_TYPE (lhs)) && !is_float)
       || (TREE_CODE (rhs) != SSA_NAME && TREE_CODE (rhs) != INTEGER_CST
@@ -6111,7 +6236,8 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src)
 	  || (it.second.range.has_hi && ov->range.hi != it.second.range.hi)
 	  || ov->conveyor_established != it.second.conveyor_established
 	  || ov->nonzero != it.second.nonzero
-	  || !cg_field_fact_float_equal (*ov, it.second))
+	  || !cg_field_fact_float_equal (*ov, it.second)
+	  || ov->object_address != it.second.object_address)
 	field_remove.safe_push (it.first);
     }
   for (auto k : field_remove)
@@ -6200,7 +6326,8 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
 	  || (it.second.range.has_hi && ov->range.hi != it.second.range.hi)
 	  || ov->conveyor_established != it.second.conveyor_established
 	  || ov->nonzero != it.second.nonzero
-	  || !cg_field_fact_float_equal (*ov, it.second))
+	  || !cg_field_fact_float_equal (*ov, it.second)
+	  || ov->object_address != it.second.object_address)
 	return false;
     }
   for (auto it : a.field_alias)
@@ -7612,7 +7739,8 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 			   gimple_ranger *ranger,
 			   hash_map<tree, cg_fact> &established_nz,
 			   cg_assert_memory_verdict_map *assert_memory_verdicts,
-			   hash_map<tree, frange> *established_frange)
+			   hash_map<tree, frange> *established_frange,
+			   hash_map<tree, cg_fact> *established_oa)
 {
   int *rpo = XNEWVEC (int, n_basic_blocks_for_fn (fun));
   int rpo_num = pre_and_rev_post_order_compute (NULL, rpo, false);
@@ -7673,7 +7801,8 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 		  cg_process_scalar_write (gimple_assign_lhs (stmt), out_state);
 		  cg_record_write_facts (stmt, out_state, established_range,
 					 *scalar_range_cache_out, ranger,
-					 established_nz, established_frange);
+					 established_nz, established_frange,
+					 established_oa);
 		}
 	      else if (is_gimple_call (stmt))
 		{
@@ -7762,14 +7891,16 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 	  if (gimple_assign_single_p (stmt))
 	    {
 	      cg_record_field_load_facts (stmt, state, *scalar_range_cache_out,
-					  established_nz, established_frange);
+					  established_nz, established_frange,
+					  established_oa);
 	      cg_process_field_write (gimple_assign_lhs (stmt),
 				       gimple_assign_rhs1 (stmt), fun,
 				       field_object_cache, state);
 	      cg_process_scalar_write (gimple_assign_lhs (stmt), state);
 	      cg_record_write_facts (stmt, state, established_range,
 				     *scalar_range_cache_out, ranger,
-				     established_nz, established_frange);
+				     established_nz, established_frange,
+				     established_oa);
 	    }
 	  else if (is_gimple_call (stmt))
 	    {
@@ -8502,13 +8633,22 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
 	  || !(TYPE_REF_P (TREE_TYPE (a)) || POINTER_TYPE_P (TREE_TYPE (a))))
 	continue;
       tree val = value_of (a);
-      if (!val || TREE_CODE (val) != SSA_NAME)
-	continue;
-      hash_set<tree> in_progress;
       oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
-      if (cg_provable_object_address_p (val, established,
-					/*require_conveyor=*/conveyor_ok,
-					in_progress, &reason))
+      if (!val || TREE_CODE (val) != SSA_NAME)
+	{
+	  /* A pointer in memory: what the fact walk found
+	     (cg_compute_assert_memory_verdicts).  */
+	  cg_assert_memory_verdicts **mv = memory_verdicts.get (call);
+	  int flavor = conveyor_ok ? 0 : 1;
+	  if (!mv || i >= cg_assert_memory_verdicts::max_conjuncts
+	      || (*mv)->verdict[i][flavor] == CG_VERDICT_NONE
+	      || (*mv)->verdict[i][flavor] == CG_VERDICT_TRUE)
+	    continue;
+	  reason = OA_UNPROVABLE_NO_FACT;
+	}
+      else if (cg_provable_object_address_at_p (val, call, established,
+						 /*require_conveyor=*/conveyor_ok,
+						 &reason))
 	continue;
       location_t loc = loc_of (*conjuncts[i]);
       ok = false;
@@ -8948,7 +9088,7 @@ pass_contracts_gimple::execute (function *fun)
 			     established_range, &call_relational_verdict,
 			     ranger,
 			     established_nz, &assert_memory_verdicts,
-			     &established_frange);
+			     &established_frange, &established);
 
   bool check_reference_safety
     = cg_function_might_need_reference_safety_walk_p (fun);
