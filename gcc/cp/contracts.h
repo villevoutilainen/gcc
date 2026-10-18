@@ -465,6 +465,18 @@ extern void oa_collect_conjuncts_public (tree *cond, vec<tree *> *out);
 extern tree contract_check_arg_struct_info (tree struct_type, tree *cond,
 					    tree *decls);
 
+/* How CONTRACT (owned by OWNER_FN) checks its own condition: whether its
+   control object is never_proven, and, for each flavor, whether it
+   forces analysis without the proofs flag (analyzed_X or proven_X) and
+   whether an unproven conjunct is an error (proven_X).  False if it has
+   no control object.  */
+extern bool oa_contract_self_check_mode_public (tree contract, tree owner_fn,
+						bool *never_proven,
+						bool *conveyor_forced,
+						bool *conveyor_strict,
+						bool *symbolic_forced,
+						bool *symbolic_strict);
+
 /* True if CONJUNCT is 'OBJ.FIELD != 0' (either operand order); sets
    *OBJ_OUT and *FIELD_OUT.  */
 extern bool oa_field_nonzero_conjunct_public (tree conjunct, tree *obj_out,

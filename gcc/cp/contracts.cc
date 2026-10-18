@@ -14238,6 +14238,14 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
 	  if (DECL_P (STRIP_ANY_LOCATION_WRAPPER (arg)))
 	    oa_inform (DECL_SOURCE_LOCATION (STRIP_ANY_LOCATION_WRAPPER (arg)),
 		    "declared here");
+	  /* With the diagnostic silenced, the GIMPLE engine reports this
+	     instead, from the check built for the contract -- so resolve
+	     it as if proven rather than dropping the contract.  */
+	  if (oa_ast_diagnostics_muted_p ())
+	    {
+	      *tp = boolean_true_node;
+	      return NULL_TREE;
+	    }
 	  *d->ok = false;
 	  *tp = error_mark_node;
 	  return NULL_TREE;
@@ -14580,6 +14588,26 @@ oa_contract_symbolic_strict_p (tree contract, tree owner_fn = NULL_TREE)
     owner_fn = current_function_decl;
   contract_check_side side = contract_side_of (contract, owner_fn);
   return contract_control_proven_symbolic (ctrl, side);
+}
+
+/* See contracts.h.  */
+
+bool
+oa_contract_self_check_mode_public (tree contract, tree owner_fn,
+				    bool *never_proven,
+				    bool *conveyor_forced, bool *conveyor_strict,
+				    bool *symbolic_forced, bool *symbolic_strict)
+{
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  if (!ctrl || !flag_contract_control_objects)
+    return false;
+  *never_proven = contract_control_never_proven
+    (ctrl, contract_side_of (contract, owner_fn), /*quiet=*/true);
+  *conveyor_forced = oa_contract_conveyor_analysis_forced_p (contract, owner_fn);
+  *conveyor_strict = oa_contract_conveyor_strict_p (contract, owner_fn);
+  *symbolic_forced = oa_contract_symbolic_analysis_forced_p (contract, owner_fn);
+  *symbolic_strict = oa_contract_symbolic_strict_p (contract, owner_fn);
+  return true;
 }
 
 /* Is CONTRACT active for the shared fact-tracking substrate (m_predicate_

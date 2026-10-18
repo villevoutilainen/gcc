@@ -4847,6 +4847,76 @@ cg_establish_persistent_facts_for_call (gcall *call,
 static tree cg_contract_check_call_p (gcall *, tree *, tree *, tree *);
 static tree cg_contract_check_decl_value (gcall *, tree, tree, tree);
 
+/* A contract_assert conjunct's verdict against the facts at the assert
+   (CG_VERDICT_NONE: not a shape this check decides).  */
+
+enum cg_verdict { CG_VERDICT_NONE, CG_VERDICT_TRUE, CG_VERDICT_FALSE,
+		  CG_VERDICT_UNKNOWN };
+
+/* Does every value in R satisfy 'value CODE C' (true), none (false), or
+   neither (unknown)?  */
+
+static cg_verdict
+cg_range_comparison_verdict (const cg_range_lite &r, tree_code code,
+			     const widest_int &c)
+{
+  switch (code)
+    {
+    case GT_EXPR:
+      if (r.has_lo && r.lo > c) return CG_VERDICT_TRUE;
+      if (r.has_hi && r.hi <= c) return CG_VERDICT_FALSE;
+      break;
+    case GE_EXPR:
+      if (r.has_lo && r.lo >= c) return CG_VERDICT_TRUE;
+      if (r.has_hi && r.hi < c) return CG_VERDICT_FALSE;
+      break;
+    case LT_EXPR:
+      if (r.has_hi && r.hi < c) return CG_VERDICT_TRUE;
+      if (r.has_lo && r.lo >= c) return CG_VERDICT_FALSE;
+      break;
+    case LE_EXPR:
+      if (r.has_hi && r.hi <= c) return CG_VERDICT_TRUE;
+      if (r.has_lo && r.lo > c) return CG_VERDICT_FALSE;
+      break;
+    case EQ_EXPR:
+      if (r.has_lo && r.has_hi && r.lo == c && r.hi == c)
+	return CG_VERDICT_TRUE;
+      if ((r.has_lo && r.lo > c) || (r.has_hi && r.hi < c))
+	return CG_VERDICT_FALSE;
+      break;
+    default:
+      break;
+    }
+  return CG_VERDICT_UNKNOWN;
+}
+
+/* The same for 'value != 0'.  */
+
+static cg_verdict
+cg_range_nonzero_verdict (const cg_range_lite &r)
+{
+  if ((r.has_lo && r.lo > 0) || (r.has_hi && r.hi < 0))
+    return CG_VERDICT_TRUE;
+  if (r.has_lo && r.has_hi && r.lo == 0 && r.hi == 0)
+    return CG_VERDICT_FALSE;
+  return CG_VERDICT_UNKNOWN;
+}
+
+/* Verdicts the dominator-ordered fact walk reaches for an assert's
+   conjuncts about memory (fields, named predicates, scalars in memory),
+   which the check pass reports along with the rest
+   (cg_check_contract_assert).  TEXT holds what was established, for a
+   false one.  */
+
+struct cg_assert_memory_verdicts
+{
+  static const unsigned max_conjuncts = 32;
+  cg_verdict verdict[max_conjuncts][2];	/* [i][0] conveyor, [i][1] symbolic.  */
+  char text[max_conjuncts][96];
+};
+
+typedef hash_map<gimple *, cg_assert_memory_verdicts *> cg_assert_memory_verdict_map;
+
 /* Is DECL a scalar in memory (its address is taken) whose value the
    walk can follow: every use of its address is a direct call argument
    or the capture struct of a contract check, so it changes only through
@@ -5076,6 +5146,166 @@ cg_establish_assert_facts (gcall *call, cg_dom_fact_state &state)
 	    }
 	}
     }
+}
+
+/* Record in VERDICTS what STATE says, at contract_assert check CALL,
+   about each of its conjuncts that is about memory -- before the assert
+   establishes them (cg_establish_assert_facts).  */
+
+static bool
+cg_compute_assert_memory_verdicts (gcall *call, cg_dom_fact_state &state,
+				   cg_assert_memory_verdicts *v)
+{
+  tree struct_var, cond, decls;
+  tree contract = cg_contract_check_call_p (call, &struct_var, &cond, &decls);
+  if (!contract || TREE_CODE (contract) != ASSERTION_STMT
+      || cond == NULL_TREE || cond == error_mark_node)
+    return false;
+
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  memset (v, 0, sizeof *v);
+  for (unsigned i = 0;
+       i < conjuncts.length () && i < cg_assert_memory_verdicts::max_conjuncts;
+       ++i)
+    {
+      tree c = *conjuncts[i];
+      cg_field_fact *fact = NULL;
+      bool nonzero_conj = false;
+      tree_code code = ERROR_MARK;
+      widest_int val = 0;
+      tree pred_fn, arg_decl, obj, field, decl, ptr_expr, const_val;
+      bool negated;
+      if (oa_match_predicate_conjunct (c, &pred_fn, &arg_decl, &negated))
+	{
+	  tree identity = cg_contract_check_object_identity (call, struct_var,
+							     decls, arg_decl);
+	  if (!identity)
+	    continue;
+	  for (int flavor = 0; flavor < 2; ++flavor)
+	    {
+	      cg_pred_fact *p = state.pred.get (identity);
+	      if (!p || p->pred_fn != pred_fn
+		  || (flavor == 0 && !p->conveyor_established))
+		v->verdict[i][flavor] = CG_VERDICT_UNKNOWN;
+	      else
+		v->verdict[i][flavor] = (p->polarity == !negated
+					 ? CG_VERDICT_TRUE : CG_VERDICT_FALSE);
+	    }
+	  snprintf (v->text[i], sizeof v->text[i], "%s",
+		    negated ? "the predicate holds" : "the predicate doesn't hold");
+	  continue;
+	}
+      if (oa_field_nonzero_conjunct_public (c, &obj, &field))
+	{
+	  obj = STRIP_ANY_LOCATION_WRAPPER (obj);
+	  if (TREE_CODE (obj) == INDIRECT_REF)
+	    obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
+	  tree identity = cg_contract_check_object_identity (call, struct_var,
+							     decls, obj);
+	  if (!identity)
+	    continue;
+	  fact = state.field.get ({identity, field});
+	  nonzero_conj = true;
+	}
+      else if (oa_nonzero_conjunct_p (c, &decl)
+	       && !cg_contract_check_decl_value (call, struct_var, decls,
+						 STRIP_ANY_LOCATION_WRAPPER (decl))
+	       && cg_scalar_memory_tracking_p (cfun,
+					       STRIP_ANY_LOCATION_WRAPPER (decl)))
+	{
+	  fact = state.field.get
+	    (cg_scalar_memory_fact_key (STRIP_ANY_LOCATION_WRAPPER (decl)));
+	  nonzero_conj = true;
+	}
+      else if (oa_match_simple_comparison_var_public (c, &decl, &code,
+						      &const_val)
+	       && TREE_CODE (const_val) == INTEGER_CST
+	       && !cg_contract_check_decl_value (call, struct_var, decls,
+						 STRIP_ANY_LOCATION_WRAPPER (decl))
+	       && cg_scalar_memory_tracking_p (cfun,
+					       STRIP_ANY_LOCATION_WRAPPER (decl)))
+	{
+	  fact = state.field.get
+	    (cg_scalar_memory_fact_key (STRIP_ANY_LOCATION_WRAPPER (decl)));
+	  val = wi::to_widest (const_val);
+	}
+      else if (oa_match_field_range_comparison (c, &field, &ptr_expr, &code,
+						&const_val)
+	       && TREE_CODE (const_val) == INTEGER_CST)
+	{
+	  ptr_expr = oa_strip_symbolic_ptr_expr_public (ptr_expr);
+	  tree identity = cg_contract_check_object_identity (call, struct_var,
+							     decls, ptr_expr);
+	  if (!identity)
+	    continue;
+	  fact = state.field.get ({identity, field});
+	  val = wi::to_widest (const_val);
+	}
+      else
+	continue;
+
+      for (int flavor = 0; flavor < 2; ++flavor)
+	{
+	  cg_verdict r = CG_VERDICT_UNKNOWN;
+	  if (fact && (flavor == 1 || fact->conveyor_established))
+	    {
+	      if (nonzero_conj)
+		r = fact->nonzero ? CG_VERDICT_TRUE
+				  : cg_range_nonzero_verdict (fact->range);
+	      else
+		r = cg_range_comparison_verdict (fact->range, code, val);
+	    }
+	  v->verdict[i][flavor] = r;
+	}
+      if (fact)
+	cg_range_lite_text (fact->range, v->text[i], sizeof v->text[i]);
+    }
+  return true;
+}
+
+/* Record the verdicts in VERDICTS, for the check pass.  */
+
+static void
+cg_record_assert_memory_verdicts (gcall *call, cg_dom_fact_state &state,
+				  cg_assert_memory_verdict_map *verdicts)
+{
+  if (!verdicts)
+    return;
+  cg_assert_memory_verdicts *v = XNEW (cg_assert_memory_verdicts);
+  if (!cg_compute_assert_memory_verdicts (call, state, v))
+    {
+      XDELETE (v);
+      return;
+    }
+  if (cg_assert_memory_verdicts **old = verdicts->get (call))
+    XDELETE (*old);
+  verdicts->put (call, v);
+}
+
+/* True if contract_assert check CALL, checked (not never_proven), has a
+   conjunct about memory that STATE shows to be false: like the AST
+   engine, such an assert establishes nothing.  */
+
+static bool
+cg_assert_memory_conjunct_false_p (gcall *call, cg_dom_fact_state &state)
+{
+  cg_assert_memory_verdicts v;
+  if (!cg_compute_assert_memory_verdicts (call, state, &v))
+    return false;
+  tree struct_var, cond, decls;
+  tree contract = cg_contract_check_call_p (call, &struct_var, &cond, &decls);
+  bool never_proven, cf, cs, sf, ss;
+  if (!oa_contract_self_check_mode_public (contract,
+					   DECL_ORIGIN (current_function_decl),
+					   &never_proven, &cf, &cs, &sf, &ss)
+      || never_proven)
+    return false;
+  for (unsigned i = 0; i < cg_assert_memory_verdicts::max_conjuncts; ++i)
+    if (v.verdict[i][0] == CG_VERDICT_FALSE
+	|| v.verdict[i][1] == CG_VERDICT_FALSE)
+      return true;
+  return false;
 }
 
 /* STMT loads a field, or a scalar in memory, into an SSA name: give the
@@ -6705,7 +6935,8 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 			   hash_map<tree, cg_range_lite> &established_range,
 			   hash_set<gimple *> *call_relational_verdict_out,
 			   gimple_ranger *ranger,
-			   hash_map<tree, cg_fact> &established_nz)
+			   hash_map<tree, cg_fact> &established_nz,
+			   cg_assert_memory_verdict_map *assert_memory_verdicts)
 {
   int *rpo = XNEWVEC (int, n_basic_blocks_for_fn (fun));
   int rpo_num = pre_and_rev_post_order_compute (NULL, rpo, false);
@@ -6787,7 +7018,8 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 		    (call, fun, field_object_cache, out_state);
 		  cg_establish_persistent_facts_for_call (call, field_object_cache,
 							   out_state);
-		  cg_establish_assert_facts (call, out_state);
+		  if (!cg_assert_memory_conjunct_false_p (call, out_state))
+		    cg_establish_assert_facts (call, out_state);
 		}
 	    }
 
@@ -6889,7 +7121,10 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 	      cg_invalidate_persistent_facts_for_call_args (call, fun,
 							     field_object_cache, state);
 	      cg_establish_persistent_facts_for_call (call, field_object_cache, state);
-	      cg_establish_assert_facts (call, state);
+	      cg_record_assert_memory_verdicts (call, state,
+						assert_memory_verdicts);
+	      if (!cg_assert_memory_conjunct_false_p (call, state))
+		cg_establish_assert_facts (call, state);
 	    }
 	}
     }
@@ -7258,6 +7493,257 @@ cg_assert_fact_scope::establish (gcall *call)
     }
 }
 
+/* Whether a GIMPLE check that the AST engine makes only under
+   -fcontract-conveyor-proofs / -fcontract-symbolic-proofs is on.  With
+   -fcontract-analysis-engine=, those flags mean what they mean for the
+   AST engine; with only the older -fcontract-*-proofs-gimple flags, the
+   GIMPLE flag itself turns them on.  */
+
+static bool
+cg_conveyor_proofs_p ()
+{
+  return flag_contract_analysis_engine != 0
+	 ? flag_contract_conveyor_proofs : flag_contract_conveyor_proofs_gimple;
+}
+
+static bool
+cg_symbolic_proofs_p ()
+{
+  return flag_contract_analysis_engine != 0
+	 ? flag_contract_symbolic_proofs : flag_contract_symbolic_proofs_gimple;
+}
+
+/* The range of SSA value VAL at STMT: the facts established for it,
+   narrowed by what the ranger knows there.  */
+
+static bool
+cg_value_range_at (tree val, gimple *stmt,
+		   hash_map<tree, cg_range_lite> &established_range,
+		   hash_map<tree, cg_range_lite> &scalar_range_cache,
+		   gimple_ranger *ranger, bool require_conveyor,
+		   cg_range_lite *out)
+{
+  if (!INTEGRAL_TYPE_P (TREE_TYPE (val)))
+    return false;
+  bool any = cg_established_range_of (val, established_range,
+				      scalar_range_cache, ranger,
+				      require_conveyor, !require_conveyor,
+				      out, stmt);
+  int_range_max vr;
+  if (TREE_CODE (val) == SSA_NAME && INTEGRAL_TYPE_P (TREE_TYPE (val))
+      && ranger->range_of_expr (vr, val, stmt)
+      && !vr.undefined_p () && !vr.varying_p () && vr.num_pairs () > 0)
+    {
+      signop sgn = TYPE_SIGN (TREE_TYPE (val));
+      widest_int lo = widest_int::from (vr.lower_bound (0), sgn);
+      widest_int hi = widest_int::from (vr.upper_bound (vr.num_pairs () - 1),
+					 sgn);
+      if (!any || !out->has_lo || lo > out->lo)
+	out->has_lo = true, out->lo = lo;
+      if (!any || !out->has_hi || hi < out->hi)
+	out->has_hi = true, out->hi = hi;
+      any = true;
+    }
+  return any;
+}
+
+/* If CALL is a conveyor or symbolic contract_assert's check, check its
+   condition against the facts at it, like the AST engine's
+   oa_handle_assertion_stmt: an is_object_address conjunct must be
+   provable unless the control object is never_proven; under the proofs
+   flags (or analyzed_* / proven_*), a provably false conjunct is an
+   error and an unproven one a warning (an error for proven_*).  The
+   conjuncts about memory were decided by the fact walk
+   (MEMORY_VERDICTS); the ones about SSA values are decided here.
+   False if the check failed, so the assert establishes nothing, as in
+   the AST engine.  */
+
+static bool
+cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
+			  hash_map<tree, cg_fact> &established_nz,
+			  hash_map<tree, cg_range_lite> &established_range,
+			  hash_map<tree, cg_range_lite> &scalar_range_cache,
+			  gimple_ranger *ranger,
+			  cg_assert_memory_verdict_map &memory_verdicts)
+{
+  tree struct_var, cond, decls;
+  tree contract = cg_contract_check_call_p (call, &struct_var, &cond, &decls);
+  if (!contract || TREE_CODE (contract) != ASSERTION_STMT
+      || cond == NULL_TREE || cond == error_mark_node)
+    return true;
+  tree owner = DECL_ORIGIN (current_function_decl);
+  bool conveyor_ok = (flag_contract_conveyor_proofs_gimple
+		      && oa_contract_conveyor_active_public (contract, owner));
+  bool symbolic_ok = (flag_contract_symbolic_proofs_gimple
+		      && oa_contract_symbolic_active_public (contract, owner));
+  if (!conveyor_ok && !symbolic_ok)
+    return true;
+  bool never_proven, conveyor_forced, conveyor_strict, symbolic_forced,
+    symbolic_strict;
+  if (!oa_contract_self_check_mode_public (contract, owner, &never_proven,
+					   &conveyor_forced, &conveyor_strict,
+					   &symbolic_forced, &symbolic_strict)
+      || never_proven)
+    return true;
+
+  bool ok = true;
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  auto loc_of = [&] (tree c)
+    {
+      location_t loc = EXPR_LOCATION (c);
+      return loc != UNKNOWN_LOCATION ? loc : gimple_location (call);
+    };
+  auto value_of = [&] (tree decl) -> tree
+    {
+      decl = STRIP_ANY_LOCATION_WRAPPER (decl);
+      if (!VAR_P (decl) && TREE_CODE (decl) != PARM_DECL)
+	return NULL_TREE;
+      return cg_contract_check_decl_value (call, struct_var, decls, decl);
+    };
+  /* The value of scalar DECL itself -- not of a reference, whose
+     captured value is the address it is bound to.  */
+  auto scalar_value_of = [&] (tree decl) -> tree
+    {
+      decl = STRIP_ANY_LOCATION_WRAPPER (decl);
+      if (TYPE_REF_P (TREE_TYPE (decl)) && !DECL_BY_REFERENCE (decl))
+	return NULL_TREE;
+      tree val = value_of (decl);
+      return val && INTEGRAL_TYPE_P (TREE_TYPE (val)) ? val : NULL_TREE;
+    };
+
+  /* is_object_address: mandatory.  */
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree arg;
+      if (!is_object_address_call_p (*conjuncts[i], &arg))
+	continue;
+      tree a = STRIP_ANY_LOCATION_WRAPPER (arg);
+      while (TREE_CODE (a) == NON_LVALUE_EXPR || CONVERT_EXPR_P (a)
+	     || TREE_CODE (a) == VIEW_CONVERT_EXPR)
+	a = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
+      if (!(VAR_P (a) || TREE_CODE (a) == PARM_DECL)
+	  || !(TYPE_REF_P (TREE_TYPE (a)) || POINTER_TYPE_P (TREE_TYPE (a))))
+	continue;
+      tree val = value_of (a);
+      if (!val || TREE_CODE (val) != SSA_NAME)
+	continue;
+      hash_set<tree> in_progress;
+      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+      if (cg_provable_object_address_p (val, established,
+					/*require_conveyor=*/conveyor_ok,
+					in_progress, &reason))
+	continue;
+      location_t loc = loc_of (*conjuncts[i]);
+      ok = false;
+      cg_conveyor_error_at (loc, "cannot prove %<is_object_address%> for %qE",
+			    arg);
+      if (const char *why = oa_unprovable_reason_text (reason))
+	inform (loc, "%s", _(why));
+      inform (DECL_SOURCE_LOCATION (a), "declared here");
+    }
+
+  cg_assert_memory_verdicts **mem = memory_verdicts.get (call);
+  for (int flavor = 0; flavor < 2; ++flavor)
+    {
+      bool require_conveyor = flavor == 0;
+      bool analysis = (require_conveyor
+		       ? conveyor_ok && (cg_conveyor_proofs_p () || conveyor_forced)
+		       : symbolic_ok && (cg_symbolic_proofs_p () || symbolic_forced));
+      if (!analysis)
+	continue;
+      bool strict = require_conveyor ? conveyor_strict : symbolic_strict;
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree c = *conjuncts[i];
+	  tree arg;
+	  if (is_object_address_call_p (c, &arg))
+	    continue;
+	  cg_verdict verdict = CG_VERDICT_NONE;
+	  char text[96] = "";
+	  oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
+	  tree decl, const_val;
+	  tree_code code;
+	  if (oa_nonzero_conjunct_p (c, &decl))
+	    if (tree val = scalar_value_of (decl))
+	      {
+		hash_set<tree> in_progress;
+		cg_range_lite r;
+		bool have_range
+		  = cg_value_range_at (val, call, established_range,
+				       scalar_range_cache, ranger,
+				       require_conveyor, &r);
+		if (cg_provable_nonzero_p (val, established_nz,
+					   require_conveyor, in_progress))
+		  verdict = CG_VERDICT_TRUE;
+		else if (have_range)
+		  {
+		    verdict = cg_range_nonzero_verdict (r);
+		    cg_range_lite_text (r, text, sizeof text);
+		    reason = OA_UNPROVABLE_RANGE_PARTIAL;
+		  }
+		else
+		  verdict = CG_VERDICT_UNKNOWN;
+	      }
+	  if (verdict == CG_VERDICT_NONE
+	      && oa_match_simple_comparison_var_public (c, &decl, &code,
+							&const_val)
+	      && TREE_CODE (const_val) == INTEGER_CST)
+	    if (tree val = scalar_value_of (decl))
+	      {
+		cg_range_lite r;
+		if (cg_value_range_at (val, call, established_range,
+				       scalar_range_cache, ranger,
+				       require_conveyor, &r))
+		  {
+		    verdict = cg_range_comparison_verdict
+				(r, code, wi::to_widest (const_val));
+		    cg_range_lite_text (r, text, sizeof text);
+		    reason = OA_UNPROVABLE_RANGE_PARTIAL;
+		  }
+		else
+		  verdict = CG_VERDICT_UNKNOWN;
+	      }
+	  if (verdict == CG_VERDICT_NONE && mem
+	      && i < cg_assert_memory_verdicts::max_conjuncts
+	      && (*mem)->verdict[i][flavor] != CG_VERDICT_NONE)
+	    {
+	      verdict = (*mem)->verdict[i][flavor];
+	      snprintf (text, sizeof text, "%s", (*mem)->text[i]);
+	    }
+	  if (verdict == CG_VERDICT_NONE)
+	    verdict = CG_VERDICT_UNKNOWN;
+
+	  location_t loc = loc_of (c);
+	  switch (verdict)
+	    {
+	    case CG_VERDICT_FALSE:
+	      ok = false;
+	      error_at (loc, "%<contract_assert%> condition %qE is provably false",
+			c);
+	      inform (loc, "established %s", text);
+	      break;
+	    case CG_VERDICT_UNKNOWN:
+	      if (strict)
+		{
+		  ok = false;
+		  error_at (loc, "cannot prove %<contract_assert%> condition %qE",
+			    c);
+		}
+	      else
+		warning_at (loc, 0, "cannot verify %<contract_assert%> condition %qE",
+			    c);
+	      if (const char *why = oa_unprovable_reason_text (reason))
+		inform (loc, "%s", _(why));
+	      break;
+	    default:
+	      break;
+	    }
+	}
+    }
+  return ok;
+}
+
 namespace {
 
 const pass_data pass_data_contracts_gimple =
@@ -7427,10 +7913,11 @@ pass_contracts_gimple::execute (function *fun)
   calculate_dominance_info (CDI_DOMINATORS);
   gimple_ranger *ranger = enable_ranger (fun, false);
 
+  cg_assert_memory_verdict_map assert_memory_verdicts;
   cg_predicate_facts_walk (fun, &scalar_range_cache,
 			     established_range, &call_relational_verdict,
 			     ranger,
-			     established_nz);
+			     established_nz, &assert_memory_verdicts);
 
   bool check_reference_safety
     = cg_function_might_need_reference_safety_walk_p (fun);
@@ -7468,7 +7955,11 @@ pass_contracts_gimple::execute (function *fun)
 			     established_call_rel, established_call_call_rel,
 			     scalar_range_cache, ranger,
 			     &call_relational_verdict);
-	      assert_facts.establish (call);
+	      if (cg_check_contract_assert (call, established, established_nz,
+					    established_range,
+					    scalar_range_cache, ranger,
+					    assert_memory_verdicts))
+		assert_facts.establish (call);
 	    }
 	}
     };
@@ -7500,6 +7991,8 @@ pass_contracts_gimple::execute (function *fun)
     if (!bitmap_bit_p (visited, bb->index))
       check_block (bb);
 
+  for (auto it : assert_memory_verdicts)
+    XDELETE (it.second);
   disable_ranger (fun);
 
   return 0;
