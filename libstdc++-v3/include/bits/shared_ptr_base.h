@@ -654,6 +654,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       virtual void
       _M_destroy() noexcept
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	__allocator_type __a(_M_alloc._M_obj);
 	__allocated_ptr<__allocator_type> __guard_ptr{ __a, this };
 	this->~_Sp_counted_ptr_inplace();
