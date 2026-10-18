@@ -7788,6 +7788,59 @@ cg_value_range_at (tree val, gimple *stmt,
   return any;
 }
 
+/* The verdict on 'VAL CODE C' (C a REAL_CST) from the ranger's
+   floating-point range of VAL at STMT; TEXT describes the range.  A
+   value that may be a NaN makes every comparison false, so it only ever
+   rules a comparison out.  */
+
+static cg_verdict
+cg_float_comparison_verdict (tree val, gimple *stmt, gimple_ranger *ranger,
+			     tree_code code, tree c, char *text, size_t n)
+{
+  frange fr (TREE_TYPE (val));
+  if (!ranger->range_of_expr (fr, val, stmt) || fr.undefined_p ()
+      || fr.known_isnan ())
+    return CG_VERDICT_UNKNOWN;
+  const REAL_VALUE_TYPE &lo = fr.lower_bound ();
+  const REAL_VALUE_TYPE &hi = fr.upper_bound ();
+  const REAL_VALUE_TYPE &cv = TREE_REAL_CST (c);
+  bool nan = fr.maybe_isnan ();
+  char lo_buf[40], hi_buf[40];
+  real_to_decimal (lo_buf, &lo, sizeof lo_buf, 0, 1);
+  real_to_decimal (hi_buf, &hi, sizeof hi_buf, 0, 1);
+  snprintf (text, n, "in [%s, %s]", lo_buf, hi_buf);
+  bool lt_c_lo = real_less (&cv, &lo);		/* c < lo */
+  bool le_c_lo = !real_less (&lo, &cv);		/* c <= lo */
+  bool lt_hi_c = real_less (&hi, &cv);		/* hi < c */
+  bool le_hi_c = !real_less (&cv, &hi);		/* hi <= c */
+  switch (code)
+    {
+    case GT_EXPR:
+      if (!nan && lt_c_lo) return CG_VERDICT_TRUE;
+      if (le_hi_c) return CG_VERDICT_FALSE;
+      break;
+    case GE_EXPR:
+      if (!nan && le_c_lo) return CG_VERDICT_TRUE;
+      if (lt_hi_c) return CG_VERDICT_FALSE;
+      break;
+    case LT_EXPR:
+      if (!nan && lt_hi_c) return CG_VERDICT_TRUE;
+      if (le_c_lo) return CG_VERDICT_FALSE;
+      break;
+    case LE_EXPR:
+      if (!nan && le_hi_c) return CG_VERDICT_TRUE;
+      if (lt_c_lo) return CG_VERDICT_FALSE;
+      break;
+    case EQ_EXPR:
+      if (!nan && le_c_lo && le_hi_c) return CG_VERDICT_TRUE;
+      if (lt_c_lo || lt_hi_c) return CG_VERDICT_FALSE;
+      break;
+    default:
+      break;
+    }
+  return CG_VERDICT_UNKNOWN;
+}
+
 /* If CALL is a conveyor or symbolic contract_assert's check, check its
    condition against the facts at it, like the AST engine's
    oa_handle_assertion_stmt: an is_object_address conjunct must be
@@ -7842,6 +7895,16 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
       if (!VAR_P (decl) && TREE_CODE (decl) != PARM_DECL)
 	return NULL_TREE;
       return cg_contract_check_decl_value (call, struct_var, decls, decl);
+    };
+  /* The floating-point value of DECL, likewise.  */
+  auto float_value_of = [&] (tree decl) -> tree
+    {
+      decl = STRIP_ANY_LOCATION_WRAPPER (decl);
+      if (TYPE_REF_P (TREE_TYPE (decl)) && !DECL_BY_REFERENCE (decl))
+	return NULL_TREE;
+      tree val = value_of (decl);
+      return (val && TREE_CODE (val) == SSA_NAME
+	      && SCALAR_FLOAT_TYPE_P (TREE_TYPE (val))) ? val : NULL_TREE;
     };
   /* The value of scalar DECL itself -- not of a reference, whose
      captured value is the address it is bound to.  */
@@ -7945,6 +8008,19 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
 		  }
 		else
 		  verdict = CG_VERDICT_UNKNOWN;
+	      }
+	  /* A floating-point comparison with a constant, decided from the
+	     ranger's floating-point range at the check.  */
+	  if (verdict == CG_VERDICT_NONE
+	      && oa_match_simple_comparison_var_public (c, &decl, &code,
+							&const_val)
+	      && TREE_CODE (const_val) == REAL_CST)
+	    if (tree val = float_value_of (decl))
+	      {
+		verdict = cg_float_comparison_verdict (val, call, ranger, code,
+						       const_val, text,
+						       sizeof text);
+		reason = OA_UNPROVABLE_RANGE_PARTIAL;
 	      }
 	  if (verdict == CG_VERDICT_NONE && mem
 	      && i < cg_assert_memory_verdicts::max_conjuncts
