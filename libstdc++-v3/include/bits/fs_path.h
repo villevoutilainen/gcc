@@ -507,22 +507,54 @@ namespace __detail
       ;
 
     _GLIBCXX26_DEPRECATED_SUGGEST("display_string' or 'native_encoded_string")
-    std::string    string() const;
+    std::string    string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
 #if __glibcxx_format_path >= 202506L // C++ >= 26 && HOSTED
-    std::string    display_string() const;
-    std::string    native_encoded_string() const;
+    std::string    display_string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
+    std::string    native_encoded_string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
 #endif
 #if _GLIBCXX_USE_WCHAR_T
-    std::wstring   wstring() const;
+    std::wstring   wstring() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
 #endif
 #ifdef _GLIBCXX_USE_CHAR8_T
     __attribute__((__abi_tag__("__u8")))
-    std::u8string  u8string() const;
+    std::u8string  u8string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
 #else
-    std::string    u8string() const;
+    std::string    u8string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
 #endif // _GLIBCXX_USE_CHAR8_T
-    std::u16string u16string() const;
-    std::u32string u32string() const;
+    std::u16string u16string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
+    std::u32string u32string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
 
     // generic format observers
     template<typename _CharT, typename _Traits = std::char_traits<_CharT>,
@@ -536,22 +568,54 @@ namespace __detail
       ;
 
     _GLIBCXX26_DEPRECATED_SUGGEST("generic_display_string' or 'generic_native_encoded_string")
-    std::string    generic_string() const;
+    std::string    generic_string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
 #if __glibcxx_format_path >= 202506L // C++ >= 26 && HOSTED
-    std::string    generic_display_string() const;
-    std::string    generic_native_encoded_string() const;
+    std::string    generic_display_string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
+    std::string    generic_native_encoded_string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
 #endif
 #if _GLIBCXX_USE_WCHAR_T
-    std::wstring   generic_wstring() const;
+    std::wstring   generic_wstring() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
 #endif
 #ifdef _GLIBCXX_USE_CHAR8_T
     __attribute__((__abi_tag__("__u8")))
-    std::u8string  generic_u8string() const;
+    std::u8string  generic_u8string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
 #else
-    std::string    generic_u8string() const;
+    std::string    generic_u8string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
 #endif // _GLIBCXX_USE_CHAR8_T
-    std::u16string generic_u16string() const;
-    std::u32string generic_u32string() const;
+    std::u16string generic_u16string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
+    std::u32string generic_u32string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+    ;
 
     // compare
 
@@ -1272,11 +1336,18 @@ namespace __detail
     }
 
   inline std::string
-  path::string() const { return string<char>(); }
+  path::string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+  { return string<char>(); }
 
 #if __glibcxx_format_path >= 202506L // C++ >= 26 && HOSTED
   inline std::string
   path::display_string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
   {
 #ifdef _GLIBCXX_FILESYSTEM_IS_WINDOWS
     return std::string(from_range,
@@ -1288,20 +1359,34 @@ namespace __detail
 
   inline std::string
   path::native_encoded_string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
   { return string<char>(); }
 #endif
 
 #if _GLIBCXX_USE_WCHAR_T
   inline std::wstring
-  path::wstring() const { return string<wchar_t>(); }
+  path::wstring() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+  { return string<wchar_t>(); }
 #endif
 
 #ifdef _GLIBCXX_USE_CHAR8_T
   inline std::u8string
-  path::u8string() const { return string<char8_t>(); }
+  path::u8string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+  { return string<char8_t>(); }
 #else
   inline std::string
   path::u8string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
   {
 #ifdef _GLIBCXX_FILESYSTEM_IS_WINDOWS
     std::string __str;
@@ -1319,10 +1404,18 @@ namespace __detail
 #endif // _GLIBCXX_USE_CHAR8_T
 
   inline std::u16string
-  path::u16string() const { return string<char16_t>(); }
+  path::u16string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+  { return string<char16_t>(); }
 
   inline std::u32string
-  path::u32string() const { return string<char32_t>(); }
+  path::u32string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
+  { return string<char32_t>(); }
 
   template<typename _CharT, typename _Traits, typename _Allocator>
     inline std::basic_string<_CharT, _Traits, _Allocator>
@@ -1375,11 +1468,17 @@ namespace __detail
 
   inline std::string
   path::generic_string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
   { return generic_string<char>(); }
 
 #if __glibcxx_format_path >= 202506L // C++ >= 26 && HOSTED
   inline std::string
   path::generic_display_string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
   {
 #ifdef _GLIBCXX_FILESYSTEM_IS_WINDOWS
     string_type __str = generic_string<wchar_t>();
@@ -1392,31 +1491,49 @@ namespace __detail
 
   inline std::string
   path::generic_native_encoded_string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
   { return generic_string<char>(); }
 #endif
 
 #if _GLIBCXX_USE_WCHAR_T
   inline std::wstring
   path::generic_wstring() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
   { return generic_string<wchar_t>(); }
 #endif
 
 #ifdef _GLIBCXX_USE_CHAR8_T
   inline std::u8string
   path::generic_u8string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
   { return generic_string<char8_t>(); }
 #else
   inline std::string
   path::generic_u8string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
   { return generic_string(); }
 #endif
 
   inline std::u16string
   path::generic_u16string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
   { return generic_string<char16_t>(); }
 
   inline std::u32string
   path::generic_u32string() const
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+#endif
   { return generic_string<char32_t>(); }
 
   inline int
@@ -1456,7 +1573,15 @@ namespace __detail
   {
     auto __ext = _M_find_extension();
     if (__ext.first && __ext.second != 0)
-      return path{__ext.first->substr(0, __ext.second)};
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// _M_find_extension's pointer, when not null, is to one of this
+	// path's own strings.
+	contract_assert<std::contracts::never_proven_conveyor_v>(
+	  std::is_object_address (__ext.first));
+#endif
+	return path{__ext.first->substr(0, __ext.second)};
+      }
     return {};
   }
 
@@ -1465,7 +1590,15 @@ namespace __detail
   {
     auto __ext = _M_find_extension();
     if (__ext.first && __ext.second != string_type::npos)
-      return path{__ext.first->substr(__ext.second)};
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// _M_find_extension's pointer, when not null, is to one of this
+	// path's own strings.
+	contract_assert<std::contracts::never_proven_conveyor_v>(
+	  std::is_object_address (__ext.first));
+#endif
+	return path{__ext.first->substr(__ext.second)};
+      }
     return {};
   }
 
