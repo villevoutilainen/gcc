@@ -17,10 +17,10 @@ struct plain_ctrl {
 };
 inline constexpr plain_ctrl plain_ctrl_v{};
 
-int f () conveyor
+int f (int x) conveyor
+  pre<std::contracts::conveyor_assert_v> (x + 1 > 0) // { dg-error "result of .\\(x \\+ 1\\). not provably free of overflow" }
 {
-  int arr[3] = {1, 2, 3};
-  return arr[5]; // { dg-error "array index .5. out of bounds" }
+  return x;
 }
 
 int g (int n) conveyor
@@ -33,4 +33,4 @@ struct S {
   void check () { contract_assert<plain_ctrl_v>(std::is_object_address(this)); } // { dg-error "may only be used inside a conveyor- or symbolic-checked predicate" }
 };
 
-int main () { S s{1}; s.check (); return f () + g (1); }
+int main () { S s{1}; s.check (); return f (1) + g (1); }

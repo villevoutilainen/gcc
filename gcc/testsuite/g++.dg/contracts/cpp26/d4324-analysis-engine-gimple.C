@@ -1,8 +1,9 @@
 // D4324: -fcontract-analysis-engine=gimple leaves the analysis
 // diagnostics to the GIMPLE engine.  The AST engine's own are silenced,
-// so a check only the AST engine performs (constant array bounds) goes
-// unreported, one both engines perform (divisors) is reported once, and
-// a rule about where a construct may appear is still reported.
+// so a check only the AST engine performs (overflow within a contract's
+// own condition) goes unreported, one both engines perform (divisors) is
+// reported once, and a rule about where a construct may appear is still
+// reported.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-analysis-engine=gimple" }
 
@@ -19,10 +20,10 @@ struct plain_ctrl {
 };
 inline constexpr plain_ctrl plain_ctrl_v{};
 
-int f () conveyor
+int f (int x) conveyor
+  pre<std::contracts::conveyor_assert_v> (x + 1 > 0) // { dg-bogus "overflow" }
 {
-  int arr[3] = {1, 2, 3};
-  return arr[5]; // { dg-bogus "out of bounds" }
+  return x;
 }
 
 int g (int n) conveyor
@@ -35,4 +36,4 @@ struct S {
   void check () { contract_assert<plain_ctrl_v>(std::is_object_address(this)); } // { dg-error "may only be used inside a conveyor- or symbolic-checked predicate" }
 };
 
-int main () { S s{1}; s.check (); return f () + g (1); }
+int main () { S s{1}; s.check (); return f (1) + g (1); }
