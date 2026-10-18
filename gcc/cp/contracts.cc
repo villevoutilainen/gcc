@@ -11326,8 +11326,15 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
 	return false;
       identity = env.alias_find (identity);
       bool conveyor_established;
-      return env.contract_field_nz_get (identity, field, &conveyor_established)
-	&& conveyor_established;
+      if (env.contract_field_nz_get (identity, field, &conveyor_established)
+	  && conveyor_established)
+	return true;
+      /* Or a range excluding zero ('obj.field > 0').  */
+      oa_contract_field_range_fact rfact;
+      return (env.contract_field_range_get (identity, field, &rfact)
+	      && rfact.conveyor_established && rfact.range.base == NULL_TREE
+	      && ((rfact.range.has_lo && rfact.range.lo > 0)
+		  || (rfact.range.has_hi && rfact.range.hi < 0)));
     }
 
   /* Item 6: an ordinary call whose callee's own non-ignored, conveyor
@@ -19441,7 +19448,8 @@ oa_invalidate_parameter_alias_group (tree identity, oa_env &env,
    not oa_object_identity_decl -- see that function's own comment.  */
 
 static void
-oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
+oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env,
+					    bool keep_object_addresses = false)
 {
   if (oa_call_is_conversion_operator_call (call))
     return;
@@ -19533,15 +19541,16 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 	     already gets. Exempted for a conveyor callee or a const
 	     reference parameter -- see this function's own comments
 	     above.  */
-	  if (!callee_is_conveyor && !arg_is_const_ref)
+	  bool end_object_addresses = (!callee_is_conveyor && !arg_is_const_ref
+				       && !keep_object_addresses);
+	  if (end_object_addresses)
 	    {
 	      env.invalidate (identity);
 	      env.range_invalidate (identity);
 	      env.field_object_address_invalidate_all (identity);
 	    }
 	  oa_invalidate_parameter_alias_group (identity, env,
-						!callee_is_conveyor
-						&& !arg_is_const_ref);
+						end_object_addresses);
 	}
     }
 }
@@ -19563,7 +19572,13 @@ oa_invalidate_symbolic_scalar_range_for_call_args (tree call, oa_env &env)
      symbolic_facts_for_call_args's own identical comment.  */
   bool call_is_aggr_init = TREE_CODE (call) == AGGR_INIT_EXPR;
   int nargs = call_is_aggr_init ? aggr_init_expr_nargs (call) : call_expr_nargs (call);
-  for (int i = call_is_aggr_init ? 1 : 0; i < nargs; ++i)
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  tree callee_parm = (callee && TREE_CODE (callee) == FUNCTION_DECL
+		      ? DECL_ARGUMENTS (callee) : NULL_TREE);
+  if (call_is_aggr_init && callee_parm)
+    callee_parm = DECL_CHAIN (callee_parm);
+  for (int i = call_is_aggr_init ? 1 : 0; i < nargs;
+       ++i, callee_parm = callee_parm ? DECL_CHAIN (callee_parm) : NULL_TREE)
     {
       tree arg = STRIP_ANY_LOCATION_WRAPPER (call_is_aggr_init
 					      ? AGGR_INIT_EXPR_ARG (call, i)
@@ -19579,7 +19594,21 @@ oa_invalidate_symbolic_scalar_range_for_call_args (tree call, oa_env &env)
 	{
 	  tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
 	  if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
-	    identity = op;
+	    {
+	      identity = op;
+	      /* The callee can change the scalar through its address, so
+		 the item 8 facts about its value (nonzero, range) end too
+		 -- unless it is bound to a const reference.  */
+	      bool const_ref = (callee_parm
+				&& TYPE_REF_P (TREE_TYPE (callee_parm))
+				&& TYPE_READONLY (TREE_TYPE (TREE_TYPE (callee_parm))));
+	      if (!const_ref && SCALAR_TYPE_P (TREE_TYPE (op)))
+		{
+		  env.nz_invalidate (op);
+		  env.range_invalidate (op);
+		  env.float_range_invalidate (op);
+		}
+	    }
 	}
       if (identity)
 	env.contract_scalar_range_invalidate (identity);
@@ -21838,19 +21867,28 @@ oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
 	  if (callee && TREE_CODE (callee) == FUNCTION_DECL)
 	    oa_call_site_callback (t, callee, e, oa_call_site_callback_data);
 	}
-      /* Bookkeeping (establish/invalidate) for the shared predicate/
-	 field-range substrate runs whenever *either* built-in feature or
-	 a plugin driving oa_walk_function_calls might consult it --
+      /* Establishing facts from a callee's postconditions, for the
+	 shared predicate/field-range substrate, runs whenever *either*
+	 built-in feature or a plugin driving oa_walk_function_calls might
+	 consult it --
 	 unlike the diagnostics above, which stay specific to each flag's
 	 own feature (see oa_contract_fact_tracking_active_p's own
 	 comment).  */
-      if (flag_contract_symbolic_proofs || flag_contract_conveyor_proofs
-	  || oa_call_site_callback || conveyor_forced || symbolic_forced)
-	{
-	  oa_invalidate_symbolic_facts_for_call_args (t, *e);
-	  oa_invalidate_symbolic_scalar_range_for_call_args (t, *e);
-	  oa_handle_call_symbolic_postcondition_establishment (t, *e);
-	}
+      bool tracking = (flag_contract_symbolic_proofs
+		       || flag_contract_conveyor_proofs
+		       || oa_call_site_callback || conveyor_forced
+		       || symbolic_forced);
+      /* Invalidation, though, always runs: the mandatory item 8 checks
+	 rely on facts a contract_assert establishes (e.g. a field's
+	 'obj.field != 0' for a divisor), which a call that may modify the
+	 object must end whether or not either feature is on.  Without
+	 either, though, a call doesn't end the is_object_address facts
+	 the mandatory obligations use, as before.  */
+      oa_invalidate_symbolic_facts_for_call_args
+	(t, *e, /*keep_object_addresses=*/!tracking);
+      oa_invalidate_symbolic_scalar_range_for_call_args (t, *e);
+      if (tracking)
+	oa_handle_call_symbolic_postcondition_establishment (t, *e);
       /* Mechanism B (-fcontract-symbolic-runtime-checks, injected runtime
 	 check codegen) is deliberately kept CALL_EXPR-only here, even
 	 though T can now also be an AGGR_INIT_EXPR: both of these read
@@ -25387,6 +25425,15 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 				env.contract_float_field_range_invalidate (field_identity,
 									    field);
 			      }
+			    /* The field's nonzero fact (a contract_assert's
+			       'obj.field != 0') is stale too, unless the value
+			       written is itself provably nonzero.  */
+			    if (INTEGRAL_TYPE_P (TREE_TYPE (field))
+				&& oa_provably_nonzero_p (rhs, env))
+			      env.contract_field_nz_set (field_identity, field,
+							 /*conveyor_established=*/true);
+			    else
+			      env.contract_field_nz_invalidate (field_identity, field);
 			    /* Stage 4a: a named predicate (e.g. 'is_opened')
 			       is opaque and could depend on any field, so
 			       a direct write to *any* field must invalidate
