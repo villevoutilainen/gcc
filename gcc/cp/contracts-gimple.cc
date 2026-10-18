@@ -2953,7 +2953,8 @@ cg_display_value (tree val, int depth = 0)
   if (TREE_CODE (val) != SSA_NAME || depth > 4)
     return val;
   if (tree var = SSA_NAME_VAR (val))
-    if (DECL_P (var) && !DECL_ARTIFICIAL (var) && DECL_NAME (var))
+    if (DECL_P (var) && DECL_NAME (var)
+	&& (!DECL_ARTIFICIAL (var) || is_this_parameter (var)))
       return var;
   gimple *def = SSA_NAME_DEF_STMT (val);
   if (!def || !is_gimple_assign (def))
@@ -3767,7 +3768,14 @@ cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
     return;
   if (TREE_CODE (base) != SSA_NAME)
     return;
-
+  /* An object's vtable pointer, loaded for a virtual call: the vtable
+     is valid whenever the object is, whose own validity the access to
+     its vtable pointer field already needed.  */
+  gimple *bdef = SSA_NAME_DEF_STMT (base);
+  if (bdef && gimple_assign_single_p (bdef)
+      && TREE_CODE (gimple_assign_rhs1 (bdef)) == COMPONENT_REF
+      && DECL_VIRTUAL_P (TREE_OPERAND (gimple_assign_rhs1 (bdef), 1)))
+    return;
   /* POINTER_TYPE, or a REFERENCE-typed PARAMETER specifically --
      mirroring oa_scan_array_bounds_in_expr's own identical condition
      (contracts.cc) after its own 2026-08-26 fix (Ville: "a conveyor
@@ -6567,7 +6575,8 @@ cg_contract_check_object_identity (gcall *call, tree struct_var, tree decls,
       return val && TREE_CODE (val) == SSA_NAME
 	     ? cg_gimple_object_identity (val) : NULL_TREE;
     }
-  if (VAR_P (decl) && RECORD_OR_UNION_TYPE_P (type))
+  /* A local aggregate, or one passed by value.  */
+  if (RECORD_OR_UNION_TYPE_P (type))
     return cg_gimple_object_identity (decl);
   return NULL_TREE;
 }
