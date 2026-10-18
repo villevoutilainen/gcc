@@ -2890,6 +2890,16 @@ cg_display_value (tree val, int depth = 0)
 	  if (DECL_P (obj) && !DECL_ARTIFICIAL (obj))
 	    return rhs1;
 	}
+      /* '*p', or a reference's referent.  */
+      if (TREE_CODE (rhs1) == MEM_REF && integer_zerop (TREE_OPERAND (rhs1, 1))
+	  && TREE_CODE (TREE_OPERAND (rhs1, 0)) == SSA_NAME)
+	{
+	  tree ptr = cg_display_value (TREE_OPERAND (rhs1, 0), depth + 1);
+	  if (DECL_P (ptr) && TYPE_REF_P (TREE_TYPE (ptr)))
+	    return convert_from_reference (ptr);
+	  if (DECL_P (ptr))
+	    return build1 (INDIRECT_REF, TREE_TYPE (rhs1), ptr);
+	}
       return val;
     }
   if (TREE_CODE_CLASS (code) == tcc_binary)
@@ -3144,6 +3154,25 @@ cg_check_overflow_ub (gimple *stmt,
      stored back into the variable it read.  */
   tree target = NULL_TREE;
   if (var_side && TREE_CODE (var_side) == SSA_NAME)
+    {
+      /* '++*p', '++r' for a reference r: the value is loaded from a
+	 location and the result stored back to it.  */
+      gimple *load = SSA_NAME_DEF_STMT (var_side);
+      /* A post-increment copies the old value first.  */
+      while (load && gimple_assign_ssa_name_copy_p (load))
+	load = SSA_NAME_DEF_STMT (gimple_assign_rhs1 (load));
+      use_operand_p use;
+      gimple *use_stmt;
+      if (load && gimple_assign_single_p (load)
+	  && !is_gimple_reg (gimple_assign_rhs1 (load))
+	  && TREE_CODE (lhs) == SSA_NAME
+	  && single_imm_use (lhs, &use, &use_stmt)
+	  && gimple_assign_single_p (use_stmt)
+	  && operand_equal_p (gimple_assign_lhs (use_stmt),
+			      gimple_assign_rhs1 (load), 0))
+	target = cg_display_value (var_side);
+    }
+  if (!target && var_side && TREE_CODE (var_side) == SSA_NAME)
     {
       tree from = cg_display_value (var_side);
       if (DECL_P (from))
@@ -9324,6 +9353,174 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
   return ok;
 }
 
+/* What the checks of a contract's own function found about each value a
+   contract check passes its predicate core function, merged over every
+   check of the contract: the core function's parameter I receives the
+   value captured in the check's field I.  */
+
+struct cg_site_fact
+{
+  bool has_range = false;
+  cg_range_lite range;
+  bool nonzero = false;
+  bool object_address = false;
+  bool has_float = false;
+  frange float_range = frange ();
+};
+
+static hash_map<tree, vec<cg_site_fact> *> *cg_predicate_site_facts;
+
+/* Record, at contract check CALL, the facts about each value it
+   captures for its predicate core function.  */
+
+static void
+cg_record_predicate_site_facts (gcall *call,
+				hash_map<tree, cg_fact> &established,
+				hash_map<tree, cg_fact> &established_nz,
+				hash_map<tree, cg_range_lite> &established_range,
+				hash_map<tree, cg_range_lite> &scalar_range_cache,
+				gimple_ranger *ranger,
+				hash_map<tree, frange> &established_frange)
+{
+  tree struct_var, cond, decls;
+  tree contract = cg_contract_check_call_p (call, &struct_var, &cond, &decls);
+  if (!contract)
+    return;
+  tree core = contract_predicate_core_function (contract);
+  if (!core)
+    return;
+  if (!cg_predicate_site_facts)
+    cg_predicate_site_facts = new hash_map<tree, vec<cg_site_fact> *>;
+  bool existed;
+  vec<cg_site_fact> *&facts = cg_predicate_site_facts->get_or_insert (core,
+								       &existed);
+  unsigned n = TREE_VEC_LENGTH (decls) - 2;
+  auto_vec<cg_site_fact> here;
+  for (unsigned i = 0; i < n; ++i)
+    {
+      cg_site_fact f;
+      tree decl = TREE_VEC_ELT (decls, i + 2);
+      tree val = cg_contract_check_decl_value (call, struct_var, decls, decl);
+      if (val && TREE_CODE (val) == SSA_NAME)
+	{
+	  tree type = TREE_TYPE (val);
+	  if (INTEGRAL_TYPE_P (type))
+	    {
+	      f.has_range = cg_value_range_at (val, call, established_range,
+					       scalar_range_cache, ranger,
+					       /*require_conveyor=*/true,
+					       &f.range);
+	      hash_set<tree> ip;
+	      f.nonzero = (cg_provable_nonzero_p (val, established_nz, true, ip)
+			   || (f.has_range
+			       && cg_range_nonzero_verdict (f.range)
+				  == CG_VERDICT_TRUE));
+	    }
+	  else if (POINTER_TYPE_P (type))
+	    f.object_address
+	      = cg_provable_object_address_at_p (val, call, established,
+						 /*require_conveyor=*/true,
+						 NULL);
+	  else if (SCALAR_FLOAT_TYPE_P (type))
+	    {
+	      frange fr (type);
+	      if (ranger->range_of_expr (fr, val, call))
+		{
+		  if (frange *known = established_frange.get (val))
+		    fr.intersect (*known);
+		  f.has_float = !fr.undefined_p () && !fr.varying_p ();
+		  f.float_range = fr;
+		}
+	    }
+	}
+      here.safe_push (f);
+    }
+  if (!existed)
+    {
+      facts = new vec<cg_site_fact> ();
+      facts->safe_splice (here);
+      return;
+    }
+  /* Another check of the same contract (a constructor's clones): what
+     holds at both.  */
+  for (unsigned i = 0; i < here.length () && i < facts->length (); ++i)
+    {
+      cg_site_fact &a = (*facts)[i];
+      const cg_site_fact &b = here[i];
+      a.nonzero &= b.nonzero;
+      a.object_address &= b.object_address;
+      if (a.has_range && b.has_range)
+	{
+	  if (!b.range.has_lo || (a.range.has_lo && b.range.lo < a.range.lo))
+	    a.range.has_lo = b.range.has_lo, a.range.lo = b.range.lo;
+	  if (!b.range.has_hi || (a.range.has_hi && b.range.hi > a.range.hi))
+	    a.range.has_hi = b.range.has_hi, a.range.hi = b.range.hi;
+	}
+      else
+	a.has_range = false;
+      if (a.has_float && b.has_float)
+	a.float_range.union_ (b.float_range);
+      else
+	a.has_float = false;
+    }
+}
+
+/* Seed predicate core function FUN's parameters with what the checks of
+   its contract recorded about the values passed to them.  */
+
+static void
+cg_seed_predicate_site_facts (function *fun,
+			      hash_map<tree, cg_fact> &established,
+			      hash_map<tree, cg_fact> &established_nz,
+			      hash_map<tree, cg_range_lite> &established_range,
+			      hash_map<tree, frange> &established_frange)
+{
+  vec<cg_site_fact> **facts
+    = cg_predicate_site_facts ? cg_predicate_site_facts->get (fun->decl) : NULL;
+  if (!facts)
+    return;
+  unsigned i = 0;
+  for (tree parm = DECL_ARGUMENTS (fun->decl); parm && i < (*facts)->length ();
+       parm = DECL_CHAIN (parm), ++i)
+    {
+      tree ssa = ssa_default_def (fun, parm);
+      if (!ssa)
+	continue;
+      const cg_site_fact &f = (**facts)[i];
+      if (f.has_range)
+	established_range.put (ssa, f.range);
+      if (f.nonzero)
+	established_nz.put (ssa, { true });
+      if (f.object_address || TYPE_REF_P (TREE_TYPE (parm)))
+	{
+	  /* A reference parameter binds the object the check passed the
+	     address of.  */
+	  if (f.object_address)
+	    established.put (ssa, { true });
+	}
+      if (f.has_float)
+	established_frange.put (ssa, f.float_range);
+    }
+}
+
+/* Whether predicate core function FN's body gets item 8's checks: its
+   contract is conveyor-flavored and checked, not never_proven, as in the
+   AST engine's oa_scan_item8_in_expr calls.  */
+
+static bool
+cg_predicate_item8_p (tree fn)
+{
+  tree owner;
+  tree contract = predicate_core_function_contract (fn, &owner);
+  if (!contract || !flag_contract_conveyor_proofs_gimple
+      || !oa_contract_conveyor_active_public (contract, owner))
+    return false;
+  bool never_proven, cf, cs, sf, ss;
+  return (oa_contract_self_check_mode_public (contract, owner, &never_proven,
+					      &cf, &cs, &sf, &ss)
+	  && !never_proven);
+}
+
 /* The object STORE_LHS (a store's destination in a predicate core
    function) names, in source terms, for a diagnostic: the parameter or
    field it reaches through a reference parameter, else STORE_LHS.  */
@@ -9495,10 +9692,15 @@ pass_contracts_gimple::execute (function *fun)
      guarded function (whose body this helper mechanically copies) has
      already had this exact condition resolved against ITS OWN,
      correctly-seeded parameters.  */
+  bool predicate_core = false;
   if (CONTRACT_HELPER (fun->decl) != ldf_contract_none)
     {
       cg_check_predicate_mutation (fun);
-      return 0;
+      /* A conveyor contract's condition gets item 8's checks too,
+	 against the facts at its checks (cg_record_predicate_site_facts).  */
+      if (!cg_predicate_item8_p (fun->decl))
+	return 0;
+      predicate_core = true;
     }
 
   /* D4324/P2680, GIMPLE/front-end instantiation-ordering fix (found via
@@ -9630,6 +9832,9 @@ pass_contracts_gimple::execute (function *fun)
      contract_assert.  */
   hash_map<tree, frange> established_frange;
   cg_seed_float_self_trust (fun, established_frange);
+  if (predicate_core)
+    cg_seed_predicate_site_facts (fun, established, established_nz,
+				  established_range, established_frange);
   cg_predicate_facts_walk (fun, &scalar_range_cache,
 			     established_range, &call_relational_verdict,
 			     ranger,
@@ -9638,7 +9843,7 @@ pass_contracts_gimple::execute (function *fun)
 
   bool check_reference_safety
     = cg_function_might_need_reference_safety_walk_p (fun);
-  bool check_item8_ub = DECL_DECLARED_CONVEYOR_P (fun->decl);
+  bool check_item8_ub = DECL_DECLARED_CONVEYOR_P (fun->decl) || predicate_core;
 
   /* Walk the dominator tree, so a contract_assert's facts are in the
      fact maps exactly while its dominator subtree is being checked (see
@@ -9674,6 +9879,10 @@ pass_contracts_gimple::execute (function *fun)
 			     established_call_rel, established_call_call_rel,
 			     scalar_range_cache, ranger,
 			     &call_relational_verdict, &established_frange);
+	      cg_record_predicate_site_facts (call, established, established_nz,
+					      established_range,
+					      scalar_range_cache, ranger,
+					      established_frange);
 	      if (cg_check_contract_assert (call, established, established_nz,
 					    established_range,
 					    scalar_range_cache, ranger,
@@ -10044,25 +10253,34 @@ contracts_gimple_eager_check_function_1 (tree fndecl, bool is_eof_drain)
 void
 contracts_gimple_eager_check_drain_at_eof (void)
 {
-  for (tree fn : cg_eager_check_predicate_helpers)
-    {
-      tree owner;
-      if (predicate_core_function_contract (fn, &owner))
-	cg_eager_check_deferred_until_eof.safe_push (fn);
-    }
-  cg_eager_check_predicate_helpers.truncate (0);
-  if (cg_eager_check_deferred_until_eof.is_empty ())
-    return;
-
   cg_eager_check_active = true;
-  while (!cg_eager_check_deferred_until_eof.is_empty ()
-	 || !cg_eager_check_pending.is_empty ())
+  do
     {
-      if (!cg_eager_check_deferred_until_eof.is_empty ())
-	contracts_gimple_eager_check_function_1
-	  (cg_eager_check_deferred_until_eof.pop (), /*is_eof_drain=*/true);
-      else
-	contracts_gimple_eager_check_function_1 (cg_eager_check_pending.pop ());
+      while (!cg_eager_check_deferred_until_eof.is_empty ()
+	     || !cg_eager_check_pending.is_empty ())
+	{
+	  if (!cg_eager_check_deferred_until_eof.is_empty ())
+	    contracts_gimple_eager_check_function_1
+	      (cg_eager_check_deferred_until_eof.pop (), /*is_eof_drain=*/true);
+	  else
+	    contracts_gimple_eager_check_function_1 (cg_eager_check_pending.pop ());
+	}
+      /* The predicate core functions last: checking one uses what the
+	 checks of its contract's own function recorded about the values
+	 it is called with (cg_record_predicate_site_facts).  */
+      auto_vec<tree> helpers;
+      for (tree fn : cg_eager_check_predicate_helpers)
+	helpers.safe_push (fn);
+      cg_eager_check_predicate_helpers.truncate (0);
+      for (tree fn : helpers)
+	{
+	  tree owner;
+	  if (predicate_core_function_contract (fn, &owner))
+	    contracts_gimple_eager_check_function_1 (fn, /*is_eof_drain=*/true);
+	}
     }
+  while (!cg_eager_check_deferred_until_eof.is_empty ()
+	 || !cg_eager_check_pending.is_empty ()
+	 || !cg_eager_check_predicate_helpers.is_empty ());
   cg_eager_check_active = false;
 }

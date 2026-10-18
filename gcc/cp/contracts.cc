@@ -6543,6 +6543,14 @@ get_or_build_predicate_core_function (tree contract, tree orig)
 /* See contracts.h.  */
 
 tree
+contract_predicate_core_function (tree contract)
+{
+  return get_contract_predicate_core_fn (contract);
+}
+
+/* See contracts.h.  */
+
+tree
 predicate_core_function_contract (tree fn, tree *owner)
 {
   tree *v = hash_map_safe_get (predicate_core_fn_contract, fn);
