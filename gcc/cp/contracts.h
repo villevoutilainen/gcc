@@ -1042,6 +1042,11 @@ public:
    probing early-out is added in front of it.  */
 extern bool *conveyor_auto_probe_violation_p;
 
+/* The conveyor(auto) specialization whose deduction the active probe is
+   deciding, if the probe was started by that deduction; see
+   conveyor_auto_note_violation_in.  */
+extern tree conveyor_auto_probe_decl;
+
 /* True while a conveyor(auto) probe (as above) is in progress.  */
 inline bool
 conveyor_auto_probing_p (void)
@@ -1056,6 +1061,20 @@ note_conveyor_auto_violation (void)
 {
   gcc_checking_assert (conveyor_auto_probe_violation_p);
   *conveyor_auto_probe_violation_p = true;
+}
+
+/* If FN is the conveyor(auto) specialization being deduced, record a
+   violation of the conveyor rules in its body and return true; the
+   caller then doesn't diagnose it, since the violation only means FN
+   isn't conveyor.  For the rules checked while FN's body is analyzed
+   (oa_* walk, GIMPLE engine), rather than while it is parsed.  */
+inline bool
+conveyor_auto_note_violation_in (tree fn)
+{
+  if (!conveyor_auto_probing_p () || !fn || fn != conveyor_auto_probe_decl)
+    return false;
+  note_conveyor_auto_violation ();
+  return true;
 }
 
 /* RAII sentinel for a single conveyor(auto) probe attempt: while
@@ -1073,6 +1092,7 @@ class conveyor_auto_probe_sentinel
 {
 public:
   bool *saved;
+  tree saved_decl;
   bool active;
   /* ACTIVE lets a caller conditionally no-op this sentinel (e.g. when
      D isn't actually an unresolved conveyor(auto) specialization)
@@ -1080,16 +1100,24 @@ public:
      suppress_conveyor_restrictions_for_converted_constant_expr_
      sentinel's own ACTIVE parameter above.  When inactive, VIOLATION
      is never touched.  */
-  explicit conveyor_auto_probe_sentinel (bool *violation, bool active = true)
-    : saved (conveyor_auto_probe_violation_p), active (active)
+  explicit conveyor_auto_probe_sentinel (bool *violation, bool active = true,
+					 tree decl = NULL_TREE)
+    : saved (conveyor_auto_probe_violation_p),
+      saved_decl (conveyor_auto_probe_decl), active (active)
   {
     if (active)
-      conveyor_auto_probe_violation_p = violation;
+      {
+	conveyor_auto_probe_violation_p = violation;
+	conveyor_auto_probe_decl = decl;
+      }
   }
   ~conveyor_auto_probe_sentinel ()
   {
     if (active)
-      conveyor_auto_probe_violation_p = saved;
+      {
+	conveyor_auto_probe_violation_p = saved;
+	conveyor_auto_probe_decl = saved_decl;
+      }
   }
 };
 
