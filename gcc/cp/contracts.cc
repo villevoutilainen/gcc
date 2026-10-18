@@ -7818,6 +7818,25 @@ struct oa_derivation;
    call_relational_merge_with (right here) need it before that point.  */
 static bool oa_range_fact_equal (const oa_range_fact &a, const oa_range_fact &b);
 
+/* The object an accessor's receiver RECV ('v', '&v', '*p', 'this')
+   names: the decl underneath, or RECV itself.  */
+
+static tree
+oa_receiver_object_identity (tree recv)
+{
+  while (recv)
+    {
+      recv = STRIP_ANY_LOCATION_WRAPPER (recv);
+      if (TREE_CODE (recv) == ADDR_EXPR || TREE_CODE (recv) == INDIRECT_REF
+	  || CONVERT_EXPR_P (recv) || TREE_CODE (recv) == NON_LVALUE_EXPR
+	  || TREE_CODE (recv) == VIEW_CONVERT_EXPR)
+	recv = TREE_OPERAND (recv, 0);
+      else
+	break;
+    }
+  return recv;
+}
+
 class oa_env
 {
 public:
@@ -8560,6 +8579,25 @@ public:
 	to_remove.safe_push (it.first);
     for (unsigned i = 0; i < to_remove.length (); ++i)
       m_call_relational_map.remove (to_remove[i]);
+  }
+  /* The object IDENTITY may have changed (a field write, or a call
+     handed it by non-const reference or pointer): drop every fact
+     comparing against the result of an accessor called on it.  */
+  void call_relational_invalidate_receiver (tree identity)
+  {
+    auto_vec<tree> to_remove;
+    for (auto it : m_call_relational_map)
+      if (oa_receiver_object_identity (it.second.rhs_receiver) == identity)
+	to_remove.safe_push (it.first);
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      m_call_relational_map.remove (to_remove[i]);
+    auto_vec<std::pair<tree, tree>> cc_remove;
+    for (auto it : m_call_call_relational_map)
+      if (oa_receiver_object_identity (it.first.first) == identity
+	  || oa_receiver_object_identity (it.second.rhs_receiver) == identity)
+	cc_remove.safe_push (it.first);
+    for (unsigned i = 0; i < cc_remove.length (); ++i)
+      m_call_call_relational_map.remove (cc_remove[i]);
   }
   void call_relational_merge_with (oa_env &other)
   {
@@ -19503,6 +19541,9 @@ oa_invalidate_parameter_alias_group (tree identity, oa_env &env,
       if (!oa_could_alias_as_parameters (identity, parm))
 	continue;
       env.predicate_fact_invalidate (parm);
+      /* IDENTITY's own are its caller's to end.  */
+      if (parm != identity)
+	env.call_relational_invalidate_receiver (parm);
       env.contract_field_range_invalidate_all (parm);
       env.contract_float_field_range_invalidate_all (parm);
       env.contract_call_range_invalidate_all (parm);
@@ -19645,6 +19686,15 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env,
 	     already gets. Exempted for a conveyor callee or a const
 	     reference parameter -- see this function's own comments
 	     above.  */
+	  /* An accessor's result on an object the callee can't change
+	     (a const reference, or the 'this' of a const member function)
+	     stays put.  */
+	  bool arg_is_const_this
+	    = (callee_parm != NULL_TREE && is_this_parameter (callee_parm)
+	       && POINTER_TYPE_P (TREE_TYPE (callee_parm))
+	       && TYPE_READONLY (TREE_TYPE (TREE_TYPE (callee_parm))));
+	  if (!arg_is_const_ref && !arg_is_const_this)
+	    env.call_relational_invalidate_receiver (identity);
 	  bool end_object_addresses = (!callee_is_conveyor && !arg_is_const_ref
 				       && !keep_object_addresses);
 	  if (end_object_addresses)
@@ -25551,6 +25601,7 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 			       p, no aliasing at all) wrongly verified before
 			       this fix.  */
 			    env.predicate_fact_invalidate (field_identity);
+			    env.call_relational_invalidate_receiver (field_identity);
 			    /* Stage 5: this replaces the FIELD sub-object of
 			       FIELD_IDENTITY directly, so whatever predicate
 			       fact was tracked about '&field_identity->field'
@@ -28001,7 +28052,8 @@ oa_underlying_param_operand (tree op, bool allow_var_decl = false)
 
 bool
 oa_match_comparison_against_param (tree conjunct, tree *param_out,
-				    tree_code *code_out, tree *other_out)
+				    tree_code *code_out, tree *other_out,
+				    bool allow_var_decl)
 {
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
   while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
@@ -28022,11 +28074,11 @@ oa_match_comparison_against_param (tree conjunct, tree *param_out,
      operator (e.g. 'x < y' with both x and y convertible-to-int).  */
   tree param, other;
   bool flipped;
-  if ((param = oa_underlying_param_operand (op0))
-      && (other = oa_underlying_param_operand (op1)))
+  if ((param = oa_underlying_param_operand (op0, allow_var_decl))
+      && (other = oa_underlying_param_operand (op1, allow_var_decl)))
     flipped = false;
-  else if ((param = oa_underlying_param_operand (op1))
-	   && (other = oa_underlying_param_operand (op0)))
+  else if ((param = oa_underlying_param_operand (op1, allow_var_decl))
+	   && (other = oa_underlying_param_operand (op0, allow_var_decl)))
     flipped = true;
   else
     return false;

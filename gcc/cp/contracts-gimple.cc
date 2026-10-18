@@ -3904,7 +3904,6 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		hash_map<tree, cg_fact> &established_nz,
 		hash_map<tree, cg_range_lite> &established_range,
 		hash_map<tree, cg_rel_fact> &established_rel,
-		hash_map<tree, cg_call_rel_fact> &established_call_rel,
 		hash_map<cg_field_key_hash, cg_call_call_rel_fact>
 		  &established_call_call_rel,
 		hash_map<tree, cg_range_lite> &scalar_range_cache,
@@ -4392,8 +4391,13 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  tree fact_rhs_receiver, fact_rhs_callee;
 	  cg_range_lite fact_offset;
 	  bool fact_conveyor_established;
+	  /* Not ESTABLISHED_CALL_REL: a precondition's fact lasts only
+	     until the receiver changes, so it is
+	     cg_check_call_relational_fact's to consult, in the
+	     dominator walk's state (cg_seed_predicate_self_trust).  */
+	  hash_map<tree, cg_call_rel_fact> no_call_rel;
 	  bool have_fact
-	    = cg_get_call_relational (sub_param, established_call_rel,
+	    = cg_get_call_relational (sub_param, no_call_rel,
 				       empty_call_rel_cache, established_range,
 				       empty_scalar_range_cache, ranger,
 				       check_as_conveyor, check_as_symbolic,
@@ -4799,6 +4803,20 @@ cg_gimple_object_identity (tree val)
   return cg_gimple_object_identity_1 (val, in_progress);
 }
 
+/* The object IDENTITY may have changed: drop every fact in STATE that
+   compares against the result of an accessor called on it.  */
+
+static void
+cg_call_rel_invalidate_receiver (cg_dom_fact_state &state, tree identity)
+{
+  auto_vec<tree> to_remove;
+  for (auto it : state.call_rel)
+    if (cg_gimple_object_identity (it.second.rhs_receiver) == identity)
+      to_remove.safe_push (it.first);
+  for (unsigned i = 0; i < to_remove.length (); ++i)
+    state.call_rel.remove (to_remove[i]);
+}
+
 /* Stage 4c: the GIMPLE analogue of contracts.cc's own Rule 1
    COMPONENT_REF write-detection block -- confirmed via tree-shape
    investigation (-fdump-tree-ssa-raw) that a direct field write is
@@ -4891,6 +4909,7 @@ cg_process_field_write (tree lhs, tree rhs, function *fun,
      ANY field write invalidates it wholesale).  */
   state.pred.remove (identity);
   state.field.remove ({identity, field});
+  cg_call_rel_invalidate_receiver (state, identity);
   /* Stage 5: this replaces the FIELD sub-object of IDENTITY directly,
      so whatever predicate fact was tracked about '&identity->field'
      itself must be dropped too -- narrower single-slot form, mirroring
@@ -5382,6 +5401,26 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
 	    seed.call.put ({ssa, call_groups[g].callee},
 			    { call_groups[g].range, conveyor_enabled });
 	}
+
+      /* 'i < v.size ()': holds on entry, until V changes
+	 (cg_call_rel_invalidate_receiver).  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree rel_param, rhs_receiver, rhs_callee;
+	  tree_code rel_code;
+	  if (!oa_match_comparison_against_call (*conjuncts[i], &rel_param,
+						  &rel_code, &rhs_receiver,
+						  &rhs_callee,
+						  /*allow_symbolic_accessor=*/
+						    !conveyor_enabled))
+	    continue;
+	  tree key_param = cg_self_trust_key (fun, rel_param);
+	  tree key_receiver = cg_self_trust_key (fun, rhs_receiver);
+	  if (key_param && key_receiver)
+	    seed.call_rel.put (key_param, { rel_code, key_receiver, rhs_callee,
+					    cg_range_lite_exact (0),
+					    conveyor_enabled });
+	}
     }
 }
 
@@ -5527,24 +5566,6 @@ cg_consult_persistent_facts (gcall *call,
 		  || (established->range.has_hi
 		      && established->range.hi <= required.hi)))
 	    continue; /* Proven true: silently discharged.  */
-	  if (established
-	      && (!require_conveyor || established->conveyor_established)
-	      && cg_ranges_disjoint_p (established->range, required))
-	    {
-	      char have_text[64], need_text[64];
-	      error_at (gimple_location (call),
-			"argument %qE provably violates the precondition of %qD",
-			substituted, callee);
-	      inform (gimple_location (call),
-		      "field %qD of %qE is established %s, but the "
-		      "precondition requires it %s",
-		      field_groups[g].field, substituted,
-		      cg_range_lite_text (established->range, have_text,
-					  sizeof have_text),
-		      cg_range_lite_text (required, need_text,
-					  sizeof need_text));
-	      continue;
-	    }
 
 	  if (strict)
 	    error_at (gimple_location (call),
@@ -5649,6 +5670,25 @@ cg_consult_persistent_facts (gcall *call,
 		  || (established->range.has_hi
 		      && established->range.hi <= required.hi)))
 	    continue; /* Proven true: silently discharged.  */
+	  if (established
+	      && (!require_conveyor || established->conveyor_established)
+	      && cg_ranges_disjoint_p (established->range, required))
+	    {
+	      char have_text[64], need_text[64];
+	      error_at (gimple_location (call),
+			"argument %qE provably violates the precondition of %qD: "
+			"%qD is established outside the required range",
+			cg_display_value (substituted), callee,
+			call_groups[g].callee);
+	      inform (gimple_location (call),
+		      "%qD is established %s, but the precondition requires "
+		      "it to be %s", call_groups[g].callee,
+		      cg_range_lite_text (established->range, have_text,
+					  sizeof have_text),
+		      cg_range_lite_text (required, need_text,
+					  sizeof need_text));
+	      continue;
+	    }
 
 	  if (strict)
 	    error_at (gimple_location (call),
@@ -5748,6 +5788,9 @@ cg_invalidate_parameter_alias_group (tree identity, function *fun,
       if (!sib_identity)
 	sib_identity = sib;
       state.pred.remove (sib_identity);
+      /* PARM's own are its caller's to end.  */
+      if (sib != parm)
+	cg_call_rel_invalidate_receiver (state, sib_identity);
       cg_field_object_predicate_invalidate_all (sib_identity, field_object_cache, state);
       auto_vec<std::pair<tree, tree>> to_remove;
       for (auto it : state.field)
@@ -5823,6 +5866,13 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
 	  }
       cg_invalidate_persistent_facts_for_call_arg (arg, fun,
 						   field_object_cache, state);
+      /* An accessor's result on an object the callee can't change
+	 through ARG (a reference or pointer to const) stays put.  */
+      if (POINTER_TYPE_P (TREE_TYPE (arg))
+	  && !(parm_types && POINTER_TYPE_P (TREE_VALUE (parm_types))
+	       && TYPE_READONLY (TREE_TYPE (TREE_VALUE (parm_types)))))
+	if (tree identity = cg_gimple_object_identity (arg))
+	  cg_call_rel_invalidate_receiver (state, identity);
       if (keep)
 	state.field.put (cg_scalar_memory_fact_key (TREE_OPERAND (arg, 0)),
 			 kept);
@@ -6171,6 +6221,34 @@ cg_establish_assert_facts (gcall *call, cg_dom_fact_state &state)
 	  continue;
 	}
 
+      /* 'x < v.size ()': holds until V changes, as a precondition's
+	 does (cg_seed_predicate_self_trust).  */
+      tree rel_decl, recv, accessor;
+      tree_code rel_code;
+      if (oa_match_comparison_against_call (c, &rel_decl, &rel_code, &recv,
+					     &accessor,
+					     /*allow_symbolic_accessor=*/
+					       !conveyor_enabled))
+	{
+	  tree r = recv;
+	  while (r && (TREE_CODE (r) == INDIRECT_REF || CONVERT_EXPR_P (r)
+		       || TREE_CODE (r) == NON_LVALUE_EXPR
+		       || TREE_CODE (r) == VIEW_CONVERT_EXPR
+		       || TREE_CODE (r) == ADDR_EXPR))
+	    r = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (r, 0));
+	  tree va = cg_contract_check_decl_value (call, struct_var, decls,
+						  rel_decl);
+	  tree vr = (r && (VAR_P (r) || TREE_CODE (r) == PARM_DECL)
+		     ? cg_contract_check_decl_value (call, struct_var, decls, r)
+		     : NULL_TREE);
+	  if (va && vr && TREE_CODE (va) == SSA_NAME
+	      && INTEGRAL_TYPE_P (TREE_TYPE (va)))
+	    state.call_rel.put (va, { rel_code, vr, accessor,
+				      cg_range_lite_exact (0),
+				      conveyor_enabled });
+	  continue;
+	}
+
       tree obj, field;
       if (oa_field_nonzero_conjunct_public (c, &obj, &field))
 	{
@@ -6342,6 +6420,77 @@ cg_compute_assert_memory_verdicts (gcall *call, cg_dom_fact_state &state,
       widest_int val = 0;
       tree pred_fn, arg_decl, obj, field, decl, ptr_expr, const_val;
       bool negated;
+      /* A comparison with an accessor's result ('x < v.size ()'),
+	 decided by a fact relating them in STATE, e.g. a
+	 precondition's, unless the receiver has changed since.  */
+      tree recv, accessor;
+      bool conveyor_shape = false;
+      if (cg_array_bounds
+	  && ((conveyor_shape
+		 = oa_match_comparison_against_call (c, &decl, &code, &recv,
+						     &accessor,
+						     /*allow_symbolic_accessor=*/
+						       false))
+	      || oa_match_comparison_against_call (c, &decl, &code, &recv,
+						   &accessor,
+						   /*allow_symbolic_accessor=*/
+						     true)))
+	{
+	  tree r = recv;
+	  while (r && (TREE_CODE (r) == INDIRECT_REF || CONVERT_EXPR_P (r)
+		       || TREE_CODE (r) == NON_LVALUE_EXPR
+		       || TREE_CODE (r) == VIEW_CONVERT_EXPR
+		       || TREE_CODE (r) == ADDR_EXPR))
+	    r = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (r, 0));
+	  tree va = cg_contract_check_decl_value (call, struct_var, decls, decl);
+	  tree vr = (r && (VAR_P (r) || TREE_CODE (r) == PARM_DECL)
+		     ? cg_contract_check_decl_value (call, struct_var, decls, r)
+		     : NULL_TREE);
+	  if (!va || !vr || !INTEGRAL_TYPE_P (TREE_TYPE (va)))
+	    continue;
+	  for (int flavor = 0; flavor < 2; ++flavor)
+	    {
+	      bool require_conveyor = flavor == 0;
+	      v->verdict[i][flavor] = CG_VERDICT_UNKNOWN;
+	      if (require_conveyor && !conveyor_shape)
+		continue;
+	      hash_map<tree, cg_call_rel_fact> empty_call_rel_cache;
+	      tree_code fact_code;
+	      tree fact_receiver, fact_callee;
+	      cg_range_lite fact_offset;
+	      bool fact_conveyor;
+	      if (!cg_get_call_relational (va, state.call_rel,
+					   empty_call_rel_cache,
+					   *cg_array_bounds->established_range,
+					   *cg_array_bounds->scalar_range_cache,
+					   cg_array_bounds->ranger,
+					   require_conveyor, !require_conveyor,
+					   &fact_code, &fact_receiver,
+					   &fact_callee, &fact_offset,
+					   &fact_conveyor)
+		  || fact_callee != accessor
+		  || (cg_gimple_object_identity (fact_receiver)
+		      != cg_gimple_object_identity (vr))
+		  || (require_conveyor && !fact_conveyor))
+		continue;
+	      if (oa_relational_code_implies (fact_code, code)
+		  && cg_offset_compatible_with_code (fact_offset, code))
+		v->verdict[i][flavor] = CG_VERDICT_TRUE;
+	      else if (cg_call_relational_contradicts_p (fact_code, fact_offset,
+							 code))
+		{
+		  v->verdict[i][flavor] = CG_VERDICT_FALSE;
+		  snprintf (v->text[i], sizeof v->text[i],
+			    "%s %s the result of %s",
+			    (DECL_NAME (decl)
+			     ? IDENTIFIER_POINTER (DECL_NAME (decl))
+			     : "the value"),
+			    op_symbol_code (fact_code),
+			    IDENTIFIER_POINTER (DECL_NAME (accessor)));
+		}
+	    }
+	  continue;
+	}
       if (oa_match_predicate_conjunct (c, &pred_fn, &arg_decl, &negated))
 	{
 	  tree identity = cg_contract_check_object_identity (call, struct_var,
@@ -9129,6 +9278,7 @@ static bool
 cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
 			  hash_map<tree, cg_fact> &established_nz,
 			  hash_map<tree, cg_range_lite> &established_range,
+			  hash_map<tree, cg_rel_fact> &established_rel,
 			  hash_map<tree, cg_range_lite> &scalar_range_cache,
 			  gimple_ranger *ranger,
 			  cg_assert_memory_verdict_map &memory_verdicts,
@@ -9292,6 +9442,68 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
 		else
 		  verdict = CG_VERDICT_UNKNOWN;
 	      }
+	  /* A comparison between two values: a relational fact linking
+	     them (e.g. the precondition 'x < q' of a function returning
+	     x, for 'post (r: r < q)'), else their two ranges.  */
+	  tree other;
+	  if (verdict == CG_VERDICT_NONE
+	      && oa_match_comparison_against_param (c, &decl, &code, &other,
+						    /*allow_var_decl=*/true))
+	    {
+	      tree va = scalar_value_of (decl);
+	      tree vb = scalar_value_of (other);
+	      if (va && vb)
+		{
+		  verdict = CG_VERDICT_UNKNOWN;
+		  hash_map<tree, cg_rel_fact> empty_rel_cache;
+		  tree_code fact_code;
+		  tree fact_rhs;
+		  cg_range_lite fact_offset;
+		  bool fact_conveyor;
+		  /* VA's fact about VB, or VB's about VA, turned around.  */
+		  for (int side = 0; side < 2 && verdict != CG_VERDICT_TRUE;
+		       ++side)
+		    {
+		      tree from = side ? vb : va, to = side ? va : vb;
+		      tree_code need = side ? swap_tree_comparison (code) : code;
+		      if (cg_get_relational (from, established_rel,
+					     empty_rel_cache, established_range,
+					     scalar_range_cache, ranger,
+					     require_conveyor, !require_conveyor,
+					     &fact_code, &fact_rhs,
+					     &fact_offset, &fact_conveyor)
+			  && fact_rhs == to
+			  && (!require_conveyor || fact_conveyor)
+			  && oa_relational_code_implies (fact_code, need)
+			  && cg_offset_compatible_with_code (fact_offset, need))
+			verdict = CG_VERDICT_TRUE;
+		    }
+		  cg_range_lite ra, rb;
+		  if (verdict != CG_VERDICT_TRUE
+		      && cg_value_range_at (va, call, established_range,
+					    scalar_range_cache, ranger,
+					    require_conveyor, &ra)
+		      && cg_value_range_at (vb, call, established_range,
+					    scalar_range_cache, ranger,
+					    require_conveyor, &rb))
+		    {
+		      enum oa_range_subsumption_result r
+			= cg_range_pair_relation (ra, code, rb);
+		      if (r == OA_RANGE_SUBSUMED)
+			verdict = CG_VERDICT_TRUE;
+		      else if (r == OA_RANGE_DISJOINT)
+			{
+			  verdict = CG_VERDICT_FALSE;
+			  char ta[44], tb[44];
+			  cg_range_lite_text_for (ra, TREE_TYPE (va), ta, sizeof ta);
+			  cg_range_lite_text_for (rb, TREE_TYPE (vb), tb, sizeof tb);
+			  snprintf (text, sizeof text, "%s and %s", ta, tb);
+			}
+		      else
+			reason = OA_UNPROVABLE_RANGE_PARTIAL;
+		    }
+		}
+	    }
 	  /* A floating-point comparison with a constant, decided from the
 	     ranger's floating-point range at the check.  */
 	  if (verdict == CG_VERDICT_NONE
@@ -9951,7 +10163,7 @@ pass_contracts_gimple::execute (function *fun)
 		cg_check_call_reference_safety (call, fun, established);
 	      cg_check_call (call, established, established_nz,
 			     established_range, established_rel,
-			     established_call_rel, established_call_call_rel,
+			     established_call_call_rel,
 			     scalar_range_cache, ranger,
 			     &call_relational_verdict, &established_frange);
 	      cg_record_predicate_site_facts (call, established, established_nz,
@@ -9959,7 +10171,7 @@ pass_contracts_gimple::execute (function *fun)
 					      scalar_range_cache, ranger,
 					      established_frange);
 	      if (cg_check_contract_assert (call, established, established_nz,
-					    established_range,
+					    established_range, established_rel,
 					    scalar_range_cache, ranger,
 					    assert_memory_verdicts,
 					    established_frange))
