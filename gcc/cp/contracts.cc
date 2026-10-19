@@ -8219,6 +8219,104 @@ public:
      accessor results -- and the value facts of every scalar whose
      address is taken.  Whether an object is still alive (m_map) is
      not one of these.  */
+  /* The loop-header widening (oa_handle_loop): *this is a candidate
+     loop-head environment no stronger than PREV, the previous candidate.
+     Drop every interval bound that differs from PREV's, so a bound that
+     moves from one iteration to the next is dropped rather than followed
+     iteration by iteration.  */
+  void loop_widen_against (oa_env &prev)
+  {
+    auto widen = [] (oa_range_fact &r, const oa_range_fact *p)
+      {
+	if (r.has_lo && (!p || !p->has_lo || p->lo != r.lo))
+	  r.has_lo = false;
+	if (r.has_hi && (!p || !p->has_hi || p->hi != r.hi))
+	  r.has_hi = false;
+      };
+    auto widen_float = [] (oa_float_range_fact &r,
+			   const oa_float_range_fact *p)
+      {
+	if (r.has_lo && (!p || !p->has_lo || !real_identical (&p->lo, &r.lo)))
+	  r.has_lo = false;
+	if (r.has_hi && (!p || !p->has_hi || !real_identical (&p->hi, &r.hi)))
+	  r.has_hi = false;
+      };
+    for (auto it : m_range_map)
+      widen (it.second, prev.m_range_map.get (it.first));
+    for (auto it : m_contract_scalar_range_map)
+      widen (it.second, prev.m_contract_scalar_range_map.get (it.first));
+    for (auto it : m_contract_field_range_map)
+      {
+	oa_contract_field_range_fact *p
+	  = prev.m_contract_field_range_map.get (it.first);
+	widen (it.second.range, p ? &p->range : NULL);
+      }
+    for (auto it : m_contract_call_range_map)
+      {
+	oa_contract_field_range_fact *p
+	  = prev.m_contract_call_range_map.get (it.first);
+	widen (it.second.range, p ? &p->range : NULL);
+      }
+    for (auto it : m_float_range_map)
+      widen_float (it.second, prev.m_float_range_map.get (it.first));
+    for (auto it : m_contract_float_field_range_map)
+      {
+	oa_contract_float_field_range_fact *p
+	  = prev.m_contract_float_field_range_map.get (it.first);
+	widen_float (it.second.range, p ? &p->range : NULL);
+      }
+  }
+  /* How much *this knows, for oa_handle_loop's fixed point: a candidate
+     loop-head environment that is no stronger than the previous one and
+     measures the same is the same.  */
+  unsigned loop_fact_measure ()
+  {
+    unsigned n = 0;
+    auto bools = [&n] (hash_map<tree, bool> &m)
+      {
+	for (auto it : m)
+	  n += it.second;
+      };
+    auto range = [&n] (const oa_range_fact &r)
+      {
+	n += 1 + r.has_lo + r.has_hi;
+      };
+    auto frange_ = [&n] (const oa_float_range_fact &r)
+      {
+	n += 1 + r.has_lo + r.has_hi + !r.maybe_nan;
+      };
+    bools (m_map);
+    bools (m_nz_map);
+    bools (m_symbolic_object_address_map);
+    bools (m_symbolic_nz_map);
+    for (auto it : m_range_map)
+      range (it.second);
+    for (auto it : m_contract_scalar_range_map)
+      range (it.second);
+    for (auto it : m_contract_field_range_map)
+      range (it.second.range), n += it.second.conveyor_established;
+    for (auto it : m_contract_call_range_map)
+      range (it.second.range), n += it.second.conveyor_established;
+    for (auto it : m_float_range_map)
+      frange_ (it.second);
+    for (auto it : m_contract_float_field_range_map)
+      frange_ (it.second.range), n += it.second.conveyor_established;
+    for (auto it : m_contract_field_nz_map)
+      n += it.second;
+    for (auto it : m_type_bound_map)
+      n += 1 + it.second.has_upper_witness + it.second.has_lower_witness;
+    n += m_predicate_fact_map.elements ();
+    n += m_relational_map.elements ();
+    n += m_call_relational_map.elements ();
+    n += m_call_call_relational_map.elements ();
+    n += m_alias_target.elements ();
+    n += m_field_alias_target.elements ();
+    n += m_array_alias_target.elements ();
+    /* Being borrowed is what restricts.  */
+    for (auto it : m_borrowed_map)
+      n -= it.second;
+    return n;
+  }
   void invalidate_all_object_state ()
   {
     m_predicate_fact_map.empty ();
@@ -13578,6 +13676,13 @@ oa_track_condition_assignment (tree cond, oa_env &env)
    the same loop.  */
 
 static bool oa_diagnostics_active = true;
+
+/* Set while oa_handle_loop computes a loop head's facts: a walk from a
+   hypothetical environment, which must leave the trees as they are -- a
+   contract_assert resolved there could be proven only by facts the real
+   walk doesn't have.  */
+
+static bool oa_speculative_walk;
 
 /* The index of CALL's first real argument: an AGGR_INIT_EXPR for a
    constructor ('return T (x);') carries a placeholder for the object
@@ -22280,6 +22385,29 @@ oa_merge_branch_envs (oa_env &then_env, oa_env &else_env, tree cond)
   then_env.borrowed_merge_with (else_env);
 }
 
+/* Where a break or continue statement leaves: the environments reaching
+   each one, merged.  oa_handle_loop collects both for its body; a switch
+   collects its own breaks.  */
+
+struct oa_jump_collector
+{
+  oa_env env;
+  bool any = false;
+  void add (oa_env &e)
+  {
+    if (!any)
+      env.assign (e);
+    else
+      oa_merge_branch_envs (env, e, NULL_TREE);
+    any = true;
+  }
+};
+
+static oa_jump_collector *oa_break_collector;
+static oa_jump_collector *oa_continue_collector;
+
+static void oa_apply_increments (tree expr, oa_env &env, bool opaque = false);
+
 /* D4324/P2680: named (rather than the anonymous lambda this replaced)
    specifically so it can recurse into its own CALL_EXPR/AGGR_INIT_EXPR
    node's own callee/argument subtrees *before* running that node's own
@@ -23483,6 +23611,10 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
   tree cond = CONTRACT_CONDITION (stmt);
   if (cond == NULL_TREE || cond == error_mark_node)
     return;
+  /* A speculative walk (oa_handle_loop) resolves a copy, for the facts
+     it establishes, and leaves STMT as it is.  */
+  if (oa_speculative_walk)
+    cond = unshare_expr (cond);
 
   /* Find top-level &&-conjuncts that are exactly is_object_address(E),
      capturing E *before* resolution replaces the call with
@@ -23788,13 +23920,16 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
      identical fact stated as a precondition works exactly as intended).
      Trust exactly when the verification loop above was skipped for the
      same reason.  */
-  oa_record_condition_as_written (stmt);
+  if (!oa_speculative_walk)
+    oa_record_condition_as_written (stmt);
   if (!oa_resolve_condition (&cond, env, conveyor_ok, symbolic_ok, /*trust=*/never_proven))
     {
-      CONTRACT_CONDITION (stmt) = error_mark_node;
+      if (!oa_speculative_walk)
+	CONTRACT_CONDITION (stmt) = error_mark_node;
       return;
     }
-  CONTRACT_CONDITION (stmt) = cond;
+  if (!oa_speculative_walk)
+    CONTRACT_CONDITION (stmt) = cond;
 
   /* A conjunct just proven false above must not also be established as
      a trusted fact below -- doing so would inject a known-contradictory
@@ -23989,13 +24124,16 @@ oa_collect_loop_targets (tree *stmt, vec<tree> *ptr_out, vec<tree> *nz_out)
 
 static void
 oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
-		oa_env &env)
+		oa_env &env, bool cond_last = false)
 {
   auto_vec<tree *> parts;
   if (cond_prep && *cond_prep) parts.safe_push (cond_prep);
-  if (cond && *cond) parts.safe_push (cond);
+  /* A do-while loop's body runs before its condition is first tested
+     (COND_LAST).  */
+  if (!cond_last && cond && *cond) parts.safe_push (cond);
   if (body && *body) parts.safe_push (body);
   if (expr && *expr) parts.safe_push (expr);
+  if (cond_last && cond && *cond) parts.safe_push (cond);
 
   /* Increment E3: the loop's own condition refines the env used for
      body+expr -- entering the body at all means the condition held.
@@ -24021,23 +24159,117 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
      loop's condition has no "else" side to use it for) -- a harmless,
      compile-time-only inefficiency, not worth a separate then-only
      variant of oa_process_condition just to avoid it.  */
-  auto walk_parts = [&] (oa_env &e)
+  /* BREAKS, if given, collects where the body's break statements leave
+     the loop, and EXITS where a false condition does.  A continue
+     statement goes on to what follows the body.  */
+  auto walk_parts = [&] (oa_env &e, oa_jump_collector *breaks = NULL,
+			 oa_jump_collector *exits = NULL)
     {
+      oa_jump_collector continues, local_breaks;
       for (unsigned i = 0; i < parts.length (); ++i)
 	{
 	  if (cond && parts[i] == cond)
 	    {
 	      oa_env then_env, else_env;
 	      oa_process_condition (*cond, e, &then_env, &else_env);
+	      oa_apply_increments (*cond, then_env);
+	      if (exits)
+		{
+		  oa_apply_increments (*cond, else_env);
+		  exits->add (else_env);
+		}
 	      e.assign (then_env);
+	    }
+	  else if (body && parts[i] == body)
+	    {
+	      auto own_breaks
+		= make_temp_override (oa_break_collector,
+				      breaks ? breaks : &local_breaks);
+	      auto own_continues
+		= make_temp_override (oa_continue_collector, &continues);
+	      oa_walk_stmt (parts[i], e);
+	      if (continues.any)
+		oa_merge_branch_envs (e, continues.env, NULL_TREE);
 	    }
 	  else
 	    oa_walk_stmt (parts[i], e);
 	}
     };
 
-  oa_env scratch = env.copy ();
-  walk_parts (scratch);
+  /* The loop head's facts: what holds on entry and on every back edge.
+     Without it, the diagnostic pass below would check the repeated part
+     with the facts of its first iteration only ('total += i' with TOTAL
+     still known to be zero).  Iterate: HEAD is joined with what one more
+     iteration from HEAD leaves, until nothing changes; from the third
+     round on, an interval bound that moves is dropped
+     (loop_widen_against), so every later round that changes something
+     drops a fact, and this ends.  The speculative walks
+     report nothing and generate nothing, like the per-decl re-walks
+     further below.  */
+  tree head_cond = cond ? *cond : NULL_TREE;
+  oa_env head = env.copy ();
+  {
+    bool saved_tracking = oa_return_tracking;
+    oa_return_tracking = false;
+    oa_env *saved_postcondition_merge_env = oa_postcondition_merge_env;
+    oa_postcondition_merge_env = NULL;
+    bool saved_symbolic_codegen = oa_symbolic_codegen_active;
+    oa_symbolic_codegen_active = false;
+    bool saved_diagnostics_active = oa_diagnostics_active;
+    oa_diagnostics_active = false;
+    bool saved_speculative = oa_speculative_walk;
+    oa_speculative_walk = true;
+    bool widened_any = false;
+    for (unsigned round = 0; ; ++round)
+      {
+	oa_env probe = head.copy ();
+	walk_parts (probe);
+	oa_env next = env.copy ();
+	oa_merge_branch_envs (next, probe, head_cond);
+	oa_merge_branch_envs (next, head, head_cond);
+	oa_env widened = next.copy ();
+	widened.loop_widen_against (head);
+	unsigned measure = next.loop_fact_measure ();
+	/* Every map only loses facts from HEAD to NEXT; an interval bound
+	   may also move, which widening reveals.  */
+	bool stable = (widened.loop_fact_measure () == measure
+		       && measure == head.loop_fact_measure ());
+	/* Widen only from the third round on, so a bound that settles
+	   after one iteration ('last = 10 / i') is kept.  */
+	head.assign (round >= 2 ? widened : next);
+	if (stable)
+	  break;
+	if (round == 100)
+	  {
+	    /* Can't happen (see above); know nothing rather than loop.  */
+	    oa_env nothing;
+	    head.assign (nothing);
+	    break;
+	  }
+	widened_any |= round >= 2;
+      }
+    /* Narrowing: HEAD holds on every iteration, so what one more
+       iteration from it leaves (joined with the entry) does too -- and
+       recovers a bound widening dropped though the condition keeps it
+       ('p = &arr[i]' under 'i < 5').  */
+    for (unsigned round = 0; widened_any && round < 2; ++round)
+      {
+	oa_env probe = head.copy ();
+	walk_parts (probe);
+	oa_env next = env.copy ();
+	oa_merge_branch_envs (next, probe, head_cond);
+	head.assign (next);
+      }
+    oa_speculative_walk = saved_speculative;
+    oa_diagnostics_active = saved_diagnostics_active;
+    oa_symbolic_codegen_active = saved_symbolic_codegen;
+    oa_return_tracking = saved_tracking;
+    oa_postcondition_merge_env = saved_postcondition_merge_env;
+  }
+
+  oa_jump_collector loop_breaks, loop_exits;
+  oa_env scratch = head.copy ();
+  walk_parts (scratch, &loop_breaks, &loop_exits);
   /* -fcontract-symbolic-runtime-checks (Mechanism B): SCRATCH is where
      any shadow the loop body itself establishes actually gets created
      (get_or_build_scalar_shadow registers it via whichever env
@@ -24064,7 +24296,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       tree d = reassigned[i];
       bool pre_ok = env.provable_p (d);
 
-      oa_env checkenv = env.copy ();
+      oa_env checkenv = head.copy ();
       checkenv.invalidate (d);
 
       bool saved_tracking = oa_return_tracking;
@@ -24113,7 +24345,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       tree d = reassigned_nz[i];
       bool pre_ok = env.nz_provable_p (d);
 
-      oa_env checkenv = env.copy ();
+      oa_env checkenv = head.copy ();
       checkenv.nz_invalidate (d);
 
       bool saved_tracking = oa_return_tracking;
@@ -24184,7 +24416,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	 tracking is inactive.  */
       oa_derivation *pre_deriv = env.deriv_get (d);
 
-      oa_env checkenv = env.copy ();
+      oa_env checkenv = head.copy ();
       checkenv.range_invalidate (d);
       /* -fcontract-conveyor-proof-provenance: mirror range_invalidate
 	 just above -- without this, a reassignment that doesn't touch D
@@ -24315,6 +24547,20 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
       env.field_object_predicate_invalidate_all (range_result_decls[i]);
       env.field_object_address_invalidate_all (range_result_decls[i]);
       oa_invalidate_parameter_alias_group (range_result_decls[i], env);
+    }
+  /* After the loop, nothing holds that doesn't hold at its head (which
+     is where a loop whose condition fails leaves it) -- the fallback for
+     a loop nothing leaves.  */
+  oa_merge_branch_envs (env, head, head_cond);
+  if (loop_exits.any || loop_breaks.any)
+    {
+      /* Precisely: what the diagnostic pass found where the condition
+	 fails, or a break leaves.  */
+      env.assign (loop_exits.any ? loop_exits.env : loop_breaks.env);
+      if (loop_exits.any && loop_breaks.any)
+	oa_merge_branch_envs (env, loop_breaks.env, head_cond);
+      env.shadow_decls_merge_with (scratch);
+      env.borrowed_merge_with (scratch);
     }
 }
 
@@ -24584,6 +24830,9 @@ oa_process_condition (tree cond, oa_env &env,
 static void
 oa_scan_item8_in_expr (tree *expr, oa_env &env)
 {
+  /* 'return;'.  */
+  if (!*expr)
+    return;
   /* An immediately invoked lambda's body is part of this function's
      evaluation: check it, with this function's facts, whether or not an
      obligation on its result would have walked it
@@ -24930,8 +25179,162 @@ oa_stmt_terminates_p (tree stmt)
    provably known about each pointer variable's value here," used to
    resolve is_object_address as the walk reaches each contract_assert.  */
 
+static void oa_walk_stmt_1 (tree *stmt, oa_env &env);
+
+/* An increment or decrement (pre or post) in EXPR, a whole statement or
+   condition just walked, changes its operand: update ENV as for the
+   assignment 'x = x + 1' (or '- 1') it amounts to, through
+   oa_walk_stmt_1's own assignment handling, silently.  EXPR's facts were
+   all taken before (an expression containing the increment is opaque to
+   the range computations), so it applies after it.  With OPAQUE, or for
+   an operand that is itself incremented, as an assignment of an unknown
+   value instead.  */
+
+static void
+oa_apply_increments (tree expr, oa_env &env, bool opaque)
+{
+  if (expr == NULL_TREE || expr == error_mark_node)
+    return;
+  struct data_t { auto_vec<tree> nodes; hash_set<tree> inner; };
+  data_t data;
+  cp_walk_tree_without_duplicates (&expr, [](tree *tp, int *walk_subtrees,
+					      void *d_) -> tree
+    {
+      data_t *d = (data_t *) d_;
+      tree t = *tp;
+      tree ioa_arg;
+      if (TREE_CODE (t) == LAMBDA_EXPR || is_object_address_call_p (t, &ioa_arg))
+	{
+	  *walk_subtrees = 0;
+	  return NULL_TREE;
+	}
+      switch (TREE_CODE (t))
+	{
+	case PREINCREMENT_EXPR:
+	case POSTINCREMENT_EXPR:
+	case PREDECREMENT_EXPR:
+	case POSTDECREMENT_EXPR:
+	  {
+	    d->nodes.safe_push (t);
+	    tree op = TREE_OPERAND (t, 0);
+	    STRIP_ANY_LOCATION_WRAPPER (op);
+	    while (CONVERT_EXPR_P (op) || TREE_CODE (op) == NON_LVALUE_EXPR)
+	      op = TREE_OPERAND (op, 0);
+	    if (TREE_CODE (op) == PREINCREMENT_EXPR
+		|| TREE_CODE (op) == PREDECREMENT_EXPR
+		|| TREE_CODE (op) == POSTINCREMENT_EXPR
+		|| TREE_CODE (op) == POSTDECREMENT_EXPR)
+	      d->inner.add (op);
+	  }
+	  break;
+	default:
+	  break;
+	}
+      return NULL_TREE;
+    }, &data);
+  if (data.nodes.is_empty ())
+    return;
+
+  auto quiet_diag = make_temp_override (oa_diagnostics_active, false);
+  auto quiet_codegen = make_temp_override (oa_symbolic_codegen_active, false);
+  auto quiet_return = make_temp_override (oa_return_tracking, false);
+  auto quiet_post = make_temp_override (oa_postcondition_merge_env,
+					(oa_env *) NULL);
+  for (tree n : data.nodes)
+    {
+      tree x = TREE_OPERAND (n, 0);
+      tree step = TREE_OPERAND (n, 1);
+      tree type = TREE_TYPE (x);
+      bool up = (TREE_CODE (n) == PREINCREMENT_EXPR
+		 || TREE_CODE (n) == POSTINCREMENT_EXPR);
+      tree rhs;
+      if (opaque || data.inner.contains (n) || step == NULL_TREE
+	  || TREE_CODE (type) == BOOLEAN_TYPE)
+	/* Opaque to every fact computation.  */
+	rhs = n;
+      else if (POINTER_TYPE_P (type))
+	{
+	  tree off = fold_convert (sizetype, step);
+	  if (!up)
+	    off = fold_build1 (NEGATE_EXPR, sizetype, off);
+	  rhs = build2 (POINTER_PLUS_EXPR, type, x, off);
+	}
+      else if (INTEGRAL_TYPE_P (type) || SCALAR_FLOAT_TYPE_P (type))
+	rhs = build2 (up ? PLUS_EXPR : MINUS_EXPR, type, x,
+		      fold_convert (type, step));
+      else
+	rhs = n;
+      tree m = build2 (MODIFY_EXPR, type, x, rhs);
+      SET_EXPR_LOCATION (m, EXPR_LOCATION (n));
+      oa_walk_stmt_1 (&m, env);
+    }
+}
+
+/* Statements whose walk walks every part of them that can contain an
+   increment as a statement or condition of its own.  */
+
+static bool
+oa_walks_own_parts_p (tree_code code)
+{
+  switch (code)
+    {
+    case STATEMENT_LIST:
+    case TRY_FINALLY_EXPR:
+    case EH_ELSE_EXPR:
+    case CLEANUP_STMT:
+    case TRY_BLOCK:
+    case HANDLER:
+    case PRECONDITION_STMT:
+    case POSTCONDITION_STMT:
+    case BIND_EXPR:
+    case EXPR_STMT:
+    case COMPOUND_EXPR:
+    case CLEANUP_POINT_EXPR:
+    case MUST_NOT_THROW_EXPR:
+    case CONVERT_EXPR:
+    case NOP_EXPR:
+    case INDIRECT_REF:
+    case COND_EXPR:
+    case IF_STMT:
+    case ASSERTION_STMT:
+    case FOR_STMT:
+    case WHILE_STMT:
+    case DO_STMT:
+    case SWITCH_STMT:
+    case RANGE_FOR_STMT:
+    case RETURN_EXPR:
+      return true;
+    default:
+      return false;
+    }
+}
+
 static void
 oa_walk_stmt (tree *stmt, oa_env &env)
+{
+  tree t = *stmt;
+  if (t == NULL_TREE || t == error_mark_node)
+    return;
+  oa_walk_stmt_1 (stmt, env);
+  switch (TREE_CODE (t))
+    {
+    case BREAK_STMT:
+      if (oa_break_collector)
+	oa_break_collector->add (env);
+      break;
+    case CONTINUE_STMT:
+      if (oa_continue_collector)
+	oa_continue_collector->add (env);
+      break;
+    default:
+      if (!oa_walks_own_parts_p (TREE_CODE (t)))
+	oa_apply_increments (t, env);
+      break;
+    }
+}
+
+static void
+oa_walk_stmt_1 (tree *stmt, oa_env &env)
 {
   tree t = *stmt;
   if (t == NULL_TREE || t == error_mark_node)
@@ -26482,6 +26885,8 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   Identical treatment for both shapes (COND_EXPR/IF_STMT).  */
 	oa_env then_env, else_env;
 	oa_process_condition (TREE_OPERAND (t, 0), env, &then_env, &else_env);
+	oa_apply_increments (TREE_OPERAND (t, 0), then_env);
+	oa_apply_increments (TREE_OPERAND (t, 0), else_env);
 	oa_walk_stmt (&TREE_OPERAND (t, 1), then_env);
 	oa_walk_stmt (&TREE_OPERAND (t, 2), else_env);
 	/* Increment H: if exactly one arm never falls through (always
@@ -26526,6 +26931,8 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   its own comment for why).  */
 	oa_env then_env, else_env;
 	oa_process_condition (IF_COND (t), env, &then_env, &else_env);
+	oa_apply_increments (IF_COND (t), then_env);
+	oa_apply_increments (IF_COND (t), else_env);
 	oa_walk_stmt (&THEN_CLAUSE (t), then_env);
 	oa_walk_stmt (&ELSE_CLAUSE (t), else_env);
 	/* Increment H: same reachability-aware merge as COND_EXPR above
@@ -26623,7 +27030,8 @@ oa_walk_stmt (tree *stmt, oa_env &env)
       return;
 
     case DO_STMT:
-      oa_handle_loop (NULL, &DO_COND (t), &DO_BODY (t), NULL, env);
+      oa_handle_loop (NULL, &DO_COND (t), &DO_BODY (t), NULL, env,
+		      /*cond_last=*/true);
       return;
 
     case SWITCH_STMT:
@@ -26642,6 +27050,11 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	  oa_scan_item8_in_expr (&SWITCH_STMT_COND (t), env);
 	oa_scan_stray_is_object_address (&SWITCH_STMT_COND (t));
 	oa_scan_stray_symbolic_call (&SWITCH_STMT_COND (t));
+	oa_apply_increments (SWITCH_STMT_COND (t), env);
+	/* A break anywhere in the body, not only between its cases.  */
+	oa_jump_collector switch_breaks;
+	auto own_breaks = make_temp_override (oa_break_collector,
+					      &switch_breaks);
 
 	/* The body (always a STATEMENT_LIST -- confirmed via
 	   finish_switch_stmt/pop_switch, built via push_stmt_list/
@@ -26785,6 +27198,15 @@ oa_walk_stmt (tree *stmt, oa_env &env)
 	   Increment L's own oa_stmt_terminates_p (SWITCH_STMT)
 	   conclusion. Post-switch code is unreachable either way, so
 	   leaving ENV untouched is sound.  */
+	if (switch_breaks.any)
+	  {
+	    if (any_result)
+	      oa_merge_branch_envs (merged, switch_breaks.env,
+				    SWITCH_STMT_COND (t));
+	    else
+	      merged.assign (switch_breaks.env);
+	    any_result = true;
+	  }
 	if (any_result)
 	  env.assign (merged);
 	return;

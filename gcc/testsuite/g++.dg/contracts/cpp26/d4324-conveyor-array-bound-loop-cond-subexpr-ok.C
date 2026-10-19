@@ -5,6 +5,9 @@
 // which exercises the condition's *own* comparison refining the
 // index range used inside the *body*, not a validation reached
 // directly within the condition itself.
+// The loop body assigns rather than accumulates: an accumulation is
+// bounded only by counting iterations, which neither engine does (the
+// AST engine used to check the body with its first iteration's facts).
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
@@ -16,8 +19,8 @@ int f (int i) conveyor
   if (i < 0 || i >= 5)
     return 0;
   for (; i < 5 && arr[i] >= 0; i++)
-    sum++;
+    sum = 1;
   return sum;
 }
 
-int main () { return f (0) == 5 ? 0 : 1; }
+int main () { return f (0) == 1 ? 0 : 1; }
