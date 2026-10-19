@@ -2931,7 +2931,7 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 		{
 		  error_at (gimple_location (call),
 			    "cannot prove %<is_object_address%> for %qE, "
-			    "implicitly required by the receiver of %qD",
+			    "required by the precondition of %qD",
 			    substituted, callee);
 		  if (const char *why = oa_unprovable_reason_text (reason))
 		    inform (gimple_location (call), "%s", _(why));
@@ -3464,20 +3464,29 @@ cg_check_overflow_ub (gimple *stmt,
 					   /*require_symbolic=*/false, &b, stmt);
 
   bool safe = false;
+  /* Each direction on its own: adding something non-negative can't go
+     below the type's minimum, whatever the other operand ('++x' with
+     only 'x < 100' known).  */
   if (code == PLUS_EXPR)
     {
-      bool hi_ok = have_a && have_b && a.has_hi && b.has_hi
-		   && a.hi + b.hi <= type_max;
-      bool lo_ok = have_a && have_b && a.has_lo && b.has_lo
-		   && a.lo + b.lo >= type_min;
+      bool hi_ok = ((have_a && have_b && a.has_hi && b.has_hi
+		     && a.hi + b.hi <= type_max)
+		    || (have_a && a.has_hi && a.hi <= 0)
+		    || (have_b && b.has_hi && b.hi <= 0));
+      bool lo_ok = ((have_a && have_b && a.has_lo && b.has_lo
+		     && a.lo + b.lo >= type_min)
+		    || (have_a && a.has_lo && a.lo >= 0)
+		    || (have_b && b.has_lo && b.lo >= 0));
       safe = hi_ok && lo_ok;
     }
   else if (code == MINUS_EXPR)
     {
-      bool hi_ok = have_a && have_b && a.has_hi && b.has_lo
-		   && a.hi - b.lo <= type_max;
-      bool lo_ok = have_a && have_b && a.has_lo && b.has_hi
-		   && a.lo - b.hi >= type_min;
+      bool hi_ok = ((have_a && have_b && a.has_hi && b.has_lo
+		     && a.hi - b.lo <= type_max)
+		    || (have_b && b.has_lo && b.lo >= 0));
+      bool lo_ok = ((have_a && have_b && a.has_lo && b.has_hi
+		     && a.lo - b.hi >= type_min)
+		    || (have_b && b.has_hi && b.hi <= 0));
       safe = hi_ok && lo_ok;
     }
   else /* MULT_EXPR: cg_range_lite_multiply, mirroring oa_range_multiply
@@ -5351,11 +5360,47 @@ cg_scalar_memory_fact_key (tree decl)
 /* A store to LHS ends the facts about a scalar in memory's own value
    (cg_scalar_memory_fact_key).  */
 
+static tree cg_contract_check_call_p (gcall *, tree *, tree *, tree *);
+
+/* The fact key of the object '*P' designates, for a scalar a reference
+   parameter refers to: {P's identity, no field}, like a scalar in
+   memory's (cg_scalar_memory_fact_key).  */
+
+static bool
+cg_referent_key (tree ref, std::pair<tree, tree> *key)
+{
+  if (TREE_CODE (ref) != MEM_REF || !integer_zerop (TREE_OPERAND (ref, 1))
+      || TREE_CODE (TREE_OPERAND (ref, 0)) != SSA_NAME)
+    return false;
+  tree identity = cg_gimple_object_identity (TREE_OPERAND (ref, 0));
+  if (!identity || TREE_CODE (identity) != SSA_NAME)
+    return false;
+  *key = { identity, NULL_TREE };
+  return true;
+}
+
+/* End every fact about a referent (cg_referent_key): a store through a
+   pointer, or a call, may change any of them through an alias.  */
+
+static void
+cg_end_referent_facts (cg_dom_fact_state &state)
+{
+  auto_vec<std::pair<tree, tree>> to_remove;
+  for (auto it : state.field)
+    if (it.first.second == NULL_TREE && TREE_CODE (it.first.first) == SSA_NAME)
+      to_remove.safe_push (it.first);
+  for (auto k : to_remove)
+    state.field.remove (k);
+}
+
 static void
 cg_process_scalar_write (tree lhs, cg_dom_fact_state &state)
 {
   if (VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
     state.field.remove (cg_scalar_memory_fact_key (lhs));
+  /* A store through a pointer ('*x = ...', 'p->f = ...').  */
+  else if (TREE_CODE (get_base_address (lhs)) == MEM_REF)
+    cg_end_referent_facts (state);
 }
 
 static void
@@ -5946,6 +5991,30 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
 			    { call_groups[g].range, conveyor_enabled });
 	}
 
+      /* 'x < 100' for a reference parameter X: what X refers to, until a
+	 store through a pointer or a call (cg_end_referent_facts).  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree decl, const_val;
+	  tree_code code;
+	  if (!oa_match_simple_comparison (*conjuncts[i], &decl, &code,
+					   &const_val)
+	      || TREE_CODE (const_val) != INTEGER_CST
+	      || TREE_CODE (decl) != PARM_DECL
+	      || !TYPE_REF_P (TREE_TYPE (decl))
+	      || !INTEGRAL_TYPE_P (TREE_TYPE (TREE_TYPE (decl))))
+	    continue;
+	  tree ssa = ssa_default_def (fun, decl);
+	  if (!ssa)
+	    continue;
+	  std::pair<tree, tree> key = { ssa, NULL_TREE };
+	  cg_field_fact *existing = seed.field.get (key);
+	  cg_field_fact fact = existing ? *existing
+			       : cg_field_fact { {}, conveyor_enabled };
+	  cg_tighten_range_bound (fact.range, code, wi::to_widest (const_val));
+	  seed.field.put (key, fact);
+	}
+
       /* 'i < v.size ()': holds on entry, until V changes
 	 (cg_call_rel_invalidate_receiver).  */
       for (unsigned i = 0; i < conjuncts.length (); ++i)
@@ -6464,6 +6533,22 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
   tree call_callee = gimple_call_fndecl (call);
   if (call_callee && DECL_CONV_FN_P (call_callee))
     return;
+  /* Any call may change what a reference refers to through an alias --
+     but not a contract's check, whose condition changes nothing.  */
+  {
+    tree sv, cd, dc;
+    /* A builtin handed no pointer (__builtin_observable_checkpoint)
+       can't reach one either.  */
+    bool pointer_free_builtin = gimple_call_builtin_p (call, BUILT_IN_NORMAL);
+    for (unsigned k = 0; pointer_free_builtin
+			 && k < gimple_call_num_args (call); ++k)
+      if (POINTER_TYPE_P (TREE_TYPE (gimple_call_arg (call, k))))
+	pointer_free_builtin = false;
+    if (!cg_contract_check_call_p (call, &sv, &cd, &dc)
+	&& !gimple_call_internal_p (call) && !pointer_free_builtin
+	&& !(gimple_call_flags (call) & (ECF_CONST | ECF_PURE)))
+      cg_end_referent_facts (state);
+  }
   /* Placement new only returns the pointer it is given.  */
   if (call_callee && std_placement_new_fn_p (call_callee))
     return;
@@ -7389,8 +7474,13 @@ cg_record_field_load_facts (gimple *stmt, cg_dom_fact_state &state,
 	  && !SCALAR_FLOAT_TYPE_P (TREE_TYPE (lhs))))
     return;
   cg_field_fact *fact;
+  std::pair<tree, tree> rkey;
   if (VAR_P (rhs) || TREE_CODE (rhs) == PARM_DECL)
     fact = state.field.get (cg_scalar_memory_fact_key (rhs));
+  else if (cg_referent_key (rhs, &rkey))
+    {
+      fact = state.field.get (rkey);
+    }
   else if (TREE_CODE (rhs) == COMPONENT_REF)
     {
       tree field = TREE_OPERAND (rhs, 1);
@@ -7583,7 +7673,7 @@ cg_record_write_facts (gimple *stmt, cg_dom_fact_state &state,
   else if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 	   && cg_scalar_memory_tracking_p (cfun, lhs))
     key = cg_scalar_memory_fact_key (lhs);
-  else
+  else if (!cg_referent_key (lhs, &key))
     return;
 
   cg_field_fact fact = { {}, /*conveyor_established=*/true };
@@ -10857,6 +10947,15 @@ struct cg_site_fact
 
 static hash_map<tree, vec<cg_site_fact> *> *cg_predicate_site_facts;
 
+/* Predicate core functions whose precondition is checked at its own
+   function's entry.  What holds there comes from the function's
+   self-trust -- that precondition itself among it -- so the core is
+   seeded from the function's other preconditions instead
+   (cg_seed_predicate_from_preconditions), as the entry check sees any
+   argument.  */
+
+static hash_set<tree> *cg_predicate_entry_checked;
+
 /* Record, at contract check CALL, the facts about each value it
    captures for its predicate core function.  */
 
@@ -10876,6 +10975,18 @@ cg_record_predicate_site_facts (gcall *call,
   tree core = contract_predicate_core_function (contract);
   if (!core)
     return;
+  tree owner = NULL_TREE;
+  if (PRECONDITION_P (contract)
+      && predicate_core_function_contract (core, &owner) && owner
+      && (cfun->decl == owner
+	  || (DECL_CLONED_FUNCTION_P (cfun->decl)
+	      && DECL_CLONED_FUNCTION (cfun->decl) == owner)))
+    {
+      if (!cg_predicate_entry_checked)
+	cg_predicate_entry_checked = new hash_set<tree>;
+      cg_predicate_entry_checked->add (core);
+      return;
+    }
   if (!cg_predicate_site_facts)
     cg_predicate_site_facts = new hash_map<tree, vec<cg_site_fact> *>;
   bool existed;
@@ -10898,10 +11009,12 @@ cg_record_predicate_site_facts (gcall *call,
 					       /*require_conveyor=*/true,
 					       &f.range);
 	      hash_set<tree> ip;
+	      /* Also an anti-range the ranger knows ('n != 0 ? n : 1').  */
 	      f.nonzero = (cg_provable_nonzero_p (val, established_nz, true, ip)
 			   || (f.has_range
 			       && cg_range_nonzero_verdict (f.range)
-				  == CG_VERDICT_TRUE));
+				  == CG_VERDICT_TRUE)
+			   || cg_excludes_zero_at_p (val, call, ranger, true));
 	    }
 	  else if (POINTER_TYPE_P (type))
 	    f.object_address
@@ -10989,6 +11102,14 @@ cg_seed_predicate_from_preconditions (function *fun,
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
 	continue;
+      /* SELF may be a copy of the specifier's contract (copy_node keeps
+	 the location).  Mistaking another contract for SELF only trusts
+	 less.  */
+      bool is_self = (contract == self
+		      || contract_predicate_core_function (contract)
+			 == fun->decl
+		      || (TREE_CODE (contract) == TREE_CODE (self)
+			  && EXPR_LOCATION (contract) == EXPR_LOCATION (self)));
       auto_vec<tree *> conjuncts;
       oa_collect_conjuncts_public (&cond, &conjuncts);
       for (unsigned i = 0; i < conjuncts.length (); ++i)
@@ -10998,7 +11119,7 @@ cg_seed_predicate_from_preconditions (function *fun,
 	  /* The contract's own conditions other than is_object_address are
 	     what is being validated; its is_object_address conjuncts are
 	     trusted, as the AST engine trusts a precondition's own.  */
-	  if (contract == self && !is_object_address_call_p (*conjuncts[i], &arg))
+	  if (is_self && !is_object_address_call_p (*conjuncts[i], &arg))
 	    continue;
 	  if (is_object_address_call_p (*conjuncts[i], &arg))
 	    {
@@ -11040,7 +11161,9 @@ cg_seed_predicate_site_facts (function *fun,
 {
   vec<cg_site_fact> **facts
     = cg_predicate_site_facts ? cg_predicate_site_facts->get (fun->decl) : NULL;
-  if (!facts)
+  if (!facts
+      || (cg_predicate_entry_checked
+	  && cg_predicate_entry_checked->contains (fun->decl)))
     {
       cg_seed_predicate_from_preconditions (fun, established, established_nz,
 					    established_range);
