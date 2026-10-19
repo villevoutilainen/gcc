@@ -28681,8 +28681,10 @@ oa_validate_contract_predicates (tree fndecl)
   bool built = false;
   /* A definition's checks of its contracts build their own core
      functions, from its own copies of them -- including a defaulted
-     function's, defined only once it is used.  */
-  if (flag_contract_conveyor_proofs_gimple && !DECL_INITIAL (fndecl)
+     function's, defined only once it is used -- unless definitions
+     check none (-fcontracts-definition-check=off).  */
+  if (flag_contract_conveyor_proofs_gimple
+      && (!DECL_INITIAL (fndecl) || !flag_contracts_definition_check)
       && !DECL_DEFAULTED_FN (fndecl))
     for (tree as = specs; as; as = TREE_CHAIN (as))
       {
