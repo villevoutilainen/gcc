@@ -39,7 +39,11 @@
 // fix was required before either correction above could actually reach a
 // floating-point postcondition's own verification.
 // { dg-do run { target c++26 } }
-// { dg-additional-options "-fcontracts -fcontract-control-objects" }
+// Finite floating-point values are assumed (-ffinite-math-only): under
+// IEEE, 'm_value >= 0.0' admits +Inf, and the bodies' arithmetic could
+// then make a NaN ('inf * 0'), for which every comparison is false --
+// neither engine proves these postconditions without the assumption.
+// { dg-additional-options "-fcontracts -fcontract-control-objects -ffinite-math-only" }
 
 #include <contracts>
 namespace sc = std::contracts;

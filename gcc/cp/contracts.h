@@ -802,6 +802,15 @@ extern bool is_object_address_call_p (tree call, tree *arg);
    precondition on it (see contracts.cc).  */
 extern bool oa_defaulted_copy_source_parm_public (tree fn, tree *parm);
 
+/* Is CONJUNCT 'std::isfinite (X)' for a floating-point variable or
+   parameter X?  Set *DECL_OUT to X.  */
+extern bool oa_isfinite_conjunct_public (tree conjunct, tree *decl_out);
+
+/* If CONJUNCT is 'std::isfinite (E)', set *LO_CMP and *HI_CMP to the
+   comparisons 'E >= -max' and 'E <= max' that hold with it.  */
+extern bool oa_isfinite_bounds_public (tree conjunct, tree *lo_cmp,
+				       tree *hi_cmp);
+
 /* If single-parameter predicate PRED_FN's (cached-active) postcondition
    defines its result as a comparison of its parameter with a constant
    ('post (r: r == (v > 0))'), set *CODE_OUT and *CONST_OUT so the result
