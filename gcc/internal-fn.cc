@@ -5736,6 +5736,13 @@ expand_ASSUME (internal_fn, gcall *)
 {
 }
 
+/* The GIMPLE contract analysis removes it; nothing to do otherwise.  */
+
+void
+expand_CONTRACT_MARK (internal_fn, gcall *)
+{
+}
+
 void
 expand_MASK_CALL (internal_fn, gcall *)
 {

@@ -2318,6 +2318,10 @@ cg_addr_only_feeds_args_field_p (function *fun, tree t)
 	   visit_addr also covers the plain-assignment case just handled,
 	   redundantly but harmlessly (STMT already failed the check
 	   above, or T doesn't appear in it at all).  */
+	/* A symbolic contract's marker takes the capture struct's address
+	   directly, and does nothing with it (IFN_CONTRACT_MARK).  */
+	if (gimple_call_internal_p (stmt, IFN_CONTRACT_MARK))
+	  continue;
 	if (walk_stmt_load_store_addr_ops (stmt, t, NULL, NULL,
 					    [] (gimple *s, tree base, tree,
 						void *data) -> bool
@@ -3697,6 +3701,27 @@ cg_display_value (tree val, int depth = 0)
       if ((VAR_P (rhs1) || TREE_CODE (rhs1) == PARM_DECL)
 	  && !DECL_ARTIFICIAL (rhs1) && DECL_NAME (rhs1))
 	return rhs1;
+      /* '&x', '&p->f'.  */
+      if (TREE_CODE (rhs1) == ADDR_EXPR)
+	{
+	  tree ref = TREE_OPERAND (rhs1, 0);
+	  if (DECL_P (ref) && DECL_NAME (ref) && !DECL_ARTIFICIAL (ref))
+	    return rhs1;
+	  if (TREE_CODE (ref) == COMPONENT_REF
+	      && TREE_CODE (TREE_OPERAND (ref, 0)) == MEM_REF
+	      && integer_zerop (TREE_OPERAND (TREE_OPERAND (ref, 0), 1))
+	      && TREE_CODE (TREE_OPERAND (TREE_OPERAND (ref, 0), 0)) == SSA_NAME)
+	    {
+	      tree ptr = cg_display_value (TREE_OPERAND (TREE_OPERAND (ref, 0),
+							  0), depth + 1);
+	      if (DECL_P (ptr) && POINTER_TYPE_P (TREE_TYPE (ptr)))
+		return build1 (ADDR_EXPR, TREE_TYPE (rhs1),
+			       build3 (COMPONENT_REF, TREE_TYPE (ref),
+				       build1 (INDIRECT_REF,
+					       TREE_TYPE (TREE_TYPE (ptr)), ptr),
+				       TREE_OPERAND (ref, 1), NULL_TREE));
+	    }
+	}
       /* A lambda's capture: by value, the field's load; by reference, a
 	 load through the pointer the field holds.  Named as the captured
 	 variable.  */
@@ -6002,6 +6027,15 @@ cg_process_field_write (tree lhs, tree rhs, function *fun,
      unknown index may have replaced any slot.  */
   if (TREE_CODE (lhs) == ARRAY_REF)
     {
+      /* A named predicate about the array could depend on any element,
+	 as on any field of an object -- whether or not its slots are
+	 tracked (an array whose address is taken isn't).  */
+      if (tree arr = get_base_address (lhs))
+	if (DECL_P (arr) || TREE_CODE (arr) == MEM_REF)
+	  if (tree whole = cg_gimple_object_identity
+			     (TREE_CODE (arr) == MEM_REF
+			      ? TREE_OPERAND (arr, 0) : arr))
+	    state.pred.remove (whole);
       tree arr_identity = cg_array_slot_base_identity (lhs);
       if (!arr_identity)
 	return;
@@ -6026,6 +6060,37 @@ cg_process_field_write (tree lhs, tree rhs, function *fun,
 	state.field_alias.put ({arr_identity, index}, rhs_identity);
       else
 	state.field_alias.remove ({arr_identity, index});
+      return;
+    }
+  /* The whole object replaced ('f = io_facility ();', '*p = x'):
+     nothing known about it holds.  */
+  if (AGGREGATE_TYPE_P (TREE_TYPE (lhs))
+      && (VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL
+	  || (TREE_CODE (lhs) == MEM_REF
+	      && integer_zerop (TREE_OPERAND (lhs, 1)))))
+    {
+      tree identity = cg_gimple_object_identity (TREE_CODE (lhs) == MEM_REF
+						 ? TREE_OPERAND (lhs, 0)
+						 : lhs);
+      if (!identity)
+	return;
+      state.pred.remove (identity);
+      auto_vec<std::pair<tree, tree>> drop;
+      for (auto it : state.field)
+	if (it.first.first == identity)
+	  drop.safe_push (it.first);
+      for (auto k : drop)
+	state.field.remove (k);
+      drop.truncate (0);
+      for (auto it : state.field_alias)
+	if (it.first.first == identity)
+	  drop.safe_push (it.first);
+      for (auto k : drop)
+	state.field_alias.remove (k);
+      cg_call_rel_invalidate_receiver (state, identity);
+      for (auto it : field_object_cache)
+	if (it.first.first == identity)
+	  state.pred.remove (it.second);
       return;
     }
   if (TREE_CODE (lhs) != COMPONENT_REF)
@@ -8204,6 +8269,38 @@ cg_establish_assert_facts (gcall *call, cg_dom_fact_state &state)
 	      state.field.put ({identity, field}, fact);
 	    }
 	}
+    }
+
+  /* 'v.size () > 3': the accessor's result on V, until V may change
+     (cg_call_rel_invalidate_receiver), as a precondition's self-trust
+     seeds it.  */
+  auto_vec<cg_call_group_lite> call_groups;
+  cg_collect_call_range_groups (cond, &call_groups,
+				/*allow_symbolic_accessor=*/!conveyor_enabled);
+  for (unsigned g = 0; g < call_groups.length (); ++g)
+    {
+      tree r = call_groups[g].receiver_expr;
+      while (r && (TREE_CODE (r) == INDIRECT_REF || CONVERT_EXPR_P (r)
+		   || TREE_CODE (r) == NON_LVALUE_EXPR
+		   || TREE_CODE (r) == VIEW_CONVERT_EXPR
+		   || TREE_CODE (r) == ADDR_EXPR))
+	r = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (r, 0));
+      tree identity = r ? identity_of (r) : NULL_TREE;
+      if (!identity)
+	continue;
+      {
+	cg_field_fact *existing
+	  = state.call.get ({identity, call_groups[g].callee});
+	cg_field_fact fact = existing ? *existing
+			     : cg_field_fact { {}, conveyor_enabled };
+	cg_range_lite &r = fact.range;
+	const cg_range_lite &add = call_groups[g].range;
+	if (add.has_lo && (!r.has_lo || add.lo > r.lo))
+	  r.has_lo = true, r.lo = add.lo;
+	if (add.has_hi && (!r.has_hi || add.hi < r.hi))
+	  r.has_hi = true, r.hi = add.hi;
+	state.call.put ({identity, call_groups[g].callee}, fact);
+      }
     }
 }
 
@@ -10906,6 +11003,19 @@ static tree
 cg_contract_check_call_p (gcall *call, tree *struct_var_out, tree *cond_out,
 			  tree *decls_out)
 {
+  /* A symbolic contract's marker: its capture struct directly.  */
+  if (gimple_call_internal_p (call, IFN_CONTRACT_MARK))
+    {
+      tree arg = gimple_call_arg (call, 0);
+      if (TREE_CODE (arg) != ADDR_EXPR || !VAR_P (TREE_OPERAND (arg, 0)))
+	return NULL_TREE;
+      tree struct_var = TREE_OPERAND (arg, 0);
+      tree contract = contract_check_arg_struct_info (TREE_TYPE (struct_var),
+						      cond_out, decls_out);
+      if (contract)
+	*struct_var_out = struct_var;
+      return contract;
+    }
   for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
     {
       tree arg = gimple_call_arg (call, i);
@@ -11702,6 +11812,19 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
 	  tree arg;
 	  if (is_object_address_call_p (c, &arg))
 	    continue;
+	  /* A postcondition's call of a function declared 'symbolic' (no
+	     body to check it against) is a trusted axiom of the symbolic
+	     check, as in the AST engine (oa_handle_postcondition_stmt) --
+	     but not a contract_assert's.  */
+	  {
+	    tree pred_fn, pred_arg;
+	    bool pred_negated;
+	    if (is_post && !require_conveyor
+		&& oa_match_predicate_conjunct (c, &pred_fn, &pred_arg,
+						&pred_negated)
+		&& DECL_DECLARED_SYMBOLIC_P (pred_fn))
+	      continue;
+	  }
 	  cg_verdict verdict = CG_VERDICT_NONE;
 	  char text[96] = "";
 	  oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
@@ -12569,6 +12692,114 @@ cg_check_predicate_mutation (function *fun)
       }
 }
 
+/* The symbolic contracts' markers (IFN_CONTRACT_MARK) in FUN have
+   served their purpose once FUN is checked: remove them, the stores
+   filling their capture structs, and the temporaries the gimplifier
+   made to take the address of a value for those stores when nothing
+   else uses them -- leaving FUN as it would be without the markers.  */
+
+static void
+cg_remove_contract_marks (function *fun)
+{
+  hash_set<tree> structs, temps;
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      if (gimple_call_internal_p (gsi_stmt (gsi), IFN_CONTRACT_MARK))
+	{
+	  tree arg = gimple_call_arg (gsi_stmt (gsi), 0);
+	  if (TREE_CODE (arg) == ADDR_EXPR && VAR_P (TREE_OPERAND (arg, 0)))
+	    structs.add (TREE_OPERAND (arg, 0));
+	}
+  if (structs.is_empty ())
+    return;
+
+  auto remove = [&] (gimple_stmt_iterator *gsi)
+    {
+      gimple *stmt = gsi_stmt (*gsi);
+      if (gimple_in_ssa_p (fun))
+	unlink_stmt_vdef (stmt);
+      gsi_remove (gsi, true);
+      if (gimple_in_ssa_p (fun))
+	release_defs (stmt);
+    };
+  /* Whether a statement mentions VAR anywhere.  */
+  auto mentions = [] (gimple *stmt, tree var)
+    {
+      for (unsigned i = 0; i < gimple_num_ops (stmt); ++i)
+	if (tree op = gimple_op (stmt, i))
+	  if (walk_tree_without_duplicates (&op, [](tree *tp, int *,
+						    void *v) -> tree
+		{ return *tp == (tree) v ? *tp : NULL_TREE; }, var))
+	    return true;
+      return false;
+    };
+
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);)
+      {
+	gimple *stmt = gsi_stmt (gsi);
+	if (gimple_call_internal_p (stmt, IFN_CONTRACT_MARK))
+	  {
+	    remove (&gsi);
+	    continue;
+	  }
+	tree base = (gimple_assign_single_p (stmt)
+		     || gimple_clobber_p (stmt)
+		     ? get_base_address (gimple_assign_lhs (stmt))
+		     : gimple_call_internal_p (stmt, IFN_DEFERRED_INIT)
+		     ? get_base_address (gimple_call_lhs (stmt)) : NULL_TREE);
+	if (base && structs.contains (base))
+	  {
+	    tree rhs = (is_gimple_assign (stmt) ? gimple_assign_rhs1 (stmt)
+			: NULL_TREE);
+	    if (rhs && TREE_CODE (rhs) == ADDR_EXPR
+		&& VAR_P (TREE_OPERAND (rhs, 0))
+		&& DECL_ARTIFICIAL (TREE_OPERAND (rhs, 0)))
+	      temps.add (TREE_OPERAND (rhs, 0));
+	    remove (&gsi);
+	    continue;
+	  }
+	gsi_next (&gsi);
+      }
+
+  /* A temporary only the removed stores took the address of: its own
+     stores and clobbers are dead too.  */
+  for (tree temp : temps)
+    {
+      bool used = false;
+      FOR_EACH_BB_FN (bb, fun)
+	for (gimple_stmt_iterator gsi = gsi_start_bb (bb);
+	     !used && !gsi_end_p (gsi); gsi_next (&gsi))
+	  {
+	    gimple *stmt = gsi_stmt (gsi);
+	    bool def_of_temp = (((gimple_assign_single_p (stmt)
+				  || gimple_clobber_p (stmt))
+				 && gimple_assign_lhs (stmt) == temp)
+				|| (gimple_call_internal_p (stmt,
+							    IFN_DEFERRED_INIT)
+				    && gimple_call_lhs (stmt) == temp));
+	    if (!def_of_temp && mentions (stmt, temp))
+	      used = true;
+	  }
+      if (used)
+	continue;
+      FOR_EACH_BB_FN (bb, fun)
+	for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);)
+	  {
+	    gimple *stmt = gsi_stmt (gsi);
+	    if (((gimple_assign_single_p (stmt) || gimple_clobber_p (stmt))
+		 && gimple_assign_lhs (stmt) == temp)
+		|| (gimple_call_internal_p (stmt, IFN_DEFERRED_INIT)
+		    && gimple_call_lhs (stmt) == temp))
+	      remove (&gsi);
+	    else
+	      gsi_next (&gsi);
+	  }
+    }
+}
+
 namespace {
 
 const pass_data pass_data_contracts_gimple =
@@ -12880,6 +13111,7 @@ pass_contracts_gimple::execute (function *fun)
   cg_array_bounds = NULL;
   disable_ranger (fun);
 
+  cg_remove_contract_marks (fun);
   return 0;
 }
 
