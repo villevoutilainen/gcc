@@ -1130,15 +1130,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 #ifndef __CORRECT_ISO_CPP11_MATH_H_PROTO_FP
   constexpr bool
-  isfinite(float __x)
+  isfinite(float __x) _GLIBCXX_CONVEYOR
   { return __builtin_isfinite(__x); }
 
   constexpr bool
-  isfinite(double __x)
+  isfinite(double __x) _GLIBCXX_CONVEYOR
   { return __builtin_isfinite(__x); }
 
   constexpr bool
-  isfinite(long double __x)
+  isfinite(long double __x) _GLIBCXX_CONVEYOR
   { return __builtin_isfinite(__x); }
 #endif
 
@@ -1146,13 +1146,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     constexpr typename __gnu_cxx::__enable_if<__is_integer<_Tp>::__value,
                                               bool>::__type
-    isfinite(_Tp)
+    isfinite(_Tp) _GLIBCXX_CONVEYOR
     { return true; }
 #endif
 
 #ifndef __CORRECT_ISO_CPP11_MATH_H_PROTO_FP
   constexpr bool
-  isinf(float __x)
+  isinf(float __x) _GLIBCXX_CONVEYOR
   { return __builtin_isinf(__x); }
 
 #if _GLIBCXX_HAVE_OBSOLETE_ISINF \
@@ -1160,12 +1160,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   using ::isinf;
 #else
   constexpr bool
-  isinf(double __x)
+  isinf(double __x) _GLIBCXX_CONVEYOR
   { return __builtin_isinf(__x); }
 #endif
 
   constexpr bool
-  isinf(long double __x)
+  isinf(long double __x) _GLIBCXX_CONVEYOR
   { return __builtin_isinf(__x); }
 #endif
 
@@ -1173,13 +1173,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     constexpr typename __gnu_cxx::__enable_if<__is_integer<_Tp>::__value,
                                               bool>::__type
-    isinf(_Tp)
+    isinf(_Tp) _GLIBCXX_CONVEYOR
     { return false; }
 #endif
 
 #ifndef __CORRECT_ISO_CPP11_MATH_H_PROTO_FP
   constexpr bool
-  isnan(float __x)
+  isnan(float __x) _GLIBCXX_CONVEYOR
   { return __builtin_isnan(__x); }
 
 #if _GLIBCXX_HAVE_OBSOLETE_ISNAN \
@@ -1187,12 +1187,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   using ::isnan;
 #else
   constexpr bool
-  isnan(double __x)
+  isnan(double __x) _GLIBCXX_CONVEYOR
   { return __builtin_isnan(__x); }
 #endif
 
   constexpr bool
-  isnan(long double __x)
+  isnan(long double __x) _GLIBCXX_CONVEYOR
   { return __builtin_isnan(__x); }
 #endif
 
@@ -1200,7 +1200,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     constexpr typename __gnu_cxx::__enable_if<__is_integer<_Tp>::__value,
                                               bool>::__type
-    isnan(_Tp)
+    isnan(_Tp) _GLIBCXX_CONVEYOR
     { return false; }
 #endif
 
@@ -1420,7 +1420,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     inline typename __gnu_cxx::__enable_if<__is_arithmetic<_Tp>::__value,
 					   int>::__type
-    isfinite(_Tp __f)
+    isfinite(_Tp __f) _GLIBCXX_CONVEYOR
     {
       typedef typename __gnu_cxx::__promote<_Tp>::__type __type;
       return __builtin_isfinite(__type(__f));
@@ -1429,7 +1429,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     inline typename __gnu_cxx::__enable_if<__is_arithmetic<_Tp>::__value,
 					   int>::__type
-    isinf(_Tp __f)
+    isinf(_Tp __f) _GLIBCXX_CONVEYOR
     {
       typedef typename __gnu_cxx::__promote<_Tp>::__type __type;
       return __builtin_isinf(__type(__f));
@@ -1438,7 +1438,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     inline typename __gnu_cxx::__enable_if<__is_arithmetic<_Tp>::__value,
 					   int>::__type
-    isnan(_Tp __f)
+    isnan(_Tp __f) _GLIBCXX_CONVEYOR
     {
       typedef typename __gnu_cxx::__promote<_Tp>::__type __type;
       return __builtin_isnan(__type(__f));
@@ -1525,15 +1525,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 				FP_SUBNORMAL, FP_ZERO, __x); }
 
   constexpr bool
-  isfinite(_Float16 __x)
+  isfinite(_Float16 __x) _GLIBCXX_CONVEYOR
   { return __builtin_isfinite(__x); }
 
   constexpr bool
-  isinf(_Float16 __x)
+  isinf(_Float16 __x) _GLIBCXX_CONVEYOR
   { return __builtin_isinf(__x); }
 
   constexpr bool
-  isnan(_Float16 __x)
+  isnan(_Float16 __x) _GLIBCXX_CONVEYOR
   { return __builtin_isnan(__x); }
 
   constexpr bool
@@ -1576,15 +1576,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 				FP_SUBNORMAL, FP_ZERO, __x); }
 
   constexpr bool
-  isfinite(_Float32 __x)
+  isfinite(_Float32 __x) _GLIBCXX_CONVEYOR
   { return __builtin_isfinite(__x); }
 
   constexpr bool
-  isinf(_Float32 __x)
+  isinf(_Float32 __x) _GLIBCXX_CONVEYOR
   { return __builtin_isinf(__x); }
 
   constexpr bool
-  isnan(_Float32 __x)
+  isnan(_Float32 __x) _GLIBCXX_CONVEYOR
   { return __builtin_isnan(__x); }
 
   constexpr bool
@@ -1627,15 +1627,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 				FP_SUBNORMAL, FP_ZERO, __x); }
 
   constexpr bool
-  isfinite(_Float64 __x)
+  isfinite(_Float64 __x) _GLIBCXX_CONVEYOR
   { return __builtin_isfinite(__x); }
 
   constexpr bool
-  isinf(_Float64 __x)
+  isinf(_Float64 __x) _GLIBCXX_CONVEYOR
   { return __builtin_isinf(__x); }
 
   constexpr bool
-  isnan(_Float64 __x)
+  isnan(_Float64 __x) _GLIBCXX_CONVEYOR
   { return __builtin_isnan(__x); }
 
   constexpr bool
@@ -1678,15 +1678,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 				FP_SUBNORMAL, FP_ZERO, __x); }
 
   constexpr bool
-  isfinite(_Float128 __x)
+  isfinite(_Float128 __x) _GLIBCXX_CONVEYOR
   { return __builtin_isfinite(__x); }
 
   constexpr bool
-  isinf(_Float128 __x)
+  isinf(_Float128 __x) _GLIBCXX_CONVEYOR
   { return __builtin_isinf(__x); }
 
   constexpr bool
-  isnan(_Float128 __x)
+  isnan(_Float128 __x) _GLIBCXX_CONVEYOR
   { return __builtin_isnan(__x); }
 
   constexpr bool
@@ -1729,15 +1729,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 				FP_SUBNORMAL, FP_ZERO, __x); }
 
   constexpr bool
-  isfinite(__gnu_cxx::__bfloat16_t __x)
+  isfinite(__gnu_cxx::__bfloat16_t __x) _GLIBCXX_CONVEYOR
   { return __builtin_isfinite(__x); }
 
   constexpr bool
-  isinf(__gnu_cxx::__bfloat16_t __x)
+  isinf(__gnu_cxx::__bfloat16_t __x) _GLIBCXX_CONVEYOR
   { return __builtin_isinf(__x); }
 
   constexpr bool
-  isnan(__gnu_cxx::__bfloat16_t __x)
+  isnan(__gnu_cxx::__bfloat16_t __x) _GLIBCXX_CONVEYOR
   { return __builtin_isnan(__x); }
 
   constexpr bool
