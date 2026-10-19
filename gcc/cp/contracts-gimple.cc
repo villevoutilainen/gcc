@@ -6649,6 +6649,396 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
     }
 }
 
+/* The function's established floating-point facts, for
+   cg_float_comparison_verdict's folding (set by the pass's execute).  */
+static hash_map<tree, frange> *cg_established_frange_for_verdicts;
+
+/* The range of E, an integer expression in the text of CALL's callee's
+   precondition -- constants, its parameters (CALL's arguments), fields
+   they point to (STATE's facts) and arithmetic of them ('v - d') -- in
+   *OUT.  As the AST engine's composition, each bound is known only if
+   composing it gives a representable value.  */
+
+static bool
+cg_requirement_int_range (tree e, gcall *call, tree callee,
+			  cg_dom_fact_state &state,
+			  hash_map<cg_field_key_hash, tree> &field_object_cache,
+			  bool require_conveyor, cg_range_lite *out,
+			  unsigned depth = 0)
+{
+  e = STRIP_ANY_LOCATION_WRAPPER (e);
+  if (depth > 8 || !INTEGRAL_TYPE_P (TREE_TYPE (e)))
+    return false;
+  auto arg_of = [&] (tree parm) -> tree
+    {
+      unsigned argno;
+      if (!cg_find_param_position (callee, parm, &argno)
+	  || argno >= gimple_call_num_args (call))
+	return NULL_TREE;
+      return cg_resolve_call_argument (call, argno);
+    };
+  switch (TREE_CODE (e))
+    {
+    case INTEGER_CST:
+      *out = cg_range_lite_exact (wi::to_widest (e));
+      return true;
+    case NON_LVALUE_EXPR:
+      return cg_requirement_int_range (TREE_OPERAND (e, 0), call, callee,
+				       state, field_object_cache,
+				       require_conveyor, out, depth + 1);
+    CASE_CONVERT:
+      if (!INTEGRAL_TYPE_P (TREE_TYPE (TREE_OPERAND (e, 0)))
+	  || !oa_integral_conversion_value_preserving_p
+		(TREE_TYPE (TREE_OPERAND (e, 0)), TREE_TYPE (e)))
+	return false;
+      return cg_requirement_int_range (TREE_OPERAND (e, 0), call, callee,
+				       state, field_object_cache,
+				       require_conveyor, out, depth + 1);
+    case PARM_DECL:
+      {
+	tree arg = arg_of (e);
+	if (!arg)
+	  return false;
+	if (TREE_CODE (arg) == INTEGER_CST)
+	  {
+	    *out = cg_range_lite_exact (wi::to_widest (arg));
+	    return true;
+	  }
+	return (cg_array_bounds && TREE_CODE (arg) == SSA_NAME
+		&& cg_value_range_at (arg, call,
+				      *cg_array_bounds->established_range,
+				      *cg_array_bounds->scalar_range_cache,
+				      cg_array_bounds->ranger,
+				      require_conveyor, out));
+      }
+    case COMPONENT_REF:
+      {
+	tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
+	if (TREE_CODE (obj) != INDIRECT_REF)
+	  return false;
+	tree base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
+	while (CONVERT_EXPR_P (base) || TREE_CODE (base) == NON_LVALUE_EXPR)
+	  base = TREE_OPERAND (base, 0);
+	if (TREE_CODE (base) != PARM_DECL)
+	  return false;
+	tree arg = arg_of (base);
+	if (!arg)
+	  return false;
+	tree identity = cg_field_slot_identity (arg, state);
+	if (!identity)
+	  identity = cg_field_object_identity (arg, field_object_cache);
+	if (!identity)
+	  identity = cg_gimple_object_identity (arg);
+	cg_field_fact *fact
+	  = identity ? state.field.get ({identity, TREE_OPERAND (e, 1)}) : NULL;
+	if (!fact || (require_conveyor && !fact->conveyor_established)
+	    || (!fact->range.has_lo && !fact->range.has_hi))
+	  return false;
+	*out = fact->range;
+	return true;
+      }
+    case PLUS_EXPR:
+    case MINUS_EXPR:
+    case MULT_EXPR:
+    case NEGATE_EXPR:
+      {
+	cg_range_lite a, b = cg_range_lite_exact (0);
+	if (!cg_requirement_int_range (TREE_OPERAND (e, 0), call, callee, state,
+				       field_object_cache, require_conveyor,
+				       &a, depth + 1)
+	    || (TREE_CODE (e) != NEGATE_EXPR
+		&& !cg_requirement_int_range (TREE_OPERAND (e, 1), call, callee,
+					      state, field_object_cache,
+					      require_conveyor, &b, depth + 1)))
+	  return false;
+	cg_range_lite r;
+	switch (TREE_CODE (e))
+	  {
+	  case PLUS_EXPR:
+	    r.has_lo = a.has_lo && b.has_lo, r.lo = a.lo + b.lo;
+	    r.has_hi = a.has_hi && b.has_hi, r.hi = a.hi + b.hi;
+	    break;
+	  case MINUS_EXPR:
+	    r.has_lo = a.has_lo && b.has_hi, r.lo = a.lo - b.hi;
+	    r.has_hi = a.has_hi && b.has_lo, r.hi = a.hi - b.lo;
+	    break;
+	  case NEGATE_EXPR:
+	    r.has_lo = a.has_hi, r.lo = -a.hi;
+	    r.has_hi = a.has_lo, r.hi = -a.lo;
+	    break;
+	  default:
+	    if (!(a.has_lo && a.has_hi && b.has_lo && b.has_hi))
+	      return false;
+	    {
+	      widest_int p[4] = { a.lo * b.lo, a.lo * b.hi, a.hi * b.lo,
+				  a.hi * b.hi };
+	      r.lo = r.hi = p[0];
+	      for (auto &v : p)
+		r.lo = wi::smin (r.lo, v), r.hi = wi::smax (r.hi, v);
+	      r.has_lo = r.has_hi = true;
+	    }
+	    break;
+	  }
+	widest_int tmin = wi::to_widest (TYPE_MIN_VALUE (TREE_TYPE (e)));
+	widest_int tmax = wi::to_widest (TYPE_MAX_VALUE (TREE_TYPE (e)));
+	r.has_lo &= r.lo >= tmin && r.lo <= tmax;
+	r.has_hi &= r.hi >= tmin && r.hi <= tmax;
+	*out = r;
+	return r.has_lo || r.has_hi;
+      }
+    default:
+      return false;
+    }
+}
+
+/* The floating-point counterpart of cg_requirement_int_range.  */
+
+static bool
+cg_requirement_float_range (tree e, gcall *call, tree callee,
+			    cg_dom_fact_state &state,
+			    hash_map<cg_field_key_hash, tree> &field_object_cache,
+			    bool require_conveyor, frange &out,
+			    unsigned depth = 0)
+{
+  e = STRIP_ANY_LOCATION_WRAPPER (e);
+  tree type = TREE_TYPE (e);
+  if (depth > 8 || !SCALAR_FLOAT_TYPE_P (type))
+    return false;
+  switch (TREE_CODE (e))
+    {
+    case REAL_CST:
+      out = frange (e, e);
+      if (!real_isnan (TREE_REAL_CST_PTR (e)))
+	out.clear_nan ();
+      return true;
+    case NON_LVALUE_EXPR:
+      return cg_requirement_float_range (TREE_OPERAND (e, 0), call, callee,
+					 state, field_object_cache,
+					 require_conveyor, out, depth + 1);
+    case PARM_DECL:
+      {
+	unsigned argno;
+	if (!cg_find_param_position (callee, e, &argno)
+	    || argno >= gimple_call_num_args (call))
+	  return false;
+	tree arg = cg_resolve_call_argument (call, argno);
+	if (TREE_CODE (arg) == REAL_CST)
+	  return cg_requirement_float_range (arg, call, callee, state,
+					     field_object_cache,
+					     require_conveyor, out, depth + 1);
+	out = frange (type);
+	return (cg_array_bounds && TREE_CODE (arg) == SSA_NAME
+		&& cg_frange_of (arg, call, cg_array_bounds->ranger,
+				 cg_established_frange_for_verdicts, out)
+		&& !out.varying_p ());
+      }
+    case COMPONENT_REF:
+      {
+	tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
+	if (TREE_CODE (obj) != INDIRECT_REF)
+	  return false;
+	tree base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
+	while (CONVERT_EXPR_P (base) || TREE_CODE (base) == NON_LVALUE_EXPR)
+	  base = TREE_OPERAND (base, 0);
+	unsigned argno;
+	if (TREE_CODE (base) != PARM_DECL
+	    || !cg_find_param_position (callee, base, &argno)
+	    || argno >= gimple_call_num_args (call))
+	  return false;
+	tree arg = cg_resolve_call_argument (call, argno);
+	tree identity = cg_field_slot_identity (arg, state);
+	if (!identity)
+	  identity = cg_field_object_identity (arg, field_object_cache);
+	if (!identity)
+	  identity = cg_gimple_object_identity (arg);
+	cg_field_fact *fact
+	  = identity ? state.field.get ({identity, TREE_OPERAND (e, 1)}) : NULL;
+	if (!fact || !fact->has_float
+	    || (require_conveyor && !fact->conveyor_established))
+	  return false;
+	out = fact->float_range;
+	return true;
+      }
+    case PLUS_EXPR:
+    case MINUS_EXPR:
+    case MULT_EXPR:
+    case RDIV_EXPR:
+      {
+	frange a (type), b (type);
+	if (!cg_requirement_float_range (TREE_OPERAND (e, 0), call, callee,
+					 state, field_object_cache,
+					 require_conveyor, a, depth + 1)
+	    || !cg_requirement_float_range (TREE_OPERAND (e, 1), call, callee,
+					    state, field_object_cache,
+					    require_conveyor, b, depth + 1))
+	  return false;
+	range_op_handler op (TREE_CODE (e));
+	frange r (type);
+	if (!op || !op.fold_range (r, type, a, b) || r.undefined_p ())
+	  return false;
+	out = r;
+	return !out.varying_p ();
+      }
+    default:
+      return false;
+    }
+}
+
+/* Whether E, a side of a comparison in a precondition, is arithmetic
+   the shape-specific consults don't take apart ('v - d', 'a * b').  */
+
+static bool
+cg_compound_requirement_side_p (tree e)
+{
+  e = STRIP_ANY_LOCATION_WRAPPER (e);
+  while (CONVERT_EXPR_P (e) || TREE_CODE (e) == NON_LVALUE_EXPR)
+    e = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
+  switch (TREE_CODE (e))
+    {
+    case PLUS_EXPR:
+    case MINUS_EXPR:
+    case MULT_EXPR:
+    case RDIV_EXPR:
+    case NEGATE_EXPR:
+      return true;
+    default:
+      return false;
+    }
+}
+
+/* A conjunct of CALL's callee's precondition comparing arithmetic
+   ('m_value - delta >= 0.0'), which no shape-specific consult checks:
+   decided from what each side's range is at CALL, or else reported as
+   not verified -- never passed over.  STRICT is a proven_* contract.  */
+
+static void
+cg_check_compound_requirement (tree conjunct, gcall *call, tree callee,
+			       cg_dom_fact_state &state,
+			       hash_map<cg_field_key_hash, tree>
+				 &field_object_cache,
+			       bool require_conveyor, bool strict)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  tree_code code = TREE_CODE (c);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR && code != NE_EXPR)
+    return;
+  tree lhs = TREE_OPERAND (c, 0), rhs = TREE_OPERAND (c, 1);
+  if (!cg_compound_requirement_side_p (lhs)
+      && !cg_compound_requirement_side_p (rhs))
+    return;
+  /* 'idx - v.size () > 10' is cg_check_call_relational_fact's.  */
+  {
+    tree param, receiver, accessor;
+    tree_code shifted_code;
+    widest_int offset;
+    if (oa_match_shifted_comparison_against_call_text
+	  (conjunct, &param, &shifted_code, &receiver, &accessor, &offset,
+	   /*allow_symbolic_accessor=*/!require_conveyor))
+      return;
+  }
+
+  /* The side shown: the conjunct's arithmetic, its parameters replaced
+     by the arguments.  */
+  auto shown = [&] (tree e) -> tree
+    {
+      tree d = unshare_expr (STRIP_ANY_LOCATION_WRAPPER (e));
+      struct data_t { gcall *call; tree callee; };
+      data_t data = { call, callee };
+      cp_walk_tree (&d, [](tree *tp, int *, void *d_) -> tree
+	{
+	  data_t *dd = (data_t *) d_;
+	  unsigned argno;
+	  if (TREE_CODE (*tp) == PARM_DECL
+	      && cg_find_param_position (dd->callee, *tp, &argno)
+	      && argno < gimple_call_num_args (dd->call))
+	    *tp = cg_display_value (cg_resolve_call_argument (dd->call,
+							       argno));
+	  return NULL_TREE;
+	}, &data, NULL);
+      return d;
+    };
+  tree side = cg_compound_requirement_side_p (lhs) ? lhs : rhs;
+
+  cg_verdict v = CG_VERDICT_UNKNOWN;
+  char have[96] = "", need[96] = "";
+  if (SCALAR_FLOAT_TYPE_P (TREE_TYPE (lhs)))
+    {
+      frange a (TREE_TYPE (lhs)), b (TREE_TYPE (rhs));
+      tree cst = TREE_CODE (STRIP_ANY_LOCATION_WRAPPER (rhs)) == REAL_CST
+		 ? STRIP_ANY_LOCATION_WRAPPER (rhs) : NULL_TREE;
+      frange want (TREE_TYPE (lhs));
+      if (cst
+	  && cg_requirement_float_range (lhs, call, callee, state,
+					 field_object_cache, require_conveyor, a)
+	  && cg_frange_for_comparison (TREE_TYPE (lhs), code, cst, &want))
+	{
+	  v = cg_frange_requirement_verdict (a, want);
+	  cg_frange_text (a, have, sizeof have);
+	  char cbuf[40];
+	  real_to_decimal (cbuf, TREE_REAL_CST_PTR (cst), sizeof cbuf, 0, 1);
+	  snprintf (need, sizeof need, "to be %s %s", op_symbol_code (code),
+		    cbuf);
+	}
+    }
+  else if (INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
+    {
+      cg_range_lite a, b;
+      if (cg_requirement_int_range (lhs, call, callee, state,
+				    field_object_cache, require_conveyor, &a)
+	  && cg_requirement_int_range (rhs, call, callee, state,
+				       field_object_cache, require_conveyor,
+				       &b))
+	{
+	  if (b.has_lo && b.has_hi && b.lo == b.hi && code != NE_EXPR)
+	    v = cg_range_comparison_verdict (a, code, b.lo);
+	  else if (code != NE_EXPR && code != EQ_EXPR)
+	    {
+	      enum oa_range_subsumption_result r
+		= cg_range_pair_relation (a, code, b);
+	      v = (r == OA_RANGE_SUBSUMED ? CG_VERDICT_TRUE
+		   : r == OA_RANGE_DISJOINT ? CG_VERDICT_FALSE
+		   : CG_VERDICT_UNKNOWN);
+	    }
+	  cg_range_lite_text (a, have, sizeof have);
+	  if (b.has_lo && b.has_hi && b.lo == b.hi)
+	    snprintf (need, sizeof need, "to be %s %lld", op_symbol_code (code),
+		      (long long) b.lo.to_shwi ());
+	  else
+	    {
+	      char rb[64];
+	      cg_range_lite_text (b, rb, sizeof rb);
+	      snprintf (need, sizeof need, "to be %s a value %s",
+			op_symbol_code (code), rb);
+	    }
+	}
+    }
+  if (v == CG_VERDICT_TRUE)
+    return;
+  location_t loc = gimple_location (call);
+  if (v == CG_VERDICT_FALSE)
+    {
+      auto_diagnostic_group d;
+      error_at (loc, "argument %qE provably violates the precondition of %qD",
+		shown (side), callee);
+      inform (loc, "%qE is established %s, but the precondition requires "
+	      "it %s", shown (side), have, need);
+      return;
+    }
+  auto_diagnostic_group d;
+  if (strict)
+    error_at (loc, "cannot prove that %qE satisfies the precondition of %qD",
+	      shown (side), callee);
+  else
+    warning_at (loc, 0, "cannot verify that %qE satisfies the precondition "
+		"of %qD", shown (side), callee);
+  inform (loc, "%s", _(oa_unprovable_reason_text
+		       (have[0] ? OA_UNPROVABLE_RANGE_PARTIAL
+				: OA_UNPROVABLE_NO_FACT)));
+}
+
 /* CALL's own callee's declared precondition, checked against STATE as
    it stands right before CALL -- the consult side, for both facts,
    the persistent-fact analogue of cg_check_call.  */
@@ -6694,6 +7084,10 @@ cg_consult_persistent_facts (gcall *call,
 
       auto_vec<tree *> conjuncts;
       oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	cg_check_compound_requirement (*conjuncts[i], call, callee, state,
+				       field_object_cache, require_conveyor,
+				       strict);
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree pred_fn, arg_decl;
@@ -11082,9 +11476,6 @@ cg_frange_comparison_verdict (const frange &fr, tree_code code, tree c,
 /* The same for SSA value VAL at STMT: the ranger's range of it there,
    narrowed by what is established for it (KNOWN, if any).  */
 
-/* The function's established floating-point facts, for
-   cg_float_comparison_verdict's folding (set by the pass's execute).  */
-static hash_map<tree, frange> *cg_established_frange_for_verdicts;
 
 static cg_verdict
 cg_float_comparison_verdict (tree val, gimple *stmt, gimple_ranger *ranger,
