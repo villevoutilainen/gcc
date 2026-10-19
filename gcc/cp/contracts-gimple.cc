@@ -6845,9 +6845,25 @@ cg_contract_check_object_identity (gcall *call, tree struct_var, tree decls,
       return val && TREE_CODE (val) == SSA_NAME
 	     ? cg_gimple_object_identity (val) : NULL_TREE;
     }
-  /* A local aggregate, or one passed by value.  */
+  /* A local aggregate, or one passed by value -- in a constructor's or
+     destructor's clone, the clone's own copy of the parameter the
+     condition names (the function it is cloned from's).  */
   if (RECORD_OR_UNION_TYPE_P (type))
-    return cg_gimple_object_identity (decl);
+    {
+      if (TREE_CODE (decl) == PARM_DECL
+	  && DECL_CONTEXT (decl) != current_function_decl
+	  && DECL_CLONED_FUNCTION_P (current_function_decl)
+	  && DECL_CLONED_FUNCTION (current_function_decl) == DECL_CONTEXT (decl))
+	{
+	  tree c = FUNCTION_FIRST_USER_PARM (current_function_decl);
+	  tree o = FUNCTION_FIRST_USER_PARM (DECL_CONTEXT (decl));
+	  for (; c && o; c = DECL_CHAIN (c), o = DECL_CHAIN (o))
+	    if (o == decl)
+	      return cg_gimple_object_identity (c);
+	  return NULL_TREE;
+	}
+      return cg_gimple_object_identity (decl);
+    }
   return NULL_TREE;
 }
 
