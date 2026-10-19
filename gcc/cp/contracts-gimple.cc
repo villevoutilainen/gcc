@@ -842,6 +842,29 @@ cg_induction_variable_bound_1 (tree, hash_map<tree, cg_range_lite> &,
 			       hash_map<tree, cg_range_lite> &, gimple_ranger *,
 			       cg_range_lite *);
 
+/* Why a fact about a value could not be established or does not decide
+   a call's precondition, found by the fact walk for the "cannot verify"
+   diagnostics of the later pass over the calls: diagnostic text only,
+   set for the duration of one function's check.  */
+
+static hash_map<tree, int> *cg_unprovable_hints;
+
+/* The call-vs-call conjuncts of a call's precondition that
+   cg_check_call_relational_fact proved from branches -- per conjunct,
+   unlike its per-call verdicts, so a proven one silences no other.  */
+
+typedef pair_hash <nofree_ptr_hash <gimple>, nofree_ptr_hash <tree_node> >
+  cg_call_conjunct_hash;
+static hash_set<cg_call_conjunct_hash> *cg_proven_call_call_conjuncts;
+
+static void
+cg_note_unprovable_hint (tree val, oa_unprovable_reason reason)
+{
+  if (cg_unprovable_hints && val && reason != OA_UNPROVABLE_NONE)
+    cg_unprovable_hints->put (val, reason);
+}
+
+
 static bool
 cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_range,
 			  hash_map<tree, cg_range_lite> &scalar_range_cache,
@@ -991,7 +1014,9 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
 	}
     }
 
-  if (ranger)
+  /* An integer's: a pointer's range is another kind (a reference
+     parameter's argument is one).  */
+  if (ranger && INTEGRAL_TYPE_P (TREE_TYPE (val)))
     {
       int_range_max vr;
       if (ranger->range_of_expr (vr, val, at_stmt))
@@ -3235,7 +3260,18 @@ cg_display_value (tree val, int depth = 0)
   if (code == SSA_NAME || CONVERT_EXPR_CODE_P (code))
     {
       tree inner = cg_display_value (rhs1, depth + 1);
-      return inner != rhs1 ? inner : val;
+      if (inner == rhs1)
+	return val;
+      /* An integer conversion that changes the value's sign or width is
+	 one the source spells (implicitly or not): shown, as the AST
+	 engine shows its own '(size_type)idx'.  */
+      tree from = TREE_TYPE (rhs1), to = TREE_TYPE (val);
+      if (CONVERT_EXPR_CODE_P (code)
+	  && INTEGRAL_TYPE_P (from) && INTEGRAL_TYPE_P (to)
+	  && (TYPE_UNSIGNED (from) != TYPE_UNSIGNED (to)
+	      || TYPE_PRECISION (from) != TYPE_PRECISION (to)))
+	return build1 (NOP_EXPR, to, inner);
+      return inner;
     }
   if (gimple_assign_single_p (def))
     {
@@ -4709,10 +4745,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		 error_at for the identical shape.  */
 	      error_at (gimple_location (call),
 			"argument %qE provably violates the precondition "
-			"of %qD", sub_param, callee);
+			"of %qD", cg_display_value (sub_param), callee);
 	      inform (gimple_location (call),
 		      "%qE is established exactly %wd, but the precondition "
-		      "requires it to be %s %qE", sub_param,
+		      "requires it to be %s %qE", cg_display_value (sub_param),
 		      wi::to_wide (sub_param).to_shwi (),
 		      op_symbol_code (rel_code), sub_other);
 	      continue;
@@ -4767,11 +4803,11 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	    if (cg_established_range_of (sub_param, established_range,
 					   scalar_range_cache, ranger,
 					   check_as_conveyor, check_as_symbolic,
-					   &param_range)
+					   &param_range, call)
 		&& cg_established_range_of (sub_other, established_range,
 					      scalar_range_cache, ranger,
 					      check_as_conveyor, check_as_symbolic,
-					      &other_range))
+					      &other_range, call))
 	      {
 		enum oa_range_subsumption_result r
 		  = cg_range_pair_relation (param_range, rel_code, other_range);
@@ -4784,10 +4820,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 					 sizeof (established_buf));
 		    error_at (gimple_location (call),
 			      "argument %qE provably violates the "
-			      "precondition of %qD", sub_param, callee);
+			      "precondition of %qD", cg_display_value (sub_param), callee);
 		    inform (gimple_location (call),
 			    "%qE is established %s, but the precondition "
-			    "requires it to be %s %qE", sub_param,
+			    "requires it to be %s %qE", cg_display_value (sub_param),
 			    established_buf, op_symbol_code (rel_code),
 			    sub_other);
 		    continue;
@@ -4810,11 +4846,11 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  if (strict)
 	    error_at (gimple_location (call),
 		      "cannot prove that %qE satisfies the "
-		      "precondition of %qD", sub_param, callee);
+		      "precondition of %qD", cg_display_value (sub_param), callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qE satisfies the "
-			"precondition of %qD", sub_param, callee);
+			"precondition of %qD", cg_display_value (sub_param), callee);
 	  if (const char *why = oa_unprovable_reason_text (reason))
 	    inform (gimple_location (call), "%s", _(why));
 	}
@@ -4912,11 +4948,11 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  if (strict)
 	    error_at (gimple_location (call),
 		      "cannot prove that %qE satisfies the "
-		      "precondition of %qD", sub_param, callee);
+		      "precondition of %qD", cg_display_value (sub_param), callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qE satisfies the "
-			"precondition of %qD", sub_param, callee);
+			"precondition of %qD", cg_display_value (sub_param), callee);
 	  /* NOTE: unlike contracts.cc's own oa_env_check_call_relational_
 	     fact_1 (which can consult oa_env::unprovable_reason_hint_get to
 	     enrich a bare "no fact" with why a branch-derived margin fact
@@ -4934,8 +4970,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	     rather than chased in this pass; NO_FACT is still strictly
 	     more precise than nothing for every other case below.  */
 	  oa_unprovable_reason reason;
+	  int *hint = cg_unprovable_hints ? cg_unprovable_hints->get (sub_param)
+					  : NULL;
 	  if (!have_fact)
-	    reason = OA_UNPROVABLE_NO_FACT;
+	    reason = hint ? (oa_unprovable_reason) *hint : OA_UNPROVABLE_NO_FACT;
 	  else if (!same_accessor)
 	    reason = OA_UNPROVABLE_WRONG_IDENTITY;
 	  else if (require_conveyor && !fact_conveyor_established)
@@ -4985,6 +5023,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      && (oa_strip_to_receiver_identity (fact_rhs_receiver)
 		  == oa_strip_to_receiver_identity (sub_rhs_receiver)))
 	    continue; /* Proven true: silently discharged.  */
+	  /* By a branch: cg_check_call_relational_fact.  */
+	  if (cg_proven_call_call_conjuncts
+	      && cg_proven_call_call_conjuncts->contains ({call, *conjuncts[i]}))
+	    continue;
 
 	  if (strict)
 	    error_at (gimple_location (call),
@@ -5029,7 +5071,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	    = cg_established_range_of (substituted, established_range,
 					scalar_range_cache, ranger,
 					check_as_conveyor,
-					check_as_symbolic, &established_r);
+					check_as_symbolic, &established_r,
+					call);
 	  if (have_range
 	      && (!required.has_lo
 		  || (established_r.has_lo && established_r.lo >= required.lo))
@@ -5225,6 +5268,9 @@ struct cg_dom_fact_state
      deliberately has no counterpart field here at all).  */
   hash_map<tree, cg_rel_fact> rel;
   hash_map<tree, cg_call_rel_fact> call_rel;
+  /* 'v.size () < w.size ()' from a branch: keyed on V's identity and
+     the accessor, also recorded the other way round under W's.  */
+  hash_map<cg_field_key_hash, cg_call_call_rel_fact> call_call;
 };
 
 /* An SSA_NAME's own identity is itself; '&decl' resolves to DECL
@@ -5398,6 +5444,13 @@ cg_call_rel_invalidate_receiver (cg_dom_fact_state &state, tree identity)
       to_remove.safe_push (it.first);
   for (unsigned i = 0; i < to_remove.length (); ++i)
     state.call_rel.remove (to_remove[i]);
+  auto_vec<std::pair<tree, tree>> cc_remove;
+  for (auto it : state.call_call)
+    if (it.first.first == identity
+	|| cg_gimple_object_identity (it.second.rhs_receiver) == identity)
+      cc_remove.safe_push (it.first);
+  for (auto k : cc_remove)
+    state.call_call.remove (k);
 }
 
 /* Stage 4c: the GIMPLE analogue of contracts.cc's own Rule 1
@@ -6120,22 +6173,33 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
 	}
 
       /* 'i < v.size ()': holds on entry, until V changes
-	 (cg_call_rel_invalidate_receiver).  */
+	 (cg_call_rel_invalidate_receiver).  So does 'i - v.size () > 10',
+	 '(i - 10) > v.size ()', when the subtraction can't wrap.  */
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree rel_param, rhs_receiver, rhs_callee;
 	  tree_code rel_code;
+	  widest_int offset = 0;
+	  tree arithmetic_type = NULL_TREE;
 	  if (!oa_match_comparison_against_call (*conjuncts[i], &rel_param,
 						  &rel_code, &rhs_receiver,
 						  &rhs_callee,
 						  /*allow_symbolic_accessor=*/
-						    !conveyor_enabled))
+						    !conveyor_enabled)
+	      && !(oa_match_shifted_comparison_against_call_text
+		     (*conjuncts[i], &rel_param, &rel_code, &rhs_receiver,
+		      &rhs_callee, &offset,
+		      /*allow_symbolic_accessor=*/!conveyor_enabled,
+		      &arithmetic_type)
+		   && arithmetic_type
+		   && INTEGRAL_TYPE_P (arithmetic_type)
+		   && TYPE_OVERFLOW_UNDEFINED (arithmetic_type)))
 	    continue;
 	  tree key_param = cg_self_trust_key (fun, rel_param);
 	  tree key_receiver = cg_self_trust_key (fun, rhs_receiver);
 	  if (key_param && key_receiver)
 	    seed.call_rel.put (key_param, { rel_code, key_receiver, rhs_callee,
-					    cg_range_lite_exact (0),
+					    cg_range_lite_exact (offset),
 					    conveyor_enabled });
 	}
     }
@@ -6708,6 +6772,7 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
 	      state.field_alias.empty ();
 	      state.call.empty ();
 	      state.call_rel.empty ();
+	      state.call_call.empty ();
 	      keep = false;
 	    }
 	}
@@ -7875,6 +7940,9 @@ cg_dom_fact_state_assign (cg_dom_fact_state *dst, const cg_dom_fact_state &src)
   dst->call_rel.empty ();
   for (auto it : src.call_rel)
     dst->call_rel.put (it.first, it.second);
+  dst->call_call.empty ();
+  for (auto it : src.call_call)
+    dst->call_call.put (it.first, it.second);
 }
 
 /* Agreement-based, mirroring contracts.cc's own oa_env::predicate_
@@ -7995,6 +8063,19 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src,
     }
   for (auto t : call_rel_remove)
     dst->call_rel.remove (t);
+
+  auto_vec<std::pair<tree, tree>> call_call_remove;
+  for (auto it : dst->call_call)
+    {
+      const cg_call_call_rel_fact *ov = src.call_call.get (it.first);
+      if (!ov || ov->code != it.second.code
+	  || ov->rhs_receiver != it.second.rhs_receiver
+	  || ov->rhs_callee != it.second.rhs_callee
+	  || ov->conveyor_established != it.second.conveyor_established)
+	call_call_remove.safe_push (it.first);
+    }
+  for (auto t : call_call_remove)
+    dst->call_call.remove (t);
 }
 
 /* The fixed-point loop's own "has anything changed since the last time
@@ -8010,7 +8091,8 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
       || a.field_alias.elements () != b.field_alias.elements ()
       || a.call.elements () != b.call.elements ()
       || a.rel.elements () != b.rel.elements ()
-      || a.call_rel.elements () != b.call_rel.elements ())
+      || a.call_rel.elements () != b.call_rel.elements ()
+      || a.call_call.elements () != b.call_call.elements ())
     return false;
   for (auto it : a.pred)
     {
@@ -8064,6 +8146,15 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
 	  || ov->rhs_receiver != it.second.rhs_receiver
 	  || ov->rhs_callee != it.second.rhs_callee
 	  || !cg_range_lite_equal (ov->offset, it.second.offset)
+	  || ov->conveyor_established != it.second.conveyor_established)
+	return false;
+    }
+  for (auto it : a.call_call)
+    {
+      const cg_call_call_rel_fact *ov = b.call_call.get (it.first);
+      if (!ov || ov->code != it.second.code
+	  || ov->rhs_receiver != it.second.rhs_receiver
+	  || ov->rhs_callee != it.second.rhs_callee
 	  || ov->conveyor_established != it.second.conveyor_established)
 	return false;
     }
@@ -8478,7 +8569,41 @@ cg_refine_relational_edge_into (tree lhs, tree rhs, tree_code code,
     }
 
   if (!lhs_is_param && !rhs_is_param)
-    return;
+    {
+      /* 'v.size () < w.size ()'.  */
+      bool l_is_call, r_is_call;
+      tree l_field, l_base, l_callee, l_receiver;
+      tree r_field, r_base, r_callee, r_receiver;
+      if (!cg_cond_operand_shape (lhs, &l_is_call, &l_field, &l_base,
+				  &l_callee, &l_receiver)
+	  || !l_is_call
+	  || !cg_cond_operand_shape (rhs, &r_is_call, &r_field, &r_base,
+				     &r_callee, &r_receiver)
+	  || !r_is_call)
+	return;
+      tree l_identity = cg_gimple_object_identity (l_receiver);
+      tree r_identity = cg_gimple_object_identity (r_receiver);
+      if (!l_identity || !r_identity)
+	return;
+      tree_code cc_code = code;
+      if (!asserted_true)
+	switch (cc_code)
+	  {
+	  case LT_EXPR: cc_code = GE_EXPR; break;
+	  case LE_EXPR: cc_code = GT_EXPR; break;
+	  case GT_EXPR: cc_code = LE_EXPR; break;
+	  case GE_EXPR: cc_code = LT_EXPR; break;
+	  default: return;
+	  }
+      else if (cc_code == NE_EXPR)
+	return;
+      tree_code swapped = swap_tree_comparison (cc_code);
+      state.call_call.put ({l_identity, l_callee},
+			   { cc_code, r_receiver, r_callee, true });
+      state.call_call.put ({r_identity, r_callee},
+			   { swapped, l_receiver, l_callee, true });
+      return;
+    }
 
   tree param_side = lhs_is_param ? lhs : rhs;
   tree call_side = lhs_is_param ? rhs : lhs;
@@ -8787,11 +8912,16 @@ cg_refine_edge_into (edge e, cg_dom_fact_state &state,
 	 trusted. SHIFTED_NEGATE true means 'CALL () - PARAM' (PARAM is
 	 the subtrahend, so PARAM_IS_MINUEND is false); false means
 	 'PARAM - CALL ()' (PARAM is the minuend).  */
+      oa_unprovable_reason why = OA_UNPROVABLE_NONE;
       if (!cg_shifted_comparison_no_wrap_ok_p (state.call_rel, shifted_param,
 						 receiver, callee,
 						 shifted_arithmetic_type,
-						 /*param_is_minuend=*/!shifted_negate))
-	return;
+						 /*param_is_minuend=*/!shifted_negate,
+						 &why))
+	{
+	  cg_note_unprovable_hint (shifted_param, why);
+	  return;
+	}
       shifted = true;
       if (shifted_negate)
 	switch (code)
@@ -9251,10 +9381,11 @@ cg_check_call_range_relational (gcall *call,
 				   sizeof (established_buf));
 	      error_at (gimple_location (call),
 			"argument %qE provably violates the precondition "
-			"of %qD", sub_param, callee);
+			"of %qD", cg_display_value (sub_param), callee);
 	      inform (gimple_location (call),
 		      "%qE is established %s, but the precondition requires "
-		      "it to be %s the result of %qD", sub_param, established_buf,
+		      "it to be %s the result of %qD",
+		      cg_display_value (sub_param), established_buf,
 		      op_symbol_code (rel_code), rhs_callee);
 	    }
 	}
@@ -9350,11 +9481,18 @@ cg_check_call_relational_fact (gcall *call,
 	{
 	  tree rel_param, rhs_receiver, rhs_callee;
 	  tree_code rel_code;
+	  /* Also 'idx - v.size () > 10': '(idx - REQUIRED_OFFSET) CODE
+	     v.size ()'.  */
+	  widest_int required_offset = 0;
 	  if (!oa_match_comparison_against_call (*conjuncts[i], &rel_param,
 						  &rel_code, &rhs_receiver,
 						  &rhs_callee,
 						  /*allow_symbolic_accessor=*/
-						    !require_conveyor))
+						    !require_conveyor)
+	      && !oa_match_shifted_comparison_against_call_text
+		    (*conjuncts[i], &rel_param, &rel_code, &rhs_receiver,
+		     &rhs_callee, &required_offset,
+		     /*allow_symbolic_accessor=*/!require_conveyor))
 	    continue;
 
 	  unsigned param_argno, receiver_argno;
@@ -9382,25 +9520,43 @@ cg_check_call_relational_fact (gcall *call,
 				       &fact_code, &fact_rhs_receiver,
 				       &fact_rhs_callee, &fact_offset,
 				       &fact_conveyor_established);
-	  if (!have_fact || fact_rhs_callee != rhs_callee
-	      || (oa_strip_to_receiver_identity (fact_rhs_receiver)
-		  != oa_strip_to_receiver_identity (sub_receiver))
-	      || (require_conveyor && !fact_conveyor_established))
+	  if (!have_fact)
 	    continue;
+	  if (fact_rhs_callee != rhs_callee
+	      || (oa_strip_to_receiver_identity (fact_rhs_receiver)
+		  != oa_strip_to_receiver_identity (sub_receiver)))
+	    {
+	      cg_note_unprovable_hint (sub_param, OA_UNPROVABLE_WRONG_IDENTITY);
+	      continue;
+	    }
+	  if (require_conveyor && !fact_conveyor_established)
+	    {
+	      cg_note_unprovable_hint (sub_param,
+				       OA_UNPROVABLE_WEAKER_PROVENANCE);
+	      continue;
+	    }
 
+	  /* The fact '(idx - A) CODE call' against the requirement
+	     '(idx - K) REL_CODE call': in terms of 'idx - K', the fact's
+	     offset is A - K.  */
+	  cg_range_lite rel_offset = fact_offset;
+	  if (rel_offset.has_lo)
+	    rel_offset.lo -= required_offset;
+	  if (rel_offset.has_hi)
+	    rel_offset.hi -= required_offset;
 	  if (oa_relational_code_implies (fact_code, rel_code)
-	      && cg_offset_compatible_with_code (fact_offset, rel_code))
+	      && cg_offset_compatible_with_code (rel_offset, rel_code))
 	    {
 	      verdict_out->add (call);
 	      continue; /* Proven true: silently discharged.  */
 	    }
 
-	  if (cg_call_relational_contradicts_p (fact_code, fact_offset, rel_code))
+	  if (cg_call_relational_contradicts_p (fact_code, rel_offset, rel_code))
 	    {
 	      verdict_out->add (call);
 	      error_at (gimple_location (call),
 			"argument %qE provably violates the precondition "
-			"of %qD", sub_param, callee);
+			"of %qD", cg_display_value (sub_param), callee);
 	      char established_buf[128];
 	      if (fact_offset.has_lo && fact_offset.has_hi
 		  && fact_offset.lo == fact_offset.hi && fact_offset.lo == 0)
@@ -9421,9 +9577,48 @@ cg_check_call_relational_fact (gcall *call,
 		}
 	      inform (gimple_location (call),
 		      "%qE is established %s, but the precondition requires "
-		      "it to be %s the result of %qD", sub_param, established_buf,
+		      "it to be %s the result of %qD",
+		      cg_display_value (sub_param), established_buf,
 		      op_symbol_code (rel_code), rhs_callee);
 	    }
+	  else
+	    cg_note_unprovable_hint (sub_param, OA_UNPROVABLE_RANGE_PARTIAL);
+	}
+
+      /* 'v.size () < w.size ()' required, against what branches have
+	 established (self-trust is cg_check_call's).  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree lhs_receiver, lhs_callee, rhs_receiver, rhs_callee;
+	  tree_code call_code;
+	  if (!oa_match_call_against_call (*conjuncts[i], &lhs_receiver,
+					     &lhs_callee, &call_code,
+					     &rhs_receiver, &rhs_callee,
+					     /*allow_symbolic_accessor=*/
+					       !require_conveyor))
+	    continue;
+	  unsigned lhs_argno, rhs_argno;
+	  if (!cg_find_param_position (callee, lhs_receiver, &lhs_argno)
+	      || !cg_find_param_position (callee, rhs_receiver, &rhs_argno)
+	      || lhs_argno >= gimple_call_num_args (call)
+	      || rhs_argno >= gimple_call_num_args (call))
+	    continue;
+	  tree l_identity
+	    = cg_gimple_object_identity (cg_resolve_call_argument (call,
+								  lhs_argno));
+	  tree r_identity
+	    = cg_gimple_object_identity (cg_resolve_call_argument (call,
+								  rhs_argno));
+	  if (!l_identity || !r_identity)
+	    continue;
+	  const cg_call_call_rel_fact *fact
+	    = state.call_call.get ({l_identity, lhs_callee});
+	  if (fact
+	      && fact->rhs_callee == rhs_callee
+	      && cg_gimple_object_identity (fact->rhs_receiver) == r_identity
+	      && oa_relational_code_implies (fact->code, call_code)
+	      && cg_proven_call_call_conjuncts)
+	    cg_proven_call_call_conjuncts->add ({call, *conjuncts[i]});
 	}
 
       /* The plain param-vs-param analogue of the call-relational loop
@@ -11583,6 +11778,11 @@ pass_contracts_gimple::execute (function *fun)
      check can't simply live inside cg_check_call to begin with, and for
      the known, accepted per-call (not per-conjunct) imprecision).  */
   hash_set<gimple *> call_relational_verdict;
+  hash_map<tree, int> unprovable_hints;
+  auto hints_ovr = make_temp_override (cg_unprovable_hints, &unprovable_hints);
+  hash_set<cg_call_conjunct_hash> proven_call_call_conjuncts;
+  auto proven_cc_ovr = make_temp_override (cg_proven_call_call_conjuncts,
+					   &proven_call_call_conjuncts);
   /* Bounds-proving demo, Part 2: created here, before cg_predicate_facts_
      walk's own call, rather than in each of the two passes separately --
      found via direct testing that giving cg_predicate_facts_walk its own,

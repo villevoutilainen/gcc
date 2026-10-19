@@ -31041,6 +31041,27 @@ oa_match_shifted_comparison_against_call (tree conjunct, oa_env &env,
   return true;
 }
 
+/* See contracts.h.  */
+
+bool
+oa_match_shifted_comparison_against_call_text (tree conjunct, tree *param_out,
+						 tree_code *code_out,
+						 tree *rhs_receiver_out,
+						 tree *rhs_callee_out,
+						 widest_int *offset_out,
+						 bool allow_symbolic_accessor,
+						 tree *arithmetic_type_out)
+{
+  /* No facts: a conversion only facts could show value-preserving
+     declines.  */
+  oa_env env;
+  return oa_match_shifted_comparison_against_call (conjunct, env, param_out,
+						    code_out, rhs_receiver_out,
+						    rhs_callee_out, offset_out,
+						    allow_symbolic_accessor,
+						    arithmetic_type_out);
+}
+
 /* Thin wrapper over oa_call_range_conjunct_shape immediately above, for
    a plugin/GIMPLE-pass-based consumer that needs the call-range
    comparison shape directly -- mirrors oa_match_field_range_comparison's
