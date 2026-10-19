@@ -4,6 +4,9 @@
 // entire top-level code, the only shape oa_walk_stmt's own CALL_EXPR
 // case would otherwise catch) is now scanned, the same treatment
 // IF_STMT/COND_EXPR/SWITCH_STMT's own conditions already get.
+// The loop body assigns rather than accumulates: an accumulation is
+// bounded only by counting iterations, which neither engine does (the
+// AST engine used to check the body with its first iteration's facts).
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
@@ -15,8 +18,8 @@ int f (int n, int i) conveyor
     return 0;
   int total = 0;
   for (; i < 10 && 10 / n > 0; i++)
-    total += i;
+    total = i;
   return total;
 }
 
-int main () { return f (5, 0) == 45 ? 0 : 1; }
+int main () { return f (5, 0) == 9 ? 0 : 1; }
