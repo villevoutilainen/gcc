@@ -1019,6 +1019,9 @@ static cg_array_bounds_ctx *cg_array_bounds;
 
 static bool cg_pointer_array_offset (tree, gimple *, tree *, cg_range_lite *,
 				     int = 0);
+static bool cg_value_range_at (tree, gimple *, hash_map<tree, cg_range_lite> &,
+			       hash_map<tree, cg_range_lite> &, gimple_ranger *,
+			       bool, cg_range_lite *);
 
 /* Do SSA values A and B hold the same value because they're computed
    alike from the same operands (or are the same)?  Only side-effect-free
@@ -1053,6 +1056,10 @@ cg_same_computed_value_p (tree a, tree b, int depth)
   return true;
 }
 
+/* The statement whose obligations are being checked, for a range
+   query the object-address prover makes (an element's index).  */
+static gimple *cg_prover_at;
+
 /* Is ADDR, an ADDR_EXPR, an object's address: of a variable, parameter,
    return slot or literal, or of a subobject ('&p->field', '&p[i]') of an
    object a provable pointer P points to?  Like the AST engine's
@@ -1067,6 +1074,36 @@ cg_addr_provable_p (tree addr, hash_map<tree, cg_fact> &established,
   tree base = get_base_address (TREE_OPERAND (addr, 0));
   if (!base)
     return false;
+  /* An element of an array is an object if its index is within the
+     array ('&arr[idx]'), as in the AST engine.  */
+  for (tree ref = TREE_OPERAND (addr, 0); handled_component_p (ref);
+       ref = TREE_OPERAND (ref, 0))
+    if (TREE_CODE (ref) == ARRAY_REF)
+      {
+	tree idx = TREE_OPERAND (ref, 1);
+	tree lo = array_ref_low_bound (ref), hi = array_ref_up_bound (ref);
+	if (!lo || !hi || TREE_CODE (lo) != INTEGER_CST
+	    || TREE_CODE (hi) != INTEGER_CST)
+	  return false;
+	cg_range_lite r;
+	if (TREE_CODE (idx) == INTEGER_CST)
+	  {
+	    r.has_lo = r.has_hi = true;
+	    r.lo = r.hi = wi::to_widest (idx);
+	  }
+	else if (!(TREE_CODE (idx) == SSA_NAME && cg_array_bounds
+		   && cg_value_range_at (idx,
+					 cg_prover_at ? cg_prover_at
+					 : SSA_NAME_DEF_STMT (idx),
+					 *cg_array_bounds->established_range,
+					 *cg_array_bounds->scalar_range_cache,
+					 cg_array_bounds->ranger,
+					 require_conveyor, &r)))
+	  return false;
+	if (!r.has_lo || !r.has_hi || r.lo < wi::to_widest (lo)
+	    || r.hi > wi::to_widest (hi))
+	  return false;
+      }
   if (DECL_P (base) || CONSTANT_CLASS_P (base)
       || TREE_CODE (base) == STRING_CST)
     return true;
@@ -1382,6 +1419,13 @@ cg_provably_owned_p (tree val, function *fun, hash_set<tree> &in_progress,
       tree base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (val, 0));
       if (DECL_P (base) && DECL_CONTEXT (base) == fun->decl)
 	return true;
+      /* An element of an owned array.  */
+      if (TREE_CODE (base) == ARRAY_REF)
+	{
+	  tree arr = get_base_address (base);
+	  if (arr && DECL_P (arr) && DECL_CONTEXT (arr) == fun->decl)
+	    return true;
+	}
       /* D4324/P2680, GIMPLE/AST parity (found via the comprehensive
 	 coverage sweep, 2026-10-12): a field of an owned object is itself
 	 owned -- the exact gap this function's own leading comment
@@ -2761,6 +2805,7 @@ static void
 cg_check_call_reference_safety (gcall *call, function *fun,
 				 hash_map<tree, cg_fact> &established)
 {
+  auto at = make_temp_override (cg_prover_at, call);
   tree callee = gimple_call_fndecl (call);
   if (!callee || !DECL_DECLARED_CONVEYOR_P (callee))
     return;
@@ -4092,6 +4137,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		hash_set<gimple *> *call_relational_verdict,
 		hash_map<tree, frange> *established_frange = NULL)
 {
+  auto at = make_temp_override (cg_prover_at, call);
   tree callee = gimple_call_fndecl (call);
   if (!callee)
     return;
@@ -4338,11 +4384,9 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	    }
 	  else if (TREE_CODE (arg) == SSA_NAME)
 	    {
-	      if (!ranger->range_of_expr (have, arg, call))
+	      /* Folded from its operands' facts, too ('t.m_value - 1e3').  */
+	      if (!cg_frange_of (arg, call, ranger, established_frange, have))
 		have.set_varying (TREE_TYPE (arg));
-	      if (established_frange)
-		if (frange *known = established_frange->get (arg))
-		  have.intersect (*known);
 	    }
 	  else
 	    continue;

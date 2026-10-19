@@ -27237,7 +27237,13 @@ oa_function_needs_walk_p (tree fndecl)
       || (DECL_LANG_SPECIFIC (fndecl) && DECL_CONTRACT_WRAPPER (fndecl)))
     return true;
 
-  return DECL_MIGHT_NEED_OA_SCAN_P (fndecl);
+  if (DECL_MIGHT_NEED_OA_SCAN_P (fndecl))
+    return true;
+  /* A constructor's or destructor's clone: whatever the function it is
+     cloned from was marked for (e.g. a call in a member's NSDMI).  */
+  if (DECL_CLONED_FUNCTION_P (fndecl))
+    return oa_function_needs_walk_p (DECL_CLONED_FUNCTION (fndecl));
+  return false;
 }
 
 /* Plugin-facing (and, prospectively, in-tree-GIMPLE-pass-facing)
