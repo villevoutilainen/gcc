@@ -14312,12 +14312,64 @@ oa_condition_as_written (tree contract)
    'this->m_ptr') is not kept, since the call itself never evaluates
    it.  */
 
+/* Is E an address computed only from local variables, parameters and
+   constants ('&st[i]', 'p + n'): side-effect free, and naming no
+   memory but through its result?  */
+
+static bool
+oa_local_address_computation_p (tree e, int depth = 0)
+{
+  e = STRIP_ANY_LOCATION_WRAPPER (e);
+  if (depth > 10)
+    return false;
+  switch (TREE_CODE (e))
+    {
+    case INTEGER_CST:
+      return true;
+    case VAR_DECL:
+    case PARM_DECL:
+      return (!is_global_var (e) && !is_capture_proxy (e)
+	      && !DECL_HAS_VALUE_EXPR_P (e));
+    case ADDR_EXPR:
+      return (depth == 0
+	      && TREE_CODE (TREE_OPERAND (e, 0)) == INDIRECT_REF
+	      && oa_local_address_computation_p
+		   (TREE_OPERAND (TREE_OPERAND (e, 0), 0), depth + 1));
+    case NOP_EXPR:
+    case CONVERT_EXPR:
+    case NON_LVALUE_EXPR:
+      return oa_local_address_computation_p (TREE_OPERAND (e, 0), depth + 1);
+    case POINTER_PLUS_EXPR:
+    case PLUS_EXPR:
+    case MINUS_EXPR:
+    case MULT_EXPR:
+      return (oa_local_address_computation_p (TREE_OPERAND (e, 0), depth + 1)
+	      && oa_local_address_computation_p (TREE_OPERAND (e, 1),
+						 depth + 1));
+    default:
+      return false;
+    }
+}
+
 static tree
 oa_resolved_object_address_call (tree arg)
 {
   if (!(flag_contract_conveyor_proofs_gimple
 	|| flag_contract_symbolic_proofs_gimple))
     return boolean_true_node;
+  /* An address computed from variables ('&st[i]') stays computed, so
+     the check captures them: the GIMPLE engine matches it against the
+     same computation later on (cg_expr_computes_p).  */
+  {
+    tree e = STRIP_ANY_LOCATION_WRAPPER (arg);
+    while (TREE_CODE (e) == NON_LVALUE_EXPR || CONVERT_EXPR_P (e))
+      e = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
+    if ((TREE_CODE (e) == ADDR_EXPR || TREE_CODE (e) == POINTER_PLUS_EXPR)
+	&& oa_local_address_computation_p (e))
+      return build2 (COMPOUND_EXPR, boolean_type_node,
+		     build1 (NOP_EXPR, void_type_node, unshare_expr (e)),
+		     boolean_true_node);
+  }
   tree a = STRIP_ANY_LOCATION_WRAPPER (arg);
   while (TREE_CODE (a) == NON_LVALUE_EXPR || CONVERT_EXPR_P (a)
 	 || TREE_CODE (a) == VIEW_CONVERT_EXPR)

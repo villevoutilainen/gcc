@@ -1005,6 +1005,21 @@ static bool cg_provable_object_address_p (tree, hash_map<tree, cg_fact> &,
 					  bool, hash_set<tree> &,
 					  oa_unprovable_reason *);
 
+/* The facts the array-bounds checks consult, set for the duration of
+   one function's check (see cg_check_array_bounds_ub).  */
+
+struct cg_array_bounds_ctx
+{
+  hash_map<tree, cg_range_lite> *established_range;
+  hash_map<tree, cg_range_lite> *scalar_range_cache;
+  gimple_ranger *ranger;
+};
+
+static cg_array_bounds_ctx *cg_array_bounds;
+
+static bool cg_pointer_array_offset (tree, gimple *, tree *, cg_range_lite *,
+				     int = 0);
+
 /* Do SSA values A and B hold the same value because they're computed
    alike from the same operands (or are the same)?  Only side-effect-free
    arithmetic, conversions and address computations, not loads.  */
@@ -1205,6 +1220,22 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
 	result = cg_addr_provable_p (gimple_assign_rhs1 (def), established,
 				     require_conveyor, in_progress,
 				     reason_out);
+      /* 'p + i' within the array P points into (p = &arr[0]).  */
+      else if (code == POINTER_PLUS_EXPR)
+	{
+	  tree array_type;
+	  cg_range_lite off;
+	  if (cg_array_bounds
+	      && cg_pointer_array_offset (val, def, &array_type, &off)
+	      && TYPE_DOMAIN (array_type)
+	      && TYPE_MAX_VALUE (TYPE_DOMAIN (array_type))
+	      && TREE_CODE (TYPE_MAX_VALUE (TYPE_DOMAIN (array_type)))
+		   == INTEGER_CST
+	      && off.has_lo && off.lo >= 0 && off.has_hi
+	      && off.hi <= wi::to_widest (TYPE_MAX_VALUE
+					   (TYPE_DOMAIN (array_type))))
+	    result = true;
+	}
       else if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
 	result = cg_provable_object_address_p (gimple_assign_rhs1 (def),
 						established, require_conveyor,
@@ -2724,6 +2755,8 @@ cg_call_relational_contradicts_p (tree_code established_code,
    later one only in a conveyor or contract-bearing caller, missing the
    obligations of an ordinary caller the AST engine checks.  */
 
+static tree cg_display_argument (tree, tree);
+
 static void
 cg_check_call_reference_safety (gcall *call, function *fun,
 				 hash_map<tree, cg_fact> &established)
@@ -2771,7 +2804,8 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 	{
 	  error_at (gimple_location (call),
 		    "cannot prove %<is_object_address%> for %qE, "
-		    "required by the precondition of %qD", substituted, callee);
+		    "required by the precondition of %qD",
+		    cg_display_argument (substituted, parm), callee);
 	  if (const char *why = oa_unprovable_reason_text (reason))
 	    inform (gimple_location (call), "%s", _(why));
 	  continue;
@@ -3022,8 +3056,29 @@ cg_display_argument (tree arg, tree parm)
 {
   if (parm && TYPE_REF_P (TREE_TYPE (parm)) && POINTER_TYPE_P (TREE_TYPE (arg)))
     {
+      if (TREE_CODE (arg) == SSA_NAME
+	  && gimple_assign_single_p (SSA_NAME_DEF_STMT (arg))
+	  && (TREE_CODE (gimple_assign_rhs1 (SSA_NAME_DEF_STMT (arg)))
+	      == ADDR_EXPR))
+	arg = gimple_assign_rhs1 (SSA_NAME_DEF_STMT (arg));
       if (TREE_CODE (arg) == ADDR_EXPR)
-	return TREE_OPERAND (arg, 0);
+	{
+	  tree ref = TREE_OPERAND (arg, 0);
+	  /* 'p->v' rather than the MEM_REF it is in GIMPLE.  */
+	  if (TREE_CODE (ref) == COMPONENT_REF
+	      && TREE_CODE (TREE_OPERAND (ref, 0)) == MEM_REF
+	      && integer_zerop (TREE_OPERAND (TREE_OPERAND (ref, 0), 1)))
+	    {
+	      tree ptr = cg_display_value (TREE_OPERAND (TREE_OPERAND (ref, 0),
+							  0));
+	      if (DECL_P (ptr))
+		return build3 (COMPONENT_REF, TREE_TYPE (ref),
+			       build1 (INDIRECT_REF, TREE_TYPE (TREE_TYPE (ptr)),
+				       ptr),
+			       TREE_OPERAND (ref, 1), NULL_TREE);
+	    }
+	  return ref;
+	}
       tree ptr = cg_display_value (arg);
       return build1 (INDIRECT_REF, TREE_TYPE (TREE_TYPE (arg)), ptr);
     }
@@ -3372,14 +3427,6 @@ cg_extract_deref_base (tree ref, tree *base_out)
    The facts these consult, set for the duration of one function's
    check.  */
 
-struct cg_array_bounds_ctx
-{
-  hash_map<tree, cg_range_lite> *established_range;
-  hash_map<tree, cg_range_lite> *scalar_range_cache;
-  gimple_ranger *ranger;
-};
-
-static cg_array_bounds_ctx *cg_array_bounds;
 
 static bool cg_value_range_at (tree, gimple *, hash_map<tree, cg_range_lite> &,
 			       hash_map<tree, cg_range_lite> &, gimple_ranger *,
@@ -3549,7 +3596,7 @@ cg_element_offset_range (tree bytes, const widest_int &elt_size, gimple *stmt,
 
 static bool
 cg_pointer_array_offset (tree val, gimple *at, tree *array_type,
-			 cg_range_lite *off, int depth = 0)
+			 cg_range_lite *off, int depth)
 {
   if (depth > 8)
     return false;
@@ -3836,15 +3883,32 @@ cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
 static void
 cg_check_dereference_ub (gimple *stmt, hash_map<tree, cg_fact> &established)
 {
+  /* A member or element access through a pointer whose address alone
+     is taken ('&p->v'): forming it is a dereference too, as in the AST
+     engine.  */
+  auto address_operand = [&] (tree op)
+    {
+      if (op && TREE_CODE (op) == ADDR_EXPR
+	  && (TREE_CODE (TREE_OPERAND (op, 0)) == COMPONENT_REF
+	      || TREE_CODE (TREE_OPERAND (op, 0)) == ARRAY_REF))
+	cg_check_one_dereference_candidate (stmt, TREE_OPERAND (op, 0),
+					    established);
+    };
   if (is_gimple_assign (stmt))
     {
       cg_check_one_dereference_candidate (stmt, gimple_assign_lhs (stmt),
 					    established);
       cg_check_one_dereference_candidate (stmt, gimple_assign_rhs1 (stmt),
 					    established);
+      address_operand (gimple_assign_rhs1 (stmt));
     }
   else if (is_gimple_call (stmt))
-    cg_check_one_dereference_candidate (stmt, gimple_call_lhs (stmt), established);
+    {
+      cg_check_one_dereference_candidate (stmt, gimple_call_lhs (stmt),
+					    established);
+      for (unsigned i = 0; i < gimple_call_num_args (stmt); ++i)
+	address_operand (gimple_call_arg (stmt, i));
+    }
 }
 
 
@@ -4013,6 +4077,8 @@ cg_proof_checks_p (tree contract, tree callee, bool conveyor)
 
 static bool cg_conveyor_proofs_p ();
 static bool cg_symbolic_proofs_p ();
+static bool cg_frange_of (tree, gimple *, gimple_ranger *,
+			  hash_map<tree, frange> *, frange &, int = 0);
 
 static void
 cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
@@ -7159,7 +7225,7 @@ static bool cg_value_range_at (tree, gimple *, hash_map<tree, cg_range_lite> &,
 static bool
 cg_frange_of (tree val, gimple *stmt, gimple_ranger *ranger,
 	      hash_map<tree, frange> *established_frange, frange &r,
-	      int depth = 0)
+	      int depth)
 {
   tree type = TREE_TYPE (val);
   if (TREE_CODE (val) == REAL_CST)
@@ -9429,6 +9495,63 @@ cg_assert_fact_scope::restore (unsigned mark)
    the facts its condition states about SSA values -- the same shapes
    cg_seed_self_trust seeds from a precondition.  */
 
+/* Does SSA value V hold the value expression E of a contract condition
+   would at contract check CALL (STRUCT_VAR and DECLS as from
+   cg_contract_check_call_p): computed alike from the values its
+   variables have there?  Only conversions, arithmetic and address
+   computations.  */
+
+static bool
+cg_expr_computes_p (tree e, tree v, gcall *call, tree struct_var, tree decls,
+		    int depth)
+{
+  e = STRIP_ANY_LOCATION_WRAPPER (e);
+  if (depth > 10)
+    return false;
+  if (TREE_CODE (e) == INTEGER_CST)
+    return (TREE_CODE (v) == INTEGER_CST
+	    && wi::to_widest (e) == wi::to_widest (v));
+  gimple *def = TREE_CODE (v) == SSA_NAME ? SSA_NAME_DEF_STMT (v) : NULL;
+  tree_code dcode = (def && is_gimple_assign (def)
+		     ? gimple_assign_rhs_code (def) : ERROR_MARK);
+  /* A conversion or copy on the GIMPLE side.  */
+  if ((CONVERT_EXPR_CODE_P (dcode) || dcode == SSA_NAME)
+      && cg_expr_computes_p (e, gimple_assign_rhs1 (def), call, struct_var,
+			     decls, depth + 1))
+    return true;
+  if (VAR_P (e) || TREE_CODE (e) == PARM_DECL)
+    {
+      tree cap = cg_contract_check_decl_value (call, struct_var, decls, e);
+      return cap && cg_same_computed_value_p (cap, v, 0);
+    }
+  if (CONVERT_EXPR_P (e) || TREE_CODE (e) == NON_LVALUE_EXPR)
+    return cg_expr_computes_p (TREE_OPERAND (e, 0), v, call, struct_var,
+			       decls, depth + 1);
+  if (TREE_CODE (e) == ADDR_EXPR
+      && TREE_CODE (TREE_OPERAND (e, 0)) == INDIRECT_REF)
+    return cg_expr_computes_p (TREE_OPERAND (TREE_OPERAND (e, 0), 0), v,
+			       call, struct_var, decls, depth + 1);
+  tree_code code = TREE_CODE (e);
+  if ((code == POINTER_PLUS_EXPR || code == PLUS_EXPR || code == MINUS_EXPR
+       || code == MULT_EXPR)
+      && dcode == code)
+    {
+      tree a = gimple_assign_rhs1 (def), b = gimple_assign_rhs2 (def);
+      if (cg_expr_computes_p (TREE_OPERAND (e, 0), a, call, struct_var,
+			      decls, depth + 1)
+	  && cg_expr_computes_p (TREE_OPERAND (e, 1), b, call, struct_var,
+				 decls, depth + 1))
+	return true;
+      if ((code == PLUS_EXPR || code == MULT_EXPR)
+	  && cg_expr_computes_p (TREE_OPERAND (e, 0), b, call, struct_var,
+				 decls, depth + 1)
+	  && cg_expr_computes_p (TREE_OPERAND (e, 1), a, call, struct_var,
+				 decls, depth + 1))
+	return true;
+    }
+  return false;
+}
+
 void
 cg_assert_fact_scope::establish (gcall *call)
 {
@@ -9478,9 +9601,25 @@ cg_assert_fact_scope::establish (gcall *call)
 	  if ((VAR_P (arg) || TREE_CODE (arg) == PARM_DECL)
 	      && (TYPE_REF_P (TREE_TYPE (arg))
 		  || POINTER_TYPE_P (TREE_TYPE (arg))))
-	    if (tree key = value_of (arg))
-	      if (TREE_CODE (key) == SSA_NAME)
-		put_fact (OA, key, { conveyor_enabled });
+	    {
+	      if (tree key = value_of (arg))
+		if (TREE_CODE (key) == SSA_NAME)
+		  put_fact (OA, key, { conveyor_enabled });
+	    }
+	  /* An address computed from variables ('&st[i]'): every value
+	     the function computes alike from the same values -- -O0
+	     GIMPLE doesn't share the computation with a later 'st[i].f'.  */
+	  else if (TREE_CODE (arg) == ADDR_EXPR
+		   || TREE_CODE (arg) == POINTER_PLUS_EXPR)
+	    {
+	      unsigned k;
+	      tree name;
+	      FOR_EACH_SSA_NAME (k, name, cfun)
+		if (POINTER_TYPE_P (TREE_TYPE (name))
+		    && cg_expr_computes_p (arg, name, call, struct_var, decls,
+					   0))
+		  put_fact (OA, name, { conveyor_enabled });
+	    }
 	  continue;
 	}
       tree decl;
