@@ -1515,8 +1515,10 @@ cg_addr_provable_p (tree addr, hash_map<tree, cg_fact> &established,
 /* If CALL immediately invokes a lambda ('[&] { return &a; } ()') whose
    every return is the address of one of its captures by reference, the
    value the caller stored for that capture in the closure just before
-   the call: what the call returns.  As the AST engine's
-   oa_resolve_iile_call, for this shape.  */
+   the call: what the call returns.  If every return is instead the
+   value of a pointer captured by reference ('[&] { return p; } ()'),
+   the value last stored to that pointer before the call, in its block.
+   As the AST engine's oa_resolve_iile_call, for these shapes.  */
 
 static tree
 cg_iile_returned_capture_address (gcall *call)
@@ -1532,8 +1534,8 @@ cg_iile_returned_capture_address (gcall *call)
   tree closure = TREE_OPERAND (closure_addr, 0);
 
   /* The capture field every return in the body returns the address of.  */
-  struct data_t { tree field; bool bad; };
-  data_t data = { NULL_TREE, false };
+  struct data_t { tree field; bool bad; int deref; };
+  data_t data = { NULL_TREE, false, -1 };
   tree body = DECL_SAVED_TREE (callee);
   cp_walk_tree_without_duplicates (&body, [](tree *tp, int *walk_subtrees,
 					     void *d) -> tree
@@ -1555,7 +1557,33 @@ cg_iile_returned_capture_address (gcall *call)
       /* '&a': the address, not the value, of the object the capture
 	 refers to -- what its field holds.  */
       tree field = NULL_TREE;
-      if (v && TREE_CODE (v) == ADDR_EXPR)
+      int deref = 0;
+      if (v && returns_pointer && is_capture_proxy (v)
+	  && !TYPE_REF_P (TREE_TYPE (v))
+	  && REFERENCE_REF_P (DECL_VALUE_EXPR (v))
+	  && TREE_CODE (TREE_OPERAND (DECL_VALUE_EXPR (v), 0)) == COMPONENT_REF
+	  && TYPE_REF_P (TREE_TYPE (TREE_OPERAND (TREE_OPERAND
+						     (DECL_VALUE_EXPR (v), 0),
+						   1))))
+	{
+	  /* 'return p': the value of the captured P.  */
+	  field = TREE_OPERAND (TREE_OPERAND (DECL_VALUE_EXPR (v), 0), 1);
+	  deref = 1;
+	}
+      else if (v && returns_pointer && REFERENCE_REF_P (v)
+	       && is_capture_proxy (TREE_OPERAND (v, 0))
+	       && TYPE_REF_P (TREE_TYPE (TREE_OPERAND (v, 0)))
+	       && (TREE_CODE (DECL_VALUE_EXPR (TREE_OPERAND (v, 0)))
+		   == COMPONENT_REF)
+	       && TYPE_REF_P (TREE_TYPE (TREE_OPERAND
+					 (DECL_VALUE_EXPR (TREE_OPERAND (v, 0)),
+					  1))))
+	{
+	  /* The same, read through the proxy, a reference.  */
+	  field = TREE_OPERAND (DECL_VALUE_EXPR (TREE_OPERAND (v, 0)), 1);
+	  deref = 1;
+	}
+      else if (v && TREE_CODE (v) == ADDR_EXPR)
 	{
 	  v = TREE_OPERAND (v, 0);
 	  if (v && is_capture_proxy (v))
@@ -1580,15 +1608,44 @@ cg_iile_returned_capture_address (gcall *call)
 	       && TYPE_REF_P (TREE_TYPE (TREE_OPERAND (v, 1)))
 	       && returns_pointer)
 	field = TREE_OPERAND (v, 1);
-      if (!field || (data->field && data->field != field))
+      if (!field || (data->field && data->field != field)
+	  || (data->deref >= 0 && data->deref != deref))
 	{
 	  data->bad = true;
 	  return *tp;
 	}
       data->field = field;
+      data->deref = deref;
       return NULL_TREE;
     }, &data);
   if (data.bad || !data.field)
+    return NULL_TREE;
+  /* The captured variable's value at the call is what is returned only
+     if the body changes nothing first.  */
+  if (data.deref == 1
+      && cp_walk_tree_without_duplicates (&body,
+					  [](tree *tp, int *walk_subtrees,
+					     void *) -> tree
+	{
+	  switch (TREE_CODE (*tp))
+	    {
+	    case RETURN_EXPR:
+	    case LAMBDA_EXPR:
+	      *walk_subtrees = 0;
+	      return NULL_TREE;
+	    case CALL_EXPR:
+	    case AGGR_INIT_EXPR:
+	    case MODIFY_EXPR:
+	    case INIT_EXPR:
+	    case PREINCREMENT_EXPR:
+	    case POSTINCREMENT_EXPR:
+	    case PREDECREMENT_EXPR:
+	    case POSTDECREMENT_EXPR:
+	      return *tp;
+	    default:
+	      return NULL_TREE;
+	    }
+	}, NULL))
     return NULL_TREE;
 
   /* The value stored into that field of CLOSURE before CALL, in its
@@ -1607,7 +1664,36 @@ cg_iile_returned_capture_address (gcall *call)
       if (TREE_CODE (lhs) == COMPONENT_REF
 	  && TREE_OPERAND (lhs, 0) == closure
 	  && TREE_OPERAND (lhs, 1) == data.field)
-	return gimple_assign_rhs1 (stmt);
+	{
+	  tree stored = gimple_assign_rhs1 (stmt);
+	  if (data.deref != 1)
+	    return stored;
+	  /* The value last stored to the captured variable before CALL,
+	     with no call or store through a pointer in between.  */
+	  if (TREE_CODE (stored) != ADDR_EXPR
+	      || !VAR_P (TREE_OPERAND (stored, 0)))
+	    return NULL_TREE;
+	  tree var = TREE_OPERAND (stored, 0);
+	  gimple_stmt_iterator g = gsi_for_stmt (call);
+	  for (gsi_prev (&g); !gsi_end_p (g); gsi_prev (&g))
+	    {
+	      gimple *s2 = gsi_stmt (g);
+	      /* What writes no memory changes nothing here.  */
+	      if (!gimple_vdef (s2) || gimple_clobber_p (s2))
+		continue;
+	      if (is_gimple_call (s2))
+		return NULL_TREE;
+	      if (!gimple_assign_single_p (s2))
+		return NULL_TREE;
+	      tree l2 = gimple_assign_lhs (s2);
+	      if (l2 == var)
+		return gimple_assign_rhs1 (s2);
+	      tree b2 = get_base_address (l2);
+	      if (!b2 || !DECL_P (b2))
+		return NULL_TREE;
+	    }
+	  return NULL_TREE;
+	}
     }
   return NULL_TREE;
 }
