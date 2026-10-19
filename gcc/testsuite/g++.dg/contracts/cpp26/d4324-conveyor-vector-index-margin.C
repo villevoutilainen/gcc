@@ -45,14 +45,13 @@
 // further arithmetic ('idx += 5') is it own separate composition
 // (oa_get_call_relational's own PLUS_EXPR handling), which can ALSO wrap
 // even once the margin itself is trustworthy -- idx could still be
-// arbitrarily close to size_type's own max. This also needs an
-// independently-provable NUMERIC bound on idx (not merely a symbolic
-// relation to size ()) tight enough that the shift provably can't
-// overflow (oa_shift_arithmetic_no_wrap_ok_p, consulting idx's own
-// established range via oa_get_range). use_shift_without_numeric_cap_
-// declines shows the margin+companion alone still isn't enough once a
-// further shift is involved; use_sound adds the missing numeric cap
-// ('idx < 5') and the shift verifies.
+// arbitrarily close to size_type's own max -- were it not that the
+// margin itself bounds it: 'idx + 10 < v.size ()', and v.size () is at
+// most size_type's max, so idx is at most that max - 11, and the shift
+// provably can't overflow (oa_shift_arithmetic_no_wrap_ok_p, given the
+// bound oa_get_call_relational derives from the fact itself).
+// use_shift_within_margin_ok shows the margin+companion alone is enough;
+// use_unsound shifts past the margin and still declines.
 //
 // use_signed_idx_declines's own type-level decline (the FIRST bug above)
 // was later found to be overly blunt: it refuses ANY signed idx, even
@@ -101,15 +100,15 @@ int use_margin_with_companion_ok (std::vector<int>& v, std::vector<int>::size_ty
   return -1;
 }
 
-int use_shift_without_numeric_cap_declines (std::vector<int>& v,
-					      std::vector<int>::size_type idx)
+int use_shift_within_margin_ok (std::vector<int>& v,
+				std::vector<int>::size_type idx)
   pre<std::contracts::conveyor_assert_v>(std::is_object_address (&v))
 {
   if (v.size () > idx && v.size () - idx > 10)
     {
-      idx += 5; // no numeric cap on idx -- could still be near size_type's
-		// own max, so this shift can't be proven not to overflow
-      return v[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
+      idx += 5; // no numeric cap on idx, but the margin is one: idx + 10 <
+		// v.size () <= SIZE_MAX, so this shift can't wrap either
+      return v[idx]; // proven safe, no diagnostic
     }
   return -1;
 }
@@ -187,7 +186,7 @@ int main ()
 {
   std::vector<int> v(20);
   return use_margin_only_declines (v, 0) + use_margin_with_companion_ok (v, 0)
-	 + use_shift_without_numeric_cap_declines (v, 0)
+	 + use_shift_within_margin_ok (v, 0)
 	 + use_sound (v, 0) + use_unsound (v, 0)
 	 + use_signed_idx_declines (v, 0) + use_signed_idx_nonneg_ok (v, 0)
 	 + use_definitely_unsound (v);
