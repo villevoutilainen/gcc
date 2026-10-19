@@ -2,7 +2,9 @@
 // ptr->field shape -- reassigning the whole tracked object drops every
 // one of its established fields, not just one (the same whole-object
 // invalidation rule the predicate shape already has, applied here to
-// this new shape's own field-range map too).
+// this new shape's own field-range map too).  The new value comes from
+// an opaque call: 't = thing ()' would make the fields known zeros, a
+// provable violation.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-symbolic-proofs" }
 
@@ -31,11 +33,13 @@ struct thing {
   { }
 };
 
+thing make_thing ();
+
 int main ()
 {
   thing t;
   t.produce_both ();
-  t = thing ();
+  t = make_thing ();
   t.consume_count (); // { dg-warning "cannot verify" }
   t.consume_other ();  // { dg-warning "cannot verify" }
   return 0;

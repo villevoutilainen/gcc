@@ -632,6 +632,12 @@ DEF_INTERNAL_FN (SHUFFLEVECTOR, ECF_CONST | ECF_LEAF | ECF_NOTHROW, NULL)
 /* <=> optimization.  */
 DEF_INTERNAL_FN (SPACESHIP, ECF_CONST | ECF_LEAF | ECF_NOTHROW, NULL)
 
+/* A symbolic contract's place in the function, for the GIMPLE contract
+   analysis (cp/contracts-gimple.cc): its one argument is the address of
+   the contract check's capture struct.  Removed by that analysis; expands
+   to nothing.  */
+DEF_INTERNAL_FN (CONTRACT_MARK, ECF_LEAF | ECF_NOTHROW, NULL)
+
 /* [[assume (cond)]].  */
 DEF_INTERNAL_FN (ASSUME, ECF_CONST | ECF_LEAF | ECF_NOTHROW
 			 | ECF_LOOPING_CONST_OR_PURE, NULL)

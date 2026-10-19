@@ -23956,6 +23956,12 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
       if (conveyor_analysis)
 	for (unsigned i = 0; i < conjuncts.length (); ++i)
 	  {
+	    /* A bare is_object_address (E) is the mandatory resolution's
+	       (oa_resolve_condition, above), which reports it if
+	       unprovable -- as in oa_handle_postcondition_stmt.  */
+	    tree oa_arg;
+	    if (is_object_address_call_p (*conjuncts[i], &oa_arg))
+	      continue;
 	    oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 	    char established_buf[128];
 	    switch (oa_check_assertion_conjunct_against_env
@@ -23997,6 +24003,12 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
       if (symbolic_analysis)
 	for (unsigned i = 0; i < conjuncts.length (); ++i)
 	  {
+	    /* A bare is_object_address (E) is the mandatory resolution's
+	       (oa_resolve_condition, above), which reports it if
+	       unprovable -- as in oa_handle_postcondition_stmt.  */
+	    tree oa_arg;
+	    if (is_object_address_call_p (*conjuncts[i], &oa_arg))
+	      continue;
 	    oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 	    char established_buf[128];
 	    switch (oa_check_assertion_conjunct_against_env
@@ -32524,6 +32536,50 @@ build_predicate_arg_struct_type (tree core_fn, location_t loc)
   return struct_type;
 }
 
+/* The capture struct type of CONTRACT's check in FN without building
+   its predicate core function: the one build_predicate_arg_struct_type
+   builds from the core function's parameters -- FN's own, one per decl
+   the condition captures, and a postcondition's result.  For a symbolic
+   contract's marker (IFN_CONTRACT_MARK), whose condition may call
+   functions with no definition: a core function would reference
+   them.  */
+
+static tree
+build_contract_mark_struct_type (tree contract, tree fn, location_t loc)
+{
+  bool postcondition = POSTCONDITION_P (contract);
+  tree result_type = postcondition ? TREE_TYPE (TREE_TYPE (fn)) : NULL_TREE;
+  vec<tree, va_gc> *captures
+    = find_condition_captures (CONTRACT_CONDITION (contract), fn,
+				postcondition
+				? POSTCONDITION_IDENTIFIER (contract)
+				: NULL_TREE);
+  auto_vec<tree> types;
+  for (tree p = DECL_ARGUMENTS (fn); p; p = DECL_CHAIN (p))
+    types.safe_push (TREE_TYPE (p));
+  for (unsigned i = 0; i < vec_safe_length (captures); ++i)
+    types.safe_push (TREE_TYPE ((*captures)[i]));
+  if (postcondition && result_type && !VOID_TYPE_P (result_type))
+    types.safe_push (result_type);
+
+  tree fields = NULL_TREE;
+  tree *last_field = &fields;
+  for (tree t : types)
+    {
+      tree pointee = TYPE_REF_P (t) ? TREE_TYPE (t) : t;
+      tree field = build_decl (loc, FIELD_DECL, NULL_TREE,
+			       build_pointer_type (pointee));
+      *last_field = field;
+      last_field = &DECL_CHAIN (field);
+    }
+  tree struct_type = make_node (RECORD_TYPE);
+  TYPE_FIELDS (struct_type) = fields;
+  for (tree f = fields; f; f = DECL_CHAIN (f))
+    DECL_CONTEXT (f) = struct_type;
+  layout_type (struct_type);
+  return struct_type;
+}
+
 /* Declare a local variable of STRUCT_TYPE (built by
    build_predicate_arg_struct_type) in CC_BIND (registered for the
    gimplifier, exactly like the ctrl_var/loc_var temporaries
@@ -33381,11 +33437,21 @@ build_contract_check (tree contract)
      CONDITION has gone through the same remap_dummy_this/remap_retval
      processing as every other contract.  */
   bool symbolic_runtime = false;
+  bool symbolic_mark = false;
   if (ctrl && contract_control_symbolic_like (ctrl, side))
     {
+      /* Still nothing at runtime, but the GIMPLE engine needs to know
+	 where the contract is, and what it is about: a marker
+	 (IFN_CONTRACT_MARK) with the check's capture struct, which that
+	 analysis removes.  */
       if (!flag_contract_symbolic_runtime_checks)
-	return void_node;
-      symbolic_runtime = true;
+	{
+	  if (!flag_contract_symbolic_proofs_gimple)
+	    return void_node;
+	  symbolic_mark = true;
+	}
+      else
+	symbolic_runtime = true;
     }
 
   contract_evaluation_semantic semantic = CES_ENFORCE;
@@ -33427,6 +33493,22 @@ build_contract_check (tree contract)
 
   if (symbolic_runtime)
     return build_symbolic_runtime_check (contract, ctrl, loc, condition);
+
+  if (symbolic_mark)
+    {
+      tree cc_bind = build3 (BIND_EXPR, void_type_node, NULL, NULL, NULL);
+      BIND_EXPR_BODY (cc_bind) = push_stmt_list ();
+      tree struct_type
+	= build_contract_mark_struct_type (contract, current_function_decl,
+					   loc);
+      tree args_ptr = build_predicate_arg_struct_var (contract, struct_type,
+						       cc_bind, loc);
+      finish_expr_stmt (build_call_expr_internal_loc (loc, IFN_CONTRACT_MARK,
+						      void_type_node, 1,
+						      args_ptr));
+      BIND_EXPR_BODY (cc_bind) = pop_stmt_list (BIND_EXPR_BODY (cc_bind));
+      return cc_bind;
+    }
 
   /* D4324 step 1, assumable: emit an optimizer assumption over the predicate
      rather than a runtime check.  IFN_ASSUME does not evaluate the predicate

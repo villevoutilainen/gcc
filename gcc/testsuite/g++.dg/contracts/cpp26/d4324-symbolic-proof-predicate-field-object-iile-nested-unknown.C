@@ -59,7 +59,7 @@ void g (holder *h)
 {
   int dummy;
   contract_assert<symbolic_ctrl_v>
-    (std::is_object_address ([&]{ open_it (&h->f); return &dummy; }())); // { dg-warning "cannot verify" }
+    (std::is_object_address ([&]{ open_it (&h->f); return &dummy; }())); // the address of a local: proven
   use_it (&h->f); // { dg-warning "cannot verify" }
 }
 
