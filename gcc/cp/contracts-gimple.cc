@@ -864,6 +864,277 @@ cg_note_unprovable_hint (tree val, oa_unprovable_reason reason)
     cg_unprovable_hints->put (val, reason);
 }
 
+/* If VAL is a load, the other loads of the same location from the same
+   memory state (the same virtual use) whose values are available at
+   STMT, in *TWINS: the same value -- whose range at STMT a condition may
+   have narrowed ('x < 100 && ++x > 0' for a reference X loads *X
+   twice).  */
+
+static void
+cg_dominating_load_twins (tree val, gimple *stmt, vec<tree> *twins)
+{
+  if (TREE_CODE (val) != SSA_NAME || !stmt || !gimple_bb (stmt)
+      || !dom_info_available_p (CDI_DOMINATORS))
+    return;
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (!def || !gimple_assign_single_p (def) || !gimple_vuse (def))
+    return;
+  tree ref = gimple_assign_rhs1 (def);
+  if (TREE_THIS_VOLATILE (ref)
+      || !(TREE_CODE (ref) == MEM_REF || handled_component_p (ref)
+	   || VAR_P (ref) || TREE_CODE (ref) == PARM_DECL))
+    return;
+  tree vuse = gimple_vuse (def);
+  imm_use_iterator it;
+  gimple *use;
+  FOR_EACH_IMM_USE_STMT (use, it, vuse)
+    {
+      if (use == def || !gimple_assign_single_p (use)
+	  || gimple_vuse (use) != vuse
+	  || TREE_CODE (gimple_assign_lhs (use)) != SSA_NAME
+	  || !operand_equal_p (gimple_assign_rhs1 (use), ref, 0)
+	  || !types_compatible_p (TREE_TYPE (gimple_assign_lhs (use)),
+				  TREE_TYPE (val)))
+	continue;
+      basic_block ub = gimple_bb (use), sb = gimple_bb (stmt);
+      if (!ub)
+	continue;
+      bool available = false;
+      if (ub != sb)
+	available = dominated_by_p (CDI_DOMINATORS, sb, ub);
+      else
+	for (gimple_stmt_iterator gsi = gsi_start_bb (ub); !gsi_end_p (gsi);
+	     gsi_next (&gsi))
+	  {
+	    if (gsi_stmt (gsi) == stmt)
+	      break;
+	    if (gsi_stmt (gsi) == use)
+	      {
+		available = true;
+		break;
+	      }
+	  }
+      if (available)
+	twins->safe_push (gimple_assign_lhs (use));
+    }
+}
+
+/* Which of the bounds of the ranger's range of integer VAL to trust.
+   The ranger takes an overflow, being undefined, not to happen: of an
+   operation whose result can overflow it gives the bound the overflow
+   would cross clamped to the type's, as the AST engine's composition
+   does not -- each bound composed of the operands' must itself be
+   representable, or it is unknown ('x * 2' for x near INT_MIN: "below
+   zero" to the ranger, unknown here).  An operand's unknown bound is
+   unbounded.  A cycle through a loop's PHIs is assumed trusted, each
+   operation in it still checked.  Cached for one function's check
+   (cg_trusted_bounds_cache): a distrusted bound always, both trusted
+   only once no such assumption is pending.  */
+
+struct cg_trust { bool lo, hi; };
+static hash_map<tree, cg_trust> *cg_trusted_bounds_cache;
+
+static cg_trust
+cg_trusted_bounds (tree val, gimple_ranger *ranger, unsigned depth = 0)
+{
+  const cg_trust all = { true, true }, none = { false, false };
+  if (TREE_CODE (val) != SSA_NAME || !ranger)
+    return all;
+  if (cg_trusted_bounds_cache)
+    if (cg_trust *known = cg_trusted_bounds_cache->get (val))
+      return *known;
+  if (depth > 12)
+    return none;
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (!def || gimple_nop_p (def) || is_gimple_call (def))
+    return all;
+  static hash_set<tree> *assumed;
+  if (!assumed)
+    assumed = new hash_set<tree>;
+  if (assumed->add (val))
+    return all;
+  cg_trust t = all;
+  if (gphi *phi = dyn_cast <gphi *> (def))
+    for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+      {
+	cg_trust a = cg_trusted_bounds (gimple_phi_arg_def (phi, i), ranger,
+					depth + 1);
+	t.lo &= a.lo;
+	t.hi &= a.hi;
+      }
+  else if (is_gimple_assign (def))
+    {
+      tree_code code = gimple_assign_rhs_code (def);
+      tree type = TREE_TYPE (val);
+      bool arith = (INTEGRAL_TYPE_P (type) && TYPE_OVERFLOW_UNDEFINED (type)
+		    && (code == PLUS_EXPR || code == MINUS_EXPR
+			|| code == MULT_EXPR || code == NEGATE_EXPR
+			|| code == ABS_EXPR || code == LSHIFT_EXPR));
+      if (!arith)
+	{
+	  /* A copy or conversion keeps its operand's; anything else
+	     derived from a distrusted bound is distrusted.  */
+	  bool copy = (code == SSA_NAME || CONVERT_EXPR_CODE_P (code));
+	  for (unsigned i = 1; i < gimple_num_ops (def); ++i)
+	    {
+	      cg_trust a = cg_trusted_bounds (gimple_op (def, i), ranger,
+					      depth + 1);
+	      if (copy)
+		t.lo &= a.lo, t.hi &= a.hi;
+	      else if (!a.lo || !a.hi)
+		t = none;
+	    }
+	  /* INT_MIN / -1.  */
+	  if ((code == TRUNC_DIV_EXPR || code == TRUNC_MOD_EXPR)
+	      && INTEGRAL_TYPE_P (type) && TYPE_OVERFLOW_UNDEFINED (type))
+	    {
+	      int_range_max a, b;
+	      tree op0 = gimple_assign_rhs1 (def), op1 = gimple_assign_rhs2 (def);
+	      if (TREE_CODE (op1) != INTEGER_CST || integer_minus_onep (op1))
+		{
+		  bool may_min
+		    = (TREE_CODE (op0) != SSA_NAME
+		       || !ranger->range_of_expr (a, op0, def) || a.varying_p ()
+		       || a.undefined_p ()
+		       || wi::to_widest (TYPE_MIN_VALUE (type))
+			  >= widest_int::from (a.lower_bound (), SIGNED));
+		  if (may_min)
+		    t = none;
+		}
+	    }
+	}
+      else
+	{
+	  /* An operand's bounds at DEF: unbounded where unknown or
+	     distrusted.  */
+	  struct bnd { bool has_lo, has_hi; widest_int lo, hi; };
+	  auto bounds = [&] (tree op) -> bnd
+	    {
+	      bnd b = { false, false, 0, 0 };
+	      if (TREE_CODE (op) == INTEGER_CST)
+		{
+		  b.has_lo = b.has_hi = true;
+		  b.lo = b.hi = wi::to_widest (op);
+		  return b;
+		}
+	      int_range_max r;
+	      if (TREE_CODE (op) != SSA_NAME || !INTEGRAL_TYPE_P (TREE_TYPE (op))
+		  || !ranger->range_of_expr (r, op, def)
+		  || r.undefined_p () || r.varying_p ())
+		return b;
+	      cg_trust a = cg_trusted_bounds (op, ranger, depth + 1);
+	      signop sgn = TYPE_SIGN (TREE_TYPE (op));
+	      b.has_lo = a.lo;
+	      b.has_hi = a.hi;
+	      b.lo = widest_int::from (r.lower_bound (), sgn);
+	      b.hi = widest_int::from (r.upper_bound (), sgn);
+	      return b;
+	    };
+	  bool unary = (code == NEGATE_EXPR || code == ABS_EXPR);
+	  bnd a = bounds (gimple_assign_rhs1 (def));
+	  bnd b = unary ? bnd { true, true, 0, 0 }
+			: bounds (gimple_assign_rhs2 (def));
+	  bool has_lo = false, has_hi = false;
+	  widest_int lo = 0, hi = 0;
+	  switch (code)
+	    {
+	    case PLUS_EXPR:
+	      has_lo = a.has_lo && b.has_lo, lo = a.lo + b.lo;
+	      has_hi = a.has_hi && b.has_hi, hi = a.hi + b.hi;
+	      break;
+	    case MINUS_EXPR:
+	      has_lo = a.has_lo && b.has_hi, lo = a.lo - b.hi;
+	      has_hi = a.has_hi && b.has_lo, hi = a.hi - b.lo;
+	      break;
+	    case NEGATE_EXPR:
+	      has_lo = a.has_hi, lo = -a.hi;
+	      has_hi = a.has_lo, hi = -a.lo;
+	      break;
+	    case ABS_EXPR:
+	      /* |x| <= max (-lo, hi); >= 0 unless it overflows.  */
+	      has_lo = a.has_lo, lo = 0;
+	      if (a.has_lo && wi::neg_p (a.lo))
+		lo = 0;
+	      has_hi = a.has_lo && a.has_hi;
+	      hi = wi::smax (-a.lo, a.hi);
+	      break;
+	    case MULT_EXPR:
+	      /* Each bound from the corners, where every corner the
+		 operands' signs can reach is finite.  */
+	      if (a.has_lo && a.has_hi && b.has_lo && b.has_hi)
+		{
+		  widest_int p[4] = { a.lo * b.lo, a.lo * b.hi, a.hi * b.lo,
+				      a.hi * b.hi };
+		  lo = hi = p[0];
+		  for (auto &v : p)
+		    lo = wi::smin (lo, v), hi = wi::smax (hi, v);
+		  has_lo = has_hi = true;
+		}
+	      else if (a.has_lo && b.has_lo && !wi::neg_p (a.lo)
+		       && !wi::neg_p (b.lo))
+		has_lo = true, lo = a.lo * b.lo;
+	      else if (a.has_hi && b.has_hi && !wi::neg_p (-a.hi)
+		       && !wi::neg_p (-b.hi))
+		has_lo = true, lo = a.hi * b.hi;
+	      else if (a.has_lo && b.has_hi && !wi::neg_p (a.lo)
+		       && !wi::neg_p (-b.hi))
+		has_hi = true, hi = a.lo * b.hi;
+	      else if (a.has_hi && b.has_lo && !wi::neg_p (-a.hi)
+		       && !wi::neg_p (b.lo))
+		has_hi = true, hi = a.hi * b.lo;
+	      break;
+	    case LSHIFT_EXPR:
+	      if (b.has_lo && b.has_hi && !wi::neg_p (b.lo)
+		  && b.hi < TYPE_PRECISION (type)
+		  && a.has_lo && a.has_hi)
+		{
+		  widest_int f = wi::lshift (widest_int (1), b.hi.to_uhwi ());
+		  widest_int p[2] = { a.lo * f, a.hi * f };
+		  lo = wi::smin (wi::smin (p[0], p[1]), a.lo);
+		  hi = wi::smax (wi::smax (p[0], p[1]), a.hi);
+		  has_lo = has_hi = true;
+		}
+	      break;
+	    default:
+	      break;
+	    }
+	  widest_int tmin = wi::to_widest (TYPE_MIN_VALUE (type));
+	  widest_int tmax = wi::to_widest (TYPE_MAX_VALUE (type));
+	  t.lo = has_lo && lo >= tmin && lo <= tmax;
+	  t.hi = has_hi && hi >= tmin && hi <= tmax;
+	}
+    }
+  assumed->remove (val);
+  if (cg_trusted_bounds_cache && (!t.lo || !t.hi || assumed->is_empty ()))
+    cg_trusted_bounds_cache->put (val, t);
+  return t;
+}
+
+/* The ranger's range of integer VAL at STMT in *OUT, without the bounds
+   cg_trusted_bounds distrusts; SGN reads them.  Narrowed by a short-
+   circuit condition's outcome if SHORT_CIRCUIT.  False if no bound is
+   left.  */
+
+static bool
+cg_trusted_ranger_range (tree val, gimple *stmt, gimple_ranger *ranger,
+			 bool short_circuit, signop sgn, cg_range_lite *out)
+{
+  int_range_max vr;
+  if (!ranger || TREE_CODE (val) != SSA_NAME
+      || !INTEGRAL_TYPE_P (TREE_TYPE (val))
+      || !ranger->range_of_expr (vr, val, stmt))
+    return false;
+  if (short_circuit)
+    cg_narrow_by_short_circuit (vr, val, stmt, ranger);
+  if (vr.undefined_p () || vr.varying_p () || vr.num_pairs () == 0)
+    return false;
+  cg_trust t = cg_trusted_bounds (val, ranger);
+  out->has_lo = t.lo;
+  out->has_hi = t.hi;
+  out->lo = widest_int::from (vr.lower_bound (0), sgn);
+  out->hi = widest_int::from (vr.upper_bound (vr.num_pairs () - 1), sgn);
+  return t.lo || t.hi;
+}
 
 static bool
 cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_range,
@@ -951,8 +1222,10 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
 				       require_symbolic, out, at_stmt))
 	return true;
     }
-  cg_range_lite phi_union;
-  bool have_phi_union = false;
+  /* Also known, besides the ranger's: a join's union, a loop
+     counter's bound, an earlier load's range.  */
+  cg_range_lite extra;
+  bool have_extra = false;
   if (gphi *phi = dyn_cast <gphi *> (def))
     {
       /* A join (a loop's head among them): the union of what each
@@ -990,8 +1263,8 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
 	  in_progress->remove (val);
 	  if (all && (u.has_lo || u.has_hi))
 	    {
-	      phi_union = u;
-	      have_phi_union = true;
+	      extra = u;
+	      have_extra = true;
 	    }
 	}
       /* A loop counter: the ranger, without loop information here,
@@ -1001,49 +1274,63 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
       if (cg_induction_variable_bound_1 (val, established_range,
 					 scalar_range_cache, ranger, &iv))
 	{
-	  if (!have_phi_union)
-	    phi_union = iv;
+	  if (!have_extra)
+	    extra = iv;
 	  else
 	    {
-	      if (iv.has_lo && (!phi_union.has_lo || iv.lo > phi_union.lo))
-		phi_union.has_lo = true, phi_union.lo = iv.lo;
-	      if (iv.has_hi && (!phi_union.has_hi || iv.hi < phi_union.hi))
-		phi_union.has_hi = true, phi_union.hi = iv.hi;
+	      if (iv.has_lo && (!extra.has_lo || iv.lo > extra.lo))
+		extra.has_lo = true, extra.lo = iv.lo;
+	      if (iv.has_hi && (!extra.has_hi || iv.hi < extra.hi))
+		extra.has_hi = true, extra.hi = iv.hi;
 	    }
-	  have_phi_union = true;
+	  have_extra = true;
 	}
     }
 
+  /* The same value, loaded earlier: its range at AT_STMT, which a
+     condition may have narrowed.  */
+  auto_vec<tree> twins;
+  if (ranger && INTEGRAL_TYPE_P (TREE_TYPE (val)))
+    cg_dominating_load_twins (val, at_stmt, &twins);
+  for (tree twin : twins)
+      {
+	cg_range_lite t;
+	if (cg_trusted_ranger_range (twin, at_stmt, ranger, false, SIGNED, &t))
+	  {
+	    if (!have_extra)
+	      extra = t;
+	    else
+	      {
+		if (t.has_lo && (!extra.has_lo || t.lo > extra.lo))
+		  extra.has_lo = true, extra.lo = t.lo;
+		if (t.has_hi && (!extra.has_hi || t.hi < extra.hi))
+		  extra.has_hi = true, extra.hi = t.hi;
+	      }
+	    have_extra = true;
+	  }
+      }
+
   /* An integer's: a pointer's range is another kind (a reference
      parameter's argument is one).  */
-  if (ranger && INTEGRAL_TYPE_P (TREE_TYPE (val)))
+  {
+    cg_range_lite r;
+    if (cg_trusted_ranger_range (val, at_stmt, ranger, true, SIGNED, &r))
+      {
+	*out = r;
+	/* Both hold: the narrower of each bound.  */
+	if (have_extra)
+	  {
+	    if (extra.has_lo && (!out->has_lo || extra.lo > out->lo))
+	      out->has_lo = true, out->lo = extra.lo;
+	    if (extra.has_hi && (!out->has_hi || extra.hi < out->hi))
+	      out->has_hi = true, out->hi = extra.hi;
+	  }
+	return true;
+      }
+  }
+  if (have_extra)
     {
-      int_range_max vr;
-      if (ranger->range_of_expr (vr, val, at_stmt))
-	cg_narrow_by_short_circuit (vr, val, at_stmt, ranger);
-      if (!vr.undefined_p () && !vr.varying_p ())
-	{
-	  unsigned n = vr.num_pairs ();
-	  if (n > 0)
-	    {
-	      out->has_lo = out->has_hi = true;
-	      out->lo = widest_int::from (vr.lower_bound (0), SIGNED);
-	      out->hi = widest_int::from (vr.upper_bound (n - 1), SIGNED);
-	      /* Both hold: the narrower of each bound.  */
-	      if (have_phi_union)
-		{
-		  if (phi_union.has_lo && phi_union.lo > out->lo)
-		    out->lo = phi_union.lo;
-		  if (phi_union.has_hi && phi_union.hi < out->hi)
-		    out->hi = phi_union.hi;
-		}
-	      return true;
-	    }
-	}
-    }
-  if (have_phi_union)
-    {
-      *out = phi_union;
+      *out = extra;
       return true;
     }
 
@@ -3162,7 +3449,9 @@ cg_excludes_zero_at_p (tree val, gimple *stmt, gimple_ranger *ranger,
 	      return true;
 	  }
     }
-  if (ranger && (TREE_CODE (val) == SSA_NAME || TREE_CODE (val) == INTEGER_CST))
+  cg_trust trust = cg_trusted_bounds (val, ranger);
+  if (ranger && (TREE_CODE (val) == SSA_NAME || TREE_CODE (val) == INTEGER_CST)
+      && trust.lo && trust.hi)
     {
       int_range_max vr;
       if (ranger->range_of_expr (vr, val, stmt) && !vr.undefined_p ()
@@ -4522,6 +4811,11 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	    continue;
 
 	  tree substituted = cg_resolve_call_argument (call, argno);
+	  /* Not through a conversion operator: the pointer it returns
+	     (its postcondition says what it is), not the object it is
+	     called on.  */
+	  if (is_oa && !POINTER_TYPE_P (TREE_TYPE (substituted)))
+	    substituted = gimple_call_arg (call, argno);
 	  hash_set<tree> in_progress;
 	  if (is_oa)
 	    {
@@ -9618,7 +9912,41 @@ cg_check_call_relational_fact (gcall *call,
 	      && cg_gimple_object_identity (fact->rhs_receiver) == r_identity
 	      && oa_relational_code_implies (fact->code, call_code)
 	      && cg_proven_call_call_conjuncts)
-	    cg_proven_call_call_conjuncts->add ({call, *conjuncts[i]});
+	    {
+	      cg_proven_call_call_conjuncts->add ({call, *conjuncts[i]});
+	      continue;
+	    }
+	  /* Each side's own range ('a.size () == 100' after a call whose
+	     postcondition says so).  */
+	  const cg_field_fact *lr = state.call.get ({l_identity, lhs_callee});
+	  const cg_field_fact *rr = state.call.get ({r_identity, rhs_callee});
+	  if (!lr || !rr
+	      || (require_conveyor
+		  && (!lr->conveyor_established || !rr->conveyor_established)))
+	    continue;
+	  enum oa_range_subsumption_result r
+	    = cg_range_pair_relation (lr->range, call_code, rr->range);
+	  if (r == OA_RANGE_PARTIAL || !cg_proven_call_call_conjuncts)
+	    continue;
+	  cg_proven_call_call_conjuncts->add ({call, *conjuncts[i]});
+	  if (r == OA_RANGE_DISJOINT)
+	    {
+	      tree l_arg = cg_resolve_call_argument (call, lhs_argno);
+	      tree r_arg = cg_resolve_call_argument (call, rhs_argno);
+	      char established_buf[128];
+	      cg_range_lite_text (lr->range, established_buf,
+				   sizeof (established_buf));
+	      error_at (gimple_location (call),
+			"argument %qE provably violates the precondition "
+			"of %qD", cg_display_argument (l_arg, lhs_receiver),
+			callee);
+	      inform (gimple_location (call),
+		      "%qD called on %qE is established %s, but the "
+		      "precondition requires it to be %s %qD called on %qE",
+		      lhs_callee, cg_display_argument (l_arg, lhs_receiver),
+		      established_buf, op_symbol_code (call_code), rhs_callee,
+		      cg_display_argument (r_arg, rhs_receiver));
+	    }
 	}
 
       /* The plain param-vs-param analogue of the call-relational loop
@@ -10523,23 +10851,31 @@ cg_value_range_at (tree val, gimple *stmt,
 				      scalar_range_cache, ranger,
 				      require_conveyor, !require_conveyor,
 				      out, stmt);
-  int_range_max vr;
-  if (TREE_CODE (val) == SSA_NAME && INTEGRAL_TYPE_P (TREE_TYPE (val))
-      && ranger->range_of_expr (vr, val, stmt))
-    cg_narrow_by_short_circuit (vr, val, stmt, ranger);
-  if (TREE_CODE (val) == SSA_NAME && INTEGRAL_TYPE_P (TREE_TYPE (val))
-      && !vr.undefined_p () && !vr.varying_p () && vr.num_pairs () > 0)
+  /* The ranger's, and that of the same value loaded earlier.  */
+  auto narrow = [&] (const cg_range_lite &r)
     {
-      signop sgn = TYPE_SIGN (TREE_TYPE (val));
-      widest_int lo = widest_int::from (vr.lower_bound (0), sgn);
-      widest_int hi = widest_int::from (vr.upper_bound (vr.num_pairs () - 1),
-					 sgn);
-      if (!any || !out->has_lo || lo > out->lo)
-	out->has_lo = true, out->lo = lo;
-      if (!any || !out->has_hi || hi < out->hi)
-	out->has_hi = true, out->hi = hi;
-      any = true;
-    }
+      if (!any)
+	{
+	  *out = r;
+	  any = true;
+	  return;
+	}
+      if (r.has_lo && (!out->has_lo || r.lo > out->lo))
+	out->has_lo = true, out->lo = r.lo;
+      if (r.has_hi && (!out->has_hi || r.hi < out->hi))
+	out->has_hi = true, out->hi = r.hi;
+    };
+  cg_range_lite r;
+  if (TREE_CODE (val) == SSA_NAME
+      && cg_trusted_ranger_range (val, stmt, ranger, true,
+				  TYPE_SIGN (TREE_TYPE (val)), &r))
+    narrow (r);
+  auto_vec<tree> twins;
+  cg_dominating_load_twins (val, stmt, &twins);
+  for (tree twin : twins)
+    if (cg_trusted_ranger_range (twin, stmt, ranger, false,
+				 TYPE_SIGN (TREE_TYPE (twin)), &r))
+      narrow (r);
   return any;
 }
 
@@ -11626,9 +11962,12 @@ cg_check_predicate_mutation (function *fun)
 		  }
 	      }
 	  }
+	auto_diagnostic_group d;
 	error_at (gimple_location (stmt), what,
 		  TREE_CODE (lhs) == SSA_NAME ? SSA_NAME_VAR (lhs)
 		  : cg_display_store_target (lhs));
+	inform (gimple_location (stmt), "%s",
+		_(oa_unprovable_reason_text (OA_UNPROVABLE_PREDICATE_CONTEXT)));
       }
 }
 
@@ -11780,6 +12119,9 @@ pass_contracts_gimple::execute (function *fun)
   hash_set<gimple *> call_relational_verdict;
   hash_map<tree, int> unprovable_hints;
   auto hints_ovr = make_temp_override (cg_unprovable_hints, &unprovable_hints);
+  hash_map<tree, cg_trust> trusted_bounds_cache;
+  auto trusted_bounds_ovr = make_temp_override (cg_trusted_bounds_cache,
+						&trusted_bounds_cache);
   hash_set<cg_call_conjunct_hash> proven_call_call_conjuncts;
   auto proven_cc_ovr = make_temp_override (cg_proven_call_call_conjuncts,
 					   &proven_call_call_conjuncts);
