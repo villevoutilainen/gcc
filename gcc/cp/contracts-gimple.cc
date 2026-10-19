@@ -3130,6 +3130,8 @@ cg_conveyor_error_at (location_t loc, const char *gmsgid, ...)
    arithmetic it was computed by, rather than an anonymous temporary
    ('<unknown>').  VAL itself if nothing better is found.  */
 
+static tree cg_capture_name (tree);
+
 static tree
 cg_display_value (tree val, int depth = 0)
 {
@@ -3154,6 +3156,11 @@ cg_display_value (tree val, int depth = 0)
       if ((VAR_P (rhs1) || TREE_CODE (rhs1) == PARM_DECL)
 	  && !DECL_ARTIFICIAL (rhs1) && DECL_NAME (rhs1))
 	return rhs1;
+      /* A lambda's capture: by value, the field's load; by reference, a
+	 load through the pointer the field holds.  Named as the captured
+	 variable.  */
+      if (tree name = cg_capture_name (rhs1))
+	return name;
       if (TREE_CODE (rhs1) == COMPONENT_REF)
 	{
 	  tree obj = TREE_OPERAND (rhs1, 0);
@@ -3193,6 +3200,39 @@ cg_display_value (tree val, int depth = 0)
     return build2 (code, TREE_TYPE (val), cg_display_value (rhs1, depth + 1),
 		   cg_display_value (gimple_assign_rhs2 (def), depth + 1));
   return val;
+}
+
+/* If REF is a load of a lambda's capture -- its closure field, for a
+   capture by value, or through it, for one by reference -- the captured
+   variable's name.  */
+
+static tree
+cg_capture_name (tree ref)
+{
+  bool deref = false;
+  if (TREE_CODE (ref) == MEM_REF && integer_zerop (TREE_OPERAND (ref, 1))
+      && TREE_CODE (TREE_OPERAND (ref, 0)) == SSA_NAME)
+    {
+      gimple *d = SSA_NAME_DEF_STMT (TREE_OPERAND (ref, 0));
+      if (!d || !gimple_assign_single_p (d))
+	return NULL_TREE;
+      ref = gimple_assign_rhs1 (d);
+      deref = true;
+    }
+  if (TREE_CODE (ref) != COMPONENT_REF)
+    return NULL_TREE;
+  tree field = TREE_OPERAND (ref, 1);
+  tree obj = TREE_OPERAND (ref, 0);
+  if (TREE_CODE (TREE_CODE (obj) == MEM_REF ? TREE_TYPE (obj)
+		 : TREE_TYPE (obj)) != RECORD_TYPE
+      || !LAMBDA_TYPE_P (TREE_TYPE (obj))
+      || deref != TYPE_REF_P (TREE_TYPE (field))
+      || !DECL_NAME (field))
+    return NULL_TREE;
+  const char *n = IDENTIFIER_POINTER (DECL_NAME (field));
+  if (n[0] == '_' && n[1] == '_' && n[2])
+    return get_identifier (n + 2);
+  return NULL_TREE;
 }
 
 /* How to name ARG, the value passed for parameter PARM, in a
@@ -10411,6 +10451,263 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
   return ok;
 }
 
+/* Immediately invoked lambdas ('[&] { ... } ()'): what the caller knew
+   about each capture at the one call, for checking the lambda's body
+   against it, as the AST engine walks such a body in place
+   (oa_resolve_iile_call).  A capture by reference: the captured
+   variable's value; by value: the copy's.  */
+
+struct cg_capture_fact
+{
+  tree field;
+  bool by_ref;
+  cg_range_lite range;
+};
+
+struct cg_iile_info
+{
+  bool conveyor_caller = false;
+  bool invalid = false;
+  auto_vec<cg_capture_fact> facts;
+};
+
+static hash_map<tree, cg_iile_info *> *cg_iile_infos;
+
+static vec<tree> cg_eager_check_deferred_until_eof_iile;
+
+/* Is local closure object CLOSURE of FUN used only by stores to its
+   fields, clobbers, and as the object of the call CALL?  */
+
+static bool
+cg_closure_only_invoked_p (function *fun, tree closure, gcall *call)
+{
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      {
+	gimple *stmt = gsi_stmt (gsi);
+	if (stmt == call || gimple_clobber_p (stmt)
+	    || gimple_call_internal_p (stmt, IFN_DEFERRED_INIT))
+	  continue;
+	if (gimple_assign_single_p (stmt)
+	    && TREE_CODE (gimple_assign_lhs (stmt)) == COMPONENT_REF
+	    && TREE_OPERAND (gimple_assign_lhs (stmt), 0) == closure)
+	  {
+	    tree rhs = gimple_assign_rhs1 (stmt);
+	    if (walk_tree (&rhs, [](tree *tp, int *, void *d) -> tree
+			     { return *tp == (tree) d ? *tp : NULL_TREE; },
+			   closure, NULL))
+	      return false;
+	    continue;
+	  }
+	for (unsigned i = 0; i < gimple_num_ops (stmt); ++i)
+	  {
+	    tree op = gimple_op (stmt, i);
+	    if (op && walk_tree (&op, [](tree *tp, int *, void *d) -> tree
+				   { return *tp == (tree) d ? *tp : NULL_TREE; },
+				 closure, NULL))
+	      return false;
+	  }
+      }
+  return true;
+}
+
+/* The value variable X has at CALL, from its last store before CALL in
+   CALL's block, if no call or store through a pointer comes between.  */
+
+static tree
+cg_local_value_before (gcall *call, tree x)
+{
+  gimple_stmt_iterator gsi = gsi_for_stmt (call);
+  for (gsi_prev (&gsi); !gsi_end_p (gsi); gsi_prev (&gsi))
+    {
+      gimple *stmt = gsi_stmt (gsi);
+      if (is_gimple_debug (stmt) || gimple_clobber_p (stmt))
+	continue;
+      if (gimple_call_internal_p (stmt, IFN_DEFERRED_INIT))
+	{
+	  if (gimple_call_lhs (stmt) == x)
+	    return NULL_TREE;
+	  continue;
+	}
+      if (!gimple_assign_single_p (stmt))
+	{
+	  if (is_gimple_call (stmt) || gimple_code (stmt) == GIMPLE_ASM)
+	    return NULL_TREE;
+	  continue;
+	}
+      tree lhs = gimple_assign_lhs (stmt);
+      if (lhs == x)
+	return gimple_assign_rhs1 (stmt);
+      if (TREE_CODE (lhs) == SSA_NAME || DECL_P (lhs)
+	  || (TREE_CODE (lhs) == COMPONENT_REF
+	      && DECL_P (TREE_OPERAND (lhs, 0))))
+	continue;
+      return NULL_TREE;
+    }
+  return NULL_TREE;
+}
+
+/* Record, at CALL in FUN, what the caller knows about the captures of
+   the lambda CALL immediately invokes, if it does.  */
+
+static void
+cg_record_iile_site_facts (gcall *call, function *fun,
+			   hash_map<tree, cg_range_lite> &established_range,
+			   hash_map<tree, cg_range_lite> &scalar_range_cache,
+			   gimple_ranger *ranger)
+{
+  tree callee = gimple_call_fndecl (call);
+  if (!callee || !LAMBDA_FUNCTION_P (callee) || gimple_call_num_args (call) < 1)
+    return;
+  tree closure_addr = gimple_call_arg (call, 0);
+  if (TREE_CODE (closure_addr) != ADDR_EXPR
+      || !VAR_P (TREE_OPERAND (closure_addr, 0)))
+    return;
+  tree closure = TREE_OPERAND (closure_addr, 0);
+  if (!cg_iile_infos)
+    cg_iile_infos = new hash_map<tree, cg_iile_info *>;
+  bool existed;
+  cg_iile_info *&info = cg_iile_infos->get_or_insert (callee, &existed);
+  if (existed)
+    {
+      /* More than one call: not one caller's facts.  */
+      info->invalid = true;
+      return;
+    }
+  info = new cg_iile_info;
+  info->conveyor_caller = DECL_DECLARED_CONVEYOR_P (fun->decl);
+  if (!cg_closure_only_invoked_p (fun, closure, call))
+    {
+      info->invalid = true;
+      return;
+    }
+  auto range_of = [&] (tree v, cg_range_lite *r) -> bool
+    {
+      if (TREE_CODE (v) == INTEGER_CST)
+	{
+	  r->has_lo = r->has_hi = true;
+	  r->lo = r->hi = wi::to_widest (v);
+	  return true;
+	}
+      return (TREE_CODE (v) == SSA_NAME && INTEGRAL_TYPE_P (TREE_TYPE (v))
+	      && cg_value_range_at (v, call, established_range,
+				    scalar_range_cache, ranger,
+				    /*require_conveyor=*/true, r));
+    };
+  gimple_stmt_iterator gsi = gsi_for_stmt (call);
+  for (gsi_prev (&gsi); !gsi_end_p (gsi); gsi_prev (&gsi))
+    {
+      gimple *stmt = gsi_stmt (gsi);
+      if (!gimple_assign_single_p (stmt))
+	continue;
+      tree lhs = gimple_assign_lhs (stmt);
+      if (TREE_CODE (lhs) != COMPONENT_REF || TREE_OPERAND (lhs, 0) != closure)
+	continue;
+      tree field = TREE_OPERAND (lhs, 1);
+      tree stored = gimple_assign_rhs1 (stmt);
+      cg_capture_fact f = { field, TYPE_REF_P (TREE_TYPE (field)), {} };
+      tree val = stored;
+      if (f.by_ref)
+	{
+	  if (TREE_CODE (stored) != ADDR_EXPR
+	      || !VAR_P (TREE_OPERAND (stored, 0))
+	      || !INTEGRAL_TYPE_P (TREE_TYPE (TREE_OPERAND (stored, 0))))
+	    continue;
+	  val = cg_local_value_before (call, TREE_OPERAND (stored, 0));
+	  if (!val)
+	    continue;
+	}
+      if (range_of (val, &f.range))
+	info->facts.safe_push (f);
+    }
+  /* The body is checked at the end of the file, after its callers.  */
+  cg_eager_check_deferred_until_eof_iile.safe_push (callee);
+}
+
+/* Seed lambda FUN's loads of its captures with what its one caller knew
+   about them (cg_record_iile_site_facts), when its body neither writes
+   them nor passes them on.  */
+
+static void
+cg_seed_iile_capture_facts (function *fun,
+			    hash_map<tree, cg_fact> &established,
+			    hash_map<tree, cg_fact> &established_nz,
+			    hash_map<tree, cg_range_lite> &established_range)
+{
+  cg_iile_info **infop = cg_iile_infos ? cg_iile_infos->get (fun->decl) : NULL;
+  if (!infop || (*infop)->invalid)
+    return;
+  tree closure_parm = DECL_ARGUMENTS (fun->decl);
+  tree cl = closure_parm ? ssa_default_def (fun, closure_parm) : NULL_TREE;
+  if (!cl)
+    return;
+  /* The closure: the caller's local object.  */
+  established.put (cl, { /*conveyor_established=*/true });
+  for (cg_capture_fact &f : (*infop)->facts)
+    {
+      /* The loads of the capture: the field's (by value) or, through the
+	 pointer the field holds, the object's (by reference).  */
+      auto_vec<tree> loads;
+      bool ok = true;
+      basic_block bb;
+      FOR_EACH_BB_FN (bb, fun)
+	for (gimple_stmt_iterator gsi = gsi_start_bb (bb);
+	     ok && !gsi_end_p (gsi); gsi_next (&gsi))
+	  {
+	    gimple *stmt = gsi_stmt (gsi);
+	    if (!gimple_assign_single_p (stmt))
+	      continue;
+	    tree lhs = gimple_assign_lhs (stmt), rhs = gimple_assign_rhs1 (stmt);
+	    auto field_of_closure = [&] (tree ref)
+	      {
+		return (TREE_CODE (ref) == COMPONENT_REF
+			&& TREE_OPERAND (ref, 1) == f.field
+			&& TREE_CODE (TREE_OPERAND (ref, 0)) == MEM_REF
+			&& TREE_OPERAND (TREE_OPERAND (ref, 0), 0) == cl);
+	      };
+	    if (field_of_closure (lhs))
+	      ok = false;
+	    else if (field_of_closure (rhs) && TREE_CODE (lhs) == SSA_NAME)
+	      {
+		if (!f.by_ref)
+		  {
+		    loads.safe_push (lhs);
+		    continue;
+		  }
+		/* Every use of the pointer must be a load through it.  */
+		imm_use_iterator iter;
+		use_operand_p use_p;
+		FOR_EACH_IMM_USE_FAST (use_p, iter, lhs)
+		  {
+		    gimple *use = USE_STMT (use_p);
+		    if (is_gimple_debug (use))
+		      continue;
+		    tree urhs = (gimple_assign_single_p (use)
+				 ? gimple_assign_rhs1 (use) : NULL_TREE);
+		    if (urhs && TREE_CODE (urhs) == MEM_REF
+			&& TREE_OPERAND (urhs, 0) == lhs
+			&& integer_zerop (TREE_OPERAND (urhs, 1))
+			&& TREE_CODE (gimple_assign_lhs (use)) == SSA_NAME)
+		      loads.safe_push (gimple_assign_lhs (use));
+		    else
+		      ok = false;
+		  }
+	      }
+	  }
+      if (!ok)
+	continue;
+      for (tree t : loads)
+	{
+	  established_range.put (t, f.range);
+	  if ((f.range.has_lo && f.range.lo > 0)
+	      || (f.range.has_hi && f.range.hi < 0))
+	    established_nz.put (t, { true });
+	}
+    }
+}
+
 /* What the checks of a contract's own function found about each value a
    contract check passes its predicate core function, merged over every
    check of the contract: the core function's parameter I receives the
@@ -10970,6 +11267,9 @@ pass_contracts_gimple::execute (function *fun)
      contract_assert.  */
   hash_map<tree, frange> established_frange;
   cg_seed_float_self_trust (fun, established_frange);
+  if (LAMBDA_FUNCTION_P (fun->decl))
+    cg_seed_iile_capture_facts (fun, established, established_nz,
+				established_range);
   if (predicate_core)
     cg_seed_predicate_site_facts (fun, established, established_nz,
 				  established_range, established_frange);
@@ -10983,7 +11283,11 @@ pass_contracts_gimple::execute (function *fun)
      obligations are the callee's, whoever calls it, as in the AST engine
      (Q2 is gated on the caller inside cg_check_call_reference_safety).  */
   bool check_reference_safety = true;
-  bool check_item8_ub = DECL_DECLARED_CONVEYOR_P (fun->decl) || predicate_core;
+  cg_iile_info **iile = (cg_iile_infos && LAMBDA_FUNCTION_P (fun->decl)
+			  ? cg_iile_infos->get (fun->decl) : NULL);
+  bool check_item8_ub = (DECL_DECLARED_CONVEYOR_P (fun->decl) || predicate_core
+			 || (iile && !(*iile)->invalid
+			     && (*iile)->conveyor_caller));
 
   /* Walk the dominator tree, so a contract_assert's facts are in the
      fact maps exactly while its dominator subtree is being checked (see
@@ -11019,6 +11323,8 @@ pass_contracts_gimple::execute (function *fun)
 			     established_call_call_rel,
 			     scalar_range_cache, ranger,
 			     &call_relational_verdict, &established_frange);
+	      cg_record_iile_site_facts (call, fun, established_range,
+					 scalar_range_cache, ranger);
 	      cg_record_predicate_site_facts (call, established, established_nz,
 					      established_range,
 					      scalar_range_cache, ranger,
@@ -11406,6 +11712,11 @@ contracts_gimple_eager_check_drain_at_eof (void)
 	  else
 	    contracts_gimple_eager_check_function_1 (cg_eager_check_pending.pop ());
 	}
+      /* The bodies of lambdas invoked immediately: after their callers
+	 (cg_record_iile_site_facts).  */
+      while (!cg_eager_check_deferred_until_eof_iile.is_empty ())
+	contracts_gimple_eager_check_function_1
+	  (cg_eager_check_deferred_until_eof_iile.pop (), /*is_eof_drain=*/true);
       /* The predicate core functions last: checking one uses what the
 	 checks of its contract's own function recorded about the values
 	 it is called with (cg_record_predicate_site_facts).  */
@@ -11424,6 +11735,7 @@ contracts_gimple_eager_check_drain_at_eof (void)
     }
   while (!cg_eager_check_deferred_until_eof.is_empty ()
 	 || !cg_eager_check_pending.is_empty ()
+	 || !cg_eager_check_deferred_until_eof_iile.is_empty ()
 	 || !cg_eager_check_predicate_helpers.is_empty ());
   cg_eager_check_active = false;
 }

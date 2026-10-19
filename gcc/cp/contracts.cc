@@ -9777,6 +9777,10 @@ is_iile_operator_call_p (tree fn, tree obj_arg)
 
 static oa_env *oa_iile_outer_env;
 
+/* The immediately invoked lambda calls whose bodies have been walked
+   (oa_resolve_iile_call), to report their diagnostics once.  */
+static GTY(()) hash_set<tree> *oa_iile_walked_calls;
+
 /* Forward-declared: defined below oa_walk_stmt, since resolving an
    invoked closure's body requires calling the statement walker
    recursively.  */
@@ -23184,6 +23188,13 @@ oa_resolve_iile_call (tree call, oa_env &env)
   tree body = DECL_SAVED_TREE (callee);
   if (body == NULL_TREE || body == error_mark_node)
     return false;
+  /* The body's diagnostics once, however many times it is walked (for
+     itself, and for obligations on its result).  */
+  if (!oa_iile_walked_calls)
+    oa_iile_walked_calls = hash_set<tree>::create_ggc (13);
+  auto diags = make_temp_override (oa_diagnostics_active,
+				   oa_diagnostics_active
+				   && !oa_iile_walked_calls->add (call));
 
   oa_env *saved_outer_env = oa_iile_outer_env;
   bool saved_tracking = oa_return_tracking;
@@ -24434,6 +24445,27 @@ oa_process_condition (tree cond, oa_env &env,
 static void
 oa_scan_item8_in_expr (tree *expr, oa_env &env)
 {
+  /* An immediately invoked lambda's body is part of this function's
+     evaluation: check it, with this function's facts, whether or not an
+     obligation on its result would have walked it
+     (oa_resolve_iile_call).  */
+  if (oa_diagnostics_active && !oa_iile_outer_env)
+    {
+      struct data_t { oa_env *env; };
+      data_t data = { &env };
+      cp_walk_tree_without_duplicates (expr, [](tree *tp, int *walk_subtrees,
+						void *d) -> tree
+	{
+	  tree closure_obj;
+	  if ((TREE_CODE (*tp) == CALL_EXPR || TREE_CODE (*tp) == AGGR_INIT_EXPR)
+	      && oa_iile_call_p (*tp, &closure_obj))
+	    {
+	      oa_resolve_iile_call (*tp, *((data_t *) d)->env);
+	      *walk_subtrees = 0;
+	    }
+	  return NULL_TREE;
+	}, &data);
+    }
   oa_env scan_env = env.copy ();
   auto_vec<tree *> conjuncts;
   oa_collect_conjuncts (expr, &conjuncts);
