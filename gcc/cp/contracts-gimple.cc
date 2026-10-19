@@ -836,7 +836,18 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
 			  hash_map<tree, cg_range_lite> &scalar_range_cache,
 			  gimple_ranger *ranger, bool require_conveyor,
 			  bool require_symbolic, cg_range_lite *out,
-			  gimple *at_stmt = NULL)
+			  gimple *at_stmt = NULL);
+static bool
+cg_induction_variable_bound_1 (tree, hash_map<tree, cg_range_lite> &,
+			       hash_map<tree, cg_range_lite> &, gimple_ranger *,
+			       cg_range_lite *);
+
+static bool
+cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_range,
+			  hash_map<tree, cg_range_lite> &scalar_range_cache,
+			  gimple_ranger *ranger, bool require_conveyor,
+			  bool require_symbolic, cg_range_lite *out,
+			  gimple *at_stmt)
 {
   if (val == NULL_TREE)
     return false;
@@ -917,6 +928,68 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
 				       require_symbolic, out, at_stmt))
 	return true;
     }
+  cg_range_lite phi_union;
+  bool have_phi_union = false;
+  if (gphi *phi = dyn_cast <gphi *> (def))
+    {
+      /* A join (a loop's head among them): the union of what each
+	 incoming value is known to be -- each being, say, a call
+	 result its postcondition bounds.  One reaching back to this
+	 PHI is unknown.  */
+      static hash_set<tree> *in_progress;
+      if (!in_progress)
+	in_progress = new hash_set<tree>;
+      if (!in_progress->add (val))
+	{
+	  cg_range_lite u;
+	  bool all = gimple_phi_num_args (phi) > 0;
+	  for (unsigned i = 0; all && i < gimple_phi_num_args (phi); ++i)
+	    {
+	      cg_range_lite r;
+	      if (!cg_established_range_of (gimple_phi_arg_def (phi, i),
+					    established_range,
+					    scalar_range_cache, ranger,
+					    require_conveyor, require_symbolic,
+					    &r))
+		all = false;
+	      else if (i == 0)
+		u = r;
+	      else
+		{
+		  u.has_lo = u.has_lo && r.has_lo;
+		  u.has_hi = u.has_hi && r.has_hi;
+		  if (u.has_lo)
+		    u.lo = wi::smin (u.lo, r.lo);
+		  if (u.has_hi)
+		    u.hi = wi::smax (u.hi, r.hi);
+		}
+	    }
+	  in_progress->remove (val);
+	  if (all && (u.has_lo || u.has_hi))
+	    {
+	      phi_union = u;
+	      have_phi_union = true;
+	    }
+	}
+      /* A loop counter: the ranger, without loop information here,
+	 knows the bound the loop's condition gives it but not the one
+	 its start and direction do.  */
+      cg_range_lite iv;
+      if (cg_induction_variable_bound_1 (val, established_range,
+					 scalar_range_cache, ranger, &iv))
+	{
+	  if (!have_phi_union)
+	    phi_union = iv;
+	  else
+	    {
+	      if (iv.has_lo && (!phi_union.has_lo || iv.lo > phi_union.lo))
+		phi_union.has_lo = true, phi_union.lo = iv.lo;
+	      if (iv.has_hi && (!phi_union.has_hi || iv.hi < phi_union.hi))
+		phi_union.has_hi = true, phi_union.hi = iv.hi;
+	    }
+	  have_phi_union = true;
+	}
+    }
 
   if (ranger)
     {
@@ -931,9 +1004,22 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
 	      out->has_lo = out->has_hi = true;
 	      out->lo = widest_int::from (vr.lower_bound (0), SIGNED);
 	      out->hi = widest_int::from (vr.upper_bound (n - 1), SIGNED);
+	      /* Both hold: the narrower of each bound.  */
+	      if (have_phi_union)
+		{
+		  if (phi_union.has_lo && phi_union.lo > out->lo)
+		    out->lo = phi_union.lo;
+		  if (phi_union.has_hi && phi_union.hi < out->hi)
+		    out->hi = phi_union.hi;
+		}
 	      return true;
 	    }
 	}
+    }
+  if (have_phi_union)
+    {
+      *out = phi_union;
+      return true;
     }
 
   return false;
@@ -3634,15 +3720,26 @@ static bool cg_value_range_at (tree, gimple *, hash_map<tree, cg_range_lite> &,
    plus a nonzero constant -- the bound its start and direction give it:
    never below the initial value when counting up, never above it when
    counting down.  Wrapping past the type's end would be signed overflow,
-   which item 8 rejects on its own, and an unsigned counter is never
-   below zero anyway.  */
+   which item 8 rejects on its own; a type whose overflow wraps gets no
+   bound (an unsigned counter wraps to zero).  The initial value's range
+   is taken from the maps given, as cg_value_range_at does.  */
 
 static bool
-cg_induction_variable_bound (tree val, cg_range_lite *out)
+cg_induction_variable_bound_1 (tree val,
+			       hash_map<tree, cg_range_lite> &established_range,
+			       hash_map<tree, cg_range_lite> &scalar_range_cache,
+			       gimple_ranger *ranger, cg_range_lite *out)
 {
   gphi *phi = dyn_cast <gphi *> (SSA_NAME_DEF_STMT (val));
-  if (!phi || gimple_phi_num_args (phi) != 2)
+  if (!phi || gimple_phi_num_args (phi) != 2
+      || !INTEGRAL_TYPE_P (TREE_TYPE (val))
+      || !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (val)))
     return false;
+  /* The initial value's range may be another loop's counter's.  */
+  static unsigned depth;
+  if (depth >= 8)
+    return false;
+  auto deeper = make_temp_override (depth, depth + 1);
   for (int step_arg = 0; step_arg < 2; ++step_arg)
     {
       tree next = gimple_phi_arg_def (phi, step_arg);
@@ -3668,10 +3765,8 @@ cg_induction_variable_bound (tree val, cg_range_lite *out)
 	  start.lo = start.hi = wi::to_widest (init);
 	}
       else if (!(TREE_CODE (init) == SSA_NAME
-		 && cg_value_range_at (init, phi,
-				       *cg_array_bounds->established_range,
-				       *cg_array_bounds->scalar_range_cache,
-				       cg_array_bounds->ranger,
+		 && cg_value_range_at (init, phi, established_range,
+				       scalar_range_cache, ranger,
 				       /*require_conveyor=*/true, &start)))
 	return false;
       if (step > 0 && start.has_lo)
@@ -3689,6 +3784,15 @@ cg_induction_variable_bound (tree val, cg_range_lite *out)
       return false;
     }
   return false;
+}
+
+static bool
+cg_induction_variable_bound (tree val, cg_range_lite *out)
+{
+  return cg_induction_variable_bound_1 (val,
+					*cg_array_bounds->established_range,
+					*cg_array_bounds->scalar_range_cache,
+					cg_array_bounds->ranger, out);
 }
 
 /* The range of integer VAL at STMT, in *OUT.  */
