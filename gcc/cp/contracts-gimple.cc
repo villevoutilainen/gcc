@@ -7606,7 +7606,27 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
 	  if (cg_unnamed_pointer_identity_p (arg, identity))
 	    {
 	      state.pred.empty ();
-	      state.field.empty ();
+	      /* A non-mutable lambda's closure is not its body's to change,
+		 and the body doesn't name it to the callee: its captures
+		 stay what they were, as the AST engine keeps them.  */
+	      tree closure = NULL_TREE;
+	      if (LAMBDA_FUNCTION_P (fun->decl) && DECL_ARGUMENTS (fun->decl)
+		  && POINTER_TYPE_P (TREE_TYPE (DECL_ARGUMENTS (fun->decl)))
+		  && TYPE_READONLY (TREE_TYPE (TREE_TYPE
+					       (DECL_ARGUMENTS (fun->decl)))))
+		if (tree ssa = ssa_default_def (fun, DECL_ARGUMENTS (fun->decl)))
+		  closure = cg_gimple_object_identity (ssa);
+	      if (closure && closure != identity)
+		{
+		  auto_vec<std::pair<tree, tree>> drop;
+		  for (auto it : state.field)
+		    if (it.first.first != closure)
+		      drop.safe_push (it.first);
+		  for (auto k : drop)
+		    state.field.remove (k);
+		}
+	      else
+		state.field.empty ();
 	      state.field_alias.empty ();
 	      state.call.empty ();
 	      state.call_rel.empty ();
