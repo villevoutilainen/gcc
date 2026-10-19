@@ -1,8 +1,10 @@
 // D4324: unsigned arithmetic wraps on overflow (well-defined modular
-// behavior), not UB -- the new composition's soundness gate is
-// TYPE_OVERFLOW_UNDEFINED, which is false for unsigned types, so
-// composition must decline (stay "cannot verify") rather than silently
-// assuming exact, wraparound-free arithmetic.
+// behavior), not UB -- so composing it exactly is sound only when no
+// value in the range can wrap: both bounds known and representable
+// ('x in [3, 4]' makes 'x + 5u' exactly [8, 9]).  Otherwise composition
+// declines ("cannot verify"), never assuming wraparound-free arithmetic
+// -- and never calling the condition false: 'x >= 3u' makes 'x + 5u'
+// wrap for the largest x.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
 
@@ -25,7 +27,18 @@ demo_unsigned (unsigned x)
   if (x >= 3u && x <= 4u)
     {
       unsigned y = x + 5u;
-      contract_assert<conveyor_ctrl_v>(y >= 8u && y <= 9u); // { dg-warning "cannot verify" }
+      contract_assert<conveyor_ctrl_v>(y >= 8u && y <= 9u);
+    }
+  return 0;
+}
+
+int
+demo_unsigned_may_wrap (unsigned x)
+{
+  if (x >= 3u)
+    {
+      unsigned y = x + 5u;
+      contract_assert<conveyor_ctrl_v>(y >= 8u); // { dg-warning "cannot verify" }
     }
   return 0;
 }

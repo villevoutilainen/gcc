@@ -1296,7 +1296,8 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
   for (tree twin : twins)
       {
 	cg_range_lite t;
-	if (cg_trusted_ranger_range (twin, at_stmt, ranger, false, SIGNED, &t))
+	if (cg_trusted_ranger_range (twin, at_stmt, ranger, false,
+				     TYPE_SIGN (TREE_TYPE (twin)), &t))
 	  {
 	    if (!have_extra)
 	      extra = t;
@@ -1315,7 +1316,8 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
      parameter's argument is one).  */
   {
     cg_range_lite r;
-    if (cg_trusted_ranger_range (val, at_stmt, ranger, true, SIGNED, &r))
+    if (cg_trusted_ranger_range (val, at_stmt, ranger, true,
+				 TYPE_SIGN (TREE_TYPE (val)), &r))
       {
 	*out = r;
 	/* Both hold: the narrower of each bound.  */
@@ -3159,13 +3161,40 @@ cg_get_call_relational (tree val, hash_map<tree, cg_call_rel_fact> &established_
 	    return false;
 
 	  cg_range_lite base_num_range;
-	  if (!cg_shift_arithmetic_no_wrap_ok_p
-		(code, TREE_TYPE (val),
-		 cg_established_range_of (base, established_range,
-					    scalar_range_cache, ranger,
-					    require_conveyor, require_symbolic,
-					    &base_num_range, def)
-		   ? base_num_range : cg_range_lite (), shift))
+	  if (!cg_established_range_of (base, established_range,
+					scalar_range_cache, ranger,
+					require_conveyor, require_symbolic,
+					&base_num_range, def))
+	    base_num_range = cg_range_lite ();
+	  /* The fact itself bounds BASE too, by the accessor's type, as in
+	     the AST engine (oa_get_call_relational): '(idx - OFFSET) <
+	     v.size ()' makes idx at most SIZE_MAX + OFFSET - 1.  */
+	  tree result_type = (*rhs_callee_out
+			      ? TREE_TYPE (TREE_TYPE (*rhs_callee_out))
+			      : NULL_TREE);
+	  if (result_type && INTEGRAL_TYPE_P (result_type))
+	    {
+	      widest_int rmin = wi::to_widest (TYPE_MIN_VALUE (result_type));
+	      widest_int rmax = wi::to_widest (TYPE_MAX_VALUE (result_type));
+	      const cg_range_lite &off = *offset_out;
+	      tree_code fc = *code_out;
+	      if ((fc == LT_EXPR || fc == LE_EXPR || fc == EQ_EXPR)
+		  && off.has_hi)
+		{
+		  widest_int hi = rmax + off.hi - (fc == LT_EXPR ? 1 : 0);
+		  if (!base_num_range.has_hi || hi < base_num_range.hi)
+		    base_num_range.has_hi = true, base_num_range.hi = hi;
+		}
+	      if ((fc == GT_EXPR || fc == GE_EXPR || fc == EQ_EXPR)
+		  && off.has_lo)
+		{
+		  widest_int lo = rmin + off.lo + (fc == GT_EXPR ? 1 : 0);
+		  if (!base_num_range.has_lo || lo > base_num_range.lo)
+		    base_num_range.has_lo = true, base_num_range.lo = lo;
+		}
+	    }
+	  if (!cg_shift_arithmetic_no_wrap_ok_p (code, TREE_TYPE (val),
+						 base_num_range, shift))
 	    return false;
 
 	  if (code == MINUS_EXPR)
@@ -12779,9 +12808,14 @@ pass_contracts_gimple::execute (function *fun)
 	    {
 	      cg_check_div_mod_ub (stmt, established_nz, established_range,
 				    scalar_range_cache, ranger);
-	      cg_check_overflow_ub (stmt, established_type_bound,
-				     established_range, scalar_range_cache,
-				     ranger);
+	      /* A predicate's overflow is the AST engine's to report under
+		 the engine option: the front end has folded some of the
+		 condition's arithmetic away before this function exists
+		 (contracts.cc, oa_predicate_text_scan).  */
+	      if (!(predicate_core && flag_contract_analysis_engine != 0))
+		cg_check_overflow_ub (stmt, established_type_bound,
+				      established_range, scalar_range_cache,
+				      ranger);
 	      cg_check_dereference_ub (stmt, established);
 	      cg_check_array_bounds_ub (stmt);
 	    }

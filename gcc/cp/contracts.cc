@@ -11836,9 +11836,12 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
      both.  */
   if (TREE_CODE (expr) == PLUS_EXPR || TREE_CODE (expr) == MINUS_EXPR)
     {
-      if (!INTEGRAL_TYPE_P (TREE_TYPE (expr))
-	  || !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (expr)))
+      if (!INTEGRAL_TYPE_P (TREE_TYPE (expr)))
 	return false;
+      /* A type whose overflow wraps (unsigned): the exact result is the
+	 value computed only if no value in the range can wrap -- both
+	 bounds known and representable -- else nothing is known.  */
+      bool wraps = !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (expr));
       tree type = TREE_TYPE (expr);
       widest_int type_min = wi::to_widest (TYPE_MIN_VALUE (type));
       widest_int type_max = wi::to_widest (TYPE_MAX_VALUE (type));
@@ -11889,6 +11892,8 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 	out->has_lo = false;
       if (out->has_hi && (out->hi < type_min || out->hi > type_max))
 	out->has_hi = false;
+      if (wraps && !(out->has_lo && out->has_hi))
+	return false;
       return out->has_lo || out->has_hi;
     }
 
@@ -11901,9 +11906,10 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
      type_min/type_max check (both directions), for the same reasons.  */
   if (TREE_CODE (expr) == MULT_EXPR || TREE_CODE (expr) == TRUNC_DIV_EXPR)
     {
-      if (!INTEGRAL_TYPE_P (TREE_TYPE (expr))
-	  || !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (expr)))
+      if (!INTEGRAL_TYPE_P (TREE_TYPE (expr)))
 	return false;
+      /* As for PLUS_EXPR/MINUS_EXPR above.  */
+      bool wraps = !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (expr));
       tree type = TREE_TYPE (expr);
       widest_int type_min = wi::to_widest (TYPE_MIN_VALUE (type));
       widest_int type_max = wi::to_widest (TYPE_MAX_VALUE (type));
@@ -11930,6 +11936,8 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 	    out->lo = lo;
 	  if (out->has_hi)
 	    out->hi = hi;
+	  if (wraps && !(out->has_lo && out->has_hi))
+	    return false;
 	  return out->has_lo || out->has_hi;
 	}
       else
@@ -11953,6 +11961,8 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 	    out->lo = lo;
 	  if (out->has_hi)
 	    out->hi = hi;
+	  if (wraps && !(out->has_lo && out->has_hi))
+	    return false;
 	  return out->has_lo || out->has_hi;
 	}
     }
@@ -12753,12 +12763,41 @@ oa_get_call_relational (tree expr, oa_env &env, oa_call_relational_fact *out)
 
       /* Same TYPE_OVERFLOW_UNDEFINED-or-independently-bounded gate as
 	 oa_get_relational's own identical case above -- see oa_shift_
-	 arithmetic_no_wrap_ok_p's own comment.  */
+	 arithmetic_no_wrap_ok_p's own comment.  The fact itself bounds
+	 BASE too, by the accessor's type: '(idx - OFFSET) < v.size ()'
+	 with 'v.size ()' at most SIZE_MAX makes idx at most
+	 SIZE_MAX + OFFSET - 1, so 'idx + 5' can't wrap when OFFSET is
+	 -10 ('v.size () - idx > 10').  */
       oa_range_fact base_num_range;
-      if (!oa_shift_arithmetic_no_wrap_ok_p
-	    (TREE_CODE (e), TREE_TYPE (e),
-	     oa_get_range (base, env, &base_num_range)
-	       ? base_num_range : oa_range_fact (), shift))
+      if (!oa_get_range (base, env, &base_num_range))
+	base_num_range = oa_range_fact ();
+      tree result_type = (out->rhs_callee
+			  ? TREE_TYPE (TREE_TYPE (out->rhs_callee))
+			  : NULL_TREE);
+      if (result_type && INTEGRAL_TYPE_P (result_type))
+	{
+	  widest_int rmin = wi::to_widest (TYPE_MIN_VALUE (result_type));
+	  widest_int rmax = wi::to_widest (TYPE_MAX_VALUE (result_type));
+	  const oa_range_fact &off = out->offset;
+	  bool upper = (out->code == LT_EXPR || out->code == LE_EXPR
+			|| out->code == EQ_EXPR);
+	  bool lower = (out->code == GT_EXPR || out->code == GE_EXPR
+			|| out->code == EQ_EXPR);
+	  if (upper && off.has_hi)
+	    {
+	      widest_int hi = rmax + off.hi - (out->code == LT_EXPR ? 1 : 0);
+	      if (!base_num_range.has_hi || hi < base_num_range.hi)
+		base_num_range.has_hi = true, base_num_range.hi = hi;
+	    }
+	  if (lower && off.has_lo)
+	    {
+	      widest_int lo = rmin + off.lo + (out->code == GT_EXPR ? 1 : 0);
+	      if (!base_num_range.has_lo || lo > base_num_range.lo)
+		base_num_range.has_lo = true, base_num_range.lo = lo;
+	    }
+	}
+      if (!oa_shift_arithmetic_no_wrap_ok_p (TREE_CODE (e), TREE_TYPE (e),
+					     base_num_range, shift))
 	return false;
 
       if (TREE_CODE (e) == MINUS_EXPR)
@@ -13713,10 +13752,21 @@ oa_call_first_real_arg (tree call)
    Rules about where a construct may appear are not analysis and are
    still reported.  */
 
+/* Set while the AST engine scans a contract's condition text
+   (oa_predicate_text_scan) and, within that, item 8's overflow scan
+   (oa_overflow_scan): the GIMPLE engine checks a predicate's core
+   function, where the front end has already folded some arithmetic the
+   condition was written with away ('x + 1 > 0' is 'x >= 0' there), so
+   its overflow is the AST engine's to report under either engine.  */
+
+static bool oa_predicate_text_scan;
+static bool oa_overflow_scan;
+
 static bool
 oa_ast_diagnostics_muted_p ()
 {
-  return flag_contract_analysis_engine == 1;
+  return (flag_contract_analysis_engine == 1
+	  && !(oa_predicate_text_scan && oa_overflow_scan));
 }
 
 static void ATTRIBUTE_GCC_DIAG (2,3)
@@ -14284,6 +14334,7 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 {
   if (!oa_diagnostics_active)
     return;
+  auto overflow = make_temp_override (oa_overflow_scan, true);
   cp_walk_tree (expr, [](tree *tp, int *walk_subtrees_p, void *data_) -> tree
     {
       oa_env *e = (oa_env *) data_;
@@ -23102,7 +23153,10 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
      never_proven exempts this precondition from item 8's mandatory
      scans too -- see this function's own leading comment.  */
   if (conveyor_ok && !never_proven && !oa_skip_predicate_scans)
-    oa_scan_item8_in_expr (&cond, env);
+    {
+      auto text = make_temp_override (oa_predicate_text_scan, true);
+      oa_scan_item8_in_expr (&cond, env);
+    }
 
   /* D4324/P2680: mandatory "no side effects escaping this condition's
      own evaluation" scan -- see oa_scan_predicate_mutation_ownership_
@@ -23717,7 +23771,10 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
      never_proven exempts this contract_assert from item 8's mandatory
      scans too -- see this function's own leading comment.  */
   if (conveyor_ok && !never_proven)
-    oa_scan_item8_in_expr (&cond, env);
+    {
+      auto text = make_temp_override (oa_predicate_text_scan, true);
+      oa_scan_item8_in_expr (&cond, env);
+    }
 
   /* D4324/P2680: see the identical comment in oa_handle_precondition_
      stmt -- same mandatory "no side effects escaping this condition's
@@ -27522,7 +27579,10 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
       if (have_result_id)
 	scan_env.set (result_id, oa_return_seen && oa_return_all_provable);
       if (!never_proven)
-	oa_scan_item8_in_expr (&cond, scan_env);
+	{
+	  auto text = make_temp_override (oa_predicate_text_scan, true);
+	  oa_scan_item8_in_expr (&cond, scan_env);
+	}
       /* D4324/P2680: see the identical comment in oa_handle_
 	 precondition_stmt -- same mandatory "no side effects escaping
 	 this condition's own evaluation" scan, applying identically to

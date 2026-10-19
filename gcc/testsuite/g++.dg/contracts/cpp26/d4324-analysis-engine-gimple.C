@@ -1,8 +1,10 @@
 // D4324: -fcontract-analysis-engine=gimple leaves the analysis
 // diagnostics to the GIMPLE engine.  The AST engine's own are silenced,
-// so a check only the AST engine performs (overflow within a contract's
-// own condition) goes unreported, one both engines perform (divisors) is
-// reported once, and a rule about where a construct may appear is still
+// except for overflow within a contract's own condition, which the AST
+// engine still reports: the front end folds some of the arithmetic a
+// condition is written with ('x + 1 > 0' is 'x >= 0') before the GIMPLE
+// engine sees it.  A check both engines perform (divisors) is reported
+// once, and a rule about where a construct may appear is still
 // reported.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-analysis-engine=gimple" }
@@ -21,7 +23,7 @@ struct plain_ctrl {
 inline constexpr plain_ctrl plain_ctrl_v{};
 
 int f (int x) conveyor
-  pre<std::contracts::conveyor_assert_v> (x + 1 > 0) // { dg-bogus "overflow" }
+  pre<std::contracts::conveyor_assert_v> (x + 1 > 0) // { dg-error "result of .\\(x \\+ 1\\). not provably free of overflow" }
 {
   return x;
 }

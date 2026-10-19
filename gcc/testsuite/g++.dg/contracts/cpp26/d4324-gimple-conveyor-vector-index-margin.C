@@ -39,24 +39,15 @@
 // use_margin_only_declines demonstrates the margin alone, without that
 // companion, no longer verifies even the plain access.
 //
-// A THIRD, related limit ON THE AST SIDE (see the AST-side sibling
-// test's own use_shift_without_numeric_cap_declines): shifting an
-// already-established margin fact by further arithmetic ('idx += 5') is
-// its own separate composition, which can ALSO wrap even once the
-// margin itself is trustworthy, needing an independently-provable
-// NUMERIC bound on idx (cg_shift_arithmetic_no_wrap_ok_p, consulting
-// idx's own established range via cg_established_range_of). GIMPLE,
-// however, proves use_shift_without_numeric_cap_ok safe even WITHOUT an
-// explicit numeric cap conjunct -- found via direct testing that
-// cg_established_range_of's own gimple_ranger fallback (real SSA value-
-// range propagation, not this file's own hand-rolled interval
-// arithmetic) is independently strong enough to bound idx here on its
-// own. This is a genuine, sound proof via a different, already-
-// documented asymmetry ("GIMPLE is permanently stronger on range/
-// dataflow mechanics" -- see project_gimple_ast_parity_direction), not
-// a gap this fix needs to close; use_sound still adds an explicit
-// numeric cap ('idx < 5') to demonstrate the mechanism this fix actually
-// added, independent of whatever the ranger can also prove on its own.
+// A THIRD case: shifting an already-established margin fact by further
+// arithmetic ('idx += 5') is its own separate composition, which could
+// wrap even once the margin itself is trustworthy -- but the margin
+// bounds idx too: 'idx + 10 < v.size ()' with v.size () at most
+// size_type's max makes idx at most that max - 11, so the shift can't
+// wrap (cg_shift_arithmetic_no_wrap_ok_p, given the bound
+// cg_get_call_relational derives from the fact itself, as the AST engine
+// does).  use_shift_without_numeric_cap_ok is proven so, without an
+// explicit numeric cap conjunct; use_sound adds one ('idx < 5') anyway.
 //
 // Most multi-fact functions below nest their conditions as separate
 // 'if' statements rather than joining them with '&&' -- this was, for a
