@@ -1114,6 +1114,106 @@ cg_addr_provable_p (tree addr, hash_map<tree, cg_fact> &established,
   return false;
 }
 
+/* If CALL immediately invokes a lambda ('[&] { return &a; } ()') whose
+   every return is the address of one of its captures by reference, the
+   value the caller stored for that capture in the closure just before
+   the call: what the call returns.  As the AST engine's
+   oa_resolve_iile_call, for this shape.  */
+
+static tree
+cg_iile_returned_capture_address (gcall *call)
+{
+  tree callee = gimple_call_fndecl (call);
+  if (!callee || !LAMBDA_FUNCTION_P (callee) || gimple_call_num_args (call) < 1
+      || !DECL_SAVED_TREE (callee))
+    return NULL_TREE;
+  tree closure_addr = gimple_call_arg (call, 0);
+  if (TREE_CODE (closure_addr) != ADDR_EXPR
+      || !VAR_P (TREE_OPERAND (closure_addr, 0)))
+    return NULL_TREE;
+  tree closure = TREE_OPERAND (closure_addr, 0);
+
+  /* The capture field every return in the body returns the address of.  */
+  struct data_t { tree field; bool bad; };
+  data_t data = { NULL_TREE, false };
+  tree body = DECL_SAVED_TREE (callee);
+  cp_walk_tree_without_duplicates (&body, [](tree *tp, int *walk_subtrees,
+					     void *d) -> tree
+    {
+      data_t *data = (data_t *) d;
+      if (TREE_CODE (*tp) == LAMBDA_EXPR)
+	{
+	  *walk_subtrees = 0;
+	  return NULL_TREE;
+	}
+      if (TREE_CODE (*tp) != RETURN_EXPR)
+	return NULL_TREE;
+      tree v = TREE_OPERAND (*tp, 0);
+      if (v && (TREE_CODE (v) == INIT_EXPR || TREE_CODE (v) == MODIFY_EXPR))
+	v = TREE_OPERAND (v, 1);
+      bool returns_pointer = v && POINTER_TYPE_P (TREE_TYPE (v));
+      while (v && (CONVERT_EXPR_P (v) || TREE_CODE (v) == NON_LVALUE_EXPR))
+	v = TREE_OPERAND (v, 0);
+      /* '&a': the address, not the value, of the object the capture
+	 refers to -- what its field holds.  */
+      tree field = NULL_TREE;
+      if (v && TREE_CODE (v) == ADDR_EXPR)
+	{
+	  v = TREE_OPERAND (v, 0);
+	  if (v && is_capture_proxy (v))
+	    v = DECL_VALUE_EXPR (v);
+	  if (v && REFERENCE_REF_P (v))
+	    {
+	      v = TREE_OPERAND (v, 0);
+	      if (TREE_CODE (v) == COMPONENT_REF
+		  && TYPE_REF_P (TREE_TYPE (TREE_OPERAND (v, 1))))
+		field = TREE_OPERAND (v, 1);
+	    }
+	}
+      /* The front end folds '&a' to the reference itself, converted to
+	 a pointer ('(int *) a', A the capture proxy); 'return q'
+	 instead dereferences it.  */
+      else if (v && returns_pointer && is_capture_proxy (v)
+	       && TYPE_REF_P (TREE_TYPE (v))
+	       && TREE_CODE (DECL_VALUE_EXPR (v)) == COMPONENT_REF
+	       && TYPE_REF_P (TREE_TYPE (TREE_OPERAND (DECL_VALUE_EXPR (v), 1))))
+	field = TREE_OPERAND (DECL_VALUE_EXPR (v), 1);
+      else if (v && TREE_CODE (v) == COMPONENT_REF
+	       && TYPE_REF_P (TREE_TYPE (TREE_OPERAND (v, 1)))
+	       && returns_pointer)
+	field = TREE_OPERAND (v, 1);
+      if (!field || (data->field && data->field != field))
+	{
+	  data->bad = true;
+	  return *tp;
+	}
+      data->field = field;
+      return NULL_TREE;
+    }, &data);
+  if (data.bad || !data.field)
+    return NULL_TREE;
+
+  /* The value stored into that field of CLOSURE before CALL, in its
+     block.  */
+  gimple_stmt_iterator gsi = gsi_for_stmt (call);
+  for (gsi_prev (&gsi); !gsi_end_p (gsi); gsi_prev (&gsi))
+    {
+      gimple *stmt = gsi_stmt (gsi);
+      if (!gimple_assign_single_p (stmt))
+	{
+	  if (is_gimple_call (stmt))
+	    return NULL_TREE;
+	  continue;
+	}
+      tree lhs = gimple_assign_lhs (stmt);
+      if (TREE_CODE (lhs) == COMPONENT_REF
+	  && TREE_OPERAND (lhs, 0) == closure
+	  && TREE_OPERAND (lhs, 1) == data.field)
+	return gimple_assign_rhs1 (stmt);
+    }
+  return NULL_TREE;
+}
+
 /* If DEF is a call to std::forward, std::move or std::as_const -- a
    reference cast spelled as a call, which at -O0 isn't folded away --
    its argument, which it returns.  As contracts.cc's
@@ -1320,6 +1420,10 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
 	     builtin with a dedicated DECL flag the way operator new has).  */
 	  if (tree arg = cg_std_identity_call_arg (def))
 	    result = cg_provable_object_address_p (arg, established,
+						    require_conveyor,
+						    in_progress, reason_out);
+	  else if (tree stored = cg_iile_returned_capture_address (as_a <gcall *> (def)))
+	    result = cg_provable_object_address_p (stored, established,
 						    require_conveyor,
 						    in_progress, reason_out);
 	  else if ((DECL_IS_OPERATOR_NEW_P (callee)
@@ -9032,6 +9136,34 @@ cg_check_call_relational_fact (gcall *call,
     }
 }
 
+/* CALL stores its result in a pointer variable in memory: whether that
+   result is an object's address, as the prover would find for an SSA
+   result -- here, an immediately invoked lambda returning a capture's
+   address (cg_iile_returned_capture_address).  */
+
+static void
+cg_record_call_result_facts (gcall *call, cg_dom_fact_state &state,
+			     hash_map<tree, cg_fact> *established_oa)
+{
+  tree lhs = gimple_call_lhs (call);
+  if (!lhs || !established_oa || !(VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
+      || !POINTER_TYPE_P (TREE_TYPE (lhs))
+      || !cg_scalar_memory_tracking_p (cfun, lhs))
+    return;
+  tree stored = cg_iile_returned_capture_address (call);
+  if (!stored)
+    return;
+  hash_set<tree> in_progress;
+  if (!cg_provable_object_address_p (stored, *established_oa,
+				     /*require_conveyor=*/true, in_progress))
+    return;
+  cg_field_key_hash::value_type key = cg_scalar_memory_fact_key (lhs);
+  cg_field_fact *existing = state.field.get (key);
+  cg_field_fact fact = existing ? *existing : cg_field_fact { {}, true };
+  fact.object_address = true;
+  state.field.put (key, fact);
+}
+
 static bool
 cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_range_cache_out,
 			   hash_map<tree, cg_range_lite> &established_range,
@@ -9131,6 +9263,7 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 		    (call, fun, field_object_cache, out_state);
 		  cg_establish_persistent_facts_for_call (call, field_object_cache,
 							   out_state);
+		  cg_record_call_result_facts (call, out_state, established_oa);
 		  if (!cg_assert_memory_conjunct_false_p (call, out_state))
 		    cg_establish_assert_facts (call, out_state);
 		}
@@ -9239,6 +9372,7 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 	      cg_invalidate_persistent_facts_for_call_args (call, fun,
 							     field_object_cache, state);
 	      cg_establish_persistent_facts_for_call (call, field_object_cache, state);
+	      cg_record_call_result_facts (call, state, established_oa);
 	      cg_record_assert_memory_verdicts (call, state,
 						assert_memory_verdicts);
 	      if (!cg_assert_memory_conjunct_false_p (call, state))

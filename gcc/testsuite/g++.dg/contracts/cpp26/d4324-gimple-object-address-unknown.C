@@ -1,11 +1,7 @@
 // The built-in GIMPLE-pass engine (-fcontract-conveyor-proofs-gimple)
-// deliberately never attempts IILE recursion (see gcc/cp/
-// contracts-gimple.cc's own top comment and ~/gimple-contract-analysis.md),
-// unlike the mandatory AST-level check, which does resolve this shape
-// (see d4324-object-address-iile-ok.C) and so raises no error of its
-// own. An honest, documented divergence (an extra warning, never a
-// missed violation), exactly mirroring the validated testsuite plugin
-// prototype's own gimple-object-address-unknown.C.
+// proves the result of an immediately invoked lambda returning a
+// capture's address, as the AST engine does (d4324-object-address-iile-
+// ok.C): it used to warn here, a documented divergence, no longer.
 // { dg-do run }
 // { dg-options "-std=c++26 -fcontracts -fcontract-control-objects -fcontract-conveyor-proofs-gimple" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
@@ -31,7 +27,7 @@ int deref (int* p) pre<conveyor_ctrl_v>(std::is_object_address (p))
 int f ()
 {
   int x = 5;
-  return deref ([&]{ return &x; }()); // { dg-warning "cannot verify .is_object_address." }
+  return deref ([&]{ return &x; }());
 }
 
 int main () { return f () - 5; }
