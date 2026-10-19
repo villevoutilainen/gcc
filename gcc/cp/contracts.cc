@@ -49,6 +49,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "real.h"
 #include "tree-pretty-print.h"
 #include "fold-const.h"
+#include "value-range.h"
 
 /*  Design notes.
 
@@ -12161,6 +12162,33 @@ oa_get_float_range (tree expr, oa_env &env, oa_float_range_fact *out)
 	return false;
 
       out->maybe_nan = false;
+      /* A missing bound is +-Inf, unless TYPE honors no infinities
+	 (-ffinite-math-only): 'inf - inf' and '0 * inf' are NaN, which
+	 every comparison is false for -- no bound of the result can be
+	 proven then.  */
+      if (HONOR_INFINITIES (type))
+	{
+	  auto may_pinf = [] (const oa_float_range_fact &r)
+	    { return !r.has_hi || (real_isinf (&r.hi) && !real_isneg (&r.hi)); };
+	  auto may_ninf = [] (const oa_float_range_fact &r)
+	    { return !r.has_lo || (real_isinf (&r.lo) && real_isneg (&r.lo)); };
+	  auto may_zero = [] (const oa_float_range_fact &r)
+	    {
+	      return ((!r.has_lo || !real_less (&dconst0, &r.lo))
+		      && (!r.has_hi || !real_less (&r.hi, &dconst0)));
+	    };
+	  tree_code c = TREE_CODE (expr);
+	  bool nan = false;
+	  if (c == PLUS_EXPR)
+	    nan = ((may_pinf (a) && may_ninf (b)) || (may_ninf (a) && may_pinf (b)));
+	  else if (c == MINUS_EXPR)
+	    nan = ((may_pinf (a) && may_pinf (b)) || (may_ninf (a) && may_ninf (b)));
+	  else if (c == MULT_EXPR)
+	    nan = ((may_zero (a) && (may_pinf (b) || may_ninf (b)))
+		   || (may_zero (b) && (may_pinf (a) || may_ninf (a))));
+	  if (nan)
+	    return false;
+	}
       if (TREE_CODE (expr) == PLUS_EXPR || TREE_CODE (expr) == MINUS_EXPR)
 	{
 	  if (a.maybe_nan || b.maybe_nan)
@@ -12812,12 +12840,107 @@ static bool oa_predicate_result_from_declared_relation
    established correctly, but with the wrong CONVEYOR_ESTABLISHED tag and
    the wrong accessor gate).  */
 
+/* See contracts.h.  */
+
+bool
+oa_isfinite_conjunct_public (tree conjunct, tree *decl_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  /* '__builtin_isfinite (x)' returns int: as a condition, converted or
+     compared with zero.  */
+  for (;;)
+    {
+      while (TREE_CODE (c) == CLEANUP_POINT_EXPR || CONVERT_EXPR_P (c)
+	     || TREE_CODE (c) == NON_LVALUE_EXPR)
+	c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+      if (TREE_CODE (c) == NE_EXPR && integer_zerop (TREE_OPERAND (c, 1)))
+	c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+      else
+	break;
+    }
+  if (TREE_CODE (c) != CALL_EXPR || call_expr_nargs (c) != 1)
+    return false;
+  tree fn = cp_get_callee_fndecl_nofold (c);
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL || !DECL_NAME (fn))
+    return false;
+  if (!(fndecl_built_in_p (fn, BUILT_IN_ISFINITE)
+	|| (id_equal (DECL_NAME (fn), "isfinite")
+	    && (decl_in_std_namespace_p (fn)
+		|| CP_DECL_CONTEXT (fn) == global_namespace))))
+    return false;
+  tree arg = oa_strip_to_relational_operand (CALL_EXPR_ARG (c, 0));
+  if (!(VAR_P (arg) || TREE_CODE (arg) == PARM_DECL)
+      || !SCALAR_FLOAT_TYPE_P (oa_decl_value_type (arg)))
+    return false;
+  *decl_out = arg;
+  return true;
+}
+
+/* See contracts.h.  */
+
+bool
+oa_isfinite_bounds_public (tree conjunct, tree *lo_cmp, tree *hi_cmp)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  /* '__builtin_isfinite (x)' returns int: as a condition, converted or
+     compared with zero.  */
+  for (;;)
+    {
+      while (TREE_CODE (c) == CLEANUP_POINT_EXPR || CONVERT_EXPR_P (c)
+	     || TREE_CODE (c) == NON_LVALUE_EXPR)
+	c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+      if (TREE_CODE (c) == NE_EXPR && integer_zerop (TREE_OPERAND (c, 1)))
+	c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+      else
+	break;
+    }
+  if (TREE_CODE (c) != CALL_EXPR || call_expr_nargs (c) != 1)
+    return false;
+  tree fn = cp_get_callee_fndecl_nofold (c);
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL || !DECL_NAME (fn)
+      || !(fndecl_built_in_p (fn, BUILT_IN_ISFINITE)
+	   || (id_equal (DECL_NAME (fn), "isfinite")
+	       && (decl_in_std_namespace_p (fn)
+		   || CP_DECL_CONTEXT (fn) == global_namespace))))
+    return false;
+  tree arg = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (c, 0));
+  while (CONVERT_EXPR_P (arg) || TREE_CODE (arg) == NON_LVALUE_EXPR)
+    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+  tree type = TREE_TYPE (arg);
+  if (!SCALAR_FLOAT_TYPE_P (type))
+    return false;
+  *lo_cmp = build2 (GE_EXPR, boolean_type_node, arg,
+		    build_real (type, real_min_representable (type)));
+  *hi_cmp = build2 (LE_EXPR, boolean_type_node, arg,
+		    build_real (type, real_max_representable (type)));
+  return true;
+}
+
 static void
 oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
 {
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
   while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
     c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+
+  /* 'std::isfinite (x)': X is neither infinite nor a NaN.  */
+  tree finite_decl;
+  if (asserted_true && oa_isfinite_conjunct_public (c, &finite_decl))
+    {
+      tree type = oa_decl_value_type (finite_decl);
+      oa_float_range_fact fact;
+      if (!env.float_range_get (finite_decl, &fact))
+	fact.has_lo = fact.has_hi = false;
+      REAL_VALUE_TYPE max = real_max_representable (type);
+      REAL_VALUE_TYPE min = real_min_representable (type);
+      if (!fact.has_lo || real_less (&fact.lo, &min))
+	fact.has_lo = true, fact.lo = min;
+      if (!fact.has_hi || real_less (&max, &fact.hi))
+	fact.has_hi = true, fact.hi = max;
+      fact.maybe_nan = false;
+      env.float_range_set (finite_decl, fact);
+      return;
+    }
 
   enum tree_code code = TREE_CODE (c);
   if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
@@ -12899,6 +13022,9 @@ oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
 	refined.has_lo = refined.has_hi = false;
 
       oa_float_tighten_range_bound (refined, code, val, oa_decl_value_type (decl));
+      /* The false edge of 'x > 100.0' holds a NaN too, under IEEE.  */
+      if (!asserted_true && HONOR_NANS (oa_decl_value_type (decl)))
+	refined.maybe_nan = true;
       env.float_range_set (decl, refined);
       return;
     }
@@ -17897,6 +18023,19 @@ oa_collect_contract_float_field_ranges (tree condition,
 {
   auto_vec<tree *> conjuncts;
   oa_collect_conjuncts (&condition, &conjuncts);
+  /* 'std::isfinite (p->f)': as 'p->f >= -max && p->f <= max'.  */
+  auto_vec<tree> finite_bounds;
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree lo, hi;
+      if (oa_isfinite_bounds_public (*conjuncts[i], &lo, &hi))
+	{
+	  finite_bounds.safe_push (lo);
+	  finite_bounds.safe_push (hi);
+	}
+    }
+  for (tree &b : finite_bounds)
+    conjuncts.safe_push (&b);
   for (unsigned i = 0; i < conjuncts.length (); ++i)
     {
       tree field, ptr_expr, const_val;

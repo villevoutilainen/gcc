@@ -5678,6 +5678,19 @@ cg_collect_field_float_groups (tree cond, vec<cg_float_field_group> *out,
 {
   auto_vec<tree *> conjuncts;
   oa_collect_conjuncts_public (&cond, &conjuncts);
+  /* 'std::isfinite (p->f)': as 'p->f >= -max && p->f <= max'.  */
+  auto_vec<tree> finite_bounds;
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree lo, hi;
+      if (oa_isfinite_bounds_public (*conjuncts[i], &lo, &hi))
+	{
+	  finite_bounds.safe_push (lo);
+	  finite_bounds.safe_push (hi);
+	}
+    }
+  for (tree &b : finite_bounds)
+    conjuncts.safe_push (&b);
   for (unsigned i = 0; i < conjuncts.length (); ++i)
     {
       tree field, ptr_expr, const_val;
@@ -6450,6 +6463,9 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
 {
   tree call_callee = gimple_call_fndecl (call);
   if (call_callee && DECL_CONV_FN_P (call_callee))
+    return;
+  /* Placement new only returns the pointer it is given.  */
+  if (call_callee && std_placement_new_fn_p (call_callee))
     return;
   unsigned n = gimple_call_num_args (call);
   tree parm_types = (gimple_call_fntype (call)
@@ -7656,7 +7672,8 @@ cg_dom_fact_state_assign (cg_dom_fact_state *dst, const cg_dom_fact_state &src)
    survives only if both sides have it and fully agree).  */
 
 static void
-cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src)
+cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src,
+			  bool unite_fields = false)
 {
   auto_vec<tree> pred_remove;
   for (auto it : dst->pred)
@@ -7671,9 +7688,41 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src)
     dst->pred.remove (t);
 
   auto_vec<std::pair<tree, tree>> field_remove;
+  /* At a join no loop runs back into (UNITE_FIELDS), a field's facts are
+     what either path's say: the union of its ranges ('if (v > 100.0) v =
+     100.0;'), which can't keep growing there.  */
+  if (unite_fields)
+    for (auto it : dst->field)
+      {
+	const cg_field_fact *ov = src.field.get (it.first);
+	if (!ov)
+	  continue;
+	cg_field_fact &f = it.second;
+	f.range.has_lo = f.range.has_lo && ov->range.has_lo;
+	f.range.has_hi = f.range.has_hi && ov->range.has_hi;
+	if (f.range.has_lo && ov->range.lo < f.range.lo)
+	  f.range.lo = ov->range.lo;
+	if (f.range.has_hi && ov->range.hi > f.range.hi)
+	  f.range.hi = ov->range.hi;
+	if (f.has_float && ov->has_float)
+	  f.float_range.union_ (ov->float_range);
+	else
+	  f.has_float = false;
+	f.nonzero = f.nonzero && ov->nonzero;
+	f.object_address = f.object_address && ov->object_address;
+	f.conveyor_established
+	  = f.conveyor_established && ov->conveyor_established;
+	dst->field.put (it.first, f);
+      }
   for (auto it : dst->field)
     {
       const cg_field_fact *ov = src.field.get (it.first);
+      if (unite_fields)
+	{
+	  if (!ov)
+	    field_remove.safe_push (it.first);
+	  continue;
+	}
       if (!ov || ov->range.has_lo != it.second.range.has_lo
 	  || ov->range.has_hi != it.second.range.has_hi
 	  || (it.second.range.has_lo && ov->range.lo != it.second.range.lo)
@@ -8450,6 +8499,43 @@ cg_refine_edge_into (edge e, cg_dom_fact_state &state,
       && code != GE_EXPR && code != EQ_EXPR)
     return;
 
+  /* A floating-point field compared with a constant ('this->m_value >
+     100.0'): its range on each edge -- on the false one, under IEEE, a
+     NaN too.  */
+  if (TREE_CODE (rhs) == REAL_CST || TREE_CODE (lhs) == REAL_CST)
+    {
+      bool fl = TREE_CODE (lhs) == REAL_CST;
+      tree fo = fl ? rhs : lhs, fc = fl ? lhs : rhs;
+      bool fis_call;
+      tree ffield, fbase, fcallee, freceiver;
+      if (!cg_cond_operand_shape (fo, &fis_call, &ffield, &fbase, &fcallee,
+				  &freceiver)
+	  || fis_call)
+	return;
+      tree_code fcode = fl ? swap_tree_comparison (code) : code;
+      bool nan = false;
+      if (!asserted_true)
+	{
+	  switch (fcode)
+	    {
+	    case LT_EXPR: fcode = GE_EXPR; break;
+	    case LE_EXPR: fcode = GT_EXPR; break;
+	    case GT_EXPR: fcode = LE_EXPR; break;
+	    case GE_EXPR: fcode = LT_EXPR; break;
+	    default: return;
+	    }
+	  nan = HONOR_NANS (TREE_TYPE (fc));
+	}
+      frange r;
+      if (!cg_frange_for_comparison (TREE_TYPE (fc), fcode, fc, &r))
+	return;
+      if (nan)
+	r.update_nan ();
+      if (tree identity = cg_gimple_object_identity (fbase))
+	cg_add_float_field_fact (state, {identity, ffield}, r, true);
+      return;
+    }
+
   tree other, const_val;
   bool flipped;
   if (TREE_CODE (rhs) == INTEGER_CST)
@@ -8568,6 +8654,19 @@ cg_refine_edge_into (edge e, cg_dom_fact_state &state,
    done once more, from the now-stable BLOCK_OUT) -- factored out so
    the two can never drift apart.  */
 
+/* Does a back edge enter BB (a predecessor BB dominates)?  */
+
+static bool
+cg_loop_header_p (basic_block bb)
+{
+  edge e;
+  edge_iterator ei;
+  FOR_EACH_EDGE (e, ei, bb->preds)
+    if (dominated_by_p (CDI_DOMINATORS, e->src, bb))
+      return true;
+  return false;
+}
+
 static void
 cg_compute_in_state (basic_block bb,
 		      hash_map<basic_block, cg_dom_fact_state *> &block_out,
@@ -8671,7 +8770,8 @@ cg_compute_in_state (basic_block bb,
 	  first = false;
 	}
       else
-	cg_dom_fact_state_merge (in_state, refined);
+	cg_dom_fact_state_merge (in_state, refined,
+				 /*unite_fields=*/!cg_loop_header_p (bb));
     }
   if (first)  /* ENTRY itself, or no predecessor processed yet at all.  */
     cg_dom_fact_state_assign (in_state, seed);
@@ -9930,17 +10030,27 @@ cg_seed_float_self_trust (function *fun,
 	{
 	  tree parm, const_val;
 	  tree_code code;
-	  if (!oa_match_simple_comparison (*conjuncts[i], &parm, &code,
-					   &const_val)
-	      || TREE_CODE (const_val) != REAL_CST
-	      || TREE_CODE (parm) != PARM_DECL
-	      || !SCALAR_FLOAT_TYPE_P (TREE_TYPE (parm)))
+	  frange r;
+	  /* 'std::isfinite (x)': neither infinite nor a NaN.  */
+	  if (oa_isfinite_conjunct_public (*conjuncts[i], &parm)
+	      && TREE_CODE (parm) == PARM_DECL)
+	    {
+	      tree type = TREE_TYPE (parm);
+	      REAL_VALUE_TYPE max = real_max_representable (type);
+	      REAL_VALUE_TYPE min = real_min_representable (type);
+	      r = frange (type, min, max);
+	      r.clear_nan ();
+	    }
+	  else if (!oa_match_simple_comparison (*conjuncts[i], &parm, &code,
+						&const_val)
+		   || TREE_CODE (const_val) != REAL_CST
+		   || TREE_CODE (parm) != PARM_DECL
+		   || !SCALAR_FLOAT_TYPE_P (TREE_TYPE (parm))
+		   || !cg_frange_for_comparison (TREE_TYPE (parm), code,
+						 const_val, &r))
 	    continue;
 	  tree ssa = ssa_default_def (fun, parm);
-	  frange r;
-	  if (!ssa
-	      || !cg_frange_for_comparison (TREE_TYPE (parm), code, const_val,
-					    &r))
+	  if (!ssa)
 	    continue;
 	  bool existed;
 	  frange &slot = established_frange.get_or_insert (ssa, &existed);
@@ -10081,13 +10191,19 @@ cg_frange_comparison_verdict (const frange &fr, tree_code code, tree c,
 /* The same for SSA value VAL at STMT: the ranger's range of it there,
    narrowed by what is established for it (KNOWN, if any).  */
 
+/* The function's established floating-point facts, for
+   cg_float_comparison_verdict's folding (set by the pass's execute).  */
+static hash_map<tree, frange> *cg_established_frange_for_verdicts;
+
 static cg_verdict
 cg_float_comparison_verdict (tree val, gimple *stmt, gimple_ranger *ranger,
 			     const frange *known, tree_code code, tree c,
 			     char *text, size_t n)
 {
   frange fr (TREE_TYPE (val));
-  if (!ranger->range_of_expr (fr, val, stmt))
+  /* Folded from its operands' facts too ('x * 2.0').  */
+  if (!cg_frange_of (val, stmt, ranger, cg_established_frange_for_verdicts,
+		     fr))
     fr.set_varying (TREE_TYPE (val));
   if (known)
     fr.intersect (*known);
@@ -11267,6 +11383,8 @@ pass_contracts_gimple::execute (function *fun)
      contract_assert.  */
   hash_map<tree, frange> established_frange;
   cg_seed_float_self_trust (fun, established_frange);
+  auto frange_ovr = make_temp_override (cg_established_frange_for_verdicts,
+					&established_frange);
   if (LAMBDA_FUNCTION_P (fun->decl))
     cg_seed_iile_capture_facts (fun, established, established_nz,
 				established_range);
