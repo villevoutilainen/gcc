@@ -1112,11 +1112,16 @@ ip_all_fields_dominate_p (gimple *at_stmt, vec<ip_field_reach_entry *> &table)
    init events for VAR (e.g. a whole-object assignment 'var = f();')
    -- those legitimately establish every field's value at once too, so
    a field read is safe if dominated by EITHER its own direct write or
-   one of these.  */
+   one of these.
+
+   VAR_MARKED is false when VAR itself is not [[uninit]], only FIELD is
+   (ip_check_default_initialized_members); the note then points at
+   FIELD's own declaration rather than VAR's.  */
 
 static void
 ip_check_local_aggregate_member (function *fun, tree var, tree field,
-				  vec<gimple *> &outer_init_stmts)
+				  vec<gimple *> &outer_init_stmts,
+				  bool var_marked = true)
 {
   ip_local_member_scan scan;
   scan.var = var;
@@ -1158,8 +1163,12 @@ ip_check_local_aggregate_member (function *fun, tree var, tree field,
 			"address of %<[[uninit]]%> member %qD of %qD is "
 			"taken here before it is provably initialized, "
 			"under the %<std::init%> profile", field, var);
-	      inform (DECL_SOURCE_LOCATION (var),
-		      "%qD is declared %<[[uninit]]%> here", var);
+	      if (var_marked)
+		inform (DECL_SOURCE_LOCATION (var),
+			"%qD is declared %<[[uninit]]%> here", var);
+	      else
+		inform (DECL_SOURCE_LOCATION (field),
+			"%qD is declared %<[[uninit]]%> here", field);
 	    }
 	}
     }
@@ -1324,6 +1333,94 @@ ip_check_address_taken_var (function *fun, tree var)
       profiles_diagnostic_at (gimple_location (read_stmt), "std::init",
 		"%qD read before it is definitely assigned, under the "
 		"%<std::init%> profile", var);
+}
+
+/* True if STMT is VAR's own default construction by a default
+   constructor that is not user-provided (implicitly defined, or
+   defaulted on its first declaration).  Such a constructor provably
+   leaves every [[uninit]] member without a default member initializer
+   untouched, so unlike any other use of '&VAR' it does not count as
+   possibly initializing one.  */
+
+static bool
+ip_implicit_default_ctor_call_p (gimple *stmt, tree var)
+{
+  gcall *call = dyn_cast <gcall *> (stmt);
+  if (!call || gimple_call_num_args (call) != 1)
+    return false;
+  tree fn = gimple_call_fndecl (call);
+  if (!fn || !DECL_CONSTRUCTOR_P (fn))
+    return false;
+  tree arg = gimple_call_arg (call, 0);
+  if (TREE_CODE (arg) != ADDR_EXPR || TREE_OPERAND (arg, 0) != var)
+    return false;
+  if (DECL_CLONED_FUNCTION_P (fn))
+    fn = DECL_CLONED_FUNCTION (fn);
+  return (default_ctor_p (fn) && !user_provided_p (fn)
+	  && (TYPE_MAIN_VARIANT (DECL_CONTEXT (fn))
+	      == TYPE_MAIN_VARIANT (TREE_TYPE (var))));
+}
+
+/* P4222 (Bjarne's mixed-triviality aggregates): a local VAR that is
+   NOT itself [[uninit]] -- its type has non-trivial default
+   initialization, so it cannot be (cp_finish_decl) -- but whose class
+   has [[uninit]] members, e.g.
+
+     struct Aggr2 { std::string str; int num [[uninit]]; };
+     Aggr2 ag2;	  // ag2.num left uninitialized
+
+   Each such member is tracked with the ordinary per-field DAA, but only
+   where what the constructor does is known: VAR's construction by an
+   implicitly-defined or defaulted default constructor leaves the
+   member uninitialized.  Anything else that could initialize it -- a
+   whole-object write ('ag2 = {}' from value-initialization, 'ag2 =
+   f ()'), or any other use of '&VAR' (a user-provided constructor, a
+   copy constructor, a member function call, passing it to a function)
+   -- counts as an initializing event, since whether it writes the
+   member cannot be known here.  So a default-initialized object of a
+   class with a user-provided default constructor is never diagnosed.
+   A member with a default member initializer is initialized by the
+   constructor itself and is skipped.  Only VAR's direct members are
+   tracked, not members of its bases or of its member subobjects.  */
+
+static void
+ip_check_default_initialized_members (function *fun, tree var)
+{
+  tree type = TREE_TYPE (var);
+  if (TREE_CODE (type) != RECORD_TYPE)
+    return;
+
+  auto_vec<tree> fields;
+  for (tree field = TYPE_FIELDS (type); field; field = DECL_CHAIN (field))
+    if (TREE_CODE (field) == FIELD_DECL && !DECL_ARTIFICIAL (field)
+	&& lookup_attribute ("uninit", DECL_ATTRIBUTES (field))
+	&& !DECL_INITIAL (field))
+      fields.safe_push (field);
+  if (fields.is_empty ())
+    return;
+
+  ip_addr_taken_scan scan;
+  scan.var = var;
+  scan.member_access = false;
+  scan.member_access_loc = UNKNOWN_LOCATION;
+
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      ip_scan_stmt_for_var (gsi_stmt (gsi), &scan);
+
+  auto_vec<gimple *> outer_init_stmts;
+  for (gimple *stmt : scan.init_stmts)
+    if (!gimple_clobber_p (stmt))
+      outer_init_stmts.safe_push (stmt);
+  for (gimple *stmt : scan.other_addr_of_stmts)
+    if (!ip_implicit_default_ctor_call_p (stmt, var))
+      outer_init_stmts.safe_push (stmt);
+
+  for (tree field : fields)
+    ip_check_local_aggregate_member (fun, var, field, outer_init_stmts,
+				     /*var_marked=*/false);
 }
 
 /* P4222 Phase 4d (S5.1-S5.3): bookkeeping for ip_check_constructor_
@@ -2560,8 +2657,17 @@ ip_check_function (function *fun)
   tree var;
   FOR_EACH_LOCAL_DECL (fun, i, var)
     {
-      if (!VAR_P (var) || !lookup_attribute ("uninit", DECL_ATTRIBUTES (var)))
+      if (!VAR_P (var))
 	continue;
+
+      if (!lookup_attribute ("uninit", DECL_ATTRIBUTES (var)))
+	{
+	  if (!TREE_STATIC (var) && !DECL_EXTERNAL (var)
+	      && !DECL_ARTIFICIAL (var) && !DECL_HAS_VALUE_EXPR_P (var)
+	      && !is_gimple_reg (var))
+	    ip_check_default_initialized_members (fun, var);
+	  continue;
+	}
 
       if (!is_gimple_reg (var))
 	{
