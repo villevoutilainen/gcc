@@ -3370,8 +3370,22 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 	{
 	  hash_set<tree> owned_in_progress;
 	  oa_unprovable_reason own_reason = OA_UNPROVABLE_NONE;
-	  if (!cg_provably_owned_p (substituted, fun, owned_in_progress,
-				     &own_reason))
+	  /* A predicate's evaluation owns only its own locals (an IILE's,
+	     a temporary): not what its function received.  */
+	  tree owner;
+	  bool owned;
+	  if (predicate_core_function_contract (fun->decl, &owner))
+	    {
+	      tree base = (TREE_CODE (substituted) == ADDR_EXPR
+			   ? get_base_address (TREE_OPERAND (substituted, 0))
+			   : NULL_TREE);
+	      owned = (base && VAR_P (base) && DECL_CONTEXT (base) == fun->decl);
+	      own_reason = OA_UNPROVABLE_PREDICATE_CONTEXT;
+	    }
+	  else
+	    owned = cg_provably_owned_p (substituted, fun, owned_in_progress,
+					 &own_reason);
+	  if (!owned)
 	    {
 	      error_at (gimple_location (call),
 			"argument %qE is not owned by the calling function, "
@@ -6363,6 +6377,56 @@ static void
 cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
 {
   tree fndecl = fun->decl;
+
+  /* A predicate core function of a precondition: what the preceding
+     preconditions of its function say of the fields its parameters
+     point to ('is_object_address (h->ptr)'), checked before it is.  Its
+     parameters start with copies of the function's own.  */
+  tree owner;
+  if (tree self = predicate_core_function_contract (fndecl, &owner))
+    if (owner && PRECONDITION_P (self))
+      for (tree as = get_fn_contract_specifiers (owner); as;
+	   as = TREE_CHAIN (as))
+	{
+	  tree contract = CONTRACT_STATEMENT (as);
+	  if (contract == self
+	      || contract_predicate_core_function (contract) == fndecl
+	      || (TREE_CODE (contract) == TREE_CODE (self)
+		  && EXPR_LOCATION (contract) == EXPR_LOCATION (self)))
+	    break;
+	  if (!PRECONDITION_P (contract)
+	      || !oa_contract_conveyor_active_public (contract, owner))
+	    continue;
+	  tree cond = CONTRACT_CONDITION (contract);
+	  if (cond == NULL_TREE || cond == error_mark_node)
+	    continue;
+	  auto_vec<tree *> conjuncts;
+	  oa_collect_conjuncts_public (&cond, &conjuncts);
+	  for (unsigned i = 0; i < conjuncts.length (); ++i)
+	    {
+	      tree oa_arg, base;
+	      if (!is_object_address_call_p (*conjuncts[i], &oa_arg))
+		continue;
+	      tree field = cg_object_address_field (oa_arg, &base);
+	      if (!field || TREE_CODE (base) != PARM_DECL)
+		continue;
+	      /* OWNER's parameter -> FNDECL's at the same position.  */
+	      tree c = DECL_ARGUMENTS (fndecl), q = DECL_ARGUMENTS (owner);
+	      for (; q && c && q != base; q = DECL_CHAIN (q), c = DECL_CHAIN (c))
+		;
+	      if (!q || !c)
+		continue;
+	      if (tree ssa = ssa_default_def (fun, c))
+		{
+		  cg_field_fact *existing = seed.field.get ({ssa, field});
+		  cg_field_fact fact = existing ? *existing
+				       : cg_field_fact { {}, true };
+		  fact.object_address = true;
+		  seed.field.put ({ssa, field}, fact);
+		}
+	    }
+	}
+
   for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
     {
       tree contract = CONTRACT_STATEMENT (as);
