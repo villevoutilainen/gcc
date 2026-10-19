@@ -4038,6 +4038,28 @@ check_field_decls (tree t, tree *access_decls,
 	  goto data_member;
 
 	case FIELD_DECL:
+	  /* P4222 Initialization profile: a member whose type's default
+	     initialization does something can't be left uninitialized by
+	     the class's constructors, so it can't be marked [[uninit]] (as
+	     an object of such a type can't be, decl.cc's cp_finish_decl).  */
+	  if (lookup_attribute ("uninit", DECL_ATTRIBUTES (field))
+	      && !processing_template_decl
+	      && COMPLETE_TYPE_P (strip_array_types (type))
+	      && type_has_nontrivial_default_init (type)
+	      && profiles_active_p ("std::init")
+	      && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (field),
+					    "std::init"))
+	    {
+	      profiles_diagnostic_at (DECL_SOURCE_LOCATION (field),
+				       "std::init",
+				       "member %qD cannot be marked "
+				       "%<[[uninit]]%>: its type %qT has "
+				       "non-trivial default initialization, "
+				       "under the %<std::init%> profile",
+				       field, type);
+	      DECL_ATTRIBUTES (field)
+		= remove_attribute ("uninit", DECL_ATTRIBUTES (field));
+	    }
 	  if (TREE_CODE (t) == UNION_TYPE)
 	    {
 	      /* [class.union]

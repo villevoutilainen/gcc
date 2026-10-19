@@ -9767,6 +9767,30 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
 			     "initializer, under the %<std::init%> profile",
 			     decl);
 
+  /* P4222 Initialization profile: an object whose type's default
+     initialization does something (a constructor, a default member
+     initializer, a member or base that does) can't be left
+     uninitialized as a whole, so it can't be marked [[uninit]]: only the
+     members a class leaves uninitialized can be, by marking those
+     members.  Arrays of such a type likewise.  At instantiation for a
+     dependent type.  */
+  if (VAR_P (decl)
+      && lookup_attribute ("uninit", DECL_ATTRIBUTES (decl))
+      && !processing_template_decl
+      && COMPLETE_TYPE_P (strip_array_types (type))
+      && type_has_nontrivial_default_init (type)
+      && profiles_active_p ("std::init")
+      && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (decl), "std::init"))
+    {
+      profiles_diagnostic_at (DECL_SOURCE_LOCATION (decl), "std::init",
+			       "%qD cannot be marked %<[[uninit]]%>: its type "
+			       "%qT has non-trivial default initialization, "
+			       "under the %<std::init%> profile", decl, type);
+      /* Not [[uninit]] then: its initialization is its type's.  */
+      DECL_ATTRIBUTES (decl) = remove_attribute ("uninit",
+						 DECL_ATTRIBUTES (decl));
+    }
+
   /* P4222 Initialization profile, Phase 3: a local pointer declaration
      initialized directly from another local's address used to be
      flavor-checked here too (a front-end, parse-time counterpart of
@@ -11998,6 +12022,24 @@ expand_static_init (tree decl, tree init)
 	  informed = true;
 	}
       return;
+    }
+
+  /* P4222 Initialization profile: a namespace-scope variable or static
+     data member is initialized by a constant (constinit, a constant
+     expression, a constexpr constructor) or zero-initialized, never
+     dynamically -- whose order across translation units is unspecified.
+     A function-local static's initialization, on first use, is not.  */
+  if (init && !DECL_FUNCTION_SCOPE_P (decl)
+      && profiles_active_p ("std::init")
+      && !profiles_header_exempt_p (DECL_SOURCE_LOCATION (decl), "std::init"))
+    {
+      auto_diagnostic_group d;
+      location_t dloc = DECL_SOURCE_LOCATION (decl);
+      if (profiles_diagnostic_at (dloc, "std::init",
+				  "%qD has non-constant initialization, under "
+				  "the %<std::init%> profile", decl))
+	inform (dloc, "declare it %<constinit%>, or initialize it with a "
+		"constant expression");
     }
 
   if (DECL_FUNCTION_SCOPE_P (decl))
