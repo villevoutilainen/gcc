@@ -17,7 +17,7 @@
 
 int f (int x) conveyor
 {
-  return [&] () { return x + 1; } ();
+  return [&] () { return x; } ();
 }
 
-int main () { return f (1) - 2; }
+int main () { return f (1) - 1; }
