@@ -112,6 +112,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "gimple-ssa.h"
 #include "bitmap.h"
 #include "sbitmap.h"
+#include "opts.h"
 
 /* Positional correspondence between CALLEE's own PARM_DECLs and CALL's
    actual argument expressions -- the GIMPLE-level analogue of
@@ -4773,14 +4774,21 @@ cg_frange_requirement_verdict (const frange &have, const frange &need)
    conveyor flavor if CONVEYOR, else the symbolic one.  Under
    -fcontract-analysis-engine= they follow the AST engine's own gate: the
    -fcontract-conveyor-proofs/-fcontract-symbolic-proofs flag, or a
-   control object that forces analysis (analyzed_X, proven_X).  With only
-   the older -fcontract-*-proofs-gimple flags, those flags themselves
-   turn them on.  */
+   control object that forces analysis (analyzed_X, proven_X).  With the
+   older -fcontract-*-proofs-gimple flags -- alone, or given explicitly
+   with the engine option, which otherwise only implies them -- those
+   flags themselves turn them on.  */
 
 static bool
 cg_proof_checks_p (tree contract, tree callee, bool conveyor)
 {
   if (flag_contract_analysis_engine == 0)
+    return true;
+  if (conveyor
+      ? OPTION_SET_P (flag_contract_conveyor_proofs_gimple)
+	&& flag_contract_conveyor_proofs_gimple
+      : OPTION_SET_P (flag_contract_symbolic_proofs_gimple)
+	&& flag_contract_symbolic_proofs_gimple)
     return true;
   bool never_proven, conveyor_forced, conveyor_strict, symbolic_forced,
     symbolic_strict;
