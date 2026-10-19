@@ -626,6 +626,17 @@ extern bool oa_match_shifted_comparison_against_call
    bool *param_is_minuend_out = nullptr,
    oa_unprovable_reason *reason_out = nullptr);
 
+/* oa_match_shifted_comparison_against_call for contract text the GIMPLE
+   engine reads.  As a requirement a call is checked against, a fact in
+   the mathematical sense ('idx > v.size () + 10') implies it whether or
+   not the subtraction wraps; trusted as a fact, it holds in that sense
+   only if the subtraction can't wrap -- its type
+   (*ARITHMETIC_TYPE_OUT) must have undefined overflow.  */
+extern bool oa_match_shifted_comparison_against_call_text
+  (tree conjunct, tree *param_out, tree_code *code_out,
+   tree *rhs_receiver_out, tree *rhs_callee_out, widest_int *offset_out,
+   bool allow_symbolic_accessor, tree *arithmetic_type_out = nullptr);
+
 /* True if every value FROM_TYPE can represent converts to TO_TYPE
    without changing its mathematical value (e.g. safe for 'unsigned' ->
    wider 'long', unsafe for 'int' -> same-or-wider unsigned, which can
