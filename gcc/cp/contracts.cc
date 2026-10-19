@@ -23448,6 +23448,66 @@ static auto_vec<tree> *oa_postcondition_result_ids;
    in OA_IILE_OUTER_ENV for the duration, consulted by oa_provable_p
    whenever the closure body reads a by-reference capture-proxy.  */
 
+/* Whether BODY, an immediately invoked lambda's, may change a variable
+   it captures by reference: an assignment or increment through a
+   capture proxy, or one passed on by reference or by address.  The
+   caller's facts about the variable then don't hold for what the body
+   reads of it (oa_iile_outer_env).  */
+
+static bool
+oa_capture_proxy_operand_p (tree t)
+{
+  while (t && (CONVERT_EXPR_P (t) || TREE_CODE (t) == NON_LVALUE_EXPR
+	       || TREE_CODE (t) == VIEW_CONVERT_EXPR))
+    t = TREE_OPERAND (t, 0);
+  if (t && REFERENCE_REF_P (t))
+    t = TREE_OPERAND (t, 0);
+  return t && VAR_P (t) && is_capture_proxy (t);
+}
+
+static bool
+oa_iile_body_writes_capture_p (tree body)
+{
+  return cp_walk_tree_without_duplicates (&body, [](tree *tp, int *walk_subtrees,
+						    void *) -> tree
+    {
+      auto is_proxy = oa_capture_proxy_operand_p;
+      tree t = *tp;
+      switch (TREE_CODE (t))
+	{
+	case LAMBDA_EXPR:
+	  *walk_subtrees = 0;
+	  return NULL_TREE;
+	case MODIFY_EXPR:
+	case INIT_EXPR:
+	case PREINCREMENT_EXPR:
+	case POSTINCREMENT_EXPR:
+	case PREDECREMENT_EXPR:
+	case POSTDECREMENT_EXPR:
+	  return is_proxy (TREE_OPERAND (t, 0)) ? t : NULL_TREE;
+	case CALL_EXPR:
+	case AGGR_INIT_EXPR:
+	  {
+	    int n = (TREE_CODE (t) == CALL_EXPR ? call_expr_nargs (t)
+		     : aggr_init_expr_nargs (t));
+	    for (int i = 0; i < n; ++i)
+	      {
+		tree a = (TREE_CODE (t) == CALL_EXPR ? CALL_EXPR_ARG (t, i)
+			  : AGGR_INIT_EXPR_ARG (t, i));
+		STRIP_NOPS (a);
+		if (TREE_CODE (a) == ADDR_EXPR && is_proxy (TREE_OPERAND (a, 0)))
+		  return t;
+		if (TYPE_REF_P (TREE_TYPE (a)) && is_proxy (a))
+		  return t;
+	      }
+	    return NULL_TREE;
+	  }
+	default:
+	  return NULL_TREE;
+	}
+    }, NULL) != NULL_TREE;
+}
+
 static bool
 oa_resolve_iile_call (tree call, oa_env &env)
 {
@@ -23486,7 +23546,13 @@ oa_resolve_iile_call (tree call, oa_env &env)
   oa_postcondition_merge_any_result = false;
   oa_postcondition_result_ids = NULL;
 
-  oa_iile_outer_env = &env;
+  /* Knowing nothing of the captures if the body may change one.  */
+  oa_env no_outer_facts;
+  no_outer_facts.set_field_object_key_cache (env.field_object_key_cache ());
+  no_outer_facts.set_array_object_key_cache (env.array_object_key_cache ());
+  no_outer_facts.set_capture_proxy_key_cache (env.capture_proxy_key_cache ());
+  oa_iile_outer_env = (oa_iile_body_writes_capture_p (body)
+		       ? &no_outer_facts : &env);
   oa_return_tracking = true;
   oa_return_all_provable = false;
   oa_return_seen = false;
@@ -23547,7 +23613,13 @@ oa_resolve_iile_range (tree call, oa_env &env, oa_range_fact *out)
   oa_postcondition_merge_any_result = false;
   oa_postcondition_result_ids = NULL;
 
-  oa_iile_outer_env = &env;
+  /* Knowing nothing of the captures if the body may change one.  */
+  oa_env no_outer_facts;
+  no_outer_facts.set_field_object_key_cache (env.field_object_key_cache ());
+  no_outer_facts.set_array_object_key_cache (env.array_object_key_cache ());
+  no_outer_facts.set_capture_proxy_key_cache (env.capture_proxy_key_cache ());
+  oa_iile_outer_env = (oa_iile_body_writes_capture_p (body)
+		       ? &no_outer_facts : &env);
   oa_return_range_tracking = true;
   oa_return_range_has_fact = false;
   oa_return_range_seen = false;
