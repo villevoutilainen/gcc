@@ -863,9 +863,9 @@
 
 #if !defined(__cpp_lib_string_view)
 # if (__cplusplus >  202302L) && _GLIBCXX_HOSTED
-#  define __glibcxx_string_view 202403L
+#  define __glibcxx_string_view 202610L
 #  if defined(__glibcxx_want_all) || defined(__glibcxx_want_string_view)
-#   define __cpp_lib_string_view 202403L
+#   define __cpp_lib_string_view 202610L
 #  endif
 # elif (__cplusplus >= 201703L) && _GLIBCXX_HOSTED
 #  define __glibcxx_string_view 201803L
@@ -1232,9 +1232,9 @@
 
 #if !defined(__cpp_lib_span)
 # if (__cplusplus >  202302L) && (__glibcxx_concepts)
-#  define __glibcxx_span 202311L
+#  define __glibcxx_span 202610L
 #  if defined(__glibcxx_want_all) || defined(__glibcxx_want_span)
-#   define __cpp_lib_span 202311L
+#   define __cpp_lib_span 202610L
 #  endif
 # elif (__cplusplus >= 202002L) && (__glibcxx_concepts)
 #  define __glibcxx_span 202002L
@@ -2661,9 +2661,9 @@
 
 #if !defined(__cpp_lib_define_static)
 # if (__cplusplus >  202302L) && _GLIBCXX_USE_CXX11_ABI && (__cpp_impl_reflection >= 202506L)
-#  define __glibcxx_define_static 202506L
+#  define __glibcxx_define_static 202610L
 #  if defined(__glibcxx_want_all) || defined(__glibcxx_want_define_static)
-#   define __cpp_lib_define_static 202506L
+#   define __cpp_lib_define_static 202610L
 #  endif
 # endif
 #endif /* !defined(__cpp_lib_define_static) */

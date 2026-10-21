@@ -756,7 +756,7 @@ ftms = {
 ftms = {
   name = string_view;
   values = {
-    v = 202403;
+    v = 202610;
     cxxmin = 26;
     hosted = yes;
   };
@@ -1083,7 +1083,7 @@ ftms = {
 ftms = {
   name = span;
   values = {
-    v = 202311;
+    v = 202610;
     cxxmin = 26;
     extra_cond = "__glibcxx_concepts";
   };
@@ -2380,7 +2380,7 @@ ftms = {
 ftms = {
   name = define_static;
   values = {
-    v = 202506;
+    v = 202610;
     cxxmin = 26;
     extra_cond = "__cpp_impl_reflection >= 202506L";
     cxx11abi = yes;

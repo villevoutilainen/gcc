@@ -12,6 +12,6 @@
 
 #ifndef __cpp_lib_define_static
 #  error "__cpp_lib_define_static"
-#elif __cpp_lib_define_static != 202506
-#  error "__cpp_lib_define_static != 202506"
+#elif __cpp_lib_define_static != 202610
+#  error "__cpp_lib_define_static != 202610"
 #endif
