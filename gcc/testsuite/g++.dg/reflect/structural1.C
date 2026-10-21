@@ -63,8 +63,8 @@ constexpr int use_outer () { return O.get (); }
 static_assert (use_outer <Outer (7)> () == 7);
 
 // A structural-marked class whose own member is NOT itself structural
-// must still be rejected -- the recursive check isn't bypassed by the
-// outer class's own exemption.
+// is ill-formed -- the recursive check isn't bypassed by the outer
+// class's own exemption.
 struct PlainInner
 {
   int v;
@@ -73,7 +73,7 @@ private:
 public:
   constexpr PlainInner (int x) : v (x) {}
 };
-class Outer2 structural
+class Outer2 structural // { dg-error "marked .structural. but is not a structural type" }
 {
   PlainInner inner;
 public:
@@ -120,8 +120,8 @@ template <PrivateDerived D>
 constexpr int use_private_derived () { return D.get_bx () + D.get_dy (); }
 static_assert (use_private_derived <PrivateDerived (3, 4)> () == 7);
 
-// Negative control: an unmarked base with private data must still
-// disqualify a structural-marked derived class -- the recursive check
+// Negative control: an unmarked base with private data makes a
+// structural-marked derived class ill-formed -- the recursive check
 // through the base's own type is unconditional, just like for members.
 class UnmarkedBase
 {
@@ -129,7 +129,7 @@ class UnmarkedBase
 public:
   constexpr UnmarkedBase (int x) : bx (x) {}
 };
-class DerivedFromUnmarked structural : public UnmarkedBase
+class DerivedFromUnmarked structural : public UnmarkedBase // { dg-error "marked .structural. but is not a structural type" }
 {
   int dy;
 public:
@@ -161,6 +161,31 @@ static_assert (std::meta::is_structural_type (^^Box<int>));
 template <Box<int> B>
 constexpr int use_box () { return B.get (); }
 static_assert (use_box <Box<int> (99)> () == 99);
+
+// Every requirement other than public access still applies: a mutable
+// member, or a non-literal class, makes the definition ill-formed.
+class Mut structural // { dg-error "marked .structural. but is not a structural type" }
+{
+  mutable int m;
+public:
+  constexpr Mut () : m (0) {}
+};
+struct NonLit { NonLit (); ~NonLit (); };
+class HasNonLit structural // { dg-error "marked .structural. but is not a structural type" }
+{
+  NonLit n;
+};
+
+// For a class template, each instantiation is checked.
+template <typename T>
+class Box2 structural // { dg-error "marked .structural. but is not a structural type" }
+{
+  T value;
+public:
+  constexpr Box2 (T v) : value (v) {}
+};
+Box2<int> b2i (1);
+Box2<PlainInner> b2p (PlainInner (1));	// { dg-message "required from here" }
 
 // Rejected on a union.
 union U structural // { dg-error "structural. not permitted on a union" }

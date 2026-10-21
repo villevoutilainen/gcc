@@ -5445,7 +5445,11 @@ structural_type_p (tree t, bool explain)
 	{
 	  if (explain)
 	    {
-	      inform (location_of (m), "%qD has a non-structural type", m);
+	      if (DECL_FIELD_IS_BASE (m))
+		inform (location_of (m), "base class %qT has a non-structural "
+			"type", TREE_TYPE (m));
+	      else
+		inform (location_of (m), "%qD has a non-structural type", m);
 	      structural_type_p (mtype, true);
 	    }
 	  return false;

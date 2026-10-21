@@ -8237,6 +8237,19 @@ finish_struct_1 (tree t)
 	  TYPE_TRANSPARENT_AGGR (t) = 0;
 	}
     }
+
+  /* A class marked with the class-property-specifier "structural" must
+     meet every requirement of a structural type other than the public
+     access of its bases and non-static data members ([temp.param]);
+     otherwise the definition is ill-formed.  For a class template this
+     is checked for each instantiation.  */
+  if (CLASSTYPE_STRUCTURAL (t) && !structural_type_p (t))
+    {
+      auto_diagnostic_group d;
+      error_at (location_of (t), "%q#T is marked %<structural%> but is not "
+		"a structural type", t);
+      structural_type_p (t, /*explain=*/true);
+    }
 }
 
 /* When T was built up, the member declarations were added in reverse
