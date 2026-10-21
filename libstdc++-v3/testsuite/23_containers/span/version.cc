@@ -24,7 +24,7 @@
 # error "Feature-test macro for span missing in <span>"
 #elif __cplusplus <= 202302L && __cpp_lib_span != 202002L
 # error "Feature-test macro for span has wrong value in <span>"
-#elif __cplusplus > 202302L && __cpp_lib_span != 202311L
+#elif __cplusplus > 202302L && __cpp_lib_span != 202610L
 # error "Feature-test macro for span has wrong value in <span>"
 #endif
 
@@ -35,6 +35,6 @@
 # error "Feature-test macro for span missing in <version>"
 #elif __cplusplus <= 202302L && __cpp_lib_span != 202002L
 # error "Feature-test macro for span has wrong value in <version>"
-#elif __cplusplus > 202302L && __cpp_lib_span != 202311L
+#elif __cplusplus > 202302L && __cpp_lib_span != 202610L
 # error "Feature-test macro for span has wrong value in <version>"
 #endif
