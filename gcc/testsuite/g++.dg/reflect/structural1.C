@@ -187,11 +187,30 @@ public:
 Box2<int> b2i (1);
 Box2<PlainInner> b2p (PlainInner (1));	// { dg-message "required from here" }
 
-// Rejected on a union.
-union U structural // { dg-error "structural. not permitted on a union" }
+// Unions: a union with private members can be marked structural too, and
+// template-argument-equivalence still goes by the active member.
+union U structural
 {
   int a;
   float b;
+public:
+  constexpr U (int x) : a (x) {}
+  constexpr U (float x) : b (x) {}
+  constexpr int get_a () const { return a; }
+};
+static_assert (std::meta::is_structural_type (^^U));
+template <U V>
+constexpr int use_union () { return V.get_a (); }
+static_assert (use_union <U (5)> () == 5);
+template <U V> struct UHolder {};
+static_assert (!std::is_same_v<UHolder<U (1)>, UHolder<U (1.0f)>>);
+static_assert (std::is_same_v<UHolder<U (1)>, UHolder<U (1)>>);
+
+// ...and the other requirements still apply to it.
+union BadU structural // { dg-error "marked .structural. but is not a structural type" }
+{
+  PlainInner p;
+  int i;
 };
 
 // Duplicate specifier diagnosed, same as "final".
