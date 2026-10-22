@@ -35,7 +35,7 @@ int use_checked (S& s) conveyor
 
 int use_unchecked (S& s) conveyor
 {
-  return s.get (); // { dg-warning "cannot verify that .int S::size\\(\\) const. called on .s." }
+  return s.get (); // { dg-error "cannot prove that .int S::size\\(\\) const. called on .s." }
 }
 
 int main () { S s; return use_checked (s) + use_unchecked (s); }

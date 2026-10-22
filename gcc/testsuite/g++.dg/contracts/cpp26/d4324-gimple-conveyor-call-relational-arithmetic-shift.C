@@ -26,7 +26,7 @@ struct S {
 int use_unsound (S& v, int i) conveyor pre<conveyor_ctrl_v>(i < v.size () && i > 0)
 {
   int j = i + 1;
-  return v.get (j); // { dg-warning "cannot verify that .j. satisfies" }
+  return v.get (j); // { dg-error "cannot prove that .j. satisfies" }
 }
 
 int use_sound (S& v, int i) conveyor pre<conveyor_ctrl_v>(i < v.size () && i > 0)

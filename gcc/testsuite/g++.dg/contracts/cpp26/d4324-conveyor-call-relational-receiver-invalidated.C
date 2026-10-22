@@ -39,7 +39,7 @@ int field_write (int x, S& v) conveyor pre<sc::conveyor_assert_v> (x < v.size ()
 int by_reference (int x, S& v) conveyor pre<sc::conveyor_assert_v> (x < v.size ())
 {
   reset (v);
-  return consume (x, v); // { dg-warning "cannot verify that .x. satisfies the precondition" }
+  return consume (x, v); // { dg-error "cannot prove that .x. satisfies the precondition" }
 }
 int member_call (int x, S& v) conveyor pre<sc::conveyor_assert_v> (x < v.size ())
 {

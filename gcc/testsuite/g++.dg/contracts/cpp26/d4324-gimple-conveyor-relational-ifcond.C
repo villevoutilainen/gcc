@@ -38,7 +38,7 @@ int use_checked_param (int x, int q) conveyor
 
 int use_unchecked_param (int x, int q) conveyor
 {
-  return check_param (x, q); // { dg-warning "cannot verify that .x. satisfies" }
+  return check_param (x, q); // { dg-error "cannot prove that .x. satisfies" }
 }
 
 struct S {
@@ -60,7 +60,7 @@ int use_checked_call (const S& v, int i) conveyor
 
 int use_unchecked_call (const S& v, int i) conveyor
 {
-  return get_checked (v, i); // { dg-warning "cannot verify that .i. satisfies" }
+  return get_checked (v, i); // { dg-error "cannot prove that .i. satisfies" }
 }
 
 int main ()

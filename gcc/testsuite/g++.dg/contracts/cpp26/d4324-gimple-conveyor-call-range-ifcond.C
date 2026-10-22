@@ -47,12 +47,12 @@ int checked_call (S& s) conveyor
 
 int unchecked_field (S& s) conveyor
 {
-  return s.get_field (); // { dg-warning "cannot verify that field .S::count." }
+  return s.get_field (); // { dg-error "cannot prove that field .S::count." }
 }
 
 int unchecked_call (S& s) conveyor
 {
-  return s.get_call (); // { dg-warning "cannot verify that .int S::size\\(\\) const." }
+  return s.get_call (); // { dg-error "cannot prove that .int S::size\\(\\) const." }
 }
 
 int main ()
