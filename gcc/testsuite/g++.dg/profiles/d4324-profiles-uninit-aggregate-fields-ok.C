@@ -1,9 +1,7 @@
-// P4222 Initialization profile, Phase 4f: an [[uninit]]-marked local
-// aggregate can genuinely be filled in field-by-field (in whichever
-// order, across however many statements) before being read -- real
-// per-FIELD CFG-dominance-based DAA (ip_check_local_aggregate_member,
-// init-profile-gimple.cc), not the unconditional "member-level access
-// is not yet analyzed" decline this exact shape used to get.
+// P4222 Initialization profile: once an [[uninit]] local aggregate has
+// been initialized as a whole, its fields can be written individually and
+// read.  (Filling it in field by field without that is rejected; see
+// d4324-profiles-uninit-aggregate-whole-object-bad.C.)
 // { dg-do compile { target c++11 } }
 
 [[profiles::enforce(std::init)]];
@@ -16,6 +14,7 @@ struct P {
 void f ()
 {
   [[uninit]] P p;
+  p = {};		// initialize the whole object first
   p.x = 1;
   p.y = 2;
   int z = p.x + p.y;

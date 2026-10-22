@@ -13,6 +13,6 @@ struct P {
 int f ()
 {
   [[uninit]] P p;
-  p.x = 1;
+  p.x = 1;		// { dg-error "is written before .p. is initialized as a whole" }
   return p.y; // { dg-error "read before it is definitely assigned" }
 }

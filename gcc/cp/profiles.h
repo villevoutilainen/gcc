@@ -86,6 +86,11 @@ extern bool profiles_warned_p (const char *);
    site's.  */
 extern bool profiles_active_p (const char *);
 
+/* std::init: source-level assignments to a subobject, recorded during
+   gimplification (cp-gimplify.cc).  */
+extern bool profiles_subobject_write_lhs_p (tree);
+extern void profiles_forget_subobject_write_lhs (tree);
+
 /* Report a profile violation, replacing a bare error_at(...) call at
    every one of this project's own diagnostic sites: emits GMSGID (a
    printf/GCC-diagnostic-style format string, exactly as error_at/
