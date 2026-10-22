@@ -5421,8 +5421,15 @@ structural_type_p (tree t, bool explain)
       /* A class declared with the C++26 "structural" class-head keyword
 	 (CLASSTYPE_STRUCTURAL) opts its own direct bases/members out of
 	 the public-only requirement -- but each one's own type must still,
-	 recursively, be structural (checked below, unconditionally).  */
-      if (!CLASSTYPE_STRUCTURAL (t) && (TREE_PRIVATE (m) || TREE_PROTECTED (m)))
+	 recursively, be structural (checked below, unconditionally).
+
+	 The members of an anonymous union or struct are public members of
+	 it ([class.union.anon]); GCC marks them private or protected only
+	 to give them the access of the anonymous member in the enclosing
+	 class, and that access is checked on the enclosing class's own
+	 member instead.  */
+      if (!CLASSTYPE_STRUCTURAL (t) && !ANON_AGGR_TYPE_P (t)
+	  && (TREE_PRIVATE (m) || TREE_PROTECTED (m)))
 	{
 	  if (explain)
 	    {
