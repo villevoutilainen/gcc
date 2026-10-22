@@ -689,6 +689,101 @@ cg_resolve_copy_construction_receiver (gcall *call, tree arg)
   return arg;
 }
 
+/* Whether statement A dominates statement B: A comes first in B's block,
+   or A's block dominates B's.  */
+
+static bool
+cg_stmt_dominates_p (gimple *a, gimple *b)
+{
+  basic_block ba = gimple_bb (a), bb = gimple_bb (b);
+  if (!ba || !bb)
+    return false;
+  if (ba == bb)
+    {
+      for (gimple_stmt_iterator gsi = gsi_for_stmt (a); !gsi_end_p (gsi);
+	   gsi_next (&gsi))
+	if (gsi_stmt (gsi) == b)
+	  return true;
+      return false;
+    }
+  return (dom_info_available_p (CDI_DOMINATORS)
+	  && dominated_by_p (CDI_DOMINATORS, bb, ba));
+}
+
+/* The value scalar variable DECL, an address-taken local or parameter
+   that therefore lives in memory, holds just before statement AT: an
+   SSA name or constant, or NULL_TREE if unknown.  A load of DECL in the
+   same memory state that dominates AT gives it -- so do the facts a
+   branch established on that load ('if (y < 50)').  Otherwise the
+   store that state comes from does, found by walking back through
+   statements that can't modify DECL.  */
+
+static tree
+cg_memory_value_at (tree decl, gimple *at)
+{
+  if (!(VAR_P (decl) || TREE_CODE (decl) == PARM_DECL)
+      || !(INTEGRAL_TYPE_P (TREE_TYPE (decl))
+	   || SCALAR_FLOAT_TYPE_P (TREE_TYPE (decl))
+	   || POINTER_TYPE_P (TREE_TYPE (decl))))
+    return NULL_TREE;
+  tree vuse = gimple_vuse (at);
+  if (!vuse)
+    return NULL_TREE;
+
+  imm_use_iterator it;
+  use_operand_p use_p;
+  FOR_EACH_IMM_USE_FAST (use_p, it, vuse)
+    {
+      gimple *u = USE_STMT (use_p);
+      if (u != at && gimple_assign_single_p (u)
+	  && gimple_assign_rhs1 (u) == decl
+	  && TREE_CODE (gimple_assign_lhs (u)) == SSA_NAME
+	  && cg_stmt_dominates_p (u, at))
+	return gimple_assign_lhs (u);
+    }
+
+  ao_ref ref;
+  ao_ref_init (&ref, decl);
+  for (int steps = 0; steps < 64 && vuse; ++steps)
+    {
+      gimple *d = SSA_NAME_DEF_STMT (vuse);
+      if (!d || gimple_nop_p (d) || is_a <gphi *> (d))
+	return NULL_TREE;
+      if (gimple_assign_single_p (d)
+	  && operand_equal_p (gimple_assign_lhs (d), decl, 0))
+	{
+	  if (gimple_clobber_p (d))
+	    return NULL_TREE;
+	  tree rhs = gimple_assign_rhs1 (d);
+	  return (TREE_CODE (rhs) == SSA_NAME || CONSTANT_CLASS_P (rhs)
+		  ? rhs : NULL_TREE);
+	}
+      if (stmt_may_clobber_ref_p_1 (d, &ref, false))
+	return NULL_TREE;
+      vuse = gimple_vuse (d);
+    }
+  return NULL_TREE;
+}
+
+/* If VAL is an SSA name loaded from a scalar variable in memory, the
+   value that variable held at the load (cg_memory_value_at); else
+   NULL_TREE.  */
+
+static tree
+cg_forwarded_load_value (tree val)
+{
+  if (TREE_CODE (val) != SSA_NAME)
+    return NULL_TREE;
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (!def || !gimple_assign_single_p (def) || !gimple_vuse (def))
+    return NULL_TREE;
+  tree rhs = gimple_assign_rhs1 (def);
+  if (!VAR_P (rhs) && TREE_CODE (rhs) != PARM_DECL)
+    return NULL_TREE;
+  tree v = cg_memory_value_at (rhs, def);
+  return v != val ? v : NULL_TREE;
+}
+
 /* CALL's own ARGNO-th actual argument, resolved through both a
    conversion-operator call (cg_resolve_conversion_receiver) and a
    copy/move-constructor materialization (cg_resolve_copy_construction_
@@ -706,6 +801,32 @@ cg_resolve_call_argument (gcall *call, unsigned argno)
   tree arg = gimple_call_arg (call, argno);
   arg = cg_resolve_copy_construction_receiver (call, arg);
   arg = cg_resolve_conversion_receiver (arg);
+  return arg;
+}
+
+/* As cg_resolve_call_argument, for a value obligation ('pre (x < 100)',
+   'pre (x != 0)'): a reference-to-scalar parameter names the object it's
+   bound to, so its argument, that object's address ('&local'), stands
+   for the object's value at CALL (cg_memory_value_at).  A class-typed
+   reference keeps its identity, which field facts are keyed on, and an
+   is_object_address obligation needs the address itself.  */
+
+static tree
+cg_resolve_value_argument (gcall *call, unsigned argno)
+{
+  tree arg = cg_resolve_call_argument (call, argno);
+  if (TREE_CODE (arg) == ADDR_EXPR)
+    if (tree callee = gimple_call_fndecl (call))
+      {
+	tree parm = DECL_ARGUMENTS (callee);
+	for (unsigned i = 0; parm && i < argno; ++i)
+	  parm = DECL_CHAIN (parm);
+	tree obj = TREE_OPERAND (arg, 0);
+	if (parm && TYPE_REF_P (TREE_TYPE (parm))
+	    && (VAR_P (obj) || TREE_CODE (obj) == PARM_DECL))
+	  if (tree v = cg_memory_value_at (obj, call))
+	    return v;
+      }
   return arg;
 }
 
@@ -1222,6 +1343,12 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
 				       scalar_range_cache, ranger, require_conveyor,
 				       require_symbolic, out, at_stmt))
 	return true;
+      /* A load from a variable in memory: what was stored there.  */
+      if (tree v = cg_forwarded_load_value (val))
+	if (cg_established_range_of (v, established_range, scalar_range_cache,
+				     ranger, require_conveyor, require_symbolic,
+				     out, at_stmt))
+	  return true;
     }
   /* Also known, besides the ranger's: a join's union, a loop
      counter's bound, an earlier load's range.  */
@@ -2187,6 +2314,21 @@ cg_provable_nonzero_p (tree val, hash_map<tree, cg_fact> &established_nz,
 
   if (TREE_CODE (val) == INTEGER_CST)
     return !integer_zerop (val);
+
+  /* The address of an object, and 'this', are never null.  */
+  if (TREE_CODE (val) == ADDR_EXPR)
+    {
+      tree base = get_base_address (TREE_OPERAND (val, 0));
+      if (base && DECL_P (base))
+	return true;
+    }
+  if (TREE_CODE (val) == SSA_NAME && SSA_NAME_IS_DEFAULT_DEF (val)
+      && SSA_NAME_VAR (val) && is_this_parameter (SSA_NAME_VAR (val)))
+    return true;
+  if (tree v = cg_forwarded_load_value (val))
+    if (cg_provable_nonzero_p (v, established_nz, require_conveyor,
+			       in_progress))
+      return true;
 
   /* A decl-keyed fact -- see cg_established_range_of's own identical
      comment just above.  */
@@ -3556,6 +3698,10 @@ cg_excludes_zero_at_p (tree val, gimple *stmt, gimple_ranger *ranger,
 {
   if (val == NULL_TREE || !INTEGRAL_TYPE_P (TREE_TYPE (val)))
     return false;
+  /* A load from a variable in memory: what was stored there.  */
+  if (tree v = cg_forwarded_load_value (val))
+    if (cg_excludes_zero_at_p (v, stmt, ranger, require_conveyor))
+      return true;
   if (TREE_CODE (val) == SSA_NAME)
     {
       /* Through plain copies (a call result typically reaches its use
@@ -3636,6 +3782,44 @@ cg_provably_nonzero_for_ub_p (tree val, gimple *stmt,
 	return true;
     }
   return false;
+}
+
+/* Set while analyzing conveyor code -- a conveyor function's body, or a
+   conveyor contract's predicate core: a call
+   from it to a conveyor callee must establish the callee's own
+   preconditions, as a mandatory error rather than a proof warning, and
+   regardless of -fcontract-conveyor-proofs.  The callee's body is only
+   verified free of undefined behavior assuming its preconditions hold.
+   The AST engine's oa_callee_pre_mandatory.  */
+
+static bool cg_callee_pre_mandatory;
+
+/* Set while analyzing a never_proven_conveyor contract's predicate core
+   for CG_CALLEE_PRE_MANDATORY's obligations alone: such a predicate is
+   otherwise exempt from the conveyor checks (cg_predicate_item8_p), but
+   a call it makes still mustn't break its conveyor callee's
+   preconditions.  Its is_object_address obligations stay exempt, as the
+   AST engine's oa_item8_callee_pre_only.  */
+
+static bool cg_callee_pre_only;
+
+/* error_at for a call's precondition obligation.  A mandatory one in a
+   conveyor(auto) specialization being deduced only means it isn't
+   conveyor: record it instead, as cg_conveyor_error_at does.  */
+
+static void ATTRIBUTE_GCC_DIAG (2,3)
+cg_obligation_error_at (location_t loc, const char *gmsgid, ...)
+	       {
+		 if (cg_callee_pre_mandatory
+		     && conveyor_auto_note_violation_in (cfun ? cfun->decl
+							 : current_function_decl))
+		   return;
+  auto_diagnostic_group d;
+  va_list ap;
+  va_start (ap, gmsgid);
+  emit_diagnostic_valist (diagnostics::kind::error, loc,
+			  diagnostics::option_id (), gmsgid, &ap);
+  va_end (ap);
 }
 
 /* error_at for a violation of the conveyor rules found in the body of the
@@ -4899,8 +5083,16 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
-      bool check_as_conveyor = conveyor_active && flag_contract_conveyor_proofs_gimple;
-      bool check_as_symbolic = symbolic_active && flag_contract_symbolic_proofs_gimple;
+      /* See cg_callee_pre_mandatory.  */
+      bool mandatory = (cg_callee_pre_mandatory && conveyor_active
+			&& DECL_DECLARED_CONVEYOR_P (callee));
+      if (cg_callee_pre_only && !mandatory)
+	continue;
+      bool check_as_conveyor = (mandatory
+				|| (conveyor_active
+				    && flag_contract_conveyor_proofs_gimple));
+      bool check_as_symbolic = (!cg_callee_pre_only && symbolic_active
+				&& flag_contract_symbolic_proofs_gimple);
       if (!check_as_conveyor && !check_as_symbolic)
 	continue;
       /* A contract enabled for both flavors at once is checked as
@@ -4917,18 +5109,21 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	 result is escalated from a warning to a hard error. Computed per-
 	 CONTRACT here (unlike the built-in engine's own OR-across-all-of-
 	 the-callee's-preconditions scope), which is at least as precise.  */
-      bool strict = (check_as_conveyor
-		     && oa_contract_conveyor_strict_cached_p (contract))
+      bool strict = mandatory
+		    || (check_as_conveyor
+			&& oa_contract_conveyor_strict_cached_p (contract))
 		    || (check_as_symbolic
 			&& oa_contract_symbolic_strict_cached_p (contract));
       /* Under -fcontract-analysis-engine=, a conveyor precondition's
 	 is_object_address conjunct is a mandatory obligation, as in the
-	 AST engine (oa_handle_call_precondition_obligation); everything
-	 else here is a proof check (cg_proof_checks_p).  */
+	 AST engine (oa_handle_call_precondition_obligation) -- except in a
+	 never-proven predicate (cg_callee_pre_only).  Everything else here
+	 is a proof check (cg_proof_checks_p), unless MANDATORY.  */
       bool mandatory_oa = (flag_contract_analysis_engine != 0
-			   && check_as_conveyor);
-      bool proofs = ((check_as_conveyor
-		      && cg_proof_checks_p (contract, callee, true))
+			   && check_as_conveyor && !cg_callee_pre_only);
+      bool proofs = (mandatory
+		     || (check_as_conveyor
+			 && cg_proof_checks_p (contract, callee, true))
 		     || (check_as_symbolic
 			 && cg_proof_checks_p (contract, callee, false)));
 
@@ -4951,6 +5146,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	    is_oa = false;
 	  else
 	    continue;
+	  if (is_oa && cg_callee_pre_only)
+	    continue;
 	  if (!proofs && !(is_oa && mandatory_oa))
 	    continue;
 
@@ -4972,7 +5169,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      || argno >= gimple_call_num_args (call))
 	    continue;
 
-	  tree substituted = cg_resolve_call_argument (call, argno);
+	  tree substituted = (is_oa ? cg_resolve_call_argument (call, argno)
+			      : cg_resolve_value_argument (call, argno));
 	  /* Not through a conversion operator: the pointer it returns
 	     (its postcondition says what it is), not the object it is
 	     called on.  */
@@ -4995,10 +5193,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 				      cg_display_argument (substituted, arg),
 				      callee);
 	      else if (strict)
-		error_at (gimple_location (call),
-			  "cannot prove %<is_object_address%> for %qE, as "
-			  "required by the precondition of %qD",
-			  substituted, callee);
+		cg_obligation_error_at (gimple_location (call),
+					 "cannot prove %<is_object_address%> for %qE, as "
+					 "required by the precondition of %qD",
+					 substituted, callee);
 	      else
 		warning_at (gimple_location (call), 0,
 			    "cannot verify %<is_object_address%> for %qE, as "
@@ -5021,9 +5219,9 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		{
 		  if (!integer_zerop (stripped_nz))
 		    continue; /* Proven true: silently discharged.  */
-		  error_at (gimple_location (call),
-			    "argument %qE provably violates the "
-			    "precondition of %qD", substituted, callee);
+		  cg_obligation_error_at (gimple_location (call),
+					   "argument %qE provably violates the "
+					   "precondition of %qD", substituted, callee);
 		  inform (gimple_location (call),
 			  "%qE is established to be exactly zero, but the "
 			  "precondition requires it to be nonzero",
@@ -5066,9 +5264,9 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		    }
 		}
 	      if (strict)
-		error_at (gimple_location (call),
-			  "cannot prove that %qE is nonzero, as required by "
-			  "the precondition of %qD", substituted, callee);
+		cg_obligation_error_at (gimple_location (call),
+					 "cannot prove that %qE is nonzero, as required by "
+					 "the precondition of %qD", substituted, callee);
 	      else
 		warning_at (gimple_location (call), 0,
 			    "cannot verify that %qE is nonzero, as required by "
@@ -5121,7 +5319,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  if (!cg_find_param_position (callee, parm, &argno)
 	      || argno >= gimple_call_num_args (call))
 	    continue;
-	  tree arg = cg_resolve_call_argument (call, argno);
+	  tree arg = cg_resolve_value_argument (call, argno);
 	  if (!SCALAR_FLOAT_TYPE_P (TREE_TYPE (arg)))
 	    continue;
 	  frange have (TREE_TYPE (arg));
@@ -5145,9 +5343,9 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  if (v == CG_VERDICT_FALSE)
 	    {
 	      char have_text[96], need_text[96];
-	      error_at (gimple_location (call),
-			"argument %qE provably violates the precondition of %qD",
-			cg_display_value (arg), callee);
+	      cg_obligation_error_at (gimple_location (call),
+				       "argument %qE provably violates the precondition of %qD",
+				       cg_display_value (arg), callee);
 	      inform (gimple_location (call),
 		      "%qE is established %s, but the precondition requires "
 		      "it %s", cg_display_value (arg),
@@ -5156,9 +5354,9 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      continue;
 	    }
 	  if (strict)
-	    error_at (gimple_location (call),
-		      "cannot prove that %qE satisfies the precondition of %qD",
-		      cg_display_value (arg), callee);
+	    cg_obligation_error_at (gimple_location (call),
+				     "cannot prove that %qE satisfies the precondition of %qD",
+				     cg_display_value (arg), callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qE satisfies the precondition of "
@@ -5182,8 +5380,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      || other_argno >= gimple_call_num_args (call))
 	    continue;
 
-	  tree sub_param = cg_resolve_call_argument (call, param_argno);
-	  tree sub_other = cg_resolve_call_argument (call, other_argno);
+	  tree sub_param = cg_resolve_value_argument (call, param_argno);
+	  tree sub_other = cg_resolve_value_argument (call, other_argno);
 
 	  /* Both sides are ordinary compile-time literals at this call
 	     site -- plain constant folding, not resolving any
@@ -5199,9 +5397,9 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		 from an (inconsistent) warning_at to match this loop's own
 		 OA_RANGE_DISJOINT sibling case below, and contracts.cc's own
 		 error_at for the identical shape.  */
-	      error_at (gimple_location (call),
-			"argument %qE provably violates the precondition "
-			"of %qD", cg_display_value (sub_param), callee);
+	      cg_obligation_error_at (gimple_location (call),
+				       "argument %qE provably violates the precondition "
+				       "of %qD", cg_display_value (sub_param), callee);
 	      inform (gimple_location (call),
 		      "%qE is established exactly %wd, but the precondition "
 		      "requires it to be %s %qE", cg_display_value (sub_param),
@@ -5274,9 +5472,9 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		    char established_buf[128];
 		    cg_range_lite_text (param_range, established_buf,
 					 sizeof (established_buf));
-		    error_at (gimple_location (call),
-			      "argument %qE provably violates the "
-			      "precondition of %qD", cg_display_value (sub_param), callee);
+		    cg_obligation_error_at (gimple_location (call),
+					     "argument %qE provably violates the "
+					     "precondition of %qD", cg_display_value (sub_param), callee);
 		    inform (gimple_location (call),
 			    "%qE is established %s, but the precondition "
 			    "requires it to be %s %qE", cg_display_value (sub_param),
@@ -5300,9 +5498,9 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	    continue;
 
 	  if (strict)
-	    error_at (gimple_location (call),
-		      "cannot prove that %qE satisfies the "
-		      "precondition of %qD", cg_display_value (sub_param), callee);
+	    cg_obligation_error_at (gimple_location (call),
+				     "cannot prove that %qE satisfies the "
+				     "precondition of %qD", cg_display_value (sub_param), callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qE satisfies the "
@@ -5355,8 +5553,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      || receiver_argno >= gimple_call_num_args (call))
 	    continue;
 
-	  tree sub_param = cg_resolve_call_argument (call, param_argno);
-	  tree sub_receiver = cg_resolve_call_argument (call, receiver_argno);
+	  tree sub_param = cg_resolve_value_argument (call, param_argno);
+	  tree sub_receiver = cg_resolve_value_argument (call, receiver_argno);
 
 	  hash_map<tree, cg_call_rel_fact> empty_call_rel_cache;
 	  hash_map<tree, cg_range_lite> empty_scalar_range_cache;
@@ -5402,9 +5600,9 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	    continue;
 
 	  if (strict)
-	    error_at (gimple_location (call),
-		      "cannot prove that %qE satisfies the "
-		      "precondition of %qD", cg_display_value (sub_param), callee);
+	    cg_obligation_error_at (gimple_location (call),
+				     "cannot prove that %qE satisfies the "
+				     "precondition of %qD", cg_display_value (sub_param), callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qE satisfies the "
@@ -5462,8 +5660,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      || rhs_argno >= gimple_call_num_args (call))
 	    continue;
 
-	  tree sub_lhs_receiver = cg_resolve_call_argument (call, lhs_argno);
-	  tree sub_rhs_receiver = cg_resolve_call_argument (call, rhs_argno);
+	  tree sub_lhs_receiver = cg_resolve_value_argument (call, lhs_argno);
+	  tree sub_rhs_receiver = cg_resolve_value_argument (call, rhs_argno);
 
 	  tree_code fact_code;
 	  tree fact_rhs_receiver, fact_rhs_callee;
@@ -5485,10 +5683,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	    continue;
 
 	  if (strict)
-	    error_at (gimple_location (call),
-		      "cannot prove that %qD called on %qE satisfies the "
-		      "precondition of %qD", lhs_callee, sub_lhs_receiver,
-		      callee);
+	    cg_obligation_error_at (gimple_location (call),
+				     "cannot prove that %qD called on %qE satisfies the "
+				     "precondition of %qD", lhs_callee, sub_lhs_receiver,
+				     callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qD called on %qE satisfies the "
@@ -5520,7 +5718,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  if (!cg_find_param_position (callee, params[p], &argno)
 	      || argno >= gimple_call_num_args (call))
 	    continue;
-	  tree substituted = cg_resolve_call_argument (call, argno);
+	  tree substituted = cg_resolve_value_argument (call, argno);
 
 	  cg_range_lite established_r;
 	  bool have_range
@@ -5538,9 +5736,9 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  if (have_range && cg_ranges_disjoint_p (established_r, required))
 	    {
 	      char have_text[64], need_text[64];
-	      error_at (gimple_location (call),
-			"argument %qE provably violates the precondition of %qD",
-			cg_display_value (substituted), callee);
+	      cg_obligation_error_at (gimple_location (call),
+				       "argument %qE provably violates the precondition of %qD",
+				       cg_display_value (substituted), callee);
 	      inform (gimple_location (call),
 		      "%qE is established %s, but the precondition requires "
 		      "it %s", cg_display_value (substituted),
@@ -5552,10 +5750,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	    }
 
 	  if (strict)
-	    error_at (gimple_location (call),
-		      "cannot prove that %qE satisfies the precondition "
-		      "of %qD", cg_display_argument (substituted, params[p]),
-		      callee);
+	    cg_obligation_error_at (gimple_location (call),
+				     "cannot prove that %qE satisfies the precondition "
+				     "of %qD", cg_display_argument (substituted, params[p]),
+				     callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qE satisfies the precondition "
@@ -5609,7 +5807,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
       && cg_find_param_position (callee, src_parm, &src_argno)
       && src_argno < gimple_call_num_args (call))
     {
-      tree substituted = cg_resolve_call_argument (call, src_argno);
+      tree substituted = cg_resolve_value_argument (call, src_argno);
       hash_set<tree> in_progress;
       oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
       if (!cg_provable_object_address_p (substituted, established,
@@ -5644,9 +5842,9 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 					  /*require_conveyor=*/true,
 					  in_progress, &reason))
 	{
-	  error_at (gimple_location (call),
-		    "cannot prove %<is_object_address%> for %qE, as "
-		    "required by the precondition of %qD", receiver, callee);
+	  cg_obligation_error_at (gimple_location (call),
+				   "cannot prove %<is_object_address%> for %qE, as "
+				   "required by the precondition of %qD", receiver, callee);
 	  if (const char *why = oa_unprovable_reason_text (reason))
 	    inform (gimple_location (call), "%s", _(why));
 	}
@@ -6777,7 +6975,7 @@ cg_requirement_int_range (tree e, gcall *call, tree callee,
       if (!cg_find_param_position (callee, parm, &argno)
 	  || argno >= gimple_call_num_args (call))
 	return NULL_TREE;
-      return cg_resolve_call_argument (call, argno);
+      return cg_resolve_value_argument (call, argno);
     };
   switch (TREE_CODE (e))
     {
@@ -6923,7 +7121,7 @@ cg_requirement_float_range (tree e, gcall *call, tree callee,
 	if (!cg_find_param_position (callee, e, &argno)
 	    || argno >= gimple_call_num_args (call))
 	  return false;
-	tree arg = cg_resolve_call_argument (call, argno);
+	tree arg = cg_resolve_value_argument (call, argno);
 	if (TREE_CODE (arg) == REAL_CST)
 	  return cg_requirement_float_range (arg, call, callee, state,
 					     field_object_cache,
@@ -6947,7 +7145,7 @@ cg_requirement_float_range (tree e, gcall *call, tree callee,
 	    || !cg_find_param_position (callee, base, &argno)
 	    || argno >= gimple_call_num_args (call))
 	  return false;
-	tree arg = cg_resolve_call_argument (call, argno);
+	tree arg = cg_resolve_value_argument (call, argno);
 	tree identity = cg_field_slot_identity (arg, state);
 	if (!identity)
 	  identity = cg_field_object_identity (arg, field_object_cache);
@@ -7056,7 +7254,7 @@ cg_check_compound_requirement (tree conjunct, gcall *call, tree callee,
 	  if (TREE_CODE (*tp) == PARM_DECL
 	      && cg_find_param_position (dd->callee, *tp, &argno)
 	      && argno < gimple_call_num_args (dd->call))
-	    *tp = cg_display_value (cg_resolve_call_argument (dd->call,
+	    *tp = cg_display_value (cg_resolve_value_argument (dd->call,
 							       argno));
 	  return NULL_TREE;
 	}, &data, NULL);
@@ -7123,16 +7321,16 @@ cg_check_compound_requirement (tree conjunct, gcall *call, tree callee,
   if (v == CG_VERDICT_FALSE)
     {
       auto_diagnostic_group d;
-      error_at (loc, "argument %qE provably violates the precondition of %qD",
-		shown (side), callee);
+      cg_obligation_error_at (loc, "argument %qE provably violates the precondition of %qD",
+			       shown (side), callee);
       inform (loc, "%qE is established %s, but the precondition requires "
 	      "it %s", shown (side), have, need);
       return;
     }
   auto_diagnostic_group d;
   if (strict)
-    error_at (loc, "cannot prove that %qE satisfies the precondition of %qD",
-	      shown (side), callee);
+    cg_obligation_error_at (loc, "cannot prove that %qE satisfies the precondition of %qD",
+			     shown (side), callee);
   else
     warning_at (loc, 0, "cannot verify that %qE satisfies the precondition "
 		"of %qD", shown (side), callee);
@@ -7164,10 +7362,17 @@ cg_consult_persistent_facts (gcall *call,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
-      bool check_as_conveyor = (conveyor_active
-				&& flag_contract_conveyor_proofs_gimple
-				&& cg_proof_checks_p (contract, callee, true));
-      bool check_as_symbolic = (symbolic_active
+      /* See cg_check_call's own identical 'mandatory'.  */
+      bool mandatory = (cg_callee_pre_mandatory && conveyor_active
+			&& DECL_DECLARED_CONVEYOR_P (callee));
+      if (cg_callee_pre_only && !mandatory)
+	continue;
+      bool check_as_conveyor = (mandatory
+				|| (conveyor_active
+				    && flag_contract_conveyor_proofs_gimple
+				    && cg_proof_checks_p (contract, callee,
+							  true)));
+      bool check_as_symbolic = (!cg_callee_pre_only && symbolic_active
 				&& flag_contract_symbolic_proofs_gimple
 				&& cg_proof_checks_p (contract, callee, false));
       if (!check_as_conveyor && !check_as_symbolic)
@@ -7175,8 +7380,9 @@ cg_consult_persistent_facts (gcall *call,
       bool require_conveyor = check_as_conveyor;
 
       /* D4324: see cg_check_call's own identical 'strict' computation.  */
-      bool strict = (check_as_conveyor
-		     && oa_contract_conveyor_strict_cached_p (contract))
+      bool strict = mandatory
+		    || (check_as_conveyor
+			&& oa_contract_conveyor_strict_cached_p (contract))
 		    || (check_as_symbolic
 			&& oa_contract_symbolic_strict_cached_p (contract));
 
@@ -7211,7 +7417,7 @@ cg_consult_persistent_facts (gcall *call,
 	     obligation's predicate block.  cg_establish_persistent_facts_
 	     for_call/cg_invalidate_persistent_facts_for_call_args
 	     deliberately do NOT do this.  */
-	  tree substituted = cg_resolve_call_argument (call, argno);
+	  tree substituted = cg_resolve_value_argument (call, argno);
 	  /* Ordering matters, same reason cg_field_slot_identity must be
 	     tried before cg_gimple_object_identity: that resolver always
 	     "succeeds" for a pointer-typed SSA value with an unrecognized
@@ -7267,14 +7473,14 @@ cg_consult_persistent_facts (gcall *call,
 		  bool value = v == CG_VERDICT_TRUE;
 		  if (value == required)
 		    continue; /* Proven true: silently discharged.  */
-		  error_at (gimple_location (call),
-			    "argument %qE provably violates the precondition "
-			    "of %qD: %qD (%qE) is established %s, but the "
-			    "precondition requires it to be %s",
-			    cg_display_value (substituted), callee, pred_fn,
-			    cg_display_value (substituted),
-			    value ? "true" : "false",
-			    required ? "true" : "false");
+		  cg_obligation_error_at (gimple_location (call),
+					   "argument %qE provably violates the precondition "
+					   "of %qD: %qD (%qE) is established %s, but the "
+					   "precondition requires it to be %s",
+					   cg_display_value (substituted), callee, pred_fn,
+					   cg_display_value (substituted),
+					   value ? "true" : "false",
+					   required ? "true" : "false");
 		  continue;
 		}
 	    }
@@ -7287,22 +7493,22 @@ cg_consult_persistent_facts (gcall *call,
 		 a genuine, provable contradiction, not merely "unknown" --
 		 mirroring contracts.cc's own OA_PROVEN_FALSE tier for this
 		 same shape (oa_env_predicate_result's own comment).  */
-	      error_at (gimple_location (call),
-			"argument %qE provably violates the precondition of "
-			"%qD: %qD (%qE) is established %s, but the "
-			"precondition requires it to be %s",
-			cg_display_value (substituted), callee, pred_fn,
-			cg_display_value (substituted),
-			fact->polarity ? "true" : "false",
-			required ? "true" : "false");
+	      cg_obligation_error_at (gimple_location (call),
+				       "argument %qE provably violates the precondition of "
+				       "%qD: %qD (%qE) is established %s, but the "
+				       "precondition requires it to be %s",
+				       cg_display_value (substituted), callee, pred_fn,
+				       cg_display_value (substituted),
+				       fact->polarity ? "true" : "false",
+				       required ? "true" : "false");
 	      continue;
 	    }
 
 	  if (strict)
-	    error_at (gimple_location (call),
-		      "cannot prove that %qD (%qE) holds, as required by "
-		      "the precondition of %qD", pred_fn,
-		      cg_display_value (substituted), callee);
+	    cg_obligation_error_at (gimple_location (call),
+				     "cannot prove that %qD (%qE) holds, as required by "
+				     "the precondition of %qD", pred_fn,
+				     cg_display_value (substituted), callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qD (%qE) holds, as required by "
@@ -7326,7 +7532,7 @@ cg_consult_persistent_facts (gcall *call,
 	    continue;
 	  /* Consult-only copy-construction lookthrough -- see this
 	     function's own predicate block above.  */
-	  tree substituted = cg_resolve_call_argument (call, argno);
+	  tree substituted = cg_resolve_value_argument (call, argno);
 	  tree identity = cg_field_slot_identity (substituted, state);
 	  if (!identity)
 	    identity = cg_field_object_identity (substituted, field_object_cache);
@@ -7350,9 +7556,9 @@ cg_consult_persistent_facts (gcall *call,
 	      && cg_ranges_disjoint_p (established->range, required))
 	    {
 	      char have_text[64], need_text[64];
-	      error_at (gimple_location (call),
-			"argument %qE provably violates the precondition of %qD",
-			substituted, callee);
+	      cg_obligation_error_at (gimple_location (call),
+				       "argument %qE provably violates the precondition of %qD",
+				       substituted, callee);
 	      inform (gimple_location (call),
 		      "field %qD of %qE is established %s, but the "
 		      "precondition requires it %s",
@@ -7365,10 +7571,10 @@ cg_consult_persistent_facts (gcall *call,
 	    }
 
 	  if (strict)
-	    error_at (gimple_location (call),
-		      "cannot prove that field %qD of %qE satisfies the "
-		      "precondition of %qD",
-		      field_groups[g].field, substituted, callee);
+	    cg_obligation_error_at (gimple_location (call),
+				     "cannot prove that field %qD of %qE satisfies the "
+				     "precondition of %qD",
+				     field_groups[g].field, substituted, callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that field %qD of %qE satisfies the "
@@ -7391,7 +7597,7 @@ cg_consult_persistent_facts (gcall *call,
 	  if (!cg_find_param_position (callee, float_groups[g].ptr_expr, &argno)
 	      || argno >= gimple_call_num_args (call))
 	    continue;
-	  tree substituted = cg_resolve_call_argument (call, argno);
+	  tree substituted = cg_resolve_value_argument (call, argno);
 	  tree identity = cg_field_slot_identity (substituted, state);
 	  if (!identity)
 	    identity = cg_field_object_identity (substituted, field_object_cache);
@@ -7411,9 +7617,9 @@ cg_consult_persistent_facts (gcall *call,
 	  if (v == CG_VERDICT_FALSE)
 	    {
 	      char have[96], need[96];
-	      error_at (gimple_location (call),
-			"argument %qE provably violates the precondition of %qD",
-			substituted, callee);
+	      cg_obligation_error_at (gimple_location (call),
+				       "argument %qE provably violates the precondition of %qD",
+				       substituted, callee);
 	      inform (gimple_location (call),
 		      "field %qD of %qE is established %s, but the precondition "
 		      "requires it %s", float_groups[g].field, substituted,
@@ -7423,10 +7629,10 @@ cg_consult_persistent_facts (gcall *call,
 	      continue;
 	    }
 	  if (strict)
-	    error_at (gimple_location (call),
-		      "cannot prove that field %qD of %qE satisfies the "
-		      "precondition of %qD",
-		      float_groups[g].field, substituted, callee);
+	    cg_obligation_error_at (gimple_location (call),
+				     "cannot prove that field %qD of %qE satisfies the "
+				     "precondition of %qD",
+				     float_groups[g].field, substituted, callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that field %qD of %qE satisfies the "
@@ -7448,7 +7654,7 @@ cg_consult_persistent_facts (gcall *call,
 					&argno)
 	      || argno >= gimple_call_num_args (call))
 	    continue;
-	  tree substituted = cg_resolve_call_argument (call, argno);
+	  tree substituted = cg_resolve_value_argument (call, argno);
 	  tree identity = cg_field_slot_identity (substituted, state);
 	  if (!identity)
 	    identity = cg_field_object_identity (substituted, field_object_cache);
@@ -7472,11 +7678,11 @@ cg_consult_persistent_facts (gcall *call,
 	      && cg_ranges_disjoint_p (established->range, required))
 	    {
 	      char have_text[64], need_text[64];
-	      error_at (gimple_location (call),
-			"argument %qE provably violates the precondition of %qD: "
-			"%qD is established outside the required range",
-			cg_display_value (substituted), callee,
-			call_groups[g].callee);
+	      cg_obligation_error_at (gimple_location (call),
+				       "argument %qE provably violates the precondition of %qD: "
+				       "%qD is established outside the required range",
+				       cg_display_value (substituted), callee,
+				       call_groups[g].callee);
 	      inform (gimple_location (call),
 		      "%qD is established %s, but the precondition requires "
 		      "it to be %s", call_groups[g].callee,
@@ -7488,10 +7694,10 @@ cg_consult_persistent_facts (gcall *call,
 	    }
 
 	  if (strict)
-	    error_at (gimple_location (call),
-		      "cannot prove that %qD called on %qE satisfies the "
-		      "precondition of %qD",
-		      call_groups[g].callee, substituted, callee);
+	    cg_obligation_error_at (gimple_location (call),
+				     "cannot prove that %qD called on %qE satisfies the "
+				     "precondition of %qD",
+				     call_groups[g].callee, substituted, callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qD called on %qE satisfies the "
@@ -10303,10 +10509,17 @@ cg_check_call_range_relational (gcall *call,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
-      bool check_as_conveyor = (conveyor_active
-				&& flag_contract_conveyor_proofs_gimple
-				&& cg_proof_checks_p (contract, callee, true));
-      bool check_as_symbolic = (symbolic_active
+      /* See cg_check_call's own identical 'mandatory'.  */
+      bool mandatory = (cg_callee_pre_mandatory && conveyor_active
+			&& DECL_DECLARED_CONVEYOR_P (callee));
+      if (cg_callee_pre_only && !mandatory)
+	continue;
+      bool check_as_conveyor = (mandatory
+				|| (conveyor_active
+				    && flag_contract_conveyor_proofs_gimple
+				    && cg_proof_checks_p (contract, callee,
+							  true)));
+      bool check_as_symbolic = (!cg_callee_pre_only && symbolic_active
 				&& flag_contract_symbolic_proofs_gimple
 				&& cg_proof_checks_p (contract, callee, false));
       if (!check_as_conveyor && !check_as_symbolic)
@@ -10337,8 +10550,8 @@ cg_check_call_range_relational (gcall *call,
 	      || receiver_argno >= gimple_call_num_args (call))
 	    continue;
 
-	  tree sub_param = cg_resolve_call_argument (call, param_argno);
-	  tree sub_receiver = cg_resolve_call_argument (call, receiver_argno);
+	  tree sub_param = cg_resolve_value_argument (call, param_argno);
+	  tree sub_receiver = cg_resolve_value_argument (call, receiver_argno);
 
 	  hash_map<tree, cg_range_lite> empty_established_range;
 	  hash_map<tree, cg_range_lite> empty_scalar_range_cache;
@@ -10371,9 +10584,9 @@ cg_check_call_range_relational (gcall *call,
 	      char established_buf[128];
 	      cg_range_lite_text (param_range, established_buf,
 				   sizeof (established_buf));
-	      error_at (gimple_location (call),
-			"argument %qE provably violates the precondition "
-			"of %qD", cg_display_value (sub_param), callee);
+	      cg_obligation_error_at (gimple_location (call),
+				       "argument %qE provably violates the precondition "
+				       "of %qD", cg_display_value (sub_param), callee);
 	      inform (gimple_location (call),
 		      "%qE is established %s, but the precondition requires "
 		      "it to be %s the result of %qD",
@@ -10453,10 +10666,17 @@ cg_check_call_relational_fact (gcall *call,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
-      bool check_as_conveyor = (conveyor_active
-				&& flag_contract_conveyor_proofs_gimple
-				&& cg_proof_checks_p (contract, callee, true));
-      bool check_as_symbolic = (symbolic_active
+      /* See cg_check_call's own identical 'mandatory'.  */
+      bool mandatory = (cg_callee_pre_mandatory && conveyor_active
+			&& DECL_DECLARED_CONVEYOR_P (callee));
+      if (cg_callee_pre_only && !mandatory)
+	continue;
+      bool check_as_conveyor = (mandatory
+				|| (conveyor_active
+				    && flag_contract_conveyor_proofs_gimple
+				    && cg_proof_checks_p (contract, callee,
+							  true)));
+      bool check_as_symbolic = (!cg_callee_pre_only && symbolic_active
 				&& flag_contract_symbolic_proofs_gimple
 				&& cg_proof_checks_p (contract, callee, false));
       if (!check_as_conveyor && !check_as_symbolic)
@@ -10494,8 +10714,8 @@ cg_check_call_relational_fact (gcall *call,
 	      || receiver_argno >= gimple_call_num_args (call))
 	    continue;
 
-	  tree sub_param = cg_resolve_call_argument (call, param_argno);
-	  tree sub_receiver = cg_resolve_call_argument (call, receiver_argno);
+	  tree sub_param = cg_resolve_value_argument (call, param_argno);
+	  tree sub_receiver = cg_resolve_value_argument (call, receiver_argno);
 
 	  hash_map<tree, cg_call_rel_fact> empty_call_rel_cache;
 	  hash_map<tree, cg_range_lite> empty_scalar_range_cache;
@@ -10546,9 +10766,9 @@ cg_check_call_relational_fact (gcall *call,
 	  if (cg_call_relational_contradicts_p (fact_code, rel_offset, rel_code))
 	    {
 	      verdict_out->add (call);
-	      error_at (gimple_location (call),
-			"argument %qE provably violates the precondition "
-			"of %qD", cg_display_value (sub_param), callee);
+	      cg_obligation_error_at (gimple_location (call),
+				       "argument %qE provably violates the precondition "
+				       "of %qD", cg_display_value (sub_param), callee);
 	      char established_buf[128];
 	      if (fact_offset.has_lo && fact_offset.has_hi
 		  && fact_offset.lo == fact_offset.hi && fact_offset.lo == 0)
@@ -10596,10 +10816,10 @@ cg_check_call_relational_fact (gcall *call,
 	      || rhs_argno >= gimple_call_num_args (call))
 	    continue;
 	  tree l_identity
-	    = cg_gimple_object_identity (cg_resolve_call_argument (call,
+	    = cg_gimple_object_identity (cg_resolve_value_argument (call,
 								  lhs_argno));
 	  tree r_identity
-	    = cg_gimple_object_identity (cg_resolve_call_argument (call,
+	    = cg_gimple_object_identity (cg_resolve_value_argument (call,
 								  rhs_argno));
 	  if (!l_identity || !r_identity)
 	    continue;
@@ -10629,15 +10849,15 @@ cg_check_call_relational_fact (gcall *call,
 	  cg_proven_call_call_conjuncts->add ({call, *conjuncts[i]});
 	  if (r == OA_RANGE_DISJOINT)
 	    {
-	      tree l_arg = cg_resolve_call_argument (call, lhs_argno);
-	      tree r_arg = cg_resolve_call_argument (call, rhs_argno);
+	      tree l_arg = cg_resolve_value_argument (call, lhs_argno);
+	      tree r_arg = cg_resolve_value_argument (call, rhs_argno);
 	      char established_buf[128];
 	      cg_range_lite_text (lr->range, established_buf,
 				   sizeof (established_buf));
-	      error_at (gimple_location (call),
-			"argument %qE provably violates the precondition "
-			"of %qD", cg_display_argument (l_arg, lhs_receiver),
-			callee);
+	      cg_obligation_error_at (gimple_location (call),
+				       "argument %qE provably violates the precondition "
+				       "of %qD", cg_display_argument (l_arg, lhs_receiver),
+				       callee);
 	      inform (gimple_location (call),
 		      "%qD called on %qE is established %s, but the "
 		      "precondition requires it to be %s %qD called on %qE",
@@ -10680,8 +10900,8 @@ cg_check_call_relational_fact (gcall *call,
 	      || other_argno >= gimple_call_num_args (call))
 	    continue;
 
-	  tree sub_param = cg_resolve_call_argument (call, param_argno);
-	  tree sub_other = cg_resolve_call_argument (call, other_argno);
+	  tree sub_param = cg_resolve_value_argument (call, param_argno);
+	  tree sub_other = cg_resolve_value_argument (call, other_argno);
 
 	  if (TREE_CODE (sub_param) == INTEGER_CST && TREE_CODE (sub_other) == INTEGER_CST)
 	    continue; /* cg_check_call's own literal-vs-literal case handles this.  */
@@ -12567,6 +12787,24 @@ cg_predicate_item8_p (tree fn)
 	  && !never_proven);
 }
 
+/* Whether predicate core function FN belongs to a checked, conveyor-
+   flavored never_proven contract: exempt from item 8, but still checked
+   for its calls' callee preconditions (cg_callee_pre_only).  */
+
+static bool
+cg_predicate_never_proven_conveyor_p (tree fn)
+{
+  tree owner;
+  tree contract = predicate_core_function_contract (fn, &owner);
+  if (!contract || !flag_contract_conveyor_proofs_gimple
+      || !oa_contract_conveyor_active_public (contract, owner))
+    return false;
+  bool never_proven, cf, cs, sf, ss;
+  return (oa_contract_self_check_mode_public (contract, owner, &never_proven,
+					      &cf, &cs, &sf, &ss)
+	  && never_proven);
+}
+
 /* The object STORE_LHS (a store's destination in a predicate core
    function) names, in source terms, for a diagnostic: the parameter or
    field it reaches through a reference parameter, else STORE_LHS.  */
@@ -12850,14 +13088,20 @@ pass_contracts_gimple::execute (function *fun)
      already had this exact condition resolved against ITS OWN,
      correctly-seeded parameters.  */
   bool predicate_core = false;
+  bool never_proven_core = false;
   if (CONTRACT_HELPER (fun->decl) != ldf_contract_none)
     {
       cg_check_predicate_mutation (fun);
       /* A conveyor contract's condition gets item 8's checks too,
-	 against the facts at its checks (cg_record_predicate_site_facts).  */
-      if (!cg_predicate_item8_p (fun->decl))
+	 against the facts at its checks (cg_record_predicate_site_facts).
+	 A never-proven one gets only its calls' callee preconditions
+	 checked, under the engine option (cg_callee_pre_only).  */
+      if (cg_predicate_item8_p (fun->decl))
+	predicate_core = true;
+      else if (cg_predicate_never_proven_conveyor_p (fun->decl))
+	predicate_core = never_proven_core = true;
+      else
 	return 0;
-      predicate_core = true;
     }
 
   /* D4324/P2680, GIMPLE/front-end instantiation-ordering fix (found via
@@ -13005,6 +13249,21 @@ pass_contracts_gimple::execute (function *fun)
   if (predicate_core)
     cg_seed_predicate_site_facts (fun, established, established_nz,
 				  established_range, established_frange);
+
+  cg_iile_info **iile = (cg_iile_infos && LAMBDA_FUNCTION_P (fun->decl)
+			  ? cg_iile_infos->get (fun->decl) : NULL);
+  bool conveyor_code = (DECL_DECLARED_CONVEYOR_P (fun->decl) || predicate_core
+			|| (iile && !(*iile)->invalid
+			    && (*iile)->conveyor_caller));
+  /* See cg_callee_pre_mandatory and cg_callee_pre_only; set before the
+     facts walk, which also checks calls' preconditions
+     (cg_consult_persistent_facts).  */
+  auto mandatory = make_temp_override (cg_callee_pre_mandatory,
+				       conveyor_code
+				       && (flag_contract_analysis_engine != 0
+					   || flag_contract_conveyor_proofs_gimple));
+  auto pre_only = make_temp_override (cg_callee_pre_only, never_proven_core);
+
   cg_predicate_facts_walk (fun, &scalar_range_cache,
 			     established_range, &call_relational_verdict,
 			     ranger,
@@ -13014,12 +13273,8 @@ pass_contracts_gimple::execute (function *fun)
   /* A conveyor callee's implicit reference-parameter and receiver
      obligations are the callee's, whoever calls it, as in the AST engine
      (Q2 is gated on the caller inside cg_check_call_reference_safety).  */
-  bool check_reference_safety = true;
-  cg_iile_info **iile = (cg_iile_infos && LAMBDA_FUNCTION_P (fun->decl)
-			  ? cg_iile_infos->get (fun->decl) : NULL);
-  bool check_item8_ub = (DECL_DECLARED_CONVEYOR_P (fun->decl) || predicate_core
-			 || (iile && !(*iile)->invalid
-			     && (*iile)->conveyor_caller));
+  bool check_reference_safety = !never_proven_core;
+  bool check_item8_ub = conveyor_code && !never_proven_core;
 
   /* Walk the dominator tree, so a contract_assert's facts are in the
      fact maps exactly while its dominator subtree is being checked (see

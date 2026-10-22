@@ -38,7 +38,7 @@ int t_nested (int x, int y) { return x != 0 ? (y != 0 ? divide (x, y) + divide (
 int t_wrong_arm (int x) { return x != 0 ? 0 : divide (10, x); }	// { dg-warning "cannot verify that .x. is nonzero" }
 bool t_wrong_and (int x) { return x == 0 && divide (10, x) > 1; }	// { dg-warning "cannot verify that .x. is nonzero" }
 int t_any (int x) { return divide (10, any (x)); }			// { dg-warning "cannot verify that .any\\(x\\). is nonzero" }
-int t_in_cond (int x) conveyor { return divide (10, x) ? 1 : 0; }	// { dg-warning "cannot verify that .x. is nonzero" }
+int t_in_cond (int x) conveyor { return divide (10, x) ? 1 : 0; }	// { dg-error "cannot prove that .x. is nonzero" }
 
 int t_div (int a, int b) conveyor { if (b != 0) return a / b; return 0; }
 int t_div_un (int a, int b) conveyor { int q = a / b; return q; }	// { dg-error "divisor .b. not provably nonzero" }

@@ -51,7 +51,7 @@ int get_checked (const S& v, const S& w) conveyor pre<conveyor_ctrl_v>(v.size ()
 
 int get_unchecked (const S& v, const S& w) conveyor
 {
-  return use_it (v, w); // { dg-warning "cannot verify that .int S::size\\(\\) const." }
+  return use_it (v, w); // { dg-error "cannot prove that .int S::size\\(\\) const." }
 }
 
 int main ()

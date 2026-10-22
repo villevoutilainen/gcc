@@ -51,7 +51,7 @@ int use_it (S& s) conveyor
 int use_it_unchecked (S& s) conveyor
 {
   int y = s.make ();
-  return consume (y); // { dg-warning "cannot verify that .y. satisfies" }
+  return consume (y); // { dg-error "cannot prove that .y. satisfies" }
 }
 
 int main () { S s; return use_it (s) + use_it_unchecked (s); }

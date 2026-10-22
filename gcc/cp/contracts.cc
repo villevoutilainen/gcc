@@ -13762,6 +13762,26 @@ oa_call_first_real_arg (tree call)
 static bool oa_predicate_text_scan;
 static bool oa_overflow_scan;
 
+/* Set while checking a call made from conveyor code -- a conveyor
+   function's body, or a strict predicate's own text -- to a conveyor
+   callee, against the callee's own preconditions.  The callee's body is
+   only verified free of undefined behavior assuming its preconditions
+   hold, so failing to establish one from conveyor code breaks the
+   conveyor rules: it's a mandatory error, not a proof warning, and it's
+   checked regardless of -fcontract-conveyor-proofs.  See
+   oa_check_mandatory_callee_preconditions.  */
+
+static bool oa_callee_pre_mandatory;
+
+/* Set while scanning a never_proven_conveyor predicate's own text for
+   OA_CALLEE_PRE_MANDATORY's obligations alone: a never-proven predicate
+   is exempt from the rest of item 8 (see oa_handle_precondition_stmt),
+   but a call it makes still mustn't break its conveyor callee's
+   preconditions -- never-proven trusts the predicate's claim, it doesn't
+   permit undefined behavior in evaluating it.  */
+
+static bool oa_item8_callee_pre_only;
+
 static bool
 oa_ast_diagnostics_muted_p ()
 {
@@ -13790,6 +13810,12 @@ oa_conveyor_error_at (location_t loc, const char *gmsgid, ...)
 static void ATTRIBUTE_GCC_DIAG (2,3)
 oa_error_at (location_t loc, const char *gmsgid, ...)
 {
+  /* A mandatory callee-precondition violation in a conveyor(auto)
+     function being deduced makes it not conveyor, rather than being an
+     error -- like oa_conveyor_error_at.  */
+  if (oa_callee_pre_mandatory
+      && conveyor_auto_note_violation_in (current_function_decl))
+    return;
   if (oa_ast_diagnostics_muted_p ())
     return;
   auto_diagnostic_group d;
@@ -15241,7 +15267,8 @@ oa_call_conveyor_obligation_status (tree call, bool *forced_out, bool *strict_ou
       if (forced_out && oa_contract_conveyor_analysis_forced_p (contract, callee))
 	*forced_out = true;
       if (strict_out && PRECONDITION_P (contract)
-	  && oa_contract_conveyor_strict_p (contract, callee))
+	  && (oa_callee_pre_mandatory
+	      || oa_contract_conveyor_strict_p (contract, callee)))
 	*strict_out = true;
     }
 }
@@ -17058,6 +17085,8 @@ oa_relational_literal_holds (tree_code code, tree a, tree b)
    functions have different names/signatures; keeping STRICT a plain
    parameter here sidesteps that entirely.  */
 
+static tree oa_substitute_value_arg (tree, tree, tree);
+
 static void
 oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 						 bool conveyor, bool strict)
@@ -17291,7 +17320,7 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
     {
       tree param = range_parms[idx];
 
-      tree substituted = oa_substitute_call_arg (callee, call, param);
+      tree substituted = oa_substitute_value_arg (callee, call, param);
       if (!substituted)
 	continue;
 
@@ -17358,7 +17387,7 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
     {
       tree param = float_range_parms[idx];
 
-      tree substituted = oa_substitute_call_arg (callee, call, param);
+      tree substituted = oa_substitute_value_arg (callee, call, param);
       if (!substituted)
 	continue;
 
@@ -17467,8 +17496,8 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	  if (oa_match_comparison_against_param (*conjuncts[i], &rel_param,
 						  &rel_code, &rel_other))
 	    {
-	      tree sub_param = oa_substitute_call_arg (callee, call, rel_param);
-	      tree sub_other = oa_substitute_call_arg (callee, call, rel_other);
+	      tree sub_param = oa_substitute_value_arg (callee, call, rel_param);
+	      tree sub_other = oa_substitute_value_arg (callee, call, rel_other);
 	      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 	      char established_buf[128];
 	      oa_proof_result rel_pr
@@ -17518,7 +17547,7 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 						     false)
 		&& TREE_CODE (rhs_receiver) == PARM_DECL)
 	      {
-		tree sub_param = oa_substitute_call_arg (callee, call, rel_param2);
+		tree sub_param = oa_substitute_value_arg (callee, call, rel_param2);
 		tree sub_receiver
 		  = oa_substitute_call_arg (callee, call, rhs_receiver);
 		oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
@@ -17580,7 +17609,7 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		   nullptr, nullptr, &match_reason)
 		&& TREE_CODE (rhs_receiver) == PARM_DECL)
 	      {
-		tree sub_param = oa_substitute_call_arg (callee, call, rel_param2);
+		tree sub_param = oa_substitute_value_arg (callee, call, rel_param2);
 		tree sub_receiver
 		  = oa_substitute_call_arg (callee, call, rhs_receiver);
 		oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
@@ -17718,7 +17747,7 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	  tree nz_arg;
 	  if (oa_nonzero_conjunct_p (*conjuncts[i], &nz_arg))
 	    {
-	      tree substituted = oa_substitute_call_arg (callee, call, nz_arg);
+	      tree substituted = oa_substitute_value_arg (callee, call, nz_arg);
 	      if (!substituted)
 		continue;
 	      substituted = oa_strip_conversion_call (substituted);
@@ -17841,6 +17870,57 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
   oa_handle_call_conveyor_call_range_obligation (call, env);
 }
 
+/* True if CALL calls a function declared conveyor.  */
+
+static bool
+oa_call_to_conveyor_callee_p (tree call)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  return (callee && TREE_CODE (callee) == FUNCTION_DECL
+	  && DECL_DECLARED_CONVEYOR_P (callee));
+}
+
+/* CALL, a call to a conveyor function made from conveyor code, must
+   establish the callee's own preconditions: see oa_callee_pre_
+   mandatory.  */
+
+static void
+oa_check_mandatory_callee_preconditions (tree call, oa_env &env)
+{
+  auto mandatory = make_temp_override (oa_callee_pre_mandatory, true);
+  oa_handle_call_conveyor_proof_obligation (call, env);
+}
+
+/* The calls within *EXPR, part of a strict predicate's own text, to
+   conveyor functions: each must establish its callee's preconditions
+   from ENV, the facts established by the predicate's earlier
+   conjuncts.  */
+
+static void
+oa_scan_callee_preconditions_in_expr (tree *expr, oa_env &env)
+{
+  if (!oa_diagnostics_active)
+    return;
+  cp_walk_tree (expr, [](tree *tp, int *walk_subtrees_p, void *data_) -> tree
+    {
+      oa_env *e = (oa_env *) data_;
+      tree t = *tp;
+      if (t == NULL_TREE || t == error_mark_node)
+	return NULL_TREE;
+      /* is_object_address's argument is never evaluated.  */
+      tree ioa_arg;
+      if (is_object_address_call_p (t, &ioa_arg))
+	{
+	  *walk_subtrees_p = 0;
+	  return NULL_TREE;
+	}
+      if ((TREE_CODE (t) == CALL_EXPR || TREE_CODE (t) == AGGR_INIT_EXPR)
+	  && oa_call_to_conveyor_callee_p (t))
+	oa_check_mandatory_callee_preconditions (t, *e);
+      return NULL_TREE;
+    }, &env, NULL);
+}
+
 /* -fcontract-symbolic-proofs: positionally substitute PARAM (one of
    CALLEE's own PARM_DECLs -- including its implicit 'this', which is
    just an ordinary leading PARM_DECL here, no special-casing needed)
@@ -17904,6 +17984,33 @@ oa_substitute_call_arg (tree callee, tree call, tree param)
   return NULL_TREE;
 }
 
+/* As oa_substitute_call_arg, for a value obligation ('pre (x < 100)',
+   'pre (x != 0)'): a reference parameter names the object it's bound
+   to, so for one the result is that object ('local'), not the address
+   the call passes ('(int &) &local') -- the object whose facts the
+   obligation must be checked against.  An is_object_address obligation,
+   and a receiver's identity, need oa_substitute_call_arg's address.  */
+
+static tree
+oa_substitute_value_arg (tree callee, tree call, tree param)
+{
+  tree arg = oa_substitute_call_arg (callee, call, param);
+  if (!arg)
+    return NULL_TREE;
+  STRIP_ANY_LOCATION_WRAPPER (param);
+  while (TREE_CODE (param) == NON_LVALUE_EXPR || TREE_CODE (param) == NOP_EXPR
+	 || TREE_CODE (param) == CONVERT_EXPR
+	 || TREE_CODE (param) == VIEW_CONVERT_EXPR)
+    param = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (param, 0));
+  if (TREE_CODE (param) != PARM_DECL || !TYPE_REF_P (TREE_TYPE (param)))
+    return arg;
+  tree a = STRIP_ANY_LOCATION_WRAPPER (arg);
+  while (TREE_CODE (a) == NOP_EXPR || TREE_CODE (a) == CONVERT_EXPR
+	 || TREE_CODE (a) == NON_LVALUE_EXPR || TREE_CODE (a) == VIEW_CONVERT_EXPR)
+    a = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
+  return TREE_CODE (a) == ADDR_EXPR ? TREE_OPERAND (a, 0) : arg;
+}
+
 /* D4324: recursively rebuilds an arbitrary compound expression drawn
    from one of CALLEE's own declared contracts into the caller's own
    terms -- unlike oa_substitute_call_arg above (which only ever
@@ -17942,7 +18049,7 @@ oa_substitute_call_expr (tree callee, tree call, tree expr)
     return expr;
 
   if (TREE_CODE (expr) == PARM_DECL)
-    return oa_substitute_call_arg (callee, call, expr);
+    return oa_substitute_value_arg (callee, call, expr);
 
   if (TREE_CODE (expr) == COMPONENT_REF)
     {
@@ -18943,8 +19050,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 						   &rel_code, &rel_other))
 	    continue;
 
-	  tree sub_param = oa_substitute_call_arg (callee, call, rel_param);
-	  tree sub_other = oa_substitute_call_arg (callee, call, rel_other);
+	  tree sub_param = oa_substitute_value_arg (callee, call, rel_param);
+	  tree sub_other = oa_substitute_value_arg (callee, call, rel_other);
 	  char established_buf[128];
 	  oa_proof_result rel_pr
 	    = oa_env_check_relational_fact_1 (env, sub_param, rel_code, sub_other,
@@ -18993,7 +19100,7 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	      || TREE_CODE (rhs_receiver) != PARM_DECL)
 	    continue;
 
-	  tree sub_param = oa_substitute_call_arg (callee, call, rel_param);
+	  tree sub_param = oa_substitute_value_arg (callee, call, rel_param);
 	  tree sub_receiver = oa_substitute_call_arg (callee, call, rhs_receiver);
 	  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 	  char established_buf[128];
@@ -19050,7 +19157,7 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	      || TREE_CODE (rhs_receiver) != PARM_DECL)
 	    continue;
 
-	  tree sub_param = oa_substitute_call_arg (callee, call, rel_param);
+	  tree sub_param = oa_substitute_value_arg (callee, call, rel_param);
 	  tree sub_receiver = oa_substitute_call_arg (callee, call, rhs_receiver);
 	  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 	  char established_buf[128];
@@ -20913,7 +21020,7 @@ oa_handle_call_symbolic_scalar_precondition_obligation (tree call, oa_env &env)
       tree param = matches[m].param;
       oa_range_fact &required = matches[m].range;
 
-      tree substituted = oa_substitute_call_arg (callee, call, param);
+      tree substituted = oa_substitute_value_arg (callee, call, param);
       if (!substituted)
 	continue;
       /* Full lookthrough (conversion operator and copy-construction)
@@ -21823,7 +21930,7 @@ oa_handle_call_symbolic_scalar_obligation (tree call, oa_env &env, tree *extra)
       tree param = matches[m].param;
       oa_range_fact required = matches[m].range;
 
-      tree substituted = oa_substitute_call_arg (callee, call, param);
+      tree substituted = oa_substitute_value_arg (callee, call, param);
       if (!substituted)
 	continue;
       tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
@@ -22629,7 +22736,11 @@ oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
 	 traits' own comment in <contracts>.  */
       bool conveyor_forced = false;
       oa_call_conveyor_obligation_status (t, &conveyor_forced, NULL);
-      if (flag_contract_conveyor_proofs || conveyor_forced)
+      if (current_function_decl
+	  && DECL_DECLARED_CONVEYOR_P (current_function_decl)
+	  && oa_call_to_conveyor_callee_p (t))
+	oa_check_mandatory_callee_preconditions (t, *e);
+      else if (flag_contract_conveyor_proofs || conveyor_forced)
 	oa_handle_call_conveyor_proof_obligation (t, *e);
       bool symbolic_forced = false;
       oa_call_symbolic_obligation_status (t, &symbolic_forced, NULL);
@@ -23155,6 +23266,15 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
   if (conveyor_ok && !never_proven && !oa_skip_predicate_scans)
     {
       auto text = make_temp_override (oa_predicate_text_scan, true);
+      oa_scan_item8_in_expr (&cond, env);
+    }
+  /* A never-proven predicate is exempt from item 8 just above, but its
+     calls to conveyor functions must still establish their callees'
+     preconditions: see oa_item8_callee_pre_only.  */
+  if (conveyor_ok && never_proven && !oa_skip_predicate_scans)
+    {
+      auto text = make_temp_override (oa_predicate_text_scan, true);
+      auto only = make_temp_override (oa_item8_callee_pre_only, true);
       oa_scan_item8_in_expr (&cond, env);
     }
 
@@ -23773,6 +23893,15 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
   if (conveyor_ok && !never_proven)
     {
       auto text = make_temp_override (oa_predicate_text_scan, true);
+      oa_scan_item8_in_expr (&cond, env);
+    }
+  /* A never-proven predicate is exempt from item 8 just above, but its
+     calls to conveyor functions must still establish their callees'
+     preconditions: see oa_item8_callee_pre_only.  */
+  if (conveyor_ok && never_proven)
+    {
+      auto text = make_temp_override (oa_predicate_text_scan, true);
+      auto only = make_temp_override (oa_item8_callee_pre_only, true);
       oa_scan_item8_in_expr (&cond, env);
     }
 
@@ -24734,6 +24863,9 @@ oa_scan_item8_conjunct (tree *conjunct, oa_env &env)
 
   if (c && TREE_CODE (c) == CALL_EXPR)
     {
+      if (oa_predicate_text_scan && oa_call_to_conveyor_callee_p (c)
+	  && oa_diagnostics_active)
+	oa_check_mandatory_callee_preconditions (c, env);
       /* Each argument's own evaluation is fully sequenced within itself,
 	 but the relative order *between* arguments is unspecified -- so
 	 every argument gets its own independent scan starting from ENV
@@ -24785,6 +24917,10 @@ oa_scan_item8_conjunct (tree *conjunct, oa_env &env)
       return;
     }
 
+  if (oa_predicate_text_scan)
+    oa_scan_callee_preconditions_in_expr (conjunct, env);
+  if (oa_item8_callee_pre_only)
+    return;
   oa_scan_div_mod_in_expr (conjunct, env);
   oa_scan_array_bounds_in_expr (conjunct, env);
   oa_scan_overflow_in_expr (conjunct, env);
@@ -27595,6 +27731,13 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 	  auto text = make_temp_override (oa_predicate_text_scan, true);
 	  oa_scan_item8_in_expr (&cond, scan_env);
 	}
+      else
+	{
+	  /* See oa_item8_callee_pre_only.  */
+	  auto text = make_temp_override (oa_predicate_text_scan, true);
+	  auto only = make_temp_override (oa_item8_callee_pre_only, true);
+	  oa_scan_item8_in_expr (&cond, scan_env);
+	}
       /* D4324/P2680: see the identical comment in oa_handle_
 	 precondition_stmt -- same mandatory "no side effects escaping
 	 this condition's own evaluation" scan, applying identically to
@@ -27837,25 +27980,32 @@ static void oa_ensure_contract_flavors_cached (tree fndecl);
 static void
 oa_cache_contract_flavors (tree fndecl)
 {
-  /* And those of the predicates its contracts name ('pre (check_it
-     (x))'), whose own postconditions the GIMPLE engine may derive a
-     result from (oa_predicate_defining_relation_public).  */
+  /* And those of every function its contracts call ('pre (check_it
+     (x))', 'pre (pos (x) > 0)'): the GIMPLE engine may derive a result
+     from a named predicate's own postconditions
+     (oa_predicate_defining_relation_public), and checks each call in a
+     conveyor predicate against its callee's preconditions
+     (cg_callee_pre_mandatory) -- which it can only see as conveyor-
+     flavored once they're cached here, even when nothing outside a
+     predicate calls that callee.  */
   for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
     {
       tree cond = CONTRACT_CONDITION (CONTRACT_STATEMENT (as));
       if (!cond || cond == error_mark_node)
 	continue;
-      auto_vec<tree *> conjuncts;
-      oa_collect_conjuncts (&cond, &conjuncts);
-      for (unsigned i = 0; i < conjuncts.length (); ++i)
+      cp_walk_tree_without_duplicates (&cond,
+	[](tree *tp, int *, void *data_) -> tree
 	{
-	  tree pred_fn, arg_decl;
-	  bool negated;
-	  if (oa_predicate_conjunct_shape (*conjuncts[i], &pred_fn, &arg_decl,
-					   &negated)
-	      && pred_fn != fndecl)
-	    oa_ensure_contract_flavors_cached (pred_fn);
-	}
+	  tree t = *tp;
+	  if (TREE_CODE (t) == CALL_EXPR || TREE_CODE (t) == AGGR_INIT_EXPR)
+	    {
+	      tree callee = cp_get_callee_fndecl_nofold (t);
+	      if (callee && TREE_CODE (callee) == FUNCTION_DECL
+		  && callee != (tree) data_)
+		oa_ensure_contract_flavors_cached (callee);
+	    }
+	  return NULL_TREE;
+	}, fndecl);
     }
   for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
     {
