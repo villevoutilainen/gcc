@@ -45,6 +45,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "gcc-urlifier.h"
 #include "contracts.h" // build_contract_check ()
 #include "builtins.h"
+#include "profiles.h"
 
 /* Keep track of forward references to immediate-escalating functions in
    case they become consteval.  This vector contains ADDR_EXPRs and
@@ -52,6 +53,36 @@ along with GCC; see the file COPYING3.  If not see
    function call in them, to check that they can be evaluated to a constant,
    and immediate-escalating functions that may become consteval.  */
 static GTY(()) hash_set<tree> *deferred_escalating_exprs;
+
+/* P4222 std::init: the left-hand sides of source-level assignments to a
+   subobject, such as 'p.a = 1'.  When the gimplifier lowers a whole-object
+   assignment from a braced initializer ('p = {1, 2}'), it emits per-field
+   stores that look exactly like those ('p.a = 1; p.b = 2;') but with left-
+   hand sides it builds itself, so recording the source-level ones here is
+   what lets the std::init profile tell the two apart.  GC-rooted, so that a
+   recorded node can't be freed and its address reused while it's still in
+   the set; the profile pass removes the entries of each function it
+   checks.  */
+static GTY(()) hash_set<tree> *profiles_subobject_write_lhs;
+
+/* True if LHS, the left-hand side of a GIMPLE store, is that of a source-
+   level assignment to a subobject (see above).  */
+
+bool
+profiles_subobject_write_lhs_p (tree lhs)
+{
+  return profiles_subobject_write_lhs
+	 && profiles_subobject_write_lhs->contains (lhs);
+}
+
+/* Forget LHS, once its function has been checked.  */
+
+void
+profiles_forget_subobject_write_lhs (tree lhs)
+{
+  if (profiles_subobject_write_lhs)
+    profiles_subobject_write_lhs->remove (lhs);
+}
 
 static void
 remember_escalating_expr (tree t)
@@ -734,6 +765,16 @@ cp_gimplify_expr (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p)
 	   types are the same, add an explicit conversion.  */
 	tree op0 = TREE_OPERAND (*expr_p, 0);
 	tree op1 = TREE_OPERAND (*expr_p, 1);
+
+	if (code == MODIFY_EXPR
+	    && (TREE_CODE (op0) == COMPONENT_REF
+		|| TREE_CODE (op0) == ARRAY_REF)
+	    && profiles_active_p ("std::init"))
+	  {
+	    if (!profiles_subobject_write_lhs)
+	      profiles_subobject_write_lhs = hash_set<tree>::create_ggc (37);
+	    profiles_subobject_write_lhs->add (op0);
+	  }
 
 	if (!error_operand_p (op0)
 	    && !error_operand_p (op1)

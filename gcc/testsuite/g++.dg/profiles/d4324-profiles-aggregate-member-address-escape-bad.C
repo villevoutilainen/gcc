@@ -16,7 +16,7 @@ void take_ptr (int *);
 int f ()
 {
   X x [[uninit]];
-  x.a = 1;
+  x.a = 1;		// { dg-error "is written before .x. is initialized as a whole" }
   take_ptr (&x.b); // { dg-error "before it is provably initialized" }
   return x.a;
 }

@@ -15,6 +15,6 @@ void other (X* p);
 void f ()
 {
   X x [[uninit]];
-  x.a = 1;
+  x.a = 1;		// { dg-error "is written before .x. is initialized as a whole" }
   other (&x); // { dg-error "before it is provably initialized" }
 }

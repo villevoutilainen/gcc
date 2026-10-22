@@ -25,8 +25,7 @@ void members_only ()
 {
   Aggr x;		   // some members left uninitialized: OK
   Triv t [[uninit]];	   // nothing to initialize: OK
-  t.a = 1;
-  t.b = 2;
+  t = {1, 2};
   (void) t;
 }
 

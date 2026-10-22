@@ -23,7 +23,7 @@ struct Holder
 void use ()
 {
   Holder<int> hi [[uninit]];	// a trivially initialized member: OK
-  hi.t = 1;
+  hi = {1};
   (void) hi;
 }
 

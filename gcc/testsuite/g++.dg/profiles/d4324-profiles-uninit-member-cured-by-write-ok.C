@@ -1,8 +1,7 @@
 // P4222 Initialization profile: a member of a local aggregate is cured
-// by a direct write to that field exactly like a plain scalar local is
-// (see d4324-profiles-uninit-cured-by-write-ok.C) -- both the address-
+// by a whole-object initialization of the aggregate -- both the address-
 // escape check (d4324-profiles-aggregate-member-address-escape-bad.C's
-// uncured shape) and, once initialized, later reads.
+// uncured shape) and, once initialized, later reads and field writes.
 // { dg-do compile { target c++11 } }
 
 [[profiles::enforce(std::init)]];
@@ -14,8 +13,8 @@ void take_ptr (int *);
 int f ()
 {
   X x [[uninit]];
-  x.a = 1;
-  x.b = 2;
+  x = {1, 2};		// a whole-object initialization
+  x.b = 3;
   take_ptr (&x.b);
   return x.a + x.b;
 }

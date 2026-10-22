@@ -1335,6 +1335,25 @@ ip_check_address_taken_var (function *fun, tree var)
 		"%<std::init%> profile", var);
 }
 
+/* P4222 std::init (Bjarne's whole-object rule): an uninitialized class
+   object whose subobjects may only be written once the object as a whole
+   is provably initialized.  The object is either a local variable VAR, the
+   member FIELD of a local variable VAR, or the member FIELD of the object
+   THIS_PARM points to in a constructor.  */
+
+enum ip_agg_base_kind { IP_AGG_VAR, IP_AGG_VAR_FIELD, IP_AGG_THIS_FIELD };
+
+struct ip_agg_base
+{
+  ip_agg_base_kind kind;
+  tree var;
+  tree field;
+  tree this_parm;
+};
+
+static void ip_check_subobject_writes (function *, const ip_agg_base &,
+				       vec<gimple *> &);
+
 /* True if STMT is VAR's own default construction by a default
    constructor that is not user-provided (implicitly defined, or
    defaulted on its first declaration).  Such a constructor provably
@@ -1419,8 +1438,15 @@ ip_check_default_initialized_members (function *fun, tree var)
       outer_init_stmts.safe_push (stmt);
 
   for (tree field : fields)
-    ip_check_local_aggregate_member (fun, var, field, outer_init_stmts,
-				     /*var_marked=*/false);
+    {
+      ip_check_local_aggregate_member (fun, var, field, outer_init_stmts,
+				       /*var_marked=*/false);
+      if (TREE_CODE (TREE_TYPE (field)) == RECORD_TYPE)
+	{
+	  ip_agg_base b = { IP_AGG_VAR_FIELD, var, field, NULL_TREE };
+	  ip_check_subobject_writes (fun, b, outer_init_stmts);
+	}
+    }
 }
 
 /* P4222 Phase 4d (S5.1-S5.3): bookkeeping for ip_check_constructor_
@@ -2630,6 +2656,133 @@ ip_check_assign_flavor_consistency (gimple *stmt, tree enclosing_fndecl,
 	      "profile");
 }
 
+/* True if T is the object B describes.  */
+
+static bool
+ip_agg_base_p (tree t, const ip_agg_base &b)
+{
+  switch (b.kind)
+    {
+    case IP_AGG_VAR:
+      return t == b.var;
+    case IP_AGG_VAR_FIELD:
+      return ip_component_ref_of_var_field_p (t, b.var, b.field);
+    case IP_AGG_THIS_FIELD:
+      return ip_component_ref_of_this_field_p (t, b.this_parm, b.field);
+    }
+  gcc_unreachable ();
+}
+
+/* True if T refers to a proper subobject of the object B describes.  */
+
+static bool
+ip_subobject_of_agg_base_p (tree t, const ip_agg_base &b)
+{
+  while (handled_component_p (t))
+    {
+      t = TREE_OPERAND (t, 0);
+      if (ip_agg_base_p (t, b))
+	return true;
+    }
+  return false;
+}
+
+/* P4222 std::init: Bjarne's whole-object rule for the uninitialized class
+   object B.  A source-level write to one of its subobjects ('p.a = 1') is
+   permitted only where the object as a whole is provably initialized: by a
+   whole-object assignment, from another object or from a braced
+   initializer ('p = {1}', 'p = {.b = 2}'), by std::construct_at, or by a
+   call passing its address to a [[must_init]] parameter.  So the object
+   can't be filled in member by member.
+
+   EVENTS are the whole-object initializations the caller already knows
+   about.  The gimplifier lowers 'p = {1, 2}' to per-field stores, so a
+   store to a subobject whose left-hand side wasn't recorded as a source-
+   level subobject write (profiles_subobject_write_lhs_p) is one of those,
+   and counts as a whole-object initialization too; a partial braced
+   initializer is lowered to a whole-object clearing store first, which
+   counts anyway.  */
+
+static void
+ip_check_subobject_writes (function *fun, const ip_agg_base &b,
+			   vec<gimple *> &events_in)
+{
+  auto_vec<gimple *> events;
+  for (gimple *g : events_in)
+    if (!gimple_clobber_p (g))
+      events.safe_push (g);
+
+  auto_vec<gimple *> writes;
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      {
+	gimple *stmt = gsi_stmt (gsi);
+	if (!is_gimple_assign (stmt) && !is_gimple_call (stmt))
+	  continue;
+	tree lhs = gimple_get_lhs (stmt);
+	if (!lhs || !ip_subobject_of_agg_base_p (lhs, b))
+	  continue;
+	if (profiles_subobject_write_lhs_p (lhs))
+	  writes.safe_push (stmt);
+	else if (!gimple_clobber_p (stmt))
+	  events.safe_push (stmt);
+      }
+
+  if (writes.is_empty ())
+    return;
+
+  ip_reach_info info;
+  ip_compute_reach_info (fun, events, &info);
+  for (gimple *w : writes)
+    {
+      if (ip_read_dominated_by_init_p (w, events, info))
+	continue;
+      location_t loc = gimple_location (w);
+      if (profiles_diagnostic_exempt_p (loc, fun->decl, "std::init"))
+	continue;
+      /* Name the member written to: the outermost one, for a write such
+	 as 'p.arr[0] = 1'.  */
+      tree written = gimple_get_lhs (w);
+      while (TREE_CODE (written) != COMPONENT_REF
+	     && handled_component_p (written))
+	written = TREE_OPERAND (written, 0);
+      tree member = (TREE_CODE (written) == COMPONENT_REF
+		     ? TREE_OPERAND (written, 1) : NULL_TREE);
+      tree whole = b.kind == IP_AGG_VAR ? b.var : b.field;
+      auto_diagnostic_group d;
+      bool emitted;
+      if (member)
+	emitted = profiles_diagnostic_at (loc, "std::init",
+			"member %qD of %qD is written before %qD is "
+			"initialized as a whole, under the %<std::init%> "
+			"profile", member, whole, whole);
+      else
+	emitted = profiles_diagnostic_at (loc, "std::init",
+			"part of %qD is written before it is initialized as "
+			"a whole, under the %<std::init%> profile", whole);
+      if (emitted)
+	inform (loc, "initialize the whole object first, for example by "
+		"assigning a braced initializer to it, or with "
+		"%<std::construct_at%>");
+    }
+}
+
+/* Forget the recorded source-level subobject writes of FUN, now that it
+   has been checked (see profiles_subobject_write_lhs_p).  */
+
+static void
+ip_forget_subobject_writes (function *fun)
+{
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      if (tree lhs = gimple_get_lhs (gsi_stmt (gsi)))
+	profiles_forget_subobject_write_lhs (lhs);
+}
+
 static unsigned int
 ip_check_function (function *fun)
 {
@@ -2672,6 +2825,20 @@ ip_check_function (function *fun)
       if (!is_gimple_reg (var))
 	{
 	  ip_check_address_taken_var (fun, var);
+	  if (TREE_CODE (TREE_TYPE (var)) == RECORD_TYPE)
+	    {
+	      ip_addr_taken_scan scan;
+	      scan.var = var;
+	      scan.member_access = false;
+	      scan.member_access_loc = UNKNOWN_LOCATION;
+	      basic_block bb;
+	      FOR_EACH_BB_FN (bb, fun)
+		for (gimple_stmt_iterator gsi = gsi_start_bb (bb);
+		     !gsi_end_p (gsi); gsi_next (&gsi))
+		  ip_scan_stmt_for_var (gsi_stmt (gsi), &scan);
+	      ip_agg_base b = { IP_AGG_VAR, var, NULL_TREE, NULL_TREE };
+	      ip_check_subobject_writes (fun, b, scan.init_stmts);
+	    }
 	  continue;
 	}
 
@@ -2732,6 +2899,21 @@ ip_check_function (function *fun)
 	      && !profiles_uninit_pointee_p (field))
 	    continue;
 	  ip_check_constructor_member (fun, this_parm, field);
+	  if (lookup_attribute ("uninit", DECL_ATTRIBUTES (field))
+	      && TREE_CODE (TREE_TYPE (field)) == RECORD_TYPE)
+	    {
+	      ip_member_scan scan;
+	      scan.this_parm = this_parm;
+	      scan.field = field;
+	      basic_block bb;
+	      FOR_EACH_BB_FN (bb, fun)
+		for (gimple_stmt_iterator gsi = gsi_start_bb (bb);
+		     !gsi_end_p (gsi); gsi_next (&gsi))
+		  ip_scan_stmt_for_member (gsi_stmt (gsi), &scan);
+	      ip_agg_base b = { IP_AGG_THIS_FIELD, NULL_TREE, field,
+				this_parm };
+	      ip_check_subobject_writes (fun, b, scan.init_stmts);
+	    }
 	}
     }
 
@@ -2760,6 +2942,8 @@ ip_check_function (function *fun)
 	}
     }
 
+
+  ip_forget_subobject_writes (fun);
   return 0;
 }
 
