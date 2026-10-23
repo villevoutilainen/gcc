@@ -2,7 +2,8 @@
 // rather than as an anonymous temporary ('<unknown>'): a call's result,
 // a placement new's pointer, a '?:' merge, an element reached by
 // pointer arithmetic, a load through a field, and a predicate
-// function's own parameters (a postcondition's result among them).
+// function's own parameters (a postcondition's result among them), and
+// the value a reference argument reads, as the object it binds to.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -fcontract-analysis-engine=gimple" }
 
@@ -31,5 +32,10 @@ int slot (Outer *st, unsigned i) conveyor { return use (st[i].t); } // { dg-erro
 
 T &id (T &x) conveyor { return x; }
 int ref_result (T &a) conveyor { return use (id (a)); } // { dg-error "is_object_address. for .id\\(a\\)." }
+
+void byref (int &x) conveyor pre<conveyor_assert_v> (x < 100);
+void bound_constant () conveyor { int local = 200; byref (local); } // { dg-error "argument .local. provably violates" }
+// { dg-message ".local. is established exactly 200" "" { target *-*-* } .-1 }
+void bound_copy (int k) conveyor { int l = k; byref (l); } // { dg-error "cannot prove that .l. satisfies" }
 
 // { dg-prune-output "no fact relating this value" }
