@@ -2749,6 +2749,9 @@ define_contract_wrapper_func (const tree& fndecl, const tree& wrapdecl, void*)
 
   tree call = build_thunk_like_call (call_target, args->length (),
 				      args->address ());
+  /* A call returning a reference is, as an expression, the object it
+     refers to, which the return statement then binds to.  */
+  call = convert_from_reference (call);
 
   finish_return_stmt (call);
 
@@ -6746,6 +6749,38 @@ contract_inherited_pending_p (tree contract, tree *basefn, tree *base_contract)
   return true;
 }
 
+/* RESULT, the result of an override, as BASE_FN's postconditions see it:
+   converted to BASE_FN's own return type, which differs when the
+   override's is covariant ('Derived *' for 'Base *'), as a call through
+   BASE_FN sees it.  The conversion adjusts a pointer, or a reference, to
+   the base subobject, keeping a null pointer null.  */
+
+static tree
+convert_result_for_base_contract (tree result, tree base_fn)
+{
+  tree base_ret = TREE_TYPE (TREE_TYPE (base_fn));
+  tree type = TREE_TYPE (result);
+
+  if (VOID_TYPE_P (base_ret) || !type || type_uses_auto (type)
+      || same_type_p (type, base_ret))
+    return result;
+  tree conv;
+  if (TYPE_REF_P (base_ret))
+    {
+      /* A reference, by way of the pointer conversion to its base.  */
+      tree addr = cp_build_addr_expr (convert_from_reference (result),
+				      tf_warning_or_error);
+      conv = cp_convert (build_pointer_type (TREE_TYPE (base_ret)), addr,
+			 tf_warning_or_error);
+      if (conv != error_mark_node)
+	conv = build_nop (base_ret, conv);
+    }
+  else
+    conv = perform_implicit_conversion (base_ret, result,
+					tf_warning_or_error);
+  return conv == error_mark_node ? result : conv;
+}
+
 /* Resolve CONTRACT (a pending inherited specifier, per
    contract_inherited_pending_p, currently being processed as part of
    USING_FNDECL -- CONTRACT's own real function, its caller-side wrapper,
@@ -6794,7 +6829,8 @@ resolve_inherited_contract (tree contract, tree using_fndecl,
      copy made for a wrapper or outlined PRE_FN/POST_FN, already remapped
      onto that copy) as part of synthesizing this specifier.  */
   if (POSTCONDITION_P (contract))
-    vec_safe_push (args, POSTCONDITION_IDENTIFIER (contract));
+    vec_safe_push (args, convert_result_for_base_contract
+			   (POSTCONDITION_IDENTIFIER (contract), basefn));
 
   CONTRACT_CONDITION (contract)
     = build_call_a (core_fn, args->length (), args->address ());
@@ -6824,9 +6860,13 @@ synthesize_inherited_specifier (tree base_spec, tree basefn, tree overrider,
   tree result_parm = NULL_TREE;
   if (TREE_CODE (base_contract) == POSTCONDITION_STMT)
     {
+      /* Of OVERRIDER's own return type, which a virtual function always
+	 has (it can't be deduced): it differs from BASEFN's when it is
+	 covariant, and the base's predicate is then handed the result
+	 converted (convert_result_for_base_contract).  */
       result_parm = build_lang_decl (PARM_DECL,
 				      get_identifier ("__inherited_r"),
-				      make_auto ());
+				      TREE_TYPE (TREE_TYPE (overrider)));
       DECL_ARTIFICIAL (result_parm) = true;
       DECL_SOURCE_LOCATION (result_parm) = DECL_SOURCE_LOCATION (overrider);
     }
@@ -32583,6 +32623,15 @@ build_base_contract_expr (tree base_fn, tree_code kind, tree using_fndecl,
 						    binfo, 1,
 						    tf_warning_or_error));
 
+  /* The override's result, as BASE_FN's postconditions see it; computed
+     once, however many of them use it.  */
+  tree base_result = NULL_TREE;
+  if (POSTCONDITION_P (contract))
+    base_result = convert_result_for_base_contract
+		    (POSTCONDITION_IDENTIFIER (contract), base_fn);
+  if (base_result && base_result != POSTCONDITION_IDENTIFIER (contract))
+    base_result = save_expr (base_result);
+
   tree result = NULL_TREE;
   for (tree spec = get_fn_contract_specifiers (base_fn); spec;
        spec = TREE_CHAIN (spec))
@@ -32598,7 +32647,7 @@ build_base_contract_expr (tree base_fn, tree_code kind, tree using_fndecl,
       for (tree p = DECL_CHAIN (this_parm); p; p = DECL_CHAIN (p))
 	vec_safe_push (args, p);
       if (POSTCONDITION_P (contract))
-	vec_safe_push (args, POSTCONDITION_IDENTIFIER (contract));
+	vec_safe_push (args, base_result);
 
       tree call = build_call_a (core_fn, args->length (), args->address ());
       result = result
