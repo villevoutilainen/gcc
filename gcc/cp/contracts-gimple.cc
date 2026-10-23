@@ -1602,6 +1602,10 @@ cg_same_computed_value_p (tree a, tree b, int depth)
    query the object-address prover makes (an element's index).  */
 static gimple *cg_prover_at;
 
+/* The call whose obligations are being reported, for naming an
+   argument's value by the object it was read from (cg_display_value).  */
+static gcall *cg_display_at;
+
 /* Is ADDR, an ADDR_EXPR, an object's address: of a variable, parameter,
    return slot or literal, or of a subobject ('&p->field', '&p[i]') of an
    object a provable pointer P points to?  Like the AST engine's
@@ -3594,6 +3598,7 @@ static void
 cg_check_call_reference_safety (gcall *call, function *fun,
 				 hash_map<tree, cg_fact> &established)
 {
+  auto display_at = make_temp_override (cg_display_at, call);
   auto at = make_temp_override (cg_prover_at, call);
   tree callee = gimple_call_fndecl (call);
   if (!callee || !DECL_DECLARED_CONVEYOR_P (callee))
@@ -4004,9 +4009,40 @@ cg_display_index (tree off, tree elt, int depth)
   return cg_display_value (index, depth + 1);
 }
 
+/* If VAL is the value an argument of cg_display_at stands for, read
+   from the object the argument binds to ('200' for 'byref (local)',
+   cg_resolve_value_argument), that object.  NULL_TREE if no argument,
+   or more than one, stands for VAL.  */
+
+static tree
+cg_display_bound_object (tree val)
+{
+  if (!cg_display_at
+      || !(CONSTANT_CLASS_P (val) || TREE_CODE (val) == SSA_NAME))
+    return NULL_TREE;
+  tree found = NULL_TREE;
+  unsigned matches = 0;
+  for (unsigned k = 0; k < gimple_call_num_args (cg_display_at); ++k)
+    {
+      tree v = cg_resolve_value_argument (cg_display_at, k);
+      if (v != val && !(CONSTANT_CLASS_P (v) && CONSTANT_CLASS_P (val)
+			&& operand_equal_p (v, val)))
+	continue;
+      ++matches;
+      tree arg = cg_resolve_call_argument (cg_display_at, k);
+      if (TREE_CODE (arg) == ADDR_EXPR && DECL_P (TREE_OPERAND (arg, 0))
+	  && DECL_NAME (TREE_OPERAND (arg, 0)))
+	found = TREE_OPERAND (arg, 0);
+    }
+  return matches == 1 ? found : NULL_TREE;
+}
+
 static tree
 cg_display_value (tree val, int depth = 0)
 {
+  if (depth == 0)
+    if (tree obj = cg_display_bound_object (val))
+      return obj;
   if (TREE_CODE (val) != SSA_NAME || depth > 4)
     return val;
   if (tree var = SSA_NAME_VAR (val))
@@ -5265,6 +5301,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		hash_set<gimple *> *call_relational_verdict,
 		hash_map<tree, frange> *established_frange = NULL)
 {
+  auto display_at = make_temp_override (cg_display_at, call);
   auto at = make_temp_override (cg_prover_at, call);
   tree callee = gimple_call_fndecl (call);
   if (!callee)
@@ -7555,6 +7592,7 @@ cg_consult_persistent_facts (gcall *call,
 			      hash_map<cg_field_key_hash, tree> &field_object_cache,
 			      cg_dom_fact_state &state)
 {
+  auto display_at = make_temp_override (cg_display_at, call);
   tree callee = gimple_call_fndecl (call);
   if (!callee)
     return;
@@ -10738,6 +10776,7 @@ cg_check_call_range_relational (gcall *call,
 				  gimple_ranger *ranger,
 				  hash_set<gimple *> *verdict_out)
 {
+  auto display_at = make_temp_override (cg_display_at, call);
   tree callee = gimple_call_fndecl (call);
   if (!callee)
     return;
@@ -10895,6 +10934,7 @@ cg_check_call_relational_fact (gcall *call,
 				  gimple_ranger *ranger,
 				  hash_set<gimple *> *verdict_out)
 {
+  auto display_at = make_temp_override (cg_display_at, call);
   tree callee = gimple_call_fndecl (call);
   if (!callee)
     return;
