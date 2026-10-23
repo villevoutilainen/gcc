@@ -4168,6 +4168,25 @@ cg_display_value (tree val, int depth = 0)
   return val;
 }
 
+/* How to name VALUE, what argument ARGNO of CALL stands for in a value
+   obligation (cg_resolve_value_argument): the object a reference
+   argument binds to when VALUE is the value read from it ('local' for
+   'byref (local)'), otherwise as cg_display_value.  */
+
+static tree
+cg_display_arg_value (gcall *call, unsigned argno, tree value)
+{
+  if (argno < gimple_call_num_args (call))
+    {
+      tree arg = cg_resolve_call_argument (call, argno);
+      if (TREE_CODE (arg) == ADDR_EXPR && DECL_P (TREE_OPERAND (arg, 0))
+	  && DECL_NAME (TREE_OPERAND (arg, 0)) && value != arg
+	  && operand_equal_p (cg_resolve_value_argument (call, argno), value))
+	return TREE_OPERAND (arg, 0);
+    }
+  return cg_display_value (value);
+}
+
 /* If REF is a load of a lambda's capture -- its closure field, for a
    capture by value, or through it, for one by reference -- the captured
    variable's name.  */
@@ -5458,11 +5477,13 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		    continue; /* Proven true: silently discharged.  */
 		  cg_obligation_error_at (gimple_location (call),
 					   "argument %qE provably violates the "
-					   "precondition of %qD", substituted, callee);
+					   "precondition of %qD", 
+					   cg_display_arg_value (call, argno, substituted),
+					   callee);
 		  inform (gimple_location (call),
 			  "%qE is established to be exactly zero, but the "
 			  "precondition requires it to be nonzero",
-			  substituted);
+			  cg_display_arg_value (call, argno, substituted));
 		  continue;
 		}
 	      if (cg_provable_nonzero_p (substituted, established_nz,
@@ -5472,7 +5493,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		continue; /* Proven true: silently discharged.  */
 	      if (reported_nz_parms.add (arg))
 		continue; /* Already reported for this call.  */
-	      substituted = cg_display_value (substituted);
+	      substituted = cg_display_arg_value (call, argno, substituted);
 	      if (strict)
 		cg_obligation_error_at (gimple_location (call),
 					 "cannot prove that %qE is nonzero, as required by "
@@ -5555,10 +5576,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      char have_text[96], need_text[96];
 	      cg_obligation_error_at (gimple_location (call),
 				       "argument %qE provably violates the precondition of %qD",
-				       cg_display_value (arg), callee);
+				       cg_display_arg_value (call, argno, arg), callee);
 	      inform (gimple_location (call),
 		      "%qE is established %s, but the precondition requires "
-		      "it %s", cg_display_value (arg),
+		      "it %s", cg_display_arg_value (call, argno, arg),
 		      cg_frange_text (have, have_text, sizeof have_text),
 		      cg_frange_text (need, need_text, sizeof need_text));
 	      continue;
@@ -5566,11 +5587,11 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  if (strict)
 	    cg_obligation_error_at (gimple_location (call),
 				     "cannot prove that %qE satisfies the precondition of %qD",
-				     cg_display_value (arg), callee);
+				     cg_display_arg_value (call, argno, arg), callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qE satisfies the precondition of "
-			"%qD", cg_display_value (arg), callee);
+			"%qD", cg_display_arg_value (call, argno, arg), callee);
 	  if (const char *why
 		= oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL))
 	    inform (gimple_location (call), "%s", _(why));
@@ -5609,10 +5630,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		 error_at for the identical shape.  */
 	      cg_obligation_error_at (gimple_location (call),
 				       "argument %qE provably violates the precondition "
-				       "of %qD", cg_display_value (sub_param), callee);
+				       "of %qD", cg_display_arg_value (call, param_argno, sub_param), callee);
 	      inform (gimple_location (call),
 		      "%qE is established exactly %wd, but the precondition "
-		      "requires it to be %s %qE", cg_display_value (sub_param),
+		      "requires it to be %s %qE", cg_display_arg_value (call, param_argno, sub_param),
 		      wi::to_wide (sub_param).to_shwi (),
 		      op_symbol_code (rel_code), sub_other);
 	      continue;
@@ -5684,10 +5705,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 					 sizeof (established_buf));
 		    cg_obligation_error_at (gimple_location (call),
 					     "argument %qE provably violates the "
-					     "precondition of %qD", cg_display_value (sub_param), callee);
+					     "precondition of %qD", cg_display_arg_value (call, param_argno, sub_param), callee);
 		    inform (gimple_location (call),
 			    "%qE is established %s, but the precondition "
-			    "requires it to be %s %qE", cg_display_value (sub_param),
+			    "requires it to be %s %qE", cg_display_arg_value (call, param_argno, sub_param),
 			    established_buf, op_symbol_code (rel_code),
 			    sub_other);
 		    continue;
@@ -5710,11 +5731,11 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  if (strict)
 	    cg_obligation_error_at (gimple_location (call),
 				     "cannot prove that %qE satisfies the "
-				     "precondition of %qD", cg_display_value (sub_param), callee);
+				     "precondition of %qD", cg_display_arg_value (call, param_argno, sub_param), callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qE satisfies the "
-			"precondition of %qD", cg_display_value (sub_param), callee);
+			"precondition of %qD", cg_display_arg_value (call, param_argno, sub_param), callee);
 	  if (const char *why = oa_unprovable_reason_text (reason))
 	    inform (gimple_location (call), "%s", _(why));
 	}
@@ -5812,11 +5833,11 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  if (strict)
 	    cg_obligation_error_at (gimple_location (call),
 				     "cannot prove that %qE satisfies the "
-				     "precondition of %qD", cg_display_value (sub_param), callee);
+				     "precondition of %qD", cg_display_arg_value (call, param_argno, sub_param), callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qE satisfies the "
-			"precondition of %qD", cg_display_value (sub_param), callee);
+			"precondition of %qD", cg_display_arg_value (call, param_argno, sub_param), callee);
 	  /* NOTE: unlike contracts.cc's own oa_env_check_call_relational_
 	     fact_1 (which can consult oa_env::unprovable_reason_hint_get to
 	     enrich a bare "no fact" with why a branch-derived margin fact
@@ -5948,10 +5969,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	      char have_text[64], need_text[64];
 	      cg_obligation_error_at (gimple_location (call),
 				       "argument %qE provably violates the precondition of %qD",
-				       cg_display_value (substituted), callee);
+				       cg_display_arg_value (call, argno, substituted), callee);
 	      inform (gimple_location (call),
 		      "%qE is established %s, but the precondition requires "
-		      "it %s", cg_display_value (substituted),
+		      "it %s", cg_display_arg_value (call, argno, substituted),
 		      cg_range_lite_text (established_r, have_text,
 					  sizeof have_text),
 		      cg_range_lite_text (required, need_text,
@@ -7495,8 +7516,9 @@ cg_check_compound_requirement (tree conjunct, gcall *call, tree callee,
 	  if (TREE_CODE (*tp) == PARM_DECL
 	      && cg_find_param_position (dd->callee, *tp, &argno)
 	      && argno < gimple_call_num_args (dd->call))
-	    *tp = cg_display_value (cg_resolve_value_argument (dd->call,
-							       argno));
+	    *tp = cg_display_arg_value (dd->call, argno,
+					cg_resolve_value_argument (dd->call,
+								   argno));
 	  return NULL_TREE;
 	}, &data, NULL);
       return d;
@@ -7741,8 +7763,8 @@ cg_consult_persistent_facts (gcall *call,
 					   "argument %qE provably violates the precondition "
 					   "of %qD: %qD (%qE) is established %s, but the "
 					   "precondition requires it to be %s",
-					   cg_display_value (substituted), callee, pred_fn,
-					   cg_display_value (substituted),
+					   cg_display_arg_value (call, argno, substituted), callee, pred_fn,
+					   cg_display_arg_value (call, argno, substituted),
 					   value ? "true" : "false",
 					   required ? "true" : "false");
 		  continue;
@@ -7761,8 +7783,8 @@ cg_consult_persistent_facts (gcall *call,
 				       "argument %qE provably violates the precondition of "
 				       "%qD: %qD (%qE) is established %s, but the "
 				       "precondition requires it to be %s",
-				       cg_display_value (substituted), callee, pred_fn,
-				       cg_display_value (substituted),
+				       cg_display_arg_value (call, argno, substituted), callee, pred_fn,
+				       cg_display_arg_value (call, argno, substituted),
 				       fact->polarity ? "true" : "false",
 				       required ? "true" : "false");
 	      continue;
@@ -7772,12 +7794,12 @@ cg_consult_persistent_facts (gcall *call,
 	    cg_obligation_error_at (gimple_location (call),
 				     "cannot prove that %qD (%qE) holds, as required by "
 				     "the precondition of %qD", pred_fn,
-				     cg_display_value (substituted), callee);
+				     cg_display_arg_value (call, argno, substituted), callee);
 	  else
 	    warning_at (gimple_location (call), 0,
 			"cannot verify that %qD (%qE) holds, as required by "
 			"the precondition of %qD", pred_fn,
-			cg_display_value (substituted), callee);
+			cg_display_arg_value (call, argno, substituted), callee);
 	  oa_unprovable_reason reason
 	    = !fact ? OA_UNPROVABLE_NO_FACT
 	      : fact->pred_fn != pred_fn ? OA_UNPROVABLE_WRONG_IDENTITY
@@ -7945,7 +7967,7 @@ cg_consult_persistent_facts (gcall *call,
 	      cg_obligation_error_at (gimple_location (call),
 				       "argument %qE provably violates the precondition of %qD: "
 				       "%qD is established outside the required range",
-				       cg_display_value (substituted), callee,
+				       cg_display_arg_value (call, argno, substituted), callee,
 				       call_groups[g].callee);
 	      inform (gimple_location (call),
 		      "%qD is established %s, but the precondition requires "
@@ -10865,11 +10887,11 @@ cg_check_call_range_relational (gcall *call,
 				   sizeof (established_buf));
 	      cg_obligation_error_at (gimple_location (call),
 				       "argument %qE provably violates the precondition "
-				       "of %qD", cg_display_value (sub_param), callee);
+				       "of %qD", cg_display_arg_value (call, param_argno, sub_param), callee);
 	      inform (gimple_location (call),
 		      "%qE is established %s, but the precondition requires "
 		      "it to be %s the result of %qD",
-		      cg_display_value (sub_param), established_buf,
+		      cg_display_arg_value (call, param_argno, sub_param), established_buf,
 		      op_symbol_code (rel_code), rhs_callee);
 	    }
 	}
@@ -11048,7 +11070,7 @@ cg_check_call_relational_fact (gcall *call,
 	      verdict_out->add (call);
 	      cg_obligation_error_at (gimple_location (call),
 				       "argument %qE provably violates the precondition "
-				       "of %qD", cg_display_value (sub_param), callee);
+				       "of %qD", cg_display_arg_value (call, param_argno, sub_param), callee);
 	      char established_buf[128];
 	      if (fact_offset.has_lo && fact_offset.has_hi
 		  && fact_offset.lo == fact_offset.hi && fact_offset.lo == 0)
@@ -11070,7 +11092,7 @@ cg_check_call_relational_fact (gcall *call,
 	      inform (gimple_location (call),
 		      "%qE is established %s, but the precondition requires "
 		      "it to be %s the result of %qD",
-		      cg_display_value (sub_param), established_buf,
+		      cg_display_arg_value (call, param_argno, sub_param), established_buf,
 		      op_symbol_code (rel_code), rhs_callee);
 	    }
 	  else
