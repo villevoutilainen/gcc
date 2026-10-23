@@ -25,6 +25,7 @@
 
 #include <contracts>
 #include <exception> // std::terminate
+#include <cstdint> // std::uintptr_t
 #include <mutex>
 #include <unordered_map>
 
@@ -257,6 +258,19 @@ __contracts_symbolic_invalidate_object(const void* obj) noexcept
   std::lock_guard<std::mutex> lock(symbolic_mutex);
   std::erase_if(symbolic_records,
 		[obj](const auto& entry) { return entry.first.obj == obj; });
+}
+
+void
+__contracts_symbolic_invalidate_range(const void* obj,
+				      std::size_t size) noexcept
+{
+  auto first = reinterpret_cast<std::uintptr_t>(obj);
+  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  std::erase_if(symbolic_records,
+		[first, size](const auto& entry) {
+		  auto addr = reinterpret_cast<std::uintptr_t>(entry.first.obj);
+		  return addr - first < size;
+		});
 }
 
 }

@@ -534,6 +534,18 @@ namespace contracts
   // to already know this class declares.
   void __contracts_symbolic_invalidate_object(const void* obj) noexcept;
 
+  // -fcontract-symbolic-runtime-checks: called when an object's lifetime
+  // ends -- on every exit from an automatic object's or a temporary's
+  // scope, exceptional ones included, and before a delete-expression
+  // frees its storage -- for any object of a type with a class that
+  // declares a symbolic predicate anywhere inside it (see
+  // type_has_symbolic_predicate_p, gcc/cp/decl.cc), whether or not its
+  // destructor is trivial. Removes every record keyed by an address in
+  // [OBJ, OBJ + SIZE): the object's own and its subobjects', at any
+  // depth.
+  void __contracts_symbolic_invalidate_range(const void* obj,
+					     __SIZE_TYPE__ size) noexcept;
+
   // Mirrors gcc/cp/contracts.cc's declare_terminate_wrapper /
   // __tu_terminate_wrapper, the existing P2900 workaround for GCC
   // PR121936 (see -fcontracts-conservative-ipa). default_control's and
