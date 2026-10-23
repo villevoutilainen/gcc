@@ -14,6 +14,6 @@ struct symbolic_ctrl {
 inline constexpr symbolic_ctrl symbolic_ctrl_v{};
 
 struct node {
-  bool is_linked (node*) symbolic;
+  bool is_linked (node*) const symbolic;
   void send (node* o) pre<symbolic_ctrl_v>(is_linked (o)) {} // { dg-error "unsupported conjunct" }
 };

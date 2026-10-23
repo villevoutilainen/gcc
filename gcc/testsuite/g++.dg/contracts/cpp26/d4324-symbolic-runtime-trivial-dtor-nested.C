@@ -19,7 +19,7 @@ inline constexpr symbolic_ctrl symbolic_ctrl_v{};
 
 // No destructor of its own: a trivial one, never called.
 struct io_facility {
-  bool is_opened (io_facility*) symbolic;
+  bool is_opened (io_facility*) const symbolic;
   void open () post<symbolic_ctrl_v> (is_opened (this)) {}
   void write_data () pre<symbolic_ctrl_v> (is_opened (this)) {}
 };
