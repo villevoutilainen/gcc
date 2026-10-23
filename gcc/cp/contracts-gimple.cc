@@ -7402,7 +7402,29 @@ cg_consult_persistent_facts (gcall *call,
 	  bool negated;
 	  if (!oa_match_predicate_conjunct (*conjuncts[i], &pred_fn, &arg_decl,
 					     &negated))
-	    continue;
+	    {
+	      /* As the AST engine's oa_handle_call_symbolic_precondition_
+		 obligation: no fact can establish it, so it's reported,
+		 never skipped.  */
+	      if (check_as_symbolic
+		  && oa_unsupported_symbolic_predicate_p (*conjuncts[i],
+							  &pred_fn))
+		{
+		  if (strict)
+		    cg_obligation_error_at (gimple_location (call),
+					     "cannot prove that %qD holds, as "
+					     "required by the precondition of "
+					     "%qD", pred_fn, callee);
+		  else
+		    warning_at (gimple_location (call), 0,
+				"cannot verify that %qD holds, as required by "
+				"the precondition of %qD", pred_fn, callee);
+		  inform (gimple_location (call), "%s",
+			  _(oa_unprovable_reason_text
+			      (OA_UNPROVABLE_UNSUPPORTED_PREDICATE)));
+		}
+	      continue;
+	    }
 
 	  unsigned argno;
 	  if (!cg_find_param_position (callee, arg_decl, &argno)
