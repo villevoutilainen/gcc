@@ -152,6 +152,16 @@ build_delete_destructor_body (tree delete_dtor, tree complete_dtor)
 					   tf_warning_or_error);
 
   tree op = get_callee_fndecl (call_delete);
+  /* -fcontract-symbolic-runtime-checks: the object's symbolic records end
+     with its storage, as in build_delete, which leaves them to this for
+     a virtual destructor.  */
+  if (!(op && DECL_P (op) && destroying_delete_p (op))
+      && flag_contract_symbolic_runtime_checks
+      && type_has_symbolic_predicate_p (current_class_type))
+    if (tree call = build_symbolic_invalidate_range_call
+	  (input_location, current_class_ptr, virtual_size))
+      call_delete = build2 (COMPOUND_EXPR, TREE_TYPE (call_delete), call,
+			    call_delete);
   if (op && DECL_P (op) && destroying_delete_p (op))
     {
       /* The destroying delete will handle calling complete_dtor.  */

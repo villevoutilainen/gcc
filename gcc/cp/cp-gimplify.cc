@@ -1947,6 +1947,68 @@ predeclare_vla (tree expr)
     }
 }
 
+/* -fcontract-symbolic-runtime-checks: memcpy, memmove and memset create the
+   objects of their destination anew, which start with no symbolic records,
+   as an object a new-expression creates does (build_new_1).  For one whose
+   destination, before its conversion to 'void *', points to a type
+   type_has_symbolic_predicate_p is true for -- the shape of a standard
+   library algorithm's copy or fill of trivially copyable objects --
+   clear the destination range first.  */
+
+static void
+cp_invalidate_symbolic_records_for_mem_call (tree *stmt_p)
+{
+  tree call = *stmt_p;
+  tree fn = get_callee_fndecl (call);
+  if (!fn || call_expr_nargs (call) != 3
+      || !(fndecl_built_in_p (fn, BUILT_IN_MEMCPY)
+	   || fndecl_built_in_p (fn, BUILT_IN_MEMMOVE)
+	   || fndecl_built_in_p (fn, BUILT_IN_MEMSET)))
+    return;
+  tree dst = CALL_EXPR_ARG (call, 0);
+  while (CONVERT_EXPR_P (dst) || TREE_CODE (dst) == NON_LVALUE_EXPR)
+    dst = TREE_OPERAND (dst, 0);
+  if (!POINTER_TYPE_P (TREE_TYPE (dst))
+      || !type_has_symbolic_predicate_p (TREE_TYPE (TREE_TYPE (dst))))
+    return;
+  tree addr = CALL_EXPR_ARG (call, 0) = save_expr (CALL_EXPR_ARG (call, 0));
+  tree size = CALL_EXPR_ARG (call, 2) = save_expr (CALL_EXPR_ARG (call, 2));
+  if (tree clear = build_symbolic_invalidate_range_call (EXPR_LOCATION (call),
+							 addr, size))
+    *stmt_p = build2 (COMPOUND_EXPR, TREE_TYPE (call), clear, call);
+}
+
+/* -fcontract-symbolic-runtime-checks: the symbolic records of an object of
+   BIND's scope whose type type_has_symbolic_predicate_p is true for end
+   with it.  Its storage may be reused for another object, which mustn't
+   inherit them, whether or not its destructor, which clears them too, is
+   trivial and so not called.  Clear the object's whole address range on
+   every exit from the scope, an exception's included: the body becomes
+   the try block of a try/finally doing so.  Not for a static or extern
+   variable, or one whose storage is elsewhere, such as the named return
+   value's, which is the caller's.  */
+
+static void
+cp_invalidate_symbolic_records_at_scope_end (tree bind)
+{
+  tree cleanups = NULL_TREE;
+  for (tree v = BIND_EXPR_VARS (bind); v; v = DECL_CHAIN (v))
+    if (VAR_P (v) && !TREE_STATIC (v) && !DECL_EXTERNAL (v)
+	&& !DECL_HAS_VALUE_EXPR_P (v)
+	&& DECL_CONTEXT (v) == current_function_decl
+	&& type_has_symbolic_predicate_p (TREE_TYPE (v)))
+      {
+	cxx_mark_addressable (v);
+	if (tree call = build_symbolic_invalidate_range_call
+	      (DECL_SOURCE_LOCATION (v), build_address (v),
+	       size_in_bytes (TREE_TYPE (v))))
+	  append_to_statement_list (call, &cleanups);
+      }
+  if (cleanups)
+    BIND_EXPR_BODY (bind) = build2 (TRY_FINALLY_EXPR, void_type_node,
+				    BIND_EXPR_BODY (bind), cleanups);
+}
+
 /* Perform any pre-gimplification lowering of C++ front end trees to
    GENERIC.  */
 
@@ -2229,6 +2291,8 @@ cp_genericize_r (tree *stmt_p, int *walk_subtrees, void *data)
 	      }
 	    p = &DECL_CHAIN (*p);
 	  }
+      if (flag_contract_symbolic_runtime_checks)
+	cp_invalidate_symbolic_records_at_scope_end (stmt);
       wtd->bind_expr_stack.safe_push (stmt);
       cp_walk_tree (&BIND_EXPR_BODY (stmt),
 		    cp_genericize_r, data, NULL);
@@ -2468,6 +2532,8 @@ cp_genericize_r (tree *stmt_p, int *walk_subtrees, void *data)
       break;
 
     case CALL_EXPR:
+      if (flag_contract_symbolic_runtime_checks)
+	cp_invalidate_symbolic_records_for_mem_call (stmt_p);
       if (tree fn = cp_get_callee_fndecl_nofold (stmt))
 	if (tree call = maybe_replace_d4324_violation_handler_call (stmt, fn))
 	  {
@@ -2532,6 +2598,27 @@ cp_genericize_r (tree *stmt_p, int *walk_subtrees, void *data)
 	  && TREE_CODE (TARGET_EXPR_INITIAL (stmt)) == CONSTRUCTOR
 	  && CONSTRUCTOR_PLACEHOLDER_BOUNDARY (TARGET_EXPR_INITIAL (stmt)))
 	TARGET_EXPR_NO_ELIDE (stmt) = 1;
+      /* -fcontract-symbolic-runtime-checks: a temporary's symbolic records
+	 end with it, as an automatic object's do (see cp_invalidate_
+	 symbolic_records_at_scope_end).  Its cleanup runs, after the
+	 destructor if any, wherever the temporary's lifetime ends; it
+	 isn't run for a temporary elided into the object it initializes,
+	 or one whose cleanup is only for an exception.  */
+      if (flag_contract_symbolic_runtime_checks
+	  && !CLEANUP_EH_ONLY (stmt)
+	  && type_has_symbolic_predicate_p (TREE_TYPE (stmt)))
+	{
+	  tree slot = TARGET_EXPR_SLOT (stmt);
+	  cxx_mark_addressable (slot);
+	  if (tree call = build_symbolic_invalidate_range_call
+		(EXPR_LOCATION (stmt), build_address (slot),
+		 size_in_bytes (TREE_TYPE (slot))))
+	    TARGET_EXPR_CLEANUP (stmt)
+	      = (TARGET_EXPR_CLEANUP (stmt)
+		 ? build2 (COMPOUND_EXPR, void_type_node,
+			   TARGET_EXPR_CLEANUP (stmt), call)
+		 : call);
+	}
       break;
 
     case TEMPLATE_ID_EXPR:

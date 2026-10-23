@@ -1014,6 +1014,15 @@ extern tree oa_strip_symbolic_ptr_expr_public (tree ptr_expr);
    definition for the full rationale.  */
 extern tree build_symbolic_invalidate_object_call (location_t, tree);
 
+/* -fcontract-symbolic-runtime-checks: build a call to
+   __contracts_symbolic_invalidate_range for the SIZE bytes at ADDR, done
+   only when not constant-evaluated, or NULL_TREE if the runtime entry
+   point can't be found.  Used where an object of a type
+   type_has_symbolic_predicate_p (decl.cc) is true for ends its
+   lifetime: the end of an automatic object's or a temporary's scope
+   (cp_genericize_r) and a delete-expression (init.cc, optimize.cc).  */
+extern tree build_symbolic_invalidate_range_call (location_t, tree, tree);
+
 /* Recognize CONJUNCT as "RECEIVER.ACCESSOR () OP const" -- the call-
    range analogue of oa_match_field_range_comparison immediately above,
    for a call to a DECL_DECLARED_CONVEYOR_P accessor (e.g. 'i < v.size

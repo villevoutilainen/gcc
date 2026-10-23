@@ -21095,6 +21095,32 @@ class_has_symbolic_predicate_p (tree type)
   return false;
 }
 
+/* -fcontract-symbolic-runtime-checks: true if an object of TYPE contains
+   one of a class class_has_symbolic_predicate_p is true for: the object
+   itself, a base, a non-static data member or an array element, at any
+   depth.  Such an object's symbolic records are cleared, as an address
+   range, when its lifetime ends -- whether or not its destructor is
+   trivial (see build_symbolic_invalidate_range_call).  */
+
+bool
+type_has_symbolic_predicate_p (tree type)
+{
+  type = strip_array_types (type);
+  if (!CLASS_TYPE_P (type) || !COMPLETE_TYPE_P (type))
+    return false;
+  if (class_has_symbolic_predicate_p (type))
+    return true;
+  tree binfo = TYPE_BINFO (type), base;
+  for (int i = 0; binfo && BINFO_BASE_ITERATE (binfo, i, base); ++i)
+    if (type_has_symbolic_predicate_p (BINFO_TYPE (base)))
+      return true;
+  for (tree f = TYPE_FIELDS (type); f; f = DECL_CHAIN (f))
+    if (TREE_CODE (f) == FIELD_DECL && !DECL_ARTIFICIAL (f)
+	&& type_has_symbolic_predicate_p (TREE_TYPE (f)))
+      return true;
+  return false;
+}
+
 /* Do all the processing for the beginning of a destructor; set up the
    vtable pointers and cleanups for bases and members.  */
 

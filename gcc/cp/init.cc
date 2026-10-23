@@ -3656,9 +3656,16 @@ build_new_1 (vec<tree, va_gc> **placement, tree type, tree nelts,
        && (!outer_nelts || !integer_zerop (cst_outer_nelts))
        && (!*init || CLASS_TYPE_P (elt_type)));
 
+  /* -fcontract-symbolic-runtime-checks: see the clearing of the new
+     objects' symbolic records below.  */
+  const bool clear_symbolic
+    = (flag_contract_symbolic_runtime_checks && !processing_template_decl
+       && type_has_symbolic_predicate_p (elt_type));
+
   /* In the simple case, we can stop now.  */
   pointer_type = build_pointer_type (type);
-  if (!cookie_size && !is_initialized && !member_delete_p && !do_clobber)
+  if (!cookie_size && !is_initialized && !member_delete_p && !do_clobber
+      && !clear_symbolic)
     return build_nop (pointer_type, alloc_expr);
 
   /* Store the result of the allocation call in a variable so that we can
@@ -4027,6 +4034,16 @@ build_new_1 (vec<tree, va_gc> **placement, tree type, tree nelts,
     rval = build2 (COMPOUND_EXPR, TREE_TYPE (rval), init_expr, rval);
   if (clobber_expr)
     rval = build2 (COMPOUND_EXPR, TREE_TYPE (rval), clobber_expr, rval);
+  /* -fcontract-symbolic-runtime-checks: the objects begin their lifetime
+     with no symbolic records, whatever storage they're created in:
+     records left at its addresses by objects that lived there before
+     aren't theirs.  Storage reused without a delete-expression ending
+     its previous objects' -- by an allocator, a placement new -- still
+     starts clean (see build_symbolic_invalidate_range_call).  */
+  if (clear_symbolic)
+    if (tree call = build_symbolic_invalidate_range_call (input_location,
+							  alloc_node, size))
+      rval = build2 (COMPOUND_EXPR, TREE_TYPE (rval), call, rval);
   if (cookie_expr)
     rval = build2 (COMPOUND_EXPR, TREE_TYPE (rval), cookie_expr, rval);
 
@@ -4442,6 +4459,16 @@ build_vec_delete_1 (location_t loc, tree base, tree maxindex, tree type,
       /* The below is short by the cookie size.  */
       virtual_size = size_binop (MULT_EXPR, size_exp,
 				 fold_convert (sizetype, maxindex));
+      /* -fcontract-symbolic-runtime-checks: the elements' symbolic records
+	 end with their storage, as in build_delete.  Only when there's a
+	 cookie: without one, the number of elements is unknown, and
+	 MAXINDEX isn't to be evaluated.  */
+      tree invalidate = NULL_TREE;
+      if (flag_contract_symbolic_runtime_checks
+	  && TYPE_VEC_NEW_USES_COOKIE (type)
+	  && type_has_symbolic_predicate_p (type))
+	invalidate = build_symbolic_invalidate_range_call (loc, base,
+							   virtual_size);
 
       if (! TYPE_VEC_NEW_USES_COOKIE (type))
 	/* no header */
@@ -4470,6 +4497,9 @@ build_vec_delete_1 (location_t loc, tree base, tree maxindex, tree type,
 					      /*placement=*/NULL_TREE,
 					      /*alloc_fn=*/NULL_TREE,
 					      complain);
+      if (invalidate && deallocate_expr != error_mark_node)
+	deallocate_expr = build2 (COMPOUND_EXPR, TREE_TYPE (deallocate_expr),
+				  invalidate, deallocate_expr);
     }
 
   body = loop;
@@ -5709,6 +5739,18 @@ build_delete (location_t loc, tree otype, tree addr,
 			    /*alloc_fn=*/NULL_TREE,
 			    complain);
     }
+
+  /* -fcontract-symbolic-runtime-checks: the object's symbolic records end
+     with its storage (see build_symbolic_invalidate_range_call).  With a
+     virtual destructor, the deleting destructor clears them
+     (build_delete_destructor_body), knowing the dynamic type's size.  */
+  if (do_delete && do_delete != error_mark_node && !destroying_delete
+      && flag_contract_symbolic_runtime_checks
+      && type_has_symbolic_predicate_p (type))
+    if (tree call = build_symbolic_invalidate_range_call
+	  (loc, addr, cxx_sizeof_nowarn (type)))
+      do_delete = build2 (COMPOUND_EXPR, TREE_TYPE (do_delete), call,
+			  do_delete);
 
   if (destroying_delete)
     /* The operator delete will call the destructor.  */

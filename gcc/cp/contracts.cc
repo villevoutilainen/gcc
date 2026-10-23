@@ -4702,6 +4702,7 @@ static GTY(()) tree symbolic_check_bool_decl;
 static GTY(()) tree symbolic_establish_range_decl;
 static GTY(()) tree symbolic_check_range_decl;
 static GTY(()) tree symbolic_invalidate_object_decl;
+static GTY(()) tree symbolic_invalidate_range_decl;
 
 static tree
 get_symbolic_establish_bool_fn (location_t loc)
@@ -4760,6 +4761,29 @@ build_symbolic_invalidate_object_call (location_t loc, tree obj_ptr)
 
   tree obj = fold_convert (ptr_type_node, obj_ptr);
   return build_call_n (fn, 1, obj);
+}
+
+/* See contracts.h.  */
+
+tree
+build_symbolic_invalidate_range_call (location_t loc, tree addr, tree size)
+{
+  tree fn = lookup_symbolic_runtime_fn (loc, &symbolic_invalidate_range_decl,
+					"__contracts_symbolic_invalidate_range");
+  if (fn == error_mark_node)
+    return NULL_TREE;
+
+  tree call = build_call_n (fn, 2, fold_convert (ptr_type_node, addr),
+			    fold_convert (size_type_node, size));
+  SET_EXPR_LOCATION (call, loc);
+  /* There's no record to clear in a constant evaluation, and the call
+     isn't a constant expression.  */
+  tree is_ce = lookup_qualified_name
+    (global_namespace, get_identifier ("__builtin_is_constant_evaluated"));
+  if (!is_ce || TREE_CODE (is_ce) != FUNCTION_DECL)
+    return call;
+  return build3_loc (loc, COND_EXPR, void_type_node,
+		     build_call_n (is_ce, 0), void_node, call);
 }
 
 /* Return the address of a stable, comdat-folded, per-declaration opaque
