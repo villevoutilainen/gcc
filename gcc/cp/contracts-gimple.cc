@@ -3677,7 +3677,8 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 	      error_at (gimple_location (call),
 			"argument %qE is not owned by the calling function, "
 			"so it may not be passed as the non-const reference "
-			"parameter %qD of %qD", substituted, parm, callee);
+			"parameter %qD of %qD",
+			cg_display_argument (substituted, parm), parm, callee);
 	      if (const char *why = oa_unprovable_reason_text (own_reason))
 		inform (gimple_location (call), "%s", _(why));
 	    }
@@ -3874,6 +3875,134 @@ cg_conveyor_error_at (location_t loc, const char *gmsgid, ...)
    ('<unknown>').  VAL itself if nothing better is found.  */
 
 static tree cg_capture_name (tree);
+static tree cg_display_value (tree, int);
+
+/* The object *PTR names, PTR being a displayed pointer (or reference):
+   'x' for '&x', '*p' otherwise.  */
+
+static tree
+cg_display_deref (tree ptr, tree type)
+{
+  if (TREE_CODE (ptr) == ADDR_EXPR)
+    return TREE_OPERAND (ptr, 0);
+  if (TYPE_REF_P (TREE_TYPE (ptr)))
+    return DECL_P (ptr) ? convert_from_reference (ptr)
+			: build1 (INDIRECT_REF, type, ptr);
+  return build1 (INDIRECT_REF, type, ptr);
+}
+
+/* For PHI, a merge of two values on the arms of one condition (a '?:',
+   a '&&'/'||' operand): 'c ? a : b'.  NULL_TREE if it is not that
+   shape.  */
+
+static tree
+cg_display_phi (gphi *phi, int depth)
+{
+  if (gimple_phi_num_args (phi) != 2)
+    return NULL_TREE;
+  /* The block ending in the condition, and whether arm I is reached
+     through its true edge.  */
+  basic_block cond_bb = NULL;
+  bool on_true[2];
+  for (unsigned i = 0; i < 2; ++i)
+    {
+      edge e = gimple_phi_arg_edge (phi, i);
+      basic_block b = e->src;
+      if (!(safe_dyn_cast <gcond *> (*gsi_last_bb (b)))
+	  && single_pred_p (b))
+	{
+	  e = single_pred_edge (b);
+	  b = e->src;
+	}
+      if (!safe_dyn_cast <gcond *> (*gsi_last_bb (b))
+	  || (cond_bb && cond_bb != b))
+	return NULL_TREE;
+      cond_bb = b;
+      on_true[i] = (e->flags & EDGE_TRUE_VALUE) != 0;
+    }
+  if (on_true[0] == on_true[1])
+    return NULL_TREE;
+  gcond *cond = as_a <gcond *> (*gsi_last_bb (cond_bb));
+  tree lhs = cg_display_value (gimple_cond_lhs (cond), depth + 1);
+  tree rhs = cg_display_value (gimple_cond_rhs (cond), depth + 1);
+  tree test;
+  /* 'if (c != 0)' is how GIMPLE spells the test 'c'.  */
+  if (gimple_cond_code (cond) == NE_EXPR && integer_zerop (rhs)
+      && TREE_CODE (TREE_TYPE (lhs)) == BOOLEAN_TYPE)
+    test = lhs;
+  else
+    test = build2 (gimple_cond_code (cond), boolean_type_node, lhs, rhs);
+  tree arms[2];
+  for (unsigned i = 0; i < 2; ++i)
+    arms[i] = cg_display_value (gimple_phi_arg_def (phi, i), depth + 1);
+  unsigned t = on_true[0] ? 0 : 1;
+  return build3 (COND_EXPR, TREE_TYPE (gimple_phi_result (phi)), test,
+		 arms[t], arms[1 - t]);
+}
+
+/* For CALL, the call itself, as the source spells it: 'f (x)'.  For a
+   placement new, the pointer it returns: its placement argument.
+   NULL_TREE if it has no function to name.  */
+
+static tree
+cg_display_call (gcall *call, int depth)
+{
+  tree fn = gimple_call_fndecl (call);
+  if (!fn)
+    return NULL_TREE;
+  if (DECL_IS_OPERATOR_NEW_P (fn) && gimple_call_num_args (call) == 2
+      && POINTER_TYPE_P (TREE_TYPE (gimple_call_arg (call, 1)))
+      && VOID_TYPE_P (TREE_TYPE (TREE_TYPE (gimple_call_arg (call, 1)))))
+    return cg_display_value (gimple_call_arg (call, 1), depth + 1);
+  auto_vec<tree, 8> args;
+  tree ptypes = TYPE_ARG_TYPES (TREE_TYPE (fn));
+  for (unsigned k = 0; k < gimple_call_num_args (call); ++k)
+    {
+      tree arg = gimple_call_arg (call, k);
+      tree shown = cg_display_value (arg, depth + 1);
+      /* A reference argument, as the object it binds to: 'f (*p)'.  */
+      tree ptype = ptypes ? TREE_VALUE (ptypes) : NULL_TREE;
+      if (ptype && TYPE_REF_P (ptype) && POINTER_TYPE_P (TREE_TYPE (arg))
+	  && !TYPE_REF_P (TREE_TYPE (shown)))
+	shown = cg_display_deref (shown, TREE_TYPE (ptype));
+      args.safe_push (shown);
+      if (ptypes)
+	ptypes = TREE_CHAIN (ptypes);
+    }
+  return build_call_expr_loc_array (UNKNOWN_LOCATION, fn, args.length (),
+				    args.address ());
+}
+
+/* For OFF, the byte offset added to a pointer to ELT, the element
+   index it is ('i' for 'i * sizeof (ELT)'), unconverted as the source
+   spells it.  NULL_TREE if it isn't a whole number of elements.  */
+
+static tree
+cg_display_index (tree off, tree elt, int depth)
+{
+  tree size = TYPE_SIZE_UNIT (elt);
+  if (!size || TREE_CODE (size) != INTEGER_CST || TREE_CODE (off) != SSA_NAME)
+    return NULL_TREE;
+  tree index = off;
+  if (!integer_onep (size))
+    {
+      gassign *mult = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (off));
+      if (!mult || gimple_assign_rhs_code (mult) != MULT_EXPR
+	  || !tree_int_cst_equal (gimple_assign_rhs2 (mult), size))
+	return NULL_TREE;
+      index = gimple_assign_rhs1 (mult);
+    }
+  /* The widening to sizetype is GCC's, not the source's.  */
+  while (TREE_CODE (index) == SSA_NAME)
+    {
+      gassign *conv = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (index));
+      if (!conv || !CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (conv))
+	  || SSA_NAME_VAR (index))
+	break;
+      index = gimple_assign_rhs1 (conv);
+    }
+  return cg_display_value (index, depth + 1);
+}
 
 static tree
 cg_display_value (tree val, int depth = 0)
@@ -3881,10 +4010,30 @@ cg_display_value (tree val, int depth = 0)
   if (TREE_CODE (val) != SSA_NAME || depth > 4)
     return val;
   if (tree var = SSA_NAME_VAR (val))
-    if (DECL_P (var) && DECL_NAME (var)
-	&& (!DECL_ARTIFICIAL (var) || is_this_parameter (var)))
-      return var;
+    {
+      if (DECL_P (var) && DECL_NAME (var)
+	  && (!DECL_ARTIFICIAL (var) || is_this_parameter (var)))
+	return var;
+      /* A predicate function's parameters: its postcondition's result
+	 ('r', not the '__r' it is passed as), and the locals its
+	 condition captures, under their own names.  */
+      if (TREE_CODE (var) == PARM_DECL && SSA_NAME_IS_DEFAULT_DEF (val))
+	{
+	  if (tree name = contract_pred_result_name (var))
+	    return name;
+	  if (DECL_NAME (var) && DECL_CONTEXT (var)
+	      && (CONTRACT_HELPER (DECL_CONTEXT (var))
+		  == ldf_contract_predicate_helper))
+	    return var;
+	}
+    }
   gimple *def = SSA_NAME_DEF_STMT (val);
+  if (gphi *phi = safe_dyn_cast <gphi *> (def))
+    if (tree cond = cg_display_phi (phi, depth))
+      return cond;
+  if (gcall *call = safe_dyn_cast <gcall *> (def))
+    if (tree shown = cg_display_call (call, depth))
+      return shown;
   if (!def || !is_gimple_assign (def))
     return val;
   tree_code code = gimple_assign_rhs_code (def);
@@ -3923,11 +4072,11 @@ cg_display_value (tree val, int depth = 0)
 	    {
 	      tree ptr = cg_display_value (TREE_OPERAND (TREE_OPERAND (ref, 0),
 							  0), depth + 1);
-	      if (DECL_P (ptr) && POINTER_TYPE_P (TREE_TYPE (ptr)))
+	      if (TREE_CODE (ptr) != SSA_NAME && POINTER_TYPE_P (TREE_TYPE (ptr)))
 		return build1 (ADDR_EXPR, TREE_TYPE (rhs1),
 			       build3 (COMPONENT_REF, TREE_TYPE (ref),
-				       build1 (INDIRECT_REF,
-					       TREE_TYPE (TREE_TYPE (ptr)), ptr),
+				       cg_display_deref (ptr,
+							 TREE_TYPE (TREE_TYPE (ptr))),
 				       TREE_OPERAND (ref, 1), NULL_TREE));
 	    }
 	}
@@ -3943,12 +4092,9 @@ cg_display_value (tree val, int depth = 0)
 	      && TREE_CODE (TREE_OPERAND (obj, 0)) == SSA_NAME)
 	    {
 	      tree ptr = cg_display_value (TREE_OPERAND (obj, 0), depth + 1);
-	      if (!DECL_P (ptr))
+	      if (TREE_CODE (ptr) == SSA_NAME)
 		return val;
-	      tree base = (TYPE_REF_P (TREE_TYPE (ptr))
-			   ? convert_from_reference (ptr)
-			   : build1 (INDIRECT_REF, TREE_TYPE (TREE_TYPE (ptr)),
-				     ptr));
+	      tree base = cg_display_deref (ptr, TREE_TYPE (TREE_TYPE (ptr)));
 	      return build3 (COMPONENT_REF, TREE_TYPE (rhs1), base,
 			     TREE_OPERAND (rhs1, 1), NULL_TREE);
 	    }
@@ -3964,13 +4110,22 @@ cg_display_value (tree val, int depth = 0)
 	  && TREE_CODE (TREE_OPERAND (rhs1, 0)) == SSA_NAME)
 	{
 	  tree ptr = cg_display_value (TREE_OPERAND (rhs1, 0), depth + 1);
-	  if (DECL_P (ptr) && TYPE_REF_P (TREE_TYPE (ptr)))
-	    return convert_from_reference (ptr);
-	  if (DECL_P (ptr))
-	    return build1 (INDIRECT_REF, TREE_TYPE (rhs1), ptr);
+	  if (TREE_CODE (ptr) != SSA_NAME)
+	    return cg_display_deref (ptr, TREE_TYPE (rhs1));
 	}
       return val;
     }
+  /* 'p + i', scaled by the element size: '&p[i]'.  */
+  if (code == POINTER_PLUS_EXPR)
+    if (tree index = cg_display_index (gimple_assign_rhs2 (def),
+				       TREE_TYPE (TREE_TYPE (val)), depth))
+      {
+	tree ptr = cg_display_value (rhs1, depth + 1);
+	tree elt = TREE_TYPE (TREE_TYPE (val));
+	return build1 (ADDR_EXPR, TREE_TYPE (val),
+		       build4 (ARRAY_REF, elt, ptr, index, NULL_TREE,
+			       NULL_TREE));
+      }
   if (TREE_CODE_CLASS (code) == tcc_binary)
     return build2 (code, TREE_TYPE (val), cg_display_value (rhs1, depth + 1),
 		   cg_display_value (gimple_assign_rhs2 (def), depth + 1));
@@ -4021,9 +4176,9 @@ cg_display_object (tree ref)
       && integer_zerop (TREE_OPERAND (TREE_OPERAND (ref, 0), 1)))
     {
       tree ptr = cg_display_value (TREE_OPERAND (TREE_OPERAND (ref, 0), 0));
-      if (DECL_P (ptr))
+      if (TREE_CODE (ptr) != SSA_NAME)
 	return build3 (COMPONENT_REF, TREE_TYPE (ref),
-		       build1 (INDIRECT_REF, TREE_TYPE (TREE_TYPE (ptr)), ptr),
+		       cg_display_deref (ptr, TREE_TYPE (TREE_TYPE (ptr))),
 		       TREE_OPERAND (ref, 1), NULL_TREE);
     }
   return ref;
@@ -4063,8 +4218,8 @@ cg_display_argument (tree arg, tree parm)
 	arg = gimple_assign_rhs1 (SSA_NAME_DEF_STMT (arg));
       if (TREE_CODE (arg) == ADDR_EXPR)
 	return cg_display_object (TREE_OPERAND (arg, 0));
-      tree ptr = cg_display_value (arg);
-      return build1 (INDIRECT_REF, TREE_TYPE (TREE_TYPE (arg)), ptr);
+      return cg_display_deref (cg_display_value (arg),
+			       TREE_TYPE (TREE_TYPE (arg)));
     }
   return cg_display_value (arg);
 }
@@ -5280,34 +5435,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		continue; /* Proven true: silently discharged.  */
 	      if (reported_nz_parms.add (arg))
 		continue; /* Already reported for this call.  */
-	      /* An anonymous SSA name prints as '<unknown>'; name the call
-		 it is the result of instead.  */
-	      tree result_of = NULL_TREE;
-	      if (TREE_CODE (substituted) == SSA_NAME
-		  && !SSA_NAME_VAR (substituted))
-		{
-		  tree src = substituted;
-		  gimple *def = SSA_NAME_DEF_STMT (src);
-		  while (def && gimple_assign_ssa_name_copy_p (def))
-		    {
-		      src = gimple_assign_rhs1 (def);
-		      def = SSA_NAME_DEF_STMT (src);
-		    }
-		  if (def && is_gimple_call (def))
-		    result_of = gimple_call_fndecl (as_a <gcall *> (def));
-		  /* As the call: 'any (x)'.  */
-		  if (result_of)
-		    {
-		      gcall *dc = as_a <gcall *> (def);
-		      auto_vec<tree, 8> args;
-		      for (unsigned k = 0; k < gimple_call_num_args (dc); ++k)
-			args.safe_push (cg_display_value (gimple_call_arg (dc, k)));
-		      substituted
-			= build_call_expr_loc_array (UNKNOWN_LOCATION, result_of,
-						     args.length (),
-						     args.address ());
-		    }
-		}
+	      substituted = cg_display_value (substituted);
 	      if (strict)
 		cg_obligation_error_at (gimple_location (call),
 					 "cannot prove that %qE is nonzero, as required by "

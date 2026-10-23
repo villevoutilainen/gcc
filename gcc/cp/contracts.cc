@@ -1470,6 +1470,20 @@ static GTY(()) hash_map<tree, tree> *decl_wrapper_fn = nullptr;
 
 static GTY(()) hash_map<tree, tree> *decl_for_wrapper = nullptr;
 
+/* A predicate function's result parameter, mapped to the name its
+   postcondition gave the result ('r' in 'post (r: r > 0)').  */
+static GTY(()) hash_map<tree, tree> *pred_result_names = nullptr;
+
+/* The name to show PARM, a predicate function's result parameter, by
+   in a diagnostic, or NULL_TREE if it isn't one.  */
+
+tree
+contract_pred_result_name (tree parm)
+{
+  tree *result = hash_map_safe_get (pred_result_names, parm);
+  return result ? *result : NULL_TREE;
+}
+
 /* Makes wrapper the precondition function for FNDECL.  */
 
 static void
@@ -6516,6 +6530,13 @@ build_predicate_core_function_1 (tree contract, tree orig)
 	 placeholder too, so either form works.  */
       if (postcond_id && postcond_id != DECL_RESULT (orig))
 	insert_decl_map (&id, postcond_id, result_parm);
+      /* The name the source gave the result, for diagnostics about
+	 this function's body.  */
+      if (postcond_id && DECL_P (postcond_id) && DECL_NAME (postcond_id))
+	{
+	  hash_map_maybe_create<hm_ggc> (pred_result_names);
+	  pred_result_names->put (result_parm, DECL_NAME (postcond_id));
+	}
     }
 
   tree condition = CONTRACT_CONDITION (contract);
