@@ -2,10 +2,9 @@
 // attached to Derived::f is genuinely eligible on both. A statically-
 // named direct call goes through both Derived::f's own caller-side
 // wrapper (client) and its own body (definition), so both fire; a
-// virtual call through Base* only ever reaches Derived::f's body
-// (definition) -- there is no caller-side wrapper for Base::f's own,
-// unrelated, unforced contract, since inherited() only governs the
-// synthesized copy, not Base::f's own eligibility.
+// virtual call through Base* names Base::f, so the caller checks
+// Base::f's own contract, and Derived::f's body, reached by dynamic
+// dispatch, checks the inherited copy.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
@@ -55,14 +54,14 @@ int main ()
 
   base_calls = 0;
 
-  // Through Base*: only Derived::f's own body (definition), reached by
-  // dynamic dispatch, checks the inherited copy -- Base::f's own,
-  // unforced contract has no client-side eligibility of its own.
+  // Through Base*: the caller checks Base::f's own contract, and
+  // Derived::f's own body (definition), reached by dynamic dispatch,
+  // checks the inherited copy.
   Base* b = new Derived ();
   int r2 = b->f (5);
   if (r2 != 10)
     __builtin_abort ();
-  if (base_calls != 1)
+  if (base_calls != 2)
     __builtin_abort ();
 
   delete b;

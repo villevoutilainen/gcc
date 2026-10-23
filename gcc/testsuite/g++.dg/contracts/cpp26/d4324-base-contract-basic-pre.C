@@ -66,7 +66,9 @@ int main ()
   // predicate was evaluated, as part of Derived's own contract check.
   if (base_calls != 0)
     __builtin_abort ();
-  if (derived_calls != 1)
+  // Checked twice: by the caller, which names the virtual Derived::f,
+  // and in Derived::f's definition.
+  if (derived_calls != 2)
     __builtin_abort ();
 
   return 0;

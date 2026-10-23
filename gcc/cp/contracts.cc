@@ -567,11 +567,24 @@ contract_active_p (tree contract, contract_check_side side)
    case handled first: its side eligibility was fixed, per side, at
    inheritance time, and is the sole authority for it -- not blended
    with the (irrelevant, since it names the same control object as the
-   base's own contract) force-flag/policy logic below.  */
+   base's own contract) force-flag/policy logic below.
+
+   A contract of FN, a virtual function, or of the virtual function FN is
+   the caller-side wrapper of, is always checked on the client side: a call names FN, the statically chosen function, which may not be
+   the function that runs, so the caller is the only place FN's own
+   contract is sure to be checked.  -fcontracts-client-check applies to
+   non-virtual functions only.  */
+
+static tree get_orig_func_for_wrapper (tree);
 
 static bool
-contract_runs_on_side (tree contract, contract_check_side side)
+contract_runs_on_side (tree contract, contract_check_side side,
+		       tree fn = NULL_TREE)
 {
+  /* For a caller-side wrapper, the function it wraps.  */
+  if (fn && DECL_CONTRACT_WRAPPER (fn))
+    fn = get_orig_func_for_wrapper (fn);
+
   if (contract_is_inherited_p (contract))
     return contract_inherited_runs_on_side (contract, side);
 
@@ -588,6 +601,7 @@ contract_runs_on_side (tree contract, contract_check_side side)
     return force_def ? true : force_client ? false
 			     : flag_contracts_definition_check;
   return force_def ? false : force_client ? true
+			   : (fn && DECL_VIRTUAL_P (fn)) ? true
 			   : (TREE_CODE (contract) == POSTCONDITION_STMT
 			      ? flag_contract_client_check > 1
 			      : flag_contract_client_check > 0);
@@ -606,7 +620,7 @@ has_active_contract_condition (tree fndecl, tree_code c,
       tree contract = TREE_VALUE (TREE_VALUE (as));
       if (TREE_CODE (contract) == c
 	  && contract_active_p (contract, side)
-	  && contract_runs_on_side (contract, side))
+	  && contract_runs_on_side (contract, side, fndecl))
 	return true;
     }
   return false;
@@ -1780,7 +1794,8 @@ copy_contracts_list (tree contracts, tree fndecl,
 
       contract_check_side side
 	= contract_side_of (CONTRACT_STATEMENT (contracts), fndecl);
-      if (!contract_runs_on_side (CONTRACT_STATEMENT (contracts), side))
+      if (!contract_runs_on_side (CONTRACT_STATEMENT (contracts), side,
+				  fndecl))
 	continue;
 
       tree c = copy_node (contracts);
@@ -2124,7 +2139,7 @@ copy_and_remap_contracts (tree dest, tree source,
 	 (define_contract_wrapper_func) filters by side here.  */
       if (for_wrapper
 	  && !contract_runs_on_side (CONTRACT_STATEMENT (contracts),
-				     ccs_wrapper))
+				     ccs_wrapper, source))
 	continue;
 
       /* The first part is copying of the legacy attribute layout - eventually
@@ -4009,7 +4024,8 @@ remap_and_emit_conditions (tree fn, tree condfn, tree_code code)
     {
       tree contract = CONTRACT_STATEMENT (contract_spec);
       if (TREE_CODE (contract) == code
-	  && contract_runs_on_side (contract, contract_side_of (contract, fn)))
+	  && contract_runs_on_side (contract, contract_side_of (contract, fn),
+				    fn))
 	{
 	  contract = copy_node (contract);
 	  if (CONTRACT_CONDITION (contract) != error_mark_node)

@@ -58,10 +58,11 @@ int main ()
   if (r != 10)
     __builtin_abort ();
 
-  // Only Derived::f's own contract ran; Base::f's was never inherited.
+  // Only Derived::f's own contract ran, by the caller and in Derived::f;
+  // Base::f's was never inherited.
   if (base_calls != 0)
     __builtin_abort ();
-  if (derived_calls != 1)
+  if (derived_calls != 2)
     __builtin_abort ();
 
   return 0;
