@@ -1,9 +1,8 @@
 // D4324: Base::f and an actual override Derived::f each declare their
-// own, independent control-object precondition. Step 1 does not add
-// any inheritance between them (that's later work) -- calling through
-// a Base* to a Base instance and to a Derived instance must each fire
-// only that object's own dynamic type's control object, never both,
-// never the other one's.
+// own, independent control-object precondition, with no inheritance
+// between them.  A call through a Base* names Base::f, so the caller
+// checks Base::f's contract; the function that runs checks its own:
+// Base::f's again for a Base instance, Derived::f's for a Derived one.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
@@ -58,14 +57,14 @@ int main ()
   Base* b = new Base ();
   if (b->f (5) != 5)
     __builtin_abort ();
-  if (base_calls != 1 || derived_calls != 0)
+  if (base_calls != 2 || derived_calls != 0)
     __builtin_abort ();
   delete b;
 
   Base* d = new Derived ();
   if (d->f (5) != 10)
     __builtin_abort ();
-  if (base_calls != 1 || derived_calls != 1)
+  if (base_calls != 3 || derived_calls != 1)
     __builtin_abort ();
   delete d;
 

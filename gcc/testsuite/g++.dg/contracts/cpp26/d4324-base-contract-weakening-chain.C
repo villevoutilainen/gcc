@@ -53,7 +53,9 @@ int main ()
   int r = d.f (500);
   if (r != 1000)
     __builtin_abort ();
-  if (calls != 1)
+  // Checked twice: by the caller, which names the virtual Derived::f,
+  // and in Derived::f's definition.
+  if (calls != 2)
     __builtin_abort ();
   return 0;
 }

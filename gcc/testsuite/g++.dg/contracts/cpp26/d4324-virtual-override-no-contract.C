@@ -1,8 +1,8 @@
 // D4324: Base::f has a control-object precondition; Derived::f
-// overrides it with no contracts of its own. Step 1 does not add any
-// contract inheritance (that's later work), so calling through a
-// Base* to a Derived instance must run Derived::f's own (contract-free)
-// body and must NOT invoke Base::f's control object at all.
+// overrides it with no contracts of its own, and inherits none.  A call
+// through a Base* to a Derived instance runs Derived::f's own
+// (contract-free) body; Base::f's control object is invoked once, by the
+// caller, since the call names Base::f.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
@@ -42,7 +42,7 @@ int main ()
   Base* d = new Derived ();
   if (d->f (5) != 10)
     __builtin_abort ();
-  if (base_calls != 0)
+  if (base_calls != 1)
     __builtin_abort ();
   delete d;
   return 0;

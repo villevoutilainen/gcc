@@ -7,7 +7,8 @@
 // Derived deliberately does not override f: a call through a Base*
 // pointing at a Derived instance is still a genuinely virtual call
 // (dispatched through the vtable), yet still lands on Base::f's own
-// body, exercising Base::f's own definition-side contract.
+// body, exercising Base::f's own definition-side contract.  The call
+// names Base::f, so its contract is checked by the caller as well.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
@@ -47,7 +48,7 @@ int main ()
   Base* b = new Derived ();
   if (b->f (5) != 5)
     __builtin_abort ();
-  if (calls != 1)
+  if (calls != 2)
     __builtin_abort ();
   delete b;
   return 0;
