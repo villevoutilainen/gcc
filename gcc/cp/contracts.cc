@@ -13182,8 +13182,17 @@ oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
 
   enum tree_code code = TREE_CODE (c);
   if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
-      && code != GE_EXPR && code != EQ_EXPR)
+      && code != GE_EXPR && code != EQ_EXPR && code != NE_EXPR)
     return;
+  /* 'x != val' known false is 'x == val'; known true, a range of two
+     pieces, which a range fact can't hold.  */
+  if (code == NE_EXPR)
+    {
+      if (asserted_true)
+	return;
+      code = EQ_EXPR;
+      asserted_true = true;
+    }
 
   tree op0_scalar = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
   tree op1_scalar = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
@@ -17595,6 +17604,143 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
     }
 }
 
+/* Recognize CONJUNCT as 'E != C' (or 'C != E') for an integer constant
+   C, E being anything else: E in *EXPR_OUT, with a reference's read and
+   a conversion operator looked through (oa_strip_to_relational_operand),
+   C in *CST_OUT.  */
+
+static bool
+oa_match_ne_constant (tree conjunct, tree *expr_out, tree *cst_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  if (TREE_CODE (c) != NE_EXPR)
+    return false;
+  tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+  tree cst0 = op0, cst1 = op1;
+  STRIP_NOPS (cst0);
+  STRIP_NOPS (cst1);
+  if (TREE_CODE (cst1) == INTEGER_CST)
+    *cst_out = cst1, *expr_out = op0;
+  else if (TREE_CODE (cst0) == INTEGER_CST)
+    *cst_out = cst0, *expr_out = op1;
+  else
+    return false;
+  *expr_out = oa_strip_to_relational_operand (*expr_out);
+  return true;
+}
+
+/* CONJUNCT, a precondition conjunct of CALLEE, with each parameter
+   replaced by CALL's argument for it, folded: a constant when every
+   argument it reads is one ('pre (b)' for 'f (true)').  NULL_TREE
+   otherwise.  */
+
+static tree
+oa_fold_conjunct_at_call (tree callee, tree call, tree conjunct)
+{
+  struct data_t { tree callee, call; bool ok; } d = { callee, call, true };
+  tree copy = unshare_expr (conjunct);
+  cp_walk_tree (&copy, [](tree *tp, int *walk_subtrees, void *d_) -> tree
+    {
+      data_t *dd = (data_t *) d_;
+      if (TYPE_P (*tp))
+	{
+	  *walk_subtrees = 0;
+	  return NULL_TREE;
+	}
+      if (TREE_CODE (*tp) != PARM_DECL)
+	return NULL_TREE;
+      tree arg = oa_substitute_call_arg (dd->callee, dd->call, *tp);
+      tree stripped = arg;
+      if (stripped)
+	{
+	  stripped = STRIP_ANY_LOCATION_WRAPPER (stripped);
+	  STRIP_NOPS (stripped);
+	}
+      if (!stripped || !CONSTANT_CLASS_P (stripped)
+	  || TYPE_REF_P (TREE_TYPE (*tp)))
+	{
+	  dd->ok = false;
+	  return *tp;
+	}
+      *tp = fold_convert (TREE_TYPE (*tp), stripped);
+      return NULL_TREE;
+    }, &d, NULL);
+  if (!d.ok)
+    return NULL_TREE;
+  tree folded = maybe_constant_value (fold_non_dependent_expr (copy));
+  folded = STRIP_ANY_LOCATION_WRAPPER (folded);
+  return TREE_CODE (folded) == INTEGER_CST ? folded : NULL_TREE;
+}
+
+/* CONJUNCT, a conveyor-active precondition conjunct of CALLEE, has no
+   proof rule at CALL (a disjunction, 'x != y', a call compared with a
+   constant): true or false only if its arguments make it a constant,
+   otherwise unprovable -- diagnosed as such rather than passed
+   silently.  */
+
+static void
+oa_report_uncovered_conjunct (tree call, tree callee, tree conjunct,
+			      bool strict)
+{
+  location_t loc = EXPR_LOCATION (call);
+  if (tree folded = oa_fold_conjunct_at_call (callee, call, conjunct))
+    {
+      if (integer_zerop (folded))
+	{
+	  oa_error_at (loc, "the arguments provably violate the precondition "
+		       "%qE of %qD", conjunct, callee);
+	  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	}
+      return;
+    }
+  if (strict)
+    oa_error_at (loc, "cannot prove the precondition %qE of %qD",
+		 conjunct, callee);
+  else
+    oa_warning_at (loc, 0, "cannot verify the precondition %qE of %qD",
+		   conjunct, callee);
+  oa_inform (loc, "%s", _(oa_unprovable_reason_text
+			    (OA_UNPROVABLE_UNSUPPORTED_CONDITION)));
+  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+}
+
+/* 'E != C' at CALL: E, substituted (SUBSTITUTED), must be established
+   outside C -- its range above or below C, or, for C zero, nonzero.  */
+
+static oa_proof_result
+oa_check_ne_constant (oa_env &env, tree substituted, tree cst,
+		      oa_unprovable_reason *reason)
+{
+  if (integer_zerop (cst) && oa_provably_nonzero_p (substituted, env))
+    return OA_PROVEN_TRUE;
+  if (!INTEGRAL_TYPE_P (TREE_TYPE (substituted)))
+    {
+      *reason = OA_UNPROVABLE_NO_FACT;
+      return OA_UNKNOWN;
+    }
+  oa_proof_result side[2];
+  tree_code codes[2] = { GT_EXPR, LT_EXPR };
+  for (unsigned k = 0; k < 2; ++k)
+    {
+      oa_range_fact req;
+      req.base = NULL_TREE;
+      req.has_lo = req.has_hi = false;
+      oa_tighten_range_bound (req, codes[k], wi::to_widest (cst));
+      oa_unprovable_reason r = OA_UNPROVABLE_NO_FACT;
+      side[k] = oa_env_check_range_subsumption (env, substituted, req, &r);
+      if (k == 0)
+	*reason = r;
+    }
+  if (side[0] == OA_PROVEN_TRUE || side[1] == OA_PROVEN_TRUE)
+    return OA_PROVEN_TRUE;
+  if (side[0] == OA_PROVEN_FALSE && side[1] == OA_PROVEN_FALSE)
+    return OA_PROVEN_FALSE;
+  return OA_UNKNOWN;
+}
+
 static void
 oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 {
@@ -17905,11 +18051,24 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	     matching the range/relational branches' own PROVEN_FALSE
 	     handling above.  */
 	  tree nz_arg;
-	  if (oa_nonzero_conjunct_p (*conjuncts[i], &nz_arg))
+	  tree ne_expr, ne_cst;
+	  bool ne_shape = oa_match_ne_constant (*conjuncts[i], &ne_expr,
+						&ne_cst);
+	  bool nz_shape = oa_nonzero_conjunct_p (*conjuncts[i], &nz_arg);
+	  /* A reference parameter's read too ('pre (x != 0)' for an
+	     'int &x').  */
+	  if (!nz_shape && ne_shape && integer_zerop (ne_cst)
+	      && TREE_CODE (ne_expr) == PARM_DECL)
+	    nz_shape = true, nz_arg = ne_expr;
+	  if (nz_shape)
 	    {
 	      tree substituted = oa_substitute_value_arg (callee, call, nz_arg);
 	      if (!substituted)
-		continue;
+		{
+		  oa_report_uncovered_conjunct (call, callee, *conjuncts[i],
+						strict);
+		  continue;
+		}
 	      substituted = oa_strip_conversion_call (substituted);
 	      tree stripped = STRIP_ANY_LOCATION_WRAPPER (substituted);
 	      if (TREE_CODE (stripped) == INTEGER_CST)
@@ -17924,6 +18083,28 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		}
 	      if (oa_provably_nonzero_p (substituted, env))
 		continue; /* Proven true: silently discharged.  */
+	      /* Or by its range: excluding zero, or exactly zero.  */
+	      {
+		oa_unprovable_reason nz_reason = OA_UNPROVABLE_NO_FACT;
+		oa_proof_result nz_r
+		  = oa_check_ne_constant (env, substituted,
+					  build_zero_cst (TREE_TYPE (stripped)),
+					  &nz_reason);
+		if (nz_r == OA_PROVEN_TRUE)
+		  continue; /* Proven true: silently discharged.  */
+		if (nz_r == OA_PROVEN_FALSE)
+		  {
+		    oa_error_at (EXPR_LOCATION (call),
+				 "argument %qE provably violates the "
+				 "precondition of %qD", substituted, callee);
+		    oa_inform (EXPR_LOCATION (call),
+			       "%qE is established to be exactly zero, but the "
+			       "precondition requires it to be nonzero",
+			       substituted);
+		    oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    continue;
+		  }
+	      }
 	      if (reported_nz_parms.add (nz_arg))
 		continue; /* Already reported for this call.  */
 	      if (strict)
@@ -17938,11 +18119,75 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	      continue;
 	    }
 
+	  /* 'E != C' for any other E, or a nonzero C: E's range must
+	     exclude C.  */
+	  if (ne_shape)
+	    {
+	      tree substituted
+		= (TREE_CODE (ne_expr) == PARM_DECL
+		   ? oa_substitute_value_arg (callee, call, ne_expr)
+		   : oa_substitute_call_expr (callee, call, ne_expr));
+	      if (!substituted)
+		{
+		  oa_report_uncovered_conjunct (call, callee, *conjuncts[i],
+						strict);
+		  continue;
+		}
+	      substituted = oa_strip_conversion_call (substituted);
+	      tree stripped = STRIP_ANY_LOCATION_WRAPPER (substituted);
+	      oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
+	      oa_proof_result r
+		= (TREE_CODE (stripped) == INTEGER_CST
+		   ? (wi::to_widest (stripped) == wi::to_widest (ne_cst)
+		      ? OA_PROVEN_FALSE : OA_PROVEN_TRUE)
+		   : oa_check_ne_constant (env, substituted, ne_cst, &reason));
+	      switch (r)
+		{
+		case OA_PROVEN_TRUE:
+		  break; /* Silently discharged.  */
+		case OA_PROVEN_FALSE:
+		  oa_error_at (EXPR_LOCATION (call),
+			       "argument %qE provably violates the precondition "
+			       "of %qD", substituted, callee);
+		  oa_inform (EXPR_LOCATION (call),
+			     "%qE is established to be exactly %qE, but the "
+			     "precondition requires it to be different",
+			     substituted, ne_cst);
+		  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  break;
+		case OA_UNKNOWN:
+		  if (strict)
+		    oa_error_at (EXPR_LOCATION (call),
+				 "cannot prove that %qE satisfies the "
+				 "precondition of %qD", substituted, callee);
+		  else
+		    oa_warning_at (EXPR_LOCATION (call), 0,
+				   "cannot verify that %qE satisfies the "
+				   "precondition of %qD", substituted, callee);
+		  if (const char *why = oa_unprovable_reason_text (reason))
+		    oa_inform (EXPR_LOCATION (call), "%s", _(why));
+		  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  break;
+		}
+	      continue;
+	    }
+
 	  tree pred_fn, arg_decl;
 	  bool negated;
 	  if (!oa_predicate_conjunct_shape (*conjuncts[i], &pred_fn, &arg_decl,
 					    &negated))
-	    continue;
+	    {
+	      /* A comparison with a constant is the range obligation's
+		 (oa_handle_precondition_simple_range_obligation); anything
+		 else has no proof rule here.  */
+	      tree gen_expr, gen_const;
+	      tree_code gen_code;
+	      if (!oa_match_general_comparison (*conjuncts[i], &gen_expr,
+						&gen_code, &gen_const))
+		oa_report_uncovered_conjunct (call, callee, *conjuncts[i],
+					      strict);
+	      continue;
+	    }
 
 	  /* D4324: CALL can also be an AGGR_INIT_EXPR (see oa_substitute_
 	     call_arg's own comment) -- ARGNO 0 ('this') always declines,
@@ -17962,7 +18207,11 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 		  ? (argno < (unsigned) oa_call_first_real_arg (call)
 		     || argno >= (unsigned) aggr_init_expr_nargs (call))
 		  : argno >= (unsigned) call_expr_nargs (call)))
-	    continue;
+	    {
+	      oa_report_uncovered_conjunct (call, callee, *conjuncts[i],
+					    strict);
+	      continue;
+	    }
 
 	  tree substituted = call_is_aggr_init
 	    ? AGGR_INIT_EXPR_ARG (call, argno) : CALL_EXPR_ARG (call, argno);
@@ -19076,6 +19325,34 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 
 static bool oa_call_symbolic_range_p (tree call, oa_range_fact *out);
 
+/* Whether some rule of oa_handle_call_symbolic_precondition_obligation,
+   or the range rule it runs first (oa_handle_precondition_simple_range_
+   obligation), checks CONJUNCT, a symbolic precondition conjunct.  Kept
+   to the shapes those rules take.  */
+
+static bool
+oa_symbolic_conjunct_covered_p (tree conjunct, oa_env &env)
+{
+  tree t1, t2, t3, t4;
+  tree_code code;
+  widest_int offset;
+  bool negated;
+  return (is_object_address_call_p (conjunct, &t1)
+	  || oa_nonzero_conjunct_p (conjunct, &t1)
+	  || oa_match_simple_comparison (conjunct, &t1, &code, &t2)
+	  || oa_match_general_comparison (conjunct, &t1, &code, &t2)
+	  || oa_match_comparison_against_param (conjunct, &t1, &code, &t2)
+	  || oa_match_comparison_against_call (conjunct, &t1, &code, &t2, &t3,
+					       /*allow_symbolic_accessor=*/true)
+	  || oa_match_shifted_comparison_against_call
+	       (conjunct, env, &t1, &code, &t2, &t3, &offset,
+		/*allow_symbolic_accessor=*/true)
+	  || oa_match_call_against_call (conjunct, &t1, &t2, &code, &t3, &t4,
+					 /*allow_symbolic_accessor=*/true)
+	  || oa_predicate_conjunct_shape (conjunct, &t1, &t2, &negated)
+	  || oa_unsupported_symbolic_predicate_p (conjunct, &t1));
+}
+
 /* -fcontract-symbolic-proofs: for each of CALL's callee's own active
    (non-ignored) symbolic preconditions, check that ENV already has a
    matching fact for the substituted argument's own object identity --
@@ -19133,6 +19410,11 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 
       auto_vec<tree *> conjuncts;
       oa_collect_conjuncts (&cond, &conjuncts);
+      /* A conjunct none of the symbolic rules below (nor the range
+	 one above) checks is reported, never passed over.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	if (!oa_symbolic_conjunct_covered_p (*conjuncts[i], env))
+	  oa_report_uncovered_conjunct (call, callee, *conjuncts[i], strict);
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree pred_fn, arg_decl;
@@ -19498,7 +19780,11 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	    {
 	      tree substituted = oa_substitute_call_arg (callee, call, arg);
 	      if (!substituted)
-		continue;
+		{
+		  oa_report_uncovered_conjunct (call, callee, *conjuncts[i],
+						strict);
+		  continue;
+		}
 	      if (oa_provably_nonzero_p (substituted, env))
 		continue; /* Proven true: silently discharged.  */
 	      /* Nonzero-ness is a value fact (copy-invariant, unlike
@@ -19529,6 +19815,27 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 		continue; /* Proven true: silently discharged.  */
 	      if (reported_nz_parms.add (arg))
 		continue; /* Already reported for this call.  */
+	      /* Exactly zero where CALL is ('x == 0 && f (x)').  */
+	      {
+		oa_unprovable_reason nz_reason = OA_UNPROVABLE_NO_FACT;
+		if (INTEGRAL_TYPE_P (TREE_TYPE (stripped))
+		    && (oa_check_ne_constant (env, substituted,
+					      build_zero_cst
+						(TREE_TYPE (stripped)),
+					      &nz_reason)
+			== OA_PROVEN_FALSE))
+		  {
+		    oa_error_at (EXPR_LOCATION (call),
+				 "argument %qE provably violates the "
+				 "precondition of %qD", substituted, callee);
+		    oa_inform (EXPR_LOCATION (call),
+			       "%qE is established to be exactly zero, but the "
+			       "precondition requires it to be nonzero",
+			       substituted);
+		    oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    continue;
+		  }
+	      }
 	      if (strict)
 		oa_error_at (EXPR_LOCATION (call),
 			  "cannot prove that %qE is nonzero, as required by "
@@ -31308,6 +31615,8 @@ oa_unprovable_reason_text (oa_unprovable_reason reason)
     case OA_UNPROVABLE_UNSUPPORTED_PREDICATE:
       return G_("a symbolic predicate's fact is tracked only for one "
 		 "object, named by a parameter or variable");
+    case OA_UNPROVABLE_UNSUPPORTED_CONDITION:
+      return G_("no proof rule covers a condition of this form");
     }
   gcc_unreachable ();
 }

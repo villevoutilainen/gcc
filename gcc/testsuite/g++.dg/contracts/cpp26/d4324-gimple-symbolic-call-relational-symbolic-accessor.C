@@ -10,7 +10,8 @@
 // via cg_seed_self_trust/cg_check_call, plus the same fact run through
 // cg_get_call_relational's own variable-offset fallback; (2) still
 // rejected -- a plain, untagged accessor named from a symbolic contract
-// is never recognized as a checkable obligation at all.
+// is never a trackable fact, so its obligation can't be proven: it is
+// reported as unverifiable, not passed over.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-symbolic-proofs-gimple" }
 
@@ -61,7 +62,7 @@ int use_unsound_shift (Sym& s, int i, int k)
 
 // Case 2: still rejected -- 'plain_size ()' has a real body but no
 // conveyor/symbolic tag at all; a symbolic contract naming it must not
-// be treated as a trackable fact.
+// be treated as a trackable fact, so no proof rule covers it.
 struct Plain {
   int plain_size () const { return 5; }
   int get (int n) const pre<symbolic_ctrl_v>(n < plain_size ()) { return n; }
@@ -69,12 +70,11 @@ struct Plain {
 
 int plain_checked (Plain& p, int i) pre<symbolic_ctrl_v>(i < p.plain_size ())
 {
-  return p.get (i);
-  /* No warning: 'plain_size ()' is neither conveyor- nor symbolic-
-     declared, so this conjunct is never recognized as a checkable
-     obligation at all -- not even to report "cannot verify."  Contrast
-     get_unchecked above, whose identical structure with a *symbolic*-
-     declared accessor does warn.  */
+  return p.get (i); // { dg-warning "cannot verify the precondition" }
+  /* 'plain_size ()' is neither conveyor- nor symbolic-declared, so no
+     fact about it can be established, even by this function's own
+     identical precondition: the obligation has no proof rule, and is
+     reported as such.  */
 }
 
 int main ()
@@ -85,5 +85,5 @@ int main ()
 	 + get_unchecked (s, 9)
 	 + use_sound_shift (s, 2, -1) // { dg-warning "cannot verify that .2. satisfies" }
 	 + use_unsound_shift (s, 2, 1) // { dg-warning "cannot verify that .2. satisfies" }
-	 + plain_checked (p, 2);
+	 + plain_checked (p, 2); // { dg-warning "cannot verify the precondition" }
 }

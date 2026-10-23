@@ -35,8 +35,8 @@ int t_pos (int x) { return divide (10, pos (x)); }
 int t_neg (int x) { return divide (10, neg (x)); }
 int t_nested (int x, int y) { return x != 0 ? (y != 0 ? divide (x, y) + divide (y, x) : 0) : 0; }
 
-int t_wrong_arm (int x) { return x != 0 ? 0 : divide (10, x); }	// { dg-warning "cannot verify that .x. is nonzero" }
-bool t_wrong_and (int x) { return x == 0 && divide (10, x) > 1; }	// { dg-warning "cannot verify that .x. is nonzero" }
+int t_wrong_arm (int x) { return x != 0 ? 0 : divide (10, x); }	// { dg-error "argument .x. provably violates" }
+bool t_wrong_and (int x) { return x == 0 && divide (10, x) > 1; }	// { dg-error "argument .x. provably violates" }
 int t_any (int x) { return divide (10, any (x)); }			// { dg-warning "cannot verify that .any\\(x\\). is nonzero" }
 int t_in_cond (int x) conveyor { return divide (10, x) ? 1 : 0; }	// { dg-error "cannot prove that .x. is nonzero" }
 
