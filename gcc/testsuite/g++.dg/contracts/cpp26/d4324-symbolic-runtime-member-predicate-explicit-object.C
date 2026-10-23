@@ -24,7 +24,7 @@ struct symbolic_ctrl {
 inline constexpr symbolic_ctrl symbolic_ctrl_v{};
 
 struct io_facility {
-  bool is_opened (io_facility*) symbolic;
+  bool is_opened (io_facility*) const symbolic;
   void open () post<symbolic_ctrl_v>(is_opened (this)) {}
   void write_data () pre<symbolic_ctrl_v>(is_opened (this)) {}
   ~io_facility () {}

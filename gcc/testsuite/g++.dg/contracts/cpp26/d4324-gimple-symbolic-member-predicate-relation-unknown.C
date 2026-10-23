@@ -16,7 +16,7 @@ struct symbolic_ctrl {
 inline constexpr symbolic_ctrl symbolic_ctrl_v{};
 
 struct node {
-  bool is_linked (node*) symbolic;
+  bool is_linked (node*) const symbolic;
   void link (node* const o) post<symbolic_ctrl_v>(is_linked (o));
   void send (node* o) pre<symbolic_ctrl_v>(is_linked (o));
 };
@@ -24,6 +24,6 @@ struct node {
 void f (node& a, node& b)
 {
   a.link (&b);
-  a.send (&b); // { dg-warning "cannot verify that 'bool node::is_linked\\(node\\*\\)' holds" }
+  a.send (&b); // { dg-warning "cannot verify that 'bool node::is_linked\\(node\\*\\) const' holds" }
   // { dg-message "tracked only for one object" "" { target *-*-* } .-1 }
 }

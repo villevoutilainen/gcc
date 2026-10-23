@@ -12520,6 +12520,20 @@ grokfndecl (tree ctype,
       return NULL_TREE;
     }
 
+  /* A symbolic member function is a predicate about its object, and never
+     changes it: it is 'const', with no other qualifier.  So the contracts
+     of a 'const' and a non-'const' member function name the same
+     predicate: an overload differing in qualification would be another
+     predicate, with facts of its own.  */
+  if (declared_symbolic_p && TREE_CODE (type) == METHOD_TYPE
+      && (type_memfn_quals (type) != TYPE_QUAL_CONST
+	  || rqual != REF_QUAL_NONE))
+    {
+      error_at (location, "a non-static member function declared "
+		"%<symbolic%> must be %<const%>, with no other qualifier");
+      return NULL_TREE;
+    }
+
   /* [except.spec]/9 - A deallocation function with no explicit noexcept-specifier
      has a non-throwing exception specification.  */
   if (raises == NULL_TREE
