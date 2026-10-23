@@ -38,4 +38,13 @@ void bound_constant () conveyor { int local = 200; byref (local); } // { dg-erro
 // { dg-message ".local. is established exactly 200" "" { target *-*-* } .-1 }
 void bound_copy (int k) conveyor { int l = k; byref (l); } // { dg-error "cannot prove that .l. satisfies" }
 
+// With several arguments of the same value, the one the precondition
+// is about.
+void two (int &x, int &y) conveyor pre<conveyor_assert_v> (y < 100);
+void same_value () conveyor { int l = 200, m = 200; two (l, m); } // { dg-error "argument .m. provably violates" }
+// { dg-message ".m. is established exactly 200" "" { target *-*-* } .-1 }
+void mixed (int v, int &x) conveyor pre<conveyor_assert_v> (v < 100);
+void same_literal () conveyor { int l = 200; mixed (200, l); } // { dg-error "argument .200. provably violates" }
+// { dg-message ".200. is established exactly 200" "" { target *-*-* } .-1 }
+
 // { dg-prune-output "no fact relating this value" }
