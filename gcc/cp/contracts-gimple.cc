@@ -228,6 +228,20 @@ struct cg_call_rel_fact
 typedef pair_hash<nofree_ptr_hash<tree_node>, nofree_ptr_hash<tree_node>>
   cg_field_key_hash;
 
+/* A call and a value at it.  */
+typedef pair_hash<nofree_ptr_hash<gimple>, nofree_ptr_hash<tree_node>>
+  cg_call_value_hash;
+
+/* The parameters (as their default definitions, 'this' included) whose
+   self-trusted is_object_address has ended by a call, as the AST engine
+   invalidates it (contracts.cc, oa_invalidate_symbolic_facts_for_call_
+   args): a non-conveyor call they're handed may have ended their
+   object's lifetime.  Recorded by the facts walk (cg_dom_fact_state's
+   OA_LIVE), consulted by cg_provable_object_address_p while
+   CG_CONSULT_CALL is being checked.  */
+static hash_set<cg_call_value_hash> *cg_ended_object_addresses;
+static gimple *cg_consult_call;
+
 /* The call-vs-call analogue of cg_call_rel_fact immediately above --
    "the (LHS_RECEIVER identity, LHS_CALLEE) pair this is keyed on CODE
    RHS_RECEIVER.RHS_CALLEE () holds", e.g. for 'pre<ctrl>(v.size () < w.
@@ -1931,6 +1945,16 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
      a conveyor-declared one) by cg_seed_self_trust, mirroring that
      function's own identical widening.  */
 
+  /* A self-trusted parameter whose object a call may have ended.  */
+  if (SSA_NAME_IS_DEFAULT_DEF (val) && cg_ended_object_addresses
+      && cg_consult_call
+      && cg_ended_object_addresses->contains ({cg_consult_call, val}))
+    {
+      if (reason_out)
+	*reason_out = OA_UNPROVABLE_NO_FACT;
+      return false;
+    }
+
   if (cg_fact *fact = established.get (val))
     if (!require_conveyor || fact->conveyor_established)
       return true;
@@ -3564,6 +3588,7 @@ cg_call_relational_contradicts_p (tree_code established_code,
    obligations of an ordinary caller the AST engine checks.  */
 
 static tree cg_display_argument (tree, tree);
+static tree cg_display_address (tree);
 
 static void
 cg_check_call_reference_safety (gcall *call, function *fun,
@@ -3592,7 +3617,7 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 		  error_at (gimple_location (call),
 			    "cannot prove %<is_object_address%> for %qE, "
 			    "required by the precondition of %qD",
-			    substituted, callee);
+			    cg_display_address (substituted), callee);
 		  if (const char *why = oa_unprovable_reason_text (reason))
 		    inform (gimple_location (call), "%s", _(why));
 		}
@@ -3985,6 +4010,42 @@ cg_capture_name (tree ref)
   return NULL_TREE;
 }
 
+/* How to name REF, an object whose address is taken, in a diagnostic:
+   'p->v' rather than the MEM_REF it is in GIMPLE.  */
+
+static tree
+cg_display_object (tree ref)
+{
+  if (TREE_CODE (ref) == COMPONENT_REF
+      && TREE_CODE (TREE_OPERAND (ref, 0)) == MEM_REF
+      && integer_zerop (TREE_OPERAND (TREE_OPERAND (ref, 0), 1)))
+    {
+      tree ptr = cg_display_value (TREE_OPERAND (TREE_OPERAND (ref, 0), 0));
+      if (DECL_P (ptr))
+	return build3 (COMPONENT_REF, TREE_TYPE (ref),
+		       build1 (INDIRECT_REF, TREE_TYPE (TREE_TYPE (ptr)), ptr),
+		       TREE_OPERAND (ref, 1), NULL_TREE);
+    }
+  return ref;
+}
+
+/* How to name VAL, an address, in a diagnostic: '&p->v' for the address
+   of an object, as the AST engine names it; otherwise
+   cg_display_value.  */
+
+static tree
+cg_display_address (tree val)
+{
+  if (TREE_CODE (val) == SSA_NAME
+      && gimple_assign_single_p (SSA_NAME_DEF_STMT (val))
+      && TREE_CODE (gimple_assign_rhs1 (SSA_NAME_DEF_STMT (val))) == ADDR_EXPR)
+    val = gimple_assign_rhs1 (SSA_NAME_DEF_STMT (val));
+  if (TREE_CODE (val) == ADDR_EXPR)
+    return build1 (ADDR_EXPR, TREE_TYPE (val),
+		   cg_display_object (TREE_OPERAND (val, 0)));
+  return cg_display_value (val);
+}
+
 /* How to name ARG, the value passed for parameter PARM, in a
    diagnostic: for a reference parameter, the object the reference binds
    to ('* p' for a pointer P, 'a' for '&a'), as the AST engine names it;
@@ -4001,23 +4062,7 @@ cg_display_argument (tree arg, tree parm)
 	      == ADDR_EXPR))
 	arg = gimple_assign_rhs1 (SSA_NAME_DEF_STMT (arg));
       if (TREE_CODE (arg) == ADDR_EXPR)
-	{
-	  tree ref = TREE_OPERAND (arg, 0);
-	  /* 'p->v' rather than the MEM_REF it is in GIMPLE.  */
-	  if (TREE_CODE (ref) == COMPONENT_REF
-	      && TREE_CODE (TREE_OPERAND (ref, 0)) == MEM_REF
-	      && integer_zerop (TREE_OPERAND (TREE_OPERAND (ref, 0), 1)))
-	    {
-	      tree ptr = cg_display_value (TREE_OPERAND (TREE_OPERAND (ref, 0),
-							  0));
-	      if (DECL_P (ptr))
-		return build3 (COMPONENT_REF, TREE_TYPE (ref),
-			       build1 (INDIRECT_REF, TREE_TYPE (TREE_TYPE (ptr)),
-				       ptr),
-			       TREE_OPERAND (ref, 1), NULL_TREE);
-	    }
-	  return ref;
-	}
+	return cg_display_object (TREE_OPERAND (arg, 0));
       tree ptr = cg_display_value (arg);
       return build1 (INDIRECT_REF, TREE_TYPE (TREE_TYPE (arg)), ptr);
     }
@@ -5835,18 +5880,46 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
       && gimple_call_num_args (call) >= 1
       && (DECL_CONSTRUCTOR_P (callee) || DECL_DESTRUCTOR_P (callee)))
     {
+      /* A rule in conveyor code, or when one of the callee's
+	 preconditions asks to be proven (proven_conveyor,
+	 proven_symbolic): an error.  Otherwise a proof: a warning, not
+	 checked in a system header.  As the AST engine's oa_cdtor_
+	 receiver_strict_p.  */
+      bool strict = (cg_callee_pre_mandatory
+		     || DECL_DECLARED_CONVEYOR_P (current_function_decl));
+      for (tree as = get_fn_contract_specifiers (callee);
+	   as && !strict; as = TREE_CHAIN (as))
+	{
+	  tree contract = CONTRACT_STATEMENT (as);
+	  strict = (PRECONDITION_P (contract)
+		    && ((oa_contract_conveyor_active_cached_p (contract)
+			 && oa_contract_conveyor_strict_cached_p (contract))
+			|| (oa_contract_symbolic_active_cached_p (contract)
+			    && oa_contract_symbolic_strict_cached_p (contract))));
+	}
       tree receiver = gimple_call_arg (call, 0);
       hash_set<tree> in_progress;
       oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
-      if (!cg_provable_object_address_p (receiver, established,
-					  /*require_conveyor=*/true,
-					  in_progress, &reason))
+      location_t loc = gimple_location (call);
+      if ((strict || !in_system_header_at (loc))
+	  && !cg_provable_object_address_p (receiver, established,
+					     /*require_conveyor=*/true,
+					     in_progress, &reason))
 	{
-	  cg_obligation_error_at (gimple_location (call),
-				   "cannot prove %<is_object_address%> for %qE, as "
-				   "required by the precondition of %qD", receiver, callee);
-	  if (const char *why = oa_unprovable_reason_text (reason))
-	    inform (gimple_location (call), "%s", _(why));
+	  bool reported = true;
+	  if (strict)
+	    cg_obligation_error_at (loc, "cannot prove %<is_object_address%> "
+				    "for %qE, as required by the precondition "
+				    "of %qD", cg_display_address (receiver),
+				    callee);
+	  else
+	    reported = warning_at (loc, 0, "cannot verify %<is_object_address%> "
+				   "for %qE, as required by the precondition "
+				   "of %qD", cg_display_address (receiver),
+				   callee);
+	  if (reported)
+	    if (const char *why = oa_unprovable_reason_text (reason))
+	      inform (loc, "%s", _(why));
 	}
     }
 }
@@ -5925,6 +5998,9 @@ struct cg_dom_fact_state
   /* 'v.size () < w.size ()' from a branch: keyed on V's identity and
      the accessor, also recorded the other way round under W's.  */
   hash_map<cg_field_key_hash, cg_call_call_rel_fact> call_call;
+  /* The self-trusted parameters (default definitions) still object
+     addresses: see cg_ended_object_addresses.  */
+  hash_set<tree> oa_live;
 };
 
 /* An SSA_NAME's own identity is itself; '&decl' resolves to DECL
@@ -9163,6 +9239,9 @@ cg_dom_fact_state_assign (cg_dom_fact_state *dst, const cg_dom_fact_state &src)
   dst->call_call.empty ();
   for (auto it : src.call_call)
     dst->call_call.put (it.first, it.second);
+  dst->oa_live.empty ();
+  for (tree t : src.oa_live)
+    dst->oa_live.add (t);
 }
 
 /* Agreement-based, mirroring contracts.cc's own oa_env::predicate_
@@ -9296,6 +9375,13 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src,
     }
   for (auto t : call_call_remove)
     dst->call_call.remove (t);
+
+  auto_vec<tree> oa_live_remove;
+  for (tree t : dst->oa_live)
+    if (!src.oa_live.contains (t))
+      oa_live_remove.safe_push (t);
+  for (tree t : oa_live_remove)
+    dst->oa_live.remove (t);
 }
 
 /* The fixed-point loop's own "has anything changed since the last time
@@ -9312,8 +9398,12 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
       || a.call.elements () != b.call.elements ()
       || a.rel.elements () != b.rel.elements ()
       || a.call_rel.elements () != b.call_rel.elements ()
-      || a.call_call.elements () != b.call_call.elements ())
+      || a.call_call.elements () != b.call_call.elements ()
+      || a.oa_live.elements () != b.oa_live.elements ())
     return false;
+  for (tree t : a.oa_live)
+    if (!b.oa_live.contains (t))
+      return false;
   for (auto it : a.pred)
     {
       const cg_pred_fact *ov = b.pred.get (it.first);
@@ -10977,6 +11067,208 @@ cg_record_call_result_facts (gcall *call, cg_dom_fact_state &state,
   state.field.put (key, fact);
 }
 
+/* Is CALL, in constructor FUN, the compiler-generated destruction of
+   one of the members of 'this' on an exception path, after a call
+   that throws?  The constructor's members it destroys are trusted to
+   be alive, as the AST engine checks a constructor's cleanups against
+   the state its body ends in: such a call doesn't consult whether
+   'this' has been ended (cg_ended_object_addresses).  */
+
+static bool
+cg_ctor_member_cleanup_p (gcall *call, function *fun)
+{
+  tree callee = gimple_call_fndecl (call);
+  if (!DECL_CONSTRUCTOR_P (fun->decl) || !callee
+      || !DECL_DESTRUCTOR_P (callee) || gimple_call_num_args (call) < 1)
+    return false;
+  /* Reached from a landing pad.  */
+  basic_block bb = gimple_bb (call);
+  bool eh = false;
+  for (int steps = 0; bb && !eh && steps < 8; ++steps)
+    {
+      edge e;
+      edge_iterator ei;
+      FOR_EACH_EDGE (e, ei, bb->preds)
+	if (e->flags & EDGE_EH)
+	  eh = true;
+      bb = single_pred_p (bb) ? single_pred (bb) : NULL;
+    }
+  if (!eh)
+    return false;
+  /* '&this->m'.  */
+  tree arg = gimple_call_arg (call, 0);
+  if (TREE_CODE (arg) == SSA_NAME && gimple_assign_single_p (SSA_NAME_DEF_STMT (arg)))
+    arg = gimple_assign_rhs1 (SSA_NAME_DEF_STMT (arg));
+  if (TREE_CODE (arg) != ADDR_EXPR)
+    return false;
+  tree ref = TREE_OPERAND (arg, 0);
+  if (TREE_CODE (ref) != COMPONENT_REF
+      || TREE_CODE (TREE_OPERAND (ref, 0)) != MEM_REF)
+    return false;
+  tree base = cg_gimple_object_identity (TREE_OPERAND (TREE_OPERAND (ref, 0), 0));
+  tree parm = base ? cg_identity_as_parm (base) : NULL_TREE;
+  return parm && is_this_parameter (parm) && DECL_CONTEXT (parm) == fun->decl;
+}
+
+/* The default definition of FUN's parameter VAL resolves to, if any.  */
+
+static tree
+cg_own_parm_default_def (tree val, function *fun)
+{
+  tree parm = val ? cg_identity_as_parm (val) : NULL_TREE;
+  if (!parm || DECL_CONTEXT (parm) != fun->decl)
+    return NULL_TREE;
+  return ssa_default_def (fun, parm);
+}
+
+/* The parameters CALL may end the object of: STATE.oa_live loses them,
+   as the AST engine's oa_invalidate_symbolic_facts_for_call_args does --
+   an argument resolving to a parameter, and the parameters that may
+   alias it, unless the callee is conveyor (which can't end an object's
+   lifetime) or takes it by const reference.  */
+
+static void
+cg_end_object_addresses_for_call (gcall *call, function *fun,
+				  hash_map<cg_field_key_hash, tree> &field_object_cache,
+				  cg_dom_fact_state &state)
+{
+  if (state.oa_live.is_empty ())
+    return;
+  /* As in the AST engine, only under the proofs flags: without them, the
+     mandatory obligations rely on is_object_address facts a call
+     doesn't end.  */
+  if (!(flag_contract_analysis_engine != 0
+	? cg_conveyor_proofs_p () || cg_symbolic_proofs_p ()
+	: (flag_contract_conveyor_proofs_gimple
+	   || flag_contract_symbolic_proofs_gimple)))
+    return;
+  tree callee = gimple_call_fndecl (call);
+  if (callee)
+    maybe_instantiate_conveyor (callee);
+  if (callee && (DECL_CONV_FN_P (callee) || DECL_DECLARED_CONVEYOR_P (callee)
+		 || std_placement_new_fn_p (callee)))
+    return;
+  /* std::forward, std::move and std::as_const are casts.  */
+  tree sv, cd, dc;
+  if (cg_std_identity_call_arg (call)
+      || cg_contract_check_call_p (call, &sv, &cd, &dc)
+      || gimple_call_internal_p (call)
+      || gimple_call_builtin_p (call, BUILT_IN_NORMAL)
+      || (gimple_call_flags (call) & (ECF_CONST | ECF_PURE)))
+    return;
+  tree parm_types = (gimple_call_fntype (call)
+		     ? TYPE_ARG_TYPES (gimple_call_fntype (call)) : NULL_TREE);
+  for (unsigned i = 0; i < gimple_call_num_args (call);
+       ++i, parm_types = parm_types ? TREE_CHAIN (parm_types) : NULL_TREE)
+    {
+      tree arg = gimple_call_arg (call, i);
+      if (!POINTER_TYPE_P (TREE_TYPE (arg))
+	  || (parm_types && TYPE_REF_P (TREE_VALUE (parm_types))
+	      && TYPE_READONLY (TREE_TYPE (TREE_VALUE (parm_types)))))
+	continue;
+      tree identity = cg_field_slot_identity (arg, state);
+      if (!identity)
+	identity = cg_field_object_identity (arg, field_object_cache);
+      if (!identity)
+	identity = cg_gimple_object_identity (arg);
+      if (tree parm = identity ? cg_identity_as_parm (identity) : NULL_TREE)
+	{
+	  /* Only the parameter's own value: a call handed one of its
+	     object's members ('&this->m') doesn't end the object, as in
+	     the AST engine.  */
+	  tree val = arg;
+	  while (TREE_CODE (val) == SSA_NAME && !SSA_NAME_IS_DEFAULT_DEF (val)
+		 && gimple_assign_single_p (SSA_NAME_DEF_STMT (val))
+		 && (TREE_CODE (gimple_assign_rhs1 (SSA_NAME_DEF_STMT (val)))
+		     == SSA_NAME))
+	    val = gimple_assign_rhs1 (SSA_NAME_DEF_STMT (val));
+	  bool own_value = ((TREE_CODE (val) == SSA_NAME
+			     && SSA_NAME_IS_DEFAULT_DEF (val))
+			    || val == parm);
+	  if (DECL_CONTEXT (parm) != fun->decl || !own_value)
+	    continue;
+	  for (tree sib = DECL_ARGUMENTS (fun->decl); sib;
+	       sib = DECL_CHAIN (sib))
+	    if (sib == parm || oa_could_alias_as_parameters_public (parm, sib))
+	      if (tree ssa = ssa_default_def (fun, sib))
+		state.oa_live.remove (ssa);
+	}
+    }
+}
+
+/* The parameters CALL makes object addresses again: STATE.oa_live gains
+   them, from the callee's conveyor postcondition
+   'is_object_address (this)' or 'is_object_address (&r)', or from a
+   conveyor contract_assert's.  */
+
+static void
+cg_establish_object_addresses_for_call (gcall *call, function *fun,
+					cg_dom_fact_state &state)
+{
+  tree struct_var, cond, decls;
+  if (tree contract = cg_contract_check_call_p (call, &struct_var, &cond,
+						&decls))
+    {
+      if (TREE_CODE (contract) != ASSERTION_STMT
+	  || cond == NULL_TREE || cond == error_mark_node
+	  || !oa_contract_conveyor_active_public
+		(contract, DECL_ORIGIN (current_function_decl)))
+	return;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree arg;
+	  if (!is_object_address_call_p (*conjuncts[i], &arg))
+	    continue;
+	  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+	  while (TREE_CODE (arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arg))
+	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	  if (!DECL_P (arg))
+	    continue;
+	  tree identity = cg_contract_check_object_identity (call, struct_var,
+							     decls, arg);
+	  if (tree ssa = cg_own_parm_default_def (identity, fun))
+	    state.oa_live.add (ssa);
+	}
+      return;
+    }
+
+  tree callee = gimple_call_fndecl (call);
+  if (!callee)
+    return;
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract)
+	  || !oa_contract_conveyor_active_cached_p (contract))
+	continue;
+      tree pcond = CONTRACT_CONDITION (contract);
+      if (pcond == NULL_TREE || pcond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&pcond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree arg;
+	  if (!is_object_address_call_p (*conjuncts[i], &arg))
+	    continue;
+	  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+	  while (TREE_CODE (arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arg))
+	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	  unsigned argno;
+	  if (TREE_CODE (arg) != PARM_DECL
+	      || !cg_find_param_position (callee, arg, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree identity = cg_gimple_object_identity (gimple_call_arg (call,
+								      argno));
+	  if (tree ssa = cg_own_parm_default_def (identity, fun))
+	    state.oa_live.add (ssa);
+	}
+    }
+}
+
 static bool
 cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_range_cache_out,
 			   hash_map<tree, cg_range_lite> &established_range,
@@ -10993,6 +11285,11 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
   hash_map<basic_block, cg_dom_fact_state *> block_out;
   cg_dom_fact_state seed;
   cg_seed_predicate_self_trust (fun, seed);
+  if (established_oa)
+    for (tree parm = DECL_ARGUMENTS (fun->decl); parm; parm = DECL_CHAIN (parm))
+      if (tree ssa = ssa_default_def (fun, parm))
+	if (established_oa->get (ssa))
+	  seed.oa_live.add (ssa);
   /* Stage 5: shared across BOTH phases below (the fixed-point
      computation and the final consult-only re-derivation) -- a key
      synthesized for a given (base, field) pair during the fixed-point
@@ -11074,8 +11371,11 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 		    }
 		  cg_invalidate_persistent_facts_for_call_args
 		    (call, fun, field_object_cache, out_state);
+		  cg_end_object_addresses_for_call (call, fun, field_object_cache,
+						    out_state);
 		  cg_establish_persistent_facts_for_call (call, field_object_cache,
 							   out_state);
+		  cg_establish_object_addresses_for_call (call, fun, out_state);
 		  cg_record_call_result_facts (call, out_state, established_oa);
 		  if (!cg_assert_memory_conjunct_false_p (call, out_state))
 		    cg_establish_assert_facts (call, out_state);
@@ -11182,9 +11482,22 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 					   field_object_cache, state);
 		  cg_process_scalar_write (gimple_call_lhs (call), state);
 		}
+	      /* The self-trusted parameters whose object has ended by
+		 CALL, for cg_check_call's consult (cg_ended_object_
+		 addresses).  */
+	      if (cg_ended_object_addresses && established_oa
+		  && !cg_ctor_member_cleanup_p (call, fun))
+		for (tree parm = DECL_ARGUMENTS (fun->decl); parm;
+		     parm = DECL_CHAIN (parm))
+		  if (tree ssa = ssa_default_def (fun, parm))
+		    if (established_oa->get (ssa) && !state.oa_live.contains (ssa))
+		      cg_ended_object_addresses->add ({call, ssa});
 	      cg_invalidate_persistent_facts_for_call_args (call, fun,
 							     field_object_cache, state);
+	      cg_end_object_addresses_for_call (call, fun, field_object_cache,
+						state);
 	      cg_establish_persistent_facts_for_call (call, field_object_cache, state);
+	      cg_establish_object_addresses_for_call (call, fun, state);
 	      cg_record_call_result_facts (call, state, established_oa);
 	      cg_record_assert_memory_verdicts (call, state,
 						assert_memory_verdicts);
@@ -13286,6 +13599,9 @@ pass_contracts_gimple::execute (function *fun)
 					   || flag_contract_conveyor_proofs_gimple));
   auto pre_only = make_temp_override (cg_callee_pre_only, never_proven_core);
 
+  hash_set<cg_call_value_hash> ended_object_addresses;
+  auto ended = make_temp_override (cg_ended_object_addresses,
+				   &ended_object_addresses);
   cg_predicate_facts_walk (fun, &scalar_range_cache,
 			     established_range, &call_relational_verdict,
 			     ranger,
@@ -13330,13 +13646,16 @@ pass_contracts_gimple::execute (function *fun)
 	  if (is_gimple_call (stmt))
 	    {
 	      gcall *call = as_a <gcall *> (stmt);
-	      if (check_reference_safety)
-		cg_check_call_reference_safety (call, fun, established);
-	      cg_check_call (call, established, established_nz,
-			     established_range, established_rel,
-			     established_call_call_rel,
-			     scalar_range_cache, ranger,
-			     &call_relational_verdict, &established_frange);
+	      {
+		auto consult = make_temp_override (cg_consult_call, call);
+		if (check_reference_safety)
+		  cg_check_call_reference_safety (call, fun, established);
+		cg_check_call (call, established, established_nz,
+			       established_range, established_rel,
+			       established_call_call_rel,
+			       scalar_range_cache, ranger,
+			       &call_relational_verdict, &established_frange);
+	      }
 	      cg_record_iile_site_facts (call, fun, established_range,
 					 scalar_range_cache, ranger);
 	      cg_record_predicate_site_facts (call, established, established_nz,

@@ -16020,6 +16020,44 @@ oa_defaulted_copy_source_parm_public (tree fn, tree *parm)
   return oa_defaulted_copy_source_parm (fn, parm);
 }
 
+/* Is the is_object_address obligation of CALL's constructor or
+   destructor receiver a rule rather than a proof: CALL is in conveyor
+   code, or one of the callee's preconditions asks to be proven
+   (proven_conveyor, proven_symbolic)?  If so, failing it is an error;
+   otherwise it's a warning, and not checked in a system header.  */
+
+static bool
+oa_cdtor_receiver_strict_p (tree call)
+{
+  if (current_function_decl
+      && DECL_DECLARED_CONVEYOR_P (current_function_decl))
+    return true;
+  bool strict = false;
+  oa_call_conveyor_obligation_status (call, NULL, &strict);
+  oa_call_symbolic_obligation_status (call, NULL, &strict);
+  return strict;
+}
+
+/* Report that RECEIVER, the object CALLEE, a constructor or destructor,
+   is called for, isn't proven an object address, at LOC: see
+   oa_cdtor_receiver_strict_p for STRICT.  */
+
+static void
+oa_report_cdtor_receiver (location_t loc, tree receiver, tree callee,
+			  bool strict, oa_unprovable_reason reason)
+{
+  if (strict)
+    oa_error_at (loc, "cannot prove %<is_object_address%> for %qE, "
+		 "required by the precondition of %qD", receiver, callee);
+  else if (!oa_warning_at (loc, 0, "cannot verify %<is_object_address%> "
+			   "for %qE, required by the precondition of %qD",
+			   receiver, callee))
+    return;
+  if (const char *why = oa_unprovable_reason_text (reason))
+    oa_inform (loc, "%s", _(why));
+  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+}
+
 static void
 oa_handle_call_precondition_obligation (tree call, oa_env &env,
 					 bool in_predicate_context = false)
@@ -16202,17 +16240,13 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
       && (DECL_CONSTRUCTOR_P (callee) || DECL_DESTRUCTOR_P (callee)))
     {
       tree receiver = CALL_EXPR_ARG (call, 0);
+      bool strict = oa_cdtor_receiver_strict_p (call);
       oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
-      if (!oa_provable_p (receiver, env, &reason)
+      if ((strict || !in_system_header_at (EXPR_LOCATION (call)))
+	  && !oa_provable_p (receiver, env, &reason)
 	  && !reported_parms.add (DECL_ARGUMENTS (callee)))
-	{
-	  oa_error_at (EXPR_LOCATION (call),
-		    "cannot prove %<is_object_address%> for %qE, "
-		    "required by the precondition of %qD", receiver, callee);
-	  if (const char *why = oa_unprovable_reason_text (reason))
-	    oa_inform (EXPR_LOCATION (call), "%s", _(why));
-	  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
-	}
+	oa_report_cdtor_receiver (EXPR_LOCATION (call), receiver, callee,
+				  strict, reason);
     }
 
   /* D4324/P2680 soundness fix (2026-08-21, see ~/soundness-fixes-for-
@@ -26656,17 +26690,12 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 		  while (TREE_CODE (slot) == NON_LVALUE_EXPR || TREE_CODE (slot) == NOP_EXPR
 			 || TREE_CODE (slot) == CONVERT_EXPR || TREE_CODE (slot) == VIEW_CONVERT_EXPR)
 		    slot = TREE_OPERAND (slot, 0);
+		  bool strict = oa_cdtor_receiver_strict_p (stripped_rhs);
 		  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
-		  if (!oa_provable_p (slot, env, &reason))
-		    {
-		      oa_error_at (EXPR_LOCATION (t),
-				"cannot prove %<is_object_address%> for %qE, "
-				"required by the precondition of %qD",
-				slot, ctor_callee);
-		      if (const char *why = oa_unprovable_reason_text (reason))
-			oa_inform (EXPR_LOCATION (t), "%s", _(why));
-		      oa_inform (DECL_SOURCE_LOCATION (ctor_callee), "declared here");
-		    }
+		  if ((strict || !in_system_header_at (EXPR_LOCATION (t)))
+		      && !oa_provable_p (slot, env, &reason))
+		    oa_report_cdtor_receiver (EXPR_LOCATION (t), slot,
+					      ctor_callee, strict, reason);
 		}
 	    }
 	}

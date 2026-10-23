@@ -35,11 +35,13 @@ struct test_vector {
   // object, never by whether operator[] itself is conveyor-declared.
   int& operator[] (int idx)
     pre<conveyor_ctrl_v>(std::is_object_address (this))
+    post<conveyor_ctrl_v>(std::is_object_address (this))
     pre<conveyor_ctrl_v>(idx < size ())
   { return data[idx]; }
 
   void resize (int const m)
     pre<conveyor_ctrl_v>(std::is_object_address (this))
+    post<conveyor_ctrl_v>(std::is_object_address (this))
     post<conveyor_ctrl_v>(size () == m)
   { n = m; }
 };
