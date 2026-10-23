@@ -3772,6 +3772,49 @@ cg_excludes_zero_at_p (tree val, gimple *stmt, gimple_ranger *ranger,
   return false;
 }
 
+/* True if VAL's range at STMT, as RANGER computes it from the conditions
+   guarding STMT, excludes CST (under 'if (x != 1)', say), as
+   cg_excludes_zero_at_p does for zero.  */
+
+static bool
+cg_excludes_value_at_p (tree val, gimple *stmt, gimple_ranger *ranger,
+			tree cst)
+{
+  if (!ranger || TREE_CODE (val) != SSA_NAME
+      || !INTEGRAL_TYPE_P (TREE_TYPE (val)) || TREE_CODE (cst) != INTEGER_CST)
+    return false;
+  cg_trust trust = cg_trusted_bounds (val, ranger);
+  if (!trust.lo || !trust.hi)
+    return false;
+  if (!wi::fits_to_tree_p (wi::to_widest (cst), TREE_TYPE (val)))
+    return true;
+  int_range_max vr;
+  return (ranger->range_of_expr (vr, val, stmt) && !vr.undefined_p ()
+	  && !vr.contains_p (wi::to_wide (fold_convert (TREE_TYPE (val),
+							 cst))));
+}
+
+/* True if VAL's range at STMT, as RANGER computes it from the conditions
+   guarding STMT, is exactly CST (under 'if (x == 0)', say).  */
+
+static bool
+cg_value_exactly_at_p (tree val, gimple *stmt, gimple_ranger *ranger,
+		       tree cst)
+{
+  if (!ranger || TREE_CODE (val) != SSA_NAME
+      || !INTEGRAL_TYPE_P (TREE_TYPE (val)) || TREE_CODE (cst) != INTEGER_CST
+      || !wi::fits_to_tree_p (wi::to_widest (cst), TREE_TYPE (val)))
+    return false;
+  cg_trust trust = cg_trusted_bounds (val, ranger);
+  if (!trust.lo || !trust.hi)
+    return false;
+  int_range_max vr;
+  tree v;
+  return (ranger->range_of_expr (vr, val, stmt) && !vr.undefined_p ()
+	  && vr.singleton_p (&v)
+	  && wi::to_widest (v) == wi::to_widest (cst));
+}
+
 /* Is VAL, used at STMT's own program point, provably nonzero? Tries
    (in order) the same fact-based check item 7 already has
    (cg_provable_nonzero_p) and then, as a supplementary source
@@ -5308,6 +5351,140 @@ static bool cg_symbolic_proofs_p ();
 static bool cg_frange_of (tree, gimple *, gimple_ranger *,
 			  hash_map<tree, frange> *, frange &, int = 0);
 
+static bool cg_nonzero_rule_conjunct_p (tree);
+static bool cg_compound_requirement_side_p (tree);
+
+/* Whether some proof rule of this engine checks CONJUNCT, a
+   precondition conjunct of CALLEE, at a call: cg_check_call's own
+   loops, cg_consult_persistent_facts's (predicates, field and call
+   ranges, compound requirements), and the relational ones run beside
+   it.  Kept to the shapes each rule takes, so that a conjunct no rule
+   checks is reported (cg_report_uncovered_conjunct) instead of being
+   passed over.  REQUIRE_CONVEYOR is as those rules' own.  */
+
+static bool
+cg_conjunct_covered_p (tree conjunct, tree callee, bool require_conveyor)
+{
+  tree t1, t2, t3, t4;
+  tree_code code;
+  widest_int offset;
+  bool negated;
+  if (is_object_address_call_p (conjunct, &t1)
+      || cg_nonzero_rule_conjunct_p (conjunct)
+      || oa_match_simple_comparison (conjunct, &t1, &code, &t2)
+      || oa_match_comparison_against_param (conjunct, &t1, &code, &t2)
+      || oa_match_comparison_against_call (conjunct, &t1, &code, &t2, &t3,
+					   !require_conveyor)
+      || oa_match_call_against_call (conjunct, &t1, &t2, &code, &t3, &t4,
+				     !require_conveyor)
+      || oa_match_shifted_comparison_against_call_text
+	   (conjunct, &t1, &code, &t2, &t3, &offset, !require_conveyor)
+      || oa_match_predicate_conjunct (conjunct, &t1, &t2, &negated)
+      || oa_unsupported_symbolic_predicate_p (conjunct, &t1)
+      || oa_isfinite_bounds_public (conjunct, &t1, &t2))
+    return true;
+  if (oa_match_field_range_comparison (conjunct, &t1, &t2, &code, &t3)
+      && TREE_CODE (oa_strip_symbolic_ptr_expr_public (t2)) == PARM_DECL)
+    return true;
+  if (oa_match_call_range_comparison (conjunct, &t1, &t2, &code, &t3,
+				      !require_conveyor)
+      && TREE_CODE (t3) == INTEGER_CST
+      && TREE_CODE (oa_strip_symbolic_ptr_expr_public (t1)) == PARM_DECL)
+    return true;
+  /* cg_check_compound_requirement's.  */
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  code = TREE_CODE (c);
+  if (code == NE_EXPR)
+    return true;
+  if ((code == LT_EXPR || code == LE_EXPR || code == GT_EXPR
+       || code == GE_EXPR || code == EQ_EXPR)
+      && (cg_compound_requirement_side_p (TREE_OPERAND (c, 0))
+	  || cg_compound_requirement_side_p (TREE_OPERAND (c, 1))))
+    return true;
+  (void) callee;
+  return false;
+}
+
+/* CONJUNCT, a precondition conjunct of CALLEE no proof rule checks
+   (cg_conjunct_covered_p), with each parameter replaced by CALL's
+   argument for it, folded: a constant when every argument it reads is
+   one.  NULL_TREE otherwise.  */
+
+static tree
+cg_fold_conjunct_at_call (tree conjunct, gcall *call, tree callee)
+{
+  struct data_t { gcall *call; tree callee; bool ok; };
+  data_t d = { call, callee, true };
+  tree copy = unshare_expr (conjunct);
+  cp_walk_tree (&copy, [](tree *tp, int *walk_subtrees, void *d_) -> tree
+    {
+      data_t *dd = (data_t *) d_;
+      if (TYPE_P (*tp))
+	{
+	  *walk_subtrees = 0;
+	  return NULL_TREE;
+	}
+      /* A reference parameter's read is the value of what it binds to
+	 (cg_resolve_value_argument).  */
+      tree parm = *tp;
+      if (TREE_CODE (parm) == INDIRECT_REF)
+	parm = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (parm, 0));
+      if (TREE_CODE (parm) != PARM_DECL
+	  || (parm != *tp && !TYPE_REF_P (TREE_TYPE (parm))))
+	return NULL_TREE;
+      unsigned argno;
+      tree arg = NULL_TREE;
+      if (cg_find_param_position (dd->callee, parm, &argno)
+	  && argno < gimple_call_num_args (dd->call))
+	arg = cg_resolve_value_argument (dd->call, argno);
+      if (!arg || TREE_CODE (arg) != INTEGER_CST
+	  || (parm == *tp && TYPE_REF_P (TREE_TYPE (parm))))
+	{
+	  dd->ok = false;
+	  return *tp;
+	}
+      *tp = fold_convert (TREE_TYPE (*tp), arg);
+      *walk_subtrees = 0;
+      return NULL_TREE;
+    }, &d, NULL);
+  if (!d.ok)
+    return NULL_TREE;
+  tree folded = cp_fully_fold (copy);
+  folded = STRIP_ANY_LOCATION_WRAPPER (folded);
+  return TREE_CODE (folded) == INTEGER_CST ? folded : NULL_TREE;
+}
+
+/* CONJUNCT, a precondition conjunct of CALLEE, has no proof rule at
+   CALL (a disjunction, a call compared with a constant): true or false
+   only if its arguments make it a constant, otherwise unprovable --
+   reported as such rather than passed over, as the AST engine's
+   oa_report_uncovered_conjunct.  */
+
+static void
+cg_report_uncovered_conjunct (tree conjunct, gcall *call, tree callee,
+			      bool strict)
+{
+  location_t loc = gimple_location (call);
+  auto_diagnostic_group d;
+  if (tree folded = cg_fold_conjunct_at_call (conjunct, call, callee))
+    {
+      if (integer_zerop (folded))
+	cg_obligation_error_at (loc, "the arguments provably violate the "
+				"precondition %qE of %qD", conjunct, callee);
+      return;
+    }
+  if (strict)
+    cg_obligation_error_at (loc, "cannot prove the precondition %qE of %qD",
+			    conjunct, callee);
+  else
+    warning_at (loc, 0, "cannot verify the precondition %qE of %qD",
+		conjunct, callee);
+  inform (loc, "%s", _(oa_unprovable_reason_text
+		       (OA_UNPROVABLE_UNSUPPORTED_CONDITION)));
+}
+
 static void
 cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		hash_map<tree, cg_fact> &established_nz,
@@ -5491,6 +5668,24 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		  || cg_excludes_zero_at_p (substituted, call, ranger,
 					    require_conveyor))
 		continue; /* Proven true: silently discharged.  */
+	      /* Exactly zero where CALL is ('x == 0 && f (x)').  */
+	      if (cg_value_exactly_at_p (substituted, call, ranger,
+					 integer_zero_node))
+		{
+		  if (reported_nz_parms.add (arg))
+		    continue;
+		  cg_obligation_error_at (gimple_location (call),
+					   "argument %qE provably violates the "
+					   "precondition of %qD",
+					   cg_display_arg_value (call, argno,
+								 substituted),
+					   callee);
+		  inform (gimple_location (call),
+			  "%qE is established to be exactly zero, but the "
+			  "precondition requires it to be nonzero",
+			  cg_display_arg_value (call, argno, substituted));
+		  continue;
+		}
 	      if (reported_nz_parms.add (arg))
 		continue; /* Already reported for this call.  */
 	      substituted = cg_display_arg_value (call, argno, substituted);
@@ -5528,6 +5723,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	 sound to consult directly.  */
       if (!proofs)
 	continue;
+
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	if (!cg_conjunct_covered_p (*conjuncts[i], callee, require_conveyor))
+	  cg_report_uncovered_conjunct (*conjuncts[i], call, callee, strict);
 
       /* A floating-point parameter compared with a constant
 	 ('pre (x <= 100.0)'): the argument's range -- a literal, or what
@@ -7273,6 +7472,28 @@ cg_requirement_int_range (tree e, gcall *call, tree callee,
 				      cg_array_bounds->ranger,
 				      require_conveyor, out));
       }
+    case INDIRECT_REF:
+      /* A reference parameter's read: the value of the object it binds
+	 to at CALL (cg_resolve_value_argument).  */
+      {
+	tree ref = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
+	if (TREE_CODE (ref) != PARM_DECL || !TYPE_REF_P (TREE_TYPE (ref)))
+	  return false;
+	tree arg = arg_of (ref);
+	if (!arg)
+	  return false;
+	if (TREE_CODE (arg) == INTEGER_CST)
+	  {
+	    *out = cg_range_lite_exact (wi::to_widest (arg));
+	    return true;
+	  }
+	return (cg_array_bounds && TREE_CODE (arg) == SSA_NAME
+		&& cg_value_range_at (arg, call,
+				      *cg_array_bounds->established_range,
+				      *cg_array_bounds->scalar_range_cache,
+				      cg_array_bounds->ranger,
+				      require_conveyor, out));
+      }
     case COMPONENT_REF:
       {
 	tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
@@ -7468,6 +7689,21 @@ cg_compound_requirement_side_p (tree e)
     }
 }
 
+/* Whether CONJUNCT is the nonzero rule's ('p != 0' for a parameter P
+   that isn't a reference: cg_check_call), not the compound one's.  */
+
+static bool
+cg_nonzero_rule_conjunct_p (tree conjunct)
+{
+  tree arg;
+  if (!oa_nonzero_conjunct_p (conjunct, &arg))
+    return false;
+  while (TREE_CODE (arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arg)
+	 || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+  return TREE_CODE (arg) == PARM_DECL;
+}
+
 /* A conjunct of CALL's callee's precondition comparing arithmetic
    ('m_value - delta >= 0.0'), which no shape-specific consult checks:
    decided from what each side's range is at CALL, or else reported as
@@ -7489,7 +7725,8 @@ cg_check_compound_requirement (tree conjunct, gcall *call, tree callee,
     return;
   tree lhs = TREE_OPERAND (c, 0), rhs = TREE_OPERAND (c, 1);
   if (!cg_compound_requirement_side_p (lhs)
-      && !cg_compound_requirement_side_p (rhs))
+      && !cg_compound_requirement_side_p (rhs)
+      && !(code == NE_EXPR && !cg_nonzero_rule_conjunct_p (conjunct)))
     return;
   /* 'idx - v.size () > 10' is cg_check_call_relational_fact's.  */
   {
@@ -7509,10 +7746,32 @@ cg_check_compound_requirement (tree conjunct, gcall *call, tree callee,
       tree d = unshare_expr (STRIP_ANY_LOCATION_WRAPPER (e));
       struct data_t { gcall *call; tree callee; };
       data_t data = { call, callee };
-      cp_walk_tree (&d, [](tree *tp, int *, void *d_) -> tree
+      cp_walk_tree (&d, [](tree *tp, int *walk_subtrees, void *d_) -> tree
 	{
 	  data_t *dd = (data_t *) d_;
 	  unsigned argno;
+	  /* '*r' for a reference R: the object it binds to; '*p': what
+	     P points to.  */
+	  if (TREE_CODE (*tp) == INDIRECT_REF
+	      && TREE_CODE (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (*tp, 0)))
+		 == PARM_DECL)
+	    {
+	      tree parm = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (*tp, 0));
+	      if (cg_find_param_position (dd->callee, parm, &argno)
+		  && argno < gimple_call_num_args (dd->call))
+		{
+		  tree v = (TYPE_REF_P (TREE_TYPE (parm))
+			    ? cg_resolve_value_argument (dd->call, argno)
+			    : gimple_call_arg (dd->call, argno));
+		  /* Still the address when no value is known for it.  */
+		  *tp = (POINTER_TYPE_P (TREE_TYPE (v))
+			 ? cg_display_deref (cg_display_value (v),
+					     TREE_TYPE (*tp))
+			 : cg_display_arg_value (dd->call, argno, v));
+		}
+	      *walk_subtrees = 0;
+	      return NULL_TREE;
+	    }
 	  if (TREE_CODE (*tp) == PARM_DECL
 	      && cg_find_param_position (dd->callee, *tp, &argno)
 	      && argno < gimple_call_num_args (dd->call))
@@ -7523,7 +7782,11 @@ cg_check_compound_requirement (tree conjunct, gcall *call, tree callee,
 	}, &data, NULL);
       return d;
     };
-  tree side = cg_compound_requirement_side_p (lhs) ? lhs : rhs;
+  tree side = (cg_compound_requirement_side_p (lhs)
+	       || !cg_compound_requirement_side_p (rhs)) ? lhs : rhs;
+  /* Of 'x != 1', the side that isn't the constant.  */
+  if (TREE_CODE (STRIP_ANY_LOCATION_WRAPPER (side)) == INTEGER_CST)
+    side = rhs;
 
   cg_verdict v = CG_VERDICT_UNKNOWN;
   char have[96] = "", need[96] = "";
@@ -7555,9 +7818,20 @@ cg_check_compound_requirement (tree conjunct, gcall *call, tree callee,
 				       field_object_cache, require_conveyor,
 				       &b))
 	{
-	  if (b.has_lo && b.has_hi && b.lo == b.hi && code != NE_EXPR)
+	  if (code == NE_EXPR)
+	    {
+	      /* Different if the ranges don't meet, equal if both are the
+		 same one value.  */
+	      if ((a.has_hi && b.has_lo && a.hi < b.lo)
+		  || (a.has_lo && b.has_hi && a.lo > b.hi))
+		v = CG_VERDICT_TRUE;
+	      else if (a.has_lo && a.has_hi && b.has_lo && b.has_hi
+		       && a.lo == a.hi && b.lo == b.hi && a.lo == b.lo)
+		v = CG_VERDICT_FALSE;
+	    }
+	  else if (b.has_lo && b.has_hi && b.lo == b.hi)
 	    v = cg_range_comparison_verdict (a, code, b.lo);
-	  else if (code != NE_EXPR && code != EQ_EXPR)
+	  else if (code != EQ_EXPR)
 	    {
 	      enum oa_range_subsumption_result r
 		= cg_range_pair_relation (a, code, b);
@@ -7577,6 +7851,26 @@ cg_check_compound_requirement (tree conjunct, gcall *call, tree callee,
 			op_symbol_code (code), rb);
 	    }
 	}
+    }
+  /* 'x != C' under a condition excluding C ('if (x != C)'): a range
+     of two pieces, which the one-interval ranges above can't hold.  */
+  if (v == CG_VERDICT_UNKNOWN && code == NE_EXPR && cg_array_bounds)
+    {
+      tree other = side == lhs ? rhs : lhs;
+      tree cst = STRIP_ANY_LOCATION_WRAPPER (other);
+      STRIP_NOPS (cst);
+      tree parm = STRIP_ANY_LOCATION_WRAPPER (side);
+      while (CONVERT_EXPR_P (parm) || TREE_CODE (parm) == NON_LVALUE_EXPR)
+	parm = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (parm, 0));
+      if (TREE_CODE (parm) == INDIRECT_REF)
+	parm = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (parm, 0));
+      unsigned argno;
+      if (TREE_CODE (parm) == PARM_DECL && TREE_CODE (cst) == INTEGER_CST
+	  && cg_find_param_position (callee, parm, &argno)
+	  && argno < gimple_call_num_args (call)
+	  && cg_excludes_value_at_p (cg_resolve_value_argument (call, argno),
+				     call, cg_array_bounds->ranger, cst))
+	v = CG_VERDICT_TRUE;
     }
   if (v == CG_VERDICT_TRUE)
     return;

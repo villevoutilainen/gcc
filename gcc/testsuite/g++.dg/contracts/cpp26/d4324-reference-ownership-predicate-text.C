@@ -121,6 +121,6 @@ main ()
 {
   T t{1};
   accept_const_in_precondition (t); // { dg-warning "cannot verify that" }
-  accept_ptr_in_body_and_in_precondition (&t);
+  accept_ptr_in_body_and_in_precondition (&t); // { dg-warning "cannot verify" }
   return 0;
 }

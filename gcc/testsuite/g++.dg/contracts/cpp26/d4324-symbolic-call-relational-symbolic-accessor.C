@@ -17,10 +17,10 @@
 // Two cases: (1) the new capability, self-trust and consult both
 // exercised for a symbolic-declared accessor, plus the same fact run
 // through the variable-offset arithmetic tracking; (2) still rejected --
-// a plain, untagged accessor named from a symbolic contract is never
-// recognized as a checkable obligation at all (contrast case 1's
-// *_unchecked, whose identical structure with a symbolic accessor does
-// warn).
+// a plain, untagged accessor named from a symbolic contract is never a
+// trackable fact, so its obligation can't be proven even where case 1's
+// identical structure with a symbolic accessor is: it is reported as
+// unverifiable, not passed over.
 //
 // No third case for "conveyor's own gate is unchanged": confirmed via
 // direct testing that this isn't reachable at all -- naming a non-
@@ -97,12 +97,11 @@ struct Plain {
 
 int plain_checked (Plain& p, int i) pre<symbolic_ctrl_v>(i < p.plain_size ())
 {
-  return p.get (i);
-  /* No warning: 'plain_size ()' is neither conveyor- nor symbolic-
-     declared, so this conjunct is never recognized as a checkable
-     obligation at all -- not even to report "cannot verify."  Contrast
-     get_unchecked above, whose identical structure with a *symbolic*-
-     declared accessor does warn.  */
+  return p.get (i); // { dg-warning "cannot verify the precondition" }
+  /* 'plain_size ()' is neither conveyor- nor symbolic-declared, so no
+     fact about it can be established, even by this function's own
+     identical precondition: the obligation has no proof rule, and is
+     reported as such.  */
 }
 
 int main ()
@@ -113,5 +112,5 @@ int main ()
 	 + get_unchecked (s, 9)
 	 + use_sound_shift (s, 2, -1) // { dg-warning "cannot verify that .2. satisfies" }
 	 + use_unsound_shift (s, 2, 1) // { dg-warning "cannot verify that .2. satisfies" }
-	 + plain_checked (p, 2);
+	 + plain_checked (p, 2); // { dg-warning "cannot verify the precondition" }
 }

@@ -367,9 +367,11 @@ enum oa_unprovable_reason
 					 but its current value was reassigned
 					 from a borrowed/external source
 					 (ownership-laundering).  */
-  OA_UNPROVABLE_UNSUPPORTED_PREDICATE /* A symbolic predicate called in a
+  OA_UNPROVABLE_UNSUPPORTED_PREDICATE, /* A symbolic predicate called in a
 					 form the analysis can't track a fact
 					 for.  */
+  OA_UNPROVABLE_UNSUPPORTED_CONDITION /* A precondition of a form the
+					 analysis has no proof rule for.  */
 };
 
 /* Text for a short, standalone inform() sentence fragment explaining
