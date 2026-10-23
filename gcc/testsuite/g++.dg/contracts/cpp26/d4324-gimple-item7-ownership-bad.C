@@ -24,7 +24,7 @@
 // on the AST engine, so an extra, spurious Q1 diagnostic fires here too
 // -- pruned, since it's unrelated to what this file is actually testing
 // (Q2 ownership).
-// { dg-prune-output "cannot prove .is_object_address. for .<unknown>., required by the precondition of .int use_val_mut" }
+// { dg-prune-output "cannot prove .is_object_address. for \[^\n\]*, required by the precondition of .int use_val_mut" }
 // { dg-prune-output "no fact relating this value to the required comparison has been established" }
 
 #include <contracts>
