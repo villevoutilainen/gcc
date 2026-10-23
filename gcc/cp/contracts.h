@@ -363,10 +363,13 @@ enum oa_unprovable_reason
 					 condition text never owns anything --
 					 it only has visibility into the
 					 enclosing function's own state.  */
-  OA_UNPROVABLE_LAUNDERED_BORROWED   /* This function's own parameter/local,
+  OA_UNPROVABLE_LAUNDERED_BORROWED,  /* This function's own parameter/local,
 					 but its current value was reassigned
 					 from a borrowed/external source
 					 (ownership-laundering).  */
+  OA_UNPROVABLE_UNSUPPORTED_PREDICATE /* A symbolic predicate called in a
+					 form the analysis can't track a fact
+					 for.  */
 };
 
 /* Text for a short, standalone inform() sentence fragment explaining
@@ -787,6 +790,12 @@ extern bool oa_contract_symbolic_strict_cached_p (tree contract);
    PRED_FN_OUT/ARG_DECL_OUT/NEGATED_OUT.  */
 extern bool oa_match_predicate_conjunct
   (tree conjunct, tree *pred_fn_out, tree *arg_decl_out, bool *negated_out);
+
+/* True if CONJUNCT calls a symbolic function, *PRED_FN_OUT, but not in
+   the shape oa_match_predicate_conjunct recognizes, so no fact can ever
+   establish it.  */
+extern bool oa_unsupported_symbolic_predicate_p (tree conjunct,
+						 tree *pred_fn_out);
 
 /* If CALL is a call to a specialization of std::is_object_address,
    return true and set *ARG to its (single) argument expression --

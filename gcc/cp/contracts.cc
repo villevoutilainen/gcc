@@ -16395,11 +16395,14 @@ static oa_proof_result oa_env_check_float_range_subsumption
    before that point in the file.  */
 static oa_derivation *oa_get_range_derivation (tree expr, oa_env &env);
 
+static tree oa_strip_predicate_arg (tree);
+
 /* -fcontract-conveyor-proofs: recognize CONJUNCT as "pred_fn (decl)" or
    its negation "!pred_fn (decl)" -- a call to some ordinary FUNCTION_DECL
    with exactly one argument, itself a bare PARM_DECL/VAR_DECL (never a
    general expression -- same "bare decl only" scope limit
-   oa_match_simple_comparison already has).  Fills PRED_FN_OUT/
+   oa_match_simple_comparison already has), or a non-static member one
+   whose implicit object argument is that same decl.  Fills PRED_FN_OUT/
    ARG_DECL_OUT/NEGATED_OUT.  Used both for a precondition's own conjunct
    ("check_it (x)", ARG_DECL_OUT = the callee's own parameter x) and a
    postcondition's ("!check_it (r)", ARG_DECL_OUT = POSTCONDITION_IDENTIFIER,
@@ -16454,7 +16457,8 @@ oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
 	c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
     }
 
-  if (TREE_CODE (c) != CALL_EXPR || call_expr_nargs (c) != 1)
+  if (TREE_CODE (c) != CALL_EXPR
+      || (call_expr_nargs (c) != 1 && call_expr_nargs (c) != 2))
     return false;
 
   tree oa_arg;
@@ -16465,7 +16469,37 @@ oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
   if (!fn || TREE_CODE (fn) != FUNCTION_DECL)
     return false;
 
-  tree arg = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (c, 0));
+  /* A non-static member predicate given its object explicitly as well,
+     'is_opened (this)': the implicit object argument and the explicit
+     one.  A fact about one object only when both are the same one; a
+     relation between two objects isn't a predicate fact.  */
+  if (call_expr_nargs (c) == 2)
+    {
+      if (!DECL_IOBJ_MEMBER_FUNCTION_P (fn)
+	  || (oa_strip_predicate_arg (CALL_EXPR_ARG (c, 0))
+	      != oa_strip_predicate_arg (CALL_EXPR_ARG (c, 1))))
+	return false;
+    }
+
+  tree arg = oa_strip_predicate_arg (CALL_EXPR_ARG (c, 0));
+  if (TREE_CODE (arg) != PARM_DECL && !VAR_P (arg))
+    return false;
+
+  *pred_fn_out = fn;
+  *arg_decl_out = arg;
+  *negated_out = negated;
+  if (call_out)
+    *call_out = c;
+  return true;
+}
+
+/* ARG, a predicate call's argument, as the decl it names: see
+   oa_predicate_conjunct_shape.  */
+
+static tree
+oa_strip_predicate_arg (tree arg)
+{
+  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
   /* -fcontract-symbolic-proofs: an argument that's already a pointer
      (e.g. 'this' passed to a predicate expecting the same pointer type)
      can still arrive wrapped in a plain conversion node (found via
@@ -16485,16 +16519,7 @@ oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
      operator (e.g. a wrapper convertible to the reference/pointer type
      a predicate function actually expects) -- same lookthrough as
      every other fact-shape recognizer in this pass.  */
-  arg = oa_strip_conversion_call (arg);
-  if (TREE_CODE (arg) != PARM_DECL && !VAR_P (arg))
-    return false;
-
-  *pred_fn_out = fn;
-  *arg_decl_out = arg;
-  *negated_out = negated;
-  if (call_out)
-    *call_out = c;
-  return true;
+  return oa_strip_conversion_call (arg);
 }
 
 /* Shared consult helper for both -fcontract-conveyor-proofs's and
@@ -18979,7 +19004,24 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	  bool negated;
 	  if (!oa_predicate_conjunct_shape (*conjuncts[i], &pred_fn, &arg_decl,
 					    &negated))
-	    continue;
+	    {
+	      if (oa_unsupported_symbolic_predicate_p (*conjuncts[i], &pred_fn))
+		{
+		  if (strict)
+		    oa_error_at (EXPR_LOCATION (call),
+				 "cannot prove that %qD holds, as required by "
+				 "the precondition of %qD", pred_fn, callee);
+		  else
+		    oa_warning_at (EXPR_LOCATION (call), 0,
+				   "cannot verify that %qD holds, as required "
+				   "by the precondition of %qD", pred_fn, callee);
+		  oa_inform (EXPR_LOCATION (call), "%s",
+			     _(oa_unprovable_reason_text
+				 (OA_UNPROVABLE_UNSUPPORTED_PREDICATE)));
+		  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		}
+	      continue;
+	    }
 
 	  tree substituted = oa_substitute_call_arg (callee, call, arg_decl);
 	  if (!substituted)
@@ -21124,6 +21166,27 @@ oa_match_predicate_conjunct (tree conjunct, tree *pred_fn_out,
 {
   return oa_predicate_conjunct_shape (conjunct, pred_fn_out, arg_decl_out,
 				       negated_out);
+}
+
+/* See contracts.h.  */
+
+bool
+oa_unsupported_symbolic_predicate_p (tree conjunct, tree *pred_fn_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR || TREE_CODE (c) == TRUTH_NOT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  if (TREE_CODE (c) != CALL_EXPR)
+    return false;
+  tree fn = cp_get_callee_fndecl_nofold (c);
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL || !DECL_DECLARED_SYMBOLIC_P (fn))
+    return false;
+  tree pred_fn, arg_decl;
+  bool negated;
+  if (oa_predicate_conjunct_shape (conjunct, &pred_fn, &arg_decl, &negated))
+    return false;
+  *pred_fn_out = fn;
+  return true;
 }
 
 /* Thin wrappers over oa_symbolic_comparison_conjunct_shape/oa_strip_
@@ -31112,6 +31175,9 @@ oa_unprovable_reason_text (oa_unprovable_reason reason)
     case OA_UNPROVABLE_LAUNDERED_BORROWED:
       return G_("this was reassigned from a borrowed or external "
 		 "source, not created by the calling function itself");
+    case OA_UNPROVABLE_UNSUPPORTED_PREDICATE:
+      return G_("a symbolic predicate's fact is tracked only for one "
+		 "object, named by a parameter or variable");
     }
   gcc_unreachable ();
 }
