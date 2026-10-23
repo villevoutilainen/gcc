@@ -8017,8 +8017,34 @@ public:
     bool *v = m_nz_map.get (decl);
     return v && *v;
   }
-  void nz_set (tree decl, bool provable) { m_nz_map.put (decl, provable); }
-  void nz_invalidate (tree decl) { m_nz_map.put (decl, false); }
+  void nz_set (tree decl, bool provable)
+  {
+    m_nz_map.put (decl, provable);
+    m_excluded_map.remove (decl);
+  }
+  void nz_invalidate (tree decl)
+  {
+    m_nz_map.put (decl, false);
+    m_excluded_map.remove (decl);
+  }
+  /* The one value a scalar DECL is known not to hold, from a condition
+     ('if (x != 1)'): what a range fact, one interval, can't say.  Ends
+     with DECL's range and nonzero facts, whenever either is set or
+     dropped (every write and escape of DECL), so it never outlives the
+     value it describes; a condition refining DECL's range keeps it
+     (excluded_set after the refinement).  */
+  bool excluded_get (tree decl, widest_int *out)
+  {
+    widest_int *v = m_excluded_map.get (decl);
+    if (!v)
+      return false;
+    *out = *v;
+    return true;
+  }
+  void excluded_set (tree decl, const widest_int &v)
+  {
+    m_excluded_map.put (decl, v);
+  }
 
   /* -fcontract-symbolic-proofs: symbolic-only counterparts of m_map/
      m_nz_map above, established *only* when the specific establishing
@@ -8081,8 +8107,13 @@ public:
   void range_set (tree decl, const oa_range_fact &fact)
   {
     m_range_map.put (decl, fact);
+    m_excluded_map.remove (decl);
   }
-  void range_invalidate (tree decl) { m_range_map.remove (decl); }
+  void range_invalidate (tree decl)
+  {
+    m_range_map.remove (decl);
+    m_excluded_map.remove (decl);
+  }
 
   /* D4324: the floating-point analogue of range_get/set/invalidate just
      above, for a scalar-float-typed decl's own oa_float_range_fact
@@ -8344,6 +8375,17 @@ public:
       };
     for (auto it : m_range_map)
       widen (it.second, prev.m_range_map.get (it.first));
+    {
+      auto_vec<tree> moved;
+      for (auto it : m_excluded_map)
+	{
+	  widest_int *p = prev.m_excluded_map.get (it.first);
+	  if (!p || *p != it.second)
+	    moved.safe_push (it.first);
+	}
+      for (tree d : moved)
+	m_excluded_map.remove (d);
+    }
     for (auto it : m_contract_scalar_range_map)
       widen (it.second, prev.m_contract_scalar_range_map.get (it.first));
     for (auto it : m_contract_field_range_map)
@@ -8392,6 +8434,7 @@ public:
     bools (m_symbolic_nz_map);
     for (auto it : m_range_map)
       range (it.second);
+    n += m_excluded_map.elements ();
     for (auto it : m_contract_scalar_range_map)
       range (it.second);
     for (auto it : m_contract_field_range_map)
@@ -8443,6 +8486,7 @@ public:
     for (tree d : scalars)
       {
 	m_nz_map.remove (d);
+	m_excluded_map.remove (d);
 	if (INTEGRAL_TYPE_P (TREE_TYPE (d)))
 	  m_range_map.remove (d);
 	m_contract_scalar_range_map.remove (d);
@@ -9376,6 +9420,8 @@ public:
       r.m_map.put (it.first, it.second);
     for (auto it : m_nz_map)
       r.m_nz_map.put (it.first, it.second);
+    for (auto it : m_excluded_map)
+      r.m_excluded_map.put (it.first, it.second);
     for (auto it : m_symbolic_object_address_map)
       r.m_symbolic_object_address_map.put (it.first, it.second);
     for (auto it : m_symbolic_nz_map)
@@ -9433,6 +9479,9 @@ public:
     m_nz_map.empty ();
     for (auto it : other.m_nz_map)
       m_nz_map.put (it.first, it.second);
+    m_excluded_map.empty ();
+    for (auto it : other.m_excluded_map)
+      m_excluded_map.put (it.first, it.second);
     m_symbolic_object_address_map.empty ();
     for (auto it : other.m_symbolic_object_address_map)
       m_symbolic_object_address_map.put (it.first, it.second);
@@ -9540,6 +9589,17 @@ public:
     for (unsigned i = 0; i < nz_to_invalidate.length (); ++i)
       m_nz_map.put (nz_to_invalidate[i], false);
 
+    /* Excluded on both paths, or not known.  */
+    auto_vec<tree> excluded_to_remove;
+    for (auto it : m_excluded_map)
+      {
+	widest_int *ov = other.m_excluded_map.get (it.first);
+	if (!ov || *ov != it.second)
+	  excluded_to_remove.safe_push (it.first);
+      }
+    for (tree d : excluded_to_remove)
+      m_excluded_map.remove (d);
+
     auto_vec<tree> symbolic_oa_to_invalidate;
     for (auto it : m_symbolic_object_address_map)
       if (it.second)
@@ -9644,6 +9704,7 @@ public:
 private:
   hash_map<tree, bool> m_map;
   hash_map<tree, bool> m_nz_map;
+  hash_map<tree, widest_int> m_excluded_map;
   hash_map<tree, bool> m_symbolic_object_address_map;
   hash_map<tree, bool> m_symbolic_nz_map;
   hash_map<tree, oa_range_fact> m_range_map;
@@ -13184,15 +13245,19 @@ oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
   if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
       && code != GE_EXPR && code != EQ_EXPR && code != NE_EXPR)
     return;
-  /* 'x != val' known false is 'x == val'; known true, a range of two
-     pieces, which a range fact can't hold.  */
+  /* 'x != val' known false is 'x == val'; 'x != val' known true, or
+     'x == val' known false, excludes VAL: a range of two pieces, which
+     a range fact can't hold, so an exclusion fact instead.  */
+  bool excludes = false;
   if (code == NE_EXPR)
     {
-      if (asserted_true)
-	return;
       code = EQ_EXPR;
-      asserted_true = true;
+      if (asserted_true)
+	excludes = true;
+      asserted_true = !asserted_true;
     }
+  else if (code == EQ_EXPR && !asserted_true)
+    excludes = true;
 
   tree op0_scalar = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
   tree op1_scalar = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
@@ -13245,16 +13310,18 @@ oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
       default: break;
       }
 
-  if (!asserted_true)
+  if (!asserted_true && !excludes)
     switch (code)
       {
       case LT_EXPR: code = GE_EXPR; break;
       case LE_EXPR: code = GT_EXPR; break;
       case GT_EXPR: code = LE_EXPR; break;
       case GE_EXPR: code = LT_EXPR; break;
-      default: return; /* NOT(decl == val) is decl != val -- skip.  */
+      default: return;
       }
 
+  if (is_float && excludes)
+    return;
   if (is_float)
     {
       oa_float_range_fact other_fact;
@@ -13283,6 +13350,12 @@ oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
     return;
   widest_int val = other_fact.lo;
 
+  if (excludes)
+    {
+      env.excluded_set (decl, val);
+      return;
+    }
+
   oa_range_fact refined;
   if (!env.range_get (decl, &refined))
     {
@@ -13291,7 +13364,12 @@ oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
     }
 
   oa_tighten_range_bound (refined, code, val);
+  /* A narrower range for the same value keeps what it excludes.  */
+  widest_int excluded;
+  bool had_excluded = env.excluded_get (decl, &excluded);
   env.range_set (decl, refined);
+  if (had_excluded)
+    env.excluded_set (decl, excluded);
 }
 
 /* D4324: is it safe to trust the algebraic "solve for PARAM" step
@@ -17716,6 +17794,15 @@ oa_check_ne_constant (oa_env &env, tree substituted, tree cst,
 {
   if (integer_zerop (cst) && oa_provably_nonzero_p (substituted, env))
     return OA_PROVEN_TRUE;
+  /* Excluded by a condition ('if (k != 1)').  */
+  {
+    tree decl = oa_strip_to_relational_operand (substituted);
+    widest_int excluded;
+    if ((VAR_P (decl) || TREE_CODE (decl) == PARM_DECL)
+	&& env.excluded_get (decl, &excluded)
+	&& excluded == wi::to_widest (cst))
+      return OA_PROVEN_TRUE;
+  }
   if (!INTEGRAL_TYPE_P (TREE_TYPE (substituted)))
     {
       *reason = OA_UNPROVABLE_NO_FACT;

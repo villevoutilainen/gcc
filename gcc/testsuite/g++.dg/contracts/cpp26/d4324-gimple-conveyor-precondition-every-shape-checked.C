@@ -53,10 +53,28 @@ void u7 (bool k) conveyor { flag (k); }		// { dg-error "cannot prove the precond
 void u8 (int k) conveyor { callc (k); }		// { dg-error "cannot prove" }
 void u9 (int k) conveyor { deref (&k); }	// { dg-error "cannot prove" }
 
+// A condition excluding a value ('k != 1', or 'k == 1' false) proves
+// '!= 1' for as long as the value is unchanged.
+int give () conveyor;
+void touch (int &) conveyor;
+void touchp (int *) conveyor;
+void e1 (int k) conveyor { if (k != 1) ne1 (k); }
+void e2 (int k) conveyor { if (k == 1) return; ne1 (k); }
+void e3 (int k) conveyor { if (!(k == 1)) ne1 (k); }
+void e4 (int k) conveyor { if (k != 1 && k > 0) ne1 (k); }
+void e5 (int k) conveyor { if (k > 0 && k != 1) ne1 (k); }
+void e6 (int k) conveyor { if (k != 1) ner (k); }
+void e7 (int k, bool c) conveyor { if (k != 1) { if (c) ne1 (k); else ne1 (k); } }
+void e8 (int k) conveyor { while (k != 1) { ne1 (k); k = give (); } }
+void x1 (int k) conveyor { if (k != 1) { k = give (); ne1 (k); } }	// { dg-error "cannot prove that .k. satisfies" }
+void x2 (int k) conveyor { if (k != 1 && k > -9 && k < 9) { ++k; ne1 (k); } }		// { dg-error "cannot prove that .k. satisfies" }
+void x3 (int k) conveyor { if (k != 1 && k > -9 && k < 9) { k += 2; ne1 (k); } }		// { dg-error "cannot prove that .k. satisfies" }
+void x4 (int k) conveyor { if (k != 1) { touch (k); ne1 (k); } }	// { dg-error "cannot prove that .k. satisfies" }
+void x5 (int k) conveyor { if (k != 1) { touchp (&k); ne1 (k); } }	// { dg-error "cannot prove that .k. satisfies" }
+void x6 (int k, bool c) conveyor { if (c) { if (k == 1) return; } ne1 (k); } // { dg-error "cannot prove that .k. satisfies" }
+void x7 (int k) conveyor { if (k != 2) ne1 (k); }			// { dg-error "cannot prove that .k. satisfies" }
+void x8 (int k) conveyor { if (k != 1 && k > -9 && k < 9) { k--; ne1 (k); } }		// { dg-error "cannot prove that .k. satisfies" }
+
 // { dg-prune-output "no proof rule covers a condition of this form" }
 // { dg-prune-output "no fact relating this value" }
 // { dg-prune-output "a numeric range is known" }
-
-// The GIMPLE engine also proves 'x != 1' from a condition excluding 1,
-// which a one-interval range can't hold: the ranger's own range can.
-void p8 (int k) conveyor { if (k != 1) ne1 (k); }
