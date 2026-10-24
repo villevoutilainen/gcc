@@ -6309,9 +6309,14 @@ contract_control_operator (tree ctrl)
    __d4324_terminate_wrapper () hides its noreturn from the optimizer,
    which this compile-time question doesn't feed), stops.  A condition
    the analysis can settle at compile time takes only its branch: one
-   on check (), or one that folds once the context's values that are
-   fixed for this contract are known (its semantic, side and kind, as
-   build_contract_control_call passes them).  A runtime branch keeps
+   on check (), or one that folds once the values fixed for this
+   contract are known: the context's semantic, side and kind, and its
+   whole static info (so the -fcontracts-group-evaluation-semantic=
+   rules a P3400 label's group names select), as
+   build_contract_control_call passes them; the control object itself
+   (its 'this', a constant: a label's level or group names); and a
+   const local initialized from those ('const evaluation_semantic sem
+   = ...').  A runtime branch keeps
    both arms, so one that returns makes the answer "may continue".  So
    do anything unrecognized (loops, switches, gotos, a missing body).
    Only a conveyor contract's facts depend on this; a symbolic one's are
@@ -6322,6 +6327,11 @@ struct cct_env
   tree ctx_type;	/* std::contracts::assertion_context.  */
   tree info_type;	/* std::contracts::assertion_static_info.  */
   HOST_WIDE_INT semantic, side, kind;
+  contract_check_side cside;
+  tree static_info;	/* A constant holding the static info, or NULL.  */
+  tree op_this;		/* The analyzed operator()'s 'this'.  */
+  tree ctrl_obj;	/* A constant holding the control object, or NULL.  */
+  hash_map<tree, tree> *locals;	/* const locals with constant values.  */
   bool unknown_body;	/* A body was missing: don't cache.  */
 };
 
@@ -6344,6 +6354,36 @@ cct_member_call_p (tree t, tree cls, const char *name)
 	  && same_type_ignoring_top_level_qualifiers_p (DECL_CONTEXT (fn), cls));
 }
 
+/* A constant, static, artificial variable of TYPE holding INIT, to
+   stand for a value fixed for the contract (its static info, its
+   control object) in the conditions cct_cond_value folds.  Never
+   referenced by generated code, so never emitted (DECL_EXTERNAL); its
+   own assembler name keeps the symbol table, which constant folding of
+   addresses may enter it into, from trying to mangle a nameless
+   decl.  */
+
+static tree
+cct_constant_var (tree type, tree init)
+{
+  tree var = build_decl (UNKNOWN_LOCATION, VAR_DECL, NULL_TREE,
+			 cp_build_qualified_type (type, TYPE_QUAL_CONST));
+  DECL_ARTIFICIAL (var) = true;
+  DECL_IGNORED_P (var) = true;
+  TREE_STATIC (var) = true;
+  TREE_READONLY (var) = true;
+  TREE_CONSTANT (var) = true;
+  DECL_DECLARED_CONSTEXPR_P (var) = true;
+  DECL_INITIALIZED_BY_CONSTANT_EXPRESSION_P (var) = true;
+  DECL_INITIAL (var) = init;
+  /* Never emitted: nothing generated refers to it.  */
+  DECL_EXTERNAL (var) = true;
+  static unsigned counter;
+  char name[32];
+  snprintf (name, sizeof name, "__contract_cct.%u", counter++);
+  SET_DECL_ASSEMBLER_NAME (var, get_identifier (name));
+  return var;
+}
+
 /* walk_tree callback: replace the context's compile-time-known values.  */
 
 static tree
@@ -6352,6 +6392,41 @@ cct_substitute_r (tree *tp, int *walk_subtrees, void *data)
   cct_env *env = (cct_env *) data;
   tree t = *tp;
   HOST_WIDE_INT v;
+  /* The whole static info -- semantic, side and the
+     -fcontracts-group-evaluation-semantic= rules -- is fixed for the
+     contract: a control object choosing by its group ('bsls.SAFE') is
+     settled at compile time too.  */
+  if (cct_member_call_p (t, env->ctx_type, "static_info"))
+    {
+      if (!env->static_info)
+	{
+	  env->static_info
+	    = cct_constant_var (env->info_type,
+				build_assertion_static_info_value (env->cside,
+								   env->info_type));
+	}
+      tree ref = env->static_info;
+      if (TYPE_REF_P (TREE_TYPE (t)))
+	ref = build_nop (TREE_TYPE (t), build_fold_addr_expr (ref));
+      *tp = ref;
+      *walk_subtrees = 0;
+      return NULL_TREE;
+    }
+  /* The control object is a constant too (its traits are evaluated
+     against it): its 'this' in operator() is that constant.  */
+  if (t == env->op_this && env->ctrl_obj)
+    {
+      *tp = build_nop (TREE_TYPE (t), build_fold_addr_expr (env->ctrl_obj));
+      *walk_subtrees = 0;
+      return NULL_TREE;
+    }
+  if (VAR_P (t) && env->locals)
+    if (tree *v = env->locals->get (t))
+      {
+	*tp = *v;
+	*walk_subtrees = 0;
+	return NULL_TREE;
+      }
   if (cct_member_call_p (t, env->ctx_type, "semantic")
       || cct_member_call_p (t, env->info_type, "semantic"))
     v = env->semantic;
@@ -6364,6 +6439,16 @@ cct_substitute_r (tree *tp, int *walk_subtrees, void *data)
   *tp = build_int_cst (TREE_TYPE (t), v);
   *walk_subtrees = 0;
   return NULL_TREE;
+}
+
+/* A copy of T to substitute into: deep, unlike unshare_expr, which
+   leaves a TARGET_EXPR (a by-value argument's) shared with the body.  */
+
+static tree
+cct_copy (tree t)
+{
+  walk_tree (&t, copy_tree_r, NULL, NULL);
+  return t;
 }
 
 /* COND's value given that check () is false: 0, 1, or -1 if unknown.  */
@@ -6417,8 +6502,8 @@ cct_cond_value (tree cond, cct_env *env)
     default:
       break;
     }
-  tree sub = unshare_expr (cond);
-  walk_tree_without_duplicates (&sub, cct_substitute_r, env);
+  tree sub = cct_copy (cond);
+  walk_tree (&sub, cct_substitute_r, env, NULL);
   sub = maybe_constant_value (sub);
   STRIP_NOPS (sub);
   if (TREE_CODE (sub) == INTEGER_CST)
@@ -6529,7 +6614,24 @@ cct_stmt (tree t, cct_env *env, int depth)
     case MODIFY_EXPR:
     case INIT_EXPR:
       {
+	tree lhs = TREE_OPERAND (t, 0);
 	tree rhs = TREE_OPERAND (t, 1);
+	/* 'const evaluation_semantic sem = ...;': a const local is
+	   initialized once; if its value is known, conditions using it
+	   are settled too.  */
+	if (VAR_P (lhs) && !TREE_STATIC (lhs) && TREE_READONLY (lhs)
+	    && depth == 0)
+	  {
+	    tree val = cct_copy (rhs);
+	    walk_tree (&val, cct_substitute_r, env, NULL);
+	    val = maybe_constant_value (val);
+	    if (CONSTANT_CLASS_P (val))
+	      {
+		if (!env->locals)
+		  env->locals = new hash_map<tree, tree>;
+		env->locals->put (lhs, val);
+	      }
+	  }
 	STRIP_NOPS (rhs);
 	if (TREE_CODE (rhs) == CALL_EXPR)
 	  return { cct_call_may_return_p (rhs, env, depth), false };
@@ -6632,6 +6734,26 @@ contract_failure_terminates_p (tree contract, tree owner_fn)
     = lookup_std_contracts_type (get_identifier ("assertion_static_info"));
   env.semantic = contract_evaluation_semantic_value ();
   env.side = 0;
+  env.cside = cside;
+  env.static_info = NULL_TREE;
+  env.locals = NULL;
+  env.op_this = (DECL_IOBJ_MEMBER_FUNCTION_P (op) ? DECL_ARGUMENTS (op)
+		 : NULL_TREE);
+  env.ctrl_obj = NULL_TREE;
+  {
+    tree c = ctrl;
+    STRIP_NOPS (c);
+    if (VAR_P (c) && DECL_DECLARED_CONSTEXPR_P (c))
+      env.ctrl_obj = c;
+    else
+      {
+	tree val = maybe_constant_value (ctrl);
+	if (TREE_CODE (val) == TARGET_EXPR)
+	  val = maybe_constant_init (TARGET_EXPR_INITIAL (val));
+	if (TREE_CODE (val) == CONSTRUCTOR)
+	  env.ctrl_obj = cct_constant_var (TREE_TYPE (val), val);
+      }
+  }
   switch (cside)
     {
     case ccs_not_applicable: env.side = 0; break;
@@ -6643,8 +6765,11 @@ contract_failure_terminates_p (tree contract, tree owner_fn)
   env.unknown_body = false;
 
   unsigned idx = ((env.semantic & 7) << 4) | ((env.side & 3) << 2) | (env.kind & 3);
+  /* The answer may depend on the control object's own data (its 'this'
+     is substituted), which the key doesn't include: cache only for a
+     type without any.  */
   bool cacheable = (env.semantic >= 0 && env.semantic < 8 && env.kind >= 0
-		    && env.kind < 4);
+		    && env.kind < 4 && is_empty_class (DECL_CONTEXT (op)));
   if (!cct_cache)
     cct_cache = new hash_map<tree, cct_cache_entry>;
   cct_cache_entry &e = cct_cache->get_or_insert (op);
@@ -6653,6 +6778,7 @@ contract_failure_terminates_p (tree contract, tree owner_fn)
     return (e.value[idx >> 6] & bit) != 0;
 
   bool terminates = !cct_fn_may_return (op, &env, 0);
+  delete env.locals;
   if (cacheable && !env.unknown_body)
     {
       e.known[idx >> 6] |= bit;
