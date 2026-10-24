@@ -14397,6 +14397,12 @@ contracts_gimple_eager_check_function (tree fndecl)
       return;
     }
 
+  /* Analyzing FNDECL runs passes, which end in ggc_collect; the parser
+     up the stack may hold trees in locals that are not GC roots (an
+     argument vector being built around a lambda, an auto function
+     instantiated mid-expression for its return type, a class still
+     being defined).  No collection until the check returns.  */
+  ggc_collect_inhibitor no_gc;
   cg_eager_check_active = true;
   contracts_gimple_eager_check_function_1 (fndecl);
   while (!cg_eager_check_pending.is_empty ())
@@ -14520,6 +14526,7 @@ contracts_gimple_eager_check_function_1 (tree fndecl, bool is_eof_drain)
 void
 contracts_gimple_eager_check_drain_at_eof (void)
 {
+  ggc_collect_inhibitor no_gc;
   cg_eager_check_active = true;
   do
     {
