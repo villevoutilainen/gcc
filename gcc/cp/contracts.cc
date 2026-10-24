@@ -15352,8 +15352,41 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 	     fact established under it.  */
 	  oa_range_fact a;
 	  oa_range_fact b;
-	  bool have_a = oa_get_range (oa_strip_to_relational_operand (op0), *e, &a);
-	  bool have_b = oa_get_range (oa_strip_to_relational_operand (op1), *e, &b);
+	  tree sop0 = oa_strip_to_relational_operand (op0);
+	  tree sop1 = oa_strip_to_relational_operand (op1);
+	  bool have_a = oa_get_range (sop0, *e, &a);
+	  bool have_b = oa_get_range (sop1, *e, &b);
+	  /* A bound no fact gives is still the operand type's own: an int is
+	     never above INT_MAX ('if (x > 0) return INT_MAX - x;').  */
+	  auto complete = [] (tree op, bool have, oa_range_fact &r) -> bool
+	    {
+	      if (have && r.base != NULL_TREE)
+		return true;
+	      tree t = TREE_TYPE (op);
+	      if (!t || !INTEGRAL_TYPE_P (t)
+		  || TREE_CODE (TYPE_MIN_VALUE (t)) != INTEGER_CST
+		  || TREE_CODE (TYPE_MAX_VALUE (t)) != INTEGER_CST)
+		return have;
+	      if (!have)
+		{
+		  r = oa_range_fact ();
+		  r.base = NULL_TREE;
+		  r.has_lo = r.has_hi = false;
+		}
+	      if (!r.has_lo)
+		{
+		  r.lo = wi::to_widest (TYPE_MIN_VALUE (t));
+		  r.has_lo = true;
+		}
+	      if (!r.has_hi)
+		{
+		  r.hi = wi::to_widest (TYPE_MAX_VALUE (t));
+		  r.has_hi = true;
+		}
+	      return true;
+	    };
+	  have_a = complete (sop0, have_a, a);
+	  have_b = complete (sop1, have_b, b);
 
 	  bool safe = false;
 	  if (code == PLUS_EXPR)
@@ -26186,6 +26219,25 @@ oa_scan_item8_conjunct (tree *conjunct, oa_env &env)
 	oa_scan_item8_in_expr (&TREE_OPERAND (c, 1), then_env);
       if (TREE_OPERAND (c, 2))
 	oa_scan_item8_in_expr (&TREE_OPERAND (c, 2), else_env);
+      return;
+    }
+
+  /* Likewise a '||', and a '&&' below the top level (inside one): the
+     right operand is evaluated only when the left is false (true), so
+     it's scanned with that ('(lhs > 0 && LLONG_MAX - lhs >= rhs) ||
+     (lhs <= 0 && LLONG_MIN - lhs <= rhs)').  */
+  if (c && (TREE_CODE (c) == TRUTH_ORIF_EXPR
+	    || TREE_CODE (c) == TRUTH_ANDIF_EXPR))
+    {
+      oa_env then_env, else_env;
+      bool saved_codegen = oa_symbolic_codegen_active;
+      oa_symbolic_codegen_active = false;
+      oa_process_condition (TREE_OPERAND (c, 0), env, &then_env, &else_env,
+			    OA_COND_SCAN_ITEM8);
+      oa_symbolic_codegen_active = saved_codegen;
+      oa_scan_item8_in_expr (&TREE_OPERAND (c, 1),
+			     TREE_CODE (c) == TRUTH_ORIF_EXPR
+			     ? else_env : then_env);
       return;
     }
 
