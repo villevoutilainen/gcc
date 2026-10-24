@@ -508,7 +508,8 @@ ip_defines_var_p (gimple *stmt, tree var)
   if (gimple_code (stmt) == GIMPLE_CALL)
     {
       gcall *call = as_a<gcall *> (stmt);
-      if (ip_trackable_decl (gimple_call_lhs (call)) == var)
+      if (ip_trackable_decl (gimple_call_lhs (call)) == var
+	  || (TREE_CODE (var) == RESULT_DECL && gimple_call_lhs (call) == var))
 	return true;
       tree fndecl = gimple_call_fndecl (call);
       if (fndecl && DECL_CONSTRUCTOR_P (fndecl) && gimple_call_num_args (call) >= 1)
@@ -533,8 +534,11 @@ ip_defines_var_p (gimple *stmt, tree var)
        inlined callee's own cleanup scaffolding introduces a scope-exit
        edge inside the enclosing function (e.g. push_back's inlined
        construct call), misfiring "reassigned here" otherwise.  */
-    return !gimple_clobber_p (stmt)
-	   && ip_trackable_decl (gimple_assign_lhs (stmt)) == var;
+    return (!gimple_clobber_p (stmt)
+	    && (ip_trackable_decl (gimple_assign_lhs (stmt)) == var
+		/* A class returned in memory, built in place.  */
+		|| (TREE_CODE (var) == RESULT_DECL
+		    && gimple_assign_lhs (stmt) == var)));
   return false;
 }
 
@@ -1061,66 +1065,7 @@ ip_call_escapes_locally_p (gcall *call, int depth)
   return ip_call_args_escape_locally_p (call, fndecl, depth);
 }
 
-/* True if LHS is a "VAR.field = ..." or "VAR[i] = ..."-shaped
-   assignment target directly into VAR's own storage -- the two GIMPLE
-   shapes a per-element/per-field aggregate-initialization write can
-   take, covering both a class/struct-typed VAR (COMPONENT_REF) and an
-   array-typed one (ARRAY_REF, e.g. the compiler-synthesized backing
-   array behind a 'std::initializer_list<T>', confirmed via gdb/
-   -fdump-tree-gimple this is exactly how 'return {p};' lowers:
-   'D.xxx[0] = p;' with D.xxx the backing array).  */
 
-static bool
-ip_component_write_target_p (tree lhs, tree var)
-{
-  return (TREE_CODE (lhs) == COMPONENT_REF || TREE_CODE (lhs) == ARRAY_REF)
-	 && TREE_OPERAND (lhs, 0) == var;
-}
-
-/* Collect, into *OUT, the RHS of every "VAR.field = rhs"/"VAR[i] =
-   rhs"-shaped assignment reaching POINT -- the field-by-field (or
-   element-by-element) aggregate-initialization counterpart of
-   ip_nearest_write_before's own whole-object write search, needed
-   because a class-typed return value or local is very often populated
-   field-by-field (e.g. brace initialization, "Widget{}"), and an
-   array-typed one element-by-element (e.g. a std::initializer_list's
-   own backing array), rather than via one single whole-object call or
-   copy ip_defines_var_p can see.  Same same-block-then-dominator-chain
-   technique as ip_nearest_write_before, but collects every matching
-   write found rather than stopping at the first, since more than one
-   field/element may need checking.  */
-
-static void
-ip_collect_component_writes_before (tree var, gimple *point, vec<tree> *out)
-{
-  basic_block bb = gimple_bb (point);
-  for (gimple_stmt_iterator gsi = gsi_for_stmt (point); !gsi_end_p (gsi);)
-    {
-      gsi_prev (&gsi);
-      if (gsi_end_p (gsi))
-	break;
-      gimple *s = gsi_stmt (gsi);
-      if (is_gimple_assign (s) && gimple_assign_single_p (s))
-	{
-	  tree lhs = gimple_assign_lhs (s);
-	  if (ip_component_write_target_p (lhs, var))
-	    out->safe_push (gimple_assign_rhs1 (s));
-	}
-    }
-  for (basic_block d = get_immediate_dominator (CDI_DOMINATORS, bb); d;
-       d = get_immediate_dominator (CDI_DOMINATORS, d))
-    for (gimple_stmt_iterator gsi = gsi_start_bb (d); !gsi_end_p (gsi);
-	 gsi_next (&gsi))
-      {
-	gimple *s = gsi_stmt (gsi);
-	if (is_gimple_assign (s) && gimple_assign_single_p (s))
-	  {
-	    tree lhs = gimple_assign_lhs (s);
-	    if (ip_component_write_target_p (lhs, var))
-	      out->safe_push (gimple_assign_rhs1 (s));
-	  }
-      }
-}
 
 /* True if TYPE could, structurally, hold a pointer/reference
    anywhere within it -- P3446R0's own definition of "container"
@@ -1168,6 +1113,37 @@ ip_type_may_hold_pointer_p (tree type, hash_set<tree> *visited)
    to the exact same reaching-write recursion as a class-typed local
    always has.  */
 
+/* Whether write W to VAR (a whole-object assignment or call, a field or
+   element store, or a call given VAR's address) stores something that
+   would dangle if VAR escaped.  */
+
+static bool
+ip_var_write_escapes_locally_p (gimple *w, int depth)
+{
+  if (gcall *call = dyn_cast<gcall *> (w))
+    {
+      if (ip_no_dangling_call_p (call) || ip_no_escape_call_p (call))
+	return false;
+      tree fndecl = gimple_call_fndecl (call);
+      if (!fndecl)
+	return true;
+      return ip_call_args_escape_locally_p (call, fndecl, depth + 1);
+    }
+  if (is_gimple_assign (w) && gimple_assign_single_p (w))
+    return ip_escapes_locally_p (gimple_assign_rhs1 (w), w, depth + 1);
+  return true;
+}
+
+/* Whether REF ('var', 'var.f', 'var.a[i].g') is part of VAR.  */
+
+static bool
+ip_ref_within_var_p (tree ref, tree var)
+{
+  while (handled_component_p (ref))
+    ref = TREE_OPERAND (ref, 0);
+  return ref == var;
+}
+
 static bool
 ip_var_contents_escape_locally_p (tree var, gimple *point, int depth)
 {
@@ -1178,33 +1154,84 @@ ip_var_contents_escape_locally_p (tree var, gimple *point, int depth)
     if (!ip_type_may_hold_pointer_p (TREE_TYPE (var), &visited))
       return false; /* Structurally cannot hold a pointer -- nothing to trace.  */
   }
-  gimple *reaching = ip_nearest_write_before (var, point);
-  if (reaching)
-    {
-      if (gimple_code (reaching) == GIMPLE_CALL)
-	{
-	  gcall *call = as_a<gcall *> (reaching);
-	  if (ip_no_dangling_call_p (call) || ip_no_escape_call_p (call))
-	    return false;
-	  tree fndecl = gimple_call_fndecl (call);
-	  if (!fndecl)
-	    return true;
-	  return ip_call_args_escape_locally_p (call, fndecl, depth + 1);
-	}
-      if (is_gimple_assign (reaching) && gimple_assign_single_p (reaching))
-	return ip_escapes_locally_p (gimple_assign_rhs1 (reaching), reaching,
-				      depth + 1);
+  /* Every whole-object write that may reach POINT ...  */
+  ip_var_reach_info info;
+  ip_compute_var_reach_info (cfun, var, &info);
+  auto_vec<gimple *> reaching;
+  ip_var_reaching_defs_before_stmt (&info, var, point, &reaching);
+  for (gimple *w : reaching)
+    if (ip_var_write_escapes_locally_p (w, depth))
       return true;
-    }
-
-  auto_vec<tree> field_values;
-  ip_collect_component_writes_before (var, point, &field_values);
-  if (field_values.is_empty ())
-    return true; /* Truly nothing found -- conservative default-deny.  */
-  for (unsigned i = 0; i < field_values.length (); ++i)
-    if (ip_escapes_locally_p (field_values[i], point, depth + 1))
-      return true;
-  return false;
+  /* ... and, anywhere in the function, every store into part of VAR
+     ('t.z = &c' after 't = {}', 't.a[0].p = q') and every call given
+     VAR's address or part of it ('fill (&t, &c)'): the last
+     whole-object write alone says nothing about what was stored into
+     VAR after it.  */
+  bool partial_writes = false;
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      {
+	gimple *s = gsi_stmt (gsi);
+	if (reaching.contains (s) || gimple_clobber_p (s))
+	  continue;
+	bool writes = false;
+	if (is_gimple_assign (s) && gimple_assign_single_p (s))
+	  {
+	    tree lhs = gimple_assign_lhs (s);
+	    writes = lhs != var && ip_ref_within_var_p (lhs, var);
+	  }
+	else if (gcall *call = dyn_cast<gcall *> (s))
+	  {
+	    tree lhs = gimple_call_lhs (call);
+	    if (lhs && lhs != var && ip_ref_within_var_p (lhs, var))
+	      {
+		partial_writes = true;
+		if (ip_var_write_escapes_locally_p (s, depth))
+		  return true;
+		continue;
+	      }
+	    /* Given VAR's address ('fill (&t, &c)'): what it could store
+	       into VAR is one of its other arguments.  Not a destructor,
+	       which ends VAR rather than storing into it, nor a call
+	       already among VAR's own defining statements.  */
+	    tree fndecl = gimple_call_fndecl (call);
+	    if (ip_defines_var_p (call, var)
+		|| (fndecl && DECL_DESTRUCTOR_P (fndecl)))
+	      continue;
+	    bool given = false;
+	    for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+	      {
+		tree arg = gimple_call_arg (call, i);
+		if (TREE_CODE (arg) == ADDR_EXPR
+		    && ip_ref_within_var_p (TREE_OPERAND (arg, 0), var))
+		  given = true;
+	      }
+	    if (!given)
+	      continue;
+	    partial_writes = true;
+	    if (ip_no_dangling_call_p (call) || ip_no_escape_call_p (call))
+	      continue;
+	    for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+	      {
+		tree arg = gimple_call_arg (call, i);
+		if (TREE_CODE (arg) == ADDR_EXPR
+		    && ip_ref_within_var_p (TREE_OPERAND (arg, 0), var))
+		  continue;
+		if (ip_escapes_locally_p (arg, call, depth + 1))
+		  return true;
+	      }
+	    continue;
+	  }
+	if (!writes)
+	  continue;
+	partial_writes = true;
+	if (ip_var_write_escapes_locally_p (s, depth))
+	  return true;
+      }
+  /* Truly nothing found -- conservative default-deny.  */
+  return reaching.is_empty () && !partial_writes;
 }
 
 /* Returns 1 if STMT writes through V_PTR with contents that escape, 0
@@ -1395,6 +1422,13 @@ ip_result_decl_escapes_locally_p (tree result_decl, gimple *point, int depth)
     return ip_escapes_locally_p (nrv_var, point, depth);
   if (gcall *call = ip_resolve_nrv_call (result_decl, point))
     return ip_call_escapes_locally_p (call, depth);
+  /* Built in place, in the return slot ('<retval> = {};', '<retval> =
+     g;', then '<retval>.f = v;'), as a class returned in memory is
+     ('std::tm t{}; t.tm_year = 126; return t;'): what was written
+     there.  */
+  if (TREE_CODE (result_decl) == RESULT_DECL
+      && !TYPE_REF_P (TREE_TYPE (result_decl)))
+    return ip_var_contents_escape_locally_p (result_decl, point, depth + 1);
   return true;
 }
 
