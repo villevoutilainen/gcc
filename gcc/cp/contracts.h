@@ -243,6 +243,7 @@ extern bool contract_control_constifies		(tree, contract_check_side, bool = fals
 extern bool contract_control_is_conveyor		(tree, contract_check_side, bool = false);
 extern bool contract_control_is_symbolic		(tree, contract_check_side, bool = false);
 extern bool contract_control_conveyor_like		(tree, contract_check_side, bool = false);
+extern bool contract_failure_terminates_p	(tree, tree);
 extern bool contract_control_symbolic_like		(tree, contract_check_side, bool = false);
 extern tree contract_default_control_object		(location_t);
 extern void maybe_inherit_virtual_contract		(tree, tree);
@@ -775,6 +776,7 @@ extern bool oa_contract_symbolic_active_public (tree contract, tree owner_fn);
    might run post-front-end.  */
 extern bool oa_contract_conveyor_active_cached_p (tree contract);
 extern bool oa_contract_symbolic_active_cached_p (tree contract);
+extern bool oa_contract_failure_terminates_cached_p (tree contract);
 
 /* Same cached, GIMPLE-pass-safe pattern as the active-status pair above,
    but for CONTRACT's own strict status (its control object is

@@ -536,6 +536,8 @@ cg_call_postcondition_range_p (tree callee, bool require_conveyor,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
+      if (!oa_contract_failure_terminates_cached_p (contract))
+	continue;
       if (require_conveyor && !conveyor_active)
 	continue;
       if (require_symbolic && !symbolic_active)
@@ -1503,6 +1505,8 @@ cg_call_postcondition_guarantees_p (tree callee, bool require_conveyor,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
+      if (!oa_contract_failure_terminates_cached_p (contract))
+	continue;
       if (require_conveyor && !conveyor_active)
 	continue;
       if (require_symbolic && !symbolic_active)
@@ -2661,6 +2665,8 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
+      if (!oa_contract_failure_terminates_cached_p (contract))
+	continue;
       bool conveyor_enabled = conveyor_active && flag_contract_conveyor_proofs_gimple;
       bool symbolic_enabled = symbolic_active && flag_contract_symbolic_proofs_gimple;
       if (!conveyor_enabled && !symbolic_enabled)
@@ -2960,6 +2966,8 @@ cg_call_postcondition_relation_p (gcall *call, tree_code *code_out,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
+      if (!oa_contract_failure_terminates_cached_p (contract))
+	continue;
       if (!conveyor_active && !symbolic_active)
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
@@ -7244,7 +7252,8 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
 		  && EXPR_LOCATION (contract) == EXPR_LOCATION (self)))
 	    break;
 	  if (!PRECONDITION_P (contract)
-	      || !oa_contract_conveyor_active_public (contract, owner))
+	      || !oa_contract_conveyor_active_public (contract, owner)
+	      || !contract_failure_terminates_p (contract, owner))
 	    continue;
 	  tree cond = CONTRACT_CONDITION (contract);
 	  if (cond == NULL_TREE || cond == error_mark_node)
@@ -7283,6 +7292,8 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
+      if (!oa_contract_failure_terminates_cached_p (contract))
+	continue;
       bool conveyor_enabled = conveyor_active && flag_contract_conveyor_proofs_gimple;
       bool symbolic_enabled = symbolic_active && flag_contract_symbolic_proofs_gimple;
       if (!conveyor_enabled && !symbolic_enabled)
@@ -8611,6 +8622,8 @@ cg_establish_persistent_facts_for_call (gcall *call,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
+      if (!oa_contract_failure_terminates_cached_p (contract))
+	continue;
       bool conveyor_enabled = conveyor_active && flag_contract_conveyor_proofs_gimple;
       bool symbolic_enabled = symbolic_active && flag_contract_symbolic_proofs_gimple;
       if (!conveyor_enabled && !symbolic_enabled)
@@ -8891,6 +8904,8 @@ cg_establish_assert_facts (gcall *call, cg_dom_fact_state &state)
 			   && oa_contract_symbolic_active_public (contract,
 								  owner));
   if (!conveyor_enabled && !symbolic_enabled)
+    return;
+  if (!contract_failure_terminates_p (contract, owner))
     return;
 
   auto identity_of = [&] (tree decl)
@@ -10971,6 +10986,8 @@ cg_compose_call_result_range (gcall *call, cg_dom_fact_state &state,
 	continue;
       if (!oa_contract_conveyor_active_cached_p (contract))
 	continue;
+      if (!oa_contract_failure_terminates_cached_p (contract))
+	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
       if (!result_id)
 	continue;
@@ -11729,6 +11746,8 @@ cg_establish_object_addresses_for_call (gcall *call, function *fun,
       if (!POSTCONDITION_P (contract)
 	  || !oa_contract_conveyor_active_cached_p (contract))
 	continue;
+      if (!oa_contract_failure_terminates_cached_p (contract))
+	continue;
       tree pcond = CONTRACT_CONDITION (contract);
       if (pcond == NULL_TREE || pcond == error_mark_node)
 	continue;
@@ -12372,6 +12391,8 @@ cg_assert_fact_scope::establish (gcall *call)
 								  owner));
   if (!conveyor_enabled && !symbolic_enabled)
     return;
+  if (!contract_failure_terminates_p (contract, owner))
+    return;
   if (cond == NULL_TREE || cond == error_mark_node)
     return;
 
@@ -12505,6 +12526,8 @@ cg_seed_float_self_trust (function *fun,
 	     && flag_contract_conveyor_proofs_gimple)
 	    || (oa_contract_symbolic_active_cached_p (contract)
 		&& flag_contract_symbolic_proofs_gimple)))
+	continue;
+      if (!oa_contract_failure_terminates_cached_p (contract))
 	continue;
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
@@ -13494,7 +13517,8 @@ cg_seed_predicate_from_preconditions (function *fun,
     {
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract)
-	  || !oa_contract_conveyor_active_public (contract, owner))
+	  || !oa_contract_conveyor_active_public (contract, owner)
+	  || !contract_failure_terminates_p (contract, owner))
 	continue;
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
