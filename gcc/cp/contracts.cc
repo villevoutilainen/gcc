@@ -8492,6 +8492,81 @@ public:
 	m_contract_scalar_range_map.remove (d);
       }
   }
+  /* D, an object, may have been written through a pointer or reference
+     to it ('*p = 1' for 'p = &d'): every fact about its value and state
+     ends, as for a reassignment of D itself (Rule 1 in oa_walk_stmt,
+     and the value facts its scalar assignment tracking replaces).  */
+  void object_written_through_memory (tree d)
+  {
+    nz_invalidate (d);
+    range_invalidate (d);
+    float_range_invalidate (d);
+    symbolic_nz_invalidate (d);
+    contract_scalar_range_invalidate (d);
+    type_bound_invalidate (d);
+    relational_invalidate_involving (d);
+    call_relational_invalidate_involving (d);
+    call_relational_invalidate_receiver (d);
+    call_call_relational_invalidate_involving (d);
+    predicate_fact_invalidate (d);
+    deriv_invalidate (d);
+    contract_field_range_invalidate_all (d);
+    contract_float_field_range_invalidate_all (d);
+    contract_call_range_invalidate_all (d);
+    contract_field_nz_invalidate_all (d);
+    field_alias_invalidate_all (d);
+    array_alias_invalidate_all (d);
+    field_object_predicate_invalidate_all (d);
+    field_object_address_invalidate_all (d);
+    if (POINTER_TYPE_P (TREE_TYPE (d)))
+      {
+	invalidate (d);
+	symbolic_object_address_invalidate (d);
+	alias_invalidate (d);
+      }
+  }
+  /* A store through a pointer or reference whose target isn't known may
+     be to any object of the current function whose address has been
+     taken: object_written_through_memory for each such object any fact
+     is held about.  (What a parameter's pointer or reference may alias
+     besides is a separate question.)  */
+  void addressable_locals_written_through_memory ()
+  {
+    hash_set<tree> objects;
+    auto add = [&objects] (tree d)
+      {
+	if (d && DECL_P (d) && TREE_ADDRESSABLE (d)
+	    && DECL_CONTEXT (d) == current_function_decl
+	    && ((VAR_P (d) && !TREE_STATIC (d) && !DECL_EXTERNAL (d))
+		|| (TREE_CODE (d) == PARM_DECL
+		    && !TYPE_REF_P (TREE_TYPE (d)))))
+	  objects.add (d);
+      };
+    for (auto it : m_map) add (it.first);
+    for (auto it : m_nz_map) add (it.first);
+    for (auto it : m_excluded_map) add (it.first);
+    for (auto it : m_symbolic_object_address_map) add (it.first);
+    for (auto it : m_symbolic_nz_map) add (it.first);
+    for (auto it : m_range_map) add (it.first);
+    for (auto it : m_float_range_map) add (it.first);
+    for (auto it : m_deriv_map) add (it.first);
+    for (auto it : m_predicate_fact_map) add (it.first);
+    for (auto it : m_relational_map)
+      add (it.first), add (it.second.rhs);
+    for (auto it : m_type_bound_map) add (it.first);
+    for (auto it : m_call_relational_map)
+      add (it.first), add (it.second.rhs_receiver);
+    for (auto it : m_call_call_relational_map) add (it.first.first);
+    for (auto it : m_contract_scalar_range_map) add (it.first);
+    for (auto it : m_contract_field_range_map) add (it.first.first);
+    for (auto it : m_contract_float_field_range_map) add (it.first.first);
+    for (auto it : m_contract_call_range_map) add (it.first.first);
+    for (auto it : m_contract_field_nz_map) add (it.first.first);
+    for (auto it : m_alias_target) add (it.first);
+    for (auto it : m_field_alias_target) add (it.first.first);
+    for (tree d : objects)
+      object_written_through_memory (d);
+  }
   /* Mirrors field_alias_invalidate_all's own removal-by-first-key-
      component sweep -- also the rule an unprovable-index write itself
      uses (see the Rule 1 write-detection site's own comment): BASE's
@@ -21036,6 +21111,24 @@ oa_invalidate_symbolic_scalar_range_for_call_args (tree call, oa_env &env)
 		}
 	    }
 	}
+      /* A pointer or reference variable to a mutable object ('touch
+	 (*p)', 'touchp (p)' for 'p = &k'): the callee can write what it
+	 points to -- what P is known to point to, or else any of this
+	 function's objects whose address was taken, as for a store
+	 through it (oa_walk_stmt).  */
+      else if ((VAR_P (arg) || TREE_CODE (arg) == PARM_DECL)
+	       && (POINTER_TYPE_P (TREE_TYPE (arg)))
+	       && !TYPE_READONLY (TREE_TYPE (TREE_TYPE (arg)))
+	       && !(callee_parm
+		    && POINTER_TYPE_P (TREE_TYPE (callee_parm))
+		    && TYPE_READONLY (TREE_TYPE (TREE_TYPE (callee_parm)))))
+	{
+	  tree target = env.alias_find (arg);
+	  if (target != arg && DECL_P (target))
+	    env.object_written_through_memory (target);
+	  else
+	    env.addressable_locals_written_through_memory ();
+	}
       if (identity)
 	env.contract_scalar_range_invalidate (identity);
     }
@@ -27214,6 +27307,48 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	    oa_scan_item8_in_expr (&TREE_OPERAND (t, 0), env);
 	    oa_scan_item8_in_expr (&TREE_OPERAND (t, 1), env);
 	  }
+	/* A store through a pointer or reference ('*p = 1', 'r = 1' for
+	   'int &r = k', '++*p', 'p[i] = 1'): the object it reaches has a
+	   new value.  That is what P is known to point to (alias_find), or
+	   else any of this function's objects whose address was taken.  A
+	   field written through a pointer whose target is known is Rule 1's
+	   below, field by field.  */
+	{
+	  tree dst = STRIP_ANY_LOCATION_WRAPPER (lhs);
+	  bool component = false;
+	  while (handled_component_p (dst))
+	    {
+	      component = true;
+	      dst = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (dst, 0));
+	    }
+	  if (TREE_CODE (dst) == INDIRECT_REF || TREE_CODE (dst) == MEM_REF)
+	    {
+	      tree ptr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (dst, 0));
+	      while (CONVERT_EXPR_P (ptr) || TREE_CODE (ptr) == NON_LVALUE_EXPR
+		     || TREE_CODE (ptr) == VIEW_CONVERT_EXPR
+		     || TREE_CODE (ptr) == SAVE_EXPR)
+		ptr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (ptr, 0));
+	      tree target = NULL_TREE;
+	      if (TREE_CODE (ptr) == ADDR_EXPR)
+		{
+		  tree base = get_base_address (TREE_OPERAND (ptr, 0));
+		  if (base && (VAR_P (base) || TREE_CODE (base) == PARM_DECL))
+		    target = base;
+		}
+	      else if (VAR_P (ptr) || TREE_CODE (ptr) == PARM_DECL)
+		{
+		  tree t = env.alias_find (ptr);
+		  if (t != ptr && DECL_P (t))
+		    target = t;
+		}
+	      /* 'this' can't be repointed, and never points to one of this
+		 function's own objects.  */
+	      if (!target && !is_this_parameter (ptr))
+		env.addressable_locals_written_through_memory ();
+	      else if (target && !component)
+		env.object_written_through_memory (target);
+	    }
+	}
 	/* Shared-substrate invalidation rule 1: any reassignment of a
 	   tracked object's identity invalidates its predicate/field-range
 	   facts, whatever the object's type -- unlike the is_object_
