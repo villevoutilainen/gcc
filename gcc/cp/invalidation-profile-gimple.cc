@@ -1646,12 +1646,23 @@ ip_escapes_locally_p (tree expr, gimple *point, int depth)
       gimple *def = SSA_NAME_DEF_STMT (expr);
       if (gimple_code (def) == GIMPLE_PHI)
 	{
+	  /* A loop makes PHIs reach themselves ('p = p;' in a loop is
+	     '# p_1 = PHI <p_2(D), p_1>'), which used to recurse to the
+	     depth limit and deny.  A value going around such a cycle
+	     comes from some PHI's other argument, which the frame that
+	     first reached that PHI checks; a PHI met again adds nothing.  */
+	  static hash_set<gimple *> *in_progress;
+	  if (!in_progress)
+	    in_progress = new hash_set<gimple *>;
 	  gphi *phi = as_a<gphi *> (def);
-	  for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
-	    if (ip_escapes_locally_p (gimple_phi_arg_def (phi, i), point,
-				       depth + 1))
-	      return true;
-	  return false;
+	  if (in_progress->add (phi))
+	    return false;
+	  bool escapes = false;
+	  for (unsigned i = 0; i < gimple_phi_num_args (phi) && !escapes; ++i)
+	    escapes = ip_escapes_locally_p (gimple_phi_arg_def (phi, i), point,
+					    depth + 1);
+	  in_progress->remove (phi);
+	  return escapes;
 	}
       if (is_gimple_assign (def) && gimple_assign_single_p (def))
 	return ip_escapes_locally_p (gimple_assign_rhs1 (def), point, depth + 1);
