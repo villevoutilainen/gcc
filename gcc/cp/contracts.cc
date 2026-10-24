@@ -12247,6 +12247,11 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
 
   if (TREE_CODE (expr) == INTEGER_CST)
     return !integer_zerop (expr);
+  /* An enumerator ('x / k_NANOSECS_PER_SEC', an unscoped enum's in a
+     class): its value.  */
+  if (TREE_CODE (expr) == CONST_DECL
+      && TREE_CODE (DECL_INITIAL (expr)) == INTEGER_CST)
+    return !integer_zerop (DECL_INITIAL (expr));
 
   /* D4324: 'this' and '&decl' are oa_provable_p's own two primary base
      cases (is_object_address axioms), and both are just as trivially
