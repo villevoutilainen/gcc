@@ -6459,7 +6459,9 @@ cg_gimple_object_identity_1 (tree val, hash_set<tree> &in_progress)
       if (def && is_gimple_assign (def))
 	{
 	  enum tree_code code = gimple_assign_rhs_code (def);
-	  if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
+	  /* 'p_3 = &s' as well: a store through P_3 is one to S.  */
+	  if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME
+	      || code == ADDR_EXPR)
 	    {
 	      tree resolved
 		= cg_gimple_object_identity_1 (gimple_assign_rhs1 (def),
