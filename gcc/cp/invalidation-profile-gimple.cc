@@ -2569,11 +2569,10 @@ ip_first_relevant_mutation (gimple *stmt, tree bound_decl,
   return NULL_TREE;
 }
 
-/* Forward, monotonic, OR-across-predecessors dataflow (GEN-only, no
-   kill -- once possibly mutated since this specific binding, stays
-   possibly mutated for the rest of its relevance; the same "ever"
-   shape ip_compute_owner_ever_owned_info uses, not the GEN/KILL shape
-   ip_compute_owner_reach_info uses): "may BOUND_DECL have been
+/* Forward, OR-across-predecessors dataflow (once possibly mutated
+   since this specific binding, stays possibly mutated for the rest of
+   its relevance; the only kill is a statement rebinding VAR, see
+   ip_mutated_since_block_transfer): "may BOUND_DECL have been
    mutated since BINDING_STMT, on some path reaching this point".
    Replaces this file's former ip_use_after_mutation_p, which used
    dominated_by_p -- a UNIVERSAL "happens on every path" test -- to
@@ -2673,11 +2672,10 @@ ip_compute_reached_from_info (function *fun, gimple *binding_stmt,
     }
 }
 
-/* Forward, monotonic, OR-across-predecessors dataflow (GEN-only, no
-   kill -- once possibly mutated since this specific binding, stays
-   possibly mutated for the rest of its relevance; the same "ever"
-   shape ip_compute_owner_ever_owned_info uses, not the GEN/KILL shape
-   ip_compute_owner_reach_info uses): "may BOUND_DECL have been
+/* Forward, OR-across-predecessors dataflow (once possibly mutated
+   since this specific binding, stays possibly mutated for the rest of
+   its relevance; the only kill is a statement rebinding VAR, see
+   ip_mutated_since_block_transfer): "may BOUND_DECL have been
    mutated since BINDING_STMT, on some path reaching this point, given
    that point is actually reachable from the binding at all"
    (ip_reached_from_info above is what answers that last, necessary
@@ -2712,9 +2710,47 @@ struct ip_mutated_since_info
    from the binding yet at all -- both cases collapse to the same
    ACTIVE-starts-false handling here.  */
 
+/* Whether STMT gives VAR a whole new value -- an assignment to it, a
+   call's result, or its construction -- rather than mutating the value
+   it has ('++it').  From there on, VAR holds no value bound by an
+   earlier statement: STMT itself when it is the binding being tracked
+   (run again, as in a loop), or another binding.  */
+
+static bool
+ip_rebinds_var_p (gimple *stmt, tree var)
+{
+  if (TREE_CODE (var) == SSA_NAME)
+    return false;
+  if (gcall *call = dyn_cast<gcall *> (stmt))
+    {
+      tree lhs = gimple_call_lhs (call);
+      if (lhs && ip_trackable_decl (lhs) == var)
+	return true;
+      tree fndecl = gimple_call_fndecl (call);
+      if (fndecl && DECL_CONSTRUCTOR_P (fndecl)
+	  && gimple_call_num_args (call) >= 1)
+	{
+	  tree this_arg = gimple_call_arg (call, 0);
+	  return (TREE_CODE (this_arg) == ADDR_EXPR
+		  && TREE_OPERAND (this_arg, 0) == var);
+	}
+      return false;
+    }
+  return (is_gimple_assign (stmt) && !gimple_clobber_p (stmt)
+	  && ip_trackable_decl (gimple_assign_lhs (stmt)) == var);
+}
+
+/* VAR is the variable holding the bound value.  A statement rebinding
+   it (ip_rebinds_var_p) ends what BINDING_STMT bound, so mutations
+   before it no longer matter on that path ('it = v.begin ();' run again
+   each loop iteration, or after the mutation on one branch).  Checked
+   after STMT's own mutation, which comes first ('it = v.insert (...)'
+   is a fresh binding).  */
+
 static tree
 ip_mutated_since_block_transfer (basic_block bb, tree in, gimple *binding_stmt,
 				  bool reached_at_entry, tree bound_decl,
+				  tree var,
 				  const vec<gimple *> &mutating_calls,
 				  const vec<tree> &mutated_decls,
 				  const vec<tree> &mutated_types)
@@ -2735,13 +2771,15 @@ ip_mutated_since_block_transfer (basic_block bb, tree in, gimple *binding_stmt,
       if (!state)
 	state = ip_first_relevant_mutation (stmt, bound_decl, mutating_calls,
 					     mutated_decls, mutated_types);
+      if (ip_rebinds_var_p (stmt, var))
+	state = NULL_TREE;
     }
   return state;
 }
 
 static void
 ip_compute_mutated_since_info (function *fun, gimple *binding_stmt,
-				tree bound_decl,
+				tree bound_decl, tree var,
 				const vec<gimple *> &mutating_calls,
 				const vec<tree> &mutated_decls,
 				const vec<tree> &mutated_types,
@@ -2779,7 +2817,7 @@ ip_compute_mutated_since_info (function *fun, gimple *binding_stmt,
 	  tree out = ip_mutated_since_block_transfer (bb, info->block_in[bb->index],
 						       binding_stmt,
 						       reached.block_in[bb->index],
-						       bound_decl, mutating_calls,
+						       bound_decl, var, mutating_calls,
 						       mutated_decls,
 						       mutated_types);
 	  if (out != info->block_out[bb->index])
@@ -2805,7 +2843,7 @@ ip_compute_mutated_since_info (function *fun, gimple *binding_stmt,
 
 static tree
 ip_mutated_since_before_stmt_p (function *fun, ip_mutated_since_info *info,
-				 gimple *binding_stmt, tree bound_decl,
+				 gimple *binding_stmt, tree bound_decl, tree var,
 				 const vec<gimple *> &mutating_calls,
 				 const vec<tree> &mutated_decls,
 				 const vec<tree> &mutated_types,
@@ -2833,6 +2871,8 @@ ip_mutated_since_before_stmt_p (function *fun, ip_mutated_since_info *info,
       if (!state)
 	state = ip_first_relevant_mutation (stmt, bound_decl, mutating_calls,
 					     mutated_decls, mutated_types);
+      if (ip_rebinds_var_p (stmt, var))
+	state = NULL_TREE;
     }
   return state;
 }
@@ -2894,7 +2934,7 @@ ip_check_var_uses (function *fun, tree var, const vec<ip_use> &uses,
 	  continue;
 	}
       mutated_infos[d] = new ip_mutated_since_info ();
-      ip_compute_mutated_since_info (fun, reach.defs[d], bound_decl,
+      ip_compute_mutated_since_info (fun, reach.defs[d], bound_decl, var,
 				      mutating_calls, mutated_decls,
 				      mutated_types, mutated_infos[d]);
     }
@@ -2921,7 +2961,7 @@ ip_check_var_uses (function *fun, tree var, const vec<ip_use> &uses,
 	  tree culprit
 	    = ip_mutated_since_before_stmt_p (fun, mutated_infos[idx],
 					       reach.defs[idx],
-					       bound_decls[idx], mutating_calls,
+					       bound_decls[idx], var, mutating_calls,
 					       mutated_decls, mutated_types,
 					       use_stmt);
 	  if (!culprit)
