@@ -1269,108 +1269,123 @@ ip_var_contents_escape_locally_p (tree var, gimple *point, int depth)
   return reaching.is_empty () && !partial_writes;
 }
 
+/* Whether REF ('*v', 'v->f', 'v->a[i].g') is part of the object
+   V_PTR points to.  */
+
+static bool
+ip_ref_in_retslot_p (tree ref, tree v_ptr)
+{
+  while (handled_component_p (ref))
+    ref = TREE_OPERAND (ref, 0);
+  return ((TREE_CODE (ref) == MEM_REF || TREE_CODE (ref) == INDIRECT_REF)
+	  && TREE_OPERAND (ref, 0) == v_ptr);
+}
+
+static bool
+ip_arg_in_retslot_1 (tree arg, tree v_ptr, hash_set<gimple *> *seen)
+{
+  if (arg == v_ptr)
+    return true;
+  if (TREE_CODE (arg) == ADDR_EXPR)
+    return ip_ref_in_retslot_p (TREE_OPERAND (arg, 0), v_ptr);
+  if (TREE_CODE (arg) != SSA_NAME)
+    return false;
+  gimple *def = SSA_NAME_DEF_STMT (arg);
+  if (seen->add (def))
+    return false;
+  if (gphi *phi = dyn_cast<gphi *> (def))
+    {
+      for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+	if (ip_arg_in_retslot_1 (gimple_phi_arg_def (phi, i), v_ptr, seen))
+	  return true;
+      return false;
+    }
+  if (is_gimple_assign (def)
+      && (gimple_assign_single_p (def)
+	  || gimple_assign_rhs_code (def) == POINTER_PLUS_EXPR))
+    return ip_arg_in_retslot_1 (gimple_assign_rhs1 (def), v_ptr, seen);
+  return false;
+}
+
+/* Whether call argument ARG may be V_PTR or the address of part of what
+   it points to ('&v->f'), through copies, offsets and merges: unlike a
+   named local's, such an address isn't invariant, so it reaches the
+   call in a temporary ('_1 = &t_5(D)->p; put (_1, &c);'), or a loop
+   walking the elements ('# _4 = PHI <&x->_M_elems, _4 + 32>').  May,
+   not must: a call that could be storing into the returned object is
+   one to check.  */
+
+static bool
+ip_arg_in_retslot_p (tree arg, tree v_ptr)
+{
+  hash_set<gimple *> seen;
+  return ip_arg_in_retslot_1 (arg, v_ptr, &seen);
+}
+
 /* Returns 1 if STMT writes through V_PTR with contents that escape, 0
    if it writes through V_PTR safely, -1 if STMT isn't a write through
-   V_PTR at all.
+   V_PTR at all.  A write is to the whole object or to any part of it
+   ('v->f = &c', '<retval>->__p = make_unique ()'), as a value
+   initialization or a constructor folded into member stores leaves
+   it -- or a call given V_PTR or the address of part of it, in any
+   position ('push_back (v, &p)', 'string::string (&v->a[0])',
+   'fill (&c, v)'), which may store its other arguments there:
 
-   A call writes through V_PTR in one of two genuinely different GIMPLE
-   shapes -- confirmed via gdb, not assumed, after an earlier draft of
-   this function got it wrong by only checking the second one:
+   - The call's own return value elided into (part of) *V_PTR:
+     '*ret_6(D) = g (ref_5); [return slot optimization]' --
+     ip_call_escapes_locally_p, which applies the return type's own
+     capacity gate and checks the call's arguments.
 
-   - The call's own return value is itself elided directly into
-     *V_PTR -- gimple_call_lhs is a MEM_REF/INDIRECT_REF of V_PTR, e.g.
-     '*ret_6(D) = g (ref_5); [return slot optimization]' for
-     'vector<int*> ret = g(ref);' once ret is itself NRVO-chained into
-     the caller's own hidden retslot. V_PTR here is NOT one of the
-     call's own gimple_call_arg()s at all -- so the existing, unmodified
-     ip_call_args_escape_locally_p already does exactly the right thing
-     applied as-is (it already knows how to walk a member call's own
-     receiver vs. a constructor's "this" vs. an ordinary free-function
-     argument; none of that is affected by WHERE the return value
-     itself is written).
-
-   - A void-returning mutating call whose receiver argument is V_PTR
-     directly (already a bare pointer, not '&something') -- e.g.
-     'std::vector<int*>::push_back (v_3(D), &p);'. Here V_PTR genuinely
-     IS gimple_call_arg(call, 0), so it must be skipped outright (never
-     recursed into -- it's the very thing whose escapability this is
-     computing), then every OTHER argument checked directly;
-     ip_call_args_escape_locally_p is NOT reusable here unchanged,
-     since its own receiver-special-case only recognizes '&var', not a
-     bare already-a-pointer SSA value.  */
+   - Given V_PTR or part of it: every OTHER argument, against its own
+     parameter type (ip_call_argument_escapes_locally_p) -- never the
+     ones naming V_PTR, which are the object being computed.  Not a
+     destructor, which ends the object rather than storing into it.  */
 
 static int
 ip_hidden_retslot_write_safe_p (gimple *stmt, tree v_ptr, int depth)
 {
   if (is_gimple_assign (stmt) && gimple_assign_single_p (stmt))
     {
-      tree lhs = gimple_assign_lhs (stmt);
-      if ((TREE_CODE (lhs) == MEM_REF || TREE_CODE (lhs) == INDIRECT_REF)
-	  && TREE_OPERAND (lhs, 0) == v_ptr)
-	return ip_escapes_locally_p (gimple_assign_rhs1 (stmt), stmt,
-				      depth + 1) ? 1 : 0;
-      return -1;
-    }
-  if (gimple_code (stmt) == GIMPLE_CALL)
-    {
-      gcall *call = as_a<gcall *> (stmt);
-      tree lhs = gimple_call_lhs (call);
-      bool retslot_write
-	= lhs && (TREE_CODE (lhs) == MEM_REF || TREE_CODE (lhs) == INDIRECT_REF)
-	  && TREE_OPERAND (lhs, 0) == v_ptr;
-      bool receiver_write
-	= !lhs && gimple_call_num_args (call) >= 1
-	  && gimple_call_arg (call, 0) == v_ptr;
-      if (!retslot_write && !receiver_write)
+      if (gimple_clobber_p (stmt)
+	  || !ip_ref_in_retslot_p (gimple_assign_lhs (stmt), v_ptr))
 	return -1;
-      /* RETSLOT_WRITE: route through ip_call_escapes_locally_p (not
-	 ip_call_args_escape_locally_p directly) so this call's own
-	 return type gets the same type-capacity gate (and std::
-	 no_dangling recognition) every other "is THIS call's own
-	 return value safe" query already gets -- confirmed, not
-	 assumed, to matter: an earlier draft skipped straight to
-	 ip_call_args_escape_locally_p and wrongly flagged 'return
-	 f1(7);' chained into a hidden retslot for a fieldless,
-	 non-trivially-copyable return type (f1's own argument, a
-	 compiler temporary materialized to bind 'int const&', looks
-	 exactly like an escaping local -- but it's irrelevant, since
-	 f1's return type can't hold a pointer at all).  */
-      if (retslot_write)
-	return ip_call_escapes_locally_p (call, depth + 1) ? 1 : 0;
-      tree fndecl = gimple_call_fndecl (call);
-      if (!fndecl)
-	return 1; /* Indirect call: can't see its args -- default-deny.  */
-      {
-	/* Unconditional skip here, UNLIKE ip_call_args_escape_locally_p's
-	   own is_member-gated one: that function's own loop always
-	   starts at i == 0, so its pre-loop skip must itself be gated on
-	   is_member to decide whether TYPE_ARG_TYPES's own first entry
-	   (the receiver's "this" type, for a member function only) needs
-	   skipping at all.  THIS loop always starts at i == 1 (GIMPLE
-	   arg 0, V_PTR, is unconditionally the one being skipped here,
-	   regardless of whether fndecl turns out to be a member function
-	   or -- this function's own doc comment assumes, but nothing
-	   structurally enforces -- a free one) -- so TYPE_ARG_TYPES's own
-	   first entry must ALWAYS be skipped to stay aligned with i == 1,
-	   whether that first entry is a receiver's "this" type or simply
-	   a free function's own first real parameter's type.  */
-	tree arg_type = TYPE_ARG_TYPES (TREE_TYPE (fndecl));
-	if (arg_type)
-	  arg_type = TREE_CHAIN (arg_type);
-	for (unsigned i = 1; i < gimple_call_num_args (call); ++i,
-	     arg_type = arg_type ? TREE_CHAIN (arg_type) : NULL_TREE)
-	  {
-	    tree param_type
-	      = (arg_type && TREE_VALUE (arg_type) != void_type_node)
-		? TREE_VALUE (arg_type) : NULL_TREE;
-	    if (ip_call_argument_escapes_locally_p (gimple_call_arg (call, i),
-						     param_type, call, depth + 1))
-	      return 1;
-	  }
-      }
-      return 0;
+      return ip_escapes_locally_p (gimple_assign_rhs1 (stmt), stmt,
+				   depth + 1) ? 1 : 0;
     }
-  return -1;
+  gcall *call = dyn_cast<gcall *> (stmt);
+  if (!call)
+    return -1;
+  tree lhs = gimple_call_lhs (call);
+  if (lhs && ip_ref_in_retslot_p (lhs, v_ptr))
+    return ip_call_escapes_locally_p (call, depth + 1) ? 1 : 0;
+  bool given = false;
+  for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+    if (ip_arg_in_retslot_p (gimple_call_arg (call, i), v_ptr))
+      given = true;
+  if (!given)
+    return -1;
+  tree fndecl = gimple_call_fndecl (call);
+  if (fndecl && DECL_DESTRUCTOR_P (fndecl))
+    return -1;
+  if (ip_no_dangling_call_p (call) || ip_no_escape_call_p (call))
+    return 0;
+  if (!fndecl)
+    return 1; /* Indirect call: can't see its parameters -- default-deny.  */
+  tree arg_type = TYPE_ARG_TYPES (TREE_TYPE (fndecl));
+  for (unsigned i = 0; i < gimple_call_num_args (call); ++i,
+       arg_type = arg_type ? TREE_CHAIN (arg_type) : NULL_TREE)
+    {
+      tree arg = gimple_call_arg (call, i);
+      if (ip_arg_in_retslot_p (arg, v_ptr))
+	continue;
+      tree param_type
+	= (arg_type && TREE_VALUE (arg_type) != void_type_node)
+	  ? TREE_VALUE (arg_type) : NULL_TREE;
+      if (ip_call_argument_escapes_locally_p (arg, param_type, call,
+					       depth + 1))
+	return 1;
+    }
+  return 0;
 }
 
 /* V_PTR is the hidden "where to construct the return value" pointer
@@ -1380,26 +1395,18 @@ ip_hidden_retslot_write_safe_p (gimple *stmt, tree v_ptr, int depth)
    a bare, SSA-less node, a different ABI shape), there is no
    separately-named NRV-elided local to resolve here at all --
    construction and every subsequent mutating call write directly
-   through V_PTR itself, in place, from the first statement. Walk
-   backward from POINT -- same block first, then up the dominator chain
-   (CDI_DOMINATORS is already computed unconditionally by
-   ip_check_function before any return is checked) -- collecting EVERY
-   write through V_PTR, not just the nearest: unlike a scalar's single
-   reaching definition, this is new code with no inherited "nearest
-   write" constraint, so it can soundly union all of them directly.
-   Known, scoped limitation: a purely linear walk, so a write on only
-   one conditional arm is found only if that arm dominates POINT (every
-   coherent-lifetime-rules-for-dangling.md example is straight-line;
-   not exercised).
+   through V_PTR itself, in place, from the first statement.  Every
+   write through V_PTR that may come before POINT (ip_stmt_may_reach_p,
+   so one on either arm of a branch too) is checked, as ip_var_contents_
+   escape_locally_p does for a named local.
 
    Default-deny applies here too, same as everywhere else in this file:
    finding at least one recognized write and confirming IT is safe is
    what justifies returning false; finding NOTHING recognizable at all
-   (the walk reaches function entry with zero matches) means we simply
-   don't know how V_PTR's contents were established, and must default
-   to true -- exactly what ip_result_decl_escapes_locally_p's own final
-   'return true;' already does when neither of ITS resolution attempts
-   finds anything.  */
+   means we simply don't know how V_PTR's contents were established,
+   and must default to true -- exactly what ip_result_decl_escapes_
+   locally_p's own final 'return true;' already does when neither of
+   ITS resolution attempts finds anything.  */
 
 static bool
 ip_hidden_retslot_contents_escape_locally_p (tree v_ptr, gimple *point,
@@ -1408,24 +1415,15 @@ ip_hidden_retslot_contents_escape_locally_p (tree v_ptr, gimple *point,
   if (depth > 16)
     return true;
   bool found_any = false;
-  basic_block bb = gimple_bb (point);
-  for (gimple_stmt_iterator gsi = gsi_for_stmt (point); !gsi_end_p (gsi);)
-    {
-      gsi_prev (&gsi);
-      if (gsi_end_p (gsi))
-	break;
-      int r = ip_hidden_retslot_write_safe_p (gsi_stmt (gsi), v_ptr, depth);
-      if (r == 1)
-	return true;
-      if (r == 0)
-	found_any = true;
-    }
-  for (basic_block d = get_immediate_dominator (CDI_DOMINATORS, bb); d;
-       d = get_immediate_dominator (CDI_DOMINATORS, d))
-    for (gimple_stmt_iterator gsi = gsi_start_bb (d); !gsi_end_p (gsi);
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
 	 gsi_next (&gsi))
       {
-	int r = ip_hidden_retslot_write_safe_p (gsi_stmt (gsi), v_ptr, depth);
+	gimple *s = gsi_stmt (gsi);
+	if (s == point || !ip_stmt_may_reach_p (s, point))
+	  continue;
+	int r = ip_hidden_retslot_write_safe_p (s, v_ptr, depth);
 	if (r == 1)
 	  return true;
 	if (r == 0)
