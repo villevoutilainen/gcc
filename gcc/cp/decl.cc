@@ -9615,6 +9615,28 @@ static void cp_maybe_mangle_decomp (tree, cp_decomp *);
    handle_uninit_attribute's own separate, unconditional ban on
    [[uninit]] for anything union-related (P4222 S5.6).  */
 
+/* True if a TYPE object holds any scalar storage at all, through its
+   members, bases and array elements at any depth.  An empty class
+   (or one built only of empty classes) has nothing that default
+   initialization could leave indeterminate, so its uninitialized
+   declaration needs no [[uninit]].  Unnamed bit-fields are padding,
+   not members.  */
+
+static bool
+ip_type_has_scalar_storage_p (tree type)
+{
+  while (TREE_CODE (type) == ARRAY_TYPE)
+    type = TREE_TYPE (type);
+  if (!CLASS_TYPE_P (type))
+    return true;
+  for (tree f = TYPE_FIELDS (type); f; f = DECL_CHAIN (f))
+    if (TREE_CODE (f) == FIELD_DECL
+	&& !DECL_UNNAMED_BIT_FIELD (f)
+	&& ip_type_has_scalar_storage_p (TREE_TYPE (f)))
+      return true;
+  return false;
+}
+
 static bool
 ip_scalar_or_scalar_array_p (tree type)
 {
@@ -9624,7 +9646,8 @@ ip_scalar_or_scalar_array_p (tree type)
     return true;
   return NON_UNION_CLASS_TYPE_P (type)
 	 && !TYPE_HAS_USER_CONSTRUCTOR (type)
-	 && TYPE_HAS_TRIVIAL_DFLT (type);
+	 && TYPE_HAS_TRIVIAL_DFLT (type)
+	 && ip_type_has_scalar_storage_p (type);
 }
 
 /* Finish processing of a declaration;
