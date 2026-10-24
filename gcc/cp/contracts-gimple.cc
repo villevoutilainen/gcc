@@ -14268,8 +14268,13 @@ make_pass_contracts_gimple (gcc::context *ctxt)
    decision permanently stuck "assume external", silently dropping its
    body at link time despite genuine callers.  */
 
+/* Every function is queued, and checked only where the collector may
+   run -- see profiles_eager_check_pending (profiles.cc), which this
+   mirrors.  The queue is a GC root, defined in contracts.cc (scanned by
+   gengtype; this file isn't).  */
 static bool cg_eager_check_active;
-static vec<tree> cg_eager_check_pending;
+static vec<tree, va_gc> *&cg_eager_check_pending
+  = contracts_gimple_eager_check_queue ();
 
 /* Mirrors profiles_eager_check_deferred_until_complete's own comment:
    a lambda's own call operator can reach expand_or_defer_fn before its
@@ -14303,11 +14308,9 @@ contracts_gimple_eager_check_type_complete (tree)
 {
   if (cg_eager_check_deferred_until_complete.is_empty ())
     return;
-  auto_vec<tree> retry;
-  retry.safe_splice (cg_eager_check_deferred_until_complete);
+  for (tree fndecl : cg_eager_check_deferred_until_complete)
+    vec_safe_push (cg_eager_check_pending, fndecl);
   cg_eager_check_deferred_until_complete.truncate (0);
-  for (tree fndecl : retry)
-    contracts_gimple_eager_check_function (fndecl);
 }
 
 void
@@ -14391,22 +14394,25 @@ contracts_gimple_eager_check_function (tree fndecl)
   if (!oa_function_needs_walk_p (fndecl))
     return;
 
-  if (cg_eager_check_active)
-    {
-      cg_eager_check_pending.safe_push (fndecl);
-      return;
-    }
+  vec_safe_push (cg_eager_check_pending, fndecl);
+}
 
-  /* Analyzing FNDECL runs passes, which end in ggc_collect; the parser
-     up the stack may hold trees in locals that are not GC roots (an
-     argument vector being built around a lambda, an auto function
-     instantiated mid-expression for its return type, a class still
-     being defined).  No collection until the check returns.  */
-  ggc_collect_inhibitor no_gc;
+/* Check the queued functions, in the order they were finished, if the
+   collector may run here (function_depth 0); see cg_eager_check_
+   pending.  Checking one may queue more; they are checked in the same
+   drain.  */
+
+void
+contracts_gimple_eager_check_drain (void)
+{
+  if (cg_eager_check_active || function_depth > 0
+      || vec_safe_is_empty (cg_eager_check_pending))
+    return;
+
   cg_eager_check_active = true;
-  contracts_gimple_eager_check_function_1 (fndecl);
-  while (!cg_eager_check_pending.is_empty ())
-    contracts_gimple_eager_check_function_1 (cg_eager_check_pending.pop ());
+  for (unsigned i = 0; i < cg_eager_check_pending->length (); ++i)
+    contracts_gimple_eager_check_function_1 ((*cg_eager_check_pending)[i]);
+  cg_eager_check_pending->truncate (0);
   cg_eager_check_active = false;
 }
 
@@ -14526,18 +14532,18 @@ contracts_gimple_eager_check_function_1 (tree fndecl, bool is_eof_drain)
 void
 contracts_gimple_eager_check_drain_at_eof (void)
 {
-  ggc_collect_inhibitor no_gc;
+  contracts_gimple_eager_check_drain ();
   cg_eager_check_active = true;
   do
     {
       while (!cg_eager_check_deferred_until_eof.is_empty ()
-	     || !cg_eager_check_pending.is_empty ())
+	     || !vec_safe_is_empty (cg_eager_check_pending))
 	{
 	  if (!cg_eager_check_deferred_until_eof.is_empty ())
 	    contracts_gimple_eager_check_function_1
 	      (cg_eager_check_deferred_until_eof.pop (), /*is_eof_drain=*/true);
 	  else
-	    contracts_gimple_eager_check_function_1 (cg_eager_check_pending.pop ());
+	    contracts_gimple_eager_check_function_1 (cg_eager_check_pending->pop ());
 	}
       /* The bodies of lambdas invoked immediately: after their callers
 	 (cg_record_iile_site_facts).  */
@@ -14561,7 +14567,7 @@ contracts_gimple_eager_check_drain_at_eof (void)
 	}
     }
   while (!cg_eager_check_deferred_until_eof.is_empty ()
-	 || !cg_eager_check_pending.is_empty ()
+	 || !vec_safe_is_empty (cg_eager_check_pending)
 	 || !cg_eager_check_deferred_until_eof_iile.is_empty ()
 	 || !cg_eager_check_predicate_helpers.is_empty ());
   cg_eager_check_active = false;

@@ -288,20 +288,6 @@ enum ggc_collect {
 };
 extern void ggc_collect (enum ggc_collect mode = GGC_COLLECT_HEURISTIC);
 
-/* While nonzero, ggc_collect does nothing.  For work run from inside a
-   front end's parser (such as a per-function check of one function
-   while an enclosing expression or class is still being parsed), whose
-   callers hold trees in locals that are not GC roots.  */
-extern int ggc_collect_inhibited;
-
-/* Inhibits collection for the lifetime of the object.  */
-class ggc_collect_inhibitor
-{
-public:
-  ggc_collect_inhibitor () { ++ggc_collect_inhibited; }
-  ~ggc_collect_inhibitor () { --ggc_collect_inhibited; }
-};
-
 /* Return unused memory pages to the system.  */
 extern void ggc_trim (void);
 

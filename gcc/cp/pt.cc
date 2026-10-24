@@ -30072,8 +30072,14 @@ maybe_instantiate_conveyor (tree fn)
   if (!DECL_CONVEYOR_AUTO_P (target) || DECL_CONVEYOR_AUTO_RESOLVED_P (target))
     return;
 
+  /* Mid-expression, even at namespace scope (a contract condition in a
+     declarator): as when instantiating to deduce a return type, don't
+     let finalize_function, or a drain of the queued profile/contract
+     checks, collect live data on the stack.  */
+  ++function_depth;
   instantiate_decl (target, /*defer_ok=*/false,
 		     /*expl_inst_class_mem_p=*/false);
+  --function_depth;
 
   if (DECL_CONVEYOR_AUTO_RESOLVED_P (target))
     {

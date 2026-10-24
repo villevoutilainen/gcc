@@ -194,6 +194,8 @@ extern gimple_opt_pass *make_pass_contracts_gimple (gcc::context *ctxt);
    expand_or_defer_fn (semantics.cc) and, for the deferred-until-
    complete case, from finish_struct (class.cc).  */
 extern void contracts_gimple_eager_check_function (tree fndecl);
+extern void contracts_gimple_eager_check_drain (void);
+extern vec<tree, va_gc> *&contracts_gimple_eager_check_queue (void);
 extern void contracts_gimple_eager_check_type_complete (tree type);
 
 /* Drains every DECL_DECLARED_CONSTEXPR_P function whose own eager

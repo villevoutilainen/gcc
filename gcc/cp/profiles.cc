@@ -537,9 +537,21 @@ static gimple_opt_pass *profiles_build_ssa_pass;
    deeply repeating gimplify_stmt/gimplify_expr recursion in the
    backtrace).  Fixed the same way the deferred pipeline avoids it:
    a re-entrant call is queued instead of recursed into, and only the
-   OUTERMOST call drains the queue, iteratively.  */
+   OUTERMOST call drains the queue, iteratively.
+
+   Every function is queued, never checked where it is finished:
+   analyzing runs passes, which end in ggc_collect, and the parser up
+   the stack may hold trees in locals that are not GC roots (a call's
+   argument vector around a lambda, a class still being defined, the
+   static-initializer list c_parse_final_cleanups builds with GC
+   disabled).  Collecting there freed them.  The queue is drained by
+   profiles_eager_check_drain only where the front end itself lets the
+   collector run: expand_or_defer_fn at function_depth 0 (where
+   cgraph_node::finalize_function collects) and the end of
+   c_parse_final_cleanups.  A GC root, since collections run while
+   functions wait in it.  */
 static bool profiles_eager_check_active;
-static vec<tree> profiles_eager_check_pending;
+static GTY(()) vec<tree, va_gc> *profiles_eager_check_pending;
 
 /* A distinct hazard from the re-entrancy one just above: a lambda's own
    call operator reaches expand_or_defer_fn (via finish_lambda_function,
@@ -616,11 +628,9 @@ profiles_eager_check_type_complete (tree)
 {
   if (profiles_eager_check_deferred_until_complete.is_empty ())
     return;
-  auto_vec<tree> retry;
-  retry.safe_splice (profiles_eager_check_deferred_until_complete);
+  for (tree fndecl : profiles_eager_check_deferred_until_complete)
+    vec_safe_push (profiles_eager_check_pending, fndecl);
   profiles_eager_check_deferred_until_complete.truncate (0);
-  for (tree fndecl : retry)
-    profiles_eager_check_function (fndecl);
 }
 
 void
@@ -635,22 +645,25 @@ profiles_eager_check_function (tree fndecl)
       && !profiles_active_p ("std::invalidation"))
     return;
 
-  if (profiles_eager_check_active)
-    {
-      profiles_eager_check_pending.safe_push (fndecl);
-      return;
-    }
+  vec_safe_push (profiles_eager_check_pending, fndecl);
+}
 
-  /* Analyzing FNDECL runs passes, which end in ggc_collect; the parser
-     up the stack may hold trees in locals that are not GC roots (an
-     argument vector being built around a lambda, an auto function
-     instantiated mid-expression for its return type, a class still
-     being defined).  No collection until the check returns.  */
-  ggc_collect_inhibitor no_gc;
+/* Check the queued functions, in the order they were finished (a
+   lambda before its enclosing function), if the collector may run
+   here: see profiles_eager_check_pending.  Checking one may queue
+   more (instantiation); they are checked in the same drain.  */
+
+void
+profiles_eager_check_drain (void)
+{
+  if (profiles_eager_check_active || function_depth > 0
+      || vec_safe_is_empty (profiles_eager_check_pending))
+    return;
+
   profiles_eager_check_active = true;
-  profiles_eager_check_function_1 (fndecl);
-  while (!profiles_eager_check_pending.is_empty ())
-    profiles_eager_check_function_1 (profiles_eager_check_pending.pop ());
+  for (unsigned i = 0; i < profiles_eager_check_pending->length (); ++i)
+    profiles_eager_check_function_1 ((*profiles_eager_check_pending)[i]);
+  profiles_eager_check_pending->truncate (0);
   profiles_eager_check_active = false;
 }
 
@@ -825,19 +838,22 @@ profiles_eager_check_function_1 (tree fndecl, bool is_eof_drain)
 void
 profiles_eager_check_drain_at_eof (void)
 {
+  /* Whatever is still queued (its function was finished where the
+     collector could not run, and nothing at function_depth 0 came
+     after), then whatever was deferred to here.  */
+  profiles_eager_check_drain ();
   if (profiles_eager_check_deferred_until_eof.is_empty ())
     return;
 
-  ggc_collect_inhibitor no_gc;
   profiles_eager_check_active = true;
   while (!profiles_eager_check_deferred_until_eof.is_empty ()
-	 || !profiles_eager_check_pending.is_empty ())
+	 || !vec_safe_is_empty (profiles_eager_check_pending))
     {
       if (!profiles_eager_check_deferred_until_eof.is_empty ())
 	profiles_eager_check_function_1
 	  (profiles_eager_check_deferred_until_eof.pop (), /*is_eof_drain=*/true);
       else
-	profiles_eager_check_function_1 (profiles_eager_check_pending.pop ());
+	profiles_eager_check_function_1 (profiles_eager_check_pending->pop ());
     }
   profiles_eager_check_active = false;
 }
@@ -1346,3 +1362,5 @@ profiles_diagnostic_exempt_p (location_t loc, tree fndecl,
 	 && profiles_header_exempt_p (DECL_SOURCE_LOCATION (fndecl),
 				      profile_name);
 }
+
+#include "gt-cp-profiles.h"

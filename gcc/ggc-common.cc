@@ -34,8 +34,6 @@ along with GCC; see the file COPYING3.  If not see
 /* When true, protect the contents of the identifier hash table.  */
 bool ggc_protect_identifiers = true;
 
-int ggc_collect_inhibited;
-
 /* Statistics about the allocation.  */
 static ggc_statistics *ggc_stats;
 

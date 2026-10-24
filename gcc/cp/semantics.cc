@@ -5835,12 +5835,12 @@ expand_or_defer_fn (tree fn)
       cgraph_node::finalize_function (fn, function_depth > 1);
       emit_associated_thunks (fn);
 
-      /* P3446R0/P4222 profiles: check this one function's own body
-	 right now, rather than only at the end of the whole
-	 translation unit's compilation (which skips all GIMPLE-level
-	 work entirely once any front-end error has been seen
-	 anywhere in the TU -- see profiles_eager_check_function's own
-	 comment).  */
+      /* P3446R0/P4222 profiles: queue this one function's own body
+	 for checking during parsing, rather than only at the end of
+	 the whole translation unit's compilation (which skips all
+	 GIMPLE-level work entirely once any front-end error has been
+	 seen anywhere in the TU -- see profiles_eager_check_function's
+	 own comment).  */
       profiles_eager_check_function (fn);
 
       /* D4324/P2680: the GIMPLE contract-checking engine needs the
@@ -5850,6 +5850,12 @@ expand_or_defer_fn (tree fn)
       contracts_gimple_eager_check_function (fn);
 
       function_depth--;
+
+      /* Check what is queued, if this is a point where the collector
+	 may run (function_depth 0, as for finalize_function above):
+	 checking runs passes that collect.  */
+      profiles_eager_check_drain ();
+      contracts_gimple_eager_check_drain ();
 
       if (DECL_IMMEDIATE_FUNCTION_P (fn))
 	{
