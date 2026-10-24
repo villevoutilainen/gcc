@@ -1755,6 +1755,24 @@ ip_clobber_of_type_p (gimple *s, tree type)
 static tree
 ip_resolve_nrv_var (tree retval, gimple *point)
 {
+  /* Its premise: nothing writes RETVAL itself.  Where something does
+     ('<retval> = std::no_dangling<tm> (t);', '<retval> = {};'), that
+     write is what's returned, and a local of the same type that
+     happens to end nearby ('t') isn't.  */
+  {
+    basic_block wb;
+    FOR_EACH_BB_FN (wb, cfun)
+      for (gimple_stmt_iterator gsi = gsi_start_bb (wb); !gsi_end_p (gsi);
+	   gsi_next (&gsi))
+	{
+	  gimple *s = gsi_stmt (gsi);
+	  tree lhs = (is_gimple_assign (s) && !gimple_clobber_p (s)
+		      ? gimple_assign_lhs (s)
+		      : is_gimple_call (s) ? gimple_call_lhs (s) : NULL_TREE);
+	  if (lhs && lhs == retval)
+	    return NULL_TREE;
+	}
+  }
   basic_block bb = gimple_bb (point);
   for (gimple_stmt_iterator gsi = gsi_for_stmt (point); !gsi_end_p (gsi);)
     {

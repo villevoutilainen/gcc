@@ -32,3 +32,8 @@ P r2 (bool b) { char c = 'x'; P t{}; if (b) { t.z = &c; return t; } return P{}; 
 P r3 (bool b) { char c = 'x'; P t{}; if (b) return t;
 		t.z = &c; return t; } // { dg-error "returning a pointer or container" }
 P r4 (int n) { char c = 'x'; P t{}; for (int i = 0; i < n; ++i) { if (i == 3) return t; t.z = &c; } return P{}; } // { dg-error "returning a pointer or container" }
+
+// Without std::no_dangling, a local's address handed to the call that
+// fills the returned object may be what it stores there.
+void fillb (Big *, const long *);
+Big h1 () { long n = 1; Big t; fillb (&t, &n); return t; }	// { dg-error "returning a pointer or container" }
