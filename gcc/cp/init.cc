@@ -3579,8 +3579,12 @@ build_new_1 (vec<tree, va_gc> **placement, tree type, tree nelts,
      flagged unconditionally, erring on the safe side -- it ends and
      restarts an object's lifetime at an existing address, which can
      invalidate outstanding pointers into that storage in ways this
-     profile's checker does not (yet) attempt to prove safe.  */
+     profile's checker does not (yet) attempt to prove safe.  Not the
+     replaceable global forms that only take extra arguments
+     ('new (std::nothrow) T', the std::align_val_t ones): those
+     allocate fresh storage, as a plain new does.  */
   if (placement_allocation_fn_p
+      && !DECL_IS_REPLACEABLE_OPERATOR_NEW_P (alloc_fn)
       && (complain & tf_error)
       && profiles_active_p ("std::invalidation")
       && !profiles_header_exempt_p (input_location, "std::invalidation"))
