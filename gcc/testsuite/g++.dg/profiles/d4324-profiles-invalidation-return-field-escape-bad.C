@@ -22,3 +22,13 @@ Big b2 () { char c = 'x'; Big t = gb; t.z = &c; return t; }		// { dg-error "retu
 Out n1 () { char c = 'x'; Out t{}; t.in.z = &c; return t; }		// { dg-error "returning a pointer or container" }
 Big f1 () { char c = 'x'; Big t{}; fill (&t, &c); return t; }		// { dg-error "returning a pointer or container" }
 Big f2 () { Big t{}; fill (&t, "lit"); return t; }
+
+// Only a store that may come before the return counts.  With several
+// returns, merged into one without a location of its own, each is
+// reported where it is.
+void use (const P &);
+P r1 (bool b) { char c = 'x'; P t{}; if (b) return t; t.z = &c; use (t); return P{}; }
+P r2 (bool b) { char c = 'x'; P t{}; if (b) { t.z = &c; return t; } return P{}; } // { dg-error "returning a pointer or container" }
+P r3 (bool b) { char c = 'x'; P t{}; if (b) return t;
+		t.z = &c; return t; } // { dg-error "returning a pointer or container" }
+P r4 (int n) { char c = 'x'; P t{}; for (int i = 0; i < n; ++i) { if (i == 3) return t; t.z = &c; } return P{}; } // { dg-error "returning a pointer or container" }

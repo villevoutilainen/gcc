@@ -1144,6 +1144,40 @@ ip_ref_within_var_p (tree ref, tree var)
   return ref == var;
 }
 
+/* Whether statement W may execute before POINT on some path to it:
+   earlier in POINT's own block, or in a block from which POINT's is
+   reachable (through a loop, from later in the same block too).  */
+
+static bool
+ip_stmt_may_reach_p (gimple *w, gimple *point)
+{
+  basic_block wb = gimple_bb (w), pb = gimple_bb (point);
+  if (!wb || !pb)
+    return true;
+  if (wb == pb)
+    for (gimple_stmt_iterator gsi = gsi_for_stmt (w); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      if (gsi_stmt (gsi) == point)
+	return true;
+  auto_bitmap seen;
+  auto_vec<basic_block> work;
+  edge e;
+  edge_iterator ei;
+  FOR_EACH_EDGE (e, ei, wb->succs)
+    work.safe_push (e->dest);
+  while (!work.is_empty ())
+    {
+      basic_block b = work.pop ();
+      if (b == pb)
+	return true;
+      if (!bitmap_set_bit (seen, b->index))
+	continue;
+      FOR_EACH_EDGE (e, ei, b->succs)
+	work.safe_push (e->dest);
+    }
+  return false;
+}
+
 static bool
 ip_var_contents_escape_locally_p (tree var, gimple *point, int depth)
 {
@@ -1162,7 +1196,7 @@ ip_var_contents_escape_locally_p (tree var, gimple *point, int depth)
   for (gimple *w : reaching)
     if (ip_var_write_escapes_locally_p (w, depth))
       return true;
-  /* ... and, anywhere in the function, every store into part of VAR
+  /* ... and every store into part of VAR that may come before POINT
      ('t.z = &c' after 't = {}', 't.a[0].p = q') and every call given
      VAR's address or part of it ('fill (&t, &c)'): the last
      whole-object write alone says nothing about what was stored into
@@ -1174,7 +1208,8 @@ ip_var_contents_escape_locally_p (tree var, gimple *point, int depth)
 	 gsi_next (&gsi))
       {
 	gimple *s = gsi_stmt (gsi);
-	if (reaching.contains (s) || gimple_clobber_p (s))
+	if (reaching.contains (s) || gimple_clobber_p (s)
+	    || !ip_stmt_may_reach_p (s, point))
 	  continue;
 	bool writes = false;
 	if (is_gimple_assign (s) && gimple_assign_single_p (s))
@@ -1871,14 +1906,44 @@ ip_check_return_escape (gimple *return_stmt, tree enclosing_fndecl)
       retval = nrv_var;
   if (!ip_escapes_locally_p (retval, return_stmt, 0))
     return;
-  if (profiles_diagnostic_exempt_p (gimple_location (return_stmt),
-				    enclosing_fndecl, "std::invalidation"))
-    return;
-  profiles_diagnostic_at (gimple_location (return_stmt), "std::invalidation",
+  auto report = [enclosing_fndecl] (location_t loc)
+    {
+      if (profiles_diagnostic_exempt_p (loc, enclosing_fndecl,
+					"std::invalidation"))
+	return;
+      profiles_diagnostic_at (loc, "std::invalidation",
 	    "returning a pointer or container that may hold a pointer "
 	    "to a local, not permitted under the %<std::invalidation%> "
 	    "profile (wrap in %<std::no_dangling%> if this is provably "
 	    "safe)");
+    };
+  location_t loc = gimple_location (return_stmt);
+  if (loc != UNKNOWN_LOCATION)
+    {
+      report (loc);
+      return;
+    }
+  /* Several 'return's merged into one, which has no location of its
+     own ('D.1 = t; return D.1;' from each): report each original
+     return whose value would dangle, at the statement setting it.  */
+  bool reported = false;
+  if (VAR_P (retval))
+    {
+      ip_var_reach_info info;
+      ip_compute_var_reach_info (cfun, retval, &info);
+      auto_vec<gimple *> reaching;
+      ip_var_reaching_defs_before_stmt (&info, retval, return_stmt,
+					&reaching);
+      for (gimple *w : reaching)
+	if (gimple_location (w) != UNKNOWN_LOCATION
+	    && ip_var_write_escapes_locally_p (w, 0))
+	  {
+	    report (gimple_location (w));
+	    reported = true;
+	  }
+    }
+  if (!reported)
+    report (DECL_SOURCE_LOCATION (enclosing_fndecl));
 }
 
 /* If STMT is "this->FIELD = rhs"-shaped, where FIELD is a POINTER_TYPE
