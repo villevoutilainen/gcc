@@ -2923,7 +2923,12 @@ ip_use_decl (tree t)
 /* True if TYPE is worth running the escape-from-scope check
    (ip_check_return_escape) against at all: a pointer/reference, or a
    class/union that might itself hold one ("container", P3446R0's own
-   broad sense) -- a plain scalar return can never dangle.  */
+   broad sense) -- a plain scalar return can never dangle, nor can a
+   class with no pointer or reference anywhere in it ('std::nothrow_t',
+   returned as 'return std::nothrow;').  Such a class's copy can leave
+   no trace in GIMPLE at all ('return <retval>;' for an empty class),
+   which the check would otherwise take for an unrecognized, possibly
+   dangling value.  */
 
 static bool
 ip_escape_checkable_type_p (tree type)
@@ -2932,9 +2937,13 @@ ip_escape_checkable_type_p (tree type)
     {
     case POINTER_TYPE:
     case REFERENCE_TYPE:
+      return true;
     case RECORD_TYPE:
     case UNION_TYPE:
-      return true;
+      {
+	hash_set<tree> visited;
+	return ip_type_may_hold_pointer_p (type, &visited);
+      }
     default:
       return false;
     }
