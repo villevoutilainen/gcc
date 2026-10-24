@@ -148,6 +148,11 @@ extern void profiles_process_command_line_warning (void);
    std::invalidation is actually enforced.  */
 extern void profiles_eager_check_function (tree fndecl);
 
+/* Checks the functions profiles_eager_check_function queued, if the
+   garbage collector may run at this point (function_depth 0); called
+   from expand_or_defer_fn.  */
+extern void profiles_eager_check_drain (void);
+
 /* Called from finish_struct (class.cc) the moment TYPE is fully
    complete -- retries any FUNCTION_DECL whose own call into
    profiles_eager_check_function above was deferred because its

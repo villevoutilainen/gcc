@@ -1096,6 +1096,16 @@ check_postconditions_in_redecl (tree olddecl, tree newdecl)
    These are used to parse contract conditions and are called inside the body
    of the guarded function.  */
 static GTY(()) hash_map<tree, tree> *decl_pre_fn;
+/* contracts-gimple.cc's queue of functions awaiting their eager check
+   (see its own comment there); here to be a GC root, which gengtype
+   only makes of a static.  */
+static GTY(()) vec<tree, va_gc> *cg_eager_check_pending;
+
+vec<tree, va_gc> *&
+contracts_gimple_eager_check_queue (void)
+{
+  return cg_eager_check_pending;
+}
 static GTY(()) hash_map<tree, tree> *decl_post_fn;
 
 /* Given a pre or post function decl (for an outlined check function) return

@@ -2291,9 +2291,6 @@ validate_free_objects (void)
 void
 ggc_collect (enum ggc_collect mode)
 {
-  if (ggc_collect_inhibited)
-    return;
-
   /* Avoid frequent unnecessary work by skipping collection if the
      total allocations haven't expanded much since the last
      collection.  */
