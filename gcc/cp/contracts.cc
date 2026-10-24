@@ -1139,6 +1139,10 @@ static GTY(()) hash_map<tree, tree> *predicate_core_fn_contract;
    contract-analysis.md, Sections 9.3/10).  */
 static GTY(()) hash_set<tree> *oa_conveyor_active_contract_cache;
 static GTY(()) hash_set<tree> *oa_symbolic_active_contract_cache;
+/* Contracts whose failed check may let execution continue
+   (contract_failure_terminates_p false), so their condition is no fact;
+   cached for the same reason.  */
+static GTY(()) hash_set<tree> *oa_nonterminating_contract_cache;
 
 /* Same caching need, same reason, for CONTRACT's own strict status
    (oa_contract_conveyor_strict_p/oa_contract_symbolic_strict_p, i.e. its
@@ -6292,6 +6296,372 @@ contract_control_operator (tree ctrl)
   return NULL_TREE;
 }
 
+/* D4324: whether a failed check of a contract stops execution, as
+   decided by its control object's operator() -- the precondition for
+   letting the contract's condition be a fact for the analyses.  A
+   control object may observe a violation and return; then execution
+   continues with the condition false, and nothing after the contract
+   may assume it.  Analyzed, not declared: the operator()'s own body
+   (lowered GENERIC, DECL_SAVED_TREE) must not reach a normal return on
+   any path where assertion_context::check () is false.  A throw is
+   fine (unwinding skips what the fact covers); a [[noreturn]] call, or
+   a call to a function whose own body cannot return (to a small depth:
+   __d4324_terminate_wrapper () hides its noreturn from the optimizer,
+   which this compile-time question doesn't feed), stops.  A condition
+   the analysis can settle at compile time takes only its branch: one
+   on check (), or one that folds once the context's values that are
+   fixed for this contract are known (its semantic, side and kind, as
+   build_contract_control_call passes them).  A runtime branch keeps
+   both arms, so one that returns makes the answer "may continue".  So
+   do anything unrecognized (loops, switches, gotos, a missing body).
+   Only a conveyor contract's facts depend on this; a symbolic one's are
+   established by declaration (see contract_failure_terminates_p).  */
+
+struct cct_env
+{
+  tree ctx_type;	/* std::contracts::assertion_context.  */
+  tree info_type;	/* std::contracts::assertion_static_info.  */
+  HOST_WIDE_INT semantic, side, kind;
+  bool unknown_body;	/* A body was missing: don't cache.  */
+};
+
+struct cct_result
+{
+  bool completes;	/* May fall through to what follows.  */
+  bool returns;		/* May reach a return.  */
+};
+
+/* Whether T is a call to member NAME of class CLS.  */
+
+static bool
+cct_member_call_p (tree t, tree cls, const char *name)
+{
+  if (!cls || TREE_CODE (t) != CALL_EXPR)
+    return false;
+  tree fn = get_callee_fndecl (t);
+  return (fn && DECL_NAME (fn) && id_equal (DECL_NAME (fn), name)
+	  && DECL_CONTEXT (fn) && TYPE_P (DECL_CONTEXT (fn))
+	  && same_type_ignoring_top_level_qualifiers_p (DECL_CONTEXT (fn), cls));
+}
+
+/* walk_tree callback: replace the context's compile-time-known values.  */
+
+static tree
+cct_substitute_r (tree *tp, int *walk_subtrees, void *data)
+{
+  cct_env *env = (cct_env *) data;
+  tree t = *tp;
+  HOST_WIDE_INT v;
+  if (cct_member_call_p (t, env->ctx_type, "semantic")
+      || cct_member_call_p (t, env->info_type, "semantic"))
+    v = env->semantic;
+  else if (cct_member_call_p (t, env->info_type, "side"))
+    v = env->side;
+  else if (cct_member_call_p (t, env->ctx_type, "kind"))
+    v = env->kind;
+  else
+    return NULL_TREE;
+  *tp = build_int_cst (TREE_TYPE (t), v);
+  *walk_subtrees = 0;
+  return NULL_TREE;
+}
+
+/* COND's value given that check () is false: 0, 1, or -1 if unknown.  */
+
+static int
+cct_cond_value (tree cond, cct_env *env)
+{
+  for (;;)
+    {
+      STRIP_NOPS (cond);
+      if (TREE_CODE (cond) != CLEANUP_POINT_EXPR)
+	break;
+      cond = TREE_OPERAND (cond, 0);
+    }
+  if (TREE_CODE (cond) == INTEGER_CST)
+    return integer_zerop (cond) ? 0 : 1;
+  if (cct_member_call_p (cond, env->ctx_type, "check"))
+    return 0;
+  switch (TREE_CODE (cond))
+    {
+    case TRUTH_NOT_EXPR:
+      {
+	int v = cct_cond_value (TREE_OPERAND (cond, 0), env);
+	return v < 0 ? -1 : !v;
+      }
+    case TRUTH_ANDIF_EXPR:
+    case TRUTH_AND_EXPR:
+      {
+	int a = cct_cond_value (TREE_OPERAND (cond, 0), env);
+	int b = cct_cond_value (TREE_OPERAND (cond, 1), env);
+	return (a == 0 || b == 0) ? 0 : (a == 1 && b == 1) ? 1 : -1;
+      }
+    case TRUTH_ORIF_EXPR:
+    case TRUTH_OR_EXPR:
+      {
+	int a = cct_cond_value (TREE_OPERAND (cond, 0), env);
+	int b = cct_cond_value (TREE_OPERAND (cond, 1), env);
+	return (a == 1 || b == 1) ? 1 : (a == 0 && b == 0) ? 0 : -1;
+      }
+    case EQ_EXPR:
+    case NE_EXPR:
+      for (int i = 0; i < 2; ++i)
+	if (integer_zerop (TREE_OPERAND (cond, 1 - i)))
+	  {
+	    tree o = TREE_OPERAND (cond, i);
+	    STRIP_NOPS (o);
+	    if (cct_member_call_p (o, env->ctx_type, "check"))
+	      return TREE_CODE (cond) == NE_EXPR ? 0 : 1;
+	  }
+      break;
+    default:
+      break;
+    }
+  tree sub = unshare_expr (cond);
+  walk_tree_without_duplicates (&sub, cct_substitute_r, env);
+  sub = maybe_constant_value (sub);
+  STRIP_NOPS (sub);
+  if (TREE_CODE (sub) == INTEGER_CST)
+    return integer_zerop (sub) ? 0 : 1;
+  return -1;
+}
+
+static bool cct_fn_may_return (tree, cct_env *, int);
+
+static tree
+cct_find_return_r (tree *tp, int *, void *)
+{
+  return TREE_CODE (*tp) == RETURN_EXPR ? *tp : NULL_TREE;
+}
+
+static cct_result
+cct_union (cct_result a, cct_result b)
+{
+  return { a.completes || b.completes, a.returns || b.returns };
+}
+
+/* Whether call T can return to its caller.  */
+
+static bool
+cct_call_may_return_p (tree t, cct_env *env, int depth)
+{
+  if (call_expr_flags (t) & ECF_NORETURN)
+    return false;
+  tree fn = get_callee_fndecl (t);
+  if (fn && depth < 4 && DECL_SAVED_TREE (fn) && !DECL_CONSTRUCTOR_P (fn))
+    return cct_fn_may_return (fn, env, depth + 1);
+  return true;
+}
+
+static cct_result
+cct_stmt (tree t, cct_env *env, int depth)
+{
+  if (!t)
+    return { true, false };
+  switch (TREE_CODE (t))
+    {
+    case STATEMENT_LIST:
+      {
+	bool returns = false;
+	for (tree_stmt_iterator i = tsi_start (t); !tsi_end_p (i); tsi_next (&i))
+	  {
+	    cct_result r = cct_stmt (tsi_stmt (i), env, depth);
+	    returns |= r.returns;
+	    if (!r.completes)
+	      return { false, returns };
+	  }
+	return { true, returns };
+      }
+    case BIND_EXPR:
+      return cct_stmt (BIND_EXPR_BODY (t), env, depth);
+    case CLEANUP_POINT_EXPR:
+    case MUST_NOT_THROW_EXPR:
+    case EXPR_STMT:
+    case NOP_EXPR:
+    case CONVERT_EXPR:
+    case NON_LVALUE_EXPR:
+    case SAVE_EXPR:
+      return cct_stmt (TREE_OPERAND (t, 0), env, depth);
+    case COND_EXPR:
+      {
+	int v = cct_cond_value (TREE_OPERAND (t, 0), env);
+	if (v == 0)
+	  return cct_stmt (TREE_OPERAND (t, 2), env, depth);
+	if (v == 1)
+	  return cct_stmt (TREE_OPERAND (t, 1), env, depth);
+	return cct_union (cct_stmt (TREE_OPERAND (t, 1), env, depth),
+			  cct_stmt (TREE_OPERAND (t, 2), env, depth));
+      }
+    case IF_STMT:
+      {
+	/* The body may not be genericized yet.  'if consteval' runs its
+	   else branch at run time.  */
+	int v = (IF_STMT_CONSTEVAL_P (t) ? 0
+		 : cct_cond_value (IF_COND (t), env));
+	if (v == 0)
+	  return cct_stmt (ELSE_CLAUSE (t), env, depth);
+	if (v == 1)
+	  return cct_stmt (THEN_CLAUSE (t), env, depth);
+	return cct_union (cct_stmt (THEN_CLAUSE (t), env, depth),
+			  cct_stmt (ELSE_CLAUSE (t), env, depth));
+      }
+    case TRY_BLOCK:
+      {
+	cct_result r = cct_stmt (TRY_STMTS (t), env, depth);
+	if (CLEANUP_P (t))
+	  return r;
+	tree h = TRY_HANDLERS (t);
+	if (TREE_CODE (h) == HANDLER)
+	  return cct_union (r, cct_stmt (HANDLER_BODY (h), env, depth));
+	for (tree_stmt_iterator i = tsi_start (h); !tsi_end_p (i); tsi_next (&i))
+	  if (TREE_CODE (tsi_stmt (i)) == HANDLER)
+	    r = cct_union (r, cct_stmt (HANDLER_BODY (tsi_stmt (i)), env, depth));
+	return r;
+      }
+    case EH_SPEC_BLOCK:
+      return cct_stmt (EH_SPEC_STMTS (t), env, depth);
+    case CLEANUP_STMT:
+      return cct_stmt (CLEANUP_BODY (t), env, depth);
+    case RETURN_EXPR:
+      return { false, true };
+    case CALL_EXPR:
+      return { cct_call_may_return_p (t, env, depth), false };
+    case MODIFY_EXPR:
+    case INIT_EXPR:
+      {
+	tree rhs = TREE_OPERAND (t, 1);
+	STRIP_NOPS (rhs);
+	if (TREE_CODE (rhs) == CALL_EXPR)
+	  return { cct_call_may_return_p (rhs, env, depth), false };
+	return { true, false };
+      }
+    case TRY_CATCH_EXPR:
+      {
+	cct_result body = cct_stmt (TREE_OPERAND (t, 0), env, depth);
+	tree h = TREE_OPERAND (t, 1);
+	tree first = h;
+	if (TREE_CODE (h) == STATEMENT_LIST && !tsi_end_p (tsi_start (h)))
+	  first = tsi_stmt (tsi_start (h));
+	if (TREE_CODE (first) == EH_FILTER_EXPR)
+	  return cct_union (body, cct_stmt (EH_FILTER_FAILURE (first), env,
+					    depth));
+	if (TREE_CODE (first) != CATCH_EXPR)
+	  /* A cleanup, run on the way out of an exception: only the
+	     body completes normally.  */
+	  return body;
+	cct_result r = body;
+	if (TREE_CODE (h) == CATCH_EXPR)
+	  return cct_union (r, cct_stmt (CATCH_BODY (h), env, depth));
+	for (tree_stmt_iterator i = tsi_start (h); !tsi_end_p (i); tsi_next (&i))
+	  if (TREE_CODE (tsi_stmt (i)) == CATCH_EXPR)
+	    r = cct_union (r, cct_stmt (CATCH_BODY (tsi_stmt (i)), env, depth));
+	return r;
+      }
+    case TRY_FINALLY_EXPR:
+      {
+	cct_result a = cct_stmt (TREE_OPERAND (t, 0), env, depth);
+	cct_result b = cct_stmt (TREE_OPERAND (t, 1), env, depth);
+	return { a.completes && b.completes, a.returns || b.returns };
+      }
+    case DECL_EXPR:
+    case LABEL_DECL:
+    case DEBUG_BEGIN_STMT:
+      return { true, false };
+    default:
+      /* Anything else (a loop, switch, goto, or an expression): it may
+	 complete, and it returns if a return is inside it.  */
+      return { true, walk_tree_without_duplicates (&t, cct_find_return_r,
+						   NULL) != NULL_TREE };
+    }
+}
+
+/* Whether FN may return normally, a failed check () assumed.  */
+
+static bool
+cct_fn_may_return (tree fn, cct_env *env, int depth)
+{
+  tree body = DECL_SAVED_TREE (fn);
+  if (!body)
+    {
+      env->unknown_body = true;
+      return true;
+    }
+  cct_result r = cct_stmt (body, env, depth);
+  return r.completes || r.returns;
+}
+
+/* Answers already computed, per operator() and per (semantic, side,
+   kind): two bits each, known and value.  */
+
+struct cct_cache_entry
+{
+  unsigned HOST_WIDE_INT known[2], value[2];
+};
+
+static hash_map<tree, cct_cache_entry> *cct_cache;
+
+/* Whether a failed check of CONTRACT, of the function OWNER_FN (or
+   NULL_TREE for a contract_assert's own enclosing function), stops
+   execution.  A contract without a control object follows its own
+   evaluation semantic.  */
+
+bool
+contract_failure_terminates_p (tree contract, tree owner_fn)
+{
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  if (!ctrl)
+    {
+      contract_evaluation_semantic ev = get_evaluation_semantic (contract);
+      return ev == CES_ENFORCE || ev == CES_QUICK;
+    }
+  /* A symbolic contract that isn't also conveyor establishes its facts
+     by declaration, not as the outcome of a check: a symbolic
+     postcondition is a straight-up establishment, and its facts hold
+     only symbolically (~/gcc-axiom-contracts.md).  */
+  contract_check_side cside
+    = contract_side_of (contract, owner_fn ? owner_fn : current_function_decl);
+  if (contract_control_symbolic_like (ctrl, cside, /*quiet=*/true)
+      && !contract_control_conveyor_like (ctrl, cside, /*quiet=*/true))
+    return true;
+  tree op = contract_control_operator (ctrl);
+  if (!op)
+    return false;
+  cct_env env;
+  env.ctx_type = lookup_std_contracts_type (get_identifier ("assertion_context"));
+  env.info_type
+    = lookup_std_contracts_type (get_identifier ("assertion_static_info"));
+  env.semantic = contract_evaluation_semantic_value ();
+  env.side = 0;
+  switch (cside)
+    {
+    case ccs_not_applicable: env.side = 0; break;
+    case ccs_definition: env.side = 1; break;
+    case ccs_wrapper: env.side = 2; break;
+    default: break;
+    }
+  env.kind = get_contract_assertion_kind (contract);
+  env.unknown_body = false;
+
+  unsigned idx = ((env.semantic & 7) << 4) | ((env.side & 3) << 2) | (env.kind & 3);
+  bool cacheable = (env.semantic >= 0 && env.semantic < 8 && env.kind >= 0
+		    && env.kind < 4);
+  if (!cct_cache)
+    cct_cache = new hash_map<tree, cct_cache_entry>;
+  cct_cache_entry &e = cct_cache->get_or_insert (op);
+  unsigned HOST_WIDE_INT bit = HOST_WIDE_INT_1U << (idx & 63);
+  if (cacheable && (e.known[idx >> 6] & bit))
+    return (e.value[idx >> 6] & bit) != 0;
+
+  bool terminates = !cct_fn_may_return (op, &env, 0);
+  if (cacheable && !env.unknown_body)
+    {
+      e.known[idx >> 6] |= bit;
+      if (terminates)
+	e.value[idx >> 6] |= bit;
+    }
+  return terminates;
+}
+
 /* Build a fresh, file-local, static bool FUNCTION_DECL that copies ORIG's
    real parameter list verbatim (including an implicit `this' for a member
    function, kept as an ordinary leading pointer parameter -- never a
@@ -10675,6 +11045,8 @@ oa_accessor_postcondition_object_address_p (tree fndecl)
 	continue;
       contract_check_side side = contract_side_of (contract, fndecl);
       if (!contract_control_conveyor_like (ctrl, side, /*quiet=*/true))
+	continue;
+      if (!contract_failure_terminates_p (contract, fndecl))
 	continue;
 
       tree cond = STRIP_ANY_LOCATION_WRAPPER (CONTRACT_CONDITION (contract));
@@ -16938,6 +17310,8 @@ oa_call_symbolic_predicate_p (tree call, tree *pred_fn_out, bool *polarity_out,
 	continue;
       if (!oa_contract_fact_tracking_active_p (contract, callee))
 	continue;
+      if (!contract_failure_terminates_p (contract, callee))
+	continue;
 
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
@@ -16956,7 +17330,9 @@ oa_call_symbolic_predicate_p (tree call, tree *pred_fn_out, bool *polarity_out,
 
 	  *pred_fn_out = pred_fn;
 	  *polarity_out = !negated;
-	  *conveyor_established_out = oa_contract_conveyor_active_p (contract, callee);
+	  *conveyor_established_out
+	    = (oa_contract_conveyor_active_p (contract, callee)
+	       && contract_failure_terminates_p (contract, callee));
 	  return true;
 	}
     }
@@ -19299,13 +19675,16 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 	continue;
       if (!oa_contract_fact_tracking_active_p (contract, callee))
 	continue;
+      if (!contract_failure_terminates_p (contract, callee))
+	continue;
       /* Which flavor *this specific* postcondition is -- recorded
 	 alongside every fact it establishes, so a conveyor-only consumer
 	 (oa_env_predicate_result/oa_env_check_field_range_fact with
 	 REQUIRE_CONVEYOR true) can refuse a fact that was only ever
 	 backed by a symbolic contract's own, unverified trust.  See
 	 oa_predicate_fact's own comment.  */
-      bool conveyor_established = oa_contract_conveyor_active_p (contract, callee);
+      bool conveyor_established = oa_contract_conveyor_active_p (contract, callee)
+	&& contract_failure_terminates_p (contract, callee);
       /* Unlike the shared-substrate maps above/below, nonzero-ness has
 	 its own, symbolic-only map (m_symbolic_nz_map) rather than a
 	 provenance tag on a shared one -- see that map's own comment on
@@ -19316,7 +19695,8 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 	 into a conveyor map here would have no consumer and only add
 	 confusion. is_object_address is handled differently still -- see
 	 the conveyor_established block below, after CONJUNCTS exists.  */
-      bool symbolic_established = oa_contract_symbolic_active_p (contract, callee);
+      bool symbolic_established = oa_contract_symbolic_active_p (contract, callee)
+	&& contract_failure_terminates_p (contract, callee);
 
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
@@ -21250,6 +21630,8 @@ oa_call_postcondition_object_address_p (tree call)
 	 a later contract_assert at all).  */
       if (!oa_contract_fact_tracking_active_p (contract, callee))
 	continue;
+      if (!contract_failure_terminates_p (contract, callee))
+	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
       if (!result_id || (!VAR_P (result_id) && TREE_CODE (result_id) != PARM_DECL))
 	continue;
@@ -21321,6 +21703,8 @@ oa_call_postcondition_nonzero_p (tree call)
 	 postcondition_object_address_p's own identical fix/comment.  */
       if (!oa_contract_fact_tracking_active_p (contract, callee))
 	continue;
+      if (!contract_failure_terminates_p (contract, callee))
+	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
       if (!result_id || (!VAR_P (result_id) && TREE_CODE (result_id) != PARM_DECL))
 	continue;
@@ -21387,6 +21771,8 @@ oa_call_postcondition_range_p (tree call, oa_env &env, oa_range_fact *out,
 	 at all, since this function -- oa_get_range's own item-6
 	 fallback -- only ever considered conveyor-active postconditions.  */
       if (!oa_contract_fact_tracking_active_p (contract, callee))
+	continue;
+      if (!contract_failure_terminates_p (contract, callee))
 	continue;
       tree rid = POSTCONDITION_IDENTIFIER (contract);
       if (!rid || (!VAR_P (rid) && TREE_CODE (rid) != PARM_DECL))
@@ -21561,6 +21947,8 @@ oa_call_symbolic_range_p (tree call, oa_range_fact *out)
       if (!POSTCONDITION_P (contract))
 	continue;
       if (!oa_contract_symbolic_active_p (contract, callee))
+	continue;
+      if (!contract_failure_terminates_p (contract, callee))
 	continue;
       tree rid = POSTCONDITION_IDENTIFIER (contract);
       if (!rid || (!VAR_P (rid) && TREE_CODE (rid) != PARM_DECL))
@@ -24126,6 +24514,11 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
     }
   CONTRACT_CONDITION (contract) = cond;
 
+  /* What follows makes the precondition a fact for the body, which it
+     is only if a failed check stops execution.  */
+  if (!contract_failure_terminates_p (contract, current_function_decl))
+    return;
+
   oa_establish_shared_substrate_self_trust (cond, env, tracking_ok, conveyor_ok);
 
   /* D4324/P2680 item 8: a 'this->field != 0'/'obj.field != 0' precondition
@@ -24907,6 +25300,11 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
      The whole condition is false regardless of which conjunct did it
      (it's a conjunction), so nothing from it should be trusted onward.  */
   if (any_conjunct_proven_false)
+    return;
+
+  /* What follows makes the assertion a fact for the code after it,
+     which it is only if a failed check stops execution.  */
+  if (!contract_failure_terminates_p (stmt, current_function_decl))
     return;
 
   oa_establish_shared_substrate_self_trust (cond, env, tracking_ok, conveyor_ok);
@@ -28757,6 +29155,13 @@ oa_cache_contract_flavors (tree fndecl)
 	    oa_symbolic_active_contract_cache = hash_set<tree>::create_ggc (37);
 	  oa_symbolic_active_contract_cache->add (contract);
 	}
+      if (CONTRACT_CONTROL_OBJECT (contract)
+	  && !contract_failure_terminates_p (contract, fndecl))
+	{
+	  if (!oa_nonterminating_contract_cache)
+	    oa_nonterminating_contract_cache = hash_set<tree>::create_ggc (37);
+	  oa_nonterminating_contract_cache->add (contract);
+	}
       if (oa_contract_conveyor_strict_p (contract, fndecl))
 	{
 	  if (!oa_conveyor_strict_contract_cache)
@@ -28887,6 +29292,16 @@ oa_contract_symbolic_active_cached_p (tree contract)
 	 && oa_symbolic_active_contract_cache->contains (contract);
 }
 
+/* Whether a failed check of CONTRACT stops execution, so its condition
+   may be a fact (contract_failure_terminates_p, as cached).  */
+
+bool
+oa_contract_failure_terminates_cached_p (tree contract)
+{
+  return !(oa_nonterminating_contract_cache
+	   && oa_nonterminating_contract_cache->contains (contract));
+}
+
 /* Cached mirrors of oa_contract_conveyor_strict_p/oa_contract_symbolic_
    strict_p, for the same GIMPLE-pass-timing reason as the active-status
    accessors above -- see oa_cache_contract_flavors's own comment.  */
@@ -28997,6 +29412,8 @@ oa_seed_entry_env (tree fndecl, tree body, oa_env &env)
       if (!PRECONDITION_P (contract))
 	continue;
       if (!oa_contract_conveyor_active_p (contract))
+	continue;
+      if (!contract_failure_terminates_p (contract, NULL_TREE))
 	continue;
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
@@ -30351,6 +30768,8 @@ oa_compose_call_result_range (tree lhs, tree rhs, oa_env &env)
 	 comment.  */
       if (!oa_contract_fact_tracking_active_p (contract, callee))
 	continue;
+      if (!contract_failure_terminates_p (contract, callee))
+	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
       if (!result_id)
 	continue;
@@ -30475,8 +30894,10 @@ oa_establish_relational_from_call (tree lhs, tree rhs, oa_env &env)
       tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
-      bool conveyor_active = oa_contract_conveyor_active_p (contract, callee);
-      bool symbolic_active = oa_contract_symbolic_active_p (contract, callee);
+      bool conveyor_active = oa_contract_conveyor_active_p (contract, callee)
+	&& contract_failure_terminates_p (contract, callee);
+      bool symbolic_active = oa_contract_symbolic_active_p (contract, callee)
+	&& contract_failure_terminates_p (contract, callee);
       if (!conveyor_active && !symbolic_active)
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
@@ -32364,9 +32785,10 @@ oa_predicate_defining_relation_public (tree pred_fn, bool require_conveyor,
       tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
-      bool active = (oa_contract_conveyor_active_cached_p (contract)
+      bool active = ((oa_contract_conveyor_active_cached_p (contract)
 		     || (!require_conveyor
-			 && oa_contract_symbolic_active_cached_p (contract)));
+			 && oa_contract_symbolic_active_cached_p (contract))))
+	&& contract_failure_terminates_p (contract, NULL_TREE);
       if (!active)
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
@@ -32444,9 +32866,10 @@ oa_call_postcondition_predicate_range_p (tree call, oa_env &env,
 	 established fact satisfies it, whichever flavor established it"
 	 (the same rule already applied to the analogous field-range
 	 consult elsewhere in this file).  */
-      bool active = require_conveyor
+      bool active = (require_conveyor
 	? oa_contract_conveyor_active_p (contract, callee)
-	: oa_contract_fact_tracking_active_p (contract, callee);
+	: oa_contract_fact_tracking_active_p (contract, callee))
+	&& contract_failure_terminates_p (contract, callee);
       if (!active)
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
@@ -32521,9 +32944,10 @@ oa_predicate_result_from_declared_relation (tree pred_fn, tree actual_arg,
       /* D4324: same REQUIRE_CONVEYOR fix as oa_call_postcondition_
 	 predicate_range_p immediately above -- previously ignored this
 	 parameter entirely.  */
-      bool active = require_conveyor
+      bool active = (require_conveyor
 	? oa_contract_conveyor_active_p (contract, pred_fn)
-	: oa_contract_fact_tracking_active_p (contract, pred_fn);
+	: oa_contract_fact_tracking_active_p (contract, pred_fn))
+	&& contract_failure_terminates_p (contract, pred_fn);
       if (!active)
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
