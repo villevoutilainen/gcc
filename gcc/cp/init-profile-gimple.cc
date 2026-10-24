@@ -2094,6 +2094,13 @@ ip_arg_uninit_flavored_p_1 (tree arg, int depth, function *fun,
     return false; /* Defensive recursion guard; never expected to trigger
 		      in practice (see the GIMPLE_PHI case below for the
 		      only way a cycle could even arise).  */
+  /* Only a pointer can refer to [[uninit]] memory.  Without this, an
+     'int' merged from zeros ('# result_1 = PHI <0, value_2>' with
+     'value_2 = 0') was flavored: ip_arg_null_pointer_p takes any
+     integer zero for a null pointer, so the GIMPLE_PHI case below
+     skipped every incoming value and answered true vacuously.  */
+  if (!POINTER_TYPE_P (TREE_TYPE (arg)))
+    return false;
   if (TREE_CODE (arg) == ADDR_EXPR)
     {
       tree operand = TREE_OPERAND (arg, 0);
@@ -2527,12 +2534,10 @@ ip_resolve_underlying_decl (tree t)
    against its own declared flavor at all, only how CALLERS treat the
    result (ip_check_call_flavor_consistency/ip_check_assign_flavor_
    consistency above). No explicit "is the function's own return type a
-   pointer" guard is needed: a non-pointer return makes ip_arg_uninit_
-   flavored_p false, and profiles_uninit_pointee_p on a never-attributed
-   function is false too, so both sides already agree with no mismatch
-   -- the same reasoning ip_check_call_flavor_consistency's own comment
-   already gives for skipping an analogous "is this a pointer parameter"
-   guard.
+   pointer" guard is needed: ip_arg_uninit_flavored_p is false for any
+   non-pointer value (its own type gate), and profiles_uninit_pointee_p
+   on a never-attributed function is false too, so both sides agree
+   with no mismatch.
 
    Confirmed via direct testing this needs one exemption: std::now_init
    ('_Tp* now_init(_Tp* __p [[must_init]]) { return __p; }') was flagged
@@ -2574,16 +2579,38 @@ ip_check_return_flavor_consistency (gimple *stmt, tree enclosing_fndecl,
      condition for this shape.  */
   if (!fn_flavor && retval_flavor && ip_arg_is_direct_addr_expr_p (retval))
     return;
-  if (profiles_diagnostic_exempt_p (gimple_location (stmt),
-				     enclosing_fndecl, "std::init"))
+  /* Several 'return's merged into one exit block leave a GIMPLE_RETURN
+     with no location of its own; report at the first merged-in value
+     whose flavor disagrees (that 'return's own location), else at the
+     function.  */
+  location_t loc = gimple_location (stmt);
+  if (loc == UNKNOWN_LOCATION && TREE_CODE (retval) == SSA_NAME
+      && gimple_code (SSA_NAME_DEF_STMT (retval)) == GIMPLE_PHI)
+    {
+      gphi *phi = as_a<gphi *> (SSA_NAME_DEF_STMT (retval));
+      for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+	{
+	  tree arg = gimple_phi_arg_def (phi, i);
+	  location_t aloc = gimple_phi_arg_location (phi, i);
+	  if (aloc != UNKNOWN_LOCATION && !ip_arg_null_pointer_p (arg)
+	      && ip_arg_uninit_flavored_p (arg, fun, stmt, cache) != fn_flavor)
+	    {
+	      loc = aloc;
+	      break;
+	    }
+	}
+    }
+  if (loc == UNKNOWN_LOCATION)
+    loc = DECL_SOURCE_LOCATION (enclosing_fndecl);
+  if (profiles_diagnostic_exempt_p (loc, enclosing_fndecl, "std::init"))
     return;
   if (retval_flavor)
-    profiles_diagnostic_at (gimple_location (stmt), "std::init",
+    profiles_diagnostic_at (loc, "std::init",
 	      "returning a pointer marked %<[[ref_to_uninit]]%> from a "
 	      "function not itself marked %<[[ref_to_uninit]]%>, under the "
 	      "%<std::init%> profile");
   else
-    profiles_diagnostic_at (gimple_location (stmt), "std::init",
+    profiles_diagnostic_at (loc, "std::init",
 	      "returning a pointer not marked %<[[ref_to_uninit]]%> from a "
 	      "function marked %<[[ref_to_uninit]]%>, under the "
 	      "%<std::init%> profile");
