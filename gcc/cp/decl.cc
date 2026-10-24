@@ -13311,8 +13311,13 @@ grokfndecl (tree ctype,
 	      && TREE_CODE (TREE_TYPE (decl)) == METHOD_TYPE)
 	    {
 	      /* Remove the `this' parm added by grokclassfn.  */
+	      tree this_parm = DECL_ARGUMENTS (decl);
 	      revert_static_member_fn (decl);
 	      check_static_quals (decl, quals);
+	      /* D4324: and any contract synthesized on it (a conveyor
+		 function's is_object_address (this)).  */
+	      if (this_parm && is_this_parameter (this_parm))
+		oa_drop_contracts_on_parm (decl, this_parm);
 	    }
 	  if (DECL_ARTIFICIAL (old_decl))
 	    {
