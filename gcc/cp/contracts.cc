@@ -3656,8 +3656,11 @@ make_postcondition_variable (cp_expr id)
    Recorded on the variable itself, since contract statements are
    copied (remap_object_contract, tsubst_object_contract_specifiers)
    before the return type is known, while the variable is either
-   shared or copied in a single place.  */
-static GTY(()) hash_set<tree> *single_post_binder_vars;
+   shared or copied in a single place.  A cache: it must not keep the
+   variable alive itself.  One made for a redeclaration has that
+   redeclaration as its DECL_CONTEXT, which duplicate_decls frees; kept
+   alive here, the next collection marked through the freed decl.  */
+static GTY((cache)) decl_tree_cache_map *single_post_binder_vars;
 
 void
 mark_single_post_binder (tree var)
@@ -3665,15 +3668,15 @@ mark_single_post_binder (tree var)
   if (!var || var == error_mark_node)
     return;
   if (!single_post_binder_vars)
-    single_post_binder_vars = hash_set<tree>::create_ggc (8);
-  single_post_binder_vars->add (var);
+    single_post_binder_vars = decl_tree_cache_map::create_ggc (8);
+  single_post_binder_vars->put (var, boolean_true_node);
 }
 
 bool
 single_post_binder_p (tree var)
 {
   return (var && single_post_binder_vars
-	  && single_post_binder_vars->contains (var));
+	  && single_post_binder_vars->get (var));
 }
 
 /* Check that the TYPE is valid for a named postcondition variable on
