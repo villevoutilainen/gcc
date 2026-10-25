@@ -13222,13 +13222,23 @@ grokfndecl (tree ctype,
      none of them turn out to be conveyor-active, since the callee's own
      first act is exactly that check (oa_fndecl_has_conveyor_active_
      contract_p) before doing anything further.  */
-  if (declared_conveyor_p || contract_specifiers)
-    {
-      tree t = decl;
-      if (TREE_CODE (decl) == TEMPLATE_DECL)
-	t = DECL_TEMPLATE_RESULT (decl);
-      oa_synthesize_implicit_reference_safety_preconditions (t);
-    }
+  /* An out-of-class member definition doesn't know yet whether it is
+     static: until check_classfn below matches it to the in-class
+     declaration, it carries a 'this' that revert_static_member_fn then
+     removes.  Synthesize its implicit preconditions after that, so a
+     static member is never given (or asked for <contracts> because of)
+     an is_object_address (this) precondition.  A constructor or
+     destructor is never static, and its clones need the precondition
+     before propagate_cdtor_contracts_to_clones below.  */
+  tree synth_fn = decl;
+  if (TREE_CODE (synth_fn) == TEMPLATE_DECL)
+    synth_fn = DECL_TEMPLATE_RESULT (synth_fn);
+  bool defer_synthesis = (ctype != NULL_TREE && check
+			  && !DECL_CONSTRUCTOR_P (synth_fn)
+			  && !DECL_DESTRUCTOR_P (synth_fn));
+  bool synthesize = declared_conveyor_p || contract_specifiers;
+  if (synthesize && !defer_synthesis)
+    oa_synthesize_implicit_reference_safety_preconditions (synth_fn);
 
   if (contract_specifiers || declared_conveyor_p)
     {
@@ -13311,14 +13321,11 @@ grokfndecl (tree ctype,
 	      && TREE_CODE (TREE_TYPE (decl)) == METHOD_TYPE)
 	    {
 	      /* Remove the `this' parm added by grokclassfn.  */
-	      tree this_parm = DECL_ARGUMENTS (decl);
 	      revert_static_member_fn (decl);
 	      check_static_quals (decl, quals);
-	      /* D4324: and any contract synthesized on it (a conveyor
-		 function's is_object_address (this)).  */
-	      if (this_parm && is_this_parameter (this_parm))
-		oa_drop_contracts_on_parm (decl, this_parm);
 	    }
+	  if (synthesize && defer_synthesis)
+	    oa_synthesize_implicit_reference_safety_preconditions (synth_fn);
 	  if (DECL_ARTIFICIAL (old_decl))
 	    {
 	      error ("definition of implicitly-declared %qD", old_decl);
@@ -13357,6 +13364,9 @@ grokfndecl (tree ctype,
 	    return NULL_TREE;
 	  return old_decl;
 	}
+      /* E.g. an explicit specialization of a member template.  */
+      if (synthesize && defer_synthesis)
+	oa_synthesize_implicit_reference_safety_preconditions (synth_fn);
     }
 
   if (DECL_CONSTRUCTOR_P (decl) && !grok_ctor_properties (ctype, decl))

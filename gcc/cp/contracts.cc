@@ -4656,51 +4656,6 @@ oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
       (fndecl, attr_chainon (new_specs, get_fn_contract_specifiers (fndecl)));
 }
 
-/* PARM is no longer a parameter of FNDECL: drop the contract specifiers
-   whose condition refers to it.  grokfndecl synthesizes a conveyor
-   function's implicit preconditions (is_object_address (this)) before
-   it matches an out-of-class definition to its in-class declaration;
-   for a static member, that match then removes 'this'
-   (revert_static_member_fn), leaving a precondition on a parameter that
-   doesn't exist -- one the in-class declaration doesn't have ("declaration
-   adds contracts"), and that crashed seeding the body's facts.  Only a
-   synthesized precondition can name 'this' there.  */
-
-static bool
-oa_contract_spec_names_p (tree spec, tree parm)
-{
-  tree cond = CONTRACT_CONDITION (CONTRACT_STATEMENT (spec));
-  return (cond && cond != error_mark_node
-	  && cp_walk_tree_without_duplicates (&cond,
-	       [](tree *tp, int *, void *data) -> tree
-	       { return *tp == (tree) data ? *tp : NULL_TREE; }, parm));
-}
-
-void
-oa_drop_contracts_on_parm (tree fndecl, tree parm)
-{
-  /* Leave a declaration without such a contract alone: setting its
-     specifiers would enter it into the map, and FNDECL may be the trial
-     declaration grokfndecl discards (and frees) once it is matched.  */
-  bool any = false;
-  for (tree spec = get_fn_contract_specifiers (fndecl); spec;
-       spec = TREE_CHAIN (spec))
-    if (oa_contract_spec_names_p (spec, parm))
-      any = true;
-  if (!any)
-    return;
-  tree kept = NULL_TREE;
-  for (tree spec = get_fn_contract_specifiers (fndecl); spec;
-       spec = TREE_CHAIN (spec))
-    if (!oa_contract_spec_names_p (spec, parm))
-      {
-	tree copy = copy_node (spec);
-	TREE_CHAIN (copy) = NULL_TREE;
-	kept = attr_chainon (kept, copy);
-      }
-  set_fn_contract_specifiers (fndecl, kept);
-}
-
 /* Return handle_contract_violation (), declaring it if needed.  */
 
 static tree
