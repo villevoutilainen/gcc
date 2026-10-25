@@ -12415,6 +12415,7 @@ tsubst_contract (tree decl, tree t, tree args, tsubst_flags_t complain,
   bool auto_p  = type_uses_auto (type);
 
   tree r = copy_node (t);
+  contract_note_copy (t, r);
 
   /* D4324: mark the enclosing (instantiated, never the template
      pattern -- current_function_decl is already rebound to the real

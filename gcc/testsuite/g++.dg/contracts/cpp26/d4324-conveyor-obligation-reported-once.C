@@ -15,7 +15,9 @@ int g (const int& t) conveyor;
 int h (const int& t) conveyor pre<sc::conveyor_assert_v> (std::is_object_address (&t));
 int d (int a, int b) conveyor pre<sc::analyzed_conveyor_v> (b != 0) pre<sc::analyzed_conveyor_v> (b != 0);
 
-int use_f (const int& s) { return f (s); }	// { dg-error "cannot prove .is_object_address." }
+// F's never_proven precondition claims what its implicit one would
+// require: a never_proven assertion needs no proof of its input facts.
+int use_f (const int& s) { return f (s); }
 int use_g (const int& s) { return g (s); }	// { dg-error "cannot prove .is_object_address." }
 int use_h (const int& s) { return h (s); }	// { dg-error "cannot prove .is_object_address." }
 int use_d (int x) { return d (1, x); }		// { dg-warning "cannot verify that .x. is nonzero" }

@@ -1,7 +1,7 @@
 // D4324: a never_proven conveyor assertion trusts its own claim, not what
 // the calls it makes require: a conveyor callee's is_object_address
 // preconditions -- implicit (reference parameters, 'this') and explicit --
-// must still be established inside it.
+// must still be established inside it, unless never_proven themselves.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-analysis-engine=ast" }
 
@@ -43,7 +43,7 @@ constexpr bool deref (const int* p) conveyor
 { return *p == 0; }
 
 void d (const int* p)
-{ contract_assert<never_proven_conveyor_v> (!deref (p)); }	// { dg-error "cannot prove .is_object_address." }
+{ contract_assert<never_proven_conveyor_v> (!deref (p)); }	// deref's precondition is never_proven itself: nothing to prove
 
 void ok3 (const int* p)
 {

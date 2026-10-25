@@ -4767,10 +4767,18 @@ oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
      the ordinary proof.  */
   bool is_ctor = DECL_CONSTRUCTOR_P (fndecl);
 
+  /* A reference parameter, or a pack of them ('Ts &&... ts').  */
+  auto reference_parm_p = [] (tree parm)
+    {
+      tree type = TREE_TYPE (parm);
+      if (DECL_PACK_P (parm) && TREE_CODE (type) == TYPE_PACK_EXPANSION)
+	type = PACK_EXPANSION_PATTERN (type);
+      return TREE_CODE (type) == REFERENCE_TYPE;
+    };
+
   bool any_needed = false;
   for (tree parm = DECL_ARGUMENTS (fndecl); parm; parm = DECL_CHAIN (parm))
-    if ((is_this_parameter (parm) && !is_ctor)
-	|| TREE_CODE (TREE_TYPE (parm)) == REFERENCE_TYPE)
+    if ((is_this_parameter (parm) && !is_ctor) || reference_parm_p (parm))
       {
 	any_needed = true;
 	break;
@@ -4805,7 +4813,7 @@ oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
       bool is_this = is_this_parameter (parm);
       if (is_this && is_ctor)
 	continue;
-      if (!is_this && TREE_CODE (TREE_TYPE (parm)) != REFERENCE_TYPE)
+      if (!is_this && !reference_parm_p (parm))
 	continue;
 
       /* D4324/P2680: a forwarding-reference parameter ('T&& t', T still an
@@ -4857,6 +4865,14 @@ oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
 				     /*koenig_p=*/false, tf_warning_or_error);
       if (call == error_mark_node)
 	continue;
+      /* A function parameter pack: '(std::is_object_address (&ts) && ...)',
+	 one conjunct per parameter it expands into.  */
+      if (!is_this && DECL_PACK_P (parm))
+	{
+	  call = finish_right_unary_fold_expr (loc, call, TRUTH_ANDIF_EXPR);
+	  if (call == error_mark_node)
+	    continue;
+	}
 
       tree contract = grok_contract (pre_id, NULL_TREE, NULL_TREE,
 				      cp_expr (call, loc), loc, ctrl);
@@ -17328,6 +17344,101 @@ oa_contract_self_check_mode_public (tree contract, tree owner_fn,
   return true;
 }
 
+/* The parameter (or 'this') an 'is_object_address (&parm)' or
+   'is_object_address (this)' conjunct C names, else NULL_TREE.  */
+
+static tree
+oa_object_address_conjunct_parm (tree c)
+{
+  tree arg;
+  if (!is_object_address_call_p (c, &arg))
+    return NULL_TREE;
+  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+  while (TREE_CODE (arg) == NOP_EXPR || TREE_CODE (arg) == CONVERT_EXPR
+	 || TREE_CODE (arg) == NON_LVALUE_EXPR
+	 || TREE_CODE (arg) == VIEW_CONVERT_EXPR
+	 || TREE_CODE (arg) == ADDR_EXPR || TREE_CODE (arg) == INDIRECT_REF)
+    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+  return TREE_CODE (arg) == PARM_DECL ? arg : NULL_TREE;
+}
+
+/* True if CONTRACT, a contract of OWNER, is never_proven.  */
+
+static bool
+oa_contract_never_proven_p (tree contract, tree owner)
+{
+  bool never_proven, cf, cs, sf, ss;
+  return (oa_contract_self_check_mode_public (contract, owner, &never_proven,
+					      &cf, &cs, &sf, &ss)
+	  && never_proven);
+}
+
+/* True if CALLEE has a never_proven precondition claiming PARM (a
+   parameter, or 'this') is an object.  */
+
+static bool
+oa_parm_object_trusted_p (tree callee, tree parm)
+{
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!PRECONDITION_P (contract)
+	  || !oa_contract_never_proven_p (contract, callee))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (!cond || cond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (tree *c : conjuncts)
+	if (oa_object_address_conjunct_parm (*c) == parm)
+	  return true;
+    }
+  return false;
+}
+
+/* See contracts.h.  */
+
+void
+contract_note_copy (tree from, tree to)
+{
+  if (oa_synthesized_implicit_contracts
+      && oa_synthesized_implicit_contracts->contains (from))
+    oa_synthesized_implicit_contracts->add (to);
+}
+
+/* See contracts.h.  */
+
+bool
+contract_parm_object_trusted_p (tree callee, tree parm)
+{
+  return oa_parm_object_trusted_p (callee, parm);
+}
+
+/* See contracts.h.  A never_proven assertion needs no proof of its input
+   facts, so a caller owes nothing for a never_proven precondition -- nor
+   for the implicit precondition a conveyor function's reference parameter
+   (or 'this') gets, when a never_proven one already claims that object
+   (std::forward).  What the never_proven predicate itself calls is still
+   checked, as for any conveyor predicate.  */
+
+bool
+contract_precondition_caller_obligation_p (tree contract, tree callee)
+{
+  if (oa_contract_never_proven_p (contract, callee))
+    return false;
+  if (oa_synthesized_implicit_contracts
+      && oa_synthesized_implicit_contracts->contains (contract))
+    {
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond && cond != error_mark_node)
+	if (tree parm = oa_object_address_conjunct_parm (cond))
+	  if (oa_parm_object_trusted_p (callee, parm))
+	    return false;
+    }
+  return true;
+}
+
 /* Is CONTRACT active for the shared fact-tracking substrate (m_predicate_
    fact_map/m_contract_scalar_range_map/m_contract_field_range_map) --
    i.e. conveyor-active *or* symbolic-active?  These maps are a single,
@@ -17454,6 +17565,9 @@ oa_call_conveyor_obligation_status (tree call, bool *forced_out, bool *strict_ou
       tree contract = CONTRACT_STATEMENT (as);
       if (!oa_contract_conveyor_active_p (contract, callee))
 	continue;
+      if (PRECONDITION_P (contract)
+	  && !contract_precondition_caller_obligation_p (contract, callee))
+	continue;
       if (forced_out && oa_contract_conveyor_analysis_forced_p (contract, callee))
 	*forced_out = true;
       if (strict_out && PRECONDITION_P (contract)
@@ -17473,6 +17587,9 @@ oa_call_symbolic_obligation_status (tree call, bool *forced_out, bool *strict_ou
     {
       tree contract = CONTRACT_STATEMENT (as);
       if (!oa_contract_symbolic_active_p (contract, callee))
+	continue;
+      if (PRECONDITION_P (contract)
+	  && !contract_precondition_caller_obligation_p (contract, callee))
 	continue;
       if (forced_out && oa_contract_symbolic_analysis_forced_p (contract, callee))
 	*forced_out = true;
@@ -18349,6 +18466,8 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
     {
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
+	continue;
+      if (!contract_precondition_caller_obligation_p (contract, callee))
 	continue;
       if (!oa_contract_conveyor_active_p (contract, callee))
 	continue;
@@ -19392,6 +19511,8 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
+      if (!contract_precondition_caller_obligation_p (contract, callee))
+	continue;
       bool active = conveyor
 	? oa_contract_conveyor_active_p (contract, callee)
 	: oa_contract_symbolic_active_p (contract, callee);
@@ -19901,6 +20022,8 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
     {
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
+	continue;
+      if (!contract_precondition_caller_obligation_p (contract, callee))
 	continue;
       if (!oa_contract_conveyor_active_p (contract, callee))
 	continue;
@@ -21532,6 +21655,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
+      if (!contract_precondition_caller_obligation_p (contract, callee))
+	continue;
       if (!oa_contract_symbolic_active_p (contract, callee))
 	continue;
 
@@ -22298,6 +22423,8 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
+      if (!contract_precondition_caller_obligation_p (contract, callee))
+	continue;
       if (!oa_contract_conveyor_active_p (contract, callee))
 	continue;
 
@@ -22527,6 +22654,8 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
     {
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
+	continue;
+      if (!contract_precondition_caller_obligation_p (contract, callee))
 	continue;
       if (!oa_contract_conveyor_active_p (contract, callee))
 	continue;

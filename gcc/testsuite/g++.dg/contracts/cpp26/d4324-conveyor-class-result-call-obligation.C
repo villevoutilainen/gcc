@@ -9,11 +9,11 @@
 #include <contracts>
 
 struct A { int v; A (); A (const A &); };
-A make (const int &r) pre<std::contracts::never_proven_conveyor_v> (std::is_object_address (&r));
-int take (const int &r) pre<std::contracts::never_proven_conveyor_v> (std::is_object_address (&r));
+A make (const int &r) pre<std::contracts::conveyor_assert_v> (std::is_object_address (&r));
+int take (const int &r) pre<std::contracts::conveyor_assert_v> (std::is_object_address (&r));
 struct S
 {
-  A get (const int &r) const pre<std::contracts::never_proven_conveyor_v> (std::is_object_address (&r));
+  A get (const int &r) const pre<std::contracts::conveyor_assert_v> (std::is_object_address (&r));
 };
 
 A returned (const int &a) { return make (a); } // { dg-error "cannot prove .is_object_address." }

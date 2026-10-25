@@ -3849,6 +3849,11 @@ cg_check_call_reference_safety (gcall *call, function *fun,
   for (tree parm = DECL_ARGUMENTS (callee); parm;
        parm = DECL_CHAIN (parm), ++argno)
     {
+      /* A never_proven precondition claiming it is an object leaves the
+	 caller nothing to prove (contract_precondition_caller_
+	 obligation_p).  */
+      if (contract_parm_object_trusted_p (callee, parm))
+	continue;
       if (is_this_parameter (parm))
 	{
 	  if (argno < gimple_call_num_args (call))
@@ -7333,6 +7338,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
+      if (!contract_precondition_caller_obligation_p (contract, callee))
+	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
       /* See cg_callee_pre_mandatory.  */
@@ -9756,6 +9763,8 @@ cg_consult_persistent_facts (gcall *call,
     {
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
+	continue;
+      if (!contract_precondition_caller_obligation_p (contract, callee))
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
@@ -12966,6 +12975,8 @@ cg_check_call_range_relational (gcall *call,
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
+      if (!contract_precondition_caller_obligation_p (contract, callee))
+	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
       /* See cg_check_call's own identical 'mandatory'.  */
@@ -13123,6 +13134,8 @@ cg_check_call_relational_fact (gcall *call,
     {
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
+	continue;
+      if (!contract_precondition_caller_obligation_p (contract, callee))
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);

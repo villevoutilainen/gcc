@@ -8,9 +8,9 @@
 
 #include <contracts>
 struct A { };
-template <class X> struct S2 { S2 (const X& a) pre<std::contracts::never_proven_conveyor_v> (std::is_object_address (&a)) {} };
-template <class X> struct S3 { constexpr S3 (const X& a) pre<std::contracts::never_proven_conveyor_v> (std::is_object_address (&a)) {} };
-template <class X> struct M2 { int m (const X& a) pre<std::contracts::never_proven_conveyor_v> (std::is_object_address (&a)) { return 0; } };
+template <class X> struct S2 { S2 (const X& a) pre<std::contracts::conveyor_assert_v> (std::is_object_address (&a)) {} };
+template <class X> struct S3 { constexpr S3 (const X& a) pre<std::contracts::conveyor_assert_v> (std::is_object_address (&a)) {} };
+template <class X> struct M2 { int m (const X& a) pre<std::contracts::conveyor_assert_v> (std::is_object_address (&a)) { return 0; } };
 S2<A> g2 (const A& a) { return S2<A> (a); }	// { dg-error "cannot prove .is_object_address." }
 void h2 (const A& a) { S2<A> s (a); }		// { dg-error "cannot prove .is_object_address." }
 template <class T> S3<T> f3 (const T& a) { return S3<T> (a); }	// { dg-error "cannot prove .is_object_address." }

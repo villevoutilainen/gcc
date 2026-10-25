@@ -70,6 +70,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     [[__nodiscard__,__gnu__::__always_inline__]]
     constexpr _Tp&&
     forward(typename std::remove_reference<_Tp>::type& __t) noexcept
+    _GLIBCXX_CONVEYOR
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    // D4324: the same is_object_address pair as std::move's below -- see
+    // its comment: the result is always '__t' itself.
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__t))
+    post<std::contracts::conveyor_assert_v>(r: std::is_object_address (&r))
+#endif
     { return static_cast<_Tp&&>(__t); }
 
   /**
@@ -83,6 +90,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     [[__nodiscard__,__gnu__::__always_inline__]]
     constexpr _Tp&&
     forward(typename std::remove_reference<_Tp>::type&& __t) noexcept
+    _GLIBCXX_CONVEYOR
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    // D4324: see the other overload.
+    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__t))
+    post<std::contracts::conveyor_assert_v>(r: std::is_object_address (&r))
+#endif
     {
       static_assert(!std::is_lvalue_reference<_Tp>::value,
 	  "std::forward must not be used to convert an rvalue to an lvalue");
@@ -123,6 +136,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   [[nodiscard,__gnu__::__always_inline__]]
   constexpr __like_t<_Tp, _Up>
   forward_like(_Up&& __x) noexcept
+  _GLIBCXX_CONVEYOR
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  // D4324: see std::forward.
+  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__x))
+  post<std::contracts::conveyor_assert_v>(r: std::is_object_address (&r))
+#endif
   { return static_cast<__like_t<_Tp, _Up>>(__x); }
 #endif
 
@@ -152,10 +171,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     // postcondition's own self-check traces the return expression back
     // through the reference-cast wrapper to '__t' directly, whose own
     // is_object_address fact is already self-trusted from the
-    // precondition above. Real (conveyor_assert_v), not never_proven --
-    // never_proven only changes postcondition/contract_assert self-
-    // checking, never a precondition's own caller obligation, so this
-    // pair's own precondition stays as-is regardless.
+    // precondition above, so the postcondition is a real one
+    // (conveyor_assert_v).  The precondition is never_proven: a caller
+    // owes nothing for it, nor for the implicit one it stands in for --
+    // move and forward only cast, never access the object.
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__t))
     post<std::contracts::conveyor_assert_v>(r: std::is_object_address (&r))
 #endif

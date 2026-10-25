@@ -41,7 +41,7 @@ constexpr bool deref (const int* p) conveyor
 { return *p == 0; }
 
 void d (const int* p)
-{ contract_assert<never_proven_conveyor_v> (!deref (p)); }	// { dg-error "cannot prove .is_object_address." }
+{ contract_assert<never_proven_conveyor_v> (!deref (p)); }	// deref's precondition is never_proven itself: nothing to prove
 
 void ok3 (const int* p)
 {
