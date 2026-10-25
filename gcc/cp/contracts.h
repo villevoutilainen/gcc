@@ -269,6 +269,10 @@ extern bool contract_control_is_conveyor		(tree, contract_check_side, bool = fal
 extern bool contract_control_is_symbolic		(tree, contract_check_side, bool = false);
 extern bool contract_control_conveyor_like		(tree, contract_check_side, bool = false);
 extern bool contract_failure_terminates_p	(tree, tree);
+/* Whether PARM is a parameter of a predicate core function that one of
+   its condition's captured locals, not itself a reference, is passed to
+   by reference: always bound to the local itself, an object.  */
+extern bool contract_predicate_capture_parm_p	(tree);
 extern bool contract_control_symbolic_like		(tree, contract_check_side, bool = false);
 extern tree contract_default_control_object		(location_t);
 extern void maybe_inherit_virtual_contract		(tree, tree);
