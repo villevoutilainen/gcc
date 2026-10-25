@@ -1071,24 +1071,35 @@ check_postconditions_in_redecl (tree olddecl, tree newdecl)
   tree t1 = FUNCTION_FIRST_USER_PARM (olddecl);
   tree t2 = FUNCTION_FIRST_USER_PARM (newdecl);
 
-  for (; t1 && t1 != void_list_node;
+  auto check_one = [olddecl] (tree t2)
+    {
+      set_parm_used_in_post (t2);
+      if (!dependent_type_p (TREE_TYPE (t2))
+	  && !CP_TYPE_CONST_P (TREE_TYPE (t2))
+	  && !TREE_READONLY (t2))
+	{
+	  auto_diagnostic_group d;
+	  error_at (DECL_SOURCE_LOCATION (t2),
+		    "value parameter %qE used in a postcondition must be "
+		    "const", t2);
+	  inform (DECL_SOURCE_LOCATION (olddecl),
+		  "previous declaration here");
+	}
+    };
+  /* A function parameter pack of OLDDECL is any number of NEWDECL's
+     parameters, none at all included: it stands for all those left.  */
+  for (; t1 && t1 != void_list_node && t2;
        t1 = TREE_CHAIN (t1), t2 = TREE_CHAIN (t2))
     {
-      if (parm_used_in_post_p (t1))
+      if (DECL_PACK_P (t1))
 	{
-	  set_parm_used_in_post (t2);
-	  if (!dependent_type_p (TREE_TYPE (t2))
-	      && !CP_TYPE_CONST_P (TREE_TYPE (t2))
-	      && !TREE_READONLY (t2))
-	    {
-	      auto_diagnostic_group d;
-	      error_at (DECL_SOURCE_LOCATION (t2),
-			"value parameter %qE used in a postcondition must be "
-			"const", t2);
-	      inform (DECL_SOURCE_LOCATION (olddecl),
-		      "previous declaration here");
-	    }
+	  if (parm_used_in_post_p (t1))
+	    for (; t2; t2 = TREE_CHAIN (t2))
+	      check_one (t2);
+	  break;
 	}
+      if (parm_used_in_post_p (t1))
+	check_one (t2);
     }
 }
 
