@@ -3351,6 +3351,21 @@ object_contract_callable_pieces (tree type, tree *this_type_out,
   return first_arg_type;
 }
 
+/* Hand FN, a helper function synthesized in the middle of other work, to
+   the compilation unit manager without letting it collect garbage, which
+   it would at function depth 0 (validate_pending_contract_predicates, at
+   the end of the translation unit): what that work still holds only on the
+   stack -- a contract condition being validated or copied -- would be
+   freed under it.  As lambda.cc does for a conversion function.  */
+
+static void
+contract_helper_expand_or_defer_fn (tree fn)
+{
+  ++function_depth;
+  expand_or_defer_fn (fn);
+  --function_depth;
+}
+
 static tree
 build_object_contract_check_function (tree objdecl, bool is_post)
 {
@@ -3516,7 +3531,7 @@ build_object_contract_check_function (tree objdecl, bool is_post)
   finish_return_stmt (has_result ? result_parm : NULL_TREE);
   finish_compound_stmt (compound_stmt);
   finish_function_body (body);
-  expand_or_defer_fn (finish_function (/*inline_p=*/false));
+  contract_helper_expand_or_defer_fn (finish_function (/*inline_p=*/false));
   pop_from_top_level ();
 
   return check_fn;
@@ -7164,7 +7179,7 @@ build_predicate_core_function_1 (tree contract, tree orig)
   finish_return_stmt (condition);
   finish_function_body (body);
   fn = finish_function (/*inline_p=*/false);
-  expand_or_defer_fn (fn);
+  contract_helper_expand_or_defer_fn (fn);
   pop_from_top_level ();
 
   return fn;
@@ -24154,7 +24169,7 @@ get_or_build_scalar_precondition_thunk (tree contract, tree callee,
   finish_return_stmt (cond);
   finish_function_body (body);
   fn = finish_function (/*inline_p=*/false);
-  expand_or_defer_fn (fn);
+  contract_helper_expand_or_defer_fn (fn);
   pop_from_top_level ();
 
   hash_map_maybe_create<hm_ggc> (symbolic_scalar_thunk_cache);
@@ -35247,7 +35262,7 @@ build_predicate_thunk_function (tree contract, tree core_fn, tree struct_type)
   finish_return_stmt (call);
   finish_function_body (body);
   fn = finish_function (/*inline_p=*/false);
-  expand_or_defer_fn (fn);
+  contract_helper_expand_or_defer_fn (fn);
   pop_from_top_level ();
 
   return fn;
