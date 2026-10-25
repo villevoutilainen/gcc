@@ -3555,8 +3555,11 @@ tree
 maybe_object_contract_check_call (tree function, tree call,
 				  vec<tree, va_gc> *args, unsigned arg_offset)
 {
+  /* A call through '&f' or '&S::f' names a function, whose own contracts
+     are a function's, not a callable object's declaration-level ones.  */
   if (!flag_contracts || call == error_mark_node
       || !function || !DECL_P (function)
+      || TREE_CODE (function) == FUNCTION_DECL
       || !get_fn_contract_specifiers (function))
     return call;
 
