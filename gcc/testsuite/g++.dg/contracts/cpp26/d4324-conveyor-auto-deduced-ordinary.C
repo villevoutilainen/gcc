@@ -14,7 +14,7 @@ struct W
 {
   int v = 0;
   int get () const
-    pre<std::contracts::never_proven_conveyor_v> (std::is_object_address (this))
+    pre<std::contracts::conveyor_assert_v> (std::is_object_address (this))
   { return v; }
 };
 

@@ -522,6 +522,15 @@ extern tree contract_check_arg_struct_info (tree struct_type, tree *cond,
    forces analysis without the proofs flag (analyzed_X or proven_X) and
    whether an unproven conjunct is an error (proven_X).  False if it has
    no control object.  */
+/* True if a caller of CALLEE must establish its precondition CONTRACT;
+   see contracts.cc.  */
+extern bool contract_precondition_caller_obligation_p (tree contract,
+						      tree callee);
+/* True if CALLEE has a never_proven precondition claiming its parameter
+   (or 'this') PARM is an object.  */
+extern bool contract_parm_object_trusted_p (tree callee, tree parm);
+/* TO is a copy of the contract FROM: it is synthesized if FROM is.  */
+extern void contract_note_copy (tree from, tree to);
 extern bool oa_contract_self_check_mode_public (tree contract, tree owner_fn,
 						bool *never_proven,
 						bool *conveyor_forced,
