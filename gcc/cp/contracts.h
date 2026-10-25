@@ -276,6 +276,9 @@ extern bool contract_predicate_capture_parm_p	(tree);
 /* Substitute the contracts of FN, an instantiation from a template whose
    body is synthesized (a defaulted function) rather than instantiated.  */
 extern void contract_substitute_for_synthesis	(tree);
+/* Make callee FN's contracts, as declared, ready for checking a call to
+   it -- substituted, and their flavors cached -- without its body.  */
+extern void contract_prepare_callee_contracts	(tree);
 extern bool contract_control_symbolic_like		(tree, contract_check_side, bool = false);
 extern tree contract_default_control_object		(location_t);
 extern void maybe_inherit_virtual_contract		(tree, tree);

@@ -31587,6 +31587,17 @@ oa_validate_contract_predicates (tree fndecl)
   return built;
 }
 
+static void oa_ensure_contract_flavors_cached (tree fndecl);
+
+/* See contracts.h.  */
+
+void
+contract_prepare_callee_contracts (tree fn)
+{
+  contract_substitute_for_synthesis (fn);
+  oa_ensure_contract_flavors_cached (fn);
+}
+
 /* See contracts.h.  */
 
 void

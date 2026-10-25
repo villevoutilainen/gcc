@@ -15621,7 +15621,17 @@ pass_contracts_gimple::execute_1 (function *fun)
 	if (!is_gimple_call (stmt))
 	  continue;
 	if (tree callee = gimple_call_fndecl (as_a <gcall *> (stmt)))
-	  maybe_instantiate_decl (callee);
+	  {
+	    /* At the end of the translation unit (the drain of the
+	       deferred checks, contracts_gimple_eager_check_drain_at_eof)
+	       front-end processing is over: instantiating a body then can
+	       constant-evaluate a function whose body cgraph no longer has.
+	       The call's check needs only the callee's contracts.  */
+	    if (at_eof >= 3)
+	      contract_prepare_callee_contracts (callee);
+	    else
+	      maybe_instantiate_decl (callee);
+	  }
       }
 
   /* Named-predicate and field/call-range facts get their own, separate
