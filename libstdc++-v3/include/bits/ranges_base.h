@@ -524,7 +524,7 @@ namespace ranges
 	{
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	  contract_assert<std::contracts::never_proven_conveyor_v>
-	    (std::is_object_address (&__t));
+	    (std::is_object_address (__builtin_addressof (__t)));
 #endif
 	  if constexpr (__member_data<_Tp>)
 	    return __t.data();
@@ -720,7 +720,8 @@ namespace ranges
       __possibly_const_range(_Range& __r) noexcept
       _GLIBCXX_CONVEYOR
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address(&__r))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__r)))
       // The return is always either '__r' itself or a const_cast of it --
       // never a reference to anything else -- so it's exactly as valid
       // an object address as '__r' already is, and (unlike when this
@@ -730,7 +731,8 @@ namespace ranges
       // sees straight through to '__r' directly. Real (conveyor_assert_v),
       // not never_proven -- see bits/move.h's own identical pair for why
       // the precondition just above is unaffected either way.
-      post<std::contracts::conveyor_assert_v>(r: std::is_object_address(&r))
+      post<std::contracts::conveyor_assert_v>
+	(r: std::is_object_address (__builtin_addressof (r)))
 #endif
       {
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS

@@ -176,7 +176,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX23_CONSTEXPR
       __uniq_ptr_impl(__uniq_ptr_impl&& __u) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__u))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__u)))
 #endif
       : _M_t(std::move(__u._M_t))
       { __u._M_ptr() = nullptr; }
@@ -186,7 +187,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this) && std::is_object_address (&__u));
+	  (std::is_object_address (this)
+	   && std::is_object_address (__builtin_addressof (__u)));
 #endif
 	reset(__u.release());
 	_M_deleter() = std::forward<_Dp>(__u._M_deleter());
@@ -197,7 +199,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       pointer&   _M_ptr() noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+      post<std::contracts::never_proven_conveyor_v>
+	(r: std::is_object_address (__builtin_addressof (r)))
 #endif
       { return std::get<0>(_M_t); }
       _GLIBCXX23_CONSTEXPR
@@ -210,7 +213,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _Dp&       _M_deleter() noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+      post<std::contracts::never_proven_conveyor_v>
+	(r: std::is_object_address (__builtin_addressof (r)))
 #endif
       { return std::get<1>(_M_t); }
       _GLIBCXX23_CONSTEXPR
@@ -251,7 +255,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this) && std::is_object_address (&__rhs));
+	  (std::is_object_address (this)
+	   && std::is_object_address (__builtin_addressof (__rhs)));
 #endif
 	using std::swap;
 	swap(this->_M_ptr(), __rhs._M_ptr());

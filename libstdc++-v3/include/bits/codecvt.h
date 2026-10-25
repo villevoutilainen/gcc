@@ -720,7 +720,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       explicit
       codecvt_byname(const string& __s, size_t __refs = 0)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__s))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__s)))
 #endif
       : codecvt_byname(__s.c_str(), __refs) { }
 #endif
@@ -743,7 +744,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       explicit
       codecvt_byname(const string& __s, size_t __refs = 0)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__s))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__s)))
 #endif
       : codecvt_byname(__s.c_str(), __refs) { }
 
@@ -764,7 +766,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       explicit
       codecvt_byname(const string& __s, size_t __refs = 0)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__s))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__s)))
 #endif
       : codecvt_byname(__s.c_str(), __refs) { }
 
@@ -786,7 +789,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       explicit
       codecvt_byname(const string& __s, size_t __refs = 0)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__s))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__s)))
 #endif
       : codecvt_byname(__s.c_str(), __refs) { }
 
@@ -807,7 +811,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       explicit
       codecvt_byname(const string& __s, size_t __refs = 0)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__s))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__s)))
 #endif
       : codecvt_byname(__s.c_str(), __refs) { }
 

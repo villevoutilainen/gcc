@@ -1001,7 +1001,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  using _Sp_cp_type = _Sp_counted_ptr_inplace<_Tp2, _Alloc, _Lp>;
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	  contract_assert<std::contracts::never_proven_conveyor_v>
-	    (std::is_object_address (&__a._M_a));
+	    (std::is_object_address (__builtin_addressof (__a._M_a)));
 #endif
 	  typename _Sp_cp_type::__allocator_type __a2(__a._M_a);
 	  auto __guard = std::__allocate_guarded(__a2);
@@ -1756,7 +1756,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this) && std::is_object_address (&__other));
+	  (std::is_object_address (this)
+	   && std::is_object_address (__builtin_addressof (__other)));
 #endif
 	std::swap(_M_ptr, __other._M_ptr);
 	_M_refcount._M_swap(__other._M_refcount);
@@ -2149,7 +2150,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       __weak_ptr(__weak_ptr&& __r) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__r))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__r)))
 #endif
       : _M_ptr(__r._M_ptr), _M_refcount(std::move(__r._M_refcount))
       { __r._M_ptr = nullptr; }
@@ -2185,7 +2187,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this) && std::is_object_address (&__r));
+	  (std::is_object_address (this)
+	   && std::is_object_address (__builtin_addressof (__r)));
 #endif
 	__weak_ptr(std::move(__r)).swap(*this);
 	return *this;
@@ -2246,7 +2249,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this) && std::is_object_address (&__s));
+	  (std::is_object_address (this)
+	   && std::is_object_address (__builtin_addressof (__s)));
 #endif
 	std::swap(_M_ptr, __s._M_ptr);
 	_M_refcount._M_swap(__s._M_refcount);

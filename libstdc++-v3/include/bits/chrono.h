@@ -215,7 +215,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	    contract_assert<std::contracts::never_proven_conveyor_v>
-	      (std::is_object_address (&__d));
+	      (std::is_object_address (__builtin_addressof (__d)));
 #endif
 	    typedef typename _ToDur::rep			__to_rep;
 	    return _ToDur(static_cast<__to_rep>(
@@ -232,7 +232,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	    contract_assert<std::contracts::never_proven_conveyor_v>
-	      (std::is_object_address (&__d));
+	      (std::is_object_address (__builtin_addressof (__d)));
 #endif
 	    typedef typename _ToDur::rep			__to_rep;
 	    return _ToDur(static_cast<__to_rep>(

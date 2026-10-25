@@ -322,7 +322,8 @@ namespace __detail
 
     path(path&& __p) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__p))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__p)))
 #endif
     : _M_pathname(std::move(__p._M_pathname)),
       _M_cmpts(std::move(__p._M_cmpts))
@@ -330,7 +331,8 @@ namespace __detail
 
     path(string_type&& __source, format = auto_format)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__source))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__source)))
 #endif
     : _M_pathname(std::move(__source))
     { _M_split_cmpts(); }
@@ -370,19 +372,19 @@ namespace __detail
     path& operator=(path&& __p) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
-      && std::is_object_address (&__p))
+      && std::is_object_address (__builtin_addressof (__p)))
 #endif
     ;
     path& operator=(string_type&& __source)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
-      && std::is_object_address (&__source))
+      && std::is_object_address (__builtin_addressof (__source)))
 #endif
     ;
     path& assign(string_type&& __source)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
-      && std::is_object_address (&__source))
+      && std::is_object_address (__builtin_addressof (__source)))
 #endif
     ;
 
@@ -435,7 +437,7 @@ namespace __detail
     path& operator+=(const string_type& __x)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
-      && std::is_object_address (&__x))
+      && std::is_object_address (__builtin_addressof (__x)))
 #endif
     ;
     path& operator+=(const value_type* __x);
@@ -482,7 +484,7 @@ namespace __detail
     void swap(path& __rhs) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
-      && std::is_object_address (&__rhs))
+      && std::is_object_address (__builtin_addressof (__rhs)))
 #endif
     ;
 
@@ -491,7 +493,8 @@ namespace __detail
     const string_type&  native() const noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+    post<std::contracts::never_proven_conveyor_v>
+      (r: std::is_object_address (__builtin_addressof (r)))
 #endif
     { return _M_pathname; }
     const value_type*   c_str() const noexcept
@@ -511,7 +514,7 @@ namespace __detail
       string(const _Allocator& __a = _Allocator()) const
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
-	&& std::is_object_address (&__a))
+	&& std::is_object_address (__builtin_addressof (__a)))
 #endif
       ;
 
@@ -572,7 +575,7 @@ namespace __detail
       generic_string(const _Allocator& __a = _Allocator()) const
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
-	&& std::is_object_address (&__a))
+	&& std::is_object_address (__builtin_addressof (__a)))
 #endif
       ;
 
@@ -631,7 +634,8 @@ namespace __detail
     int compare(const path& __p) const noexcept;
     int compare(const string_type& __s) const noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__s))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__s)))
 #endif
     ;
     int compare(const value_type* __s) const noexcept;
@@ -746,7 +750,8 @@ namespace __detail
     /// Append one path to another
     friend path operator/(const path& __lhs, const path& __rhs)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__lhs))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__lhs)))
 #endif
     {
       path __result(__lhs);
@@ -821,7 +826,8 @@ namespace __detail
       static basic_string<_CharT, _Traits, _Allocator>
       _S_str_convert(basic_string_view<value_type>, const _Allocator& __a)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       ;
 
@@ -898,8 +904,9 @@ namespace __detail
 
   inline void swap(path& __lhs, path& __rhs) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__lhs)
-    && std::is_object_address (&__rhs))
+  pre<std::contracts::never_proven_conveyor_v>
+    (std::is_object_address (__builtin_addressof (__lhs))
+    && std::is_object_address (__builtin_addressof (__rhs)))
 #endif
   { __lhs.swap(__rhs); }
 
@@ -1123,7 +1130,8 @@ namespace __detail
 
     reference operator*() const noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+    post<std::contracts::never_proven_conveyor_v>
+      (r: std::is_object_address (__builtin_addressof (r)))
 #endif
     ;
     pointer   operator->() const noexcept
@@ -1235,7 +1243,7 @@ namespace __detail
   path::operator+=(const string_type& __x)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
   pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
-    && std::is_object_address (&__x))
+    && std::is_object_address (__builtin_addressof (__x)))
 #endif
   {
     _M_concat(__x);
@@ -1288,7 +1296,7 @@ namespace __detail
   inline void path::swap(path& __rhs) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
   pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
-    && std::is_object_address (&__rhs))
+    && std::is_object_address (__builtin_addressof (__rhs)))
 #endif
   {
     _M_pathname.swap(__rhs._M_pathname);
@@ -1301,7 +1309,8 @@ namespace __detail
     path::_S_str_convert(basic_string_view<value_type> __str,
 			 const _Allocator& __a)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__a)))
 #endif
     {
       static_assert(!is_same_v<_CharT, value_type>);
@@ -1356,7 +1365,7 @@ namespace __detail
     path::string(const _Allocator& __a) const
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
-      && std::is_object_address (&__a))
+      && std::is_object_address (__builtin_addressof (__a)))
 #endif
     {
       if constexpr (is_same_v<_CharT, value_type>)
@@ -1452,7 +1461,7 @@ namespace __detail
     path::generic_string(const _Allocator& __a) const
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
-      && std::is_object_address (&__a))
+      && std::is_object_address (__builtin_addressof (__a)))
 #endif
     {
 #ifdef _GLIBCXX_FILESYSTEM_IS_WINDOWS
@@ -1483,7 +1492,7 @@ namespace __detail
 		__str += __slash;
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	      contract_assert<std::contracts::never_proven_conveyor_v>
-		(std::is_object_address (&__elem));
+		(std::is_object_address (__builtin_addressof (__elem)));
 #endif
 	      __str += basic_string_view<value_type>(__elem._M_pathname);
 	      __add_slash = __elem._M_type() == _Type::_Filename;
@@ -1569,7 +1578,8 @@ namespace __detail
   inline int
   path::compare(const string_type& __s) const noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__s))
+  pre<std::contracts::never_proven_conveyor_v>
+    (std::is_object_address (__builtin_addressof (__s)))
 #endif
   { return compare(basic_string_view<value_type>(__s)); }
 
@@ -1715,7 +1725,8 @@ namespace __detail
   inline path::iterator::reference
   path::iterator::operator*() const noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+  post<std::contracts::never_proven_conveyor_v>
+    (r: std::is_object_address (__builtin_addressof (r)))
 #endif
   {
     __glibcxx_assert(_M_path != nullptr);

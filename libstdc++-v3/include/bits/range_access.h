@@ -406,7 +406,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (&__cont));
+	(std::is_object_address (__builtin_addressof (__cont)));
 #endif
       using type = make_signed_t<decltype(__cont.size())>;
       return static_cast<common_type_t<ptrdiff_t, type>>(__cont.size());

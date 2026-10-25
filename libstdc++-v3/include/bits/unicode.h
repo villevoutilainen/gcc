@@ -265,7 +265,8 @@ namespace __unicode
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (&__lhs) && std::is_object_address (&__rhs));
+	  (std::is_object_address (__builtin_addressof (__lhs))
+	   && std::is_object_address (__builtin_addressof (__rhs)));
 #endif
 	if constexpr (forward_iterator<_Iter>)
 	  return __lhs._M_curr() == __rhs._M_curr()
@@ -707,7 +708,8 @@ namespace __unicode
       _M_curr()
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+      post<std::contracts::never_proven_conveyor_v>
+	(r: std::is_object_address (__builtin_addressof (r)))
 #endif
       { return _M_first_and_curr._M_curr; }
 
