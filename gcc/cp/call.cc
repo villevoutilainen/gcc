@@ -11114,6 +11114,7 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
      different, broader rule than check_conveyor_function_body_r's own
      narrow, name-based ban on std::unreachable() specifically, which is
      unaffected by this check and still applies independently.  */
+  conveyor_violation_scope cvs;
   if (conveyor_restrictions_active_p ())
     {
       /* D4324: force a still-undecided 'conveyor(auto)' FN's deduction
@@ -11136,11 +11137,14 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
 	    note_conveyor_auto_violation ();
 	  else
 	    {
-	      conveyor_error_at (input_location, "call to %qD, which is not "
-				 "declared %<conveyor%>, not permitted in a "
-				 "conveyor function or predicate", fn);
-	      return error_mark_node;
+	      conveyor_rule_error_at (input_location, "call to %qD, which is "
+				      "not declared %<conveyor%>, not "
+				      "permitted in a conveyor function or "
+				      "predicate", fn);
+	      if (contract_condition_conveyor_p)
+		return error_mark_node;
 	    }
+	  cvs.violated ();
 	}
     }
 

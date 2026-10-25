@@ -1161,31 +1161,27 @@ public:
    deduction attempt's own "did we find a violation" flag.  Every one
    of conveyor_restrictions_active_p's many scattered callers is
    expected to check conveyor_auto_probing_p () itself and, if true,
-   call note_conveyor_auto_violation () instead of diagnosing and
-   poisoning the expression -- a conveyor(auto) instantiation whose
-   body happens to violate a mandatory rule must still build as an
-   ordinary, ill-conveyor-but-otherwise-valid function: banning
-   reinterpret_cast, for instance, doesn't stop it from being
-   perfectly valid C++, just conveyor-incompatible C++, so there is
-   nothing to poison in the AST built for the surrounding, non-probing
-   compilation to see.  The usual shape at each call site is:
+   call note_conveyor_auto_violation () instead of diagnosing.  The usual
+   shape at each call site is:
 
      if (conveyor_restrictions_active_p ())
        {
 	 if (conveyor_auto_probing_p ())
 	   note_conveyor_auto_violation ();
 	 else
-	   {
-	     error_at (loc, "...");
-	     return error_mark_node;
-	   }
+	   conveyor_error_at (loc, "...");
        }
 
-   i.e. the existing diagnose-and-poison block is untouched; only a
-   probing early-out is added in front of it.  The error is given
-   regardless of the caller's tsubst_flags: outside conveyor(auto)
-   deduction a conveyor violation is never a substitution failure, so it
-   must not silently remove an overload candidate or fail a constraint.  */
+   and either way the expression is then built as usual: banning
+   reinterpret_cast, for instance, doesn't stop it from being perfectly
+   valid C++, just conveyor-incompatible C++, so there is nothing to
+   poison -- a conveyor(auto) instantiation whose body violates a rule
+   must still build as an ordinary function, and an error node elsewhere
+   would only give follow-on errors (an invalid deduced return type, a
+   constraint turned false).  The error is given regardless of the
+   caller's tsubst_flags: outside conveyor(auto) deduction a conveyor
+   violation is never a substitution failure, so it must not silently
+   remove an overload candidate or fail a constraint.  */
 extern bool *conveyor_auto_probe_violation_p;
 
 /* The number of errors given for violations of the conveyor rules
@@ -1201,6 +1197,38 @@ extern void conveyor_error_at (location_t, const char *, ...)
   ATTRIBUTE_GCC_DIAG (2,3);
 extern void conveyor_error_valist (location_t, const char *, va_list *)
   ATTRIBUTE_GCC_DIAG (2,0);
+extern void conveyor_rule_error_at (location_t, const char *, ...)
+  ATTRIBUTE_GCC_DIAG (2,3);
+extern bool conveyor_rule_rejected_p (tree);
+
+/* Set while the rest of a construct already diagnosed as violating the
+   conveyor rules is built; see conveyor_violation_scope.  */
+extern bool suppress_conveyor_restrictions_after_violation_p;
+
+/* RAII scope for building a construct the conveyor rules may forbid:
+   once VIOLATED, the rest of it is built without them, so that e.g. a
+   rejected new-expression's own operator new and operator delete calls
+   aren't reported as violations too.  */
+class conveyor_violation_scope
+{
+  bool saved;
+  bool active = false;
+
+public:
+  conveyor_violation_scope ()
+    : saved (suppress_conveyor_restrictions_after_violation_p)
+  { }
+  void violated ()
+  {
+    active = true;
+    suppress_conveyor_restrictions_after_violation_p = true;
+  }
+  ~conveyor_violation_scope ()
+  {
+    if (active)
+      suppress_conveyor_restrictions_after_violation_p = saved;
+  }
+};
 
 /* The conveyor(auto) specialization whose deduction the active probe is
    deciding, if the probe was started by that deduction; see
@@ -1303,7 +1331,7 @@ extern bool suppress_conveyor_restrictions_for_trait_query_p;
    absorbed into the other function's deduction.  */
 class conveyor_instantiation_context_sentinel
 {
-  bool saved_trait, saved_cce, saved_dtor, saved_condition;
+  bool saved_trait, saved_cce, saved_dtor, saved_violation, saved_condition;
   conveyor_auto_probe_sentinel probe;
 
 public:
@@ -1311,12 +1339,14 @@ public:
     : saved_trait (suppress_conveyor_restrictions_for_trait_query_p),
       saved_cce (suppress_conveyor_restrictions_for_converted_constant_expr_p),
       saved_dtor (suppress_conveyor_restrictions_for_deleting_dtor_p),
+      saved_violation (suppress_conveyor_restrictions_after_violation_p),
       saved_condition (contract_condition_conveyor_p),
       probe (nullptr, conveyor_auto_probe_decl != d)
   {
     suppress_conveyor_restrictions_for_trait_query_p = false;
     suppress_conveyor_restrictions_for_converted_constant_expr_p = false;
     suppress_conveyor_restrictions_for_deleting_dtor_p = false;
+    suppress_conveyor_restrictions_after_violation_p = false;
     contract_condition_conveyor_p = false;
   }
   ~conveyor_instantiation_context_sentinel ()
@@ -1324,6 +1354,7 @@ public:
     suppress_conveyor_restrictions_for_trait_query_p = saved_trait;
     suppress_conveyor_restrictions_for_converted_constant_expr_p = saved_cce;
     suppress_conveyor_restrictions_for_deleting_dtor_p = saved_dtor;
+    suppress_conveyor_restrictions_after_violation_p = saved_violation;
     contract_condition_conveyor_p = saved_condition;
   }
 };

@@ -1201,9 +1201,10 @@ check_narrowing (tree type, tree init, tsubst_flags_t complain,
 	  else
 	    {
 	      if (complain & tf_error)
-		conveyor_error_at (loc, "narrowing conversion of %qE from %qH "
-				   "to %qI not permitted in a conveyor "
-				   "function or predicate", init, ftype, type);
+		conveyor_rule_error_at (loc, "narrowing conversion of %qE "
+					"from %qH to %qI not permitted in a "
+					"conveyor function or predicate", init,
+					ftype, type);
 	      return false;
 	    }
 	}

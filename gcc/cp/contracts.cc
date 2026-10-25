@@ -938,11 +938,26 @@ bool *conveyor_auto_probe_violation_p = nullptr;
 /* See contracts.h.  */
 int conveyor_errorcount;
 
-/* Emit the error GMSGID with AP at LOC for a violation of the conveyor
-   rules, counting it in conveyor_errorcount.  */
+/* See contracts.h.  */
+bool suppress_conveyor_restrictions_after_violation_p = false;
 
-void
-conveyor_error_valist (location_t loc, const char *gmsgid, va_list *ap)
+/* The DECL_UIDs of the functions a conveyor rule violation was reported
+   in (conveyor_rule_error_at).  */
+static hash_set<int_hash<int, -1, -2>> *conveyor_rule_rejected_uids;
+
+/* The function whose body or contract is being checked right now.  */
+
+static tree
+conveyor_error_function ()
+{
+  return cfun ? cfun->decl : current_function_decl;
+}
+
+/* Emit the error GMSGID with AP at LOC, counting it in
+   conveyor_errorcount.  */
+
+static void ATTRIBUTE_GCC_DIAG (2,0)
+conveyor_emit_error (location_t loc, const char *gmsgid, va_list *ap)
 {
   auto_diagnostic_group d;
   int before = errorcount;
@@ -951,8 +966,32 @@ conveyor_error_valist (location_t loc, const char *gmsgid, va_list *ap)
   conveyor_errorcount += errorcount - before;
 }
 
-/* error_at for a violation of the conveyor rules; see
-   conveyor_errorcount.  */
+/* True if a conveyor rule violation was reported in FN
+   (conveyor_rule_error_at).  */
+
+bool
+conveyor_rule_rejected_p (tree fn)
+{
+  return (conveyor_rule_rejected_uids
+	  && conveyor_rule_rejected_uids->contains (DECL_UID (fn)));
+}
+
+/* An analysis error (the engines' conveyor and proof checks) with AP at
+   LOC; see conveyor_errorcount.  Not given for a function that broke a
+   conveyor rule: it is rejected already, and its analysis would only be
+   about the forbidden constructs (a new-expression's result not provably
+   valid, say).  */
+
+void
+conveyor_error_valist (location_t loc, const char *gmsgid, va_list *ap)
+{
+  tree fn = conveyor_error_function ();
+  if (fn && conveyor_rule_rejected_p (fn))
+    return;
+  conveyor_emit_error (loc, gmsgid, ap);
+}
+
+/* error_at for conveyor_error_valist.  */
 
 void
 conveyor_error_at (location_t loc, const char *gmsgid, ...)
@@ -960,6 +999,44 @@ conveyor_error_at (location_t loc, const char *gmsgid, ...)
   va_list ap;
   va_start (ap, gmsgid);
   conveyor_error_valist (loc, gmsgid, &ap);
+  va_end (ap);
+}
+
+/* The source lines a conveyor rule violation was reported on
+   (conveyor_rule_error_at), as "file:line" identifiers.  */
+static hash_set<nofree_string_hash> *conveyor_rule_error_lines;
+
+/* error_at for a violation of the conveyor rules themselves (a forbidden
+   construct, found as it is built); see conveyor_errorcount and
+   conveyor_error_valist.  Reported once per source line: the construct
+   is still built, so what it is built from can trip the rules again -- a
+   rejected explicit destructor call's call to the destructor, or each
+   instantiation of a template whose definition was already diagnosed.  */
+
+void
+conveyor_rule_error_at (location_t loc, const char *gmsgid, ...)
+{
+  if (tree fn = conveyor_error_function ())
+    {
+      if (!conveyor_rule_rejected_uids)
+	conveyor_rule_rejected_uids = new hash_set<int_hash<int, -1, -2>>;
+      conveyor_rule_rejected_uids->add (DECL_UID (fn));
+    }
+  expanded_location xloc = expand_location (loc);
+  if (xloc.file)
+    {
+      char *key = xasprintf ("%s:%d", xloc.file, xloc.line);
+      if (!conveyor_rule_error_lines)
+	conveyor_rule_error_lines = new hash_set<nofree_string_hash>;
+      if (conveyor_rule_error_lines->add (key))
+	{
+	  free (key);
+	  return;
+	}
+    }
+  va_list ap;
+  va_start (ap, gmsgid);
+  conveyor_emit_error (loc, gmsgid, &ap);
   va_end (ap);
 }
 
@@ -984,6 +1061,8 @@ conveyor_restrictions_active_p ()
   if (suppress_conveyor_restrictions_for_converted_constant_expr_p)
     return false;
   if (suppress_conveyor_restrictions_for_deleting_dtor_p)
+    return false;
+  if (suppress_conveyor_restrictions_after_violation_p)
     return false;
   /* None of these checks exist to reject code that can never actually
      execute: they exist to prove the code that *does* run at runtime is

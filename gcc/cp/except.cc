@@ -634,16 +634,19 @@ build_throw (location_t loc, tree exp, tsubst_flags_t complain)
   if (exp == error_mark_node)
     return exp;
 
+  conveyor_violation_scope cvs;
   if (conveyor_restrictions_active_p ())
     {
       if (conveyor_auto_probing_p ())
 	note_conveyor_auto_violation ();
       else
 	{
-	  conveyor_error_at (loc, "%<throw%>-expression not permitted in a "
-			     "conveyor function or predicate");
-	  return error_mark_node;
+	  conveyor_rule_error_at (loc, "%<throw%>-expression not permitted in "
+				  "a conveyor function or predicate");
+	  if (contract_condition_conveyor_p)
+	    return error_mark_node;
 	}
+      cvs.violated ();
     }
 
   if (processing_template_decl)

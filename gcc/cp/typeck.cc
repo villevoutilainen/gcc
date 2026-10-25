@@ -3222,16 +3222,20 @@ lookup_destructor (tree object, tree scope, tree dtor_name,
 
   /* D4324: an explicit destructor call (as opposed to an implicit one at
      scope exit) is not permitted in a conveyor function or predicate.  */
+  conveyor_violation_scope cvs;
   if (conveyor_restrictions_active_p ())
     {
       if (conveyor_auto_probing_p ())
 	note_conveyor_auto_violation ();
       else
 	{
-	  conveyor_error_at (input_location, "explicit destructor call not "
-			     "permitted in a conveyor function or predicate");
-	  return error_mark_node;
+	  conveyor_rule_error_at (input_location, "explicit destructor call "
+				  "not permitted in a conveyor function or "
+				  "predicate");
+	  if (contract_condition_conveyor_p)
+	    return error_mark_node;
 	}
+      cvs.violated ();
     }
 
   if (scope && !check_dtor_name (scope, dtor_type))
@@ -4792,6 +4796,7 @@ cp_build_function_call_vec (tree function, vec<tree, va_gc> **params,
      ordinary case -- reachable when overload resolution's own general
      path didn't handle this call (see finish_call_expr's own fallback to
      this function), not just when it's genuinely unresolvable.  */
+  conveyor_violation_scope cvs;
   if (conveyor_restrictions_active_p ())
     {
       /* D4324: see build_over_call's own identical comment (call.cc) --
@@ -4807,12 +4812,14 @@ cp_build_function_call_vec (tree function, vec<tree, va_gc> **params,
 	    note_conveyor_auto_violation ();
 	  else
 	    {
-	      conveyor_error_at (input_location, "call through a function "
-				 "pointer or pointer to member function not "
-				 "permitted in a conveyor function or "
-				 "predicate");
-	      return error_mark_node;
+	      conveyor_rule_error_at (input_location, "call through a "
+				      "function pointer or pointer to member "
+				      "function not permitted in a conveyor "
+				      "function or predicate");
+	      if (contract_condition_conveyor_p)
+		return error_mark_node;
 	    }
+	  cvs.violated ();
 	}
       else if (!fndecl_built_in_p (fndecl) && !DECL_DECLARED_CONVEYOR_P (fndecl)
 	       && !is_object_address_fndecl_p (fndecl)
@@ -4822,11 +4829,14 @@ cp_build_function_call_vec (tree function, vec<tree, va_gc> **params,
 	    note_conveyor_auto_violation ();
 	  else
 	    {
-	      conveyor_error_at (input_location, "call to %qD, which is not "
-				 "declared %<conveyor%>, not permitted in a "
-				 "conveyor function or predicate", fndecl);
-	      return error_mark_node;
+	      conveyor_rule_error_at (input_location, "call to %qD, which is "
+				      "not declared %<conveyor%>, not "
+				      "permitted in a conveyor function or "
+				      "predicate", fndecl);
+	      if (contract_condition_conveyor_p)
+		return error_mark_node;
 	    }
+	  cvs.violated ();
 	}
     }
 
@@ -6566,10 +6576,11 @@ cp_build_binary_op (const op_location_t &location,
 	    note_conveyor_auto_violation ();
 	  else
 	    {
-	      conveyor_error_at (location, "pointer relational comparison not "
-				 "permitted in a conveyor function or "
-				 "predicate");
-	      return error_mark_node;
+	      conveyor_rule_error_at (location, "pointer relational comparison "
+				      "not permitted in a conveyor function or "
+				      "predicate");
+	      if (contract_condition_conveyor_p)
+		return error_mark_node;
 	    }
 	}
       if (TREE_CODE (orig_op0) == STRING_CST
@@ -8987,6 +8998,7 @@ build_static_cast_1 (location_t loc, tree type, tree expr, bool c_cast_p,
 	 here -- confirmed via a real regression (std::strong_ordering's
 	 own 'return __v;', __v already exactly strong_ordering) once
 	 this exclusion was missing.  */
+      conveyor_violation_scope cvs;
       if (conveyor_restrictions_active_p ()
 	  && !same_type_ignoring_top_level_qualifiers_p (intype, TREE_TYPE (type)))
 	{
@@ -8994,11 +9006,14 @@ build_static_cast_1 (location_t loc, tree type, tree expr, bool c_cast_p,
 	    note_conveyor_auto_violation ();
 	  else
 	    {
-	      conveyor_error_at (loc, "%<static_cast%> performing a "
-				 "base-to-derived conversion not permitted "
-				 "in a conveyor function or predicate");
-	      return error_mark_node;
+	      conveyor_rule_error_at (loc, "%<static_cast%> performing a "
+				      "base-to-derived conversion not "
+				      "permitted in a conveyor function or "
+				      "predicate");
+	      if (contract_condition_conveyor_p)
+		return error_mark_node;
 	    }
+	  cvs.violated ();
 	}
 
       if (processing_template_decl)
@@ -9207,6 +9222,7 @@ build_static_cast_1 (location_t loc, tree type, tree expr, bool c_cast_p,
 	 same-type check compares them directly, not via TREE_TYPE. See
 	 the reference-cast branch's own comment for why this must be
 	 excluded from the conveyor restriction.  */
+      conveyor_violation_scope cvs;
       if (conveyor_restrictions_active_p ()
 	  && !same_type_ignoring_top_level_qualifiers_p (intype, type))
 	{
@@ -9214,11 +9230,14 @@ build_static_cast_1 (location_t loc, tree type, tree expr, bool c_cast_p,
 	    note_conveyor_auto_violation ();
 	  else
 	    {
-	      conveyor_error_at (loc, "%<static_cast%> performing a "
-				 "base-to-derived conversion not permitted "
-				 "in a conveyor function or predicate");
-	      return error_mark_node;
+	      conveyor_rule_error_at (loc, "%<static_cast%> performing a "
+				      "base-to-derived conversion not "
+				      "permitted in a conveyor function or "
+				      "predicate");
+	      if (contract_condition_conveyor_p)
+		return error_mark_node;
 	    }
+	  cvs.violated ();
 	}
 
       if (processing_template_decl)
@@ -9661,16 +9680,19 @@ build_reinterpret_cast (location_t loc, tree type, tree expr,
   if (type == error_mark_node || expr == error_mark_node)
     return error_mark_node;
 
+  conveyor_violation_scope cvs;
   if (conveyor_restrictions_active_p ())
     {
       if (conveyor_auto_probing_p ())
 	note_conveyor_auto_violation ();
       else
 	{
-	  conveyor_error_at (loc, "%<reinterpret_cast%> not permitted in a "
-			     "conveyor function or predicate");
-	  return error_mark_node;
+	  conveyor_rule_error_at (loc, "%<reinterpret_cast%> not permitted in "
+				  "a conveyor function or predicate");
+	  if (contract_condition_conveyor_p)
+	    return error_mark_node;
 	}
+      cvs.violated ();
     }
 
   /* P3446R0/P4296R0, Phase 7a Negative Baseline (S7.2's

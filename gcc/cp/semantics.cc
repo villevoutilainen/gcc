@@ -3795,16 +3795,19 @@ finish_pseudo_destructor_expr (tree object, tree scope, tree destructor,
 
   /* D4324: a pseudo-destructor call is not permitted in a conveyor
      function or predicate.  */
+  conveyor_violation_scope cvs;
   if (conveyor_restrictions_active_p ())
     {
       if (conveyor_auto_probing_p ())
 	note_conveyor_auto_violation ();
       else
 	{
-	  conveyor_error_at (loc, "pseudo-destructor call not permitted in a "
-			     "conveyor function or predicate");
-	  return error_mark_node;
+	  conveyor_rule_error_at (loc, "pseudo-destructor call not permitted "
+				  "in a conveyor function or predicate");
+	  if (contract_condition_conveyor_p)
+	    return error_mark_node;
 	}
+      cvs.violated ();
     }
 
   if (!processing_template_decl)
@@ -5123,6 +5126,7 @@ finish_id_expression_1 (tree id_expression,
 	 mutable state outside the conveyor's own cone of evaluation.  Local
 	 variables and parameters (DECL_FUNCTION_SCOPE_P) are never
 	 restricted here.  */
+      conveyor_violation_scope cvs;
       if (VAR_P (decl)
 	  && conveyor_restrictions_active_p ()
 	  && (DECL_THREAD_LOCAL_P (decl)
@@ -5134,16 +5138,19 @@ finish_id_expression_1 (tree id_expression,
 	  else
 	    {
 	      if (DECL_THREAD_LOCAL_P (decl))
-		conveyor_error_at (input_location, "use of %<thread_local%> "
-				   "variable %qD not permitted in a conveyor "
-				   "function or predicate", decl);
+		conveyor_rule_error_at (input_location, "use of "
+					"%<thread_local%> variable %qD not "
+					"permitted in a conveyor function or "
+					"predicate", decl);
 	      else
-		conveyor_error_at (input_location, "use of non-const variable "
-				   "%qD with static storage duration not "
-				   "permitted in a conveyor function or "
-				   "predicate", decl);
-	      return error_mark_node;
+		conveyor_rule_error_at (input_location, "use of non-const "
+					"variable %qD with static storage "
+					"duration not permitted in a "
+					"conveyor function or predicate", decl);
+	      if (contract_condition_conveyor_p)
+		return error_mark_node;
 	    }
+	  cvs.violated ();
 	}
 
       /* Only certain kinds of names are allowed in constant

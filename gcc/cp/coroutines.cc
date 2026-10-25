@@ -1591,16 +1591,19 @@ finish_co_await_expr (location_t kw, tree expr)
   if (!expr || error_operand_p (expr))
     return error_mark_node;
 
+  conveyor_violation_scope cvs;
   if (conveyor_restrictions_active_p ())
     {
       if (conveyor_auto_probing_p ())
 	note_conveyor_auto_violation ();
       else
 	{
-	  conveyor_error_at (kw, "%<co_await%>-expression not permitted in a "
-			     "conveyor function or predicate");
-	  return error_mark_node;
+	  conveyor_rule_error_at (kw, "%<co_await%>-expression not permitted "
+				  "in a conveyor function or predicate");
+	  if (contract_condition_conveyor_p)
+	    return error_mark_node;
 	}
+      cvs.violated ();
     }
 
   if (cp_unevaluated_operand)
