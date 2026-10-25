@@ -50,6 +50,15 @@ struct It
 };
 long use (It<int> a, It<int> b) { return a - b; }
 
+// A bound the assertion leaves open is the type's own: an unsigned U
+// asserted below 64 is in [0, 63].
+long
+type_bound (long n, unsigned u) conveyor
+{
+  contract_assert<never_proven_conveyor_v> (n >= -1000 && n <= 1000 && u < 64);
+  return n * 64 - u;
+}
+
 long
 too_wide (long n) conveyor
 {
