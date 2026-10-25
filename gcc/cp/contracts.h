@@ -1323,39 +1323,47 @@ public:
   }
 };
 
-/* D4324: a default member initializer is built -- parsed, or instantiated
-   for a class template specialization -- once, outside any constructor,
-   and then spliced as it is into every constructor or aggregate
-   initialization that uses it, so the conveyor rules checked as a
-   construct is built never see it in a conveyor function.  It is
-   therefore built under a probe of its own (conveyor_nsdmi_probe): with
-   the rules active, as if in a conveyor function, but a violation only
-   marks the member (conveyor_nsdmi_violates_p).  A use of the initializer
-   in a conveyor function is then that violation
-   (conveyor_check_nsdmi_use), and a defaulted constructor using it isn't
-   conveyor.  CONVEYOR_NSDMI_PROBE_P is set while such a probe runs and
-   CONVEYOR_NSDMI_PROBE_FUNCTION is the function current when it started:
-   the rules apply to the initializer itself, not to a lambda body in it
-   or another function its building instantiates.  */
-extern bool conveyor_nsdmi_probe_p;
-extern tree conveyor_nsdmi_probe_function;
+/* D4324: a default member initializer or a default argument is built --
+   parsed, or instantiated for a template specialization -- once, outside
+   the function it is evaluated in, and then spliced as it is into every
+   constructor, aggregate initialization or call that uses it, so the
+   conveyor rules checked as a construct is built never see it there.  It
+   is therefore built under a probe of its own (conveyor_spliced_probe):
+   with the rules active, as if in a conveyor function, but a violation
+   is only recorded, for the initializer (conveyor_finish_nsdmi_probe,
+   conveyor_nsdmi_violates_p) or the default argument
+   (conveyor_note_default_arg_probe).  A use in a conveyor function is
+   then that violation (conveyor_check_nsdmi_use,
+   conveyor_check_default_arg_use); a use anywhere else isn't, the rules
+   not being about such code at all.  CONVEYOR_SPLICED_PROBE_P is set
+   while a probe runs and CONVEYOR_SPLICED_PROBE_FUNCTION is the function
+   current when it started: the rules apply to the expression itself, not
+   to a lambda body in it or another function its building
+   instantiates.  */
+extern bool conveyor_spliced_probe_p;
+extern tree conveyor_spliced_probe_function;
 
-class conveyor_nsdmi_probe
+class conveyor_spliced_probe
 {
-  tree field;
   bool violation = false;
   bool saved_p;
   tree saved_function;
   conveyor_auto_probe_sentinel probe;
 
 public:
-  explicit conveyor_nsdmi_probe (tree);
-  ~conveyor_nsdmi_probe ();
+  conveyor_spliced_probe ();
+  ~conveyor_spliced_probe ();
+  /* True if the expression built violated the rules.  */
+  bool violated () const { return violation; }
 };
 
+extern void conveyor_finish_nsdmi_probe (tree, const conveyor_spliced_probe &);
 extern bool conveyor_nsdmi_violates_p (tree);
 extern void conveyor_note_deduced_defaulted (tree);
 extern void conveyor_check_nsdmi_use (tree);
+extern void conveyor_note_default_arg_probe (tree,
+					     const conveyor_spliced_probe &);
+extern void conveyor_check_default_arg_use (tree, tree, int);
 
 /* Set while a contract control object's trait query is evaluated; see
    contracts.cc.  */
@@ -1375,7 +1383,7 @@ extern bool suppress_conveyor_restrictions_for_trait_query_p;
 class conveyor_instantiation_context_sentinel
 {
   bool saved_trait, saved_cce, saved_dtor, saved_violation, saved_condition;
-  bool saved_nsdmi;
+  bool saved_spliced;
   conveyor_auto_probe_sentinel probe;
 
 public:
@@ -1385,10 +1393,10 @@ public:
       saved_dtor (suppress_conveyor_restrictions_for_deleting_dtor_p),
       saved_violation (suppress_conveyor_restrictions_after_violation_p),
       saved_condition (contract_condition_conveyor_p),
-      saved_nsdmi (conveyor_nsdmi_probe_p),
+      saved_spliced (conveyor_spliced_probe_p),
       probe (nullptr, conveyor_auto_probe_decl != d)
   {
-    conveyor_nsdmi_probe_p = false;
+    conveyor_spliced_probe_p = false;
     suppress_conveyor_restrictions_for_trait_query_p = false;
     suppress_conveyor_restrictions_for_converted_constant_expr_p = false;
     suppress_conveyor_restrictions_for_deleting_dtor_p = false;
@@ -1402,7 +1410,7 @@ public:
     suppress_conveyor_restrictions_for_deleting_dtor_p = saved_dtor;
     suppress_conveyor_restrictions_after_violation_p = saved_violation;
     contract_condition_conveyor_p = saved_condition;
-    conveyor_nsdmi_probe_p = saved_nsdmi;
+    conveyor_spliced_probe_p = saved_spliced;
   }
 };
 

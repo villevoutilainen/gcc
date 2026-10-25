@@ -1087,8 +1087,8 @@ conveyor_restrictions_active_p ()
     return false;
   if (contract_condition_conveyor_p)
     return true;
-  if (conveyor_nsdmi_probe_p
-      && current_function_decl == conveyor_nsdmi_probe_function)
+  if (conveyor_spliced_probe_p
+      && current_function_decl == conveyor_spliced_probe_function)
     return true;
   if (current_function_decl
       && DECL_DECLARED_CONVEYOR_P (current_function_decl))
@@ -1097,29 +1097,39 @@ conveyor_restrictions_active_p ()
 }
 
 /* See contracts.h.  */
-bool conveyor_nsdmi_probe_p;
-tree conveyor_nsdmi_probe_function;
+bool conveyor_spliced_probe_p;
+tree conveyor_spliced_probe_function;
 
 /* The DECL_UIDs of the members whose default member initializer violates
    the conveyor rules.  */
 static hash_set<int_hash<int, -1, -2>> *conveyor_nsdmi_violating_uids;
 
-/* Start building FIELD's default member initializer under a probe of the
-   conveyor rules; only with control objects, where conveyor functions
-   exist, and not for a template's own initializer: its instantiations
-   are probed.  */
+/* The default arguments, as built, that violate the conveyor rules.  */
+static GTY(()) hash_set<tree> *conveyor_violating_default_args;
 
-conveyor_nsdmi_probe::conveyor_nsdmi_probe (tree field)
-  : field (field), saved_p (conveyor_nsdmi_probe_p),
-    saved_function (conveyor_nsdmi_probe_function),
+/* Start building an initializer or default argument under a probe of the
+   conveyor rules; only with control objects, where conveyor functions
+   exist, and not for a template's own: its instantiations are probed.  */
+
+conveyor_spliced_probe::conveyor_spliced_probe ()
+  : saved_p (conveyor_spliced_probe_p),
+    saved_function (conveyor_spliced_probe_function),
     probe (&violation, flag_contract_control_objects
 		       && !processing_template_decl)
 {
   if (probe.active)
     {
-      conveyor_nsdmi_probe_p = true;
-      conveyor_nsdmi_probe_function = current_function_decl;
+      conveyor_spliced_probe_p = true;
+      conveyor_spliced_probe_function = current_function_decl;
     }
+}
+
+conveyor_spliced_probe::~conveyor_spliced_probe ()
+{
+  if (!probe.active)
+    return;
+  conveyor_spliced_probe_p = saved_p;
+  conveyor_spliced_probe_function = saved_function;
 }
 
 /* The DECL_UIDs of the explicitly-defaulted special members that are
@@ -1136,13 +1146,13 @@ conveyor_note_deduced_defaulted (tree fn)
   conveyor_deduced_defaulted_uids->add (DECL_UID (fn));
 }
 
-conveyor_nsdmi_probe::~conveyor_nsdmi_probe ()
+/* FIELD's default member initializer was built under PROBE: record
+   whether it violates the conveyor rules.  */
+
+void
+conveyor_finish_nsdmi_probe (tree field, const conveyor_spliced_probe &probe)
 {
-  if (!probe.active)
-    return;
-  conveyor_nsdmi_probe_p = saved_p;
-  conveyor_nsdmi_probe_function = saved_function;
-  if (!violation)
+  if (!probe.violated ())
     return;
   if (!conveyor_nsdmi_violating_uids)
     conveyor_nsdmi_violating_uids = new hash_set<int_hash<int, -1, -2>>;
@@ -1184,14 +1194,16 @@ conveyor_nsdmi_violates_p (tree field)
 	  && conveyor_nsdmi_violating_uids->contains (DECL_UID (field)));
 }
 
-/* FIELD's default member initializer is used here, in a constructor or
-   an aggregate initialization: in a conveyor function, its violation of
-   the conveyor rules is one too.  */
+/* Something built under a conveyor_spliced_probe that violates the
+   conveyor rules is used here: in a conveyor function, report it with
+   GMSGID about ARG1 and ARG2 (or, in conveyor(auto) deduction, record
+   it), noting where it was declared, DECL.  */
 
-void
-conveyor_check_nsdmi_use (tree field)
+static void
+conveyor_check_spliced_use (const char *gmsgid, tree arg1, tree arg2,
+			    tree decl)
 {
-  if (!conveyor_nsdmi_violates_p (field) || !conveyor_restrictions_active_p ())
+  if (!conveyor_restrictions_active_p ())
     return;
   if (conveyor_auto_probing_p ())
     {
@@ -1200,17 +1212,65 @@ conveyor_check_nsdmi_use (tree field)
     }
   auto_diagnostic_group d;
   int before = errorcount;
-  conveyor_rule_error_at (input_location, "default member initializer for "
-			  "%qD, which violates the %<conveyor%> rules, not "
-			  "permitted in a conveyor function or predicate",
-			  field);
+  conveyor_rule_error_at (input_location, gmsgid, arg1, arg2);
   if (errorcount != before)
     {
-      inform (DECL_SOURCE_LOCATION (field), "declared here");
+      inform (DECL_SOURCE_LOCATION (decl), "declared here");
       if (current_function_decl)
 	inform (DECL_SOURCE_LOCATION (current_function_decl),
 		"used by %qD", current_function_decl);
     }
+}
+
+/* FIELD's default member initializer is used here, in a constructor or
+   an aggregate initialization: in a conveyor function, its violation of
+   the conveyor rules is one too.  */
+
+void
+conveyor_check_nsdmi_use (tree field)
+{
+  if (conveyor_nsdmi_violates_p (field))
+    conveyor_check_spliced_use (G_("default member initializer for %qD, "
+				   "which violates the %<conveyor%> rules, "
+				   "not permitted in a conveyor function or "
+				   "predicate"), field, NULL_TREE, field);
+}
+
+/* The default argument ARG was built under PROBE: record whether it
+   violates the conveyor rules.  */
+
+void
+conveyor_note_default_arg_probe (tree arg, const conveyor_spliced_probe &probe)
+{
+  if (!probe.violated () || !arg || arg == error_mark_node)
+    return;
+  if (!conveyor_violating_default_args)
+    conveyor_violating_default_args = hash_set<tree>::create_ggc (8);
+  conveyor_violating_default_args->add (arg);
+}
+
+/* The default argument ARG, as built, for parameter PARMNUM of FN is used
+   in a call here: it is evaluated by the caller, so in a conveyor
+   function its violation of the conveyor rules is one too.  Whether FN
+   is conveyor doesn't matter.  */
+
+void
+conveyor_check_default_arg_use (tree arg, tree fn, int parmnum)
+{
+  if (!conveyor_violating_default_args
+      || !conveyor_violating_default_args->contains (arg))
+    return;
+  tree parm = chain_index (parmnum, FUNCTION_FIRST_USER_PARM (fn));
+  if (parm)
+    conveyor_check_spliced_use (G_("default argument for %qD of %qD, which "
+				   "violates the %<conveyor%> rules, not "
+				   "permitted in a conveyor function or "
+				   "predicate"), parm, fn, parm);
+  else
+    conveyor_check_spliced_use (G_("default argument of %qD, which "
+				   "violates the %<conveyor%> rules, not "
+				   "permitted in a conveyor function or "
+				   "predicate"), fn, NULL_TREE, fn);
 }
 
 /* Constify access to DECL from within the contract condition.  */
