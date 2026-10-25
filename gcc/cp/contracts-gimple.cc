@@ -113,6 +113,9 @@ along with GCC; see the file COPYING3.  If not see
 #include "bitmap.h"
 #include "sbitmap.h"
 #include "opts.h"
+#include "tree-eh.h"
+#include "tree-cfg.h"
+#include "tree-cfgcleanup.h"
 
 /* Positional correspondence between CALLEE's own PARM_DECLs and CALL's
    actual argument expressions -- the GIMPLE-level analogue of
@@ -15473,10 +15476,46 @@ public:
   }
 
   unsigned int execute (function *) final override;
+
+private:
+  unsigned int execute_1 (function *);
 };
+
+/* After the checks: a call recorded as possibly throwing whose callee has
+   since been found not to throw (a template instantiated and analyzed
+   while this function, checked early for its contracts, waited) leaves
+   a stale landing pad the verifier rejects.  Drop it, as the ordinary
+   passes do.  */
 
 unsigned int
 pass_contracts_gimple::execute (function *fun)
+{
+  unsigned int todo = execute_1 (fun);
+  bool changed = false;
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    {
+      gimple *last = *gsi_last_bb (bb);
+      if (last && lookup_stmt_eh_lp_fn (fun, last) > 0
+	  && !stmt_could_throw_p (fun, last))
+	{
+	  remove_stmt_from_eh_lp_fn (fun, last);
+	  changed |= gimple_purge_dead_eh_edges (bb);
+	}
+    }
+  /* The landing pads may now be unreachable, and with them calls the
+     call graph has edges for.  */
+  if (changed)
+    {
+      cleanup_tree_cfg ();
+      if (cgraph_node::get (fun->decl))
+	cgraph_edge::rebuild_edges ();
+    }
+  return todo;
+}
+
+unsigned int
+pass_contracts_gimple::execute_1 (function *fun)
 {
   cg_linear_post_tests = -1;
   /* D4324/P2680: mirrors contracts.cc's oa_resolve_object_address_in_
