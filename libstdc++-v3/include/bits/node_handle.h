@@ -72,7 +72,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       using allocator_type = __alloc_rebind<_NodeAlloc, _Val>;
 
       allocator_type
-      get_allocator() const noexcept _GLIBCXX_CONVEYOR
+      get_allocator() const noexcept _GLIBCXX_CONVEYOR_AUTO
       {
 	__glibcxx_assert(!this->empty());
 	return allocator_type(_M_alloc._M_alloc);

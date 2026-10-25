@@ -491,15 +491,15 @@ namespace ranges
 
       constexpr _It
       begin() const requires copyable<_It>
-      _GLIBCXX_CONVEYOR
+      _GLIBCXX_CONVEYOR_AUTO
       { return _M_begin; }
 
       [[nodiscard]] constexpr _It
       begin() requires (!copyable<_It>)
-      _GLIBCXX_CONVEYOR
+      _GLIBCXX_CONVEYOR_AUTO
       { return std::move(_M_begin); }
 
-      constexpr _Sent end() const _GLIBCXX_CONVEYOR
+      constexpr _Sent end() const _GLIBCXX_CONVEYOR_AUTO
       { return _M_end; }
 
       constexpr bool empty() const _GLIBCXX_CONVEYOR
@@ -507,7 +507,7 @@ namespace ranges
 
       constexpr __size_type
       size() const requires (_Kind == subrange_kind::sized)
-      _GLIBCXX_CONVEYOR
+      _GLIBCXX_CONVEYOR_AUTO
       {
 	if constexpr (_S_store_size)
 	  return _M_size._M_size;
