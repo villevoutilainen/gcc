@@ -14411,14 +14411,99 @@ static void oa_refine_single_comparison (tree, oa_env &, bool);
    other for '&&' (or a false '||'), and for '||', '?:' or a false '&&'
    by each case, joined.  False if CONJUNCT is not compound.  */
 
+/* C without the wrappers a condition can carry.  */
+
+static tree
+oa_strip_condition (tree c)
+{
+  while (true)
+    {
+      c = STRIP_ANY_LOCATION_WRAPPER (c);
+      if (TREE_CODE (c) == CLEANUP_POINT_EXPR
+	  || TREE_CODE (c) == NON_LVALUE_EXPR
+	  || ((TREE_CODE (c) == NOP_EXPR || TREE_CODE (c) == CONVERT_EXPR
+	       || TREE_CODE (c) == VIEW_CONVERT_EXPR)
+	      && TREE_CODE (TREE_TYPE (c)) == BOOLEAN_TYPE
+	      && (TREE_CODE (TREE_TYPE (TREE_OPERAND (c, 0)))
+		  == BOOLEAN_TYPE)))
+	c = TREE_OPERAND (c, 0);
+      else
+	return c;
+    }
+}
+
+/* True if condition C is a constant, its value in *VALUE.  */
+
+static bool
+oa_condition_constant_p (tree c, bool *value)
+{
+  c = oa_strip_condition (c);
+  if (TREE_CODE (c) == INTEGER_CST)
+    {
+      *value = !integer_zerop (c);
+      return true;
+    }
+  if (TREE_CODE (c) == TRUTH_NOT_EXPR
+      && oa_condition_constant_p (TREE_OPERAND (c, 0), value))
+    {
+      *value = !*value;
+      return true;
+    }
+  return false;
+}
+
+static void oa_refine_by_call (tree call, oa_env &env, bool asserted_true);
+
 static bool
 oa_refine_compound_condition (tree conjunct, oa_env &env, bool asserted_true)
 {
-  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  tree c = oa_strip_condition (conjunct);
   tree_code code = TREE_CODE (c);
+  bool value;
+  /* Nothing to learn; a constant with the other outcome is a path that
+     can't be taken.  */
+  if (oa_condition_constant_p (c, &value))
+    return true;
   if (code == TRUTH_NOT_EXPR)
     {
       oa_refine_single_comparison (TREE_OPERAND (c, 0), env, !asserted_true);
+      return true;
+    }
+  /* 'b == true', 'res != false', a bool compared with a constant, each
+     side possibly promoted to int.  */
+  if (code == EQ_EXPR || code == NE_EXPR)
+    {
+      tree ops[2];
+      bool boolean = true;
+      for (int i = 0; i < 2; ++i)
+	{
+	  ops[i] = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, i));
+	  while ((CONVERT_EXPR_P (ops[i])
+		  || TREE_CODE (ops[i]) == VIEW_CONVERT_EXPR)
+		 && INTEGRAL_TYPE_P (TREE_TYPE (TREE_OPERAND (ops[i], 0))))
+	    ops[i] = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (ops[i], 0));
+	  /* A truth value: of type bool, or a comparison or truth
+	     operation, whatever its type.  */
+	  if (TREE_CODE (ops[i]) == INTEGER_CST)
+	    boolean &= integer_zerop (ops[i]) || integer_onep (ops[i]);
+	  else
+	    boolean &= (TREE_CODE (TREE_TYPE (ops[i])) == BOOLEAN_TYPE
+			|| COMPARISON_CLASS_P (ops[i])
+			|| truth_value_p (TREE_CODE (ops[i])));
+	}
+      if (boolean)
+	for (int i = 0; i < 2; ++i)
+	  if (oa_condition_constant_p (ops[i], &value))
+	    {
+	      oa_refine_single_comparison (ops[1 - i], env,
+					   asserted_true
+					   == (value == (code == EQ_EXPR)));
+	      return true;
+	    }
+    }
+  if (code == CALL_EXPR || code == AGGR_INIT_EXPR)
+    {
+      oa_refine_by_call (c, env, asserted_true);
       return true;
     }
   bool is_and = code == TRUTH_ANDIF_EXPR || code == TRUTH_AND_EXPR;
@@ -14433,7 +14518,20 @@ oa_refine_compound_condition (tree conjunct, oa_env &env, bool asserted_true)
 	  oa_refine_single_comparison (b, env, asserted_true);
 	  return true;
 	}
-      /* A alone decides it, or A goes the other way and B decides.  */
+      /* A alone decides it, or A goes the other way and B decides; a
+	 constant operand settles which.  */
+      if (oa_condition_constant_p (a, &value))
+	{
+	  if (value != asserted_true)
+	    oa_refine_single_comparison (b, env, asserted_true);
+	  return true;
+	}
+      if (oa_condition_constant_p (b, &value))
+	{
+	  if (value != asserted_true)
+	    oa_refine_single_comparison (a, env, asserted_true);
+	  return true;
+	}
       oa_env first = env.copy ();
       oa_refine_single_comparison (a, first, asserted_true);
       oa_refine_single_comparison (a, env, !asserted_true);
@@ -14445,6 +14543,12 @@ oa_refine_compound_condition (tree conjunct, oa_env &env, bool asserted_true)
   if (code == COND_EXPR && TREE_OPERAND (c, 1) && TREE_OPERAND (c, 2)
       && TREE_CODE (TREE_TYPE (c)) == BOOLEAN_TYPE)
     {
+      if (oa_condition_constant_p (TREE_OPERAND (c, 0), &value))
+	{
+	  oa_refine_single_comparison (TREE_OPERAND (c, value ? 1 : 2), env,
+				       asserted_true);
+	  return true;
+	}
       oa_env first = env.copy ();
       oa_refine_single_comparison (TREE_OPERAND (c, 0), first, true);
       oa_refine_single_comparison (TREE_OPERAND (c, 1), first, asserted_true);
@@ -14455,6 +14559,102 @@ oa_refine_compound_condition (tree conjunct, oa_env &env, bool asserted_true)
       return true;
     }
   return false;
+}
+
+static tree oa_substitute_value_arg (tree, tree, tree);
+static bool oa_predicate_conjunct_shape (tree, tree *, tree *, bool *,
+					 tree * = NULL);
+
+struct oa_post_subst_data
+{
+  tree callee, call, result_id, result;
+  bool ok;
+};
+
+static tree
+oa_post_subst_r (tree *tp, int *walk_subtrees, void *data_)
+{
+  oa_post_subst_data *d = (oa_post_subst_data *) data_;
+  if (TYPE_P (*tp))
+    {
+      *walk_subtrees = 0;
+      return NULL_TREE;
+    }
+  if (*tp == d->result_id)
+    {
+      *tp = d->result;
+      *walk_subtrees = 0;
+    }
+  else if (TREE_CODE (*tp) == PARM_DECL)
+    {
+      tree arg = oa_substitute_value_arg (d->callee, d->call, *tp);
+      if (!arg || TREE_SIDE_EFFECTS (arg))
+	{
+	  d->ok = false;
+	  return *tp;
+	}
+      *tp = arg;
+      *walk_subtrees = 0;
+    }
+  return NULL_TREE;
+}
+
+/* CALL, a call returning bool, has the outcome ASSERTED_TRUE: refine
+   ENV by the call itself, a predicate fact about its argument, and by
+   what the callee's postconditions then say about the arguments, the
+   result being that outcome ('if (ok (a, b))' with 'post (r: !r || a <
+   b)' gives 'a < b').  A postcondition counts if it is conveyor-active
+   and its failure terminates, as for the facts it establishes about a
+   result (oa_establish_relational_from_call).  */
+
+static void
+oa_refine_by_call (tree call, oa_env &env, bool asserted_true)
+{
+  if (!oa_fact_tracking_bookkeeping_active_p ())
+    return;
+  static int depth;
+  if (depth >= 4)
+    return;
+  tree callee = (TREE_CODE (call) == CALL_EXPR
+		 ? cp_get_callee_fndecl_nofold (call) : NULL_TREE);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return;
+  auto depth_ovr = make_temp_override (depth, depth + 1);
+
+  tree pred_fn, arg_decl;
+  bool negated;
+  if (oa_predicate_conjunct_shape (call, &pred_fn, &arg_decl, &negated))
+    {
+      tree identity;
+      if (oa_object_identity_decl (arg_decl, &identity)
+	  || oa_field_slot_identity (arg_decl, env, &identity)
+	  || oa_array_slot_identity (arg_decl, env, &identity))
+	env.predicate_fact_set (env.alias_find (identity), pred_fn,
+				 asserted_true, /*conveyor_established=*/true);
+    }
+
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract)
+	  || !oa_contract_conveyor_active_p (contract, callee)
+	  || !contract_failure_terminates_p (contract, callee))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      if (!cond || cond == error_mark_node)
+	continue;
+      oa_post_subst_data d
+	= { callee, call, result_id,
+	    constant_boolean_node (asserted_true,
+				   result_id ? TREE_TYPE (result_id)
+				   : boolean_type_node),
+	    true };
+      tree subst = unshare_expr (cond);
+      cp_walk_tree (&subst, oa_post_subst_r, &d, NULL);
+      if (d.ok)
+	oa_refine_single_comparison (subst, env, true);
+    }
 }
 
 static void
@@ -17725,7 +17925,7 @@ static tree oa_strip_predicate_arg (tree);
 static bool
 oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
 			     tree *arg_decl_out, bool *negated_out,
-			     tree *call_out = NULL)
+			     tree *call_out)
 {
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
   while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
