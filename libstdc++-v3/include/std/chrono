@@ -657,7 +657,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (&__y));
+	  (std::is_object_address (__builtin_addressof (__y)));
 #endif
 	return day(unsigned{__x} + __y.count());
       }
@@ -770,7 +770,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (&__y));
+	  (std::is_object_address (__builtin_addressof (__y)));
 #endif
 	// modulo(x + (y - 1), 12) = modulo(x + (y - 1) + 12, 12)
 	//                         = modulo((x + 11) + y    , 12)
@@ -787,7 +787,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (&__y));
+	  (std::is_object_address (__builtin_addressof (__y)));
 #endif
 	// modulo(x + (-y - 1), 12) = modulo(x + (-y - 1) + 12, 12)
 	//                          = modulo((x + 11) - y     , 12)
@@ -964,7 +964,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (&__y));
+	  (std::is_object_address (__builtin_addressof (__y)));
 #endif
 	return year{int{__x} + static_cast<int>(__y.count())};
       }
@@ -1021,7 +1021,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (&__d));
+	  (std::is_object_address (__builtin_addressof (__d)));
 #endif
 	return weekday{__detail::__add_modulo<7>(4, __d.count())};
       }
@@ -1115,7 +1115,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (&__y));
+	  (std::is_object_address (__builtin_addressof (__y)));
 #endif
 	return weekday{__detail::__add_modulo<7>(__x._M_wd, __y.count())};
       }
@@ -1129,7 +1129,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (&__y));
+	  (std::is_object_address (__builtin_addressof (__y)));
 #endif
 	return weekday{__detail::__sub_modulo<7>(__x._M_wd, __y.count())};
       }
@@ -1782,7 +1782,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (&__dp));
+	(std::is_object_address (__builtin_addressof (__dp)));
 #endif
       constexpr auto __z2    = static_cast<uint32_t>(-1468000);
       constexpr auto __r2_e3 = static_cast<uint32_t>(536895458);
@@ -2135,7 +2135,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		    + days((_M_wdi.index()-1)*7 + 1));
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (&__d));
+	  (std::is_object_address (__builtin_addressof (__d)));
 #endif
 	__glibcxx_assert(__d.count() >= 1);
 	return (unsigned)__d.count() <= (unsigned)(_M_y / _M_m / last).day();
@@ -2751,7 +2751,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (&__x) && std::is_object_address (&__y));
+	  (std::is_object_address (__builtin_addressof (__x))
+	   && std::is_object_address (__builtin_addressof (__y)));
 #endif
 	return __x._M_name == __y._M_name;
       }
@@ -2761,7 +2762,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (&__x) && std::is_object_address (&__y));
+	  (std::is_object_address (__builtin_addressof (__x))
+	   && std::is_object_address (__builtin_addressof (__y)));
 #endif
 	return __x._M_name <=> __y._M_name;
       }
@@ -2917,7 +2919,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (&__x) && std::is_object_address (&__y));
+	  (std::is_object_address (__builtin_addressof (__x))
+	   && std::is_object_address (__builtin_addressof (__y)));
 #endif
 	return __x.name() == __y.name();
       }
@@ -2927,7 +2930,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (&__x) && std::is_object_address (&__y));
+	  (std::is_object_address (__builtin_addressof (__x))
+	   && std::is_object_address (__builtin_addressof (__y)));
 #endif
 	return __x.name() <=> __y.name();
       }

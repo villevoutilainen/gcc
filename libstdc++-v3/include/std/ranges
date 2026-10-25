@@ -216,7 +216,8 @@ namespace ranges
 	__box(_Tp&& __t)
 	noexcept(is_nothrow_move_constructible_v<_Tp>)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__t))
+	pre<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (__builtin_addressof (__t)))
 #endif
 	: _M_value(std::move(__t))
 	{ }
@@ -450,7 +451,8 @@ namespace ranges
       single_view(_Tp&& __t)
       noexcept(is_nothrow_move_constructible_v<_Tp>)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__t))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__t)))
 #endif
       : _M_value(std::move(__t))
       { }
@@ -895,7 +897,8 @@ namespace views
       operator() [[nodiscard]] (_Tp&& __e) const
       noexcept(noexcept(single_view<decay_t<_Tp>>(std::forward<_Tp>(__e))))
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__e))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__e)))
 #endif
       { return single_view<decay_t<_Tp>>(std::forward<_Tp>(__e)); }
   };
@@ -10327,8 +10330,10 @@ namespace ranges
     operator==(const _Iterator& __x, const _Iterator& __y)
       requires (equality_comparable<iterator_t<__maybe_const_t<_Const, _Vs>>> && ...)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__x))
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__y))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__x)))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__y)))
 #endif
     {
       __glibcxx_assert(!__x._M_it.valueless_by_exception());
@@ -10339,7 +10344,8 @@ namespace ranges
     friend constexpr bool
     operator==(const _Iterator& __it, default_sentinel_t)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__it))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__it)))
 #endif
     {
       __glibcxx_assert(!__it._M_it.valueless_by_exception());

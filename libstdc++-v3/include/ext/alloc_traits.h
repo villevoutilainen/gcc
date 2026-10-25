@@ -98,7 +98,8 @@ template<typename _Alloc, typename = typename _Alloc::value_type>
     [[__gnu__::__always_inline__]]
     static constexpr _Alloc _S_select_on_copy(const _Alloc& __a)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__a)))
 #endif
     { return _Base_type::select_on_container_copy_construction(__a); }
 

@@ -131,7 +131,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     // ranges::begin/end) has no way to establish that fact at all,
     // since oa_provable_p has no general way to trace an arbitrary
     // function call's return value back to its argument's own storage.
-    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+    post<std::contracts::never_proven_conveyor_v>
+      (r: std::is_object_address (__builtin_addressof (r)))
 #endif
     ;
 
@@ -140,7 +141,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     get(const tuple<_Elements...>& __t) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     // See the non-const overload's own identical comment above.
-    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+    post<std::contracts::never_proven_conveyor_v>
+      (r: std::is_object_address (__builtin_addressof (r)))
 #endif
     ;
 
@@ -149,7 +151,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     get(tuple<_Elements...>&& __t) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     // See the lvalue-reference overload's own identical comment above.
-    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+    post<std::contracts::never_proven_conveyor_v>
+      (r: std::is_object_address (__builtin_addressof (r)))
 #endif
     ;
 
@@ -158,7 +161,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     get(const tuple<_Elements...>&& __t) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     // See the lvalue-reference overload's own identical comment above.
-    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+    post<std::contracts::never_proven_conveyor_v>
+      (r: std::is_object_address (__builtin_addressof (r)))
 #endif
     ;
 
@@ -1323,7 +1327,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (&__in));
+	(std::is_object_address (__builtin_addressof (__in)));
 #endif
       return __pair_get<_Int>::__move_get(std::move(__in));
     }

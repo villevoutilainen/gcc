@@ -74,8 +74,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     // D4324: the same is_object_address pair as std::move's below -- see
     // its comment: the result is always '__t' itself.
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__t))
-    post<std::contracts::conveyor_assert_v>(r: std::is_object_address (&r))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__t)))
+    post<std::contracts::conveyor_assert_v>
+      (r: std::is_object_address (__builtin_addressof (r)))
 #endif
     { return static_cast<_Tp&&>(__t); }
 
@@ -93,8 +95,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     _GLIBCXX_CONVEYOR
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     // D4324: see the other overload.
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__t))
-    post<std::contracts::conveyor_assert_v>(r: std::is_object_address (&r))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__t)))
+    post<std::contracts::conveyor_assert_v>
+      (r: std::is_object_address (__builtin_addressof (r)))
 #endif
     {
       static_assert(!std::is_lvalue_reference<_Tp>::value,
@@ -139,8 +143,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   _GLIBCXX_CONVEYOR
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
   // D4324: see std::forward.
-  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__x))
-  post<std::contracts::conveyor_assert_v>(r: std::is_object_address (&r))
+  pre<std::contracts::never_proven_conveyor_v>
+    (std::is_object_address (__builtin_addressof (__x)))
+  post<std::contracts::conveyor_assert_v>
+    (r: std::is_object_address (__builtin_addressof (r)))
 #endif
   { return static_cast<__like_t<_Tp, _Up>>(__x); }
 #endif
@@ -175,8 +181,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     // (conveyor_assert_v).  The precondition is never_proven: a caller
     // owes nothing for it, nor for the implicit one it stands in for --
     // move and forward only cast, never access the object.
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__t))
-    post<std::contracts::conveyor_assert_v>(r: std::is_object_address (&r))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__t)))
+    post<std::contracts::conveyor_assert_v>
+      (r: std::is_object_address (__builtin_addressof (r)))
 #endif
     { return static_cast<typename std::remove_reference<_Tp>::type&&>(__t); }
 
@@ -229,7 +237,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _Tp
     __exchange(_Tp& __obj, _Up&& __new_val)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__obj))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__obj)))
 #endif
     {
       _Tp __old_val = std::move(__obj);
@@ -276,8 +285,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     _GLIBCXX_NOEXCEPT_IF(__and_<is_nothrow_move_constructible<_Tp>,
 				is_nothrow_move_assignable<_Tp>>::value)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a)
-      && std::is_object_address (&__b))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__a))
+      && std::is_object_address (__builtin_addressof (__b)))
 #endif
     {
 #if __cplusplus < 201103L

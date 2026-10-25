@@ -65,7 +65,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     swap(basic_string& __s) _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
-      && std::is_object_address (&__s))
+      && std::is_object_address (__builtin_addressof (__s)))
 #endif
     {
       if (this == std::__addressof(__s))
@@ -82,7 +82,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 #define _GLIBCXX_SWAP_REASSERT \
       contract_assert<std::contracts::never_proven_conveyor_v> \
-	(std::is_object_address (this) && std::is_object_address (&__s))
+	(std::is_object_address (this) \
+	 && std::is_object_address (__builtin_addressof (__s)))
 #else
 #define _GLIBCXX_SWAP_REASSERT
 #endif
@@ -458,7 +459,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     _M_assign(const basic_string& __str)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
-      && std::is_object_address (&__str))
+      && std::is_object_address (__builtin_addressof (__str)))
 #endif
     {
       if (this != std::__addressof(__str))
@@ -471,7 +472,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 #define _GLIBCXX_ASSIGN_REASSERT \
 	  contract_assert<std::contracts::never_proven_conveyor_v> \
-	    (std::is_object_address (this) && std::is_object_address (&__str))
+	    (std::is_object_address (this) \
+	     && std::is_object_address (__builtin_addressof (__str)))
 #else
 #define _GLIBCXX_ASSIGN_REASSERT
 #endif
@@ -807,7 +809,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     __resize_and_overwrite(const size_type __n, _Operation __op)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__op))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__op)))
 #endif
     { resize_and_overwrite<_Operation&>(__n, __op); }
 #endif
@@ -824,7 +827,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #endif
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__op))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__op)))
 #endif
     {
       reserve(__n);

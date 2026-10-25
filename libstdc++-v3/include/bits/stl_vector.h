@@ -151,7 +151,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	_GLIBCXX20_CONSTEXPR
 	_Vector_impl(_Tp_alloc_type const& __a) _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+	pre<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (__builtin_addressof (__a)))
 #endif
 	: _Tp_alloc_type(__a)
 	{ }
@@ -315,7 +316,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       // same reasoning _M_default_initialize's own post<> already uses.
       // Lets callers (e.g. _M_range_initialize_n) trust this accessor's
       // result via its contract alone, never its implementation.
-      post<std::contracts::conveyor_assert_v> (r: std::is_object_address (&r))
+      post<std::contracts::conveyor_assert_v>
+	(r: std::is_object_address (__builtin_addressof (r)))
 #endif
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
@@ -329,7 +331,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       const _Tp_alloc_type&
       _M_get_Tp_allocator() const _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      post<std::contracts::conveyor_assert_v> (r: std::is_object_address (&r))
+      post<std::contracts::conveyor_assert_v>
+	(r: std::is_object_address (__builtin_addressof (r)))
 #endif
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
@@ -366,7 +369,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       _Vector_base(const allocator_type& __a) _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _M_impl(__a) { }
 
@@ -381,7 +385,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       _Vector_base(size_t __n, const allocator_type& __a)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _M_impl(__a)
       { _M_create_storage(__n); }
@@ -398,7 +403,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       _Vector_base(_Vector_base&& __x, const allocator_type& __a)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _M_impl(__a)
       {
@@ -415,7 +421,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       _Vector_base(const allocator_type& __a, _Vector_base&& __x)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _M_impl(_Tp_alloc_type(__a), std::move(__x._M_impl))
       { }
@@ -679,7 +686,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       vector(size_type __n, const allocator_type& __a = allocator_type())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _Base(_S_check_init_len(__n, __a), __a)
       { _M_default_initialize(__n); }
@@ -696,7 +704,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       vector(size_type __n, const value_type& __value,
 	     const allocator_type& __a = allocator_type())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _Base(_S_check_init_len(__n, __a), __a)
       { _M_fill_initialize(__n, __value); }
@@ -713,7 +722,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       vector(size_type __n, const value_type& __value = value_type(),
 	     const allocator_type& __a = allocator_type())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _Base(_S_check_init_len(__n, __a), __a)
       { _M_fill_initialize(__n, __value); }
@@ -811,7 +821,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       vector(initializer_list<value_type> __l,
 	     const allocator_type& __a = allocator_type())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _Base(__a)
       {
@@ -842,7 +853,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	vector(_InputIterator __first, _InputIterator __last,
 	       const allocator_type& __a = allocator_type())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+	pre<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (__builtin_addressof (__a)))
 #endif
 	: _Base(__a)
 	{
@@ -2373,7 +2385,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       static _GLIBCXX20_CONSTEXPR size_type
       _S_check_init_len(size_type __n, const allocator_type& __a)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__a))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       {
 	if (__n > _Base::_S_max_size(_Tp_alloc_type(__a)))

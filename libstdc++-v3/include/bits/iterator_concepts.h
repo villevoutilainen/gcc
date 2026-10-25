@@ -1008,7 +1008,8 @@ namespace ranges
       constexpr auto
       __begin(_Tp& __t)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__t))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__t)))
 #endif
       {
 	if constexpr (is_array_v<_Tp>)

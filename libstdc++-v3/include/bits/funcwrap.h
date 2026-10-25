@@ -409,7 +409,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
      {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
        contract_assert<std::contracts::never_proven_conveyor_v>
-	 (std::is_object_address (this) && std::is_object_address (&__x));
+	 (std::is_object_address (this)
+	  && std::is_object_address (__builtin_addressof (__x)));
 #endif
        using _Op = _Manager::_Op;
        _M_manage = std::__exchange(__x._M_manage, _Manager::_S_empty);
@@ -442,7 +443,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
      {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
        contract_assert<std::contracts::never_proven_conveyor_v>
-	 (std::is_object_address (this) && std::is_object_address (&__x));
+	 (std::is_object_address (this)
+	  && std::is_object_address (__builtin_addressof (__x)));
 #endif
        using _Op = _Manager::_Op;
        // Order of operations here is more efficient if __x is empty.

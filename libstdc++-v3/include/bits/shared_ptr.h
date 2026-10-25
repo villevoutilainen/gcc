@@ -339,7 +339,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       shared_ptr(shared_ptr&& __r) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__r))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__r)))
 #endif
       : __shared_ptr<_Tp>(std::move(__r)) { }
 

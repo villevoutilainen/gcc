@@ -350,7 +350,7 @@ namespace __detail
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (&__r));
+	  (std::is_object_address (__builtin_addressof (__r)));
 #endif
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__result));

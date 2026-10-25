@@ -764,7 +764,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       static _GLIBCXX20_CONSTEXPR allocator_type
       select_on_container_copy_construction(const allocator_type& __rhs)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__rhs))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__rhs)))
 #endif
       { return __rhs; }
     };
@@ -879,7 +880,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       static _GLIBCXX20_CONSTEXPR allocator_type
       select_on_container_copy_construction(const allocator_type& __rhs)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__rhs))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__rhs)))
 #endif
       { return __rhs; }
     };
@@ -916,7 +918,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (&__one) && std::is_object_address (&__two));
+	(std::is_object_address (__builtin_addressof (__one))
+	 && std::is_object_address (__builtin_addressof (__two)));
 #endif
       using __traits = allocator_traits<_Alloc>;
       using __pocma

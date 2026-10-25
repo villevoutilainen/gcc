@@ -81,7 +81,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     [[__gnu__::__always_inline__]] constexpr
     __cow_constexpr_string(const string& __o)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__o))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__o)))
 #endif
     {
       if consteval {
@@ -122,13 +123,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     [[__gnu__::__always_inline__]] constexpr
     __cow_constexpr_string(const __cow_constexpr_string& __o) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__o))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__o)))
 #endif
     {
       if consteval {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	// D4324/P2680: '_M_str' is a raw pointer field inside a union
-	// with '_M_p'/'_M_bytes' -- is_object_address(&__o) alone says
+	// with '_M_p'/'_M_bytes' -- is_object_address
+	// (__builtin_addressof (__o)) alone says
 	// nothing about whether the union's ACTIVE member is '_M_str',
 	// let alone whether it holds a valid string*. This class's own
 	// invariant guarantees it does whenever '_M_str' is read from a
@@ -161,7 +164,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     operator=(const __cow_constexpr_string& __o) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__o))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__o)))
 #endif
     {
       if consteval {
@@ -214,7 +218,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     [[__gnu__::__always_inline__]] constexpr
     __cow_constexpr_string(__cow_constexpr_string&& __o) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__o))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__o)))
 #endif
     {
       if consteval {
@@ -241,7 +246,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     operator=(__cow_constexpr_string&& __o) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__o))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__o)))
 #endif
     {
       if consteval {
@@ -369,7 +375,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr inline explicit
     logic_error(const string& __arg) _GLIBCXX_TXN_SAFE
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : _M_msg(__arg) {}
 
@@ -395,22 +402,26 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     // needs no precondition of its own (no data members to prove
     // anything about).
     constexpr logic_error(logic_error&& __arg) noexcept
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__arg)))
       : exception(std::move(__arg)), _M_msg(std::move(__arg._M_msg)) { }
     constexpr logic_error& operator=(logic_error&& __arg) noexcept
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__arg)))
     {
       exception::operator=(std::move(__arg));
       _M_msg = std::move(__arg._M_msg);
       return *this;
     }
     constexpr logic_error(const logic_error& __arg) noexcept
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__arg)))
       : exception(__arg), _M_msg(__arg._M_msg) { }
     constexpr logic_error& operator=(const logic_error& __arg) noexcept
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__arg)))
     {
       exception::operator=(__arg);
       _M_msg = __arg._M_msg;
@@ -481,7 +492,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_TXN_SAFE
 
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : logic_error(__arg) { }
     [[__gnu__::__gnu_inline__]]
@@ -516,7 +528,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_TXN_SAFE
 
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : logic_error(__arg) { }
     [[__gnu__::__gnu_inline__]]
@@ -553,7 +566,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_TXN_SAFE
 
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : logic_error(__arg) { }
     [[__gnu__::__gnu_inline__]]
@@ -589,7 +603,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_TXN_SAFE
 
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : logic_error(__arg) { }
     [[__gnu__::__gnu_inline__]]
@@ -629,7 +644,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr inline explicit
     runtime_error(const string& __arg) _GLIBCXX_TXN_SAFE
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : _M_msg(__arg) {}
 
@@ -643,18 +659,21 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     // are explicit bodies (delegating to the base class, then '_M_msg')
     // rather than '=default' with a precondition attached.
     constexpr runtime_error(runtime_error&& __arg) noexcept
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__arg)))
       : exception(std::move(__arg)), _M_msg(std::move(__arg._M_msg)) { }
     constexpr runtime_error& operator=(runtime_error&& __arg) noexcept
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__arg)))
     {
       exception::operator=(std::move(__arg));
       _M_msg = std::move(__arg._M_msg);
       return *this;
     }
     constexpr runtime_error(const runtime_error& __arg) noexcept
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__arg)))
       : exception(__arg), _M_msg(__arg._M_msg) { }
     // D4324/P2680: the original '=default' declaration here omitted
     // 'constexpr' explicitly (matching every other special member in
@@ -669,7 +688,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     // operator=") the moment this stops being implicitly constexpr.
     constexpr runtime_error& operator=(const runtime_error& __arg) noexcept
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__arg)))
     {
       exception::operator=(__arg);
       _M_msg = __arg._M_msg;
@@ -740,7 +760,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_TXN_SAFE
 
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : runtime_error(__arg) { }
     [[__gnu__::__gnu_inline__]]
@@ -776,7 +797,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_TXN_SAFE
 
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__arg))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : runtime_error(__arg) { }
     [[__gnu__::__gnu_inline__]]

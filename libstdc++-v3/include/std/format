@@ -232,7 +232,8 @@ namespace __format
     _GLIBCXX_CONSTEXPR_FORMAT
     explicit format_error(const string& __what)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__what))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__what)))
 #endif
     : runtime_error(__what) { }
 
@@ -825,7 +826,7 @@ namespace __format
       auto __pad = [&__padding] (size_t __n, _Out& __o) {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (&__o));
+	  (std::is_object_address (__builtin_addressof (__o)));
 #endif
 	if (__n == 0)
 	  return;
@@ -1180,7 +1181,7 @@ namespace __format
     {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (&__str));
+	(std::is_object_address (__builtin_addressof (__str)));
 #endif
       using _Str_view = basic_string_view<_CharT>;
       using _Esc = _Escapes<_CharT>;
@@ -1334,7 +1335,8 @@ namespace __format
     {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (this) && std::is_object_address (&__loc));
+	(std::is_object_address (this)
+	 && std::is_object_address (__builtin_addressof (__loc)));
 #endif
       if (_M_hasval)
 	_M_loc = std::move(__loc);
@@ -2481,7 +2483,7 @@ namespace __format
 	auto __overwrite = [&](_CharT* __p, size_t) {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	  contract_assert<std::contracts::never_proven_conveyor_v>
-	    (std::is_object_address (&__grp));
+	    (std::is_object_address (__builtin_addressof (__grp)));
 #endif
 	  // Copy any +/- sign and "0x" prefix
 	  ranges::copy_n(__str.data(), __offset, __p);
@@ -3676,7 +3678,8 @@ namespace __format
       _GLIBCXX_CONSTEXPR_FORMAT
       _Seq_sink(_Seq&& __s) noexcept(is_nothrow_move_constructible_v<_Seq>)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__s))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__s)))
 #endif
       : _M_seq(std::move(__s))
       { }
@@ -4083,7 +4086,8 @@ namespace __format
       _GLIBCXX_CONSTEXPR_FORMAT explicit
       _Padding_sink(_Out __out, size_t __padwidth, size_t __maxwidth)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__out))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__out)))
 #endif
       : _M_padwidth(__padwidth), _M_maxwidth(__maxwidth),
 	_M_out(std::move(__out)), _M_printwidth(0)
@@ -4093,7 +4097,8 @@ namespace __format
       _GLIBCXX_CONSTEXPR_FORMAT explicit
       _Padding_sink(_Out __out, size_t __padwidth)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__out))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__out)))
 #endif
       : _Padding_sink(std::move(__out), __padwidth, (size_t)-1)
       { }
@@ -5097,7 +5102,8 @@ namespace __format
       basic_format_context(basic_format_args<basic_format_context> __args,
 			   _Out __out)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__out))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__out)))
 #endif
       : _M_args(__args), _M_out(std::move(__out))
       { }
@@ -5106,7 +5112,8 @@ namespace __format
       basic_format_context(basic_format_args<basic_format_context> __args,
 			   _Out __out, const std::locale& __loc)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__out))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__out)))
 #endif
       : _M_args(__args), _M_out(std::move(__out)), _M_loc(__loc)
       { }
@@ -5157,7 +5164,8 @@ namespace __format
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this) && std::is_object_address (&__it));
+	  (std::is_object_address (this)
+	   && std::is_object_address (__builtin_addressof (__it)));
 #endif
 	_M_out = std::move(__it);
       }

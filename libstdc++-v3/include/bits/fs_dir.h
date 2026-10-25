@@ -111,7 +111,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
     directory_entry(const directory_entry&) = default;
     directory_entry(directory_entry&& __e) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__e))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__e)))
 #endif
     : _M_path(std::move(__e._M_path)), _M_type(__e._M_type)
     { }
@@ -119,14 +120,16 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
     explicit
     directory_entry(const filesystem::path& __p)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__p))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__p)))
 #endif
     : _M_path(__p)
     { refresh(); }
 
     directory_entry(const filesystem::path& __p, error_code& __ec)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__p))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__p)))
 #endif
     : _M_path(__p)
     {
@@ -347,7 +350,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
     directory_entry(const filesystem::path& __p, file_type __t)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__p))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__p)))
 #endif
     : _M_path(__p), _M_type(__t)
     { }
@@ -404,13 +408,15 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
     explicit
     __directory_iterator_proxy(const directory_entry& __e)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__e))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__e)))
 #endif
     : _M_entry(__e) { }
 
     __directory_iterator_proxy(__directory_iterator_proxy&& __other) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (&__other))
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__other)))
 #endif
     : _M_entry(std::move(__other._M_entry)) { }
 
@@ -462,7 +468,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
     const directory_entry& operator*() const noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+    post<std::contracts::never_proven_conveyor_v>
+      (r: std::is_object_address (__builtin_addressof (r)))
 #endif
     ;
     const directory_entry* operator->() const noexcept
@@ -581,7 +588,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
     const directory_entry& operator*() const noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    post<std::contracts::never_proven_conveyor_v>(r: std::is_object_address (&r))
+    post<std::contracts::never_proven_conveyor_v>
+      (r: std::is_object_address (__builtin_addressof (r)))
 #endif
     ;
     const directory_entry* operator->() const noexcept

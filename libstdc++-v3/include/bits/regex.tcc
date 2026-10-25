@@ -112,7 +112,7 @@ namespace __detail
   {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     contract_assert<std::contracts::never_proven_conveyor_v>
-      (std::is_object_address (&__name));
+      (std::is_object_address (__builtin_addressof (__name)));
 #endif
     static const char* const __collatenames[] =
       {
