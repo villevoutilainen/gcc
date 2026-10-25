@@ -8545,6 +8545,8 @@ public:
   }
   void set (tree decl, bool provable) { m_map.put (capture_key (decl), provable); }
   void invalidate (tree decl) { m_map.put (capture_key (decl), false); }
+  /* Whether DECL has a fact at all, provable or not.  */
+  bool known_p (tree decl) { return m_map.get (capture_key (decl)) != NULL; }
 
   /* A second, independent per-decl fact -- "provably nonzero" -- for
      item 8's narrow div/mod restriction (see oa_provably_nonzero_p
@@ -15899,6 +15901,18 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 	  tree base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
 	  if (!POINTER_TYPE_P (TREE_TYPE (base)))
 	    return NULL_TREE;
+	  /* '*p' of class type reaches here as '*(T &) p' (a copy's source,
+	     say): what is dereferenced is still the pointer, or the
+	     reference parameter, under the conversion -- not a reference
+	     bound elsewhere.  */
+	  tree inner = base;
+	  while (CONVERT_EXPR_P (inner) || TREE_CODE (inner) == NON_LVALUE_EXPR)
+	    inner = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (inner, 0));
+	  if (inner != base
+	      && (TREE_CODE (TREE_TYPE (inner)) == POINTER_TYPE
+		  || (TREE_CODE (inner) == PARM_DECL
+		      && TYPE_REF_P (TREE_TYPE (inner)))))
+	    base = inner;
 	  oa_range_fact base_fact;
 	  if (oa_get_range (base, *e, &base_fact) && base_fact.base != NULL_TREE)
 	    {
@@ -15940,6 +15954,14 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 	     above intact for everything else.  */
 	  bool is_ref_parm = TREE_CODE (TREE_TYPE (base)) == REFERENCE_TYPE
 			      && TREE_CODE (base) == PARM_DECL;
+	  /* A local reference whose own binding this walk saw ('T &r = *p;',
+	     its declaration recording whether that was provable) is only as
+	     valid as that binding: reading through it needs the same proof
+	     a reference parameter does.  */
+	  if (TREE_CODE (TREE_TYPE (base)) == REFERENCE_TYPE
+	      && VAR_P (base) && !DECL_HAS_VALUE_EXPR_P (base)
+	      && e->known_p (base))
+	    is_ref_parm = true;
 	  if (TREE_CODE (TREE_TYPE (base)) != POINTER_TYPE && !is_ref_parm)
 	    return NULL_TREE;
 	  /* No tracked array-offset fact -- fall back to is_object_address
@@ -17745,6 +17767,19 @@ oa_strip_to_call (tree init)
     init = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (init, 0));
   return TREE_CODE (init) == CALL_EXPR || TREE_CODE (init) == AGGR_INIT_EXPR
     ? init : NULL_TREE;
+}
+
+/* Whether binding a reference to INIT makes it denote an object: INIT
+   provably is one, or is a reference a call returned -- trusted as one
+   is when read directly ('f ().x'), and as the GIMPLE engine takes it.  */
+
+static bool
+oa_reference_binding_provable_p (tree init, oa_env &env)
+{
+  tree call = oa_strip_to_call (init);
+  if (call && TREE_CODE (call) == CALL_EXPR && TYPE_REF_P (TREE_TYPE (call)))
+    return true;
+  return oa_provable_p (init, env);
 }
 
 /* A defaulted copy or move constructor or assignment operator can carry
@@ -28579,7 +28614,8 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	       never recorded whether r's own binding was itself provable,
 	       even though a pointer initialized the identical way already
 	       does.  */
-	    env.set (decl, oa_provable_p (DECL_INITIAL (decl), env));
+	    env.set (decl, oa_reference_binding_provable_p (DECL_INITIAL (decl),
+							    env));
 	  }
 	else if (VAR_P (decl) && INTEGRAL_TYPE_P (TREE_TYPE (decl)))
 	  {
@@ -29349,7 +29385,9 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 	    && POINTER_TYPE_P (TREE_TYPE (lhs)))
 	  {
-	    env.set (lhs, oa_provable_p (rhs, env));
+	    env.set (lhs, TYPE_REF_P (TREE_TYPE (lhs))
+			  ? oa_reference_binding_provable_p (rhs, env)
+			  : oa_provable_p (rhs, env));
 	    /* Increment E2's array-base+offset tracking, independent of
 	       (and alongside) the is_object_address tracking above.  */
 	    oa_range_fact fact;
