@@ -4292,6 +4292,9 @@ cg_display_call (gcall *call, int depth)
     {
       tree arg = gimple_call_arg (call, k);
       tree shown = cg_display_value (arg, depth + 1);
+      /* An argument with no source spelling: show the value itself.  */
+      if (!shown)
+	shown = arg;
       /* A reference argument, as the object it binds to: 'f (*p)'.  */
       tree ptype = ptypes ? TREE_VALUE (ptypes) : NULL_TREE;
       if (ptype && TYPE_REF_P (ptype) && POINTER_TYPE_P (TREE_TYPE (arg))
@@ -4451,7 +4454,14 @@ cg_display_value (tree val, int depth = 0)
 	 load through the pointer the field holds.  Named as the captured
 	 variable.  */
       if (tree name = cg_capture_name (rhs1))
-	return name;
+	{
+	  /* A name alone has no type, which the display of a value needs
+	     (a call's argument, a dereference): give it the value's.  */
+	  tree shown = build_decl (UNKNOWN_LOCATION, VAR_DECL, name,
+				   TREE_TYPE (rhs1));
+	  DECL_ARTIFICIAL (shown) = true;
+	  return shown;
+	}
       if (TREE_CODE (rhs1) == COMPONENT_REF)
 	{
 	  tree obj = TREE_OPERAND (rhs1, 0);
