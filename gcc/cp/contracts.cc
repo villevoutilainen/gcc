@@ -6900,6 +6900,20 @@ find_condition_captures (tree condition, tree orig, tree postcond_id)
   return data.captured;
 }
 
+/* The parameters of predicate core functions that a captured local is
+   passed to (build_predicate_core_function_1).  */
+
+static GTY(()) hash_set<tree> *contract_pred_capture_parms;
+
+/* See contracts.h.  */
+
+bool
+contract_predicate_capture_parm_p (tree parm)
+{
+  return (contract_pred_capture_parms
+	  && contract_pred_capture_parms->contains (parm));
+}
+
 static tree
 build_predicate_core_function_1 (tree contract, tree orig)
 {
@@ -6925,9 +6939,36 @@ build_predicate_core_function_1 (tree contract, tree orig)
       *last_type = build_tree_list (NULL_TREE, TREE_TYPE (p));
       last_type = &TREE_CHAIN (*last_type);
     }
+  /* A captured local is passed by reference where a copy would differ
+     from it, so the condition sees the object itself: an array ('buf ==
+     p'), a class object (copied behind its copy constructor's back), and
+     a scalar whose address the condition takes ('&x == p', or binding a
+     reference to it).  Any other scalar is passed by value, its value
+     all the condition uses -- and what the GIMPLE engine records facts
+     about at the checks (cg_seed_predicate_site_facts).  */
+  hash_set<tree> address_taken;
+  {
+    tree cond = CONTRACT_CONDITION (contract);
+    cp_walk_tree_without_duplicates
+      (&cond, [](tree *tp, int *, void *data) -> tree
+	 {
+	   if (TREE_CODE (*tp) == ADDR_EXPR && DECL_P (TREE_OPERAND (*tp, 0)))
+	     ((hash_set<tree> *) data)->add (TREE_OPERAND (*tp, 0));
+	   return NULL_TREE;
+	 }, &address_taken);
+  }
+  auto capture_parm_type = [&address_taken] (tree cp)
+    {
+      tree type = TREE_TYPE (cp);
+      if (TYPE_REF_P (type)
+	  || (SCALAR_TYPE_P (type) && !address_taken.contains (cp)))
+	return type;
+      return cp_build_reference_type (type, false);
+    };
   for (unsigned i = 0; i < vec_safe_length (captures); ++i)
     {
-      *last_type = build_tree_list (NULL_TREE, TREE_TYPE ((*captures)[i]));
+      *last_type = build_tree_list (NULL_TREE,
+				    capture_parm_type ((*captures)[i]));
       last_type = &TREE_CHAIN (*last_type);
     }
   if (has_result)
@@ -6967,7 +7008,17 @@ build_predicate_core_function_1 (tree contract, tree orig)
 	 PARM_DECL chain, so build a fresh one of the same type rather
 	 than copy_decl, which would preserve a VAR_DECL's own tree code.  */
       tree cp = (*captures)[i];
-      tree np = build_lang_decl (PARM_DECL, DECL_NAME (cp), TREE_TYPE (cp));
+      tree np = build_lang_decl (PARM_DECL, DECL_NAME (cp),
+				 capture_parm_type (cp));
+      /* Only one bound here to the local itself: not a by-value scalar
+	 (a pointer's value proves nothing), nor a captured reference
+	 (only as valid as its own binding).  */
+      if (TYPE_REF_P (TREE_TYPE (np)) && !TYPE_REF_P (TREE_TYPE (cp)))
+	{
+	  if (!contract_pred_capture_parms)
+	    contract_pred_capture_parms = hash_set<tree>::create_ggc (16);
+	  contract_pred_capture_parms->add (np);
+	}
       DECL_CONTEXT (np) = fn;
       DECL_ARTIFICIAL (np) = true;
       suppress_warning (np);
@@ -7037,7 +7088,14 @@ build_predicate_core_function_1 (tree contract, tree orig)
   {
     tree ncp = new_captures;
     for (unsigned i = 0; i < vec_safe_length (captures); ++i, ncp = DECL_CHAIN (ncp))
-      insert_decl_map (&id, (*captures)[i], ncp);
+      {
+	tree cp = (*captures)[i];
+	/* A capture that wasn't a reference is now one: its uses are
+	   uses of what the parameter refers to.  */
+	insert_decl_map (&id, cp, TYPE_REF_P (TREE_TYPE (ncp))
+				  && !TYPE_REF_P (TREE_TYPE (cp))
+				  ? convert_from_reference (ncp) : ncp);
+      }
   }
   if (has_result)
     {

@@ -1982,6 +1982,11 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
       tree var = SSA_NAME_VAR (val);
       if (var && TREE_CODE (var) == PARM_DECL && DECL_BY_REFERENCE (var))
 	return true;
+      /* A predicate's captured local, passed by reference: the local
+	 itself.  */
+      if (var && TREE_CODE (var) == PARM_DECL
+	  && contract_predicate_capture_parm_p (var))
+	return true;
     }
 
   /* D4324/P2680 author correction (2026-08-19): 'this' is deliberately
