@@ -3228,8 +3228,8 @@ lookup_destructor (tree object, tree scope, tree dtor_name,
 	note_conveyor_auto_violation ();
       else
 	{
-	  error ("explicit destructor call not permitted in a conveyor "
-		 "function or predicate");
+	  conveyor_error_at (input_location, "explicit destructor call not "
+			     "permitted in a conveyor function or predicate");
 	  return error_mark_node;
 	}
     }
@@ -4809,9 +4809,10 @@ cp_build_function_call_vec (tree function, vec<tree, va_gc> **params,
 	    note_conveyor_auto_violation ();
 	  else
 	    {
-	      error_at (input_location, "call through a function pointer "
-			"or pointer to member function not permitted in "
-			"a conveyor function or predicate");
+	      conveyor_error_at (input_location, "call through a function "
+				 "pointer or pointer to member function not "
+				 "permitted in a conveyor function or "
+				 "predicate");
 	      return error_mark_node;
 	    }
 	}
@@ -4823,9 +4824,9 @@ cp_build_function_call_vec (tree function, vec<tree, va_gc> **params,
 	    note_conveyor_auto_violation ();
 	  else
 	    {
-	      error_at (input_location, "call to %qD, which is not "
-			"declared %<conveyor%>, not permitted in a "
-			"conveyor function or predicate", fndecl);
+	      conveyor_error_at (input_location, "call to %qD, which is not "
+				 "declared %<conveyor%>, not permitted in a "
+				 "conveyor function or predicate", fndecl);
 	      return error_mark_node;
 	    }
 	}
@@ -6567,8 +6568,9 @@ cp_build_binary_op (const op_location_t &location,
 	    note_conveyor_auto_violation ();
 	  else
 	    {
-	      error_at (location, "pointer relational comparison not "
-			"permitted in a conveyor function or predicate");
+	      conveyor_error_at (location, "pointer relational comparison not "
+				 "permitted in a conveyor function or "
+				 "predicate");
 	      return error_mark_node;
 	    }
 	}
@@ -8994,9 +8996,9 @@ build_static_cast_1 (location_t loc, tree type, tree expr, bool c_cast_p,
 	    note_conveyor_auto_violation ();
 	  else
 	    {
-	      error_at (loc, "%<static_cast%> performing a base-to-derived "
-			"conversion not permitted in a conveyor function "
-			"or predicate");
+	      conveyor_error_at (loc, "%<static_cast%> performing a "
+				 "base-to-derived conversion not permitted "
+				 "in a conveyor function or predicate");
 	      return error_mark_node;
 	    }
 	}
@@ -9214,9 +9216,9 @@ build_static_cast_1 (location_t loc, tree type, tree expr, bool c_cast_p,
 	    note_conveyor_auto_violation ();
 	  else
 	    {
-	      error_at (loc, "%<static_cast%> performing a base-to-derived "
-			"conversion not permitted in a conveyor function "
-			"or predicate");
+	      conveyor_error_at (loc, "%<static_cast%> performing a "
+				 "base-to-derived conversion not permitted "
+				 "in a conveyor function or predicate");
 	      return error_mark_node;
 	    }
 	}
@@ -9667,8 +9669,8 @@ build_reinterpret_cast (location_t loc, tree type, tree expr,
 	note_conveyor_auto_violation ();
       else
 	{
-	  error_at (loc, "%<reinterpret_cast%> not permitted in a "
-		    "conveyor function or predicate");
+	  conveyor_error_at (loc, "%<reinterpret_cast%> not permitted in a "
+			     "conveyor function or predicate");
 	  return error_mark_node;
 	}
     }

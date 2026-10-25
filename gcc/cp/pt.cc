@@ -11664,6 +11664,16 @@ neglectable_inst_p (tree d)
 	       : decl_maybe_constant_var_p (d)));
 }
 
+/* The number of errors that put template instantiation into its error
+   recovery: all but those for violations of the conveyor rules, which
+   leave the code they are about valid C++ (see conveyor_errorcount).  */
+
+static int
+tinst_errorcount ()
+{
+  return errorcount + sorrycount - conveyor_errorcount;
+}
+
 /* Returns TRUE iff we should refuse to instantiate DECL because it's
    neglectable and instantiated from within an erroneous instantiation.  */
 
@@ -11671,7 +11681,7 @@ static bool
 limit_bad_template_recursion (tree decl)
 {
   struct tinst_level *lev = current_tinst_level;
-  int errs = errorcount + sorrycount;
+  int errs = tinst_errorcount ();
   if (errs == 0 || !neglectable_inst_p (decl))
     return false;
 
@@ -11747,7 +11757,7 @@ push_tinst_level_loc (tree tldcl, tree targs, location_t loc)
   new_level->tldcl = tldcl;
   new_level->targs = targs;
   new_level->locus = loc;
-  new_level->errors = errorcount + sorrycount;
+  new_level->errors = tinst_errorcount ();
   new_level->had_errors = false;
   new_level->next = NULL;
   new_level->refcount = 0;
@@ -11836,7 +11846,7 @@ pop_tinst_level (void)
   /* Restore the filename and line number stashed away when we started
      this instantiation.  */
   input_location = current_tinst_level->locus;
-  if (unsigned errs = errorcount + sorrycount)
+  if (unsigned errs = tinst_errorcount ())
     if (errs > current_tinst_level->errors)
       current_tinst_level->had_errors = true;
   set_refcount_ptr (current_tinst_level, current_tinst_level->next);
@@ -11873,7 +11883,7 @@ reopen_tinst_level (struct tinst_level *level)
   set_refcount_ptr (current_tinst_level, level);
   pop_tinst_level ();
   if (current_tinst_level && !current_tinst_level->had_errors)
-    current_tinst_level->errors = errorcount+sorrycount;
+    current_tinst_level->errors = tinst_errorcount ();
 
   if (cxx_dump_pretty_printer pp {tinst_dump_id})
     {
@@ -13521,7 +13531,7 @@ instantiate_class_template (tree type)
      instantiating member functions in limit_bad_template_recursion.  We set
      this flag even if the problem was in another instantiation triggered by
      this one, as that will likely also cause trouble for member functions.  */
-  if (errorcount + sorrycount > current_tinst_level->errors)
+  if (tinst_errorcount () > current_tinst_level->errors)
     CLASSTYPE_ERRONEOUS (type) = true;
 
   /* We don't instantiate default arguments for member functions.  14.7.1:
@@ -29720,7 +29730,7 @@ instantiate_body (tree pattern, tree args, tree d, bool nested_p)
       if (DECL_OMP_DECLARE_REDUCTION_P (code_pattern))
 	cp_check_omp_declare_reduction (d);
 
-      if (int errs = errorcount + sorrycount)
+      if (int errs = tinst_errorcount ())
 	if (errs > current_tinst_level->errors)
 	  if (function *f = DECL_STRUCT_FUNCTION (d))
 	    f->language->erroneous = true;
