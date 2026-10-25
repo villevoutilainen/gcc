@@ -1954,8 +1954,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       swap(vector& __x) _GLIBCXX_NOEXCEPT
       {
 #if __cplusplus >= 201103L
-	__glibcxx_assert(_Alloc_traits::propagate_on_container_swap::value
-			 || _M_get_Tp_allocator() == __x._M_get_Tp_allocator());
+	__glibcxx_assert_noconveyor
+	  (_Alloc_traits::propagate_on_container_swap::value
+	   || _M_get_Tp_allocator() == __x._M_get_Tp_allocator());
 #endif
 	this->_M_impl._M_swap_data(__x._M_impl);
 	_Alloc_traits::_S_on_swap(_M_get_Tp_allocator(),

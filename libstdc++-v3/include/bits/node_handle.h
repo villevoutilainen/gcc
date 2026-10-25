@@ -208,7 +208,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  if constexpr (_ATr::propagate_on_container_move_assignment::value)
 	    _M_alloc = std::move(__alloc);
 	  else if constexpr (!_AllocTraits::is_always_equal::value)
-	    __glibcxx_assert(_M_alloc == __alloc);
+	    __glibcxx_assert_noconveyor(_M_alloc == __alloc);
 	}
 
 	// Precondition: _M_alloc is the active member of both unions.
@@ -219,7 +219,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  if constexpr (_AllocTraits::propagate_on_container_swap::value)
 	    swap(_M_alloc, __other._M_alloc);
 	  else if constexpr (!_AllocTraits::is_always_equal::value)
-	    __glibcxx_assert(_M_alloc == __other._M_alloc);
+	    __glibcxx_assert_noconveyor(_M_alloc == __other._M_alloc);
 	}
 
 	// Precondition: _M_alloc is the active member of the union.
