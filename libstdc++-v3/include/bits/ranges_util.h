@@ -162,6 +162,12 @@ namespace ranges
 	requires forward_range<remove_reference_t<_Self>>
 	_GLIBCXX_CONVEYOR_AUTO
 	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  // Not conveyor (an iterator's dereference isn't), so nothing vouches
+	  // for __self to what it calls.
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (__builtin_addressof (__self)));
+#endif
 	  __glibcxx_assert(!__self.empty());
 	  return *ranges::begin(__self);
 	}
@@ -173,6 +179,12 @@ namespace ranges
 	  && common_range<remove_reference_t<_Self>>
 	_GLIBCXX_CONVEYOR_AUTO
 	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  // Not conveyor (an iterator's dereference isn't), so nothing vouches
+	  // for __self to what it calls.
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (__builtin_addressof (__self)));
+#endif
 	  __glibcxx_assert(!__self.empty());
 	  return *ranges::prev(ranges::end(__self));
 	}
@@ -182,7 +194,15 @@ namespace ranges
 	constexpr decltype(auto)
 	operator[](this _Self&& __self, range_difference_t<_Range> __n)
 	_GLIBCXX_CONVEYOR_AUTO
-	{ return ranges::begin(__self)[__n]; }
+	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  // Not conveyor (an iterator's dereference isn't), so nothing vouches
+	  // for __self to what it calls.
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (__builtin_addressof (__self)));
+#endif
+	  return ranges::begin(__self)[__n];
+	}
 
       template<typename _Self>
 	constexpr auto

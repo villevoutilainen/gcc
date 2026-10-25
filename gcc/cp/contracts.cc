@@ -1814,6 +1814,12 @@ add_post_condition_fn_call (tree fndecl)
   finish_expr_stmt (call);
 }
 
+/* The implicit preconditions oa_synthesize_implicit_reference_safety_
+   preconditions built, and copies of them (copy_contracts_list), such as
+   those woven into bodies.  */
+
+static GTY(()) hash_set<tree> *oa_synthesized_implicit_contracts;
+
 /* Copy (possibly a sub-set of) contracts from CONTRACTS on FNDECL.  */
 
 static tree
@@ -1840,6 +1846,10 @@ copy_contracts_list (tree contracts, tree fndecl,
       tree c = copy_node (contracts);
       TREE_VALUE (c) = build_tree_list (TREE_PURPOSE (TREE_VALUE (c)),
 					copy_node (CONTRACT_STATEMENT (c)));
+      if (oa_synthesized_implicit_contracts
+	  && oa_synthesized_implicit_contracts->contains
+	       (CONTRACT_STATEMENT (contracts)))
+	oa_synthesized_implicit_contracts->add (CONTRACT_STATEMENT (c));
 
       copy_body_data id;
       hash_map<tree, tree> decl_map;
@@ -2186,6 +2196,10 @@ copy_and_remap_contracts (tree dest, tree source,
       tree c = copy_node (contracts);
       TREE_VALUE (c) = build_tree_list (TREE_PURPOSE (TREE_VALUE (c)),
 					copy_node (CONTRACT_STATEMENT (c)));
+      if (oa_synthesized_implicit_contracts
+	  && oa_synthesized_implicit_contracts->contains
+	       (CONTRACT_STATEMENT (contracts)))
+	oa_synthesized_implicit_contracts->add (CONTRACT_STATEMENT (c));
       /* This is the copied contract statement.  */
       tree stmt = CONTRACT_STATEMENT (c);
 
@@ -4484,10 +4498,6 @@ oa_fndecl_has_conveyor_active_contract_p (tree fndecl)
   return false;
 }
 
-/* The implicit preconditions oa_synthesize_implicit_reference_safety_
-   preconditions built.  */
-
-static GTY(()) hash_set<tree> *oa_synthesized_implicit_contracts;
 
 /* Remove from FNDECL's, and its clones', contract specifiers the implicit
    preconditions synthesized for it -- once 'conveyor(auto)' deduction finds
@@ -4521,6 +4531,19 @@ contract_drop_synthesized_preconditions (tree fndecl)
   tree clone;
   FOR_EACH_CLONE (clone, fndecl)
     drop (clone);
+  /* And their copies already woven into its body (apply_preconditions).  */
+  if (DECL_SAVED_TREE (fndecl))
+    cp_walk_tree_without_duplicates (&DECL_SAVED_TREE (fndecl),
+      [](tree *tp, int *walk_subtrees, void *) -> tree
+      {
+	if (CONTRACT_P (*tp)
+	    && oa_synthesized_implicit_contracts->contains (*tp))
+	  {
+	    *tp = build_empty_stmt (EXPR_LOCATION (*tp));
+	    *walk_subtrees = 0;
+	  }
+	return NULL_TREE;
+      }, NULL);
 }
 
 void
@@ -31780,11 +31803,75 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
 /* Top-level entry point, called from finish_function alongside
    check_conveyor_function_body, at the same pre-genericize timing.  */
 
+/* Put back the conditions as written (oa_condition_as_written_map) of the
+   contract statements in FNDECL's body and of its own contracts, for its
+   walk to start over.  */
+
+static void
+oa_restore_conditions_as_written (tree fndecl)
+{
+  if (!oa_condition_as_written_map)
+    return;
+  auto restore = [] (tree stmt)
+    {
+      if (tree *saved = oa_condition_as_written_map->get (stmt))
+	CONTRACT_CONDITION (stmt) = unshare_expr (*saved);
+    };
+  for (tree spec = get_fn_contract_specifiers (fndecl); spec;
+       spec = TREE_CHAIN (spec))
+    restore (CONTRACT_STATEMENT (spec));
+  if (DECL_SAVED_TREE (fndecl))
+    cp_walk_tree_without_duplicates (&DECL_SAVED_TREE (fndecl),
+      [](tree *tp, int *, void *) -> tree
+      {
+	if (CONTRACT_P (*tp))
+	  if (tree *saved = oa_condition_as_written_map->get (*tp))
+	    CONTRACT_CONDITION (*tp) = unshare_expr (*saved);
+	return NULL_TREE;
+      }, NULL);
+}
+
 void
 resolve_object_address_in_function (tree fndecl)
 {
   contract_note_returned_reference_sources (fndecl);
+
+  /* A 'conveyor(auto)' specialization being deduced is walked as the
+     conveyor function it is presumed to be -- trusting its own reference
+     parameters and 'this' through its implicit preconditions, its
+     violations only noted.  Once deduction has found one, it's an
+     ordinary function, to be walked as one: without those preconditions,
+     out of the probe, so that what it owes as such is diagnosed (as the
+     GIMPLE engine, checking it after deduction, does).  */
+  auto deduced_ordinary = [fndecl] ()
+    {
+      return (conveyor_auto_probing_p () && conveyor_auto_probe_decl == fndecl
+	      && *conveyor_auto_probe_violation_p);
+    };
+  auto walk_ordinary = [fndecl] ()
+    {
+      CLEAR_DECL_DECLARED_CONVEYOR_P (fndecl);
+      contract_drop_synthesized_preconditions (fndecl);
+      conveyor_auto_probe_sentinel ordinary (nullptr, true, NULL_TREE);
+      oa_resolve_object_address_in_function_1 (fndecl);
+    };
+  /* Usually the violation is found instantiating the body, before.  */
+  if (deduced_ordinary ())
+    {
+      walk_ordinary ();
+      return;
+    }
   oa_resolve_object_address_in_function_1 (fndecl);
+  /* Found by the walk itself: walk again, from the conditions as written
+     (the walk resolves them in place), past the walk's own once-per-
+     function guard.  */
+  if (deduced_ordinary ())
+    {
+      oa_restore_conditions_as_written (fndecl);
+      if (oa_resolved_functions)
+	oa_resolved_functions->remove (fndecl);
+      walk_ordinary ();
+    }
 }
 
 /* D4324: check the predicates of FNDECL's declared strict contracts for
