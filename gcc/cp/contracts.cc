@@ -8509,6 +8509,25 @@ oa_receiver_object_identity (tree recv)
   return recv;
 }
 
+static bool oa_linear_atom_equal (tree, tree);
+static bool oa_linear_atom_mentions (tree, tree);
+static bool oa_linear_atom_has_field (tree, tree);
+
+/* A linear combination of at most two terms (see oa_linear_leaf) with
+   coefficients +-1, plus a constant: what oa_linear_decompose reduces an
+   integer expression to.  */
+
+struct oa_linear_form
+{
+  tree decl[2] = {};
+  int coef[2] = {};
+  unsigned n = 0;
+  widest_int k = 0;
+};
+
+static tree oa_linear_leaf (tree, int = 0);
+static bool oa_linear_decompose (tree, int, oa_linear_form *);
+
 class oa_env
 {
 public:
@@ -8967,14 +8986,20 @@ public:
       }
     for (auto it : m_linear_sum_map)
       {
+	const std::pair<tree, tree> *k
+	  = linear_find (prev.m_linear_sum_map, true, it.first.first,
+			 it.first.second);
 	oa_contract_field_range_fact *p
-	  = prev.m_linear_sum_map.get (it.first);
+	  = k ? prev.m_linear_sum_map.get (*k) : NULL;
 	widen (it.second.range, p ? &p->range : NULL);
       }
     for (auto it : m_linear_diff_map)
       {
+	const std::pair<tree, tree> *k
+	  = linear_find (prev.m_linear_diff_map, false, it.first.first,
+			 it.first.second);
 	oa_contract_field_range_fact *p
-	  = prev.m_linear_diff_map.get (it.first);
+	  = k ? prev.m_linear_diff_map.get (*k) : NULL;
 	widen (it.second.range, p ? &p->range : NULL);
       }
     for (auto it : m_float_range_map)
@@ -9053,7 +9078,19 @@ public:
     m_array_alias_target.empty ();
     m_call_relational_map.empty ();
     m_call_call_relational_map.empty ();
-    linear_invalidate_if ([] (tree d) { return TREE_ADDRESSABLE (d); });
+    linear_invalidate_if ([] (tree d)
+      {
+	/* A term naming an object's field, or a scalar whose address was
+	   taken: the call may have changed it.  */
+	if (oa_linear_atom_has_field (d, NULL_TREE))
+	  return true;
+	return walk_tree_without_duplicates
+		 (&d, [] (tree *tp, int *, void *) -> tree
+		    {
+		      return (DECL_P (*tp) && TREE_ADDRESSABLE (*tp)
+			      ? *tp : NULL_TREE);
+		    }, NULL) != NULL_TREE;
+      });
     auto_vec<tree> scalars;
     for (auto it : m_nz_map)
       if (DECL_P (it.first) && TREE_ADDRESSABLE (it.first))
@@ -9396,7 +9433,8 @@ public:
      keyed on DECL itself.  */
   void relational_invalidate_involving (tree decl)
   {
-    linear_invalidate_if ([decl] (tree d) { return d == decl; });
+    linear_invalidate_if ([decl] (tree d)
+			  { return oa_linear_atom_mentions (d, decl); });
     m_relational_map.remove (decl);
     auto_vec<tree> to_remove;
     for (auto it : m_relational_map)
@@ -9407,8 +9445,8 @@ public:
   }
   void relational_merge_with (oa_env &other)
   {
-    linear_merge_with (m_linear_sum_map, other.m_linear_sum_map);
-    linear_merge_with (m_linear_diff_map, other.m_linear_diff_map);
+    linear_merge_with (m_linear_sum_map, other.m_linear_sum_map, true);
+    linear_merge_with (m_linear_diff_map, other.m_linear_diff_map, false);
     auto_vec<tree> to_remove;
     auto_vec<tree> to_keep;
     auto_vec<oa_relational_fact> kept_facts;
@@ -9434,24 +9472,60 @@ public:
   }
 
   /* The bound on 'A + B' (SUM) or 'A - B', if any.  */
+  /* The key of MAP for the terms A and B (either order for a sum), the
+     same terms by oa_linear_atom_equal, or null.  */
+  static const std::pair<tree, tree> *
+  linear_find (hash_map<oa_field_key_hash, oa_contract_field_range_fact> &m,
+	       bool sum, tree a, tree b)
+  {
+    for (auto it = m.begin (); it != m.end (); ++it)
+      {
+	const std::pair<tree, tree> &k = (*it).first;
+	if ((oa_linear_atom_equal (k.first, a)
+	     && oa_linear_atom_equal (k.second, b))
+	    || (sum && oa_linear_atom_equal (k.first, b)
+		&& oa_linear_atom_equal (k.second, a)))
+	  return &k;
+      }
+    return NULL;
+  }
   bool linear_get (bool sum, tree a, tree b, oa_contract_field_range_fact *out)
   {
     auto &m = sum ? m_linear_sum_map : m_linear_diff_map;
-    if (sum && DECL_UID (b) < DECL_UID (a))
-      std::swap (a, b);
-    oa_contract_field_range_fact *v = m.get ({a, b});
-    if (!v)
+    const std::pair<tree, tree> *k = linear_find (m, sum, a, b);
+    if (!k)
       return false;
-    *out = *v;
+    *out = *m.get (*k);
     return true;
   }
   void linear_set (bool sum, tree a, tree b,
 		   const oa_contract_field_range_fact &fact)
   {
     auto &m = sum ? m_linear_sum_map : m_linear_diff_map;
-    if (sum && DECL_UID (b) < DECL_UID (a))
-      std::swap (a, b);
-    m.put ({a, b}, fact);
+    if (const std::pair<tree, tree> *k = linear_find (m, sum, a, b))
+      {
+	std::pair<tree, tree> key = *k;
+	m.put (key, fact);
+      }
+    else
+      m.put ({a, b}, fact);
+  }
+  /* For each difference bound 'A - B' that is exactly one value C, call
+     F (A, B, C).  */
+  template <typename F>
+  void linear_for_equalities (F f)
+  {
+    for (auto it : m_linear_diff_map)
+      if (it.second.range.has_lo && it.second.range.has_hi
+	  && it.second.range.lo == it.second.range.hi)
+	f (it.first.first, it.first.second, it.second.range.lo,
+	   it.second.conveyor_established);
+  }
+  /* A field of an object has been written, or (FIELD null) any.  */
+  void linear_invalidate_field (tree field)
+  {
+    linear_invalidate_if ([field] (tree t)
+			  { return oa_linear_atom_has_field (t, field); });
   }
   /* Drop every bound involving a decl PRED holds for.  */
   template <typename P>
@@ -9463,6 +9537,8 @@ public:
 	for (auto it : *m)
 	  if (pred (it.first.first) || pred (it.first.second))
 	    to_remove.safe_push (it.first);
+	/* A sum's key may be in either order; nothing to do for that here,
+	   PRED looks at both.  */
 	for (auto &k : to_remove)
 	  m->remove (k);
       }
@@ -9473,14 +9549,16 @@ public:
   linear_merge_with (hash_map<oa_field_key_hash,
 			      oa_contract_field_range_fact> &mine,
 		     hash_map<oa_field_key_hash,
-			      oa_contract_field_range_fact> &theirs)
+			      oa_contract_field_range_fact> &theirs, bool sum)
   {
     auto_vec<std::pair<tree, tree>> to_remove;
     auto_vec<std::pair<tree, tree>> to_keep;
     auto_vec<oa_contract_field_range_fact> kept_facts;
     for (auto it : mine)
       {
-	oa_contract_field_range_fact *ov = theirs.get (it.first);
+	const std::pair<tree, tree> *tk
+	  = linear_find (theirs, sum, it.first.first, it.first.second);
+	oa_contract_field_range_fact *ov = tk ? theirs.get (*tk) : NULL;
 	oa_contract_field_range_fact merged;
 	merged.range.base = NULL_TREE;
 	merged.range.has_lo = (ov && it.second.range.has_lo
@@ -9849,6 +9927,9 @@ public:
      (mirrors predicate_fact_invalidate's own whole-object granularity).  */
   void contract_field_range_invalidate_all (tree identity)
   {
+    /* A bound naming a field of any object: which object a term's field
+       belongs to isn't resolved here.  */
+    linear_invalidate_field (NULL_TREE);
     auto_vec<std::pair<tree, tree>> to_remove;
     for (auto it : m_contract_field_range_map)
       if (it.first.first == identity)
@@ -12404,6 +12485,14 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
       return false;
     }
 
+  /* A constant variable ('static constexpr int k = 10;'): its value.  */
+  if (VAR_P (expr) && INTEGRAL_TYPE_P (TREE_TYPE (expr))
+      && decl_constant_var_p (expr))
+    {
+      tree v = maybe_constant_value (expr);
+      if (TREE_CODE (v) == INTEGER_CST)
+	return !integer_zerop (v);
+    }
   if (VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
     {
       if (oa_iile_outer_env && is_capture_proxy (expr))
@@ -14293,17 +14382,158 @@ oa_shifted_comparison_no_wrap_ok_p (oa_env &env, tree param, tree receiver,
 
 static inline bool oa_fact_tracking_bookkeeping_active_p ();
 
-/* A linear combination of at most two decls with coefficients +-1
-   plus a constant: what oa_linear_decompose reduces an integer
-   expression to.  */
+/* T without the wrappers and value-preserving conversions that don't
+   change what a linear term denotes; a constant variable ('static
+   constexpr int k = 10;') as its value.  */
 
-struct oa_linear_form
+static tree
+oa_linear_strip (tree t)
 {
-  tree decl[2] = {};
-  int coef[2] = {};
-  unsigned n = 0;
-  widest_int k = 0;
-};
+  while (true)
+    {
+      STRIP_ANY_LOCATION_WRAPPER (t);
+      if (TREE_CODE (t) == NON_LVALUE_EXPR || TREE_CODE (t) == VIEW_CONVERT_EXPR)
+	{
+	  t = TREE_OPERAND (t, 0);
+	  continue;
+	}
+      if (CONVERT_EXPR_P (t))
+	{
+	  tree to = TREE_TYPE (t), from = TREE_TYPE (TREE_OPERAND (t, 0));
+	  if ((POINTER_TYPE_P (to) && POINTER_TYPE_P (from))
+	      || (INTEGRAL_TYPE_P (to) && INTEGRAL_TYPE_P (from)
+		  && (TYPE_UNSIGNED (from) == TYPE_UNSIGNED (to)
+		      ? TYPE_PRECISION (from) <= TYPE_PRECISION (to)
+		      : (TYPE_UNSIGNED (from)
+			 && TYPE_PRECISION (from) < TYPE_PRECISION (to)))))
+	    {
+	      t = TREE_OPERAND (t, 0);
+	      continue;
+	    }
+	}
+      if (VAR_P (t) && INTEGRAL_TYPE_P (TREE_TYPE (t))
+	  && decl_constant_var_p (t))
+	{
+	  tree v = maybe_constant_value (t);
+	  if (TREE_CODE (v) == INTEGER_CST)
+	    return v;
+	}
+      return t;
+    }
+}
+
+/* Whether A and B, linear terms, denote the same value: the same decl,
+   the same field of the same object, or the same operation on such
+   operands.  */
+
+static bool
+oa_linear_atom_equal (tree a, tree b)
+{
+  a = oa_linear_strip (a);
+  b = oa_linear_strip (b);
+  if (a == b)
+    return true;
+  if (TREE_CODE (a) == INTEGER_CST && TREE_CODE (b) == INTEGER_CST)
+    return wi::to_widest (a) == wi::to_widest (b);
+  if (TREE_CODE (a) != TREE_CODE (b) || DECL_P (a))
+    return false;
+  switch (TREE_CODE_CLASS (TREE_CODE (a)))
+    {
+    case tcc_unary:
+    case tcc_binary:
+    case tcc_comparison:
+    case tcc_reference:
+    case tcc_expression:
+      if (TREE_CODE (a) == COMPONENT_REF)
+	return (TREE_OPERAND (a, 1) == TREE_OPERAND (b, 1)
+		&& oa_linear_atom_equal (TREE_OPERAND (a, 0),
+					 TREE_OPERAND (b, 0)));
+      if (TREE_CODE (a) != INDIRECT_REF
+	  && TREE_CODE_CLASS (TREE_CODE (a)) == tcc_reference)
+	return false;
+      if (TREE_CODE_CLASS (TREE_CODE (a)) == tcc_expression)
+	return false;
+      for (int i = 0; i < TREE_OPERAND_LENGTH (a); ++i)
+	if (!oa_linear_atom_equal (TREE_OPERAND (a, i), TREE_OPERAND (b, i)))
+	  return false;
+      return true;
+    default:
+      return false;
+    }
+}
+
+/* Whether linear term T mentions DECL.  */
+
+static bool
+oa_linear_atom_mentions (tree t, tree decl)
+{
+  return walk_tree_without_duplicates (&t, [] (tree *tp, int *, void *d)
+					 -> tree
+				       { return *tp == (tree) d ? *tp : NULL_TREE; },
+				       decl) != NULL_TREE;
+}
+
+/* Whether linear term T reads FIELD of some object, or (FIELD null) any
+   field.  */
+
+static bool
+oa_linear_atom_has_field (tree t, tree field)
+{
+  return walk_tree_without_duplicates (&t, [] (tree *tp, int *, void *d)
+					 -> tree
+				       {
+					 return (TREE_CODE (*tp) == COMPONENT_REF
+						 && (!d || TREE_OPERAND (*tp, 1) == (tree) d)
+						 ? *tp : NULL_TREE);
+				       }, field) != NULL_TREE;
+}
+
+static bool oa_object_identity_decl (tree, tree *);
+
+/* E as a linear term, or null: a decl's value; a field of an object
+   ('this->d_seconds', 's.f'); or an operation no linear form expresses
+   ('nanoseconds / k', 'x * 3') on such terms and constants, free of side
+   effects.  */
+
+static tree
+oa_linear_leaf (tree e, int depth)
+{
+  if (depth > 6)
+    return NULL_TREE;
+  tree d = oa_strip_to_relational_operand (e);
+  if (d && (VAR_P (d) || TREE_CODE (d) == PARM_DECL)
+      && INTEGRAL_TYPE_P (oa_decl_value_type (d)))
+    return d;
+  tree t = oa_linear_strip (e);
+  if (!INTEGRAL_TYPE_P (TREE_TYPE (t)) || TREE_SIDE_EFFECTS (t))
+    return NULL_TREE;
+  if (TREE_CODE (t) == COMPONENT_REF
+      && TREE_CODE (TREE_OPERAND (t, 1)) == FIELD_DECL)
+    {
+      tree obj = oa_linear_strip (TREE_OPERAND (t, 0));
+      if (TREE_CODE (obj) == INDIRECT_REF)
+	obj = oa_linear_strip (TREE_OPERAND (obj, 0));
+      tree identity;
+      return (oa_object_identity_decl (obj, &identity)
+	      || TREE_CODE (obj) == COMPONENT_REF) ? t : NULL_TREE;
+    }
+  switch (TREE_CODE (t))
+    {
+    case TRUNC_DIV_EXPR: case TRUNC_MOD_EXPR: case MULT_EXPR:
+    case LSHIFT_EXPR: case RSHIFT_EXPR: case BIT_AND_EXPR:
+    case BIT_IOR_EXPR: case BIT_XOR_EXPR: case MIN_EXPR: case MAX_EXPR:
+      for (int i = 0; i < 2; ++i)
+	{
+	  tree op = oa_linear_strip (TREE_OPERAND (t, i));
+	  if (TREE_CODE (op) != INTEGER_CST
+	      && !oa_linear_leaf (TREE_OPERAND (t, i), depth + 1))
+	    return NULL_TREE;
+	}
+      return t;
+    default:
+      return NULL_TREE;
+    }
+}
 
 /* Add SIGN * E to FORM, if E is linear in decls with no operation that
    could wrap: constants, decls, and '+', '-' and negation in a type
@@ -14346,12 +14576,11 @@ oa_linear_decompose (tree e, int sign, oa_linear_form *form)
 				      code == MINUS_EXPR ? -sign : sign,
 				      form));
     }
-  tree d = oa_strip_to_relational_operand (e);
-  if (!d || (!VAR_P (d) && TREE_CODE (d) != PARM_DECL)
-      || !INTEGRAL_TYPE_P (oa_decl_value_type (d)))
+  tree d = oa_linear_leaf (e);
+  if (!d)
     return false;
   for (unsigned i = 0; i < form->n; ++i)
-    if (form->decl[i] == d)
+    if (oa_linear_atom_equal (form->decl[i], d))
       {
 	form->coef[i] += sign;
 	if (form->coef[i] == 0)
@@ -14377,7 +14606,7 @@ oa_linear_decompose (tree e, int sign, oa_linear_form *form)
 static bool
 oa_linear_operand_range (tree d, oa_env &env, oa_range_fact *r)
 {
-  tree t = oa_decl_value_type (d);
+  tree t = DECL_P (d) ? oa_decl_value_type (d) : TREE_TYPE (d);
   if (!INTEGRAL_TYPE_P (t)
       || TREE_CODE (TYPE_MIN_VALUE (t)) != INTEGER_CST
       || TREE_CODE (TYPE_MAX_VALUE (t)) != INTEGER_CST)
@@ -14479,23 +14708,107 @@ oa_learn_linear_comparison (tree conjunct, oa_env &env, bool asserted_true)
 /* The bound a learned linear fact gives on 'OP0 + OP1' (PLUS_EXPR) or
    'OP0 - OP1', met into *R.  */
 
+static bool
+oa_linear_bound_of (const oa_linear_form &form, oa_env &env,
+		    oa_range_fact *out)
+{
+  if (form.n != 2)
+    return false;
+  bool sum = form.coef[0] == form.coef[1];
+  tree a = form.decl[0], b = form.decl[1];
+  bool neg = false;
+  if (form.coef[0] < 0)
+    {
+      if (sum)
+	neg = true;
+      else
+	std::swap (a, b);
+    }
+  oa_contract_field_range_fact f;
+  if (!env.linear_get (sum, a, b, &f))
+    return false;
+  oa_range_fact r = f.range;
+  if (neg)
+    {
+      oa_range_fact n;
+      n.has_lo = r.has_hi, n.has_hi = r.has_lo;
+      if (r.has_hi)
+	n.lo = -r.hi;
+      if (r.has_lo)
+	n.hi = -r.lo;
+      r = n;
+    }
+  if (r.has_lo)
+    r.lo += form.k;
+  if (r.has_hi)
+    r.hi += form.k;
+  *out = r;
+  return true;
+}
+
 static void
 oa_linear_tighten (tree_code code, tree op0, tree op1, oa_env &env,
 		   oa_range_fact *r)
 {
-  tree a = oa_strip_to_relational_operand (op0);
-  tree b = oa_strip_to_relational_operand (op1);
-  if (!a || !b || a == b
-      || (!VAR_P (a) && TREE_CODE (a) != PARM_DECL)
-      || (!VAR_P (b) && TREE_CODE (b) != PARM_DECL))
+  oa_linear_form form;
+  if (!oa_linear_decompose (op0, 1, &form)
+      || !oa_linear_decompose (op1, code == MINUS_EXPR ? -1 : 1, &form)
+      || form.n != 2)
     return;
-  oa_contract_field_range_fact f;
-  if (!env.linear_get (code == PLUS_EXPR, a, b, &f))
+  oa_range_fact got;
+  bool have = oa_linear_bound_of (form, env, &got);
+  /* Or through a term known equal to another plus a constant ('d_seconds
+     = seconds;'), substituted.  */
+  if (!have)
+    for (unsigned i = 0; i < 2 && !have; ++i)
+      env.linear_for_equalities ([&] (tree x, tree y, const widest_int &c,
+				      bool)
+	{
+	  if (have)
+	    return;
+	  /* x - y == c.  */
+	  for (int dir = 0; dir < 2 && !have; ++dir)
+	    {
+	      tree from = dir ? y : x, to = dir ? x : y;
+	      if (!oa_linear_atom_equal (form.decl[i], from)
+		  || oa_linear_atom_equal (form.decl[1 - i], to))
+		continue;
+	      oa_linear_form sub = form;
+	      sub.decl[i] = to;
+	      /* from = to + c, or from = to - c.  */
+	      sub.k += form.coef[i] * (dir ? -c : c);
+	      have = oa_linear_bound_of (sub, env, &got);
+	    }
+	});
+  if (!have)
     return;
-  if (f.range.has_lo && (!r->has_lo || f.range.lo > r->lo))
-    r->lo = f.range.lo, r->has_lo = true;
-  if (f.range.has_hi && (!r->has_hi || f.range.hi < r->hi))
-    r->hi = f.range.hi, r->has_hi = true;
+  if (got.has_lo && (!r->has_lo || got.lo > r->lo))
+    r->lo = got.lo, r->has_lo = true;
+  if (got.has_hi && (!r->has_hi || got.hi < r->hi))
+    r->hi = got.hi, r->has_hi = true;
+}
+
+/* LHS, a local scalar, has just been given the value RHS: if that is one
+   term plus a constant ('long long d = seconds;'), record that LHS minus
+   the term is that constant, for oa_linear_tighten to substitute.  Its
+   older bounds are already gone (relational_invalidate_involving).  */
+
+static void
+oa_linear_note_assignment (tree lhs, tree rhs, oa_env &env)
+{
+  lhs = STRIP_ANY_LOCATION_WRAPPER (lhs);
+  if (!(VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
+      || !INTEGRAL_TYPE_P (TREE_TYPE (lhs)) || !rhs)
+    return;
+  oa_linear_form f;
+  if (!oa_linear_decompose (rhs, 1, &f) || f.n != 1 || f.coef[0] != 1
+      || oa_linear_atom_mentions (f.decl[0], lhs))
+    return;
+  oa_contract_field_range_fact eq;
+  eq.range.has_lo = eq.range.has_hi = true;
+  eq.range.lo = eq.range.hi = f.k;
+  eq.conveyor_established = true;
+  env.linear_set (false, lhs, f.decl[0], eq);
 }
 
 static void oa_merge_branch_envs (oa_env &, oa_env &, tree);
@@ -28299,6 +28612,8 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	       relational fact for a freshly-declared decl simply has no
 	       prior entry to go stale.  */
 	    oa_establish_relational_from_call (decl, DECL_INITIAL (decl), env);
+	    if (DECL_INITIAL (decl))
+	      oa_linear_note_assignment (decl, DECL_INITIAL (decl), env);
 	    /* D4324 Commit 2: same relational/call-relational derive as the
 	       INIT_EXPR/MODIFY_EXPR case's own identical addition (see that
 	       case's own comment on the PLUS_EXPR/MINUS_EXPR transfer) --
@@ -28846,6 +29161,27 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 				env.contract_float_field_range_invalidate (field_identity,
 									    field);
 			      }
+			    /* Bounds on sums naming the field are stale; the
+			       field now equals what was written, if that is
+			       one term plus a constant ('d_seconds = seconds;'
+			       makes 'd_seconds - seconds' 0).  */
+			    env.linear_invalidate_field (field);
+			    if (INTEGRAL_TYPE_P (TREE_TYPE (field)))
+			      {
+				tree lhs_atom = oa_linear_leaf (lhs);
+				oa_linear_form f;
+				if (lhs_atom && oa_linear_decompose (rhs, 1, &f)
+				    && f.n == 1 && f.coef[0] == 1
+				    && !oa_linear_atom_has_field (f.decl[0],
+								  field))
+				  {
+				    oa_contract_field_range_fact eq;
+				    eq.range.has_lo = eq.range.has_hi = true;
+				    eq.range.lo = eq.range.hi = f.k;
+				    eq.conveyor_established = true;
+				    env.linear_set (false, lhs_atom, f.decl[0], eq);
+				  }
+			      }
 			    /* The field's nonzero fact (a contract_assert's
 			       'obj.field != 0') is stale too, unless the value
 			       written is itself provably nonzero.  */
@@ -29087,6 +29423,7 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	       unconditionally invalidated any stale relational fact for
 	       LHS before this branch ever runs.  */
 	    oa_establish_relational_from_call (lhs, rhs, env);
+	    oa_linear_note_assignment (lhs, rhs, env);
 	    /* D4324 Commit 2: RHS may itself resolve to a shifted copy of
 	       an already-established relational/call-relational fact for
 	       some other decl (see oa_get_relational/oa_get_call_
