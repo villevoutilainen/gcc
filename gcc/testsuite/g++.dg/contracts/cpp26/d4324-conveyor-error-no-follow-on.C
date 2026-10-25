@@ -50,3 +50,18 @@ pm2 (const M *s, int (M::*pmf) (int) const, int x)
   contract_assert<std::contracts::conveyor_assert_v> ((s->*pmf) (x) > 0);	// { dg-error "call through a function pointer" }
   return x;
 }
+
+// An instantiated assertion whose condition is rejected is dropped, so
+// evaluating the function at compile time still works.
+template<class T>
+struct E
+{
+  static constexpr int rank () { return 3; }	// not conveyor
+  static constexpr int ext (int r) conveyor(auto)
+  {
+    contract_assert<std::contracts::never_proven_conveyor_v> (r < rank ());	// { dg-error "call to .static constexpr int E<T>::rank.. .with T = int.., which is not declared .conveyor." }
+    return r;
+  }
+};
+constexpr int use_ext () { return E<int>::ext (1); }
+static_assert (use_ext () == 1);
