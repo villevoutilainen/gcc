@@ -31566,7 +31566,12 @@ oa_validate_contract_predicates (tree fndecl)
 void
 contract_substitute_for_synthesis (tree fn)
 {
+  /* Unlike a call site met in an unevaluated operand or a contract
+     condition (a concept check can synthesize a defaulted comparison),
+     this defines FN for good: substitute regardless of the context.  */
+  push_to_top_level ();
   oa_maybe_instantiate_contracts (fn);
+  pop_from_top_level ();
 }
 
 /* D4324: an object declaration's own contracts are validated through its
@@ -36115,6 +36120,18 @@ build_contract_check (tree contract)
      resolve_base_contract_calls's comment for why this also has to
      happen here, at genericization time.  */
   resolve_base_contract_calls (contract, current_function_decl);
+
+  /* After errors, a template's contract may never have been substituted
+     for this function (push_tinst_level declines once a template has gone
+     wrong), leaving its condition dependent: nothing to check.  Only then:
+     uses_template_parms also counts an 'auto' a condition's operand was
+     declared with.  */
+  if (seen_error ())
+    {
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond && cond != error_mark_node && uses_template_parms (cond))
+	return NULL_TREE;
+    }
 
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   contract_check_side side
