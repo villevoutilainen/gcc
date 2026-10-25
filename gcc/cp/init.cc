@@ -645,10 +645,11 @@ maybe_instantiate_nsdmi_init (tree member, tsubst_flags_t complain)
 
 	  /* Do deferred instantiation of the NSDMI.  */
 	  {
-	    conveyor_nsdmi_probe cnp (member);
+	    conveyor_spliced_probe probe;
 	    init = tsubst_expr (init, DECL_TI_ARGS (member), complain,
 				member);
 	    init = digest_nsdmi_init (member, init, complain);
+	    conveyor_finish_nsdmi_probe (member, probe);
 	  }
 
 	  finish_lambda_scope ();

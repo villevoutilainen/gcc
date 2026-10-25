@@ -29226,7 +29226,15 @@ cp_parser_default_argument (cp_parser *parser, bool template_parm_p)
       saved_class_ref = current_class_ref;
       cp_function_chain->x_current_class_ref = NULL_TREE;
     }
-  default_argument = cp_parser_initializer (parser);
+  {
+    /* D4324: a default argument is evaluated by the caller; see
+       conveyor_spliced_probe.  Not a template parameter's, a constant
+       expression.  */
+    conveyor_spliced_probe probe;
+    default_argument = cp_parser_initializer (parser);
+    if (!template_parm_p)
+      conveyor_note_default_arg_probe (default_argument, probe);
+  }
   /* Restore the "this" pointer.  */
   if (cfun)
     {
@@ -38742,10 +38750,11 @@ cp_parser_late_parsing_nsdmi (cp_parser *parser, tree field)
 
   push_unparsed_function_queues (parser);
   {
-    conveyor_nsdmi_probe cnp (field);
+    conveyor_spliced_probe probe;
     def = cp_parser_late_parse_one_default_arg (parser, field,
 						DECL_INITIAL (field),
 						NULL_TREE);
+    conveyor_finish_nsdmi_probe (field, probe);
   }
   pop_unparsed_function_queues (parser);
 
@@ -38806,10 +38815,15 @@ cp_parser_late_parsing_default_args (cp_parser *parser, tree fn)
 	   already declared with default arguments.  */
 	continue;
 
-      parsed_arg
-	= cp_parser_late_parse_one_default_arg (parser, parmdecl,
-						default_arg,
-						TREE_VALUE (parm));
+      {
+	/* D4324: see conveyor_spliced_probe.  */
+	conveyor_spliced_probe probe;
+	parsed_arg
+	  = cp_parser_late_parse_one_default_arg (parser, parmdecl,
+						  default_arg,
+						  TREE_VALUE (parm));
+	conveyor_note_default_arg_probe (parsed_arg, probe);
+      }
       TREE_PURPOSE (parm) = parsed_arg;
 
       /* Update any instantiations we've already created.  */

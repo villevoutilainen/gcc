@@ -9770,6 +9770,9 @@ convert_default_arg (tree type, tree arg, tree fn, int parmnum,
   if (fn && DECL_TEMPLATE_INFO (fn))
     arg = tsubst_default_argument (fn, parmnum, type, arg, complain);
 
+  /* D4324: the caller evaluates ARG.  */
+  conveyor_check_default_arg_use (arg, fn, parmnum);
+
   /* Due to:
 
        [dcl.fct.default]

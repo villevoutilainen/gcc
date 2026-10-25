@@ -15253,13 +15253,19 @@ tsubst_default_argument (tree fn, int parmnum, tree type, tree arg,
      the body of function so as to avoid collecting live data on the
      stack.  */
   ++function_depth;
-  arg = tsubst_expr (arg, DECL_TI_ARGS (fn), complain, NULL_TREE);
-  --function_depth;
+  {
+    /* D4324: the caller evaluates it, so not FN's conveyor rules; see
+       conveyor_spliced_probe.  */
+    conveyor_spliced_probe probe;
+    arg = tsubst_expr (arg, DECL_TI_ARGS (fn), complain, NULL_TREE);
+    --function_depth;
 
-  finish_lambda_scope ();
+    finish_lambda_scope ();
 
-  /* Make sure the default argument is reasonable.  */
-  arg = check_default_argument (type, arg, complain);
+    /* Make sure the default argument is reasonable.  */
+    arg = check_default_argument (type, arg, complain);
+    conveyor_note_default_arg_probe (arg, probe);
+  }
 
   if (errorcount+sorrycount > errs
       && (complain & tf_warning_or_error))
