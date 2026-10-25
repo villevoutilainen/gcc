@@ -31561,6 +31561,14 @@ oa_validate_contract_predicates (tree fndecl)
   return built;
 }
 
+/* See contracts.h.  */
+
+void
+contract_substitute_for_synthesis (tree fn)
+{
+  oa_maybe_instantiate_contracts (fn);
+}
+
 /* D4324: an object declaration's own contracts are validated through its
    check functions (build_object_contract_check_function), whose body walk
    scans them; build those that no call has needed yet.  */

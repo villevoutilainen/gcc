@@ -34,6 +34,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "intl.h"
 #include "common/common-target.h"
 #include "attribs.h"
+#include "contracts.h"
 
 static void do_build_copy_assign (tree);
 static void do_build_copy_constructor (tree);
@@ -1807,6 +1808,11 @@ synthesize_method (tree fndecl)
      body for the clone.  */
   if (DECL_CLONED_FUNCTION_P (fndecl))
     fndecl = DECL_CLONED_FUNCTION (fndecl);
+
+  /* D4324: a defaulted member of a class template is synthesized here,
+     never instantiated, so its contracts -- a conveyor one's implicit
+     is_object_address preconditions -- aren't substituted anywhere else.  */
+  contract_substitute_for_synthesis (fndecl);
 
   /* We may be in the middle of deferred access check.  Disable
      it now.  */
