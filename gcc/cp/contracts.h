@@ -1267,6 +1267,43 @@ public:
   }
 };
 
+/* Set while a contract control object's trait query is evaluated; see
+   contracts.cc.  */
+extern bool suppress_conveyor_restrictions_for_trait_query_p;
+
+/* RAII sentinel for instantiating a function or variable's definition
+   (instantiate_body): whatever conveyor context the instantiation was
+   triggered from doesn't extend into it.  The constant-expression, trait-
+   query and deleting-destructor exemptions and a contract condition's
+   conveyor flavor are about their own expression, not about a body that
+   evaluating it happened to need -- e.g. a deduced return type in a
+   constraint checked by a static_assert, which would otherwise instantiate
+   a conveyor function's whole body, once, with its rules off.  */
+class conveyor_instantiation_context_sentinel
+{
+  bool saved_trait, saved_cce, saved_dtor, saved_condition;
+
+public:
+  conveyor_instantiation_context_sentinel ()
+    : saved_trait (suppress_conveyor_restrictions_for_trait_query_p),
+      saved_cce (suppress_conveyor_restrictions_for_converted_constant_expr_p),
+      saved_dtor (suppress_conveyor_restrictions_for_deleting_dtor_p),
+      saved_condition (contract_condition_conveyor_p)
+  {
+    suppress_conveyor_restrictions_for_trait_query_p = false;
+    suppress_conveyor_restrictions_for_converted_constant_expr_p = false;
+    suppress_conveyor_restrictions_for_deleting_dtor_p = false;
+    contract_condition_conveyor_p = false;
+  }
+  ~conveyor_instantiation_context_sentinel ()
+  {
+    suppress_conveyor_restrictions_for_trait_query_p = saved_trait;
+    suppress_conveyor_restrictions_for_converted_constant_expr_p = saved_cce;
+    suppress_conveyor_restrictions_for_deleting_dtor_p = saved_dtor;
+    contract_condition_conveyor_p = saved_condition;
+  }
+};
+
 extern void set_fn_contract_specifiers		(tree, tree);
 extern void update_fn_contract_specifiers	(tree, tree);
 extern tree get_fn_contract_specifiers		(tree);
