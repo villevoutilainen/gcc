@@ -325,15 +325,28 @@ ip_type_structurally_nests_p (tree haystack, tree needle)
    or (via its own ADDR_EXPR branch) the VAR_DECL an address-of
    expression names -- always the ultimate object itself, never a
    reference variable -- so no separate REFERENCE_TYPE exclusion is
-   needed on top of VAR_P here.  A PARM_DECL on either side keeps the
-   conservative "not proven" default from ip_types_provably_
-   unrelated_p alone, since its own identity is not under this
-   function's control.  */
+   needed on top of VAR_P here.  A PARM_DECL against a static or
+   global keeps the conservative "not proven" default from ip_types_
+   provably_unrelated_p alone, since what the parameter refers to is
+   the caller's choice; but an automatic local of this call is created
+   after every argument was, so no parameter (nor 'this') can refer to
+   it.  */
+
+static bool
+ip_automatic_local_p (tree decl)
+{
+  return (VAR_P (decl) && !TREE_STATIC (decl) && !DECL_EXTERNAL (decl)
+	  && !DECL_HAS_VALUE_EXPR_P (decl)
+	  && DECL_CONTEXT (decl) == current_function_decl);
+}
 
 static bool
 ip_decls_provably_distinct_objects_p (tree decl_a, tree decl_b)
 {
-  return VAR_P (decl_a) && VAR_P (decl_b);
+  if (VAR_P (decl_a) && VAR_P (decl_b))
+    return true;
+  return ((TREE_CODE (decl_a) == PARM_DECL && ip_automatic_local_p (decl_b))
+	  || (TREE_CODE (decl_b) == PARM_DECL && ip_automatic_local_p (decl_a)));
 }
 
 static bool
