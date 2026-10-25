@@ -1193,11 +1193,16 @@ extern bool *conveyor_auto_probe_violation_p;
    conveyor_auto_note_violation_in.  */
 extern tree conveyor_auto_probe_decl;
 
-/* True while a conveyor(auto) probe (as above) is in progress.  */
+/* True while a conveyor(auto) probe (as above) is in progress, so a
+   violation found now only means the specialization being deduced isn't
+   conveyor.  Not in a conveyor contract condition: its conveyor flavor
+   comes from its control object, not from the deduction, so a violation
+   in it is an error even while the function is being deduced.  */
 inline bool
 conveyor_auto_probing_p (void)
 {
-  return conveyor_auto_probe_violation_p != nullptr;
+  return conveyor_auto_probe_violation_p != nullptr
+	 && !contract_condition_conveyor_p;
 }
 
 /* Record that the active conveyor(auto) probe found a violation.
@@ -1271,24 +1276,29 @@ public:
    contracts.cc.  */
 extern bool suppress_conveyor_restrictions_for_trait_query_p;
 
-/* RAII sentinel for instantiating a function or variable's definition
+/* RAII sentinel for instantiating D, a function or variable's definition
    (instantiate_body): whatever conveyor context the instantiation was
    triggered from doesn't extend into it.  The constant-expression, trait-
    query and deleting-destructor exemptions and a contract condition's
    conveyor flavor are about their own expression, not about a body that
    evaluating it happened to need -- e.g. a deduced return type in a
    constraint checked by a static_assert, which would otherwise instantiate
-   a conveyor function's whole body, once, with its rules off.  */
+   a conveyor function's whole body, once, with its rules off.  Likewise a
+   conveyor(auto) probe is about the body of the specialization it deduces:
+   unless D is that one, violations in D's body are errors, not
+   absorbed into the other function's deduction.  */
 class conveyor_instantiation_context_sentinel
 {
   bool saved_trait, saved_cce, saved_dtor, saved_condition;
+  conveyor_auto_probe_sentinel probe;
 
 public:
-  conveyor_instantiation_context_sentinel ()
+  explicit conveyor_instantiation_context_sentinel (tree d)
     : saved_trait (suppress_conveyor_restrictions_for_trait_query_p),
       saved_cce (suppress_conveyor_restrictions_for_converted_constant_expr_p),
       saved_dtor (suppress_conveyor_restrictions_for_deleting_dtor_p),
-      saved_condition (contract_condition_conveyor_p)
+      saved_condition (contract_condition_conveyor_p),
+      probe (nullptr, conveyor_auto_probe_decl != d)
   {
     suppress_conveyor_restrictions_for_trait_query_p = false;
     suppress_conveyor_restrictions_for_converted_constant_expr_p = false;
