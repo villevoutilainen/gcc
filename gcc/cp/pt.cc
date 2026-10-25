@@ -29750,7 +29750,12 @@ public:
       return;
     s_resolving->remove (m_decl);
     if (m_violation)
-      CLEAR_DECL_DECLARED_CONVEYOR_P (m_decl);
+      {
+	CLEAR_DECL_DECLARED_CONVEYOR_P (m_decl);
+	/* And the implicit preconditions instantiate_body synthesized while
+	   it was presumed conveyor.  */
+	contract_drop_synthesized_preconditions (m_decl);
+      }
     SET_DECL_CONVEYOR_AUTO_RESOLVED_P (m_decl);
   }
 };

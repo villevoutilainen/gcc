@@ -4484,6 +4484,45 @@ oa_fndecl_has_conveyor_active_contract_p (tree fndecl)
   return false;
 }
 
+/* The implicit preconditions oa_synthesize_implicit_reference_safety_
+   preconditions built.  */
+
+static GTY(()) hash_set<tree> *oa_synthesized_implicit_contracts;
+
+/* Remove from FNDECL's, and its clones', contract specifiers the implicit
+   preconditions synthesized for it -- once 'conveyor(auto)' deduction finds
+   it isn't conveyor after all (instantiate_body synthesizes them while it's
+   still presumed to be): a function that isn't conveyor imposes no
+   is_object_address obligation on its callers.  */
+
+void
+contract_drop_synthesized_preconditions (tree fndecl)
+{
+  if (!oa_synthesized_implicit_contracts)
+    return;
+  auto drop = [] (tree fn)
+    {
+      tree kept = NULL_TREE;
+      bool any = false;
+      for (tree spec = get_fn_contract_specifiers (fn); spec;
+	   spec = TREE_CHAIN (spec))
+	if (oa_synthesized_implicit_contracts->contains (CONTRACT_STATEMENT (spec)))
+	  any = true;
+	else
+	  {
+	    tree copy = copy_node (spec);
+	    TREE_CHAIN (copy) = NULL_TREE;
+	    kept = attr_chainon (kept, copy);
+	  }
+      if (any)
+	set_fn_contract_specifiers (fn, kept);
+    };
+  drop (fndecl);
+  tree clone;
+  FOR_EACH_CLONE (clone, fndecl)
+    drop (clone);
+}
+
 void
 oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
 {
@@ -4677,6 +4716,9 @@ oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
       tree spec = finish_contract_specifier (pre_id, contract);
       if (spec == error_mark_node)
 	continue;
+      if (!oa_synthesized_implicit_contracts)
+	oa_synthesized_implicit_contracts = hash_set<tree>::create_ggc (37);
+      oa_synthesized_implicit_contracts->add (CONTRACT_STATEMENT (spec));
       new_specs = attr_chainon (new_specs, spec);
     }
 
@@ -24613,6 +24655,14 @@ oa_maybe_instantiate_contracts (tree fn)
     return;
   if (DECL_CLONED_FUNCTION_P (fn))
     fn = DECL_CLONED_FUNCTION (fn);
+  /* An unresolved 'conveyor(auto)' callee: whether it's conveyor -- and so
+     has the implicit preconditions a caller must prove -- is only known
+     once deduced.  Checking a call before that would silently find no
+     obligation at all.  Not where instantiating is speculative (below).  */
+  if (DECL_CONVEYOR_AUTO_P (fn) && !DECL_CONVEYOR_AUTO_RESOLVED_P (fn)
+      && !cp_unevaluated_operand && !processing_contract_condition
+      && !processing_template_decl)
+    maybe_instantiate_conveyor (fn);
   if (!DECL_TEMPLATE_INFO (fn) || DECL_TEMPLATE_INSTANTIATED (fn))
     return;
   /* Missing gate found and fixed 2026-08-23: there is nothing for this

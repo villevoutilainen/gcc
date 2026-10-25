@@ -129,6 +129,12 @@ namespace ranges
 	operator()(_Tp&& __t) const noexcept(_S_noexcept<_Tp&>())
 	_GLIBCXX_CONVEYOR_AUTO
 	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  // An instance that isn't conveyor -- calling a begin()/end() that
+	  // isn't -- trusts __t for whatever obligations those have.
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (__builtin_addressof (__t)));
+#endif
 	  if constexpr (is_array_v<remove_reference_t<_Tp>>)
 	    {
 	      static_assert(is_lvalue_reference_v<_Tp>);
@@ -181,6 +187,12 @@ namespace ranges
 	operator()(_Tp&& __t) const noexcept(_S_noexcept<_Tp&>())
 	_GLIBCXX_CONVEYOR_AUTO
 	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  // An instance that isn't conveyor -- calling a begin()/end() that
+	  // isn't -- trusts __t for whatever obligations those have.
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (__builtin_addressof (__t)));
+#endif
 	  if constexpr (is_bounded_array_v<remove_reference_t<_Tp>>)
 	    {
 	      static_assert(is_lvalue_reference_v<_Tp>);

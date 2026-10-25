@@ -285,6 +285,9 @@ extern void contract_note_returned_reference_sources (tree);
 /* Whether the reference CALLEE returns may be its argument ARGNO ('this'
    being 0), or what that argument refers to.  */
 extern bool contract_call_may_return_arg_p	(tree, unsigned);
+/* Remove the implicit preconditions synthesized for FNDECL, a
+   'conveyor(auto)' function deduced not to be conveyor.  */
+extern void contract_drop_synthesized_preconditions (tree);
 extern bool contract_control_symbolic_like		(tree, contract_check_side, bool = false);
 extern tree contract_default_control_object		(location_t);
 extern void maybe_inherit_virtual_contract		(tree, tree);
