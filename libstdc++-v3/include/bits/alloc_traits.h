@@ -494,7 +494,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  otherwise returns @c numeric_limits<size_type>::max()
       */
       static _GLIBCXX20_CONSTEXPR size_type
-      max_size(const _Alloc& __a) noexcept _GLIBCXX_CONVEYOR
+      max_size(const _Alloc& __a) noexcept _GLIBCXX_CONVEYOR_AUTO
       {
 	if constexpr (__has_max_size<_Alloc>)
 	  return __a.max_size();

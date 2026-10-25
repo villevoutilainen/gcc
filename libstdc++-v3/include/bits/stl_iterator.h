@@ -1055,7 +1055,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       __attribute__((__always_inline__))
       explicit _GLIBCXX_CONSTEXPR
-      __normal_iterator(const _Iterator& __i) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
+      __normal_iterator(const _Iterator& __i) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       : _M_current(__i) { }
 
       // Allow iterator to const_iterator conversion
@@ -1185,7 +1185,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	requires requires {
 	  { __lhs.base() == __rhs.base() } -> std::convertible_to<bool>;
 	}
-	_GLIBCXX_CONVEYOR
+	_GLIBCXX_CONVEYOR_AUTO
 	{ return __lhs.base() == __rhs.base(); }
 
       [[nodiscard, __gnu__::__always_inline__]]
@@ -1196,7 +1196,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       requires requires {
 	{ __lhs.base() == __rhs.base() } -> std::convertible_to<bool>;
       }
-      _GLIBCXX_CONVEYOR
+      _GLIBCXX_CONVEYOR_AUTO
       { return __lhs.base() == __rhs.base(); }
 
       template<typename _Iter>
