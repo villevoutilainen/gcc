@@ -4183,8 +4183,8 @@ static bool cg_callee_pre_mandatory;
    for CG_CALLEE_PRE_MANDATORY's obligations alone: such a predicate is
    otherwise exempt from the conveyor checks (cg_predicate_item8_p), but
    a call it makes still mustn't break its conveyor callee's
-   preconditions.  Its is_object_address obligations stay exempt, as the
-   AST engine's oa_item8_callee_pre_only.  */
+   preconditions, is_object_address ones included, as the AST engine's
+   oa_item8_callee_pre_only.  */
 
 static bool cg_callee_pre_only;
 
@@ -7326,11 +7326,12 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 			&& oa_contract_symbolic_strict_cached_p (contract));
       /* Under -fcontract-analysis-engine=, a conveyor precondition's
 	 is_object_address conjunct is a mandatory obligation, as in the
-	 AST engine (oa_handle_call_precondition_obligation) -- except in a
-	 never-proven predicate (cg_callee_pre_only).  Everything else here
-	 is a proof check (cg_proof_checks_p), unless MANDATORY.  */
+	 AST engine (oa_handle_call_precondition_obligation), in a
+	 never-proven predicate too: never-proven trusts the predicate's
+	 own claim, not what the calls it makes require.  Everything else
+	 here is a proof check (cg_proof_checks_p), unless MANDATORY.  */
       bool mandatory_oa = (flag_contract_analysis_engine != 0
-			   && check_as_conveyor && !cg_callee_pre_only);
+			   && check_as_conveyor);
       bool proofs = (mandatory
 		     || (check_as_conveyor
 			 && cg_proof_checks_p (contract, callee, true))
@@ -7355,8 +7356,6 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	  else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
 	    is_oa = false;
 	  else
-	    continue;
-	  if (is_oa && cg_callee_pre_only)
 	    continue;
 	  if (!proofs && !(is_oa && mandatory_oa))
 	    continue;
@@ -15976,10 +15975,6 @@ pass_contracts_gimple::execute_1 (function *fun)
 			     established_nz, &assert_memory_verdicts,
 			     &established_frange, &established);
 
-  /* A conveyor callee's implicit reference-parameter and receiver
-     obligations are the callee's, whoever calls it, as in the AST engine
-     (Q2 is gated on the caller inside cg_check_call_reference_safety).  */
-  bool check_reference_safety = !never_proven_core;
   bool check_item8_ub = conveyor_code && !never_proven_core;
 
   /* Walk the dominator tree, so a contract_assert's facts are in the
@@ -16017,8 +16012,14 @@ pass_contracts_gimple::execute_1 (function *fun)
 	      gcall *call = as_a <gcall *> (stmt);
 	      {
 		auto consult = make_temp_override (cg_consult_call, call);
-		if (check_reference_safety)
-		  cg_check_call_reference_safety (call, fun, established);
+		/* A conveyor callee's implicit reference-parameter and
+		   receiver obligations are the callee's, whoever calls it --
+		   a never-proven predicate included, as in the AST engine
+		   (oa_scan_item7_in_expr): never-proven trusts the
+		   predicate's own claim, not what the calls it makes
+		   require.  Q2 is gated on the caller inside
+		   cg_check_call_reference_safety.  */
+		cg_check_call_reference_safety (call, fun, established);
 		cg_check_call (call, established, established_nz,
 			       established_range, established_rel,
 			       established_call_call_rel,
