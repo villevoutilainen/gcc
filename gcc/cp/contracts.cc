@@ -11525,6 +11525,15 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
 	  && stripped_tail == TREE_OPERAND (head, 0)
 	  && oa_operator_new_call_provable_p (TREE_OPERAND (head, 1)))
 	return true;
+      /* A variable's address, whatever comes before it: 'const V &r =
+	 make ();' binds R through '(D = make (), &D)', D the temporary
+	 whose lifetime is extended to R's.  */
+      if (TREE_CODE (stripped_tail) == ADDR_EXPR)
+	{
+	  tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (stripped_tail, 0));
+	  if (VAR_P (op) || TREE_CODE (op) == PARM_DECL)
+	    return true;
+	}
     }
 
   /* D4324/P2680, ctor/dtor 'this' soundness correction, Phase 1.4/1.5
