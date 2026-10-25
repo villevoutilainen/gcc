@@ -35957,6 +35957,19 @@ get_or_build_symbolic_shadow_contract (location_t loc, tree contract,
    predicate -- per the document's "the runtime code that checks a
    symbolic pre() should invoke the control object's operator()."  */
 
+/* CC_BIND, the BIND_EXPR a contract check was built in, now that its body
+   is complete.  build3 computed its TREE_SIDE_EFFECTS from the still-empty
+   body; without it, a check that is all of a loop's body was dropped from
+   the loop by append_to_statement_list (genericize_c_loop), so that
+   'for (...) contract_assert (c);' never checked anything.  */
+
+static tree
+contract_check_bind_done (tree cc_bind)
+{
+  TREE_SIDE_EFFECTS (cc_bind) = 1;
+  return cc_bind;
+}
+
 static tree
 build_symbolic_runtime_check (tree contract, tree ctrl, location_t loc,
 			       tree condition)
@@ -36011,7 +36024,7 @@ build_symbolic_runtime_check (tree contract, tree ctrl, location_t loc,
     }
 
   BIND_EXPR_BODY (cc_bind) = pop_stmt_list (BIND_EXPR_BODY (cc_bind));
-  return cc_bind;
+  return contract_check_bind_done (cc_bind);
 }
 
 /* Genericize a CONTRACT tree, but do not attach it to the current context,
@@ -36172,7 +36185,7 @@ build_contract_check (tree contract)
 						      void_type_node, 1,
 						      args_ptr));
       BIND_EXPR_BODY (cc_bind) = pop_stmt_list (BIND_EXPR_BODY (cc_bind));
-      return cc_bind;
+      return contract_check_bind_done (cc_bind);
     }
 
   /* D4324 step 1, assumable: emit an optimizer assumption over the predicate
@@ -36316,7 +36329,7 @@ build_contract_check (tree contract)
     }
 
   BIND_EXPR_BODY (cc_bind) = pop_stmt_list (BIND_EXPR_BODY (cc_bind));
-  return cc_bind;
+  return contract_check_bind_done (cc_bind);
 }
 
 #include "gt-cp-contracts.h"
