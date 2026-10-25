@@ -1274,12 +1274,15 @@ cg_trusted_ranger_range (tree val, gimple *stmt, gimple_ranger *ranger,
   return t.lo || t.hi;
 }
 
+static void cg_range_meet (cg_range_lite *, const cg_range_lite &);
+
 static bool
-cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_range,
-			  hash_map<tree, cg_range_lite> &scalar_range_cache,
-			  gimple_ranger *ranger, bool require_conveyor,
-			  bool require_symbolic, cg_range_lite *out,
-			  gimple *at_stmt)
+cg_established_range_of_1 (tree val,
+			    hash_map<tree, cg_range_lite> &established_range,
+			    hash_map<tree, cg_range_lite> &scalar_range_cache,
+			    gimple_ranger *ranger, bool require_conveyor,
+			    bool require_symbolic, cg_range_lite *out,
+			    gimple *at_stmt)
 {
   if (val == NULL_TREE)
     return false;
@@ -1481,6 +1484,39 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
     }
 
   return false;
+}
+
+static bool cg_linear_postcondition_tests_p ();
+static cg_range_lite cg_linear_bound (tree_code, tree, tree, gimple *,
+				      gimple_ranger *);
+
+/* cg_established_range_of_1's range, met, at AT_STMT in conveyor
+   checking, with what the postconditions of bool calls tested on the
+   way there say of VAL (cg_linear_bound): ranger can't see those.  */
+
+static bool
+cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_range,
+			  hash_map<tree, cg_range_lite> &scalar_range_cache,
+			  gimple_ranger *ranger, bool require_conveyor,
+			  bool require_symbolic, cg_range_lite *out,
+			  gimple *at_stmt)
+{
+  bool have = cg_established_range_of_1 (val, established_range,
+					  scalar_range_cache, ranger,
+					  require_conveyor, require_symbolic,
+					  out, at_stmt);
+  if (!at_stmt || !require_conveyor || !ranger || !val
+      || TREE_CODE (val) != SSA_NAME || !INTEGRAL_TYPE_P (TREE_TYPE (val))
+      || !cg_linear_postcondition_tests_p ())
+    return have;
+  if (!have)
+    *out = cg_range_lite ();
+  cg_range_lite lin = cg_linear_bound (PLUS_EXPR, val, integer_zero_node,
+				       at_stmt, ranger);
+  /* An empty bound is a path that can't be taken: nothing to add.  */
+  if (!(lin.has_lo && lin.has_hi && lin.lo > lin.hi))
+    cg_range_meet (out, lin);
+  return out->has_lo || out->has_hi;
 }
 
 /* Item 6's own shape, read declaratively: does CALLEE have a declared,
@@ -4552,6 +4588,9 @@ cg_provably_safe_unit_shift_p (tree x, bool increasing,
   return increasing ? fact.has_upper_witness : fact.has_lower_witness;
 }
 
+static tree cg_contract_check_call_p (gcall *, tree *, tree *, tree *);
+static tree cg_contract_check_decl_value (gcall *, tree, tree, tree);
+
 /* A linear combination of at most two SSA values with coefficients
    +-1 plus a constant, what cg_linear_decompose reduces a value to.  */
 
@@ -4646,32 +4685,101 @@ cg_range_meet (cg_range_lite *r, const cg_range_lite &b)
     r->hi = b.hi, r->has_hi = true;
 }
 
-/* The bound the atoms' own ranges on edge E give the target.  */
+/* What is known on a path about the target's atoms and about its atom
+   part (the target without its constant), or that the path can't be
+   taken.  */
+
+struct cg_linear_state
+{
+  cg_range_lite atom[2];
+  cg_range_lite part;
+  bool infeasible = false;
+};
+
+/* ATOM's range on edge E, its type's where ranger knows nothing.  */
 
 static cg_range_lite
-cg_linear_ranges_on_edge (cg_linear_query &q, edge e)
+cg_linear_atom_on_edge (cg_linear_query &q, edge e, tree atom)
+{
+  tree type = TREE_TYPE (atom);
+  cg_range_lite r;
+  r.has_lo = r.has_hi = true;
+  r.lo = wi::to_widest (TYPE_MIN_VALUE (type));
+  r.hi = wi::to_widest (TYPE_MAX_VALUE (type));
+  int_range_max vr (type);
+  if (q.ranger->range_on_edge (vr, e, atom) && !vr.undefined_p ()
+      && !vr.varying_p ())
+    {
+      r.lo = widest_int::from (vr.lower_bound (), TYPE_SIGN (type));
+      r.hi = widest_int::from (vr.upper_bound (), TYPE_SIGN (type));
+    }
+  return r;
+}
+
+/* Meet into ST's part the bound its atoms' intervals give it.  */
+
+static void
+cg_linear_close (cg_linear_query &q, cg_linear_state *st)
 {
   cg_range_lite r;
   r.has_lo = r.has_hi = true;
-  for (unsigned i = 0; i < 2; ++i)
+  for (unsigned i = 0; i < q.target.n; ++i)
     {
-      tree atom = q.target.atom[i];
-      tree type = TREE_TYPE (atom);
-      widest_int lo = wi::to_widest (TYPE_MIN_VALUE (type));
-      widest_int hi = wi::to_widest (TYPE_MAX_VALUE (type));
-      int_range_max vr (type);
-      if (q.ranger->range_on_edge (vr, e, atom) && !vr.undefined_p ()
-	  && !vr.varying_p ())
-	{
-	  lo = widest_int::from (vr.lower_bound (), TYPE_SIGN (type));
-	  hi = widest_int::from (vr.upper_bound (), TYPE_SIGN (type));
-	}
+      const cg_range_lite &a = st->atom[i];
       if (q.target.coef[i] > 0)
-	r.lo += lo, r.hi += hi;
+	{
+	  r.has_lo &= a.has_lo, r.has_hi &= a.has_hi;
+	  if (a.has_lo)
+	    r.lo += a.lo;
+	  if (a.has_hi)
+	    r.hi += a.hi;
+	}
       else
-	r.lo -= hi, r.hi -= lo;
+	{
+	  r.has_lo &= a.has_hi, r.has_hi &= a.has_lo;
+	  if (a.has_hi)
+	    r.lo -= a.hi;
+	  if (a.has_lo)
+	    r.hi -= a.lo;
+	}
     }
+  cg_range_meet (&st->part, r);
+}
+
+/* The hull of two intervals.  */
+
+static cg_range_lite
+cg_range_hull (const cg_range_lite &a, const cg_range_lite &b)
+{
+  cg_range_lite r;
+  r.has_lo = a.has_lo && b.has_lo;
+  r.has_hi = a.has_hi && b.has_hi;
+  if (r.has_lo)
+    r.lo = wi::smin (a.lo, b.lo);
+  if (r.has_hi)
+    r.hi = wi::smax (a.hi, b.hi);
   return r;
+}
+
+/* ST becomes what holds on one of the paths ST and OTHER (both
+   closed).  */
+
+static void
+cg_linear_state_hull (cg_linear_query &q, cg_linear_state *st,
+		      cg_linear_state other)
+{
+  if (other.infeasible)
+    return;
+  if (st->infeasible)
+    {
+      *st = other;
+      return;
+    }
+  cg_linear_close (q, st);
+  cg_linear_close (q, &other);
+  for (unsigned i = 0; i < 2; ++i)
+    st->atom[i] = cg_range_hull (st->atom[i], other.atom[i]);
+  st->part = cg_range_hull (st->part, other.part);
 }
 
 /* The bound the condition ending E's source gives the target on E, if
@@ -4704,17 +4812,17 @@ cg_linear_from_comparison (cg_linear_query &q, tree_code code, tree lhs,
     return r;
   cg_linear_form f;
   if (!cg_linear_decompose (lhs, 1, &f, 0)
-      || !cg_linear_decompose (rhs, -1, &f, 0) || f.n != 2)
+      || !cg_linear_decompose (rhs, -1, &f, 0) || f.n != q.target.n)
     return r;
   /* F's atom part is S times the target's.  */
   int s = 0;
   for (int sign : { 1, -1 })
     {
       bool all = true;
-      for (unsigned i = 0; i < 2; ++i)
+      for (unsigned i = 0; i < q.target.n; ++i)
 	{
 	  bool found = false;
-	  for (unsigned j = 0; j < 2; ++j)
+	  for (unsigned j = 0; j < f.n; ++j)
 	    if (f.atom[j] == q.target.atom[i]
 		&& f.coef[j] == sign * q.target.coef[i])
 	      found = true;
@@ -4813,26 +4921,470 @@ cg_linear_bound_through_phi (cg_linear_query &q, edge e, int depth,
   return true;
 }
 
+static void cg_linear_eval (cg_linear_query &, tree, bool, cg_linear_state *,
+			    int);
+static void cg_linear_postconditions (cg_linear_query &, tree, gcall *, tree,
+				      bool, cg_linear_state *, int);
+
+/* Add SIGN * T, a tree over SSA values and constants (a postcondition
+   with the call's arguments substituted), to FORM, as cg_linear_
+   decompose does for a value.  */
+
+static bool
+cg_linear_decompose_tree (tree t, int sign, cg_linear_form *form, int depth)
+{
+  STRIP_ANY_LOCATION_WRAPPER (t);
+  if (depth > 16)
+    return false;
+  tree_code code = TREE_CODE (t);
+  if (code == INTEGER_CST || code == SSA_NAME)
+    return cg_linear_decompose (t, sign, form, 0);
+  if ((code == PLUS_EXPR || code == MINUS_EXPR || code == NEGATE_EXPR)
+      && INTEGRAL_TYPE_P (TREE_TYPE (t))
+      && TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (t)))
+    {
+      if (code == NEGATE_EXPR)
+	return cg_linear_decompose_tree (TREE_OPERAND (t, 0), -sign, form,
+					 depth + 1);
+      return (cg_linear_decompose_tree (TREE_OPERAND (t, 0), sign, form,
+					depth + 1)
+	      && cg_linear_decompose_tree (TREE_OPERAND (t, 1),
+					   code == MINUS_EXPR ? -sign : sign,
+					   form, depth + 1));
+    }
+  if (CONVERT_EXPR_CODE_P (code) || code == VIEW_CONVERT_EXPR
+      || code == NON_LVALUE_EXPR)
+    {
+      tree inner = TREE_OPERAND (t, 0);
+      tree from = TREE_TYPE (inner), to = TREE_TYPE (t);
+      if (code == NON_LVALUE_EXPR
+	  || (INTEGRAL_TYPE_P (from) && INTEGRAL_TYPE_P (to)
+	      && (TYPE_UNSIGNED (from) == TYPE_UNSIGNED (to)
+		  ? TYPE_PRECISION (from) <= TYPE_PRECISION (to)
+		  : (TYPE_UNSIGNED (from)
+		     && TYPE_PRECISION (from) < TYPE_PRECISION (to)))))
+	return cg_linear_decompose_tree (inner, sign, form, depth + 1);
+    }
+  return false;
+}
+
+/* T without the wrappers a condition can carry.  */
+
+static tree
+cg_linear_strip_condition (tree t)
+{
+  while (true)
+    {
+      STRIP_ANY_LOCATION_WRAPPER (t);
+      tree_code code = TREE_CODE (t);
+      if (code == CLEANUP_POINT_EXPR || code == NON_LVALUE_EXPR
+	  || ((CONVERT_EXPR_CODE_P (code) || code == VIEW_CONVERT_EXPR)
+	      && INTEGRAL_TYPE_P (TREE_TYPE (TREE_OPERAND (t, 0)))
+	      && (TREE_CODE (TREE_TYPE (t)) == BOOLEAN_TYPE
+		  || (TREE_CODE (TREE_TYPE (TREE_OPERAND (t, 0)))
+		      == BOOLEAN_TYPE))))
+	t = TREE_OPERAND (t, 0);
+      else
+	return t;
+    }
+}
+
+/* Refine ST by condition C (a tree, see cg_linear_decompose_tree)
+   having the outcome TRUTH: comparisons of a linear form of the
+   target's atoms, and '!', '&&', '||', '?:' and bool equality over
+   them.  */
+
+static void
+cg_linear_eval (cg_linear_query &q, tree c, bool truth, cg_linear_state *st,
+		int depth)
+{
+  if (st->infeasible || depth > 16)
+    return;
+  c = cg_linear_strip_condition (c);
+  tree_code code = TREE_CODE (c);
+  if (code == INTEGER_CST)
+    {
+      if (integer_zerop (c) == truth)
+	st->infeasible = true;
+      return;
+    }
+  if (code == TRUTH_NOT_EXPR)
+    return cg_linear_eval (q, TREE_OPERAND (c, 0), !truth, st, depth + 1);
+  bool is_and = code == TRUTH_ANDIF_EXPR || code == TRUTH_AND_EXPR;
+  bool is_or = code == TRUTH_ORIF_EXPR || code == TRUTH_OR_EXPR;
+  if (is_and || is_or)
+    {
+      tree a = TREE_OPERAND (c, 0), b = TREE_OPERAND (c, 1);
+      if (is_and == truth)
+	{
+	  cg_linear_eval (q, a, truth, st, depth + 1);
+	  cg_linear_eval (q, b, truth, st, depth + 1);
+	  return;
+	}
+      cg_linear_state first = *st;
+      cg_linear_eval (q, a, truth, &first, depth + 1);
+      cg_linear_eval (q, a, !truth, st, depth + 1);
+      cg_linear_eval (q, b, truth, st, depth + 1);
+      cg_linear_state_hull (q, st, first);
+      return;
+    }
+  /* A call, its arguments values: what the callee's postconditions say
+     given its result.  */
+  if (code == CALL_EXPR)
+    {
+      tree fn = get_callee_fndecl (c);
+      bool pure = true;
+      for (int i = 0; i < call_expr_nargs (c); ++i)
+	pure &= !TREE_SIDE_EFFECTS (CALL_EXPR_ARG (c, i));
+      if (fn && pure)
+	cg_linear_postconditions (q, fn, NULL, c, truth, st, depth + 4);
+      return;
+    }
+  if (code == COND_EXPR && TREE_OPERAND (c, 1) && TREE_OPERAND (c, 2))
+    {
+      cg_linear_state first = *st;
+      cg_linear_eval (q, TREE_OPERAND (c, 0), true, &first, depth + 1);
+      cg_linear_eval (q, TREE_OPERAND (c, 1), truth, &first, depth + 1);
+      cg_linear_eval (q, TREE_OPERAND (c, 0), false, st, depth + 1);
+      cg_linear_eval (q, TREE_OPERAND (c, 2), truth, st, depth + 1);
+      cg_linear_state_hull (q, st, first);
+      return;
+    }
+  if (TREE_CODE_CLASS (code) != tcc_comparison)
+    return;
+  tree lhs = cg_linear_strip_condition (TREE_OPERAND (c, 0));
+  tree rhs = cg_linear_strip_condition (TREE_OPERAND (c, 1));
+  /* A truth value compared with a constant.  */
+  if (code == EQ_EXPR || code == NE_EXPR)
+    for (int i = 0; i < 2; ++i)
+      {
+	tree k = i ? rhs : lhs, other = i ? lhs : rhs;
+	if (TREE_CODE (k) == INTEGER_CST
+	    && (integer_zerop (k) || integer_onep (k))
+	    && (TREE_CODE (TREE_TYPE (other)) == BOOLEAN_TYPE
+		|| COMPARISON_CLASS_P (other)
+		|| truth_value_p (TREE_CODE (other))))
+	  return cg_linear_eval (q, other,
+				 truth == (integer_onep (k)
+					   == (code == EQ_EXPR)),
+				 st, depth + 1);
+      }
+  if (!truth)
+    {
+      if (code == EQ_EXPR)
+	return;
+      code = invert_tree_comparison (code, false);
+    }
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return;
+  cg_linear_form f;
+  if (!cg_linear_decompose_tree (lhs, 1, &f, 0)
+      || !cg_linear_decompose_tree (rhs, -1, &f, 0) || f.n == 0)
+    return;
+  /* What it bounds: one atom of the target, or its whole atom part,
+     S times F's atom part.  */
+  cg_range_lite *slot = NULL;
+  int s = 0;
+  if (f.n == 1)
+    for (unsigned i = 0; i < q.target.n; ++i)
+      if (f.atom[0] == q.target.atom[i])
+	slot = &st->atom[i], s = f.coef[0];
+  if (!slot && f.n == q.target.n)
+    for (int sign : { 1, -1 })
+      {
+	bool all = true;
+	for (unsigned i = 0; i < q.target.n; ++i)
+	  {
+	    bool found = false;
+	    for (unsigned j = 0; j < f.n; ++j)
+	      if (f.atom[j] == q.target.atom[i]
+		  && f.coef[j] == sign * q.target.coef[i])
+		found = true;
+	    all &= found;
+	  }
+	if (all)
+	  {
+	    slot = &st->part, s = sign;
+	    break;
+	  }
+      }
+  if (!slot)
+    return;
+  widest_int bound = -f.k;
+  if (s < 0)
+    {
+      bound = -bound;
+      code = swap_tree_comparison (code);
+    }
+  cg_range_lite r;
+  switch (code)
+    {
+    case LT_EXPR: r.has_hi = true; r.hi = bound - 1; break;
+    case LE_EXPR: r.has_hi = true; r.hi = bound; break;
+    case GT_EXPR: r.has_lo = true; r.lo = bound + 1; break;
+    case GE_EXPR: r.has_lo = true; r.lo = bound; break;
+    case EQ_EXPR: r.has_lo = r.has_hi = true; r.lo = r.hi = bound; break;
+    default: gcc_unreachable ();
+    }
+  cg_range_meet (slot, r);
+}
+
+/* How cg_linear_subst replaces the declarations of a contract's
+   condition by values.  */
+
+struct cg_linear_subst_data
+{
+  /* A postcondition's result and what it is.  */
+  tree result_id = NULL_TREE, result = NULL_TREE;
+  /* The parameters of CALLEE by the arguments of a call to it, GCALL or
+     TREE_CALL (a CALL_EXPR whose arguments are already values).  */
+  tree callee = NULL_TREE;
+  gcall *gcall_ = NULL;
+  tree tree_call = NULL_TREE;
+  /* The current function's own parameters by their incoming values.  */
+  bool own_parms = false;
+  /* A contract_assert check CHECK's declarations by the values it
+     captures.  */
+  gcall *check = NULL;
+  tree struct_var = NULL_TREE, decls = NULL_TREE;
+  bool ok = true;
+};
+
+static tree
+cg_linear_subst_r (tree *tp, int *walk_subtrees, void *data_)
+{
+  cg_linear_subst_data *d = (cg_linear_subst_data *) data_;
+  if (TYPE_P (*tp))
+    {
+      *walk_subtrees = 0;
+      return NULL_TREE;
+    }
+  if (d->result_id && *tp == d->result_id)
+    {
+      *tp = d->result;
+      *walk_subtrees = 0;
+      return NULL_TREE;
+    }
+  if (TREE_CODE (*tp) != PARM_DECL && !VAR_P (*tp))
+    return NULL_TREE;
+  tree decl = *tp, val = NULL_TREE;
+  /* A reference's value isn't what it binds.  */
+  bool by_value = !TYPE_REF_P (TREE_TYPE (decl));
+  unsigned argno;
+  if (d->check)
+    {
+      if (by_value || DECL_BY_REFERENCE (decl))
+	val = cg_contract_check_decl_value (d->check, d->struct_var,
+					    d->decls, decl);
+    }
+  else if (TREE_CODE (decl) == PARM_DECL && by_value)
+    {
+      if (d->own_parms)
+	{
+	  tree owner = DECL_ORIGIN (current_function_decl);
+	  if (cg_find_param_position (owner, decl, &argno))
+	    {
+	      tree p = DECL_ARGUMENTS (current_function_decl);
+	      for (unsigned i = 0; p && i < argno; ++i)
+		p = DECL_CHAIN (p);
+	      if (p && DECL_ORIGIN (p) == decl)
+		val = ssa_default_def (cfun, p);
+	      else if (p == decl)
+		val = ssa_default_def (cfun, p);
+	    }
+	}
+      else if (cg_find_param_position (d->callee, decl, &argno))
+	{
+	  if (d->gcall_ && argno < gimple_call_num_args (d->gcall_))
+	    val = gimple_call_arg (d->gcall_, argno);
+	  else if (d->tree_call && argno < (unsigned) call_expr_nargs (d->tree_call))
+	    val = CALL_EXPR_ARG (d->tree_call, argno);
+	}
+    }
+  if (!val || (d->check && TREE_CODE (val) != SSA_NAME
+	       && TREE_CODE (val) != INTEGER_CST))
+    {
+      d->ok = false;
+      return *tp;
+    }
+  *tp = val;
+  *walk_subtrees = 0;
+  return NULL_TREE;
+}
+
+/* COND, a contract's condition, with D's substitution, or NULL_TREE if
+   some declaration in it has no value.  */
+
+static tree
+cg_linear_subst (tree cond, cg_linear_subst_data &d)
+{
+  tree subst = unshare_expr (cond);
+  walk_tree (&subst, cg_linear_subst_r, &d, NULL);
+  return d.ok ? subst : NULL_TREE;
+}
+
+/* Refine ST by the postconditions of CALLEE, called by GCALL or
+   TREE_CALL, its result having the outcome TRUTH.  A postcondition
+   counts if it is conveyor-active and its failure terminates.  */
+
+static void
+cg_linear_postconditions (cg_linear_query &q, tree callee, gcall *gcall_,
+			  tree tree_call, bool truth, cg_linear_state *st,
+			  int depth)
+{
+  if (!flag_contract_conveyor_proofs_gimple || depth > 4)
+    return;
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract)
+	  || !oa_contract_conveyor_active_public (contract, callee)
+	  || !contract_failure_terminates_p (contract, callee))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (!cond || cond == error_mark_node)
+	continue;
+      cg_linear_subst_data d;
+      d.result_id = POSTCONDITION_IDENTIFIER (contract);
+      d.result = constant_boolean_node (truth, d.result_id
+					? TREE_TYPE (d.result_id)
+					: boolean_type_node);
+      d.callee = callee;
+      d.gcall_ = gcall_;
+      d.tree_call = tree_call;
+      if (tree subst = cg_linear_subst (cond, d))
+	cg_linear_eval (q, subst, true, st, depth + 1);
+    }
+}
+
+static bool cg_gimple_cond_zero_test (edge, tree *, bool *);
+
+/* Whether the current function tests the result of a call to a
+   function with a postcondition (cg_linear_postconditions_on_edge's
+   source of facts), computed once per function.  */
+
+static gcall *cg_tested_call (tree, bool *);
+
+/* -1 until computed for the function being checked; reset by
+   contracts_gimple_check_function.  */
+static int cg_linear_post_tests = -1;
+
+static bool
+cg_linear_postcondition_tests_p ()
+{
+  if (cg_linear_post_tests < 0)
+    {
+      cg_linear_post_tests = 0;
+      basic_block bb;
+      FOR_EACH_BB_FN (bb, cfun)
+	{
+	  gcond *cond = safe_dyn_cast <gcond *> (*gsi_last_bb (bb));
+	  if (!cond || TREE_CODE (gimple_cond_lhs (cond)) != SSA_NAME)
+	    continue;
+	  bool truth = true;
+	  gcall *call = cg_tested_call (gimple_cond_lhs (cond), &truth);
+	  tree callee = call ? gimple_call_fndecl (call) : NULL_TREE;
+	  if (!callee)
+	    continue;
+	  for (tree as = get_fn_contract_specifiers (callee); as;
+	       as = TREE_CHAIN (as))
+	    if (POSTCONDITION_P (CONTRACT_STATEMENT (as)))
+	      cg_linear_post_tests = 1;
+	}
+    }
+  return cg_linear_post_tests > 0;
+}
+
+/* The call whose bool result TESTED is, through copies, conversions
+   and negations ('!ok (x)' is '_2 = _1 ^ 1'), flipping *TRUTH for each
+   negation; NULL if it isn't one.  */
+
+static gcall *
+cg_tested_call (tree tested, bool *truth)
+{
+  for (int depth = 0; depth < 8 && TREE_CODE (tested) == SSA_NAME; ++depth)
+    {
+      gimple *def = SSA_NAME_DEF_STMT (tested);
+      if (gcall *call = def ? dyn_cast <gcall *> (def) : NULL)
+	return call;
+      if (!def || !is_gimple_assign (def)
+	  || TREE_CODE (gimple_assign_rhs1 (def)) != SSA_NAME)
+	return NULL;
+      tree_code code = gimple_assign_rhs_code (def);
+      tree rhs1 = gimple_assign_rhs1 (def);
+      if (code == TRUTH_NOT_EXPR
+	  || (code == BIT_NOT_EXPR
+	      && TREE_CODE (TREE_TYPE (rhs1)) == BOOLEAN_TYPE)
+	  || (code == BIT_XOR_EXPR
+	      && TREE_CODE (TREE_TYPE (rhs1)) == BOOLEAN_TYPE
+	      && integer_onep (gimple_assign_rhs2 (def))))
+	*truth = !*truth;
+      else if (!(gimple_assign_ssa_name_copy_p (def)
+		 || (CONVERT_EXPR_CODE_P (code)
+		     && INTEGRAL_TYPE_P (TREE_TYPE (rhs1))
+		     && (TREE_CODE (TREE_TYPE (rhs1)) == BOOLEAN_TYPE
+			 || TYPE_PRECISION (TREE_TYPE (rhs1))
+			    <= TYPE_PRECISION (TREE_TYPE (tested))))))
+	return NULL;
+      tested = rhs1;
+    }
+  return NULL;
+}
+
+
+/* If E's condition tests the bool a call returns, refine ST by the
+   callee's postconditions with that outcome ('if (ok (a, b))' with
+   'post (r: !r || a < b)').  A postcondition counts if it is conveyor-
+   active and its failure terminates.  */
+
+static void
+cg_linear_postconditions_on_edge (cg_linear_query &q, edge e,
+				  cg_linear_state *st)
+{
+  tree tested;
+  bool truth;
+  if (!flag_contract_conveyor_proofs_gimple
+      || !cg_gimple_cond_zero_test (e, &tested, &truth))
+    return;
+  gcall *call = cg_tested_call (tested, &truth);
+  tree callee = call ? gimple_call_fndecl (call) : NULL_TREE;
+  if (callee)
+    cg_linear_postconditions (q, callee, call, NULL_TREE, truth, st, 0);
+}
+
 /* The bound on the target along E.  */
 
 static cg_range_lite
 cg_linear_bound_edge (cg_linear_query &q, edge e, int depth)
 {
-  cg_range_lite r;
+  cg_linear_state st;
   if (depth > 16)
-    return r;
-  if (!cg_linear_bound_through_phi (q, e, depth, &r))
+    return st.part;
+  if (!cg_linear_bound_through_phi (q, e, depth, &st.part))
     {
-      r = cg_linear_bound_entry (q, e->src, depth + 1);
+      st.part = cg_linear_bound_entry (q, e->src, depth + 1);
       if (e->flags & (EDGE_TRUE_VALUE | EDGE_FALSE_VALUE))
 	if (gcond *cond = safe_dyn_cast <gcond *> (*gsi_last_bb (e->src)))
-	  cg_range_meet (&r, cg_linear_from_comparison
-			       (q, gimple_cond_code (cond),
-				gimple_cond_lhs (cond), gimple_cond_rhs (cond),
-				(e->flags & EDGE_TRUE_VALUE) != 0));
+	  cg_range_meet (&st.part, cg_linear_from_comparison
+				     (q, gimple_cond_code (cond),
+				      gimple_cond_lhs (cond),
+				      gimple_cond_rhs (cond),
+				      (e->flags & EDGE_TRUE_VALUE) != 0));
     }
-  cg_range_meet (&r, cg_linear_ranges_on_edge (q, e));
-  return r;
+  for (unsigned i = 0; i < q.target.n; ++i)
+    st.atom[i] = cg_linear_atom_on_edge (q, e, q.target.atom[i]);
+  cg_linear_postconditions_on_edge (q, e, &st);
+  if (st.infeasible)
+    {
+      /* No path: anything holds on it.  An empty interval.  */
+      st.part.has_lo = st.part.has_hi = true;
+      st.part.lo = 1;
+      st.part.hi = 0;
+      return st.part;
+    }
+  cg_linear_close (q, &st);
+  return st.part;
 }
 
 /* The bound on the target on entry to BB: the hull over BB's incoming
@@ -4894,9 +5446,75 @@ cg_linear_bound (tree_code code, tree op0, tree op1, gimple *stmt,
       || !cg_linear_decompose (op0, 1, &q.target, 0)
       || !cg_linear_decompose (op1, code == MINUS_EXPR ? -1 : 1, &q.target,
 			       0)
-      || q.target.n != 2)
+      || q.target.n == 0)
     return none;
   cg_range_lite r = cg_linear_bound_entry (q, gimple_bb (stmt), 0);
+  /* What the function's own preconditions and the contract_asserts
+     before STMT state, with the atoms' ranges at STMT.  */
+  cg_linear_state st;
+  for (unsigned i = 0; i < q.target.n; ++i)
+    {
+      tree atom = q.target.atom[i], type = TREE_TYPE (atom);
+      st.atom[i].has_lo = st.atom[i].has_hi = true;
+      st.atom[i].lo = wi::to_widest (TYPE_MIN_VALUE (type));
+      st.atom[i].hi = wi::to_widest (TYPE_MAX_VALUE (type));
+      int_range_max vr (type);
+      if (ranger->range_of_expr (vr, atom, stmt) && !vr.undefined_p ()
+	  && !vr.varying_p ())
+	{
+	  st.atom[i].lo = widest_int::from (vr.lower_bound (), TYPE_SIGN (type));
+	  st.atom[i].hi = widest_int::from (vr.upper_bound (), TYPE_SIGN (type));
+	}
+    }
+  tree owner = DECL_ORIGIN (current_function_decl);
+  if (flag_contract_conveyor_proofs_gimple)
+    for (tree as = get_fn_contract_specifiers (owner); as;
+	 as = TREE_CHAIN (as))
+      {
+	tree contract = CONTRACT_STATEMENT (as);
+	if (!PRECONDITION_P (contract)
+	    || !oa_contract_conveyor_active_public (contract, owner)
+	    || !contract_failure_terminates_p (contract, owner))
+	  continue;
+	tree cond = CONTRACT_CONDITION (contract);
+	if (!cond || cond == error_mark_node)
+	  continue;
+	cg_linear_subst_data d;
+	d.own_parms = true;
+	if (tree subst = cg_linear_subst (cond, d))
+	  cg_linear_eval (q, subst, true, &st, 0);
+      }
+  for (basic_block bb = gimple_bb (stmt); bb && flag_contract_conveyor_proofs_gimple;
+       bb = get_immediate_dominator (CDI_DOMINATORS, bb))
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      {
+	gimple *g = gsi_stmt (gsi);
+	if (g == stmt)
+	  break;
+	gcall *check = dyn_cast <gcall *> (g);
+	tree struct_var, cond, decls;
+	tree contract = (check
+			 ? cg_contract_check_call_p (check, &struct_var, &cond,
+						     &decls)
+			 : NULL_TREE);
+	if (!contract || TREE_CODE (contract) != ASSERTION_STMT
+	    || !cond || cond == error_mark_node
+	    || !oa_contract_conveyor_active_public (contract, owner)
+	    || !contract_failure_terminates_p (contract, owner))
+	  continue;
+	cg_linear_subst_data d;
+	d.check = check;
+	d.struct_var = struct_var;
+	d.decls = decls;
+	if (tree subst = cg_linear_subst (cond, d))
+	  cg_linear_eval (q, subst, true, &st, 0);
+      }
+  if (!st.infeasible)
+    {
+      cg_linear_close (q, &st);
+      cg_range_meet (&r, st.part);
+    }
   /* Constants of the form itself.  */
   if (r.has_lo)
     r.lo += q.target.k;
@@ -7970,12 +8588,28 @@ cg_requirement_int_range (tree e, gcall *call, tree callee,
 	    *out = cg_range_lite_exact (wi::to_widest (arg));
 	    return true;
 	  }
-	return (cg_array_bounds && TREE_CODE (arg) == SSA_NAME
-		&& cg_value_range_at (arg, call,
-				      *cg_array_bounds->established_range,
-				      *cg_array_bounds->scalar_range_cache,
-				      cg_array_bounds->ranger,
-				      require_conveyor, out));
+	if (!cg_array_bounds || TREE_CODE (arg) != SSA_NAME)
+	  return false;
+	bool have = cg_value_range_at (arg, call,
+				       *cg_array_bounds->established_range,
+				       *cg_array_bounds->scalar_range_cache,
+				       cg_array_bounds->ranger,
+				       require_conveyor, out);
+	if (!have)
+	  *out = cg_range_lite ();
+	/* What the conditions and contracts on the way say of it, the
+	   postconditions of a bool call tested among them
+	   (cg_linear_bound).  An empty bound is a path that can't be
+	   taken: nothing to add.  */
+	if (require_conveyor)
+	  {
+	    cg_range_lite lin = cg_linear_bound (PLUS_EXPR, arg,
+						 integer_zero_node, call,
+						 cg_array_bounds->ranger);
+	    if (!(lin.has_lo && lin.has_hi && lin.lo > lin.hi))
+	      cg_range_meet (out, lin);
+	  }
+	return out->has_lo || out->has_hi;
       }
     case INDIRECT_REF:
       /* A reference parameter's read: the value of the object it binds
@@ -11118,6 +11752,25 @@ cg_refine_edge_into (edge e, cg_dom_fact_state &state,
   bool zero_want_nonzero;
   if (cg_gimple_cond_zero_test (e, &zero_tested, &zero_want_nonzero))
     {
+      /* 'if (check (x))': the predicate holds, or not, for X, as a
+	 contract naming it would establish (cg_establish_persistent_
+	 facts_for_call); a scalar's fact is keyed by its value, as a
+	 precondition's is (cg_seed_predicate_self_trust).  */
+      bool call_truth = zero_want_nonzero;
+      if (gcall *call = cg_tested_call (zero_tested, &call_truth))
+	{
+	  tree callee = gimple_call_fndecl (call);
+	  if (callee && gimple_call_num_args (call) == 1)
+	    {
+	      tree arg = gimple_call_arg (call, 0);
+	      tree identity = cg_gimple_object_identity (arg);
+	      if (!identity && TREE_CODE (arg) == SSA_NAME)
+		identity = arg;
+	      if (identity)
+		state.pred.put (identity, { callee, call_truth, true });
+	    }
+	  return;
+	}
       gimple *def = SSA_NAME_DEF_STMT (zero_tested);
       if (!def || !is_gimple_assign (def))
 	return;
@@ -14410,6 +15063,7 @@ public:
 unsigned int
 pass_contracts_gimple::execute (function *fun)
 {
+  cg_linear_post_tests = -1;
   /* D4324/P2680: mirrors contracts.cc's oa_resolve_object_address_in_
      function_1 -- a generated "pred"/"thunk"/consteval-thunk helper
      function (see ldf_contract_predicate_helper's own comment) is a
