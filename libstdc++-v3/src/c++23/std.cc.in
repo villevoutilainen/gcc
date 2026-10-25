@@ -1032,6 +1032,49 @@ export namespace std::contracts
   using std::contracts::detection_mode;
   using std::contracts::contract_violation;
   using std::contracts::invoke_default_contract_violation_handler;
+  // D4324
+  using std::contracts::analyzed_conveyor_t;
+  using std::contracts::analyzed_conveyor_v;
+  using std::contracts::analyzed_symbolic_t;
+  using std::contracts::analyzed_symbolic_v;
+  using std::contracts::assertion_check_side;
+  using std::contracts::assertion_context;
+  using std::contracts::assertion_control;
+  using std::contracts::assertion_info;
+  using std::contracts::assertion_static_info;
+  using std::contracts::assume;
+  using std::contracts::assume_v;
+  using std::contracts::base_contract;
+  using std::contracts::contract_validation_result;
+  using std::contracts::conveyor_assert;
+  using std::contracts::conveyor_assert_v;
+  using std::contracts::default_control;
+  using std::contracts::default_v;
+  using std::contracts::group_semantic_rule;
+  using std::contracts::group_semantic_rules_view;
+  using std::contracts::ignore;
+  using std::contracts::ignore_v;
+  using std::contracts::invoke_violation_handler;
+  using std::contracts::mandatory;
+  using std::contracts::mandatory_v;
+  using std::contracts::never_proven_conveyor;
+  using std::contracts::never_proven_conveyor_v;
+  using std::contracts::never_proven_symbolic;
+  using std::contracts::never_proven_symbolic_v;
+  using std::contracts::noexcept_assert;
+  using std::contracts::noexcept_assert_v;
+  using std::contracts::proven_conveyor_t;
+  using std::contracts::proven_conveyor_v;
+  using std::contracts::proven_symbolic_t;
+  using std::contracts::proven_symbolic_v;
+  using std::contracts::review;
+  using std::contracts::review_v;
+  using std::contracts::symbolic_assert;
+  using std::contracts::symbolic_assert_v;
+}
+export namespace std
+{
+  using std::is_object_address;
 }
 #endif // __cpp_lib_contracts
 
@@ -3716,6 +3759,17 @@ export namespace std
 #if __cpp_lib_observable_checkpoint
   using std::observable_checkpoint;
 #endif
+  // P4324 profiles escape hatches.
+  using std::as_owner;
+  using std::escape_ref_to_uninit;
+  using std::escape_uninit;
+  using std::no_dangling;
+  using std::no_escape;
+  using std::now_init;
+  using std::now_init_in_place;
+  using std::now_uninit;
+  using std::now_valid;
+  using std::owner_consumed;
 }
 
 // <valarray>
