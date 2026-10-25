@@ -11136,10 +11136,9 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
 	    note_conveyor_auto_violation ();
 	  else
 	    {
-	      if (complain & tf_error)
-		error_at (input_location, "call to %qD, which is not "
-			  "declared %<conveyor%>, not permitted in a "
-			  "conveyor function or predicate", fn);
+	      error_at (input_location, "call to %qD, which is not "
+			"declared %<conveyor%>, not permitted in a "
+			"conveyor function or predicate", fn);
 	      return error_mark_node;
 	    }
 	}

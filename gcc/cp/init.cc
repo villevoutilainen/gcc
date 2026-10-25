@@ -4120,9 +4120,8 @@ build_new (location_t loc, vec<tree, va_gc> **placement, tree type,
 	note_conveyor_auto_violation ();
       else
 	{
-	  if (complain & tf_error)
-	    error_at (loc, "%<new%>-expression not permitted in a conveyor "
-		      "function or predicate");
+	  error_at (loc, "%<new%>-expression not permitted in a conveyor "
+		    "function or predicate");
 	  return error_mark_node;
 	}
     }

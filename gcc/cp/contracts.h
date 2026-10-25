@@ -1176,14 +1176,16 @@ public:
 	   note_conveyor_auto_violation ();
 	 else
 	   {
-	     if (complain & tf_error)
-	       error_at (loc, "...");
+	     error_at (loc, "...");
 	     return error_mark_node;
 	   }
        }
 
    i.e. the existing diagnose-and-poison block is untouched; only a
-   probing early-out is added in front of it.  */
+   probing early-out is added in front of it.  The error is given
+   regardless of the caller's tsubst_flags: outside conveyor(auto)
+   deduction a conveyor violation is never a substitution failure, so it
+   must not silently remove an overload candidate or fail a constraint.  */
 extern bool *conveyor_auto_probe_violation_p;
 
 /* The conveyor(auto) specialization whose deduction the active probe is

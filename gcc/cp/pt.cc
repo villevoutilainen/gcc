@@ -13557,6 +13557,15 @@ tsubst_template_arg (tree t, tree args, tsubst_flags_t complain, tree in_decl)
 {
   tree r;
 
+  /* D4324: a non-type template argument is a converted constant
+     expression, and any expression in a type template argument is a
+     constant expression too (an array bound: a variably modified type
+     can't be a template argument) or unevaluated.  But substitution
+     builds any call in them before that is established.  See
+     suppress_conveyor_restrictions_for_converted_constant_expr_p's
+     comment in contracts.h.  */
+  suppress_conveyor_restrictions_for_converted_constant_expr_sentinel sccce;
+
   if (!t)
     r = t;
   else if (TYPE_P (t))

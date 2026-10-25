@@ -22168,6 +22168,11 @@ cp_parser_template_argument (cp_parser* parser)
     }
 
  general_expr:
+  /* D4324: a non-type template argument is a converted constant
+     expression; see suppress_conveyor_restrictions_for_converted_
+     constant_expr_p's comment in contracts.h.  */
+  suppress_conveyor_restrictions_for_converted_constant_expr_sentinel
+    sccce;
   /* If the argument wasn't successfully parsed as a type-id followed
      by '>>', the argument can only be a constant expression now.
      Otherwise, we try parsing the constant-expression tentatively,

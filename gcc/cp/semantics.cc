@@ -3801,9 +3801,8 @@ finish_pseudo_destructor_expr (tree object, tree scope, tree destructor,
 	note_conveyor_auto_violation ();
       else
 	{
-	  if (complain & tf_error)
-	    error_at (loc, "pseudo-destructor call not permitted in a "
-		      "conveyor function or predicate");
+	  error_at (loc, "pseudo-destructor call not permitted in a "
+		    "conveyor function or predicate");
 	  return error_mark_node;
 	}
     }

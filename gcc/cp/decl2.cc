@@ -681,9 +681,8 @@ delete_sanity (location_t loc, tree exp, tree size, bool doing_vec,
 	note_conveyor_auto_violation ();
       else
 	{
-	  if (complain & tf_error)
-	    error_at (loc, "%<delete%>-expression not permitted in a "
-		      "conveyor function or predicate");
+	  error_at (loc, "%<delete%>-expression not permitted in a "
+		    "conveyor function or predicate");
 	  return error_mark_node;
 	}
     }
