@@ -29498,6 +29498,9 @@ instantiate_body (tree pattern, tree args, tree d, bool nested_p)
   if (current_function_decl)
     save_omp_privatization_clauses (omp_privatization_save);
 
+  /* D4324: D's definition gets its own conveyor context.  */
+  conveyor_instantiation_context_sentinel conveyor_context;
+
   bool push_to_top = maybe_push_to_top_level (d);
 
   mark_template_arguments_used (pattern, args);
