@@ -60,9 +60,7 @@ template std::basic_const_iterator<int*>::basic_const_iterator(int*) conveyor;
 // -- here a plain pointer -- designates, and nothing proves that an
 // object: it can't be dereferenced in a conveyor function, so these
 // aren't conveyor.  The wrappers calling them below are ordinary
-// functions, still checked at run time; they take the subrange by value,
-// an object of their own, as these members' implicit is_object_address
-// precondition requires.
+// functions, still checked at run time.
 
 // D4324/P2680: each 'sr' here is a CONST reference, deliberately -- none
 // of these ever write through it, and view_interface's own explicit-
@@ -74,14 +72,14 @@ template std::basic_const_iterator<int*>::basic_const_iterator(int*) conveyor;
 // validly proven, never satisfies that. A const reference sidesteps
 // the question entirely: _Self deduces const, and Q2 only ever applies
 // to non-const references in the first place.
-int front (SR sr) { return sr.front (); }
-int back (SR sr) { return sr.back (); }
-int subscript (SR sr) { return sr[2]; }
+int front (const SR& sr) { return sr.front (); }
+int back (const SR& sr) { return sr.back (); }
+int subscript (const SR& sr) { return sr[2]; }
 bool is_empty (const SR& sr) conveyor { return sr.empty (); }
 std::size_t size (const SR& sr) conveyor { return sr.size (); }
 bool as_bool (const SR& sr) conveyor { return bool (sr); }
 bool data_nonnull (const SR& sr) conveyor { return sr.data () != nullptr; }
-int cbegin_deref (SR sr) { return *sr.cbegin (); }
+auto cbegin_of (const SR& sr) conveyor { return sr.cbegin (); }
 
 int main ()
 {
@@ -98,7 +96,7 @@ int main ()
   VERIFY (as_bool (sr));
   VERIFY (!as_bool (empty_sr));
   VERIFY (data_nonnull (sr));
-  VERIFY (cbegin_deref (sr) == 1);
+  VERIFY (*cbegin_of (sr) == 1);
 
   return 0;
 }

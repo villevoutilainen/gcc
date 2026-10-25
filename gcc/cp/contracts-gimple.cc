@@ -15856,7 +15856,14 @@ pass_contracts_gimple::execute_1 (function *fun)
 	    if (at_eof >= 3)
 	      contract_prepare_callee_contracts (callee);
 	    else
-	      maybe_instantiate_decl (callee);
+	      {
+		maybe_instantiate_decl (callee);
+		/* Whether a 'conveyor(auto)' callee is conveyor -- and has the
+		   implicit preconditions this call must satisfy -- is only
+		   known once deduced, which maybe_instantiate_decl doesn't
+		   force for an ordinary function template.  */
+		maybe_instantiate_conveyor (callee);
+	      }
 	  }
       }
 

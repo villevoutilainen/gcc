@@ -831,7 +831,14 @@ namespace __unicode
 	return _M_end(ranges::begin(_M_base), ranges::end(_M_base));
       }
 
-      constexpr bool empty() const { return ranges::empty(_M_base); }
+      constexpr bool empty() const
+      {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
+	return ranges::empty(_M_base);
+      }
     };
 
 #ifdef __cpp_char8_t
