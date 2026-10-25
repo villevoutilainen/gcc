@@ -26689,6 +26689,17 @@ cp_parser_declarator (cp_parser* parser,
   if (cp_parser_allow_gnu_extensions_p (parser))
     gnu_attributes = cp_parser_gnu_attributes_opt (parser);
 
+  /* An abstract declarator ends at a function contract specifier, as after
+     a trailing return type ('-> int pre<ctrl> (cond)'): 'pre' or 'post',
+     maybe a balanced '<...>', and then '('.  Trying it as the start of a
+     pointer-to-member ptr-operator would turn 'pre<ctrl>' into a
+     template-id token, no longer recognizable as a contract specifier
+     once that fails.  'pre<X>::*' doesn't match: it is still a pointer to
+     member of the class template specialization 'pre<X>'.  */
+  if (dcl_kind == CP_PARSER_DECLARATOR_ABSTRACT
+      && cp_maybe_function_contract_specifier (parser))
+    return NULL;
+
   /* Check for the ptr-operator production.  */
   cp_parser_parse_tentatively (parser);
   /* Parse the ptr-operator.  */
