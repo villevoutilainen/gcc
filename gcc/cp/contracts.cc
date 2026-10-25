@@ -6728,6 +6728,17 @@ static bool
 cct_fn_may_return (tree fn, cct_env *env, int depth)
 {
   tree body = DECL_SAVED_TREE (fn);
+  /* A constexpr member of a class template (a control type like
+     'Label<true>') isn't instantiated until something needs it: as
+     constant evaluation does, instantiate it now.  */
+  if (!body && DECL_DECLARED_CONSTEXPR_P (fn) && DECL_TEMPLOID_INSTANTIATION (fn)
+      && !processing_template_decl)
+    {
+      ++function_depth;
+      instantiate_decl (fn, /*defer_ok*/false, /*expl_inst*/false);
+      --function_depth;
+      body = DECL_SAVED_TREE (fn);
+    }
   if (!body)
     {
       env->unknown_body = true;
