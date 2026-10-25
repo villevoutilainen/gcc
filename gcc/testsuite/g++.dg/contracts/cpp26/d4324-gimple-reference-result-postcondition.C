@@ -22,7 +22,9 @@ int use (A &a) conveyor { return a.v; }
 int direct (A &a) conveyor { return use (get (a)); }
 int chained (A &a) conveyor { return use (mv (get (a))); }
 
-A &unproven (A &a) conveyor { return a; }
-int bad (A &a) conveyor { return use (unproven (a)); } // { dg-error "cannot prove .is_object_address." }
+// A conveyor callee's returned reference is checked where it's returned
+// (d4324-conveyor-return-reference-*.C); an ordinary one's isn't.
+A &unproven (A &a) { return a; }
+int bad (A &a) { return use (unproven (a)); } // { dg-error "cannot prove .is_object_address." }
 
 int main () { A a{1}; return direct (a) + chained (a) + bad (a); }

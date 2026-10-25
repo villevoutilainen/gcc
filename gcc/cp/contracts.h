@@ -279,6 +279,12 @@ extern void contract_substitute_for_synthesis	(tree);
 /* Make callee FN's contracts, as declared, ready for checking a call to
    it -- substituted, and their flavors cached -- without its body.  */
 extern void contract_prepare_callee_contracts	(tree);
+/* Record which parameters the reference conveyor function FNDECL returns
+   may come from, before its body is lowered.  */
+extern void contract_note_returned_reference_sources (tree);
+/* Whether the reference CALLEE returns may be its argument ARGNO ('this'
+   being 0), or what that argument refers to.  */
+extern bool contract_call_may_return_arg_p	(tree, unsigned);
 extern bool contract_control_symbolic_like		(tree, contract_check_side, bool = false);
 extern tree contract_default_control_object		(location_t);
 extern void maybe_inherit_virtual_contract		(tree, tree);

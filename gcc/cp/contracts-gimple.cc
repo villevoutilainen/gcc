@@ -1936,6 +1936,134 @@ cg_return_slot_p (tree val)
    comment on provable_object_address_p for the full rationale (SSA/PHI
    walk replaces oa_env::merge_with's own hand-rolled AND-merge).  */
 
+/* D4324: whether conveyor CALL, returning a reference, was given the
+   address of a temporary -- a compiler-made local, ending with the
+   full-expression -- which it may hand back.  */
+
+static bool
+cg_call_given_temporary_p (gcall *call, int depth = 0)
+{
+  if (depth > 8)
+    return false;
+  tree callee = gimple_call_fndecl (call);
+  for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+    {
+      tree arg = gimple_call_arg (call, i);
+      if (!contract_call_may_return_arg_p (callee, i))
+	continue;
+      if (TREE_CODE (arg) == ADDR_EXPR)
+	{
+	  tree base = get_base_address (TREE_OPERAND (arg, 0));
+	  if (base && VAR_P (base) && !is_global_var (base)
+	      && DECL_ARTIFICIAL (base) && !DECL_NAME (base))
+	    return true;
+	}
+      else if (TREE_CODE (arg) == SSA_NAME && POINTER_TYPE_P (TREE_TYPE (arg)))
+	if (gcall *inner = dyn_cast <gcall *> (SSA_NAME_DEF_STMT (arg)))
+	  if (cg_call_given_temporary_p (inner, depth + 1))
+	    return true;
+    }
+  return false;
+}
+
+/* D4324: whether VAL is a named reference ('const T &r = f (T{});')
+   bound to what a conveyor call returned when given a temporary: the
+   temporary, which the call may hand back, ends with the full-expression,
+   before the reference is used.  Within that full-expression the call's
+   result is fine (cg_provable_object_address_p).  */
+
+static bool
+cg_named_ref_bound_to_temporary_p (tree val)
+{
+  if (TREE_CODE (val) != SSA_NAME || SSA_NAME_IS_DEFAULT_DEF (val))
+    return false;
+  tree var = SSA_NAME_VAR (val);
+  if (!var || !VAR_P (var) || !DECL_NAME (var) || DECL_ARTIFICIAL (var)
+      || !TYPE_REF_P (TREE_TYPE (var)))
+    return false;
+  for (int depth = 0; depth < 8 && TREE_CODE (val) == SSA_NAME
+		      && !SSA_NAME_IS_DEFAULT_DEF (val); ++depth)
+    {
+      gimple *def = SSA_NAME_DEF_STMT (val);
+      if (gcall *call = dyn_cast <gcall *> (def))
+	{
+	  tree callee = gimple_call_fndecl (call);
+	  return (callee && DECL_DECLARED_CONVEYOR_P (callee)
+		  && TYPE_REF_P (TREE_TYPE (TREE_TYPE (callee)))
+		  && cg_call_given_temporary_p (call));
+	}
+      if (!is_gimple_assign (def)
+	  || !(gimple_assign_rhs_code (def) == SSA_NAME
+	       || CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def))))
+	return false;
+      val = gimple_assign_rhs1 (def);
+    }
+  return false;
+}
+
+/* D4324: a reference a conveyor function returns must outlive the call.
+   Whether address VAL reaches storage that ends with the current function
+   FN: an automatic variable (a temporary included) or by-value parameter
+   of it -- directly, through copies and merges, or as what a call given
+   such an address may hand back.  */
+
+static bool
+cg_addr_local_p (tree val, tree fn, int depth = 0)
+{
+  if (!val || depth > 16)
+    return false;
+  if (TREE_CODE (val) == ADDR_EXPR)
+    {
+      tree base = get_base_address (TREE_OPERAND (val, 0));
+      if (!base)
+	return false;
+      if (TREE_CODE (base) == MEM_REF)
+	return cg_addr_local_p (TREE_OPERAND (base, 0), fn, depth + 1);
+      if (VAR_P (base))
+	return !is_global_var (base) && DECL_CONTEXT (base) == fn;
+      if (TREE_CODE (base) == PARM_DECL)
+	return !TYPE_REF_P (TREE_TYPE (base)) || DECL_BY_REFERENCE (base);
+      return TREE_CODE (base) == RESULT_DECL;
+    }
+  if (TREE_CODE (val) != SSA_NAME)
+    return false;
+  if (SSA_NAME_IS_DEFAULT_DEF (val))
+    {
+      tree var = SSA_NAME_VAR (val);
+      return var && TREE_CODE (var) == PARM_DECL && DECL_BY_REFERENCE (var);
+    }
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (gphi *phi = dyn_cast <gphi *> (def))
+    {
+      for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+	if (cg_addr_local_p (gimple_phi_arg_def (phi, i), fn, depth + 1))
+	  return true;
+      return false;
+    }
+  if (is_gimple_assign (def))
+    {
+      enum tree_code code = gimple_assign_rhs_code (def);
+      if (code == ADDR_EXPR || code == SSA_NAME || CONVERT_EXPR_CODE_P (code)
+	  || code == POINTER_PLUS_EXPR)
+	return cg_addr_local_p (gimple_assign_rhs1 (def), fn, depth + 1);
+      return false;
+    }
+  if (gcall *call = dyn_cast <gcall *> (def))
+    {
+      tree callee = gimple_call_fndecl (call);
+      for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+	{
+	  tree arg = gimple_call_arg (call, i);
+	  if (POINTER_TYPE_P (TREE_TYPE (arg))
+	      && contract_call_may_return_arg_p (callee, i)
+	      && cg_addr_local_p (arg, fn, depth + 1))
+	    return true;
+	}
+      return false;
+    }
+  return false;
+}
+
 static bool
 cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
 			       bool require_conveyor,
@@ -1961,6 +2089,15 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
     {
       if (reason_out)
 	*reason_out = OA_UNPROVABLE_NOT_ADDRESS_SHAPE;
+      return false;
+    }
+
+  /* Before any fact about it: a reference whose object has ended can't
+     have been established as one.  */
+  if (cg_named_ref_bound_to_temporary_p (val))
+    {
+      if (reason_out && *reason_out == OA_UNPROVABLE_NONE)
+	*reason_out = OA_UNPROVABLE_NO_FACT;
       return false;
     }
 
@@ -2124,6 +2261,13 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
 		  && id_equal (DECL_NAME (callee), "__cxa_allocate_exception")
 		  && CP_DECL_CONTEXT (callee) == global_namespace
 		  && DECL_EXTERN_C_P (callee)))
+	    result = true;
+	  /* A reference a conveyor callee returns: its returns are checked
+	     to outlive it (cg_check_returned_reference), and what it was
+	     given lives to the end of the call's full-expression (a named
+	     reference bound to it: cg_named_ref_bound_to_temporary_p).  */
+	  else if (DECL_DECLARED_CONVEYOR_P (callee)
+		   && TYPE_REF_P (TREE_TYPE (TREE_TYPE (callee))))
 	    result = true;
 	  else
 	    result = cg_call_postcondition_guarantees_p
@@ -6622,6 +6766,17 @@ cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
      or into the VTT.  */
   if (cg_vtable_pointer_p (base) || cg_vtt_pointer_p (base))
     return;
+  /* A named reference bound to what a conveyor call given a temporary
+     returned: the object has ended (before the copies are looked through
+     below, which lose the name).  */
+  if (cg_named_ref_bound_to_temporary_p (base))
+    {
+      cg_conveyor_error_at (gimple_location (stmt),
+			    "pointer dereference of %qE not "
+			    "provably valid in a conveyor function",
+			    cg_display_value (base));
+      return;
+    }
   /* A virtual base of an object, '(H *) (this + *(vptr - 24))': valid
      if the object is.  */
   for (int depth = 0; depth < 8 && TREE_CODE (base) == SSA_NAME; ++depth)
@@ -6658,6 +6813,15 @@ cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
   bool is_ref_parm = TREE_CODE (TREE_TYPE (base)) == REFERENCE_TYPE
 		      && SSA_NAME_VAR (base)
 		      && TREE_CODE (SSA_NAME_VAR (base)) == PARM_DECL;
+  /* A named local reference is as valid as what it was bound to ('T &r =
+     *p;', 'const T &r = f (T{});'), which its value's definition shows --
+     as in the AST engine, which checks one whose binding it saw.  */
+  if (TREE_CODE (TREE_TYPE (base)) == REFERENCE_TYPE
+      && TREE_CODE (base) == SSA_NAME && !SSA_NAME_IS_DEFAULT_DEF (base)
+      && SSA_NAME_VAR (base) && VAR_P (SSA_NAME_VAR (base))
+      && DECL_NAME (SSA_NAME_VAR (base))
+      && !DECL_ARTIFICIAL (SSA_NAME_VAR (base)))
+    is_ref_parm = true;
   if (TREE_CODE (TREE_TYPE (base)) != POINTER_TYPE && !is_ref_parm)
     return;
 
@@ -6693,6 +6857,68 @@ cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
 			  "pointer dereference of %qE not "
 			  "provably valid in a conveyor function",
 			  cg_display_value (base));
+}
+
+/* Whether address VAL is 'this', or that of '*this' or a subobject,
+   through copies.  */
+
+static bool
+cg_addr_of_this_p (tree val, int depth = 0)
+{
+  if (depth > 8 || !val)
+    return false;
+  if (TREE_CODE (val) == ADDR_EXPR)
+    {
+      tree base = get_base_address (TREE_OPERAND (val, 0));
+      return (base && TREE_CODE (base) == MEM_REF
+	      && cg_addr_of_this_p (TREE_OPERAND (base, 0), depth + 1));
+    }
+  if (TREE_CODE (val) != SSA_NAME)
+    return false;
+  if (SSA_NAME_IS_DEFAULT_DEF (val))
+    return SSA_NAME_VAR (val) && is_this_parameter (SSA_NAME_VAR (val));
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (is_gimple_assign (def)
+      && (gimple_assign_rhs_code (def) == ADDR_EXPR
+	  || gimple_assign_rhs_code (def) == SSA_NAME
+	  || CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def))))
+    return cg_addr_of_this_p (gimple_assign_rhs1 (def), depth + 1);
+  return false;
+}
+
+/* At a 'return' STMT in conveyor function FUN returning a reference: the
+   reference must outlive the call and be provably an object, as in the
+   AST engine (contracts.cc, oa_check_returned_reference).  */
+
+static void
+cg_check_returned_reference (gimple *stmt, function *fun,
+			     hash_map<tree, cg_fact> &established)
+{
+  greturn *ret = dyn_cast <greturn *> (stmt);
+  if (!ret || !DECL_DECLARED_CONVEYOR_P (fun->decl)
+      || !TYPE_REF_P (TREE_TYPE (TREE_TYPE (fun->decl))))
+    return;
+  tree val = gimple_return_retval (ret);
+  if (!val)
+    return;
+  if (cg_addr_local_p (val, fun->decl))
+    {
+      cg_conveyor_error_at (gimple_location (stmt),
+			    "reference returned from a conveyor function "
+			    "refers to an object that does not outlive it");
+      return;
+    }
+  /* '*this' or a member of it: a conveyor function's own object, as its
+     body trusts it (an implicitly conveyor defaulted member included).  */
+  if (cg_addr_of_this_p (val))
+    return;
+  auto at = make_temp_override (cg_prover_at, stmt);
+  hash_set<tree> in_progress;
+  if (!cg_provable_object_address_p (val, established,
+				     /*require_conveyor=*/true, in_progress))
+    cg_conveyor_error_at (gimple_location (stmt),
+			  "reference returned from a conveyor function "
+			  "is not provably to an object");
 }
 
 static void
@@ -15776,6 +16002,7 @@ pass_contracts_gimple::execute_1 (function *fun)
 				      established_range, scalar_range_cache,
 				      ranger);
 	      cg_check_dereference_ub (stmt, established);
+	      cg_check_returned_reference (stmt, fun, established);
 	      cg_check_array_bounds_ub (stmt);
 	    }
 	  if (is_gimple_call (stmt))

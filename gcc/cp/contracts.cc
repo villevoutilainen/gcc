@@ -11557,6 +11557,8 @@ oa_std_forward_call_p (tree call, tree *arg)
    particular: this does not interpret arbitrary function calls, or a
    stored/passed-around closure invoked here).  */
 
+static bool oa_conveyor_returned_reference_p (tree);
+
 static bool
 oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullptr)
 {
@@ -12226,6 +12228,14 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
      is an object address.  */
   if (TREE_CODE (expr) == CALL_EXPR
       && oa_call_postcondition_object_address_p (expr))
+    return true;
+
+  /* D4324: a reference a conveyor callee returns, used within the
+     full-expression of the call: the callee's returns are checked to
+     outlive it, and what it was given -- even a temporary -- lives to the
+     end of that full-expression.  (A named reference bound to it is
+     another matter: oa_reference_binding_provable_p.)  */
+  if (oa_conveyor_returned_reference_p (expr))
     return true;
 
   /* D4324: 'cond ? a : b' is provable iff BOTH arms are -- the value-
@@ -17853,16 +17863,22 @@ oa_strip_to_call (tree init)
     ? init : NULL_TREE;
 }
 
-/* Whether binding a reference to INIT makes it denote an object: INIT
-   provably is one, or is a reference a call returned -- trusted as one
-   is when read directly ('f ().x'), and as the GIMPLE engine takes it.  */
+static bool oa_call_has_temporary_input (tree);
+
+/* Whether binding a reference to INIT makes it denote an object for as
+   long as the reference lives: INIT provably is one, or is the reference a
+   conveyor callee returned (oa_provable_p) -- unless that call was given
+   a temporary, which it may hand back and which ends with the
+   full-expression ('const T &r = f (T{});').  */
 
 static bool
 oa_reference_binding_provable_p (tree init, oa_env &env)
 {
   tree call = oa_strip_to_call (init);
-  if (call && TREE_CODE (call) == CALL_EXPR && TYPE_REF_P (TREE_TYPE (call)))
-    return true;
+  /* A conveyor callee's returned reference outlives the full-expression
+     unless a temporary it was given -- which it may hand back -- doesn't.  */
+  if (call && oa_conveyor_returned_reference_p (call))
+    return !oa_call_has_temporary_input (call);
   return oa_provable_p (init, env);
 }
 
@@ -28072,6 +28088,300 @@ oa_walks_own_parts_p (tree_code code)
     }
 }
 
+/* D4324: which of FNDECL's parameters ('this' first) the reference it
+   returns may come from: bit I for parameter I, every bit if unknown -- a
+   local pointer or reference in a returned expression, a body not seen,
+   or more parameters than bits.  From the parameters its 'return'
+   statements mention: a conveyor function can't produce an object's
+   address from anything else that isn't its own (which its returns are
+   checked against) or static.  Recorded as each function is finished
+   (contract_note_returned_reference_sources), its body being lowered
+   afterwards.  */
+
+static GTY(()) hash_map<tree, tree> *contract_return_sources_map;
+
+static unsigned HOST_WIDE_INT
+contract_compute_return_sources (tree fndecl)
+{
+  const unsigned HOST_WIDE_INT all = HOST_WIDE_INT_M1U;
+  tree body = DECL_SAVED_TREE (fndecl);
+  if (!body)
+    return all;
+  struct data_t { tree fn; unsigned HOST_WIDE_INT mask; bool seen; };
+  data_t data = { fndecl, 0, false };
+  cp_walk_tree_without_duplicates (&body, [](tree *tp, int *, void *d) -> tree
+    {
+      data_t *data = (data_t *) d;
+      if (TREE_CODE (*tp) != RETURN_EXPR)
+	return NULL_TREE;
+      data->seen = true;
+      tree val = TREE_OPERAND (*tp, 0);
+      if (val && (TREE_CODE (val) == INIT_EXPR || TREE_CODE (val) == MODIFY_EXPR))
+	val = TREE_OPERAND (val, 1);
+      if (!val)
+	return NULL_TREE;
+      cp_walk_tree_without_duplicates (&val, [](tree *tp, int *, void *d) -> tree
+	{
+	  data_t *data = (data_t *) d;
+	  tree t = *tp;
+	  if (TREE_CODE (t) == PARM_DECL && DECL_CONTEXT (t) == data->fn)
+	    {
+	      unsigned i = 0;
+	      for (tree p = DECL_ARGUMENTS (data->fn); p && p != t;
+		   p = DECL_CHAIN (p))
+		++i;
+	      data->mask |= (i < HOST_BITS_PER_WIDE_INT
+			     ? HOST_WIDE_INT_1U << i : HOST_WIDE_INT_M1U);
+	    }
+	  else if (VAR_P (t) && POINTER_TYPE_P (TREE_TYPE (t))
+		   && !TREE_STATIC (t) && !DECL_EXTERNAL (t))
+	    data->mask = HOST_WIDE_INT_M1U;
+	  return NULL_TREE;
+	}, data);
+      return NULL_TREE;
+    }, &data);
+  return data.seen ? data.mask : all;
+}
+
+/* See contracts.h.  */
+
+void
+contract_note_returned_reference_sources (tree fndecl)
+{
+  if (!DECL_DECLARED_CONVEYOR_P (fndecl)
+      || !TYPE_REF_P (TREE_TYPE (TREE_TYPE (fndecl))))
+    return;
+  hash_map_maybe_create<hm_ggc> (contract_return_sources_map);
+  contract_return_sources_map->put
+    (fndecl, build_int_cstu (uint64_type_node,
+			     contract_compute_return_sources (fndecl)));
+}
+
+/* See contracts.h.  */
+
+bool
+contract_call_may_return_arg_p (tree callee, unsigned argno)
+{
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return true;
+  if (DECL_CLONED_FUNCTION_P (callee))
+    callee = DECL_CLONED_FUNCTION (callee);
+  unsigned HOST_WIDE_INT mask;
+  if (tree *v = (contract_return_sources_map
+		 ? contract_return_sources_map->get (callee) : NULL))
+    mask = TREE_INT_CST_LOW (*v);
+  else if (DECL_SAVED_TREE (callee))
+    mask = contract_compute_return_sources (callee);
+  else
+    return true;
+  return argno >= HOST_BITS_PER_WIDE_INT || (mask >> argno) & 1;
+}
+
+/* D4324: a reference a conveyor function returns must outlive the call.
+   Whether address ADDR (a pointer, or a reference's value) reaches storage
+   that ends with the current function: one of its automatic variables or
+   by-value parameters, or a temporary -- directly, through an alias, or
+   as what a call given such an address may hand back.  */
+
+static bool oa_storage_local_p (tree obj, oa_env &env, int depth);
+
+static bool
+oa_addr_local_p (tree addr, oa_env &env, int depth = 0)
+{
+  if (!addr || addr == error_mark_node || depth > 8)
+    return false;
+  addr = STRIP_ANY_LOCATION_WRAPPER (addr);
+  while (CONVERT_EXPR_P (addr) || TREE_CODE (addr) == NON_LVALUE_EXPR
+	 || TREE_CODE (addr) == VIEW_CONVERT_EXPR)
+    addr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (addr, 0));
+  switch (TREE_CODE (addr))
+    {
+    case ADDR_EXPR:
+      return oa_storage_local_p (TREE_OPERAND (addr, 0), env, depth + 1);
+    case COND_EXPR:
+      return (oa_addr_local_p (TREE_OPERAND (addr, 1), env, depth + 1)
+	      || oa_addr_local_p (TREE_OPERAND (addr, 2), env, depth + 1));
+    case COMPOUND_EXPR:
+      return oa_addr_local_p (TREE_OPERAND (addr, 1), env, depth + 1);
+    case POINTER_PLUS_EXPR:
+      return oa_addr_local_p (TREE_OPERAND (addr, 0), env, depth + 1);
+    case VAR_DECL:
+    case PARM_DECL:
+      {
+	/* What a pointer or reference variable is known to designate.  */
+	tree target = env.alias_find (addr);
+	if (target != addr)
+	  return oa_storage_local_p (target, env, depth + 1);
+	return false;
+      }
+    case CALL_EXPR:
+    case AGGR_INIT_EXPR:
+      {
+	/* A call may return what it was given.  */
+	tree callee = cp_get_callee_fndecl_nofold (addr);
+	int n = (TREE_CODE (addr) == CALL_EXPR ? call_expr_nargs (addr)
+		 : aggr_init_expr_nargs (addr));
+	for (int i = 0; i < n; ++i)
+	  {
+	    tree arg = (TREE_CODE (addr) == CALL_EXPR ? CALL_EXPR_ARG (addr, i)
+			: AGGR_INIT_EXPR_ARG (addr, i));
+	    if (POINTER_TYPE_P (TREE_TYPE (arg))
+		&& contract_call_may_return_arg_p (callee, i)
+		&& oa_addr_local_p (arg, env, depth + 1))
+	      return true;
+	  }
+	return false;
+      }
+    default:
+      return false;
+    }
+}
+
+/* Whether object OBJ's storage ends with the current function: see
+   oa_addr_local_p.  */
+
+static bool
+oa_storage_local_p (tree obj, oa_env &env, int depth)
+{
+  if (!obj || obj == error_mark_node || depth > 8)
+    return false;
+  obj = STRIP_ANY_LOCATION_WRAPPER (obj);
+  while (TREE_CODE (obj) == COMPONENT_REF || TREE_CODE (obj) == BIT_FIELD_REF
+	 || TREE_CODE (obj) == REALPART_EXPR || TREE_CODE (obj) == IMAGPART_EXPR
+	 || (TREE_CODE (obj) == ARRAY_REF
+	     && TREE_CODE (TREE_TYPE (TREE_OPERAND (obj, 0))) == ARRAY_TYPE)
+	 || CONVERT_EXPR_P (obj) || TREE_CODE (obj) == NON_LVALUE_EXPR
+	 || TREE_CODE (obj) == VIEW_CONVERT_EXPR)
+    obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
+  switch (TREE_CODE (obj))
+    {
+    case INDIRECT_REF:
+    case MEM_REF:
+    case ARRAY_REF:
+      return oa_addr_local_p (TREE_OPERAND (obj, 0), env, depth + 1);
+    case TARGET_EXPR:
+    case COMPOUND_LITERAL_EXPR:
+    case RESULT_DECL:
+      return true;
+    case CALL_EXPR:
+    case AGGR_INIT_EXPR:
+      /* A class prvalue: a temporary; a reference: what the call may
+	 hand back.  */
+      if (!TYPE_REF_P (TREE_TYPE (obj)))
+	return true;
+      return oa_addr_local_p (obj, env, depth + 1);
+    case PARM_DECL:
+      if (TYPE_REF_P (TREE_TYPE (obj)))
+	return oa_addr_local_p (obj, env, depth + 1);
+      /* A by-value parameter, this function's own copy.  */
+      return !is_this_parameter (obj);
+    case VAR_DECL:
+      if (DECL_HAS_VALUE_EXPR_P (obj))
+	return false;
+      if (TYPE_REF_P (TREE_TYPE (obj)))
+	return oa_addr_local_p (obj, env, depth + 1);
+      return (!TREE_STATIC (obj) && !DECL_EXTERNAL (obj)
+	      && DECL_FUNCTION_SCOPE_P (obj)
+	      && DECL_CONTEXT (obj) == current_function_decl);
+    default:
+      return false;
+    }
+}
+
+/* Whether an address CALL is given -- its object or a reference or
+   pointer argument -- is a temporary's, ending with the full-expression
+   the call is in.  */
+
+static bool
+oa_call_has_temporary_input (tree call)
+{
+  call = STRIP_ANY_LOCATION_WRAPPER (call);
+  if (TREE_CODE (call) != CALL_EXPR)
+    return false;
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  for (int i = 0; i < call_expr_nargs (call); ++i)
+    {
+      tree arg = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (call, i));
+      if (!POINTER_TYPE_P (TREE_TYPE (arg))
+	  || !contract_call_may_return_arg_p (callee, i))
+	continue;
+      while (CONVERT_EXPR_P (arg) || TREE_CODE (arg) == NON_LVALUE_EXPR)
+	arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+      if (TREE_CODE (arg) == TARGET_EXPR)
+	return true;
+      if (TREE_CODE (arg) == ADDR_EXPR)
+	{
+	  tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	  while (handled_component_p (op))
+	    op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
+	  if (TREE_CODE (op) == TARGET_EXPR
+	      || TREE_CODE (op) == COMPOUND_LITERAL_EXPR
+	      || (TREE_CODE (op) == CALL_EXPR && !TYPE_REF_P (TREE_TYPE (op))))
+	    return true;
+	}
+      if (TREE_CODE (arg) == CALL_EXPR && oa_call_has_temporary_input (arg))
+	return true;
+    }
+  return false;
+}
+
+/* Whether CALL's callee guarantees the reference CALL returns is an
+   object: a conveyor function, whose own returns are checked to outlive
+   it (oa_check_returned_reference).  */
+
+static bool
+oa_conveyor_returned_reference_p (tree call)
+{
+  call = STRIP_ANY_LOCATION_WRAPPER (call);
+  if (TREE_CODE (call) != CALL_EXPR || !TYPE_REF_P (TREE_TYPE (call)))
+    return false;
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  return callee && TREE_CODE (callee) == FUNCTION_DECL
+	 && DECL_DECLARED_CONVEYOR_P (callee);
+}
+
+/* Whether address ADDR is 'this', or that of '*this' or a subobject.  */
+
+static bool
+oa_addr_of_this_p (tree addr)
+{
+  addr = STRIP_ANY_LOCATION_WRAPPER (addr);
+  while (CONVERT_EXPR_P (addr) || TREE_CODE (addr) == NON_LVALUE_EXPR)
+    addr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (addr, 0));
+  if (is_this_parameter (addr))
+    return true;
+  if (TREE_CODE (addr) != ADDR_EXPR)
+    return false;
+  tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (addr, 0));
+  while (TREE_CODE (obj) == COMPONENT_REF || CONVERT_EXPR_P (obj)
+	 || TREE_CODE (obj) == NON_LVALUE_EXPR)
+    obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
+  return (TREE_CODE (obj) == INDIRECT_REF
+	  && oa_addr_of_this_p (TREE_OPERAND (obj, 0)));
+}
+
+/* At a 'return' of VAL in a conveyor function returning a reference: the
+   reference must outlive the call and be provably an object.  */
+
+static void
+oa_check_returned_reference (tree val, oa_env &env, location_t loc)
+{
+  tree fn = current_function_decl;
+  if (!val || !fn || !oa_diagnostics_active || !DECL_DECLARED_CONVEYOR_P (fn)
+      || !TYPE_REF_P (TREE_TYPE (TREE_TYPE (fn))))
+    return;
+  if (oa_addr_local_p (val, env))
+    oa_conveyor_error_at (loc, "reference returned from a conveyor function "
+			  "refers to an object that does not outlive it");
+  /* '*this' or a member of it: a conveyor function's own object, as its
+     body trusts it (an implicitly conveyor defaulted member included).  */
+  else if (oa_addr_of_this_p (val))
+    return;
+  else if (!oa_provable_p (val, env))
+    oa_conveyor_error_at (loc, "reference returned from a conveyor function "
+			  "is not provably to an object");
+}
+
 static void
 oa_walk_stmt (tree *stmt, oa_env &env)
 {
@@ -28117,6 +28427,14 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
       return;
 
     case RETURN_EXPR:
+      {
+	tree rval = TREE_OPERAND (t, 0);
+	if (rval && (TREE_CODE (rval) == INIT_EXPR
+		     || TREE_CODE (rval) == MODIFY_EXPR))
+	  rval = TREE_OPERAND (rval, 1);
+	oa_check_returned_reference (rval, env,
+				     EXPR_LOC_OR_LOC (t, oa_current_stmt_loc));
+      }
       if (oa_return_tracking || oa_return_range_tracking
 	  || oa_postcondition_merge_env)
 	{
@@ -31415,6 +31733,7 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
 void
 resolve_object_address_in_function (tree fndecl)
 {
+  contract_note_returned_reference_sources (fndecl);
   oa_resolve_object_address_in_function_1 (fndecl);
 }
 

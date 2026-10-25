@@ -55,8 +55,14 @@ template bool std::ranges::__access::_Empty::operator()(SR&) const conveyor;
 template auto std::ranges::__access::_CBegin::operator()(SR&) const conveyor;
 template int* std::ranges::__prev_fn::operator()(int*) const conveyor;
 template std::basic_const_iterator<int*>::basic_const_iterator(int*) conveyor;
-template const int&
-  std::basic_const_iterator<int*>::operator*() const conveyor;
+// Not basic_const_iterator<int*>::operator*, nor view_interface's own
+// front()/back()/operator[]: each returns a reference to what an iterator
+// -- here a plain pointer -- designates, and nothing proves that an
+// object: it can't be dereferenced in a conveyor function, so these
+// aren't conveyor.  The wrappers calling them below are ordinary
+// functions, still checked at run time; they take the subrange by value,
+// an object of their own, as these members' implicit is_object_address
+// precondition requires.
 
 // D4324/P2680: each 'sr' here is a CONST reference, deliberately -- none
 // of these ever write through it, and view_interface's own explicit-
@@ -68,14 +74,14 @@ template const int&
 // validly proven, never satisfies that. A const reference sidesteps
 // the question entirely: _Self deduces const, and Q2 only ever applies
 // to non-const references in the first place.
-int front (const SR& sr) conveyor { return sr.front (); }
-int back (const SR& sr) conveyor { return sr.back (); }
-int subscript (const SR& sr) conveyor { return sr[2]; }
+int front (SR sr) { return sr.front (); }
+int back (SR sr) { return sr.back (); }
+int subscript (SR sr) { return sr[2]; }
 bool is_empty (const SR& sr) conveyor { return sr.empty (); }
 std::size_t size (const SR& sr) conveyor { return sr.size (); }
 bool as_bool (const SR& sr) conveyor { return bool (sr); }
 bool data_nonnull (const SR& sr) conveyor { return sr.data () != nullptr; }
-int cbegin_deref (const SR& sr) conveyor { return *sr.cbegin (); }
+int cbegin_deref (SR sr) { return *sr.cbegin (); }
 
 int main ()
 {
