@@ -7917,6 +7917,12 @@ is_object_address_call_p (tree call, tree *arg)
   if (call_expr_nargs (call) != 1)
     return false;
   *arg = CALL_EXPR_ARG (call, 0);
+  /* '__builtin_addressof (x)' substituted as if in a template (the
+     contract of a function whose return type is still to be deduced)
+     stays an ADDRESSOF_EXPR around the original operand: it is '&x'.  */
+  tree a = STRIP_ANY_LOCATION_WRAPPER (*arg);
+  if (TREE_CODE (a) == ADDRESSOF_EXPR && TREE_TYPE (a))
+    *arg = build1 (ADDR_EXPR, TREE_TYPE (a), TREE_OPERAND (a, 0));
   return true;
 }
 
