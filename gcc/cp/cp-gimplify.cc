@@ -1832,6 +1832,8 @@ cp_fold_function (tree fndecl)
      been constant-evaluated already if possible, so we can safely
      pass ff_mce_false.  */
   cp_fold_data data (ff_genericize | ff_mce_false);
+  /* D4324: keep what the GIMPLE engine checks for undefined behavior.  */
+  contracts_keep_ub_sentinel keep_ub (fndecl);
   /* Do cp_fold_immediate_r in separate whole IL walk instead of during
      cp_fold_r, as otherwise expressions using results of immediate functions
      might not be folded as cp_fold is called on those before cp_fold_r is

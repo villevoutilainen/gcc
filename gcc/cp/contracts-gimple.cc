@@ -14440,6 +14440,30 @@ contracts_gimple_eager_check_drain (void)
   cg_eager_check_active = false;
 }
 
+/* Whether FNDECL's body is checked for undefined behavior (item 8) by
+   this engine, so that folding it must keep every operation that might
+   overflow: a conveyor function, a predicate's core, or a lambda (one
+   invoked immediately from a conveyor function is checked as part of
+   it).  Folds that rely on signed overflow being undefined erase the
+   operation itself ('INT_MAX - x > 5' becomes 'x <= 2147483641'), so
+   the body is folded and gimplified as if overflow trapped (flag_trapv),
+   which neither erases an overflowing operation nor introduces one (as
+   folding for wrapping would: 'x - INT_MIN < -6'); later optimization
+   still sees the real setting.  Likewise '&&'/'||' stay short-circuit:
+   an operation guarded by the left operand isn't to be evaluated
+   unconditionally.  See contracts_keep_ub_sentinel.  */
+
+bool
+contracts_gimple_keeps_overflow_p (tree fndecl)
+{
+  return (flag_contract_conveyor_proofs_gimple
+	  && fndecl && TREE_CODE (fndecl) == FUNCTION_DECL
+	  && DECL_LANG_SPECIFIC (fndecl)
+	  && (DECL_DECLARED_CONVEYOR_P (fndecl)
+	      || CONTRACT_HELPER (fndecl) == ldf_contract_predicate_helper
+	      || LAMBDA_FUNCTION_P (fndecl)));
+}
+
 static void
 contracts_gimple_eager_check_function_1 (tree fndecl, bool is_eof_drain)
 {
@@ -14519,7 +14543,12 @@ contracts_gimple_eager_check_function_1 (tree fndecl, bool is_eof_drain)
      own identical comment for why that function isn't called
      directly.  */
   node->definition = true;
-  node->analyze ();
+  {
+    /* Gimplified keeping its overflow (contracts_gimple_keeps_overflow_p);
+       the analysis itself then sees the real overflow semantics.  */
+    contracts_keep_ub_sentinel keep_ub (fndecl);
+    node->analyze ();
+  }
   push_cfun (DECL_STRUCT_FUNCTION (fndecl));
   gimple_register_cfg_hooks ();
   bitmap_obstack_initialize (NULL);

@@ -195,6 +195,31 @@ extern gimple_opt_pass *make_pass_contracts_gimple (gcc::context *ctxt);
    complete case, from finish_struct (class.cc).  */
 extern void contracts_gimple_eager_check_function (tree fndecl);
 extern void contracts_gimple_eager_check_drain (void);
+extern bool contracts_gimple_keeps_overflow_p (tree);
+
+/* While alive, folding and gimplification keep what the GIMPLE engine
+   checks for undefined behavior in FNDECL (when
+   contracts_gimple_keeps_overflow_p): signed arithmetic is taken to trap
+   on overflow (flag_trapv), so no fold may rely on overflow being
+   undefined, nor on it wrapping -- either can erase an overflowing
+   operation or introduce a new one, and a body folded so is still
+   correct where overflow is undefined; and '&&'/'||' are kept
+   short-circuit (logical-op-non-short-circuit=0), so an operation
+   guarded by the left operand isn't evaluated unconditionally.  */
+class contracts_keep_ub_sentinel
+{
+  temp_override<int> m_trapv;
+  temp_override<int> m_non_short_circuit;
+public:
+  explicit contracts_keep_ub_sentinel (tree fndecl)
+    : contracts_keep_ub_sentinel (contracts_gimple_keeps_overflow_p (fndecl))
+  { }
+  explicit contracts_keep_ub_sentinel (bool keep)
+    : m_trapv (flag_trapv, flag_trapv || keep),
+      m_non_short_circuit (param_logical_op_non_short_circuit,
+			   keep ? 0 : param_logical_op_non_short_circuit)
+  { }
+};
 extern vec<tree, va_gc> *&contracts_gimple_eager_check_queue (void);
 extern void contracts_gimple_eager_check_type_complete (tree type);
 
