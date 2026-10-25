@@ -6364,17 +6364,19 @@ namespace views::__adaptor
     _OuterIter(_OuterIter&&) = default;
     _OuterIter& operator=(_OuterIter&&) = default;
 
+    // D4324: these asserts' comparison goes through the underlying view's
+    // own iterator and ranges::end, which can't be conveyor in general.
     constexpr value_type
     operator*() const
     {
-      __glibcxx_assert(*this != default_sentinel);
+      __glibcxx_assert_noconveyor(*this != default_sentinel);
       return value_type(*_M_parent);
     }
 
     constexpr _OuterIter&
     operator++()
     {
-      __glibcxx_assert(*this != default_sentinel);
+      __glibcxx_assert_noconveyor(*this != default_sentinel);
       ranges::advance(*_M_parent->_M_current, _M_parent->_M_remainder,
 		      ranges::end(_M_parent->_M_base));
       _M_parent->_M_remainder = _M_parent->_M_n;
@@ -6472,6 +6474,13 @@ namespace views::__adaptor
     constexpr range_reference_t<_Vp>
     operator*() const
     {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      // D4324/P2680: the assertion below passes *this to the conveyor
+      // operator==, so 'this' must be a valid object; trust it here
+      // rather than burdening every caller.
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (this));
+#endif
       __glibcxx_assert(*this != default_sentinel);
       return **_M_parent->_M_current;
     }
@@ -6479,6 +6488,11 @@ namespace views::__adaptor
     constexpr _InnerIter&
     operator++()
     {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      // See operator*()'s identical comment above.
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (this));
+#endif
       __glibcxx_assert(*this != default_sentinel);
       ++*_M_parent->_M_current;
       if (*_M_parent->_M_current == ranges::end(_M_parent->_M_base))
@@ -6494,7 +6508,20 @@ namespace views::__adaptor
 
     friend constexpr bool
     operator==(const _InnerIter& __x, default_sentinel_t) noexcept
-    { return __x._M_parent->_M_remainder == 0; }
+      _GLIBCXX_CONVEYOR
+    {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      // D4324/P2680: _M_parent's validity is an axiom of this iterator's
+      // own invariant (set from a real reference by the constructor), so
+      // trust it here, as in ref_view::begin().
+      chunk_view* const __p = __x._M_parent;
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__p));
+      return __p->_M_remainder == 0;
+#else
+      return __x._M_parent->_M_remainder == 0;
+#endif
+    }
 
     friend constexpr difference_type
     operator-(default_sentinel_t, const _InnerIter& __x)
