@@ -47,7 +47,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
   template<typename _Tp, typename _Up>
     constexpr bool
-    cmp_equal(_Tp __t, _Up __u) noexcept
+    cmp_equal(_Tp __t, _Up __u) noexcept _GLIBCXX_CONVEYOR
     {
       static_assert(__is_signed_or_unsigned_integer<_Tp>::value);
       static_assert(__is_signed_or_unsigned_integer<_Up>::value);
@@ -62,12 +62,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
   template<typename _Tp, typename _Up>
     constexpr bool
-    cmp_not_equal(_Tp __t, _Up __u) noexcept
+    cmp_not_equal(_Tp __t, _Up __u) noexcept _GLIBCXX_CONVEYOR
     { return !std::cmp_equal(__t, __u); }
 
   template<typename _Tp, typename _Up>
     constexpr bool
-    cmp_less(_Tp __t, _Up __u) noexcept
+    cmp_less(_Tp __t, _Up __u) noexcept _GLIBCXX_CONVEYOR
     {
       static_assert(__is_signed_or_unsigned_integer<_Tp>::value);
       static_assert(__is_signed_or_unsigned_integer<_Up>::value);
@@ -82,17 +82,17 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
   template<typename _Tp, typename _Up>
     constexpr bool
-    cmp_greater(_Tp __t, _Up __u) noexcept
+    cmp_greater(_Tp __t, _Up __u) noexcept _GLIBCXX_CONVEYOR
     { return std::cmp_less(__u, __t); }
 
   template<typename _Tp, typename _Up>
     constexpr bool
-    cmp_less_equal(_Tp __t, _Up __u) noexcept
+    cmp_less_equal(_Tp __t, _Up __u) noexcept _GLIBCXX_CONVEYOR
     { return !std::cmp_less(__u, __t); }
 
   template<typename _Tp, typename _Up>
     constexpr bool
-    cmp_greater_equal(_Tp __t, _Up __u) noexcept
+    cmp_greater_equal(_Tp __t, _Up __u) noexcept _GLIBCXX_CONVEYOR
     { return !std::cmp_less(__t, __u); }
 
   template<typename _Res, typename _Tp>

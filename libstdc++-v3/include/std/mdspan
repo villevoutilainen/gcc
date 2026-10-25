@@ -240,7 +240,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  constexpr void
 	  _M_init_dynamic_extents(_GetOtherExtent __get_extent) noexcept
 	  {
-	    __glibcxx_assert(_S_is_compatible_extents<_OtherRank>(__get_extent));
+	    __glibcxx_assert_noconveyor
+	      (_S_is_compatible_extents<_OtherRank>(__get_extent));
 	    for (size_t __i = 0; __i < _S_rank_dynamic; ++__i)
 	      {
 		size_t __di = __i;
@@ -429,10 +430,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       using rank_type = size_t;
 
       static constexpr rank_type
-      rank() noexcept { return _Storage::_S_rank; }
+      rank() noexcept _GLIBCXX_CONVEYOR
+      { return _Storage::_S_rank; }
 
       static constexpr rank_type
-      rank_dynamic() noexcept { return _Storage::_S_rank_dynamic; }
+      rank_dynamic() noexcept _GLIBCXX_CONVEYOR
+      { return _Storage::_S_rank_dynamic; }
 
       static constexpr size_t
       static_extent(rank_type __r) noexcept
@@ -1507,7 +1510,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr
       mapping(const extents_type& __extents) noexcept
       : _M_extents(__extents)
-      { __glibcxx_assert(__mdspan::__is_representable_extents(_M_extents)); }
+      {
+	__glibcxx_assert_noconveyor
+	  (__mdspan::__is_representable_extents(_M_extents));
+      }
 
       template<typename _OExtents>
 	requires is_constructible_v<extents_type, _OExtents>
@@ -1621,7 +1627,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  static_assert(__mdspan::__representable_size<_OExtents, index_type>,
 	    "The size of OtherExtents must be representable as index_type");
-	  __glibcxx_assert(__mdspan::__is_representable_extents(_M_extents));
+	  __glibcxx_assert_noconveyor
+	    (__mdspan::__is_representable_extents(_M_extents));
 	}
 
 #if __glibcxx_submdspan
@@ -1684,7 +1691,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr
       mapping(const extents_type& __extents) noexcept
       : _M_extents(__extents)
-      { __glibcxx_assert(__mdspan::__is_representable_extents(_M_extents)); }
+      {
+	__glibcxx_assert_noconveyor
+	  (__mdspan::__is_representable_extents(_M_extents));
+      }
 
       template<typename _OExtents>
 	requires is_constructible_v<extents_type, _OExtents>
@@ -1805,7 +1815,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  static_assert(__mdspan::__representable_size<_OExtents, index_type>,
 	    "The size of OtherExtents must be representable as index_type");
-	  __glibcxx_assert(__mdspan::__is_representable_extents(_M_extents));
+	  __glibcxx_assert_noconveyor
+	    (__mdspan::__is_representable_extents(_M_extents));
 	}
 
 #if __glibcxx_submdspan
@@ -1894,7 +1905,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    _M_strides[__i] =
 	      __mdspan::__index_type_cast<index_type>(as_const(__strides[__i]));
 
-	  __glibcxx_assert(_M_check_unique());
+	  __glibcxx_assert_noconveyor(_M_check_unique());
 	}
 
       template<typename _OIndexType>
@@ -1921,7 +1932,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  using _OIndexType = _StridedMapping::index_type;
 	  using _OExtents = _StridedMapping::extents_type;
 
-	  __glibcxx_assert(__mdspan::__offset(__other) == 0);
+	  __glibcxx_assert_noconveyor(__mdspan::__offset(__other) == 0);
 	  static_assert(__mdspan::__representable_size<_OExtents, index_type>,
 	    "The size of StridedMapping::extents_type must be representable as"
 	    " index_type");
@@ -2357,7 +2368,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	: _M_extents(__exts)
 	{
 	  if constexpr (!__all_static(__static_extents<_Extents>()))
-	    __glibcxx_assert(__is_representable_extents(_M_extents));
+	    __glibcxx_assert_noconveyor(__is_representable_extents(_M_extents));
 
 	  if constexpr (_S_rank > 1)
 	    {
@@ -2375,7 +2386,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		  __stride = static_cast<_IndexType>(
 		    __least_multiple(_PaddingValue, _M_padextent()));
 
-		  __glibcxx_assert(__is_representable_extents(
+		  __glibcxx_assert_noconveyor(__is_representable_extents(
 		      _LayoutTraits::_S_make_padded_extent(
 			std::dextents<_IndexType, 1>{__stride},
 			_M_extents)));
@@ -2399,7 +2410,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	      _M_stride = _Stride{static_cast<_IndexType>(
 		__least_multiple(__pad, _M_padextent()))};
 
-	      __glibcxx_assert(__is_representable_extents(
+	      __glibcxx_assert_noconveyor(__is_representable_extents(
 		_LayoutTraits::_S_make_padded_extent(
 		  _M_stride, _M_extents)));
 	    }
@@ -3023,10 +3034,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       using reference = typename accessor_type::reference;
 
       static constexpr rank_type
-      rank() noexcept { return extents_type::rank(); }
+      rank() noexcept _GLIBCXX_CONVEYOR
+      { return extents_type::rank(); }
 
       static constexpr rank_type
-      rank_dynamic() noexcept { return extents_type::rank_dynamic(); }
+      rank_dynamic() noexcept _GLIBCXX_CONVEYOR
+      { return extents_type::rank_dynamic(); }
 
       static constexpr size_t
       static_extent(rank_type __r) noexcept
