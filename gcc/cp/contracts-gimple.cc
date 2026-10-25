@@ -6120,6 +6120,38 @@ cg_check_overflow_ub (gimple *stmt,
 					   scalar_range_cache, ranger,
 					   /*require_conveyor=*/true,
 					   /*require_symbolic=*/false, &b, stmt);
+  /* A bound no fact gives is still the type's own -- the type of the
+     value before any widening conversion ('(long) u' for an unsigned U
+     is never negative), as the AST engine's oa_scan_overflow_in_expr.  */
+  auto complete = [] (tree op, bool &have, cg_range_lite &r)
+    {
+      while (TREE_CODE (op) == SSA_NAME)
+	{
+	  gimple *def = SSA_NAME_DEF_STMT (op);
+	  if (!def || !is_gimple_assign (def)
+	      || !CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def)))
+	    break;
+	  tree in = gimple_assign_rhs1 (def);
+	  if (!INTEGRAL_TYPE_P (TREE_TYPE (in))
+	      || !INTEGRAL_TYPE_P (TREE_TYPE (op))
+	      || !oa_integral_conversion_value_preserving_p (TREE_TYPE (in),
+							     TREE_TYPE (op)))
+	    break;
+	  op = in;
+	}
+      tree t = TREE_TYPE (op);
+      if (!INTEGRAL_TYPE_P (t))
+	return;
+      if (!have)
+	r.has_lo = r.has_hi = false;
+      if (!r.has_lo)
+	r.has_lo = true, r.lo = wi::to_widest (TYPE_MIN_VALUE (t));
+      if (!r.has_hi)
+	r.has_hi = true, r.hi = wi::to_widest (TYPE_MAX_VALUE (t));
+      have = true;
+    };
+  complete (op0, have_a, a);
+  complete (op1, have_b, b);
 
   bool safe = false;
   /* A bound the conditions on the way give the sum or difference itself

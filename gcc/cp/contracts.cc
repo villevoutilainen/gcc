@@ -16702,6 +16702,15 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 	    {
 	      if (have && r.base != NULL_TREE)
 		return true;
+	      /* The type of the value before any widening conversion: a
+		 '(long) u' for an unsigned U is never negative.  */
+	      op = STRIP_ANY_LOCATION_WRAPPER (op);
+	      while ((TREE_CODE (op) == NOP_EXPR || TREE_CODE (op) == CONVERT_EXPR)
+		     && INTEGRAL_TYPE_P (TREE_TYPE (op))
+		     && INTEGRAL_TYPE_P (TREE_TYPE (TREE_OPERAND (op, 0)))
+		     && oa_integral_conversion_value_preserving_p
+			  (TREE_TYPE (TREE_OPERAND (op, 0)), TREE_TYPE (op)))
+		op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
 	      tree t = TREE_TYPE (op);
 	      if (!t || !INTEGRAL_TYPE_P (t)
 		  || TREE_CODE (TYPE_MIN_VALUE (t)) != INTEGER_CST
