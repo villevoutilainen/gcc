@@ -38741,9 +38741,12 @@ cp_parser_late_parsing_nsdmi (cp_parser *parser, tree field)
   maybe_begin_member_template_processing (field);
 
   push_unparsed_function_queues (parser);
-  def = cp_parser_late_parse_one_default_arg (parser, field,
-					      DECL_INITIAL (field),
-					      NULL_TREE);
+  {
+    conveyor_nsdmi_probe cnp (field);
+    def = cp_parser_late_parse_one_default_arg (parser, field,
+						DECL_INITIAL (field),
+						NULL_TREE);
+  }
   pop_unparsed_function_queues (parser);
 
   maybe_end_member_template_processing ();

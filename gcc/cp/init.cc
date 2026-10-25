@@ -644,8 +644,12 @@ maybe_instantiate_nsdmi_init (tree member, tsubst_flags_t complain)
 	  start_lambda_scope (member);
 
 	  /* Do deferred instantiation of the NSDMI.  */
-	  init = tsubst_expr (init, DECL_TI_ARGS (member), complain, member);
-	  init = digest_nsdmi_init (member, init, complain);
+	  {
+	    conveyor_nsdmi_probe cnp (member);
+	    init = tsubst_expr (init, DECL_TI_ARGS (member), complain,
+				member);
+	    init = digest_nsdmi_init (member, init, complain);
+	  }
 
 	  finish_lambda_scope ();
 
@@ -1021,7 +1025,10 @@ perform_member_init (tree member, tree init, hash_set<tree> &uninitialized)
   /* Use the non-static data member initializer if there was no
      mem-initializer for this field.  */
   if (init == NULL_TREE)
-    init = get_nsdmi (member, /*ctor*/true, tf_warning_or_error);
+    {
+      init = get_nsdmi (member, /*ctor*/true, tf_warning_or_error);
+      conveyor_check_nsdmi_use (member);
+    }
 
   if (init == error_mark_node)
     return;

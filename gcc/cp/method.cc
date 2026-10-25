@@ -2780,6 +2780,16 @@ walk_field_subobs (tree fields, special_function_kind sfk, tree fnname,
 			   && !expr_noexcept_p (nsdmi, tf_none))
 		    *spec_p = noexcept_false_spec;
 		}
+	      /* D4324/P2680 9.2.3: so is one whose default member
+		 initializer violates the conveyor rules; it is part of
+		 the constructor's body.  */
+	      if (conveyor_p && *conveyor_p)
+		{
+		  tree nsdmi = maybe_instantiate_nsdmi_init (field, complain);
+		  if (nsdmi == error_mark_node
+		      || conveyor_nsdmi_violates_p (field))
+		    *conveyor_p = false;
+		}
 	      /* Don't do the normal processing.  */
 	      continue;
 	    }
@@ -3236,9 +3246,12 @@ synthesized_method_walk (tree ctype, special_function_kind sfk, bool const_p,
 		     spec_p, trivial_p, deleted_p, constexpr_p, conveyor_p,
 		     diag, flags, complain, /*dtor_from_ctor*/false);
   if (SFK_CTOR_P (sfk))
+    /* D4324/P2680 9.2.3: the member destructors a constructor calls
+       when a later member's initialization throws are part of it too,
+       as for the bases (synthesized_method_base_walk).  */
     walk_field_subobs (TYPE_FIELDS (ctype), sfk_destructor,
 		       complete_dtor_identifier, TYPE_UNQUALIFIED,
-		       NULL, NULL, deleted_p, NULL, NULL,
+		       NULL, NULL, deleted_p, NULL, conveyor_p,
 		       false, flags, complain, /*dtor_from_ctor*/true);
 
   pop_scope (scope);
@@ -4009,8 +4022,12 @@ defaulted_late_check (tree fn, tristate imp_const/*=tristate::unknown()*/)
      would have it; one explicitly marked 'conveyor' is rejected if the
      implicit form wouldn't qualify.  */
   if (DECL_DEFAULTED_IN_CLASS_P (fn)
-      && DECL_DECLARED_CONVEYOR_P (implicit_fn))
-    SET_DECL_DECLARED_CONVEYOR_P (fn);
+      && DECL_DECLARED_CONVEYOR_P (implicit_fn)
+      && !DECL_DECLARED_CONVEYOR_P (fn))
+    {
+      SET_DECL_DECLARED_CONVEYOR_P (fn);
+      conveyor_note_deduced_defaulted (fn);
+    }
 
   if (!DECL_DECLARED_CONVEYOR_P (implicit_fn)
       && DECL_DECLARED_CONVEYOR_P (fn))
