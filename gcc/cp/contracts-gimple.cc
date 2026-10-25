@@ -4706,6 +4706,140 @@ cg_provably_safe_unit_shift_p (tree x, bool increasing,
 static tree cg_contract_check_call_p (gcall *, tree *, tree *, tree *);
 static tree cg_contract_check_decl_value (gcall *, tree, tree, tree);
 
+/* The value integer memory reference REF (a field, 'this->d_seconds')
+   holds just before AT: what a dominating store to it wrote, with no
+   statement in between that may change it; null if not known.  */
+
+static tree
+cg_ref_value_at (tree ref, gimple *at)
+{
+  if (!INTEGRAL_TYPE_P (TREE_TYPE (ref)) || TREE_THIS_VOLATILE (ref))
+    return NULL_TREE;
+  tree vuse = gimple_vuse (at);
+  ao_ref r;
+  ao_ref_init (&r, ref);
+  for (int steps = 0; steps < 64 && vuse; ++steps)
+    {
+      gimple *d = SSA_NAME_DEF_STMT (vuse);
+      if (!d || gimple_nop_p (d) || is_a <gphi *> (d))
+	return NULL_TREE;
+      if (gimple_assign_single_p (d)
+	  && operand_equal_p (gimple_assign_lhs (d), ref, 0))
+	{
+	  if (gimple_clobber_p (d))
+	    return NULL_TREE;
+	  tree rhs = gimple_assign_rhs1 (d);
+	  return (TREE_CODE (rhs) == SSA_NAME || TREE_CODE (rhs) == INTEGER_CST
+		  ? rhs : NULL_TREE);
+	}
+      if (stmt_may_clobber_ref_p_1 (d, &r, false))
+	return NULL_TREE;
+      vuse = gimple_vuse (d);
+    }
+  return NULL_TREE;
+}
+
+/* V, an integer constant or a constant variable, as an INTEGER_CST, or
+   null.  */
+
+static tree
+cg_linear_constant (tree v)
+{
+  STRIP_ANY_LOCATION_WRAPPER (v);
+  while (CONVERT_EXPR_P (v) || TREE_CODE (v) == NON_LVALUE_EXPR
+	 || TREE_CODE (v) == VIEW_CONVERT_EXPR)
+    v = TREE_OPERAND (v, 0);
+  if (TREE_CODE (v) == INTEGER_CST)
+    return v;
+  if (VAR_P (v) && INTEGRAL_TYPE_P (TREE_TYPE (v)) && decl_constant_var_p (v))
+    {
+      tree c = maybe_constant_value (v);
+      if (TREE_CODE (c) == INTEGER_CST)
+	return c;
+    }
+  return NULL_TREE;
+}
+
+static bool cg_linear_atom_equal (tree, tree, int = 0);
+
+/* Whether the operands of SSA value A's definition and of expression B
+   (a condition's subtree, its declarations already values) are the same
+   operation on the same values.  */
+
+static bool
+cg_linear_def_matches (tree a, tree b, int depth)
+{
+  gassign *def = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (a));
+  if (!def || gimple_assign_rhs_code (def) != TREE_CODE (b)
+      || gimple_num_ops (def) - 1 != (unsigned) TREE_OPERAND_LENGTH (b))
+    return false;
+  for (int i = 0; i < TREE_OPERAND_LENGTH (b); ++i)
+    if (!cg_linear_atom_equal (gimple_op (def, i + 1), TREE_OPERAND (b, i),
+			       depth + 1))
+      return false;
+  return true;
+}
+
+/* Whether linear terms A and B denote the same value: the same SSA name
+   or constant, through copies and value-preserving conversions, or an
+   SSA name and an expression computing what its definition does
+   ('_2 = n_1 / 1000000000' and a condition's 'n_1 / k').  */
+
+static bool
+cg_linear_atom_equal (tree a, tree b, int depth)
+{
+  if (depth > 8)
+    return false;
+  auto strip = [] (tree t)
+    {
+      while (true)
+	{
+	  STRIP_ANY_LOCATION_WRAPPER (t);
+	  if (TREE_CODE (t) == NON_LVALUE_EXPR
+	      || TREE_CODE (t) == VIEW_CONVERT_EXPR
+	      || (CONVERT_EXPR_P (t) && INTEGRAL_TYPE_P (TREE_TYPE (t))
+		  && INTEGRAL_TYPE_P (TREE_TYPE (TREE_OPERAND (t, 0)))
+		  && TYPE_PRECISION (TREE_TYPE (TREE_OPERAND (t, 0)))
+		     <= TYPE_PRECISION (TREE_TYPE (t))
+		  && TYPE_UNSIGNED (TREE_TYPE (TREE_OPERAND (t, 0)))
+		     == TYPE_UNSIGNED (TREE_TYPE (t))))
+	    t = TREE_OPERAND (t, 0);
+	  else if (TREE_CODE (t) == SSA_NAME)
+	    {
+	      gassign *d = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (t));
+	      tree r = d ? gimple_assign_rhs1 (d) : NULL_TREE;
+	      if (d && TREE_CODE (r) == SSA_NAME
+		  && (gimple_assign_ssa_name_copy_p (d)
+		      || (CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (d))
+			  && INTEGRAL_TYPE_P (TREE_TYPE (r))
+			  && TYPE_PRECISION (TREE_TYPE (r))
+			     <= TYPE_PRECISION (TREE_TYPE (t))
+			  && TYPE_UNSIGNED (TREE_TYPE (r))
+			     == TYPE_UNSIGNED (TREE_TYPE (t)))))
+		t = r;
+	      else
+		return t;
+	    }
+	  else
+	    return t;
+	}
+    };
+  a = strip (a);
+  b = strip (b);
+  if (a == b)
+    return true;
+  tree ca = cg_linear_constant (a), cb = cg_linear_constant (b);
+  if (ca || cb)
+    return ca && cb && wi::to_widest (ca) == wi::to_widest (cb);
+  if (TREE_CODE (a) == SSA_NAME && TREE_CODE (b) == SSA_NAME)
+    return false;
+  if (TREE_CODE (b) == SSA_NAME)
+    std::swap (a, b);
+  if (TREE_CODE (a) == SSA_NAME && EXPR_P (b))
+    return cg_linear_def_matches (a, b, depth);
+  return false;
+}
+
 /* A linear combination of at most two SSA values with coefficients
    +-1 plus a constant, what cg_linear_decompose reduces a value to.  */
 
@@ -4722,6 +4856,8 @@ struct cg_linear_form
    conversions that keep every value.  Any other value is an atom.
    False if more than two atoms remain, or one with a coefficient
    other than +-1.  */
+
+static bool cg_linear_add_atom (tree, int, cg_linear_form *);
 
 static bool
 cg_linear_decompose (tree val, int sign, cg_linear_form *form, int depth)
@@ -4757,9 +4893,24 @@ cg_linear_decompose (tree val, int sign, cg_linear_form *form, int depth)
 		       && (TYPE_PRECISION (TREE_TYPE (rhs1))
 			   < TYPE_PRECISION (type))))))
 	  return cg_linear_decompose (rhs1, sign, form, depth + 1);
+	/* A load of a field ('this->d_seconds'): what was stored there.  */
+	if (gimple_assign_single_p (def) && gimple_vuse (def)
+	    && TREE_CODE (rhs1) != SSA_NAME && !CONSTANT_CLASS_P (rhs1))
+	  if (tree stored = cg_ref_value_at (rhs1, def))
+	    if (types_compatible_p (TREE_TYPE (stored), type))
+	      return cg_linear_decompose (stored, sign, form, depth + 1);
       }
+  return cg_linear_add_atom (val, sign, form);
+}
+
+/* Add SIGN * ATOM, a term (an SSA value, or an expression on values a
+   linear form doesn't express), to FORM.  */
+
+static bool
+cg_linear_add_atom (tree val, int sign, cg_linear_form *form)
+{
   for (unsigned i = 0; i < form->n; ++i)
-    if (form->atom[i] == val)
+    if (cg_linear_atom_equal (form->atom[i], val))
       {
 	form->coef[i] += sign;
 	if (form->coef[i] == 0)
@@ -4938,7 +5089,7 @@ cg_linear_from_comparison (cg_linear_query &q, tree_code code, tree lhs,
 	{
 	  bool found = false;
 	  for (unsigned j = 0; j < f.n; ++j)
-	    if (f.atom[j] == q.target.atom[i]
+	    if (cg_linear_atom_equal (f.atom[j], q.target.atom[i])
 		&& f.coef[j] == sign * q.target.coef[i])
 	      found = true;
 	  all &= found;
@@ -5079,8 +5230,26 @@ cg_linear_decompose_tree (tree t, int sign, cg_linear_form *form, int depth)
 		  : (TYPE_UNSIGNED (from)
 		     && TYPE_PRECISION (from) < TYPE_PRECISION (to)))))
 	return cg_linear_decompose_tree (inner, sign, form, depth + 1);
+      return false;
     }
-  return false;
+  if (tree c = cg_linear_constant (t))
+    {
+      form->k += sign * wi::to_widest (c);
+      return true;
+    }
+  /* An operation a linear form doesn't express ('n / k'), on values: a
+     term, matched by what it computes (cg_linear_atom_equal).  */
+  switch (code)
+    {
+    case TRUNC_DIV_EXPR: case TRUNC_MOD_EXPR: case MULT_EXPR:
+    case LSHIFT_EXPR: case RSHIFT_EXPR: case BIT_AND_EXPR:
+    case BIT_IOR_EXPR: case BIT_XOR_EXPR: case MIN_EXPR: case MAX_EXPR:
+      if (INTEGRAL_TYPE_P (TREE_TYPE (t)) && !TREE_SIDE_EFFECTS (t))
+	return cg_linear_add_atom (t, sign, form);
+      return false;
+    default:
+      return false;
+    }
 }
 
 /* T without the wrappers a condition can carry.  */
@@ -5203,7 +5372,7 @@ cg_linear_eval (cg_linear_query &q, tree c, bool truth, cg_linear_state *st,
   int s = 0;
   if (f.n == 1)
     for (unsigned i = 0; i < q.target.n; ++i)
-      if (f.atom[0] == q.target.atom[i])
+      if (cg_linear_atom_equal (f.atom[0], q.target.atom[i]))
 	slot = &st->atom[i], s = f.coef[0];
   if (!slot && f.n == q.target.n)
     for (int sign : { 1, -1 })
@@ -5213,7 +5382,7 @@ cg_linear_eval (cg_linear_query &q, tree c, bool truth, cg_linear_state *st,
 	  {
 	    bool found = false;
 	    for (unsigned j = 0; j < f.n; ++j)
-	      if (f.atom[j] == q.target.atom[i]
+	      if (cg_linear_atom_equal (f.atom[j], q.target.atom[i])
 		  && f.coef[j] == sign * q.target.coef[i])
 		found = true;
 	    all &= found;
@@ -5283,6 +5452,13 @@ cg_linear_subst_r (tree *tp, int *walk_subtrees, void *data_)
     }
   if (TREE_CODE (*tp) != PARM_DECL && !VAR_P (*tp))
     return NULL_TREE;
+  /* A static or global ('TI::k'): itself, a constant one's value read
+     where needed (cg_linear_constant).  */
+  if (VAR_P (*tp) && (TREE_STATIC (*tp) || DECL_EXTERNAL (*tp)))
+    {
+      *walk_subtrees = 0;
+      return NULL_TREE;
+    }
   tree decl = *tp, val = NULL_TREE;
   /* A reference's value isn't what it binds.  */
   bool by_value = !TYPE_REF_P (TREE_TYPE (decl));
