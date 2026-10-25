@@ -1227,7 +1227,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  __ret.position = end();
 	else
 	  {
-	    __glibcxx_assert(get_allocator() == __nh.get_allocator());
+	    __glibcxx_assert_noconveyor
+	      (get_allocator() == __nh.get_allocator());
 
 	    if (auto __loc = _M_locate(__nh._M_key()))
 	      {
@@ -1255,7 +1256,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	if (__nh.empty())
 	  return end();
 
-	__glibcxx_assert(get_allocator() == __nh.get_allocator());
+	__glibcxx_assert_noconveyor(get_allocator() == __nh.get_allocator());
 
 	const key_type& __k = __nh._M_key();
 	auto __code = this->_M_hash_code(__k);
@@ -1334,7 +1335,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       void
       _M_merge_unique(_Hashtable& __src)
       {
-	__glibcxx_assert(get_allocator() == __src.get_allocator());
+	__glibcxx_assert_noconveyor(get_allocator() == __src.get_allocator());
 
 	using _PTr = pointer_traits<__node_base_ptr>;
 
@@ -1371,7 +1372,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  static_assert(is_same_v<typename _Compatible_Hashtable::node_type,
 	      node_type>, "Node types are compatible");
-	  __glibcxx_assert(get_allocator() == __src.get_allocator());
+	  __glibcxx_assert_noconveyor(get_allocator() == __src.get_allocator());
 
 	  auto __n_elt = __src.size();
 	  size_type __first = 1;
@@ -1399,7 +1400,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       void
       _M_merge_multi(_Hashtable& __src)
       {
-	__glibcxx_assert(get_allocator() == __src.get_allocator());
+	__glibcxx_assert_noconveyor(get_allocator() == __src.get_allocator());
 
 	if (__src.size() == 0) [[__unlikely__]]
 	  return;
@@ -1432,7 +1433,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  static_assert(is_same_v<typename _Compatible_Hashtable::node_type,
 	      node_type>, "Node types are compatible");
-	  __glibcxx_assert(get_allocator() == __src.get_allocator());
+	  __glibcxx_assert_noconveyor(get_allocator() == __src.get_allocator());
 
 	  __node_ptr __hint = nullptr;
 	  this->reserve(size() + __src.size());

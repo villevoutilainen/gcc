@@ -2129,7 +2129,8 @@ namespace __rb_tree
 	  __ret.position = end();
 	else
 	  {
-	    __glibcxx_assert(_M_get_Node_allocator() == *__nh._M_alloc);
+	    __glibcxx_assert_noconveyor
+	      (_M_get_Node_allocator() == *__nh._M_alloc);
 
 	    auto __res = _M_get_insert_unique_pos(__nh._M_key());
 	    if (__res.second)
@@ -2159,7 +2160,8 @@ namespace __rb_tree
 	  __ret = end();
 	else
 	  {
-	    __glibcxx_assert(_M_get_Node_allocator() == *__nh._M_alloc);
+	    __glibcxx_assert_noconveyor
+	      (_M_get_Node_allocator() == *__nh._M_alloc);
 	    auto __res = _M_get_insert_equal_pos(__nh._M_key());
 	    if (__res.second)
 	      __ret = _M_insert_node(__res.first, __res.second,
@@ -2180,7 +2182,8 @@ namespace __rb_tree
 	  __ret = end();
 	else
 	  {
-	    __glibcxx_assert(_M_get_Node_allocator() == *__nh._M_alloc);
+	    __glibcxx_assert_noconveyor
+	      (_M_get_Node_allocator() == *__nh._M_alloc);
 	    auto __res = _M_get_insert_hint_unique_pos(__hint, __nh._M_key());
 	    if (__res.second)
 	      {
@@ -2203,7 +2206,8 @@ namespace __rb_tree
 	  __ret = end();
 	else
 	  {
-	    __glibcxx_assert(_M_get_Node_allocator() == *__nh._M_alloc);
+	    __glibcxx_assert_noconveyor
+	      (_M_get_Node_allocator() == *__nh._M_alloc);
 	    auto __res = _M_get_insert_hint_equal_pos(__hint, __nh._M_key());
 	    if (__res.second)
 	      __ret = _M_insert_node(__res.first, __res.second,
