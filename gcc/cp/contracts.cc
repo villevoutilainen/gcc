@@ -17811,7 +17811,8 @@ oa_defaulted_copy_source_parm (tree fn, tree *parm)
 
 /* Does defaulted FN's body pass SRC, or a part of it, to a call whose
    callee requires an is_object_address of one of its parameters (a
-   precondition's, or another such defaulted function's)?  */
+   precondition's, or another such defaulted function's), or, FN being
+   conveyor, read SRC itself?  */
 
 static bool
 oa_defaulted_copy_body_needs_p (tree fn, tree src,
@@ -17822,9 +17823,18 @@ oa_defaulted_copy_body_needs_p (tree fn, tree src,
   if (CLASS_TYPE_P (DECL_CONTEXT (fn))
       && CLASSTYPE_VBASECLASSES (DECL_CONTEXT (fn)))
     return true;
+  tree body = DECL_SAVED_TREE (fn);
+  /* A conveyor one (P2680 9.2.3: every base's and member's corresponding
+     member is) that reads the source itself, e.g. a memberwise copy of
+     scalars, dereferences it -- which its body may do only if the
+     source is an object.  */
+  if (DECL_DECLARED_CONVEYOR_P (fn)
+      && cp_walk_tree_without_duplicates
+	   (&body, [](tree *tp, int *, void *s) -> tree
+	      { return *tp == (tree) s ? *tp : NULL_TREE; }, src))
+    return true;
   struct data_t { tree src; hash_set<tree> *in_progress; };
   data_t data = { src, &in_progress };
-  tree body = DECL_SAVED_TREE (fn);
   return cp_walk_tree_without_duplicates (&body, [](tree *tp, int *,
 						    void *d) -> tree
     {
