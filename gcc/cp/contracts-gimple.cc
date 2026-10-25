@@ -15790,6 +15790,16 @@ pass_contracts_gimple::execute_1 (function *fun)
 	return 0;
     }
 
+  /* A function that broke a conveyor rule is rejected already: its
+     analysis would only be about the forbidden constructs (see
+     conveyor_error_valist), and it is what makes an immediately invoked
+     lambda's body conveyor code (cg_iile_infos).  */
+  if (conveyor_rule_rejected_p (fun->decl))
+    {
+      cg_remove_contract_marks (fun);
+      return 0;
+    }
+
   /* D4324/P2680, GIMPLE/front-end instantiation-ordering fix (found via
      the comprehensive coverage sweep, 2026-10-12): an ordinary,
      non-template caller gets its own GIMPLE contracts pass run
