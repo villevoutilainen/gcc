@@ -2737,6 +2737,34 @@ ip_rebinds_var_p (gimple *stmt, tree var)
 	  && ip_trackable_decl (gimple_assign_lhs (stmt)) == var);
 }
 
+/* The mutated-since state of a binding at a program point: NULL_TREE, it
+   holds and nothing since it may have invalidated it; a mutated decl
+   (the witness), it may have been invalidated; or IP_BINDING_DEAD, VAR
+   has been bound again since by another statement, so on this path the
+   binding doesn't reach here at all and nothing more is charged to it.
+   Merging takes the strongest (a witness, then NULL_TREE, then dead).  */
+
+#define IP_BINDING_DEAD error_mark_node
+
+/* STATE after STMT: a relevant mutation of a live binding is its witness;
+   then a statement rebinding VAR starts it over if it is BINDING_STMT
+   itself (again, as in a loop) and ends it otherwise.  */
+
+static tree
+ip_mutated_since_step (gimple *stmt, tree state, gimple *binding_stmt,
+		       tree bound_decl, tree var,
+		       const vec<gimple *> &mutating_calls,
+		       const vec<tree> &mutated_decls,
+		       const vec<tree> &mutated_types)
+{
+  if (!state)
+    state = ip_first_relevant_mutation (stmt, bound_decl, mutating_calls,
+					 mutated_decls, mutated_types);
+  if (ip_rebinds_var_p (stmt, var))
+    state = stmt == binding_stmt ? NULL_TREE : IP_BINDING_DEAD;
+  return state;
+}
+
 /* VAR is the variable holding the bound value.  A statement rebinding
    it (ip_rebinds_var_p) ends what BINDING_STMT bound, so mutations
    before it no longer matter on that path ('it = v.begin ();' run again
@@ -2762,14 +2790,15 @@ ip_mutated_since_block_transfer (basic_block bb, tree in, gimple *binding_stmt,
       if (!active)
 	{
 	  if (own_block && stmt == binding_stmt)
-	    active = true;
+	    {
+	      active = true;
+	      state = NULL_TREE;
+	    }
 	  continue;
 	}
-      if (!state)
-	state = ip_first_relevant_mutation (stmt, bound_decl, mutating_calls,
-					     mutated_decls, mutated_types);
-      if (ip_rebinds_var_p (stmt, var))
-	state = NULL_TREE;
+      state = ip_mutated_since_step (stmt, state, binding_stmt, bound_decl,
+				     var, mutating_calls, mutated_decls,
+				     mutated_types);
     }
   return state;
 }
@@ -2788,6 +2817,9 @@ ip_compute_mutated_since_info (function *fun, gimple *binding_stmt,
   unsigned n = last_basic_block_for_fn (fun);
   info->block_in.safe_grow_cleared (n);
   info->block_out.safe_grow_cleared (n);
+  /* Nothing reached from the binding yet.  */
+  for (unsigned i = 0; i < n; ++i)
+    info->block_in[i] = info->block_out[i] = IP_BINDING_DEAD;
 
   bool changed = true;
   while (changed)
@@ -2796,15 +2828,20 @@ ip_compute_mutated_since_info (function *fun, gimple *binding_stmt,
       basic_block bb;
       FOR_EACH_BB_FN (bb, fun)
 	{
-	  tree in = NULL_TREE;
+	  tree in = IP_BINDING_DEAD;
 	  edge e;
 	  edge_iterator ei;
 	  FOR_EACH_EDGE (e, ei, bb->preds)
-	    if (info->block_out[e->src->index])
-	      {
-		in = info->block_out[e->src->index];
-		break;
-	      }
+	    {
+	      tree out = info->block_out[e->src->index];
+	      if (out && out != IP_BINDING_DEAD)
+		{
+		  in = out;
+		  break;
+		}
+	      if (!out)
+		in = NULL_TREE;
+	    }
 	  if (in != info->block_in[bb->index])
 	    {
 	      info->block_in[bb->index] = in;
@@ -2862,16 +2899,18 @@ ip_mutated_since_before_stmt_p (function *fun, ip_mutated_since_info *info,
       if (!active)
 	{
 	  if (own_block && stmt == binding_stmt)
-	    active = true;
+	    {
+	      active = true;
+	      state = NULL_TREE;
+	    }
 	  continue;
 	}
-      if (!state)
-	state = ip_first_relevant_mutation (stmt, bound_decl, mutating_calls,
-					     mutated_decls, mutated_types);
-      if (ip_rebinds_var_p (stmt, var))
-	state = NULL_TREE;
+      state = ip_mutated_since_step (stmt, state, binding_stmt, bound_decl,
+				     var, mutating_calls, mutated_decls,
+				     mutated_types);
     }
-  return state;
+  /* Not reaching here on any path: nothing to charge it with.  */
+  return state == IP_BINDING_DEAD ? NULL_TREE : state;
 }
 
 /* Rule #0/#1's own top-level driver for one tracked variable VAR:
