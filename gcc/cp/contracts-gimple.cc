@@ -4746,11 +4746,18 @@ static tree
 cg_linear_constant (tree v)
 {
   STRIP_ANY_LOCATION_WRAPPER (v);
-  while (CONVERT_EXPR_P (v) || TREE_CODE (v) == NON_LVALUE_EXPR
-	 || TREE_CODE (v) == VIEW_CONVERT_EXPR)
-    v = TREE_OPERAND (v, 0);
+  /* A converted constant is the converted value.  */
+  if ((CONVERT_EXPR_P (v) || TREE_CODE (v) == NON_LVALUE_EXPR
+       || TREE_CODE (v) == VIEW_CONVERT_EXPR)
+      && INTEGRAL_TYPE_P (TREE_TYPE (v)))
+    {
+      tree c = cg_linear_constant (TREE_OPERAND (v, 0));
+      return c ? fold_convert (TREE_TYPE (v), c) : NULL_TREE;
+    }
   if (TREE_CODE (v) == INTEGER_CST)
     return v;
+  if (TREE_CODE (v) == CONST_DECL && TREE_CODE (DECL_INITIAL (v)) == INTEGER_CST)
+    return DECL_INITIAL (v);
   if (VAR_P (v) && INTEGRAL_TYPE_P (TREE_TYPE (v)) && decl_constant_var_p (v))
     {
       tree c = maybe_constant_value (v);

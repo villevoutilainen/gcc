@@ -61,3 +61,19 @@ struct TI
     return d;
   }
 };
+
+/* The constant an enumerator, converted from its enumeration type.  */
+struct TE
+{
+  long long d_seconds;
+  enum { k = 1000000000 };
+  static bool valid (const long long s, const int n) conveyor
+    post<conveyor_assert_v> (res: !res || (s > 0 ? n / k <= LLONG_MAX - s
+						  : n / k >= LLONG_MIN - s));
+  void set (long long seconds, int nanoseconds) conveyor
+  {
+    contract_assert<conveyor_assert_v> (valid (seconds, nanoseconds));
+    d_seconds = seconds;
+    d_seconds += nanoseconds / k;
+  }
+};

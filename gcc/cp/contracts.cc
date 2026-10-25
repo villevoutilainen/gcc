@@ -12762,6 +12762,19 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
      any) is found the same way.  */
   expr = oa_strip_conversion_call (expr);
 
+  /* An enumerator, or a constant variable ('static constexpr int k'):
+     its value.  */
+  if (TREE_CODE (expr) == CONST_DECL
+      && TREE_CODE (DECL_INITIAL (expr)) == INTEGER_CST)
+    expr = DECL_INITIAL (expr);
+  else if (VAR_P (expr) && INTEGRAL_TYPE_P (TREE_TYPE (expr))
+	   && decl_constant_var_p (expr))
+    {
+      tree v = maybe_constant_value (expr);
+      if (TREE_CODE (v) == INTEGER_CST)
+	expr = v;
+    }
+
   if (TREE_CODE (expr) == INTEGER_CST)
     {
       out->base = NULL_TREE;
@@ -14400,6 +14413,14 @@ oa_linear_strip (tree t)
       if (CONVERT_EXPR_P (t))
 	{
 	  tree to = TREE_TYPE (t), from = TREE_TYPE (TREE_OPERAND (t, 0));
+	  /* A constant converted: the converted value ('(int) k', k an
+	     enumerator).  */
+	  if (INTEGRAL_TYPE_P (to))
+	    {
+	      tree c = oa_linear_strip (TREE_OPERAND (t, 0));
+	      if (TREE_CODE (c) == INTEGER_CST)
+		return fold_convert (to, c);
+	    }
 	  if ((POINTER_TYPE_P (to) && POINTER_TYPE_P (from))
 	      || (INTEGRAL_TYPE_P (to) && INTEGRAL_TYPE_P (from)
 		  && (TYPE_UNSIGNED (from) == TYPE_UNSIGNED (to)
@@ -14418,6 +14439,9 @@ oa_linear_strip (tree t)
 	  if (TREE_CODE (v) == INTEGER_CST)
 	    return v;
 	}
+      if (TREE_CODE (t) == CONST_DECL
+	  && TREE_CODE (DECL_INITIAL (t)) == INTEGER_CST)
+	return DECL_INITIAL (t);
       return t;
     }
 }
