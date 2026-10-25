@@ -20031,7 +20031,11 @@ tsubst_stmt (tree t, tree args, tsubst_flags_t complain, tree in_decl)
     case ASSERTION_STMT:
       {
 	r = tsubst_contract (NULL_TREE, t, args, complain, in_decl);
-	if (r != error_mark_node)
+	/* An assertion whose condition is in error is dropped, as when
+	   it is parsed (grok_contract): left in the body, it would make
+	   evaluating the function fail -- e.g. a conveyor assertion
+	   calling a function that isn't conveyor.  */
+	if (r != error_mark_node && CONTRACT_CONDITION (r) != error_mark_node)
 	  add_stmt (r);
 	RETURN (r);
       }
