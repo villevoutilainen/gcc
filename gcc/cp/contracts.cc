@@ -13362,6 +13362,66 @@ oa_decl_value_type (tree decl)
    not just a bare scalar decl.  And, per oa_strip_reference_read's own
    comment, a reference decl's own transparent read.  */
 
+/* The C++ ABI's own pointers in the code that reaches a virtual base
+   (build_base_path): T, conversions stripped, is the VTT a constructor
+   is passed ('__vtt_parm') at a constant offset.  */
+
+static tree
+oa_strip_pointer_nops (tree t)
+{
+  t = STRIP_ANY_LOCATION_WRAPPER (t);
+  while (CONVERT_EXPR_P (t) || TREE_CODE (t) == NON_LVALUE_EXPR
+	 || TREE_CODE (t) == VIEW_CONVERT_EXPR)
+    t = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
+  return t;
+}
+
+static bool
+oa_vtt_pointer_expr_p (tree t)
+{
+  t = oa_strip_pointer_nops (t);
+  if (TREE_CODE (t) == POINTER_PLUS_EXPR
+      && TREE_CODE (TREE_OPERAND (t, 1)) == INTEGER_CST)
+    return oa_vtt_pointer_expr_p (TREE_OPERAND (t, 0));
+  return (TREE_CODE (t) == PARM_DECL && DECL_ARTIFICIAL (t)
+	  && DECL_NAME (t) == vtt_parm_identifier);
+}
+
+/* T points into a vtable: an object's vtable pointer, or one read from
+   the VTT, at a constant offset (a virtual base's offset lies before the
+   address point).  Valid whenever the object is, the read of its vtable
+   pointer field having needed that already.  */
+
+static bool
+oa_vtable_pointer_expr_p (tree t)
+{
+  t = oa_strip_pointer_nops (t);
+  if (TREE_CODE (t) == POINTER_PLUS_EXPR
+      && TREE_CODE (TREE_OPERAND (t, 1)) == INTEGER_CST)
+    return oa_vtable_pointer_expr_p (TREE_OPERAND (t, 0));
+  if (TREE_CODE (t) == COMPONENT_REF
+      && DECL_VIRTUAL_P (TREE_OPERAND (t, 1)))
+    return true;
+  return (TREE_CODE (t) == INDIRECT_REF
+	  && oa_vtt_pointer_expr_p (TREE_OPERAND (t, 0)));
+}
+
+/* If T is a virtual base of an object, '(H *) ((B *) p + *(vptr -
+   24))', the pointer to that object, P.  */
+
+static tree
+oa_vbase_object (tree t)
+{
+  t = oa_strip_pointer_nops (t);
+  if (TREE_CODE (t) != POINTER_PLUS_EXPR)
+    return NULL_TREE;
+  tree off = oa_strip_pointer_nops (TREE_OPERAND (t, 1));
+  if (TREE_CODE (off) != INDIRECT_REF
+      || !oa_vtable_pointer_expr_p (TREE_OPERAND (off, 0)))
+    return NULL_TREE;
+  return oa_strip_pointer_nops (TREE_OPERAND (t, 0));
+}
+
 static tree
 oa_strip_to_relational_operand (tree expr)
 {
@@ -15621,7 +15681,22 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 	    bool this_self_trusted
 	      = is_this_parameter (stripped_base) && current_function_decl
 		&& DECL_DECLARED_CONVEYOR_P (current_function_decl);
-	    if (!this_self_trusted && !oa_provable_p (base, *e))
+	    /* The ABI's own pointers on the way to a virtual base: into a
+	       vtable or the VTT, valid whenever the object (or the VTT)
+	       is; and the virtual base itself, valid if the object it is
+	       reached from is.  */
+	    if (oa_vtable_pointer_expr_p (stripped_base)
+		|| oa_vtt_pointer_expr_p (stripped_base))
+	      return NULL_TREE;
+	    tree checked = base;
+	    if (tree object = oa_vbase_object (stripped_base))
+	      {
+		checked = object;
+		this_self_trusted
+		  = (is_this_parameter (object) && current_function_decl
+		     && DECL_DECLARED_CONVEYOR_P (current_function_decl));
+	      }
+	    if (!this_self_trusted && !oa_provable_p (checked, *e))
 	    /* The implicit INDIRECT_REF inside 'p->field' (as opposed to
 	       an explicit '*p') is compiler-synthesized with no location
 	       of its own -- confirmed via direct testing that plain
@@ -17405,6 +17480,11 @@ static bool
 oa_defaulted_copy_body_needs_p (tree fn, tree src,
 				hash_set<tree> &in_progress)
 {
+  /* With a virtual base, the body reaches it through the source's own
+     vtable pointer.  */
+  if (CLASS_TYPE_P (DECL_CONTEXT (fn))
+      && CLASSTYPE_VBASECLASSES (DECL_CONTEXT (fn)))
+    return true;
   struct data_t { tree src; hash_set<tree> *in_progress; };
   data_t data = { src, &in_progress };
   tree body = DECL_SAVED_TREE (fn);

@@ -676,7 +676,9 @@ cg_resolve_copy_construction_receiver (gcall *call, tree arg)
   if (TREE_CODE (arg) != ADDR_EXPR)
     return arg;
   tree temp = TREE_OPERAND (arg, 0);
-  if (!VAR_P (temp))
+  /* Only the compiler's temporary: a named local copied from another
+     ('B e (c); e = c;') is an object of its own.  */
+  if (!VAR_P (temp) || !DECL_ARTIFICIAL (temp))
     return arg;
 
   for (gimple_stmt_iterator gsi = gsi_for_stmt (call); !gsi_end_p (gsi);
@@ -3657,6 +3659,9 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 	  if (argno < gimple_call_num_args (call))
 	    {
 	      tree substituted = cg_resolve_call_argument (call, argno);
+	      /* Not through a copy or conversion: the address passed.  */
+	      if (!POINTER_TYPE_P (TREE_TYPE (substituted)))
+		substituted = gimple_call_arg (call, argno);
 	      hash_set<tree> in_progress;
 	      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 	      if (!cg_provable_object_address_p (substituted, established,
@@ -3679,6 +3684,8 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 	continue;
 
       tree substituted = cg_resolve_call_argument (call, argno);
+      if (!POINTER_TYPE_P (TREE_TYPE (substituted)))
+	substituted = gimple_call_arg (call, argno);
       hash_set<tree> in_progress;
       oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
       if (!cg_provable_object_address_p (substituted, established,
@@ -6188,6 +6195,103 @@ cg_check_array_bounds_ub (gimple *stmt)
    own LHS) for a pointer dereference needing is_object_address
    provability -- see this section's own leading comment.  */
 
+/* The C++ ABI's own pointers in the code that reaches a virtual base:
+   a pointer to the VTT a constructor is passed (its artificial
+   '__vtt_parm'), or a constant offset into it.  */
+
+static bool
+cg_vtt_pointer_p (tree val, int depth = 0)
+{
+  if (TREE_CODE (val) != SSA_NAME || depth > 8)
+    return false;
+  if (SSA_NAME_IS_DEFAULT_DEF (val))
+    {
+      tree var = SSA_NAME_VAR (val);
+      return (var && TREE_CODE (var) == PARM_DECL && DECL_ARTIFICIAL (var)
+	      && DECL_NAME (var) == vtt_parm_identifier);
+    }
+  gassign *def = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (val));
+  if (!def)
+    return false;
+  tree_code code = gimple_assign_rhs_code (def);
+  if ((code == POINTER_PLUS_EXPR
+       && TREE_CODE (gimple_assign_rhs2 (def)) == INTEGER_CST)
+      || code == SSA_NAME || CONVERT_EXPR_CODE_P (code))
+    return cg_vtt_pointer_p (gimple_assign_rhs1 (def), depth + 1);
+  return false;
+}
+
+/* A pointer into a vtable: an object's vtable pointer, or one a VTT
+   holds, at a constant offset (the virtual base offsets lie before the
+   address point).  Valid whenever the object is, the read of its
+   vtable pointer field having needed that already, or the VTT.  */
+
+static bool
+cg_vtable_pointer_p (tree val, int depth = 0)
+{
+  if (TREE_CODE (val) != SSA_NAME || depth > 8)
+    return false;
+  gassign *def = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (val));
+  if (!def)
+    return false;
+  tree_code code = gimple_assign_rhs_code (def);
+  tree rhs1 = gimple_assign_rhs1 (def);
+  if ((code == POINTER_PLUS_EXPR
+       && TREE_CODE (gimple_assign_rhs2 (def)) == INTEGER_CST)
+      || code == SSA_NAME || CONVERT_EXPR_CODE_P (code))
+    return cg_vtable_pointer_p (rhs1, depth + 1);
+  if (!gimple_assign_single_p (def))
+    return false;
+  if (TREE_CODE (rhs1) == COMPONENT_REF
+      && DECL_VIRTUAL_P (TREE_OPERAND (rhs1, 1)))
+    return true;
+  return (TREE_CODE (rhs1) == MEM_REF
+	  && cg_vtt_pointer_p (TREE_OPERAND (rhs1, 0)));
+}
+
+/* OFF is a virtual base's offset, read from a vtable ('this + *(vptr -
+   24)' reaches the virtual base of '*this').  */
+
+static bool
+cg_vbase_offset_p (tree off)
+{
+  for (int depth = 0; depth < 8 && TREE_CODE (off) == SSA_NAME; ++depth)
+    {
+      gassign *def = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (off));
+      if (!def)
+	return false;
+      tree rhs1 = gimple_assign_rhs1 (def);
+      if (gimple_assign_single_p (def) && TREE_CODE (rhs1) == MEM_REF)
+	return cg_vtable_pointer_p (TREE_OPERAND (rhs1, 0));
+      if (!CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def))
+	  && gimple_assign_rhs_code (def) != SSA_NAME)
+	return false;
+      off = rhs1;
+    }
+  return false;
+}
+
+/* VAL is computed by adding a virtual base's offset, through copies
+   and conversions.  */
+
+static bool
+cg_vbase_reached_p (tree val)
+{
+  for (int depth = 0; depth < 8 && TREE_CODE (val) == SSA_NAME; ++depth)
+    {
+      gassign *def = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (val));
+      if (!def)
+	return false;
+      if (gimple_assign_rhs_code (def) == POINTER_PLUS_EXPR)
+	return cg_vbase_offset_p (gimple_assign_rhs2 (def));
+      if (!gimple_assign_ssa_name_copy_p (def)
+	  && !CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def)))
+	return false;
+      val = gimple_assign_rhs1 (def);
+    }
+  return false;
+}
+
 static void
 cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
 				      hash_map<tree, cg_fact> &established)
@@ -6205,6 +6309,26 @@ cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
       && TREE_CODE (gimple_assign_rhs1 (bdef)) == COMPONENT_REF
       && DECL_VIRTUAL_P (TREE_OPERAND (gimple_assign_rhs1 (bdef), 1)))
     return;
+  /* The ABI's own pointers on the way to a virtual base: into a vtable,
+     or into the VTT.  */
+  if (cg_vtable_pointer_p (base) || cg_vtt_pointer_p (base))
+    return;
+  /* A virtual base of an object, '(H *) (this + *(vptr - 24))': valid
+     if the object is.  */
+  for (int depth = 0; depth < 8 && TREE_CODE (base) == SSA_NAME; ++depth)
+    {
+      gassign *def = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (base));
+      if (def && gimple_assign_rhs_code (def) == POINTER_PLUS_EXPR
+	  && cg_vbase_offset_p (gimple_assign_rhs2 (def)))
+	base = gimple_assign_rhs1 (def);
+      else if (def && (gimple_assign_ssa_name_copy_p (def)
+		       || (CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def))
+			   && POINTER_TYPE_P (TREE_TYPE (gimple_assign_rhs1 (def)))
+			   && cg_vbase_reached_p (gimple_assign_rhs1 (def)))))
+	base = gimple_assign_rhs1 (def);
+      else
+	break;
+    }
   /* POINTER_TYPE, or a REFERENCE-typed PARAMETER specifically --
      mirroring oa_scan_array_bounds_in_expr's own identical condition
      (contracts.cc) after its own 2026-08-26 fix (Ville: "a conveyor
