@@ -3947,6 +3947,131 @@ cg_display_deref (tree ptr, tree type)
   return build1 (INDIRECT_REF, type, ptr);
 }
 
+/* The test COND makes, as the source spells it.  */
+
+static tree
+cg_display_cond (gcond *cond, int depth)
+{
+  tree lhs = cg_display_value (gimple_cond_lhs (cond), depth + 1);
+  tree rhs = cg_display_value (gimple_cond_rhs (cond), depth + 1);
+  /* 'if (c != 0)' is how GIMPLE spells the test 'c'.  */
+  if (gimple_cond_code (cond) == NE_EXPR && integer_zerop (rhs)
+      && TREE_CODE (TREE_TYPE (lhs)) == BOOLEAN_TYPE)
+    return lhs;
+  return build2 (gimple_cond_code (cond), boolean_type_node, lhs, rhs);
+}
+
+/* PHI's argument I, the constant behind the gimplifier's 'iftmp = 1;'
+   included.  */
+
+static tree
+cg_display_phi_arg (gphi *phi, unsigned i, int depth)
+{
+  tree arg = gimple_phi_arg_def (phi, i);
+  if (TREE_CODE (arg) == SSA_NAME && !SSA_NAME_IS_DEFAULT_DEF (arg))
+    if (gassign *d = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (arg)))
+      if (gimple_assign_single_p (d)
+	  && TREE_CODE (gimple_assign_rhs1 (d)) == INTEGER_CST)
+	arg = gimple_assign_rhs1 (d);
+  return cg_display_value (arg, depth + 1);
+}
+
+/* 'c ? a : b' of type TYPE, as '&&'/'||' when an arm is a constant:
+   'c && a' for 'c ? a : 0', 'c || b' for 'c ? 1 : b', and so on; and
+   '(c && x) || b' for 'c ? x || b : b', '(c || x) && a' for
+   'c ? a : x && a', a condition both arms end in.  */
+
+static tree
+cg_display_choice (tree type, tree c, tree a, tree b)
+{
+  if (TREE_CODE (a) == TRUTH_ORIF_EXPR
+      && operand_equal_p (TREE_OPERAND (a, 1), b, 0))
+    return build2 (TRUTH_ORIF_EXPR, type,
+		   cg_display_choice (type, c, TREE_OPERAND (a, 0),
+				      build_zero_cst (type)), b);
+  if (TREE_CODE (b) == TRUTH_ANDIF_EXPR
+      && operand_equal_p (TREE_OPERAND (b, 1), a, 0))
+    return build2 (TRUTH_ANDIF_EXPR, type,
+		   cg_display_choice (type, c, build_one_cst (type),
+				      TREE_OPERAND (b, 0)), a);
+  tree not_c = build1 (TRUTH_NOT_EXPR, boolean_type_node, c);
+  if (TREE_CODE (b) == INTEGER_CST)
+    {
+      if (TREE_CODE (a) == INTEGER_CST)
+	{
+	  if (integer_zerop (a) == integer_zerop (b))
+	    return a;
+	  return integer_zerop (b) ? c : not_c;
+	}
+      return build2 (integer_zerop (b) ? TRUTH_ANDIF_EXPR : TRUTH_ORIF_EXPR,
+		     type, integer_zerop (b) ? c : not_c, a);
+    }
+  if (TREE_CODE (a) == INTEGER_CST)
+    return build2 (integer_zerop (a) ? TRUTH_ANDIF_EXPR : TRUTH_ORIF_EXPR,
+		   type, integer_zerop (a) ? not_c : c, b);
+  return build3 (COND_EXPR, type, c, a, b);
+}
+
+/* What PHI's value is when control leaves along E, within the region
+   START dominates, BUDGET bounding the blocks visited (a cycle exhausts
+   it): PHI's argument for E if E enters PHI's block, else the value for
+   E's destination (cg_display_phi_from).  NULL_TREE if that is not a
+   tree of conditions within the region.  */
+
+static tree cg_display_phi_from (gphi *, basic_block, basic_block, int,
+				 int *);
+
+static tree
+cg_display_phi_along (gphi *phi, basic_block start, edge e, int depth,
+		      int *budget)
+{
+  if (e->dest == gimple_bb (phi))
+    return cg_display_phi_arg (phi, e->dest_idx, depth);
+  return cg_display_phi_from (phi, start, e->dest, depth, budget);
+}
+
+static tree
+cg_display_phi_from (gphi *phi, basic_block start, basic_block bb,
+		     int depth, int *budget)
+{
+  if (--*budget < 0 || !dominated_by_p (CDI_DOMINATORS, bb, start))
+    return NULL_TREE;
+  if (single_succ_p (bb))
+    return cg_display_phi_along (phi, start, single_succ_edge (bb), depth,
+				 budget);
+  gcond *cond = safe_dyn_cast <gcond *> (*gsi_last_bb (bb));
+  if (!cond || EDGE_COUNT (bb->succs) != 2)
+    return NULL_TREE;
+  edge t = EDGE_SUCC (bb, 0), f = EDGE_SUCC (bb, 1);
+  if (f->flags & EDGE_TRUE_VALUE)
+    std::swap (t, f);
+  if (!(t->flags & EDGE_TRUE_VALUE) || !(f->flags & EDGE_FALSE_VALUE))
+    return NULL_TREE;
+  tree a = cg_display_phi_along (phi, start, t, depth, budget);
+  tree b = (a ? cg_display_phi_along (phi, start, f, depth, budget)
+	    : NULL_TREE);
+  if (!b)
+    return NULL_TREE;
+  return cg_display_choice (TREE_TYPE (gimple_phi_result (phi)),
+			    cg_display_cond (cond, depth), a, b);
+}
+
+/* For PHI, a merge of values decided by conditions ('&&', '||', '?:'):
+   'c ? a : b', 'c && d'.  NULL_TREE if it is not that shape.  */
+
+static tree
+cg_display_cond_phi (gphi *phi, int depth)
+{
+  if (!dom_info_available_p (CDI_DOMINATORS))
+    return NULL_TREE;
+  basic_block start = get_immediate_dominator (CDI_DOMINATORS,
+					       gimple_bb (phi));
+  if (!start || !safe_dyn_cast <gcond *> (*gsi_last_bb (start)))
+    return NULL_TREE;
+  int budget = 32;
+  return cg_display_phi_from (phi, start, start, depth, &budget);
+}
+
 /* For PHI, a merge of two values on the arms of one condition (a '?:',
    a '&&'/'||' operand): 'c ? a : b'.  NULL_TREE if it is not that
    shape.  */
@@ -3979,18 +4104,10 @@ cg_display_phi (gphi *phi, int depth)
   if (on_true[0] == on_true[1])
     return NULL_TREE;
   gcond *cond = as_a <gcond *> (*gsi_last_bb (cond_bb));
-  tree lhs = cg_display_value (gimple_cond_lhs (cond), depth + 1);
-  tree rhs = cg_display_value (gimple_cond_rhs (cond), depth + 1);
-  tree test;
-  /* 'if (c != 0)' is how GIMPLE spells the test 'c'.  */
-  if (gimple_cond_code (cond) == NE_EXPR && integer_zerop (rhs)
-      && TREE_CODE (TREE_TYPE (lhs)) == BOOLEAN_TYPE)
-    test = lhs;
-  else
-    test = build2 (gimple_cond_code (cond), boolean_type_node, lhs, rhs);
+  tree test = cg_display_cond (cond, depth);
   tree arms[2];
   for (unsigned i = 0; i < 2; ++i)
-    arms[i] = cg_display_value (gimple_phi_arg_def (phi, i), depth + 1);
+    arms[i] = cg_display_phi_arg (phi, i, depth);
   unsigned t = on_true[0] ? 0 : 1;
   return build3 (COND_EXPR, TREE_TYPE (gimple_phi_result (phi)), test,
 		 arms[t], arms[1 - t]);
@@ -4116,8 +4233,12 @@ cg_display_value (tree val, int depth = 0)
     }
   gimple *def = SSA_NAME_DEF_STMT (val);
   if (gphi *phi = safe_dyn_cast <gphi *> (def))
-    if (tree cond = cg_display_phi (phi, depth))
-      return cond;
+    {
+      if (tree cond = cg_display_phi (phi, depth))
+	return cond;
+      if (tree cond = cg_display_cond_phi (phi, depth))
+	return cond;
+    }
   if (gcall *call = safe_dyn_cast <gcall *> (def))
     if (tree shown = cg_display_call (call, depth))
       return shown;
@@ -4213,9 +4334,12 @@ cg_display_value (tree val, int depth = 0)
 		       build4 (ARRAY_REF, elt, ptr, index, NULL_TREE,
 			       NULL_TREE));
       }
-  if (TREE_CODE_CLASS (code) == tcc_binary)
+  if (TREE_CODE_CLASS (code) == tcc_binary
+      || TREE_CODE_CLASS (code) == tcc_comparison)
     return build2 (code, TREE_TYPE (val), cg_display_value (rhs1, depth + 1),
 		   cg_display_value (gimple_assign_rhs2 (def), depth + 1));
+  if (TREE_CODE_CLASS (code) == tcc_unary)
+    return build1 (code, TREE_TYPE (val), cg_display_value (rhs1, depth + 1));
   return val;
 }
 
