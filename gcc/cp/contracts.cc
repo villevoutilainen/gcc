@@ -15190,6 +15190,13 @@ static bool oa_diagnostics_active = true;
 
 static bool oa_speculative_walk;
 
+/* Each loop's head facts as oa_handle_loop last found them, keyed by
+   the loop's body, for the function being walked: a loop inside
+   another is walked again on each round of the outer loop's fixed
+   point, and starting from what it found last time, joined with what
+   now holds on entry, it usually confirms in one round.  */
+static hash_map<tree, class oa_env *> *oa_loop_head_cache;
+
 /* The index of CALL's first real argument: an AGGR_INIT_EXPR for a
    constructor ('return T (x);') carries a placeholder for the object
    being constructed as argument 0 at this stage, but one for an ordinary
@@ -26455,6 +26462,16 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
      further below.  */
   tree head_cond = cond ? *cond : NULL_TREE;
   oa_env head = env.copy ();
+  /* In a speculative walk (an enclosing loop's fixed point), start from
+     this loop's last head joined with the entry: no stronger than the
+     entry, and the rounds below re-establish that each iteration keeps
+     it, so what they end with holds on every iteration as from a cold
+     start, if possibly with less.  The checking walk starts cold.  */
+  tree loop_key = (body && *body ? *body
+		   : cond && *cond ? *cond : NULL_TREE);
+  if (oa_speculative_walk && oa_loop_head_cache && loop_key)
+    if (oa_env **cached = oa_loop_head_cache->get (loop_key))
+      oa_merge_branch_envs (head, **cached, head_cond);
   {
     bool saved_tracking = oa_return_tracking;
     oa_return_tracking = false;
@@ -26513,6 +26530,14 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
     oa_return_tracking = saved_tracking;
     oa_postcondition_merge_env = saved_postcondition_merge_env;
   }
+  if (oa_loop_head_cache && loop_key)
+    {
+      bool existed;
+      oa_env *&slot = oa_loop_head_cache->get_or_insert (loop_key, &existed);
+      if (!existed)
+	slot = new oa_env;
+      slot->assign (head);
+    }
 
   oa_jump_collector loop_breaks, loop_exits;
   oa_env scratch = head.copy ();
@@ -26532,9 +26557,15 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
      inside the loop body must still read as borrowed afterward.  */
   env.borrowed_merge_with (scratch);
 
+  /* Where a false condition or a break leaves the loop, what follows
+     it starts from what the diagnostic pass found there (at the end of
+     this function); the per-decl re-walks below only matter for a loop
+     nothing leaves.  Walking them anyway made a loop nested N deep cost
+     the product of N such walk counts.  */
   auto_vec<tree> reassigned, reassigned_nz;
-  for (unsigned i = 0; i < parts.length (); ++i)
-    oa_collect_loop_targets (parts[i], &reassigned, &reassigned_nz);
+  if (!loop_exits.any && !loop_breaks.any)
+    for (unsigned i = 0; i < parts.length (); ++i)
+      oa_collect_loop_targets (parts[i], &reassigned, &reassigned_nz);
 
   auto_vec<tree> result_decls;
   auto_vec<bool> result_provable;
@@ -30527,6 +30558,15 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
   auto ovr_merge_env = make_temp_override (oa_postcondition_merge_env);
   auto ovr_result_ids = make_temp_override (oa_postcondition_result_ids);
   auto ovr_merge_any = make_temp_override (oa_postcondition_merge_any_result);
+  /* This function's own loops' heads (oa_handle_loop); their facts name
+     its trees.  */
+  hash_map<tree, oa_env *> loop_heads;
+  auto ovr_loop_heads = make_temp_override (oa_loop_head_cache, &loop_heads);
+  struct loop_heads_cleanup
+  {
+    hash_map<tree, oa_env *> &m;
+    ~loop_heads_cleanup () { for (auto it : m) delete it.second; }
+  } loop_heads_cleanup_ = { loop_heads };
 
   /* D4324/P2680: a generated "pred"/"thunk"/consteval-thunk helper
      function (see ldf_contract_predicate_helper's own comment) never
