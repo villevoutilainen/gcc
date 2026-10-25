@@ -1134,14 +1134,74 @@ ip_var_write_escapes_locally_p (gimple *w, int depth)
   return true;
 }
 
-/* Whether REF ('var', 'var.f', 'var.a[i].g') is part of VAR.  */
+/* OBJ is an object whose contents a return carries: a variable (a named
+   local, a RESULT_DECL), or the pointer to one (a hidden return slot's,
+   an SSA default-def).  Whether REF ('var.f', '*v', 'v->a[i].g', '*q'
+   with Q pointing into it) may be part of it, and whether pointer PTR may
+   point into it -- '&var.f', OBJ itself, through copies, offsets and
+   merges ('_1 = &t_5(D)->p', a loop's '# _4 = PHI <&x->_M_elems, _4 +
+   32>'), or the result of a call given such a pointer ('int **q =
+   slot_of (t)'), which may be derived from it.  May, not must: a store
+   that could be into the returned object is one to check.  A pointer
+   into OBJ obtained otherwise -- stashed by one call, returned by
+   another -- isn't recognized.  */
+
+static bool ip_ptr_into_object_1 (tree, tree, hash_set<gimple *> *);
 
 static bool
-ip_ref_within_var_p (tree ref, tree var)
+ip_ref_in_object_1 (tree ref, tree obj, hash_set<gimple *> *seen)
 {
   while (handled_component_p (ref))
     ref = TREE_OPERAND (ref, 0);
-  return ref == var;
+  if (ref == obj)
+    return true;
+  if (TREE_CODE (ref) == MEM_REF || TREE_CODE (ref) == INDIRECT_REF)
+    return ip_ptr_into_object_1 (TREE_OPERAND (ref, 0), obj, seen);
+  return false;
+}
+
+static bool
+ip_ptr_into_object_1 (tree ptr, tree obj, hash_set<gimple *> *seen)
+{
+  if (ptr == obj && TREE_CODE (obj) == SSA_NAME)
+    return true;
+  if (TREE_CODE (ptr) == ADDR_EXPR)
+    return ip_ref_in_object_1 (TREE_OPERAND (ptr, 0), obj, seen);
+  if (TREE_CODE (ptr) != SSA_NAME)
+    return false;
+  gimple *def = SSA_NAME_DEF_STMT (ptr);
+  if (seen->add (def))
+    return false;
+  if (gphi *phi = dyn_cast<gphi *> (def))
+    {
+      for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+	if (ip_ptr_into_object_1 (gimple_phi_arg_def (phi, i), obj, seen))
+	  return true;
+      return false;
+    }
+  if (is_gimple_assign (def)
+      && (gimple_assign_single_p (def)
+	  || gimple_assign_rhs_code (def) == POINTER_PLUS_EXPR))
+    return ip_ptr_into_object_1 (gimple_assign_rhs1 (def), obj, seen);
+  if (gcall *call = dyn_cast<gcall *> (def))
+    for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+      if (ip_ptr_into_object_1 (gimple_call_arg (call, i), obj, seen))
+	return true;
+  return false;
+}
+
+static bool
+ip_ref_in_object_p (tree ref, tree obj)
+{
+  hash_set<gimple *> seen;
+  return ip_ref_in_object_1 (ref, obj, &seen);
+}
+
+static bool
+ip_ptr_into_object_p (tree ptr, tree obj)
+{
+  hash_set<gimple *> seen;
+  return ip_ptr_into_object_1 (ptr, obj, &seen);
 }
 
 /* Whether statement W may execute before POINT on some path to it:
@@ -1215,12 +1275,12 @@ ip_var_contents_escape_locally_p (tree var, gimple *point, int depth)
 	if (is_gimple_assign (s) && gimple_assign_single_p (s))
 	  {
 	    tree lhs = gimple_assign_lhs (s);
-	    writes = lhs != var && ip_ref_within_var_p (lhs, var);
+	    writes = lhs != var && ip_ref_in_object_p (lhs, var);
 	  }
 	else if (gcall *call = dyn_cast<gcall *> (s))
 	  {
 	    tree lhs = gimple_call_lhs (call);
-	    if (lhs && lhs != var && ip_ref_within_var_p (lhs, var))
+	    if (lhs && lhs != var && ip_ref_in_object_p (lhs, var))
 	      {
 		partial_writes = true;
 		if (ip_var_write_escapes_locally_p (s, depth))
@@ -1239,8 +1299,7 @@ ip_var_contents_escape_locally_p (tree var, gimple *point, int depth)
 	    for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
 	      {
 		tree arg = gimple_call_arg (call, i);
-		if (TREE_CODE (arg) == ADDR_EXPR
-		    && ip_ref_within_var_p (TREE_OPERAND (arg, 0), var))
+		if (ip_ptr_into_object_p (arg, var))
 		  given = true;
 	      }
 	    if (!given)
@@ -1251,8 +1310,7 @@ ip_var_contents_escape_locally_p (tree var, gimple *point, int depth)
 	    for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
 	      {
 		tree arg = gimple_call_arg (call, i);
-		if (TREE_CODE (arg) == ADDR_EXPR
-		    && ip_ref_within_var_p (TREE_OPERAND (arg, 0), var))
+		if (ip_ptr_into_object_p (arg, var))
 		  continue;
 		if (ip_escapes_locally_p (arg, call, depth + 1))
 		  return true;
@@ -1267,59 +1325,6 @@ ip_var_contents_escape_locally_p (tree var, gimple *point, int depth)
       }
   /* Truly nothing found -- conservative default-deny.  */
   return reaching.is_empty () && !partial_writes;
-}
-
-/* Whether REF ('*v', 'v->f', 'v->a[i].g') is part of the object
-   V_PTR points to.  */
-
-static bool
-ip_ref_in_retslot_p (tree ref, tree v_ptr)
-{
-  while (handled_component_p (ref))
-    ref = TREE_OPERAND (ref, 0);
-  return ((TREE_CODE (ref) == MEM_REF || TREE_CODE (ref) == INDIRECT_REF)
-	  && TREE_OPERAND (ref, 0) == v_ptr);
-}
-
-static bool
-ip_arg_in_retslot_1 (tree arg, tree v_ptr, hash_set<gimple *> *seen)
-{
-  if (arg == v_ptr)
-    return true;
-  if (TREE_CODE (arg) == ADDR_EXPR)
-    return ip_ref_in_retslot_p (TREE_OPERAND (arg, 0), v_ptr);
-  if (TREE_CODE (arg) != SSA_NAME)
-    return false;
-  gimple *def = SSA_NAME_DEF_STMT (arg);
-  if (seen->add (def))
-    return false;
-  if (gphi *phi = dyn_cast<gphi *> (def))
-    {
-      for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
-	if (ip_arg_in_retslot_1 (gimple_phi_arg_def (phi, i), v_ptr, seen))
-	  return true;
-      return false;
-    }
-  if (is_gimple_assign (def)
-      && (gimple_assign_single_p (def)
-	  || gimple_assign_rhs_code (def) == POINTER_PLUS_EXPR))
-    return ip_arg_in_retslot_1 (gimple_assign_rhs1 (def), v_ptr, seen);
-  return false;
-}
-
-/* Whether call argument ARG may be V_PTR or the address of part of what
-   it points to ('&v->f'), through copies, offsets and merges: unlike a
-   named local's, such an address isn't invariant, so it reaches the
-   call in a temporary ('_1 = &t_5(D)->p; put (_1, &c);'), or a loop
-   walking the elements ('# _4 = PHI <&x->_M_elems, _4 + 32>').  May,
-   not must: a call that could be storing into the returned object is
-   one to check.  */
-
-static bool
-ip_arg_in_retslot_p (tree arg, tree v_ptr)
-{
-  hash_set<gimple *> seen;
-  return ip_arg_in_retslot_1 (arg, v_ptr, &seen);
 }
 
 /* Returns 1 if STMT writes through V_PTR with contents that escape, 0
@@ -1347,7 +1352,7 @@ ip_hidden_retslot_write_safe_p (gimple *stmt, tree v_ptr, int depth)
   if (is_gimple_assign (stmt) && gimple_assign_single_p (stmt))
     {
       if (gimple_clobber_p (stmt)
-	  || !ip_ref_in_retslot_p (gimple_assign_lhs (stmt), v_ptr))
+	  || !ip_ref_in_object_p (gimple_assign_lhs (stmt), v_ptr))
 	return -1;
       return ip_escapes_locally_p (gimple_assign_rhs1 (stmt), stmt,
 				   depth + 1) ? 1 : 0;
@@ -1356,11 +1361,11 @@ ip_hidden_retslot_write_safe_p (gimple *stmt, tree v_ptr, int depth)
   if (!call)
     return -1;
   tree lhs = gimple_call_lhs (call);
-  if (lhs && ip_ref_in_retslot_p (lhs, v_ptr))
+  if (lhs && ip_ref_in_object_p (lhs, v_ptr))
     return ip_call_escapes_locally_p (call, depth + 1) ? 1 : 0;
   bool given = false;
   for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
-    if (ip_arg_in_retslot_p (gimple_call_arg (call, i), v_ptr))
+    if (ip_ptr_into_object_p (gimple_call_arg (call, i), v_ptr))
       given = true;
   if (!given)
     return -1;
@@ -1376,7 +1381,7 @@ ip_hidden_retslot_write_safe_p (gimple *stmt, tree v_ptr, int depth)
        arg_type = arg_type ? TREE_CHAIN (arg_type) : NULL_TREE)
     {
       tree arg = gimple_call_arg (call, i);
-      if (ip_arg_in_retslot_p (arg, v_ptr))
+      if (ip_ptr_into_object_p (arg, v_ptr))
 	continue;
       tree param_type
 	= (arg_type && TREE_VALUE (arg_type) != void_type_node)
