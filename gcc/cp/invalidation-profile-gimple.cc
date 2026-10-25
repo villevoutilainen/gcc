@@ -434,6 +434,113 @@ ip_receiver_decl (tree receiver)
   return NULL_TREE;
 }
 
+/* A member of a tracked object, as one interned COMPONENT_REF per
+   (parent, field): 'this->m' is COMPONENT_REF (this, m), the root
+   being the declaration (for a pointer or reference parameter, the
+   object it points to), so two accesses to the same member are the
+   same tree.  Valid for one function; see ip_check_function.  */
+
+static vec<tree> ip_member_accesses;
+
+static tree
+ip_intern_member (tree parent, tree field)
+{
+  for (tree a : ip_member_accesses)
+    if (TREE_OPERAND (a, 0) == parent && TREE_OPERAND (a, 1) == field)
+      return a;
+  tree a = build3 (COMPONENT_REF, TREE_TYPE (field), parent, field,
+		   NULL_TREE);
+  ip_member_accesses.safe_push (a);
+  return a;
+}
+
+/* The tracked object REF names: a declaration, '*P' for a parameter P
+   (as P), or a member of one of those (interned).  NULL_TREE if it is
+   none of those.  */
+
+static tree
+ip_tracked_object (tree ref)
+{
+  if (VAR_P (ref) || TREE_CODE (ref) == PARM_DECL)
+    return ref;
+  if (TREE_CODE (ref) == MEM_REF && integer_zerop (TREE_OPERAND (ref, 1)))
+    return ip_receiver_decl (TREE_OPERAND (ref, 0));
+  if (TREE_CODE (ref) == COMPONENT_REF
+      && TREE_CODE (TREE_OPERAND (ref, 1)) == FIELD_DECL)
+    if (tree parent = ip_tracked_object (TREE_OPERAND (ref, 0)))
+      return ip_intern_member (parent, TREE_OPERAND (ref, 1));
+  return NULL_TREE;
+}
+
+/* What RECEIVER, a call's 'this' or another pointer argument, points
+   to: ip_receiver_decl's declaration, or a member of a tracked object
+   ('&this->m', '&s.m', '&r->a.b').  */
+
+static tree
+ip_receiver_object (tree receiver)
+{
+  if (tree decl = ip_receiver_decl (receiver))
+    return decl;
+  /* '_1 = &this->m;', the address computed first.  */
+  if (TREE_CODE (receiver) == SSA_NAME && !SSA_NAME_IS_DEFAULT_DEF (receiver))
+    if (gassign *def = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (receiver)))
+      if (gimple_assign_single_p (def)
+	  && TREE_CODE (gimple_assign_rhs1 (def)) == ADDR_EXPR)
+	receiver = gimple_assign_rhs1 (def);
+  if (TREE_CODE (receiver) == ADDR_EXPR
+      && TREE_CODE (TREE_OPERAND (receiver, 0)) == COMPONENT_REF)
+    return ip_tracked_object (TREE_OPERAND (receiver, 0));
+  return NULL_TREE;
+}
+
+/* The declaration a tracked object OBJ is a member of (or OBJ).  */
+
+static tree
+ip_object_root (tree obj)
+{
+  while (TREE_CODE (obj) == COMPONENT_REF)
+    obj = TREE_OPERAND (obj, 0);
+  return obj;
+}
+
+/* True if A and B, tracked objects with the same root, may overlap:
+   one contains the other, or they are members of a union.  Members
+   that part at different fields of a class are disjoint.  */
+
+static bool
+ip_members_may_overlap_p (tree a, tree b)
+{
+  auto_vec<tree, 8> pa, pb;
+  for (; TREE_CODE (a) == COMPONENT_REF; a = TREE_OPERAND (a, 0))
+    pa.safe_push (TREE_OPERAND (a, 1));
+  for (; TREE_CODE (b) == COMPONENT_REF; b = TREE_OPERAND (b, 0))
+    pb.safe_push (TREE_OPERAND (b, 1));
+  for (unsigned i = 1; i <= pa.length () && i <= pb.length (); ++i)
+    {
+      tree fa = pa[pa.length () - i], fb = pb[pb.length () - i];
+      if (fa != fb)
+	return TREE_CODE (DECL_CONTEXT (fa)) == UNION_TYPE;
+    }
+  return true;
+}
+
+/* Tracked object OBJ as the source spells it, for a diagnostic.  */
+
+static tree
+ip_object_display (tree obj)
+{
+  if (TREE_CODE (obj) != COMPONENT_REF)
+    return obj;
+  tree parent = TREE_OPERAND (obj, 0);
+  tree base = ip_object_display (parent);
+  if (TREE_CODE (parent) == PARM_DECL && TYPE_PTR_P (TREE_TYPE (parent)))
+    base = build1 (INDIRECT_REF, TREE_TYPE (TREE_TYPE (parent)), base);
+  else if (TREE_CODE (parent) == PARM_DECL)
+    base = convert_from_reference (base);
+  return build3 (COMPONENT_REF, TREE_TYPE (obj), base,
+		 TREE_OPERAND (obj, 1), NULL_TREE);
+}
+
 /* True if CALL is a call to a std::-namespace function named NAME --
    shared name-based recognition for this profile's manual escape
    hatches (std::no_dangling, std::now_valid), which have no distinct
@@ -2420,7 +2527,7 @@ ip_binding_established_by_1 (gimple *def_stmt, hash_set<gimple *> *seen)
 	return NULL_TREE;
       if (!ip_call_result_may_reference_receiver_p (TREE_TYPE (lhs)))
 	return NULL_TREE;
-      return ip_receiver_decl (gimple_call_arg (call, 0));
+      return ip_receiver_object (gimple_call_arg (call, 0));
     }
   if (is_gimple_assign (def_stmt)
       && gimple_assign_rhs_code (def_stmt) == POINTER_PLUS_EXPR)
@@ -2511,7 +2618,7 @@ ip_collect_mutations (gcall *call, vec<ip_mutation> *out)
 
   if (ip_call_assumed_mutating_p (fndecl, via_virtual_dispatch)
       && gimple_call_num_args (call) >= 1)
-    if (tree decl = ip_receiver_decl (gimple_call_arg (call, 0)))
+    if (tree decl = ip_receiver_object (gimple_call_arg (call, 0)))
       {
 	tree this_ptr_type = TREE_VALUE (TYPE_ARG_TYPES (TREE_TYPE (fndecl)));
 	out->safe_push ({ decl, TREE_TYPE (this_ptr_type) });
@@ -2535,7 +2642,7 @@ ip_collect_mutations (gcall *call, vec<ip_mutation> *out)
       if (!via_virtual_dispatch
 	  && profiles_not_invalidating_at_position_p (fndecl, i + 1))
 	continue;
-      if (tree decl = ip_receiver_decl (gimple_call_arg (call, i)))
+      if (tree decl = ip_receiver_object (gimple_call_arg (call, i)))
 	out->safe_push ({ decl, pointee });
     }
 }
@@ -2568,11 +2675,16 @@ ip_first_relevant_mutation (gimple *stmt, tree bound_decl,
     if (mutating_calls[i] == stmt)
       {
 	tree mutated_decl = mutated_decls[i];
-	bool safe = (mutated_decl != bound_decl
-		     && (ip_decls_provably_distinct_objects_p (mutated_decl,
-								bound_decl)
-			 || ip_types_provably_unrelated_p (mutated_types[i],
-							    TREE_TYPE (bound_decl))));
+	tree mutated_root = ip_object_root (mutated_decl);
+	tree bound_root = ip_object_root (bound_decl);
+	bool safe;
+	if (mutated_root == bound_root)
+	  safe = !ip_members_may_overlap_p (mutated_decl, bound_decl);
+	else
+	  safe = (ip_decls_provably_distinct_objects_p (mutated_root,
+							 bound_root)
+		  || ip_types_provably_unrelated_p (mutated_types[i],
+						     TREE_TYPE (bound_decl)));
 	if (!safe)
 	  return mutated_decl;
       }
@@ -3018,9 +3130,11 @@ ip_check_var_uses (function *fun, tree var, const vec<ip_use> &uses,
 	  if (!profiles_diagnostic_exempt_p (gimple_location (use_stmt),
 					      enclosing_fndecl, "std::invalidation"))
 	    profiles_diagnostic_at (gimple_location (use_stmt), "std::invalidation",
-		      "use of a value bound to %qD, potentially invalidated "
-		      "by an earlier mutation of %qD, not permitted under the "
-		      "%<std::invalidation%> profile", bound_decls[idx], culprit);
+		      "use of a value bound to %qE, potentially invalidated "
+		      "by an earlier mutation of %qE, not permitted under the "
+		      "%<std::invalidation%> profile",
+		      ip_object_display (bound_decls[idx]),
+		      ip_object_display (culprit));
 	  break;
 	}
     }
@@ -5137,6 +5251,7 @@ ip_check_owner_consumption (function *fun)
 static unsigned int
 ip_check_function (function *fun)
 {
+  ip_member_accesses.truncate (0);
   auto_vec<gimple *> mutating_calls;
   auto_vec<tree> mutated_decls;
   auto_vec<tree> mutated_types;
