@@ -30,8 +30,8 @@ struct Outer { T t; };
 int slot (Outer *st, unsigned i) conveyor { return use (st[i].t); } // { dg-error "is_object_address. for .st\\\[i\\\].Outer::t." }
 // { dg-error "pointer dereference of .& st\\\[i\\\]." "" { target *-*-* } .-1 }
 
-T &id (T &x) conveyor { return x; }
-int ref_result (T &a) conveyor { return use (id (a)); } // { dg-error "is_object_address. for .id\\(a\\)." }
+T &id (T &x) { return x; }
+int ref_result (T &a) { return use (id (a)); } // { dg-error "is_object_address. for .id\\(a\\)." }
 
 void byref (int &x) conveyor pre<conveyor_assert_v> (x < 100);
 void bound_constant () conveyor { int local = 200; byref (local); } // { dg-error "argument .local. provably violates" }
