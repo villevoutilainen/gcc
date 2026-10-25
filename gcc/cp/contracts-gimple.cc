@@ -1373,6 +1373,49 @@ cg_established_range_of_1 (tree val,
 				     ranger, require_conveyor, require_symbolic,
 				     out, at_stmt))
 	  return true;
+      /* Arithmetic on values whose ranges are known, as the AST engine's
+	 oa_get_range composes them ('b * (m - 1)' with facts on m and b
+	 only): the ranger doesn't know the contracts' facts.  Only when
+	 the result fits the type, so that no wrapping is assumed away.  */
+      if ((code == PLUS_EXPR || code == MINUS_EXPR || code == MULT_EXPR)
+	  && INTEGRAL_TYPE_P (TREE_TYPE (val)))
+	{
+	  cg_range_lite a, b;
+	  if (cg_established_range_of (gimple_assign_rhs1 (def),
+				       established_range, scalar_range_cache,
+				       ranger, require_conveyor,
+				       require_symbolic, &a, at_stmt)
+	      && cg_established_range_of (gimple_assign_rhs2 (def),
+					  established_range,
+					  scalar_range_cache, ranger,
+					  require_conveyor, require_symbolic,
+					  &b, at_stmt)
+	      && a.has_lo && a.has_hi && b.has_lo && b.has_hi)
+	    {
+	      cg_range_lite r;
+	      r.has_lo = r.has_hi = true;
+	      if (code == PLUS_EXPR)
+		r.lo = a.lo + b.lo, r.hi = a.hi + b.hi;
+	      else if (code == MINUS_EXPR)
+		r.lo = a.lo - b.hi, r.hi = a.hi - b.lo;
+	      else
+		{
+		  bool has_lo, has_hi;
+		  if (!cg_range_lite_multiply (a, b, &has_lo, &r.lo,
+					       &has_hi, &r.hi)
+		      || !has_lo || !has_hi)
+		    r.has_lo = r.has_hi = false;
+		}
+	      tree type = TREE_TYPE (val);
+	      if (r.has_lo && r.has_hi
+		  && r.lo >= wi::to_widest (TYPE_MIN_VALUE (type))
+		  && r.hi <= wi::to_widest (TYPE_MAX_VALUE (type)))
+		{
+		  *out = r;
+		  return true;
+		}
+	    }
+	}
     }
   /* Also known, besides the ranger's: a join's union, a loop
      counter's bound, an earlier load's range.  */

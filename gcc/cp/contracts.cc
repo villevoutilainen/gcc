@@ -13020,6 +13020,16 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 	expr = v;
     }
 
+  /* A constant expression the front end hasn't folded yet, such as
+     '-(__PTRDIFF_MAX__ / 1024)' in a contract's condition: its value.  */
+  if (TREE_CODE (expr) != INTEGER_CST && TREE_CONSTANT (expr)
+      && INTEGRAL_TYPE_P (TREE_TYPE (expr)))
+    {
+      tree v = maybe_constant_value (expr);
+      if (TREE_CODE (v) == INTEGER_CST)
+	expr = v;
+    }
+
   if (TREE_CODE (expr) == INTEGER_CST)
     {
       out->base = NULL_TREE;
@@ -13450,6 +13460,20 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
       if (out->has_hi)
 	out->hi = arm1.hi > arm2.hi ? arm1.hi : arm2.hi;
       return out->has_lo || out->has_hi;
+    }
+
+  /* A comparison or a logical operation is 0 or 1, as is any other value
+     of type bool (as the GIMPLE engine knows from the type's bounds) --
+     folding may give a comparison the integer type it's converted to.  */
+  if (TREE_CODE (TREE_TYPE (expr)) == BOOLEAN_TYPE
+      || TREE_CODE_CLASS (TREE_CODE (expr)) == tcc_comparison
+      || truth_value_p (TREE_CODE (expr)))
+    {
+      out->base = NULL_TREE;
+      out->has_lo = out->has_hi = true;
+      out->lo = 0;
+      out->hi = 1;
+      return true;
     }
 
   return false;
@@ -32961,6 +32985,23 @@ oa_establish_relational_from_call (tree lhs, tree rhs, oa_env &env)
     }
 }
 
+/* T, or its value if it is a scalar constant expression the front end
+   hasn't folded to an INTEGER_CST or REAL_CST yet (a condition's
+   '__PTRDIFF_MAX__ / 1024'): for the comparison matchers below, which
+   recognize a bound only in that form.  */
+
+static tree
+oa_fold_constant_operand (tree t)
+{
+  if (TREE_CODE (t) == INTEGER_CST || TREE_CODE (t) == REAL_CST
+      || !TREE_CONSTANT (t)
+      || !(INTEGRAL_TYPE_P (TREE_TYPE (t))
+	   || SCALAR_FLOAT_TYPE_P (TREE_TYPE (t))))
+    return t;
+  tree v = maybe_constant_value (t);
+  return (TREE_CODE (v) == INTEGER_CST || TREE_CODE (v) == REAL_CST) ? v : t;
+}
+
 /* Recognize CONJUNCT as the shape "param OP const" (or "const OP
    param", normalized so the returned CODE_OUT always reads left-to-
    right as "param CODE_OUT const"), for a plugin's own precondition-
@@ -32996,6 +33037,8 @@ oa_match_simple_comparison (tree conjunct, tree *param_out, tree_code *code_out,
      directly, missing the reference-read case).  */
   tree op0 = oa_strip_to_relational_operand (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0)));
   tree op1 = oa_strip_to_relational_operand (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1)));
+  op0 = oa_fold_constant_operand (op0);
+  op1 = oa_fold_constant_operand (op1);
 
   /* D4324: REAL_CST admitted alongside INTEGER_CST -- see oa_match_
      simple_comparison_var's own identical extension for why CONST_VAL_
@@ -33053,6 +33096,8 @@ oa_match_general_comparison (tree conjunct, tree *expr_out,
 
   tree op0 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
   tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1));
+  op0 = oa_fold_constant_operand (op0);
+  op1 = oa_fold_constant_operand (op1);
 
   tree expr, const_val;
   bool flipped;
@@ -34640,6 +34685,8 @@ oa_match_simple_comparison_var (tree conjunct, tree *decl_out,
      comparison, not just a declared pre<>.  */
   tree op0 = oa_strip_to_relational_operand (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0)));
   tree op1 = oa_strip_to_relational_operand (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 1)));
+  op0 = oa_fold_constant_operand (op0);
+  op1 = oa_fold_constant_operand (op1);
 
   /* D4324: REAL_CST admitted alongside INTEGER_CST -- CONST_VAL_OUT is
      already a plain tree (not a widest_int), so the caller dispatches
