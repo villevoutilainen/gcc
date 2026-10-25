@@ -972,6 +972,10 @@ conveyor_emit_error (location_t loc, const char *gmsgid, va_list *ap)
 bool
 conveyor_rule_rejected_p (tree fn)
 {
+  /* The GIMPLE engine analyzes a constructor or destructor's clones; the
+     violation was found in the function they were cloned from.  */
+  if (DECL_CLONED_FUNCTION_P (fn))
+    fn = DECL_CLONED_FUNCTION (fn);
   return (conveyor_rule_rejected_uids
 	  && conveyor_rule_rejected_uids->contains (DECL_UID (fn)));
 }
@@ -1083,10 +1087,130 @@ conveyor_restrictions_active_p ()
     return false;
   if (contract_condition_conveyor_p)
     return true;
+  if (conveyor_nsdmi_probe_p
+      && current_function_decl == conveyor_nsdmi_probe_function)
+    return true;
   if (current_function_decl
       && DECL_DECLARED_CONVEYOR_P (current_function_decl))
     return true;
   return false;
+}
+
+/* See contracts.h.  */
+bool conveyor_nsdmi_probe_p;
+tree conveyor_nsdmi_probe_function;
+
+/* The DECL_UIDs of the members whose default member initializer violates
+   the conveyor rules.  */
+static hash_set<int_hash<int, -1, -2>> *conveyor_nsdmi_violating_uids;
+
+/* Start building FIELD's default member initializer under a probe of the
+   conveyor rules; only with control objects, where conveyor functions
+   exist, and not for a template's own initializer: its instantiations
+   are probed.  */
+
+conveyor_nsdmi_probe::conveyor_nsdmi_probe (tree field)
+  : field (field), saved_p (conveyor_nsdmi_probe_p),
+    saved_function (conveyor_nsdmi_probe_function),
+    probe (&violation, flag_contract_control_objects
+		       && !processing_template_decl)
+{
+  if (probe.active)
+    {
+      conveyor_nsdmi_probe_p = true;
+      conveyor_nsdmi_probe_function = current_function_decl;
+    }
+}
+
+/* The DECL_UIDs of the explicitly-defaulted special members that are
+   conveyor only because their implicit form is (defaulted_late_check).  */
+static hash_set<int_hash<int, -1, -2>> *conveyor_deduced_defaulted_uids;
+
+/* Record that FN is conveyor only because its implicit form is.  */
+
+void
+conveyor_note_deduced_defaulted (tree fn)
+{
+  if (!conveyor_deduced_defaulted_uids)
+    conveyor_deduced_defaulted_uids = new hash_set<int_hash<int, -1, -2>>;
+  conveyor_deduced_defaulted_uids->add (DECL_UID (fn));
+}
+
+conveyor_nsdmi_probe::~conveyor_nsdmi_probe ()
+{
+  if (!probe.active)
+    return;
+  conveyor_nsdmi_probe_p = saved_p;
+  conveyor_nsdmi_probe_function = saved_function;
+  if (!violation)
+    return;
+  if (!conveyor_nsdmi_violating_uids)
+    conveyor_nsdmi_violating_uids = new hash_set<int_hash<int, -1, -2>>;
+  conveyor_nsdmi_violating_uids->add (DECL_UID (field));
+
+  /* A class's default member initializers are parsed only once it is
+     complete, after its defaulted constructors were found conveyor
+     (synthesized_method_walk, defaulted_late_check) without them; such a
+     constructor using this initializer isn't conveyor after all.  One
+     declared conveyor keeps it, and its use of the initializer is the
+     error (conveyor_check_nsdmi_use).  */
+  tree ctx = DECL_CONTEXT (field);
+  while (ANON_AGGR_TYPE_P (ctx) && TYPE_P (TYPE_CONTEXT (ctx)))
+    ctx = TYPE_CONTEXT (ctx);
+  if (!CLASS_TYPE_P (ctx))
+    return;
+  for (tree fn : ovl_range (CLASSTYPE_CONSTRUCTORS (ctx)))
+    if (TREE_CODE (fn) == FUNCTION_DECL
+	&& DECL_DEFAULTED_FN (fn)
+	&& (default_ctor_p (fn) || DECL_INHERITED_CTOR (fn))
+	&& (DECL_ARTIFICIAL (fn)
+	    || (conveyor_deduced_defaulted_uids
+		&& conveyor_deduced_defaulted_uids->contains (DECL_UID (fn)))))
+      {
+	CLEAR_DECL_DECLARED_CONVEYOR_P (fn);
+	tree clone;
+	FOR_EACH_CLONE (clone, fn)
+	  CLEAR_DECL_DECLARED_CONVEYOR_P (clone);
+      }
+}
+
+/* True if FIELD's default member initializer violates the conveyor
+   rules.  */
+
+bool
+conveyor_nsdmi_violates_p (tree field)
+{
+  return (conveyor_nsdmi_violating_uids
+	  && conveyor_nsdmi_violating_uids->contains (DECL_UID (field)));
+}
+
+/* FIELD's default member initializer is used here, in a constructor or
+   an aggregate initialization: in a conveyor function, its violation of
+   the conveyor rules is one too.  */
+
+void
+conveyor_check_nsdmi_use (tree field)
+{
+  if (!conveyor_nsdmi_violates_p (field) || !conveyor_restrictions_active_p ())
+    return;
+  if (conveyor_auto_probing_p ())
+    {
+      note_conveyor_auto_violation ();
+      return;
+    }
+  auto_diagnostic_group d;
+  int before = errorcount;
+  conveyor_rule_error_at (input_location, "default member initializer for "
+			  "%qD, which violates the %<conveyor%> rules, not "
+			  "permitted in a conveyor function or predicate",
+			  field);
+  if (errorcount != before)
+    {
+      inform (DECL_SOURCE_LOCATION (field), "declared here");
+      if (current_function_decl)
+	inform (DECL_SOURCE_LOCATION (current_function_decl),
+		"used by %qD", current_function_decl);
+    }
 }
 
 /* Constify access to DECL from within the contract condition.  */

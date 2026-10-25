@@ -2095,6 +2095,8 @@ process_init_constructor_record (tree type, tree init, int nested, int flags,
 	    }
 	  /* C++14 aggregate NSDMI.  */
 	  next = get_nsdmi (field, /*ctor*/false, complain);
+	  if (complain & tf_error)
+	    conveyor_check_nsdmi_use (field);
 	  if (!CONSTRUCTOR_PLACEHOLDER_BOUNDARY (init)
 	      && find_placeholders (next))
 	    CONSTRUCTOR_PLACEHOLDER_BOUNDARY (init) = 1;
@@ -2257,6 +2259,8 @@ process_init_constructor_union (tree type, tree init, int nested, int flags,
 	      && DECL_INITIAL (field) != NULL_TREE)
 	    {
 	      tree val = get_nsdmi (field, /*in_ctor=*/false, complain);
+	      if (complain & tf_error)
+		conveyor_check_nsdmi_use (field);
 	      if (!CONSTRUCTOR_PLACEHOLDER_BOUNDARY (init)
 		  && find_placeholders (val))
 		CONSTRUCTOR_PLACEHOLDER_BOUNDARY (init) = 1;
