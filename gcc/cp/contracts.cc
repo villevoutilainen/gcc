@@ -3889,6 +3889,14 @@ object_contract_check_postcondition_result (tree ret_type, location_t loc)
   return true;
 }
 
+/* cp_walk_tree callback: a pack expansion in *TP.  */
+
+static tree
+contains_pack_expansion_r (tree *tp, int *, void *)
+{
+  return PACK_EXPANSION_P (*tp) ? *tp : NULL_TREE;
+}
+
 /* Instantiate each postcondition with the return type to finalize the
    contract specifiers on a function decl FNDECL.  */
 
@@ -3957,6 +3965,17 @@ rebuild_postconditions (tree fndecl)
 	  invalidate_contract (contract);
 	  continue;
 	}
+
+      /* Substituting the condition here, with no template arguments,
+	 can't expand a parameter pack, as in 'post (r: r == sizeof...
+	 (a))'.  In a template the condition is substituted with the
+	 result variable when the function is instantiated anyway
+	 (tsubst_contract), so leave such a one to that.  */
+      if (processing_template_decl
+	  && cp_walk_tree_without_duplicates (&condition,
+					      contains_pack_expansion_r,
+					      NULL))
+	continue;
 
       /* "Instantiate" the result variable using the known type, or
 	 resolve it to the parameter it names.  */
