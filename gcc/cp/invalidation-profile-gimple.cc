@@ -2266,9 +2266,8 @@ ip_check_member_init_call (gimple *stmt, tree field, tree enclosing_fndecl)
    ip_trackable_decl resolves to a real VAR_DECL/PARM_DECL (through its
    own SSA_NAME_VAR unwrap) is looked up via ip_nearest_write_before
    instead, since a real declaration needs the same CFG-dominance walk
-   every other tracked binding does.  Shared by ip_binding_established_
-   by and ip_originating_call below, which differ only in what they do
-   with the statement this resolves to.  */
+   every other tracked binding does.  Used by ip_binding_established_
+   by below.  */
 
 static gimple *
 ip_resolve_defining_stmt (tree rhs, gimple *point)
@@ -2304,11 +2303,12 @@ ip_resolve_defining_stmt (tree rhs, gimple *point)
    into 'vec.data()' itself), inherits whatever binding the nearest
    reaching write to the base declaration, as of DEF_STMT's own
    position, itself establishes -- recursing via ip_resolve_defining_
-   stmt/ip_nearest_write_before, which are always called on a strictly
-   earlier statement than this function's own DEF_STMT, so this
-   recursion is well-founded (no cycle-guard is needed the way
-   contracts-gimple.cc's PHI recursion needs one: there is no PHI node
-   here to create a cycle through).  */
+   stmt/ip_nearest_write_before.  The write reaching DEF_STMT can be
+   DEF_STMT itself, around a loop ('++first' on a parameter is
+   'first = first + 4', and the only write of FIRST reaching it is
+   itself); such a cycle never reaches a binding statement, so a walk
+   that comes back to a statement it has seen establishes none, like
+   the parameter's own value.  */
 
 /* If CALL is an indirect (OBJ_TYPE_REF) dispatch through a class-typed
    receiver, return the FUNCTION_DECL declared, in the receiver's own
@@ -2377,8 +2377,10 @@ ip_virtual_call_declared_target (gcall *call)
 }
 
 static tree
-ip_binding_established_by (gimple *def_stmt)
+ip_binding_established_by_1 (gimple *def_stmt, hash_set<gimple *> *seen)
 {
+  if (seen->add (def_stmt))
+    return NULL_TREE;
   if (gimple_code (def_stmt) == GIMPLE_CALL)
     {
       gcall *call = as_a<gcall *> (def_stmt);
@@ -2388,7 +2390,8 @@ ip_binding_established_by (gimple *def_stmt)
 	  if (!var)
 	    return NULL_TREE;
 	  gimple *reaching = ip_nearest_write_before (var, def_stmt);
-	  return reaching ? ip_binding_established_by (reaching) : NULL_TREE;
+	  return (reaching ? ip_binding_established_by_1 (reaching, seen)
+		  : NULL_TREE);
 	}
       tree fndecl = gimple_call_fndecl (call);
       if (!fndecl)
@@ -2406,46 +2409,24 @@ ip_binding_established_by (gimple *def_stmt)
     {
       gimple *reaching = ip_resolve_defining_stmt (gimple_assign_rhs1 (def_stmt),
 						    def_stmt);
-      return reaching ? ip_binding_established_by (reaching) : NULL_TREE;
+      return (reaching ? ip_binding_established_by_1 (reaching, seen)
+	      : NULL_TREE);
     }
   if (is_gimple_assign (def_stmt) && gimple_assign_single_p (def_stmt))
     {
       gimple *reaching = ip_resolve_defining_stmt (gimple_assign_rhs1 (def_stmt),
 						    def_stmt);
-      return reaching ? ip_binding_established_by (reaching) : NULL_TREE;
+      return (reaching ? ip_binding_established_by_1 (reaching, seen)
+	      : NULL_TREE);
     }
   return NULL_TREE;
 }
 
-/* The same chain of copies/pointer-arithmetic/anonymous-SSA-temp hops
-   ip_binding_established_by walks (via the identical ip_resolve_
-   defining_stmt helper), but returning the ultimate GIMPLE_CALL it
-   traces back to (or NULL if that walk wouldn't establish a binding at
-   all) instead of what that call binds its result to.  Used so a
-   value's own establishing call is never also counted as a mutation
-   that invalidates that SAME value: a call to a non-const, unannotated
-   accessor like 'begin()' is, by ip_collect_mutations's own "assumed
-   invalidating" default, itself a mutation of its receiver -- but the
-   fresh iterator/pointer it just returned cannot have been invalidated
-   by that same call's own side effect, only a DIFFERENT, earlier-bound
-   value could be.  Mirrors ip_binding_established_by's own recursive
-   structure exactly, for the same reason (no cycle-guard needed: no
-   PHI node here to create a cycle through).  */
-
-static gimple *
-ip_originating_call (gimple *def_stmt)
+static tree
+ip_binding_established_by (gimple *def_stmt)
 {
-  if (gimple_code (def_stmt) == GIMPLE_CALL)
-    return def_stmt;
-  if (is_gimple_assign (def_stmt)
-      && (gimple_assign_rhs_code (def_stmt) == POINTER_PLUS_EXPR
-	  || gimple_assign_single_p (def_stmt)))
-    {
-      gimple *reaching = ip_resolve_defining_stmt (gimple_assign_rhs1 (def_stmt),
-						    def_stmt);
-      return reaching ? ip_originating_call (reaching) : NULL;
-    }
-  return NULL;
+  hash_set<gimple *> seen;
+  return ip_binding_established_by_1 (def_stmt, &seen);
 }
 
 /* One (DECL, TYPE) pair CALL is judged to mutate -- see
