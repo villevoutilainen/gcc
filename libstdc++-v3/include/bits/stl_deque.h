@@ -379,10 +379,28 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       operator-(const _Self& __x, const _Self& __y) _GLIBCXX_NOEXCEPT
       _GLIBCXX_CONVEYOR
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	// D4324/P2680: for two iterators into the same deque this can't
+	// overflow -- each position is within its buffer, and no map holds
+	// anywhere near PTRDIFF_MAX / 1024 nodes -- but that relation between
+	// the iterators isn't provable, so trust it here.
+	const difference_type __bufsz = difference_type(_S_buffer_size());
+	const difference_type __nodes = __x._M_node - __y._M_node;
+	const difference_type __xpos = __x._M_cur - __x._M_first;
+	const difference_type __ypos = __y._M_last - __y._M_cur;
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (__bufsz > 0 && __bufsz <= _GLIBCXX_DEQUE_BUF_SIZE
+	   && __nodes >= -(__PTRDIFF_MAX__ / 1024)
+	   && __nodes <= __PTRDIFF_MAX__ / 1024
+	   && __xpos >= 0 && __xpos <= _GLIBCXX_DEQUE_BUF_SIZE
+	   && __ypos >= 0 && __ypos <= _GLIBCXX_DEQUE_BUF_SIZE);
+	return __bufsz * (__nodes - bool(__x._M_node)) + __xpos + __ypos;
+#else
 	return difference_type(_S_buffer_size())
 	  * (__x._M_node - __y._M_node - bool(__x._M_node))
 	  + (__x._M_cur - __x._M_first)
 	  + (__y._M_last - __y._M_cur);
+#endif
       }
 
       // _GLIBCXX_RESOLVE_LIB_DEFECTS

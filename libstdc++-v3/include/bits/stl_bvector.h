@@ -299,11 +299,28 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
     friend _GLIBCXX20_CONSTEXPR ptrdiff_t
     operator-(const _Bit_iterator_base& __x, const _Bit_iterator_base& __y)
+    _GLIBCXX_CONVEYOR
     {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      // D4324/P2680: for two iterators into the same vector this can't
+      // overflow -- each offset is within its word, and no vector holds
+      // anywhere near PTRDIFF_MAX / 128 words -- but that relation between
+      // the iterators isn't provable, so trust it here, in place of the
+      // _M_assume_normalized hints (an assumption isn't allowed here).
+      const ptrdiff_t __words = __x._M_p - __y._M_p;
+      const ptrdiff_t __xoff = __x._M_offset;
+      const ptrdiff_t __yoff = __y._M_offset;
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(__words >= -(__PTRDIFF_MAX__ / 128) && __words <= __PTRDIFF_MAX__ / 128
+	 && __xoff >= 0 && __xoff < int(_S_word_bit)
+	 && __yoff >= 0 && __yoff < int(_S_word_bit));
+      return int(_S_word_bit) * __words + __xoff - __yoff;
+#else
       __x._M_assume_normalized();
       __y._M_assume_normalized();
       return (int(_S_word_bit) * (__x._M_p - __y._M_p)
 	      + __x._M_offset - __y._M_offset);
+#endif
     }
   };
 #pragma GCC diagnostic pop
@@ -436,7 +453,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     : _Bit_iterator_base(__x, __y) { }
 
     _GLIBCXX20_CONSTEXPR
-    _Bit_const_iterator(const _Bit_iterator& __x)
+    _Bit_const_iterator(const _Bit_iterator& __x) _GLIBCXX_CONVEYOR
     : _Bit_iterator_base(__x._M_p, __x._M_offset) { }
 
     _GLIBCXX20_CONSTEXPR
