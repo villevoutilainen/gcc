@@ -12405,6 +12405,21 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
       return false;
     }
 
+  /* Arithmetic whose range excludes zero ('i + 1' under 'i >= 0'):
+     oa_get_range composes it from its operands' facts.  */
+  if (INTEGRAL_TYPE_P (TREE_TYPE (expr))
+      && (TREE_CODE (expr) == PLUS_EXPR || TREE_CODE (expr) == MINUS_EXPR
+	  || TREE_CODE (expr) == MULT_EXPR || TREE_CODE (expr) == NEGATE_EXPR))
+    {
+      /* Negation keeps zero out exactly when its operand does.  */
+      if (TREE_CODE (expr) == NEGATE_EXPR)
+	return oa_provably_nonzero_p (TREE_OPERAND (expr, 0), env);
+      oa_range_fact fact;
+      return (oa_get_range (expr, env, &fact) && fact.base == NULL_TREE
+	      && ((fact.has_lo && fact.lo > 0)
+		  || (fact.has_hi && fact.hi < 0)));
+    }
+
   /* D4324/P2680 item 8: a field access ('this->field'/'obj.field'),
      resolved against m_contract_field_nz_map -- mirrors oa_get_range's
      own COMPONENT_REF case immediately below in this file exactly,

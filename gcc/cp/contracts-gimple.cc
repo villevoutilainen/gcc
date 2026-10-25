@@ -3882,6 +3882,105 @@ cg_value_exactly_at_p (tree val, gimple *stmt, gimple_ranger *ranger,
    confirmed by direct testing that 'if (b > 0) return a / b;' was
    wrongly rejected without STMT.  */
 
+static bool cg_value_range_at (tree, gimple *, hash_map<tree, cg_range_lite> &,
+			       hash_map<tree, cg_range_lite> &, gimple_ranger *,
+			       bool, cg_range_lite *);
+
+/* The range of integer value VAL at STMT, composed through '+', '-',
+   '*', negation and value-preserving conversions from its operands'
+   (cg_value_range_at), each operand's missing bound its type's own; a
+   result bound outside VAL's type is dropped (an overflow, or, in a type
+   that wraps, nothing known).  */
+
+static bool
+cg_composed_range_at (tree val, gimple *stmt,
+		      hash_map<tree, cg_range_lite> &established_range,
+		      hash_map<tree, cg_range_lite> &scalar_range_cache,
+		      gimple_ranger *ranger, cg_range_lite *out, int depth)
+{
+  tree type = TREE_TYPE (val);
+  if (!INTEGRAL_TYPE_P (type) || depth > 6)
+    return false;
+  if (TREE_CODE (val) == INTEGER_CST)
+    {
+      *out = cg_range_lite_exact (wi::to_widest (val));
+      return true;
+    }
+  if (TREE_CODE (val) != SSA_NAME)
+    return false;
+  auto operand = [&] (tree op, cg_range_lite *r) -> bool
+    {
+      tree t = TREE_TYPE (op);
+      if (!INTEGRAL_TYPE_P (t))
+	return false;
+      if (!cg_composed_range_at (op, stmt, established_range,
+				 scalar_range_cache, ranger, r, depth + 1))
+	*r = cg_range_lite ();
+      if (!r->has_lo)
+	r->has_lo = true, r->lo = wi::to_widest (TYPE_MIN_VALUE (t));
+      if (!r->has_hi)
+	r->has_hi = true, r->hi = wi::to_widest (TYPE_MAX_VALUE (t));
+      return true;
+    };
+  cg_range_lite composed;
+  bool have = false;
+  if (gassign *def = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (val)))
+    {
+      tree_code code = gimple_assign_rhs_code (def);
+      tree op0 = gimple_assign_rhs1 (def);
+      cg_range_lite a, b;
+      if ((code == PLUS_EXPR || code == MINUS_EXPR || code == MULT_EXPR)
+	  && operand (op0, &a) && operand (gimple_assign_rhs2 (def), &b))
+	{
+	  have = true;
+	  if (code == PLUS_EXPR)
+	    composed.lo = a.lo + b.lo, composed.hi = a.hi + b.hi;
+	  else if (code == MINUS_EXPR)
+	    composed.lo = a.lo - b.hi, composed.hi = a.hi - b.lo;
+	  else
+	    have = (cg_range_lite_multiply (a, b, &composed.has_lo,
+					    &composed.lo, &composed.has_hi,
+					    &composed.hi)
+		    && composed.has_lo && composed.has_hi);
+	  composed.has_lo = composed.has_hi = have;
+	}
+      else if (code == NEGATE_EXPR && operand (op0, &a))
+	{
+	  have = true;
+	  composed.has_lo = composed.has_hi = true;
+	  composed.lo = -a.hi, composed.hi = -a.lo;
+	}
+      else if (CONVERT_EXPR_CODE_P (code) && INTEGRAL_TYPE_P (TREE_TYPE (op0))
+	       && oa_integral_conversion_value_preserving_p (TREE_TYPE (op0),
+							     type))
+	have = cg_composed_range_at (op0, stmt, established_range,
+				     scalar_range_cache, ranger, &composed,
+				     depth + 1);
+      if (have)
+	{
+	  widest_int tmin = wi::to_widest (TYPE_MIN_VALUE (type));
+	  widest_int tmax = wi::to_widest (TYPE_MAX_VALUE (type));
+	  bool lo_in = composed.has_lo && composed.lo >= tmin && composed.lo <= tmax;
+	  bool hi_in = composed.has_hi && composed.hi >= tmin && composed.hi <= tmax;
+	  if (!TYPE_OVERFLOW_UNDEFINED (type) && !(lo_in && hi_in))
+	    lo_in = hi_in = false;
+	  composed.has_lo = lo_in;
+	  composed.has_hi = hi_in;
+	  have = lo_in || hi_in;
+	}
+    }
+  cg_range_lite own;
+  bool have_own = cg_value_range_at (val, stmt, established_range,
+				     scalar_range_cache, ranger,
+				     /*require_conveyor=*/true, &own);
+  if (!have && !have_own)
+    return false;
+  *out = have ? composed : own;
+  if (have && have_own)
+    cg_range_meet (out, own);
+  return true;
+}
+
 static bool
 cg_provably_nonzero_for_ub_p (tree val, gimple *stmt,
 				hash_map<tree, cg_fact> &established_nz,
@@ -3889,6 +3988,15 @@ cg_provably_nonzero_for_ub_p (tree val, gimple *stmt,
 				hash_map<tree, cg_range_lite> &scalar_range_cache,
 				gimple_ranger *ranger)
 {
+  /* A divisor computed from values with established ranges ('i + 1'
+     under 'pre (i >= 0)'): the ranger alone doesn't know those.  */
+  {
+    cg_range_lite r;
+    if (cg_composed_range_at (val, stmt, established_range,
+			      scalar_range_cache, ranger, &r, 0)
+	&& ((r.has_lo && r.lo > 0) || (r.has_hi && r.hi < 0)))
+      return true;
+  }
   hash_set<tree> in_progress;
   if (cg_provable_nonzero_p (val, established_nz, /*require_conveyor=*/true,
 			      in_progress))
