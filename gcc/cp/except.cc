@@ -640,8 +640,8 @@ build_throw (location_t loc, tree exp, tsubst_flags_t complain)
 	note_conveyor_auto_violation ();
       else
 	{
-	  error_at (loc, "%<throw%>-expression not permitted in a conveyor "
-		    "function or predicate");
+	  conveyor_error_at (loc, "%<throw%>-expression not permitted in a "
+			     "conveyor function or predicate");
 	  return error_mark_node;
 	}
     }

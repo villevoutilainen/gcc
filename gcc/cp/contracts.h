@@ -1188,6 +1188,20 @@ public:
    must not silently remove an overload candidate or fail a constraint.  */
 extern bool *conveyor_auto_probe_violation_p;
 
+/* The number of errors given for violations of the conveyor rules
+   (conveyor_error_at).  Such an error rejects the program but leaves the
+   code it is about valid C++ as far as the rest of the front end is
+   concerned, so template instantiation doesn't enter its error recovery
+   for it (pt.cc, tinst_errorcount): outside conveyor(auto) deduction a
+   conveyor violation must never change how templates are instantiated,
+   e.g. make an excluded overload viable.  */
+extern int conveyor_errorcount;
+
+extern void conveyor_error_at (location_t, const char *, ...)
+  ATTRIBUTE_GCC_DIAG (2,3);
+extern void conveyor_error_valist (location_t, const char *, va_list *)
+  ATTRIBUTE_GCC_DIAG (2,0);
+
 /* The conveyor(auto) specialization whose deduction the active probe is
    deciding, if the probe was started by that deduction; see
    conveyor_auto_note_violation_in.  */

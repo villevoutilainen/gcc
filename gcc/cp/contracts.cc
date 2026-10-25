@@ -936,6 +936,34 @@ bool suppress_conveyor_restrictions_for_deleting_dtor_p = false;
 bool *conveyor_auto_probe_violation_p = nullptr;
 
 /* See contracts.h.  */
+int conveyor_errorcount;
+
+/* Emit the error GMSGID with AP at LOC for a violation of the conveyor
+   rules, counting it in conveyor_errorcount.  */
+
+void
+conveyor_error_valist (location_t loc, const char *gmsgid, va_list *ap)
+{
+  auto_diagnostic_group d;
+  int before = errorcount;
+  emit_diagnostic_valist (diagnostics::kind::error, loc,
+			  diagnostics::option_id (), gmsgid, ap);
+  conveyor_errorcount += errorcount - before;
+}
+
+/* error_at for a violation of the conveyor rules; see
+   conveyor_errorcount.  */
+
+void
+conveyor_error_at (location_t loc, const char *gmsgid, ...)
+{
+  va_list ap;
+  va_start (ap, gmsgid);
+  conveyor_error_valist (loc, gmsgid, &ap);
+  va_end (ap);
+}
+
+/* See contracts.h.  */
 tree conveyor_auto_probe_decl;
 
 /* True if constructs subject to the D4324 conveyor-function syntactic
@@ -15764,8 +15792,7 @@ oa_conveyor_error_at (location_t loc, const char *gmsgid, ...)
   auto_diagnostic_group d;
   va_list ap;
   va_start (ap, gmsgid);
-  emit_diagnostic_valist (diagnostics::kind::error, loc,
-			  diagnostics::option_id (), gmsgid, &ap);
+  conveyor_error_valist (loc, gmsgid, &ap);
   va_end (ap);
 }
 
@@ -15786,8 +15813,7 @@ oa_error_at (location_t loc, const char *gmsgid, ...)
   auto_diagnostic_group d;
   va_list ap;
   va_start (ap, gmsgid);
-  emit_diagnostic_valist (diagnostics::kind::error, loc,
-			  diagnostics::option_id (), gmsgid, &ap);
+  conveyor_error_valist (loc, gmsgid, &ap);
   va_end (ap);
 }
 

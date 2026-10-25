@@ -9740,9 +9740,9 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
       if (conveyor_auto_probing_p ())
 	note_conveyor_auto_violation ();
       else
-	error_at (DECL_SOURCE_LOCATION (decl),
-		  "local variable %qD not explicitly initialized in a "
-		  "conveyor function or predicate", decl);
+	conveyor_error_at (DECL_SOURCE_LOCATION (decl),
+			   "local variable %qD not explicitly initialized in a "
+			   "conveyor function or predicate", decl);
     }
 
   /* P4222 Initialization profile: a local automatic variable of

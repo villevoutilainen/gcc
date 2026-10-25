@@ -3820,10 +3820,10 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 						  /*require_conveyor=*/true,
 						  in_progress, &reason))
 		{
-		  error_at (gimple_location (call),
-			    "cannot prove %<is_object_address%> for %qE, "
-			    "required by the precondition of %qD",
-			    cg_display_address (substituted), callee);
+		  conveyor_error_at (gimple_location (call),
+				     "cannot prove %<is_object_address%> for "
+				     "%qE, required by the precondition of %qD",
+				     cg_display_address (substituted), callee);
 		  if (const char *why = oa_unprovable_reason_text (reason))
 		    inform (gimple_location (call), "%s", _(why));
 		}
@@ -3844,10 +3844,10 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 					  /*require_conveyor=*/true, in_progress,
 					  &reason))
 	{
-	  error_at (gimple_location (call),
-		    "cannot prove %<is_object_address%> for %qE, "
-		    "required by the precondition of %qD",
-		    cg_display_argument (substituted, parm), callee);
+	  conveyor_error_at (gimple_location (call),
+			     "cannot prove %<is_object_address%> for %qE, "
+			     "required by the precondition of %qD",
+			     cg_display_argument (substituted, parm), callee);
 	  if (const char *why = oa_unprovable_reason_text (reason))
 	    inform (gimple_location (call), "%s", _(why));
 	  continue;
@@ -3882,11 +3882,12 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 					 &own_reason);
 	  if (!owned)
 	    {
-	      error_at (gimple_location (call),
-			"argument %qE is not owned by the calling function, "
-			"so it may not be passed as the non-const reference "
-			"parameter %qD of %qD",
-			cg_display_argument (substituted, parm), parm, callee);
+	      conveyor_error_at (gimple_location (call),
+				 "argument %qE is not owned by the calling "
+				 "function, so it may not be passed as the "
+				 "non-const reference parameter %qD of %qD",
+				 cg_display_argument (substituted, parm), parm,
+				 callee);
 	      if (const char *why = oa_unprovable_reason_text (own_reason))
 		inform (gimple_location (call), "%s", _(why));
 	    }
@@ -4202,8 +4203,7 @@ cg_obligation_error_at (location_t loc, const char *gmsgid, ...)
   auto_diagnostic_group d;
   va_list ap;
   va_start (ap, gmsgid);
-  emit_diagnostic_valist (diagnostics::kind::error, loc,
-			  diagnostics::option_id (), gmsgid, &ap);
+  conveyor_error_valist (loc, gmsgid, &ap);
   va_end (ap);
 }
 
@@ -4222,8 +4222,7 @@ cg_conveyor_error_at (location_t loc, const char *gmsgid, ...)
   auto_diagnostic_group d;
   va_list ap;
   va_start (ap, gmsgid);
-  emit_diagnostic_valist (diagnostics::kind::error, loc,
-			  diagnostics::option_id (), gmsgid, &ap);
+  conveyor_error_valist (loc, gmsgid, &ap);
   va_end (ap);
 }
 
@@ -14864,10 +14863,11 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
 	    case CG_VERDICT_FALSE:
 	      ok = false;
 	      if (is_post)
-		error_at (loc, "postcondition condition %qE is provably false", c);
+		conveyor_error_at (loc, "postcondition condition %qE is "
+				   "provably false", c);
 	      else
-		error_at (loc, "%<contract_assert%> condition %qE is provably false",
-			  c);
+		conveyor_error_at (loc, "%<contract_assert%> condition %qE "
+				   "is provably false", c);
 	      inform (loc, "established %s", text);
 	      break;
 	    case CG_VERDICT_UNKNOWN:
@@ -14875,10 +14875,11 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
 		{
 		  ok = false;
 		  if (is_post)
-		    error_at (loc, "cannot prove postcondition condition %qE", c);
+		    conveyor_error_at (loc, "cannot prove postcondition "
+				       "condition %qE", c);
 		  else
-		    error_at (loc, "cannot prove %<contract_assert%> condition %qE",
-			      c);
+		    conveyor_error_at (loc, "cannot prove %<contract_assert%> "
+				       "condition %qE", c);
 		}
 	      else if (is_post)
 		warning_at (loc, 0, "cannot verify postcondition condition %qE", c);
@@ -15570,9 +15571,9 @@ cg_check_predicate_mutation (function *fun)
 	      }
 	  }
 	auto_diagnostic_group d;
-	error_at (gimple_location (stmt), what,
-		  TREE_CODE (lhs) == SSA_NAME ? SSA_NAME_VAR (lhs)
-		  : cg_display_store_target (lhs));
+	conveyor_error_at (gimple_location (stmt), what,
+			   TREE_CODE (lhs) == SSA_NAME ? SSA_NAME_VAR (lhs)
+			   : cg_display_store_target (lhs));
 	inform (gimple_location (stmt), "%s",
 		_(oa_unprovable_reason_text (OA_UNPROVABLE_PREDICATE_CONTEXT)));
       }

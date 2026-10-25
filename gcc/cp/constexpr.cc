@@ -1057,9 +1057,9 @@ check_conveyor_function_body_r (tree *tp, int *, void *)
 	    if (conveyor_auto_probing_p ())
 	      note_conveyor_auto_violation ();
 	    else
-	      error_at (EXPR_LOCATION (t),
-			"%<std::unreachable%> not permitted in a conveyor "
-			"function or predicate");
+	      conveyor_error_at (EXPR_LOCATION (t), "%<std::unreachable%> not "
+				 "permitted in a conveyor function or "
+				 "predicate");
 	  }
       }
       break;
@@ -1129,9 +1129,9 @@ check_conveyor_function_body (tree fun)
       if (conveyor_auto_probing_p ())
 	note_conveyor_auto_violation ();
       else
-	error_at (DECL_SOURCE_LOCATION (fun),
-		  "conveyor function %qD with non-%<void%> return type must "
-		  "contain a %<return%> statement", fun);
+	conveyor_error_at (DECL_SOURCE_LOCATION (fun), "conveyor function %qD "
+			   "with non-%<void%> return type must contain a "
+			   "%<return%> statement", fun);
     }
 }
 

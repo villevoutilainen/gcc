@@ -3801,8 +3801,8 @@ finish_pseudo_destructor_expr (tree object, tree scope, tree destructor,
 	note_conveyor_auto_violation ();
       else
 	{
-	  error_at (loc, "pseudo-destructor call not permitted in a "
-		    "conveyor function or predicate");
+	  conveyor_error_at (loc, "pseudo-destructor call not permitted in a "
+			     "conveyor function or predicate");
 	  return error_mark_node;
 	}
     }
@@ -5134,12 +5134,14 @@ finish_id_expression_1 (tree id_expression,
 	  else
 	    {
 	      if (DECL_THREAD_LOCAL_P (decl))
-		error ("use of %<thread_local%> variable %qD not permitted "
-		       "in a conveyor function or predicate", decl);
+		conveyor_error_at (input_location, "use of %<thread_local%> "
+				   "variable %qD not permitted in a conveyor "
+				   "function or predicate", decl);
 	      else
-		error ("use of non-const variable %qD with static storage "
-		       "duration not permitted in a conveyor function or "
-		       "predicate", decl);
+		conveyor_error_at (input_location, "use of non-const variable "
+				   "%qD with static storage duration not "
+				   "permitted in a conveyor function or "
+				   "predicate", decl);
 	      return error_mark_node;
 	    }
 	}
