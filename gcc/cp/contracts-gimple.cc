@@ -4552,6 +4552,359 @@ cg_provably_safe_unit_shift_p (tree x, bool increasing,
   return increasing ? fact.has_upper_witness : fact.has_lower_witness;
 }
 
+/* A linear combination of at most two SSA values with coefficients
+   +-1 plus a constant, what cg_linear_decompose reduces a value to.  */
+
+struct cg_linear_form
+{
+  tree atom[2] = {};
+  int coef[2] = {};
+  unsigned n = 0;
+  widest_int k = 0;
+};
+
+/* Add SIGN * VAL to FORM, following the definitions of '+', '-',
+   negation (in a type whose overflow is undefined), copies and
+   conversions that keep every value.  Any other value is an atom.
+   False if more than two atoms remain, or one with a coefficient
+   other than +-1.  */
+
+static bool
+cg_linear_decompose (tree val, int sign, cg_linear_form *form, int depth)
+{
+  if (TREE_CODE (val) == INTEGER_CST)
+    {
+      form->k += sign * wi::to_widest (val);
+      return true;
+    }
+  if (TREE_CODE (val) != SSA_NAME || !INTEGRAL_TYPE_P (TREE_TYPE (val)))
+    return false;
+  if (depth < 8)
+    if (gassign *def = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (val)))
+      {
+	tree_code code = gimple_assign_rhs_code (def);
+	tree rhs1 = gimple_assign_rhs1 (def);
+	tree type = TREE_TYPE (val);
+	if ((code == PLUS_EXPR || code == MINUS_EXPR || code == NEGATE_EXPR)
+	    && TYPE_OVERFLOW_UNDEFINED (type))
+	  {
+	    if (code == NEGATE_EXPR)
+	      return cg_linear_decompose (rhs1, -sign, form, depth + 1);
+	    return (cg_linear_decompose (rhs1, sign, form, depth + 1)
+		    && cg_linear_decompose (gimple_assign_rhs2 (def),
+					    code == MINUS_EXPR ? -sign : sign,
+					    form, depth + 1));
+	  }
+	if (code == SSA_NAME
+	    || (CONVERT_EXPR_CODE_P (code) && INTEGRAL_TYPE_P (TREE_TYPE (rhs1))
+		&& (TYPE_UNSIGNED (TREE_TYPE (rhs1)) == TYPE_UNSIGNED (type)
+		    ? TYPE_PRECISION (TREE_TYPE (rhs1)) <= TYPE_PRECISION (type)
+		    : (TYPE_UNSIGNED (TREE_TYPE (rhs1))
+		       && (TYPE_PRECISION (TREE_TYPE (rhs1))
+			   < TYPE_PRECISION (type))))))
+	  return cg_linear_decompose (rhs1, sign, form, depth + 1);
+      }
+  for (unsigned i = 0; i < form->n; ++i)
+    if (form->atom[i] == val)
+      {
+	form->coef[i] += sign;
+	if (form->coef[i] == 0)
+	  {
+	    form->atom[i] = form->atom[form->n - 1];
+	    form->coef[i] = form->coef[form->n - 1];
+	    --form->n;
+	  }
+	return form->coef[i] >= -1 && form->coef[i] <= 1;
+      }
+  if (form->n == 2)
+    return false;
+  form->atom[form->n] = val;
+  form->coef[form->n] = sign;
+  ++form->n;
+  return true;
+}
+
+/* The two-atom part of a linear form T, 'c0 * a0 + c1 * a1', is the
+   value cg_linear_bound bounds; constants aside.  An interval on it,
+   unbounded where HAS_LO/HAS_HI is false.  */
+
+struct cg_linear_query
+{
+  cg_linear_form target;
+  gimple_ranger *ranger;
+  hash_map<basic_block, cg_range_lite> memo;
+};
+
+/* Meet B into *R.  */
+
+static void
+cg_range_meet (cg_range_lite *r, const cg_range_lite &b)
+{
+  if (b.has_lo && (!r->has_lo || b.lo > r->lo))
+    r->lo = b.lo, r->has_lo = true;
+  if (b.has_hi && (!r->has_hi || b.hi < r->hi))
+    r->hi = b.hi, r->has_hi = true;
+}
+
+/* The bound the atoms' own ranges on edge E give the target.  */
+
+static cg_range_lite
+cg_linear_ranges_on_edge (cg_linear_query &q, edge e)
+{
+  cg_range_lite r;
+  r.has_lo = r.has_hi = true;
+  for (unsigned i = 0; i < 2; ++i)
+    {
+      tree atom = q.target.atom[i];
+      tree type = TREE_TYPE (atom);
+      widest_int lo = wi::to_widest (TYPE_MIN_VALUE (type));
+      widest_int hi = wi::to_widest (TYPE_MAX_VALUE (type));
+      int_range_max vr (type);
+      if (q.ranger->range_on_edge (vr, e, atom) && !vr.undefined_p ()
+	  && !vr.varying_p ())
+	{
+	  lo = widest_int::from (vr.lower_bound (), TYPE_SIGN (type));
+	  hi = widest_int::from (vr.upper_bound (), TYPE_SIGN (type));
+	}
+      if (q.target.coef[i] > 0)
+	r.lo += lo, r.hi += hi;
+      else
+	r.lo -= hi, r.hi -= lo;
+    }
+  return r;
+}
+
+/* The bound the condition ending E's source gives the target on E, if
+   it compares a linear form of the target's two atoms.  */
+
+static cg_range_lite
+cg_linear_from_comparison (cg_linear_query &q, tree_code code, tree lhs,
+			   tree rhs, bool truth)
+{
+  cg_range_lite r;
+  /* '_5 != 0' testing a comparison computed into _5.  */
+  if ((code == NE_EXPR || code == EQ_EXPR) && integer_zerop (rhs)
+      && TREE_CODE (lhs) == SSA_NAME)
+    if (gassign *def = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (lhs)))
+      if (TREE_CODE_CLASS (gimple_assign_rhs_code (def)) == tcc_comparison)
+	{
+	  truth = truth == (code == NE_EXPR);
+	  code = gimple_assign_rhs_code (def);
+	  lhs = gimple_assign_rhs1 (def);
+	  rhs = gimple_assign_rhs2 (def);
+	}
+  if (!truth)
+    {
+      if (code == EQ_EXPR)
+	return r;
+      code = invert_tree_comparison (code, false);
+    }
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return r;
+  cg_linear_form f;
+  if (!cg_linear_decompose (lhs, 1, &f, 0)
+      || !cg_linear_decompose (rhs, -1, &f, 0) || f.n != 2)
+    return r;
+  /* F's atom part is S times the target's.  */
+  int s = 0;
+  for (int sign : { 1, -1 })
+    {
+      bool all = true;
+      for (unsigned i = 0; i < 2; ++i)
+	{
+	  bool found = false;
+	  for (unsigned j = 0; j < 2; ++j)
+	    if (f.atom[j] == q.target.atom[i]
+		&& f.coef[j] == sign * q.target.coef[i])
+	      found = true;
+	  all &= found;
+	}
+      if (all)
+	{
+	  s = sign;
+	  break;
+	}
+    }
+  if (!s)
+    return r;
+  /* S * A + K CODE 0, A the target's atom part.  */
+  widest_int c = -f.k;
+  if (s < 0)
+    {
+      c = -c;
+      code = swap_tree_comparison (code);
+    }
+  switch (code)
+    {
+    case LT_EXPR: r.has_hi = true; r.hi = c - 1; break;
+    case LE_EXPR: r.has_hi = true; r.hi = c; break;
+    case GT_EXPR: r.has_lo = true; r.lo = c + 1; break;
+    case GE_EXPR: r.has_lo = true; r.lo = c; break;
+    case EQ_EXPR: r.has_lo = r.has_hi = true; r.lo = r.hi = c; break;
+    default: gcc_unreachable ();
+    }
+  return r;
+}
+
+static cg_range_lite cg_linear_bound_entry (cg_linear_query &, basic_block,
+					    int);
+static cg_range_lite cg_linear_bound_edge (cg_linear_query &, edge, int);
+
+/* The bound on the target along E, the edge of a condition of E->src
+   testing a merge, in E->src, of values decided before it ('if (l > 0 ?
+   a >= b : a <= b)'): the hull, over the merge's incoming edges, of the
+   bound along each with its own value having the outcome of E.  An
+   incoming constant without that outcome is a path that can't take E.
+   False if E is not such an edge.  */
+
+static bool
+cg_linear_bound_through_phi (cg_linear_query &q, edge e, int depth,
+			     cg_range_lite *out)
+{
+  gcond *cond = safe_dyn_cast <gcond *> (*gsi_last_bb (e->src));
+  if (!cond || !(e->flags & (EDGE_TRUE_VALUE | EDGE_FALSE_VALUE)))
+    return false;
+  tree lhs = gimple_cond_lhs (cond);
+  tree_code code = gimple_cond_code (cond);
+  if ((code != NE_EXPR && code != EQ_EXPR)
+      || !integer_zerop (gimple_cond_rhs (cond))
+      || TREE_CODE (lhs) != SSA_NAME)
+    return false;
+  gphi *phi = safe_dyn_cast <gphi *> (SSA_NAME_DEF_STMT (lhs));
+  if (!phi || gimple_bb (phi) != e->src)
+    return false;
+  /* Each incoming value is nonzero exactly when TRUTH.  */
+  bool truth = ((e->flags & EDGE_TRUE_VALUE) != 0) == (code == NE_EXPR);
+  bool any = false;
+  cg_range_lite r;
+  for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+    {
+      tree arg = gimple_phi_arg_def (phi, i);
+      edge in = gimple_phi_arg_edge (phi, i);
+      if (dominated_by_p (CDI_DOMINATORS, in->src, e->src))
+	return false;
+      cg_range_lite b;
+      if (TREE_CODE (arg) == INTEGER_CST)
+	{
+	  if (integer_zerop (arg) == truth)
+	    continue;
+	}
+      else
+	b = cg_linear_from_comparison (q, NE_EXPR, arg,
+				       build_zero_cst (TREE_TYPE (arg)),
+				       truth);
+      cg_range_meet (&b, cg_linear_bound_edge (q, in, depth + 1));
+      if (!any)
+	r = b, any = true;
+      else
+	{
+	  r.has_lo = r.has_lo && b.has_lo;
+	  r.has_hi = r.has_hi && b.has_hi;
+	  if (r.has_lo)
+	    r.lo = wi::smin (r.lo, b.lo);
+	  if (r.has_hi)
+	    r.hi = wi::smax (r.hi, b.hi);
+	}
+    }
+  if (!any)
+    return false;
+  *out = r;
+  return true;
+}
+
+/* The bound on the target along E.  */
+
+static cg_range_lite
+cg_linear_bound_edge (cg_linear_query &q, edge e, int depth)
+{
+  cg_range_lite r;
+  if (depth > 16)
+    return r;
+  if (!cg_linear_bound_through_phi (q, e, depth, &r))
+    {
+      r = cg_linear_bound_entry (q, e->src, depth + 1);
+      if (e->flags & (EDGE_TRUE_VALUE | EDGE_FALSE_VALUE))
+	if (gcond *cond = safe_dyn_cast <gcond *> (*gsi_last_bb (e->src)))
+	  cg_range_meet (&r, cg_linear_from_comparison
+			       (q, gimple_cond_code (cond),
+				gimple_cond_lhs (cond), gimple_cond_rhs (cond),
+				(e->flags & EDGE_TRUE_VALUE) != 0));
+    }
+  cg_range_meet (&r, cg_linear_ranges_on_edge (q, e));
+  return r;
+}
+
+/* The bound on the target on entry to BB: the hull over BB's incoming
+   edges; nothing across a back edge or too far back.  */
+
+static cg_range_lite
+cg_linear_bound_entry (cg_linear_query &q, basic_block bb, int depth)
+{
+  if (cg_range_lite *m = q.memo.get (bb))
+    return *m;
+  cg_range_lite r;
+  if (depth <= 16 && EDGE_COUNT (bb->preds) > 0
+      && bb != ENTRY_BLOCK_PTR_FOR_FN (cfun))
+    {
+      bool first = true;
+      edge e;
+      edge_iterator ei;
+      FOR_EACH_EDGE (e, ei, bb->preds)
+	{
+	  if (e->src == ENTRY_BLOCK_PTR_FOR_FN (cfun)
+	      || dominated_by_p (CDI_DOMINATORS, e->src, bb))
+	    {
+	      r = cg_range_lite ();
+	      first = false;
+	      break;
+	    }
+	  cg_range_lite b = cg_linear_bound_edge (q, e, depth);
+	  if (first)
+	    r = b, first = false;
+	  else
+	    {
+	      r.has_lo = r.has_lo && b.has_lo;
+	      r.has_hi = r.has_hi && b.has_hi;
+	      if (r.has_lo)
+		r.lo = wi::smin (r.lo, b.lo);
+	      if (r.has_hi)
+		r.hi = wi::smax (r.hi, b.hi);
+	    }
+	}
+    }
+  q.memo.put (bb, r);
+  return r;
+}
+
+/* The bound, at STMT, on 'OP0 + OP1' (PLUS_EXPR) or 'OP0 - OP1' that
+   conditions comparing it guarantee on every path there: the overflow
+   guards 'INT_MAX - a >= b', 'a > 0 ? b <= INT_MAX - a : b >= INT_MIN -
+   a'.  Each comparison is exact, its own arithmetic being undefined on
+   overflow (and, in a conveyor function, proven not to overflow).  */
+
+static cg_range_lite
+cg_linear_bound (tree_code code, tree op0, tree op1, gimple *stmt,
+		 gimple_ranger *ranger)
+{
+  cg_range_lite none;
+  cg_linear_query q;
+  q.ranger = ranger;
+  if (!dom_info_available_p (CDI_DOMINATORS)
+      || !cg_linear_decompose (op0, 1, &q.target, 0)
+      || !cg_linear_decompose (op1, code == MINUS_EXPR ? -1 : 1, &q.target,
+			       0)
+      || q.target.n != 2)
+    return none;
+  cg_range_lite r = cg_linear_bound_entry (q, gimple_bb (stmt), 0);
+  /* Constants of the form itself.  */
+  if (r.has_lo)
+    r.lo += q.target.k;
+  if (r.has_hi)
+    r.hi += q.target.k;
+  return r;
+}
+
 /* D4324/P2680 item 8's overflow check, GIMPLE side -- the counterpart of
    oa_scan_overflow_in_expr. "Increment 1" of this piece: the NUMERIC
    route for NEGATE_EXPR and binary PLUS_EXPR/MINUS_EXPR/MULT_EXPR (all
@@ -4644,6 +4997,17 @@ cg_check_overflow_ub (gimple *stmt,
 					   /*require_symbolic=*/false, &b, stmt);
 
   bool safe = false;
+  /* A bound the conditions on the way give the sum or difference itself
+     (the guard 'INT_MAX - a >= b'): cg_linear_bound, only asked when the
+     operands' ranges don't settle it.  */
+  cg_range_lite lin;
+  bool lin_done = false;
+  auto linear = [&] () -> const cg_range_lite &
+    {
+      if (!lin_done)
+	lin = cg_linear_bound (code, op0, op1, stmt, ranger), lin_done = true;
+      return lin;
+    };
   /* Each direction on its own: adding something non-negative can't go
      below the type's minimum, whatever the other operand ('++x' with
      only 'x < 100' known).  */
@@ -4652,21 +5016,25 @@ cg_check_overflow_ub (gimple *stmt,
       bool hi_ok = ((have_a && have_b && a.has_hi && b.has_hi
 		     && a.hi + b.hi <= type_max)
 		    || (have_a && a.has_hi && a.hi <= 0)
-		    || (have_b && b.has_hi && b.hi <= 0));
+		    || (have_b && b.has_hi && b.hi <= 0)
+		    || (linear ().has_hi && linear ().hi <= type_max));
       bool lo_ok = ((have_a && have_b && a.has_lo && b.has_lo
 		     && a.lo + b.lo >= type_min)
 		    || (have_a && a.has_lo && a.lo >= 0)
-		    || (have_b && b.has_lo && b.lo >= 0));
+		    || (have_b && b.has_lo && b.lo >= 0)
+		    || (linear ().has_lo && linear ().lo >= type_min));
       safe = hi_ok && lo_ok;
     }
   else if (code == MINUS_EXPR)
     {
       bool hi_ok = ((have_a && have_b && a.has_hi && b.has_lo
 		     && a.hi - b.lo <= type_max)
-		    || (have_b && b.has_lo && b.lo >= 0));
+		    || (have_b && b.has_lo && b.lo >= 0)
+		    || (linear ().has_hi && linear ().hi <= type_max));
       bool lo_ok = ((have_a && have_b && a.has_lo && b.has_hi
 		     && a.lo - b.hi >= type_min)
-		    || (have_b && b.has_hi && b.hi <= 0));
+		    || (have_b && b.has_hi && b.hi <= 0)
+		    || (linear ().has_lo && linear ().lo >= type_min));
       safe = hi_ok && lo_ok;
     }
   else /* MULT_EXPR: cg_range_lite_multiply, mirroring oa_range_multiply

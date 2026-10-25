@@ -8954,6 +8954,18 @@ public:
 	  = prev.m_contract_call_range_map.get (it.first);
 	widen (it.second.range, p ? &p->range : NULL);
       }
+    for (auto it : m_linear_sum_map)
+      {
+	oa_contract_field_range_fact *p
+	  = prev.m_linear_sum_map.get (it.first);
+	widen (it.second.range, p ? &p->range : NULL);
+      }
+    for (auto it : m_linear_diff_map)
+      {
+	oa_contract_field_range_fact *p
+	  = prev.m_linear_diff_map.get (it.first);
+	widen (it.second.range, p ? &p->range : NULL);
+      }
     for (auto it : m_float_range_map)
       widen_float (it.second, prev.m_float_range_map.get (it.first));
     for (auto it : m_contract_float_field_range_map)
@@ -8995,6 +9007,10 @@ public:
       range (it.second.range), n += it.second.conveyor_established;
     for (auto it : m_contract_call_range_map)
       range (it.second.range), n += it.second.conveyor_established;
+    for (auto it : m_linear_sum_map)
+      range (it.second.range), n += it.second.conveyor_established;
+    for (auto it : m_linear_diff_map)
+      range (it.second.range), n += it.second.conveyor_established;
     for (auto it : m_float_range_map)
       frange_ (it.second);
     for (auto it : m_contract_float_field_range_map)
@@ -9026,6 +9042,7 @@ public:
     m_array_alias_target.empty ();
     m_call_relational_map.empty ();
     m_call_call_relational_map.empty ();
+    linear_invalidate_if ([] (tree d) { return TREE_ADDRESSABLE (d); });
     auto_vec<tree> scalars;
     for (auto it : m_nz_map)
       if (DECL_P (it.first) && TREE_ADDRESSABLE (it.first))
@@ -9107,6 +9124,10 @@ public:
     for (auto it : m_predicate_fact_map) add (it.first);
     for (auto it : m_relational_map)
       add (it.first), add (it.second.rhs);
+    for (auto it : m_linear_sum_map)
+      add (it.first.first), add (it.first.second);
+    for (auto it : m_linear_diff_map)
+      add (it.first.first), add (it.first.second);
     for (auto it : m_type_bound_map) add (it.first);
     for (auto it : m_call_relational_map)
       add (it.first), add (it.second.rhs_receiver);
@@ -9364,6 +9385,7 @@ public:
      keyed on DECL itself.  */
   void relational_invalidate_involving (tree decl)
   {
+    linear_invalidate_if ([decl] (tree d) { return d == decl; });
     m_relational_map.remove (decl);
     auto_vec<tree> to_remove;
     for (auto it : m_relational_map)
@@ -9374,6 +9396,8 @@ public:
   }
   void relational_merge_with (oa_env &other)
   {
+    linear_merge_with (m_linear_sum_map, other.m_linear_sum_map);
+    linear_merge_with (m_linear_diff_map, other.m_linear_diff_map);
     auto_vec<tree> to_remove;
     auto_vec<tree> to_keep;
     auto_vec<oa_relational_fact> kept_facts;
@@ -9396,6 +9420,80 @@ public:
       m_relational_map.remove (to_remove[i]);
     for (unsigned i = 0; i < to_keep.length (); ++i)
       m_relational_map.put (to_keep[i], kept_facts[i]);
+  }
+
+  /* The bound on 'A + B' (SUM) or 'A - B', if any.  */
+  bool linear_get (bool sum, tree a, tree b, oa_contract_field_range_fact *out)
+  {
+    auto &m = sum ? m_linear_sum_map : m_linear_diff_map;
+    if (sum && DECL_UID (b) < DECL_UID (a))
+      std::swap (a, b);
+    oa_contract_field_range_fact *v = m.get ({a, b});
+    if (!v)
+      return false;
+    *out = *v;
+    return true;
+  }
+  void linear_set (bool sum, tree a, tree b,
+		   const oa_contract_field_range_fact &fact)
+  {
+    auto &m = sum ? m_linear_sum_map : m_linear_diff_map;
+    if (sum && DECL_UID (b) < DECL_UID (a))
+      std::swap (a, b);
+    m.put ({a, b}, fact);
+  }
+  /* Drop every bound involving a decl PRED holds for.  */
+  template <typename P>
+  void linear_invalidate_if (P pred)
+  {
+    for (auto *m : { &m_linear_sum_map, &m_linear_diff_map })
+      {
+	auto_vec<std::pair<tree, tree>> to_remove;
+	for (auto it : *m)
+	  if (pred (it.first.first) || pred (it.first.second))
+	    to_remove.safe_push (it.first);
+	for (auto &k : to_remove)
+	  m->remove (k);
+      }
+  }
+  /* The join: the hull of the two bounds, dropped where only one side
+     has one.  */
+  static void
+  linear_merge_with (hash_map<oa_field_key_hash,
+			      oa_contract_field_range_fact> &mine,
+		     hash_map<oa_field_key_hash,
+			      oa_contract_field_range_fact> &theirs)
+  {
+    auto_vec<std::pair<tree, tree>> to_remove;
+    auto_vec<std::pair<tree, tree>> to_keep;
+    auto_vec<oa_contract_field_range_fact> kept_facts;
+    for (auto it : mine)
+      {
+	oa_contract_field_range_fact *ov = theirs.get (it.first);
+	oa_contract_field_range_fact merged;
+	merged.range.base = NULL_TREE;
+	merged.range.has_lo = (ov && it.second.range.has_lo
+			       && ov->range.has_lo);
+	merged.range.has_hi = (ov && it.second.range.has_hi
+			       && ov->range.has_hi);
+	if (!merged.range.has_lo && !merged.range.has_hi)
+	  {
+	    to_remove.safe_push (it.first);
+	    continue;
+	  }
+	if (merged.range.has_lo)
+	  merged.range.lo = wi::smin (it.second.range.lo, ov->range.lo);
+	if (merged.range.has_hi)
+	  merged.range.hi = wi::smax (it.second.range.hi, ov->range.hi);
+	merged.conveyor_established
+	  = it.second.conveyor_established && ov->conveyor_established;
+	to_keep.safe_push (it.first);
+	kept_facts.safe_push (merged);
+      }
+    for (unsigned i = 0; i < to_remove.length (); ++i)
+      mine.remove (to_remove[i]);
+    for (unsigned i = 0; i < to_keep.length (); ++i)
+      mine.put (to_keep[i], kept_facts[i]);
   }
 
   /* oa_type_bound_fact's own get/set/invalidate/merge_with -- see that
@@ -10065,6 +10163,10 @@ public:
       r.m_predicate_fact_map.put (it.first, it.second);
     for (auto it : m_relational_map)
       r.m_relational_map.put (it.first, it.second);
+    for (auto it : m_linear_sum_map)
+      r.m_linear_sum_map.put (it.first, it.second);
+    for (auto it : m_linear_diff_map)
+      r.m_linear_diff_map.put (it.first, it.second);
     for (auto it : m_type_bound_map)
       r.m_type_bound_map.put (it.first, it.second);
     for (auto it : m_call_relational_map)
@@ -10132,6 +10234,12 @@ public:
     m_relational_map.empty ();
     for (auto it : other.m_relational_map)
       m_relational_map.put (it.first, it.second);
+    m_linear_sum_map.empty ();
+    for (auto it : other.m_linear_sum_map)
+      m_linear_sum_map.put (it.first, it.second);
+    m_linear_diff_map.empty ();
+    for (auto it : other.m_linear_diff_map)
+      m_linear_diff_map.put (it.first, it.second);
     m_type_bound_map.empty ();
     for (auto it : other.m_type_bound_map)
       m_type_bound_map.put (it.first, it.second);
@@ -10341,6 +10449,11 @@ private:
   hash_map<tree, oa_derivation *> m_deriv_map;
   hash_map<tree, oa_predicate_fact> m_predicate_fact_map;
   hash_map<tree, oa_relational_fact> m_relational_map;
+  /* Bounds on 'A + B' (key (A, B), A's DECL_UID the smaller) and on
+     'A - B' (key (A, B)), from a comparison such as the overflow guard
+     'INT_MAX - a >= b'.  See oa_learn_linear_comparison.  */
+  hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_linear_sum_map;
+  hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_linear_diff_map;
   hash_map<tree, oa_type_bound_fact> m_type_bound_map;
   hash_map<tree, oa_call_relational_fact> m_call_relational_map;
   hash_map<tree, oa_unprovable_reason> m_unprovable_reason_hint_map;
@@ -12451,6 +12564,9 @@ oa_convert_range_across_signedness (tree from_type, tree to_type,
   return false;
 }
 
+static void oa_linear_tighten (tree_code, tree, tree, oa_env &,
+			       oa_range_fact *);
+
 static bool
 oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 {
@@ -12648,9 +12764,8 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
       tree op1 = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 1));
 
       oa_range_fact a, b;
-      if (!oa_get_range (op0, env, &a) || !oa_get_range (op1, env, &b))
-	return false;
-      if (a.base != NULL_TREE || b.base != NULL_TREE)
+      bool have = oa_get_range (op0, env, &a) && oa_get_range (op1, env, &b);
+      if (have && (a.base != NULL_TREE || b.base != NULL_TREE))
 	/* A pointer's own array-offset shifting through plain PLUS_EXPR/
 	   MINUS_EXPR doesn't happen at this stage -- see POINTER_PLUS_EXPR
 	   below, confirmed empirically to be what pointer arithmetic
@@ -12658,7 +12773,9 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 	return false;
 
       out->base = NULL_TREE;
-      if (TREE_CODE (expr) == PLUS_EXPR)
+      if (!have)
+	out->has_lo = out->has_hi = false;
+      else if (TREE_CODE (expr) == PLUS_EXPR)
 	{
 	  out->has_lo = a.has_lo && b.has_lo;
 	  out->has_hi = a.has_hi && b.has_hi;
@@ -12676,6 +12793,8 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 	  if (out->has_hi)
 	    out->hi = a.hi - b.lo;
 	}
+      /* A bound learned on the sum or difference itself.  */
+      oa_linear_tighten (TREE_CODE (expr), op0, op1, env, out);
       /* Each bound is checked against BOTH thresholds, not just its own
 	 "natural" one -- found via direct testing (x near INT_MAX,
 	 x * 2): the exact lo can itself exceed type_max just as easily
@@ -14077,9 +14196,273 @@ oa_shifted_comparison_no_wrap_ok_p (oa_env &env, tree param, tree receiver,
   return false;
 }
 
+static inline bool oa_fact_tracking_bookkeeping_active_p ();
+
+/* A linear combination of at most two decls with coefficients +-1
+   plus a constant: what oa_linear_decompose reduces an integer
+   expression to.  */
+
+struct oa_linear_form
+{
+  tree decl[2] = {};
+  int coef[2] = {};
+  unsigned n = 0;
+  widest_int k = 0;
+};
+
+/* Add SIGN * E to FORM, if E is linear in decls with no operation that
+   could wrap: constants, decls, and '+', '-' and negation in a type
+   whose overflow is undefined, through conversions that keep every
+   value.  False otherwise.  */
+
+static bool
+oa_linear_decompose (tree e, int sign, oa_linear_form *form)
+{
+  STRIP_ANY_LOCATION_WRAPPER (e);
+  while (CONVERT_EXPR_P (e) || TREE_CODE (e) == NON_LVALUE_EXPR)
+    {
+      tree inner = TREE_OPERAND (e, 0);
+      tree to = TREE_TYPE (e), from = TREE_TYPE (inner);
+      if (TREE_CODE (e) != NON_LVALUE_EXPR
+	  && (!INTEGRAL_TYPE_P (to) || !INTEGRAL_TYPE_P (from)
+	      || (TYPE_UNSIGNED (from) == TYPE_UNSIGNED (to)
+		  ? TYPE_PRECISION (from) > TYPE_PRECISION (to)
+		  : !(TYPE_UNSIGNED (from)
+		      && TYPE_PRECISION (from) < TYPE_PRECISION (to)))))
+	return false;
+      e = inner;
+      STRIP_ANY_LOCATION_WRAPPER (e);
+    }
+  if (TREE_CODE (e) == INTEGER_CST)
+    {
+      form->k += sign * wi::to_widest (e);
+      return true;
+    }
+  tree_code code = TREE_CODE (e);
+  if (code == PLUS_EXPR || code == MINUS_EXPR || code == NEGATE_EXPR)
+    {
+      if (!INTEGRAL_TYPE_P (TREE_TYPE (e))
+	  || !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (e)))
+	return false;
+      if (code == NEGATE_EXPR)
+	return oa_linear_decompose (TREE_OPERAND (e, 0), -sign, form);
+      return (oa_linear_decompose (TREE_OPERAND (e, 0), sign, form)
+	      && oa_linear_decompose (TREE_OPERAND (e, 1),
+				      code == MINUS_EXPR ? -sign : sign,
+				      form));
+    }
+  tree d = oa_strip_to_relational_operand (e);
+  if (!d || (!VAR_P (d) && TREE_CODE (d) != PARM_DECL)
+      || !INTEGRAL_TYPE_P (oa_decl_value_type (d)))
+    return false;
+  for (unsigned i = 0; i < form->n; ++i)
+    if (form->decl[i] == d)
+      {
+	form->coef[i] += sign;
+	if (form->coef[i] == 0)
+	  {
+	    form->decl[i] = form->decl[form->n - 1];
+	    form->coef[i] = form->coef[form->n - 1];
+	    --form->n;
+	  }
+	else if (form->coef[i] != 1 && form->coef[i] != -1)
+	  return false;
+	return true;
+      }
+  if (form->n == 2)
+    return false;
+  form->decl[form->n] = d;
+  form->coef[form->n] = sign;
+  ++form->n;
+  return true;
+}
+
+/* D's range, with the bounds no fact gives filled from its type.  */
+
+static bool
+oa_linear_operand_range (tree d, oa_env &env, oa_range_fact *r)
+{
+  tree t = oa_decl_value_type (d);
+  if (!INTEGRAL_TYPE_P (t)
+      || TREE_CODE (TYPE_MIN_VALUE (t)) != INTEGER_CST
+      || TREE_CODE (TYPE_MAX_VALUE (t)) != INTEGER_CST)
+    return false;
+  if (!oa_get_range (d, env, r) || r->base != NULL_TREE)
+    *r = oa_range_fact ();
+  if (!r->has_lo)
+    r->lo = wi::to_widest (TYPE_MIN_VALUE (t)), r->has_lo = true;
+  if (!r->has_hi)
+    r->hi = wi::to_widest (TYPE_MAX_VALUE (t)), r->has_hi = true;
+  return true;
+}
+
+/* CONJUNCT (true if ASSERTED_TRUE, else false) as a bound on the sum or
+   difference of two decls: 'INT_MAX - a >= b' is 'a + b <= INT_MAX',
+   'a >= INT_MIN + b' is 'a - b >= INT_MIN', which is what makes 'a + b'
+   and 'a - b' free of overflow after the usual guards.  The comparison
+   is exact: its own arithmetic is undefined on overflow (in a conveyor
+   function, proven not to overflow).  Recorded as an interval, met
+   with the one the two decls' ranges give and with any bound already
+   known, so that a join of the guard's two cases ('a > 0 ? b <= MAX -
+   a : b >= MIN - a') keeps both sides.  */
+
+static void
+oa_learn_linear_comparison (tree conjunct, oa_env &env, bool asserted_true)
+{
+  if (!oa_fact_tracking_bookkeeping_active_p ())
+    return;
+  STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  tree_code code = TREE_CODE (conjunct);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return;
+  if (!asserted_true)
+    {
+      if (code == EQ_EXPR)
+	return;
+      code = invert_tree_comparison (code, false);
+    }
+  oa_linear_form form;
+  if (!oa_linear_decompose (TREE_OPERAND (conjunct, 0), 1, &form)
+      || !oa_linear_decompose (TREE_OPERAND (conjunct, 1), -1, &form)
+      || form.n != 2)
+    return;
+  /* coef0 * d0 + coef1 * d1 + k CODE 0.  Normalize to 'A op B CODE C'
+     with op '+' (SUM) or '-'.  */
+  bool sum = form.coef[0] == form.coef[1];
+  tree a = form.decl[0], b = form.decl[1];
+  widest_int c = -form.k;
+  if (form.coef[0] < 0)
+    {
+      if (sum)
+	{
+	  c = -c;
+	  code = swap_tree_comparison (code);
+	}
+      else
+	std::swap (a, b);
+    }
+  oa_range_fact bound;
+  switch (code)
+    {
+    case LT_EXPR: bound.has_hi = true; bound.hi = c - 1; break;
+    case LE_EXPR: bound.has_hi = true; bound.hi = c; break;
+    case GT_EXPR: bound.has_lo = true; bound.lo = c + 1; break;
+    case GE_EXPR: bound.has_lo = true; bound.lo = c; break;
+    case EQ_EXPR:
+      bound.has_lo = bound.has_hi = true;
+      bound.lo = bound.hi = c;
+      break;
+    default:
+      gcc_unreachable ();
+    }
+  /* What the decls' own ranges give.  */
+  oa_range_fact ra, rb;
+  if (oa_linear_operand_range (a, env, &ra)
+      && oa_linear_operand_range (b, env, &rb))
+    {
+      widest_int lo = sum ? ra.lo + rb.lo : ra.lo - rb.hi;
+      widest_int hi = sum ? ra.hi + rb.hi : ra.hi - rb.lo;
+      if (!bound.has_lo || lo > bound.lo)
+	bound.lo = lo, bound.has_lo = true;
+      if (!bound.has_hi || hi < bound.hi)
+	bound.hi = hi, bound.has_hi = true;
+    }
+  oa_contract_field_range_fact fact = { bound, true };
+  oa_contract_field_range_fact old;
+  if (env.linear_get (sum, a, b, &old))
+    {
+      if (old.range.has_lo && (!fact.range.has_lo || old.range.lo > fact.range.lo))
+	fact.range.lo = old.range.lo, fact.range.has_lo = true;
+      if (old.range.has_hi && (!fact.range.has_hi || old.range.hi < fact.range.hi))
+	fact.range.hi = old.range.hi, fact.range.has_hi = true;
+      fact.conveyor_established = old.conveyor_established;
+    }
+  env.linear_set (sum, a, b, fact);
+}
+
+/* The bound a learned linear fact gives on 'OP0 + OP1' (PLUS_EXPR) or
+   'OP0 - OP1', met into *R.  */
+
+static void
+oa_linear_tighten (tree_code code, tree op0, tree op1, oa_env &env,
+		   oa_range_fact *r)
+{
+  tree a = oa_strip_to_relational_operand (op0);
+  tree b = oa_strip_to_relational_operand (op1);
+  if (!a || !b || a == b
+      || (!VAR_P (a) && TREE_CODE (a) != PARM_DECL)
+      || (!VAR_P (b) && TREE_CODE (b) != PARM_DECL))
+    return;
+  oa_contract_field_range_fact f;
+  if (!env.linear_get (code == PLUS_EXPR, a, b, &f))
+    return;
+  if (f.range.has_lo && (!r->has_lo || f.range.lo > r->lo))
+    r->lo = f.range.lo, r->has_lo = true;
+  if (f.range.has_hi && (!r->has_hi || f.range.hi < r->hi))
+    r->hi = f.range.hi, r->has_hi = true;
+}
+
+static void oa_merge_branch_envs (oa_env &, oa_env &, tree);
+static void oa_refine_single_comparison (tree, oa_env &, bool);
+
+/* CONJUNCT is a compound condition true (ASSERTED_TRUE) or false in ENV:
+   refine ENV by what holds on every way that can be -- one after the
+   other for '&&' (or a false '||'), and for '||', '?:' or a false '&&'
+   by each case, joined.  False if CONJUNCT is not compound.  */
+
+static bool
+oa_refine_compound_condition (tree conjunct, oa_env &env, bool asserted_true)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  tree_code code = TREE_CODE (c);
+  if (code == TRUTH_NOT_EXPR)
+    {
+      oa_refine_single_comparison (TREE_OPERAND (c, 0), env, !asserted_true);
+      return true;
+    }
+  bool is_and = code == TRUTH_ANDIF_EXPR || code == TRUTH_AND_EXPR;
+  bool is_or = code == TRUTH_ORIF_EXPR || code == TRUTH_OR_EXPR;
+  if (is_and || is_or)
+    {
+      tree a = TREE_OPERAND (c, 0), b = TREE_OPERAND (c, 1);
+      /* Both operands have the outcome itself.  */
+      if (is_and == asserted_true)
+	{
+	  oa_refine_single_comparison (a, env, asserted_true);
+	  oa_refine_single_comparison (b, env, asserted_true);
+	  return true;
+	}
+      /* A alone decides it, or A goes the other way and B decides.  */
+      oa_env first = env.copy ();
+      oa_refine_single_comparison (a, first, asserted_true);
+      oa_refine_single_comparison (a, env, !asserted_true);
+      oa_refine_single_comparison (b, env, asserted_true);
+      oa_merge_branch_envs (first, env, c);
+      env.assign (first);
+      return true;
+    }
+  if (code == COND_EXPR && TREE_OPERAND (c, 1) && TREE_OPERAND (c, 2)
+      && TREE_CODE (TREE_TYPE (c)) == BOOLEAN_TYPE)
+    {
+      oa_env first = env.copy ();
+      oa_refine_single_comparison (TREE_OPERAND (c, 0), first, true);
+      oa_refine_single_comparison (TREE_OPERAND (c, 1), first, asserted_true);
+      oa_refine_single_comparison (TREE_OPERAND (c, 0), env, false);
+      oa_refine_single_comparison (TREE_OPERAND (c, 2), env, asserted_true);
+      oa_merge_branch_envs (first, env, c);
+      env.assign (first);
+      return true;
+    }
+  return false;
+}
+
 static void
 oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
 {
+  if (oa_refine_compound_condition (conjunct, env, asserted_true))
+    return;
+  oa_learn_linear_comparison (conjunct, env, asserted_true);
   /* D4324, item 8's overflow check: establish a type-bound witness (see
      oa_type_bound_fact's own comment) independently of, and before, the
      mutually-exclusive-by-construction blocks below -- unlike those,
@@ -15389,20 +15772,29 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 	  have_b = complete (sop1, have_b, b);
 
 	  bool safe = false;
+	  /* A bound learned on the sum or difference itself (the guard
+	     'INT_MAX - a >= b'): oa_learn_linear_comparison.  */
+	  oa_range_fact lin;
+	  if (code == PLUS_EXPR || code == MINUS_EXPR)
+	    oa_linear_tighten (code, op0, op1, *e, &lin);
 	  if (code == PLUS_EXPR)
 	    {
-	      bool hi_ok = have_a && have_b && a.has_hi && b.has_hi
-			   && a.hi + b.hi <= type_max;
-	      bool lo_ok = have_a && have_b && a.has_lo && b.has_lo
-			   && a.lo + b.lo >= type_min;
+	      bool hi_ok = (have_a && have_b && a.has_hi && b.has_hi
+			    && a.hi + b.hi <= type_max)
+			   || (lin.has_hi && lin.hi <= type_max);
+	      bool lo_ok = (have_a && have_b && a.has_lo && b.has_lo
+			    && a.lo + b.lo >= type_min)
+			   || (lin.has_lo && lin.lo >= type_min);
 	      safe = hi_ok && lo_ok;
 	    }
 	  else if (code == MINUS_EXPR)
 	    {
-	      bool hi_ok = have_a && have_b && a.has_hi && b.has_lo
-			   && a.hi - b.lo <= type_max;
-	      bool lo_ok = have_a && have_b && a.has_lo && b.has_hi
-			   && a.lo - b.hi >= type_min;
+	      bool hi_ok = (have_a && have_b && a.has_hi && b.has_lo
+			    && a.hi - b.lo <= type_max)
+			   || (lin.has_hi && lin.hi <= type_max);
+	      bool lo_ok = (have_a && have_b && a.has_lo && b.has_hi
+			    && a.lo - b.hi >= type_min)
+			   || (lin.has_lo && lin.lo >= type_min);
 	      safe = hi_ok && lo_ok;
 	    }
 	  else /* MULT_EXPR: oa_range_multiply (own comment, near
