@@ -531,7 +531,7 @@ namespace pmr
        *  @return `numeric_limits<size_t>::max() / sizeof(value_type)`
       */
       static _GLIBCXX20_CONSTEXPR size_type
-      max_size(const allocator_type&) noexcept
+      max_size(const allocator_type&) noexcept _GLIBCXX_CONVEYOR
       { return size_t(-1) / sizeof(value_type); }
     };
 
