@@ -27458,6 +27458,39 @@ static void
 oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 		oa_env &env, bool cond_last = false)
 {
+  /* 'do { ... } while (false)', which every assertion macro is: the body
+     runs once and nothing loops back, so it's walked once, in place, as
+     a block whose break and continue statements both go to what follows
+     it -- not through the fixed point and the re-walks below, whose
+     environment copies made a function of N such macros cost N times its
+     environment's size, and a nest of them the product of their walk
+     counts (a BDE test driver took 26 minutes).  */
+  if (cond_last && cond && *cond && body
+      && !(cond_prep && *cond_prep) && !(expr && *expr))
+    {
+      tree c = *cond;
+      STRIP_ANY_LOCATION_WRAPPER (c);
+      while (CONVERT_EXPR_P (c) || TREE_CODE (c) == NON_LVALUE_EXPR)
+	c = TREE_OPERAND (c, 0);
+      if (TREE_CODE (c) == INTEGER_CST && integer_zerop (c))
+	{
+	  oa_jump_collector breaks, continues;
+	  {
+	    auto own_breaks = make_temp_override (oa_break_collector,
+						  &breaks);
+	    auto own_continues = make_temp_override (oa_continue_collector,
+						     &continues);
+	    if (*body)
+	      oa_walk_stmt (body, env);
+	  }
+	  if (continues.any)
+	    oa_merge_branch_envs (env, continues.env, NULL_TREE);
+	  if (breaks.any)
+	    oa_merge_branch_envs (env, breaks.env, NULL_TREE);
+	  return;
+	}
+    }
+
   auto_vec<tree *> parts;
   if (cond_prep && *cond_prep) parts.safe_push (cond_prep);
   /* A do-while loop's body runs before its condition is first tested
