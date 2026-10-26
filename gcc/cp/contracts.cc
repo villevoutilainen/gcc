@@ -12001,6 +12001,12 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
       tree fwd_arg;
       if (!oa_std_forward_call_p (stripped, &fwd_arg))
 	break;
+      /* A conveyor one (libstdc++'s, under conveyor assertions) returns a
+	 reference that is proven whatever its argument, as any conveyor
+	 callee's is (oa_conveyor_returned_reference_p below), the GIMPLE
+	 engine's cg_provable_object_address_p likewise.  */
+      if (oa_conveyor_returned_reference_p (stripped))
+	return true;
       expr = STRIP_ANY_LOCATION_WRAPPER (fwd_arg);
     }
 
