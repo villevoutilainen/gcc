@@ -310,6 +310,9 @@ namespace __detail
       _M_match_range(const _StrTransT& __first, const _StrTransT& __last,
 		     const _StrTransT& __str) const
       {
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	_GLIBCXX_CONVEYOR_TRUST(__last);
+	_GLIBCXX_CONVEYOR_TRUST(__str);
 	__glibcxx_assert(__first.size() == 1);
 	__glibcxx_assert(__last.size() == 1);
 	__glibcxx_assert(__str.size() == 1);
@@ -453,6 +456,7 @@ namespace __detail
       _StringT
       _M_add_collate_element(const _StringT& __s)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__s);
 	auto __st = _M_traits.lookup_collatename(__s.data(),
 						 __s.data() + __s.size());
 	if (__st.empty())
@@ -466,6 +470,7 @@ namespace __detail
       void
       _M_add_equivalence_class(const _StringT& __s)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__s);
 	auto __st = _M_traits.lookup_collatename(__s.data(),
 						 __s.data() + __s.size());
 	if (__st.empty())
@@ -481,6 +486,7 @@ namespace __detail
       void
       _M_add_character_class(const _StringT& __s, bool __neg)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__s);
 	auto __mask = _M_traits.lookup_classname(__s.data(),
 						 __s.data() + __s.size(),
 						 __icase);
@@ -508,6 +514,7 @@ namespace __detail
       void
       _M_ready()
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	std::sort(_M_char_set.begin(), _M_char_set.end());
 	auto __end = std::unique(_M_char_set.begin(), _M_char_set.end());
 	_M_char_set.erase(__end, _M_char_set.end());

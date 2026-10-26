@@ -265,6 +265,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	constexpr
 	explicit(extent != dynamic_extent && _OExtent == dynamic_extent)
 	span(const span<_OType, _OExtent>& __s) noexcept
+	_GLIBCXX_CONVEYOR_REQUIRES(__s)
 	: _M_ptr(__s.data()), _M_extent(__s.size())
 	{ }
 

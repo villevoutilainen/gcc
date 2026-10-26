@@ -1058,6 +1058,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     auto
     __make_shared_arr_tag(size_t __n, const _Alloc& __a = _Alloc()) noexcept
     {
+      _GLIBCXX_CONVEYOR_TRUST(__a);
       using _Up = remove_all_extents_t<_Tp>;
       using _UpAlloc = __alloc_rebind<_Alloc, _Up>;
       size_t __s = sizeof(remove_extent_t<_Tp>) / sizeof(_Up);

@@ -328,6 +328,7 @@ namespace __detail
       _StateIdT
       _M_insert_state(_StateT __s)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	this->push_back(std::move(__s));
 	if (this->size() > _GLIBCXX_REGEX_STATE_LIMIT)
 	  __throw_regex_error(

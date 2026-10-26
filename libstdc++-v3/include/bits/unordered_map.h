@@ -425,7 +425,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       { return _M_h.end(); }
 
       const_iterator
-      cend() const noexcept
+      cend() const noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _M_h.end(); }
       ///@}
 
@@ -555,6 +555,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	pair<iterator, bool>
 	try_emplace(key_type&& __k, _Args&&... __args)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return _M_h.try_emplace(cend(), std::move(__k),
 				  std::forward<_Args>(__args)...);
 	}

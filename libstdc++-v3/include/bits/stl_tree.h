@@ -1578,6 +1578,7 @@ namespace __rb_tree
 
       _Rb_tree(const _Compare& __comp,
 	       const allocator_type& __a = allocator_type())
+	       _GLIBCXX_CONVEYOR_TRUST_PRE(__a)
       : _M_impl(__comp, _Node_allocator(__a)) { }
 
       _Rb_tree(const _Rb_tree& __x)
@@ -1745,6 +1746,7 @@ namespace __rb_tree
 	__enable_if_t<__same_value_type<_InputIterator>::value>
 	_M_insert_range_unique(_InputIterator __first, _InputIterator __last)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  _Alloc_node __an(*this);
 	  for (; __first != __last; ++__first)
 	    _M_insert_unique_(end(), *__first, __an);
@@ -1927,7 +1929,10 @@ namespace __rb_tree
 
       iterator
       lower_bound(const key_type& __k)
-      { return iterator(_M_lower_bound(_M_begin(), _M_end(), __k)); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return iterator(_M_lower_bound(_M_begin(), _M_end(), __k));
+      }
 
       const_iterator
       lower_bound(const key_type& __k) const
@@ -1938,7 +1943,10 @@ namespace __rb_tree
 
       iterator
       upper_bound(const key_type& __k)
-      { return iterator(_M_upper_bound(_M_begin(), _M_end(), __k)); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return iterator(_M_upper_bound(_M_begin(), _M_end(), __k));
+      }
 
       const_iterator
       upper_bound(const key_type& __k) const
@@ -2123,6 +2131,8 @@ namespace __rb_tree
       insert_return_type
       _M_reinsert_node_unique(node_type&& __nh)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__nh);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	insert_return_type __ret;
 	if (__nh.empty())
 	  __ret.position = end();
@@ -2247,6 +2257,7 @@ namespace __rb_tree
       node_type
       extract(const key_type& __k)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	node_type __nh;
 	auto __pos = find(__k);
 	if (__pos != end())
@@ -2277,6 +2288,7 @@ namespace __rb_tree
 	void
 	_M_merge_unique(_Compatible_tree<_Compare2>& __src) noexcept
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__src);
 	  using _Merge_helper = _Rb_tree_merge_helper<_Rb_tree, _Compare2>;
 	  for (auto __i = __src.begin(), __end = __src.end(); __i != __end;)
 	    {
@@ -2319,6 +2331,7 @@ namespace __rb_tree
 
       friend bool
       operator==(const _Rb_tree& __x, const _Rb_tree& __y)
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       {
 	return __x.size() == __y.size()
 	  && std::equal(__x.begin(), __x.end(), __y.begin());
@@ -2544,12 +2557,14 @@ namespace __rb_tree
 #endif
 		 _NodeGen& __node_gen)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	bool __insert_left = (__x || __p == _M_end()
 			      || _M_key_compare(_KeyOfValue()(__v),
 						_S_key(__p)));
 
-	_Base_ptr __z =
-	  __node_gen(_GLIBCXX_FORWARD(_Arg, __v))->_M_base_ptr();
+	_Node_ptr __node = __node_gen(_GLIBCXX_FORWARD(_Arg, __v));
+	_GLIBCXX_CONVEYOR_TRUST(*__node);
+	_Base_ptr __z = __node->_M_base_ptr();
 
 	_Node_traits::_S_insert_and_rebalance
 	  (__insert_left, __z, __p, this->_M_impl._M_header);
@@ -2734,6 +2749,7 @@ namespace __rb_tree
     _Rb_tree<_Key, _Val, _KeyOfValue, _Compare, _Alloc>::
     equal_range(const _Key& __k)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       typedef pair<iterator, iterator> _Ret;
 
       _Base_ptr __x = _M_begin();
@@ -2766,6 +2782,7 @@ namespace __rb_tree
     _Rb_tree<_Key, _Val, _KeyOfValue, _Compare, _Alloc>::
     equal_range(const _Key& __k) const
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       typedef pair<const_iterator, const_iterator> _Ret;
 
       _Base_ptr __x = _M_begin();
@@ -2831,6 +2848,7 @@ namespace __rb_tree
     _Rb_tree<_Key, _Val, _KeyOfValue, _Compare, _Alloc>::
     _M_get_insert_unique_pos(const key_type& __k)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       typedef pair<_Base_ptr, _Base_ptr> _Res;
       _Base_ptr __x = _M_begin();
       _Base_ptr __y = _M_end();
@@ -2863,6 +2881,7 @@ namespace __rb_tree
     _Rb_tree<_Key, _Val, _KeyOfValue, _Compare, _Alloc>::
     _M_get_insert_equal_pos(const key_type& __k)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       typedef pair<_Base_ptr, _Base_ptr> _Res;
       _Base_ptr __x = _M_begin();
       _Base_ptr __y = _M_end();
@@ -2983,6 +3002,7 @@ namespace __rb_tree
     _M_get_insert_hint_unique_pos(const_iterator __position,
 				  const key_type& __k)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       typedef pair<_Base_ptr, _Base_ptr> _Res;
 
       // end()
@@ -3200,6 +3220,8 @@ namespace __rb_tree
     _M_insert_node(_Base_ptr __x, _Base_ptr __p, _Node_ptr __z)
     -> iterator
     {
+      _GLIBCXX_CONVEYOR_TRUST(__z);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       bool __insert_left = (__x || __p == _M_end()
 			    || _M_key_compare(_S_key(__z), _S_key(__p)));
 
@@ -3381,6 +3403,7 @@ namespace __rb_tree
     _Rb_tree<_Key, _Val, _KeyOfValue, _Compare, _Alloc>::
     _M_erase_unique(const _Key& __x)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       iterator __it = find(__x);
       if (__it == end())
 	return 0;
@@ -3396,6 +3419,7 @@ namespace __rb_tree
     _Rb_tree<_Key, _Val, _KeyOfValue, _Compare, _Alloc>::
     find(const _Key& __k)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       iterator __j(_M_lower_bound(_M_begin(), _M_end(), __k));
       return (__j == end()
 	      || _M_key_compare(__k, _S_key(__j._M_node))) ? end() : __j;
@@ -3408,6 +3432,7 @@ namespace __rb_tree
     _Rb_tree<_Key, _Val, _KeyOfValue, _Compare, _Alloc>::
     find(const _Key& __k) const
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const_iterator __j(_M_lower_bound(_M_begin(), _M_end(), __k));
       return (__j == end()
 	      || _M_key_compare(__k, _S_key(__j._M_node))) ? end() : __j;

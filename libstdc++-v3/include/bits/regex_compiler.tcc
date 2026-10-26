@@ -178,9 +178,11 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_quantifier()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       bool __neg = (_M_flags & regex_constants::ECMAScript);
       auto __init = [this, &__neg]()
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (_M_stack.empty())
 	    __throw_regex_error(regex_constants::error_badrepeat);
 	  __neg = __neg && _M_match_token(_ScannerT::_S_token_opt);
@@ -397,6 +399,7 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_insert_character_class_matcher()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_assert(_M_value.size() == 1);
       _BracketMatcher<__icase, __collate> __matcher
 	(_M_ctype.is(_CtypeT::upper, _M_value[0]), _M_traits);
@@ -602,6 +605,7 @@ namespace __detail
     {
       return [this, __ch]
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (std::binary_search(_M_char_set.begin(), _M_char_set.end(),
 			       _M_translator._M_translate(__ch)))
 	  return true;

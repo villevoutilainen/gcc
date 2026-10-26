@@ -1053,6 +1053,7 @@ namespace __format
 	_M_format_to(const _ChronoData<_CharT>& __t, _OutIter __out,
 		     _FormatContext& __fc) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__t);
 	  auto __first = _M_spec._M_chrono_specs.begin();
 	  const auto __last = _M_spec._M_chrono_specs.end();
 
@@ -1514,6 +1515,7 @@ namespace __format
 	_OutIter
 	_M_j(const _ChronoData<_CharT>& __t, _OutIter __out) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__t);
 	  if (!_M_spec._M_needs(_ChronoParts::_DayOfYear))
 	  {
 	    // Decimal number of days, without padding.
@@ -1587,6 +1589,7 @@ namespace __format
 	_OutIter
 	_M_r(const _ChronoData<_CharT>& __t, _OutIter __out) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__t);
 	  // %r Locale's 12-hour clock time, for C-locale: %I:%M:%S %p
 	  auto __hi = __t._M_hours.count() % 12;
 	  if (__hi == 0)
@@ -1609,6 +1612,7 @@ namespace __format
 	_M_R_X(const _ChronoData<_CharT>& __t, _OutIter __out,
 	       bool __secs) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__t);
 	  // %R  Equivalent to %H:%M
 	  // %X  Locale's time rep, for C-locale: %H:%M:%S (without subseconds)
 	  // %EX Locale's alternative time representation, for C-locale same as above
@@ -1658,6 +1662,7 @@ namespace __format
 	_M_subsecs(const _ChronoData<_CharT>& __t, _OutIter __out,
 		   _FormatContext& __ctx) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__t);
 	  unsigned __prec = _M_spec._M_prec_kind != _WP_none
 			  ? _M_spec._M_get_precision(__ctx)
 			  : _M_spec._M_prec;
@@ -2025,6 +2030,7 @@ namespace __format
 			const chrono::duration<_Rep2, _Period2>& __ss,
 			_FormatContext& __fc) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__ed);
 	  __format::_Str_sink<_CharT> __suffix_store;
 	  constexpr auto _S_unit_suffix
 	    = chrono::__detail::__units_suffix<_Period1, _CharT>();
@@ -2176,6 +2182,7 @@ namespace __format
 	typename basic_format_context<_Out, _CharT>::iterator
 	format(const chrono::duration<_Rep, _Period>& __d,
 	       basic_format_context<_Out, _CharT>& __fc) const
+	       _GLIBCXX_CONVEYOR_REQUIRES(__d)
 	{
 	  if constexpr (numeric_limits<_Rep>::is_signed)
 	    if (__d < __d.zero()) [[unlikely]]

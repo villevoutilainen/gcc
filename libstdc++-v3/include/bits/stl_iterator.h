@@ -1098,7 +1098,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __attribute__((__always_inline__))
       _GLIBCXX14_CONSTEXPR
       __normal_iterator&
-      operator++() _GLIBCXX_NOEXCEPT
+      operator++() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	++_M_current;
 	return *this;
@@ -1186,6 +1186,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  { __lhs.base() == __rhs.base() } -> std::convertible_to<bool>;
 	}
 	_GLIBCXX_CONVEYOR_AUTO
+	_GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
 	{ return __lhs.base() == __rhs.base(); }
 
       [[nodiscard, __gnu__::__always_inline__]]
@@ -1197,6 +1198,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{ __lhs.base() == __rhs.base() } -> std::convertible_to<bool>;
       }
       _GLIBCXX_CONVEYOR_AUTO
+      _GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
       { return __lhs.base() == __rhs.base(); }
 
       template<typename _Iter>
@@ -1209,6 +1211,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	requires requires {
 	  std::__detail::__synth3way(__lhs.base(), __rhs.base());
 	}
+	_GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
 	{ return std::__detail::__synth3way(__lhs.base(), __rhs.base()); }
 #else
        // Forward iterator requirements
@@ -1343,6 +1346,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	operator-(const __normal_iterator& __lhs,
 		  const __normal_iterator<_Iter, _Container>& __rhs)
 #endif
+	_GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
 	{ return __lhs.base() - __rhs.base(); }
 
       _GLIBCXX_NODISCARD __attribute__((__always_inline__))
@@ -1553,12 +1557,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #else
       [[nodiscard]]
       constexpr const iterator_type&
-      base() const & noexcept
+      base() const & noexcept _GLIBCXX_CONVEYOR
       { return _M_current; }
 
       [[nodiscard]]
       constexpr iterator_type
-      base() &&
+      base() && _GLIBCXX_CONVEYOR_AUTO
       { return std::move(_M_current); }
 #endif
 
@@ -1753,6 +1757,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR bool
     operator==(const move_iterator<_Iterator>& __x,
 	       const move_iterator<_Iterator>& __y)
+	       _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
     // N.B. No constraints, x.base() == y.base() is always well-formed.
     { return __x.base() == __y.base(); }
 
@@ -1807,6 +1812,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     operator-(const move_iterator<_IteratorL>& __x,
 	      const move_iterator<_IteratorR>& __y)
     -> decltype(__x.base() - __y.base())
+    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
     { return __x.base() - __y.base(); }
 
   template<typename _Iterator>

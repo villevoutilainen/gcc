@@ -447,7 +447,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX26_CONSTEXPR
       iterator
       end() noexcept
-      { return {this, _M_cont.keys.cend()}; }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return {this, _M_cont.keys.cend()}; }
 
       _GLIBCXX26_CONSTEXPR
       const_iterator
@@ -477,12 +477,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX26_CONSTEXPR
       const_iterator
       cbegin() const noexcept
-      { return {this, _M_cont.keys.cbegin()}; }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return {this, _M_cont.keys.cbegin()}; }
 
       _GLIBCXX26_CONSTEXPR
       const_iterator
       cend() const noexcept
-      { return {this, _M_cont.keys.cend()}; }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return {this, _M_cont.keys.cend()}; }
 
       _GLIBCXX26_CONSTEXPR
       const_reverse_iterator
@@ -520,6 +520,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	pair<iterator, bool>
 	_M_try_emplace(optional<const_iterator> __hint, _Key2&& __k, _Args&&... __args)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  // TODO: Simplify and audit the hint handling.
 	  typename key_container_type::iterator __key_it;
 	  typename mapped_container_type::iterator __value_it;
@@ -801,7 +802,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       _GLIBCXX26_CONSTEXPR
       const key_container_type&
-      keys() const noexcept
+      keys() const noexcept _GLIBCXX_CONVEYOR
       { return _M_cont.keys; }
 
       [[nodiscard]]
@@ -906,6 +907,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	iterator
 	lower_bound(const _Key2& __x)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  auto __it = std::lower_bound(_M_cont.keys.begin(), _M_cont.keys.end(),
 				       __x, _M_comp);
 	  return {this, __it};
@@ -918,6 +920,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	const_iterator
 	lower_bound(const _Key2& __x) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  auto __it = std::lower_bound(_M_cont.keys.begin(), _M_cont.keys.end(),
 				       __x, _M_comp);
 	  return {this, __it};
@@ -991,6 +994,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	pair<const_iterator, const_iterator>
 	equal_range(const _Key2& __x) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  auto [__first, __last] = std::equal_range(_M_cont.keys.begin(),
 						    _M_cont.keys.end(),
 						    __x, _M_comp);
@@ -1102,6 +1106,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       reference
       operator*() const noexcept
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__glibcxx_assert(_M_index < _M_cont->keys.size());
 	return {_M_cont->keys[_M_index], _M_cont->values[_M_index]};
       }

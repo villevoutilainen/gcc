@@ -588,7 +588,7 @@ namespace ranges
   template<size_t _Num, class _It, class _Sent, subrange_kind _Kind>
     requires ((_Num == 0 && copyable<_It>) || _Num == 1)
     constexpr auto
-    get(const subrange<_It, _Sent, _Kind>& __r)
+    get(const subrange<_It, _Sent, _Kind>& __r) _GLIBCXX_CONVEYOR_REQUIRES(__r)
     {
       if constexpr (_Num == 0)
 	return __r.begin();
@@ -599,7 +599,7 @@ namespace ranges
   template<size_t _Num, class _It, class _Sent, subrange_kind _Kind>
     requires (_Num < 2)
     constexpr auto
-    get(subrange<_It, _Sent, _Kind>&& __r)
+    get(subrange<_It, _Sent, _Kind>&& __r) _GLIBCXX_CONVEYOR_REQUIRES(__r)
     {
       if constexpr (_Num == 0)
 	return __r.begin();
@@ -861,6 +861,7 @@ namespace ranges
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__pred),
@@ -895,6 +896,7 @@ namespace ranges
       [[nodiscard]] constexpr range_value_t<_Range>
       operator()(_Range&& __r, _Comp __comp = {}, _Proj __proj = {}) const
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	auto __first = ranges::begin(__r);
 	auto __last = ranges::end(__r);
 	__glibcxx_assert(__first != __last);

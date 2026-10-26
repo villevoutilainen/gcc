@@ -1568,6 +1568,7 @@ namespace __detail
       _Hashtable_alloc<_NodeAlloc>::_M_allocate_node(_Args&&... __args)
       -> __node_ptr
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	auto& __alloc = _M_node_allocator();
 	auto __nptr = __node_alloc_traits::allocate(__alloc, 1);
 	__node_ptr __n = std::__to_address(__nptr);
@@ -1590,6 +1591,7 @@ namespace __detail
     void
     _Hashtable_alloc<_NodeAlloc>::_M_deallocate_node(__node_ptr __n)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __node_alloc_traits::destroy(_M_node_allocator(), __n->_M_valptr());
       _M_deallocate_node_ptr(__n);
     }
@@ -1598,6 +1600,7 @@ namespace __detail
     void
     _Hashtable_alloc<_NodeAlloc>::_M_deallocate_node_ptr(__node_ptr __n)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       using _Ptr = typename __node_alloc_traits::pointer;
       auto __ptr = std::pointer_traits<_Ptr>::pointer_to(*__n);
       __n->~__node_type();
@@ -1621,6 +1624,7 @@ namespace __detail
     _Hashtable_alloc<_NodeAlloc>::_M_allocate_buckets(size_t __bkt_count)
     -> __buckets_ptr
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __buckets_alloc_type __alloc(_M_node_allocator());
 
       auto __ptr = __buckets_alloc_traits::allocate(__alloc, __bkt_count);
@@ -1634,6 +1638,7 @@ namespace __detail
     _Hashtable_alloc<_NodeAlloc>::
     _M_deallocate_buckets(__buckets_ptr __bkts, size_t __bkt_count)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       using _Ptr = typename __buckets_alloc_traits::pointer;
       auto __ptr = std::pointer_traits<_Ptr>::pointer_to(*__bkts);
       __buckets_alloc_type __alloc(_M_node_allocator());

@@ -235,6 +235,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     deque<_Tp, _Alloc>::
     _M_erase(iterator __position)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       iterator __next = __position;
       ++__next;
       const difference_type __index = __position - begin();
@@ -258,6 +259,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     deque<_Tp, _Alloc>::
     _M_erase(iterator __first, iterator __last)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__first == __last)
 	return __first;
       else if (__first == begin() && __last == end())
@@ -307,6 +309,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     deque<_Tp, _Alloc>::
     _M_fill_insert(iterator __pos, size_type __n, const value_type& __x)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__pos._M_cur == this->_M_impl._M_start._M_cur)
 	{
 	  iterator __new_start = _M_reserve_elements_at_front(__n);
@@ -350,6 +353,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     deque<_Tp, _Alloc>::
     _M_default_append(size_type __n)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__n)
 	{
 	  iterator __new_finish = _M_reserve_elements_at_back(__n);
@@ -444,6 +448,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _M_range_initialize(_ForwardIterator __first, _ForwardIterator __last,
 			  std::forward_iterator_tag)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	const size_type __n = std::distance(__first, __last);
 	this->_M_initialize_map(_S_check_init_len(__n, _M_get_Tp_allocator()));
 
@@ -489,6 +494,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _M_push_back_aux(const value_type& __t)
 #endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (size() == max_size())
 	  __throw_length_error(
 	      __N("cannot create std::deque larger than max_size()"));
@@ -528,6 +534,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _M_push_front_aux(const value_type& __t)
 #endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (size() == max_size())
 	  __throw_length_error(
 	      __N("cannot create std::deque larger than max_size()"));
@@ -560,6 +567,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     void deque<_Tp, _Alloc>::
     _M_pop_back_aux()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_deallocate_node(this->_M_impl._M_finish._M_first);
       this->_M_impl._M_finish._M_set_node(this->_M_impl._M_finish._M_node - 1);
       this->_M_impl._M_finish._M_cur = this->_M_impl._M_finish._M_last - 1;
@@ -576,6 +584,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     void deque<_Tp, _Alloc>::
     _M_pop_front_aux()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _Alloc_traits::destroy(_M_get_Tp_allocator(),
 			     this->_M_impl._M_start._M_cur);
       _M_deallocate_node(this->_M_impl._M_start._M_first);
@@ -590,6 +599,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _M_range_prepend(_InputIterator __first, _Sentinel __last,
 		      size_type __n)
       {
+	 _GLIBCXX_CONVEYOR_TRUST_THIS;
 	 iterator __new_start = _M_reserve_elements_at_front(__n);
 	 __try
 	   {
@@ -612,6 +622,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _M_range_append(_InputIterator __first, _Sentinel __last,
 		      size_type __n)
      {
+       _GLIBCXX_CONVEYOR_TRUST_THIS;
        iterator __new_finish = _M_reserve_elements_at_back(__n);
        __try
 	{
@@ -664,6 +675,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       deque<_Tp, _Alloc>::
       _M_emplace_aux(iterator __pos, _Args&&... __args)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	// We should construct this temporary while the deque is
 	// in its current state in case something in __args...
 	// depends on that state before shuffling elements around.
@@ -711,6 +723,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     deque<_Tp, _Alloc>::
     _M_insert_aux(iterator __pos, size_type __n, const value_type& __x)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const difference_type __elems_before = __pos - this->_M_impl._M_start;
       const size_type __length = this->size();
       value_type __x_copy = __x;
@@ -799,6 +812,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		    _ForwardIterator __first, _ForwardIterator __last,
 		    size_type __n)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	const difference_type __elemsbefore = __pos - this->_M_impl._M_start;
 	const size_type __length = size();
 	if (static_cast<size_type>(__elemsbefore) < __length / 2)
@@ -1036,6 +1050,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
      deque<_Tp, _Alloc>::
      _M_destroy_data_aux(iterator __first, iterator __last)
      {
+       _GLIBCXX_CONVEYOR_TRUST_THIS;
        for (_Map_pointer __node = __first._M_node + 1;
 	    __node < __last._M_node; ++__node)
 	 std::_Destroy(*__node, *__node + _S_buffer_size(),
@@ -1058,6 +1073,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     deque<_Tp, _Alloc>::
     _M_new_elements_at_front(size_type __new_elems)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (this->max_size() - this->size() < __new_elems)
 	__throw_length_error(__N("deque::_M_new_elements_at_front"));
 
@@ -1083,6 +1099,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     deque<_Tp, _Alloc>::
     _M_new_elements_at_back(size_type __new_elems)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (this->max_size() - this->size() < __new_elems)
 	__throw_length_error(__N("deque::_M_new_elements_at_back"));
 
@@ -1108,6 +1125,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     deque<_Tp, _Alloc>::
     _M_reallocate_map(size_type __nodes_to_add, bool __add_at_front)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const size_type __old_num_nodes
 	= this->_M_impl._M_finish._M_node - this->_M_impl._M_start._M_node + 1;
       const size_type __new_num_nodes = __old_num_nodes + __nodes_to_add;

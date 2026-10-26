@@ -867,7 +867,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     public:
       _Sp_counted_array(const _Sp_counted_array_base<_Alloc>& __a,
-			pointer __p) noexcept
+			pointer __p) noexcept _GLIBCXX_CONVEYOR_TRUST_PRE(__a)
       : _Sp_counted_array_base<_Alloc>(__a), _M_alloc_ptr(__p)
       { }
 
@@ -884,6 +884,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       virtual void
       _M_destroy() noexcept
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_Sp_counted_array_base<_Alloc> __a = *this;
 	pointer __p = _M_alloc_ptr;
 	this->~_Sp_counted_array();

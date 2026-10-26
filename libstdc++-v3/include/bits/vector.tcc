@@ -180,6 +180,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     vector<_Tp, _Alloc>::
     _M_erase(iterator __position)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__position + 1 != end())
 	_GLIBCXX_MOVE3(__position + 1, end(), __position);
       --this->_M_impl._M_finish;
@@ -194,6 +195,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     vector<_Tp, _Alloc>::
     _M_erase(iterator __first, iterator __last)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__first != __last)
 	{
 	  if (__last != end())
@@ -257,6 +259,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     vector<_Tp, _Alloc>::
     _M_fill_assign(size_t __n, const value_type& __val)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const size_type __sz = size();
       if (__n > capacity())
 	{
@@ -306,6 +309,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _M_assign_aux(_ForwardIterator __first, _ForwardIterator __last,
 		    std::forward_iterator_tag)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	const size_type __sz = size();
 	const size_type __len = std::distance(__first, __last);
 
@@ -341,6 +345,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     vector<_Tp, _Alloc>::
     _M_insert_rval(const_iterator __position, value_type&& __v) -> iterator
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const auto __n = __position - cbegin();
       if (this->_M_impl._M_finish != this->_M_impl._M_end_of_storage)
 	if (__position == cend())
@@ -367,6 +372,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _M_emplace_aux(const_iterator __position, _Args&&... __args)
       -> iterator
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	const auto __n = __position - cbegin();
 	if (this->_M_impl._M_finish != this->_M_impl._M_end_of_storage)
 	  if (__position == cend())
@@ -438,6 +444,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     _M_realloc_insert(iterator __position, const _Tp& __x)
 #endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const size_type __len1 = _M_check_len(1u, "vector::_M_realloc_insert");
       if (__len1 <= 0)
 	__builtin_unreachable();
@@ -547,6 +554,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     _M_realloc_append(const _Tp& __x)
 #endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const size_type __len = _M_check_len(1u, "vector::_M_realloc_append");
       if (__len <= 0)
 	__builtin_unreachable();
@@ -640,6 +648,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     vector<_Tp, _Alloc>::
     _M_fill_insert(iterator __position, size_type __n, const value_type& __x)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__n != 0)
 	{
 	  if (__position.base() == this->_M_impl._M_finish)
@@ -791,6 +800,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     vector<_Tp, _Alloc>::
     _M_default_append(size_type __n)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__n != 0)
 	{
 	  const size_type __size = size();
@@ -886,6 +896,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     vector<_Tp, _Alloc>::
     _M_shrink_to_fit()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (capacity() == size())
 	return false;
       _GLIBCXX_ASAN_ANNOTATE_REINIT;

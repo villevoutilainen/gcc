@@ -1384,6 +1384,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       operator=(const basic_string& __str)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__str);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return this->assign(__str);
       }
 
@@ -1820,7 +1822,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       void
       shrink_to_fit() noexcept
-      { reserve(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; reserve(); }
 #pragma GCC diagnostic pop
 #endif
 
@@ -1944,7 +1946,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #endif
       _GLIBCXX20_CONSTEXPR
       void
-      reserve();
+      reserve() _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  Erases the string, making it empty.
@@ -2047,7 +2049,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
-      at(size_type __n)
+      at(size_type __n) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if (__n >= size())
 	  __throw_out_of_range_fmt(__N("basic_string::at: __n "
@@ -2126,7 +2128,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       operator+=(const basic_string& __str)
-      { return this->append(__str); }
+      { _GLIBCXX_CONVEYOR_TRUST(__str); return this->append(__str); }
 
       /**
        *  @brief  Append a C string.
@@ -2183,7 +2185,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX20_CONSTEXPR
       basic_string&
-      append(const basic_string& __str)
+      append(const basic_string& __str) _GLIBCXX_CONVEYOR_REQUIRES(__str)
       { return this->append(__str._M_data(), __str.size()); }
 
       /**
@@ -2417,6 +2419,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       assign(const basic_string& __str)
+      _GLIBCXX_CONVEYOR_REQUIRES(__str) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 #if __cplusplus >= 201103L
 	if (_Alloc_traits::_S_propagate_on_copy_assign())
@@ -3101,7 +3104,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX20_CONSTEXPR
       void
-      pop_back() noexcept
+      pop_back() noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(!empty());
 	_M_erase(size() - 1, 1);
@@ -3128,6 +3131,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       replace(size_type __pos, size_type __n, const basic_string& __str)
+      _GLIBCXX_CONVEYOR_REQUIRES(__str)
       { return this->replace(__pos, __n, __str._M_data(), __str.size()); }
 
       /**
@@ -3656,7 +3660,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       allocator_type
-      get_allocator() const _GLIBCXX_NOEXCEPT
+      get_allocator() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _M_get_allocator(); }
 
       /**
@@ -3674,7 +3678,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find(const _CharT* __s, size_type __pos, size_type __n) const
-      _GLIBCXX_NOEXCEPT;
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  @brief  Find position of a string.
@@ -3689,8 +3693,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find(const basic_string& __str, size_type __pos = 0) const
-      _GLIBCXX_NOEXCEPT
-      { return this->find(__str.data(), __pos, __str.size()); }
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES(__str)
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return this->find(__str.data(), __pos, __str.size());
+      }
 
 #ifdef __glibcxx_string_view // >= C++17
       /**
@@ -3823,7 +3830,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
-      rfind(_CharT __c, size_type __pos = npos) const _GLIBCXX_NOEXCEPT;
+      rfind(_CharT __c, size_type __pos = npos) const _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  @brief  Find position of a character of string.
@@ -3839,8 +3847,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_first_of(const basic_string& __str, size_type __pos = 0) const
-      _GLIBCXX_NOEXCEPT
-      { return this->find_first_of(__str.data(), __pos, __str.size()); }
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES(__str)
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return this->find_first_of(__str.data(), __pos, __str.size());
+      }
 
 #ifdef __glibcxx_string_view // >= C++17
       /**
@@ -3876,7 +3887,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_first_of(const _CharT* __s, size_type __pos, size_type __n) const
-      _GLIBCXX_NOEXCEPT;
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  @brief  Find position of a character of C string.
@@ -4174,7 +4185,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_last_not_of(_CharT __c, size_type __pos = npos) const
-      _GLIBCXX_NOEXCEPT;
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  @brief  Get a substring.
@@ -4506,7 +4517,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       [[nodiscard]]
       constexpr bool
-      starts_with(_CharT __x) const noexcept
+      starts_with(_CharT __x) const noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return __sv_type(this->data(), this->size()).starts_with(__x); }
 
       [[nodiscard, __gnu__::__nonnull__]]
@@ -4517,6 +4528,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       [[nodiscard]]
       constexpr bool
       ends_with(basic_string_view<_CharT, _Traits> __x) const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return __sv_type(this->data(), this->size()).ends_with(__x); }
 
       [[nodiscard]]
@@ -4538,7 +4550,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       [[nodiscard]]
       constexpr bool
-      contains(_CharT __x) const noexcept
+      contains(_CharT __x) const noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return __sv_type(this->data(), this->size()).contains(__x); }
 
       [[nodiscard, __gnu__::__nonnull__]]

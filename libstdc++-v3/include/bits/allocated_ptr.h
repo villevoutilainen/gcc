@@ -213,7 +213,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       get_allocator() const noexcept { return _M_a; }
 
       constexpr value_type*
-      get() const noexcept
+      get() const noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT_PTR
       { return std::__to_address(_M_p); }
 
       [[__nodiscard__]]

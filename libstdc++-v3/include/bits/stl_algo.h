@@ -3655,6 +3655,9 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
     [[nodiscard]] constexpr const _Tp&
     clamp(const _Tp& __val, const _Tp& __lo, const _Tp& __hi)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__val);
+      _GLIBCXX_CONVEYOR_TRUST(__lo);
+      _GLIBCXX_CONVEYOR_TRUST(__hi);
       __glibcxx_assert(!(__hi < __lo));
       return std::min(std::max(__val, __lo), __hi);
     }
