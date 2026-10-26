@@ -78,10 +78,52 @@ namespace census
     return n;
   }
 
+  // The rest of optional's interface: const and rvalue accessors, every
+  // comparison, the monadic operations of every value category,
+  // conversions, swap, iteration, and optional<T&>.
+  template<class T>
+  int optional_api ()
+  {
+    int n = 0;
+    std::optional<T> o (std::in_place, 1), p;
+    const std::optional<T> c (std::in_place, 2);
+    n += (c.value () == *c) + (*c.operator-> () == *c) + bool (c);
+    n += (std::move (o).value () == T (1)) + (*std::move (c) == T (2));
+    n += std::move (o).value_or (T (3)) == T (3);
+    n += (o != p) + (o > p) + (o <= p) + (o >= p) + (c != o);
+    n += (o == std::nullopt) + (std::nullopt == o) + (o != std::nullopt);
+    n += (o == T (1)) + (T (1) == o) + (o != T (1)) + (T (1) != o);
+    n += (o < T (1)) + (T (1) < o) + (o > T (1)) + (T (1) > o);
+    n += (o <= T (1)) + (T (1) <= o) + (o >= T (1)) + (T (1) >= o);
+    auto id = [] (const T &x) { return std::optional<T> (x); };
+    auto eq = [] (const T &x) { return x == x; };
+    n += c.and_then (id).has_value () + std::move (o).and_then (id).has_value ();
+    n += std::move (c).and_then (id).has_value ();
+    n += c.transform (eq).has_value () + std::move (o).transform (eq).has_value ();
+    n += std::move (c).transform (eq).has_value ();
+    auto none = [] { return std::optional<T> (); };
+    n += c.or_else (none).has_value () + std::move (o).or_else (none).has_value ();
+    std::optional<std::optional<T>> nested (std::in_place, std::in_place, 4);
+    n += nested.value ().has_value ();
+    std::optional<long> l (3);
+    std::optional<long> m (l), k (std::move (l));
+    m = std::optional<int> (5);
+    k = std::move (m);
+    swap (o, p);
+    n += o.begin () == o.end ();
+    n += c.begin () == c.end ();
+    T v (6);
+    std::optional<T &> r (v);
+    n += (r.value () == v) + (r.value_or (v) == v) + (*r == v);
+    n += (r == o) + (r == std::nullopt) + (r.begin () != r.end ());
+    return n;
+  }
+
   int all ()
   {
     return vocabulary<int> () + vocabulary<Val> () + vocabulary<ThrowCopy> ()
-	   + vocabulary<AddrOp> () + functions ();
+	   + vocabulary<AddrOp> () + functions () + optional_api<int> ()
+	   + optional_api<Val> ();
   }
 }
 
