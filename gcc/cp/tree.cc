@@ -5409,6 +5409,13 @@ structural_type_p (tree t, bool explain)
        structural types or (possibly multi-dimensional) array thereof.  */
   if (!CLASS_TYPE_P (t))
     return false;
+  /* A class that deletes its reflect_constant (P4340) opts out.  */
+  if (CLASSTYPE_NOT_STRUCTURAL (t))
+    {
+      if (explain)
+	inform (location_of (t), "%qT deletes %<reflect_constant%>", t);
+      return false;
+    }
   if (!literal_type_p (t))
     {
       if (explain)

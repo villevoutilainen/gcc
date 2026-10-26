@@ -2695,6 +2695,7 @@ struct GTY(()) lang_type {
   bool erroneous : 1;
   bool non_pod_aggregate : 1;
   bool non_aggregate_pod : 1;
+  bool not_structural : 1;
 
   /* When adding a flag here, consider whether or not it ought to
      apply to a template instance if it applies to the template.  If
@@ -2705,7 +2706,7 @@ struct GTY(()) lang_type {
   /* There are some bits left to fill out a 32-bit word.  Keep track
      of this by updating the size of this bitfield whenever you add or
      remove a flag.  */
-  unsigned dummy : 2;
+  unsigned dummy : 1;
 
   tree primary_base;
   vec<tree_pair_s, va_gc> *vcall_indices;
@@ -2801,6 +2802,11 @@ struct GTY(()) lang_type {
    on.  */
 #define CLASSTYPE_STRUCTURAL(NODE) \
   (TYPE_LANG_FLAG_3 (RECORD_OR_UNION_CHECK (NODE)))
+
+/* True if this class deletes 'std::meta::info reflect_constant () const'
+   (P4340): it is not a structural type, whatever its members.  */
+#define CLASSTYPE_NOT_STRUCTURAL(NODE) \
+  (LANG_TYPE_CLASS_CHECK (NODE)->not_structural)
 
 
 /* Nonzero means that this _CLASSTYPE node overloads operator=(X&).  */
@@ -7784,6 +7790,7 @@ extern void defaulted_late_check		(tree, tristate = tristate::unknown ());
 extern bool defaultable_fn_check		(tree);
 extern bool reflect_constant_fn_p		(const_tree);
 extern tree defaulted_reflect_constant		(tree);
+extern void deleted_reflect_constant		(tree);
 extern void check_abi_tags			(tree);
 extern tree missing_abi_tags			(tree);
 extern void fixup_type_variants			(tree);

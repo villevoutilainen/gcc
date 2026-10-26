@@ -6324,6 +6324,7 @@ trees_out::lang_type_bools (tree t, bits_out& bits)
   gcc_checking_assert (!lang->erroneous);
   WB (lang->non_pod_aggregate);
   WB (lang->non_aggregate_pod);
+  WB (lang->not_structural);
 #undef WB
 }
 
@@ -6397,6 +6398,7 @@ trees_in::lang_type_bools (tree t, bits_in& bits)
   gcc_checking_assert (!lang->erroneous);
   RB (lang->non_pod_aggregate);
   RB (lang->non_aggregate_pod);
+  RB (lang->not_structural);
 #undef RB
   return !get_overrun ();
 }

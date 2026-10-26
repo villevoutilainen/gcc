@@ -13128,6 +13128,7 @@ instantiate_class_template (tree type)
     {
       CLASSTYPE_FINAL (type) = CLASSTYPE_FINAL (pattern);
       CLASSTYPE_STRUCTURAL (type) = CLASSTYPE_STRUCTURAL (pattern);
+      CLASSTYPE_NOT_STRUCTURAL (type) = CLASSTYPE_NOT_STRUCTURAL (pattern);
     }
 
   pbinfo = TYPE_BINFO (pattern);
