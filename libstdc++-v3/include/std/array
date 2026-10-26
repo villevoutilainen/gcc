@@ -264,7 +264,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[__nodiscard__]]
       _GLIBCXX17_CONSTEXPR reference
-      back() noexcept _GLIBCXX_CONVEYOR_AUTO _GLIBCXX_PRECONDITION_NONEMPTY()
+      back() noexcept _GLIBCXX_PRECONDITION_NONEMPTY()
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	return _M_elems[_Nm - 1];
@@ -272,8 +273,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[__nodiscard__]]
       constexpr const_reference
-      back() const noexcept _GLIBCXX_CONVEYOR_AUTO
-      _GLIBCXX_PRECONDITION_NONEMPTY()
+      back() const noexcept _GLIBCXX_PRECONDITION_NONEMPTY()
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 #if __cplusplus >= 201402L
 	__glibcxx_requires_nonempty();

@@ -611,7 +611,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       { return static_cast<_Node*>(_M_node)->_M_valptr(); }
 
       _List_iterator&
-      operator++() _GLIBCXX_NOEXCEPT
+      operator++() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	_M_node = _M_node->_M_next;
 	return *this;
@@ -626,7 +626,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       }
 
       _List_iterator&
-      operator--() _GLIBCXX_NOEXCEPT
+      operator--() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	_M_node = _M_node->_M_prev;
 	return *this;
@@ -643,14 +643,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD
       friend bool
       operator==(const _List_iterator& __x,
-		 const _List_iterator& __y) _GLIBCXX_NOEXCEPT
+		 const _List_iterator& __y) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return __x._M_node == __y._M_node; }
 
 #if __cpp_impl_three_way_comparison < 201907L
       _GLIBCXX_NODISCARD
       friend bool
       operator!=(const _List_iterator& __x,
-		 const _List_iterator& __y) _GLIBCXX_NOEXCEPT
+		 const _List_iterator& __y) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return __x._M_node != __y._M_node; }
 #endif
 
@@ -702,7 +702,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       { return static_cast<_Node*>(_M_node)->_M_valptr(); }
 
       _List_const_iterator&
-      operator++() _GLIBCXX_NOEXCEPT
+      operator++() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	_M_node = _M_node->_M_next;
 	return *this;
@@ -717,7 +717,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       }
 
       _List_const_iterator&
-      operator--() _GLIBCXX_NOEXCEPT
+      operator--() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	_M_node = _M_node->_M_prev;
 	return *this;
@@ -734,14 +734,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD
       friend bool
       operator==(const _List_const_iterator& __x,
-		 const _List_const_iterator& __y) _GLIBCXX_NOEXCEPT
+		 const _List_const_iterator& __y) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return __x._M_node == __y._M_node; }
 
 #if __cpp_impl_three_way_comparison < 201907L
       _GLIBCXX_NODISCARD
       friend bool
       operator!=(const _List_const_iterator& __x,
-		 const _List_const_iterator& __y) _GLIBCXX_NOEXCEPT
+		 const _List_const_iterator& __y) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return __x._M_node != __y._M_node; }
 #endif
 
