@@ -8328,6 +8328,8 @@ finish_struct (tree t, tree attributes)
      the struct, not the end.  */
   input_location = DECL_SOURCE_LOCATION (TYPE_NAME (t));
 
+  note_reflect_constant (t);
+
   if (processing_template_decl)
     {
       tree x;

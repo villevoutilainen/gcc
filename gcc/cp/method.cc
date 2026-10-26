@@ -4093,26 +4093,33 @@ reflect_constant_signature_p (tree fn)
 	  && REFLECTION_TYPE_P (TREE_TYPE (TREE_TYPE (fn))));
 }
 
-/* FN, a reflect_constant member function, is deleted in its class: if it
-   is 'consteval std::meta::info reflect_constant () const', its class is not
-   structural, whatever its members (P4340).  Any other reflect_constant
-   is just a deleted function.  */
+/* Mark class T, now that its members are known, structural if it
+   defaults its reflect_constant, or not structural if it deletes it
+   (P4340): only 'consteval std::meta::info reflect_constant () const'
+   does either, and any other deleted reflect_constant is just a deleted
+   function.  Done from its members, not as each is declared, so that a
+   redeclaration rejected as such has no effect.  */
 
 void
-deleted_reflect_constant (tree fn)
+note_reflect_constant (tree t)
 {
-  tree ctx = DECL_CONTEXT (fn);
-  if (current_class_type && TYPE_BEING_DEFINED (current_class_type)
-      && ctx == current_class_type
-      && reflect_constant_signature_p (fn))
-    CLASSTYPE_NOT_STRUCTURAL (ctx) = 1;
+  for (tree f = TYPE_FIELDS (t); f; f = DECL_CHAIN (f))
+    {
+      tree fn = STRIP_TEMPLATE (f);
+      if (!reflect_constant_fn_p (fn))
+	continue;
+      if (DECL_DEFAULTED_FN (fn))
+	CLASSTYPE_STRUCTURAL (t) = 1;
+      else if (DECL_DELETED_FN (fn) && reflect_constant_signature_p (fn))
+	CLASSTYPE_NOT_STRUCTURAL (t) = 1;
+    }
 }
 
 /* Check defaulting FN, a reflect_constant member function: it has to be
    'consteval std::meta::info reflect_constant () const', defaulted in its
-   class.
-   Its class is then structural.  It is only a marker: nothing defines it,
-   and a call to it is ill-formed (it is deleted).  */
+   class.  Its class is then structural (note_reflect_constant).  It is
+   only a marker: nothing defines it, and a call to it is ill-formed (it
+   is deleted).  */
 
 static bool
 defaultable_reflect_constant_check (tree fn)
@@ -4130,7 +4137,6 @@ defaultable_reflect_constant_check (tree fn)
 	     "function with no parameters returning %<std::meta::info%>", fn);
       return false;
     }
-  CLASSTYPE_STRUCTURAL (ctx) = 1;
   DECL_DELETED_FN (fn) = 1;
   return true;
 }

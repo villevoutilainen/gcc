@@ -7790,7 +7790,7 @@ extern void defaulted_late_check		(tree, tristate = tristate::unknown ());
 extern bool defaultable_fn_check		(tree);
 extern bool reflect_constant_fn_p		(const_tree);
 extern tree defaulted_reflect_constant		(tree);
-extern void deleted_reflect_constant		(tree);
+extern void note_reflect_constant		(tree);
 extern void check_abi_tags			(tree);
 extern tree missing_abi_tags			(tree);
 extern void fixup_type_variants			(tree);
