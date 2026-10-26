@@ -13,6 +13,7 @@ namespace census
 {
   template<class R>
   int consume (R &&r)
+    CENSUS_OBJECT (r)
   {
     int n = 0;
     for (auto &&x : r)
@@ -26,6 +27,7 @@ namespace census
 
   template<class C>
   int pipelines (C &c)
+    CENSUS_OBJECT (c)
   {
     namespace v = std::views;
     using T = std::ranges::range_value_t<C>;

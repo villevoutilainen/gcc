@@ -19,6 +19,7 @@ namespace census
 {
   template<class C>
   int use_sequence (C &c, const C &other)
+    CENSUS_OBJECT (c) CENSUS_OBJECT (other)
   {
     using T = typename C::value_type;
     int n = 0;
@@ -61,6 +62,7 @@ namespace census
 
   template<class C>
   int use_random_access (C &c)
+    CENSUS_OBJECT (c)
   {
     int n = 0;
     if (!c.empty ())

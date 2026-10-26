@@ -9,6 +9,7 @@ namespace census
 {
   template<class S>
   int use_string (S &s, const S &t)
+    CENSUS_OBJECT (s) CENSUS_OBJECT (t)
   {
     using C = typename S::value_type;
     int n = 0;
