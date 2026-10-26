@@ -677,6 +677,7 @@ namespace ranges
       [[nodiscard]] constexpr borrowed_iterator_t<_Range>
       operator()(_Range&& __r, const _Tp& __value, _Proj __proj = {}) const
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       __value, std::move(__proj));
       }
@@ -705,6 +706,7 @@ namespace ranges
       [[nodiscard]] constexpr borrowed_iterator_t<_Range>
       operator()(_Range&& __r, _Pred __pred, _Proj __proj = {}) const
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__pred), std::move(__proj));
       }
@@ -733,6 +735,7 @@ namespace ranges
       [[nodiscard]] constexpr borrowed_iterator_t<_Range>
       operator()(_Range&& __r, _Pred __pred, _Proj __proj = {}) const
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__pred), std::move(__proj));
       }
@@ -797,6 +800,8 @@ namespace ranges
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r1);
+	_GLIBCXX_CONVEYOR_TRUST(__r2);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__pred),
@@ -861,6 +866,7 @@ namespace ranges
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r2);
 	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
@@ -957,6 +963,7 @@ namespace ranges
       [[nodiscard]] constexpr borrowed_iterator_t<_Range>
       operator()(_Range&& __r, _Pred __pred = {}, _Proj __proj = {}) const
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__pred), std::move(__proj));
       }

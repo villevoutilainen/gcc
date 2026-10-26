@@ -170,6 +170,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __attribute__((__always_inline__))
       _GLIBCXX20_CONSTEXPR
       allocator(const allocator& __a) _GLIBCXX_NOTHROW _GLIBCXX_CONVEYOR
+      _GLIBCXX_CONVEYOR_TRUST_PRE(__a)
       : __allocator_base<_Tp>(__a) { }
 
 #if __cplusplus >= 201103L
@@ -180,7 +181,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       template<typename _Tp1>
 	__attribute__((__always_inline__))
 	_GLIBCXX20_CONSTEXPR
-	allocator(const allocator<_Tp1>&) _GLIBCXX_NOTHROW _GLIBCXX_CONVEYOR { }
+	allocator(const allocator<_Tp1>& __a __attribute__((__unused__)))
+	_GLIBCXX_NOTHROW _GLIBCXX_CONVEYOR _GLIBCXX_CONVEYOR_TRUST_PRE(__a) { }
 
       __attribute__((__always_inline__))
 #if __cpp_constexpr_dynamic_alloc
