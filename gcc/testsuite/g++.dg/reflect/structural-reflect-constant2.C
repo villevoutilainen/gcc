@@ -71,3 +71,12 @@ public:
   consteval std::meta::info reflect_constant () const = default;
 };
 static_assert (std::meta::is_structural_type (^^OptIn));
+
+// It has to be consteval to opt out, and a function returning
+// std::meta::info has to be consteval anyway.
+struct NotConsteval
+{
+  int x;
+  std::meta::info reflect_constant () const = delete; // { dg-error "must be declared .consteval." }
+};
+static_assert (std::meta::is_structural_type (^^NotConsteval));
