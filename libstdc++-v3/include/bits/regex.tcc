@@ -76,6 +76,7 @@ namespace __detail
 
       if (__ret)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__res);
 	  for (auto& __it : __res)
 	    if (!__it.matched)
 	      __it.first = __it.second = __e;

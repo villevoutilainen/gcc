@@ -411,7 +411,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     _GLIBCXX14_CONSTEXPR
     const _Tp&
-    max(const _Tp&, const _Tp&);
+    max(const _Tp&, const _Tp&) _GLIBCXX_CONVEYOR_AUTO;
 
   template<typename _Tp, typename _Compare>
     _GLIBCXX14_CONSTEXPR
@@ -424,7 +424,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     _GLIBCXX14_CONSTEXPR
     const _Tp&
-    min(const _Tp&, const _Tp&) _GLIBCXX_CONVEYOR;
+    min(const _Tp&, const _Tp&) _GLIBCXX_CONVEYOR_AUTO;
 
   template<typename _Tp, typename _Compare>
     _GLIBCXX14_CONSTEXPR

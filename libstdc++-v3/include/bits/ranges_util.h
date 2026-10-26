@@ -502,7 +502,7 @@ namespace ranges
       constexpr _Sent end() const _GLIBCXX_CONVEYOR_AUTO
       { return _M_end; }
 
-      constexpr bool empty() const _GLIBCXX_CONVEYOR
+      constexpr bool empty() const _GLIBCXX_CONVEYOR_AUTO
       { return _M_begin == _M_end; }
 
       constexpr __size_type

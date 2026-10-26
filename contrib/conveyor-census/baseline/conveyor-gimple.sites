@@ -1,53 +1,22 @@
 bits/allocated_ptr.h: { ::new ((void*)this->get()) value_type; }
-bits/cpyfunc_impl.h: __glibcxx_assert(*this != nullptr);
-bits/forward_list.h: : _Base(_Node_alloc_type(__al))
-bits/forward_list.h: { return this->_M_impl._M_head._M_next == nullptr; }
-bits/list.tcc: auto& __this_alloc = this->_M_get_Node_allocator();
-bits/list.tcc: return iterator(__tmp->_M_base());
-bits/mofunc_impl.h: __glibcxx_assert(*this != nullptr);
-bits/ranges_util.h: { return _M_begin == _M_end; }
+bits/forward_list.h: __glibcxx_requires_nonempty();
+bits/list.tcc: _GLIBCXX_CONVEYOR_TRUST(*__tmp);
 bits/regex_executor.h: _M_rep_count(_M_nfa.size()),
 bits/regex_executor.h: _M_visited_states = new bool[_M_nfa.size()];
 bits/regex_executor.tcc: __glibcxx_assert(_M_get_sol_pos());
 bits/regex_executor.tcc: _M_cur_results = _M_results;
 bits/regex_executor.tcc: std::fill_n(_M_visited_states, _M_nfa.size(), false);
-bits/regex.tcc: for (auto& __it : __res)
-bits/shared_ptr_base.h: _Guarded_ptr __guard{__a};
-bits/stl_algobase.h: if (__b < __a)
-bits/stl_algo.h: return std::min(std::max(__val, __lo), __hi);
-bits/stl_deque.h: : _Base(std::move(__x), __a, __x.size())
-bits/stl_deque.h: const difference_type __nodes = __x._M_node - __y._M_node;
-bits/stl_deque.h: const difference_type __xpos = __x._M_cur - __x._M_first;
-bits/stl_deque.h: const difference_type __ypos = __y._M_last - __y._M_cur;
-bits/stl_deque.h: const size_t __allocmax = _Alloc_traits::max_size(__a);
-bits/stl_deque.h: if (__x.get_allocator() != __a && !__x.empty())
-bits/stl_deque.h: return __bufsz * (__nodes - bool(__x._M_node)) + __xpos + __ypos;
-bits/stl_deque.h: { return __x._M_cur == __y._M_cur; }
-bits/stl_iterator.h: : _M_current() { }
+bits/stl_deque.h: { return _S_max_size(_M_get_Tp_allocator()); }
+bits/stl_deque.h: { return this->_M_impl._M_finish == this->_M_impl._M_start; }
+bits/stl_deque.h: size_type __sz = this->_M_impl._M_finish - this->_M_impl._M_start;
 bits/stl_iterator.h: : _M_current(__i.base()) { }
-bits/stl_list.h: : _Base(_Node_alloc_type(__a))
-bits/stl_list.h: __glibcxx_assert(__first != __last);
-bits/stl_list.h: return this->_M_impl._M_node._M_next == this->_M_impl._M_node._M_base();
-bits/stl_set.h: __glibcxx_assert(__pos != end());
-bits/stl_tree.h: _Base_ptr __base_z = __z->_M_base_ptr();
-bits/stl_vector.h: ptrdiff_t __dif = this->_M_impl._M_finish - this->_M_impl._M_start;
-bits/stl_vector.h: { return begin() == end(); }
-bits/valarray_before.h: return _M_expr1.size();
+bits/stl_list.h: __glibcxx_requires_nonempty();
+bits/stl_vector.h: __glibcxx_requires_nonempty();
+bits/stl_vector.h: __glibcxx_requires_subscript(__n);
 bits/vector.tcc: __glibcxx_assert(__position != const_iterator());
-ext/extptr_allocator.h: : _M_real_alloc(__rarg._M_real_alloc) { }
 std/flat_map: __glibcxx_assert(_M_index < _M_cont->keys.size());
-std/flat_map: : _M_cont(std::__addressof(__fm->_M_cont)), _M_index(__it - __fm->keys().cbegin())
-std/format: __format_ctx.advance_to(__f.format(__val, __format_ctx));
-std/format: _M_set(_Td{__v.data(), __v.size()});
 std/mdspan: __glibcxx_assert(cmp_less_equal(_M_mapping.required_span_size(),
 std/mdspan: __glibcxx_assert(__idx < __ext.extent(0));
 std/mdspan: __glibcxx_assert(__is_multi_index(make_index_sequence<rank()>()));
-std/optional: { return this->_M_is_engaged(); }
-std/ranges: __glibcxx_assert(_M_current != _M_end);
-std/ranges: __glibcxx_assert(_M_current != _M_next);
-std/ranges: if (++_M_get_inner() == ranges::end(__inner_range))
-std/ranges: if (_M_inner != ranges::end(__inner))
 std/ranges: if (std::get<1>(_M_inner_it) != ranges::end(__inner))
-std/ranges: _M_inner_it.template emplace<1>(ranges::begin(__inner));
-std/ranges: _M_inner = ranges::begin(__inner);
-std/variant: if ((__variant::__as(__variants).valueless_by_exception() || ...))
+std/ranges: { return __y.count() == 0 || __y.base() == __x._M_end; }

@@ -85,6 +85,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       emplace(const_iterator __position, _Args&&... __args)
       {
 	_Node_ptr __tmp = _M_create_node(std::forward<_Args>(__args)...);
+	_GLIBCXX_CONVEYOR_TRUST(*__tmp);
 	__tmp->_M_hook(__position._M_const_cast()._M_node);
 	this->_M_inc_size(1);
 	return iterator(__tmp->_M_base());
@@ -101,6 +102,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #endif
     {
       _Node_ptr __tmp = _M_create_node(__x);
+      _GLIBCXX_CONVEYOR_TRUST(*__tmp);
       __tmp->_M_hook(__position._M_const_cast()._M_node);
       this->_M_inc_size(1);
       return iterator(__tmp->_M_base());
@@ -265,7 +267,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     list<_Tp, _Alloc>::
     operator=(const list& __x)
     {
-      _GLIBCXX_CONVEYOR_TRUST(__x);
       if (this != std::__addressof(__x))
 	{
 #if __cplusplus >= 201103L

@@ -78,11 +78,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       : _M_real_alloc() { }
 
       _ExtPtr_allocator(const _ExtPtr_allocator& __rarg) _GLIBCXX_USE_NOEXCEPT
+      _GLIBCXX_CONVEYOR_TRUST_PRE(__rarg)
       : _M_real_alloc(__rarg._M_real_alloc) { }
 
       template<typename _Up>
         _ExtPtr_allocator(const _ExtPtr_allocator<_Up>& __rarg)
-	_GLIBCXX_USE_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES(__rarg)
+	_GLIBCXX_USE_NOEXCEPT _GLIBCXX_CONVEYOR_TRUST_PRE(__rarg)
         : _M_real_alloc(__rarg._M_getUnderlyingImp()) { }
 
       ~_ExtPtr_allocator() _GLIBCXX_USE_NOEXCEPT

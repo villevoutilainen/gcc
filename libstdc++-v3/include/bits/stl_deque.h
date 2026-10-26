@@ -283,7 +283,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD
       friend _GLIBCXX26_CONSTEXPR bool
       operator==(const _Self& __x, const _Self& __y) _GLIBCXX_NOEXCEPT
-      _GLIBCXX_CONVEYOR
+      _GLIBCXX_CONVEYOR_AUTO
       { return __x._M_cur == __y._M_cur; }
 
       // Note: we also provide overloads whose operands are of the same type in
@@ -382,7 +382,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD
       friend _GLIBCXX26_CONSTEXPR difference_type
       operator-(const _Self& __x, const _Self& __y) _GLIBCXX_NOEXCEPT
-      _GLIBCXX_CONVEYOR
+      _GLIBCXX_CONVEYOR_AUTO
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	// D4324/P2680: for two iterators into the same deque this can't
@@ -1055,6 +1055,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX26_CONSTEXPR
       deque(deque&& __x, const allocator_type& __a, false_type)
+      _GLIBCXX_CONVEYOR_TRUST_PRE(__x)
       : _Base(std::move(__x), __a, __x.size())
       {
 	if (__x.get_allocator() != __a && !__x.empty())
@@ -2085,7 +2086,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       }
 
       static _GLIBCXX26_CONSTEXPR size_type
-      _S_max_size(const _Tp_alloc_type& __a) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
+      _S_max_size(const _Tp_alloc_type& __a) _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR_AUTO
       {
 	const size_t __diffmax = __gnu_cxx::__numeric_traits<ptrdiff_t>::__max;
 	const size_t __allocmax = _Alloc_traits::max_size(__a);

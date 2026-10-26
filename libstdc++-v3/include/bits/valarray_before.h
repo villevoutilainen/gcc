@@ -572,7 +572,7 @@ namespace __detail
 
       size_t size() const
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(_M_expr1);
 	return _M_expr1.size();
       }
 

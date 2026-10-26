@@ -1214,6 +1214,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       list(initializer_list<value_type> __l,
 	   const allocator_type& __a = allocator_type())
+      _GLIBCXX_CONVEYOR_REQUIRES(__a)
       : _Base(_Node_alloc_type(__a))
       { _M_initialize_dispatch(__l.begin(), __l.end(), __false_type()); }
 
@@ -1311,7 +1312,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        *  Whether the allocator is copied depends on the allocator traits.
        */
       list&
-      operator=(const list& __x);
+      operator=(const list& __x)
+      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
 #if __cplusplus >= 201103L
 #pragma GCC diagnostic push
@@ -1599,7 +1601,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        *  end().)
        */
       _GLIBCXX_NODISCARD bool
-      empty() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
+      empty() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       {
 	return this->_M_impl._M_node._M_next == this->_M_impl._M_node._M_base();
       }
@@ -2855,7 +2857,7 @@ namespace __list
     _Node_base<_VoidPtr>::_M_transfer(_Base_ptr const __first,
 				      _Base_ptr const __last) noexcept
     {
-      __glibcxx_assert(__first != __last);
+      __glibcxx_assert_noconveyor(__first != __last);
 
       auto __self = _M_base();
       if (__self != __last)

@@ -86,7 +86,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       explicit operator bool() const noexcept { return (bool)_M_ptr; }
 
       /// Get the address that the owned pointer refers to.
-      value_type* get() const { return std::__to_address(_M_ptr); }
+      value_type* get() const _GLIBCXX_CONVEYOR_RETURNS_OBJECT_PTR
+      { return std::__to_address(_M_ptr); }
 
       pointer release() { return std::__exchange(_M_ptr, nullptr); }
 

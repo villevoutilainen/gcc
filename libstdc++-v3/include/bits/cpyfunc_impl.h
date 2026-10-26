@@ -224,6 +224,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       _Res
       operator()(_ArgTypes... __args) _GLIBCXX_MOF_CV_REF noexcept(_Noex)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(*this != nullptr);
 	return _M_invoke(this->_M_storage, std::forward<_ArgTypes>(__args)...);
@@ -245,6 +246,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       /// Check for emptiness by comparing with `nullptr`.
       friend bool
       operator==(const copyable_function& __x, nullptr_t) noexcept
+      _GLIBCXX_CONVEYOR
       { return __x._M_invoke == nullptr; }
 
     private:
