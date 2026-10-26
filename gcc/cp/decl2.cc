@@ -1387,8 +1387,6 @@ grokfield (const cp_declarator *declarator,
 	      DECL_DECLARED_INLINE_P (value) = 1;
 	      if (TREE_CODE (init) == STRING_CST)
 		DECL_INITIAL (value) = init;
-	      if (reflect_constant_fn_p (value))
-		deleted_reflect_constant (value);
 	    }
 	  else if (init == ridpointers[(int)RID_DEFAULT])
 	    {
