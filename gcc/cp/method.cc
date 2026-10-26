@@ -415,6 +415,7 @@ type_has_trivial_fn (tree ctype, special_function_kind sfk)
       return !TYPE_HAS_NONTRIVIAL_DESTRUCTOR (ctype);
     case sfk_inheriting_constructor:
     case sfk_comparison:
+    case sfk_reflect_constant:
       return false;
     default:
       gcc_unreachable ();
@@ -3358,7 +3359,11 @@ maybe_explain_implicit_delete (tree decl)
 	      informed = true;
 	    }
 	}
-      if (!informed && sfk == sfk_comparison)
+      if (!informed && sfk == sfk_reflect_constant)
+	inform (DECL_SOURCE_LOCATION (decl),
+		"a defaulted %qD only makes its class structural; it has no "
+		"definition", decl);
+      else if (!informed && sfk == sfk_comparison)
 	{
 	  inform (DECL_SOURCE_LOCATION (decl),
 		  "%q#D is implicitly deleted because the default "
@@ -3950,6 +3955,10 @@ defaulted_late_check (tree fn, tristate imp_const/*=tristate::unknown()*/)
   tree ctx = DECL_CONTEXT (fn);
   special_function_kind kind = special_function_p (fn);
 
+  /* Nothing to synthesize or compare: see defaultable_fn_check.  */
+  if (kind == sfk_reflect_constant)
+    return;
+
   if (kind == sfk_comparison)
     {
       /* If the function was declared constexpr, check that the definition
@@ -4040,6 +4049,67 @@ defaulted_late_check (tree fn, tristate imp_const/*=tristate::unknown()*/)
     }
 }
 
+/* Whether FN is a member function named reflect_constant: a class that
+   defaults one, 'consteval std::meta::info reflect_constant () const
+   = default;' (P4340), is a structural class, exactly as if it were
+   declared with the class-property-specifier 'structural'.  */
+
+bool
+reflect_constant_fn_p (const_tree fn)
+{
+  return (TREE_CODE (fn) == FUNCTION_DECL
+	  && DECL_NAME (fn)
+	  && id_equal (DECL_NAME (fn), "reflect_constant")
+	  && DECL_IOBJ_MEMBER_FUNCTION_P (fn));
+}
+
+/* The defaulted reflect_constant member function of class T, if it has
+   one.  */
+
+tree
+defaulted_reflect_constant (tree t)
+{
+  for (tree f = TYPE_FIELDS (t); f; f = DECL_CHAIN (f))
+    {
+      tree fn = STRIP_TEMPLATE (f);
+      if (TREE_CODE (fn) == FUNCTION_DECL
+	  && DECL_DEFAULTED_FN (fn)
+	  && reflect_constant_fn_p (fn))
+	return fn;
+    }
+  return NULL_TREE;
+}
+
+/* Check defaulting FN, a reflect_constant member function: it has to be
+   'std::meta::info reflect_constant () const', defaulted in its class.
+   Its class is then structural.  It is only a marker: nothing defines it,
+   and a call to it is ill-formed (it is deleted).  */
+
+static bool
+defaultable_reflect_constant_check (tree fn)
+{
+  tree ctx = DECL_CONTEXT (fn);
+  if (!current_class_type || !TYPE_BEING_DEFINED (current_class_type)
+      || ctx != current_class_type)
+    {
+      error ("%qD can only be defaulted in its class", fn);
+      return false;
+    }
+  tree ret = TREE_TYPE (TREE_TYPE (fn));
+  if (FUNCTION_FIRST_USER_PARMTYPE (fn) != void_list_node
+      || !(type_memfn_quals (TREE_TYPE (fn)) & TYPE_QUAL_CONST)
+      || type_memfn_rqual (TREE_TYPE (fn)) == REF_QUAL_RVALUE
+      || !REFLECTION_TYPE_P (ret))
+    {
+      error ("defaulted %qD must be a %<const%> member function with no "
+	     "parameters returning %<std::meta::info%>", fn);
+      return false;
+    }
+  CLASSTYPE_STRUCTURAL (ctx) = 1;
+  DECL_DELETED_FN (fn) = 1;
+  return true;
+}
+
 /* Returns true iff FN can be explicitly defaulted, and gives any
    errors if defaulting FN is ill-formed.  */
 
@@ -4081,6 +4151,12 @@ defaultable_fn_check (tree fn)
       kind = sfk_comparison;
       if (!early_check_defaulted_comparison (fn))
 	return false;
+    }
+  else if (reflect_constant_fn_p (fn))
+    {
+      if (!defaultable_reflect_constant_check (fn))
+	return false;
+      kind = sfk_reflect_constant;
     }
 
   /* FIXME: We need to check for xobj member functions here to give better

@@ -7158,6 +7158,8 @@ special_function_p (const_tree decl)
   if (DECL_OVERLOADED_OPERATOR_CODE_RAW (decl) >= OVL_OP_EQ_EXPR
       && DECL_OVERLOADED_OPERATOR_CODE_RAW (decl) <= OVL_OP_SPACESHIP_EXPR)
     return sfk_comparison;
+  if (reflect_constant_fn_p (decl) && DECL_DEFAULTED_FN (decl))
+    return sfk_reflect_constant;
 
   return sfk_none;
 }

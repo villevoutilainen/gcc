@@ -8246,8 +8246,12 @@ finish_struct_1 (tree t)
   if (CLASSTYPE_STRUCTURAL (t) && !structural_type_p (t))
     {
       auto_diagnostic_group d;
-      error_at (location_of (t), "%q#T is marked %<structural%> but is not "
-		"a structural type", t);
+      if (tree fn = defaulted_reflect_constant (t))
+	error_at (location_of (t), "%q#T defaults %qD but is not a "
+		  "structural type", t, fn);
+      else
+	error_at (location_of (t), "%q#T is marked %<structural%> but is not "
+		  "a structural type", t);
       structural_type_p (t, /*explain=*/true);
     }
 }

@@ -6386,6 +6386,8 @@ enum special_function_kind {
   sfk_conversion,	   /* A conversion operator.  */
   sfk_deduction_guide,	   /* A class template deduction guide.  */
   sfk_comparison,	   /* A comparison operator (e.g. ==, <, <=>).  */
+  sfk_reflect_constant,	   /* A defaulted 'std::meta::info
+			      reflect_constant () const' (P4340).  */
   sfk_virtual_destructor   /* Used by member synthesis fns.  */
 };
 
@@ -7780,6 +7782,8 @@ extern void explain_non_literal_class		(tree);
 extern void inherit_targ_abi_tags		(tree);
 extern void defaulted_late_check		(tree, tristate = tristate::unknown ());
 extern bool defaultable_fn_check		(tree);
+extern bool reflect_constant_fn_p		(const_tree);
+extern tree defaulted_reflect_constant		(tree);
 extern void check_abi_tags			(tree);
 extern tree missing_abi_tags			(tree);
 extern void fixup_type_variants			(tree);
