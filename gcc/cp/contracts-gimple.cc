@@ -8471,12 +8471,38 @@ cg_call_rel_invalidate_receiver (cg_dom_fact_state &state, tree identity)
    scope entirely) is deliberately left unresolved, correctly declining
    rather than mis-resolving.  */
 
+/* The keys cg_field_object_identity makes for '&BASE->field', by (BASE,
+   field), and the keys of each BASE: every fact about the fields of a
+   call's arguments ends at the call, and sweeping all of the function's
+   keys for each argument made a function of N calls cost N times its
+   number of keys.  */
+
+struct cg_field_object_cache : hash_map<cg_field_key_hash, tree>
+{
+  hash_map<tree, vec<tree>> by_base;
+  cg_field_object_cache () {}
+  cg_field_object_cache (const cg_field_object_cache &) = delete;
+  cg_field_object_cache &operator= (const cg_field_object_cache &) = delete;
+  ~cg_field_object_cache ()
+  {
+    for (auto it : by_base)
+      it.second.release ();
+  }
+  void add (tree base, tree field, tree key)
+  {
+    put ({base, field}, key);
+    by_base.get_or_insert (base).safe_push (key);
+  }
+  /* The keys of BASE's fields, or null.  */
+  vec<tree> *keys_of (tree base) { return by_base.get (base); }
+};
+
 static tree cg_field_slot_identity (tree val, cg_dom_fact_state &state);
 static void cg_invalidate_parameter_alias_group
-  (tree identity, function *fun, hash_map<cg_field_key_hash, tree> &field_object_cache,
+  (tree identity, function *fun, cg_field_object_cache &field_object_cache,
    cg_dom_fact_state &state);
 static tree cg_field_object_identity (tree val,
-				       hash_map<cg_field_key_hash, tree> &cache);
+				       cg_field_object_cache &cache);
 
 /* Stage 5: mirrors contracts.cc's own oa_env::field_object_predicate_
    invalidate_all -- sweeps every cached '&BASE->field' synthetic key
@@ -8486,12 +8512,12 @@ static tree cg_field_object_identity (tree val,
 
 static void
 cg_field_object_predicate_invalidate_all (tree base,
-					   hash_map<cg_field_key_hash, tree> &cache,
+					   cg_field_object_cache &cache,
 					   cg_dom_fact_state &state)
 {
-  for (auto it : cache)
-    if (it.first.first == base)
-      state.pred.remove (it.second);
+  if (vec<tree> *keys = cache.keys_of (base))
+    for (tree key : *keys)
+      state.pred.remove (key);
 }
 
 /* The key under which cg_dom_fact_state::field holds the facts about
@@ -8551,7 +8577,7 @@ cg_process_scalar_write (tree lhs, cg_dom_fact_state &state)
 
 static void
 cg_process_field_write (tree lhs, tree rhs, function *fun,
-			 hash_map<cg_field_key_hash, tree> &field_object_cache,
+			 cg_field_object_cache &field_object_cache,
 			 cg_dom_fact_state &state)
 {
   /* A pointer stored to an array slot 'arr[k]': what the slot now
@@ -8621,9 +8647,9 @@ cg_process_field_write (tree lhs, tree rhs, function *fun,
       for (auto k : drop)
 	state.field_alias.remove (k);
       cg_call_rel_invalidate_receiver (state, identity);
-      for (auto it : field_object_cache)
-	if (it.first.first == identity)
-	  state.pred.remove (it.second);
+      if (vec<tree> *keys = field_object_cache.keys_of (identity))
+	for (tree key : *keys)
+	  state.pred.remove (key);
       return;
     }
   if (TREE_CODE (lhs) != COMPONENT_REF)
@@ -8777,7 +8803,7 @@ cg_field_slot_identity (tree val, cg_dom_fact_state &state)
    AST side's pointer-based design has to work to be.  */
 
 static tree
-cg_field_object_identity (tree val, hash_map<cg_field_key_hash, tree> &cache)
+cg_field_object_identity (tree val, cg_field_object_cache &cache)
 {
   if (TREE_CODE (val) == SSA_NAME)
     {
@@ -8804,7 +8830,7 @@ cg_field_object_identity (tree val, hash_map<cg_field_key_hash, tree> &cache)
   if (existing)
     return *existing;
   tree key = build_decl (UNKNOWN_LOCATION, VAR_DECL, NULL_TREE, ptr_type_node);
-  cache.put ({base_identity, field}, key);
+  cache.add (base_identity, field, key);
   return key;
 }
 
@@ -9300,7 +9326,7 @@ static hash_map<tree, frange> *cg_established_frange_for_verdicts;
 static bool
 cg_requirement_int_range (tree e, gcall *call, tree callee,
 			  cg_dom_fact_state &state,
-			  hash_map<cg_field_key_hash, tree> &field_object_cache,
+			  cg_field_object_cache &field_object_cache,
 			  bool require_conveyor, cg_range_lite *out,
 			  unsigned depth = 0)
 {
@@ -9472,7 +9498,7 @@ cg_requirement_int_range (tree e, gcall *call, tree callee,
 static bool
 cg_requirement_float_range (tree e, gcall *call, tree callee,
 			    cg_dom_fact_state &state,
-			    hash_map<cg_field_key_hash, tree> &field_object_cache,
+			    cg_field_object_cache &field_object_cache,
 			    bool require_conveyor, frange &out,
 			    unsigned depth = 0)
 {
@@ -9605,7 +9631,7 @@ cg_nonzero_rule_conjunct_p (tree conjunct)
 static void
 cg_check_compound_requirement (tree conjunct, gcall *call, tree callee,
 			       cg_dom_fact_state &state,
-			       hash_map<cg_field_key_hash, tree>
+			       cg_field_object_cache
 				 &field_object_cache,
 			       bool require_conveyor, bool strict)
 {
@@ -9798,7 +9824,7 @@ static cg_verdict cg_range_comparison_verdict (const cg_range_lite &,
 
 static void
 cg_consult_persistent_facts (gcall *call,
-			      hash_map<cg_field_key_hash, tree> &field_object_cache,
+			      cg_field_object_cache &field_object_cache,
 			      cg_dom_fact_state &state)
 {
   auto display_at = make_temp_override (cg_display_at, call);
@@ -10246,7 +10272,7 @@ cg_identity_as_parm (tree identity)
 
 static void
 cg_invalidate_parameter_alias_group (tree identity, function *fun,
-				      hash_map<cg_field_key_hash, tree> &field_object_cache,
+				      cg_field_object_cache &field_object_cache,
 				      cg_dom_fact_state &state)
 {
   tree parm = cg_identity_as_parm (identity);
@@ -10312,11 +10338,11 @@ cg_invalidate_parameter_alias_group (tree identity, function *fun,
    everywhere else in this pass).  */
 
 static void cg_invalidate_persistent_facts_for_call_arg
-  (tree, function *, hash_map<cg_field_key_hash, tree> &, cg_dom_fact_state &);
+  (tree, function *, cg_field_object_cache &, cg_dom_fact_state &);
 
 static void
 cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
-					       hash_map<cg_field_key_hash, tree> &field_object_cache,
+					       cg_field_object_cache &field_object_cache,
 					       cg_dom_fact_state &state)
 {
   tree call_callee = gimple_call_fndecl (call);
@@ -10428,7 +10454,7 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
 
 static void
 cg_invalidate_persistent_facts_for_call_arg (tree arg, function *fun,
-					     hash_map<cg_field_key_hash, tree> &field_object_cache,
+					     cg_field_object_cache &field_object_cache,
 					     cg_dom_fact_state &state)
 {
   /* An aggregate passed by value is a copy the callee can't change the
@@ -10490,7 +10516,7 @@ cg_invalidate_persistent_facts_for_call_arg (tree arg, function *fun,
 
 static void
 cg_establish_persistent_facts_for_call (gcall *call,
-					 hash_map<cg_field_key_hash, tree> &field_object_cache,
+					 cg_field_object_cache &field_object_cache,
 					 cg_dom_fact_state &state)
 {
   tree callee = gimple_call_fndecl (call);
@@ -10638,6 +10664,85 @@ static cg_verdict cg_frange_comparison_verdict (const frange &, tree_code,
    a store to it or a call it is passed to, both of which end its facts
    (cg_scalar_memory_fact_key).  */
 
+/* For the function the fact walk is walking (cg_predicate_facts_walk),
+   which asks cg_scalar_memory_tracking_p about every write it follows:
+   the variables whose address has a use other than those it allows,
+   found in one scan of the function (cg_scalar_memory_untracked)
+   rather than one per variable asked about.  */
+
+static function *cg_scalar_memory_tracking_fun;
+static hash_set<tree> *cg_scalar_memory_untracked_set;
+
+static bool cg_scalar_memory_tracking_p_1 (function *, tree);
+static bool cg_stores_addr_into_args_field_p (gimple *, tree);
+
+/* Add to UNTRACKED every variable of FUN whose address
+   cg_scalar_memory_tracking_p_1 would find a disallowed use of.  */
+
+static void
+cg_scalar_memory_untracked (function *fun, hash_set<tree> &untracked)
+{
+  auto mark_addresses = [] (tree *tp, int *, void *d) -> tree
+    {
+      if (TREE_CODE (*tp) == ADDR_EXPR)
+	((hash_set<tree> *) d)->add (TREE_OPERAND (*tp, 0));
+      return NULL_TREE;
+    };
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      {
+	gimple *stmt = gsi_stmt (gsi);
+	if (is_gimple_call (stmt))
+	  {
+	    /* A direct argument is fine; anything else isn't.  */
+	    for (unsigned i = 0; i < gimple_call_num_args (stmt); ++i)
+	      {
+		tree arg = gimple_call_arg (stmt, i);
+		if (TREE_CODE (arg) == ADDR_EXPR
+		    && (VAR_P (TREE_OPERAND (arg, 0))
+			|| TREE_CODE (TREE_OPERAND (arg, 0)) == PARM_DECL))
+		  continue;
+		walk_tree (&arg, mark_addresses, &untracked, NULL);
+	      }
+	    tree lhs = gimple_call_lhs (stmt);
+	    if (lhs && TREE_CODE (lhs) != VAR_DECL && TREE_CODE (lhs) != SSA_NAME)
+	      walk_tree (&lhs, mark_addresses, &untracked, NULL);
+	    continue;
+	  }
+	/* Storing a variable's address into a contract check's capture
+	   struct is fine for that variable.  */
+	struct ctx { hash_set<tree> *untracked; tree allowed; };
+	ctx c = { &untracked, NULL_TREE };
+	if (gimple_assign_single_p (stmt)
+	    && TREE_CODE (gimple_assign_rhs1 (stmt)) == ADDR_EXPR)
+	  {
+	    tree t = TREE_OPERAND (gimple_assign_rhs1 (stmt), 0);
+	    if (cg_stores_addr_into_args_field_p (stmt, t))
+	      c.allowed = t;
+	    else if (TREE_CODE (gimple_assign_lhs (stmt)) == COMPONENT_REF)
+	      {
+		tree cond, decls;
+		tree base = TREE_OPERAND (gimple_assign_lhs (stmt), 0);
+		if (VAR_P (base)
+		    && contract_check_arg_struct_info (TREE_TYPE (base), &cond,
+						       &decls))
+		  c.allowed = t;
+	      }
+	  }
+	walk_stmt_load_store_addr_ops
+	  (stmt, &c, NULL, NULL,
+	   [] (gimple *, tree op, tree, void *d) -> bool
+	     {
+	       ctx *c = (ctx *) d;
+	       if (op != c->allowed)
+		 c->untracked->add (op);
+	       return false;
+	     });
+      }
+}
+
 static bool
 cg_scalar_memory_tracking_p (function *fun, tree decl)
 {
@@ -10645,6 +10750,20 @@ cg_scalar_memory_tracking_p (function *fun, tree decl)
       || !TREE_ADDRESSABLE (decl) || !SCALAR_TYPE_P (TREE_TYPE (decl))
       || is_global_var (decl) || DECL_CONTEXT (decl) != fun->decl)
     return false;
+  if (fun != cg_scalar_memory_tracking_fun)
+    return cg_scalar_memory_tracking_p_1 (fun, decl);
+  if (!cg_scalar_memory_untracked_set)
+    {
+      cg_scalar_memory_untracked_set = new hash_set<tree>;
+      cg_scalar_memory_untracked (fun, *cg_scalar_memory_untracked_set);
+    }
+  bool r = !cg_scalar_memory_untracked_set->contains (decl);
+  return r;
+}
+
+static bool
+cg_scalar_memory_tracking_p_1 (function *fun, tree decl)
+{
   struct ctx { tree decl; bool ok; };
   ctx c = { decl, true };
   basic_block bb;
@@ -13007,7 +13126,7 @@ cg_compose_call_result_range (gcall *call, cg_dom_fact_state &state,
 
 static void
 cg_check_call_range_relational (gcall *call,
-				  hash_map<cg_field_key_hash, tree> &field_object_cache,
+				  cg_field_object_cache &field_object_cache,
 				  cg_dom_fact_state &state,
 				  gimple_ranger *ranger,
 				  hash_set<gimple *> *verdict_out)
@@ -13537,7 +13656,7 @@ cg_own_parm_default_def (tree val, function *fun)
 
 static void
 cg_end_object_addresses_for_call (gcall *call, function *fun,
-				  hash_map<cg_field_key_hash, tree> &field_object_cache,
+				  cg_field_object_cache &field_object_cache,
 				  cg_dom_fact_state &state)
 {
   if (state.oa_live.is_empty ())
@@ -13689,6 +13808,23 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 			   hash_map<tree, frange> *established_frange,
 			   hash_map<tree, cg_fact> *established_oa)
 {
+  /* Remember cg_scalar_memory_tracking_p's answers for FUN while walking
+     it, and only then.  */
+  struct scalar_memory_tracking_cache
+  {
+    explicit scalar_memory_tracking_cache (function *fun)
+    {
+      cg_scalar_memory_tracking_fun = fun;
+      cg_scalar_memory_untracked_set = NULL;
+    }
+    ~scalar_memory_tracking_cache ()
+    {
+      cg_scalar_memory_tracking_fun = NULL;
+      delete cg_scalar_memory_untracked_set;
+      cg_scalar_memory_untracked_set = NULL;
+    }
+  } scalar_memory_tracking (fun);
+
   int *rpo = XNEWVEC (int, n_basic_blocks_for_fn (fun));
   int rpo_num = pre_and_rev_post_order_compute (NULL, rpo, false);
 
@@ -13708,7 +13844,7 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
      field) pair to that same key, not a freshly synthesized one, or
      every fact carried forward from BLOCK_OUT would become permanently
      unmatchable.  */
-  hash_map<cg_field_key_hash, tree> field_object_cache;
+  cg_field_object_cache field_object_cache;
 
   /* Fixed-point computation, deliberately WITHOUT consulting (cg_
      consult_persistent_facts is the one call among the three that has
