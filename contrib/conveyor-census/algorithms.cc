@@ -6,6 +6,8 @@
 #include <vector>
 #include <functional>
 #include <random>
+#include <list>
+#include <memory>
 
 namespace census
 {
@@ -99,6 +101,104 @@ namespace census
     return n;
   }
 
+  // The range overloads of the ranges algorithms.
+  int ranges_api ()
+  {
+    namespace r = std::ranges;
+    std::vector<int> v = { 3, 1, 2 }, w = { 1, 2, 3 }, out (8);
+    std::list<int> l = { 1, 2, 3 };
+    auto pred = [] (int x) { return x > 1; };
+    int n = 0;
+    n += r::all_of (v, pred) + r::any_of (v, pred) + r::none_of (v, pred);
+    r::for_each (v, [] (int) {});
+    n += (r::find (v, 1) != v.end ()) + (r::find (l, 1) != l.end ());
+    n += (r::find_if (v, pred) != v.end ()) + (r::find_if_not (v, pred) != v.end ());
+    n += r::find_end (v, w).begin () != v.end ();
+    n += r::find_first_of (v, w) != v.end ();
+    n += r::adjacent_find (v) != v.end ();
+    n += r::count (v, 1) + r::count_if (v, pred) + r::count (l, 1);
+    n += r::mismatch (v, w).in1 != v.end ();
+    n += r::equal (v, w) + r::equal (l, w) + r::is_permutation (v, w);
+    n += r::search (v, w).begin () != v.end ();
+    n += r::search_n (v, 1, 1).begin () != v.end ();
+    n += r::starts_with (v, w) + r::ends_with (v, w);
+    n += r::contains (v, 1) + r::contains_subrange (v, w);
+    n += r::find_last (v, 1).begin () != v.end ();
+    n += r::find_last_if (v, pred).begin () != v.end ();
+    r::copy (v, out.begin ());
+    r::copy_if (v, out.begin (), pred);
+    r::copy_backward (v, out.end ());
+    r::move (w, out.begin ());
+    r::move_backward (w, out.end ());
+    r::transform (v, out.begin (), [] (int x) { return x; });
+    r::transform (v, w, out.begin (), [] (int x, int) { return x; });
+    r::replace (out, 1, 2);
+    r::replace_if (out, pred, 2);
+    r::replace_copy (v, out.begin (), 1, 2);
+    r::replace_copy_if (v, out.begin (), pred, 2);
+    r::fill (out, 1);
+    r::generate (out, [] { return 1; });
+    n += r::remove (out, 1).begin () != out.end ();
+    n += r::remove_if (out, pred).begin () != out.end ();
+    r::remove_copy (v, out.begin (), 1);
+    r::remove_copy_if (v, out.begin (), pred);
+    n += r::unique (out).begin () != out.end ();
+    r::unique_copy (v, out.begin ());
+    r::reverse (out);
+    r::reverse (l);
+    r::reverse_copy (v, out.begin ());
+    r::rotate (out, out.begin () + 1);
+    r::rotate_copy (v, v.begin () + 1, out.begin ());
+    r::shuffle (out, std::minstd_rand ());
+    r::sample (v, out.begin (), 2, std::minstd_rand ());
+    r::shift_left (out, 1);
+    r::shift_right (out, 1);
+    n += r::is_partitioned (v, pred);
+    r::partition (out, pred);
+    r::partition_copy (v, out.begin (), out.begin () + 4, pred);
+    r::stable_partition (out, pred);
+    n += r::partition_point (out, pred) != out.end ();
+    r::sort (out);
+    r::stable_sort (out);
+    r::partial_sort (out, out.begin () + 1);
+    r::partial_sort_copy (v, out);
+    n += r::is_sorted (out) + (r::is_sorted_until (out) != out.end ());
+    r::nth_element (out, out.begin () + 1);
+    n += r::lower_bound (out, 1) != r::upper_bound (out, 1);
+    n += r::equal_range (out, 1).begin () != out.end ();
+    n += r::binary_search (out, 1);
+    r::sort (v);
+    r::merge (v, w, out.begin ());
+    r::inplace_merge (out, out.begin () + 1);
+    n += r::includes (v, w);
+    r::set_union (v, w, out.begin ());
+    r::set_intersection (v, w, out.begin ());
+    r::set_difference (v, w, out.begin ());
+    r::set_symmetric_difference (v, w, out.begin ());
+    r::make_heap (out);
+    r::push_heap (out);
+    r::pop_heap (out);
+    r::sort_heap (out);
+    n += r::is_heap (out) + (r::is_heap_until (out) != out.end ());
+    n += (r::min (v) == r::max (v)) + (r::minmax (v).min == 0);
+    n += r::min_element (v) != r::max_element (v);
+    n += r::minmax_element (v).min != v.end ();
+    n += r::lexicographical_compare (v, w) + r::lexicographical_compare (v, l);
+    n += r::next_permutation (out).found + r::prev_permutation (out).found;
+    n += r::fold_left (v, 0, std::plus<> {}) + *r::fold_left_first (v, std::plus<> {});
+    n += r::fold_right (v, 0, std::plus<> {}) + *r::fold_right_last (v, std::plus<> {});
+    n += r::fold_left_with_iter (v, 0, std::plus<> {}).value;
+    n += *r::fold_left_first_with_iter (v, std::plus<> {}).value;
+    r::iota (out, 0);
+    r::uninitialized_copy (v, out);
+    r::uninitialized_move (w, out);
+    r::uninitialized_fill (out, 1);
+    r::uninitialized_value_construct (out);
+    r::uninitialized_default_construct (out);
+    r::destroy (out);
+    return n;
+  }
+
   int all ()
   {
     int n = 0;
@@ -112,6 +212,7 @@ namespace census
     n += iterators<Val, forward_iterator_wrapper> ();
     n += iterators<Val, random_access_iterator_wrapper> ();
     n += numeric<int> () + numeric<long> () + numeric<double> ();
+    n += ranges_api ();
     n += std::max ({ 1, 2, 3 }) + std::min (Val (1), Val (2)).v
 	 + std::clamp (5, 1, 3) + std::ranges::max ({ 1, 2 });
     return n;

@@ -172,6 +172,8 @@ namespace ranges
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r1);
+	_GLIBCXX_CONVEYOR_TRUST(__r2);
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
 	// 3560. ranges::equal [...] should short-circuit for sized_ranges
 	if constexpr (sized_range<_Range1>)
@@ -348,6 +350,7 @@ namespace __detail
       constexpr copy_result<borrowed_iterator_t<_Range>, _Out>
       operator()(_Range&& __r, _Out __result) const
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
 	  (std::is_object_address (__builtin_addressof (__r)));
@@ -377,6 +380,7 @@ namespace __detail
       constexpr move_result<borrowed_iterator_t<_Range>, _Out>
       operator()(_Range&& __r, _Out __result) const
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__result));
       }
@@ -487,6 +491,7 @@ namespace __detail
       constexpr copy_backward_result<borrowed_iterator_t<_Range>, _Iter>
       operator()(_Range&& __r, _Iter __result) const
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__result));
       }
@@ -512,6 +517,7 @@ namespace __detail
       constexpr move_backward_result<borrowed_iterator_t<_Range>, _Iter>
       operator()(_Range&& __r, _Iter __result) const
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__result));
       }
@@ -630,6 +636,7 @@ namespace __detail
       constexpr borrowed_iterator_t<_Range>
       operator()(_Range&& __r, const _Tp& __value) const
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r), __value);
       }
   };

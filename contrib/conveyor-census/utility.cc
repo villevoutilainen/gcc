@@ -1,6 +1,7 @@
 // Vocabulary types and function wrappers.
 #include "types.h"
 #include <optional>
+#include <memory>
 #include <variant>
 #include <tuple>
 #include <utility>
@@ -119,11 +120,20 @@ namespace census
     return n;
   }
 
+  // Copying an allocator trusts the source, as copies do: no
+  // CENSUS_OBJECT here.
+  int allocator_copies (const std::allocator<int> &a)
+  {
+    std::allocator<int> b (a);
+    std::allocator<long> c (a);
+    return b == std::allocator<int> (c);
+  }
+
   int all ()
   {
     return vocabulary<int> () + vocabulary<Val> () + vocabulary<ThrowCopy> ()
 	   + vocabulary<AddrOp> () + functions () + optional_api<int> ()
-	   + optional_api<Val> ();
+	   + optional_api<Val> () + allocator_copies (std::allocator<int> ());
   }
 }
 
