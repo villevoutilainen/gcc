@@ -11,6 +11,13 @@
 #include <ext/extptr_allocator.h>
 #include <testsuite_iterators.h>
 
+// The user code's own side of the library's conveyor contracts: a function
+// taking a reference states that it refers to an object, so that the
+// library functions it calls on it can rely on that; its callers prove it.
+#define CENSUS_OBJECT(x) \
+  pre<std::contracts::conveyor_assert_v> \
+    (std::is_object_address (__builtin_addressof (x)))
+
 namespace census
 {
   // A class with user-provided special members and an ordering.
