@@ -1434,7 +1434,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       /**  Returns the number of elements in the %deque.  */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR size_type
-      size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
+      size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       {
 	size_type __sz = this->_M_impl._M_finish - this->_M_impl._M_start;
 	if (__sz > max_size ())
@@ -1445,8 +1445,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       /**  Returns the size() of the largest possible %deque.  */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR size_type
-      max_size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
-      { return _S_max_size(_M_get_Tp_allocator()); }
+      max_size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return _S_max_size(_M_get_Tp_allocator());
+      }
 
 #if __cplusplus >= 201103L
       /**
@@ -1520,7 +1523,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR bool
-      empty() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
+      empty() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return this->_M_impl._M_finish == this->_M_impl._M_start; }
 
       // element access

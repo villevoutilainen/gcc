@@ -1,5 +1,3 @@
-bits/forward_list.h: __glibcxx_requires_nonempty();
-bits/list.tcc: _GLIBCXX_CONVEYOR_TRUST(*__tmp);
 bits/regex_executor.h: _M_rep_count(_M_nfa.size()),
 bits/regex_executor.h: _M_visited_states = new bool[_M_nfa.size()];
 bits/regex_executor.tcc: __glibcxx_assert(_M_get_sol_pos());
@@ -8,17 +6,9 @@ bits/std_function.h: = new _Functor(std::forward<_Fn>(__f));
 bits/stl_construct.h: ::new(static_cast<void*>(__p)) _Tp(std::forward<_Args>(__args)...);
 bits/stl_construct.h: return ::new(__loc) _Tp(std::forward<_Args>(__args)...);
 bits/stl_deque.h: deque __newobj(std::forward<_Args>(__args)...);
-bits/stl_deque.h: { return _S_max_size(_M_get_Tp_allocator()); }
-bits/stl_deque.h: { return this->_M_impl._M_finish == this->_M_impl._M_start; }
-bits/stl_deque.h: size_type __sz = this->_M_impl._M_finish - this->_M_impl._M_start;
-bits/stl_iterator.h: : _M_current(__i.base()) { }
-bits/stl_list.h: __glibcxx_requires_nonempty();
 bits/stl_pair.h: : first(std::forward<_U1>(__p.first)),
 bits/stl_pair.h: : first(std::forward<_U1>(__x)), second(std::forward<_U2>(__y))
 bits/stl_tree.h: __glibcxx_assert_noconveyor
-bits/stl_vector.h: __glibcxx_requires_nonempty();
-bits/stl_vector.h: __glibcxx_requires_subscript(__n);
-bits/vector.tcc: __glibcxx_assert(__position != const_iterator());
 std/mdspan: __glibcxx_assert(cmp_less_equal(_M_mapping.required_span_size(),
 std/mdspan: __glibcxx_assert(__idx < __ext.extent(0));
 std/mdspan: __glibcxx_assert(__is_multi_index(make_index_sequence<rank()>()));

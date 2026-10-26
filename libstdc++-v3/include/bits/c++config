@@ -766,6 +766,18 @@ namespace std
 // this header implicitly redefining __glibcxx_assert itself around them.
 # define __glibcxx_assert_noconveyor(cond) \
      contract_assert<std::contracts::noexcept_assert_v>(cond)
+// In a container's member function: like __glibcxx_assert, except not a
+// conveyor predicate for a container whose allocator has a fancy pointer,
+// whose operations can't be conveyor (see <contracts>'
+// __container_conveyor_p).
+# if defined(_GLIBCXX_CONVEYOR_ASSERTIONS)
+#  define __glibcxx_assert_container(cond) \
+     contract_assert<std::contracts::__container_assert< \
+       std::contracts::__container_conveyor_p<__remove_cvref(decltype(*this))>()> \
+       ::__make()>(cond)
+# else
+#  define __glibcxx_assert_container(cond) __glibcxx_assert(cond)
+# endif
 # define __glibcxx_assert_msg_noconveyor(cond, msg) \
      contract_assert<std::contracts::noexcept_assert(msg)>(cond)
 #elif defined(_GLIBCXX_ASSERTIONS)
@@ -786,6 +798,7 @@ namespace std
 // non-conveyor runtime check, so these are just aliases.
 # define __glibcxx_assert_noconveyor(cond) __glibcxx_assert(cond)
 # define __glibcxx_assert_msg_noconveyor(cond, msg) __glibcxx_assert(cond)
+# define __glibcxx_assert_container(cond) __glibcxx_assert(cond)
 #elif _GLIBCXX_HAVE_IS_CONSTANT_EVALUATED
 // _GLIBCXX_ASSERTIONS is not defined, so assertions checks are only enabled
 // during constant evaluation. This ensures we diagnose undefined behaviour
@@ -805,6 +818,7 @@ namespace std
 # define __glibcxx_assert_msg(cond, msg) __glibcxx_assert(cond)
 # define __glibcxx_assert_noconveyor(cond) __glibcxx_assert(cond)
 # define __glibcxx_assert_msg_noconveyor(cond, msg) __glibcxx_assert(cond)
+# define __glibcxx_assert_container(cond) __glibcxx_assert(cond)
 #else
 // _GLIBCXX_ASSERTIONS is not defined and __is_constant_evaluated() doesn't
 // work so don't check any assertions.
@@ -812,6 +826,7 @@ namespace std
 # define __glibcxx_assert_msg(cond, msg)
 # define __glibcxx_assert_noconveyor(cond)
 # define __glibcxx_assert_msg_noconveyor(cond, msg)
+# define __glibcxx_assert_container(cond)
 #endif
 
 // How an individual library function gets tagged conveyor "conditionally,

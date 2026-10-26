@@ -1,18 +1,8 @@
 bits/allocated_ptr.h: { ::new ((void*)this->get()) value_type; }
-bits/forward_list.h: __glibcxx_requires_nonempty();
-bits/list.tcc: _GLIBCXX_CONVEYOR_TRUST(*__tmp);
 bits/regex_executor.h: _M_rep_count(_M_nfa.size()),
 bits/regex_executor.h: _M_visited_states = new bool[_M_nfa.size()];
 bits/regex_executor.tcc: __glibcxx_assert(_M_get_sol_pos());
 bits/regex_executor.tcc: std::fill_n(_M_visited_states, _M_nfa.size(), false);
-bits/stl_deque.h: { return _S_max_size(_M_get_Tp_allocator()); }
-bits/stl_deque.h: { return this->_M_impl._M_finish == this->_M_impl._M_start; }
-bits/stl_deque.h: size_type __sz = this->_M_impl._M_finish - this->_M_impl._M_start;
-bits/stl_iterator.h: : _M_current(__i.base()) { }
-bits/stl_list.h: __glibcxx_requires_nonempty();
-bits/stl_vector.h: __glibcxx_requires_nonempty();
-bits/stl_vector.h: __glibcxx_requires_subscript(__n);
-bits/vector.tcc: __glibcxx_assert(__position != const_iterator());
 std/flat_map: __glibcxx_assert(_M_index < _M_cont->keys.size());
 std/mdspan: __glibcxx_assert(cmp_less_equal(_M_mapping.required_span_size(),
 std/mdspan: __glibcxx_assert(__idx < __ext.extent(0));
