@@ -30634,6 +30634,20 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	   condition tracking (oa_track_condition_assignment, narrowly
 	   scoped to a top-level assignment only, never inside &&/||, see
 	   its own comment for why).  */
+	/* A constant condition -- 'if constexpr' after instantiation, or
+	   'if (true)' -- takes one arm unconditionally, so what it
+	   establishes holds after the if; the other is dead code, which
+	   the GIMPLE engine never sees either (gimplification keeps only
+	   the taken arm).  */
+	{
+	  tree cst = STRIP_ANY_LOCATION_WRAPPER (IF_COND (t));
+	  if (TREE_CODE (cst) == INTEGER_CST)
+	    {
+	      oa_walk_stmt (integer_zerop (cst) ? &ELSE_CLAUSE (t)
+			    : &THEN_CLAUSE (t), env);
+	      return;
+	    }
+	}
 	oa_env then_env, else_env;
 	oa_process_condition (IF_COND (t), env, &then_env, &else_env);
 	oa_apply_increments (IF_COND (t), then_env);
