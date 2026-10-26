@@ -9589,7 +9589,11 @@ public:
     array_alias_invalidate_all (d);
     field_object_predicate_invalidate_all (d);
     field_object_address_invalidate_all (d);
-    if (POINTER_TYPE_P (TREE_TYPE (d)))
+    /* A pointer stored in D may have changed, so what it pointed to is
+       no longer known; a reference can't be reseated, so the object it
+       refers to is still the one it was -- writing that object doesn't
+       end the reference's own facts.  */
+    if (TREE_CODE (TREE_TYPE (d)) == POINTER_TYPE)
       {
 	invalidate (d);
 	symbolic_object_address_invalidate (d);
@@ -27645,6 +27649,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 
       result_decls.safe_push (d);
       result_provable.safe_push (pre_ok && checkenv.provable_p (d));
+
     }
 
   for (unsigned i = 0; i < result_decls.length (); ++i)
