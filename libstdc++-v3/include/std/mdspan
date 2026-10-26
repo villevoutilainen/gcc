@@ -3160,7 +3160,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	     auto __is_multi_index = [&]<size_t... _Counts>(index_sequence<_Counts...>)
 	     { return (__is_valid_index(_Counts, __indices) && ...); };
 
-	     __glibcxx_assert(__is_multi_index(make_index_sequence<rank()>()));
+	     __glibcxx_assert_noconveyor(__is_multi_index(make_index_sequence<rank()>()));
 	     auto __index = _M_mapping(static_cast<index_type>(__indices)...);
 	     return _M_accessor.access(_M_handle, __index);
     	   }
@@ -3245,7 +3245,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr size_type
       size() const noexcept
       {
-	__glibcxx_assert(cmp_less_equal(_M_mapping.required_span_size(),
+	__glibcxx_assert_noconveyor(cmp_less_equal(_M_mapping.required_span_size(),
 					__gnu_cxx::__int_traits<size_t>
 						 ::__max));
 	return size_type(__mdspan::__size(extents()));
@@ -3477,7 +3477,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    static_assert(std::cmp_less(_OIndexType::value, _Extent));
 	  }
 	else
-	  __glibcxx_assert(__idx < __ext.extent(0));
+	  __glibcxx_assert_noconveyor(__idx < __ext.extent(0));
       }
 
     template<typename _IndexType, size_t _Extent, typename _OIndexType>

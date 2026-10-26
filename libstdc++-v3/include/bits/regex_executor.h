@@ -77,7 +77,7 @@ namespace __detail
 	_M_re(__re),
 	_M_nfa(*__re._M_automaton),
 	_M_results(__results),
-	_M_rep_count(_M_nfa.size()),
+	_M_rep_count(),
 	_M_start(_M_nfa._M_start()),
 	_M_visited_states(nullptr),
 	_M_flags(__flags),
@@ -86,6 +86,8 @@ namespace __detail
 	using namespace regex_constants;
 	if (__flags & match_prev_avail) // ignore not_bol and not_bow
 	  _M_flags &= ~(match_not_bol | match_not_bow);
+	_GLIBCXX_CONVEYOR_TRUST(_M_nfa);
+	_M_rep_count.resize(_M_nfa.size());
 	if (_M_search_mode == _Search_mode::_BFS)
 	  _M_visited_states = new bool[_M_nfa.size()];
       }

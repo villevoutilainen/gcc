@@ -1154,11 +1154,11 @@ namespace __rb_tree
       typedef _Alloc 				allocator_type;
 
       _Node_allocator&
-      _M_get_Node_allocator() _GLIBCXX_NOEXCEPT
+      _M_get_Node_allocator() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return this->_M_impl; }
 
       const _Node_allocator&
-      _M_get_Node_allocator() const _GLIBCXX_NOEXCEPT
+      _M_get_Node_allocator() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return this->_M_impl; }
 
       allocator_type
@@ -1169,6 +1169,7 @@ namespace __rb_tree
       _Node_ptr
       _M_get_node()
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 #if __cplusplus < 201102L || _GLIBCXX_USE_ALLOC_PTR_FOR_RB_TREE
 	return _Node_alloc_traits::allocate(_M_get_Node_allocator(), 1);
 #else
@@ -1190,6 +1191,7 @@ namespace __rb_tree
       void
       _M_put_node(_Node_ptr __p) _GLIBCXX_NOEXCEPT
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 #if __cplusplus < 201102L || _GLIBCXX_USE_ALLOC_PTR_FOR_RB_TREE
 	_Node_alloc_traits::deallocate(_M_get_Node_allocator(), __p, 1);
 #else
@@ -1234,6 +1236,7 @@ namespace __rb_tree
 	void
 	_M_construct_node(_Node_ptr __node, _Args&&... __args)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  __try
 	    {
 	      ::new(std::addressof(*__node)) _Node;
@@ -1262,6 +1265,7 @@ namespace __rb_tree
       void
       _M_destroy_node(_Node_ptr __p) _GLIBCXX_NOEXCEPT
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 #if __cplusplus < 201103L
 	get_allocator().destroy(__p->_M_valptr());
 #else
@@ -2232,6 +2236,7 @@ namespace __rb_tree
       node_type
       extract(const_iterator __pos)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	auto __ptr = _Node_traits::_S_rebalance_for_erase
 	  (__pos._M_node, _M_impl._M_header);
 	--_M_impl._M_node_count;

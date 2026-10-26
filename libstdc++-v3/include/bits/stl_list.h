@@ -2649,8 +2649,8 @@ _GLIBCXX_END_NAMESPACE_CXX11
     inline bool
     operator==(const list<_Tp, _Alloc>& __x, const list<_Tp, _Alloc>& __y)
     {
-_GLIBCXX_CONVEYOR_TRUST(__x);
-_GLIBCXX_CONVEYOR_TRUST(__y);
+      _GLIBCXX_CONVEYOR_TRUST(__x);
+      _GLIBCXX_CONVEYOR_TRUST(__y);
 #if _GLIBCXX_USE_CXX11_ABI
       if (__x.size() != __y.size())
 	return false;

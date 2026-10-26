@@ -2465,7 +2465,7 @@ namespace views::__adaptor
 
 	  friend constexpr bool
 	  operator==(const _CI<_Const>& __y, const _Sentinel& __x)
-	  _GLIBCXX_CONVEYOR_REQUIRES(__x)
+	  _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
 	  { return __y.count() == 0 || __y.base() == __x._M_end; }
 
 	  template<bool _OtherConst = !_Const,
@@ -7755,6 +7755,7 @@ namespace views::__adaptor
 	  else
 	    {
 	      auto&& __inner = _M_get_inner();
+	      _GLIBCXX_CONVEYOR_TRUST(__inner);
 	      if (std::get<1>(_M_inner_it) != ranges::end(__inner))
 		break;
 

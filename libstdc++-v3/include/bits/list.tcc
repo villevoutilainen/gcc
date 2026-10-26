@@ -555,7 +555,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       list<_Tp, _Alloc>::
       remove_if(_Predicate __pred)
       {
-_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 #if !_GLIBCXX_USE_CXX11_ABI
 	size_type __removed __attribute__((__unused__)) = 0;
 #endif

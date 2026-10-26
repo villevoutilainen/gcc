@@ -1107,7 +1107,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator*() const noexcept
       {
 	_GLIBCXX_CONVEYOR_TRUST(*_M_cont);
-	__glibcxx_assert(_M_index < _M_cont->keys.size());
+	__glibcxx_assert_noconveyor(_M_index < _M_cont->keys.size());
 	return {_M_cont->keys[_M_index], _M_cont->values[_M_index]};
       }
 

@@ -196,6 +196,7 @@ namespace __detail
     bool _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_main_bfs(_Match_mode __match_mode)
     {
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_match_queue.emplace_back(_M_start, _M_results);
       bool __ret = false;
@@ -204,6 +205,7 @@ namespace __detail
 	  _M_has_sol = false;
 	  if (_M_match_queue.empty())
 	    break;
+	  _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
 	  std::fill_n(_M_visited_states, _M_nfa.size(), false);
 	  auto __old_queue = std::move(_M_match_queue);
 	  auto __alloc = _M_cur_results.get_allocator();
@@ -509,7 +511,7 @@ namespace __detail
 		_M_results = _M_cur_results;
 	      else // POSIX
 		{
-		  __glibcxx_assert(_M_get_sol_pos());
+		  __glibcxx_assert_noconveyor(_M_get_sol_pos());
 		  // Here's POSIX's logic: match the longest one. However
 		  // we never know which one (lhs or rhs of "|") is longer
 		  // unless we try both of them and compare the results.
