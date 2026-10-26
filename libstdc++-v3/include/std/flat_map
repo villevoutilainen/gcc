@@ -1106,7 +1106,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       reference
       operator*() const noexcept
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(*_M_cont);
 	__glibcxx_assert(_M_index < _M_cont->keys.size());
 	return {_M_cont->keys[_M_index], _M_cont->values[_M_index]};
       }
@@ -1188,12 +1188,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX26_CONSTEXPR
       _Iterator(_Flat_map_impl* __fm, typename key_container_type::const_iterator __it)
       requires (!_Const)
+      _GLIBCXX_CONVEYOR_TRUST_PRE(*__fm)
       : _M_cont(std::__addressof(__fm->_M_cont)), _M_index(__it - __fm->keys().cbegin())
       { }
 
       _GLIBCXX26_CONSTEXPR
       _Iterator(const _Flat_map_impl* __fm, typename key_container_type::const_iterator __it)
       requires _Const
+      _GLIBCXX_CONVEYOR_TRUST_PRE(*__fm)
       : _M_cont(std::__addressof(__fm->_M_cont)), _M_index(__it - __fm->keys().cbegin())
       { }
 

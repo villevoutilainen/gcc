@@ -2465,6 +2465,7 @@ namespace views::__adaptor
 
 	  friend constexpr bool
 	  operator==(const _CI<_Const>& __y, const _Sentinel& __x)
+	  _GLIBCXX_CONVEYOR_REQUIRES(__x)
 	  { return __y.count() == 0 || __y.base() == __x._M_end; }
 
 	  template<bool _OtherConst = !_Const,
@@ -6724,14 +6725,14 @@ namespace views::__adaptor
     constexpr value_type
     operator*() const _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
-      __glibcxx_assert(_M_current != _M_end);
+      __glibcxx_assert_noconveyor(_M_current != _M_end);
       return views::take(subrange(_M_current, _M_end), _M_n);
     }
 
     constexpr _Iterator&
     operator++() _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
-      __glibcxx_assert(_M_current != _M_end);
+      __glibcxx_assert_noconveyor(_M_current != _M_end);
       _M_missing = ranges::advance(_M_current, _M_n, _M_end);
       return *this;
     }
@@ -7396,14 +7397,14 @@ namespace views::__adaptor
     constexpr value_type
     operator*() const _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
-      __glibcxx_assert(_M_current != _M_next);
+      __glibcxx_assert_noconveyor(_M_current != _M_next);
       return ranges::subrange(_M_current, _M_next);
     }
 
     constexpr _Iterator&
     operator++() _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
-      __glibcxx_assert(_M_current != _M_next);
+      __glibcxx_assert_noconveyor(_M_current != _M_next);
       _M_current = _M_next;
       _M_next = _M_parent->_M_find_next(_M_current);
       return *this;
@@ -8454,7 +8455,7 @@ namespace views::__adaptor
     constexpr _Iterator&
     operator++() _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
-      __glibcxx_assert(_M_current != _M_end);
+      __glibcxx_assert_noconveyor(_M_current != _M_end);
       _M_missing = ranges::advance(_M_current, _M_stride, _M_end);
       return *this;
     }
@@ -9513,6 +9514,7 @@ namespace views::__adaptor
     requires sentinel_for<sentinel_t<_Base>, iterator_t<__maybe_const_t<_OtherConst, _Vp>>>
     friend constexpr bool
     operator==(const _Iterator<_OtherConst>& __x, const _Sentinel& __y)
+    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
     { return __x._M_current == __y._M_end; }
 
     template<bool _OtherConst>

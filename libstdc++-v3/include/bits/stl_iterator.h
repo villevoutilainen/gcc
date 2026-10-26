@@ -1050,7 +1050,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       __attribute__((__always_inline__))
       _GLIBCXX_CONSTEXPR
-      __normal_iterator() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
+      __normal_iterator() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       : _M_current() { }
 
       __attribute__((__always_inline__))
@@ -1068,7 +1068,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	[[__gnu__::__always_inline__]]
 	constexpr
 	__normal_iterator(const __normal_iterator<_Iter, _Container>& __i)
-	noexcept _GLIBCXX_CONVEYOR
+	noexcept _GLIBCXX_CONVEYOR_AUTO
 #else
       // N.B. _Container::pointer is not actually in container requirements,
       // but is present in std::vector and std::basic_string.
@@ -2424,7 +2424,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[nodiscard]]
       constexpr const _It&
-      base() const & noexcept
+      base() const & noexcept _GLIBCXX_CONVEYOR
       { return _M_current; }
 
       [[nodiscard]]

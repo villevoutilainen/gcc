@@ -1040,6 +1040,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    }
 	  };
 
+	  _GLIBCXX_CONVEYOR_TRUST(__a);
 	  _Guarded_ptr __guard{__a};
 	  _Up* const __raw = std::to_address(__guard._M_ptr);
 	  __guard._M_init(__raw, __init); // might throw

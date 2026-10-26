@@ -4263,6 +4263,7 @@ namespace __format
 	    typename _Context::template formatter_type<_Td> __f;
 	    __parse_ctx.advance_to(__f.parse(__parse_ctx));
 	    _Tq& __val = *const_cast<_Tq*>(static_cast<const _Td*>(__ptr));
+	    _GLIBCXX_CONVEYOR_TRUST(__val);
 	    __format_ctx.advance_to(__f.format(__val, __format_ctx));
 	  }
 
@@ -4669,6 +4670,7 @@ namespace __format
 	_GLIBCXX_CONSTEXPR_FORMAT explicit
 	basic_format_arg(_Tp& __v) noexcept
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__v);
 	  using _Td = _Normalize<_Tp>;
 	  if constexpr (is_same_v<_Td, basic_string_view<_CharT>>)
 	    _M_set(_Td{__v.data(), __v.size()});

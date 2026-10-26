@@ -189,7 +189,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       { return static_cast<_Node*>(this->_M_node)->_M_valptr(); }
 
       _Self&
-      operator++() noexcept
+      operator++() noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	_M_node = _M_node->_M_next;
 	return *this;
@@ -209,6 +209,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       [[__nodiscard__]]
       friend bool
       operator==(const _Self& __x, const _Self& __y) noexcept
+      _GLIBCXX_CONVEYOR_AUTO
       { return __x._M_node == __y._M_node; }
 
 #if __cpp_impl_three_way_comparison < 201907L
@@ -279,7 +280,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       { return static_cast<_Node*>(this->_M_node)->_M_valptr(); }
 
       _Self&
-      operator++() noexcept
+      operator++() noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	_M_node = _M_node->_M_next;
 	return *this;
@@ -299,6 +300,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       [[__nodiscard__]]
       friend bool
       operator==(const _Self& __x, const _Self& __y) noexcept
+      _GLIBCXX_CONVEYOR_AUTO
       { return __x._M_node == __y._M_node; }
 
 #if __cpp_impl_three_way_comparison < 201907L
@@ -499,7 +501,7 @@ namespace __fwdlist
       { return static_cast<_Node&>(*this->_M_node)._M_valptr(); }
 
       _GLIBCXX14_CONSTEXPR _Iterator&
-      operator++() noexcept
+      operator++() noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	_M_node = _M_node->_M_next;
 	return *this;
@@ -896,6 +898,7 @@ _GLIBCXX_CONVEYOR_TRUST_THIS;
 	       typename = std::_RequireInputIter<_InputIterator>>
 	forward_list(_InputIterator __first, _InputIterator __last,
 		     const _Alloc& __al = _Alloc())
+	_GLIBCXX_CONVEYOR_REQUIRES(__al)
 	: _Base(_Node_alloc_type(__al))
 	{ _M_range_initialize(__first, __last); }
 
@@ -1260,7 +1263,7 @@ _GLIBCXX_CONVEYOR_TRUST_THIS;
        */
       [[__nodiscard__]]
       bool
-      empty() const noexcept _GLIBCXX_CONVEYOR
+      empty() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { return this->_M_impl._M_head._M_next == nullptr; }
 
       /**

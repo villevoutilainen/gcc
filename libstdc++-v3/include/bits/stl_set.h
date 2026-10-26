@@ -375,7 +375,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  to the keys.
        */
       iterator
-      end() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      end() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return _M_t.end(); }
 
       /**
@@ -665,7 +665,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #ifdef __glibcxx_node_extract // >= C++17
       /// Extract a node.
       node_type
-      extract(const_iterator __pos)
+      extract(const_iterator __pos) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(__pos != end());
 	return _M_t.extract(__pos);

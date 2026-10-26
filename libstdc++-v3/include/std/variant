@@ -221,22 +221,22 @@ namespace __variant
 
   template<typename... _Types>
     constexpr std::variant<_Types...>&
-    __as(std::variant<_Types...>& __v) noexcept
+    __as(std::variant<_Types...>& __v) noexcept _GLIBCXX_CONVEYOR
     { return __v; }
 
   template<typename... _Types>
     constexpr const std::variant<_Types...>&
-    __as(const std::variant<_Types...>& __v) noexcept
+    __as(const std::variant<_Types...>& __v) noexcept _GLIBCXX_CONVEYOR
     { return __v; }
 
   template<typename... _Types>
     constexpr std::variant<_Types...>&&
-    __as(std::variant<_Types...>&& __v) noexcept
+    __as(std::variant<_Types...>&& __v) noexcept _GLIBCXX_CONVEYOR
     { return std::move(__v); }
 
   template<typename... _Types>
     constexpr const std::variant<_Types...>&&
-    __as(const std::variant<_Types...>&& __v) noexcept
+    __as(const std::variant<_Types...>&& __v) noexcept _GLIBCXX_CONVEYOR
     { return std::move(__v); }
 
 #if (__cpp_lib_variant < 202106L) && defined(_GLIBCXX_USE_VARIANT_CXX17_OLD_ABI)
@@ -2037,6 +2037,10 @@ namespace __detail::__variant
     constexpr __detail::__variant::__visit_result_t<_Visitor, _Variants...>
     visit(_Visitor&& __visitor, _Variants&&... __variants)
     {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	((std::is_object_address (__builtin_addressof (__variants)) && ...));
+#endif
       namespace __variant = std::__detail::__variant;
 
       if ((__variant::__as(__variants).valueless_by_exception() || ...))
@@ -2077,6 +2081,10 @@ namespace __detail::__variant
     constexpr _Res
     visit(_Visitor&& __visitor, _Variants&&... __variants)
     {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	((std::is_object_address (__builtin_addressof (__variants)) && ...));
+#endif
       namespace __variant = std::__detail::__variant;
 
       if ((__variant::__as(__variants).valueless_by_exception() || ...))

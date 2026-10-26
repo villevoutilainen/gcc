@@ -3220,7 +3220,7 @@ namespace __rb_tree
     _M_insert_node(_Base_ptr __x, _Base_ptr __p, _Node_ptr __z)
     -> iterator
     {
-      _GLIBCXX_CONVEYOR_TRUST(__z);
+      _GLIBCXX_CONVEYOR_TRUST(*__z);
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       bool __insert_left = (__x || __p == _M_end()
 			    || _M_key_compare(_S_key(__z), _S_key(__p)));
