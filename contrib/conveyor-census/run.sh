@@ -49,8 +49,21 @@ for config in conveyor control; do
     printf '%s\n' "${lumps[@]}" | xargs -P "$jobs" -I{} sh -c \
       'f={}; '"$(printf '%q ' "${cxx[@]}")"' '"${configs[$config]}"' -fcontract-analysis-engine='"$engine"' "$f" > '"$dir"'/$(basename "$f" .cc).err 2>&1'
     errs=$(cat "$dir"/*.err | grep -c 'libstdc++-v3/include/.*: error:')
+    # A site is its header and the text of its source line, not the line
+    # number, so that editing a header doesn't move its other sites.
     cat "$dir"/*.err | grep 'libstdc++-v3/include/.*: error:' \
-      | sed 's|.*/include/||; s/: error.*//' | sort -u > "$out/$config-$engine.sites"
+      | sed 's|.*/include/||; s/: error.*//' | sort -u \
+      | python3 -c '
+import sys
+inc = sys.argv[1]
+for l in sys.stdin:
+    f, line = l.split(":")[:2]
+    try:
+        text = open(inc + "/" + f).read().split("\n")[int(line) - 1].strip()
+    except (OSError, IndexError):
+        text = "?"
+    print(f + ": " + text)' "$src/libstdc++-v3/include" \
+      | sort -u > "$out/$config-$engine.sites"
     sites=$(wc -l < "$out/$config-$engine.sites")
     ices=$(cat "$dir"/*.err | grep -c 'internal compiler error')
     printf '%-9s %-7s library errors %6d  distinct sites %5d  ICEs %d\n' \

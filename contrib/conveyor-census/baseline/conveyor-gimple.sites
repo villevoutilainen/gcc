@@ -1,62 +1,53 @@
-bits/allocated_ptr.h:117:9
-bits/cpyfunc_impl.h:228:9
-bits/forward_list.h:1264:46
-bits/forward_list.h:899:17
-bits/list.tcc:106:14
-bits/list.tcc:274:63
-bits/list.tcc:90:16
-bits/mofunc_impl.h:212:9
-bits/ranges_util.h:506:25
-bits/regex_executor.h:80:9
-bits/regex_executor.h:90:51
-bits/regex_executor.tcc:168:22
-bits/regex_executor.tcc:207:22
-bits/regex_executor.tcc:512:19
-bits/regex.tcc:79:11
-bits/shared_ptr_base.h:1043:24
-bits/stl_algobase.h:237:15
-bits/stl_algo.h:3662:22
-bits/stl_deque.h:2016:58
-bits/stl_deque.h:282:27
-bits/stl_deque.h:388:53
-bits/stl_deque.h:389:51
-bits/stl_deque.h:390:52
-bits/stl_deque.h:397:46
-bits/stl_deque.h:988:46
-bits/stl_deque.h:990:53
-bits/stl_iterator.h:1054:9
-bits/stl_iterator.h:1082:11
-bits/stl_list.h:1217:15
-bits/stl_list.h:1604:78
-bits/stl_list.h:2858:7
-bits/stl_set.h:670:9
-bits/stl_tree.h:3228:44
-bits/stl_vector.h:1241:51
-bits/stl_vector.h:1347:21
-bits/valarray_before.h:576:29
-bits/vector.tcc:142:11
-ext/extptr_allocator.h:81:9
-std/flat_map:1110:9
-std/flat_map:1191:77
-std/flat_map:1197:77
-std/format:4266:36
-std/format:4674:19
-std/mdspan:3163:14
-std/mdspan:3248:9
-std/mdspan:3480:11
-std/optional:1244:35
-std/ranges:1631:37
-std/ranges:3136:41
-std/ranges:3137:44
-std/ranges:3260:37
-std/ranges:3264:48
-std/ranges:5810:36
-std/ranges:6721:7
-std/ranges:6728:7
-std/ranges:7393:7
-std/ranges:7400:7
-std/ranges:7692:56
-std/ranges:7743:60
-std/ranges:7748:58
-std/ranges:8448:7
-std/variant:2042:62
+bits/allocated_ptr.h: { ::new ((void*)this->get()) value_type; }
+bits/cpyfunc_impl.h: __glibcxx_assert(*this != nullptr);
+bits/forward_list.h: : _Base(_Node_alloc_type(__al))
+bits/forward_list.h: { return this->_M_impl._M_head._M_next == nullptr; }
+bits/list.tcc: auto& __this_alloc = this->_M_get_Node_allocator();
+bits/list.tcc: return iterator(__tmp->_M_base());
+bits/mofunc_impl.h: __glibcxx_assert(*this != nullptr);
+bits/ranges_util.h: { return _M_begin == _M_end; }
+bits/regex_executor.h: _M_rep_count(_M_nfa.size()),
+bits/regex_executor.h: _M_visited_states = new bool[_M_nfa.size()];
+bits/regex_executor.tcc: __glibcxx_assert(_M_get_sol_pos());
+bits/regex_executor.tcc: _M_cur_results = _M_results;
+bits/regex_executor.tcc: std::fill_n(_M_visited_states, _M_nfa.size(), false);
+bits/regex.tcc: for (auto& __it : __res)
+bits/shared_ptr_base.h: _Guarded_ptr __guard{__a};
+bits/stl_algobase.h: if (__b < __a)
+bits/stl_algo.h: return std::min(std::max(__val, __lo), __hi);
+bits/stl_deque.h: : _Base(std::move(__x), __a, __x.size())
+bits/stl_deque.h: const difference_type __nodes = __x._M_node - __y._M_node;
+bits/stl_deque.h: const difference_type __xpos = __x._M_cur - __x._M_first;
+bits/stl_deque.h: const difference_type __ypos = __y._M_last - __y._M_cur;
+bits/stl_deque.h: const size_t __allocmax = _Alloc_traits::max_size(__a);
+bits/stl_deque.h: if (__x.get_allocator() != __a && !__x.empty())
+bits/stl_deque.h: return __bufsz * (__nodes - bool(__x._M_node)) + __xpos + __ypos;
+bits/stl_deque.h: { return __x._M_cur == __y._M_cur; }
+bits/stl_iterator.h: : _M_current() { }
+bits/stl_iterator.h: : _M_current(__i.base()) { }
+bits/stl_list.h: : _Base(_Node_alloc_type(__a))
+bits/stl_list.h: __glibcxx_assert(__first != __last);
+bits/stl_list.h: return this->_M_impl._M_node._M_next == this->_M_impl._M_node._M_base();
+bits/stl_set.h: __glibcxx_assert(__pos != end());
+bits/stl_tree.h: _Base_ptr __base_z = __z->_M_base_ptr();
+bits/stl_vector.h: ptrdiff_t __dif = this->_M_impl._M_finish - this->_M_impl._M_start;
+bits/stl_vector.h: { return begin() == end(); }
+bits/valarray_before.h: return _M_expr1.size();
+bits/vector.tcc: __glibcxx_assert(__position != const_iterator());
+ext/extptr_allocator.h: : _M_real_alloc(__rarg._M_real_alloc) { }
+std/flat_map: __glibcxx_assert(_M_index < _M_cont->keys.size());
+std/flat_map: : _M_cont(std::__addressof(__fm->_M_cont)), _M_index(__it - __fm->keys().cbegin())
+std/format: __format_ctx.advance_to(__f.format(__val, __format_ctx));
+std/format: _M_set(_Td{__v.data(), __v.size()});
+std/mdspan: __glibcxx_assert(cmp_less_equal(_M_mapping.required_span_size(),
+std/mdspan: __glibcxx_assert(__idx < __ext.extent(0));
+std/mdspan: __glibcxx_assert(__is_multi_index(make_index_sequence<rank()>()));
+std/optional: { return this->_M_is_engaged(); }
+std/ranges: __glibcxx_assert(_M_current != _M_end);
+std/ranges: __glibcxx_assert(_M_current != _M_next);
+std/ranges: if (++_M_get_inner() == ranges::end(__inner_range))
+std/ranges: if (_M_inner != ranges::end(__inner))
+std/ranges: if (std::get<1>(_M_inner_it) != ranges::end(__inner))
+std/ranges: _M_inner_it.template emplace<1>(ranges::begin(__inner));
+std/ranges: _M_inner = ranges::begin(__inner);
+std/variant: if ((__variant::__as(__variants).valueless_by_exception() || ...))

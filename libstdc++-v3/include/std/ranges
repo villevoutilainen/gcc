@@ -1628,7 +1628,10 @@ namespace views::__adaptor
 
 	constexpr explicit
 	operator bool() const noexcept
-	{ return this->_M_is_engaged(); }
+	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  return this->_M_is_engaged();
+	}
 
 	constexpr _Tp&
 	operator*() noexcept
@@ -3133,6 +3136,7 @@ namespace views::__adaptor
 	    for (; __outer != ranges::end(_M_parent->_M_base); ++__outer)
 	      {
 		auto&& __inner = __update_inner(__outer);
+		_GLIBCXX_CONVEYOR_TRUST(__inner);
 		_M_inner = ranges::begin(__inner);
 		if (_M_inner != ranges::end(__inner))
 		  return;
@@ -3256,11 +3260,13 @@ namespace views::__adaptor
 	  {
 	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    auto&& __inner_range = [this] () -> auto&& {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      if constexpr (_S_ref_is_glvalue)
 		return *_M_get_outer();
 	      else
 		return *_M_parent->_M_inner;
 	    }();
+	    _GLIBCXX_CONVEYOR_TRUST(__inner_range);
 	    if (++_M_get_inner() == ranges::end(__inner_range))
 	      {
 		++_M_get_outer();
@@ -7689,6 +7695,7 @@ namespace views::__adaptor
       if (_M_get_outer() != ranges::end(_M_parent->_M_base))
 	{
 	  auto&& __inner = _M_update_inner();
+	  _GLIBCXX_CONVEYOR_TRUST(__inner);
 	  _M_inner_it.template emplace<1>(ranges::begin(__inner));
 	  _M_satisfy();
 	}
@@ -7702,6 +7709,7 @@ namespace views::__adaptor
       if (_M_get_outer() != ranges::end(_M_parent->_M_base))
 	{
 	  auto&& __inner = _M_update_inner();
+	  _GLIBCXX_CONVEYOR_TRUST(__inner);
 	  _M_inner_it.template emplace<1>(ranges::begin(__inner));
 	  _M_satisfy();
 	}
@@ -7740,6 +7748,7 @@ namespace views::__adaptor
 		break;
 
 	      auto&& __inner = _M_update_inner();
+	      _GLIBCXX_CONVEYOR_TRUST(__inner);
 	      _M_inner_it.template emplace<1>(ranges::begin(__inner));
 	    }
 	  else

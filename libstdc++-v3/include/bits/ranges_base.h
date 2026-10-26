@@ -969,6 +969,7 @@ namespace ranges
     template<input_or_output_iterator _It, sentinel_for<_It> _Sent>
       constexpr iter_difference_t<_It>
       operator()(_It& __it, iter_difference_t<_It> __n, _Sent __bound) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__it)
       {
 	if constexpr (sized_sentinel_for<_Sent, _It>)
 	  {
