@@ -12242,6 +12242,11 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
       STRIP_ANY_LOCATION_WRAPPER (op);
       if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
 	return true;
+      /* A string literal ('opt == "x"' binding a 'const char (&)[2]'):
+	 an lvalue of static storage duration, so always an object, as
+	 the GIMPLE engine's cg_provable_object_address_p has it.  */
+      if (TREE_CODE (op) == STRING_CST)
+	return true;
       /* D4324: reference-safety -- '&TARGET_EXPR<slot, init>' is how a
 	 reference bound directly to a temporary (a by-value call result,
 	 or a literal/converting-constructor expression, e.g. 'reads_only
