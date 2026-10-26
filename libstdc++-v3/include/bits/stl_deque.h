@@ -1014,7 +1014,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  by @a __x (unless the allocator traits dictate a different object).
        */
       _GLIBCXX26_CONSTEXPR
-      deque(const deque& __x) _GLIBCXX_CONVEYOR_REQUIRES(__x)
+      deque(const deque& __x) _GLIBCXX_CONVEYOR_TRUST_PRE(__x)
       : _Base(_Alloc_traits::_S_select_on_copy(__x._M_get_Tp_allocator()),
 	      __x.size())
       { std::__uninitialized_copy_a(__x.begin(), __x.end(),
@@ -1035,7 +1035,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       /// Copy constructor with alternative allocator
       _GLIBCXX26_CONSTEXPR
       deque(const deque& __x, const __type_identity_t<allocator_type>& __a)
-      _GLIBCXX_CONVEYOR_REQUIRES(__x)
+      _GLIBCXX_CONVEYOR_TRUST_PRE(__x)
       : _Base(__a, __x.size())
       { std::__uninitialized_copy_a(__x.begin(), __x.end(),
 				    this->_M_impl._M_start,
@@ -1159,8 +1159,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  by @a __x (unless the allocator traits dictate a different object).
        */
       _GLIBCXX26_CONSTEXPR deque&
-      operator=(const deque& __x)
-      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
+      operator=(const deque& __x);
 
 #if __cplusplus >= 201103L
       /**

@@ -741,7 +741,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  by @a __x (unless the allocator traits dictate a different object).
        */
       _GLIBCXX20_CONSTEXPR
-      vector(const vector& __x) _GLIBCXX_CONVEYOR_REQUIRES(__x)
+      vector(const vector& __x) _GLIBCXX_CONVEYOR_TRUST_PRE(__x)
       : _Base(__x.size(),
 	_Alloc_traits::_S_select_on_copy(__x._M_get_Tp_allocator()))
       {
@@ -936,8 +936,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX20_CONSTEXPR
       vector&
-      operator=(const vector& __x)
-      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
+      operator=(const vector& __x);
 
 #if __cplusplus >= 201103L
       /**

@@ -267,6 +267,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     list<_Tp, _Alloc>::
     operator=(const list& __x)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__x);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (this != std::__addressof(__x))
 	{
 #if __cplusplus >= 201103L

@@ -3,7 +3,6 @@ bits/list.tcc: _GLIBCXX_CONVEYOR_TRUST(*__tmp);
 bits/regex_executor.h: _M_rep_count(_M_nfa.size()),
 bits/regex_executor.h: _M_visited_states = new bool[_M_nfa.size()];
 bits/regex_executor.tcc: __glibcxx_assert(_M_get_sol_pos());
-bits/regex_executor.tcc: _M_cur_results = _M_results;
 bits/regex_executor.tcc: std::fill_n(_M_visited_states, _M_nfa.size(), false);
 bits/std_function.h: = new _Functor(std::forward<_Fn>(__f));
 bits/stl_construct.h: ::new(static_cast<void*>(__p)) _Tp(std::forward<_Args>(__args)...);
