@@ -37306,6 +37306,35 @@ build_symbolic_runtime_check (tree contract, tree ctrl, location_t loc,
   return contract_check_bind_done (cc_bind);
 }
 
+/* Whether CONDITION is true once each of its std::is_object_address calls
+   is: such a call is never evaluated at run time -- it is proven, or the
+   program is ill-formed -- so the check of a condition made of nothing
+   else can't fail, and builds an assertion_context and calls its control
+   object for nothing.  A condition with any other operand left over is
+   checked as ever.  */
+
+static bool
+contract_condition_proven_true_p (tree condition)
+{
+  tree copy = unshare_expr (condition);
+  cp_walk_tree_without_duplicates
+    (&copy,
+     [] (tree *tp, int *walk_subtrees, void *) -> tree
+       {
+	 tree arg;
+	 if (TREE_CODE (*tp) == CALL_EXPR && is_object_address_call_p (*tp, &arg))
+	   {
+	     *tp = boolean_true_node;
+	     *walk_subtrees = 0;
+	   }
+	 return NULL_TREE;
+       },
+     NULL);
+  copy = cp_fully_fold (copy);
+  STRIP_ANY_LOCATION_WRAPPER (copy);
+  return TREE_CODE (copy) == INTEGER_CST && integer_nonzerop (copy);
+}
+
 /* Genericize a CONTRACT tree, but do not attach it to the current context,
    the caller is responsible for that.
    This is called during genericization.  */
@@ -37462,6 +37491,18 @@ build_contract_check (tree contract)
 
   if (symbolic_runtime)
     return build_symbolic_runtime_check (contract, ctrl, loc, condition);
+
+  /* A conveyor contract whose condition is proven (is_object_address):
+     nothing at run time, like a symbolic one, but the GIMPLE engine's
+     marker, for the facts it establishes.  */
+  if (!symbolic_mark && ctrl
+      && contract_control_conveyor_like (ctrl, side, /*quiet=*/true)
+      && contract_condition_proven_true_p (condition))
+    {
+      if (!flag_contract_conveyor_proofs_gimple)
+	return void_node;
+      symbolic_mark = true;
+    }
 
   if (symbolic_mark)
     {
