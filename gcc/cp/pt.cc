@@ -21657,7 +21657,34 @@ tsubst_lambda_expr (tree t, tree args, tsubst_flags_t complain, tree in_decl)
 	   need another to confuse NRV (91217).  */
 	saved = BIND_EXPR_BODY (saved);
 
+      /* Its contracts, which tsubst_function_decl only copied: a call
+	 operator isn't instantiated through regenerate_decl_from_template,
+	 where a function's contracts otherwise are.  Substituted after its
+	 body, in its context, so that a capture used in a condition maps
+	 to its instantiated capture proxy just as in the body; until then
+	 FN has none, so that deducing its return type in the body doesn't
+	 rebuild the pattern's postconditions as FN's.  */
+      tree spec = get_fn_contract_specifiers (oldfn);
+      if (spec)
+	remove_fn_contract_specifiers (fn);
+
       tsubst_stmt (saved, args, complain, r);
+
+      if (spec)
+	{
+	  tree list = NULL_TREE;
+	  for (; spec; spec = TREE_CHAIN (spec))
+	    {
+	      tree nc = copy_node (spec);
+	      tree c = tsubst_contract (fn, CONTRACT_STATEMENT (nc), args,
+					complain, oldfn);
+	      TREE_VALUE (nc) = build_tree_list (NULL_TREE, c);
+	      TREE_CHAIN (nc) = list;
+	      list = nc;
+	    }
+	  set_fn_contract_specifiers (fn, nreverse (list));
+	  rebuild_postconditions (fn);
+	}
 
       finish_lambda_function (body);
 

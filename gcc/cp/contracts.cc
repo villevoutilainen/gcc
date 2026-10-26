@@ -5895,12 +5895,23 @@ build_contract_violation_constant (tree ctor, tree contract)
 }
 
 /* Helper to replace references to dummy this parameters with references to
-   the first argument of the FUNCTION_DECL DATA.  */
+   the first argument of the FUNCTION_DECL DATA.  A lambda's capture proxy
+   -- for 'this' too, which is_this_parameter also accepts -- is replaced by
+   what it stands for instead, a member of the closure the call operator's
+   first argument points to: the proxy is a local of the call operator's
+   body, which the contract check may be built outside of (D4324's
+   outlined predicate functions), and the closure is not 'this'.  */
 
 static tree
-remap_dummy_this_1 (tree *tp, int *, void *data)
+remap_dummy_this_1 (tree *tp, int *walk_subtrees, void *data)
 {
-  if (!is_this_parameter (*tp))
+  if (VAR_P (*tp) && is_capture_proxy (*tp) && DECL_HAS_VALUE_EXPR_P (*tp))
+    {
+      *tp = unshare_expr (DECL_VALUE_EXPR (*tp));
+      *walk_subtrees = 0;
+      return NULL_TREE;
+    }
+  if (TREE_CODE (*tp) != PARM_DECL || !is_this_parameter (*tp))
     return NULL_TREE;
   tree fn = (tree)data;
   *tp = DECL_ARGUMENTS (fn);
