@@ -103,19 +103,23 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
   template<size_t _Int, class _Tp1, class _Tp2>
     constexpr typename tuple_element<_Int, pair<_Tp1, _Tp2>>::type&
-    get(pair<_Tp1, _Tp2>& __in) noexcept;
+    get(pair<_Tp1, _Tp2>& __in) noexcept
+    _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
   template<size_t _Int, class _Tp1, class _Tp2>
     constexpr typename tuple_element<_Int, pair<_Tp1, _Tp2>>::type&&
-    get(pair<_Tp1, _Tp2>&& __in) noexcept;
+    get(pair<_Tp1, _Tp2>&& __in) noexcept
+    _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
   template<size_t _Int, class _Tp1, class _Tp2>
     constexpr const typename tuple_element<_Int, pair<_Tp1, _Tp2>>::type&
-    get(const pair<_Tp1, _Tp2>& __in) noexcept;
+    get(const pair<_Tp1, _Tp2>& __in) noexcept
+    _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
   template<size_t _Int, class _Tp1, class _Tp2>
     constexpr const typename tuple_element<_Int, pair<_Tp1, _Tp2>>::type&&
-    get(const pair<_Tp1, _Tp2>&& __in) noexcept;
+    get(const pair<_Tp1, _Tp2>&& __in) noexcept
+    _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
   template<size_t __i, typename... _Elements>
     constexpr __tuple_element_t<__i, tuple<_Elements...>>&
