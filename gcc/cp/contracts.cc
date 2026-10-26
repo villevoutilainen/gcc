@@ -2721,6 +2721,34 @@ check_redecl_contract (tree newdecl, tree olddecl)
   tree new_contracts = get_fn_contract_specifiers (newdecl);
   tree old_contracts = get_fn_contract_specifiers (olddecl);
 
+  /* A conveyor redeclaration that writes no contracts still gets the
+     implicit preconditions synthesized for its reference parameters and
+     'this'.  Those aren't contracts of its own: it omits its contracts,
+     and inherits the first declaration's -- which has the same synthesized
+     ones, and perhaps user-written ones too (a never_proven precondition
+     standing in for an implicit one, as MovableRefUtil::move has).
+     Compared as a list of its own, it would be rejected for having fewer
+     contracts, and would replace the first declaration's below
+     (update_contract_arguments).  */
+  if (old_contracts && new_contracts
+      && oa_synthesized_implicit_contracts
+      && !contract_any_deferred_p (new_contracts))
+    {
+      bool all_synthesized = true;
+      for (tree spec = new_contracts; spec; spec = TREE_CHAIN (spec))
+	if (!oa_synthesized_implicit_contracts->contains
+	      (CONTRACT_STATEMENT (spec)))
+	  {
+	    all_synthesized = false;
+	    break;
+	  }
+      if (all_synthesized)
+	{
+	  set_fn_contract_specifiers (newdecl, NULL_TREE);
+	  new_contracts = NULL_TREE;
+	}
+    }
+
   if (!old_contracts && !new_contracts)
     return;
 
