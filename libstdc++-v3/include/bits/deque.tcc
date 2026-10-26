@@ -95,6 +95,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     deque<_Tp, _Alloc>::
     operator=(const deque& __x)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__x);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (std::__addressof(__x) != this)
 	{
 #if __cplusplus >= 201103L

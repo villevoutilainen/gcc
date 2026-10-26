@@ -1189,7 +1189,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        *  The newly-created %list uses a copy of the allocation object used
        *  by @a __x (unless the allocator traits dictate a different object).
        */
-      list(const list& __x) _GLIBCXX_CONVEYOR_REQUIRES(__x)
+      list(const list& __x) _GLIBCXX_CONVEYOR_TRUST_PRE(__x)
       : _Base(_Node_alloc_traits::
 	      _S_select_on_copy(__x._M_get_Node_allocator()))
       { _M_initialize_dispatch(__x.begin(), __x.end(), __false_type()); }
@@ -1312,8 +1312,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        *  Whether the allocator is copied depends on the allocator traits.
        */
       list&
-      operator=(const list& __x)
-      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
+      operator=(const list& __x);
 
 #if __cplusplus >= 201103L
 #pragma GCC diagnostic push
