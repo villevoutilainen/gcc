@@ -299,10 +299,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #ifdef __glibcxx_optional_range_support // >= C++26
       // Iterator support.
       constexpr auto begin() const noexcept
-	requires is_object_v<_Tp> && (!is_unbounded_array_v<_Tp>);
+	requires is_object_v<_Tp> && (!is_unbounded_array_v<_Tp>)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       constexpr auto end() const noexcept
-	requires is_object_v<_Tp> && (!is_unbounded_array_v<_Tp>);
+	requires is_object_v<_Tp> && (!is_unbounded_array_v<_Tp>)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS;
 #endif // __glibcxx_optional_range_support
 
       // Observers.
