@@ -139,7 +139,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       const size_type __n = __position - begin();
       if (this->_M_impl._M_finish != this->_M_impl._M_end_of_storage)
 	{
-	  __glibcxx_assert(__position != const_iterator());
+	  __glibcxx_assert_container(__position != const_iterator());
 	  if (!(__position != const_iterator()))
 	    __builtin_unreachable(); // PR 106434
 

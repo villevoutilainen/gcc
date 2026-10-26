@@ -935,6 +935,43 @@ namespace contracts
 
   inline constexpr never_proven_conveyor never_proven_conveyor_v{};
 
+  /// @cond undocumented
+  // The control object of libstdc++'s container assertions under
+  // _GLIBCXX_CONVEYOR_ASSERTIONS (debug/assertions.h): never_proven_conveyor,
+  // except noexcept_assert -- an ordinary checked assertion -- for a
+  // container whose allocator has a fancy pointer, whose operations can't be
+  // conveyor.  An allocator declaring a pointer type that isn't a raw
+  // pointer has one; std::allocator declares none.  _Tp is the container, or
+  // a container adaptor, whose underlying container decides.
+  template<typename _Tp>
+    consteval bool
+    __container_conveyor_p() noexcept
+    {
+      if constexpr (requires { typename _Tp::container_type; })
+	return __container_conveyor_p<typename _Tp::container_type>();
+      else if constexpr (requires { typename _Tp::allocator_type::pointer; })
+	return __is_pointer(typename _Tp::allocator_type::pointer);
+      else
+	return true;
+    }
+
+  template<bool _Conveyor>
+    struct __container_assert
+    {
+      static consteval never_proven_conveyor
+      __make(const char* __msg = nullptr) noexcept
+      { return never_proven_conveyor(__msg); }
+    };
+
+  template<>
+    struct __container_assert<false>
+    {
+      static consteval noexcept_assert
+      __make(const char* __msg = nullptr) noexcept
+      { return noexcept_assert(__msg); }
+    };
+  /// @endcond
+
   // Identical to conveyor_assert above, but declares analyzed_conveyor()
   // true instead of (in addition to being) is_conveyor(): forces
   // -fcontract-conveyor-proofs-equivalent analysis on for any contract

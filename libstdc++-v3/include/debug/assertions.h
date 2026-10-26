@@ -78,7 +78,9 @@
 #  if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 #   define __glibcxx_requires_subscript(_N)	\
     contract_assert<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)); \
-    __glibcxx_assert_msg(_N < this->size(), #_N " < this->size()")
+    contract_assert<std::contracts::__container_assert< \
+      std::contracts::__container_conveyor_p<__remove_cvref(decltype(*this))>()> \
+      ::__make(#_N " < this->size()")>(_N < this->size())
 #  else
 #   define __glibcxx_requires_subscript(_N)	\
     __glibcxx_assert_msg(_N < this->size(), #_N " < this->size()")
@@ -90,7 +92,9 @@
 #  if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 #   define __glibcxx_requires_nonempty()		\
     contract_assert<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)); \
-    __glibcxx_assert(!this->empty())
+    contract_assert<std::contracts::__container_assert< \
+      std::contracts::__container_conveyor_p<__remove_cvref(decltype(*this))>()> \
+      ::__make()>(!this->empty())
 #  else
 #   define __glibcxx_requires_nonempty()		\
     __glibcxx_assert(!this->empty())
