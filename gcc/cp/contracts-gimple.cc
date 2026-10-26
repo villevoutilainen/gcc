@@ -2304,6 +2304,15 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
 	    result = cg_provable_object_address_p (stored, established,
 						    require_conveyor,
 						    in_progress, reason_out);
+	  /* The standard placement operator new returns its pointer
+	     argument: the object is constructed there (the AST engine sees
+	     the placement new-expression's address operand likewise).  */
+	  else if (std_placement_new_fn_p (callee)
+		   && gimple_call_num_args (def) == 2)
+	    result = cg_provable_object_address_p (gimple_call_arg (def, 1),
+						    established,
+						    require_conveyor,
+						    in_progress, reason_out);
 	  else if ((DECL_IS_OPERATOR_NEW_P (callee)
 		    && !std_placement_new_fn_p (callee))
 	      || (DECL_NAME (callee)
