@@ -2291,9 +2291,15 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
 	     declared lazily by except.cc's own build_throw, not a GCC
 	     builtin with a dedicated DECL flag the way operator new has).  */
 	  if (tree arg = cg_std_identity_call_arg (def))
-	    result = cg_provable_object_address_p (arg, established,
-						    require_conveyor,
-						    in_progress, reason_out);
+	    /* Its argument, or -- for a conveyor one such as libstdc++'s
+	       std::move under conveyor assertions -- what any conveyor
+	       callee returning a reference guarantees (below), as the AST
+	       engine's oa_conveyor_returned_reference_p does.  */
+	    result = (cg_provable_object_address_p (arg, established,
+						     require_conveyor,
+						     in_progress, reason_out)
+		      || (DECL_DECLARED_CONVEYOR_P (callee)
+			  && TYPE_REF_P (TREE_TYPE (TREE_TYPE (callee)))));
 	  else if (tree stored = cg_iile_returned_capture_address (as_a <gcall *> (def)))
 	    result = cg_provable_object_address_p (stored, established,
 						    require_conveyor,

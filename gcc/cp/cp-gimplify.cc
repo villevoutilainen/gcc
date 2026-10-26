@@ -3926,6 +3926,11 @@ cp_fold (tree x, fold_flags_t flags)
 	    && !(flags & ff_only_non_odr)
 	    && call_expr_nargs (x) == 1
 	    && decl_in_std_namespace_p (callee)
+	    /* Not one with contracts (libstdc++'s conveyor std::move and
+	       std::forward): folding the call away would drop their checks,
+	       and the analysis engines would see a cast where the call they
+	       rely on was (a conveyor callee's returned reference).  */
+	    && !DECL_HAS_CONTRACTS_P (callee)
 	    && DECL_NAME (callee) != NULL_TREE
 	    && (id_equal (DECL_NAME (callee), "move")
 		|| id_equal (DECL_NAME (callee), "forward")
