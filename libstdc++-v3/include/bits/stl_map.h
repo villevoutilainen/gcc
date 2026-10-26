@@ -650,7 +650,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	std::pair<iterator, bool>
 	emplace(_Args&&... __args)
 	{
-_GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 #if __cplusplus >= 201703L
 	  if constexpr (sizeof...(_Args) == 2)
 	    if constexpr (is_same_v<allocator_type, allocator<value_type>>)

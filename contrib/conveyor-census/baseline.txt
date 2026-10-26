@@ -1,4 +1,4 @@
-conveyor  gimple  library errors     22  distinct sites    11  ICEs 0
-conveyor  ast     library errors     29  distinct sites    16  ICEs 0
+conveyor  gimple  library errors      0  distinct sites     0  ICEs 0
+conveyor  ast     library errors      0  distinct sites     0  ICEs 0
 control   gimple  library errors      0  distinct sites     0  ICEs 0
 control   ast     library errors      0  distinct sites     0  ICEs 0
