@@ -35,7 +35,7 @@ template <S V> struct Holder {};
 static_assert (std::is_same_v<Holder<S (1)>, Holder<S (1)>>);
 static_assert (!std::is_same_v<Holder<S (1)>, Holder<S (2)>>);
 
-// A trailing return type, and no consteval, work as well.
+// A trailing return type works as well.
 struct T2
 {
 private:
@@ -49,15 +49,15 @@ static_assert (std::meta::is_structural_type (^^T2));
 template <T2 V> struct Holder2 {};
 static_assert (!std::is_same_v<Holder2<T2 (1)>, Holder2<T2 (3)>>);
 
+// It has to be consteval.
 struct T3
 {
 private:
   int z;
 public:
   constexpr T3 (int v) : z (v) {}
-  std::meta::info reflect_constant () const = default;
+  std::meta::info reflect_constant () const = default; // { dg-error "must be a .consteval. .const. member function" }
 };
-static_assert (std::meta::is_structural_type (^^T3));
 
 // Recursive, through members and bases.
 class Inner
@@ -140,18 +140,19 @@ public:
   consteval std::meta::info reflect_constant () const = default;
 };
 
-// Only 'std::meta::info reflect_constant () const' can be defaulted.
+// Only 'consteval std::meta::info reflect_constant () const' can be
+// defaulted.
 struct NonConst
 {
-  consteval std::meta::info reflect_constant () = default; // { dg-error "must be a .const. member function" }
+  consteval std::meta::info reflect_constant () = default; // { dg-error "must be a .consteval. .const. member function" }
 };
 struct WithParm
 {
-  consteval std::meta::info reflect_constant (int) const = default; // { dg-error "must be a .const. member function" }
+  consteval std::meta::info reflect_constant (int) const = default; // { dg-error "must be a .consteval. .const. member function" }
 };
 struct WrongType
 {
-  int reflect_constant () const = default; // { dg-error "must be a .const. member function" }
+  int reflect_constant () const = default; // { dg-error "must be a .consteval. .const. member function" }
 };
 struct OutOfClass
 {

@@ -4081,19 +4081,20 @@ defaulted_reflect_constant (tree t)
 }
 
 /* Whether reflect_constant member function FN is
-   'std::meta::info reflect_constant () const'.  */
+   'consteval std::meta::info reflect_constant () const'.  */
 
 static bool
 reflect_constant_signature_p (tree fn)
 {
-  return (FUNCTION_FIRST_USER_PARMTYPE (fn) == void_list_node
+  return (DECL_IMMEDIATE_FUNCTION_P (fn)
+	  && FUNCTION_FIRST_USER_PARMTYPE (fn) == void_list_node
 	  && (type_memfn_quals (TREE_TYPE (fn)) & TYPE_QUAL_CONST)
 	  && type_memfn_rqual (TREE_TYPE (fn)) != REF_QUAL_RVALUE
 	  && REFLECTION_TYPE_P (TREE_TYPE (TREE_TYPE (fn))));
 }
 
 /* FN, a reflect_constant member function, is deleted in its class: if it
-   is 'std::meta::info reflect_constant () const', its class is not
+   is 'consteval std::meta::info reflect_constant () const', its class is not
    structural, whatever its members (P4340).  Any other reflect_constant
    is just a deleted function.  */
 
@@ -4108,7 +4109,8 @@ deleted_reflect_constant (tree fn)
 }
 
 /* Check defaulting FN, a reflect_constant member function: it has to be
-   'std::meta::info reflect_constant () const', defaulted in its class.
+   'consteval std::meta::info reflect_constant () const', defaulted in its
+   class.
    Its class is then structural.  It is only a marker: nothing defines it,
    and a call to it is ill-formed (it is deleted).  */
 
@@ -4124,8 +4126,8 @@ defaultable_reflect_constant_check (tree fn)
     }
   if (!reflect_constant_signature_p (fn))
     {
-      error ("defaulted %qD must be a %<const%> member function with no "
-	     "parameters returning %<std::meta::info%>", fn);
+      error ("defaulted %qD must be a %<consteval%> %<const%> member "
+	     "function with no parameters returning %<std::meta::info%>", fn);
       return false;
     }
   CLASSTYPE_STRUCTURAL (ctx) = 1;
