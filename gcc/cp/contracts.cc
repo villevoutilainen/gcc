@@ -9006,6 +9006,124 @@ struct oa_linear_form
 static tree oa_linear_leaf (tree, int = 0);
 static bool oa_linear_decompose (tree, int, oa_linear_form *);
 
+/* One of oa_env's fact maps, shared between the copies of an environment
+   until one of them writes to it: the walk copies its environment for
+   every branch and every round of a loop's fixed point, and a function's
+   environment holds facts about every variable it has seen, so copying
+   each map entry by entry made checking a function of N conditions cost
+   N times its environment's size.  Copying shares the map; the first
+   write through a copy that shares it copies it (only that one map);
+   a join can skip a map both sides still share.  get () and iteration
+   give read-only access, so that nothing writes to a shared map;
+   get_mut () is for writing through.  */
+
+template<typename KeyId, typename Value>
+class oa_cow_map
+{
+  typedef hash_map<KeyId, Value> map_type;
+  typedef typename simple_hashmap_traits<default_hash_traits<KeyId>,
+					 Value>::key_type key_type;
+  struct rep
+  {
+    map_type map;
+    unsigned refs;
+    rep () : refs (1) {}
+    explicit rep (map_type &m) : map (m), refs (1) {}
+  };
+  rep *m_rep = nullptr;
+
+  void release ()
+  {
+    if (m_rep && --m_rep->refs == 0)
+      delete m_rep;
+    m_rep = nullptr;
+  }
+  /* The map, for writing: unshared first.  */
+  map_type &w ()
+  {
+    if (!m_rep)
+      m_rep = new rep;
+    else if (m_rep->refs > 1)
+      {
+	rep *r = new rep (m_rep->map);
+	--m_rep->refs;
+	m_rep = r;
+      }
+    return m_rep->map;
+  }
+  static map_type &empty_map ()
+  {
+    static map_type *e = new map_type;
+    return *e;
+  }
+  map_type &r () const { return m_rep ? m_rep->map : empty_map (); }
+
+public:
+  oa_cow_map () {}
+  oa_cow_map (const oa_cow_map &o) : m_rep (o.m_rep)
+  {
+    if (m_rep)
+      ++m_rep->refs;
+  }
+  oa_cow_map &operator= (const oa_cow_map &o)
+  {
+    if (o.m_rep)
+      ++o.m_rep->refs;
+    release ();
+    m_rep = o.m_rep;
+    return *this;
+  }
+  ~oa_cow_map () { release (); }
+
+  /* Whether this and O are the same map, so that merging them is a
+     no-op.  */
+  bool same_p (const oa_cow_map &o) const { return m_rep == o.m_rep; }
+
+  const Value *get (const key_type &k) const
+  {
+    return m_rep ? m_rep->map.get (k) : NULL;
+  }
+  Value *get_mut (const key_type &k)
+  {
+    if (!m_rep || !m_rep->map.get (k))
+      return NULL;
+    return w ().get (k);
+  }
+  bool put (const key_type &k, const Value &v) { return w ().put (k, v); }
+  void remove (const key_type &k)
+  {
+    if (m_rep && m_rep->map.get (k))
+      w ().remove (k);
+  }
+  void empty () { release (); }
+  /* The map itself, unshared, for updating many entries in place.  */
+  map_type &write_all () { return w (); }
+  size_t elements () const { return m_rep ? m_rep->map.elements () : 0; }
+  bool is_empty () const { return !m_rep || m_rep->map.is_empty (); }
+
+  class const_iterator
+  {
+    typename map_type::iterator m_it;
+  public:
+    explicit const_iterator (typename map_type::iterator it) : m_it (it) {}
+    const_iterator &operator++ () { ++m_it; return *this; }
+    bool operator!= (const const_iterator &o) const { return m_it != o.m_it; }
+    bool operator== (const const_iterator &o) const { return m_it == o.m_it; }
+    auto operator* ()
+    {
+      auto p = *m_it;
+      struct reference_pair
+      {
+	decltype (p.first) first;
+	const std::remove_reference_t<decltype (p.second)> &second;
+      };
+      return reference_pair { p.first, p.second };
+    }
+  };
+  const_iterator begin () const { return const_iterator (r ().begin ()); }
+  const_iterator end () const { return const_iterator (r ().end ()); }
+};
+
 class oa_env
 {
 public:
@@ -9060,7 +9178,7 @@ public:
 
   bool provable_p (tree decl)
   {
-    bool *v = m_map.get (capture_key (decl));
+    const bool *v = m_map.get (capture_key (decl));
     return v && *v;
   }
   void set (tree decl, bool provable) { m_map.put (capture_key (decl), provable); }
@@ -9078,7 +9196,7 @@ public:
      lattice) is exactly what's wanted for it too.  */
   bool nz_provable_p (tree decl)
   {
-    bool *v = m_nz_map.get (decl);
+    const bool *v = m_nz_map.get (decl);
     return v && *v;
   }
   void nz_set (tree decl, bool provable)
@@ -9099,7 +9217,7 @@ public:
      (excluded_set after the refinement).  */
   bool excluded_get (tree decl, widest_int *out)
   {
-    widest_int *v = m_excluded_map.get (decl);
+    const widest_int *v = m_excluded_map.get (decl);
     if (!v)
       return false;
     *out = *v;
@@ -9126,7 +9244,7 @@ public:
      merge_with below.  */
   bool symbolic_object_address_provable_p (tree decl)
   {
-    bool *v = m_symbolic_object_address_map.get (decl);
+    const bool *v = m_symbolic_object_address_map.get (decl);
     return v && *v;
   }
   void symbolic_object_address_set (tree decl, bool provable)
@@ -9139,7 +9257,7 @@ public:
   }
   bool symbolic_nz_provable_p (tree decl)
   {
-    bool *v = m_symbolic_nz_map.get (decl);
+    const bool *v = m_symbolic_nz_map.get (decl);
     return v && *v;
   }
   void symbolic_nz_set (tree decl, bool provable)
@@ -9162,7 +9280,7 @@ public:
      merge_with's shape.  */
   bool range_get (tree decl, oa_range_fact *out)
   {
-    oa_range_fact *v = m_range_map.get (decl);
+    const oa_range_fact *v = m_range_map.get (decl);
     if (!v)
       return false;
     *out = *v;
@@ -9187,7 +9305,7 @@ public:
      completely untouched.  */
   bool float_range_get (tree decl, oa_float_range_fact *out)
   {
-    oa_float_range_fact *v = m_float_range_map.get (decl);
+    const oa_float_range_fact *v = m_float_range_map.get (decl);
     if (!v)
       return false;
     *out = *v;
@@ -9217,7 +9335,7 @@ public:
      join.  */
   bool predicate_fact_get (tree decl, oa_predicate_fact *out)
   {
-    oa_predicate_fact *v = m_predicate_fact_map.get (decl);
+    const oa_predicate_fact *v = m_predicate_fact_map.get (decl);
     if (!v)
       return false;
     *out = *v;
@@ -9235,12 +9353,14 @@ public:
   void predicate_fact_invalidate (tree decl) { m_predicate_fact_map.remove (decl); }
   void predicate_fact_merge_with (oa_env &other)
   {
+    if (m_predicate_fact_map.same_p (other.m_predicate_fact_map))
+      return;
     auto_vec<tree> to_remove;
     auto_vec<tree> to_keep;
     auto_vec<oa_predicate_fact> kept_facts;
     for (auto it : m_predicate_fact_map)
       {
-	oa_predicate_fact *ov = other.m_predicate_fact_map.get (it.first);
+	const oa_predicate_fact *ov = other.m_predicate_fact_map.get (it.first);
 	if (!ov || ov->pred_fn != it.second.pred_fn
 	    || ov->polarity != it.second.polarity)
 	  {
@@ -9294,7 +9414,7 @@ public:
      only alias is correctly dropped, not kept, at the join.  */
   tree alias_find (tree d)
   {
-    tree *t = m_alias_target.get (d);
+    const tree *t = m_alias_target.get (d);
     return t ? *t : d;
   }
   void alias_set (tree d, tree target) { m_alias_target.put (d, target); }
@@ -9306,10 +9426,12 @@ public:
      structure's own comment above.  */
   void alias_merge_with (oa_env &other)
   {
+    if (m_alias_target.same_p (other.m_alias_target))
+      return;
     auto_vec<tree> to_remove;
     for (auto it : m_alias_target)
       {
-	tree *ov = other.m_alias_target.get (it.first);
+	const tree *ov = other.m_alias_target.get (it.first);
 	if (!ov || *ov != it.second)
 	  to_remove.safe_push (it.first);
       }
@@ -9334,7 +9456,7 @@ public:
      that comment for why: this file's own Rule 1 dispatch relies on
      that function's true/false return as a control-flow discriminator,
      which teaching it to resolve COMPONENT_REF would silently break).  */
-  tree *field_alias_find (tree base, tree field)
+  tree const *field_alias_find (tree base, tree field)
   {
     return m_field_alias_target.get ({base, field});
   }
@@ -9362,10 +9484,12 @@ public:
      union -- see that method's own comment for why).  */
   void field_alias_merge_with (oa_env &other)
   {
+    if (m_field_alias_target.same_p (other.m_field_alias_target))
+      return;
     auto_vec<std::pair<tree, tree>> to_remove;
     for (auto it : m_field_alias_target)
       {
-	tree *ov = other.m_field_alias_target.get (it.first);
+	const tree *ov = other.m_field_alias_target.get (it.first);
 	if (!ov || *ov != it.second)
 	  to_remove.safe_push (it.first);
       }
@@ -9396,7 +9520,7 @@ public:
      deliberately a new, separate resolver rather than an extension of
      oa_object_identity_decl, for the identical Rule-1-dispatch reason
      field_alias's own comment explains.  */
-  tree *array_alias_find (tree base, HOST_WIDE_INT index)
+  tree const *array_alias_find (tree base, HOST_WIDE_INT index)
   {
     return m_array_alias_target.get ({base, index});
   }
@@ -9437,56 +9561,56 @@ public:
 	if (r.has_hi && (!p || !p->has_hi || !real_identical (&p->hi, &r.hi)))
 	  r.has_hi = false;
       };
-    for (auto it : m_range_map)
+    for (auto it : m_range_map.write_all ())
       widen (it.second, prev.m_range_map.get (it.first));
     {
       auto_vec<tree> moved;
       for (auto it : m_excluded_map)
 	{
-	  widest_int *p = prev.m_excluded_map.get (it.first);
+	  const widest_int *p = prev.m_excluded_map.get (it.first);
 	  if (!p || *p != it.second)
 	    moved.safe_push (it.first);
 	}
       for (tree d : moved)
 	m_excluded_map.remove (d);
     }
-    for (auto it : m_contract_scalar_range_map)
+    for (auto it : m_contract_scalar_range_map.write_all ())
       widen (it.second, prev.m_contract_scalar_range_map.get (it.first));
-    for (auto it : m_contract_field_range_map)
+    for (auto it : m_contract_field_range_map.write_all ())
       {
-	oa_contract_field_range_fact *p
+	const oa_contract_field_range_fact *p
 	  = prev.m_contract_field_range_map.get (it.first);
 	widen (it.second.range, p ? &p->range : NULL);
       }
-    for (auto it : m_contract_call_range_map)
+    for (auto it : m_contract_call_range_map.write_all ())
       {
-	oa_contract_field_range_fact *p
+	const oa_contract_field_range_fact *p
 	  = prev.m_contract_call_range_map.get (it.first);
 	widen (it.second.range, p ? &p->range : NULL);
       }
-    for (auto it : m_linear_sum_map)
+    for (auto it : m_linear_sum_map.write_all ())
       {
 	const std::pair<tree, tree> *k
 	  = linear_find (prev.m_linear_sum_map, true, it.first.first,
 			 it.first.second);
-	oa_contract_field_range_fact *p
+	const oa_contract_field_range_fact *p
 	  = k ? prev.m_linear_sum_map.get (*k) : NULL;
 	widen (it.second.range, p ? &p->range : NULL);
       }
-    for (auto it : m_linear_diff_map)
+    for (auto it : m_linear_diff_map.write_all ())
       {
 	const std::pair<tree, tree> *k
 	  = linear_find (prev.m_linear_diff_map, false, it.first.first,
 			 it.first.second);
-	oa_contract_field_range_fact *p
+	const oa_contract_field_range_fact *p
 	  = k ? prev.m_linear_diff_map.get (*k) : NULL;
 	widen (it.second.range, p ? &p->range : NULL);
       }
-    for (auto it : m_float_range_map)
+    for (auto it : m_float_range_map.write_all ())
       widen_float (it.second, prev.m_float_range_map.get (it.first));
-    for (auto it : m_contract_float_field_range_map)
+    for (auto it : m_contract_float_field_range_map.write_all ())
       {
-	oa_contract_float_field_range_fact *p
+	const oa_contract_float_field_range_fact *p
 	  = prev.m_contract_float_field_range_map.get (it.first);
 	widen_float (it.second.range, p ? &p->range : NULL);
       }
@@ -9497,7 +9621,7 @@ public:
   unsigned loop_fact_measure ()
   {
     unsigned n = 0;
-    auto bools = [&n] (hash_map<tree, bool> &m)
+    auto bools = [&n] (const oa_cow_map<tree, bool> &m)
       {
 	for (auto it : m)
 	  n += it.second;
@@ -9597,6 +9721,17 @@ public:
      and the value facts its scalar assignment tracking replaces).  */
   void object_written_through_memory (tree d)
   {
+    object_written_through_memory_1 (d);
+    field_object_predicate_invalidate_all (d);
+    field_object_address_invalidate_all (d);
+  }
+  /* object_written_through_memory, but for the facts of D's fields and
+     array slots (field_object_predicate_invalidate_all, field_object_
+     address_invalidate_all), which sweep the whole function's field and
+     array keys: addressable_locals_written_through_memory does that
+     once for all the objects it writes.  */
+  void object_written_through_memory_1 (tree d)
+  {
     nz_invalidate (d);
     range_invalidate (d);
     float_range_invalidate (d);
@@ -9615,8 +9750,6 @@ public:
     contract_field_nz_invalidate_all (d);
     field_alias_invalidate_all (d);
     array_alias_invalidate_all (d);
-    field_object_predicate_invalidate_all (d);
-    field_object_address_invalidate_all (d);
     /* A pointer stored in D may have changed, so what it pointed to is
        no longer known; a reference can't be reseated, so the object it
        refers to is still the one it was -- writing that object doesn't
@@ -9671,8 +9804,28 @@ public:
     for (auto it : m_contract_field_nz_map) add (it.first.first);
     for (auto it : m_alias_target) add (it.first);
     for (auto it : m_field_alias_target) add (it.first.first);
+    if (objects.is_empty ())
+      return;
     for (tree d : objects)
-      object_written_through_memory (d);
+      object_written_through_memory_1 (d);
+    /* field_object_predicate_invalidate_all and field_object_address_
+       invalidate_all for every one of OBJECTS, in one sweep of the keys
+       rather than one per object.  */
+    if (m_field_object_key)
+      for (auto it : *m_field_object_key)
+	if (objects.contains (it.first.first))
+	  {
+	    predicate_fact_invalidate (it.second);
+	    invalidate (it.second);
+	  }
+    if (m_array_object_key)
+      for (auto it : *m_array_object_key)
+	if (objects.contains (it.first.first)
+	    || objects.contains (it.first.second))
+	  {
+	    predicate_fact_invalidate (it.second);
+	    invalidate (it.second);
+	  }
   }
   /* Mirrors field_alias_invalidate_all's own removal-by-first-key-
      component sweep -- also the rule an unprovable-index write itself
@@ -9693,10 +9846,12 @@ public:
      union -- see alias_merge_with's own comment for why).  */
   void array_alias_merge_with (oa_env &other)
   {
+    if (m_array_alias_target.same_p (other.m_array_alias_target))
+      return;
     auto_vec<std::pair<tree, HOST_WIDE_INT>> to_remove;
     for (auto it : m_array_alias_target)
       {
-	tree *ov = other.m_array_alias_target.get (it.first);
+	const tree *ov = other.m_array_alias_target.get (it.first);
 	if (!ov || *ov != it.second)
 	  to_remove.safe_push (it.first);
       }
@@ -9894,7 +10049,7 @@ public:
      by AND.  */
   bool relational_get (tree decl, oa_relational_fact *out)
   {
-    oa_relational_fact *v = m_relational_map.get (decl);
+    const oa_relational_fact *v = m_relational_map.get (decl);
     if (!v)
       return false;
     *out = *v;
@@ -9934,21 +10089,22 @@ public:
     auto_vec<tree> to_remove;
     auto_vec<tree> to_keep;
     auto_vec<oa_relational_fact> kept_facts;
-    for (auto it : m_relational_map)
-      {
-	oa_relational_fact *ov = other.m_relational_map.get (it.first);
-	if (!ov || ov->code != it.second.code || ov->rhs != it.second.rhs
-	    || !oa_range_fact_equal (ov->offset, it.second.offset))
-	  {
-	    to_remove.safe_push (it.first);
-	    continue;
-	  }
-	oa_relational_fact merged = it.second;
-	merged.conveyor_established
-	  = it.second.conveyor_established && ov->conveyor_established;
-	to_keep.safe_push (it.first);
-	kept_facts.safe_push (merged);
-      }
+    if (!m_relational_map.same_p (other.m_relational_map))
+      for (auto it : m_relational_map)
+	{
+	  const oa_relational_fact *ov = other.m_relational_map.get (it.first);
+	  if (!ov || ov->code != it.second.code || ov->rhs != it.second.rhs
+	      || !oa_range_fact_equal (ov->offset, it.second.offset))
+	    {
+	      to_remove.safe_push (it.first);
+	      continue;
+	    }
+	  oa_relational_fact merged = it.second;
+	  merged.conveyor_established
+	    = it.second.conveyor_established && ov->conveyor_established;
+	  to_keep.safe_push (it.first);
+	  kept_facts.safe_push (merged);
+	}
     for (unsigned i = 0; i < to_remove.length (); ++i)
       m_relational_map.remove (to_remove[i]);
     for (unsigned i = 0; i < to_keep.length (); ++i)
@@ -9959,7 +10115,8 @@ public:
   /* The key of MAP for the terms A and B (either order for a sum), the
      same terms by oa_linear_atom_equal, or null.  */
   static const std::pair<tree, tree> *
-  linear_find (hash_map<oa_field_key_hash, oa_contract_field_range_fact> &m,
+  linear_find (const oa_cow_map<oa_field_key_hash,
+			       oa_contract_field_range_fact> &m,
 	       bool sum, tree a, tree b)
   {
     for (auto it = m.begin (); it != m.end (); ++it)
@@ -10030,11 +10187,14 @@ public:
   /* The join: the hull of the two bounds, dropped where only one side
      has one.  */
   static void
-  linear_merge_with (hash_map<oa_field_key_hash,
-			      oa_contract_field_range_fact> &mine,
-		     hash_map<oa_field_key_hash,
-			      oa_contract_field_range_fact> &theirs, bool sum)
+  linear_merge_with (oa_cow_map<oa_field_key_hash,
+				oa_contract_field_range_fact> &mine,
+		     const oa_cow_map<oa_field_key_hash,
+				      oa_contract_field_range_fact> &theirs,
+		     bool sum)
   {
+    if (mine.same_p (theirs))
+      return;
     auto_vec<std::pair<tree, tree>> to_remove;
     auto_vec<std::pair<tree, tree>> to_keep;
     auto_vec<oa_contract_field_range_fact> kept_facts;
@@ -10042,7 +10202,7 @@ public:
       {
 	const std::pair<tree, tree> *tk
 	  = linear_find (theirs, sum, it.first.first, it.first.second);
-	oa_contract_field_range_fact *ov = tk ? theirs.get (*tk) : NULL;
+	const oa_contract_field_range_fact *ov = tk ? theirs.get (*tk) : NULL;
 	oa_contract_field_range_fact merged;
 	merged.range.base = NULL_TREE;
 	merged.range.has_lo = (ov && it.second.range.has_lo
@@ -10082,7 +10242,7 @@ public:
      has no base to compare).  */
   bool type_bound_get (tree decl, oa_type_bound_fact *out)
   {
-    oa_type_bound_fact *v = m_type_bound_map.get (decl);
+    const oa_type_bound_fact *v = m_type_bound_map.get (decl);
     if (!v)
       return false;
     *out = *v;
@@ -10090,7 +10250,7 @@ public:
   }
   void type_bound_set (tree decl, bool upper, bool lower)
   {
-    oa_type_bound_fact *v = m_type_bound_map.get (decl);
+    const oa_type_bound_fact *v = m_type_bound_map.get (decl);
     oa_type_bound_fact fact = v ? *v : oa_type_bound_fact { false, false };
     fact.has_upper_witness |= upper;
     fact.has_lower_witness |= lower;
@@ -10099,12 +10259,14 @@ public:
   void type_bound_invalidate (tree decl) { m_type_bound_map.remove (decl); }
   void type_bound_merge_with (oa_env &other)
   {
+    if (m_type_bound_map.same_p (other.m_type_bound_map))
+      return;
     auto_vec<tree> to_remove;
     auto_vec<tree> to_keep;
     auto_vec<oa_type_bound_fact> kept_facts;
     for (auto it : m_type_bound_map)
       {
-	oa_type_bound_fact *ov = other.m_type_bound_map.get (it.first);
+	const oa_type_bound_fact *ov = other.m_type_bound_map.get (it.first);
 	oa_type_bound_fact merged;
 	merged.has_upper_witness
 	  = it.second.has_upper_witness && ov && ov->has_upper_witness;
@@ -10130,7 +10292,7 @@ public:
      is a separate map rather than a reuse.  */
   bool call_relational_get (tree decl, oa_call_relational_fact *out)
   {
-    oa_call_relational_fact *v = m_call_relational_map.get (decl);
+    const oa_call_relational_fact *v = m_call_relational_map.get (decl);
     if (!v)
       return false;
     *out = *v;
@@ -10187,12 +10349,14 @@ public:
   }
   void call_relational_merge_with (oa_env &other)
   {
+    if (m_call_relational_map.same_p (other.m_call_relational_map))
+      return;
     auto_vec<tree> to_remove;
     auto_vec<tree> to_keep;
     auto_vec<oa_call_relational_fact> kept_facts;
     for (auto it : m_call_relational_map)
       {
-	oa_call_relational_fact *ov = other.m_call_relational_map.get (it.first);
+	const oa_call_relational_fact *ov = other.m_call_relational_map.get (it.first);
 	if (!ov || ov->code != it.second.code
 	    || ov->rhs_receiver != it.second.rhs_receiver
 	    || ov->rhs_callee != it.second.rhs_callee
@@ -10238,7 +10402,7 @@ public:
   }
   oa_unprovable_reason unprovable_reason_hint_get (tree decl)
   {
-    oa_unprovable_reason *v = m_unprovable_reason_hint_map.get (decl);
+    const oa_unprovable_reason *v = m_unprovable_reason_hint_map.get (decl);
     return v ? *v : OA_UNPROVABLE_NONE;
   }
 
@@ -10249,7 +10413,7 @@ public:
   bool call_call_relational_get (tree lhs_receiver, tree lhs_callee,
 				    oa_call_call_relational_fact *out)
   {
-    oa_call_call_relational_fact *v
+    const oa_call_call_relational_fact *v
       = m_call_call_relational_map.get ({lhs_receiver, lhs_callee});
     if (!v)
       return false;
@@ -10288,12 +10452,14 @@ public:
   }
   void call_call_relational_merge_with (oa_env &other)
   {
+    if (m_call_call_relational_map.same_p (other.m_call_call_relational_map))
+      return;
     auto_vec<std::pair<tree, tree>> to_remove;
     auto_vec<std::pair<tree, tree>> to_keep;
     auto_vec<oa_call_call_relational_fact> kept_facts;
     for (auto it : m_call_call_relational_map)
       {
-	oa_call_call_relational_fact *ov
+	const oa_call_call_relational_fact *ov
 	  = other.m_call_call_relational_map.get (it.first);
 	if (!ov || ov->code != it.second.code
 	    || ov->rhs_receiver != it.second.rhs_receiver
@@ -10328,7 +10494,7 @@ public:
      `base`/array-offset handling, which this fact never has).  */
   bool contract_scalar_range_get (tree decl, oa_range_fact *out)
   {
-    oa_range_fact *v = m_contract_scalar_range_map.get (decl);
+    const oa_range_fact *v = m_contract_scalar_range_map.get (decl);
     if (!v)
       return false;
     *out = *v;
@@ -10344,12 +10510,14 @@ public:
   }
   void contract_scalar_range_merge_with (oa_env &other)
   {
+    if (m_contract_scalar_range_map.same_p (other.m_contract_scalar_range_map))
+      return;
     auto_vec<tree> to_remove;
     auto_vec<tree> to_keep;
     auto_vec<oa_range_fact> kept_facts;
     for (auto it : m_contract_scalar_range_map)
       {
-	oa_range_fact *ov = other.m_contract_scalar_range_map.get (it.first);
+	const oa_range_fact *ov = other.m_contract_scalar_range_map.get (it.first);
 	if (!ov)
 	  {
 	    to_remove.safe_push (it.first);
@@ -10387,7 +10555,7 @@ public:
   bool contract_field_range_get (tree identity, tree field,
 				  oa_contract_field_range_fact *out)
   {
-    oa_contract_field_range_fact *v
+    const oa_contract_field_range_fact *v
       = m_contract_field_range_map.get ({identity, field});
     if (!v)
       return false;
@@ -10423,12 +10591,14 @@ public:
   }
   void contract_field_range_merge_with (oa_env &other)
   {
+    if (m_contract_field_range_map.same_p (other.m_contract_field_range_map))
+      return;
     auto_vec<std::pair<tree, tree>> to_remove;
     auto_vec<std::pair<tree, tree>> to_keep;
     auto_vec<oa_contract_field_range_fact> kept_facts;
     for (auto it : m_contract_field_range_map)
       {
-	oa_contract_field_range_fact *ov
+	const oa_contract_field_range_fact *ov
 	  = other.m_contract_field_range_map.get (it.first);
 	if (!ov)
 	  {
@@ -10461,7 +10631,7 @@ public:
   bool contract_field_nz_get (tree identity, tree field,
 			       bool *conveyor_established_out)
   {
-    bool *v = m_contract_field_nz_map.get ({identity, field});
+    const bool *v = m_contract_field_nz_map.get ({identity, field});
     if (!v)
       return false;
     *conveyor_established_out = *v;
@@ -10495,12 +10665,14 @@ public:
      established it.  */
   void contract_field_nz_merge_with (oa_env &other)
   {
+    if (m_contract_field_nz_map.same_p (other.m_contract_field_nz_map))
+      return;
     auto_vec<std::pair<tree, tree>> to_remove;
     auto_vec<std::pair<tree, tree>> to_keep;
     auto_vec<bool> kept_facts;
     for (auto it : m_contract_field_nz_map)
       {
-	bool *ov = other.m_contract_field_nz_map.get (it.first);
+	const bool *ov = other.m_contract_field_nz_map.get (it.first);
 	if (!ov)
 	  {
 	    to_remove.safe_push (it.first);
@@ -10521,7 +10693,7 @@ public:
   bool contract_float_field_range_get (tree identity, tree field,
 					oa_contract_float_field_range_fact *out)
   {
-    oa_contract_float_field_range_fact *v
+    const oa_contract_float_field_range_fact *v
       = m_contract_float_field_range_map.get ({identity, field});
     if (!v)
       return false;
@@ -10550,12 +10722,14 @@ public:
   }
   void contract_float_field_range_merge_with (oa_env &other)
   {
+    if (m_contract_float_field_range_map.same_p (other.m_contract_float_field_range_map))
+      return;
     auto_vec<std::pair<tree, tree>> to_remove;
     auto_vec<std::pair<tree, tree>> to_keep;
     auto_vec<oa_contract_float_field_range_fact> kept_facts;
     for (auto it : m_contract_float_field_range_map)
       {
-	oa_contract_float_field_range_fact *ov
+	const oa_contract_float_field_range_fact *ov
 	  = other.m_contract_float_field_range_map.get (it.first);
 	if (!ov)
 	  {
@@ -10598,7 +10772,7 @@ public:
   bool contract_call_range_get (tree identity, tree callee,
 				  oa_contract_field_range_fact *out)
   {
-    oa_contract_field_range_fact *v
+    const oa_contract_field_range_fact *v
       = m_contract_call_range_map.get ({identity, callee});
     if (!v)
       return false;
@@ -10632,12 +10806,14 @@ public:
   }
   void contract_call_range_merge_with (oa_env &other)
   {
+    if (m_contract_call_range_map.same_p (other.m_contract_call_range_map))
+      return;
     auto_vec<std::pair<tree, tree>> to_remove;
     auto_vec<std::pair<tree, tree>> to_keep;
     auto_vec<oa_contract_field_range_fact> kept_facts;
     for (auto it : m_contract_call_range_map)
       {
-	oa_contract_field_range_fact *ov
+	const oa_contract_field_range_fact *ov
 	  = other.m_contract_call_range_map.get (it.first);
 	if (!ov)
 	  {
@@ -10677,7 +10853,7 @@ public:
      below.  */
   oa_derivation *deriv_get (tree decl)
   {
-    oa_derivation **v = m_deriv_map.get (decl);
+    oa_derivation *const *v = m_deriv_map.get (decl);
     return v ? *v : NULL;
   }
   void deriv_set (tree decl, oa_derivation *d) { m_deriv_map.put (decl, d); }
@@ -10702,7 +10878,7 @@ public:
   void set_outermost_bind (tree t) { m_outermost_bind = t; }
   tree shadow_get (tree decl)
   {
-    tree *v = m_shadow_decls.get (decl);
+    const tree *v = m_shadow_decls.get (decl);
     return v ? *v : NULL_TREE;
   }
   void shadow_set (tree decl, tree shadow_var)
@@ -10711,6 +10887,8 @@ public:
   }
   void shadow_decls_merge_with (oa_env &other)
   {
+    if (m_shadow_decls.same_p (other.m_shadow_decls))
+      return;
     for (auto it : other.m_shadow_decls)
       if (!m_shadow_decls.get (it.first))
 	m_shadow_decls.put (it.first, it.second);
@@ -10719,60 +10897,35 @@ public:
   oa_env copy ()
   {
     oa_env r;
-    for (auto it : m_map)
-      r.m_map.put (it.first, it.second);
-    for (auto it : m_nz_map)
-      r.m_nz_map.put (it.first, it.second);
-    for (auto it : m_excluded_map)
-      r.m_excluded_map.put (it.first, it.second);
-    for (auto it : m_symbolic_object_address_map)
-      r.m_symbolic_object_address_map.put (it.first, it.second);
-    for (auto it : m_symbolic_nz_map)
-      r.m_symbolic_nz_map.put (it.first, it.second);
-    for (auto it : m_range_map)
-      r.m_range_map.put (it.first, it.second);
-    for (auto it : m_float_range_map)
-      r.m_float_range_map.put (it.first, it.second);
-    for (auto it : m_deriv_map)
-      r.m_deriv_map.put (it.first, it.second);
-    for (auto it : m_predicate_fact_map)
-      r.m_predicate_fact_map.put (it.first, it.second);
-    for (auto it : m_relational_map)
-      r.m_relational_map.put (it.first, it.second);
-    for (auto it : m_linear_sum_map)
-      r.m_linear_sum_map.put (it.first, it.second);
-    for (auto it : m_linear_diff_map)
-      r.m_linear_diff_map.put (it.first, it.second);
-    for (auto it : m_type_bound_map)
-      r.m_type_bound_map.put (it.first, it.second);
-    for (auto it : m_call_relational_map)
-      r.m_call_relational_map.put (it.first, it.second);
-    for (auto it : m_call_call_relational_map)
-      r.m_call_call_relational_map.put (it.first, it.second);
-    for (auto it : m_contract_scalar_range_map)
-      r.m_contract_scalar_range_map.put (it.first, it.second);
-    for (auto it : m_contract_field_range_map)
-      r.m_contract_field_range_map.put (it.first, it.second);
-    for (auto it : m_contract_float_field_range_map)
-      r.m_contract_float_field_range_map.put (it.first, it.second);
-    for (auto it : m_contract_call_range_map)
-      r.m_contract_call_range_map.put (it.first, it.second);
-    for (auto it : m_contract_field_nz_map)
-      r.m_contract_field_nz_map.put (it.first, it.second);
+    r.m_map = m_map;
+    r.m_nz_map = m_nz_map;
+    r.m_excluded_map = m_excluded_map;
+    r.m_symbolic_object_address_map = m_symbolic_object_address_map;
+    r.m_symbolic_nz_map = m_symbolic_nz_map;
+    r.m_range_map = m_range_map;
+    r.m_float_range_map = m_float_range_map;
+    r.m_deriv_map = m_deriv_map;
+    r.m_predicate_fact_map = m_predicate_fact_map;
+    r.m_relational_map = m_relational_map;
+    r.m_linear_sum_map = m_linear_sum_map;
+    r.m_linear_diff_map = m_linear_diff_map;
+    r.m_type_bound_map = m_type_bound_map;
+    r.m_call_relational_map = m_call_relational_map;
+    r.m_call_call_relational_map = m_call_call_relational_map;
+    r.m_contract_scalar_range_map = m_contract_scalar_range_map;
+    r.m_contract_field_range_map = m_contract_field_range_map;
+    r.m_contract_float_field_range_map = m_contract_float_field_range_map;
+    r.m_contract_call_range_map = m_contract_call_range_map;
+    r.m_contract_field_nz_map = m_contract_field_nz_map;
     r.m_outermost_bind = m_outermost_bind;
-    for (auto it : m_shadow_decls)
-      r.m_shadow_decls.put (it.first, it.second);
-    for (auto it : m_alias_target)
-      r.m_alias_target.put (it.first, it.second);
-    for (auto it : m_field_alias_target)
-      r.m_field_alias_target.put (it.first, it.second);
-    for (auto it : m_array_alias_target)
-      r.m_array_alias_target.put (it.first, it.second);
+    r.m_shadow_decls = m_shadow_decls;
+    r.m_alias_target = m_alias_target;
+    r.m_field_alias_target = m_field_alias_target;
+    r.m_array_alias_target = m_array_alias_target;
     r.m_field_object_key = m_field_object_key;
     r.m_array_object_key = m_array_object_key;
     r.m_capture_proxy_key = m_capture_proxy_key;
-    for (auto it : m_borrowed_map)
-      r.m_borrowed_map.put (it.first, it.second);
+    r.m_borrowed_map = m_borrowed_map;
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -10780,88 +10933,36 @@ public:
      explicitly rather than via operator=).  */
   void assign (oa_env &other)
   {
-    m_map.empty ();
-    for (auto it : other.m_map)
-      m_map.put (it.first, it.second);
-    m_nz_map.empty ();
-    for (auto it : other.m_nz_map)
-      m_nz_map.put (it.first, it.second);
-    m_excluded_map.empty ();
-    for (auto it : other.m_excluded_map)
-      m_excluded_map.put (it.first, it.second);
-    m_symbolic_object_address_map.empty ();
-    for (auto it : other.m_symbolic_object_address_map)
-      m_symbolic_object_address_map.put (it.first, it.second);
-    m_symbolic_nz_map.empty ();
-    for (auto it : other.m_symbolic_nz_map)
-      m_symbolic_nz_map.put (it.first, it.second);
-    m_range_map.empty ();
-    for (auto it : other.m_range_map)
-      m_range_map.put (it.first, it.second);
-    m_float_range_map.empty ();
-    for (auto it : other.m_float_range_map)
-      m_float_range_map.put (it.first, it.second);
-    m_deriv_map.empty ();
-    for (auto it : other.m_deriv_map)
-      m_deriv_map.put (it.first, it.second);
-    m_predicate_fact_map.empty ();
-    for (auto it : other.m_predicate_fact_map)
-      m_predicate_fact_map.put (it.first, it.second);
-    m_relational_map.empty ();
-    for (auto it : other.m_relational_map)
-      m_relational_map.put (it.first, it.second);
-    m_linear_sum_map.empty ();
-    for (auto it : other.m_linear_sum_map)
-      m_linear_sum_map.put (it.first, it.second);
-    m_linear_diff_map.empty ();
-    for (auto it : other.m_linear_diff_map)
-      m_linear_diff_map.put (it.first, it.second);
-    m_type_bound_map.empty ();
-    for (auto it : other.m_type_bound_map)
-      m_type_bound_map.put (it.first, it.second);
-    m_call_relational_map.empty ();
-    for (auto it : other.m_call_relational_map)
-      m_call_relational_map.put (it.first, it.second);
-    m_unprovable_reason_hint_map.empty ();
-    for (auto it : other.m_unprovable_reason_hint_map)
-      m_unprovable_reason_hint_map.put (it.first, it.second);
-    m_call_call_relational_map.empty ();
-    for (auto it : other.m_call_call_relational_map)
-      m_call_call_relational_map.put (it.first, it.second);
-    m_contract_scalar_range_map.empty ();
-    for (auto it : other.m_contract_scalar_range_map)
-      m_contract_scalar_range_map.put (it.first, it.second);
-    m_contract_field_range_map.empty ();
-    for (auto it : other.m_contract_field_range_map)
-      m_contract_field_range_map.put (it.first, it.second);
-    m_contract_float_field_range_map.empty ();
-    for (auto it : other.m_contract_float_field_range_map)
-      m_contract_float_field_range_map.put (it.first, it.second);
-    m_contract_call_range_map.empty ();
-    for (auto it : other.m_contract_call_range_map)
-      m_contract_call_range_map.put (it.first, it.second);
-    m_contract_field_nz_map.empty ();
-    for (auto it : other.m_contract_field_nz_map)
-      m_contract_field_nz_map.put (it.first, it.second);
+    m_map = other.m_map;
+    m_nz_map = other.m_nz_map;
+    m_excluded_map = other.m_excluded_map;
+    m_symbolic_object_address_map = other.m_symbolic_object_address_map;
+    m_symbolic_nz_map = other.m_symbolic_nz_map;
+    m_range_map = other.m_range_map;
+    m_float_range_map = other.m_float_range_map;
+    m_deriv_map = other.m_deriv_map;
+    m_predicate_fact_map = other.m_predicate_fact_map;
+    m_relational_map = other.m_relational_map;
+    m_linear_sum_map = other.m_linear_sum_map;
+    m_linear_diff_map = other.m_linear_diff_map;
+    m_type_bound_map = other.m_type_bound_map;
+    m_call_relational_map = other.m_call_relational_map;
+    m_unprovable_reason_hint_map = other.m_unprovable_reason_hint_map;
+    m_call_call_relational_map = other.m_call_call_relational_map;
+    m_contract_scalar_range_map = other.m_contract_scalar_range_map;
+    m_contract_field_range_map = other.m_contract_field_range_map;
+    m_contract_float_field_range_map = other.m_contract_float_field_range_map;
+    m_contract_call_range_map = other.m_contract_call_range_map;
+    m_contract_field_nz_map = other.m_contract_field_nz_map;
     m_outermost_bind = other.m_outermost_bind;
-    m_shadow_decls.empty ();
-    for (auto it : other.m_shadow_decls)
-      m_shadow_decls.put (it.first, it.second);
-    m_alias_target.empty ();
-    for (auto it : other.m_alias_target)
-      m_alias_target.put (it.first, it.second);
-    m_field_alias_target.empty ();
-    for (auto it : other.m_field_alias_target)
-      m_field_alias_target.put (it.first, it.second);
-    m_array_alias_target.empty ();
-    for (auto it : other.m_array_alias_target)
-      m_array_alias_target.put (it.first, it.second);
+    m_shadow_decls = other.m_shadow_decls;
+    m_alias_target = other.m_alias_target;
+    m_field_alias_target = other.m_field_alias_target;
+    m_array_alias_target = other.m_array_alias_target;
     m_field_object_key = other.m_field_object_key;
     m_array_object_key = other.m_array_object_key;
     m_capture_proxy_key = other.m_capture_proxy_key;
-    m_borrowed_map.empty ();
-    for (auto it : other.m_borrowed_map)
-      m_borrowed_map.put (it.first, it.second);
+    m_borrowed_map = other.m_borrowed_map;
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -10876,62 +10977,69 @@ public:
        none at all, and (unlike every other fact here) can never itself
        cause an unsound proof if it happens to be stale in the other
        arm.  */
-    for (auto it : other.m_unprovable_reason_hint_map)
-      if (!m_unprovable_reason_hint_map.get (it.first))
-	m_unprovable_reason_hint_map.put (it.first, it.second);
+    if (!m_unprovable_reason_hint_map.same_p
+	  (other.m_unprovable_reason_hint_map))
+      for (auto it : other.m_unprovable_reason_hint_map)
+	if (!m_unprovable_reason_hint_map.get (it.first))
+	  m_unprovable_reason_hint_map.put (it.first, it.second);
 
     auto_vec<tree> to_invalidate;
-    for (auto it : m_map)
-      if (it.second)
-	{
-	  bool *ov = other.m_map.get (it.first);
-	  if (!ov || !*ov)
-	    to_invalidate.safe_push (it.first);
-	}
+    if (!m_map.same_p (other.m_map))
+      for (auto it : m_map)
+	if (it.second)
+	  {
+	    const bool *ov = other.m_map.get (it.first);
+	    if (!ov || !*ov)
+	      to_invalidate.safe_push (it.first);
+	  }
     for (unsigned i = 0; i < to_invalidate.length (); ++i)
       m_map.put (to_invalidate[i], false);
 
     auto_vec<tree> nz_to_invalidate;
-    for (auto it : m_nz_map)
-      if (it.second)
-	{
-	  bool *ov = other.m_nz_map.get (it.first);
-	  if (!ov || !*ov)
-	    nz_to_invalidate.safe_push (it.first);
-	}
+    if (!m_nz_map.same_p (other.m_nz_map))
+      for (auto it : m_nz_map)
+	if (it.second)
+	  {
+	    const bool *ov = other.m_nz_map.get (it.first);
+	    if (!ov || !*ov)
+	      nz_to_invalidate.safe_push (it.first);
+	  }
     for (unsigned i = 0; i < nz_to_invalidate.length (); ++i)
       m_nz_map.put (nz_to_invalidate[i], false);
 
     /* Excluded on both paths, or not known.  */
     auto_vec<tree> excluded_to_remove;
-    for (auto it : m_excluded_map)
-      {
-	widest_int *ov = other.m_excluded_map.get (it.first);
-	if (!ov || *ov != it.second)
-	  excluded_to_remove.safe_push (it.first);
-      }
+    if (!m_excluded_map.same_p (other.m_excluded_map))
+      for (auto it : m_excluded_map)
+	{
+	  const widest_int *ov = other.m_excluded_map.get (it.first);
+	  if (!ov || *ov != it.second)
+	    excluded_to_remove.safe_push (it.first);
+	}
     for (tree d : excluded_to_remove)
       m_excluded_map.remove (d);
 
     auto_vec<tree> symbolic_oa_to_invalidate;
-    for (auto it : m_symbolic_object_address_map)
-      if (it.second)
-	{
-	  bool *ov = other.m_symbolic_object_address_map.get (it.first);
-	  if (!ov || !*ov)
-	    symbolic_oa_to_invalidate.safe_push (it.first);
-	}
+    if (!m_symbolic_object_address_map.same_p (other.m_symbolic_object_address_map))
+      for (auto it : m_symbolic_object_address_map)
+	if (it.second)
+	  {
+	    const bool *ov = other.m_symbolic_object_address_map.get (it.first);
+	    if (!ov || !*ov)
+	      symbolic_oa_to_invalidate.safe_push (it.first);
+	  }
     for (unsigned i = 0; i < symbolic_oa_to_invalidate.length (); ++i)
       m_symbolic_object_address_map.put (symbolic_oa_to_invalidate[i], false);
 
     auto_vec<tree> symbolic_nz_to_invalidate;
-    for (auto it : m_symbolic_nz_map)
-      if (it.second)
-	{
-	  bool *ov = other.m_symbolic_nz_map.get (it.first);
-	  if (!ov || !*ov)
-	    symbolic_nz_to_invalidate.safe_push (it.first);
-	}
+    if (!m_symbolic_nz_map.same_p (other.m_symbolic_nz_map))
+      for (auto it : m_symbolic_nz_map)
+	if (it.second)
+	  {
+	    const bool *ov = other.m_symbolic_nz_map.get (it.first);
+	    if (!ov || !*ov)
+	      symbolic_nz_to_invalidate.safe_push (it.first);
+	  }
     for (unsigned i = 0; i < symbolic_nz_to_invalidate.length (); ++i)
       m_symbolic_nz_map.put (symbolic_nz_to_invalidate[i], false);
   }
@@ -10948,12 +11056,14 @@ public:
      pass, rather than mutating m_range_map while iterating it.  */
   void range_merge_with (oa_env &other)
   {
+    if (m_range_map.same_p (other.m_range_map))
+      return;
     auto_vec<tree> to_remove;
     auto_vec<tree> to_keep;
     auto_vec<oa_range_fact> kept_facts;
     for (auto it : m_range_map)
       {
-	oa_range_fact *ov = other.m_range_map.get (it.first);
+	const oa_range_fact *ov = other.m_range_map.get (it.first);
 	if (!ov || ov->base != it.second.base)
 	  {
 	    to_remove.safe_push (it.first);
@@ -10986,12 +11096,14 @@ public:
      own field exists at all).  */
   void float_range_merge_with (oa_env &other)
   {
+    if (m_float_range_map.same_p (other.m_float_range_map))
+      return;
     auto_vec<tree> to_remove;
     auto_vec<tree> to_keep;
     auto_vec<oa_float_range_fact> kept_facts;
     for (auto it : m_float_range_map)
       {
-	oa_float_range_fact *ov = other.m_float_range_map.get (it.first);
+	const oa_float_range_fact *ov = other.m_float_range_map.get (it.first);
 	if (!ov)
 	  {
 	    to_remove.safe_push (it.first);
@@ -11015,35 +11127,35 @@ public:
   }
 
 private:
-  hash_map<tree, bool> m_map;
-  hash_map<tree, bool> m_nz_map;
-  hash_map<tree, widest_int> m_excluded_map;
-  hash_map<tree, bool> m_symbolic_object_address_map;
-  hash_map<tree, bool> m_symbolic_nz_map;
-  hash_map<tree, oa_range_fact> m_range_map;
-  hash_map<tree, oa_float_range_fact> m_float_range_map;
-  hash_map<tree, oa_derivation *> m_deriv_map;
-  hash_map<tree, oa_predicate_fact> m_predicate_fact_map;
-  hash_map<tree, oa_relational_fact> m_relational_map;
+  oa_cow_map<tree, bool> m_map;
+  oa_cow_map<tree, bool> m_nz_map;
+  oa_cow_map<tree, widest_int> m_excluded_map;
+  oa_cow_map<tree, bool> m_symbolic_object_address_map;
+  oa_cow_map<tree, bool> m_symbolic_nz_map;
+  oa_cow_map<tree, oa_range_fact> m_range_map;
+  oa_cow_map<tree, oa_float_range_fact> m_float_range_map;
+  oa_cow_map<tree, oa_derivation *> m_deriv_map;
+  oa_cow_map<tree, oa_predicate_fact> m_predicate_fact_map;
+  oa_cow_map<tree, oa_relational_fact> m_relational_map;
   /* Bounds on 'A + B' (key (A, B), A's DECL_UID the smaller) and on
      'A - B' (key (A, B)), from a comparison such as the overflow guard
      'INT_MAX - a >= b'.  See oa_learn_linear_comparison.  */
-  hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_linear_sum_map;
-  hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_linear_diff_map;
-  hash_map<tree, oa_type_bound_fact> m_type_bound_map;
-  hash_map<tree, oa_call_relational_fact> m_call_relational_map;
-  hash_map<tree, oa_unprovable_reason> m_unprovable_reason_hint_map;
-  hash_map<oa_field_key_hash, oa_call_call_relational_fact> m_call_call_relational_map;
-  hash_map<tree, oa_range_fact> m_contract_scalar_range_map;
-  hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_contract_field_range_map;
-  hash_map<oa_field_key_hash, oa_contract_float_field_range_fact> m_contract_float_field_range_map;
-  hash_map<oa_field_key_hash, oa_contract_field_range_fact> m_contract_call_range_map;
-  hash_map<oa_field_key_hash, bool> m_contract_field_nz_map;
+  oa_cow_map<oa_field_key_hash, oa_contract_field_range_fact> m_linear_sum_map;
+  oa_cow_map<oa_field_key_hash, oa_contract_field_range_fact> m_linear_diff_map;
+  oa_cow_map<tree, oa_type_bound_fact> m_type_bound_map;
+  oa_cow_map<tree, oa_call_relational_fact> m_call_relational_map;
+  oa_cow_map<tree, oa_unprovable_reason> m_unprovable_reason_hint_map;
+  oa_cow_map<oa_field_key_hash, oa_call_call_relational_fact> m_call_call_relational_map;
+  oa_cow_map<tree, oa_range_fact> m_contract_scalar_range_map;
+  oa_cow_map<oa_field_key_hash, oa_contract_field_range_fact> m_contract_field_range_map;
+  oa_cow_map<oa_field_key_hash, oa_contract_float_field_range_fact> m_contract_float_field_range_map;
+  oa_cow_map<oa_field_key_hash, oa_contract_field_range_fact> m_contract_call_range_map;
+  oa_cow_map<oa_field_key_hash, bool> m_contract_field_nz_map;
   tree m_outermost_bind = NULL_TREE;
-  hash_map<tree, tree> m_shadow_decls;
-  hash_map<tree, tree> m_alias_target;
-  hash_map<oa_field_key_hash, tree> m_field_alias_target;
-  hash_map<pair_hash<nofree_ptr_hash<tree_node>,
+  oa_cow_map<tree, tree> m_shadow_decls;
+  oa_cow_map<tree, tree> m_alias_target;
+  oa_cow_map<oa_field_key_hash, tree> m_field_alias_target;
+  oa_cow_map<pair_hash<nofree_ptr_hash<tree_node>,
 		      int_hash<HOST_WIDE_INT, -1, -2>>, tree> m_array_alias_target;
   /* Never owned/allocated here -- see field_object_identity_key's own
      comment for why this must be a shared pointer, not an embedded map.  */
@@ -11062,11 +11174,11 @@ private:
      borrowed", preserving the previous default-owned behavior for every
      other case (fresh locals, direct aliases, which resolve through
      m_alias_target instead and never need an entry here at all).  */
-  hash_map<tree, bool> m_borrowed_map;
+  oa_cow_map<tree, bool> m_borrowed_map;
 public:
   bool borrowed_p (tree decl)
   {
-    bool *v = m_borrowed_map.get (decl);
+    const bool *v = m_borrowed_map.get (decl);
     return v && *v;
   }
   void borrowed_set (tree decl) { m_borrowed_map.put (decl, true); }
@@ -11083,6 +11195,8 @@ public:
      union only ever combines two branches' *current* states at a join.  */
   void borrowed_merge_with (oa_env &other)
   {
+    if (m_borrowed_map.same_p (other.m_borrowed_map))
+      return;
     for (auto it : other.m_borrowed_map)
       if (it.second)
 	m_borrowed_map.put (it.first, true);
@@ -11250,7 +11364,7 @@ oa_env::deriv_merge_with (oa_env &other, tree branch_cond)
   auto_vec<oa_derivation *> kept_derivs;
   for (auto it : m_deriv_map)
     {
-      oa_derivation **ov = other.m_deriv_map.get (it.first);
+      oa_derivation *const *ov = other.m_deriv_map.get (it.first);
       oa_range_fact merged_fact;
       if (!ov || !range_get (it.first, &merged_fact))
 	{
@@ -11549,7 +11663,7 @@ oa_field_slot_identity (tree expr, oa_env &env, tree *decl_out)
   if (!oa_object_identity_decl (obj_expr, &base_identity))
     return false;
   base_identity = env.alias_find (base_identity);
-  tree *target = env.field_alias_find (base_identity, field);
+  tree const *target = env.field_alias_find (base_identity, field);
   if (!target)
     return false;
   *decl_out = *target;
@@ -11659,7 +11773,7 @@ oa_array_slot_identity (tree expr, oa_env &env, tree *decl_out)
   if (!oa_object_identity_decl (arr_base, &array_identity))
     return false;
   array_identity = env.alias_find (array_identity);
-  tree *target = env.array_alias_find (array_identity, idx);
+  tree const *target = env.array_alias_find (array_identity, idx);
   if (!target)
     return false;
   *decl_out = *target;
