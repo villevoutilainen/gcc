@@ -1,7 +1,9 @@
 #!/bin/bash
 # Conveyor census: compile every lump in this directory under each library
 # configuration and analysis engine, and count the errors located in the
-# library's own headers (and any internal compiler errors).
+# library's own headers, any internal compiler errors, and the errors in
+# the lumps themselves (the checks the library's contracts make of user
+# code).
 #
 #   run.sh [-j N] [-o outdir] [-w] [lump.cc...]
 #
@@ -66,8 +68,12 @@ for l in sys.stdin:
       | sort -u > "$out/$config-$engine.sites"
     sites=$(wc -l < "$out/$config-$engine.sites")
     ices=$(cat "$dir"/*.err | grep -c 'internal compiler error')
-    printf '%-9s %-7s library errors %6d  distinct sites %5d  ICEs %d\n' \
-      "$config" "$engine" "$errs" "$sites" "$ices" | tee -a "$results"
+    # Errors in the lumps themselves: the user-facing checks the library's
+    # contracts make of code like theirs, not library defects -- counted so
+    # that a change making the library harder to use shows too.
+    user=$(cat "$dir"/*.err | grep -c '/conveyor-census/[^/:]*\.cc:[0-9]*:[0-9]*: error:')
+    printf '%-9s %-7s library errors %6d  distinct sites %5d  ICEs %d  user-code errors %d\n' \
+      "$config" "$engine" "$errs" "$sites" "$ices" "$user" | tee -a "$results"
   done
 done
 
