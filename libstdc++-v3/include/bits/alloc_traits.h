@@ -1068,6 +1068,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       static bool
       _S_do_it(_Tp& __c) noexcept
       {
+_GLIBCXX_CONVEYOR_TRUST(__c);
 #if __cpp_exceptions
 	try
 	  {

@@ -52,6 +52,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __erase_if(_Container& __cont, _UnsafeContainer& __ucont,
 		 _Predicate __pred)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__cont);
+	_GLIBCXX_CONVEYOR_TRUST(__ucont);
 	const auto __osz = __ucont.size();
 	const auto __end = __ucont.end();
 	auto __removed = std::__remove_if(__ucont.begin(), __end,
@@ -72,6 +74,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __erase_nodes_if(_Container& __cont, _UnsafeContainer& __ucont,
 		       _Predicate __pred)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__ucont);
 	typename _Container::size_type __num = 0;
 	for (auto __iter = __ucont.begin(), __last = __ucont.end();
 	     __iter != __last;)

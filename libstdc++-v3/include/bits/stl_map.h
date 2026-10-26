@@ -244,6 +244,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       map(initializer_list<value_type> __l,
 	  const _Compare& __comp = _Compare(),
 	  const allocator_type& __a = allocator_type())
+	  _GLIBCXX_CONVEYOR_REQUIRES(__a)
       : _M_t(__comp, _Pair_alloc_type(__a))
       { _M_t._M_insert_range_unique(__l.begin(), __l.end()); }
 
@@ -407,7 +408,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  according to the keys.
        */
       iterator
-      end() _GLIBCXX_NOEXCEPT
+      end() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _M_t.end(); }
 
       /**
@@ -416,7 +417,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  the keys.
        */
       const_iterator
-      end() const _GLIBCXX_NOEXCEPT
+      end() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _M_t.end(); }
 
       /**
@@ -530,6 +531,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       mapped_type&
       operator[](const key_type& __k)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	// concept requirements
 	__glibcxx_function_requires(_DefaultConstructibleConcept<mapped_type>)
 
@@ -648,6 +650,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	std::pair<iterator, bool>
 	emplace(_Args&&... __args)
 	{
+_GLIBCXX_CONVEYOR_TRUST_THIS;
 #if __cplusplus >= 201703L
 	  if constexpr (sizeof...(_Args) == 2)
 	    if constexpr (is_same_v<allocator_type, allocator<value_type>>)
@@ -809,6 +812,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	pair<iterator, bool>
 	try_emplace(key_type&& __k, _Args&&... __args)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  iterator __i = lower_bound(__k);
 	  if (__i == end() || key_comp()(__k, (*__i).first))
 	    {
@@ -1463,7 +1467,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  either be 0 (not present) or 1 (present).
        */
       size_type
-      count(const key_type& __x) const
+      count(const key_type& __x) const _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _M_t.find(__x) == _M_t.end() ? 0 : 1; }
 
 #ifdef __glibcxx_generic_associative_lookup // C++ >= 14
@@ -1482,7 +1486,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  @return  True if there is an element with the specified key.
        */
       bool
-      contains(const key_type& __x) const
+      contains(const key_type& __x) const _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _M_t.find(__x) != _M_t.end(); }
 
       template<typename _Kt>
@@ -1731,7 +1735,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     inline bool
     operator==(const map<_Key, _Tp, _Compare, _Alloc>& __x,
 	       const map<_Key, _Tp, _Compare, _Alloc>& __y)
-    { return __x._M_t == __y._M_t; }
+    { _GLIBCXX_CONVEYOR_TRUST(__x); return __x._M_t == __y._M_t; }
 
 #if __cpp_lib_three_way_comparison
   /**

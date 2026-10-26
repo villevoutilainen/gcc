@@ -2176,7 +2176,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       sub_match<_Bi_iter>&
       _M_prefix()
-      { return _Unchecked::operator[](_Unchecked::size() - 2); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return _Unchecked::operator[](_Unchecked::size() - 2);
+      }
 
       const_reference
       _M_suffix() const
@@ -2184,7 +2187,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       sub_match<_Bi_iter>&
       _M_suffix()
-      { return _Unchecked::operator[](_Unchecked::size() - 1); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return _Unchecked::operator[](_Unchecked::size() - 1);
+      }
 
       _Bi_iter _M_begin {};
       /// @endcond

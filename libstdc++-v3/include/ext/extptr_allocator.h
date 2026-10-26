@@ -82,7 +82,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       template<typename _Up>
         _ExtPtr_allocator(const _ExtPtr_allocator<_Up>& __rarg)
-	_GLIBCXX_USE_NOEXCEPT
+	_GLIBCXX_USE_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES(__rarg)
         : _M_real_alloc(__rarg._M_getUnderlyingImp()) { }
 
       ~_ExtPtr_allocator() _GLIBCXX_USE_NOEXCEPT
@@ -138,7 +138,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       inline bool
       operator==(const _ExtPtr_allocator& __rarg) const
-      { return _M_real_alloc == __rarg._M_real_alloc; }
+      {
+	_GLIBCXX_CONVEYOR_TRUST(__rarg);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return _M_real_alloc == __rarg._M_real_alloc;
+      }
 
 #if __cpp_impl_three_way_comparison < 201907L
       template<typename _Up>
@@ -157,7 +161,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       // A method specific to this implementation.
       const std::allocator<_Tp>&
-      _M_getUnderlyingImp() const
+      _M_getUnderlyingImp() const _GLIBCXX_CONVEYOR
       { return _M_real_alloc; }
 
     private:

@@ -529,6 +529,7 @@ namespace __variant
       constexpr void
       _M_reset()
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (!_M_valid()) [[__unlikely__]]
 	  return;
 
@@ -1452,6 +1453,8 @@ namespace __detail::__variant
       namespace __variant = __detail::__variant;
       return __variant::__compare(__ret, __v, __w,
 				  [](auto&& __l, auto&& __r) {
+				    _GLIBCXX_CONVEYOR_TRUST(__l);
+				    _GLIBCXX_CONVEYOR_TRUST(__r);
 				    return __l <=> __r;
 				  });
     }
@@ -1797,6 +1800,8 @@ namespace __detail::__variant
       noexcept((__is_nothrow_swappable<_Types>::value && ...)
 	       && is_nothrow_move_constructible_v<variant>)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__rhs);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	static_assert((is_move_constructible_v<_Types> && ...));
 
 	// Handle this here to simplify the visitation.

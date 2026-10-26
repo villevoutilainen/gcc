@@ -1151,6 +1151,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       swap(optional& __other)
       noexcept(is_nothrow_move_constructible_v<_Tp>
 	       && is_nothrow_swappable_v<_Tp>)
+      _GLIBCXX_CONVEYOR_REQUIRES(__other) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	using std::swap;
 
@@ -1204,21 +1205,23 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       }
 
       constexpr _Tp*
-      operator->() noexcept
+      operator->() noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(this->_M_is_engaged());
 	return std::__addressof(this->_M_get());
       }
 
       constexpr const _Tp&
-      operator*() const& noexcept
+      operator*() const& noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_assert(this->_M_is_engaged());
 	return this->_M_get();
       }
 
       constexpr _Tp&
-      operator*()& noexcept
+      operator*()& noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_assert(this->_M_is_engaged());
 	return this->_M_get();
@@ -1226,6 +1229,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr _Tp&&
       operator*()&& noexcept
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_assert(this->_M_is_engaged());
 	return std::move(this->_M_get());
@@ -1233,6 +1237,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr const _Tp&&
       operator*() const&& noexcept
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_assert(this->_M_is_engaged());
 	return std::move(this->_M_get());
@@ -1253,7 +1258,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       }
 
       constexpr _Tp&
-      value()&
+      value()& _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if (this->_M_is_engaged())
 	  return this->_M_get();
@@ -1280,7 +1285,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       // 4406. value_or return statement is inconsistent with Mandates
       template<typename _Up = remove_cv_t<_Tp>>
 	constexpr remove_cv_t<_Tp>
-	value_or(_Up&& __u) const&
+	value_or(_Up&& __u) const& _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  using _Xp = remove_cv_t<_Tp>;
 	  static_assert(is_convertible_v<const _Tp&, _Xp>);
@@ -1309,7 +1314,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       template<typename _Fn>
 	constexpr auto
-	and_then(_Fn&& __f) &
+	and_then(_Fn&& __f) & _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  using _Up = remove_cvref_t<invoke_result_t<_Fn, _Tp&>>;
 	  static_assert(__is_optional_v<_Up>,
@@ -1365,7 +1370,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       template<typename _Fn>
 	constexpr auto
-	transform(_Fn&& __f) &
+	transform(_Fn&& __f) & _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  using _Up = remove_cv_t<invoke_result_t<_Fn, _Tp&>>;
 	  if (has_value())
@@ -1606,6 +1611,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator==(const optional<_Tp>& __lhs, const optional<_Up>& __rhs)
     -> __optional_eq_t<_Tp, _Up>
+    _GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
       if (__lhs.has_value() != __rhs.has_value())
 	return false;
@@ -1680,6 +1686,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr compare_three_way_result_t<_Tp, _Up>
     operator<=>(const optional<_Tp>& __x, const optional<_Up>& __y)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__x);
+      _GLIBCXX_CONVEYOR_TRUST(__y);
       return __x && __y ? *__x <=> *__y : bool(__x) <=> bool(__y);
     }
 #endif
@@ -1768,6 +1776,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator== [[nodiscard]] (const optional<_Tp>& __lhs, const _Up& __rhs)
     -> __optional_eq_t<_Tp, _Up>
+    _GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
       if (__lhs.has_value())
 	return *__lhs == __rhs;

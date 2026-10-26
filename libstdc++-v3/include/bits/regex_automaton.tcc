@@ -152,6 +152,7 @@ namespace __detail
     _StateIdT
     _NFA<_TraitsT>::_M_insert_backref(size_t __index)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (this->_M_flags & regex_constants::__polynomial)
 	__throw_regex_error(regex_constants::error_complexity,
 			    "Unexpected back-reference in polynomial mode.");
@@ -181,6 +182,7 @@ namespace __detail
     void
     _NFA<_TraitsT>::_M_eliminate_dummy()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       for (auto& __it : *this)
 	{
 	  while (__it._M_next >= 0 && (*this)[__it._M_next]._M_opcode()

@@ -288,6 +288,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       __string_type
       str() const _GLIBCXX_LVAL_REF_QUAL
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__string_type __ret(_M_string.get_allocator());
 	if (char_type* __hi = _M_high_mark())
 	  __ret.assign(this->pbase(), __hi);
@@ -399,6 +400,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       void
       _M_stringbuf_init(ios_base::openmode __mode)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_M_mode = __mode;
 	__size_type __len = 0;
 	if (_M_mode & (ios_base::ate | ios_base::app))

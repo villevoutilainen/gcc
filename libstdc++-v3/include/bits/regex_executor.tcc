@@ -162,6 +162,7 @@ namespace __detail
     bool _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_main_dfs(_Match_mode __match_mode)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_has_sol = false;
       *_M_get_sol_pos() = _BiIter();
       _M_cur_results = _M_results;
@@ -290,6 +291,7 @@ namespace __detail
     bool _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_main_bfs(_Match_mode __match_mode)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_match_queue.emplace_back(_M_start, _M_results);
       bool __ret = false;
       while (1)
@@ -322,6 +324,7 @@ namespace __detail
     bool _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_lookahead(_StateIdT __next)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       // Backreferences may refer to captured content.
       // We may want to make this faster by not copying,
       // but let's not be clever prematurely.
@@ -790,6 +793,7 @@ namespace __detail
     void _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_dfs(_Match_mode __match_mode, _StateIdT __start)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _StateIdT __next = __start;
 
       while (true)

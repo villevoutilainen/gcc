@@ -570,7 +570,11 @@ namespace __detail
       value_type operator[](size_t __i) const
       { return _Oper()(_M_expr1[__i], _M_expr2); }
 
-      size_t size() const { return _M_expr1.size(); }
+      size_t size() const
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return _M_expr1.size();
+      }
 
     private:
       typename _ValArrayRef<_Clos>::__type _M_expr1;

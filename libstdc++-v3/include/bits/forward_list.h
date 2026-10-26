@@ -644,11 +644,11 @@ namespace __fwdlist
       using const_iterator = typename _Node_traits::_Const_iterator;
 
       _Node_alloc_type&
-      _M_get_Node_allocator() noexcept
+      _M_get_Node_allocator() noexcept _GLIBCXX_CONVEYOR
       { return this->_M_impl; }
 
       const _Node_alloc_type&
-      _M_get_Node_allocator() const noexcept
+      _M_get_Node_allocator() const noexcept _GLIBCXX_CONVEYOR
       { return this->_M_impl; }
 
       _Fwd_list_base() = default;
@@ -684,6 +684,7 @@ namespace __fwdlist
       void
       _M_put_node(_Node_ptr __p)
       {
+_GLIBCXX_CONVEYOR_TRUST_THIS;
 #if _GLIBCXX_USE_ALLOC_PTR_FOR_FWD_LIST
 	_Node_alloc_traits::deallocate(_M_get_Node_allocator(), __p, 1);
 #else
@@ -697,6 +698,7 @@ namespace __fwdlist
 	_Node_ptr
 	_M_create_node(_Args&&... __args)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  auto& __alloc = _M_get_Node_allocator();
 	  auto __guard = std::__allocate_guarded_obj(__alloc);
 	  _Node_alloc_traits::construct(__alloc, __guard->_M_valptr(),
@@ -714,6 +716,7 @@ namespace __fwdlist
       void
       _M_destroy_node(_Node_ptr __p)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	auto& __alloc = _M_get_Node_allocator();
 	// Destroy the element
 	_Node_alloc_traits::destroy(__alloc, __p->_M_valptr());

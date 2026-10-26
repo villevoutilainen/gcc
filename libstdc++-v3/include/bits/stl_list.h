@@ -484,7 +484,11 @@ namespace __list
 
       _Scratch_list() { this->_M_next = this->_M_prev = this->_M_base(); }
 
-      bool empty() const { return this->_M_next == this->_M_base(); }
+      bool empty() const
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return this->_M_next == this->_M_base();
+      }
 
       void swap(_Base& __l) { _Base::swap(*this, __l); }
 
@@ -511,6 +515,8 @@ namespace __list
 	void
 	merge(_Base& __x, _Cmp __comp)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__x);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  _Base_ptr __first1 = this->_M_next;
 	  _Base_ptr const __last1 = this->_M_base();
 	  _Base_ptr __first2 = __x._M_next;
@@ -538,6 +544,7 @@ namespace __list
       // Splice all nodes from *this after __i.
       void _M_put_all(_Base_ptr __i)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (!empty())
 	  __i->_M_transfer(this->_M_next, this->_M_base());
       }
@@ -859,11 +866,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       typedef _Alloc allocator_type;
 
       _Node_alloc_type&
-      _M_get_Node_allocator() _GLIBCXX_NOEXCEPT
+      _M_get_Node_allocator() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return _M_impl; }
 
       const _Node_alloc_type&
-      _M_get_Node_allocator() const _GLIBCXX_NOEXCEPT
+      _M_get_Node_allocator() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR
       { return _M_impl; }
 
 #if __cplusplus >= 201103L
@@ -1101,6 +1108,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_Node_ptr
 	_M_create_node(_Args&&... __args)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  auto& __alloc = _M_get_Node_allocator();
 	  auto __guard = std::__allocate_guarded_obj(__alloc);
 	  _Node_alloc_traits::construct(__alloc, __guard->_M_valptr(),
@@ -1128,6 +1136,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       explicit
       list(const allocator_type& __a) _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR_REQUIRES(__a)
       : _Base(_Node_alloc_type(__a)) { }
 
 #if __cplusplus >= 201103L
@@ -1154,6 +1163,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       list(size_type __n, const value_type& __value,
 	   const allocator_type& __a = allocator_type())
+	   _GLIBCXX_CONVEYOR_REQUIRES(__a)
       : _Base(_Node_alloc_type(__a))
       { _M_fill_initialize(__n, __value); }
 #else
@@ -1179,7 +1189,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        *  The newly-created %list uses a copy of the allocation object used
        *  by @a __x (unless the allocator traits dictate a different object).
        */
-      list(const list& __x)
+      list(const list& __x) _GLIBCXX_CONVEYOR_REQUIRES(__x)
       : _Base(_Node_alloc_traits::
 	      _S_select_on_copy(__x._M_get_Node_allocator()))
       { _M_initialize_dispatch(__x.begin(), __x.end(), __false_type()); }
@@ -1249,12 +1259,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	       typename = std::_RequireInputIter<_InputIterator>>
 	list(_InputIterator __first, _InputIterator __last,
 	     const allocator_type& __a = allocator_type())
+	_GLIBCXX_CONVEYOR_REQUIRES(__a)
 	: _Base(_Node_alloc_type(__a))
 	{ _M_initialize_dispatch(__first, __last, __false_type()); }
 #else
       template<typename _InputIterator>
 	list(_InputIterator __first, _InputIterator __last,
 	     const allocator_type& __a = allocator_type())
+	_GLIBCXX_CONVEYOR_REQUIRES(__a)
 	: _Base(_Node_alloc_type(__a))
 	{
 	  // Check whether it's an integral type.  If so, it's not an iterator.
@@ -1318,6 +1330,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       operator=(list&& __x)
       noexcept(_Node_alloc_traits::_S_nothrow_move())
       {
+	_GLIBCXX_CONVEYOR_TRUST(__x);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	constexpr bool __move_storage =
 	  _Node_alloc_traits::_S_propagate_on_move_assign()
 	  || _Node_alloc_traits::_S_always_equal();
@@ -1444,7 +1458,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       /// Get a copy of the memory allocation object.
       allocator_type
-      get_allocator() const _GLIBCXX_NOEXCEPT
+      get_allocator() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return allocator_type(_Base::_M_get_Node_allocator()); }
 
       // iterators
@@ -1494,7 +1508,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_NODISCARD
       const_iterator
-      end() const _GLIBCXX_NOEXCEPT
+      end() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return const_iterator(this->_M_impl._M_node._M_base()); }
 
       /**
@@ -1605,7 +1619,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       /**  Returns the size() of the largest possible %list.  */
       _GLIBCXX_NODISCARD
       size_type
-      max_size() const _GLIBCXX_NOEXCEPT
+      max_size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _Node_alloc_traits::max_size(_M_get_Node_allocator()); }
 
 #if __cplusplus >= 201103L
@@ -2071,6 +2085,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       void
       swap(list& __x) _GLIBCXX_NOEXCEPT
       {
+	_GLIBCXX_CONVEYOR_TRUST(__x);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_Node_traits::_Node_base::swap(this->_M_impl._M_node,
 				       __x._M_impl._M_node);
 
@@ -2113,6 +2129,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #else
       splice(iterator __position, list& __x)
 #endif
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       {
 	if (!__x.empty())
 	  {
@@ -2500,6 +2517,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       void
       _M_check_equal_allocators(const list& __x) _GLIBCXX_NOEXCEPT
       {
+	_GLIBCXX_CONVEYOR_TRUST(__x);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (_M_get_Node_allocator() != __x._M_get_Node_allocator())
 	  __builtin_abort();
       }
@@ -2629,6 +2648,8 @@ _GLIBCXX_END_NAMESPACE_CXX11
     inline bool
     operator==(const list<_Tp, _Alloc>& __x, const list<_Tp, _Alloc>& __y)
     {
+_GLIBCXX_CONVEYOR_TRUST(__x);
+_GLIBCXX_CONVEYOR_TRUST(__y);
 #if _GLIBCXX_USE_CXX11_ABI
       if (__x.size() != __y.size())
 	return false;
@@ -2665,6 +2686,8 @@ _GLIBCXX_END_NAMESPACE_CXX11
     inline __detail::__synth3way_t<_Tp>
     operator<=>(const list<_Tp, _Alloc>& __x, const list<_Tp, _Alloc>& __y)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__x);
+      _GLIBCXX_CONVEYOR_TRUST(__y);
       return std::lexicographical_compare_three_way(__x.begin(), __x.end(),
 						    __y.begin(), __y.end(),
 						    __detail::__synth3way);

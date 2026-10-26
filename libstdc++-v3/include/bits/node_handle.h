@@ -74,6 +74,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       allocator_type
       get_allocator() const noexcept _GLIBCXX_CONVEYOR_AUTO
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__glibcxx_assert(!this->empty());
 	return allocator_type(_M_alloc._M_alloc);
       }
@@ -103,6 +104,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _Node_handle_common&
       operator=(_Node_handle_common&& __nh) noexcept
       {
+	_GLIBCXX_CONVEYOR_TRUST(__nh);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (empty())
 	  {
 	    if (!__nh.empty())
@@ -155,6 +158,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       void
       _M_move(_Node_handle_common&& __nh) noexcept
       {
+	_GLIBCXX_CONVEYOR_TRUST(__nh);
 	::new (std::__addressof(_M_alloc)) _NodeAlloc(__nh._M_alloc.release());
 	_M_ptr = __nh._M_ptr;
 	__nh._M_ptr = nullptr;
@@ -166,6 +170,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       void
       _M_reset() noexcept
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_NodeAlloc __alloc = _M_alloc.release();
 	_AllocTraits::destroy(__alloc, _M_ptr->_M_valptr());
 	_AllocTraits::deallocate(__alloc, _M_ptr, 1);
@@ -178,6 +183,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       void
       release() noexcept
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_M_alloc.release();
 	_M_ptr = nullptr;
       }
@@ -197,6 +203,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_Optional_alloc& operator=(_Optional_alloc&&) = delete;
 
 	_Optional_alloc(const _NodeAlloc& __alloc) noexcept
+	_GLIBCXX_CONVEYOR_TRUST_PRE(__alloc)
 	: _M_alloc(__alloc)
 	{ }
 
@@ -223,10 +230,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	}
 
 	// Precondition: _M_alloc is the active member of the union.
-	_NodeAlloc& operator*() noexcept { return _M_alloc; }
+	_NodeAlloc& operator*() noexcept _GLIBCXX_CONVEYOR { return _M_alloc; }
 
 	// Precondition: _M_alloc is the active member of the union.
-	_NodeAlloc release() noexcept
+	_NodeAlloc release() noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  _NodeAlloc __tmp = std::move(_M_alloc);
 	  _M_alloc.~_NodeAlloc();
@@ -269,6 +276,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       key_type&
       key() const noexcept
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__glibcxx_assert(!this->empty());
 	return *_M_pkey;
       }
@@ -359,6 +367,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       value_type&
       value() const noexcept
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__glibcxx_assert(!this->empty());
 	return *this->_M_ptr->_M_valptr();
       }

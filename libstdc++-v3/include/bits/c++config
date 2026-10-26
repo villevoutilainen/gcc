@@ -829,6 +829,74 @@ namespace std
 # endif
 #endif
 
+// A trust point at the start of a library function's body, for a function
+// that isn't conveyor itself but calls conveyor functions on its own object
+// (_GLIBCXX_CONVEYOR_TRUST_THIS) or through a reference (_GLIBCXX_CONVEYOR_
+// TRUST): those calls' implicit is_object_address preconditions need the
+// object proven, and such a function has nothing to prove it from.  A
+// never_proven assertion supplies the fact (and checks it at run time)
+// without asking anything of the function's callers.  Used as a statement:
+//   _GLIBCXX_CONVEYOR_TRUST_THIS;
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+# define _GLIBCXX_CONVEYOR_TRUST_THIS \
+    contract_assert<std::contracts::never_proven_conveyor_v> \
+      (std::is_object_address (this))
+# define _GLIBCXX_CONVEYOR_TRUST(_Obj) \
+    contract_assert<std::contracts::never_proven_conveyor_v> \
+      (std::is_object_address (__builtin_addressof (_Obj)))
+#else
+# define _GLIBCXX_CONVEYOR_TRUST_THIS
+# define _GLIBCXX_CONVEYOR_TRUST(_Obj)
+#endif
+
+// The same trust point for a constructor whose mem-initializers already use
+// the object, where no statement can come first: a never_proven
+// precondition, which likewise asks nothing of the constructor's callers.
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+# define _GLIBCXX_CONVEYOR_TRUST_PRE(_Obj) \
+    pre<std::contracts::never_proven_conveyor_v> \
+      (std::is_object_address (__builtin_addressof (_Obj)))
+#else
+# define _GLIBCXX_CONVEYOR_TRUST_PRE(_Obj)
+#endif
+
+// A proven precondition on a library API function that calls conveyor
+// functions on its own object (_GLIBCXX_CONVEYOR_REQUIRES_THIS) or through a
+// reference parameter (_GLIBCXX_CONVEYOR_REQUIRES): the caller proves the
+// object valid, which checks the user's code, as a conveyor member function's
+// implicit precondition does.  Goes on the function's first declaration,
+// after any noexcept-specifier.  The library's own non-conveyor callers
+// establish the fact with _GLIBCXX_CONVEYOR_TRUST at the call site.
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+# define _GLIBCXX_CONVEYOR_REQUIRES_THIS \
+    pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+# define _GLIBCXX_CONVEYOR_REQUIRES(_Obj) \
+    pre<std::contracts::conveyor_assert_v> \
+      (std::is_object_address (__builtin_addressof (_Obj)))
+#else
+# define _GLIBCXX_CONVEYOR_REQUIRES_THIS
+# define _GLIBCXX_CONVEYOR_REQUIRES(_Obj)
+#endif
+
+// A trust point on what a library function returns, for one that can't be
+// conveyor itself (e.g. an iterator's operator++, which does pointer
+// arithmetic): a never_proven postcondition that the reference
+// (_GLIBCXX_CONVEYOR_RETURNS_OBJECT) or pointer
+// (_GLIBCXX_CONVEYOR_RETURNS_OBJECT_PTR) it returns designates an object, as
+// a conveyor function's returned reference is known to.  Goes on the
+// function's first declaration, after any noexcept-specifier.
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+# define _GLIBCXX_CONVEYOR_RETURNS_OBJECT \
+    post<std::contracts::never_proven_conveyor_v> \
+      (__r: std::is_object_address (__builtin_addressof (__r)))
+# define _GLIBCXX_CONVEYOR_RETURNS_OBJECT_PTR \
+    post<std::contracts::never_proven_conveyor_v> \
+      (__r: std::is_object_address (__r))
+#else
+# define _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+# define _GLIBCXX_CONVEYOR_RETURNS_OBJECT_PTR
+#endif
+
 // Declaration-level macros for _GLIBCXX_PRECONDITION_ASSERTIONS: turn a
 // library function's own already-conveyor-routed in-body assert (see
 // debug/assertions.h's own __glibcxx_requires_subscript and friends, which

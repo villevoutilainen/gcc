@@ -370,12 +370,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX26_CONSTEXPR
       const_iterator
       begin() const noexcept
-      { return _M_cont.begin(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_cont.begin(); }
 
       _GLIBCXX26_CONSTEXPR
       const_iterator
       end() const noexcept
-      { return _M_cont.end(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_cont.end(); }
 
       _GLIBCXX26_CONSTEXPR
       const_reverse_iterator
@@ -430,6 +430,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	pair<iterator, bool>
 	_M_try_emplace(optional<const_iterator> __hint, _Arg&& __arg, _Args&&... __args)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  // TODO: Simplify and audit the hint handling.
 	  auto&& __k = [&] -> decltype(auto) {
 	    if constexpr (sizeof...(_Args) == 0

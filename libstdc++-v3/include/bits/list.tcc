@@ -112,6 +112,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     list<_Tp, _Alloc>::
     insert(const_iterator __position, size_type __n, const value_type& __x)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__n)
 	{
 	  list __tmp(__n, __x, get_allocator());
@@ -129,6 +130,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       insert(const_iterator __position, _InputIterator __first,
 	     _InputIterator __last)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	list __tmp(__first, __last, get_allocator());
 	if (!__tmp.empty())
 	  {
@@ -170,6 +172,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     list<_Tp, _Alloc>::
     _M_resize_pos(size_type& __new_size) const
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const_iterator __i;
 #if _GLIBCXX_USE_CXX11_ABI
       const size_type __len = size();
@@ -262,6 +265,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     list<_Tp, _Alloc>::
     operator=(const list& __x)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__x);
       if (this != std::__addressof(__x))
 	{
 #if __cplusplus >= 201103L
@@ -362,6 +366,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     list<_Tp, _Alloc>::
     unique()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       iterator __first = begin();
       iterator __last = end();
       if (__first == __last)
@@ -476,6 +481,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     list<_Tp, _Alloc>::
     sort()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       // Do nothing if the list has length 0 or 1.
       if (empty() || ++begin() == end())
 	return;
@@ -540,6 +546,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       list<_Tp, _Alloc>::
       remove_if(_Predicate __pred)
       {
+_GLIBCXX_CONVEYOR_TRUST_THIS;
 #if !_GLIBCXX_USE_CXX11_ABI
 	size_type __removed __attribute__((__unused__)) = 0;
 #endif

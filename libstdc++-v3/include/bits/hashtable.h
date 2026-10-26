@@ -670,7 +670,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       allocator_type
       get_allocator() const noexcept _GLIBCXX_CONVEYOR_AUTO
-      { return allocator_type(this->_M_node_allocator()); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return allocator_type(this->_M_node_allocator());
+      }
 
       size_type
       max_size() const noexcept
@@ -1222,6 +1225,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       insert_return_type
       _M_reinsert_node(node_type&& __nh)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__nh);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	insert_return_type __ret;
 	if (__nh.empty())
 	  __ret.position = end();
@@ -1270,6 +1275,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       node_type
       _M_extract_node(size_t __bkt, __node_base_ptr __prev_n)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__node_ptr __n = static_cast<__node_ptr>(__prev_n->_M_nxt);
 	if (__prev_n == _M_buckets[__bkt])
 	  _M_remove_bucket_begin(__bkt, __n->_M_next(),
@@ -1335,6 +1341,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       void
       _M_merge_unique(_Hashtable& __src)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__src);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__glibcxx_assert_noconveyor(get_allocator() == __src.get_allocator());
 
 	using _PTr = pointer_traits<__node_base_ptr>;

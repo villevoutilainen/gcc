@@ -375,7 +375,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  to the keys.
        */
       iterator
-      end() const _GLIBCXX_NOEXCEPT
+      end() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _M_t.end(); }
 
       /**
@@ -865,7 +865,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  @return  True if there is an element with the specified key.
        */
       bool
-      contains(const key_type& __x) const
+      contains(const key_type& __x) const _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _M_t.find(__x) != _M_t.end(); }
 
       template<typename _Kt>
@@ -1095,7 +1095,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     inline bool
     operator==(const set<_Key, _Compare, _Alloc>& __x,
 	       const set<_Key, _Compare, _Alloc>& __y)
-    { return __x._M_t == __y._M_t; }
+    { _GLIBCXX_CONVEYOR_TRUST(__x); return __x._M_t == __y._M_t; }
 
 #if __cpp_lib_three_way_comparison
   /**
