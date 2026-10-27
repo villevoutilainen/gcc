@@ -109,7 +109,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
    *    size_t     _M_len
    *  @endcode
    */
-#if __cplusplus > 202302L
+// C++26: structural, by defaulting reflect_constant (P4340) where
+// reflection is enabled, and with the class-property-specifier otherwise.
+#if __cplusplus > 202302L && !defined(__cpp_impl_reflection)
 # define _GLIBCXX_STRUCTURAL structural
 #else
 # define _GLIBCXX_STRUCTURAL
@@ -126,6 +128,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       static_assert(is_same_v<_CharT, typename _Traits::char_type>);
 
     public:
+      _GLIBCXX_DEFAULT_REFLECT_CONSTANT
+
 
       // types
       using traits_type		= _Traits;

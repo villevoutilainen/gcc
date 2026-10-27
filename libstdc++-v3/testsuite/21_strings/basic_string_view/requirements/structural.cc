@@ -1,9 +1,10 @@
 // { dg-do compile { target c++26 } }
 
-// basic_string_view is marked with the C++26 "structural" class-head
-// keyword, so it can be used directly as a non-type template
-// parameter despite its own private data members -- and this must be
-// a pure addition: every other observable property stays unchanged.
+// Without reflection, basic_string_view is marked with the C++26
+// "structural" class-head keyword, so it can be used directly as a
+// non-type template parameter despite its own private data members --
+// and this must be a pure addition: every other observable property
+// stays unchanged.
 
 #include <string_view>
 #include <type_traits>
