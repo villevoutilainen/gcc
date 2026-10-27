@@ -1272,6 +1272,8 @@ namespace __expected
       requires requires {__x.swap(__y);}
       { __x.swap(__y); }
 
+      _GLIBCXX_DEFAULT_REFLECT_CONSTANT
+
     private:
       template<typename, typename> friend class expected;
 
@@ -1962,6 +1964,8 @@ namespace __expected
       noexcept(noexcept(__x.swap(__y)))
       requires requires { __x.swap(__y); }
       { __x.swap(__y); }
+
+      _GLIBCXX_DEFAULT_REFLECT_CONSTANT
 
     private:
       template<typename, typename> friend class expected;

@@ -1518,6 +1518,9 @@ namespace __detail::__variant
 	__detail::__variant::_Traits<_Types...>::_S_move_assign,
 	variant<_Types...>>
     {
+    public:
+      _GLIBCXX_DEFAULT_REFLECT_CONSTANT
+
     private:
       template <typename... _UTypes, typename _Tp>
 	friend _GLIBCXX20_CONSTEXPR decltype(auto)

@@ -844,6 +844,19 @@ namespace std
 # endif
 #endif
 
+// A defaulted reflect_constant (P4340, with -freflection): a class
+// template's specializations are then structural wherever their bases
+// and members are, regardless of their access, and its reflect_constant
+// is deleted (so the specialization isn't structural) elsewhere.
+#ifndef _GLIBCXX_DEFAULT_REFLECT_CONSTANT
+# if defined(__cpp_impl_reflection)
+#  define _GLIBCXX_DEFAULT_REFLECT_CONSTANT \
+  consteval decltype(^^int) reflect_constant() const = default;
+# else
+#  define _GLIBCXX_DEFAULT_REFLECT_CONSTANT
+# endif
+#endif
+
 // A trust point at the start of a library function's body, for a function
 // that isn't conveyor itself but calls conveyor functions on its own object
 // (_GLIBCXX_CONVEYOR_TRUST_THIS) or through a reference (_GLIBCXX_CONVEYOR_

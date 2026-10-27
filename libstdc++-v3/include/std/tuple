@@ -245,6 +245,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     {
       template<size_t, typename...> friend struct _Tuple_impl;
 
+      _GLIBCXX_DEFAULT_REFLECT_CONSTANT
+
       typedef _Tuple_impl<_Idx + 1, _Tail...> _Inherited;
       typedef _Head_base<_Idx, _Head> _Base;
 
@@ -508,6 +510,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     : private _Head_base<_Idx, _Head>
     {
       template<size_t, typename...> friend struct _Tuple_impl;
+
+      _GLIBCXX_DEFAULT_REFLECT_CONSTANT
 
       typedef _Head_base<_Idx, _Head> _Base;
 
