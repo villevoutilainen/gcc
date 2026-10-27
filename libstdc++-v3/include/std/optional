@@ -794,6 +794,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     {
       static_assert(__is_valid_contained_type_for_optional<_Tp>);
 
+    public:
+      _GLIBCXX_DEFAULT_REFLECT_CONSTANT
+
     private:
       using _Base = _Optional_base<_Tp>;
 
