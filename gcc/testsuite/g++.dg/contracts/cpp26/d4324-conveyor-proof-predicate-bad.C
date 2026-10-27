@@ -9,6 +9,7 @@
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -fdump-contract-proofs=predicate-bad-proofs.smt2" }
 // { dg-final { scan-file predicate-bad-proofs.smt2 "\\(assert \\(not check_it\\)\\)\n\\(assert check_it\\)" } }
 // { dg-final { scan-file predicate-bad-proofs.smt2 "expect: unsat" } }
+// { dg-final { remove-build-file "predicate-bad-proofs.smt2" } }
 
 #include <contracts>
 namespace sc = std::contracts;

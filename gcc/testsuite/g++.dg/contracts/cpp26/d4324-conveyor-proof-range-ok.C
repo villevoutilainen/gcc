@@ -13,6 +13,7 @@
 // { dg-final { scan-file range-ok-proofs.smt2 "\\(assert \\(<= v 99\\)\\)" } }
 // { dg-final { scan-file range-ok-proofs.smt2 "\\(assert \\(not \\(and \\(>= v 20\\) \\(<= v 999\\)\\)\\)\\)" } }
 // { dg-final { scan-file range-ok-proofs.smt2 "expect: unsat" } }
+// { dg-final { remove-build-file "range-ok-proofs.smt2" } }
 
 #include <contracts>
 namespace sc = std::contracts;

@@ -13,6 +13,7 @@
 // { dg-final { scan-file range-if-join-ok-proofs.smt2 "\\(assert \\(=> branch_0 \\(and \\(>= v 10\\) \\(<= v 49\\)\\)\\)\\)" } }
 // { dg-final { scan-file range-if-join-ok-proofs.smt2 "\\(assert \\(=> \\(not branch_0\\) \\(and \\(>= v 20\\) \\(<= v 79\\)\\)\\)\\)" } }
 // { dg-final { scan-file range-if-join-ok-proofs.smt2 "expect: unsat" } }
+// { dg-final { remove-build-file "range-if-join-ok-proofs.smt2" } }
 
 #include <contracts>
 namespace sc = std::contracts;

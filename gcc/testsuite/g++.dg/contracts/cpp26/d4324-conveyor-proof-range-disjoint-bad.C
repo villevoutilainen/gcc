@@ -10,6 +10,7 @@
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -fdump-contract-proofs=range-disjoint-bad-proofs.smt2" }
 // { dg-final { scan-file range-disjoint-bad-proofs.smt2 "\\(assert \\(and \\(>= v 0\\) \\(<= v 9\\)\\)\\)" } }
 // { dg-final { scan-file range-disjoint-bad-proofs.smt2 "expect: unsat" } }
+// { dg-final { remove-build-file "range-disjoint-bad-proofs.smt2" } }
 
 #include <contracts>
 namespace sc = std::contracts;
