@@ -71,7 +71,9 @@ for l in sys.stdin:
     # Errors in the lumps themselves: the user-facing checks the library's
     # contracts make of code like theirs, not library defects -- counted so
     # that a change making the library harder to use shows too.
-    user=$(cat "$dir"/*.err | grep -c '/conveyor-census/[^/:]*\.cc:[0-9]*:[0-9]*: error:')
+    # The lumps are compiled from this directory, so their own diagnostics
+    # name them without a directory.
+    user=$(cat "$dir"/*.err | grep -cE '(^|/conveyor-census/)[^/:]*\.cc:[0-9]+:[0-9]+: (fatal )?error:')
     printf '%-9s %-7s library errors %6d  distinct sites %5d  ICEs %d  user-code errors %d\n' \
       "$config" "$engine" "$errs" "$sites" "$ices" "$user" | tee -a "$results"
   done
