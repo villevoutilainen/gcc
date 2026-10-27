@@ -1,9 +1,9 @@
 // { dg-do run { target c++26 } }
 
-// span is marked with the C++26 "structural" class-head keyword, so
-// it can be used directly as a non-type template parameter despite
-// its own private data members -- and this must be a pure addition:
-// every other observable property stays unchanged.
+// Without reflection, span is marked with the C++26 "structural"
+// class-head keyword, so it can be used directly as a non-type template
+// parameter despite its own private data members -- and this must be a
+// pure addition: every other observable property stays unchanged.
 
 #include <span>
 #include <type_traits>

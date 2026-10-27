@@ -96,7 +96,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{ return _Extent; }
       };
 
-#if __cplusplus > 202302L
+// C++26: structural, by defaulting reflect_constant (P4340) where
+// reflection is enabled, and with the class-property-specifier otherwise.
+#if __cplusplus > 202302L && !defined(__cpp_impl_reflection)
 # define _GLIBCXX_STRUCTURAL structural
 #else
 # define _GLIBCXX_STRUCTURAL
@@ -107,12 +109,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     // recursive member-type check applies regardless of span's own
     // CLASSTYPE_STRUCTURAL exemption -- the primary (non-dynamic-
     // extent) template above has no data members at all, so it's
-    // already trivially structural without needing the keyword.
+    // already trivially structural without needing either marking.
     template<>
       class __extent_storage<dynamic_extent> _GLIBCXX_STRUCTURAL
       {
 #undef _GLIBCXX_STRUCTURAL
       public:
+	_GLIBCXX_DEFAULT_REFLECT_CONSTANT
+
 	[[__gnu__::__always_inline__]]
 	constexpr
 	__extent_storage(size_t __extent) noexcept
@@ -132,7 +136,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
   } // namespace __detail
 
-#if __cplusplus > 202302L
+// C++26: structural, by defaulting reflect_constant (P4340) where
+// reflection is enabled, and with the class-property-specifier otherwise.
+#if __cplusplus > 202302L && !defined(__cpp_impl_reflection)
 # define _GLIBCXX_STRUCTURAL structural
 #else
 # define _GLIBCXX_STRUCTURAL
@@ -171,6 +177,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	static inline constexpr integral_constant<size_t, _Nm> __v{};
 
     public:
+      _GLIBCXX_DEFAULT_REFLECT_CONSTANT
+
       // member types
       using element_type           = _Type;
       using value_type             = remove_cv_t<_Type>;
