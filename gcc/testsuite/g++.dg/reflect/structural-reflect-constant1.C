@@ -81,7 +81,9 @@ template <Outer O>
 constexpr int use_outer () { return O.get (); }
 static_assert (use_outer <Outer (3, 4)> () == 7);
 
-// A class template: each instantiation is structural, and checked.
+// A class template: each instantiation is structural where it can be
+// (otherwise its defaulted reflect_constant is deleted:
+// structural-reflect-constant4.C).
 template <typename T>
 class Box
 {
@@ -103,7 +105,7 @@ public:
   constexpr Box2Member (int x) : v (x) {}
 };
 template <typename T>
-class Box2 // { dg-error "defaults \[^\n\]* but is not a structural type" }
+class Box2
 {
   T value;
 public:
@@ -111,7 +113,9 @@ public:
   consteval std::meta::info reflect_constant () const = default;
 };
 Box2<int> b2i (1);
-Box2<Box2Member> b2m (Box2Member (1));	// { dg-message "required from here" }
+Box2<Box2Member> b2m (Box2Member (1));
+static_assert (std::meta::is_structural_type (^^Box2<int>));
+static_assert (!std::meta::is_structural_type (^^Box2<Box2Member>));
 
 // A union.
 union U

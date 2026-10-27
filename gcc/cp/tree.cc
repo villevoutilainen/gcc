@@ -5413,7 +5413,22 @@ structural_type_p (tree t, bool explain)
   if (CLASSTYPE_NOT_STRUCTURAL (t))
     {
       if (explain)
-	inform (location_of (t), "%qT deletes %<reflect_constant%>", t);
+	{
+	  if (tree fn = defaulted_reflect_constant (t))
+	    {
+	      /* Deleted by finish_struct_1: say why it couldn't be
+		 structural.  */
+	      inform (DECL_SOURCE_LOCATION (fn), "%qD is deleted because "
+		      "%qT would not be a structural type", fn, t);
+	      CLASSTYPE_NOT_STRUCTURAL (t) = 0;
+	      CLASSTYPE_STRUCTURAL (t) = 1;
+	      structural_type_p (t, true);
+	      CLASSTYPE_STRUCTURAL (t) = 0;
+	      CLASSTYPE_NOT_STRUCTURAL (t) = 1;
+	    }
+	  else
+	    inform (location_of (t), "%qT deletes %<reflect_constant%>", t);
+	}
       return false;
     }
   if (!literal_type_p (t))

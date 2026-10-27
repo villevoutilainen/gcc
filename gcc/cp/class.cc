@@ -8245,6 +8245,16 @@ finish_struct_1 (tree t)
      is checked for each instantiation.  */
   if (CLASSTYPE_STRUCTURAL (t) && !structural_type_p (t))
     {
+      /* In a class template, though, a defaulted reflect_constant is
+	 instead deleted where its class can't be structural (P4340), so
+	 that instantiation opts out as if it deleted it.  */
+      if (CLASSTYPE_TEMPLATE_INSTANTIATION (t)
+	  && defaulted_reflect_constant (t))
+	{
+	  CLASSTYPE_STRUCTURAL (t) = 0;
+	  CLASSTYPE_NOT_STRUCTURAL (t) = 1;
+	  return;
+	}
       auto_diagnostic_group d;
       if (tree fn = defaulted_reflect_constant (t))
 	error_at (location_of (t), "%q#T defaults %qD but is not a "
