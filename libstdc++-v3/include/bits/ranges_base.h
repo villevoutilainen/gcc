@@ -259,6 +259,12 @@ namespace ranges
 	operator()(_Tp&& __t) const
 	noexcept(_S_noexcept<_Tp&>())
 	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  // An instance that isn't conveyor -- calling a member or function that
+	  // isn't -- trusts __t for whatever obligations those have.
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (__builtin_addressof (__t)));
+#endif
 	  if constexpr (__member_rbegin<_Tp>)
 	    return __t.rbegin();
 	  else if constexpr (__adl_rbegin<_Tp>)
@@ -317,6 +323,12 @@ namespace ranges
 	operator()(_Tp&& __t) const
 	noexcept(_S_noexcept<_Tp&>())
 	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  // An instance that isn't conveyor -- calling a member or function that
+	  // isn't -- trusts __t for whatever obligations those have.
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (__builtin_addressof (__t)));
+#endif
 	  if constexpr (__member_rend<_Tp>)
 	    return __t.rend();
 	  else if constexpr (__adl_rend<_Tp>)
@@ -382,6 +394,12 @@ namespace ranges
 	operator()(_Tp&& __t) const noexcept(_S_noexcept<_Tp&>())
 	_GLIBCXX_CONVEYOR_AUTO
 	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  // An instance that isn't conveyor -- calling a member or function that
+	  // isn't -- trusts __t for whatever obligations those have.
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (__builtin_addressof (__t)));
+#endif
 	  if constexpr (is_bounded_array_v<remove_reference_t<_Tp>>)
 	    return extent_v<remove_reference_t<_Tp>>;
 	  else if constexpr (__member_size<_Tp>)
@@ -461,6 +479,12 @@ namespace ranges
 	operator()(_Tp&& __t) const noexcept(_S_noexcept<_Tp&>())
 	_GLIBCXX_CONVEYOR_AUTO
 	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  // An instance that isn't conveyor -- calling a member or function that
+	  // isn't -- trusts __t for whatever obligations those have.
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (__builtin_addressof (__t)));
+#endif
 	  if constexpr (__member_empty<_Tp>)
 	    return bool(__t.empty());
 	  else if constexpr (__size0_empty<_Tp>)
