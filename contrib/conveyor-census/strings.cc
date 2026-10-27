@@ -7,6 +7,28 @@
 
 namespace census
 {
+  // Every form of operator+: each operand a string lvalue or rvalue, a
+  // character, a character array or a string view.
+  template<class S>
+  int concatenate (const S &s, const S &t)
+    CENSUS_OBJECT (s) CENSUS_OBJECT (t)
+  {
+    using C = typename S::value_type;
+    const C *p = t.c_str ();
+    std::basic_string_view<C> v (t);
+    std::size_t n = 0;
+    n += (s + t).size () + (p + s).size () + (C ('x') + s).size ()
+	 + (s + p).size () + (s + C ('y')).size ();
+    n += (S (s) + t).size () + (s + S (t)).size () + (S (s) + S (t)).size ();
+    n += (p + S (s)).size () + (C ('x') + S (s)).size ()
+	 + (S (s) + p).size () + (S (s) + C ('y')).size ();
+#if __glibcxx_string_view >= 202403L
+    n += (s + v).size () + (S (s) + v).size () + (v + s).size ()
+	 + (v + S (s)).size ();
+#endif
+    return n;
+  }
+
   template<class S>
   int use_string (S &s, const S &t)
     CENSUS_OBJECT (s) CENSUS_OBJECT (t)
@@ -46,6 +68,7 @@ namespace census
     copy.swap (moved);
     n += std::erase (s, C ('a')) + std::erase_if (s, [] (C) { return false; });
     n += (s.c_str () != nullptr) + (s.data () != nullptr);
+    n += concatenate (s, t);
     s.clear ();
     return n;
   }

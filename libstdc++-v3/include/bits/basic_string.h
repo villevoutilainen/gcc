@@ -4639,6 +4639,12 @@ _GLIBCXX_END_NAMESPACE_CXX11
     inline basic_string<_CharT, _Traits, _Alloc>
     operator+(const basic_string<_CharT, _Traits, _Alloc>& __lhs,
 	      const basic_string<_CharT, _Traits, _Alloc>& __rhs)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__lhs)))
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__rhs)))
+#endif
     {
       typedef basic_string<_CharT, _Traits, _Alloc> _Str;
       return std::__str_concat<_Str>(__lhs.c_str(), __lhs.size(),
@@ -4657,6 +4663,10 @@ _GLIBCXX_END_NAMESPACE_CXX11
     inline basic_string<_CharT,_Traits,_Alloc>
     operator+(const _CharT* __lhs,
 	      const basic_string<_CharT,_Traits,_Alloc>& __rhs)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__rhs)))
+#endif
     {
       __glibcxx_requires_string(__lhs);
       typedef basic_string<_CharT, _Traits, _Alloc> _Str;
@@ -4675,6 +4685,10 @@ _GLIBCXX_END_NAMESPACE_CXX11
     _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
     inline basic_string<_CharT,_Traits,_Alloc>
     operator+(_CharT __lhs, const basic_string<_CharT,_Traits,_Alloc>& __rhs)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__rhs)))
+#endif
     {
       typedef basic_string<_CharT, _Traits, _Alloc> _Str;
       return std::__str_concat<_Str>(__builtin_addressof(__lhs), 1,
@@ -4693,6 +4707,10 @@ _GLIBCXX_END_NAMESPACE_CXX11
     inline basic_string<_CharT, _Traits, _Alloc>
     operator+(const basic_string<_CharT, _Traits, _Alloc>& __lhs,
 	      const _CharT* __rhs)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__lhs)))
+#endif
     {
       __glibcxx_requires_string(__rhs);
       typedef basic_string<_CharT, _Traits, _Alloc> _Str;
@@ -4710,6 +4728,10 @@ _GLIBCXX_END_NAMESPACE_CXX11
     _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
     inline basic_string<_CharT, _Traits, _Alloc>
     operator+(const basic_string<_CharT, _Traits, _Alloc>& __lhs, _CharT __rhs)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__lhs)))
+#endif
     {
       typedef basic_string<_CharT, _Traits, _Alloc> _Str;
       return std::__str_concat<_Str>(__lhs.c_str(), __lhs.size(),
@@ -4850,6 +4872,10 @@ _GLIBCXX_END_NAMESPACE_CXX11
     constexpr basic_string<_CharT, _Traits, _Alloc>
     operator+(const basic_string<_CharT, _Traits, _Alloc>& __lhs,
 	       type_identity_t<basic_string_view<_CharT, _Traits>> __rhs)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__lhs)))
+#endif
     {
       using _Str = basic_string<_CharT, _Traits, _Alloc>;
       return std::__str_concat<_Str>(__lhs.data(), __lhs.size(),
@@ -4873,6 +4899,10 @@ _GLIBCXX_END_NAMESPACE_CXX11
     constexpr basic_string<_CharT, _Traits, _Alloc>
     operator+(type_identity_t<basic_string_view<_CharT, _Traits>> __lhs,
 	       const basic_string<_CharT, _Traits, _Alloc>& __rhs)
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__rhs)))
+#endif
     {
       using _Str = basic_string<_CharT, _Traits, _Alloc>;
       return std::__str_concat<_Str>(__lhs.data(), __lhs.size(),
