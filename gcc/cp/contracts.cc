@@ -12204,13 +12204,21 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
      (a separate concern, this function's ordinary CALL_EXPR/AGGR_INIT_
      EXPR handling elsewhere already covers a constructor's own
      correctness; this recognizer only answers "is D itself a valid
-     object address").  */
-  if (TREE_CODE (expr) == COMPOUND_EXPR)
+     object address").  An assignment 'p = new T ();', unlike the
+     initialization, has the chain under a conversion to P's type, which
+     the stripping loop further below would only remove too late.  */
+  tree comma = expr;
+  while (TREE_CODE (comma) == NON_LVALUE_EXPR
+	 || TREE_CODE (comma) == NOP_EXPR
+	 || TREE_CODE (comma) == CONVERT_EXPR
+	 || TREE_CODE (comma) == VIEW_CONVERT_EXPR)
+    comma = TREE_OPERAND (comma, 0);
+  if (TREE_CODE (comma) == COMPOUND_EXPR)
     {
-      tree head = expr;
+      tree head = comma;
       while (TREE_CODE (head) == COMPOUND_EXPR)
 	head = TREE_OPERAND (head, 0);
-      tree tail = expr;
+      tree tail = comma;
       while (TREE_CODE (tail) == COMPOUND_EXPR)
 	tail = TREE_OPERAND (tail, 1);
       tree stripped_tail = STRIP_ANY_LOCATION_WRAPPER (tail);
