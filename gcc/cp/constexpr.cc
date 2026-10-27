@@ -3784,7 +3784,10 @@ clear_no_implicit_zero (tree ctor)
 {
   if (CONSTRUCTOR_NO_CLEARING (ctor))
     {
-      CONSTRUCTOR_NO_CLEARING (ctor) = false;
+      /* The omitted elements of such a CONSTRUCTOR are not within their
+	 lifetime, rather than zero-initialized.  */
+      if (!CONSTRUCTOR_OMITTED_NOT_WITHIN_LIFETIME_P (ctor))
+	CONSTRUCTOR_NO_CLEARING (ctor) = false;
       for (auto &e: CONSTRUCTOR_ELTS (ctor))
 	if (TREE_CODE (e.value) == CONSTRUCTOR)
 	  clear_no_implicit_zero (e.value);
@@ -5407,8 +5410,10 @@ reduced_constant_expression_p (tree t, tree sz /* = NULL_TREE */,
 	    return false;
 	  }
 ok:
-      if (CONSTRUCTOR_NO_CLEARING (t))
-	/* All the fields are initialized.  */
+      if (CONSTRUCTOR_NO_CLEARING (t)
+	  /* Unless the omitted elements are not within their lifetime,
+	     all the fields are initialized.  */
+	  && !CONSTRUCTOR_OMITTED_NOT_WITHIN_LIFETIME_P (t))
 	CONSTRUCTOR_NO_CLEARING (t) = false;
       return true;
 
@@ -8674,6 +8679,9 @@ cxx_eval_store_expression (const constexpr_ctx *ctx, tree t,
   auto_vec<tree *> ctors;
   releasing_vec indexes;
   auto_vec<int> index_pos_hints;
+  /* Whether the store ends the lifetime of an element of an array member
+     of a union, which is then omitted from the array's CONSTRUCTOR.  */
+  bool omit_union_elemental_elt = false;
   bool activated_union_member_p = false;
   bool empty_base = false;
   while (!refs->is_empty ())
@@ -9039,7 +9047,33 @@ cxx_eval_store_expression (const constexpr_ctx *ctx, tree t,
 	  CONSTRUCTOR_ZERO_PADDING_BITS (*valp) = zero_padding_bits;
 	}
       else
-	*valp = void_node;
+	{
+	  *valp = void_node;
+	  /* An element of an array member of a union that is no longer
+	     within its lifetime is an inactive union subobject, like one
+	     whose lifetime never began: represent it the same way, by
+	     omitting it from an array whose omitted elements are not within
+	     their lifetime, so that the value is a constant expression and
+	     template-argument-equivalent to one in which it never began
+	     ([expr.const], [temp.type]).  */
+	  if (cxx_dialect >= cxx26
+	      && CLOBBER_KIND (init) >= CLOBBER_OBJECT_END
+	      && !ctors.is_empty ())
+	    {
+	      tree arr = *ctors.last ();
+	      unsigned i = ctors.length () - 1;
+	      while (i > 0
+		     && TREE_CODE (TREE_TYPE (*ctors[i - 1])) == ARRAY_TYPE)
+		--i;
+	      if (TREE_CODE (arr) == CONSTRUCTOR
+		  && TREE_CODE (TREE_TYPE (arr)) == ARRAY_TYPE
+		  && CONSTRUCTOR_NO_CLEARING (arr)
+		  && CONSTRUCTOR_OMITTED_NOT_WITHIN_LIFETIME_P (arr)
+		  && i > 0
+		  && TREE_CODE (TREE_TYPE (*ctors[i - 1])) == UNION_TYPE)
+		omit_union_elemental_elt = true;
+	    }
+	}
     }
   else if (*valp && TREE_CODE (*valp) == CONSTRUCTOR
 	   && TREE_CODE (init) == CONSTRUCTOR)
@@ -9124,6 +9158,14 @@ cxx_eval_store_expression (const constexpr_ctx *ctx, tree t,
 	if (TREE_CODE (TREE_TYPE (*elt)) == UNION_TYPE)
 	  CONSTRUCTOR_NO_CLEARING (*elt) = false;
       }
+
+  if (omit_union_elemental_elt)
+    {
+      tree arr = *ctors.last ();
+      HOST_WIDE_INT ix = find_array_ctor_elt (arr, indexes->last (), false);
+      if (ix != -1)
+	CONSTRUCTOR_ELTS (arr)->ordered_remove (ix);
+    }
 
   if (lval)
     return target;
