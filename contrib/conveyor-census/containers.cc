@@ -218,6 +218,31 @@ namespace census
     const int *data () const conveyor { return d; }
   };
 
+  // A user sequence whose members are conveyor, for the back and front
+  // insert iterators, which call them through their stored container
+  // pointer.
+  struct ConveyorSeq
+  {
+    using value_type = int;
+    using const_reference = const int &;
+    int n = 0;
+    void push_back (int v) conveyor { n = v; }
+    void push_front (int v) conveyor { n = v; }
+  };
+
+  int insert_iterators ()
+  {
+    ConveyorSeq s;
+    int v = 1;
+    auto b = std::back_inserter (s);
+    *b = v;
+    *b = 2;
+    auto f = std::front_inserter (s);
+    *f = v;
+    *f = 3;
+    return s.n;
+  }
+
   int nonmember_access ()
   {
     ConveyorRange r;
@@ -254,7 +279,7 @@ namespace census
     n += fixed<int, 4> () + fixed<Val, 3> () + fixed<AddrOp, 2> ();
     n += flat ();
 #ifdef _GLIBCXX_CONVEYOR_ASSERTIONS
-    n += nonmember_access ();
+    n += nonmember_access () + insert_iterators ();
 #endif
     return n;
   }

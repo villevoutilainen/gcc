@@ -707,6 +707,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       back_insert_iterator&
       operator=(typename _Container::const_reference __value)
       {
+	_GLIBCXX_CONVEYOR_TRUST(*container);
 	container->push_back(__value);
 	return *this;
       }
@@ -715,6 +716,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       back_insert_iterator&
       operator=(const typename _Container::value_type& __value)
       {
+	_GLIBCXX_CONVEYOR_TRUST(*container);
 	container->push_back(__value);
 	return *this;
       }
@@ -723,6 +725,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       back_insert_iterator&
       operator=(typename _Container::value_type&& __value)
       {
+	_GLIBCXX_CONVEYOR_TRUST(*container);
 	container->push_back(std::move(__value));
 	return *this;
       }
@@ -808,6 +811,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       front_insert_iterator&
       operator=(typename _Container::const_reference __value)
       {
+	_GLIBCXX_CONVEYOR_TRUST(*container);
 	container->push_front(__value);
 	return *this;
       }
@@ -816,6 +820,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       front_insert_iterator&
       operator=(const typename _Container::value_type& __value)
       {
+	_GLIBCXX_CONVEYOR_TRUST(*container);
 	container->push_front(__value);
 	return *this;
       }
@@ -824,6 +829,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       front_insert_iterator&
       operator=(typename _Container::value_type&& __value)
       {
+	_GLIBCXX_CONVEYOR_TRUST(*container);
 	container->push_front(std::move(__value));
 	return *this;
       }
@@ -935,6 +941,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       insert_iterator&
       operator=(typename _Container::const_reference __value)
       {
+	_GLIBCXX_CONVEYOR_TRUST(*container);
 	iter = container->insert(iter, __value);
 	++iter;
 	return *this;
@@ -944,6 +951,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       insert_iterator&
       operator=(const typename _Container::value_type& __value)
       {
+	_GLIBCXX_CONVEYOR_TRUST(*container);
 	iter = container->insert(iter, __value);
 	++iter;
 	return *this;
@@ -953,6 +961,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       insert_iterator&
       operator=(typename _Container::value_type&& __value)
       {
+	_GLIBCXX_CONVEYOR_TRUST(*container);
 	iter = container->insert(iter, std::move(__value));
 	++iter;
 	return *this;
