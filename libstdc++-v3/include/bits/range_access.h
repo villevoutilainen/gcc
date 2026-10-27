@@ -293,7 +293,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     size(const _Container& __cont) noexcept(noexcept(__cont.size()))
     -> decltype(__cont.size())
-    { return __cont.size(); }
+    {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__cont)));
+#endif
+      return __cont.size();
+    }
 
   /**
    *  @brief  Return the size of an array.
@@ -317,7 +323,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     empty(const _Container& __cont) noexcept(noexcept(__cont.empty()))
     -> decltype(__cont.empty())
-    { return __cont.empty(); }
+    {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__cont)));
+#endif
+      return __cont.empty();
+    }
 
   /**
    *  @brief  Return whether an array is empty (always false).
@@ -353,7 +365,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     data(_Container& __cont) noexcept(noexcept(__cont.data()))
     -> decltype(__cont.data())
-    { return __cont.data(); }
+    {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__cont)));
+#endif
+      return __cont.data();
+    }
 
   /**
    *  @brief  Return the data pointer of a const container.
@@ -365,7 +383,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     data(const _Container& __cont) noexcept(noexcept(__cont.data()))
     -> decltype(__cont.data())
-    { return __cont.data(); }
+    {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      contract_assert<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__cont)));
+#endif
+      return __cont.data();
+    }
 
   /**
    *  @brief  Return the data pointer of an array.

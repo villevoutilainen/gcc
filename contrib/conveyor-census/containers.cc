@@ -205,6 +205,29 @@ namespace census
     return n;
   }
 
+#ifdef _GLIBCXX_CONVEYOR_ASSERTIONS
+  // A user container whose members are conveyor: the non-member access
+  // functions (std::size, std::empty, std::data, std::ssize) call them on
+  // their own parameter.
+  struct ConveyorRange
+  {
+    int d[2] = { 1, 2 };
+    std::size_t size () const conveyor { return 2; }
+    bool empty () const conveyor { return false; }
+    int *data () conveyor { return d; }
+    const int *data () const conveyor { return d; }
+  };
+
+  int nonmember_access ()
+  {
+    ConveyorRange r;
+    const ConveyorRange &cr = r;
+    int n = std::size (r) + std::empty (r) + std::ssize (cr);
+    n += (std::data (r) != nullptr) + (std::data (cr) != nullptr);
+    return n;
+  }
+#endif
+
   // An int key wrapped so the hashers above apply.
   struct Key
   {
@@ -230,6 +253,9 @@ namespace census
     n += associative<int, int, PropAlloc> ();
     n += fixed<int, 4> () + fixed<Val, 3> () + fixed<AddrOp, 2> ();
     n += flat ();
+#ifdef _GLIBCXX_CONVEYOR_ASSERTIONS
+    n += nonmember_access ();
+#endif
     return n;
   }
 }
