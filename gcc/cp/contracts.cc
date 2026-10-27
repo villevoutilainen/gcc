@@ -30001,7 +30001,13 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
       {
 	tree slot = TREE_OPERAND (t, 0);
 	tree init = TREE_OPERAND (t, 1);
-	if (init && TREE_CODE (init) != AGGR_INIT_EXPR)
+	/* An AGGR_INIT_EXPR too: a discarded call returning a class by
+	   invisible reference ('erase (it);' for a non-trivially-copyable
+	   iterator), or a discarded constructor temporary, has its
+	   obligations, a member function's own 'this' among them, like
+	   any other call (oa_scan_calls_visitor skips only a constructor's
+	   placeholder argument).  */
+	if (init && init != error_mark_node)
 	  oa_scan_calls_in_expr (&TREE_OPERAND (t, 1), env);
 	if (slot && VAR_P (slot) && POINTER_TYPE_P (TREE_TYPE (slot)))
 	  {
