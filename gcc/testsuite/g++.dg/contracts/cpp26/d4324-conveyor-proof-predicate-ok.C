@@ -12,6 +12,7 @@
 // { dg-final { scan-file predicate-ok-proofs.smt2 "\\(declare-const check_it Bool\\)" } }
 // { dg-final { scan-file predicate-ok-proofs.smt2 "\\(assert check_it\\)\n\\(assert \\(not check_it\\)\\)" } }
 // { dg-final { scan-file predicate-ok-proofs.smt2 "expect: unsat" } }
+// { dg-final { remove-build-file "predicate-ok-proofs.smt2" } }
 
 #include <contracts>
 namespace sc = std::contracts;

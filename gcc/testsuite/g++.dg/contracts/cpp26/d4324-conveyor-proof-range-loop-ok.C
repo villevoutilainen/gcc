@@ -6,15 +6,18 @@
 // reassignment) -- a sound loop-invariant argument by construction (see
 // oa_handle_loop's own comment and .claude/plans/stateless-jumping-
 // shore.md). With provenance tracking active, the emitted certificate
-// derives that established range as a bare disjunction of the two
-// arms' own bounds, instead of asserting the flat merged interval
-// [1, 99] as an unexplained premise -- no branch selector is needed at
-// all here (unlike the if/else-join case), since there is no condition
-// to select between "zero iterations" and "at least one."
+// derives that established range from the two arms' own bounds instead
+// of asserting the flat merged interval [1, 99] as an unexplained
+// premise.  Where the loop's condition fails, its head joins the entry
+// with the end of the body, so the arms are selected by an unconstrained
+// branch selector exactly as for an if/else join -- equivalent to their
+// bare disjunction.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -fcontract-conveyor-proof-provenance -fdump-contract-proofs=range-loop-ok-proofs.smt2" }
-// { dg-final { scan-file range-loop-ok-proofs.smt2 "\\(assert \\(or \\(and \\(>= v 1\\) \\(<= v 4\\)\\) \\(and \\(>= v 50\\) \\(<= v 99\\)\\)\\)\\)" } }
+// { dg-final { scan-file range-loop-ok-proofs.smt2 "\\(assert \\(=> branch_0 \\(and \\(>= v 1\\) \\(<= v 4\\)\\)\\)\\)" } }
+// { dg-final { scan-file range-loop-ok-proofs.smt2 "\\(assert \\(=> \\(not branch_0\\) \\(and \\(>= v 50\\) \\(<= v 99\\)\\)\\)\\)" } }
 // { dg-final { scan-file range-loop-ok-proofs.smt2 "expect: unsat" } }
+// { dg-final { remove-build-file "range-loop-ok-proofs.smt2" } }
 
 #include <contracts>
 namespace sc = std::contracts;
