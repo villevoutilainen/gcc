@@ -7666,7 +7666,10 @@ create_template_parm_object (tree expr, tsubst_flags_t complain)
   if (TREE_CODE (expr) == TARGET_EXPR)
     expr = TARGET_EXPR_INITIAL (expr);
 
-  if (!TREE_CONSTANT (expr))
+  /* An already evaluated argument, such as one from
+     std::meta::reflect_constant, can be TREE_CONSTANT and still not be a
+     constant expression, e.g. if a subobject is outside its lifetime.  */
+  if (!TREE_CONSTANT (expr) || !reduced_constant_expression_p (expr))
     {
       if ((complain & tf_error)
 	  && require_rvalue_constant_expression (orig))
