@@ -1,11 +1,12 @@
 // D4324: AST counterpart of d4324-gimple-assert-site-field-facts.C.  An
 // assertion's condition knows what its check site knew about the fields
 // of the objects it captures -- 'this->c' trusted earlier -- but not what
-// a call or store in between could have changed, nor what holds on one
-// branch only.  Without -fcontract-conveyor-proofs, the AST engine lets
-// a call keep its arguments' is_object_address facts.
+// a call or store in between could have changed -- a conveyor callee
+// can't end its arguments, but it can store in them -- nor what holds on
+// one branch only.  Without -fcontract-conveyor-proofs, a call keeps
+// what was known of its arguments themselves, not of their fields.
 // { dg-do compile { target c++26 } }
-// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -fcontract-analysis-engine=ast" }
+// { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-analysis-engine=ast" }
 
 #include <contracts>
 using namespace std::contracts;
@@ -25,7 +26,10 @@ struct It {
   int one_branch () const;
   int conv () const pre<conveyor_assert_v> (std::is_object_address (this));
   int after_call ();
+  int conveyor_call ()
+    pre<conveyor_assert_v> (std::is_object_address (this));
   void mutate ();
+  void reset (C *p) conveyor;
 };
 int It::trusted () const
 {
@@ -55,13 +59,21 @@ int It::one_branch () const
 int It::conv () const
 {
   contract_assert<never_proven_conveyor_v> (std::is_object_address (c));
-  contract_assert<conveyor_assert_v> (i < c->keys.size ()); // { dg-warning "cannot verify .contract_assert. condition" }
+  contract_assert<conveyor_assert_v> (i < c->keys.size ());
   return i;
 }
 int It::after_call ()
 {
   contract_assert<never_proven_conveyor_v> (std::is_object_address (c));
   mutate ();
+  contract_assert (i < c->keys.size ());	// { dg-error "cannot prove" }
+  return i;
+}
+void It::reset (C *p) conveyor { c = p; }
+int It::conveyor_call ()
+{
+  contract_assert<never_proven_conveyor_v> (std::is_object_address (c));
+  reset (nullptr);
   contract_assert (i < c->keys.size ());	// { dg-error "cannot prove" }
   return i;
 }
