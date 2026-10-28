@@ -23348,7 +23348,9 @@ oa_unnamed_mutable_pointer_arg_p (tree arg)
 
 static void
 oa_invalidate_parameter_alias_group (tree identity, oa_env &env,
-				      bool invalidate_object_address = true)
+				      bool invalidate_object_address = true,
+				      bool invalidate_field_object_addresses
+					= true)
 {
   if (!current_function_decl || TREE_CODE (identity) != PARM_DECL
       || DECL_CONTEXT (identity) != current_function_decl)
@@ -23390,8 +23392,9 @@ oa_invalidate_parameter_alias_group (tree identity, oa_env &env,
 	{
 	  env.invalidate (parm);
 	  env.range_invalidate (parm);
-	  env.field_object_address_invalidate_all (parm);
 	}
+      if (invalidate_object_address || invalidate_field_object_addresses)
+	env.field_object_address_invalidate_all (parm);
     }
 }
 
@@ -23515,14 +23518,20 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env,
 	    env.call_relational_invalidate_receiver (identity);
 	  bool end_object_addresses = (!callee_is_conveyor && !arg_is_const_ref
 				       && !keep_object_addresses);
+	  /* A conveyor callee, or KEEP_OBJECT_ADDRESSES, keeps the
+	     argument's own: any callee can store a different pointer in
+	     its fields, though, so what was known of those ends.  */
+	  bool end_field_object_addresses = !arg_is_const_ref;
 	  if (end_object_addresses)
 	    {
 	      env.invalidate (identity);
 	      env.range_invalidate (identity);
-	      env.field_object_address_invalidate_all (identity);
 	    }
+	  if (end_field_object_addresses)
+	    env.field_object_address_invalidate_all (identity);
 	  oa_invalidate_parameter_alias_group (identity, env,
-						end_object_addresses);
+						end_object_addresses,
+						end_field_object_addresses);
 	}
       else if (oa_unnamed_mutable_pointer_arg_p (call_arg))
 	env.invalidate_all_object_state ();
