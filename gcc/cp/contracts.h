@@ -526,6 +526,16 @@ extern tree contract_check_arg_struct_info (tree struct_type, tree *cond,
    see contracts.cc.  */
 extern bool contract_precondition_caller_obligation_p (tree contract,
 						      tree callee);
+/* Whether a call to CALLEE owes nothing for the implicit preconditions
+   CALLEE has as a special member function the compiler inferred to be
+   conveyor -- its synthesized is_object_address of 'this' and of its
+   reference parameters, and a defaulted copy's of its source -- because
+   the caller isn't conveyor code.  */
+extern bool contract_inferred_obligation_waived_p (tree callee);
+/* Whether the code being analyzed is conveyor code, for
+   contract_inferred_obligation_waived_p: set by the GIMPLE engine for the
+   function it analyzes, -1 while the AST engine works it out itself.  */
+extern int contract_obligation_conveyor_code;
 /* True if CALLEE has a never_proven precondition claiming its parameter
    (or 'this') PARM is an object.  */
 extern bool contract_parm_object_trusted_p (tree callee, tree parm);

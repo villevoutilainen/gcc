@@ -17790,6 +17790,55 @@ contract_parm_object_trusted_p (tree callee, tree parm)
   return oa_parm_object_trusted_p (callee, parm);
 }
 
+/* See contracts.h.  */
+
+int contract_obligation_conveyor_code = -1;
+
+/* Whether the AST engine is analyzing conveyor code: a conveyor function's
+   body, or a conveyor predicate's own text.  */
+
+static bool
+oa_in_conveyor_code_p ()
+{
+  return (oa_callee_pre_mandatory || oa_predicate_text_scan
+	  || (current_function_decl
+	      && DECL_DECLARED_CONVEYOR_P (current_function_decl)));
+}
+
+/* Whether FN is a special member function that is conveyor only because
+   the compiler inferred it (D4324 9.2.3): an implicitly-declared one, or
+   an explicitly-defaulted one that picked the property up from its
+   implicit form.  */
+
+static bool
+conveyor_inferred_special_member_p (tree fn)
+{
+  if (DECL_CLONED_FUNCTION_P (fn))
+    fn = DECL_CLONED_FUNCTION (fn);
+  if (TREE_CODE (fn) != FUNCTION_DECL || !DECL_DECLARED_CONVEYOR_P (fn)
+      || !DECL_DEFAULTED_FN (fn) || special_memfn_p (fn) == sfk_none)
+    return false;
+  return (DECL_ARTIFICIAL (fn)
+	  || (conveyor_deduced_defaulted_uids
+	      && conveyor_deduced_defaulted_uids->contains (DECL_UID (fn))));
+}
+
+/* See contracts.h.  An inferred conveyor special member's implicit
+   preconditions exist so that conveyor code calling it proves what the
+   member assumes; code that isn't conveyor never asked for the property
+   and owes nothing.  */
+
+bool
+contract_inferred_obligation_waived_p (tree callee)
+{
+  if (!conveyor_inferred_special_member_p (callee))
+    return false;
+  bool conveyor_code = (contract_obligation_conveyor_code >= 0
+			? contract_obligation_conveyor_code != 0
+			: oa_in_conveyor_code_p ());
+  return !conveyor_code;
+}
+
 /* See contracts.h.  A never_proven assertion needs no proof of its input
    facts, so a caller owes nothing for a never_proven precondition -- nor
    for the implicit precondition a conveyor function's reference parameter
@@ -17805,6 +17854,8 @@ contract_precondition_caller_obligation_p (tree contract, tree callee)
   if (oa_synthesized_implicit_contracts
       && oa_synthesized_implicit_contracts->contains (contract))
     {
+      if (contract_inferred_obligation_waived_p (callee))
+	return false;
       tree cond = CONTRACT_CONDITION (contract);
       if (cond && cond != error_mark_node)
 	if (tree parm = oa_object_address_conjunct_parm (cond))
@@ -18658,9 +18709,10 @@ static bool
 oa_defaulted_copy_body_needs_p (tree fn, tree src,
 				hash_set<tree> &in_progress)
 {
-  /* With a virtual base, the body reaches it through the source's own
-     vtable pointer.  */
-  if (CLASS_TYPE_P (DECL_CONTEXT (fn))
+  /* With a virtual base, a conveyor body reaches it through the source's
+     own vtable pointer; one that isn't conveyor is ordinary code, whose
+     dereferences owe nothing.  */
+  if (DECL_DECLARED_CONVEYOR_P (fn) && CLASS_TYPE_P (DECL_CONTEXT (fn))
       && CLASSTYPE_VBASECLASSES (DECL_CONTEXT (fn)))
     return true;
   tree body = DECL_SAVED_TREE (fn);
@@ -18673,8 +18725,8 @@ oa_defaulted_copy_body_needs_p (tree fn, tree src,
 	   (&body, [](tree *tp, int *, void *s) -> tree
 	      { return *tp == (tree) s ? *tp : NULL_TREE; }, src))
     return true;
-  struct data_t { tree src; hash_set<tree> *in_progress; };
-  data_t data = { src, &in_progress };
+  struct data_t { tree fn; tree src; hash_set<tree> *in_progress; };
+  data_t data = { fn, src, &in_progress };
   return cp_walk_tree_without_duplicates (&body, [](tree *tp, int *,
 						    void *d) -> tree
     {
@@ -18701,6 +18753,12 @@ oa_defaulted_copy_body_needs_p (tree fn, tree src,
 				   ? AGGR_INIT_EXPR_ARG (t, i)
 				   : CALL_EXPR_ARG (t, i));
       if (!passes_src)
+	return NULL_TREE;
+      /* What an inferred conveyor special member requires binds only
+	 conveyor code (contract_inferred_obligation_waived_p), which a
+	 body that isn't conveyor isn't.  */
+      if (!DECL_DECLARED_CONVEYOR_P (data->fn)
+	  && conveyor_inferred_special_member_p (callee))
 	return NULL_TREE;
       tree parm;
       if (oa_defaulted_copy_source_parm_1 (callee, &parm, *data->in_progress))
@@ -18821,7 +18879,8 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
   /* A defaulted copy or move member's implicit is_object_address of its
      source (oa_defaulted_copy_source_parm).  */
   tree src_parm;
-  if (oa_defaulted_copy_source_parm (callee, &src_parm))
+  if (oa_defaulted_copy_source_parm (callee, &src_parm)
+      && !contract_inferred_obligation_waived_p (callee))
     if (tree substituted = oa_substitute_call_arg (callee, call, src_parm))
       {
 	oa_unprovable_reason reason = OA_UNPROVABLE_NONE;

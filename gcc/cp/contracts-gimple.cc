@@ -3857,7 +3857,8 @@ cg_check_call_reference_safety (gcall *call, function *fun,
   auto display_at = make_temp_override (cg_display_at, call);
   auto at = make_temp_override (cg_prover_at, call);
   tree callee = gimple_call_fndecl (call);
-  if (!callee || !DECL_DECLARED_CONVEYOR_P (callee))
+  if (!callee || !DECL_DECLARED_CONVEYOR_P (callee)
+      || contract_inferred_obligation_waived_p (callee))
     return;
 
   unsigned argno = 0;
@@ -8108,6 +8109,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
   if ((flag_contract_analysis_engine != 0
        || flag_contract_conveyor_proofs_gimple)
       && oa_defaulted_copy_source_parm_public (callee, &src_parm)
+      && !contract_inferred_obligation_waived_p (callee)
       && cg_find_param_position (callee, src_parm, &src_argno)
       && src_argno < gimple_call_num_args (call))
     {
@@ -16373,6 +16375,10 @@ pass_contracts_gimple::execute_1 (function *fun)
 				       && (flag_contract_analysis_engine != 0
 					   || flag_contract_conveyor_proofs_gimple));
   auto pre_only = make_temp_override (cg_callee_pre_only, never_proven_core);
+  /* contract_inferred_obligation_waived_p's view of this function.  */
+  auto obligation_code
+    = make_temp_override (contract_obligation_conveyor_code,
+			  conveyor_code ? 1 : 0);
 
   hash_set<cg_call_value_hash> ended_object_addresses;
   auto ended = make_temp_override (cg_ended_object_addresses,
