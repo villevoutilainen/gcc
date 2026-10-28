@@ -1,6 +1,7 @@
 // Vocabulary types and function wrappers.
 #include "types.h"
 #include <optional>
+#include <string>
 #include <memory>
 #include <variant>
 #include <tuple>
@@ -120,6 +121,15 @@ namespace census
     return n;
   }
 
+  // A conveyor member called through optional's operator->, which promises
+  // the object its result points to.
+  int optional_arrow ()
+  {
+    std::optional<std::string> s (std::in_place, "abc");
+    const std::optional<std::string> c (std::in_place, "de");
+    return s->size () + c->size () + s->empty ();
+  }
+
   // Copying an allocator trusts the source, as copies do: no
   // CENSUS_OBJECT here.
   int allocator_copies (const std::allocator<int> &a)
@@ -133,7 +143,8 @@ namespace census
   {
     return vocabulary<int> () + vocabulary<Val> () + vocabulary<ThrowCopy> ()
 	   + vocabulary<AddrOp> () + functions () + optional_api<int> ()
-	   + optional_api<Val> () + allocator_copies (std::allocator<int> ());
+	   + optional_api<Val> () + optional_arrow ()
+	   + allocator_copies (std::allocator<int> ());
   }
 }
 
