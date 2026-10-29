@@ -914,6 +914,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _M_range_insert(iterator __pos, _InputIterator __first,
 		      _InputIterator __last, std::input_iterator_tag)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (__pos == end())
 	  {
 	    for (; __first != __last; ++__first)
@@ -936,6 +937,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _M_range_insert(iterator __position, _ForwardIterator __first,
 		      _ForwardIterator __last, std::forward_iterator_tag)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (__first != __last)
 	  {
 	    const size_type __n = std::distance(__first, __last);

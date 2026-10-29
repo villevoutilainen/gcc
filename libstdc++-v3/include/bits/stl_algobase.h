@@ -1630,8 +1630,12 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
       __glibcxx_requires_valid_range(__first1, __last1);
 
       for (; __first1 != __last1; ++__first1, (void)++__first2)
-	if (!bool(__binary_pred(*__first1, *__first2)))
-	  return false;
+	{
+	  _GLIBCXX_CONVEYOR_TRUST_DEREF(__first1);
+	  _GLIBCXX_CONVEYOR_TRUST_DEREF(__first2);
+	  if (!bool(__binary_pred(*__first1, *__first2)))
+	    return false;
+	}
       return true;
     }
 

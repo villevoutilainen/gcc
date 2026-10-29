@@ -244,6 +244,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       ostream_iterator&
       operator=(const _Tp& __value)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__value);
 	__glibcxx_requires_cond(_M_stream != 0,
 				_M_message(__gnu_debug::__msg_output_ostream)
 				._M_iterator(*this));

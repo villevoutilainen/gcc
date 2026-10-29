@@ -137,7 +137,10 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
       __glibcxx_requires_valid_range(__first, __last);
 
       for (; __first != __last; ++__first)
-	__init = _GLIBCXX_MOVE_IF_20(__init) + *__first;
+	{
+	  _GLIBCXX_CONVEYOR_TRUST_DEREF(__first);
+	  __init = _GLIBCXX_MOVE_IF_20(__init) + *__first;
+	}
       return __init;
     }
 

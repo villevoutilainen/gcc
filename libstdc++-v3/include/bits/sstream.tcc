@@ -83,6 +83,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     basic_stringbuf<_CharT, _Traits, _Alloc>::
     overflow(int_type __c)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const bool __testout = this->_M_mode & ios_base::out;
       if (__builtin_expect(!__testout, false))
 	return traits_type::eof();
@@ -249,6 +250,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     basic_stringbuf<_CharT, _Traits, _Alloc>::
     _M_sync(char_type* __base, __size_type __i, __size_type __o)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const bool __testin = _M_mode & ios_base::in;
       const bool __testout = _M_mode & ios_base::out;
       char_type* __endg = __base + _M_string.size();

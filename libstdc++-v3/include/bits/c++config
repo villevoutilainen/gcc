@@ -877,6 +877,21 @@ namespace std
 # define _GLIBCXX_CONVEYOR_TRUST(_Obj)
 #endif
 
+// The same trust point for the element an iterator designates, before a
+// library algorithm hands it to a user operation whose preconditions require
+// it to be an object: only when the iterator is a raw pointer, as a class
+// iterator's operator* promises (or should promise) its own result.  Used as
+// a statement:
+//   _GLIBCXX_CONVEYOR_TRUST_DEREF(__first);
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+# define _GLIBCXX_CONVEYOR_TRUST_DEREF(_It) \
+    if constexpr (__is_pointer(__decltype(_It))) \
+      contract_assert<std::contracts::never_proven_conveyor_v> \
+	(std::is_object_address (_It))
+#else
+# define _GLIBCXX_CONVEYOR_TRUST_DEREF(_It)
+#endif
+
 // The same trust point for a constructor whose mem-initializers already use
 // the object, where no statement can come first: a never_proven
 // precondition, which likewise asks nothing of the constructor's callers.
