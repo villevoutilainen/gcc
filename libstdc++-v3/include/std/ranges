@@ -1483,42 +1483,52 @@ namespace views::__adaptor
 
       constexpr iterator_t<_Range>
       begin()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::begin(_M_r); }
 
       constexpr sentinel_t<_Range>
       end()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::end(_M_r); }
 
       constexpr auto
       begin() const requires range<const _Range>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::begin(_M_r); }
 
       constexpr auto
       end() const requires range<const _Range>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::end(_M_r); }
 
       constexpr bool
       empty() requires requires { ranges::empty(_M_r); }
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::empty(_M_r); }
 
       constexpr bool
       empty() const requires requires { ranges::empty(_M_r); }
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::empty(_M_r); }
 
       constexpr auto
       size() requires sized_range<_Range>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::size(_M_r); }
 
       constexpr auto
       size() const requires sized_range<const _Range>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::size(_M_r); }
 
       constexpr auto
       data() requires contiguous_range<_Range>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::data(_M_r); }
 
       constexpr auto
       data() const requires contiguous_range<const _Range>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::data(_M_r); }
     };
 
@@ -3052,6 +3062,15 @@ namespace views::__adaptor
     template<typename _Tp>
       constexpr _Tp&
       __as_lvalue(_Tp&& __t)
+      _GLIBCXX_CONVEYOR
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      // An identity cast, like std::move: a caller owes nothing for __t,
+      // and the reference returned is __t itself.
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (__builtin_addressof (__t)))
+      post<std::contracts::conveyor_assert_v>
+	(__r: std::is_object_address (__builtin_addressof (__r)))
+#endif
       { return static_cast<_Tp&>(__t); }
   } // namespace __detail
 
@@ -3297,6 +3316,7 @@ namespace views::__adaptor
 	      && bidirectional_range<range_reference_t<_Base>>
 	      && common_range<range_reference_t<_Base>>
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    if (_M_outer == ranges::end(_M_parent->_M_base))
 	      _M_inner = ranges::end(__detail::__as_lvalue(*--_M_outer));
 	    while (_M_get_inner() == ranges::begin(__detail::__as_lvalue(*_M_outer)))
@@ -6180,6 +6200,7 @@ namespace views::__adaptor
 
     friend constexpr bool
     operator==(const _Iterator& __x, const _Iterator& __y)
+    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
     { return __x._M_inner == __y._M_inner; }
 
     friend constexpr bool

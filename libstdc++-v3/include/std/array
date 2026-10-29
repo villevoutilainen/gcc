@@ -121,7 +121,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       // DR 776.
       _GLIBCXX20_CONSTEXPR void
-      fill(const value_type& __u)
+      fill(const value_type& __u) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { std::fill_n(begin(), size(), __u); }
 
       _GLIBCXX20_CONSTEXPR void
@@ -207,6 +207,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[__nodiscard__]]
       _GLIBCXX17_CONSTEXPR reference
       operator[](size_type __n) noexcept _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_subscript(__n);
 	return _M_elems[__n];
@@ -215,6 +216,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[__nodiscard__]]
       constexpr const_reference
       operator[](size_type __n) const noexcept _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 #if __cplusplus >= 201402L
 	__glibcxx_requires_subscript(__n);

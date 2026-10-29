@@ -528,6 +528,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	constexpr void
 	_M_append_range_to(_Rg&& __rg, pointer& __ptr)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  __ptr = std::__uninitialized_copy_a(ranges::begin(__rg),
 					      ranges::end(__rg),
 					      __ptr, _M_get_Tp_allocator());
@@ -893,6 +895,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	constexpr
 	vector(from_range_t, _Rg&& __rg, const _Alloc& __a = _Alloc())
+	_GLIBCXX_CONVEYOR_REQUIRES(__rg)
 	: vector(__a)
 	{
 	  if constexpr (ranges::forward_range<_Rg> || ranges::sized_range<_Rg>)
@@ -1056,7 +1059,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	constexpr void
-	assign_range(_Rg&& __rg)
+	assign_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  static_assert(assignable_from<_Tp&, ranges::range_reference_t<_Rg>>);
 
@@ -1166,7 +1169,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reverse_iterator
-      rbegin() const _GLIBCXX_NOEXCEPT
+      rbegin() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return const_reverse_iterator(end()); }
 
       /**
@@ -1186,7 +1189,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reverse_iterator
-      rend() const _GLIBCXX_NOEXCEPT
+      rend() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return const_reverse_iterator(begin()); }
 
 #if __cplusplus >= 201103L
@@ -1364,7 +1367,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX20_CONSTEXPR
       void
-      reserve(size_type __n);
+      reserve(size_type __n) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       // element access
       /**
@@ -1785,7 +1788,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	constexpr iterator
-	insert_range(const_iterator __pos, _Rg&& __rg);
+	insert_range(const_iterator __pos, _Rg&& __rg)
+	_GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        * @brief Append a range at the end of the vector.
@@ -1794,7 +1798,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	constexpr void
-	append_range(_Rg&& __rg)
+	append_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  // N.B. __rg may overlap with *this, so we must copy from __rg before
 	  // existing elements or iterators referring to *this are invalidated.

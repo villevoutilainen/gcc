@@ -62,6 +62,33 @@ namespace census
     return n;
   }
 
+  // Views over owned and nested ranges, their iterators, and the
+  // view_interface accessors.
+  int more_views ()
+  {
+    namespace v = std::views;
+    int n = 0;
+    std::vector<int> nested[2] = { { 1, 2 }, { 3 } };
+    auto j = nested | v::join;
+    auto it = j.end ();
+    --it;
+    n += *it;
+    auto o = std::vector<int> { 1, 2, 3 } | v::all;
+    n += *o.begin () + o.size () + (o.end () != o.begin ());
+    n += o.front () + o.back ();
+    auto t = v::iota (0, 5) | v::take (3);
+    n += t.front ();
+    const int a[5] = { 1, 2, 3, 4, 5 };
+    auto at = a | v::adjacent_transform<3> ([] (auto... x) { return (x + ...); });
+    n += at.begin () == at.end ();
+    auto c = v::iota (0, 5) | v::take_while ([] (int x) { return x < 3; })
+	     | v::common;
+    n += c.begin () == c.end ();
+    std::vector<int> fr (std::from_range, a);
+    n += fr.size ();
+    return n;
+  }
+
   int all ()
   {
     namespace v = std::views;
@@ -75,6 +102,7 @@ namespace census
     rrange<int, input_iterator_wrapper> in (a);
     n += consume (in | v::take (2));
     n += consume (a) + std::ranges::ssize (a);
+    n += more_views ();
     rrange<int, forward_iterator_wrapper> fw (a);
     n += pipelines (fw);
     std::vector<std::vector<int>> nested = { { 1 }, { 2, 3 } };

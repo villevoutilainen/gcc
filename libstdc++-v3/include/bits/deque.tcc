@@ -902,6 +902,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
   template<ranges::forward_range _Rg>
     auto __advance_dist(_Rg& __rg)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__rg);
       struct _Res
 	{
 	  ranges::iterator_t<_Rg> __last;

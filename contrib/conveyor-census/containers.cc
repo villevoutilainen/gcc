@@ -277,9 +277,53 @@ namespace census
     friend auto operator<=> (const Key &, const Key &) = default;
   };
 
-  int all ()
+  int takes_object (const Val &x)
+    CENSUS_OBJECT (x)
+  { return x.v; }
+
+  // Members of the sequences that call their own accessors, and the
+  // range constructors and members given an array.
+  int sequence_extras ()
   {
     int n = 0;
+    const std::vector<int> cv = { 1, 2 };
+    n += *cv.rbegin () + *(cv.rend () - 1);
+    std::vector<int> v;
+    v.reserve (4);
+    std::array<long, 4> a;
+    a.fill (1);
+#ifdef _GLIBCXX_CONVEYOR_ASSERTIONS
+    // What the library promises in conveyor mode only.
+    std::array<Val, 3> av {};
+    n += takes_object (av[1]);
+#endif
+    const int r[2] = { 1, 2 };
+    std::deque<int> d (std::from_range, r);
+    std::list<int> l (std::from_range, r);
+    std::vector<int> w (std::from_range, r);
+    v.append_range (r);
+    d.append_range (r);
+    l.append_range (r);
+    v.assign_range (r);
+    d.assign_range (r);
+    l.assign_range (r);
+    v.insert_range (v.begin (), r);
+    d.insert_range (d.begin (), r);
+    l.insert_range (l.begin (), r);
+    d.prepend_range (r);
+    l.prepend_range (r);
+    std::forward_list<int> f (std::from_range, r);
+    f.assign_range (r);
+    f.prepend_range (r);
+    f.insert_range_after (f.before_begin (), r);
+    n += *f.begin ();
+    n += d.size () + l.size () + w.size () + a[0];
+    return n;
+  }
+
+  int all ()
+  {
+    int n = sequence_extras ();
     n += sequences<int, std::allocator> ();
     n += sequences<Val, std::allocator> ();
     n += sequences<ThrowCopy, std::allocator> ();
