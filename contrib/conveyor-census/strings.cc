@@ -73,11 +73,80 @@ namespace census
     return n;
   }
 
+  // Every overload of the find family.
+  template<class S>
+  int find_all (const S &s, const S &t)
+    CENSUS_OBJECT (s) CENSUS_OBJECT (t)
+  {
+    using C = typename S::value_type;
+    const C p[] = { C ('a'), C ('b'), C () };
+    std::basic_string_view<C> v (p, 2);
+    int n = 0;
+#define CENSUS_FIND(F) \
+    n += s.F (t) + s.F (v) + s.F (p, 0, 2) + s.F (p) + s.F (C ('a'));
+    CENSUS_FIND (find)
+    CENSUS_FIND (rfind)
+    CENSUS_FIND (find_first_of)
+    CENSUS_FIND (find_last_of)
+    CENSUS_FIND (find_first_not_of)
+    CENSUS_FIND (find_last_not_of)
+#undef CENSUS_FIND
+    return n;
+  }
+
+  // The other overloads taking a string, a view, a pointer or a range.
+  template<class S>
+  int overloads_all (S &s, const S &t)
+    CENSUS_OBJECT (s) CENSUS_OBJECT (t)
+  {
+    using C = typename S::value_type;
+    const C p[] = { C ('a'), C ('b'), C () };
+    std::basic_string_view<C> v (p, 2);
+    int n = 0;
+    s.assign (t); s.assign (t, 0, 1); s.assign (v); s.assign (v, 0, 1);
+    s.assign (p, 2); s.assign (p); s.assign (2, C ('a'));
+    s.assign (p, p + 2); s.assign ({ C ('a') });
+    s.append (t, 0, 1); s.append (v, 0, 1); s.append (p, 2); s.append (p);
+    s.append (p, p + 2); s.append ({ C ('a') });
+    s += v; s += p; s += { C ('a') };
+    s.insert (0, t, 0, 1); s.insert (0, v); s.insert (0, v, 0, 1);
+    s.insert (0, p, 2); s.insert (0, p); s.insert (0, 2, C ('a'));
+    s.insert (s.begin (), 2, C ('a')); s.insert (s.begin (), p, p + 2);
+    s.insert (s.begin (), { C ('a') });
+    s.replace (0, 1, t, 0, 1); s.replace (0, 1, v); s.replace (0, 1, v, 0, 1);
+    s.replace (0, 1, p, 2); s.replace (0, 1, p); s.replace (0, 1, 2, C ('a'));
+    s.replace (s.begin (), s.begin () + 1, t);
+    s.replace (s.begin (), s.begin () + 1, v);
+    s.replace (s.begin (), s.begin () + 1, p, 2);
+    s.replace (s.begin (), s.begin () + 1, p);
+    s.replace (s.begin (), s.begin () + 1, 2, C ('a'));
+    s.replace (s.begin (), s.begin () + 1, p, p + 2);
+    s.replace (s.begin (), s.begin () + 1, { C ('a') });
+    n += s.compare (v) + s.compare (0, 1, t) + s.compare (0, 1, t, 0, 1)
+	 + s.compare (0, 1, v) + s.compare (0, 1, v, 0, 1) + s.compare (p)
+	 + s.compare (0, 1, p) + s.compare (0, 1, p, 2);
+    n += s.starts_with (v) + s.starts_with (p) + s.ends_with (v)
+	 + s.ends_with (p) + s.ends_with (C ('a')) + s.contains (v)
+	 + s.contains (p) + s.contains (t);
+    C buf[4];
+    n += s.copy (buf, 2) + s.substr ().size ();
+    s.erase (s.begin (), s.begin () + 1);
+    s.insert (0, t);
+    s.resize (4);
+    s.append_range (v); s.assign_range (v); s.insert_range (s.begin (), v);
+    s.replace_with_range (s.begin (), s.begin () + 1, v);
+    s.resize_and_overwrite (2, [] (C *, std::size_t k) { return k; });
+    n += s.empty () + (s.get_allocator () == t.get_allocator ());
+    n += *s.begin () == *s.cbegin () && *s.rbegin () == *s.crbegin ();
+    n += s.end () == s.cend () || s.rend () == s.crend ();
+    return n;
+  }
+
   template<class C, class A>
   int strings ()
   {
     std::basic_string<C, std::char_traits<C>, A> s, t;
-    return use_string (s, t);
+    return use_string (s, t) + find_all (s, t) + overloads_all (s, t);
   }
 
   int all ()

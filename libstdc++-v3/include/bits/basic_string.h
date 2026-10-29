@@ -1703,7 +1703,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_iterator
-      cend() const noexcept
+      cend() const noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return const_iterator(this->_M_data() + this->size()); }
 
       /**
@@ -2271,7 +2271,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       template<__detail::__container_compatible_range<_CharT> _Rg>
 	constexpr basic_string&
-	append_range(_Rg&& __rg)
+	append_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  // N.B. __rg may overlap with *this, so we must copy from __rg before
 	  // existing elements or iterators referring to *this are invalidated.
@@ -2490,6 +2490,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       assign(const basic_string& __str, size_type __pos, size_type __n = npos)
+      _GLIBCXX_CONVEYOR_REQUIRES(__str) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _M_replace(size_type(0), this->size(), __str._M_data()
 			  + __str._M_check(__pos, "basic_string::assign"),
 			  __str._M_limit(__pos, __n)); }
@@ -2615,7 +2616,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       template<__detail::__container_compatible_range<_CharT> _Rg>
 	constexpr basic_string&
-	assign_range(_Rg&& __rg)
+	assign_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  basic_string __s(from_range, std::forward<_Rg>(__rg),
 			   _M_get_allocator());
@@ -2632,7 +2633,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX20_CONSTEXPR
       basic_string&
-      assign(initializer_list<_CharT> __l)
+      assign(initializer_list<_CharT> __l) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	// The initializer_list array cannot alias the characters in *this
 	// so we don't need to use replace to that case.
@@ -2675,6 +2676,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_GLIBCXX20_CONSTEXPR
 	_If_sv<_Tp, basic_string&>
 	assign(const _Tp& __svt, size_type __pos, size_type __n = npos)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  __sv_type __sv = __svt;
 	  return _M_replace(size_type(0), this->size(),
@@ -2798,6 +2800,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       template<__detail::__container_compatible_range<_CharT> _Rg>
 	constexpr iterator
 	insert_range(const_iterator __p, _Rg&& __rg)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  auto __pos = __p - cbegin();
 
@@ -3255,6 +3258,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       replace(__const_iterator __i1, __const_iterator __i2,
 	      const basic_string& __str)
+      _GLIBCXX_CONVEYOR_REQUIRES(__str) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return this->replace(__i1, __i2, __str._M_data(), __str.size()); }
 
       /**
@@ -3435,6 +3439,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       template<__detail::__container_compatible_range<_CharT> _Rg>
 	constexpr basic_string&
 	replace_with_range(const_iterator __i1, const_iterator __i2, _Rg&& __rg)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  if (__i1 == cend())
 	    append_range(std::forward<_Rg>(__rg));
@@ -3711,6 +3716,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_If_sv<_Tp, size_type>
 	find(const _Tp& __svt, size_type __pos = 0) const
 	noexcept(is_same<_Tp, __sv_type>::value)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  __sv_type __sv = __svt;
 	  return this->find(__sv.data(), __pos, __sv.size());
@@ -3730,6 +3736,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find(const _CharT* __s, size_type __pos = 0) const _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_requires_string(__s);
 	return this->find(__s, __pos, traits_type::length(__s));
@@ -3747,7 +3754,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
-      find(_CharT __c, size_type __pos = 0) const _GLIBCXX_NOEXCEPT;
+      find(_CharT __c, size_type __pos = 0) const _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  @brief  Find last position of a string.
@@ -3762,7 +3770,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       rfind(const basic_string& __str, size_type __pos = npos) const
-      _GLIBCXX_NOEXCEPT
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES(__str)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return this->rfind(__str.data(), __pos, __str.size()); }
 
 #ifdef __glibcxx_string_view // >= C++17
@@ -3777,6 +3786,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_If_sv<_Tp, size_type>
 	rfind(const _Tp& __svt, size_type __pos = npos) const
 	noexcept(is_same<_Tp, __sv_type>::value)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  __sv_type __sv = __svt;
 	  return this->rfind(__sv.data(), __pos, __sv.size());
@@ -3798,7 +3808,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       rfind(const _CharT* __s, size_type __pos, size_type __n) const
-      _GLIBCXX_NOEXCEPT;
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  @brief  Find last position of a C string.
@@ -3813,6 +3823,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       rfind(const _CharT* __s, size_type __pos = npos) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_requires_string(__s);
 	return this->rfind(__s, __pos, traits_type::length(__s));
@@ -3866,6 +3877,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_If_sv<_Tp, size_type>
 	find_first_of(const _Tp& __svt, size_type __pos = 0) const
 	noexcept(is_same<_Tp, __sv_type>::value)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  __sv_type __sv = __svt;
 	  return this->find_first_of(__sv.data(), __pos, __sv.size());
@@ -3902,7 +3914,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_first_of(const _CharT* __s, size_type __pos = 0) const
-      _GLIBCXX_NOEXCEPT
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_requires_string(__s);
 	return this->find_first_of(__s, __pos, traits_type::length(__s));
@@ -3923,6 +3935,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_first_of(_CharT __c, size_type __pos = 0) const _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return this->find(__c, __pos); }
 
       /**
@@ -3939,7 +3952,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_last_of(const basic_string& __str, size_type __pos = npos) const
-      _GLIBCXX_NOEXCEPT
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES(__str)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return this->find_last_of(__str.data(), __pos, __str.size()); }
 
 #ifdef __glibcxx_string_view // >= C++17
@@ -3955,6 +3969,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_If_sv<_Tp, size_type>
 	find_last_of(const _Tp& __svt, size_type __pos = npos) const
 	noexcept(is_same<_Tp, __sv_type>::value)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  __sv_type __sv = __svt;
 	  return this->find_last_of(__sv.data(), __pos, __sv.size());
@@ -3976,7 +3991,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_last_of(const _CharT* __s, size_type __pos, size_type __n) const
-      _GLIBCXX_NOEXCEPT;
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  @brief  Find last position of a character of C string.
@@ -3991,7 +4006,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_last_of(const _CharT* __s, size_type __pos = npos) const
-      _GLIBCXX_NOEXCEPT
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_requires_string(__s);
 	return this->find_last_of(__s, __pos, traits_type::length(__s));
@@ -4012,6 +4027,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_last_of(_CharT __c, size_type __pos = npos) const _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return this->rfind(__c, __pos); }
 
       /**
@@ -4027,7 +4043,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_first_not_of(const basic_string& __str, size_type __pos = 0) const
-      _GLIBCXX_NOEXCEPT
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES(__str)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return this->find_first_not_of(__str.data(), __pos, __str.size()); }
 
 #ifdef __glibcxx_string_view // >= C++17
@@ -4043,6 +4060,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_If_sv<_Tp, size_type>
 	find_first_not_of(const _Tp& __svt, size_type __pos = 0) const
 	noexcept(is_same<_Tp, __sv_type>::value)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  __sv_type __sv = __svt;
 	  return this->find_first_not_of(__sv.data(), __pos, __sv.size());
@@ -4064,7 +4082,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_first_not_of(const _CharT* __s, size_type __pos,
-			size_type __n) const _GLIBCXX_NOEXCEPT;
+			size_type __n) const _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  @brief  Find position of a character not in C string.
@@ -4079,7 +4098,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_first_not_of(const _CharT* __s, size_type __pos = 0) const
-      _GLIBCXX_NOEXCEPT
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_requires_string(__s);
 	return this->find_first_not_of(__s, __pos, traits_type::length(__s));
@@ -4098,7 +4117,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_first_not_of(_CharT __c, size_type __pos = 0) const
-      _GLIBCXX_NOEXCEPT;
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  @brief  Find last position of a character not in string.
@@ -4114,7 +4133,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_last_not_of(const basic_string& __str, size_type __pos = npos) const
-      _GLIBCXX_NOEXCEPT
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES(__str)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return this->find_last_not_of(__str.data(), __pos, __str.size()); }
 
 #ifdef __glibcxx_string_view // >= C++17
@@ -4130,6 +4150,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_If_sv<_Tp, size_type>
 	find_last_not_of(const _Tp& __svt, size_type __pos = npos) const
 	noexcept(is_same<_Tp, __sv_type>::value)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  __sv_type __sv = __svt;
 	  return this->find_last_not_of(__sv.data(), __pos, __sv.size());
@@ -4151,7 +4172,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_last_not_of(const _CharT* __s, size_type __pos,
-		       size_type __n) const _GLIBCXX_NOEXCEPT;
+		       size_type __n) const _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS;
       /**
        *  @brief  Find last position of a character not in C string.
        *  @param __s  C string containing characters to avoid.
@@ -4166,7 +4188,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_last_not_of(const _CharT* __s, size_type __pos = npos) const
-      _GLIBCXX_NOEXCEPT
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_requires_string(__s);
 	return this->find_last_not_of(__s, __pos, traits_type::length(__s));
@@ -4282,6 +4304,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_If_sv<_Tp, int>
 	compare(const _Tp& __svt) const
 	noexcept(is_same<_Tp, __sv_type>::value)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  __sv_type __sv = __svt;
 	  const size_type __size = this->size();
@@ -4355,6 +4378,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       int
       compare(size_type __pos, size_type __n, const basic_string& __str) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__str) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	_M_check(__pos, "basic_string::compare");
 	__n = _M_limit(__pos, __n);
@@ -4423,6 +4447,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       int
       compare(const _CharT* __s) const _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_requires_string(__s);
 	const size_type __size = this->size();
@@ -4513,6 +4538,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       [[nodiscard]]
       constexpr bool
       starts_with(basic_string_view<_CharT, _Traits> __x) const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return __sv_type(this->data(), this->size()).starts_with(__x); }
 
       [[nodiscard]]
@@ -4523,6 +4549,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       [[nodiscard, __gnu__::__nonnull__]]
       constexpr bool
       starts_with(const _CharT* __x) const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return __sv_type(this->data(), this->size()).starts_with(__x); }
 
       [[nodiscard]]
@@ -4533,12 +4560,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       [[nodiscard]]
       constexpr bool
-      ends_with(_CharT __x) const noexcept
+      ends_with(_CharT __x) const noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return __sv_type(this->data(), this->size()).ends_with(__x); }
 
       [[nodiscard, __gnu__::__nonnull__]]
       constexpr bool
       ends_with(const _CharT* __x) const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return __sv_type(this->data(), this->size()).ends_with(__x); }
 #endif // C++20
 
@@ -4546,6 +4574,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       [[nodiscard]]
       constexpr bool
       contains(basic_string_view<_CharT, _Traits> __x) const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return __sv_type(this->data(), this->size()).contains(__x); }
 
       [[nodiscard]]
@@ -4556,6 +4585,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       [[nodiscard, __gnu__::__nonnull__]]
       constexpr bool
       contains(const _CharT* __x) const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return __sv_type(this->data(), this->size()).contains(__x); }
 #endif // C++23
 
