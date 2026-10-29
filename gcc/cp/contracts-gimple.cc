@@ -11778,6 +11778,9 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src,
 	const cg_field_fact *ov = src.field.get (it.first);
 	if (!ov)
 	  continue;
+	/* Updated in place: a put here, even of the key already present,
+	   may expand the table under this very iteration, leaving IT's key
+	   a reference into the freed old one.  */
 	cg_field_fact &f = it.second;
 	f.range.has_lo = f.range.has_lo && ov->range.has_lo;
 	f.range.has_hi = f.range.has_hi && ov->range.has_hi;
@@ -11793,7 +11796,6 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src,
 	f.object_address = f.object_address && ov->object_address;
 	f.conveyor_established
 	  = f.conveyor_established && ov->conveyor_established;
-	dst->field.put (it.first, f);
       }
   for (auto it : dst->field)
     {
