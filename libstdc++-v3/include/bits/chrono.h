@@ -187,6 +187,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  static constexpr _ToDur
 	  __cast(const duration<_Rep, _Period>& __d)
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__d);
 	    typedef typename _ToDur::rep			__to_rep;
 	    return _ToDur(static_cast<__to_rep>(static_cast<_CR>(__d.count())
 	      * static_cast<_CR>(_CF::num)

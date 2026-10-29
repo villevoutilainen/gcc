@@ -83,6 +83,10 @@ namespace census
     d2 -= d;
     d2 %= d;
     n += d2.count () > 0;
+    // A ratio that's neither a whole multiple nor a whole fraction.
+    using thirds = std::chrono::duration<long, std::ratio<1, 3>>;
+    using halves = std::chrono::duration<long, std::ratio<1, 2>>;
+    n += duration_cast<halves> (thirds (5)).count ();
     auto t = system_clock::now ();
     n += time_point_cast<seconds> (t).time_since_epoch ().count () > 0;
     t += d;
