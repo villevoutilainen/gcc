@@ -1577,7 +1577,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[__nodiscard__]]
       _GLIBCXX17_CONSTEXPR reference
-      operator*() const
+      operator*() const _GLIBCXX_CONVEYOR_RETURNS_OBJECT
 #ifdef __glibcxx_ranges
       { return ranges::iter_move(_M_current); }
 #else
