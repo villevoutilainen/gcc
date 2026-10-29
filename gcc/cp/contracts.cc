@@ -28808,9 +28808,48 @@ oa_counted_loop_cond (tree loop, oa_env &env)
   if (TREE_CODE (x) == INTEGER_CST)
     std::swap (x, c);
   if (!VAR_P (x) || TREE_CODE (c) != INTEGER_CST
-      || !INTEGRAL_TYPE_P (TREE_TYPE (x)) || TREE_ADDRESSABLE (x)
+      || !INTEGRAL_TYPE_P (TREE_TYPE (x))
       || TREE_STATIC (x) || DECL_EXTERNAL (x)
       || DECL_CONTEXT (x) != current_function_decl)
+    return NULL_TREE;
+  /* Its address taken only to read it, as a reference or pointer to const
+     -- an argument printed, for example; a call given that doesn't change
+     X, as everywhere else in this analysis -- and nowhere else.  */
+  if (TREE_ADDRESSABLE (x)
+      && (!DECL_SAVED_TREE (current_function_decl)
+	  || cp_walk_tree_without_duplicates
+	       (&DECL_SAVED_TREE (current_function_decl),
+		[] (tree *tp, int *walk_subtrees, void *d) -> tree
+		  {
+		    tree t = *tp;
+		    tree x = (tree) d;
+		    if (CONVERT_EXPR_P (t) || TREE_CODE (t) == NON_LVALUE_EXPR)
+		      {
+			tree to = TREE_TYPE (t);
+			tree op = TREE_OPERAND (t, 0);
+			STRIP_ANY_LOCATION_WRAPPER (op);
+			if ((TYPE_REF_P (to) || TYPE_PTR_P (to))
+			    && TYPE_READONLY (TREE_TYPE (to))
+			    && TREE_CODE (op) == ADDR_EXPR)
+			  {
+			    tree a = TREE_OPERAND (op, 0);
+			    STRIP_ANY_LOCATION_WRAPPER (a);
+			    if (a == x)
+			      {
+				*walk_subtrees = 0;
+				return NULL_TREE;
+			      }
+			  }
+		      }
+		    if (TREE_CODE (t) == ADDR_EXPR)
+		      {
+			tree a = TREE_OPERAND (t, 0);
+			STRIP_ANY_LOCATION_WRAPPER (a);
+			if (a == x)
+			  return t;
+		      }
+		    return NULL_TREE;
+		  }, x)))
     return NULL_TREE;
   bool up;
   switch (TREE_CODE (expr))
@@ -28830,7 +28869,7 @@ oa_counted_loop_cond (tree loop, oa_env &env)
   STRIP_ANY_LOCATION_WRAPPER (xop);
   if (xop != x || !integer_onep (TREE_OPERAND (expr, 1)))
     return NULL_TREE;
-  /* Nothing else writes X.  */
+  /* Nothing else writes X directly (through its address, below).  */
   if (cp_walk_tree_without_duplicates (&FOR_BODY (loop),
 				       [] (tree *tp, int *, void *d) -> tree
     {
@@ -28848,14 +28887,6 @@ oa_counted_loop_cond (tree loop, oa_env &env)
 	    tree lhs = TREE_OPERAND (t, 0);
 	    STRIP_ANY_LOCATION_WRAPPER (lhs);
 	    if (lhs == x)
-	      return t;
-	  }
-	  break;
-	case ADDR_EXPR:
-	  {
-	    tree op = TREE_OPERAND (t, 0);
-	    STRIP_ANY_LOCATION_WRAPPER (op);
-	    if (op == x)
 	      return t;
 	  }
 	  break;
