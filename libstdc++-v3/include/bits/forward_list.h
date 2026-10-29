@@ -180,7 +180,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       [[__nodiscard__]]
       reference
-      operator*() const noexcept
+      operator*() const noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *static_cast<_Node*>(this->_M_node)->_M_valptr(); }
 
       [[__nodiscard__]]
@@ -271,7 +271,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       [[__nodiscard__]]
       reference
-      operator*() const noexcept
+      operator*() const noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *static_cast<_Node*>(this->_M_node)->_M_valptr(); }
 
       [[__nodiscard__]]
@@ -933,6 +933,7 @@ namespace __fwdlist
        *                  types.
        */
       forward_list(const forward_list& __list)
+      _GLIBCXX_CONVEYOR_TRUST_PRE(__list)
       : _Base(_Node_alloc_traits::_S_select_on_copy(
 		__list._M_get_Node_allocator()))
       { _M_range_initialize(__list.begin(), __list.end()); }

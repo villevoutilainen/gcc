@@ -1279,6 +1279,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>
 	(std::is_object_address (__builtin_addressof (__a)))
+      _GLIBCXX_CONVEYOR_TRUST_PRE(__str)
 #endif
       : _M_dataplus(_M_local_data(), __a)
       {

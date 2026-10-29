@@ -1284,6 +1284,8 @@ namespace std _GLIBCXX_VISIBILITY(default)
 	  { __u < __t } -> __boolean_testable;
 	}
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__t);
+	  _GLIBCXX_CONVEYOR_TRUST(__u);
 	  if constexpr (three_way_comparable_with<_Tp, _Up>)
 	    return __t <=> __u;
 	  else

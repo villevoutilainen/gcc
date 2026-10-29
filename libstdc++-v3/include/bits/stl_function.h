@@ -405,7 +405,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX14_CONSTEXPR
       bool
       operator()(const _Tp& __x, const _Tp& __y) const
-      { return __x < __y; }
+      {
+	_GLIBCXX_CONVEYOR_TRUST(__x);
+	_GLIBCXX_CONVEYOR_TRUST(__y);
+	return __x < __y;
+      }
     };
 
   /// One of the @link comparison_functors comparison functors@endlink.

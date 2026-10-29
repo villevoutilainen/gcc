@@ -1744,7 +1744,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	_GLIBCXX20_CONSTEXPR
 	iterator
 	insert(const_iterator __position, _InputIterator __first,
-	       _InputIterator __last)
+	       _InputIterator __last) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  difference_type __offset = __position - cbegin();
 	  _M_range_insert(begin() + __offset, __first, __last,
