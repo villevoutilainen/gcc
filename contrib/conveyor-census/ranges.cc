@@ -19,7 +19,7 @@ namespace census
     for (auto &&x : r)
       n += sizeof (x) > 0;
     if constexpr (std::ranges::sized_range<R>)
-      n += std::ranges::size (r);
+      n += std::ranges::size (r) + std::ranges::ssize (r);
     if constexpr (std::ranges::forward_range<R>)
       n += std::ranges::distance (r) + !std::ranges::empty (r);
     return n;
@@ -74,6 +74,7 @@ namespace census
     int a[4] = { 1, 2, 3, 4 };
     rrange<int, input_iterator_wrapper> in (a);
     n += consume (in | v::take (2));
+    n += consume (a) + std::ranges::ssize (a);
     rrange<int, forward_iterator_wrapper> fw (a);
     n += pipelines (fw);
     std::vector<std::vector<int>> nested = { { 1 }, { 2, 3 } };

@@ -89,6 +89,21 @@ namespace census
       d.emplace_front (1);
       d.pop_front ();
     }
+    if constexpr (std::default_initializable<T>)
+      {
+	// The sized constructors.
+	std::vector<T, A<T>> v (3);
+	std::deque<T, A<T>> d (3);
+	std::list<T, A<T>> l (3);
+	n += v.size () + d.size () + l.size ();
+	if constexpr (std::copyable<T>)
+	  {
+	    std::vector<T, A<T>> v2 (3, v[0]);
+	    std::deque<T, A<T>> d2 (3, d[0]);
+	    std::list<T, A<T>> l2 (3, l.front ());
+	    n += v2.size () + d2.size () + l2.size ();
+	  }
+      }
     {
       std::list<T, A<T>> l, m;
       n += use_sequence (l, m);
@@ -182,7 +197,7 @@ namespace census
     n += s.size () + (s[0] == s.front ()) + s.subspan (1).size ()
 	 + s.first (1).size () + s.last (1).size ();
     std::span<const T, N> cs (a);
-    n += cs.size_bytes () > 0;
+    n += (cs.size_bytes () > 0) + (s.size_bytes () > 0);
     for (auto &x : a)
       n += x == x;
     return n;

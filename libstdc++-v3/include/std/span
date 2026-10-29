@@ -289,7 +289,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[nodiscard]]
       constexpr size_type
-      size_bytes() const noexcept
+      size_bytes() const noexcept _GLIBCXX_CONVEYOR
       { return this->_M_extent._M_extent() * sizeof(element_type); }
 
       [[nodiscard]]

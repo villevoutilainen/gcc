@@ -184,12 +184,12 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
   /// Error category for `errno` error codes.
   [[__nodiscard__, __gnu__::__const__]]
   const error_category&
-  generic_category() noexcept;
+  generic_category() noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
   /// Error category for other error codes defined by the OS.
   [[__nodiscard__, __gnu__::__const__]]
   const error_category&
-  system_category() noexcept;
+  system_category() noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
   /// @}
 
