@@ -28779,6 +28779,105 @@ oa_stmt_terminates_p (tree stmt)
     }
 }
 
+/* A counted loop, 'for (x = A; x != C; ++x)' (or '--x' with A >= C), whose
+   variable only the increment writes and which starts on the near side of
+   C: since X moves towards C by one each iteration and the loop ends on
+   reaching it, the body sees the bound a '<' (or '>') would give.  Return
+   that condition, for analysing the loop with, or NULL_TREE.  ENV is the
+   state after the loop's init-statement.  */
+
+static tree
+oa_counted_loop_cond (tree loop, oa_env &env)
+{
+  if (FOR_COND_PREP (loop))
+    return NULL_TREE;
+  tree cond = FOR_COND (loop), expr = FOR_EXPR (loop);
+  if (!cond || !expr)
+    return NULL_TREE;
+  STRIP_ANY_LOCATION_WRAPPER (cond);
+  STRIP_ANY_LOCATION_WRAPPER (expr);
+  if (TREE_CODE (expr) == CLEANUP_POINT_EXPR)
+    expr = TREE_OPERAND (expr, 0);
+  if (TREE_CODE (expr) == CONVERT_EXPR && VOID_TYPE_P (TREE_TYPE (expr)))
+    expr = TREE_OPERAND (expr, 0);
+  if (TREE_CODE (cond) != NE_EXPR)
+    return NULL_TREE;
+  tree x = TREE_OPERAND (cond, 0), c = TREE_OPERAND (cond, 1);
+  STRIP_ANY_LOCATION_WRAPPER (x);
+  STRIP_ANY_LOCATION_WRAPPER (c);
+  if (TREE_CODE (x) == INTEGER_CST)
+    std::swap (x, c);
+  if (!VAR_P (x) || TREE_CODE (c) != INTEGER_CST
+      || !INTEGRAL_TYPE_P (TREE_TYPE (x)) || TREE_ADDRESSABLE (x)
+      || TREE_STATIC (x) || DECL_EXTERNAL (x)
+      || DECL_CONTEXT (x) != current_function_decl)
+    return NULL_TREE;
+  bool up;
+  switch (TREE_CODE (expr))
+    {
+    case PREINCREMENT_EXPR:
+    case POSTINCREMENT_EXPR:
+      up = true;
+      break;
+    case PREDECREMENT_EXPR:
+    case POSTDECREMENT_EXPR:
+      up = false;
+      break;
+    default:
+      return NULL_TREE;
+    }
+  tree xop = TREE_OPERAND (expr, 0);
+  STRIP_ANY_LOCATION_WRAPPER (xop);
+  if (xop != x || !integer_onep (TREE_OPERAND (expr, 1)))
+    return NULL_TREE;
+  /* Nothing else writes X.  */
+  if (cp_walk_tree_without_duplicates (&FOR_BODY (loop),
+				       [] (tree *tp, int *, void *d) -> tree
+    {
+      tree t = *tp;
+      tree x = (tree) d;
+      switch (TREE_CODE (t))
+	{
+	case MODIFY_EXPR:
+	case INIT_EXPR:
+	case PREINCREMENT_EXPR:
+	case POSTINCREMENT_EXPR:
+	case PREDECREMENT_EXPR:
+	case POSTDECREMENT_EXPR:
+	  {
+	    tree lhs = TREE_OPERAND (t, 0);
+	    STRIP_ANY_LOCATION_WRAPPER (lhs);
+	    if (lhs == x)
+	      return t;
+	  }
+	  break;
+	case ADDR_EXPR:
+	  {
+	    tree op = TREE_OPERAND (t, 0);
+	    STRIP_ANY_LOCATION_WRAPPER (op);
+	    if (op == x)
+	      return t;
+	  }
+	  break;
+	default:
+	  break;
+	}
+      return NULL_TREE;
+    }, x))
+    return NULL_TREE;
+  oa_range_fact start;
+  widest_int bound = wi::to_widest (c);
+  if (!env.range_get (x, &start) || start.base)
+    return NULL_TREE;
+  if (up ? !(start.has_hi && start.hi <= bound)
+	 : !(start.has_lo && start.lo >= bound))
+    return NULL_TREE;
+  tree counted = build2 (up ? LT_EXPR : GT_EXPR, TREE_TYPE (FOR_COND (loop)),
+			 x, c);
+  protected_set_expr_location (counted, cp_expr_loc_or_input_loc (cond));
+  return counted;
+}
+
 /* The forward statement walker: processes *STMT (an arbitrary
    statement or statement-sequence) in program order, threading ENV
    forward -- an abstract, flow-sensitive simulation of "what is
@@ -31012,8 +31111,12 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	 (cond-prep/cond/body/increment) repeats every iteration, handled
 	 by the loop-header merge rule (item 4).  */
       oa_walk_stmt (&FOR_INIT_STMT (t), env);
-      oa_handle_loop (&FOR_COND_PREP (t), &FOR_COND (t), &FOR_BODY (t),
-		      &FOR_EXPR (t), env);
+      if (tree counted = oa_counted_loop_cond (t, env))
+	oa_handle_loop (&FOR_COND_PREP (t), &counted, &FOR_BODY (t),
+			&FOR_EXPR (t), env);
+      else
+	oa_handle_loop (&FOR_COND_PREP (t), &FOR_COND (t), &FOR_BODY (t),
+			&FOR_EXPR (t), env);
       return;
 
     case WHILE_STMT:
