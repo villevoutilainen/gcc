@@ -1316,6 +1316,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __diff_type
       _M_lookup(_Key __key, __diff_type __not_found) const
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	auto __iter = _M_bad_char.find(__key);
 	if (__iter == _M_bad_char.end())
 	  return __not_found;
@@ -1547,8 +1548,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	      const auto __match = __first + __diff_type(__i + 1);
 	      return std::make_pair(__match, __match + __patlen);
 	    }
-	  __i += std::max(_M_bad_char_shift(__first[__i]),
-			  _M_good_suffix[__j]);
+	  // Values, not references to the table: std::max requires objects.
+	  const __diff_type __bad = _M_bad_char_shift(__first[__i]);
+	  const __diff_type __good = _M_good_suffix[__j];
+	  __i += std::max(__bad, __good);
 	}
       return std::make_pair(__last, __last);
     }
