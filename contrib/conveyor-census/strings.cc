@@ -91,6 +91,7 @@ namespace census
     CENSUS_FIND (find_first_not_of)
     CENSUS_FIND (find_last_not_of)
 #undef CENSUS_FIND
+    n += (s <=> p) == 0 && (s == p) && !(s != p);
     return n;
   }
 

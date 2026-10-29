@@ -5027,6 +5027,10 @@ _GLIBCXX_END_NAMESPACE_CXX11
     operator<=>(const basic_string<_CharT, _Traits, _Alloc>& __lhs,
 		const _CharT* __rhs) noexcept
     -> decltype(__detail::__char_traits_cmp_cat<_Traits>(0))
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__lhs)))
+#endif
     { return __detail::__char_traits_cmp_cat<_Traits>(__lhs.compare(__rhs)); }
 #else
   /**
