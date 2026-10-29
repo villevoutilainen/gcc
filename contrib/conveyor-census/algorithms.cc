@@ -199,9 +199,23 @@ namespace census
     return n;
   }
 
+  // The searchers, whose skip table for a type other than a narrow
+  // character is a hash map.
+  int searchers ()
+  {
+    std::vector<int> hay = { 1, 2, 3, 4, 2, 3 };
+    std::vector<int> needle = { 2, 3 };
+    std::boyer_moore_searcher bm (needle.begin (), needle.end ());
+    std::boyer_moore_horspool_searcher bmh (needle.begin (), needle.end ());
+    std::default_searcher ds (needle.begin (), needle.end ());
+    return (std::search (hay.begin (), hay.end (), bm) - hay.begin ())
+	   + (std::search (hay.begin (), hay.end (), bmh) - hay.begin ())
+	   + (std::search (hay.begin (), hay.end (), ds) - hay.begin ());
+  }
+
   int all ()
   {
-    int n = 0;
+    int n = searchers ();
     int ai[4] = { 4, 3, 2, 1 };
     Val av[4] = { 4, 3, 2, 1 };
     n += random_access (ai, ai + 4) + random_access (av, av + 4);
