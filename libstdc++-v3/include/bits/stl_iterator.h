@@ -256,7 +256,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       _GLIBCXX_NODISCARD
       _GLIBCXX17_CONSTEXPR reference
-      operator*() const
+      operator*() const _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	_Iterator __tmp = current;
 	return *--__tmp;
