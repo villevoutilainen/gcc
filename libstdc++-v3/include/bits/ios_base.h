@@ -239,7 +239,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
   [[__nodiscard__, __gnu__::__const__]]
   const error_category&
-  iostream_category() noexcept;
+  iostream_category() noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
   [[__nodiscard__]]
   inline error_code

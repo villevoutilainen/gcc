@@ -421,6 +421,12 @@ namespace ranges
 	constexpr auto
 	operator()(_Tp&& __t) const noexcept(noexcept(_Size{}(__t)))
 	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  // An instance of ranges::size for an array is conveyor, so it has an
+	  // obligation of __t.
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (__builtin_addressof (__t)));
+#endif
 	  auto __size = _Size{}(__t);
 	  using __size_type = decltype(__size);
 	  // Return the wider of ptrdiff_t and make-signed-like-t<__size_type>.

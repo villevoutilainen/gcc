@@ -640,6 +640,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 	_GLIBCXX17_CONSTEXPR duration&
 	operator+=(const duration& __d)
+	_GLIBCXX_CONVEYOR_REQUIRES(__d)
 	{
 	  __r += __d.count();
 	  return *this;
@@ -647,6 +648,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 	_GLIBCXX17_CONSTEXPR duration&
 	operator-=(const duration& __d)
+	_GLIBCXX_CONVEYOR_REQUIRES(__d)
 	{
 	  __r -= __d.count();
 	  return *this;
@@ -680,6 +682,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  _GLIBCXX17_CONSTEXPR
 	  __enable_if_t<!treat_as_floating_point<_Rep2>::value, duration&>
 	  operator%=(const duration& __d)
+	  _GLIBCXX_CONVEYOR_REQUIRES(__d)
 	  {
 	    __r %= __d.count();
 	    return *this;
@@ -993,6 +996,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	// arithmetic
 	_GLIBCXX17_CONSTEXPR time_point&
 	operator+=(const duration& __dur)
+	_GLIBCXX_CONVEYOR_REQUIRES(__dur)
 	{
 	  __d += __dur;
 	  return *this;
@@ -1000,6 +1004,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 	_GLIBCXX17_CONSTEXPR time_point&
 	operator-=(const duration& __dur)
+	_GLIBCXX_CONVEYOR_REQUIRES(__dur)
 	{
 	  __d -= __dur;
 	  return *this;

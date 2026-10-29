@@ -69,6 +69,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     deque<_Tp, _Alloc>::
     _M_default_initialize()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _Map_pointer __cur;
       __try
 	{
@@ -399,6 +400,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     deque<_Tp, _Alloc>::
     _M_fill_initialize(const value_type& __value)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _Map_pointer __cur;
       __try
 	{
