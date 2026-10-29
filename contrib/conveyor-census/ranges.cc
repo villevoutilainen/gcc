@@ -86,6 +86,10 @@ namespace census
     n += c.begin () == c.end ();
     std::vector<int> fr (std::from_range, a);
     n += fr.size ();
+    std::unique_ptr<int> ups[] = { std::make_unique<int> (1),
+				   std::make_unique<int> (2) };
+    for (auto up : ups | v::as_rvalue)
+      n += *up;
     return n;
   }
 
