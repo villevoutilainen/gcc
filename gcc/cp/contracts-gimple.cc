@@ -116,6 +116,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-eh.h"
 #include "tree-cfg.h"
 #include "tree-cfgcleanup.h"
+#include "cfgloop.h"
+#include "tree-scalar-evolution.h"
 
 /* Positional correspondence between CALLEE's own PARM_DECLs and CALL's
    actual argument expressions -- the GIMPLE-level analogue of
@@ -16341,6 +16343,16 @@ pass_contracts_gimple::execute_1 (function *fun)
 		       established_call_call_rel, established_type_bound);
 
   calculate_dominance_info (CDI_DOMINATORS);
+  /* The loops build_cfg found, and their induction variables' evolutions,
+     so that ranger bounds a counted loop's variable from its start and
+     exit test -- 'for (i = 0; i != 4; ++i)' -- not just from a '<'.  */
+  bool own_scev = false;
+  if (!scev_initialized_p ())
+    {
+      loop_optimizer_init (LOOPS_NORMAL);
+      scev_initialize ();
+      own_scev = true;
+    }
   gimple_ranger *ranger = enable_ranger (fun, false);
 
   cg_assert_memory_verdict_map assert_memory_verdicts;
@@ -16492,6 +16504,11 @@ pass_contracts_gimple::execute_1 (function *fun)
   cg_short_circuit_sources = NULL;
   cg_array_bounds = NULL;
   disable_ranger (fun);
+  if (own_scev)
+    {
+      scev_finalize ();
+      loop_optimizer_finalize ();
+    }
 
   cg_remove_contract_marks (fun);
   return 0;
