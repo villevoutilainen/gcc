@@ -1136,6 +1136,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	_GLIBCXX26_CONSTEXPR
 	deque(from_range_t, _Rg&& __rg, const allocator_type& __a = _Alloc())
+	_GLIBCXX_CONVEYOR_REQUIRES(__rg)
 	: deque(__a)
 	{ append_range(std::forward<_Rg>(__rg)); }
 #endif
@@ -1266,7 +1267,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	constexpr void
-	assign_range(_Rg&& __rg)
+	assign_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  static_assert(assignable_from<_Tp&, ranges::range_reference_t<_Rg>>);
 
@@ -1948,7 +1949,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	_GLIBCXX26_CONSTEXPR iterator
-	insert_range(const_iterator __pos, _Rg&& __rg);
+	insert_range(const_iterator __pos, _Rg&& __rg)
+	_GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        * @brief Prepend a range at the beginning of the deque.
@@ -1957,7 +1959,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	_GLIBCXX26_CONSTEXPR void
-	prepend_range(_Rg&& __rg);
+	prepend_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        * @brief Append a range at the end of the deque.
@@ -1966,7 +1968,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	_GLIBCXX26_CONSTEXPR void
-	append_range(_Rg&& __rg);
+	append_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 #endif // containers_ranges
 
       /**

@@ -1283,6 +1283,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	list(from_range_t, _Rg&& __rg, const _Alloc& __a = _Alloc())
+	_GLIBCXX_CONVEYOR_REQUIRES(__rg)
 	: _Base(_Node_alloc_type(__a))
 	{
 	  auto __first = ranges::begin(__rg);
@@ -1382,7 +1383,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	void
-	assign_range(_Rg&& __rg)
+	assign_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  static_assert(assignable_from<_Tp&, ranges::range_reference_t<_Rg>>);
 
@@ -1766,7 +1767,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	void
-	prepend_range(_Rg&& __rg)
+	prepend_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  list __tmp(from_range, std::forward<_Rg>(__rg), get_allocator());
 	  if (!__tmp.empty())
@@ -1787,7 +1788,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	void
-	append_range(_Rg&& __rg)
+	append_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  list __tmp(from_range, std::forward<_Rg>(__rg), get_allocator());
 	  if (!__tmp.empty())
@@ -2008,6 +2009,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	iterator
 	insert_range(const_iterator __position, _Rg&& __rg)
+	_GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  list __tmp(from_range, std::forward<_Rg>(__rg), get_allocator());
 	  if (!__tmp.empty())

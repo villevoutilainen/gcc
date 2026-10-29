@@ -149,6 +149,8 @@ template<typename _CharT, typename _Traits>
     seekoff(off_type __off, ios_base::seekdir __way,
 	    ios_base::openmode __which = ios_base::in | ios_base::out) override
     {
+      // Called through the streambuf.
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       pos_type __ret =  pos_type(off_type(-1));
 
       if (__way == ios_base::beg)

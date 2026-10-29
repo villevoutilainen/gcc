@@ -168,7 +168,8 @@ namespace ranges
 	  contract_assert<std::contracts::never_proven_conveyor_v>
 	    (std::is_object_address (__builtin_addressof (__self)));
 #endif
-	  __glibcxx_assert(!__self.empty());
+	  // empty is conveyor only for some views.
+	  __glibcxx_assert_noconveyor(!__self.empty());
 	  return *ranges::begin(__self);
 	}
 
@@ -185,7 +186,8 @@ namespace ranges
 	  contract_assert<std::contracts::never_proven_conveyor_v>
 	    (std::is_object_address (__builtin_addressof (__self)));
 #endif
-	  __glibcxx_assert(!__self.empty());
+	  // empty is conveyor only for some views.
+	  __glibcxx_assert_noconveyor(!__self.empty());
 	  return *ranges::prev(ranges::end(__self));
 	}
 

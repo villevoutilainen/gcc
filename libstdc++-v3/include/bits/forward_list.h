@@ -913,6 +913,7 @@ namespace __fwdlist
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	forward_list(from_range_t, _Rg&& __rg, const _Alloc& __a = _Alloc())
+	_GLIBCXX_CONVEYOR_REQUIRES(__rg)
 	: _Base(_Node_alloc_type(__a))
 	{
 	  auto __to = this->_M_impl._M_head._M_base_ptr();
@@ -1084,7 +1085,7 @@ namespace __fwdlist
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	void
-	assign_range(_Rg&& __rg)
+	assign_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  static_assert(assignable_from<_Tp&, ranges::range_reference_t<_Rg>>);
 
@@ -1164,7 +1165,7 @@ namespace __fwdlist
 
       /// Get a copy of the memory allocation object.
       allocator_type
-      get_allocator() const noexcept
+      get_allocator() const noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return allocator_type(this->_M_get_Node_allocator()); }
 
       // 23.3.4.3 iterators:
@@ -1369,7 +1370,7 @@ namespace __fwdlist
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	void
-	prepend_range(_Rg&& __rg)
+	prepend_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  forward_list __tmp(from_range, std::forward<_Rg>(__rg),
 			     get_allocator());
@@ -1516,6 +1517,7 @@ namespace __fwdlist
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	iterator
 	insert_range_after(const_iterator __position, _Rg&& __rg)
+	_GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  forward_list __tmp(from_range, std::forward<_Rg>(__rg),
 			     get_allocator());
@@ -1647,6 +1649,7 @@ namespace __fwdlist
        */
       void
       splice_after(const_iterator __pos, forward_list&& __list) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__list) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if (!__list.empty())
 	  _M_splice_after(__pos, __list.before_begin(), __list.end());
@@ -1654,6 +1657,7 @@ namespace __fwdlist
 
       void
       splice_after(const_iterator __pos, forward_list& __list) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__list) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { splice_after(__pos, std::move(__list)); }
 
       /**

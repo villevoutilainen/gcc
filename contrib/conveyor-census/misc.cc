@@ -13,6 +13,8 @@
 #include <limits>
 #include <system_error>
 #include <future>
+#include <generator>
+#include <spanstream>
 
 namespace census
 {
@@ -33,10 +35,46 @@ namespace census
     return n;
   }
 
+  std::generator<int> inner_gen ()
+  {
+    co_yield 2;
+  }
+
+  std::generator<int> outer_gen ()
+  {
+    co_yield 1;
+    co_yield std::ranges::elements_of (inner_gen ());
+  }
+
+  // String and span streams over a string or buffer, and a nested
+  // generator.
+  int streams ()
+  {
+    int n = 0;
+    std::string s = "1 2";
+    std::stringbuf sb (s);
+    std::istringstream is (s);
+    std::ostringstream os (s);
+    std::stringstream ss (s);
+    sb.str (s);
+    is.str (s);
+    n += sb.str ().size () + is.str ().size () + os.str ().size ()
+	 + ss.str ().size ();
+    char buf[16] = {};
+    std::spanstream sps (buf);
+    sps << 12;
+    sps.seekp (0);
+    sps.seekg (0);
+    n += sps.tellp () == 0;
+    for (int x : outer_gen ())
+      n += x;
+    return n;
+  }
+
   int all ()
   {
     int n = integers<int> () + integers<unsigned> () + integers<long long> ()
-	    + integers<unsigned char> ();
+	    + integers<unsigned char> () + streams ();
     using namespace std::chrono;
     auto d = 1h + 30min + 5s;
     n += duration_cast<seconds> (d).count () + floor<minutes> (d).count ();

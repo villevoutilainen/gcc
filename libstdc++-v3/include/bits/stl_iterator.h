@@ -1985,6 +1985,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr
       common_iterator(const common_iterator<_It2, _Sent2>& __x)
       noexcept(_S_noexcept<const _It2&, const _Sent2&>())
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       : _M_valueless(), _M_index(__x._M_index)
       {
 	__glibcxx_assert(__x._M_has_value());
@@ -2096,6 +2097,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	       && is_nothrow_constructible_v<_Sent, const _Sent2&>
 	       && is_nothrow_assignable_v<_It&, const _It2&>
 	       && is_nothrow_assignable_v<_Sent&, const _Sent2&>)
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       {
 	__glibcxx_assert(__x._M_has_value());
 	_M_assign(__x);
@@ -2187,6 +2189,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       friend constexpr bool
       operator== [[nodiscard]] (const common_iterator& __x,
 				const common_iterator<_It2, _Sent2>& __y)
+      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
 	switch(__x._M_index << 2 | __y._M_index)
 	  {
@@ -2209,6 +2212,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       friend constexpr bool
       operator== [[nodiscard]] (const common_iterator& __x,
 				const common_iterator<_It2, _Sent2>& __y)
+      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
 	switch(__x._M_index << 2 | __y._M_index)
 	  {
@@ -2232,6 +2236,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       friend constexpr iter_difference_t<_It2>
       operator- [[nodiscard]] (const common_iterator& __x,
 			       const common_iterator<_It2, _Sent2>& __y)
+      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
 	switch(__x._M_index << 2 | __y._M_index)
 	  {
@@ -2278,7 +2283,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       friend class common_iterator;
 
     constexpr bool
-    _M_has_value() const noexcept { return _M_index != _S_valueless; }
+    _M_has_value() const noexcept _GLIBCXX_CONVEYOR
+    { return _M_index != _S_valueless; }
 
     template<typename _CIt>
       constexpr void

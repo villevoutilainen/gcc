@@ -913,6 +913,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     _GLIBCXX26_CONSTEXPR auto
     __advance_dist(_Rg& __rg)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__rg);
       struct _Res
 	{
 	  ranges::iterator_t<_Rg> __last;
