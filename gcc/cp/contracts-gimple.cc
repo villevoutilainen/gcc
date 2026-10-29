@@ -8918,6 +8918,11 @@ cg_object_address_field (tree arg, tree *base)
       || TREE_CODE (TREE_OPERAND (arg, 1)) != FIELD_DECL)
     return NULL_TREE;
   tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+  /* A member of an anonymous union or struct ('this->anon.d_p'): the
+     object is the one holding the anonymous member.  */
+  while (TREE_CODE (obj) == COMPONENT_REF
+	 && ANON_AGGR_TYPE_P (TREE_TYPE (obj)))
+    obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
   if (TREE_CODE (obj) == INDIRECT_REF)
     obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
   while (TREE_CODE (obj) == NON_LVALUE_EXPR || CONVERT_EXPR_P (obj))
@@ -11430,6 +11435,9 @@ cg_record_field_load_facts (gimple *stmt, cg_dom_fact_state &state,
       else if (TREE_CODE (rhs) == COMPONENT_REF)
 	{
 	  tree obj = TREE_OPERAND (rhs, 0);
+	  while (TREE_CODE (obj) == COMPONENT_REF
+		 && ANON_AGGR_TYPE_P (TREE_TYPE (obj)))
+	    obj = TREE_OPERAND (obj, 0);
 	  tree obj_expr = (TREE_CODE (obj) == MEM_REF
 			   && integer_zerop (TREE_OPERAND (obj, 1))
 			   ? TREE_OPERAND (obj, 0) : obj);
@@ -14516,6 +14524,85 @@ cg_assert_fact_scope::restore (unsigned mark)
    variables have there?  Only conversions, arithmetic and address
    computations.  */
 
+static bool cg_expr_computes_p (tree, tree, gcall *, tree, tree, int);
+
+/* Does LOAD, a load of a data member, read the value the member had at
+   contract check CALL?  Walks LOAD's virtual operands back to CALL
+   (through PHIs, along every path), failing at any store that may
+   write the member: one to the same field, or one through memory that
+   may alias it.  A store to a variable of this function can't be the
+   member of an object that existed before it (as '*this' does), and
+   clobbers write nothing; calls are let through, as a member fact
+   established in the dominator walk survives them too
+   (cg_record_field_load_facts).  */
+
+static bool
+cg_load_unchanged_since_p (gimple *load, gcall *call)
+{
+  tree ref = gimple_assign_rhs1 (load);
+  tree field = (TREE_CODE (ref) == COMPONENT_REF
+		? TREE_OPERAND (ref, 1) : NULL_TREE);
+  tree stop1 = gimple_vuse (call), stop2 = gimple_vdef (call);
+  if (!gimple_vuse (load) || !stop1)
+    return false;
+  auto_vec<tree, 16> work;
+  hash_set<tree> seen;
+  work.safe_push (gimple_vuse (load));
+  unsigned budget = 256;
+  while (!work.is_empty ())
+    {
+      tree v = work.pop ();
+      if (v == stop1 || v == stop2 || seen.add (v))
+	continue;
+      if (--budget == 0 || SSA_NAME_IS_DEFAULT_DEF (v))
+	return false;
+      gimple *d = SSA_NAME_DEF_STMT (v);
+      if (gphi *phi = dyn_cast <gphi *> (d))
+	{
+	  for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+	    work.safe_push (gimple_phi_arg_def (phi, i));
+	  continue;
+	}
+      if (gimple_assign_single_p (d) && !gimple_clobber_p (d))
+	{
+	  tree lhs = gimple_assign_lhs (d);
+	  tree base = get_base_address (lhs);
+	  bool local = (base && VAR_P (base) && !is_global_var (base)
+			&& DECL_CONTEXT (base) == current_function_decl);
+	  if (!local
+	      && ((field && TREE_CODE (lhs) == COMPONENT_REF
+		   && TREE_OPERAND (lhs, 1) == field)
+		  || refs_may_alias_p (lhs, ref)))
+	    return false;
+	}
+      work.safe_push (gimple_vuse (d));
+    }
+  return true;
+}
+
+/* Does the reference REF of a GIMPLE load name the same lvalue as the
+   contract condition's E -- the same members, through anonymous union
+   or struct levels alike, of an object whose address is computed alike
+   (see cg_expr_computes_p)?  */
+
+static bool
+cg_ref_computes_p (tree e, tree ref, gcall *call, tree struct_var,
+		   tree decls, int depth)
+{
+  e = STRIP_ANY_LOCATION_WRAPPER (e);
+  if (depth > 10)
+    return false;
+  if (TREE_CODE (e) == COMPONENT_REF && TREE_CODE (ref) == COMPONENT_REF)
+    return (TREE_OPERAND (e, 1) == TREE_OPERAND (ref, 1)
+	    && cg_ref_computes_p (TREE_OPERAND (e, 0), TREE_OPERAND (ref, 0),
+				  call, struct_var, decls, depth + 1));
+  if (TREE_CODE (e) == INDIRECT_REF && TREE_CODE (ref) == MEM_REF
+      && integer_zerop (TREE_OPERAND (ref, 1)))
+    return cg_expr_computes_p (TREE_OPERAND (e, 0), TREE_OPERAND (ref, 0),
+			       call, struct_var, decls, depth + 1);
+  return false;
+}
+
 static bool
 cg_expr_computes_p (tree e, tree v, gcall *call, tree struct_var, tree decls,
 		    int depth)
@@ -14542,6 +14629,15 @@ cg_expr_computes_p (tree e, tree v, gcall *call, tree struct_var, tree decls,
   if (CONVERT_EXPR_P (e) || TREE_CODE (e) == NON_LVALUE_EXPR)
     return cg_expr_computes_p (TREE_OPERAND (e, 0), v, call, struct_var,
 			       decls, depth + 1);
+  /* A data member read, 'p->d_p' ('this->d_p' in a member function):
+     V must be a load of the same member of an object computed alike,
+     with no store that may write the member between the contract check
+     CALL and the load, so that V holds the value the condition read.  */
+  if (TREE_CODE (e) == COMPONENT_REF && def && gimple_assign_load_p (def)
+      && cg_ref_computes_p (e, gimple_assign_rhs1 (def), call, struct_var,
+			    decls, depth + 1)
+      && cg_load_unchanged_since_p (def, call))
+    return true;
   if (TREE_CODE (e) == ADDR_EXPR
       && TREE_CODE (TREE_OPERAND (e, 0)) == INDIRECT_REF)
     return cg_expr_computes_p (TREE_OPERAND (TREE_OPERAND (e, 0), 0), v,
