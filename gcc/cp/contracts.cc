@@ -9971,13 +9971,29 @@ public:
   {
     tree *key = m_field_object_key->get ({base, field});
     if (key)
-      invalidate (*key);
+      {
+	invalidate (*key);
+	array_object_address_invalidate_on (*key);
+      }
+  }
+  /* The array-slot facts 'd_p[i]' keyed on a pointer member's own
+     field key (see oa_pointer_member_identity): a write to the member,
+     or anything invalidating its object, must drop them too.  */
+  void array_object_address_invalidate_on (tree member_key)
+  {
+    if (m_array_object_key)
+      for (auto it : *m_array_object_key)
+	if (it.first.first == member_key)
+	  invalidate (it.second);
   }
   void field_object_address_invalidate_all (tree base)
   {
     for (auto it : *m_field_object_key)
       if (it.first.first == base)
-	invalidate (it.second);
+	{
+	  invalidate (it.second);
+	  array_object_address_invalidate_on (it.second);
+	}
     /* See field_object_predicate_invalidate_all's own identical
        Increment 2 addition just above -- same reasoning, including the
        both-key-components check.  */
@@ -11881,6 +11897,50 @@ oa_field_object_identity (tree expr, oa_env &env, tree *decl_out)
    composed base is unexplored, disclosed scope, not silently
    dropped.  */
 
+/* The object a pointer-typed member read 'OBJ.FIELD' or 'OBJ->FIELD'
+   belongs to, for keying the member's own facts: OBJ with any anonymous
+   union/struct levels collapsed FIRST ('this->anon.d_p' is COMPONENT_REF
+   (COMPONENT_REF (INDIRECT_REF (this), <anon>), d_p)) and only then one
+   INDIRECT_REF peeled -- peeling first would leave the anonymous level's
+   own INDIRECT_REF (this) behind, which no identity resolver accepts.  */
+
+static tree
+oa_field_base_object (tree obj)
+{
+  obj = STRIP_ANY_LOCATION_WRAPPER (obj);
+  while (TREE_CODE (obj) == COMPONENT_REF
+	 && ANON_AGGR_TYPE_P (TREE_TYPE (obj)))
+    obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
+  if (TREE_CODE (obj) == INDIRECT_REF)
+    obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
+  return obj;
+}
+
+/* If ARR is a read of a pointer-typed data member (e.g. 'this->d_p'),
+   set *KEY_OUT to that member's field_object_identity_key -- the same
+   key an is_object_address fact about the member's own value is
+   stored under -- and return true.  Lets 'd_p[i]' / 'd_p + i' key their
+   array-slot facts on the member, as 'p[i]' does on a local P.  */
+
+static bool
+oa_pointer_member_identity (tree arr, oa_env &env, tree *key_out)
+{
+  arr = STRIP_ANY_LOCATION_WRAPPER (arr);
+  if (TREE_CODE (arr) != COMPONENT_REF
+      || !POINTER_TYPE_P (TREE_TYPE (arr)))
+    return false;
+  tree obj = oa_field_base_object (TREE_OPERAND (arr, 0));
+  tree identity;
+  if (!(oa_object_identity_decl (obj, &identity)
+	|| oa_field_slot_identity (obj, env, &identity)
+	|| oa_array_slot_identity (obj, env, &identity)
+	|| oa_field_object_identity (obj, env, &identity)))
+    return false;
+  identity = env.alias_find (identity);
+  *key_out = env.field_object_identity_key (identity, TREE_OPERAND (arr, 1));
+  return true;
+}
+
 static bool
 oa_array_object_identity (tree expr, oa_env &env, tree *decl_out)
 {
@@ -11922,9 +11982,10 @@ oa_array_object_identity (tree expr, oa_env &env, tree *decl_out)
 	 own range-based path is the relevant mechanism for a constant, if
 	 it applies at all).  */
       arr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      while (TREE_CODE (arr) == NON_LVALUE_EXPR || TREE_CODE (arr) == NOP_EXPR
+	     || TREE_CODE (arr) == CONVERT_EXPR || TREE_CODE (arr) == VIEW_CONVERT_EXPR)
+	arr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arr, 0));
       tree byte_off = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 1));
-      if (TREE_CODE (byte_off) == INTEGER_CST)
-	return false;
       tree pointee = TREE_TYPE (TREE_TYPE (expr));
       tree elt_size_tree = TYPE_SIZE_UNIT (pointee);
       if (!elt_size_tree || TREE_CODE (elt_size_tree) != INTEGER_CST)
@@ -11932,6 +11993,18 @@ oa_array_object_identity (tree expr, oa_env &env, tree *decl_out)
       widest_int elt_size = wi::to_widest (elt_size_tree);
       if (elt_size == 0)
 	return false;
+      /* A constant offset is a constant index: 'p[2]' arrives as
+	 'p + 2*sizeof(T)'.  Its identity is the (shared) sizetype
+	 INTEGER_CST of the index itself, so an assertion and a later use
+	 with the same constant meet on one key.  */
+      if (TREE_CODE (byte_off) == INTEGER_CST)
+	{
+	  widest_int off = wi::to_widest (byte_off);
+	  if (wi::neg_p (off) || wi::umod_trunc (off, elt_size) != 0)
+	    return false;
+	  index = wide_int_to_tree (sizetype, wi::udiv_trunc (off, elt_size));
+	  goto resolve;
+	}
       tree inner = byte_off;
       while (TREE_CODE (inner) == NOP_EXPR || TREE_CODE (inner) == CONVERT_EXPR)
 	inner = TREE_OPERAND (inner, 0);
@@ -11950,12 +12023,20 @@ oa_array_object_identity (tree expr, oa_env &env, tree *decl_out)
   else
     return false;
 
+ resolve:
   tree base_identity, index_identity;
-  if (!oa_object_identity_decl (arr, &base_identity))
+  if (oa_object_identity_decl (arr, &base_identity))
+    base_identity = env.alias_find (base_identity);
+  else if (!oa_pointer_member_identity (arr, env, &base_identity))
     return false;
-  if (!oa_object_identity_decl (index, &index_identity))
+  if (TREE_CODE (index) == INTEGER_CST)
+    {
+      if (tree_int_cst_sgn (index) < 0)
+	return false;
+      index_identity = wide_int_to_tree (sizetype, wi::to_widest (index));
+    }
+  else if (!oa_object_identity_decl (index, &index_identity))
     return false;
-  base_identity = env.alias_find (base_identity);
   *decl_out = env.array_object_identity_key (base_identity, index_identity);
   return true;
 }
@@ -12718,9 +12799,7 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
       /* PTR_BASE: the field's own base operand with (at most) one
 	 INDIRECT_REF peeled off -- used for the established-fact identity
 	 lookup below, exactly as before this fix.  */
-      tree ptr_base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
-      if (TREE_CODE (ptr_base) == INDIRECT_REF)
-	ptr_base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (ptr_base, 0));
+      tree ptr_base = oa_field_base_object (TREE_OPERAND (expr, 0));
       tree identity;
       tree field_key = NULL_TREE;
       if (oa_object_identity_decl (ptr_base, &identity)
@@ -26612,9 +26691,7 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 	       exactly this shape for its own destructor's precondition.  */
 	    else if (TREE_CODE (arg) == COMPONENT_REF)
 	      {
-		tree obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
-		if (TREE_CODE (obj_expr) == INDIRECT_REF)
-		  obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj_expr, 0));
+		tree obj_expr = oa_field_base_object (TREE_OPERAND (arg, 0));
 		tree field = TREE_OPERAND (arg, 1);
 		tree identity;
 		if (oa_object_identity_decl (obj_expr, &identity)
@@ -27238,9 +27315,7 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 	       exactly this shape for its own destructor's precondition.  */
 	    else if (TREE_CODE (arg) == COMPONENT_REF)
 	      {
-		tree obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
-		if (TREE_CODE (obj_expr) == INDIRECT_REF)
-		  obj_expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj_expr, 0));
+		tree obj_expr = oa_field_base_object (TREE_OPERAND (arg, 0));
 		tree field = TREE_OPERAND (arg, 1);
 		tree identity;
 		if (oa_object_identity_decl (obj_expr, &identity)
