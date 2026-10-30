@@ -2129,7 +2129,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       operator+=(const basic_string& __str)
-      { _GLIBCXX_CONVEYOR_TRUST(__str); return this->append(__str); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__str);
+	return this->append(__str);
+      }
 
       /**
        *  @brief  Append a C string.

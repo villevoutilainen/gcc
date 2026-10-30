@@ -1044,6 +1044,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       /// Move constructor with alternative allocator
       _GLIBCXX26_CONSTEXPR
       deque(deque&& __x, const __type_identity_t<allocator_type>& __a)
+      _GLIBCXX_CONVEYOR_TRUST_PRE(__a)
       : deque(std::move(__x), __a, typename _Alloc_traits::is_always_equal{})
       { }
 

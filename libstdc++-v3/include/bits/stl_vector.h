@@ -310,37 +310,30 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _Tp_alloc_type&
       _M_get_Tp_allocator() _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      // D4324/P2680: real (conveyor_assert_v), not never_proven -- 'this'
-      // is never reassigned by the mid-body self-trust assert below, and
-      // _M_impl is a plain field of it, so this is verifiable directly,
-      // same reasoning _M_default_initialize's own post<> already uses.
-      // Lets callers (e.g. _M_range_initialize_n) trust this accessor's
-      // result via its contract alone, never its implementation.
+      // An internal accessor every member uses: it trusts its object (a
+      // never_proven precondition, which asks nothing of its callers).  The
+      // postcondition is real (conveyor_assert_v): _M_impl is a plain field
+      // of the trusted object, so it is verifiable directly, and callers
+      // (e.g. _M_range_initialize_n) rely on the contract alone.
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>
 	(r: std::is_object_address (__builtin_addressof (r)))
 #endif
-      {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
-	return this->_M_impl;
-      }
+      { return this->_M_impl; }
 
       _GLIBCXX20_CONSTEXPR
       const _Tp_alloc_type&
       _M_get_Tp_allocator() const _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      // An internal accessor every member uses: it trusts its object (a
+      // never_proven precondition, which asks nothing of its callers).
+      pre<std::contracts::never_proven_conveyor_v>
+	(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>
 	(r: std::is_object_address (__builtin_addressof (r)))
 #endif
-      {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
-	return this->_M_impl;
-      }
+      { return this->_M_impl; }
 
       _GLIBCXX20_CONSTEXPR
       allocator_type

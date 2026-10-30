@@ -389,11 +389,11 @@ namespace __rb_tree
       : _M_node(__x) { }
 
       reference
-      operator*() const _GLIBCXX_NOEXCEPT
+      operator*() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *static_cast<_Node_ptr>(_M_node)->_M_valptr(); }
 
       pointer
-      operator->() const _GLIBCXX_NOEXCEPT
+      operator->() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT_PTR
       { return static_cast<_Node_ptr>(_M_node)->_M_valptr(); }
 
       _Rb_tree_iterator&
@@ -468,11 +468,11 @@ namespace __rb_tree
       : _M_node(__it._M_node) { }
 
       reference
-      operator*() const _GLIBCXX_NOEXCEPT
+      operator*() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *static_cast<_Node_ptr>(_M_node)->_M_valptr(); }
 
       pointer
-      operator->() const _GLIBCXX_NOEXCEPT
+      operator->() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT_PTR
       { return static_cast<_Node_ptr>(_M_node)->_M_valptr(); }
 
       _Rb_tree_const_iterator&

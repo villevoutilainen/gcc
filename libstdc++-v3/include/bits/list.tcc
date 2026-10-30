@@ -123,6 +123,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__n)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__x);
 	  list __tmp(__n, __x, get_allocator());
 	  iterator __it = __tmp.begin();
 	  splice(__position, __tmp);

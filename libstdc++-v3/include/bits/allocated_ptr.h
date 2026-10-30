@@ -126,8 +126,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       using __allocated_ptr<_Alloc>::operator=;
 
-      value_type& operator*() const { return *this->get(); }
-      value_type* operator->() const { return this->get(); }
+      value_type& operator*() const
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return *this->get(); }
+      value_type* operator->() const
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return this->get(); }
     };
 
   /// Construct an object in storage allocated using __a.
