@@ -171,6 +171,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   vprint_nonunicode_buffered(string_view __fmt, format_args __args)
   { std::vprint_nonunicode_buffered(stdout, __fmt, __args); }
 
+  inline void
+  vprint_unicode(string_view __fmt, format_args __args)
+  { std::vprint_unicode(stdout, __fmt, __args); }
+
+  inline void
+  vprint_nonunicode(string_view __fmt, format_args __args)
+  { std::vprint_nonunicode(stdout, __fmt, __args); }
+
   // Defined for C++26, supported as an extension to C++23.
   inline void println(FILE* __stream)
   {
