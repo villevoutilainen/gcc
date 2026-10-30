@@ -267,6 +267,34 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *
        *  This requires that @c --current is dereferenceable.
       */
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__glibcxx_concepts)
+      // In conveyor mode a raw-pointer iterator's operator-> promises the
+      // element it points to, as operator* does; a class iterator's own
+      // operator-> makes that promise, if anything does.
+      _GLIBCXX_NODISCARD
+      constexpr pointer
+      operator->() const
+      requires is_pointer_v<_Iterator>
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT_PTR
+      {
+	_Iterator __tmp = current;
+	--__tmp;
+	return __tmp;
+      }
+
+      _GLIBCXX_NODISCARD
+      constexpr pointer
+      operator->() const
+      requires (!is_pointer_v<_Iterator>)
+	&& requires(const _Iterator __i) { __i.operator->(); }
+      {
+	// _GLIBCXX_RESOLVE_LIB_DEFECTS
+	// 1052. operator-> should also support smart pointers
+	_Iterator __tmp = current;
+	--__tmp;
+	return _S_to_pointer(__tmp);
+      }
+#else
       _GLIBCXX_NODISCARD
       _GLIBCXX17_CONSTEXPR pointer
       operator->() const
@@ -281,6 +309,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	--__tmp;
 	return _S_to_pointer(__tmp);
       }
+#endif
 
       /**
        *  @return  @c *this
