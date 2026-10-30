@@ -1285,6 +1285,7 @@ namespace __fwdlist
       [[__nodiscard__]]
       reference
       front() _GLIBCXX_PRECONDITION_NONEMPTY()
+      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	_Node& __front = static_cast<_Node&>(*this->_M_impl._M_head._M_next);
@@ -1298,6 +1299,7 @@ namespace __fwdlist
       [[__nodiscard__]]
       const_reference
       front() const _GLIBCXX_PRECONDITION_NONEMPTY()
+      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	_Node& __front = static_cast<_Node&>(*this->_M_impl._M_head._M_next);

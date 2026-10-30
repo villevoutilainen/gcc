@@ -1672,6 +1672,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD
       reference
       front() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
+      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1684,6 +1685,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD
       const_reference
       front() const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
+      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1696,6 +1698,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD
       reference
       back() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
+      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	iterator __tmp = end();
@@ -1710,6 +1713,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD
       const_reference
       back() const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
+      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	const_iterator __tmp = end();
