@@ -28923,6 +28923,50 @@ oa_replace_tree_r (tree *tp, int *, void *data_)
    observed in practice; the general full-substitution path already
    handles a capture proxy correctly on its first, ordinary pass.  */
 
+/* DECL's parameter at the position of OLD_PARM, an unnamed parameter
+   (name matching can't find it) of another generation of DECL's
+   parameter list: its position in its own function's list when that is
+   known, else counted from the end of its own chain, which is the same
+   length.  NULL_TREE if either list has a pack, whose expansion shifts
+   positions.  */
+
+static tree
+oa_unnamed_parm_counterpart (tree old_parm, tree decl)
+{
+  unsigned n = 0;
+  for (tree dp = DECL_ARGUMENTS (decl); dp; dp = DECL_CHAIN (dp), ++n)
+    if (DECL_PACK_P (dp))
+      return NULL_TREE;
+  unsigned pos = 0;
+  bool found = false;
+  tree ctx = DECL_CONTEXT (old_parm);
+  if (ctx && TREE_CODE (ctx) == FUNCTION_DECL)
+    for (tree p = DECL_ARGUMENTS (ctx); p; p = DECL_CHAIN (p), ++pos)
+      {
+	if (DECL_PACK_P (p))
+	  return NULL_TREE;
+	if (p == old_parm)
+	  {
+	    found = true;
+	    break;
+	  }
+      }
+  if (!found)
+    {
+      unsigned rest = 0;
+      for (tree p = old_parm; p; p = DECL_CHAIN (p), ++rest)
+	if (DECL_PACK_P (p))
+	  return NULL_TREE;
+      if (rest > n)
+	return NULL_TREE;
+      pos = n - rest;
+    }
+  tree dp = DECL_ARGUMENTS (decl);
+  for (; dp && pos; dp = DECL_CHAIN (dp), --pos)
+    ;
+  return dp;
+}
+
 static void
 oa_reanchor_stale_contract_parms (tree attr, tree decl)
 {
@@ -28954,15 +28998,18 @@ oa_reanchor_stale_contract_parms (tree attr, tree decl)
   for (tree old_parm : stale)
     {
       tree name = DECL_NAME (old_parm);
-      if (!name)
-	continue;
       tree fresh = NULL_TREE;
-      for (tree dp = DECL_ARGUMENTS (decl); dp; dp = DECL_CHAIN (dp))
-	if (DECL_NAME (dp) == name)
-	  {
-	    fresh = dp;
-	    break;
-	  }
+      if (name)
+	{
+	  for (tree dp = DECL_ARGUMENTS (decl); dp; dp = DECL_CHAIN (dp))
+	    if (DECL_NAME (dp) == name)
+	      {
+		fresh = dp;
+		break;
+	      }
+	}
+      else
+	fresh = oa_unnamed_parm_counterpart (old_parm, decl);
       if (!fresh)
 	continue;
       for (tree as = attr; as; as = TREE_CHAIN (as))
