@@ -17982,19 +17982,30 @@ contract_precondition_caller_obligation_p (tree contract, tree callee)
       if (contract_inferred_obligation_waived_p (callee))
 	return false;
       tree cond = CONTRACT_CONDITION (contract);
-      if (cond && cond != error_mark_node)
-	if (tree parm = oa_object_address_conjunct_parm (cond))
-	  {
-	    if (oa_parm_object_trusted_p (callee, parm))
-	      return false;
-	    /* A reference to a function never designates an object: the
-	       implicit precondition, for an object reference, doesn't apply
-	       (a forwarding reference instantiated for a function, as
-	       std::__exchange's new value is for function_ref's manager).  */
-	    tree type = TREE_TYPE (parm);
-	    if (TYPE_REF_P (type) && FUNC_OR_METHOD_TYPE_P (TREE_TYPE (type)))
-	      return false;
-	  }
+      if (!cond || cond == error_mark_node)
+	return true;
+      /* One conjunct per parameter -- several for a parameter pack's
+	 elements ('(is_object_address (&ts) && ...)', expanded): owed
+	 unless every one of them is waived.  */
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (tree *c : conjuncts)
+	{
+	  tree parm = oa_object_address_conjunct_parm (*c);
+	  if (!parm)
+	    return true;
+	  if (oa_parm_object_trusted_p (callee, parm))
+	    continue;
+	  /* A reference to a function never designates an object: the
+	     implicit precondition, for an object reference, doesn't apply
+	     (a forwarding reference instantiated for a function, as
+	     std::__exchange's new value is for function_ref's manager).  */
+	  tree type = TREE_TYPE (parm);
+	  if (TYPE_REF_P (type) && FUNC_OR_METHOD_TYPE_P (TREE_TYPE (type)))
+	    continue;
+	  return true;
+	}
+      return false;
     }
   return true;
 }
