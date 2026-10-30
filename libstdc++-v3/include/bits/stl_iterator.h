@@ -318,7 +318,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  Decrements the underlying iterator.
       */
       _GLIBCXX17_CONSTEXPR reverse_iterator&
-      operator++()
+      operator++() _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	--current;
@@ -345,7 +345,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  Increments the underlying iterator.
       */
       _GLIBCXX17_CONSTEXPR reverse_iterator&
-      operator--()
+      operator--() _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	++current;
@@ -383,7 +383,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  The underlying iterator must be a Random Access Iterator.
       */
       _GLIBCXX17_CONSTEXPR reverse_iterator&
-      operator+=(difference_type __n)
+      operator+=(difference_type __n) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	current -= __n;
@@ -407,7 +407,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  The underlying iterator must be a Random Access Iterator.
       */
       _GLIBCXX17_CONSTEXPR reverse_iterator&
-      operator-=(difference_type __n)
+      operator-=(difference_type __n) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	current += __n;
