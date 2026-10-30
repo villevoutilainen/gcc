@@ -538,6 +538,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_Result
 	__call(tuple<_Args...>&& __args, _Index_tuple<_Indexes...>)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return std::__invoke(_M_f,
 	      _Mu<_Bound_args>()(std::get<_Indexes>(_M_bound_args), __args)...
 	      );
@@ -746,6 +747,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_Res
 	__call(tuple<_Args...>&& __args, _Index_tuple<_Indexes...>)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return std::__invoke_r<_Res>(_M_f, _Mu<_Bound_args>()
 		      (std::get<_Indexes>(_M_bound_args), __args)...);
 	}
@@ -756,6 +758,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_Res
 	__call(tuple<_Args...>&& __args, _Index_tuple<_Indexes...>) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return std::__invoke_r<_Res>(_M_f, _Mu<_Bound_args>()
 		      (std::get<_Indexes>(_M_bound_args), __args)...);
 	}
@@ -766,6 +769,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_Res
 	__call(tuple<_Args...>&& __args, _Index_tuple<_Indexes...>) volatile
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return std::__invoke_r<_Res>(_M_f, _Mu<_Bound_args>()
 		      (__volget<_Indexes>(_M_bound_args), __args)...);
 	}
@@ -776,6 +780,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	__call(tuple<_Args...>&& __args,
 	       _Index_tuple<_Indexes...>) const volatile
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return std::__invoke_r<_Res>(_M_f, _Mu<_Bound_args>()
 		      (__volget<_Indexes>(_M_bound_args), __args)...);
 	}
@@ -1282,6 +1287,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	pair<_ForwardIterator2, _ForwardIterator2>
 	operator()(_ForwardIterator2 __first, _ForwardIterator2 __last) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  _ForwardIterator2 __first_ret =
 	    std::search(__first, __last, std::get<0>(_M_m), std::get<1>(_M_m),
 			std::get<2>(_M_m));
@@ -1357,11 +1363,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  auto __ukey = static_cast<make_unsigned_t<_Key>>(__key);
 	  if (__ukey >= _Len)
 	    return __not_found;
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return std::get<0>(_M_bad_char)[__ukey];
 	}
 
       const _Pred&
-      _M_pred() const { return std::get<1>(_M_bad_char); }
+      _M_pred() const
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return std::get<1>(_M_bad_char); }
 
       tuple<array<_Tp, _Len>, _Pred> _M_bad_char;
     };

@@ -267,6 +267,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	{
 	  if (__n <= __sz)
 	    __builtin_unreachable();
+	  _GLIBCXX_CONVEYOR_TRUST(__val);
 	  vector __tmp(__n, __val, _M_get_Tp_allocator());
 	  __tmp._M_impl._M_swap_data(this->_M_impl);
 	}

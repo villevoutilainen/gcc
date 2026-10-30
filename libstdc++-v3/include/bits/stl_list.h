@@ -2149,7 +2149,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #if __cplusplus >= 201103L
       void
       splice(const_iterator __position, list& __x) noexcept
-      { splice(__position, std::move(__x)); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; splice(__position, std::move(__x)); }
 #endif
 
       /**

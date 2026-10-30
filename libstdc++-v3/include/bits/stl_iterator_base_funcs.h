@@ -205,6 +205,7 @@ namespace __detail
     inline _GLIBCXX14_CONSTEXPR void
     __advance(_InputIterator& __i, _Distance __n, input_iterator_tag)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__i);
       // concept requirements
       __glibcxx_function_requires(_InputIteratorConcept<_InputIterator>)
       __glibcxx_assert(__n >= 0);
@@ -217,6 +218,7 @@ namespace __detail
     __advance(_BidirectionalIterator& __i, _Distance __n,
 	      bidirectional_iterator_tag)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__i);
       // concept requirements
       __glibcxx_function_requires(_BidirectionalIteratorConcept<
 				  _BidirectionalIterator>)
@@ -233,6 +235,7 @@ namespace __detail
     __advance(_RandomAccessIterator& __i, _Distance __n,
               random_access_iterator_tag)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__i);
       // concept requirements
       __glibcxx_function_requires(_RandomAccessIteratorConcept<
 				  _RandomAccessIterator>)

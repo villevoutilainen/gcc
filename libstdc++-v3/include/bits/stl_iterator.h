@@ -259,7 +259,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator*() const _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	_Iterator __tmp = current;
-	return *--__tmp;
+	--__tmp;
+	return *__tmp;
       }
 
       /**
@@ -1627,6 +1628,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX17_CONSTEXPR move_iterator&
       operator++()
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	++_M_current;
 	return *this;
       }
@@ -2188,6 +2190,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     operator++()
     {
       __glibcxx_assert(_M_index == 0);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       ++_M_it;
       return *this;
     }
@@ -2493,6 +2496,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       noexcept(noexcept(*_M_current))
       {
 	__glibcxx_assert( _M_length > 0 );
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return *_M_current;
       }
 
@@ -2503,6 +2507,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       requires __detail::__dereferenceable<const _It>
       {
 	__glibcxx_assert( _M_length > 0 );
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return *_M_current;
       }
 
@@ -2516,6 +2521,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator++()
       {
 	__glibcxx_assert(_M_length > 0);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	++_M_current;
 	--_M_length;
 	return *this;
@@ -2548,6 +2554,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr counted_iterator&
       operator--() requires bidirectional_iterator<_It>
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	--_M_current;
 	++_M_length;
 	return *this;

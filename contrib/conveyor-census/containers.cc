@@ -98,9 +98,12 @@ namespace census
 	n += v.size () + d.size () + l.size ();
 	if constexpr (std::copyable<T>)
 	  {
-	    std::vector<T, A<T>> v2 (3, v[0]);
+	    // vector's operator[] and list's front() don't promise the
+	    // element they return; a copy of it is a local object.
+	    T e (v[0]);
+	    std::vector<T, A<T>> v2 (3, e);
 	    std::deque<T, A<T>> d2 (3, d[0]);
-	    std::list<T, A<T>> l2 (3, l.front ());
+	    std::list<T, A<T>> l2 (3, e);
 	    n += v2.size () + d2.size () + l2.size ();
 	  }
       }

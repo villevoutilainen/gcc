@@ -1825,6 +1825,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  static_assert(sizeof...(_Elements) == tuple_size_v<_UTuple>,
 	      "tuple objects can only be compared if they have equal sizes.");
 	  return [&]<size_t... _Is>(index_sequence<_Is...>) {
+	    _GLIBCXX_CONVEYOR_TRUST(__t);
+	    _GLIBCXX_CONVEYOR_TRUST(__u);
 	    return (bool(std::get<_Is>(__t) == std::get<_Is>(__u))
 		    && ...);
 	  }(index_sequence_for<_Elements...>{});
@@ -2562,6 +2564,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 			      const tuple<_Ups...>& __u)
     {
       return [&]<size_t... _Inds>(index_sequence<_Inds...>) {
+	_GLIBCXX_CONVEYOR_TRUST(__t);
+	_GLIBCXX_CONVEYOR_TRUST(__u);
 	// Fold == over the tuples until non-equal elements are found.
 	return (bool(std::get<_Inds>(__t) == std::get<_Inds>(__u)) && ...);
       }(index_sequence_for<_Tps...>{});
@@ -2577,6 +2581,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       // Set __c to the comparison result of two corresponding elements.
       // Return true they are equivalent.
       auto __cmp = [&]<size_t _Ind>(integral_constant<size_t, _Ind>) {
+	_GLIBCXX_CONVEYOR_TRUST(__t);
+	_GLIBCXX_CONVEYOR_TRUST(__u);
 	__c = __detail::__synth3way(std::get<_Ind>(__t), std::get<_Ind>(__u));
 	return __c == 0;
       };

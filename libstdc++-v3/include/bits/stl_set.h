@@ -1095,7 +1095,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     inline bool
     operator==(const set<_Key, _Compare, _Alloc>& __x,
 	       const set<_Key, _Compare, _Alloc>& __y)
-    { _GLIBCXX_CONVEYOR_TRUST(__x); return __x._M_t == __y._M_t; }
+    {
+      _GLIBCXX_CONVEYOR_TRUST(__x);
+      _GLIBCXX_CONVEYOR_TRUST(__y);
+      return __x._M_t == __y._M_t;
+    }
 
 #if __cpp_lib_three_way_comparison
   /**

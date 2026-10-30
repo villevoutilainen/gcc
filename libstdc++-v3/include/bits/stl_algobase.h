@@ -397,6 +397,8 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
     inline void
     __assign_one(_OutIter& __out, _InIter& __in)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__out);
+      _GLIBCXX_CONVEYOR_TRUST(__in);
 #if __cplusplus >= 201103L
       if constexpr (_IsMove)
 	*__out = std::move(*__in);

@@ -567,11 +567,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       // The _M_get operations have _M_engaged as a precondition.
       constexpr _Tp&
-      _M_get() noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _M_get() noexcept
+      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return _M_payload._M_get(); }
 
       constexpr const _Tp&
-      _M_get() const noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _M_get() const noexcept
+      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return _M_payload._M_get(); }
     };
 
@@ -617,11 +619,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       // The _M_get operations have _M_engaged as a precondition.
       constexpr _Tp&
-      _M_get() noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _M_get() noexcept
+      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return static_cast<_Dp*>(this)->_M_payload._M_get(); }
 
       constexpr const _Tp&
-      _M_get() const noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _M_get() const noexcept
+      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return static_cast<const _Dp*>(this)->_M_payload._M_get(); }
     };
 

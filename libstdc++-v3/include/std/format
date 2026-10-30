@@ -4264,6 +4264,7 @@ namespace __format
 	    __parse_ctx.advance_to(__f.parse(__parse_ctx));
 	    _Tq& __val = *const_cast<_Tq*>(static_cast<const _Td*>(__ptr));
 	    _GLIBCXX_CONVEYOR_TRUST(__val);
+	    _GLIBCXX_CONVEYOR_TRUST(__format_ctx);
 	    __format_ctx.advance_to(__f.format(__val, __format_ctx));
 	  }
 
@@ -5532,9 +5533,20 @@ namespace __format
     {
       if constexpr (is_same_v<_Out, _Sink_iter<_CharT>>)
 	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  // The locale is trusted where it is known not to be null.
+	  if (__loc != nullptr)
+	    {
+	      _GLIBCXX_CONVEYOR_TRUST(*__loc);
+	      auto __ctx = _Context(__args, __out, *__loc);
+	      return __format::__do_vformat_to(__out, __fmt, __ctx);
+	    }
+	  auto __ctx = _Context(__args, __out);
+#else
 	  auto __ctx = __loc == nullptr
 		     ? _Context(__args, __out)
 		     : _Context(__args, __out, *__loc);
+#endif
 	  return __format::__do_vformat_to(__out, __fmt, __ctx);
 	}
       else if constexpr (__contiguous_char_iter<_CharT, _Out>)
@@ -6122,7 +6134,10 @@ namespace __format
 	typename basic_format_context<_Out, _CharT>::iterator
 	_M_format(_Tuple& __tuple, index_sequence<_Ids...>,
 		  basic_format_context<_Out, _CharT>& __fc) const
-	{ return _M_format_elems(std::get<_Ids>(__tuple)..., __fc); }
+	{
+	  _GLIBCXX_CONVEYOR_TRUST(__tuple);
+	  return _M_format_elems(std::get<_Ids>(__tuple)..., __fc);
+	}
 
       template<typename _Out>
 	_GLIBCXX_CONSTEXPR_FORMAT

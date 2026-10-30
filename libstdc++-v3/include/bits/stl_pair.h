@@ -390,8 +390,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       template<typename... _Args1, size_t... _Indexes1,
 	       typename... _Args2, size_t... _Indexes2>
 	_GLIBCXX20_CONSTEXPR
-	pair(tuple<_Args1...>&, tuple<_Args2...>&,
-	     _Index_tuple<_Indexes1...>, _Index_tuple<_Indexes2...>);
+	pair(tuple<_Args1...>& __tuple1, tuple<_Args2...>& __tuple2,
+	     _Index_tuple<_Indexes1...>, _Index_tuple<_Indexes2...>)
+	_GLIBCXX_CONVEYOR_TRUST_PRE(__tuple1) _GLIBCXX_CONVEYOR_TRUST_PRE(__tuple2);
     public:
 
 #if __cpp_lib_concepts
