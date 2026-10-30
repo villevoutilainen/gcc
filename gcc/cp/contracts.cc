@@ -4878,6 +4878,38 @@ oa_fndecl_has_conveyor_active_contract_p (tree fndecl)
 }
 
 
+/* A template whose contract names a DEPENDENT control object (e.g.
+   'pre<Policy::label> (...)') can't tell, as a pattern, whether that
+   contract is conveyor-active, so oa_fndecl_has_conveyor_active_contract_p
+   skips it and the pattern gets no implicit precondition -- yet each
+   instantiation can tell.  Called once DECL's own contracts are
+   substituted (tsubst_regenerated_contract_specifiers, on every path that
+   instantiates them: the body's own instantiation and a caller's
+   contract-only one alike), so DECL's callers are held to its implicit
+   preconditions and its body may rely on them.  A pattern that did get
+   them passed substituted copies on already; nothing to add.  */
+
+void
+oa_synthesize_for_dependent_control_instantiation (tree decl, tree pattern)
+{
+  if (!flag_contract_control_objects
+      || TREE_CODE (decl) != FUNCTION_DECL
+      || !pattern || TREE_CODE (pattern) != FUNCTION_DECL
+      || DECL_OA_REFSAFETY_SYNTHESIZED_P (pattern)
+      || DECL_DECLARED_CONVEYOR_P (pattern))
+    return;
+  bool dependent = false;
+  for (tree c = get_fn_contract_specifiers (pattern); c; c = TREE_CHAIN (c))
+    if (tree ctrl = CONTRACT_CONTROL_OBJECT (CONTRACT_STATEMENT (c)))
+      if (uses_template_parms (ctrl))
+	{
+	  dependent = true;
+	  break;
+	}
+  if (dependent)
+    oa_synthesize_implicit_reference_safety_preconditions (decl);
+}
+
 /* Remove from FNDECL's, and its clones', contract specifiers the implicit
    preconditions synthesized for it -- once 'conveyor(auto)' deduction finds
    it isn't conveyor after all (instantiate_body synthesizes them while it's

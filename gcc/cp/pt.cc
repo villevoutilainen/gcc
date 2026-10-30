@@ -29212,6 +29212,9 @@ tsubst_regenerated_contract_specifiers (tree decl, tree code_pattern, tree args)
      its return type while its caller is being parsed): re-point them by
      name, as for the already-substituted case above.  */
   oa_reanchor_stale_contract_parms (get_fn_contract_specifiers (decl), decl);
+  /* D4324: with its control objects now concrete, DECL can tell whether
+     its contracts are conveyor-active where CODE_PATTERN couldn't.  */
+  oa_synthesize_for_dependent_control_instantiation (decl, code_pattern);
 }
 
 static void

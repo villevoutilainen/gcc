@@ -293,6 +293,10 @@ extern tree contract_default_control_object		(location_t);
 extern void maybe_inherit_virtual_contract		(tree, tree);
 extern void resolve_object_address_in_function		(tree);
 extern void oa_synthesize_implicit_reference_safety_preconditions (tree);
+/* Synthesize, for DECL, an instantiation of PATTERN, the implicit
+   preconditions PATTERN couldn't get because a control object of its
+   contracts was dependent.  */
+extern void oa_synthesize_for_dependent_control_instantiation (tree, tree);
 extern bool validate_pending_contract_predicates ();
 extern bool oa_stmt_terminates_p			(tree);
 extern void oa_mark_fn_if_expr_calls_active_contract	(tree, tree);
