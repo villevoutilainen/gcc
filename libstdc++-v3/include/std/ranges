@@ -2200,6 +2200,7 @@ namespace views::__adaptor
 	  constexpr _Iterator&
 	  operator--() requires bidirectional_range<_Base>
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    --_M_current;
 	    return *this;
 	  }
