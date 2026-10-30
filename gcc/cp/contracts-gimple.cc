@@ -14536,8 +14536,53 @@ static bool cg_expr_computes_p (tree, tree, gcall *, tree, tree, int);
    established in the dominator walk survives them too
    (cg_record_field_load_facts).  */
 
+/* Where pointer P points, as far as copies, conversions and offsets
+   show: the decl whose address it was computed from, else the pointer
+   value it was computed from.  */
+
+static tree
+cg_pointer_root (tree p)
+{
+  for (int i = 0; i < 16; ++i)
+    {
+      if (TREE_CODE (p) == ADDR_EXPR)
+	{
+	  tree base = get_base_address (TREE_OPERAND (p, 0));
+	  if (base && TREE_CODE (base) == MEM_REF)
+	    {
+	      p = TREE_OPERAND (base, 0);
+	      continue;
+	    }
+	  return base;
+	}
+      if (TREE_CODE (p) != SSA_NAME || SSA_NAME_IS_DEFAULT_DEF (p))
+	return p;
+      gimple *def = SSA_NAME_DEF_STMT (p);
+      if (!is_gimple_assign (def))
+	return p;
+      tree_code code = gimple_assign_rhs_code (def);
+      if (gimple_assign_single_p (def) || CONVERT_EXPR_CODE_P (code)
+	  || code == POINTER_PLUS_EXPR)
+	p = gimple_assign_rhs1 (def);
+      else
+	return p;
+    }
+  return p;
+}
+
+/* The decl, or pointer value, the object REF reads lies in.  */
+
+static tree
+cg_ref_root (tree ref)
+{
+  tree base = get_base_address (ref);
+  if (base && TREE_CODE (base) == MEM_REF)
+    return cg_pointer_root (TREE_OPERAND (base, 0));
+  return base;
+}
+
 static bool
-cg_load_unchanged_since_p (gimple *load, gcall *call)
+cg_load_unchanged_since_p (gimple *load, gcall *call, bool locals_too = false)
 {
   tree ref = gimple_assign_rhs1 (load);
   tree field = (TREE_CODE (ref) == COMPONENT_REF
@@ -14563,11 +14608,24 @@ cg_load_unchanged_since_p (gimple *load, gcall *call)
 	    work.safe_push (gimple_phi_arg_def (phi, i));
 	  continue;
 	}
+      /* A call given a pointer into the object may write it (passing a
+	 reference to it, say) -- any other call is let through, as for a
+	 member (and as the AST engine does).  */
+      if (locals_too)
+	if (gcall *c = dyn_cast <gcall *> (d))
+	  for (unsigned i = 0; i < gimple_call_num_args (c); ++i)
+	    {
+	      tree a = gimple_call_arg (c, i);
+	      if (POINTER_TYPE_P (TREE_TYPE (a))
+		  && cg_pointer_root (a) == cg_ref_root (ref))
+		return false;
+	    }
       if (gimple_assign_single_p (d) && !gimple_clobber_p (d))
 	{
 	  tree lhs = gimple_assign_lhs (d);
 	  tree base = get_base_address (lhs);
-	  bool local = (base && VAR_P (base) && !is_global_var (base)
+	  bool local = (!locals_too
+			&& base && VAR_P (base) && !is_global_var (base)
 			&& DECL_CONTEXT (base) == current_function_decl);
 	  if (!local
 	      && ((field && TREE_CODE (lhs) == COMPONENT_REF
@@ -14600,6 +14658,38 @@ cg_ref_computes_p (tree e, tree ref, gcall *call, tree struct_var,
       && integer_zerop (TREE_OPERAND (ref, 1)))
     return cg_expr_computes_p (TREE_OPERAND (e, 0), TREE_OPERAND (ref, 0),
 			       call, struct_var, decls, depth + 1);
+  /* An element of the same array decl, at an index computed alike.  */
+  if (TREE_CODE (e) == ARRAY_REF && TREE_CODE (ref) == ARRAY_REF)
+    {
+      tree ea = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
+      return (DECL_P (ea) && ea == TREE_OPERAND (ref, 0)
+	      && cg_expr_computes_p (TREE_OPERAND (e, 1), TREE_OPERAND (ref, 1),
+				     call, struct_var, decls, depth + 1));
+    }
+  /* '*r', R a reference bound (at the contract check) to the decl the
+     load reads.  */
+  if (TREE_CODE (e) == INDIRECT_REF && DECL_P (ref))
+    {
+      tree r = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
+      while (CONVERT_EXPR_P (r) || TREE_CODE (r) == NON_LVALUE_EXPR)
+	r = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (r, 0));
+      if (!VAR_P (r) && TREE_CODE (r) != PARM_DECL)
+	return false;
+      tree cap = cg_contract_check_decl_value (call, struct_var, decls, r);
+      for (int i = 0; cap && i < 8; ++i)
+	{
+	  if (CONVERT_EXPR_P (cap) || TREE_CODE (cap) == NON_LVALUE_EXPR)
+	    cap = TREE_OPERAND (cap, 0);
+	  else if (TREE_CODE (cap) == SSA_NAME
+		   && is_gimple_assign (SSA_NAME_DEF_STMT (cap))
+		   && gimple_assign_single_p (SSA_NAME_DEF_STMT (cap)))
+	    cap = gimple_assign_rhs1 (SSA_NAME_DEF_STMT (cap));
+	  else
+	    break;
+	}
+      return (cap && TREE_CODE (cap) == ADDR_EXPR
+	      && TREE_OPERAND (cap, 0) == ref);
+    }
   return false;
 }
 
@@ -14637,6 +14727,16 @@ cg_expr_computes_p (tree e, tree v, gcall *call, tree struct_var, tree decls,
       && cg_ref_computes_p (e, gimple_assign_rhs1 (def), call, struct_var,
 			    decls, depth + 1)
       && cg_load_unchanged_since_p (def, call))
+    return true;
+  /* D4324 item 8: a pointer read through a reference ('*r') or from an
+     array element ('a[i]'): V must load the same object, unchanged since
+     the check -- by any store at all, the function's own objects (a local
+     array, a pointer a local reference is bound to) included.  */
+  if ((TREE_CODE (e) == INDIRECT_REF || TREE_CODE (e) == ARRAY_REF)
+      && POINTER_TYPE_P (TREE_TYPE (e)) && def && gimple_assign_load_p (def)
+      && cg_ref_computes_p (e, gimple_assign_rhs1 (def), call, struct_var,
+			    decls, depth + 1)
+      && cg_load_unchanged_since_p (def, call, /*locals_too=*/true))
     return true;
   if (TREE_CODE (e) == ADDR_EXPR
       && TREE_CODE (TREE_OPERAND (e, 0)) == INDIRECT_REF)
@@ -14723,7 +14823,12 @@ cg_assert_fact_scope::establish (gcall *call)
 	     the function computes alike from the same values -- -O0
 	     GIMPLE doesn't share the computation with a later 'st[i].f'.  */
 	  else if (TREE_CODE (arg) == ADDR_EXPR
-		   || TREE_CODE (arg) == POINTER_PLUS_EXPR)
+		   || TREE_CODE (arg) == POINTER_PLUS_EXPR
+		   /* D4324 item 8: a pointer read through a reference or
+		      from an array element.  */
+		   || ((TREE_CODE (arg) == INDIRECT_REF
+			|| TREE_CODE (arg) == ARRAY_REF)
+		       && POINTER_TYPE_P (TREE_TYPE (arg))))
 	    {
 	      unsigned k;
 	      tree name;
