@@ -5307,6 +5307,7 @@ _GLIBCXX_END_NAMESPACE_CXX11
     inline basic_ostream<_CharT, _Traits>&
     operator<<(basic_ostream<_CharT, _Traits>& __os,
 	       const basic_string<_CharT, _Traits, _Alloc>& __str)
+    _GLIBCXX_CONVEYOR_TRUST_PRE(__os) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
     pre<std::contracts::never_proven_conveyor_v>
       (std::is_object_address (__builtin_addressof (__os))

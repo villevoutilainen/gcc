@@ -795,6 +795,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline basic_ostream<_CharT, _Traits>&
     operator<<(basic_ostream<_CharT, _Traits>& __os,
 	       basic_string_view<_CharT,_Traits> __str)
+    _GLIBCXX_CONVEYOR_TRUST_PRE(__os) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
     { return __ostream_insert(__os, __str.data(), __str.size()); }
 #endif // HOSTED
 
