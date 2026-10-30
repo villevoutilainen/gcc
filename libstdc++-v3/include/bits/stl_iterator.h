@@ -290,6 +290,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX17_CONSTEXPR reverse_iterator&
       operator++()
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	--current;
 	return *this;
       }
@@ -302,6 +303,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX17_CONSTEXPR reverse_iterator
       operator++(int)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	reverse_iterator __tmp = *this;
 	--current;
 	return __tmp;
@@ -315,6 +317,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX17_CONSTEXPR reverse_iterator&
       operator--()
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	++current;
 	return *this;
       }
@@ -327,6 +330,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX17_CONSTEXPR reverse_iterator
       operator--(int)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	reverse_iterator __tmp = *this;
 	++current;
 	return __tmp;
@@ -351,6 +355,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX17_CONSTEXPR reverse_iterator&
       operator+=(difference_type __n)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	current -= __n;
 	return *this;
       }
@@ -374,6 +379,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX17_CONSTEXPR reverse_iterator&
       operator-=(difference_type __n)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	current += __n;
 	return *this;
       }
