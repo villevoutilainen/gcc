@@ -29128,15 +29128,36 @@ tsubst_regenerated_contract_specifiers (tree decl, tree code_pattern, tree args)
       tree name = DECL_NAME (pat_parm);
       if (!name)
 	continue;
+      bool found = false;
       for (tree dp = DECL_ARGUMENTS (decl); dp; dp = DECL_CHAIN (dp))
 	if (DECL_NAME (dp) == name)
 	  {
 	    register_local_specialization (dp, pat_parm);
+	    found = true;
 	    break;
 	  }
+      /* A function parameter pack's elements are named apart ('__iters#0')
+	 in DECL, so it matches nothing there: map it to whatever the
+	 same-named parameter of CODE_PATTERN was registered as above (its
+	 argument pack).  */
+      if (!found)
+	for (tree cp = DECL_ARGUMENTS (code_pattern); cp; cp = DECL_CHAIN (cp))
+	  if (DECL_NAME (cp) == name)
+	    {
+	      if (tree *spec = local_specializations->get (cp))
+		register_local_specialization (*spec, pat_parm);
+	      break;
+	    }
     }
 
   tsubst_contract_specifiers (attr, decl, args, tf_warning_or_error, code_pattern);
+
+  /* A function parameter pack's elements can still come out as copies of
+     their own ('it#0') rather than DECL's parameters, when the pack wasn't
+     yet registered as a local specialization (DECL instantiated to deduce
+     its return type while its caller is being parsed): re-point them by
+     name, as for the already-substituted case above.  */
+  oa_reanchor_stale_contract_parms (get_fn_contract_specifiers (decl), decl);
 }
 
 static void

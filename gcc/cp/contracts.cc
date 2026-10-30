@@ -4849,6 +4849,26 @@ oa_fndecl_has_conveyor_active_contract_p (tree fndecl)
       if (!ctrl || !flag_contract_control_objects)
 	continue;
       contract_check_side side = contract_side_of (contract, fndecl);
+      /* In a template (a member of a class template, a function
+	 template), the trait queries below don't fold while
+	 processing_template_decl is set, so even a non-dependent control
+	 object such as std::contracts::conveyor_assert_v read as "not
+	 conveyor": its reference parameters and 'this' got no implicit
+	 precondition in the pattern, hence none in any instantiation
+	 either, so callers weren't held to them and the body couldn't
+	 rely on them.  A non-dependent control object means the same in
+	 every instantiation; evaluate it as such.  A dependent one is
+	 still decided only per instantiation, which nothing here
+	 revisits.  */
+      if (processing_template_decl)
+	{
+	  if (instantiation_dependent_expression_p (ctrl))
+	    continue;
+	  ctrl = instantiate_non_dependent_expr (ctrl, tf_none);
+	  if (ctrl == error_mark_node)
+	    continue;
+	}
+      processing_template_decl_sentinel ptds;
       if (!contract_control_conveyor_like (ctrl, side, /*quiet=*/true))
 	continue;
       if (!contract_control_is_ignored (ctrl, side, /*quiet=*/true))
@@ -5085,9 +5105,14 @@ oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
 	 the real, already-shipping library case that surfaced this:
 	 std::move itself, tagged conveyor under _GLIBCXX_CONVEYOR_ASSERTIONS,
 	 instantiated for basic_string's own 'std::move(__str._M_get_
-	 allocator())'-style forwarding of an lvalue reference.  */
+	 allocator())'-style forwarding of an lvalue reference.
+
+	 And as '__builtin_addressof (t)', not '&t': the object's address,
+	 never a class's overloaded operator& (libstdc++'s test iterators
+	 declare one returning void).  cp_build_addressof defers a dependent
+	 operand the same way.  */
       tree arg = is_this ? parm
-	: build_x_unary_op (loc, ADDR_EXPR, parm, NULL_TREE, tf_warning_or_error);
+	: cp_build_addressof (loc, parm, tf_warning_or_error);
       if (arg == error_mark_node)
 	continue;
 
@@ -17959,8 +17984,17 @@ contract_precondition_caller_obligation_p (tree contract, tree callee)
       tree cond = CONTRACT_CONDITION (contract);
       if (cond && cond != error_mark_node)
 	if (tree parm = oa_object_address_conjunct_parm (cond))
-	  if (oa_parm_object_trusted_p (callee, parm))
-	    return false;
+	  {
+	    if (oa_parm_object_trusted_p (callee, parm))
+	      return false;
+	    /* A reference to a function never designates an object: the
+	       implicit precondition, for an object reference, doesn't apply
+	       (a forwarding reference instantiated for a function, as
+	       std::__exchange's new value is for function_ref's manager).  */
+	    tree type = TREE_TYPE (parm);
+	    if (TYPE_REF_P (type) && FUNC_OR_METHOD_TYPE_P (TREE_TYPE (type)))
+	      return false;
+	  }
     }
   return true;
 }
