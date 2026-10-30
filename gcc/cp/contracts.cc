@@ -2255,6 +2255,27 @@ apply_postconditions (tree fndecl)
     }
 }
 
+/* Finish COMPOUND_STMT, the block maybe_apply_function_contracts wraps
+   around FNDECL's body.  The body itself already got its return-value
+   sentinel DECL_EXPR (and, for a throwing cleanup, its CLEANUP_STMT) from
+   maybe_splice_retval_cleanup when it was finished; the wrapper's block pops
+   back to the function-parms level too, so keep it from splicing them in a
+   second time.  A duplicate DECL_EXPR crashes the gimplifier, and a second
+   cleanup would destroy the return value twice.  In a cdtor the macro
+   aliases current_vtt_parm, and the splice is skipped there anyway.  */
+
+static void
+finish_contracts_wrapper_stmt (tree fndecl, tree compound_stmt)
+{
+  if (DECL_CONSTRUCTOR_P (fndecl) || DECL_DESTRUCTOR_P (fndecl))
+    {
+      finish_compound_stmt (compound_stmt);
+      return;
+    }
+  temp_override<tree> no_sentinel (current_retval_sentinel, NULL_TREE);
+  finish_compound_stmt (compound_stmt);
+}
+
 /* Add contract handling to the function in FNDECL.
 
    When we have only pre-conditions, this simply prepends a call (or a direct
@@ -2329,7 +2350,7 @@ maybe_apply_function_contracts (tree fndecl)
     {
       apply_preconditions (fndecl);
       add_stmt (fnbody);
-      finish_compound_stmt (compound_stmt);
+      finish_contracts_wrapper_stmt (fndecl, compound_stmt);
       return;
     }
 
@@ -2354,7 +2375,7 @@ maybe_apply_function_contracts (tree fndecl)
   else
     apply_postconditions (fndecl);
   TREE_OPERAND (try_fin, 1) = pop_stmt_list (TREE_OPERAND (try_fin, 1));
-  finish_compound_stmt (compound_stmt);
+  finish_contracts_wrapper_stmt (fndecl, compound_stmt);
   /* The DECL_SAVED_TREE stmt list will be popped by our caller.  */
 }
 
