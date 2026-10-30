@@ -9882,6 +9882,11 @@ public:
     for (auto it : m_contract_field_nz_map) add (it.first.first);
     for (auto it : m_alias_target) add (it.first);
     for (auto it : m_field_alias_target) add (it.first.first);
+    /* An array whose only facts are about its elements' values (oa_
+       pointer_value_key), or a pointer about its slots ('&p[i]').  */
+    if (m_array_object_key)
+      for (auto it : *m_array_object_key)
+	add (it.first.first);
     if (objects.is_empty ())
       return;
     for (tree d : objects)
@@ -12119,6 +12124,89 @@ oa_array_object_identity (tree expr, oa_env &env, tree *decl_out)
   return true;
 }
 
+/* D4324 item 8: if EXPR reads a pointer VALUE stored in an object that has
+   no decl of its own to key a fact on, set *KEY_OUT to the key such a
+   fact is established and consulted under, and return true:
+
+   - '*r', the pointer a reference R to a pointer refers to ('T *&r'):
+     the pointer decl R is bound to, when that's known ('T *const &r =
+     p' -- the fact is then one about P, ended by any write to it), else
+     a key on R's referent ended by any write to that object;
+   - 'a[i]', an element of a fixed-size array A of pointers: a key on
+     (A, I) -- I a constant or a decl -- ended by any write to A or to I.
+
+   (Either object's own address is a different question: '&a[i]' and
+   'r' itself are trivially objects.)  */
+
+static bool
+oa_pointer_value_key (tree expr, oa_env &env, tree *key_out)
+{
+  expr = STRIP_ANY_LOCATION_WRAPPER (expr);
+  while (TREE_CODE (expr) == NON_LVALUE_EXPR || TREE_CODE (expr) == NOP_EXPR
+	 || TREE_CODE (expr) == CONVERT_EXPR
+	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR)
+    expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+  if (!POINTER_TYPE_P (TREE_TYPE (expr)))
+    return false;
+  if (TREE_CODE (expr) == INDIRECT_REF)
+    {
+      tree r = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      if (!(VAR_P (r) || TREE_CODE (r) == PARM_DECL)
+	  || !TYPE_REF_P (TREE_TYPE (r)))
+	return false;
+      /* A local reference is bound to its initializer for good.  */
+      if (VAR_P (r) && DECL_INITIAL (r))
+	{
+	  tree init = STRIP_ANY_LOCATION_WRAPPER (DECL_INITIAL (r));
+	  while (CONVERT_EXPR_P (init) || TREE_CODE (init) == NON_LVALUE_EXPR)
+	    init = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (init, 0));
+	  if (TREE_CODE (init) == ADDR_EXPR)
+	    {
+	      tree bound = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (init, 0));
+	      if ((VAR_P (bound) || TREE_CODE (bound) == PARM_DECL)
+		  && POINTER_TYPE_P (TREE_TYPE (bound)))
+		{
+		  *key_out = bound;
+		  return true;
+		}
+	    }
+	}
+      tree identity;
+      if (!oa_object_identity_decl (r, &identity))
+	return false;
+      identity = env.alias_find (identity);
+      if (identity != r
+	  && (VAR_P (identity) || TREE_CODE (identity) == PARM_DECL)
+	  && POINTER_TYPE_P (TREE_TYPE (identity)))
+	*key_out = identity;
+      else
+	*key_out = env.field_object_identity_key (identity, error_mark_node);
+      return true;
+    }
+  if (TREE_CODE (expr) == ARRAY_REF)
+    {
+      tree arr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      tree index = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 1));
+      if (TREE_CODE (TREE_TYPE (arr)) != ARRAY_TYPE)
+	return false;
+      tree base_identity, index_identity;
+      if (!oa_object_identity_decl (arr, &base_identity))
+	return false;
+      base_identity = env.alias_find (base_identity);
+      if (TREE_CODE (index) == INTEGER_CST)
+	{
+	  if (tree_int_cst_sgn (index) < 0)
+	    return false;
+	  index_identity = wide_int_to_tree (sizetype, wi::to_widest (index));
+	}
+      else if (!oa_object_identity_decl (index, &index_identity))
+	return false;
+      *key_out = env.array_object_identity_key (base_identity, index_identity);
+      return true;
+    }
+  return false;
+}
+
 static bool oa_get_range (tree expr, oa_env &env, oa_range_fact *out);
 
 /* D4324/P2680: true if FNDECL -- any ordinary accessor, not just a
@@ -12314,6 +12402,16 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
 	return true;
       expr = STRIP_ANY_LOCATION_WRAPPER (fwd_arg);
     }
+
+  /* D4324 item 8: a pointer value read through a reference, or from an
+     element of an array, established as an object (oa_pointer_value_
+     key).  */
+  {
+    tree value_key;
+    if (oa_pointer_value_key (expr, env, &value_key)
+	&& env.provable_p (value_key))
+      return true;
+  }
 
   /* D4324/P2680: a call to any accessor (conversion operator or
      ordinary named function alike) whose own postcondition proves
@@ -26822,6 +26920,14 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 		if (oa_array_object_identity (arg, env, &identity))
 		  arg = identity;
 	      }
+	    /* D4324 item 8: a pointer value read through a reference, or
+	       from an element of an array -- see oa_pointer_value_key.  */
+	    else
+	      {
+		tree value_key;
+		if (oa_pointer_value_key (arg, env, &value_key))
+		  arg = value_key;
+	      }
 	    facts.safe_push (arg);
 	  }
 	else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
@@ -27445,6 +27551,14 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 		tree identity;
 		if (oa_array_object_identity (arg, env, &identity))
 		  arg = identity;
+	      }
+	    /* D4324 item 8: a pointer value read through a reference, or
+	       from an element of an array -- see oa_pointer_value_key.  */
+	    else
+	      {
+		tree value_key;
+		if (oa_pointer_value_key (arg, env, &value_key))
+		  arg = value_key;
 	      }
 	    facts.safe_push (arg);
 	  }
@@ -30599,6 +30713,17 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 		  if (t != ptr && DECL_P (t))
 		    target = t;
 		}
+	      /* The pointer a reference refers to has a new value: the
+		 fact oa_pointer_value_key keyed on the reference's referent
+		 ends.  */
+	      if ((VAR_P (ptr) || TREE_CODE (ptr) == PARM_DECL)
+		  && TYPE_REF_P (TREE_TYPE (ptr)))
+		{
+		  tree identity;
+		  if (oa_object_identity_decl (ptr, &identity))
+		    env.field_object_address_invalidate (env.alias_find (identity),
+							 error_mark_node);
+		}
 	      /* 'this' can't be repointed, and never points to one of this
 		 function's own objects.  */
 	      if (!target && !is_this_parameter (ptr))
@@ -30869,6 +30994,10 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 			    if (POINTER_TYPE_P (TREE_TYPE (base))
 				|| TREE_CODE (TREE_TYPE (base)) == REFERENCE_TYPE)
 			      {
+				/* The facts on its elements' values (oa_
+				   pointer_value_key): any of them, for an
+				   index that could be any.  */
+				env.field_object_address_invalidate_all (array_identity);
 				HOST_WIDE_INT idx;
 				if (oa_array_index_constant (index, &idx))
 				  {
