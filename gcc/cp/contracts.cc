@@ -12248,6 +12248,30 @@ static bool oa_get_range (tree expr, oa_env &env, oa_range_fact *out);
    carrying such a postcondition -- remained real and is fixed here
    directly, not worked around a second time.  */
 
+/* Is COND, in a template pattern's contract not yet substituted, a call
+   of std::is_object_address with one argument, set to *ARG?  Its callee
+   is then still a name, not a resolved specialization.  */
+
+static bool
+oa_pattern_is_object_address_call_p (tree cond, tree *arg)
+{
+  cond = STRIP_ANY_LOCATION_WRAPPER (cond);
+  if (!cond || TREE_CODE (cond) != CALL_EXPR || call_expr_nargs (cond) != 1)
+    return false;
+  tree fn = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_FN (cond));
+  if (TREE_CODE (fn) == TEMPLATE_ID_EXPR)
+    fn = TREE_OPERAND (fn, 0);
+  if (TREE_CODE (fn) != OVERLOAD && TREE_CODE (fn) != TEMPLATE_DECL
+      && TREE_CODE (fn) != FUNCTION_DECL)
+    return false;
+  tree f = OVL_FIRST (fn);
+  if (!f || !DECL_NAME (f) || !id_equal (DECL_NAME (f), "is_object_address")
+      || !decl_in_std_namespace_p (f))
+    return false;
+  *arg = CALL_EXPR_ARG (cond, 0);
+  return true;
+}
+
 static bool
 oa_accessor_postcondition_object_address_p (tree fndecl)
 {
@@ -12270,15 +12294,24 @@ oa_accessor_postcondition_object_address_p (tree fndecl)
       if (!contract_failure_terminates_p (contract, fndecl))
 	continue;
 
-      tree cond = STRIP_ANY_LOCATION_WRAPPER (CONTRACT_CONDITION (contract));
-      if (cond == NULL_TREE || TREE_CODE (cond) != CALL_EXPR
-	  || call_expr_nargs (cond) != 1)
+      tree cond = CONTRACT_CONDITION (contract);
+      tree ia_arg;
+      if (!is_object_address_call_p (cond, &ia_arg)
+	  && !oa_pattern_is_object_address_call_p (cond, &ia_arg))
 	continue;
-      tree callee = cp_get_callee_fndecl_nofold (cond);
-      if (!callee || !is_object_address_fndecl_p (callee))
-	continue;
-      tree ia_arg = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (cond, 0));
-      if (TREE_CODE (ia_arg) == ADDR_EXPR)
+      ia_arg = STRIP_ANY_LOCATION_WRAPPER (ia_arg);
+      /* '&res' for a reference RES is RES converted to a pointer once
+	 substituted; in a template specialization's postcondition not yet
+	 substituted (when it's first called in a predicate, which doesn't
+	 substitute it), still its pattern's '__builtin_addressof (res)'.
+	 Either way the same promise about the result.  */
+      while (CONVERT_EXPR_P (ia_arg) || TREE_CODE (ia_arg) == NON_LVALUE_EXPR)
+	ia_arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (ia_arg, 0));
+      if (TREE_CODE (ia_arg) == ADDR_EXPR
+	  || TREE_CODE (ia_arg) == ADDRESSOF_EXPR)
+	ia_arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (ia_arg, 0));
+      /* The pattern's reference RES, as an expression.  */
+      if (REFERENCE_REF_P (ia_arg))
 	ia_arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (ia_arg, 0));
       if (ia_arg == result_id)
 	return true;
@@ -12430,14 +12463,22 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
      adding this replacement.) There is no field to rewrite EXPR into
      here, unlike that removed function's own field-identity
      composition: the call's result is simply provable, full stop.  */
-  if (TREE_CODE (expr) == CALL_EXPR && call_expr_nargs (expr) == 1)
-    {
-      tree fn = CALL_EXPR_FN (expr);
-      if (fn && TREE_CODE (fn) == ADDR_EXPR
-	  && TREE_CODE (TREE_OPERAND (fn, 0)) == FUNCTION_DECL
-	  && oa_accessor_postcondition_object_address_p (TREE_OPERAND (fn, 0)))
-	return true;
-    }
+  {
+    /* Its returned reference can arrive converted to the pointer type a
+       reference parameter takes ('(const T *) f (x)').  */
+    tree call = expr;
+    while (TREE_CODE (call) == NOP_EXPR || TREE_CODE (call) == CONVERT_EXPR
+	   || TREE_CODE (call) == NON_LVALUE_EXPR)
+      call = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (call, 0));
+    if (TREE_CODE (call) == CALL_EXPR && call_expr_nargs (call) == 1)
+      {
+	tree fn = CALL_EXPR_FN (call);
+	if (fn && TREE_CODE (fn) == ADDR_EXPR
+	    && TREE_CODE (TREE_OPERAND (fn, 0)) == FUNCTION_DECL
+	    && oa_accessor_postcondition_object_address_p (TREE_OPERAND (fn, 0)))
+	  return true;
+      }
+  }
 
   /* D4324/P2680, ctor/dtor 'this' soundness correction, Phase 1.4/1.5:
      'new T()' (no placement) lowers, at this pre-genericize stage, to a
