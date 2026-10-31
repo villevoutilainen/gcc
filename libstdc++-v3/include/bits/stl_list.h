@@ -1958,7 +1958,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
 #if __cplusplus >= 201103L
       iterator
-      insert(const_iterator __position, size_type __n, const value_type& __x) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
+      insert(const_iterator __position, size_type __n, const value_type& __x)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__x);
 #else
       void
       insert(iterator __position, size_type __n, const value_type& __x)

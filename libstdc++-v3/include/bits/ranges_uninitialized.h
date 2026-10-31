@@ -311,8 +311,8 @@ namespace ranges
 				borrowed_iterator_t<_ORange>>
       operator()(_IRange&& __inr, _ORange&& __outr) const
       _GLIBCXX_CONVEYOR_REQUIRES(__outr)
+      _GLIBCXX_CONVEYOR_REQUIRES(__inr)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__inr);
 	return (*this)(ranges::begin(__inr), ranges::end(__inr),
 		       ranges::begin(__outr), ranges::end(__outr));
       }
@@ -409,8 +409,8 @@ namespace ranges
 				borrowed_iterator_t<_ORange>>
       operator()(_IRange&& __inr, _ORange&& __outr) const
       _GLIBCXX_CONVEYOR_REQUIRES(__outr)
+      _GLIBCXX_CONVEYOR_REQUIRES(__inr)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__inr);
 	return (*this)(ranges::begin(__inr), ranges::end(__inr),
 		       ranges::begin(__outr), ranges::end(__outr));
       }

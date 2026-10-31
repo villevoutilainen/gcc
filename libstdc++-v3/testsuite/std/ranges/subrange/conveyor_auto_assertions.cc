@@ -71,10 +71,17 @@ template std::basic_const_iterator<int*>::basic_const_iterator(int*) conveyor;
 // 9.1's cone-of-evaluation rule, Q2) -- a borrowed parameter, however
 // validly proven, never satisfies that. A const reference sidesteps
 // the question entirely: _Self deduces const, and Q2 only ever applies
-// to non-const references in the first place.
-int front (const SR& sr) { return sr.front (); }
-int back (const SR& sr) { return sr.back (); }
-int subscript (const SR& sr) { return sr[2]; }
+// to non-const references in the first place.  front()/back()/operator[]
+// require their object, so these require theirs of their callers.
+int front (const SR& sr)
+  pre<std::contracts::conveyor_assert_v> (std::is_object_address (&sr))
+{ return sr.front (); }
+int back (const SR& sr)
+  pre<std::contracts::conveyor_assert_v> (std::is_object_address (&sr))
+{ return sr.back (); }
+int subscript (const SR& sr)
+  pre<std::contracts::conveyor_assert_v> (std::is_object_address (&sr))
+{ return sr[2]; }
 bool is_empty (const SR& sr) conveyor { return sr.empty (); }
 std::size_t size (const SR& sr) conveyor { return sr.size (); }
 bool as_bool (const SR& sr) conveyor { return bool (sr); }

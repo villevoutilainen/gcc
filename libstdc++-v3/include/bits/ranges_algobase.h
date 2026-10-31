@@ -172,8 +172,8 @@ namespace ranges
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
 	// 3560. ranges::equal [...] should short-circuit for sized_ranges
 	if constexpr (sized_range<_Range1>)
@@ -354,10 +354,6 @@ namespace __detail
       operator()(_Range&& __r, _Out __result) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (__builtin_addressof (__r)));
-#endif
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__result));
       }
