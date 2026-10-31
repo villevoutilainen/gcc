@@ -272,7 +272,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr const_reference
       operator[](size_type __pos) const noexcept
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_assert(__pos < this->_M_len);
 	return *(this->_M_str + __pos);
@@ -370,7 +370,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr int
       compare(basic_string_view __str) const noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	const size_type __rlen = std::min(this->_M_len, __str._M_len);
@@ -796,7 +796,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline basic_ostream<_CharT, _Traits>&
     operator<<(basic_ostream<_CharT, _Traits>& __os,
 	       basic_string_view<_CharT,_Traits> __str)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__os) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+    _GLIBCXX_CONVEYOR_REQUIRES(__os) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
     { return __ostream_insert(__os, __str.data(), __str.size()); }
 #endif // HOSTED
 

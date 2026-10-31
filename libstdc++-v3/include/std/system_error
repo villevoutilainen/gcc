@@ -566,7 +566,7 @@ namespace __adl_only
 
     system_error(error_code __ec, const string& __what)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>
+    pre<std::contracts::conveyor_assert_v>
       (std::is_object_address (__builtin_addressof (__what)))
 #endif
     : runtime_error(__what + (": " + __ec.message())), _M_code(__ec) { }
@@ -583,7 +583,7 @@ namespace __adl_only
 
     system_error(int __v, const error_category& __ecat, const string& __what)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>
+    pre<std::contracts::conveyor_assert_v>
       (std::is_object_address (__builtin_addressof (__what)))
 #endif
     : runtime_error(__what + (": " + error_code(__v, __ecat).message())),

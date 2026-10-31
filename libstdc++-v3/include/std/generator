@@ -281,6 +281,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	void
 	_M_jump_in(_Coro_handle __rest, _Coro_handle __new) noexcept
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  __glibcxx_assert_noconveyor(&__new.promise()._M_nest == this);
 	  __glibcxx_assert_noconveyor(this->_M_is_bottom());
 	  // We're bottom.  We're also top if top is unset (note that this is

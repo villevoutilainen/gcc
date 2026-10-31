@@ -185,24 +185,16 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     jthread&
     operator=(jthread&& __other) noexcept
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__other)
     {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (this)
-	 && std::is_object_address (__builtin_addressof (__other)));
-#endif
       std::jthread(std::move(__other)).swap(*this);
       return *this;
     }
 
     void
     swap(jthread& __other) noexcept
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__other)
     {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (this)
-	 && std::is_object_address (__builtin_addressof (__other)));
-#endif
       std::swap(_M_stop_source, __other._M_stop_source);
       std::swap(_M_thread, __other._M_thread);
     }
@@ -261,6 +253,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
     friend void swap(jthread& __lhs, jthread& __rhs) noexcept
+    _GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
       __lhs.swap(__rhs);
     }

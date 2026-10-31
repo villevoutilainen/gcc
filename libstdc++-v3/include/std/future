@@ -363,6 +363,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _Result_base&
       wait()
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	// Run any deferred function or join any asynchronous thread:
 	_M_complete_async();
 	// Acquire MO makes sure this synchronizes with the thread that made
@@ -772,6 +773,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __result_type
       _M_get_result() const
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(_M_state);
 	_State_base::_S_check(_M_state);
 	_Result_base& __res = _M_state->wait();
 	if (!(__res._M_error == nullptr))
@@ -950,12 +953,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       future& operator=(const future&) = delete;
 
       future& operator=(future&& __fut) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__fut)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this)
-	   && std::is_object_address (__builtin_addressof (__fut)));
-#endif
 	future(std::move(__fut))._M_swap(*this);
 	return *this;
       }
@@ -970,7 +969,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       shared_future<void> share() noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       ;
     };
@@ -1098,12 +1097,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       }
 
       shared_future& operator=(shared_future&& __sf) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__sf)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this)
-	   && std::is_object_address (__builtin_addressof (__sf)));
-#endif
 	shared_future(std::move(__sf))._M_swap(*this);
 	return *this;
       }
@@ -1155,7 +1150,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   inline shared_future<void>
   future<void>::share() noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+  pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
   { return shared_future<void>(std::move(*this)); }
 
@@ -1215,12 +1210,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       // Assignment
       promise&
       operator=(promise&& __rhs) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this)
-	   && std::is_object_address (__builtin_addressof (__rhs)));
-#endif
 	promise(std::move(__rhs)).swap(*this);
 	return *this;
       }
@@ -1336,12 +1327,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       // Assignment
       promise&
       operator=(promise&& __rhs) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this)
-	   && std::is_object_address (__builtin_addressof (__rhs)));
-#endif
 	promise(std::move(__rhs)).swap(*this);
 	return *this;
       }
@@ -1441,12 +1428,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       // Assignment
       promise&
       operator=(promise&& __rhs) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this)
-	   && std::is_object_address (__builtin_addressof (__rhs)));
-#endif
 	promise(std::move(__rhs)).swap(*this);
 	return *this;
       }

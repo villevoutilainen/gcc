@@ -165,8 +165,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  constexpr __type<_Tp>
 	  operator()(_Tp&& __e) const
 	  noexcept(_S_noexcept<_Tp>())
+	  _GLIBCXX_CONVEYOR_REQUIRES(__e)
 	  {
-	    _GLIBCXX_CONVEYOR_TRUST(__e);
 	    if constexpr (__adl_imove<_Tp>)
 	      return iter_move(static_cast<_Tp&&>(__e));
 	    else if constexpr (is_lvalue_reference_v<__iter_ref_t<_Tp>>)

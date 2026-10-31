@@ -171,9 +171,9 @@ namespace ranges
       [[nodiscard]] constexpr bool
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r2)
       {
 	_GLIBCXX_CONVEYOR_TRUST(__r1);
-	_GLIBCXX_CONVEYOR_TRUST(__r2);
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
 	// 3560. ranges::equal [...] should short-circuit for sized_ranges
 	if constexpr (sized_range<_Range1>)
@@ -197,6 +197,9 @@ namespace __detail
     constexpr void
     __assign_one(_OutIter& __out, _InIter& __in)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__out);
+      _GLIBCXX_CONVEYOR_TRUST(__in);
+      _GLIBCXX_CONVEYOR_TRUST_DEREF(__in);
       if constexpr (_IsMove)
 	*__out = ranges::iter_move(__in);
       else
@@ -349,8 +352,8 @@ namespace __detail
       requires indirectly_copyable<iterator_t<_Range>, _Out>
       constexpr copy_result<borrowed_iterator_t<_Range>, _Out>
       operator()(_Range&& __r, _Out __result) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r);
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
 	  (std::is_object_address (__builtin_addressof (__r)));
@@ -379,8 +382,8 @@ namespace __detail
       requires indirectly_movable<iterator_t<_Range>, _Out>
       constexpr move_result<borrowed_iterator_t<_Range>, _Out>
       operator()(_Range&& __r, _Out __result) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__result));
       }
@@ -490,8 +493,8 @@ namespace __detail
       requires indirectly_copyable<iterator_t<_Range>, _Iter>
       constexpr copy_backward_result<borrowed_iterator_t<_Range>, _Iter>
       operator()(_Range&& __r, _Iter __result) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__result));
       }
@@ -516,8 +519,8 @@ namespace __detail
       requires indirectly_movable<iterator_t<_Range>, _Iter>
       constexpr move_backward_result<borrowed_iterator_t<_Range>, _Iter>
       operator()(_Range&& __r, _Iter __result) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__result));
       }
@@ -635,8 +638,8 @@ namespace __detail
       requires output_range<_Range, const _Tp&>
       constexpr borrowed_iterator_t<_Range>
       operator()(_Range&& __r, const _Tp& __value) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r), __value);
       }
   };

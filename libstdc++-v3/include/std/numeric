@@ -758,8 +758,8 @@ namespace ranges
     template<weakly_incrementable _Tp, output_range<const _Tp&> _Range>
       constexpr iota_result<borrowed_iterator_t<_Range>, _Tp>
       operator()(_Range&& __r, _Tp __value) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r), std::move(__value));
       }
   };

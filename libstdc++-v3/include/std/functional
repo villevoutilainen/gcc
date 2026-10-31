@@ -1286,8 +1286,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_GLIBCXX20_CONSTEXPR
 	pair<_ForwardIterator2, _ForwardIterator2>
 	operator()(_ForwardIterator2 __first, _ForwardIterator2 __last) const
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
-	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  _ForwardIterator2 __first_ret =
 	    std::search(__first, __last, std::get<0>(_M_m), std::get<1>(_M_m),
 			std::get<2>(_M_m));
@@ -1433,7 +1433,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       template<typename _Tp>
 	__diff_type
 	_M_bad_char_shift(_Tp __c) const
-	{ return this->_M_lookup(__c, _M_pat_end - _M_pat); }
+	{ _GLIBCXX_CONVEYOR_TRUST_THIS; _GLIBCXX_CONVEYOR_TRUST(_M_pat_end); _GLIBCXX_CONVEYOR_TRUST(_M_pat); return this->_M_lookup(__c, _M_pat_end - _M_pat); }
 
       _RAIter _M_pat;
       _RAIter _M_pat_end;
@@ -1463,6 +1463,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
         pair<_RandomAccessIterator2, _RandomAccessIterator2>
 	operator()(_RandomAccessIterator2 __first,
 		   _RandomAccessIterator2 __last) const
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 #ifdef __glibcxx_concepts // >= C++20
 	  // Value types must be the same for hash function and predicate
@@ -1492,7 +1493,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       template<typename _Tp>
 	__diff_type
 	_M_bad_char_shift(_Tp __c) const
-	{ return this->_M_lookup(__c, _M_pat_end - _M_pat); }
+	{ _GLIBCXX_CONVEYOR_TRUST_THIS; _GLIBCXX_CONVEYOR_TRUST(_M_pat); _GLIBCXX_CONVEYOR_TRUST(_M_pat_end); return this->_M_lookup(__c, _M_pat_end - _M_pat); }
 
       _RAIter _M_pat;
       _RAIter _M_pat_end;

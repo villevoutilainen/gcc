@@ -119,7 +119,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       __ostream_type&
       operator<<(__ostream_type& (*__pf)(__ostream_type&))
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
 	// DR 60. What is a formatted input function?
@@ -129,7 +129,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       __ostream_type&
       operator<<(__ios_type& (*__pf)(__ios_type&))
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
 	// DR 60. What is a formatted input function?
@@ -140,7 +140,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       __ostream_type&
       operator<<(ios_base& (*__pf) (ios_base&))
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
 	// DR 60. What is a formatted input function?
@@ -180,26 +180,26 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       __ostream_type&
       operator<<(long __n)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return _M_insert(__n); }
 
       __ostream_type&
       operator<<(unsigned long __n)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return _M_insert(__n); }
 
       __ostream_type&
       operator<<(bool __n)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return _M_insert(__n); }
 
       __ostream_type&
       operator<<(short __n)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
       __ostream_type&
       operator<<(unsigned short __n)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
 	// 117. basic_ostream uses nonexistent num_put member functions.
@@ -208,11 +208,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       __ostream_type&
       operator<<(int __n)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
       __ostream_type&
       operator<<(unsigned int __n)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
 	// 117. basic_ostream uses nonexistent num_put member functions.
@@ -224,12 +224,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #pragma GCC diagnostic ignored "-Wlong-long"
       __ostream_type&
       operator<<(long long __n)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return _M_insert(__n); }
 
       __ostream_type&
       operator<<(unsigned long long __n)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return _M_insert(__n); }
 #pragma GCC diagnostic pop
 #endif
@@ -246,12 +246,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       __ostream_type&
       operator<<(double __f)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return _M_insert(__f); }
 
       __ostream_type&
       operator<<(float __f)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
 	// 117. basic_ostream uses nonexistent num_put member functions.
@@ -260,7 +260,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       __ostream_type&
       operator<<(long double __f)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return _M_insert(__f); }
       ///@}
 
@@ -268,7 +268,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __attribute__((__always_inline__))
       __ostream_type&
       operator<<(_Float16 __f)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	return _M_insert(_S_cast_flt<double>(__f));
       }
@@ -278,7 +278,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __attribute__((__always_inline__))
       __ostream_type&
       operator<<(_Float32 __f)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	return _M_insert(_S_cast_flt<double>(__f));
       }
@@ -288,7 +288,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __attribute__((__always_inline__))
       __ostream_type&
       operator<<(_Float64 __f)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	return _M_insert(_S_cast_flt<double>(__f));
       }
@@ -298,7 +298,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __attribute__((__always_inline__))
       __ostream_type&
       operator<<(_Float128 __f)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	return _M_insert(_S_cast_flt<long double>(__f));
       }
@@ -308,7 +308,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __attribute__((__always_inline__))
       __ostream_type&
       operator<<(__gnu_cxx::__bfloat16_t __f)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	return _M_insert(_S_cast_flt<double>(__f));
       }
@@ -324,13 +324,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       __ostream_type&
       operator<<(const void* __p)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return _M_insert(__p); }
 
 #if __cplusplus >= 201703L
       __ostream_type&
       operator<<(nullptr_t)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *this << "nullptr"; }
 #endif
 
@@ -338,7 +338,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __attribute__((__always_inline__))
       __ostream_type&
       operator<<(const volatile void* __p)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return _M_insert(const_cast<const void*>(__p)); }
 #endif
 
@@ -365,7 +365,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       __ostream_type&
       operator<<(__streambuf_type* __sb)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
       ///@}
 
       ///@{
@@ -431,7 +431,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       __ostream_type&
       flush()
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
       /**
        *  @brief  Getting the current write position.
@@ -654,7 +654,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _CharT, typename _Traits>
     inline basic_ostream<_CharT, _Traits>&
     operator<<(basic_ostream<_CharT, _Traits>& __out, _CharT __c)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+    _GLIBCXX_CONVEYOR_REQUIRES(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
     {
       if (__out.width() != 0)
 	return __ostream_insert(__out, &__c, 1);
@@ -665,14 +665,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _CharT, typename _Traits>
     inline basic_ostream<_CharT, _Traits>&
     operator<<(basic_ostream<_CharT, _Traits>& __out, char __c)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+    _GLIBCXX_CONVEYOR_REQUIRES(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
     { return (__out << __out.widen(__c)); }
 
   // Specialization
   template<typename _Traits>
     inline basic_ostream<char, _Traits>&
     operator<<(basic_ostream<char, _Traits>& __out, char __c)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+    _GLIBCXX_CONVEYOR_REQUIRES(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
     {
       if (__out.width() != 0)
 	return __ostream_insert(__out, &__c, 1);
@@ -684,13 +684,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Traits>
     inline basic_ostream<char, _Traits>&
     operator<<(basic_ostream<char, _Traits>& __out, signed char __c)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+    _GLIBCXX_CONVEYOR_REQUIRES(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
     { return (__out << static_cast<char>(__c)); }
 
   template<typename _Traits>
     inline basic_ostream<char, _Traits>&
     operator<<(basic_ostream<char, _Traits>& __out, unsigned char __c)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+    _GLIBCXX_CONVEYOR_REQUIRES(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
     { return (__out << static_cast<char>(__c)); }
   ///@}
 
@@ -750,7 +750,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _CharT, typename _Traits>
     inline basic_ostream<_CharT, _Traits>&
     operator<<(basic_ostream<_CharT, _Traits>& __out, const _CharT* __s)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+    _GLIBCXX_CONVEYOR_REQUIRES(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
     {
       if (!__s)
 	__out.setstate(ios_base::badbit);
@@ -763,13 +763,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _CharT, typename _Traits>
     basic_ostream<_CharT, _Traits> &
     operator<<(basic_ostream<_CharT, _Traits>& __out, const char* __s)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
+    _GLIBCXX_CONVEYOR_REQUIRES(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
   // Partial specializations
   template<typename _Traits>
     inline basic_ostream<char, _Traits>&
     operator<<(basic_ostream<char, _Traits>& __out, const char* __s)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+    _GLIBCXX_CONVEYOR_REQUIRES(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
     {
       if (!__s)
 	__out.setstate(ios_base::badbit);
@@ -783,13 +783,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Traits>
     inline basic_ostream<char, _Traits>&
     operator<<(basic_ostream<char, _Traits>& __out, const signed char* __s)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+    _GLIBCXX_CONVEYOR_REQUIRES(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
     { return (__out << reinterpret_cast<const char*>(__s)); }
 
   template<typename _Traits>
     inline basic_ostream<char, _Traits> &
     operator<<(basic_ostream<char, _Traits>& __out, const unsigned char* __s)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+    _GLIBCXX_CONVEYOR_REQUIRES(__out) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
     { return (__out << reinterpret_cast<const char*>(__s)); }
   ///@}
 

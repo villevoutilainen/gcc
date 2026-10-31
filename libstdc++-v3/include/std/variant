@@ -128,7 +128,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr variant_alternative_t<_Np, variant<_Types...>>&
     get(variant<_Types...>& __v)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__v)))
       post<std::contracts::never_proven_conveyor_v>
 	(r: std::is_object_address (__builtin_addressof (r)))
@@ -139,7 +139,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr variant_alternative_t<_Np, variant<_Types...>>&&
     get(variant<_Types...>&& __v)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__v)))
       post<std::contracts::never_proven_conveyor_v>
 	(r: std::is_object_address (__builtin_addressof (r)))
@@ -150,7 +150,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr variant_alternative_t<_Np, variant<_Types...>> const&
     get(const variant<_Types...>& __v)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__v)))
       post<std::contracts::never_proven_conveyor_v>
 	(r: std::is_object_address (__builtin_addressof (r)))
@@ -161,7 +161,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr variant_alternative_t<_Np, variant<_Types...>> const&&
     get(const variant<_Types...>&& __v)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__v)))
       post<std::contracts::never_proven_conveyor_v>
 	(r: std::is_object_address (__builtin_addressof (r)))
@@ -1640,6 +1640,7 @@ namespace __detail::__variant
 	operator=(_Tp&& __rhs)
 	noexcept(is_nothrow_assignable_v<__accepted_type<_Tp&&>&, _Tp>
 		 && is_nothrow_constructible_v<__accepted_type<_Tp&&>, _Tp>)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  constexpr auto __index = __accepted_index<_Tp>;
 	  if (index() == __index)
@@ -1663,6 +1664,7 @@ namespace __detail::__variant
 	enable_if_t<is_constructible_v<_Tp, _Args...> && __exactly_once<_Tp>,
 		    _Tp&>
 	emplace(_Args&&... __args)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  constexpr size_t __index = __index_of<_Tp>;
 	  return this->emplace<__index>(std::forward<_Args>(__args)...);
@@ -1685,7 +1687,7 @@ namespace __detail::__variant
 		    __to_type<_Np>&>
 	emplace(_Args&&... __args)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+	  pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
 	{
 	  namespace __variant = std::__detail::__variant;
@@ -1783,9 +1785,9 @@ namespace __detail::__variant
       swap(variant& __rhs)
       noexcept((__is_nothrow_swappable<_Types>::value && ...)
 	       && is_nothrow_move_constructible_v<variant>)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	_GLIBCXX_CONVEYOR_TRUST(__rhs);
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	static_assert((is_move_constructible_v<_Types> && ...));
 
 	// Handle this here to simplify the visitation.
@@ -1801,6 +1803,7 @@ namespace __detail::__variant
 	__variant::__raw_idx_visit(
 	  [this, &__rhs](auto&& __rhs_mem, auto __rhs_index) mutable
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    constexpr size_t __j = __rhs_index;
 	    if constexpr (__j != variant_npos)
 	      {

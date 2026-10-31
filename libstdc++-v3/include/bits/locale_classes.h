@@ -173,7 +173,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     explicit
     locale(const std::string& __s)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__s)))
 #endif
     : locale(__s.c_str()) { }
@@ -192,7 +192,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     */
     locale(const locale& __base, const std::string& __s, category __cat)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__s)))
 #endif
     : locale(__base, __s.c_str(), __cat) { }

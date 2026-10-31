@@ -351,7 +351,7 @@ _GLIBCXX_MEM_FN_TRAITS(&& noexcept, false_type, true_type)
       _GLIBCXX20_CONSTEXPR
       _Tp&
       get() const noexcept
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *_M_data; }
 
       template<typename... _Args>
@@ -359,6 +359,7 @@ _GLIBCXX_MEM_FN_TRAITS(&& noexcept, false_type, true_type)
 	typename __invoke_result<_Tp&, _Args...>::type
 	operator()(_Args&&... __args) const
 	noexcept(__is_nothrow_invocable<_Tp&, _Args...>::value)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 #if __cplusplus > 201703L
 	  if constexpr (is_object_v<type>)

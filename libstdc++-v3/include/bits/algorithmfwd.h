@@ -223,7 +223,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     _GLIBCXX14_CONSTEXPR
     const _Tp&
-    clamp(const _Tp&, const _Tp&, const _Tp&);
+    clamp(const _Tp& __val, const _Tp& __lo, const _Tp& __hi)
+    _GLIBCXX_CONVEYOR_REQUIRES(__val) _GLIBCXX_CONVEYOR_REQUIRES(__lo)
+    _GLIBCXX_CONVEYOR_REQUIRES(__hi);
 
   template<typename _Tp, typename _Compare>
     _GLIBCXX14_CONSTEXPR
