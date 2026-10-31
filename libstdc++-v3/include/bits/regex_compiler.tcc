@@ -147,6 +147,7 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_assertion()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_match_token(_ScannerT::_S_token_line_begin))
 	_M_stack.push(_StateSeqT(*_M_nfa, _M_nfa->_M_insert_line_begin()));
       else if (_M_match_token(_ScannerT::_S_token_line_end))
@@ -387,6 +388,7 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_insert_char_matcher()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_stack.push(_StateSeqT(*_M_nfa,
 	_M_nfa->_M_insert_matcher
 	  (_CharMatcher<_TraitsT, __icase, __collate>
@@ -415,6 +417,7 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_insert_bracket_matcher(bool __neg)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _BracketMatcher<__icase, __collate> __matcher(__neg, _M_traits);
       _BracketState __last_char;
       if (_M_try_char())
@@ -439,6 +442,7 @@ namespace __detail
     _M_expression_term(_BracketState& __last_char,
 		       _BracketMatcher<__icase, __collate>& __matcher)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_match_token(_ScannerT::_S_token_bracket_end))
 	return false;
 
@@ -554,6 +558,7 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_try_char()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       bool __is_char = false;
       if (_M_match_token(_ScannerT::_S_token_oct_num))
 	{
@@ -575,6 +580,7 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_match_token(_TokenT __token)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__token == _M_scanner._M_get_token())
 	{
 	  _M_value = _M_scanner._M_get_value();
@@ -589,6 +595,7 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_cur_int_value(int __radix)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       int __v = 0;
       for (_CharT __c : _M_value)
 	if (__builtin_mul_overflow(__v, __radix, &__v)

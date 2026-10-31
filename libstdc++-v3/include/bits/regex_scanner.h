@@ -226,7 +226,7 @@ namespace __detail
       { return _M_token; }
 
       const _StringT&
-      _M_get_value() const noexcept
+      _M_get_value() const noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return _M_value; }
 
 #ifdef _GLIBCXX_DEBUG

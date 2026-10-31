@@ -64,7 +64,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     basic_string<_CharT, _Traits, _Alloc>::
     swap(basic_string& __s) _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
+    pre<std::contracts::conveyor_assert_v>(std::is_object_address (this)
       && std::is_object_address (__builtin_addressof (__s)))
 #endif
     {
@@ -515,7 +515,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     // D4324/P2680: see this function's own declaration in basic_string.h
     // for why this is now conveyor_assert_v.
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
     post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
     {
@@ -565,6 +565,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     basic_string<_CharT, _Traits, _Alloc>::
     _M_erase(size_type __pos, size_type __n)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const size_type __how_much = length() - __pos - __n;
 
       if (__how_much && __n)
@@ -623,7 +624,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     basic_string<_CharT, _Traits, _Alloc>::
     resize(size_type __n, _CharT __c)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
     {
       const size_type __size = this->size();
@@ -826,8 +827,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     __resize_and_overwrite(const size_type __n, _Operation __op)
 #endif
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-    pre<std::contracts::never_proven_conveyor_v>
+    pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+    pre<std::contracts::conveyor_assert_v>
       (std::is_object_address (__builtin_addressof (__op)))
 #endif
     {

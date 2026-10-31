@@ -244,7 +244,12 @@ namespace __detail
       bool
       _M_match_range(const _StrTransT& __first, const _StrTransT& __last,
 		     const _StrTransT& __s) const
-      { return __first <= __s && __s <= __last; }
+      {
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	_GLIBCXX_CONVEYOR_TRUST(__last);
+	_GLIBCXX_CONVEYOR_TRUST(__s);
+	return __first <= __s && __s <= __last;
+      }
 
     protected:
       bool _M_in_range_icase(_CharT __first, _CharT __last, _CharT __ch) const
