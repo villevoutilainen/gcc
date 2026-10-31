@@ -846,7 +846,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       size_type
       count(const key_type& __x) const
-      { return _M_t.find(__x) == _M_t.end() ? 0 : 1; }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return _M_t.find(__x) == _M_t.end() ? 0 : 1;
+      }
 
 #ifdef __glibcxx_generic_associative_lookup // C++ >= 14
       template<typename _Kt>

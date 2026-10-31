@@ -2451,6 +2451,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       void
       _M_move_assign(vector&& __x, false_type)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__x);
 	if (__x._M_get_Tp_allocator() == this->_M_get_Tp_allocator())
 	  _M_move_assign(std::move(__x), true_type());
 	else
