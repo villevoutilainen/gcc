@@ -65,6 +65,7 @@
 #include <ext/type_traits.h>
 #include <bits/move.h>
 #include <bits/ptr_traits.h>
+#include <debug/assertions.h>
 
 #if __cplusplus >= 201103L
 # include <type_traits>
@@ -988,8 +989,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator=(typename _Container::const_reference __value)
       _GLIBCXX_CONVEYOR_REQUIRES(__value)
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	iter = container->insert(iter, __value);
 	++iter;
 	return *this;
@@ -1000,8 +1001,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator=(const typename _Container::value_type& __value)
       _GLIBCXX_CONVEYOR_REQUIRES(__value)
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	iter = container->insert(iter, __value);
 	++iter;
 	return *this;
@@ -1012,8 +1013,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator=(typename _Container::value_type&& __value)
       _GLIBCXX_CONVEYOR_REQUIRES(__value)
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	iter = container->insert(iter, std::move(__value));
 	++iter;
 	return *this;
@@ -2202,9 +2203,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     constexpr common_iterator&
     operator++()
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_PRECONDITION(_M_index == 0)
     {
-      __glibcxx_assert(_M_index == 0);
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      __glibcxx_requires(_M_index == 0);
       ++_M_it;
       return *this;
     }
@@ -2508,9 +2509,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr decltype(auto)
       operator*()
       noexcept(noexcept(*_M_current))
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_PRECONDITION(_M_length > 0)
       {
-	__glibcxx_assert( _M_length > 0 );
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	__glibcxx_requires( _M_length > 0 );
 	return *_M_current;
       }
 
@@ -2519,9 +2520,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator*() const
       noexcept(noexcept(*_M_current))
       requires __detail::__dereferenceable<const _It>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_PRECONDITION(_M_length > 0)
       {
-	__glibcxx_assert( _M_length > 0 );
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	__glibcxx_requires( _M_length > 0 );
 	return *_M_current;
       }
 
@@ -2533,9 +2534,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr counted_iterator&
       operator++()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_PRECONDITION(_M_length > 0)
       {
-	__glibcxx_assert(_M_length > 0);
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	__glibcxx_requires(_M_length > 0);
 	++_M_current;
 	--_M_length;
 	return *this;

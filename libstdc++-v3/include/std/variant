@@ -1786,8 +1786,8 @@ namespace __detail::__variant
       noexcept((__is_nothrow_swappable<_Types>::value && ...)
 	       && is_nothrow_move_constructible_v<variant>)
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__rhs);
 	static_assert((is_move_constructible_v<_Types> && ...));
 
 	// Handle this here to simplify the visitation.

@@ -306,8 +306,8 @@ namespace ranges
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__pred),
@@ -514,8 +514,8 @@ namespace ranges
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	range_difference_t<_Range1> __n1 = -1;
 	range_difference_t<_Range2> __n2 = -1;
 	if constexpr (sized_range<_Range1>)
@@ -602,8 +602,8 @@ namespace ranges
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	range_difference_t<_Range1> __n1 = -1;
 	range_difference_t<_Range2> __n2 = -1;
 	if constexpr (sized_range<_Range1>)
@@ -800,8 +800,8 @@ namespace ranges
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__pred),
@@ -894,8 +894,8 @@ namespace ranges
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
 	// 3560. ranges::is_permutation should short-circuit for sized_ranges
 	if constexpr (sized_range<_Range1>)
@@ -976,8 +976,8 @@ namespace ranges
 				   borrowed_iterator_t<_Range2>>
       operator()(_Range1&& __r1, _Range2&& __r2) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2));
       }
@@ -1080,8 +1080,8 @@ namespace ranges
       operator()(_Range1&& __r1, _Range2&& __r2, _Out __result, _Fp __binary_op,
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__result), std::move(__binary_op),
@@ -2900,8 +2900,8 @@ namespace ranges
       operator()(_Range1&& __r, _Range2&& __out, _Comp __comp = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r)
+      _GLIBCXX_CONVEYOR_REQUIRES(__out)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__out);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       ranges::begin(__out), ranges::end(__out),
 		       std::move(__comp),
@@ -3657,8 +3657,8 @@ namespace ranges
 		 _Comp __comp = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__result), std::move(__comp),
@@ -3992,8 +3992,8 @@ namespace ranges
       operator()(_Range1&& __r1, _Range2&& __r2, _Comp __comp = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__comp),
@@ -4062,8 +4062,8 @@ namespace ranges
 		 _Out __result, _Comp __comp = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__result), std::move(__comp),
@@ -4122,8 +4122,8 @@ namespace ranges
 		 _Comp __comp = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__result), std::move(__comp),
@@ -4181,8 +4181,8 @@ namespace ranges
 		 _Comp __comp = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__result), std::move(__comp),
@@ -4251,8 +4251,8 @@ namespace ranges
 		 _Comp __comp = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__result), std::move(__comp),
@@ -4711,8 +4711,8 @@ namespace ranges
       operator()(_Range1&& __r1, _Range2&& __r2, _Comp __comp = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__comp),
@@ -4925,8 +4925,8 @@ namespace ranges
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       _GLIBCXX_CONVEYOR_REQUIRES(__r2)
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__pred), std::move(__proj1), std::move(__proj2));

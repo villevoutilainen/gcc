@@ -6510,6 +6510,7 @@ namespace __format
 	_M_format_elems(_Rg& __rg,
 			basic_format_context<_Out, _CharT>& __fc) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  _GLIBCXX_CONVEYOR_TRUST(__fc);
 	  auto __out = __format::__write(__fc.out(), _M_open);
 

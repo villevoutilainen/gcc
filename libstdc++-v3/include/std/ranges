@@ -1750,6 +1750,7 @@ namespace views::__adaptor
 	_M_get(_Range& __r) const
 	{
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__r);
 	  __glibcxx_assert(_M_has_value());
 	  return ranges::begin(__r) + _M_offset;
 	}
@@ -1757,6 +1758,7 @@ namespace views::__adaptor
 	constexpr void
 	_M_set(_Range& __r, const iterator_t<_Range>& __it)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__r);
 	  _GLIBCXX_CONVEYOR_TRUST(__it);
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  __glibcxx_assert(!_M_has_value());
@@ -1858,7 +1860,8 @@ namespace views::__adaptor
 
 	constexpr range_reference_t<_Base>
 	operator*() const
-	{ _GLIBCXX_CONVEYOR_TRUST_THIS; return *_M_current; }
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
+	{ return *_M_current; }
 
 	constexpr _Base_iter
 	operator->() const
@@ -2013,6 +2016,7 @@ namespace views::__adaptor
 
       constexpr auto
       end()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if constexpr (common_range<_Vp>)
 	  return _Iterator<false>{this, ranges::end(_M_base)};
@@ -2176,7 +2180,8 @@ namespace views::__adaptor
 	  constexpr decltype(auto)
 	  operator*() const
 	    noexcept(noexcept(_M_fun._M_call_deref(_M_current)))
-	  { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_fun._M_call_deref(_M_current); }
+	  _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	  { return _M_fun._M_call_deref(_M_current); }
 
 	  constexpr _Iterator&
 	  operator++()
@@ -2265,8 +2270,8 @@ namespace views::__adaptor
 	    requires random_access_range<_Base>
 	      && three_way_comparable<_Base_iter>
 	  _GLIBCXX_CONVEYOR_REQUIRES(__y)
+	  _GLIBCXX_CONVEYOR_REQUIRES(__x)
 	  {
-	    _GLIBCXX_CONVEYOR_TRUST(__x);
 	    return __x._M_current <=> __y._M_current;
 	  }
 #endif
@@ -2295,6 +2300,7 @@ namespace views::__adaptor
 
 	  friend constexpr decltype(auto)
 	  iter_move(const _Iterator& __i) noexcept(noexcept(*__i))
+	  _GLIBCXX_CONVEYOR_REQUIRES(__i)
 	  {
 	    if constexpr (is_lvalue_reference_v<decltype(*__i)>)
 	      return std::move(*__i);
@@ -2381,6 +2387,7 @@ namespace views::__adaptor
 
       constexpr _Iterator<false>
       begin()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _Iterator<false>{this, ranges::begin(_M_base)}; }
 
       constexpr _Iterator<true>
@@ -2391,10 +2398,12 @@ namespace views::__adaptor
 
       constexpr _Sentinel<false>
       end()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _Sentinel<false>{ranges::end(_M_base)}; }
 
       constexpr _Iterator<false>
       end() requires common_range<_Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _Iterator<false>{this, ranges::end(_M_base)}; }
 
       constexpr _Sentinel<true>
@@ -2411,6 +2420,7 @@ namespace views::__adaptor
 
       constexpr auto
       size() requires sized_range<_Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::size(_M_base); }
 
       constexpr auto
@@ -2534,6 +2544,7 @@ namespace views::__adaptor
 
       constexpr auto
       begin() const requires range<const _Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if constexpr (sized_range<const _Vp>)
 	  {
@@ -2565,6 +2576,7 @@ namespace views::__adaptor
 
       constexpr auto
       end() const requires range<const _Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if constexpr (sized_range<const _Vp>)
 	  {
@@ -2579,6 +2591,7 @@ namespace views::__adaptor
 
       constexpr auto
       size() requires sized_range<_Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	auto __n = ranges::size(_M_base);
 	return std::min(__n, static_cast<decltype(__n)>(_M_count));
@@ -2586,6 +2599,7 @@ namespace views::__adaptor
 
       constexpr auto
       size() const requires sized_range<const _Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	auto __n = ranges::size(_M_base);
 	return std::min(__n, static_cast<decltype(__n)>(_M_count));
@@ -2771,6 +2785,7 @@ namespace views::__adaptor
       constexpr auto
       begin() const requires range<const _Vp>
 	&& indirect_unary_predicate<const _Pred, iterator_t<const _Vp>>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::begin(_M_base); }
 
       constexpr auto
@@ -2781,6 +2796,7 @@ namespace views::__adaptor
       constexpr auto
       end() const requires range<const _Vp>
 	&& indirect_unary_predicate<const _Pred, iterator_t<const _Vp>>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _Sentinel<true>(ranges::end(_M_base),
 			       std::__addressof(*_M_pred)); }
     };
@@ -2883,10 +2899,12 @@ namespace views::__adaptor
 
       constexpr auto
       end() const requires range<const _Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::end(_M_base); }
 
       constexpr auto
       size() requires sized_range<_Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	const auto __s = ranges::size(_M_base);
 	const auto __c = static_cast<decltype(__s)>(_M_count);
@@ -3027,6 +3045,7 @@ namespace views::__adaptor
 
       constexpr auto
       end()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::end(_M_base); }
     };
 
@@ -3433,6 +3452,7 @@ namespace views::__adaptor
 
       constexpr auto
       begin()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if constexpr (forward_range<_Vp>)
 	  {
@@ -3453,12 +3473,14 @@ namespace views::__adaptor
 	requires forward_range<const _Vp>
 	  && is_reference_v<range_reference_t<const _Vp>>
 	  && input_range<range_reference_t<const _Vp>>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	return _Iterator<true>{this, ranges::begin(_M_base)};
       }
 
       constexpr auto
       end()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if constexpr (forward_range<_Vp> && is_reference_v<_InnerRange>
 		      && forward_range<_InnerRange>
@@ -3474,6 +3496,7 @@ namespace views::__adaptor
 	requires forward_range<const _Vp>
 	  && is_reference_v<range_reference_t<const _Vp>>
 	  && input_range<range_reference_t<const _Vp>>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if constexpr (is_reference_v<range_reference_t<const _Vp>>
 		      && forward_range<range_reference_t<const _Vp>>
@@ -3678,7 +3701,10 @@ namespace views::__adaptor
 		_M_trailing_empty = false;
 		return *this;
 	      }
-	    const auto [__pbegin, __pend] = subrange{_M_parent->_M_pattern};
+	    _GLIBCXX_CONVEYOR_TRUST(*_M_parent);
+	    auto& __pattern = _M_parent->_M_pattern;
+	    _GLIBCXX_CONVEYOR_TRUST(__pattern);
+	    const auto [__pbegin, __pend] = subrange{__pattern};
 	    if (__pbegin == __pend)
 	      ++__current();
 	    else if constexpr (__detail::__tiny_range<_Pattern>)
@@ -3900,6 +3926,7 @@ namespace views::__adaptor
 
       constexpr auto
       begin()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if constexpr (forward_range<_Vp>)
 	  {
@@ -3920,12 +3947,14 @@ namespace views::__adaptor
       constexpr auto
       begin() const requires forward_range<_Vp> && forward_range<const _Vp>
 	&& forward_range<const _Pattern>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	return _OuterIter<true>{this, ranges::begin(_M_base)};
       }
 
       constexpr auto
       end() requires forward_range<_Vp> && common_range<_Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	constexpr bool __simple
 	  = __detail::__simple_view<_Vp> && __detail::__simple_view<_Pattern>;
@@ -3934,6 +3963,7 @@ namespace views::__adaptor
 
       constexpr auto
       end() const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if constexpr (forward_range<_Vp>
 		      && forward_range<const _Vp>
@@ -4030,6 +4060,7 @@ namespace views::__adaptor
 
     constexpr _Iterator
     begin()
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       if (!_M_cached_begin)
 	_M_cached_begin = _M_find_next(ranges::begin(_M_base));
@@ -4038,6 +4069,7 @@ namespace views::__adaptor
 
     constexpr auto
     end()
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       if constexpr (common_range<_Vp>)
 	return _Iterator{this, ranges::end(_M_base), {}};
@@ -4246,6 +4278,7 @@ namespace views::__adaptor
 
       constexpr auto
       begin() const requires range<const _Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if constexpr (random_access_range<const _Vp> && sized_range<const _Vp>)
 	  return ranges::begin(_M_base);
@@ -4266,6 +4299,7 @@ namespace views::__adaptor
 
       constexpr auto
       end() const requires range<const _Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if constexpr (random_access_range<const _Vp> && sized_range<const _Vp>)
 	  return ranges::begin(_M_base) + ranges::size(_M_base);
@@ -4370,6 +4404,7 @@ namespace views::__adaptor
 
       constexpr auto
       begin() requires common_range<_Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return std::make_reverse_iterator(ranges::end(_M_base)); }
 
       constexpr auto
@@ -4378,6 +4413,7 @@ namespace views::__adaptor
 
       constexpr reverse_iterator<iterator_t<_Vp>>
       end()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return std::make_reverse_iterator(ranges::begin(_M_base)); }
 
       constexpr auto
@@ -4386,6 +4422,7 @@ namespace views::__adaptor
 
       constexpr auto
       size() requires sized_range<_Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::size(_M_base); }
 
       constexpr auto
@@ -4519,6 +4556,7 @@ namespace views::__adaptor
 
       constexpr auto
       begin() const requires range<const _Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _Iterator<true>(ranges::begin(_M_base)); }
 
       constexpr auto
@@ -4535,10 +4573,12 @@ namespace views::__adaptor
 
       constexpr auto
       end() const requires common_range<const _Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _Iterator<true>{ranges::end(_M_base)}; }
 
       constexpr auto
       size() requires sized_range<_Vp>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return ranges::size(_M_base); }
 
       constexpr auto
@@ -5652,6 +5692,7 @@ namespace views::__adaptor
 
     constexpr auto
     begin() const requires range<const _Vp>
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     { return _Iterator<true>(ranges::begin(_M_base), ranges::end(_M_base)); }
 
     constexpr auto
@@ -5665,6 +5706,7 @@ namespace views::__adaptor
 
     constexpr auto
     end() const requires range<const _Vp>
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       if constexpr (common_range<const _Vp>)
 	return _Iterator<true>(__as_sentinel{}, ranges::begin(_M_base), ranges::end(_M_base));
@@ -5674,6 +5716,7 @@ namespace views::__adaptor
 
     constexpr auto
     size() requires sized_range<_Vp>
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       using _ST = decltype(ranges::size(_M_base));
       using _CT = common_type_t<_ST, size_t>;
@@ -5918,8 +5961,8 @@ namespace views::__adaptor
     operator-(const _Iterator& __x, const _Iterator& __y)
       requires sized_sentinel_for<iterator_t<_Base>, iterator_t<_Base>>
     _GLIBCXX_CONVEYOR_REQUIRES(__y)
+    _GLIBCXX_CONVEYOR_REQUIRES(__x)
     {
-      _GLIBCXX_CONVEYOR_TRUST(__x);
       return __x._M_current.back() - __y._M_current.back();
     }
 
@@ -6058,6 +6101,7 @@ namespace views::__adaptor
 
     constexpr auto
     begin()
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     { return _Iterator<false>(*this, _M_inner.begin()); }
 
     constexpr auto
@@ -6069,6 +6113,7 @@ namespace views::__adaptor
 
     constexpr auto
     end()
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       if constexpr (common_range<_InnerView>)
         return _Iterator<false>(*this, _M_inner.end());
@@ -6565,26 +6610,16 @@ namespace views::__adaptor
 
     constexpr range_reference_t<_Vp>
     operator*() const
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      // D4324/P2680: the assertion below passes *this to the conveyor
-      // operator==, so 'this' must be a valid object; trust it here
-      // rather than burdening every caller.
-      contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (this));
-#endif
       __glibcxx_assert(*this != default_sentinel);
       return **_M_parent->_M_current;
     }
 
     constexpr _InnerIter&
     operator++()
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      // See operator*()'s identical comment above.
-      contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (this));
-#endif
       __glibcxx_assert(*this != default_sentinel);
       ++*_M_parent->_M_current;
       if (*_M_parent->_M_current == ranges::end(_M_parent->_M_base))
@@ -6671,6 +6706,7 @@ namespace views::__adaptor
 
     constexpr auto
     begin() const requires forward_range<const _Vp>
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     { return _Iterator<true>(this, ranges::begin(_M_base)); }
 
     constexpr auto
@@ -7018,6 +7054,7 @@ namespace views::__adaptor
 
     constexpr auto
     begin() const requires __detail::__slide_caches_nothing<const _Vp>
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     { return _Iterator<true>(ranges::begin(_M_base), _M_n); }
 
     constexpr auto
@@ -7407,6 +7444,7 @@ namespace views::__adaptor
 
     constexpr auto
     end()
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       if constexpr (common_range<_Vp>)
 	return _Iterator(*this, ranges::end(_M_base), ranges::end(_M_base));
@@ -7642,6 +7680,7 @@ namespace views::__adaptor
 
     constexpr auto
     begin()
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       if constexpr (forward_range<_Vp>)
 	{
@@ -7662,10 +7701,12 @@ namespace views::__adaptor
 	&& forward_range<const _Pattern>
 	&& is_reference_v<range_reference_t<const _Vp>>
 	&& input_range<range_reference_t<const _Vp>>
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     { return _Iterator<true>{*this, ranges::begin(_M_base)}; }
 
     constexpr auto
     end()
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       constexpr bool __use_const
 	= __detail::__simple_view<_Vp> && __detail::__simple_view<_Pattern>;
@@ -7683,6 +7724,7 @@ namespace views::__adaptor
 	&& forward_range<const _Pattern>
 	&& is_reference_v<range_reference_t<const _Vp>>
 	&& input_range<range_reference_t<const _Vp>>
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       using _InnerConstRange = range_reference_t<const _Vp>;
       if constexpr (forward_range<_InnerConstRange>
@@ -7750,6 +7792,7 @@ namespace views::__adaptor
       requires forward_range<_Base>
     : _M_parent(std::__addressof(__parent)), _M_outer_it(std::move(__outer))
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_get_outer() != ranges::end(_M_parent->_M_base))
 	{
 	  auto&& __inner = _M_update_inner();
@@ -8395,6 +8438,7 @@ namespace views::__adaptor
 
     constexpr auto
     begin() const requires range<const _Vp>
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     { return _Iterator<true>(this, ranges::begin(_M_base)); }
 
     constexpr auto
@@ -8734,6 +8778,7 @@ namespace views::__adaptor
       constexpr auto
       __cartesian_common_arg_end(_Range& __r)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	if constexpr (common_range<_Range>)
 	  return ranges::end(__r);
 	else
@@ -9266,6 +9311,7 @@ namespace views::__adaptor
 
     constexpr auto
     begin() const requires range<const _Vp>
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     { return move_iterator(ranges::begin(_M_base)); }
 
     constexpr auto
@@ -9279,6 +9325,7 @@ namespace views::__adaptor
 
     constexpr auto
     end() const requires range<const _Vp>
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       if constexpr (common_range<const _Vp>)
 	return move_iterator(ranges::end(_M_base));
@@ -9364,6 +9411,7 @@ namespace views::__adaptor
 
     constexpr auto
     begin() const requires __detail::__range_with_movable_reference<const _Vp>
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     { return _Iterator<true>(ranges::begin(_M_base), 0); }
 
     constexpr auto
@@ -9387,6 +9435,7 @@ namespace views::__adaptor
 
     constexpr auto
     size() requires sized_range<_Vp>
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     { return ranges::size(_M_base); }
 
     constexpr auto
