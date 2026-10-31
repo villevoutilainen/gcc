@@ -16606,6 +16606,15 @@ static oa_pre_selection_kind oa_pre_selection = OA_PRE_ALL;
 
 static bool oa_item8_callee_pre_only;
 
+/* Set while scanning a never_proven_conveyor predicate's own text for
+   its dereferences alone (oa_scan_array_bounds_in_expr's INDIRECT_REF
+   case): trusting the claim doesn't make evaluating it valid, and '*p'
+   of an unestablished P is undefined behavior however the result is
+   used.  Its arithmetic stays exempt -- a never-proven trust is what a
+   library uses for an unprovable bound.  */
+
+static bool oa_deref_scan_only;
+
 static bool
 oa_ast_diagnostics_muted_p ()
 {
@@ -16863,6 +16872,10 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 	  *walk_subtrees_p = 0;
 	  return NULL_TREE;
 	}
+
+      /* See oa_deref_scan_only.  */
+      if (oa_deref_scan_only && TREE_CODE (t) != INDIRECT_REF)
+	return NULL_TREE;
 
       if (TREE_CODE (t) == ARRAY_REF)
 	{
@@ -27026,6 +27039,10 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
     {
       auto text = make_temp_override (oa_predicate_text_scan, true);
       auto only = make_temp_override (oa_item8_callee_pre_only, true);
+      /* A dereference the condition implies ('p->v') has no location
+	 of its own: report it at the condition.  */
+      auto at = make_temp_override (oa_current_stmt_loc,
+				    cp_expr_loc_or_input_loc (cond));
       oa_scan_item8_in_expr (&cond, env);
     }
 
@@ -27664,6 +27681,10 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
     {
       auto text = make_temp_override (oa_predicate_text_scan, true);
       auto only = make_temp_override (oa_item8_callee_pre_only, true);
+      /* A dereference the condition implies ('p->v') has no location
+	 of its own: report it at the condition.  */
+      auto at = make_temp_override (oa_current_stmt_loc,
+				    cp_expr_loc_or_input_loc (cond));
       oa_scan_item8_in_expr (&cond, env);
     }
 
@@ -28692,6 +28713,12 @@ oa_scan_item8_conjunct (tree *conjunct, oa_env &env)
       STRIP_ANY_LOCATION_WRAPPER (c);
     }
 
+  /* is_object_address is a compile-time query whose argument is never
+     evaluated: nothing in it to scan.  */
+  tree ioa_arg;
+  if (c && is_object_address_call_p (c, &ioa_arg))
+    return;
+
   if (c && TREE_CODE (c) == CALL_EXPR)
     {
       if (oa_predicate_text_scan && oa_call_to_conveyor_callee_p (c)
@@ -28770,7 +28797,11 @@ oa_scan_item8_conjunct (tree *conjunct, oa_env &env)
   if (oa_predicate_text_scan)
     oa_scan_callee_preconditions_in_expr (conjunct, env);
   if (oa_item8_callee_pre_only)
-    return;
+    {
+      auto deref = make_temp_override (oa_deref_scan_only, true);
+      oa_scan_array_bounds_in_expr (conjunct, env);
+      return;
+    }
   oa_scan_div_mod_in_expr (conjunct, env);
   oa_scan_array_bounds_in_expr (conjunct, env);
   oa_scan_overflow_in_expr (conjunct, env);
@@ -28987,6 +29018,21 @@ oa_scan_item8_in_expr (tree *expr, oa_env &env)
   for (unsigned i = 0; i < conjuncts.length (); ++i)
     {
       oa_scan_item8_conjunct (conjuncts[i], scan_env);
+      /* An is_object_address conjunct, proven or trusted, establishes
+	 its object for the conjuncts after it ('is_object_address (p)
+	 && p->v > 0'), as a nonzero one does just below.  */
+      tree oa_arg;
+      if (is_object_address_call_p (*conjuncts[i], &oa_arg))
+	{
+	  oa_arg = STRIP_ANY_LOCATION_WRAPPER (oa_arg);
+	  while (CONVERT_EXPR_P (oa_arg) || TREE_CODE (oa_arg) == NON_LVALUE_EXPR)
+	    oa_arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (oa_arg, 0));
+	  if (TREE_CODE (oa_arg) == ADDR_EXPR)
+	    oa_arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (oa_arg, 0));
+	  if (VAR_P (oa_arg) || TREE_CODE (oa_arg) == PARM_DECL)
+	    scan_env.set (oa_arg, true);
+	  continue;
+	}
       tree nz_decl;
       if (oa_nonzero_conjunct_p (*conjuncts[i], &nz_decl))
 	scan_env.nz_set (nz_decl, true);
@@ -32121,6 +32167,10 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 	  /* See oa_item8_callee_pre_only.  */
 	  auto text = make_temp_override (oa_predicate_text_scan, true);
 	  auto only = make_temp_override (oa_item8_callee_pre_only, true);
+      /* A dereference the condition implies ('p->v') has no location
+	 of its own: report it at the condition.  */
+      auto at = make_temp_override (oa_current_stmt_loc,
+				    cp_expr_loc_or_input_loc (cond));
 	  oa_scan_item8_in_expr (&cond, scan_env);
 	}
       /* D4324/P2680: see the identical comment in oa_handle_

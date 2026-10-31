@@ -16011,11 +16011,36 @@ cg_record_predicate_site_facts (gcall *call,
   vec<cg_site_fact> *&facts = cg_predicate_site_facts->get_or_insert (core,
 								       &existed);
   unsigned n = TREE_VEC_LENGTH (decls) - 2;
+  /* What the condition's own is_object_address conjuncts name: proven,
+     or trusted for a never-proven one, by the time the conjuncts after
+     them are evaluated ('is_object_address (p) && p->v > 0'), as the AST
+     engine's oa_scan_item8_in_expr has them.  */
+  hash_set<tree> claimed;
+  if (cond && cond != error_mark_node)
+    {
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (tree *c : conjuncts)
+	{
+	  tree arg;
+	  if (!is_object_address_call_p (*c, &arg))
+	    continue;
+	  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+	  while (CONVERT_EXPR_P (arg) || TREE_CODE (arg) == NON_LVALUE_EXPR)
+	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	  if (TREE_CODE (arg) == ADDR_EXPR)
+	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	  if (DECL_P (arg))
+	    claimed.add (arg);
+	}
+    }
   auto_vec<cg_site_fact> here;
   for (unsigned i = 0; i < n; ++i)
     {
       cg_site_fact f;
       tree decl = TREE_VEC_ELT (decls, i + 2);
+      if (claimed.contains (decl))
+	f.object_address = true;
       tree val = cg_contract_check_decl_value (call, struct_var, decls, decl);
       if (val && TREE_CODE (val) == SSA_NAME)
 	{
@@ -16036,9 +16061,10 @@ cg_record_predicate_site_facts (gcall *call,
 	    }
 	  else if (POINTER_TYPE_P (type))
 	    f.object_address
-	      = cg_provable_object_address_at_p (val, call, established,
-						 /*require_conveyor=*/true,
-						 NULL);
+	      = (f.object_address
+		 || cg_provable_object_address_at_p (val, call, established,
+						    /*require_conveyor=*/true,
+						    NULL));
 	  else if (SCALAR_FLOAT_TYPE_P (type))
 	    {
 	      frange fr (type);
@@ -16847,6 +16873,11 @@ pass_contracts_gimple::execute_1 (function *fun)
 	      cg_check_returned_reference (stmt, fun, established);
 	      cg_check_array_bounds_ub (stmt);
 	    }
+	  /* A never-proven predicate is exempt from item 8, but not from
+	     its dereferences being valid: trusting the claim doesn't make
+	     evaluating it valid (the AST engine's oa_deref_scan_only).  */
+	  else if (never_proven_core && conveyor_code)
+	    cg_check_dereference_ub (stmt, established);
 	  if (is_gimple_call (stmt))
 	    {
 	      gcall *call = as_a <gcall *> (stmt);
