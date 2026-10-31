@@ -5482,7 +5482,10 @@ namespace __detail
 		  if (__offset && __tz_offset != __bad_min)
 		    *__offset = __tz_offset;
 		  if (__abbrev && !__tz_abbr.empty())
-		    *__abbrev = std::move(__tz_abbr);
+		    {
+		      _GLIBCXX_CONVEYOR_TRUST(*__abbrev);
+		      *__abbrev = std::move(__tz_abbr);
+		    }
 		}
 	    }
 	  else

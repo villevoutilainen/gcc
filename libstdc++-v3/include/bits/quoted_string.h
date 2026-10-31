@@ -116,6 +116,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       std::basic_ostream<_CharT, _Traits>&
       operator<<(std::basic_ostream<_CharT, _Traits>& __os,
 		 const _Quoted_string<const _CharT*, _CharT>& __str)
+      _GLIBCXX_CONVEYOR_REQUIRES(__os)
       {
 	//  _GLIBCXX_RESOLVE_LIB_DEFECTS
 	//  DR 2344 quoted()'s interaction with padding is unclear
@@ -141,6 +142,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       std::basic_ostream<_CharT, _Traits>&
       operator<<(std::basic_ostream<_CharT, _Traits>& __os,
 		 const _Quoted_string<_String, _CharT>& __str)
+      _GLIBCXX_CONVEYOR_REQUIRES(__os)
       {
 	//  _GLIBCXX_RESOLVE_LIB_DEFECTS
 	//  DR 2344 quoted()'s interaction with padding is unclear
@@ -179,6 +181,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    __is >> __str._M_string;
 	    return __is;
 	  }
+	_GLIBCXX_CONVEYOR_TRUST(__str._M_string);
 	__str._M_string.clear();
 	std::ios_base::fmtflags __flags
 	  = __is.flags(__is.flags() & ~std::ios_base::skipws);
