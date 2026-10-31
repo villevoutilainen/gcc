@@ -187,11 +187,17 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     thread(const thread&) = delete;
 
     thread(thread&& __t) noexcept
-    { swap(__t); }
+    {
+      // A move trusts its source, as a copy does.
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(__t);
+      swap(__t);
+    }
 
     thread& operator=(const thread&) = delete;
 
     thread& operator=(thread&& __t) noexcept
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__t)
     {
       if (joinable())
 	std::__terminate();
@@ -201,12 +207,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     void
     swap(thread& __t) noexcept
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__t)
     {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (this)
-	 && std::is_object_address (__builtin_addressof (__t)));
-#endif
       std::swap(_M_id, __t._M_id);
     }
 
@@ -335,6 +337,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   /// @relates std::thread
   inline void
   swap(thread& __x, thread& __y) noexcept
+  _GLIBCXX_CONVEYOR_REQUIRES(__y)
+  _GLIBCXX_CONVEYOR_REQUIRES(__x)
   { __x.swap(__y); }
 
   /// @relates std::thread::id

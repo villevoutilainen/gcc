@@ -858,7 +858,11 @@ namespace __detail
       ~_List() = default;
 
       _Type type() const noexcept
-      { return _Type(reinterpret_cast<__UINTPTR_TYPE__>(_M_impl.get()) & 0x3); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(_M_impl);
+	return _Type(reinterpret_cast<__UINTPTR_TYPE__>(_M_impl.get()) & 0x3);
+      }
 
       void type(_Type) noexcept;
 

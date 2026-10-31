@@ -375,7 +375,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr inline explicit
     logic_error(const string& __arg) _GLIBCXX_TXN_SAFE
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>
+    pre<std::contracts::conveyor_assert_v>
       (std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : _M_msg(__arg) {}
@@ -406,8 +406,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	(std::is_object_address (__builtin_addressof (__arg)))
       : exception(std::move(__arg)), _M_msg(std::move(__arg._M_msg)) { }
     constexpr logic_error& operator=(logic_error&& __arg) noexcept
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__arg)))
     {
       exception::operator=(std::move(__arg));
@@ -419,8 +419,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	(std::is_object_address (__builtin_addressof (__arg)))
       : exception(__arg), _M_msg(__arg._M_msg) { }
     constexpr logic_error& operator=(const logic_error& __arg) noexcept
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__arg)))
     {
       exception::operator=(__arg);
@@ -441,7 +441,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr inline virtual const char*
     what() const _GLIBCXX_TXN_SAFE_DYN noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
     {
       return _M_msg.c_str();
@@ -492,7 +492,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_TXN_SAFE
 
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : logic_error(__arg) { }
@@ -528,7 +528,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_TXN_SAFE
 
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : logic_error(__arg) { }
@@ -566,7 +566,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_TXN_SAFE
 
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : logic_error(__arg) { }
@@ -603,7 +603,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_TXN_SAFE
 
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : logic_error(__arg) { }
@@ -644,7 +644,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr inline explicit
     runtime_error(const string& __arg) _GLIBCXX_TXN_SAFE
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>
+    pre<std::contracts::conveyor_assert_v>
       (std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : _M_msg(__arg) {}
@@ -663,8 +663,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	(std::is_object_address (__builtin_addressof (__arg)))
       : exception(std::move(__arg)), _M_msg(std::move(__arg._M_msg)) { }
     constexpr runtime_error& operator=(runtime_error&& __arg) noexcept
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__arg)))
     {
       exception::operator=(std::move(__arg));
@@ -687,8 +687,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     // fails to compile ("defaulted constructor calls non-constexpr ...
     // operator=") the moment this stops being implicitly constexpr.
     constexpr runtime_error& operator=(const runtime_error& __arg) noexcept
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__arg)))
     {
       exception::operator=(__arg);
@@ -710,7 +710,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr inline virtual const char*
     what() const _GLIBCXX_TXN_SAFE_DYN noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+    pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
     {
       return _M_msg.c_str();
@@ -760,7 +760,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_TXN_SAFE
 
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : runtime_error(__arg) { }
@@ -797,7 +797,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_TXN_SAFE
 
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__arg)))
 #endif
     : runtime_error(__arg) { }

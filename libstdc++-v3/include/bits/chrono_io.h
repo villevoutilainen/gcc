@@ -842,6 +842,7 @@ namespace __format
 	typename _FormatContext::iterator
 	_M_format(const _ChronoData<_CharT>& __t, _FormatContext& __fc) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__fc);
 #if defined _GLIBCXX_USE_NL_LANGINFO_L && __CHAR_BIT__ == 8
 	  // _GLIBCXX_RESOLVE_LIB_DEFECTS
 	  // 3565. Handling of encodings in localized formatting
@@ -1466,15 +1467,17 @@ namespace __format
 	  days __idoy = __t._M_day_of_year - __offset;
 
 	  // Year of nearest Thursday:
+	  _GLIBCXX_CONVEYOR_TRUST(__t);
+	  const year __tyear = __t._M_year;
 	  year __iyear;
 	  if (__idoy <= days(0))
-	    __iyear = __t._M_year - years(1);
+	    __iyear = __tyear - years(1);
 	  else if (__idoy <= days(365))
-	    __iyear = __t._M_year;
-	  else if (__idoy == days(366) && __t._M_year.is_leap())
-	    __iyear = __t._M_year;
+	    __iyear = __tyear;
+	  else if (__idoy == days(366) && __tyear.is_leap())
+	    __iyear = __tyear;
 	  else if (__idoy <= days(730))
-	    __iyear = __t._M_year + years(1);
+	    __iyear = __tyear + years(1);
 	  else [[unlikely]]
 	    __iyear = year_month_day(__ild).year();
 

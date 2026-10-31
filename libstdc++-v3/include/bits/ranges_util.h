@@ -510,6 +510,7 @@ namespace ranges
       constexpr __size_type
       size() const requires (_Kind == subrange_kind::sized)
       _GLIBCXX_CONVEYOR_AUTO
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if constexpr (_S_store_size)
 	  return _M_size._M_size;
@@ -678,8 +679,8 @@ namespace ranges
 					 const _Tp*>
       [[nodiscard]] constexpr borrowed_iterator_t<_Range>
       operator()(_Range&& __r, const _Tp& __value, _Proj __proj = {}) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       __value, std::move(__proj));
       }
@@ -707,8 +708,8 @@ namespace ranges
 	       _Pred>
       [[nodiscard]] constexpr borrowed_iterator_t<_Range>
       operator()(_Range&& __r, _Pred __pred, _Proj __proj = {}) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__pred), std::move(__proj));
       }
@@ -736,8 +737,8 @@ namespace ranges
 	       _Pred>
       [[nodiscard]] constexpr borrowed_iterator_t<_Range>
       operator()(_Range&& __r, _Pred __pred, _Proj __proj = {}) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__pred), std::move(__proj));
       }
@@ -801,9 +802,9 @@ namespace ranges
       constexpr mismatch_result<iterator_t<_Range1>, iterator_t<_Range2>>
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r2)
       {
 	_GLIBCXX_CONVEYOR_TRUST(__r1);
-	_GLIBCXX_CONVEYOR_TRUST(__r2);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__pred),
@@ -867,9 +868,9 @@ namespace ranges
       [[nodiscard]] constexpr borrowed_subrange_t<_Range1>
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
 	_GLIBCXX_CONVEYOR_TRUST(__r2);
-	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__pred),
@@ -903,8 +904,8 @@ namespace ranges
 					    range_value_t<_Range>*>
       [[nodiscard]] constexpr range_value_t<_Range>
       operator()(_Range&& __r, _Comp __comp = {}, _Proj __proj = {}) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r);
 	auto __first = ranges::begin(__r);
 	auto __last = ranges::end(__r);
 	__glibcxx_assert(__first != __last);
@@ -926,6 +927,7 @@ namespace ranges
       [[nodiscard]] constexpr _Tp
       operator()(initializer_list<_Tp> __r,
 		 _Comp __comp = {}, _Proj __proj = {}) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	return (*this)(ranges::subrange(__r),
 		       std::move(__comp), std::move(__proj));
@@ -964,8 +966,8 @@ namespace ranges
 	       projected<iterator_t<_Range>, _Proj>> _Pred = ranges::equal_to>
       [[nodiscard]] constexpr borrowed_iterator_t<_Range>
       operator()(_Range&& __r, _Pred __pred = {}, _Proj __proj = {}) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__pred), std::move(__proj));
       }

@@ -423,6 +423,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 			       is_convertible<_Ep, _Dp>>>>
 	_GLIBCXX23_CONSTEXPR
 	unique_ptr(unique_ptr<_Up, _Ep>&& __u) noexcept
+	_GLIBCXX_CONVEYOR_TRUST_PRE(__u)
 	: _M_t(__u.release(), std::forward<_Ep>(__u.get_deleter()))
 	{ }
 
@@ -508,6 +509,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #else
       noexcept(_Nothrow_deref<pointer>::value)
 #endif
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 #if _GLIBCXX_USE_BUILTIN_TRAIT(__reference_converts_from_temporary)
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
@@ -525,6 +527,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX23_CONSTEXPR
       pointer
       operator->() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	_GLIBCXX_DEBUG_PEDASSERT(get() != pointer());
 	return get();
@@ -534,11 +537,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX23_CONSTEXPR
       pointer
       get() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	return _M_t._M_ptr();
       }
 
@@ -546,11 +546,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX23_CONSTEXPR
       deleter_type&
       get_deleter() noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	return _M_t._M_deleter();
       }
 
@@ -558,17 +555,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX23_CONSTEXPR
       const deleter_type&
       get_deleter() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	return _M_t._M_deleter();
       }
 
       /// Return @c true if the stored pointer is not null.
       _GLIBCXX23_CONSTEXPR
       explicit operator bool() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return get() == pointer() ? false : true; }
 
       // Modifiers.
@@ -753,6 +748,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 			       is_convertible<_Ep, _Dp>>>>
 	_GLIBCXX23_CONSTEXPR
 	unique_ptr(unique_ptr<_Up, _Ep>&& __u) noexcept
+	_GLIBCXX_CONVEYOR_TRUST_PRE(__u)
 	: _M_t(__u.release(), std::forward<_Ep>(__u.get_deleter()))
 	{ }
 
@@ -817,6 +813,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX23_CONSTEXPR
       typename std::add_lvalue_reference<element_type>::type
       operator[](size_t __i) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert_noconveyor(get() != pointer());
 	return get()[__i];
@@ -826,11 +823,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX23_CONSTEXPR
       pointer
       get() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	return _M_t._M_ptr();
       }
 
@@ -838,11 +832,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX23_CONSTEXPR
       deleter_type&
       get_deleter() noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	return _M_t._M_deleter();
       }
 
@@ -850,17 +841,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX23_CONSTEXPR
       const deleter_type&
       get_deleter() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	return _M_t._M_deleter();
       }
 
       /// Return @c true if the stored pointer is not null.
       _GLIBCXX23_CONSTEXPR
       explicit operator bool() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return get() == pointer() ? false : true; }
 
       // Modifiers.
@@ -1110,6 +1099,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 			       typename unique_ptr<_Up, _Ep>::pointer>
     operator<=>(const unique_ptr<_Tp, _Dp>& __x,
 		const unique_ptr<_Up, _Ep>& __y)
+    _GLIBCXX_CONVEYOR_REQUIRES(__y)
+    _GLIBCXX_CONVEYOR_REQUIRES(__x)
     { return compare_three_way()(__x.get(), __y.get()); }
 
   template<typename _Tp, typename _Dp>

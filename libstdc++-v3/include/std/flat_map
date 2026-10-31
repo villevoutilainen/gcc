@@ -520,6 +520,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	pair<iterator, bool>
 	_M_try_emplace(optional<const_iterator> __hint, _Key2&& __k, _Args&&... __args)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__k);
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  // TODO: Simplify and audit the hint handling.
 	  typename key_container_type::iterator __key_it;
@@ -816,12 +817,16 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX26_CONSTEXPR
       iterator
       find(const key_type& __x)
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return find<key_type>(__x); }
 
       [[nodiscard]]
       _GLIBCXX26_CONSTEXPR
       const_iterator
       find(const key_type& __x) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       { return find<key_type>(__x); }
 
       template<typename _Key2>
@@ -830,6 +835,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_GLIBCXX26_CONSTEXPR
 	iterator
 	find(const _Key2& __x)
+	_GLIBCXX_CONVEYOR_REQUIRES(__x)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  auto __it = lower_bound(__x);
 	  if (__it != end() && !_M_comp(__x, __it->first))
@@ -844,6 +851,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_GLIBCXX26_CONSTEXPR
 	const_iterator
 	find(const _Key2& __x) const
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
+	_GLIBCXX_CONVEYOR_REQUIRES(__x)
 	{
 	  auto __it = lower_bound(__x);
 	  if (__it != cend() && !_M_comp(__x, __it->first))
@@ -856,6 +865,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX26_CONSTEXPR
       size_type
       count(const key_type& __x) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       { return count<key_type>(__x); }
 
       template<typename _Key2>
@@ -864,6 +875,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_GLIBCXX26_CONSTEXPR
 	size_type
 	count(const _Key2& __x) const
+	_GLIBCXX_CONVEYOR_REQUIRES(__x)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  if constexpr (!_Multi)
 	    return contains<_Key2>(__x);
@@ -878,6 +891,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX26_CONSTEXPR
       bool
       contains(const key_type& __x) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return contains<key_type>(__x); }
 
       template<typename _Key2>
@@ -886,18 +901,24 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_GLIBCXX26_CONSTEXPR
 	bool
 	contains(const _Key2& __x) const
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
+	_GLIBCXX_CONVEYOR_REQUIRES(__x)
 	{ return find(__x) != cend(); }
 
       [[nodiscard]]
       _GLIBCXX26_CONSTEXPR
       iterator
       lower_bound(const key_type& __x)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       { return lower_bound<key_type>(__x); }
 
       [[nodiscard]]
       _GLIBCXX26_CONSTEXPR
       const_iterator
       lower_bound(const key_type& __x) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return lower_bound<key_type>(__x); }
 
       template<typename _Key2>
@@ -906,8 +927,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_GLIBCXX26_CONSTEXPR
 	iterator
 	lower_bound(const _Key2& __x)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
-	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  auto __it = std::lower_bound(_M_cont.keys.begin(), _M_cont.keys.end(),
 				       __x, _M_comp);
 	  return {this, __it};
@@ -919,8 +940,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_GLIBCXX26_CONSTEXPR
 	const_iterator
 	lower_bound(const _Key2& __x) const
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
-	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  auto __it = std::lower_bound(_M_cont.keys.begin(), _M_cont.keys.end(),
 				       __x, _M_comp);
 	  return {this, __it};
@@ -972,6 +993,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX26_CONSTEXPR
       pair<const_iterator, const_iterator>
       equal_range(const key_type& __x) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       { return equal_range<key_type>(__x); }
 
       template<typename _Key2>
@@ -993,8 +1016,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_GLIBCXX26_CONSTEXPR
 	pair<const_iterator, const_iterator>
 	equal_range(const _Key2& __x) const
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
-	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  auto [__first, __last] = std::equal_range(_M_cont.keys.begin(),
 						    _M_cont.keys.end(),
 						    __x, _M_comp);

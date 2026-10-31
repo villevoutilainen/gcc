@@ -204,7 +204,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       explicit
       basic_string(__sv_wrapper __svw, const _Alloc& __a)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(__a)
+      _GLIBCXX_CONVEYOR_REQUIRES(__a)
       : basic_string(__svw._M_sv.data(), __svw._M_sv.size(), __a) { }
 #endif
 
@@ -2077,11 +2077,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
       front() noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	__glibcxx_assert(!empty());
 	return operator[](0);
       }
@@ -2236,11 +2233,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       append(const _CharT* __s, size_type __n)
       _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	__glibcxx_requires_string_len(__s, __n);
 	_M_check_length(size_type(0), __n, "basic_string::append");
 	return _M_append(__s, __n);
@@ -2274,11 +2268,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       append(size_type __n, _CharT __c)
       _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	return _M_replace_aux(this->size(), size_type(0), __n, __c);
       }
 
@@ -2427,11 +2418,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       void
       push_back(_CharT __c)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	const size_type __size = this->size();
 	if (__size + 1 > this->capacity())
 	  this->_M_mutate(__size, size_type(0), 0, size_type(1));
@@ -2541,11 +2529,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       assign(const _CharT* __s, size_type __n)
       _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	__glibcxx_requires_string_len(__s, __n);
 	return _M_replace(size_type(0), this->size(), __s, __n);
       }
@@ -2607,11 +2592,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	basic_string&
 	assign(_InputIterator __first, _InputIterator __last)
 	_GLIBCXX_CONVEYOR_RETURNS_OBJECT
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	  contract_assert<std::contracts::never_proven_conveyor_v>
-	    (std::is_object_address (this));
-#endif
 	  using _IterTraits = iterator_traits<_InputIterator>;
 	  if constexpr (is_pointer<decltype(std::__niter_base(__first))>::value
 			  && is_same<typename _IterTraits::value_type,
@@ -3011,11 +2993,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       insert(size_type __pos, size_type __n, _CharT __c)
       _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	return _M_replace_aux(_M_check(__pos, "basic_string::insert"),
 			      size_type(0), __n, __c);
       }

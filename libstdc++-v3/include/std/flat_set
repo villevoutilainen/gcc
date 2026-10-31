@@ -716,6 +716,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX26_CONSTEXPR
       const_iterator
       find(const key_type& __x) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return find<key_type>(__x); }
 
       template<typename _Key2>
@@ -738,6 +740,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_GLIBCXX26_CONSTEXPR
 	const_iterator
 	find(const _Key2& __x) const
+	_GLIBCXX_CONVEYOR_REQUIRES(__x)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  auto __it = lower_bound(__x);
 	  if (__it != cend() && !_M_comp(__x, *__it))
@@ -772,6 +776,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX26_CONSTEXPR
       bool
       contains(const key_type& __x) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       { return contains<key_type>(__x); }
 
       template<typename _Key2>
@@ -780,6 +786,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_GLIBCXX26_CONSTEXPR
 	bool
 	contains(const _Key2& __x) const
+	_GLIBCXX_CONVEYOR_REQUIRES(__x)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{ return find(__x) != cend(); }
 
       [[nodiscard]]

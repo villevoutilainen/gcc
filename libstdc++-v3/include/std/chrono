@@ -624,6 +624,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr day&
       operator+=(const days& __d) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__d)
       {
 	*this = *this + __d;
 	return *this;
@@ -631,6 +633,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr day&
       operator-=(const days& __d) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__d)
       {
 	*this = *this - __d;
 	return *this;
@@ -654,20 +658,19 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       friend constexpr day
       operator+(const day& __x, const days& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (__builtin_addressof (__y)));
-#endif
 	return day(unsigned{__x} + __y.count());
       }
 
       friend constexpr day
       operator+(const days& __x, const day& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       { return __y + __x; }
 
       friend constexpr day
       operator-(const day& __x, const days& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       { return __x + -__y; }
 
       friend constexpr days
@@ -707,6 +710,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr month&
       operator++() noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	*this += months{1};
 	return *this;
@@ -714,6 +718,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr month
       operator++(int) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	auto __ret = *this;
 	++(*this);
@@ -722,6 +727,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr month&
       operator--() noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	*this -= months{1};
 	return *this;
@@ -729,6 +735,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr month
       operator--(int) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	auto __ret = *this;
 	--(*this);
@@ -737,6 +744,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr month&
       operator+=(const months& __m) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__m)
       {
 	*this = *this + __m;
 	return *this;
@@ -744,6 +753,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr month&
       operator-=(const months& __m) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__m)
       {
 	*this = *this - __m;
 	return *this;
@@ -767,11 +778,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       friend constexpr month
       operator+(const month& __x, const months& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (__builtin_addressof (__y)));
-#endif
 	// modulo(x + (y - 1), 12) = modulo(x + (y - 1) + 12, 12)
 	//                         = modulo((x + 11) + y    , 12)
 	return month{1 + __detail::__add_modulo<12>(
@@ -780,15 +788,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       friend constexpr month
       operator+(const months& __x,  const month& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       { return __y + __x; }
 
       friend constexpr month
       operator-(const month& __x, const months& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (__builtin_addressof (__y)));
-#endif
 	// modulo(x + (-y - 1), 12) = modulo(x + (-y - 1) + 12, 12)
 	//                          = modulo((x + 11) - y     , 12)
 	return month{1 + __detail::__sub_modulo<12>(
@@ -895,6 +901,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr year&
       operator+=(const years& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
 	*this = *this + __y;
 	return *this;
@@ -902,6 +910,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr year&
       operator-=(const years& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
 	*this = *this - __y;
 	return *this;
@@ -961,20 +971,19 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       friend constexpr year
       operator+(const year& __x, const years& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (__builtin_addressof (__y)));
-#endif
 	return year{int{__x} + static_cast<int>(__y.count())};
       }
 
       friend constexpr year
       operator+(const years& __x, const year& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       { return __y + __x; }
 
       friend constexpr year
       operator-(const year& __x, const years& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       { return __x + -__y; }
 
       friend constexpr years
@@ -1046,6 +1055,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr weekday&
       operator++() noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	*this += days{1};
 	return *this;
@@ -1053,6 +1063,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr weekday
       operator++(int) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	auto __ret = *this;
 	++(*this);
@@ -1061,6 +1072,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr weekday&
       operator--() noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	*this -= days{1};
 	return *this;
@@ -1068,6 +1080,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr weekday
       operator--(int) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	auto __ret = *this;
 	--(*this);
@@ -1076,6 +1089,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr weekday&
       operator+=(const days& __d) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__d)
       {
 	*this = *this + __d;
 	return *this;
@@ -1083,6 +1098,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr weekday&
       operator-=(const days& __d) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__d)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	*this = *this - __d;
 	return *this;
@@ -1112,25 +1129,20 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       friend constexpr weekday
       operator+(const weekday& __x, const days& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (__builtin_addressof (__y)));
-#endif
 	return weekday{__detail::__add_modulo<7>(__x._M_wd, __y.count())};
       }
 
       friend constexpr weekday
       operator+(const days& __x, const weekday& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       { return __y + __x; }
 
       friend constexpr weekday
       operator-(const weekday& __x, const days& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (__builtin_addressof (__y)));
-#endif
 	return weekday{__detail::__sub_modulo<7>(__x._M_wd, __y.count())};
       }
 
@@ -1540,6 +1552,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr year_month&
       operator+=(const years& __dy)  noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__dy)
       {
 	*this = *this + __dy;
 	return *this;
@@ -1547,6 +1561,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr year_month&
       operator-=(const years& __dy)  noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__dy)
       {
 	*this = *this - __dy;
 	return *this;
@@ -1597,14 +1613,17 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       friend constexpr year_month
       operator+(const year_month& __ym, const years& __dy) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__dy)
       { return (__ym.year() + __dy) / __ym.month(); }
 
       friend constexpr year_month
       operator+(const years& __dy, const year_month& __ym) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__ym)
       { return __ym + __dy; }
 
       friend constexpr year_month
       operator-(const year_month& __ym, const years& __dy) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__ym)
       { return __ym + -__dy; }
 
       friend constexpr year_month
@@ -1675,6 +1694,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr year_month_day&
       operator+=(const years& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	*this = *this + __y;
 	return *this;
@@ -1682,6 +1703,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr year_month_day&
       operator-=(const years& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
 	*this = *this - __y;
 	return *this;
@@ -1733,10 +1756,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       friend constexpr year_month_day
       operator+(const year_month_day& __ymd, const years& __dy) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__dy)
       { return (__ymd.year() + __dy) / __ymd.month() / __ymd.day(); }
 
       friend constexpr year_month_day
       operator+(const years& __dy, const year_month_day& __ymd) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__ymd)
       { return __ymd + __dy; }
 
       template<typename = __detail::__months_years_conversion_disambiguator>
@@ -1746,6 +1771,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       friend constexpr year_month_day
       operator-(const year_month_day& __ymd, const years& __dy) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__ymd)
       { return __ymd + -__dy; }
 
       friend constexpr year_month_day
@@ -1877,6 +1903,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr year_month_day_last&
       operator+=(const years& __y)  noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
 	*this = *this + __y;
 	return *this;
@@ -1884,6 +1912,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr year_month_day_last&
       operator-=(const years& __y)  noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
 	*this = *this - __y;
 	return *this;
@@ -1975,16 +2005,19 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       friend constexpr year_month_day_last
       operator+(const year_month_day_last& __ymdl,
 		const years& __dy) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__dy)
       { return {__ymdl.year() + __dy, __ymdl.month_day_last()}; }
 
       friend constexpr year_month_day_last
       operator+(const years& __dy,
 		const year_month_day_last& __ymdl) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__ymdl)
       { return __ymdl + __dy; }
 
       friend constexpr year_month_day_last
       operator-(const year_month_day_last& __ymdl,
 		const years& __dy) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__ymdl)
       { return __ymdl + -__dy; }
 
       friend constexpr year_month_day_last
@@ -2079,6 +2112,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr year_month_weekday&
       operator+=(const years& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	*this = *this + __y;
 	return *this;
@@ -2086,6 +2121,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr year_month_weekday&
       operator-=(const years& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
 	*this = *this - __y;
 	return *this;
@@ -2165,10 +2202,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       friend constexpr year_month_weekday
       operator+(const year_month_weekday& __ymwd, const years& __dy) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__dy)
       { return {__ymwd.year() + __dy, __ymwd.month(), __ymwd.weekday_indexed()}; }
 
       friend constexpr year_month_weekday
       operator+(const years& __dy, const year_month_weekday& __ymwd) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__ymwd)
       { return __ymwd + __dy; }
 
       template<typename = __detail::__months_years_conversion_disambiguator>
@@ -2178,6 +2217,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       friend constexpr year_month_weekday
       operator-(const year_month_weekday& __ymwd, const years& __dy) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__ymwd)
       { return __ymwd + -__dy; }
 
       friend constexpr year_month_weekday
@@ -2236,6 +2276,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr year_month_weekday_last&
       operator+=(const years& __y)  noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	*this = *this + __y;
 	return *this;
@@ -2243,6 +2285,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr year_month_weekday_last&
       operator-=(const years& __y)  noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
 	*this = *this - __y;
 	return *this;
@@ -2307,11 +2351,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       friend constexpr year_month_weekday_last
       operator+(const year_month_weekday_last& __ymwdl,
 		const years& __dy) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__dy)
       { return {__ymwdl.year() + __dy, __ymwdl.month(), __ymwdl.weekday_last()}; }
 
       friend constexpr year_month_weekday_last
       operator+(const years& __dy,
 		const year_month_weekday_last& __ymwdl) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__ymwdl)
       { return __ymwdl + __dy; }
 
       template<typename = __detail::__months_years_conversion_disambiguator>
@@ -2323,6 +2369,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       friend constexpr year_month_weekday_last
       operator-(const year_month_weekday_last& __ymwdl,
 		const years& __dy) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__ymwdl)
       { return __ymwdl + -__dy; }
 
       friend constexpr year_month_weekday_last
@@ -2689,11 +2736,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[nodiscard]]
       string_view name() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	return _M_name;
       }
 
@@ -2748,23 +2792,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[nodiscard]] friend bool
       operator==(const time_zone& __x, const time_zone& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (__builtin_addressof (__x))
-	   && std::is_object_address (__builtin_addressof (__y)));
-#endif
 	return __x._M_name == __y._M_name;
       }
 
       [[nodiscard]] friend strong_ordering
       operator<=>(const time_zone& __x, const time_zone& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (__builtin_addressof (__x))
-	   && std::is_object_address (__builtin_addressof (__y)));
-#endif
 	return __x._M_name <=> __y._M_name;
       }
 
@@ -2898,41 +2934,27 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       time_zone_link& operator=(time_zone_link&&) = default;
 
       string_view name() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	return _M_name;
       }
       string_view target() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	return _M_target;
       }
 
       friend bool
       operator==(const time_zone_link& __x, const time_zone_link& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (__builtin_addressof (__x))
-	   && std::is_object_address (__builtin_addressof (__y)));
-#endif
 	return __x.name() == __y.name();
       }
 
       friend strong_ordering
       operator<=>(const time_zone_link& __x, const time_zone_link& __y) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (__builtin_addressof (__x))
-	   && std::is_object_address (__builtin_addressof (__y)));
-#endif
 	return __x.name() <=> __y.name();
       }
 

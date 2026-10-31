@@ -1403,6 +1403,9 @@ namespace __rb_tree
 	bool
 	_M_key_compare(const _Key1& __k1, const _Key2& __k2) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__k2);
+	  _GLIBCXX_CONVEYOR_TRUST(__k1);
 #if __cplusplus >= 201103L
 	  // Enforce this here with a user-friendly message.
 	  static_assert(

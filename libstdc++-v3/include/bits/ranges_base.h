@@ -950,6 +950,7 @@ namespace ranges
     template<input_or_output_iterator _It>
       constexpr void
       operator()(_It& __it, iter_difference_t<_It> __n) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__it)
       {
 	if constexpr (random_access_iterator<_It>)
 	  __it += __n;
@@ -984,6 +985,8 @@ namespace ranges
     template<input_or_output_iterator _It, sentinel_for<_It> _Sent>
       constexpr void
       operator()(_It& __it, _Sent __bound) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__it)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if constexpr (assignable_from<_It&, _Sent>)
 	  __it = std::move(__bound);
@@ -1096,8 +1099,8 @@ namespace ranges
       [[nodiscard, __gnu__::__always_inline__]]
       constexpr iter_difference_t<decay_t<_It>>
       operator()(_It&& __first, _Sent __last) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__first)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__first);
 	if constexpr (!is_array_v<remove_reference_t<_It>>)
 	  return __last - __first;
 	else
@@ -1108,8 +1111,8 @@ namespace ranges
       [[nodiscard, __gnu__::__always_inline__]]
       constexpr range_difference_t<_Range>
       operator()(_Range&& __r) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r);
 	if constexpr (sized_range<_Range>)
 	  return static_cast<range_difference_t<_Range>>(ranges::size(__r));
 	else

@@ -168,8 +168,8 @@ namespace ranges
       _GLIBCXX26_CONSTEXPR
       borrowed_iterator_t<_Range>
       operator()(_Range&& __r) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r));
       }
   };
@@ -230,8 +230,8 @@ namespace ranges
       _GLIBCXX26_CONSTEXPR
       borrowed_iterator_t<_Range>
       operator()(_Range&& __r) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r));
       }
   };
@@ -310,9 +310,9 @@ namespace ranges
       uninitialized_copy_result<borrowed_iterator_t<_IRange>,
 				borrowed_iterator_t<_ORange>>
       operator()(_IRange&& __inr, _ORange&& __outr) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__outr)
       {
 	_GLIBCXX_CONVEYOR_TRUST(__inr);
-	_GLIBCXX_CONVEYOR_TRUST(__outr);
 	return (*this)(ranges::begin(__inr), ranges::end(__inr),
 		       ranges::begin(__outr), ranges::end(__outr));
       }
@@ -408,9 +408,9 @@ namespace ranges
       uninitialized_move_result<borrowed_iterator_t<_IRange>,
 				borrowed_iterator_t<_ORange>>
       operator()(_IRange&& __inr, _ORange&& __outr) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__outr)
       {
 	_GLIBCXX_CONVEYOR_TRUST(__inr);
-	_GLIBCXX_CONVEYOR_TRUST(__outr);
 	return (*this)(ranges::begin(__inr), ranges::end(__inr),
 		       ranges::begin(__outr), ranges::end(__outr));
       }
@@ -491,8 +491,8 @@ namespace ranges
       _GLIBCXX26_CONSTEXPR
       borrowed_iterator_t<_Range>
       operator()(_Range&& __r, const _Tp& __x) const
+      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r), __x);
       }
   };

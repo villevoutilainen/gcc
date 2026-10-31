@@ -319,8 +319,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       _GLIBCXX17_CONSTEXPR reverse_iterator&
       operator++() _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	--current;
 	return *this;
       }
@@ -332,8 +332,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       _GLIBCXX17_CONSTEXPR reverse_iterator
       operator++(int)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	reverse_iterator __tmp = *this;
 	--current;
 	return __tmp;
@@ -346,8 +346,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       _GLIBCXX17_CONSTEXPR reverse_iterator&
       operator--() _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	++current;
 	return *this;
       }
@@ -359,8 +359,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       _GLIBCXX17_CONSTEXPR reverse_iterator
       operator--(int)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	reverse_iterator __tmp = *this;
 	++current;
 	return __tmp;
@@ -384,8 +384,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       _GLIBCXX17_CONSTEXPR reverse_iterator&
       operator+=(difference_type __n) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	current -= __n;
 	return *this;
       }
@@ -408,8 +408,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       _GLIBCXX17_CONSTEXPR reverse_iterator&
       operator-=(difference_type __n) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	current += __n;
 	return *this;
       }
@@ -742,9 +742,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #if __cplusplus < 201103L
       back_insert_iterator&
       operator=(typename _Container::const_reference __value)
+      _GLIBCXX_CONVEYOR_REQUIRES(__value)
       {
 	_GLIBCXX_CONVEYOR_TRUST(*container);
-	_GLIBCXX_CONVEYOR_TRUST(__value);
 	container->push_back(__value);
 	return *this;
       }
@@ -752,9 +752,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX20_CONSTEXPR
       back_insert_iterator&
       operator=(const typename _Container::value_type& __value)
+      _GLIBCXX_CONVEYOR_REQUIRES(__value)
       {
 	_GLIBCXX_CONVEYOR_TRUST(*container);
-	_GLIBCXX_CONVEYOR_TRUST(__value);
 	container->push_back(__value);
 	return *this;
       }
@@ -762,9 +762,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX20_CONSTEXPR
       back_insert_iterator&
       operator=(typename _Container::value_type&& __value)
+      _GLIBCXX_CONVEYOR_REQUIRES(__value)
       {
 	_GLIBCXX_CONVEYOR_TRUST(*container);
-	_GLIBCXX_CONVEYOR_TRUST(__value);
 	container->push_back(std::move(__value));
 	return *this;
       }
@@ -774,12 +774,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       back_insert_iterator&
       operator*()
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *this; }
 
       /// Simply returns *this.  (This %iterator does not @a move.)
       _GLIBCXX20_CONSTEXPR
       back_insert_iterator&
       operator++()
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *this; }
 
       /// Simply returns *this.  (This %iterator does not @a move.)
@@ -849,9 +851,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #if __cplusplus < 201103L
       front_insert_iterator&
       operator=(typename _Container::const_reference __value)
+      _GLIBCXX_CONVEYOR_REQUIRES(__value)
       {
 	_GLIBCXX_CONVEYOR_TRUST(*container);
-	_GLIBCXX_CONVEYOR_TRUST(__value);
 	container->push_front(__value);
 	return *this;
       }
@@ -859,9 +861,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX20_CONSTEXPR
       front_insert_iterator&
       operator=(const typename _Container::value_type& __value)
+      _GLIBCXX_CONVEYOR_REQUIRES(__value)
       {
 	_GLIBCXX_CONVEYOR_TRUST(*container);
-	_GLIBCXX_CONVEYOR_TRUST(__value);
 	container->push_front(__value);
 	return *this;
       }
@@ -869,9 +871,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX20_CONSTEXPR
       front_insert_iterator&
       operator=(typename _Container::value_type&& __value)
+      _GLIBCXX_CONVEYOR_REQUIRES(__value)
       {
 	_GLIBCXX_CONVEYOR_TRUST(*container);
-	_GLIBCXX_CONVEYOR_TRUST(__value);
 	container->push_front(std::move(__value));
 	return *this;
       }
@@ -881,12 +883,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       front_insert_iterator&
       operator*()
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *this; }
 
       /// Simply returns *this.  (This %iterator does not @a move.)
       _GLIBCXX20_CONSTEXPR
       front_insert_iterator&
       operator++()
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *this; }
 
       /// Simply returns *this.  (This %iterator does not @a move.)
@@ -982,10 +986,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #if __cplusplus < 201103L
       insert_iterator&
       operator=(typename _Container::const_reference __value)
+      _GLIBCXX_CONVEYOR_REQUIRES(__value)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST(*container);
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
-	_GLIBCXX_CONVEYOR_TRUST(__value);
 	iter = container->insert(iter, __value);
 	++iter;
 	return *this;
@@ -994,10 +998,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX20_CONSTEXPR
       insert_iterator&
       operator=(const typename _Container::value_type& __value)
+      _GLIBCXX_CONVEYOR_REQUIRES(__value)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST(*container);
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
-	_GLIBCXX_CONVEYOR_TRUST(__value);
 	iter = container->insert(iter, __value);
 	++iter;
 	return *this;
@@ -1006,10 +1010,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX20_CONSTEXPR
       insert_iterator&
       operator=(typename _Container::value_type&& __value)
+      _GLIBCXX_CONVEYOR_REQUIRES(__value)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST(*container);
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
-	_GLIBCXX_CONVEYOR_TRUST(__value);
 	iter = container->insert(iter, std::move(__value));
 	++iter;
 	return *this;
@@ -1020,12 +1024,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       insert_iterator&
       operator*()
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *this; }
 
       /// Simply returns *this.  (This %iterator does not @a move.)
       _GLIBCXX20_CONSTEXPR
       insert_iterator&
       operator++()
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *this; }
 
       /// Simply returns *this.  (This %iterator does not @a move.)
@@ -1412,12 +1418,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       difference_type
       operator-(const __normal_iterator& __lhs, const __normal_iterator& __rhs)
 	_GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (__builtin_addressof (__lhs))
-	   && std::is_object_address (__builtin_addressof (__rhs)));
-#endif
 	return __lhs.base() - __rhs.base();
       }
 
@@ -1639,8 +1641,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       _GLIBCXX17_CONSTEXPR move_iterator&
       operator++()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	++_M_current;
 	return *this;
       }
@@ -2565,8 +2567,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr counted_iterator&
       operator--() requires bidirectional_iterator<_It>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	--_M_current;
 	++_M_length;
 	return *this;

@@ -232,7 +232,7 @@ namespace __format
     _GLIBCXX_CONSTEXPR_FORMAT
     explicit format_error(const string& __what)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>
+    pre<std::contracts::conveyor_assert_v>
       (std::is_object_address (__builtin_addressof (__what)))
 #endif
     : runtime_error(__what) { }
@@ -899,6 +899,7 @@ namespace __format
 			   const _Spec<_CharT>& __spec,
 			   _Align __align = _Align_left)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__fc);
       size_t __width = __spec._M_get_width(__fc);
 
       if (__width <= __estimated_width)
@@ -1208,6 +1209,7 @@ namespace __format
 	  bool __esc_replace = false;
 	  auto __should_escape = [&](auto const& __it)
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST(__it);
 	      if (*__it <= 0x7f)
 		return __esc_ascii
 			 = __format::__should_escape_ascii(*__it.base(), __term);
@@ -1438,6 +1440,7 @@ namespace __format
 	format(basic_string_view<_CharT> __s,
 	       basic_format_context<_Out, _CharT>& __fc) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__fc);
 	  if (_M_spec._M_debug)
 	    return _M_format_escaped(__s, __fc);
 
@@ -1455,6 +1458,7 @@ namespace __format
 	_M_format_escaped(basic_string_view<_CharT> __s,
 			  basic_format_context<_Out, _CharT>& __fc) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__fc);
 	  const size_t __padwidth = _M_spec._M_get_width(__fc);
 	  if (__padwidth == 0 && _M_spec._M_prec_kind == _WP_none)
 	    return __format::__write_escaped(__fc.out(), __s, _Term_quote);
@@ -1823,6 +1827,7 @@ namespace __format
 	_M_format_character(_CharT __c,
 			    basic_format_context<_Out, _CharT>& __fc) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__fc);
 	  basic_string_view<_CharT> __in(&__c, 1u);
 	  size_t __width = 1u;
 	  // N.B. single byte cannot encode character of width greater than 1
@@ -1876,6 +1881,7 @@ namespace __format
 	_M_format_int(basic_string_view<_CharT> __str, size_t __prefix_len,
 		      basic_format_context<_Out, _CharT>& __fc) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__fc);
 	  size_t __width = _M_spec._M_get_width(__fc);
 	  if (_M_spec._M_localized)
 	    {
@@ -2135,6 +2141,7 @@ namespace __format
 	typename basic_format_context<_Out, _CharT>::iterator
 	format(_Fp __v, basic_format_context<_Out, _CharT>& __fc) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__fc);
 	  std::string __dynbuf;
 	  char __buf[128];
 	  to_chars_result __res{};
@@ -2742,6 +2749,8 @@ namespace __format
 	typename basic_format_context<_Out, _CharT>::iterator
 	format(const _CharT* __u,
 	       basic_format_context<_Out, _CharT>& __fc) const
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
+	_GLIBCXX_CONVEYOR_REQUIRES(__fc)
 	{ return _M_f.format(__u, __fc); }
 
 #if __glibcxx_format_ranges // C++ >= 23 && HOSTED
@@ -2803,6 +2812,8 @@ namespace __format
 	typename basic_format_context<_Out, char>::iterator
 	format(const basic_string<char, _Traits, _Alloc>& __u,
 	       basic_format_context<_Out, char>& __fc) const
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
+	_GLIBCXX_CONVEYOR_REQUIRES(__fc)
 	{ return _M_f.format(__u, __fc); }
 
 #if __glibcxx_format_ranges // C++ >= 23 && HOSTED
@@ -2870,6 +2881,8 @@ namespace __format
 	typename basic_format_context<_Out, char>::iterator
 	format(basic_string_view<char, _Traits> __u,
 	       basic_format_context<_Out, char>& __fc) const
+	_GLIBCXX_CONVEYOR_REQUIRES(__fc)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{ return _M_f.format(__u, __fc); }
 
 #if __glibcxx_format_ranges // C++ >= 23 && HOSTED
@@ -2903,6 +2916,8 @@ namespace __format
 	typename basic_format_context<_Out, wchar_t>::iterator
 	format(basic_string_view<wchar_t, _Traits> __u,
 	       basic_format_context<_Out, wchar_t>& __fc) const
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
+	_GLIBCXX_CONVEYOR_REQUIRES(__fc)
 	{ return _M_f.format(__u, __fc); }
 
 #if __glibcxx_format_ranges // C++ >= 23 && HOSTED
@@ -2993,6 +3008,8 @@ namespace __format
       template<typename _Out>
 	typename basic_format_context<_Out, _CharT>::iterator
 	format(_Tp __u, basic_format_context<_Out, _CharT>& __fc) const
+	_GLIBCXX_CONVEYOR_REQUIRES(__fc)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{ return _M_f.format(__u, __fc); }
 
     private:
@@ -3042,6 +3059,8 @@ namespace __format
       template<typename _Out>
 	typename basic_format_context<_Out, _CharT>::iterator
 	format(_Float16 __u, basic_format_context<_Out, _CharT>& __fc) const
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
+	_GLIBCXX_CONVEYOR_REQUIRES(__fc)
 	{ return _M_f.format((float)__u, __fc); }
 
     private:
@@ -3064,6 +3083,8 @@ namespace __format
       template<typename _Out>
 	typename basic_format_context<_Out, _CharT>::iterator
 	format(_Float32 __u, basic_format_context<_Out, _CharT>& __fc) const
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
+	_GLIBCXX_CONVEYOR_REQUIRES(__fc)
 	{ return _M_f.format((float)__u, __fc); }
 
     private:
@@ -3086,6 +3107,8 @@ namespace __format
       template<typename _Out>
 	typename basic_format_context<_Out, _CharT>::iterator
 	format(_Float64 __u, basic_format_context<_Out, _CharT>& __fc) const
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
+	_GLIBCXX_CONVEYOR_REQUIRES(__fc)
 	{ return _M_f.format((double)__u, __fc); }
 
     private:
@@ -3154,6 +3177,8 @@ namespace __format
 	typename basic_format_context<_Out, _CharT>::iterator
 	format(__gnu_cxx::__bfloat16_t __u,
 	       basic_format_context<_Out, _CharT>& __fc) const
+	_GLIBCXX_CONVEYOR_REQUIRES(__fc)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{ return _M_f.format((float)__u, __fc); }
 
     private:
@@ -4685,8 +4710,8 @@ namespace __format
 	requires __format::__formattable_with<_Tp, _Context>
 	_GLIBCXX_CONSTEXPR_FORMAT explicit
 	basic_format_arg(_Tp& __v) noexcept
+	_GLIBCXX_CONVEYOR_REQUIRES(__v)
 	{
-	  _GLIBCXX_CONVEYOR_TRUST(__v);
 	  using _Td = _Normalize<_Tp>;
 	  if constexpr (is_same_v<_Td, basic_string_view<_CharT>>)
 	    _M_set(_Td{__v.data(), __v.size()});
@@ -4991,6 +5016,7 @@ namespace __format
 	static _GLIBCXX_CONSTEXPR_FORMAT _Element_t
 	_S_make_elt(_Tp& __v)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__v);
 	  using _Tq = remove_const_t<_Tp>;
 	  using _CharT = typename _Context::char_type;
 	  static_assert(is_default_constructible_v<formatter<_Tq, _CharT>>,
@@ -5120,7 +5146,7 @@ namespace __format
       basic_format_context(basic_format_args<basic_format_context> __args,
 			   _Out __out)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__out)))
 #endif
       : _M_args(__args), _M_out(std::move(__out))
@@ -5130,7 +5156,7 @@ namespace __format
       basic_format_context(basic_format_args<basic_format_context> __args,
 			   _Out __out, const std::locale& __loc)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__out)))
 #endif
       : _M_args(__args), _M_out(std::move(__out)), _M_loc(__loc)
@@ -5169,22 +5195,15 @@ namespace __format
       [[nodiscard]]
       _GLIBCXX_CONSTEXPR_FORMAT iterator
       out()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	return std::move(_M_out);
       }
 
       _GLIBCXX_CONSTEXPR_FORMAT void
       advance_to(iterator __it)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__it)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this)
-	   && std::is_object_address (__builtin_addressof (__it)));
-#endif
 	_M_out = std::move(__it);
       }
     };
@@ -5359,6 +5378,8 @@ namespace __format
       constexpr void
       _M_on_chars(iterator __last) override
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(_M_fc);
 	basic_string_view<_CharT> __str(this->begin(), __last);
 	_M_fc.advance_to(__format::__write(_M_fc.out(), __str));
       }
@@ -5370,6 +5391,8 @@ namespace __format
 	using handle = typename basic_format_arg<_Context>::handle;
 
 	__format::__visit_format_arg([this](auto& __arg) {
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(_M_fc);
 	  using _Type = remove_reference_t<decltype(__arg)>;
 	  using _Formatter = typename _Context::template formatter_type<_Type>;
 	  if constexpr (is_same_v<_Type, monostate>)
@@ -5380,7 +5403,10 @@ namespace __format
 	    {
 	      _Formatter __f;
 	      this->_M_pc.advance_to(__f.parse(this->_M_pc));
-	      this->_M_fc.advance_to(__f.format(__arg, this->_M_fc));
+	      auto __out = __f.format(__arg, this->_M_fc);
+	      // That call may have ended what was known of the context.
+	      _GLIBCXX_CONVEYOR_TRUST(this->_M_fc);
+	      this->_M_fc.advance_to(std::move(__out));
 	    }
 	  else
 	    static_assert(__format::__formattable_with<_Type, _Context>);
@@ -5988,6 +6014,7 @@ namespace __format
 		    const _Spec<_CharT>& __spec,
 		    _Callback&& __call)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__fc);
       if constexpr (is_same_v<_Out, _Drop_iter<_CharT>>)
 	return __fc.out();
       else
@@ -6004,6 +6031,7 @@ namespace __format
 	 {
 	   _GLIBCXX_CONSTEXPR_FORMAT
 	   _Restore_out(basic_format_context<_Sink_iter<_CharT>, _CharT>& __fc)
+	   _GLIBCXX_CONVEYOR_TRUST_PRE(__fc)
 	   : _M_ctx(std::addressof(__fc)), _M_out(__fc.out())
 	  { }
 
@@ -6014,8 +6042,12 @@ namespace __format
 	  _GLIBCXX_CONSTEXPR_FORMAT
 	  ~_Restore_out()
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    if (_M_ctx)
-	      _M_ctx->advance_to(_M_out);
+	      {
+		_GLIBCXX_CONVEYOR_TRUST(*_M_ctx);
+		_M_ctx->advance_to(_M_out);
+	      }
 	  }
 
 	private:
@@ -6052,6 +6084,9 @@ namespace __format
 		  basic_format_context<_Out, _CharT>& __fc,
 		  basic_string_view<_CharT> __sep) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__elem);
+	  _GLIBCXX_CONVEYOR_TRUST(__fc);
 	  if constexpr (_Pos != 0)
 	    __fc.advance_to(__format::__write(__fc.out(), __sep));
 	  __fc.advance_to(_M_formatter.format(__elem, __fc));
@@ -6164,6 +6199,7 @@ namespace __format
 		   __fc, _M_spec,
 		   [this, &__elems...](basic_format_context<_Out, _CharT>& __nfc)
 		     {
+		       _GLIBCXX_CONVEYOR_TRUST(__nfc);
 		       __nfc.advance_to(__format::__write(__nfc.out(), _M_open));
 		       _M_felems._M_format(__elems..., __nfc, _M_sep);
 		       return __format::__write(__nfc.out(), _M_close);
@@ -6434,6 +6470,7 @@ namespace __format
 	_GLIBCXX_CONSTEXPR_FORMAT
 	typename basic_format_context<_Out, _CharT>::iterator
 	format(_Rg&& __rg, basic_format_context<_Out, _CharT>& __fc) const
+	_GLIBCXX_CONVEYOR_REQUIRES(__rg)
 	{
 	  using _Range = remove_reference_t<_Rg>;
 	  if constexpr (ranges::contiguous_range<_Rg>)
@@ -6473,6 +6510,7 @@ namespace __format
 	_M_format_elems(_Rg& __rg,
 			basic_format_context<_Out, _CharT>& __fc) const
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__fc);
 	  auto __out = __format::__write(__fc.out(), _M_open);
 
 	  auto __first = ranges::begin(__rg);
@@ -6572,6 +6610,9 @@ namespace __format
 	typename basic_format_context<_Out, _CharT>::iterator
 	format(__format::__maybe_const_range<_Rg, _CharT>& __rg,
 	       basic_format_context<_Out, _CharT>& __fc) const
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
+	_GLIBCXX_CONVEYOR_REQUIRES(__rg)
+	_GLIBCXX_CONVEYOR_REQUIRES(__fc)
 	{
 	  if constexpr (_S_range_format_is_string)
 	    return _M_under._M_format_range(__rg, __fc);

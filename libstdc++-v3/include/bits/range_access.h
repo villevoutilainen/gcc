@@ -54,7 +54,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     begin(_Container& __cont) noexcept(noexcept(__cont.begin()))
     -> decltype(__cont.begin())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
+    _GLIBCXX_CONVEYOR_REQUIRES(__cont)
     { return __cont.begin(); }
 
   /**
@@ -67,7 +67,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     begin(const _Container& __cont) noexcept(noexcept(__cont.begin()))
     -> decltype(__cont.begin())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
+    _GLIBCXX_CONVEYOR_REQUIRES(__cont)
     { return __cont.begin(); }
 
   /**
@@ -81,7 +81,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     end(_Container& __cont) noexcept(noexcept(__cont.end()))
     -> decltype(__cont.end())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
+    _GLIBCXX_CONVEYOR_REQUIRES(__cont)
     { return __cont.end(); }
 
   /**
@@ -95,7 +95,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     end(const _Container& __cont) noexcept(noexcept(__cont.end()))
     -> decltype(__cont.end())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
+    _GLIBCXX_CONVEYOR_REQUIRES(__cont)
     { return __cont.end(); }
 
   /**
@@ -169,7 +169,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     rbegin(_Container& __cont) noexcept(noexcept(__cont.rbegin()))
       -> decltype(__cont.rbegin())
-      _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
+      _GLIBCXX_CONVEYOR_REQUIRES(__cont)
     { return __cont.rbegin(); }
 
   /**
@@ -183,7 +183,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     rbegin(const _Container& __cont) noexcept(noexcept(__cont.rbegin()))
       -> decltype(__cont.rbegin())
-      _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
+      _GLIBCXX_CONVEYOR_REQUIRES(__cont)
     { return __cont.rbegin(); }
 
   /**
@@ -197,7 +197,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     rend(_Container& __cont) noexcept(noexcept(__cont.rend()))
       -> decltype(__cont.rend())
-      _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
+      _GLIBCXX_CONVEYOR_REQUIRES(__cont)
     { return __cont.rend(); }
 
   /**
@@ -211,7 +211,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     rend(const _Container& __cont) noexcept(noexcept(__cont.rend()))
       -> decltype(__cont.rend())
-      _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
+      _GLIBCXX_CONVEYOR_REQUIRES(__cont)
     { return __cont.rend(); }
 
   /**
@@ -301,12 +301,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     size(const _Container& __cont) noexcept(noexcept(__cont.size()))
     -> decltype(__cont.size())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
+    _GLIBCXX_CONVEYOR_REQUIRES(__cont)
     {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__cont)));
-#endif
       return __cont.size();
     }
 
@@ -332,12 +328,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     empty(const _Container& __cont) noexcept(noexcept(__cont.empty()))
     -> decltype(__cont.empty())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
+    _GLIBCXX_CONVEYOR_REQUIRES(__cont)
     {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__cont)));
-#endif
       return __cont.empty();
     }
 
@@ -375,12 +367,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     data(_Container& __cont) noexcept(noexcept(__cont.data()))
     -> decltype(__cont.data())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
+    _GLIBCXX_CONVEYOR_REQUIRES(__cont)
     {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__cont)));
-#endif
       return __cont.data();
     }
 
@@ -394,12 +382,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     data(const _Container& __cont) noexcept(noexcept(__cont.data()))
     -> decltype(__cont.data())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
+    _GLIBCXX_CONVEYOR_REQUIRES(__cont)
     {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__cont)));
-#endif
       return __cont.data();
     }
 
@@ -439,11 +423,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     ssize(const _Container& __cont) noexcept(noexcept(__cont.size()))
     -> common_type_t<ptrdiff_t, make_signed_t<decltype(__cont.size())>>
+    _GLIBCXX_CONVEYOR_REQUIRES(__cont)
     {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      contract_assert<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__cont)));
-#endif
       using type = make_signed_t<decltype(__cont.size())>;
       return static_cast<common_type_t<ptrdiff_t, type>>(__cont.size());
     }

@@ -2013,6 +2013,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
     __upper_bound(_ForwardIterator __first, _ForwardIterator __last,
 		  const _Tp& __val, _Compare __comp)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__val);
       typedef typename iterator_traits<_ForwardIterator>::difference_type
 	_DistanceType;
 
@@ -2101,6 +2102,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
     __equal_range(_ForwardIterator __first, _ForwardIterator __last,
 		  const _Tp& __val, _Compare __comp)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__val);
       typedef typename iterator_traits<_ForwardIterator>::difference_type
 	_DistanceType;
 
@@ -3655,9 +3657,6 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
     [[nodiscard]] constexpr const _Tp&
     clamp(const _Tp& __val, const _Tp& __lo, const _Tp& __hi)
     {
-      _GLIBCXX_CONVEYOR_TRUST(__val);
-      _GLIBCXX_CONVEYOR_TRUST(__lo);
-      _GLIBCXX_CONVEYOR_TRUST(__hi);
       __glibcxx_assert(!(__hi < __lo));
       return std::min(std::max(__val, __lo), __hi);
     }
