@@ -948,7 +948,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  The newly-created %deque uses a copy of the allocator object used
        *  by @a __x (unless the allocator traits dictate a different object).
        */
-      deque(const deque& __x) _GLIBCXX_CONVEYOR_TRUST_PRE(__x)
+      deque(const deque& __x) _GLIBCXX_CONVEYOR_REQUIRES(__x)
       : _Base(_Alloc_traits::_S_select_on_copy(__x._M_get_Tp_allocator()),
 	      __x.size())
       { std::__uninitialized_copy_a(__x.begin(), __x.end(),
@@ -968,7 +968,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       /// Copy constructor with alternative allocator
       deque(const deque& __x, const __type_identity_t<allocator_type>& __a)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(__x)
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       : _Base(__a, __x.size())
       { std::__uninitialized_copy_a(__x.begin(), __x.end(),
 				    this->_M_impl._M_start,
@@ -976,7 +976,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       /// Move constructor with alternative allocator
       deque(deque&& __x, const __type_identity_t<allocator_type>& __a)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(__a)
+      _GLIBCXX_CONVEYOR_REQUIRES(__a)
       : deque(std::move(__x), __a, typename _Alloc_traits::is_always_equal{})
       { }
 
@@ -986,7 +986,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       { }
 
       deque(deque&& __x, const allocator_type& __a, false_type)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(__x)
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       : _Base(std::move(__x), __a, __x.size())
       {
 	if (__x.get_allocator() != __a && !__x.empty())
@@ -1087,7 +1087,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  by @a __x (unless the allocator traits dictate a different object).
        */
       deque&
-      operator=(const deque& __x);
+      operator=(const deque& __x) _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__x);
 
 #if __cplusplus >= 201103L
       /**
@@ -1363,6 +1363,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD
       size_type
       size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	size_type __sz = this->_M_impl._M_finish - this->_M_impl._M_start;
 	if (__sz > max_size ())
@@ -1374,8 +1375,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD
       size_type
       max_size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return _S_max_size(_M_get_Tp_allocator());
       }
 
@@ -1549,7 +1550,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD
       reference
       front() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1562,7 +1563,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD
       const_reference
       front() const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1575,7 +1576,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD
       reference
       back() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	iterator __tmp = end();
@@ -1590,7 +1591,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD
       const_reference
       back() const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	const_iterator __tmp = end();
@@ -2577,9 +2578,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     inline void
     swap(deque<_Tp,_Alloc>& __x, deque<_Tp,_Alloc>& __y)
     _GLIBCXX_NOEXCEPT_IF(noexcept(__x.swap(__y)))
+    _GLIBCXX_CONVEYOR_REQUIRES(__y)
+    _GLIBCXX_CONVEYOR_REQUIRES(__x)
     {
-      _GLIBCXX_CONVEYOR_TRUST(__x);
-      _GLIBCXX_CONVEYOR_TRUST(__y);
       __x.swap(__y);
     }
 

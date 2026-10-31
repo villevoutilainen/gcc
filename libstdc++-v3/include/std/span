@@ -257,7 +257,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	noexcept(noexcept(ranges::data(__range))
 		  && noexcept(ranges::size(__range)))
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	pre<std::contracts::never_proven_conveyor_v>
+	pre<std::contracts::conveyor_assert_v>
 	  (std::is_object_address (__builtin_addressof (__range)))
 #endif
 	: _M_ptr(ranges::data(__range)), _M_extent(ranges::size(__range))
@@ -302,36 +302,27 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr reference
       front() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_PRECONDITION_NONEMPTY()
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
-	__glibcxx_assert(!empty());
+	__glibcxx_requires_nonempty();
 	return *this->_M_ptr;
       }
 
       [[nodiscard]]
       constexpr reference
       back() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_PRECONDITION_NONEMPTY()
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
-	__glibcxx_assert(!empty());
+	__glibcxx_requires_nonempty();
 	return *(this->_M_ptr + (size() - 1));
       }
 
       [[nodiscard]]
       constexpr reference
       operator[](size_type __idx) const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_PRECONDITION_SUBSCRIPT(__idx)
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
-	__glibcxx_assert(__idx < size());
+	__glibcxx_requires_subscript(__idx);
 	return *(this->_M_ptr + __idx);
       }
 
@@ -339,11 +330,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr reference
       at(size_type __idx) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	if (__idx >= size())
 	  __throw_out_of_range_fmt(__N("span::at(%zu) out-of-range for span "
 				       "of size %zu"), __idx, this->size());
@@ -361,22 +349,16 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr iterator
       begin() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	return iterator(this->_M_ptr);
       }
 
       [[nodiscard]]
       constexpr iterator
       end() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
 	return iterator(this->_M_ptr + this->size());
       }
 
@@ -418,13 +400,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	[[nodiscard]]
 	constexpr span<element_type, _Count>
 	first() const noexcept
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
+	_GLIBCXX_PRECONDITION(_Extent != dynamic_extent || _Count <= size())
 	{
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	  contract_assert<std::contracts::never_proven_conveyor_v>
-	    (std::is_object_address (this));
-#endif
 	  if constexpr (_Extent == dynamic_extent)
-	    __glibcxx_assert(_Count <= size());
+	    __glibcxx_requires(_Count <= size());
 	  else
 	    static_assert(_Count <= extent);
 	  using _Sp = span<element_type, _Count>;
@@ -434,12 +414,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr span<element_type, dynamic_extent>
       first(size_type __count) const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_PRECONDITION(__count <= size())
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
-	__glibcxx_assert(__count <= size());
+	__glibcxx_requires(__count <= size());
 	return span<element_type>(this->data(), __count);
       }
 
@@ -447,13 +424,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	[[nodiscard]]
 	constexpr span<element_type, _Count>
 	last() const noexcept
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
+	_GLIBCXX_PRECONDITION(_Extent != dynamic_extent || _Count <= size())
 	{
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	  contract_assert<std::contracts::never_proven_conveyor_v>
-	    (std::is_object_address (this));
-#endif
 	  if constexpr (_Extent == dynamic_extent)
-	    __glibcxx_assert(_Count <= size());
+	    __glibcxx_requires(_Count <= size());
 	  else
 	    static_assert(_Count <= extent);
 	  using _Sp = span<element_type, _Count>;
@@ -463,12 +438,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr span<element_type, dynamic_extent>
       last(size_type __count) const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_PRECONDITION(__count <= size())
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
-	__glibcxx_assert(__count <= size());
+	__glibcxx_requires(__count <= size());
 	return span<element_type>(this->data() + (this->size() - __count),
 				  __count);
       }
@@ -478,14 +450,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	constexpr auto
 	subspan() const noexcept
 	-> span<element_type, _S_subspan_extent<_Offset, _Count>()>
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
+	_GLIBCXX_PRECONDITION(_Extent != dynamic_extent || _Offset <= size())
+	_GLIBCXX_PRECONDITION(_Extent != dynamic_extent
+			      || _Count == dynamic_extent
+			      || (_Count <= size() && _Count <= size() - _Offset))
 	{
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	  contract_assert<std::contracts::never_proven_conveyor_v>
-	    (std::is_object_address (this));
-#endif
 	  if constexpr (_Extent == dynamic_extent)
 	    {
-	      __glibcxx_assert(_Offset <= size());
+	      __glibcxx_requires(_Offset <= size());
 	    }
 	  else
 	    static_assert(_Offset <= extent);
@@ -498,8 +471,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    {
 	      if constexpr (_Extent == dynamic_extent)
 		{
-		  __glibcxx_assert(_Count <= size());
-		  __glibcxx_assert(_Count <= (size() - _Offset));
+		  __glibcxx_requires(_Count <= size());
+		  __glibcxx_requires(_Count <= (size() - _Offset));
 		}
 	      else
 		{
@@ -514,18 +487,18 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr span<element_type, dynamic_extent>
       subspan(size_type __offset, size_type __count = dynamic_extent) const
       noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_PRECONDITION(__offset <= size())
+      _GLIBCXX_PRECONDITION(__count == dynamic_extent
+			    || (__count <= size()
+				&& __offset + __count <= size()))
       {
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	contract_assert<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (this));
-#endif
-	__glibcxx_assert(__offset <= size());
+	__glibcxx_requires(__offset <= size());
 	if (__count == dynamic_extent)
 	  __count = this->size() - __offset;
 	else
 	  {
-	    __glibcxx_assert(__count <= size());
-	    __glibcxx_assert(__offset + __count <= size());
+	    __glibcxx_requires(__count <= size());
+	    __glibcxx_requires(__offset + __count <= size());
 	  }
 	return span<element_type>(this->data() + __offset, __count);
       }

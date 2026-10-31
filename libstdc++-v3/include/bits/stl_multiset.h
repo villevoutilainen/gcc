@@ -612,8 +612,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       /// Extract a node.
       node_type
       extract(const_iterator __pos)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	__glibcxx_assert(__pos != end());
+	__glibcxx_assert_noconveyor(__pos != end());
 	return _M_t.extract(__pos);
       }
 

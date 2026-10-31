@@ -109,6 +109,16 @@
   __glibcxx_check_subscript(_N)
 #endif
 
+// The in-body form of any other condition an API function declares as
+// a precondition with _GLIBCXX_PRECONDITION (bits/c++config), disabled
+// under _GLIBCXX_PRECONDITION_ASSERTIONS for the same double-checking
+// reason as the shapes above.
+#if defined _GLIBCXX_PRECONDITION_ASSERTIONS
+# define __glibcxx_requires(_Cond)
+#else
+# define __glibcxx_requires(_Cond) __glibcxx_assert(_Cond)
+#endif
+
 // Verify that a divisor is nonzero. Unlike the three shapes above, this
 // one has no Debug Mode counterpart to route to under _GLIBCXX_DEBUG --
 // it isn't about container/iterator bounds at all, just a plain scalar

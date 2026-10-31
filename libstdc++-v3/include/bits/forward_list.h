@@ -933,7 +933,7 @@ namespace __fwdlist
        *                  types.
        */
       forward_list(const forward_list& __list)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(__list)
+      _GLIBCXX_CONVEYOR_REQUIRES(__list)
       : _Base(_Node_alloc_traits::_S_select_on_copy(
 		__list._M_get_Node_allocator()))
       { _M_range_initialize(__list.begin(), __list.end()); }
@@ -1285,7 +1285,7 @@ namespace __fwdlist
       [[__nodiscard__]]
       reference
       front() _GLIBCXX_PRECONDITION_NONEMPTY()
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	_Node& __front = static_cast<_Node&>(*this->_M_impl._M_head._M_next);
@@ -1299,7 +1299,7 @@ namespace __fwdlist
       [[__nodiscard__]]
       const_reference
       front() const _GLIBCXX_PRECONDITION_NONEMPTY()
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	_Node& __front = static_cast<_Node&>(*this->_M_impl._M_head._M_next);
@@ -1827,6 +1827,7 @@ namespace __fwdlist
        */
       void
       sort()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { sort(std::less<_Tp>()); }
 
       /**
@@ -1837,7 +1838,7 @@ namespace __fwdlist
        */
       template<typename _Comp>
 	void
-	sort(_Comp __comp);
+	sort(_Comp __comp) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  @brief  Reverse the elements in list.

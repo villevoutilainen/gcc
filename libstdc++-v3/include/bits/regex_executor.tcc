@@ -165,6 +165,7 @@ namespace __detail
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_has_sol = false;
       *_M_get_sol_pos() = _BiIter();
+      _GLIBCXX_CONVEYOR_TRUST(_M_results);
       _M_cur_results = _M_results;
       _M_dfs(__match_mode, _M_start);
       return _M_has_sol;
@@ -516,6 +517,9 @@ namespace __detail
     void _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_handle_accept(_Match_mode __match_mode, _StateIdT)
     {
+      _GLIBCXX_CONVEYOR_TRUST(_M_cur_results);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(_M_results);
       if (_M_search_mode == _Search_mode::_DFS)
 	{
 	  __glibcxx_assert(!_M_has_sol);
@@ -545,6 +549,7 @@ namespace __detail
 			 < std::distance(_M_begin, _M_current))
 		    {
 		      *_M_get_sol_pos() = _M_current;
+		      _GLIBCXX_CONVEYOR_TRUST(_M_results);
 		      _M_results = _M_cur_results;
 		    }
 		}

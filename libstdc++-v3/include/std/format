@@ -3410,19 +3410,31 @@ namespace __format
       [[__gnu__::__always_inline__]]
       _GLIBCXX_CONSTEXPR_FORMAT span<_CharT>
       _M_used() const noexcept
-      { return _M_span.first(_M_next - _M_span.begin()); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(_M_span);
+	return _M_span.first(_M_next - _M_span.begin());
+      }
 
       // The portion of the span that has not been written to.
       [[__gnu__::__always_inline__]]
       constexpr span<_CharT>
       _M_unused() const noexcept
-      { return _M_span.subspan(_M_next - _M_span.begin()); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(_M_span);
+	return _M_span.subspan(_M_next - _M_span.begin());
+      }
 
       // Use the start of the span as the next write position.
       [[__gnu__::__always_inline__]]
       constexpr void
       _M_rewind() noexcept
-      { _M_next = _M_span.begin(); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(_M_span);
+	_M_next = _M_span.begin();
+      }
 
       // Replace the current output range.
       _GLIBCXX_CONSTEXPR_FORMAT void
@@ -3436,6 +3448,8 @@ namespace __format
       constexpr void
       _M_write(_CharT __c)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(_M_span);
 	*_M_next++ = __c;
 	if (_M_next - _M_span.begin() == std::ssize(_M_span)) [[unlikely]]
 	  _M_overflow();

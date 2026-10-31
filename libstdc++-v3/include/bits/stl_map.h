@@ -530,8 +530,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       mapped_type&
       operator[](const key_type& __k)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	// concept requirements
 	__glibcxx_function_requires(_DefaultConstructibleConcept<mapped_type>)
 
@@ -649,8 +649,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       template<typename... _Args>
 	std::pair<iterator, bool>
 	emplace(_Args&&... __args)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
-	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 #if __cplusplus >= 201703L
 	  if constexpr (sizeof...(_Args) == 2)
 	    if constexpr (is_same_v<allocator_type, allocator<value_type>>)
@@ -710,14 +710,17 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       /// Extract a node.
       node_type
       extract(const_iterator __pos)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	__glibcxx_assert(__pos != end());
+	__glibcxx_assert_noconveyor(__pos != end());
 	return _M_t.extract(__pos);
       }
 
       /// Extract a node.
       node_type
       extract(const key_type& __x)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       { return _M_t.extract(__x); }
 
 #ifdef __glibcxx_associative_heterogeneous_erasure // C++23
@@ -811,8 +814,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       template <typename... _Args>
 	pair<iterator, bool>
 	try_emplace(key_type&& __k, _Args&&... __args)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
-	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  iterator __i = lower_bound(__k);
 	  if (__i == end() || key_comp()(__k, (*__i).first))
 	    {
@@ -1267,7 +1270,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       iterator
       erase(const_iterator __position)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return _M_t.erase(__position); }
 
@@ -1276,7 +1279,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       iterator
       erase(iterator __position)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return _M_t.erase(__position); }
       /// @}
@@ -1511,6 +1514,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       iterator
       lower_bound(const key_type& __x)
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _M_t.lower_bound(__x); }
 
 #ifdef __glibcxx_generic_associative_lookup // C++ >= 14
@@ -1556,6 +1561,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       iterator
       upper_bound(const key_type& __x)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       { return _M_t.upper_bound(__x); }
 
 #ifdef __glibcxx_generic_associative_lookup // C++ >= 14
@@ -1735,9 +1742,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     inline bool
     operator==(const map<_Key, _Tp, _Compare, _Alloc>& __x,
 	       const map<_Key, _Tp, _Compare, _Alloc>& __y)
+    _GLIBCXX_CONVEYOR_REQUIRES(__y)
+    _GLIBCXX_CONVEYOR_REQUIRES(__x)
     {
-      _GLIBCXX_CONVEYOR_TRUST(__x);
-      _GLIBCXX_CONVEYOR_TRUST(__y);
       return __x._M_t == __y._M_t;
     }
 

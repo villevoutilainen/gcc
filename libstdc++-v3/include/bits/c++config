@@ -980,12 +980,17 @@ namespace std
 	  _GLIBCXX_PRECONDITION_CONTAINER_P>::__make()>(!empty())
 # define _GLIBCXX_PRECONDITION_NON_EMPTY_RANGE(_First, _Last) \
     pre<std::contracts::conveyor_assert_v>(_First != _Last)
+// Any other condition an API function's body checks of its caller
+// (__glibcxx_requires below in debug/assertions.h is its in-body form).
+# define _GLIBCXX_PRECONDITION(_Cond) \
+    pre<std::contracts::conveyor_assert_v>(_Cond)
 # define _GLIBCXX_PRECONDITION_NONZERO_DIVISOR(_Y) \
     pre<std::contracts::conveyor_assert_v>(_Y != 0)
 #else
 # define _GLIBCXX_PRECONDITION_SUBSCRIPT(_N)
 # define _GLIBCXX_PRECONDITION_NONEMPTY()
 # define _GLIBCXX_PRECONDITION_NON_EMPTY_RANGE(_First, _Last)
+# define _GLIBCXX_PRECONDITION(_Cond)
 # define _GLIBCXX_PRECONDITION_NONZERO_DIVISOR(_Y)
 #endif
 

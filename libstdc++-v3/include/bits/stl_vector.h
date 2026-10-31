@@ -681,7 +681,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       vector(size_type __n, const allocator_type& __a = allocator_type())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _Base(_S_check_init_len(__n, __a), __a)
@@ -699,7 +699,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       vector(size_type __n, const value_type& __value,
 	     const allocator_type& __a = allocator_type())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _Base(_S_check_init_len(__n, __a), __a)
@@ -717,7 +717,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       vector(size_type __n, const value_type& __value = value_type(),
 	     const allocator_type& __a = allocator_type())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _Base(_S_check_init_len(__n, __a), __a)
@@ -736,7 +736,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  by @a __x (unless the allocator traits dictate a different object).
        */
       _GLIBCXX20_CONSTEXPR
-      vector(const vector& __x) _GLIBCXX_CONVEYOR_TRUST_PRE(__x)
+      vector(const vector& __x) _GLIBCXX_CONVEYOR_REQUIRES(__x)
       : _Base(__x.size(),
 	_Alloc_traits::_S_select_on_copy(__x._M_get_Tp_allocator()))
       {
@@ -816,7 +816,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       vector(initializer_list<value_type> __l,
 	     const allocator_type& __a = allocator_type())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _Base(__a)
@@ -848,7 +848,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	vector(_InputIterator __first, _InputIterator __last,
 	       const allocator_type& __a = allocator_type())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	pre<std::contracts::never_proven_conveyor_v>
+	pre<std::contracts::conveyor_assert_v>
 	  (std::is_object_address (__builtin_addressof (__a)))
 #endif
 	: _Base(__a)
@@ -932,7 +932,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX20_CONSTEXPR
       vector&
-      operator=(const vector& __x);
+      operator=(const vector& __x) _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__x);
 
 #if __cplusplus >= 201103L
       /**
@@ -1377,7 +1377,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
       operator[](size_type __n) _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_subscript(__n);
 	return *(this->_M_impl._M_start + __n);
@@ -1397,7 +1397,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reference
       operator[](size_type __n) const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_subscript(__n);
 	return *(this->_M_impl._M_start + __n);
@@ -1463,7 +1463,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
       front() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1476,7 +1476,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reference
       front() const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1489,7 +1489,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
       back() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	return *(end() - 1);
@@ -1502,7 +1502,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reference
       back() const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	return *(end() - 1);

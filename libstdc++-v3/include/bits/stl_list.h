@@ -1189,7 +1189,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        *  The newly-created %list uses a copy of the allocation object used
        *  by @a __x (unless the allocator traits dictate a different object).
        */
-      list(const list& __x) _GLIBCXX_CONVEYOR_TRUST_PRE(__x)
+      list(const list& __x) _GLIBCXX_CONVEYOR_REQUIRES(__x)
       : _Base(_Node_alloc_traits::
 	      _S_select_on_copy(__x._M_get_Node_allocator()))
       { _M_initialize_dispatch(__x.begin(), __x.end(), __false_type()); }
@@ -1316,7 +1316,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        *  Whether the allocator is copied depends on the allocator traits.
        */
       list&
-      operator=(const list& __x);
+      operator=(const list& __x) _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__x);
 
 #if __cplusplus >= 201103L
 #pragma GCC diagnostic push
@@ -1334,9 +1334,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       list&
       operator=(list&& __x)
       noexcept(_Node_alloc_traits::_S_nothrow_move())
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__x);
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	constexpr bool __move_storage =
 	  _Node_alloc_traits::_S_propagate_on_move_assign()
 	  || _Node_alloc_traits::_S_always_equal();
@@ -1651,7 +1651,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        *  extended and new elements are populated with given data.
        */
       void
-      resize(size_type __new_size, const value_type& __x);
+      resize(size_type __new_size, const value_type& __x)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__x);
 #else
       /**
        *  @brief Resizes the %list to the specified number of elements.
@@ -1675,7 +1676,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD
       reference
       front() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1688,7 +1689,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD
       const_reference
       front() const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	return *begin();
@@ -1701,7 +1702,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD
       reference
       back() _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	iterator __tmp = end();
@@ -1716,7 +1717,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD
       const_reference
       back() const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_NONEMPTY()
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_nonempty();
 	const_iterator __tmp = end();
@@ -1957,7 +1958,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
 #if __cplusplus >= 201103L
       iterator
-      insert(const_iterator __position, size_type __n, const value_type& __x);
+      insert(const_iterator __position, size_type __n, const value_type& __x) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 #else
       void
       insert(iterator __position, size_type __n, const value_type& __x)
@@ -1987,7 +1988,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	       typename = std::_RequireInputIter<_InputIterator>>
 	iterator
 	insert(const_iterator __position, _InputIterator __first,
-	       _InputIterator __last);
+	       _InputIterator __last) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 #else
       template<typename _InputIterator>
 	void
@@ -2096,9 +2097,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       void
       swap(list& __x) _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       {
-	_GLIBCXX_CONVEYOR_TRUST(__x);
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_Node_traits::_Node_base::swap(this->_M_impl._M_node,
 				       __x._M_impl._M_node);
 
@@ -2300,7 +2301,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       template<typename _Predicate>
 	__remove_return_type
-	remove_if(_Predicate);
+	remove_if(_Predicate) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  @brief  Remove consecutive duplicate elements.
@@ -2314,7 +2315,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_LIST_REMOVE_RETURN_TYPE_TAG
       __remove_return_type
-      unique();
+      unique() _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  @brief  Remove consecutive elements satisfying a predicate.
@@ -2399,7 +2400,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        *  elements remain in list order.
        */
       void
-      sort();
+      sort() _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  @brief  Sort the elements according to comparison function.
@@ -2664,9 +2665,9 @@ _GLIBCXX_END_NAMESPACE_CXX11
     _GLIBCXX_NODISCARD
     inline bool
     operator==(const list<_Tp, _Alloc>& __x, const list<_Tp, _Alloc>& __y)
+    _GLIBCXX_CONVEYOR_REQUIRES(__y)
+    _GLIBCXX_CONVEYOR_REQUIRES(__x)
     {
-      _GLIBCXX_CONVEYOR_TRUST(__x);
-      _GLIBCXX_CONVEYOR_TRUST(__y);
 #if _GLIBCXX_USE_CXX11_ABI
       if (__x.size() != __y.size())
 	return false;
@@ -2702,9 +2703,9 @@ _GLIBCXX_END_NAMESPACE_CXX11
     [[nodiscard]]
     inline __detail::__synth3way_t<_Tp>
     operator<=>(const list<_Tp, _Alloc>& __x, const list<_Tp, _Alloc>& __y)
+    _GLIBCXX_CONVEYOR_REQUIRES(__y)
+    _GLIBCXX_CONVEYOR_REQUIRES(__x)
     {
-      _GLIBCXX_CONVEYOR_TRUST(__x);
-      _GLIBCXX_CONVEYOR_TRUST(__y);
       return std::lexicographical_compare_three_way(__x.begin(), __x.end(),
 						    __y.begin(), __y.end(),
 						    __detail::__synth3way);
@@ -2762,6 +2763,7 @@ _GLIBCXX_END_NAMESPACE_CXX11
     inline void
     swap(list<_Tp, _Alloc>& __x, list<_Tp, _Alloc>& __y)
     _GLIBCXX_NOEXCEPT_IF(noexcept(__x.swap(__y)))
+    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
     { __x.swap(__y); }
 
 _GLIBCXX_END_NAMESPACE_CONTAINER

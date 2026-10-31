@@ -102,6 +102,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp, typename _Alloc, typename _Predicate>
     inline typename _GLIBCXX_STD_C::list<_Tp, _Alloc>::size_type
     erase_if(_GLIBCXX_STD_C::list<_Tp, _Alloc>& __cont, _Predicate __pred)
+    _GLIBCXX_CONVEYOR_REQUIRES(__cont)
     { return __cont.remove_if(__pred); }
 
   template<typename _Tp, typename _Alloc,
