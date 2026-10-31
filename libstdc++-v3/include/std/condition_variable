@@ -278,6 +278,7 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
 
     void
     notify_one() noexcept
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       lock_guard<mutex> __lock(*_M_mutex);
       _M_cond.notify_one();
@@ -285,6 +286,7 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
 
     void
     notify_all() noexcept
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       lock_guard<mutex> __lock(*_M_mutex);
       _M_cond.notify_all();

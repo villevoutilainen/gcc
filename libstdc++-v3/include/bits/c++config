@@ -964,12 +964,20 @@ namespace std
 // used from free functions with no 'this' in scope and don't call any
 // conveyor accessor, so they're left unchanged.
 #if defined(_GLIBCXX_PRECONDITION_ASSERTIONS) && defined(__cpp_contract_control_objects)
+# define _GLIBCXX_PRECONDITION_CONTAINER_P \
+    std::contracts::__container_conveyor_p<__remove_cvref(decltype(*this))>()
+# define _GLIBCXX_PRECONDITION_CONTAINER_OBJECT \
+    pre<std::contracts::__container_object_pre< \
+	  _GLIBCXX_PRECONDITION_CONTAINER_P>::__make()> \
+      (std::is_object_address (this))
 # define _GLIBCXX_PRECONDITION_SUBSCRIPT(_N) \
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)) \
-    pre<std::contracts::conveyor_assert_v>(_N < size())
+    _GLIBCXX_PRECONDITION_CONTAINER_OBJECT \
+    pre<std::contracts::__container_pre< \
+	  _GLIBCXX_PRECONDITION_CONTAINER_P>::__make()>(_N < size())
 # define _GLIBCXX_PRECONDITION_NONEMPTY() \
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)) \
-    pre<std::contracts::conveyor_assert_v>(!empty())
+    _GLIBCXX_PRECONDITION_CONTAINER_OBJECT \
+    pre<std::contracts::__container_pre< \
+	  _GLIBCXX_PRECONDITION_CONTAINER_P>::__make()>(!empty())
 # define _GLIBCXX_PRECONDITION_NON_EMPTY_RANGE(_First, _Last) \
     pre<std::contracts::conveyor_assert_v>(_First != _Last)
 # define _GLIBCXX_PRECONDITION_NONZERO_DIVISOR(_Y) \

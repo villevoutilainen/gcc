@@ -1407,7 +1407,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       using element_type = _Tp;
 
       element_type&
-      operator*() const noexcept
+      operator*() const noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *std::__shared_ptr_deref(_M_get()); }
 
       element_type*
@@ -1449,7 +1449,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #if __cplusplus <= 201402L
       [[__deprecated__("shared_ptr<T[]>::operator* is absent from C++17")]]
       element_type&
-      operator*() const noexcept
+      operator*() const noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *std::__shared_ptr_deref(_M_get()); }
 
       [[__deprecated__("shared_ptr<T[]>::operator-> is absent from C++17")]]

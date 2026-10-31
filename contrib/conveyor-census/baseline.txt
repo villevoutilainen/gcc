@@ -1,4 +1,6 @@
 conveyor  gimple  library errors      0  distinct sites     0  ICEs 0  user-code errors 0
 conveyor  ast     library errors      0  distinct sites     0  ICEs 0  user-code errors 0
+precondition gimple  library errors      0  distinct sites     0  ICEs 0  user-code errors 0
+precondition ast     library errors      0  distinct sites     0  ICEs 0  user-code errors 0
 control   gimple  library errors      0  distinct sites     0  ICEs 0  user-code errors 0
 control   ast     library errors      0  distinct sites     0  ICEs 0  user-code errors 0

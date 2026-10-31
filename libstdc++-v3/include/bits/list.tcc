@@ -218,6 +218,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     list<_Tp, _Alloc>::
     _M_default_append(size_type __n)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       size_type __i = 0;
       __try
 	{

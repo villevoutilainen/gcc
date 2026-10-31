@@ -358,7 +358,7 @@ namespace __list
       // Must downcast from _Node_base to _Node to get to value.
       [[__nodiscard__]]
       constexpr reference
-      operator*() const noexcept
+      operator*() const noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return static_cast<_Node&>(*_M_node)._M_u._M_data; }
 
       [[__nodiscard__]]
@@ -602,7 +602,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       // Must downcast from _List_node_base to _List_node to get to value.
       _GLIBCXX_NODISCARD
       reference
-      operator*() const _GLIBCXX_NOEXCEPT
+      operator*() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *static_cast<_Node*>(_M_node)->_M_valptr(); }
 
       _GLIBCXX_NODISCARD
@@ -693,7 +693,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       // Must downcast from List_node_base to _List_node to get to value.
       _GLIBCXX_NODISCARD
       reference
-      operator*() const _GLIBCXX_NOEXCEPT
+      operator*() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *static_cast<_Node*>(_M_node)->_M_valptr(); }
 
       _GLIBCXX_NODISCARD
@@ -1289,7 +1289,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	  auto __first = ranges::begin(__rg);
 	  const auto __last = ranges::end(__rg);
 	  for (; __first != __last; ++__first)
-	    emplace_back(*__first);
+	    {
+	      _GLIBCXX_CONVEYOR_TRUST_DEREF(__first);
+	      emplace_back(*__first);
+	    }
 	}
 #endif
 
@@ -1748,6 +1751,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	void
 #endif
 	emplace_front(_Args&&... __args)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  this->_M_insert(begin(), std::forward<_Args>(__args)...);
 #if __cplusplus > 201402L
@@ -1845,6 +1849,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	void
 #endif
 	emplace_back(_Args&&... __args)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  this->_M_insert(end(), std::forward<_Args>(__args)...);
 #if __cplusplus > 201402L
@@ -2424,10 +2429,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_M_initialize_dispatch(_InputIterator __first, _InputIterator __last,
 			       __false_type)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  bool __notempty = __first != __last;
 	  for (; __first != __last; ++__first)
 #if __cplusplus >= 201103L
-	    emplace_back(*__first);
+	    {
+	      _GLIBCXX_CONVEYOR_TRUST_DEREF(__first);
+	      emplace_back(*__first);
+	    }
 #else
 	    push_back(*__first);
 #endif
@@ -2452,6 +2461,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       void
       _M_default_initialize(size_type __n)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	for (; __n; --__n)
 	  emplace_back();
       }

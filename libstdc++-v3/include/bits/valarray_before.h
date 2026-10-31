@@ -568,7 +568,11 @@ namespace __detail
       : _M_expr1(__e), _M_expr2(__t) {}
 
       value_type operator[](size_t __i) const
-      { return _Oper()(_M_expr1[__i], _M_expr2); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(_M_expr1);
+	return _Oper()(_M_expr1[__i], _M_expr2);
+      }
 
       size_t size() const
       {

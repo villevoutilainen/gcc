@@ -4247,6 +4247,7 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
     inline _ForwardIterator
     search(_ForwardIterator __first, _ForwardIterator __last,
 	   const _Searcher& __searcher)
+    _GLIBCXX_CONVEYOR_REQUIRES(__searcher)
     { return __searcher(__first, __last).first; }
 #endif
 

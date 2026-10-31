@@ -1518,7 +1518,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  function throws out_of_range if the check fails.
        */
       reference
-      at(size_type __n)
+      at(size_type __n) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	_M_range_check(__n);
 	return (*this)[__n];
@@ -1625,6 +1625,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #if __cplusplus >= 201103L
       void
       push_front(value_type&& __x)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { emplace_front(std::move(__x)); }
 
       template<typename... _Args>
@@ -1633,7 +1634,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #else
 	void
 #endif
-	emplace_front(_Args&&... __args);
+	emplace_front(_Args&&... __args) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 #endif
 
       /**
@@ -1662,6 +1663,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #if __cplusplus >= 201103L
       void
       push_back(value_type&& __x)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { emplace_back(std::move(__x)); }
 
       template<typename... _Args>
@@ -1670,7 +1672,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #else
 	void
 #endif
-	emplace_back(_Args&&... __args);
+	emplace_back(_Args&&... __args) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 #endif
 
       /**
@@ -1731,7 +1733,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       template<typename... _Args>
 	iterator
-	emplace(const_iterator __position, _Args&&... __args);
+	emplace(const_iterator __position, _Args&&... __args)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  @brief  Inserts given value into %deque before specified iterator.
