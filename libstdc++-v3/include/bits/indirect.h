@@ -285,6 +285,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       template<typename _Self>
       constexpr auto&&
       operator*(this _Self&& __self) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES(__self)
       {
 	// n.b. [allocator.requirements.general] p22 implies
 	// dereferencing const pointer is same as pointer
@@ -743,6 +744,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr const _Tp&
       operator*() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(_M_objp != nullptr);
 	return *_M_objp->_M_objp;
@@ -750,6 +752,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr _Tp&
       operator*() noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(_M_objp != nullptr);
 	return *_M_objp->_M_objp;
@@ -757,6 +760,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr const_pointer
       operator->() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(_M_objp != nullptr);
 	return _M_objp ? _M_objp->_M_objp : const_pointer{};
@@ -764,6 +768,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr pointer
       operator->() noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(_M_objp != nullptr);
 	return _M_objp ? _M_objp->_M_objp : pointer{};

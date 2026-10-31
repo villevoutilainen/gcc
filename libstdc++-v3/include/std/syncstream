@@ -119,7 +119,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 	using _ATr = allocator_traits<_Alloc>;
 	if constexpr (!_ATr::propagate_on_container_swap::value)
-	  __glibcxx_assert(get_allocator() == __other.get_allocator());
+	  __glibcxx_assert_noconveyor(get_allocator() == __other.get_allocator());
 
 	std::swap(_M_impl, __other._M_impl);
 	std::swap(this->_M_emit_on_sync, __other._M_emit_on_sync);

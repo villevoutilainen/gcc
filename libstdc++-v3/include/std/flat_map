@@ -504,7 +504,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX26_CONSTEXPR
       size_type
       size() const noexcept
-      { return _M_cont.keys.size(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_cont.keys.size(); }
 
       _GLIBCXX26_CONSTEXPR
       size_type
@@ -1068,6 +1068,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       void
       _M_unique() requires (!_Multi)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	struct __key_equiv
 	{
 	  _GLIBCXX26_CONSTEXPR
@@ -1251,6 +1252,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       friend _GLIBCXX26_CONSTEXPR strong_ordering
       operator<=>(const _Iterator& __x, const _Iterator& __y)
+      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
 	__glibcxx_assert(__x._M_cont == __y._M_cont);
 	__glibcxx_assert((__x._M_index == size_t(-1)) == (__y._M_index == size_t(-1)));

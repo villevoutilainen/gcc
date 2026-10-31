@@ -308,6 +308,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       // Observers.
       constexpr _Tp* operator->() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(_M_val); // hardened precondition
 	return _M_val;

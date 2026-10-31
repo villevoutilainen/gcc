@@ -1058,6 +1058,7 @@ template<typename _Tp, typename _IndexType>
 
     constexpr _Repeat_iterator&
     operator--()
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       __glibcxx_assert(_M_current > 0);
       --_M_current;
@@ -1074,6 +1075,7 @@ template<typename _Tp, typename _IndexType>
 
     constexpr _Repeat_iterator&
     operator+=(difference_type __n)
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       __glibcxx_assert(_M_current + __n >= 0);
       _M_current += __n;
@@ -1082,6 +1084,7 @@ template<typename _Tp, typename _IndexType>
 
     constexpr _Repeat_iterator&
     operator-=(difference_type __n)
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       __glibcxx_assert(_M_current - __n >= 0);
       _M_current -= __n;

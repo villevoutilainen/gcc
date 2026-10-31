@@ -438,7 +438,12 @@ namespace __detail
       value_type operator[](size_t __i) const
       { return _M_func (_M_expr[__i]); }
 
-      size_t size() const { return _M_expr.size ();}
+      size_t size() const
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(_M_expr);
+	return _M_expr.size();
+      }
 
     private:
       typename _ValArrayRef<_Dom>::__type _M_expr;
@@ -503,7 +508,12 @@ namespace __detail
       value_type operator[](size_t __i) const
       { return _Oper()(_M_expr[__i]); }
 
-      size_t size() const { return _M_expr.size(); }
+      size_t size() const
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(_M_expr);
+	return _M_expr.size();
+      }
 
     private:
       typename _ValArrayRef<_Arg>::__type _M_expr;
@@ -549,7 +559,12 @@ namespace __detail
       value_type operator[](size_t __i) const
       { return _Oper()(_M_expr1[__i], _M_expr2[__i]); }
 
-      size_t size() const { return _M_expr1.size(); }
+      size_t size() const
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(_M_expr1);
+	return _M_expr1.size();
+      }
 
     private:
       typename _ValArrayRef<_FirstArg>::__type _M_expr1;
@@ -599,7 +614,12 @@ namespace __detail
       value_type operator[](size_t __i) const
       { return _Oper()(_M_expr1, _M_expr2[__i]); }
 
-      size_t size() const { return _M_expr2.size(); }
+      size_t size() const
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(_M_expr2);
+	return _M_expr2.size();
+      }
 
     private:
       _Vt _M_expr1;

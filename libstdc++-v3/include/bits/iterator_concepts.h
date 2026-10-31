@@ -911,6 +911,8 @@ namespace ranges
 	operator()(_Tp&& __e1, _Up&& __e2) const
 	noexcept(_S_noexcept<_Tp, _Up>())
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__e1);
+	  _GLIBCXX_CONVEYOR_TRUST(__e2);
 	  if constexpr (__adl_iswap<_Tp, _Up>)
 	    iter_swap(static_cast<_Tp&&>(__e1), static_cast<_Up&&>(__e2));
 	  else if constexpr (indirectly_readable<_Tp>

@@ -2170,6 +2170,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     [[nodiscard]]
     constexpr decltype(auto)
     operator*()
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       __glibcxx_assert(_M_index == 0);
       return *_M_it;
@@ -2178,6 +2179,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     [[nodiscard]]
     constexpr decltype(auto)
     operator*() const requires __detail::__dereferenceable<const _It>
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       __glibcxx_assert(_M_index == 0);
       return *_M_it;
@@ -2186,6 +2188,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     [[nodiscard]]
     constexpr auto
     operator->() const requires __detail::__common_iter_has_arrow<_It>
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       __glibcxx_assert(_M_index == 0);
       if constexpr (is_pointer_v<_It> || requires { _M_it.operator->(); })
@@ -2212,6 +2215,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     // 3953. iter_move for common_iterator and ... should return decltype(auto)
     constexpr decltype(auto)
     operator++(int)
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       __glibcxx_assert(_M_index == 0);
       if constexpr (forward_iterator<_It>)
@@ -2306,6 +2310,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     iter_move(const common_iterator& __i)
     noexcept(noexcept(ranges::iter_move(std::declval<const _It&>())))
     requires input_iterator<_It>
+    _GLIBCXX_CONVEYOR_REQUIRES(__i)
     {
       __glibcxx_assert(__i._M_index == 0);
       return ranges::iter_move(__i._M_it);
@@ -2317,6 +2322,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		const common_iterator<_It2, _Sent2>& __y)
       noexcept(noexcept(ranges::iter_swap(std::declval<const _It&>(),
 					  std::declval<const _It2&>())))
+      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
 	__glibcxx_assert(__x._M_index == 0);
 	__glibcxx_assert(__y._M_index == 0);
@@ -2575,6 +2581,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr counted_iterator
       operator++(int) requires forward_iterator<_It>
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	auto __tmp = *this;
 	++*this;
 	return __tmp;
@@ -2612,6 +2619,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr counted_iterator&
       operator+=(iter_difference_t<_It> __n)
       requires random_access_iterator<_It>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(__n <= _M_length);
 	_M_current += __n;
@@ -2645,6 +2653,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr counted_iterator&
       operator-=(iter_difference_t<_It> __n)
       requires random_access_iterator<_It>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(-__n <= _M_length);
 	_M_current -= __n;
@@ -2657,6 +2666,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       operator[](iter_difference_t<_It> __n) const
       noexcept(noexcept(_M_current[__n]))
       requires random_access_iterator<_It>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(__n < _M_length);
 	return _M_current[__n];
@@ -2686,6 +2696,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       iter_move(const counted_iterator& __i)
       noexcept(noexcept(ranges::iter_move(__i._M_current)))
       requires input_iterator<_It>
+      _GLIBCXX_CONVEYOR_REQUIRES(__i)
       {
 	__glibcxx_assert( __i._M_length > 0 );
 	return ranges::iter_move(__i._M_current);
@@ -2696,6 +2707,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	iter_swap(const counted_iterator& __x,
 		  const counted_iterator<_It2>& __y)
 	noexcept(noexcept(ranges::iter_swap(__x._M_current, __y._M_current)))
+	_GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
 	{
 	  __glibcxx_assert( __x._M_length > 0 && __y._M_length > 0 );
 	  ranges::iter_swap(__x._M_current, __y._M_current);

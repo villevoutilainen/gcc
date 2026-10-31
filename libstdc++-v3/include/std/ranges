@@ -3770,6 +3770,7 @@ namespace views::__adaptor
 	    if constexpr (__detail::__tiny_range<_Pattern>)
 	      {
 		const auto& __cur = _M_i_current();
+		_GLIBCXX_CONVEYOR_TRUST(__cur);
 		if (__cur == __end)
 		  return true;
 		if (__pcur == __pend)
@@ -3796,11 +3797,11 @@ namespace views::__adaptor
 
 	  constexpr auto&
 	  _M_i_current() noexcept
-	  { return _M_i.__current(); }
+	  { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_i.__current(); }
 
 	  constexpr auto&
 	  _M_i_current() const noexcept
-	  { return _M_i.__current(); }
+	  { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_i.__current(); }
 
 	  _OuterIter<_Const> _M_i = _OuterIter<_Const>();
 	  bool _M_incremented = false;
@@ -3838,7 +3839,9 @@ namespace views::__adaptor
 	    if constexpr (!forward_range<_Base>)
 	      if constexpr (_Pattern::size() == 0)
 		return *this;
-	    ++_M_i_current();
+	    auto& __cur = _M_i_current();
+	    _GLIBCXX_CONVEYOR_TRUST(__cur);
+	    ++__cur;
 	    return *this;
 	  }
 
@@ -5200,6 +5203,8 @@ namespace views::__adaptor
       requires (indirectly_swappable<iterator_t<__detail::__maybe_const_t<_Const, _Vs>>> && ...)
     {
       [&]<size_t... _Is>(index_sequence<_Is...>) {
+	_GLIBCXX_CONVEYOR_TRUST(__l);
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	(ranges::iter_swap(std::get<_Is>(__l._M_current), std::get<_Is>(__r._M_current)), ...);
       }(make_index_sequence<sizeof...(_Vs)>{});
     }
@@ -6801,6 +6806,7 @@ namespace views::__adaptor
     constexpr _Iterator&
     operator--() requires bidirectional_range<_Base>
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       ranges::advance(_M_current, _M_missing - _M_n);
       _M_missing = 0;
       return *this;
@@ -7352,13 +7358,14 @@ namespace views::__adaptor
     constexpr iterator_t<_Vp>
     _M_find_prev(iterator_t<_Vp> __current) requires bidirectional_range<_Vp>
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_assert(_M_pred.has_value());
       auto __pred = [this]<typename _Tp, typename _Up>(_Tp&& __x, _Up&& __y) {
 	return !bool((*_M_pred)(std::forward<_Up>(__y), std::forward<_Tp>(__x)));
       };
       auto __rbegin = std::make_reverse_iterator(__current);
       auto __rend = std::make_reverse_iterator(ranges::begin(_M_base));
-      __glibcxx_assert(__rbegin != __rend);
+      __glibcxx_assert_noconveyor(__rbegin != __rend);
       auto __it = ranges::adjacent_find(__rbegin, __rend, __pred).base();
       return ranges::prev(__it, 1, ranges::begin(_M_base));
     }
@@ -8443,6 +8450,7 @@ namespace views::__adaptor
     constexpr _Iterator&
     operator--() requires bidirectional_range<_Base>
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       ranges::advance(_M_current, _M_missing - _M_stride);
       _M_missing = 0;
       return *this;
@@ -8957,6 +8965,8 @@ namespace views::__adaptor
 		&& indirectly_swappable<iterator_t<__maybe_const_t<_Const, _Vs>>>)
     {
       [&]<size_t... _Is>(index_sequence<_Is...>) {
+	_GLIBCXX_CONVEYOR_TRUST(__l);
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	(ranges::iter_swap(std::get<_Is>(__l._M_current), std::get<_Is>(__r._M_current)), ...);
       }(make_index_sequence<1 + sizeof...(_Vs)>{});
     }
@@ -10264,6 +10274,7 @@ namespace ranges
     constexpr _Iterator&
     operator--()
       requires __detail::__concat_is_bidirectional<_Const, _Vs...>
+    _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
       __glibcxx_assert(!_M_it.valueless_by_exception());
       // D4324/P2680: see operator++'s own identical comment -- this
@@ -10660,6 +10671,7 @@ namespace ranges
     constexpr _Iterator&
     operator++()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_parent->_M_cache._M_reset();
       ++_M_current;
       return *this;
@@ -10703,7 +10715,11 @@ namespace ranges
 
     friend constexpr bool
     operator==(const _Iterator& __x, const _Sentinel& __y)
-    { return __x._M_current == __y._M_end; }
+    {
+      _GLIBCXX_CONVEYOR_TRUST(__x);
+      _GLIBCXX_CONVEYOR_TRUST(__y);
+      return __x._M_current == __y._M_end;
+    }
 
     friend constexpr range_difference_t<_Vp>
     operator-(const _Iterator& __x, const _Sentinel& __y)

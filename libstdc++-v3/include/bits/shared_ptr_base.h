@@ -1707,6 +1707,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       template<typename _Yp>
 	_SafeConv<_Yp>
 	reset(_Yp* __p) // _Yp must be complete.
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  // Catch self-reset errors.
 	  __glibcxx_assert(__p == nullptr || __p != _M_ptr);

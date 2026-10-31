@@ -74,56 +74,79 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       ///  Assignment operator.  Assigns elements to corresponding elements
       ///  of @a a.
-      mask_array& operator=(const mask_array&);
+      mask_array& operator=(const mask_array& __a)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__a);
 
-      void operator=(const valarray<_Tp>&) const;
+      void operator=(const valarray<_Tp>& __v) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
       ///  Multiply slice elements by corresponding elements of @a v.
-      void operator*=(const valarray<_Tp>&) const;
+      void operator*=(const valarray<_Tp>& __v) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
       ///  Divide slice elements by corresponding elements of @a v.
-      void operator/=(const valarray<_Tp>&) const;
+      void operator/=(const valarray<_Tp>& __v) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
       ///  Modulo slice elements by corresponding elements of @a v.
-      void operator%=(const valarray<_Tp>&) const;
+      void operator%=(const valarray<_Tp>& __v) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
       ///  Add corresponding elements of @a v to slice elements.
-      void operator+=(const valarray<_Tp>&) const;
+      void operator+=(const valarray<_Tp>& __v) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
       ///  Subtract corresponding elements of @a v from slice elements.
-      void operator-=(const valarray<_Tp>&) const;
+      void operator-=(const valarray<_Tp>& __v) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
       ///  Logical xor slice elements with corresponding elements of @a v.
-      void operator^=(const valarray<_Tp>&) const;
+      void operator^=(const valarray<_Tp>& __v) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
       ///  Logical and slice elements with corresponding elements of @a v.
-      void operator&=(const valarray<_Tp>&) const;
+      void operator&=(const valarray<_Tp>& __v) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
       ///  Logical or slice elements with corresponding elements of @a v.
-      void operator|=(const valarray<_Tp>&) const;
+      void operator|=(const valarray<_Tp>& __v) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
       ///  Left shift slice elements by corresponding elements of @a v.
-      void operator<<=(const valarray<_Tp>&) const;
+      void operator<<=(const valarray<_Tp>& __v) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
       ///  Right shift slice elements by corresponding elements of @a v.
-      void operator>>=(const valarray<_Tp>&) const;
+      void operator>>=(const valarray<_Tp>& __v) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
       ///  Assign all slice elements to @a t.
       void operator=(const _Tp&) const;
 
         //        ~mask_array ();
 
       template<class _Dom>
-        void operator=(const _Expr<_Dom,_Tp>&) const;
+        void operator=(const _Expr<_Dom,_Tp>& __e) const
+        _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__e);
       template<class _Dom>
-        void operator*=(const _Expr<_Dom,_Tp>&) const;
+        void operator*=(const _Expr<_Dom,_Tp>& __e) const
+        _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__e);
       template<class _Dom>
-        void operator/=(const _Expr<_Dom,_Tp>&) const;
+        void operator/=(const _Expr<_Dom,_Tp>& __e) const
+        _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__e);
       template<class _Dom>
-        void operator%=(const _Expr<_Dom,_Tp>&) const;
+        void operator%=(const _Expr<_Dom,_Tp>& __e) const
+        _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__e);
       template<class _Dom>
-        void operator+=(const _Expr<_Dom,_Tp>&) const;
+        void operator+=(const _Expr<_Dom,_Tp>& __e) const
+        _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__e);
       template<class _Dom>
-        void operator-=(const _Expr<_Dom,_Tp>&) const;
+        void operator-=(const _Expr<_Dom,_Tp>& __e) const
+        _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__e);
       template<class _Dom>
-        void operator^=(const _Expr<_Dom,_Tp>&) const;
+        void operator^=(const _Expr<_Dom,_Tp>& __e) const
+        _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__e);
       template<class _Dom>
-        void operator&=(const _Expr<_Dom,_Tp>&) const;
+        void operator&=(const _Expr<_Dom,_Tp>& __e) const
+        _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__e);
       template<class _Dom>
-        void operator|=(const _Expr<_Dom,_Tp>&) const;
+        void operator|=(const _Expr<_Dom,_Tp>& __e) const
+        _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__e);
       template<class _Dom>
-        void operator<<=(const _Expr<_Dom,_Tp>&) const;
+        void operator<<=(const _Expr<_Dom,_Tp>& __e) const
+        _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__e);
       template<class _Dom>
-        void operator>>=(const _Expr<_Dom,_Tp>&) const;
+        void operator>>=(const _Expr<_Dom,_Tp>& __e) const
+        _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__e);
 
     private:
       mask_array(_Array<_Tp>, size_t, _Array<bool>);
@@ -179,7 +202,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       inline void
       mask_array<_Tp>::operator=(const _Expr<_Ex, _Tp>& __e) const
       {
-	__glibcxx_assert(__e.size() == _M_sz);
+	__glibcxx_assert_noconveyor(__e.size() == _M_sz);
 	std::__valarray_copy(__e, __e.size(), _M_array, _M_mask);
       }
 
@@ -200,7 +223,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       inline void							\
       mask_array<_Tp>::operator _Op##=(const _Expr<_Dom, _Tp>& __e) const\
       {									\
-	__glibcxx_assert(__e.size() == _M_sz);				\
+	__glibcxx_assert_noconveyor(__e.size() == _M_sz);		\
 	_Array_augmented_##_Name(_M_array, _M_mask, __e, __e.size());   \
       }
 

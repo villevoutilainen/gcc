@@ -585,6 +585,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       template<typename... _Args>
 	constexpr _Tp&
 	unchecked_emplace_back(_Args&&... __args)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  __glibcxx_assert(_M_size < _Nm);
 	  auto __p = std::construct_at(data() + _M_size,
@@ -595,15 +596,16 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       constexpr _Tp&
       unchecked_push_back(const _Tp& __x)
-      { return unchecked_emplace_back(__x); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return unchecked_emplace_back(__x); }
 
       constexpr _Tp&
       unchecked_push_back(_Tp&& __x)
-      { return unchecked_emplace_back(std::move(__x)); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return unchecked_emplace_back(std::move(__x)); }
 
       template<typename... _Args>
 	constexpr iterator
 	emplace(const_iterator __position, _Args&&... __args)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  size_t __b = __position - cbegin(); // elements before position
 	  __glibcxx_assert(__b <= _M_size);
@@ -618,14 +620,15 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       constexpr iterator
       insert(const_iterator __position, const _Tp& __x)
-      { return emplace(__position, __x); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return emplace(__position, __x); }
 
       constexpr iterator
       insert(const_iterator __position, _Tp&& __x)
-      { return emplace(__position, std::move(__x)); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return emplace(__position, std::move(__x)); }
 
       constexpr iterator
       insert(const_iterator __position, size_type __n, const _Tp& __x)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	size_t __b = __position - cbegin(); // elements before position
 	__glibcxx_assert(__b <= _M_size);
@@ -642,6 +645,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	constexpr iterator
 	insert(const_iterator __position, _InputIterator __first,
 	       _InputIterator __last)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  size_t __b = __position - cbegin(); // elements before position
 	  __glibcxx_assert(__b <= _M_size);
@@ -718,6 +722,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       constexpr iterator
       erase(const_iterator __position)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	size_t __n = __position - cbegin();
 	__glibcxx_assert(__n < _M_size);
@@ -729,6 +734,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       constexpr iterator
       erase(const_iterator __first, const_iterator __last)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	size_t __n = __first - cbegin();
 	size_t __x = __last - __first;

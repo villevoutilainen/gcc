@@ -229,7 +229,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *
        *  @param  __sa  Array slice to get values from.
        */
-      valarray<_Tp>& operator=(const slice_array<_Tp>& __sa);
+      valarray<_Tp>& operator=(const slice_array<_Tp>& __sa)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__sa);
 
       /**
        *  @brief  Assign elements to an array subset.
@@ -239,7 +240,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *
        *  @param  __ga  Array slice to get values from.
        */
-      valarray<_Tp>& operator=(const gslice_array<_Tp>& __ga);
+      valarray<_Tp>& operator=(const gslice_array<_Tp>& __ga)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__ga);
 
       /**
        *  @brief  Assign elements to an array subset.
@@ -249,7 +251,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *
        *  @param  __ma  Array slice to get values from.
        */
-      valarray<_Tp>& operator=(const mask_array<_Tp>& __ma);
+      valarray<_Tp>& operator=(const mask_array<_Tp>& __ma)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__ma);
 
       /**
        *  @brief  Assign elements to an array subset.
@@ -259,7 +262,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *
        *  @param  __ia  Array slice to get values from.
        */
-      valarray<_Tp>& operator=(const indirect_array<_Tp>& __ia);
+      valarray<_Tp>& operator=(const indirect_array<_Tp>& __ia)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__ia);
 
 #if __cplusplus >= 201103L
       /**
@@ -351,7 +355,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  @param  __m  The valarray bitmask.
        *  @return  New valarray containing elements indicated by @a __m.
        */
-      valarray<_Tp>       operator[](const valarray<bool>& __m) const;
+      valarray<_Tp>       operator[](const valarray<bool>& __m) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__m);
 
       /**
        *  @brief  Return a reference to an array subset.
@@ -365,7 +370,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  @param  __m  The valarray bitmask.
        *  @return  New valarray containing elements indicated by @a __m.
        */
-      mask_array<_Tp>     operator[](const valarray<bool>& __m);
+      mask_array<_Tp>     operator[](const valarray<bool>& __m)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__m);
 
       /**
        *  @brief  Return an array subset.
@@ -440,34 +446,44 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       valarray<_Tp>& operator>>=(const _Tp&);
 
       ///  Multiply elements of array by corresponding elements of @a v.
-      valarray<_Tp>& operator*=(const valarray<_Tp>&);
+      valarray<_Tp>& operator*=(const valarray<_Tp>& __v)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
 
       ///  Divide elements of array by corresponding elements of @a v.
-      valarray<_Tp>& operator/=(const valarray<_Tp>&);
+      valarray<_Tp>& operator/=(const valarray<_Tp>& __v)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
 
       ///  Modulo elements of array by corresponding elements of @a v.
-      valarray<_Tp>& operator%=(const valarray<_Tp>&);
+      valarray<_Tp>& operator%=(const valarray<_Tp>& __v)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
 
       ///  Add corresponding elements of @a v to elements of array.
-      valarray<_Tp>& operator+=(const valarray<_Tp>&);
+      valarray<_Tp>& operator+=(const valarray<_Tp>& __v)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
 
       ///  Subtract corresponding elements of @a v from elements of array.
-      valarray<_Tp>& operator-=(const valarray<_Tp>&);
+      valarray<_Tp>& operator-=(const valarray<_Tp>& __v)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
 
       ///  Logical xor corresponding elements of @a v with elements of array.
-      valarray<_Tp>& operator^=(const valarray<_Tp>&);
+      valarray<_Tp>& operator^=(const valarray<_Tp>& __v)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
 
       ///  Logical or corresponding elements of @a v with elements of array.
-      valarray<_Tp>& operator|=(const valarray<_Tp>&);
+      valarray<_Tp>& operator|=(const valarray<_Tp>& __v)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
 
       ///  Logical and corresponding elements of @a v with elements of array.
-      valarray<_Tp>& operator&=(const valarray<_Tp>&);
+      valarray<_Tp>& operator&=(const valarray<_Tp>& __v)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
 
       ///  Left shift elements of array by corresponding elements of @a v.
-      valarray<_Tp>& operator<<=(const valarray<_Tp>&);
+      valarray<_Tp>& operator<<=(const valarray<_Tp>& __v)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
 
       ///  Right shift elements of array by corresponding elements of @a v.
-      valarray<_Tp>& operator>>=(const valarray<_Tp>&);
+      valarray<_Tp>& operator>>=(const valarray<_Tp>& __v)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__v);
 
       template<class _Dom>
 	valarray<_Tp>& operator*=(const _Expr<_Dom, _Tp>&);
@@ -505,13 +521,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  Accumulates the sum of all elements into a Tp using +=.  The order
        *  of adding the elements is unspecified.
        */
-      _Tp    sum() const;
+      _Tp    sum() const _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       ///  Return the minimum element using operator<().
-      _Tp    min() const;
+      _Tp    min() const _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       ///  Return the maximum element using operator<().
-      _Tp    max() const;
+      _Tp    max() const _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        *  @brief  Return a shifted array.
@@ -850,6 +866,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline valarray<_Tp>&
     valarray<_Tp>::operator=(const gslice_array<_Tp>& __ga)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__ga._M_index);
       __glibcxx_assert(_M_size == __ga._M_index.size());
       std::__valarray_copy(__ga._M_array, _Array<size_t>(__ga._M_index),
 			   _Array<_Tp>(_M_data), _M_size);
@@ -971,6 +988,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline indirect_array<_Tp>
     valarray<_Tp>::operator[](const valarray<size_t>& __i)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__i);
       return indirect_array<_Tp>(_Array<_Tp>(_M_data), __i.size(),
 				 _Array<size_t>(__i));
     }
@@ -1207,6 +1225,7 @@ _DEFINE_VALARRAY_EXPR_AUGMENTED_ASSIGNMENT(>>, __shift_right)
     inline _Expr<_BinClos<_Name, _ValArray, _ValArray, _Tp, _Tp>,	\
 		 typename __fun<_Name, _Tp>::result_type>		\
     operator _Op(const valarray<_Tp>& __v, const valarray<_Tp>& __w)	\
+    _GLIBCXX_CONVEYOR_REQUIRES(__v) _GLIBCXX_CONVEYOR_REQUIRES(__w)	\
     {									\
       __glibcxx_assert(__v.size() == __w.size());			\
       typedef _BinClos<_Name, _ValArray, _ValArray, _Tp, _Tp> _Closure;	\

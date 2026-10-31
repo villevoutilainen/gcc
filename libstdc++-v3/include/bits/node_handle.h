@@ -276,14 +276,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       key_type&
       key() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__glibcxx_assert(!this->empty());
 	return *_M_pkey;
       }
 
       mapped_type&
       mapped() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(!this->empty());
 	return *_M_pmapped;
@@ -337,7 +338,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{ return pointer_traits<__pointer<_Tp>>::pointer_to(__obj); }
 
       const key_type&
-      _M_key() const noexcept { return key(); }
+      _M_key() const noexcept { _GLIBCXX_CONVEYOR_TRUST_THIS; return key(); }
 
       template<typename _Key2, typename _Value2, typename _KeyOfValue,
 	       typename _Compare, typename _ValueAlloc>
@@ -367,8 +368,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       value_type&
       value() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__glibcxx_assert(!this->empty());
 	return *this->_M_ptr->_M_valptr();
       }
@@ -390,7 +391,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       : _Node_handle_common<_Value, _NodeAlloc>(__ptr, __alloc) { }
 
       const value_type&
-      _M_key() const noexcept { return value(); }
+      _M_key() const noexcept { _GLIBCXX_CONVEYOR_TRUST_THIS; return value(); }
 
       template<typename _Key, typename _Val, typename _KeyOfValue,
 	       typename _Compare, typename _Alloc>

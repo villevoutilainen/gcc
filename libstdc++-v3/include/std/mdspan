@@ -1168,6 +1168,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	      size_t __stride = 1;
 	      auto __body = [&](size_t __k, auto __slice)
 	      {
+		_GLIBCXX_CONVEYOR_TRUST(__inv_map);
+		_GLIBCXX_CONVEYOR_TRUST(__ret);
 		for (size_t __i = __i0; __i < __inv_map[__k]; ++__i)
 		  __stride *= _Trait::_S_padded_extent(__mapping, __i);
 
@@ -2407,7 +2409,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		return;
 	      else
 		{
-		  __glibcxx_assert(
+		  __glibcxx_assert_noconveyor(
 		      __is_representable_least_multiple<_IndexType>(
 			_PaddingValue, _M_padextent()));
 
@@ -2431,7 +2433,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    __glibcxx_assert(cmp_equal(_PaddingValue, __pad));
 	  if constexpr (_S_rank > 1 && _S_static_stride == dynamic_extent)
 	    {
-	      __glibcxx_assert(
+	      __glibcxx_assert_noconveyor(
 		__is_representable_least_multiple<_IndexType>(
 		  __pad, _M_padextent()));
 
@@ -2461,7 +2463,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 		if constexpr (_S_static_stride == dynamic_extent
 		    || _OExtents::static_extent(__stride_idx) == dynamic_extent)
-		  __glibcxx_assert(std::cmp_equal(_M_padstride(),
+		  __glibcxx_assert_noconveyor(std::cmp_equal(_M_padstride(),
 						  _M_padextent()));
 	      }
 	  }
