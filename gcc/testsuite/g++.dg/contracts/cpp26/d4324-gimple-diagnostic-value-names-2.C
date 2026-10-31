@@ -16,7 +16,7 @@ int neg () conveyor post<conveyor_assert_v> (r: r < 0);
 void call_result () conveyor { pos (neg ()); } // { dg-error "argument .neg\\(\\). provably violates" }
 // { dg-message ".neg\\(\\). is established" "" { target *-*-* } .-1 }
 
-int post_result (int a) post<conveyor_assert_v> (r: pos (r) > 0) { return a; } // { dg-error "cannot prove that .r. satisfies" }
+int post_result (int a) post<conveyor_assert_v> (r: pos (r) > 0) { return a; } // { dg-warning "cannot verify that .r. satisfies" }
 // { dg-warning "cannot verify postcondition" "" { target *-*-* } .-1 }
 
 struct P { int v; P (int n) pre<std::contracts::proven_conveyor_v> (n >= 0) : v (n) {} };
@@ -36,7 +36,7 @@ int ref_result (T &a) { return use (id (a)); } // { dg-error "is_object_address.
 void byref (int &x) conveyor pre<conveyor_assert_v> (x < 100);
 void bound_constant () conveyor { int local = 200; byref (local); } // { dg-error "argument .local. provably violates" }
 // { dg-message ".local. is established exactly 200" "" { target *-*-* } .-1 }
-void bound_copy (int k) conveyor { int l = k; byref (l); } // { dg-error "cannot prove that .l. satisfies" }
+void bound_copy (int k) conveyor { int l = k; byref (l); } // { dg-warning "cannot verify that .l. satisfies" }
 
 // With several arguments of the same value, the one the precondition
 // is about.

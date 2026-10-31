@@ -33,7 +33,7 @@ int get_checked (S& s, int i) conveyor pre<conveyor_ctrl_v>(i < s.size ())
 
 int get_unchecked (S& s, int i) conveyor
 {
-  return s.get (i); // { dg-error "cannot prove that .i. satisfies" }
+  return s.get (i); // { dg-warning "cannot verify that .i. satisfies" }
 }
 
 int main ()

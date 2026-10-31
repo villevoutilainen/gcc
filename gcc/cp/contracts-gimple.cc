@@ -7394,12 +7394,19 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
-      /* See cg_callee_pre_mandatory.  */
-      bool mandatory = (cg_callee_pre_mandatory && conveyor_active
-			&& DECL_DECLARED_CONVEYOR_P (callee));
-      if (cg_callee_pre_only && !mandatory)
+      /* See cg_callee_pre_mandatory.  Its value conjuncts are mandatory
+	 only when a failed check doesn't stop execution: one that does
+	 can't be false when CALLEE's body runs, so the caller owes only
+	 its evaluation's freedom from undefined behavior, checked where the
+	 predicate is declared.  Its is_object_address conjuncts, which no
+	 run-time check can establish, stay mandatory (MANDATORY_OA).  */
+      bool mandatory_ctx = (cg_callee_pre_mandatory && conveyor_active
+			    && DECL_DECLARED_CONVEYOR_P (callee));
+      bool mandatory = (mandatory_ctx
+			&& !contract_failure_terminates_p (contract, callee));
+      if (cg_callee_pre_only && !mandatory_ctx)
 	continue;
-      bool check_as_conveyor = (mandatory
+      bool check_as_conveyor = (mandatory_ctx
 				|| (conveyor_active
 				    && flag_contract_conveyor_proofs_gimple));
       bool check_as_symbolic = (!cg_callee_pre_only && symbolic_active
@@ -7434,7 +7441,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
       bool mandatory_oa = (flag_contract_analysis_engine != 0
 			   && check_as_conveyor);
       bool proofs = (mandatory
-		     || (check_as_conveyor
+		     || (check_as_conveyor && !cg_callee_pre_only
 			 && cg_proof_checks_p (contract, callee, true))
 		     || (check_as_symbolic
 			 && cg_proof_checks_p (contract, callee, false)));
@@ -9852,9 +9859,11 @@ cg_consult_persistent_facts (gcall *call,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
-      /* See cg_check_call's own identical 'mandatory'.  */
+      /* See cg_check_call's own 'mandatory': only a precondition whose
+	 failed check doesn't stop execution.  */
       bool mandatory = (cg_callee_pre_mandatory && conveyor_active
-			&& DECL_DECLARED_CONVEYOR_P (callee));
+			&& DECL_DECLARED_CONVEYOR_P (callee)
+			&& !contract_failure_terminates_p (contract, callee));
       if (cg_callee_pre_only && !mandatory)
 	continue;
       bool check_as_conveyor = (mandatory
@@ -13161,9 +13170,11 @@ cg_check_call_range_relational (gcall *call,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
-      /* See cg_check_call's own identical 'mandatory'.  */
+      /* See cg_check_call's own 'mandatory': only a precondition whose
+	 failed check doesn't stop execution.  */
       bool mandatory = (cg_callee_pre_mandatory && conveyor_active
-			&& DECL_DECLARED_CONVEYOR_P (callee));
+			&& DECL_DECLARED_CONVEYOR_P (callee)
+			&& !contract_failure_terminates_p (contract, callee));
       if (cg_callee_pre_only && !mandatory)
 	continue;
       bool check_as_conveyor = (mandatory
@@ -13321,9 +13332,11 @@ cg_check_call_relational_fact (gcall *call,
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
       bool symbolic_active = oa_contract_symbolic_active_cached_p (contract);
-      /* See cg_check_call's own identical 'mandatory'.  */
+      /* See cg_check_call's own 'mandatory': only a precondition whose
+	 failed check doesn't stop execution.  */
       bool mandatory = (cg_callee_pre_mandatory && conveyor_active
-			&& DECL_DECLARED_CONVEYOR_P (callee));
+			&& DECL_DECLARED_CONVEYOR_P (callee)
+			&& !contract_failure_terminates_p (contract, callee));
       if (cg_callee_pre_only && !mandatory)
 	continue;
       bool check_as_conveyor = (mandatory

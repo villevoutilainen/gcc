@@ -51,7 +51,7 @@ int use_unsound_shift (S& v, int i, int k) conveyor
 		       && k >= 0 && k <= 2)
 {
   int j = i + k;
-  return v.get (j); // { dg-error "cannot prove that .j. satisfies" }
+  return v.get (j); // { dg-warning "cannot verify that .j. satisfies" }
 }
 
 int main ()

@@ -16557,14 +16557,28 @@ static bool oa_overflow_scan;
 
 /* Set while checking a call made from conveyor code -- a conveyor
    function's body, or a strict predicate's own text -- to a conveyor
-   callee, against the callee's own preconditions.  The callee's body is
+   callee, against those of the callee's preconditions whose failed
+   check doesn't stop execution (OA_PRE_MANDATORY).  The callee's body is
    only verified free of undefined behavior assuming its preconditions
-   hold, so failing to establish one from conveyor code breaks the
-   conveyor rules: it's a mandatory error, not a proof warning, and it's
-   checked regardless of -fcontract-conveyor-proofs.  See
+   hold; one whose failure terminates can't be false when the body runs,
+   so conveyor code owes only its evaluation's freedom from undefined
+   behavior, which is checked where the predicate is declared.  One that
+   doesn't terminate must be established: failing to is a mandatory
+   error, not a proof warning, checked regardless of
+   -fcontract-conveyor-proofs.  (is_object_address conjuncts, which no
+   run-time check can establish, are always the caller's:
+   oa_handle_call_precondition_obligation.)  See
    oa_check_mandatory_callee_preconditions.  */
 
 static bool oa_callee_pre_mandatory;
+
+/* Which of a callee's preconditions the conveyor value-obligation checks
+   look at: all of them, only those whose failed check doesn't stop
+   execution (the mandatory ones, see OA_CALLEE_PRE_MANDATORY), or only
+   those whose failure does.  */
+
+enum oa_pre_selection_kind { OA_PRE_ALL, OA_PRE_MANDATORY, OA_PRE_TERMINATING };
+static oa_pre_selection_kind oa_pre_selection = OA_PRE_ALL;
 
 /* Set while scanning a never_proven_conveyor predicate's own text for
    OA_CALLEE_PRE_MANDATORY's obligations alone: a never-proven predicate
@@ -18181,6 +18195,26 @@ contract_precondition_caller_obligation_p (tree contract, tree callee)
   return true;
 }
 
+/* Whether the conveyor value-obligation checks of a call to CALLEE look at
+   CONTRACT, one of its preconditions: one the caller owes at all, and of
+   the kind OA_PRE_SELECTION asks for.  */
+
+static bool
+oa_value_obligation_contract_p (tree contract, tree callee)
+{
+  if (!contract_precondition_caller_obligation_p (contract, callee))
+    return false;
+  switch (oa_pre_selection)
+    {
+    case OA_PRE_MANDATORY:
+      return !contract_failure_terminates_p (contract, callee);
+    case OA_PRE_TERMINATING:
+      return contract_failure_terminates_p (contract, callee);
+    default:
+      return true;
+    }
+}
+
 /* Is CONTRACT active for the shared fact-tracking substrate (m_predicate_
    fact_map/m_contract_scalar_range_map/m_contract_field_range_map) --
    i.e. conveyor-active *or* symbolic-active?  These maps are a single,
@@ -18308,7 +18342,7 @@ oa_call_conveyor_obligation_status (tree call, bool *forced_out, bool *strict_ou
       if (!oa_contract_conveyor_active_p (contract, callee))
 	continue;
       if (PRECONDITION_P (contract)
-	  && !contract_precondition_caller_obligation_p (contract, callee))
+	  && !oa_value_obligation_contract_p (contract, callee))
 	continue;
       if (forced_out && oa_contract_conveyor_analysis_forced_p (contract, callee))
 	*forced_out = true;
@@ -20261,7 +20295,7 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
-      if (!contract_precondition_caller_obligation_p (contract, callee))
+      if (!oa_value_obligation_contract_p (contract, callee))
 	continue;
       bool active = conveyor
 	? oa_contract_conveyor_active_p (contract, callee)
@@ -20773,7 +20807,7 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
-      if (!contract_precondition_caller_obligation_p (contract, callee))
+      if (!oa_value_obligation_contract_p (contract, callee))
 	continue;
       if (!oa_contract_conveyor_active_p (contract, callee))
 	continue;
@@ -21290,14 +21324,26 @@ oa_call_to_conveyor_callee_p (tree call)
 }
 
 /* CALL, a call to a conveyor function made from conveyor code, must
-   establish the callee's own preconditions: see oa_callee_pre_
-   mandatory.  */
+   establish those of the callee's own preconditions whose failed check
+   doesn't stop execution: see oa_callee_pre_mandatory.  One whose
+   failure terminates is a proof obligation as in ordinary code: checked
+   under -fcontract-conveyor-proofs, or when the precondition asks for it
+   (analyzed_conveyor, proven_conveyor) -- from a strict predicate's text
+   too, as the GIMPLE engine does.  */
 
 static void
 oa_check_mandatory_callee_preconditions (tree call, oa_env &env)
 {
-  auto mandatory = make_temp_override (oa_callee_pre_mandatory, true);
-  oa_handle_call_conveyor_proof_obligation (call, env);
+  {
+    auto mandatory = make_temp_override (oa_callee_pre_mandatory, true);
+    auto sel = make_temp_override (oa_pre_selection, OA_PRE_MANDATORY);
+    oa_handle_call_conveyor_proof_obligation (call, env);
+  }
+  auto sel = make_temp_override (oa_pre_selection, OA_PRE_TERMINATING);
+  bool forced = false;
+  oa_call_conveyor_obligation_status (call, &forced, NULL);
+  if (flag_contract_conveyor_proofs || forced)
+    oa_handle_call_conveyor_proof_obligation (call, env);
 }
 
 /* The calls within *EXPR, part of a strict predicate's own text, to
@@ -23173,7 +23219,7 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
-      if (!contract_precondition_caller_obligation_p (contract, callee))
+      if (!oa_value_obligation_contract_p (contract, callee))
 	continue;
       if (!oa_contract_conveyor_active_p (contract, callee))
 	continue;
@@ -23405,7 +23451,7 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
       tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
-      if (!contract_precondition_caller_obligation_p (contract, callee))
+      if (!oa_value_obligation_contract_p (contract, callee))
 	continue;
       if (!oa_contract_conveyor_active_p (contract, callee))
 	continue;
