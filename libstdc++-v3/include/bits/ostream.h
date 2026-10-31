@@ -398,7 +398,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *         unsigned char.
       */
       __ostream_type&
-      put(char_type __c);
+      put(char_type __c)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
       /**
        *  @brief  Character string insertion.
@@ -417,7 +418,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *         unsigned char.
       */
       __ostream_type&
-      write(const char_type* __s, streamsize __n);
+      write(const char_type* __s, streamsize __n)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
       ///@}
 
       /**
@@ -452,7 +454,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  that function fails, sets failbit.
       */
       __ostream_type&
-      seekp(pos_type);
+      seekp(pos_type)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
       /**
        *  @brief  Changing the current write position.
@@ -464,7 +467,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  If that function fails, sets failbit.
       */
        __ostream_type&
-      seekp(off_type, ios_base::seekdir);
+      seekp(off_type, ios_base::seekdir)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
     protected:
       basic_ostream()

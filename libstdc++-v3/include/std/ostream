@@ -202,6 +202,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
   // Defined for C++26, supported as an extension to C++23.
   inline void println(ostream& __os)
+  _GLIBCXX_CONVEYOR_REQUIRES(__os)
   {
 #if defined(_WIN32) && !defined(__CYGWIN__)
     if constexpr (__unicode::__literal_encoding_is_utf8())

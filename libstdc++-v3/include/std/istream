@@ -418,7 +418,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *         unsigned char.
       */
       __istream_type&
-      get(char_type& __c);
+      get(char_type& __c)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
       /**
        *  @brief  Simple multiple-character extraction.
@@ -445,7 +446,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *         unsigned char.
       */
       __istream_type&
-      get(char_type* __s, streamsize __n, char_type __delim);
+      get(char_type* __s, streamsize __n, char_type __delim)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
       /**
        *  @brief  Simple multiple-character extraction.
@@ -457,6 +459,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       __istream_type&
       get(char_type* __s, streamsize __n)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return this->get(__s, __n, this->widen('\n')); }
 
       /**
@@ -479,7 +482,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        * state.
       */
       __istream_type&
-      get(__streambuf_type& __sb, char_type __delim);
+      get(__streambuf_type& __sb, char_type __delim)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
       /**
        *  @brief  Extraction into another streambuf.
@@ -490,6 +494,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       __istream_type&
       get(__streambuf_type& __sb)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return this->get(__sb, this->widen('\n')); }
 
       /**
@@ -518,7 +523,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  the array.
       */
       __istream_type&
-      getline(char_type* __s, streamsize __n, char_type __delim);
+      getline(char_type* __s, streamsize __n, char_type __delim)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
       /**
        *  @brief  String extraction.
@@ -530,6 +536,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       __istream_type&
       getline(char_type* __s, streamsize __n)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return this->getline(__s, __n, this->widen('\n')); }
 
       /**
@@ -553,18 +560,22 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  the Standard.
       */
       __istream_type&
-      ignore(streamsize __n, int_type __delim);
+      ignore(streamsize __n, int_type __delim)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
       __istream_type&
-      ignore(streamsize __n);
+      ignore(streamsize __n)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
       __istream_type&
-      ignore();
+      ignore()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
 #if __cplusplus > 202302L
       [[__gnu__::__always_inline__]]
       __istream_type&
       ignore(streamsize __n, char __delim) requires same_as<_CharT, char>
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return ignore(__n, traits_type::to_int_type(__delim)); }
 #endif
 
@@ -595,7 +606,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *         unsigned char.
       */
       __istream_type&
-      read(char_type* __s, streamsize __n);
+      read(char_type* __s, streamsize __n)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
       /**
        *  @brief  Extraction until the buffer is exhausted, but no more.
@@ -631,7 +643,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *         as required by DR 60.
       */
       __istream_type&
-      putback(char_type __c);
+      putback(char_type __c)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
       /**
        *  @brief  Unextracting the previous character.
@@ -647,7 +660,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *         as required by DR 60.
       */
       __istream_type&
-      unget();
+      unget()
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
       /**
        *  @brief  Synchronizing the stream buffer.
@@ -695,7 +709,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *         not affect the next call to @c gcount().
       */
       __istream_type&
-      seekg(pos_type);
+      seekg(pos_type)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
       /**
        *  @brief  Changing the current read position.
@@ -711,7 +726,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *         not affect the next call to @c gcount().
       */
       __istream_type&
-      seekg(off_type, ios_base::seekdir);
+      seekg(off_type, ios_base::seekdir)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
       ///@}
 
     protected:
@@ -1083,7 +1099,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   */
   template<typename _CharT, typename _Traits>
     basic_istream<_CharT, _Traits>&
-    ws(basic_istream<_CharT, _Traits>& __is);
+    ws(basic_istream<_CharT, _Traits>& __is)
+    _GLIBCXX_CONVEYOR_REQUIRES(__is) _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
 
 #if __cplusplus >= 201103L
   // C++11 27.7.2.6 Rvalue stream extraction [istream.rvalue]

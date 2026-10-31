@@ -71,10 +71,40 @@ namespace census
     return n;
   }
 
+  // Ordinary code chaining stream members and manipulators: each link
+  // returns the stream it was given, promised, so the next one's
+  // requirement on it is met -- std::endl through put (), istream's own
+  // members, and a user inserter that requires and promises its stream.
+  struct Point { int x, y; };
+
+  std::ostream &operator<< (std::ostream &os, const Point &p)
+    pre<std::contracts::conveyor_assert_v> (std::is_object_address (&os))
+    post<std::contracts::never_proven_conveyor_v>
+      (r: std::is_object_address (&r))
+  {
+    return os << '(' << p.x << ", " << p.y << ')';
+  }
+
+  int stream_chains ()
+  {
+    std::ostringstream os;
+    os << "x" << std::endl << std::setw (3) << 4 << std::flush;
+    os.put ('a').write ("bc", 2) << std::ends;
+    os << Point { 1, 2 } << std::endl;
+    std::istringstream is ("1 2 3");
+    int a, b, c;
+    is >> std::ws >> a;
+    is.ignore ().get ();
+    is.putback ('2').unget ();
+    is >> b >> c;
+    return a + b + c + int (os.str ().size ());
+  }
+
   int all ()
   {
     int n = integers<int> () + integers<unsigned> () + integers<long long> ()
-	    + integers<unsigned char> () + streams ();
+	    + integers<unsigned char> () + streams ()
+	    + stream_chains ();
     using namespace std::chrono;
     auto d = 1h + 30min + 5s;
     n += duration_cast<seconds> (d).count () + floor<minutes> (d).count ();
