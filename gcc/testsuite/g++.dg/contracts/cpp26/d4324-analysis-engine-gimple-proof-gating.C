@@ -2,8 +2,9 @@
 // call-site proof checks of ordinary code follow -fcontract-conveyor-
 // proofs, as the AST engine's do: without it, only the mandatory
 // is_object_address obligation is reported.  A call from conveyor code
-// must establish a conveyor callee's preconditions regardless, as a
-// conveyor rule, so those are errors without the flag too.  See also
+// is checked the same way: a callee's precondition whose failed check
+// stops execution needn't be proven there, only its is_object_address
+// conjuncts, which no run-time check can establish.  See also
 // d4324-analysis-engine-gimple-proof-gating-proofs.C.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-analysis-engine=gimple" }
@@ -17,8 +18,8 @@ int oa (int *p) conveyor pre<conveyor_assert_v> (std::is_object_address (p)) { r
 
 void calls (int x, int *q) conveyor
 {
-  dv (x); // { dg-error "cannot prove that .x. is nonzero" }
-  rg (x); // { dg-error "cannot prove that .x. satisfies the precondition" }
+  dv (x); // { dg-bogus "cannot" }
+  rg (x); // { dg-bogus "cannot" }
   oa (q); // { dg-error "cannot prove .is_object_address. for .q., required by the precondition of" }
 }
 

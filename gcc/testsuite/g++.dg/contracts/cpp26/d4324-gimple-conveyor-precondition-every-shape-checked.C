@@ -10,20 +10,35 @@
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-analysis-engine=gimple" }
 
 #include <contracts>
-using std::contracts::conveyor_assert_v;
+namespace sc = std::contracts;
+using sc::conveyor_assert_v;
+
+// The callees' control object observes a violation, so their
+// preconditions stay a mandatory obligation of conveyor code: one whose
+// failed check stops execution is owed only as a proof
+// (d4324-conveyor-callee-precondition-mandatory.C).
+struct observing_conveyor
+{
+  static constexpr bool is_ignored (sc::assertion_static_info) noexcept { return false; }
+  static constexpr bool constify (sc::assertion_static_info) noexcept { return false; }
+  static constexpr bool assumable (sc::assertion_static_info) noexcept { return false; }
+  static constexpr bool is_conveyor (sc::assertion_static_info) noexcept { return true; }
+  constexpr void operator() (const sc::assertion_context &) const noexcept { }
+};
+inline constexpr observing_conveyor observing_v{};
 
 int g (int) conveyor;
-void ne1 (int x) conveyor pre<conveyor_assert_v> (x != 1);
-void ner (int &x) conveyor pre<conveyor_assert_v> (x != 1);
-void nzr (int &x) conveyor pre<conveyor_assert_v> (x != 0);
-void nzc (const int &x) conveyor pre<conveyor_assert_v> (x != 0);
-void off (int x) conveyor pre<conveyor_assert_v> (x > 0 && x < 1000 && x - 2 != 1);
-void two (int x, int y) conveyor pre<conveyor_assert_v> (x != y);
-void alt (int x) conveyor pre<conveyor_assert_v> (x == 3 || x == 5);
-void flag (bool b) conveyor pre<conveyor_assert_v> (b);
-void callc (int x) conveyor pre<conveyor_assert_v> (g (x) != 2);
+void ne1 (int x) conveyor pre<observing_v> (x != 1);
+void ner (int &x) conveyor pre<observing_v> (x != 1);
+void nzr (int &x) conveyor pre<observing_v> (x != 0);
+void nzc (const int &x) conveyor pre<observing_v> (x != 0);
+void off (int x) conveyor pre<observing_v> (x > 0 && x < 1000 && x - 2 != 1);
+void two (int x, int y) conveyor pre<observing_v> (x != y);
+void alt (int x) conveyor pre<observing_v> (x == 3 || x == 5);
+void flag (bool b) conveyor pre<observing_v> (b);
+void callc (int x) conveyor pre<observing_v> (g (x) != 2);
 void deref (int *p) conveyor
-  pre<conveyor_assert_v> (std::is_object_address (p) && *p != 0);
+  pre<conveyor_assert_v> (std::is_object_address (p)) pre<observing_v> (*p != 0);
 
 // Proven.
 void p1 (int k) conveyor { if (k > 5) ne1 (k); }

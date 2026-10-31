@@ -5,11 +5,12 @@
 // this declared precondition -- unlike the plain body-internal assert
 // it replaces -- is actually enforced at other conveyor callers' own
 // call sites, not just within saturating_div's own body). A literal
-// zero divisor is rejected outright; so is an unconstrained one, since a
-// conveyor caller must establish a conveyor callee's preconditions (a
-// conveyor rule, not just a proof); a properly guarded divisor is
-// silently proven safe.  The same holds for a call in a strict
-// predicate, whose earlier conjuncts can establish the divisor.
+// zero divisor is rejected outright; an unconstrained one is reported as
+// unverified, a proof like in ordinary code: the precondition's failed
+// check stops execution, so even a conveyor caller needn't establish it;
+// a properly guarded divisor is silently proven safe.  The same holds for
+// a call in a strict predicate, whose earlier conjuncts can establish the
+// divisor.
 // { dg-options "-D_GLIBCXX_CONVEYOR_ASSERTIONS -D_GLIBCXX_PRECONDITION_ASSERTIONS -fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
 // { dg-do compile { target c++26 } }
 
@@ -23,7 +24,7 @@ int literal_zero_bad(int x) conveyor
 
 int unconstrained_unknown(int x, int y) conveyor
 {
-  return std::saturating_div(x, y); // { dg-error "cannot prove that .y. is nonzero" }
+  return std::saturating_div(x, y); // { dg-warning "cannot verify that .y. is nonzero" }
 }
 
 int guarded_ok(int x, int y) conveyor
@@ -34,7 +35,7 @@ int guarded_ok(int x, int y) conveyor
 }
 
 void pred_unconstrained(int x, int y)
-  pre<std::contracts::conveyor_assert_v>(std::saturating_div(x, y) > 0) // { dg-error "cannot prove that .y. is nonzero" }
+  pre<std::contracts::conveyor_assert_v>(std::saturating_div(x, y) > 0) // { dg-warning "cannot verify that .y. is nonzero" }
 { }
 
 void pred_guarded(int x, int y)

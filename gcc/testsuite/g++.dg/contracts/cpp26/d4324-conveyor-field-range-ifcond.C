@@ -35,7 +35,7 @@ int use_checked (S& s) conveyor
 
 int use_unchecked (S& s) conveyor
 {
-  return s.get (); // { dg-error "cannot prove that field .S::count." }
+  return s.get (); // { dg-warning "cannot verify that field .S::count." }
 }
 
 int main () { S s; s.count = 5; return use_checked (s) + use_unchecked (s); }
