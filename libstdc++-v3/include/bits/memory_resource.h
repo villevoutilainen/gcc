@@ -524,7 +524,11 @@ namespace pmr
 	static _GLIBCXX20_CONSTEXPR void
 	destroy(allocator_type&, _Up* __p)
 	noexcept(is_nothrow_destructible<_Up>::value)
-	{ __p->~_Up(); }
+	{
+	  // As destroy_at, until the raw-memory functions require it.
+	  _GLIBCXX_CONVEYOR_TRUST(*__p);
+	  __p->~_Up();
+	}
 
       /**
        *  @brief  The maximum supported allocation size

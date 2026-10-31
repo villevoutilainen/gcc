@@ -3575,6 +3575,7 @@ namespace __format
       _GLIBCXX_CONSTEXPR_FORMAT void
       _M_overflow() override
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	auto __s = this->_M_used();
 	if (__s.empty()) [[unlikely]]
 	  return; // Nothing in the buffer to transfer to _M_seq.

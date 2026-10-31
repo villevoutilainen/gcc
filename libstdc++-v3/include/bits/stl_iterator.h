@@ -1143,7 +1143,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_NODISCARD __attribute__((__always_inline__))
       _GLIBCXX_CONSTEXPR
       reference
-      operator*() const _GLIBCXX_NOEXCEPT
+      operator*() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *_M_current; }
 
       _GLIBCXX_NODISCARD __attribute__((__always_inline__))
@@ -1172,7 +1172,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __attribute__((__always_inline__))
       _GLIBCXX14_CONSTEXPR
       __normal_iterator&
-      operator--() _GLIBCXX_NOEXCEPT
+      operator--() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	--_M_current;
 	return *this;
@@ -1660,7 +1660,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #endif
 
       _GLIBCXX17_CONSTEXPR move_iterator&
-      operator--()
+      operator--() _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	--_M_current;
 	return *this;

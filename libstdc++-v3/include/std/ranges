@@ -3153,6 +3153,7 @@ namespace views::__adaptor
 	  {
 	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    auto __update_inner = [this] (const iterator_t<_Base>& __x) -> auto&& {
+	      _GLIBCXX_CONVEYOR_TRUST(__x);
 	      if constexpr (_S_ref_is_glvalue)
 		return *__x;
 	      else
@@ -10346,7 +10347,10 @@ namespace ranges
     {
       __glibcxx_assert(!_M_it.valueless_by_exception());
       using reference = __detail::__concat_reference_t<__maybe_const_t<_Const, _Vs>...>;
-      return std::visit([](auto&& __it) -> reference { return *__it; }, _M_it);
+      return std::visit([](auto&& __it) -> reference {
+	  _GLIBCXX_CONVEYOR_TRUST(__it);
+	  return *__it;
+	}, _M_it);
     }
 
     constexpr _Iterator&
