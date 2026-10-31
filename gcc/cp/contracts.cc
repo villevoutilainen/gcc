@@ -22266,19 +22266,8 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 	 on its own, mirroring exactly how a field-range postcondition
 	 already re-establishes a fact for the caller after an invalidating
 	 intervening call.  */
-      if (conveyor_established)
-	for (unsigned i = 0; i < conjuncts.length (); ++i)
-	  {
-	    tree arg;
-	    if (!is_object_address_call_p (*conjuncts[i], &arg))
-	      continue;
-	    tree substituted
-	      = oa_substitute_call_arg (callee, call,
-					 STRIP_ANY_LOCATION_WRAPPER (arg));
-	    tree identity;
-	    if (substituted && oa_object_identity_decl (substituted, &identity))
-	      env.set (identity, true);
-	  }
+      /* (Established whether or not fact tracking is on, by
+	 oa_establish_call_postcondition_argument_facts.)  */
 
 	      auto_vec<oa_symbolic_field_group> field_groups;
 	      oa_collect_contract_field_ranges (cond, &field_groups);
@@ -22370,6 +22359,146 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
 						call_groups[i].range,
 						conveyor_established);
 		}
+    }
+}
+
+/* For oa_post_arg_subst_r: CALL to CALLEE, whose postcondition is being
+   restated in terms of CALL's own arguments.  OK goes false if it can't
+   be: the condition names the result, or an argument with side
+   effects.  */
+
+struct oa_post_arg_subst_data
+{
+  tree callee, call, result_id;
+  bool ok;
+};
+
+/* Replace each of CALLEE's parameters in a postcondition's condition by
+   what CALL passes: a reference parameter's use ('*r') by the object it
+   is bound to, a pointer parameter's dereference ('*p') by the object
+   the argument designates ('*&n' is 'n'), any other parameter by the
+   argument's value.  */
+
+static tree
+oa_post_arg_subst_r (tree *tp, int *walk_subtrees, void *data_)
+{
+  oa_post_arg_subst_data *d = (oa_post_arg_subst_data *) data_;
+  if (TYPE_P (*tp))
+    {
+      *walk_subtrees = 0;
+      return NULL_TREE;
+    }
+  if (d->result_id && *tp == d->result_id)
+    {
+      d->ok = false;
+      return *tp;
+    }
+  if (INDIRECT_REF_P (*tp))
+    {
+      tree op = TREE_OPERAND (*tp, 0);
+      STRIP_NOPS (op);
+      if (TREE_CODE (op) == PARM_DECL)
+	{
+	  tree obj;
+	  if (TYPE_REF_P (TREE_TYPE (op)))
+	    obj = oa_substitute_value_arg (d->callee, d->call, op);
+	  else
+	    {
+	      tree arg = oa_substitute_call_arg (d->callee, d->call, op);
+	      if (arg)
+		STRIP_NOPS (arg);
+	      obj = (arg && TREE_CODE (arg) == ADDR_EXPR
+		     ? TREE_OPERAND (arg, 0)
+		     : arg ? build_fold_indirect_ref (arg) : NULL_TREE);
+	    }
+	  if (!obj || TREE_SIDE_EFFECTS (obj))
+	    {
+	      d->ok = false;
+	      return *tp;
+	    }
+	  *tp = obj;
+	  *walk_subtrees = 0;
+	  return NULL_TREE;
+	}
+    }
+  if (TREE_CODE (*tp) == PARM_DECL)
+    {
+      /* A reference parameter not dereferenced ('&r'): not a value.  */
+      tree arg = (TYPE_REF_P (TREE_TYPE (*tp)) ? NULL_TREE
+		  : oa_substitute_value_arg (d->callee, d->call, *tp));
+      if (!arg || TREE_SIDE_EFFECTS (arg))
+	{
+	  d->ok = false;
+	  return *tp;
+	}
+      *tp = arg;
+      *walk_subtrees = 0;
+    }
+  return NULL_TREE;
+}
+
+/* After CALL: what its callee's postconditions say about the objects its
+   arguments designate holds -- through a pointer parameter, that it
+   points to an object ('post (is_object_address (p))', as a function
+   constructing one there promises) or what that object's value is
+   ('post (*p > 0)'), and through a reference parameter what the bound
+   object's value is ('post (n > 0)').  Only a conveyor postcondition
+   whose failed check stops execution counts, as for the facts it
+   establishes about a result.  Run after the call's own invalidation of
+   what it may modify, and whether or not fact tracking is on: the
+   mandatory checks use these facts.  */
+
+static void
+oa_establish_call_postcondition_argument_facts (tree call, oa_env &env)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return;
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract)
+	  || !oa_contract_conveyor_active_p (contract, callee)
+	  || !contract_failure_terminates_p (contract, callee))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+      tree result_id = POSTCONDITION_IDENTIFIER (contract);
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree arg;
+	  if (is_object_address_call_p (*conjuncts[i], &arg))
+	    {
+	      arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+	      if (result_id && cp_tree_equal (arg, result_id))
+		continue;
+	      tree substituted = oa_substitute_call_arg (callee, call, arg);
+	      tree identity;
+	      if (substituted && oa_object_identity_decl (substituted, &identity))
+		env.set (identity, true);
+	      continue;
+	    }
+	  oa_post_arg_subst_data d = { callee, call, result_id, true };
+	  tree subst = unshare_expr (*conjuncts[i]);
+	  cp_walk_tree (&subst, oa_post_arg_subst_r, &d, NULL);
+	  if (!d.ok)
+	    continue;
+	  /* As a contract_assert's own conjuncts establish
+	     (oa_handle_assertion_stmt): 'E != 0' as a nonzero fact, a
+	     comparison as a range.  */
+	  tree nz;
+	  if (oa_nonzero_conjunct_p (subst, &nz))
+	    {
+	      nz = STRIP_ANY_LOCATION_WRAPPER (nz);
+	      if (VAR_P (nz) || TREE_CODE (nz) == PARM_DECL)
+		env.nz_set (nz, true);
+	    }
+	  else
+	    oa_refine_single_comparison (subst, env, true);
+	}
     }
 }
 
@@ -26391,6 +26520,7 @@ oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
       oa_invalidate_symbolic_scalar_range_for_call_args (t, *e);
       if (tracking)
 	oa_handle_call_symbolic_postcondition_establishment (t, *e);
+      oa_establish_call_postcondition_argument_facts (t, *e);
       /* Mechanism B (-fcontract-symbolic-runtime-checks, injected runtime
 	 check codegen) is deliberately kept CALL_EXPR-only here, even
 	 though T can now also be an AGGR_INIT_EXPR: both of these read

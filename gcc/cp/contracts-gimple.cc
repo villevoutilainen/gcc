@@ -10534,6 +10534,80 @@ cg_invalidate_persistent_facts_for_call_arg (tree arg, function *fun,
    its own (necessarily stale-by-then) invalidation of the same
    identity.  */
 
+static bool cg_scalar_memory_tracking_p (function *, tree);
+
+/* The fact key, in STATE.field, of the scalar object ARG -- CALL's
+   argument for a pointer or reference parameter -- designates: a scalar
+   in memory whose address is passed ('&n'), or the object a pointer
+   value designates (cg_referent_key).  */
+
+static bool
+cg_call_arg_referent_key (tree arg, std::pair<tree, tree> *key)
+{
+  STRIP_NOPS (arg);
+  if (TREE_CODE (arg) == ADDR_EXPR)
+    {
+      tree obj = TREE_OPERAND (arg, 0);
+      if ((VAR_P (obj) || TREE_CODE (obj) == PARM_DECL)
+	  && INTEGRAL_TYPE_P (TREE_TYPE (obj))
+	  && cg_scalar_memory_tracking_p (cfun, obj))
+	{
+	  *key = cg_scalar_memory_fact_key (obj);
+	  return true;
+	}
+      return false;
+    }
+  if (TREE_CODE (arg) != SSA_NAME || !POINTER_TYPE_P (TREE_TYPE (arg)))
+    return false;
+  tree identity = cg_gimple_object_identity (arg);
+  if (!identity || TREE_CODE (identity) != SSA_NAME)
+    return false;
+  *key = { identity, NULL_TREE };
+  return true;
+}
+
+/* Whether CONJUNCT, of a postcondition of CALLEE, compares the scalar
+   object one of CALLEE's pointer or reference parameters designates
+   ('*p > 0', a reference parameter's 'n != 0') with an integer
+   constant: its parameter's position in *ARGNO, the comparison as
+   '*p CODE VAL' in *CODE and *VAL.  */
+
+static bool
+cg_referent_comparison_p (tree conjunct, tree callee, unsigned *argno,
+			  tree_code *code, tree *val)
+{
+  conjunct = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  tree_code c = TREE_CODE (conjunct);
+  if (TREE_CODE_CLASS (c) != tcc_comparison)
+    return false;
+  tree a = TREE_OPERAND (conjunct, 0), b = TREE_OPERAND (conjunct, 1);
+  auto strip = [] (tree t)
+    {
+      t = STRIP_ANY_LOCATION_WRAPPER (t);
+      while (CONVERT_EXPR_P (t) || TREE_CODE (t) == NON_LVALUE_EXPR)
+	t = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
+      return t;
+    };
+  a = strip (a);
+  b = strip (b);
+  if (TREE_CODE (a) == INTEGER_CST)
+    {
+      std::swap (a, b);
+      c = swap_tree_comparison (c);
+    }
+  if (TREE_CODE (b) != INTEGER_CST || !INDIRECT_REF_P (a))
+    return false;
+  tree parm = strip (TREE_OPERAND (a, 0));
+  if (TREE_CODE (parm) != PARM_DECL
+      || !(POINTER_TYPE_P (TREE_TYPE (parm)) || TYPE_REF_P (TREE_TYPE (parm)))
+      || !INTEGRAL_TYPE_P (TREE_TYPE (a))
+      || !cg_find_param_position (callee, parm, argno))
+    return false;
+  *code = c;
+  *val = b;
+  return true;
+}
+
 static void
 cg_establish_persistent_facts_for_call (gcall *call,
 					 cg_field_object_cache &field_object_cache,
@@ -10591,6 +10665,36 @@ cg_establish_persistent_facts_for_call (gcall *call,
 	    identity = cg_gimple_object_identity (substituted);
 	  if (identity)
 	    state.pred.put (identity, { pred_fn, !negated, conveyor_enabled });
+	}
+
+      /* What the call leaves in the scalar object a pointer or reference
+	 parameter designates ('post (*p > 0)', a reference parameter's
+	 'post (n != 0)'): a fact about that object's value, until it is
+	 stored to or passed to a call.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  unsigned argno;
+	  tree_code code;
+	  tree val;
+	  std::pair<tree, tree> key;
+	  if (!cg_referent_comparison_p (*conjuncts[i], callee, &argno, &code,
+					 &val)
+	      || argno >= gimple_call_num_args (call)
+	      || !cg_call_arg_referent_key (gimple_call_arg (call, argno), &key))
+	    continue;
+	  cg_field_fact *existing = state.field.get (key);
+	  cg_field_fact fact = existing ? *existing
+			       : cg_field_fact { {}, conveyor_enabled };
+	  if (code == NE_EXPR)
+	    {
+	      if (integer_zerop (val))
+		fact.nonzero = true;
+	      else
+		continue;
+	    }
+	  else
+	    cg_tighten_range_bound (fact.range, code, wi::to_widest (val));
+	  state.field.put (key, fact);
 	}
 
       auto_vec<cg_field_group_lite> field_groups;
@@ -14392,6 +14496,7 @@ public:
   unsigned mark () const { return m_undo.length (); }
   void restore (unsigned mark);
   void establish (gcall *call);
+  void establish_call_postconditions (gcall *call);
 
 private:
   enum which { OA, NZ, RANGE, TYPE_BOUND, FRANGE };
@@ -14774,6 +14879,52 @@ cg_expr_computes_p (tree e, tree v, gcall *call, tree struct_var, tree decls,
 	return true;
     }
   return false;
+}
+
+/* After CALL: the pointers it passes that its callee's conveyor
+   postcondition says point to an object ('post (is_object_address (p))',
+   as a function constructing one there promises), for the statements
+   CALL dominates -- the postcondition counterpart of a contract_assert's
+   facts (establish).  A postcondition counts only if its failed check
+   stops execution.  */
+
+void
+cg_assert_fact_scope::establish_call_postconditions (gcall *call)
+{
+  tree callee = gimple_call_fndecl (call);
+  if (!callee || !flag_contract_conveyor_proofs_gimple)
+    return;
+  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+    {
+      tree contract = CONTRACT_STATEMENT (as);
+      if (!POSTCONDITION_P (contract)
+	  || !oa_contract_conveyor_active_cached_p (contract)
+	  || !oa_contract_failure_terminates_cached_p (contract))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree arg;
+	  if (!is_object_address_call_p (*conjuncts[i], &arg))
+	    continue;
+	  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+	  while (TREE_CODE (arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arg))
+	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	  unsigned argno;
+	  if (TREE_CODE (arg) != PARM_DECL
+	      || !POINTER_TYPE_P (TREE_TYPE (arg))
+	      || !cg_find_param_position (callee, arg, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree val = gimple_call_arg (call, argno);
+	  if (TREE_CODE (val) == SSA_NAME)
+	    put_fact (OA, val, { /*conveyor_established=*/true });
+	}
+    }
 }
 
 void
@@ -16680,6 +16831,7 @@ pass_contracts_gimple::execute_1 (function *fun)
 					    assert_memory_verdicts,
 					    established_frange))
 		assert_facts.establish (call);
+	      assert_facts.establish_call_postconditions (call);
 	    }
 	}
     };
