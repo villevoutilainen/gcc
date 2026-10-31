@@ -38141,6 +38141,55 @@ contract_condition_proven_true_p (tree condition)
    the caller is responsible for that.
    This is called during genericization.  */
 
+/* Whether contract condition COND was left unsubstituted: it holds a
+   template parameter, an unresolved name or a construct only a template
+   has, or names something of a dependent type.  */
+
+static bool
+contract_condition_unsubstituted_p (tree cond)
+{
+  return cp_walk_tree_without_duplicates (&cond, [](tree *tp, int *ws, void *)
+    -> tree
+    {
+      tree t = *tp;
+      if (TYPE_P (t))
+	{
+	  *ws = 0;
+	  return dependent_type_p (t) ? t : NULL_TREE;
+	}
+      if (DECL_P (t))
+	{
+	  *ws = 0;
+	  return (TREE_TYPE (t) && dependent_type_p (TREE_TYPE (t))
+		  ? t : NULL_TREE);
+	}
+      switch (TREE_CODE (t))
+	{
+	case TEMPLATE_PARM_INDEX:
+	case IDENTIFIER_NODE:
+	case SCOPE_REF:
+	case TEMPLATE_ID_EXPR:
+	case CAST_EXPR:
+	case STATIC_CAST_EXPR:
+	case REINTERPRET_CAST_EXPR:
+	case CONST_CAST_EXPR:
+	case DYNAMIC_CAST_EXPR:
+	case ARROW_EXPR:
+	case MODOP_EXPR:
+	case EXPR_PACK_EXPANSION:
+	case NONTYPE_ARGUMENT_PACK:
+	case TRAIT_EXPR:
+	case SIZEOF_EXPR:
+	case ALIGNOF_EXPR:
+	case NOEXCEPT_EXPR:
+	case PSEUDO_DTOR_EXPR:
+	  return t;
+	default:
+	  return NULL_TREE;
+	}
+    }, NULL) != NULL_TREE;
+}
+
 tree
 build_contract_check (tree contract)
 {
@@ -38162,13 +38211,15 @@ build_contract_check (tree contract)
 
   /* After errors, a template's contract may never have been substituted
      for this function (push_tinst_level declines once a template has gone
-     wrong), leaving its condition dependent: nothing to check.  Only then:
-     uses_template_parms also counts an 'auto' a condition's operand was
-     declared with.  */
+     wrong), leaving its condition dependent: nothing to check.  Not
+     uses_template_parms, which also counts a variable declared 'auto':
+     every contract naming one would be dropped after any error at all,
+     an unrelated one included.  */
   if (seen_error ())
     {
       tree cond = CONTRACT_CONDITION (contract);
-      if (cond && cond != error_mark_node && uses_template_parms (cond))
+      if (cond && cond != error_mark_node
+	  && contract_condition_unsubstituted_p (cond))
 	return NULL_TREE;
     }
 
