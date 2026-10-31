@@ -4939,6 +4939,7 @@ static tree cg_contract_check_call_p (gcall *, tree *, tree *, tree *);
 static tree cg_contract_check_decl_value (gcall *, tree, tree, tree);
 static bool cg_predicate_item8_p (tree);
 static bool cg_predicate_ordinary_assert_p (tree);
+static bool cg_predicate_never_proven_conveyor_p (tree);
 
 /* The value integer memory reference REF (a field, 'this->d_seconds')
    holds just before AT: what a dominating store to it wrote, with no
@@ -14100,6 +14101,7 @@ cg_seed_predicate_site_field_facts (function *fun, cg_dom_fact_state &seed)
       || (cg_predicate_entry_checked
 	  && cg_predicate_entry_checked->contains (fun->decl))
       || !(cg_predicate_item8_p (fun->decl)
+	   || cg_predicate_never_proven_conveyor_p (fun->decl)
 	   || cg_predicate_ordinary_assert_p (fun->decl)))
     return;
   for (const cg_site_field_fact &f : **facts)
