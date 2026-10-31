@@ -180,7 +180,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       [[__nodiscard__]]
       reference
-      operator*() const noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      operator*() const noexcept
       { return *static_cast<_Node*>(this->_M_node)->_M_valptr(); }
 
       [[__nodiscard__]]
@@ -271,7 +271,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       [[__nodiscard__]]
       reference
-      operator*() const noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      operator*() const noexcept
       { return *static_cast<_Node*>(this->_M_node)->_M_valptr(); }
 
       [[__nodiscard__]]
@@ -898,7 +898,6 @@ namespace __fwdlist
 	       typename = std::_RequireInputIter<_InputIterator>>
 	forward_list(_InputIterator __first, _InputIterator __last,
 		     const _Alloc& __al = _Alloc())
-	_GLIBCXX_CONVEYOR_REQUIRES(__al)
 	: _Base(_Node_alloc_type(__al))
 	{ _M_range_initialize(__first, __last); }
 
@@ -913,9 +912,9 @@ namespace __fwdlist
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	forward_list(from_range_t, _Rg&& __rg, const _Alloc& __a = _Alloc())
-	_GLIBCXX_CONVEYOR_REQUIRES(__rg)
 	: _Base(_Node_alloc_type(__a))
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  auto __to = this->_M_impl._M_head._M_base_ptr();
 	  auto __first = ranges::begin(__rg);
 	  const auto __last = ranges::end(__rg);
@@ -1086,8 +1085,10 @@ namespace __fwdlist
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	void
-	assign_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	assign_range(_Rg&& __rg)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  static_assert(assignable_from<_Tp&, ranges::range_reference_t<_Rg>>);
 
 	  auto __first = ranges::begin(__rg);
@@ -1166,8 +1167,8 @@ namespace __fwdlist
 
       /// Get a copy of the memory allocation object.
       allocator_type
-      get_allocator() const noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return allocator_type(this->_M_get_Node_allocator()); }
+      get_allocator() const noexcept
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return allocator_type(this->_M_get_Node_allocator()); }
 
       // 23.3.4.3 iterators:
 
@@ -1374,8 +1375,10 @@ namespace __fwdlist
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	void
-	prepend_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	prepend_range(_Rg&& __rg)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  forward_list __tmp(from_range, std::forward<_Rg>(__rg),
 			     get_allocator());
 	  if (!__tmp.empty())
@@ -1521,8 +1524,9 @@ namespace __fwdlist
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	iterator
 	insert_range_after(const_iterator __position, _Rg&& __rg)
-	_GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  forward_list __tmp(from_range, std::forward<_Rg>(__rg),
 			     get_allocator());
 	  return _M_splice_after(__position, __tmp.before_begin(), __tmp.end());
@@ -1653,16 +1657,16 @@ namespace __fwdlist
        */
       void
       splice_after(const_iterator __pos, forward_list&& __list) noexcept
-      _GLIBCXX_CONVEYOR_REQUIRES(__list) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__list);
 	if (!__list.empty())
 	  _M_splice_after(__pos, __list.before_begin(), __list.end());
       }
 
       void
       splice_after(const_iterator __pos, forward_list& __list) noexcept
-      _GLIBCXX_CONVEYOR_REQUIRES(__list) _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { splice_after(__pos, std::move(__list)); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; _GLIBCXX_CONVEYOR_TRUST(__list); splice_after(__pos, std::move(__list)); }
 
       /**
        *  @brief  Insert element from another %forward_list.

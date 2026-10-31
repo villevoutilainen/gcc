@@ -1137,7 +1137,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	_GLIBCXX26_CONSTEXPR
 	deque(from_range_t, _Rg&& __rg, const allocator_type& __a = _Alloc())
-	_GLIBCXX_CONVEYOR_REQUIRES(__rg)
 	: deque(__a)
 	{ append_range(std::forward<_Rg>(__rg)); }
 #endif
@@ -1268,8 +1267,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	constexpr void
-	assign_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	assign_range(_Rg&& __rg)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  static_assert(assignable_from<_Tp&, ranges::range_reference_t<_Rg>>);
 
 	  if constexpr (ranges::forward_range<_Rg> || ranges::sized_range<_Rg>)
@@ -1464,8 +1465,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  default constructed elements are appended.
        */
       _GLIBCXX26_CONSTEXPR void
-      resize(size_type __new_size) _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      resize(size_type __new_size)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	const size_type __len = size();
 	if (__new_size > __len)
 	  _M_default_append(__new_size - __len);
@@ -1502,8 +1504,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       void
       resize(size_type __new_size, value_type __x = value_type())
 #endif
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	const size_type __len = size();
 	if (__new_size > __len)
 	  _M_fill_insert(this->_M_impl._M_finish, __new_size - __len, __x);
@@ -1955,8 +1957,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	_GLIBCXX26_CONSTEXPR iterator
-	insert_range(const_iterator __pos, _Rg&& __rg)
-	_GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
+	insert_range(const_iterator __pos, _Rg&& __rg);
 
       /**
        * @brief Prepend a range at the beginning of the deque.
@@ -1965,7 +1966,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	_GLIBCXX26_CONSTEXPR void
-	prepend_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
+	prepend_range(_Rg&& __rg);
 
       /**
        * @brief Append a range at the end of the deque.
@@ -1974,7 +1975,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	_GLIBCXX26_CONSTEXPR void
-	append_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
+	append_range(_Rg&& __rg);
 #endif // containers_ranges
 
       /**
@@ -2035,8 +2036,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX26_CONSTEXPR void
       swap(deque& __x) _GLIBCXX_NOEXCEPT
-      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+_GLIBCXX_CONVEYOR_TRUST_THIS;
+_GLIBCXX_CONVEYOR_TRUST(__x);
 #if __cplusplus >= 201103L
 	__glibcxx_assert_noconveyor
 	  (_Alloc_traits::propagate_on_container_swap::value
@@ -2578,8 +2580,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     _GLIBCXX_NODISCARD
     inline _GLIBCXX26_CONSTEXPR bool
     operator==(const deque<_Tp, _Alloc>& __x, const deque<_Tp, _Alloc>& __y)
-    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-    { return __x.size() == __y.size()
+    { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __x.size() == __y.size()
 	     && std::equal(__x.begin(), __x.end(), __y.begin()); }
 
 #if __cpp_lib_three_way_comparison

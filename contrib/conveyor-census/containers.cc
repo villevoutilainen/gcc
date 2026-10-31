@@ -158,8 +158,11 @@ namespace census
       std::multimap<K, V, std::less<K>, A<P>> m;
       m.emplace (K (1), 2);
       n += m.count (K (1));
-      auto [b, e] = m.equal_range (K (1));
-      n += b == e;
+      // Not a structured binding: its names are std::get results, which
+      // promise nothing (only hardened accessors do), and the iterators'
+      // operator== is a conveyor that needs its operands' objects.
+      auto r = m.equal_range (K (1));
+      n += r.first == r.second;
     }
     {
       std::set<K, std::less<K>, A<K>> s, t;

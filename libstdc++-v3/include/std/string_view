@@ -373,10 +373,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr int
       compare(basic_string_view __str) const noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	const size_type __rlen = std::min(this->_M_len, __str._M_len);
 	int __ret = traits_type::compare(this->_M_str, __str._M_str, __rlen);
 	if (__ret == 0)
@@ -800,8 +798,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline basic_ostream<_CharT, _Traits>&
     operator<<(basic_ostream<_CharT, _Traits>& __os,
 	       basic_string_view<_CharT,_Traits> __str)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__os) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
-    { return __ostream_insert(__os, __str.data(), __str.size()); }
+    { _GLIBCXX_CONVEYOR_TRUST(__os); return __ostream_insert(__os, __str.data(), __str.size()); }
 #endif // HOSTED
 
   // basic_string_view typedef names

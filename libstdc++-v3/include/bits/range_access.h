@@ -54,8 +54,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     begin(_Container& __cont) noexcept(noexcept(__cont.begin()))
     -> decltype(__cont.begin())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
-    { return __cont.begin(); }
+    { _GLIBCXX_CONVEYOR_TRUST(__cont); return __cont.begin(); }
 
   /**
    *  @brief  Return an iterator pointing to the first element of
@@ -67,8 +66,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     begin(const _Container& __cont) noexcept(noexcept(__cont.begin()))
     -> decltype(__cont.begin())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
-    { return __cont.begin(); }
+    { _GLIBCXX_CONVEYOR_TRUST(__cont); return __cont.begin(); }
 
   /**
    *  @brief  Return an iterator pointing to one past the last element of
@@ -81,8 +79,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     end(_Container& __cont) noexcept(noexcept(__cont.end()))
     -> decltype(__cont.end())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
-    { return __cont.end(); }
+    { _GLIBCXX_CONVEYOR_TRUST(__cont); return __cont.end(); }
 
   /**
    *  @brief  Return an iterator pointing to one past the last element of
@@ -95,8 +92,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     end(const _Container& __cont) noexcept(noexcept(__cont.end()))
     -> decltype(__cont.end())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
-    { return __cont.end(); }
+    { _GLIBCXX_CONVEYOR_TRUST(__cont); return __cont.end(); }
 
   /**
    *  @brief  Return an iterator pointing to the first element of the array.
@@ -169,8 +165,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     rbegin(_Container& __cont) noexcept(noexcept(__cont.rbegin()))
       -> decltype(__cont.rbegin())
-      _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
-    { return __cont.rbegin(); }
+    { _GLIBCXX_CONVEYOR_TRUST(__cont); return __cont.rbegin(); }
 
   /**
    *  @brief  Return a reverse iterator pointing to the last element of
@@ -183,8 +178,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     rbegin(const _Container& __cont) noexcept(noexcept(__cont.rbegin()))
       -> decltype(__cont.rbegin())
-      _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
-    { return __cont.rbegin(); }
+    { _GLIBCXX_CONVEYOR_TRUST(__cont); return __cont.rbegin(); }
 
   /**
    *  @brief  Return a reverse iterator pointing one past the first element of
@@ -197,8 +191,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     rend(_Container& __cont) noexcept(noexcept(__cont.rend()))
       -> decltype(__cont.rend())
-      _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
-    { return __cont.rend(); }
+    { _GLIBCXX_CONVEYOR_TRUST(__cont); return __cont.rend(); }
 
   /**
    *  @brief  Return a reverse iterator pointing one past the first element of
@@ -211,8 +204,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR auto
     rend(const _Container& __cont) noexcept(noexcept(__cont.rend()))
       -> decltype(__cont.rend())
-      _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
-    { return __cont.rend(); }
+    { _GLIBCXX_CONVEYOR_TRUST(__cont); return __cont.rend(); }
 
   /**
    *  @brief  Return a reverse iterator pointing to the last element of
@@ -301,8 +293,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     size(const _Container& __cont) noexcept(noexcept(__cont.size()))
     -> decltype(__cont.size())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
     {
+_GLIBCXX_CONVEYOR_TRUST(__cont);
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       contract_assert<std::contracts::never_proven_conveyor_v>
 	(std::is_object_address (__builtin_addressof (__cont)));
@@ -332,8 +324,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     empty(const _Container& __cont) noexcept(noexcept(__cont.empty()))
     -> decltype(__cont.empty())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
     {
+_GLIBCXX_CONVEYOR_TRUST(__cont);
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       contract_assert<std::contracts::never_proven_conveyor_v>
 	(std::is_object_address (__builtin_addressof (__cont)));
@@ -375,8 +367,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     data(_Container& __cont) noexcept(noexcept(__cont.data()))
     -> decltype(__cont.data())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
     {
+_GLIBCXX_CONVEYOR_TRUST(__cont);
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       contract_assert<std::contracts::never_proven_conveyor_v>
 	(std::is_object_address (__builtin_addressof (__cont)));
@@ -394,8 +386,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     data(const _Container& __cont) noexcept(noexcept(__cont.data()))
     -> decltype(__cont.data())
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__cont)
     {
+_GLIBCXX_CONVEYOR_TRUST(__cont);
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       contract_assert<std::contracts::never_proven_conveyor_v>
 	(std::is_object_address (__builtin_addressof (__cont)));

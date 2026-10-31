@@ -1136,7 +1136,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       explicit
       list(const allocator_type& __a) _GLIBCXX_NOEXCEPT
-      _GLIBCXX_CONVEYOR_REQUIRES(__a)
       : _Base(_Node_alloc_type(__a)) { }
 
 #if __cplusplus >= 201103L
@@ -1163,7 +1162,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       list(size_type __n, const value_type& __value,
 	   const allocator_type& __a = allocator_type())
-	   _GLIBCXX_CONVEYOR_REQUIRES(__a)
       : _Base(_Node_alloc_type(__a))
       { _M_fill_initialize(__n, __value); }
 #else
@@ -1214,7 +1212,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       list(initializer_list<value_type> __l,
 	   const allocator_type& __a = allocator_type())
-      _GLIBCXX_CONVEYOR_REQUIRES(__a)
       : _Base(_Node_alloc_type(__a))
       { _M_initialize_dispatch(__l.begin(), __l.end(), __false_type()); }
 
@@ -1260,14 +1257,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	       typename = std::_RequireInputIter<_InputIterator>>
 	list(_InputIterator __first, _InputIterator __last,
 	     const allocator_type& __a = allocator_type())
-	_GLIBCXX_CONVEYOR_REQUIRES(__a)
 	: _Base(_Node_alloc_type(__a))
 	{ _M_initialize_dispatch(__first, __last, __false_type()); }
 #else
       template<typename _InputIterator>
 	list(_InputIterator __first, _InputIterator __last,
 	     const allocator_type& __a = allocator_type())
-	_GLIBCXX_CONVEYOR_REQUIRES(__a)
 	: _Base(_Node_alloc_type(__a))
 	{
 	  // Check whether it's an integral type.  If so, it's not an iterator.
@@ -1283,9 +1278,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	list(from_range_t, _Rg&& __rg, const _Alloc& __a = _Alloc())
-	_GLIBCXX_CONVEYOR_REQUIRES(__rg)
 	: _Base(_Node_alloc_type(__a))
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  auto __first = ranges::begin(__rg);
 	  const auto __last = ranges::end(__rg);
 	  for (; __first != __last; ++__first)
@@ -1383,8 +1378,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	void
-	assign_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	assign_range(_Rg&& __rg)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  static_assert(assignable_from<_Tp&, ranges::range_reference_t<_Rg>>);
 
 	  iterator __first1 = begin();
@@ -1460,8 +1457,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       /// Get a copy of the memory allocation object.
       allocator_type
-      get_allocator() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return allocator_type(_Base::_M_get_Node_allocator()); }
+      get_allocator() const _GLIBCXX_NOEXCEPT
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return allocator_type(_Base::_M_get_Node_allocator()); }
 
       // iterators
       /**
@@ -1510,8 +1507,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_NODISCARD
       const_iterator
-      end() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return const_iterator(this->_M_impl._M_node._M_base()); }
+      end() const _GLIBCXX_NOEXCEPT
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return const_iterator(this->_M_impl._M_node._M_base()); }
 
       /**
        *  Returns a read/write reverse iterator that points to the last
@@ -1621,8 +1618,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       /**  Returns the size() of the largest possible %list.  */
       _GLIBCXX_NODISCARD
       size_type
-      max_size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return _Node_alloc_traits::max_size(_M_get_Node_allocator()); }
+      max_size() const _GLIBCXX_NOEXCEPT
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _Node_alloc_traits::max_size(_M_get_Node_allocator()); }
 
 #if __cplusplus >= 201103L
       /**
@@ -1772,8 +1769,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	void
-	prepend_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	prepend_range(_Rg&& __rg)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  list __tmp(from_range, std::forward<_Rg>(__rg), get_allocator());
 	  if (!__tmp.empty())
 	    splice(begin(), __tmp);
@@ -1793,8 +1792,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	void
-	append_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	append_range(_Rg&& __rg)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  list __tmp(from_range, std::forward<_Rg>(__rg), get_allocator());
 	  if (!__tmp.empty())
 	    splice(end(), __tmp);
@@ -2015,8 +2016,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	iterator
 	insert_range(const_iterator __position, _Rg&& __rg)
-	_GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  list __tmp(from_range, std::forward<_Rg>(__rg), get_allocator());
 	  if (!__tmp.empty())
 	    {
@@ -2138,8 +2140,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #else
       splice(iterator __position, list& __x)
 #endif
-      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__x);
 	if (!__x.empty())
 	  {
 	    _M_check_equal_allocators(__x);

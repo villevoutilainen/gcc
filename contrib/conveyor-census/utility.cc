@@ -106,7 +106,9 @@ namespace census
     auto none = [] { return std::optional<T> (); };
     n += c.or_else (none).has_value () + std::move (o).or_else (none).has_value ();
     std::optional<std::optional<T>> nested (std::in_place, std::in_place, 4);
-    n += nested.value ().has_value ();
+    // operator*, hardened, promises the object it returns; value () isn't
+    // and doesn't, and has_value () needs its object.
+    n += (*nested).has_value ();
     std::optional<long> l (3);
     std::optional<long> m (l), k (std::move (l));
     m = std::optional<int> (5);

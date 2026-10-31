@@ -70,6 +70,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     vector<_Tp, _Alloc>::
     reserve(size_type __n)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__n > this->max_size())
 	__throw_length_error(__N("vector::reserve"));
       if (this->capacity() < __n)
@@ -1036,6 +1037,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       insert_range(const_iterator __pos, _Rg&& __rg)
       -> iterator
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__rg);
 	if (__pos == cend())
 	  {
 	    const auto __ins_idx = size();

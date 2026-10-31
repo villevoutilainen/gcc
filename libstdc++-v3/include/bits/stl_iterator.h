@@ -257,7 +257,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       */
       _GLIBCXX_NODISCARD
       _GLIBCXX17_CONSTEXPR reference
-      operator*() const _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      operator*() const
       {
 	_Iterator __tmp = current;
 	--__tmp;
@@ -277,7 +277,6 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr pointer
       operator->() const
       requires is_pointer_v<_Iterator>
-      _GLIBCXX_CONVEYOR_RETURNS_OBJECT_PTR
       {
 	_Iterator __tmp = current;
 	--__tmp;
@@ -1269,8 +1268,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	requires requires {
 	  std::__detail::__synth3way(__lhs.base(), __rhs.base());
 	}
-	_GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
-	{ return std::__detail::__synth3way(__lhs.base(), __rhs.base()); }
+	{ _GLIBCXX_CONVEYOR_TRUST(__lhs); _GLIBCXX_CONVEYOR_TRUST(__rhs); return std::__detail::__synth3way(__lhs.base(), __rhs.base()); }
 #else
        // Forward iterator requirements
       template<typename _Iter>
@@ -1404,8 +1402,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	operator-(const __normal_iterator& __lhs,
 		  const __normal_iterator<_Iter, _Container>& __rhs)
 #endif
-	_GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
-	{ return __lhs.base() - __rhs.base(); }
+	{ _GLIBCXX_CONVEYOR_TRUST(__lhs); _GLIBCXX_CONVEYOR_TRUST(__rhs); return __lhs.base() - __rhs.base(); }
 
       _GLIBCXX_NODISCARD __attribute__((__always_inline__))
       friend
@@ -1631,7 +1628,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[__nodiscard__]]
       _GLIBCXX17_CONSTEXPR reference
-      operator*() const _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      operator*() const
 #ifdef __glibcxx_ranges
       { return ranges::iter_move(_M_current); }
 #else
@@ -1821,9 +1818,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline _GLIBCXX17_CONSTEXPR bool
     operator==(const move_iterator<_Iterator>& __x,
 	       const move_iterator<_Iterator>& __y)
-	       _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
     // N.B. No constraints, x.base() == y.base() is always well-formed.
-    { return __x.base() == __y.base(); }
+    { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __x.base() == __y.base(); }
 
 #ifdef __cpp_lib_three_way_comparison
   template<three_way_comparable _Iterator>
@@ -1876,8 +1872,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     operator-(const move_iterator<_IteratorL>& __x,
 	      const move_iterator<_IteratorR>& __y)
     -> decltype(__x.base() - __y.base())
-    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-    { return __x.base() - __y.base(); }
+    { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __x.base() - __y.base(); }
 
   template<typename _Iterator>
     [[__nodiscard__]]

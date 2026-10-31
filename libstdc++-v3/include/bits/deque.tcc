@@ -951,6 +951,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       insert_range(const_iterator __pos, _Rg&& __rg)
       -> iterator
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__rg);
 	if (__pos == cend())
 	  {
 	    const auto __ins_idx = size();
@@ -990,6 +992,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        deque<_Tp, _Alloc>::
        prepend_range(_Rg&& __rg)
        {
+	 _GLIBCXX_CONVEYOR_TRUST_THIS;
+	 _GLIBCXX_CONVEYOR_TRUST(__rg);
 	 if (empty())
 	   append_range(std::forward<_Rg>(__rg));
 	 else if constexpr (ranges::forward_range<_Rg> || ranges::sized_range<_Rg>)
@@ -1032,6 +1036,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        deque<_Tp, _Alloc>::
        append_range(_Rg&& __rg)
        {
+	 _GLIBCXX_CONVEYOR_TRUST_THIS;
+	 _GLIBCXX_CONVEYOR_TRUST(__rg);
 	 if constexpr (ranges::forward_range<_Rg> || ranges::sized_range<_Rg>)
 	   {
 	     const size_type __n(ranges::distance(__rg));

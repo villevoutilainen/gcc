@@ -88,7 +88,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   /// Points to a statically-allocated object derived from error_category.
   [[__nodiscard__, __gnu__::__const__]]
   const error_category&
-  future_category() noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
+  future_category() noexcept;
 
   /// Overload of make_error_code for `future_errc`.
   [[__nodiscard__]]
@@ -968,11 +968,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	this->_M_get_result();
       }
 
-      shared_future<void> share() noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
-      ;
+      shared_future<void> share() noexcept;
     };
 
 
@@ -1123,22 +1119,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Res>
     inline __basic_future<_Res>::
     __basic_future(shared_future<_Res>&& __sf) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>
-      (std::is_object_address (__builtin_addressof (__sf)))
-#endif
     : _M_state(std::move(__sf._M_state))
-    { }
+    { _GLIBCXX_CONVEYOR_TRUST(__sf); }
 
   template<typename _Res>
     inline __basic_future<_Res>::
     __basic_future(future<_Res>&& __uf) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>
-      (std::is_object_address (__builtin_addressof (__uf)))
-#endif
     : _M_state(std::move(__uf._M_state))
-    { }
+    { _GLIBCXX_CONVEYOR_TRUST(__uf); }
 
   // _GLIBCXX_RESOLVE_LIB_DEFECTS
   // 2556. Wide contract for future::share()
@@ -1154,10 +1142,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
   inline shared_future<void>
   future<void>::share() noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
-  { return shared_future<void>(std::move(*this)); }
+  { _GLIBCXX_CONVEYOR_TRUST_THIS; return shared_future<void>(std::move(*this)); }
 
   /// Primary template for promise
   template<typename _Res>

@@ -389,11 +389,11 @@ namespace __rb_tree
       : _M_node(__x) { }
 
       reference
-      operator*() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      operator*() const _GLIBCXX_NOEXCEPT
       { return *static_cast<_Node_ptr>(_M_node)->_M_valptr(); }
 
       pointer
-      operator->() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT_PTR
+      operator->() const _GLIBCXX_NOEXCEPT
       { return static_cast<_Node_ptr>(_M_node)->_M_valptr(); }
 
       _Rb_tree_iterator&
@@ -468,11 +468,11 @@ namespace __rb_tree
       : _M_node(__it._M_node) { }
 
       reference
-      operator*() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      operator*() const _GLIBCXX_NOEXCEPT
       { return *static_cast<_Node_ptr>(_M_node)->_M_valptr(); }
 
       pointer
-      operator->() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_RETURNS_OBJECT_PTR
+      operator->() const _GLIBCXX_NOEXCEPT
       { return static_cast<_Node_ptr>(_M_node)->_M_valptr(); }
 
       _Rb_tree_const_iterator&
@@ -2338,8 +2338,8 @@ namespace __rb_tree
 
       friend bool
       operator==(const _Rb_tree& __x, const _Rb_tree& __y)
-      _GLIBCXX_CONVEYOR_REQUIRES(__x)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__x);
 	return __x.size() == __y.size()
 	  && std::equal(__x.begin(), __x.end(), __y.begin());
       }

@@ -205,10 +205,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       { return std::get<0>(_M_t); }
       _GLIBCXX23_CONSTEXPR
       pointer    _M_ptr() const noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
-      { return std::get<0>(_M_t); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return std::get<0>(_M_t); }
       _GLIBCXX23_CONSTEXPR
       _Dp&       _M_deleter() noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
@@ -219,10 +216,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       { return std::get<1>(_M_t); }
       _GLIBCXX23_CONSTEXPR
       const _Dp& _M_deleter() const noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
-      { return std::get<1>(_M_t); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return std::get<1>(_M_t); }
 
       _GLIBCXX23_CONSTEXPR
       void reset(pointer __p) noexcept

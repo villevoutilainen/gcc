@@ -244,7 +244,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       map(initializer_list<value_type> __l,
 	  const _Compare& __comp = _Compare(),
 	  const allocator_type& __a = allocator_type())
-	  _GLIBCXX_CONVEYOR_REQUIRES(__a)
       : _M_t(__comp, _Pair_alloc_type(__a))
       { _M_t._M_insert_range_unique(__l.begin(), __l.end()); }
 
@@ -408,8 +407,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  according to the keys.
        */
       iterator
-      end() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return _M_t.end(); }
+      end() _GLIBCXX_NOEXCEPT
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.end(); }
 
       /**
        *  Returns a read-only (constant) iterator that points one past the last
@@ -417,8 +416,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  the keys.
        */
       const_iterator
-      end() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return _M_t.end(); }
+      end() const _GLIBCXX_NOEXCEPT
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.end(); }
 
       /**
        *  Returns a read/write reverse iterator that points to the last pair in
@@ -1266,19 +1265,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       iterator
       erase(const_iterator __position)
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
-      { return _M_t.erase(__position); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.erase(__position); }
 
       // LWG 2059
       _GLIBCXX_ABI_TAG_CXX11
       iterator
       erase(iterator __position)
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
-      { return _M_t.erase(__position); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.erase(__position); }
       /// @}
 #else
       /**
@@ -1467,8 +1460,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  either be 0 (not present) or 1 (present).
        */
       size_type
-      count(const key_type& __x) const _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return _M_t.find(__x) == _M_t.end() ? 0 : 1; }
+      count(const key_type& __x) const
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.find(__x) == _M_t.end() ? 0 : 1; }
 
 #ifdef __glibcxx_generic_associative_lookup // C++ >= 14
       template<typename _Kt>
@@ -1486,8 +1479,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  @return  True if there is an element with the specified key.
        */
       bool
-      contains(const key_type& __x) const _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return _M_t.find(__x) != _M_t.end(); }
+      contains(const key_type& __x) const
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.find(__x) != _M_t.end(); }
 
       template<typename _Kt>
 	auto

@@ -98,17 +98,12 @@ namespace ranges
       // D4324/P2680: see __max_diff_type::operator/='s own comment for why
       // this is a precondition rather than a body assert, and why it's
       // gated on _GLIBCXX_CONVEYOR_ASSERTIONS.
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
-      { return *this += 1; }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return *this += 1; }
 
       constexpr __max_size_type
       operator++(int) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	auto __tmp = *this;
 	++*this;
 	return __tmp;
@@ -117,17 +112,12 @@ namespace ranges
       constexpr __max_size_type&
       operator--() noexcept
       // D4324/P2680: see __max_diff_type::operator/='s own comment.
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
-      { return *this -= 1; }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return *this -= 1; }
 
       constexpr __max_size_type
       operator--(int) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	auto __tmp = *this;
 	--*this;
 	return __tmp;
@@ -229,12 +219,9 @@ namespace ranges
       constexpr __max_size_type&
       operator%=(const __max_size_type& __r) noexcept
       // D4324/P2680: see __max_diff_type::operator/='s own comment.
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	if (!_M_msb && !__r._M_msb) [[likely]]
 	  _M_val %= __r._M_val;
 	else
@@ -379,44 +366,32 @@ namespace ranges
       friend constexpr __max_size_type
       operator/(__max_size_type __l, const __max_size_type& __r) noexcept
       // D4324/P2680: see __max_diff_type::operator/='s own comment.
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	__l /= __r;
 	return __l;
       }
 
       friend constexpr __max_size_type
       operator%(__max_size_type __l, const __max_size_type& __r) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	__l %= __r;
 	return __l;
       }
 
       friend constexpr __max_size_type
       operator<<(__max_size_type __l, const __max_size_type& __r) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	__l <<= __r;
 	return __l;
       }
 
       friend constexpr __max_size_type
       operator>>(__max_size_type __l, const __max_size_type& __r) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	__l >>= __r;
 	return __l;
       }
@@ -527,10 +502,7 @@ namespace ranges
 
       constexpr explicit
       operator bool() const noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
-      { return _M_rep != 0; }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_rep != 0; }
 
       constexpr __max_diff_type
       operator+() const noexcept
@@ -538,31 +510,20 @@ namespace ranges
 
       constexpr __max_diff_type
       operator-() const noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
-      { return __max_diff_type(-_M_rep); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return __max_diff_type(-_M_rep); }
 
       constexpr __max_diff_type
       operator~() const noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
-      { return __max_diff_type(~_M_rep); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return __max_diff_type(~_M_rep); }
 
       constexpr __max_diff_type&
       operator++() noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
-      { return *this += 1; }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return *this += 1; }
 
       constexpr __max_diff_type
       operator++(int) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	auto __tmp = *this;
 	++*this;
 	return __tmp;
@@ -570,17 +531,12 @@ namespace ranges
 
       constexpr __max_diff_type&
       operator--() noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
-      { return *this -= 1; }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return *this -= 1; }
 
       constexpr __max_diff_type
       operator--(int) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	auto __tmp = *this;
 	--*this;
 	return __tmp;
@@ -588,36 +544,27 @@ namespace ranges
 
       constexpr __max_diff_type&
       operator+=(const __max_diff_type& __r) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	_M_rep += __r._M_rep;
 	return *this;
       }
 
       constexpr __max_diff_type&
       operator-=(const __max_diff_type& __r) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	_M_rep -= __r._M_rep;
 	return *this;
       }
 
       constexpr __max_diff_type&
       operator*=(const __max_diff_type& __r) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	_M_rep *= __r._M_rep;
 	return *this;
       }
@@ -708,24 +655,18 @@ namespace ranges
 
       constexpr __max_diff_type&
       operator<<=(const __max_diff_type& __r) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	_M_rep.operator<<=(__r._M_rep);
 	return *this;
       }
 
       constexpr __max_diff_type&
       operator>>=(const __max_diff_type& __r) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	// Arithmetic right shift.
 	const auto __msb = _M_rep._M_msb;
 	_M_rep >>= __r._M_rep;
@@ -807,77 +748,56 @@ namespace ranges
 
       friend constexpr __max_diff_type
       operator+(__max_diff_type __l, const __max_diff_type& __r) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	__l += __r;
 	return __l;
       }
 
       friend constexpr __max_diff_type
       operator-(__max_diff_type __l, const __max_diff_type& __r) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	__l -= __r;
 	return __l;
       }
 
       friend constexpr __max_diff_type
       operator*(__max_diff_type __l, const __max_diff_type& __r) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	__l *= __r;
 	return __l;
       }
 
       friend constexpr __max_diff_type
       operator/(__max_diff_type __l, const __max_diff_type& __r) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	__l /= __r;
 	return __l;
       }
 
       friend constexpr __max_diff_type
       operator%(__max_diff_type __l, const __max_diff_type& __r) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	__l %= __r;
 	return __l;
       }
 
       friend constexpr __max_diff_type
       operator<<(__max_diff_type __l, const __max_diff_type& __r) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	__l <<= __r;
 	return __l;
       }
 
       friend constexpr __max_diff_type
       operator>>(__max_diff_type __l, const __max_diff_type& __r) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__r)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	__l >>= __r;
 	return __l;
       }

@@ -63,11 +63,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     void
     basic_string<_CharT, _Traits, _Alloc>::
     swap(basic_string& __s) _GLIBCXX_NOEXCEPT
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
-      && std::is_object_address (__builtin_addressof (__s)))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(__s);
       if (this == std::__addressof(__s))
 	return;
 
@@ -232,10 +230,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     typename basic_string<_CharT, _Traits, _Alloc>::pointer
     basic_string<_CharT, _Traits, _Alloc>::
     _M_create(size_type& __capacity, size_type __old_capacity)
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__capacity > max_size())
 	std::__throw_length_error(__N("basic_string::_M_create"));
       if (__capacity > __old_capacity && __capacity < 2 * __old_capacity)
@@ -288,11 +284,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 	  _GLIBCXX20_CONSTEXPR
 	  ~_Guard()
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (_M_guarded))
-#endif
-	  { if (_M_guarded) _M_guarded->_M_dispose(); }
+	  { _GLIBCXX_CONVEYOR_TRUST_THIS; if (_M_guarded) _M_guarded->_M_dispose(); }
 
 	  basic_string* _M_guarded;
 	} __guard(this);
@@ -353,11 +345,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 	  _GLIBCXX20_CONSTEXPR
 	  ~_Guard()
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (_M_guarded))
-#endif
-	  { if (_M_guarded) _M_guarded->_M_dispose(); }
+	  { _GLIBCXX_CONVEYOR_TRUST_THIS; if (_M_guarded) _M_guarded->_M_dispose(); }
 
 	  basic_string* _M_guarded;
 	} __guard(this);
@@ -463,11 +451,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     void
     basic_string<_CharT, _Traits, _Alloc>::
     _M_assign(const basic_string& __str)
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
-      && std::is_object_address (__builtin_addressof (__str)))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(__str);
       if (this != std::__addressof(__str))
 	{
 	  // D4324/P2680: same "same-typed 'this'/reference parameter,
@@ -628,10 +614,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     void
     basic_string<_CharT, _Traits, _Alloc>::
     resize(size_type __n, _CharT __c)
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const size_type __size = this->size();
       if (__size < __n)
 	this->append(__n - __size, __c);
@@ -686,10 +670,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     basic_string<_CharT, _Traits, _Alloc>::
     _M_replace_aux(size_type __pos1, size_type __n1, size_type __n2,
 		   _CharT __c)
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_check_length(__n1, __n2, "basic_string::_M_replace_aux");
 
       const size_type __old_size = this->size();
@@ -751,6 +733,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     _M_replace(size_type __pos, size_type __len1, const _CharT* __s,
 	       const size_type __len2)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_check_length(__len1, __len2, "basic_string::_M_replace");
 
       const size_type __old_size = this->size();
@@ -813,12 +796,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr void
     basic_string<_CharT, _Traits, _Alloc>::
     __resize_and_overwrite(const size_type __n, _Operation __op)
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-    pre<std::contracts::never_proven_conveyor_v>
-      (std::is_object_address (__builtin_addressof (__op)))
-#endif
-    { resize_and_overwrite<_Operation&>(__n, __op); }
+    { _GLIBCXX_CONVEYOR_TRUST_THIS; _GLIBCXX_CONVEYOR_TRUST(__op); resize_and_overwrite<_Operation&>(__n, __op); }
 #endif
 
 #if __cplusplus >= 201103L
@@ -831,12 +809,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #else
     __resize_and_overwrite(const size_type __n, _Operation __op)
 #endif
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-    pre<std::contracts::never_proven_conveyor_v>
-      (std::is_object_address (__builtin_addressof (__op)))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(__op);
       reserve(__n);
       _CharT* const __p = _M_data();
 #if __cpp_lib_is_constant_evaluated
@@ -862,11 +837,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	: _M_this(__t), _M_r(__r) { }
 #endif
 	_GLIBCXX20_CONSTEXPR ~_Terminator()
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (_M_this))
-#endif
-	{ _M_this->_M_set_length(_M_r); }
+	{ _GLIBCXX_CONVEYOR_TRUST_THIS; _M_this->_M_set_length(_M_r); }
 	basic_string* _M_this;
 	size_type _M_r;
       };

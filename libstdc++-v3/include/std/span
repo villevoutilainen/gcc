@@ -256,10 +256,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	span(_Range&& __range)
 	noexcept(noexcept(ranges::data(__range))
 		  && noexcept(ranges::size(__range)))
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	pre<std::contracts::never_proven_conveyor_v>
-	  (std::is_object_address (__builtin_addressof (__range)))
-#endif
+	_GLIBCXX_CONVEYOR_TRUST_PRE(__range)
 	: _M_ptr(ranges::data(__range)), _M_extent(ranges::size(__range))
 	{ }
 
@@ -273,7 +270,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	constexpr
 	explicit(extent != dynamic_extent && _OExtent == dynamic_extent)
 	span(const span<_OType, _OExtent>& __s) noexcept
-	_GLIBCXX_CONVEYOR_REQUIRES(__s)
+	_GLIBCXX_CONVEYOR_TRUST_PRE(__s)
 	: _M_ptr(__s.data()), _M_extent(__s.size())
 	{ }
 

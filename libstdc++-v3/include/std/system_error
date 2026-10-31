@@ -184,12 +184,12 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
   /// Error category for `errno` error codes.
   [[__nodiscard__, __gnu__::__const__]]
   const error_category&
-  generic_category() noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
+  generic_category() noexcept;
 
   /// Error category for other error codes defined by the OS.
   [[__nodiscard__, __gnu__::__const__]]
   const error_category&
-  system_category() noexcept _GLIBCXX_CONVEYOR_RETURNS_OBJECT;
+  system_category() noexcept;
 
   /// @}
 
@@ -583,6 +583,8 @@ namespace __adl_only
 
     system_error(int __v, const error_category& __ecat, const string& __what)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (__ecat)))
     pre<std::contracts::never_proven_conveyor_v>
       (std::is_object_address (__builtin_addressof (__what)))
 #endif

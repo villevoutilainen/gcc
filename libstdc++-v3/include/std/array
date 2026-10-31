@@ -121,8 +121,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       // DR 776.
       _GLIBCXX20_CONSTEXPR void
-      fill(const value_type& __u) _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { std::fill_n(begin(), size(), __u); }
+      fill(const value_type& __u)
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; std::fill_n(begin(), size(), __u); }
 
       _GLIBCXX20_CONSTEXPR void
       swap(array& __other)

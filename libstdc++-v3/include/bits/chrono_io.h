@@ -2185,8 +2185,8 @@ namespace __format
 	typename basic_format_context<_Out, _CharT>::iterator
 	format(const chrono::duration<_Rep, _Period>& __d,
 	       basic_format_context<_Out, _CharT>& __fc) const
-	       _GLIBCXX_CONVEYOR_REQUIRES(__d)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__d);
 	  if constexpr (numeric_limits<_Rep>::is_signed)
 	    if (__d < __d.zero()) [[unlikely]]
 	      {

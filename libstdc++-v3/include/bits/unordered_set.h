@@ -824,8 +824,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  @return  True if there is any element with the specified key.
        */
       bool
-      contains(const key_type& __x) const _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return _M_h.find(__x) != _M_h.end(); }
+      contains(const key_type& __x) const
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_h.find(__x) != _M_h.end(); }
 
       template<typename _Kt>
 	auto

@@ -162,12 +162,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     [[__gnu__::__always_inline__]] constexpr __cow_constexpr_string&
     operator=(const __cow_constexpr_string& __o) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-    pre<std::contracts::never_proven_conveyor_v>
-      (std::is_object_address (__builtin_addressof (__o)))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(__o);
       if consteval {
 	string* __p = _M_str;
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
@@ -244,12 +241,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     [[__gnu__::__always_inline__]] constexpr __cow_constexpr_string&
     operator=(__cow_constexpr_string&& __o) noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-    pre<std::contracts::never_proven_conveyor_v>
-      (std::is_object_address (__builtin_addressof (__o)))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(__o);
       if consteval {
 	string* __p = _M_str;
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
@@ -275,10 +269,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     [[__gnu__::__always_inline__]] constexpr const char*
     c_str() const noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if consteval {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	// See the copy constructor's own comment for why '_M_str' is
@@ -440,10 +432,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     [[__gnu__::__gnu_inline__]]
     constexpr inline virtual const char*
     what() const _GLIBCXX_TXN_SAFE_DYN noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       return _M_msg.c_str();
     }
 #else
@@ -491,11 +481,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr inline explicit domain_error(const string& __arg)
       _GLIBCXX_TXN_SAFE
 
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__arg)))
-#endif
-    : logic_error(__arg) { }
+    : logic_error(__arg) { _GLIBCXX_CONVEYOR_TRUST(__arg); }
     [[__gnu__::__gnu_inline__]]
     constexpr inline explicit domain_error(const char* __arg) _GLIBCXX_TXN_SAFE
     : logic_error(__arg) { }
@@ -527,11 +513,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr inline explicit invalid_argument(const string& __arg)
       _GLIBCXX_TXN_SAFE
 
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__arg)))
-#endif
-    : logic_error(__arg) { }
+    : logic_error(__arg) { _GLIBCXX_CONVEYOR_TRUST(__arg); }
     [[__gnu__::__gnu_inline__]]
     constexpr inline explicit invalid_argument(const char* __arg)
       _GLIBCXX_TXN_SAFE
@@ -565,11 +547,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr inline explicit length_error(const string& __arg)
       _GLIBCXX_TXN_SAFE
 
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__arg)))
-#endif
-    : logic_error(__arg) { }
+    : logic_error(__arg) { _GLIBCXX_CONVEYOR_TRUST(__arg); }
     [[__gnu__::__gnu_inline__]]
     constexpr inline explicit length_error(const char* __arg) _GLIBCXX_TXN_SAFE
     : logic_error(__arg) { }
@@ -602,11 +580,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr inline explicit out_of_range(const string& __arg)
       _GLIBCXX_TXN_SAFE
 
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__arg)))
-#endif
-    : logic_error(__arg) { }
+    : logic_error(__arg) { _GLIBCXX_CONVEYOR_TRUST(__arg); }
     [[__gnu__::__gnu_inline__]]
     constexpr inline explicit out_of_range(const char* __arg) _GLIBCXX_TXN_SAFE
     : logic_error(__arg) { }
@@ -709,10 +683,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     [[__gnu__::__gnu_inline__]]
     constexpr inline virtual const char*
     what() const _GLIBCXX_TXN_SAFE_DYN noexcept
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       return _M_msg.c_str();
     }
 #else
@@ -759,11 +731,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr inline explicit overflow_error(const string& __arg)
       _GLIBCXX_TXN_SAFE
 
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__arg)))
-#endif
-    : runtime_error(__arg) { }
+    : runtime_error(__arg) { _GLIBCXX_CONVEYOR_TRUST(__arg); }
     [[__gnu__::__gnu_inline__]]
     constexpr inline explicit overflow_error(const char* __arg)
       _GLIBCXX_TXN_SAFE
@@ -796,11 +764,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr inline explicit underflow_error(const string& __arg)
       _GLIBCXX_TXN_SAFE
 
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__arg)))
-#endif
-    : runtime_error(__arg) { }
+    : runtime_error(__arg) { _GLIBCXX_CONVEYOR_TRUST(__arg); }
     [[__gnu__::__gnu_inline__]]
     constexpr inline explicit underflow_error(const char* __arg)
       _GLIBCXX_TXN_SAFE

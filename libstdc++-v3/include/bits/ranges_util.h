@@ -590,8 +590,9 @@ namespace ranges
   template<size_t _Num, class _It, class _Sent, subrange_kind _Kind>
     requires ((_Num == 0 && copyable<_It>) || _Num == 1)
     constexpr auto
-    get(const subrange<_It, _Sent, _Kind>& __r) _GLIBCXX_CONVEYOR_REQUIRES(__r)
+    get(const subrange<_It, _Sent, _Kind>& __r)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__r);
       if constexpr (_Num == 0)
 	return __r.begin();
       else
@@ -601,8 +602,9 @@ namespace ranges
   template<size_t _Num, class _It, class _Sent, subrange_kind _Kind>
     requires (_Num < 2)
     constexpr auto
-    get(subrange<_It, _Sent, _Kind>&& __r) _GLIBCXX_CONVEYOR_REQUIRES(__r)
+    get(subrange<_It, _Sent, _Kind>&& __r)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__r);
       if constexpr (_Num == 0)
 	return __r.begin();
       else

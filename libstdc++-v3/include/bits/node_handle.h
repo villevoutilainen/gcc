@@ -233,8 +233,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_NodeAlloc& operator*() noexcept _GLIBCXX_CONVEYOR { return _M_alloc; }
 
 	// Precondition: _M_alloc is the active member of the union.
-	_NodeAlloc release() noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	_NodeAlloc release() noexcept
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  _NodeAlloc __tmp = std::move(_M_alloc);
 	  _M_alloc.~_NodeAlloc();
 	  return __tmp;

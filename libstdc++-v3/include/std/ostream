@@ -69,8 +69,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _CharT, typename _Traits>
     inline basic_ostream<_CharT, _Traits>&
     endl(basic_ostream<_CharT, _Traits>& __os)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__os) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
-    { return flush(__os.put(__os.widen('\n'))); }
+    { _GLIBCXX_CONVEYOR_TRUST(__os); return flush(__os.put(__os.widen('\n'))); }
 
   /**
    *  @brief  Write a null character into the output sequence.
@@ -82,8 +81,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _CharT, typename _Traits>
     inline basic_ostream<_CharT, _Traits>&
     ends(basic_ostream<_CharT, _Traits>& __os)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__os) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
-    { return __os.put(_CharT()); }
+    { _GLIBCXX_CONVEYOR_TRUST(__os); return __os.put(_CharT()); }
 
   /**
    *  @brief  Flushes the output stream.
@@ -93,8 +91,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _CharT, typename _Traits>
     inline basic_ostream<_CharT, _Traits>&
     flush(basic_ostream<_CharT, _Traits>& __os)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__os) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
-    { return __os.flush(); }
+    { _GLIBCXX_CONVEYOR_TRUST(__os); return __os.flush(); }
 
 #ifdef __glibcxx_syncbuf // C++ >= 20 && HOSTED && CXX11ABI
   template<typename _CharT, typename _Traits>

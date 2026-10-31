@@ -1282,20 +1282,13 @@ namespace __detail::__variant
   template<typename _Ret, typename _Vp, typename _Op>
     constexpr _Ret
     __compare(_Ret __ret, const _Vp& __lhs, const _Vp& __rhs, _Op __op)
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__lhs)))
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__rhs)))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST(__lhs);
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       __variant::__raw_idx_visit(
 	[&__ret, &__lhs, &__op] (auto&& __rhs_mem, auto __rhs_index)
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	  pre<std::contracts::never_proven_conveyor_v>
-	    (std::is_object_address (__builtin_addressof (__lhs)))
-#endif
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__lhs);
 	  if constexpr (__rhs_index != variant_npos)
 	    {
 	      if (__lhs.index() == __rhs_index.value)
@@ -1319,25 +1312,15 @@ namespace __detail::__variant
     constexpr bool
     operator== [[nodiscard]] (const variant<_Types...>& __lhs,
 			      const variant<_Types...>& __rhs)
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__lhs)))
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__rhs)))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST(__lhs);
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       namespace __variant = __detail::__variant;
       return __variant::__compare(true, __lhs, __rhs,
 				  [](auto&& __l, auto&& __r) -> bool
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-				    pre<std::contracts::never_proven_conveyor_v>
-				      (std::is_object_address
-					 (__builtin_addressof (__l)))
-				    pre<std::contracts::never_proven_conveyor_v>
-				      (std::is_object_address
-					 (__builtin_addressof (__r)))
-#endif
 				  {
+				    _GLIBCXX_CONVEYOR_TRUST(__l);
+				    _GLIBCXX_CONVEYOR_TRUST(__r);
 				    return __l == __r;
 				  });
     }
@@ -1684,10 +1667,8 @@ namespace __detail::__variant
 	enable_if_t<is_constructible_v<__to_type<_Np>, _Args...>,
 		    __to_type<_Np>&>
 	emplace(_Args&&... __args)
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	  pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  namespace __variant = std::__detail::__variant;
 	  using type = typename _Nth_type<_Np, _Types...>::type;
 	  // Provide the strong exception-safety guarantee when possible,

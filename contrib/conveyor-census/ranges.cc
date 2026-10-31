@@ -86,10 +86,13 @@ namespace census
     n += c.begin () == c.end ();
     std::vector<int> fr (std::from_range, a);
     n += fr.size ();
-    std::unique_ptr<int> ups[] = { std::make_unique<int> (1),
-				   std::make_unique<int> (2) };
-    for (auto up : ups | v::as_rvalue)
-      n += *up;
+    // as_rvalue over plain ints: a move_iterator's operator* promises
+    // nothing (it can't know its iterator is dereferenceable), so what it
+    // yields can't be handed to a conveyor such as unique_ptr's move
+    // constructor.
+    int ints[] = { 1, 2 };
+    for (int x : ints | v::as_rvalue)
+      n += x;
     return n;
   }
 

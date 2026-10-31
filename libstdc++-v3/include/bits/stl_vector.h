@@ -888,9 +888,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	constexpr
 	vector(from_range_t, _Rg&& __rg, const _Alloc& __a = _Alloc())
-	_GLIBCXX_CONVEYOR_REQUIRES(__rg)
 	: vector(__a)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  if constexpr (ranges::forward_range<_Rg> || ranges::sized_range<_Rg>)
 	    {
 	      const auto __n = static_cast<size_type>(ranges::distance(__rg));
@@ -1052,8 +1052,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	constexpr void
-	assign_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	assign_range(_Rg&& __rg)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  static_assert(assignable_from<_Tp&, ranges::range_reference_t<_Rg>>);
 
 	  if constexpr (ranges::forward_range<_Rg> || ranges::sized_range<_Rg>)
@@ -1152,8 +1154,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reverse_iterator
-      rbegin() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return reverse_iterator(end()); }
+      rbegin() _GLIBCXX_NOEXCEPT
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return reverse_iterator(end()); }
 
       /**
        *  Returns a read-only (constant) reverse iterator that points
@@ -1162,8 +1164,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reverse_iterator
-      rbegin() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return const_reverse_iterator(end()); }
+      rbegin() const _GLIBCXX_NOEXCEPT
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return const_reverse_iterator(end()); }
 
       /**
        *  Returns a read/write reverse iterator that points to one
@@ -1172,8 +1174,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reverse_iterator
-      rend() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return reverse_iterator(begin()); }
+      rend() _GLIBCXX_NOEXCEPT
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return reverse_iterator(begin()); }
 
       /**
        *  Returns a read-only (constant) reverse iterator that points
@@ -1182,8 +1184,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reverse_iterator
-      rend() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return const_reverse_iterator(begin()); }
+      rend() const _GLIBCXX_NOEXCEPT
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return const_reverse_iterator(begin()); }
 
 #if __cplusplus >= 201103L
       /**
@@ -1193,8 +1195,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       [[__nodiscard__]] _GLIBCXX20_CONSTEXPR
       const_iterator
-      cbegin() const noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return const_iterator(this->_M_impl._M_start); }
+      cbegin() const noexcept
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return const_iterator(this->_M_impl._M_start); }
 
       /**
        *  Returns a read-only (constant) iterator that points one past
@@ -1203,8 +1205,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       [[__nodiscard__]] _GLIBCXX20_CONSTEXPR
       const_iterator
-      cend() const noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return const_iterator(this->_M_impl._M_finish); }
+      cend() const noexcept
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return const_iterator(this->_M_impl._M_finish); }
 
       /**
        *  Returns a read-only (constant) reverse iterator that points
@@ -1257,8 +1259,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX20_CONSTEXPR
       void
-      resize(size_type __new_size) _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      resize(size_type __new_size)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (__new_size > size())
 	  _M_default_append(__new_size - size());
 	else if (__new_size < size())
@@ -1279,8 +1282,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       void
       resize(size_type __new_size, const value_type& __x)
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (__new_size > size())
 	  _M_fill_append(__new_size - size(), __x);
 	else if (__new_size < size())
@@ -1360,7 +1363,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX20_CONSTEXPR
       void
-      reserve(size_type __n) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
+      reserve(size_type __n);
 
       // element access
       /**
@@ -1698,8 +1701,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       iterator
       insert(const_iterator __position, size_type __n, const value_type& __x)
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	difference_type __offset = __position - cbegin();
 	_M_fill_insert(begin() + __offset, __n, __x);
 	return begin() + __offset;
@@ -1744,8 +1747,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	_GLIBCXX20_CONSTEXPR
 	iterator
 	insert(const_iterator __position, _InputIterator __first,
-	       _InputIterator __last) _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	       _InputIterator __last)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  difference_type __offset = __position - cbegin();
 	  _M_range_insert(begin() + __offset, __first, __last,
 			  std::__iterator_category(__first));
@@ -1788,8 +1792,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	constexpr iterator
-	insert_range(const_iterator __pos, _Rg&& __rg)
-	_GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
+	insert_range(const_iterator __pos, _Rg&& __rg);
 
       /**
        * @brief Append a range at the end of the vector.
@@ -1798,8 +1801,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       template<__detail::__container_compatible_range<_Tp> _Rg>
 	constexpr void
-	append_range(_Rg&& __rg) _GLIBCXX_CONVEYOR_REQUIRES(__rg) _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	append_range(_Rg&& __rg)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  // N.B. __rg may overlap with *this, so we must copy from __rg before
 	  // existing elements or iterators referring to *this are invalidated.
 	  // e.g. in v.append_range(views::concat(v, foo)) rg overlaps v.
@@ -1920,8 +1925,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       iterator
 #if __cplusplus >= 201103L
-      erase(const_iterator __position) _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return _M_erase(begin() + (__position - cbegin())); }
+      erase(const_iterator __position)
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_erase(begin() + (__position - cbegin())); }
 #else
       erase(iterator __position)
       { return _M_erase(__position); }
@@ -1949,8 +1954,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       iterator
 #if __cplusplus >= 201103L
       erase(const_iterator __first, const_iterator __last)
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	const auto __beg = begin();
 	const auto __cbeg = cbegin();
 	return _M_erase(__beg + (__first - __cbeg), __beg + (__last - __cbeg));
@@ -2395,11 +2400,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       // Called by constructors to check initial size.
       static _GLIBCXX20_CONSTEXPR size_type
       _S_check_init_len(size_type __n, const allocator_type& __a)
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__a)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST(__a);
 	if (__n > _Base::_S_max_size(_Tp_alloc_type(__a)))
 	  __throw_length_error(
 	      __N("cannot create std::vector larger than max_size()"));
@@ -2524,8 +2526,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
     inline bool
     operator==(const vector<_Tp, _Alloc>& __x, const vector<_Tp, _Alloc>& __y)
-    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-    { return (__x.size() == __y.size()
+    { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return (__x.size() == __y.size()
 	      && std::equal(__x.begin(), __x.end(), __y.begin())); }
 
 #if __cpp_lib_three_way_comparison // >= C++20
@@ -2544,8 +2545,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     [[nodiscard]]
     constexpr __detail::__synth3way_t<_Tp>
     operator<=>(const vector<_Tp, _Alloc>& __x, const vector<_Tp, _Alloc>& __y)
-    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__x);
+      _GLIBCXX_CONVEYOR_TRUST(__y);
       return std::lexicographical_compare_three_way(__x.begin(), __x.end(),
 						    __y.begin(), __y.end(),
 						    __detail::__synth3way);
@@ -2565,8 +2567,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
   template<typename _Tp, typename _Alloc>
     _GLIBCXX_NODISCARD inline bool
     operator<(const vector<_Tp, _Alloc>& __x, const vector<_Tp, _Alloc>& __y)
-    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-    { return std::lexicographical_compare(__x.begin(), __x.end(),
+    { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return std::lexicographical_compare(__x.begin(), __x.end(),
 					  __y.begin(), __y.end()); }
 
   /// Based on operator==

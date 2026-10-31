@@ -878,6 +878,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  else
 	    {
 	      auto [__first, __last] = equal_range(__x);
+	      _GLIBCXX_CONVEYOR_TRUST(__first);
+	      _GLIBCXX_CONVEYOR_TRUST(__last);
 	      return __last - __first;
 	    }
 	}

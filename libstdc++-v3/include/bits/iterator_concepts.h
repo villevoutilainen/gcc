@@ -1008,11 +1008,8 @@ namespace ranges
       requires is_array_v<_Tp> || __member_begin<_Tp&> || __adl_begin<_Tp&>
       constexpr auto
       __begin(_Tp& __t)
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__t)))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST(__t);
 	if constexpr (is_array_v<_Tp>)
 	  return __t + 0;
 	else if constexpr (__member_begin<_Tp&>)

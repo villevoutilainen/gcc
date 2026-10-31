@@ -881,11 +881,7 @@ namespace views
       constexpr auto
       operator() [[nodiscard]] (_Tp&& __e) const
       noexcept(noexcept(single_view<decay_t<_Tp>>(std::forward<_Tp>(__e))))
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
-	(std::is_object_address (__builtin_addressof (__e)))
-#endif
-      { return single_view<decay_t<_Tp>>(std::forward<_Tp>(__e)); }
+      { _GLIBCXX_CONVEYOR_TRUST(__e); return single_view<decay_t<_Tp>>(std::forward<_Tp>(__e)); }
   };
 
   inline constexpr _Single single{};
@@ -1468,53 +1464,43 @@ namespace views::__adaptor
 
       constexpr iterator_t<_Range>
       begin()
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return ranges::begin(_M_r); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return ranges::begin(_M_r); }
 
       constexpr sentinel_t<_Range>
       end()
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return ranges::end(_M_r); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return ranges::end(_M_r); }
 
       constexpr auto
       begin() const requires range<const _Range>
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return ranges::begin(_M_r); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return ranges::begin(_M_r); }
 
       constexpr auto
       end() const requires range<const _Range>
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return ranges::end(_M_r); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return ranges::end(_M_r); }
 
       constexpr bool
       empty() requires requires { ranges::empty(_M_r); }
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return ranges::empty(_M_r); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return ranges::empty(_M_r); }
 
       constexpr bool
       empty() const requires requires { ranges::empty(_M_r); }
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return ranges::empty(_M_r); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return ranges::empty(_M_r); }
 
       constexpr auto
       size() requires sized_range<_Range>
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return ranges::size(_M_r); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return ranges::size(_M_r); }
 
       constexpr auto
       size() const requires sized_range<const _Range>
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return ranges::size(_M_r); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return ranges::size(_M_r); }
 
       constexpr auto
       data() requires contiguous_range<_Range>
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return ranges::data(_M_r); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return ranges::data(_M_r); }
 
       constexpr auto
       data() const requires contiguous_range<const _Range>
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return ranges::data(_M_r); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return ranges::data(_M_r); }
     };
 
   template<typename _Tp>
@@ -1888,8 +1874,7 @@ namespace views::__adaptor
 	friend constexpr bool
 	operator==(const _Iterator& __x, const _Iterator& __y)
 	  requires equality_comparable<_Base_iter>
-	  _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-	{ return __x._M_current == __y._M_current; }
+	{ _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __x._M_current == __y._M_current; }
 
 	friend constexpr range_rvalue_reference_t<_Base>
 	iter_move(const _Iterator& __i)
@@ -2216,8 +2201,7 @@ namespace views::__adaptor
 	  friend constexpr bool
 	  operator==(const _Iterator& __x, const _Iterator& __y)
 	    requires equality_comparable<_Base_iter>
-	    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-	  { return __x._M_current == __y._M_current; }
+	  { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __x._M_current == __y._M_current; }
 
 	  friend constexpr bool
 	  operator<(const _Iterator& __x, const _Iterator& __y)
@@ -2463,8 +2447,7 @@ namespace views::__adaptor
 
 	  friend constexpr bool
 	  operator==(const _CI<_Const>& __y, const _Sentinel& __x)
-	  _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-	  { return __y.count() == 0 || __y.base() == __x._M_end; }
+	  { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __y.count() == 0 || __y.base() == __x._M_end; }
 
 	  template<bool _OtherConst = !_Const,
 		   typename _Base2 = __detail::__maybe_const_t<_OtherConst, _Vp>>
@@ -2706,8 +2689,7 @@ namespace views::__adaptor
 
 	  friend constexpr bool
 	  operator==(const iterator_t<_Base>& __x, const _Sentinel& __y)
-	  _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-	  { return __y._M_end == __x || !std::__invoke(*__y._M_pred, *__x); }
+	  { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __y._M_end == __x || !std::__invoke(*__y._M_pred, *__x); }
 
 	  template<bool _OtherConst = !_Const,
 		   typename _Base2 = __detail::__maybe_const_t<_OtherConst, _Vp>>
@@ -2833,8 +2815,9 @@ namespace views::__adaptor
       begin()
 	requires (!(__detail::__simple_view<_Vp>
 		    && random_access_range<const _Vp>
-		    && sized_range<const _Vp>)) _GLIBCXX_CONVEYOR_REQUIRES_THIS
+		    && sized_range<const _Vp>))
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if constexpr (_S_needs_cached_begin)
 	  if (_M_cached_begin._M_has_value())
 	    return _M_cached_begin._M_get(_M_base);
@@ -3336,8 +3319,9 @@ namespace views::__adaptor
 	    requires _S_ref_is_glvalue
 	      && forward_range<_Base>
 	      && equality_comparable<_Inner_iter>
-	      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__x);
+	    _GLIBCXX_CONVEYOR_TRUST(__y);
 	    return (__x._M_outer == __y._M_outer
 		    && __x._M_inner == __y._M_inner);
 	  }
@@ -3753,8 +3737,9 @@ namespace views::__adaptor
 	  friend constexpr bool
 	  operator==(const _OuterIter& __x, const _OuterIter& __y)
 	    requires forward_range<_Base>
-	    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__x);
+	    _GLIBCXX_CONVEYOR_TRUST(__y);
 	    return __x._M_current == __y._M_current
 	      && __x._M_trailing_empty == __y._M_trailing_empty;
 	  }
@@ -4152,8 +4137,9 @@ namespace views::__adaptor
 
       friend constexpr bool
       operator==(const _Iterator& __x, const _Iterator& __y)
-      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__x);
+	_GLIBCXX_CONVEYOR_TRUST(__y);
 	return __x._M_cur == __y._M_cur
 	  && __x._M_trailing_empty == __y._M_trailing_empty;
       }
@@ -4734,8 +4720,7 @@ namespace views::__adaptor
 	  friend constexpr bool
 	  operator==(const _Iterator& __x, const _Iterator& __y)
 	    requires equality_comparable<iterator_t<_Base>>
-	    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-	  { return __x._M_current == __y._M_current; }
+	  { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __x._M_current == __y._M_current; }
 
 	  friend constexpr bool
 	  operator<(const _Iterator& __x, const _Iterator& __y)
@@ -5885,8 +5870,7 @@ namespace views::__adaptor
 
     friend constexpr bool
     operator==(const _Iterator& __x, const _Iterator& __y)
-    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-    { return __x._M_current.back() == __y._M_current.back(); }
+    { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __x._M_current.back() == __y._M_current.back(); }
 
     friend constexpr bool
     operator<(const _Iterator& __x, const _Iterator& __y)
@@ -6257,8 +6241,7 @@ namespace views::__adaptor
 
     friend constexpr bool
     operator==(const _Iterator& __x, const _Iterator& __y)
-    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-    { return __x._M_inner == __y._M_inner; }
+    { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __x._M_inner == __y._M_inner; }
 
     friend constexpr bool
     operator<(const _Iterator& __x, const _Iterator& __y)
@@ -6791,15 +6774,17 @@ namespace views::__adaptor
     { return _M_current; }
 
     constexpr value_type
-    operator*() const _GLIBCXX_CONVEYOR_REQUIRES_THIS
+    operator*() const
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_assert_noconveyor(_M_current != _M_end);
       return views::take(subrange(_M_current, _M_end), _M_n);
     }
 
     constexpr _Iterator&
-    operator++() _GLIBCXX_CONVEYOR_REQUIRES_THIS
+    operator++()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_assert_noconveyor(_M_current != _M_end);
       _M_missing = ranges::advance(_M_current, _M_n, _M_end);
       return *this;
@@ -6858,8 +6843,7 @@ namespace views::__adaptor
 
     friend constexpr bool
     operator==(const _Iterator& __x, const _Iterator& __y)
-    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-    { return __x._M_current == __y._M_current; }
+    { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __x._M_current == __y._M_current; }
 
     friend constexpr bool
     operator==(const _Iterator& __x, default_sentinel_t)
@@ -7013,8 +6997,8 @@ namespace views::__adaptor
     constexpr auto
     begin() requires (!(__detail::__simple_view<_Vp>
 			&& __detail::__slide_caches_nothing<const _Vp>))
-			_GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if constexpr (__detail::__slide_caches_first<_Vp>)
 	{
 	  iterator_t<_Vp> __it;
@@ -7038,8 +7022,8 @@ namespace views::__adaptor
     constexpr auto
     end() requires (!(__detail::__simple_view<_Vp>
 		      && __detail::__slide_caches_nothing<const _Vp>))
-		      _GLIBCXX_CONVEYOR_REQUIRES_THIS
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if constexpr (__detail::__slide_caches_nothing<_Vp>)
 	return _Iterator<false>(ranges::begin(_M_base) + range_difference_t<_Vp>(size()),
 				_M_n);
@@ -7213,8 +7197,9 @@ namespace views::__adaptor
 
     friend constexpr bool
     operator==(const _Iterator& __x, const _Iterator& __y)
-    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__x);
+      _GLIBCXX_CONVEYOR_TRUST(__y);
       if constexpr (_S_last_elt_present)
 	return __x._M_last_elt == __y._M_last_elt;
       else
@@ -7464,15 +7449,17 @@ namespace views::__adaptor
     _Iterator() = default;
 
     constexpr value_type
-    operator*() const _GLIBCXX_CONVEYOR_REQUIRES_THIS
+    operator*() const
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_assert_noconveyor(_M_current != _M_next);
       return ranges::subrange(_M_current, _M_next);
     }
 
     constexpr _Iterator&
-    operator++() _GLIBCXX_CONVEYOR_REQUIRES_THIS
+    operator++()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_assert_noconveyor(_M_current != _M_next);
       _M_current = _M_next;
       _M_next = _M_parent->_M_find_next(_M_current);
@@ -7505,8 +7492,7 @@ namespace views::__adaptor
 
     friend constexpr bool
     operator==(const _Iterator& __x, const _Iterator& __y)
-    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-    { return __x._M_current == __y._M_current; }
+    { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __x._M_current == __y._M_current; }
 
     friend constexpr bool
     operator==(const _Iterator& __x, default_sentinel_t)
@@ -8009,8 +7995,7 @@ namespace views::__adaptor
     operator==(const _Iterator& __x, const _Iterator& __y)
       requires _S_ref_is_glvalue
 	&& forward_range<_Base> && equality_comparable<_InnerIter>
-	_GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-    { return __x._M_outer_it == __y._M_outer_it && __x._M_inner_it ==__y._M_inner_it; }
+    { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __x._M_outer_it == __y._M_outer_it && __x._M_inner_it ==__y._M_inner_it; }
 
     friend constexpr common_reference_t<iter_rvalue_reference_t<_InnerIter>,
 					iter_rvalue_reference_t<_PatternIter>>
@@ -8435,8 +8420,9 @@ namespace views::__adaptor
     { _GLIBCXX_CONVEYOR_TRUST_THIS; return *_M_current; }
 
     constexpr _Iterator&
-    operator++() _GLIBCXX_CONVEYOR_REQUIRES_THIS
+    operator++()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_assert_noconveyor(_M_current != _M_end);
       _M_missing = ranges::advance(_M_current, _M_stride, _M_end);
       return *this;
@@ -8501,8 +8487,7 @@ namespace views::__adaptor
     friend constexpr bool
     operator==(const _Iterator& __x, const _Iterator& __y)
       requires equality_comparable<iterator_t<_Base>>
-      _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-    { return __x._M_current == __y._M_current; }
+    { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __x._M_current == __y._M_current; }
 
     friend constexpr bool
     operator<(const _Iterator& __x, const _Iterator& __y)
@@ -9517,8 +9502,7 @@ namespace views::__adaptor
     requires sentinel_for<sentinel_t<_Base>, iterator_t<__maybe_const_t<_OtherConst, _Vp>>>
     friend constexpr bool
     operator==(const _Iterator<_OtherConst>& __x, const _Sentinel& __y)
-    _GLIBCXX_CONVEYOR_REQUIRES(__x) _GLIBCXX_CONVEYOR_REQUIRES(__y)
-    { return __x._M_current == __y._M_end; }
+    { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __x._M_current == __y._M_end; }
 
     template<bool _OtherConst>
     requires sized_sentinel_for<sentinel_t<_Base>, iterator_t<__maybe_const_t<_OtherConst, _Vp>>>
@@ -9977,10 +9961,8 @@ namespace ranges
 
     constexpr _Iterator<false>
     begin() requires (!(__detail::__simple_view<_Vs> && ...))
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _Iterator<false> __it(this, in_place_index<0>, ranges::begin(std::get<0>(_M_views)));
       __it.template _M_satisfy<0>();
       return __it;
@@ -9988,10 +9970,8 @@ namespace ranges
 
     constexpr _Iterator<true>
     begin() const requires (range<const _Vs> && ...) && __detail::__concatable<const _Vs...>
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _Iterator<true> __it(this, in_place_index<0>, ranges::begin(std::get<0>(_M_views)));
       __it.template _M_satisfy<0>();
       return __it;
@@ -9999,10 +9979,8 @@ namespace ranges
 
     constexpr auto
     end() requires (!(__detail::__simple_view<_Vs> && ...))
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       constexpr auto __n = sizeof...(_Vs);
       if constexpr (__detail::__all_forward<false, _Vs...>
 		    && common_range<_Vs...[__n - 1]>)
@@ -10014,10 +9992,8 @@ namespace ranges
 
     constexpr auto
     end() const requires (range<const _Vs> && ...) && __detail::__concatable<const _Vs...>
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       constexpr auto __n = sizeof...(_Vs);
       if constexpr (__detail::__all_forward<true, _Vs...>
 		    && common_range<const _Vs...[__n - 1]>)
@@ -10119,10 +10095,8 @@ namespace ranges
     template<size_t _Nm>
       constexpr void
       _M_satisfy()
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_GLIBCXX_CONVEYOR_TRUST(*_M_parent);
 	if constexpr (_Nm < (sizeof...(_Vs) - 1))
 	  {
@@ -10252,10 +10226,8 @@ namespace ranges
 
     constexpr _Iterator&
     operator++()
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
-#endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       // D4324/P2680: this lambda is passed to _M_invoke_with_runtime_index,
       // which forwards it into _S_invoke_with_runtime_index's own outer
       // (immediately-invoked) closure, where it's called via a stored
@@ -10268,10 +10240,8 @@ namespace ranges
       // explicit precondition, exactly as any other ordinary (non-
       // conveyor) function forwarding a reference/this needs one.
       _M_invoke_with_runtime_index([this]<size_t _Idx>()
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	++std::get<_Idx>(_M_it);
 	_M_satisfy<_Idx>();
       });
@@ -10301,10 +10271,8 @@ namespace ranges
       // own capture site, so its own 'this' needs its own explicit
       // precondition too.
       _M_invoke_with_runtime_index([this]<size_t _Idx>()
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_M_prev<_Idx>();
       });
       return *this;
@@ -10331,10 +10299,8 @@ namespace ranges
       // precondition too ('__n' is captured by value, not by reference,
       // so it needs no such precondition of its own).
       _M_invoke_with_runtime_index([this, __n]<size_t _Idx>()
-#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-#endif
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_GLIBCXX_CONVEYOR_TRUST(*_M_parent);
 	auto __begin = ranges::begin(std::get<_Idx>(_M_parent->_M_views));
 	if (__n > 0)

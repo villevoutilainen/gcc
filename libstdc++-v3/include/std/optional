@@ -571,13 +571,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       // The _M_get operations have _M_engaged as a precondition.
       constexpr _Tp&
       _M_get() noexcept
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
-      { return _M_payload._M_get(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_payload._M_get(); }
 
       constexpr const _Tp&
       _M_get() const noexcept
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
-      { return _M_payload._M_get(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_payload._M_get(); }
     };
 
 #if __cpp_concepts < 202002L
@@ -623,13 +621,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       // The _M_get operations have _M_engaged as a precondition.
       constexpr _Tp&
       _M_get() noexcept
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
-      { return static_cast<_Dp*>(this)->_M_payload._M_get(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return static_cast<_Dp*>(this)->_M_payload._M_get(); }
 
       constexpr const _Tp&
       _M_get() const noexcept
-      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
-      { return static_cast<const _Dp*>(this)->_M_payload._M_get(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return static_cast<const _Dp*>(this)->_M_payload._M_get(); }
     };
 
   template<typename _Tp>
@@ -897,8 +893,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	constexpr explicit(!is_convertible_v<const _Up&, _Tp>)
 	optional(const optional<_Up>& __t)
 	noexcept(is_nothrow_constructible_v<_Tp, const _Up&>)
-	_GLIBCXX_CONVEYOR_REQUIRES(__t)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__t);
 	  if (__t)
 	    emplace(__t._M_fwd());
 	}
@@ -910,8 +906,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	constexpr explicit(!is_convertible_v<_Up, _Tp>)
 	optional(optional<_Up>&& __t)
 	noexcept(is_nothrow_constructible_v<_Tp, _Up>)
-	_GLIBCXX_CONVEYOR_REQUIRES(__t)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__t);
 	  if (__t)
 	    emplace(std::move(__t)._M_fwd());
 	}
@@ -961,8 +957,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	constexpr
 	optional(const optional<_Up>& __t)
 	noexcept(is_nothrow_constructible_v<_Tp, const _Up&>)
-	_GLIBCXX_CONVEYOR_REQUIRES(__t)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__t);
 	  if (__t)
 	    emplace(__t._M_fwd());
 	}
@@ -975,8 +971,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	explicit constexpr
 	optional(const optional<_Up>& __t)
 	noexcept(is_nothrow_constructible_v<_Tp, const _Up&>)
-	_GLIBCXX_CONVEYOR_REQUIRES(__t)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__t);
 	  if (__t)
 	    emplace(__t._M_fwd());
 	}
@@ -989,8 +985,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	constexpr
 	optional(optional<_Up>&& __t)
 	noexcept(is_nothrow_constructible_v<_Tp, _Up>)
-	_GLIBCXX_CONVEYOR_REQUIRES(__t)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__t);
 	  if (__t)
 	    emplace(std::move(__t)._M_fwd());
 	}
@@ -1003,8 +999,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	explicit constexpr
 	optional(optional<_Up>&& __t)
 	noexcept(is_nothrow_constructible_v<_Tp, _Up>)
-	_GLIBCXX_CONVEYOR_REQUIRES(__t)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__t);
 	  if (__t)
 	    emplace(std::move(__t)._M_fwd());
 	}
@@ -1053,8 +1049,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	operator=(_Up&& __u)
 	noexcept(__and_v<is_nothrow_constructible<_Tp, _Up>,
 			 is_nothrow_assignable<_Tp&, _Up>>)
-	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (this->_M_is_engaged())
 	    this->_M_get() = std::forward<_Up>(__u);
 	  else
@@ -1082,8 +1078,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	operator=(const optional<_Up>& __u)
 	noexcept(__and_v<is_nothrow_constructible<_Tp, const _Up&>,
 			 is_nothrow_assignable<_Tp&, const _Up&>>)
-	_GLIBCXX_CONVEYOR_REQUIRES(__u) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__u);
 	  if (__u)
 	    {
 	      if (this->_M_is_engaged())
@@ -1117,8 +1114,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	operator=(optional<_Up>&& __u)
 	noexcept(__and_v<is_nothrow_constructible<_Tp, _Up>,
 			 is_nothrow_assignable<_Tp&, _Up>>)
-	_GLIBCXX_CONVEYOR_REQUIRES(__u) _GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__u);
 	  if (__u)
 	    {
 	      if (this->_M_is_engaged())
@@ -1167,8 +1165,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       swap(optional& __other)
       noexcept(is_nothrow_move_constructible_v<_Tp>
 	       && is_nothrow_swappable_v<_Tp>)
-      _GLIBCXX_CONVEYOR_REQUIRES(__other) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__other);
 	using std::swap;
 
 	if (this->_M_is_engaged() && __other._M_is_engaged())
@@ -1187,29 +1186,31 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 #ifdef __cpp_lib_optional_range_support // >= C++26
       // Iterator support.
-      constexpr iterator begin() noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      constexpr iterator begin() noexcept
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return iterator(
 	  this->_M_is_engaged() ? std::addressof(this->_M_get()) : nullptr
 	);
       }
 
       constexpr const_iterator begin() const noexcept
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return const_iterator(
 	  this->_M_is_engaged() ? std::addressof(this->_M_get()) : nullptr
 	);
       }
 
-      constexpr iterator end() noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      constexpr iterator end() noexcept
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return begin() + has_value();
       }
 
       constexpr const_iterator end() const noexcept
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return begin() + has_value();
       }
 #endif // __cpp_lib_optional_range_support
@@ -1264,43 +1265,42 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       }
 
       constexpr explicit operator bool() const noexcept
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      { return this->_M_is_engaged(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return this->_M_is_engaged(); }
 
       constexpr bool has_value() const noexcept _GLIBCXX_CONVEYOR
       { return this->_M_is_engaged(); }
 
       constexpr const _Tp&
-      value() const& _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      value() const&
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (this->_M_is_engaged())
 	  return this->_M_get();
 	__throw_bad_optional_access();
       }
 
       constexpr _Tp&
-      value()& _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      value()&
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (this->_M_is_engaged())
 	  return this->_M_get();
 	__throw_bad_optional_access();
       }
 
       constexpr _Tp&&
-      value()&& _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      value()&&
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (this->_M_is_engaged())
 	  return std::move(this->_M_get());
 	__throw_bad_optional_access();
       }
 
       constexpr const _Tp&&
-      value() const&& _GLIBCXX_CONVEYOR_REQUIRES_THIS
-      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      value() const&&
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (this->_M_is_engaged())
 	  return std::move(this->_M_get());
 	__throw_bad_optional_access();
@@ -1310,8 +1310,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       // 4406. value_or return statement is inconsistent with Mandates
       template<typename _Up = remove_cv_t<_Tp>>
 	constexpr remove_cv_t<_Tp>
-	value_or(_Up&& __u) const& _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	value_or(_Up&& __u) const&
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  using _Xp = remove_cv_t<_Tp>;
 	  static_assert(is_convertible_v<const _Tp&, _Xp>);
 	  static_assert(is_convertible_v<_Up, _Xp>);
@@ -1323,8 +1324,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       template<typename _Up = remove_cv_t<_Tp>>
 	constexpr remove_cv_t<_Tp>
-	value_or(_Up&& __u) && _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	value_or(_Up&& __u) &&
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  using _Xp = remove_cv_t<_Tp>;
 	  static_assert(is_convertible_v<_Tp, _Xp>);
 	  static_assert(is_convertible_v<_Up, _Xp>);
@@ -1339,8 +1341,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       template<typename _Fn>
 	constexpr auto
-	and_then(_Fn&& __f) & _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	and_then(_Fn&& __f) &
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  using _Up = remove_cvref_t<invoke_result_t<_Fn, _Tp&>>;
 	  static_assert(__is_optional_v<_Up>,
 			"the function passed to std::optional<T>::and_then "
@@ -1353,8 +1356,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       template<typename _Fn>
 	constexpr auto
-	and_then(_Fn&& __f) const & _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	and_then(_Fn&& __f) const &
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  using _Up = remove_cvref_t<invoke_result_t<_Fn, const _Tp&>>;
 	  static_assert(__is_optional_v<_Up>,
 			"the function passed to std::optional<T>::and_then "
@@ -1367,8 +1371,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       template<typename _Fn>
 	constexpr auto
-	and_then(_Fn&& __f) && _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	and_then(_Fn&& __f) &&
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  using _Up = remove_cvref_t<invoke_result_t<_Fn, _Tp>>;
 	  static_assert(__is_optional_v<_Up>,
 			"the function passed to std::optional<T>::and_then "
@@ -1381,8 +1386,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       template<typename _Fn>
 	constexpr auto
-	and_then(_Fn&& __f) const && _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	and_then(_Fn&& __f) const &&
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  using _Up = remove_cvref_t<invoke_result_t<_Fn, const _Tp>>;
 	  static_assert(__is_optional_v<_Up>,
 			"the function passed to std::optional<T>::and_then "
@@ -1395,8 +1401,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       template<typename _Fn>
 	constexpr auto
-	transform(_Fn&& __f) & _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	transform(_Fn&& __f) &
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  using _Up = remove_cv_t<invoke_result_t<_Fn, _Tp&>>;
 	  if (has_value())
 	    return optional<_Up>(_Optional_func<_Fn>{__f}, _M_get());
@@ -1406,8 +1413,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       template<typename _Fn>
 	constexpr auto
-	transform(_Fn&& __f) const & _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	transform(_Fn&& __f) const &
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  using _Up = remove_cv_t<invoke_result_t<_Fn, const _Tp&>>;
 	  if (has_value())
 	    return optional<_Up>(_Optional_func<_Fn>{__f}, _M_get());
@@ -1417,8 +1425,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       template<typename _Fn>
 	constexpr auto
-	transform(_Fn&& __f) && _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	transform(_Fn&& __f) &&
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  using _Up = remove_cv_t<invoke_result_t<_Fn, _Tp>>;
 	  if (has_value())
 	    return optional<_Up>(_Optional_func<_Fn>{__f}, std::move(_M_get()));
@@ -1428,8 +1437,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       template<typename _Fn>
 	constexpr auto
-	transform(_Fn&& __f) const && _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	transform(_Fn&& __f) const &&
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  using _Up = remove_cv_t<invoke_result_t<_Fn, const _Tp>>;
 	  if (has_value())
 	    return optional<_Up>(_Optional_func<_Fn>{__f}, std::move(_M_get()));
@@ -1439,8 +1449,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       template<typename _Fn> requires invocable<_Fn> && copy_constructible<_Tp>
 	constexpr optional
-	or_else(_Fn&& __f) const& _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	or_else(_Fn&& __f) const&
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  using _Up = invoke_result_t<_Fn>;
 	  static_assert(is_same_v<remove_cvref_t<_Up>, optional>,
 			"the function passed to std::optional<T>::or_else "
@@ -1454,8 +1465,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       template<typename _Fn> requires invocable<_Fn> && move_constructible<_Tp>
 	constexpr optional
-	or_else(_Fn&& __f) && _GLIBCXX_CONVEYOR_REQUIRES_THIS
+	or_else(_Fn&& __f) &&
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  using _Up = invoke_result_t<_Fn>;
 	  static_assert(is_same_v<remove_cvref_t<_Up>, optional>,
 			"the function passed to std::optional<T>::or_else "
@@ -1511,7 +1523,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     optional<_Tp&>::begin() const noexcept
       requires is_object_v<_Tp> && (!is_unbounded_array_v<_Tp>)
-    { return __gnu_cxx::__normal_iterator<_Tp*, optional>(_M_val); }
+    {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      return __gnu_cxx::__normal_iterator<_Tp*, optional>(_M_val);
+    }
 
   template<typename _Tp>
     constexpr auto
@@ -1636,8 +1651,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator==(const optional<_Tp>& __lhs, const optional<_Up>& __rhs)
     -> __optional_eq_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__lhs);
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       if (__lhs.has_value() != __rhs.has_value())
 	return false;
       if (!__lhs.has_value())
@@ -1649,8 +1665,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator!=(const optional<_Tp>& __lhs, const optional<_Up>& __rhs)
     -> __optional_ne_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__lhs);
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       if (__lhs.has_value() != __rhs.has_value())
 	return true;
       if (!__lhs.has_value())
@@ -1662,8 +1679,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator<(const optional<_Tp>& __lhs, const optional<_Up>& __rhs)
     -> __optional_lt_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__lhs);
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       if (!__rhs.has_value())
 	return false;
       if (!__lhs.has_value())
@@ -1675,8 +1693,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator>(const optional<_Tp>& __lhs, const optional<_Up>& __rhs)
     -> __optional_gt_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__lhs);
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       if (!__lhs.has_value())
 	return false;
       if (!__rhs.has_value())
@@ -1688,8 +1707,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator<=(const optional<_Tp>& __lhs, const optional<_Up>& __rhs)
     -> __optional_le_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__lhs);
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       if (!__lhs.has_value())
 	return true;
       if (!__rhs.has_value())
@@ -1701,8 +1721,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator>=(const optional<_Tp>& __lhs, const optional<_Up>& __rhs)
     -> __optional_ge_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__lhs);
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       if (!__rhs.has_value())
 	return true;
       if (!__lhs.has_value())
@@ -1727,34 +1748,29 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     [[nodiscard]]
     constexpr bool
     operator==(const optional<_Tp>& __lhs, nullopt_t) noexcept
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs)
-    { return !__lhs; }
+    { _GLIBCXX_CONVEYOR_TRUST(__lhs); return !__lhs; }
 
 #ifdef __cpp_lib_three_way_comparison
   template<typename _Tp>
     [[nodiscard]]
     constexpr strong_ordering
     operator<=>(const optional<_Tp>& __x, nullopt_t) noexcept
-    _GLIBCXX_CONVEYOR_REQUIRES(__x)
-    { return bool(__x) <=> false; }
+    { _GLIBCXX_CONVEYOR_TRUST(__x); return bool(__x) <=> false; }
 #else
   template<typename _Tp>
     constexpr bool
     operator==(nullopt_t, const optional<_Tp>& __rhs) noexcept
-    _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
-    { return !__rhs; }
+    { _GLIBCXX_CONVEYOR_TRUST(__rhs); return !__rhs; }
 
   template<typename _Tp>
     constexpr bool
     operator!=(const optional<_Tp>& __lhs, nullopt_t) noexcept
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs)
-    { return static_cast<bool>(__lhs); }
+    { _GLIBCXX_CONVEYOR_TRUST(__lhs); return static_cast<bool>(__lhs); }
 
   template<typename _Tp>
     constexpr bool
     operator!=(nullopt_t, const optional<_Tp>& __rhs) noexcept
-    _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
-    { return static_cast<bool>(__rhs); }
+    { _GLIBCXX_CONVEYOR_TRUST(__rhs); return static_cast<bool>(__rhs); }
 
   template<typename _Tp>
     constexpr bool
@@ -1764,14 +1780,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     constexpr bool
     operator<(nullopt_t, const optional<_Tp>& __rhs) noexcept
-    _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
-    { return static_cast<bool>(__rhs); }
+    { _GLIBCXX_CONVEYOR_TRUST(__rhs); return static_cast<bool>(__rhs); }
 
   template<typename _Tp>
     constexpr bool
     operator>(const optional<_Tp>& __lhs, nullopt_t) noexcept
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs)
-    { return static_cast<bool>(__lhs); }
+    { _GLIBCXX_CONVEYOR_TRUST(__lhs); return static_cast<bool>(__lhs); }
 
   template<typename _Tp>
     constexpr bool
@@ -1781,8 +1795,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     constexpr bool
     operator<=(const optional<_Tp>& __lhs, nullopt_t) noexcept
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs)
-    { return !__lhs; }
+    { _GLIBCXX_CONVEYOR_TRUST(__lhs); return !__lhs; }
 
   template<typename _Tp>
     constexpr bool
@@ -1797,8 +1810,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     constexpr bool
     operator>=(nullopt_t, const optional<_Tp>& __rhs) noexcept
-    _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
-    { return !__rhs; }
+    { _GLIBCXX_CONVEYOR_TRUST(__rhs); return !__rhs; }
 #endif // three-way-comparison
 
 #if __cpp_lib_concepts
@@ -1815,8 +1827,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator== [[nodiscard]] (const optional<_Tp>& __lhs, const _Up& __rhs)
     -> __optional_eq_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__lhs);
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       if (__lhs.has_value())
 	return *__lhs == __rhs;
       return false;
@@ -1827,8 +1840,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator== [[nodiscard]] (const _Tp& __lhs, const optional<_Up>& __rhs)
     -> __optional_eq_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       if (__rhs.has_value())
 	return __lhs == *__rhs;
       return false;
@@ -1839,8 +1852,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator!= [[nodiscard]] (const optional<_Tp>& __lhs, const _Up& __rhs)
     -> __optional_ne_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__lhs);
       if (__lhs.has_value())
 	return *__lhs != __rhs;
       return true;
@@ -1851,8 +1864,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator!= [[nodiscard]] (const _Tp& __lhs, const optional<_Up>& __rhs)
     -> __optional_ne_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       if (__rhs.has_value())
 	return __lhs != *__rhs;
       return true;
@@ -1863,8 +1876,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator< [[nodiscard]] (const optional<_Tp>& __lhs, const _Up& __rhs)
     -> __optional_lt_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__lhs);
       if (__lhs.has_value())
 	return *__lhs < __rhs;
       return true;
@@ -1875,8 +1888,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator< [[nodiscard]] (const _Tp& __lhs, const optional<_Up>& __rhs)
     -> __optional_lt_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       if (__rhs.has_value())
 	return __lhs < *__rhs;
       return false;
@@ -1887,8 +1900,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator> [[nodiscard]] (const optional<_Tp>& __lhs, const _Up& __rhs)
     -> __optional_gt_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__lhs);
       if (__lhs.has_value())
 	return *__lhs > __rhs;
       return false;
@@ -1899,8 +1912,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator> [[nodiscard]] (const _Tp& __lhs, const optional<_Up>& __rhs)
     -> __optional_gt_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       if (__rhs.has_value())
 	return __lhs > *__rhs;
       return true;
@@ -1911,8 +1924,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator<= [[nodiscard]] (const optional<_Tp>& __lhs, const _Up& __rhs)
     -> __optional_le_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__lhs);
       if (__lhs.has_value())
 	return *__lhs <= __rhs;
       return true;
@@ -1923,8 +1936,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator<= [[nodiscard]] (const _Tp& __lhs, const optional<_Up>& __rhs)
     -> __optional_le_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       if (__rhs.has_value())
 	return __lhs <= *__rhs;
       return false;
@@ -1935,8 +1948,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator>= [[nodiscard]] (const optional<_Tp>& __lhs, const _Up& __rhs)
     -> __optional_ge_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__lhs);
       if (__lhs.has_value())
 	return *__lhs >= __rhs;
       return false;
@@ -1947,8 +1960,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr auto
     operator>= [[nodiscard]] (const _Tp& __lhs, const optional<_Up>& __rhs)
     -> __optional_ge_t<_Tp, _Up>
-    _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       if (__rhs.has_value())
 	return __lhs >= *__rhs;
       return true;
@@ -1969,8 +1982,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       && three_way_comparable_with<_Tp, _Up>
     constexpr compare_three_way_result_t<_Tp, _Up>
     operator<=> [[nodiscard]] (const optional<_Tp>& __x, const _Up& __v)
-    _GLIBCXX_CONVEYOR_REQUIRES(__x)
-    { return bool(__x) ? *__x <=> __v : strong_ordering::less; }
+    { _GLIBCXX_CONVEYOR_TRUST(__x); return bool(__x) ? *__x <=> __v : strong_ordering::less; }
 #endif
 
   // Swap and creation functions.
@@ -1982,8 +1994,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline enable_if_t<is_move_constructible_v<_Tp> && is_swappable_v<_Tp>>
     swap(optional<_Tp>& __lhs, optional<_Tp>& __rhs)
     noexcept(noexcept(__lhs.swap(__rhs)))
-    _GLIBCXX_CONVEYOR_REQUIRES(__lhs) _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
-    { __lhs.swap(__rhs); }
+    { _GLIBCXX_CONVEYOR_TRUST(__lhs); _GLIBCXX_CONVEYOR_TRUST(__rhs); __lhs.swap(__rhs); }
 
 #if __cpp_lib_optional >= 202506L
   // We deviate from standard, that do not declared separate swap overload
