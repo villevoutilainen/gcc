@@ -870,6 +870,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     find(const _CharT* __s, size_type __pos, size_type __n) const
     _GLIBCXX_NOEXCEPT
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_requires_string_len(__s, __n);
       const size_type __size = this->size();
 
@@ -906,6 +907,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     basic_string<_CharT, _Traits, _Alloc>::
     find(_CharT __c, size_type __pos) const _GLIBCXX_NOEXCEPT
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       size_type __ret = npos;
       const size_type __size = this->size();
       if (__pos < __size)
@@ -926,6 +928,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     rfind(const _CharT* __s, size_type __pos, size_type __n) const
     _GLIBCXX_NOEXCEPT
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_requires_string_len(__s, __n);
       const size_type __size = this->size();
       if (__n <= __size)
@@ -948,6 +951,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     basic_string<_CharT, _Traits, _Alloc>::
     rfind(_CharT __c, size_type __pos) const _GLIBCXX_NOEXCEPT
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       size_type __size = this->size();
       if (__size)
 	{
@@ -967,6 +971,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     find_first_of(const _CharT* __s, size_type __pos, size_type __n) const
     _GLIBCXX_NOEXCEPT
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_requires_string_len(__s, __n);
       for (; __n && __pos < this->size(); ++__pos)
 	{
@@ -984,6 +989,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     find_last_of(const _CharT* __s, size_type __pos, size_type __n) const
     _GLIBCXX_NOEXCEPT
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_requires_string_len(__s, __n);
       size_type __size = this->size();
       if (__size && __n)
@@ -1007,6 +1013,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     find_first_not_of(const _CharT* __s, size_type __pos, size_type __n) const
     _GLIBCXX_NOEXCEPT
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_requires_string_len(__s, __n);
       for (; __pos < this->size(); ++__pos)
 	if (!traits_type::find(__s, __n, _M_data()[__pos]))
@@ -1020,6 +1027,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     basic_string<_CharT, _Traits, _Alloc>::
     find_first_not_of(_CharT __c, size_type __pos) const _GLIBCXX_NOEXCEPT
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       for (; __pos < this->size(); ++__pos)
 	if (!traits_type::eq(_M_data()[__pos], __c))
 	  return __pos;
@@ -1033,6 +1041,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     find_last_not_of(const _CharT* __s, size_type __pos, size_type __n) const
     _GLIBCXX_NOEXCEPT
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_requires_string_len(__s, __n);
       size_type __size = this->size();
       if (__size)
@@ -1055,6 +1064,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     basic_string<_CharT, _Traits, _Alloc>::
     find_last_not_of(_CharT __c, size_type __pos) const _GLIBCXX_NOEXCEPT
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       size_type __size = this->size();
       if (__size)
 	{
