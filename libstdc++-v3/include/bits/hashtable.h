@@ -670,8 +670,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       allocator_type
       get_allocator() const noexcept _GLIBCXX_CONVEYOR_AUTO
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return allocator_type(this->_M_node_allocator());
       }
 

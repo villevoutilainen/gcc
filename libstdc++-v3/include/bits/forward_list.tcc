@@ -412,7 +412,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       forward_list<_Tp, _Alloc>::
       sort(_Comp __comp)
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (empty())
 	  return;
 

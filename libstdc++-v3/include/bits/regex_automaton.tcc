@@ -200,6 +200,7 @@ namespace __detail
     _StateSeq<_TraitsT>
     _StateSeq<_TraitsT>::_M_clone()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
       _GLIBCXX_STD_C::map<_StateIdT, _StateIdT> __m;
       std::stack<_StateIdT, _GLIBCXX_STD_C::deque<_StateIdT>> __stack;

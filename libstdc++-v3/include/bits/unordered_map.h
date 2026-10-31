@@ -491,8 +491,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       /// Extract a node.
       node_type
       extract(const_iterator __pos)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	__glibcxx_assert(__pos != end());
+	__glibcxx_assert_noconveyor(__pos != end());
 	return _M_h.extract(__pos);
       }
 
@@ -554,8 +555,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       template <typename... _Args>
 	pair<iterator, bool>
 	try_emplace(key_type&& __k, _Args&&... __args)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
-	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return _M_h.try_emplace(cend(), std::move(__k),
 				  std::forward<_Args>(__args)...);
 	}
@@ -1965,8 +1966,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       /// Extract a node.
       node_type
       extract(const_iterator __pos)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	__glibcxx_assert(__pos != end());
+	__glibcxx_assert_noconveyor(__pos != end());
 	return _M_h.extract(__pos);
       }
 

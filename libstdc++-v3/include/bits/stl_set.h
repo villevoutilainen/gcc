@@ -665,9 +665,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #ifdef __glibcxx_node_extract // >= C++17
       /// Extract a node.
       node_type
-      extract(const_iterator __pos) _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      extract(const_iterator __pos)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	__glibcxx_assert(__pos != end());
+	__glibcxx_assert_noconveyor(__pos != end());
 	return _M_t.extract(__pos);
       }
 
@@ -846,8 +847,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       size_type
       count(const key_type& __x) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return _M_t.find(__x) == _M_t.end() ? 0 : 1;
       }
 
@@ -1098,9 +1099,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     inline bool
     operator==(const set<_Key, _Compare, _Alloc>& __x,
 	       const set<_Key, _Compare, _Alloc>& __y)
+    _GLIBCXX_CONVEYOR_REQUIRES(__y)
+    _GLIBCXX_CONVEYOR_REQUIRES(__x)
     {
-      _GLIBCXX_CONVEYOR_TRUST(__x);
-      _GLIBCXX_CONVEYOR_TRUST(__y);
       return __x._M_t == __y._M_t;
     }
 
