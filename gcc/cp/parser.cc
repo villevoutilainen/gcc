@@ -13838,7 +13838,13 @@ cp_parser_lambda_body (cp_parser* parser, tree lambda_expr)
 		location_t loc = DECL_SOURCE_LOCATION (cap_fld);
 		error_at (loc, "%qE is not implicitly captured by a contract"
 			  " assertion", expr);
-		inform (DECL_SOURCE_LOCATION (expr), "%q#E declared here", expr);
+		/* A captured reference is its implicit dereference.  */
+		tree decl = tree_strip_any_location_wrapper (expr);
+		if (REFERENCE_REF_P (decl))
+		  decl = TREE_OPERAND (decl, 0);
+		if (DECL_P (decl))
+		  inform (DECL_SOURCE_LOCATION (decl), "%q#D declared here",
+			  decl);
 	      }
 	  }
       }
