@@ -38,13 +38,14 @@ cxx=("$build/gcc/xg++" "-B$build/gcc/" -nostdinc++
      -std=gnu++26 -O0 -fcontracts -fcontract-control-objects -c -o /dev/null)
 declare -A configs=(
   [conveyor]="-D_GLIBCXX_CONVEYOR_ASSERTIONS"
+  [precondition]="-D_GLIBCXX_CONVEYOR_ASSERTIONS -D_GLIBCXX_PRECONDITION_ASSERTIONS"
   [control]=""
 )
 
 mkdir -p "$out"
 results=$out/results.txt
 : > "$results"
-for config in conveyor control; do
+for config in conveyor precondition control; do
   for engine in gimple ast; do
     dir=$out/$config-$engine
     mkdir -p "$dir"

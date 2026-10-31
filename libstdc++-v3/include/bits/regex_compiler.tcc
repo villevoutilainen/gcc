@@ -91,6 +91,7 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_disjunction()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       this->_M_alternative();
       while (_M_match_token(_ScannerT::_S_token_or))
 	{
@@ -115,6 +116,7 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_alternative()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (this->_M_term())
 	{
 	  _StateSeqT __re = _M_pop();
@@ -306,6 +308,7 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_atom()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_match_token(_ScannerT::_S_token_anychar))
 	{
 	  if (!(_M_flags & regex_constants::ECMAScript))
@@ -364,6 +367,7 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_insert_any_matcher_ecma()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_stack.push(_StateSeqT(*_M_nfa,
 	_M_nfa->_M_insert_matcher
 	  (_AnyMatcher<_TraitsT, true, __icase, __collate>
@@ -376,6 +380,7 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_insert_any_matcher_posix()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_stack.push(_StateSeqT(*_M_nfa,
 	_M_nfa->_M_insert_matcher
 	  (_AnyMatcher<_TraitsT, false, __icase, __collate>

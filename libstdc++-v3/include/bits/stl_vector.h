@@ -1431,7 +1431,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
-      at(size_type __n)
+      at(size_type __n) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	_M_range_check(__n);
 	return (*this)[__n];
@@ -1556,6 +1556,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       void
       push_back(value_type&& __x)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { emplace_back(std::move(__x)); }
 
       template<typename... _Args>
@@ -1565,7 +1566,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #else
 	void
 #endif
-	emplace_back(_Args&&... __args);
+	emplace_back(_Args&&... __args) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 #endif
 
       /**

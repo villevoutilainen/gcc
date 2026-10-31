@@ -1401,7 +1401,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       template<typename _RandomAccessIterator2>
         pair<_RandomAccessIterator2, _RandomAccessIterator2>
 	operator()(_RandomAccessIterator2 __first,
-		   _RandomAccessIterator2 __last) const;
+		   _RandomAccessIterator2 __last) const _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
     private:
       bool

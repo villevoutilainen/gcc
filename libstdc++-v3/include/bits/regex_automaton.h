@@ -287,6 +287,7 @@ namespace __detail
       _StateIdT
       _M_insert_subexpr_end()
       {
+        _GLIBCXX_CONVEYOR_TRUST_THIS;
 	_StateT __tmp(_S_opcode_subexpr_end);
 	__tmp._M_subexpr = this->_M_paren_stack.back();
 	this->_M_paren_stack.pop_back();
@@ -373,6 +374,8 @@ namespace __detail
       void
       _M_append(_StateIdT __id)
       {
+        _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
+        _GLIBCXX_CONVEYOR_TRUST_THIS;
 	_M_nfa[_M_end]._M_next = __id;
 	_M_end = __id;
       }
@@ -381,6 +384,8 @@ namespace __detail
       void
       _M_append(const _StateSeq& __s)
       {
+        _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
+        _GLIBCXX_CONVEYOR_TRUST_THIS;
 	_M_nfa[_M_end]._M_next = __s._M_start;
 	_M_end = __s._M_end;
       }

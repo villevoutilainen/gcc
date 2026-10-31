@@ -1326,6 +1326,7 @@ namespace __fwdlist
 	void
 #endif
 	emplace_front(_Args&&... __args)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  this->_M_insert_after(cbefore_begin(),
 				std::forward<_Args>(__args)...);

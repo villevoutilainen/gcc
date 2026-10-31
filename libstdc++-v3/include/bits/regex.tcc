@@ -56,6 +56,7 @@ namespace __detail
       if (__re._M_automaton == nullptr)
 	return false;
 
+      _GLIBCXX_CONVEYOR_TRUST(__m);
       typename match_results<_BiIter, _Alloc>::_Unchecked& __res = __m;
       __m._M_begin = __s;
       __m._M_resize(__re._M_automaton->_M_sub_count());

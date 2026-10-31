@@ -970,6 +970,44 @@ namespace contracts
       __make(const char* __msg = nullptr) noexcept
       { return noexcept_assert(__msg); }
     };
+
+  // A container's declared precondition: proven, so the caller's code is
+  // checked against it, for a container whose operations can be conveyor;
+  // an ordinary checked precondition for one with a fancy pointer, whose
+  // can't (__container_conveyor_p).
+  template<bool _Conveyor>
+    struct __container_pre
+    {
+      static consteval conveyor_assert
+      __make() noexcept
+      { return conveyor_assert{}; }
+    };
+
+  template<>
+    struct __container_pre<false>
+    {
+      static consteval noexcept_assert
+      __make() noexcept
+      { return noexcept_assert(); }
+    };
+
+  // The precondition that such a container is an object: proven, or for
+  // one with a fancy pointer, which can't be proven, never-proven.
+  template<bool _Conveyor>
+    struct __container_object_pre
+    {
+      static consteval conveyor_assert
+      __make() noexcept
+      { return conveyor_assert{}; }
+    };
+
+  template<>
+    struct __container_object_pre<false>
+    {
+      static consteval never_proven_conveyor
+      __make() noexcept
+      { return never_proven_conveyor(); }
+    };
   /// @endcond
 
   // Identical to conveyor_assert above, but declares analyzed_conveyor()

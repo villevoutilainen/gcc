@@ -291,6 +291,7 @@ namespace __detail
     bool _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_main_bfs(_Match_mode __match_mode)
     {
+      _GLIBCXX_CONVEYOR_TRUST(_M_results);
       _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_match_queue.emplace_back(_M_start, _M_results);
@@ -360,6 +361,8 @@ namespace __detail
     _StateIdT _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_rep_once_more(_Match_mode, _StateIdT __i)
     {
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const auto& __state = _M_nfa[__i];
       auto& __rep_count = _M_rep_count[__i];
       if (__rep_count.second == 0 || __rep_count.first != _M_current)
@@ -420,6 +423,8 @@ namespace __detail
     inline _StateIdT _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_handle_repeat(_Match_mode __match_mode, _StateIdT __i)
     {
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const auto& __state = _M_nfa[__i];
       // Greedy.
       if (!__state._M_neg)
@@ -471,6 +476,8 @@ namespace __detail
     inline _StateIdT _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_handle_subexpr_begin(_Match_mode, _StateIdT __i)
     {
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const auto& __state = _M_nfa[__i];
       auto& __res = _M_cur_results[__state._M_subexpr];
       if (_M_nfa._M_has_backref
@@ -491,6 +498,8 @@ namespace __detail
     inline _StateIdT _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_handle_subexpr_end(_Match_mode, _StateIdT __i)
     {
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const auto& __state = _M_nfa[__i];
       auto& __res = _M_cur_results[__state._M_subexpr];
       if (_M_nfa._M_has_backref
@@ -513,6 +522,8 @@ namespace __detail
     inline _StateIdT _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_handle_line_begin_assertion(_Match_mode, _StateIdT __i)
     {
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const auto& __state = _M_nfa[__i];
       if (_M_at_begin())
 	return __state._M_next;
@@ -523,6 +534,8 @@ namespace __detail
     inline _StateIdT _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_handle_line_end_assertion(_Match_mode, _StateIdT __i)
     {
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const auto& __state = _M_nfa[__i];
       if (_M_at_end())
 	return __state._M_next;
@@ -533,6 +546,8 @@ namespace __detail
     inline _StateIdT _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_handle_word_boundary(_Match_mode, _StateIdT __i)
     {
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const auto& __state = _M_nfa[__i];
       if (_M_word_boundary() == !__state._M_neg)
 	return __state._M_next;
@@ -545,6 +560,8 @@ namespace __detail
     _StateIdT _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_handle_subexpr_lookahead(_Match_mode, _StateIdT __i)
     {
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const auto& __state = _M_nfa[__i];
       if (_M_lookahead(__state._M_alt) == !__state._M_neg)
 	return __state._M_next;
@@ -559,6 +576,8 @@ namespace __detail
     inline _StateIdT _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_handle_match(_Match_mode, _StateIdT __i)
     {
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const auto& __state = _M_nfa[__i];
       if (_M_current == _M_end)
 	return _S_invalid_state_id;
@@ -633,6 +652,8 @@ namespace __detail
     _StateIdT _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_handle_backref(_Match_mode, _StateIdT __i)
     {
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_assert(_M_search_mode == _Search_mode::_Dfs);
 
       const auto& __state = _M_nfa[__i];
@@ -720,6 +741,8 @@ namespace __detail
     inline _StateIdT _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_handle_alternative(_Match_mode, _StateIdT __i)
     {
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const auto& __state = _M_nfa[__i];
       if (_M_nfa._M_flags & regex_constants::ECMAScript)
 	{
@@ -747,6 +770,7 @@ namespace __detail
     inline _StateIdT _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_node(_Match_mode __match_mode, _StateIdT __i)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       // DFS has no _M_visited implementation as such don't even have the branch
       // or the check in the call graph.
       if constexpr (__search_mode == _Search_mode::_Bfs)
@@ -754,6 +778,7 @@ namespace __detail
 	  return _S_invalid_state_id;
 
       _StateIdT __next = _S_invalid_state_id;
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
       switch (_M_nfa[__i]._M_opcode())
 	{
 	case _S_opcode_repeat:

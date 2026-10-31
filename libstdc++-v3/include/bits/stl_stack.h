@@ -299,6 +299,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #if __cplusplus >= 201103L
       _GLIBCXX26_CONSTEXPR void
       push(value_type&& __x)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { c.push_back(std::move(__x)); }
 
 #if __cplusplus > 201402L
