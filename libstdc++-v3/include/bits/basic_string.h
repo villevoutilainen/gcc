@@ -846,7 +846,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       explicit
       basic_string(const _Alloc& __a) _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _M_dataplus(_M_local_data(), __a)
@@ -862,7 +862,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string(const basic_string& __str)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__str)))
       // '_M_local_data ()' inlined here -- see the move constructor's own
       // identical comment just above for why.
@@ -906,7 +906,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string(const basic_string& __str, size_type __pos,
 		   const _Alloc& __a = _Alloc())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__a))
 	&& std::is_object_address (__builtin_addressof (__str)))
 #endif
@@ -928,7 +928,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string(const basic_string& __str, size_type __pos,
 		   size_type __n)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__str)))
 #endif
       : _M_dataplus(_M_local_data())
@@ -950,7 +950,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string(const basic_string& __str, size_type __pos,
 		   size_type __n, const _Alloc& __a)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__a))
 	&& std::is_object_address (__builtin_addressof (__str)))
 #endif
@@ -967,7 +967,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string(basic_string&& __str, size_type __pos,
 		   const _Alloc& __a = _Alloc())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _M_dataplus(_M_local_data(), __a)
@@ -980,7 +980,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string(basic_string&& __str, size_type __pos, size_type __n,
 		   const _Alloc& __a = _Alloc())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _M_dataplus(_M_local_data(), __a)
@@ -1003,7 +1003,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string(const _CharT* __s, size_type __n,
 		   const _Alloc& __a = _Alloc())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _M_dataplus(_M_local_data(), __a)
@@ -1028,7 +1028,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string(const _CharT* __s, const _Alloc& __a = _Alloc())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _M_dataplus(_M_local_data(), __a)
@@ -1055,7 +1055,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string(size_type __n, _CharT __c, const _Alloc& __a = _Alloc())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _M_dataplus(_M_local_data(), __a)
@@ -1072,7 +1072,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string(basic_string&& __str) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__str)))
       // D4324/P2680: '_M_local_data ()' inlined here (rather than called
       // as its own method) specifically under _GLIBCXX_CONVEYOR_ASSERTIONS
@@ -1231,6 +1231,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       template<__detail::__container_compatible_range<_CharT> _Rg>
 	constexpr
 	basic_string(from_range_t, _Rg&& __rg, const _Alloc& __a = _Alloc())
+	_GLIBCXX_CONVEYOR_REQUIRES(__a)
 	: basic_string(__a)
 	{
 	  if constexpr (ranges::forward_range<_Rg> || ranges::sized_range<_Rg>)
@@ -1258,7 +1259,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string(initializer_list<_CharT> __l, const _Alloc& __a = _Alloc())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _M_dataplus(_M_local_data(), __a)
@@ -1267,7 +1268,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string(const basic_string& __str, const _Alloc& __a)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__a)))
 #endif
       : _M_dataplus(_M_local_data(), __a)
@@ -1277,9 +1278,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string(basic_string&& __str, const _Alloc& __a)
       noexcept(_Alloc_traits::_S_always_equal())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__a)))
-      _GLIBCXX_CONVEYOR_TRUST_PRE(__str)
+      _GLIBCXX_CONVEYOR_REQUIRES(__str)
 #endif
       : _M_dataplus(_M_local_data(), __a)
       {
@@ -1326,7 +1327,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
         basic_string(_InputIterator __beg, _InputIterator __end,
 		     const _Alloc& __a = _Alloc())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	pre<std::contracts::never_proven_conveyor_v>
+	pre<std::contracts::conveyor_assert_v>
 	  (std::is_object_address (__builtin_addressof (__a)))
 #endif
 	: _M_dataplus(_M_local_data(), __a), _M_string_length(0)
@@ -1373,7 +1374,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       ~basic_string()
       // D4324/P2680: see _M_destroy's own comment just below.
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { _M_dispose(); }
 
@@ -1384,11 +1385,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       operator=(const basic_string& __str)
-      {
-	_GLIBCXX_CONVEYOR_TRUST(__str);
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
-	return this->assign(__str);
-      }
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__str)
+      { return this->assign(__str); }
 
       /**
        *  @brief  Copy contents of @a s into this string.
@@ -1398,7 +1396,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       operator=(const _CharT* __s)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return this->assign(__s); }
 
@@ -1432,8 +1430,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       operator=(basic_string&& __str)
       noexcept(_Alloc_traits::_S_nothrow_move())
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__str)))
 #endif
       {
@@ -1608,7 +1606,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       iterator
       begin() _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return iterator(_M_data()); }
 
@@ -1620,7 +1618,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       const_iterator
       begin() const _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return const_iterator(_M_data()); }
 
@@ -1632,7 +1630,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       iterator
       end() _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return iterator(_M_data() + this->size()); }
 
@@ -1644,7 +1642,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       const_iterator
       end() const _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return const_iterator(_M_data() + this->size()); }
 
@@ -1656,6 +1654,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reverse_iterator
       rbegin() _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return reverse_iterator(this->end()); }
 
       /**
@@ -1676,6 +1675,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reverse_iterator
       rend() _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return reverse_iterator(this->begin()); }
 
       /**
@@ -1715,6 +1715,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reverse_iterator
       crbegin() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return const_reverse_iterator(this->end()); }
 
       /**
@@ -1725,6 +1726,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reverse_iterator
       crend() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return const_reverse_iterator(this->begin()); }
 #endif
 
@@ -1752,7 +1754,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // read plus a call to max_size (), itself now real), confirmed via
       // direct testing not to invalidate 'this' here.
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return size(); }
@@ -1794,7 +1796,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       void
       resize(size_type __n, _CharT __c)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       ;
 
@@ -1812,7 +1814,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       void
       resize(size_type __n)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { this->resize(__n, _CharT()); }
 
@@ -1822,8 +1824,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       ///  A non-binding request to reduce capacity() to size().
       _GLIBCXX20_CONSTEXPR
       void
-      shrink_to_fit() noexcept
-      { _GLIBCXX_CONVEYOR_TRUST_THIS; reserve(); }
+      shrink_to_fit() noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      { reserve(); }
 #pragma GCC diagnostic pop
 #endif
 
@@ -1861,7 +1863,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	constexpr void
 	resize_and_overwrite(size_type __n, _Operation __op)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-	pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+	pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 	// '_Operation' is explicitly instantiated as a reference type
 	// ('resize_and_overwrite<_Operation&>') by __resize_and_overwrite's
 	// own forwarding call below, making '__op' a reference parameter
@@ -1869,7 +1871,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	// reference parameter. For the ordinary, directly-called, by-value
 	// instantiation this is trivially satisfied ('&__op' is a bare
 	// PARM_DECL's own address).
-	pre<std::contracts::never_proven_conveyor_v>
+	pre<std::contracts::conveyor_assert_v>
 	  (std::is_object_address (__builtin_addressof (__op)))
 #endif
 	;
@@ -1898,7 +1900,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // D4324/P2680: real (conveyor_assert_v) postcondition -- body only
       // calls _M_is_local () and max_size () (both now real).
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
@@ -1934,7 +1936,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // _M_dispose, _M_data, _M_capacity (all now real) and the static
       // _S_copy (takes a pointer argument, not 'this').
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       ;
@@ -1956,7 +1958,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       void
       clear() _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { _M_set_length(0); }
 
@@ -1984,7 +1986,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       const_reference
       operator[] (size_type __pos) const _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	__glibcxx_assert(__pos <= size());
@@ -2005,7 +2007,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       reference
       operator[](size_type __pos)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
         // Allow pos == size() both in C++98 mode, as v3 extension,
@@ -2097,7 +2099,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       reference
       back() noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	__glibcxx_assert(!empty());
@@ -2112,7 +2114,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       const_reference
       back() const noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	__glibcxx_assert(!empty());
@@ -2129,11 +2131,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       operator+=(const basic_string& __str)
-      {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
-	_GLIBCXX_CONVEYOR_TRUST(__str);
-	return this->append(__str);
-      }
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__str)
+      { return this->append(__str); }
 
       /**
        *  @brief  Append a C string.
@@ -2327,6 +2326,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       append(initializer_list<_CharT> __l)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return this->append(__l.begin(), __l.size()); }
 #endif // C++11
 
@@ -2347,6 +2347,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #endif
         basic_string&
         append(_InputIterator __first, _InputIterator __last)
+        _GLIBCXX_CONVEYOR_REQUIRES_THIS
         { return this->replace(end(), end(), __first, __last); }
 
 #ifdef __glibcxx_string_view
@@ -2472,6 +2473,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       assign(basic_string&& __str)
       noexcept(_Alloc_traits::_S_nothrow_move())
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
 	// 2063. Contradictory requirements for string move assignment
@@ -2535,7 +2537,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       assign(const _CharT* __s)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	__glibcxx_requires_string(__s);
@@ -2556,7 +2558,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       assign(size_type __n, _CharT __c)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return _M_replace_aux(size_type(0), this->size(), __n, __c); }
 
@@ -2724,6 +2726,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       iterator
       insert(const_iterator __p, size_type __n, _CharT __c)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	_GLIBCXX_DEBUG_PEDASSERT(__p >= begin() && __p <= end());
 	const size_type __pos = __p - begin();
@@ -2746,6 +2749,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       */
       void
       insert(iterator __p, size_type __n, _CharT __c)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {	this->replace(__p, __p, __n, __c);  }
 #endif
 
@@ -2769,6 +2773,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_GLIBCXX20_CONSTEXPR
 	iterator
         insert(const_iterator __p, _InputIterator __beg, _InputIterator __end)
+        _GLIBCXX_CONVEYOR_REQUIRES_THIS
         {
 	  _GLIBCXX_DEBUG_PEDASSERT(__p >= begin() && __p <= end());
 	  const size_type __pos = __p - begin();
@@ -2836,6 +2841,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       iterator
       insert(const_iterator __p, initializer_list<_CharT> __l)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return this->insert(__p, __l.begin(), __l.end()); }
 
 #ifdef _GLIBCXX_DEFINING_STRING_INSTANTIATIONS
@@ -2865,8 +2871,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       insert(size_type __pos1, const basic_string& __str)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__str)))
 #endif
       { return this->replace(__pos1, size_type(0),
@@ -2894,6 +2900,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       insert(size_type __pos1, const basic_string& __str,
 	     size_type __pos2, size_type __n = npos)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return this->replace(__pos1, size_type(0), __str._M_data()
 			     + __str._M_check(__pos2, "basic_string::insert"),
 			     __str._M_limit(__pos2, __n)); }
@@ -2917,6 +2924,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       insert(size_type __pos, const _CharT* __s, size_type __n)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return this->replace(__pos, size_type(0), __s, __n); }
 
       /**
@@ -2938,7 +2946,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       insert(size_type __pos, const _CharT* __s)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	__glibcxx_requires_string(__s);
@@ -2990,6 +2998,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       iterator
       insert(__const_iterator __p, _CharT __c)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	_GLIBCXX_DEBUG_PEDASSERT(__p >= begin() && __p <= end());
 	const size_type __pos = __p - begin();
@@ -3008,6 +3017,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_GLIBCXX20_CONSTEXPR
 	_If_sv<_Tp, basic_string&>
 	insert(size_type __pos, const _Tp& __svt)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  __sv_type __sv = __svt;
 	  return this->insert(__pos, __sv.data(), __sv.size());
@@ -3026,6 +3036,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_If_sv<_Tp, basic_string&>
 	insert(size_type __pos1, const _Tp& __svt,
 	       size_type __pos2, size_type __n = npos)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  __sv_type __sv = __svt;
 	  return this->replace(__pos1, size_type(0),
@@ -3073,6 +3084,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       iterator
       erase(__const_iterator __position)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	_GLIBCXX_DEBUG_PEDASSERT(__position >= begin()
 				 && __position < end());
@@ -3093,6 +3105,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       iterator
       erase(__const_iterator __first, __const_iterator __last)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	_GLIBCXX_DEBUG_PEDASSERT(__first >= begin() && __first <= __last
 				 && __last <= end());
@@ -3164,6 +3177,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       replace(size_type __pos1, size_type __n1, const basic_string& __str,
 	      size_type __pos2, size_type __n2 = npos)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return this->replace(__pos1, __n1, __str._M_data()
 			     + __str._M_check(__pos2, "basic_string::replace"),
 			     __str._M_limit(__pos2, __n2)); }
@@ -3191,7 +3205,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       replace(size_type __pos, size_type __n1, const _CharT* __s,
 	      size_type __n2)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	__glibcxx_requires_string_len(__s, __n2);
@@ -3218,6 +3232,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       replace(size_type __pos, size_type __n1, const _CharT* __s)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_requires_string(__s);
 	return this->replace(__pos, __n1, __s, traits_type::length(__s));
@@ -3285,6 +3300,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       replace(__const_iterator __i1, __const_iterator __i2,
 	      const _CharT* __s, size_type __n)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	_GLIBCXX_DEBUG_PEDASSERT(begin() <= __i1 && __i1 <= __i2
 				 && __i2 <= end());
@@ -3307,6 +3323,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string&
       replace(__const_iterator __i1, __const_iterator __i2, const _CharT* __s)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_requires_string(__s);
 	return this->replace(__i1, __i2, __s, traits_type::length(__s));
@@ -3330,6 +3347,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       replace(__const_iterator __i1, __const_iterator __i2, size_type __n,
 	      _CharT __c)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	_GLIBCXX_DEBUG_PEDASSERT(begin() <= __i1 && __i1 <= __i2
 				 && __i2 <= end());
@@ -3401,6 +3419,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       replace(__const_iterator __i1, __const_iterator __i2,
 	      const _CharT* __k1, const _CharT* __k2)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	_GLIBCXX_DEBUG_PEDASSERT(begin() <= __i1 && __i1 <= __i2
 				 && __i2 <= end());
@@ -3425,6 +3444,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string&
       replace(__const_iterator __i1, __const_iterator __i2,
 	      const_iterator __k1, const_iterator __k2)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	_GLIBCXX_DEBUG_PEDASSERT(begin() <= __i1 && __i1 <= __i2
 				 && __i2 <= end());
@@ -3476,6 +3496,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       basic_string& replace(const_iterator __i1, const_iterator __i2,
 			    initializer_list<_CharT> __l)
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return this->replace(__i1, __i2, __l.begin(), __l.size()); }
 #endif // C++11
 
@@ -3491,6 +3512,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_GLIBCXX20_CONSTEXPR
 	_If_sv<_Tp, basic_string&>
 	replace(size_type __pos, size_type __n, const _Tp& __svt)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  __sv_type __sv = __svt;
 	  return this->replace(__pos, __n, __sv.data(), __sv.size());
@@ -3510,6 +3532,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_If_sv<_Tp, basic_string&>
 	replace(size_type __pos1, size_type __n1, const _Tp& __svt,
 		size_type __pos2, size_type __n2 = npos)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  __sv_type __sv = __svt;
 	  return this->replace(__pos1, __n1,
@@ -3531,6 +3554,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_GLIBCXX20_CONSTEXPR
 	_If_sv<_Tp, basic_string&>
 	replace(const_iterator __i1, const_iterator __i2, const _Tp& __svt)
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  __sv_type __sv = __svt;
 	  return this->replace(__i1 - begin(), __i2 - __i1, __sv);
@@ -3607,7 +3631,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       void
       swap(basic_string& __s) _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this)
 	&& std::is_object_address (__builtin_addressof (__s)))
 #endif
       ;
@@ -3625,7 +3649,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // D4324/P2680: real (conveyor_assert_v) postcondition -- trivial
       // one-hop delegation to _M_data () (already real).
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return _M_data(); }
@@ -3644,7 +3668,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // D4324/P2680: real (conveyor_assert_v) postcondition -- trivial
       // one-hop delegation to _M_data () (already real).
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return _M_data(); }
@@ -3660,7 +3684,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _CharT*
       data() noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return _M_data(); }
 #endif
@@ -3703,11 +3727,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find(const basic_string& __str, size_type __pos = 0) const
-      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES(__str)
-      {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
-	return this->find(__str.data(), __pos, __str.size());
-      }
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__str)
+      { return this->find(__str.data(), __pos, __str.size()); }
 
 #ifdef __glibcxx_string_view // >= C++17
       /**
@@ -3863,11 +3885,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       find_first_of(const basic_string& __str, size_type __pos = 0) const
-      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES(__str)
-      {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
-	return this->find_first_of(__str.data(), __pos, __str.size());
-      }
+      _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      _GLIBCXX_CONVEYOR_REQUIRES(__str)
+      { return this->find_first_of(__str.data(), __pos, __str.size()); }
 
 #ifdef __glibcxx_string_view // >= C++17
       /**
@@ -4230,7 +4250,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       basic_string
       substr(size_type __pos = 0, size_type __n = npos) const
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       { return basic_string(*this,
 			    _M_check(__pos, "basic_string::substr"), __n); }
@@ -4284,7 +4304,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       int
       compare(const basic_string& __str) const
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this)
+      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this)
 	&& std::is_object_address (__builtin_addressof (__str)))
 #endif
       {
@@ -4422,6 +4442,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       int
       compare(size_type __pos1, size_type __n1, const basic_string& __str,
 	      size_type __pos2, size_type __n2 = npos) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__str)
       {
 	_M_check(__pos1, "basic_string::compare");
 	__str._M_check(__pos2, "basic_string::compare");
@@ -4675,9 +4696,9 @@ _GLIBCXX_END_NAMESPACE_CXX11
     operator+(const basic_string<_CharT, _Traits, _Alloc>& __lhs,
 	      const basic_string<_CharT, _Traits, _Alloc>& __rhs)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__lhs)))
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__rhs)))
 #endif
     {
@@ -4699,7 +4720,7 @@ _GLIBCXX_END_NAMESPACE_CXX11
     operator+(const _CharT* __lhs,
 	      const basic_string<_CharT,_Traits,_Alloc>& __rhs)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__rhs)))
 #endif
     {
@@ -4721,7 +4742,7 @@ _GLIBCXX_END_NAMESPACE_CXX11
     inline basic_string<_CharT,_Traits,_Alloc>
     operator+(_CharT __lhs, const basic_string<_CharT,_Traits,_Alloc>& __rhs)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__rhs)))
 #endif
     {
@@ -4743,7 +4764,7 @@ _GLIBCXX_END_NAMESPACE_CXX11
     operator+(const basic_string<_CharT, _Traits, _Alloc>& __lhs,
 	      const _CharT* __rhs)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__lhs)))
 #endif
     {
@@ -4764,7 +4785,7 @@ _GLIBCXX_END_NAMESPACE_CXX11
     inline basic_string<_CharT, _Traits, _Alloc>
     operator+(const basic_string<_CharT, _Traits, _Alloc>& __lhs, _CharT __rhs)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__lhs)))
 #endif
     {
@@ -4781,9 +4802,9 @@ _GLIBCXX_END_NAMESPACE_CXX11
     operator+(basic_string<_CharT, _Traits, _Alloc>&& __lhs,
 	      const basic_string<_CharT, _Traits, _Alloc>& __rhs)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__lhs)))
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__rhs)))
 #endif
     { return std::move(__lhs.append(__rhs)); }
@@ -4794,9 +4815,9 @@ _GLIBCXX_END_NAMESPACE_CXX11
     operator+(const basic_string<_CharT, _Traits, _Alloc>& __lhs,
 	      basic_string<_CharT, _Traits, _Alloc>&& __rhs)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__lhs)))
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__rhs)))
 #endif
     {
@@ -4824,9 +4845,9 @@ _GLIBCXX_END_NAMESPACE_CXX11
     operator+(basic_string<_CharT, _Traits, _Alloc>&& __lhs,
 	      basic_string<_CharT, _Traits, _Alloc>&& __rhs)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__lhs)))
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__rhs)))
 #endif
     {
@@ -4864,7 +4885,7 @@ _GLIBCXX_END_NAMESPACE_CXX11
     operator+(const _CharT* __lhs,
 	      basic_string<_CharT, _Traits, _Alloc>&& __rhs)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__rhs)))
 #endif
     {
@@ -4908,7 +4929,7 @@ _GLIBCXX_END_NAMESPACE_CXX11
     operator+(const basic_string<_CharT, _Traits, _Alloc>& __lhs,
 	       type_identity_t<basic_string_view<_CharT, _Traits>> __rhs)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__lhs)))
 #endif
     {
@@ -4935,7 +4956,7 @@ _GLIBCXX_END_NAMESPACE_CXX11
     operator+(type_identity_t<basic_string_view<_CharT, _Traits>> __lhs,
 	       const basic_string<_CharT, _Traits, _Alloc>& __rhs)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::never_proven_conveyor_v>
+      pre<std::contracts::conveyor_assert_v>
 	(std::is_object_address (__builtin_addressof (__rhs)))
 #endif
     {
@@ -4951,6 +4972,7 @@ _GLIBCXX_END_NAMESPACE_CXX11
     constexpr basic_string<_CharT, _Traits, _Alloc>
     operator+(type_identity_t<basic_string_view<_CharT, _Traits>> __lhs,
 	       basic_string<_CharT, _Traits, _Alloc>&& __rhs)
+    _GLIBCXX_CONVEYOR_REQUIRES(__rhs)
     {
       return std::move(__rhs.insert(0, __lhs));
     }
@@ -4970,7 +4992,7 @@ _GLIBCXX_END_NAMESPACE_CXX11
 	       const basic_string<_CharT, _Traits, _Alloc>& __rhs)
     _GLIBCXX_NOEXCEPT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>
+    pre<std::contracts::conveyor_assert_v>
       (std::is_object_address (__builtin_addressof (__lhs))
       && std::is_object_address (__builtin_addressof (__rhs)))
 #endif
@@ -4991,7 +5013,7 @@ _GLIBCXX_END_NAMESPACE_CXX11
     operator==(const basic_string<_CharT, _Traits, _Alloc>& __lhs,
 	       const _CharT* __rhs)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>
+    pre<std::contracts::conveyor_assert_v>
       (std::is_object_address (__builtin_addressof (__lhs)))
 #endif
     {
@@ -5013,7 +5035,7 @@ _GLIBCXX_END_NAMESPACE_CXX11
     operator<=>(const basic_string<_CharT, _Traits, _Alloc>& __lhs,
 		const basic_string<_CharT, _Traits, _Alloc>& __rhs) noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>
+    pre<std::contracts::conveyor_assert_v>
       (std::is_object_address (__builtin_addressof (__lhs))
       && std::is_object_address (__builtin_addressof (__rhs)))
 #endif
@@ -5033,7 +5055,7 @@ _GLIBCXX_END_NAMESPACE_CXX11
 		const _CharT* __rhs) noexcept
     -> decltype(__detail::__char_traits_cmp_cat<_Traits>(0))
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>
+    pre<std::contracts::conveyor_assert_v>
       (std::is_object_address (__builtin_addressof (__lhs)))
 #endif
     { return __detail::__char_traits_cmp_cat<_Traits>(__lhs.compare(__rhs)); }
@@ -5307,9 +5329,9 @@ _GLIBCXX_END_NAMESPACE_CXX11
     inline basic_ostream<_CharT, _Traits>&
     operator<<(basic_ostream<_CharT, _Traits>& __os,
 	       const basic_string<_CharT, _Traits, _Alloc>& __str)
-    _GLIBCXX_CONVEYOR_TRUST_PRE(__os) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+    _GLIBCXX_CONVEYOR_REQUIRES(__os) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-    pre<std::contracts::never_proven_conveyor_v>
+    pre<std::contracts::conveyor_assert_v>
       (std::is_object_address (__builtin_addressof (__os))
       && std::is_object_address (__builtin_addressof (__str)))
 #endif
@@ -5400,7 +5422,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline int
   stoi(const string& __str, size_t* __idx = 0, int __base = 10)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa<long, int>(&std::strtol, "stoi", __str.c_str(),
@@ -5409,7 +5431,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline long
   stol(const string& __str, size_t* __idx = 0, int __base = 10)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa(&std::strtol, "stol", __str.c_str(),
@@ -5418,7 +5440,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline unsigned long
   stoul(const string& __str, size_t* __idx = 0, int __base = 10)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa(&std::strtoul, "stoul", __str.c_str(),
@@ -5428,7 +5450,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline long long
   stoll(const string& __str, size_t* __idx = 0, int __base = 10)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa(&std::strtoll, "stoll", __str.c_str(),
@@ -5437,7 +5459,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline unsigned long long
   stoull(const string& __str, size_t* __idx = 0, int __base = 10)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa(&std::strtoull, "stoull", __str.c_str(),
@@ -5446,7 +5468,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline long long
   stoll(const string& __str, size_t* __idx = 0, int __base = 10)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return std::stol(__str, __idx, __base); }
@@ -5454,7 +5476,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline unsigned long long
   stoull(const string& __str, size_t* __idx = 0, int __base = 10)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return std::stoul(__str, __idx, __base); }
@@ -5463,7 +5485,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline double
   stod(const string& __str, size_t* __idx = 0)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa(&std::strtod, "stod", __str.c_str(), __idx); }
@@ -5473,7 +5495,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline float
   stof(const string& __str, size_t* __idx = 0)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa(&std::strtof, "stof", __str.c_str(), __idx); }
@@ -5481,7 +5503,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline float
   stof(const string& __str, size_t* __idx = 0)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   {
@@ -5503,7 +5525,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline long double
   stold(const string& __str, size_t* __idx = 0)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa(&std::strtold, "stold", __str.c_str(), __idx); }
@@ -5511,7 +5533,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline long double
   stold(const string& __str, size_t* __idx = 0)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return std::stod(__str, __idx); }
@@ -5725,7 +5747,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline int
   stoi(const wstring& __str, size_t* __idx = 0, int __base = 10)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa<long, int>(&std::wcstol, "stoi", __str.c_str(),
@@ -5734,7 +5756,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline long
   stol(const wstring& __str, size_t* __idx = 0, int __base = 10)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa(&std::wcstol, "stol", __str.c_str(),
@@ -5743,7 +5765,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline unsigned long
   stoul(const wstring& __str, size_t* __idx = 0, int __base = 10)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa(&std::wcstoul, "stoul", __str.c_str(),
@@ -5752,7 +5774,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline long long
   stoll(const wstring& __str, size_t* __idx = 0, int __base = 10)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa(&std::wcstoll, "stoll", __str.c_str(),
@@ -5761,7 +5783,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline unsigned long long
   stoull(const wstring& __str, size_t* __idx = 0, int __base = 10)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa(&std::wcstoull, "stoull", __str.c_str(),
@@ -5771,7 +5793,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline float
   stof(const wstring& __str, size_t* __idx = 0)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa(&std::wcstof, "stof", __str.c_str(), __idx); }
@@ -5779,7 +5801,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline double
   stod(const wstring& __str, size_t* __idx = 0)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa(&std::wcstod, "stod", __str.c_str(), __idx); }
@@ -5787,7 +5809,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
   inline long double
   stold(const wstring& __str, size_t* __idx = 0)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-  pre<std::contracts::never_proven_conveyor_v>
+  pre<std::contracts::conveyor_assert_v>
     (std::is_object_address (__builtin_addressof (__str)))
 #endif
   { return __gnu_cxx::__stoa(&std::wcstold, "stold", __str.c_str(), __idx); }

@@ -85,7 +85,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    std::destroy_at(std::addressof(__x));
 	}
       else
-	__location->~_Tp();
+	{
+	  // The object's destructor may require it to be an object
+	  // (basic_string's does); destroy_at itself doesn't yet.
+	  _GLIBCXX_CONVEYOR_TRUST(*__location);
+	  __location->~_Tp();
+	}
     }
 
 #if __cpp_constexpr_dynamic_alloc // >= C++20

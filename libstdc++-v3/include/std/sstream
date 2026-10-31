@@ -230,6 +230,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	    const allocator_type& __a)
 	  requires (is_convertible_v<const _Tp&,
 		    basic_string_view<_CharT, _Traits>>)
+	_GLIBCXX_CONVEYOR_REQUIRES(__a)
 	: _M_string(__t, __a)
 	{ _M_stringbuf_init(__mode); }
 #endif // C++26
@@ -745,6 +746,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	    ios_base::openmode __mode = ios_base::in)
 	  requires (is_convertible_v<const _Tp&,
 		    basic_string_view<_CharT, _Traits>>)
+	_GLIBCXX_CONVEYOR_REQUIRES(__t)
 	: basic_istringstream(__t, __mode, allocator_type{})
 	{ }
 
@@ -752,6 +754,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	basic_istringstream(const _Tp& __t, const allocator_type& __a)
 	  requires (is_convertible_v<const _Tp&,
 		    basic_string_view<_CharT, _Traits>>)
+	_GLIBCXX_CONVEYOR_REQUIRES(__t) _GLIBCXX_CONVEYOR_REQUIRES(__a)
 	: basic_istringstream(__t, ios_base::in, __a)
 	{ }
 
@@ -760,6 +763,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	    const allocator_type& __a)
 	  requires (is_convertible_v<const _Tp&,
 		    basic_string_view<_CharT, _Traits>>)
+	_GLIBCXX_CONVEYOR_REQUIRES(__t) _GLIBCXX_CONVEYOR_REQUIRES(__a)
 	  : __istream_type(), _M_stringbuf(__t, __mode | ios_base::in, __a)
 	{ this->init(std::__addressof(_M_stringbuf)); }
 #endif // C++26
