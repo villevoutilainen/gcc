@@ -172,7 +172,8 @@ namespace __detail
       _StateSeqT
       _M_pop()
       {
-        _GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(_M_stack);
 	auto __ret = _M_stack.top();
 	_M_stack.pop();
 	return __ret;
@@ -245,12 +246,7 @@ namespace __detail
       bool
       _M_match_range(const _StrTransT& __first, const _StrTransT& __last,
 		     const _StrTransT& __s) const
-      {
-	_GLIBCXX_CONVEYOR_TRUST(__first);
-	_GLIBCXX_CONVEYOR_TRUST(__last);
-	_GLIBCXX_CONVEYOR_TRUST(__s);
-	return __first <= __s && __s <= __last;
-      }
+      { return __first <= __s && __s <= __last; }
 
     protected:
       bool _M_in_range_icase(_CharT __first, _CharT __last, _CharT __ch) const
@@ -455,7 +451,6 @@ namespace __detail
       void
       _M_add_char(_CharT __c)
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_M_char_set.push_back(_M_translator._M_translate(__c));
 	_GLIBCXX_DEBUG_ONLY(_M_is_ready = false);
       }
@@ -463,7 +458,6 @@ namespace __detail
       _StringT
       _M_add_collate_element(const _StringT& __s)
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_GLIBCXX_CONVEYOR_TRUST(__s);
 	auto __st = _M_traits.lookup_collatename(__s.data(),
 						 __s.data() + __s.size());
@@ -511,7 +505,6 @@ namespace __detail
       void
       _M_make_range(_CharT __l, _CharT __r)
       {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (__l > __r)
 	  __throw_regex_error(regex_constants::error_range,
 			      "Invalid range in bracket expression.");

@@ -110,6 +110,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       vector<_Tp, _Alloc>::
       emplace_back(_Args&&... __args)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (this->_M_impl._M_finish != this->_M_impl._M_end_of_storage)
 	  {
 	    _GLIBCXX_ASAN_ANNOTATE_GROW(1);
@@ -211,6 +212,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     vector<_Tp, _Alloc>::
     operator=(const vector<_Tp, _Alloc>& __x)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__x);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (std::__addressof(__x) != this)
 	{
 	  _GLIBCXX_ASAN_ANNOTATE_REINIT;

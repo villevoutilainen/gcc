@@ -272,7 +272,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr const_reference
       operator[](size_type __pos) const noexcept
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(__pos < this->_M_len);
 	return *(this->_M_str + __pos);
@@ -292,6 +292,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr const_reference
       front() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(this->_M_len > 0);
 	return *this->_M_str;
@@ -300,6 +301,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr const_reference
       back() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(this->_M_len > 0);
 	return *(this->_M_str + this->_M_len - 1);
@@ -314,6 +316,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr void
       remove_prefix(size_type __n) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(this->_M_len >= __n);
 	this->_M_str += __n;
@@ -322,6 +325,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       constexpr void
       remove_suffix(size_type __n) noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(this->_M_len >= __n);
 	this->_M_len -= __n;
@@ -370,7 +374,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr int
       compare(basic_string_view __str) const noexcept
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
       {
 	const size_type __rlen = std::min(this->_M_len, __str._M_len);
@@ -424,7 +428,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr bool
       starts_with(_CharT __x) const noexcept
-      { return !this->empty() && traits_type::eq(this->front(), __x); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return !this->empty() && traits_type::eq(this->front(), __x); }
 
       [[nodiscard, __gnu__::__nonnull__]]
       constexpr bool
@@ -444,7 +448,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr bool
       ends_with(_CharT __x) const noexcept
-      { return !this->empty() && traits_type::eq(this->back(), __x); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return !this->empty() && traits_type::eq(this->back(), __x); }
 
       [[nodiscard, __gnu__::__nonnull__]]
       constexpr bool
@@ -796,7 +800,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline basic_ostream<_CharT, _Traits>&
     operator<<(basic_ostream<_CharT, _Traits>& __os,
 	       basic_string_view<_CharT,_Traits> __str)
-    _GLIBCXX_CONVEYOR_REQUIRES(__os) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+    _GLIBCXX_CONVEYOR_TRUST_PRE(__os) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
     { return __ostream_insert(__os, __str.data(), __str.size()); }
 #endif // HOSTED
 

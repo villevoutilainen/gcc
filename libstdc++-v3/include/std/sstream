@@ -170,13 +170,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // P0408 Efficient access to basic_stringbuf buffer
       explicit
       basic_stringbuf(const allocator_type& __a)
-      _GLIBCXX_CONVEYOR_REQUIRES(__a)
       : basic_stringbuf(ios_base::in | std::ios_base::out, __a)
       { }
 
       basic_stringbuf(ios_base::openmode __mode,
 		      const allocator_type& __a)
-      _GLIBCXX_CONVEYOR_REQUIRES(__a)
       : __streambuf_type(), _M_mode(__mode), _M_string(__a)
       { }
 
@@ -217,7 +215,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	    ios_base::openmode __mode = ios_base::in | ios_base::out)
 	  requires (is_convertible_v<const _Tp&,
 		    basic_string_view<_CharT, _Traits>>)
-	_GLIBCXX_CONVEYOR_REQUIRES(__t)
 	: basic_stringbuf(__t, __mode, allocator_type{})
 	{ }
 
@@ -233,7 +230,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	    const allocator_type& __a)
 	  requires (is_convertible_v<const _Tp&,
 		    basic_string_view<_CharT, _Traits>>)
-	_GLIBCXX_CONVEYOR_REQUIRES(__a)
 	: _M_string(__t, __a)
 	{ _M_stringbuf_init(__mode); }
 #endif // C++26
@@ -292,8 +288,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD
       __string_type
       str() const _GLIBCXX_LVAL_REF_QUAL
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__string_type __ret(_M_string.get_allocator());
 	if (char_type* __hi = _M_high_mark())
 	  __ret.assign(this->pbase(), __hi);
@@ -310,7 +306,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_GLIBCXX_NODISCARD
 	basic_string<_CharT, _Traits, _SAlloc>
 	str(const _SAlloc& __sa) const
-	_GLIBCXX_CONVEYOR_REQUIRES(__sa)
 	{
 	  auto __sv = view();
 	  return { __sv.data(), __sv.size(), __sa };
@@ -320,8 +315,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD
       __string_type
       str() &&
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	contract_assert<std::contracts::never_proven_conveyor_v>
+	  (std::is_object_address (this));
+#endif
 	if (char_type* __hi = _M_high_mark())
 	  {
 	    if (_M_string.data() == this->pbase()) [[likely]]
@@ -380,7 +378,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       void
       str(__string_type&& __s)
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	_M_string = std::move(__s);
 	_M_stringbuf_init(_M_mode);
@@ -456,7 +453,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	    // things will quickly blow up.
 
 	    // Step 1: Destroy the current internal array.
-	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    _M_string.clear();
 
 	    // Step 2: Use the external array.
@@ -712,7 +708,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #if __cplusplus > 201703L && _GLIBCXX_USE_CXX11_ABI
       // P0408 Efficient access to basic_stringbuf buffer
       basic_istringstream(ios_base::openmode __mode, const allocator_type& __a)
-      _GLIBCXX_CONVEYOR_REQUIRES(__a)
       : __istream_type(), _M_stringbuf(__mode | ios_base::in, __a)
       { this->init(std::__addressof(_M_stringbuf)); }
 
@@ -725,7 +720,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       template<typename _SAlloc>
 	basic_istringstream(const basic_string<_CharT, _Traits, _SAlloc>& __str,
 			    const allocator_type& __a)
-	_GLIBCXX_CONVEYOR_REQUIRES(__a)
 	: basic_istringstream(__str, ios_base::in, __a)
 	{ }
 
@@ -733,7 +727,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	basic_istringstream(const basic_string<_CharT, _Traits, _SAlloc>& __str,
 			    ios_base::openmode __mode,
 			    const allocator_type& __a)
-	_GLIBCXX_CONVEYOR_REQUIRES(__a)
 	: __istream_type(), _M_stringbuf(__str, __mode | ios_base::in, __a)
 	{ this->init(std::__addressof(_M_stringbuf)); }
 
@@ -752,7 +745,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	    ios_base::openmode __mode = ios_base::in)
 	  requires (is_convertible_v<const _Tp&,
 		    basic_string_view<_CharT, _Traits>>)
-	_GLIBCXX_CONVEYOR_REQUIRES(__t)
 	: basic_istringstream(__t, __mode, allocator_type{})
 	{ }
 
@@ -760,7 +752,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	basic_istringstream(const _Tp& __t, const allocator_type& __a)
 	  requires (is_convertible_v<const _Tp&,
 		    basic_string_view<_CharT, _Traits>>)
-	_GLIBCXX_CONVEYOR_REQUIRES(__t) _GLIBCXX_CONVEYOR_REQUIRES(__a)
 	: basic_istringstream(__t, ios_base::in, __a)
 	{ }
 
@@ -769,7 +760,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	    const allocator_type& __a)
 	  requires (is_convertible_v<const _Tp&,
 		    basic_string_view<_CharT, _Traits>>)
-	_GLIBCXX_CONVEYOR_REQUIRES(__t) _GLIBCXX_CONVEYOR_REQUIRES(__a)
 	  : __istream_type(), _M_stringbuf(__t, __mode | ios_base::in, __a)
 	{ this->init(std::__addressof(_M_stringbuf)); }
 #endif // C++26
@@ -814,7 +804,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD
       __string_type
       str() const _GLIBCXX_LVAL_REF_QUAL
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _M_stringbuf.str(); }
 
 #if __cplusplus > 201703L
@@ -825,7 +814,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_GLIBCXX_NODISCARD
 	basic_string<_CharT, _Traits, _SAlloc>
 	str(const _SAlloc& __sa) const
-	_GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__sa)
 	{ return _M_stringbuf.str(__sa); }
 #endif
 
@@ -833,7 +821,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       __string_type
       str() &&
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
       { return std::move(_M_stringbuf).str(); }
 #endif // cxx11 ABI
@@ -867,7 +855,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       void
       str(__string_type&& __s)
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { _M_stringbuf.str(std::move(__s)); }
 #endif
 
@@ -992,7 +979,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #if __cplusplus > 201703L && _GLIBCXX_USE_CXX11_ABI
       // P0408 Efficient access to basic_stringbuf buffer
       basic_ostringstream(ios_base::openmode __mode, const allocator_type& __a)
-      _GLIBCXX_CONVEYOR_REQUIRES(__a)
       : __ostream_type(), _M_stringbuf(__mode | ios_base::out, __a)
       { this->init(std::__addressof(_M_stringbuf)); }
 
@@ -1005,7 +991,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       template<typename _SAlloc>
 	basic_ostringstream(const basic_string<_CharT, _Traits, _SAlloc>& __str,
 			    const allocator_type& __a)
-	_GLIBCXX_CONVEYOR_REQUIRES(__a)
 	: basic_ostringstream(__str, ios_base::out, __a)
 	{ }
 
@@ -1013,7 +998,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	basic_ostringstream(const basic_string<_CharT, _Traits, _SAlloc>& __str,
 			    ios_base::openmode __mode,
 			    const allocator_type& __a)
-	_GLIBCXX_CONVEYOR_REQUIRES(__a)
 	: __ostream_type(), _M_stringbuf(__str, __mode | ios_base::out, __a)
 	{ this->init(std::__addressof(_M_stringbuf)); }
 
@@ -1091,7 +1075,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD
       __string_type
       str() const _GLIBCXX_LVAL_REF_QUAL
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _M_stringbuf.str(); }
 
 #if __cplusplus > 201703L
@@ -1102,7 +1085,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_GLIBCXX_NODISCARD
 	basic_string<_CharT, _Traits, _SAlloc>
 	str(const _SAlloc& __sa) const
-	_GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__sa)
 	{ return _M_stringbuf.str(__sa); }
 #endif
 
@@ -1110,7 +1092,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       __string_type
       str() &&
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
       { return std::move(_M_stringbuf).str(); }
 #endif // cxx11 ABI
@@ -1144,7 +1126,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       void
       str(__string_type&& __s)
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { _M_stringbuf.str(std::move(__s)); }
 #endif
 
@@ -1265,7 +1246,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #if __cplusplus > 201703L && _GLIBCXX_USE_CXX11_ABI
       // P0408 Efficient access to basic_stringbuf buffer
       basic_stringstream(ios_base::openmode __mode, const allocator_type& __a)
-      _GLIBCXX_CONVEYOR_REQUIRES(__a)
       : __iostream_type(), _M_stringbuf(__mode, __a)
       { this->init(std::__addressof(_M_stringbuf)); }
 
@@ -1279,7 +1259,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       template<typename _SAlloc>
 	basic_stringstream(const basic_string<_CharT, _Traits, _SAlloc>& __str,
 			   const allocator_type& __a)
-	_GLIBCXX_CONVEYOR_REQUIRES(__a)
 	: basic_stringstream(__str, ios_base::in | ios_base::out, __a)
 	{ }
 
@@ -1287,7 +1266,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	basic_stringstream(const basic_string<_CharT, _Traits, _SAlloc>& __str,
 			   ios_base::openmode __mode,
 			   const allocator_type& __a)
-	_GLIBCXX_CONVEYOR_REQUIRES(__a)
 	: __iostream_type(), _M_stringbuf(__str, __mode, __a)
 	{ this->init(std::__addressof(_M_stringbuf)); }
 
@@ -1365,7 +1343,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD
       __string_type
       str() const _GLIBCXX_LVAL_REF_QUAL
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { return _M_stringbuf.str(); }
 
 #if __cplusplus > 201703L
@@ -1376,7 +1353,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_GLIBCXX_NODISCARD
 	basic_string<_CharT, _Traits, _SAlloc>
 	str(const _SAlloc& __sa) const
-	_GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_REQUIRES(__sa)
 	{ return _M_stringbuf.str(__sa); }
 #endif
 
@@ -1384,7 +1360,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       __string_type
       str() &&
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
       { return std::move(_M_stringbuf).str(); }
 #endif // cxx11 ABI
@@ -1418,7 +1394,6 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       void
       str(__string_type&& __s)
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { _M_stringbuf.str(std::move(__s)); }
 #endif
 

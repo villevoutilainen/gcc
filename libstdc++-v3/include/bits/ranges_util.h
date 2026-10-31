@@ -93,7 +93,7 @@ namespace ranges
 	static constexpr bool
 	_S_empty(_Tp& __t)
 	noexcept(noexcept(_S_bool(ranges::begin(__t) == ranges::end(__t))))
-	{ _GLIBCXX_CONVEYOR_TRUST(__t); return ranges::begin(__t) == ranges::end(__t); }
+	{ return ranges::begin(__t) == ranges::end(__t); }
 
       template<typename _Tp>
 	static constexpr auto
@@ -117,7 +117,6 @@ namespace ranges
 	noexcept(noexcept(ranges::size(__self) == 0))
 	requires sized_range<remove_reference_t<_Self>>
 	_GLIBCXX_CONVEYOR_AUTO
-	_GLIBCXX_CONVEYOR_REQUIRES(__self)
 	{ return ranges::size(__self) == 0; }
 
       template<typename _Self>
@@ -162,8 +161,13 @@ namespace ranges
 	front(this _Self&& __self)
 	requires forward_range<remove_reference_t<_Self>>
 	_GLIBCXX_CONVEYOR_AUTO
-	_GLIBCXX_CONVEYOR_REQUIRES(__self)
 	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  // Not conveyor (an iterator's dereference isn't), so nothing vouches
+	  // for __self to what it calls.
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (__builtin_addressof (__self)));
+#endif
 	  // empty is conveyor only for some views.
 	  __glibcxx_assert_noconveyor(!__self.empty());
 	  return *ranges::begin(__self);
@@ -175,8 +179,13 @@ namespace ranges
 	requires bidirectional_range<remove_reference_t<_Self>>
 	  && common_range<remove_reference_t<_Self>>
 	_GLIBCXX_CONVEYOR_AUTO
-	_GLIBCXX_CONVEYOR_REQUIRES(__self)
 	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  // Not conveyor (an iterator's dereference isn't), so nothing vouches
+	  // for __self to what it calls.
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (__builtin_addressof (__self)));
+#endif
 	  // empty is conveyor only for some views.
 	  __glibcxx_assert_noconveyor(!__self.empty());
 	  return *ranges::prev(ranges::end(__self));
@@ -187,8 +196,13 @@ namespace ranges
 	constexpr decltype(auto)
 	operator[](this _Self&& __self, range_difference_t<_Range> __n)
 	_GLIBCXX_CONVEYOR_AUTO
-	_GLIBCXX_CONVEYOR_REQUIRES(__self)
 	{
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	  // Not conveyor (an iterator's dereference isn't), so nothing vouches
+	  // for __self to what it calls.
+	  contract_assert<std::contracts::never_proven_conveyor_v>
+	    (std::is_object_address (__builtin_addressof (__self)));
+#endif
 	  return ranges::begin(__self)[__n];
 	}
 
@@ -446,7 +460,6 @@ namespace ranges
 	subrange(_Rng&& __r)
 	noexcept(noexcept(subrange(__r, ranges::size(__r))))
 	requires _S_store_size && sized_range<_Rng>
-	_GLIBCXX_CONVEYOR_REQUIRES(__r)
 	: subrange(__r, ranges::size(__r))
 	{ }
 
@@ -458,7 +471,6 @@ namespace ranges
 	subrange(_Rng&& __r)
 	noexcept(noexcept(subrange(ranges::begin(__r), ranges::end(__r))))
 	requires (!_S_store_size)
-	_GLIBCXX_CONVEYOR_REQUIRES(__r)
 	: subrange(ranges::begin(__r), ranges::end(__r))
 	{ }
 
@@ -498,7 +510,6 @@ namespace ranges
       constexpr __size_type
       size() const requires (_Kind == subrange_kind::sized)
       _GLIBCXX_CONVEYOR_AUTO
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	if constexpr (_S_store_size)
 	  return _M_size._M_size;
@@ -667,8 +678,8 @@ namespace ranges
 					 const _Tp*>
       [[nodiscard]] constexpr borrowed_iterator_t<_Range>
       operator()(_Range&& __r, const _Tp& __value, _Proj __proj = {}) const
-      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       __value, std::move(__proj));
       }
@@ -696,8 +707,8 @@ namespace ranges
 	       _Pred>
       [[nodiscard]] constexpr borrowed_iterator_t<_Range>
       operator()(_Range&& __r, _Pred __pred, _Proj __proj = {}) const
-      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__pred), std::move(__proj));
       }
@@ -725,8 +736,8 @@ namespace ranges
 	       _Pred>
       [[nodiscard]] constexpr borrowed_iterator_t<_Range>
       operator()(_Range&& __r, _Pred __pred, _Proj __proj = {}) const
-      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__pred), std::move(__proj));
       }
@@ -791,9 +802,9 @@ namespace ranges
 				borrowed_iterator_t<_Range2>>
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
-      _GLIBCXX_CONVEYOR_REQUIRES(__r2)
-      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r1);
+	_GLIBCXX_CONVEYOR_TRUST(__r2);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__pred),
@@ -857,9 +868,9 @@ namespace ranges
       [[nodiscard]] constexpr borrowed_subrange_t<_Range1>
       operator()(_Range1&& __r1, _Range2&& __r2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
-      _GLIBCXX_CONVEYOR_REQUIRES(__r1)
-      _GLIBCXX_CONVEYOR_REQUIRES(__r2)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r2);
+	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__pred),
@@ -916,8 +927,8 @@ namespace ranges
       [[nodiscard]] constexpr _Tp
       operator()(initializer_list<_Tp> __r,
 		 _Comp __comp = {}, _Proj __proj = {}) const
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return (*this)(ranges::subrange(__r),
 		       std::move(__comp), std::move(__proj));
       }
@@ -955,8 +966,8 @@ namespace ranges
 	       projected<iterator_t<_Range>, _Proj>> _Pred = ranges::equal_to>
       [[nodiscard]] constexpr borrowed_iterator_t<_Range>
       operator()(_Range&& __r, _Pred __pred = {}, _Proj __proj = {}) const
-      _GLIBCXX_CONVEYOR_REQUIRES(__r)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__r);
 	return (*this)(ranges::begin(__r), ranges::end(__r),
 		       std::move(__pred), std::move(__proj));
       }

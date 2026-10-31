@@ -95,7 +95,6 @@ namespace __detail
     _Scanner<_CharT>::
     _M_scan_normal()
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       auto __c = *_M_current++;
 
       if (__builtin_strchr(_M_spec_char, _M_ctype.narrow(__c, ' ')) == nullptr)
@@ -208,7 +207,6 @@ namespace __detail
     _Scanner<_CharT>::
     _M_scan_in_bracket()
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_current == _M_end)
 	__throw_regex_error(regex_constants::error_brack);
 
@@ -270,7 +268,6 @@ namespace __detail
     _Scanner<_CharT>::
     _M_scan_in_brace()
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_current == _M_end)
 	__throw_regex_error(regex_constants::error_brace);
 
@@ -312,7 +309,6 @@ namespace __detail
     _Scanner<_CharT>::
     _M_eat_escape_ecma()
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_current == _M_end)
 	__throw_regex_error(regex_constants::error_escape);
 
@@ -395,7 +391,6 @@ namespace __detail
     _Scanner<_CharT>::
     _M_eat_escape_posix()
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_current == _M_end)
 	__throw_regex_error(regex_constants::error_escape);
 
@@ -436,7 +431,6 @@ namespace __detail
     _Scanner<_CharT>::
     _M_eat_escape_awk()
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       auto __c = *_M_current++;
       auto __pos = _M_find_escape(_M_ctype.narrow(__c, '\0'));
 
@@ -474,7 +468,6 @@ namespace __detail
     _Scanner<_CharT>::
     _M_eat_class(char __ch)
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       for (_M_value.clear(); _M_current != _M_end && *_M_current != __ch;)
 	_M_value += *_M_current++;
       if (_M_current == _M_end

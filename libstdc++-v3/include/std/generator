@@ -281,7 +281,6 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	void
 	_M_jump_in(_Coro_handle __rest, _Coro_handle __new) noexcept
 	{
-	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  __glibcxx_assert_noconveyor(&__new.promise()._M_nest == this);
 	  __glibcxx_assert_noconveyor(this->_M_is_bottom());
 	  // We're bottom.  We're also top if top is unset (note that this is
@@ -310,6 +309,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_ValuePtr&
 	_M_bottom_value(_Promise_erased& __current) noexcept
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__current);
 	  __glibcxx_assert(&__current._M_nest == this);
 	  if (auto __bf = std::get_if<_Bottom_frame>(&this->_M_stack))
 	    return __bf->_M_value;
@@ -322,6 +322,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_ValuePtr&
 	_M_value(_Promise_erased& __current) noexcept
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__current);
 	  __glibcxx_assert(&__current._M_nest == this);
 	  auto __bf = std::get_if<_Bottom_frame>(&this->_M_stack);
 	  __glibcxx_assert(__bf);
@@ -758,6 +759,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       void
       _M_mark_as_started() noexcept
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__glibcxx_assert(!this->_M_began);
 	this->_M_began = true;
       }

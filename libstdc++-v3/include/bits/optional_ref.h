@@ -286,6 +286,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	emplace(_Up&& __u)
 	noexcept(is_nothrow_constructible_v<_Tp&, _Up>)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  __convert_ref_init_val(std::forward<_Up>(__u));
 	  // _GLIBCXX_RESOLVE_LIB_DEFECTS
 	  // 4300. Missing Returns: element in optional<T&>::emplace
@@ -315,6 +316,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       }
 
       constexpr _Tp& operator*() const noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(_M_val); // hardened precondition
 	return *_M_val;

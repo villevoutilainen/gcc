@@ -200,8 +200,6 @@ namespace __detail
     _StateSeq<_TraitsT>
     _StateSeq<_TraitsT>::_M_clone()
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
-      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
       _GLIBCXX_STD_C::map<_StateIdT, _StateIdT> __m;
       std::stack<_StateIdT, _GLIBCXX_STD_C::deque<_StateIdT>> __stack;
       __stack.push(_M_start);
@@ -209,6 +207,8 @@ namespace __detail
 	{
 	  auto __u = __stack.top();
 	  __stack.pop();
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
 	  auto __dup = _M_nfa[__u];
 	  // _M_insert_state() never return -1
 	  auto __id = _M_nfa._M_insert_state(std::move(__dup));
@@ -225,9 +225,9 @@ namespace __detail
 	}
       for (auto __it : __m)
 	{
-	  // _M_insert_state above may have changed _M_nfa.
-	  _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
 	  auto __v = __it.second;
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
 	  auto& __ref = _M_nfa[__v];
 	  if (__ref._M_next != _S_invalid_state_id)
 	    __ref._M_next = __m.find(__ref._M_next)->second;

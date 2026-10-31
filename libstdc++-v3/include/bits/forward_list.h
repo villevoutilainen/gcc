@@ -933,7 +933,7 @@ namespace __fwdlist
        *                  types.
        */
       forward_list(const forward_list& __list)
-      _GLIBCXX_CONVEYOR_REQUIRES(__list)
+      _GLIBCXX_CONVEYOR_TRUST_PRE(__list)
       : _Base(_Node_alloc_traits::_S_select_on_copy(
 		__list._M_get_Node_allocator()))
       { _M_range_initialize(__list.begin(), __list.end()); }
@@ -1326,8 +1326,8 @@ namespace __fwdlist
 	void
 #endif
 	emplace_front(_Args&&... __args)
-	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  this->_M_insert_after(cbefore_begin(),
 				std::forward<_Args>(__args)...);
 #if __cplusplus > 201402L
@@ -1827,7 +1827,6 @@ namespace __fwdlist
        */
       void
       sort()
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { sort(std::less<_Tp>()); }
 
       /**
@@ -1838,7 +1837,7 @@ namespace __fwdlist
        */
       template<typename _Comp>
 	void
-	sort(_Comp __comp) _GLIBCXX_CONVEYOR_REQUIRES_THIS;
+	sort(_Comp __comp);
 
       /**
        *  @brief  Reverse the elements in list.

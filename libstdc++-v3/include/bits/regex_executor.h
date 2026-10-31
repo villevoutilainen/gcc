@@ -73,7 +73,6 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
 		const _RegexT&  __re,
 		_FlagT          __flags,
 		bool            __use_dfs)
-      _GLIBCXX_CONVEYOR_TRUST_PRE(__re)
       : _M_cur_results(__results.get_allocator()),
 	_M_begin(__begin),
 	_M_end(__end),
@@ -89,6 +88,7 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
 	using namespace regex_constants;
 	if (__flags & match_prev_avail) // ignore not_bol and not_bow
 	  _M_flags &= ~(match_not_bol | match_not_bow);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_GLIBCXX_CONVEYOR_TRUST(_M_nfa);
 	_M_rep_count.resize(_M_nfa.size());
 	if (_M_search_mode == _Search_mode::_Bfs)

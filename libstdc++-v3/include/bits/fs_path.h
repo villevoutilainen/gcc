@@ -858,11 +858,7 @@ namespace __detail
       ~_List() = default;
 
       _Type type() const noexcept
-      {
-	_GLIBCXX_CONVEYOR_TRUST_THIS;
-	_GLIBCXX_CONVEYOR_TRUST(_M_impl);
-	return _Type(reinterpret_cast<__UINTPTR_TYPE__>(_M_impl.get()) & 0x3);
-      }
+      { return _Type(reinterpret_cast<__UINTPTR_TYPE__>(_M_impl.get()) & 0x3); }
 
       void type(_Type) noexcept;
 
@@ -1147,15 +1143,25 @@ namespace __detail
       return std::__addressof(**this);
     }
 
-    iterator& operator++() noexcept;
+    iterator& operator++() noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
     iterator  operator++(int) noexcept
-    { auto __tmp = *this; ++*this; return __tmp; }
+    {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      auto __tmp = *this;
+      ++*this;
+      return __tmp;
+    }
 
-    iterator& operator--() noexcept;
+    iterator& operator--() noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
     iterator  operator--(int) noexcept
-    { auto __tmp = *this; --*this; return __tmp; }
+    {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      auto __tmp = *this;
+      --*this;
+      return __tmp;
+    }
 
     friend bool
     operator==(const iterator& __lhs, const iterator& __rhs) noexcept
@@ -1176,6 +1182,8 @@ namespace __detail
     __path_iter_distance(const iterator& __first, const iterator& __last)
     noexcept
     {
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      _GLIBCXX_CONVEYOR_TRUST(__last);
       __glibcxx_assert(__first._M_path != nullptr);
       __glibcxx_assert(__first._M_path == __last._M_path);
       if (__first._M_is_multi())
@@ -1189,6 +1197,7 @@ namespace __detail
     friend void
     __path_iter_advance(iterator& __i, difference_type __n) noexcept
     {
+      _GLIBCXX_CONVEYOR_TRUST(__i);
       if (__n == 1)
 	++__i;
       else if (__n == -1)

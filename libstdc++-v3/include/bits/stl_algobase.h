@@ -400,8 +400,6 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
     {
       _GLIBCXX_CONVEYOR_TRUST(__out);
       _GLIBCXX_CONVEYOR_TRUST(__in);
-      _GLIBCXX_CONVEYOR_TRUST_DEREF(__out);
-      _GLIBCXX_CONVEYOR_TRUST_DEREF(__in);
 #if __cplusplus >= 201103L
       if constexpr (_IsMove)
 	*__out = std::move(*__in);
@@ -1514,7 +1512,6 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
     __lower_bound(_ForwardIterator __first, _ForwardIterator __last,
 		  const _Tp& __val, _Compare __comp)
     {
-      _GLIBCXX_CONVEYOR_TRUST(__val);
       typedef typename iterator_traits<_ForwardIterator>::difference_type
 	_DistanceType;
 

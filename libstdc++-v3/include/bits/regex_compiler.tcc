@@ -91,7 +91,6 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_disjunction()
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       this->_M_alternative();
       while (_M_match_token(_ScannerT::_S_token_or))
 	{
@@ -116,7 +115,6 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_alternative()
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (this->_M_term())
 	{
 	  _StateSeqT __re = _M_pop();
@@ -150,16 +148,23 @@ namespace __detail
     _M_assertion()
     {
       _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(_M_value);
       if (_M_match_token(_ScannerT::_S_token_line_begin))
 	_M_stack.push(_StateSeqT(*_M_nfa, _M_nfa->_M_insert_line_begin()));
       else if (_M_match_token(_ScannerT::_S_token_line_end))
 	_M_stack.push(_StateSeqT(*_M_nfa, _M_nfa->_M_insert_line_end()));
       else if (_M_match_token(_ScannerT::_S_token_word_bound))
-	// _M_value[0] == 'n' means it's negative, say "not word boundary".
-	_M_stack.push(_StateSeqT(*_M_nfa, _M_nfa->
-	      _M_insert_word_bound(_M_value[0] == 'n')));
+	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(_M_value);
+	  // _M_value[0] == 'n' means it's negative, say "not word boundary".
+	  _M_stack.push(_StateSeqT(*_M_nfa, _M_nfa->
+		_M_insert_word_bound(_M_value[0] == 'n')));
+	}
       else if (_M_match_token(_ScannerT::_S_token_subexpr_lookahead_begin))
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(_M_value);
 	  auto __neg = _M_value[0] == 'n';
 	  this->_M_disjunction();
 	  if (!_M_match_token(_ScannerT::_S_token_subexpr_end))
@@ -182,6 +187,7 @@ namespace __detail
     _M_quantifier()
     {
       _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
       bool __neg = (_M_flags & regex_constants::ECMAScript);
       auto __init = [this, &__neg]()
 	{
@@ -277,7 +283,10 @@ namespace __detail
 	      __e._M_append(__end);
 	      while (!__stack.empty())
 		{
-		  auto& __tmp = (*_M_nfa)[__stack.top()];
+		  _GLIBCXX_CONVEYOR_TRUST_THIS;
+		  auto& __nfa = *_M_nfa;
+		  _GLIBCXX_CONVEYOR_TRUST(__nfa);
+		  auto& __tmp = __nfa[__stack.top()];
 		  __stack.pop();
 		  std::swap(__tmp._M_next, __tmp._M_alt);
 		}
@@ -308,7 +317,6 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_atom()
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_match_token(_ScannerT::_S_token_anychar))
 	{
 	  if (!(_M_flags & regex_constants::ECMAScript))
@@ -367,7 +375,6 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_insert_any_matcher_ecma()
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_stack.push(_StateSeqT(*_M_nfa,
 	_M_nfa->_M_insert_matcher
 	  (_AnyMatcher<_TraitsT, true, __icase, __collate>
@@ -380,7 +387,6 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_insert_any_matcher_posix()
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_stack.push(_StateSeqT(*_M_nfa,
 	_M_nfa->_M_insert_matcher
 	  (_AnyMatcher<_TraitsT, false, __icase, __collate>
@@ -394,6 +400,7 @@ namespace __detail
     _M_insert_char_matcher()
     {
       _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(_M_value);
       _M_stack.push(_StateSeqT(*_M_nfa,
 	_M_nfa->_M_insert_matcher
 	  (_CharMatcher<_TraitsT, __icase, __collate>
@@ -423,6 +430,7 @@ namespace __detail
     _M_insert_bracket_matcher(bool __neg)
     {
       _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(_M_value);
       _BracketMatcher<__icase, __collate> __matcher(__neg, _M_traits);
       _BracketState __last_char;
       if (_M_try_char())
@@ -448,6 +456,7 @@ namespace __detail
 		       _BracketMatcher<__icase, __collate>& __matcher)
     {
       _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(_M_value);
       if (_M_match_token(_ScannerT::_S_token_bracket_end))
 	return false;
 
@@ -487,7 +496,11 @@ namespace __detail
 	  __matcher._M_add_character_class(_M_value, false);
 	}
       else if (_M_try_char())
-	__push_char(_M_value[0]);
+	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(_M_value);
+	  __push_char(_M_value[0]);
+	}
       // POSIX doesn't allow '-' as a start-range char (say [a-z--0]),
       // except when the '-' is the first or last character in the bracket
       // expression ([--0]). ECMAScript treats all '-' after a range as a
@@ -517,6 +530,8 @@ namespace __detail
 	    {
 	      if (_M_try_char())
 		{
+		  _GLIBCXX_CONVEYOR_TRUST_THIS;
+		  _GLIBCXX_CONVEYOR_TRUST(_M_value);
 		  // "x-y"
 		  __matcher._M_make_range(__last_char.get(), _M_value[0]);
 		  __last_char.reset();
@@ -547,6 +562,8 @@ namespace __detail
       else if (_M_match_token(_ScannerT::_S_token_quoted_class))
 	{
 	  __push_class();
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(_M_value);
 	  __matcher._M_add_character_class(_M_value,
 					   _M_ctype.is(_CtypeT::upper,
 						       _M_value[0]));
@@ -563,7 +580,6 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_try_char()
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       bool __is_char = false;
       if (_M_match_token(_ScannerT::_S_token_oct_num))
 	{
@@ -585,7 +601,6 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_match_token(_TokenT __token)
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__token == _M_scanner._M_get_token())
 	{
 	  _M_value = _M_scanner._M_get_value();
@@ -600,7 +615,6 @@ namespace __detail
     _Compiler<_TraitsT>::
     _M_cur_int_value(int __radix)
     {
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       int __v = 0;
       for (_CharT __c : _M_value)
 	if (__builtin_mul_overflow(__v, __radix, &__v)

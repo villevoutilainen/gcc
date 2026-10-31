@@ -1404,9 +1404,6 @@ namespace __rb_tree
 	bool
 	_M_key_compare(const _Key1& __k1, const _Key2& __k2) const
 	{
-	  _GLIBCXX_CONVEYOR_TRUST_THIS;
-	  _GLIBCXX_CONVEYOR_TRUST(__k2);
-	  _GLIBCXX_CONVEYOR_TRUST(__k1);
 #if __cplusplus >= 201103L
 	  // Enforce this here with a user-friendly message.
 	  static_assert(
@@ -1849,7 +1846,7 @@ namespace __rb_tree
       iterator
       erase(const_iterator __position)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
       {
 	__glibcxx_assert(__position != end());
@@ -1864,7 +1861,7 @@ namespace __rb_tree
       iterator
       erase(iterator __position)
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
-      pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
+      pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
       {
 	__glibcxx_assert(__position != end());
@@ -1938,8 +1935,8 @@ namespace __rb_tree
 
       iterator
       lower_bound(const key_type& __k)
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return iterator(_M_lower_bound(_M_begin(), _M_end(), __k));
       }
 
@@ -1952,8 +1949,8 @@ namespace __rb_tree
 
       iterator
       upper_bound(const key_type& __k)
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return iterator(_M_upper_bound(_M_begin(), _M_end(), __k));
       }
 
@@ -2240,8 +2237,8 @@ namespace __rb_tree
       /// Extract a node.
       node_type
       extract(const_iterator __pos)
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	auto __ptr = _Node_traits::_S_rebalance_for_erase
 	  (__pos._M_node, _M_impl._M_header);
 	--_M_impl._M_node_count;
@@ -2266,8 +2263,8 @@ namespace __rb_tree
       /// Extract a node.
       node_type
       extract(const key_type& __k)
-      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	node_type __nh;
 	auto __pos = find(__k);
 	if (__pos != end())

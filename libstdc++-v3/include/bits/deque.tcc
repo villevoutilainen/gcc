@@ -97,6 +97,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     deque<_Tp, _Alloc>::
     operator=(const deque& __x)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__x);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (std::__addressof(__x) != this)
 	{
 #if __cplusplus >= 201103L
@@ -143,6 +145,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       deque<_Tp, _Alloc>::
       emplace_front(_Args&&... __args)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (this->_M_impl._M_start._M_cur != this->_M_impl._M_start._M_first)
 	  {
 	    _Alloc_traits::construct(this->_M_impl,
@@ -168,6 +171,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       deque<_Tp, _Alloc>::
       emplace_back(_Args&&... __args)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (this->_M_impl._M_finish._M_cur
 	    != this->_M_impl._M_finish._M_last - 1)
 	  {

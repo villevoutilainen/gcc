@@ -780,6 +780,7 @@ namespace __expected
       [[nodiscard]]
       constexpr const _Tp&
       operator*() const & noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(_M_has_value);
 	return _M_val;
@@ -857,6 +858,7 @@ namespace __expected
 
       constexpr const _Er&
       error() const & noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(!_M_has_value);
 	return _M_unex;
@@ -864,6 +866,7 @@ namespace __expected
 
       constexpr _Er&
       error() & noexcept
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(!_M_has_value);
 	return _M_unex;
@@ -1230,6 +1233,8 @@ namespace __expected
 	noexcept(noexcept(bool(*__x == *__y))
 		  && noexcept(bool(__x.error() == __y.error())))
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__y);
+	  _GLIBCXX_CONVEYOR_TRUST(__x);
 	  if (__x.has_value() != __y.has_value())
 	    return false;
 	  if (__x.has_value())
