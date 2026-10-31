@@ -351,6 +351,7 @@ _GLIBCXX_MEM_FN_TRAITS(&& noexcept, false_type, true_type)
       _GLIBCXX20_CONSTEXPR
       _Tp&
       get() const noexcept
+      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       { return *_M_data; }
 
       template<typename... _Args>

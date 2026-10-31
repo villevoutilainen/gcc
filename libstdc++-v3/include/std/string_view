@@ -272,6 +272,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr const_reference
       operator[](size_type __pos) const noexcept
+      _GLIBCXX_CONVEYOR_TRUST_PRE(*this) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_assert(__pos < this->_M_len);
 	return *(this->_M_str + __pos);
