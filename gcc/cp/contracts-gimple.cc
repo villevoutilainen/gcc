@@ -4666,8 +4666,13 @@ cg_display_value (tree val, int depth = 0)
 	{
 	  /* A name alone has no type, which the display of a value needs
 	     (a call's argument, a dereference): give it the value's.  */
-	  tree shown = build_decl (UNKNOWN_LOCATION, VAR_DECL, name,
-				   TREE_TYPE (rhs1));
+	  /* The C++ printer takes a 'this' VAR_DECL for a capture proxy,
+	     which needs a DECL_VALUE_EXPR: show a captured 'this' as the
+	     parameter it captures instead.  */
+	  tree shown = build_decl (UNKNOWN_LOCATION,
+				   name == this_identifier
+				   ? PARM_DECL : VAR_DECL,
+				   name, TREE_TYPE (rhs1));
 	  DECL_ARTIFICIAL (shown) = true;
 	  return shown;
 	}
@@ -8307,6 +8312,39 @@ struct cg_dom_fact_state
    chase fails or arguments disagree, preserving this function's own
    prior behavior for every already-working, non-aliasing case.  */
 
+/* A capture of the closure a non-mutable lambda's call operator FUN is
+   called on, read as REF ('__closure->__this'): the capture's field,
+   which the body can't change, so that every read of it -- the body's
+   loads, and a contract condition's capture proxy -- has one identity.
+   NULL_TREE otherwise.  */
+
+static tree
+cg_closure_capture_field (tree ref)
+{
+  if (TREE_CODE (ref) != COMPONENT_REF)
+    return NULL_TREE;
+  tree obj = TREE_OPERAND (ref, 0);
+  if (!(TREE_CODE (obj) == INDIRECT_REF
+	|| (TREE_CODE (obj) == MEM_REF && integer_zerop (TREE_OPERAND (obj, 1)))))
+    return NULL_TREE;
+  tree ptr = TREE_OPERAND (obj, 0);
+  /* A generic lambda's instantiation converts it ('(const C *)
+     __closure').  */
+  STRIP_NOPS (ptr);
+  if (TREE_CODE (ptr) == SSA_NAME && SSA_NAME_IS_DEFAULT_DEF (ptr))
+    ptr = SSA_NAME_VAR (ptr);
+  if (!ptr || TREE_CODE (ptr) != PARM_DECL
+      || DECL_CONTEXT (ptr) != current_function_decl
+      || !LAMBDA_FUNCTION_P (current_function_decl)
+      || ptr != DECL_ARGUMENTS (current_function_decl)
+      || !POINTER_TYPE_P (TREE_TYPE (ptr)))
+    return NULL_TREE;
+  tree closure = TREE_TYPE (TREE_TYPE (ptr));
+  if (!LAMBDA_TYPE_P (closure) || !TYPE_READONLY (closure))
+    return NULL_TREE;
+  return TREE_OPERAND (ref, 1);
+}
+
 static tree
 cg_gimple_object_identity_1 (tree val, hash_set<tree> &in_progress)
 {
@@ -8359,6 +8397,9 @@ cg_gimple_object_identity_1 (tree val, hash_set<tree> &in_progress)
 	  tree resolved = cg_gimple_object_identity_1 (arg, in_progress);
 	  return resolved ? resolved : val;
 	}
+      if (def && gimple_assign_load_p (def))
+	if (tree field = cg_closure_capture_field (gimple_assign_rhs1 (def)))
+	  return field;
       return val;
     }
   if (VAR_P (val) || TREE_CODE (val) == PARM_DECL)
@@ -10975,6 +11016,12 @@ cg_contract_check_object_identity (gcall *call, tree struct_var, tree decls,
   tree type = TREE_TYPE (decl);
   if (TYPE_REF_P (type) || POINTER_TYPE_P (type))
     {
+      /* A capture proxy for a capture the body can't change: the
+	 capture's identity (cg_closure_capture_field).  */
+      if (VAR_P (decl) && DECL_HAS_VALUE_EXPR_P (decl)
+	  && is_capture_proxy (decl))
+	if (tree field = cg_closure_capture_field (DECL_VALUE_EXPR (decl)))
+	  return field;
       tree val = cg_contract_check_decl_value (call, struct_var, decls, decl);
       /* A const parameter of this function the check doesn't capture
 	 ('this', or a lambda's closure, reached through a capture's
