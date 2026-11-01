@@ -11,6 +11,9 @@
 #include <unordered_set>
 #include <flat_map>
 #include <flat_set>
+#include <stack>
+#include <queue>
+#include <inplace_vector>
 #include <array>
 #include <span>
 #include <algorithm>
@@ -153,11 +156,25 @@ namespace census
       m.erase (K (2));
       n += m == o;
       std::erase_if (m, [] (const auto &) { return false; });
+      // Copying (the tree's _M_copy / node cloning), copy- and
+      // move-assignment.
+      std::map<K, V, std::less<K>, A<P>> c (m);
+      c = o;
+      c = std::move (m);
+      n += c.size () + (c.cbegin () == c.cend ());
     }
     {
       std::multimap<K, V, std::less<K>, A<P>> m;
       m.emplace (K (1), 2);
       n += m.count (K (1));
+      // The equal-key insertion paths, copying, and const end.
+      m.insert (m.end (), {K (1), 3});
+      m.insert ({{K (2), 4}, {K (2), 5}});
+      std::multimap<K, V, std::less<K>, A<P>> c (m);
+      c = m;
+      const auto &cc = c;
+      n += (cc.begin () != cc.end ()) + (c.cend () != c.cbegin ());
+      c.erase (c.begin (), c.end ());
       // Not a structured binding: its names are std::get results, which
       // promise nothing (only hardened accessors do), and the iterators'
       // operator== is a conveyor that needs its operands' objects.
@@ -327,6 +344,90 @@ namespace census
     return n;
   }
 
+  // A container a user wrote, like Qt's QList: its operations aren't
+  // conveyor, so an adaptor over it has ordinary checked assertions.
+  template<typename T>
+    struct UserSeq
+    {
+      using value_type = T;
+      using reference = T &;
+      using const_reference = const T &;
+      using size_type = unsigned;
+      T d[4] {};
+      unsigned n = 0;
+      bool empty () const { return n == 0; }
+      unsigned size () const { return n; }
+      T &back () { return d[n - 1]; }
+      const T &back () const { return d[n - 1]; }
+      T &front () { return d[0]; }
+      const T &front () const { return d[0]; }
+      void push_back (const T &v) { d[n++] = v; }
+      void pop_back () { --n; }
+      void pop_front () { --n; }
+    };
+
+  int adaptors_inplace ()
+  {
+    std::stack<int, UserSeq<int>> s;
+    s.push (1);
+    int n = s.top () + s.empty ();
+    s.pop ();
+    std::queue<int, UserSeq<int>> q;
+    q.push (1);
+    n += q.front () + q.back ();
+    q.pop ();
+    std::stack<int, std::vector<int>> sv;
+    sv.push (2);
+    n += sv.top () + sv.empty ();
+    sv.pop ();
+    std::stack<int, std::list<int>> sl;
+    sl.push (2);
+    n += sl.top ();
+    sl.pop ();
+    std::stack<int, std::inplace_vector<int, 4>> si;
+    si.push (2);
+    n += si.top ();
+    si.pop ();
+    std::queue<int> qd;
+    qd.push (3);
+    n += qd.front ();
+    qd.pop ();
+    std::priority_queue<int> pq;
+    pq.push (1);
+    const int one = 1;
+    pq.push (one);
+    pq.emplace (2);
+    n += pq.top ();
+    pq.pop ();
+
+    std::inplace_vector<int, 8> v;
+    v.push_back (1);
+    v.push_back (one);
+    v.emplace_back (3);
+    v.try_push_back (4);
+    v.try_push_back (one);
+    v.try_emplace_back (5);
+    v.unchecked_push_back (6);
+    std::vector<int> r {7, 8};
+    v.clear ();
+    v.append_range (r);
+    v.insert_range (v.end (), r);
+    v.insert (v.begin (), 0);
+    v.emplace (v.end (), 9);
+    v.resize (3);
+    v.erase (v.begin ());
+    v.pop_back ();
+    v.assign ({1, 2});
+    v.assign_range (r);
+    std::inplace_vector<int, 8> w (r.begin (), r.end ()), u (std::from_range, r);
+    w.swap (u);
+    w = u;
+    u = std::move (v);
+    n += w.size () + u.front () + u.back () + u[0] + u.at (0)
+	 + std::erase (w, 1);
+    return n;
+  }
+
   int all ()
   {
     int n = sequence_extras ();
@@ -342,7 +443,7 @@ namespace census
     n += associative<int, Val, MinAlloc> ();
     n += associative<int, int, PropAlloc> ();
     n += fixed<int, 4> () + fixed<Val, 3> () + fixed<AddrOp, 2> ();
-    n += flat ();
+    n += flat () + adaptors_inplace ();
 #ifdef _GLIBCXX_CONVEYOR_ASSERTIONS
     n += nonmember_access () + insert_iterators ();
 #endif

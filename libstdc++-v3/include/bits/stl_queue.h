@@ -252,7 +252,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR bool
-      empty() const _GLIBCXX_CONVEYOR
+      empty() const _GLIBCXX_CONVEYOR_AUTO
       { return c.empty(); }
 
       /**  Returns the number of elements in the %queue.  */
@@ -612,7 +612,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       priority_queue(const _Compare& __x = _Compare(),
 		     const _Sequence& __s = _Sequence())
       : c(__s), comp(__x)
-      { std::make_heap(c.begin(), c.end(), comp); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; std::make_heap(c.begin(), c.end(), comp); }
 #else
       template<typename _Seq = _Sequence, typename _Requires = typename
 	       enable_if<__and_<is_default_constructible<_Compare>,
@@ -624,12 +624,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       explicit _GLIBCXX26_CONSTEXPR
       priority_queue(const _Compare& __x, const _Sequence& __s)
       : c(__s), comp(__x)
-      { std::make_heap(c.begin(), c.end(), comp); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; std::make_heap(c.begin(), c.end(), comp); }
 
       explicit _GLIBCXX26_CONSTEXPR
       priority_queue(const _Compare& __x, _Sequence&& __s = _Sequence())
       : c(std::move(__s)), comp(__x)
-      { std::make_heap(c.begin(), c.end(), comp); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; std::make_heap(c.begin(), c.end(), comp); }
 
       priority_queue(const priority_queue&) = default;
       priority_queue& operator=(const priority_queue&) = default;
@@ -669,13 +669,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	priority_queue(const _Compare& __x, const _Sequence& __c,
 		       const _Alloc& __a)
 	: c(__c, __a), comp(__x)
-	{ std::make_heap(c.begin(), c.end(), comp); }
+	{ _GLIBCXX_CONVEYOR_TRUST_THIS; std::make_heap(c.begin(), c.end(), comp); }
 
       template<typename _Alloc, typename _Requires = _Uses<_Alloc>>
 	_GLIBCXX26_CONSTEXPR
 	priority_queue(const _Compare& __x, _Sequence&& __c, const _Alloc& __a)
 	: c(std::move(__c), __a), comp(__x)
-	{ std::make_heap(c.begin(), c.end(), comp); }
+	{ _GLIBCXX_CONVEYOR_TRUST_THIS; std::make_heap(c.begin(), c.end(), comp); }
 
       template<typename _Alloc, typename _Requires = _Uses<_Alloc>>
 	_GLIBCXX26_CONSTEXPR
@@ -714,6 +714,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  __glibcxx_requires_valid_range(__first, __last);
 	  c.insert(c.end(), __first, __last);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  std::make_heap(c.begin(), c.end(), comp);
 	}
 #else
@@ -725,7 +726,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	priority_queue(_InputIterator __first, _InputIterator __last,
 		       const _Compare& __x = _Compare())
 	: c(__first, __last), comp(__x)
-	{ std::make_heap(c.begin(), c.end(), comp); }
+	{ _GLIBCXX_CONVEYOR_TRUST_THIS; std::make_heap(c.begin(), c.end(), comp); }
 
       // _GLIBCXX_RESOLVE_LIB_DEFECTS
       // 3522. Missing requirement on InputIterator template parameter
@@ -738,6 +739,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  __glibcxx_requires_valid_range(__first, __last);
 	  c.insert(c.end(), __first, __last);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  std::make_heap(c.begin(), c.end(), comp);
 	}
 
@@ -750,6 +752,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  __glibcxx_requires_valid_range(__first, __last);
 	  c.insert(c.end(), __first, __last);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  std::make_heap(c.begin(), c.end(), comp);
 	}
 #endif // C++11
@@ -765,7 +768,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	priority_queue(_InputIterator __first, _InputIterator __last,
 		       const _Alloc& __alloc)
 	: c(__first, __last, __alloc), comp()
-	{ std::make_heap(c.begin(), c.end(), comp); }
+	{ _GLIBCXX_CONVEYOR_TRUST_THIS; std::make_heap(c.begin(), c.end(), comp); }
 
       template<typename _InputIterator, typename _Alloc,
 	       typename = std::_RequireInputIter<_InputIterator>,
@@ -774,7 +777,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	priority_queue(_InputIterator __first, _InputIterator __last,
 		       const _Compare& __x, const _Alloc& __alloc)
 	: c(__first, __last, __alloc), comp(__x)
-	{ std::make_heap(c.begin(), c.end(), comp); }
+	{ _GLIBCXX_CONVEYOR_TRUST_THIS; std::make_heap(c.begin(), c.end(), comp); }
 
       template<typename _InputIterator, typename _Alloc,
 	       typename = std::_RequireInputIter<_InputIterator>,
@@ -787,6 +790,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  __glibcxx_requires_valid_range(__first, __last);
 	  c.insert(c.end(), __first, __last);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  std::make_heap(c.begin(), c.end(), comp);
 	}
 
@@ -800,6 +804,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  __glibcxx_requires_valid_range(__first, __last);
 	  c.insert(c.end(), __first, __last);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  std::make_heap(c.begin(), c.end(), comp);
 	}
 #endif // C++11
@@ -816,20 +821,20 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	priority_queue(from_range_t, _Rg&& __rg,
 		       const _Compare& __x = _Compare())
 	: c(ranges::to<_Sequence>(std::forward<_Rg>(__rg))), comp(__x)
-	{ std::make_heap(c.begin(), c.end(), comp); }
+	{ _GLIBCXX_CONVEYOR_TRUST_THIS; std::make_heap(c.begin(), c.end(), comp); }
 
       template<__detail::__container_compatible_range<_Tp> _Rg, typename _Alloc>
 	_GLIBCXX26_CONSTEXPR
 	priority_queue(from_range_t, _Rg&& __rg, const _Compare& __x,
 		       const _Alloc& __a)
 	: c(ranges::to<_Sequence>(std::forward<_Rg>(__rg), __a)), comp(__x)
-	{ std::make_heap(c.begin(), c.end(), comp); }
+	{ _GLIBCXX_CONVEYOR_TRUST_THIS; std::make_heap(c.begin(), c.end(), comp); }
 
       template<__detail::__container_compatible_range<_Tp> _Rg, typename _Alloc>
 	_GLIBCXX26_CONSTEXPR
 	priority_queue(from_range_t, _Rg&& __rg, const _Alloc& __a)
 	: c(ranges::to<_Sequence>(std::forward<_Rg>(__rg), __a)), comp()
-	{ std::make_heap(c.begin(), c.end(), comp); }
+	{ _GLIBCXX_CONVEYOR_TRUST_THIS; std::make_heap(c.begin(), c.end(), comp); }
       /// @}
 #endif
 
@@ -838,7 +843,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR bool
-      empty() const _GLIBCXX_CONVEYOR
+      empty() const _GLIBCXX_CONVEYOR_AUTO
       { return c.empty(); }
 
       /**  Returns the number of elements in the %queue.  */
@@ -871,6 +876,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       push(const value_type& __x)
       {
 	c.push_back(__x);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	std::push_heap(c.begin(), c.end(), comp);
       }
 
@@ -879,6 +885,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       push(value_type&& __x)
       {
 	c.push_back(std::move(__x));
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	std::push_heap(c.begin(), c.end(), comp);
       }
 
@@ -887,6 +894,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	emplace(_Args&&... __args)
 	{
 	  c.emplace_back(std::forward<_Args>(__args)...);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  std::push_heap(c.begin(), c.end(), comp);
 	}
 #endif
@@ -900,6 +908,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    c.append_range(std::forward<_Rg>(__rg));
 	  else
 	    ranges::copy(__rg, std::back_inserter(c));
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  std::make_heap(c.begin(), c.end(), comp);
 	}
 #endif
@@ -919,6 +928,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       pop() _GLIBCXX_PRECONDITION_NONEMPTY()
       {
 	__glibcxx_requires_nonempty();
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	std::pop_heap(c.begin(), c.end(), comp);
 	c.pop_back();
       }

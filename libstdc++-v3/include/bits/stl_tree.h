@@ -1539,6 +1539,8 @@ namespace __rb_tree
 	_Base_ptr
 	_M_copy(const _Rb_tree& __x, _NodeGen& __gen)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__x);
 	  _Base_ptr __root =
 	    _M_copy<_MoveValues>(__x._M_begin_node(), _M_end(), __gen);
 	  _M_leftmost() = _Node_base::_S_minimum(__root);
@@ -1668,7 +1670,7 @@ namespace __rb_tree
 
       const_reverse_iterator
       rbegin() const _GLIBCXX_NOEXCEPT
-      { return const_reverse_iterator(end()); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return const_reverse_iterator(end()); }
 
       reverse_iterator
       rend() _GLIBCXX_NOEXCEPT
@@ -1770,6 +1772,7 @@ namespace __rb_tree
 	__enable_if_t<__same_value_type<_InputIterator>::value>
 	_M_insert_range_equal(_InputIterator __first, _InputIterator __last)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  _Alloc_node __an(*this);
 	  for (; __first != __last; ++__first)
 	    _M_insert_equal_(end(), *__first, __an);
@@ -1825,6 +1828,7 @@ namespace __rb_tree
 	void
 	_M_insert_range_equal(_InputIterator __first, _InputIterator __last)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  _Alloc_node __an(*this);
 	  for (; __first != __last; ++__first)
 	    _M_insert_equal_(end(), *__first, __an);
@@ -2444,6 +2448,8 @@ namespace __rb_tree
     _Rb_tree<_Key, _Val, _KeyOfValue, _Compare, _Alloc>::
     _M_move_assign(_Rb_tree& __x, true_type)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(__x);
       clear();
       if (__x._M_root())
 	_M_move_data(__x, true_type());
@@ -2518,6 +2524,8 @@ namespace __rb_tree
     _Rb_tree<_Key, _Val, _KeyOfValue, _Compare, _Alloc>::
     operator=(const _Rb_tree& __x)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(__x);
       if (this != std::__addressof(__x))
 	{
 	  // Note that _Key may be a constant type.
@@ -2592,12 +2600,14 @@ namespace __rb_tree
     _M_insert_lower(_Base_ptr __p, const _Val& __v)
 #endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       bool __insert_left = (__p == _M_end()
 			    || !_M_key_compare(_S_key(__p),
 					       _KeyOfValue()(__v)));
 
-      _Base_ptr __z =
-	_M_create_node(_GLIBCXX_FORWARD(_Arg, __v))->_M_base_ptr();
+      _Node_ptr __zn = _M_create_node(_GLIBCXX_FORWARD(_Arg, __v));
+      _GLIBCXX_CONVEYOR_TRUST(*__zn);
+      _Base_ptr __z = __zn->_M_base_ptr();
       _Node_traits::_S_insert_and_rebalance
 	(__insert_left, __z, __p, this->_M_impl._M_header);
       ++_M_impl._M_node_count;
@@ -2617,6 +2627,7 @@ namespace __rb_tree
     _M_insert_equal_lower(const _Val& __v)
 #endif
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _Base_ptr __x = _M_begin();
       _Base_ptr __y = _M_end();
       while (__x)
@@ -2637,6 +2648,7 @@ namespace __rb_tree
       {
 	// Structural copy. __x and __p must be non-null.
 	_Node_ptr __top = _M_clone_node<_MoveValues>(__x, __node_gen);
+	_GLIBCXX_CONVEYOR_TRUST(*__top);
 	_Base_ptr __top_base = __top->_M_base_ptr();
 	__top->_M_parent = __p;
 
@@ -2650,8 +2662,9 @@ namespace __rb_tree
 
 	    while (__x)
 	      {
-		_Base_ptr __y =
-		  _M_clone_node<_MoveValues>(__x, __node_gen)->_M_base_ptr();
+		_Node_ptr __yn = _M_clone_node<_MoveValues>(__x, __node_gen);
+		_GLIBCXX_CONVEYOR_TRUST(*__yn);
+		_Base_ptr __y = __yn->_M_base_ptr();
 		__p->_M_left = __y;
 		__y->_M_parent = __p;
 		if (__x->_M_right)
@@ -3146,6 +3159,7 @@ namespace __rb_tree
     _Rb_tree<_Key, _Val, _KeyOfValue, _Compare, _Alloc>::
     _M_get_insert_hint_equal_pos(const_iterator __position, const key_type& __k)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       typedef pair<_Base_ptr, _Base_ptr> _Res;
 
       // end()
@@ -3263,6 +3277,7 @@ namespace __rb_tree
     _M_insert_equal_lower_node(_Node_ptr __z)
     -> iterator
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _Base_ptr __x = _M_begin();
       _Base_ptr __y = _M_end();
       while (__x)
@@ -3372,6 +3387,7 @@ namespace __rb_tree
     _Rb_tree<_Key, _Val, _KeyOfValue, _Compare, _Alloc>::
     _M_erase_aux(const_iterator __first, const_iterator __last)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__first == begin() && __last == end())
 	clear();
       else

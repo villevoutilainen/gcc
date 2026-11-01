@@ -372,7 +372,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       iterator
       end() const _GLIBCXX_NOEXCEPT
-      { return _M_t.end(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.end(); }
 
       /**
        *  Returns a read-only (constant) reverse iterator that points to the
@@ -409,7 +409,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       iterator
       cend() const noexcept
-      { return _M_t.end(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.end(); }
 
       /**
        *  Returns a read-only (constant) reverse iterator that points to the

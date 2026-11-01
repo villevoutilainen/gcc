@@ -397,7 +397,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       iterator
       end() _GLIBCXX_NOEXCEPT
-      { return _M_t.end(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.end(); }
 
       /**
        *  Returns a read-only (constant) iterator that points one past the last
@@ -406,7 +406,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       const_iterator
       end() const _GLIBCXX_NOEXCEPT
-      { return _M_t.end(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.end(); }
 
       /**
        *  Returns a read/write reverse iterator that points to the last pair in
@@ -461,7 +461,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       const_iterator
       cend() const noexcept
-      { return _M_t.end(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.end(); }
 
       /**
        *  Returns a read-only (constant) reverse iterator that points to the

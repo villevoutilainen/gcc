@@ -250,7 +250,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR bool
-      empty() const _GLIBCXX_CONVEYOR
+      empty() const _GLIBCXX_CONVEYOR_AUTO
       { return c.empty(); }
 
       /**  Returns the number of elements in the %stack.  */

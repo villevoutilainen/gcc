@@ -2903,6 +2903,14 @@ namespace __list
 } // namespace __list
 #endif
 
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  // A container adaptor over a list is conveyor-checked like it
+  // (std::contracts::__container_conveyor_p).
+  template<typename _Tp, typename _Alloc>
+    inline constexpr bool
+    contracts::__std_adaptor_container_v<_GLIBCXX_STD_C::list<_Tp, _Alloc>> = true;
+#endif
+
 _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace std
 

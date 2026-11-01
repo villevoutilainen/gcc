@@ -2675,6 +2675,14 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
     : true_type { };
 #endif
 
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+  // A container adaptor over a deque is conveyor-checked like it
+  // (std::contracts::__container_conveyor_p).
+  template<typename _Tp, typename _Alloc>
+    inline constexpr bool
+    contracts::__std_adaptor_container_v<_GLIBCXX_STD_C::deque<_Tp, _Alloc>> = true;
+#endif
+
 _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace std
 

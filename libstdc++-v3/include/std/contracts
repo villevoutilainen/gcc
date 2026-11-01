@@ -942,13 +942,25 @@ namespace contracts
   // container whose allocator has a fancy pointer, whose operations can't be
   // conveyor.  An allocator declaring a pointer type that isn't a raw
   // pointer has one; std::allocator declares none.  _Tp is the container, or
-  // a container adaptor, whose underlying container decides.
+  // a container adaptor, whose underlying container decides -- when it is
+  // one of the library's own sequence containers (__std_adaptor_container_v,
+  // specialized next to each of them).  Any other underlying container is
+  // the user's, whose operations aren't known to be conveyor, so its
+  // adaptor's assertions are ordinary checked ones.
+  template<typename _Tp>
+    inline constexpr bool __std_adaptor_container_v = false;
+
   template<typename _Tp>
     consteval bool
     __container_conveyor_p() noexcept
     {
       if constexpr (requires { typename _Tp::container_type; })
-	return __container_conveyor_p<typename _Tp::container_type>();
+	{
+	  if constexpr (__std_adaptor_container_v<typename _Tp::container_type>)
+	    return __container_conveyor_p<typename _Tp::container_type>();
+	  else
+	    return false;
+	}
       else if constexpr (requires { typename _Tp::allocator_type::pointer; })
 	return __is_pointer(typename _Tp::allocator_type::pointer);
       else
