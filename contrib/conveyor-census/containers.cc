@@ -432,6 +432,27 @@ namespace census
   }
 
   // Const lookups and list ends, as Qt's QMap / QList-of-QMap use them.
+  // Node extraction from the unordered containers, multimap's hinted
+  // equal insertion, a map's rbegin, a const vector's at.
+  int more_lookups ()
+  {
+    std::unordered_set<int> us {1, 2};
+    auto nh = us.extract (us.begin ());
+    std::unordered_map<int, int> um {{1, 2}};
+    auto mh = um.extract (um.begin ());
+    std::unordered_multiset<int> ums {1, 1};
+    auto nh2 = ums.extract (ums.begin ());
+    std::unordered_multimap<int, int> umm {{1, 2}};
+    auto mh2 = umm.extract (umm.begin ());
+    std::multimap<int, int> mm {{1, 2}};
+    mm.emplace_hint (mm.begin (), 0, 1);
+    mm.insert (mm.end (), {3, 4});
+    std::map<int, int> m {{1, 2}};
+    const std::vector<int> v {1, 2};
+    return int (!nh.empty () + !mh.empty () + !nh2.empty () + !mh2.empty ())
+	   + (m.rbegin () != m.rend ()) + v.at (1) + int (mm.size ());
+  }
+
   int const_lookups ()
   {
     std::map<int, Val> m {{1, Val (2)}};
@@ -460,7 +481,7 @@ namespace census
     n += associative<int, Val, MinAlloc> ();
     n += associative<int, int, PropAlloc> ();
     n += fixed<int, 4> () + fixed<Val, 3> () + fixed<AddrOp, 2> ();
-    n += flat () + adaptors_inplace () + const_lookups ();
+    n += flat () + adaptors_inplace () + const_lookups () + more_lookups ();
 #ifdef _GLIBCXX_CONVEYOR_ASSERTIONS
     n += nonmember_access () + insert_iterators ();
 #endif

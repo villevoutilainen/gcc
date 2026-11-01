@@ -1456,6 +1456,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       const_reference
       at(size_type __n) const
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_M_range_check(__n);
 	return (*this)[__n];
       }

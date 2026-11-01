@@ -584,7 +584,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #ifdef __glibcxx_node_extract // >= C++17 && HOSTED
       /// Extract a node.
       node_type
-      extract(const_iterator __pos)
+      extract(const_iterator __pos) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(__pos != end());
 	return _M_h.extract(__pos);
@@ -1600,7 +1600,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #ifdef __glibcxx_node_extract // >= C++17 && HOSTED
       /// Extract a node.
       node_type
-      extract(const_iterator __pos)
+      extract(const_iterator __pos) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(__pos != end());
 	return _M_h.extract(__pos);

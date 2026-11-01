@@ -1666,7 +1666,7 @@ namespace __rb_tree
 
       reverse_iterator
       rbegin() _GLIBCXX_NOEXCEPT
-      { return reverse_iterator(end()); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return reverse_iterator(end()); }
 
       const_reverse_iterator
       rbegin() const _GLIBCXX_NOEXCEPT
@@ -3263,6 +3263,8 @@ namespace __rb_tree
     _M_insert_lower_node(_Base_ptr __p, _Node_ptr __z)
     -> iterator
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(*__z);
       bool __insert_left = (__p == _M_end()
 			    || !_M_key_compare(_S_key(__p), _S_key(__z)));
 
