@@ -9965,13 +9965,17 @@ public:
     /* field_object_predicate_invalidate_all and field_object_address_
        invalidate_all for every one of OBJECTS, in one sweep of the keys
        rather than one per object.  */
+    auto_vec<tree, 8> members;
     if (m_field_object_key)
       for (auto it : *m_field_object_key)
 	if (objects.contains (it.first.first))
 	  {
 	    predicate_fact_invalidate (it.second);
 	    invalidate (it.second);
+	    members.safe_push (it.second);
 	  }
+    for (tree k : members)
+      field_object_address_invalidate_derived (k);
     if (m_array_object_key)
       for (auto it : *m_array_object_key)
 	if (objects.contains (it.first.first)
@@ -10128,7 +10132,91 @@ public:
       {
 	invalidate (*key);
 	array_object_address_invalidate_on (*key);
+	field_object_address_invalidate_derived (*key);
       }
+  }
+  /* The facts on members of the object a pointer member points to,
+     keyed on that member's own field key ('this->mobj->d' is keyed
+     (key (this, mobj), d), see oa_member_object_identity), and so on
+     down the chain: once the member MEMBER_KEY stands for may hold
+     another pointer, or its object is gone, none of them is known.
+     Each key is made after the key it is based on, so the chain can't
+     loop; DEPTH bounds it all the same.  */
+  void field_object_address_invalidate_derived (tree member_key,
+						int depth = 0)
+  {
+    if (depth > 16 || !m_field_object_key)
+      return;
+    auto_vec<tree, 8> derived;
+    for (auto it : *m_field_object_key)
+      if (it.first.first == member_key)
+	derived.safe_push (it.second);
+    for (tree k : derived)
+      {
+	invalidate (k);
+	array_object_address_invalidate_on (k);
+	field_object_address_invalidate_derived (k, depth + 1);
+      }
+  }
+  /* Every chain fact (one keyed on a pointer member's own field key,
+     see field_object_address_invalidate_field_chains), and every one
+     reached through one.  */
+  void field_object_address_invalidate_chains ()
+  {
+    if (!m_field_object_key)
+      return;
+    hash_set<tree> member_keys;
+    for (auto it : *m_field_object_key)
+      member_keys.add (it.second);
+    auto_vec<tree, 8> hit;
+    for (auto it : *m_field_object_key)
+      if (member_keys.contains (it.first.first))
+	hit.safe_push (it.second);
+    for (tree k : hit)
+      {
+	invalidate (k);
+	array_object_address_invalidate_on (k);
+	field_object_address_invalidate_derived (k);
+      }
+  }
+  /* A write to FIELD of an object whose identity is BASE (NULL_TREE
+     when unresolved): BASE->FIELD itself is the caller's to handle, as
+     ever, but a pointer chain's facts ('this->mobj->d', keyed on
+     another member's field key) are kept for the chain's own path
+     alone, so the write may be to the very object the chain reaches
+     ('O *o = mobj; o->d = nullptr;').  Drops every chain fact on a
+     FIELD member, other than BASE's, and every chain fact reached
+     through one (a one-level 'this->mobj' fact itself is left alone,
+     as before chains were tracked; what lies beyond it is not).  */
+  void field_object_address_invalidate_field_chains (tree base, tree field)
+  {
+    if (!m_field_object_key)
+      return;
+    bool any = false;
+    for (auto it : *m_field_object_key)
+      if (it.first.second == field && it.first.first != base)
+	{
+	  any = true;
+	  break;
+	}
+    if (!any)
+      return;
+    hash_set<tree> member_keys;
+    for (auto it : *m_field_object_key)
+      member_keys.add (it.second);
+    auto_vec<tree, 8> hit;
+    for (auto it : *m_field_object_key)
+      if (it.first.second == field && it.first.first != base)
+	{
+	  if (member_keys.contains (it.first.first))
+	    {
+	      invalidate (it.second);
+	      array_object_address_invalidate_on (it.second);
+	    }
+	  hit.safe_push (it.second);
+	}
+    for (tree k : hit)
+      field_object_address_invalidate_derived (k);
   }
   /* The array-slot facts 'd_p[i]' keyed on a pointer member's own
      field key (see oa_pointer_member_identity): a write to the member,
@@ -10142,12 +10230,16 @@ public:
   }
   void field_object_address_invalidate_all (tree base)
   {
+    auto_vec<tree, 8> members;
     for (auto it : *m_field_object_key)
       if (it.first.first == base)
 	{
 	  invalidate (it.second);
 	  array_object_address_invalidate_on (it.second);
+	  members.safe_push (it.second);
 	}
+    for (tree k : members)
+      field_object_address_invalidate_derived (k);
     /* See field_object_predicate_invalidate_all's own identical
        Increment 2 addition just above -- same reasoning, including the
        both-key-components check.  */
@@ -12070,29 +12162,66 @@ oa_field_base_object (tree obj)
   return obj;
 }
 
+static bool oa_member_object_identity (tree, oa_env &, tree *, int = 0);
+
 /* If ARR is a read of a pointer-typed data member (e.g. 'this->d_p'),
    set *KEY_OUT to that member's field_object_identity_key -- the same
    key an is_object_address fact about the member's own value is
    stored under -- and return true.  Lets 'd_p[i]' / 'd_p + i' key their
-   array-slot facts on the member, as 'p[i]' does on a local P.  */
+   array-slot facts on the member, as 'p[i]' does on a local P.  The
+   member's own object may itself be reached through a pointer member
+   ('this->mobj->d'): see oa_member_object_identity.  */
 
 static bool
-oa_pointer_member_identity (tree arr, oa_env &env, tree *key_out)
+oa_pointer_member_identity (tree arr, oa_env &env, tree *key_out,
+			    int depth = 0)
 {
   arr = STRIP_ANY_LOCATION_WRAPPER (arr);
+  while (TREE_CODE (arr) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arr)
+	 || TREE_CODE (arr) == VIEW_CONVERT_EXPR)
+    arr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arr, 0));
   if (TREE_CODE (arr) != COMPONENT_REF
       || !POINTER_TYPE_P (TREE_TYPE (arr)))
     return false;
   tree obj = oa_field_base_object (TREE_OPERAND (arr, 0));
   tree identity;
-  if (!(oa_object_identity_decl (obj, &identity)
-	|| oa_field_slot_identity (obj, env, &identity)
-	|| oa_array_slot_identity (obj, env, &identity)
-	|| oa_field_object_identity (obj, env, &identity)))
+  if (!oa_member_object_identity (obj, env, &identity, depth + 1))
     return false;
-  identity = env.alias_find (identity);
   *key_out = env.field_object_identity_key (identity, TREE_OPERAND (arr, 1));
   return true;
+}
+
+/* The identity of the object OBJ (a field's base object, as
+   oa_field_base_object gives it) for keying that field's facts: OBJ
+   as a decl, a field or array slot known to alias one, or '&h.f' --
+   or, failing those, OBJ a read of a pointer member itself, keyed on
+   that member's own field key (oa_pointer_member_identity), so that
+   'this->mobj->d' is keyed (key (this, mobj), d) and a fact on it is
+   found again by the next 'this->mobj->d', as 'this->d''s is.  A
+   never_proven trust of 'mobj->d' otherwise never made a following
+   'mobj->d->v.size ()' (its '&mobj->d->v') provable, though a trust of
+   one-level 'd' or of a local copy of 'mobj->d' did.  The chain's
+   facts end with any write to a member along it (field_object_
+   address_invalidate_derived) or to a member of the same name
+   elsewhere (field_object_address_invalidate_field_chains).  Returns
+   the identity alias-canonicalized.  */
+
+static bool
+oa_member_object_identity (tree obj, oa_env &env, tree *identity_out,
+			   int depth)
+{
+  if (depth > 8)
+    return false;
+  tree identity;
+  if (oa_object_identity_decl (obj, &identity)
+      || oa_field_slot_identity (obj, env, &identity)
+      || oa_array_slot_identity (obj, env, &identity)
+      || oa_field_object_identity (obj, env, &identity))
+    {
+      *identity_out = env.alias_find (identity);
+      return true;
+    }
+  return oa_pointer_member_identity (obj, env, identity_out, depth);
 }
 
 static bool
@@ -13090,14 +13219,8 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
       tree ptr_base = oa_field_base_object (TREE_OPERAND (expr, 0));
       tree identity;
       tree field_key = NULL_TREE;
-      if (oa_object_identity_decl (ptr_base, &identity)
-	  || oa_field_slot_identity (ptr_base, env, &identity)
-	  || oa_array_slot_identity (ptr_base, env, &identity)
-	  || oa_field_object_identity (ptr_base, env, &identity))
-	{
-	  identity = env.alias_find (identity);
-	  field_key = env.field_object_identity_key (identity, field);
-	}
+      if (oa_member_object_identity (ptr_base, env, &identity))
+	field_key = env.field_object_identity_key (identity, field);
       if (!POINTER_TYPE_P (TREE_TYPE (field))
 	  && TREE_CODE (TREE_TYPE (field)) != REFERENCE_TYPE
 	  && !(field_key && env.provable_p (field_key)))
@@ -27195,14 +27318,10 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 		tree obj_expr = oa_field_base_object (TREE_OPERAND (arg, 0));
 		tree field = TREE_OPERAND (arg, 1);
 		tree identity;
-		if (oa_object_identity_decl (obj_expr, &identity)
-		    || oa_field_slot_identity (obj_expr, env, &identity)
-		    || oa_array_slot_identity (obj_expr, env, &identity)
-		    || oa_field_object_identity (obj_expr, env, &identity))
-		  {
-		    identity = env.alias_find (identity);
-		    arg = env.field_object_identity_key (identity, field);
-		  }
+		/* Through pointer members too ('mobj->d'): see
+		   oa_member_object_identity.  */
+		if (oa_member_object_identity (obj_expr, env, &identity))
+		  arg = env.field_object_identity_key (identity, field);
 	      }
 	    /* D4324, Increment 2 of the pointer-indexing follow-on: 'p
 	       [index]' for a POINTER-TYPED p (as opposed to a genuine
@@ -27831,14 +27950,10 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 		tree obj_expr = oa_field_base_object (TREE_OPERAND (arg, 0));
 		tree field = TREE_OPERAND (arg, 1);
 		tree identity;
-		if (oa_object_identity_decl (obj_expr, &identity)
-		    || oa_field_slot_identity (obj_expr, env, &identity)
-		    || oa_array_slot_identity (obj_expr, env, &identity)
-		    || oa_field_object_identity (obj_expr, env, &identity))
-		  {
-		    identity = env.alias_find (identity);
-		    arg = env.field_object_identity_key (identity, field);
-		  }
+		/* Through pointer members too ('mobj->d'): see
+		   oa_member_object_identity.  */
+		if (oa_member_object_identity (obj_expr, env, &identity))
+		  arg = env.field_object_identity_key (identity, field);
 	      }
 	    /* D4324, Increment 2 of the pointer-indexing follow-on: 'p
 	       [index]' for a POINTER-TYPED p (as opposed to a genuine
@@ -31064,6 +31179,17 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 		env.addressable_locals_written_through_memory ();
 	      else if (target && !component)
 		env.object_written_through_memory (target);
+	      /* A pointer chain's facts ('this->mobj->d', see
+		 oa_member_object_identity) are kept for the chain's path
+		 alone, and a store through an unknown pointer may be to a
+		 member along it ('P **pp = &mobj->d; *pp = q;'): any store
+		 that may write a pointer (one of pointer, class or array
+		 type -- not an arithmetic one) drops them all.  A field
+		 store ('o->d = q') is the field-write branch's below.  */
+	      if (!target && !is_this_parameter (ptr) && !component
+		  && !ARITHMETIC_TYPE_P (TREE_TYPE (dst))
+		  && TREE_CODE (TREE_TYPE (dst)) != ENUMERAL_TYPE)
+		env.field_object_address_invalidate_chains ();
 	    }
 	}
 	/* Shared-substrate invalidation rule 1: any reassignment of a
@@ -31129,7 +31255,37 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 			    ? STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0))
 			    : obj;
 			tree field_identity;
-			if (oa_object_identity_decl (obj_expr, &field_identity))
+			bool decl_base
+			  = oa_object_identity_decl (obj_expr, &field_identity);
+			/* The member of an object reached through a pointer
+			   member ('mobj->d = x;' in a member function): its
+			   value facts are keyed on that member's field key
+			   (oa_member_object_identity), so the write replaces
+			   them -- and those of any other chain ending in a
+			   member of the same name, which may be this very
+			   object (field_object_address_invalidate_field_
+			   chains).  Only the is_object_address facts follow
+			   such chains; the rest of this branch keeps to a
+			   decl base.  */
+			tree chain_identity = NULL_TREE;
+			if (!decl_base
+			    && !oa_member_object_identity
+				  (oa_field_base_object (obj), env,
+				   &chain_identity))
+			  chain_identity = NULL_TREE;
+			env.field_object_address_invalidate_field_chains
+			  (decl_base ? env.alias_find (field_identity)
+			   : chain_identity, field);
+			if (chain_identity)
+			  {
+			    env.field_object_address_invalidate (chain_identity,
+								 field);
+			    if (POINTER_TYPE_P (TREE_TYPE (field)))
+			      env.set (env.field_object_identity_key
+					 (chain_identity, field),
+				       oa_provable_p (rhs, env));
+			  }
+			if (decl_base)
 			  {
 			    /* Unlike the whole-object branch above, this
 			       genuinely mutates the pointee's own memory (a

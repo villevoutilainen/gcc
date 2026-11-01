@@ -15023,6 +15023,7 @@ cg_assert_fact_scope::establish (gcall *call)
 	  while (TREE_CODE (arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arg)
 		 || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
 	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	  tree fbase_unused;
 	  /* '&r' for a reference R is R itself; 'p' for a pointer P.  */
 	  if ((VAR_P (arg) || TREE_CODE (arg) == PARM_DECL)
 	      && (TYPE_REF_P (TREE_TYPE (arg))
@@ -15041,7 +15042,18 @@ cg_assert_fact_scope::establish (gcall *call)
 		      from an array element.  */
 		   || ((TREE_CODE (arg) == INDIRECT_REF
 			|| TREE_CODE (arg) == ARRAY_REF)
-		       && POINTER_TYPE_P (TREE_TYPE (arg))))
+		       && POINTER_TYPE_P (TREE_TYPE (arg)))
+		   /* A pointer member of an object that is itself reached
+		      through a pointer member ('this->mobj->d'), which the
+		      dominator walk's member facts can't key (they need a
+		      parameter or local for the object, see
+		      cg_object_address_field): every value loaded alike --
+		      'this->mobj', then its 'd' -- with neither member
+		      possibly written between the check and the load
+		      (cg_expr_computes_p, cg_load_unchanged_since_p).  */
+		   || (TREE_CODE (arg) == COMPONENT_REF
+		       && POINTER_TYPE_P (TREE_TYPE (arg))
+		       && !cg_object_address_field (arg, &fbase_unused)))
 	    {
 	      unsigned k;
 	      tree name;
