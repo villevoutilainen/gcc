@@ -24490,15 +24490,28 @@ oa_invalidate_symbolic_scalar_range_for_call_args (tree call, oa_env &env)
 	      identity = op;
 	      /* The callee can change the scalar through its address, so
 		 the item 8 facts about its value (nonzero, range) end too
-		 -- unless it is bound to a const reference.  */
-	      bool const_ref = (callee_parm
-				&& TYPE_REF_P (TREE_TYPE (callee_parm))
-				&& TYPE_READONLY (TREE_TYPE (TREE_TYPE (callee_parm))));
+		 -- unless it is bound to a const reference or a pointer to
+		 const.  */
+	      tree parm_type = callee_parm ? TREE_TYPE (callee_parm) : NULL_TREE;
+	      bool const_ref = (parm_type
+				&& (TYPE_REF_P (parm_type)
+				    || POINTER_TYPE_P (parm_type))
+				&& TYPE_READONLY (TREE_TYPE (parm_type)));
 	      if (!const_ref && SCALAR_TYPE_P (TREE_TYPE (op)))
 		{
 		  env.nz_invalidate (op);
 		  env.range_invalidate (op);
 		  env.float_range_invalidate (op);
+		  /* A pointer's own facts too -- what it points to may
+		     have changed: 'set (&p)' may store anything in P.
+		     The GIMPLE engine ends them, P being then a memory
+		     load whose value the call may change; the AST engine
+		     kept them in its basic mode (control objects without
+		     -fcontract-conveyor-proofs), where a call otherwise
+		     keeps is_object_address facts, so that after
+		     'TRUST (p); set (&p);' a 'p->f ()' was accepted.  */
+		  if (TREE_CODE (TREE_TYPE (op)) == POINTER_TYPE)
+		    env.object_written_through_memory (op);
 		}
 	    }
 	}
