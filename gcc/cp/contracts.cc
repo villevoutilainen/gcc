@@ -5753,6 +5753,7 @@ init_contracts ()
 {
   init_terminate_fn ();
   init_builtin_contract_violation_type ();
+  lang_post_pch_load = contracts_post_pch_load;
 
   /* The experimental GIMPLE-pass contract-checking engine (-fcontract-
      conveyor-proofs-gimple / -fcontract-symbolic-proofs-gimple) is
@@ -38516,6 +38517,79 @@ build_contract_check (tree contract)
   TREE_SIDE_EFFECTS (cc_bind) = true;
   BIND_EXPR_BODY (cc_bind) = pop_stmt_list (BIND_EXPR_BODY (cc_bind));
   return contract_check_bind_done (cc_bind);
+}
+
+/* A GC'd hash table keyed by tree pointers doesn't survive a PCH: writing
+   the PCH moves every object to its address in the PCH image, and
+   hash_table neither rehashes on load nor hashes anything stable (as
+   DECL_UID-keyed tables do).  Loaded from a PCH, every lookup of a key the
+   PCH brought along misses -- a template defined in the PCH, say, has no
+   contracts when instantiated.  So rebuild each such table, from the
+   loaded entries, once the PCH is in.  */
+
+template<typename K, typename V>
+static void
+pch_rehash (hash_map<K, V> *&map)
+{
+  if (!map)
+    return;
+  hash_map<K, V> *fresh = hash_map<K, V>::create_ggc (map->elements ());
+  for (auto it = map->begin (); it != map->end (); ++it)
+    fresh->put ((*it).first, (*it).second);
+  map = fresh;
+}
+
+template<typename K>
+static void
+pch_rehash (hash_set<K> *&set)
+{
+  if (!set)
+    return;
+  hash_set<K> *fresh = hash_set<K>::create_ggc (set->elements ());
+  for (K key : *set)
+    fresh->add (key);
+  set = fresh;
+}
+
+/* lang_post_pch_load: rehash the pointer-keyed tables above, and those
+   elsewhere in the front end (profiles_post_pch_load).  */
+
+void
+contracts_post_pch_load ()
+{
+  pch_rehash (contract_decl_map);
+  pch_rehash (decl_pre_fn);
+  pch_rehash (decl_post_fn);
+  pch_rehash (orig_from_outlined);
+  pch_rehash (contract_predicate_core_fn);
+  pch_rehash (predicate_core_fn_contract);
+  pch_rehash (object_check_fn_orig_decl);
+  pch_rehash (decl_wrapper_fn);
+  pch_rehash (decl_for_wrapper);
+  pch_rehash (pred_result_names);
+  pch_rehash (contract_positional_parms_map);
+  pch_rehash (contract_deferred_binders_map);
+  pch_rehash (object_pre_check_fn_map);
+  pch_rehash (object_post_check_fn_map);
+  pch_rehash (contract_inherited_from);
+  pch_rehash (oa_condition_as_written_map);
+  pch_rehash (oa_defaulted_copy_needs_cache);
+  pch_rehash (symbolic_scalar_thunk_cache);
+  pch_rehash (contract_return_sources_map);
+  pch_rehash (contract_check_arg_struct_map);
+  pch_rehash (symbolic_shadow_contract);
+  pch_rehash (conveyor_violating_default_args);
+  pch_rehash (oa_conveyor_active_contract_cache);
+  pch_rehash (oa_symbolic_active_contract_cache);
+  pch_rehash (oa_nonterminating_contract_cache);
+  pch_rehash (oa_conveyor_strict_contract_cache);
+  pch_rehash (oa_symbolic_strict_contract_cache);
+  pch_rehash (oa_synthesized_implicit_contracts);
+  pch_rehash (contract_pred_capture_parms);
+  pch_rehash (oa_iile_walked_calls);
+  pch_rehash (oa_contract_flavors_cached_fns);
+  pch_rehash (oa_validated_contract_decls);
+  profiles_post_pch_load ();
 }
 
 #include "gt-cp-contracts.h"

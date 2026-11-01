@@ -4607,4 +4607,19 @@ fold_builtin_source_location (const_tree t)
   return build_fold_addr_expr_with_type_loc (loc, var, TREE_TYPE (t));
 }
 
+/* After a PCH is loaded: profiles_subobject_write_lhs is keyed by tree
+   pointers, which the PCH moved (see contracts_post_pch_load).  */
+
+void
+profiles_post_pch_load ()
+{
+  if (!profiles_subobject_write_lhs)
+    return;
+  hash_set<tree> *fresh
+    = hash_set<tree>::create_ggc (profiles_subobject_write_lhs->elements ());
+  for (tree t : *profiles_subobject_write_lhs)
+    fresh->add (t);
+  profiles_subobject_write_lhs = fresh;
+}
+
 #include "gt-cp-cp-gimplify.h"
