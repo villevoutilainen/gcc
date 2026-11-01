@@ -576,7 +576,7 @@ static GTY(()) vec<tree, va_gc> *profiles_eager_check_pending;
    is already complete by normal C++ deferred-body-parsing rules -- is
    deferred here and retried by profiles_eager_check_type_complete once
    finish_struct (class.cc) actually finishes that type.  */
-static vec<tree> profiles_eager_check_deferred_until_complete;
+static GTY(()) vec<tree, va_gc> *profiles_eager_check_deferred_until_complete;
 
 /* D4324/P2680: mirrors contracts_gimple_eager_check_function's own
    identical, later-found hazard (contracts-gimple.cc) exactly --
@@ -604,7 +604,7 @@ static vec<tree> profiles_eager_check_deferred_until_complete;
    after c_parse_final_cleanups sets at_eof to 3 (mirroring exactly
    where contracts_gimple_eager_check_drain_at_eof's own identical
    queue is drained).  */
-static vec<tree> profiles_eager_check_deferred_until_eof;
+static GTY(()) vec<tree, va_gc> *profiles_eager_check_deferred_until_eof;
 
 static void profiles_eager_check_function_1 (tree fndecl,
 					      bool is_eof_drain = false);
@@ -626,11 +626,11 @@ static void profiles_eager_check_function_1 (tree fndecl,
 void
 profiles_eager_check_type_complete (tree)
 {
-  if (profiles_eager_check_deferred_until_complete.is_empty ())
+  if (vec_safe_is_empty (profiles_eager_check_deferred_until_complete))
     return;
-  for (tree fndecl : profiles_eager_check_deferred_until_complete)
+  for (tree fndecl : *profiles_eager_check_deferred_until_complete)
     vec_safe_push (profiles_eager_check_pending, fndecl);
-  profiles_eager_check_deferred_until_complete.truncate (0);
+  vec_safe_truncate (profiles_eager_check_deferred_until_complete, 0);
 }
 
 void
@@ -745,7 +745,7 @@ profiles_eager_check_function_1 (tree fndecl, bool is_eof_drain)
   tree ctx = DECL_CONTEXT (fndecl);
   if (ctx && RECORD_OR_UNION_TYPE_P (ctx) && !COMPLETE_TYPE_P (ctx))
     {
-      profiles_eager_check_deferred_until_complete.safe_push (fndecl);
+      vec_safe_push (profiles_eager_check_deferred_until_complete, fndecl);
       return;
     }
 
@@ -763,7 +763,7 @@ profiles_eager_check_function_1 (tree fndecl, bool is_eof_drain)
      right back to the same queue.  */
   if (vague_linkage_p (fndecl) && !is_eof_drain)
     {
-      profiles_eager_check_deferred_until_eof.safe_push (fndecl);
+      vec_safe_push (profiles_eager_check_deferred_until_eof, fndecl);
       return;
     }
 
@@ -842,16 +842,16 @@ profiles_eager_check_drain_at_eof (void)
      collector could not run, and nothing at function_depth 0 came
      after), then whatever was deferred to here.  */
   profiles_eager_check_drain ();
-  if (profiles_eager_check_deferred_until_eof.is_empty ())
+  if (vec_safe_is_empty (profiles_eager_check_deferred_until_eof))
     return;
 
   profiles_eager_check_active = true;
-  while (!profiles_eager_check_deferred_until_eof.is_empty ()
+  while (!vec_safe_is_empty (profiles_eager_check_deferred_until_eof)
 	 || !vec_safe_is_empty (profiles_eager_check_pending))
     {
-      if (!profiles_eager_check_deferred_until_eof.is_empty ())
+      if (!vec_safe_is_empty (profiles_eager_check_deferred_until_eof))
 	profiles_eager_check_function_1
-	  (profiles_eager_check_deferred_until_eof.pop (), /*is_eof_drain=*/true);
+	  (profiles_eager_check_deferred_until_eof->pop (), /*is_eof_drain=*/true);
       else
 	profiles_eager_check_function_1 (profiles_eager_check_pending->pop ());
     }

@@ -29081,6 +29081,28 @@ oa_reanchor_stale_contract_parms (tree attr, tree decl)
     }
 }
 
+/* The DECLs tsubst_regenerated_contract_specifiers has substituted the
+   contract-specifiers of (see its own comment).  A GC root so that a PCH
+   carries it: a decl the PCH's header already substituted (an extern
+   template's member, say) mustn't be substituted again in the TU.  */
+
+static GTY(()) hash_set<tree> *contract_specifiers_substituted;
+
+/* After a PCH is loaded: contract_specifiers_substituted is keyed by tree
+   pointers, which the PCH moved (see contracts_post_pch_load).  */
+
+void
+pt_contracts_post_pch_load ()
+{
+  if (!contract_specifiers_substituted)
+    return;
+  hash_set<tree> *fresh
+    = hash_set<tree>::create_ggc (contract_specifiers_substituted->elements ());
+  for (tree t : *contract_specifiers_substituted)
+    fresh->add (t);
+  contract_specifiers_substituted = fresh;
+}
+
 /* Regenerate DECL's contract-specifiers (a member function template of a
    class template, e.g. basic_string<_CharT,...>::resize_and_overwrite<
    _Operation>, or an ordinary "unique friend" member such as
@@ -29175,9 +29197,8 @@ tsubst_regenerated_contract_specifiers (tree decl, tree code_pattern, tree args)
      before declining to redo the full substitution -- cheap and safe
      even when nothing has actually gone stale (the scan finds nothing
      to do and returns immediately).  */
-  static hash_set<tree> *contract_specifiers_substituted;
   if (!contract_specifiers_substituted)
-    contract_specifiers_substituted = new hash_set<tree> ();
+    contract_specifiers_substituted = hash_set<tree>::create_ggc (64);
   if (contract_specifiers_substituted->add (decl))
     {
       oa_reanchor_stale_contract_parms (attr, decl);

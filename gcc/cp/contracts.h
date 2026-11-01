@@ -176,6 +176,10 @@ enum contract_check_side { ccs_definition, ccs_wrapper, ccs_not_applicable };
 extern void init_contracts			(void);
 extern void contracts_post_pch_load		(void);
 extern void profiles_post_pch_load		(void);
+extern void pt_contracts_post_pch_load		(void);
+extern vec<tree, va_gc> *&contracts_gimple_eager_check_until_complete_queue (void);
+extern vec<tree, va_gc> *&contracts_gimple_eager_check_until_eof_queue (void);
+extern vec<tree, va_gc> *&contracts_gimple_eager_check_predicate_helpers (void);
 
 /* contracts-gimple.cc.  Declared here (rather than alongside the other
    make_pass_* declarations in tree-pass.h) because this pass only exists

@@ -17044,17 +17044,20 @@ static vec<tree, va_gc> *&cg_eager_check_pending
    closure type's own finish_struct has actually completed, since
    finish_lambda_function runs before the enclosing cp_parser_lambda_
    expression calls finish_struct on the closure type itself.  */
-static vec<tree> cg_eager_check_deferred_until_complete;
+static vec<tree, va_gc> *&cg_eager_check_deferred_until_complete
+  = contracts_gimple_eager_check_until_complete_queue ();
 
 /* DECL_DECLARED_CONSTEXPR_P functions, deferred until genuine end-of-
    TU -- see the big comment above for why.  Drained by contracts_
    gimple_eager_check_drain_at_eof, called from c_parse_final_cleanups
    (decl2.cc) right after at_eof is set to 3.  */
-static vec<tree> cg_eager_check_deferred_until_eof;
+static vec<tree, va_gc> *&cg_eager_check_deferred_until_eof
+  = contracts_gimple_eager_check_until_eof_queue ();
 
 /* Predicate helpers, of which the core functions are checked at the end
    of the translation unit (see contracts_gimple_eager_check_function).  */
-static vec<tree> cg_eager_check_predicate_helpers;
+static vec<tree, va_gc> *&cg_eager_check_predicate_helpers
+  = contracts_gimple_eager_check_predicate_helpers ();
 
 static gimple_opt_pass *cg_eager_build_ssa_pass;
 static gimple_opt_pass *cg_eager_contracts_pass;
@@ -17069,11 +17072,11 @@ static void contracts_gimple_eager_check_function_1 (tree fndecl,
 void
 contracts_gimple_eager_check_type_complete (tree)
 {
-  if (cg_eager_check_deferred_until_complete.is_empty ())
+  if (vec_safe_is_empty (cg_eager_check_deferred_until_complete))
     return;
-  for (tree fndecl : cg_eager_check_deferred_until_complete)
+  for (tree fndecl : *cg_eager_check_deferred_until_complete)
     vec_safe_push (cg_eager_check_pending, fndecl);
-  cg_eager_check_deferred_until_complete.truncate (0);
+  vec_safe_truncate (cg_eager_check_deferred_until_complete, 0);
 }
 
 void
@@ -17119,8 +17122,8 @@ contracts_gimple_eager_check_function (tree fndecl)
 	 queued.  */
       if (flag_contract_conveyor_proofs_gimple
 	  && CONTRACT_HELPER (fndecl) == ldf_contract_predicate_helper
-	  && !cg_eager_check_predicate_helpers.contains (fndecl))
-	cg_eager_check_predicate_helpers.safe_push (fndecl);
+	  && !vec_safe_contains (cg_eager_check_predicate_helpers, fndecl))
+	vec_safe_push (cg_eager_check_predicate_helpers, fndecl);
       return;
     }
 
@@ -17218,7 +17221,7 @@ contracts_gimple_eager_check_function_1 (tree fndecl, bool is_eof_drain)
   tree ctx = DECL_CONTEXT (fndecl);
   if (ctx && RECORD_OR_UNION_TYPE_P (ctx) && !COMPLETE_TYPE_P (ctx))
     {
-      cg_eager_check_deferred_until_complete.safe_push (fndecl);
+      vec_safe_push (cg_eager_check_deferred_until_complete, fndecl);
       return;
     }
 
@@ -17273,7 +17276,7 @@ contracts_gimple_eager_check_function_1 (tree fndecl, bool is_eof_drain)
   if ((DECL_DECLARED_CONSTEXPR_P (fndecl) || vague_linkage_p (fndecl))
       && !is_eof_drain)
     {
-      cg_eager_check_deferred_until_eof.safe_push (fndecl);
+      vec_safe_push (cg_eager_check_deferred_until_eof, fndecl);
       return;
     }
 
@@ -17328,12 +17331,12 @@ contracts_gimple_eager_check_drain_at_eof (void)
   cg_eager_check_active = true;
   do
     {
-      while (!cg_eager_check_deferred_until_eof.is_empty ()
+      while (!vec_safe_is_empty (cg_eager_check_deferred_until_eof)
 	     || !vec_safe_is_empty (cg_eager_check_pending))
 	{
-	  if (!cg_eager_check_deferred_until_eof.is_empty ())
+	  if (!vec_safe_is_empty (cg_eager_check_deferred_until_eof))
 	    contracts_gimple_eager_check_function_1
-	      (cg_eager_check_deferred_until_eof.pop (), /*is_eof_drain=*/true);
+	      (cg_eager_check_deferred_until_eof->pop (), /*is_eof_drain=*/true);
 	  else
 	    contracts_gimple_eager_check_function_1 (cg_eager_check_pending->pop ());
 	}
@@ -17346,9 +17349,10 @@ contracts_gimple_eager_check_drain_at_eof (void)
 	 checks of its contract's own function recorded about the values
 	 it is called with (cg_record_predicate_site_facts).  */
       auto_vec<tree> helpers;
-      for (tree fn : cg_eager_check_predicate_helpers)
-	helpers.safe_push (fn);
-      cg_eager_check_predicate_helpers.truncate (0);
+      if (cg_eager_check_predicate_helpers)
+	for (tree fn : *cg_eager_check_predicate_helpers)
+	  helpers.safe_push (fn);
+      vec_safe_truncate (cg_eager_check_predicate_helpers, 0);
       static hash_set<tree> checked_cores;
       for (tree fn : helpers)
 	{
@@ -17358,9 +17362,9 @@ contracts_gimple_eager_check_drain_at_eof (void)
 	    contracts_gimple_eager_check_function_1 (fn, /*is_eof_drain=*/true);
 	}
     }
-  while (!cg_eager_check_deferred_until_eof.is_empty ()
+  while (!vec_safe_is_empty (cg_eager_check_deferred_until_eof)
 	 || !vec_safe_is_empty (cg_eager_check_pending)
 	 || !cg_eager_check_deferred_until_eof_iile.is_empty ()
-	 || !cg_eager_check_predicate_helpers.is_empty ());
+	 || !vec_safe_is_empty (cg_eager_check_predicate_helpers));
   cg_eager_check_active = false;
 }

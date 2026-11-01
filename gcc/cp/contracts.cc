@@ -1102,7 +1102,7 @@ tree conveyor_spliced_probe_function;
 
 /* The DECL_UIDs of the members whose default member initializer violates
    the conveyor rules.  */
-static hash_set<int_hash<int, -1, -2>> *conveyor_nsdmi_violating_uids;
+static GTY(()) hash_set<tree> *conveyor_nsdmi_violating_uids;
 
 /* The default arguments, as built, that violate the conveyor rules.  */
 static GTY(()) hash_set<tree> *conveyor_violating_default_args;
@@ -1134,7 +1134,7 @@ conveyor_spliced_probe::~conveyor_spliced_probe ()
 
 /* The DECL_UIDs of the explicitly-defaulted special members that are
    conveyor only because their implicit form is (defaulted_late_check).  */
-static hash_set<int_hash<int, -1, -2>> *conveyor_deduced_defaulted_uids;
+static GTY(()) hash_set<tree> *conveyor_deduced_defaulted_uids;
 
 /* Record that FN is conveyor only because its implicit form is.  */
 
@@ -1142,8 +1142,8 @@ void
 conveyor_note_deduced_defaulted (tree fn)
 {
   if (!conveyor_deduced_defaulted_uids)
-    conveyor_deduced_defaulted_uids = new hash_set<int_hash<int, -1, -2>>;
-  conveyor_deduced_defaulted_uids->add (DECL_UID (fn));
+    conveyor_deduced_defaulted_uids = hash_set<tree>::create_ggc (8);
+  conveyor_deduced_defaulted_uids->add (fn);
 }
 
 /* FIELD's default member initializer was built under PROBE: record
@@ -1155,8 +1155,8 @@ conveyor_finish_nsdmi_probe (tree field, const conveyor_spliced_probe &probe)
   if (!probe.violated ())
     return;
   if (!conveyor_nsdmi_violating_uids)
-    conveyor_nsdmi_violating_uids = new hash_set<int_hash<int, -1, -2>>;
-  conveyor_nsdmi_violating_uids->add (DECL_UID (field));
+    conveyor_nsdmi_violating_uids = hash_set<tree>::create_ggc (8);
+  conveyor_nsdmi_violating_uids->add (field);
 
   /* A class's default member initializers are parsed only once it is
      complete, after its defaulted constructors were found conveyor
@@ -1175,7 +1175,7 @@ conveyor_finish_nsdmi_probe (tree field, const conveyor_spliced_probe &probe)
 	&& (default_ctor_p (fn) || DECL_INHERITED_CTOR (fn))
 	&& (DECL_ARTIFICIAL (fn)
 	    || (conveyor_deduced_defaulted_uids
-		&& conveyor_deduced_defaulted_uids->contains (DECL_UID (fn)))))
+		&& conveyor_deduced_defaulted_uids->contains (fn))))
       {
 	CLEAR_DECL_DECLARED_CONVEYOR_P (fn);
 	tree clone;
@@ -1191,7 +1191,7 @@ bool
 conveyor_nsdmi_violates_p (tree field)
 {
   return (conveyor_nsdmi_violating_uids
-	  && conveyor_nsdmi_violating_uids->contains (DECL_UID (field)));
+	  && conveyor_nsdmi_violating_uids->contains (field));
 }
 
 /* Something built under a conveyor_spliced_probe that violates the
@@ -1407,6 +1407,35 @@ vec<tree, va_gc> *&
 contracts_gimple_eager_check_queue (void)
 {
   return cg_eager_check_pending;
+}
+
+/* Likewise contracts-gimple.cc's queues of functions whose check waits
+   for their class to be complete or for the end of the TU, and of
+   predicate helpers checked there.  GC roots also so that a PCH carries
+   them: writing a PCH stops before the end-of-TU drain, so what the
+   header queued is checked by the TU that loads it.  (Not the queue of
+   immediately-invoked lambdas: their checks need cg_iile_infos' facts,
+   which a PCH can't carry, so a header's are not checked.)  */
+static GTY(()) vec<tree, va_gc> *cg_eager_check_until_complete_q;
+static GTY(()) vec<tree, va_gc> *cg_eager_check_until_eof_q;
+static GTY(()) vec<tree, va_gc> *cg_eager_check_predicate_helpers_q;
+
+vec<tree, va_gc> *&
+contracts_gimple_eager_check_until_complete_queue (void)
+{
+  return cg_eager_check_until_complete_q;
+}
+
+vec<tree, va_gc> *&
+contracts_gimple_eager_check_until_eof_queue (void)
+{
+  return cg_eager_check_until_eof_q;
+}
+
+vec<tree, va_gc> *&
+contracts_gimple_eager_check_predicate_helpers (void)
+{
+  return cg_eager_check_predicate_helpers_q;
 }
 static GTY(()) hash_map<tree, tree> *decl_post_fn;
 
@@ -18161,7 +18190,7 @@ conveyor_inferred_special_member_p (tree fn)
     return false;
   return (DECL_ARTIFICIAL (fn)
 	  || (conveyor_deduced_defaulted_uids
-	      && conveyor_deduced_defaulted_uids->contains (DECL_UID (fn))));
+	      && conveyor_deduced_defaulted_uids->contains (fn)));
 }
 
 /* See contracts.h.  An inferred conveyor special member's implicit
@@ -32634,7 +32663,7 @@ oa_contract_symbolic_strict_cached_p (tree contract)
    recognize the very CALL_EXPRs it needs to re-establish the facts a
    later conjunct/item-8 check in that same second walk might depend
    on -- see the "double-invocation" gap this guards against, below.  */
-static hash_set<tree> *oa_resolved_functions;
+static GTY(()) hash_set<tree> *oa_resolved_functions;
 
 /* Shared body for resolve_object_address_in_function and
    oa_walk_function_calls below: both need exactly the same early exits
@@ -32970,7 +32999,7 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
   /* D4324/P2680 double-invocation guard -- see this function's own
      leading comment above for the plugin scenario this prevents.  */
   if (!oa_resolved_functions)
-    oa_resolved_functions = new hash_set<tree> ();
+    oa_resolved_functions = hash_set<tree>::create_ggc (64);
   if (oa_resolved_functions->add (fndecl))
     return;
 
@@ -38589,6 +38618,10 @@ contracts_post_pch_load ()
   pch_rehash (oa_iile_walked_calls);
   pch_rehash (oa_contract_flavors_cached_fns);
   pch_rehash (oa_validated_contract_decls);
+  pch_rehash (oa_resolved_functions);
+  pch_rehash (conveyor_nsdmi_violating_uids);
+  pch_rehash (conveyor_deduced_defaulted_uids);
+  pt_contracts_post_pch_load ();
   profiles_post_pch_load ();
 }
 
