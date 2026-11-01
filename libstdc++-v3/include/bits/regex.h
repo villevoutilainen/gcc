@@ -1060,6 +1060,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	int
 	compare(__string_view __s) const noexcept
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (const size_t __n = std::min(_M_len, __s._M_len))
 	    if (int __ret = traits_type::compare(_M_data, __s._M_data, __n))
 	      return __ret;
@@ -1897,7 +1898,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       size_type
       size() const noexcept
-      { return _Unchecked::empty() ? 0 : _Unchecked::size() - 3; }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _Unchecked::empty() ? 0 : _Unchecked::size() - 3; }
 
       size_type
       max_size() const noexcept
@@ -1910,7 +1911,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_NODISCARD bool
       empty() const noexcept
-      { return _Unchecked::size() <= 3; }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _Unchecked::size() <= 3; }
 
       ///@}
 
@@ -1929,7 +1930,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       difference_type
       length(size_type __sub = 0) const
-      { return (*this)[__sub].length(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return (*this)[__sub].length(); }
 
       /**
        * @brief Gets the offset of the beginning of the indicated submatch.
@@ -1944,7 +1945,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       difference_type
       position(size_type __sub = 0) const
-      { return std::distance(_M_begin, (*this)[__sub].first); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return std::distance(_M_begin, (*this)[__sub].first); }
 
       /**
        * @brief Gets the match or submatch converted to a string type.
@@ -1957,7 +1958,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       string_type
       str(size_type __sub = 0) const
-      { return string_type((*this)[__sub]); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return string_type((*this)[__sub]); }
 
       /**
        * @brief Gets a %sub_match reference for the match or submatch.
@@ -1972,6 +1973,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       const_reference
       operator[](size_type __sub) const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_assert( ready() );
 	return __sub < size()
@@ -1989,6 +1991,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       const_reference
       prefix() const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_assert( ready() );
 	return !empty() ? _M_prefix() : _M_unmatched_sub();
@@ -2004,6 +2007,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       const_reference
       suffix() const
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_assert( ready() );
 	return !empty() ? _M_suffix() : _M_unmatched_sub();
@@ -2014,7 +2018,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       const_iterator
       begin() const noexcept
-      { return _Base_type::begin(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _Base_type::begin(); }
 
       /**
        * @brief Gets an iterator to the start of the %sub_match collection.
@@ -2028,7 +2032,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       const_iterator
       end() const noexcept
-      { return _Base_type::end() - (_Base_type::empty() ? 0 : 3); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _Base_type::end() - (_Base_type::empty() ? 0 : 3); }
 
       /**
        * @brief Gets an iterator to one-past-the-end of the collection.
@@ -2056,7 +2060,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_Out_iter
 	format(_Out_iter __out, const char_type* __fmt_first,
 	       const char_type* __fmt_last,
-	       match_flag_type __flags = regex_constants::format_default) const;
+	       match_flag_type __flags = regex_constants::format_default) const
+	_GLIBCXX_CONVEYOR_REQUIRES_THIS;
 
       /**
        * @pre   ready() == true
@@ -2090,6 +2095,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       format(const char_type* __fmt,
 	     match_flag_type __flags = regex_constants::format_default) const
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	string_type __result;
 	format(std::back_inserter(__result),
 	       __fmt,
@@ -2164,15 +2170,15 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       const_reference
       _M_unmatched_sub() const
-      { return _Unchecked::operator[](_Unchecked::size() - 3); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _Unchecked::operator[](_Unchecked::size() - 3); }
 
       sub_match<_Bi_iter>&
       _M_unmatched_sub()
-      { return _Unchecked::operator[](_Unchecked::size() - 3); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _Unchecked::operator[](_Unchecked::size() - 3); }
 
       const_reference
       _M_prefix() const
-      { return _Unchecked::operator[](_Unchecked::size() - 2); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _Unchecked::operator[](_Unchecked::size() - 2); }
 
       sub_match<_Bi_iter>&
       _M_prefix()
@@ -2183,7 +2189,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       const_reference
       _M_suffix() const
-      { return _Unchecked::operator[](_Unchecked::size() - 1); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _Unchecked::operator[](_Unchecked::size() - 1); }
 
       sub_match<_Bi_iter>&
       _M_suffix()
@@ -3094,10 +3100,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       const value_type&
       _M_current_match() const
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	const auto& __m = *_M_position;
+	_GLIBCXX_CONVEYOR_TRUST(__m);
 	if (_M_subs[_M_n] == -1)
-	  return (*_M_position).prefix();
+	  return __m.prefix();
 	else
-	  return (*_M_position)[_M_subs[_M_n]];
+	  return __m[_M_subs[_M_n]];
       }
 
       constexpr bool

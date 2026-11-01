@@ -132,6 +132,21 @@ namespace census
     n += dist (g);
     std::regex re ("a+b");
     n += std::regex_match ("aab", re);
+    // std::string iterators (__normal_iterator, whose comparisons and
+    // increments are hardened), and match_results' checked accessors.
+    std::string rs = "aab ab";
+    std::smatch rm;
+    if (std::regex_search (rs, rm, re))
+      n += rm[0].length () + rm.size () + rm.position (0) + rm.length (0)
+	   + rm.str (0).size () + rm.prefix ().length ()
+	   + rm.suffix ().length () + rm.format ("$&").size ();
+    for (std::sregex_iterator ri (rs.begin (), rs.end (), re), re_end;
+	 ri != re_end; ++ri)
+      n += ri->length (0);
+    for (std::sregex_token_iterator ti (rs.begin (), rs.end (), re, -1),
+	 te_end; ti != te_end; ++ti)
+      n += ti->length ();
+    n += std::regex_replace (rs, re, "[$&]").size ();
     std::ostringstream os;
     os << std::setw (4) << 42 << std::hex << 255;
     n += os.str ().size ();

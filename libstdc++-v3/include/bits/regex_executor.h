@@ -221,6 +221,7 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
       bool
       _M_at_begin() const
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (_M_current == _M_begin)
 	  {
 	    // match_not_bol means ^ does not match [_M_begin,_M_begin)
@@ -248,6 +249,7 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
       bool
       _M_at_end() const
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (_M_current == _M_end)
 	  return !(_M_flags & regex_constants::match_not_eol);
 	else if (_M_match_multiline())

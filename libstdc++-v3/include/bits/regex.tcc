@@ -82,6 +82,8 @@ namespace __detail
 	      __it.first = __it.second = __e;
 	  auto& __pre = __m._M_prefix();
 	  auto& __suf = __m._M_suffix();
+	  _GLIBCXX_CONVEYOR_TRUST(__pre);
+	  _GLIBCXX_CONVEYOR_TRUST(__suf);
 	  if (__match_mode)
 	    {
 	      __pre.matched = false;
@@ -470,6 +472,7 @@ namespace __detail
 
       auto __output = [&](size_t __idx)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  auto& __sub = (*this)[__idx];
 	  if (__sub.matched)
 	    __out = std::copy(__sub.first, __sub.second, __out);
@@ -584,11 +587,13 @@ namespace __detail
 	  sub_match<_Bi_iter> __last;
 	  for (; __i != __end; ++__i)
 	    {
+	      const auto& __m = *__i;
+	      _GLIBCXX_CONVEYOR_TRUST(__m);
 	      if (!(__flags & regex_constants::format_no_copy))
-		__out = std::copy(__i->prefix().first, __i->prefix().second,
+		__out = std::copy(__m.prefix().first, __m.prefix().second,
 				  __out);
-	      __out = __i->format(__out, __fmt, __fmt + __len, __flags);
-	      __last = __i->suffix();
+	      __out = __m.format(__out, __fmt, __fmt + __len, __flags);
+	      __last = __m.suffix();
 	      if (__flags & regex_constants::format_first_only)
 		break;
 	    }
@@ -605,6 +610,8 @@ namespace __detail
     regex_iterator<_Bi_iter, _Ch_type, _Rx_traits>::
     operator==(const regex_iterator& __rhs) const noexcept
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       if (_M_pregex == nullptr && __rhs._M_pregex == nullptr)
 	return true;
       return _M_pregex == __rhs._M_pregex
@@ -627,6 +634,7 @@ namespace __detail
       // [0, match.size()) for which match[i].matched is true,
       // match[i].position() shall return distance(begin, match[i].first).
       // [28.12.1.4.5]
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_match[0].matched)
 	{
 	  auto __start = _M_match[0].second;
@@ -645,8 +653,9 @@ namespace __detail
 				   | regex_constants::match_not_null
 				   | regex_constants::match_continuous))
 		    {
-		      __glibcxx_assert(_M_match[0].matched);
+		      __glibcxx_assert_noconveyor(_M_match[0].matched);
 		      auto& __prefix = _M_match._M_prefix();
+		      _GLIBCXX_CONVEYOR_TRUST(__prefix);
 		      __prefix.first = __prefix_first;
 		      __prefix.matched = __prefix.first != __prefix.second;
 		      // [28.12.1.4.5]
@@ -660,8 +669,9 @@ namespace __detail
 	  _M_flags |= regex_constants::match_prev_avail;
 	  if (regex_search(__start, _M_end, _M_match, *_M_pregex, _M_flags))
 	    {
-	      __glibcxx_assert(_M_match[0].matched);
+	      __glibcxx_assert_noconveyor(_M_match[0].matched);
 	      auto& __prefix = _M_match._M_prefix();
+	      _GLIBCXX_CONVEYOR_TRUST(__prefix);
 	      __prefix.first = __prefix_first;
 	      __prefix.matched = __prefix.first != __prefix.second;
 	      // [28.12.1.4.5]
@@ -716,7 +726,11 @@ namespace __detail
     regex_token_iterator<_Bi_iter, _Ch_type, _Rx_traits>::
     operator++()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _Position __prev = _M_position;
+      // *__prev is __prev's _M_match member, an object even at the end.
+      const auto& __prev_match = *__prev;
+      _GLIBCXX_CONVEYOR_TRUST(__prev_match);
       if (_M_suffix.matched)
 	*this = regex_token_iterator();
       else if (_M_n + 1 < _M_subs.size())
@@ -730,11 +744,11 @@ namespace __detail
 	  ++_M_position;
 	  if (_M_position != _Position())
 	    _M_result = &_M_current_match();
-	  else if (_M_has_m1 && __prev->suffix().length() != 0)
+	  else if (_M_has_m1 && __prev_match.suffix().length() != 0)
 	    {
 	      _M_suffix.matched = true;
-	      _M_suffix.first = __prev->suffix().first;
-	      _M_suffix.second = __prev->suffix().second;
+	      _M_suffix.first = __prev_match.suffix().first;
+	      _M_suffix.second = __prev_match.suffix().second;
 	      _M_result = &_M_suffix;
 	    }
 	  else
@@ -750,6 +764,7 @@ namespace __detail
     regex_token_iterator<_Bi_iter, _Ch_type, _Rx_traits>::
     _M_init(_Bi_iter __a, _Bi_iter __b)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_has_m1 = false;
       for (auto __it : _M_subs)
 	if (__it == -1)

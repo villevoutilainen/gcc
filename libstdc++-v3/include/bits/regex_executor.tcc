@@ -40,6 +40,7 @@ namespace __detail
     bool _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_search()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_search_from_first())
 	return true;
       if (_M_flags & regex_constants::match_continuous)
@@ -723,11 +724,13 @@ namespace __detail
 		  // position of the last successful match. It's better
 		  // to be larger, because POSIX regex is always greedy.
 		  // TODO: This could be slow.
-		  if (*_M_get_sol_pos() == _BiIter()
-		      || std::distance(_M_begin, *_M_get_sol_pos())
+		  _BiIter* const __sol_pos = _M_get_sol_pos();
+		  _GLIBCXX_CONVEYOR_TRUST(*__sol_pos);
+		  if (*__sol_pos == _BiIter()
+		      || std::distance(_M_begin, *__sol_pos)
 			 < std::distance(_M_begin, _M_current))
 		    {
-		      *_M_get_sol_pos() = _M_current;
+		      *__sol_pos = _M_current;
 		      _M_results = _M_cur_results;
 		    }
 		}
@@ -914,6 +917,7 @@ namespace __detail
     bool _Executor<_BiIter, _Alloc, _TraitsT>::
     _M_word_boundary() const
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_current == _M_begin && (_M_flags & regex_constants::match_not_bow))
 	return false;
       if (_M_current == _M_end && (_M_flags & regex_constants::match_not_eow))
