@@ -128,6 +128,10 @@ namespace census
     std::valarray<int> va = { 1, 2, 3 };
     n += (va * 2).sum ();
     std::mt19937 g (1);
+    std::seed_seq seq {1u, 2u, 3u};
+    std::vector<unsigned> seeds (4);
+    seq.generate (seeds.begin (), seeds.end ());
+    n += seeds[0] != 0;
     std::uniform_int_distribution<int> dist (1, 6);
     n += dist (g);
     std::regex re ("a+b");

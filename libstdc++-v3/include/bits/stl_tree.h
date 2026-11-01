@@ -1947,6 +1947,7 @@ namespace __rb_tree
       const_iterator
       lower_bound(const key_type& __k) const
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return const_iterator
 	  (_M_lower_bound(_M_begin(), _M_end(), __k));
       }
@@ -1961,6 +1962,7 @@ namespace __rb_tree
       const_iterator
       upper_bound(const key_type& __k) const
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return const_iterator
 	  (_M_upper_bound(_M_begin(), _M_end(), __k));
       }

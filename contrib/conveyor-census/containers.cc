@@ -428,6 +428,20 @@ namespace census
     return n;
   }
 
+  // Const lookups and list ends, as Qt's QMap / QList-of-QMap use them.
+  int const_lookups ()
+  {
+    std::map<int, Val> m {{1, Val (2)}};
+    const auto &cm = m;
+    int n = (cm.lower_bound (1) != cm.upper_bound (1))
+	    + (cm.lower_bound (0) == cm.cbegin ());
+    std::list<std::map<int, int>> l (2);
+    const auto &cl = l;
+    n += (cl.cbegin () != cl.cend ()) + (l.begin () != l.end ())
+	 + (cl.begin () != cl.end ());
+    return n;
+  }
+
   int all ()
   {
     int n = sequence_extras ();
@@ -443,7 +457,7 @@ namespace census
     n += associative<int, Val, MinAlloc> ();
     n += associative<int, int, PropAlloc> ();
     n += fixed<int, 4> () + fixed<Val, 3> () + fixed<AddrOp, 2> ();
-    n += flat () + adaptors_inplace ();
+    n += flat () + adaptors_inplace () + const_lookups ();
 #ifdef _GLIBCXX_CONVEYOR_ASSERTIONS
     n += nonmember_access () + insert_iterators ();
 #endif

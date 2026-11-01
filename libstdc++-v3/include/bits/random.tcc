@@ -3571,6 +3571,7 @@ namespace __detail
     seed_seq::generate(_RandomAccessIterator __begin,
 		       _RandomAccessIterator __end)
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       typedef typename iterator_traits<_RandomAccessIterator>::value_type
         _Type;
 

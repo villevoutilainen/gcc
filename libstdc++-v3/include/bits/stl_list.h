@@ -975,6 +975,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // count the number of nodes
       size_t _M_node_count() const
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return _S_distance(_M_impl._M_node._M_next, _M_impl._M_node._M_base());
       }
 #endif
@@ -1498,7 +1499,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       [[not_invalidating]]
       iterator
       end() _GLIBCXX_NOEXCEPT
-      { return iterator(this->_M_impl._M_node._M_base()); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return iterator(this->_M_impl._M_node._M_base()); }
 
       /**
        *  Returns a read-only (constant) iterator that points one past
@@ -1569,7 +1570,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       [[__nodiscard__]]
       const_iterator
       cend() const noexcept
-      { return const_iterator(this->_M_impl._M_node._M_base()); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return const_iterator(this->_M_impl._M_node._M_base()); }
 
       /**
        *  Returns a read-only (constant) reverse iterator that points to
