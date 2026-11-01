@@ -2324,6 +2324,7 @@ namespace __rb_tree
 	void
 	_M_merge_equal(_Compatible_tree<_Compare2>& __src) noexcept
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__src);
 	  using _Merge_helper = _Rb_tree_merge_helper<_Rb_tree, _Compare2>;
 	  for (auto __i = __src.begin(), __end = __src.end(); __i != __end;)
 	    {

@@ -175,6 +175,9 @@ namespace census
       const auto &cc = c;
       n += (cc.begin () != cc.end ()) + (c.cend () != c.cbegin ());
       c.erase (c.begin (), c.end ());
+      std::multimap<K, V, std::less<K>, A<P>> other;
+      other.emplace (K (3), 6);
+      c.merge (other);
       // Not a structured binding: its names are std::get results, which
       // promise nothing (only hardened accessors do), and the iterators'
       // operator== is a conveyor that needs its operands' objects.
