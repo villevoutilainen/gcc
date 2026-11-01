@@ -3267,6 +3267,10 @@ check_for_override (tree decl, tree ctype)
       /* Remember this identifier is virtual name.  */
       IDENTIFIER_VIRTUAL_P (DECL_NAME (decl)) = true;
 
+      /* D4324: a defaulted virtual function is conveyor only if declared
+	 so.  */
+      conveyor_drop_deduced_for_virtual (decl);
+
       if (!DECL_VINDEX (decl))
 	/* It's a new vfunc.  */
 	DECL_VINDEX (decl) = error_mark_node;

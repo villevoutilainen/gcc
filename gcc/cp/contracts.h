@@ -177,6 +177,7 @@ extern void init_contracts			(void);
 extern void contracts_post_pch_load		(void);
 extern void profiles_post_pch_load		(void);
 extern void pt_contracts_post_pch_load		(void);
+extern void conveyor_drop_deduced_for_virtual	(tree, bool = false);
 extern vec<tree, va_gc> *&contracts_gimple_eager_check_until_complete_queue (void);
 extern vec<tree, va_gc> *&contracts_gimple_eager_check_until_eof_queue (void);
 extern vec<tree, va_gc> *&contracts_gimple_eager_check_predicate_helpers (void);

@@ -4049,11 +4049,14 @@ defaulted_late_check (tree fn, tristate imp_const/*=tristate::unknown()*/)
   /* D4324/P2680 9.2.3: mirror the constexpr handling just above for
      'conveyor'.  An explicitly-defaulted special member with no explicit
      'conveyor' of its own picks up the property if the implicit form
-     would have it; one explicitly marked 'conveyor' is rejected if the
-     implicit form wouldn't qualify.  */
+     would have it -- unless it is virtual: a defaulted virtual function
+     is conveyor only if declared so (conveyor_drop_deduced_for_virtual).
+     One explicitly marked 'conveyor' is rejected if the implicit form
+     wouldn't qualify.  */
   if (DECL_DEFAULTED_IN_CLASS_P (fn)
       && DECL_DECLARED_CONVEYOR_P (implicit_fn)
-      && !DECL_DECLARED_CONVEYOR_P (fn))
+      && !DECL_DECLARED_CONVEYOR_P (fn)
+      && !DECL_VIRTUAL_P (fn))
     {
       SET_DECL_DECLARED_CONVEYOR_P (fn);
       conveyor_note_deduced_defaulted (fn);

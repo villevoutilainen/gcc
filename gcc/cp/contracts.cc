@@ -1146,6 +1146,30 @@ conveyor_note_deduced_defaulted (tree fn)
   conveyor_deduced_defaulted_uids->add (fn);
 }
 
+/* A defaulted virtual function is conveyor only if declared so: FN, once
+   known to be virtual (OVERRIDES: it overrides a virtual function, before
+   DECL_VIRTUAL_P is set), loses the conveyor it has only by deduction (an
+   implicitly-declared member, or one defaulted without 'conveyor').
+   Otherwise every override of a base's 'virtual ~B () = default;' would
+   have to be conveyor (check_final_overrider), and an implicit override
+   of an explicitly conveyor virtual would pass that check as conveyor.  */
+
+void
+conveyor_drop_deduced_for_virtual (tree fn, bool overrides)
+{
+  if (!(overrides || DECL_VIRTUAL_P (fn)) || !DECL_DEFAULTED_FN (fn)
+      || !DECL_DECLARED_CONVEYOR_P (fn))
+    return;
+  if (!DECL_ARTIFICIAL (fn)
+      && !(conveyor_deduced_defaulted_uids
+	   && conveyor_deduced_defaulted_uids->contains (fn)))
+    return;
+  CLEAR_DECL_DECLARED_CONVEYOR_P (fn);
+  tree clone;
+  FOR_EACH_CLONE (clone, fn)
+    CLEAR_DECL_DECLARED_CONVEYOR_P (clone);
+}
+
 /* FIELD's default member initializer was built under PROBE: record
    whether it violates the conveyor rules.  */
 

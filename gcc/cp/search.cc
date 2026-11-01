@@ -2209,6 +2209,7 @@ check_final_overrider (tree overrider, tree basefn)
      in the hierarchy at the call site (see the conveyor-restrictions
      check in call.cc's build_over_call, which relies on exactly this
      invariant to permit a virtual call to such a function).  */
+  conveyor_drop_deduced_for_virtual (overrider, /*overrides=*/true);
   if (DECL_DECLARED_CONVEYOR_P (basefn) && !DECL_DECLARED_CONVEYOR_P (overrider))
     {
       auto_diagnostic_group d;
