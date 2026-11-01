@@ -12224,6 +12224,33 @@ oa_member_object_identity (tree obj, oa_env &env, tree *identity_out,
   return oa_pointer_member_identity (obj, env, identity_out, depth);
 }
 
+/* If ARR (an ARRAY_REF's own base, conversions already stripped) is the
+   array a reference-to-array variable or parameter R refers to --
+   'a' in 'a[i]' for 'const T (&a)[N]' is INDIRECT_REF (a) of ARRAY_TYPE
+   -- return R, else NULL_TREE.  A reference is bound for good, so R is
+   as stable a key for its array's slots as a pointer variable is for
+   its own: an element fact keyed (R, I) ends only with a write to I or
+   anything invalidating R itself.  R's referent being an ARRAY_TYPE
+   keeps the key apart from a pointer's: no pointer-arithmetic slot
+   'r[i]' of R itself exists to share it.  Without this, a never_proven
+   trust of '&a[i]' never discharged the following 'a[i].f ()' (its
+   '&a[i]') though the identical code over a 'const T *a' did --
+   found on a constexpr constructor looping over
+   'const std::array<unsigned, 2> (&infos)[N]'.  */
+
+static tree
+oa_array_reference_decl (tree arr)
+{
+  if (TREE_CODE (arr) != INDIRECT_REF
+      || TREE_CODE (TREE_TYPE (arr)) != ARRAY_TYPE)
+    return NULL_TREE;
+  tree r = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arr, 0));
+  if ((VAR_P (r) || TREE_CODE (r) == PARM_DECL)
+      && TYPE_REF_P (TREE_TYPE (r)))
+    return r;
+  return NULL_TREE;
+}
+
 static bool
 oa_array_object_identity (tree expr, oa_env &env, tree *decl_out)
 {
@@ -12238,7 +12265,11 @@ oa_array_object_identity (tree expr, oa_env &env, tree *decl_out)
       while (TREE_CODE (arr) == NON_LVALUE_EXPR || TREE_CODE (arr) == NOP_EXPR
 	     || TREE_CODE (arr) == CONVERT_EXPR || TREE_CODE (arr) == VIEW_CONVERT_EXPR)
 	arr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arr, 0));
-      if (!POINTER_TYPE_P (TREE_TYPE (arr)))
+      /* '&a[i]' of a reference-to-array A keys on A itself (see
+	 oa_array_reference_decl).  */
+      if (tree r = oa_array_reference_decl (arr))
+	arr = r;
+      else if (!POINTER_TYPE_P (TREE_TYPE (arr)))
 	return false;
       index = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 1));
     }
@@ -13057,6 +13088,15 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
 		  && idx_fact.lo >= 0 && idx_fact.hi <= wi::to_widest (max))
 		return true;
 	      return false;
+	    }
+	  /* '&a[i]' of a reference-to-array A: an explicitly-asserted
+	     array-slot fact keyed on A (oa_array_reference_decl), as for a
+	     pointer just below.  */
+	  if (oa_array_reference_decl (arr))
+	    {
+	      tree identity;
+	      return (oa_array_object_identity (expr, env, &identity)
+		      && env.provable_p (identity));
 	    }
 	  /* D4324, Increment 1 of the pointer-indexing follow-on: the same
 	     question as above, but ARR is a POINTER_TYPE whose own value is
@@ -17741,10 +17781,32 @@ oa_local_address_computation_p (tree e, int depth = 0)
       return (!is_global_var (e) && !is_capture_proxy (e)
 	      && !DECL_HAS_VALUE_EXPR_P (e));
     case ADDR_EXPR:
-      return (depth == 0
-	      && TREE_CODE (TREE_OPERAND (e, 0)) == INDIRECT_REF
-	      && oa_local_address_computation_p
-		   (TREE_OPERAND (TREE_OPERAND (e, 0), 0), depth + 1));
+      {
+	if (depth != 0)
+	  return false;
+	tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
+	if (TREE_CODE (op) == INDIRECT_REF)
+	  return oa_local_address_computation_p (TREE_OPERAND (op, 0),
+						 depth + 1);
+	/* '&a[i]', A a local or parameter reference to an array
+	   (oa_array_reference_decl): the GIMPLE engine matches it
+	   against a later '&(*a)[i]' (cg_expr_computes_p), and needs
+	   I's value at the check for that -- a loop variable I is
+	   no parameter, captured only if the condition still names
+	   it.  Without this, a never_proven trust of '&infos[i]' in a
+	   loop over a 'const T (&infos)[N]' never discharged the
+	   following 'infos[i].f ()' with -fcontract-analysis-engine=
+	   gimple, though the same trust with a parameter I did.  */
+	if (TREE_CODE (op) == ARRAY_REF)
+	  {
+	    tree arr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
+	    tree r = oa_array_reference_decl (arr);
+	    return (r && oa_local_address_computation_p (r, depth + 1)
+		    && oa_local_address_computation_p (TREE_OPERAND (op, 1),
+						       depth + 1));
+	  }
+	return false;
+      }
     case NOP_EXPR:
     case CONVERT_EXPR:
     case NON_LVALUE_EXPR:

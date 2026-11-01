@@ -4300,6 +4300,7 @@ cg_conveyor_error_at (location_t loc, const char *gmsgid, ...)
 
 static tree cg_capture_name (tree);
 static tree cg_display_value (tree, int);
+static tree cg_display_object (tree);
 
 /* The object *PTR names, PTR being a displayed pointer (or reference):
    'x' for '&x', '*p' otherwise.  */
@@ -4644,6 +4645,13 @@ cg_display_value (tree val, int depth = 0)
 	  tree ref = TREE_OPERAND (rhs1, 0);
 	  if (DECL_P (ref) && DECL_NAME (ref) && !DECL_ARTIFICIAL (ref))
 	    return rhs1;
+	  /* '&a[i]' (cg_display_object).  */
+	  if (TREE_CODE (ref) == ARRAY_REF)
+	    {
+	      tree shown = cg_display_object (ref);
+	      if (shown != ref)
+		return build1 (ADDR_EXPR, TREE_TYPE (rhs1), shown);
+	    }
 	  if (TREE_CODE (ref) == COMPONENT_REF
 	      && TREE_CODE (TREE_OPERAND (ref, 0)) == MEM_REF
 	      && integer_zerop (TREE_OPERAND (TREE_OPERAND (ref, 0), 1))
@@ -4784,6 +4792,29 @@ cg_capture_name (tree ref)
 static tree
 cg_display_object (tree ref)
 {
+  /* 'a[i]': an element of an array variable, or of the array a pointer
+     or reference A points to ('(*a)[i]' in GIMPLE for 'const T (&a)[N]'),
+     at an index shown as the source names it -- not '<unknown>', as the
+     address of such an element was shown before.  */
+  if (TREE_CODE (ref) == ARRAY_REF)
+    {
+      tree base = TREE_OPERAND (ref, 0), shown_base = NULL_TREE;
+      if (DECL_P (base) && DECL_NAME (base) && !DECL_ARTIFICIAL (base))
+	shown_base = base;
+      else if (TREE_CODE (base) == MEM_REF
+	       && integer_zerop (TREE_OPERAND (base, 1))
+	       && TREE_CODE (TREE_OPERAND (base, 0)) == SSA_NAME)
+	{
+	  tree ptr = cg_display_value (TREE_OPERAND (base, 0));
+	  if (TREE_CODE (ptr) != SSA_NAME)
+	    shown_base = cg_display_deref (ptr, TREE_TYPE (base));
+	}
+      tree index = cg_display_value (TREE_OPERAND (ref, 1));
+      if (shown_base && TREE_CODE (index) != SSA_NAME)
+	return build4 (ARRAY_REF, TREE_TYPE (ref), shown_base, index,
+		       NULL_TREE, NULL_TREE);
+      return ref;
+    }
   if (TREE_CODE (ref) == COMPONENT_REF
       && TREE_CODE (TREE_OPERAND (ref, 0)) == MEM_REF
       && integer_zerop (TREE_OPERAND (TREE_OPERAND (ref, 0), 1)))
@@ -14825,11 +14856,19 @@ cg_ref_computes_p (tree e, tree ref, gcall *call, tree struct_var,
       && integer_zerop (TREE_OPERAND (ref, 1)))
     return cg_expr_computes_p (TREE_OPERAND (e, 0), TREE_OPERAND (ref, 0),
 			       call, struct_var, decls, depth + 1);
-  /* An element of the same array decl, at an index computed alike.  */
+  /* An element of the same array decl, at an index computed alike --
+     or of the same array reached alike: '(*a)[i]' for a reference-to-
+     array A ('const T (&a)[N]'), whose referent the GIMPLE reads as
+     MEM_REF (a, 0), matched through the INDIRECT_REF case above.  */
   if (TREE_CODE (e) == ARRAY_REF && TREE_CODE (ref) == ARRAY_REF)
     {
       tree ea = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
-      return (DECL_P (ea) && ea == TREE_OPERAND (ref, 0)
+      tree ra = TREE_OPERAND (ref, 0);
+      return ((DECL_P (ea)
+	       ? ea == ra
+	       : (TREE_CODE (TREE_TYPE (ea)) == ARRAY_TYPE
+		  && cg_ref_computes_p (ea, ra, call, struct_var, decls,
+					depth + 1)))
 	      && cg_expr_computes_p (TREE_OPERAND (e, 1), TREE_OPERAND (ref, 1),
 				     call, struct_var, decls, depth + 1));
     }
@@ -14909,6 +14948,25 @@ cg_expr_computes_p (tree e, tree v, gcall *call, tree struct_var, tree decls,
       && TREE_CODE (TREE_OPERAND (e, 0)) == INDIRECT_REF)
     return cg_expr_computes_p (TREE_OPERAND (TREE_OPERAND (e, 0), 0), v,
 			       call, struct_var, decls, depth + 1);
+  /* The address of an array element, '&a[i]' for a reference-to-array
+     A: V must compute the address of the same element ('_1 =
+     &(*a)[i]'), from the values A and I had at the check -- no load is
+     involved, so no store in between can change it, while a write to
+     I is a new SSA value the index no longer matches.  Without this, a
+     never_proven trust of '&a[i]' never discharged the following
+     'a[i].f ()' though the same code over a pointer A ('_3 = a + _2',
+     matched as arithmetic below) did -- found on a constexpr
+     constructor looping over 'const std::array<unsigned, 2>
+     (&infos)[N]'.  */
+  if (TREE_CODE (e) == ADDR_EXPR
+      && TREE_CODE (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0)))
+	 == ARRAY_REF
+      && def && gimple_assign_single_p (def)
+      && TREE_CODE (gimple_assign_rhs1 (def)) == ADDR_EXPR
+      && TREE_CODE (TREE_OPERAND (gimple_assign_rhs1 (def), 0)) == ARRAY_REF)
+    return cg_ref_computes_p (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0)),
+			      TREE_OPERAND (gimple_assign_rhs1 (def), 0),
+			      call, struct_var, decls, depth + 1);
   tree_code code = TREE_CODE (e);
   if ((code == POINTER_PLUS_EXPR || code == PLUS_EXPR || code == MINUS_EXPR
        || code == MULT_EXPR)
