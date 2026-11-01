@@ -14724,6 +14724,93 @@ oa_vtable_pointer_expr_p (tree t)
 	  && oa_vtt_pointer_expr_p (TREE_OPERAND (t, 0)));
 }
 
+/* Whether OFF, an INTEGER_CST, is where a virtual base of TYPE, or a
+   base of one, lies in a complete TYPE object: the fixed offset
+   build_base_path uses for it in a complete-object constructor or
+   destructor ('this + 8' in D's complete-object constructor of 'struct
+   D : virtual B').  Shared with the GIMPLE engine, which sees that
+   variant on its own.  */
+
+static bool
+contract_vbase_subobject_offset_in_p (tree binfo, tree off, int depth)
+{
+  if (tree_int_cst_equal (BINFO_OFFSET (binfo), off))
+    return true;
+  if (depth > 16)
+    return false;
+  tree base;
+  for (unsigned i = 0; BINFO_BASE_ITERATE (binfo, i, base); ++i)
+    if (contract_vbase_subobject_offset_in_p (base, off, depth + 1))
+      return true;
+  return false;
+}
+
+bool
+contract_vbase_subobject_offset_p (tree type, tree off)
+{
+  if (!type || !CLASS_TYPE_P (type) || TREE_CODE (off) != INTEGER_CST)
+    return false;
+  tree vbase;
+  for (unsigned i = 0;
+       vec_safe_iterate (CLASSTYPE_VBASECLASSES (type), i, &vbase); ++i)
+    if (contract_vbase_subobject_offset_in_p (vbase, off, 0))
+      return true;
+  return false;
+}
+
+/* OFF is a virtual base's offset as build_base_path computes it: read
+   from a vtable, '*(vptr - 24)'; or, in a constructor or destructor
+   that may run as either variant (the one cloned into the complete-
+   and base-object ones), its in-charge selection between that read and
+   the fixed offset, '__in_chrg == 0 ? *(vptr - 24) : 8' (D's
+   constructor of 'struct D : virtual B', abstract or not -- DR 1658
+   lets an abstract class's constructor skip constructing its virtual
+   bases, but it still sets their vtable pointers).  */
+
+/* OFF is a virtual base's offset read from a vtable, '*(vptr - 24)',
+   or that adjusted by the constant build_base_path adds for a base of
+   the virtual base, '*(vptr - 24) + 16' (a polymorphic non-primary base
+   of it).  Only the compiler builds these: source code cannot name a
+   vtable pointer.  */
+
+static bool
+oa_vtable_offset_read_p (tree off)
+{
+  off = oa_strip_pointer_nops (off);
+  if ((TREE_CODE (off) == PLUS_EXPR || TREE_CODE (off) == MINUS_EXPR)
+      && TREE_CODE (oa_strip_pointer_nops (TREE_OPERAND (off, 1)))
+	 == INTEGER_CST)
+    off = oa_strip_pointer_nops (TREE_OPERAND (off, 0));
+  return (TREE_CODE (off) == INDIRECT_REF
+	  && oa_vtable_pointer_expr_p (TREE_OPERAND (off, 0)));
+}
+
+static bool
+oa_vbase_offset_expr_p (tree off, bool in_charge_ok)
+{
+  off = oa_strip_pointer_nops (off);
+  if (oa_vtable_offset_read_p (off))
+    return true;
+  if (!in_charge_ok || TREE_CODE (off) != COND_EXPR || !current_function_decl
+      || !DECL_HAS_IN_CHARGE_PARM_P (current_function_decl))
+    return false;
+  tree cond = oa_strip_pointer_nops (TREE_OPERAND (off, 0));
+  if ((TREE_CODE (cond) != EQ_EXPR && TREE_CODE (cond) != NE_EXPR)
+      || !integer_zerop (oa_strip_pointer_nops (TREE_OPERAND (cond, 1))))
+    return false;
+  tree parm = oa_strip_pointer_nops (TREE_OPERAND (cond, 0));
+  if (TREE_CODE (parm) != PARM_DECL || !DECL_ARTIFICIAL (parm)
+      || DECL_NAME (parm) != in_charge_identifier)
+    return false;
+  /* The fixed offset is the in-charge (complete-object) arm.  */
+  bool ne = TREE_CODE (cond) == NE_EXPR;
+  tree fixed = oa_strip_pointer_nops (TREE_OPERAND (off, ne ? 1 : 2));
+  tree read = TREE_OPERAND (off, ne ? 2 : 1);
+  return (contract_vbase_subobject_offset_p
+	    (DECL_CONTEXT (current_function_decl), fixed)
+	  && oa_vbase_offset_expr_p (read, false));
+}
+
 /* If T is a virtual base of an object, '(H *) ((B *) p + *(vptr -
    24))', the pointer to that object, P.  */
 
@@ -14731,11 +14818,8 @@ static tree
 oa_vbase_object (tree t)
 {
   t = oa_strip_pointer_nops (t);
-  if (TREE_CODE (t) != POINTER_PLUS_EXPR)
-    return NULL_TREE;
-  tree off = oa_strip_pointer_nops (TREE_OPERAND (t, 1));
-  if (TREE_CODE (off) != INDIRECT_REF
-      || !oa_vtable_pointer_expr_p (TREE_OPERAND (off, 0)))
+  if (TREE_CODE (t) != POINTER_PLUS_EXPR
+      || !oa_vbase_offset_expr_p (TREE_OPERAND (t, 1), true))
     return NULL_TREE;
   return oa_strip_pointer_nops (TREE_OPERAND (t, 0));
 }
@@ -17561,6 +17645,12 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 	  tree op1 = TREE_OPERAND (t, 1);
 	  if (!INTEGRAL_TYPE_P (TREE_TYPE (t))
 	      || !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (t)))
+	    return NULL_TREE;
+	  /* A base of a virtual base, '*(vptr - 24) + 16': the ABI's
+	     offset of a subobject within the object (oa_vtable_offset_
+	     read_p), not arithmetic of the program's.  */
+	  if ((code == PLUS_EXPR || code == MINUS_EXPR)
+	      && oa_vtable_offset_read_p (t))
 	    return NULL_TREE;
 	  tree type = TREE_TYPE (t);
 	  widest_int type_min = wi::to_widest (TYPE_MIN_VALUE (type));

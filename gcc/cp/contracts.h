@@ -203,6 +203,7 @@ extern gimple_opt_pass *make_pass_contracts_gimple (gcc::context *ctxt);
 extern void contracts_gimple_eager_check_function (tree fndecl);
 extern void contracts_gimple_eager_check_drain (void);
 extern bool contracts_gimple_keeps_overflow_p (tree);
+extern bool contract_vbase_subobject_offset_p (tree, tree);
 
 /* While alive, folding and gimplification keep what the GIMPLE engine
    checks for undefined behavior in FNDECL (when

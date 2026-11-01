@@ -6101,6 +6101,8 @@ cg_linear_bound (tree_code code, tree op0, tree op1, gimple *stmt,
    testing) -- so the general binary-arithmetic case below already
    covers it.  */
 
+static bool cg_vbase_offset_p (tree);
+
 static void
 cg_check_overflow_ub (gimple *stmt,
 			hash_map<tree, cg_type_bound_fact> &established_type_bound,
@@ -6141,6 +6143,12 @@ cg_check_overflow_ub (gimple *stmt,
 
   tree op0 = gimple_assign_rhs1 (stmt);
   tree op1 = gimple_assign_rhs2 (stmt);
+  /* A base of a virtual base, '*(vptr - 24) + 16': the ABI's offset of
+     a subobject within the object (cg_vbase_offset_p), not arithmetic of
+     the program's.  */
+  if ((code == PLUS_EXPR || code == MINUS_EXPR)
+      && TREE_CODE (op1) == INTEGER_CST && cg_vbase_offset_p (op0))
+    return;
   widest_int type_min = wi::to_widest (TYPE_MIN_VALUE (type));
   widest_int type_max = wi::to_widest (TYPE_MAX_VALUE (type));
 
@@ -6839,7 +6847,9 @@ cg_vtable_pointer_p (tree val, int depth = 0)
 }
 
 /* OFF is a virtual base's offset, read from a vtable ('this + *(vptr -
-   24)' reaches the virtual base of '*this').  */
+   24)' reaches the virtual base of '*this'), or that adjusted by the
+   constant build_base_path adds for a base of the virtual base ('*(vptr
+   - 24) + 16', a polymorphic non-primary base of it).  */
 
 static bool
 cg_vbase_offset_p (tree off)
@@ -6850,14 +6860,45 @@ cg_vbase_offset_p (tree off)
       if (!def)
 	return false;
       tree rhs1 = gimple_assign_rhs1 (def);
+      tree_code code = gimple_assign_rhs_code (def);
       if (gimple_assign_single_p (def) && TREE_CODE (rhs1) == MEM_REF)
 	return cg_vtable_pointer_p (TREE_OPERAND (rhs1, 0));
-      if (!CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def))
-	  && gimple_assign_rhs_code (def) != SSA_NAME)
+      if ((code == PLUS_EXPR || code == MINUS_EXPR)
+	  && TREE_CODE (gimple_assign_rhs2 (def)) == INTEGER_CST)
+	;
+      else if (!CONVERT_EXPR_CODE_P (code) && code != SSA_NAME)
 	return false;
       off = rhs1;
     }
   return false;
+}
+
+/* DEF is 'this + 8' reaching a virtual base (or a base of one) at its
+   fixed offset in a complete-object constructor or destructor
+   (build_base_path's in-charge arm, as cloned): 'struct D : virtual B'
+   sets B's vtable pointer through it in D's complete-object constructor
+   even when D is abstract (DR 1658).  Only the function's own 'this',
+   only in the complete-object variant, and only at an offset where such
+   a subobject lies (contract_vbase_subobject_offset_p).  */
+
+static bool
+cg_vbase_fixed_offset_p (gassign *def)
+{
+  if (!def || gimple_assign_rhs_code (def) != POINTER_PLUS_EXPR
+      || TREE_CODE (gimple_assign_rhs2 (def)) != INTEGER_CST)
+    return false;
+  tree fn = cfun ? cfun->decl : NULL_TREE;
+  if (!fn || !(DECL_COMPLETE_CONSTRUCTOR_P (fn)
+	       || DECL_COMPLETE_DESTRUCTOR_P (fn)
+	       || DECL_DELETING_DESTRUCTOR_P (fn)))
+    return false;
+  tree obj = gimple_assign_rhs1 (def);
+  if (TREE_CODE (obj) != SSA_NAME || !SSA_NAME_IS_DEFAULT_DEF (obj)
+      || !SSA_NAME_VAR (obj) || !is_this_parameter (SSA_NAME_VAR (obj))
+      || SSA_NAME_VAR (obj) != DECL_ARGUMENTS (fn))
+    return false;
+  return contract_vbase_subobject_offset_p (DECL_CONTEXT (fn),
+					    gimple_assign_rhs2 (def));
 }
 
 /* VAL is computed by adding a virtual base's offset, through copies
@@ -6872,7 +6913,8 @@ cg_vbase_reached_p (tree val)
       if (!def)
 	return false;
       if (gimple_assign_rhs_code (def) == POINTER_PLUS_EXPR)
-	return cg_vbase_offset_p (gimple_assign_rhs2 (def));
+	return (cg_vbase_offset_p (gimple_assign_rhs2 (def))
+		|| cg_vbase_fixed_offset_p (def));
       if (!gimple_assign_ssa_name_copy_p (def)
 	  && !CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def)))
 	return false;
@@ -6913,13 +6955,15 @@ cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
 			    cg_display_value (base));
       return;
     }
-  /* A virtual base of an object, '(H *) (this + *(vptr - 24))': valid
-     if the object is.  */
+  /* A virtual base of an object, '(H *) (this + *(vptr - 24))', or of
+     a complete-object constructor's or destructor's own 'this' at its
+     fixed offset, '(B *) (this + 8)': valid if the object is.  */
   for (int depth = 0; depth < 8 && TREE_CODE (base) == SSA_NAME; ++depth)
     {
       gassign *def = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (base));
       if (def && gimple_assign_rhs_code (def) == POINTER_PLUS_EXPR
-	  && cg_vbase_offset_p (gimple_assign_rhs2 (def)))
+	  && (cg_vbase_offset_p (gimple_assign_rhs2 (def))
+	      || cg_vbase_fixed_offset_p (def)))
 	base = gimple_assign_rhs1 (def);
       else if (def && (gimple_assign_ssa_name_copy_p (def)
 		       || (CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def))
