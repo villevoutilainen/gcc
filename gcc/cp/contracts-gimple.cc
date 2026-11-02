@@ -14107,10 +14107,16 @@ static void
 cg_end_route_objects (tree arg, cg_dom_fact_state &state, int depth = 0,
 		      bool climb = true)
 {
-  if (TREE_CODE (arg) == SSA_NAME)
-    state.oa_ended.add (arg);
   tree member;
   tree root = cg_route_object (arg, &member, climb);
+  /* The address of a variable's own storage ('&m', or a reference or
+     pointer copied from it) is an object's for the variable's whole
+     scope, as in the AST engine: no call ends it.  */
+  if (!member && root && DECL_P (root)
+      && (VAR_P (root) || TREE_CODE (root) == PARM_DECL))
+    return;
+  if (TREE_CODE (arg) == SSA_NAME)
+    state.oa_ended.add (arg);
   if (member)
     {
       state.oa_ended.add (member);
