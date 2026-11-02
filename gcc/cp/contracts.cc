@@ -17175,7 +17175,15 @@ oa_index_range (tree index, oa_env &env, oa_range_fact *out)
       out->lo = out->hi = wi::to_widest (index);
       return true;
     }
-  return oa_get_range (index, env, out) && out->base == NULL_TREE;
+  if (!oa_get_range (index, env, out) || out->base != NULL_TREE)
+    return false;
+  /* An unsigned index is never below zero: 'n < size' bounds it.  */
+  if (!out->has_lo && TYPE_UNSIGNED (TREE_TYPE (index)))
+    {
+      out->has_lo = true;
+      out->lo = 0;
+    }
+  return true;
 }
 
 /* D4324/P2680 item 8: check that TOTAL (an already-computed offset
@@ -30806,7 +30814,9 @@ oa_conveyor_returned_reference_p (tree call)
 	 && DECL_DECLARED_CONVEYOR_P (callee);
 }
 
-/* Whether address ADDR is 'this', or that of '*this' or a subobject.  */
+/* Whether address ADDR is 'this', or that of '*this' or a subobject --
+   an element of a member array too, its index checked in bounds on its
+   own (oa_scan_array_bounds_in_expr).  */
 
 static bool
 oa_addr_of_this_p (tree addr)
@@ -30819,8 +30829,8 @@ oa_addr_of_this_p (tree addr)
   if (TREE_CODE (addr) != ADDR_EXPR)
     return false;
   tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (addr, 0));
-  while (TREE_CODE (obj) == COMPONENT_REF || CONVERT_EXPR_P (obj)
-	 || TREE_CODE (obj) == NON_LVALUE_EXPR)
+  while (TREE_CODE (obj) == COMPONENT_REF || TREE_CODE (obj) == ARRAY_REF
+	 || CONVERT_EXPR_P (obj) || TREE_CODE (obj) == NON_LVALUE_EXPR)
     obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
   return (TREE_CODE (obj) == INDIRECT_REF
 	  && oa_addr_of_this_p (TREE_OPERAND (obj, 0)));

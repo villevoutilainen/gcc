@@ -6590,6 +6590,9 @@ cg_bounds_value_range (tree val, gimple *stmt, cg_range_lite *out)
 	out->has_hi = true, out->hi = iv.hi;
       any = true;
     }
+  /* An unsigned value is never below zero: 'n < size' bounds it.  */
+  if (any && !out->has_lo && TYPE_UNSIGNED (TREE_TYPE (val)))
+    out->has_lo = true, out->lo = 0;
   return any && out->has_lo && out->has_hi;
 }
 
@@ -7120,14 +7123,24 @@ cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
 			  cg_display_value (base));
 }
 
-/* Whether address VAL is 'this', or that of '*this' or a subobject,
-   through copies.  */
+/* Whether address VAL is 'this', or that of '*this' or a subobject --
+   an element of a member array too, its index checked in bounds on its
+   own (cg_check_array_bounds_ub) -- through copies, and joins of such
+   addresses.  */
 
 static bool
 cg_addr_of_this_p (tree val, int depth = 0)
 {
   if (depth > 8 || !val)
     return false;
+  if (TREE_CODE (val) == SSA_NAME && !SSA_NAME_IS_DEFAULT_DEF (val))
+    if (gphi *phi = dyn_cast <gphi *> (SSA_NAME_DEF_STMT (val)))
+      {
+	for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+	  if (!cg_addr_of_this_p (gimple_phi_arg_def (phi, i), depth + 1))
+	    return false;
+	return gimple_phi_num_args (phi) > 0;
+      }
   if (TREE_CODE (val) == ADDR_EXPR)
     {
       tree base = get_base_address (TREE_OPERAND (val, 0));
