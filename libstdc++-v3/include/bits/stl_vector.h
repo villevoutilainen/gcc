@@ -1393,11 +1393,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
-      operator[](size_type __n) _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
+      operator[](size_type __n) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
+      _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
       _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_subscript(__n);
-	return *(this->_M_impl._M_start + __n);
+	pointer __p = this->_M_impl._M_start + __n;
+	_GLIBCXX_CONVEYOR_TRUST_ELEMENT_PTR(__p);
+	return *__p;
       }
 
       /**
@@ -1413,11 +1416,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reference
-      operator[](size_type __n) const _GLIBCXX_NOEXCEPT _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
+      operator[](size_type __n) const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
+      _GLIBCXX_PRECONDITION_SUBSCRIPT(__n)
       _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_subscript(__n);
-	return *(this->_M_impl._M_start + __n);
+	pointer __p = this->_M_impl._M_start + __n;
+	_GLIBCXX_CONVEYOR_TRUST_ELEMENT_PTR(__p);
+	return *__p;
       }
 
     protected:

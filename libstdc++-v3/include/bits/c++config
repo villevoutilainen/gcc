@@ -876,10 +876,35 @@ namespace std
 // increment, a mem-initializer, an argument -- where no statement can go:
 // _Obj itself, trusted (std::__trust_object).
 # define _GLIBCXX_CONVEYOR_TRUSTED(_Obj) std::__trust_object (_Obj)
+// In a container's subscript operator, after __glibcxx_requires_subscript:
+// index _N is below _Size -- checked just before, or the declared
+// precondition (_GLIBCXX_PRECONDITION_SUBSCRIPT) its callers prove --
+// so _Elem, the element it designates, is one of the container's
+// objects.  Neither follows from the size () the check compares with,
+// so a trust states them, and the operator can be conveyor.  Not for a
+// container of no elements, whose subscript is never valid.
+# define _GLIBCXX_CONVEYOR_TRUST_SUBSCRIPT(_N, _Size, _Elem) \
+    if constexpr ((_Size) != 0) \
+      { \
+	contract_assert<std::contracts::never_proven_conveyor_v> \
+	  ((_N) < (_Size)); \
+	contract_assert<std::contracts::never_proven_conveyor_v> \
+	  (std::is_object_address (__builtin_addressof (_Elem))); \
+      }
+// The same for a container holding its elements through a pointer (a
+// vector's, a string's): that _Ptr, to the element the index designates,
+// points to one of its objects.  Not through a fancy pointer, whose
+// operations can't be conveyor.
+# define _GLIBCXX_CONVEYOR_TRUST_ELEMENT_PTR(_Ptr) \
+    if constexpr (__is_pointer (__decltype (_Ptr))) \
+      contract_assert<std::contracts::never_proven_conveyor_v> \
+	(std::is_object_address (_Ptr))
 #else
 # define _GLIBCXX_CONVEYOR_TRUST_THIS
 # define _GLIBCXX_CONVEYOR_TRUST(_Obj)
 # define _GLIBCXX_CONVEYOR_TRUSTED(_Obj) (_Obj)
+# define _GLIBCXX_CONVEYOR_TRUST_SUBSCRIPT(_N, _Size, _Elem)
+# define _GLIBCXX_CONVEYOR_TRUST_ELEMENT_PTR(_Ptr)
 #endif
 
 // The same trust point for the element an iterator designates, before a

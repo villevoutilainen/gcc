@@ -1924,13 +1924,17 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const_reference
-      operator[] (size_type __pos) const _GLIBCXX_NOEXCEPT
+      operator[] (size_type __pos) const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_assert(__pos <= size());
-	return _M_data()[__pos];
+	// One of the string's characters, or its terminator.
+	pointer __p = _M_data() + __pos;
+	_GLIBCXX_CONVEYOR_TRUST_ELEMENT_PTR(__p);
+	return *__p;
       }
 
       /**
@@ -1945,17 +1949,21 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       reference
-      operator[](size_type __pos)
+      operator[](size_type __pos) _GLIBCXX_CONVEYOR_AUTO
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
+      _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
         // Allow pos == size() both in C++98 mode, as v3 extension,
 	// and in C++11 mode.
 	__glibcxx_assert(__pos <= size());
         // In pedantic mode be strict in C++98 mode.
 	_GLIBCXX_DEBUG_PEDASSERT(__cplusplus >= 201103L || __pos < size());
-	return _M_data()[__pos];
+	// One of the string's characters, or its terminator.
+	pointer __p = _M_data() + __pos;
+	_GLIBCXX_CONVEYOR_TRUST_ELEMENT_PTR(__p);
+	return *__p;
       }
 
       /**

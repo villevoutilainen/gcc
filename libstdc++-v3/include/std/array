@@ -214,6 +214,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_requires_subscript(__n);
+	_GLIBCXX_CONVEYOR_TRUST_SUBSCRIPT(__n, _Nm, _M_elems[__n]);
 	return _M_elems[__n];
       }
 
@@ -225,6 +226,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 #if __cplusplus >= 201402L
 	__glibcxx_requires_subscript(__n);
+	_GLIBCXX_CONVEYOR_TRUST_SUBSCRIPT(__n, _Nm, _M_elems[__n]);
 #endif
 	return _M_elems[__n];
       }
