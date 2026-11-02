@@ -389,7 +389,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  Iteration is done in ascending order according to the keys.
        */
       iterator
-      begin() _GLIBCXX_NOEXCEPT
+      begin() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.begin(); }
 
       /**
@@ -398,7 +398,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  keys.
        */
       const_iterator
-      begin() const _GLIBCXX_NOEXCEPT
+      begin() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.begin(); }
 
       /**
@@ -407,7 +407,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  according to the keys.
        */
       iterator
-      end() _GLIBCXX_NOEXCEPT
+      end() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.end(); }
 
       /**
@@ -416,7 +416,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  the keys.
        */
       const_iterator
-      end() const _GLIBCXX_NOEXCEPT
+      end() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.end(); }
 
       /**
@@ -462,7 +462,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  keys.
        */
       const_iterator
-      cbegin() const noexcept
+      cbegin() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.begin(); }
 
       /**
@@ -471,7 +471,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  the keys.
        */
       const_iterator
-      cend() const noexcept
+      cend() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.end(); }
 
       /**
@@ -498,17 +498,17 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  end().)
       */
       _GLIBCXX_NODISCARD bool
-      empty() const _GLIBCXX_NOEXCEPT
+      empty() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.empty(); }
 
       /** Returns the size of the %map.  */
       size_type
-      size() const _GLIBCXX_NOEXCEPT
+      size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.size(); }
 
       /** Returns the maximum size of the %map.  */
       size_type
-      max_size() const _GLIBCXX_NOEXCEPT
+      max_size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.max_size(); }
 
       // [23.3.1.2] element access
@@ -536,6 +536,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
 	iterator __i = lower_bound(__k);
 	// __i->first is greater than or equivalent to __k.
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (__i == end() || key_comp()(__k, (*__i).first))
 #if __cplusplus >= 201103L
 	  __i = _M_t._M_emplace_hint_unique(__i, std::piecewise_construct,
@@ -659,6 +660,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		  {
 		    const key_type& __k = __a;
 		    iterator __i = lower_bound(__k);
+		    _GLIBCXX_CONVEYOR_TRUST_THIS;
 		    if (__i == end() || key_comp()(__k, (*__i).first))
 		      {
 			__i = emplace_hint(__i, std::forward<_Args>(__args)...);
@@ -813,6 +815,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	{
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  iterator __i = lower_bound(__k);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (__i == end() || key_comp()(__k, (*__i).first))
 	    {
 	      __i = emplace_hint(__i, std::piecewise_construct,
@@ -1461,7 +1464,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       size_type
       count(const key_type& __x) const
-      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.find(__x) == _M_t.end() ? 0 : 1; }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	const_iterator __it = _M_t.find(__x);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return __it == _M_t.end() ? 0 : 1;
+      }
 
 #ifdef __glibcxx_generic_associative_lookup // C++ >= 14
       template<typename _Kt>
@@ -1480,7 +1488,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       bool
       contains(const key_type& __x) const
-      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.find(__x) != _M_t.end(); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	const_iterator __it = _M_t.find(__x);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return __it != _M_t.end();
+      }
 
       template<typename _Kt>
 	auto

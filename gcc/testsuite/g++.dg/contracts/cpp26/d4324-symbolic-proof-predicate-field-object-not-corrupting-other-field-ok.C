@@ -19,7 +19,9 @@ inline constexpr symbolic_ctrl symbolic_ctrl_v{};
 
 struct file { bool opened = false; };
 bool is_opened (const file *f) symbolic;
-struct holder { file f1; file f2; };
+// Not standard-layout: a call given '&h.f2' can't reach 'h', or 'h.f1',
+// from it (offsetof, pointer-interconvertibility), as it could otherwise.
+struct holder { file f1; file f2; virtual ~holder () {} };
 
 void open_it (file * const f) post<symbolic_ctrl_v> (is_opened (f)) { f->opened = true; }
 void mutate_via_alias (file *f) { f->opened = false; }

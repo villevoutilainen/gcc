@@ -378,7 +378,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  keys.
        */
       iterator
-      begin() _GLIBCXX_NOEXCEPT
+      begin() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.begin(); }
 
       /**
@@ -387,7 +387,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  the keys.
        */
       const_iterator
-      begin() const _GLIBCXX_NOEXCEPT
+      begin() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.begin(); }
 
       /**
@@ -396,7 +396,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  keys.
        */
       iterator
-      end() _GLIBCXX_NOEXCEPT
+      end() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.end(); }
 
       /**
@@ -405,7 +405,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  to the keys.
        */
       const_iterator
-      end() const _GLIBCXX_NOEXCEPT
+      end() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.end(); }
 
       /**
@@ -451,7 +451,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  the keys.
        */
       const_iterator
-      cbegin() const noexcept
+      cbegin() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.begin(); }
 
       /**
@@ -460,7 +460,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  to the keys.
        */
       const_iterator
-      cend() const noexcept
+      cend() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.end(); }
 
       /**
@@ -485,17 +485,17 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       // capacity
       /** Returns true if the %multimap is empty.  */
       _GLIBCXX_NODISCARD bool
-      empty() const _GLIBCXX_NOEXCEPT
+      empty() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.empty(); }
 
       /** Returns the size of the %multimap.  */
       size_type
-      size() const _GLIBCXX_NOEXCEPT
+      size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.size(); }
 
       /** Returns the maximum size of the %multimap.  */
       size_type
-      max_size() const _GLIBCXX_NOEXCEPT
+      max_size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.max_size(); }
 
       // modifiers

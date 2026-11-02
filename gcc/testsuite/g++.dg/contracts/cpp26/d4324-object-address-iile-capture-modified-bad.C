@@ -30,7 +30,8 @@ int changed_before (int* p)
   pre<std::contracts::conveyor_assert_v>(std::is_object_address (p))
 {
   p = nullptr;
-  int* q = [&]() { return p; }();
+  // Conveyor, so the call doesn't end what p points to (the lifetime rule).
+  int* q = [&]() conveyor { return p; }();
   contract_assert<std::contracts::conveyor_assert_v>(std::is_object_address (q)); // { dg-error "cannot prove .is_object_address. for .q." }
   return *q;
 }
@@ -39,7 +40,8 @@ int unchanged ()
 {
   int a = 1;
   int* p = &a;
-  int* q = [&]() { return p; }();
+  // Conveyor, so the call doesn't end what p points to (the lifetime rule).
+  int* q = [&]() conveyor { return p; }();
   contract_assert<std::contracts::conveyor_assert_v>(std::is_object_address (q));
   return *q;
 }

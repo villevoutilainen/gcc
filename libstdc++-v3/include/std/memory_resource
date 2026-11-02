@@ -164,7 +164,10 @@ namespace pmr
     void release() noexcept;
 
     memory_resource* resource() const noexcept
-    { return _M_unpooled.get_allocator().resource(); }
+    {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      return _M_unpooled.get_allocator().resource();
+    }
 
     struct _Pool;
 

@@ -531,6 +531,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	      && (__hint == cend()
 		  || (__s = !_M_comp((*__hint)[0].first, __k)))) // k <= hint[0]
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      __key_it = _M_cont.keys.begin() + __hint->_M_index;
 	      if constexpr (!_Multi)
 		if (__r == 1 && !_M_comp(__key_it[-1], __k)) // k == hint[-1]
@@ -538,7 +539,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    }
 	  else
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      auto __first = _M_cont.keys.begin();
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      auto __last = _M_cont.keys.end();
 	      if (__r == 1) // k >= hint[-1]
 		__first += __hint->_M_index;
@@ -559,12 +562,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		__key_it = std::lower_bound(__first, __last, __k, _M_comp);
 	    }
 
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if constexpr (!_Multi)
 	    if (__key_it != _M_cont.keys.end() && !_M_comp(__k, __key_it[0]))
 	      return {iterator{this, __key_it}, false};
 
 	  auto __guard = _M_make_clear_guard();
 	  __key_it = _M_cont.keys.insert(__key_it, std::forward<_Key2>(__k));
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  __value_it = _M_cont.values.begin() + (__key_it - _M_cont.keys.begin());
 	  _M_cont.values.emplace(__value_it, std::forward<_Args>(__args)...);
 	  __guard._M_disable();
@@ -1119,7 +1124,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 	_GLIBCXX_CONVEYOR_TRUST(*_M_cont);
 	__glibcxx_assert_noconveyor(_M_index < _M_cont->keys.size());
-	return {_M_cont->keys[_M_index], _M_cont->values[_M_index]};
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return {_M_cont->keys[_M_index],
+		std::__trust_object(*_M_cont).values[_M_index]};
       }
 
       struct pointer

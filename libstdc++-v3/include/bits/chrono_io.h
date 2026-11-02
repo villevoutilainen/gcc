@@ -1080,8 +1080,11 @@ namespace __format
 		__tm.tm_mon = (unsigned)__t._M_month - 1;
 		__tm.tm_mday = (unsigned)__t._M_day;
 		__tm.tm_wday = __t._M_weekday.c_encoding();
+		_GLIBCXX_CONVEYOR_TRUST(__t);
 		__tm.tm_hour = __t._M_hours.count();
+		_GLIBCXX_CONVEYOR_TRUST(__t);
 		__tm.tm_min = __t._M_minutes.count();
+		_GLIBCXX_CONVEYOR_TRUST(__t);
 		__tm.tm_sec = __t._M_seconds.count();
 
 		// Some locales use %Z in their %c format but we don't want strftime
@@ -2195,6 +2198,7 @@ namespace __format
 		    // -d is undefined for the most negative integer.
 		    // Convert duration to corresponding unsigned rep.
 		    using _URep = make_unsigned_t<_Rep>;
+		    _GLIBCXX_CONVEYOR_TRUST(__d);
 		    auto __ucnt = -static_cast<_URep>(__d.count());
 		    auto __ud = chrono::duration<_URep, _Period>(__ucnt);
 		    return _M_format(__ud, true, __fc);

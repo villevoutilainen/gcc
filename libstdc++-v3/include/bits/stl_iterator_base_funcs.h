@@ -225,10 +225,16 @@ namespace __detail
 				  _BidirectionalIterator>)
       if (__n > 0)
         while (__n--)
-	  ++__i;
+	  {
+	    ++__i;
+	    _GLIBCXX_CONVEYOR_TRUST(__i);
+	  }
       else
         while (__n++)
-	  --__i;
+	  {
+	    --__i;
+	    _GLIBCXX_CONVEYOR_TRUST(__i);
+	  }
     }
 
   template<typename _RandomAccessIterator, typename _Distance>

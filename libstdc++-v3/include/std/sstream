@@ -322,6 +322,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 #endif
 	if (char_type* __hi = _M_high_mark())
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    if (_M_string.data() == this->pbase()) [[likely]]
 	      // Set length to end of sequence and add null terminator.
 	      _M_string._M_set_length(__hi - this->pbase());
@@ -330,6 +331,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	  }
 	auto __str = std::move(_M_string);
 	_M_string.clear();
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_M_sync(_M_string.data(), 0, 0);
 	return __str;
       }

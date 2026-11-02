@@ -80,6 +80,7 @@ namespace __detail
       if (!_M_match_token(_ScannerT::_S_token_eof))
 	__throw_regex_error(regex_constants::error_paren);
       __r._M_append(_M_pop());
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_assert(_M_stack.empty());
       __r._M_append(_M_nfa->_M_insert_subexpr_end());
       __r._M_append(_M_nfa->_M_insert_accept());
@@ -228,6 +229,7 @@ namespace __detail
 	}
       else if (_M_match_token(_ScannerT::_S_token_interval_begin))
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (_M_stack.empty())
 	    __throw_regex_error(regex_constants::error_badrepeat);
 	  if (!_M_match_token(_ScannerT::_S_token_dup_count))
@@ -433,8 +435,12 @@ namespace __detail
       _GLIBCXX_CONVEYOR_TRUST(_M_value);
       _BracketMatcher<__icase, __collate> __matcher(__neg, _M_traits);
       _BracketState __last_char;
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_try_char())
-	__last_char.set(_M_value[0]);
+	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  __last_char.set(_M_value[0]);
+	}
       else if (_M_match_token(_ScannerT::_S_token_bracket_dash))
 	// Dash as first character is a normal character.
 	__last_char.set('-');

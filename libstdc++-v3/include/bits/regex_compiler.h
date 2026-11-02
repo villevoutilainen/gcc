@@ -175,6 +175,7 @@ namespace __detail
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_GLIBCXX_CONVEYOR_TRUST(_M_stack);
 	auto __ret = _M_stack.top();
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_M_stack.pop();
 	return __ret;
       }
@@ -318,7 +319,13 @@ namespace __detail
 	__glibcxx_assert(__first.size() == 1);
 	__glibcxx_assert(__last.size() == 1);
 	__glibcxx_assert(__str.size() == 1);
-	return this->_M_in_range_icase(__first[0], __last[0], __str[0]);
+	// Each subscript may have ended the strings, which may be one
+	// another (the lifetime rule): they haven't.
+	const auto __f = __first[0];
+	_GLIBCXX_CONVEYOR_TRUST(__last);
+	const auto __l = __last[0];
+	_GLIBCXX_CONVEYOR_TRUST(__str);
+	return this->_M_in_range_icase(__f, __l, __str[0]);
       }
     };
 

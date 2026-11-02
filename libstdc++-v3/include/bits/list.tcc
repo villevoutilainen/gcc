@@ -91,6 +91,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #endif
 	__tmp->_M_hook(__position._M_const_cast()._M_node);
 	this->_M_inc_size(1);
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+	if constexpr (__is_pointer(_Node_ptr))
+	  _GLIBCXX_CONVEYOR_TRUST(*__tmp);
+#endif
 	return iterator(__tmp->_M_base());
       }
 #endif
@@ -111,6 +115,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #endif
       __tmp->_M_hook(__position._M_const_cast()._M_node);
       this->_M_inc_size(1);
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      if constexpr (__is_pointer(_Node_ptr))
+        _GLIBCXX_CONVEYOR_TRUST(*__tmp);
+#endif
       return iterator(__tmp->_M_base());
     }
 
@@ -227,8 +235,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	}
       __catch(...)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  for (; __i; --__i)
-	    pop_back();
+	    {
+	      pop_back();
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    }
 	  __throw_exception_again;
 	}
     }
@@ -385,6 +397,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #if !_GLIBCXX_USE_CXX11_ABI
       size_type __removed __attribute__((__unused__)) = 0;
 #endif
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       list __to_destroy(get_allocator());
       iterator __next = __first;
       while (++__next != __last)
@@ -533,6 +546,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		__carry.swap(*__counter);
 		if (__counter == __fill)
 		  ++__fill;
+		// The calls above were given parts of *this, so may have
+		// ended it (the lifetime rule): it hasn't.
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 	      }
 	    while ( !empty() );
 

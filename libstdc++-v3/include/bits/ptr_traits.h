@@ -112,6 +112,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{ pointer::pointer_to(__r) } -> convertible_to<pointer>;
       }
 #endif
+      _GLIBCXX_CONVEYOR_AUTO _GLIBCXX_CONVEYOR_TRUST_PRE(__r)
       { return pointer::pointer_to(__r); }
     };
 
@@ -133,7 +134,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *  @return `addressof(__r)`
       */
       static _GLIBCXX20_CONSTEXPR pointer
-      pointer_to(element_type& __r) noexcept
+      pointer_to(element_type& __r) noexcept _GLIBCXX_CONVEYOR_AUTO
+      _GLIBCXX_CONVEYOR_TRUST_PRE(__r)
       { return std::addressof(__r); }
     };
 

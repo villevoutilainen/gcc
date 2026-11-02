@@ -1332,6 +1332,7 @@ namespace __fwdlist
 	  this->_M_insert_after(cbefore_begin(),
 				std::forward<_Args>(__args)...);
 #if __cplusplus > 201402L
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return front();
 #endif
 	}

@@ -26,7 +26,8 @@ int g ()
 {
   int a = 1;
   int* p = &a;
-  int* q = [&]() { return p; }();
+  // Conveyor, so the call doesn't end what p points to (the lifetime rule).
+  int* q = [&]() conveyor { return p; }();
   contract_assert<conveyor_ctrl_v>(std::is_object_address(q));
   return *q;
 }

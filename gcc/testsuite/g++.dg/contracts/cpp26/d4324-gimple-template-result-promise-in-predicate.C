@@ -11,10 +11,12 @@
 struct D { int v; };
 bool le (const D &, const D &) pre<std::contracts::conveyor_assert_v> (true);
 
+// object is conveyor, so a call given *(e - 1) doesn't end it, nor B,
+// which may be the same object (the lifetime rule).
 struct U
 {
   template <class T>
-  static constexpr T &&object (T &&r)
+  static constexpr T &&object (T &&r) conveyor(auto)
     pre<std::contracts::never_proven_conveyor_v>
       (std::is_object_address (__builtin_addressof (r)))
     post<std::contracts::never_proven_conveyor_v>

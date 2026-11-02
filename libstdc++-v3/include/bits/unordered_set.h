@@ -825,7 +825,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       bool
       contains(const key_type& __x) const
-      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_h.find(__x) != _M_h.end(); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	const_iterator __it = _M_h.find(__x);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return __it != _M_h.end();
+      }
 
       template<typename _Kt>
 	auto

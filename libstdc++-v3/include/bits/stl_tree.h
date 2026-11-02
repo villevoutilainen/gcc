@@ -1382,7 +1382,7 @@ namespace __rb_tree
       { return this->_M_impl._M_header._M_right; }
 
       _Base_ptr
-      _M_begin() const _GLIBCXX_NOEXCEPT
+      _M_begin() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return this->_M_impl._M_header._M_parent; }
 
       _Node_ptr
@@ -1542,7 +1542,8 @@ namespace __rb_tree
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  _GLIBCXX_CONVEYOR_TRUST(__x);
 	  _Base_ptr __root =
-	    _M_copy<_MoveValues>(__x._M_begin_node(), _M_end(), __gen);
+	    _M_copy<_MoveValues>(__x._M_begin_node(),
+				 std::__trust_object(*this)._M_end(), __gen);
 	  _M_leftmost() = _Node_base::_S_minimum(__root);
 	  _M_rightmost() = _Node_base::_S_maximum(__root);
 	  _M_impl._M_node_count = __x._M_impl._M_node_count;
@@ -1649,11 +1650,11 @@ namespace __rb_tree
       { return _M_impl._M_key_compare; }
 
       iterator
-      begin() _GLIBCXX_NOEXCEPT
+      begin() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return iterator(this->_M_impl._M_header._M_left); }
 
       const_iterator
-      begin() const _GLIBCXX_NOEXCEPT
+      begin() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return const_iterator(this->_M_impl._M_header._M_left); }
 
       iterator
@@ -1674,22 +1675,22 @@ namespace __rb_tree
 
       reverse_iterator
       rend() _GLIBCXX_NOEXCEPT
-      { return reverse_iterator(begin()); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return reverse_iterator(begin()); }
 
       const_reverse_iterator
       rend() const _GLIBCXX_NOEXCEPT
       { return const_reverse_iterator(begin()); }
 
       _GLIBCXX_NODISCARD bool
-      empty() const _GLIBCXX_NOEXCEPT
+      empty() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_impl._M_node_count == 0; }
 
       size_type
-      size() const _GLIBCXX_NOEXCEPT
+      size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_impl._M_node_count; }
 
       size_type
-      max_size() const _GLIBCXX_NOEXCEPT
+      max_size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _Node_alloc_traits::max_size(_M_get_Node_allocator()); }
 
       void
@@ -1756,8 +1757,14 @@ namespace __rb_tree
 	{
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  _Alloc_node __an(*this);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  for (; __first != __last; ++__first)
-	    _M_insert_unique_(end(), *__first, __an);
+	    {
+	      _M_insert_unique_(end(), *__first, __an);
+	      // Given *this's allocator through __an, so may have ended
+	      // *this (the lifetime rule): it hasn't.
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    }
 	}
 
       template<typename _InputIterator>
@@ -1774,8 +1781,14 @@ namespace __rb_tree
 	{
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  _Alloc_node __an(*this);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  for (; __first != __last; ++__first)
-	    _M_insert_equal_(end(), *__first, __an);
+	    {
+	      _M_insert_equal_(end(), *__first, __an);
+	      // Given *this's allocator through __an, so may have ended
+	      // *this (the lifetime rule): it hasn't.
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    }
 	}
 
       template<typename _InputIterator>
@@ -1821,7 +1834,12 @@ namespace __rb_tree
 	{
 	  _Alloc_node __an(*this);
 	  for (; __first != __last; ++__first)
-	    _M_insert_unique_(end(), *__first, __an);
+	    {
+	      _M_insert_unique_(end(), *__first, __an);
+	      // Given *this's allocator through __an, so may have ended
+	      // *this (the lifetime rule): it hasn't.
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    }
 	}
 
       template<typename _InputIterator>
@@ -1831,7 +1849,12 @@ namespace __rb_tree
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  _Alloc_node __an(*this);
 	  for (; __first != __last; ++__first)
-	    _M_insert_equal_(end(), *__first, __an);
+	    {
+	      _M_insert_equal_(end(), *__first, __an);
+	      // Given *this's allocator through __an, so may have ended
+	      // *this (the lifetime rule): it hasn't.
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    }
 	}
 #endif
 
@@ -2273,6 +2296,7 @@ namespace __rb_tree
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	node_type __nh;
 	auto __pos = find(__k);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (__pos != end())
 	  __nh = extract(const_iterator(__pos));
 	return __nh;
@@ -2303,7 +2327,10 @@ namespace __rb_tree
 	{
 	  _GLIBCXX_CONVEYOR_TRUST(__src);
 	  using _Merge_helper = _Rb_tree_merge_helper<_Rb_tree, _Compare2>;
-	  for (auto __i = __src.begin(), __end = __src.end(); __i != __end;)
+	  auto __i = __src.begin();
+	  // begin () may have ended __src (the lifetime rule): it hasn't.
+	  _GLIBCXX_CONVEYOR_TRUST(__src);
+	  for (auto __end = __src.end(); __i != __end;)
 	    {
 	      auto __pos = __i++;
 	      auto __res = _M_get_insert_unique_pos(_KeyOfValue()(*__pos));
@@ -2326,7 +2353,10 @@ namespace __rb_tree
 	{
 	  _GLIBCXX_CONVEYOR_TRUST(__src);
 	  using _Merge_helper = _Rb_tree_merge_helper<_Rb_tree, _Compare2>;
-	  for (auto __i = __src.begin(), __end = __src.end(); __i != __end;)
+	  auto __i = __src.begin();
+	  // begin () may have ended __src (the lifetime rule): it hasn't.
+	  _GLIBCXX_CONVEYOR_TRUST(__src);
+	  for (auto __end = __src.end(); __i != __end;)
 	    {
 	      auto __pos = __i++;
 	      auto __res = _M_get_insert_equal_pos(_KeyOfValue()(*__pos));
@@ -2347,6 +2377,7 @@ namespace __rb_tree
       operator==(const _Rb_tree& __x, const _Rb_tree& __y)
       {
 	_GLIBCXX_CONVEYOR_TRUST(__x);
+	_GLIBCXX_CONVEYOR_TRUST(__y);
 	return __x.size() == __y.size()
 	  && std::equal(__x.begin(), __x.end(), __y.begin());
       }
@@ -2456,6 +2487,8 @@ namespace __rb_tree
       clear();
       if (__x._M_root())
 	_M_move_data(__x, true_type());
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(__x);
       std::__alloc_on_move(_M_get_Node_allocator(),
 			   __x._M_get_Node_allocator());
     }
@@ -2885,6 +2918,7 @@ namespace __rb_tree
       iterator __j = iterator(__y);
       if (__comp)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (__j == begin())
 	    return _Res(__x, __y);
 	  else
@@ -3249,6 +3283,7 @@ namespace __rb_tree
       bool __insert_left = (__x || __p == _M_end()
 			    || _M_key_compare(_S_key(__z), _S_key(__p)));
 
+      _GLIBCXX_CONVEYOR_TRUST(*__z);
       _Base_ptr __base_z = __z->_M_base_ptr();
       _Node_traits::_S_insert_and_rebalance
 	(__insert_left, __base_z, __p, this->_M_impl._M_header);
@@ -3268,6 +3303,7 @@ namespace __rb_tree
       bool __insert_left = (__p == _M_end()
 			    || !_M_key_compare(_S_key(__p), _S_key(__z)));
 
+      _GLIBCXX_CONVEYOR_TRUST(*__z);
       _Base_ptr __base_z = __z->_M_base_ptr();
       _Node_traits::_S_insert_and_rebalance
 	(__insert_left, __base_z, __p, this->_M_impl._M_header);
@@ -3433,6 +3469,7 @@ namespace __rb_tree
     {
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       iterator __it = find(__x);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__it == end())
 	return 0;
 
@@ -3449,8 +3486,14 @@ namespace __rb_tree
     {
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       iterator __j(_M_lower_bound(_M_begin(), _M_end(), __k));
-      return (__j == end()
-	      || _M_key_compare(__k, _S_key(__j._M_node))) ? end() : __j;
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      if (__j == end())
+	return __j;
+      // The comparison is given *this's comparator, so may have ended
+      // *this (the lifetime rule): it hasn't.
+      const bool __less = _M_key_compare(__k, _S_key(__j._M_node));
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      return __less ? end() : __j;
     }
 
   template<typename _Key, typename _Val, typename _KeyOfValue,
@@ -3462,8 +3505,14 @@ namespace __rb_tree
     {
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       const_iterator __j(_M_lower_bound(_M_begin(), _M_end(), __k));
-      return (__j == end()
-	      || _M_key_compare(__k, _S_key(__j._M_node))) ? end() : __j;
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      if (__j == end())
+	return __j;
+      // The comparison is given *this's comparator, so may have ended
+      // *this (the lifetime rule): it hasn't.
+      const bool __less = _M_key_compare(__k, _S_key(__j._M_node));
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      return __less ? end() : __j;
     }
 
   template<typename _Key, typename _Val, typename _KeyOfValue,

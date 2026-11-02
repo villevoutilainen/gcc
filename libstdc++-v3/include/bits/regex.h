@@ -1976,9 +1976,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_CONVEYOR_REQUIRES_THIS _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_assert( ready() );
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	// size () may have ended *this (the lifetime rule): it hasn't.
 	return __sub < size()
-	       ? _Unchecked::operator[](__sub)
-	       : _M_unmatched_sub();
+	       ? std::__trust_object(*this)._Unchecked::operator[](__sub)
+	       : std::__trust_object(*this)._M_unmatched_sub();
       }
 
       /**
@@ -3105,8 +3107,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_GLIBCXX_CONVEYOR_TRUST(__m);
 	if (_M_subs[_M_n] == -1)
 	  return __m.prefix();
-	else
-	  return __m[_M_subs[_M_n]];
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return __m[_M_subs[_M_n]];
       }
 
       constexpr bool

@@ -252,7 +252,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // does next, exactly as needed.
       _GLIBCXX20_CONSTEXPR
       void
-      _M_data(pointer __p)
+      _M_data(pointer __p) _GLIBCXX_CONVEYOR_AUTO
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
@@ -262,7 +262,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // See _M_data's own comment just above.
       _GLIBCXX20_CONSTEXPR
       void
-      _M_length(size_type __length)
+      _M_length(size_type __length) _GLIBCXX_CONVEYOR_AUTO
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
@@ -307,7 +307,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // -- confirmed via direct testing, one accessor at a time.
       _GLIBCXX20_CONSTEXPR
       pointer
-      _M_data() const
+      _M_data() const _GLIBCXX_CONVEYOR_AUTO
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
@@ -318,7 +318,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // is here.
       _GLIBCXX20_CONSTEXPR
       pointer
-      _M_local_data()
+      _M_local_data() _GLIBCXX_CONVEYOR_AUTO
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
@@ -335,7 +335,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // here.
       _GLIBCXX20_CONSTEXPR
       const_pointer
-      _M_local_data() const
+      _M_local_data() const _GLIBCXX_CONVEYOR_AUTO
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
@@ -351,7 +351,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // See _M_data's own comment above.
       _GLIBCXX20_CONSTEXPR
       void
-      _M_capacity(size_type __capacity)
+      _M_capacity(size_type __capacity) _GLIBCXX_CONVEYOR_AUTO
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
@@ -360,7 +360,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       _GLIBCXX20_CONSTEXPR
       void
-      _M_set_length(size_type __n)
+      _M_set_length(size_type __n) _GLIBCXX_CONVEYOR_AUTO
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
@@ -374,7 +374,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // here.
       _GLIBCXX20_CONSTEXPR
       bool
-      _M_is_local() const
+      _M_is_local() const _GLIBCXX_CONVEYOR_AUTO
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
@@ -396,9 +396,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       // D4324/P2680: real (conveyor_assert_v) postcondition -- max_size ()'s
       // own (now also real, see above) postcondition re-establishes 'this'
       // after each of the two calls to it in this function's body (defined
-      // out-of-line in basic_string.tcc); _S_allocate_at_least is static and
-      // takes _M_get_allocator ()'s own return *value* as an argument, never
-      // 'this' itself, so 'this' is never invalidated by that call either.
+      // out-of-line in basic_string.tcc); _S_allocate_at_least is given the
+      // allocator, a part of *this through which it could reach *this, so
+      // the body re-trusts 'this' after it.
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
@@ -429,7 +429,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       _GLIBCXX20_CONSTEXPR
       void
-      _M_dispose()
+      _M_dispose() _GLIBCXX_CONVEYOR_AUTO
       // D4324/P2680: see _M_destroy's own comment just below. Real
       // (conveyor_assert_v) postcondition: _M_is_local ()'s own
       // (already real) postcondition re-establishes 'this' after that
@@ -446,22 +446,23 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       _GLIBCXX20_CONSTEXPR
       void
-      _M_destroy(size_type __size) throw()
+      _M_destroy(size_type __size) throw() _GLIBCXX_CONVEYOR_AUTO
       // D4324/P2680: see __max_diff_type::operator/='s own comment
       // (bits/max_size_type.h) for why this is a precondition, not a body
       // assert, and why it's gated on _GLIBCXX_CONVEYOR_ASSERTIONS.
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
-      // D4324/P2680: real (conveyor_assert_v) -- _M_get_allocator ()/
-      // _M_data ()'s own postconditions (now also real) re-establish
-      // 'this' right after each call; _Alloc_traits::deallocate's own
-      // receiver is the allocator/pointer *values* those calls return,
-      // never 'this' itself, so 'this' is never invalidated. Needed so
+      // D4324/P2680: real (conveyor_assert_v) -- _Alloc_traits::deallocate
+      // is given the allocator, a part of *this through which it could
+      // reach *this, so the body re-trusts 'this' after it. Needed so
       // _M_dispose's own postcondition, below, can see 'this' still
       // established after calling this function.
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
-      { _Alloc_traits::deallocate(_M_get_allocator(), _M_data(), __size + 1); }
+      {
+	_Alloc_traits::deallocate(_M_get_allocator(), _M_data(), __size + 1);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+      }
 
 #if __cplusplus < 201103L || defined _GLIBCXX_DEFINING_STRING_INSTANTIATIONS
       // _M_construct_aux is used to implement the 21.3.1 para 15 which
@@ -580,7 +581,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       __attribute__((__always_inline__))
       _GLIBCXX14_CONSTEXPR
       void
-      _M_init_local_buf() _GLIBCXX_NOEXCEPT
+      _M_init_local_buf() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
@@ -597,7 +598,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       __attribute__((__always_inline__))
       _GLIBCXX14_CONSTEXPR
       pointer
-      _M_use_local_data() _GLIBCXX_NOEXCEPT
+      _M_use_local_data() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
@@ -627,7 +628,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       _GLIBCXX20_CONSTEXPR
       size_type
-      _M_check(size_type __pos, const char* __s) const
+      _M_check(size_type __pos, const char* __s) const _GLIBCXX_CONVEYOR_AUTO
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (__pos > this->size())
@@ -640,6 +641,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX20_CONSTEXPR
       void
       _M_check_length(size_type __n1, size_type __n2, const char* __s) const
+      _GLIBCXX_CONVEYOR_AUTO
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (this->max_size() - (this->size() - __n1) < __n2)
@@ -1418,6 +1420,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	    _M_set_length(0);
 	  }
 	// Replace allocator if POCMA is true.
+	_GLIBCXX_CONVEYOR_TRUST(__str);
 	std::__alloc_on_move(_M_get_allocator(), __str._M_get_allocator());
 
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
@@ -1701,7 +1704,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       ///  null-termination.
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
-      length() const _GLIBCXX_NOEXCEPT
+      length() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       // D4324/P2680: real (conveyor_assert_v) postcondition -- size ()'s own
       // receiver is 'this', but it's a trivial one-hop accessor (a field
       // read plus a call to max_size (), itself now real), confirmed via
@@ -1836,7 +1839,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
-      capacity() const _GLIBCXX_NOEXCEPT
+      capacity() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       // D4324/P2680: real (conveyor_assert_v) postcondition -- body only
       // calls _M_is_local () and max_size () (both now real).
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
@@ -2229,10 +2232,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	      else
 		{
 		  _M_check_length(0, __len, "basic_string::append_range");
+		  _GLIBCXX_CONVEYOR_TRUST_THIS;
 		  basic_string __s(_M_get_allocator());
 		  __s.reserve(__newlen);
+		  _GLIBCXX_CONVEYOR_TRUST_THIS;
 		  _S_copy_range(__s._M_data() + size(), std::forward<_Rg>(__rg),
 				__len);
+		  _GLIBCXX_CONVEYOR_TRUST_THIS;
 		  _S_copy(__s._M_data(), _M_data(), size());
 		  if (!_M_is_local())
 		    _M_destroy(_M_allocated_capacity);
@@ -2371,6 +2377,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	      {
 		// Propagating allocator cannot free existing storage so must
 		// deallocate it before replacing current allocator.
+		_GLIBCXX_CONVEYOR_TRUST(__str);
 		if (__str.size() <= _S_local_capacity)
 		  {
 		    _M_destroy(_M_allocated_capacity);
@@ -2379,7 +2386,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 		  }
 		else
 		  {
+		    _GLIBCXX_CONVEYOR_TRUST(__str);
 		    const auto __len = __str.size();
+		    _GLIBCXX_CONVEYOR_TRUST(__str);
 		    auto __alloc = __str._M_get_allocator();
 		    // If this allocation throws there are no effects:
 		    auto __r = _S_allocate_at_least(__alloc, __len + 1);
@@ -2389,6 +2398,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 		    _M_set_length(__len);
 		  }
 	      }
+	    _GLIBCXX_CONVEYOR_TRUST(__str);
 	    std::__alloc_on_copy(_M_get_allocator(), __str._M_get_allocator());
 	  }
 #endif
@@ -2738,6 +2748,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  auto __pos = __p - cbegin();
 
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  if constexpr (ranges::forward_range<_Rg>)
 	    if (ranges::empty(__rg))
 	      return begin() + __pos;
@@ -2747,6 +2758,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	    append_range(std::forward<_Rg>(__rg));
 	  else
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      basic_string __s(from_range, std::forward<_Rg>(__rg),
 			       _M_get_allocator());
 	      insert(__pos, __s);
@@ -3372,6 +3384,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	    append_range(std::forward<_Rg>(__rg));
 	  else
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      basic_string __s(from_range, std::forward<_Rg>(__rg),
 			       _M_get_allocator());
 	      replace(__i1, __i2, __s);
@@ -3532,7 +3545,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const _CharT*
-      c_str() const _GLIBCXX_NOEXCEPT
+      c_str() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       // D4324/P2680: real (conveyor_assert_v) postcondition -- trivial
       // one-hop delegation to _M_data () (already real).
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
@@ -3551,7 +3564,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       const _CharT*
-      data() const _GLIBCXX_NOEXCEPT
+      data() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       // D4324/P2680: real (conveyor_assert_v) postcondition -- trivial
       // one-hop delegation to _M_data () (already real).
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
@@ -3569,7 +3582,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       _CharT*
-      data() noexcept
+      data() noexcept _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_data(); }
 #endif
 
@@ -3578,7 +3591,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       allocator_type
-      get_allocator() const _GLIBCXX_NOEXCEPT
+      get_allocator() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_get_allocator(); }
 
       /**
@@ -4287,6 +4300,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_GLIBCXX_CONVEYOR_TRUST(__str);
 	_M_check(__pos, "basic_string::compare");
 	__n = _M_limit(__pos, __n);
+	_GLIBCXX_CONVEYOR_TRUST(__str);
 	const size_type __osize = __str.size();
 	const size_type __len = std::min(__n, __osize);
 	int __r = traits_type::compare(_M_data() + __pos, __str.data(), __len);

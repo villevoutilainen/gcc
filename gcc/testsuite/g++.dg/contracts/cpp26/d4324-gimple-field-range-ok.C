@@ -28,7 +28,8 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 
 struct thing {
   int count;
-  void produce ()
+  // Conveyor, so calling it doesn't end the object (the lifetime rule).
+  void produce () conveyor
     pre<conveyor_ctrl_v>(std::is_object_address (this))
     post<conveyor_ctrl_v>(this->count >= 40 && this->count < 100)
   { count = 55; }

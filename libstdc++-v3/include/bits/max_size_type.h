@@ -225,7 +225,15 @@ namespace ranges
 	if (!_M_msb && !__r._M_msb) [[likely]]
 	  _M_val %= __r._M_val;
 	else
-	  *this -= (*this / __r) * __r;
+	  {
+	    // Each operator is given *this or __r, so may have ended it (the
+	    // lifetime rule): it hasn't.
+	    __max_size_type __q = *this / __r;
+	    _GLIBCXX_CONVEYOR_TRUST(__r);
+	    __q = __q * __r;
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    *this -= __q;
+	  }
 	return *this;
       }
 

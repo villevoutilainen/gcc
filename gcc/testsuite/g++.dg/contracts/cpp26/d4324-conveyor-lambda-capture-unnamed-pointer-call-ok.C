@@ -20,7 +20,8 @@ struct S {
     auto l = [this] ()
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       {
-	bump (get_ref (n));
+	int k = 0;
+	bump (get_ref (k));
 	sat ();
       };
     l ();

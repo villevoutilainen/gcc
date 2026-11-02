@@ -13,7 +13,8 @@ struct V
 {
   int x;
   int get () const conveyor { return x; }
-  void set (int v) { x = v; }
+  // Conveyor, so a call to it doesn't end the object (the lifetime rule).
+  void set (int v) conveyor { x = v; }
 };
 
 int f (V &c)

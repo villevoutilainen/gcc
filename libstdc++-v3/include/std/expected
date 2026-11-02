@@ -781,7 +781,7 @@ namespace __expected
 
       [[nodiscard]]
       constexpr const _Tp&
-      operator*() const & noexcept
+      operator*() const & noexcept _GLIBCXX_CONVEYOR_AUTO
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(_M_has_value);
@@ -790,7 +790,7 @@ namespace __expected
 
       [[nodiscard]]
       constexpr _Tp&
-      operator*() & noexcept
+      operator*() & noexcept _GLIBCXX_CONVEYOR_AUTO
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(_M_has_value);
@@ -799,7 +799,7 @@ namespace __expected
 
       [[nodiscard]]
       constexpr const _Tp&&
-      operator*() const && noexcept
+      operator*() const && noexcept _GLIBCXX_CONVEYOR_AUTO
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(_M_has_value);
@@ -808,7 +808,7 @@ namespace __expected
 
       [[nodiscard]]
       constexpr _Tp&&
-      operator*() && noexcept
+      operator*() && noexcept _GLIBCXX_CONVEYOR_AUTO
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(_M_has_value);
@@ -820,7 +820,8 @@ namespace __expected
       operator bool() const noexcept { return _M_has_value; }
 
       [[nodiscard]]
-      constexpr bool has_value() const noexcept { return _M_has_value; }
+      constexpr bool has_value() const noexcept _GLIBCXX_CONVEYOR_AUTO
+      { return _M_has_value; }
 
       constexpr const _Tp&
       value() const &
@@ -862,7 +863,7 @@ namespace __expected
       }
 
       constexpr const _Er&
-      error() const & noexcept
+      error() const & noexcept _GLIBCXX_CONVEYOR_AUTO
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(!_M_has_value);
@@ -870,7 +871,7 @@ namespace __expected
       }
 
       constexpr _Er&
-      error() & noexcept
+      error() & noexcept _GLIBCXX_CONVEYOR_AUTO
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(!_M_has_value);
@@ -878,7 +879,7 @@ namespace __expected
       }
 
       constexpr const _Er&&
-      error() const && noexcept
+      error() const && noexcept _GLIBCXX_CONVEYOR_AUTO
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(!_M_has_value);
@@ -886,7 +887,7 @@ namespace __expected
       }
 
       constexpr _Er&&
-      error() && noexcept
+      error() && noexcept _GLIBCXX_CONVEYOR_AUTO
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(!_M_has_value);
@@ -1104,6 +1105,7 @@ namespace __expected
 	  using _Up = __expected::__result_xform<_Fn, _Tp&>;
 	  using _Res = expected<_Up, _Er>;
 
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (has_value())
 	    return _Res(__in_place_inv{}, [&]() {
 			  return std::__invoke(std::forward<_Fn>(__f),
@@ -1244,8 +1246,12 @@ namespace __expected
 	  _GLIBCXX_CONVEYOR_TRUST(__x);
 	  if (__x.has_value() != __y.has_value())
 	    return false;
+	  _GLIBCXX_CONVEYOR_TRUST(__y);
+	  _GLIBCXX_CONVEYOR_TRUST(__x);
 	  if (__x.has_value())
 	    return *__x == *__y;
+	  _GLIBCXX_CONVEYOR_TRUST(__y);
+	  _GLIBCXX_CONVEYOR_TRUST(__x);
 	  return __x.error() == __y.error();
 	}
 
@@ -1632,10 +1638,12 @@ namespace __expected
       operator bool() const noexcept { return _M_has_value; }
 
       [[nodiscard]]
-      constexpr bool has_value() const noexcept { return _M_has_value; }
+      constexpr bool has_value() const noexcept _GLIBCXX_CONVEYOR_AUTO
+      { return _M_has_value; }
 
       constexpr void
-      operator*() const noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      operator*() const noexcept _GLIBCXX_CONVEYOR_AUTO
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       { __glibcxx_assert(_M_has_value); }
 
       constexpr void
@@ -1658,7 +1666,7 @@ namespace __expected
       }
 
       constexpr const _Er&
-      error() const & noexcept
+      error() const & noexcept _GLIBCXX_CONVEYOR_AUTO
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(!_M_has_value);
@@ -1666,7 +1674,7 @@ namespace __expected
       }
 
       constexpr _Er&
-      error() & noexcept
+      error() & noexcept _GLIBCXX_CONVEYOR_AUTO
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(!_M_has_value);
@@ -1674,7 +1682,7 @@ namespace __expected
       }
 
       constexpr const _Er&&
-      error() const && noexcept
+      error() const && noexcept _GLIBCXX_CONVEYOR_AUTO
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(!_M_has_value);
@@ -1682,7 +1690,7 @@ namespace __expected
       }
 
       constexpr _Er&&
-      error() && noexcept
+      error() && noexcept _GLIBCXX_CONVEYOR_AUTO
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(!_M_has_value);

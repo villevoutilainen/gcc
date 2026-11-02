@@ -1,10 +1,12 @@
 // D4324: a counted loop whose condition is 'i != N' -- the variable starts
 // at or below N, only the loop's own increment changes it, by one -- bounds
 // the variable in the body as 'i < N' would, so an array element indexed by
-// it is proven.  So does counting down to N, and so does a variable whose
-// address is only taken to read it (printed through a const reference).  A
-// loop that starts past N, that can step past it, whose N isn't known, or
-// whose variable can be written through a pointer, bounds nothing.
+// it is proven.  So does counting down to N.  A loop that starts past N,
+// that can step past it, whose N isn't known, or whose variable can be
+// written through a pointer, bounds nothing -- nor one whose variable's
+// address a call is given even through a const reference (printed): the
+// variable isn't const, so the callee may keep the address and a later
+// call write it.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-analysis-engine=ast" }
 
@@ -92,7 +94,7 @@ int printed ()
   for (int i = 0; i != 4; ++i)
     {
       show (i);
-      n += use (arr[i]);
+      n += use (arr[i]); // { dg-error "cannot prove" }
     }
   return n;
 }

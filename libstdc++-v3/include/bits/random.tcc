@@ -3621,6 +3621,7 @@ namespace __detail
 			    ^ __begin[__kpn]
 			    ^ __begin[(__k - 1) % __n]);
 	  uint32_t __r1 = 1664525u * (__arg ^ (__arg >> 27));
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  uint32_t __r2 = __r1 + (uint32_t)__kn + _M_v[__k - 1];
 	  __begin[__kpn] = (uint32_t)__begin[__kpn] + __r1;
 	  __begin[__kqn] = (uint32_t)__begin[__kqn] + __r2;

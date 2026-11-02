@@ -73,7 +73,7 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
 		const _RegexT&  __re,
 		_FlagT          __flags,
 		bool            __use_dfs)
-      : _M_cur_results(__results.get_allocator()),
+      : _M_cur_results(std::__trust_object(__results).get_allocator()),
 	_M_begin(__begin),
 	_M_end(__end),
 	_M_re(__re),

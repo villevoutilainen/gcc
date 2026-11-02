@@ -181,6 +181,8 @@ namespace ranges
 	    if (ranges::distance(__r1) != ranges::distance(__r2))
 	      return false;
 
+	_GLIBCXX_CONVEYOR_TRUST(__r2);
+	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	return (*this)(ranges::begin(__r1), ranges::end(__r1),
 		       ranges::begin(__r2), ranges::end(__r2),
 		       std::move(__pred),

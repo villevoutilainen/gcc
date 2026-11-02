@@ -257,7 +257,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	noexcept(noexcept(ranges::data(__range))
 		  && noexcept(ranges::size(__range)))
 	_GLIBCXX_CONVEYOR_TRUST_PRE(__range)
-	: _M_ptr(ranges::data(__range)), _M_extent(ranges::size(__range))
+	: _M_ptr(ranges::data(__range)),
+	  _M_extent(ranges::size(std::__trust_object(__range)))
 	{ }
 
       constexpr
@@ -341,14 +342,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[nodiscard]]
       constexpr pointer
-      data() const noexcept
+      data() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { return this->_M_ptr; }
 
       // iterator support
 
       [[nodiscard]]
       constexpr iterator
-      begin() const noexcept
+      begin() const noexcept _GLIBCXX_CONVEYOR_AUTO
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
@@ -359,7 +360,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[nodiscard]]
       constexpr iterator
-      end() const noexcept
+      end() const noexcept _GLIBCXX_CONVEYOR_AUTO
       {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
 	contract_assert<std::contracts::never_proven_conveyor_v>
@@ -445,6 +446,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	__glibcxx_assert(__count <= size());
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return span<element_type>(this->data() + (this->size() - __count),
 				  __count);
       }

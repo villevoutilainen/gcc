@@ -971,7 +971,7 @@ namespace contracts
     struct __container_assert
     {
       static consteval never_proven_conveyor
-      __make(const char* __msg = nullptr) noexcept
+      __make(const char* __msg = nullptr) noexcept _GLIBCXX_CONVEYOR
       { return never_proven_conveyor(__msg); }
     };
 
@@ -979,7 +979,7 @@ namespace contracts
     struct __container_assert<false>
     {
       static consteval noexcept_assert
-      __make(const char* __msg = nullptr) noexcept
+      __make(const char* __msg = nullptr) noexcept _GLIBCXX_CONVEYOR
       { return noexcept_assert(__msg); }
     };
 
@@ -991,7 +991,7 @@ namespace contracts
     struct __container_pre
     {
       static consteval conveyor_assert
-      __make() noexcept
+      __make() noexcept _GLIBCXX_CONVEYOR
       { return conveyor_assert{}; }
     };
 
@@ -999,7 +999,7 @@ namespace contracts
     struct __container_pre<false>
     {
       static consteval noexcept_assert
-      __make() noexcept
+      __make() noexcept _GLIBCXX_CONVEYOR
       { return noexcept_assert(); }
     };
 
@@ -1009,7 +1009,7 @@ namespace contracts
     struct __container_object_pre
     {
       static consteval conveyor_assert
-      __make() noexcept
+      __make() noexcept _GLIBCXX_CONVEYOR
       { return conveyor_assert{}; }
     };
 
@@ -1017,7 +1017,7 @@ namespace contracts
     struct __container_object_pre<false>
     {
       static consteval never_proven_conveyor
-      __make() noexcept
+      __make() noexcept _GLIBCXX_CONVEYOR
       { return never_proven_conveyor(); }
     };
   /// @endcond

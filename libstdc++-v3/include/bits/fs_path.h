@@ -1406,9 +1406,13 @@ _GLIBCXX_CONVEYOR_TRUST_THIS;
     if (empty())
       return {};
     else if (_M_type() == _Type::_Filename)
-      return *this;
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return *this;
+      }
     else if (_M_type() == _Type::_Multi)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (_M_pathname.back() == preferred_separator)
 	  return {};
 	auto __last = --end();

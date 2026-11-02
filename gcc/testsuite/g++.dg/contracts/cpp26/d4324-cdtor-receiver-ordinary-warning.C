@@ -20,8 +20,9 @@ struct S
   int buf[2];
   H h;
   int* get () { return buf; }
+  // H's destructor on the exception path after 'h' is built is never
+  // run: nothing after it in the constructor can throw.
   S () : h (get ()) {} // { dg-warning "cannot verify .is_object_address. for \[^\n\]*required by the precondition of .H::H\\(int\\*\\)." }
-  // { dg-warning "cannot verify .is_object_address. for \[^\n\]*required by the precondition of .H::~H\\(\\)." "" { target *-*-* } .-1 }
 };
 
 void use () { S s; }

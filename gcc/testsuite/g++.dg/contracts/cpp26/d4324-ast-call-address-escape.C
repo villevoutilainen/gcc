@@ -2,8 +2,9 @@
 // -fcontract-conveyor-proofs), a call that is passed a local pointer's
 // address through a parameter that can write it ends the pointer's
 // is_object_address fact, as the GIMPLE engine does: 'set (&p)' may
-// store anything in P.  A pointer-to-const or const-reference parameter
-// can't, so the fact stays.
+// store anything in P.  Through a pointer-to-const or a const reference
+// the callee is still given P's value, a route to the object, which it
+// may end (the lifetime rule), so the fact ends there too.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-analysis-engine=ast" }
 
@@ -21,6 +22,6 @@ void cset (V *const *);
 void cref (V *const &);
 
 int esc (V *p) { TRUST (p); set (&p); return p->size (); }	// { dg-error "is_object_address" }
-int esc_const_ptr (V *p) { TRUST (p); cset (&p); return p->size (); }
-int esc_const_ref (V *p) { TRUST (p); cref (p); return p->size (); }
+int esc_const_ptr (V *p) { TRUST (p); cset (&p); return p->size (); }	// { dg-error "is_object_address" }
+int esc_const_ref (V *p) { TRUST (p); cref (p); return p->size (); }	// { dg-error "is_object_address" }
 int no_call (V *p) { TRUST (p); return p->size (); }

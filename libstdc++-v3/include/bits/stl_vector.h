@@ -308,7 +308,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX20_CONSTEXPR
       _Tp_alloc_type&
-      _M_get_Tp_allocator() _GLIBCXX_NOEXCEPT
+      _M_get_Tp_allocator() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       // An internal accessor every member uses: it trusts its object (a
       // never_proven precondition, which asks nothing of its callers).  The
@@ -324,7 +324,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX20_CONSTEXPR
       const _Tp_alloc_type&
-      _M_get_Tp_allocator() const _GLIBCXX_NOEXCEPT
+      _M_get_Tp_allocator() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       // An internal accessor every member uses: it trusts its object (a
       // never_proven precondition, which asks nothing of its callers).
@@ -337,11 +337,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       _GLIBCXX20_CONSTEXPR
       allocator_type
-      get_allocator() const _GLIBCXX_NOEXCEPT
+      get_allocator() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return allocator_type(_M_get_Tp_allocator()); }
 
       static _GLIBCXX20_CONSTEXPR size_t
       _S_max_size(const _Tp_alloc_type& __a) _GLIBCXX_NOEXCEPT
+      _GLIBCXX_CONVEYOR_AUTO
       {
 	// std::distance(begin(), end()) cannot be greater than PTRDIFF_MAX,
 	// and realistically we can't store more than PTRDIFF_MAX/sizeof(T)
@@ -484,16 +485,18 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       // D4324/P2680: real (conveyor_assert_v), not never_proven -- 'this'
-      // itself is never reassigned by this body, and _Tr::deallocate's
-      // own receiver is _M_impl (a field, passed by reference), not
-      // 'this', so 'this' is never invalidated mid-body either. The
-      // engine can now verify this directly.
+      // itself is never reassigned by this body; _Tr::deallocate is given
+      // _M_impl, the allocator, through which it could reach 'this' (the
+      // lifetime rule), so the body re-trusts 'this' after it.
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	typedef __gnu_cxx::__alloc_traits<_Tp_alloc_type> _Tr;
 	if (__p)
-	  _Tr::deallocate(_M_impl, __p, __n);
+	  {
+	    _Tr::deallocate(_M_impl, __p, __n);
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  }
       }
 
     protected:
@@ -737,9 +740,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX20_CONSTEXPR
       vector(const vector& __x) _GLIBCXX_CONVEYOR_TRUST_PRE(__x)
-      : _Base(__x.size(),
-	_Alloc_traits::_S_select_on_copy(__x._M_get_Tp_allocator()))
+      // Either argument may be evaluated after the other was given __x
+      // (the lifetime rule).
+      : _Base(std::__trust_object(__x).size(),
+	_Alloc_traits::_S_select_on_copy
+	  (std::__trust_object(__x)._M_get_Tp_allocator()))
       {
+	_GLIBCXX_CONVEYOR_TRUST(__x);
 	this->_M_impl._M_finish =
 	  std::__uninitialized_copy_a(__x.begin(), __x.end(),
 				      this->_M_impl._M_start,
@@ -916,9 +923,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       ~vector() _GLIBCXX_NOEXCEPT
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	std::_Destroy(this->_M_impl._M_start, this->_M_impl._M_finish,
 		      _M_get_Tp_allocator());
 	_GLIBCXX_ASAN_ANNOTATE_BEFORE_DEALLOC;
+	// _Destroy was given the allocator, a part of *this, so may have
+	// ended it (the lifetime rule): it hasn't, for ~_Vector_base.
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
       }
 
       /**
@@ -1069,10 +1080,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		}
 
 	      reserve(__n);
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      auto __first = ranges::copy_n(ranges::begin(__rg), size(),
 					    this->_M_impl._M_start).in;
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      [[maybe_unused]] const auto __diff = __n - size();
 	      _GLIBCXX_ASAN_ANNOTATE_GROW(__diff);
+	      _GLIBCXX_CONVEYOR_TRUST(__rg);
 	      _Base::_M_append_range(ranges::subrange(std::move(__first),
 						      ranges::end(__rg)));
 	      _GLIBCXX_ASAN_ANNOTATE_GREW(__diff);
@@ -1195,7 +1209,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       [[__nodiscard__]] _GLIBCXX20_CONSTEXPR
       const_iterator
-      cbegin() const noexcept
+      cbegin() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return const_iterator(this->_M_impl._M_start); }
 
       /**
@@ -1205,7 +1219,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       [[__nodiscard__]] _GLIBCXX20_CONSTEXPR
       const_iterator
-      cend() const noexcept
+      cend() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return const_iterator(this->_M_impl._M_finish); }
 
       /**
@@ -1244,7 +1258,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       /**  Returns the size() of the largest possible %vector.  */
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
-      max_size() const _GLIBCXX_NOEXCEPT
+      max_size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _Base::_S_max_size(_M_get_Tp_allocator()); }
 
 #if __cplusplus >= 201103L
@@ -1438,6 +1452,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_M_range_check(__n);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return (*this)[__n];
       }
 
@@ -1458,6 +1473,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_M_range_check(__n);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return (*this)[__n];
       }
 
@@ -1706,6 +1722,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	difference_type __offset = __position - cbegin();
 	_M_fill_insert(begin() + __offset, __n, __x);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return begin() + __offset;
       }
 #else
@@ -1818,6 +1835,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	      if (capacity() == 0)
 		reserve(__n);
 
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      const auto __sz = size();
 	      const auto __capacity = capacity();
 	      if ((__capacity - __sz) >= __n)
@@ -2149,19 +2167,21 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       // D4324/P2680: same reasoning as _M_default_initialize's own
       // identical pair just above -- 'this' is never reassigned, and
-      // this function's own callees never touch 'this' as a receiver
-      // either. Verifiable directly.
+      // after each callee given the allocator (through which it could
+      // reach 'this') the body re-trusts 'this'.
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
 	{
 	  _Alloc_result __r = this->_M_allocate_at_least(
 	    _S_check_init_len(__n, _M_get_Tp_allocator()));
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  pointer __start = __r.__ptr;
 	  this->_M_impl._M_start = this->_M_impl._M_finish = __start;
 	  this->_M_impl._M_end_of_storage = __start + __r.__count;
 	  this->_M_impl._M_finish
 	      = std::__uninitialized_copy_a(_GLIBCXX_MOVE(__first), __last,
 					    __start, _M_get_Tp_allocator());
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	}
 
       // Called by the first initialize_dispatch above and by the
@@ -2184,17 +2204,16 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       // D4324/P2680: real (conveyor_assert_v), not never_proven -- same
       // reasoning as _M_deallocate's own identical pair just above:
-      // 'this' is never reassigned, and __uninitialized_default_n_a's
-      // own arguments (this->_M_impl._M_start, a field read, and
-      // _M_get_Tp_allocator(), a one-hop trivial accessor already
-      // exempt from the mandatory alias-invalidation sweep) never touch
-      // 'this' as a receiver either. Verifiable directly.
+      // 'this' is never reassigned, and __uninitialized_default_n_a is
+      // given the allocator, through which it could reach 'this', so the
+      // body re-trusts 'this' after it.
       post<std::contracts::conveyor_assert_v>(std::is_object_address (this))
 #endif
       {
 	this->_M_impl._M_finish =
 	  std::__uninitialized_default_n_a(this->_M_impl._M_start, __n,
 					   _M_get_Tp_allocator());
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
       }
 #endif
 
@@ -2443,6 +2462,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       void
       _M_move_assign(vector&& __x, true_type) noexcept
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	vector __tmp(get_allocator());
 	this->_M_impl._M_swap_data(__x._M_impl);
 	__tmp._M_impl._M_swap_data(__x._M_impl);

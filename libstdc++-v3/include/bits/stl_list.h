@@ -546,7 +546,13 @@ namespace __list
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (!empty())
-	  __i->_M_transfer(this->_M_next, this->_M_base());
+	  {
+	    // Each call may have ended *this (the lifetime rule): it hasn't.
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    _Base_ptr __next = this->_M_next;
+	    _Base_ptr __base = this->_M_base();
+	    __i->_M_transfer(__next, __base);
+	  }
       }
     };
 } // namespace __list
@@ -1349,6 +1355,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	this->clear();
 	this->_M_move_nodes(std::move(__x));
 
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__x);
 	if constexpr (_Node_alloc_traits::_S_propagate_on_move_assign())
 	  this->_M_get_Node_allocator()
 	      = std::move(__x._M_get_Node_allocator());
@@ -1458,7 +1466,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
       /// Get a copy of the memory allocation object.
       allocator_type
-      get_allocator() const _GLIBCXX_NOEXCEPT
+      get_allocator() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return allocator_type(_Base::_M_get_Node_allocator()); }
 
       // iterators
@@ -1477,7 +1485,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD
       [[not_invalidating]]
       iterator
-      begin() _GLIBCXX_NOEXCEPT
+      begin() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return iterator(this->_M_impl._M_node._M_next); }
 
       /**
@@ -1487,7 +1495,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_NODISCARD
       const_iterator
-      begin() const _GLIBCXX_NOEXCEPT
+      begin() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return const_iterator(this->_M_impl._M_node._M_next); }
 
       /**
@@ -1498,7 +1506,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       _GLIBCXX_NODISCARD
       [[not_invalidating]]
       iterator
-      end() _GLIBCXX_NOEXCEPT
+      end() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return iterator(this->_M_impl._M_node._M_base()); }
 
       /**
@@ -1508,7 +1516,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       _GLIBCXX_NODISCARD
       const_iterator
-      end() const _GLIBCXX_NOEXCEPT
+      end() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return const_iterator(this->_M_impl._M_node._M_base()); }
 
       /**
@@ -1559,7 +1567,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       [[__nodiscard__]]
       const_iterator
-      cbegin() const noexcept
+      cbegin() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { return const_iterator(this->_M_impl._M_node._M_next); }
 
       /**
@@ -1569,7 +1577,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       [[__nodiscard__]]
       const_iterator
-      cend() const noexcept
+      cend() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return const_iterator(this->_M_impl._M_node._M_base()); }
 
       /**
@@ -1750,6 +1758,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  this->_M_insert(begin(), std::forward<_Args>(__args)...);
 #if __cplusplus > 201402L
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return front();
 #endif
 	}
@@ -1852,6 +1861,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  this->_M_insert(end(), std::forward<_Args>(__args)...);
 #if __cplusplus > 201402L
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return back();
 #endif
 	}
@@ -2106,6 +2116,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	__x._M_set_size(this->_M_get_size());
 	this->_M_set_size(__xsize);
 
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__x);
 	_Node_alloc_traits::_S_on_swap(this->_M_get_Node_allocator(),
 				       __x._M_get_Node_allocator());
       }

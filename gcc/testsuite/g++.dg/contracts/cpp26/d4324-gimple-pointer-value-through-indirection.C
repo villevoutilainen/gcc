@@ -33,8 +33,9 @@ good (int *p, F *&d, F *pool[4], int k, Fp b)
 }
 
 struct P { int a; };
-int use1 (const P &) pre<std::contracts::conveyor_assert_v> (true);
-int use2 (const P &) pre<std::contracts::conveyor_assert_v> (true);
+// Conveyor, so giving one the object doesn't end it (the lifetime rule).
+int use1 (const P &) conveyor pre<std::contracts::conveyor_assert_v> (true);
+int use2 (const P &) conveyor pre<std::contracts::conveyor_assert_v> (true);
 typedef const P *It;
 
 // A call given only the pointer's value can't change the pointer.

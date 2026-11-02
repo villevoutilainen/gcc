@@ -1064,9 +1064,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #if __cpp_exceptions
 	try
 	  {
-	    _Tp(__make_move_if_noexcept_iterator(__c.begin()),
-		__make_move_if_noexcept_iterator(__c.end()),
-		__c.get_allocator()).swap(__c);
+	    _GLIBCXX_CONVEYOR_TRUST(__c);
+	    // Each argument may be evaluated after another was given __c.
+	    _Tp(__make_move_if_noexcept_iterator
+		  (std::__trust_object(__c).begin()),
+		__make_move_if_noexcept_iterator
+		  (std::__trust_object(__c).end()),
+		std::__trust_object(__c).get_allocator()).swap(__c);
 	    return true;
 	  }
 	catch(...)

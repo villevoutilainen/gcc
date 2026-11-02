@@ -291,6 +291,7 @@ namespace __detail
 	_GLIBCXX_CONVEYOR_TRUST(_M_paren_stack);
 	_StateT __tmp(_S_opcode_subexpr_end);
 	__tmp._M_subexpr = this->_M_paren_stack.back();
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	this->_M_paren_stack.pop_back();
 	return _M_insert_state(std::move(__tmp));
       }
@@ -332,12 +333,14 @@ namespace __detail
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	this->push_back(std::move(__s));
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (this->size() > _GLIBCXX_REGEX_STATE_LIMIT)
 	  __throw_regex_error(
 	    regex_constants::error_space,
 	    "Number of NFA states exceeds limit. Please use shorter regex "
 	    "string, or use smaller brace expression, or make "
 	    "_GLIBCXX_REGEX_STATE_LIMIT larger.");
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return this->size() - 1;
       }
 

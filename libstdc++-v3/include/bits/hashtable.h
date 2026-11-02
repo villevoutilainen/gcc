@@ -1290,6 +1290,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	__prev_n->_M_nxt = __n->_M_nxt;
 	__n->_M_nxt = nullptr;
 	--_M_element_count;
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return { __n, this->_M_node_allocator() };
       }
 

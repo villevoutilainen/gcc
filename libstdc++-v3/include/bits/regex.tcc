@@ -96,8 +96,10 @@ namespace __detail
 	  else
 	    {
 	      __pre.first = __s;
+	      _GLIBCXX_CONVEYOR_TRUST(__res);
 	      __pre.second = __res[0].first;
 	      __pre.matched = (__pre.first != __pre.second);
+	      _GLIBCXX_CONVEYOR_TRUST(__res);
 	      __suf.first = __res[0].second;
 	      __suf.second = __e;
 	      __suf.matched = (__suf.first != __suf.second);
@@ -590,9 +592,13 @@ namespace __detail
 	      const auto& __m = *__i;
 	      _GLIBCXX_CONVEYOR_TRUST(__m);
 	      if (!(__flags & regex_constants::format_no_copy))
-		__out = std::copy(__m.prefix().first, __m.prefix().second,
-				  __out);
+		{
+		  const auto& __pre = __m.prefix();
+		  __out = std::copy(__pre.first, __pre.second, __out);
+		}
+	      _GLIBCXX_CONVEYOR_TRUST(__m);
 	      __out = __m.format(__out, __fmt, __fmt + __len, __flags);
+	      _GLIBCXX_CONVEYOR_TRUST(__m);
 	      __last = __m.suffix();
 	      if (__flags & regex_constants::format_first_only)
 		break;
@@ -637,9 +643,13 @@ namespace __detail
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_match[0].matched)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  auto __start = _M_match[0].second;
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  auto __prefix_first = _M_match[0].second;
-	  if (_M_match[0].first == _M_match[0].second)
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  const auto& __m0 = _M_match[0];
+	  if (__m0.first == __m0.second)
 	    {
 	      if (__start == _M_end)
 		{
@@ -653,6 +663,7 @@ namespace __detail
 				   | regex_constants::match_not_null
 				   | regex_constants::match_continuous))
 		    {
+		      _GLIBCXX_CONVEYOR_TRUST_THIS;
 		      __glibcxx_assert_noconveyor(_M_match[0].matched);
 		      auto& __prefix = _M_match._M_prefix();
 		      _GLIBCXX_CONVEYOR_TRUST(__prefix);
@@ -669,6 +680,7 @@ namespace __detail
 	  _M_flags |= regex_constants::match_prev_avail;
 	  if (regex_search(__start, _M_end, _M_match, *_M_pregex, _M_flags))
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      __glibcxx_assert_noconveyor(_M_match[0].matched);
 	      auto& __prefix = _M_match._M_prefix();
 	      _GLIBCXX_CONVEYOR_TRUST(__prefix);
@@ -747,7 +759,9 @@ namespace __detail
 	  else if (_M_has_m1 && __prev_match.suffix().length() != 0)
 	    {
 	      _M_suffix.matched = true;
+	      _GLIBCXX_CONVEYOR_TRUST(__prev_match);
 	      _M_suffix.first = __prev_match.suffix().first;
+	      _GLIBCXX_CONVEYOR_TRUST(__prev_match);
 	      _M_suffix.second = __prev_match.suffix().second;
 	      _M_result = &_M_suffix;
 	    }

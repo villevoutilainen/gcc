@@ -60,8 +60,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 					  std::move(__pred));
 	if (__removed != __end)
 	  {
-	    __cont.erase(__niter_wrap(__cont.begin(), __removed),
-			 __cont.end());
+	    // Each call may have ended __cont, given a route into it (the
+	    // lifetime rule): it hasn't.
+	    _GLIBCXX_CONVEYOR_TRUST(__cont);
+	    auto __first = __niter_wrap(__cont.begin(), __removed);
+	    _GLIBCXX_CONVEYOR_TRUST(__cont);
+	    auto __last = __cont.end();
+	    _GLIBCXX_CONVEYOR_TRUST(__cont);
+	    __cont.erase(__first, __last);
+	    _GLIBCXX_CONVEYOR_TRUST(__ucont);
 	    return __osz - __ucont.size();
 	  }
 

@@ -1,7 +1,8 @@
 // D4324: a non-conveyor call handed a parameter, 'this' included, or a
-// parameter that may alias it, may end its object, so its self-trusted
-// is_object_address doesn't hold after the call, as in the AST engine;
-// a postcondition or contract_assert stating it makes it hold again.
+// parameter that may alias it, by const reference too, may end its
+// object, so its self-trusted is_object_address doesn't hold after the
+// call, as in the AST engine; a postcondition or contract_assert stating it
+// makes it hold again.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs -fcontract-analysis-engine=gimple" }
 
@@ -36,10 +37,11 @@ void by_alias (H& r, H& s) pre<sc::conveyor_assert_v> (std::is_object_address (&
   r.cm (); // { dg-error "cannot prove .is_object_address." }
 }
 
-void const_ref_keeps (H& r) pre<sc::conveyor_assert_v> (std::is_object_address (&r))
+// A const reference is a route to the object too.
+void const_ref_ends (H& r) pre<sc::conveyor_assert_v> (std::is_object_address (&r))
 {
   look (r);
-  r.cm ();
+  r.cm (); // { dg-error "cannot prove .is_object_address." }
 }
 
 void post_renews (H& r) pre<sc::conveyor_assert_v> (std::is_object_address (&r))

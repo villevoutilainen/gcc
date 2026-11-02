@@ -2447,14 +2447,24 @@ namespace views::__adaptor
 
 	  friend constexpr bool
 	  operator==(const _CI<_Const>& __y, const _Sentinel& __x)
-	  { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __y.count() == 0 || __y.base() == __x._M_end; }
+	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__x);
+	    _GLIBCXX_CONVEYOR_TRUST(__y);
+	    return __y.count() == 0
+	      || std::__trust_object(__y).base()
+		   == std::__trust_object(__x)._M_end;
+	  }
 
 	  template<bool _OtherConst = !_Const,
 		   typename _Base2 = __detail::__maybe_const_t<_OtherConst, _Vp>>
 	    requires sentinel_for<sentinel_t<_Base>, iterator_t<_Base2>>
 	  friend constexpr bool
 	  operator==(const _CI<_OtherConst>& __y, const _Sentinel& __x)
-	  { return __y.count() == 0 || __y.base() == __x._M_end; }
+	  {
+	    return __y.count() == 0
+	      || std::__trust_object(__y).base()
+		   == std::__trust_object(__x)._M_end;
+	  }
 
 	  friend _Sentinel<!_Const>;
 	};
@@ -2626,6 +2636,7 @@ namespace views::__adaptor
 				 || __detail::__is_iota_view<_Tp>))
 	    {
 	      __n = std::min<_Dp>(ranges::distance(__r), __n);
+	      _GLIBCXX_CONVEYOR_TRUST(__r);
 	      auto __begin = ranges::begin(__r);
 	      auto __end = __begin + __n;
 	      if constexpr (std::__detail::__is_span<_Tp>)
@@ -3124,13 +3135,19 @@ namespace views::__adaptor
 	    };
 
 	    _Outer_iter& __outer = _M_get_outer();
-	    for (; __outer != ranges::end(_M_parent->_M_base); ++__outer)
+	    _GLIBCXX_CONVEYOR_TRUST(__outer);
+	    for (; __outer != ranges::end(_M_parent->_M_base);)
 	      {
 		auto&& __inner = __update_inner(__outer);
 		_GLIBCXX_CONVEYOR_TRUST(__inner);
 		_M_inner = ranges::begin(__inner);
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 		if (_M_inner != ranges::end(__inner))
 		  return;
+		// ++ may have ended __outer (the lifetime rule): it hasn't.
+		_GLIBCXX_CONVEYOR_TRUST(__outer);
+		++__outer;
+		_GLIBCXX_CONVEYOR_TRUST(__outer);
 	      }
 
 	    if constexpr (_S_ref_is_glvalue)
@@ -3267,6 +3284,7 @@ namespace views::__adaptor
 	    _GLIBCXX_CONVEYOR_TRUST(__inner_range);
 	    if (++_M_get_inner() == ranges::end(__inner_range))
 	      {
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 		++_M_get_outer();
 		_M_satisfy();
 	      }
@@ -3466,9 +3484,7 @@ namespace views::__adaptor
 	requires forward_range<const _Vp>
 	  && is_reference_v<range_reference_t<const _Vp>>
 	  && input_range<range_reference_t<const _Vp>>
-      {
-	return _Iterator<true>{this, ranges::begin(_M_base)};
-      }
+      { return _Iterator<true>{this, ranges::begin(_M_base)}; }
 
       constexpr auto
       end()
@@ -3701,6 +3717,7 @@ namespace views::__adaptor
 		if (__current() != __end)
 		  {
 		    ++__current();
+		    _GLIBCXX_CONVEYOR_TRUST_THIS;
 		    if (__current() == __end)
 		      _M_trailing_empty = true;
 		  }
@@ -5765,6 +5782,7 @@ namespace views::__adaptor
       else
 	for (size_t __i = 0; __i < _Nm; ++__i)
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    _M_current[_Nm - 1 - __i] = __last;
 	    ranges::advance(__last, -1, __first);
 	  }
@@ -5875,7 +5893,12 @@ namespace views::__adaptor
 
     friend constexpr bool
     operator==(const _Iterator& __x, const _Iterator& __y)
-    { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __x._M_current.back() == __y._M_current.back(); }
+    {
+      _GLIBCXX_CONVEYOR_TRUST(__x);
+      _GLIBCXX_CONVEYOR_TRUST(__y);
+      return __x._M_current.back()
+	       == std::__trust_object(__y)._M_current.back();
+    }
 
     friend constexpr bool
     operator<(const _Iterator& __x, const _Iterator& __y)
@@ -7146,6 +7169,7 @@ namespace views::__adaptor
     {
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       ++_M_current;
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if constexpr (_S_last_elt_present)
 	++_M_last_elt;
       return *this;
@@ -7836,6 +7860,7 @@ namespace views::__adaptor
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       while (true)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (_M_inner_it.index() == 0)
 	    {
 	      if (std::get<0>(_M_inner_it) != ranges::end(_M_parent->_M_pattern))
@@ -7852,6 +7877,7 @@ namespace views::__adaptor
 	      if (std::get<1>(_M_inner_it) != ranges::end(__inner))
 		break;
 
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      if (++_M_get_outer() == ranges::end(_M_parent->_M_base))
 		{
 		  if constexpr (_S_ref_is_glvalue)
@@ -7912,6 +7938,7 @@ namespace views::__adaptor
 			         iter_reference_t<_PatternIter>>
     operator*() const
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_inner_it.index() == 0)
 	return *std::get<0>(_M_inner_it);
       else
@@ -7921,6 +7948,7 @@ namespace views::__adaptor
     constexpr _Iterator&
     operator++()
     {
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (_M_inner_it.index() == 0)
 	++std::get<0>(_M_inner_it);
       else
@@ -8696,11 +8724,12 @@ namespace views::__adaptor
       auto __its = [this]<size_t... _Is>(index_sequence<_Is...>) {
 	using _Ret = tuple<iterator_t<_First>, iterator_t<_Vs>...>;
 	bool __empty_tail = (ranges::empty(std::get<1 + _Is>(_M_bases)) || ...);
-	auto& __first = std::get<0>(_M_bases);
+	auto& __first = std::get<0>(std::__trust_object(_M_bases));
 	return _Ret{(__empty_tail
 		     ? ranges::begin(__first)
 		     : __detail::__cartesian_common_arg_end(__first)),
-		    ranges::begin(std::get<1 + _Is>(_M_bases))...};
+		    ranges::begin(std::get<1 + _Is>
+				    (std::__trust_object(_M_bases)))...};
       }(make_index_sequence<sizeof...(_Vs)>{});
 
       return _Iterator<false>{*this, std::move(__its)};
@@ -8713,11 +8742,13 @@ namespace views::__adaptor
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	using _Ret = tuple<iterator_t<const _First>, iterator_t<const _Vs>...>;
 	bool __empty_tail = (ranges::empty(std::get<1 + _Is>(_M_bases)) || ...);
-	auto& __first = std::get<0>(_M_bases);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	auto& __first = std::get<0>(std::__trust_object(_M_bases));
 	return _Ret{(__empty_tail
 		     ? ranges::begin(__first)
 		     : __detail::__cartesian_common_arg_end(__first)),
-		    ranges::begin(std::get<1 + _Is>(_M_bases))...};
+		    ranges::begin(std::get<1 + _Is>
+				    (std::__trust_object(_M_bases)))...};
       }(make_index_sequence<sizeof...(_Vs)>{});
 
       return _Iterator<true>{*this, std::move(__its)};
@@ -8983,6 +9014,7 @@ namespace views::__adaptor
       // Stepping the iterator may have changed what the analysis knows of
       // the parent; trust it again.
       _GLIBCXX_CONVEYOR_TRUST(*_M_parent);
+      _GLIBCXX_CONVEYOR_TRUST(__it);
       if constexpr (_Nm > 0)
 	if (__it == ranges::end(std::get<_Nm>(_M_parent->_M_bases)))
 	  {
@@ -9512,7 +9544,11 @@ namespace views::__adaptor
     requires sentinel_for<sentinel_t<_Base>, iterator_t<__maybe_const_t<_OtherConst, _Vp>>>
     friend constexpr bool
     operator==(const _Iterator<_OtherConst>& __x, const _Sentinel& __y)
-    { _GLIBCXX_CONVEYOR_TRUST(__x); _GLIBCXX_CONVEYOR_TRUST(__y); return __x._M_current == __y._M_end; }
+    {
+      _GLIBCXX_CONVEYOR_TRUST(__x);
+      _GLIBCXX_CONVEYOR_TRUST(__y);
+      return __x._M_current == __y._M_end;
+    }
 
     template<bool _OtherConst>
     requires sized_sentinel_for<sentinel_t<_Base>, iterator_t<__maybe_const_t<_OtherConst, _Vp>>>
@@ -10110,8 +10146,13 @@ namespace ranges
 	_GLIBCXX_CONVEYOR_TRUST(*_M_parent);
 	if constexpr (_Nm < (sizeof...(_Vs) - 1))
 	  {
-	    if (std::get<_Nm>(_M_it) == ranges::end(std::get<_Nm>(_M_parent->_M_views)))
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    auto& __cur = std::get<_Nm>(_M_it);
+	    _GLIBCXX_CONVEYOR_TRUST(*_M_parent);
+	    if (__cur == ranges::end(std::get<_Nm>(_M_parent->_M_views)))
 	      {
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
+		_GLIBCXX_CONVEYOR_TRUST(*_M_parent);
 		_M_it.template emplace<_Nm + 1>(ranges::begin
 						(std::get<_Nm + 1>(_M_parent->_M_views)));
 		_M_satisfy<_Nm + 1>();
@@ -10204,7 +10245,11 @@ namespace ranges
     template<typename _Fp>
       constexpr auto
       _M_invoke_with_runtime_index(_Fp&& __f)
-      { return _S_invoke_with_runtime_index(std::forward<_Fp>(__f), _M_it.index()); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return _S_invoke_with_runtime_index(std::forward<_Fp>(__f),
+					    _M_it.index());
+      }
 
     template<typename... _Args>
       explicit constexpr

@@ -540,7 +540,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return std::__invoke(_M_f,
-	      _Mu<_Bound_args>()(std::get<_Indexes>(_M_bound_args), __args)...
+	      _Mu<_Bound_args>()
+		(std::get<_Indexes>(std::__trust_object(_M_bound_args)),
+		 __args)...
 	      );
 	}
 
@@ -551,7 +553,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	__call_c(tuple<_Args...>&& __args, _Index_tuple<_Indexes...>) const
 	{
 	  return std::__invoke(_M_f,
-	      _Mu<_Bound_args>()(std::get<_Indexes>(_M_bound_args), __args)...
+	      _Mu<_Bound_args>()
+		(std::get<_Indexes>(std::__trust_object(_M_bound_args)),
+		 __args)...
 	      );
 	}
 
@@ -1289,12 +1293,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  _ForwardIterator2 __first_ret =
-	    std::search(__first, __last, std::get<0>(_M_m), std::get<1>(_M_m),
-			std::get<2>(_M_m));
+	    std::search(__first, __last, std::get<0>(std::__trust_object(_M_m)),
+			std::get<1>(std::__trust_object(_M_m)),
+			std::get<2>(std::__trust_object(_M_m)));
 	  auto __ret = std::make_pair(__first_ret, __first_ret);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (__ret.first != __last)
-	    std::advance(__ret.second, std::distance(std::get<0>(_M_m),
-						     std::get<1>(_M_m)));
+	    std::advance(__ret.second,
+			 std::distance(std::get<0>(std::__trust_object(_M_m)),
+				       std::get<1>(std::__trust_object(_M_m))));
 	  return __ret;
 	}
 
@@ -1324,6 +1331,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	auto __iter = _M_bad_char.find(__key);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (__iter == _M_bad_char.end())
 	  return __not_found;
 	return __iter->second;
@@ -1513,12 +1521,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  if (_M_is_prefix(__pat, __patlen, __p + 1))
 	    __last_prefix = __p + 1;
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  _M_good_suffix[__p] = __last_prefix + (__patlen - 1 - __p);
 	}
       for (__diff_type __p = 0; __p < __patlen - 1; ++__p)
 	{
 	  auto __slen = _M_suffix_length(__pat, __patlen, __p);
 	  auto __pos = __patlen - 1 - __slen;
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (!__pred(__pat[__p - __slen], __pat[__pos]))
 	    _M_good_suffix[__pos] = __patlen - 1 - __p + __slen;
 	}

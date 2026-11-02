@@ -884,9 +884,11 @@ namespace __format
 #endif
 	if (__n == 0)
 	  return;
+	_GLIBCXX_CONVEYOR_TRUST(__padding);
 	while (__n > __padding.size())
 	  {
 	    __o = __format::__write(std::move(__o), __padding);
+	    _GLIBCXX_CONVEYOR_TRUST(__padding);
 	    __n -= __padding.size();
 	  }
 	if (__n != 0)
@@ -2540,8 +2542,10 @@ namespace __format
 	    (std::is_object_address (__builtin_addressof (__grp)));
 #endif
 	  // Copy any +/- sign and "0x" prefix
+	  _GLIBCXX_CONVEYOR_TRUST(__str);
 	  ranges::copy_n(__str.data(), __offset, __p);
 	  // Apply grouping to the digits before the radix or exponent.
+	  _GLIBCXX_CONVEYOR_TRUST(__str);
 	  auto __end = std::__add_grouping(__p + __offset, __np.thousands_sep(),
 					   __grp.data(), __grp.size(),
 					   __str.data() + __offset,
@@ -2554,6 +2558,7 @@ namespace __format
 		  ++__end;
 		  ++__e;
 		}
+	      _GLIBCXX_CONVEYOR_TRUST(__str);
 	      const size_t __rlen = __str.size() - __e;
 	      // Append fractional digits and/or exponent:
 	      char_traits<_CharT>::copy(__end, __str.data() + __e, __rlen);
@@ -3440,7 +3445,7 @@ namespace __format
       [[__gnu__::__always_inline__]]
       constexpr void
       _M_rewind() noexcept
-      { _M_next = _M_span.begin(); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; _M_next = _M_span.begin(); }
 
       // Replace the current output range.
       _GLIBCXX_CONSTEXPR_FORMAT void
@@ -3455,6 +3460,7 @@ namespace __format
       _M_write(_CharT __c)
       {
 	*_M_next++ = __c;
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (_M_next - _M_span.begin() == std::ssize(_M_span)) [[unlikely]]
 	  _M_overflow();
       }
@@ -3508,6 +3514,7 @@ namespace __format
 	if (__n <= _M_unused().size())
 	  return { this };
 
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (__n <= _M_span.size()) // Cannot meet the request.
 	  {
 	    _M_overflow(); // Make more space available.
@@ -3753,6 +3760,7 @@ namespace __format
 	      _Seq_sink::_M_overflow();
 
 	    // Expand _M_seq to make __n new characters available:
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    const auto __sz = _M_seq.size();
 	    if constexpr (is_same_v<string, _Seq> || is_same_v<wstring, _Seq>)
 	      _M_seq.__resize_and_overwrite(__sz + __n,
@@ -3848,6 +3856,7 @@ namespace __format
 	  (std::is_object_address (this));
 #endif
 	auto __s = this->_M_used();
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (_M_seq.size())
 	  {
 	    if (__s.size() != 0)
@@ -6309,7 +6318,9 @@ namespace __format
 		  basic_format_context<_Out, _CharT>& __fc) const
 	{
 	  _GLIBCXX_CONVEYOR_TRUST(__tuple);
-	  return _M_format_elems(std::get<_Ids>(__tuple)..., __fc);
+	  return _M_format_elems(std::get<_Ids>
+				   (std::__trust_object(__tuple))...,
+				 __fc);
 	}
 
       template<typename _Out>
@@ -6633,7 +6644,9 @@ namespace __format
 	{
 	  auto __out = __format::__write(__fc.out(), _M_open);
 
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  auto __first = ranges::begin(__rg);
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  auto const __last = ranges::end(__rg);
 	  if (__first == __last)
 	    return __format::__write(__out, _M_close);

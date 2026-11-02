@@ -75,6 +75,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	__throw_length_error(__N("vector::reserve"));
       if (this->capacity() < __n)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  const size_type __old_size = size();
 	  _Alloc_result __tmp;
 #if __cplusplus >= 201103L
@@ -123,6 +124,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	else
 	  _M_realloc_append(std::forward<_Args>(__args)...);
 # if __cplusplus > 201402L
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return back();
 # endif
       }
@@ -237,16 +239,24 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 				   __x._M_get_Tp_allocator());
 	    }
 #endif
+	  _GLIBCXX_CONVEYOR_TRUST(__x);
 	  const size_type __xlen = __x.size();
-	  if (__xlen > capacity())
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  const size_type __cap = capacity();
+	  // capacity () may have ended *this, and __x, which may be *this.
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__x);
+	  if (__xlen > __cap)
 	    _M_replace_with(__xlen, __x.begin(), __x.end());
 	  else if (size() >= __xlen)
 	    std::_Destroy(std::copy(__x.begin(), __x.end(), begin()),
 	      end(), _M_get_Tp_allocator());
 	  else
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      std::copy(__x._M_impl._M_start, __x._M_impl._M_start + size(),
 			this->_M_impl._M_start);
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      std::__uninitialized_copy_a(__x._M_impl._M_start + size(),
 					  __x._M_impl._M_finish,
 					  this->_M_impl._M_finish,
@@ -275,6 +285,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	}
       else if (__n > __sz)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  std::fill(begin(), end(), __val);
 	  const size_type __add = __n - __sz;
 	  _GLIBCXX_ASAN_ANNOTATE_GROW(__add);
@@ -394,6 +405,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	      // could alias one of the elements of the container and so we
 	      // need to use it before _M_insert_aux moves elements around.
 	      _Temporary_value __tmp(this, std::forward<_Args>(__args)...);
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      _M_insert_aux(begin() + __n, std::move(__tmp._M_val()));
 	    }
 	else
@@ -455,6 +467,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	__builtin_unreachable();
       pointer __old_start = this->_M_impl._M_start;
       pointer __old_finish = this->_M_impl._M_finish;
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const size_type __elems_before = __position - begin();
       _Alloc_result __r = this->_M_allocate_at_least(__len1);
       const size_type __len = __r.__count;
@@ -565,6 +578,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	__builtin_unreachable();
       const pointer __old_start = this->_M_impl._M_start;
       const pointer __old_finish = this->_M_impl._M_finish;
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const size_type __elems = size();
       const _Alloc_result __r = this->_M_allocate_at_least(__len);
       const size_type __rlen = __r.__count;
@@ -667,6 +681,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	      _Temporary_value __tmp(this, __x);
 	      value_type& __x_copy = __tmp._M_val();
 #endif
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      const size_type __elems_after = end() - __position;
 	      pointer __old_finish(this->_M_impl._M_finish);
 	      if (__elems_after > __n)
@@ -902,7 +917,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     _M_shrink_to_fit()
     {
       _GLIBCXX_CONVEYOR_TRUST_THIS;
-      if (capacity() == size())
+      const size_type __cap = capacity();
+      // capacity () may have ended *this (the lifetime rule): it hasn't.
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      if (__cap == size())
 	return false;
       _GLIBCXX_ASAN_ANNOTATE_REINIT;
       return std::__shrink_to_fit_aux<vector>::_S_do_it(*this);
@@ -1043,6 +1061,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	  {
 	    const auto __ins_idx = size();
 	    append_range(std::forward<_Rg>(__rg));
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    return begin() + __ins_idx;
 	  }
 
@@ -1153,6 +1172,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		// _Guard destructor destroys [old_start,old_finish).
 		// _Guard_alloc destructor frees [old_start,old_start+got).
 	      }
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    return begin() + __ins_idx;
 	  }
 	else

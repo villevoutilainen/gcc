@@ -9330,7 +9330,12 @@ public:
     const bool *v = m_map.get (capture_key (decl));
     return v && *v;
   }
-  void set (tree decl, bool provable) { m_map.put (capture_key (decl), provable); }
+  void set (tree decl, bool provable)
+  {
+    m_map.put (capture_key (decl), provable);
+    if (provable && m_ended_member_map.elements ())
+      member_restore (capture_key (decl));
+  }
   void invalidate (tree decl) { m_map.put (capture_key (decl), false); }
   /* Whether DECL has a fact at all, provable or not.  */
   bool known_p (tree decl) { return m_map.get (capture_key (decl)) != NULL; }
@@ -9815,9 +9820,10 @@ public:
     n += m_alias_target.elements ();
     n += m_field_alias_target.elements ();
     n += m_array_alias_target.elements ();
-    /* Being borrowed is what restricts.  */
+    /* Being borrowed is what restricts, as is a member's having ended.  */
     for (auto it : m_borrowed_map)
       n -= it.second;
+    n -= m_ended_member_map.elements ();
     return n;
   }
   void invalidate_all_object_state ()
@@ -9915,6 +9921,25 @@ public:
      taken: object_written_through_memory for each such object any fact
      is held about.  (What a parameter's pointer or reference may alias
      besides is a separate question.)  */
+  /* The is_object_address facts of this function's own pointer
+     variables whose address has been taken: a call that may have been
+     given their address earlier ('keep (&p)') may rewrite them.  */
+  void escaped_local_pointers_invalidate ()
+  {
+    auto_vec<tree, 8> ptrs;
+    for (auto it : m_map)
+      {
+	tree d = it.first;
+	if (DECL_P (d) && TREE_ADDRESSABLE (d)
+	    && TREE_CODE (TREE_TYPE (d)) == POINTER_TYPE
+	    && DECL_CONTEXT (d) == current_function_decl
+	    && ((VAR_P (d) && !TREE_STATIC (d) && !DECL_EXTERNAL (d))
+		|| TREE_CODE (d) == PARM_DECL))
+	  ptrs.safe_push (d);
+      }
+    for (tree d : ptrs)
+      object_written_through_memory (d);
+  }
   void addressable_locals_written_through_memory ()
   {
     hash_set<tree> objects;
@@ -11188,6 +11213,7 @@ public:
     r.m_array_object_key = m_array_object_key;
     r.m_capture_proxy_key = m_capture_proxy_key;
     r.m_borrowed_map = m_borrowed_map;
+    r.m_ended_member_map = m_ended_member_map;
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -11225,6 +11251,7 @@ public:
     m_array_object_key = other.m_array_object_key;
     m_capture_proxy_key = other.m_capture_proxy_key;
     m_borrowed_map = other.m_borrowed_map;
+    m_ended_member_map = other.m_ended_member_map;
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -11437,7 +11464,55 @@ private:
      other case (fresh locals, direct aliases, which resolve through
      m_alias_target instead and never need an entry here at all).  */
   oa_cow_map<tree, bool> m_borrowed_map;
+  /* The members a call may have ended while the object they lie in it
+     can't have (oa_call_arg_further_routes): keyed on a member's field
+     key, true; or on an object any one of whose members it may have,
+     false.  So '&o.in' isn't an object just because O is.  */
+  oa_cow_map<tree, bool> m_ended_member_map;
+  /* What is known of KEY and its members holds again: a fact on it was
+     established (a trust).  */
+  void member_restore (tree key, int depth = 0)
+  {
+    m_ended_member_map.remove (key);
+    if (depth > 16 || !m_field_object_key)
+      return;
+    auto_vec<tree, 8> members;
+    for (auto it : *m_field_object_key)
+      if (it.first.first == key && m_ended_member_map.get (it.second))
+	members.safe_push (it.second);
+    for (tree k : members)
+      member_restore (k, depth + 1);
+  }
 public:
+  void member_trusted (tree key)
+  {
+    if (m_ended_member_map.elements ())
+      member_restore (key);
+  }
+  /* A call may have ended the member KEY is the field key of (WHOLE),
+     or any one of the members of the object KEY is the identity of.  */
+  void member_end (tree key, bool whole)
+  {
+    const bool *v = m_ended_member_map.get (key);
+    if (!v || (whole && !*v))
+      m_ended_member_map.put (key, whole);
+  }
+  /* Whether member FIELD of the object BASE is the identity of may have
+     ended though the object hasn't, and no fact on it has been
+     established since.  */
+  bool member_ended_p (tree base, tree field)
+  {
+    if (!m_ended_member_map.elements ())
+      return false;
+    tree *key = m_field_object_key ? m_field_object_key->get ({base, field})
+				   : NULL;
+    if (key && provable_p (*key))
+      return false;
+    if (m_ended_member_map.get (base))
+      return true;
+    const bool *v = key ? m_ended_member_map.get (*key) : NULL;
+    return v && *v;
+  }
   bool borrowed_p (tree decl)
   {
     const bool *v = m_borrowed_map.get (decl);
@@ -11457,6 +11532,10 @@ public:
      union only ever combines two branches' *current* states at a join.  */
   void borrowed_merge_with (oa_env &other)
   {
+    /* A member ended on either branch, likewise.  */
+    if (!m_ended_member_map.same_p (other.m_ended_member_map))
+      for (auto it : other.m_ended_member_map)
+	member_end (it.first, it.second);
     if (m_borrowed_map.same_p (other.m_borrowed_map))
       return;
     for (auto it : other.m_borrowed_map)
@@ -12975,6 +13054,21 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
       if (TREE_CODE (op) == COMPONENT_REF
 	  && TREE_CODE (TREE_OPERAND (op, 1)) == FIELD_DECL)
 	{
+	  /* Unless a call may have ended the member while the object
+	     stays (oa_env::member_ended_p).  */
+	  {
+	    tree base;
+	    if (oa_member_object_identity (oa_field_base_object
+					     (TREE_OPERAND (op, 0)),
+					   env, &base)
+		&& env.member_ended_p (env.alias_find (base),
+				       TREE_OPERAND (op, 1)))
+	      {
+		if (reason_out)
+		  *reason_out = OA_UNPROVABLE_NO_FACT;
+		return false;
+	      }
+	  }
 	  tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
 	  bool via_pointer = TREE_CODE (obj) == INDIRECT_REF;
 	  tree obj_expr = via_pointer
@@ -13265,6 +13359,12 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
 	  && TREE_CODE (TREE_TYPE (field)) != REFERENCE_TYPE
 	  && !(field_key && env.provable_p (field_key)))
 	{
+	  if (field_key && env.member_ended_p (identity, field))
+	    {
+	      if (reason_out)
+		*reason_out = OA_UNPROVABLE_NO_FACT;
+	      return false;
+	    }
 	  /* Same structural recursion the ADDR_EXPR/COMPONENT_REF case
 	     above performs for an explicit '&obj.field' -- computed fresh
 	     from EXPR's own original base operand (not PTR_BASE, which
@@ -24189,6 +24289,14 @@ oa_could_alias_as_parameters (tree a, tree b)
 {
   if (a == b || TREE_CODE (a) != PARM_DECL || TREE_CODE (b) != PARM_DECL)
     return false;
+  /* A constructor's 'this' is the object it begins the lifetime of: no
+     parameter refers to it (using it as the source, as in 'T t (t);',
+     is undefined).  */
+  for (tree p : { a, b })
+    if (is_this_parameter (p) && DECL_CONTEXT (p)
+	&& TREE_CODE (DECL_CONTEXT (p)) == FUNCTION_DECL
+	&& DECL_CONSTRUCTOR_P (DECL_CONTEXT (p)))
+      return false;
   tree ta = TREE_TYPE (a), tb = TREE_TYPE (b);
   if (!((POINTER_TYPE_P (ta) || TREE_CODE (ta) == REFERENCE_TYPE)
 	&& (POINTER_TYPE_P (tb) || TREE_CODE (tb) == REFERENCE_TYPE)))
@@ -24322,9 +24430,162 @@ oa_invalidate_parameter_alias_group (tree identity, oa_env &env,
    the predicate fact just above.  Uses oa_invalidation_identity_decl,
    not oa_object_identity_decl -- see that function's own comment.  */
 
+/* Whether a callee given a route to COMP -- a member or element lvalue,
+   a COMPONENT_REF or ARRAY_REF -- may legally reach the object COMP lies
+   in, and so end that too: an element reaches its whole array (pointer
+   arithmetic), a base class subobject its derived object (a static_cast
+   down), and a member of a union or of a standard-layout class its
+   object (pointer-interconvertibility, offsetof).  A member of any other
+   class reaches only itself.  */
+
+bool
+contract_member_reaches_enclosing_p (tree comp)
+{
+  switch (TREE_CODE (comp))
+    {
+    case ARRAY_REF:
+    case ARRAY_RANGE_REF:
+    case REALPART_EXPR:
+    case IMAGPART_EXPR:
+    case VIEW_CONVERT_EXPR:
+      return true;
+    case COMPONENT_REF:
+      break;
+    default:
+      return false;
+    }
+  tree field = TREE_OPERAND (comp, 1);
+  if (TREE_CODE (field) == FIELD_DECL && DECL_FIELD_IS_BASE (field))
+    return true;
+  tree type = TREE_TYPE (TREE_OPERAND (comp, 0));
+  return (TREE_CODE (type) == UNION_TYPE
+	  || !CLASS_TYPE_P (type)
+	  || std_layout_type_p (type));
+}
+
+/* The function a call through FN -- its CALL_EXPR_FN, or gimple_call_fn
+   -- names, for whether it can end a lifetime: the FUNCTION_DECL called,
+   or for a virtual call (an OBJ_TYPE_REF) the virtual function of the
+   object's static class at the call's vtable slot ('B::vf' for 'b.vf
+   (p)'); and for a caller-side contract wrapper, the function it wraps.
+   NULL_TREE if unknown (a call through a pointer).  */
+
+tree
+contract_call_named_fn (tree fn)
+{
+  if (!fn)
+    return NULL_TREE;
+  STRIP_NOPS (fn);
+  tree decl = NULL_TREE;
+  if (TREE_CODE (fn) == ADDR_EXPR
+      && TREE_CODE (TREE_OPERAND (fn, 0)) == FUNCTION_DECL)
+    decl = TREE_OPERAND (fn, 0);
+  else if (TREE_CODE (fn) == FUNCTION_DECL)
+    decl = fn;
+  else if (TREE_CODE (fn) == OBJ_TYPE_REF)
+    {
+      tree cls = obj_type_ref_class (fn);
+      tree token = OBJ_TYPE_REF_TOKEN (fn);
+      if (cls && CLASS_TYPE_P (cls) && TYPE_BINFO (cls)
+	  && TREE_CODE (token) == INTEGER_CST)
+	for (tree v = BINFO_VIRTUALS (TYPE_BINFO (cls)); v; v = TREE_CHAIN (v))
+	  {
+	    tree vfn = BV_FN (v);
+	    if (vfn && TREE_CODE (vfn) == FUNCTION_DECL && DECL_VINDEX (vfn)
+		&& TREE_CODE (DECL_VINDEX (vfn)) == INTEGER_CST
+		&& tree_int_cst_equal (DECL_VINDEX (vfn), token))
+	      {
+		decl = vfn;
+		break;
+	      }
+	  }
+    }
+  if (decl)
+    if (tree orig = get_orig_func_for_wrapper (decl))
+      decl = orig;
+  return decl;
+}
+
+/* The function a virtual call CALL names (contract_call_named_fn).  */
+
+static tree
+oa_virtual_call_named_fn (tree call)
+{
+  if (TREE_CODE (call) != CALL_EXPR)
+    return NULL_TREE;
+  tree fn = CALL_EXPR_FN (call);
+  /* An internal function's call has none.  */
+  if (!fn)
+    return NULL_TREE;
+  STRIP_NOPS (fn);
+  if (TREE_CODE (fn) != OBJ_TYPE_REF)
+    return NULL_TREE;
+  return contract_call_named_fn (fn);
+}
+
+/* Push onto ROUTES the further routes a callee given ARG, a pointer or
+   reference argument, has to objects: for a member's or element's
+   address, the objects enclosing it that it may reach
+   (contract_member_reaches_enclosing_p), innermost first; for a
+   pointer or reference a call returned ('touch (s.get_a ())'), the
+   objects it may lie in -- each pointer or reference that call was
+   given, itself when the result may be any part of it (its class is a
+   union or standard-layout, or the result is of a class it derives from
+   or that derives from it, or it isn't of class type), else only one of
+   its members, pushed onto MEMBER_ROUTES.  *STOP_OUT is set to the
+   member whose address ARG is, or the member it lies in, at which the
+   climb outward stops: that member may end while its object doesn't.  */
+
 static void
-oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env,
-					    bool keep_object_addresses = false)
+oa_call_arg_further_routes (tree arg, vec<tree> &routes,
+			    vec<tree> &member_routes, tree *stop_out,
+			    bool climb = true)
+{
+  *stop_out = NULL_TREE;
+  tree a = STRIP_ANY_LOCATION_WRAPPER (arg);
+  while (CONVERT_EXPR_P (a) || TREE_CODE (a) == NON_LVALUE_EXPR
+	 || TREE_CODE (a) == VIEW_CONVERT_EXPR)
+    a = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
+  if (TREE_CODE (a) == ADDR_EXPR)
+    {
+      tree l = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
+      while (climb && contract_member_reaches_enclosing_p (l))
+	{
+	  l = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (l, 0));
+	  if (TREE_CODE (l) == INDIRECT_REF)
+	    {
+	      routes.safe_push (TREE_OPERAND (l, 0));
+	      return;
+	    }
+	  routes.safe_push (build1 (ADDR_EXPR, build_pointer_type
+				    (TREE_TYPE (l)), l));
+	}
+      if (TREE_CODE (l) == COMPONENT_REF)
+	*stop_out = l;
+      return;
+    }
+  if (TREE_CODE (a) != CALL_EXPR)
+    return;
+  tree rtype = TREE_TYPE (a);
+  if (!INDIRECT_TYPE_P (rtype))
+    return;
+  tree referent = TYPE_MAIN_VARIANT (TREE_TYPE (rtype));
+  for (int i = 0; i < call_expr_nargs (a); ++i)
+    {
+      tree q = CALL_EXPR_ARG (a, i);
+      if (!INDIRECT_TYPE_P (TREE_TYPE (q)))
+	continue;
+      tree c = TYPE_MAIN_VARIANT (TREE_TYPE (TREE_TYPE (q)));
+      bool whole = (!CLASS_TYPE_P (c) || !CLASS_TYPE_P (referent)
+		    || TREE_CODE (c) == UNION_TYPE || std_layout_type_p (c)
+		    || DERIVED_FROM_P (c, referent)
+		    || DERIVED_FROM_P (referent, c));
+      (whole ? routes : member_routes).safe_push (q);
+    }
+}
+
+static void
+oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 {
   if (oa_call_is_conversion_operator_call (call))
     return;
@@ -24356,9 +24617,29 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env,
      even though a conveyor accessor call obviously can't invalidate
      the very reference it was called through.  */
   tree callee = cp_get_callee_fndecl_nofold (call);
-  bool callee_is_conveyor = callee != NULL_TREE
-    && TREE_CODE (callee) == FUNCTION_DECL
-    && DECL_DECLARED_CONVEYOR_P (callee);
+  /* A virtual call names its function too ('b.vf (p)' calls B::vf), and
+     every override of a conveyor virtual function is conveyor (the
+     override rule, check_final_overrider), so whichever runs can't end
+     a lifetime either.  */
+  tree named = callee ? callee : oa_virtual_call_named_fn (call);
+  /* A caller-side contract wrapper ('b.vf' through 'B::vf.contract_
+     wrapper', for a virtual function's contracts) checks them and calls
+     the function it wraps: it is conveyor exactly when that is.  */
+  if (named && TREE_CODE (named) == FUNCTION_DECL)
+    if (tree orig = get_orig_func_for_wrapper (named))
+      named = orig;
+  /* A conveyor(auto) callee is conveyor once deduced: deduce it now, as
+     the GIMPLE engine does (cg_call_ends_lifetimes_p), or it would count
+     as one that may end a lifetime.  Not where instantiating is
+     speculative (oa_maybe_instantiate_contracts).  */
+  if (named && TREE_CODE (named) == FUNCTION_DECL
+      && DECL_CONVEYOR_AUTO_P (named) && !DECL_CONVEYOR_AUTO_RESOLVED_P (named)
+      && !cp_unevaluated_operand && !processing_contract_condition
+      && !processing_template_decl)
+    maybe_instantiate_conveyor (named);
+  bool callee_is_conveyor = named != NULL_TREE
+    && TREE_CODE (named) == FUNCTION_DECL
+    && DECL_DECLARED_CONVEYOR_P (named);
   /* D4324/P2680: a second, narrower exemption alongside CALLEE_IS_CONVEYOR
      above -- an argument passed via a CONST reference can't be deleted or
      reseated through THAT parameter by a well-formed callee (the same
@@ -24388,63 +24669,169 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env,
   for (int i = oa_call_first_real_arg (call); i < nargs;
        ++i, callee_parm = callee_parm ? DECL_CHAIN (callee_parm) : NULL_TREE)
     {
-      tree call_arg = call_is_aggr_init
+      tree arg0 = call_is_aggr_init
 	? AGGR_INIT_EXPR_ARG (call, i) : CALL_EXPR_ARG (call, i);
-      tree identity;
-      if (oa_invalidation_identity_decl (call_arg, &identity)
-	  || oa_field_slot_identity (call_arg, env, &identity)
-	  || oa_array_slot_identity (call_arg, env, &identity)
-	  || oa_field_object_identity (call_arg, env, &identity))
+      /* ARG0, and when the callee may end a lifetime the further routes
+	 it gives to objects (oa_call_arg_further_routes): a route to a
+	 member reaches the object it lies in only where the language
+	 lets the callee get there.  */
+      auto_vec<tree, 4> routes, member_routes;
+      routes.safe_push (arg0);
+      for (unsigned r = 0; r < routes.length () && r < 32; ++r)
 	{
-	  identity = env.alias_find (identity);
-	  env.predicate_fact_invalidate (identity);
-	  env.contract_field_range_invalidate_all (identity);
-	  env.contract_float_field_range_invalidate_all (identity);
-	  env.contract_call_range_invalidate_all (identity);
-	  /* D4324/P2680 item 8: see oa_invalidate_parameter_alias_group's
-	     own identical addition just above.  */
-	  env.contract_field_nz_invalidate_all (identity);
-	  env.field_alias_invalidate_all (identity);
-	  env.array_alias_invalidate_all (identity);
-	  env.field_object_predicate_invalidate_all (identity);
-	  bool arg_is_const_ref = callee_parm != NULL_TREE
-	    && TREE_CODE (TREE_TYPE (callee_parm)) == REFERENCE_TYPE
-	    && TYPE_READONLY (TREE_TYPE (TREE_TYPE (callee_parm)));
-	  /* D4324: see oa_invalidate_parameter_alias_group's own identical
-	     addition just above -- m_map/m_range_map need the same
-	     per-argument invalidation discipline every other fact map here
-	     already gets. Exempted for a conveyor callee or a const
-	     reference parameter -- see this function's own comments
-	     above.  */
-	  /* An accessor's result on an object the callee can't change
-	     (a const reference, or the 'this' of a const member function)
-	     stays put.  */
-	  bool arg_is_const_this
-	    = (callee_parm != NULL_TREE && is_this_parameter (callee_parm)
-	       && POINTER_TYPE_P (TREE_TYPE (callee_parm))
-	       && TYPE_READONLY (TREE_TYPE (TREE_TYPE (callee_parm))));
-	  if (!arg_is_const_ref && !arg_is_const_this)
-	    env.call_relational_invalidate_receiver (identity);
-	  bool end_object_addresses = (!callee_is_conveyor && !arg_is_const_ref
-				       && !keep_object_addresses);
-	  /* A conveyor callee, or KEEP_OBJECT_ADDRESSES, keeps the
-	     argument's own: any callee can store a different pointer in
-	     its fields, though, so what was known of those ends.  */
-	  bool end_field_object_addresses = !arg_is_const_ref;
-	  if (end_object_addresses)
+	  tree call_arg = routes[r];
+	  /* A constructor or destructor run on a member or base ('this->
+	     B::B ()', '~exception ()' in a destructor) constructs or
+	     destroys that subobject only: its object isn't reached.  And a
+	     constructor begins a lifetime rather than ending one: whatever
+	     it is run on is an object after it as before.  */
+	  bool cdtor_receiver = (r == 0 && i == 0 && !call_is_aggr_init
+				 && named && TREE_CODE (named) == FUNCTION_DECL
+				 && (DECL_CONSTRUCTOR_P (named)
+				     || DECL_DESTRUCTOR_P (named)));
+	  if ((r > 0 || !callee_is_conveyor)
+	      && !(cdtor_receiver && DECL_CONSTRUCTOR_P (named)))
 	    {
-	      env.invalidate (identity);
-	      env.range_invalidate (identity);
+	      tree stop;
+	      oa_call_arg_further_routes (call_arg, routes, member_routes,
+					  &stop, !cdtor_receiver);
+	      tree key;
+	      if (stop
+		  && oa_field_object_identity (build1 (ADDR_EXPR,
+						       build_pointer_type
+							 (TREE_TYPE (stop)),
+						       stop), env, &key))
+		env.member_end (key, true);
 	    }
-	  if (end_field_object_addresses)
-	    env.field_object_address_invalidate_all (identity);
-	  oa_invalidate_parameter_alias_group (identity, env,
-						end_object_addresses,
-						end_field_object_addresses);
+	  tree identity;
+	  if (oa_invalidation_identity_decl (call_arg, &identity)
+	      || oa_field_slot_identity (call_arg, env, &identity)
+	      || oa_array_slot_identity (call_arg, env, &identity)
+	      || oa_field_object_identity (call_arg, env, &identity))
+	    {
+	      identity = env.alias_find (identity);
+	      env.predicate_fact_invalidate (identity);
+	      env.contract_field_range_invalidate_all (identity);
+	      env.contract_float_field_range_invalidate_all (identity);
+	      env.contract_call_range_invalidate_all (identity);
+	      /* D4324/P2680 item 8: see oa_invalidate_parameter_alias_group's
+		 own identical addition just above.  */
+	      env.contract_field_nz_invalidate_all (identity);
+	      env.field_alias_invalidate_all (identity);
+	      env.array_alias_invalidate_all (identity);
+	      env.field_object_predicate_invalidate_all (identity);
+	      bool arg_is_const_ref = callee_parm != NULL_TREE
+		&& TREE_CODE (TREE_TYPE (callee_parm)) == REFERENCE_TYPE
+		&& TYPE_READONLY (TREE_TYPE (TREE_TYPE (callee_parm)));
+	      /* D4324: see oa_invalidate_parameter_alias_group's own identical
+		 addition just above -- m_map/m_range_map need the same
+		 per-argument invalidation discipline every other fact map here
+		 already gets. Exempted for a conveyor callee or a const
+		 reference parameter -- see this function's own comments
+		 above.  */
+	      /* An accessor's result on an object the callee can't change
+		 (a const reference, or the 'this' of a const member function)
+		 stays put.  */
+	      bool arg_is_const_this
+		= (callee_parm != NULL_TREE && is_this_parameter (callee_parm)
+		   && POINTER_TYPE_P (TREE_TYPE (callee_parm))
+		   && TYPE_READONLY (TREE_TYPE (TREE_TYPE (callee_parm))));
+	      if (!arg_is_const_ref && !arg_is_const_this)
+		env.call_relational_invalidate_receiver (identity);
+	      /* A call given a route to an object -- a pointer or reference
+		 to it, const or not, its address, or the object a member
+		 call is made on -- may end its lifetime ('delete p', 'delete
+		 &r' through a const reference too, 'delete this'), unless the
+		 callee is conveyor, which can't.  So its is_object_address
+		 fact ends, in every mode: 'TRUST (p); destroy (p); p->f ()'
+		 was accepted.  A call given no route to the object ('other
+		 ()') keeps it.  */
+	      bool end_object_addresses
+		= !callee_is_conveyor && !(cdtor_receiver
+					   && DECL_CONSTRUCTOR_P (named));
+	      /* What was known of its fields ends with it; and any callee that
+		 may write them can store a different pointer there.  */
+	      bool end_field_object_addresses = (end_object_addresses
+						 || !arg_is_const_ref);
+	      if (end_object_addresses)
+		{
+		  env.invalidate (identity);
+		  env.range_invalidate (identity);
+		}
+	      if (end_field_object_addresses)
+		env.field_object_address_invalidate_all (identity);
+	      oa_invalidate_parameter_alias_group (identity, env,
+						    end_object_addresses,
+						    end_field_object_addresses);
+	    }
+	  else if (oa_unnamed_mutable_pointer_arg_p (call_arg))
+	    env.invalidate_all_object_state ();
+
+	  /* A pointer read from a member ('destroy (c.d)', 'destroy
+	     (this->d)'): the object it points to may end too, and its fact
+	     is keyed on the member (oa_pointer_member_identity), which no
+	     identity resolver above reaches.  */
+	  if (!callee_is_conveyor)
+	    {
+	      tree a = STRIP_ANY_LOCATION_WRAPPER (call_arg);
+	      while (CONVERT_EXPR_P (a) || TREE_CODE (a) == NON_LVALUE_EXPR
+		     || TREE_CODE (a) == VIEW_CONVERT_EXPR)
+		a = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
+	      tree key;
+	      if (TREE_CODE (a) == COMPONENT_REF
+		  && POINTER_TYPE_P (TREE_TYPE (a))
+		  && oa_pointer_member_identity (a, env, &key))
+		{
+		  env.invalidate (key);
+		  env.range_invalidate (key);
+		  env.field_object_address_invalidate_derived (key);
+		}
+	    }
+	  /* A pointer member's address, at any depth ('set (&mobj->d)'): any
+	     callee, conveyor or not, may store another pointer there.  */
+	  {
+	    tree a = STRIP_ANY_LOCATION_WRAPPER (call_arg);
+	    while (CONVERT_EXPR_P (a) || TREE_CODE (a) == NON_LVALUE_EXPR
+		   || TREE_CODE (a) == VIEW_CONVERT_EXPR)
+	      a = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
+	    tree key;
+	    if (TREE_CODE (a) == ADDR_EXPR)
+	      {
+		tree m = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
+		if (TREE_CODE (m) == COMPONENT_REF
+		    && POINTER_TYPE_P (TREE_TYPE (m))
+		    && oa_pointer_member_identity (m, env, &key))
+		  {
+		    env.invalidate (key);
+		    env.range_invalidate (key);
+		    env.field_object_address_invalidate_derived (key);
+		  }
+	      }
+	  }
 	}
-      else if (oa_unnamed_mutable_pointer_arg_p (call_arg))
-	env.invalidate_all_object_state ();
+      /* An object only one of whose members the callee may be given (an
+	 accessor's result on a class that isn't standard-layout): what
+	 is known of its members ends, not the object.  */
+      for (tree q : member_routes)
+	{
+	  tree identity;
+	  if (oa_invalidation_identity_decl (q, &identity)
+	      || oa_field_slot_identity (q, env, &identity)
+	      || oa_array_slot_identity (q, env, &identity)
+	      || oa_field_object_identity (q, env, &identity))
+	    {
+	      identity = env.alias_find (identity);
+	      env.field_object_address_invalidate_all (identity);
+	      env.member_end (identity, false);
+	    }
+	}
     }
+
+  /* A local pointer whose address has been taken may have been handed
+     out ('keep (&p)') and so be rewritten by any call that isn't
+     conveyor, though given no route to it here.  */
+  if (!callee_is_conveyor)
+    env.escaped_local_pointers_invalidate ();
 }
 
 /* -fcontract-symbolic-proofs: static-prover analogue of Mechanism B's
@@ -26884,11 +27271,10 @@ oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
       /* Invalidation, though, always runs: the mandatory item 8 checks
 	 rely on facts a contract_assert establishes (e.g. a field's
 	 'obj.field != 0' for a divisor), which a call that may modify the
-	 object must end whether or not either feature is on.  Without
-	 either, though, a call doesn't end the is_object_address facts
-	 the mandatory obligations use, as before.  */
-      oa_invalidate_symbolic_facts_for_call_args
-	(t, *e, /*keep_object_addresses=*/!tracking);
+	 object must end whether or not either feature is on -- and so
+	 must a call's ending of the lifetime of an object it is given a
+	 route to (is_object_address), in every mode.  */
+      oa_invalidate_symbolic_facts_for_call_args (t, *e);
       oa_invalidate_symbolic_scalar_range_for_call_args (t, *e);
       if (tracking)
 	oa_handle_call_symbolic_postcondition_establishment (t, *e);
@@ -28088,6 +28474,15 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 		    tree identity;
 		    if (oa_array_object_identity (arg, env, &identity))
 		      arg = identity;
+		  }
+		/* A member's address ('&o.in'), an object while its object
+		   is, holds again after a call that may have ended it
+		   (oa_env::member_ended_p).  */
+		else if (TREE_CODE (op) == COMPONENT_REF && conveyor_ok)
+		  {
+		    tree key;
+		    if (oa_field_object_identity (arg, env, &key))
+		      env.member_trusted (key);
 		  }
 	      }
 	    /* D4324/P2680: 'is_object_address(p)' for a POINTER-TYPED FIELD
@@ -30578,9 +30973,13 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	 itself -- a bare CALL_EXPR, handled the same as any other
 	 expression-statement call by the CALL_EXPR case below, so Rule 2
 	 invalidation sees it taking CLEANUP_DECL's own address like any
-	 other call would).  */
+	 other call would).  An EH-only cleanup (a constructed member or
+	 base, for the rest of the constructor) runs only if CLEANUP_BODY
+	 throws: when nothing in it can, it never runs, as the GIMPLE
+	 engine sees from the missing EH edge.  */
       oa_walk_stmt (&CLEANUP_BODY (t), env);
-      oa_walk_stmt (&CLEANUP_EXPR (t), env);
+      if (!CLEANUP_EH_ONLY (t) || !expr_noexcept_p (CLEANUP_BODY (t), tf_none))
+	oa_walk_stmt (&CLEANUP_EXPR (t), env);
       return;
 
     case TRY_BLOCK:

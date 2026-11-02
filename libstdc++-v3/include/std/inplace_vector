@@ -263,14 +263,17 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	      const size_type __sz = _S_distance_if_fits(0, __rg);
 	      if (__sz <= size())
 		{
+		  _GLIBCXX_CONVEYOR_TRUST(__rg);
 		  ranges::copy_n(ranges::begin(__rg), __sz, data());
 		  std::destroy(data() + __sz, data() + _M_size);
 		}
 	      else
 		{
+		  _GLIBCXX_CONVEYOR_TRUST(__rg);
 		  auto [__in, __out] = ranges::copy_n(
 					 ranges::begin(__rg), _M_size,
 					 data());
+		  _GLIBCXX_CONVEYOR_TRUST(__rg);
 		  ranges::uninitialized_copy(
 		    std::move(__in), ranges::end(__rg),
 		    __out, unreachable_sentinel);
@@ -538,6 +541,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	    {
 	      const size_t __sz = _S_distance_if_fits(_M_size, __rg);
 	      // Bounded on output range due PR121143
+	      _GLIBCXX_CONVEYOR_TRUST(__rg);
 	      ranges::uninitialized_copy(
 		ranges::begin(__rg), unreachable_sentinel,
 		data() + _M_size, data() + _M_size + __sz);
@@ -618,6 +622,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  size_t __b = __position - cbegin(); // elements before position
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  __glibcxx_assert(__b <= _M_size);
 	  if (_M_size >= _Nm)
 	    __throw_bad_alloc();
@@ -658,6 +663,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	_GLIBCXX_CONVEYOR_REQUIRES_THIS
 	{
 	  size_t __b = __position - cbegin(); // elements before position
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  __glibcxx_assert(__b <= _M_size);
 	  iterator __pos = begin() + __b;
 	  const size_t __s = _M_size;
@@ -702,13 +708,16 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		}
 	      else if constexpr (ranges::forward_range<_Rg>)
 		{
+		  _GLIBCXX_CONVEYOR_TRUST(__rg);
 		  auto __mid = ranges::next(ranges::begin(__rg), __num_after);
+		  _GLIBCXX_CONVEYOR_TRUST(__rg);
 		  ranges::uninitialized_copy(__mid, ranges::end(__rg),
 					     __end, unreachable_sentinel);
 		  _M_size += __sz - __num_after;
 		  ranges::uninitialized_move(__pos, __end,
 					     __pos + __sz, unreachable_sentinel);
 		  _M_size += __num_after;
+		  _GLIBCXX_CONVEYOR_TRUST(__rg);
 		  ranges::copy(ranges::begin(__rg), __mid, __pos);
 		}
 	      else
@@ -737,9 +746,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
 	size_t __n = __position - cbegin();
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__glibcxx_assert(__n < _M_size);
 	iterator __pos = begin() + __n;
 	std::move(__pos + 1, end(), __pos);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	pop_back();
 	return __pos;
       }
@@ -750,6 +761,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       {
 	size_t __n = __first - cbegin();
 	size_t __x = __last - __first;
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__glibcxx_assert(__n <= _M_size);
 	__glibcxx_assert(__x <= _M_size);
 	iterator __pos = begin() + __n;

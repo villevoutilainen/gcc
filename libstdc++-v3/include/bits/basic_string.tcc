@@ -221,7 +221,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       // NB: Need an array of char_type[__capacity], plus a terminating
       // null char_type() element.
-      return _S_allocate_at_least(_M_get_allocator(), __capacity + 1);
+      _Alloc_result __r = _S_allocate_at_least(_M_get_allocator(),
+					       __capacity + 1);
+      // The allocator is part of *this, so the call may have ended it
+      // (the lifetime rule): it hasn't.
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      return __r;
     }
 
   // This must remain for ABI stability, though unused in current code.
@@ -674,6 +679,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_check_length(__n1, __n2, "basic_string::_M_replace_aux");
 
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const size_type __old_size = this->size();
       const size_type __new_size = __old_size + __n2 - __n1;
 
@@ -736,6 +742,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_check_length(__len1, __len2, "basic_string::_M_replace");
 
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const size_type __old_size = this->size();
       const size_type __new_size = __old_size + __len2 - __len1;
 
@@ -753,6 +760,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	      _S_copy(__newp + __pos, __s, __len2);
 	      _S_copy(__newp + __pos + __len2, __p + __len1, __how_much);
 	      _S_copy(this->_M_data(), __newp, __new_size);
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      this->_M_get_allocator().deallocate(__newp, __new_size);
 	    }
 	  else
@@ -973,11 +981,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     {
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_requires_string_len(__s, __n);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       for (; __n && __pos < this->size(); ++__pos)
 	{
 	  const _CharT* __p = traits_type::find(__s, __n, _M_data()[__pos]);
 	  if (__p)
 	    return __pos;
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	}
       return npos;
     }
@@ -1015,9 +1025,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     {
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       __glibcxx_requires_string_len(__s, __n);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       for (; __pos < this->size(); ++__pos)
-	if (!traits_type::find(__s, __n, _M_data()[__pos]))
-	  return __pos;
+	{
+	  if (!traits_type::find(__s, __n, _M_data()[__pos]))
+	    return __pos;
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	}
       return npos;
     }
 
@@ -1029,8 +1043,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     {
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       for (; __pos < this->size(); ++__pos)
-	if (!traits_type::eq(_M_data()[__pos], __c))
-	  return __pos;
+	{
+	  if (!traits_type::eq(_M_data()[__pos], __c))
+	    return __pos;
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	}
       return npos;
     }
 

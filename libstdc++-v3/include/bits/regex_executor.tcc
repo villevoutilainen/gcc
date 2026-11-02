@@ -46,11 +46,14 @@ namespace __detail
       if (_M_flags & regex_constants::match_continuous)
 	return false;
       _M_flags |= regex_constants::match_prev_avail;
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       while (_M_begin != _M_end)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  ++_M_begin;
 	  if (_M_search_from_first())
 	    return true;
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	}
       return false;
     }
@@ -294,12 +297,12 @@ namespace __detail
     {
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
-      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _M_match_queue.emplace_back(_M_start, _M_results);
       bool __ret = false;
       while (1)
 	{
 	  _M_has_sol = false;
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (_M_match_queue.empty())
 	    break;
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
@@ -314,8 +317,10 @@ namespace __detail
 	    }
 	  if (__match_mode == _Match_mode::_Prefix)
 	    __ret |= _M_has_sol;
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (_M_current == _M_end)
 	    break;
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  ++_M_current;
 	}
       if (__match_mode == _Match_mode::_Exact)
@@ -339,9 +344,13 @@ namespace __detail
       __sub._M_start = __next;
       if (__sub._M_search_from_first())
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  for (size_t __i = 0; __i < __what.size(); __i++)
-	    if (__what[__i].matched)
-	      _M_cur_results[__i] = __what[__i];
+	    {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	      if (__what[__i].matched)
+		_M_cur_results[__i] = __what[__i];
+	    }
 	  return true;
 	}
       return false;
@@ -598,6 +607,7 @@ namespace __detail
 	{
 	  if (__state._M_matches(*_M_current))
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      ++_M_current;
 	      return __state._M_next;
 	    }
@@ -842,6 +852,7 @@ namespace __detail
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       _StateIdT __next = __start;
 
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       while (true)
 	{
 	  // Follow immediate successors without re-entering the frame
@@ -850,10 +861,12 @@ namespace __detail
 	  while (__next != _S_invalid_state_id)
 	    __next = _M_node<__search_mode>(__match_mode, __next);
 
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (_M_frames.empty())
 	    break;
 
 	  _ExecutorFrame<_BiIter> __frame = std::move(_M_frames.back());
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  _M_frames.pop_back();
 
 	  switch (__frame._M_op)
@@ -896,12 +909,14 @@ namespace __detail
 	      else
 		{
 		  _M_cur_results[__frame._M_state_id].second = __frame._M_pos;
+		  _GLIBCXX_CONVEYOR_TRUST_THIS;
 		  _M_cur_results[__frame._M_state_id].matched = __frame._M_matched;
 		}
 	      break;
 
 	    case _S_fopcode_restore_rep_count:
 	      _M_rep_count[__frame._M_state_id].first = __frame._M_pos;
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      _M_rep_count[__frame._M_state_id].second = __frame._M_count;
 	      break;
 
@@ -909,6 +924,7 @@ namespace __detail
 	      _M_rep_count[__frame._M_state_id].second--;
 	      break;
 	    }
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	}
     }
 
@@ -931,6 +947,7 @@ namespace __detail
 	  if (_M_is_word(*std::prev(__prev)))
 	    __left_is_word = true;
 	}
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       bool __right_is_word =
         _M_current != _M_end && _M_is_word(*_M_current);
 

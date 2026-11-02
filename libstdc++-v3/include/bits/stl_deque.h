@@ -173,12 +173,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	       typename = _Require<is_same<_Self, const_iterator>,
 				   is_same<_Iter, iterator>>>
        _GLIBCXX26_CONSTEXPR
-       _Deque_iterator(const _Iter& __x) noexcept
+       _Deque_iterator(const _Iter& __x) noexcept _GLIBCXX_CONVEYOR_AUTO
+       _GLIBCXX_CONVEYOR_TRUST_PRE(__x)
        : _M_cur(__x._M_cur), _M_first(__x._M_first),
 	 _M_last(__x._M_last), _M_node(__x._M_node) { }
 
       _GLIBCXX26_CONSTEXPR
       _Deque_iterator(const _Deque_iterator& __x) noexcept
+      _GLIBCXX_CONVEYOR_AUTO _GLIBCXX_CONVEYOR_TRUST_PRE(__x)
        : _M_cur(__x._M_cur), _M_first(__x._M_first),
 	 _M_last(__x._M_last), _M_node(__x._M_node) { }
 
@@ -606,6 +608,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
 	_GLIBCXX26_CONSTEXPR
 	_Deque_impl_data(_Deque_impl_data&& __x) noexcept
+	_GLIBCXX_CONVEYOR_TRUST_PRE(__x)
 	: _Deque_impl_data(__x)
 	{ __x = _Deque_impl_data(); }
 #endif
@@ -1015,11 +1018,21 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX26_CONSTEXPR
       deque(const deque& __x) _GLIBCXX_CONVEYOR_TRUST_PRE(__x)
-      : _Base(_Alloc_traits::_S_select_on_copy(__x._M_get_Tp_allocator()),
-	      __x.size())
-      { std::__uninitialized_copy_a(__x.begin(), __x.end(),
+      // Either argument may be evaluated after the other was given __x
+      // (the lifetime rule).
+      : _Base(_Alloc_traits::_S_select_on_copy
+		(std::__trust_object(__x)._M_get_Tp_allocator()),
+	      std::__trust_object(__x).size())
+      {
+	// _S_select_on_copy was given __x's allocator, so may have ended
+	// __x (the lifetime rule): it hasn't.
+	_GLIBCXX_CONVEYOR_TRUST(__x);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	std::__uninitialized_copy_a(__x.begin(), __x.end(),
 				    this->_M_impl._M_start,
-				    _M_get_Tp_allocator()); }
+				    std::__trust_object(*this)
+				      ._M_get_Tp_allocator());
+      }
 
 #if __cplusplus >= 201103L
       /**
@@ -1037,9 +1050,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       deque(const deque& __x, const __type_identity_t<allocator_type>& __a)
       _GLIBCXX_CONVEYOR_TRUST_PRE(__x)
       : _Base(__a, __x.size())
-      { std::__uninitialized_copy_a(__x.begin(), __x.end(),
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	std::__uninitialized_copy_a(__x.begin(), __x.end(),
 				    this->_M_impl._M_start,
-				    _M_get_Tp_allocator()); }
+				    std::__trust_object(*this)
+				      ._M_get_Tp_allocator());
+      }
 
       /// Move constructor with alternative allocator
       _GLIBCXX26_CONSTEXPR
@@ -1061,9 +1078,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       {
 	if (__x.get_allocator() != __a && !__x.empty())
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    std::__uninitialized_move_a(__x.begin(), __x.end(),
 					this->_M_impl._M_start,
-					_M_get_Tp_allocator());
+					std::__trust_object(*this)
+					  ._M_get_Tp_allocator());
 	    __x.clear();
 	  }
       }
@@ -1148,7 +1167,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX26_CONSTEXPR
       ~deque()
-      { _M_destroy_data(begin(), end(), _M_get_Tp_allocator()); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_M_destroy_data(begin(), end(),
+			std::__trust_object(*this)._M_get_Tp_allocator());
+      }
 
       /**
        *  @brief  %Deque assignment operator.
@@ -1282,8 +1305,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		  return _M_erase_at_end(__res.out);
 		}
 
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      auto __rest = ranges::copy_n(ranges::begin(__rg), size(),
 					   begin()).in;
+	      _GLIBCXX_CONVEYOR_TRUST(__rg);
 	      _M_range_append(std::move(__rest), ranges::end(__rg),
 			      __n - size());
 	    }
@@ -1320,7 +1345,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR iterator
-      begin() _GLIBCXX_NOEXCEPT
+      begin() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return this->_M_impl._M_start; }
 
       /**
@@ -1329,7 +1354,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR const_iterator
-      begin() const _GLIBCXX_NOEXCEPT
+      begin() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return this->_M_impl._M_start; }
 
       /**
@@ -1339,7 +1364,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR iterator
-      end() _GLIBCXX_NOEXCEPT
+      end() _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return this->_M_impl._M_finish; }
 
       /**
@@ -1349,7 +1374,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       _GLIBCXX_NODISCARD
       _GLIBCXX26_CONSTEXPR const_iterator
-      end() const _GLIBCXX_NOEXCEPT
+      end() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return this->_M_impl._M_finish; }
 
       /**
@@ -1399,7 +1424,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       [[__nodiscard__]]
       _GLIBCXX26_CONSTEXPR const_iterator
-      cbegin() const noexcept
+      cbegin() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { return this->_M_impl._M_start; }
 
       /**
@@ -1409,7 +1434,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       [[__nodiscard__]]
       _GLIBCXX26_CONSTEXPR const_iterator
-      cend() const noexcept
+      cend() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { return this->_M_impl._M_finish; }
 
       /**
@@ -1599,6 +1624,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_M_range_check(__n);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return (*this)[__n];
       }
 
@@ -1882,8 +1908,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX26_CONSTEXPR iterator
       insert(const_iterator __position, size_type __n, const value_type& __x)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	difference_type __offset = __position - cbegin();
 	_M_fill_insert(__position._M_const_cast(), __n, __x);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return begin() + __offset;
       }
 #else
@@ -2045,6 +2073,8 @@ _GLIBCXX_CONVEYOR_TRUST(__x);
 	   || _M_get_Tp_allocator() == __x._M_get_Tp_allocator());
 #endif
 	_M_impl._M_swap_data(__x._M_impl);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__x);
 	_Alloc_traits::_S_on_swap(_M_get_Tp_allocator(),
 				  __x._M_get_Tp_allocator());
       }
@@ -2057,7 +2087,7 @@ _GLIBCXX_CONVEYOR_TRUST(__x);
        */
       _GLIBCXX26_CONSTEXPR void
       clear() _GLIBCXX_NOEXCEPT
-      { _M_erase_at_end(begin()); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; _M_erase_at_end(begin()); }
 
     protected:
       // Internal constructor functions follow.
@@ -2203,11 +2233,13 @@ _GLIBCXX_CONVEYOR_TRUST(__x);
 	if (__n > size())
 	  {
 	    std::fill(begin(), end(), __val);
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    _M_fill_insert(end(), __n - size(), __val);
 	  }
 	else
 	  {
 	    _M_erase_at_end(begin() + difference_type(__n));
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    std::fill(begin(), end(), __val);
 	  }
       }
@@ -2371,7 +2403,8 @@ _GLIBCXX_CONVEYOR_TRUST(__x);
       _M_erase_at_begin(iterator __pos)
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
-	_M_destroy_data(begin(), __pos, _M_get_Tp_allocator());
+	_M_destroy_data(begin(), __pos,
+			std::__trust_object(*this)._M_get_Tp_allocator());
 	_M_destroy_nodes(this->_M_impl._M_start._M_node, __pos._M_node);
 	this->_M_impl._M_start = __pos;
       }
@@ -2382,7 +2415,8 @@ _GLIBCXX_CONVEYOR_TRUST(__x);
       _M_erase_at_end(iterator __pos)
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
-	_M_destroy_data(__pos, end(), _M_get_Tp_allocator());
+	_M_destroy_data(__pos, end(),
+			std::__trust_object(*this)._M_get_Tp_allocator());
 	_M_destroy_nodes(__pos._M_node + 1,
 			 this->_M_impl._M_finish._M_node + 1);
 	this->_M_impl._M_finish = __pos;
@@ -2471,6 +2505,8 @@ _GLIBCXX_CONVEYOR_TRUST(__x);
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	this->_M_impl._M_swap_data(__x._M_impl);
 	__x.clear();
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__x);
 	std::__alloc_on_move(_M_get_Tp_allocator(), __x._M_get_Tp_allocator());
       }
 
@@ -2500,6 +2536,7 @@ _GLIBCXX_CONVEYOR_TRUST(__x);
 	deque __newobj(std::forward<_Args>(__args)...);
 	// Free existing storage using existing allocator.
 	clear();
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_M_deallocate_node(*begin()._M_node); // one node left after clear()
 	_M_deallocate_map(this->_M_impl._M_map, this->_M_impl._M_map_size);
 	this->_M_impl._M_map = nullptr;
@@ -2520,6 +2557,7 @@ _GLIBCXX_CONVEYOR_TRUST(__x);
 	// leaving __x in a valid empty state with a moved-from allocator.
 	_M_replace_map(std::move(__x));
 	// Move the corresponding allocator state too.
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_M_get_Tp_allocator() = std::move(__alloc);
       }
 
@@ -2600,6 +2638,8 @@ _GLIBCXX_CONVEYOR_TRUST(__x);
     inline _GLIBCXX26_CONSTEXPR __detail::__synth3way_t<_Tp>
     operator<=>(const deque<_Tp, _Alloc>& __x, const deque<_Tp, _Alloc>& __y)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__x);
+      _GLIBCXX_CONVEYOR_TRUST(__y);
       return std::lexicographical_compare_three_way(__x.begin(), __x.end(),
 						    __y.begin(), __y.end(),
 						    __detail::__synth3way);

@@ -1185,6 +1185,7 @@ namespace __variant
     {
       static_assert(__detail::__variant::__exactly_once<_Tp, _Types...>,
 		    "T must occur exactly once in alternatives");
+      _GLIBCXX_CONVEYOR_TRUST(__v);
       return __v.index() == std::__find_uniq_type_in_pack<_Tp, _Types...>();
     }
 
@@ -1236,7 +1237,10 @@ namespace __variant
       static_assert(_Np < sizeof...(_Types),
 		    "The index must be in [0, number of alternatives)");
       static_assert(!is_void_v<_Alternative_type>, "_Tp must not be void");
-      if (__ptr && __ptr->index() == _Np)
+      if (!__ptr)
+	return nullptr;
+      _GLIBCXX_CONVEYOR_TRUST(*__ptr);
+      if (__ptr->index() == _Np)
 	return std::addressof(__detail::__variant::__get<_Np>(*__ptr));
       return nullptr;
     }
@@ -1625,6 +1629,7 @@ namespace __detail::__variant
 		 && is_nothrow_constructible_v<__accepted_type<_Tp&&>, _Tp>)
 	{
 	  constexpr auto __index = __accepted_index<_Tp>;
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (index() == __index)
 	    std::get<__index>(*this) = std::forward<_Tp>(__rhs);
 	  else
@@ -1748,7 +1753,7 @@ namespace __detail::__variant
       constexpr bool valueless_by_exception() const noexcept _GLIBCXX_CONVEYOR
       { return !this->_M_valid(); }
 
-      constexpr size_t index() const noexcept
+      constexpr size_t index() const noexcept _GLIBCXX_CONVEYOR_AUTO
       {
 	using __index_type = typename _Base::__index_type;
 	if constexpr (__detail::__variant::__never_valueless<_Types...>())
@@ -1785,6 +1790,7 @@ namespace __detail::__variant
 	    constexpr size_t __j = __rhs_index;
 	    if constexpr (__j != variant_npos)
 	      {
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 		if (this->index() == __j)
 		  {
 		    using std::swap;
@@ -1962,6 +1968,7 @@ namespace __detail::__variant
     else _GLIBCXX_VISIT_UNREACHABLE();					\
   }
 
+	      _GLIBCXX_CONVEYOR_TRUST(__v0);
 	      switch (__v0.index())
 		{
 		  _GLIBCXX_VISIT_CASE(0)

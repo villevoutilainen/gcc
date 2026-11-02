@@ -108,7 +108,12 @@ namespace __detail
 		 ? _M_extended_spec_char
 		 : nullptr),
     _M_at_bracket_start(false)
-    { __glibcxx_assert(_M_spec_char); }
+    {
+      // _M_is_ecma () above may have ended *this (the lifetime rule): it
+      // hasn't.
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      __glibcxx_assert(_M_spec_char);
+    }
 
   protected:
     const char*

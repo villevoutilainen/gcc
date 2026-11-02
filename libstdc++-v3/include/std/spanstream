@@ -191,6 +191,7 @@ template<typename _CharT, typename _Traits>
 	  if (__builtin_add_overflow(__base, __off, &__off)) [[unlikely]]
 	    return __ret;
 
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (__off < 0 || (size_t)__off > _M_buf.size()) [[unlikely]]
 	    return __ret;
 

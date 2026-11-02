@@ -4204,7 +4204,7 @@ template<typename _Ret, typename _Fn, typename... _Args>
   /// @since C++20
   [[__gnu__::__always_inline__]]
   constexpr bool
-  is_constant_evaluated() noexcept
+  is_constant_evaluated() noexcept _GLIBCXX_CONVEYOR
   {
 #if __cpp_if_consteval >= 202106L
     if consteval { return true; } else { return false; }

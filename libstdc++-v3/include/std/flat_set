@@ -448,14 +448,20 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	      && (__hint == cend()
 		  || (__s = !_M_comp((*__hint)[0], __k)))) // k <= hint[0]
 	    {
-	      __it = _M_cont.begin() + (*__hint - begin());
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	      const auto __off = *__hint - begin();
+	      // The calls above may have ended *this (the lifetime rule).
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	      __it = _M_cont.begin() + __off;
 	      if constexpr (!_Multi)
 		if (__r == 1 && !_M_comp(__it[-1], __k)) // k == hint[-1]
 		  return {__it - 1, false};
 	    }
 	  else
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      auto __first = _M_cont.begin();
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      auto __last = _M_cont.end();
 	      if (__r == 1) // k >= hint[-1]
 		__first += *__hint - _M_cont.begin();
@@ -476,6 +482,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		__it = std::lower_bound(__first, __last, __k, _M_comp);
 	    }
 
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if constexpr (!_Multi)
 	    if (__it != _M_cont.end() && !_M_comp(__k, __it[0]))
 	      return {__it, false};

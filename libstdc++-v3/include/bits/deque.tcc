@@ -73,17 +73,26 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _Map_pointer __cur;
       __try
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  for (__cur = this->_M_impl._M_start._M_node;
 	       __cur < this->_M_impl._M_finish._M_node;
 	       ++__cur)
-	    std::__uninitialized_default_a(*__cur, *__cur + _S_buffer_size(),
-					   _M_get_Tp_allocator());
+	    {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	      std::__uninitialized_default_a(*__cur, *__cur + _S_buffer_size(),
+					     _M_get_Tp_allocator());
+	      // Given the allocator, a part of *this, so it may have ended
+	      // *this (the lifetime rule): it hasn't.
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    }
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  std::__uninitialized_default_a(this->_M_impl._M_finish._M_first,
 					 this->_M_impl._M_finish._M_cur,
 					 _M_get_Tp_allocator());
 	}
       __catch(...)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  std::_Destroy(this->_M_impl._M_start, iterator(*__cur, __cur),
 			_M_get_Tp_allocator());
 	  __throw_exception_again;
@@ -110,15 +119,21 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		  // Replacement allocator cannot free existing storage,
 		  // so deallocate everything and take copy of __x's data.
 		  _M_replace_map(__x, __x.get_allocator());
+		  _GLIBCXX_CONVEYOR_TRUST_THIS;
+		  _GLIBCXX_CONVEYOR_TRUST(__x);
 		  std::__alloc_on_copy(_M_get_Tp_allocator(),
 				       __x._M_get_Tp_allocator());
 		  return *this;
 		}
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	      _GLIBCXX_CONVEYOR_TRUST(__x);
 	      std::__alloc_on_copy(_M_get_Tp_allocator(),
 				   __x._M_get_Tp_allocator());
 	    }
 #endif
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  const size_type __len = size();
+	  _GLIBCXX_CONVEYOR_TRUST(__x);
 	  if (__len >= __x.size())
 	    _M_erase_at_end(std::copy(__x.begin(), __x.end(),
 				      this->_M_impl._M_start));
@@ -156,6 +171,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	else
 	  _M_push_front_aux(std::forward<_Args>(__args)...);
 #if __cplusplus > 201402L
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return front();
 #endif
       }
@@ -183,6 +199,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	else
 	  _M_push_back_aux(std::forward<_Args>(__args)...);
 #if __cplusplus > 201402L
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return back();
 #endif
       }
@@ -250,18 +267,22 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       iterator __next = __position;
       ++__next;
       const difference_type __index = __position - begin();
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (static_cast<size_type>(__index) < (size() >> 1))
 	{
 	  if (__position != begin())
 	    _GLIBCXX_MOVE_BACKWARD3(begin(), __position, __next);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  pop_front();
 	}
       else
 	{
 	  if (__next != end())
 	    _GLIBCXX_MOVE3(__next, end(), __position);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  pop_back();
 	}
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       return begin() + __index;
     }
 
@@ -277,12 +298,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       else if (__first == begin() && __last == end())
 	{
 	  clear();
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return end();
 	}
       else
 	{
 	  const difference_type __n = __last - __first;
 	  const difference_type __elems_before = __first - begin();
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (static_cast<size_type>(__elems_before) <= (size() - __n) / 2)
 	    {
 	      if (__first != begin())
@@ -295,6 +318,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		_GLIBCXX_MOVE3(__last, end(), __first);
 	      _M_erase_at_end(end() - __n);
 	    }
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return begin() + __elems_before;
 	}
     }
@@ -327,6 +351,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	  iterator __new_start = _M_reserve_elements_at_front(__n);
 	  __try
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      std::__uninitialized_fill_a(__new_start, this->_M_impl._M_start,
 					  __x, _M_get_Tp_allocator());
 	      this->_M_impl._M_start = __new_start;
@@ -343,6 +368,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	  iterator __new_finish = _M_reserve_elements_at_back(__n);
 	  __try
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      std::__uninitialized_fill_a(this->_M_impl._M_finish,
 					  __new_finish, __x,
 					  _M_get_Tp_allocator());
@@ -371,6 +397,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	  iterator __new_finish = _M_reserve_elements_at_back(__n);
 	  __try
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      std::__uninitialized_default_a(this->_M_impl._M_finish,
 					     __new_finish,
 					     _M_get_Tp_allocator());
@@ -413,17 +440,26 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _Map_pointer __cur;
       __try
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  for (__cur = this->_M_impl._M_start._M_node;
 	       __cur < this->_M_impl._M_finish._M_node;
 	       ++__cur)
-	    std::__uninitialized_fill_a(*__cur, *__cur + _S_buffer_size(),
-					__value, _M_get_Tp_allocator());
+	    {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	      std::__uninitialized_fill_a(*__cur, *__cur + _S_buffer_size(),
+					  __value, _M_get_Tp_allocator());
+	      // Given the allocator, a part of *this, so it may have ended
+	      // *this (the lifetime rule): it hasn't.
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    }
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  std::__uninitialized_fill_a(this->_M_impl._M_finish._M_first,
 				      this->_M_impl._M_finish._M_cur,
 				      __value, _M_get_Tp_allocator());
 	}
       __catch(...)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  std::_Destroy(this->_M_impl._M_start, iterator(*__cur, __cur),
 			_M_get_Tp_allocator());
 	  __throw_exception_again;
@@ -477,16 +513,19 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
 		_ForwardIterator __mid = __first;
 		std::advance(__mid, _S_buffer_size());
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 		std::__uninitialized_copy_a(__first, __mid, *__cur_node,
 					    _M_get_Tp_allocator());
 		__first = __mid;
 	      }
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    std::__uninitialized_copy_a(__first, __last,
 					this->_M_impl._M_finish._M_first,
 					_M_get_Tp_allocator());
 	  }
 	__catch(...)
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    std::_Destroy(this->_M_impl._M_start,
 			  iterator(*__cur_node, __cur_node),
 			  _M_get_Tp_allocator());
@@ -569,6 +608,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	  }
 	__catch(...)
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    ++this->_M_impl._M_start;
 	    _M_deallocate_node(*(this->_M_impl._M_start._M_node - 1));
 	    __throw_exception_again;
@@ -585,6 +625,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _M_deallocate_node(this->_M_impl._M_finish._M_first);
       this->_M_impl._M_finish._M_set_node(this->_M_impl._M_finish._M_node - 1);
       this->_M_impl._M_finish._M_cur = this->_M_impl._M_finish._M_last - 1;
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       _Alloc_traits::destroy(_M_get_Tp_allocator(),
 			     this->_M_impl._M_finish._M_cur);
     }
@@ -618,6 +659,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	 iterator __new_start = _M_reserve_elements_at_front(__n);
 	 __try
 	   {
+	     _GLIBCXX_CONVEYOR_TRUST_THIS;
 	     std::__uninitialized_copy_a(_GLIBCXX_MOVE(__first), __last,
 					 __new_start, _M_get_Tp_allocator());
 	     this->_M_impl._M_start = __new_start;
@@ -641,6 +683,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        iterator __new_finish = _M_reserve_elements_at_back(__n);
        __try
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  std::__uninitialized_copy_a(_GLIBCXX_MOVE(__first), __last,
 				      this->_M_impl._M_finish,
 				      _M_get_Tp_allocator());
@@ -701,11 +744,15 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       deque<_Tp, _Alloc>::
       _M_insert_aux(iterator __pos, const value_type& __x)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	value_type __x_copy = __x; // XXX copy
 #endif
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	difference_type __index = __pos - this->_M_impl._M_start;
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (static_cast<size_type>(__index) < size() / 2)
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    push_front(_GLIBCXX_MOVE(front()));
 	    iterator __front1 = this->_M_impl._M_start;
 	    ++__front1;
@@ -718,6 +765,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	  }
 	else
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    push_back(_GLIBCXX_MOVE(back()));
 	    iterator __back1 = this->_M_impl._M_finish;
 	    --__back1;
@@ -754,6 +802,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		{
 		  iterator __start_n = (this->_M_impl._M_start
 					+ difference_type(__n));
+		  _GLIBCXX_CONVEYOR_TRUST_THIS;
 		  std::__uninitialized_move_a(this->_M_impl._M_start,
 					      __start_n, __new_start,
 					      _M_get_Tp_allocator());
@@ -763,6 +812,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		}
 	      else
 		{
+		  _GLIBCXX_CONVEYOR_TRUST_THIS;
 		  std::__uninitialized_move_fill(this->_M_impl._M_start,
 						 __pos, __new_start,
 						 this->_M_impl._M_start,
@@ -792,6 +842,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		{
 		  iterator __finish_n = (this->_M_impl._M_finish
 					 - difference_type(__n));
+		  _GLIBCXX_CONVEYOR_TRUST_THIS;
 		  std::__uninitialized_move_a(__finish_n,
 					      this->_M_impl._M_finish,
 					      this->_M_impl._M_finish,
@@ -802,6 +853,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		}
 	      else
 		{
+		  _GLIBCXX_CONVEYOR_TRUST_THIS;
 		  std::__uninitialized_fill_move(this->_M_impl._M_finish,
 						 __pos + difference_type(__n),
 						 __x_copy, __pos,
@@ -842,6 +894,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		  {
 		    iterator __start_n = (this->_M_impl._M_start
 					  + difference_type(__n));
+		    _GLIBCXX_CONVEYOR_TRUST_THIS;
 		    std::__uninitialized_move_a(this->_M_impl._M_start,
 						__start_n, __new_start,
 						_M_get_Tp_allocator());
@@ -853,6 +906,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		  {
 		    _ForwardIterator __mid = __first;
 		    std::advance(__mid, difference_type(__n) - __elemsbefore);
+		    _GLIBCXX_CONVEYOR_TRUST_THIS;
 		    std::__uninitialized_move_copy(this->_M_impl._M_start,
 						   __pos, __first, __mid,
 						   __new_start,
@@ -881,6 +935,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		{
 		  iterator __finish_n = (this->_M_impl._M_finish
 					 - difference_type(__n));
+		  _GLIBCXX_CONVEYOR_TRUST_THIS;
 		  std::__uninitialized_move_a(__finish_n,
 					      this->_M_impl._M_finish,
 					      this->_M_impl._M_finish,
@@ -893,6 +948,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		{
 		  _ForwardIterator __mid = __first;
 		  std::advance(__mid, __elemsafter);
+		  _GLIBCXX_CONVEYOR_TRUST_THIS;
 		  std::__uninitialized_copy_move(__mid, __last, __pos,
 						 this->_M_impl._M_finish,
 						 this->_M_impl._M_finish,
@@ -955,14 +1011,17 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	_GLIBCXX_CONVEYOR_TRUST(__rg);
 	if (__pos == cend())
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    const auto __ins_idx = size();
 	    append_range(std::forward<_Rg>(__rg));
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    return begin() + __ins_idx;
 	  }
 
 	if (__pos == cbegin())
 	  {
 	    prepend_range(std::forward<_Rg>(__rg));
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    return begin();
 	  }
 
@@ -970,6 +1029,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	if constexpr (ranges::forward_range<_Rg>)
 	  {
 	    auto [__last, __n] = __advance_dist(__rg);
+	    _GLIBCXX_CONVEYOR_TRUST(__rg);
 	    if (__n != 0) [[likely]]
 	      _M_insert_aux(__pos._M_const_cast(),
 			    ranges::begin(__rg), __last,
@@ -983,6 +1043,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		 (void)++__first, ++__it)
 	      __it = _M_emplace_aux(__it, *__first);
 	  }
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	return begin() + __ins_idx;
       }
 
@@ -1078,13 +1139,21 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        _GLIBCXX_CONVEYOR_TRUST_THIS;
        for (_Map_pointer __node = __first._M_node + 1;
 	    __node < __last._M_node; ++__node)
-	 std::_Destroy(*__node, *__node + _S_buffer_size(),
-		       _M_get_Tp_allocator());
+	 {
+	   _GLIBCXX_CONVEYOR_TRUST_THIS;
+	   std::_Destroy(*__node, *__node + _S_buffer_size(),
+			 _M_get_Tp_allocator());
+	   // _Destroy was given the allocator, a part of *this, so may have
+	   // ended *this (the lifetime rule): it hasn't.
+	   _GLIBCXX_CONVEYOR_TRUST_THIS;
+	 }
 
        if (__first._M_node != __last._M_node)
 	 {
+	   _GLIBCXX_CONVEYOR_TRUST_THIS;
 	   std::_Destroy(__first._M_cur, __first._M_last,
 			 _M_get_Tp_allocator());
+	   _GLIBCXX_CONVEYOR_TRUST_THIS;
 	   std::_Destroy(__last._M_first, __last._M_cur,
 			 _M_get_Tp_allocator());
 	 }
@@ -1172,6 +1241,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	}
       else
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  size_type __new_map_size = this->_M_impl._M_map_size
 				     + std::max(this->_M_impl._M_map_size,
 						__nodes_to_add) + 2;

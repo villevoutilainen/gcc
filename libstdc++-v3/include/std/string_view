@@ -246,12 +246,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[nodiscard]]
       constexpr size_type
-      size() const noexcept
+      size() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { return this->_M_len; }
 
       [[nodiscard]]
       constexpr size_type
-      length() const noexcept
+      length() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { return _M_len; }
 
       [[nodiscard]]
@@ -264,7 +264,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[nodiscard]]
       constexpr bool
-      empty() const noexcept
+      empty() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { return this->_M_len == 0; }
 
       // [string.view.access], element access
@@ -309,7 +309,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       [[nodiscard]]
       constexpr const_pointer
-      data() const noexcept
+      data() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { return this->_M_str; }
 
       // [string.view.modifiers], modifiers:
@@ -346,6 +346,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       copy(_CharT* __str, size_type __n, size_type __pos = 0) const
       {
 	__glibcxx_requires_string_len(__str, __n);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__pos = std::__sv_check(size(), __pos, "basic_string_view::copy");
 	const size_type __rlen = std::min<size_t>(__n, _M_len - __pos);
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
@@ -358,6 +359,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr basic_string_view
       substr(size_type __pos = 0, size_type __n = npos) const noexcept(false)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__pos = std::__sv_check(size(), __pos, "basic_string_view::substr");
 	const size_type __rlen = std::min<size_t>(__n, _M_len - __pos);
 	return basic_string_view{_M_str + __pos, __rlen};
@@ -437,6 +439,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr bool
       ends_with(basic_string_view __x) const noexcept
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	const auto __len = this->size();
 	const auto __xlen = __x.size();
 	return __len >= __xlen
@@ -823,7 +826,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       size_t
       operator()(const string_view& __str) const noexcept
-      { return std::_Hash_impl::hash(__str.data(), __str.length()); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST(__str);
+	return std::_Hash_impl::hash(__str.data(), __str.length());
+      }
     };
 
   template<>
@@ -837,7 +843,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       size_t
       operator()(const wstring_view& __s) const noexcept
-      { return std::_Hash_impl::hash(__s.data(),
+      { _GLIBCXX_CONVEYOR_TRUST(__s); return std::_Hash_impl::hash(__s.data(),
                                      __s.length() * sizeof(wchar_t)); }
     };
 
@@ -853,7 +859,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       size_t
       operator()(const u8string_view& __str) const noexcept
-      { return std::_Hash_impl::hash(__str.data(), __str.length()); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST(__str);
+	return std::_Hash_impl::hash(__str.data(), __str.length());
+      }
     };
 
   template<>
@@ -868,7 +877,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       size_t
       operator()(const u16string_view& __s) const noexcept
-      { return std::_Hash_impl::hash(__s.data(),
+      { _GLIBCXX_CONVEYOR_TRUST(__s); return std::_Hash_impl::hash(__s.data(),
                                      __s.length() * sizeof(char16_t)); }
     };
 
@@ -883,7 +892,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       size_t
       operator()(const u32string_view& __s) const noexcept
-      { return std::_Hash_impl::hash(__s.data(),
+      { _GLIBCXX_CONVEYOR_TRUST(__s); return std::_Hash_impl::hash(__s.data(),
                                      __s.length() * sizeof(char32_t)); }
     };
 

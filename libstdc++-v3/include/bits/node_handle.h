@@ -117,6 +117,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  {
 	    // Free the current node before replacing the allocator.
 	    _AllocTraits::destroy(*_M_alloc, _M_ptr->_M_valptr());
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    _AllocTraits::deallocate(*_M_alloc, _M_ptr, 1);
 
 	    _M_alloc = __nh._M_alloc.release(); // assigns if POCMA

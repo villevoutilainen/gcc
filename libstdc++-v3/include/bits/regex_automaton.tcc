@@ -185,13 +185,23 @@ namespace __detail
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       for (auto& __it : *this)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  while (__it._M_next >= 0 && (*this)[__it._M_next]._M_opcode()
 		 == _S_opcode_dummy)
-	    __it._M_next = (*this)[__it._M_next]._M_next;
+	    {
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	      __it._M_next = (*this)[__it._M_next]._M_next;
+	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    }
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (__it._M_has_alt())
 	    while (__it._M_alt >= 0 && (*this)[__it._M_alt]._M_opcode()
 		   == _S_opcode_dummy)
-	      __it._M_alt = (*this)[__it._M_alt]._M_next;
+	      {
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
+		__it._M_alt = (*this)[__it._M_alt]._M_next;
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
+	      }
 	}
     }
 

@@ -75,12 +75,17 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       codecvt_base::result __result;
       do
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__outstr);
 	  __outstr.resize(__outstr.size() + (__last - __next) * __maxlen);
+	  _GLIBCXX_CONVEYOR_TRUST(__outstr);
 	  auto __outnext = &__outstr.front() + __outchars;
+	  _GLIBCXX_CONVEYOR_TRUST(__outstr);
 	  auto const __outlast = &__outstr.back() + 1;
 	  __result = (__cvt.*__fn)(__state, __next, __last, __next,
 					__outnext, __outlast, __outnext);
+	  _GLIBCXX_CONVEYOR_TRUST(__outstr);
 	  __outchars = __outnext - &__outstr.front();
+	  _GLIBCXX_CONVEYOR_TRUST(__outstr);
 	}
       while (__result == codecvt_base::partial && __next != __last
 	     && ptrdiff_t(__outstr.size() - __outchars) < __maxlen);

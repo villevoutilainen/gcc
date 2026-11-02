@@ -15,7 +15,9 @@
 struct E
 {
   unsigned v[2];
-  unsigned size () const
+  // Conveyor, so calling it doesn't end the element (the lifetime rule);
+  // operator[] isn't, so each use below comes after the size () calls.
+  unsigned size () const conveyor
     pre<std::contracts::conveyor_assert_v> (std::is_object_address (this))
   { return 2; }
   const unsigned &operator[] (int n) const
@@ -31,8 +33,8 @@ template <int N> struct CI
     for (int i = 0; i < N; ++i)
       {
 	TRUST (&infos[i]);
-	out[2 * i] = infos[i][0];
 	out[2 * i + 1] = infos[i].size ();
+	out[2 * i] = infos[i][0];
       }
   }
 };
@@ -45,7 +47,12 @@ unsigned k (const E *a, int i) { TRUST (&a[i]); return a[i][0]; }
 
 unsigned hc (const E (&a)[3]) { TRUST (&a[2]); return a[2].size (); }
 
-unsigned hu (E (&a)[4], int i) { TRUST (&a[i]); return a[i].size () + a[i][1]; }
+unsigned hu (E (&a)[4], int i)
+{
+  TRUST (&a[i]);
+  unsigned s = a[i].size ();
+  return s + a[i][1];
+}
 
 // A loop over a reference-to-array in a non-template function and in a
 // non-template constructor: the index is a local, not a parameter.

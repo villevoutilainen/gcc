@@ -979,6 +979,7 @@ namespace ranges
 	      {
 		do
 		  {
+		    _GLIBCXX_CONVEYOR_TRUST(__it);
 		    ++__it;
 		  }
 		while (--__n);
@@ -1010,7 +1011,12 @@ namespace ranges
 	if constexpr (assignable_from<_It&, _Sent>)
 	  __it = std::move(__bound);
 	else if constexpr (sized_sentinel_for<_Sent, _It>)
-	  (*this)(__it, __bound - __it);
+	  {
+	    auto __d = __bound - __it;
+	    // The subtraction may have ended __it (the lifetime rule).
+	    _GLIBCXX_CONVEYOR_TRUST(__it);
+	    (*this)(__it, __d);
+	  }
 	else
 	  {
 	    while (__it != __bound)
@@ -1046,6 +1052,7 @@ namespace ranges
 		// n and bound must not lead in opposite directions:
 		__glibcxx_assert((__n < 0) == (__diff < 0));
 
+		_GLIBCXX_CONVEYOR_TRUST(__it);
 		(*this)(__it, __n);
 		return 0;
 	      }
@@ -1064,8 +1071,10 @@ namespace ranges
 	    iter_difference_t<_It> __m = 0;
 	    do
 	      {
+		_GLIBCXX_CONVEYOR_TRUST(__it);
 		++__it;
 		++__m;
+		_GLIBCXX_CONVEYOR_TRUST(__it);
 	      }
 	    while (__m != __n && __it != __bound);
 	    return __n - __m;
@@ -1075,8 +1084,10 @@ namespace ranges
 	    iter_difference_t<_It> __m = 0;
 	    do
 	      {
+		_GLIBCXX_CONVEYOR_TRUST(__it);
 		--__it;
 		--__m;
+		_GLIBCXX_CONVEYOR_TRUST(__it);
 	      }
 	    while (__m != __n && __it != __bound);
 	    return __n - __m;

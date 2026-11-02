@@ -132,6 +132,7 @@ namespace __unicode
 	contract_assert<std::contracts::never_proven_conveyor_v>
 	  (std::is_object_address (this));
 #endif
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (_M_curr() != _M_last)
 	  _M_read();
 	else
@@ -206,6 +207,7 @@ namespace __unicode
 	contract_assert<std::contracts::never_proven_conveyor_v>
 	  (std::is_object_address (this));
 #endif
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (_M_buf_index + 1 < _M_buf_last)
 	  ++_M_buf_index; // Move to the next code unit in the buffer.
 	else if (_M_curr() != _M_last)
@@ -214,6 +216,7 @@ namespace __unicode
 	    // we already moved there after decoding the last code point).
 	    if constexpr (forward_iterator<_Iter>)
 	      std::advance(_M_curr(), _M_to_increment);
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    if (_M_curr() == _M_last)
 	      _M_buf_index = 0;
 	    else // Decode next code point from the input and update buffer.
@@ -660,33 +663,54 @@ namespace __unicode
 	  {
 	    static_assert(sizeof(_ToFmt) == 1);
 	    int __bits = std::bit_width((uint32_t)__c);
+	    // Each _M_buf[i] is given a part of *this, so may have ended it
+	    // (the lifetime rule): it hasn't.
 	    if (__bits <= 7) [[likely]]
 	      {
 		_M_buf[0] = __c;
-		_M_buf[1] = _M_buf[2] = _M_buf[3] = 0;
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
+		_M_buf[1] = 0;
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
+		_M_buf[2] = 0;
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
+		_M_buf[3] = 0;
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 		_M_buf_last = 1;
 	      }
 	    else if (__bits <= 11)
 	      {
 		_M_buf[0] = 0xC0 | (__c >> 6);
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 		_M_buf[1] = 0x80 | (__c & 0x3F);
-		_M_buf[2] = _M_buf[3] = 0;
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
+		_M_buf[2] = 0;
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
+		_M_buf[3] = 0;
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 		_M_buf_last = 2;
 	      }
 	    else if (__bits <= 16)
 	      {
 		_M_buf[0] = 0xE0 | (__c >> 12);
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 		_M_buf[1] = 0x80 | ((__c >> 6) & 0x3F);
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 		_M_buf[2] = 0x80 | (__c & 0x3F);
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 		_M_buf[3] = 0;
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 		_M_buf_last = 3;
 	      }
 	    else
 	      {
 		_M_buf[0] = 0xF0 | ((__c >> 18) & 0x07);
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 		_M_buf[1] = 0x80 | ((__c >> 12) & 0x3F);
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 		_M_buf[2] = 0x80 | ((__c >> 6) & 0x3F);
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 		_M_buf[3] = 0x80 | (__c & 0x3F);
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
 		_M_buf_last = 4;
 	      }
 	  }
@@ -705,7 +729,7 @@ namespace __unicode
       { return _M_first_and_curr._M_first; }
 
       constexpr _Iter&
-      _M_curr()
+      _M_curr() _GLIBCXX_CONVEYOR_AUTO
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
       post<std::contracts::never_proven_conveyor_v>
@@ -714,7 +738,7 @@ namespace __unicode
       { return _M_first_and_curr._M_curr; }
 
       constexpr _Iter
-      _M_curr() const
+      _M_curr() const _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_first_and_curr._M_curr; }
 
       // _M_first is not needed for non-bidirectional ranges.
@@ -1241,6 +1265,7 @@ inline namespace __v18_0_0
     constexpr size_t
     __truncate(basic_string_view<_CharT>& __s, size_t __max)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__s);
       if (__s.empty()) [[unlikely]]
 	return 0;
 

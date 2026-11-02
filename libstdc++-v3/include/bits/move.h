@@ -49,8 +49,20 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     __attribute__((__always_inline__))
     inline _GLIBCXX_CONSTEXPR _Tp*
-    __addressof(_Tp& __r) _GLIBCXX_NOEXCEPT
+    __addressof(_Tp& __r) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
+    _GLIBCXX_CONVEYOR_TRUST_PRE(__r)
     { return __builtin_addressof(__r); }
+
+  // A trust point inside an expression: __x, still the object it was,
+  // where a call before it in the same expression -- a mem-initializer,
+  // another argument -- was given a route to it and so may have ended
+  // it (the lifetime rule), and no statement can re-trust it.
+  template<typename _Tp>
+    __attribute__((__always_inline__))
+    inline _GLIBCXX_CONSTEXPR _Tp&
+    __trust_object(_Tp& __x) _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
+    _GLIBCXX_CONVEYOR_TRUST_PRE(__x) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+    { return __x; }
 
 #if __cplusplus >= 201103L
 
@@ -223,7 +235,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<typename _Tp>
     [[__nodiscard__,__gnu__::__always_inline__]]
     inline _GLIBCXX17_CONSTEXPR _Tp*
-    addressof(_Tp& __r) noexcept
+    addressof(_Tp& __r) noexcept _GLIBCXX_CONVEYOR_AUTO
+    _GLIBCXX_CONVEYOR_TRUST_PRE(__r)
     { return __builtin_addressof(__r); }
 
   // _GLIBCXX_RESOLVE_LIB_DEFECTS

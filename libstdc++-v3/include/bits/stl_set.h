@@ -366,7 +366,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  to the keys.
        */
       iterator
-      begin() const _GLIBCXX_NOEXCEPT
+      begin() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.begin(); }
 
       /**
@@ -403,7 +403,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  to the keys.
        */
       iterator
-      cbegin() const noexcept
+      cbegin() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.begin(); }
 
       /**
@@ -412,7 +412,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  to the keys.
        */
       iterator
-      cend() const noexcept
+      cend() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.end(); }
 
       /**
@@ -436,17 +436,17 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
       ///  Returns true if the %set is empty.
       _GLIBCXX_NODISCARD bool
-      empty() const _GLIBCXX_NOEXCEPT
+      empty() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.empty(); }
 
       ///  Returns the size of the %set.
       size_type
-      size() const _GLIBCXX_NOEXCEPT
+      size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.size(); }
 
       ///  Returns the maximum size of the %set.
       size_type
-      max_size() const _GLIBCXX_NOEXCEPT
+      max_size() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO
       { return _M_t.max_size(); }
 
       /**
@@ -869,7 +869,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        */
       bool
       contains(const key_type& __x) const
-      { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_t.find(__x) != _M_t.end(); }
+      {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	const_iterator __it = _M_t.find(__x);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return __it != _M_t.end();
+      }
 
       template<typename _Kt>
 	auto

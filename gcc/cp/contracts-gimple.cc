@@ -245,6 +245,18 @@ typedef pair_hash<nofree_ptr_hash<gimple>, nofree_ptr_hash<tree_node>>
    OA_LIVE), consulted by cg_provable_object_address_p while
    CG_CONSULT_CALL is being checked.  */
 static hash_set<cg_call_value_hash> *cg_ended_object_addresses;
+/* For each call, the members whose object may have ended before it while
+   the object they lie in hasn't (cg_end_route_objects): a member lvalue,
+   or a TREE_LIST whose purpose is an object any one of whose members
+   may have.  */
+static hash_map<gimple *, vec<tree>> *cg_ended_member_routes;
+/* The pointer values a trust of a member or element ('&a[i]') makes an
+   object's again at a call, though an earlier call may have ended the
+   object they lie in (cg_dom_fact_state's OA_RENEWED).  */
+static hash_set<cg_call_value_hash> *cg_renewed_object_addresses;
+static tree cg_pointer_root (tree);
+static bool cg_member_route_ended_p (tree);
+static bool cg_call_ends_lifetimes_p (gcall *);
 static gimple *cg_consult_call;
 
 /* The call-vs-call analogue of cg_call_rel_fact immediately above --
@@ -2181,10 +2193,18 @@ cg_provable_object_address_p (tree val, hash_map<tree, cg_fact> &established,
      a conveyor-declared one) by cg_seed_self_trust, mirroring that
      function's own identical widening.  */
 
-  /* A self-trusted parameter whose object a call may have ended.  */
-  if (SSA_NAME_IS_DEFAULT_DEF (val) && cg_ended_object_addresses
-      && cg_consult_call
-      && cg_ended_object_addresses->contains ({cg_consult_call, val}))
+  /* A self-trusted parameter, or a pointer value, whose object a call
+     given a route to it may have ended (cg_end_object_addresses_for_
+     call).  */
+  if (cg_ended_object_addresses && cg_consult_call
+      && !(cg_renewed_object_addresses
+	   && cg_renewed_object_addresses->contains ({cg_consult_call, val}))
+      && (cg_ended_object_addresses->contains ({cg_consult_call, val})
+	  || (TREE_CODE (val) == SSA_NAME && !SSA_NAME_IS_DEFAULT_DEF (val)
+	      && cg_pointer_root (val) != val
+	      && cg_ended_object_addresses->contains
+		   ({cg_consult_call, cg_pointer_root (val)}))
+	  || cg_member_route_ended_p (val)))
     {
       if (reason_out)
 	*reason_out = OA_UNPROVABLE_NO_FACT;
@@ -8352,6 +8372,21 @@ struct cg_dom_fact_state
   /* The self-trusted parameters (default definitions) still object
      addresses: see cg_ended_object_addresses.  */
   hash_set<tree> oa_live;
+  /* The pointer values (cg_pointer_root) whose object a call given a
+     route to it may have ended since (cg_end_object_addresses_for_call):
+     on any path, so a union at joins.  A fact on one established before
+     doesn't hold; a new one (a trust after the call) clears it.  A
+     member whose object hasn't ended is its lvalue (cg_end_route_
+     objects).  */
+  hash_set<tree> oa_ended;
+  /* The objects any one of whose members such a call may have ended,
+     though not the object (cg_end_route_objects): as OA_ENDED.  */
+  hash_set<tree> oa_ended_any_member;
+  /* The pointer values a later trust of a member or element made an
+     object's again ('TRUST (&a[i])' after a call given 'a'): what
+     OA_ENDED says of the object they lie in doesn't apply to them.  On
+     every path, so an intersection at joins.  */
+  hash_set<tree> oa_renewed;
 };
 
 /* An SSA_NAME's own identity is itself; '&decl' resolves to DECL
@@ -10504,6 +10539,24 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
   /* Placement new only returns the pointer it is given.  */
   if (call_callee && std_placement_new_fn_p (call_callee))
     return;
+  /* A local scalar in memory whose address has been taken may have been
+     handed out earlier ('keep (&p)'): a call that isn't conveyor may
+     write it, given no route to it here, so the facts on its value end
+     (cg_scalar_memory_fact_key).  */
+  if (cg_call_ends_lifetimes_p (call))
+    {
+      auto_vec<std::pair<tree, tree>> escaped;
+      for (auto it : state.field)
+	{
+	  tree d = it.first.first;
+	  if (it.first.second == NULL_TREE && d && DECL_P (d)
+	      && (VAR_P (d) || TREE_CODE (d) == PARM_DECL)
+	      && !is_global_var (d) && TREE_ADDRESSABLE (d))
+	    escaped.safe_push (it.first);
+	}
+      for (auto k : escaped)
+	state.field.remove (k);
+    }
   unsigned n = gimple_call_num_args (call);
   tree parm_types = (gimple_call_fntype (call)
 		     ? TYPE_ARG_TYPES (gimple_call_fntype (call)) : NULL_TREE);
@@ -10526,6 +10579,27 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
 	  }
       cg_invalidate_persistent_facts_for_call_arg (arg, fun,
 						   field_object_cache, state);
+      /* A member's address ('set (&this->d)', 'set (&c.d)'): the call
+	 may store anything there, so the facts on the member's value end
+	 -- keyed on the object's identity and the field, which the
+	 member's own address doesn't resolve to above.  */
+      {
+	tree addr = arg;
+	if (TREE_CODE (addr) == SSA_NAME && !SSA_NAME_IS_DEFAULT_DEF (addr)
+	    && gimple_assign_single_p (SSA_NAME_DEF_STMT (addr)))
+	  addr = gimple_assign_rhs1 (SSA_NAME_DEF_STMT (addr));
+	if (TREE_CODE (addr) == ADDR_EXPR
+	    && TREE_CODE (TREE_OPERAND (addr, 0)) == COMPONENT_REF)
+	  {
+	    tree ref = TREE_OPERAND (addr, 0);
+	    tree obj = TREE_OPERAND (ref, 0);
+	    tree id = (TREE_CODE (obj) == MEM_REF
+		       ? cg_gimple_object_identity (TREE_OPERAND (obj, 0))
+		       : cg_gimple_object_identity (obj));
+	    if (id)
+	      state.field.remove ({id, TREE_OPERAND (ref, 1)});
+	  }
+      }
       /* An accessor's result on an object the callee can't change
 	 through ARG (a reference or pointer to const) stays put.  */
       if (POINTER_TYPE_P (TREE_TYPE (arg))
@@ -11992,6 +12066,15 @@ cg_dom_fact_state_assign (cg_dom_fact_state *dst, const cg_dom_fact_state &src)
   dst->oa_live.empty ();
   for (tree t : src.oa_live)
     dst->oa_live.add (t);
+  dst->oa_ended.empty ();
+  for (tree t : src.oa_ended)
+    dst->oa_ended.add (t);
+  dst->oa_ended_any_member.empty ();
+  for (tree t : src.oa_ended_any_member)
+    dst->oa_ended_any_member.add (t);
+  dst->oa_renewed.empty ();
+  for (tree t : src.oa_renewed)
+    dst->oa_renewed.add (t);
 }
 
 /* Agreement-based, mirroring contracts.cc's own oa_env::predicate_
@@ -12134,6 +12217,19 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src,
       oa_live_remove.safe_push (t);
   for (tree t : oa_live_remove)
     dst->oa_live.remove (t);
+
+  /* Ended on any path is ended.  */
+  for (tree t : src.oa_ended)
+    dst->oa_ended.add (t);
+  for (tree t : src.oa_ended_any_member)
+    dst->oa_ended_any_member.add (t);
+  /* Renewed only on every path.  */
+  auto_vec<tree> unrenew;
+  for (tree t : dst->oa_renewed)
+    if (!src.oa_renewed.contains (t))
+      unrenew.safe_push (t);
+  for (tree t : unrenew)
+    dst->oa_renewed.remove (t);
 }
 
 /* The fixed-point loop's own "has anything changed since the last time
@@ -12151,10 +12247,23 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
       || a.rel.elements () != b.rel.elements ()
       || a.call_rel.elements () != b.call_rel.elements ()
       || a.call_call.elements () != b.call_call.elements ()
-      || a.oa_live.elements () != b.oa_live.elements ())
+      || a.oa_live.elements () != b.oa_live.elements ()
+      || a.oa_ended.elements () != b.oa_ended.elements ()
+      || (a.oa_ended_any_member.elements ()
+	  != b.oa_ended_any_member.elements ())
+      || a.oa_renewed.elements () != b.oa_renewed.elements ())
     return false;
+  for (tree t : a.oa_renewed)
+    if (!b.oa_renewed.contains (t))
+      return false;
   for (tree t : a.oa_live)
     if (!b.oa_live.contains (t))
+      return false;
+  for (tree t : a.oa_ended)
+    if (!b.oa_ended.contains (t))
+      return false;
+  for (tree t : a.oa_ended_any_member)
+    if (!b.oa_ended_any_member.contains (t))
       return false;
   for (auto it : a.pred)
     {
@@ -13904,6 +14013,351 @@ cg_own_parm_default_def (tree val, function *fun)
   return ssa_default_def (fun, parm);
 }
 
+/* Whether CALL may end the lifetime of an object it is given a route to
+   ('delete p', 'delete &r' through a const reference too, 'delete this',
+   'free (p)').  Not a conveyor callee, which can't -- nor so a chain of
+   them -- however it is reached: directly, through a caller-side
+   contract wrapper, or as a virtual call naming a conveyor function
+   (every override of which is conveyor); nor a cast-like std::forward /
+   std::move / std::as_const, a contract check, an internal function, a
+   const or pure one, or a builtin other than free and realloc.  */
+
+static bool
+cg_call_ends_lifetimes_p (gcall *call)
+{
+  if (gimple_call_internal_p (call)
+      || (gimple_call_flags (call) & (ECF_CONST | ECF_PURE)))
+    return false;
+  tree sv, cd, dc;
+  if (cg_std_identity_call_arg (call)
+      || cg_contract_check_call_p (call, &sv, &cd, &dc))
+    return false;
+  if (gimple_call_builtin_p (call, BUILT_IN_NORMAL))
+    {
+      built_in_function code = DECL_FUNCTION_CODE (gimple_call_fndecl (call));
+      return code == BUILT_IN_FREE || code == BUILT_IN_REALLOC;
+    }
+  tree named = contract_call_named_fn (gimple_call_fn (call));
+  if (named && TREE_CODE (named) == FUNCTION_DECL)
+    {
+      maybe_instantiate_conveyor (named);
+      if (DECL_CONV_FN_P (named) || DECL_DECLARED_CONVEYOR_P (named)
+	  || std_placement_new_fn_p (named))
+	return false;
+    }
+  return true;
+}
+
+/* Where pointer P points, as cg_pointer_root, but a member's address
+   only reaches the object it lies in where a callee given it may legally
+   get there (contract_member_reaches_enclosing_p): the decl or pointer
+   value of the object reached, or NULL_TREE with *MEMBER_OUT set to the
+   member lvalue the climb stops at.  Without CLIMB, a member's address
+   reaches only the member.  */
+
+static tree
+cg_route_object (tree p, tree *member_out, bool climb = true)
+{
+  *member_out = NULL_TREE;
+  for (int i = 0; i < 16; ++i)
+    {
+      if (TREE_CODE (p) == ADDR_EXPR)
+	{
+	  tree ref = TREE_OPERAND (p, 0);
+	  while (climb && contract_member_reaches_enclosing_p (ref))
+	    ref = TREE_OPERAND (ref, 0);
+	  if (handled_component_p (ref))
+	    {
+	      *member_out = ref;
+	      return NULL_TREE;
+	    }
+	  if (TREE_CODE (ref) == MEM_REF)
+	    {
+	      p = TREE_OPERAND (ref, 0);
+	      continue;
+	    }
+	  return ref;
+	}
+      if (TREE_CODE (p) != SSA_NAME || SSA_NAME_IS_DEFAULT_DEF (p))
+	return p;
+      gimple *def = SSA_NAME_DEF_STMT (p);
+      if (!is_gimple_assign (def))
+	return p;
+      tree_code code = gimple_assign_rhs_code (def);
+      if (gimple_assign_single_p (def) || CONVERT_EXPR_CODE_P (code)
+	  || code == POINTER_PLUS_EXPR)
+	p = gimple_assign_rhs1 (def);
+      else
+	return p;
+    }
+  return p;
+}
+
+/* Record in STATE.oa_ended the objects a call that may end a lifetime,
+   given ARG, may end: what ARG points to, but for a member's address
+   only as far out as the callee may reach (cg_route_object); and for a
+   pointer or reference a call returned ('touch (s.get_a ())'), the
+   objects it may lie in -- each pointer or reference that call was
+   given, wholly when the result may be any part of it (its class is a
+   union or standard-layout, or the result is of a class it derives from
+   or that derives from it, or it isn't of class type), else any one of
+   its members.  As the AST engine's oa_call_arg_further_routes.  */
+
+static void
+cg_end_route_objects (tree arg, cg_dom_fact_state &state, int depth = 0,
+		      bool climb = true)
+{
+  if (TREE_CODE (arg) == SSA_NAME)
+    state.oa_ended.add (arg);
+  tree member;
+  tree root = cg_route_object (arg, &member, climb);
+  if (member)
+    {
+      state.oa_ended.add (member);
+      return;
+    }
+  if (!root || TREE_CODE (root) != SSA_NAME)
+    return;
+  state.oa_ended.add (root);
+  /* What a trust renewed in the object ends with it again.  */
+  if (state.oa_renewed.elements ())
+    {
+      auto_vec<tree> drop;
+      for (tree t : state.oa_renewed)
+	if (t == arg || cg_pointer_root (t) == root)
+	  drop.safe_push (t);
+      for (tree t : drop)
+	state.oa_renewed.remove (t);
+    }
+  gcall *def = (SSA_NAME_IS_DEFAULT_DEF (root) ? NULL
+		: dyn_cast <gcall *> (SSA_NAME_DEF_STMT (root)));
+  if (!def || depth >= 4 || !INDIRECT_TYPE_P (TREE_TYPE (root)))
+    return;
+  tree referent = TYPE_MAIN_VARIANT (TREE_TYPE (TREE_TYPE (root)));
+  for (unsigned i = 0; i < gimple_call_num_args (def); ++i)
+    {
+      tree q = gimple_call_arg (def, i);
+      if (!INDIRECT_TYPE_P (TREE_TYPE (q)))
+	continue;
+      tree c = TYPE_MAIN_VARIANT (TREE_TYPE (TREE_TYPE (q)));
+      if (!CLASS_TYPE_P (c) || !CLASS_TYPE_P (referent)
+	  || TREE_CODE (c) == UNION_TYPE || std_layout_type_p (c)
+	  || DERIVED_FROM_P (c, referent) || DERIVED_FROM_P (referent, c))
+	cg_end_route_objects (q, state, depth + 1);
+      else
+	{
+	  tree m;
+	  tree obj = cg_route_object (q, &m);
+	  if (m)
+	    obj = m;
+	  if (obj)
+	    state.oa_ended_any_member.add (obj);
+	}
+    }
+}
+
+/* Whether member lvalues A and B, as GIMPLE gives them, may be the same
+   member of the same object: the same fields down to the same object,
+   elements of an array being taken as possibly the same.  */
+
+static bool
+cg_same_member_lvalue_p (tree a, tree b)
+{
+  for (int i = 0; i < 32; ++i)
+    {
+      if (TREE_CODE (a) != TREE_CODE (b))
+	return false;
+      switch (TREE_CODE (a))
+	{
+	case COMPONENT_REF:
+	  if (TREE_OPERAND (a, 1) != TREE_OPERAND (b, 1))
+	    return false;
+	  break;
+	case ARRAY_REF:
+	case ARRAY_RANGE_REF:
+	case REALPART_EXPR:
+	case IMAGPART_EXPR:
+	case VIEW_CONVERT_EXPR:
+	  break;
+	case MEM_REF:
+	  return (cg_pointer_root (TREE_OPERAND (a, 0))
+		  == cg_pointer_root (TREE_OPERAND (b, 0))
+		  && operand_equal_p (TREE_OPERAND (a, 1),
+				      TREE_OPERAND (b, 1), 0));
+	default:
+	  return a == b || operand_equal_p (a, b, 0);
+	}
+      a = TREE_OPERAND (a, 0);
+      b = TREE_OPERAND (b, 0);
+    }
+  return false;
+}
+
+/* Whether VAL is the address of a member a call before the one being
+   checked (CG_CONSULT_CALL) may have ended while the object it lies in
+   isn't known to have ended (cg_ended_member_routes).  */
+
+static bool
+cg_member_route_ended_p (tree val)
+{
+  if (!cg_ended_member_routes || !cg_consult_call)
+    return false;
+  vec<tree> *ended = cg_ended_member_routes->get (cg_consult_call);
+  if (!ended || ended->is_empty ())
+    return false;
+  tree p = val;
+  for (int i = 0; i < 16 && TREE_CODE (p) == SSA_NAME; ++i)
+    {
+      if (SSA_NAME_IS_DEFAULT_DEF (p))
+	return false;
+      gimple *def = SSA_NAME_DEF_STMT (p);
+      if (!is_gimple_assign (def)
+	  || !(gimple_assign_single_p (def)
+	       || CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def))))
+	return false;
+      p = gimple_assign_rhs1 (def);
+    }
+  if (TREE_CODE (p) != ADDR_EXPR
+      || !handled_component_p (TREE_OPERAND (p, 0)))
+    return false;
+  tree ref = TREE_OPERAND (p, 0);
+  tree base = get_base_address (ref);
+  tree base_root = (base && TREE_CODE (base) == MEM_REF
+		    ? cg_pointer_root (TREE_OPERAND (base, 0)) : base);
+  for (tree e : *ended)
+    {
+      /* Any member of an object: one VAL's member lies in.  */
+      if (TREE_CODE (e) == TREE_LIST)
+	{
+	  tree obj = TREE_PURPOSE (e);
+	  if (!handled_component_p (obj))
+	    {
+	      if (obj == base_root)
+		return true;
+	      continue;
+	    }
+	  for (tree l = TREE_OPERAND (ref, 0); handled_component_p (l);
+	       l = TREE_OPERAND (l, 0))
+	    if (cg_same_member_lvalue_p (l, obj))
+	      return true;
+	  continue;
+	}
+      /* A member: VAL's, or one it lies in.  */
+      for (tree l = ref; handled_component_p (l); l = TREE_OPERAND (l, 0))
+	if (cg_same_member_lvalue_p (l, e))
+	  return true;
+    }
+  return false;
+}
+
+/* Undo cg_end_route_objects for pointer value ARG, now known again to
+   point to an object (a callee's postcondition says so): that object,
+   and what of its members has ended.  */
+
+static void
+cg_restore_route_objects (tree arg, cg_dom_fact_state &state)
+{
+  tree member;
+  tree root = cg_route_object (arg, &member);
+  if (TREE_CODE (arg) == SSA_NAME)
+    state.oa_ended.remove (arg);
+  if (root && !member)
+    state.oa_ended.remove (root);
+  auto_vec<tree> drop;
+  for (tree e : state.oa_ended)
+    {
+      if (!handled_component_p (e))
+	continue;
+      if (member)
+	{
+	  for (tree l = e; handled_component_p (l); l = TREE_OPERAND (l, 0))
+	    if (cg_same_member_lvalue_p (l, member))
+	      {
+		drop.safe_push (e);
+		break;
+	      }
+	  continue;
+	}
+      tree base = get_base_address (e);
+      if (base && TREE_CODE (base) == MEM_REF)
+	base = cg_pointer_root (TREE_OPERAND (base, 0));
+      if (base && base == root)
+	drop.safe_push (e);
+    }
+  for (tree e : drop)
+    state.oa_ended.remove (e);
+  if (tree obj = member ? member : root)
+    state.oa_ended_any_member.remove (obj);
+}
+
+/* Whether member lvalue E, as GIMPLE gives it, is the one the contract
+   condition's address operand REF (GENERIC, 'o.in' or 'this->m')
+   names, the condition's object being IDENTITY at the check.  */
+
+static bool
+cg_member_is_condition_member_p (tree e, tree ref, tree decl, tree identity)
+{
+  for (int i = 0; i < 32; ++i)
+    {
+      ref = STRIP_ANY_LOCATION_WRAPPER (ref);
+      if (TREE_CODE (ref) == INDIRECT_REF)
+	ref = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (ref, 0));
+      if (!handled_component_p (e))
+	{
+	  if (ref != decl)
+	    return false;
+	  if (TREE_CODE (e) == MEM_REF)
+	    return (identity
+		    && cg_gimple_object_identity (TREE_OPERAND (e, 0))
+		       == identity);
+	  return e == decl || e == identity;
+	}
+      if (TREE_CODE (e) != TREE_CODE (ref))
+	return false;
+      if (TREE_CODE (e) == COMPONENT_REF
+	  && TREE_OPERAND (e, 1) != TREE_OPERAND (ref, 1))
+	return false;
+      e = TREE_OPERAND (e, 0);
+      ref = TREE_OPERAND (ref, 0);
+    }
+  return false;
+}
+
+/* SSA name NAME gets a new value (its definition, again in a loop): what
+   STATE.oa_ended says of its old value, and of the members of what that
+   pointed to, doesn't hold of it.  */
+
+static void
+cg_forget_ended_value (tree name, cg_dom_fact_state &state)
+{
+  if (!name || TREE_CODE (name) != SSA_NAME
+      || !(state.oa_ended.elements () || state.oa_ended_any_member.elements ()))
+    return;
+  state.oa_ended.remove (name);
+  state.oa_ended_any_member.remove (name);
+  auto_vec<tree> drop;
+  for (tree e : state.oa_ended)
+    if (handled_component_p (e))
+      {
+	tree base = get_base_address (e);
+	if (base && TREE_CODE (base) == MEM_REF
+	    && TREE_OPERAND (base, 0) == name)
+	  drop.safe_push (e);
+      }
+  for (tree e : drop)
+    state.oa_ended.remove (e);
+}
+
+/* As cg_forget_ended_value for the PHI results of BB.  */
+
+static void
+cg_forget_ended_phis (basic_block bb, cg_dom_fact_state &state)
+{
+  for (gphi_iterator gpi = gsi_start_phis (bb); !gsi_end_p (gpi);
+       gsi_next (&gpi))
+    cg_forget_ended_value (gimple_phi_result (gpi.phi ()), state);
+}
+
 /* The parameters CALL may end the object of: STATE.oa_live loses them,
    as the AST engine's oa_invalidate_symbolic_facts_for_call_args does --
    an argument resolving to a parameter, and the parameters that may
@@ -13912,71 +14366,81 @@ cg_own_parm_default_def (tree val, function *fun)
 
 static void
 cg_end_object_addresses_for_call (gcall *call, function *fun,
-				  cg_field_object_cache &field_object_cache,
 				  cg_dom_fact_state &state)
 {
-  if (state.oa_live.is_empty ())
+  /* In every mode, and for a const pointer or reference as well (the
+     AST engine's oa_invalidate_symbolic_facts_for_call_args): a call
+     given a route to an object may end it -- 'TRUST (p); destroy (p);
+     p->f ()' was accepted.  A call given no route to it keeps it.  */
+  if (!cg_call_ends_lifetimes_p (call))
     return;
-  /* As in the AST engine, only under the proofs flags: without them, the
-     mandatory obligations rely on is_object_address facts a call
-     doesn't end.  */
-  if (!(flag_contract_analysis_engine != 0
-	? cg_conveyor_proofs_p () || cg_symbolic_proofs_p ()
-	: (flag_contract_conveyor_proofs_gimple
-	   || flag_contract_symbolic_proofs_gimple)))
-    return;
-  tree callee = gimple_call_fndecl (call);
-  if (callee)
-    maybe_instantiate_conveyor (callee);
-  if (callee && (DECL_CONV_FN_P (callee) || DECL_DECLARED_CONVEYOR_P (callee)
-		 || std_placement_new_fn_p (callee)))
-    return;
-  /* std::forward, std::move and std::as_const are casts.  */
-  tree sv, cd, dc;
-  if (cg_std_identity_call_arg (call)
-      || cg_contract_check_call_p (call, &sv, &cd, &dc)
-      || gimple_call_internal_p (call)
-      || gimple_call_builtin_p (call, BUILT_IN_NORMAL)
-      || (gimple_call_flags (call) & (ECF_CONST | ECF_PURE)))
-    return;
-  tree parm_types = (gimple_call_fntype (call)
-		     ? TYPE_ARG_TYPES (gimple_call_fntype (call)) : NULL_TREE);
-  for (unsigned i = 0; i < gimple_call_num_args (call);
-       ++i, parm_types = parm_types ? TREE_CHAIN (parm_types) : NULL_TREE)
+  for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
     {
       tree arg = gimple_call_arg (call, i);
-      if (!POINTER_TYPE_P (TREE_TYPE (arg))
-	  || (parm_types && TYPE_REF_P (TREE_VALUE (parm_types))
-	      && TYPE_READONLY (TREE_TYPE (TREE_VALUE (parm_types)))))
+      if (!POINTER_TYPE_P (TREE_TYPE (arg)))
 	continue;
-      tree identity = cg_field_slot_identity (arg, state);
-      if (!identity)
-	identity = cg_field_object_identity (arg, field_object_cache);
-      if (!identity)
-	identity = cg_gimple_object_identity (arg);
-      if (tree parm = identity ? cg_identity_as_parm (identity) : NULL_TREE)
-	{
-	  /* Only the parameter's own value: a call handed one of its
-	     object's members ('&this->m') doesn't end the object, as in
-	     the AST engine.  */
-	  tree val = arg;
-	  while (TREE_CODE (val) == SSA_NAME && !SSA_NAME_IS_DEFAULT_DEF (val)
-		 && gimple_assign_single_p (SSA_NAME_DEF_STMT (val))
-		 && (TREE_CODE (gimple_assign_rhs1 (SSA_NAME_DEF_STMT (val)))
-		     == SSA_NAME))
-	    val = gimple_assign_rhs1 (SSA_NAME_DEF_STMT (val));
-	  bool own_value = ((TREE_CODE (val) == SSA_NAME
-			     && SSA_NAME_IS_DEFAULT_DEF (val))
-			    || val == parm);
-	  if (DECL_CONTEXT (parm) != fun->decl || !own_value)
-	    continue;
-	  for (tree sib = DECL_ARGUMENTS (fun->decl); sib;
-	       sib = DECL_CHAIN (sib))
-	    if (sib == parm || oa_could_alias_as_parameters_public (parm, sib))
-	      if (tree ssa = ssa_default_def (fun, sib))
-		state.oa_live.remove (ssa);
-	}
+      /* Whatever value it is, a later use of the same pointer value
+	 isn't known to be an object (cg_ended_object_addresses); nor
+	 the objects it is a route to (cg_end_route_objects).  But a
+	 destructor run on a member or base destroys that subobject only,
+	 not reaching its object; and a constructor begins a lifetime
+	 rather than ending one, so whatever it is run on is an object
+	 after it as before.  As the AST engine's
+	 oa_invalidate_symbolic_facts_for_call_args.  */
+      tree named = (i == 0 ? contract_call_named_fn (gimple_call_fn (call))
+		    : NULL_TREE);
+      bool cdtor = (named && TREE_CODE (named) == FUNCTION_DECL
+		    && (DECL_CONSTRUCTOR_P (named)
+			|| DECL_DESTRUCTOR_P (named)));
+      if (cdtor && DECL_CONSTRUCTOR_P (named))
+	continue;
+      cg_end_route_objects (arg, state, 0, !cdtor);
+      /* A parameter's object the route reaches -- its own value, or one
+	 of its members or bases where the callee may get from there to
+	 the object (cg_route_object) -- ends, and so do the parameters
+	 that may alias it, as in the AST engine.  */
+      tree member;
+      tree root = cg_route_object (arg, &member, !cdtor);
+      tree parm = (!member && root && TREE_CODE (root) == SSA_NAME
+		   && SSA_NAME_IS_DEFAULT_DEF (root)
+		   ? SSA_NAME_VAR (root) : NULL_TREE);
+      if (!parm || TREE_CODE (parm) != PARM_DECL
+	  || DECL_CONTEXT (parm) != fun->decl)
+	continue;
+      for (tree sib = DECL_ARGUMENTS (fun->decl); sib; sib = DECL_CHAIN (sib))
+	if (sib == parm || oa_could_alias_as_parameters_public (parm, sib))
+	  if (tree ssa = ssa_default_def (fun, sib))
+	    state.oa_live.remove (ssa);
     }
+}
+
+/* The pointer values that compute ARG, the address in a trust's
+   condition, as at contract check CALL (STRUCT_VAR and DECLS as from
+   cg_contract_check_call_p): as cg_assert_fact_scope::establish keys the
+   fact.  Computed once per check.  */
+
+static hash_map<gimple *, vec<tree>> *cg_trust_values_cache;
+static bool cg_expr_computes_p (tree, tree, gcall *, tree, tree, int);
+
+static const vec<tree> &
+cg_trust_computed_values (gcall *call, tree arg, tree struct_var, tree decls)
+{
+  static vec<tree> none;
+  if (!cg_trust_values_cache)
+    return none;
+  bool existed;
+  vec<tree> &v = cg_trust_values_cache->get_or_insert (call, &existed);
+  if (!existed)
+    {
+      v = vNULL;
+      unsigned k;
+      tree name;
+      FOR_EACH_SSA_NAME (k, name, cfun)
+	if (POINTER_TYPE_P (TREE_TYPE (name))
+	    && cg_expr_computes_p (arg, name, call, struct_var, decls, 0))
+	  v.safe_push (name);
+    }
+  return v;
 }
 
 /* The parameters CALL makes object addresses again: STATE.oa_live gains
@@ -14007,10 +14471,67 @@ cg_establish_object_addresses_for_call (gcall *call, function *fun,
 	  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
 	  while (TREE_CODE (arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arg))
 	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	  /* A member's address ('&o.in', '&this->m'): a trust of it holds
+	     again after a call that may have ended it.  */
+	  if (TREE_CODE (arg) == ADDR_EXPR)
+	    {
+	      /* The values that compute it are an object's again, though
+		 the object they lie in may have ended (OA_RENEWED).  */
+	      if (handled_component_p (STRIP_ANY_LOCATION_WRAPPER
+				       (TREE_OPERAND (arg, 0))))
+		for (tree name : cg_trust_computed_values (call, arg,
+							   struct_var, decls))
+		  state.oa_renewed.add (name);
+	      tree ref = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	      tree decl = ref;
+	      while (handled_component_p (decl)
+		     || TREE_CODE (decl) == INDIRECT_REF)
+		decl = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (decl, 0));
+	      if (handled_component_p (ref) && DECL_P (decl))
+		{
+		  tree identity
+		    = cg_contract_check_object_identity (call, struct_var,
+							 decls, decl);
+		  auto_vec<tree> drop;
+		  for (tree e : state.oa_ended)
+		    if (handled_component_p (e)
+			&& cg_member_is_condition_member_p (e, ref, decl,
+							    identity))
+		      drop.safe_push (e);
+		  for (tree e : drop)
+		    state.oa_ended.remove (e);
+		}
+	      continue;
+	    }
 	  if (!DECL_P (arg))
 	    continue;
 	  tree identity = cg_contract_check_object_identity (call, struct_var,
 							     decls, arg);
+	  /* A trust after a call that may have ended it holds again, and
+	     so do its members.  */
+	  if (identity)
+	    {
+	      tree root = cg_pointer_root (identity);
+	      state.oa_ended.remove (identity);
+	      state.oa_ended_any_member.remove (identity);
+	      if (root)
+		{
+		  state.oa_ended.remove (root);
+		  state.oa_ended_any_member.remove (root);
+		}
+	      auto_vec<tree> drop;
+	      for (tree e : state.oa_ended)
+		if (handled_component_p (e))
+		  {
+		    tree base = get_base_address (e);
+		    if (base && TREE_CODE (base) == MEM_REF)
+		      base = cg_pointer_root (TREE_OPERAND (base, 0));
+		    if (base && (base == identity || base == root))
+		      drop.safe_push (e);
+		  }
+	      for (tree e : drop)
+		state.oa_ended.remove (e);
+	    }
 	  if (tree ssa = cg_own_parm_default_def (identity, fun))
 	    state.oa_live.add (ssa);
 	}
@@ -14048,6 +14569,13 @@ cg_establish_object_addresses_for_call (gcall *call, function *fun,
 	    continue;
 	  tree identity = cg_gimple_object_identity (gimple_call_arg (call,
 								      argno));
+	  if (identity)
+	    {
+	      state.oa_ended.remove (identity);
+	      if (tree root = cg_pointer_root (identity))
+		state.oa_ended.remove (root);
+	    }
+	  cg_restore_route_objects (gimple_call_arg (call, argno), state);
 	  if (tree ssa = cg_own_parm_default_def (identity, fun))
 	    state.oa_live.add (ssa);
 	}
@@ -14277,10 +14805,12 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 
 	  cg_dom_fact_state out_state;
 	  cg_dom_fact_state_assign (&out_state, in_state);
+	  cg_forget_ended_phis (bb, out_state);
 	  for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
 	       gsi_next (&gsi))
 	    {
 	      gimple *stmt = gsi_stmt (gsi);
+	      cg_forget_ended_value (gimple_get_lhs (stmt), out_state);
 	      if (gimple_assign_single_p (stmt))
 		{
 		  cg_record_field_load_facts (stmt, out_state,
@@ -14317,8 +14847,7 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 		    }
 		  cg_invalidate_persistent_facts_for_call_args
 		    (call, fun, field_object_cache, out_state);
-		  cg_end_object_addresses_for_call (call, fun, field_object_cache,
-						    out_state);
+		  cg_end_object_addresses_for_call (call, fun, out_state);
 		  cg_establish_persistent_facts_for_call (call, field_object_cache,
 							   out_state);
 		  cg_establish_object_addresses_for_call (call, fun, out_state);
@@ -14381,10 +14910,12 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
       cg_compute_in_state (bb, block_out, seed, &state, established_range,
 			    ranger, /*require_conveyor=*/false,
 			    /*require_symbolic=*/false);
+      cg_forget_ended_phis (bb, state);
       for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
 	   gsi_next (&gsi))
 	{
 	  gimple *stmt = gsi_stmt (gsi);
+	  cg_forget_ended_value (gimple_get_lhs (stmt), state);
 	  if (gimple_assign_single_p (stmt))
 	    {
 	      cg_record_field_load_facts (stmt, state, *scalar_range_cache_out,
@@ -14434,15 +14965,38 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 		 addresses).  */
 	      if (cg_ended_object_addresses && established_oa
 		  && !cg_ctor_member_cleanup_p (call, fun))
-		for (tree parm = DECL_ARGUMENTS (fun->decl); parm;
-		     parm = DECL_CHAIN (parm))
-		  if (tree ssa = ssa_default_def (fun, parm))
-		    if (established_oa->get (ssa) && !state.oa_live.contains (ssa))
-		      cg_ended_object_addresses->add ({call, ssa});
+		{
+		  for (tree parm = DECL_ARGUMENTS (fun->decl); parm;
+		       parm = DECL_CHAIN (parm))
+		    if (tree ssa = ssa_default_def (fun, parm))
+		      if (established_oa->get (ssa)
+			  && !state.oa_live.contains (ssa))
+			cg_ended_object_addresses->add ({call, ssa});
+		  /* And the pointer values an earlier call given a route
+		     to their object may have ended.  */
+		  for (tree t : state.oa_ended)
+		    if (!handled_component_p (t))
+		      cg_ended_object_addresses->add ({call, t});
+		  if (cg_renewed_object_addresses)
+		    for (tree t : state.oa_renewed)
+		      cg_renewed_object_addresses->add ({call, t});
+		  /* And the members it may have, the object they lie in
+		     not (cg_member_route_ended_p): an object any one of
+		     whose members may have is a TREE_LIST's purpose.  */
+		  if (cg_ended_member_routes)
+		    {
+		      for (tree t : state.oa_ended)
+			if (handled_component_p (t))
+			  cg_ended_member_routes->get_or_insert (call)
+			    .safe_push (t);
+		      for (tree t : state.oa_ended_any_member)
+			cg_ended_member_routes->get_or_insert (call)
+			  .safe_push (build_tree_list (t, NULL_TREE));
+		    }
+		}
 	      cg_invalidate_persistent_facts_for_call_args (call, fun,
 							     field_object_cache, state);
-	      cg_end_object_addresses_for_call (call, fun, field_object_cache,
-						state);
+	      cg_end_object_addresses_for_call (call, fun, state);
 	      cg_establish_persistent_facts_for_call (call, field_object_cache, state);
 	      cg_establish_object_addresses_for_call (call, fun, state);
 	      cg_record_call_result_facts (call, state, established_oa);
@@ -14850,18 +15404,38 @@ cg_load_unchanged_since_p (gimple *load, gcall *call, bool locals_too = false)
 	    work.safe_push (gimple_phi_arg_def (phi, i));
 	  continue;
 	}
-      /* A call given a pointer into the object may write it (passing a
-	 reference to it, say) -- any other call is let through, as for a
-	 member (and as the AST engine does).  */
-      if (locals_too)
-	if (gcall *c = dyn_cast <gcall *> (d))
+      /* A call given a route to the object the load reads from -- a
+	 pointer to it or into it, or for a member function the object
+	 itself as 'this' -- may write it, or end it if it isn't conveyor
+	 (cg_call_ends_lifetimes_p): 'set (&d)', 'update ()' on '*this'.
+	 Any other call is let through ('other ()' can't reach it), as for
+	 a member and as the AST engine does -- except that a local whose
+	 address has been taken may have been handed out earlier ('keep
+	 (&p)'), so any call that isn't conveyor may write it.  */
+      if (gcall *c = dyn_cast <gcall *> (d))
+	{
+	  tree root = cg_ref_root (ref);
 	  for (unsigned i = 0; i < gimple_call_num_args (c); ++i)
 	    {
 	      tree a = gimple_call_arg (c, i);
-	      if (POINTER_TYPE_P (TREE_TYPE (a))
-		  && cg_pointer_root (a) == cg_ref_root (ref))
+	      tree aroot = POINTER_TYPE_P (TREE_TYPE (a))
+			   ? cg_pointer_root (a) : NULL_TREE;
+	      /* Compared as expressions: a root that is itself a load
+		 ('this->mobj', for '&mobj->d') is a different tree each
+		 time it is read.  */
+	      if (aroot && root
+		  && (aroot == root || operand_equal_p (aroot, root, 0))
+		  && (locals_too
+		      || cg_call_ends_lifetimes_p (c)
+		      || !TYPE_READONLY (TREE_TYPE (TREE_TYPE (a)))))
 		return false;
 	    }
+	  if (root && DECL_P (root)
+	      && (VAR_P (root) || TREE_CODE (root) == PARM_DECL)
+	      && !is_global_var (root) && TREE_ADDRESSABLE (root)
+	      && cg_call_ends_lifetimes_p (c))
+	    return false;
+	}
       if (gimple_assign_single_p (d) && !gimple_clobber_p (d))
 	{
 	  tree lhs = gimple_assign_lhs (d);
@@ -16951,6 +17525,25 @@ pass_contracts_gimple::execute_1 (function *fun)
   hash_set<cg_call_value_hash> ended_object_addresses;
   auto ended = make_temp_override (cg_ended_object_addresses,
 				   &ended_object_addresses);
+  hash_map<gimple *, vec<tree>> ended_member_routes;
+  auto ended_members = make_temp_override (cg_ended_member_routes,
+					   &ended_member_routes);
+  hash_set<cg_call_value_hash> renewed_object_addresses;
+  auto renewed = make_temp_override (cg_renewed_object_addresses,
+				     &renewed_object_addresses);
+  hash_map<gimple *, vec<tree>> trust_values;
+  auto trust_values_override = make_temp_override (cg_trust_values_cache,
+						   &trust_values);
+  struct release_member_routes
+  {
+    hash_map<gimple *, vec<tree>> &m;
+    ~release_member_routes ()
+    {
+      for (auto it : m)
+	it.second.release ();
+    }
+  } release_ended_member_routes { ended_member_routes },
+    release_trust_values { trust_values };
   cg_predicate_facts_walk (fun, &scalar_range_cache,
 			     established_range, &call_relational_verdict,
 			     ranger,

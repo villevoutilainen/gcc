@@ -138,6 +138,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _Optional_payload_base(bool /* __engaged */,
 			     const _Optional_payload_base& __other)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__other);
 	if (__other._M_engaged)
 	  this->_M_construct(__other._M_get());
       }
@@ -148,6 +149,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _Optional_payload_base(bool /* __engaged */,
 			     _Optional_payload_base&& __other)
       {
+	_GLIBCXX_CONVEYOR_TRUST(__other);
 	if (__other._M_engaged)
 	  this->_M_construct(std::move(__other._M_get()));
       }
@@ -170,10 +172,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr void
       _M_copy_assign(const _Optional_payload_base& __other)
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__other);
 	if (this->_M_engaged && __other._M_engaged)
 	  this->_M_get() = __other._M_get();
 	else
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__other);
 	    if (__other._M_engaged)
 	      this->_M_construct(__other._M_get());
 	    else
@@ -329,11 +334,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       // const-qualification, because _M_payload has had the const removed.
 
       constexpr _Tp&
-      _M_get() noexcept
+      _M_get() noexcept _GLIBCXX_CONVEYOR_AUTO
       { return this->_M_payload._M_value; }
 
       constexpr const _Tp&
-      _M_get() const noexcept
+      _M_get() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { return this->_M_payload._M_value; }
 
       // _M_reset is a 'safe' operation with no precondition.
@@ -570,11 +575,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       // The _M_get operations have _M_engaged as a precondition.
       constexpr _Tp&
-      _M_get() noexcept
+      _M_get() noexcept _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_payload._M_get(); }
 
       constexpr const _Tp&
-      _M_get() const noexcept
+      _M_get() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return _M_payload._M_get(); }
     };
 
@@ -620,11 +625,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       // The _M_get operations have _M_engaged as a precondition.
       constexpr _Tp&
-      _M_get() noexcept
+      _M_get() noexcept _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return static_cast<_Dp*>(this)->_M_payload._M_get(); }
 
       constexpr const _Tp&
-      _M_get() const noexcept
+      _M_get() const noexcept _GLIBCXX_CONVEYOR_AUTO
       { _GLIBCXX_CONVEYOR_TRUST_THIS; return static_cast<const _Dp*>(this)->_M_payload._M_get(); }
     };
 
@@ -1142,6 +1147,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  this->_M_reset();
 	  this->_M_construct(std::forward<_Args>(__args)...);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return this->_M_get();
 	}
 
@@ -1205,13 +1211,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr iterator end() noexcept
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
-	return begin() + has_value();
+	return begin() + std::__trust_object(*this).has_value();
       }
 
       constexpr const_iterator end() const noexcept
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
-	return begin() + has_value();
+	return begin() + std::__trust_object(*this).has_value();
       }
 #endif // __cpp_lib_optional_range_support
 
@@ -1233,7 +1239,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       }
 
       constexpr const _Tp&
-      operator*() const& noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      operator*() const& noexcept _GLIBCXX_CONVEYOR_AUTO
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_assert(this->_M_is_engaged());
@@ -1241,7 +1248,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       }
 
       constexpr _Tp&
-      operator*()& noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      operator*()& noexcept _GLIBCXX_CONVEYOR_AUTO
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_assert(this->_M_is_engaged());
@@ -1249,7 +1257,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       }
 
       constexpr _Tp&&
-      operator*()&& noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      operator*()&& noexcept _GLIBCXX_CONVEYOR_AUTO
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_assert(this->_M_is_engaged());
@@ -1257,7 +1266,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       }
 
       constexpr const _Tp&&
-      operator*() const&& noexcept _GLIBCXX_CONVEYOR_REQUIRES_THIS
+      operator*() const&& noexcept _GLIBCXX_CONVEYOR_AUTO
+      _GLIBCXX_CONVEYOR_REQUIRES_THIS
       _GLIBCXX_CONVEYOR_RETURNS_OBJECT
       {
 	__glibcxx_assert(this->_M_is_engaged());
@@ -1493,7 +1503,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[__gnu__::__always_inline__]]
       constexpr _Tp&&
       _M_fwd() && noexcept
-      { return std::move(_M_get()); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return std::move(_M_get()); }
 
       [[__gnu__::__always_inline__]]
       constexpr const _Tp&
@@ -1658,6 +1668,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	return false;
       if (!__lhs.has_value())
 	return true;
+      _GLIBCXX_CONVEYOR_TRUST(__lhs);
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       return *__lhs == *__rhs;
     }
 
@@ -1672,6 +1684,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	return true;
       if (!__lhs.has_value())
 	return false;
+      _GLIBCXX_CONVEYOR_TRUST(__rhs);
       return *__lhs != *__rhs;
     }
 
