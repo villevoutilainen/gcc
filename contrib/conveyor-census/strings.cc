@@ -50,10 +50,16 @@ namespace census
     S sub = s.substr (1, 2);
     n += sub.size () + s.length () + s.capacity () + (s.max_size () > 0);
     n += s[0] == s.at (0);
-    n += s.front () == s.back ();
+    CENSUS_ALIVE (s);
+    {
+      const C f = s.front ();
+      CENSUS_ALIVE (s);
+      n += f == s.back ();
+    }
     s.resize (10, C ('e'));
     s.erase (0, 1);
     s.erase (s.begin ());
+    CENSUS_ALIVE (s);
     s.pop_back ();
     s.reserve (64);
     s.shrink_to_fit ();
@@ -68,6 +74,8 @@ namespace census
     copy.swap (moved);
     n += std::erase (s, C ('a')) + std::erase_if (s, [] (C) { return false; });
     n += (s.c_str () != nullptr) + (s.data () != nullptr);
+    CENSUS_ALIVE (s);
+    CENSUS_ALIVE (t);
     n += concatenate (s, t);
     s.clear ();
     return n;
@@ -137,7 +145,14 @@ namespace census
     s.append_range (v); s.assign_range (v); s.insert_range (s.begin (), v);
     s.replace_with_range (s.begin (), s.begin () + 1, v);
     s.resize_and_overwrite (2, [] (C *, std::size_t k) { return k; });
-    n += s.empty () + (s.get_allocator () == t.get_allocator ());
+    CENSUS_ALIVE (s);
+    n += s.empty ();
+    CENSUS_ALIVE (s);
+    {
+      auto a = s.get_allocator ();
+      CENSUS_ALIVE (t);
+      n += a == t.get_allocator ();
+    }
     n += *s.begin () == *s.cbegin () && *s.rbegin () == *s.crbegin ();
     n += s.end () == s.cend () || s.rend () == s.crend ();
     return n;

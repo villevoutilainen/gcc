@@ -21,7 +21,12 @@ namespace census
     if constexpr (std::ranges::sized_range<R>)
       n += std::ranges::size (r) + std::ranges::ssize (r);
     if constexpr (std::ranges::forward_range<R>)
-      n += std::ranges::distance (r) + !std::ranges::empty (r);
+      {
+	CENSUS_ALIVE (r);
+	n += std::ranges::distance (r);
+	CENSUS_ALIVE (r);
+	n += !std::ranges::empty (r);
+      }
     return n;
   }
 
@@ -55,6 +60,7 @@ namespace census
       n += consume (c | v::reverse);
     if constexpr (std::ranges::common_range<C>)
       n += consume (c | v::common);
+    CENSUS_ALIVE (c);
     std::ranges::subrange s (std::ranges::begin (c), std::ranges::end (c));
     n += consume (s);
     std::ranges::ref_view rv (c);

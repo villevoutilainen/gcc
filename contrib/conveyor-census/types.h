@@ -18,6 +18,13 @@
   pre<std::contracts::conveyor_assert_v> \
     (std::is_object_address (__builtin_addressof (x)))
 
+// The user code's trust that X is still the object it was after a call it
+// gave a route to X, which may have ended it (the lifetime rule): the call
+// isn't conveyor, but the user knows it doesn't end X.
+#define CENSUS_ALIVE(x) \
+  contract_assert<std::contracts::never_proven_conveyor_v> \
+    (std::is_object_address (__builtin_addressof (x)))
+
 namespace census
 {
   // A class with user-provided special members and an ordering.

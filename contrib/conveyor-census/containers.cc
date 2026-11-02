@@ -27,12 +27,17 @@ namespace census
     using T = typename C::value_type;
     int n = 0;
     c.emplace_back (1);
+    CENSUS_ALIVE (c);
     c.emplace (c.begin (), 2);
     if constexpr (std::copyable<T>)
       {
 	T t (3);
 	c.push_back (t);
-	c.insert (c.end (), t);
+	CENSUS_ALIVE (c);
+	auto e = c.end ();
+	CENSUS_ALIVE (c);
+	c.insert (e, t);
+	CENSUS_ALIVE (c);
 	c.insert (c.end (), 2, t);
 	c.assign (2, t);
 	C copy (c);
@@ -42,13 +47,26 @@ namespace census
 	c.resize (4, t);
       }
     c.push_back (T (4));
+    CENSUS_ALIVE (c);
     for (auto &x : c)
       n += x == x;
     for (auto it = c.rbegin (); it != c.rend (); ++it)
       ++n;
-    n += c.size () + c.empty () + (c.max_size () > 0);
-    n += c.front () == c.back ();
+    CENSUS_ALIVE (c);
+    n += c.size ();
+    CENSUS_ALIVE (c);
+    n += c.empty ();
+    CENSUS_ALIVE (c);
+    n += c.max_size () > 0;
+    CENSUS_ALIVE (c);
+    {
+      const auto &f = c.front ();
+      CENSUS_ALIVE (c);
+      n += f == c.back ();
+    }
+    CENSUS_ALIVE (c);
     c.erase (c.begin ());
+    CENSUS_ALIVE (c);
     c.pop_back ();
     c.resize (2);
     if constexpr (requires { c.shrink_to_fit (); })
@@ -59,6 +77,7 @@ namespace census
     std::swap (c, moved);
     n += std::erase_if (c, [] (const T &x) { return x == x; });
     c.clear ();
+    CENSUS_ALIVE (c);
     (void) c.get_allocator ();
     return n;
   }
@@ -70,7 +89,11 @@ namespace census
     int n = 0;
     if (!c.empty ())
       {
-	n += c[0] == c.at (0);
+	CENSUS_ALIVE (c);
+	const auto &e0 = c[0];
+	CENSUS_ALIVE (c);
+	n += e0 == c.at (0);
+	CENSUS_ALIVE (c);
 	n += c.end () - c.begin ();
       }
     return n;
@@ -457,8 +480,11 @@ namespace census
   {
     std::map<int, Val> m {{1, Val (2)}};
     const auto &cm = m;
-    int n = (cm.lower_bound (1) != cm.upper_bound (1))
-	    + (cm.lower_bound (0) == cm.cbegin ());
+    int n = cm.lower_bound (1) != cm.upper_bound (1);
+    CENSUS_ALIVE (cm);
+    auto lb = cm.lower_bound (0);
+    CENSUS_ALIVE (cm);
+    n += lb == cm.cbegin ();
     std::list<std::map<int, int>> l (2);
     const auto &cl = l;
     n += (cl.cbegin () != cl.cend ()) + (l.begin () != l.end ())
