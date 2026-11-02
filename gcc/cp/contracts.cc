@@ -2742,9 +2742,12 @@ get_fn_contract_specifiers (tree decl)
    object clause -- see .claude/plans/stateless-jumping-shore.md -- but
    only ever consulted for that feature: an ordinary function's own
    contracts are remapped via DECL_ARGUMENTS instead (remap_contract),
-   which needs no such side table.  */
+   which needs no such side table.  A cache: it must not keep a contract
+   or its parameters alive itself.  A redeclaration's contracts name its
+   parameters, whose DECL_CONTEXT duplicate_decls frees; kept alive here,
+   the next collection marked through the freed decl.  */
 
-static GTY(()) hash_map<tree, tree> *contract_positional_parms_map;
+static GTY((cache)) tree_cache_map *contract_positional_parms_map;
 
 void
 set_contract_positional_parms (tree contract, tree parms)
@@ -39550,13 +39553,14 @@ build_contract_check (tree contract)
    contracts when instantiated.  So rebuild each such table, from the
    loaded entries, once the PCH is in.  */
 
-template<typename K, typename V>
+template<typename K, typename V, typename Traits>
 static void
-pch_rehash (hash_map<K, V> *&map)
+pch_rehash (hash_map<K, V, Traits> *&map)
 {
   if (!map)
     return;
-  hash_map<K, V> *fresh = hash_map<K, V>::create_ggc (map->elements ());
+  hash_map<K, V, Traits> *fresh
+    = hash_map<K, V, Traits>::create_ggc (map->elements ());
   for (auto it = map->begin (); it != map->end (); ++it)
     fresh->put ((*it).first, (*it).second);
   map = fresh;
