@@ -66,7 +66,9 @@ namespace census
     std::basic_string_view<C> v = s;
     n += v.size () + v.find (C ('a')) + v.substr (1).size ()
 	 + (v == std::basic_string_view<C> (t));
+    CENSUS_ALIVE (v);
     v.remove_prefix (1);
+    CENSUS_ALIVE (v);
     v.remove_suffix (1);
     S copy (s);
     S moved (std::move (copy));
@@ -162,7 +164,9 @@ namespace census
   int strings ()
   {
     std::basic_string<C, std::char_traits<C>, A> s, t;
-    return use_string (s, t) + find_all (s, t) + overloads_all (s, t);
+    CENSUS_ALIVE (t);
+    CENSUS_ALIVE (s);
+    return use_string (census_alive (s), census_alive (t)) + find_all (census_alive (s), census_alive (t)) + overloads_all (census_alive (s), census_alive (t));
   }
 
   int all ()

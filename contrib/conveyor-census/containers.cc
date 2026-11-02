@@ -36,6 +36,7 @@ namespace census
 	CENSUS_ALIVE (c);
 	auto e = c.end ();
 	CENSUS_ALIVE (c);
+	CENSUS_ALIVE (t);
 	c.insert (e, t);
 	CENSUS_ALIVE (c);
 	c.insert (c.end (), 2, t);
@@ -50,7 +51,7 @@ namespace census
     CENSUS_ALIVE (c);
     for (auto &x : c)
       n += x == x;
-    for (auto it = c.rbegin (); it != c.rend (); ++it)
+    for (auto it = c.rbegin (); census_alive (it) != c.rend (); ++census_alive (it))
       ++n;
     CENSUS_ALIVE (c);
     n += c.size ();
@@ -105,14 +106,17 @@ namespace census
     int n = 0;
     {
       std::vector<T, A<T>> v, w;
-      n += use_sequence (v, w) + use_random_access (v);
+      CENSUS_ALIVE (v);
+      n += use_sequence (census_alive (v), w) + use_random_access (census_alive (v));
       if constexpr (std::copyable<T>)
 	n += v.capacity () + (v.data () != nullptr);
     }
     {
       std::deque<T, A<T>> d, e;
-      n += use_sequence (d, e) + use_random_access (d);
+      CENSUS_ALIVE (d);
+      n += use_sequence (census_alive (d), e) + use_random_access (census_alive (d));
       d.emplace_front (1);
+      CENSUS_ALIVE (d);
       d.pop_front ();
     }
     if constexpr (std::default_initializable<T>)
@@ -126,6 +130,7 @@ namespace census
 	  {
 	    // vector's operator[] and list's front() don't promise the
 	    // element they return; a copy of it is a local object.
+	    CENSUS_ALIVE (v);
 	    T e (v[0]);
 	    std::vector<T, A<T>> v2 (3, e);
 	    std::deque<T, A<T>> d2 (3, d[0]);
@@ -153,6 +158,7 @@ namespace census
       for (auto &x : f)
 	n += x == x;
       f.erase_after (f.before_begin ());
+      CENSUS_ALIVE (f);
       f.pop_front ();
     }
     return n;
@@ -168,12 +174,14 @@ namespace census
       m.try_emplace (K (1), 2);
       m.emplace (K (2), 3);
       n += m.count (K (1)) + m.contains (K (2));
-      n += m.find (K (1)) != m.end ();
+      CENSUS_ALIVE (m);
+      n += census_alive (m).find (K (1)) != census_alive (m).end ();
       n += m.lower_bound (K (1)) != m.upper_bound (K (1));
       auto nh = m.extract (K (1));
       if (nh)
 	m.insert (std::move (nh));
       m.merge (o);
+      CENSUS_ALIVE (m);
       for (auto &[k, v] : m)
 	n += k == k;
       m.erase (K (2));
@@ -184,6 +192,7 @@ namespace census
       std::map<K, V, std::less<K>, A<P>> c (m);
       c = o;
       c = std::move (m);
+      CENSUS_ALIVE (c);
       n += c.size () + (c.cbegin () == c.cend ());
     }
     {
@@ -191,12 +200,16 @@ namespace census
       m.emplace (K (1), 2);
       n += m.count (K (1));
       // The equal-key insertion paths, copying, and const end.
+      CENSUS_ALIVE (m);
       m.insert (m.end (), {K (1), 3});
       m.insert ({{K (2), 4}, {K (2), 5}});
       std::multimap<K, V, std::less<K>, A<P>> c (m);
       c = m;
       const auto &cc = c;
+      CENSUS_ALIVE (cc);
+      CENSUS_ALIVE (c);
       n += (cc.begin () != cc.end ()) + (c.cend () != c.cbegin ());
+      CENSUS_ALIVE (c);
       c.erase (c.begin (), c.end ());
       std::multimap<K, V, std::less<K>, A<P>> other;
       other.emplace (K (3), 6);
@@ -212,6 +225,7 @@ namespace census
       s.emplace (1);
       s.insert (K (2));
       n += s.contains (K (1));
+      CENSUS_ALIVE (s);
       auto nh = s.extract (s.begin ());
       s.insert (std::move (nh));
       s.merge (t);
@@ -241,11 +255,14 @@ namespace census
   int fixed ()
   {
     std::array<T, N> a {};
-    int n = a.size () + (a[0] == a.at (0)) + (a.front () == a.back ());
+    CENSUS_ALIVE (a);
+    int n = census_alive (a).size () + (census_alive (a)[0] == census_alive (a).at (0)) + (census_alive (a).front () == census_alive (a).back ());
     std::span<T> s (a);
-    n += s.size () + (s[0] == s.front ()) + s.subspan (1).size ()
-	 + s.first (1).size () + s.last (1).size ();
+    CENSUS_ALIVE (s);
+    n += census_alive (s).size () + (census_alive (s)[0] == census_alive (s).front ()) + census_alive (s).subspan (1).size ()
+	 + census_alive (s).first (1).size () + census_alive (s).last (1).size ();
     std::span<const T, N> cs (a);
+    CENSUS_ALIVE (s);
     n += (cs.size_bytes () > 0) + (s.size_bytes () > 0);
     for (auto &x : a)
       n += x == x;
@@ -356,7 +373,9 @@ namespace census
     v.assign_range (r);
     d.assign_range (r);
     l.assign_range (r);
+    CENSUS_ALIVE (v);
     v.insert_range (v.begin (), r);
+    CENSUS_ALIVE (d);
     d.insert_range (d.begin (), r);
     l.insert_range (l.begin (), r);
     d.prepend_range (r);
@@ -366,6 +385,8 @@ namespace census
     f.prepend_range (r);
     f.insert_range_after (f.before_begin (), r);
     n += *f.begin ();
+    CENSUS_ALIVE (d);
+    CENSUS_ALIVE (a);
     n += d.size () + l.size () + w.size () + a[0];
     return n;
   }
@@ -404,26 +425,36 @@ namespace census
     q.pop ();
     std::stack<int, std::vector<int>> sv;
     sv.push (2);
-    n += sv.top () + sv.empty ();
+    CENSUS_ALIVE (sv);
+    n += census_alive (sv).top () + census_alive (sv).empty ();
+    CENSUS_ALIVE (sv);
     sv.pop ();
     std::stack<int, std::list<int>> sl;
     sl.push (2);
+    CENSUS_ALIVE (sl);
     n += sl.top ();
+    CENSUS_ALIVE (sl);
     sl.pop ();
     std::stack<int, std::inplace_vector<int, 4>> si;
     si.push (2);
+    CENSUS_ALIVE (si);
     n += si.top ();
+    CENSUS_ALIVE (si);
     si.pop ();
     std::queue<int> qd;
     qd.push (3);
+    CENSUS_ALIVE (qd);
     n += qd.front ();
+    CENSUS_ALIVE (qd);
     qd.pop ();
     std::priority_queue<int> pq;
     pq.push (1);
     const int one = 1;
     pq.push (one);
     pq.emplace (2);
+    CENSUS_ALIVE (pq);
     n += pq.top ();
+    CENSUS_ALIVE (pq);
     pq.pop ();
 
     std::inplace_vector<int, 8> v;
@@ -439,17 +470,23 @@ namespace census
     v.append_range (r);
     v.insert_range (v.end (), r);
     v.insert (v.begin (), 0);
-    v.emplace (v.end (), 9);
+    CENSUS_ALIVE (v);
+    census_alive (v).emplace (census_alive (v).end (), 9);
     v.resize (3);
-    v.erase (v.begin ());
+    CENSUS_ALIVE (v);
+    census_alive (v).erase (census_alive (v).begin ());
+    CENSUS_ALIVE (v);
     v.pop_back ();
     v.assign ({1, 2});
     v.assign_range (r);
+    CENSUS_ALIVE (r);
     std::inplace_vector<int, 8> w (r.begin (), r.end ()), u (std::from_range, r);
     w.swap (u);
     w = u;
     u = std::move (v);
-    n += w.size () + u.front () + u.back () + u[0] + u.at (0)
+    CENSUS_ALIVE (w);
+    CENSUS_ALIVE (u);
+    n += w.size () + census_alive (u).front () + census_alive (u).back () + census_alive (u)[0] + census_alive (u).at (0)
 	 + std::erase (w, 1);
     return n;
   }
@@ -460,20 +497,25 @@ namespace census
   int more_lookups ()
   {
     std::unordered_set<int> us {1, 2};
-    auto nh = us.extract (us.begin ());
+    CENSUS_ALIVE (us);
+    auto nh = census_alive (us).extract (census_alive (us).begin ());
     std::unordered_map<int, int> um {{1, 2}};
-    auto mh = um.extract (um.begin ());
+    CENSUS_ALIVE (um);
+    auto mh = census_alive (um).extract (census_alive (um).begin ());
     std::unordered_multiset<int> ums {1, 1};
-    auto nh2 = ums.extract (ums.begin ());
+    CENSUS_ALIVE (ums);
+    auto nh2 = census_alive (ums).extract (census_alive (ums).begin ());
     std::unordered_multimap<int, int> umm {{1, 2}};
-    auto mh2 = umm.extract (umm.begin ());
+    CENSUS_ALIVE (umm);
+    auto mh2 = census_alive (umm).extract (census_alive (umm).begin ());
     std::multimap<int, int> mm {{1, 2}};
     mm.emplace_hint (mm.begin (), 0, 1);
+    CENSUS_ALIVE (mm);
     mm.insert (mm.end (), {3, 4});
     std::map<int, int> m {{1, 2}};
     const std::vector<int> v {1, 2};
     return int (!nh.empty () + !mh.empty () + !nh2.empty () + !mh2.empty ())
-	   + (m.rbegin () != m.rend ()) + v.at (1) + int (mm.size ());
+	   + (m.rbegin () != m.rend ()) + v.at (1) + int (census_alive (mm).size ());
   }
 
   int const_lookups ()

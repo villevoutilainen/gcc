@@ -25,7 +25,7 @@ namespace census
 	CENSUS_ALIVE (r);
 	n += std::ranges::distance (r);
 	CENSUS_ALIVE (r);
-	n += !std::ranges::empty (r);
+	n += !census_alive (std::ranges::empty) (r);
       }
     return n;
   }
@@ -61,7 +61,8 @@ namespace census
     if constexpr (std::ranges::common_range<C>)
       n += consume (c | v::common);
     CENSUS_ALIVE (c);
-    std::ranges::subrange s (std::ranges::begin (c), std::ranges::end (c));
+    std::ranges::subrange s (census_alive (std::ranges::begin) (c),
+			      census_alive (std::ranges::end) (c));
     n += consume (s);
     std::ranges::ref_view rv (c);
     n += consume (rv);
@@ -114,6 +115,7 @@ namespace census
     int a[4] = { 1, 2, 3, 4 };
     rrange<int, input_iterator_wrapper> in (a);
     n += consume (in | v::take (2));
+    CENSUS_ALIVE (a);
     n += consume (a) + std::ranges::ssize (a);
     n += more_views ();
     rrange<int, forward_iterator_wrapper> fw (a);
@@ -125,7 +127,7 @@ namespace census
     n += consume (s | v::split (','));
     n += consume (s | v::lazy_split (','));
     n += consume (v::iota (0, 5)) + consume (v::repeat (1, 3))
-	 + consume (v::single (Val (1))) + consume (v::empty<int>);
+	 + consume (v::single (Val (1))) + consume (census_alive (v::empty<int>));
     n += consume (v::concat (vi, vi));
     std::map<int, Val> m = { { 1, 2 } };
     n += consume (m | v::keys) + consume (m | v::values) + consume (m | v::elements<1>);

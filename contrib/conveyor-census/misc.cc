@@ -90,6 +90,7 @@ namespace census
     std::ostringstream os;
     os << "x" << std::endl << std::setw (3) << 4 << std::flush;
     os.put ('a').write ("bc", 2) << std::ends;
+    CENSUS_ALIVE (os);
     os << Point { 1, 2 } << std::endl;
     std::istringstream is ("1 2 3");
     int a, b, c;
@@ -112,6 +113,7 @@ namespace census
     d2 += d;
     d2 -= d;
     d2 %= d;
+    CENSUS_ALIVE (d2);
     n += d2.count () > 0;
     // A ratio that's neither a whole multiple nor a whole fraction.
     using thirds = std::chrono::duration<long, std::ratio<1, 3>>;
@@ -141,9 +143,9 @@ namespace census
     std::string rs = "aab ab";
     std::smatch rm;
     if (std::regex_search (rs, rm, re))
-      n += rm[0].length () + rm.size () + rm.position (0) + rm.length (0)
-	   + rm.str (0).size () + rm.prefix ().length ()
-	   + rm.suffix ().length () + rm.format ("$&").size ();
+      n += census_alive (rm)[0].length () + census_alive (rm).size () + census_alive (rm).position (0) + census_alive (rm).length (0)
+	   + census_alive (rm).str (0).size () + census_alive (rm).prefix ().length ()
+	   + census_alive (rm).suffix ().length () + census_alive (rm).format ("$&").size ();
     for (std::sregex_iterator ri (rs.begin (), rs.end (), re), re_end;
 	 ri != re_end; ++ri)
       n += ri->length (0);

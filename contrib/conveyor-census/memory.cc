@@ -51,6 +51,7 @@ namespace census
     std::allocator_traits<std::allocator<T>>::construct (al, m, 1);
     std::allocator_traits<std::allocator<T>>::destroy (al, m);
     std::allocator_traits<std::allocator<T>>::deallocate (al, m, 2);
+    CENSUS_ALIVE (al);
     MinAlloc<T> ma;
     n += std::allocator_traits<MinAlloc<T>>::max_size (ma) > 0;
     n += std::addressof (src[0]) == src;
@@ -66,6 +67,7 @@ namespace census
     Val *p = pa.new_object<Val> (1);
     int n = p->v;
     pa.delete_object (p);
+    CENSUS_ALIVE (v);
     return n + v.size ();
   }
 

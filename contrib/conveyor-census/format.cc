@@ -37,6 +37,7 @@ namespace census
     auto r = std::format_to_n (buf, sizeof buf, "{}", 12345);
     n += r.size + std::formatted_size ("{}", 42);
     n += std::vformat ("{}", std::make_format_args (n)).size ();
+    CENSUS_ALIVE (out);
     return n + out.size ();
   }
 }

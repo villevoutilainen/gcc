@@ -25,6 +25,17 @@
   contract_assert<std::contracts::never_proven_conveyor_v> \
     (std::is_object_address (__builtin_addressof (x)))
 
+// The same trust inside an expression, where a call before it in the same
+// expression was given a route to X: X itself, trusted.
+template<typename T>
+  constexpr T &
+  census_alive (T &x) noexcept conveyor
+    pre<std::contracts::never_proven_conveyor_v>
+      (std::is_object_address (__builtin_addressof (x)))
+    post<std::contracts::never_proven_conveyor_v>
+      (r: std::is_object_address (__builtin_addressof (r)))
+  { return x; }
+
 namespace census
 {
   // A class with user-provided special members and an ordering.

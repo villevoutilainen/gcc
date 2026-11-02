@@ -19,7 +19,8 @@ namespace census
   {
     int n = 0;
     std::optional<T> o (std::in_place, 1), p;
-    n += o.has_value () + (*o == *o) + (o.value () == *o) + (o == p) + (o < p);
+    CENSUS_ALIVE (o);
+    n += census_alive (o).has_value () + (*census_alive (o) == *census_alive (o)) + (census_alive (o).value () == *census_alive (o)) + (census_alive (o) == p) + (census_alive (o) < p);
     n += o.value_or (T (2)) == T (2);
     p = o;
     p.emplace (3);
@@ -36,7 +37,9 @@ namespace census
     va.swap (vb);
 
     std::tuple<int, T, std::string> t (1, T (2), "x"), u;
-    n += std::get<0> (t) + (std::get<1> (t) == T (2)) + (t == u) + (t < u);
+    CENSUS_ALIVE (t);
+    n += std::get<0> (census_alive (t)) + (std::get<1> (census_alive (t)) == T (2)) + (census_alive (t) == u) + (census_alive (t) < u);
+    CENSUS_ALIVE (t);
     auto [a, b, c] = t;
     n += a + (b == b) + c.size ();
     n += std::apply ([] (int x, const T &, const std::string &) { return x; }, t);
@@ -89,7 +92,8 @@ namespace census
     int n = 0;
     std::optional<T> o (std::in_place, 1), p;
     const std::optional<T> c (std::in_place, 2);
-    n += (c.value () == *c) + (*c.operator-> () == *c) + bool (c);
+    CENSUS_ALIVE (c);
+    n += (census_alive (c).value () == *census_alive (c)) + (*census_alive (c).operator-> () == *census_alive (c)) + bool (census_alive (c));
     n += (std::move (o).value () == T (1)) + (*std::move (c) == T (2));
     n += std::move (o).value_or (T (3)) == T (3);
     n += (o != p) + (o > p) + (o <= p) + (o >= p) + (c != o);
@@ -118,7 +122,8 @@ namespace census
     n += c.begin () == c.end ();
     T v (6);
     std::optional<T &> r (v);
-    n += (r.value () == v) + (r.value_or (v) == v) + (*r == v);
+    CENSUS_ALIVE (r);
+    n += (census_alive (r).value () == v) + (census_alive (r).value_or (v) == v) + (*census_alive (r) == v);
     n += (r == o) + (r == std::nullopt) + (r.begin () != r.end ());
     return n;
   }
@@ -129,7 +134,8 @@ namespace census
   {
     std::optional<std::string> s (std::in_place, "abc");
     const std::optional<std::string> c (std::in_place, "de");
-    return s->size () + c->size () + s->empty ();
+    CENSUS_ALIVE (s);
+    return census_alive (s)->size () + c->size () + census_alive (s)->empty ();
   }
 
   // Copying an allocator trusts the source, as copies do: no
