@@ -29193,7 +29193,7 @@ tsubst_regenerated_contract_specifiers (tree decl, tree code_pattern, tree args)
      "trust without forcing the body" fallback deliberately substitutes
      early, before DECL's real instantiation, so a caller can see DECL's
      contract text without forcing DECL's body to instantiate too soon).
-     Re-anchor any now-stale PARM_DECL leaves ATTR still references
+     Re-anchor any now-stale PARM_DECL leaves DECL's contracts reference
      before declining to redo the full substitution -- cheap and safe
      even when nothing has actually gone stale (the scan finds nothing
      to do and returns immediately).  */
@@ -29201,7 +29201,7 @@ tsubst_regenerated_contract_specifiers (tree decl, tree code_pattern, tree args)
     contract_specifiers_substituted = hash_set<tree>::create_ggc (64);
   if (contract_specifiers_substituted->add (decl))
     {
-      oa_reanchor_stale_contract_parms (attr, decl);
+      oa_reanchor_stale_contract_parms (decl_contracts, decl);
       return;
     }
 
