@@ -255,6 +255,8 @@ static hash_map<gimple *, vec<tree>> *cg_ended_member_routes;
    object they lie in (cg_dom_fact_state's OA_RENEWED).  */
 static hash_set<cg_call_value_hash> *cg_renewed_object_addresses;
 static tree cg_pointer_root (tree);
+static bool cg_same_pointer_root_p (tree, tree);
+static bool cg_same_member_lvalue_p (tree, tree);
 static tree cg_ref_member_key (tree);
 static bool cg_member_route_ended_p (tree);
 static bool cg_call_ends_lifetimes_p (gcall *);
@@ -14238,6 +14240,52 @@ cg_route_object (tree p, tree *member_out, bool climb = true)
    or that derives from it, or it isn't of class type), else any one of
    its members.  As the AST engine's oa_call_arg_further_routes.  */
 
+/* A call ends MEMBER, a member lvalue, or else the object ROOT: what a
+   trust renewed in it (STATE.oa_renewed, a member's or element's
+   address) ends with it again.  */
+
+static void
+cg_drop_renewed_within (tree root, tree member, cg_dom_fact_state &state)
+{
+  if (!state.oa_renewed.elements () || (!member && !root))
+    return;
+  auto_vec<tree> drop;
+  for (tree t : state.oa_renewed)
+    {
+      tree p = t;
+      for (int i = 0; i < 16 && TREE_CODE (p) == SSA_NAME
+		      && !SSA_NAME_IS_DEFAULT_DEF (p); ++i)
+	{
+	  gimple *def = SSA_NAME_DEF_STMT (p);
+	  if (!is_gimple_assign (def)
+	      || !(gimple_assign_single_p (def)
+		   || CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def))))
+	    break;
+	  p = gimple_assign_rhs1 (def);
+	}
+      if (TREE_CODE (p) != ADDR_EXPR)
+	continue;
+      tree ref = TREE_OPERAND (p, 0);
+      bool within = false;
+      if (member)
+	for (tree l = ref; !within && handled_component_p (l);
+	     l = TREE_OPERAND (l, 0))
+	  within = cg_same_member_lvalue_p (l, member);
+      else
+	{
+	  tree base = get_base_address (ref);
+	  within = (base == root
+		    || (base && TREE_CODE (base) == MEM_REF
+			&& cg_same_pointer_root_p
+			     (cg_pointer_root (TREE_OPERAND (base, 0)), root)));
+	}
+      if (within)
+	drop.safe_push (t);
+    }
+  for (tree t : drop)
+    state.oa_renewed.remove (t);
+}
+
 static void
 cg_end_route_objects (tree arg, cg_dom_fact_state &state, int depth = 0,
 		      bool climb = true)
@@ -14255,6 +14303,7 @@ cg_end_route_objects (tree arg, cg_dom_fact_state &state, int depth = 0,
     return;
   if (TREE_CODE (arg) == SSA_NAME)
     state.oa_ended.add (arg);
+  cg_drop_renewed_within (root, member, state);
   /* A variable's own storage ('&m', or a reference or pointer copied
      from it): its object, too, until a trust or a constructor run on it
      (cg_restore_decl_object).  */
@@ -16001,13 +16050,20 @@ cg_expr_computes_p (tree e, tree v, gcall *call, tree struct_var, tree decls,
      'a[i].f ()' though the same code over a pointer A ('_3 = a + _2',
      matched as arithmetic below) did -- found on a constexpr
      constructor looping over 'const std::array<unsigned, 2>
-     (&infos)[N]'.  */
+     (&infos)[N]'.  Likewise a member's address, '&this->m' ('_1 =
+     &this_2(D)->m'): without it, a trust of the member never renewed
+     the address a later 'm.f ()' computes once a call had ended the
+     object M lies in.  */
   if (TREE_CODE (e) == ADDR_EXPR
-      && TREE_CODE (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0)))
-	 == ARRAY_REF
+      && (TREE_CODE (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0)))
+	  == ARRAY_REF
+	  || TREE_CODE (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0)))
+	     == COMPONENT_REF)
       && def && gimple_assign_single_p (def)
       && TREE_CODE (gimple_assign_rhs1 (def)) == ADDR_EXPR
-      && TREE_CODE (TREE_OPERAND (gimple_assign_rhs1 (def), 0)) == ARRAY_REF)
+      && (TREE_CODE (TREE_OPERAND (gimple_assign_rhs1 (def), 0)) == ARRAY_REF
+	  || (TREE_CODE (TREE_OPERAND (gimple_assign_rhs1 (def), 0))
+	      == COMPONENT_REF)))
     return cg_ref_computes_p (STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0)),
 			      TREE_OPERAND (gimple_assign_rhs1 (def), 0),
 			      call, struct_var, decls, depth + 1);

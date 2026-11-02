@@ -11517,6 +11517,9 @@ public:
      or any one of the members of the object KEY is the identity of.  */
   void member_end (tree key, bool whole)
   {
+    /* A trust of the member (member_trusted) no longer holds.  */
+    if (whole)
+      invalidate (key);
     const bool *v = m_ended_member_map.get (key);
     if (!v || (whole && !*v))
       m_ended_member_map.put (key, whole);
@@ -13092,18 +13095,27 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
 	  && TREE_CODE (TREE_OPERAND (op, 1)) == FIELD_DECL)
 	{
 	  /* Unless a call may have ended the member while the object
-	     stays (oa_env::member_ended_p).  */
+	     stays (oa_env::member_ended_p).  A fact established on the
+	     member itself (a trust), which a call ending its object would
+	     have dropped (field_object_address_invalidate_all), holds
+	     though the object has ended.  */
 	  {
 	    tree base;
 	    if (oa_member_object_identity (oa_field_base_object
 					     (TREE_OPERAND (op, 0)),
-					   env, &base)
-		&& env.member_ended_p (env.alias_find (base),
-				       TREE_OPERAND (op, 1)))
+					   env, &base))
 	      {
-		if (reason_out)
-		  *reason_out = OA_UNPROVABLE_NO_FACT;
-		return false;
+		base = env.alias_find (base);
+		if (env.member_ended_p (base, TREE_OPERAND (op, 1)))
+		  {
+		    if (reason_out)
+		      *reason_out = OA_UNPROVABLE_NO_FACT;
+		    return false;
+		  }
+		tree key = env.field_object_identity_key (base,
+							  TREE_OPERAND (op, 1));
+		if (key && env.provable_p (key))
+		  return true;
 	      }
 	  }
 	  tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
@@ -24604,6 +24616,51 @@ oa_virtual_call_named_fn (tree call)
   return contract_call_named_fn (fn);
 }
 
+/* The calls whose returned references the current function's local
+   references are bound to, each by its reference.  A reference is
+   bound once and never rebound, so the call stays its route for the
+   reference's whole scope.  */
+
+static GTY(()) tree oa_reference_bindings_fn;
+static GTY(()) hash_map<tree, tree> *oa_reference_bindings;
+
+/* Local reference DECL is bound to RHS: record the call it is the
+   result of, if any.  */
+
+static void
+oa_note_reference_binding (tree decl, tree rhs)
+{
+  if (oa_reference_bindings_fn != current_function_decl)
+    {
+      if (oa_reference_bindings)
+	oa_reference_bindings->empty ();
+      oa_reference_bindings_fn = current_function_decl;
+    }
+  tree call = oa_strip_to_call (rhs);
+  if (call && TREE_CODE (call) == CALL_EXPR
+      && INDIRECT_TYPE_P (TREE_TYPE (call)))
+    {
+      if (!oa_reference_bindings)
+	oa_reference_bindings = hash_map<tree, tree>::create_ggc (8);
+      oa_reference_bindings->put (decl, call);
+    }
+  else if (oa_reference_bindings)
+    oa_reference_bindings->remove (decl);
+}
+
+/* The call local reference DECL was bound to the result of
+   (oa_note_reference_binding), or NULL_TREE.  */
+
+static tree
+oa_reference_binding_call (tree decl)
+{
+  if (oa_reference_bindings_fn != current_function_decl
+      || !oa_reference_bindings)
+    return NULL_TREE;
+  tree *call = oa_reference_bindings->get (decl);
+  return call ? *call : NULL_TREE;
+}
+
 /* Push onto ROUTES the further routes a callee given ARG, a pointer or
    reference argument, has to objects: for a member's or element's
    address, the objects enclosing it that it may reach
@@ -24645,6 +24702,12 @@ oa_call_arg_further_routes (tree arg, vec<tree> &routes,
 	*stop_out = l;
       return;
     }
+  /* A local reference bound to what a call returned ('const T& s =
+     o.get (); touch (s);'): the routes that call's result gives, as the
+     result passed directly would (oa_note_reference_binding).  */
+  if (VAR_P (a) && TYPE_REF_P (TREE_TYPE (a)))
+    if (tree call = oa_reference_binding_call (a))
+      a = call;
   if (TREE_CODE (a) != CALL_EXPR)
     return;
   tree rtype = TREE_TYPE (a);
@@ -28694,7 +28757,12 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 		  {
 		    tree key;
 		    if (oa_field_object_identity (arg, env, &key))
-		      env.member_trusted (key);
+		      {
+			env.member_trusted (key);
+			/* Itself an object, though the object it lies in
+			   may have ended.  */
+			env.set (key, true);
+		      }
 		  }
 	      }
 	    /* D4324/P2680: 'is_object_address(p)' for a POINTER-TYPED FIELD
@@ -32345,6 +32413,8 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	      env.predicate_fact_set (env.alias_find (lhs), pred_fn, polarity,
 				       pred_conveyor_established);
 	  }
+	if (VAR_P (lhs) && TYPE_REF_P (TREE_TYPE (lhs)))
+	  oa_note_reference_binding (lhs, rhs);
 	if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 	    && POINTER_TYPE_P (TREE_TYPE (lhs)))
 	  {
