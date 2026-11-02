@@ -142,9 +142,8 @@ find_param_position (tree callee, tree parm, unsigned *argno_out)
 static bool
 call_postcondition_guarantees_object_address_p (tree callee)
 {
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
@@ -176,9 +175,8 @@ call_postcondition_guarantees_object_address_p (tree callee)
 static bool
 call_postcondition_guarantees_nonzero_p (tree callee)
 {
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
@@ -283,9 +281,8 @@ extract_conjunct_range (vec<tree *> &conjuncts, tree target, oa_range_lite *out)
 static bool
 call_postcondition_range_p (tree callee, oa_range_lite *out)
 {
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
@@ -520,9 +517,8 @@ static void
 seed_predicate_self_trust (function *fun, dom_fact_state &seed)
 {
   tree fndecl = fun->decl;
-  for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (fndecl))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       tree cond = CONTRACT_CONDITION (contract);
@@ -566,9 +562,8 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
   if (!callee)
     return;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       tree cond = CONTRACT_CONDITION (contract);
@@ -680,9 +675,8 @@ establish_persistent_facts_for_call (gcall *call, dom_fact_state &state)
   if (!callee)
     return;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       tree cond = CONTRACT_CONDITION (contract);
@@ -956,9 +950,8 @@ static bool
 call_postcondition_relation_p (tree callee, gcall *call, tree_code *code_out,
 				tree *rhs_out)
 {
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
@@ -1053,9 +1046,8 @@ seed_self_trust (function *fun, hash_set<tree> &established,
 		  hash_map<tree, rel_fact_lite> &established_rel)
 {
   tree fndecl = fun->decl;
-  for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (fndecl))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       tree cond = CONTRACT_CONDITION (contract);
@@ -1145,9 +1137,8 @@ check_call (gcall *call, hash_set<tree> &established,
   if (!callee)
     return;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       tree cond = CONTRACT_CONDITION (contract);

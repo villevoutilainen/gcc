@@ -207,9 +207,8 @@ call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
 static void
 check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 {
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!oa_contract_symbolic_active_public (contract, callee))

@@ -12557,10 +12557,11 @@ tsubst_contract (tree decl, tree t, tree args, tsubst_flags_t complain,
   return r;
 }
 
-/* Update T instantiating a contract specifier.  */
+/* Instantiate the contract specifier CONTRACT, returning the substituted
+   contract statement.  */
 
-static void
-tsubst_contract_specifier (tree decl, tree t, tree args,
+static tree
+tsubst_contract_specifier (tree decl, tree contract, tree args,
 			   tsubst_flags_t complain, tree in_decl)
 {
   /* For non-specializations, adjust the current declaration to the most general
@@ -12572,9 +12573,6 @@ tsubst_contract_specifier (tree decl, tree t, tree args,
     in_decl = DECL_TEMPLATE_RESULT (most_general_template (in_decl));
   local_specialization_stack specs (lss_copy);
   register_parameter_specializations (in_decl, decl);
-
-  /* Get the contract to be instantiated.  */
-  tree contract = CONTRACT_STATEMENT (t);
 
   /* Use the complete set of template arguments for instantiation. The
      contract may not have been instantiated and still refer to outer levels
@@ -12634,28 +12632,36 @@ tsubst_contract_specifier (tree decl, tree t, tree args,
   current_class_ptr = save_ccp;
   current_class_ref = save_ccr;
 
-  /* Rebuild the attribute.  */
-  TREE_VALUE (t) = build_tree_list (NULL_TREE, contract);
+  return contract;
 }
 
-/* For unsubstituted list of contracts in SPECIFIERS, instantiate contracts
- for DECL and set the list as contracts for decl. Substitution creates a deep
- copy of the contract.  */
+/* For the unsubstituted contract specifiers SPECIFIERS, instantiate the
+ contracts for DECL and set them as the contracts for DECL.  Substitution
+ creates a deep copy of the contract.  */
 
 void
-tsubst_contract_specifiers (tree specfiers, tree decl, tree args,
+tsubst_contract_specifiers (tree specifiers, tree decl, tree args,
 			    tsubst_flags_t complain, tree in_decl)
 {
-  tree subst_contract_list = NULL_TREE;
-  for (tree spec = specfiers; spec; spec = TREE_CHAIN (spec))
+  if (!specifiers)
     {
-      tree nc = copy_node (spec);
-      tsubst_contract_specifier (decl, nc, args, complain, in_decl);
-      TREE_CHAIN (nc) = subst_contract_list;
-      subst_contract_list = nc;
+      if (flag_contracts)
+	set_fn_contract_specifiers (decl, NULL_TREE);
+      return;
     }
+
+  /* SPECIFIERS may be shared with the pattern (see the copy in
+     tsubst_function_decl), so build a fresh vector rather than substituting
+     in place.  tsubst_contract () copies each statement it substitutes.  */
+  int len = TREE_VEC_LENGTH (specifiers);
+  tree subst_contracts = make_tree_vec (len);
+  for (int ix = 0; ix < len; ix++)
+    TREE_VEC_ELT (subst_contracts, ix)
+      = tsubst_contract_specifier (decl, TREE_VEC_ELT (specifiers, ix), args,
+				   complain, in_decl);
+
   if (flag_contracts)
-    set_fn_contract_specifiers (decl, nreverse (subst_contract_list));
+    set_fn_contract_specifiers (decl, subst_contracts);
 }
 
 /* Instantiate a single dependent attribute T (a TREE_LIST), and return either
@@ -21742,17 +21748,12 @@ tsubst_lambda_expr (tree t, tree args, tsubst_flags_t complain, tree in_decl)
 
       if (spec)
 	{
-	  tree list = NULL_TREE;
-	  for (; spec; spec = TREE_CHAIN (spec))
-	    {
-	      tree nc = copy_node (spec);
-	      tree c = tsubst_contract (fn, CONTRACT_STATEMENT (nc), args,
-					complain, oldfn);
-	      TREE_VALUE (nc) = build_tree_list (NULL_TREE, c);
-	      TREE_CHAIN (nc) = list;
-	      list = nc;
-	    }
-	  set_fn_contract_specifiers (fn, nreverse (list));
+	  tree list = make_tree_vec (TREE_VEC_LENGTH (spec));
+	  for (int ix = 0; ix < TREE_VEC_LENGTH (spec); ix++)
+	    TREE_VEC_ELT (list, ix)
+	      = tsubst_contract (fn, TREE_VEC_ELT (spec, ix), args, complain,
+				 oldfn);
+	  set_fn_contract_specifiers (fn, list);
 	  rebuild_postconditions (fn);
 	}
 
@@ -29031,9 +29032,9 @@ static void
 oa_reanchor_stale_contract_parms (tree attr, tree decl)
 {
   auto_vec<tree> refs;
-  for (tree as = attr; as; as = TREE_CHAIN (as))
+  for (tree contract : contract_specifier_range (attr))
     {
-      tree cond = CONTRACT_CONDITION (CONTRACT_STATEMENT (as));
+      tree cond = CONTRACT_CONDITION (contract);
       cp_walk_tree (&cond, find_contract_parm_decls_r, &refs, NULL);
     }
 
@@ -29072,9 +29073,9 @@ oa_reanchor_stale_contract_parms (tree attr, tree decl)
 	fresh = oa_unnamed_parm_counterpart (old_parm, decl);
       if (!fresh)
 	continue;
-      for (tree as = attr; as; as = TREE_CHAIN (as))
+      for (tree contract : contract_specifier_range (attr))
 	{
-	  tree *cond_p = &CONTRACT_CONDITION (CONTRACT_STATEMENT (as));
+	  tree *cond_p = &CONTRACT_CONDITION (contract);
 	  oa_replace_tree_data data = { old_parm, fresh };
 	  cp_walk_tree (cond_p, oa_replace_tree_r, &data, NULL);
 	}
@@ -29229,9 +29230,9 @@ tsubst_regenerated_contract_specifiers (tree decl, tree code_pattern, tree args)
   local_specialization_stack lss (lss_copy);
   register_parameter_specializations (code_pattern, decl);
   auto_vec<tree> unmatched;
-  for (tree as = attr; as; as = TREE_CHAIN (as))
+  for (tree contract : contract_specifier_range (attr))
     {
-      tree cond = CONTRACT_CONDITION (CONTRACT_STATEMENT (as));
+      tree cond = CONTRACT_CONDITION (contract);
       cp_walk_tree (&cond, find_contract_parm_decls_r, &unmatched, NULL);
     }
   for (tree pat_parm : unmatched)

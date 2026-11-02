@@ -83,21 +83,25 @@ enum detection_mode : uint16_t {
 #define POSTCONDITION_P(NODE)          \
   (TREE_CODE (NODE) == POSTCONDITION_STMT)
 
+/* The contract specifiers of a function are held in a TREE_VEC, each element
+   of which is a PRECONDITION_STMT or a POSTCONDITION_STMT.  A function with
+   no contracts has NULL_TREE rather than an empty vector.  */
+
+/* The contract statements of SPECS, a function's contract specifiers or
+   NULL_TREE for none, for a range-based for.  */
+
+class contract_specifier_range
+{
+  tree v;
+public:
+  contract_specifier_range (tree v) : v (v) { }
+  tree *begin () { return v ? TREE_VEC_BEGIN (v) : nullptr; }
+  tree *end () { return v ? TREE_VEC_END (v) : nullptr; }
+};
+
 /* True iff the FUNCTION_DECL NODE currently has any contracts.  */
 #define DECL_HAS_CONTRACTS_P(NODE) \
   (get_fn_contract_specifiers (NODE) != NULL_TREE)
-
-/* The wrapper of the original source location of a list of contracts.  */
-#define CONTRACT_SOURCE_LOCATION_WRAPPER(NODE) \
-  (TREE_PURPOSE (TREE_VALUE (NODE)))
-
-/* The original source location of a list of contracts.  */
-#define CONTRACT_SOURCE_LOCATION(NODE) \
-  (EXPR_LOCATION (CONTRACT_SOURCE_LOCATION_WRAPPER (NODE)))
-
-/* The actual code _STMT for a contract specifier.  */
-#define CONTRACT_STATEMENT(NODE) \
-  (TREE_VALUE (TREE_VALUE (NODE)))
 
 /* The parsed condition of the contract.  */
 #define CONTRACT_CONDITION(NODE) \
@@ -255,7 +259,8 @@ extern void contracts_gimple_eager_check_drain_at_eof (void);
 extern bool oa_function_needs_walk_p (tree fndecl);
 
 extern tree grok_contract			(tree, tree, tree, cp_expr, location_t, tree = NULL_TREE);
-extern tree finish_contract_specifier 		(tree, tree);
+extern tree build_contract_specifiers		(vec<tree, va_gc> *);
+extern tree contract_specifiers_concat		(tree, tree);
 extern tree finish_contract_condition		(cp_expr);
 extern void update_late_contract		(tree, tree, cp_expr);
 extern void check_redecl_contract		(tree, tree);
@@ -1443,6 +1448,14 @@ public:
 extern void set_fn_contract_specifiers		(tree, tree);
 extern void update_fn_contract_specifiers	(tree, tree);
 extern tree get_fn_contract_specifiers		(tree);
+
+/* The contract statements of function FNDECL, for a range-based for.  */
+
+inline contract_specifier_range
+fn_contracts (tree fndecl)
+{
+  return contract_specifier_range (get_fn_contract_specifiers (fndecl));
+}
 extern void remove_decl_with_fn_contracts_specifiers (tree);
 extern void remove_fn_contract_specifiers	(tree);
 extern void update_contract_arguments		(tree, tree);

@@ -581,9 +581,8 @@ static bool
 cg_call_postcondition_range_p (tree callee, bool require_conveyor,
 				bool require_symbolic, cg_range_lite *out)
 {
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
@@ -1631,9 +1630,8 @@ cg_call_postcondition_guarantees_p (tree callee, bool require_conveyor,
 				     bool require_symbolic,
 				     bool (*match_fn) (tree, tree *))
 {
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
@@ -2991,9 +2989,8 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 		     hash_map<tree, cg_type_bound_fact> &established_type_bound)
 {
   tree fndecl = fun->decl;
-  for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (fndecl))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
@@ -3292,9 +3289,8 @@ cg_call_postcondition_relation_p (gcall *call, tree_code *code_out,
   if (!callee)
     return false;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
@@ -5882,9 +5878,8 @@ cg_linear_postconditions (cg_linear_query &q, tree callee, gcall *gcall_,
 {
   if (!flag_contract_conveyor_proofs_gimple || depth > 4)
     return;
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract)
 	  || !oa_contract_conveyor_active_public (contract, callee)
 	  || !contract_failure_terminates_p (contract, callee))
@@ -5934,9 +5929,8 @@ cg_linear_postcondition_tests_p ()
 	  tree callee = call ? gimple_call_fndecl (call) : NULL_TREE;
 	  if (!callee)
 	    continue;
-	  for (tree as = get_fn_contract_specifiers (callee); as;
-	       as = TREE_CHAIN (as))
-	    if (POSTCONDITION_P (CONTRACT_STATEMENT (as)))
+	  for (tree contract : fn_contracts (callee))
+	    if (POSTCONDITION_P (contract))
 	      cg_linear_post_tests = 1;
 	}
     }
@@ -6115,10 +6109,8 @@ cg_linear_bound (tree_code code, tree op0, tree op1, gimple *stmt,
     }
   tree owner = DECL_ORIGIN (current_function_decl);
   if (flag_contract_conveyor_proofs_gimple)
-    for (tree as = get_fn_contract_specifiers (owner); as;
-	 as = TREE_CHAIN (as))
+    for (tree contract : fn_contracts (owner))
       {
-	tree contract = CONTRACT_STATEMENT (as);
 	if (!PRECONDITION_P (contract)
 	    || !oa_contract_conveyor_active_public (contract, owner)
 	    || !contract_failure_terminates_p (contract, owner))
@@ -7562,9 +7554,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
      conveyor function's reference parameter gets, say), and each
      unprovable obligation should be reported once.  */
   hash_set<tree> reported_oa_parms, reported_nz_parms;
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!contract_precondition_caller_obligation_p (contract, callee))
@@ -8334,10 +8325,10 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 	 receiver_strict_p.  */
       bool strict = (cg_callee_pre_mandatory
 		     || DECL_DECLARED_CONVEYOR_P (current_function_decl));
-      for (tree as = get_fn_contract_specifiers (callee);
-	   as && !strict; as = TREE_CHAIN (as))
+      for (tree contract : fn_contracts (callee))
 	{
-	  tree contract = CONTRACT_STATEMENT (as);
+	  if (strict)
+	    break;
 	  strict = (PRECONDITION_P (contract)
 		    && ((oa_contract_conveyor_active_cached_p (contract)
 			 && oa_contract_conveyor_strict_cached_p (contract))
@@ -9378,10 +9369,8 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
   tree owner;
   if (tree self = predicate_core_function_contract (fndecl, &owner))
     if (owner && PRECONDITION_P (self))
-      for (tree as = get_fn_contract_specifiers (owner); as;
-	   as = TREE_CHAIN (as))
+      for (tree contract : fn_contracts (owner))
 	{
-	  tree contract = CONTRACT_STATEMENT (as);
 	  if (contract == self
 	      || contract_predicate_core_function (contract) == fndecl
 	      || (TREE_CODE (contract) == TREE_CODE (self)
@@ -9421,9 +9410,8 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
 	    }
 	}
 
-  for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (fndecl))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
@@ -10078,9 +10066,8 @@ cg_consult_persistent_facts (gcall *call,
   if (!callee)
     return;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!contract_precondition_caller_obligation_p (contract, callee))
@@ -10884,9 +10871,8 @@ cg_establish_persistent_facts_for_call (gcall *call,
   if (!callee)
     return;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_cached_p (contract);
@@ -13497,9 +13483,8 @@ cg_compose_call_result_range (gcall *call, cg_dom_fact_state &state,
   if (!callee)
     return;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       if (!oa_contract_conveyor_active_cached_p (contract))
@@ -13634,9 +13619,8 @@ cg_check_call_range_relational (gcall *call,
   if (!callee)
     return;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!contract_precondition_caller_obligation_p (contract, callee))
@@ -13796,9 +13780,8 @@ cg_check_call_relational_fact (gcall *call,
   if (!callee)
     return;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!contract_precondition_caller_obligation_p (contract, callee))
@@ -14981,9 +14964,8 @@ cg_establish_object_addresses_for_call (gcall *call, function *fun,
   tree callee = gimple_call_fndecl (call);
   if (!callee)
     return;
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract)
 	  || !oa_contract_conveyor_active_cached_p (contract))
 	continue;
@@ -16101,9 +16083,8 @@ cg_assert_fact_scope::establish_call_postconditions (gcall *call)
   tree callee = gimple_call_fndecl (call);
   if (!callee || !flag_contract_conveyor_proofs_gimple)
     return;
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract)
 	  || !oa_contract_conveyor_active_cached_p (contract)
 	  || !oa_contract_failure_terminates_cached_p (contract))
@@ -16293,10 +16274,8 @@ static void
 cg_seed_float_self_trust (function *fun,
 			  hash_map<tree, frange> &established_frange)
 {
-  for (tree as = get_fn_contract_specifiers (fun->decl); as;
-       as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (fun->decl))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!((oa_contract_conveyor_active_cached_p (contract)
@@ -17338,9 +17317,8 @@ cg_seed_predicate_from_preconditions (function *fun,
 	  return cg_self_trust_key (fun, c);
       return NULL_TREE;
     };
-  for (tree as = get_fn_contract_specifiers (owner); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (owner))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract)
 	  || !oa_contract_conveyor_active_public (contract, owner)
 	  || !contract_failure_terminates_p (contract, owner))

@@ -27261,17 +27261,17 @@ cp_parser_direct_declarator (cp_parser* parser,
 		  /* D4324: PTRMEM_THIS_PARM (if any 'this' reference in
 		     the condition resolved to it above) isn't one of
 		     PARAMS, so cp_parser_function_contract_specifier's own
-		     positional-parms bookkeeping (keyed off each contract's
-		     own CONTRACT_STATEMENT, set against PARAMS alone) never
+		     positional-parms bookkeeping (keyed off each contract
+		     statement, set against PARAMS alone) never
 		     recorded it -- prepend it here so remap_object_contract
 		     (contracts.cc) can later substitute it onto
 		     build_object_contract_check_function's own matching
 		     leading '__this' parameter, the same way it already
 		     substitutes each ordinary positional parameter.  */
 		  if (ptrmem_this_parm)
-		    for (tree c = contract_specifiers; c; c = TREE_CHAIN (c))
+		    for (tree stmt
+			 : contract_specifier_range (contract_specifiers))
 		      {
-			tree stmt = CONTRACT_STATEMENT (c);
 			tree existing = get_contract_positional_parms (stmt);
 			set_contract_positional_parms
 			  (stmt, tree_cons (NULL_TREE, ptrmem_this_parm,
@@ -30779,7 +30779,7 @@ cp_parser_class_specifier (cp_parser* parser)
 	     parameter-declaration-clause), so the first one suffices.  */
 	  tree first_contract = get_fn_contract_specifiers (decl);
 	  tree positional_parms
-	    = get_contract_positional_parms (CONTRACT_STATEMENT (first_contract));
+	    = get_contract_positional_parms (TREE_VEC_ELT (first_contract, 0));
 	  for (tree p = positional_parms; p; p = TREE_CHAIN (p))
 	    {
 	      tree parm = TREE_VALUE (p);
@@ -34828,27 +34828,22 @@ void
 cp_parser_late_contracts (cp_parser *parser, tree fndecl)
 {
 
-  tree new_contracts = NULL_TREE;
-  tree old_contracts = get_fn_contract_specifiers (fndecl);
+  tree contracts = get_fn_contract_specifiers (fndecl);
 
-  if (old_contracts == NULL_TREE || !contract_any_deferred_p (old_contracts))
+  if (contracts == NULL_TREE || !contract_any_deferred_p (contracts))
     return;
 
-  for (; old_contracts; old_contracts = TREE_CHAIN (old_contracts))
+  /* The conditions are updated in place; the statements are shared with any
+     other declaration that refers to them, exactly as before.  */
+  for (tree contract : tree_vec_range (contracts))
     {
-      tree contract = TREE_VALUE (TREE_VALUE (old_contracts));
-
-      tree condition = CONTRACT_CONDITION (contract);
       /* All contracts should be deferred if one of them is deferred */
-      gcc_checking_assert (TREE_CODE (condition) == DEFERRED_PARSE);
+      gcc_checking_assert (CONTRACT_CONDITION_DEFERRED_P (contract));
 
       cp_parser_late_contract_condition (parser, fndecl, contract);
-      tree list = tree_cons (TREE_PURPOSE (old_contracts),
-			     TREE_VALUE (old_contracts), NULL_TREE);
-      new_contracts = chainon (new_contracts, list);
     }
 
-  update_fn_contract_specifiers (fndecl, new_contracts);
+  update_fn_contract_specifiers (fndecl, contracts);
 }
 
 /* D4324 + templates: parse deferred (DEFERRED_PARSE) contract
@@ -34877,19 +34872,19 @@ cp_parser_late_contracts (cp_parser *parser, tree fndecl)
 static void
 cp_parser_late_object_contracts (cp_parser *parser, tree decl)
 {
-  tree new_contracts = NULL_TREE;
-  tree old_contracts = get_fn_contract_specifiers (decl);
+  tree contracts = get_fn_contract_specifiers (decl);
 
-  if (old_contracts == NULL_TREE || !contract_any_deferred_p (old_contracts))
+  if (contracts == NULL_TREE || !contract_any_deferred_p (contracts))
     return;
 
   tree this_type, ret_type;
   object_contract_callable_pieces (TREE_TYPE (decl), &this_type, &ret_type);
   bool ret_dependent = dependent_type_p (ret_type);
 
-  for (; old_contracts; old_contracts = TREE_CHAIN (old_contracts))
+  /* The conditions are updated in place, as cp_parser_late_contracts
+     does.  */
+  for (tree contract : tree_vec_range (contracts))
     {
-      tree contract = TREE_VALUE (TREE_VALUE (old_contracts));
       tree condition = CONTRACT_CONDITION (contract);
       gcc_checking_assert (TREE_CODE (condition) == DEFERRED_PARSE);
 
@@ -34921,9 +34916,6 @@ cp_parser_late_object_contracts (cp_parser *parser, tree decl)
 	      && !object_contract_check_postcondition_result (ret_type, r_loc))
 	    {
 	      invalidate_contract (contract);
-	      tree list = tree_cons (TREE_PURPOSE (old_contracts),
-				     TREE_VALUE (old_contracts), NULL_TREE);
-	      new_contracts = chainon (new_contracts, list);
 	      continue;
 	    }
 	}
@@ -34960,9 +34952,6 @@ cp_parser_late_object_contracts (cp_parser *parser, tree decl)
 	  if (!ok)
 	    {
 	      invalidate_contract (contract);
-	      tree list = tree_cons (TREE_PURPOSE (old_contracts),
-				     TREE_VALUE (old_contracts), NULL_TREE);
-	      new_contracts = chainon (new_contracts, list);
 	      continue;
 	    }
 	}
@@ -35052,13 +35041,9 @@ cp_parser_late_object_contracts (cp_parser *parser, tree decl)
 	error_at (input_location, "expected conditional-expression");
       cp_parser_pop_lexer (parser);
       pop_unparsed_function_queues (parser);
-
-      tree list = tree_cons (TREE_PURPOSE (old_contracts),
-			     TREE_VALUE (old_contracts), NULL_TREE);
-      new_contracts = chainon (new_contracts, list);
     }
 
-  update_fn_contract_specifiers (decl, new_contracts);
+  update_fn_contract_specifiers (decl, contracts);
 }
 
 /* Parse an optional contract control specifier appearing immediately after a
@@ -35779,7 +35764,7 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
 static tree
 cp_parser_function_contract_specifier_seq (cp_parser *parser, tree params)
 {
-  tree contract_specs = NULL_TREE;
+  releasing_vec contract_specs;
 
   while (true)
     {
@@ -35794,19 +35779,11 @@ cp_parser_function_contract_specifier_seq (cp_parser *parser, tree params)
       if (contract_spec == error_mark_node)
 	continue;
 
-      /* For now, turn this into an attribute.  */
-      tree contract_name = TREE_CODE (contract_spec) == PRECONDITION_STMT
-			   ? get_identifier ("pre")
-			   : get_identifier ("post");
-      contract_spec = finish_contract_specifier (contract_name, contract_spec);
-      /* Arrange to build the list in the correct order.  */
-      if (contract_specs)
-	contract_specs = attr_chainon (contract_specs, contract_spec);
-      else
-	contract_specs = contract_spec;
+      /* The specifiers are collected in source order.  */
+      vec_safe_push (contract_specs, contract_spec);
     }
 
-    return contract_specs;
+  return build_contract_specifiers (contract_specs);
 }
 
 /* Parse a standard C++-11 attribute specifier.

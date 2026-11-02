@@ -170,14 +170,6 @@ contract_valid_p (tree contract)
   return CONTRACT_CONDITION (contract) != error_mark_node;
 }
 
-/* True if the contract specifier is valid.  */
-
-static bool
-contract_specifier_valid_p (tree contract)
-{
-  return contract_valid_p (TREE_VALUE (TREE_VALUE (contract)));
-}
-
 /* Compare the contract conditions of OLD_CONTRACT and NEW_CONTRACT.
    Returns false if the conditions are equivalent, and true otherwise.  */
 
@@ -276,35 +268,38 @@ match_contract_specifiers (location_t oldloc, tree old_contracts,
   if (!old_contracts || !new_contracts)
     return true;
 
-  /* Compare each contract in turn.  */
-  while (old_contracts && new_contracts)
-    {
-      /* If either contract is ill-formed, skip the rest of the comparison,
-	 since we've already diagnosed an error.  */
-      if (!contract_specifier_valid_p (new_contracts)
-	  || !contract_specifier_valid_p (old_contracts))
-	return false;
+  int old_len = TREE_VEC_LENGTH (old_contracts);
+  int new_len = TREE_VEC_LENGTH (new_contracts);
 
-      if (mismatched_contracts_p (CONTRACT_STATEMENT (old_contracts),
-				  CONTRACT_STATEMENT (new_contracts)))
-	return false;
-      old_contracts = TREE_CHAIN (old_contracts);
-      new_contracts = TREE_CHAIN (new_contracts);
-    }
-
-  /* If we didn't compare all specifiers, the contracts don't match.  */
-  if (old_contracts || new_contracts)
+  /* If we don't have the same number, the contracts don't match.  */
+  if (old_len != new_len)
     {
       auto_diagnostic_group d;
       error_at (newloc,
 		"declaration has a different number of contracts than "
 		"previously declared");
       inform (oldloc,
-	      new_contracts
+	      new_len > old_len
 	      ? "previous declaration with fewer contracts here"
 	      : "previous declaration with more contracts here");
       return false;
     }
+
+  /* Compare each contract in turn.  */
+  for (int ix = 0; ix < MIN (old_len, new_len); ix++)
+    {
+      tree old_contract = TREE_VEC_ELT (old_contracts, ix);
+      tree new_contract = TREE_VEC_ELT (new_contracts, ix);
+
+      /* If either contract is ill-formed, skip the rest of the comparison,
+	 since we've already diagnosed an error.  */
+      if (!contract_valid_p (new_contract) || !contract_valid_p (old_contract))
+	return false;
+
+      if (mismatched_contracts_p (old_contract, new_contract))
+	return false;
+    }
+
 
   return true;
 }
@@ -359,26 +354,28 @@ contracts_equal_p (tree c1, tree c2)
 }
 
 /* -Wfunction-pointer-contract-mismatch: silent counterpart of
-   match_contract_specifiers above: true iff SPEC1 and SPEC2 (each a
-   chain as returned by get_fn_contract_specifiers) carry the exact same
-   sequence of contracts, with no diagnostics.  Two NULL chains are
-   equal (neither decl has a contract of its own).  */
+   match_contract_specifiers above: true iff SPEC1 and SPEC2 (each as
+   returned by get_fn_contract_specifiers) carry the exact same sequence
+   of contracts, with no diagnostics.  Two NULL_TREEs are equal (neither
+   decl has a contract of its own).  */
 
 static bool
 contract_specifiers_equal_p (tree spec1, tree spec2)
 {
-  while (spec1 && spec2)
+  if (!spec1 || !spec2)
+    return !spec1 && !spec2;
+  if (TREE_VEC_LENGTH (spec1) != TREE_VEC_LENGTH (spec2))
+    return false;
+  for (int ix = 0; ix < TREE_VEC_LENGTH (spec1); ix++)
     {
-      if (!contract_specifier_valid_p (spec1)
-	  || !contract_specifier_valid_p (spec2))
+      tree c1 = TREE_VEC_ELT (spec1, ix);
+      tree c2 = TREE_VEC_ELT (spec2, ix);
+      if (!contract_valid_p (c1) || !contract_valid_p (c2))
 	return false;
-      if (!contracts_equal_p (CONTRACT_STATEMENT (spec1),
-			       CONTRACT_STATEMENT (spec2)))
+      if (!contracts_equal_p (c1, c2))
 	return false;
-      spec1 = TREE_CHAIN (spec1);
-      spec2 = TREE_CHAIN (spec2);
     }
-  return !spec1 && !spec2;
+  return true;
 }
 
 /* -Wfunction-pointer-contract-mismatch: resolve EXPR down to the single
@@ -614,15 +611,15 @@ static bool
 has_active_contract_condition (tree fndecl, tree_code c,
 				contract_check_side side)
 {
-  tree as = get_fn_contract_specifiers (fndecl);
-  for (; as != NULL_TREE; as = TREE_CHAIN (as))
-    {
-      tree contract = TREE_VALUE (TREE_VALUE (as));
-      if (TREE_CODE (contract) == c
-	  && contract_active_p (contract, side)
-	  && contract_runs_on_side (contract, side, fndecl))
-	return true;
-    }
+  tree contracts = get_fn_contract_specifiers (fndecl);
+  if (!contracts)
+    return false;
+
+  for (tree contract : tree_vec_range (contracts))
+    if (TREE_CODE (contract) == c
+	&& contract_active_p (contract, side)
+	&& contract_runs_on_side (contract, side, fndecl))
+      return true;
   return false;
 }
 
@@ -644,29 +641,26 @@ has_active_postconditions (tree fndecl, contract_check_side side)
   return has_active_contract_condition (fndecl, POSTCONDITION_STMT, side);
 }
 
-/* Return true if any contract in the CONTRACT list is checked or assumed
-   under the current build configuration.  A plain "is anything active at
-   all" query has no single correct side, so a PRE/POST contract is
-   checked under *both* real sides (never a false negative that would
-   wrongly skip real per-side processing later); an ASSERTION_STMT has
-   only ccs_not_applicable to check.  */
+/* Return true if any contract of FNDECL is checked or assumed under the
+   current build configuration.  A plain "is anything active at all" query
+   has no single correct side, so a PRE/POST contract is checked under
+   *both* real sides (never a false negative that would wrongly skip real
+   per-side processing later); an ASSERTION_STMT has only
+   ccs_not_applicable to check.  */
 
 static bool
 contract_any_active_p (tree fndecl)
 {
-  tree as = get_fn_contract_specifiers (fndecl);
-  for (; as; as = TREE_CHAIN (as))
-    {
-      tree contract = TREE_VALUE (TREE_VALUE (as));
-      if (TREE_CODE (contract) == ASSERTION_STMT)
-	{
-	  if (contract_active_p (contract, ccs_not_applicable))
-	    return true;
-	}
-      else if (contract_active_p (contract, ccs_definition)
-	       || contract_active_p (contract, ccs_wrapper))
-	return true;
-    }
+  tree contracts = get_fn_contract_specifiers (fndecl);
+  if (!contracts)
+    return false;
+
+  for (tree contract : tree_vec_range (contracts))
+    if (TREE_CODE (contract) == ASSERTION_STMT
+	? contract_active_p (contract, ccs_not_applicable)
+	: (contract_active_p (contract, ccs_definition)
+	   || contract_active_p (contract, ccs_wrapper)))
+      return true;
   return false;
 }
 
@@ -675,8 +669,11 @@ contract_any_active_p (tree fndecl)
 bool
 contract_any_deferred_p (tree contracts)
 {
-  for (; contracts; contracts = TREE_CHAIN (contracts))
-    if (CONTRACT_CONDITION_DEFERRED_P (CONTRACT_STATEMENT (contracts)))
+  if (!contracts)
+    return false;
+
+  for (tree contract : tree_vec_range (contracts))
+    if (CONTRACT_CONDITION_DEFERRED_P (contract))
       return true;
   return false;
 }
@@ -784,17 +781,51 @@ get_evaluation_semantic (const_tree contract)
   gcc_unreachable ();
 }
 
-/* Get location of the last contract in the CONTRACTS tree chain.  */
+/* Get location of the last contract in CONTRACTS.  */
 
 static location_t
 get_contract_end_loc (tree contracts)
 {
-  tree last = NULL_TREE;
-  for (tree a = contracts; a; a = TREE_CHAIN (a))
-    last = a;
-  gcc_checking_assert (last);
-  last = CONTRACT_STATEMENT (last);
+  gcc_checking_assert (contracts && TREE_VEC_LENGTH (contracts) > 0);
+  tree last = TREE_VEC_ELT (contracts, TREE_VEC_LENGTH (contracts) - 1);
   return EXPR_LOCATION (last);
+}
+
+/* Build the contract specifiers for a function from CONTRACTS, which are in
+   source order.  Returns NULL_TREE when there are none.  */
+
+tree
+build_contract_specifiers (vec<tree, va_gc> *contracts)
+{
+  unsigned len = vec_safe_length (contracts);
+  if (!len)
+    return NULL_TREE;
+
+  tree specs = make_tree_vec (len);
+  for (unsigned ix = 0; ix < len; ix++)
+    TREE_VEC_ELT (specs, ix) = (*contracts)[ix];
+  return specs;
+}
+
+/* Append the contract specifiers in SECOND to those in FIRST, either of
+   which may be NULL_TREE.  Neither input is modified.  */
+
+tree
+contract_specifiers_concat (tree first, tree second)
+{
+  if (!first)
+    return second;
+  if (!second)
+    return first;
+
+  int flen = TREE_VEC_LENGTH (first);
+  int slen = TREE_VEC_LENGTH (second);
+  tree specs = make_tree_vec (flen + slen);
+  for (int ix = 0; ix < flen; ix++)
+    TREE_VEC_ELT (specs, ix) = TREE_VEC_ELT (first, ix);
+  for (int ix = 0; ix < slen; ix++)
+    TREE_VEC_ELT (specs, flen + ix) = TREE_VEC_ELT (second, ix);
+  return specs;
 }
 
 struct GTY(()) contract_decl
@@ -1996,40 +2027,41 @@ start_function_contracts (tree fndecl)
 
   /* Check that the postcondition result name, if any, does not shadow a
      function parameter.  */
-  for (tree ca = get_fn_contract_specifiers (fndecl); ca; ca = TREE_CHAIN (ca))
-    if (POSTCONDITION_P (CONTRACT_STATEMENT (ca)))
-      if (tree id = POSTCONDITION_IDENTIFIER (CONTRACT_STATEMENT (ca)))
-	{
-	  if (id == error_mark_node)
-	    {
-	      CONTRACT_CONDITION (CONTRACT_STATEMENT (ca)) = error_mark_node;
-	      continue;
-	    }
-	  tree r_name = tree_strip_any_location_wrapper (id);
-	  if (TREE_CODE (id) == PARM_DECL)
-	    r_name = DECL_NAME (id);
-	  gcc_checking_assert (r_name && TREE_CODE (r_name) == IDENTIFIER_NODE);
-	  tree seen = lookup_name (r_name);
-	  if (seen
-	      && TREE_CODE (seen) == PARM_DECL
-	      && DECL_CONTEXT (seen) == fndecl)
-	    {
+  if (tree specs = get_fn_contract_specifiers (fndecl))
+    for (tree ca : tree_vec_range (specs))
+      if (POSTCONDITION_P (ca))
+	if (tree id = POSTCONDITION_IDENTIFIER (ca))
+	  {
+	    if (id == error_mark_node)
+	      {
+		CONTRACT_CONDITION (ca) = error_mark_node;
+		continue;
+	      }
+	    tree r_name = tree_strip_any_location_wrapper (id);
+	    if (TREE_CODE (id) == PARM_DECL)
+	      r_name = DECL_NAME (id);
+	    gcc_checking_assert (r_name
+				 && TREE_CODE (r_name) == IDENTIFIER_NODE);
+	    tree seen = lookup_name (r_name);
+	    if (seen
+		&& TREE_CODE (seen) == PARM_DECL
+		&& DECL_CONTEXT (seen) == fndecl)
+	      {
 		auto_diagnostic_group d;
 		location_t id_l = location_wrapper_p (id)
 				  ? EXPR_LOCATION (id)
 				  : DECL_SOURCE_LOCATION (id);
-		location_t co_l = EXPR_LOCATION (CONTRACT_STATEMENT (ca));
+		location_t co_l = EXPR_LOCATION (ca);
 		if (id_l != UNKNOWN_LOCATION)
 		  co_l = make_location (id_l, co_l, co_l);
 		error_at (co_l, "contract postcondition result name shadows a"
 			  " function parameter");
 		inform (DECL_SOURCE_LOCATION (seen),
 			"parameter declared here");
-		POSTCONDITION_IDENTIFIER (CONTRACT_STATEMENT (ca))
-		  = error_mark_node;
-		CONTRACT_CONDITION (CONTRACT_STATEMENT (ca)) = error_mark_node;
-	    }
-	}
+		POSTCONDITION_IDENTIFIER (ca) = error_mark_node;
+		CONTRACT_CONDITION (ca) = error_mark_node;
+	      }
+	  }
 
   /* If we are expanding contract assertions inline then no need to declare
      the outline function decls.  */
@@ -2170,30 +2202,26 @@ static tree
 copy_contracts_list (tree contracts, tree fndecl,
 		     contract_match_kind remap_kind = cmk_all)
 {
-  tree last = NULL_TREE, new_contracts = NULL_TREE;
-  for (; contracts; contracts = TREE_CHAIN (contracts))
+  if (!contracts)
+    return NULL_TREE;
+
+  auto_vec<tree> copies (TREE_VEC_LENGTH (contracts));
+  for (tree contract : tree_vec_range (contracts))
     {
       if ((remap_kind == cmk_pre
-	   && (TREE_CODE (CONTRACT_STATEMENT (contracts))
-	       == POSTCONDITION_STMT))
+	   && TREE_CODE (contract) == POSTCONDITION_STMT)
 	  || (remap_kind == cmk_post
-	      && (TREE_CODE (CONTRACT_STATEMENT (contracts))
-		  == PRECONDITION_STMT)))
+	      && TREE_CODE (contract) == PRECONDITION_STMT))
 	continue;
 
-      contract_check_side side
-	= contract_side_of (CONTRACT_STATEMENT (contracts), fndecl);
-      if (!contract_runs_on_side (CONTRACT_STATEMENT (contracts), side,
-				  fndecl))
+      contract_check_side side = contract_side_of (contract, fndecl);
+      if (!contract_runs_on_side (contract, side, fndecl))
 	continue;
 
-      tree c = copy_node (contracts);
-      TREE_VALUE (c) = build_tree_list (TREE_PURPOSE (TREE_VALUE (c)),
-					copy_node (CONTRACT_STATEMENT (c)));
+      tree c = copy_node (contract);
       if (oa_synthesized_implicit_contracts
-	  && oa_synthesized_implicit_contracts->contains
-	       (CONTRACT_STATEMENT (contracts)))
-	oa_synthesized_implicit_contracts->add (CONTRACT_STATEMENT (c));
+	  && oa_synthesized_implicit_contracts->contains (contract))
+	oa_synthesized_implicit_contracts->add (c);
 
       copy_body_data id;
       hash_map<tree, tree> decl_map;
@@ -2220,18 +2248,19 @@ copy_contracts_list (tree contracts, tree fndecl,
 
       /* We're not inside any EH region.  */
       id.eh_lp_nr = 0;
-      walk_tree (&CONTRACT_CONDITION (CONTRACT_STATEMENT (c)),
-				      copy_tree_body_r, &id, NULL);
+      walk_tree (&CONTRACT_CONDITION (c), copy_tree_body_r, &id, NULL);
 
+      CONTRACT_COMMENT (c) = copy_node (CONTRACT_COMMENT (c));
 
-      CONTRACT_COMMENT (CONTRACT_STATEMENT (c))
-	= copy_node (CONTRACT_COMMENT (CONTRACT_STATEMENT (c)));
-
-      chainon (last, c);
-      last = c;
-      if (!new_contracts)
-	new_contracts = c;
+      copies.quick_push (c);
     }
+
+  if (copies.is_empty ())
+    return NULL_TREE;
+
+  tree new_contracts = make_tree_vec (copies.length ());
+  for (unsigned ix = 0; ix < copies.length (); ix++)
+    TREE_VEC_ELT (new_contracts, ix) = copies[ix];
   return new_contracts;
 }
 
@@ -2265,19 +2294,6 @@ emit_contract_statement (tree contract)
   return true;
 }
 
-/* Generate the statement for the given contract by adding the contract
-   statement to the current block. Returns the next contract in the chain.  */
-
-static tree
-emit_contract (tree contract)
-{
-  gcc_assert (TREE_CODE (contract) == TREE_LIST);
-
-  emit_contract_statement (CONTRACT_STATEMENT (contract));
-
-  return TREE_CHAIN (contract);
-}
-
 /* Add a call or a direct evaluation of the pre checks.  */
 
 static void
@@ -2287,9 +2303,9 @@ apply_preconditions (tree fndecl)
     add_pre_condition_fn_call (fndecl);
   else
   {
-    tree contract_copy = copy_contracts (fndecl, cmk_pre);
-    for (; contract_copy; contract_copy = TREE_CHAIN (contract_copy))
-      emit_contract (contract_copy);
+    if (tree contract_copy = copy_contracts (fndecl, cmk_pre))
+      for (tree contract : tree_vec_range (contract_copy))
+	emit_contract_statement (contract);
   }
 }
 
@@ -2302,9 +2318,9 @@ apply_postconditions (tree fndecl)
     add_post_condition_fn_call (fndecl);
   else
     {
-      tree contract_copy = copy_contracts (fndecl, cmk_post);
-      for (; contract_copy; contract_copy = TREE_CHAIN (contract_copy))
-	emit_contract (contract_copy);
+      if (tree contract_copy = copy_contracts (fndecl, cmk_post))
+	for (tree contract : tree_vec_range (contract_copy))
+	  emit_contract_statement (contract);
     }
 }
 
@@ -2545,16 +2561,17 @@ tree
 copy_and_remap_contracts (tree dest, tree source,
 			  contract_match_kind remap_kind, bool for_wrapper)
 {
-  tree last = NULL_TREE, contracts_copy= NULL_TREE;
   tree contracts = get_fn_contract_specifiers (source);
-  for (; contracts; contracts = TREE_CHAIN (contracts))
+  if (!contracts)
+    return NULL_TREE;
+
+  auto_vec<tree> copies (TREE_VEC_LENGTH (contracts));
+  for (tree contract : tree_vec_range (contracts))
     {
       if ((remap_kind == cmk_pre
-	   && (TREE_CODE (CONTRACT_STATEMENT (contracts))
-	       == POSTCONDITION_STMT))
+	   && TREE_CODE (contract) == POSTCONDITION_STMT)
 	  || (remap_kind == cmk_post
-	      && (TREE_CODE (CONTRACT_STATEMENT (contracts))
-		  == PRECONDITION_STMT)))
+	      && TREE_CODE (contract) == PRECONDITION_STMT))
 	continue;
 
       /* update_contract_arguments uses this function for plain
@@ -2563,21 +2580,13 @@ copy_and_remap_contracts (tree dest, tree source,
 	 contract unconditionally; only a genuine caller-side wrapper copy
 	 (define_contract_wrapper_func) filters by side here.  */
       if (for_wrapper
-	  && !contract_runs_on_side (CONTRACT_STATEMENT (contracts),
-				     ccs_wrapper, source))
+	  && !contract_runs_on_side (contract, ccs_wrapper, source))
 	continue;
 
-      /* The first part is copying of the legacy attribute layout - eventually
-	 this will go away.  */
-      tree c = copy_node (contracts);
-      TREE_VALUE (c) = build_tree_list (TREE_PURPOSE (TREE_VALUE (c)),
-					copy_node (CONTRACT_STATEMENT (c)));
+      tree stmt = copy_node (contract);
       if (oa_synthesized_implicit_contracts
-	  && oa_synthesized_implicit_contracts->contains
-	       (CONTRACT_STATEMENT (contracts)))
-	oa_synthesized_implicit_contracts->add (CONTRACT_STATEMENT (c));
-      /* This is the copied contract statement.  */
-      tree stmt = CONTRACT_STATEMENT (c);
+	  && oa_synthesized_implicit_contracts->contains (contract))
+	oa_synthesized_implicit_contracts->add (stmt);
 
       /* If we have an erroneous postcondition identifier, we also mark the
 	 condition as invalid so only need to check that.  */
@@ -2596,11 +2605,15 @@ copy_and_remap_contracts (tree dest, tree source,
       if (CONTRACT_COMMENT (stmt) != error_mark_node)
 	CONTRACT_COMMENT (stmt) = copy_node (CONTRACT_COMMENT (stmt));
 
-      chainon (last, c);
-      last = c;
-      if (!contracts_copy)
-	contracts_copy = c;
+      copies.quick_push (stmt);
     }
+
+  if (copies.is_empty ())
+    return NULL_TREE;
+
+  tree contracts_copy = make_tree_vec (copies.length ());
+  for (unsigned ix = 0; ix < copies.length (); ix++)
+    TREE_VEC_ELT (contracts_copy, ix) = copies[ix];
 
   return contracts_copy;
 }
@@ -2651,13 +2664,16 @@ propagate_cdtor_contracts_to_clones (tree fn)
     }
 }
 
-/* Set the (maybe) parsed contract specifier LIST for DECL.  */
+/* Set the (maybe) parsed contract specifiers CONTRACTS for DECL.
+   CONTRACTS is either  NULL_TREE or a TREE_VEC of contract statements.  */
 
 void
-set_fn_contract_specifiers (tree decl, tree list)
+set_fn_contract_specifiers (tree decl, tree contracts)
 {
   if (!decl || error_operand_p (decl))
     return;
+
+  gcc_checking_assert (!contracts || TREE_CODE (contracts) == TREE_VEC);
 
   bool existed = false;
   contract_decl& rd
@@ -2669,18 +2685,18 @@ set_fn_contract_specifiers (tree decl, tree list)
 	 contracts used for the function.  */
       location_t decl_loc = DECL_SOURCE_LOCATION (decl);
       location_t cont_end = decl_loc;
-      if (list)
-	cont_end = get_contract_end_loc (list);
+      if (contracts)
+	cont_end = get_contract_end_loc (contracts);
       rd.note_loc = make_location (decl_loc, decl_loc, cont_end);
     }
-  rd.contract_specifiers = list;
+  rd.contract_specifiers = contracts;
 }
 
 /* Update the entry for DECL in the map of contract specifiers with the
-  contracts in LIST. */
+  contracts in CONTRACTS.  */
 
 void
-update_fn_contract_specifiers (tree decl, tree list)
+update_fn_contract_specifiers (tree decl, tree contracts)
 {
   if (!decl || error_operand_p (decl))
     return;
@@ -2691,9 +2707,9 @@ update_fn_contract_specifiers (tree decl, tree list)
   gcc_checking_assert (existed);
 
   /* We should only get here when we parse deferred contracts.  */
-  gcc_checking_assert (!contract_any_deferred_p (list));
+  gcc_checking_assert (!contract_any_deferred_p (contracts));
 
-  rd.contract_specifiers = list;
+  rd.contract_specifiers = contracts;
 }
 
 /* When a decl is about to be removed, then we need to release its content and
@@ -2823,9 +2839,8 @@ check_redecl_contract (tree newdecl, tree olddecl)
       && !contract_any_deferred_p (new_contracts))
     {
       bool all_synthesized = true;
-      for (tree spec = new_contracts; spec; spec = TREE_CHAIN (spec))
-	if (!oa_synthesized_implicit_contracts->contains
-	      (CONTRACT_STATEMENT (spec)))
+      for (tree contract : tree_vec_range (new_contracts))
+	if (!oa_synthesized_implicit_contracts->contains (contract))
 	  {
 	    all_synthesized = false;
 	    break;
@@ -3109,9 +3124,8 @@ maybe_contract_wrap_call (tree fndecl, tree call)
       tree src_parm;
       if (oa_defaulted_copy_source_parm (fndecl, &src_parm))
 	SET_DECL_MIGHT_NEED_OA_SCAN_P (current_function_decl);
-      for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+      for (tree contract : fn_contracts (fndecl))
 	{
-	  tree contract = CONTRACT_STATEMENT (as);
 	  if (PRECONDITION_P (contract)
 	      && (oa_contract_conveyor_active_p (contract, fndecl)
 		  || oa_contract_symbolic_active_p (contract, fndecl)))
@@ -3490,16 +3504,10 @@ remap_object_contract (tree contract, tree dst_parms)
 {
   /* Look this up against the *original* (pre-copy) statement node:
      that's the exact tree set_contract_positional_parms was keyed on
-     back in cp_parser_function_contract_specifier, before
-     finish_contract_specifier ever wrapped it into the attribute-list
-     shape CONTRACT is received as here.  */
-  tree orig_stmt = CONTRACT_STATEMENT (contract);
-  tree orig_positional_parms = get_contract_positional_parms (orig_stmt);
+     back in cp_parser_function_contract_specifier.  */
+  tree orig_positional_parms = get_contract_positional_parms (contract);
 
-  tree copy = copy_node (contract);
-  TREE_VALUE (copy) = build_tree_list (TREE_PURPOSE (TREE_VALUE (contract)),
-					copy_node (orig_stmt));
-  tree stmt = CONTRACT_STATEMENT (copy);
+  tree stmt = copy_node (contract);
 
   hash_map<tree, tree> decl_map;
   tree dp = dst_parms;
@@ -3512,7 +3520,7 @@ remap_object_contract (tree contract, tree dst_parms)
 
   walk_tree (&CONTRACT_CONDITION (stmt), object_contract_remap_r, &decl_map,
 	     NULL);
-  return copy;
+  return stmt;
 }
 
 /* D4324 + templates: PATTERN_DECL is a VAR_DECL/PARM_DECL/FIELD_DECL
@@ -3580,17 +3588,12 @@ tsubst_object_contract_specifiers (tree pattern_decl, tree new_decl,
       parms_tail = &TREE_CHAIN (*parms_tail);
     }
 
-  tree new_contracts = NULL_TREE;
-  tree *contracts_tail = &new_contracts;
-  for (tree c = specs; c; c = TREE_CHAIN (c))
+  auto_vec<tree> new_contracts (TREE_VEC_LENGTH (specs));
+  for (tree orig_stmt : tree_vec_range (specs))
     {
-      tree orig_stmt = CONTRACT_STATEMENT (c);
       tree orig_positional_parms = get_contract_positional_parms (orig_stmt);
 
-      tree copy = copy_node (c);
       tree new_stmt = copy_node (orig_stmt);
-      TREE_VALUE (copy) = build_tree_list (TREE_PURPOSE (TREE_VALUE (c)),
-					    new_stmt);
 
       /* Map each PATTERN positional parameter (and its own synthesized
 	 'this', if any -- already included in ORIG_POSITIONAL_PARMS)
@@ -3630,8 +3633,7 @@ tsubst_object_contract_specifiers (tree pattern_decl, tree new_decl,
 	  oldvar = POSTCONDITION_IDENTIFIER (orig_stmt);
 	  if (oldvar == error_mark_node)
 	    {
-	      *contracts_tail = invalidate_contract (copy);
-	      contracts_tail = &TREE_CHAIN (*contracts_tail);
+	      new_contracts.quick_push (invalidate_contract (new_stmt));
 	      continue;
 	    }
 	  /* Deliberately NOT retyped (and NOT validated via
@@ -3690,11 +3692,13 @@ tsubst_object_contract_specifiers (tree pattern_decl, tree new_decl,
 	 site, operating on concrete, non-dependent decls by then.  */
       set_contract_positional_parms (new_stmt, new_positional_parms);
 
-      *contracts_tail = copy;
-      contracts_tail = &TREE_CHAIN (*contracts_tail);
+      new_contracts.quick_push (new_stmt);
     }
 
-  set_fn_contract_specifiers (new_decl, new_contracts);
+  tree new_specs = make_tree_vec (new_contracts.length ());
+  for (unsigned ix = 0; ix < new_contracts.length (); ix++)
+    TREE_VEC_ELT (new_specs, ix) = new_contracts[ix];
+  set_fn_contract_specifiers (new_decl, new_specs);
 }
 
 /* Map from a callable-typed object decl to its (cached) pre-check or
@@ -3798,22 +3802,12 @@ build_object_contract_check_function (tree objdecl, bool is_post)
   location_t loc = DECL_SOURCE_LOCATION (objdecl);
 
   /* No point building anything unless OBJDECL actually has a contract
-     of this kind.  Each kept entry is its own copy_node, with its
-     TREE_CHAIN explicitly reset: C's own chain slot still belongs to
-     OBJDECL's full (pre-and-post) list, and reusing C or its chain
-     pointer directly here would splice the *other* kind's contracts
-     in right behind it.  */
-  tree specs = NULL_TREE;
-  tree *specs_tail = &specs;
-  for (tree c = get_fn_contract_specifiers (objdecl); c; c = TREE_CHAIN (c))
-    if ((TREE_CODE (CONTRACT_STATEMENT (c)) == POSTCONDITION_STMT) == is_post)
-      {
-	tree entry = copy_node (c);
-	TREE_CHAIN (entry) = NULL_TREE;
-	*specs_tail = entry;
-	specs_tail = &TREE_CHAIN (entry);
-      }
-  if (!specs)
+     of this kind.  */
+  auto_vec<tree> specs;
+  for (tree c : fn_contracts (objdecl))
+    if ((TREE_CODE (c) == POSTCONDITION_STMT) == is_post)
+      specs.safe_push (c);
+  if (specs.is_empty ())
     return NULL_TREE;
 
   /* Fresh parameters matching OBJDECL's own callable signature,
@@ -3912,13 +3906,10 @@ build_object_contract_check_function (tree objdecl, bool is_post)
     DECL_NAME (check_fn) = get_identifier (namebuf);
   }
 
-  tree remapped_specs = NULL_TREE;
-  tree *remapped_tail = &remapped_specs;
-  for (tree c = specs; c; c = TREE_CHAIN (c))
-    {
-      *remapped_tail = remap_object_contract (c, parms);
-      remapped_tail = &TREE_CHAIN (*remapped_tail);
-    }
+  tree remapped_specs = make_tree_vec (specs.length ());
+  for (unsigned ix = 0; ix < specs.length (); ix++)
+    TREE_VEC_ELT (remapped_specs, ix) = remap_object_contract (specs[ix],
+							       parms);
   set_fn_contract_specifiers (check_fn, remapped_specs);
   /* Resolve the postcondition result placeholder (still auto-typed,
      per make_postcondition_variable) to CHECK_FN's own real return
@@ -4213,9 +4204,11 @@ rebuild_postconditions (tree fndecl)
     return;
 
   tree contract_spec = get_fn_contract_specifiers (fndecl);
-  for (; contract_spec ; contract_spec = TREE_CHAIN (contract_spec))
+  if (!contract_spec)
+    return;
+
+  for (tree contract : tree_vec_range (contract_spec))
     {
-      tree contract = TREE_VALUE (TREE_VALUE (contract_spec));
       if (TREE_CODE (contract) != POSTCONDITION_STMT)
 	continue;
       tree condition = CONTRACT_CONDITION (contract);
@@ -4448,27 +4441,6 @@ grok_contract (tree contract_spec, tree mode, tree result, cp_expr condition,
   return contract;
 }
 
-/* Build the contract specifier where IDENTIFIER is one of 'pre',
-   'post' or 'assert' and CONTRACT is the underlying statement.  */
-
-tree
-finish_contract_specifier (tree identifier, tree contract)
-{
-  if (contract == error_mark_node)
-    return error_mark_node;
-
-  tree contract_spec = build_tree_list (build_tree_list (NULL_TREE, identifier),
-					build_tree_list (NULL_TREE, contract));
-
-  /* Mark the contract as dependent if the condition is dependent.  */
-  tree condition = CONTRACT_CONDITION (contract);
-  if (TREE_CODE (condition) != DEFERRED_PARSE
-      && value_dependent_expression_p (condition))
-    ATTR_IS_DEPENDENT (contract_spec) = true;
-
-  return contract_spec;
-}
-
 /* Update condition of a late-parsed contract and postcondition variable,
    if any.  */
 
@@ -4529,19 +4501,19 @@ remap_and_emit_conditions (tree fn, tree condfn, tree_code code)
 {
   gcc_assert (code == PRECONDITION_STMT || code == POSTCONDITION_STMT);
   tree contract_spec = get_fn_contract_specifiers (fn);
-  for (; contract_spec; contract_spec = TREE_CHAIN (contract_spec))
-    {
-      tree contract = CONTRACT_STATEMENT (contract_spec);
-      if (TREE_CODE (contract) == code
-	  && contract_runs_on_side (contract, contract_side_of (contract, fn),
-				    fn))
-	{
-	  contract = copy_node (contract);
-	  if (CONTRACT_CONDITION (contract) != error_mark_node)
-	    remap_contract (fn, condfn, contract, /*duplicate_p=*/false);
-	  emit_contract_statement (contract);
-	}
-    }
+  if (!contract_spec)
+    return;
+
+  for (tree contract : tree_vec_range (contract_spec))
+    if (TREE_CODE (contract) == code
+	&& contract_runs_on_side (contract, contract_side_of (contract, fn),
+				  fn))
+      {
+	contract = copy_node (contract);
+	if (CONTRACT_CONDITION (contract) != error_mark_node)
+	  remap_contract (fn, condfn, contract, /*duplicate_p=*/false);
+	emit_contract_statement (contract);
+      }
 }
 
 /* Finish up the pre & post function definitions for a guarded FNDECL,
@@ -4915,9 +4887,8 @@ static tree lookup_is_object_address_template ();
 static bool
 oa_fndecl_has_conveyor_active_contract_p (tree fndecl)
 {
-  for (tree c = get_fn_contract_specifiers (fndecl); c; c = TREE_CHAIN (c))
+  for (tree contract : fn_contracts (fndecl))
     {
-      tree contract = CONTRACT_STATEMENT (c);
       tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
       if (!ctrl || !flag_contract_control_objects)
 	continue;
@@ -4972,8 +4943,8 @@ oa_synthesize_for_dependent_control_instantiation (tree decl, tree pattern)
       || DECL_DECLARED_CONVEYOR_P (pattern))
     return;
   bool dependent = false;
-  for (tree c = get_fn_contract_specifiers (pattern); c; c = TREE_CHAIN (c))
-    if (tree ctrl = CONTRACT_CONTROL_OBJECT (CONTRACT_STATEMENT (c)))
+  for (tree c : fn_contracts (pattern))
+    if (tree ctrl = CONTRACT_CONTROL_OBJECT (c))
       if (uses_template_parms (ctrl))
 	{
 	  dependent = true;
@@ -4996,20 +4967,15 @@ contract_drop_synthesized_preconditions (tree fndecl)
     return;
   auto drop = [] (tree fn)
     {
-      tree kept = NULL_TREE;
+      vec<tree, va_gc> *kept = NULL;
       bool any = false;
-      for (tree spec = get_fn_contract_specifiers (fn); spec;
-	   spec = TREE_CHAIN (spec))
-	if (oa_synthesized_implicit_contracts->contains (CONTRACT_STATEMENT (spec)))
+      for (tree contract : fn_contracts (fn))
+	if (oa_synthesized_implicit_contracts->contains (contract))
 	  any = true;
 	else
-	  {
-	    tree copy = copy_node (spec);
-	    TREE_CHAIN (copy) = NULL_TREE;
-	    kept = attr_chainon (kept, copy);
-	  }
+	  vec_safe_push (kept, contract);
       if (any)
-	set_fn_contract_specifiers (fn, kept);
+	set_fn_contract_specifiers (fn, build_contract_specifiers (kept));
     };
   drop (fndecl);
   tree clone;
@@ -5165,7 +5131,7 @@ oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
     }
 
   tree pre_id = get_identifier ("pre");
-  tree new_specs = NULL_TREE;
+  vec<tree, va_gc> *new_specs = NULL;
   for (tree parm = DECL_ARGUMENTS (fndecl); parm; parm = DECL_CHAIN (parm))
     {
       bool is_this = is_this_parameter (parm);
@@ -5241,18 +5207,19 @@ oa_synthesize_implicit_reference_safety_preconditions (tree fndecl)
 				      cp_expr (call, loc), loc, ctrl);
       if (contract == error_mark_node)
 	continue;
-      tree spec = finish_contract_specifier (pre_id, contract);
-      if (spec == error_mark_node)
-	continue;
       if (!oa_synthesized_implicit_contracts)
 	oa_synthesized_implicit_contracts = hash_set<tree>::create_ggc (37);
-      oa_synthesized_implicit_contracts->add (CONTRACT_STATEMENT (spec));
-      new_specs = attr_chainon (new_specs, spec);
+      oa_synthesized_implicit_contracts->add (contract);
+      vec_safe_push (new_specs, contract);
     }
 
   if (new_specs)
-    set_fn_contract_specifiers
-      (fndecl, attr_chainon (new_specs, get_fn_contract_specifiers (fndecl)));
+    {
+      tree specs = build_contract_specifiers (new_specs);
+      specs = contract_specifiers_concat (specs,
+					  get_fn_contract_specifiers (fndecl));
+      set_fn_contract_specifiers (fndecl, specs);
+    }
 }
 
 /* Return handle_contract_violation (), declaring it if needed.  */
@@ -7904,10 +7871,8 @@ whole_set_inherited_p (tree basefn, tree_code code, tree overrider,
   *client = false;
   *definition = false;
   bool seen = false;
-  for (tree spec = get_fn_contract_specifiers (basefn); spec;
-       spec = TREE_CHAIN (spec))
+  for (tree contract : fn_contracts (basefn))
     {
-      tree contract = CONTRACT_STATEMENT (spec);
       if (TREE_CODE (contract) != code)
 	continue;
       tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
@@ -8063,10 +8028,9 @@ resolve_inherited_contract (tree contract, tree using_fndecl,
    wrapper or outlined PRE_FN/POST_FN) is definitely a complete type.  */
 
 static tree
-synthesize_inherited_specifier (tree base_spec, tree basefn, tree overrider,
-				 bool client, bool definition)
+synthesize_inherited_specifier (tree base_contract, tree basefn,
+				 tree overrider, bool client, bool definition)
 {
-  tree base_contract = CONTRACT_STATEMENT (base_spec);
   tree result_parm = NULL_TREE;
   if (TREE_CODE (base_contract) == POSTCONDITION_STMT)
     {
@@ -8081,11 +8045,7 @@ synthesize_inherited_specifier (tree base_spec, tree basefn, tree overrider,
       DECL_SOURCE_LOCATION (result_parm) = DECL_SOURCE_LOCATION (overrider);
     }
 
-  tree entry = copy_node (base_spec);
   tree contract = copy_node (base_contract);
-  TREE_VALUE (entry) = build_tree_list (TREE_PURPOSE (TREE_VALUE (base_spec)),
-					contract);
-  TREE_CHAIN (entry) = NULL_TREE;
 
   int bits = (client ? CONTRACT_INHERITED_CLIENT_BIT : 0)
 	     | (definition ? CONTRACT_INHERITED_DEFINITION_BIT : 0);
@@ -8096,7 +8056,7 @@ synthesize_inherited_specifier (tree base_spec, tree basefn, tree overrider,
   if (result_parm)
     POSTCONDITION_IDENTIFIER (contract) = result_parm;
 
-  return entry;
+  return contract;
 }
 
 /* OVERRIDER overrides BASEFN (gcc/cp/search.cc's look_for_overrides_r has
@@ -8142,11 +8102,9 @@ maybe_inherit_virtual_contract (tree overrider, tree basefn)
       return;
     }
 
-  tree last = NULL_TREE, new_specs = NULL_TREE;
-  for (tree spec = get_fn_contract_specifiers (basefn); spec;
-       spec = TREE_CHAIN (spec))
+  vec<tree, va_gc> *new_specs = NULL;
+  for (tree contract : fn_contracts (basefn))
     {
-      tree contract = CONTRACT_STATEMENT (spec);
       bool client, definition;
       if (TREE_CODE (contract) == PRECONDITION_STMT)
 	client = pre_client, definition = pre_definition;
@@ -8157,17 +8115,16 @@ maybe_inherit_virtual_contract (tree overrider, tree basefn)
       if (!client && !definition)
 	continue;
 
-      tree entry = synthesize_inherited_specifier (spec, basefn, overrider,
-						    client, definition);
-      chainon (last, entry);
-      last = entry;
-      if (!new_specs)
-	new_specs = entry;
+      tree inherited = synthesize_inherited_specifier (contract, basefn,
+							overrider, client,
+							definition);
+      vec_safe_push (new_specs, inherited);
     }
 
   hash_map_maybe_create<hm_ggc> (contract_inherited_from);
   contract_inherited_from->put (overrider, basefn);
-  set_fn_contract_specifiers (overrider, new_specs);
+  set_fn_contract_specifiers (overrider,
+			      build_contract_specifiers (new_specs));
 }
 
 /* D4324 step 3: std::contracts::base_contract<Base>() -- an explicit,
@@ -12617,9 +12574,8 @@ oa_accessor_postcondition_object_address_p (tree fndecl)
 {
   if (!fndecl || TREE_CODE (fndecl) != FUNCTION_DECL || !flag_contract_control_objects)
     return false;
-  for (tree spec = get_fn_contract_specifiers (fndecl); spec; spec = TREE_CHAIN (spec))
+  for (tree contract : fn_contracts (fndecl))
     {
-      tree contract = CONTRACT_STATEMENT (spec);
       if (TREE_CODE (contract) != POSTCONDITION_STMT)
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
@@ -16479,9 +16435,8 @@ oa_refine_by_call (tree call, oa_env &env, bool asserted_true)
 				 asserted_true, /*conveyor_established=*/true);
     }
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract)
 	  || !oa_contract_conveyor_active_p (contract, callee)
 	  || !contract_failure_terminates_p (contract, callee))
@@ -18580,9 +18535,8 @@ oa_contract_never_proven_p (tree contract, tree owner)
 static bool
 oa_parm_object_trusted_p (tree callee, tree parm)
 {
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract)
 	  || !oa_contract_never_proven_p (contract, callee))
 	continue;
@@ -18852,9 +18806,8 @@ oa_call_conveyor_obligation_status (tree call, bool *forced_out, bool *strict_ou
   tree callee = cp_get_callee_fndecl_nofold (call);
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!oa_contract_conveyor_active_p (contract, callee))
 	continue;
       if (PRECONDITION_P (contract)
@@ -18875,9 +18828,8 @@ oa_call_symbolic_obligation_status (tree call, bool *forced_out, bool *strict_ou
   tree callee = cp_get_callee_fndecl_nofold (call);
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!oa_contract_symbolic_active_p (contract, callee))
 	continue;
       if (PRECONDITION_P (contract)
@@ -19630,10 +19582,8 @@ oa_defaulted_copy_body_needs_p (tree fn, tree src,
       if (oa_defaulted_copy_source_parm_1 (callee, &parm, *data->in_progress))
 	return t;
       oa_maybe_instantiate_contracts (callee);
-      for (tree as = get_fn_contract_specifiers (callee); as;
-	   as = TREE_CHAIN (as))
+      for (tree contract : fn_contracts (callee))
 	{
-	  tree contract = CONTRACT_STATEMENT (as);
 	  if (!PRECONDITION_P (contract))
 	    continue;
 	  tree cond = CONTRACT_CONDITION (contract);
@@ -19762,9 +19712,8 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
 	    oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	  }
       }
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!contract_precondition_caller_obligation_p (contract, callee))
@@ -20298,9 +20247,8 @@ oa_call_symbolic_predicate_p (tree call, tree *pred_fn_out, bool *polarity_out,
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return false;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       if (!oa_contract_fact_tracking_active_p (contract, callee))
@@ -20806,9 +20754,8 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
   auto_vec<tree> float_range_parms;
   auto_vec<oa_float_range_fact> float_range_facts;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!oa_value_obligation_contract_p (contract, callee))
@@ -21318,9 +21265,8 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
   /* The callee parameters whose nonzero obligation has been reported for
      CALL already, so a repeated precondition reports it once.  */
   hash_set<tree> reported_nz_parms;
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!oa_value_obligation_contract_p (contract, callee))
@@ -22679,9 +22625,8 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       if (!oa_contract_fact_tracking_active_p (contract, callee))
@@ -22970,9 +22915,8 @@ oa_establish_call_postcondition_argument_facts (tree call, oa_env &env)
   tree callee = cp_get_callee_fndecl_nofold (call);
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract)
 	  || !oa_contract_conveyor_active_p (contract, callee)
 	  || !contract_failure_terminates_p (contract, callee))
@@ -23091,9 +23035,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
   /* The callee parameters whose nonzero obligation has been reported for
      CALL already, so a repeated precondition reports it once.  */
   hash_set<tree> reported_nz_parms;
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!contract_precondition_caller_obligation_p (contract, callee))
@@ -23859,9 +23802,8 @@ oa_handle_call_conveyor_field_range_obligation (tree call, oa_env &env)
   bool strict = false;
   oa_call_conveyor_obligation_status (call, NULL, &strict);
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!oa_value_obligation_contract_p (contract, callee))
@@ -24091,9 +24033,8 @@ oa_handle_call_conveyor_call_range_obligation (tree call, oa_env &env)
   bool strict = false;
   oa_call_conveyor_obligation_status (call, NULL, &strict);
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!oa_value_obligation_contract_p (contract, callee))
@@ -25269,9 +25210,8 @@ oa_call_postcondition_object_address_p (tree call)
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return false;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       /* D4324: m_map (is_object_address) carries no per-fact provenance
@@ -25349,9 +25289,8 @@ oa_call_postcondition_nonzero_p (tree call)
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return false;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       /* D4324: m_nz_map carries no per-fact provenance tag -- see oa_call_
@@ -25413,9 +25352,8 @@ oa_call_postcondition_range_p (tree call, oa_env &env, oa_range_fact *out,
   oa_env scratch;
   bool any = false;
   tree last_contract = NULL_TREE;
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       /* D4324: m_range_map carries no per-fact provenance tag -- see
@@ -25596,9 +25534,8 @@ oa_call_symbolic_range_p (tree call, oa_range_fact *out)
   tree result_id = NULL_TREE;
   oa_env scratch;
   bool any = false;
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       if (!oa_contract_symbolic_active_p (contract, callee))
@@ -25662,9 +25599,8 @@ static void
 oa_precondition_symbolic_ranges (tree callee,
 				  vec<oa_symbolic_precondition_match> *out)
 {
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!oa_contract_symbolic_active_p (contract, callee))
@@ -26125,9 +26061,8 @@ oa_precondition_field_range_obligations
    void (*callback) (tree, tree, tree, bool, tree, bool, tree, void *),
    void *data)
 {
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!oa_contract_fact_tracking_active_p (contract, callee))
@@ -26170,9 +26105,8 @@ oa_precondition_float_field_range_obligations
    void (*callback) (tree, tree, tree, bool, tree, bool, tree, void *),
    void *data)
 {
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!oa_contract_fact_tracking_active_p (contract, callee))
@@ -26216,9 +26150,8 @@ oa_precondition_call_range_obligations
    void (*callback) (tree, tree, tree, bool, tree, bool, tree, void *),
    void *data)
 {
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!oa_contract_fact_tracking_active_p (contract, callee))
@@ -27176,9 +27109,8 @@ oa_mark_fn_if_expr_calls_active_contract (tree fndecl, tree expr)
       if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
 	return NULL_TREE;
       oa_maybe_instantiate_contracts (callee);
-      for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+      for (tree contract : fn_contracts (callee))
 	{
-	  tree contract = CONTRACT_STATEMENT (as);
 	  if (PRECONDITION_P (contract)
 	      && (oa_contract_conveyor_active_p (contract, callee)
 		  || oa_contract_symbolic_active_p (contract, callee)))
@@ -33097,9 +33029,8 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 static bool
 oa_has_active_postcondition (tree fndecl)
 {
-  for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (fndecl))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (POSTCONDITION_P (contract)
 	  && (oa_contract_conveyor_active_p (contract)
 	      || oa_contract_symbolic_active_p (contract)))
@@ -33520,9 +33451,9 @@ oa_cache_contract_flavors (tree fndecl)
      (cg_callee_pre_mandatory) -- which it can only see as conveyor-
      flavored once they're cached here, even when nothing outside a
      predicate calls that callee.  */
-  for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (fndecl))
     {
-      tree cond = CONTRACT_CONDITION (CONTRACT_STATEMENT (as));
+      tree cond = CONTRACT_CONDITION (contract);
       if (!cond || cond == error_mark_node)
 	continue;
       cp_walk_tree_without_duplicates (&cond,
@@ -33539,9 +33470,8 @@ oa_cache_contract_flavors (tree fndecl)
 	  return NULL_TREE;
 	}, fndecl);
     }
-  for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (fndecl))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (oa_contract_conveyor_active_p (contract, fndecl))
 	{
 	  if (!oa_conveyor_active_contract_cache)
@@ -33805,9 +33735,8 @@ oa_seed_entry_env (tree fndecl, tree body, oa_env &env)
   if (oa_defaulted_copy_source_parm (fndecl, &src_parm))
     env.set (src_parm, true);
 
-  for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (fndecl))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!PRECONDITION_P (contract))
 	continue;
       if (!oa_contract_conveyor_active_p (contract))
@@ -34215,9 +34144,8 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
   auto_vec<tree> postcondition_result_ids;
   if (oa_return_tracking)
     {
-      for (tree as = get_fn_contract_specifiers (fndecl); as; as = TREE_CHAIN (as))
+      for (tree contract : fn_contracts (fndecl))
 	{
-	  tree contract = CONTRACT_STATEMENT (as);
 	  if (!POSTCONDITION_P (contract))
 	    continue;
 	  tree result_id = POSTCONDITION_IDENTIFIER (contract);
@@ -34408,9 +34336,8 @@ oa_restore_conditions_as_written (tree fndecl)
       if (tree *saved = oa_condition_as_written_map->get (stmt))
 	CONTRACT_CONDITION (stmt) = unshare_expr (*saved);
     };
-  for (tree spec = get_fn_contract_specifiers (fndecl); spec;
-       spec = TREE_CHAIN (spec))
-    restore (CONTRACT_STATEMENT (spec));
+  for (tree contract : fn_contracts (fndecl))
+    restore (contract);
   if (DECL_SAVED_TREE (fndecl))
     cp_walk_tree_without_duplicates (&DECL_SAVED_TREE (fndecl),
       [](tree *tp, int *, void *) -> tree
@@ -34546,9 +34473,8 @@ oa_validate_contract_predicates (tree fndecl)
   bool any_strict = false;
   {
     auto ovr = make_temp_override (oa_validating_declaration, fndecl);
-    for (tree as = specs; as; as = TREE_CHAIN (as))
+    for (tree stmt : contract_specifier_range (specs))
       {
-	tree stmt = CONTRACT_STATEMENT (as);
 	tree cond = CONTRACT_CONDITION (stmt);
 	if (!cond || cond == error_mark_node)
 	  continue;
@@ -34578,9 +34504,8 @@ oa_validate_contract_predicates (tree fndecl)
   env.set_capture_proxy_key_cache (&capture_proxy_key_cache);
   oa_seed_entry_env (fndecl, NULL_TREE, env);
 
-  for (tree as = specs; as; as = TREE_CHAIN (as))
+  for (tree stmt : contract_specifier_range (specs))
     {
-      tree stmt = CONTRACT_STATEMENT (as);
       tree cond = CONTRACT_CONDITION (stmt);
       if (!cond || cond == error_mark_node)
 	continue;
@@ -34605,9 +34530,8 @@ oa_validate_contract_predicates (tree fndecl)
   if (flag_contract_conveyor_proofs_gimple
       && (!DECL_INITIAL (fndecl) || !flag_contracts_definition_check)
       && !DECL_DEFAULTED_FN (fndecl))
-    for (tree as = specs; as; as = TREE_CHAIN (as))
+    for (tree stmt : contract_specifier_range (specs))
       {
-	tree stmt = CONTRACT_STATEMENT (as);
 	tree cond = CONTRACT_CONDITION (stmt);
 	if (!cond || cond == error_mark_node
 	    || !oa_contract_conveyor_active_p (stmt, fndecl)
@@ -34680,9 +34604,8 @@ oa_validate_object_contract_predicates (tree objdecl)
 	  && uses_template_parms (DECL_CONTEXT (objdecl))))
     return;
   bool any_pre = false, any_post = false;
-  for (tree as = specs; as; as = TREE_CHAIN (as))
+  for (tree stmt : contract_specifier_range (specs))
     {
-      tree stmt = CONTRACT_STATEMENT (as);
       tree cond = CONTRACT_CONDITION (stmt);
       if (!cond || cond == error_mark_node)
 	continue;
@@ -35255,9 +35178,8 @@ oa_compose_call_result_range (tree lhs, tree rhs, oa_env &env)
     return false;
 
   bool composed = false;
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       /* D4324: m_range_map carries no per-fact provenance tag -- see
@@ -35386,9 +35308,8 @@ oa_establish_relational_from_call (tree lhs, tree rhs, oa_env &env)
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       bool conveyor_active = oa_contract_conveyor_active_p (contract, callee)
@@ -37300,9 +37221,8 @@ oa_predicate_defining_relation_public (tree pred_fn, bool require_conveyor,
   tree own_param = DECL_ARGUMENTS (pred_fn);
   if (!own_param || DECL_CHAIN (own_param))
     return false;
-  for (tree as = get_fn_contract_specifiers (pred_fn); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (pred_fn))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       bool active = ((oa_contract_conveyor_active_cached_p (contract)
@@ -37372,9 +37292,8 @@ oa_call_postcondition_predicate_range_p (tree call, oa_env &env,
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return false;
 
-  for (tree as = get_fn_contract_specifiers (callee); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (callee))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       /* D4324: this function already takes REQUIRE_CONVEYOR -- previously
@@ -37456,9 +37375,8 @@ oa_predicate_result_from_declared_relation (tree pred_fn, tree actual_arg,
   if (!own_param || DECL_CHAIN (own_param))
     return false;
 
-  for (tree as = get_fn_contract_specifiers (pred_fn); as; as = TREE_CHAIN (as))
+  for (tree contract : fn_contracts (pred_fn))
     {
-      tree contract = CONTRACT_STATEMENT (as);
       if (!POSTCONDITION_P (contract))
 	continue;
       /* D4324: same REQUIRE_CONVEYOR fix as oa_call_postcondition_
@@ -38142,10 +38060,8 @@ build_base_contract_expr (tree base_fn, tree_code kind, tree using_fndecl,
     base_result = save_expr (base_result);
 
   tree result = NULL_TREE;
-  for (tree spec = get_fn_contract_specifiers (base_fn); spec;
-       spec = TREE_CHAIN (spec))
+  for (tree base_contract : fn_contracts (base_fn))
     {
-      tree base_contract = CONTRACT_STATEMENT (spec);
       if (TREE_CODE (base_contract) != kind)
 	continue;
 
