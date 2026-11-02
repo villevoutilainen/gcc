@@ -295,8 +295,10 @@ namespace ranges
 	else
 	  {
 	    auto __guard = __detail::_DestroyGuard(__ofirst);
-	    for (; __ifirst != __ilast && __ofirst != __olast;
-		 ++__ofirst, (void)++__ifirst)
+	    _GLIBCXX_CONVEYOR_TRUST(__ofirst);
+	    _GLIBCXX_CONVEYOR_TRUST(__ifirst);
+	    for (; _GLIBCXX_CONVEYOR_TRUSTED (__ifirst) != __ilast && _GLIBCXX_CONVEYOR_TRUSTED (__ofirst) != __olast;
+		 ++_GLIBCXX_CONVEYOR_TRUSTED (__ofirst), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__ifirst))
 	      ::new (__detail::__voidify(*__ofirst)) _OutType(*__ifirst);
 	    __guard.release();
 	    return {std::move(__ifirst), __ofirst};
@@ -392,8 +394,10 @@ namespace ranges
 	else
 	  {
 	    auto __guard = __detail::_DestroyGuard(__ofirst);
-	    for (; __ifirst != __ilast && __ofirst != __olast;
-		 ++__ofirst, (void)++__ifirst)
+	    _GLIBCXX_CONVEYOR_TRUST(__ofirst);
+	    _GLIBCXX_CONVEYOR_TRUST(__ifirst);
+	    for (; _GLIBCXX_CONVEYOR_TRUSTED (__ifirst) != __ilast && _GLIBCXX_CONVEYOR_TRUSTED (__ofirst) != __olast;
+		 ++_GLIBCXX_CONVEYOR_TRUSTED (__ofirst), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__ifirst))
 	      ::new (__detail::__voidify(*__ofirst))
 		    _OutType(ranges::iter_move(__ifirst));
 	    __guard.release();
@@ -569,7 +573,8 @@ namespace ranges
 	if (!is_constant_evaluated())
 	  return ranges::next(std::move(__first), __last);
 
-      for (; __first != __last; ++__first)
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	ranges::destroy_at(std::__addressof(*__first));
       return __first;
     }

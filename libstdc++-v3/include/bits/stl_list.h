@@ -1288,8 +1288,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	: _Base(_Node_alloc_type(__a))
 	{
 	  _GLIBCXX_CONVEYOR_TRUST(__rg);
-	  auto __first = ranges::begin(__rg);
-	  const auto __last = ranges::end(__rg);
+	  auto __first = _GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__rg);
+	  const auto __last = _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__rg);
 	  for (; __first != __last; ++__first)
 	    emplace_back(*__first);
 	}
@@ -1395,10 +1395,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
 	  iterator __first1 = begin();
 	  const iterator __last1 = end();
-	  auto __first2 = ranges::begin(__rg);
-	  const auto __last2 = ranges::end(__rg);
-	  for (; __first1 != __last1 && __first2 != __last2;
-	       ++__first1, (void)++__first2)
+	  auto __first2 = _GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__rg);
+	  const auto __last2 = _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__rg);
+	  _GLIBCXX_CONVEYOR_TRUST(__first1);
+	  for (; _GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1 && __first2 != __last2;
+	       ++_GLIBCXX_CONVEYOR_TRUSTED (__first1), (void)++__first2)
 	    *__first1 = *__first2;
 	  if (__first2 == __last2)
 	    erase(__first1, __last1);
@@ -2194,6 +2195,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       {
 	iterator __j = __i._M_const_cast();
 	++__j;
+	_GLIBCXX_CONVEYOR_TRUST(__i);
 	if (__position == __i || __position == __j)
 	  return;
 
@@ -2442,7 +2444,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 			       __false_type)
 	{
 	  bool __notempty = __first != __last;
-	  for (; __first != __last; ++__first)
+	  _GLIBCXX_CONVEYOR_TRUST(__first);
+	  for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 #if __cplusplus >= 201103L
 	    emplace_back(*__first);
 #else
@@ -2685,12 +2688,17 @@ _GLIBCXX_END_NAMESPACE_CXX11
 
       const_iterator __i1 = __x.begin();
       const_iterator __i2 = __y.begin();
-      while (__i1 != __end1 && __i2 != __end2 && *__i1 == *__i2)
+      _GLIBCXX_CONVEYOR_TRUST(__i2);
+      _GLIBCXX_CONVEYOR_TRUST(__i1);
+      while (_GLIBCXX_CONVEYOR_TRUSTED (__i1) != __end1 && _GLIBCXX_CONVEYOR_TRUSTED (__i2) != __end2 && *_GLIBCXX_CONVEYOR_TRUSTED (__i1) == *_GLIBCXX_CONVEYOR_TRUSTED (__i2))
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__i1);
 	  ++__i1;
+	  _GLIBCXX_CONVEYOR_TRUST(__i2);
 	  ++__i2;
 	}
-      return __i1 == __end1 && __i2 == __end2;
+      _GLIBCXX_CONVEYOR_TRUST(__i2);
+      return _GLIBCXX_CONVEYOR_TRUSTED (__i1) == __end1 && _GLIBCXX_CONVEYOR_TRUSTED (__i2) == __end2;
     }
 
 #if __cpp_lib_three_way_comparison
@@ -2795,13 +2803,16 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
       typedef __detail::_List_node_header _Sentinel;
       _GLIBCXX_STD_C::_List_const_iterator<_Tp> __beyond = __last;
       ++__beyond;
+      _GLIBCXX_CONVEYOR_TRUST(__beyond);
       const bool __whole = __first == __beyond;
       if (__builtin_constant_p (__whole) && __whole)
 	return static_cast<const _Sentinel*>(__last._M_node)->_M_size;
 
       ptrdiff_t __n = 0;
-      while (__first != __last)
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      while (_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__first);
 	  ++__first;
 	  ++__n;
 	}

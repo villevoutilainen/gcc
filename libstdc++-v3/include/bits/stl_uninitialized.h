@@ -161,9 +161,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		     _ForwardIterator __result)
     {
       _UninitDestroyGuard<_ForwardIterator> __guard(__result);
-      for (; __first != __last; ++__first, (void)++__result)
+      _GLIBCXX_CONVEYOR_TRUST(__result);
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__result))
 	std::_Construct(std::__addressof(*__result), *__first);
       __guard.release();
+      _GLIBCXX_CONVEYOR_TRUST(__guard);
       return __result;
     }
 
@@ -347,9 +350,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		     const _Tp& __x)
     {
       _UninitDestroyGuard<_ForwardIterator> __guard(__first);
-      for (; __first != __last; ++__first)
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	std::_Construct(std::__addressof(*__first), __x);
       __guard.release();
+      _GLIBCXX_CONVEYOR_TRUST(__guard);
     }
 
 #if __cplusplus < 201103L
@@ -491,6 +496,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       for (; __n--; ++__first)
 	std::_Construct(std::__addressof(*__first), __x);
       __guard.release();
+      _GLIBCXX_CONVEYOR_TRUST(__guard);
       return __first;
     }
 
@@ -623,9 +629,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	__guard(__result, __alloc);
 
       typedef __gnu_cxx::__alloc_traits<_Allocator> __traits;
-      for (; __first != __last; ++__first, (void)++__result)
+      _GLIBCXX_CONVEYOR_TRUST(__result);
+      _GLIBCXX_CONVEYOR_TRUST(__last);
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != _GLIBCXX_CONVEYOR_TRUSTED (__last); ++_GLIBCXX_CONVEYOR_TRUSTED (__first), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__result))
 	__traits::construct(__alloc, std::__addressof(*__result), *__first);
       __guard.release();
+      _GLIBCXX_CONVEYOR_TRUST(__guard);
       return __result;
     }
 
@@ -729,10 +739,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	__guard(__first, __alloc);
 
       typedef __gnu_cxx::__alloc_traits<_Allocator> __traits;
-      for (; __first != __last; ++__first)
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	__traits::construct(__alloc, std::__addressof(*__first), __x);
 
       __guard.release();
+
+      _GLIBCXX_CONVEYOR_TRUST(__guard);
     }
 
 #if _GLIBCXX_HOSTED
@@ -763,6 +776,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       for (; __n > 0; --__n, (void) ++__first)
 	__traits::construct(__alloc, std::__addressof(*__first), __x);
       __guard.release();
+      _GLIBCXX_CONVEYOR_TRUST(__guard);
       return __first;
     }
 
@@ -808,6 +822,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __result = __mid; // Everything up to __mid is now guarded.
       __result = std::__uninitialized_move_a(__first2, __last2, __mid, __alloc);
       __guard.release();
+      _GLIBCXX_CONVEYOR_TRUST(__guard);
       return __result;
     }
 
@@ -832,6 +847,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __result = __mid; // Everything up to __mid is now guarded.
       __result = std::__uninitialized_copy_a(__first2, __last2, __mid, __alloc);
       __guard.release();
+      _GLIBCXX_CONVEYOR_TRUST(__guard);
       return __result;
     }
 
@@ -851,6 +867,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __result = __mid; // Everything up to __mid is now guarded.
       __result = std::__uninitialized_move_a(__first, __last, __mid, __alloc);
       __guard.release();
+      _GLIBCXX_CONVEYOR_TRUST(__guard);
       return __result;
     }
 
@@ -873,6 +890,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __first2 = __mid2; // Everything up to __mid2 is now guarded.
       std::__uninitialized_fill_a(__mid2, __last2, __x, __alloc);
       __guard.release();
+      _GLIBCXX_CONVEYOR_TRUST(__guard);
     }
 
   /// @endcond
@@ -892,9 +910,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
         __uninit_default(_ForwardIterator __first, _ForwardIterator __last)
         {
 	  _UninitDestroyGuard<_ForwardIterator> __guard(__first);
-	  for (; __first != __last; ++__first)
+	  _GLIBCXX_CONVEYOR_TRUST(__first);
+	  for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	    std::_Construct(std::addressof(*__first));
 	  __guard.release();
+	  _GLIBCXX_CONVEYOR_TRUST(__guard);
 	}
     };
 
@@ -912,6 +932,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  typename iterator_traits<_ForwardIterator>::value_type* __val
 	    = std::addressof(*__first);
 	  std::_Construct(__val);
+	  _GLIBCXX_CONVEYOR_TRUST(__first);
 	  if (++__first != __last)
 	    std::fill(__first, __last, *__val);
 	}
@@ -929,6 +950,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  for (; __n > 0; --__n, (void) ++__first)
 	    std::_Construct(std::addressof(*__first));
 	  __guard.release();
+	  _GLIBCXX_CONVEYOR_TRUST(__guard);
 	  return __first;
 	}
     };
@@ -1014,9 +1036,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _UninitDestroyGuard<_ForwardIterator, _Allocator> __guard(__first,
 								__alloc);
       typedef __gnu_cxx::__alloc_traits<_Allocator> __traits;
-      for (; __first != __last; ++__first)
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	__traits::construct(__alloc, std::addressof(*__first));
       __guard.release();
+      _GLIBCXX_CONVEYOR_TRUST(__guard);
     }
 
 #if _GLIBCXX_HOSTED
@@ -1042,6 +1066,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       for (; __n > 0; --__n, (void) ++__first)
 	__traits::construct(__alloc, std::addressof(*__first));
       __guard.release();
+      _GLIBCXX_CONVEYOR_TRUST(__guard);
       return __first;
     }
 
@@ -1069,6 +1094,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  for (; __first != __last; ++__first)
 	    std::_Construct_novalue(std::addressof(*__first));
 	  __guard.release();
+	  _GLIBCXX_CONVEYOR_TRUST(__guard);
 	}
     };
 
@@ -1095,6 +1121,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  for (; __n > 0; --__n, (void) ++__first)
 	    std::_Construct_novalue(std::addressof(*__first));
 	  __guard.release();
+	  _GLIBCXX_CONVEYOR_TRUST(__guard);
 	  return __first;
 	}
     };
@@ -1151,6 +1178,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       for (; __n > 0; --__n, (void) ++__first, ++__result)
 	std::_Construct(std::addressof(*__result), *__first);
       __guard.release();
+      _GLIBCXX_CONVEYOR_TRUST(__guard);
       return __result;
     }
 
@@ -1174,6 +1202,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       for (; __n > 0; --__n, (void) ++__first, ++__result)
 	std::_Construct(std::addressof(*__result), *__first);
       __guard.release();
+      _GLIBCXX_CONVEYOR_TRUST(__guard);
       return {__first, __result};
     }
 
@@ -1367,7 +1396,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       static_assert(std::is_same<_ValueType, _ValueType2>::value,
 	  "relocation is only possible for values of the same type");
       _ForwardIterator __cur = __result;
-      for (; __first != __last; ++__first, (void)++__cur)
+      _GLIBCXX_CONVEYOR_TRUST(__cur);
+      for (; __first != __last; ++__first, (void)++_GLIBCXX_CONVEYOR_TRUSTED (__cur))
 	std::__relocate_object_a(std::addressof(*__cur),
 				 std::addressof(*__first), __alloc);
       return __cur;

@@ -901,7 +901,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	  if constexpr (ranges::forward_range<_Rg> || ranges::sized_range<_Rg>)
 	    {
 	      const auto __n = static_cast<size_type>(ranges::distance(__rg));
-	      _M_range_initialize_n(ranges::begin(__rg), ranges::end(__rg),
+	      _M_range_initialize_n(_GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__rg), _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__rg),
 				    __n);
 	    }
 	  else
@@ -1081,14 +1081,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
 	      reserve(__n);
 	      _GLIBCXX_CONVEYOR_TRUST_THIS;
-	      auto __first = ranges::copy_n(ranges::begin(__rg), size(),
+	      auto __first = ranges::copy_n(_GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__rg), size(),
 					    this->_M_impl._M_start).in;
 	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      [[maybe_unused]] const auto __diff = __n - size();
 	      _GLIBCXX_ASAN_ANNOTATE_GROW(__diff);
 	      _GLIBCXX_CONVEYOR_TRUST(__rg);
 	      _Base::_M_append_range(ranges::subrange(std::move(__first),
-						      ranges::end(__rg)));
+						      _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__rg)));
 	      _GLIBCXX_ASAN_ANNOTATE_GREW(__diff);
 	    }
 	  else // input_range<_Rg> && !sized_range<_Rg>
@@ -1857,8 +1857,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	      const pointer __back = __mid + __n;
 	      _Guard_alloc __guard(__start, __got, *this);
 	      allocator_type& __a = _M_get_Tp_allocator();
-	      std::__uninitialized_copy_a(ranges::begin(__rg),
-					  ranges::end(__rg),
+	      std::__uninitialized_copy_a(_GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__rg),
+					  _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__rg),
 					  __mid, __a);
 
 	      if constexpr (_S_use_relocate())

@@ -143,10 +143,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       const size_type __n = __position - begin();
       if (this->_M_impl._M_finish != this->_M_impl._M_end_of_storage)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__position);
 	  __glibcxx_assert_container(__position != const_iterator());
+	  _GLIBCXX_CONVEYOR_TRUST(__position);
 	  if (!(__position != const_iterator()))
 	    __builtin_unreachable(); // PR 106434
 
+	  _GLIBCXX_CONVEYOR_TRUST(__position);
 	  if (__position == end())
 	    {
 	      _GLIBCXX_ASAN_ANNOTATE_GROW(1);
@@ -202,8 +205,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       if (__first != __last)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__last);
 	  if (__last != end())
 	    _GLIBCXX_MOVE3(__last, end(), __first);
+	  _GLIBCXX_CONVEYOR_TRUST(__first);
 	  _M_erase_at_end(__first.base() + (end() - __last));
 	}
       return __first;
@@ -363,6 +368,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     {
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       const auto __n = __position - cbegin();
+      _GLIBCXX_CONVEYOR_TRUST(__position);
       if (this->_M_impl._M_finish != this->_M_impl._M_end_of_storage)
 	if (__position == cend())
 	  {
@@ -390,6 +396,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	const auto __n = __position - cbegin();
+	_GLIBCXX_CONVEYOR_TRUST(__position);
 	if (this->_M_impl._M_finish != this->_M_impl._M_end_of_storage)
 	  if (__position == cend())
 	    {
@@ -498,10 +505,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	if constexpr (_S_use_relocate())
 	  {
 	    // Relocation cannot throw.
+	    _GLIBCXX_CONVEYOR_TRUST(__position);
 	    __new_finish = std::__relocate_a(__old_start, __position.base(),
 					     __new_start,
 					     _M_get_Tp_allocator());
 	    ++__new_finish;
+	    _GLIBCXX_CONVEYOR_TRUST(__position);
 	    __new_finish = std::__relocate_a(__position.base(), __old_finish,
 					     __new_finish,
 					     _M_get_Tp_allocator());
@@ -531,6 +540,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	    // Guard the new element so it will be destroyed if anything throws.
 	    _Guard_elts __guard_elts(__new_start + __elems_before, _M_impl);
 
+	    _GLIBCXX_CONVEYOR_TRUST(__position);
 	    __new_finish = std::__uninitialized_move_if_noexcept_a(
 			     __old_start, __position.base(),
 			     __new_start, _M_get_Tp_allocator());
@@ -539,6 +549,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	    // Guard everything before the new element too.
 	    __guard_elts._M_first = __new_start;
 
+	    _GLIBCXX_CONVEYOR_TRUST(__position);
 	    __new_finish = std::__uninitialized_move_if_noexcept_a(
 			      __position.base(), __old_finish,
 			      __new_finish, _M_get_Tp_allocator());
@@ -693,9 +704,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 					      _M_get_Tp_allocator());
 		  this->_M_impl._M_finish += __n;
 		  _GLIBCXX_ASAN_ANNOTATE_GREW(__n);
-		  _GLIBCXX_MOVE_BACKWARD3(__position.base(),
+		  _GLIBCXX_MOVE_BACKWARD3(_GLIBCXX_CONVEYOR_TRUSTED (__position).base(),
 					  __old_finish - __n, __old_finish);
-		  std::fill(__position.base(), __position.base() + __n,
+		  _GLIBCXX_CONVEYOR_TRUST(__position);
+		  std::fill(_GLIBCXX_CONVEYOR_TRUSTED (__position).base(), _GLIBCXX_CONVEYOR_TRUSTED (__position).base() + __n,
 			    __x_copy);
 		}
 	      else
@@ -707,11 +719,13 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 						  __x_copy,
 						  _M_get_Tp_allocator());
 		  _GLIBCXX_ASAN_ANNOTATE_GREW(__n - __elems_after);
+		  _GLIBCXX_CONVEYOR_TRUST(__position);
 		  std::__uninitialized_move_a(__position.base(), __old_finish,
 					      this->_M_impl._M_finish,
 					      _M_get_Tp_allocator());
 		  this->_M_impl._M_finish += __elems_after;
 		  _GLIBCXX_ASAN_ANNOTATE_GREW(__elems_after);
+		  _GLIBCXX_CONVEYOR_TRUST(__position);
 		  std::fill(__position.base(), __old_finish, __x_copy);
 		}
 	    }
@@ -721,6 +735,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	      // the allocator can alter them if 'this' is globally reachable.
 	      pointer __old_start = this->_M_impl._M_start;
 	      pointer __old_finish = this->_M_impl._M_finish;
+	      _GLIBCXX_CONVEYOR_TRUST(__position);
 	      const pointer __pos = __position.base();
 
 	      const size_type __len1 =
@@ -1099,8 +1114,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		  }
 		else
 		  {
-		    auto __first = ranges::begin(__rg);
-		    const auto __last = ranges::end(__rg);
+		    auto __first = _GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__rg);
+		    const auto __last = _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__rg);
 		    auto __mid = ranges::next(__first, __elems_after);
 		    _GLIBCXX_ASAN_ANNOTATE_GROW(__n);
 		    _Base::_M_append_range(ranges::subrange(__mid, __last));

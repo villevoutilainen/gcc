@@ -277,6 +277,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	}
       else
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__next);
 	  if (__next != end())
 	    _GLIBCXX_MOVE3(__next, end(), __position);
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
@@ -511,14 +512,19 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		if (__n < _S_buffer_size())
 		  __builtin_unreachable(); // See PR 100516
 
+		_GLIBCXX_CONVEYOR_TRUST(__first);
 		_ForwardIterator __mid = __first;
 		std::advance(__mid, _S_buffer_size());
 		_GLIBCXX_CONVEYOR_TRUST_THIS;
+		_GLIBCXX_CONVEYOR_TRUST(__mid);
+		_GLIBCXX_CONVEYOR_TRUST(__first);
 		std::__uninitialized_copy_a(__first, __mid, *__cur_node,
 					    _M_get_Tp_allocator());
 		__first = __mid;
 	      }
 	    _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    _GLIBCXX_CONVEYOR_TRUST(__last);
+	    _GLIBCXX_CONVEYOR_TRUST(__first);
 	    std::__uninitialized_copy_a(__first, __last,
 					this->_M_impl._M_finish._M_first,
 					_M_get_Tp_allocator());
@@ -718,6 +724,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	if (__builtin_expect(__n == 0, 0))
 	  return;
 
+	_GLIBCXX_CONVEYOR_TRUST(__last);
+	_GLIBCXX_CONVEYOR_TRUST(__first);
 	if (__pos._M_cur == this->_M_impl._M_start._M_cur)
 	  _M_range_prepend(__first, __last, __n);
 	else if (__pos._M_cur == this->_M_impl._M_finish._M_cur)
@@ -907,11 +915,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		    _ForwardIterator __mid = __first;
 		    std::advance(__mid, difference_type(__n) - __elemsbefore);
 		    _GLIBCXX_CONVEYOR_TRUST_THIS;
+		    _GLIBCXX_CONVEYOR_TRUST(__mid);
+		    _GLIBCXX_CONVEYOR_TRUST(__first);
 		    std::__uninitialized_move_copy(this->_M_impl._M_start,
 						   __pos, __first, __mid,
 						   __new_start,
 						   _M_get_Tp_allocator());
 		    this->_M_impl._M_start = __new_start;
+		    _GLIBCXX_CONVEYOR_TRUST(__mid);
 		    std::copy(__mid, __last, __old_start);
 		  }
 	      }
@@ -949,11 +960,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		  _ForwardIterator __mid = __first;
 		  std::advance(__mid, __elemsafter);
 		  _GLIBCXX_CONVEYOR_TRUST_THIS;
+		  _GLIBCXX_CONVEYOR_TRUST(__mid);
 		  std::__uninitialized_copy_move(__mid, __last, __pos,
 						 this->_M_impl._M_finish,
 						 this->_M_impl._M_finish,
 						 _M_get_Tp_allocator());
 		  this->_M_impl._M_finish = __new_finish;
+		  _GLIBCXX_CONVEYOR_TRUST(__mid);
+		  _GLIBCXX_CONVEYOR_TRUST(__first);
 		  std::copy(__first, __mid, __pos);
 		}
 	    }
@@ -1032,7 +1046,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	    _GLIBCXX_CONVEYOR_TRUST(__rg);
 	    if (__n != 0) [[likely]]
 	      _M_insert_aux(__pos._M_const_cast(),
-			    ranges::begin(__rg), __last,
+			    _GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__rg), __last,
 			    __n);
 	  }
 	else
@@ -1688,7 +1702,7 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
       if constexpr (!__is_nothrow_constructible(_OTp, _IRef))
 	return std::__do_uninit_copy(__first, __last, __result);
       else
-	while (__first != __last)
+	while (_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	  {
 	    auto __from = __first._M_cur;
 	    ptrdiff_t __n;
@@ -1746,7 +1760,7 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
 				       std::make_move_iterator(__last),
 				       __result);
       else
-	while (__first != __last)
+	while (_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	  {
 	    auto __from = __first._M_cur;
 	    ptrdiff_t __n;

@@ -2396,8 +2396,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 		    _M_data(__r.__ptr);
 		    _M_capacity(__r.__count - 1);
 		    _M_set_length(__len);
+		    _GLIBCXX_CONVEYOR_TRUST(__alloc);
 		  }
 	      }
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
 	    _GLIBCXX_CONVEYOR_TRUST(__str);
 	    std::__alloc_on_copy(_M_get_allocator(), __str._M_get_allocator());
 	  }
@@ -2750,10 +2752,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 
 	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  if constexpr (ranges::forward_range<_Rg>)
-	    if (ranges::empty(__rg))
+	    if (_GLIBCXX_CONVEYOR_TRUSTED (ranges::empty)(__rg))
 	      return begin() + __pos;
 
 
+	  _GLIBCXX_CONVEYOR_TRUST(__p);
 	  if (__p == cend())
 	    append_range(std::forward<_Rg>(__rg));
 	  else
@@ -5345,6 +5348,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       __detail::__to_chars_10_impl(__p + (int)__neg, __len, __uval);
       return __n;
     });
+    _GLIBCXX_CONVEYOR_TRUST(__str);
     return __str;
   }
 
@@ -5361,6 +5365,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       __detail::__to_chars_10_impl(__p, __n, __val);
       return __n;
     });
+    _GLIBCXX_CONVEYOR_TRUST(__str);
     return __str;
   }
 
@@ -5380,6 +5385,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       __detail::__to_chars_10_impl(__p + (int)__neg, __len, __uval);
       return __n;
     });
+    _GLIBCXX_CONVEYOR_TRUST(__str);
     return __str;
   }
 
@@ -5396,6 +5402,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       __detail::__to_chars_10_impl(__p, __n, __val);
       return __n;
     });
+    _GLIBCXX_CONVEYOR_TRUST(__str);
     return __str;
   }
 
@@ -5413,6 +5420,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       __detail::__to_chars_10_impl(__p + (int)__neg, __len, __uval);
       return __n;
     });
+    _GLIBCXX_CONVEYOR_TRUST(__str);
     return __str;
   }
 
@@ -5426,6 +5434,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
       __detail::__to_chars_10_impl(__p, __n, __val);
       return __n;
     });
+    _GLIBCXX_CONVEYOR_TRUST(__str);
     return __str;
   }
 
@@ -5446,7 +5455,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	__len *= 2;
 	return __p - __p;;
       });
-    } while (__str.empty());
+    } while (_GLIBCXX_CONVEYOR_TRUSTED (__str).empty());
+    _GLIBCXX_CONVEYOR_TRUST(__str);
     return __str;
   }
 
@@ -5465,7 +5475,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	__len *= 2;
 	return __p - __p;;
       });
-    } while (__str.empty());
+    } while (_GLIBCXX_CONVEYOR_TRUSTED (__str).empty());
+    _GLIBCXX_CONVEYOR_TRUST(__str);
     return __str;
   }
 
@@ -5484,7 +5495,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	__len *= 2;
 	return __p - __p;;
       });
-    } while (__str.empty());
+    } while (_GLIBCXX_CONVEYOR_TRUSTED (__str).empty());
+    _GLIBCXX_CONVEYOR_TRUST(__str);
     return __str;
   }
 #elif _GLIBCXX_USE_C99_STDIO

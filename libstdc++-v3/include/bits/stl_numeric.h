@@ -93,7 +93,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    typename iterator_traits<_ForwardIterator>::value_type>)
       __glibcxx_requires_valid_range(__first, __last);
 
-      for (; __first != __last; ++__first)
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	{
 	  *__first = __value;
 	  ++__value;
@@ -136,7 +137,8 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
       __glibcxx_function_requires(_InputIteratorConcept<_InputIterator>)
       __glibcxx_requires_valid_range(__first, __last);
 
-      for (; __first != __last; ++__first)
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	{
 	  _GLIBCXX_CONVEYOR_TRUST_DEREF(__first);
 	  __init = _GLIBCXX_MOVE_IF_20(__init) + *__first;
@@ -197,7 +199,9 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
       __glibcxx_function_requires(_InputIteratorConcept<_InputIterator2>)
       __glibcxx_requires_valid_range(__first1, __last1);
 
-      for (; __first1 != __last1; ++__first1, (void)++__first2)
+      _GLIBCXX_CONVEYOR_TRUST(__first2);
+      _GLIBCXX_CONVEYOR_TRUST(__first1);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1; ++_GLIBCXX_CONVEYOR_TRUSTED (__first1), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__first2))
 	__init = _GLIBCXX_MOVE_IF_20(__init) + (*__first1 * *__first2);
       return __init;
     }
@@ -270,11 +274,14 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
 	return __result;
       _ValueType __value = *__first;
       *__result = __value;
-      while (++__first != __last)
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      while (++_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	{
 	  __value = _GLIBCXX_MOVE_IF_20(__value) + *__first;
+	  _GLIBCXX_CONVEYOR_TRUST(__result);
 	  *++__result = __value;
 	}
+      _GLIBCXX_CONVEYOR_TRUST(__result);
       return ++__result;
     }
 
@@ -351,12 +358,15 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
 	return __result;
       _ValueType __value = *__first;
       *__result = __value;
-      while (++__first != __last)
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      while (++_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	{
 	  _ValueType __tmp = *__first;
+	  _GLIBCXX_CONVEYOR_TRUST(__result);
 	  *++__result = __tmp - _GLIBCXX_MOVE_IF_20(__value);
 	  __value = _GLIBCXX_MOVE(__tmp);
 	}
+      _GLIBCXX_CONVEYOR_TRUST(__result);
       return ++__result;
     }
 

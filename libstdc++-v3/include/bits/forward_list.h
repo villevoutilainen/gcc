@@ -916,8 +916,8 @@ namespace __fwdlist
 	{
 	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  auto __to = this->_M_impl._M_head._M_base_ptr();
-	  auto __first = ranges::begin(__rg);
-	  const auto __last = ranges::end(__rg);
+	  auto __first = _GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__rg);
+	  const auto __last = _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__rg);
 	  for (; __first != __last; ++__first)
 	    {
 	      __to->_M_next = this->_M_create_node(*__first)->_M_base_ptr();
@@ -1097,14 +1097,17 @@ namespace __fwdlist
 	  iterator __curr = begin();
 	  const iterator __end = end();
 
-	  while (__curr != __end && __first != __last)
+	  _GLIBCXX_CONVEYOR_TRUST(__curr);
+	  while (_GLIBCXX_CONVEYOR_TRUSTED (__curr) != __end && __first != __last)
 	    {
 	      *__curr = *__first;
 	      __prev = __curr;
 	      ++__first;
+	      _GLIBCXX_CONVEYOR_TRUST(__curr);
 	      ++__curr;
 	    }
 
+	  _GLIBCXX_CONVEYOR_TRUST(__curr);
 	  if (__curr != __end)
 	    erase_after(__prev, __end);
 	  else

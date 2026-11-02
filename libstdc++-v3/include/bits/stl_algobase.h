@@ -210,7 +210,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 				  _ForwardIterator2>)
       __glibcxx_requires_valid_range(__first1, __last1);
 
-      for (; __first1 != __last1; ++__first1, (void)++__first2)
+      _GLIBCXX_CONVEYOR_TRUST(__first2);
+      _GLIBCXX_CONVEYOR_TRUST(__first1);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1; ++_GLIBCXX_CONVEYOR_TRUSTED (__first1), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__first2))
 	std::iter_swap(__first1, __first2);
       return __first2;
     }
@@ -459,7 +461,8 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
 	}
 #endif
 
-      for (; __first != __last; ++__result, (void)++__first)
+      _GLIBCXX_CONVEYOR_TRUST(__result);
+      for (; __first != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__result), (void)++__first)
 	std::__assign_one<_IsMove>(__result, __first);
       return __result;
     }
@@ -927,7 +930,8 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
 						     const _Tp,
 						     const _Tp&>::__type _Up;
       _Up __val(__value);
-      for (; __first != __last; ++__first)
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	*__first = __val;
     }
 #pragma GCC diagnostic pop
@@ -1201,7 +1205,8 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
 	static bool
 	equal(_II1 __first1, _II1 __last1, _II2 __first2)
 	{
-	  for (; __first1 != __last1; ++__first1, (void) ++__first2)
+	  _GLIBCXX_CONVEYOR_TRUST(__first1);
+	  for (; _GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1; ++_GLIBCXX_CONVEYOR_TRUSTED (__first1), (void) ++__first2)
 	    if (!(*__first1 == *__first2))
 	      return false;
 	  return true;
@@ -1525,6 +1530,7 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
 	  if (__comp(*__middle, __val))
 	    {
 	      __first = __middle;
+	      _GLIBCXX_CONVEYOR_TRUST(__first);
 	      ++__first;
 	      __len = __len - __half - 1;
 	    }
@@ -1639,7 +1645,9 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
       __glibcxx_function_requires(_InputIteratorConcept<_IIter2>)
       __glibcxx_requires_valid_range(__first1, __last1);
 
-      for (; __first1 != __last1; ++__first1, (void)++__first2)
+      _GLIBCXX_CONVEYOR_TRUST(__first2);
+      _GLIBCXX_CONVEYOR_TRUST(__first1);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1; ++_GLIBCXX_CONVEYOR_TRUSTED (__first1), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__first2))
 	{
 	  _GLIBCXX_CONVEYOR_TRUST_DEREF(__first1);
 	  _GLIBCXX_CONVEYOR_TRUST_DEREF(__first2);
@@ -1912,15 +1920,21 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
 	      return __lencmp;
 	    }
 
-      while (__first1 != __last1)
+      while (_GLIBCXX_CONVEYOR_TRUSTED (__first1) != _GLIBCXX_CONVEYOR_TRUSTED (__last1))
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__first2);
+	  _GLIBCXX_CONVEYOR_TRUST(__last2);
 	  if (__first2 == __last2)
 	    return strong_ordering::greater;
 	  if (auto __cmp = __comp(*__first1, *__first2); __cmp != 0)
 	    return __cmp;
+	  _GLIBCXX_CONVEYOR_TRUST(__first1);
 	  ++__first1;
+	  _GLIBCXX_CONVEYOR_TRUST(__first2);
 	  ++__first2;
 	}
+      _GLIBCXX_CONVEYOR_TRUST(__first2);
+      _GLIBCXX_CONVEYOR_TRUST(__last2);
       return (__first2 == __last2) <=> true; // See PR 94006
     }
 
@@ -2111,8 +2125,11 @@ _GLIBCXX_END_NAMESPACE_ALGO
     __find_if(_Iterator __first, _Iterator __last, _Predicate __pred)
     {
 #pragma GCC unroll 4
-      while (__first != __last && !bool(__pred(*__first)))
-	++__first;
+      while (_GLIBCXX_CONVEYOR_TRUSTED (__first) != _GLIBCXX_CONVEYOR_TRUSTED (__last) && !bool(__pred(*_GLIBCXX_CONVEYOR_TRUSTED (__first))))
+	{
+	  _GLIBCXX_CONVEYOR_TRUST(__first);
+	  ++__first;
+	}
       return __first;
     }
 
@@ -2135,14 +2152,20 @@ _GLIBCXX_END_NAMESPACE_ALGO
 		_Predicate __pred)
     {
       __first = std::__find_if(__first, __last, __pred);
+      _GLIBCXX_CONVEYOR_TRUST(__last);
+      _GLIBCXX_CONVEYOR_TRUST(__first);
       if (__first == __last)
 	return __first;
       _ForwardIterator __result = __first;
+      _GLIBCXX_CONVEYOR_TRUST(__first);
       ++__first;
-      for (; __first != __last; ++__first)
+      _GLIBCXX_CONVEYOR_TRUST(__last);
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != _GLIBCXX_CONVEYOR_TRUSTED (__last); ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	if (!__pred(*__first))
 	  {
 	    *__result = _GLIBCXX_MOVE(*__first);
+	    _GLIBCXX_CONVEYOR_TRUST(__result);
 	    ++__result;
 	  }
       return __result;
@@ -2176,21 +2199,26 @@ _GLIBCXX_END_NAMESPACE_ALGO
 	{
 	  __first1 = std::__find_if(__first1, __last1, __match_first);
 
+	  _GLIBCXX_CONVEYOR_TRUST(__first1);
 	  if (__first1 == __last1)
 	    return __last1;
 
 	  _ForwardIterator2 __p = __p1;
 	  __current = __first1;
+	  _GLIBCXX_CONVEYOR_TRUST(__current);
 	  if (++__current == __last1)
 	    return __last1;
 
 	  while (__predicate(*__current, *__p))
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST(__p);
 	      if (++__p == __last2)
 		return __first1;
+	      _GLIBCXX_CONVEYOR_TRUST(__current);
 	      if (++__current == __last1)
 		return __last1;
 	    }
+	  _GLIBCXX_CONVEYOR_TRUST(__first1);
 	  ++__first1;
 	}
       return __first1;

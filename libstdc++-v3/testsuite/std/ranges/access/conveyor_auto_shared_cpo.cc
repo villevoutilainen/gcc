@@ -36,13 +36,27 @@
 #include <vector>
 #include <testsuite_hooks.h>
 
+// A trust that X is still an object after a call that isn't conveyor
+// was given a route to it (the lifetime rule).
+#define ALIVE(x) \
+  contract_assert<std::contracts::never_proven_conveyor_v> \
+    (std::is_object_address (__builtin_addressof (x)))
+
 int main ()
 {
   std::vector<int> v {1, 2, 3};
 
+  // The customization point objects are globals: any call that isn't
+  // conveyor -- v's construction too -- may end them (the lifetime rule).
+  ALIVE (std::ranges::begin);
   VERIFY (*std::ranges::begin (v) == 1);
-  VERIFY (std::ranges::end (v) - std::ranges::begin (v) == 3);
+  ALIVE (std::ranges::end);
+  auto e = std::ranges::end (v);
+  ALIVE (std::ranges::begin);
+  VERIFY (e - std::ranges::begin (v) == 3);
+  ALIVE (std::ranges::size);
   VERIFY (std::ranges::size (v) == 3);
+  ALIVE (std::ranges::empty);
   VERIFY (!std::ranges::empty (v));
 
   return 0;

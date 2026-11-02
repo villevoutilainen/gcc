@@ -1094,7 +1094,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     _Destroy(_ForwardIterator __first, _ForwardIterator __last,
 	     _Allocator& __alloc)
     {
-      for (; __first != __last; ++__first)
+      _GLIBCXX_CONVEYOR_TRUST(__last);
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != _GLIBCXX_CONVEYOR_TRUSTED (__last); ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 #if __cplusplus < 201103L
 	__alloc.destroy(std::__addressof(*__first));
 #else

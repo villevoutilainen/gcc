@@ -221,12 +221,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       typedef typename iterator_traits<_ForwardIterator>::value_type
                        _Value_type;
 #if __cplusplus >= 201103L
+      _GLIBCXX_CONVEYOR_TRUST(__first);
       if constexpr (!is_trivially_destructible<_Value_type>::value)
-	for (; __first != __last; ++__first)
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  std::_Destroy(std::addressof(*__first));
 #if __cpp_constexpr_dynamic_alloc // >= C++20
       else if (std::is_constant_evaluated())
-	for (; __first != __last; ++__first)
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  std::destroy_at(std::addressof(*__first));
 #endif
 #else
@@ -252,7 +253,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  std::_Destroy(std::addressof(*__first));
 #if __cpp_constexpr_dynamic_alloc // >= C++20
       else if (std::is_constant_evaluated())
-	for (; __count > 0; (void)++__first, --__count)
+	for (; __count > 0; (void)++_GLIBCXX_CONVEYOR_TRUSTED (__first), --__count)
 	  std::destroy_at(std::addressof(*__first));
 #endif
       else

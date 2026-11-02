@@ -113,7 +113,8 @@ namespace ranges
       operator()(_Iter __first, _Sent __last,
 		 _Pred __pred, _Proj __proj = {}) const
       {
-	for (; __first != __last; ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  if (!(bool)std::__invoke(__pred, std::__invoke(__proj, *__first)))
 	    return false;
 	return true;
@@ -142,7 +143,8 @@ namespace ranges
       operator()(_Iter __first, _Sent __last,
 		 _Pred __pred, _Proj __proj = {}) const
       {
-	for (; __first != __last; ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  if (std::__invoke(__pred, std::__invoke(__proj, *__first)))
 	    return true;
 	return false;
@@ -171,7 +173,8 @@ namespace ranges
       operator()(_Iter __first, _Sent __last,
 		 _Pred __pred, _Proj __proj = {}) const
       {
-	for (; __first != __last; ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  if (std::__invoke(__pred, std::__invoke(__proj, *__first)))
 	    return false;
 	return true;
@@ -315,8 +318,9 @@ namespace ranges
 		 _Iter2 __first2, _Sent2 __last2, _Pred __pred = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       {
-	for (; __first1 != __last1; ++__first1)
-	  for (auto __iter = __first2; __iter != __last2; ++__iter)
+	_GLIBCXX_CONVEYOR_TRUST(__first1);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1; ++_GLIBCXX_CONVEYOR_TRUSTED (__first1))
+	  for (auto __iter = __first2; _GLIBCXX_CONVEYOR_TRUSTED (__iter) != __last2; ++_GLIBCXX_CONVEYOR_TRUSTED (__iter))
 	    if (std::__invoke(__pred,
 			      std::__invoke(__proj1, *__first1),
 			      std::__invoke(__proj2, *__iter)))
@@ -357,7 +361,8 @@ namespace ranges
 		 const _Tp& __value, _Proj __proj = {}) const
       {
 	iter_difference_t<_Iter> __n = 0;
-	for (; __first != __last; ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  if (std::__invoke(__proj, *__first) == __value)
 	    ++__n;
 	return __n;
@@ -390,7 +395,8 @@ namespace ranges
 		 _Pred __pred, _Proj __proj = {}) const
       {
 	iter_difference_t<_Iter> __n = 0;
-	for (; __first != __last; ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  if (std::__invoke(__pred, std::__invoke(__proj, *__first)))
 	    ++__n;
 	return __n;
@@ -684,7 +690,7 @@ namespace ranges
 		|| !same_as<_Iter1, _Sent1>
 		|| __shift < __n2)
 	      {
-		ranges::advance(__first1, __shift);
+		_GLIBCXX_CONVEYOR_TRUSTED (ranges::advance)(__first1, __shift);
 		return ranges::equal(std::move(__first1), __last1,
 				     std::move(__first2), __last2,
 				     std::move(__pred),
@@ -696,14 +702,15 @@ namespace ranges
 	  {
 	    _Iter1 __it1 = __last1;
 	    if (__n1 != -1)
-	      ranges::advance(__it1, -iter_difference_t<_Iter1>(__n2));
+	      _GLIBCXX_CONVEYOR_TRUSTED (ranges::advance)(__it1, -iter_difference_t<_Iter1>(__n2));
 	    else
 	      {
 		// We can't use ranges::advance if the haystack size is
 		// unknown, since we need to detect and return false if
 		// it's smaller than the needle.
 		iter_difference_t<_Iter2> __m = __n2;
-		while (__m != 0 && __it1 != __first1)
+		_GLIBCXX_CONVEYOR_TRUST(__it1);
+		while (__m != 0 && _GLIBCXX_CONVEYOR_TRUSTED (__it1) != __first1)
 		  {
 		    --__m;
 		    --__it1;
@@ -866,8 +873,10 @@ namespace ranges
 
 	// Efficiently compare identical prefixes:  O(N) if sequences
 	// have the same elements in the same order.
-	for (; __first1 != __last1 && __first2 != __last2;
-	     ++__first1, (void)++__first2)
+	_GLIBCXX_CONVEYOR_TRUST(__first2);
+	_GLIBCXX_CONVEYOR_TRUST(__first1);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2;
+	     ++_GLIBCXX_CONVEYOR_TRUSTED (__first1), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__first2))
 	  if (!(bool)std::__invoke(__pred,
 				   std::__invoke(__proj1, *__first1),
 				   std::__invoke(__proj2, *__first2)))
@@ -875,6 +884,7 @@ namespace ranges
 
 	if constexpr (__sized_iters)
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__first1);
 	    if (__first1 == __last1)
 	      return true;
 	  }
@@ -888,7 +898,7 @@ namespace ranges
 	      return false;
 	  }
 
-	for (auto __scan = __first1; __scan != __last1; ++__scan)
+	for (auto __scan = __first1; _GLIBCXX_CONVEYOR_TRUSTED (__scan) != __last1; ++_GLIBCXX_CONVEYOR_TRUSTED (__scan))
 	  {
 	    auto&& __scan_deref = *__scan;
 	    auto&& __proj_scan =
@@ -898,6 +908,7 @@ namespace ranges
 				   std::forward<decltype(__proj_scan)>(__proj_scan),
 				   std::forward<_Tp>(__arg));
 	    };
+	    _GLIBCXX_CONVEYOR_TRUST(__scan);
 	    if (__scan != ranges::find_if(__first1, __scan,
 					  __comp_scan, __proj1))
 	      continue; // We've seen this one before.
@@ -932,8 +943,8 @@ namespace ranges
 
 	_GLIBCXX_CONVEYOR_TRUST(__r2);
 	_GLIBCXX_CONVEYOR_TRUST(__r1);
-	return (*this)(ranges::begin(__r1), ranges::end(__r1),
-		       ranges::begin(__r2), ranges::end(__r2),
+	return (*this)(_GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__r1), _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__r1),
+		       _GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__r2), _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__r2),
 		       std::move(__pred),
 		       std::move(__proj1), std::move(__proj2));
       }
@@ -954,10 +965,12 @@ namespace ranges
       operator()(_Iter __first, _Sent __last, _Out __result,
 		 _Pred __pred, _Proj __proj = {}) const
       {
-	for (; __first != __last; ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  if (std::__invoke(__pred, std::__invoke(__proj, *__first)))
 	    {
 	      *__result = *__first;
+	      _GLIBCXX_CONVEYOR_TRUST(__result);
 	      ++__result;
 	    }
 	return {std::move(__first), std::move(__result)};
@@ -993,8 +1006,10 @@ namespace ranges
       operator()(_Iter1 __first1, _Sent1 __last1,
 		 _Iter2 __first2, _Sent2 __last2) const
       {
-	for (; __first1 != __last1 && __first2 != __last2;
-	     ++__first1, (void)++__first2)
+	_GLIBCXX_CONVEYOR_TRUST(__first2);
+	_GLIBCXX_CONVEYOR_TRUST(__first1);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2;
+	     ++_GLIBCXX_CONVEYOR_TRUSTED (__first1), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__first2))
 	  ranges::iter_swap(__first1, __first2);
 	return {std::move(__first1), std::move(__first2)};
       }
@@ -1056,7 +1071,9 @@ namespace ranges
       operator()(_Iter __first1, _Sent __last1, _Out __result,
 		 _Fp __op, _Proj __proj = {}) const
       {
-	for (; __first1 != __last1; ++__first1, (void)++__result)
+	_GLIBCXX_CONVEYOR_TRUST(__result);
+	_GLIBCXX_CONVEYOR_TRUST(__first1);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1; ++_GLIBCXX_CONVEYOR_TRUSTED (__first1), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__result))
 	  *__result = std::__invoke(__op, std::__invoke(__proj, *__first1));
 	return {std::move(__first1), std::move(__result)};
       }
@@ -1089,8 +1106,11 @@ namespace ranges
 		 _Out __result, _Fp __binary_op,
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       {
-	for (; __first1 != __last1 && __first2 != __last2;
-	     ++__first1, (void)++__first2, ++__result)
+	_GLIBCXX_CONVEYOR_TRUST(__result);
+	_GLIBCXX_CONVEYOR_TRUST(__first2);
+	_GLIBCXX_CONVEYOR_TRUST(__first1);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2;
+	     ++_GLIBCXX_CONVEYOR_TRUSTED (__first1), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__first2), ++_GLIBCXX_CONVEYOR_TRUSTED (__result))
 	  *__result = std::__invoke(__binary_op,
 				    std::__invoke(__proj1, *__first1),
 				    std::__invoke(__proj2, *__first2));
@@ -1134,7 +1154,8 @@ namespace ranges
 		 const _Tp1& __old_value, const _Tp2& __new_value,
 		 _Proj __proj = {}) const
       {
-	for (; __first != __last; ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  if (std::__invoke(__proj, *__first) == __old_value)
 	    *__first = __new_value;
 	return __first;
@@ -1172,7 +1193,8 @@ namespace ranges
       operator()(_Iter __first, _Sent __last,
 		 _Pred __pred, const _Tp& __new_value, _Proj __proj = {}) const
       {
-	for (; __first != __last; ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  if (std::__invoke(__pred, std::__invoke(__proj, *__first)))
 	    *__first = __new_value;
 	return std::move(__first);
@@ -1214,7 +1236,9 @@ namespace ranges
 		 const _Tp1& __old_value, const _Tp2& __new_value,
 		 _Proj __proj = {}) const
       {
-	for (; __first != __last; ++__first, (void)++__result)
+	_GLIBCXX_CONVEYOR_TRUST(__result);
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__result))
 	  if (std::__invoke(__proj, *__first) == __old_value)
 	    *__result = __new_value;
 	  else
@@ -1262,7 +1286,9 @@ namespace ranges
       operator()(_Iter __first, _Sent __last, _Out __result,
 		 _Pred __pred, const _Tp& __new_value, _Proj __proj = {}) const
       {
-	for (; __first != __last; ++__first, (void)++__result)
+	_GLIBCXX_CONVEYOR_TRUST(__result);
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__result))
 	  if (std::__invoke(__pred, std::__invoke(__proj, *__first)))
 	    *__result = __new_value;
 	  else
@@ -1316,7 +1342,8 @@ namespace ranges
       constexpr _Out
       operator()(_Out __first, _Sent __last, _Fp __gen) const
       {
-	for (; __first != __last; ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  *__first = std::__invoke(__gen);
 	return __first;
       }
@@ -1348,10 +1375,12 @@ namespace ranges
 
 	auto __result = __first;
 	++__first;
-	for (; __first != __last; ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  if (!std::__invoke(__pred, std::__invoke(__proj, *__first)))
 	    {
 	      *__result = ranges::iter_move(__first);
+	      _GLIBCXX_CONVEYOR_TRUST(__result);
 	      ++__result;
 	    }
 
@@ -1423,10 +1452,12 @@ namespace ranges
       operator()(_Iter __first, _Sent __last, _Out __result,
 		 _Pred __pred, _Proj __proj = {}) const
       {
-	for (; __first != __last; ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  if (!std::__invoke(__pred, std::__invoke(__proj, *__first)))
 	    {
 	      *__result = *__first;
+	      _GLIBCXX_CONVEYOR_TRUST(__result);
 	      ++__result;
 	    }
 	return {std::move(__first), std::move(__result)};
@@ -1466,10 +1497,12 @@ namespace ranges
       operator()(_Iter __first, _Sent __last, _Out __result,
 		 const _Tp& __value, _Proj __proj = {}) const
       {
-	for (; __first != __last; ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  if (!(std::__invoke(__proj, *__first) == __value))
 	    {
 	      *__result = *__first;
+	      _GLIBCXX_CONVEYOR_TRUST(__result);
 	      ++__result;
 	    }
 	return {std::move(__first), std::move(__result)};
@@ -1511,12 +1544,14 @@ namespace ranges
 
 	auto __dest = __first;
 	++__first;
-	while (++__first != __last)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	_GLIBCXX_CONVEYOR_TRUST(__dest);
+	while (++_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	  if (!std::__invoke(__comp,
 			     std::__invoke(__proj, *__dest),
 			     std::__invoke(__proj, *__first)))
-	    *++__dest = ranges::iter_move(__first);
-	return {++__dest, __first};
+	    *++_GLIBCXX_CONVEYOR_TRUSTED (__dest) = ranges::iter_move(__first);
+	return {++_GLIBCXX_CONVEYOR_TRUSTED (__dest), __first};
       }
 
     template<forward_range _Range, typename _Proj = identity,
@@ -1569,14 +1604,17 @@ namespace ranges
 	  {
 	    auto __next = __first;
 	    *__result = *__next;
-	    while (++__next != __last)
+	    _GLIBCXX_CONVEYOR_TRUST(__next);
+	    while (++_GLIBCXX_CONVEYOR_TRUSTED (__next) != __last)
 	      if (!std::__invoke(__comp,
 				 std::__invoke(__proj, *__first),
 				 std::__invoke(__proj, *__next)))
 		{
 		  __first = __next;
+		  _GLIBCXX_CONVEYOR_TRUST(__result);
 		  *++__result = *__first;
 		}
+	    _GLIBCXX_CONVEYOR_TRUST(__result);
 	    return {__next, std::move(++__result)};
 	  }
 	else if constexpr (__detail::__can_reread_output<_Out, iter_value_t<_Iter>>)
@@ -1646,6 +1684,7 @@ namespace ranges
 		while (__first < __tail)
 		  {
 		    ranges::iter_swap(__first, __tail);
+		    _GLIBCXX_CONVEYOR_TRUST(__first);
 		    ++__first;
 		    --__tail;
 		  }
@@ -1654,12 +1693,15 @@ namespace ranges
 	  }
 	else
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__tail);
+	    _GLIBCXX_CONVEYOR_TRUST(__first);
 	    for (;;)
-	      if (__first == __tail || __first == --__tail)
+	      if (_GLIBCXX_CONVEYOR_TRUSTED (__first) == _GLIBCXX_CONVEYOR_TRUSTED (__tail) || _GLIBCXX_CONVEYOR_TRUSTED (__first) == --_GLIBCXX_CONVEYOR_TRUSTED (__tail))
 		break;
 	      else
 		{
 		  ranges::iter_swap(__first, __tail);
+		  _GLIBCXX_CONVEYOR_TRUST(__first);
 		  ++__first;
 		}
 	    return __i;
@@ -1691,10 +1733,12 @@ namespace ranges
       {
 	auto __i = ranges::next(__first, __last);
 	auto __tail = __i;
-	while (__first != __tail)
+	_GLIBCXX_CONVEYOR_TRUST(__tail);
+	while (__first != _GLIBCXX_CONVEYOR_TRUSTED (__tail))
 	  {
 	    --__tail;
 	    *__result = *__tail;
+	    _GLIBCXX_CONVEYOR_TRUST(__result);
 	    ++__result;
 	  }
 	return {__i, std::move(__result)};
@@ -1759,7 +1803,9 @@ namespace ranges
 		    for (decltype(__n) __i = 0; __i < __n - __k; ++ __i)
 		      {
 			ranges::iter_swap(__p, __q);
+			_GLIBCXX_CONVEYOR_TRUST(__p);
 			++__p;
+			_GLIBCXX_CONVEYOR_TRUST(__q);
 			++__q;
 		      }
 		    __n %= __k;
@@ -1943,10 +1989,12 @@ namespace ranges
 		    if (__p.first < __n)
 		      {
 			*__out = *__first;
+			_GLIBCXX_CONVEYOR_TRUST(__out);
 			++__out;
 			--__n;
 		      }
 
+		    _GLIBCXX_CONVEYOR_TRUST(__first);
 		    ++__first;
 
 		    if (__n == 0) break;
@@ -1955,20 +2003,24 @@ namespace ranges
 		    if (__p.second < __n)
 		      {
 			*__out = *__first;
+			_GLIBCXX_CONVEYOR_TRUST(__out);
 			++__out;
 			--__n;
 		      }
 
+		    _GLIBCXX_CONVEYOR_TRUST(__first);
 		    ++__first;
 		  }
 	      }
 
 	    // The loop above is otherwise equivalent to this one-at-a-time version:
 
-	    for (; __n != 0; ++__first)
+	    _GLIBCXX_CONVEYOR_TRUST(__first);
+	    for (; __n != 0; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	      if (__d(__g, __param_type{0, --__unsampled_sz}) < __n)
 		{
 		  *__out = *__first;
+		  _GLIBCXX_CONVEYOR_TRUST(__out);
 		  ++__out;
 		  --__n;
 		}
@@ -2057,7 +2109,7 @@ namespace ranges
 		// using a single distribution invocation to produce swap positions
 		// for two successive elements at a time:
 
-		while (__i != __last)
+		while (_GLIBCXX_CONVEYOR_TRUSTED (__i) != _GLIBCXX_CONVEYOR_TRUSTED (__last))
 		  {
 		    const __uc_type __swap_range = __uc_type(__i - __first) + 1;
 
@@ -2075,7 +2127,9 @@ namespace ranges
 	__distr_type __d;
 
 	_Iter __i = ranges::next(__first);
-	for (; __i != __last; ++__i)
+	_GLIBCXX_CONVEYOR_TRUST(__last);
+	_GLIBCXX_CONVEYOR_TRUST(__i);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__i) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__i))
 	  ranges::iter_swap(__i,
 			    ranges::next(__first,
 					 __d(__g, __p_type(0, __i - __first))));
@@ -2445,7 +2499,7 @@ namespace ranges
 	if (__first == __last)
 	  return;
 
-	for (_Iter __i = ranges::next(__first); __i != __last; ++__i)
+	for (_Iter __i = ranges::next(__first); _GLIBCXX_CONVEYOR_TRUSTED (__i) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__i))
 	  {
 	    if (__comp(*__i, *__first))
 	      {
@@ -2462,7 +2516,7 @@ namespace ranges
       constexpr void
       __unguarded_insertion_sort(_Iter __first, _Iter __last, _Comp __comp)
       {
-	for (_Iter __i = __first; __i != __last; ++__i)
+	for (_Iter __i = __first; _GLIBCXX_CONVEYOR_TRUSTED (__i) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__i))
 	  __detail::__unguarded_linear_insert(__i, __comp);
       }
 
@@ -2489,14 +2543,19 @@ namespace ranges
       {
 	while (true)
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__first);
 	    while (__comp(*__first, *__pivot))
-	      ++__first;
+	      {
+		_GLIBCXX_CONVEYOR_TRUST(__first);
+		++__first;
+	      }
 	    --__last;
 	    while (__comp(*__pivot, *__last))
 	      --__last;
 	    if (!(__first < __last))
 	      return __first;
 	    ranges::iter_swap(__first, __last);
+	    _GLIBCXX_CONVEYOR_TRUST(__first);
 	    ++__first;
 	  }
       }
@@ -2507,7 +2566,7 @@ namespace ranges
       {
 	_Iter __mid = __first + (__last - __first) / 2;
 	__detail::__move_median_to_first(__first, ranges::next(__first), __mid,
-					 ranges::prev(__last), __comp);
+					 _GLIBCXX_CONVEYOR_TRUSTED (ranges::prev)(__last), __comp);
 	return __detail::__unguarded_partition(ranges::next(__first), __last,
 					       __first, __comp);
       }
@@ -2517,7 +2576,7 @@ namespace ranges
       __heap_select(_Iter __first, _Iter __middle, _Iter __last, _Comp __comp)
       {
 	ranges::make_heap(__first, __middle, __comp);
-	for (_Iter __i = __middle; __i < __last; ++__i)
+	for (_Iter __i = __middle; _GLIBCXX_CONVEYOR_TRUSTED (__i) < __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__i))
 	  if (__comp(*__i, *__first))
 	    __detail::__pop_heap(__first, __middle, __i, __comp);
       }
@@ -2598,18 +2657,23 @@ namespace ranges
 		   _Iter __first2, _Iter __last2,
 		   _Out __result, _Comp __comp)
       {
-	while (__first1 != __last1 && __first2 != __last2)
+	_GLIBCXX_CONVEYOR_TRUST(__first2);
+	_GLIBCXX_CONVEYOR_TRUST(__first1);
+	while (_GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2)
 	  {
 	    if (__comp(*__first2, *__first1))
 	      {
 		*__result = ranges::iter_move(__first2);
+		_GLIBCXX_CONVEYOR_TRUST(__first2);
 		++__first2;
 	      }
 	    else
 	      {
 		*__result = ranges::iter_move(__first1);
+		_GLIBCXX_CONVEYOR_TRUST(__first1);
 		++__first1;
 	      }
+	    _GLIBCXX_CONVEYOR_TRUST(__result);
 	    ++__result;
 	  }
 	return ranges::move(__first2, __last2,
@@ -2833,7 +2897,8 @@ namespace ranges
 
 	ranges::make_heap(__first, __middle, __comp, __proj);
 	auto __i = __middle;
-	for (; __i != __last; ++__i)
+	_GLIBCXX_CONVEYOR_TRUST(__i);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__i) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__i))
 	  if (std::__invoke(__comp,
 			    std::__invoke(__proj, *__i),
 			    std::__invoke(__proj, *__first)))
@@ -2892,15 +2957,20 @@ namespace ranges
 	  }
 
 	auto __result_real_last = __result_first;
-	while (__first != __last && __result_real_last != __result_last)
+	_GLIBCXX_CONVEYOR_TRUST(__result_real_last);
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	while (_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last && _GLIBCXX_CONVEYOR_TRUSTED (__result_real_last) != __result_last)
 	  {
 	    *__result_real_last = *__first;
+	    _GLIBCXX_CONVEYOR_TRUST(__result_real_last);
 	    ++__result_real_last;
+	    _GLIBCXX_CONVEYOR_TRUST(__first);
 	    ++__first;
 	  }
 
 	ranges::make_heap(__result_first, __result_real_last, __comp, __proj2);
-	for (; __first != __last; ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  if (std::__invoke(__comp,
 			    std::__invoke(__proj1, *__first),
 			    std::__invoke(__proj2, *__result_first)))
@@ -2954,7 +3024,8 @@ namespace ranges
 	  return __first;
 
 	auto __next = __first;
-	for (++__next; __next != __last; __first = __next, (void)++__next)
+	_GLIBCXX_CONVEYOR_TRUST(__next);
+	for (++__next; _GLIBCXX_CONVEYOR_TRUSTED (__next) != __last; __first = _GLIBCXX_CONVEYOR_TRUSTED (__next), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__next))
 	  if (std::__invoke(__comp,
 			    std::__invoke(__proj, *__next),
 			    std::__invoke(__proj, *__first)))
@@ -2990,7 +3061,8 @@ namespace ranges
 	  return true;
 
 	auto __next = __first;
-	for (++__next; __next != __last; __first = __next, (void)++__next)
+	_GLIBCXX_CONVEYOR_TRUST(__next);
+	for (++__next; _GLIBCXX_CONVEYOR_TRUSTED (__next) != __last; __first = _GLIBCXX_CONVEYOR_TRUSTED (__next), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__next))
 	  if (std::__invoke(__comp,
 			    std::__invoke(__proj, *__next),
 			    std::__invoke(__proj, *__first)))
@@ -3098,10 +3170,12 @@ namespace ranges
 	  {
 	    auto __half = __len / 2;
 	    auto __middle = __first;
-	    ranges::advance(__middle, __half);
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    _GLIBCXX_CONVEYOR_TRUSTED (ranges::advance)(__middle, __half);
 	    if (std::__invoke(__comp, std::__invoke(__proj, *__middle), __value))
 	      {
 		__first = __middle;
+		_GLIBCXX_CONVEYOR_TRUST(__first);
 		++__first;
 		__len = __len - __half - 1;
 	      }
@@ -3147,12 +3221,14 @@ namespace ranges
 	  {
 	    auto __half = __len / 2;
 	    auto __middle = __first;
-	    ranges::advance(__middle, __half);
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    _GLIBCXX_CONVEYOR_TRUSTED (ranges::advance)(__middle, __half);
 	    if (std::__invoke(__comp, __value, std::__invoke(__proj, *__middle)))
 	      __len = __half;
 	    else
 	      {
 		__first = __middle;
+		_GLIBCXX_CONVEYOR_TRUST(__first);
 		++__first;
 		__len = __len - __half - 1;
 	      }
@@ -3196,12 +3272,14 @@ namespace ranges
 	  {
 	    auto __half = __len / 2;
 	    auto __middle = __first;
-	    ranges::advance(__middle, __half);
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    _GLIBCXX_CONVEYOR_TRUSTED (ranges::advance)(__middle, __half);
 	    if (std::__invoke(__comp,
 			      std::__invoke(__proj, *__middle),
 			      __value))
 	      {
 		__first = __middle;
+		_GLIBCXX_CONVEYOR_TRUST(__first);
 		++__first;
 		__len = __len - __half - 1;
 	      }
@@ -3214,7 +3292,10 @@ namespace ranges
 		auto __left
 		  = ranges::lower_bound(__first, __middle,
 					__value, __comp, __proj);
-		ranges::advance(__first, __len);
+		_GLIBCXX_CONVEYOR_TRUST_THIS;
+		_GLIBCXX_CONVEYOR_TRUST(__first);
+		_GLIBCXX_CONVEYOR_TRUSTED (ranges::advance)(__first, __len);
+		_GLIBCXX_CONVEYOR_TRUST(__middle);
 		auto __right
 		  = ranges::upper_bound(++__middle, __first,
 					__value, __comp, __proj);
@@ -3327,17 +3408,21 @@ namespace ranges
 	    auto __tail = __lasti;
 	    for (;;)
 	      {
+		_GLIBCXX_CONVEYOR_TRUST(__tail);
+		_GLIBCXX_CONVEYOR_TRUST(__first);
 		for (;;)
-		  if (__first == __tail)
+		  if (_GLIBCXX_CONVEYOR_TRUSTED (__first) == _GLIBCXX_CONVEYOR_TRUSTED (__tail))
 		    return {std::move(__first), std::move(__lasti)};
 		  else if (std::__invoke(__pred,
 					 std::__invoke(__proj, *__first)))
-		    ++__first;
+		    ++_GLIBCXX_CONVEYOR_TRUSTED (__first);
 		  else
 		    break;
 		--__tail;
+		_GLIBCXX_CONVEYOR_TRUST(__tail);
+		_GLIBCXX_CONVEYOR_TRUST(__first);
 		for (;;)
-		  if (__first == __tail)
+		  if (_GLIBCXX_CONVEYOR_TRUSTED (__first) == _GLIBCXX_CONVEYOR_TRUSTED (__tail))
 		    return {std::move(__first), std::move(__lasti)};
 		  else if (!(bool)std::__invoke(__pred,
 						std::__invoke(__proj, *__tail)))
@@ -3345,6 +3430,7 @@ namespace ranges
 		  else
 		    break;
 		ranges::iter_swap(__first, __tail);
+		_GLIBCXX_CONVEYOR_TRUST(__first);
 		++__first;
 	      }
 	  }
@@ -3394,7 +3480,8 @@ namespace ranges
       constexpr _Iter
       __find_if_not_n(_Iter __first, _Distance& __len, _Pred __pred)
       {
-	for (; __len; --__len,  (void) ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; __len; --__len,  (void) ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  if (!__pred(*__first))
 	    break;
 	return __first;
@@ -3421,11 +3508,14 @@ namespace ranges
 	    // This ensures that we only call __pred once per element.
 	    *__result2 = ranges::iter_move(__first);
 	    ++__result2;
+	    _GLIBCXX_CONVEYOR_TRUST(__first);
 	    ++__first;
-	    for (; __first != __last; ++__first)
+	    _GLIBCXX_CONVEYOR_TRUST(__first);
+	    for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	      if (__pred(*__first))
 		{
 		  *__result1 = ranges::iter_move(__first);
+		  _GLIBCXX_CONVEYOR_TRUST(__result1);
 		  ++__result1;
 		}
 	      else
@@ -3556,15 +3646,18 @@ namespace ranges
 		 _Out1 __out_true, _Out2 __out_false,
 		 _Pred __pred, _Proj __proj = {}) const
       {
-	for (; __first != __last; ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  if (std::__invoke(__pred, std::__invoke(__proj, *__first)))
 	    {
 	      *__out_true = *__first;
+	      _GLIBCXX_CONVEYOR_TRUST(__out_true);
 	      ++__out_true;
 	    }
 	  else
 	    {
 	      *__out_false = *__first;
+	      _GLIBCXX_CONVEYOR_TRUST(__out_false);
 	      ++__out_false;
 	    }
 
@@ -3607,10 +3700,12 @@ namespace ranges
 	  {
 	    auto __half = __len / 2;
 	    auto __middle = __first;
-	    ranges::advance(__middle, __half);
+	    _GLIBCXX_CONVEYOR_TRUST_THIS;
+	    _GLIBCXX_CONVEYOR_TRUSTED (ranges::advance)(__middle, __half);
 	    if (std::__invoke(__pred, std::__invoke(__proj, *__middle)))
 	      {
 		__first = __middle;
+		_GLIBCXX_CONVEYOR_TRUST(__first);
 		++__first;
 		__len = __len - __half - 1;
 	      }
@@ -3650,20 +3745,25 @@ namespace ranges
 		 _Comp __comp = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       {
-	while (__first1 != __last1 && __first2 != __last2)
+	_GLIBCXX_CONVEYOR_TRUST(__first2);
+	_GLIBCXX_CONVEYOR_TRUST(__first1);
+	while (_GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2)
 	  {
 	    if (std::__invoke(__comp,
 			      std::__invoke(__proj2, *__first2),
 			      std::__invoke(__proj1, *__first1)))
 	      {
 		*__result = *__first2;
+		_GLIBCXX_CONVEYOR_TRUST(__first2);
 		++__first2;
 	      }
 	    else
 	      {
 		*__result = *__first1;
+		_GLIBCXX_CONVEYOR_TRUST(__first1);
 		++__first1;
 	      }
+	    _GLIBCXX_CONVEYOR_TRUST(__result);
 	    ++__result;
 	  }
 	auto __copy1 = ranges::copy(std::move(__first1), std::move(__last1),
@@ -3705,11 +3805,13 @@ namespace ranges
 			    _Iter2 __first2, _Iter2 __last2,
 			    _Out __result, _Comp __comp)
       {
-	while (__first1 != __last1 && __first2 != __last2)
+	_GLIBCXX_CONVEYOR_TRUST(__first2);
+	while (__first1 != __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2)
 	  {
 	    if (__comp(*__first2, *__first1))
 	      {
 		*__result = ranges::iter_move(__first2);
+		_GLIBCXX_CONVEYOR_TRUST(__first2);
 		++__first2;
 	      }
 	    else
@@ -3717,6 +3819,7 @@ namespace ranges
 		*__result = ranges::iter_move(__first1);
 		++__first1;
 	      }
+	    _GLIBCXX_CONVEYOR_TRUST(__result);
 	    ++__result;
 	  }
 	if (__first1 != __last1)
@@ -3744,6 +3847,7 @@ namespace ranges
 	    if (__comp(*__last2, *__last1))
 	      {
 		*--__result = ranges::iter_move(__last1);
+		_GLIBCXX_CONVEYOR_TRUST(__last1);
 		if (__first1 == __last1)
 		  {
 		    ranges::move_backward(__first2, ++__last2, __result);
@@ -3994,7 +4098,9 @@ namespace ranges
 		 _Comp __comp = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       {
-	while (__first1 != __last1 && __first2 != __last2)
+	_GLIBCXX_CONVEYOR_TRUST(__first2);
+	_GLIBCXX_CONVEYOR_TRUST(__first1);
+	while (_GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2)
 	  if (std::__invoke(__comp,
 			    std::__invoke(__proj2, *__first2),
 			    std::__invoke(__proj1, *__first1)))
@@ -4002,14 +4108,16 @@ namespace ranges
 	  else if (std::__invoke(__comp,
 				 std::__invoke(__proj1, *__first1),
 				 std::__invoke(__proj2, *__first2)))
-	    ++__first1;
+	    ++_GLIBCXX_CONVEYOR_TRUSTED (__first1);
 	  else
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST(__first1);
 	      ++__first1;
+	      _GLIBCXX_CONVEYOR_TRUST(__first2);
 	      ++__first2;
 	    }
 
-	return __first2 == __last2;
+	return _GLIBCXX_CONVEYOR_TRUSTED (__first2) == __last2;
       }
 
     template<input_range _Range1, input_range _Range2,
@@ -4048,13 +4156,16 @@ namespace ranges
 		 _Out __result, _Comp __comp = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       {
-	while (__first1 != __last1 && __first2 != __last2)
+	_GLIBCXX_CONVEYOR_TRUST(__first2);
+	_GLIBCXX_CONVEYOR_TRUST(__first1);
+	while (_GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2)
 	  {
 	    if (std::__invoke(__comp,
 			      std::__invoke(__proj1, *__first1),
 			      std::__invoke(__proj2, *__first2)))
 	      {
 		*__result = *__first1;
+		_GLIBCXX_CONVEYOR_TRUST(__first1);
 		++__first1;
 	      }
 	    else if (std::__invoke(__comp,
@@ -4062,14 +4173,18 @@ namespace ranges
 				   std::__invoke(__proj1, *__first1)))
 	      {
 		*__result = *__first2;
+		_GLIBCXX_CONVEYOR_TRUST(__first2);
 		++__first2;
 	      }
 	    else
 	      {
 		*__result = *__first1;
+		_GLIBCXX_CONVEYOR_TRUST(__first1);
 		++__first1;
+		_GLIBCXX_CONVEYOR_TRUST(__first2);
 		++__first2;
 	      }
+	    _GLIBCXX_CONVEYOR_TRUST(__result);
 	    ++__result;
 	  }
 	auto __copy1 = ranges::copy(std::move(__first1), std::move(__last1),
@@ -4118,20 +4233,25 @@ namespace ranges
 		 _Comp __comp = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       {
-	while (__first1 != __last1 && __first2 != __last2)
+	_GLIBCXX_CONVEYOR_TRUST(__first2);
+	_GLIBCXX_CONVEYOR_TRUST(__first1);
+	while (_GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2)
 	  if (std::__invoke(__comp,
 			    std::__invoke(__proj1, *__first1),
 			    std::__invoke(__proj2, *__first2)))
-	    ++__first1;
+	    ++_GLIBCXX_CONVEYOR_TRUSTED (__first1);
 	  else if (std::__invoke(__comp,
 				 std::__invoke(__proj2, *__first2),
 				 std::__invoke(__proj1, *__first1)))
-	    ++__first2;
+	    ++_GLIBCXX_CONVEYOR_TRUSTED (__first2);
 	  else
 	    {
 	      *__result = *__first1;
+	      _GLIBCXX_CONVEYOR_TRUST(__first1);
 	      ++__first1;
+	      _GLIBCXX_CONVEYOR_TRUST(__first2);
 	      ++__first2;
+	      _GLIBCXX_CONVEYOR_TRUST(__result);
 	      ++__result;
 	    }
 	// TODO: Eliminating these variables triggers an ICE.
@@ -4178,22 +4298,28 @@ namespace ranges
 		 _Comp __comp = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       {
-	while (__first1 != __last1 && __first2 != __last2)
+	_GLIBCXX_CONVEYOR_TRUST(__first2);
+	_GLIBCXX_CONVEYOR_TRUST(__first1);
+	while (_GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2)
 	  if (std::__invoke(__comp,
 			    std::__invoke(__proj1, *__first1),
 			    std::__invoke(__proj2, *__first2)))
 	    {
 	      *__result = *__first1;
+	      _GLIBCXX_CONVEYOR_TRUST(__first1);
 	      ++__first1;
+	      _GLIBCXX_CONVEYOR_TRUST(__result);
 	      ++__result;
 	    }
 	  else if (std::__invoke(__comp,
 				 std::__invoke(__proj2, *__first2),
 				 std::__invoke(__proj1, *__first1)))
-	    ++__first2;
+	    ++_GLIBCXX_CONVEYOR_TRUSTED (__first2);
 	  else
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST(__first1);
 	      ++__first1;
+	      _GLIBCXX_CONVEYOR_TRUST(__first2);
 	      ++__first2;
 	    }
 	return ranges::copy(std::move(__first1), std::move(__last1),
@@ -4238,13 +4364,17 @@ namespace ranges
 		 _Out __result, _Comp __comp = {},
 		 _Proj1 __proj1 = {}, _Proj2 __proj2 = {}) const
       {
-	while (__first1 != __last1 && __first2 != __last2)
+	_GLIBCXX_CONVEYOR_TRUST(__first2);
+	_GLIBCXX_CONVEYOR_TRUST(__first1);
+	while (_GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2)
 	  if (std::__invoke(__comp,
 			    std::__invoke(__proj1, *__first1),
 			    std::__invoke(__proj2, *__first2)))
 	    {
 	      *__result = *__first1;
+	      _GLIBCXX_CONVEYOR_TRUST(__first1);
 	      ++__first1;
+	      _GLIBCXX_CONVEYOR_TRUST(__result);
 	      ++__result;
 	    }
 	  else if (std::__invoke(__comp,
@@ -4252,12 +4382,16 @@ namespace ranges
 				 std::__invoke(__proj1, *__first1)))
 	    {
 	      *__result = *__first2;
+	      _GLIBCXX_CONVEYOR_TRUST(__first2);
 	      ++__first2;
+	      _GLIBCXX_CONVEYOR_TRUST(__result);
 	      ++__result;
 	    }
 	  else
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST(__first1);
 	      ++__first1;
+	      _GLIBCXX_CONVEYOR_TRUST(__first2);
 	      ++__first2;
 	    }
 	auto __copy1 = ranges::copy(std::move(__first1), std::move(__last1),
@@ -4323,7 +4457,8 @@ namespace ranges
 	auto __last = ranges::end(__r);
 	__glibcxx_assert(__first != __last);
 	range_value_t<_Range> __result(*__first);
-	while (++__first != __last)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	while (++_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	  {
 	    auto&& __tmp = *__first;
 	    if (std::__invoke(__comp,
@@ -4429,6 +4564,7 @@ namespace ranges
 	__glibcxx_assert(__first != __last);
 	auto __comp_proj = __detail::__make_comp_proj(__comp, __proj);
 	minmax_result<range_value_t<_Range>> __result = {*__first, __result.min};
+	_GLIBCXX_CONVEYOR_TRUST(__first);
 	if (++__first == __last)
 	  return __result;
 	else
@@ -4441,12 +4577,13 @@ namespace ranges
 	    else
 	      __result.max = std::forward<decltype(__val)>(__val);
 	  }
-	while (++__first != __last)
+	while (++_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	  {
 	    // Now process two elements at a time so that we perform at most
 	    // 1 + 3*(N-2)/2 comparisons in total (each of the (N-2)/2
 	    // iterations of this loop performs three comparisons).
 	    range_value_t<_Range> __val1 = *__first;
+	    _GLIBCXX_CONVEYOR_TRUST(__first);
 	    if (++__first == __last)
 	      {
 		// N is odd; in this final iteration, we perform at most two
@@ -4505,7 +4642,8 @@ namespace ranges
 	  return __first;
 
 	auto __i = __first;
-	while (++__i != __last)
+	_GLIBCXX_CONVEYOR_TRUST(__i);
+	while (++_GLIBCXX_CONVEYOR_TRUSTED (__i) != __last)
 	  {
 	    if (std::__invoke(__comp,
 			      std::__invoke(__proj, *__i),
@@ -4543,7 +4681,8 @@ namespace ranges
 	  return __first;
 
 	auto __i = __first;
-	while (++__i != __last)
+	_GLIBCXX_CONVEYOR_TRUST(__i);
+	while (++_GLIBCXX_CONVEYOR_TRUSTED (__i) != __last)
 	  {
 	    if (std::__invoke(__comp,
 			      std::__invoke(__proj, *__first),
@@ -4593,12 +4732,13 @@ namespace ranges
 	    else
 	      __result.max = __first;
 	  }
-	while (++__first != __last)
+	while (++_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	  {
 	    // Now process two elements at a time so that we perform at most
 	    // 1 + 3*(N-2)/2 comparisons in total (each of the (N-2)/2
 	    // iterations of this loop performs three comparisons).
 	    auto __prev = __first;
+	    _GLIBCXX_CONVEYOR_TRUST(__first);
 	    if (++__first == __last)
 	      {
 		// N is odd; in this final iteration, we perform at most two
@@ -4715,8 +4855,9 @@ namespace ranges
 		  }
 	      }
 
-	    for (; __first1 != __last1 && __first2 != __last2;
-		 ++__first1, (void) ++__first2)
+	    _GLIBCXX_CONVEYOR_TRUST(__first2);
+	    for (; __first1 != __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2;
+		 ++__first1, (void) ++_GLIBCXX_CONVEYOR_TRUSTED (__first2))
 	      {
 		if (std::__invoke(__comp,
 				  std::__invoke(__proj1, *__first1),
@@ -4727,6 +4868,7 @@ namespace ranges
 				  std::__invoke(__proj1, *__first1)))
 		  return false;
 	      }
+	    _GLIBCXX_CONVEYOR_TRUST(__first2);
 	    return __first1 == __last1 && __first2 != __last2;
 	  }
       }
@@ -4742,8 +4884,9 @@ namespace ranges
       {
 	_GLIBCXX_CONVEYOR_TRUST(__r1);
 	_GLIBCXX_CONVEYOR_TRUST(__r2);
-	return (*this)(ranges::begin(__r1), ranges::end(__r1),
-		       ranges::begin(__r2), ranges::end(__r2),
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return (*this)(_GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__r1), _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__r1),
+		       _GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__r2), _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__r2),
 		       std::move(__comp),
 		       std::move(__proj1), std::move(__proj2));
       }
@@ -4792,6 +4935,7 @@ namespace ranges
 
 	auto __i = __first;
 	++__i;
+	_GLIBCXX_CONVEYOR_TRUST(__i);
 	if (__i == __last)
 	  return {std::move(__i), false};
 
@@ -4816,6 +4960,7 @@ namespace ranges
 		ranges::reverse(__ii, __last);
 		return {std::move(__lasti), true};
 	      }
+	    _GLIBCXX_CONVEYOR_TRUST(__i);
 	    if (__i == __first)
 	      {
 		ranges::reverse(__first, __last);
@@ -4855,6 +5000,7 @@ namespace ranges
 
 	auto __i = __first;
 	++__i;
+	_GLIBCXX_CONVEYOR_TRUST(__i);
 	if (__i == __last)
 	  return {std::move(__i), false};
 
@@ -4879,6 +5025,7 @@ namespace ranges
 		ranges::reverse(__ii, __last);
 		return {std::move(__lasti), true};
 	      }
+	    _GLIBCXX_CONVEYOR_TRUST(__i);
 	    if (__i == __first)
 	      {
 		ranges::reverse(__first, __last);
@@ -5183,7 +5330,8 @@ namespace ranges
 	  return _Ret{std::move(__first), _Up(std::move(__init))};
 
 	_Up __accum = std::__invoke(__f, std::move(__init), *__first);
-	for (++__first; __first != __last; ++__first)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (++__first; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  __accum = std::__invoke(__f, std::move(__accum), *__first);
 	return _Ret{std::move(__first), std::move(__accum)};
       }
@@ -5256,8 +5404,13 @@ namespace ranges
 	  return _Ret{std::move(__first), optional<_Up>()};
 
 	optional<_Up> __init(in_place, *__first);
-	for (++__first; __first != __last; ++__first)
-	  *__init = std::__invoke(__f, std::move(*__init), *__first);
+	_GLIBCXX_CONVEYOR_TRUST(__init);
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	for (++__first; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
+	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__init);
+	    *_GLIBCXX_CONVEYOR_TRUSTED (__init) = std::__invoke(__f, std::move(*_GLIBCXX_CONVEYOR_TRUSTED (__init)), *__first);
+	  }
 	return _Ret{std::move(__first), std::move(__init)};
       }
 
@@ -5325,7 +5478,8 @@ namespace ranges
 
 	_Iter __tail = ranges::next(__first, __last);
 	_Up __accum = std::__invoke(__f, *--__tail, std::move(__init));
-	while (__first != __tail)
+	_GLIBCXX_CONVEYOR_TRUST(__tail);
+	while (__first != _GLIBCXX_CONVEYOR_TRUSTED (__tail))
 	  __accum = std::__invoke(__f, *--__tail, std::move(__accum));
 	return __accum;
       }

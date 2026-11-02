@@ -1858,6 +1858,7 @@ namespace __format
 	    {
 	      auto& __np = std::use_facet<numpunct<_CharT>>(__fc.locale());
 	      __s = __i ? __np.truename() : __np.falsename();
+	      _GLIBCXX_CONVEYOR_TRUST(__s);
 	      __est_width = __s.size(); // TODO Unicode-aware estimate
 	    }
 	  else
@@ -1866,6 +1867,7 @@ namespace __format
 		__s = __i ? "true" : "false";
 	      else
 		__s = __i ? L"true" : L"false";
+	      _GLIBCXX_CONVEYOR_TRUST(__s);
 	      __est_width = __s.size();
 	    }
 
@@ -1899,8 +1901,9 @@ namespace __format
 	  __format::__write_escaped(__sink.out(), __in, _Term_apos);
 
 	  __in = __sink.view();
+	  _GLIBCXX_CONVEYOR_TRUST(__in);
 	  if (__in[1] == _Escapes<_CharT>::_S_bslash()[0]) // escape sequence
-	    __width = __in.size();
+	    __width = _GLIBCXX_CONVEYOR_TRUSTED (__in).size();
 	  return __format::__write_padded_as_spec(__in, __width,
 						  __fc, _M_spec);
 	}
@@ -1978,6 +1981,7 @@ namespace __format
 		    {
 		      __out = __format::__write(std::move(__out),
 						__str.substr(0, __prefix_len));
+		      _GLIBCXX_CONVEYOR_TRUST(__str);
 		      __str.remove_prefix(__prefix_len);
 		    }
 		}
@@ -2315,6 +2319,7 @@ namespace __format
 
 		  __dynbuf.__resize_and_overwrite(__dynbuf.capacity() * 2,
 						  __overwrite);
+		  _GLIBCXX_CONVEYOR_TRUST(__dynbuf);
 		  __start = __dynbuf.data() + __offset; // reserve space for sign and prefix
 		  __end = __dynbuf.data() + __dynbuf.size();
 		}
@@ -2362,6 +2367,7 @@ namespace __format
 	      if (__d != __s.npos) // Found decimal point.
 		{
 		  __p = __s.find(__expc, __d + 1);
+		  _GLIBCXX_CONVEYOR_TRUST(__s);
 		  if (__p == __s.npos)
 		    __p = __s.size();
 
@@ -2369,6 +2375,7 @@ namespace __format
 		  if (__trailing_zeros)
 		    {
 		      // Find number of digits after first significant figure.
+		      _GLIBCXX_CONVEYOR_TRUST(__s);
 		      if (__s[__offset] != '0')
 			// A string like "D.D" or "-D.DDD"
 			__sigfigs = __p - __offset - 1;
@@ -2381,9 +2388,13 @@ namespace __format
 		}
 	      else // No decimal point, we need to insert one.
 		{
+		  _GLIBCXX_CONVEYOR_TRUST(__s);
 		  __p = __s.find(__expc); // Find the exponent, if present.
 		  if (__p == __s.npos)
-		    __p = __s.size();
+		    {
+		      _GLIBCXX_CONVEYOR_TRUST(__s);
+		      __p = __s.size();
+		    }
 		  __d = __p; // Position where '.' should be inserted.
 		  __sigfigs = __d - __offset;
 		}
@@ -2398,20 +2409,24 @@ namespace __format
 
 	      if (size_t __extras = int(__d == __p) + __z) // How many to add.
 		{
+		  _GLIBCXX_CONVEYOR_TRUST(__dynbuf);
 		  if (__dynbuf.empty() && __extras <= size_t(__end - __res.ptr))
 		    {
 		      // The stack buffer is large enough for the result.
 		      // Move exponent to make space for extra chars.
+		      _GLIBCXX_CONVEYOR_TRUST(__s);
 		      __builtin_memmove(__start + __p + __extras,
 					__start + __p,
 					__s.size() - __p);
 		      if (__d == __p)
 			__start[__p++] = '.';
 		      __builtin_memset(__start + __p, '0', __z);
+		      _GLIBCXX_CONVEYOR_TRUST(__s);
 		      __narrow_str = {__s.data(), __s.size() + __extras};
 		    }
 		  else // Need to switch to the dynamic buffer.
 		    {
+		      _GLIBCXX_CONVEYOR_TRUST(__s);
 		      __dynbuf.reserve(__s.size() + __extras);
 		      if (__dynbuf.empty())
 			{
@@ -2425,6 +2440,7 @@ namespace __format
 		      else
 			{
 			  __dynbuf.insert(__p, __extras, '0');
+			  _GLIBCXX_CONVEYOR_TRUST(__dynbuf);
 			  if (__d == __p)
 			    __dynbuf[__p] = '.';
 			}
@@ -2476,6 +2492,7 @@ namespace __format
 		  if (__offset > 0)
 		    {
 		      __out = __format::__write(__out, __str.substr(0, __offset));
+		      _GLIBCXX_CONVEYOR_TRUST(__str);
 		      __str.remove_prefix(__offset);
 		    }
 		}
@@ -2528,13 +2545,18 @@ namespace __format
 	    }
 	  }
 
+	_GLIBCXX_CONVEYOR_TRUST(__str);
 	if (__grp.empty() && __point == __dot)
 	  return __lstr; // Locale uses '.' and no grouping.
 
 	size_t __d = __str.find(__dot); // Index of radix character (if any).
 	size_t __e = min(__d, __str.find(__exp)); // First of radix or exponent
 	if (__e == __str.npos)
-	  __e = __str.size();
+	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__str);
+	    __e = __str.size();
+	  }
+	_GLIBCXX_CONVEYOR_TRUST(__str);
 	const size_t __r = __str.size() - __e; // Length of remainder.
 	auto __overwrite = [&](_CharT* __p, size_t) {
 #if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
@@ -3469,17 +3491,27 @@ namespace __format
       _M_write(basic_string_view<_CharT> __s)
       {
 	span __to = _M_unused();
-	while (__to.size() <= __s.size())
+	_GLIBCXX_CONVEYOR_TRUST(__to);
+	_GLIBCXX_CONVEYOR_TRUST(__s);
+	while (__to.size() <= _GLIBCXX_CONVEYOR_TRUSTED (__s).size())
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__to);
 	    __s.copy(__to.data(), __to.size());
+	    _GLIBCXX_CONVEYOR_TRUST(__to);
 	    _M_next += __to.size();
+	    _GLIBCXX_CONVEYOR_TRUST(__to);
+	    _GLIBCXX_CONVEYOR_TRUST(__s);
 	    __s.remove_prefix(__to.size());
 	    _M_overflow();
 	    __to = _M_unused();
 	  }
+	_GLIBCXX_CONVEYOR_TRUST(__s);
 	if (__s.size())
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__to);
+	    _GLIBCXX_CONVEYOR_TRUST(__s);
 	    __s.copy(__to.data(), __s.size());
+	    _GLIBCXX_CONVEYOR_TRUST(__s);
 	    _M_next += __s.size();
 	  }
       }
@@ -3908,6 +3940,7 @@ namespace __format
 	    _M_out = ranges::copy(__first, std::move(_M_out)).out;
 	  }
 	this->_M_rewind();
+	_GLIBCXX_CONVEYOR_TRUST(__s);
 	_M_count += __s.size();
       }
 
@@ -5075,7 +5108,7 @@ namespace __format
     __pack_arg_types(const array<_Arg_t, _Nm>& __types)
     {
       __UINT64_TYPE__ __packed_types = 0;
-      for (auto __i = __types.rbegin(); __i != __types.rend(); ++__i)
+      for (auto __i = __types.rbegin(); _GLIBCXX_CONVEYOR_TRUSTED (__i) != __types.rend(); ++_GLIBCXX_CONVEYOR_TRUSTED (__i))
 	__packed_types = (__packed_types << _Bits) | (unsigned)*__i;
       return __packed_types;
     }
@@ -5441,7 +5474,8 @@ namespace __format
       {
 	basic_string_view<_CharT> __fmt = _M_fmt_str();
 
-	if (__fmt.size() == 2 && __fmt[0] == '{' && __fmt[1] == '}')
+	_GLIBCXX_CONVEYOR_TRUST(__fmt);
+	if (_GLIBCXX_CONVEYOR_TRUSTED (__fmt).size() == 2 && _GLIBCXX_CONVEYOR_TRUSTED (__fmt)[0] == '{' && _GLIBCXX_CONVEYOR_TRUSTED (__fmt)[1] == '}')
 	  {
 	    _M_pc.advance_to(begin() + 1);
 	    _M_format_arg(_M_pc.next_arg_id());
@@ -5451,7 +5485,8 @@ namespace __format
 	size_t __lbr = __fmt.find('{');
 	size_t __rbr = __fmt.find('}');
 
-	while (__fmt.size())
+	_GLIBCXX_CONVEYOR_TRUST(__fmt);
+	while (_GLIBCXX_CONVEYOR_TRUSTED (__fmt).size())
 	  {
 	    auto __cmp = __lbr <=> __rbr;
 	    if (__cmp == 0)
@@ -5462,9 +5497,11 @@ namespace __format
 	      }
 	    else if (__cmp < 0)
 	      {
+		_GLIBCXX_CONVEYOR_TRUST(__fmt);
 		if (__lbr + 1 == __fmt.size()
 		      || (__rbr == __fmt.npos && __fmt[__lbr + 1] != '{'))
 		  __format::__unmatched_left_brace_in_format_string();
+		_GLIBCXX_CONVEYOR_TRUST(__fmt);
 		const bool __is_escape = __fmt[__lbr + 1] == '{';
 		iterator __last = begin() + __lbr + int(__is_escape);
 		_M_on_chars(__last);
@@ -5486,7 +5523,7 @@ namespace __format
 	      }
 	    else
 	      {
-		if (++__rbr == __fmt.size() || __fmt[__rbr] != '}')
+		if (++__rbr == _GLIBCXX_CONVEYOR_TRUSTED (__fmt).size() || _GLIBCXX_CONVEYOR_TRUSTED (__fmt)[__rbr] != '}')
 		  __format::__unmatched_right_brace_in_format_string();
 		iterator __last = begin() + __rbr;
 		_M_on_chars(__last);
@@ -5658,7 +5695,7 @@ namespace __format
     {
       if constexpr (is_same_v<_CharT, char>)
 	// Fast path for "{}" format strings and simple format arg types.
-	if (__fmt.size() == 2 && __fmt[0] == '{' && __fmt[1] == '}')
+	if (_GLIBCXX_CONVEYOR_TRUSTED (__fmt).size() == 2 && _GLIBCXX_CONVEYOR_TRUSTED (__fmt)[0] == '{' && _GLIBCXX_CONVEYOR_TRUSTED (__fmt)[1] == '}')
 	  {
 	    bool __done = false;
 	    __format::__visit_format_arg([&](auto& __arg) {
@@ -5708,6 +5745,7 @@ namespace __format
 		  if (auto __res = __out._M_reserve(__sv.size()))
 		    {
 		      ranges::copy(__sv, __res.get());
+		      _GLIBCXX_CONVEYOR_TRUST(__sv);
 		      __res._M_bump(__sv.size());
 		      __done = true;
 		    }
@@ -6645,15 +6683,16 @@ namespace __format
 	  auto __out = __format::__write(__fc.out(), _M_open);
 
 	  _GLIBCXX_CONVEYOR_TRUST(__rg);
-	  auto __first = ranges::begin(__rg);
+	  auto __first = _GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__rg);
 	  _GLIBCXX_CONVEYOR_TRUST(__rg);
-	  auto const __last = ranges::end(__rg);
+	  auto const __last = _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__rg);
 	  if (__first == __last)
 	    return __format::__write(__out, _M_close);
 
 	  __fc.advance_to(__out);
 	  __out = _M_fval.format(*__first, __fc);
-	  for (++__first; __first != __last; ++__first)
+	  _GLIBCXX_CONVEYOR_TRUST(__first);
+	  for (++__first; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	    {
 	      __out = __format::__write(__out, _M_sep);
 	      __fc.advance_to(__out);

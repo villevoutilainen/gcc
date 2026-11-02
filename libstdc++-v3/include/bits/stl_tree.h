@@ -2330,7 +2330,8 @@ namespace __rb_tree
 	  auto __i = __src.begin();
 	  // begin () may have ended __src (the lifetime rule): it hasn't.
 	  _GLIBCXX_CONVEYOR_TRUST(__src);
-	  for (auto __end = __src.end(); __i != __end;)
+	  _GLIBCXX_CONVEYOR_TRUST(__i);
+	  for (auto __end = __src.end(); _GLIBCXX_CONVEYOR_TRUSTED (__i) != __end;)
 	    {
 	      auto __pos = __i++;
 	      auto __res = _M_get_insert_unique_pos(_KeyOfValue()(*__pos));
@@ -2356,7 +2357,8 @@ namespace __rb_tree
 	  auto __i = __src.begin();
 	  // begin () may have ended __src (the lifetime rule): it hasn't.
 	  _GLIBCXX_CONVEYOR_TRUST(__src);
-	  for (auto __end = __src.end(); __i != __end;)
+	  _GLIBCXX_CONVEYOR_TRUST(__i);
+	  for (auto __end = __src.end(); _GLIBCXX_CONVEYOR_TRUSTED (__i) != __end;)
 	    {
 	      auto __pos = __i++;
 	      auto __res = _M_get_insert_equal_pos(_KeyOfValue()(*__pos));
@@ -3432,7 +3434,7 @@ namespace __rb_tree
       if (__first == begin() && __last == end())
 	clear();
       else
-	while (__first != __last)
+	while (_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	  _M_erase_aux(__first++);
     }
 

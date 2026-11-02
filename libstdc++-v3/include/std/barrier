@@ -161,8 +161,9 @@ It looks different from literature pseudocode for two main reasons:
 		(std::is_object_address
 		   (__builtin_addressof (__state[__current])));
 #endif
-	      __atomic_phase_ref_t __phase(&__state[__current]
-					      .__tickets[__round]);
+	      __state_t& __st = __state[__current];
+	      _GLIBCXX_CONVEYOR_TRUST(__st);
+	      __atomic_phase_ref_t __phase(&__st.__tickets[__round]);
 	      if (__current == __last_node && (__current_expected & 1))
 		{
 		  if (__phase.compare_exchange_strong(__expect, __full_step,

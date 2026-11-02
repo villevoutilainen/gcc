@@ -315,6 +315,7 @@ namespace __detail
 	      _M_cur_results = _ResultsVec(std::move(__task.second), __alloc);
 	      _M_dfs<_Search_mode::_Bfs>(__match_mode, __task.first);
 	    }
+	  _GLIBCXX_CONVEYOR_TRUST(__alloc);
 	  if (__match_mode == _Match_mode::_Prefix)
 	    __ret |= _M_has_sol;
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
@@ -345,11 +346,16 @@ namespace __detail
       if (__sub._M_search_from_first())
 	{
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
-	  for (size_t __i = 0; __i < __what.size(); __i++)
+	  _GLIBCXX_CONVEYOR_TRUST(__what);
+	  for (size_t __i = 0; __i < _GLIBCXX_CONVEYOR_TRUSTED (__what).size(); __i++)
 	    {
 	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	      _GLIBCXX_CONVEYOR_TRUST(__what);
 	      if (__what[__i].matched)
-		_M_cur_results[__i] = __what[__i];
+		{
+		  _GLIBCXX_CONVEYOR_TRUST(__what);
+		  _M_cur_results[__i] = __what[__i];
+		}
 	    }
 	  return true;
 	}
@@ -685,10 +691,11 @@ namespace __detail
       if (!__submatch.matched)
 	return _S_invalid_state_id;
       auto __last = _M_current;
+      _GLIBCXX_CONVEYOR_TRUST(__last);
       for (auto __tmp = __submatch.first;
-	   __last != _M_end && __tmp != __submatch.second;
-	   ++__tmp)
-	++__last;
+	   _GLIBCXX_CONVEYOR_TRUSTED (__last) != _M_end && _GLIBCXX_CONVEYOR_TRUSTED (__tmp) != __submatch.second;
+	   ++_GLIBCXX_CONVEYOR_TRUSTED (__tmp))
+	++_GLIBCXX_CONVEYOR_TRUSTED (__last);
       if (_Backref_matcher<_BiIter, _TraitsT>(
 	      _M_re.flags() & regex_constants::icase,
 	      _M_re._M_automaton->_M_traits)._M_apply(

@@ -662,6 +662,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	__allocator_type __a(_M_alloc._M_obj);
 	__allocated_ptr<__allocator_type> __guard_ptr{ __a, this };
 	this->~_Sp_counted_ptr_inplace();
+	_GLIBCXX_CONVEYOR_TRUST(__a);
       }
 
     private:
@@ -1005,13 +1006,17 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    (std::is_object_address (__builtin_addressof (__a._M_a)));
 #endif
 	  typename _Sp_cp_type::__allocator_type __a2(__a._M_a);
-	  auto __guard = std::__allocate_guarded(__a2);
-	  _Sp_cp_type* __mem = __guard.get();
-	  auto __pi = ::new (__mem)
-	    _Sp_cp_type(__a._M_a, std::forward<_Args>(__args)...);
-	  __guard = nullptr;
-	  _M_pi = __pi;
-	  __p = __pi->_M_ptr();
+	  _GLIBCXX_CONVEYOR_TRUST(__a2);
+	  {
+	    auto __guard = std::__allocate_guarded(__a2);
+	    _Sp_cp_type* __mem = __guard.get();
+	    auto __pi = ::new (__mem)
+	      _Sp_cp_type(__a._M_a, std::forward<_Args>(__args)...);
+	    __guard = nullptr;
+	    _M_pi = __pi;
+	    __p = __pi->_M_ptr();
+	  }
+	  _GLIBCXX_CONVEYOR_TRUST(__a2);
 	}
 
 #if __glibcxx_shared_ptr_arrays >= 201707L // C++ >= 20 && HOSTED

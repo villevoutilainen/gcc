@@ -1316,6 +1316,7 @@ _GLIBCXX_CONVEYOR_TRUST(__a);
 	__str.assign(1, __slash);
       else
 	{
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  __str.reserve(_M_pathname.size());
 	  bool __add_slash = false;
 	  for (auto& __elem : *this)
@@ -1417,7 +1418,10 @@ _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return {};
 	auto __last = --end();
 	if (__last->_M_type() == _Type::_Filename)
-	  return *__last;
+	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__last);
+	    return *__last;
+	  }
       }
     return {};
   }
@@ -1509,6 +1513,7 @@ _GLIBCXX_CONVEYOR_TRUST_THIS;
       }
     else
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__glibcxx_assert(!_M_at_end);
 	_M_at_end = true;
       }
@@ -1526,6 +1531,7 @@ _GLIBCXX_CONVEYOR_TRUST_THIS;
       }
     else
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__glibcxx_assert(_M_at_end);
 	_M_at_end = false;
       }

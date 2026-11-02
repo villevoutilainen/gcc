@@ -38,6 +38,12 @@
 #include <ranges>
 #include <testsuite_hooks.h>
 
+// A trust that X is still an object after a call that isn't conveyor
+// was given a route to it (the lifetime rule).
+#define ALIVE(x) \
+  contract_assert<std::contracts::never_proven_conveyor_v> \
+    (std::is_object_address (__builtin_addressof (x)))
+
 using SR = std::ranges::subrange<int*, int*, std::ranges::subrange_kind::sized>;
 
 // Explicit-instantiation pins: 'conveyor(auto)''s own regression-safety
@@ -95,8 +101,11 @@ int main ()
   SR empty_sr (arr, arr, 0u);
 
   VERIFY (front (sr) == 1);
+  ALIVE (sr);
   VERIFY (back (sr) == 5);
+  ALIVE (sr);
   VERIFY (subscript (sr) == 3);
+  ALIVE (sr);
   VERIFY (!is_empty (sr));
   VERIFY (is_empty (empty_sr));
   VERIFY (size (sr) == 5);

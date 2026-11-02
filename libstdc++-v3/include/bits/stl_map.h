@@ -537,9 +537,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	iterator __i = lower_bound(__k);
 	// __i->first is greater than or equivalent to __k.
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(__i);
 	if (__i == end() || key_comp()(__k, (*__i).first))
 #if __cplusplus >= 201103L
-	  __i = _M_t._M_emplace_hint_unique(__i, std::piecewise_construct,
+	  __i = _M_t._M_emplace_hint_unique(_GLIBCXX_CONVEYOR_TRUSTED (__i), std::piecewise_construct,
 					    std::tuple<const key_type&>(__k),
 					    std::tuple<>());
 #else
@@ -663,6 +664,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		    _GLIBCXX_CONVEYOR_TRUST_THIS;
 		    if (__i == end() || key_comp()(__k, (*__i).first))
 		      {
+			_GLIBCXX_CONVEYOR_TRUST(__i);
 			__i = emplace_hint(__i, std::forward<_Args>(__args)...);
 			return {__i, true};
 		      }
@@ -818,6 +820,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (__i == end() || key_comp()(__k, (*__i).first))
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST(__i);
 	      __i = emplace_hint(__i, std::piecewise_construct,
 				 std::forward_as_tuple(std::move(__k)),
 				 std::forward_as_tuple(

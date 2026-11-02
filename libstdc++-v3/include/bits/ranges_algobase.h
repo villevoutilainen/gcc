@@ -153,13 +153,14 @@ namespace ranges
 	  }
 	else
 	  {
-	    for (; __first1 != __last1 && __first2 != __last2;
-		 ++__first1, (void)++__first2)
+	    _GLIBCXX_CONVEYOR_TRUST(__first1);
+	    for (; _GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1 && __first2 != __last2;
+		 ++_GLIBCXX_CONVEYOR_TRUSTED (__first1), (void)++__first2)
 	      if (!(bool)std::__invoke(__pred,
 				       std::__invoke(__proj1, *__first1),
 				       std::__invoke(__proj2, *__first2)))
 		return false;
-	    return __first1 == __last1 && __first2 == __last2;
+	    return _GLIBCXX_CONVEYOR_TRUSTED (__first1) == __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) == __last2;
 	  }
       }
 
@@ -183,8 +184,9 @@ namespace ranges
 
 	_GLIBCXX_CONVEYOR_TRUST(__r2);
 	_GLIBCXX_CONVEYOR_TRUST(__r1);
-	return (*this)(ranges::begin(__r1), ranges::end(__r1),
-		       ranges::begin(__r2), ranges::end(__r2),
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return (*this)(_GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__r1), _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__r1),
+		       _GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__r2), _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__r2),
 		       std::move(__pred),
 		       std::move(__proj1), std::move(__proj2));
       }
@@ -318,6 +320,7 @@ namespace __detail
 	    {
 	      __detail::__assign_one<_IsMove>(__result, __first);
 	      ++__first;
+	      _GLIBCXX_CONVEYOR_TRUST(__result);
 	      ++__result;
 	    }
 	  return {std::move(__first), std::move(__result)};
@@ -586,7 +589,8 @@ namespace __detail
 	      }
 
 	    const auto __tmp = __value;
-	    for (; __n > 0; --__n, (void)++__first)
+	    _GLIBCXX_CONVEYOR_TRUST(__first);
+	    for (; __n > 0; --__n, (void)++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	      *__first = __tmp;
 	    return __first;
 	  }

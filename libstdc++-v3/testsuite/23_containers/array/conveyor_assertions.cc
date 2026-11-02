@@ -27,10 +27,17 @@
 #include <array>
 #include <testsuite_hooks.h>
 
+// A trust that X is still an object after a call that isn't conveyor
+// was given a route to it (the lifetime rule).
+#define ALIVE(x) \
+  contract_assert<std::contracts::never_proven_conveyor_v> \
+    (std::is_object_address (__builtin_addressof (x)))
+
 int main()
 {
   std::array<int, 3> a{1, 2, 3};
   VERIFY(a[1] == 2);
+  ALIVE(a);
   VERIFY(a.size() == 3);
   return 0;
 }

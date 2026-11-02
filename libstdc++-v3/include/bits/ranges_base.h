@@ -1124,8 +1124,10 @@ namespace ranges
 	  }
 
 	iter_difference_t<_It> __n = 0;
-	while (__first != __last)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	while (_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__first);
 	    ++__first;
 	    ++__n;
 	  }

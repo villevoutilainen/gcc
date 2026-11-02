@@ -1633,6 +1633,7 @@ namespace __detail
       auto __ptr = __buckets_alloc_traits::allocate(__alloc, __bkt_count);
       __buckets_ptr __p = std::__to_address(__ptr);
       __builtin_memset(__p, 0, __bkt_count * sizeof(__node_base_ptr));
+      _GLIBCXX_CONVEYOR_TRUST(__alloc);
       return __p;
     }
 
@@ -1646,6 +1647,7 @@ namespace __detail
       auto __ptr = std::pointer_traits<_Ptr>::pointer_to(*__bkts);
       __buckets_alloc_type __alloc(_M_node_allocator());
       __buckets_alloc_traits::deallocate(__alloc, __ptr, __bkt_count);
+      _GLIBCXX_CONVEYOR_TRUST(__alloc);
     }
 
  ///@} hashtable-detail

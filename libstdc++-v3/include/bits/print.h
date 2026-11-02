@@ -145,7 +145,7 @@ namespace __format
 	  // Characters in internal buffer need to be transferred to the FILE.
 	  auto __n = ::fwrite_unlocked(__s.data(), 1, __s.size(),
 				       _M_file._M_file);
-	  if (__n != __s.size())
+	  if (__n != _GLIBCXX_CONVEYOR_TRUSTED (__s).size())
 	    __throw_system_error(errno);
 	  this->_M_reset(this->_M_buf);
 	}
@@ -186,7 +186,7 @@ namespace __format
 	    ::putc_unlocked('\n', _M_file._M_file); // '\n' triggers a flush
 	  else if (_M_file._M_line_buffered() && __s.size()
 		     && (__s.back() == '\n'
-			   || __builtin_memchr(__s.data(), '\n', __s.size())))
+			   || __builtin_memchr(_GLIBCXX_CONVEYOR_TRUSTED (__s).data(), '\n', _GLIBCXX_CONVEYOR_TRUSTED (__s).size())))
 	    _M_file._M_flush();
 	}
     }
@@ -292,7 +292,7 @@ namespace __format
     __format::_Str_sink<char> __buf;
     std::vformat_to(__buf.out(), __fmt, __args);
     auto __out = __buf.view();
-    if (std::fwrite(__out.data(), 1, __out.size(), __stream) != __out.size())
+    if (std::fwrite(_GLIBCXX_CONVEYOR_TRUSTED (__out).data(), 1, _GLIBCXX_CONVEYOR_TRUSTED (__out).size(), __stream) != _GLIBCXX_CONVEYOR_TRUSTED (__out).size())
       __throw_system_error(EIO);
   }
 

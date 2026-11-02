@@ -283,12 +283,15 @@ namespace __detail
 		  __e._M_append(_StateSeqT(*_M_nfa, __alt, __tmp._M_end));
 		}
 	      __e._M_append(__end);
-	      while (!__stack.empty())
+	      _GLIBCXX_CONVEYOR_TRUST(__stack);
+	      while (!_GLIBCXX_CONVEYOR_TRUSTED (__stack).empty())
 		{
 		  _GLIBCXX_CONVEYOR_TRUST_THIS;
 		  auto& __nfa = *_M_nfa;
 		  _GLIBCXX_CONVEYOR_TRUST(__nfa);
+		  _GLIBCXX_CONVEYOR_TRUST(__stack);
 		  auto& __tmp = __nfa[__stack.top()];
+		  _GLIBCXX_CONVEYOR_TRUST(__stack);
 		  __stack.pop();
 		  std::swap(__tmp._M_next, __tmp._M_alt);
 		}

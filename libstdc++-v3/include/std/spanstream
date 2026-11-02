@@ -128,9 +128,11 @@ template<typename _CharT, typename _Traits>
       if (_M_mode & ios_base::out)
 	{
 	  this->setp(__s.data(), __s.data() + __s.size());
+	  _GLIBCXX_CONVEYOR_TRUST(__s);
 	  if (_M_mode & ios_base::ate)
 	    this->pbump(__s.size());
 	}
+      _GLIBCXX_CONVEYOR_TRUST(__s);
       if (_M_mode & ios_base::in)
 	this->setg(__s.data(), __s.data(), __s.data() + __s.size());
     }

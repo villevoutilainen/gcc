@@ -58,6 +58,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	const auto __end = __ucont.end();
 	auto __removed = std::__remove_if(__ucont.begin(), __end,
 					  std::move(__pred));
+	_GLIBCXX_CONVEYOR_TRUST(__end);
 	if (__removed != __end)
 	  {
 	    // Each call may have ended __cont, given a route into it (the
@@ -84,7 +85,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_GLIBCXX_CONVEYOR_TRUST(__ucont);
 	typename _Container::size_type __num = 0;
 	for (auto __iter = __ucont.begin(), __last = __ucont.end();
-	     __iter != __last;)
+	     _GLIBCXX_CONVEYOR_TRUSTED (__iter) != __last;)
 	  {
 	    if (__pred(*__iter))
 	      {

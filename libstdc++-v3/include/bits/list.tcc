@@ -316,7 +316,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     _M_fill_assign(size_type __n, const value_type& __val)
     {
       iterator __i = begin();
-      for (; __i != end() && __n > 0; ++__i, --__n)
+      _GLIBCXX_CONVEYOR_TRUST(__i);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__i) != end() && __n > 0; ++_GLIBCXX_CONVEYOR_TRUSTED (__i), --__n)
         *__i = __val;
       if (__n > 0)
         insert(end(), __n, __val);
@@ -333,9 +334,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       {
         iterator __first1 = begin();
         iterator __last1 = end();
-        for (; __first1 != __last1 && __first2 != __last2;
-	     ++__first1, (void)++__first2)
+        _GLIBCXX_CONVEYOR_TRUST(__first2);
+        _GLIBCXX_CONVEYOR_TRUST(__first1);
+        for (; _GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2;
+	     ++_GLIBCXX_CONVEYOR_TRUSTED (__first1), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__first2))
           *__first1 = *__first2;
+        _GLIBCXX_CONVEYOR_TRUST(__first2);
         if (__first2 == __last2)
           erase(__first1, __last1);
         else
@@ -400,7 +404,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_CONVEYOR_TRUST_THIS;
       list __to_destroy(get_allocator());
       iterator __next = __first;
-      while (++__next != __last)
+      _GLIBCXX_CONVEYOR_TRUST(__next);
+      while (++_GLIBCXX_CONVEYOR_TRUSTED (__next) != __last)
 	{
 	  if (*__first == *__next)
 	    {
@@ -443,7 +448,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 
 	  const _Finalize_merge __fin(*this, __x, __first2);
 
-	  while (__first1 != __last1 && __first2 != __last2)
+	  _GLIBCXX_CONVEYOR_TRUST(__first2);
+	  _GLIBCXX_CONVEYOR_TRUST(__first1);
+	  while (_GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2)
 	    if (*__first2 < *__first1)
 	      {
 		iterator __next = __first2;
@@ -451,7 +458,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		__first2 = __next;
 	      }
 	    else
-	      ++__first1;
+	      ++_GLIBCXX_CONVEYOR_TRUSTED (__first1);
+	  _GLIBCXX_CONVEYOR_TRUST(__first2);
 	  if (__first2 != __last2)
 	    {
 	      _M_transfer(__last1, __first2, __last2);
@@ -580,7 +588,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	list __to_destroy(get_allocator());
 	iterator __first = begin();
 	iterator __last = end();
-	while (__first != __last)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	while (_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	  {
 	    iterator __next = __first;
 	    ++__next;

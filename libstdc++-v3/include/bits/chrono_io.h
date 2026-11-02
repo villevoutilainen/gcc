@@ -629,6 +629,7 @@ namespace __format
 	  auto __end = __str.find('}');
 	  if (__end != __str.npos)
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST(__str);
 	      __str.remove_suffix(__str.length() - __end);
 	      __last = __first + __end;
 	    }
@@ -1243,6 +1244,7 @@ namespace __format
 		    __first = __last;
 		  else
 		    {
+		      _GLIBCXX_CONVEYOR_TRUST(__str);
 		      __str.remove_suffix(__str.length() - __pos);
 		      __first += __pos + 1;
 		    }
@@ -1641,7 +1643,7 @@ namespace __format
 	  if (__secs)
 	    _S_fill_two_digits(__buf + 6, __t._M_seconds.count());
 	  else
-	    __sv.remove_suffix(3);
+	    _GLIBCXX_CONVEYOR_TRUSTED (__sv).remove_suffix(3);
 
 	  return __format::__write(std::move(__out), __sv);
 	}
@@ -1829,6 +1831,7 @@ namespace __format
       {
 	auto __sv = _S_two_digits(__n);
 	__buf[0] = __sv[0];
+	_GLIBCXX_CONVEYOR_TRUST(__sv);
 	__buf[1] = __sv[1];
       }
 
@@ -1875,7 +1878,9 @@ namespace __format
       _S_str_d3(span<_CharT, 3> __buf, unsigned __n)
       {
 	_S_fill_two_digits(__buf.data(), __n / 10);
+	_GLIBCXX_CONVEYOR_TRUST(__buf);
 	__buf[2] = _S_chars[__n % 10];
+	_GLIBCXX_CONVEYOR_TRUST(__buf);
 	return __string_view(__buf.data(), 3);
       }
     };
@@ -2070,6 +2075,7 @@ namespace __format
 	  auto __nss = _S_subseconds(__ss);
 	  __cd._M_subseconds = chrono::duration_cast<_Attoseconds>(__nss);
 
+	  _GLIBCXX_CONVEYOR_TRUST(__nss);
 	  auto __ssreps = __nss.count();
 	  auto __args_store
 	    = std::make_format_args<_ErasedContext>(__ereps, __ssreps, __prec);

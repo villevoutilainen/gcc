@@ -310,7 +310,9 @@ namespace __detail
 	      __first += 4;
 	    }
 	}
-      for (; __first != __last; ++__first)
+      _GLIBCXX_CONVEYOR_TRUST(__last);
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	__init = __binary_op(__init, *__first);
       return __init;
     }
@@ -394,7 +396,10 @@ namespace __detail
 	      __first2 += 4;
 	    }
 	}
-      for (; __first1 != __last1; ++__first1, (void) ++__first2)
+      _GLIBCXX_CONVEYOR_TRUST(__last1);
+      _GLIBCXX_CONVEYOR_TRUST(__first2);
+      _GLIBCXX_CONVEYOR_TRUST(__first1);
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1; ++_GLIBCXX_CONVEYOR_TRUSTED (__first1), (void) ++_GLIBCXX_CONVEYOR_TRUSTED (__first2))
 	__init = __binary_op1(__init, __binary_op2(*__first1, *__first2));
       return __init;
     }
@@ -490,10 +495,12 @@ namespace __detail
 		   _OutputIterator __result, _Tp __init,
 		   _BinaryOperation __binary_op)
     {
-      while (__first != __last)
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      while (_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	{
 	  _Tp __v = std::move(__init);
 	  __init = __binary_op(__v, *__first);
+	  _GLIBCXX_CONVEYOR_TRUST(__first);
 	  ++__first;
 	  *__result++ = std::move(__v);
 	}
@@ -746,9 +753,11 @@ namespace ranges
       constexpr iota_result<_Out, _Tp>
       operator()(_Out __first, _Sent __last, _Tp __value) const
       {
-	while (__first != __last)
+	_GLIBCXX_CONVEYOR_TRUST(__first);
+	while (_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	  {
 	    *__first = static_cast<const _Tp&>(__value);
+	    _GLIBCXX_CONVEYOR_TRUST(__first);
 	    ++__first;
 	    ++__value;
 	  }

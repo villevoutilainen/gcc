@@ -1336,10 +1336,18 @@ inline namespace __v18_0_0
 	  else if constexpr (!is_same_v<_CharT, char>)
 	    {
 	      string_view __s(__enc);
+	      _GLIBCXX_CONVEYOR_TRUST(__s);
 	      if (__s.ends_with("//"))
-		__s.remove_suffix(2);
+		{
+		  _GLIBCXX_CONVEYOR_TRUST(__s);
+		  __s.remove_suffix(2);
+		}
+	      _GLIBCXX_CONVEYOR_TRUST(__s);
 	      if (__s.ends_with("LE") || __s.ends_with("BE"))
-		__s.remove_suffix(2);
+		{
+		  _GLIBCXX_CONVEYOR_TRUST(__s);
+		  __s.remove_suffix(2);
+		}
 	      return __s == "16" || __s == "32";
 	    }
 	}

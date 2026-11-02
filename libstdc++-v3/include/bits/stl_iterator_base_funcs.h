@@ -88,7 +88,8 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
       __glibcxx_function_requires(_InputIteratorConcept<_InputIterator>)
 
       typename iterator_traits<_InputIterator>::difference_type __n = 0;
-      while (__first != __last)
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      while (_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	{
 	  ++__first;
 	  ++__n;

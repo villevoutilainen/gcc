@@ -442,13 +442,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  }();
 	  typename container_type::iterator __it;
 	  int __r = -1, __s = -1;
+	  _GLIBCXX_CONVEYOR_TRUST(__hint);
 	  if (__hint.has_value()
 	      && (__hint == cbegin()
-		  || (__r = !_M_comp(__k, (*__hint)[-1]))) // k >= hint[-1]
+		  || (__r = !_M_comp(__k, (*_GLIBCXX_CONVEYOR_TRUSTED (__hint))[-1]))) // k >= hint[-1]
 	      && (__hint == cend()
-		  || (__s = !_M_comp((*__hint)[0], __k)))) // k <= hint[0]
+		  || (__s = !_M_comp((*_GLIBCXX_CONVEYOR_TRUSTED (__hint))[0], __k)))) // k <= hint[0]
 	    {
 	      _GLIBCXX_CONVEYOR_TRUST_THIS;
+	      _GLIBCXX_CONVEYOR_TRUST(__hint);
 	      const auto __off = *__hint - begin();
 	      // The calls above may have ended *this (the lifetime rule).
 	      _GLIBCXX_CONVEYOR_TRUST_THIS;
@@ -463,6 +465,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	      auto __first = _M_cont.begin();
 	      _GLIBCXX_CONVEYOR_TRUST_THIS;
 	      auto __last = _M_cont.end();
+	      _GLIBCXX_CONVEYOR_TRUST(__hint);
 	      if (__r == 1) // k >= hint[-1]
 		__first += *__hint - _M_cont.begin();
 	      else if (__r == 0) // k < __hint[-1]
@@ -483,6 +486,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    }
 
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(__it);
 	  if constexpr (!_Multi)
 	    if (__it != _M_cont.end() && !_M_comp(__k, __it[0]))
 	      return {__it, false};

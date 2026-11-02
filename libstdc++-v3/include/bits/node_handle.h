@@ -176,6 +176,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_AllocTraits::destroy(__alloc, _M_ptr->_M_valptr());
 	_AllocTraits::deallocate(__alloc, _M_ptr, 1);
 	_M_ptr = nullptr;
+	_GLIBCXX_CONVEYOR_TRUST(__alloc);
       }
 
       // Destroys the allocator. Does not deallocate or destroy the node.

@@ -858,7 +858,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       if (__first == __last)
 	return __last;
       _ForwardIterator __next = __first;
-      while (++__next != __last)
+      _GLIBCXX_CONVEYOR_TRUST(__next);
+      while (++_GLIBCXX_CONVEYOR_TRUSTED (__next) != __last)
 	{
 	  if (__binary_pred(*__first, *__next))
 	    return __first;
@@ -881,9 +882,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       // Do the real copy work.
       _ForwardIterator __dest = __first;
       ++__first;
-      while (++__first != __last)
+      _GLIBCXX_CONVEYOR_TRUST(__first);
+      _GLIBCXX_CONVEYOR_TRUST(__dest);
+      while (++_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	if (!__binary_pred(*__dest, *__first))
-	  *++__dest = _GLIBCXX_MOVE(*__first);
+	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__dest);
+	    *++__dest = _GLIBCXX_MOVE(*__first);
+	  }
+      _GLIBCXX_CONVEYOR_TRUST(__dest);
       return ++__dest;
     }
 
@@ -1308,7 +1315,9 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
 	      for (_Distance __i = 0; __i < __n - __k; ++ __i)
 		{
 		  std::iter_swap(__p, __q);
+		  _GLIBCXX_CONVEYOR_TRUST(__p);
 		  ++__p;
+		  _GLIBCXX_CONVEYOR_TRUST(__q);
 		  ++__q;
 		}
 	      __n = static_cast<_UDistance>(__n) % static_cast<_UDistance>(__k);
@@ -1642,7 +1651,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 		  _RandomAccessIterator __last, _Compare __comp)
     {
       std::__make_heap(__first, __middle, __comp);
-      for (_RandomAccessIterator __i = __middle; __i < __last; ++__i)
+      for (_RandomAccessIterator __i = __middle; _GLIBCXX_CONVEYOR_TRUSTED (__i) < __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__i))
 	if (__comp(*__i, *__first))
 	  std::__pop_heap(__first, __middle, __i, __comp);
     }
@@ -1827,7 +1836,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
       typedef iterator_traits<_RandomAccessIterator> _IterTraits;
       typedef typename _IterTraits::difference_type _Dist;
 
-      for (_RandomAccessIterator __i = __first + _Dist(1); __i != __last; ++__i)
+      for (_RandomAccessIterator __i = __first + _Dist(1); _GLIBCXX_CONVEYOR_TRUSTED (__i) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__i))
 	{
 	  if (__comp(*__i, *__first))
 	    {
@@ -1847,7 +1856,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
     __unguarded_insertion_sort(_RandomAccessIterator __first,
 			       _RandomAccessIterator __last, _Compare __comp)
     {
-      for (_RandomAccessIterator __i = __first; __i != __last; ++__i)
+      for (_RandomAccessIterator __i = __first; _GLIBCXX_CONVEYOR_TRUSTED (__i) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__i))
 	std::__unguarded_linear_insert(__i, __comp);
     }
 
@@ -1887,14 +1896,19 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
     {
       while (true)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__first);
 	  while (__comp(*__first, *__pivot))
-	    ++__first;
+	    {
+	      _GLIBCXX_CONVEYOR_TRUST(__first);
+	      ++__first;
+	    }
 	  --__last;
 	  while (__comp(*__pivot, *__last))
 	    --__last;
 	  if (!(__first < __last))
 	    return __first;
 	  std::iter_swap(__first, __last);
+	  _GLIBCXX_CONVEYOR_TRUST(__first);
 	  ++__first;
 	}
     }
@@ -2058,6 +2072,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 	  else
 	    {
 	      __first = __middle;
+	      _GLIBCXX_CONVEYOR_TRUST(__first);
 	      ++__first;
 	      __len = __len - __half - 1;
 	    }
@@ -2144,6 +2159,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 	  if (__comp(*__middle, __val))
 	    {
 	      __first = __middle;
+	      _GLIBCXX_CONVEYOR_TRUST(__first);
 	      ++__first;
 	      __len = __len - __half - 1;
 	    }
@@ -2154,6 +2170,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 	      _ForwardIterator __left
 		= std::__lower_bound(__first, __middle, __val, __comp);
 	      std::advance(__first, __len);
+	      _GLIBCXX_CONVEYOR_TRUST(__middle);
 	      _ForwardIterator __right
 		= std::__upper_bound(++__middle, __first, __val, __comp);
 	      return pair<_ForwardIterator, _ForwardIterator>(__left, __right);

@@ -688,7 +688,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _M_allocate_map(size_t __n)
       {
 	_Map_alloc_type __map_alloc = _M_get_map_allocator();
-	return _Map_alloc_traits::allocate(__map_alloc, __n);
+	_Map_pointer __p = _Map_alloc_traits::allocate(__map_alloc, __n);
+	_GLIBCXX_CONVEYOR_TRUST(__map_alloc);
+	return __p;
       }
 
       _GLIBCXX26_CONSTEXPR void
@@ -696,6 +698,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       {
 	_Map_alloc_type __map_alloc = _M_get_map_allocator();
 	_Map_alloc_traits::deallocate(__map_alloc, __p, __n);
+	_GLIBCXX_CONVEYOR_TRUST(__map_alloc);
       }
 
       _GLIBCXX26_CONSTEXPR void
@@ -1309,7 +1312,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	      auto __rest = ranges::copy_n(ranges::begin(__rg), size(),
 					   begin()).in;
 	      _GLIBCXX_CONVEYOR_TRUST(__rg);
-	      _M_range_append(std::move(__rest), ranges::end(__rg),
+	      _M_range_append(std::move(__rest), _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__rg),
 			      __n - size());
 	    }
 	  else
@@ -2214,14 +2217,23 @@ _GLIBCXX_CONVEYOR_TRUST(__x);
 	  const size_type __len = std::distance(__first, __last);
 	  if (__len > size())
 	    {
+	      _GLIBCXX_CONVEYOR_TRUST(__first);
 	      _ForwardIterator __mid = __first;
 	      std::advance(__mid, size());
+	      _GLIBCXX_CONVEYOR_TRUST(__mid);
+	      _GLIBCXX_CONVEYOR_TRUST(__first);
 	      std::copy(__first, __mid, begin());
+	      _GLIBCXX_CONVEYOR_TRUST(__mid);
+	      _GLIBCXX_CONVEYOR_TRUST(__last);
 	      _M_range_insert_aux(end(), __mid, __last,
 				  std::__iterator_category(__first));
 	    }
 	  else
-	    _M_erase_at_end(std::copy(__first, __last, begin()));
+	    {
+	      _GLIBCXX_CONVEYOR_TRUST(__first);
+	      _GLIBCXX_CONVEYOR_TRUST(__last);
+	      _M_erase_at_end(std::copy(__first, __last, begin()));
+	    }
 	}
 
       // Called by assign(n,t), and the range assign when it turns out

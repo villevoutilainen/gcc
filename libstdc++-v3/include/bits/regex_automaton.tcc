@@ -213,9 +213,12 @@ namespace __detail
       _GLIBCXX_STD_C::map<_StateIdT, _StateIdT> __m;
       std::stack<_StateIdT, _GLIBCXX_STD_C::deque<_StateIdT>> __stack;
       __stack.push(_M_start);
-      while (!__stack.empty())
+      _GLIBCXX_CONVEYOR_TRUST(__stack);
+      while (!_GLIBCXX_CONVEYOR_TRUSTED (__stack).empty())
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__stack);
 	  auto __u = __stack.top();
+	  _GLIBCXX_CONVEYOR_TRUST(__stack);
 	  __stack.pop();
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
@@ -233,6 +236,7 @@ namespace __detail
 	      && __m.count(__dup._M_next) == 0)
 	    __stack.push(__dup._M_next);
 	}
+      _GLIBCXX_CONVEYOR_TRUST(__m);
       for (auto __it : __m)
 	{
 	  auto __v = __it.second;

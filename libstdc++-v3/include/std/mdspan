@@ -137,7 +137,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  for (size_t __i = 0; __i < _S_rank; ++__i)
 	    {
 	      __ret[__i] = __dyn;
-	      __dyn += (_Extents[__i] == dynamic_extent);
+	      __dyn += (_GLIBCXX_CONVEYOR_TRUSTED (_Extents)[__i] == dynamic_extent);
 	    }
 	  __ret[_S_rank] = __dyn;
 	  return __ret;
@@ -155,7 +155,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  array<size_t, _S_rank_dynamic> __ret;
 	  for (size_t __i = 0, __r = 0; __i < _S_rank; ++__i)
-	    if (_Extents[__i] == dynamic_extent)
+	    if (_GLIBCXX_CONVEYOR_TRUSTED (_Extents)[__i] == dynamic_extent)
 	      __ret[__r++] = __i;
 	  return __ret;
 	}();
@@ -232,7 +232,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    if constexpr (_OtherRank == _S_rank)
 	      for (size_t __i = 0; __i < _S_rank; ++__i)
 		if (!_S_is_dynamic(__i)
-		    && !cmp_equal(_Extents[__i], _S_int_cast(__get_extent(__i))))
+		    && !cmp_equal(_GLIBCXX_CONVEYOR_TRUSTED (_Extents)[__i], _S_int_cast(__get_extent(__i))))
 		  return false;
 	    return true;
 	  }
@@ -556,8 +556,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr bool
       __contains_zero(span<_Tp, _Nm> __exts) noexcept
       {
-	for (size_t __i = 0; __i < __exts.size(); ++__i)
-	  if (__exts[__i] == 0)
+	_GLIBCXX_CONVEYOR_TRUST(__exts);
+	for (size_t __i = 0; __i < _GLIBCXX_CONVEYOR_TRUSTED (__exts).size(); ++__i)
+	  if (_GLIBCXX_CONVEYOR_TRUSTED (__exts)[__i] == 0)
 	    return true;
 	return false;
       }
@@ -945,8 +946,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  convertible_to<_Slices, _IndexType>...};
 
 	size_t __i = 0;
+	_GLIBCXX_CONVEYOR_TRUST(__is_int_like);
 	for (size_t __k = 0; __k < __rank; ++__k)
-	  if (!__is_int_like[__k])
+	  if (!_GLIBCXX_CONVEYOR_TRUSTED (__is_int_like)[__k])
 	    __map[__i++] = __k;
 	return __map;
       }
@@ -1260,10 +1262,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	return false;
 
       for (size_t __i = 0; __i < __block_size - 1; ++__i)
-	if (__slice_kinds[__i] != _SliceKind::__full)
+	if (_GLIBCXX_CONVEYOR_TRUSTED (__slice_kinds)[__i] != _SliceKind::__full)
 	  return false;
 
-      auto __last = __slice_kinds[__block_size - 1];
+      auto __last = _GLIBCXX_CONVEYOR_TRUSTED (__slice_kinds)[__block_size - 1];
       return __last == _SliceKind::__full
 	  || __last == _SliceKind::__unit_stride_slice;
     }
@@ -1274,18 +1276,21 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     __padded_block_begin_generic(span<const _SliceKind> __slice_kinds,
 				 size_t __sub_rank)
     {
+      _GLIBCXX_CONVEYOR_TRUST(__slice_kinds);
       if (__slice_kinds[0] != _SliceKind::__full
-	  && __slice_kinds[0] != _SliceKind::__unit_stride_slice)
+	  && _GLIBCXX_CONVEYOR_TRUSTED (__slice_kinds)[0] != _SliceKind::__unit_stride_slice)
 	return dynamic_extent;
-      else if (__slice_kinds.size() == 1)
+      else if (_GLIBCXX_CONVEYOR_TRUSTED (__slice_kinds).size() == 1)
 	return dynamic_extent;
       else
 	{
 	  size_t __u = 1;
-	  while(__u < __slice_kinds.size()
-		&& __slice_kinds[__u] == _SliceKind::__collapsing)
+	  _GLIBCXX_CONVEYOR_TRUST(__slice_kinds);
+	  while(__u < _GLIBCXX_CONVEYOR_TRUSTED (__slice_kinds).size()
+		&& _GLIBCXX_CONVEYOR_TRUSTED (__slice_kinds)[__u] == _SliceKind::__collapsing)
 	    ++__u;
 
+	  _GLIBCXX_CONVEYOR_TRUST(__slice_kinds);
 	  if (__mdspan::__is_block(__slice_kinds.subspan(__u), __sub_rank -1))
 	    return __u;
 	  return dynamic_extent;
@@ -1399,8 +1404,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 				   size_t __sub_rank)
 	  {
 	    auto __rev_slice_kinds = array<_SliceKind, _Nm>{};
+	    _GLIBCXX_CONVEYOR_TRUST(__slice_kinds);
 	    for(size_t __i = 0; __i < _Nm; ++__i)
-	      __rev_slice_kinds[__i] = __slice_kinds[_Nm - 1 - __i];
+	      {
+		_GLIBCXX_CONVEYOR_TRUST(__slice_kinds);
+		__rev_slice_kinds[__i] = __slice_kinds[_Nm - 1 - __i];
+	      }
 	    return __mdspan::__is_block(span(__rev_slice_kinds), __sub_rank);
 	  }
       };
@@ -1908,9 +1917,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		span<_OIndexType, extents_type::rank()> __strides) noexcept
 	: _M_extents(__exts)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__strides);
 	  for (size_t __i = 0; __i < extents_type::rank(); ++__i)
 	    _M_strides[__i] =
-	      __mdspan::__index_type_cast<index_type>(as_const(__strides[__i]));
+	      __mdspan::__index_type_cast<index_type>(as_const(_GLIBCXX_CONVEYOR_TRUSTED (__strides)[__i]));
 
 	  if constexpr (extents_type::rank() > 0)
 	    __glibcxx_assert_noconveyor(_M_check_unique());
