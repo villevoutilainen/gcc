@@ -128,6 +128,9 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
 	// This is intentionally disabled for backreferences.  Pruning the
 	// search space for DFS reduces the number of frames we build and the
 	// time to find an actual match.
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	_GLIBCXX_CONVEYOR_TRUST(_M_current);
+	_GLIBCXX_CONVEYOR_TRUST(_M_end);
 	if (_M_search_mode == _Search_mode::_Dfs
 	    && !_M_nfa._M_has_backref
 	    && _M_current != _M_end

@@ -65,6 +65,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     { return __x; }
 
 #if __cplusplus >= 201103L
+  // The same for an xvalue, such as an iterator's rvalue-reference result.
+  template<typename _Tp>
+    __attribute__((__always_inline__))
+    inline constexpr _Tp&&
+    __trust_object(_Tp&& __x) noexcept _GLIBCXX_CONVEYOR_AUTO
+    _GLIBCXX_CONVEYOR_TRUST_PRE(__x) _GLIBCXX_CONVEYOR_RETURNS_OBJECT
+    { return static_cast<_Tp&&>(__x); }
 
   /**
    *  @addtogroup utilities

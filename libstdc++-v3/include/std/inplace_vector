@@ -950,10 +950,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	constexpr static size_t
 	_S_distance_if_fits(size_t __size, _Rg& __rg)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__rg);
 	  if constexpr (ranges::sized_range<_Rg>)
-	    return _S_check_size(ranges::size(__rg), __size);
+	    return _S_check_size(_GLIBCXX_CONVEYOR_TRUSTED (ranges::size)(__rg), __size);
 	  else
-	    return _S_check_distance(ranges::begin(__rg), ranges::end(__rg),
+	    return _S_check_distance(_GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__rg),
+				     _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(_GLIBCXX_CONVEYOR_TRUSTED (__rg)),
 				     __size);
 	}
     };

@@ -202,6 +202,8 @@ namespace __detail
       // "no match", so stay conservative and run the real executor.  This is
       // important for patterns such as "(a*)*" where epsilon paths can cycle
       // before a consuming state is reached.
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
       if (__depth > _M_nfa.size())
 	return true;
 
@@ -420,14 +422,19 @@ namespace __detail
       if (__next == _S_invalid_state_id)
 	return _S_invalid_state_id;
 
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
+      _GLIBCXX_CONVEYOR_TRUST(_M_nfa);
       const auto& __state = _M_nfa[__next];
       if (__state._M_opcode() != _S_opcode_match
 	  || __state._M_next != __repeat)
 	return __next;
 
+      _GLIBCXX_CONVEYOR_TRUST(_M_current);
+      _GLIBCXX_CONVEYOR_TRUST(_M_end);
       if (_M_current == _M_end || !__state._M_matches(*_M_current))
 	return _S_invalid_state_id;
 
+      _GLIBCXX_CONVEYOR_TRUST(_M_current);
       ++_M_current;
       return __repeat;
     }

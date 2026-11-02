@@ -5,6 +5,7 @@
 #include <list>
 #include <forward_list>
 #include <map>
+#include <span>
 #include <string>
 #include <sstream>
 #include <algorithm>
@@ -123,6 +124,12 @@ namespace census
     std::vector<std::vector<int>> nested = { { 1 }, { 2, 3 } };
     n += consume (nested | v::join);
     n += consume (nested | v::join_with (0));
+    // A forward join over xvalues of borrowed ranges, and its segmented
+    // for_each.
+    std::vector<std::span<int>> spans = { std::span<int> (a) };
+    auto rj = spans | v::as_rvalue | v::join;
+    n += consume (rj);
+    std::ranges::for_each (rj, [&] (int x) { n += x; });
     std::string s = "a,b,c";
     n += consume (s | v::split (','));
     n += consume (s | v::lazy_split (','));

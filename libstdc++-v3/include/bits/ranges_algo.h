@@ -238,7 +238,8 @@ namespace ranges
 	}
       else
 	{
-	  for (; __first != __last; ++__first)
+	  _GLIBCXX_CONVEYOR_TRUST(__first);
+	  for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	    std::__invoke(__f, std::__invoke(__proj, *__first));
 	  return __first;
 	}

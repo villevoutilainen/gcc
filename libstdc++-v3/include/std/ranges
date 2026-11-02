@@ -3348,7 +3348,8 @@ namespace views::__adaptor
 	    _GLIBCXX_CONVEYOR_TRUST(__x);
 	    _GLIBCXX_CONVEYOR_TRUST(__y);
 	    return (__x._M_outer == __y._M_outer
-		    && __x._M_inner == __y._M_inner);
+		    && _GLIBCXX_CONVEYOR_TRUSTED (__x)._M_inner
+			 == _GLIBCXX_CONVEYOR_TRUSTED (__y)._M_inner);
 	  }
 
 	  friend constexpr decltype(auto)
@@ -3384,15 +3385,15 @@ namespace views::__adaptor
 		}
 	      else
 		{
-		  auto __end = ranges::end(*__first_outer);
+		  auto __end = _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(_GLIBCXX_CONVEYOR_TRUSTED (*__first_outer));
 		  auto __ret = __func(__first_inner, __end);
 		  if (__ret != __end)
 		    return _Iterator(__first._M_parent, __first_outer, __ret);
 
-		  while (++__first_outer != __last_outer)
+		  while (++_GLIBCXX_CONVEYOR_TRUSTED (__first_outer) != __last_outer)
 		    {
-		      __end = ranges::end(*__first_outer);
-		      __ret = __func(ranges::begin(*__first_outer), __end);
+		      __end = _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(_GLIBCXX_CONVEYOR_TRUSTED (*__first_outer));
+		      __ret = __func(_GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(_GLIBCXX_CONVEYOR_TRUSTED (*__first_outer)), __end);
 		      if (__ret != __end)
 			return _Iterator(__first._M_parent, __first_outer, __ret);
 		    }
@@ -3400,7 +3401,7 @@ namespace views::__adaptor
 		  if (__last != __last._M_parent->end())
 		    {
 		      __end = __last_inner;
-		      __ret = __func(ranges::begin(*__last_outer), __end);
+		      __ret = __func(_GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(_GLIBCXX_CONVEYOR_TRUSTED (*__last_outer)), __end);
 		      if (__ret != __end)
 			return _Iterator(__first._M_parent, __first_outer, __ret);
 		    }
