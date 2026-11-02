@@ -34,5 +34,5 @@ int borrowed (const C &c)
 int owned ()
 {
   C c;
-  return c.yes (1) + c.no (1) + c.eyes () + c.eno () + ref_yes (c) + ref_no (c);
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (c))); int __r = c.yes (1); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (c))); __r += c.no (1); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (c))); __r += c.eyes (); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (c))); __r += c.eno (); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (c))); __r += ref_yes (c); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (c))); __r += ref_no (c); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (c))); return __r;
 }

@@ -35,4 +35,4 @@ namespace n
   int h () { pre<int> p{2}; return p.*f6 () + p.*f7 (); }
 }
 
-int g () { S s{1}; return f1 (s) + f2 (s) + f3 (s) + s.*f4 () + s.*f5 (); }
+int g () { S s{1}; int r = f1 (s); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (s))); r += f2 (s); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (s))); r += f3 (s); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (s))); r += s.*f4 (); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (s))); return r + s.*f5 (); }

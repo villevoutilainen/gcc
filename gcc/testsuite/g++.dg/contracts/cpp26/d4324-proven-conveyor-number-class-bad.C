@@ -54,6 +54,6 @@ main ()
 {
   Number n (50.0);
   n.increase_by (100.0);
-  n.decrease_by (150.0); // { dg-error "provably violates the precondition" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (n))); n.decrease_by (150.0); // { dg-error "provably violates the precondition" }
   return 0;
 }

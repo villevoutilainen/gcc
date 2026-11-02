@@ -16,4 +16,4 @@ S2<A> g2 (const A& a) { return S2<A> (a); }	// { dg-error "cannot prove .is_obje
 void h2 (const A& a) { S2<A> s (a); }		// { dg-error "cannot prove .is_object_address." }
 template <class T> S3<T> f3 (const T& a) { return S3<T> (a); }	// { dg-error "cannot prove .is_object_address." }
 int k2 (const A& a) { M2<A> m; return m.m (a); }	// { dg-error "cannot prove .is_object_address." }
-void ok () { A a; S2<A> s (a); S3<A> t (a); f3 (a); M2<A> m; m.m (a); }
+void ok () { A a; S2<A> s (a); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (a))); S3<A> t (a); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (a))); f3 (a); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (a))); M2<A> m; m.m (a); }

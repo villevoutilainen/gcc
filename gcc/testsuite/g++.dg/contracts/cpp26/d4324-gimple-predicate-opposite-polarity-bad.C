@@ -35,7 +35,7 @@ void contradiction_caller ()
 {
   io_facility f;
   f.open ();
-  f.reopen (); // { dg-error "provably violates the precondition of .*is established true, but the precondition requires it to be false" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (f))); f.reopen (); // { dg-error "provably violates the precondition of .*is established true, but the precondition requires it to be false" }
 }
 
 int main () { return 0; }

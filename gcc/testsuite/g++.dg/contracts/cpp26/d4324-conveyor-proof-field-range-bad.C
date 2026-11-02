@@ -38,7 +38,7 @@ void caller ()
 {
   thing t;
   t.produce_count_bad ();
-  t.consume_count (); // { dg-error "provably violates the precondition" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (t))); t.consume_count (); // { dg-error "provably violates the precondition" }
                       // { dg-message "is established \[^\n\]*, but the precondition requires" "established fact" { target *-*-* } .-1 }
 }
 

@@ -26,6 +26,6 @@ int main ()
 {
   thing t;
   t.set_value ();
-  t.bump_bad (1000.0); // { dg-error "provably violates the precondition" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (t))); t.bump_bad (1000.0); // { dg-error "provably violates the precondition" }
   return 0;
 }

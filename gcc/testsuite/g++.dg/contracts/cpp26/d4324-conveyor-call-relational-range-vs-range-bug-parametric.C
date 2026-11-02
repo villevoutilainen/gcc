@@ -75,5 +75,5 @@ int use_unsound (test_vector& v)
 int main ()
 {
   test_vector v;
-  return use_sound (v) + use_unsound (v);
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); int __r = use_sound (v); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += use_unsound (v); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); return __r;
 }

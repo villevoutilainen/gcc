@@ -56,7 +56,7 @@ void caller ()
 {
   io_facility f;
   f.open_symbolic ();
-  f.read_conveyor (); // { dg-warning "cannot verify" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (f))); f.read_conveyor (); // { dg-warning "cannot verify" }
                       // { dg-message "weaker .non-conveyor. trust" "unprovable reason" { target *-*-* } .-1 }
 }
 

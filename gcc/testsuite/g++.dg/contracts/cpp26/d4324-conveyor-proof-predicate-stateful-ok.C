@@ -34,6 +34,6 @@ int main ()
 {
   io_facility f;
   f.open ();
-  f.read ();
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (f))); f.read ();
   return 0;
 }

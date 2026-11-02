@@ -25,6 +25,6 @@ int main ()
 {
   int i = 0;
   S s{0};
-  assign_ref (i); assign_value (1); increment (i); decrement (i);
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (i))); assign_ref (i); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (i))); assign_value (1); increment (i); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (i))); decrement (i);
   field (s); own_local (1); not_conveyor (i);
 }

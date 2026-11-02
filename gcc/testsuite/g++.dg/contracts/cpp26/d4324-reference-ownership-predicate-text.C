@@ -121,6 +121,6 @@ main ()
 {
   T t{1};
   accept_const_in_precondition (t); // { dg-warning "cannot verify that" }
-  accept_ptr_in_body_and_in_precondition (&t); // { dg-warning "cannot verify" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (t))); accept_ptr_in_body_and_in_precondition (&t); // { dg-warning "cannot verify" }
   return 0;
 }

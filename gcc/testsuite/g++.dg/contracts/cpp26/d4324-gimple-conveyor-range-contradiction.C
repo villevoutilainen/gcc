@@ -32,6 +32,6 @@ void calls ()
   middling (forty_to_ninety ()); // { dg-warning "cannot verify" }
   thing t;
   t.produce ();
-  t.consume (); // { dg-error "provably violates the precondition" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (t))); t.consume (); // { dg-error "provably violates the precondition" }
   // { dg-message "is established \[^\n\]*, but the precondition requires" "" { target *-*-* } .-1 }
 }

@@ -45,6 +45,6 @@ int main ()
 {
   thing t;
   t.produce ();
-  g (&t);
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (t))); g (&t);
   return 0;
 }

@@ -53,6 +53,6 @@ int main ()
   thing t;
   thing_ref ref{&t};
   produce_count (ref);
-  consume_count (ref);
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (ref))); consume_count (ref);
   return 0;
 }

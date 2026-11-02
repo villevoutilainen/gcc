@@ -43,7 +43,7 @@ void caller ()
 {
   io_facility f;
   f.open_symbolic ();
-  f.read_conveyor (); // { dg-warning "cannot verify that .*is_opened.*holds" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (f))); f.read_conveyor (); // { dg-warning "cannot verify that .*is_opened.*holds" }
 }
 
 int main () { caller (); return 0; }

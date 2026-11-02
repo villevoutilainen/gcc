@@ -9335,6 +9335,8 @@ public:
     m_map.put (capture_key (decl), provable);
     if (provable && m_ended_member_map.elements ())
       member_restore (capture_key (decl));
+    if (provable && m_ended_decl_map.elements ())
+      m_ended_decl_map.remove (capture_key (decl));
   }
   void invalidate (tree decl) { m_map.put (capture_key (decl), false); }
   /* Whether DECL has a fact at all, provable or not.  */
@@ -9824,6 +9826,7 @@ public:
     for (auto it : m_borrowed_map)
       n -= it.second;
     n -= m_ended_member_map.elements ();
+    n -= m_ended_decl_map.elements ();
     return n;
   }
   void invalidate_all_object_state ()
@@ -11214,6 +11217,7 @@ public:
     r.m_capture_proxy_key = m_capture_proxy_key;
     r.m_borrowed_map = m_borrowed_map;
     r.m_ended_member_map = m_ended_member_map;
+    r.m_ended_decl_map = m_ended_decl_map;
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -11252,6 +11256,7 @@ public:
     m_capture_proxy_key = other.m_capture_proxy_key;
     m_borrowed_map = other.m_borrowed_map;
     m_ended_member_map = other.m_ended_member_map;
+    m_ended_decl_map = other.m_ended_decl_map;
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -11469,6 +11474,11 @@ private:
      key, true; or on an object any one of whose members it may have,
      false.  So '&o.in' isn't an object just because O is.  */
   oa_cow_map<tree, bool> m_ended_member_map;
+  /* The variables, of any storage duration, a call given a route to
+     them may have ended (their address, a pointer or reference to them,
+     a member call on them), until a trust or a constructor run on them:
+     their own address isn't an object's any more.  */
+  oa_cow_map<tree, bool> m_ended_decl_map;
   /* What is known of KEY and its members holds again: a fact on it was
      established (a trust).  */
   void member_restore (tree key, int depth = 0)
@@ -11484,6 +11494,17 @@ private:
       member_restore (k, depth + 1);
   }
 public:
+  void decl_object_end (tree decl) { m_ended_decl_map.put (decl, true); }
+  void decl_object_restore (tree decl)
+  {
+    if (m_ended_decl_map.elements ())
+      m_ended_decl_map.remove (decl);
+  }
+  bool decl_object_ended_p (tree decl)
+  {
+    return (m_ended_decl_map.elements ()
+	    && m_ended_decl_map.get (decl) != NULL);
+  }
   void member_trusted (tree key)
   {
     if (m_ended_member_map.elements ())
@@ -11532,10 +11553,13 @@ public:
      union only ever combines two branches' *current* states at a join.  */
   void borrowed_merge_with (oa_env &other)
   {
-    /* A member ended on either branch, likewise.  */
+    /* A member ended on either branch, likewise, and a variable.  */
     if (!m_ended_member_map.same_p (other.m_ended_member_map))
       for (auto it : other.m_ended_member_map)
 	member_end (it.first, it.second);
+    if (!m_ended_decl_map.same_p (other.m_ended_decl_map))
+      for (auto it : other.m_ended_decl_map)
+	m_ended_decl_map.put (it.first, true);
     if (m_borrowed_map.same_p (other.m_borrowed_map))
       return;
     for (auto it : other.m_borrowed_map)
@@ -12998,8 +13022,18 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
 	 too would be redundant, not additive.  */
       op = oa_strip_conversion_operator_call (op);
       STRIP_ANY_LOCATION_WRAPPER (op);
+      /* A variable's own storage -- unless a call given a route to it
+	 may have ended its object (oa_env::decl_object_ended_p).  */
       if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
-	return true;
+	{
+	  if (env.decl_object_ended_p (op))
+	    {
+	      if (reason_out)
+		*reason_out = OA_UNPROVABLE_NO_FACT;
+	      return false;
+	    }
+	  return true;
+	}
       /* A string literal ('opt == "x"' binding a 'const char (&)[2]'):
 	 an lvalue of static storage duration, so always an object, as
 	 the GIMPLE engine's cg_provable_object_address_p has it.  */
@@ -24430,6 +24464,42 @@ oa_invalidate_parameter_alias_group (tree identity, oa_env &env,
    the predicate fact just above.  Uses oa_invalidation_identity_decl,
    not oa_object_identity_decl -- see that function's own comment.  */
 
+/* Whether D is a variable the language owns and user code can't name: a
+   range-based for's own (the range, its begin and end iterators), or a
+   structured binding declaration's hidden one its bindings are got from.
+   They are trusted again at each use -- no call ends them (the lifetime
+   rule), since nowhere could a trust be written for them.  */
+
+bool
+contract_hidden_var_p (tree d)
+{
+  if (!d || !VAR_P (d))
+    return false;
+  if (DECL_DECOMPOSITION_P (d) && DECL_DECOMP_IS_BASE (d))
+    return true;
+  if (!DECL_ARTIFICIAL (d) || !DECL_NAME (d))
+    return false;
+  tree n = DECL_NAME (d);
+  return (n == for_range__identifier || n == for_begin__identifier
+	  || n == for_end__identifier || n == for_range_identifier
+	  || n == for_begin_identifier || n == for_end_identifier);
+}
+
+/* Whether D is an object of static or thread storage duration that user
+   code may reach by name, so that any call that isn't conveyor may end
+   it, given a route to it or not (the lifetime rule): a variable, a
+   template parameter object; not a reference, nor what the
+   implementation makes for itself (a vtable, a guard variable).  */
+
+bool
+contract_static_object_p (tree d)
+{
+  return (VAR_P (d) && is_global_var (d)
+	  && !TYPE_REF_P (TREE_TYPE (d))
+	  && !DECL_VIRTUAL_P (d)
+	  && (!DECL_ARTIFICIAL (d) || DECL_NTTP_OBJECT_P (d)));
+}
+
 /* Whether a callee given a route to COMP -- a member or element lvalue,
    a COMPONENT_REF or ARRAY_REF -- may legally reach the object COMP lies
    in, and so end that too: an element reaches its whole array (pointer
@@ -24584,11 +24654,89 @@ oa_call_arg_further_routes (tree arg, vec<tree> &routes,
     }
 }
 
+/* The variable whose own storage INIT, a pointer temporary's
+   initializer, is the address of -- '&t', converted, or through another
+   such temporary -- or NULL_TREE.  */
+
+static tree
+oa_temporary_pointee_decl (tree init, oa_env &env)
+{
+  for (int i = 0; init && i < 8; ++i)
+    {
+      init = STRIP_ANY_LOCATION_WRAPPER (init);
+      if (CONVERT_EXPR_P (init) || TREE_CODE (init) == NON_LVALUE_EXPR)
+	init = TREE_OPERAND (init, 0);
+      else if (TREE_CODE (init) == TARGET_EXPR)
+	init = TARGET_EXPR_INITIAL (init);
+      else if (TREE_CODE (init) == ADDR_EXPR)
+	{
+	  tree d = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (init, 0));
+	  return ((VAR_P (d) || TREE_CODE (d) == PARM_DECL) ? d : NULL_TREE);
+	}
+      else if (VAR_P (init) && POINTER_TYPE_P (TREE_TYPE (init)))
+	{
+	  tree d = env.alias_find (init);
+	  return (d != init && !INDIRECT_TYPE_P (TREE_TYPE (d)) ? d : NULL_TREE);
+	}
+      else
+	return NULL_TREE;
+    }
+  return NULL_TREE;
+}
+
+/* The objects of static storage duration the current function's body
+   names (contract_static_object_p), each once: what any call that isn't
+   conveyor may end.  Computed once per function.  */
+
+static GTY(()) tree oa_statics_fn;
+static GTY(()) vec<tree, va_gc> *oa_statics;
+
+static vec<tree, va_gc> *
+oa_function_statics ()
+{
+  tree fn = current_function_decl;
+  if (oa_statics_fn == fn && fn)
+    return oa_statics;
+  oa_statics_fn = fn;
+  vec_safe_truncate (oa_statics, 0);
+  if (!fn || !DECL_SAVED_TREE (fn))
+    return oa_statics;
+  hash_set<tree> seen;
+  struct data { hash_set<tree> *seen; };
+  data d = { &seen };
+  cp_walk_tree_without_duplicates
+    (&DECL_SAVED_TREE (fn),
+     [] (tree *tp, int *, void *dp) -> tree
+       {
+	 data *d = (data *) dp;
+	 if (contract_static_object_p (*tp) && !d->seen->add (*tp))
+	   vec_safe_push (oa_statics, *tp);
+	 return NULL_TREE;
+       },
+     &d);
+  return oa_statics;
+}
+
 static void
 oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 {
   if (oa_call_is_conversion_operator_call (call))
     return;
+  /* Placement new only returns the address it is given, at which an
+     object is constructed: a variable there is an object again.  */
+  if (tree fn = cp_get_callee_fndecl_nofold (call))
+    if (TREE_CODE (fn) == FUNCTION_DECL && std_placement_new_fn_p (fn))
+      {
+	if (TREE_CODE (call) == CALL_EXPR && call_expr_nargs (call) >= 2)
+	  {
+	    tree a = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (call, 1));
+	    while (CONVERT_EXPR_P (a) || TREE_CODE (a) == NON_LVALUE_EXPR)
+	      a = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
+	    if (tree d = oa_temporary_pointee_decl (a, env))
+	      env.decl_object_restore (d);
+	  }
+	return;
+      }
   /* D4324: CALL can also be an AGGR_INIT_EXPR (see oa_substitute_call_
      arg's own comment) -- start at 1, explicitly skipping index 0 (the
      receiver's own meaningless placeholder slot) rather than relying on
@@ -24709,6 +24857,9 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 	      || oa_array_slot_identity (call_arg, env, &identity)
 	      || oa_field_object_identity (call_arg, env, &identity))
 	    {
+	      /* A copy ('p' for 'p = q' or 'p = &t') holds its own fact too,
+		 besides the object it aliases.  */
+	      tree copy = identity;
 	      identity = env.alias_find (identity);
 	      env.predicate_fact_invalidate (identity);
 	      env.contract_field_range_invalidate_all (identity);
@@ -24747,8 +24898,10 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 		 was accepted.  A call given no route to the object ('other
 		 ()') keeps it.  */
 	      bool end_object_addresses
-		= !callee_is_conveyor && !(cdtor_receiver
-					   && DECL_CONSTRUCTOR_P (named));
+		= (!callee_is_conveyor
+		   && !(cdtor_receiver && DECL_CONSTRUCTOR_P (named))
+		   && !contract_hidden_var_p (identity)
+		   && !contract_hidden_var_p (copy));
 	      /* What was known of its fields ends with it; and any callee that
 		 may write them can store a different pointer there.  */
 	      bool end_field_object_addresses = (end_object_addresses
@@ -24757,7 +24910,22 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 		{
 		  env.invalidate (identity);
 		  env.range_invalidate (identity);
+		  if (copy != identity)
+		    {
+		      env.invalidate (copy);
+		      env.range_invalidate (copy);
+		    }
+		  /* A variable's object itself, not a pointer's value, of
+		     any storage duration: its own address isn't an
+		     object's any more either.  */
+		  if ((TREE_CODE (identity) == PARM_DECL || VAR_P (identity))
+		      && !INDIRECT_TYPE_P (TREE_TYPE (identity)))
+		    env.decl_object_end (identity);
 		}
+	      /* A constructor run on a variable begins its object again.  */
+	      else if (cdtor_receiver && DECL_CONSTRUCTOR_P (named)
+		       && (VAR_P (identity) || TREE_CODE (identity) == PARM_DECL))
+		env.decl_object_restore (identity);
 	      if (end_field_object_addresses)
 		env.field_object_address_invalidate_all (identity);
 	      oa_invalidate_parameter_alias_group (identity, env,
@@ -24832,6 +25000,21 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
      conveyor, though given no route to it here.  */
   if (!callee_is_conveyor)
     env.escaped_local_pointers_invalidate ();
+
+  /* An object of static storage duration any function may reach by
+     name: a call that isn't conveyor may end it though given no route
+     to it -- not a builtin, nor an identity cast such as std::move.  As
+     the GIMPLE engine's cg_end_object_addresses_for_call.  */
+  if (!callee_is_conveyor
+      && !(named && TREE_CODE (named) == FUNCTION_DECL
+	   && (fndecl_built_in_p (named)
+	       || (decl_in_std_namespace_p (named) && DECL_NAME (named)
+		   && (id_equal (DECL_NAME (named), "move")
+		       || id_equal (DECL_NAME (named), "forward")
+		       || id_equal (DECL_NAME (named), "as_const"))))))
+    if (vec<tree, va_gc> *statics = oa_function_statics ())
+      for (tree g : *statics)
+	env.decl_object_end (g);
 }
 
 /* -fcontract-symbolic-proofs: static-prover analogue of Mechanism B's
@@ -27109,6 +27292,24 @@ oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
 	      || TREE_CODE (t) == TRUTH_ANDIF_EXPR
 	      || TREE_CODE (t) == TRUTH_ORIF_EXPR))
 	{
+	  /* A constant condition ('true ? a : b', as in libstdc++'s
+	     testsuite VERIFY): only the arm it selects is ever evaluated,
+	     as the GIMPLE engine sees once it is folded away.  */
+	  tree cst = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
+	  STRIP_NOPS (cst);
+	  if (TREE_CODE (cst) == INTEGER_CST)
+	    {
+	      bool taken = !integer_zerop (cst);
+	      tree *arm = NULL;
+	      if (TREE_CODE (t) == COND_EXPR)
+		arm = &TREE_OPERAND (t, taken ? 1 : 2);
+	      else if ((TREE_CODE (t) == TRUTH_ANDIF_EXPR) == taken)
+		arm = &TREE_OPERAND (t, 1);
+	      if (arm && *arm)
+		cp_walk_tree (arm, oa_scan_calls_visitor, d, NULL);
+	      *walk_subtrees = 0;
+	      return NULL_TREE;
+	    }
 	  oa_env then_env, else_env;
 	  oa_process_condition (TREE_OPERAND (t, 0), *e, &then_env, &else_env,
 				OA_COND_SCAN_CALLS);
@@ -29590,6 +29791,11 @@ oa_process_condition (tree cond, oa_env &env,
   tree cond_copy = cond;
   auto_vec<tree *> conjuncts;
   oa_collect_conjuncts (&cond_copy, &conjuncts);
+  /* Where the condition is false: after the conjunct that is false was
+     evaluated, the ones before it true -- each such state merged.  The
+     calls the condition makes happen on that path too: a call in it
+     that ends an object ends it there (the lifetime rule).  */
+  oa_env else_env = env.copy ();
   for (unsigned i = 0; i < conjuncts.length (); ++i)
     {
       if (scans == OA_COND_SCAN_ITEM8)
@@ -29609,6 +29815,13 @@ oa_process_condition (tree cond, oa_env &env,
 	  oa_scan_stray_symbolic_call (conjuncts[i]);
 	}
       oa_track_condition_assignment (*conjuncts[i], cond_env);
+      if (i == 0)
+	else_env.assign (cond_env);
+      else
+	{
+	  oa_env false_here = cond_env.copy ();
+	  oa_merge_branch_envs (else_env, false_here, cond);
+	}
       /* A bare 'E != 0'/'0 != E' conjunct seeds the nz-fact map
 	 directly, exactly as a precondition/contract_assert conjunct
 	 already does (oa_handle_precondition_stmt/oa_handle_assertion_
@@ -29655,7 +29868,7 @@ oa_process_condition (tree cond, oa_env &env,
     }
 
   then_env_out->assign (cond_env);
-  else_env_out->assign (env);
+  else_env_out->assign (else_env);
   if (conjuncts.length () == 1)
     {
       auto_vec<tree *> disjuncts;
@@ -30978,6 +31191,13 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	 throws: when nothing in it can, it never runs, as the GIMPLE
 	 engine sees from the missing EH edge.  */
       oa_walk_stmt (&CLEANUP_BODY (t), env);
+      /* Nor is the named return value's (finalize_nrv, after this
+	 analysis): it is the object the function returns, so its
+	 destructor runs only on an exception path, as the GIMPLE engine
+	 sees.  */
+      if (CLEANUP_DECL (t) && cfun && cfun->language
+	  && CLEANUP_DECL (t) == current_function_return_value)
+	return;
       if (!CLEANUP_EH_ONLY (t) || !expr_noexcept_p (CLEANUP_BODY (t), tf_none))
 	oa_walk_stmt (&CLEANUP_EXPR (t), env);
       return;
@@ -31107,6 +31327,11 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
     case DECL_EXPR:
       {
 	tree decl = DECL_EXPR_DECL (t);
+	/* A declaration begins its automatic variable's object, again in a
+	   loop; a static one's is begun once, so a call that ended it on
+	   an earlier pass ended it for good.  */
+	if (VAR_P (decl) && !is_global_var (decl))
+	  env.decl_object_restore (decl);
 	/* A declaration's own initializer ('int c = 10 / q;') is a
 	   distinct shape from an ordinary assignment statement ('int c;
 	   c = 10 / q;', reaching the INIT_EXPR/MODIFY_EXPR case below) --
@@ -31521,6 +31746,10 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	      env.set (slot, oa_provable_p (init, env));
 	    else
 	      env.invalidate (slot);
+	    /* The variable it points to, for placement new
+	       ('new (&t) T' passes '&t' through such temporaries).  */
+	    if (tree pointee = oa_temporary_pointee_decl (init, env))
+	      env.alias_set (slot, pointee);
 	  }
       }
       return;
@@ -32347,6 +32576,17 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	   why this matters (a later conjunct's scan now sees facts
 	   established by earlier conjuncts within the same condition).
 	   Identical treatment for both shapes (COND_EXPR/IF_STMT).  */
+	/* A constant condition selects one arm; the other is never
+	   evaluated (oa_scan_calls_visitor).  */
+	tree cst = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
+	STRIP_NOPS (cst);
+	if (TREE_CODE (cst) == INTEGER_CST)
+	  {
+	    tree *arm = &TREE_OPERAND (t, integer_zerop (cst) ? 2 : 1);
+	    if (*arm)
+	      oa_walk_stmt (arm, env);
+	    return;
+	  }
 	oa_env then_env, else_env;
 	oa_process_condition (TREE_OPERAND (t, 0), env, &then_env, &else_env);
 	oa_apply_increments (TREE_OPERAND (t, 0), then_env);

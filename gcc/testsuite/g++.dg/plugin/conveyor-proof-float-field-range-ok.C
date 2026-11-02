@@ -16,6 +16,7 @@ struct thing {
   double value;
   void produce_value ()
     pre<conveyor_ctrl_v>(std::is_object_address (this))
+    post<conveyor_ctrl_v>(std::is_object_address (this))
     post<conveyor_ctrl_v>(this->value >= 0.0 && this->value < 10.0)
   { value = 5.5; }
   void consume_value ()

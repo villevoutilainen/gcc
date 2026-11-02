@@ -26,7 +26,7 @@ int up ()
   const S arr[4] = { {1}, {2}, {3}, {4} };
   int n = 0;
   for (int i = 0; i != 4; ++i)
-    n += use (arr[i]);
+    { n += use (arr[i]); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (arr))); }
   return n;
 }
 
@@ -35,7 +35,7 @@ int down ()
   const S arr[4] = { {1}, {2}, {3}, {4} };
   int n = 0;
   for (int i = 3; i != -1; --i)
-    n += use (arr[i]);
+    { n += use (arr[i]); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (arr))); }
   return n;
 }
 
@@ -44,7 +44,7 @@ int unsigned_up ()
   const S arr[4] = { {1}, {2}, {3}, {4} };
   int n = 0;
   for (unsigned i = 0; i != 4; i++)
-    n += use (arr[i]);
+    { n += use (arr[i]); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (arr))); }
   return n;
 }
 

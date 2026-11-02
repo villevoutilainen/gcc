@@ -142,9 +142,9 @@ int idx_signed_nonneg_violates (std::vector<int>& v, int idx)
 int main ()
 {
   std::vector<int> v (20);
-  return shifted_past_the_boundary (v, 0)
-	 + exactly_at_the_edge (v, 0)
-	 + genuinely_ambiguous (v, 0)
-	 + idx_signed_declines (v, 0)
-	 + idx_signed_nonneg_violates (v, 0);
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); int __r = shifted_past_the_boundary (v, 0);
+	 contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += exactly_at_the_edge (v, 0);
+	 contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += genuinely_ambiguous (v, 0);
+	 contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += idx_signed_declines (v, 0);
+	 contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += idx_signed_nonneg_violates (v, 0); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); return __r;
 }

@@ -46,7 +46,7 @@ int use_local_container_ok (int x)
 {
   std::vector<int> test{1, 2, 3};
   if (x >= 0 && x < test.size ())
-    return test[x]; // proven safe, no diagnostic
+    { int __r = test[x]; contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (test))); return __r; } // proven safe, no diagnostic
   return 0;
 }
 
@@ -58,7 +58,7 @@ int use_local_idx_from_call_ok ()
   std::vector<int> test{1, 2, 3};
   int idx = get_index ();
   if (idx >= 0 && idx < test.size ())
-    return test[idx]; // proven safe, no diagnostic
+    { int __r = test[idx]; contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (test))); return __r; } // proven safe, no diagnostic
   return 0;
 }
 
@@ -79,7 +79,7 @@ int use_local_container_unguarded_bad ()
 {
   std::vector<int> test{1, 2, 3};
   int idx = get_index ();
-  return test[idx]; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
+  int __r = test[idx]; contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (test))); return __r; // { dg-warning {cannot verify that [^\n]* satisfies the precondition} }
 }
 
 int main ()

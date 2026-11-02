@@ -35,7 +35,7 @@ void dot_receiver ()
 {
   io_facility f;
   f.open ();
-  f.read ();
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (f))); f.read ();
 }
 
 void pointer_receiver ()
@@ -43,7 +43,7 @@ void pointer_receiver ()
   io_facility f;
   io_facility *fp = &f;
   fp->open ();
-  fp->read ();
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (fp)); fp->read ();
 }
 
 int main ()

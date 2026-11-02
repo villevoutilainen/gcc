@@ -25,7 +25,7 @@ void g ()
 {
   L l;
   l.getd ();
-  l.getc ();
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (l))); l.getc ();
   int i = 0;
   T {i};
 }

@@ -45,7 +45,7 @@ void dot_receiver ()
 {
   thing t;
   t.produce ();
-  t.consume ();
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (t))); t.consume ();
 }
 
 void pointer_receiver ()
@@ -53,7 +53,7 @@ void pointer_receiver ()
   thing t;
   thing *tp = &t;
   tp->produce ();
-  tp->consume ();
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (tp)); tp->consume ();
 }
 
 int main ()

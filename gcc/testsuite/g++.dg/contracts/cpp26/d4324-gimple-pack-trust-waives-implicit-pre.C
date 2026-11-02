@@ -35,7 +35,7 @@ int
 trusted (int *const &a, int *const &b)
 {
   V v{};
-  return v.call (a, b) + v.dcall (a, b);
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); int __r = v.call (a, b); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += v.dcall (a, b); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); return __r;
 }
 
 int

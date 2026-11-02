@@ -31,11 +31,11 @@ void calls ()
 {
   number n;
   n.produce ();
-  n.too_small (); // { dg-error "provably violates the precondition" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (n))); n.too_small (); // { dg-error "provably violates the precondition" }
   // { dg-message "is established \[^\n\]*, but the precondition requires" "" { target *-*-* } .-1 }
-  n.produce ();
-  n.consume ();
-  n.consume (); // { dg-warning "cannot verify" "consume may change the field" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (n))); n.produce ();
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (n))); n.consume ();
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (n))); n.consume (); // { dg-warning "cannot verify" "consume may change the field" }
   take_percentage (50.0);
   take_percentage (150.0); // { dg-error "provably violates the precondition" }
   // { dg-message "is established \[^\n\]*, but the precondition requires" "" { target *-*-* } .-1 }

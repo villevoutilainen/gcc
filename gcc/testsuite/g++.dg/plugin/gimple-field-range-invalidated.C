@@ -43,7 +43,7 @@ void invalidated_caller ()
   thing t;
   t.produce ();
   unrelated (&t);
-  t.consume (); // { dg-warning "gimple-oa: cannot verify" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (t))); t.consume (); // { dg-warning "gimple-oa: cannot verify" }
 }
 
 int main () { invalidated_caller (); return 0; }

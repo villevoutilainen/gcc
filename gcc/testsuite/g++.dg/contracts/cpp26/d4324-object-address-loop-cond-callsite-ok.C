@@ -27,7 +27,10 @@ int f ()
   int x = 1;
   int total = 0;
   for (int i = 0; i < 3 && check (&x); i++)
-    total += i;
+    {
+      total += i;
+      contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (x)));
+    }
   return total;
 }
 

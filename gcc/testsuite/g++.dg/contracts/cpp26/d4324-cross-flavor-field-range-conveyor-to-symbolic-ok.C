@@ -47,6 +47,6 @@ int main ()
 {
   thing t;
   t.produce_count_conveyor ();
-  t.consume_count_symbolic ();
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (t))); t.consume_count_symbolic ();
   return 0;
 }

@@ -35,7 +35,7 @@ void invalidated_caller ()
   io_facility f;
   f.open ();
   unrelated (&f);
-  f.read (); // { dg-warning "gimple-oa: cannot verify" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (f))); f.read (); // { dg-warning "gimple-oa: cannot verify" }
 }
 
 int main () { invalidated_caller (); return 0; }

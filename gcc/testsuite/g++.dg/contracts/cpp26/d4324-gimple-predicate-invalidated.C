@@ -37,7 +37,7 @@ void invalidated_caller ()
   io_facility f;
   f.open ();
   unrelated (&f);
-  f.read (); // { dg-warning "cannot verify that .*is_opened.*holds" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (f))); f.read (); // { dg-warning "cannot verify that .*is_opened.*holds" }
 }
 
 int main () { invalidated_caller (); return 0; }

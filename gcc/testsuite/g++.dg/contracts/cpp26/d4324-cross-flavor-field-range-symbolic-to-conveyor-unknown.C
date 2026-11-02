@@ -48,7 +48,7 @@ void caller ()
 {
   thing t;
   t.produce_count_symbolic ();
-  t.consume_count_conveyor (); // { dg-warning "cannot verify" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (t))); t.consume_count_conveyor (); // { dg-warning "cannot verify" }
                                // { dg-message "weaker .non-conveyor. trust" "unprovable reason" { target *-*-* } .-1 }
 }
 

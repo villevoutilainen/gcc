@@ -50,6 +50,6 @@ int main ()
 {
   io_facility f;
   f.open ();
-  g (&f);
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (f))); g (&f);
   return 0;
 }

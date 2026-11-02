@@ -53,5 +53,5 @@ good (int v)
   pre<std::contracts::conveyor_assert_v> (v > 0)
 {
   S s;
-  return t1 (v) + t2 (v) + t3 (v) + s.m (v);
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); int __r = t1 (v); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += t2 (v); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += t3 (v); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += s.m (v); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); return __r;
 }

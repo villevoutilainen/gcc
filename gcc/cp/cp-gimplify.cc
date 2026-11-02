@@ -2179,12 +2179,45 @@ cp_genericize_r (tree *stmt_p, int *walk_subtrees, void *data)
        to lower this construct before scanning it, so we need to lower these
        before doing anything else.  */
     case CLEANUP_STMT:
-      *stmt_p = build2_loc (EXPR_LOCATION (stmt),
-			    CLEANUP_EH_ONLY (stmt) ? TRY_CATCH_EXPR
-						   : TRY_FINALLY_EXPR,
-			    void_type_node,
-			    CLEANUP_BODY (stmt),
-			    CLEANUP_EXPR (stmt));
+      {
+	tree cleanup = CLEANUP_EXPR (stmt);
+	/* D4324: for the GIMPLE contract analysis, a cleanup run on both
+	   exits gets a copy of its own for the exception one, so the
+	   analysis can tell that path's cleanups apart from the normal
+	   path's (contracts-gimple.cc, cg_collect_eh_cleanup_blocks):
+	   lowered on its own, the cleanup is one block both exits reach.
+	   Only one that copies as it is.  */
+	if (!CLEANUP_EH_ONLY (stmt)
+	    && flag_contract_control_objects
+	    && (flag_contract_conveyor_proofs_gimple
+		|| flag_contract_symbolic_proofs_gimple)
+	    && !walk_tree_without_duplicates
+		 (&cleanup,
+		  [] (tree *tp, int *, void *) -> tree
+		    {
+		      switch (TREE_CODE (*tp))
+			{
+			case TARGET_EXPR:
+			case BIND_EXPR:
+			case DECL_EXPR:
+			case STATEMENT_LIST:
+			case LABEL_EXPR:
+			case EH_ELSE_EXPR:
+			  return *tp;
+			default:
+			  return NULL_TREE;
+			}
+		    },
+		  NULL))
+	  cleanup = build2 (EH_ELSE_EXPR, void_type_node, cleanup,
+			    unshare_expr (cleanup));
+	*stmt_p = build2_loc (EXPR_LOCATION (stmt),
+			      CLEANUP_EH_ONLY (stmt) ? TRY_CATCH_EXPR
+						     : TRY_FINALLY_EXPR,
+			      void_type_node,
+			      CLEANUP_BODY (stmt),
+			      cleanup);
+      }
       break;
 
     case IF_STMT:
@@ -4058,6 +4091,14 @@ cp_fold (tree x, fold_flags_t flags)
 	   constant, but the call followed by an INDIRECT_REF is.  */
 	if (callee && DECL_DECLARED_CONSTEXPR_P (callee)
 	    && !(flags & ff_only_non_odr)
+	    /* Not one with contracts returning an address (libstdc++'s
+	       std::__trust_object or std::__addressof of a global): the
+	       constant would be the bare object, and the analysis engines
+	       would lose the trust or returned object the call is, as
+	       for std::move above.  */
+	    && !(DECL_HAS_CONTRACTS_P (callee)
+		 && (INDIRECT_TYPE_P (TREE_TYPE (x))
+		     || INDIRECT_TYPE_P (TREE_TYPE (TREE_TYPE (callee)))))
 	    && (!flag_no_inline
 		|| lookup_attribute ("always_inline",
 				     DECL_ATTRIBUTES (callee))))

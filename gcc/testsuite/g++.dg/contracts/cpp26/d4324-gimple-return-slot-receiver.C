@@ -24,7 +24,7 @@ int main ()
 {
   A a = named ();
   A b = prvalue ();
-  A c = copied (a);
+  A c = copied (a); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (a)));
   A d = named_conveyor ();
   return 0;
 }

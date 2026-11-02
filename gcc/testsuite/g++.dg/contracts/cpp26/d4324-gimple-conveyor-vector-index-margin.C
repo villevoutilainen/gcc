@@ -245,10 +245,10 @@ int use_or_case (std::vector<int>& v, std::vector<int>::size_type idx)
 int main ()
 {
   std::vector<int> v(20);
-  return use_margin_only_declines (v, 0) + use_margin_with_companion_ok (v, 0)
-	 + use_shift_without_numeric_cap_ok (v, 0)
-	 + use_sound (v, 0) + use_unsound (v, 0)
-	 + use_signed_idx_declines (v, 0) + use_signed_idx_nonneg_ok (v, 0)
-	 + use_definitely_unsound (v)
-	 + use_signed_idx_nonneg_ok_and (v, 0) + use_or_case (v, 0);
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); int __r = use_margin_only_declines (v, 0); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += use_margin_with_companion_ok (v, 0);
+	 contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += use_shift_without_numeric_cap_ok (v, 0);
+	 contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += use_sound (v, 0); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += use_unsound (v, 0);
+	 contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += use_signed_idx_declines (v, 0); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += use_signed_idx_nonneg_ok (v, 0);
+	 contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += use_definitely_unsound (v);
+	 contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += use_signed_idx_nonneg_ok_and (v, 0); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); __r += use_or_case (v, 0); contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (v))); return __r;
 }

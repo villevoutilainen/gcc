@@ -27,7 +27,7 @@ use (std::vector<int>& v1, std::vector<int>& v2)
   auto cv = std::views::concat (v1, v2);
   auto it = cv.begin ();
   ++it;
-  return it == cv.end ();
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (it))); return it == cv.end ();
 }
 
 int main () { return 0; }

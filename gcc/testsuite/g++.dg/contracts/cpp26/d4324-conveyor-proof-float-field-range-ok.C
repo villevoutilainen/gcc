@@ -39,6 +39,6 @@ main ()
 {
   thing t;
   t.produce_value ();
-  t.consume_value ();
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (t))); t.consume_value ();
   return 0;
 }
