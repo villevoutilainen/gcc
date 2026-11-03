@@ -1646,6 +1646,14 @@ check_conveyor_redeclaration (tree old_decl, tree new_decl)
   if (TREE_CODE (old_decl) != FUNCTION_DECL
       || TREE_CODE (new_decl) != FUNCTION_DECL)
     return true;
+  /* An explicit specialization can differ from the template
+     declaration with respect to 'conveyor' and 'conveyor(auto)', just
+     as for constexpr (see validate_constexpr_redeclaration above): it
+     is a function of its own, 'conveyor' or not ('conveyor(auto)' being
+     for templates only).  */
+  if (! DECL_TEMPLATE_SPECIALIZATION (old_decl)
+      && DECL_TEMPLATE_SPECIALIZATION (new_decl))
+    return true;
   /* D4324: 'conveyor(auto)'-ness itself must also agree -- comparing
      DECL_DECLARED_CONVEYOR_P alone isn't enough for a still-unresolved
      conveyor(auto) declaration, whose conveyor_p bit reads false (not
@@ -1671,12 +1679,6 @@ check_conveyor_redeclaration (tree old_decl, tree new_decl)
 	SET_DECL_DECLARED_CONVEYOR_P (old_decl);
       return true;
     }
-  /* An explicit specialization can differ from the template
-     declaration with respect to 'conveyor', just as for constexpr
-     (see validate_constexpr_redeclaration above).  */
-  if (! DECL_TEMPLATE_SPECIALIZATION (old_decl)
-      && DECL_TEMPLATE_SPECIALIZATION (new_decl))
-    return true;
 
   auto_diagnostic_group d;
   error_at (DECL_SOURCE_LOCATION (new_decl),
