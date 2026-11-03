@@ -95,7 +95,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _M_range_initialize(_InputIterator __first, _InputIterator __last)
       {
 	auto __to = this->_M_impl._M_head._M_base_ptr();
-	for (; __first != __last; ++__first)
+	for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  {
 	    __to->_M_next = this->_M_create_node(*__first)->_M_base_ptr();
 	    __to = __to->_M_next;
@@ -393,14 +393,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       //  making sure both iterators are valid.
       auto __ix = __lx.cbegin();
       auto __iy = __ly.cbegin();
-      while (__ix != __lx.cend() && __iy != __ly.cend())
+      while (_GLIBCXX_CONVEYOR_TRUSTED (__ix) != __lx.cend() && _GLIBCXX_CONVEYOR_TRUSTED (__iy) != __ly.cend())
 	{
 	  if (!(*__ix == *__iy))
 	    return false;
-	  ++__ix;
-	  ++__iy;
+	  ++_GLIBCXX_CONVEYOR_TRUSTED (__ix);
+	  ++_GLIBCXX_CONVEYOR_TRUSTED (__iy);
 	}
-      if (__ix == __lx.cend() && __iy == __ly.cend())
+      if (_GLIBCXX_CONVEYOR_TRUSTED (__ix) == __lx.cend() && _GLIBCXX_CONVEYOR_TRUSTED (__iy) == __ly.cend())
 	return true;
       else
 	return false;

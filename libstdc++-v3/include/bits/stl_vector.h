@@ -1777,6 +1777,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	  difference_type __offset = __position - cbegin();
 	  _M_range_insert(begin() + __offset, __first, __last,
 			  std::__iterator_category(__first));
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  return begin() + __offset;
 	}
 #else

@@ -462,7 +462,8 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
 #endif
 
       _GLIBCXX_CONVEYOR_TRUST(__result);
-      for (; __first != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__result), (void)++__first)
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last;
+	   ++_GLIBCXX_CONVEYOR_TRUSTED (__result), (void)++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	std::__assign_one<_IsMove>(__result, __first);
       return __result;
     }
@@ -1968,8 +1969,8 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
     {
       while (__first1 != __last1 && bool(__binary_pred(*__first1, *__first2)))
 	{
-	  ++__first1;
-	  ++__first2;
+	  ++_GLIBCXX_CONVEYOR_TRUSTED (__first1);
+	  ++_GLIBCXX_CONVEYOR_TRUSTED (__first2);
 	}
       return pair<_InputIterator1, _InputIterator2>(__first1, __first2);
     }

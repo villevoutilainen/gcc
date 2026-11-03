@@ -155,7 +155,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       else
 #endif // C++11
 	{
-	  for (; __first != __last; ++__first)
+	  for (; __first != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	    __f(*__first);
 	  return __first;
 	}
@@ -4334,7 +4334,9 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
 	    __typeof__(__unary_op(*__first))>)
       __glibcxx_requires_valid_range(__first, __last);
 
-      for (; __first != __last; ++__first, (void)++__result)
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last;
+	   ++_GLIBCXX_CONVEYOR_TRUSTED (__first),
+	   (void)++_GLIBCXX_CONVEYOR_TRUSTED (__result))
 	*__result = __unary_op(*__first);
       return __result;
     }
@@ -5314,16 +5316,16 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
 		       _InputIterator2 __first2, _InputIterator2 __last2,
 		       _OutputIterator __result, _Compare __comp)
     {
-      while (__first1 != __last1 && __first2 != __last2)
-	if (__comp(*__first1, *__first2))
-	  ++__first1;
-	else if (__comp(*__first2, *__first1))
-	  ++__first2;
+      while (_GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1 && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2)
+	if (__comp(*_GLIBCXX_CONVEYOR_TRUSTED (__first1), *_GLIBCXX_CONVEYOR_TRUSTED (__first2)))
+	  ++_GLIBCXX_CONVEYOR_TRUSTED (__first1);
+	else if (__comp(*_GLIBCXX_CONVEYOR_TRUSTED (__first2), *_GLIBCXX_CONVEYOR_TRUSTED (__first1)))
+	  ++_GLIBCXX_CONVEYOR_TRUSTED (__first2);
 	else
 	  {
-	    *__result = *__first1;
-	    ++__first1;
-	    ++__first2;
+	    *__result = *_GLIBCXX_CONVEYOR_TRUSTED (__first1);
+	    ++_GLIBCXX_CONVEYOR_TRUSTED (__first1);
+	    ++_GLIBCXX_CONVEYOR_TRUSTED (__first2);
 	    ++__result;
 	  }
       return __result;

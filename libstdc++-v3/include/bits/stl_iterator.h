@@ -990,6 +990,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_GLIBCXX_CONVEYOR_TRUST(__value);
 	iter = container->insert(iter, __value);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	++iter;
 	return *this;
       }
@@ -1002,6 +1003,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_GLIBCXX_CONVEYOR_TRUST(__value);
 	iter = container->insert(iter, __value);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	++iter;
 	return *this;
       }

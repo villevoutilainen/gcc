@@ -991,6 +991,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 						_M_get_Tp_allocator());
 		    this->_M_impl._M_finish += __n;
 		    _GLIBCXX_ASAN_ANNOTATE_GREW(__n);
+		    _GLIBCXX_CONVEYOR_TRUST(__position);
 		    _GLIBCXX_MOVE_BACKWARD3(__position.base(),
 					    __old_finish - __n, __old_finish);
 		    std::copy(__first, __last, __position);
@@ -1005,6 +1006,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 						_M_get_Tp_allocator());
 		    this->_M_impl._M_finish += __n - __elems_after;
 		    _GLIBCXX_ASAN_ANNOTATE_GREW(__n - __elems_after);
+		    _GLIBCXX_CONVEYOR_TRUST(__position);
 		    std::__uninitialized_move_a(__position.base(),
 						__old_finish,
 						this->_M_impl._M_finish,
