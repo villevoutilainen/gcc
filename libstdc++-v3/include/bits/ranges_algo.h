@@ -556,8 +556,10 @@ namespace ranges
 	  __n1 = ranges::size(__r1);
 	if constexpr (sized_range<_Range2>)
 	  __n2 = ranges::size(__r2);
-	return _S_impl(ranges::begin(__r1), ranges::end(__r1), __n1,
-		       ranges::begin(__r2), ranges::end(__r2), __n2,
+	return _S_impl(_GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__r1),
+		       _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__r1), __n1,
+		       _GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__r2),
+		       _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__r2), __n2,
 		       std::move(__pred),
 		       std::move(__proj1), std::move(__proj2));
       }
@@ -644,8 +646,10 @@ namespace ranges
 	  __n1 = ranges::size(__r1);
 	if constexpr (sized_range<_Range2>)
 	  __n2 = ranges::size(__r2);
-	return _S_impl(ranges::begin(__r1), ranges::end(__r1), __n1,
-		       ranges::begin(__r2), ranges::end(__r2), __n2,
+	return _S_impl(_GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__r1),
+		       _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__r1), __n1,
+		       _GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(__r2),
+		       _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__r2), __n2,
 		       std::move(__pred),
 		       std::move(__proj1), std::move(__proj2));
       }

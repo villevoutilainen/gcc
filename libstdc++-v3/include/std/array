@@ -334,6 +334,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_CONVEYOR_TRUST(__b);
       for (size_t __i = 0; __i < _Nm; ++__i)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__a);
+	  _GLIBCXX_CONVEYOR_TRUST(__b);
 	  auto __c = __detail::__synth3way(__a[__i], __b[__i]);
 	  if (__c != 0)
 	    return __c;

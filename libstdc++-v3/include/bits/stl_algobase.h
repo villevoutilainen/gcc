@@ -741,7 +741,9 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
 
       while (__first != __last)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__last);
 	  --__last;
+	  _GLIBCXX_CONVEYOR_TRUST(__result);
 	  --__result;
 	  std::__assign_one<_IsMove>(__result, __last);
 	}
@@ -1926,6 +1928,8 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
 	  _GLIBCXX_CONVEYOR_TRUST(__last2);
 	  if (__first2 == __last2)
 	    return strong_ordering::greater;
+	  _GLIBCXX_CONVEYOR_TRUST(__first1);
+	  _GLIBCXX_CONVEYOR_TRUST(__first2);
 	  if (auto __cmp = __comp(*__first1, *__first2); __cmp != 0)
 	    return __cmp;
 	  _GLIBCXX_CONVEYOR_TRUST(__first1);

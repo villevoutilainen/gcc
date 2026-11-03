@@ -261,6 +261,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 	_Iterator __tmp = current;
 	--__tmp;
+	_GLIBCXX_CONVEYOR_TRUST(__tmp);
 	return *__tmp;
       }
 
@@ -335,6 +336,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	reverse_iterator __tmp = *this;
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	--current;
 	return __tmp;
       }
@@ -362,6 +364,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	reverse_iterator __tmp = *this;
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	++current;
 	return __tmp;
       }

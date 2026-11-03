@@ -91,6 +91,7 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
       _GLIBCXX_CONVEYOR_TRUST(__first);
       while (_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__first);
 	  ++__first;
 	  ++__n;
 	}
@@ -212,7 +213,10 @@ namespace __detail
       __glibcxx_function_requires(_InputIteratorConcept<_InputIterator>)
       __glibcxx_assert(__n >= 0);
       while (__n-- > 0)
-	++__i;
+	{
+	  _GLIBCXX_CONVEYOR_TRUST(__i);
+	  ++__i;
+	}
     }
 
   template<typename _BidirectionalIterator, typename _Distance>
