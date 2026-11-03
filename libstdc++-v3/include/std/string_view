@@ -190,7 +190,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	constexpr explicit
 	basic_string_view(_Range&& __r)
 	noexcept(noexcept(ranges::size(__r)) && noexcept(ranges::data(__r)))
-	: _M_len(ranges::size(__r)), _M_str(ranges::data(__r))
+	: _M_len(_GLIBCXX_CONVEYOR_TRUSTED (ranges::size)(
+		   _GLIBCXX_CONVEYOR_TRUSTED (__r))),
+	  _M_str(_GLIBCXX_CONVEYOR_TRUSTED (ranges::data)(
+		   _GLIBCXX_CONVEYOR_TRUSTED (__r)))
 	{ }
 
       basic_string_view(nullptr_t) = delete;
@@ -282,6 +285,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       constexpr const_reference
       at(size_type __pos) const
       {
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (__pos >= _M_len)
 	  __throw_out_of_range_fmt(__N("basic_string_view::at: __pos "
 				       "(which is %zu) >= this->size() "

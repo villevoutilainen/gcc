@@ -1209,8 +1209,12 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
 	{
 	  _GLIBCXX_CONVEYOR_TRUST(__first1);
 	  for (; _GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1; ++_GLIBCXX_CONVEYOR_TRUSTED (__first1), (void) ++__first2)
-	    if (!(*__first1 == *__first2))
-	      return false;
+	    {
+	      _GLIBCXX_CONVEYOR_TRUST_DEREF(__first1);
+	      _GLIBCXX_CONVEYOR_TRUST_DEREF(__first2);
+	      if (!(*__first1 == *__first2))
+		return false;
+	    }
 	  return true;
 	}
     };

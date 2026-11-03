@@ -1056,13 +1056,19 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	      bidirectional_iterator_tag)
     {
       while (true)
-	if (__first == __last || __first == --__last)
-	  return;
-	else
-	  {
-	    std::iter_swap(__first, __last);
-	    ++__first;
-	  }
+	{
+	  _GLIBCXX_CONVEYOR_TRUST(__first);
+	  _GLIBCXX_CONVEYOR_TRUST(__last);
+	  if (__first == __last
+	      || __first == --_GLIBCXX_CONVEYOR_TRUSTED (__last))
+	    return;
+	  else
+	    {
+	      std::iter_swap(__first, __last);
+	      _GLIBCXX_CONVEYOR_TRUST(__first);
+	      ++__first;
+	    }
+	}
     }
 
   /**
@@ -1818,6 +1824,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 	{
 	  *__last = _GLIBCXX_MOVE(*__next);
 	  __last = __next;
+	  _GLIBCXX_CONVEYOR_TRUST(__next);
 	  --__next;
 	}
       *__last = _GLIBCXX_MOVE(__val);
@@ -1902,9 +1909,13 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 	      _GLIBCXX_CONVEYOR_TRUST(__first);
 	      ++__first;
 	    }
+	  _GLIBCXX_CONVEYOR_TRUST(__last);
 	  --__last;
 	  while (__comp(*__pivot, *__last))
-	    --__last;
+	    {
+	      _GLIBCXX_CONVEYOR_TRUST(__last);
+	      --__last;
+	    }
 	  if (!(__first < __last))
 	    return __first;
 	  std::iter_swap(__first, __last);

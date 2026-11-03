@@ -452,6 +452,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	auto __diff1 = __t1 - __d;
 	if (__diff0 == __diff1)
 	  {
+	    _GLIBCXX_CONVEYOR_TRUST(__t0);
 	    if (__t0.count() & 1)
 	      return __t1;
 	    return __t0;

@@ -5173,6 +5173,7 @@ namespace __detail
 			    __err |= ios_base::eofbit;
 			  break;
 			}
+		      _GLIBCXX_CONVEYOR_TRUST(__tz_abbr);
 		      if (__tz_abbr.empty())
 			__err |= ios_base::failbit;
 		    }
@@ -5491,6 +5492,7 @@ namespace __detail
 		{
 		  if (__offset && __tz_offset != __bad_min)
 		    *__offset = __tz_offset;
+		  _GLIBCXX_CONVEYOR_TRUST(__tz_abbr);
 		  if (__abbrev && !__tz_abbr.empty())
 		    *__abbrev = std::move(__tz_abbr);
 		}

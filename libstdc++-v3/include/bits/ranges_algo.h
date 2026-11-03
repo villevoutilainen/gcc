@@ -1330,7 +1330,7 @@ namespace ranges
       constexpr _Out
       operator()(_Out __first, iter_difference_t<_Out> __n, _Fp __gen) const
       {
-	for (; __n > 0; --__n, (void)++__first)
+	for (; __n > 0; --__n, (void)++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	  *__first = std::__invoke(__gen);
 	return __first;
       }
@@ -2200,7 +2200,8 @@ namespace ranges
 	else
 	  {
 	    auto __comp_proj = __detail::__make_comp_proj(__comp, __proj);
-	    iter_value_t<_Iter> __value(ranges::iter_move(ranges::prev(__last)));
+	    iter_value_t<_Iter> __value(ranges::iter_move(
+	      _GLIBCXX_CONVEYOR_TRUSTED (ranges::prev)(__last)));
 	    __detail::__push_heap(__first, (__last - __first) - 1,
 				  0, std::move(__value), __comp_proj);
 	    return __last;
@@ -5137,7 +5138,7 @@ namespace ranges
 	    if (__found == __first)
 	      return {__last, __last};
 	    else
-	      return {ranges::prev(__found), __last};
+	      return {_GLIBCXX_CONVEYOR_TRUSTED (ranges::prev)(__found), __last};
 	  }
 	else
 	  {
@@ -5184,7 +5185,7 @@ namespace ranges
 	    if (__found == __first)
 	      return {__last, __last};
 	    else
-	      return {ranges::prev(__found), __last};
+	      return {_GLIBCXX_CONVEYOR_TRUSTED (ranges::prev)(__found), __last};
 	  }
 	else
 	  {
@@ -5229,7 +5230,7 @@ namespace ranges
 	    if (__found == __first)
 	      return {__last, __last};
 	    else
-	      return {ranges::prev(__found), __last};
+	      return {_GLIBCXX_CONVEYOR_TRUSTED (ranges::prev)(__found), __last};
 	  }
 	else
 	  {
@@ -5516,7 +5517,8 @@ namespace ranges
 	if (__first == __last)
 	  return optional<_Up>();
 
-	_Iter __tail = ranges::prev(ranges::next(__first, std::move(__last)));
+	_Iter __tail = _GLIBCXX_CONVEYOR_TRUSTED (ranges::prev)(
+	  _GLIBCXX_CONVEYOR_TRUSTED (ranges::next)(__first, std::move(__last)));
 	return optional<_Up>(in_place,
 			     ranges::fold_right(std::move(__first), __tail,
 						iter_value_t<_Iter>(*__tail),

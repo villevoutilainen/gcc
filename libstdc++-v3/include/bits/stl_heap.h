@@ -422,6 +422,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     {
       while (__last - __first > 1)
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(__last);
 	  --__last;
 	  std::__pop_heap(__first, __last, __last, __comp);
 	}

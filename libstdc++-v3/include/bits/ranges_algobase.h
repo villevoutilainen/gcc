@@ -143,7 +143,9 @@ namespace ranges
 	      }
 	    else
 	      {
-		for (; __first1 != __last1; ++__first1, (void)++__first2)
+		for (; _GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1;
+		     ++_GLIBCXX_CONVEYOR_TRUSTED (__first1),
+		     (void)++_GLIBCXX_CONVEYOR_TRUSTED (__first2))
 		  if (!(bool)std::__invoke(__pred,
 					   std::__invoke(__proj1, *__first1),
 					   std::__invoke(__proj2, *__first2)))

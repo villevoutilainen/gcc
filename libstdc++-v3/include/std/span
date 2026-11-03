@@ -372,12 +372,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       [[nodiscard]]
       constexpr reverse_iterator
       rbegin() const noexcept
-      { return reverse_iterator(this->end()); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return reverse_iterator(this->end()); }
 
       [[nodiscard]]
       constexpr reverse_iterator
       rend() const noexcept
-      { return reverse_iterator(this->begin()); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return reverse_iterator(this->begin()); }
 
 #if __cplusplus > 202002L
       [[nodiscard]]

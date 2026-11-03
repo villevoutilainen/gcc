@@ -5210,8 +5210,9 @@ namespace views::__adaptor
       return [&]<size_t... _Is>(index_sequence<_Is...>) {
 	_GLIBCXX_CONVEYOR_TRUST(__x);
 	_GLIBCXX_CONVEYOR_TRUST(__y);
-	return ranges::min({difference_type(std::get<_Is>(__x._M_current)
-					    - std::get<_Is>(__y._M_current))...},
+	return ranges::min({difference_type(
+			      std::get<_Is>(_GLIBCXX_CONVEYOR_TRUSTED (__x)._M_current)
+			      - std::get<_Is>(_GLIBCXX_CONVEYOR_TRUSTED (__y)._M_current))...},
 			   ranges::less{},
 			   [](difference_type __i) {
 			     return __detail::__to_unsigned_like(__i < 0 ? -__i : __i);
@@ -5971,7 +5972,8 @@ namespace views::__adaptor
     {
       _GLIBCXX_CONVEYOR_TRUST(__x);
       _GLIBCXX_CONVEYOR_TRUST(__y);
-      return __x._M_current.back() - __y._M_current.back();
+      return __x._M_current.back()
+	- _GLIBCXX_CONVEYOR_TRUSTED (__y)._M_current.back();
     }
 
     friend constexpr auto

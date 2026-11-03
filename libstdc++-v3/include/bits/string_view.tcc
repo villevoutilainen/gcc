@@ -154,6 +154,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		 size_type __n) const noexcept
     {
       __glibcxx_requires_string_len(__str, __n);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       size_type __size = this->size();
       if (__size && __n)
 	{
