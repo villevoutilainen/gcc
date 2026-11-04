@@ -3445,8 +3445,10 @@ namespace __rb_tree
     erase(const _Key& __x)
     {
       pair<iterator, iterator> __p = equal_range(__x);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       const size_type __old_size = size();
       _M_erase_aux(__p.first, __p.second);
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       return __old_size - size();
     }
 

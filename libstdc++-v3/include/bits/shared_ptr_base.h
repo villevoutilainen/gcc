@@ -573,8 +573,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _M_destroy() noexcept
       {
 	__allocator_type __a(_M_alloc._M_obj);
-	__allocated_ptr<__allocator_type> __guard_ptr{ __a, this };
-	this->~_Sp_counted_deleter();
+	{
+	  __allocated_ptr<__allocator_type> __guard_ptr{ __a, this };
+	  this->~_Sp_counted_deleter();
+	}
+	_GLIBCXX_CONVEYOR_TRUST(__a);
       }
 
       virtual void*
@@ -660,8 +663,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  (std::is_object_address (this));
 #endif
 	__allocator_type __a(_M_alloc._M_obj);
-	__allocated_ptr<__allocator_type> __guard_ptr{ __a, this };
-	this->~_Sp_counted_ptr_inplace();
+	{
+	  __allocated_ptr<__allocator_type> __guard_ptr{ __a, this };
+	  this->~_Sp_counted_ptr_inplace();
+	}
 	_GLIBCXX_CONVEYOR_TRUST(__a);
       }
 
@@ -742,8 +747,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	using pointer = typename allocator_traits<__allocator_type>::pointer;
 	__allocator_type __a(_M_alloc);
 	auto __p = pointer_traits<pointer>::pointer_to(*this);
-	__allocated_ptr<__allocator_type> __guard_ptr{ __a, __p };
-	this->~_Sp_counted_ptr_inplace();
+	{
+	  __allocated_ptr<__allocator_type> __guard_ptr{ __a, __p };
+	  this->~_Sp_counted_ptr_inplace();
+	}
+	_GLIBCXX_CONVEYOR_TRUST(__a);
       }
 
       void*
@@ -1101,6 +1109,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  _Alloc_traits::construct(__a, __mem, __r.release(),
 				   std::forward<_Del>(__r.get_deleter()));
 	  _M_pi = __mem;
+	  _GLIBCXX_CONVEYOR_TRUST(__a);
 	}
 
       // Throw bad_weak_ptr when __r._M_get_use_count() == 0.

@@ -360,10 +360,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #if !_GLIBCXX_USE_CXX11_ABI
       size_type __removed __attribute__((__unused__)) = 0;
 #endif
+      _GLIBCXX_CONVEYOR_TRUST_THIS;
       list __to_destroy(get_allocator());
       iterator __first = begin();
       iterator __last = end();
-      while (__first != __last)
+      while (_GLIBCXX_CONVEYOR_TRUSTED (__first) != __last)
 	{
 	  iterator __next = __first;
 	  ++__next;

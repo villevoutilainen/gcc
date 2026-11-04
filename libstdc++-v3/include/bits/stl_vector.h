@@ -1230,7 +1230,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       [[__nodiscard__]] _GLIBCXX20_CONSTEXPR
       const_reverse_iterator
       crbegin() const noexcept
-      { return const_reverse_iterator(end()); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return const_reverse_iterator(end()); }
 
       /**
        *  Returns a read-only (constant) reverse iterator that points
@@ -1240,7 +1240,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       [[__nodiscard__]] _GLIBCXX20_CONSTEXPR
       const_reverse_iterator
       crend() const noexcept
-      { return const_reverse_iterator(begin()); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return const_reverse_iterator(begin()); }
 #endif
 
       // [23.2.4.2] capacity

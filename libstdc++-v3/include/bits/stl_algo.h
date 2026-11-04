@@ -2340,19 +2340,21 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 			  _InputIterator2 __first2, _InputIterator2 __last2,
 			  _OutputIterator __result, _Compare __comp)
     {
-      while (__first1 != __last1 && __first2 != __last2)
+      while (_GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1
+	     && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2)
 	{
-	  if (__comp(*__first2, *__first1))
+	  if (__comp(*_GLIBCXX_CONVEYOR_TRUSTED (__first2),
+		     *_GLIBCXX_CONVEYOR_TRUSTED (__first1)))
 	    {
-	      *__result = _GLIBCXX_MOVE(*__first2);
-	      ++__first2;
+	      *__result = _GLIBCXX_MOVE(*_GLIBCXX_CONVEYOR_TRUSTED (__first2));
+	      ++_GLIBCXX_CONVEYOR_TRUSTED (__first2);
 	    }
 	  else
 	    {
-	      *__result = _GLIBCXX_MOVE(*__first1);
-	      ++__first1;
+	      *__result = _GLIBCXX_MOVE(*_GLIBCXX_CONVEYOR_TRUSTED (__first1));
+	      ++_GLIBCXX_CONVEYOR_TRUSTED (__first1);
 	    }
-	  ++__result;
+	  ++_GLIBCXX_CONVEYOR_TRUSTED (__result);
 	}
       if (__first1 != __last1)
 	_GLIBCXX_MOVE3(__first1, __last1, __result);
@@ -2384,7 +2386,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 	  if (__comp(*__last2, *__last1))
 	    {
 	      *--__result = _GLIBCXX_MOVE(*__last1);
-	      if (__first1 == __last1)
+	      if (__first1 == _GLIBCXX_CONVEYOR_TRUSTED (__last1))
 		{
 		  _GLIBCXX_MOVE_BACKWARD3(__first2, ++__last2, __result);
 		  return;
@@ -2700,19 +2702,21 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 		 _InputIterator __first2, _InputIterator __last2,
 		 _OutputIterator __result, _Compare __comp)
     {
-      while (__first1 != __last1 && __first2 != __last2)
+      while (_GLIBCXX_CONVEYOR_TRUSTED (__first1) != __last1
+	     && _GLIBCXX_CONVEYOR_TRUSTED (__first2) != __last2)
 	{
-	  if (__comp(*__first2, *__first1))
+	  if (__comp(*_GLIBCXX_CONVEYOR_TRUSTED (__first2),
+		     *_GLIBCXX_CONVEYOR_TRUSTED (__first1)))
 	    {
-	      *__result = _GLIBCXX_MOVE(*__first2);
-	      ++__first2;
+	      *__result = _GLIBCXX_MOVE(*_GLIBCXX_CONVEYOR_TRUSTED (__first2));
+	      ++_GLIBCXX_CONVEYOR_TRUSTED (__first2);
 	    }
 	  else
 	    {
-	      *__result = _GLIBCXX_MOVE(*__first1);
-	      ++__first1;
+	      *__result = _GLIBCXX_MOVE(*_GLIBCXX_CONVEYOR_TRUSTED (__first1));
+	      ++_GLIBCXX_CONVEYOR_TRUSTED (__first1);
 	    }
-	  ++__result;
+	  ++_GLIBCXX_CONVEYOR_TRUSTED (__result);
 	}
       return _GLIBCXX_MOVE3(__first2, __last2,
 			    _GLIBCXX_MOVE3(__first1, __last1,

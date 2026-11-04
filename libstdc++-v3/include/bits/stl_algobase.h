@@ -934,7 +934,8 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
 						     const _Tp&>::__type _Up;
       _Up __val(__value);
       _GLIBCXX_CONVEYOR_TRUST(__first);
-      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last;
+	   ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	*__first = __val;
     }
 #pragma GCC diagnostic pop
@@ -2148,7 +2149,8 @@ _GLIBCXX_END_NAMESPACE_ALGO
     __count_if(_InputIterator __first, _InputIterator __last, _Predicate __pred)
     {
       typename iterator_traits<_InputIterator>::difference_type __n = 0;
-      for (; __first != __last; ++__first)
+      for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last;
+	   ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	if (__pred(*__first))
 	  ++__n;
       return __n;
