@@ -7575,6 +7575,14 @@ build_predicate_core_function_1 (tree contract, tree orig)
       DECL_CONTEXT (np) = fn;
       DECL_CHAIN (np) = NULL_TREE;
       suppress_warning (np);
+      /* A constructor's 'this' says *this is uninitialized on entry
+	 (-flifetime-dse=2), which -Wuninitialized reads; a predicate in
+	 the constructor's body runs after its members are initialized, as
+	 ipa-split's split-off parts do.  */
+      if (lookup_attribute ("clobber *this", DECL_ATTRIBUTES (np)))
+	DECL_ATTRIBUTES (np)
+	  = remove_attribute ("clobber *this",
+			      copy_list (DECL_ATTRIBUTES (np)));
       *last_arg = np;
       last_arg = &DECL_CHAIN (np);
     }
