@@ -26576,6 +26576,8 @@ get_or_build_scalar_precondition_thunk (tree contract, tree callee,
 
   tree parm = build_lang_decl (PARM_DECL, get_identifier ("p"), void_ptr_type);
   DECL_CONTEXT (parm) = fn;
+  /* Compiler-made: no -Wunused-parameter when the body doesn't read it.  */
+  DECL_ARTIFICIAL (parm) = 1;
   DECL_ARGUMENTS (fn) = parm;
   DECL_RESULT (fn) = NULL_TREE; /* Let start_preparsed_function fill it in.  */
 
@@ -38425,6 +38427,8 @@ build_predicate_thunk_function (tree contract, tree core_fn, tree struct_type)
 
   tree parm = build_lang_decl (PARM_DECL, get_identifier ("p"), void_ptr_type);
   DECL_CONTEXT (parm) = fn;
+  /* Compiler-made: no -Wunused-parameter when the body doesn't read it.  */
+  DECL_ARTIFICIAL (parm) = 1;
   DECL_ARGUMENTS (fn) = parm;
   DECL_RESULT (fn) = NULL_TREE; /* Let start_preparsed_function fill it in.  */
 
