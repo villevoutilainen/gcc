@@ -911,6 +911,7 @@ extern bool is_object_address_call_p (tree call, tree *arg);
    parameter: the analysis treats FN as if it had an is_object_address
    precondition on it (see contracts.cc).  */
 extern bool oa_defaulted_copy_source_parm_public (tree fn, tree *parm);
+extern bool oa_defaulted_assign_dest_this_public (tree fn, tree *parm);
 
 /* Is CONJUNCT 'std::isfinite (X)' for a floating-point variable or
    parameter X?  Set *DECL_OUT to X.  */

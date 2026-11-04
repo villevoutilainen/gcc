@@ -3265,6 +3265,12 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
   if (oa_defaulted_copy_source_parm_public (fndecl, &src_parm))
     if (tree key = cg_self_trust_key (fun, src_parm))
       established.put (key, { /*conveyor_established=*/true });
+  /* And a defaulted assignment's on its destination
+     (contracts.cc, oa_defaulted_assign_dest_this).  */
+  tree dest_parm;
+  if (oa_defaulted_assign_dest_this_public (fndecl, &dest_parm))
+    if (tree key = cg_self_trust_key (fun, dest_parm))
+      established.put (key, { /*conveyor_established=*/true });
 }
 
 /* Item 6 for relational facts: does CALL's own callee have a
@@ -8301,6 +8307,33 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 				"cannot prove %<is_object_address%> for %qE, "
 				"required by the implicit precondition of %qD",
 				cg_display_argument (substituted, src_parm),
+				callee);
+	  if (const char *why = oa_unprovable_reason_text (reason))
+	    inform (gimple_location (call), "%s", _(why));
+	}
+    }
+  /* And a defaulted assignment's implicit is_object_address of its
+     destination (contracts.cc, oa_defaulted_assign_dest_this).  */
+  tree dest_parm;
+  unsigned dest_argno;
+  if ((flag_contract_analysis_engine != 0
+       || flag_contract_conveyor_proofs_gimple)
+      && oa_defaulted_assign_dest_this_public (callee, &dest_parm)
+      && !contract_inferred_obligation_waived_p (callee)
+      && cg_find_param_position (callee, dest_parm, &dest_argno)
+      && dest_argno < gimple_call_num_args (call))
+    {
+      tree substituted = cg_resolve_value_argument (call, dest_argno);
+      hash_set<tree> in_progress;
+      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+      if (!cg_provable_object_address_p (substituted, established,
+					  /*require_conveyor=*/true,
+					  in_progress, &reason))
+	{
+	  cg_conveyor_error_at (gimple_location (call),
+				"cannot prove %<is_object_address%> for %qE, "
+				"required by the implicit precondition of %qD",
+				cg_display_argument (substituted, dest_parm),
 				callee);
 	  if (const char *why = oa_unprovable_reason_text (reason))
 	    inform (gimple_location (call), "%s", _(why));

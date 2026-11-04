@@ -3019,6 +3019,7 @@ update_contract_arguments (tree srcdecl, tree destdecl)
    reached.  */
 static void oa_maybe_instantiate_contracts (tree fn);
 static bool oa_defaulted_copy_source_parm (tree fn, tree *parm);
+static bool oa_defaulted_assign_dest_this (tree fn, tree *parm);
 static bool oa_contract_conveyor_active_p (tree contract, tree owner_fn);
 static bool oa_contract_symbolic_active_p (tree contract, tree owner_fn);
 
@@ -3123,6 +3124,10 @@ maybe_contract_wrap_call (tree fndecl, tree call)
       /* A defaulted copy or move member's implicit precondition.  */
       tree src_parm;
       if (oa_defaulted_copy_source_parm (fndecl, &src_parm))
+	SET_DECL_MIGHT_NEED_OA_SCAN_P (current_function_decl);
+      /* And on its destination (oa_defaulted_assign_dest_this).  */
+      tree dest_parm;
+      if (oa_defaulted_assign_dest_this (fndecl, &dest_parm))
 	SET_DECL_MIGHT_NEED_OA_SCAN_P (current_function_decl);
       for (tree contract : fn_contracts (fndecl))
 	{
@@ -19610,6 +19615,67 @@ oa_defaulted_copy_source_parm_public (tree fn, tree *parm)
   return oa_defaulted_copy_source_parm (fn, parm);
 }
 
+/* The destination side of oa_defaulted_copy_source_parm: a defaulted
+   copy or move assignment operator that isn't conveyor gets no implicit
+   is_object_address of 'this' (a conveyor one does), yet its body may
+   pass 'this', or a member of it, on to a member's assignment that
+   requires its object.  When it does, the analysis treats the defaulted
+   function as if it had 'pre<never_proven_conveyor_v>
+   (std::is_object_address (this))': its body trusts 'this', and each
+   caller must prove its receiver.  Nothing is added to the function
+   itself.  (A constructor needs nothing of the kind: constructing it
+   begins its object.)
+
+   True if FN (a clone, or the function it is cloned from) is such a
+   function, setting *PARM to FN's own 'this'.  */
+
+static GTY(()) hash_map<tree, tree> *oa_defaulted_assign_needs_cache;
+
+static bool
+oa_defaulted_assign_dest_this (tree fn, tree *parm)
+{
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL)
+    return false;
+  tree orig = DECL_CLONED_FUNCTION_P (fn) ? DECL_CLONED_FUNCTION (fn) : fn;
+  if (!DECL_DEFAULTED_FN (orig) || !DECL_IOBJ_MEMBER_FUNCTION_P (orig)
+      || !DECL_ASSIGNMENT_OPERATOR_P (orig)
+      || DECL_DECLARED_CONVEYOR_P (orig)
+      || !(copy_fn_p (orig) > 0 || move_fn_p (orig)))
+    return false;
+  tree dest = DECL_ARGUMENTS (orig);
+  tree fn_dest = DECL_ARGUMENTS (fn);
+  if (!dest || !fn_dest || !is_this_parameter (dest))
+    return false;
+  bool needs;
+  if (tree *cached = hash_map_safe_get (oa_defaulted_assign_needs_cache,
+					orig))
+    needs = *cached == boolean_true_node;
+  else
+    {
+      /* No body yet (not yet implicitly defined): not decided yet.  */
+      if (!DECL_SAVED_TREE (orig))
+	return false;
+      hash_set<tree> in_progress;
+      in_progress.add (orig);
+      needs = oa_defaulted_copy_body_needs_p (orig, dest, in_progress);
+      hash_map_maybe_create<hm_ggc> (oa_defaulted_assign_needs_cache);
+      oa_defaulted_assign_needs_cache->put (orig, needs ? boolean_true_node
+					    : boolean_false_node);
+    }
+  if (!needs)
+    return false;
+  *parm = fn_dest;
+  return true;
+}
+
+/* See contracts.h.  */
+
+bool
+oa_defaulted_assign_dest_this_public (tree fn, tree *parm)
+{
+  return oa_defaulted_assign_dest_this (fn, parm);
+}
+
 /* Is the is_object_address obligation of CALL's constructor or
    destructor receiver a rule rather than a proof: CALL is in conveyor
    code, or one of the callee's preconditions asks to be proven
@@ -19702,6 +19768,26 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
 	oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 	if (!oa_provable_p (substituted, env, &reason)
 	    && !reported_parms.add (src_parm))
+	  {
+	    oa_conveyor_error_at (EXPR_LOCATION (call),
+				  "cannot prove %<is_object_address%> for "
+				  "%qE, required by the implicit precondition "
+				  "of %qD", substituted, callee);
+	    if (const char *why = oa_unprovable_reason_text (reason))
+	      oa_inform (EXPR_LOCATION (call), "%s", _(why));
+	    oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	  }
+      }
+  /* And a defaulted assignment's implicit is_object_address of its
+     destination (oa_defaulted_assign_dest_this).  */
+  tree dest_parm;
+  if (oa_defaulted_assign_dest_this (callee, &dest_parm)
+      && !contract_inferred_obligation_waived_p (callee))
+    if (tree substituted = oa_substitute_call_arg (callee, call, dest_parm))
+      {
+	oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+	if (!oa_provable_p (substituted, env, &reason)
+	    && !reported_parms.add (dest_parm))
 	  {
 	    oa_conveyor_error_at (EXPR_LOCATION (call),
 				  "cannot prove %<is_object_address%> for "
@@ -24464,17 +24550,70 @@ contract_static_object_p (tree d)
 	  && (!DECL_ARTIFICIAL (d) || DECL_NTTP_OBJECT_P (d)));
 }
 
+/* Whether COMP, a COMPONENT_REF, names a non-static data member of the
+   source or the destination of a compiler-synthesized memberwise copy or
+   move -- the body of a defaulted (or implicitly defined) copy or move
+   constructor or assignment operator, current_function_decl: there the
+   compiler copies or moves member by member, and a member's copy reaching
+   its distinct siblings would make the synthesized body's later member
+   copies unprovable, with nowhere a user could trust them.  The source is
+   the function's first user parameter, seen through its reference, the
+   destination its 'this' (or, in GIMPLE, either through the SSA name of
+   its default definition).  */
+
+static bool
+contract_synthesized_memberwise_source_member_p (tree comp)
+{
+  tree fn = current_function_decl;
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL)
+    return false;
+  tree orig = DECL_CLONED_FUNCTION_P (fn) ? DECL_CLONED_FUNCTION (fn) : fn;
+  if (!DECL_DEFAULTED_FN (orig))
+    return false;
+  switch (special_function_p (orig))
+    {
+    case sfk_copy_constructor:
+    case sfk_move_constructor:
+    case sfk_copy_assignment:
+    case sfk_move_assignment:
+      break;
+    default:
+      return false;
+    }
+  tree field = TREE_OPERAND (comp, 1);
+  if (TREE_CODE (field) != FIELD_DECL || DECL_FIELD_IS_BASE (field))
+    return false;
+  tree source = FUNCTION_FIRST_USER_PARM (fn);
+  tree dest = DECL_ARGUMENTS (fn);
+  if (!source)
+    return false;
+  tree obj = TREE_OPERAND (comp, 0);
+  STRIP_NOPS (obj);
+  if (TREE_CODE (obj) == INDIRECT_REF
+      || (TREE_CODE (obj) == MEM_REF && integer_zerop (TREE_OPERAND (obj, 1))))
+    obj = TREE_OPERAND (obj, 0);
+  STRIP_NOPS (obj);
+  if (TREE_CODE (obj) == SSA_NAME)
+    obj = SSA_NAME_VAR (obj);
+  return obj && (obj == source || obj == dest);
+}
+
 /* Whether a callee given a route to COMP -- a member or element lvalue,
    a COMPONENT_REF or ARRAY_REF -- may legally reach the object COMP lies
    in, and so end that too: an element reaches its whole array (pointer
    arithmetic), a base class subobject its derived object (a static_cast
    down), and a member of a union or of a standard-layout class its
    object (pointer-interconvertibility, offsetof).  A member of any other
-   class reaches only itself.  */
+   class reaches only itself; and so does a member of the source or the
+   destination of a compiler-synthesized memberwise copy or move
+   (contract_synthesized_memberwise_source_member_p).  */
 
 bool
 contract_member_reaches_enclosing_p (tree comp)
 {
+  if (TREE_CODE (comp) == COMPONENT_REF
+      && contract_synthesized_memberwise_source_member_p (comp))
+    return false;
   switch (TREE_CODE (comp))
     {
     case ARRAY_REF:
@@ -33734,6 +33873,11 @@ oa_seed_entry_env (tree fndecl, tree body, oa_env &env)
   tree src_parm;
   if (oa_defaulted_copy_source_parm (fndecl, &src_parm))
     env.set (src_parm, true);
+  /* And a defaulted assignment's on its destination
+     (oa_defaulted_assign_dest_this).  */
+  tree dest_parm;
+  if (oa_defaulted_assign_dest_this (fndecl, &dest_parm))
+    env.set (dest_parm, true);
 
   for (tree contract : fn_contracts (fndecl))
     {
