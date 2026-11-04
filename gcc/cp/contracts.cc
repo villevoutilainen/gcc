@@ -9894,7 +9894,7 @@ public:
      given their address earlier ('keep (&p)') may rewrite them.  */
   void escaped_local_pointers_invalidate ()
   {
-    auto_vec<tree, 8> ptrs;
+    hash_set<tree> ptrs;
     for (auto it : m_map)
       {
 	tree d = it.first;
@@ -9903,10 +9903,38 @@ public:
 	    && DECL_CONTEXT (d) == current_function_decl
 	    && ((VAR_P (d) && !TREE_STATIC (d) && !DECL_EXTERNAL (d))
 		|| TREE_CODE (d) == PARM_DECL))
-	  ptrs.safe_push (d);
+	  ptrs.add (d);
       }
+    if (ptrs.is_empty ())
+      return;
+    /* object_written_through_memory for each of PTRS, but with its
+       sweeps of the whole function's field and array keys (field_object_
+       predicate_invalidate_all, field_object_address_invalidate_all)
+       done once for all of them: this runs at every call that isn't
+       conveyor, and one sweep per pointer made a large function's
+       analysis cost the number of its escaped pointers times the number
+       of its field keys at each call (bslma_constructionutil.xt.cpp's
+       'main' ran for over an hour).  */
     for (tree d : ptrs)
-      object_written_through_memory (d);
+      object_written_through_memory_1 (d);
+    auto_vec<tree, 8> members;
+    if (m_field_object_key)
+      for (auto it : *m_field_object_key)
+	if (ptrs.contains (it.first.first))
+	  {
+	    predicate_fact_invalidate (it.second);
+	    invalidate (it.second);
+	    members.safe_push (it.second);
+	  }
+    array_object_address_invalidate_on_all (members);
+    field_object_address_invalidate_derived_all (members);
+    if (m_array_object_key)
+      for (auto it : *m_array_object_key)
+	if (ptrs.contains (it.first.first) || ptrs.contains (it.first.second))
+	  {
+	    predicate_fact_invalidate (it.second);
+	    invalidate (it.second);
+	  }
   }
   void addressable_locals_written_through_memory ()
   {
@@ -9967,8 +9995,7 @@ public:
 	    invalidate (it.second);
 	    members.safe_push (it.second);
 	  }
-    for (tree k : members)
-      field_object_address_invalidate_derived (k);
+    field_object_address_invalidate_derived_all (members);
     if (m_array_object_key)
       for (auto it : *m_array_object_key)
 	if (objects.contains (it.first.first)
@@ -10150,6 +10177,54 @@ public:
 	array_object_address_invalidate_on (k);
 	field_object_address_invalidate_derived (k, depth + 1);
       }
+  }
+  /* field_object_address_invalidate_derived for each of MEMBER_KEYS --
+     the same keys reached, the same facts ended -- but breadth first,
+     with one sweep of the field keys and one of the array keys per
+     level for all of them rather than per key: callers ending many
+     members at once (an opaque call's sweep of the function's
+     addressable locals) otherwise paid the number of members times the
+     number of keys.  */
+  void field_object_address_invalidate_derived_all
+    (const vec<tree> &member_keys)
+  {
+    if (!m_field_object_key || member_keys.is_empty ())
+      return;
+    hash_set<tree> sets[2];
+    int cur = 0;
+    for (tree k : member_keys)
+      sets[cur].add (k);
+    for (int depth = 0; depth <= 16 && !sets[cur].is_empty (); ++depth)
+      {
+	hash_set<tree> &frontier = sets[cur];
+	hash_set<tree> &next = sets[1 - cur];
+	next.empty ();
+	for (auto it : *m_field_object_key)
+	  if (frontier.contains (it.first.first))
+	    next.add (it.second);
+	if (next.is_empty ())
+	  break;
+	for (tree k : next)
+	  invalidate (k);
+	if (m_array_object_key)
+	  for (auto it : *m_array_object_key)
+	    if (next.contains (it.first.first))
+	      invalidate (it.second);
+	cur = 1 - cur;
+      }
+  }
+  /* array_object_address_invalidate_on for each of MEMBER_KEYS, in one
+     sweep of the array keys.  */
+  void array_object_address_invalidate_on_all (const vec<tree> &member_keys)
+  {
+    if (!m_array_object_key || member_keys.is_empty ())
+      return;
+    hash_set<tree> keys;
+    for (tree k : member_keys)
+      keys.add (k);
+    for (auto it : *m_array_object_key)
+      if (keys.contains (it.first.first))
+	invalidate (it.second);
   }
   /* Every chain fact (one keyed on a pointer member's own field key,
      see field_object_address_invalidate_field_chains), and every one
