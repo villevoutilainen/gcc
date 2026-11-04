@@ -126,7 +126,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     _InputIterator
     __find_if_not_n(_InputIterator __first, _Distance& __len, _Predicate __pred)
     {
-      for (; __len; --__len,  (void) ++__first)
+      for (; __len; --__len,  (void) ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	if (!__pred(*__first))
 	  break;
       return __first;
@@ -1349,8 +1349,8 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
 	      __p = __q - __k;
 	      for (_Distance __i = 0; __i < __n - __k; ++ __i)
 		{
-		  --__p;
-		  --__q;
+		  --_GLIBCXX_CONVEYOR_TRUSTED (__p);
+		  --_GLIBCXX_CONVEYOR_TRUSTED (__q);
 		  std::iter_swap(__p, __q);
 		}
 	      __n = static_cast<_UDistance>(__n) % static_cast<_UDistance>(__k);
@@ -1533,12 +1533,12 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 	  // This ensures that we only call __pred once per element.
 	  *__result2 = _GLIBCXX_MOVE(*__first);
 	  ++__result2;
-	  ++__first;
-	  for (; __first != __last; ++__first)
+	  ++_GLIBCXX_CONVEYOR_TRUSTED (__first);
+	  for (; _GLIBCXX_CONVEYOR_TRUSTED (__first) != __last; ++_GLIBCXX_CONVEYOR_TRUSTED (__first))
 	    if (__pred(*__first))
 	      {
-		*__result1 = _GLIBCXX_MOVE(*__first);
-		++__result1;
+		*__result1 = _GLIBCXX_MOVE(*_GLIBCXX_CONVEYOR_TRUSTED (__first));
+		++_GLIBCXX_CONVEYOR_TRUSTED (__result1);
 	      }
 	    else
 	      {

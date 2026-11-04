@@ -1254,7 +1254,10 @@ namespace __variant
       static_assert(_Np < sizeof...(_Types),
 		    "The index must be in [0, number of alternatives)");
       static_assert(!is_void_v<_Alternative_type>, "_Tp must not be void");
-      if (__ptr && __ptr->index() == _Np)
+      if (!__ptr)
+	return nullptr;
+      _GLIBCXX_CONVEYOR_TRUST(*__ptr);
+      if (__ptr->index() == _Np)
 	return std::addressof(__detail::__variant::__get<_Np>(*__ptr));
       return nullptr;
     }

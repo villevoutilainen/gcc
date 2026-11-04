@@ -1679,7 +1679,7 @@ namespace __rb_tree
 
       const_reverse_iterator
       rend() const _GLIBCXX_NOEXCEPT
-      { return const_reverse_iterator(begin()); }
+      { _GLIBCXX_CONVEYOR_TRUST_THIS; return const_reverse_iterator(begin()); }
 
       _GLIBCXX_NODISCARD bool
       empty() const _GLIBCXX_NOEXCEPT _GLIBCXX_CONVEYOR_AUTO

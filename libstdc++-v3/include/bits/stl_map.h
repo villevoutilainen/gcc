@@ -535,12 +535,14 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	__glibcxx_function_requires(_DefaultConstructibleConcept<mapped_type>)
 
 	iterator __i = lower_bound(__k);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	// __i->first is greater than or equivalent to __k.
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	_GLIBCXX_CONVEYOR_TRUST(__i);
 	if (__i == end() || key_comp()(__k, (*__i).first))
 #if __cplusplus >= 201103L
-	  __i = _M_t._M_emplace_hint_unique(_GLIBCXX_CONVEYOR_TRUSTED (__i), std::piecewise_construct,
+	  __i = _M_t._M_emplace_hint_unique(_GLIBCXX_CONVEYOR_TRUSTED (__i),
+					    std::piecewise_construct,
 					    std::tuple<const key_type&>(__k),
 					    std::tuple<>());
 #else
@@ -557,9 +559,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	__glibcxx_function_requires(_DefaultConstructibleConcept<mapped_type>)
 
 	iterator __i = lower_bound(__k);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	// __i->first is greater than or equivalent to __k.
 	if (__i == end() || key_comp()(__k, (*__i).first))
-	  __i = _M_t._M_emplace_hint_unique(__i, std::piecewise_construct,
+	  __i = _M_t._M_emplace_hint_unique(_GLIBCXX_CONVEYOR_TRUSTED (__i),
+					std::piecewise_construct,
 					std::forward_as_tuple(std::move(__k)),
 					std::tuple<>());
 	return (*__i).second;
@@ -589,6 +593,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       at(const key_type& __k)
       {
 	iterator __i = lower_bound(__k);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	if (__i == end() || key_comp()(__k, (*__i).first))
 	  __throw_out_of_range(__N("map::at"));
 	return (*__i).second;
@@ -600,6 +605,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	at(const _Kt& __k)
 	{
 	  iterator __i = lower_bound(__k);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (__i == end() || key_comp()(__k, (*__i).first))
 	    __throw_out_of_range(__N("map::at"));
 	  return (*__i).second;
@@ -662,10 +668,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		    const key_type& __k = __a;
 		    iterator __i = lower_bound(__k);
 		    _GLIBCXX_CONVEYOR_TRUST_THIS;
+		    _GLIBCXX_CONVEYOR_TRUST_THIS;
 		    if (__i == end() || key_comp()(__k, (*__i).first))
 		      {
 			_GLIBCXX_CONVEYOR_TRUST(__i);
-			__i = emplace_hint(__i, std::forward<_Args>(__args)...);
+			__i = emplace_hint(_GLIBCXX_CONVEYOR_TRUSTED (__i),
+					   std::forward<_Args>(__args)...);
 			return {__i, true};
 		      }
 		    return {__i, false};
@@ -799,9 +807,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	try_emplace(const key_type& __k, _Args&&... __args)
 	{
 	  iterator __i = lower_bound(__k);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (__i == end() || key_comp()(__k, (*__i).first))
 	    {
-	      __i = emplace_hint(__i, std::piecewise_construct,
+	      __i = emplace_hint(_GLIBCXX_CONVEYOR_TRUSTED (__i),
+				 std::piecewise_construct,
 				 std::forward_as_tuple(__k),
 				 std::forward_as_tuple(
 				   std::forward<_Args>(__args)...));
@@ -818,10 +828,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  iterator __i = lower_bound(__k);
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (__i == end() || key_comp()(__k, (*__i).first))
 	    {
 	      _GLIBCXX_CONVEYOR_TRUST(__i);
-	      __i = emplace_hint(__i, std::piecewise_construct,
+	      __i = emplace_hint(_GLIBCXX_CONVEYOR_TRUSTED (__i),
+				 std::piecewise_construct,
 				 std::forward_as_tuple(std::move(__k)),
 				 std::forward_as_tuple(
 				   std::forward<_Args>(__args)...));
@@ -980,9 +992,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		{
 		  const key_type& __k = __x.first;
 		  iterator __i = lower_bound(__k);
+		  _GLIBCXX_CONVEYOR_TRUST_THIS;
 		  if (__i == end() || key_comp()(__k, (*__i).first))
 		    {
-		      __i = emplace_hint(__i, std::forward<_Pair>(__x));
+		      __i = emplace_hint(_GLIBCXX_CONVEYOR_TRUSTED (__i),
+					 std::forward<_Pair>(__x));
 		      return {__i, true};
 		    }
 		  return {__i, false};
@@ -1112,9 +1126,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	insert_or_assign(const key_type& __k, _Obj&& __obj)
 	{
 	  iterator __i = lower_bound(__k);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (__i == end() || key_comp()(__k, (*__i).first))
 	    {
-	      __i = emplace_hint(__i, std::piecewise_construct,
+	      __i = emplace_hint(_GLIBCXX_CONVEYOR_TRUSTED (__i),
+				 std::piecewise_construct,
 				 std::forward_as_tuple(__k),
 				 std::forward_as_tuple(
 				   std::forward<_Obj>(__obj)));
@@ -1130,9 +1146,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	insert_or_assign(key_type&& __k, _Obj&& __obj)
 	{
 	  iterator __i = lower_bound(__k);
+	  _GLIBCXX_CONVEYOR_TRUST_THIS;
 	  if (__i == end() || key_comp()(__k, (*__i).first))
 	    {
-	      __i = emplace_hint(__i, std::piecewise_construct,
+	      __i = emplace_hint(_GLIBCXX_CONVEYOR_TRUSTED (__i),
+				 std::piecewise_construct,
 				 std::forward_as_tuple(std::move(__k)),
 				 std::forward_as_tuple(
 				   std::forward<_Obj>(__obj)));
