@@ -1600,7 +1600,8 @@ namespace chrono
 	if (__ns.count() > 999999999) [[__unlikely__]]
 	  __ns = chrono::nanoseconds(999999999);
 
-      __ts.tv_sec = static_cast<time_t>(_GLIBCXX_CONVEYOR_TRUSTED (__s).count());
+      _GLIBCXX_CONVEYOR_TRUST(__s);
+      __ts.tv_sec = static_cast<time_t>(__s.count());
       __ts.tv_nsec = static_cast<long>(__ns.count());
       return __ts;
     }
