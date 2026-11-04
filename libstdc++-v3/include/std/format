@@ -3664,7 +3664,7 @@ namespace __format
 	    if (!_M_on_stack())
 	      _M_sbuf->__safe_pbump(__s.size());
 	    else if (_M_sbuf->sputn(__s.data(), __s.size())
-		       != static_cast<streamsize>(__s.size()))
+		       != static_cast<streamsize>(_GLIBCXX_CONVEYOR_TRUSTED (__s).size()))
 	      _M_write_failed = true;
 	  }
 	__catch(const __cxxabiv1::__forced_unwind&)

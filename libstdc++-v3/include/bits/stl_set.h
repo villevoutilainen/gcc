@@ -848,7 +848,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       count(const key_type& __x) const
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
-	return _M_t.find(__x) == _M_t.end() ? 0 : 1;
+	typename _Rep_type::const_iterator __i = _M_t.find(__x);
+	_GLIBCXX_CONVEYOR_TRUST_THIS;
+	return __i == _M_t.end() ? 0 : 1;
       }
 
 #ifdef __glibcxx_generic_associative_lookup // C++ >= 14
