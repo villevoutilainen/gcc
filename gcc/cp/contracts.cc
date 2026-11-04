@@ -987,7 +987,7 @@ conveyor_error_function ()
 /* Emit the error GMSGID with AP at LOC, counting it in
    conveyor_errorcount.  */
 
-static void ATTRIBUTE_GCC_DIAG (2,0)
+static bool ATTRIBUTE_GCC_DIAG (2,0)
 conveyor_emit_error (location_t loc, const char *gmsgid, va_list *ap)
 {
   auto_diagnostic_group d;
@@ -995,6 +995,7 @@ conveyor_emit_error (location_t loc, const char *gmsgid, va_list *ap)
   emit_diagnostic_valist (diagnostics::kind::error, loc,
 			  diagnostics::option_id (), gmsgid, ap);
   conveyor_errorcount += errorcount - before;
+  return errorcount > before;
 }
 
 /* True if a conveyor rule violation was reported in FN
@@ -1046,9 +1047,10 @@ static hash_set<nofree_string_hash> *conveyor_rule_error_lines;
    conveyor_error_valist.  Reported once per source line: the construct
    is still built, so what it is built from can trip the rules again -- a
    rejected explicit destructor call's call to the destructor, or each
-   instantiation of a template whose definition was already diagnosed.  */
+   instantiation of a template whose definition was already diagnosed.
+   True if the error was reported.  */
 
-void
+bool
 conveyor_rule_error_at (location_t loc, const char *gmsgid, ...)
 {
   if (tree fn = conveyor_error_function ())
@@ -1066,13 +1068,14 @@ conveyor_rule_error_at (location_t loc, const char *gmsgid, ...)
       if (conveyor_rule_error_lines->add (key))
 	{
 	  free (key);
-	  return;
+	  return false;
 	}
     }
   va_list ap;
   va_start (ap, gmsgid);
-  conveyor_emit_error (loc, gmsgid, &ap);
+  bool reported = conveyor_emit_error (loc, gmsgid, &ap);
   va_end (ap);
+  return reported;
 }
 
 /* See contracts.h.  */

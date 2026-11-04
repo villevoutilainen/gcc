@@ -4831,10 +4831,11 @@ cp_build_function_call_vec (tree function, vec<tree, va_gc> **params,
 	    note_conveyor_auto_violation ();
 	  else
 	    {
-	      conveyor_rule_error_at (input_location, "call to %qD, which is "
-				      "not declared %<conveyor%>, not "
-				      "permitted in a conveyor function or "
-				      "predicate", fndecl);
+	      if (conveyor_rule_error_at (input_location, "call to %qD, which "
+					  "is not declared %<conveyor%>, not "
+					  "permitted in a conveyor function or "
+					  "predicate", fndecl))
+		inform (DECL_SOURCE_LOCATION (fndecl), "%qD declared here", fndecl);
 	      if (contract_condition_conveyor_p)
 		return error_mark_node;
 	    }

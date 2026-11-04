@@ -1238,7 +1238,7 @@ extern void conveyor_error_at (location_t, const char *, ...)
   ATTRIBUTE_GCC_DIAG (2,3);
 extern void conveyor_error_valist (location_t, const char *, va_list *)
   ATTRIBUTE_GCC_DIAG (2,0);
-extern void conveyor_rule_error_at (location_t, const char *, ...)
+extern bool conveyor_rule_error_at (location_t, const char *, ...)
   ATTRIBUTE_GCC_DIAG (2,3);
 extern bool conveyor_rule_rejected_p (tree);
 

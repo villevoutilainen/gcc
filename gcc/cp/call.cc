@@ -11194,10 +11194,11 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
 	    note_conveyor_auto_violation ();
 	  else
 	    {
-	      conveyor_rule_error_at (input_location, "call to %qD, which is "
-				      "not declared %<conveyor%>, not "
-				      "permitted in a conveyor function or "
-				      "predicate", fn);
+	      if (conveyor_rule_error_at (input_location, "call to %qD, which "
+					  "is not declared %<conveyor%>, not "
+					  "permitted in a conveyor function or "
+					  "predicate", fn))
+		inform (DECL_SOURCE_LOCATION (fn), "%qD declared here", fn);
 	      if (contract_condition_conveyor_p)
 		return error_mark_node;
 	    }
