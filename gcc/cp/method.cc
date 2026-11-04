@@ -1815,6 +1815,14 @@ synthesize_method (tree fndecl)
      is_object_address preconditions -- aren't substituted anywhere else.  */
   contract_substitute_for_synthesis (fndecl);
 
+  /* That deduces a conveyor(auto) function's conveyor-ness by instantiating
+     it, which for a defaulted function is this synthesis, done already.  */
+  if (DECL_SAVED_TREE (fndecl) || DECL_DELETED_FN (fndecl))
+    {
+      input_location = save_input_location;
+      return;
+    }
+
   /* We may be in the middle of deferred access check.  Disable
      it now.  */
   push_deferring_access_checks (dk_no_deferred);
