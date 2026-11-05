@@ -1,7 +1,7 @@
 // D4324: under -fcontract-evaluation-semantic=quick_enforce, a failed default_v
-// check terminates at once, without writing a diagnostic first, as a plain
-// contract does.  The terminate handler writes the first output; any
-// diagnostic before it would make the output not start with it.
+// check terminates at once, without calling the violation handler, as a
+// plain contract does.  The terminate handler writes the first output; a
+// handler call before it would make the output not start with it.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=quick_enforce" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }

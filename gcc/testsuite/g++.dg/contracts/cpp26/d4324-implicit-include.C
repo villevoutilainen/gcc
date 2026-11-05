@@ -14,14 +14,13 @@ using sem_t = std::contracts::evaluation_semantic;
 static_assert (sem_t::enforce != sem_t::ignore);
 
 // This test never links the runtime contracts support library
-// (libstdc++exp): default_v's operator() calls these two library-only
-// entry points in its non-executed (check-failed) branch, which is enough
-// to need them defined at link time even though this test's checks all
-// pass.  Trivial local definitions sidestep the resulting link error, the
-// same established workaround used by every other test exercising
-// default_v (see d4324-control-object-state.C et al.).
+// (libstdc++exp): default_v's operator() calls the violation handler and
+// a library-only terminate entry point in its non-executed (check-failed)
+// branch, which is enough to need them defined at link time even though
+// this test's checks all pass.  A replacement handler and a trivial local
+// definition sidestep the resulting link error.
+void handle_contract_violation (const std::contracts::contract_violation&) {}
 namespace std { namespace contracts {
-void __d4324_log_violation (const char*, std::source_location) noexcept {}
 [[noreturn]] void __d4324_terminate () noexcept { __builtin_trap (); }
 } }
 

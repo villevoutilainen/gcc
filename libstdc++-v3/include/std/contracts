@@ -611,10 +611,16 @@ namespace contracts
 	}
       else
 	{
-	  // quick_enforce terminates at once, with no diagnostic, as a plain
-	  // contract does under -fcontract-evaluation-semantic=quick_enforce.
+	  // quick_enforce terminates at once, without calling the violation
+	  // handler, as a plain contract does under
+	  // -fcontract-evaluation-semantic=quick_enforce.  Otherwise the
+	  // replaceable violation handler is called; an exception it throws
+	  // propagates.
 	  if (__ctx.semantic() != evaluation_semantic::quick_enforce)
-	    __d4324_log_violation(__ctx.comment(), __ctx.location());
+	    invoke_violation_handler
+	      ({__ctx.comment(), __ctx.location(), __ctx.semantic(),
+		__ctx.kind()},
+	       detection_mode::predicate_false);
 	  if (__ctx.semantic() != evaluation_semantic::observe)
 	    __d4324_terminate_wrapper();
 	}
