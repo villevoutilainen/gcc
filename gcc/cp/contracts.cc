@@ -19121,14 +19121,28 @@ oa_reference_owned_p (tree expr, oa_env &env,
   if (TREE_CODE (expr) == ADDR_EXPR)
     {
       tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
-      if (TREE_CODE (op) == COMPONENT_REF)
+      /* A field or an element of an owned object is owned, at any depth:
+	 'this->a.b[i].c' is owned as '*this' is.  The GIMPLE engine
+	 (cg_provably_owned_p) already sees through the whole chain; one
+	 level only here rejected libc++'s string's
+	 'pointer_to (__rep_.__s.__data_[0])'.  */
+      if (TREE_CODE (op) == COMPONENT_REF || TREE_CODE (op) == ARRAY_REF)
 	{
-	  tree base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
+	  tree base = op;
+	  bool field = false;
+	  while (TREE_CODE (base) == COMPONENT_REF
+		 || TREE_CODE (base) == ARRAY_REF)
+	    {
+	      field |= TREE_CODE (base) == COMPONENT_REF;
+	      base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (base, 0));
+	    }
+	  if (TREE_CODE (base) == TARGET_EXPR)
+	    return true;
 	  if (TREE_CODE (base) == INDIRECT_REF)
 	    return oa_reference_owned_p (TREE_OPERAND (base, 0), env,
 					  /*asking_about_pointer_value=*/true,
 					  in_predicate_context, reason_out);
-	  if (DECL_P (base))
+	  if (DECL_P (base) && field)
 	    return oa_reference_owned_p (base, env,
 					  /*asking_about_pointer_value=*/true,
 					  in_predicate_context, reason_out);
