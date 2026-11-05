@@ -401,16 +401,32 @@ fnptr_contract_owner (tree expr)
   if (expr == NULL_TREE || expr == error_mark_node)
     return NULL_TREE;
 
+  /* Look through conversions, '&', and '*' applied to a function
+     pointer: (*p)(x), (**p)(x) and (*s.fp)(x) call through p or s.fp
+     itself (P4445 BUG-07).  */
   expr = STRIP_ANY_LOCATION_WRAPPER (expr);
-  while (TREE_CODE (expr) == NON_LVALUE_EXPR
-	 || TREE_CODE (expr) == NOP_EXPR
-	 || TREE_CODE (expr) == CONVERT_EXPR
-	 || TREE_CODE (expr) == VIEW_CONVERT_EXPR
-	 || REFERENCE_REF_P (expr))
-    expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+  while (true)
+    {
+      if (TREE_CODE (expr) == NON_LVALUE_EXPR
+	  || TREE_CODE (expr) == NOP_EXPR
+	  || TREE_CODE (expr) == CONVERT_EXPR
+	  || TREE_CODE (expr) == VIEW_CONVERT_EXPR
+	  || TREE_CODE (expr) == ADDR_EXPR
+	  || REFERENCE_REF_P (expr)
+	  || (INDIRECT_REF_P (expr)
+	      && TYPE_PTRFN_P (TREE_TYPE (TREE_OPERAND (expr, 0)))))
+	expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+      else
+	break;
+    }
 
-  if (TREE_CODE (expr) == ADDR_EXPR)
-    expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
+  /* (c ? p : p)(x): both arms name the same contracted object.  */
+  if (TREE_CODE (expr) == COND_EXPR && TREE_OPERAND (expr, 1))
+    {
+      tree a = fnptr_contract_owner (TREE_OPERAND (expr, 1));
+      tree b = fnptr_contract_owner (TREE_OPERAND (expr, 2));
+      return a == b ? a : NULL_TREE;
+    }
 
   /* '&C::member_func' for a non-static, non-overloaded member is a
      PTRMEM_CST, not an ADDR_EXPR (FUNCTION_DECL) -- its own designated
