@@ -500,6 +500,12 @@ namespace contracts
       {
 	if (__ctx.check ())
 	  return;
+	evaluation_semantic __effective
+	  = __effective_semantic (__configured_semantic (__ctx.static_info ()));
+	// quick_enforce terminates at once, as a plain contract and default_v
+	// do: no notification, no local or global violation handler.
+	if (__effective == evaluation_semantic::quick_enforce)
+	  __d4324_terminate_wrapper ();
 	// Always notified on a real violation, independent of whether
 	// local_violation_label (just below) goes on to suppress the
 	// global handler -- matching the real paper's own owner_label
@@ -517,9 +523,6 @@ namespace contracts
 	const char* __comment = __ctx.comment ();
 	if constexpr (compute_comment_label<_Self>)
 	  __comment = static_cast<const _Self&> (*this).compute_comment (__comment);
-
-	evaluation_semantic __effective
-	  = __effective_semantic (__configured_semantic (__ctx.static_info ()));
 
 	// Falls through to the REAL, user-replaceable global handler --
 	// not an approximation, see invoke_violation_handler's own
