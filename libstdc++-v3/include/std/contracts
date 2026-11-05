@@ -596,8 +596,10 @@ namespace contracts
     static constexpr bool
     assumable(assertion_static_info) noexcept { return false; }
 
+    // Not noexcept: an exception thrown by the predicate propagates to
+    // the caller, neither terminating nor reported as a violation.
     constexpr void
-    operator()(const assertion_context& __ctx) const noexcept
+    operator()(const assertion_context& __ctx) const
     {
       if (__ctx.check())
 	return;
@@ -609,7 +611,10 @@ namespace contracts
 	}
       else
 	{
-	  __d4324_log_violation(__ctx.comment(), __ctx.location());
+	  // quick_enforce terminates at once, with no diagnostic, as a plain
+	  // contract does under -fcontract-evaluation-semantic=quick_enforce.
+	  if (__ctx.semantic() != evaluation_semantic::quick_enforce)
+	    __d4324_log_violation(__ctx.comment(), __ctx.location());
 	  if (__ctx.semantic() != evaluation_semantic::observe)
 	    __d4324_terminate_wrapper();
 	}
