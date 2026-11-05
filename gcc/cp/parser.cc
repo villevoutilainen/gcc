@@ -32401,7 +32401,9 @@ cp_parser_member_declaration (cp_parser* parser)
 		       && !cp_parser_early_parsing_nsdmi (parser, decl))
 		/* Add DECL to the queue of NSDMI to be parsed later.  */
 		vec_safe_push (unparsed_nsdmis, decl);
-	      else if (DECL_HAS_CONTRACTS_P (decl))
+	      /* Not an else: a data member with a default member initializer
+		 can have a pre<>/post<> clause too (P4445 BUG-06).  */
+	      if (!DECL_DECLARES_FUNCTION_P (decl) && DECL_HAS_CONTRACTS_P (decl))
 		/* D4324 + templates: a static/non-static data member of
 		   callable type whose own pre<>/post<> clause was
 		   necessarily deferred (DEFERRED_PARSE -- see
