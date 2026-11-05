@@ -13,16 +13,9 @@
 using sem_t = std::contracts::evaluation_semantic;
 static_assert (sem_t::enforce != sem_t::ignore);
 
-// This test never links the runtime contracts support library
-// (libstdc++exp): default_v's operator() calls the violation handler and
-// a library-only terminate entry point in its non-executed (check-failed)
-// branch, which is enough to need them defined at link time even though
-// this test's checks all pass.  A replacement handler and a trivial local
-// definition sidestep the resulting link error.
-void handle_contract_violation (const std::contracts::contract_violation&) {}
-namespace std { namespace contracts {
-[[noreturn]] void __d4324_terminate () noexcept { __builtin_trap (); }
-} }
+// The option also makes the driver link the runtime contracts support
+// library (libstdc++exp), as -fcontracts does: default_v's operator()
+// needs it, so this test doesn't link without it (P4445 BUG-38).
 
 // A bare pre, naming no control object at all -- relies on
 // -fcontracts-implicit-include enabling -fcontract-control-objects (so

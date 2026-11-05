@@ -167,6 +167,7 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
       switch (decoded_options[i].opt_index)
 	{
 	case OPT_fcontracts:
+	case OPT_fcontracts_implicit_include:
 	  need_experimental = true;
 	  break;
 
