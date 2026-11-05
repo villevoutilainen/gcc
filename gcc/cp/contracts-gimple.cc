@@ -14302,6 +14302,21 @@ cg_drop_renewed_within (tree root, tree member, cg_dom_fact_state &state)
     state.oa_renewed.remove (t);
 }
 
+/* Whether ARG, a call's pointer argument, is a range-based for's
+   '__for_range' (or another hidden variable, contract_hidden_var_p): a
+   reference bound to the range, the route its begin () and end () calls
+   are given.  The object it refers to is the user's, and the language's
+   own route to it doesn't end it, as the AST engine keeps the object
+   through the hidden copy (oa_handle_call_precondition_obligation's
+   'copy').  */
+
+static bool
+cg_route_through_hidden_var_p (tree arg)
+{
+  return (TREE_CODE (arg) == SSA_NAME && SSA_NAME_VAR (arg)
+	  && contract_hidden_var_p (SSA_NAME_VAR (arg)));
+}
+
 static void
 cg_end_route_objects (tree arg, cg_dom_fact_state &state, int depth = 0,
 		      bool climb = true)
@@ -14316,6 +14331,8 @@ cg_end_route_objects (tree arg, cg_dom_fact_state &state, int depth = 0,
   if (!member && root
       && (contract_hidden_var_p (root)
 	  || (VAR_P (root) && DECL_ARTIFICIAL (root) && !DECL_NAME (root))))
+    return;
+  if (cg_route_through_hidden_var_p (arg))
     return;
   if (TREE_CODE (arg) == SSA_NAME)
     state.oa_ended.add (arg);
@@ -14700,6 +14717,8 @@ cg_end_object_addresses_for_call_1 (gcall *call, function *fun,
 	  continue;
 	}
       cg_end_route_objects (arg, state, 0, !cdtor);
+      if (cg_route_through_hidden_var_p (arg))
+	continue;
       /* A parameter's object the route reaches -- its own value, or one
 	 of its members or bases where the callee may get from there to
 	 the object (cg_route_object) -- ends, and so do the parameters
