@@ -15,13 +15,12 @@
 #include <contracts>
 
 // This test is compile-only and never links the runtime contracts support
-// library (libstdc++exp), but default_control's operator() calls these two
-// library-only entry points in its non-consteval branch; under
-// -pedantic-errors that flags them "used but never defined".  Trivial local
-// definitions sidestep that without affecting anything this test actually
+// library (libstdc++exp), but default_control's operator() calls the
+// library-only __d4324_terminate in its non-consteval branch; under
+// -pedantic-errors that flags it "used but never defined".  A trivial local
+// definition sidesteps that without affecting anything this test actually
 // checks (the IPA/noipa codegen shape, not runtime handling).
 namespace std { namespace contracts {
-void __d4324_log_violation (const char*, std::source_location) noexcept {}
 [[noreturn]] void __d4324_terminate () noexcept { __builtin_trap (); }
 } }
 

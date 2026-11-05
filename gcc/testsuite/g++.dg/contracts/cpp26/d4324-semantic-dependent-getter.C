@@ -20,10 +20,9 @@
 #include <contracts>
 
 // This test is compile-only and never links the runtime contracts support
-// library (libstdc++exp); see d4324-constify-off.C for why these trivial
-// local definitions are needed under -pedantic-errors.
+// library (libstdc++exp); see d4324-constify-off.C for why this trivial
+// local definition is needed under -pedantic-errors.
 namespace std { namespace contracts {
-void __d4324_log_violation (const char*, std::source_location) noexcept {}
 [[noreturn]] void __d4324_terminate () noexcept { __builtin_trap (); }
 } }
 

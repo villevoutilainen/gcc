@@ -17,7 +17,6 @@
 #include <contracts>
 
 namespace std { namespace contracts {
-void __d4324_log_violation (const char*, std::source_location) noexcept {}
 [[noreturn]] void __d4324_terminate () noexcept { __builtin_trap (); }
 } }
 

@@ -17,14 +17,15 @@
 #include <contracts>
 
 // This test is compile-only with respect to the runtime contracts support
-// library (libstdc++exp): it never links it. default_control/mandatory's
-// operator()s call these two library-only entry points in their
-// non-consteval branch (unrelated to this test, but still compiled as
-// part of <contracts>, since __d4324_terminate_wrapper -- an ordinary,
-// externally-linked inline function -- gets emitted into every TU that
-// includes <contracts> with -fcontract-control-objects, regardless of
-// whether anything in the TU actually calls it); trivial local
-// definitions sidestep the resulting link error.
+// library (libstdc++exp): it never links it. mandatory's operator() calls
+// these two library-only entry points, and default_control's operator()
+// calls __d4324_terminate, in their non-consteval branch (unrelated to
+// this test, but still compiled as part of <contracts>, since
+// __d4324_terminate_wrapper -- an ordinary, externally-linked inline
+// function -- gets emitted into every TU that includes <contracts> with
+// -fcontract-control-objects, regardless of whether anything in the TU
+// actually calls it); trivial local definitions sidestep the resulting
+// link error.
 namespace std { namespace contracts {
 void __d4324_log_violation (const char*, std::source_location) noexcept {}
 [[noreturn]] void __d4324_terminate () noexcept { __builtin_trap (); }

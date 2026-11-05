@@ -11,12 +11,11 @@
 
 // This test is compile-only and never links the runtime contracts support
 // library (libstdc++exp), but the bare pre() below resolves to default_v,
-// whose operator() calls these two library-only entry points; under
-// -pedantic-errors that flags them "used but never defined".  Trivial local
-// definitions sidestep that without affecting anything this test actually
+// whose operator() calls the library-only __d4324_terminate; under
+// -pedantic-errors that flags it "used but never defined".  A trivial local
+// definition sidesteps that without affecting anything this test actually
 // checks (which entry point gets called, not what it does).
 namespace std { namespace contracts {
-void __d4324_log_violation (const char*, std::source_location) noexcept {}
 [[noreturn]] void __d4324_terminate () noexcept { __builtin_trap (); }
 } }
 

@@ -11,10 +11,6 @@
 
 #include <contracts>
 
-namespace std { namespace contracts {
-void __d4324_log_violation (const char*, std::source_location) noexcept {}
-} }
-
 namespace sc = std::contracts;
 
 constexpr int f (int x) pre<sc::default_v>(x >= 0) { return x; }
