@@ -17943,21 +17943,18 @@ static bool oa_callee_pre_mandatory;
 enum oa_pre_selection_kind { OA_PRE_ALL, OA_PRE_MANDATORY, OA_PRE_TERMINATING };
 static oa_pre_selection_kind oa_pre_selection = OA_PRE_ALL;
 
-/* Set while scanning a never_proven_conveyor predicate's own text for
-   OA_CALLEE_PRE_MANDATORY's obligations alone: a never-proven predicate
-   is exempt from the rest of item 8 (see oa_handle_precondition_stmt),
-   but a call it makes still mustn't break its conveyor callee's
-   preconditions -- never-proven trusts the predicate's claim, it doesn't
-   permit undefined behavior in evaluating it.  */
+/* Set while scanning a never_proven_conveyor predicate's own text: of
+   its calls' callee preconditions, only OA_CALLEE_PRE_MANDATORY's
+   obligations are checked.  Never-proven trusts the predicate's claim, a
+   fact it establishes without proof; it doesn't permit undefined
+   behavior in evaluating it, so the rest of item 8 applies as to any
+   conveyor predicate: the input facts of establishing a fact must be
+   proven.  */
 
 static bool oa_item8_callee_pre_only;
 
-/* Set while scanning a never_proven_conveyor predicate's own text for
-   its dereferences alone (oa_scan_array_bounds_in_expr's INDIRECT_REF
-   case): trusting the claim doesn't make evaluating it valid, and '*p'
-   of an unestablished P is undefined behavior however the result is
-   used.  Its arithmetic stays exempt -- a never-proven trust is what a
-   library uses for an unprovable bound.  */
+/* Set while scanning for dereferences alone (oa_scan_array_bounds_in_
+   expr's INDIRECT_REF case).  */
 
 static bool oa_deref_scan_only;
 
@@ -31537,12 +31534,10 @@ oa_scan_item8_conjunct (tree *conjunct, oa_env &env)
 
   if (oa_predicate_text_scan)
     oa_scan_callee_preconditions_in_expr (conjunct, env);
-  if (oa_item8_callee_pre_only)
-    {
-      auto deref = make_temp_override (oa_deref_scan_only, true);
-      oa_scan_array_bounds_in_expr (conjunct, env);
-      return;
-    }
+  /* A never-proven predicate's evaluation is checked as any other's: it
+     may establish a fact without proof, but what evaluating it requires
+     -- a nonzero divisor, no overflow, a valid dereference -- must be
+     proven (oa_item8_callee_pre_only).  */
   oa_scan_div_mod_in_expr (conjunct, env);
   oa_scan_array_bounds_in_expr (conjunct, env);
   oa_scan_overflow_in_expr (conjunct, env);

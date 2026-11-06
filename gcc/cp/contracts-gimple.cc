@@ -18636,7 +18636,11 @@ pass_contracts_gimple::execute_1 (function *fun)
 			     established_nz, &assert_memory_verdicts,
 			     &established_frange, &established);
 
-  bool check_item8_ub = conveyor_code && !never_proven_core;
+  /* A never-proven predicate's evaluation too: it establishes a fact
+     without proof, but the input facts of establishing it -- a nonzero
+     divisor, no overflow, a valid dereference -- must be proven, as in
+     the AST engine.  */
+  bool check_item8_ub = conveyor_code;
 
   /* Walk the dominator tree, so a contract_assert's facts are in the
      fact maps exactly while its dominator subtree is being checked (see
@@ -18669,11 +18673,6 @@ pass_contracts_gimple::execute_1 (function *fun)
 	      cg_check_returned_reference (stmt, fun, established);
 	      cg_check_array_bounds_ub (stmt);
 	    }
-	  /* A never-proven predicate is exempt from item 8, but not from
-	     its dereferences being valid: trusting the claim doesn't make
-	     evaluating it valid (the AST engine's oa_deref_scan_only).  */
-	  else if (never_proven_core && conveyor_code)
-	    cg_check_dereference_ub (stmt, established);
 	  if (is_gimple_call (stmt) && !cg_eh_cleanup_stmt_p (stmt))
 	    {
 	      gcall *call = as_a <gcall *> (stmt);

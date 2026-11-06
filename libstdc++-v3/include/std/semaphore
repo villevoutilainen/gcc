@@ -65,12 +65,18 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       static constexpr ptrdiff_t
       max() noexcept _GLIBCXX_CONVEYOR
+#if defined(_GLIBCXX_CONVEYOR_ASSERTIONS) && defined(__cpp_contract_control_objects)
+      post<std::contracts::conveyor_assert_v> (__r: __r == __least_max_value)
+#endif
       { return __least_max_value; }
 
       void
       release(ptrdiff_t __update = 1) noexcept
       {
 	[[maybe_unused]] ptrdiff_t __old = _M_sem._M_release(__update);
+	// The counter is never negative: established first, so that
+	// max() - __old is known not to overflow.
+	__glibcxx_assert(__old >= 0);
 	__glibcxx_assert(__update >= 0 && __update <= max() - __old);
       }
 

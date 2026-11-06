@@ -2,8 +2,9 @@
 // must still be valid: a dereference in it ('p->v') needs its pointer
 // established, as in any conveyor predicate.  is_object_address's
 // argument is never evaluated ('&*this' included), a conjunct's trusted
-// claim establishes the pointer for the conjuncts after it, and the
-// predicate's arithmetic stays exempt from item 8.
+// claim establishes the pointer for the conjuncts after it.  The
+// predicate's arithmetic is checked too: establishing a fact needs no
+// proof, but its input facts do.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-analysis-engine=ast" }
 
@@ -14,7 +15,7 @@ struct D { int v; };
 
 int a (D *p) pre<never_proven_conveyor_v> (p->v > 0) { return 0; } // { dg-error "pointer dereference of 'p' not provably valid" }
 int b (D *p) pre<never_proven_conveyor_v> (std::is_object_address (p) && p->v > 0) { return 0; }
-int c (int x) pre<never_proven_conveyor_v> (x + 1 > 0) { return 0; }
+int c (int x) pre<never_proven_conveyor_v> (x + 1 > 0) { return 0; } // { dg-error "not provably free of overflow" }
 
 struct S
 {
