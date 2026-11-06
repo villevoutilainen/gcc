@@ -18436,11 +18436,49 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
 {
   bool ok = true;
 
+  /* The nodes a conjunct of *COND is reached by: from the root, through
+     '&&' and value-preserving wrappers only.  is_object_address is
+     resolved at compile time and replaced by its verdict, which is only
+     sound for a conjunct: under '||', '!' or '?:' it would be evaluated
+     as a constant (P4445 BUG-16).  */
+  hash_set<tree> conjunct_level;
+  {
+    auto_vec<tree, 8> work;
+    work.safe_push (*cond);
+    while (!work.is_empty ())
+      {
+	tree c = work.pop ();
+	if (!c || conjunct_level.add (c))
+	  continue;
+	switch (TREE_CODE (c))
+	  {
+	  case TRUTH_ANDIF_EXPR:
+	  case TRUTH_AND_EXPR:
+	    work.safe_push (TREE_OPERAND (c, 0));
+	    work.safe_push (TREE_OPERAND (c, 1));
+	    break;
+	  case CLEANUP_POINT_EXPR:
+	  case NOP_EXPR:
+	  case CONVERT_EXPR:
+	  case VIEW_CONVERT_EXPR:
+	  case NON_LVALUE_EXPR:
+	    work.safe_push (TREE_OPERAND (c, 0));
+	    break;
+	  default:
+	    if (location_wrapper_p (c))
+	      work.safe_push (TREE_OPERAND (c, 0));
+	    break;
+	  }
+      }
+  }
+
   struct walk_data
   {
     oa_env *env; bool conveyor_ok; bool symbolic_ok; bool trust; bool *ok;
+    hash_set<tree> *conjunct_level;
   };
-  walk_data data = { &env, conveyor_ok, symbolic_ok, trust, &ok };
+  walk_data data = { &env, conveyor_ok, symbolic_ok, trust, &ok,
+		     &conjunct_level };
 
   cp_walk_tree (cond, [](tree *tp, int *, void *data_) -> tree
     {
@@ -18448,6 +18486,17 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
       tree arg;
       if (!is_object_address_call_p (*tp, &arg))
 	return NULL_TREE;
+
+      if (!d->conjunct_level->contains (*tp))
+	{
+	  error_at (EXPR_LOCATION (*tp),
+		    "%<std::is_object_address%> may only be used as a "
+		    "conjunct of a contract condition, not under %<||%>, "
+		    "%<!%> or %<?:%>");
+	  *d->ok = false;
+	  *tp = error_mark_node;
+	  return NULL_TREE;
+	}
 
       if (!d->conveyor_ok && !d->symbolic_ok)
 	{
