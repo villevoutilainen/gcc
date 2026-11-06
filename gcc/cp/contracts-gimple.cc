@@ -5036,6 +5036,49 @@ cg_check_div_mod_ub (gimple *stmt, hash_map<tree, cg_fact> &established_nz,
   if (!is_gimple_assign (stmt))
     return;
   enum tree_code code = gimple_assign_rhs_code (stmt);
+
+  /* A shift count must be non-negative and less than the width of the
+     shifted operand's type (P4445 BUG-11).  */
+  if ((code == LSHIFT_EXPR || code == RSHIFT_EXPR)
+      && INTEGRAL_TYPE_P (TREE_TYPE (gimple_assign_lhs (stmt))))
+    {
+      tree count = gimple_assign_rhs2 (stmt);
+      unsigned prec = TYPE_PRECISION (TREE_TYPE (gimple_assign_lhs (stmt)));
+      /* A constant count: the front end checks it
+	 (conveyor_check_constant_shift_count).  */
+      if (TREE_CODE (count) == INTEGER_CST)
+	return;
+      cg_range_lite r;
+      bool known = false;
+      if (TREE_CODE (count) == SSA_NAME)
+	known = cg_value_range_at (count, stmt, established_range,
+				   scalar_range_cache, ranger,
+				   /*require_conveyor=*/true, &r);
+      /* An end of the range the conditions guarding STMT exclude
+	 ('if (n == 32) return ...;' after 'n <= 32'): one narrower.  */
+      if (known && r.has_hi
+	  && wi::fits_to_tree_p (r.hi, TREE_TYPE (count))
+	  && cg_excludes_value_at_p (count, stmt, ranger,
+				     wide_int_to_tree (TREE_TYPE (count),
+						       r.hi)))
+	r.hi -= 1;
+      if (known && r.has_lo
+	  && wi::fits_to_tree_p (r.lo, TREE_TYPE (count))
+	  && cg_excludes_value_at_p (count, stmt, ranger,
+				     wide_int_to_tree (TREE_TYPE (count),
+						       r.lo)))
+	r.lo += 1;
+      /* An unsigned count is non-negative.  */
+      bool nonneg = (TYPE_UNSIGNED (TREE_TYPE (count))
+		     || (r.has_lo && r.lo >= 0));
+      if (!(known && nonneg && r.has_hi && r.hi < prec))
+	cg_conveyor_error_at (gimple_location (stmt),
+			      "shift count %qE not provably non-negative and "
+			      "less than %u in a conveyor function",
+			      cg_display_value (count), prec);
+      return;
+    }
+
   if (code != TRUNC_DIV_EXPR && code != TRUNC_MOD_EXPR)
     return;
 
@@ -5043,9 +5086,60 @@ cg_check_div_mod_ub (gimple *stmt, hash_map<tree, cg_fact> &established_nz,
   if (!cg_provably_nonzero_for_ub_p (divisor, stmt, established_nz,
 				      established_range, scalar_range_cache,
 				      ranger))
+    {
+      cg_conveyor_error_at (gimple_location (stmt),
+			    "divisor %qE not provably nonzero in a "
+			    "conveyor function",
+			    cg_display_value (divisor));
+      return;
+    }
+
+  /* The one other undefined case: the minimum of a signed type divided
+     by -1 (P4445 BUG-10).  Excluded if the divisor's range leaves out -1,
+     or the dividend's leaves out the minimum.  */
+  tree type = TREE_TYPE (gimple_assign_lhs (stmt));
+  if (!INTEGRAL_TYPE_P (type) || !TYPE_OVERFLOW_UNDEFINED (type))
+    return;
+  tree dividend = gimple_assign_rhs1 (stmt);
+  auto range_of = [&] (tree v, cg_range_lite *r)
+    {
+      if (TREE_CODE (v) == INTEGER_CST)
+	{
+	  r->has_lo = r->has_hi = true;
+	  r->lo = r->hi = wi::to_widest (v);
+	  return true;
+	}
+      return (TREE_CODE (v) == SSA_NAME
+	      && cg_value_range_at (v, stmt, established_range,
+				    scalar_range_cache, ranger,
+				    /*require_conveyor=*/true, r));
+    };
+  cg_range_lite r;
+  if (range_of (divisor, &r)
+      && ((r.has_lo && r.lo > -1) || (r.has_hi && r.hi < -1)))
+    return;
+  /* Known not to be -1, or not to be the minimum, from the conditions
+     guarding STMT ('if (y == -1) return ...;').  */
+  if (cg_excludes_value_at_p (divisor, stmt, ranger,
+			      build_minus_one_cst (type))
+      || cg_excludes_value_at_p (dividend, stmt, ranger,
+				 TYPE_MIN_VALUE (type)))
+    return;
+  cg_range_lite n;
+  if (range_of (dividend, &n) && n.has_lo
+      && n.lo > wi::to_widest (TYPE_MIN_VALUE (type)))
+    return;
+  if (code == TRUNC_DIV_EXPR)
     cg_conveyor_error_at (gimple_location (stmt),
-			  "divisor %qE not provably nonzero in a "
-			  "conveyor function",
+			  "division of %qE by %qE not provably free of "
+			  "overflow in a conveyor function",
+			  cg_display_value (dividend),
+			  cg_display_value (divisor));
+  else
+    cg_conveyor_error_at (gimple_location (stmt),
+			  "remainder of %qE by %qE not provably free of "
+			  "overflow in a conveyor function",
+			  cg_display_value (dividend),
 			  cg_display_value (divisor));
 }
 

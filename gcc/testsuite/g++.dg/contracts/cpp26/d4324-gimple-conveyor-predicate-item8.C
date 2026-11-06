@@ -9,7 +9,7 @@
 using namespace std::contracts;
 
 int divide (int x, int y) pre<conveyor_assert_v> (x / y > 1) { return x; } // { dg-error "divisor .y. not provably nonzero" }
-int guarded (int x, int y) pre<conveyor_assert_v> (y != 0 && x / y > 1) { return x; }
+int guarded (int x, int y) pre<conveyor_assert_v> (y > 0 && x / y > 1) { return x; }
 int trusted (int x, int y) pre<never_proven_conveyor_v> (x / y > 1) { return x; }
 
 int index (int i) conveyor

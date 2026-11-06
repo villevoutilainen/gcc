@@ -14415,7 +14415,40 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 	  if (captured)
 	    return oa_get_range (captured, *oa_iile_outer_env, out);
 	}
-      return env.range_get (expr, out);
+      bool known = env.range_get (expr, out);
+      /* A value it is known not to be, at an end of its range (or of its
+	 type's): the range is one narrower there ('if (n == 32) return;'
+	 after 'n <= 32').  */
+      widest_int excluded;
+      tree type = TREE_TYPE (expr);
+      if (INTEGRAL_TYPE_P (type) && env.excluded_get (expr, &excluded)
+	  && (!known || !out->base))
+	{
+	  if (!known)
+	    {
+	      out->base = NULL_TREE;
+	      out->has_lo = out->has_hi = false;
+	    }
+	  widest_int lo = wi::to_widest (TYPE_MIN_VALUE (type));
+	  widest_int hi = wi::to_widest (TYPE_MAX_VALUE (type));
+	  if (out->has_lo)
+	    lo = out->lo;
+	  if (out->has_hi)
+	    hi = out->hi;
+	  if (excluded == lo && lo < hi)
+	    {
+	      out->has_lo = true;
+	      out->lo = lo + 1;
+	      known = true;
+	    }
+	  else if (excluded == hi && lo < hi)
+	    {
+	      out->has_hi = true;
+	      out->hi = hi - 1;
+	      known = true;
+	    }
+	}
+      return known;
     }
 
   /* D4324: a field access ('this->field'/'obj.field'), resolved against
@@ -17470,6 +17503,43 @@ oa_inform (location_t loc, const char *gmsgid, ...)
    actually declared with the 'conveyor' keyword -- checked by the
    caller, not here.  */
 
+/* Whether NUM / DEN (or NUM % DEN), of signed TYPE, provably isn't the one
+   overflowing case, the type's minimum divided by -1 (P4445 BUG-10): DEN's
+   range excludes -1, or NUM's excludes the minimum.  */
+
+static bool
+oa_div_overflow_excluded_p (tree num, tree den, tree type, oa_env &env)
+{
+  /* An enumerator or a constexpr variable: its value.  */
+  tree cden = maybe_constant_value (den);
+  if (TREE_CODE (cden) == INTEGER_CST)
+    return !integer_minus_onep (cden);
+  tree cnum = maybe_constant_value (num);
+  if (TREE_CODE (cnum) == INTEGER_CST)
+    return !tree_int_cst_equal (fold_convert (type, cnum),
+				TYPE_MIN_VALUE (type));
+  /* Known not to be -1, or not to be the minimum: 'if (y == -1)'
+     taken elsewhere.  */
+  widest_int excluded;
+  tree sden = oa_strip_to_relational_operand (den);
+  if ((VAR_P (sden) || TREE_CODE (sden) == PARM_DECL)
+      && env.excluded_get (sden, &excluded) && excluded == -1)
+    return true;
+  tree snum = oa_strip_to_relational_operand (num);
+  if ((VAR_P (snum) || TREE_CODE (snum) == PARM_DECL)
+      && env.excluded_get (snum, &excluded)
+      && excluded == wi::to_widest (TYPE_MIN_VALUE (type)))
+    return true;
+  oa_range_fact f;
+  if (oa_get_range (den, env, &f) && !f.base
+      && ((f.has_lo && f.lo > -1) || (f.has_hi && f.hi < -1)))
+    return true;
+  if (oa_get_range (num, env, &f) && !f.base && f.has_lo
+      && f.lo > wi::to_widest (TYPE_MIN_VALUE (type)))
+    return true;
+  return false;
+}
+
 static void
 oa_scan_div_mod_in_expr (tree *expr, oa_env &env)
 {
@@ -17491,6 +17561,33 @@ oa_scan_div_mod_in_expr (tree *expr, oa_env &env)
 	  *walk_subtrees_p = 0;
 	  return NULL_TREE;
 	}
+      /* A shift count must be non-negative and less than the width of
+	 the shifted operand's type (P4445 BUG-11).  */
+      if ((TREE_CODE (t) == LSHIFT_EXPR || TREE_CODE (t) == RSHIFT_EXPR)
+	  && INTEGRAL_TYPE_P (TREE_TYPE (t)))
+	{
+	  tree count = TREE_OPERAND (t, 1);
+	  unsigned prec = TYPE_PRECISION (TREE_TYPE (t));
+	  /* A constant count: the front end checks it
+	     (conveyor_check_constant_shift_count).  */
+	  if (TREE_CODE (maybe_constant_value (count)) == INTEGER_CST)
+	    return NULL_TREE;
+	  oa_range_fact f;
+	  if (!oa_get_range (count, *e, &f))
+	    {
+	      f.base = NULL_TREE;
+	      f.has_lo = f.has_hi = false;
+	    }
+	  /* An unsigned count is non-negative.  */
+	  bool nonneg = (TYPE_UNSIGNED (TREE_TYPE (count))
+			 || (f.has_lo && f.lo >= 0));
+	  if (!(!f.base && nonneg && f.has_hi && f.hi < prec))
+	    oa_conveyor_error_at (EXPR_LOCATION (t),
+				  "shift count %qE not provably non-negative "
+				  "and less than %u in a conveyor function",
+				  count, prec);
+	  return NULL_TREE;
+	}
       if (TREE_CODE (t) != TRUNC_DIV_EXPR && TREE_CODE (t) != TRUNC_MOD_EXPR)
 	return NULL_TREE;
       tree divisor = TREE_OPERAND (t, 1);
@@ -17498,6 +17595,22 @@ oa_scan_div_mod_in_expr (tree *expr, oa_env &env)
 	oa_conveyor_error_at (EXPR_LOCATION (t),
 			      "divisor %qE not provably nonzero in "
 			      "a conveyor function", divisor);
+      else if (INTEGRAL_TYPE_P (TREE_TYPE (t))
+	       && TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (t))
+	       && !oa_div_overflow_excluded_p (TREE_OPERAND (t, 0), divisor,
+					       TREE_TYPE (t), *e))
+	{
+	  if (TREE_CODE (t) == TRUNC_DIV_EXPR)
+	    oa_conveyor_error_at (EXPR_LOCATION (t),
+				  "division of %qE by %qE not provably free "
+				  "of overflow in a conveyor function",
+				  TREE_OPERAND (t, 0), divisor);
+	  else
+	    oa_conveyor_error_at (EXPR_LOCATION (t),
+				  "remainder of %qE by %qE not provably free "
+				  "of overflow in a conveyor function",
+				  TREE_OPERAND (t, 0), divisor);
+	}
       return NULL_TREE;
     }, &env, NULL);
 }
@@ -36247,14 +36360,18 @@ oa_establish_relational_from_call (tree lhs, tree rhs, oa_env &env)
 
 /* T, or its value if it is a scalar constant expression the front end
    hasn't folded to an INTEGER_CST or REAL_CST yet (a condition's
-   '__PTRDIFF_MAX__ / 1024'): for the comparison matchers below, which
+   '__PTRDIFF_MAX__ / 1024', or a constexpr variable such as
+   '__int_traits<_Tp>::__min'): for the comparison matchers below, which
    recognize a bound only in that form.  */
 
 static tree
 oa_fold_constant_operand (tree t)
 {
+  tree s = t;
+  STRIP_NOPS (s);
+  bool constant_var = VAR_P (s) && decl_constant_var_p (s);
   if (TREE_CODE (t) == INTEGER_CST || TREE_CODE (t) == REAL_CST
-      || !TREE_CONSTANT (t)
+      || !(TREE_CONSTANT (t) || constant_var)
       || !(INTEGRAL_TYPE_P (TREE_TYPE (t))
 	   || SCALAR_FLOAT_TYPE_P (TREE_TYPE (t))))
     return t;

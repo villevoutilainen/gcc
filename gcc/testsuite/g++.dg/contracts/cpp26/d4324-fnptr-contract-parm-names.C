@@ -7,7 +7,8 @@
 #include <contracts>
 
 int div_by (int x, int d) conveyor
-  pre<std::contracts::proven_conveyor_v>(d != 0) { return x / d; }
+  pre<std::contracts::proven_conveyor_v>(d != 0)
+  pre<std::contracts::proven_conveyor_v>(x >= -__INT_MAX__) { return x / d; }
 
 void f (int) {}
 void (*p) (int x)

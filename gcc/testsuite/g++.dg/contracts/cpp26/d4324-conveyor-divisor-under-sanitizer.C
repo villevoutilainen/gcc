@@ -8,4 +8,4 @@
 #include <contracts>
 
 int quot (int x, int y) conveyor { return x / y; } // { dg-error "divisor 'y' not provably nonzero" }
-int quot2 (int x, int y) conveyor { if (y != 0) return x / y; return 0; }
+int quot2 (int x, int y) conveyor { if (y > 0) return x / y; return 0; }

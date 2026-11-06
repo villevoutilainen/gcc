@@ -13,7 +13,8 @@
 #include <contracts>
 
 int divide (int a, int b) conveyor
-  pre<std::contracts::proven_conveyor_v>(b != 0) { return a / b; }
+  pre<std::contracts::proven_conveyor_v>(b != 0)
+  pre<std::contracts::proven_conveyor_v>(a >= -__INT_MAX__) { return a / b; }
 int nz (int x) conveyor
   post<std::contracts::conveyor_assert_v>(r: r != 0) { return x == 0 ? 1 : x; }
 

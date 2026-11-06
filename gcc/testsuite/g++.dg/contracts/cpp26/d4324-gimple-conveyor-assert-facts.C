@@ -11,14 +11,14 @@ using namespace std::contracts;
 
 int divisor (int n, int x) conveyor
 {
-  contract_assert<never_proven_conveyor_v> (n != 0);
+  contract_assert<never_proven_conveyor_v> (n > 0);
   return x / n;
 }
 
 int not_dominated (int n, int x) conveyor
 {
   if (x > 3)
-    contract_assert<never_proven_conveyor_v> (n != 0);
+    contract_assert<never_proven_conveyor_v> (n > 0);
   return x / n; // { dg-error "divisor .n. not provably nonzero" }
 }
 

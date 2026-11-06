@@ -5597,6 +5597,29 @@ do_warn_enum_conversions (location_t loc, enum tree_code code, tree type0,
   return false;
 }
 
+/* D4324: in a conveyor function or predicate, a constant shift COUNT of
+   an operand of promoted TYPE must be non-negative and less than its
+   width (P4445 BUG-11).  Checked here, where the count is still known:
+   folding turns the shift into a constant before the GIMPLE engine sees
+   it.  The engines check every other count.  */
+
+static void
+conveyor_check_constant_shift_count (location_t loc, tree count, tree type,
+				     tsubst_flags_t complain)
+{
+  if (!(complain & tf_error) || !conveyor_restrictions_active_p ())
+    return;
+  unsigned prec = TYPE_PRECISION (type);
+  if (tree_int_cst_sgn (count) >= 0 && compare_tree_int (count, prec) < 0)
+    return;
+  if (conveyor_auto_probing_p ())
+    note_conveyor_auto_violation ();
+  else
+    conveyor_rule_error_at (loc, "shift count %qE not provably non-negative "
+			    "and less than %u in a conveyor function",
+			    count, prec);
+}
+
 /* Build a binary-operation expression without default conversions.
    CODE is the kind of expression to build.
    LOCATION is the location_t of the operator in the source code.
@@ -6191,6 +6214,8 @@ cp_build_binary_op (const op_location_t &location,
 		    warning_at (location, OPT_Wshift_count_overflow,
 				"right shift count >= width of type");
 		}
+	      conveyor_check_constant_shift_count (location, const_op1, type0,
+						   complain);
 	    }
 	  /* Avoid converting op1 to result_type later.  */
 	  converted = 1;
@@ -6252,6 +6277,8 @@ cp_build_binary_op (const op_location_t &location,
 	      else if (TREE_CODE (const_op0) == INTEGER_CST
 		       && (complain & tf_warning))
 		maybe_warn_shift_overflow (location, const_op0, const_op1);
+	      conveyor_check_constant_shift_count (location, const_op1, type0,
+						   complain);
 	    }
 	  /* Avoid converting op1 to result_type later.  */
 	  converted = 1;

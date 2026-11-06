@@ -26,7 +26,7 @@ struct conveyor_ctrl {
 inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 
 int div_ok (int a, int b) conveyor
-  pre<conveyor_ctrl_v>(b != 0)
+  pre<conveyor_ctrl_v>(b > 0)
 {
   return a / b;
 }

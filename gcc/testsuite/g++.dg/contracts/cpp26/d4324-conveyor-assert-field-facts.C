@@ -19,7 +19,7 @@ struct M
 
   M &operator/= (const M &r) conveyor
   {
-    contract_assert<never_proven_conveyor_v> (r.v != 0);
+    contract_assert<never_proven_conveyor_v> (r.v > 0);
     v /= r.v;
     return *this;
   }
@@ -27,7 +27,7 @@ struct M
 
 int ref_param (const M &r, int x) conveyor
 {
-  contract_assert<never_proven_conveyor_v> (r.v != 0);
+  contract_assert<never_proven_conveyor_v> (r.v > 0);
   return x / r.v;
 }
 
@@ -40,7 +40,7 @@ int local (int x) conveyor
 
 int written (M &r, int x) conveyor
 {
-  contract_assert<never_proven_conveyor_v> (r.v != 0);
+  contract_assert<never_proven_conveyor_v> (r.v > 0);
   r.v = x;
   return x / r.v; // { dg-error "divisor \[^\n\]* not provably nonzero" }
 }
@@ -49,7 +49,7 @@ void reset (M &) conveyor;
 
 int passed (M &r, int x) conveyor
 {
-  contract_assert<never_proven_conveyor_v> (r.v != 0);
+  contract_assert<never_proven_conveyor_v> (r.v > 0);
   reset (r);
   return x / r.v; // { dg-error "divisor \[^\n\]* not provably nonzero" }
 }
@@ -57,6 +57,6 @@ int passed (M &r, int x) conveyor
 int not_dominated (const M &r, int x) conveyor
 {
   if (x > 1)
-    contract_assert<never_proven_conveyor_v> (r.v != 0);
+    contract_assert<never_proven_conveyor_v> (r.v > 0);
   return x / r.v; // { dg-error "divisor \[^\n\]* not provably nonzero" }
 }
