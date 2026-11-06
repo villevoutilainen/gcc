@@ -4039,6 +4039,43 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 	    }
 	  continue;
 	}
+      /* Likewise a pointer to non-const, as in the AST engine: the callee
+	 may write through it, so a predicate may pass one only to an
+	 object it created.  */
+      if (TYPE_PTR_P (TREE_TYPE (parm))
+	  && !TYPE_READONLY (TREE_TYPE (TREE_TYPE (parm)))
+	  && !FUNC_OR_METHOD_TYPE_P (TREE_TYPE (TREE_TYPE (parm)))
+	  && argno < gimple_call_num_args (call))
+	{
+	  tree owner;
+	  tree arg = cg_resolve_call_argument (call, argno);
+	  if (!POINTER_TYPE_P (TREE_TYPE (arg)))
+	    arg = gimple_call_arg (call, argno);
+	  if (predicate_core_function_contract (fun->decl, &owner)
+	      && !integer_zerop (arg))
+	    {
+	      tree base = (TREE_CODE (arg) == ADDR_EXPR
+			   ? get_base_address (TREE_OPERAND (arg, 0))
+			   : NULL_TREE);
+	      if (!(base && VAR_P (base) && DECL_CONTEXT (base) == fun->decl))
+		{
+		  conveyor_error_at (gimple_location (call),
+				     "object %qE is not owned by the calling "
+				     "function, so it may not be passed as "
+				     "the pointer-to-non-const parameter %qD "
+				     "of %qD",
+				     (TREE_CODE (arg) == ADDR_EXPR
+				      ? cg_display_object (TREE_OPERAND (arg, 0))
+				      : build_fold_indirect_ref
+					  (cg_display_value (arg, 0))),
+				     parm, callee);
+		  inform (gimple_location (call), "%s",
+			  _(oa_unprovable_reason_text
+			      (OA_UNPROVABLE_PREDICATE_CONTEXT)));
+		}
+	    }
+	  continue;
+	}
       if (TREE_CODE (TREE_TYPE (parm)) != REFERENCE_TYPE)
 	continue;
       if (argno >= gimple_call_num_args (call))

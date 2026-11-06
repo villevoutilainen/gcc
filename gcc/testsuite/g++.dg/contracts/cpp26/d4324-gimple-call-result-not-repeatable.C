@@ -1,7 +1,9 @@
 // D4324 (GIMPLE engine): 'if (m.toggle ())' makes m.toggle () a fact about m
 // only if calling it again gives the same result.  Not so for a member of a
 // class with a mutable member, which even a const member function may write
-// (P4445 BUG-21).  A const accessor of a class without one, or a function
+// (P4445 BUG-21).  A conveyor function now writes one through const access
+// only to an object that began its lifetime in it, so toggle () is itself
+// ill-formed; the call still isn't taken as a fact.  A const accessor of a class without one, or a function
 // taking a const reference, is fine.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-analysis-engine=gimple" }
@@ -13,7 +15,7 @@ namespace sc = std::contracts;
 struct M
 {
   mutable bool flip = false;
-  bool toggle () const conveyor { flip = !flip; return flip; }
+  bool toggle () const conveyor { flip = !flip; return flip; } // { dg-error "write to mutable member" }
 };
 void need (const M &m) pre<sc::proven_conveyor_v>(m.toggle ()) {}
 int a () { M m; if (m.toggle ()) need (m); return 0; } // { dg-error "cannot prove the precondition" }

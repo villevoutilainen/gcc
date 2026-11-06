@@ -90,6 +90,10 @@ int use_ptr_mut (T* q) conveyor
   pre<conveyor_ctrl_v>(std::is_object_address (q))
 { return q->v > 0; }
 
+int use_ptr_const (const T* q) conveyor
+  pre<conveyor_ctrl_v>(std::is_object_address (q))
+{ return q->v > 0; }
+
 // The ASYMMETRY, explicit: the same REFERENCE parameter Y is owned
 // (forwardable) from the function's own BODY, but NOT owned from its
 // PRECONDITION's condition text -- a predicate never received Y as its
@@ -102,18 +106,26 @@ accept_in_body_reject_in_precondition (T& y)
   return use_val_mut (y); // accepted: the function's own body may forward its own received parameter
 }
 
-// POINTERS have NO such asymmetry: pointer aliasing is categorically
-// the calling function's own concern, never the callee's, in EITHER
-// context -- accepted both in the function's own body and in its
-// precondition's condition text (unlike the reference case just above).
-// A widened Q2 that also restricted pointers here was tried and
-// reverted -- see d4324-reference-ownership-member-receiver.C for why.
+// A pointer to non-const has the same asymmetry: the callee may write
+// through it, so the precondition's condition text, which owns nothing it
+// didn't create, may not pass the received pointer on, while the
+// function's own body may.  A pointer to const may be passed anywhere: a
+// conveyor function writes through const access only to an object that
+// began its lifetime in it.
 int
-accept_ptr_in_body_and_in_precondition (T* p)
+reject_ptr_in_precondition_accept_in_body (T* p)
   pre<conveyor_ctrl_v>(std::is_object_address (p))
-  pre<conveyor_ctrl_v>(use_ptr_mut (p))
+  pre<conveyor_ctrl_v>(use_ptr_mut (p)) // { dg-error "is not owned by the calling function" }
 {
   return use_ptr_mut (p);
+}
+
+int
+accept_const_ptr_in_precondition (T* p)
+  pre<conveyor_ctrl_v>(std::is_object_address (p))
+  pre<conveyor_ctrl_v>(use_ptr_const (p))
+{
+  return use_ptr_const (p);
 }
 
 int
@@ -121,6 +133,6 @@ main ()
 {
   T t{1};
   accept_const_in_precondition (t); // { dg-warning "cannot verify that" }
-  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (t))); accept_ptr_in_body_and_in_precondition (&t); // { dg-warning "cannot verify" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (t))); reject_ptr_in_precondition_accept_in_body (&t); // { dg-warning "cannot verify" }
   return 0;
 }

@@ -1040,6 +1040,127 @@ maybe_save_constexpr_fundef (tree fun)
    static_cast, narrowing conversion -- that live alongside the
    constructs they gate instead).  */
 
+/* Whether E designates an object that began its lifetime within the
+   evaluation of the current function: a local variable, a parameter
+   passed by value, a temporary, or part of one.  E is that object, an
+   lvalue, or, when POINTER, a pointer to it.  */
+
+static bool
+conveyor_owned_object_p (tree e, bool pointer = false)
+{
+  e = STRIP_ANY_LOCATION_WRAPPER (e);
+  STRIP_NOPS (e);
+  if (pointer)
+    {
+      /* A pointer value not computed from an address: what it points to
+	 is unknown, so not owned.  */
+      if (TREE_CODE (e) != ADDR_EXPR)
+	return false;
+      e = TREE_OPERAND (e, 0);
+    }
+  else if (TREE_CODE (e) == ADDR_EXPR)
+    e = TREE_OPERAND (e, 0);
+  while (TREE_CODE (e) == COMPONENT_REF || TREE_CODE (e) == ARRAY_REF
+	 || TREE_CODE (e) == NON_LVALUE_EXPR || TREE_CODE (e) == VIEW_CONVERT_EXPR)
+    {
+      /* A reference member refers to an object the class doesn't own.  */
+      if (TREE_CODE (e) == COMPONENT_REF
+	  && TYPE_REF_P (TREE_TYPE (TREE_OPERAND (e, 1))))
+	return false;
+      e = TREE_OPERAND (e, 0);
+      e = STRIP_ANY_LOCATION_WRAPPER (e);
+    }
+  if (TREE_CODE (e) == TARGET_EXPR)
+    return true;
+  if ((VAR_P (e) || TREE_CODE (e) == PARM_DECL)
+      && !TYPE_REF_P (TREE_TYPE (e))
+      && !is_global_var (e)
+      && DECL_CONTEXT (e) == current_function_decl
+      && !is_this_parameter (e))
+    return true;
+  return false;
+}
+
+/* If lvalue E is a mutable member reached through a const object (a
+   write to it is a write through const access), the member; else
+   NULL_TREE.  */
+
+static tree
+conveyor_mutable_through_const (tree e)
+{
+  e = STRIP_ANY_LOCATION_WRAPPER (e);
+  STRIP_NOPS (e);
+  for (; TREE_CODE (e) == COMPONENT_REF || TREE_CODE (e) == ARRAY_REF;
+       e = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0)))
+    if (TREE_CODE (e) == COMPONENT_REF
+	&& TREE_CODE (TREE_OPERAND (e, 1)) == FIELD_DECL
+	&& DECL_MUTABLE_P (TREE_OPERAND (e, 1))
+	&& CP_TYPE_CONST_P (TREE_TYPE (TREE_OPERAND (e, 0))))
+      return e;
+  return NULL_TREE;
+}
+
+/* A conveyor function writes through const access -- a mutable member
+   of a const object, or through a const_cast -- only to an object that
+   began its lifetime within its own evaluation: const access in a
+   conveyor function's declaration then means that nothing is written
+   through it, which a strict predicate relies on (P4445: the routes by
+   which a strict contract assertion had side effects).  */
+
+static void
+conveyor_check_const_access_write (tree lval, location_t loc)
+{
+  tree m = conveyor_mutable_through_const (lval);
+  if (!m || conveyor_owned_object_p (m))
+    return;
+  if (conveyor_auto_probing_p ())
+    note_conveyor_auto_violation ();
+  else
+    conveyor_rule_error_at (loc, "write to mutable member %qD of a const "
+			    "object that did not begin its lifetime in this "
+			    "conveyor function", TREE_OPERAND (m, 1));
+}
+
+/* A cast that removes const from what a pointer or reference designates
+   (const_cast, or a cast acting as one), written by the user: not one the
+   implementation makes (a virtual base's VTT, a thrown object's
+   type_info).  */
+
+static bool
+conveyor_const_removing_cast_p (tree t)
+{
+  if (TREE_CODE (t) != NOP_EXPR && TREE_CODE (t) != CONVERT_EXPR)
+    return false;
+  tree to = TREE_TYPE (t);
+  tree from = TREE_TYPE (TREE_OPERAND (t, 0));
+  if (!to || !from || !INDIRECT_TYPE_P (to) || !INDIRECT_TYPE_P (from)
+      || CP_TYPE_CONST_P (TREE_TYPE (to))
+      || !CP_TYPE_CONST_P (TREE_TYPE (from))
+      || FUNC_OR_METHOD_TYPE_P (TREE_TYPE (to)))
+    return false;
+  tree base = TREE_OPERAND (t, 0);
+  for (;;)
+    {
+      base = STRIP_ANY_LOCATION_WRAPPER (base);
+      STRIP_NOPS (base);
+      if (TREE_CODE (base) == ADDR_EXPR || INDIRECT_REF_P (base)
+	  || handled_component_p (base)
+	  || TREE_CODE (base) == POINTER_PLUS_EXPR)
+	base = TREE_OPERAND (base, 0);
+      else
+	break;
+    }
+  if (DECL_P (base) && DECL_ARTIFICIAL (base) && !is_this_parameter (base))
+    return false;
+  return true;
+}
+
+/* The const-removing casts a conveyor function returns as its value: its
+   declaration shows the non-const access it hands out, and it writes
+   nothing through them itself.  */
+
+static hash_set<tree> *conveyor_returned_casts;
+
 static tree
 check_conveyor_function_body_r (tree *tp, int *, void *)
 {
@@ -1047,9 +1168,74 @@ check_conveyor_function_body_r (tree *tp, int *, void *)
 
   switch (TREE_CODE (t))
     {
+    case RETURN_EXPR:
+      if (tree v = TREE_OPERAND (t, 0))
+	{
+	  if (TREE_CODE (v) == INIT_EXPR || TREE_CODE (v) == MODIFY_EXPR)
+	    v = TREE_OPERAND (v, 1);
+	  v = STRIP_ANY_LOCATION_WRAPPER (v);
+	  /* Through the conversions that don't remove const.  */
+	  while ((TREE_CODE (v) == NOP_EXPR || TREE_CODE (v) == CONVERT_EXPR
+		  || TREE_CODE (v) == NON_LVALUE_EXPR)
+		 && !conveyor_const_removing_cast_p (v))
+	    v = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (v, 0));
+	  if (conveyor_const_removing_cast_p (v) && conveyor_returned_casts)
+	    conveyor_returned_casts->add (v);
+	}
+      break;
+
+    case MODIFY_EXPR:
+    case PREINCREMENT_EXPR:
+    case PREDECREMENT_EXPR:
+    case POSTINCREMENT_EXPR:
+    case POSTDECREMENT_EXPR:
+      conveyor_check_const_access_write (TREE_OPERAND (t, 0),
+					 cp_expr_loc_or_input_loc (t));
+      break;
+
+    case NOP_EXPR:
+    case CONVERT_EXPR:
+      {
+	/* A conversion that removes const from what a pointer or
+	   reference designates is a const_cast (or a cast that acts as
+	   one): only for an object this function owns.  */
+	if (conveyor_const_removing_cast_p (t)
+	    && !(conveyor_returned_casts && conveyor_returned_casts->contains (t))
+	    && !conveyor_owned_object_p (TREE_OPERAND (t, 0),
+					 TYPE_PTR_P (TREE_TYPE
+						       (TREE_OPERAND (t, 0)))))
+	  {
+	    tree shown = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
+	    STRIP_NOPS (shown);
+	    if (TREE_CODE (shown) == ADDR_EXPR)
+	      shown = TREE_OPERAND (shown, 0);
+	    if (conveyor_auto_probing_p ())
+	      note_conveyor_auto_violation ();
+	    else
+	      conveyor_rule_error_at (cp_expr_loc_or_input_loc (t),
+				      "cast removes %<const%> from %qE, which "
+				      "did not begin its lifetime in this "
+				      "conveyor function", shown);
+	  }
+      }
+      break;
+
     case CALL_EXPR:
       {
 	tree fn = cp_get_callee_fndecl_nofold (t);
+	/* Passing a mutable member of a const object on for writing (a
+	   non-const member call on it, or its address to a pointer or
+	   reference to non-const) is a write through const access.  */
+	for (int i = 0; i < call_expr_nargs (t); ++i)
+	  {
+	    tree a = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (t, i));
+	    tree at = TREE_TYPE (a);
+	    STRIP_NOPS (a);
+	    if (at && INDIRECT_TYPE_P (at) && !CP_TYPE_CONST_P (TREE_TYPE (at))
+		&& TREE_CODE (a) == ADDR_EXPR)
+	      conveyor_check_const_access_write (TREE_OPERAND (a, 0),
+						 cp_expr_loc_or_input_loc (t));
+	  }
 	/* A lambda's body is checked as part of this function.  */
 	if (fn && LAMBDA_FUNCTION_P (fn))
 	  conveyor_check_unsequenced_in_lambdas (t);
@@ -1126,6 +1312,8 @@ check_conveyor_function_body (tree fun)
     return;
 
   hash_set<tree> pset;
+  hash_set<tree> returned_casts;
+  auto rc = make_temp_override (conveyor_returned_casts, &returned_casts);
   cp_walk_tree (&body, check_conveyor_function_body_r, NULL, &pset);
 
   tree return_type = TREE_TYPE (TREE_TYPE (fun));

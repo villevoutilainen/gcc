@@ -21261,6 +21261,42 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
 		}
 	      continue;
 	    }
+	  /* Likewise a pointer to non-const: the callee may write through
+	     it, so a predicate may pass one only to an object it created.
+	     A conveyor function's body may: a pointer is its caller's
+	     concern.  */
+	  if (in_predicate_context && TYPE_PTR_P (TREE_TYPE (parm))
+	      && !TYPE_READONLY (TREE_TYPE (TREE_TYPE (parm)))
+	      && !FUNC_OR_METHOD_TYPE_P (TREE_TYPE (TREE_TYPE (parm))))
+	    {
+	      tree arg = NULL_TREE;
+	      if (TREE_CODE (call) == AGGR_INIT_EXPR)
+		{
+		  if (argno < (unsigned) aggr_init_expr_nargs (call))
+		    arg = AGGR_INIT_EXPR_ARG (call, argno);
+		}
+	      else if (argno < (unsigned) call_expr_nargs (call))
+		arg = CALL_EXPR_ARG (call, argno);
+	      if (!arg || integer_zerop (STRIP_ANY_LOCATION_WRAPPER (arg)))
+		continue;
+	      arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+	      oa_unprovable_reason own_reason = OA_UNPROVABLE_NONE;
+	      if (!oa_reference_owned_p (arg, env,
+					 /*asking_about_pointer_value=*/false,
+					 in_predicate_context, &own_reason))
+		{
+		  oa_error_at (EXPR_LOCATION (call),
+			       "object %qE is not owned by the calling "
+			       "function, so it may not be passed as the "
+			       "pointer-to-non-const parameter %qD of %qD",
+			       oa_receiver_object_for_display (arg), parm,
+			       callee);
+		  if (const char *why = oa_unprovable_reason_text (own_reason))
+		    oa_inform (EXPR_LOCATION (call), "%s", _(why));
+		  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		}
+	      continue;
+	    }
 	  if (TREE_CODE (TREE_TYPE (parm)) != REFERENCE_TYPE)
 	    continue;
 	  bool is_const_ref = TYPE_READONLY (TREE_TYPE (TREE_TYPE (parm)));
