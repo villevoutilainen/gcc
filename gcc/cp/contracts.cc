@@ -20208,6 +20208,25 @@ oa_report_cdtor_receiver (location_t loc, tree receiver, tree callee,
   oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 }
 
+/* The object a member call is made on, given RECEIVER, the address
+   passed as its 'this', as the user wrote it.  */
+
+static tree
+oa_receiver_object_for_display (tree receiver)
+{
+  tree r = receiver;
+  STRIP_NOPS (r);
+  /* A reference, converted to the pointer.  */
+  if (TYPE_REF_P (TREE_TYPE (r)))
+    return r;
+  if (TREE_CODE (r) != ADDR_EXPR)
+    return build_fold_indirect_ref (receiver);
+  r = TREE_OPERAND (r, 0);
+  if (REFERENCE_REF_P (r))
+    r = TREE_OPERAND (r, 0);
+  return r;
+}
+
 static void
 oa_handle_call_precondition_obligation (tree call, oa_env &env,
 					 bool in_predicate_context = false)
@@ -20483,7 +20502,57 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
 	   parm = DECL_CHAIN (parm), ++argno)
 	{
 	  if (is_this_parameter (parm))
-	    continue;
+	    {
+	      /* A predicate owns no object it didn't create, so it may not
+		 call a non-const member function on one (P4445 BUG-15).  A
+		 conveyor function's body may: a pointer is its caller's
+		 concern.  */
+	      if (!in_predicate_context
+		  || TYPE_READONLY (TREE_TYPE (TREE_TYPE (parm))))
+		continue;
+	      tree receiver = NULL_TREE;
+	      if (TREE_CODE (call) == AGGR_INIT_EXPR)
+		{
+		  if (argno < (unsigned) aggr_init_expr_nargs (call))
+		    receiver = AGGR_INIT_EXPR_ARG (call, argno);
+		}
+	      else if (argno < (unsigned) call_expr_nargs (call))
+		receiver = CALL_EXPR_ARG (call, argno);
+	      if (!receiver)
+		continue;
+	      receiver = STRIP_ANY_LOCATION_WRAPPER (receiver);
+	      /* A constructor creates the object it is called on; a
+		 temporary's destructor ends what the predicate created.  */
+	      if (DECL_CONSTRUCTOR_P (callee))
+		continue;
+	      if (DECL_DESTRUCTOR_P (callee))
+		{
+		  tree obj = receiver;
+		  STRIP_NOPS (obj);
+		  if (TREE_CODE (obj) == ADDR_EXPR)
+		    obj = TREE_OPERAND (obj, 0);
+		  if (TREE_CODE (obj) == TARGET_EXPR
+		      || (VAR_P (obj) && DECL_ARTIFICIAL (obj)
+			  && !DECL_NAME (obj)))
+		    continue;
+		}
+	      oa_unprovable_reason own_reason = OA_UNPROVABLE_NONE;
+	      if (!oa_reference_owned_p (receiver, env,
+					 /*asking_about_pointer_value=*/false,
+					 in_predicate_context, &own_reason))
+		{
+		  oa_error_at (EXPR_LOCATION (call),
+			       "object %qE is not owned by the calling "
+			       "function, so the non-const member function "
+			       "%qD may not be called on it",
+			       oa_receiver_object_for_display (receiver),
+			       callee);
+		  if (const char *why = oa_unprovable_reason_text (own_reason))
+		    oa_inform (EXPR_LOCATION (call), "%s", _(why));
+		  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		}
+	      continue;
+	    }
 	  if (TREE_CODE (TREE_TYPE (parm)) != REFERENCE_TYPE)
 	    continue;
 	  bool is_const_ref = TYPE_READONLY (TREE_TYPE (TREE_TYPE (parm)));

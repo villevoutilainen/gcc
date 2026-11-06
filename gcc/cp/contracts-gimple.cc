@@ -3963,6 +3963,8 @@ cg_call_relational_contradicts_p (tree_code established_code,
 
 static tree cg_display_argument (tree, tree);
 static tree cg_display_address (tree);
+static tree cg_display_object (tree);
+static tree cg_display_value (tree, int);
 
 static void
 cg_check_call_reference_safety (gcall *call, function *fun,
@@ -4004,6 +4006,35 @@ cg_check_call_reference_safety (gcall *call, function *fun,
 				     cg_display_address (substituted), callee);
 		  if (const char *why = oa_unprovable_reason_text (reason))
 		    inform (gimple_location (call), "%s", _(why));
+		}
+	      /* A predicate owns no object it didn't create, so it may not
+		 call a non-const member function on one, as in the AST
+		 engine (P4445 BUG-15).  A constructor creates its object.  */
+	      tree owner;
+	      if (!TYPE_READONLY (TREE_TYPE (TREE_TYPE (parm)))
+		  && !DECL_CONSTRUCTOR_P (callee)
+		  && predicate_core_function_contract (fun->decl, &owner))
+		{
+		  tree base = (TREE_CODE (substituted) == ADDR_EXPR
+			       ? get_base_address (TREE_OPERAND (substituted, 0))
+			       : NULL_TREE);
+		  if (!(base && VAR_P (base) && DECL_CONTEXT (base) == fun->decl))
+		    {
+		      conveyor_error_at (gimple_location (call),
+					 "object %qE is not owned by the "
+					 "calling function, so the non-const "
+					 "member function %qD may not be "
+					 "called on it",
+					 (TREE_CODE (substituted) == ADDR_EXPR
+					  ? cg_display_object
+					      (TREE_OPERAND (substituted, 0))
+					  : build_fold_indirect_ref
+					      (cg_display_value (substituted, 0))),
+					 callee);
+		      inform (gimple_location (call), "%s",
+			      _(oa_unprovable_reason_text
+				  (OA_UNPROVABLE_PREDICATE_CONTEXT)));
+		    }
 		}
 	    }
 	  continue;

@@ -1,25 +1,14 @@
 // D4324/P2680 Q2 and THIS: the implicit receiver of a non-const member
-// conveyor call is a POINTER, and pointers are entirely EXEMPT from Q2,
-// in any context (function body or predicate/assert text) -- pointer
-// aliasing is categorically the calling function's own concern, never
-// the callee's, matching Q1's own pre-existing boundary (a pointer
-// never gets an implicit is_object_address obligation either).
+// conveyor call is a POINTER, and pointers are exempt from Q2 in a
+// conveyor function's body -- pointer aliasing is the calling
+// function's own concern, matching Q1's boundary (a pointer never gets
+// an implicit is_object_address obligation either).
 //
-// This was NOT always the model within this same rework: an earlier
-// revision widened Q2 to cover the implicit 'this' receiver (and, more
-// broadly, any non-const pointer parameter) uniformly with references.
-// That was reverted after direct testing showed it broke the widely-
-// used "named predicate" query pattern throughout this whole engine --
-// e.g. 'bool is_opened (file* f) conveyor { return f != nullptr; }',
-// f an ordinary, read-only, non-const pointer parameter -- since a
-// predicate calling such a query with the enclosing function's own
-// by-value/pointer parameter as the argument was wrongly rejected (a
-// plain pointer parameter is never "received" from a predicate's own
-// narrower perspective, the same way a reference parameter isn't). The
-// exact gap the widening aimed to close (a fresh pointer bound to a
-// directly-named global) is separately, and already, fully closed by
-// an independent restriction: conveyor code may never odr-use a
-// mutable global at all, in any shape.
+// Not in contract condition text: a predicate owns no object it didn't
+// create, so it may not call a non-const member function on one, which
+// could modify the caller's object (P4445 BUG-15).  A named predicate
+// query is const, as is_opened would be; a by-value pointer PARAMETER
+// passed to such a query stays exempt.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-conveyor-proofs" }
 
@@ -88,19 +77,28 @@ accept_pointer_receiver (T* d) conveyor
   return d->v;
 }
 
-// The motivating "named predicate" pattern: a query taking a plain,
-// non-const pointer receiver, called from PRECONDITION TEXT with the
-// enclosing function's own by-value pointer parameter -- accepted, in
-// both the body and the precondition, since pointers get no ownership
-// check in either context.
+// A non-const query called from PRECONDITION TEXT on what the
+// enclosing function's pointer parameter points to: rejected, though the
+// body may make the same call.
 struct Gauge { bool ready () conveyor { return true; } };
 
 int
-accept_pointer_receiver_from_predicate_text (Gauge* g)
+reject_non_const_receiver_from_predicate_text (Gauge* g)
   pre<conveyor_ctrl_v>(std::is_object_address (g))
-  pre<conveyor_ctrl_v>(g->ready ())
+  pre<conveyor_ctrl_v>(g->ready ()) // { dg-error "non-const member function" }
 {
   return g->ready () ? 1 : 0;
+}
+
+// The named predicate pattern: a const query, accepted.
+struct Meter { bool ready () const conveyor { return true; } };
+
+int
+accept_const_receiver_from_predicate_text (Meter* m)
+  pre<conveyor_ctrl_v>(std::is_object_address (m))
+  pre<conveyor_ctrl_v>(m->ready ())
+{
+  return m->ready () ? 1 : 0;
 }
 
 int
@@ -113,7 +111,7 @@ main ()
   accept_received_receiver (t);
   t.mutate_via_self ();
   t.mutate_field ();
-  Gauge g;
-  accept_pointer_receiver_from_predicate_text (&g); // { dg-warning "cannot verify that" }
+  Meter m;
+  accept_const_receiver_from_predicate_text (&m); // { dg-warning "cannot verify that" }
   return 0;
 }
