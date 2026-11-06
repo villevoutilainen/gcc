@@ -13111,6 +13111,10 @@ instantiate_class_template (tree type)
 
   maybe_diagnose_erroneous_template (t ? TI_TEMPLATE (t) : templ);
 
+  /* D4324: TYPE's definition gets its own conveyor context, as a
+     function's does in instantiate_body (P4445 BUG-25).  */
+  conveyor_instantiation_context_sentinel conveyor_context (type);
+
   bool push_to_top = maybe_push_to_top_level (TYPE_MAIN_DECL (type));
 
   mark_template_arguments_used (templ, CLASSTYPE_TI_ARGS (type));
