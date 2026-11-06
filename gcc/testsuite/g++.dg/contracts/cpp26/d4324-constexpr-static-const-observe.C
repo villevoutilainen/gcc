@@ -16,7 +16,7 @@ namespace sc = std::contracts;
 constexpr int f (int x) pre<sc::default_v>(x >= 0) { return x; }
 
 static const int y = f (-42);
-// { dg-warning "contract predicate is false in constant expression" "" { target *-*-* } 0 }
+// { dg-warning "constexpr message: x >= 0 \\\[contract\\\]" "" { target *-*-* } 0 }
 
 static_assert (y == -42);
 

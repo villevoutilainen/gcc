@@ -1342,6 +1342,9 @@ public:
   /* [basic.contract.eval]/7.3 if this expression would otherwise be constant
      then a non-const contract makes the program ill-formed.  */
   bool contract_condition_non_const;
+  /* CONTRACT_STATEMENT has a control object, whose operator() has already
+     reported the violation as an error.  */
+  bool contract_diagnosed;
   /* Some metafunctions aren't dependent just on their arguments, but also
      on various other dependencies, e.g. has_identifier on a function parameter
      reflection can change depending on further declarations of corresponding
@@ -1362,7 +1365,8 @@ public:
     : constexpr_ops_count (0), cleanups (NULL), modifiable (nullptr),
       consteval_block (NULL_TREE), heap_dealloc_count (0),
       uncaught_exceptions (0), contract_statement (NULL_TREE),
-      contract_condition_non_const (false), state_dependent (false) {}
+      contract_condition_non_const (false), contract_diagnosed (false),
+      state_dependent (false) {}
 
   bool is_outside_lifetime (tree t)
   {
@@ -4112,31 +4116,6 @@ is_std_source_location_current (const constexpr_call *call)
 	  && is_std_source_location_current (call->fundef->decl));
 }
 
-/* Return true if FNDECL is std::contracts::__d4324_consteval_diagnose_violation
-   (declared, never defined, in libstdc++-v3/include/std/contracts).  Every
-   D4324 control type's operator() calls this, under "if consteval", to
-   report a violation using the exact same manifestly-constant-evaluated,
-   quiet-independent diagnostic decision [basic.contract.eval] already
-   requires for a bare (control-object-less) contract -- see the special
-   case for it in cxx_eval_call_expression.  The name is distinctive enough
-   that only a light namespace sanity check is done, unlike
-   is_std_source_location_current's fuller walk.  */
-
-static inline bool
-is_d4324_consteval_diagnose_violation (tree fndecl)
-{
-  if (fndecl == NULL_TREE || TREE_CODE (fndecl) != FUNCTION_DECL)
-    return false;
-  tree name = DECL_NAME (fndecl);
-  if (name == NULL_TREE
-      || !id_equal (name, "__d4324_consteval_diagnose_violation"))
-    return false;
-  tree ctx = CP_DECL_CONTEXT (fndecl);
-  return (ctx != NULL_TREE && TREE_CODE (ctx) == NAMESPACE_DECL
-	  && DECL_NAME (ctx) != NULL_TREE
-	  && id_equal (DECL_NAME (ctx), "contracts"));
-}
-
 /* Return true if FNDECL is __dynamic_cast.  */
 
 static inline bool
@@ -4691,53 +4670,6 @@ cxx_eval_call_expression (const constexpr_ctx *ctx, tree t,
   tree orig_fun = fun;
   if (DECL_CLONED_FUNCTION_P (fun) && !DECL_DELETING_DESTRUCTOR_P (fun))
     fun = DECL_CLONED_FUNCTION (fun);
-
-  if (is_d4324_consteval_diagnose_violation (fun))
-    {
-      /* D4324: reuse [basic.contract.eval]'s own manifestly-constant-
-	 evaluated, quiet-INDEPENDENT violation diagnostic decision here --
-	 deliberately not gated on ctx->quiet, exactly like
-	 check_for_failed_contracts isn't, so this fires even in a "may
-	 silently fall back" trial-evaluation context (e.g. an ordinary
-	 static const initializer) that nonetheless counts as manifestly
-	 constant-evaluated per [expr.const]/[basic.start.static].  */
-      if (ctx->manifestly_const_eval != mce_true)
-	return void_node;
-
-      tree terminating = cxx_eval_constant_expression
-	(ctx, CALL_EXPR_ARG (t, 0), vc_prvalue, non_constant_p, overflow_p,
-	 jump_target);
-      if (*non_constant_p)
-	return t;
-
-      /* LOC (the call's own location) is always inside <contracts>
-	 itself, a system header, and the "in constexpr expansion of ..."
-	 note chain leading back to the user's own code (e.g. the
-	 `static const int y = f(-42);` declaration) is only ever shown
-	 alongside an actually-emitted diagnostic -- so this needs to behave
-	 like any other genuinely user-facing diagnostic whose root cause
-	 happens to sit in a system header, not be silently suppressed the
-	 way an ordinary warning physically inside a header normally would
-	 be.  Same idiom already used for this in gcc/cp/except.cc's
-	 maybe_noexcept_warning and gcc/cp/call.cc.  */
-      auto s = make_temp_override (global_dc->m_warn_system_headers, true);
-
-      if (integer_nonzerop (terminating))
-	{
-	  emit_diagnostic (diagnostics::kind::error, loc, 0,
-			    "contract predicate is false in constant "
-			    "expression");
-	  *non_constant_p = true;
-	  return t;
-	}
-
-      /* Non-terminating: warn, but let the caller's already-computed
-	 value stand -- exactly like a bare contract's observe semantic
-	 does at the shared check_for_failed_contracts call site.  */
-      emit_diagnostic (diagnostics::kind::warning, loc, 0,
-			"contract predicate is false in constant expression");
-      return void_node;
-    }
 
   if (is_ubsan_builtin_p (fun))
     return void_node;
@@ -11491,16 +11423,15 @@ cxx_eval_constant_expression (const constexpr_ctx *ctx, tree t,
 	/* D4324: a contract naming a control object dispatches through that
 	   object's own protocol -- is_ignored/operator() -- instead of the
 	   TU-wide evaluation-semantic fallback below, exactly like the
-	   runtime (genericized) path does.  There's no separate deferred
-	   bookkeeping here the way check_for_failed_contracts needs for the
-	   bare-contract path: the operator() call's own success/failure (a
-	   real constant-expression call, which may hit a non-constexpr
-	   function, an uncaught exception, or -- via the recognized
-	   __d4324_consteval_diagnose_violation call each control type's
-	   "if consteval" branch makes -- the same manifestly-const-eval-
-	   gated, severity-aware diagnostic decision check_for_failed_contracts
-	   itself embodies) is itself the immediate, correct signal, so it's
-	   evaluated exactly like any other statement.  */
+	   runtime (genericized) path does.  The control type reports a
+	   violation itself, under "if consteval", with
+	   std::contracts::constexpr_error_str or constexpr_warning_str, which
+	   call __builtin_constexpr_diag.  An error it reports is treated like
+	   a failed bare contract with a terminating semantic: the contract is
+	   recorded, so later contracts are skipped and the call isn't cached,
+	   and the outermost evaluation's result is error_mark_node (see
+	   check_for_failed_contracts).  A warning lets the evaluation go on,
+	   as observe does.  */
 	if (CONTRACT_CONTROL_OBJECT (t))
 	  {
 	    tree fndecl = (ctx->call && ctx->call->fundef
@@ -11510,9 +11441,24 @@ cxx_eval_constant_expression (const constexpr_ctx *ctx, tree t,
 	    if (check == error_mark_node)
 	      *non_constant_p = true;
 	    else if (check != void_node)
-	      r = cxx_eval_constant_expression (ctx, check, vc_discard,
-						 non_constant_p, overflow_p,
-						 jump_target);
+	      {
+		/* The control types are in <contracts>, a system header, and
+		   so is the location of their diagnostic; show its warnings
+		   anyway.  */
+		auto sh = make_temp_override (global_dc->m_warn_system_headers,
+					      true);
+		int errors = errorcount;
+		r = cxx_eval_constant_expression (ctx, check, vc_discard,
+						   non_constant_p, overflow_p,
+						   jump_target);
+		if (errorcount > errors
+		    && !*non_constant_p
+		    && ctx->manifestly_const_eval == mce_true)
+		  {
+		    ctx->global->contract_statement = t;
+		    ctx->global->contract_diagnosed = true;
+		  }
+	      }
 	    break;
 	  }
 
@@ -11793,6 +11739,9 @@ check_for_failed_contracts (constexpr_ctx *ctx)
       /* When !MCE, silently return not constant.  */
       return true;
     }
+  else if (global_ctx->contract_diagnosed)
+    /* The control object reported it already.  */
+    return true;
   else if (contract_terminating_p (global_ctx->contract_statement))
     {
       kind = diagnostics::kind::error;

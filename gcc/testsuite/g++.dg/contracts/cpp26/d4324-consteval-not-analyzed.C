@@ -21,5 +21,5 @@ sum (std::span<const int, 3> s, unsigned long n)
 
 constexpr int arr[3] = { 1, 2, 3 };
 static_assert (sum (arr, 3) == 6);
-static_assert (sum (arr, 4) == 6);	// { dg-error "non-constant" }
-// { dg-error "contract predicate is false" "" { target *-*-* } 0 }
+static_assert (sum (arr, 4) == 6);
+// { dg-error "constexpr message: __idx < size\\(\\) \\\[contract\\\]" "" { target *-*-* } 0 }

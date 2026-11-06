@@ -6055,9 +6055,7 @@ get_symbolic_field_key (tree field)
 /* Return true if FNDECL is std::contracts::__d4324_invoke_violation_handler
    (declared, never defined, in libstdc++-v3/include/std/contracts).  See
    maybe_replace_d4324_violation_handler_call below.  The name is
-   distinctive enough that only a light namespace sanity check is done,
-   matching the analogous recognizer for __d4324_consteval_diagnose_violation
-   in gcc/cp/constexpr.cc.  */
+   distinctive enough that only a light namespace sanity check is done.  */
 
 static bool
 is_d4324_invoke_violation_handler (tree fndecl)
@@ -40362,9 +40360,9 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
   tree op = contract_control_operator (ctrl);
   if (!op)
     {
-      /* Unlike a genuine contract violation (handled by the caller via the
-	 recognized __d4324_consteval_diagnose_violation call, deliberately
-	 not quiet-gated to match check_for_failed_contracts), a missing
+      /* Unlike a genuine contract violation (which the control type
+	 reports itself with __builtin_constexpr_diag, not quiet-gated, like
+	 check_for_failed_contracts), a missing
 	 operator() is a malformed-program error, not something
 	 manifestly-const-eval-awareness should force into visibility: a
 	 merely-quiet trial evaluation (e.g. this same contract reached via
