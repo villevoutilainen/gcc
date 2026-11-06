@@ -39885,6 +39885,27 @@ get_or_build_symbolic_shadow_contract (location_t loc, tree contract,
    the loop by append_to_statement_list (genericize_c_loop), so that
    'for (...) contract_assert (c);' never checked anything.  */
 
+/* True if CONTRACT, a contract statement of the current function, is a
+   symbolic one that -fcontract-symbolic-runtime-checks checks.  Its
+   condition is never evaluated: only its conjuncts' shapes are read
+   (oa_collect_symbolic_actions), so it must not be folded first --
+   at -O1, 'x >= 40 && x < 100' becomes one unsigned comparison, which
+   matches no conjunct shape (P4445 BUG-27).  */
+
+bool
+contract_symbolic_runtime_checked_p (tree contract)
+{
+  if (!flag_contract_symbolic_runtime_checks || !flag_contract_control_objects)
+    return false;
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  if (!ctrl || ctrl == error_mark_node)
+    return false;
+  contract_check_side side
+    = contract_side_of (contract, current_function_decl);
+  return contract_control_symbolic_like (ctrl, side, current_function_decl,
+					 /*quiet=*/true);
+}
+
 static tree
 contract_check_bind_done (tree cc_bind)
 {

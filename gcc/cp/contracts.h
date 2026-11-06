@@ -1507,6 +1507,7 @@ extern bool emit_contract_wrapper_func		(bool);
 extern void maybe_emit_violation_handler_wrappers (void);
 
 extern tree build_contract_check		(tree);
+extern bool contract_symbolic_runtime_checked_p	(tree);
 extern tree contract_pred_result_name	(tree);
 extern tree build_contract_control_constexpr_check (tree, tree, bool);
 extern tree maybe_replace_d4324_violation_handler_call (tree, tree);

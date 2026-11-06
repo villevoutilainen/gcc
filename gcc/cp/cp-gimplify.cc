@@ -1794,6 +1794,15 @@ cp_fold_r (tree *stmt_p, int *walk_subtrees, void *data_)
        }
       break;
 
+    case ASSERTION_STMT:
+    case PRECONDITION_STMT:
+    case POSTCONDITION_STMT:
+      /* D4324: the run-time check of a symbolic contract reads its
+	 condition as written.  */
+      if (contract_symbolic_runtime_checked_p (stmt))
+	*walk_subtrees = 0;
+      break;
+
     default:
       break;
     }
