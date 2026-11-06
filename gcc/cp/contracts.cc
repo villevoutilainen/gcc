@@ -13031,6 +13031,10 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
     return false;
 
   STRIP_ANY_LOCATION_WRAPPER (expr);
+  /* -fsanitize= instrumentation evaluates an operand once, in a
+     SAVE_EXPR: the same value (P4445 BUG-24).  */
+  while (TREE_CODE (expr) == SAVE_EXPR)
+    expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
 
   /* D4324/P2680: 'std::forward<T>(x)' pass-through -- see oa_std_forward_
      call_p's own comment for why this needs an explicit strip here,
@@ -14017,6 +14021,10 @@ oa_provably_nonzero_p (tree expr, oa_env &env)
     return false;
 
   STRIP_ANY_LOCATION_WRAPPER (expr);
+  /* -fsanitize= instrumentation evaluates an operand once, in a
+     SAVE_EXPR: the same value (P4445 BUG-24).  */
+  while (TREE_CODE (expr) == SAVE_EXPR)
+    expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
 
   /* Reading a by-reference lambda-capture proxy's *value* (as opposed
      to its address, which oa_provable_p's own capture-proxy comment
@@ -14295,6 +14303,10 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
     return false;
 
   STRIP_ANY_LOCATION_WRAPPER (expr);
+  /* -fsanitize= instrumentation evaluates an operand once, in a
+     SAVE_EXPR: the same value (P4445 BUG-24).  */
+  while (TREE_CODE (expr) == SAVE_EXPR)
+    expr = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (expr, 0));
 
   if (oa_iile_outer_env && TREE_CODE (expr) == INDIRECT_REF)
     {
