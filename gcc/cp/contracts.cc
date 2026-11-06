@@ -9738,6 +9738,23 @@ public:
   }
   void alias_set (tree d, tree target) { m_alias_target.put (d, target); }
   void alias_invalidate (tree d) { m_alias_target.remove (d); }
+  /* Automatic variable V's scope has ended: its object, and what is known
+     of the pointers known to designate it (P4445 BUG-23).  */
+  void scope_end (tree v)
+  {
+    decl_object_end (v);
+    auto_vec<tree, 4> aliases;
+    for (auto it : m_alias_target)
+      if (it.second == v)
+	aliases.safe_push (it.first);
+    for (tree d : aliases)
+      {
+	invalidate (d);
+	range_invalidate (d);
+	symbolic_object_address_invalidate (d);
+	alias_invalidate (d);
+      }
+  }
   /* Agreement-based, mirroring predicate_fact_merge_with exactly: an
      entry survives only if both sides have it and agree on the same
      target, otherwise it's dropped (treated as "no longer known to
@@ -31943,6 +31960,10 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 
     case BIND_EXPR:
       oa_walk_stmt (&BIND_EXPR_BODY (t), env);
+      /* Leaving the block ends its automatic variables.  */
+      for (tree v = BIND_EXPR_VARS (t); v; v = DECL_CHAIN (v))
+	if (VAR_P (v) && !is_global_var (v))
+	  env.scope_end (v);
       return;
 
     case DECL_EXPR:
