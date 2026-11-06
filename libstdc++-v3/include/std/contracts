@@ -1227,6 +1227,39 @@ namespace contracts
 
   inline constexpr proven_conveyor_t proven_conveyor_v{};
 
+  // What the symbolic control types do when a symbolic precondition finds
+  // no record of its fact (-fcontract-symbolic-runtime-checks), as
+  // default_control does for a false predicate: report the violation to
+  // the replaceable violation handler with the configured semantic (an
+  // exception it throws propagates), then terminate unless the semantic
+  // is observe.  Quick-enforce terminates at once; ignore reports nothing.
+  constexpr void
+  __symbolic_violation(const assertion_context& __ctx, const char* __message)
+  {
+    if (__ctx.check())
+      return;
+    const char* __text = __message ? __message : __ctx.comment();
+    const evaluation_semantic __sem = __ctx.semantic();
+    if (__sem == evaluation_semantic::ignore)
+      return;
+    if consteval
+      {
+	if (__sem == evaluation_semantic::observe)
+	  constexpr_warning_str ("contract", __text);
+	else
+	  constexpr_error_str ("contract", __text);
+      }
+    else
+      {
+	if (__sem != evaluation_semantic::quick_enforce)
+	  invoke_violation_handler
+	    ({__text, __ctx.location(), __sem, __ctx.kind()},
+	     detection_mode::predicate_false);
+	if (__sem != evaluation_semantic::observe)
+	  __d4324_terminate_wrapper();
+      }
+  }
+
   // The is_symbolic-flavor mirror of conveyor_assert above: declares
   // is_symbolic() true instead of is_conveyor(), so a contract naming
   // this is checked under -fcontract-symbolic-proofs the ordinary way
@@ -1246,48 +1279,11 @@ namespace contracts
     static constexpr bool
     is_symbolic(assertion_static_info) noexcept { return true; }
 
+    // Not noexcept: an exception thrown by the violation handler
+    // propagates to the caller.
     constexpr void
-    operator()(const assertion_context& __ctx) const noexcept
-    {
-      if (__ctx.check())
-	return;
-
-      const char* __text = message ? message : __ctx.comment();
-
-#if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
-      if consteval
-	{
-	  constexpr_error_str ("contract", __text);
-	}
-      else
-	{
-	  try
-	    {
-	      invoke_violation_handler
-		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
-		 detection_mode::predicate_false);
-	    }
-	  catch (...) { }
-	  __d4324_terminate_wrapper();
-	}
-#else
-      if consteval
-	{
-	  constexpr_error_str ("contract", __text);
-	}
-      else
-	{
-#ifdef _GLIBCXX_VERBOSE_ASSERT
-	  std::__glibcxx_assert_fail (__ctx.location().file_name(),
-				       __ctx.location().line(),
-				       __ctx.location().function_name(),
-				       __text);
-#else
-	  __builtin_abort();
-#endif
-	}
-#endif
-    }
+    operator()(const assertion_context& __ctx) const
+    { __symbolic_violation(__ctx, message); }
   };
 
   inline constexpr symbolic_assert symbolic_assert_v{};
@@ -1312,48 +1308,11 @@ namespace contracts
     static constexpr bool
     never_proven(assertion_static_info) noexcept { return true; }
 
+    // Not noexcept: an exception thrown by the violation handler
+    // propagates to the caller.
     constexpr void
-    operator()(const assertion_context& __ctx) const noexcept
-    {
-      if (__ctx.check())
-	return;
-
-      const char* __text = message ? message : __ctx.comment();
-
-#if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
-      if consteval
-	{
-	  constexpr_error_str ("contract", __text);
-	}
-      else
-	{
-	  try
-	    {
-	      invoke_violation_handler
-		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
-		 detection_mode::predicate_false);
-	    }
-	  catch (...) { }
-	  __d4324_terminate_wrapper();
-	}
-#else
-      if consteval
-	{
-	  constexpr_error_str ("contract", __text);
-	}
-      else
-	{
-#ifdef _GLIBCXX_VERBOSE_ASSERT
-	  std::__glibcxx_assert_fail (__ctx.location().file_name(),
-				       __ctx.location().line(),
-				       __ctx.location().function_name(),
-				       __text);
-#else
-	  __builtin_abort();
-#endif
-	}
-#endif
-    }
+    operator()(const assertion_context& __ctx) const
+    { __symbolic_violation(__ctx, message); }
   };
 
   inline constexpr never_proven_symbolic never_proven_symbolic_v{};
@@ -1379,48 +1338,11 @@ namespace contracts
     static constexpr bool
     analyzed_symbolic(assertion_static_info) noexcept { return true; }
 
+    // Not noexcept: an exception thrown by the violation handler
+    // propagates to the caller.
     constexpr void
-    operator()(const assertion_context& __ctx) const noexcept
-    {
-      if (__ctx.check())
-	return;
-
-      const char* __text = message ? message : __ctx.comment();
-
-#if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
-      if consteval
-	{
-	  constexpr_error_str ("contract", __text);
-	}
-      else
-	{
-	  try
-	    {
-	      invoke_violation_handler
-		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
-		 detection_mode::predicate_false);
-	    }
-	  catch (...) { }
-	  __d4324_terminate_wrapper();
-	}
-#else
-      if consteval
-	{
-	  constexpr_error_str ("contract", __text);
-	}
-      else
-	{
-#ifdef _GLIBCXX_VERBOSE_ASSERT
-	  std::__glibcxx_assert_fail (__ctx.location().file_name(),
-				       __ctx.location().line(),
-				       __ctx.location().function_name(),
-				       __text);
-#else
-	  __builtin_abort();
-#endif
-	}
-#endif
-    }
+    operator()(const assertion_context& __ctx) const
+    { __symbolic_violation(__ctx, message); }
   };
 
   inline constexpr analyzed_symbolic_t analyzed_symbolic_v{};
@@ -1441,48 +1363,11 @@ namespace contracts
     static constexpr bool
     proven_symbolic(assertion_static_info) noexcept { return true; }
 
+    // Not noexcept: an exception thrown by the violation handler
+    // propagates to the caller.
     constexpr void
-    operator()(const assertion_context& __ctx) const noexcept
-    {
-      if (__ctx.check())
-	return;
-
-      const char* __text = message ? message : __ctx.comment();
-
-#if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
-      if consteval
-	{
-	  constexpr_error_str ("contract", __text);
-	}
-      else
-	{
-	  try
-	    {
-	      invoke_violation_handler
-		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
-		 detection_mode::predicate_false);
-	    }
-	  catch (...) { }
-	  __d4324_terminate_wrapper();
-	}
-#else
-      if consteval
-	{
-	  constexpr_error_str ("contract", __text);
-	}
-      else
-	{
-#ifdef _GLIBCXX_VERBOSE_ASSERT
-	  std::__glibcxx_assert_fail (__ctx.location().file_name(),
-				       __ctx.location().line(),
-				       __ctx.location().function_name(),
-				       __text);
-#else
-	  __builtin_abort();
-#endif
-	}
-#endif
-    }
+    operator()(const assertion_context& __ctx) const
+    { __symbolic_violation(__ctx, message); }
   };
 
   inline constexpr proven_symbolic_t proven_symbolic_v{};
