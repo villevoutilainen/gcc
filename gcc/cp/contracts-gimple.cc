@@ -5027,15 +5027,42 @@ cg_display_argument (tree arg, tree parm)
    "every div/mod anywhere in the function" coverage a recursive walk
    would otherwise need to provide itself.  */
 
+static bool cg_frange_of (tree, gimple *, gimple_ranger *,
+			  hash_map<tree, frange> *, frange &, int);
+
 static void
 cg_check_div_mod_ub (gimple *stmt, hash_map<tree, cg_fact> &established_nz,
 		       hash_map<tree, cg_range_lite> &established_range,
 		       hash_map<tree, cg_range_lite> &scalar_range_cache,
-		       gimple_ranger *ranger)
+		       gimple_ranger *ranger,
+		       hash_map<tree, frange> *established_frange)
 {
   if (!is_gimple_assign (stmt))
     return;
   enum tree_code code = gimple_assign_rhs_code (stmt);
+
+  /* A floating value converted to an integer type must, truncated, be
+     representable in it (P4445 BUG-13).  */
+  if (code == FIX_TRUNC_EXPR
+      && INTEGRAL_TYPE_P (TREE_TYPE (gimple_assign_lhs (stmt))))
+    {
+      tree val = gimple_assign_rhs1 (stmt);
+      tree type = TREE_TYPE (gimple_assign_lhs (stmt));
+      frange r (TREE_TYPE (val));
+      bool known = (TREE_CODE (val) == REAL_CST
+		    ? (r = frange (val, val), true)
+		    : cg_frange_of (val, stmt, ranger, established_frange, r, 0));
+      REAL_VALUE_TYPE lo, hi;
+      contract_float_to_int_limits (type, &lo, &hi);
+      if (!(known && !r.undefined_p () && !r.maybe_isnan ()
+	    && real_less (&lo, &r.lower_bound ())
+	    && real_less (&r.upper_bound (), &hi)))
+	cg_conveyor_error_at (gimple_location (stmt),
+			      "conversion of %qE to %qT not provably in "
+			      "range in a conveyor function",
+			      cg_display_value (val, 0), type);
+      return;
+    }
 
   /* A shift count must be non-negative and less than the width of the
      shifted operand's type (P4445 BUG-11).  */
@@ -18288,7 +18315,8 @@ pass_contracts_gimple::execute_1 (function *fun)
 	  if (check_item8_ub)
 	    {
 	      cg_check_div_mod_ub (stmt, established_nz, established_range,
-				    scalar_range_cache, ranger);
+				    scalar_range_cache, ranger,
+				    &established_frange);
 	      /* A predicate's overflow is the AST engine's to report under
 		 the engine option: the front end has folded some of the
 		 condition's arithmetic away before this function exists

@@ -17503,6 +17503,39 @@ oa_inform (location_t loc, const char *gmsgid, ...)
    actually declared with the 'conveyor' keyword -- checked by the
    caller, not here.  */
 
+/* The location of the statement oa_walk_stmt is walking.  */
+static location_t oa_current_stmt_loc = UNKNOWN_LOCATION;
+
+/* The open interval (*LO, *HI) a floating value must lie in, exactly,
+   for its conversion to integer TYPE to be defined: truncated, it is
+   representable ([conv.fpint]; P4445 BUG-13).  */
+
+void
+contract_float_to_int_limits (tree type, REAL_VALUE_TYPE *lo,
+			      REAL_VALUE_TYPE *hi)
+{
+  widest_int min = wi::to_widest (TYPE_MIN_VALUE (type));
+  widest_int max = wi::to_widest (TYPE_MAX_VALUE (type));
+  real_from_integer (lo, VOIDmode, min - 1, SIGNED);
+  real_from_integer (hi, VOIDmode, max + 1, SIGNED);
+}
+
+/* Whether converting EXPR, of floating type, to integer TYPE is provably
+   defined under ENV: its range is known, excludes a NaN, and lies within
+   contract_float_to_int_limits.  */
+
+static bool
+oa_float_to_int_defined_p (tree expr, tree type, oa_env &env)
+{
+  oa_float_range_fact f;
+  if (!oa_get_float_range (expr, env, &f)
+      || !f.has_lo || !f.has_hi || f.maybe_nan)
+    return false;
+  REAL_VALUE_TYPE lo, hi;
+  contract_float_to_int_limits (type, &lo, &hi);
+  return real_less (&lo, &f.lo) && real_less (&f.hi, &hi);
+}
+
 /* Whether NUM / DEN (or NUM % DEN), of signed TYPE, provably isn't the one
    overflowing case, the type's minimum divided by -1 (P4445 BUG-10): DEN's
    range excludes -1, or NUM's excludes the minimum.  */
@@ -17559,6 +17592,25 @@ oa_scan_div_mod_in_expr (tree *expr, oa_env &env)
       if (is_object_address_call_p (t, &ioa_arg))
 	{
 	  *walk_subtrees_p = 0;
+	  return NULL_TREE;
+	}
+      /* A floating value converted to an integer type must, truncated,
+	 be representable in it (P4445 BUG-13).  */
+      if (TREE_CODE (t) == FIX_TRUNC_EXPR
+	  && INTEGRAL_TYPE_P (TREE_TYPE (t))
+	  && TREE_CODE (TREE_OPERAND (t, 0)) != REAL_CST)
+	{
+	  if (!oa_float_to_int_defined_p (TREE_OPERAND (t, 0), TREE_TYPE (t),
+					  *e))
+	    /* An implicit conversion has no location of its own.  */
+	    oa_conveyor_error_at (EXPR_LOC_OR_LOC (t,
+						   oa_current_stmt_loc
+						   != UNKNOWN_LOCATION
+						   ? oa_current_stmt_loc
+						   : input_location),
+				  "conversion of %qE to %qT not provably "
+				  "in range in a conveyor function",
+				  TREE_OPERAND (t, 0), TREE_TYPE (t));
 	  return NULL_TREE;
 	}
       /* A shift count must be non-negative and less than the width of
@@ -17728,8 +17780,6 @@ oa_check_offset_in_bounds (tree t, tree array_type, const oa_range_fact &total,
    Only meaningful within a function actually declared with the
    'conveyor' keyword -- checked by the caller, not here.  */
 
-/* The location of the statement oa_walk_stmt is walking.  */
-static location_t oa_current_stmt_loc = UNKNOWN_LOCATION;
 
 static void
 oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)

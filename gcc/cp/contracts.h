@@ -1508,6 +1508,8 @@ extern void maybe_emit_violation_handler_wrappers (void);
 
 extern tree build_contract_check		(tree);
 extern bool contract_symbolic_runtime_checked_p	(tree);
+extern void contract_float_to_int_limits	(tree, REAL_VALUE_TYPE *,
+						 REAL_VALUE_TYPE *);
 extern tree contract_pred_result_name	(tree);
 extern tree build_contract_control_constexpr_check (tree, tree, bool);
 extern tree maybe_replace_d4324_violation_handler_call (tree, tree);
