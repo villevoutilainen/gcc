@@ -482,10 +482,19 @@ maybe_warn_fnptr_contract_mismatch (location_t loc, tree dest_decl,
     return;
 
   tree dest_type = TREE_TYPE (dest_decl);
-  if (dest_type == NULL_TREE
-      || (!TYPE_PTRFN_P (dest_type)
-	  && !TYPE_REFFN_P (dest_type)
-	  && !TYPE_PTRMEMFUNC_P (dest_type)))
+  if (dest_type == NULL_TREE)
+    return;
+  /* A reference bound to a contracted function pointer: calls through the
+     reference aren't checked against the pointer's contract, just as calls
+     through a copy aren't (P4445 BUG-07), so it's warned about the same
+     way.  */
+  bool binding = (TYPE_REF_P (dest_type)
+		  && (TYPE_PTRFN_P (TREE_TYPE (dest_type))
+		      || TYPE_PTRMEMFUNC_P (TREE_TYPE (dest_type))));
+  if (!binding
+      && !TYPE_PTRFN_P (dest_type)
+      && !TYPE_REFFN_P (dest_type)
+      && !TYPE_PTRMEMFUNC_P (dest_type))
     return;
 
   if (warning_suppressed_p (src_expr, OPT_Wfunction_pointer_contract_mismatch))
@@ -501,9 +510,18 @@ maybe_warn_fnptr_contract_mismatch (location_t loc, tree dest_decl,
   if (dest_spec == NULL_TREE)
     {
       if (src_spec != NULL_TREE)
-	warning_at (loc, OPT_Wfunction_pointer_contract_mismatch,
-		    "assigning %qD, which has its own contract, to "
-		    "%qD, which has none", src_owner, dest_decl);
+	{
+	  if (binding)
+	    warning_at (loc, OPT_Wfunction_pointer_contract_mismatch,
+			"binding reference %qD, which has no contract, to "
+			"%qD, which has its own; calls through %qD are not "
+			"checked against it", dest_decl, src_owner,
+			dest_decl);
+	  else
+	    warning_at (loc, OPT_Wfunction_pointer_contract_mismatch,
+			"assigning %qD, which has its own contract, to "
+			"%qD, which has none", src_owner, dest_decl);
+	}
       return;
     }
 
