@@ -3484,6 +3484,23 @@ compile-time, single-function check); the two may be used separately or
 together. This option has no effect unless
 @option{-fcontract-control-objects} is also enabled.
 
+A record follows the lifetime of the object it is about only where that
+lifetime visibly ends in code compiled with this option: at the end of
+the object's scope, at its destruction, or when a new-expression,
+@code{memcpy}, @code{memmove} or @code{memset} creates new objects in its
+storage.  Storage reused otherwise passes the previous objects' records
+on to the new ones: memory freed with @code{free} and allocated again,
+a scope left by @code{longjmp}, a union member switched by assignment,
+or placement new in code compiled without the option.
+
+Every translation unit that establishes or checks the same symbolic
+contracts must be compiled with this option.  An inline function
+compiled both with and without it has two definitions, and which one the
+linker keeps decides whether its postconditions are recorded.  The
+records are kept in @file{libstdc++exp}, a static library: a shared
+library that links it and does not export its symbols keeps records of
+its own.
+
 @opindex fdump-contract-proofs
 @item -fdump-contract-proofs=@var{file}
 Emit an SMT-LIB2 verification condition to @var{file} for every
