@@ -10222,6 +10222,7 @@ public:
   void scope_end (tree v)
   {
     decl_object_end (v);
+    derived_end (v);
     auto_vec<tree, 4> aliases;
     for (auto it : m_alias_target)
       if (it.second == v)
@@ -10487,6 +10488,8 @@ public:
     n -= m_ended_member_map.elements ();
     n -= m_ended_decl_map.elements ();
     n -= m_escaped_decl_map.elements ();
+    for (auto it : m_derived_from)
+      n -= list_length (it.second);
     return n;
   }
   void invalidate_all_object_state ()
@@ -11960,6 +11963,7 @@ public:
     r.m_ended_member_map = m_ended_member_map;
     r.m_ended_decl_map = m_ended_decl_map;
     r.m_escaped_decl_map = m_escaped_decl_map;
+    r.m_derived_from = m_derived_from;
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -12000,6 +12004,7 @@ public:
     m_ended_member_map = other.m_ended_member_map;
     m_ended_decl_map = other.m_ended_decl_map;
     m_escaped_decl_map = other.m_escaped_decl_map;
+    m_derived_from = other.m_derived_from;
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -12226,6 +12231,12 @@ private:
      may write through it, or stored where this function doesn't track
      it.  Any later call that isn't conveyor may write them.  */
   oa_cow_map<tree, bool> m_escaped_decl_map;
+  /* A pointer or reference variable whose value was obtained from other
+     objects -- returned by a call given a route to them, or loaded from
+     their memory ('int &r = v[0]', 'int *p = v.data') -- maps to them, a
+     TREE_LIST: the object it designates may be one they own, which a
+     call that may end them may end too (P4445 caller9).  */
+  oa_cow_map<tree, tree> m_derived_from;
   /* What is known of KEY and its members holds again: a fact on it was
      established (a trust).  */
   void member_restore (tree key, int depth = 0)
@@ -12251,6 +12262,55 @@ public:
 	    || (TREE_CODE (decl) == PARM_DECL
 		&& !TYPE_REF_P (TREE_TYPE (decl)))))
       m_escaped_decl_map.put (decl, true);
+  }
+  /* DECL's value was obtained from the objects in SOURCES, a TREE_LIST,
+     or from none of them when SOURCES is null.  */
+  void derived_set (tree decl, tree sources)
+  {
+    if (sources)
+      m_derived_from.put (decl, sources);
+    else if (m_derived_from.elements ())
+      m_derived_from.remove (decl);
+  }
+  /* OBJECT may have ended: so may every object whose address was
+     obtained from it, transitively, and what is known of the pointers
+     and references designating those ends with them.  */
+  void derived_end (tree object)
+  {
+    if (!m_derived_from.elements ())
+      return;
+    auto_vec<tree, 8> work;
+    hash_set<tree> seen;
+    work.safe_push (object);
+    while (!work.is_empty ())
+      {
+	tree o = work.pop ();
+	if (seen.add (o))
+	  continue;
+	auto_vec<tree, 4> hit;
+	for (auto it : m_derived_from)
+	  for (tree l = it.second; l; l = TREE_CHAIN (l))
+	    if (TREE_VALUE (l) == o)
+	      {
+		hit.safe_push (it.first);
+		break;
+	      }
+	for (tree k : hit)
+	  {
+	    auto_vec<tree, 4> ends;
+	    ends.safe_push (k);
+	    for (auto it : m_alias_target)
+	      if (it.second == k)
+		ends.safe_push (it.first);
+	    for (tree d : ends)
+	      {
+		invalidate (d);
+		range_invalidate (d);
+		symbolic_object_address_invalidate (d);
+	      }
+	    work.safe_push (k);
+	  }
+      }
   }
   /* A call that isn't conveyor may have written the locals whose address
      has been handed out (P4445 BUG-17).  */
@@ -12335,6 +12395,17 @@ public:
     if (!m_escaped_decl_map.same_p (other.m_escaped_decl_map))
       for (auto it : other.m_escaped_decl_map)
 	m_escaped_decl_map.put (it.first, true);
+    /* And what a value may have been obtained from, on either.  */
+    if (!m_derived_from.same_p (other.m_derived_from))
+      for (auto it : other.m_derived_from)
+	{
+	  const tree *mine = m_derived_from.get (it.first);
+	  tree merged = mine ? *mine : NULL_TREE;
+	  for (tree l = it.second; l; l = TREE_CHAIN (l))
+	    if (!value_member (TREE_VALUE (l), merged))
+	      merged = tree_cons (NULL_TREE, TREE_VALUE (l), merged);
+	  m_derived_from.put (it.first, merged);
+	}
     if (m_borrowed_map.same_p (other.m_borrowed_map))
       return;
     for (auto it : other.m_borrowed_map)
@@ -25993,6 +26064,80 @@ oa_reference_binding_call (tree decl)
   return call ? *call : NULL_TREE;
 }
 
+/* Add to *LIST the objects the value of E, a pointer or reference
+   expression, was obtained from: for a call ('v[0]', 'v.data ()',
+   'get (&v)'), the objects it is given a route to, the object of a
+   member call included; for a pointer loaded from memory ('v.data',
+   'v.data[i]', 'p->next'), the object holding it.  The object E
+   designates may be one they own, and may end when they may (P4445
+   caller9).  */
+
+static void
+oa_value_sources_1 (tree e, oa_env &env, tree *list, int depth)
+{
+  if (!e || depth > 16)
+    return;
+  auto add = [&] (tree route)
+    {
+      tree id;
+      if (oa_invalidation_identity_decl (route, &id)
+	  || oa_field_slot_identity (route, env, &id)
+	  || oa_array_slot_identity (route, env, &id)
+	  || oa_field_object_identity (route, env, &id))
+	{
+	  id = env.alias_find (id);
+	  if (!value_member (id, *list))
+	    *list = tree_cons (NULL_TREE, id, *list);
+	}
+    };
+  e = STRIP_ANY_LOCATION_WRAPPER (e);
+  if (tree call = oa_strip_to_call (e))
+    {
+      bool aggr = TREE_CODE (call) == AGGR_INIT_EXPR;
+      int n = aggr ? aggr_init_expr_nargs (call) : call_expr_nargs (call);
+      for (int i = 0; i < n; ++i)
+	{
+	  tree arg = aggr ? AGGR_INIT_EXPR_ARG (call, i) : CALL_EXPR_ARG (call, i);
+	  if (POINTER_TYPE_P (TREE_TYPE (arg)))
+	    add (arg);
+	}
+      return;
+    }
+  switch (TREE_CODE (e))
+    {
+    case NOP_EXPR:
+    case CONVERT_EXPR:
+    case NON_LVALUE_EXPR:
+    case VIEW_CONVERT_EXPR:
+    case ADDR_EXPR:
+    case INDIRECT_REF:
+    case ARRAY_REF:
+    case POINTER_PLUS_EXPR:
+    case SAVE_EXPR:
+      oa_value_sources_1 (TREE_OPERAND (e, 0), env, list, depth + 1);
+      break;
+    case COMPONENT_REF:
+      /* A pointer loaded from a member: the object holding it.  */
+      if (POINTER_TYPE_P (TREE_TYPE (e)))
+	add (build_fold_addr_expr (TREE_OPERAND (e, 0)));
+      oa_value_sources_1 (TREE_OPERAND (e, 0), env, list, depth + 1);
+      break;
+    case COMPOUND_EXPR:
+      oa_value_sources_1 (TREE_OPERAND (e, 1), env, list, depth + 1);
+      break;
+    default:
+      break;
+    }
+}
+
+static tree
+oa_value_sources (tree init, oa_env &env)
+{
+  tree list = NULL_TREE;
+  oa_value_sources_1 (init, env, &list, 0);
+  return list;
+}
+
 /* Push onto ROUTES the further routes a callee given ARG, a pointer or
    reference argument, has to objects: for a member's or element's
    address, the objects enclosing it that it may reach
@@ -26333,6 +26478,11 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 		      env.invalidate (copy);
 		      env.range_invalidate (copy);
 		    }
+		  /* And what was obtained from it ('int &r = v[0]'): the
+		     object may own it (P4445 caller9).  */
+		  env.derived_end (identity);
+		  if (copy != identity)
+		    env.derived_end (copy);
 		  /* A variable's object itself, not a pointer's value, of
 		     any storage duration: its own address isn't an
 		     object's any more either.  */
@@ -26371,6 +26521,7 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 		  env.invalidate (key);
 		  env.range_invalidate (key);
 		  env.field_object_address_invalidate_derived (key);
+		  env.derived_end (key);
 		}
 	    }
 	  /* A pointer member's address, at any depth ('set (&mobj->d)'): any
@@ -26452,6 +26603,7 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 	for (tree g : *statics)
 	  {
 	    env.decl_object_end (g);
+	    env.derived_end (g);
 	    written.add (g);
 	  }
 	env.objects_written_through_memory (written);
@@ -32913,6 +33065,9 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	      env.set (decl, oa_provable_p (DECL_INITIAL (decl), env));
 	    else
 	      env.invalidate (decl);
+	    env.derived_set (decl, (DECL_INITIAL (decl)
+				    ? oa_value_sources (DECL_INITIAL (decl), env)
+				    : NULL_TREE));
 	    /* Increment E2's array-base+offset tracking, independent of
 	       (and alongside) the is_object_address tracking above.  */
 	    oa_range_fact fact;
@@ -32966,6 +33121,7 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	       oa_object_identity_decl itself resolves to" scope as the
 	       pointer case above (see its own comment) -- covers 'file &r
 	       = *p;', 'file &r2 = r;', and 'file &r = f;' alike.  */
+	    env.derived_set (decl, oa_value_sources (DECL_INITIAL (decl), env));
 	    tree alias_rhs_identity;
 	    if (oa_object_identity_decl (DECL_INITIAL (decl), &alias_rhs_identity)
 		&& alias_rhs_identity != decl)
@@ -33840,6 +33996,7 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	    env.set (lhs, TYPE_REF_P (TREE_TYPE (lhs))
 			  ? oa_reference_binding_provable_p (rhs, env)
 			  : oa_provable_p (rhs, env));
+	    env.derived_set (lhs, oa_value_sources (rhs, env));
 	    /* Increment E2's array-base+offset tracking, independent of
 	       (and alongside) the is_object_address tracking above.  */
 	    oa_range_fact fact;

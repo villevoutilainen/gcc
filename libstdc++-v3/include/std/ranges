@@ -3385,15 +3385,18 @@ namespace views::__adaptor
 		}
 	      else
 		{
-		  auto __end = _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(_GLIBCXX_CONVEYOR_TRUSTED (*__first_outer));
+		  // Dereference before trusting the CPO: operator* may end it.
+		  auto&& __outer_ref = *__first_outer;
+		  auto __end = _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(_GLIBCXX_CONVEYOR_TRUSTED (__outer_ref));
 		  auto __ret = __func(__first_inner, __end);
 		  if (__ret != __end)
 		    return _Iterator(__first._M_parent, __first_outer, __ret);
 
 		  while (++_GLIBCXX_CONVEYOR_TRUSTED (__first_outer) != __last_outer)
 		    {
-		      __end = _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(_GLIBCXX_CONVEYOR_TRUSTED (*__first_outer));
-		      __ret = __func(_GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(_GLIBCXX_CONVEYOR_TRUSTED (*__first_outer)), __end);
+		      auto&& __next_ref = *__first_outer;
+		      __end = _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(_GLIBCXX_CONVEYOR_TRUSTED (__next_ref));
+		      __ret = __func(_GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(_GLIBCXX_CONVEYOR_TRUSTED (__next_ref)), __end);
 		      if (__ret != __end)
 			return _Iterator(__first._M_parent, __first_outer, __ret);
 		    }
@@ -3401,7 +3404,8 @@ namespace views::__adaptor
 		  if (__last != __last._M_parent->end())
 		    {
 		      __end = __last_inner;
-		      __ret = __func(_GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(_GLIBCXX_CONVEYOR_TRUSTED (*__last_outer)), __end);
+		      auto&& __last_ref = *__last_outer;
+		      __ret = __func(_GLIBCXX_CONVEYOR_TRUSTED (ranges::begin)(_GLIBCXX_CONVEYOR_TRUSTED (__last_ref)), __end);
 		      if (__ret != __end)
 			return _Iterator(__first._M_parent, __first_outer, __ret);
 		    }
@@ -7890,7 +7894,8 @@ namespace views::__adaptor
 	      auto&& __inner = _M_get_inner();
 	      _GLIBCXX_CONVEYOR_TRUST(__inner);
 	      _GLIBCXX_CONVEYOR_TRUST_THIS;
-	      if (std::get<1>(_M_inner_it) != _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(__inner))
+	      // std::get may end what was obtained from *this: trust again.
+	      if (std::get<1>(_M_inner_it) != _GLIBCXX_CONVEYOR_TRUSTED (ranges::end)(_GLIBCXX_CONVEYOR_TRUSTED (__inner)))
 		break;
 
 	      _GLIBCXX_CONVEYOR_TRUST_THIS;

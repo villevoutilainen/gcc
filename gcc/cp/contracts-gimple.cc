@@ -14872,11 +14872,199 @@ cg_forget_ended_phis (basic_block bb, cg_dom_fact_state &state)
     cg_forget_ended_value (gimple_phi_result (gpi.phi ()), state);
 }
 
+/* The root (a decl or pointer value) of the object member lvalue M lies
+   in.  */
+
+static tree
+cg_member_root (tree m)
+{
+  tree base = get_base_address (m);
+  if (base && TREE_CODE (base) == MEM_REF)
+    return cg_pointer_root (TREE_OPERAND (base, 0));
+  return base;
+}
+
+/* Push onto SOURCES the objects pointer value NAME was obtained from, as
+   (root, member) pairs, MEMBER null for the whole object: for a call's
+   result ('v[0]', 'v.data ()'), each object it was given a route to; for
+   a load ('v.data', 'p->next'), the object holding it; for a PHI, those
+   of each of its values.  The object NAME designates may be one they own
+   and end with them (P4445 caller9).  */
+
+static void
+cg_value_sources (tree name, vec<std::pair<tree, tree>> &sources,
+		  int depth = 0)
+{
+  if (TREE_CODE (name) != SSA_NAME || SSA_NAME_IS_DEFAULT_DEF (name)
+      || depth > 4)
+    return;
+  gimple *def = SSA_NAME_DEF_STMT (name);
+  if (gcall *call = dyn_cast <gcall *> (def))
+    {
+      for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+	{
+	  tree arg = gimple_call_arg (call, i);
+	  if (!POINTER_TYPE_P (TREE_TYPE (arg)) || TREE_CODE (arg) == INTEGER_CST)
+	    continue;
+	  tree member;
+	  tree root = cg_route_object (arg, &member);
+	  if (member)
+	    sources.safe_push ({cg_member_root (member), member});
+	  else if (root)
+	    sources.safe_push ({root, NULL_TREE});
+	}
+      return;
+    }
+  if (gphi *phi = dyn_cast <gphi *> (def))
+    {
+      for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+	{
+	  tree a = gimple_phi_arg_def (phi, i);
+	  if (TREE_CODE (a) == SSA_NAME)
+	    {
+	      tree r = cg_pointer_root (a);
+	      if (r && TREE_CODE (r) == SSA_NAME && r != name)
+		cg_value_sources (r, sources, depth + 1);
+	    }
+	}
+      return;
+    }
+  if (gimple_assign_load_p (def))
+    {
+      tree base = get_base_address (gimple_assign_rhs1 (def));
+      if (base && TREE_CODE (base) == MEM_REF)
+	base = cg_pointer_root (TREE_OPERAND (base, 0));
+      if (base && (DECL_P (base) || TREE_CODE (base) == SSA_NAME))
+	sources.safe_push ({base, NULL_TREE});
+    }
+}
+
+/* Whether statement DEF comes before statement AT on every path to AT.  */
+
+static bool
+cg_stmt_before_p (gimple *def, gimple *at)
+{
+  basic_block db = gimple_bb (def), ab = gimple_bb (at);
+  if (!db || !ab)
+    return false;
+  if (db != ab)
+    return dominated_by_p (CDI_DOMINATORS, ab, db);
+  if (gimple_code (def) == GIMPLE_PHI)
+    return true;
+  if (def == at)
+    return false;
+  for (gimple_stmt_iterator gsi = gsi_for_stmt (def); !gsi_end_p (gsi);
+       gsi_next (&gsi))
+    if (gsi_stmt (gsi) == at)
+      return true;
+  return false;
+}
+
+/* CALL, which may end lifetimes, may end the objects it is given a route
+   to and those of static storage duration (cg_end_object_addresses_for_
+   call_2): so may it every object whose address a pointer value obtained
+   before CALL was obtained from one of them (cg_value_sources),
+   transitively, as the AST engine's oa_env::derived_end (P4445
+   caller9).  */
+
+static void
+cg_end_derived_values (gcall *call, function *fun, cg_dom_fact_state &state)
+{
+  auto_vec<std::pair<tree, tree>, 8> work;
+  if (cg_function_statics && !gimple_call_builtin_p (call, BUILT_IN_NORMAL))
+    for (tree g : *cg_function_statics)
+      work.safe_push ({g, NULL_TREE});
+  for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+    {
+      tree arg = gimple_call_arg (call, i);
+      if (!POINTER_TYPE_P (TREE_TYPE (arg)) || TREE_CODE (arg) == INTEGER_CST
+	  || cg_route_through_hidden_var_p (arg))
+	continue;
+      tree named = (i == 0 ? contract_call_named_fn (gimple_call_fn (call))
+		    : NULL_TREE);
+      bool cdtor = (named && TREE_CODE (named) == FUNCTION_DECL
+		    && (DECL_CONSTRUCTOR_P (named)
+			|| DECL_DESTRUCTOR_P (named)));
+      if (cdtor && DECL_CONSTRUCTOR_P (named))
+	continue;
+      if (TREE_CODE (arg) == SSA_NAME)
+	work.safe_push ({arg, NULL_TREE});
+      tree member;
+      tree root = cg_route_object (arg, &member, !cdtor);
+      if (member)
+	work.safe_push ({cg_member_root (member), member});
+      else if (root)
+	work.safe_push ({root, NULL_TREE});
+    }
+  if (work.is_empty ())
+    return;
+  /* The pointer values defined before CALL, with where each was
+     obtained from.  */
+  auto_vec<std::pair<tree, vec<std::pair<tree, tree>>>> derived;
+  unsigned i;
+  tree name;
+  FOR_EACH_SSA_NAME (i, name, fun)
+    {
+      if (!POINTER_TYPE_P (TREE_TYPE (name)) || SSA_NAME_IS_DEFAULT_DEF (name)
+	  || state.oa_ended.contains (name))
+	continue;
+      /* A value is the pointer value it was computed from, and follows
+	 it; one loaded from memory ('v.data', its root) was obtained from
+	 the object holding it.  */
+      tree root = cg_pointer_root (name);
+      vec<std::pair<tree, tree>> sources = vNULL;
+      if (root == name)
+	cg_value_sources (name, sources);
+      else if (root && (handled_component_p (root)
+			|| TREE_CODE (root) == MEM_REF))
+	{
+	  tree base = get_base_address (root);
+	  if (base && TREE_CODE (base) == MEM_REF)
+	    base = cg_pointer_root (TREE_OPERAND (base, 0));
+	  if (base && (DECL_P (base) || TREE_CODE (base) == SSA_NAME))
+	    sources.safe_push ({base, NULL_TREE});
+	}
+      if (sources.is_empty ())
+	sources.release ();
+      else
+	derived.safe_push ({name, sources});
+    }
+  while (!work.is_empty ())
+    {
+      auto ended = work.pop ();
+      if (!ended.first)
+	continue;
+      for (auto &d : derived)
+	{
+	  if (state.oa_ended.contains (d.first))
+	    continue;
+	  for (auto &s : d.second)
+	    if (s.first
+		&& (s.first == ended.first
+		    || operand_equal_p (s.first, ended.first, 0))
+		&& (!ended.second || !s.second
+		    || operand_equal_p (s.second, ended.second, 0))
+		&& cg_stmt_before_p (SSA_NAME_DEF_STMT (d.first), call))
+	      {
+		state.oa_ended.add (d.first);
+		state.oa_renewed.remove (d.first);
+		work.safe_push ({d.first, NULL_TREE});
+		break;
+	      }
+	}
+    }
+  for (auto &d : derived)
+    d.second.release ();
+}
+
 /* The parameters CALL may end the object of: STATE.oa_live loses them,
    as the AST engine's oa_invalidate_symbolic_facts_for_call_args does --
    an argument resolving to a parameter, and the parameters that may
    alias it, unless the callee is conveyor (which can't end an object's
    lifetime) or takes it by const reference.  */
+
+static void cg_end_object_addresses_for_call_2 (gcall *, function *,
+						cg_dom_fact_state &);
 
 static void
 cg_end_object_addresses_for_call_1 (gcall *call, function *fun,
@@ -14892,6 +15080,17 @@ cg_end_object_addresses_for_call_1 (gcall *call, function *fun,
       cg_restore_decl_object (gimple_call_arg (call, 1), state);
   if (!cg_call_ends_lifetimes_p (call))
     return;
+  cg_end_object_addresses_for_call_2 (call, fun, state);
+  cg_end_derived_values (call, fun, state);
+}
+
+/* The body of cg_end_object_addresses_for_call_1, for a call that may end
+   lifetimes.  */
+
+static void
+cg_end_object_addresses_for_call_2 (gcall *call, function *fun,
+				    cg_dom_fact_state &state)
+{
   /* An object of static storage duration any function may reach by
      name: it may end though the call is given no route to it -- not by
      a builtin (free, realloc).  As the AST engine's
