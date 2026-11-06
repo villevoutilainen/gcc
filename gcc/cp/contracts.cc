@@ -31466,7 +31466,9 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 
 	  if (oa_return_tracking)
 	    {
-	      bool this_provable = oa_provable_p (val, env);
+	      /* Not an object the return itself ends (P4445 BUG-18).  */
+	      bool this_provable = (!oa_addr_local_p (val, env)
+				    && oa_provable_p (val, env));
 	      if (!oa_return_seen)
 		{
 		  oa_return_all_provable = this_provable;
@@ -31533,7 +31535,11 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 		   ++i)
 		{
 		  tree result_id = (*oa_postcondition_result_ids)[i];
-		  snap.set (result_id, oa_provable_p (val, env));
+		  /* An object this function's return ends -- an automatic
+		     variable, a by-value parameter, a temporary -- isn't one
+		     where the postcondition holds (P4445 BUG-18).  */
+		  snap.set (result_id, (!oa_addr_local_p (val, env)
+					&& oa_provable_p (val, env)));
 		  oa_range_fact fact;
 		  if (oa_get_range (val, env, &fact))
 		    snap.range_set (result_id, fact);
