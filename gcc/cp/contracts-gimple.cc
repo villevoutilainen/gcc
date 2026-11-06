@@ -8858,6 +8858,11 @@ cg_unnamed_pointer_identity_p (tree arg, tree identity)
   if (gimple_assign_single_p (def))
     {
       tree rhs = gimple_assign_rhs1 (def);
+      /* A global pointer variable's value ('fprintf (stderr, ...)') is
+	 named, as the AST engine names the variable itself: the callee
+	 is given a route to its object alone (P4445 BUG-30).  */
+      if (VAR_P (rhs) && is_global_var (rhs))
+	return false;
       return (TREE_CODE (rhs) != ADDR_EXPR
 	      && (handled_component_p (rhs) || TREE_CODE (rhs) == MEM_REF
 		  || VAR_P (rhs) || TREE_CODE (rhs) == PARM_DECL));
