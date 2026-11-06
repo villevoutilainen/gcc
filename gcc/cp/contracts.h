@@ -184,6 +184,7 @@ extern void pt_contracts_post_pch_load		(void);
 extern void conveyor_drop_deduced_for_virtual	(tree, bool = false);
 extern tree contract_call_named_fn		(tree);
 extern bool contract_member_reaches_enclosing_p	(tree);
+extern bool contract_class_writable_indirection_p (tree, int = 0);
 extern bool contract_hidden_var_p		(tree);
 extern bool contract_static_object_p		(tree);
 extern vec<tree, va_gc> *&contracts_gimple_eager_check_until_complete_queue (void);

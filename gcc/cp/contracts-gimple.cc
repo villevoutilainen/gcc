@@ -3966,6 +3966,45 @@ static tree cg_display_address (tree);
 static tree cg_display_object (tree);
 static tree cg_display_value (tree, int);
 
+/* Whether ARG, a predicate's argument for a parameter of a class holding
+   references to non-const (contract_class_writable_indirection_p), is an
+   object FUN, the predicate's function, created, each reference stored
+   into it referring to an object FUN created too: as in the AST engine's
+   oa_writable_indirections_owned_p.  */
+
+static bool
+cg_writable_indirections_owned_p (tree arg, function *fun)
+{
+  tree base = arg;
+  if (TREE_CODE (base) == ADDR_EXPR)
+    base = get_base_address (TREE_OPERAND (base, 0));
+  if (!base || !VAR_P (base) || DECL_CONTEXT (base) != fun->decl
+      || is_global_var (base))
+    return false;
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      {
+	gimple *stmt = gsi_stmt (gsi);
+	if (!gimple_assign_single_p (stmt) || gimple_clobber_p (stmt))
+	  continue;
+	tree lhs = gimple_assign_lhs (stmt);
+	if (TREE_CODE (lhs) != COMPONENT_REF
+	    || get_base_address (lhs) != base
+	    || !TYPE_REF_P (TREE_TYPE (TREE_OPERAND (lhs, 1)))
+	    || CP_TYPE_CONST_P (TREE_TYPE (TREE_TYPE (TREE_OPERAND (lhs, 1)))))
+	  continue;
+	tree val = gimple_assign_rhs1 (stmt);
+	tree vbase = (TREE_CODE (val) == ADDR_EXPR
+		      ? get_base_address (TREE_OPERAND (val, 0)) : NULL_TREE);
+	if (!(vbase && VAR_P (vbase) && DECL_CONTEXT (vbase) == fun->decl
+	      && !is_global_var (vbase)))
+	  return false;
+      }
+  return true;
+}
+
 static void
 cg_check_call_reference_safety (gcall *call, function *fun,
 				 hash_map<tree, cg_fact> &established)
@@ -3981,6 +4020,43 @@ cg_check_call_reference_safety (gcall *call, function *fun,
   for (tree parm = DECL_ARGUMENTS (callee); parm;
        parm = DECL_CHAIN (parm), ++argno)
     {
+      /* A predicate may pass an object of a class holding references to
+	 non-const only if it created the object and what they refer to,
+	 as in the AST engine (oa_check_predicate_writable_indirection_
+	 arg).  */
+      {
+	tree owner;
+	tree ptype = TREE_TYPE (parm);
+	tree cls = INDIRECT_TYPE_P (ptype) ? TREE_TYPE (ptype) : ptype;
+	if (argno < gimple_call_num_args (call)
+	    && !DECL_CONSTRUCTOR_P (callee) && !DECL_DESTRUCTOR_P (callee)
+	    && predicate_core_function_contract (fun->decl, &owner)
+	    && contract_class_writable_indirection_p (cls))
+	  {
+	    tree arg = gimple_call_arg (call, argno);
+	    if (!integer_zerop (arg)
+		&& !cg_writable_indirections_owned_p (arg, fun))
+	      {
+		tree obj = (TREE_CODE (arg) == ADDR_EXPR
+			    ? get_base_address (TREE_OPERAND (arg, 0)) : arg);
+		if (obj && DECL_P (obj) && DECL_NAME (obj)
+		    && !DECL_ARTIFICIAL (obj))
+		  conveyor_error_at (gimple_location (call),
+				     "%qD holds a reference to an object not "
+				     "owned by the calling function, so it may "
+				     "not be passed to %qD", obj, callee);
+		else
+		  conveyor_error_at (gimple_location (call),
+				     "a temporary of type %qT holds a reference "
+				     "to an object not owned by the calling "
+				     "function, so it may not be passed to %qD",
+				     TYPE_MAIN_VARIANT (cls), callee);
+		inform (gimple_location (call), "%s",
+			_(oa_unprovable_reason_text
+			    (OA_UNPROVABLE_PREDICATE_CONTEXT)));
+	      }
+	  }
+      }
       /* A never_proven precondition claiming it is an object leaves the
 	 caller nothing to prove (contract_precondition_caller_
 	 obligation_p).  */

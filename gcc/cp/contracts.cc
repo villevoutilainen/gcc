@@ -20935,6 +20935,145 @@ oa_receiver_object_for_display (tree receiver)
   return r;
 }
 
+/* Whether an object of class TYPE holds, in itself or in a base, member or
+   array element, a reference to non-const: a route through which a
+   function given the object, even by const access, may write what it
+   refers to (P4445: an aggregate with a reference member, a lambda
+   capturing by reference).  A reference never owns what it refers to.  A
+   pointer member may (a container's buffer): writing through one reached
+   through const access is checked in the conveyor function instead
+   (conveyor_check_const_access_write).  */
+
+bool
+contract_class_writable_indirection_p (tree type, int depth)
+{
+  type = strip_array_types (type);
+  if (!CLASS_TYPE_P (type) || !COMPLETE_TYPE_P (type) || depth > 8)
+    return false;
+  type = TYPE_MAIN_VARIANT (type);
+  static hash_map<tree, bool> *cache;
+  if (!cache)
+    cache = new hash_map<tree, bool>;
+  if (bool *known = cache->get (type))
+    return *known;
+  bool found = false;
+  for (tree f = TYPE_FIELDS (type); f && !found; f = DECL_CHAIN (f))
+    {
+      if (TREE_CODE (f) != FIELD_DECL)
+	continue;
+      /* The vtable pointer isn't a route to anything the program owns.  */
+      if (DECL_ARTIFICIAL (f) && !DECL_FIELD_IS_BASE (f))
+	continue;
+      tree ft = strip_array_types (TREE_TYPE (f));
+      if (TYPE_REF_P (ft))
+	found = (!CP_TYPE_CONST_P (TREE_TYPE (ft))
+		 && !FUNC_OR_METHOD_TYPE_P (TREE_TYPE (ft)));
+      else if (!INDIRECT_TYPE_P (ft))
+	found = contract_class_writable_indirection_p (ft, depth + 1);
+    }
+  cache->put (type, found);
+  return found;
+}
+
+/* Whether OBJ, an object of a class with such routes, was created by the
+   predicate itself with each route referring to an object it created:
+   a temporary initialized member by member ('R{t}', a lambda's closure),
+   recursively.  Anything else may refer to the caller's objects.  */
+
+static bool
+oa_writable_indirections_owned_p (tree obj, oa_env &env, int depth = 0)
+{
+  obj = STRIP_ANY_LOCATION_WRAPPER (obj);
+  STRIP_NOPS (obj);
+  if (TREE_CODE (obj) == ADDR_EXPR)
+    obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (obj, 0));
+  if (depth > 8)
+    return false;
+  tree init = NULL_TREE;
+  if (TREE_CODE (obj) == TARGET_EXPR)
+    init = TARGET_EXPR_INITIAL (obj);
+  else if (TREE_CODE (obj) == CONSTRUCTOR)
+    init = obj;
+  if (!init || TREE_CODE (init) != CONSTRUCTOR)
+    return false;
+  unsigned i;
+  tree field, val;
+  FOR_EACH_CONSTRUCTOR_ELT (CONSTRUCTOR_ELTS (init), i, field, val)
+    {
+      if (!field || TREE_CODE (field) != FIELD_DECL)
+	return false;
+      tree ft = strip_array_types (TREE_TYPE (field));
+      if (TYPE_PTR_P (ft))
+	continue;
+      if (TYPE_REF_P (ft))
+	{
+	  if (CP_TYPE_CONST_P (TREE_TYPE (ft))
+	      || FUNC_OR_METHOD_TYPE_P (TREE_TYPE (ft)))
+	    continue;
+	  if (integer_zerop (STRIP_ANY_LOCATION_WRAPPER (val)))
+	    continue;
+	  if (!oa_reference_owned_p (val, env,
+				     /*asking_about_pointer_value=*/false,
+				     /*in_predicate_context=*/true))
+	    return false;
+	}
+      else if (contract_class_writable_indirection_p (ft)
+	       && !oa_writable_indirections_owned_p (val, env, depth + 1))
+	return false;
+    }
+  return true;
+}
+
+/* In a predicate, CALL's argument for PARM (the ARGNO'th) of conveyor
+   CALLEE is an object, or designates one, of a class through whose
+   references or pointers to non-const CALLEE may write: as for a pointer
+   to non-const, the predicate must own what they refer to.  */
+
+static void
+oa_check_predicate_writable_indirection_arg (tree call, tree callee,
+					     tree parm, unsigned argno,
+					     oa_env &env)
+{
+  if (DECL_CONSTRUCTOR_P (callee) || DECL_DESTRUCTOR_P (callee))
+    return;
+  tree ptype = TREE_TYPE (parm);
+  tree cls = INDIRECT_TYPE_P (ptype) ? TREE_TYPE (ptype) : ptype;
+  if (!contract_class_writable_indirection_p (cls))
+    return;
+  tree arg = NULL_TREE;
+  if (TREE_CODE (call) == AGGR_INIT_EXPR)
+    {
+      if (argno < (unsigned) aggr_init_expr_nargs (call))
+	arg = AGGR_INIT_EXPR_ARG (call, argno);
+    }
+  else if (argno < (unsigned) call_expr_nargs (call))
+    arg = CALL_EXPR_ARG (call, argno);
+  if (!arg || integer_zerop (STRIP_ANY_LOCATION_WRAPPER (arg)))
+    return;
+  if (oa_writable_indirections_owned_p (arg, env))
+    return;
+  tree shown = (INDIRECT_TYPE_P (ptype)
+		? oa_receiver_object_for_display (arg)
+		: STRIP_ANY_LOCATION_WRAPPER (arg));
+  STRIP_NOPS (shown);
+  if (REFERENCE_REF_P (shown))
+    shown = TREE_OPERAND (shown, 0);
+  if (DECL_P (shown) && DECL_NAME (shown) && !DECL_ARTIFICIAL (shown))
+    oa_error_at (EXPR_LOCATION (call),
+		 "%qD holds a reference to an object not owned by the "
+		 "calling function, so it may not be passed to %qD",
+		 shown, callee);
+  else
+    oa_error_at (EXPR_LOCATION (call),
+		 "a temporary of type %qT holds a reference to an object not "
+		 "owned by the calling function, so it may not be passed to "
+		 "%qD", TYPE_MAIN_VARIANT (cls), callee);
+  if (const char *why
+	= oa_unprovable_reason_text (OA_UNPROVABLE_PREDICATE_CONTEXT))
+    oa_inform (EXPR_LOCATION (call), "%s", _(why));
+  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+}
+
 static void
 oa_handle_call_precondition_obligation (tree call, oa_env &env,
 					 bool in_predicate_context = false)
@@ -21209,6 +21348,9 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
       for (tree parm = DECL_ARGUMENTS (callee); parm;
 	   parm = DECL_CHAIN (parm), ++argno)
 	{
+	  if (in_predicate_context)
+	    oa_check_predicate_writable_indirection_arg (call, callee, parm,
+							 argno, env);
 	  if (is_this_parameter (parm))
 	    {
 	      /* A predicate owns no object it didn't create, so it may not

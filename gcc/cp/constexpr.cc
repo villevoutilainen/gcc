@@ -1100,16 +1100,67 @@ conveyor_mutable_through_const (tree e)
   return NULL_TREE;
 }
 
+/* If pointer value P is a pointer member of a const object ('this->p' in
+   a const member function), possibly offset, that member; else
+   NULL_TREE.  */
+
+static tree
+conveyor_pointer_member_through_const (tree p)
+{
+  for (;;)
+    {
+      p = STRIP_ANY_LOCATION_WRAPPER (p);
+      STRIP_NOPS (p);
+      if (TREE_CODE (p) == POINTER_PLUS_EXPR)
+	p = TREE_OPERAND (p, 0);
+      else
+	break;
+    }
+  if (TREE_CODE (p) == COMPONENT_REF
+      && TYPE_PTR_P (TREE_TYPE (p))
+      && CP_TYPE_CONST_P (TREE_TYPE (TREE_OPERAND (p, 0)))
+      && !conveyor_owned_object_p (TREE_OPERAND (p, 0)))
+    return p;
+  return NULL_TREE;
+}
+
+/* If lvalue E is reached through a pointer member of a const object
+   ('this->p[i]', '*this->p', 'this->p->x' in a const member function),
+   that member; else NULL_TREE.  Const is deep in a conveyor function: what
+   the object points to is written only through non-const access.  */
+
+static tree
+conveyor_pointee_through_const (tree e)
+{
+  e = STRIP_ANY_LOCATION_WRAPPER (e);
+  STRIP_NOPS (e);
+  while (TREE_CODE (e) == COMPONENT_REF || TREE_CODE (e) == ARRAY_REF)
+    e = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (e, 0));
+  if (INDIRECT_REF_P (e) && !REFERENCE_REF_P (e))
+    return conveyor_pointer_member_through_const (TREE_OPERAND (e, 0));
+  return NULL_TREE;
+}
+
 /* A conveyor function writes through const access -- a mutable member
-   of a const object, or through a const_cast -- only to an object that
-   began its lifetime within its own evaluation: const access in a
-   conveyor function's declaration then means that nothing is written
-   through it, which a strict predicate relies on (P4445: the routes by
-   which a strict contract assertion had side effects).  */
+   of a const object, what a pointer member of a const object points to,
+   or through a const_cast -- only to an object that began its lifetime
+   within its own evaluation: const access in a conveyor function's
+   declaration then means that nothing is written through it, which a
+   strict predicate relies on (P4445: the routes by which a strict
+   contract assertion had side effects).  */
 
 static void
 conveyor_check_const_access_write (tree lval, location_t loc)
 {
+  if (tree pm = conveyor_pointee_through_const (lval))
+    {
+      if (conveyor_auto_probing_p ())
+	note_conveyor_auto_violation ();
+      else
+	conveyor_rule_error_at (loc, "write through pointer member %qD of a "
+				"const object", TREE_OPERAND (pm, 1));
+      return;
+    }
   tree m = conveyor_mutable_through_const (lval);
   if (!m || conveyor_owned_object_p (m))
     return;
@@ -1231,10 +1282,26 @@ check_conveyor_function_body_r (tree *tp, int *, void *)
 	    tree a = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (t, i));
 	    tree at = TREE_TYPE (a);
 	    STRIP_NOPS (a);
-	    if (at && INDIRECT_TYPE_P (at) && !CP_TYPE_CONST_P (TREE_TYPE (at))
-		&& TREE_CODE (a) == ADDR_EXPR)
+	    if (!at || !INDIRECT_TYPE_P (at) || CP_TYPE_CONST_P (TREE_TYPE (at)))
+	      continue;
+	    if (TREE_CODE (a) == ADDR_EXPR)
 	      conveyor_check_const_access_write (TREE_OPERAND (a, 0),
 						 cp_expr_loc_or_input_loc (t));
+	    /* A pointer member of a const object, itself passed on for
+	       writing through ('set (this->p)').  Not to a constructor,
+	       which keeps it in the object it creates, as returning it hands
+	       it out: that class's declaration shows it.  */
+	    else if (!(fn && DECL_CONSTRUCTOR_P (fn)))
+	      if (tree pm = conveyor_pointer_member_through_const (a))
+		{
+		  if (conveyor_auto_probing_p ())
+		    note_conveyor_auto_violation ();
+		  else
+		    conveyor_rule_error_at (cp_expr_loc_or_input_loc (t),
+					    "pointer member %qD of a const "
+					    "object passed on for writing",
+					    TREE_OPERAND (pm, 1));
+		}
 	  }
 	/* A lambda's body is checked as part of this function.  */
 	if (fn && LAMBDA_FUNCTION_P (fn))
