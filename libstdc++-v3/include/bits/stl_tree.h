@@ -1876,7 +1876,8 @@ namespace __rb_tree
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
       {
-	__glibcxx_assert(__position != end());
+	__glibcxx_assert(__position
+			 != static_cast<const _Rb_tree&>(*this).end());
 	const_iterator __result = __position;
 	++__result;
 	_M_erase_aux(__position);
@@ -1891,7 +1892,8 @@ namespace __rb_tree
       pre<std::contracts::never_proven_conveyor_v>(std::is_object_address (this))
 #endif
       {
-	__glibcxx_assert(__position != end());
+	__glibcxx_assert(__position
+			 != static_cast<const _Rb_tree&>(*this).end());
 	iterator __result = __position;
 	++__result;
 	_M_erase_aux(__position);
@@ -2174,7 +2176,8 @@ namespace __rb_tree
 	else
 	  {
 	    __glibcxx_assert_noconveyor
-	      (_M_get_Node_allocator() == *__nh._M_alloc);
+	      (static_cast<const _Rb_tree&>(*this)._M_get_Node_allocator()
+	       == __nh._M_alloc._M_alloc);
 
 	    auto __res = _M_get_insert_unique_pos(__nh._M_key());
 	    if (__res.second)
@@ -2205,7 +2208,8 @@ namespace __rb_tree
 	else
 	  {
 	    __glibcxx_assert_noconveyor
-	      (_M_get_Node_allocator() == *__nh._M_alloc);
+	      (static_cast<const _Rb_tree&>(*this)._M_get_Node_allocator()
+	       == __nh._M_alloc._M_alloc);
 	    auto __res = _M_get_insert_equal_pos(__nh._M_key());
 	    if (__res.second)
 	      __ret = _M_insert_node(__res.first, __res.second,
@@ -2227,7 +2231,8 @@ namespace __rb_tree
 	else
 	  {
 	    __glibcxx_assert_noconveyor
-	      (_M_get_Node_allocator() == *__nh._M_alloc);
+	      (static_cast<const _Rb_tree&>(*this)._M_get_Node_allocator()
+	       == __nh._M_alloc._M_alloc);
 	    auto __res = _M_get_insert_hint_unique_pos(__hint, __nh._M_key());
 	    if (__res.second)
 	      {
@@ -2251,7 +2256,8 @@ namespace __rb_tree
 	else
 	  {
 	    __glibcxx_assert_noconveyor
-	      (_M_get_Node_allocator() == *__nh._M_alloc);
+	      (static_cast<const _Rb_tree&>(*this)._M_get_Node_allocator()
+	       == __nh._M_alloc._M_alloc);
 	    auto __res = _M_get_insert_hint_equal_pos(__hint, __nh._M_key());
 	    if (__res.second)
 	      __ret = _M_insert_node(__res.first, __res.second,

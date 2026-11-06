@@ -2009,7 +2009,8 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 #if __cplusplus >= 201103L
 	__glibcxx_assert_noconveyor
 	  (_Alloc_traits::propagate_on_container_swap::value
-	   || _M_get_Tp_allocator() == __x._M_get_Tp_allocator());
+	   || static_cast<const vector&>(*this)._M_get_Tp_allocator()
+		== static_cast<const vector&>(__x)._M_get_Tp_allocator());
 #endif
 	this->_M_impl._M_swap_data(__x._M_impl);
 	_Alloc_traits::_S_on_swap(_M_get_Tp_allocator(),

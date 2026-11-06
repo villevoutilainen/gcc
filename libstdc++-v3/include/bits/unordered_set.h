@@ -421,7 +421,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  element in the %unordered_set.
        */
       const_iterator
-      cend() const noexcept
+      cend() const noexcept _GLIBCXX_CONVEYOR
       { return _M_h.end(); }
 
       // modifiers.
@@ -586,7 +586,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       node_type
       extract(const_iterator __pos) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	__glibcxx_assert(__pos != end());
+	__glibcxx_assert(__pos != cend());
 	return _M_h.extract(__pos);
       }
 
@@ -1470,7 +1470,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
        *  element in the %unordered_multiset.
        */
       const_iterator
-      cend() const noexcept
+      cend() const noexcept _GLIBCXX_CONVEYOR
       { return _M_h.end(); }
 
       // modifiers.
@@ -1607,7 +1607,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       node_type
       extract(const_iterator __pos) _GLIBCXX_CONVEYOR_REQUIRES_THIS
       {
-	__glibcxx_assert(__pos != end());
+	__glibcxx_assert(__pos != cend());
 	return _M_h.extract(__pos);
       }
 

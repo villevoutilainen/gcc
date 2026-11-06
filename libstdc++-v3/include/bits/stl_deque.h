@@ -2073,7 +2073,7 @@ _GLIBCXX_CONVEYOR_TRUST(__x);
 #if __cplusplus >= 201103L
 	__glibcxx_assert_noconveyor
 	  (_Alloc_traits::propagate_on_container_swap::value
-	   || _M_get_Tp_allocator() == __x._M_get_Tp_allocator());
+	   || get_allocator() == __x.get_allocator());
 #endif
 	_M_impl._M_swap_data(__x._M_impl);
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
