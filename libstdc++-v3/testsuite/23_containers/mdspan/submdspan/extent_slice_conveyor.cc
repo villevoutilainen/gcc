@@ -1,4 +1,4 @@
-// { dg-options "-D_GLIBCXX_ASSERTIONS -D_GLIBCXX_CONVEYOR_ASSERTIONS -fcontracts -fcontract-control-objects -fcontract-analysis-engine=gimple" }
+// { dg-options "-D_GLIBCXX_ASSERTIONS -D_GLIBCXX_CONVEYOR_ASSERTIONS -fcontracts -fcontract-control-objects" }
 // { dg-do run { target c++26 } }
 
 // D4324: submdspan with extent_slice compiles with conveyor assertions

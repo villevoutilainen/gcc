@@ -17378,10 +17378,19 @@ static bool oa_item8_callee_pre_only;
 
 static bool oa_deref_scan_only;
 
+/* The walk still runs, to resolve the conditions, but reports nothing:
+   when the GIMPLE engine reports instead, or in an immediate function,
+   which the GIMPLE engine doesn't analyze either -- every call of one is
+   a constant evaluation, which rejects core undefined behavior and
+   contract violations itself (P4445 BUG-35).  */
+
 static bool
 oa_ast_diagnostics_muted_p ()
 {
-  return (flag_contract_analysis_engine == 1
+  return ((flag_contract_analysis_engine == 1
+	   || (current_function_decl
+	       && TREE_CODE (current_function_decl) == FUNCTION_DECL
+	       && DECL_IMMEDIATE_FUNCTION_P (current_function_decl)))
 	  && !(oa_predicate_text_scan && oa_overflow_scan));
 }
 
