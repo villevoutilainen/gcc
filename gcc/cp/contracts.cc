@@ -3901,15 +3901,31 @@ build_object_contract_check_function (tree objdecl, bool is_post)
       *at_tail = build_tree_list (NULL_TREE, this_type);
       at_tail = &TREE_CHAIN (*at_tail);
     }
+  /* Name each parameter after the declarator's own, which the conditions
+     were written against, so diagnostics show 'x' rather than '__a0'
+     (P4445 BUG-08).  Every contract on OBJDECL shares the declarator's
+     parameter list.  */
+  tree positional = get_contract_positional_parms (specs[0]);
+  if (positional && this_type)
+    positional = TREE_CHAIN (positional);	/* The synthesized 'this'.  */
   unsigned i = 0;
   for (tree t = first_arg_type; t && t != void_list_node;
        t = TREE_CHAIN (t), i++)
     {
-      char namebuf[8];
-      snprintf (namebuf, sizeof namebuf, "__a%u", i);
+      tree name = NULL_TREE;
+      if (positional)
+	{
+	  name = DECL_NAME (TREE_VALUE (positional));
+	  positional = TREE_CHAIN (positional);
+	}
+      if (!name)
+	{
+	  char namebuf[16];
+	  snprintf (namebuf, sizeof namebuf, "__a%u", i);
+	  name = get_identifier (namebuf);
+	}
       tree ptype = TREE_VALUE (t);
-      tree parm = cp_build_parm_decl (NULL_TREE, get_identifier (namebuf),
-				       ptype);
+      tree parm = cp_build_parm_decl (NULL_TREE, name, ptype);
       DECL_ARTIFICIAL (parm) = true;
       *parms_tail = parm;
       parms_tail = &DECL_CHAIN (parm);
