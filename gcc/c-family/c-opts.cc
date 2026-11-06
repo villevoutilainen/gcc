@@ -1320,6 +1320,22 @@ c_common_post_options (const char **pfilename)
 			   flag_contract_symbolic_proofs_gimple, 1);
     }
 
+  /* The GIMPLE engine runs on the lowered function, which -fsyntax-only
+     never builds (P4445 BUG-39).  */
+  if (flag_syntax_only
+      && flag_contracts
+      && (flag_contract_conveyor_proofs_gimple
+	  || flag_contract_symbolic_proofs_gimple))
+    {
+      if (flag_contract_analysis_engine == 1)
+	warning (0, "%<-fsyntax-only%> doesn't run the GIMPLE contract "
+		 "analysis engine; %<-fcontract-analysis-engine=gimple%> "
+		 "checks nothing");
+      else
+	warning (0, "%<-fsyntax-only%> doesn't run the GIMPLE contract "
+		 "analysis engine");
+    }
+
   /* EnabledBy unfortunately can't specify value to use if set and
      LangEnabledBy can't specify multiple options with &&.  For -Wunused
      or -Wunused -Wextra we want these to default to 3 unless user specified
