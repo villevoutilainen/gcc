@@ -3120,15 +3120,16 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree tb_decl;
-	  tree_code tb_code;
-	  if (!oa_match_type_bounded_comparison (*conjuncts[i], &tb_decl, &tb_code))
+	  bool tb_upper, tb_lower;
+	  if (!oa_type_bound_witness (*conjuncts[i], /*asserted_true=*/true,
+				      &tb_decl, &tb_upper, &tb_lower))
 	    continue;
 	  tree key = cg_self_trust_key (fun, tb_decl);
 	  if (!key)
 	    continue;
 	  cg_type_bound_fact &fact = established_type_bound.get_or_insert (key);
-	  fact.has_upper_witness |= (tb_code == LT_EXPR || tb_code == LE_EXPR);
-	  fact.has_lower_witness |= (tb_code == GT_EXPR || tb_code == GE_EXPR);
+	  fact.has_upper_witness |= tb_upper;
+	  fact.has_lower_witness |= tb_lower;
 	}
 
       /* The call-vs-call analogue of the call-relational loop just
@@ -16282,14 +16283,16 @@ cg_assert_fact_scope::establish (gcall *call)
 					     &r))
 	      put_frange (key, r);
 	  }
-      if (oa_match_type_bounded_comparison (c, &decl, &code)
+      bool tb_upper, tb_lower;
+      if (oa_type_bound_witness (c, /*asserted_true=*/true, &decl, &tb_upper,
+				 &tb_lower)
 	  && scalar_decl_p (decl))
 	if (tree key = value_of (decl))
 	  if (TREE_CODE (key) == SSA_NAME)
 	    {
 	      cg_type_bound_fact tb;
-	      tb.has_upper_witness = (code == LT_EXPR || code == LE_EXPR);
-	      tb.has_lower_witness = (code == GT_EXPR || code == GE_EXPR);
+	      tb.has_upper_witness = tb_upper;
+	      tb.has_lower_witness = tb_lower;
 	      put_type_bound (key, tb);
 	    }
     }

@@ -16792,21 +16792,10 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
      just whichever one happens to run first.  */
   {
     tree decl;
-    tree_code code;
-    if (oa_match_type_bounded_comparison (conjunct, &decl, &code))
-      {
-	if (!asserted_true)
-	  switch (code)
-	    {
-	    case LT_EXPR: code = GE_EXPR; break;
-	    case LE_EXPR: code = GT_EXPR; break;
-	    case GT_EXPR: code = LE_EXPR; break;
-	    case GE_EXPR: code = LT_EXPR; break;
-	    default: gcc_unreachable ();
-	    }
-	env.type_bound_set (decl, /*upper=*/code == LT_EXPR || code == LE_EXPR,
-			      /*lower=*/code == GT_EXPR || code == GE_EXPR);
-      }
+    bool upper, lower;
+    if (oa_type_bound_witness (conjunct, asserted_true, &decl, &upper,
+			       &lower))
+      env.type_bound_set (decl, upper, lower);
   }
 
   /* D4324: a ptr->field or call-range conjunct in an ordinary runtime
@@ -35525,7 +35514,7 @@ oa_match_comparison_against_param (tree conjunct, tree *param_out,
 
 bool
 oa_match_type_bounded_comparison (tree conjunct, tree *decl_out,
-				    tree_code *code_out)
+				    tree_code *code_out, tree *other_out)
 {
   tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
   while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
@@ -35577,7 +35566,47 @@ oa_match_type_bounded_comparison (tree conjunct, tree *decl_out,
 
   *decl_out = decl;
   *code_out = code;
+  if (other_out)
+    *other_out = other;
   return true;
+}
+
+/* The type-bound witnesses (oa_type_bound_fact) CONJUNCT gives about the
+   decl it bounds, *DECL_OUT, when it's ASSERTED_TRUE (or false): an upper
+   witness if that decl is provably below its type's maximum, a lower one
+   if above its minimum.  A strict comparison ('i < n') always leaves room;
+   a non-strict one ('i <= n') only against a bound of a narrower type,
+   whose own extreme is inside the decl's range (P4445 BUG-19).  */
+
+bool
+oa_type_bound_witness (tree conjunct, bool asserted_true, tree *decl_out,
+		       bool *upper, bool *lower)
+{
+  tree decl, other;
+  tree_code code;
+  if (!oa_match_type_bounded_comparison (conjunct, &decl, &code, &other))
+    return false;
+  if (!asserted_true)
+    switch (code)
+      {
+      case LT_EXPR: code = GE_EXPR; break;
+      case LE_EXPR: code = GT_EXPR; break;
+      case GT_EXPR: code = LE_EXPR; break;
+      case GE_EXPR: code = LT_EXPR; break;
+      default: gcc_unreachable ();
+      }
+  tree decl_type = oa_decl_value_type (decl);
+  tree other_type = oa_decl_value_type (other);
+  *upper = (code == LT_EXPR
+	    || (code == LE_EXPR
+		&& tree_int_cst_lt (TYPE_MAX_VALUE (other_type),
+				    TYPE_MAX_VALUE (decl_type))));
+  *lower = (code == GT_EXPR
+	    || (code == GE_EXPR
+		&& tree_int_cst_lt (TYPE_MIN_VALUE (decl_type),
+				    TYPE_MIN_VALUE (other_type))));
+  *decl_out = decl;
+  return *upper || *lower;
 }
 
 /* Recognize CONJUNCT as "RESULT_ID OP other", where RESULT_ID is a

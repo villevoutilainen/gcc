@@ -782,7 +782,10 @@ extern bool oa_match_call_against_call
    same fact from a conveyor function's own self-trusted precondition
    conjuncts, rather than duplicating this purely syntactic matcher.  */
 extern bool oa_match_type_bounded_comparison
-  (tree conjunct, tree *decl_out, tree_code *code_out);
+  (tree conjunct, tree *decl_out, tree_code *code_out,
+   tree *other_out = NULL);
+extern bool oa_type_bound_witness (tree conjunct, bool asserted_true,
+				   tree *decl_out, bool *upper, bool *lower);
 
 /* If CONJUNCT has the shape "RESULT_ID OP other", where RESULT_ID is a
    postcondition's own already-known return-value binder and "other" is
