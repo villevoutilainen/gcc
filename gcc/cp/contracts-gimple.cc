@@ -13140,7 +13140,9 @@ cg_refine_edge_into (edge e, cg_dom_fact_state &state,
       if (gcall *call = cg_tested_call (zero_tested, &call_truth))
 	{
 	  tree callee = gimple_call_fndecl (call);
-	  if (callee && gimple_call_num_args (call) == 1)
+	  /* Only if the call gives the same result again (P4445 BUG-21).  */
+	  if (callee && gimple_call_num_args (call) == 1
+	      && oa_call_repeatable_p (callee))
 	    {
 	      tree arg = gimple_call_arg (call, 0);
 	      tree identity = cg_gimple_object_identity (arg);

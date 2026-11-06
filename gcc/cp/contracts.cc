@@ -20492,6 +20492,44 @@ static tree oa_strip_predicate_arg (tree);
    needs the same exclusion, so it belongs here once, centrally, rather
    than repeated at each call site.  */
 
+/* Whether class TYPE has a mutable non-static data member: in itself, a
+   base, or a member of class type.  A const member function may write it,
+   and so give a different result each time it's called.  */
+
+static bool
+oa_class_has_mutable_member_p (tree type, int depth = 0)
+{
+  if (!CLASS_TYPE_P (type) || !COMPLETE_TYPE_P (type) || depth > 16)
+    return false;
+  for (tree f = TYPE_FIELDS (type); f; f = DECL_CHAIN (f))
+    if (TREE_CODE (f) == FIELD_DECL)
+      {
+	if (DECL_MUTABLE_P (f))
+	  return true;
+	tree ft = strip_array_types (TREE_TYPE (f));
+	if (CLASS_TYPE_P (ft) && oa_class_has_mutable_member_p (ft, depth + 1))
+	  return true;
+      }
+  return false;
+}
+
+/* Whether a call to FN gives the same result each time on the same
+   arguments, as a predicate's result must to be a fact about them.  Not
+   so for a member function of a class with a mutable member, which even a
+   const one may write (P4445 BUG-21).  A symbolic predicate is never
+   evaluated, so it always is.  */
+
+bool
+oa_call_repeatable_p (tree fn)
+{
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL)
+    return false;
+  if (DECL_LANG_SPECIFIC (fn) && DECL_DECLARED_SYMBOLIC_P (fn))
+    return true;
+  return !(DECL_IOBJ_MEMBER_FUNCTION_P (fn)
+	   && oa_class_has_mutable_member_p (DECL_CONTEXT (fn)));
+}
+
 static bool
 oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
 			     tree *arg_decl_out, bool *negated_out,
@@ -20520,6 +20558,11 @@ oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
 
   tree fn = cp_get_callee_fndecl_nofold (c);
   if (!fn || TREE_CODE (fn) != FUNCTION_DECL)
+    return false;
+
+  /* A predicate's result is a fact about its argument only if calling it
+     again gives the same result.  */
+  if (!oa_call_repeatable_p (fn))
     return false;
 
   /* A non-static member predicate given its object explicitly as well,

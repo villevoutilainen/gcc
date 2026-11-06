@@ -784,6 +784,7 @@ extern bool oa_match_call_against_call
 extern bool oa_match_type_bounded_comparison
   (tree conjunct, tree *decl_out, tree_code *code_out,
    tree *other_out = NULL);
+extern bool oa_call_repeatable_p (tree fn);
 extern bool oa_type_bound_witness (tree conjunct, bool asserted_true,
 				   tree *decl_out, bool *upper, bool *lower);
 
