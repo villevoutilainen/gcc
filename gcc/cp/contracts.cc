@@ -20717,6 +20717,14 @@ oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
     }
 
   tree arg = oa_strip_predicate_arg (CALL_EXPR_ARG (c, 0));
+  /* '&v' names v's object, as 'p' for 'p = &v' does through alias
+     tracking (P4445 BUG-31).  */
+  if (TREE_CODE (arg) == ADDR_EXPR)
+    {
+      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+      if (TREE_CODE (op) == PARM_DECL || VAR_P (op))
+	arg = op;
+    }
   if (TREE_CODE (arg) != PARM_DECL && !VAR_P (arg))
     return false;
 
@@ -38649,7 +38657,11 @@ oa_collect_symbolic_actions (location_t loc, tree condition,
 	  oa_symbolic_action act = {};
 	  act.is_range = false;
 	  act.pred_fn = pred_fn;
-	  act.bool_arg = arg_decl;
+	  /* The record is keyed by the object's address: 'is_opened (&g)'
+	     is recognized with the object g itself.  */
+	  act.bool_arg = (POINTER_TYPE_P (TREE_TYPE (arg_decl))
+			  || TYPE_REF_P (TREE_TYPE (arg_decl))
+			  ? arg_decl : build_fold_addr_expr (arg_decl));
 	  act.polarity = !negated;
 	  actions->safe_push (act);
 	  continue;
