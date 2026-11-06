@@ -4398,6 +4398,26 @@ static bool cg_callee_pre_mandatory;
 
 static bool cg_callee_pre_only;
 
+/* While alive, around the checks of what a call owes its callee: if they
+   reported anything, a note where the callee is declared, after any
+   other note they added, as the AST engine does.  */
+
+class cg_callee_declared_note
+{
+  tree m_callee;
+  int m_count;
+public:
+  explicit cg_callee_declared_note (gcall *call)
+    : m_callee (gimple_call_fndecl (call)),
+      m_count (errorcount + warningcount)
+  { }
+  ~cg_callee_declared_note ()
+  {
+    if (m_callee && errorcount + warningcount > m_count)
+      inform (DECL_SOURCE_LOCATION (m_callee), "declared here");
+  }
+};
+
 /* error_at for a call's precondition obligation.  A mandatory one in a
    conveyor(auto) specialization being deduced only means it isn't
    conveyor: record it instead, as cg_conveyor_error_at does.  */
@@ -15596,26 +15616,29 @@ cg_predicate_facts_walk (function *fun, hash_map<tree, cg_range_lite> *scalar_ra
 	      cg_record_predicate_site_field_facts (call, state);
 	      /* Not a cleanup on an exception path (cg_eh_cleanup_stmt_p).  */
 	      bool checked = !cg_eh_cleanup_stmt_p (call);
-	      if (checked)
-		cg_consult_persistent_facts (call, field_object_cache, state);
-	      /* Bounds-proving demo, Part 2: STATE is dominator-correct for
-		 CALL exactly here, before any of this same call's own
-		 invalidation below -- see cg_check_call_range_relational's
-		 own comment for why this specific check can't live in
-		 cg_check_call instead.  */
-	      if (checked)
-		cg_check_call_range_relational (call, field_object_cache, state,
-						ranger,
-						call_relational_verdict_out);
-	      /* Same STATE-dominator-correctness requirement as the range-
-		 vs-range check just above -- see cg_check_call_relational_
-		 fact's own comment for why the explicit-fact check (both
-		 proving true and proving a contradiction) can't live in
-		 cg_check_call either.  */
-	      if (checked)
-		cg_check_call_relational_fact (call, state, established_range,
-					       ranger,
-					       call_relational_verdict_out);
+	      {
+		cg_callee_declared_note note (call);
+		if (checked)
+		  cg_consult_persistent_facts (call, field_object_cache, state);
+		/* Bounds-proving demo, Part 2: STATE is dominator-correct for
+		   CALL exactly here, before any of this same call's own
+		   invalidation below -- see cg_check_call_range_relational's
+		   own comment for why this specific check can't live in
+		   cg_check_call instead.  */
+		if (checked)
+		  cg_check_call_range_relational (call, field_object_cache, state,
+						  ranger,
+						  call_relational_verdict_out);
+		/* Same STATE-dominator-correctness requirement as the range-
+		   vs-range check just above -- see cg_check_call_relational_
+		   fact's own comment for why the explicit-fact check (both
+		   proving true and proving a contradiction) can't live in
+		   cg_check_call either.  */
+		if (checked)
+		  cg_check_call_relational_fact (call, state, established_range,
+						 ranger,
+						 call_relational_verdict_out);
+	      }
 	      /* Before this same call's own argument invalidation just
 		 below, so it sees the receiver's facts exactly as the
 		 caller left them -- see cg_compose_call_result_range's
@@ -18344,6 +18367,7 @@ pass_contracts_gimple::execute_1 (function *fun)
 	      gcall *call = as_a <gcall *> (stmt);
 	      {
 		auto consult = make_temp_override (cg_consult_call, call);
+		cg_callee_declared_note note (call);
 		/* A conveyor callee's implicit reference-parameter and
 		   receiver obligations are the callee's, whoever calls it --
 		   a never-proven predicate included, as in the AST engine
