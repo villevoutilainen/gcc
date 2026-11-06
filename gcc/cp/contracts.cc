@@ -7926,12 +7926,26 @@ cct_fn_may_return (tree fn, cct_env *env, int depth)
       --function_depth;
       body = DECL_SAVED_TREE (fn);
     }
+  /* Once FN has been gimplified, DECL_SAVED_TREE is gone, so the answer
+     would depend on the order functions are compiled in.  A constexpr
+     function's body is also kept, before genericization, for constant
+     evaluation: use that, with its own copy of the parameters.  */
+  tree saved_this = env->op_this;
+  if (!body && DECL_DECLARED_CONSTEXPR_P (fn))
+    if (constexpr_fundef *fd = retrieve_constexpr_fundef (fn))
+      if (fd->body && fd->body != error_mark_node)
+	{
+	  body = fd->body;
+	  if (env->op_this && env->op_this == DECL_ARGUMENTS (fn))
+	    env->op_this = fd->parms;
+	}
   if (!body)
     {
       env->unknown_body = true;
       return true;
     }
   cct_result r = cct_stmt (body, env, depth);
+  env->op_this = saved_this;
   return r.completes || r.returns;
 }
 
