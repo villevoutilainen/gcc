@@ -5543,6 +5543,11 @@ get_symbolic_key_decl (location_t loc, tree name)
   TREE_USED (key) = 1;
   TREE_PUBLIC (key) = 1;
   comdat_linkage (key);
+  /* One identity per process, whatever -fvisibility: a library built
+     with -fvisibility=hidden establishes facts its users check
+     (P4445 BUG-34).  */
+  DECL_VISIBILITY (key) = VISIBILITY_DEFAULT;
+  DECL_VISIBILITY_SPECIFIED (key) = 1;
   pushdecl_top_level_and_finish (key, NULL_TREE);
   return key;
 }
