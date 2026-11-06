@@ -17284,6 +17284,28 @@ oa_call_first_real_arg (tree call)
 static bool oa_predicate_text_scan;
 static bool oa_overflow_scan;
 
+/* True while checking what needs a conveyor fact: a callee's conveyor
+   precondition, or the absence of undefined behaviour in conveyor code.
+   A symbolic postcondition, which is never evaluated, can't discharge
+   either (P4445 BUG-20): "a conveyor fact can discharge a symbolic
+   obligation, but not the other way around".  */
+
+static bool oa_conveyor_strength;
+
+/* Whether CONTRACT, of CALLEE, is symbolic only, not also conveyor: what
+   it states is established without being checked.  */
+
+static bool
+oa_contract_symbolic_only_p (tree contract, tree callee)
+{
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  if (!ctrl)
+    return false;
+  contract_check_side side = contract_side_of (contract, callee);
+  return (contract_control_symbolic_like (ctrl, side, callee, true)
+	  && !contract_control_conveyor_like (ctrl, side, callee, true));
+}
+
 /* Set while checking a call made from conveyor code -- a conveyor
    function's body, or a strict predicate's own text -- to a conveyor
    callee, against those of the callee's preconditions whose failed
@@ -17408,6 +17430,7 @@ oa_inform (location_t loc, const char *gmsgid, ...)
 static void
 oa_scan_div_mod_in_expr (tree *expr, oa_env &env)
 {
+  auto strength = make_temp_override (oa_conveyor_strength, true);
   if (!oa_diagnostics_active)
     return;
   cp_walk_tree (expr, [](tree *tp, int *walk_subtrees_p, void *data_) -> tree
@@ -17555,6 +17578,7 @@ static location_t oa_current_stmt_loc = UNKNOWN_LOCATION;
 static void
 oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 {
+  auto strength = make_temp_override (oa_conveyor_strength, true);
   if (!oa_diagnostics_active)
     return;
   cp_walk_tree (expr, [](tree *tp, int *walk_subtrees_p, void *data_) -> tree
@@ -17948,6 +17972,7 @@ oa_provably_safe_unit_shift_p (tree x, bool increasing, oa_env &env)
 static void
 oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 {
+  auto strength = make_temp_override (oa_conveyor_strength, true);
   if (!oa_diagnostics_active)
     return;
   auto overflow = make_temp_override (oa_overflow_scan, true);
@@ -21641,6 +21666,7 @@ oa_check_ne_constant (oa_env &env, tree substituted, tree cst,
 static void
 oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 {
+  auto strength = make_temp_override (oa_conveyor_strength, true);
   /* Only diagnoses: nothing to do in a walk whose diagnostics are off
      (a speculative loop re-walk, or a condition re-scanned only for its
      facts, OA_COND_SCAN_ITEM8).  */
@@ -25734,6 +25760,8 @@ oa_call_postcondition_object_address_p (tree call)
     {
       if (!POSTCONDITION_P (contract))
 	continue;
+      if (oa_conveyor_strength && oa_contract_symbolic_only_p (contract, callee))
+	continue;
       /* D4324: m_map (is_object_address) carries no per-fact provenance
 	 tag of its own, unlike e.g. oa_contract_field_range_fact's
 	 conveyor_established -- so, exactly like oa_call_symbolic_
@@ -25813,6 +25841,8 @@ oa_call_postcondition_nonzero_p (tree call)
     {
       if (!POSTCONDITION_P (contract))
 	continue;
+      if (oa_conveyor_strength && oa_contract_symbolic_only_p (contract, callee))
+	continue;
       /* D4324: m_nz_map carries no per-fact provenance tag -- see oa_call_
 	 postcondition_object_address_p's own identical fix/comment.  */
       if (!oa_contract_fact_tracking_active_p (contract, callee))
@@ -25875,6 +25905,8 @@ oa_call_postcondition_range_p (tree call, oa_env &env, oa_range_fact *out,
   for (tree contract : fn_contracts (callee))
     {
       if (!POSTCONDITION_P (contract))
+	continue;
+      if (oa_conveyor_strength && oa_contract_symbolic_only_p (contract, callee))
 	continue;
       /* D4324: m_range_map carries no per-fact provenance tag -- see
 	 oa_call_postcondition_object_address_p's own identical fix/
