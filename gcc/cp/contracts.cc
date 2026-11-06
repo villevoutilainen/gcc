@@ -4422,16 +4422,35 @@ rebuild_postconditions (tree fndecl)
     }
 }
 
+/* The text of the condition being parsed, spelled from its tokens, when it
+   was written in a macro (see cp_parser_contract_condition_text); NULL_TREE
+   otherwise.  An IDENTIFIER_NODE.  */
+
+tree contract_condition_text;
+
 /* Make a string of the contract condition, if it is available.  */
 
 static tree
 build_comment (cp_expr condition)
 {
+  /* A condition written in a macro has no source text of its own: what's
+     between its ends would be the macro's name (P4445 BUG-36).  The parser
+     spelled it from its tokens instead.  */
+  if (contract_condition_text)
+    return build_string_literal (IDENTIFIER_LENGTH (contract_condition_text)
+				 + 1,
+				 IDENTIFIER_POINTER (contract_condition_text));
+
   /* Try to get the actual source text for the condition; if that fails pretty
      print the resulting tree.  */
-  char *str = get_source_text_between (global_dc->get_file_cache (),
-				       condition.get_start (),
-				       condition.get_finish ());
+  char *str = NULL;
+  if (!linemap_location_from_macro_expansion_p (line_table,
+						condition.get_start ())
+      && !linemap_location_from_macro_expansion_p (line_table,
+						   condition.get_finish ()))
+    str = get_source_text_between (global_dc->get_file_cache (),
+				   condition.get_start (),
+				   condition.get_finish ());
   if (!str)
     {
       const char *str = expr_to_string (condition);

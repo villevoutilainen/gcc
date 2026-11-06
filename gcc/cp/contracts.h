@@ -281,6 +281,7 @@ extern void propagate_cdtor_contracts_to_clones	(tree);
 extern tree constify_contract_access		(tree);
 extern tree view_as_const			(tree);
 extern contract_check_side contract_side_of	(tree, tree);
+extern tree contract_condition_text;	/* An identifier: no GTY needed.  */
 extern bool contract_control_constifies		(tree, contract_check_side, tree, bool = false);
 extern bool contract_control_is_conveyor		(tree, contract_check_side, tree, bool = false);
 extern bool contract_control_is_symbolic		(tree, contract_check_side, tree, bool = false);

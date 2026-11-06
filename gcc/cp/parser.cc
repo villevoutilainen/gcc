@@ -50,6 +50,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "bitmap.h"
 #include "builtins.h"
 #include "contracts.h"
+#include "diagnostics/file-cache.h"
 #include "profiles.h"
 #include "analyzer/analyzer-language.h"
 
@@ -34721,6 +34722,108 @@ cp_parser_annotation_list (cp_parser *parser)
   return attributes;
 }
 
+/* If the contract condition spanning the tokens FIRST to LAST was written in
+   a macro, return its text spelled from those tokens, each read back from
+   where it was written (the macro's definition, or its argument), as an
+   identifier; otherwise NULL_TREE, and the condition's own source text
+   serves (build_comment).  Without this, a condition written in a macro is
+   reported as the macro's name (P4445 BUG-36).  */
+
+static tree
+cp_parser_contract_condition_text (cp_token *first, cp_token *last,
+				   cp_token *next)
+{
+  if (!first || !last || last < first
+      || (!linemap_location_from_macro_expansion_p (line_table,
+						     first->location)
+	  && !linemap_location_from_macro_expansion_p (line_table,
+						       last->location)))
+    return NULL_TREE;
+
+  /* Starting in the source and ending in a macro invocation
+     ('x < LIMIT', 'x < MAX (a, b)'): the source text up to NEXT, the token
+     after the condition, without NEXT itself and any whitespace before it.
+     (The invocation's own closing parenthesis isn't a token we see.)  */
+  if (!linemap_location_from_macro_expansion_p (line_table, first->location)
+      && next
+      && !linemap_location_from_macro_expansion_p (line_table, next->location))
+    {
+      char *text
+	= get_source_text_between (global_dc->get_file_cache (),
+				   get_start (first->location),
+				   get_start (next->location));
+      if (text)
+	{
+	  size_t len = strlen (text);
+	  if (len)
+	    --len;			/* NEXT's first character.  */
+	  while (len && ISSPACE (text[len - 1]))
+	    --len;
+	  text[len] = '\0';
+	  tree id = len ? get_identifier (text) : NULL_TREE;
+	  free (text);
+	  if (id)
+	    return id;
+	}
+    }
+
+  pretty_printer pp;
+  location_t prev_outer = UNKNOWN_LOCATION;
+  for (cp_token *t = first; t <= last; ++t)
+    {
+      if (t->purged_p)
+	continue;
+      /* Where the token appears in the source: itself, or the macro
+	 invocation it came from.  */
+      location_t outer
+	= linemap_resolve_location (line_table, t->location,
+				    LRK_MACRO_EXPANSION_POINT, NULL);
+      /* A token starting a macro's expansion doesn't record the space
+	 before the macro's name in the source: look at the source.  */
+      bool space = t != first && (t->flags & PREV_WHITE);
+      if (t != first && !space && outer != prev_outer)
+	{
+	  expanded_location xl = expand_location (outer);
+	  diagnostics::char_span line
+	    = global_dc->get_file_cache ().get_source_line (xl.file, xl.line);
+	  if (line && xl.column > 1
+	      && (size_t) xl.column - 2 < line.length ())
+	    space = ISSPACE (line[xl.column - 2]);
+	}
+      prev_outer = outer;
+      source_range r = get_range_from_loc (line_table, t->location);
+      location_t start
+	= linemap_resolve_location (line_table, r.m_start,
+				    LRK_SPELLING_LOCATION, NULL);
+      location_t finish
+	= linemap_resolve_location (line_table, r.m_finish,
+				    LRK_SPELLING_LOCATION, NULL);
+      char *text = get_source_text_between (global_dc->get_file_cache (),
+					    start, finish);
+      if (!text)
+	return NULL_TREE;
+      if (space)
+	pp_space (&pp);
+      pp_string (&pp, text);
+      free (text);
+    }
+  return get_identifier (pp_formatted_text (&pp));
+}
+
+/* Parse a contract condition, setting *TEXT as for
+   cp_parser_contract_condition_text.  */
+
+static cp_expr
+cp_parser_contract_condition (cp_parser *parser, tree *text)
+{
+  cp_token *first = cp_lexer_peek_token (parser->lexer);
+  cp_expr condition = cp_parser_conditional_expression (parser);
+  *text = cp_parser_contract_condition_text
+	    (first, cp_lexer_previous_token (parser->lexer),
+	     cp_lexer_peek_token (parser->lexer));
+  return condition;
+}
+
 /* Parse a contract condition for a deferred contract.  */
 
 void
@@ -34798,9 +34901,15 @@ cp_parser_late_contract_condition (cp_parser *parser, tree fn, tree contract)
       if (undeduced_result_type_p)
 	++processing_template_decl;
     }
-  cp_expr parsed_condition = cp_parser_conditional_expression (parser);
+  tree condition_text;
+  cp_expr parsed_condition
+    = cp_parser_contract_condition (parser, &condition_text);
   /* Commit to changes.  */
-  update_late_contract (contract, result, parsed_condition);
+  {
+    auto text_ovr = make_temp_override (contract_condition_text,
+					condition_text);
+    update_late_contract (contract, result, parsed_condition);
+  }
   if (undeduced_result_type_p)
     --processing_template_decl;
 
@@ -35030,8 +35139,14 @@ cp_parser_late_object_contracts (cp_parser *parser, tree decl)
 	  if (dependent_result_p)
 	    ++processing_template_decl;
 	}
-      cp_expr parsed_condition = cp_parser_conditional_expression (parser);
-      update_late_contract (contract, result, parsed_condition);
+      tree condition_text;
+      cp_expr parsed_condition
+        = cp_parser_contract_condition (parser, &condition_text);
+      {
+        auto text_ovr = make_temp_override (contract_condition_text,
+      					    condition_text);
+        update_late_contract (contract, result, parsed_condition);
+      }
       if ((binders || r_ident) && dependent_result_p)
 	--processing_template_decl;
       processing_postcondition = old_pc;
@@ -35243,12 +35358,19 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
   begin_scope (sk_contract, current_function_decl);
   bool old_pc = processing_postcondition;
   processing_postcondition = false;
-  cp_expr condition = cp_parser_conditional_expression (parser);
+  tree condition_text;
+  cp_expr condition = cp_parser_contract_condition (parser, &condition_text);
   gcc_checking_assert (scope_chain && scope_chain->bindings
 		       && scope_chain->bindings->kind == sk_contract);
   /* Build the contract.  */
-  tree contract = grok_contract (cont_assert, /*mode*/NULL_TREE,
-			    /*result*/NULL_TREE, condition, loc, control_object);
+  tree contract;
+  {
+    auto text_ovr = make_temp_override (contract_condition_text,
+					condition_text);
+    contract = grok_contract (cont_assert, /*mode*/NULL_TREE,
+			      /*result*/NULL_TREE, condition, loc,
+			      control_object);
+  }
   processing_postcondition = old_pc;
   pop_bindings_and_leave_scope ();
 
@@ -35725,10 +35847,16 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
 	    *positional_tail = build_tree_list (NULL_TREE, TREE_VALUE (p));
 	    positional_tail = &TREE_CHAIN (*positional_tail);
 	  }
-      cp_expr condition = cp_parser_conditional_expression (parser);
+      tree condition_text;
+      cp_expr condition
+	= cp_parser_contract_condition (parser, &condition_text);
       /* Build the contract.  */
-      contract = grok_contract (contract_name, /*mode*/NULL_TREE, result,
-				condition, loc, control_object);
+      {
+	auto text_ovr = make_temp_override (contract_condition_text,
+					    condition_text);
+	contract = grok_contract (contract_name, /*mode*/NULL_TREE, result,
+				  condition, loc, control_object);
+      }
       if (n_binders > 0)
 	--processing_template_decl;
       processing_postcondition = old_pc;
