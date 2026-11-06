@@ -1328,11 +1328,11 @@ c_common_post_options (const char **pfilename)
 	  || flag_contract_symbolic_proofs_gimple))
     {
       if (flag_contract_analysis_engine == 1)
-	warning (0, "%<-fsyntax-only%> doesn't run the GIMPLE contract "
+	warning (0, "%<-fsyntax-only%> does not run the GIMPLE contract "
 		 "analysis engine; %<-fcontract-analysis-engine=gimple%> "
 		 "checks nothing");
       else
-	warning (0, "%<-fsyntax-only%> doesn't run the GIMPLE contract "
+	warning (0, "%<-fsyntax-only%> does not run the GIMPLE contract "
 		 "analysis engine");
     }
 
