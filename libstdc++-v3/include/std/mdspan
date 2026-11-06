@@ -3532,7 +3532,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    static_assert(std::cmp_less_equal(_OIndexType::value, _Extent));
 	  }
 	else
-	  __glibcxx_assert(__idx <= __ext.extent(0));
+	  __glibcxx_assert_noconveyor(__idx <= __ext.extent(0));
       }
 
     template<typename _IndexType, size_t _Extent, typename _Slice>
@@ -3559,7 +3559,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		if constexpr (__is_constant_wrapper_v<typename _Slice::stride_type>)
 		  static_assert(_Slice::stride_type::value > 0);
 		else
-		  __glibcxx_assert(__slice.stride > 0);
+		  __glibcxx_assert_noconveyor(__slice.stride > 0);
 
 		if constexpr (_Extent != dynamic_extent
 		     && __is_constant_wrapper_v<typename _Slice::offset_type>)
@@ -3579,7 +3579,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		    _Extent - _Slice::offset_type::value,
 		    (_Slice::extent_type::value - 1) * _Slice::stride_type::value));
 		else
-		  __glibcxx_assert(std::cmp_greater(
+		  __glibcxx_assert_noconveyor(std::cmp_greater(
 		    __ext.extent(0) - __slice.offset,
 		    (_Slice::extent_type::value - 1) * __slice.stride));
 	      }
@@ -3587,7 +3587,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 				         constant_wrapper<_IndexType(1)>>)
 	      {
 		__mdspan::__check_valid_index(__ext, __slice.offset);
-		__glibcxx_assert(std::cmp_greater_equal(
+		__glibcxx_assert_noconveyor(std::cmp_greater_equal(
 		  __ext.extent(0) - __slice.offset,
 		  __slice.extent));
 	      }
@@ -3595,9 +3595,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	      __mdspan::__check_valid_index(__ext, __slice.offset);
 	    else
 	      {
-		__glibcxx_assert(__slice.offset < __ext.extent(0));
-		__glibcxx_assert(__slice.extent == 1 || __slice.stride > 0);
-		__glibcxx_assert(__slice.extent == 1 || std::cmp_greater(
+		__glibcxx_assert_noconveyor(__slice.offset < __ext.extent(0));
+		__glibcxx_assert_noconveyor(__slice.extent == 1
+					    || __slice.stride > 0);
+		__glibcxx_assert_noconveyor(__slice.extent == 1 || std::cmp_greater(
 		  __ext.extent(0) - __slice.offset,
 		  (__slice.extent - 1) * __slice.stride));
 	      }
