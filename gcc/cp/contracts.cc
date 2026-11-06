@@ -6327,12 +6327,78 @@ build_group_rules_value (tree view_type)
    below (evaluating a control-object query) and the assertion_context
    builders build_contract_control_call/build_contract_control_constexpr_check
    (populating assertion_context::static_info()) -- the one place this
-   value's shape is built.  is_virtual/overrides_virtual are always false
-   for now: groundwork for later work on virtual-function semantics, not
-   yet wired to any real detection.  */
+   value's shape is built.  FN is the function in which the check is
+   built (see contract_static_info_fn), for is_virtual/overrides_virtual;
+   without it both are false.  */
+
+/* The function whose contract is checked in FN: FN itself, or the
+   function behind a caller-side wrapper, an outlined pre/post function or
+   a constructor/destructor clone.  */
 
 static tree
-build_assertion_static_info_value (contract_check_side side, tree info_type)
+contract_static_info_fn (tree fn)
+{
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL || !DECL_LANG_SPECIFIC (fn))
+    return fn;
+  if (DECL_CONTRACT_WRAPPER (fn))
+    if (tree orig = get_orig_func_for_wrapper (fn))
+      fn = orig;
+  if (tree orig = get_orig_for_outlined (fn))
+    fn = orig;
+  return DECL_ORIGIN (fn);
+}
+
+/* Whether FN, a virtual member function, overrides a virtual function of
+   one of its bases.  Unlike look_for_overrides, this doesn't diagnose.  */
+
+static bool
+contract_fn_overrides_virtual_p (tree fn)
+{
+  tree ctx = DECL_CONTEXT (fn);
+  if (!CLASS_TYPE_P (ctx) || !TYPE_BINFO (ctx))
+    return false;
+  for (tree binfo = TREE_CHAIN (TYPE_BINFO (ctx)); binfo;
+       binfo = TREE_CHAIN (binfo))
+    {
+      tree base = BINFO_TYPE (binfo);
+      /* A destructor's name differs per class: it overrides a base's
+	 virtual destructor.  */
+      if (DECL_DESTRUCTOR_P (fn))
+	{
+	  if (tree dtor = CLASSTYPE_DESTRUCTOR (base))
+	    if (DECL_VIRTUAL_P (dtor))
+	      return true;
+	}
+      else if (look_for_overrides_here (base, fn))
+	return true;
+    }
+  return false;
+}
+
+/* Fill *IS_VIRTUAL and *OVERRIDES for assertion_static_info: whether FN,
+   the function owning the contract (see contract_static_info_fn), is
+   virtual, and whether it overrides a base's virtual function.  Both are
+   false for a contract_assert (SIDE ccs_not_applicable) or an unknown
+   FN.  */
+
+static void
+contract_static_info_virtual (tree fn, contract_check_side side,
+			      bool *is_virtual, bool *overrides)
+{
+  *is_virtual = *overrides = false;
+  if (side == ccs_not_applicable)
+    return;
+  fn = contract_static_info_fn (fn);
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL
+      || !DECL_FUNCTION_MEMBER_P (fn) || !DECL_VIRTUAL_P (fn))
+    return;
+  *is_virtual = true;
+  *overrides = contract_fn_overrides_virtual_p (fn);
+}
+
+static tree
+build_assertion_static_info_value (contract_check_side side, tree info_type,
+				   tree fn = NULL_TREE)
 {
   tree f0 = next_aggregate_field (TYPE_FIELDS (info_type));
   tree f1 = next_aggregate_field (DECL_CHAIN (f0));
@@ -6351,12 +6417,15 @@ build_assertion_static_info_value (contract_check_side side, tree info_type)
     default: gcc_unreachable ();
     }
 
+  bool is_virtual, overrides;
+  contract_static_info_virtual (fn, side, &is_virtual, &overrides);
+
   return build_constructor_va
     (info_type, 5,
      f0, build_int_cst (TREE_TYPE (f0), contract_evaluation_semantic_value ()),
      f1, build_int_cst (TREE_TYPE (f1), side_val),
-     f2, boolean_false_node,
-     f3, boolean_false_node,
+     f2, constant_boolean_node (is_virtual, TREE_TYPE (f2)),
+     f3, constant_boolean_node (overrides, TREE_TYPE (f3)),
      f4, build_group_rules_value (TREE_TYPE (f4)));
 }
 
@@ -6977,6 +7046,7 @@ struct cct_env
   tree info_type;	/* std::contracts::assertion_static_info.  */
   HOST_WIDE_INT semantic, side, kind;
   contract_check_side cside;
+  tree owner_fn;	/* The function the check is built in, or NULL.  */
   tree static_info;	/* A constant holding the static info, or NULL.  */
   tree op_this;		/* The analyzed operator()'s 'this'.  */
   tree ctrl_obj;	/* A constant holding the control object, or NULL.  */
@@ -7052,7 +7122,8 @@ cct_substitute_r (tree *tp, int *walk_subtrees, void *data)
 	  env->static_info
 	    = cct_constant_var (env->info_type,
 				build_assertion_static_info_value (env->cside,
-								   env->info_type));
+								   env->info_type,
+								   env->owner_fn));
 	}
       tree ref = env->static_info;
       if (TYPE_REF_P (TREE_TYPE (t)))
@@ -7353,11 +7424,11 @@ cct_fn_may_return (tree fn, cct_env *env, int depth)
 }
 
 /* Answers already computed, per operator() and per (semantic, side,
-   kind): two bits each, known and value.  */
+   kind, is_virtual, overrides_virtual): two bits each, known and value.  */
 
 struct cct_cache_entry
 {
-  unsigned HOST_WIDE_INT known[2], value[2];
+  unsigned HOST_WIDE_INT known[8], value[8];
 };
 
 static hash_map<tree, cct_cache_entry> *cct_cache;
@@ -7395,6 +7466,7 @@ contract_failure_terminates_p (tree contract, tree owner_fn)
   env.semantic = contract_evaluation_semantic_value ();
   env.side = 0;
   env.cside = cside;
+  env.owner_fn = owner_fn ? owner_fn : current_function_decl;
   env.static_info = NULL_TREE;
   env.locals = NULL;
   env.op_this = (DECL_IOBJ_MEMBER_FUNCTION_P (op) ? DECL_ARGUMENTS (op)
@@ -7424,7 +7496,11 @@ contract_failure_terminates_p (tree contract, tree owner_fn)
   env.kind = get_contract_assertion_kind (contract);
   env.unknown_body = false;
 
-  unsigned idx = ((env.semantic & 7) << 4) | ((env.side & 3) << 2) | (env.kind & 3);
+  bool is_virtual, overrides;
+  contract_static_info_virtual (env.owner_fn, cside, &is_virtual, &overrides);
+  unsigned idx = (((unsigned) overrides << 8) | ((unsigned) is_virtual << 7)
+		  | ((env.semantic & 7) << 4) | ((env.side & 3) << 2)
+		  | (env.kind & 3));
   /* The answer may depend on the control object's own data (its 'this'
      is substituted), which the key doesn't include: cache only for a
      type without any.  */
@@ -26775,7 +26851,8 @@ oa_build_symbolic_scalar_check_bind (tree contract, tree ctrl, tree op,
 	       resolve_fndecl_for_diagnostic_name (current_function_decl))),
      f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
      f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
-     f4, build_assertion_static_info_value (side, TREE_TYPE (f4)),
+     f4, build_assertion_static_info_value (side, TREE_TYPE (f4),
+					    current_function_decl),
      f5, fold_convert (TREE_TYPE (f5), args_ptr),
      f6, fold_convert (TREE_TYPE (f6), check_fn));
 
@@ -38868,7 +38945,8 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
 	       resolve_fndecl_for_diagnostic_name (current_function_decl))),
      f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
      f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
-     f4, build_assertion_static_info_value (side, TREE_TYPE (f4)),
+     f4, build_assertion_static_info_value (side, TREE_TYPE (f4),
+					    current_function_decl),
      f5, fold_convert (TREE_TYPE (f5), args_ptr),
      f6, fold_convert (TREE_TYPE (f6), check_fn));
 
@@ -39184,7 +39262,8 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
 	       resolve_fndecl_for_diagnostic_name (fndecl))),
      f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
      f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
-     f4, build_assertion_static_info_value (side, TREE_TYPE (f4)),
+     f4, build_assertion_static_info_value (side, TREE_TYPE (f4),
+					    fndecl),
      f5, fold_convert (TREE_TYPE (f5), dummy_args_ptr),
      f6, fold_convert (TREE_TYPE (f6), check_fn));
 

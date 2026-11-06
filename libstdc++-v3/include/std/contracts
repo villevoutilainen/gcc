@@ -138,9 +138,9 @@ namespace contracts
 
   // D4324: static (compile-time-known) properties of where a contract
   // occurs, independent of any one particular runtime evaluation.
-  // is_virtual()/overrides_virtual() are groundwork for later work on
-  // virtual-function semantics -- the compiler always fills both false
-  // for now, regardless of the actual function.
+  // is_virtual(): the contract's function is virtual; overrides_virtual():
+  // it also overrides a base class's virtual function.  Both are false
+  // for a contract_assert.
   class assertion_static_info {
     evaluation_semantic _M_semantic;
     assertion_check_side _M_side;
