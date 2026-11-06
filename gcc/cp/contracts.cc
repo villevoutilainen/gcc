@@ -18496,6 +18496,27 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
     {
       walk_data *d = (walk_data *) data_;
       tree arg;
+
+      /* A function declared 'symbolic' has no definition: a contract that
+	 isn't symbolic-checked would evaluate it at run time, and fail to
+	 link (P4445 BUG-28).  */
+      if (!d->symbolic_ok
+	  && (TREE_CODE (*tp) == CALL_EXPR || TREE_CODE (*tp) == AGGR_INIT_EXPR))
+	{
+	  tree callee = cp_get_callee_fndecl_nofold (*tp);
+	  if (callee && TREE_CODE (callee) == FUNCTION_DECL
+	      && DECL_LANG_SPECIFIC (callee) && DECL_DECLARED_SYMBOLIC_P (callee))
+	    {
+	      error_at (EXPR_LOCATION (*tp), "%qD, declared %<symbolic%>, may "
+			"only be used in the condition of a symbolic-checked "
+			"contract", callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      *d->ok = false;
+	      *tp = error_mark_node;
+	      return NULL_TREE;
+	    }
+	}
+
       if (!is_object_address_call_p (*tp, &arg))
 	return NULL_TREE;
 
