@@ -19253,6 +19253,46 @@ oa_call_conveyor_obligation_status (tree call, bool *forced_out, bool *strict_ou
     }
 }
 
+static void oa_call_symbolic_obligation_status (tree, bool *, bool *);
+
+/* Whether a call in the current function's body forces conveyor or
+   symbolic analysis on (analyzed_/proven_ control objects on a callee's
+   contract): the facts it needs must be established from the calls
+   before it, whatever the command line says (P4445 BUG-29).  Computed
+   once per function.  */
+
+static GTY(()) tree oa_forced_fn;
+static bool oa_forced_fn_value;
+
+static tree
+oa_forced_obligation_call_r (tree *tp, int *, void *)
+{
+  if (TREE_CODE (*tp) != CALL_EXPR && TREE_CODE (*tp) != AGGR_INIT_EXPR)
+    return NULL_TREE;
+  bool conveyor = false;
+  bool symbolic = false;
+  oa_call_conveyor_obligation_status (*tp, &conveyor, NULL);
+  oa_call_symbolic_obligation_status (*tp, &symbolic, NULL);
+  return conveyor || symbolic ? *tp : NULL_TREE;
+}
+
+static bool
+oa_function_has_forced_obligation_p ()
+{
+  tree fn = current_function_decl;
+  if (oa_forced_fn == fn && fn)
+    return oa_forced_fn_value;
+  oa_forced_fn = fn;
+  oa_forced_fn_value = false;
+  if (!fn || !DECL_SAVED_TREE (fn))
+    return false;
+  oa_forced_fn_value
+    = cp_walk_tree_without_duplicates (&DECL_SAVED_TREE (fn),
+				       oa_forced_obligation_call_r,
+				       NULL) != NULL_TREE;
+  return oa_forced_fn_value;
+}
+
 static void
 oa_call_symbolic_obligation_status (tree call, bool *forced_out, bool *strict_out)
 {
@@ -28173,7 +28213,8 @@ oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
       bool tracking = (flag_contract_symbolic_proofs
 		       || flag_contract_conveyor_proofs
 		       || oa_call_site_callback || conveyor_forced
-		       || symbolic_forced);
+		       || symbolic_forced
+		       || oa_function_has_forced_obligation_p ());
       /* Invalidation, though, always runs: the mandatory item 8 checks
 	 rely on facts a contract_assert establishes (e.g. a field's
 	 'obj.field != 0' for a divisor), which a call that may modify the
