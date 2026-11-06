@@ -12506,13 +12506,13 @@ tsubst_contract (tree decl, tree t, tree args, tsubst_flags_t complain,
     = make_temp_override (contract_condition_constify_p,
 			  flag_contract_control_objects
 			  ? contract_control_constifies
-			      (ctrl, contract_side_of (t, decl))
+			      (ctrl, contract_side_of (t, decl), decl)
 			  : true);
   auto conveyor_ovr
     = make_temp_override (contract_condition_conveyor_p,
 			  flag_contract_control_objects
 			  && contract_control_conveyor_like
-			       (ctrl, contract_side_of (t, decl)));
+			       (ctrl, contract_side_of (t, decl), decl));
 
   /* Instantiate the condition.  If the postcondition has a result binding
      whose type is undeduced, process the expression as if inside a template to

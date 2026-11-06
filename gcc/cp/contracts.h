@@ -281,10 +281,10 @@ extern void propagate_cdtor_contracts_to_clones	(tree);
 extern tree constify_contract_access		(tree);
 extern tree view_as_const			(tree);
 extern contract_check_side contract_side_of	(tree, tree);
-extern bool contract_control_constifies		(tree, contract_check_side, bool = false);
-extern bool contract_control_is_conveyor		(tree, contract_check_side, bool = false);
-extern bool contract_control_is_symbolic		(tree, contract_check_side, bool = false);
-extern bool contract_control_conveyor_like		(tree, contract_check_side, bool = false);
+extern bool contract_control_constifies		(tree, contract_check_side, tree, bool = false);
+extern bool contract_control_is_conveyor		(tree, contract_check_side, tree, bool = false);
+extern bool contract_control_is_symbolic		(tree, contract_check_side, tree, bool = false);
+extern bool contract_control_conveyor_like		(tree, contract_check_side, tree, bool = false);
 extern bool contract_failure_terminates_p	(tree, tree);
 /* Whether PARM is a parameter of a predicate core function that one of
    its condition's captured locals, not itself a reference, is passed to
@@ -305,7 +305,7 @@ extern bool contract_call_may_return_arg_p	(tree, unsigned);
 /* Remove the implicit preconditions synthesized for FNDECL, a
    'conveyor(auto)' function deduced not to be conveyor.  */
 extern void contract_drop_synthesized_preconditions (tree);
-extern bool contract_control_symbolic_like		(tree, contract_check_side, bool = false);
+extern bool contract_control_symbolic_like		(tree, contract_check_side, tree, bool = false);
 extern tree contract_default_control_object		(location_t);
 extern void maybe_inherit_virtual_contract		(tree, tree);
 extern void resolve_object_address_in_function		(tree);

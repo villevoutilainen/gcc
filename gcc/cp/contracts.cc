@@ -534,11 +534,11 @@ maybe_warn_fnptr_contract_mismatch (location_t loc, tree dest_decl,
 		"%qD", src_owner, dest_decl);
 }
 
-static bool contract_control_is_ignored (tree, contract_check_side, bool = false);
-static bool contract_control_validates (tree, contract_check_side, bool = false);
-static bool contract_control_assumable (tree, contract_check_side, bool = false);
-static bool contract_control_forces_client_side (tree, contract_check_side, bool = false);
-static bool contract_control_forces_definition_side (tree, contract_check_side, bool = false);
+static bool contract_control_is_ignored (tree, contract_check_side, tree, bool = false);
+static bool contract_control_validates (tree, contract_check_side, tree, bool = false);
+static bool contract_control_assumable (tree, contract_check_side, tree, bool = false);
+static bool contract_control_forces_client_side (tree, contract_check_side, tree, bool = false);
+static bool contract_control_forces_definition_side (tree, contract_check_side, tree, bool = false);
 static bool contract_is_inherited_p (tree);
 static bool contract_inherited_runs_on_side (tree, contract_check_side);
 
@@ -558,11 +558,12 @@ contract_side_of (tree contract, tree fndecl)
   return DECL_CONTRACT_WRAPPER (fndecl) ? ccs_wrapper : ccs_definition;
 }
 
-/* Return true if CONTRACT is checked or assumed under the current build
-   configuration, for the given SIDE.  */
+/* Return true if CONTRACT, a contract of FN (or NULL_TREE if unknown), is
+   checked or assumed under the current build configuration, for the given
+   SIDE.  */
 
 static bool
-contract_active_p (tree contract, contract_check_side side)
+contract_active_p (tree contract, contract_check_side side, tree fn)
 {
   /* D4324: a named control object decides activity by its type's
      compile-time members rather than the translation-unit semantic.  The
@@ -577,11 +578,11 @@ contract_active_p (tree contract, contract_check_side side)
 	 is_ignored/assumable below), so a control object that rejects
 	 its own configuration is diagnosed regardless of what those
 	 other traits would otherwise decide.  */
-      if (!contract_control_validates (ctrl, side))
+      if (!contract_control_validates (ctrl, side, fn))
 	return false;
-      if (!contract_control_is_ignored (ctrl, side))
+      if (!contract_control_is_ignored (ctrl, side, fn))
 	return true;
-      return contract_control_assumable (ctrl, side);
+      return contract_control_assumable (ctrl, side, fn);
     }
   return get_evaluation_semantic (contract) != CES_IGNORE;
 }
@@ -621,9 +622,9 @@ contract_runs_on_side (tree contract, contract_check_side side,
 
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   bool force_client
-    = ctrl && contract_control_forces_client_side (ctrl, side);
+    = ctrl && contract_control_forces_client_side (ctrl, side, fn);
   bool force_def
-    = ctrl && contract_control_forces_definition_side (ctrl, side);
+    = ctrl && contract_control_forces_definition_side (ctrl, side, fn);
   /* Check the "definition" flag first on both sides, so that when a
      control object (erroneously) sets both, the contract is routed to
      ccs_definition only rather than dropped from both sides entirely --
@@ -651,7 +652,7 @@ has_active_contract_condition (tree fndecl, tree_code c,
 
   for (tree contract : tree_vec_range (contracts))
     if (TREE_CODE (contract) == c
-	&& contract_active_p (contract, side)
+	&& contract_active_p (contract, side, fndecl)
 	&& contract_runs_on_side (contract, side, fndecl))
       return true;
   return false;
@@ -691,9 +692,9 @@ contract_any_active_p (tree fndecl)
 
   for (tree contract : tree_vec_range (contracts))
     if (TREE_CODE (contract) == ASSERTION_STMT
-	? contract_active_p (contract, ccs_not_applicable)
-	: (contract_active_p (contract, ccs_definition)
-	   || contract_active_p (contract, ccs_wrapper)))
+	? contract_active_p (contract, ccs_not_applicable, fndecl)
+	: (contract_active_p (contract, ccs_definition, fndecl)
+	   || contract_active_p (contract, ccs_wrapper, fndecl)))
       return true;
   return false;
 }
@@ -3691,12 +3692,13 @@ tsubst_object_contract_specifiers (tree pattern_decl, tree new_decl,
       auto constify_ovr
 	= make_temp_override (contract_condition_constify_p,
 			       flag_contract_control_objects
-			       ? contract_control_constifies (ctrl, side)
+			       ? contract_control_constifies (ctrl, side, new_decl)
 			       : true);
       auto conveyor_ovr
 	= make_temp_override (contract_condition_conveyor_p,
 			       flag_contract_control_objects
-			       && contract_control_conveyor_like (ctrl, side));
+			       && contract_control_conveyor_like (ctrl, side,
+								  new_decl));
 
       tree oldvar = NULL_TREE, newvar = NULL_TREE;
       if (POSTCONDITION_P (orig_stmt) && POSTCONDITION_IDENTIFIER (orig_stmt))
@@ -4378,14 +4380,16 @@ rebuild_postconditions (tree fndecl)
 	 setting keeps the result const, exactly as P2900 requires.  */
       bool constify_p = flag_contract_control_objects
 	? contract_control_constifies (CONTRACT_CONTROL_OBJECT (contract),
-					contract_side_of (contract, fndecl))
+					contract_side_of (contract, fndecl),
+					fndecl)
 	: true;
       auto constify_ovr
 	= make_temp_override (contract_condition_constify_p, constify_p);
 
       bool conveyor_p = flag_contract_control_objects
 	&& contract_control_conveyor_like (CONTRACT_CONTROL_OBJECT (contract),
-					    contract_side_of (contract, fndecl));
+					    contract_side_of (contract, fndecl),
+					    fndecl);
       auto conveyor_ovr
 	= make_temp_override (contract_condition_conveyor_p, conveyor_p);
 
@@ -4984,9 +4988,9 @@ oa_fndecl_has_conveyor_active_contract_p (tree fndecl)
 	    continue;
 	}
       processing_template_decl_sentinel ptds;
-      if (!contract_control_conveyor_like (ctrl, side, /*quiet=*/true))
+      if (!contract_control_conveyor_like (ctrl, side, fndecl, /*quiet=*/true))
 	continue;
-      if (!contract_control_is_ignored (ctrl, side, /*quiet=*/true))
+      if (!contract_control_is_ignored (ctrl, side, fndecl, /*quiet=*/true))
 	return true;
     }
   return false;
@@ -6390,10 +6394,16 @@ contract_static_info_virtual (tree fn, contract_check_side side,
     return;
   fn = contract_static_info_fn (fn);
   if (!fn || TREE_CODE (fn) != FUNCTION_DECL
-      || !DECL_FUNCTION_MEMBER_P (fn) || !DECL_VIRTUAL_P (fn))
+      || !DECL_IOBJ_MEMBER_FUNCTION_P (fn))
     return;
-  *is_virtual = true;
+  /* While the class is being completed (contract inheritance), an
+     overrider isn't marked virtual yet: overriding makes it so.  Once
+     the class is complete, a function that isn't virtual overrides
+     nothing.  */
+  if (!DECL_VIRTUAL_P (fn) && !TYPE_BEING_DEFINED (DECL_CONTEXT (fn)))
+    return;
   *overrides = contract_fn_overrides_virtual_p (fn);
+  *is_virtual = DECL_VIRTUAL_P (fn) || *overrides;
 }
 
 static tree
@@ -6464,7 +6474,7 @@ build_assertion_static_info_value (contract_check_side side, tree info_type,
 
 static int
 contract_control_bool_member (tree ctrl, const char *name,
-			       contract_check_side side, bool quiet = false)
+			       contract_check_side side, tree owner_fn, bool quiet = false)
 {
   tree ctrl_expr = ctrl;
   ctrl = contract_control_naming_type (ctrl);
@@ -6507,7 +6517,7 @@ contract_control_bool_member (tree ctrl, const char *name,
     = lookup_std_contracts_type (get_identifier ("assertion_static_info"));
   if (!same_type_ignoring_top_level_qualifiers_p (info_type, real_info_type))
     return -1;
-  tree cfg_arg = build_assertion_static_info_value (side, info_type);
+  tree cfg_arg = build_assertion_static_info_value (side, info_type, owner_fn);
 
   releasing_vec args;
   vec_safe_push (args, cfg_arg);
@@ -6620,9 +6630,9 @@ contract_control_bool_member (tree ctrl, const char *name,
    existing evaluation-semantic path is used instead.  */
 
 static bool
-contract_control_is_ignored (tree ctrl, contract_check_side side, bool quiet)
+contract_control_is_ignored (tree ctrl, contract_check_side side, tree owner_fn, bool quiet)
 {
-  return contract_control_bool_member (ctrl, "is_ignored", side, quiet) == 1;
+  return contract_control_bool_member (ctrl, "is_ignored", side, owner_fn, quiet) == 1;
 }
 
 /* If the assertion names a control type CTRL, constant-evaluate
@@ -6646,7 +6656,7 @@ contract_control_is_ignored (tree ctrl, contract_check_side side, bool quiet)
    speculative-evaluation reasons documented there.  */
 
 static bool
-contract_control_validates (tree ctrl, contract_check_side side, bool quiet)
+contract_control_validates (tree ctrl, contract_check_side side, tree owner_fn, bool quiet)
 {
   tree ctrl_expr = ctrl;
   tree ctrl_type = contract_control_naming_type (ctrl);
@@ -6686,7 +6696,7 @@ contract_control_validates (tree ctrl, contract_check_side side, bool quiet)
   if (!same_type_ignoring_top_level_qualifiers_p (result_type, real_result_type))
     return true;
 
-  tree cfg_arg = build_assertion_static_info_value (side, info_type);
+  tree cfg_arg = build_assertion_static_info_value (side, info_type, owner_fn);
   releasing_vec args;
   vec_safe_push (args, cfg_arg);
 
@@ -6775,9 +6785,9 @@ contract_control_validates (tree ctrl, contract_check_side side, bool quiet)
    constify.  */
 
 bool
-contract_control_constifies (tree ctrl, contract_check_side side, bool quiet)
+contract_control_constifies (tree ctrl, contract_check_side side, tree owner_fn, bool quiet)
 {
-  return contract_control_bool_member (ctrl, "constify", side, quiet) == 1;
+  return contract_control_bool_member (ctrl, "constify", side, owner_fn, quiet) == 1;
 }
 
 /* True if the control type CTRL's is_conveyor(cfg) returns true for the
@@ -6787,9 +6797,9 @@ contract_control_constifies (tree ctrl, contract_check_side side, bool quiet)
    is_conveyor getter, is not conveyor.  */
 
 bool
-contract_control_is_conveyor (tree ctrl, contract_check_side side, bool quiet)
+contract_control_is_conveyor (tree ctrl, contract_check_side side, tree owner_fn, bool quiet)
 {
-  return contract_control_bool_member (ctrl, "is_conveyor", side, quiet) == 1;
+  return contract_control_bool_member (ctrl, "is_conveyor", side, owner_fn, quiet) == 1;
 }
 
 /* True if the control type CTRL's is_symbolic(cfg) returns true for the
@@ -6801,9 +6811,9 @@ contract_control_is_conveyor (tree ctrl, contract_check_side side, bool quiet)
    usable is_symbolic getter, is not symbolic.  */
 
 bool
-contract_control_is_symbolic (tree ctrl, contract_check_side side, bool quiet)
+contract_control_is_symbolic (tree ctrl, contract_check_side side, tree owner_fn, bool quiet)
 {
-  return contract_control_bool_member (ctrl, "is_symbolic", side, quiet) == 1;
+  return contract_control_bool_member (ctrl, "is_symbolic", side, owner_fn, quiet) == 1;
 }
 
 /* True if the control type CTRL's never_proven(cfg) returns true --
@@ -6816,9 +6826,9 @@ contract_control_is_symbolic (tree ctrl, contract_check_side side, bool quiet)
    not-yet-migrated defensive assertions).  */
 
 static bool
-contract_control_never_proven (tree ctrl, contract_check_side side, bool quiet = false)
+contract_control_never_proven (tree ctrl, contract_check_side side, tree owner_fn, bool quiet = false)
 {
-  return contract_control_bool_member (ctrl, "never_proven", side, quiet) == 1;
+  return contract_control_bool_member (ctrl, "never_proven", side, owner_fn, quiet) == 1;
 }
 
 /* True if the control type CTRL's analyzed_conveyor(cfg)/proven_
@@ -6831,27 +6841,27 @@ contract_control_never_proven (tree ctrl, contract_check_side side, bool quiet =
    both exactly.  */
 
 static bool
-contract_control_analyzed_conveyor (tree ctrl, contract_check_side side, bool quiet = false)
+contract_control_analyzed_conveyor (tree ctrl, contract_check_side side, tree owner_fn, bool quiet = false)
 {
-  return contract_control_bool_member (ctrl, "analyzed_conveyor", side, quiet) == 1;
+  return contract_control_bool_member (ctrl, "analyzed_conveyor", side, owner_fn, quiet) == 1;
 }
 
 static bool
-contract_control_proven_conveyor (tree ctrl, contract_check_side side, bool quiet = false)
+contract_control_proven_conveyor (tree ctrl, contract_check_side side, tree owner_fn, bool quiet = false)
 {
-  return contract_control_bool_member (ctrl, "proven_conveyor", side, quiet) == 1;
+  return contract_control_bool_member (ctrl, "proven_conveyor", side, owner_fn, quiet) == 1;
 }
 
 static bool
-contract_control_analyzed_symbolic (tree ctrl, contract_check_side side, bool quiet = false)
+contract_control_analyzed_symbolic (tree ctrl, contract_check_side side, tree owner_fn, bool quiet = false)
 {
-  return contract_control_bool_member (ctrl, "analyzed_symbolic", side, quiet) == 1;
+  return contract_control_bool_member (ctrl, "analyzed_symbolic", side, owner_fn, quiet) == 1;
 }
 
 static bool
-contract_control_proven_symbolic (tree ctrl, contract_check_side side, bool quiet = false)
+contract_control_proven_symbolic (tree ctrl, contract_check_side side, tree owner_fn, bool quiet = false)
 {
-  return contract_control_bool_member (ctrl, "proven_symbolic", side, quiet) == 1;
+  return contract_control_bool_member (ctrl, "proven_symbolic", side, owner_fn, quiet) == 1;
 }
 
 /* True if CTRL is conveyor for *any* reason -- is_conveyor, or either of
@@ -6868,22 +6878,22 @@ contract_control_proven_symbolic (tree ctrl, contract_check_side side, bool quie
    consistently, not just for the static analysis pass.  */
 
 bool
-contract_control_conveyor_like (tree ctrl, contract_check_side side, bool quiet)
+contract_control_conveyor_like (tree ctrl, contract_check_side side, tree owner_fn, bool quiet)
 {
-  return contract_control_is_conveyor (ctrl, side, quiet)
-	 || contract_control_analyzed_conveyor (ctrl, side, quiet)
-	 || contract_control_proven_conveyor (ctrl, side, quiet);
+  return contract_control_is_conveyor (ctrl, side, owner_fn, quiet)
+	 || contract_control_analyzed_conveyor (ctrl, side, owner_fn, quiet)
+	 || contract_control_proven_conveyor (ctrl, side, owner_fn, quiet);
 }
 
 /* Symbolic mirror of contract_control_conveyor_like immediately
    above.  */
 
 bool
-contract_control_symbolic_like (tree ctrl, contract_check_side side, bool quiet)
+contract_control_symbolic_like (tree ctrl, contract_check_side side, tree owner_fn, bool quiet)
 {
-  return contract_control_is_symbolic (ctrl, side, quiet)
-	 || contract_control_analyzed_symbolic (ctrl, side, quiet)
-	 || contract_control_proven_symbolic (ctrl, side, quiet);
+  return contract_control_is_symbolic (ctrl, side, owner_fn, quiet)
+	 || contract_control_analyzed_symbolic (ctrl, side, owner_fn, quiet)
+	 || contract_control_proven_symbolic (ctrl, side, owner_fn, quiet);
 }
 
 /* True if the control type CTRL's assumable(cfg) returns true for the TU's
@@ -6891,9 +6901,9 @@ contract_control_symbolic_like (tree ctrl, contract_check_side side, bool quiet)
    optimizer as an assumption.  */
 
 static bool
-contract_control_assumable (tree ctrl, contract_check_side side, bool quiet)
+contract_control_assumable (tree ctrl, contract_check_side side, tree owner_fn, bool quiet)
 {
-  return contract_control_bool_member (ctrl, "assumable", side, quiet) == 1;
+  return contract_control_bool_member (ctrl, "assumable", side, owner_fn, quiet) == 1;
 }
 
 /* True if the control type CTRL's omit_comment(cfg) returns true for the
@@ -6903,10 +6913,10 @@ contract_control_assumable (tree ctrl, contract_check_side side, bool quiet)
    keeps the existing behaviour of always storing it.  */
 
 static bool
-contract_control_omits_comment (tree ctrl, contract_check_side side,
+contract_control_omits_comment (tree ctrl, contract_check_side side, tree owner_fn,
 				 bool quiet = false)
 {
-  return contract_control_bool_member (ctrl, "omit_comment", side, quiet) == 1;
+  return contract_control_bool_member (ctrl, "omit_comment", side, owner_fn, quiet) == 1;
 }
 
 /* True if the control type CTRL's omit_source_location(cfg) returns true
@@ -6915,10 +6925,10 @@ contract_control_omits_comment (tree ctrl, contract_check_side side,
    Optional, same default-false behaviour as contract_control_omits_comment.  */
 
 static bool
-contract_control_omits_source_location (tree ctrl, contract_check_side side,
+contract_control_omits_source_location (tree ctrl, contract_check_side side, tree owner_fn,
 					 bool quiet = false)
 {
-  return contract_control_bool_member (ctrl, "omit_source_location", side,
+  return contract_control_bool_member (ctrl, "omit_source_location", side, owner_fn,
 					quiet) == 1;
 }
 
@@ -6930,10 +6940,10 @@ contract_control_omits_source_location (tree ctrl, contract_check_side side,
    default-false behaviour as contract_control_omits_comment.  */
 
 static bool
-contract_control_forces_client_side (tree ctrl, contract_check_side side,
+contract_control_forces_client_side (tree ctrl, contract_check_side side, tree owner_fn,
 				      bool quiet)
 {
-  return contract_control_bool_member (ctrl, "force_client_side_check", side,
+  return contract_control_bool_member (ctrl, "force_client_side_check", side, owner_fn,
 					quiet) == 1;
 }
 
@@ -6943,11 +6953,11 @@ contract_control_forces_client_side (tree ctrl, contract_check_side side,
    only at the function's own definition, never via a caller-side wrapper.  */
 
 static bool
-contract_control_forces_definition_side (tree ctrl, contract_check_side side,
+contract_control_forces_definition_side (tree ctrl, contract_check_side side, tree owner_fn,
 					  bool quiet)
 {
   return contract_control_bool_member (ctrl, "force_definition_side_check",
-					side, quiet) == 1;
+					side, owner_fn, quiet) == 1;
 }
 
 /* True if the control type CTRL's inherited(cfg) returns true for SIDE,
@@ -6957,10 +6967,10 @@ contract_control_forces_definition_side (tree ctrl, contract_check_side side,
    maybe_inherit_virtual_contract.  */
 
 static bool
-contract_control_inherited (tree ctrl, contract_check_side side,
+contract_control_inherited (tree ctrl, contract_check_side side, tree owner_fn,
 			     bool quiet = false)
 {
-  return contract_control_bool_member (ctrl, "inherited", side, quiet) == 1;
+  return contract_control_bool_member (ctrl, "inherited", side, owner_fn, quiet) == 1;
 }
 
 /* If the control type CTRL provides the D4324 dispatch operator
@@ -7453,8 +7463,10 @@ contract_failure_terminates_p (tree contract, tree owner_fn)
      only symbolically (~/gcc-axiom-contracts.md).  */
   contract_check_side cside
     = contract_side_of (contract, owner_fn ? owner_fn : current_function_decl);
-  if (contract_control_symbolic_like (ctrl, cside, /*quiet=*/true)
-      && !contract_control_conveyor_like (ctrl, cside, /*quiet=*/true))
+  tree static_fn = owner_fn ? owner_fn : current_function_decl;
+  if (contract_control_symbolic_like (ctrl, cside, static_fn, /*quiet=*/true)
+      && !contract_control_conveyor_like (ctrl, cside, static_fn,
+					  /*quiet=*/true))
     return true;
   tree op = contract_control_operator (ctrl);
   if (!op)
@@ -8033,8 +8045,9 @@ whole_set_inherited_p (tree basefn, tree_code code, tree overrider,
       tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
       if (!ctrl)
 	continue;
-      bool this_client = contract_control_inherited (ctrl, ccs_wrapper);
-      bool this_definition = contract_control_inherited (ctrl, ccs_definition);
+      bool this_client = contract_control_inherited (ctrl, ccs_wrapper, basefn);
+      bool this_definition = contract_control_inherited (ctrl, ccs_definition,
+							  basefn);
       if (!seen)
 	{
 	  *client = this_client;
@@ -12815,7 +12828,7 @@ oa_accessor_postcondition_object_address_p (tree fndecl)
       if (!ctrl)
 	continue;
       contract_check_side side = contract_side_of (contract, fndecl);
-      if (!contract_control_conveyor_like (ctrl, side, /*quiet=*/true))
+      if (!contract_control_conveyor_like (ctrl, side, fndecl, /*quiet=*/true))
 	continue;
       if (!contract_failure_terminates_p (contract, fndecl))
 	continue;
@@ -18620,12 +18633,12 @@ oa_contract_conveyor_active_p (tree contract, tree owner_fn = NULL_TREE)
   if (!owner_fn)
     owner_fn = current_function_decl;
   if (oa_validating_declaration && owner_fn == oa_validating_declaration)
-    return (contract_control_conveyor_like (ctrl, ccs_definition)
-	    || contract_control_conveyor_like (ctrl, ccs_wrapper));
+    return (contract_control_conveyor_like (ctrl, ccs_definition, owner_fn)
+	    || contract_control_conveyor_like (ctrl, ccs_wrapper, owner_fn));
   contract_check_side side = contract_side_of (contract, owner_fn);
-  if (!contract_control_conveyor_like (ctrl, side))
+  if (!contract_control_conveyor_like (ctrl, side, owner_fn))
     return false;
-  return !contract_control_is_ignored (ctrl, side);
+  return !contract_control_is_ignored (ctrl, side, owner_fn);
 }
 
 /* -fcontract-symbolic-proofs: does CONTRACT (a PRECONDITION_STMT/
@@ -18643,9 +18656,9 @@ oa_contract_symbolic_active_p (tree contract, tree owner_fn = NULL_TREE)
   if (!owner_fn)
     owner_fn = current_function_decl;
   contract_check_side side = contract_side_of (contract, owner_fn);
-  if (!contract_control_symbolic_like (ctrl, side))
+  if (!contract_control_symbolic_like (ctrl, side, owner_fn))
     return false;
-  return !contract_control_is_ignored (ctrl, side);
+  return !contract_control_is_ignored (ctrl, side, owner_fn);
 }
 
 /* True if CONTRACT's own analysis should run regardless of flag_contract_
@@ -18664,8 +18677,8 @@ oa_contract_conveyor_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE
   if (!owner_fn)
     owner_fn = current_function_decl;
   contract_check_side side = contract_side_of (contract, owner_fn);
-  return contract_control_analyzed_conveyor (ctrl, side)
-	 || contract_control_proven_conveyor (ctrl, side);
+  return contract_control_analyzed_conveyor (ctrl, side, owner_fn)
+	 || contract_control_proven_conveyor (ctrl, side, owner_fn);
 }
 
 static bool
@@ -18677,8 +18690,8 @@ oa_contract_symbolic_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE
   if (!owner_fn)
     owner_fn = current_function_decl;
   contract_check_side side = contract_side_of (contract, owner_fn);
-  return contract_control_analyzed_symbolic (ctrl, side)
-	 || contract_control_proven_symbolic (ctrl, side);
+  return contract_control_analyzed_symbolic (ctrl, side, owner_fn)
+	 || contract_control_proven_symbolic (ctrl, side, owner_fn);
 }
 
 /* True if CONTRACT's control object is proven_conveyor specifically (not
@@ -18695,7 +18708,7 @@ oa_contract_conveyor_strict_p (tree contract, tree owner_fn = NULL_TREE)
   if (!owner_fn)
     owner_fn = current_function_decl;
   contract_check_side side = contract_side_of (contract, owner_fn);
-  return contract_control_proven_conveyor (ctrl, side);
+  return contract_control_proven_conveyor (ctrl, side, owner_fn);
 }
 
 static bool
@@ -18707,7 +18720,7 @@ oa_contract_symbolic_strict_p (tree contract, tree owner_fn = NULL_TREE)
   if (!owner_fn)
     owner_fn = current_function_decl;
   contract_check_side side = contract_side_of (contract, owner_fn);
-  return contract_control_proven_symbolic (ctrl, side);
+  return contract_control_proven_symbolic (ctrl, side, owner_fn);
 }
 
 /* See contracts.h.  */
@@ -18722,7 +18735,7 @@ oa_contract_self_check_mode_public (tree contract, tree owner_fn,
   if (!ctrl || !flag_contract_control_objects)
     return false;
   *never_proven = contract_control_never_proven
-    (ctrl, contract_side_of (contract, owner_fn), /*quiet=*/true);
+    (ctrl, contract_side_of (contract, owner_fn), owner_fn, /*quiet=*/true);
   *conveyor_forced = oa_contract_conveyor_analysis_forced_p (contract, owner_fn);
   *conveyor_strict = oa_contract_conveyor_strict_p (contract, owner_fn);
   *symbolic_forced = oa_contract_symbolic_analysis_forced_p (contract, owner_fn);
@@ -26826,7 +26839,8 @@ oa_build_symbolic_scalar_check_bind (tree contract, tree ctrl, tree op,
   tree t_ctx = TREE_VALUE (FUNCTION_FIRST_USER_PARMTYPE (op));
   tree ctx_type = non_reference (t_ctx);
 
-  tree comment = contract_control_omits_comment (ctrl, side)
+  tree comment = contract_control_omits_comment (ctrl, side,
+						current_function_decl)
     ? NULL_TREE : CONTRACT_COMMENT (contract);
   if (!comment)
     comment = build_string_literal ("");
@@ -26844,7 +26858,8 @@ oa_build_symbolic_scalar_check_bind (tree contract, tree ctrl, tree op,
   tree ctor = build_constructor_va
     (ctx_type, 7,
      f0, comment,
-     f1, (contract_control_omits_source_location (ctrl, side)
+     f1, (contract_control_omits_source_location (ctrl, side,
+						  current_function_decl)
 	  ? build_constructor (TREE_TYPE (f1), NULL)
 	  : build_real_source_location_value
 	      (loc, TREE_TYPE (f1),
@@ -28293,7 +28308,8 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
      See also oa_handle_assertion_stmt/oa_handle_postcondition_stmt's
      own identical fix.  */
   bool never_proven = contract_control_never_proven
-    (CONTRACT_CONTROL_OBJECT (contract), contract_side_of (contract, current_function_decl));
+    (CONTRACT_CONTROL_OBJECT (contract), contract_side_of (contract, current_function_decl),
+     current_function_decl);
   tree cond = CONTRACT_CONDITION (contract);
   if (cond == NULL_TREE || cond == error_mark_node)
     return;
@@ -28944,7 +28960,8 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
      essential for __glibcxx_assert's own real-world use across the
      library).  */
   bool never_proven = contract_control_never_proven
-    (CONTRACT_CONTROL_OBJECT (stmt), contract_side_of (stmt, current_function_decl));
+    (CONTRACT_CONTROL_OBJECT (stmt), contract_side_of (stmt, current_function_decl),
+     current_function_decl);
   tree cond = CONTRACT_CONDITION (stmt);
   if (cond == NULL_TREE || cond == error_mark_node)
     return;
@@ -33500,7 +33517,8 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
      the full rationale.  */
   bool never_proven = contract_control_never_proven (
 	CONTRACT_CONTROL_OBJECT (contract),
-	contract_side_of (contract, current_function_decl));
+	contract_side_of (contract, current_function_decl),
+	current_function_decl);
   tree cond = CONTRACT_CONDITION (contract);
   if (cond == NULL_TREE || cond == error_mark_node)
     return;
@@ -38910,7 +38928,8 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
   contract_check_side side
     = contract_side_of (contract, current_function_decl);
 
-  tree comment = contract_control_omits_comment (ctrl, side)
+  tree comment = contract_control_omits_comment (ctrl, side,
+						current_function_decl)
     ? NULL_TREE : CONTRACT_COMMENT (contract);
   if (!comment)
     /* Empty, not null: matches the "static empty string, never a null
@@ -38943,7 +38962,8 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
   tree ctor = build_constructor_va
     (ctx_type, 7,
      f0, comment,
-     f1, (contract_control_omits_source_location (ctrl, side)
+     f1, (contract_control_omits_source_location (ctrl, side,
+						  current_function_decl)
 	  ? build_constructor (TREE_TYPE (f1), NULL)
 	  : build_real_source_location_value
 	      (loc, TREE_TYPE (f1),
@@ -39197,7 +39217,7 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
   gcc_checking_assert (ctrl);
   contract_check_side side = contract_side_of (contract, fndecl);
 
-  if (contract_control_is_ignored (ctrl, side, quiet))
+  if (contract_control_is_ignored (ctrl, side, fndecl, quiet))
     return void_node;
 
   tree op = contract_control_operator (ctrl);
@@ -39230,7 +39250,7 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
      build_predicate_constexpr_thunk on why this thunk must never be
      scheduled for real code generation.  */
 
-  tree comment = contract_control_omits_comment (ctrl, side, quiet)
+  tree comment = contract_control_omits_comment (ctrl, side, fndecl, quiet)
     ? NULL_TREE : CONTRACT_COMMENT (contract);
   if (!comment)
     /* Empty, not null: matches the "static empty string, never a null
@@ -39260,7 +39280,7 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
   tree ctor = build_constructor_va
     (ctx_type, 7,
      f0, comment,
-     f1, (contract_control_omits_source_location (ctrl, side, quiet)
+     f1, (contract_control_omits_source_location (ctrl, side, fndecl, quiet)
 	  ? build_constructor (TREE_TYPE (f1), NULL)
 	  : build_real_source_location_value
 	      (loc, TREE_TYPE (f1),
@@ -39640,8 +39660,8 @@ build_contract_check (tree contract)
      assertion emits no runtime check; if the control object's type is also
      assumable the predicate is handed to the optimizer as an assumption
      (evaluated by no one at runtime) instead.  */
-  bool ignored = contract_control_is_ignored (ctrl, side);
-  bool assumable = ignored && contract_control_assumable (ctrl, side);
+  bool ignored = contract_control_is_ignored (ctrl, side, current_function_decl);
+  bool assumable = ignored && contract_control_assumable (ctrl, side, current_function_decl);
 
   /* A named control object must provide operator() unconditionally, even
      when ignored/assumable -- so whether it's required never depends on
@@ -39665,8 +39685,8 @@ build_contract_check (tree contract)
 	 on.  contract_runs_on_side deterministically routes a
 	 (misconfigured) contract with both set to ccs_definition only, so
 	 this fires exactly once for it, here.  */
-      if (contract_control_forces_client_side (ctrl, side)
-	  && contract_control_forces_definition_side (ctrl, side))
+      if (contract_control_forces_client_side (ctrl, side, current_function_decl)
+	  && contract_control_forces_definition_side (ctrl, side, current_function_decl))
 	{
 	  error_at (EXPR_LOCATION (contract),
 		    "control object of type %qT has both "
@@ -39697,7 +39717,7 @@ build_contract_check (tree contract)
      processing as every other contract.  */
   bool symbolic_runtime = false;
   bool symbolic_mark = false;
-  if (ctrl && contract_control_symbolic_like (ctrl, side))
+  if (ctrl && contract_control_symbolic_like (ctrl, side, current_function_decl))
     {
       /* Still nothing at runtime, but the GIMPLE engine needs to know
 	 where the contract is, and what it is about: a marker
@@ -39757,7 +39777,7 @@ build_contract_check (tree contract)
      nothing at run time, like a symbolic one, but the GIMPLE engine's
      marker, for the facts it establishes.  */
   if (!symbolic_mark && ctrl
-      && contract_control_conveyor_like (ctrl, side, /*quiet=*/true)
+      && contract_control_conveyor_like (ctrl, side, current_function_decl, /*quiet=*/true)
       && contract_condition_proven_true_p (condition))
     {
       if (!flag_contract_conveyor_proofs_gimple)

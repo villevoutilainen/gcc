@@ -34769,7 +34769,7 @@ cp_parser_late_contract_condition (cp_parser *parser, tree fn, tree contract)
      exactly as for early-parsed contracts.  */
   bool constify_p = flag_contract_control_objects
     ? contract_control_constifies (CONTRACT_CONTROL_OBJECT (contract),
-				    contract_side_of (contract, fn))
+				    contract_side_of (contract, fn), fn)
     : true;
   auto constify_ovr = make_temp_override (contract_condition_constify_p,
 					  constify_p);
@@ -34778,7 +34778,7 @@ cp_parser_late_contract_condition (cp_parser *parser, tree fn, tree contract)
 
   bool conveyor_p = flag_contract_control_objects
     && contract_control_conveyor_like (CONTRACT_CONTROL_OBJECT (contract),
-					contract_side_of (contract, fn));
+					contract_side_of (contract, fn), fn);
   auto conveyor_ovr = make_temp_override (contract_condition_conveyor_p,
 					  conveyor_p);
 
@@ -34971,13 +34971,13 @@ cp_parser_late_object_contracts (cp_parser *parser, tree decl)
 
       bool constify_p = flag_contract_control_objects
 	? contract_control_constifies (CONTRACT_CONTROL_OBJECT (contract),
-					side)
+					side, decl)
 	: true;
       auto constify_ovr = make_temp_override (contract_condition_constify_p,
 					      constify_p);
       bool conveyor_p = flag_contract_control_objects
 	&& contract_control_conveyor_like (CONTRACT_CONTROL_OBJECT (contract),
-					    side);
+					    side, decl);
       auto conveyor_ovr = make_temp_override (contract_condition_conveyor_p,
 					      conveyor_p);
 
@@ -35224,7 +35224,8 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
      applies.  When constifying, treat the current class object as const in
      the condition too.  */
   bool constify_p = flag_contract_control_objects
-    ? contract_control_constifies (control_object, ccs_not_applicable)
+    ? contract_control_constifies (control_object, ccs_not_applicable,
+				    current_function_decl)
     : true;
   auto constify_ovr = make_temp_override (contract_condition_constify_p,
 					  constify_p);
@@ -35233,7 +35234,8 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
     current_class_ref = view_as_const (current_class_ref);
 
   bool conveyor_p = flag_contract_control_objects
-    && contract_control_conveyor_like (control_object, ccs_not_applicable);
+    && contract_control_conveyor_like (control_object, ccs_not_applicable,
+					current_function_decl);
   auto conveyor_ovr = make_temp_override (contract_condition_conveyor_p,
 					  conveyor_p);
 
@@ -35602,7 +35604,10 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
 	 applies.  When constifying, treat the current class object as const
 	 in the condition.  */
       bool constify_p = flag_contract_control_objects
-	? contract_control_constifies (control_object, ccs_definition)
+	/* No declaration exists yet: an in-class member's contract is
+	   parsed late instead, so this is never a virtual function's.  */
+	? contract_control_constifies (control_object, ccs_definition,
+				       NULL_TREE)
 	: true;
       auto constify_ovr = make_temp_override (contract_condition_constify_p,
 					      constify_p);
@@ -35611,7 +35616,8 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
 	current_class_ref = view_as_const (current_class_ref);
 
       bool conveyor_p = flag_contract_control_objects
-	&& contract_control_conveyor_like (control_object, ccs_definition);
+	&& contract_control_conveyor_like (control_object, ccs_definition,
+					   NULL_TREE);
       auto conveyor_ovr = make_temp_override (contract_condition_conveyor_p,
 					      conveyor_p);
 
