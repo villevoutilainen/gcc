@@ -1050,6 +1050,9 @@ check_conveyor_function_body_r (tree *tp, int *, void *)
     case CALL_EXPR:
       {
 	tree fn = cp_get_callee_fndecl_nofold (t);
+	/* A lambda's body is checked as part of this function.  */
+	if (fn && LAMBDA_FUNCTION_P (fn))
+	  conveyor_check_unsequenced_in_lambdas (t);
 	if (fn && DECL_NAME (fn)
 	    && id_equal (DECL_NAME (fn), "unreachable")
 	    && decl_in_std_namespace_p (fn))
@@ -1062,6 +1065,15 @@ check_conveyor_function_body_r (tree *tp, int *, void *)
 				      "or predicate");
 	  }
       }
+      break;
+
+    /* Every full expression with a side effect, which an unsequenced
+       conflict needs (P4445 BUG-12).  */
+    case CLEANUP_POINT_EXPR:
+      conveyor_check_unsequenced (TREE_OPERAND (t, 0));
+      break;
+    case LAMBDA_EXPR:
+      conveyor_check_unsequenced_in_lambdas (t);
       break;
 
     /* Explicit-initialization-of-locals is checked at the point of

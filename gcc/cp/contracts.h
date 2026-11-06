@@ -1398,6 +1398,8 @@ extern void conveyor_finish_nsdmi_probe (tree, const conveyor_spliced_probe &);
 extern bool conveyor_nsdmi_violates_p (tree);
 extern void conveyor_note_deduced_defaulted (tree);
 extern void conveyor_check_nsdmi_use (tree);
+extern void conveyor_check_unsequenced (tree);
+extern void conveyor_check_unsequenced_in_lambdas (tree);
 extern void conveyor_note_default_arg_probe (tree,
 					     const conveyor_spliced_probe &);
 extern void conveyor_check_default_arg_use (tree, tree, int);

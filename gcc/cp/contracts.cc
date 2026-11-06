@@ -898,6 +898,13 @@ finish_contract_condition (cp_expr condition)
   if (type_dependent_expression_p (condition))
     return condition;
 
+  /* A conveyor predicate's: unsequenced accesses (P4445 BUG-12).  */
+  if (conveyor_restrictions_active_p ())
+    {
+      conveyor_check_unsequenced (condition);
+      conveyor_check_unsequenced_in_lambdas (condition);
+    }
+
   return condition_conversion (condition);
 }
 
@@ -1327,6 +1334,461 @@ conveyor_check_nsdmi_use (tree field)
 				   "which violates the %<conveyor%> rules, "
 				   "not permitted in a conveyor function or "
 				   "predicate"), field, NULL_TREE, field);
+}
+
+/* D4324: unsequenced accesses in a conveyor function or predicate
+   (P4445 BUG-12).  An access is an lvalue read or written (WRITE), and
+   WHERE is the expression that writes it.  */
+
+struct cus_access
+{
+  tree lval;
+  bool write;
+  location_t where;
+};
+
+/* The object LVAL designates, as a base and a path of fields and array
+   elements: the base is a variable, or the dereference the object is
+   reached through.  */
+
+static tree
+cus_base (tree lval)
+{
+  while (true)
+    {
+      STRIP_ANY_LOCATION_WRAPPER (lval);
+      if (TREE_CODE (lval) == COMPONENT_REF || TREE_CODE (lval) == ARRAY_REF
+	  || TREE_CODE (lval) == BIT_FIELD_REF
+	  || TREE_CODE (lval) == REALPART_EXPR
+	  || TREE_CODE (lval) == IMAGPART_EXPR
+	  || TREE_CODE (lval) == VIEW_CONVERT_EXPR
+	  || CONVERT_EXPR_P (lval) || TREE_CODE (lval) == NON_LVALUE_EXPR)
+	lval = TREE_OPERAND (lval, 0);
+      else if (TREE_CODE (lval) == INDIRECT_REF)
+	{
+	  /* '*&x' is x.  */
+	  tree op = TREE_OPERAND (lval, 0);
+	  STRIP_NOPS (op);
+	  while (TREE_CODE (op) == SAVE_EXPR)
+	    {
+	      op = TREE_OPERAND (op, 0);
+	      STRIP_NOPS (op);
+	    }
+	  if (TREE_CODE (op) != ADDR_EXPR)
+	    return lval;
+	  lval = TREE_OPERAND (op, 0);
+	}
+      else
+	return lval;
+    }
+}
+
+/* Whether BASE (cus_base's) is a variable, rather than an object reached
+   through a pointer or reference.  */
+
+static bool
+cus_decl_base_p (tree base)
+{
+  return ((VAR_P (base) || TREE_CODE (base) == PARM_DECL
+	   || TREE_CODE (base) == RESULT_DECL)
+	  && !TYPE_REF_P (TREE_TYPE (base)));
+}
+
+/* Whether the paths from the same base to X and Y can overlap: not if
+   they name different fields of a structure, or different constant
+   elements of an array, at the same step.  */
+
+static bool
+cus_paths_overlap_p (tree x, tree y)
+{
+  auto_vec<tree, 8> px, py;
+  for (tree t = x; t; )
+    {
+      STRIP_ANY_LOCATION_WRAPPER (t);
+      if (TREE_CODE (t) == COMPONENT_REF || TREE_CODE (t) == ARRAY_REF)
+	{
+	  px.safe_push (t);
+	  t = TREE_OPERAND (t, 0);
+	}
+      else
+	break;
+    }
+  for (tree t = y; t; )
+    {
+      STRIP_ANY_LOCATION_WRAPPER (t);
+      if (TREE_CODE (t) == COMPONENT_REF || TREE_CODE (t) == ARRAY_REF)
+	{
+	  py.safe_push (t);
+	  t = TREE_OPERAND (t, 0);
+	}
+      else
+	break;
+    }
+  /* Compare from the base outwards.  */
+  unsigned i = px.length (), j = py.length ();
+  while (i > 0 && j > 0)
+    {
+      tree a = px[--i], b = py[--j];
+      if (TREE_CODE (a) != TREE_CODE (b))
+	return true;
+      if (TREE_CODE (a) == COMPONENT_REF)
+	{
+	  tree fa = TREE_OPERAND (a, 1), fb = TREE_OPERAND (b, 1);
+	  if (fa != fb)
+	    return TREE_CODE (DECL_CONTEXT (fa)) == UNION_TYPE
+		   || DECL_CONTEXT (fa) != DECL_CONTEXT (fb);
+	}
+      else
+	{
+	  tree ia = maybe_constant_value (TREE_OPERAND (a, 1));
+	  tree ib = maybe_constant_value (TREE_OPERAND (b, 1));
+	  if (TREE_CODE (ia) == INTEGER_CST && TREE_CODE (ib) == INTEGER_CST
+	      && !tree_int_cst_equal (ia, ib))
+	    return false;
+	}
+    }
+  return true;
+}
+
+/* Whether X and Y, lvalues, may designate the same object (or
+   overlapping ones); *CERTAIN is set if they certainly do.  */
+
+static bool
+cus_may_alias_p (tree x, tree y, bool *certain)
+{
+  *certain = false;
+  tree bx = cus_base (x), by = cus_base (y);
+  bool dx = cus_decl_base_p (bx), dy = cus_decl_base_p (by);
+  if (dx && dy)
+    {
+      if (bx != by || !cus_paths_overlap_p (x, y))
+	return false;
+      *certain = true;
+      return true;
+    }
+  /* A variable is reached through a pointer or reference only if its
+     address can be had.  */
+  if (dx && !is_global_var (bx) && !TREE_ADDRESSABLE (bx))
+    return false;
+  if (dy && !is_global_var (by) && !TREE_ADDRESSABLE (by))
+    return false;
+  if (!dx && !dy && TREE_CODE (bx) == INDIRECT_REF
+      && TREE_CODE (by) == INDIRECT_REF
+      && cp_tree_equal (TREE_OPERAND (bx, 0), TREE_OPERAND (by, 0)))
+    {
+      if (!cus_paths_overlap_p (x, y))
+	return false;
+      *certain = true;
+      return true;
+    }
+  tree tx = TREE_TYPE (x), ty = TREE_TYPE (y);
+  if (!tx || !ty || !COMPLETE_TYPE_P (tx) || !COMPLETE_TYPE_P (ty))
+    return true;
+  return alias_sets_conflict_p (get_alias_set (tx), get_alias_set (ty));
+}
+
+/* The state of one conveyor_check_unsequenced walk.  */
+
+struct cus_state
+{
+  hash_set<tree> saves;
+  bool reported = false;
+};
+
+static void cus_collect (tree, vec<cus_access> &, cus_state &);
+
+/* Report a conflict between A and B, unsequenced, once per full
+   expression.  */
+
+static void
+cus_check_pair (const cus_access &a, const cus_access &b, cus_state &st)
+{
+  if (st.reported || !(a.write || b.write))
+    return;
+  bool certain;
+  if (!cus_may_alias_p (a.lval, b.lval, &certain))
+    return;
+  st.reported = true;
+  const cus_access &w = a.write ? a : b;
+  const cus_access &o = a.write ? b : a;
+  if (conveyor_auto_probing_p ())
+    {
+      note_conveyor_auto_violation ();
+      return;
+    }
+  if (certain)
+    conveyor_rule_error_at (w.where, "%qE is modified unsequenced with "
+			    "another access to it in a conveyor function "
+			    "or predicate", w.lval);
+  else
+    conveyor_rule_error_at (w.where, "%qE is modified unsequenced with an "
+			    "access to %qE, which may be the same object, in "
+			    "a conveyor function or predicate",
+			    w.lval, o.lval);
+}
+
+/* Append the accesses of OPS, each of which is unsequenced with the
+   others, to OUT, checking each pair from different operands.  */
+
+static void
+cus_unsequenced (auto_vec<tree, 4> &ops, vec<cus_access> &out,
+		 cus_state &st)
+{
+  auto_vec<vec<cus_access> > lists;
+  lists.safe_grow_cleared (ops.length ());
+  for (unsigned i = 0; i < ops.length (); ++i)
+    cus_collect (ops[i], lists[i], st);
+  for (unsigned i = 0; i < lists.length (); ++i)
+    for (unsigned j = i + 1; j < lists.length (); ++j)
+      for (const cus_access &a : lists[i])
+	for (const cus_access &b : lists[j])
+	  cus_check_pair (a, b, st);
+  for (auto &l : lists)
+    {
+      for (const cus_access &a : l)
+	out.safe_push (a);
+      l.release ();
+    }
+}
+
+/* Append to OUT the accesses evaluating the operands of lvalue X makes,
+   but not an access to X itself.  */
+
+static void
+cus_collect_lvalue (tree x, vec<cus_access> &out, cus_state &st)
+{
+  STRIP_ANY_LOCATION_WRAPPER (x);
+  switch (TREE_CODE (x))
+    {
+    case VAR_DECL:
+    case PARM_DECL:
+    case RESULT_DECL:
+      return;
+    case INDIRECT_REF:
+      cus_collect (TREE_OPERAND (x, 0), out, st);
+      return;
+    case COMPONENT_REF:
+    case REALPART_EXPR:
+    case IMAGPART_EXPR:
+    case VIEW_CONVERT_EXPR:
+    case NOP_EXPR:
+    case CONVERT_EXPR:
+    case NON_LVALUE_EXPR:
+      cus_collect_lvalue (TREE_OPERAND (x, 0), out, st);
+      return;
+    case ARRAY_REF:
+      /* E1[E2]: E1 is sequenced before E2 (C++17).  */
+      cus_collect_lvalue (TREE_OPERAND (x, 0), out, st);
+      cus_collect (TREE_OPERAND (x, 1), out, st);
+      return;
+    default:
+      cus_collect (x, out, st);
+      return;
+    }
+}
+
+/* Append to OUT the accesses evaluating X makes that are unsequenced with
+   whatever X itself is unsequenced with, checking the pairs within X
+   that are unsequenced with each other.  */
+
+static void
+cus_collect (tree x, vec<cus_access> &out, cus_state &st)
+{
+  if (!x || st.reported || error_operand_p (x))
+    return;
+  STRIP_ANY_LOCATION_WRAPPER (x);
+  location_t loc = cp_expr_loc_or_input_loc (x);
+  enum tree_code code = TREE_CODE (x);
+  switch (code)
+    {
+    case VAR_DECL:
+    case PARM_DECL:
+    case RESULT_DECL:
+      if (!TYPE_REF_P (TREE_TYPE (x)))
+	out.safe_push ({ x, false, loc });
+      return;
+
+    case INDIRECT_REF:
+      cus_collect (TREE_OPERAND (x, 0), out, st);
+      out.safe_push ({ x, false, loc });
+      return;
+
+    case COMPONENT_REF:
+    case ARRAY_REF:
+      cus_collect_lvalue (x, out, st);
+      out.safe_push ({ x, false, loc });
+      return;
+
+    case ADDR_EXPR:
+      cus_collect_lvalue (TREE_OPERAND (x, 0), out, st);
+      return;
+
+    case MODIFY_EXPR:
+    case INIT_EXPR:
+      /* The right operand is sequenced before the left (C++17), and the
+	 store after both.  */
+      cus_collect (TREE_OPERAND (x, 1), out, st);
+      cus_collect_lvalue (TREE_OPERAND (x, 0), out, st);
+      out.safe_push ({ TREE_OPERAND (x, 0), true, loc });
+      return;
+
+    case PREINCREMENT_EXPR:
+    case PREDECREMENT_EXPR:
+    case POSTINCREMENT_EXPR:
+    case POSTDECREMENT_EXPR:
+      cus_collect_lvalue (TREE_OPERAND (x, 0), out, st);
+      out.safe_push ({ TREE_OPERAND (x, 0), true, loc });
+      return;
+
+    /* Sequenced: the left operand first.  */
+    case COMPOUND_EXPR:
+    case TRUTH_ANDIF_EXPR:
+    case TRUTH_ORIF_EXPR:
+    case LSHIFT_EXPR:
+    case RSHIFT_EXPR:
+      cus_collect (TREE_OPERAND (x, 0), out, st);
+      cus_collect (TREE_OPERAND (x, 1), out, st);
+      return;
+
+    case COND_EXPR:
+      cus_collect (TREE_OPERAND (x, 0), out, st);
+      cus_collect (TREE_OPERAND (x, 1), out, st);
+      cus_collect (TREE_OPERAND (x, 2), out, st);
+      return;
+
+    /* The callee is sequenced before the arguments, which are
+       indeterminately sequenced with each other (C++17); what the call
+       does is indeterminately sequenced with the caller's evaluations,
+       and checked in the callee, a conveyor function.  */
+    case CALL_EXPR:
+      cus_collect (CALL_EXPR_FN (x), out, st);
+      for (int i = 0; i < call_expr_nargs (x); ++i)
+	cus_collect (CALL_EXPR_ARG (x, i), out, st);
+      return;
+    case AGGR_INIT_EXPR:
+      for (int i = 0; i < aggr_init_expr_nargs (x); ++i)
+	cus_collect (AGGR_INIT_EXPR_ARG (x, i), out, st);
+      return;
+
+    /* A braced initializer's elements are sequenced in order.  */
+    case CONSTRUCTOR:
+      {
+	unsigned i;
+	tree v;
+	FOR_EACH_CONSTRUCTOR_VALUE (CONSTRUCTOR_ELTS (x), i, v)
+	  cus_collect (v, out, st);
+	return;
+      }
+
+    case TARGET_EXPR:
+      cus_collect (TARGET_EXPR_INITIAL (x), out, st);
+      return;
+
+    case SAVE_EXPR:
+      if (!st.saves.add (x))
+	cus_collect (TREE_OPERAND (x, 0), out, st);
+      return;
+
+    case CLEANUP_POINT_EXPR:
+    case EXPR_STMT:
+      cus_collect (TREE_OPERAND (x, 0), out, st);
+      return;
+
+    /* Not evaluated, or evaluated on their own.  */
+    case SIZEOF_EXPR:
+    case ALIGNOF_EXPR:
+    case NOEXCEPT_EXPR:
+    case TYPEID_EXPR:
+    case LAMBDA_EXPR:
+    case BIND_EXPR:
+    case STATEMENT_LIST:
+    case STMT_EXPR:
+      return;
+
+    default:
+      break;
+    }
+
+  if (!IS_EXPR_CODE_CLASS (TREE_CODE_CLASS (code)))
+    return;
+  int n = TREE_OPERAND_LENGTH (x);
+  if (n == 1)
+    {
+      cus_collect (TREE_OPERAND (x, 0), out, st);
+      return;
+    }
+  auto_vec<tree, 4> ops;
+  for (int i = 0; i < n; ++i)
+    if (TREE_OPERAND (x, i))
+      ops.safe_push (TREE_OPERAND (x, i));
+  cus_unsequenced (ops, out, st);
+}
+
+/* D4324: in a conveyor function or predicate, a full expression EXPR
+   mustn't modify an object unsequenced with another access to it --
+   undefined behavior ([intro.execution]) -- nor with an access to what
+   may be the same object: 'a++ + b++' for two references A and B,
+   which a caller may bind to one object (P4445 BUG-12).  Such code is
+   to be written so that it can't happen, as separate statements.  */
+
+void
+conveyor_check_unsequenced (tree expr)
+{
+  if (!expr || error_operand_p (expr) || processing_template_decl)
+    return;
+  cus_state st;
+  auto_vec<cus_access> out;
+  cus_collect (expr, out, st);
+}
+
+/* The state of a conveyor_check_unsequenced_in_lambdas walk: the
+   lambda functions seen, and whether the walk is within one's body.  */
+
+struct cus_lambda_walk
+{
+  hash_set<tree> seen;
+  bool in_body = false;
+};
+
+/* cp_walk_tree callback for conveyor_check_unsequenced_in_lambdas: the
+   full expressions of the body of each lambda called in *TP, nested ones
+   included.  */
+
+static tree
+cus_lambda_bodies_r (tree *tp, int *, void *data)
+{
+  cus_lambda_walk *w = (cus_lambda_walk *) data;
+  tree t = *tp;
+  if (TREE_CODE (t) == CLEANUP_POINT_EXPR && w->in_body)
+    conveyor_check_unsequenced (TREE_OPERAND (t, 0));
+  else if (TREE_CODE (t) == CALL_EXPR || TREE_CODE (t) == LAMBDA_EXPR)
+    {
+      tree fn = (TREE_CODE (t) == LAMBDA_EXPR ? lambda_function (t)
+		 : cp_get_callee_fndecl_nofold (t));
+      if (fn && TREE_CODE (fn) == FUNCTION_DECL && LAMBDA_FUNCTION_P (fn)
+	  && DECL_SAVED_TREE (fn) && !w->seen.add (fn))
+	{
+	  bool outer = w->in_body;
+	  w->in_body = true;
+	  cp_walk_tree (&DECL_SAVED_TREE (fn), cus_lambda_bodies_r, data,
+			NULL);
+	  w->in_body = outer;
+	}
+    }
+  return NULL_TREE;
+}
+
+/* D4324: conveyor_check_unsequenced over the full expressions of the
+   bodies of the lambdas called in EXPR, part of a conveyor function or
+   predicate, which they are checked as part of.  */
+
+void
+conveyor_check_unsequenced_in_lambdas (tree expr)
+{
+  if (!expr || error_operand_p (expr) || processing_template_decl)
+    return;
+  cus_lambda_walk w;
+  cp_walk_tree (&expr, cus_lambda_bodies_r, &w, NULL);
 }
 
 /* The default argument ARG was built under PROBE: record whether it
