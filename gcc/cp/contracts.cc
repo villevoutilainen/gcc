@@ -38428,22 +38428,6 @@ build_base_contract_expr (tree base_fn, tree_code kind, tree using_fndecl,
 			   tree contract)
 {
   tree this_parm = DECL_ARGUMENTS (using_fndecl);
-  tree binfo = lookup_base (TREE_TYPE (TREE_TYPE (this_parm)),
-			    DECL_CONTEXT (base_fn), ba_any, NULL,
-			    tf_warning_or_error);
-  gcc_assert (binfo && binfo != error_mark_node);
-  tree adjusted_this = save_expr (build_base_path (PLUS_EXPR, this_parm,
-						    binfo, 1,
-						    tf_warning_or_error));
-
-  /* The override's result, as BASE_FN's postconditions see it; computed
-     once, however many of them use it.  */
-  tree base_result = NULL_TREE;
-  if (POSTCONDITION_P (contract))
-    base_result = convert_result_for_base_contract
-		    (POSTCONDITION_IDENTIFIER (contract), base_fn);
-  if (base_result && base_result != POSTCONDITION_IDENTIFIER (contract))
-    base_result = save_expr (base_result);
 
   tree result = NULL_TREE;
   for (tree base_contract : fn_contracts (base_fn))
@@ -38451,14 +38435,35 @@ build_base_contract_expr (tree base_fn, tree_code kind, tree using_fndecl,
       if (TREE_CODE (base_contract) != kind)
 	continue;
 
-      tree core_fn = get_or_build_predicate_core_function (base_contract,
-							     base_fn);
+      /* A contract BASE_FN inherited rather than wrote is, until
+	 genericization, a placeholder 'true' standing for its own base's
+	 contract (contract_inherited_pending_p): follow it, through any
+	 chain of such, to the contract actually written, and check that
+	 against its own function (P4445 BUG-04).  */
+      tree fn = base_fn, c = base_contract;
+      tree pending_fn, pending_contract;
+      while (contract_inherited_pending_p (c, &pending_fn, &pending_contract))
+	{
+	  fn = pending_fn;
+	  c = pending_contract;
+	}
+
+      tree binfo = lookup_base (TREE_TYPE (TREE_TYPE (this_parm)),
+				DECL_CONTEXT (fn), ba_any, NULL,
+				tf_warning_or_error);
+      gcc_assert (binfo && binfo != error_mark_node);
+      tree adjusted_this = build_base_path (PLUS_EXPR, this_parm, binfo, 1,
+					    tf_warning_or_error);
+
+      tree core_fn = get_or_build_predicate_core_function (c, fn);
       releasing_vec args;
       vec_safe_push (args, adjusted_this);
       for (tree p = DECL_CHAIN (this_parm); p; p = DECL_CHAIN (p))
 	vec_safe_push (args, p);
+      /* The override's result, as FN's postconditions see it.  */
       if (POSTCONDITION_P (contract))
-	vec_safe_push (args, base_result);
+	vec_safe_push (args, convert_result_for_base_contract
+			       (POSTCONDITION_IDENTIFIER (contract), fn));
 
       tree call = build_call_a (core_fn, args->length (), args->address ());
       result = result
