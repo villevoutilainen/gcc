@@ -10371,6 +10371,85 @@ immediate_invocation_p (tree fn)
 	  && !in_immediate_context ());
 }
 
+/* D4324: whether built-in FN may be called from a conveyor function or
+   predicate (P4445 BUG-09).  Only built-ins with no side effects and no
+   undefined behavior, or none that the analysis doesn't check: GCC's
+   attributes say what a built-in writes, not when it is undefined, so a
+   built-in is allowed by name.  Every other one is rejected, as any
+   other function that isn't conveyor is.  */
+
+static bool
+conveyor_builtin_allowed_p (tree fn)
+{
+  if (fndecl_built_in_p (fn, BUILT_IN_FRONTEND))
+    switch (DECL_FE_FUNCTION_CODE (fn))
+      {
+      case CP_BUILT_IN_IS_CONSTANT_EVALUATED:
+      case CP_BUILT_IN_INTEGER_PACK:
+      case CP_BUILT_IN_IS_CORRESPONDING_MEMBER:
+      case CP_BUILT_IN_IS_POINTER_INTERCONVERTIBLE_WITH_CLASS:
+      case CP_BUILT_IN_SOURCE_LOCATION:
+      case CP_BUILT_IN_IS_STRING_LITERAL:
+      case CP_BUILT_IN_IS_WITHIN_LIFETIME:
+	return true;
+      default:
+	return false;
+      }
+  if (!fndecl_built_in_p (fn, BUILT_IN_NORMAL))
+    return false;
+  switch (DECL_FUNCTION_CODE (fn))
+    {
+    /* Control: reaching one is the program's own claim.  */
+    case BUILT_IN_UNREACHABLE:
+    case BUILT_IN_UNREACHABLE_TRAP:
+    case BUILT_IN_TRAP:
+    case BUILT_IN_EXPECT:
+    case BUILT_IN_EXPECT_WITH_PROBABILITY:
+    case BUILT_IN_CONSTANT_P:
+    case BUILT_IN_OBSERVABLE_CHKPT:
+    /* Defined for every argument.  */
+    case BUILT_IN_SIGNBIT:
+    case BUILT_IN_FPCLASSIFY:
+    case BUILT_IN_ISFINITE:
+    case BUILT_IN_ISINF_SIGN:
+    case BUILT_IN_ISINF:
+    case BUILT_IN_ISNAN:
+    case BUILT_IN_ISNORMAL:
+    case BUILT_IN_ISGREATER:
+    case BUILT_IN_ISGREATEREQUAL:
+    case BUILT_IN_ISLESS:
+    case BUILT_IN_ISLESSEQUAL:
+    case BUILT_IN_ISLESSGREATER:
+    case BUILT_IN_ISUNORDERED:
+    case BUILT_IN_ISEQSIG:
+    case BUILT_IN_ISSIGNALING:
+    CASE_FLT_FN (BUILT_IN_FABS):
+    CASE_FLT_FN (BUILT_IN_COPYSIGN):
+    CASE_INT_FN (BUILT_IN_POPCOUNT):
+    CASE_INT_FN (BUILT_IN_PARITY):
+    CASE_INT_FN (BUILT_IN_FFS):
+    CASE_INT_FN (BUILT_IN_CLRSB):
+    case BUILT_IN_POPCOUNTG:
+    case BUILT_IN_PARITYG:
+    case BUILT_IN_FFSG:
+    case BUILT_IN_CLRSBG:
+    case BUILT_IN_BSWAP16:
+    case BUILT_IN_BSWAP32:
+    case BUILT_IN_BSWAP64:
+    case BUILT_IN_BSWAP128:
+    /* Overflow-checked arithmetic: never overflows itself.  */
+    case BUILT_IN_ADD_OVERFLOW:
+    case BUILT_IN_SUB_OVERFLOW:
+    case BUILT_IN_MUL_OVERFLOW:
+    case BUILT_IN_ADD_OVERFLOW_P:
+    case BUILT_IN_SUB_OVERFLOW_P:
+    case BUILT_IN_MUL_OVERFLOW_P:
+      return true;
+    default:
+      return false;
+    }
+}
+
 /* Subroutine of the various build_*_call functions.  Overload resolution
    has chosen a winning candidate CAND; build up a CALL_EXPR accordingly.
    ARGS is a TREE_LIST of the unconverted arguments to the call.  FLAGS is a
@@ -11185,7 +11264,7 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
 	 (pt.cc).  A no-op for anything else.  */
       maybe_instantiate_conveyor (fn);
 
-      if (!fndecl_built_in_p (fn) && !DECL_DECLARED_CONVEYOR_P (fn)
+      if (!conveyor_builtin_allowed_p (fn) && !DECL_DECLARED_CONVEYOR_P (fn)
 	       && !is_object_address_fndecl_p (fn)
 	       && !is_std_unreachable_fndecl_p (fn)
 	       && !(nargs && is_iile_operator_call_p (fn, argarray[0])))
