@@ -9,7 +9,7 @@
 
 template <bool B>
 int
-f (int x) conveyor // { dg-error "conveyor function .* with non-.void. return type must contain a .return. statement" }
+f (int x) conveyor // { dg-error "conveyor function .* with non-.void. return type may reach its end without a .return. statement" }
 {
   if constexpr (B)
     return x;

@@ -19,6 +19,6 @@ int partial (int x) conveyor
   else
     return 1;
 }
-int missing (int x) conveyor { if (x) return 1; }	// { dg-error "must contain a .return. statement" }
+int missing (int x) conveyor { if (x) return 1; }	// { dg-error "may reach its end without a .return. statement" }
 // { dg-warning "control reaches end of non-void function" "" { target *-*-* } .-1 }
 int fine (int x) conveyor { return x < 0 ? 0 : x; }

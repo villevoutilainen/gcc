@@ -1129,9 +1129,17 @@ check_conveyor_function_body (tree fun)
       if (conveyor_auto_probing_p ())
 	note_conveyor_auto_violation ();
       else
-	conveyor_rule_error_at (DECL_SOURCE_LOCATION (fun), "conveyor "
-				"function %qD with non-%<void%> return type "
-				"must contain a %<return%> statement", fun);
+	{
+	  /* Every path must end in a return: conditions that together
+	     cover every case aren't taken into account (P4445 BUG-26).  */
+	  if (conveyor_rule_error_at (DECL_SOURCE_LOCATION (fun), "conveyor "
+				      "function %qD with non-%<void%> return "
+				      "type may reach its end without a "
+				      "%<return%> statement", fun))
+	    inform (DECL_SOURCE_LOCATION (fun), "every path must end in a "
+		    "%<return%>, even one that only the conditions before it "
+		    "rule out");
+	}
     }
 }
 

@@ -3,7 +3,7 @@
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
-int f (int x) conveyor // { dg-error "conveyor function .* with non-.void. return type must contain a .return. statement" }
+int f (int x) conveyor // { dg-error "conveyor function .* with non-.void. return type may reach its end without a .return. statement" }
 {
   int y = x;
   (void) y;
