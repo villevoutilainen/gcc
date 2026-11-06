@@ -11,8 +11,7 @@
 // Termination is observed through a terminate handler that exits with a
 // controlled, zero exit code instead of aborting: reaching it at all
 // (rather than the exception escaping to main, or the process returning
-// normally) is exactly what's being verified.  __d4324_log_violation is
-// defined locally so that this test doesn't need libstdc++exp linked.
+// normally) is exactly what's being verified.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
@@ -32,10 +31,6 @@ handle_contract_violation (const sc::contract_violation&)
   handler_called = true;
   throw 42;
 }
-
-namespace std { namespace contracts {
-void __d4324_log_violation (const char*, std::source_location) noexcept {}
-} }
 
 [[noreturn]] void
 on_terminate ()

@@ -16,15 +16,6 @@
 
 #include <contracts>
 
-// This test is compile-only with respect to the runtime contracts support
-// library (libstdc++exp): it never links it. mandatory's operator() calls
-// this library-only entry point in its non-consteval branch (unrelated to
-// this test, but still compiled as part of <contracts>); a trivial local
-// definition sidesteps the resulting link error.
-namespace std { namespace contracts {
-void __d4324_log_violation (const char*, std::source_location) noexcept {}
-} }
-
 namespace sc = std::contracts;
 
 bool handler_called = false;

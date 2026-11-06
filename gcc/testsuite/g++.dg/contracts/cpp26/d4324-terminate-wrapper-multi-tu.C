@@ -14,12 +14,6 @@
 
 #include <contracts>
 
-// See d4324-terminate-wrapper-multi-tu-aux.cc: same inline stand-in,
-// present in both TUs, unrelated to the bug this test targets.
-namespace std { namespace contracts {
-inline void __d4324_log_violation (const char*, std::source_location) noexcept {}
-} }
-
 int g (int x);
 int f (int x) pre (x >= 0) { return x; }
 

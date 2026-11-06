@@ -497,7 +497,6 @@ namespace contracts
 				      info.comment(), info.location());
   }
 
-  void __d4324_log_violation(const char*, std::source_location) noexcept;
 
   // -fcontract-symbolic-runtime-checks (~/gcc-axiom-contracts.md, "the
   // gem"): a symbolic postcondition's runtime establishment, and a
@@ -693,8 +692,10 @@ namespace contracts
     static constexpr bool
     assumable(assertion_static_info) noexcept { return false; }
 
+    // Not noexcept: an exception thrown by the predicate or the violation
+    // handler propagates to the caller.
     constexpr void
-    operator()(const assertion_context& __ctx) const noexcept
+    operator()(const assertion_context& __ctx) const
     {
       if (__ctx.check())
 	return;
@@ -703,7 +704,13 @@ namespace contracts
 	  // Never terminates at runtime, so never a compile-time error either.
 	  constexpr_warning_str ("contract", __ctx.comment());
 	}
-      else { __d4324_log_violation(__ctx.comment(), __ctx.location()); }
+      else
+	{
+	  invoke_violation_handler
+	    ({__ctx.comment(), __ctx.location(), evaluation_semantic::observe,
+	      __ctx.kind()},
+	     detection_mode::predicate_false);
+	}
     }
   };
 
@@ -733,8 +740,10 @@ namespace contracts
     static constexpr bool
     assumable(assertion_static_info) noexcept { return false; }
 
+    // Not noexcept: an exception thrown by the predicate or the violation
+    // handler propagates to the caller.
     constexpr void
-    operator()(const assertion_context& __ctx) const noexcept
+    operator()(const assertion_context& __ctx) const
     {
       if (__ctx.check())
 	return;
@@ -746,7 +755,10 @@ namespace contracts
 	}
       else
 	{
-	  __d4324_log_violation(__ctx.comment(), __ctx.location());
+	  invoke_violation_handler
+	    ({__ctx.comment(), __ctx.location(), evaluation_semantic::enforce,
+	      __ctx.kind()},
+	     detection_mode::predicate_false);
 	  __d4324_terminate_wrapper();
 	}
     }

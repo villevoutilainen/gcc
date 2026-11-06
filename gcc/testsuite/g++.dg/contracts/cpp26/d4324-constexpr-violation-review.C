@@ -12,16 +12,6 @@
 
 #include <contracts>
 
-// This test is compile-only and never links the runtime contracts support
-// library (libstdc++exp), but review_v's operator() calls this library-only
-// entry point in its non-consteval branch; under -pedantic-errors that
-// flags it "used but never defined".  A trivial local definition sidesteps
-// that without affecting anything this test actually checks (the
-// compile-time violation path, not runtime handling).
-namespace std { namespace contracts {
-void __d4324_log_violation (const char*, std::source_location) noexcept {}
-} }
-
 namespace sc = std::contracts;
 
 constexpr int r (int x) pre<sc::review_v>(x >= 0)
