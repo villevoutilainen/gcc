@@ -241,14 +241,23 @@ namespace ranges
       operator<<=(const __max_size_type& __r) noexcept _GLIBCXX_CONVEYOR
       {
 	__glibcxx_assert(__r <= _S_rep_bits);
+	// The field-level facts the shift counts below need, as in
+	// operator/= above.
+	__glibcxx_assert(__r._M_val <= _S_rep_bits);
 	if (__r != 0)
 	  {
-	    _M_msb = (_M_val >> (_S_rep_bits - __r._M_val)) & 1;
+	    __glibcxx_assert(__r._M_val != 0);
+	    const size_t __shift = _S_rep_bits - __r._M_val;
+	    __glibcxx_assert(__shift < _S_rep_bits);
+	    _M_msb = (_M_val >> __shift) & 1;
 
 	    if (__r._M_val == _S_rep_bits) [[unlikely]]
 	      _M_val = 0;
 	    else
-	      _M_val <<= __r._M_val;
+	      {
+		__glibcxx_assert(__r._M_val < _S_rep_bits);
+		_M_val <<= __r._M_val;
+	      }
 	  }
 	return *this;
       }
@@ -257,16 +266,25 @@ namespace ranges
       operator>>=(const __max_size_type& __r) noexcept _GLIBCXX_CONVEYOR
       {
 	__glibcxx_assert(__r <= _S_rep_bits);
+	// The field-level facts the shift counts below need, as in
+	// operator/= above.
+	__glibcxx_assert(__r._M_val <= _S_rep_bits);
 	if (__r != 0)
 	  {
+	    __glibcxx_assert(__r._M_val != 0);
 	    if (__r._M_val == _S_rep_bits) [[unlikely]]
 	      _M_val = 0;
 	    else
-	      _M_val >>= __r._M_val;
+	      {
+		__glibcxx_assert(__r._M_val < _S_rep_bits);
+		_M_val >>= __r._M_val;
+	      }
 
 	    if (_M_msb) [[unlikely]]
 	      {
-		_M_val |= __rep(1) << (_S_rep_bits - __r._M_val);
+		const size_t __shift = _S_rep_bits - __r._M_val;
+		__glibcxx_assert(__shift < _S_rep_bits);
+		_M_val |= __rep(1) << __shift;
 		_M_msb = 0;
 	      }
 	  }

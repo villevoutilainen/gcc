@@ -101,9 +101,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       _GLIBCXX_PRECONDITION_NONZERO_DIVISOR(__y)
     {
       __glibcxx_requires_nonzero_divisor(__y);
+      // Nested, so that each division is provably free of overflow:
+      // the divisor isn't -1, or the dividend isn't the minimum.
       if constexpr (is_signed_v<_Tp>)
-	if (__x == __gnu_cxx::__int_traits<_Tp>::__min && __y == _Tp(-1))
-	  return __gnu_cxx::__int_traits<_Tp>::__max;
+	if (__y == _Tp(-1))
+	  {
+	    if (__x == __gnu_cxx::__int_traits<_Tp>::__min)
+	      return __gnu_cxx::__int_traits<_Tp>::__max;
+	    return __x / __y;
+	  }
       return __x / __y;
     }
 
