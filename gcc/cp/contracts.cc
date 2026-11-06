@@ -9990,6 +9990,7 @@ public:
       n -= it.second;
     n -= m_ended_member_map.elements ();
     n -= m_ended_decl_map.elements ();
+    n -= m_escaped_decl_map.elements ();
     return n;
   }
   void invalidate_all_object_state ()
@@ -10177,6 +10178,12 @@ public:
     if (m_array_object_key)
       for (auto it : *m_array_object_key)
 	add (it.first.first);
+    objects_written_through_memory (objects);
+  }
+  /* object_written_through_memory for each of OBJECTS, with the sweeps
+     of the function's field and array keys done once for all of them.  */
+  void objects_written_through_memory (hash_set<tree> &objects)
+  {
     if (objects.is_empty ())
       return;
     for (tree d : objects)
@@ -11456,6 +11463,7 @@ public:
     r.m_borrowed_map = m_borrowed_map;
     r.m_ended_member_map = m_ended_member_map;
     r.m_ended_decl_map = m_ended_decl_map;
+    r.m_escaped_decl_map = m_escaped_decl_map;
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -11495,6 +11503,7 @@ public:
     m_borrowed_map = other.m_borrowed_map;
     m_ended_member_map = other.m_ended_member_map;
     m_ended_decl_map = other.m_ended_decl_map;
+    m_escaped_decl_map = other.m_escaped_decl_map;
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -11717,6 +11726,10 @@ private:
      a member call on them), until a trust or a constructor run on them:
      their own address isn't an object's any more.  */
   oa_cow_map<tree, bool> m_ended_decl_map;
+  /* The locals whose address has been handed out: given to a call that
+     may write through it, or stored where this function doesn't track
+     it.  Any later call that isn't conveyor may write them.  */
+  oa_cow_map<tree, bool> m_escaped_decl_map;
   /* What is known of KEY and its members holds again: a fact on it was
      established (a trust).  */
   void member_restore (tree key, int depth = 0)
@@ -11733,6 +11746,27 @@ private:
   }
 public:
   void decl_object_end (tree decl) { m_ended_decl_map.put (decl, true); }
+  /* DECL's address has been handed out, if DECL is a local.  */
+  void decl_escape (tree decl)
+  {
+    if (decl && DECL_P (decl)
+	&& DECL_CONTEXT (decl) == current_function_decl
+	&& ((VAR_P (decl) && !TREE_STATIC (decl) && !DECL_EXTERNAL (decl))
+	    || (TREE_CODE (decl) == PARM_DECL
+		&& !TYPE_REF_P (TREE_TYPE (decl)))))
+      m_escaped_decl_map.put (decl, true);
+  }
+  /* A call that isn't conveyor may have written the locals whose address
+     has been handed out (P4445 BUG-17).  */
+  void escaped_locals_written_through_memory ()
+  {
+    if (!m_escaped_decl_map.elements ())
+      return;
+    hash_set<tree> objects;
+    for (auto it : m_escaped_decl_map)
+      objects.add (it.first);
+    objects_written_through_memory (objects);
+  }
   void decl_object_restore (tree decl)
   {
     if (m_ended_decl_map.elements ())
@@ -11801,6 +11835,10 @@ public:
     if (!m_ended_decl_map.same_p (other.m_ended_decl_map))
       for (auto it : other.m_ended_decl_map)
 	m_ended_decl_map.put (it.first, true);
+    /* A local escaped on either branch, likewise.  */
+    if (!m_escaped_decl_map.same_p (other.m_escaped_decl_map))
+      for (auto it : other.m_escaped_decl_map)
+	m_escaped_decl_map.put (it.first, true);
     if (m_borrowed_map.same_p (other.m_borrowed_map))
       return;
     for (auto it : other.m_borrowed_map)
@@ -12084,6 +12122,8 @@ static GTY(()) hash_set<tree> *oa_iile_walked_calls;
    invoked closure's body requires calling the statement walker
    recursively.  */
 static bool oa_resolve_iile_call (tree call, oa_env &env);
+static bool oa_iile_body_writes_capture_p (tree body);
+static tree oa_handed_out_object (tree expr, bool to_ref, oa_env &env);
 
 /* D4324/P2680 item 6: forward-declared -- the actual definitions
    (defined near oa_handle_call_precondition_obligation, item 7's dual,
@@ -25330,6 +25370,18 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 		   && TYPE_READONLY (TREE_TYPE (TREE_TYPE (callee_parm))));
 	      if (!arg_is_const_ref && !arg_is_const_this)
 		env.call_relational_invalidate_receiver (identity);
+	      /* A callee that may write through the route may also keep it,
+		 and a later call write through that (P4445 BUG-17).  Not
+		 counted for a member call's 'this', for now (Ville,
+		 2026-11-06).  */
+	      if (!callee_is_conveyor && !arg_is_const_ref
+		  && !(callee_parm != NULL_TREE
+		       && is_this_parameter (callee_parm)))
+		env.decl_escape (oa_handed_out_object
+				   (call_arg,
+				    callee_parm != NULL_TREE
+				    && TYPE_REF_P (TREE_TYPE (callee_parm)),
+				    env));
 	      /* A call given a route to an object -- a pointer or reference
 		 to it, const or not, its address, or the object a member
 		 call is made on -- may end its lifetime ('delete p', 'delete
@@ -25438,9 +25490,23 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 
   /* A local pointer whose address has been taken may have been handed
      out ('keep (&p)') and so be rewritten by any call that isn't
-     conveyor, though given no route to it here.  */
+     conveyor, though given no route to it here.  So may any other local
+     whose address has been taken: what is known of its value ends too
+     (P4445 BUG-17), as in the GIMPLE engine, where it lives in memory.  */
   if (!callee_is_conveyor)
-    env.escaped_local_pointers_invalidate ();
+    {
+      env.escaped_local_pointers_invalidate ();
+      /* An immediately invoked lambda isn't opaque: its body is walked
+	 with this function's facts (oa_resolve_iile_call), and only one
+	 that may write a capture changes them.  */
+      tree closure_obj;
+      if (!oa_iile_call_p (call, &closure_obj))
+	env.escaped_locals_written_through_memory ();
+      else if (oa_iile_body_writes_capture_p
+		 (DECL_SAVED_TREE (cp_get_callee_fndecl_nofold (call))))
+	/* Its captures by reference don't escape, but it may write them.  */
+	env.addressable_locals_written_through_memory ();
+    }
 
   /* An object of static storage duration any function may reach by
      name: a call that isn't conveyor may end it though given no route
@@ -25454,8 +25520,47 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 		       || id_equal (DECL_NAME (named), "forward")
 		       || id_equal (DECL_NAME (named), "as_const"))))))
     if (vec<tree, va_gc> *statics = oa_function_statics ())
-      for (tree g : *statics)
-	env.decl_object_end (g);
+      {
+	/* ... and may write it: what is known of its value ends too (P4445
+	   BUG-17).  */
+	hash_set<tree> written;
+	for (tree g : *statics)
+	  {
+	    env.decl_object_end (g);
+	    written.add (g);
+	  }
+	env.objects_written_through_memory (written);
+      }
+}
+
+/* The object whose address EXPR hands out, given as a pointer, or bound to
+   a reference when TO_REF: '&x' (or a reference bound to x) hands out x's;
+   a pointer value hands out the object it's known to point to (alias
+   tracking), never its own variable's.  NULL_TREE if none is known.  */
+
+static tree
+oa_handed_out_object (tree expr, bool to_ref, oa_env &env)
+{
+  tree a = STRIP_ANY_LOCATION_WRAPPER (expr);
+  while (CONVERT_EXPR_P (a) || TREE_CODE (a) == NON_LVALUE_EXPR
+	 || TREE_CODE (a) == VIEW_CONVERT_EXPR)
+    a = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
+  if (TREE_CODE (a) == ADDR_EXPR)
+    {
+      tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
+      if (REFERENCE_REF_P (op))
+	op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
+      return DECL_P (op) ? env.alias_find (op) : NULL_TREE;
+    }
+  if (REFERENCE_REF_P (a))
+    a = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (a, 0));
+  if (!DECL_P (a))
+    return NULL_TREE;
+  if (to_ref && !POINTER_TYPE_P (TREE_TYPE (a)))
+    return a;
+  /* A pointer's value: only a known target.  */
+  tree target = env.alias_find (a);
+  return target != a ? target : NULL_TREE;
 }
 
 /* -fcontract-symbolic-proofs: static-prover analogue of Mechanism B's
@@ -32780,6 +32885,13 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	  }
 	if (VAR_P (lhs) && TYPE_REF_P (TREE_TYPE (lhs)))
 	  oa_note_reference_binding (lhs, rhs);
+	/* A local's address stored anywhere but in a local variable, which
+	   this function tracks (alias_set below), is handed out: a later
+	   call may write the local through it (P4445 BUG-17).  */
+	if (POINTER_TYPE_P (TREE_TYPE (lhs))
+	    && !((VAR_P (lhs) && !TREE_STATIC (lhs) && !DECL_EXTERNAL (lhs))
+		 || TREE_CODE (lhs) == PARM_DECL))
+	  env.decl_escape (oa_handed_out_object (rhs, false, env));
 	if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 	    && POINTER_TYPE_P (TREE_TYPE (lhs)))
 	  {
