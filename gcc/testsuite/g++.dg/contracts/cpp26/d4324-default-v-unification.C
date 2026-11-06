@@ -9,16 +9,6 @@
 
 #include <contracts>
 
-// This test is compile-only and never links the runtime contracts support
-// library (libstdc++exp), but the bare pre() below resolves to default_v,
-// whose operator() calls the library-only __d4324_terminate; under
-// -pedantic-errors that flags it "used but never defined".  A trivial local
-// definition sidesteps that without affecting anything this test actually
-// checks (which entry point gets called, not what it does).
-namespace std { namespace contracts {
-[[noreturn]] void __d4324_terminate () noexcept { __builtin_trap (); }
-} }
-
 int f (int x) pre (x > 0) { return x; }
 
 // The implicit default_v control object is called on violation ...

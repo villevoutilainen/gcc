@@ -142,11 +142,6 @@ void __d4324_log_violation(const char* comment, std::source_location loc) noexce
 #endif
 }
 
-[[noreturn]] void __d4324_terminate() noexcept
-{
-  std::terminate();
-}
-
 namespace
 {
   // -fcontract-symbolic-runtime-checks ("the gem"): one process-wide,

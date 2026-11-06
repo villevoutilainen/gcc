@@ -18,7 +18,6 @@
 // present in both TUs, unrelated to the bug this test targets.
 namespace std { namespace contracts {
 inline void __d4324_log_violation (const char*, std::source_location) noexcept {}
-[[noreturn]] inline void __d4324_terminate () noexcept { __builtin_trap (); }
 } }
 
 int g (int x);

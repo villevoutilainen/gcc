@@ -7,13 +7,6 @@
 
 #include <contracts>
 
-// This test is compile-only and never links the runtime contracts support
-// library (libstdc++exp); see d4324-default-v-unification.C for why this
-// trivial local definition is needed under -pedantic-errors.
-namespace std { namespace contracts {
-[[noreturn]] void __d4324_terminate () noexcept { __builtin_trap (); }
-} }
-
 int f (int x) pre<> (x > 0) { return x; }
 int g (int x) post<> (r: r > 0) { return x; }
 

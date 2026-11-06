@@ -7,16 +7,6 @@
 
 #include <contracts>
 
-// This test is compile-only and never links the runtime contracts support
-// library (libstdc++exp), but the bare pre() below resolves to default_v,
-// whose operator() calls the library-only __d4324_terminate; under
-// -pedantic-errors that flags it "used but never defined".  A trivial local
-// definition sidesteps that without affecting anything this test actually
-// checks (constification / overload binding, not violation handling).
-namespace std { namespace contracts {
-[[noreturn]] void __d4324_terminate () noexcept { __builtin_trap (); }
-} }
-
 struct constified {
   static constexpr bool is_ignored (std::contracts::assertion_static_info) { return false; }
   static constexpr bool constify (std::contracts::assertion_static_info) { return true; }

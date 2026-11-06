@@ -8,13 +8,11 @@
 // deliberately continues after catching), noexcept_assert must still
 // reach __d4324_terminate_wrapper afterward.
 //
-// __d4324_terminate is overridden locally (same idiom as
-// d4324-invoke-violation-handler.C/d4324-terminate-wrapper-multi-tu.C)
-// so this test doesn't need libstdc++exp linked, and so termination is
-// observed via a controlled, zero exit code instead of an actual abort:
-// reaching this override at all (rather than the exception escaping to
-// main, or the process returning normally) is exactly what's being
-// verified.
+// Termination is observed through a terminate handler that exits with a
+// controlled, zero exit code instead of aborting: reaching it at all
+// (rather than the exception escaping to main, or the process returning
+// normally) is exactly what's being verified.  __d4324_log_violation is
+// defined locally so that this test doesn't need libstdc++exp linked.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
@@ -22,6 +20,7 @@
 #define _GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER
 #include <contracts>
 #include <cstdlib>
+#include <exception>
 
 namespace sc = std::contracts;
 
@@ -36,10 +35,11 @@ handle_contract_violation (const sc::contract_violation&)
 
 namespace std { namespace contracts {
 void __d4324_log_violation (const char*, std::source_location) noexcept {}
-[[noreturn]] void
-__d4324_terminate () noexcept
-{ std::_Exit (handler_called ? 0 : 1); }
 } }
+
+[[noreturn]] void
+on_terminate ()
+{ std::_Exit (handler_called ? 0 : 1); }
 
 int f (int x)
 {
@@ -49,6 +49,7 @@ int f (int x)
 
 int main ()
 {
+  std::set_terminate (on_terminate);
   try
     {
       f (-1);

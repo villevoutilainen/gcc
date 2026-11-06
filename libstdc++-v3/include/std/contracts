@@ -54,6 +54,10 @@
 
 namespace std _GLIBCXX_VISIBILITY(default)
 {
+  // As declared in <exception>, which this header can't include (see
+  // above).  The control types call it when a violation terminates.
+  extern "C++" void terminate() noexcept __attribute__ ((__noreturn__,__cold__));
+
 _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 namespace contracts
@@ -494,7 +498,6 @@ namespace contracts
   }
 
   void __d4324_log_violation(const char*, std::source_location) noexcept;
-  [[noreturn]] void __d4324_terminate() noexcept;
 
   // -fcontract-symbolic-runtime-checks (~/gcc-axiom-contracts.md, "the
   // gem"): a symbolic postcondition's runtime establishment, and a
@@ -551,8 +554,8 @@ namespace contracts
   // PR121936 (see -fcontracts-conservative-ipa). default_control's and
   // mandatory's operator() are ordinary inline functions, visible and
   // inlinable in every TU that includes <contracts>; without this
-  // wrapper, once a TU's cfg() constant-folds and the call to the real,
-  // noreturn __d4324_terminate() becomes unconditional, IPA is free to
+  // wrapper, once a TU's cfg() constant-folds and the call to the
+  // noreturn std::terminate() becomes unconditional, IPA is free to
   // infer that a caller reaching past the call proves the precondition
   // held -- sound only within the TU that compiled it, since cfg()
   // reflects that TU's own -fcontract-evaluation-semantic=, which may
@@ -560,14 +563,14 @@ namespace contracts
   // mechanism exists to prevent from leaking across TU boundaries, e.g.
   // under LTO or via -fipa-cp-clone's per-call-site specialization).
   // Deliberately NOT noreturn itself, even though its body unconditionally
-  // calls the real (noreturn) __d4324_terminate: noipa alone blocks IPA
+  // calls the noreturn std::terminate: noipa alone blocks IPA
   // from *analyzing* the body to infer noreturn-ness, but does not and
   // cannot override an explicit noreturn declared directly on the
   // function being called, so the wrapper must decline that declaration
   // too for callers to see it as possibly-returning.
   [[gnu::noipa]] inline void
   __d4324_terminate_wrapper() noexcept
-  { __d4324_terminate(); }
+  { std::terminate(); }
 
   // Compile-time diagnostics, following P2758 ("Emitting messages at
   // compile time").  These stand in for the std::constexpr_print_str,

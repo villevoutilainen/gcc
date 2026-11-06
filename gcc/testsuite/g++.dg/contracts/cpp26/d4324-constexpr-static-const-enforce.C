@@ -16,10 +16,6 @@
 
 #include <contracts>
 
-namespace std { namespace contracts {
-[[noreturn]] void __d4324_terminate () noexcept { __builtin_trap (); }
-} }
-
 namespace sc = std::contracts;
 
 constexpr int f (int x) pre<sc::default_v>(x >= 0) { return x; }

@@ -19,13 +19,6 @@
 
 #include <contracts>
 
-// This test is compile-only and never links the runtime contracts support
-// library (libstdc++exp); see d4324-constify-off.C for why this trivial
-// local definition is needed under -pedantic-errors.
-namespace std { namespace contracts {
-[[noreturn]] void __d4324_terminate () noexcept { __builtin_trap (); }
-} }
-
 namespace sc = std::contracts;
 
 struct constify_under_observe {
