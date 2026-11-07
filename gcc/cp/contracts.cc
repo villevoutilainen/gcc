@@ -22842,12 +22842,28 @@ oa_relation_conjunct_shape (tree conjunct, tree *pred_fn_out,
       || !DECL_LANG_SPECIFIC (fn) || !DECL_DECLARED_SYMBOLIC_P (fn))
     return false;
   unsigned n = call_expr_nargs (c);
-  if (n < 2 || n > OA_RELATION_MAX_ARGS)
+  if (n < 1 || n > OA_RELATION_MAX_ARGS)
     return false;
-  tree t1, t2;
-  bool n1;
-  if (oa_predicate_conjunct_shape (conjunct, &t1, &t2, &n1))
-    return false;
+  /* One argument: a value of class type (a by-value parameter with
+     unique object representations, 'is_zero_terminated
+     (std::string_view)'), whose facts follow the value as a relation's
+     do.  An object, or a scalar, is a one-object fact
+     (oa_predicate_conjunct_shape).  */
+  if (n == 1)
+    {
+      tree pt = TYPE_ARG_TYPES (TREE_TYPE (fn));
+      if (!pt || pt == void_list_node
+	  || !CLASS_TYPE_P (TREE_VALUE (pt))
+	  || oa_relation_arg_kind_of (fn, 0) != OA_RELATION_VALUE)
+	return false;
+    }
+  else
+    {
+      tree t1, t2;
+      bool n1;
+      if (oa_predicate_conjunct_shape (conjunct, &t1, &t2, &n1))
+	return false;
+    }
   for (unsigned i = 0; i < n; ++i)
     if (oa_relation_arg_kind_of (fn, i) == OA_RELATION_UNSUPPORTED)
       return false;
@@ -22902,9 +22918,15 @@ oa_relation_strip_arg (tree arg)
    variable holding it, or the constant.  NULL_TREE if it has none the
    analysis can key a fact by.  */
 
+static tree oa_elided_result_call (tree);
+
 static tree
 oa_relation_arg_identity (tree arg, oa_relation_arg_kind kind, oa_env &env)
 {
+  /* A call's result passed on directly ('read (make ())'): the call,
+     whose postconditions oa_check_call_relation established about it.  */
+  if (tree rc = oa_elided_result_call (arg))
+    return rc;
   if (kind == OA_RELATION_VALUE)
     {
       tree v = oa_relation_strip_arg (arg);
@@ -26037,8 +26059,15 @@ oa_check_call_relation (tree call, tree callee, tree pred_fn,
   auto_vec<tree, OA_RELATION_MAX_ARGS> subs;
   tree ids[OA_RELATION_MAX_ARGS];
   oa_relation_fact fact;
-  bool have = (oa_relation_substitute_args (callee, call, args, NULL_TREE,
-					    NULL_TREE, subs)
+  bool substituted = oa_relation_substitute_args (callee, call, args,
+						 NULL_TREE, NULL_TREE, subs);
+  /* An argument that is another call's result has that call's facts
+     (guaranteed elision), keyed by the call.  */
+  if (substituted)
+    for (tree sub : subs)
+      if (tree rc = oa_elided_result_call (sub))
+	oa_establish_call_relations (rc, env, rc);
+  bool have = (substituted
 	       && oa_relation_identities (pred_fn, subs, env, ids)
 	       && env.relation_get (pred_fn, ids, subs.length (), &fact));
   bool required = !negated;
