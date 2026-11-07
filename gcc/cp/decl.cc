@@ -12737,6 +12737,32 @@ grokfndecl (tree ctype,
       return NULL_TREE;
     }
 
+  /* A symbolic predicate's by-value parameter is a value, its fact keyed
+     by the value's bytes: of a class type, one with unique object
+     representations, whose equal values have the same bytes.  Any other
+     class is taken by reference, a fact about the object.  */
+  if (declared_symbolic_p)
+    {
+      tree parms = TYPE_ARG_TYPES (type);
+      if (TREE_CODE (type) == METHOD_TYPE && parms)
+	parms = TREE_CHAIN (parms);
+      for (; parms && parms != void_list_node; parms = TREE_CHAIN (parms))
+	{
+	  tree pt = TREE_VALUE (parms);
+	  if (CLASS_TYPE_P (pt) && !dependent_type_p (pt)
+	      && COMPLETE_TYPE_P (complete_type (pt))
+	      && !type_has_unique_obj_representations (pt))
+	    {
+	      error_at (location, "a parameter of a function declared "
+			"%<symbolic%> taken by value must have unique object "
+			"representations, which %qT doesn%'t", pt);
+	      inform (location, "take it by reference for a fact about the "
+		      "object");
+	      return NULL_TREE;
+	    }
+	}
+    }
+
   /* [except.spec]/9 - A deallocation function with no explicit noexcept-specifier
      has a non-throwing exception specification.  */
   if (raises == NULL_TREE
