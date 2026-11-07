@@ -14514,6 +14514,7 @@ cg_call_ends_lifetimes_p (gcall *call)
     {
       maybe_instantiate_conveyor (named);
       if (DECL_CONV_FN_P (named) || DECL_DECLARED_CONVEYOR_P (named)
+	  || DECL_DECLARED_SYMBOLIC_P (named)
 	  || std_placement_new_fn_p (named))
 	return false;
     }

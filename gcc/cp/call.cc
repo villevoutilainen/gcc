@@ -11267,7 +11267,12 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
 	 (pt.cc).  A no-op for anything else.  */
       maybe_instantiate_conveyor (fn);
 
+      /* A symbolic function has no definition, so no side effects and no
+	 undefined behavior: evaluated code calling one gets true, or the
+	 recorded fact under -fcontract-symbolic-runtime-checks
+	 (contract_symbolic_call_value).  */
       if (!conveyor_builtin_allowed_p (fn) && !DECL_DECLARED_CONVEYOR_P (fn)
+	       && !DECL_DECLARED_SYMBOLIC_P (fn)
 	       && !is_object_address_fndecl_p (fn)
 	       && !is_std_unreachable_fndecl_p (fn)
 	       && !(nargs && is_iile_operator_call_p (fn, argarray[0])))

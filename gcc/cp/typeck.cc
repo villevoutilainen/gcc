@@ -4824,6 +4824,7 @@ cp_build_function_call_vec (tree function, vec<tree, va_gc> **params,
 	  cvs.violated ();
 	}
       else if (!fndecl_built_in_p (fndecl) && !DECL_DECLARED_CONVEYOR_P (fndecl)
+	       && !DECL_DECLARED_SYMBOLIC_P (fndecl)
 	       && !is_object_address_fndecl_p (fndecl)
 	       && !is_std_unreachable_fndecl_p (fndecl))
 	{

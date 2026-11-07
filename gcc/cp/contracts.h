@@ -1569,6 +1569,8 @@ contract_terminating_p (const_tree contract)
 }
 
 
+extern tree contract_symbolic_call_value (tree);
+
 /* D4324, QoI: P3595 contract configuration (contracts.cc).  */
 extern unsigned contract_config_override;
 extern int contract_config_consteval;

@@ -900,6 +900,15 @@ cp_gimplify_expr (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p)
       break;
 
     case CALL_EXPR:
+      /* D4324: a symbolic function has no definition; evaluated code that
+	 calls one gets true, or the recorded fact.  */
+      if (tree fn = cp_get_callee_fndecl_nofold (*expr_p))
+	if (DECL_DECLARED_SYMBOLIC_P (fn))
+	  {
+	    *expr_p = contract_symbolic_call_value (*expr_p);
+	    ret = GS_OK;
+	    break;
+	  }
       ret = GS_OK;
       if (flag_strong_eval_order == 2
 	  && CALL_EXPR_FN (*expr_p)

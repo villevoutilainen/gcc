@@ -6042,6 +6042,41 @@ get_symbolic_predicate_key (tree fn)
   return build_fold_addr_expr (key);
 }
 
+/* The value of CALL, a call to a symbolic function in code that is
+   evaluated -- a strict predicate or a conveyor function may call one,
+   having neither side effects nor undefined behavior: true, as the
+   function's facts are proven, not run; under
+   -fcontract-symbolic-runtime-checks, a call of a predicate of one
+   pointer or reference argument is the fact recorded for that object
+   ("the gem").  */
+
+tree
+contract_symbolic_call_value (tree call)
+{
+  tree type = TREE_TYPE (call);
+  tree fn = cp_get_callee_fndecl_nofold (call);
+  location_t loc = cp_expr_loc_or_input_loc (call);
+  if (flag_contract_symbolic_runtime_checks && fn
+      && call_expr_nargs (call) == 1
+      && POINTER_TYPE_P (TREE_TYPE (CALL_EXPR_ARG (call, 0))))
+    {
+      tree check = get_symbolic_check_bool_fn (loc);
+      if (check != error_mark_node)
+	{
+	  tree obj = fold_convert (ptr_type_node, CALL_EXPR_ARG (call, 0));
+	  tree v = build_call_n (check, 3, get_symbolic_predicate_key (fn),
+				 obj, boolean_true_node);
+	  return fold_convert (type, v);
+	}
+    }
+  /* The arguments are still evaluated, for their side effects.  */
+  tree v = fold_convert (type, boolean_true_node);
+  for (int i = call_expr_nargs (call) - 1; i >= 0; --i)
+    if (TREE_SIDE_EFFECTS (CALL_EXPR_ARG (call, i)))
+      v = build2 (COMPOUND_EXPR, type, CALL_EXPR_ARG (call, i), v);
+  return v;
+}
+
 /* Return the runtime identity key for symbolic comparison conjunct
    FIELD (a ptr->field OP const-shaped conjunct's field) -- see
    get_symbolic_key_decl.  FIELD_DECLs carry no DECL_ASSEMBLER_NAME
@@ -19791,9 +19826,10 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
       tree arg;
 
       /* A function declared 'symbolic' has no definition: a contract that
-	 isn't symbolic-checked would evaluate it at run time, and fail to
-	 link (P4445 BUG-28).  */
-      if (!d->symbolic_ok
+	 is neither symbolic- nor conveyor-checked would evaluate it at run
+	 time, and fail to link (P4445 BUG-28).  A strict one evaluates it
+	 as true, or the recorded fact (contract_symbolic_call_value).  */
+      if (!d->symbolic_ok && !d->conveyor_ok
 	  && (TREE_CODE (*tp) == CALL_EXPR || TREE_CODE (*tp) == AGGR_INIT_EXPR))
 	{
 	  tree callee = cp_get_callee_fndecl_nofold (*tp);
@@ -19801,8 +19837,8 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
 	      && DECL_LANG_SPECIFIC (callee) && DECL_DECLARED_SYMBOLIC_P (callee))
 	    {
 	      error_at (EXPR_LOCATION (*tp), "%qD, declared %<symbolic%>, may "
-			"only be used in the condition of a symbolic-checked "
-			"contract", callee);
+			"only be used in the condition of a symbolic- or "
+			"conveyor-checked contract", callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      *d->ok = false;
 	      *tp = error_mark_node;
@@ -22268,10 +22304,17 @@ oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
   if (TREE_CODE (arg) == ADDR_EXPR)
     {
       tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
-      if (TREE_CODE (op) == PARM_DECL || VAR_P (op))
+      if (TREE_CODE (op) == PARM_DECL || VAR_P (op)
+	  || TREE_CODE (op) == RESULT_DECL)
 	arg = op;
     }
-  if (TREE_CODE (arg) != PARM_DECL && !VAR_P (arg))
+  /* A postcondition's result: the function's own result object,
+     '*<retval>' for a class returned by invisible reference.  */
+  if (INDIRECT_REF_P (arg)
+      && TREE_CODE (STRIP_NOPS (TREE_OPERAND (arg, 0))) == RESULT_DECL)
+    arg = STRIP_NOPS (TREE_OPERAND (arg, 0));
+  if (TREE_CODE (arg) != PARM_DECL && !VAR_P (arg)
+      && TREE_CODE (arg) != RESULT_DECL)
     return false;
 
   *pred_fn_out = fn;
@@ -27091,9 +27134,10 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
       && !cp_unevaluated_operand && !processing_contract_condition
       && !processing_template_decl)
     maybe_instantiate_conveyor (named);
+  /* A symbolic function, never run, is no route to anything either.  */
   bool callee_is_conveyor = named != NULL_TREE
     && TREE_CODE (named) == FUNCTION_DECL
-    && DECL_DECLARED_CONVEYOR_P (named);
+    && (DECL_DECLARED_CONVEYOR_P (named) || DECL_DECLARED_SYMBOLIC_P (named));
   /* D4324/P2680: a second, narrower exemption alongside CALLEE_IS_CONVEYOR
      above -- an argument passed via a CONST reference can't be deleted or
      reseated through THAT parameter by a well-formed callee (the same
@@ -29939,6 +29983,12 @@ oa_scan_stray_is_object_address (tree *expr)
 static void
 oa_scan_stray_symbolic_call (tree *expr)
 {
+  /* A conveyor function may call one: it gets true, or the recorded fact
+     (contract_symbolic_call_value).  */
+  if (current_function_decl
+      && TREE_CODE (current_function_decl) == FUNCTION_DECL
+      && DECL_DECLARED_CONVEYOR_P (current_function_decl))
+    return;
   tree found = cp_walk_tree (expr, [](tree *tp, int *, void *) -> tree
     {
       tree t = *tp;
@@ -41797,7 +41847,13 @@ build_contract_check (tree contract)
      processing as every other contract.  */
   bool symbolic_runtime = false;
   bool symbolic_mark = false;
-  if (ctrl && contract_control_symbolic_like (ctrl, side, current_function_decl))
+  /* A control object both strict and symbolic is checked at run time as a
+     strict one: its symbolic calls evaluate to true, or to the recorded
+     fact under -fcontract-symbolic-runtime-checks
+     (contract_symbolic_call_value).  */
+  if (ctrl && contract_control_symbolic_like (ctrl, side, current_function_decl)
+      && !contract_control_conveyor_like (ctrl, side, current_function_decl,
+					  /*quiet=*/true))
     {
       /* Still nothing at runtime, but the GIMPLE engine needs to know
 	 where the contract is, and what it is about: a marker
