@@ -36878,6 +36878,9 @@ oa_type_bound_witness (tree conjunct, bool asserted_true, tree *decl_out,
       }
   tree decl_type = oa_decl_value_type (decl);
   tree other_type = oa_decl_value_type (other);
+  /* Integer bounds only: a pointer comparison bounds nothing here.  */
+  if (!INTEGRAL_TYPE_P (decl_type) || !INTEGRAL_TYPE_P (other_type))
+    return false;
   *upper = (code == LT_EXPR
 	    || (code == LE_EXPR
 		&& tree_int_cst_lt (TYPE_MAX_VALUE (other_type),
