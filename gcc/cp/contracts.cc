@@ -6042,6 +6042,305 @@ get_symbolic_predicate_key (tree fn)
   return build_fold_addr_expr (key);
 }
 
+/* -fcontract-symbolic-runtime-checks: a relation's runtime entry points
+   (symbolic relations, the design note's stage 3).  */
+
+static GTY(()) tree symbolic_establish_relation_decl;
+static GTY(()) tree symbolic_check_relation_decl;
+static GTY(()) tree symbolic_end_scope_decl;
+
+static tree
+get_symbolic_relation_fn (location_t loc, bool establish)
+{
+  return (establish
+	  ? lookup_symbolic_runtime_fn (loc, &symbolic_establish_relation_decl,
+					"__contracts_symbolic_establish_relation")
+	  : lookup_symbolic_runtime_fn (loc, &symbolic_check_relation_decl,
+					"__contracts_symbolic_check_relation"));
+}
+
+/* A call ending the relations established in the block whose token's
+   address is SCOPE_ADDR (__contracts_symbolic_end_scope).  */
+
+tree
+build_symbolic_end_scope_call (location_t loc, tree scope_addr)
+{
+  tree fn = lookup_symbolic_runtime_fn (loc, &symbolic_end_scope_decl,
+					"__contracts_symbolic_end_scope");
+  if (fn == error_mark_node)
+    return NULL_TREE;
+  return build_call_n (fn, 1, fold_convert (const_ptr_type_node,
+					    scope_addr));
+}
+
+/* E, argument I of relation PRED_FN, as the runtime takes it: an object's
+   address with size 0, or a value's address and size, into *ADDR and
+   *SIZE.  False if it can't be.  */
+
+static bool
+oa_relation_runtime_arg (tree pred_fn, unsigned i, tree e, tree *addr,
+			 tree *size)
+{
+  if (oa_relation_arg_kind_of (pred_fn, i) == OA_RELATION_OBJECT)
+    {
+      if (INDIRECT_TYPE_P (TREE_TYPE (e)))
+	*addr = build_nop (const_ptr_type_node, e);
+      else
+	*addr = build_nop (const_ptr_type_node, build_address (e));
+      *size = size_zero_node;
+      return true;
+    }
+  /* The predicate's parameter type: the bytes every site compares.  */
+  tree ptype = NULL_TREE;
+  unsigned k = 0;
+  for (tree t = TYPE_ARG_TYPES (TREE_TYPE (pred_fn));
+       t && t != void_list_node; t = TREE_CHAIN (t), ++k)
+    if (k == i)
+      ptype = TYPE_MAIN_VARIANT (TREE_VALUE (t));
+  if (!ptype)
+    return false;
+  if (!same_type_ignoring_top_level_qualifiers_p (TREE_TYPE (e), ptype))
+    {
+      if (CLASS_TYPE_P (ptype) || CLASS_TYPE_P (TREE_TYPE (e)))
+	return false;
+      e = fold_convert (ptype, e);
+    }
+  tree s = oa_relation_strip_arg (e);
+  tree a;
+  if ((VAR_P (s) || TREE_CODE (s) == PARM_DECL
+       || TREE_CODE (s) == RESULT_DECL || INDIRECT_REF_P (s))
+      && same_type_ignoring_top_level_qualifiers_p (TREE_TYPE (s), ptype))
+    a = build_address (s);
+  else
+    {
+      tree t = get_target_expr (e, tf_none);
+      if (t == error_mark_node)
+	return false;
+      a = build1 (ADDR_EXPR, build_pointer_type (ptype), t);
+    }
+  *addr = fold_convert (const_ptr_type_node, a);
+  *size = fold_convert (size_type_node, size_in_bytes (ptype));
+  return true;
+}
+
+/* A call establishing (ESTABLISH) or checking relation PRED_FN (ARGS
+   [0..N)), POLARITY; SCOPE_ADDR the block token's address for an
+   establishment with a value argument, else null.  NULL_TREE if an
+   argument can't be passed, error_mark_node if the runtime isn't
+   declared.  */
+
+static tree
+oa_build_relation_runtime_call (location_t loc, bool establish,
+				tree pred_fn, const tree *args, unsigned n,
+				bool polarity, tree scope_addr)
+{
+  tree fn = get_symbolic_relation_fn (loc, establish);
+  if (fn == error_mark_node)
+    return error_mark_node;
+  tree argv[14];
+  unsigned c = 0;
+  argv[c++] = get_symbolic_predicate_key (pred_fn);
+  argv[c++] = build_int_cst (unsigned_type_node, n);
+  for (unsigned i = 0; i < 4; ++i)
+    if (i < n)
+      {
+	if (!oa_relation_runtime_arg (pred_fn, i, args[i], &argv[c],
+				      &argv[c + 1]))
+	  return NULL_TREE;
+	c += 2;
+      }
+    else
+      {
+	argv[c++] = null_pointer_node;
+	argv[c++] = size_zero_node;
+      }
+  argv[c++] = build_int_cst (boolean_type_node, polarity);
+  if (establish)
+    argv[c++] = (scope_addr ? fold_convert (const_ptr_type_node, scope_addr)
+		 : null_pointer_node);
+  return build_call_a (fn, c, argv);
+}
+
+/* Does relation PRED_FN have a value argument?  */
+
+static bool
+oa_relation_has_value_arg (tree pred_fn, unsigned n)
+{
+  for (unsigned i = 0; i < n; ++i)
+    if (oa_relation_arg_kind_of (pred_fn, i) == OA_RELATION_VALUE)
+      return true;
+  return false;
+}
+
+static void oa_collect_conjuncts (tree *, vec<tree *> *);
+
+/* Call F on each relation with a value argument that a symbolic
+   postcondition of CALLEE, checked at run time, establishes: the
+   relation's function, arguments, polarity, and the postcondition's
+   result name.  */
+
+template <typename F>
+static void
+oa_for_each_call_value_relation (tree callee, F f)
+{
+  for (tree contract : fn_contracts (callee))
+    {
+      if (!POSTCONDITION_P (contract))
+	continue;
+      contract_config_scope ccs (contract, callee);
+      tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+      if (!ctrl || ctrl == error_mark_node
+	  || !contract_control_symbolic_like (ctrl,
+					      contract_side_of (contract,
+								callee),
+					      callee, /*quiet=*/true))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (!cond || cond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree pred_fn;
+	  bool negated;
+	  auto_vec<tree> args;
+	  if (oa_relation_conjunct_shape (*conjuncts[i], &pred_fn, &args,
+					  &negated)
+	      && oa_relation_has_value_arg (pred_fn, args.length ()))
+	    f (pred_fn, args, !negated, POSTCONDITION_IDENTIFIER (contract));
+	}
+    }
+}
+
+/* -fcontract-symbolic-runtime-checks: does CALL's callee have a symbolic
+   postcondition establishing a relation with a value argument, which the
+   call site records (build_symbolic_call_relations)?  */
+
+bool
+symbolic_call_relations_p (tree call)
+{
+  if (!flag_contract_symbolic_runtime_checks
+      || TREE_CODE (call) != CALL_EXPR)
+    return false;
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL
+      || !DECL_LANG_SPECIFIC (callee) || !get_fn_contract_specifiers (callee))
+    return false;
+  bool any = false;
+  oa_for_each_call_value_relation (callee,
+				   [&] (tree, const vec<tree> &, bool, tree)
+				   { any = true; });
+  return any;
+}
+
+/* -fcontract-symbolic-runtime-checks: CALL, which symbolic_call_relations_p
+   says has relations with a value argument to record, followed by their
+   establishment, bound to the block whose token's address is SCOPE_ADDR:
+   a value never ends, so its record lives as long as the block that
+   can use it (symbolic relations, the design note's stage 3).  The
+   arguments are evaluated once, before the call, and the relations
+   read what the call left: through a reference parameter, its referent;
+   the result, its value.  NULL_TREE if they can't be recorded (a class
+   result that isn't trivially copyable, which a temporary would copy).  */
+
+tree
+build_symbolic_call_relations (tree call, tree scope_addr)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  location_t loc = cp_expr_loc_or_input_loc (call);
+  tree rtype = TREE_TYPE (call);
+  if (CLASS_TYPE_P (rtype) && !trivially_copyable_p (rtype))
+    return NULL_TREE;
+  for (int i = 0; i < call_expr_nargs (call); ++i)
+    if (TREE_CODE (CALL_EXPR_ARG (call, i)) != TARGET_EXPR)
+      CALL_EXPR_ARG (call, i) = save_expr (CALL_EXPR_ARG (call, i));
+  tree head, result = NULL_TREE;
+  if (VOID_TYPE_P (rtype))
+    head = call;
+  else if (CLASS_TYPE_P (rtype))
+    {
+      head = get_target_expr (call, tf_none);
+      if (head == error_mark_node)
+	return NULL_TREE;
+      result = TARGET_EXPR_SLOT (head);
+    }
+  else
+    head = result = save_expr (call);
+
+  /* What callee argument expression A stands for at CALL.  */
+  auto operand = [&] (tree a, bool value) -> tree
+    {
+      tree s = oa_relation_strip_arg (a);
+      if (TREE_CODE (s) == INTEGER_CST)
+	return s;
+      bool deref = INDIRECT_REF_P (s);
+      tree base = deref ? oa_relation_strip_arg (TREE_OPERAND (s, 0)) : s;
+      tree op = NULL_TREE;
+      if (TREE_CODE (base) == PARM_DECL)
+	{
+	  int k = 0;
+	  for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++k)
+	    if (p == base)
+	      {
+		if (k < call_expr_nargs (call))
+		  op = CALL_EXPR_ARG (call, k);
+		break;
+	      }
+	  if (op && TREE_CODE (op) == TARGET_EXPR)
+	    op = TARGET_EXPR_SLOT (op);
+	}
+      if (!op)
+	return NULL_TREE;
+      /* A value the callee reads through its reference parameter.  */
+      if (value && deref && INDIRECT_TYPE_P (TREE_TYPE (op)))
+	op = (TYPE_REF_P (TREE_TYPE (op)) ? convert_from_reference (op)
+	      : build_fold_indirect_ref (op));
+      return op;
+    };
+
+  tree establish = NULL_TREE;
+  bool failed = false;
+  oa_for_each_call_value_relation
+    (callee, [&] (tree pred_fn, const vec<tree> &args, bool polarity,
+		  tree result_name)
+     {
+       tree ops[OA_RELATION_MAX_ARGS];
+       for (unsigned i = 0; i < args.length (); ++i)
+	 {
+	   bool value = (oa_relation_arg_kind_of (pred_fn, i)
+			 == OA_RELATION_VALUE);
+	   tree s = oa_relation_strip_arg (args[i]);
+	   tree base = (INDIRECT_REF_P (s)
+			? oa_relation_strip_arg (TREE_OPERAND (s, 0)) : s);
+	   ops[i] = (result_name && base == result_name ? result
+		     : operand (args[i], value));
+	   if (!ops[i])
+	     {
+	       failed = true;
+	       return;
+	     }
+	 }
+       tree c = oa_build_relation_runtime_call (loc, true, pred_fn, ops,
+						args.length (), polarity,
+						scope_addr);
+       if (!c || c == error_mark_node)
+	 {
+	   failed = true;
+	   return;
+	 }
+       establish = (establish
+		    ? build2 (COMPOUND_EXPR, void_type_node, establish, c)
+		    : c);
+     });
+  if (failed || !establish)
+    return NULL_TREE;
+  tree e = build2 (COMPOUND_EXPR, void_type_node, head, establish);
+  if (result)
+    e = build2 (COMPOUND_EXPR, rtype, e, result);
+  return e;
+}
+
 /* The value of CALL, a call to a symbolic function in code that is
    evaluated -- a strict predicate or a conveyor function may call one,
    having neither side effects nor undefined behavior: true, as the
@@ -22582,6 +22881,16 @@ oa_relation_strip_arg (tree arg)
 	       && TREE_CODE (TARGET_EXPR_INITIAL (arg)) != AGGR_INIT_EXPR
 	       && TREE_CODE (TARGET_EXPR_INITIAL (arg)) != CALL_EXPR)
 	arg = TARGET_EXPR_INITIAL (arg);
+      /* '*&x' is x: a class assignment's operand ('k = x').  */
+      else if (INDIRECT_REF_P (arg))
+	{
+	  tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	  while (CONVERT_EXPR_P (op) || TREE_CODE (op) == NON_LVALUE_EXPR)
+	    op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
+	  if (TREE_CODE (op) != ADDR_EXPR)
+	    break;
+	  arg = TREE_OPERAND (op, 0);
+	}
       else
 	break;
     }
@@ -40931,6 +41240,11 @@ oa_check_assertion_conjunct_public (oa_analysis_env *env, tree conjunct,
 struct oa_symbolic_action
 {
   bool is_range;
+  /* A relation (oa_relation_conjunct_shape): PRED_FN of REL_ARGS
+     [0..REL_N).  */
+  bool is_relation;
+  unsigned rel_n;
+  tree rel_args[OA_RELATION_MAX_ARGS];
   tree pred_fn;
   tree bool_arg;
   bool polarity;
@@ -40971,6 +41285,22 @@ oa_collect_symbolic_actions (location_t loc, tree condition,
     {
       tree pred_fn, arg_decl;
       bool negated;
+      {
+	auto_vec<tree> rel_args;
+	if (oa_relation_conjunct_shape (*conjuncts[i], &pred_fn, &rel_args,
+					&negated))
+	  {
+	    oa_symbolic_action act = {};
+	    act.is_relation = true;
+	    act.pred_fn = pred_fn;
+	    act.rel_n = rel_args.length ();
+	    for (unsigned j = 0; j < act.rel_n; ++j)
+	      act.rel_args[j] = rel_args[j];
+	    act.polarity = !negated;
+	    actions->safe_push (act);
+	    continue;
+	  }
+      }
       if (oa_predicate_conjunct_shape (*conjuncts[i], &pred_fn, &arg_decl,
 					&negated))
 	{
@@ -42097,6 +42427,20 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
 static tree
 oa_build_symbolic_check_call (location_t loc, oa_symbolic_action &action)
 {
+  if (action.is_relation)
+    {
+      tree call = oa_build_relation_runtime_call (loc, false, action.pred_fn,
+						  action.rel_args,
+						  action.rel_n,
+						  action.polarity, NULL_TREE);
+      if (!call)
+	{
+	  error_at (loc, "an argument of %qD cannot be checked under %qs",
+		    action.pred_fn, "-fcontract-symbolic-runtime-checks");
+	  return error_mark_node;
+	}
+      return call;
+    }
   if (!action.is_range)
     {
       tree fn = get_symbolic_check_bool_fn (loc);
@@ -42129,6 +42473,14 @@ oa_build_symbolic_check_call (location_t loc, oa_symbolic_action &action)
 static tree
 oa_build_symbolic_establish_call (location_t loc, oa_symbolic_action &action)
 {
+  if (action.is_relation)
+    {
+      tree call = oa_build_relation_runtime_call (loc, true, action.pred_fn,
+						  action.rel_args,
+						  action.rel_n,
+						  action.polarity, NULL_TREE);
+      return call ? call : error_mark_node;
+    }
   if (!action.is_range)
     {
       tree fn = get_symbolic_establish_bool_fn (loc);
@@ -42244,6 +42596,14 @@ contract_check_bind_done (tree cc_bind)
   return cc_bind;
 }
 
+/* -fcontract-symbolic-runtime-checks: while cp_genericize_r builds the
+   check of a contract_assert, the address of the token of the block it
+   is in (created on first use), for the relations with a value argument
+   a never_proven assertion records; null otherwise.  */
+
+tree (*symbolic_assert_scope_addr_fn) (void *);
+void *symbolic_assert_scope_addr_data;
+
 static tree
 build_symbolic_runtime_check (tree contract, tree ctrl, location_t loc,
 			       tree condition)
@@ -42259,10 +42619,44 @@ build_symbolic_runtime_check (tree contract, tree ctrl, location_t loc,
   if (TREE_CODE (contract) == ASSERTION_STMT)
     emit_builtin_observable_checkpoint ();
 
-  if (POSTCONDITION_P (contract))
+  /* A never_proven assertion is trusted, as a postcondition is by its
+     callers: it records its facts rather than checking them, so the
+     code it lets the analysis accept doesn't then fail at run time.  */
+  bool assert_records
+    = (TREE_CODE (contract) == ASSERTION_STMT
+       && contract_control_never_proven (ctrl,
+					 contract_side_of (contract,
+							   current_function_decl),
+					 current_function_decl,
+					 /*quiet=*/true));
+  if (POSTCONDITION_P (contract) || assert_records)
     {
       for (unsigned i = 0; i < actions.length (); ++i)
 	{
+	  if (actions[i].is_relation
+	      && oa_relation_has_value_arg (actions[i].pred_fn,
+					    actions[i].rel_n))
+	    {
+	      /* A postcondition's relation with a value argument is
+		 recorded at the call site, bound to the caller's block
+		 (build_symbolic_call_relations); an assertion's, bound to
+		 its own.  */
+	      if (!assert_records)
+		continue;
+	      tree scope = (symbolic_assert_scope_addr_fn
+			    ? symbolic_assert_scope_addr_fn
+				(symbolic_assert_scope_addr_data)
+			    : NULL_TREE);
+	      if (!scope)
+		continue;
+	      tree call = oa_build_relation_runtime_call
+			    (loc, true, actions[i].pred_fn, actions[i].rel_args,
+			     actions[i].rel_n, actions[i].polarity, scope);
+	      if (!call || call == error_mark_node)
+		return error_mark_node;
+	      finish_expr_stmt (call);
+	      continue;
+	    }
 	  tree call = oa_build_symbolic_establish_call (loc, actions[i]);
 	  if (call == error_mark_node)
 	    return error_mark_node;

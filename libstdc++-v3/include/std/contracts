@@ -536,6 +536,23 @@ namespace contracts
   // to already know this class declares.
   void __contracts_symbolic_invalidate_object(const void* obj) noexcept;
 
+  // -fcontract-symbolic-runtime-checks: a relation, a symbolic predicate
+  // of N (2 to 4) arguments (KEY as for _bool).  Argument I is an
+  // object's address AI when its size SI is 0, otherwise a value, SI
+  // bytes at AI.  A relation with a value argument is established at the
+  // call site, bound to SCOPE, a block-local token whose block's every
+  // exit ends it (__contracts_symbolic_end_scope); one of objects only
+  // has a null SCOPE and lives as long as its objects.
+  void __contracts_symbolic_establish_relation(const void* key, unsigned n,
+	const void* a0, __SIZE_TYPE__ s0, const void* a1, __SIZE_TYPE__ s1,
+	const void* a2, __SIZE_TYPE__ s2, const void* a3, __SIZE_TYPE__ s3,
+	bool polarity, const void* scope) noexcept;
+  bool __contracts_symbolic_check_relation(const void* key, unsigned n,
+	const void* a0, __SIZE_TYPE__ s0, const void* a1, __SIZE_TYPE__ s1,
+	const void* a2, __SIZE_TYPE__ s2, const void* a3, __SIZE_TYPE__ s3,
+	bool polarity) noexcept;
+  void __contracts_symbolic_end_scope(const void* scope) noexcept;
+
   // -fcontract-symbolic-runtime-checks: called when an object's lifetime
   // ends -- on every exit from an automatic object's or a temporary's
   // scope, exceptional ones included, and before a delete-expression

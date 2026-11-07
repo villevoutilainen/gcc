@@ -1376,6 +1376,11 @@ struct cp_genericize_data
   tree try_block;
   bool no_sanitize_p;
   bool handle_invisiref_parm_p;
+  /* -fcontract-symbolic-runtime-checks: each block's token binding the
+     relations recorded in it (cp_symbolic_record_call_relations), and
+     the calls already recorded.  */
+  hash_map<tree, tree> *symbolic_scopes;
+  hash_set<tree> *symbolic_recorded;
 };
 
 /* Emit an error about taking the address of an immediate function.
@@ -2008,6 +2013,77 @@ cp_invalidate_symbolic_records_at_scope_end (tree bind)
 				    BIND_EXPR_BODY (bind), cleanups);
 }
 
+/* -fcontract-symbolic-runtime-checks: the address of the token of the
+   innermost block being genericized, binding the relations with a value
+   argument recorded in it.  Created on first use: a variable, whose
+   address identifies the block while it runs, and the block's body
+   becomes the try block of a try/finally ending the token's relations
+   on every exit, an exception's included.  NULL_TREE if there is no
+   block.  */
+
+static tree
+cp_symbolic_scope_addr (cp_genericize_data *wtd, location_t loc)
+{
+  if (wtd->bind_expr_stack.is_empty ())
+    return NULL_TREE;
+  tree bind = wtd->bind_expr_stack.last ();
+  if (!wtd->symbolic_scopes)
+    wtd->symbolic_scopes = new hash_map<tree, tree>;
+  tree *slot = wtd->symbolic_scopes->get (bind);
+  tree token = slot ? *slot : NULL_TREE;
+  if (!token)
+    {
+      token = build_decl (loc, VAR_DECL, NULL_TREE, char_type_node);
+      DECL_ARTIFICIAL (token) = 1;
+      DECL_IGNORED_P (token) = 1;
+      DECL_CONTEXT (token) = current_function_decl;
+      TREE_ADDRESSABLE (token) = 1;
+      tree end = build_symbolic_end_scope_call (loc, build_address (token));
+      if (!end)
+	return NULL_TREE;
+      DECL_CHAIN (token) = BIND_EXPR_VARS (bind);
+      BIND_EXPR_VARS (bind) = token;
+      BIND_EXPR_BODY (bind) = build2 (TRY_FINALLY_EXPR, void_type_node,
+				      BIND_EXPR_BODY (bind), end);
+      wtd->symbolic_scopes->put (bind, token);
+    }
+  return build_address (token);
+}
+
+static tree
+cp_symbolic_scope_addr_hook (void *data)
+{
+  cp_genericize_data *wtd = (cp_genericize_data *) data;
+  return cp_symbolic_scope_addr (wtd, input_location);
+}
+
+/* -fcontract-symbolic-runtime-checks: the call *STMT_P establishes, by
+   its callee's symbolic postconditions, relations with a value argument:
+   record them after it, bound to the innermost enclosing block (symbolic
+   relations, the design note's stage 3), by its token
+   (cp_symbolic_scope_addr).  True if *STMT_P was replaced.  */
+
+static bool
+cp_symbolic_record_call_relations (tree *stmt_p, cp_genericize_data *wtd)
+{
+  tree call = *stmt_p;
+  if (wtd->symbolic_recorded && wtd->symbolic_recorded->contains (call))
+    return false;
+  if (!symbolic_call_relations_p (call) || wtd->bind_expr_stack.is_empty ())
+    return false;
+  if (!wtd->symbolic_recorded)
+    wtd->symbolic_recorded = new hash_set<tree>;
+  wtd->symbolic_recorded->add (call);
+  tree scope = cp_symbolic_scope_addr (wtd, cp_expr_loc_or_input_loc (call));
+  if (!scope)
+    return false;
+  tree e = build_symbolic_call_relations (call, scope);
+  if (!e)
+    return false;
+  *stmt_p = e;
+  return true;
+}
+
 /* Perform any pre-gimplification lowering of C++ front end trees to
    GENERIC.  */
 
@@ -2343,11 +2419,15 @@ cp_genericize_r (tree *stmt_p, int *walk_subtrees, void *data)
     case ASSERTION_STMT:
     case PRECONDITION_STMT:
     case POSTCONDITION_STMT:
+      symbolic_assert_scope_addr_fn = cp_symbolic_scope_addr_hook;
+      symbolic_assert_scope_addr_data = wtd;
       if (tree check = build_contract_check (stmt))
 	{
+	  symbolic_assert_scope_addr_fn = NULL;
 	  *stmt_p = check;
 	  return cp_genericize_r (stmt_p, walk_subtrees, data);
 	}
+      symbolic_assert_scope_addr_fn = NULL;
       /* If we didn't build a check, replace it with void_node so we don't
 	 leak contracts into GENERIC.  */
       *stmt_p = void_node;
@@ -2595,6 +2675,9 @@ cp_genericize_r (tree *stmt_p, int *walk_subtrees, void *data)
       break;
 
     case CALL_EXPR:
+      if (flag_contract_symbolic_runtime_checks
+	  && cp_symbolic_record_call_relations (stmt_p, wtd))
+	return cp_genericize_r (stmt_p, walk_subtrees, data);
       if (flag_contract_symbolic_runtime_checks)
 	cp_invalidate_symbolic_records_for_mem_call (stmt_p);
       if (tree fn = cp_get_callee_fndecl_nofold (stmt))
@@ -2832,8 +2915,12 @@ cp_genericize_tree (tree* t_p, bool handle_invisiref_parm_p)
   wtd.try_block = NULL_TREE;
   wtd.no_sanitize_p = false;
   wtd.handle_invisiref_parm_p = handle_invisiref_parm_p;
+  wtd.symbolic_scopes = NULL;
+  wtd.symbolic_recorded = NULL;
   cp_walk_tree (t_p, cp_genericize_r, &wtd, NULL);
   delete wtd.p_set;
+  delete wtd.symbolic_scopes;
+  delete wtd.symbolic_recorded;
   if (sanitize_flags_p (SANITIZE_VPTR))
     cp_ubsan_instrument_member_accesses (t_p);
 }

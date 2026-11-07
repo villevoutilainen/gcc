@@ -40,6 +40,8 @@ void c1 (Vec &v) { It i = vbegin (v); It j = i; use_it (j, v); }
 void c2 (Vec &v) { It f, l; range (v, f, l); It g = f; use_range (g, l); }
 void c3 (Vec &v) { It i = vbegin (v); It j = i; j.p++; contract_assert<symbolic_assert_v>(belongs_to (i, v)); contract_assert<symbolic_assert_v>(belongs_to (j, v)); } // { dg-warning "cannot verify" }
 
+void c4 (Vec &v) { It j; It i = vbegin (v); j = i; use_it (j, v); }
+
 // Writing the variable ends them.
 void w1 (Vec &v, It g) { It f, l; range (v, f, l); f = g; use_range (f, l); }	// { dg-warning "cannot verify" }
 void w2 (Vec &v) { It f, l; range (v, f, l); f.p = nullptr; use_range (f, l); }	// { dg-warning "cannot verify" }

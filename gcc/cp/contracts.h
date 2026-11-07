@@ -1583,6 +1583,11 @@ extern oa_relation_arg_kind oa_relation_param_kind (tree);
 extern oa_relation_arg_kind oa_relation_arg_kind_of (tree, unsigned);
 extern bool oa_relation_conjunct_shape (tree, tree *, vec<tree> *, bool *);
 extern tree oa_relation_strip_arg (tree);
+extern bool symbolic_call_relations_p (tree);
+extern tree build_symbolic_call_relations (tree, tree);
+extern tree build_symbolic_end_scope_call (location_t, tree);
+extern tree (*symbolic_assert_scope_addr_fn) (void *);
+extern void *symbolic_assert_scope_addr_data;
 
 /* D4324, QoI: P3595 contract configuration (contracts.cc).  */
 extern unsigned contract_config_override;

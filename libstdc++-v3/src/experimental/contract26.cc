@@ -28,6 +28,8 @@
 #include <cstdint> // std::uintptr_t
 #include <mutex>
 #include <unordered_map>
+#include <string>
+#include <vector>
 
 #ifndef __cpp_lib_contracts
 # error "This file requires C++26 contracts support to be enabled"
@@ -179,6 +181,45 @@ namespace
   std::mutex symbolic_mutex;
   std::unordered_map<symbolic_record_key, symbolic_record_value,
 		      symbolic_record_key_hash> symbolic_records;
+
+  // A relation's record (symbolic facts about several objects and
+  // values): keyed by the predicate's tag and, for each argument, an
+  // object's address or a value's bytes.  OBJS, the objects' addresses,
+  // end it with any of their lifetimes; SCOPE, for a relation with a
+  // value argument, the block it was established in, ends it on every
+  // exit from that block (__contracts_symbolic_end_scope).
+  struct symbolic_relation_value
+  {
+    bool polarity;
+    const void* scope;
+    std::vector<const void*> objs;
+  };
+
+  std::unordered_map<std::string, symbolic_relation_value> symbolic_relations;
+
+  std::string
+  relation_key(const void* key, unsigned n, const void* const* args,
+	       const std::size_t* sizes, std::vector<const void*>* objs)
+  {
+    std::string k(reinterpret_cast<const char*>(&key), sizeof key);
+    for (unsigned i = 0; i < n && i < 4; ++i)
+      {
+	k.push_back(sizes[i] ? 'v' : 'o');
+	if (sizes[i])
+	  {
+	    std::size_t sz = sizes[i];
+	    k.append(reinterpret_cast<const char*>(&sz), sizeof sz);
+	    k.append(static_cast<const char*>(args[i]), sizes[i]);
+	  }
+	else
+	  {
+	    k.append(reinterpret_cast<const char*>(&args[i]), sizeof args[i]);
+	    if (objs)
+	      objs->push_back(args[i]);
+	  }
+      }
+    return k;
+  }
 }
 
 void
@@ -239,11 +280,61 @@ __contracts_symbolic_check_range(const void* key, const void* obj,
 }
 
 void
+__contracts_symbolic_establish_relation(const void* key, unsigned n,
+					 const void* a0, std::size_t s0,
+					 const void* a1, std::size_t s1,
+					 const void* a2, std::size_t s2,
+					 const void* a3, std::size_t s3,
+					 bool polarity,
+					 const void* scope) noexcept
+{
+  const void* args[4] = { a0, a1, a2, a3 };
+  const std::size_t sizes[4] = { s0, s1, s2, s3 };
+  symbolic_relation_value v{polarity, scope, {}};
+  std::string k = relation_key(key, n, args, sizes, &v.objs);
+  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  symbolic_relations[std::move(k)] = std::move(v);
+}
+
+bool
+__contracts_symbolic_check_relation(const void* key, unsigned n,
+				     const void* a0, std::size_t s0,
+				     const void* a1, std::size_t s1,
+				     const void* a2, std::size_t s2,
+				     const void* a3, std::size_t s3,
+				     bool polarity) noexcept
+{
+  const void* args[4] = { a0, a1, a2, a3 };
+  const std::size_t sizes[4] = { s0, s1, s2, s3 };
+  std::string k = relation_key(key, n, args, sizes, nullptr);
+  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  auto it = symbolic_relations.find(k);
+  return it != symbolic_relations.end() && it->second.polarity == polarity;
+}
+
+void
+__contracts_symbolic_end_scope(const void* scope) noexcept
+{
+  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  std::erase_if(symbolic_relations,
+		[scope](const auto& entry)
+		{ return entry.second.scope == scope; });
+}
+
+void
 __contracts_symbolic_invalidate_object(const void* obj) noexcept
 {
   std::lock_guard<std::mutex> lock(symbolic_mutex);
   std::erase_if(symbolic_records,
 		[obj](const auto& entry) { return entry.first.obj == obj; });
+  std::erase_if(symbolic_relations,
+		[obj](const auto& entry)
+		{
+		  for (const void* o : entry.second.objs)
+		    if (o == obj)
+		      return true;
+		  return false;
+		});
 }
 
 void
@@ -256,6 +347,14 @@ __contracts_symbolic_invalidate_range(const void* obj,
 		[first, size](const auto& entry) {
 		  auto addr = reinterpret_cast<std::uintptr_t>(entry.first.obj);
 		  return addr - first < size;
+		});
+  std::erase_if(symbolic_relations,
+		[first, size](const auto& entry)
+		{
+		  for (const void* o : entry.second.objs)
+		    if (reinterpret_cast<std::uintptr_t>(o) - first < size)
+		      return true;
+		  return false;
 		});
 }
 
