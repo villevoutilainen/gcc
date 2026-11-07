@@ -433,6 +433,17 @@ namespace contracts
 	return __configured;
       }
 
+      // The group a P3595 configuration's "group" key matches (GCC's
+      // group() query): the label's first group name, or none.
+      constexpr const char*
+      group () const noexcept
+      {
+	if constexpr (identification_label<_Self>)
+	  for (const char* __name : static_cast<const _Self&> (*this).group_names)
+	    return __name;
+	return nullptr;
+      }
+
       constexpr evaluation_semantic
       __effective_semantic (evaluation_semantic __configured) const noexcept
       {

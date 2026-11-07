@@ -1751,6 +1751,31 @@ extern tree braced_lists_to_strings (tree, tree);
 struct contract_group_semantic_entry { const char *name; unsigned semantic; };
 extern vec<contract_group_semantic_entry> contract_group_semantic_table;
 
+/* One entry of a P3595 contract configuration
+   (-fcontract-configuration=<json>, -fcontract-configuration-file=<path>):
+   which contract assertions it matches, and the evaluation semantic it
+   gives them.  The first entry, in command-line order, that matches an
+   assertion decides its semantic; -fcontract-evaluation-semantic decides
+   for the rest.  Parsed in c-opts.cc, consulted by cp/contracts.cc.
+   KIND is a contract_assertion_kind (1 pre, 2 post, 3 contract_assert) or
+   0 for any; CONSTEXPR_EVAL is 1 for constant evaluation, 0 for run time,
+   -1 for either; GROUP, NS and FILE are NULL for any.  LINES holds pairs
+   of first and last line, LINES_LEN of them; COLUMN 0 is any.  SEMANTIC is
+   numbered as -fcontract-evaluation-semantic.  */
+struct contract_config_entry
+{
+  unsigned kind;
+  int constexpr_eval;
+  const char *group;
+  const char *ns;
+  const char *file;
+  int *lines;
+  unsigned lines_len;
+  int column;
+  unsigned semantic;
+};
+extern vec<contract_config_entry> contract_config_table;
+
 /* One entry per comma-separated profile name from a
    -fprofiles-enforce=name[,name...] occurrence (c-opts.cc's own
    OPT_fprofiles_enforce_ case/handle_profiles_enforce_option).

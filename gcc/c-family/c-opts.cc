@@ -19,6 +19,7 @@ along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
 #define INCLUDE_VECTOR
+#define INCLUDE_MAP
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
@@ -44,6 +45,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "dumpfile.h"
 #include "file-prefix-map.h"    /* add_*_prefix_map()  */
 #include "context.h"
+#include "json-parsing.h"
 #include "diagnostics/text-sink.h"
 
 #ifndef DOLLARS_IN_IDENTIFIERS
@@ -132,6 +134,7 @@ static void set_std_c2y (int);
 static void check_deps_environment_vars (void);
 static void handle_deferred_opts (void);
 static void handle_contract_group_semantics (void);
+static void handle_contract_configuration (void);
 static void handle_profiles_enforce_option (void);
 static void handle_profiles_warning_option (void);
 static void sanitize_cpp_opts (void);
@@ -607,6 +610,13 @@ c_common_handle_option (size_t scode, const char *arg, HOST_WIDE_INT value,
       defer_opt (code, arg);
       break;
 
+    case OPT_fcontract_configuration_:
+    case OPT_fcontract_configuration_file_:
+      /* Repeatable; parsed once, in command-line order, by
+	 handle_contract_configuration after option processing.  */
+      defer_opt (code, arg);
+      break;
+
     case OPT_fcontracts_group_evaluation_semantic_:
       /* Repeatable; each occurrence is parsed (and validated) once, by
 	 handle_contract_group_semantics, after option processing --
@@ -897,6 +907,7 @@ c_common_post_options (const char **pfilename)
 
   handle_deferred_opts ();
   handle_contract_group_semantics ();
+  handle_contract_configuration ();
   handle_profiles_enforce_option ();
   handle_profiles_warning_option ();
 
@@ -1722,6 +1733,309 @@ handle_contract_group_semantics (void)
       contract_group_semantic_entry entry
 	= { xstrndup (arg, colon - arg), semantic };
       contract_group_semantic_table.safe_push (entry);
+    }
+}
+
+/* Storage for contract_config_table (c-family/c-common.h).  */
+vec<contract_config_entry> contract_config_table;
+
+/* The evaluation semantic NAME spells, numbered as
+   -fcontract-evaluation-semantic; 0 if none.  */
+static unsigned
+contract_config_semantic (const char *name)
+{
+  if (!strcmp (name, "ignore"))
+    return 1;
+  if (!strcmp (name, "observe"))
+    return 2;
+  if (!strcmp (name, "enforce"))
+    return 3;
+  if (!strcmp (name, "quick_enforce"))
+    return 4;
+  return 0;
+}
+
+/* Whether every key of OBJ, an object of a contract configuration named
+   WHAT, is one of KEYS; diagnose the first that isn't (SOURCE names the
+   configuration).  */
+static bool
+contract_config_known_keys (const json::object *obj, const char *what,
+			    const char *const *keys, const char *source)
+{
+  for (size_t i = 0; i < obj->get_num_keys (); ++i)
+    {
+      const char *key = obj->get_key (i);
+      bool known = false;
+      for (const char *const *k = keys; *k; ++k)
+	if (!strcmp (key, *k))
+	  known = true;
+      if (!known)
+	{
+	  error ("unknown key %qs in %qs of contract configuration %qs",
+		 key, what, source);
+	  return false;
+	}
+    }
+  return true;
+}
+
+/* The string member KEY of OBJ into *OUT, or leave *OUT if OBJ has none;
+   false, diagnosed, if it isn't a non-empty string.  */
+static bool
+contract_config_string (const json::object *obj, const char *key,
+			const char **out, const char *source)
+{
+  json::value *v = obj->get (key);
+  if (!v)
+    return true;
+  json::string *str = v->dyn_cast_string ();
+  if (!str || !*str->get_string ())
+    {
+      error ("%qs in contract configuration %qs must be a non-empty string",
+	     key, source);
+      return false;
+    }
+  *out = xstrdup (str->get_string ());
+  return true;
+}
+
+/* Parse the location LOC ("file", "file:lines" or "file:lines:column",
+   LINES being comma-separated N or N-M) into E.  */
+static bool
+contract_config_location (const char *loc, contract_config_entry &e,
+			  const char *source)
+{
+  auto digits_p = [] (const char *b, const char *end, bool ranges)
+    {
+      if (b == end)
+	return false;
+      for (; b != end; ++b)
+	if (!ISDIGIT (*b) && !(ranges && (*b == ',' || *b == '-')))
+	  return false;
+      return true;
+    };
+  const char *end = loc + strlen (loc);
+  const char *c1 = strrchr (loc, ':');
+  const char *lines = NULL, *lines_end = NULL;
+  if (c1 && c1 != loc && digits_p (c1 + 1, end, true))
+    {
+      const char *c0 = NULL;
+      for (const char *p = c1 - 1; p > loc; --p)
+	if (*p == ':')
+	  {
+	    c0 = p;
+	    break;
+	  }
+      if (c0 && digits_p (c0 + 1, c1, true) && digits_p (c1 + 1, end, false))
+	{
+	  /* file:lines:column  */
+	  e.column = atoi (c1 + 1);
+	  lines = c0 + 1;
+	  lines_end = c1;
+	  end = c0;
+	}
+      else
+	{
+	  lines = c1 + 1;
+	  lines_end = end;
+	  end = c1;
+	}
+    }
+  e.file = xstrndup (loc, end - loc);
+  if (!lines)
+    return true;
+  auto_vec<int> v;
+  for (const char *p = lines; p < lines_end;)
+    {
+      char *q;
+      long first = strtol (p, &q, 10);
+      long last = first;
+      if (q == p)
+	break;
+      if (*q == '-')
+	{
+	  p = q + 1;
+	  last = strtol (p, &q, 10);
+	  if (q == p)
+	    break;
+	}
+      if (last < first || first < 1)
+	{
+	  error ("invalid line range in %<location%> %qs of contract "
+		 "configuration %qs", loc, source);
+	  return false;
+	}
+      v.safe_push (first);
+      v.safe_push (last);
+      p = q;
+      if (p < lines_end && *p == ',')
+	++p;
+      else if (p < lines_end)
+	break;
+    }
+  if (v.is_empty () || v.length () % 2)
+    {
+      error ("invalid line range in %<location%> %qs of contract "
+	     "configuration %qs", loc, source);
+      return false;
+    }
+  e.lines = XNEWVEC (int, v.length ());
+  memcpy (e.lines, v.address (), v.length () * sizeof (int));
+  e.lines_len = v.length () / 2;
+  return true;
+}
+
+/* Parse the P3595 contract configuration JSON TEXT (SOURCE names it for
+   diagnostics: the option, or the file), appending its entries to
+   contract_config_table.  A configuration is an array of entries
+   {"match": {...}, "output": {"semantic": NAME}}; "match" may have "kind"
+   ("pre", "post", "contract_assert"), "constexpr" (true for constant
+   evaluation, false for run time), "namespace", "location" and "group"
+   (matched against a control object's group() query), each optional.  */
+static void
+parse_contract_configuration (const char *text, const char *source)
+{
+  json::parser_result_t result = json::parse_utf8_string (text, true, NULL);
+  if (json::error *err = result.m_err.get ())
+    {
+      error ("invalid JSON in contract configuration %qs: %s", source,
+	     err->get_msg ());
+      return;
+    }
+  json::array *arr = result.m_val ? result.m_val->dyn_cast_array () : NULL;
+  if (!arr)
+    {
+      error ("contract configuration %qs must be a JSON array", source);
+      return;
+    }
+  static const char *const entry_keys[] = { "match", "output", NULL };
+  static const char *const match_keys[]
+    = { "kind", "constexpr", "namespace", "location", "group", NULL };
+  static const char *const output_keys[] = { "semantic", NULL };
+  for (size_t i = 0; i < arr->size (); ++i)
+    {
+      json::object *obj = arr->get (i)->dyn_cast_object ();
+      if (!obj)
+	{
+	  error ("contract configuration %qs: each entry must be a JSON "
+		 "object", source);
+	  continue;
+	}
+      if (!contract_config_known_keys (obj, "entry", entry_keys, source))
+	continue;
+      contract_config_entry e = {};
+      e.constexpr_eval = -1;
+
+      json::value *out_v = obj->get ("output");
+      json::object *out = out_v ? out_v->dyn_cast_object () : NULL;
+      const char *sem = NULL;
+      if (!out
+	  || !contract_config_known_keys (out, "output", output_keys, source)
+	  || !contract_config_string (out, "semantic", &sem, source))
+	{
+	  if (!out)
+	    error ("contract configuration %qs: an entry needs an %<output%> "
+		   "object", source);
+	  continue;
+	}
+      if (!sem || !(e.semantic = contract_config_semantic (sem)))
+	{
+	  error ("contract configuration %qs: %<output%> needs a "
+		 "%<semantic%>, one of %<ignore%>, %<observe%>, %<enforce%> "
+		 "and %<quick_enforce%>", source);
+	  continue;
+	}
+
+      if (json::value *match_v = obj->get ("match"))
+	{
+	  json::object *match = match_v->dyn_cast_object ();
+	  if (!match)
+	    {
+	      error ("contract configuration %qs: %<match%> must be a JSON "
+		     "object", source);
+	      continue;
+	    }
+	  if (!contract_config_known_keys (match, "match", match_keys, source))
+	    continue;
+	  const char *kind = NULL, *loc = NULL;
+	  if (!contract_config_string (match, "kind", &kind, source)
+	      || !contract_config_string (match, "namespace", &e.ns, source)
+	      || !contract_config_string (match, "group", &e.group, source)
+	      || !contract_config_string (match, "location", &loc, source))
+	    continue;
+	  if (kind)
+	    {
+	      if (!strcmp (kind, "pre"))
+		e.kind = 1;
+	      else if (!strcmp (kind, "post"))
+		e.kind = 2;
+	      else if (!strcmp (kind, "contract_assert"))
+		e.kind = 3;
+	      else
+		{
+		  error ("contract configuration %qs: invalid %<kind%> %qs",
+			 source, kind);
+		  continue;
+		}
+	    }
+	  if (json::value *ce = match->get ("constexpr"))
+	    {
+	      if (ce->get_kind () == json::JSON_TRUE)
+		e.constexpr_eval = 1;
+	      else if (ce->get_kind () == json::JSON_FALSE)
+		e.constexpr_eval = 0;
+	      else
+		{
+		  error ("contract configuration %qs: %<constexpr%> must be a "
+			 "boolean", source);
+		  continue;
+		}
+	    }
+	  if (e.ns && !strncmp (e.ns, "::", 2))
+	    e.ns += 2;
+	  if (loc && !contract_config_location (loc, e, source))
+	    continue;
+	}
+      contract_config_table.safe_push (e);
+    }
+}
+
+/* Parse every deferred -fcontract-configuration=<json> and
+   -fcontract-configuration-file=<path>, in command-line order.  */
+static void
+handle_contract_configuration (void)
+{
+  for (unsigned i = 0; i < deferred_count; i++)
+    {
+      struct deferred_opt *opt = &deferred_opts[i];
+      if (opt->code == OPT_fcontract_configuration_)
+	parse_contract_configuration (opt->arg, "-fcontract-configuration");
+      else if (opt->code == OPT_fcontract_configuration_file_)
+	{
+	  FILE *f = fopen (opt->arg, "r");
+	  if (!f)
+	    {
+	      error ("cannot open contract configuration file %qs: %m",
+		     opt->arg);
+	      continue;
+	    }
+	  size_t len = 0, cap = 4096;
+	  char *text = XNEWVEC (char, cap + 1);
+	  size_t n;
+	  while ((n = fread (text + len, 1, cap - len, f)) > 0)
+	    {
+	      len += n;
+	      if (len == cap)
+		{
+		  cap *= 2;
+		  text = XRESIZEVEC (char, text, cap + 1);
+		}
+	    }
+	  fclose (f);
+	  text[len] = '\0';
+	  parse_contract_configuration (text, opt->arg);
+	  XDELETEVEC (text);
+	}
     }
 }
 

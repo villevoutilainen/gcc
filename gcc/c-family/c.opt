@@ -2030,6 +2030,17 @@ fcontract-evaluation-semantic=
 C++ ObjC++ Joined RejectNegative Enum(contract_semantic) Var(flag_contract_evaluation_semantic) Init(3)
 -fcontract-evaluation-semantic=[ignore|observe|enforce|quick_enforce]	Select the contract evaluation semantic (defaults to enforce).
 
+; P3595 configuration (D4324: QoI): repeatable, deferred and parsed in
+; command-line order in c-opts.cc's handle_contract_configuration into
+; contract_config_table.
+fcontract-configuration=
+C++ ObjC++ Joined RejectNegative
+-fcontract-configuration=<json>	Give contract assertions evaluation semantics by a P3595 JSON configuration; may be given multiple times.
+
+fcontract-configuration-file=
+C++ ObjC++ Joined RejectNegative
+-fcontract-configuration-file=<path>	Read a P3595 JSON contract configuration from a file; may be given multiple times.
+
 Enum
 Name(contract_violation_info) Type(int) UnknownError(unrecognized contract violation information level %qs)
 

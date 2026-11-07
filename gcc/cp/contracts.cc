@@ -565,6 +565,7 @@ contract_side_of (tree contract, tree fndecl)
 static bool
 contract_active_p (tree contract, contract_check_side side, tree fn)
 {
+  contract_config_scope ccs (contract, fn);
   /* D4324: a named control object decides activity by its type's
      compile-time members rather than the translation-unit semantic.  The
      assertion is active if it is not ignored (a runtime check or
@@ -613,6 +614,7 @@ static bool
 contract_runs_on_side (tree contract, contract_check_side side,
 		       tree fn = NULL_TREE)
 {
+  contract_config_scope ccs (contract, fn);
   /* For a caller-side wrapper, the function it wraps.  */
   if (fn && DECL_CONTRACT_WRAPPER (fn))
     fn = get_orig_func_for_wrapper (fn);
@@ -4125,6 +4127,7 @@ tsubst_object_contract_specifiers (tree pattern_decl, tree new_decl,
   auto_vec<tree> new_contracts (TREE_VEC_LENGTH (specs));
   for (tree orig_stmt : tree_vec_range (specs))
     {
+      contract_config_scope ccs (orig_stmt, new_decl);
       tree orig_positional_parms = get_contract_positional_parms (orig_stmt);
 
       tree new_stmt = copy_node (orig_stmt);
@@ -4760,6 +4763,7 @@ rebuild_postconditions (tree fndecl)
 
   for (tree contract : tree_vec_range (contract_spec))
     {
+      contract_config_scope ccs (contract, fndecl);
       if (TREE_CODE (contract) != POSTCONDITION_STMT)
 	continue;
       tree condition = CONTRACT_CONDITION (contract);
@@ -4988,9 +4992,15 @@ grok_contract (tree contract_spec, tree mode, tree result, cp_expr condition,
 
   /* Determine the evaluation semantic.  This is now an override, so that if
      not set we will get the default (currently enforce).  */
-  CONTRACT_EVALUATION_SEMANTIC (contract)
-    = build_int_cst (uint16_type_node, (uint16_t)
-		     flag_contract_evaluation_semantic);
+  {
+    /* A P3595 configuration may give this assertion its own; one semantic
+       for its evaluation at compile time and at run time alike.  */
+    unsigned sem = contract_config_semantic_for (kind, loc, control_object,
+						 NULL_TREE, -1);
+    CONTRACT_EVALUATION_SEMANTIC (contract)
+      = build_int_cst (uint16_type_node, (uint16_t)
+		       (sem ? sem : flag_contract_evaluation_semantic));
+  }
 
   /* If the contract is deferred, don't do anything with the condition.  */
   if (TREE_CODE (condition) == DEFERRED_PARSE)
@@ -5461,6 +5471,7 @@ oa_fndecl_has_conveyor_active_contract_p (tree fndecl)
 {
   for (tree contract : fn_contracts (fndecl))
     {
+      contract_config_scope ccs (contract, fndecl);
       tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
       if (!ctrl || !flag_contract_control_objects)
 	continue;
@@ -6693,10 +6704,19 @@ remap_retval (tree fndecl, tree contract)
    quick_enforce encoding as evaluation_semantic, so no remapping is
    needed.  */
 
+/* The semantic a P3595 configuration gives the contract assertion being
+   processed (contract_config_scope), or 0: the translation unit's.  */
+unsigned contract_config_override;
+
+/* Whether the contract assertion being processed is evaluated at compile
+   time (1) or at run time (0), for contract_config_scope.  */
+int contract_config_consteval;
+
 static unsigned
 contract_evaluation_semantic_value ()
 {
-  return flag_contract_evaluation_semantic;
+  return (contract_config_override ? contract_config_override
+	  : flag_contract_evaluation_semantic);
 }
 
 /* CTRL is the constant-expression naming a control OBJECT for
@@ -7124,6 +7144,143 @@ contract_control_bool_member (tree ctrl, const char *name,
   if (!val || TREE_CODE (val) != INTEGER_CST)
     return -1;
   return integer_onep (val) ? 1 : 0;
+}
+
+/* D4324, QoI: P3595 contract configuration (-fcontract-configuration=,
+   -fcontract-configuration-file=, c-opts.cc).  An entry matches an
+   assertion by its kind, by whether it is evaluated at compile time, by
+   the namespace of its function, by its source location and by its
+   control object's group, and gives it an evaluation semantic; the first
+   matching entry decides.  The semantic is what the assertion's control
+   object is given as assertion_static_info::semantic() and
+   assertion_context's semantic, and what a contract without a control
+   object is evaluated with.  */
+
+/* The group CTRL's optional group() query names -- a constexpr member
+   function taking no arguments and returning a string -- or NULL.  */
+
+static const char *
+contract_control_group_name (tree ctrl)
+{
+  tree ctrl_expr = ctrl;
+  tree type = contract_control_naming_type (ctrl);
+  if (!type || !CLASS_TYPE_P (type) || processing_template_decl)
+    return NULL;
+  complete_type (type);
+  if (!COMPLETE_TYPE_P (type))
+    return NULL;
+  tree member = lookup_member (type, get_identifier ("group"),
+			       /*protect=*/1, /*want_type=*/false, tf_none);
+  if (!member || member == error_mark_node || !BASELINK_P (member))
+    return NULL;
+  releasing_vec args;
+  bool saved_suppress = suppress_conveyor_restrictions_for_trait_query_p;
+  suppress_conveyor_restrictions_for_trait_query_p = true;
+  tree call = build_new_method_call (ctrl_expr, member, &args, NULL_TREE,
+				     LOOKUP_NORMAL, NULL, tf_none);
+  tree val = (call && call != error_mark_node
+	      ? maybe_constant_value (call, NULL_TREE, mce_true) : NULL_TREE);
+  suppress_conveyor_restrictions_for_trait_query_p = saved_suppress;
+  if (!val || val == error_mark_node)
+    return NULL;
+  STRIP_NOPS (val);
+  return c_getstr (val);
+}
+
+/* Whether the configuration's namespace ENTRY covers NS ("a::b"): NS
+   itself or a namespace nested in it.  */
+
+static bool
+contract_config_ns_matches (const char *entry, const char *ns)
+{
+  size_t n = strlen (entry);
+  return (!strncmp (entry, ns, n)
+	  && (ns[n] == '\0' || (ns[n] == ':' && ns[n + 1] == ':')));
+}
+
+/* Whether the configuration's file ENTRY names FILE: the same path, or a
+   trailing part of it starting at a directory boundary.  */
+
+static bool
+contract_config_file_matches (const char *entry, const char *file)
+{
+  size_t n = strlen (entry), m = strlen (file);
+  if (n > m || strcmp (file + (m - n), entry))
+    return false;
+  return n == m || file[m - n - 1] == '/' || entry[0] == '/';
+}
+
+/* The semantic the configuration gives a contract assertion of KIND at
+   LOC, naming control object CTRL (NULL_TREE: none), of function FN
+   (NULL_TREE: of the current scope); CONSTEVAL is 1 for its evaluation at
+   compile time, 0 for run time, -1 for an evaluation of either (C++26
+   contracts without control objects, which have one semantic for both:
+   entries with a "constexpr" key then match nothing).  0 if no entry
+   matches.  */
+
+unsigned
+contract_config_semantic_for (unsigned kind, location_t loc, tree ctrl,
+			      tree fn, int comptime)
+{
+  if (contract_config_table.is_empty ())
+    return 0;
+  tree scope = fn && fn != error_mark_node ? CP_DECL_CONTEXT (fn)
+	       : current_namespace;
+  scope = decl_namespace_context (scope);
+  const char *ns = NULL;
+  if (scope && scope != global_namespace)
+    ns = decl_as_string (scope, TFF_PLAIN_IDENTIFIER);
+  expanded_location xloc = expand_location (loc);
+  const char *group = NULL;
+  bool group_known = false;
+  for (const contract_config_entry &e : contract_config_table)
+    {
+      if (e.kind && e.kind != kind)
+	continue;
+      if (e.constexpr_eval != -1 && e.constexpr_eval != comptime)
+	continue;
+      if (e.ns && (!ns || !contract_config_ns_matches (e.ns, ns)))
+	continue;
+      if (e.file)
+	{
+	  if (!xloc.file || !contract_config_file_matches (e.file, xloc.file))
+	    continue;
+	  bool in = !e.lines_len;
+	  for (unsigned i = 0; i < e.lines_len; ++i)
+	    if (xloc.line >= e.lines[2 * i] && xloc.line <= e.lines[2 * i + 1])
+	      in = true;
+	  if (!in || (e.column && xloc.column != e.column))
+	    continue;
+	}
+      if (e.group)
+	{
+	  if (!group_known)
+	    {
+	      group = ctrl ? contract_control_group_name (ctrl) : NULL;
+	      group_known = true;
+	    }
+	  size_t n = strlen (e.group);
+	  if (!group || strncmp (e.group, group, n)
+	      || (group[n] != '\0' && group[n] != '.'))
+	    continue;
+	}
+      return e.semantic;
+    }
+  return 0;
+}
+
+/* As contract_config_semantic_for, for CONTRACT.  */
+
+unsigned
+contract_config_semantic_of (tree contract, tree fn, int comptime)
+{
+  if (contract_config_table.is_empty () || !contract
+      || contract == error_mark_node)
+    return 0;
+  return contract_config_semantic_for (get_contract_assertion_kind (contract),
+				       EXPR_LOCATION (contract),
+				       CONTRACT_CONTROL_OBJECT (contract), fn,
+				       comptime);
 }
 
 /* If the assertion names a control type CTRL, constant-evaluate
@@ -7975,6 +8132,7 @@ static hash_map<tree, cct_cache_entry> *cct_cache;
 bool
 contract_failure_terminates_p (tree contract, tree owner_fn)
 {
+  contract_config_scope ccs (contract, owner_fn);
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl)
     {
@@ -8564,6 +8722,7 @@ whole_set_inherited_p (tree basefn, tree_code code, tree overrider,
   bool seen = false;
   for (tree contract : fn_contracts (basefn))
     {
+      contract_config_scope ccs (contract, basefn);
       if (TREE_CODE (contract) != code)
 	continue;
       tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
@@ -13471,6 +13630,7 @@ oa_accessor_postcondition_object_address_p (tree fndecl)
     return false;
   for (tree contract : fn_contracts (fndecl))
     {
+      contract_config_scope ccs (contract, fndecl);
       if (TREE_CODE (contract) != POSTCONDITION_STMT)
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
@@ -17920,6 +18080,7 @@ static bool oa_conveyor_strength;
 static bool
 oa_contract_symbolic_only_p (tree contract, tree callee)
 {
+  contract_config_scope ccs (contract, callee);
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl)
     return false;
@@ -19548,6 +19709,7 @@ static bool oa_skip_predicate_scans;
 static bool
 oa_contract_conveyor_active_p (tree contract, tree owner_fn = NULL_TREE)
 {
+  contract_config_scope ccs (contract, owner_fn);
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl || !flag_contract_control_objects)
     return false;
@@ -19571,6 +19733,7 @@ oa_contract_conveyor_active_p (tree contract, tree owner_fn = NULL_TREE)
 static bool
 oa_contract_symbolic_active_p (tree contract, tree owner_fn = NULL_TREE)
 {
+  contract_config_scope ccs (contract, owner_fn);
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl || !flag_contract_control_objects)
     return false;
@@ -19592,6 +19755,7 @@ oa_contract_symbolic_active_p (tree contract, tree owner_fn = NULL_TREE)
 static bool
 oa_contract_conveyor_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE)
 {
+  contract_config_scope ccs (contract, owner_fn);
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl || !flag_contract_control_objects)
     return false;
@@ -19605,6 +19769,7 @@ oa_contract_conveyor_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE
 static bool
 oa_contract_symbolic_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE)
 {
+  contract_config_scope ccs (contract, owner_fn);
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl || !flag_contract_control_objects)
     return false;
@@ -19623,6 +19788,7 @@ oa_contract_symbolic_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE
 static bool
 oa_contract_conveyor_strict_p (tree contract, tree owner_fn = NULL_TREE)
 {
+  contract_config_scope ccs (contract, owner_fn);
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl || !flag_contract_control_objects)
     return false;
@@ -19635,6 +19801,7 @@ oa_contract_conveyor_strict_p (tree contract, tree owner_fn = NULL_TREE)
 static bool
 oa_contract_symbolic_strict_p (tree contract, tree owner_fn = NULL_TREE)
 {
+  contract_config_scope ccs (contract, owner_fn);
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl || !flag_contract_control_objects)
     return false;
@@ -28246,6 +28413,7 @@ static tree
 oa_build_symbolic_scalar_check_bind (tree contract, tree ctrl, tree op,
 				      tree thunk_fn, tree args_ptr)
 {
+  contract_config_scope ccs (contract, current_function_decl);
   location_t loc = EXPR_LOCATION (contract);
   contract_check_side side = contract_side_of (contract, current_function_decl);
   tree t_ctx = TREE_VALUE (FUNCTION_FIRST_USER_PARMTYPE (op));
@@ -34941,6 +35109,7 @@ oa_has_active_postcondition (tree fndecl)
 static void
 oa_handle_postcondition_stmt (tree contract, oa_env &env)
 {
+  contract_config_scope ccs (contract, current_function_decl);
   bool conveyor_ok = oa_contract_conveyor_active_p (contract);
   bool symbolic_ok = oa_contract_symbolic_active_p (contract);
   /* Found and fixed 2026-08-26: moved up from its own, narrower use
@@ -40284,6 +40453,7 @@ static tree
 build_predicate_arg_struct_var (tree contract, tree struct_type, tree cc_bind,
 				location_t loc)
 {
+  contract_config_scope ccs (contract, current_function_decl);
   tree struct_var = build_decl (loc, VAR_DECL, NULL_TREE, struct_type);
   DECL_ARTIFICIAL (struct_var) = true;
   DECL_IGNORED_P (struct_var) = true;
@@ -40406,6 +40576,7 @@ static tree
 build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
 			      tree args_ptr, tree thunk_fn)
 {
+  contract_config_scope ccs (contract, current_function_decl);
   location_t loc = EXPR_LOCATION (contract);
   tree t_ctx = TREE_VALUE (FUNCTION_FIRST_USER_PARMTYPE (op));
   tree ctx_type = non_reference (t_ctx);
@@ -40579,6 +40750,7 @@ build_real_source_location_value (location_t loc, tree src_loc_type,
 static tree
 build_predicate_constexpr_thunk (tree contract)
 {
+  contract_config_scope ccs (contract, current_function_decl);
   location_t loc = EXPR_LOCATION (contract);
 
   tree void_ptr_type = build_pointer_type (void_type_node);
@@ -40697,6 +40869,7 @@ tree
 build_contract_control_constexpr_check (tree contract, tree fndecl,
 					 bool quiet)
 {
+  contract_config_scope ccs (contract, fndecl, 1);
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   gcc_checking_assert (ctrl);
   contract_check_side side = contract_side_of (contract, fndecl);
@@ -40966,6 +41139,7 @@ get_or_build_symbolic_shadow_contract (location_t loc, tree contract,
 bool
 contract_symbolic_runtime_checked_p (tree contract)
 {
+  contract_config_scope ccs (contract, current_function_decl);
   if (!flag_contract_symbolic_runtime_checks || !flag_contract_control_objects)
     return false;
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
@@ -40988,6 +41162,7 @@ static tree
 build_symbolic_runtime_check (tree contract, tree ctrl, location_t loc,
 			       tree condition)
 {
+  contract_config_scope ccs (contract, current_function_decl);
   auto_vec<oa_symbolic_action> actions;
   if (!oa_collect_symbolic_actions (loc, condition, &actions))
     return error_mark_node;
@@ -41126,6 +41301,7 @@ contract_condition_unsubstituted_p (tree cond)
 tree
 build_contract_check (tree contract)
 {
+  contract_config_scope ccs (contract, current_function_decl);
   /* A specifier synthesized by maybe_inherit_virtual_contract has its
      real condition resolved lazily, here, rather than when first
      synthesized -- see resolve_inherited_contract's comment for why.  */

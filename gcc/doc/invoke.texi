@@ -225,6 +225,7 @@ in the following sections.
 -fcontracts
 -fcontract-evaluation-semantic=@r{[}ignore@r{|}observe@r{|}enforce@r{|}quick_enforce@r{]}
 -fcontract-violation-information=@r{[}full@r{|}none@r{]}
+-fcontract-configuration=@var{json}  -fcontract-configuration-file=@var{file}
 -fcontracts-conservative-ipa  -fcontract-checks-outlined
 -fcontract-disable-optimized-checks
 -fcontracts-client-check=@r{[}none@r{|}pre@r{|}all@r{]}
@@ -3391,6 +3392,46 @@ names are empty and its line is 0, and the program does not contain them.
 This holds for every assertion, whichever control object it names
 (@option{-fcontract-control-objects}).  @samp{full}, the default, keeps
 them.
+
+@opindex fcontract-configuration
+@opindex fcontract-configuration-file
+@item -fcontract-configuration=@var{json}
+@itemx -fcontract-configuration-file=@var{file}
+Give contract assertions their evaluation semantics by a P3595
+configuration, inline or read from @var{file}; either option may be given
+several times.  A configuration is a JSON array (comments allowed) of
+entries, each an object with an @code{output} object, whose
+@code{semantic} is one of @samp{ignore}, @samp{observe}, @samp{enforce}
+and @samp{quick_enforce}, and an optional @code{match} object, whose keys
+select the assertions the entry applies to:
+
+@table @code
+@item kind
+@samp{pre}, @samp{post} or @samp{contract_assert}.
+@item constexpr
+@samp{true} for the assertion's evaluation at compile time, @samp{false}
+for its evaluation at run time.  Used only with
+@option{-fcontract-control-objects}: without it an assertion has one
+semantic for both, and an entry with this key matches nothing.
+@item namespace
+The namespace of the assertion's function, or one it is nested in.
+@item location
+@samp{@var{file}}, @samp{@var{file}:@var{lines}} or
+@samp{@var{file}:@var{lines}:@var{column}}: @var{file} is the assertion's
+source file or a trailing part of its path, and @var{lines} a
+comma-separated list of lines @var{n} and ranges @var{n}-@var{m}.
+@item group
+The group named by the @code{group()} query of the assertion's control
+object (@option{-fcontract-control-objects}), or a group it is nested in
+by a dotted suffix: @samp{lib} matches @samp{lib} and @samp{lib.io}.
+@end table
+
+The first entry, in the order the options are given, that matches an
+assertion decides its semantic; @option{-fcontract-evaluation-semantic}
+decides for the rest.  The semantic is what the assertion is evaluated
+with, and what its control object is given.
+@option{-fcontracts-group-evaluation-semantic} is separate: it gives the
+control objects a table of their own to read.
 
 @opindex fcontracts-conservative-ipa
 @opindex fno-contracts-conservative-ipa

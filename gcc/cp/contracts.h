@@ -1568,4 +1568,53 @@ contract_terminating_p (const_tree contract)
 	  || get_evaluation_semantic (contract) == CES_QUICK);
 }
 
+
+/* D4324, QoI: P3595 contract configuration (contracts.cc).  */
+extern unsigned contract_config_override;
+extern int contract_config_consteval;
+extern unsigned contract_config_semantic_for (unsigned, location_t, tree,
+					      tree, int);
+extern unsigned contract_config_semantic_of (tree, tree, int);
+
+/* While one is live, a control object's queries, its context and its
+   static info see the semantic the configuration gives one contract
+   assertion -- CONTRACT, or one of KIND at LOC naming CTRL -- of function
+   FN (NULL_TREE: the current scope), evaluated at compile time if
+   CONSTEVAL is 1, at run time if 0, as the enclosing scope's if -2 (run
+   time outside any); or the translation unit's semantic if no entry
+   matches.  No effect without a configuration.  */
+
+class contract_config_scope
+{
+  unsigned m_saved;
+  int m_saved_consteval;
+public:
+  contract_config_scope (tree contract, tree fn = NULL_TREE,
+			 int comptime = -2)
+    : m_saved (contract_config_override),
+      m_saved_consteval (contract_config_consteval)
+  {
+    if (comptime != -2)
+      contract_config_consteval = comptime;
+    if (!contract_config_table.is_empty ())
+      contract_config_override
+	= contract_config_semantic_of (contract, fn,
+				       contract_config_consteval);
+  }
+  contract_config_scope (unsigned kind, location_t loc, tree ctrl, tree fn)
+    : m_saved (contract_config_override),
+      m_saved_consteval (contract_config_consteval)
+  {
+    contract_config_consteval = 0;
+    if (!contract_config_table.is_empty ())
+      contract_config_override
+	= contract_config_semantic_for (kind, loc, ctrl, fn, 0);
+  }
+  ~contract_config_scope ()
+  {
+    contract_config_override = m_saved;
+    contract_config_consteval = m_saved_consteval;
+  }
+};
+
 #endif /* ! GCC_CP_CONTRACT_H */

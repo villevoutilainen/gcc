@@ -34870,6 +34870,7 @@ cp_parser_late_contract_condition (cp_parser *parser, tree fn, tree contract)
   /* D4324: with control objects enabled, constification is opt-in via the
      control object's type; otherwise P2900 constification (always on) applies,
      exactly as for early-parsed contracts.  */
+  contract_config_scope ccs (contract, fn);
   bool constify_p = flag_contract_control_objects
     ? contract_control_constifies (CONTRACT_CONTROL_OBJECT (contract),
 				    contract_side_of (contract, fn), fn)
@@ -35078,6 +35079,7 @@ cp_parser_late_object_contracts (cp_parser *parser, tree decl)
       cp_token_cache *tokens = DEFPARSE_TOKENS (condition);
       cp_parser_push_lexer_for_tokens (parser, tokens);
 
+      contract_config_scope ccs (contract, decl);
       bool constify_p = flag_contract_control_objects
 	? contract_control_constifies (CONTRACT_CONTROL_OBJECT (contract),
 					side, decl)
@@ -35338,6 +35340,8 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
      control object's type; otherwise P2900 constification (always on)
      applies.  When constifying, treat the current class object as const in
      the condition too.  */
+  contract_config_scope ccs (CAK_ASSERT, loc, control_object,
+			     current_function_decl);
   bool constify_p = flag_contract_control_objects
     ? contract_control_constifies (control_object, ccs_not_applicable,
 				    current_function_decl)
