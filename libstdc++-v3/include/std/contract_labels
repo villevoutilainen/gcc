@@ -338,6 +338,26 @@ namespace contracts
       constexpr __SIZE_TYPE__ size () const noexcept { return _M_size; }
     };
 
+    // ---- Hierarchical group names ----
+    //
+    // Whether the group a configuration rule names, RULE, covers the
+    // group NAME: NAME itself, or any group nested in it by a dotted
+    // suffix -- "lib" covers "lib" and "lib.io", not "library".  The
+    // labels below look rules up with it; a control object of the user's
+    // own that reads group_semantic_rules() can use it too.
+    constexpr bool
+    group_matches (const char* __rule, const char* __name) noexcept
+    {
+      if (!__rule || !__name)
+	return false;
+      while (*__rule && *__rule == *__name)
+	{
+	  ++__rule;
+	  ++__name;
+	}
+      return *__rule == '\0' && (*__name == '\0' || *__name == '.');
+    }
+
     // ---- group_semantic_rules()-driven group configuration ----
     //
     // Real, compiler-provided data now (see
@@ -347,7 +367,8 @@ namespace contracts
     // the compiler already validated every rule's semantic spelling,
     // so RULES's own elements are already real evaluation_semantic
     // values.  Consulted in RULES's own order (== command-line order),
-    // first match wins, against any of the label's own group names.
+    // first match wins, against any of the label's own group names,
+    // hierarchically (group_matches: a rule for "lib" covers "lib.io").
     //
     // _Names may be group_name_view (a simple label) or
     // __combined_group_names (see combined_label further down) -- both
@@ -360,7 +381,7 @@ namespace contracts
     {
       for (auto& __rule : __rules)
 	for (const char* __name : __names)
-	  if (__builtin_strcmp (__name, __rule.group_name ()) == 0)
+	  if (group_matches (__rule.group_name (), __name))
 	    {
 	      __out = __rule.semantic ();
 	      return true;
