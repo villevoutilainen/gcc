@@ -2030,6 +2030,23 @@ fcontract-evaluation-semantic=
 C++ ObjC++ Joined RejectNegative Enum(contract_semantic) Var(flag_contract_evaluation_semantic) Init(3)
 -fcontract-evaluation-semantic=[ignore|observe|enforce|quick_enforce]	Select the contract evaluation semantic (defaults to enforce).
 
+Enum
+Name(contract_violation_info) Type(int) UnknownError(unrecognized contract violation information level %qs)
+
+EnumValue
+Enum(contract_violation_info) String(none) Value(0)
+
+EnumValue
+Enum(contract_violation_info) String(full) Value(1)
+
+; D4324: none empties every contract assertion's comment and source
+; location (the predicate text, file, function and line the violation
+; handler sees), so the program doesn't contain them -- for every
+; assertion, whichever control object it names.
+fcontract-violation-information=
+C++ ObjC++ Joined RejectNegative Enum(contract_violation_info) Var(flag_contract_violation_information) Init(1)
+-fcontract-violation-information=[full|none]	Whether contract violations carry the assertion's text and source location (defaults to full).
+
 ; Repeatable: -fcontracts-group-evaluation-semantic=safety:observe
 ; -fcontracts-group-evaluation-semantic=perf:ignore accumulates one
 ; override rule per occurrence into contract_group_semantic_table (see

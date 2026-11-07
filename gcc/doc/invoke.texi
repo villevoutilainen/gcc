@@ -224,6 +224,7 @@ in the following sections.
 -fconstexpr-loop-limit=@var{n}  -fconstexpr-ops-limit=@var{n}
 -fcontracts
 -fcontract-evaluation-semantic=@r{[}ignore@r{|}observe@r{|}enforce@r{|}quick_enforce@r{]}
+-fcontract-violation-information=@r{[}full@r{|}none@r{]}
 -fcontracts-conservative-ipa  -fcontract-checks-outlined
 -fcontract-disable-optimized-checks
 -fcontracts-client-check=@r{[}none@r{|}pre@r{|}all@r{]}
@@ -3381,6 +3382,15 @@ an error will be emitted.
 fails, the execution is terminated immediately (without calling any handler).
 At compile-time there is no difference in behaviour between this option and
 the @code{enforce} case, since no handler is invoked at compile time.
+
+@opindex fcontract-violation-information
+@item -fcontract-violation-information=@var{level}
+With @samp{none}, no contract assertion carries its text or its source
+location: the comment a violation reports is empty, its file and function
+names are empty and its line is 0, and the program does not contain them.
+This holds for every assertion, whichever control object it names
+(@option{-fcontract-control-objects}).  @samp{full}, the default, keeps
+them.
 
 @opindex fcontracts-conservative-ipa
 @opindex fno-contracts-conservative-ipa

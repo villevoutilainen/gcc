@@ -6545,11 +6545,16 @@ build_contract_violation_ctor (tree contract)
     can_be_const = false;
 
   tree comment = CONTRACT_COMMENT (contract);
+  /* -fcontract-violation-information=none: no text, no location.  */
+  if (!flag_contract_violation_information)
+    comment = build_string_literal ("");
   if (comment && !really_constant_p (comment))
     can_be_const = false;
 
   tree std_src_loc_impl_ptr = CONTRACT_STD_SOURCE_LOC (contract);
-  if (std_src_loc_impl_ptr)
+  if (!flag_contract_violation_information)
+    std_src_loc_impl_ptr = build_zero_cst (ptr_type_node);
+  else if (std_src_loc_impl_ptr)
     {
       std_src_loc_impl_ptr = convert_from_reference (std_src_loc_impl_ptr);
       if (!really_constant_p (std_src_loc_impl_ptr))
@@ -7416,6 +7421,9 @@ static bool
 contract_control_omits_comment (tree ctrl, contract_check_side side, tree owner_fn,
 				 bool quiet = false)
 {
+  /* -fcontract-violation-information=none: for every assertion.  */
+  if (!flag_contract_violation_information)
+    return true;
   return contract_control_bool_member (ctrl, "omit_comment", side, owner_fn, quiet) == 1;
 }
 
@@ -7428,6 +7436,8 @@ static bool
 contract_control_omits_source_location (tree ctrl, contract_check_side side, tree owner_fn,
 					 bool quiet = false)
 {
+  if (!flag_contract_violation_information)
+    return true;
   return contract_control_bool_member (ctrl, "omit_source_location", side, owner_fn,
 					quiet) == 1;
 }
