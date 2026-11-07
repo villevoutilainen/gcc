@@ -18800,6 +18800,10 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 	     below.  */
 	  tree stripped = oa_strip_to_relational_operand (x);
 	  tree value_type = oa_decl_value_type (stripped);
+	  /* The negation's own type decides: '-(size_t) n' wraps.  */
+	  if (!INTEGRAL_TYPE_P (TREE_TYPE (t))
+	      || !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (t)))
+	    return NULL_TREE;
 	  if (!INTEGRAL_TYPE_P (value_type) || !TYPE_OVERFLOW_UNDEFINED (value_type))
 	    return NULL_TREE;
 	  oa_range_fact fact;
