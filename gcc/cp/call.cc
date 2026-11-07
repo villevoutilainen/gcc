@@ -10407,6 +10407,9 @@ conveyor_builtin_allowed_p (tree fn)
     case BUILT_IN_EXPECT_WITH_PROBABILITY:
     case BUILT_IN_CONSTANT_P:
     case BUILT_IN_OBSERVABLE_CHKPT:
+    /* The program's claim about its argument, as unreachable is about
+       the path: a pointer to T is aligned for T.  */
+    case BUILT_IN_ASSUME_ALIGNED:
     /* Defined for every argument.  */
     case BUILT_IN_SIGNBIT:
     case BUILT_IN_FPCLASSIFY:

@@ -72,3 +72,12 @@ bool through_ref (const B &b) conveyor { *b.p = 3; return true; }	// { dg-error 
 
 struct H { int *p; H (int *q) conveyor : p (q) {} };
 struct CH : H { CH (const B &b) conveyor : H (b.p) {} };
+
+// std::is_object_address only asks about its argument: a pointer member of
+// a const object may be given to it.
+struct asks { int* p; int get () const conveyor; };
+int asks::get () const conveyor
+{
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (p));
+  return *p;
+}

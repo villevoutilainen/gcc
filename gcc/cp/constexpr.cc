@@ -1276,8 +1276,11 @@ check_conveyor_function_body_r (tree *tp, int *, void *)
 	tree fn = cp_get_callee_fndecl_nofold (t);
 	/* Passing a mutable member of a const object on for writing (a
 	   non-const member call on it, or its address to a pointer or
-	   reference to non-const) is a write through const access.  */
-	for (int i = 0; i < call_expr_nargs (t); ++i)
+	   reference to non-const) is a write through const access.
+	   std::is_object_address only asks about its argument.  */
+	int nargs = (fn && is_object_address_fndecl_p (fn)
+		     ? 0 : call_expr_nargs (t));
+	for (int i = 0; i < nargs; ++i)
 	  {
 	    tree a = STRIP_ANY_LOCATION_WRAPPER (CALL_EXPR_ARG (t, i));
 	    tree at = TREE_TYPE (a);

@@ -21,3 +21,4 @@ bool ok_nan (double d) conveyor { return __builtin_isnan (d) || __builtin_isinf 
 unsigned ok_bswap (unsigned x) conveyor { return __builtin_bswap32 (x); }
 bool ok_ce () conveyor { return __builtin_is_constant_evaluated (); }
 int ok_expect (int x) conveyor { if (__builtin_expect (x > 0, 1)) return 1; __builtin_unreachable (); }
+int* ok_aligned (int* p) conveyor { return static_cast<int*> (__builtin_assume_aligned (p, alignof (int))); }
