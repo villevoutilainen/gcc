@@ -1891,7 +1891,7 @@ contract_config_location (const char *loc, contract_config_entry &e,
    {"match": {...}, "output": {"semantic": NAME}}; "match" may have "kind"
    ("pre", "post", "contract_assert"), "constexpr" (true for constant
    evaluation, false for run time), "namespace", "location" and "group"
-   (matched against a control object's group() query), each optional.  */
+   (matched against a control object's group_names), each optional.  */
 static void
 parse_contract_configuration (const char *text, const char *source)
 {

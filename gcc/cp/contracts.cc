@@ -7156,35 +7156,424 @@ contract_control_bool_member (tree ctrl, const char *name,
    assertion_context's semantic, and what a contract without a control
    object is evaluated with.  */
 
-/* The group CTRL's optional group() query names -- a constexpr member
-   function taking no arguments and returning a string -- or NULL.  */
+/* A control object's group names, for the P3595 configuration's "group"
+   key: P3400's group_names facet, a range of names.  The compiler walks
+   it as a range-based for does, constant-evaluating the walk; a name is
+   read through its data() and size() if it has them (data() must return
+   const char *), else converted to const char * and read up to its NUL.
+   std::string_view is never needed, so <contracts> needn't include it.  */
 
-static const char *
-contract_control_group_name (tree ctrl)
+/* The most names a group_names may hold.  */
+#define CONTRACT_GROUP_NAMES_MAX 4096
+
+/* What contract_group_names_query computes.  */
+enum contract_group_names_what { CGN_COUNT, CGN_LENGTHS, CGN_CHARS };
+
+/* Find the begin and end of RANGE as a range-based for does, into *BEGIN
+   and *END, without diagnosing.  False if either doesn't form.  */
+
+static bool
+contract_group_names_begin_end (tree range, tree *begin, tree *end)
 {
-  tree ctrl_expr = ctrl;
+  tree r = cp_perform_range_for_lookup (range, begin, end, tf_none);
+  if (!error_operand_p (*begin) && !error_operand_p (*end))
+    return true;
+  if (r == error_mark_node || !CLASS_TYPE_P (TREE_TYPE (range)))
+    return false;
+  /* cp_perform_range_for_lookup only probes the viability of begin and
+     end found by argument-dependent lookup when it may diagnose.  */
+  tree *out[2] = { begin, end };
+  const char *names[2] = { "begin", "end" };
+  for (int k = 0; k < 2; ++k)
+    {
+      releasing_vec args;
+      vec_safe_push (args, range);
+      tree fn = perform_koenig_lookup (get_identifier (names[k]), args,
+				       tf_none);
+      *out[k] = finish_call_expr (fn, &args, /*disallow_virtual=*/false,
+				  /*koenig_p=*/true, tf_none);
+      if (error_operand_p (*out[k]))
+	return false;
+    }
+  return true;
+}
+
+/* Whether TYPE, a class, has members data and size callable with no
+   arguments; then in *DATA_OK whether data() returns const char *.  */
+
+static bool
+contract_group_name_has_data_size (tree type, bool *data_ok)
+{
+  if (!CLASS_TYPE_P (type) || !COMPLETE_TYPE_P (complete_type (type)))
+    return false;
+  tree data = lookup_member (type, get_identifier ("data"), 1, false,
+			     tf_none);
+  tree size = lookup_member (type, get_identifier ("size"), 1, false,
+			     tf_none);
+  if (!data || !size || !BASELINK_P (data) || !BASELINK_P (size))
+    return false;
+  /* The data() taking no arguments: its return type.  */
+  tree t = NULL_TREE;
+  for (tree fn : lkp_range (BASELINK_FUNCTIONS (data)))
+    if (TREE_CODE (fn) == FUNCTION_DECL
+	&& FUNCTION_FIRST_USER_PARMTYPE (fn) == void_list_node)
+      t = TREE_TYPE (TREE_TYPE (fn));
+  if (!t)
+    return false;
+  *data_ok = (TYPE_PTR_P (t)
+	      && same_type_p (TYPE_MAIN_VARIANT (TREE_TYPE (t)), char_type_node)
+	      && CP_TYPE_CONST_P (TREE_TYPE (t))
+	      && !CP_TYPE_VOLATILE_P (TREE_TYPE (t)));
+  return true;
+}
+
+/* An expression that constant-evaluates to one fact about GN, a control
+   object's group_names (an lvalue): with CGN_COUNT the number of its names,
+   counting no further than CONTRACT_GROUP_NAMES_MAX + 1; with CGN_LENGTHS
+   an array of the lengths of its first COUNT names; with CGN_CHARS an array
+   of the TOTAL characters of those names, one after another.  The range is
+   walked once, as a range-based for walks it.  *BAD_DATA is set if a name
+   has a data() that doesn't return const char *.  NULL_TREE if some step
+   doesn't form.  */
+
+static tree
+contract_group_names_query (location_t loc, tree gn,
+			    contract_group_names_what what,
+			    unsigned HOST_WIDE_INT count,
+			    unsigned HOST_WIDE_INT total, bool *bad_data)
+{
+  /* GN is named once, through a pointer.  */
+  tree p = get_target_expr (build_address (gn), tf_none);
+  if (error_operand_p (p))
+    return NULL_TREE;
+  tree range = cp_build_fold_indirect_ref (TARGET_EXPR_SLOT (p));
+  tree b, e;
+  if (!contract_group_names_begin_end (range, &b, &e))
+    return NULL_TREE;
+  tree btype = cv_unqualified (TREE_TYPE (b));
+  tree etype = cv_unqualified (TREE_TYPE (e));
+  if (TREE_CODE (b) == TARGET_EXPR)
+    b = TARGET_EXPR_INITIAL (b);
+  if (TREE_CODE (e) == TARGET_EXPR)
+    e = TARGET_EXPR_INITIAL (e);
+  b = force_target_expr (btype, b, tf_none);
+  e = force_target_expr (etype, e, tf_none);
+  tree r = get_target_expr (build_zero_cst (ptrdiff_type_node), tf_none);
+  if (error_operand_p (b) || error_operand_p (e) || error_operand_p (r))
+    return NULL_TREE;
+  tree bs = TARGET_EXPR_SLOT (b), rs = TARGET_EXPR_SLOT (r);
+  tree binc = build_x_unary_op (loc, PREINCREMENT_EXPR, bs, NULL_TREE,
+				tf_none);
+  if (error_operand_p (binc))
+    return NULL_TREE;
+  tree rinc = build2 (PREINCREMENT_EXPR, ptrdiff_type_node, rs,
+		      build_int_cst (ptrdiff_type_node, 1));
+
+  tree cond;
+  if (what == CGN_COUNT)
+    {
+      cond = build_x_binary_op (loc, NE_EXPR, bs, ERROR_MARK,
+				TARGET_EXPR_SLOT (e), ERROR_MARK, NULL_TREE,
+				NULL, tf_none);
+      if (error_operand_p (cond))
+	return NULL_TREE;
+      cond = contextual_conv_bool (cond, tf_none);
+      if (error_operand_p (cond))
+	return NULL_TREE;
+      cond = build2 (TRUTH_ANDIF_EXPR, boolean_type_node,
+		     build2 (NE_EXPR, boolean_type_node, rs,
+			     build_int_cst (ptrdiff_type_node,
+					    CONTRACT_GROUP_NAMES_MAX + 1)),
+		     cond);
+    }
+  else
+    cond = build2 (NE_EXPR, boolean_type_node, rs,
+		   build_int_cst (ptrdiff_type_node, count));
+
+  warning_sentinel wur (warn_unused_result);
+  tree body, tail, res = NULL_TREE, k = NULL_TREE;
+  if (what == CGN_COUNT)
+    {
+      body = build_compound_expr (loc, binc, rinc);
+      tail = rs;
+    }
+  else
+    {
+      tree elt_type = what == CGN_LENGTHS ? ptrdiff_type_node : char_type_node;
+      unsigned HOST_WIDE_INT n = what == CGN_LENGTHS ? count : total;
+      tree arr_type
+	= build_cplus_array_type (elt_type, build_index_type (size_int (n - 1)));
+      res = get_target_expr (build_value_init (arr_type, tf_none), tf_none);
+      if (error_operand_p (res))
+	return NULL_TREE;
+      tree ress = TARGET_EXPR_SLOT (res);
+      if (what == CGN_CHARS)
+	{
+	  k = get_target_expr (build_zero_cst (ptrdiff_type_node), tf_none);
+	  if (error_operand_p (k))
+	    return NULL_TREE;
+	}
+
+      /* The name, *B, in a temporary of its own, and an index J into it:
+	 through its data() and size(), or as a const char *.  */
+      tree elt = build_x_indirect_ref (loc, bs, RO_UNARY_STAR, NULL_TREE,
+				       tf_none);
+      if (error_operand_p (elt))
+	return NULL_TREE;
+      tree elt_class = non_reference (TREE_TYPE (elt));
+      bool data_ok = false;
+      bool use_data_size
+	= contract_group_name_has_data_size (TYPE_MAIN_VARIANT (elt_class),
+					     &data_ok);
+      if (use_data_size && !data_ok)
+	{
+	  *bad_data = true;
+	  return NULL_TREE;
+	}
+      tree name = (use_data_size
+		   ? force_rvalue (elt, tf_none)
+		   : perform_implicit_conversion (const_string_type_node, elt,
+						  tf_none));
+      if (error_operand_p (name))
+	return NULL_TREE;
+      tree nm = get_target_expr (name, tf_none);
+      tree j = get_target_expr (build_zero_cst (ptrdiff_type_node), tf_none);
+      if (error_operand_p (nm) || error_operand_p (j))
+	return NULL_TREE;
+      tree nms = TARGET_EXPR_SLOT (nm), js = TARGET_EXPR_SLOT (j);
+      tree jinc = build2 (PREINCREMENT_EXPR, ptrdiff_type_node, js,
+			  build_int_cst (ptrdiff_type_node, 1));
+      tree chars = nms, jcond = NULL_TREE;
+      if (use_data_size)
+	{
+	  releasing_vec noargs;
+	  tree data = finish_class_member_access_expr
+	    (nms, get_identifier ("data"), false, tf_none);
+	  if (!error_operand_p (data))
+	    data = finish_call_expr (data, &noargs, false, false, tf_none);
+	  tree size = finish_class_member_access_expr
+	    (nms, get_identifier ("size"), false, tf_none);
+	  if (!error_operand_p (size))
+	    {
+	      releasing_vec noargs2;
+	      size = finish_call_expr (size, &noargs2, false, false, tf_none);
+	    }
+	  if (!error_operand_p (size))
+	    size = cp_convert (ptrdiff_type_node, size, tf_none);
+	  if (error_operand_p (data) || error_operand_p (size))
+	    return NULL_TREE;
+	  chars = data;
+	  jcond = build2 (NE_EXPR, boolean_type_node, js, size);
+	}
+      /* Character J of the name, as an int.  */
+      tree ch = grok_array_decl (loc, chars, js, NULL, tf_none);
+      if (error_operand_p (ch))
+	return NULL_TREE;
+      ch = cp_convert (integer_type_node, convert_from_reference (ch),
+		       tf_none);
+      if (error_operand_p (ch))
+	return NULL_TREE;
+      if (!jcond)
+	jcond = build2 (NE_EXPR, boolean_type_node, ch, integer_zero_node);
+
+      tree jbody = jinc;
+      if (what == CGN_CHARS)
+	{
+	  tree dst = cp_build_array_ref (loc, ress, TARGET_EXPR_SLOT (k),
+					 tf_none);
+	  if (error_operand_p (dst))
+	    return NULL_TREE;
+	  tree set = cp_build_modify_expr (loc, dst, NOP_EXPR,
+					   cp_convert (char_type_node, ch,
+						       tf_none),
+					   tf_none);
+	  if (error_operand_p (set))
+	    return NULL_TREE;
+	  tree kinc = build2 (PREINCREMENT_EXPR, ptrdiff_type_node,
+			      TARGET_EXPR_SLOT (k),
+			      build_int_cst (ptrdiff_type_node, 1));
+	  jbody = build_compound_expr (loc, set,
+				       build_compound_expr (loc, kinc, jinc));
+	}
+      tree jw = build_stmt (loc, WHILE_STMT, NULL_TREE, NULL_TREE, NULL_TREE,
+			    NULL_TREE, NULL_TREE);
+      WHILE_BODY (jw) = fold_build_cleanup_point_expr
+	(void_type_node, convert_to_void (jbody, ICV_STATEMENT, tf_none));
+      WHILE_COND (jw) = jcond;
+
+      tree each = build_compound_expr (loc, j, jw);
+      if (what == CGN_LENGTHS)
+	{
+	  tree dst = cp_build_array_ref (loc, ress, rs, tf_none);
+	  if (error_operand_p (dst))
+	    return NULL_TREE;
+	  tree set = cp_build_modify_expr (loc, dst, NOP_EXPR, js, tf_none);
+	  if (error_operand_p (set))
+	    return NULL_TREE;
+	  each = build_compound_expr (loc, each, set);
+	}
+      each = build_compound_expr (loc, nm, each);
+      /* One full-expression per name, so its temporaries are new each
+	 time round.  */
+      each = fold_build_cleanup_point_expr
+	(void_type_node, convert_to_void (each, ICV_STATEMENT, tf_none));
+      body = build_compound_expr (loc, each,
+				  build_compound_expr (loc, binc, rinc));
+      tail = ress;
+    }
+
+  tree w = build_stmt (loc, WHILE_STMT, NULL_TREE, NULL_TREE, NULL_TREE,
+		       NULL_TREE, NULL_TREE);
+  WHILE_BODY (w) = body;
+  WHILE_COND (w) = cond;
+  tree expr = build_compound_expr (loc, w, tail);
+  if (k)
+    expr = build_compound_expr (loc, k, expr);
+  if (res)
+    expr = build_compound_expr (loc, res, expr);
+  expr = build_compound_expr (loc, r, expr);
+  if (what == CGN_COUNT)
+    expr = build_compound_expr (loc, e, expr);
+  expr = build_compound_expr (loc, b, expr);
+  expr = build_compound_expr (loc, p, expr);
+  return fold_build_cleanup_point_expr (TREE_TYPE (expr), expr);
+}
+
+/* The N integers of V, the constant value of an integer or of an array of
+   N integers, into OUT; false if V isn't one.  */
+
+static bool
+contract_group_names_values (tree v, unsigned HOST_WIDE_INT n,
+			     auto_vec<HOST_WIDE_INT> &out)
+{
+  out.truncate (0);
+  if (TREE_CODE (v) == INTEGER_CST)
+    {
+      out.safe_push (tree_to_shwi (v));
+      return true;
+    }
+  out.safe_grow_cleared (n);
+  if (TREE_CODE (v) == STRING_CST)
+    {
+      const char *str = TREE_STRING_POINTER (v);
+      for (unsigned HOST_WIDE_INT i = 0;
+	   i < n && i < (unsigned HOST_WIDE_INT) TREE_STRING_LENGTH (v); ++i)
+	out[i] = str[i];
+      return true;
+    }
+  if (TREE_CODE (v) != CONSTRUCTOR)
+    return false;
+  unsigned HOST_WIDE_INT next = 0;
+  tree idx, val;
+  unsigned i;
+  FOR_EACH_CONSTRUCTOR_ELT (CONSTRUCTOR_ELTS (v), i, idx, val)
+    {
+      unsigned HOST_WIDE_INT lo = next, hi = next;
+      if (idx && TREE_CODE (idx) == RANGE_EXPR)
+	{
+	  lo = tree_to_uhwi (TREE_OPERAND (idx, 0));
+	  hi = tree_to_uhwi (TREE_OPERAND (idx, 1));
+	}
+      else if (idx && TREE_CODE (idx) == INTEGER_CST)
+	lo = hi = tree_to_uhwi (idx);
+      if (TREE_CODE (val) != INTEGER_CST || hi >= n)
+	return false;
+      for (unsigned HOST_WIDE_INT x = lo; x <= hi; ++x)
+	out[x] = tree_to_shwi (val);
+      next = hi + 1;
+    }
+  return true;
+}
+
+/* The names in the group_names of control object CTRL, into NAMES (empty:
+   none, or no group_names).  A group_names that is a range of names but
+   can't be read as a constant expression, or holds more than
+   CONTRACT_GROUP_NAMES_MAX names, or whose names' data() doesn't return
+   const char *, is diagnosed at LOC.  */
+
+static void
+contract_control_group_names (tree ctrl, location_t loc,
+			      auto_vec<char *> &names)
+{
+  names.truncate (0);
   tree type = contract_control_naming_type (ctrl);
-  if (!type || !CLASS_TYPE_P (type) || processing_template_decl)
-    return NULL;
+  if (!type || !CLASS_TYPE_P (type) || processing_template_decl
+      || instantiation_dependent_expression_p (ctrl))
+    return;
   complete_type (type);
   if (!COMPLETE_TYPE_P (type))
-    return NULL;
-  tree member = lookup_member (type, get_identifier ("group"),
+    return;
+  tree member = lookup_member (type, get_identifier ("group_names"),
 			       /*protect=*/1, /*want_type=*/false, tf_none);
-  if (!member || member == error_mark_node || !BASELINK_P (member))
-    return NULL;
-  releasing_vec args;
+  if (!member || member == error_mark_node)
+    return;
+  tree gn = finish_class_member_access_expr (ctrl, get_identifier
+					     ("group_names"), false, tf_none);
+  if (error_operand_p (gn))
+    return;
+
   bool saved_suppress = suppress_conveyor_restrictions_for_trait_query_p;
   suppress_conveyor_restrictions_for_trait_query_p = true;
-  tree call = build_new_method_call (ctrl_expr, member, &args, NULL_TREE,
-				     LOOKUP_NORMAL, NULL, tf_none);
-  tree val = (call && call != error_mark_node
-	      ? maybe_constant_value (call, NULL_TREE, mce_true) : NULL_TREE);
+  auto evaluate = [&] (contract_group_names_what what,
+		       unsigned HOST_WIDE_INT count,
+		       unsigned HOST_WIDE_INT total,
+		       auto_vec<HOST_WIDE_INT> &out) -> int
+    {
+      bool bad_data = false;
+      tree q = contract_group_names_query (loc, gn, what, count, total,
+					   &bad_data);
+      if (bad_data)
+	{
+	  error_at (loc, "the names in the %<group_names%> of control object "
+		    "%qT have a %<data()%> that does not return "
+		    "%<const char *%>", type);
+	  return -1;
+	}
+      if (!q)
+	return 0;	/* Not a range of names: no groups.  */
+      tree v = maybe_constant_value (q, NULL_TREE, mce_true);
+      if (v && !error_operand_p (v)
+	  && contract_group_names_values (v, what == CGN_CHARS ? total
+					     : count, out))
+	return 1;
+      error_at (loc, "the %<group_names%> of control object %qT is not a "
+		"constant expression", type);
+      return -1;
+    };
+
+  auto_vec<HOST_WIDE_INT> counted, lens, chars;
+  if (evaluate (CGN_COUNT, 0, 0, counted) == 1 && !counted.is_empty ())
+    {
+      HOST_WIDE_INT count = counted[0];
+      if (count > CONTRACT_GROUP_NAMES_MAX)
+	error_at (loc, "the %<group_names%> of control object %qT holds more "
+		  "than %d names", type, CONTRACT_GROUP_NAMES_MAX);
+      else if (count > 0
+	       && evaluate (CGN_LENGTHS, count, 0, lens) == 1)
+	{
+	  unsigned HOST_WIDE_INT total = 0;
+	  for (HOST_WIDE_INT len : lens)
+	    total += len;
+	  if (total == 0
+	      || evaluate (CGN_CHARS, count, total, chars) == 1)
+	    {
+	      unsigned HOST_WIDE_INT at = 0;
+	      for (HOST_WIDE_INT len : lens)
+		{
+		  char *name = XNEWVEC (char, len + 1);
+		  for (HOST_WIDE_INT c = 0; c < len; ++c)
+		    name[c] = (char) chars[at + c];
+		  name[len] = '\0';
+		  at += len;
+		  if (len)
+		    names.safe_push (name);
+		  else
+		    XDELETEVEC (name);
+		}
+	    }
+	}
+    }
   suppress_conveyor_restrictions_for_trait_query_p = saved_suppress;
-  if (!val || val == error_mark_node)
-    return NULL;
-  STRIP_NOPS (val);
-  return c_getstr (val);
 }
 
 /* Whether the configuration's namespace ENTRY covers NS ("a::b"): NS
@@ -7231,8 +7620,8 @@ contract_config_semantic_for (unsigned kind, location_t loc, tree ctrl,
   if (scope && scope != global_namespace)
     ns = decl_as_string (scope, TFF_PLAIN_IDENTIFIER);
   expanded_location xloc = expand_location (loc);
-  const char *group = NULL;
-  bool group_known = false;
+  auto_vec<char *> groups;
+  bool groups_known = false;
   for (const contract_config_entry &e : contract_config_table)
     {
       if (e.kind && e.kind != kind)
@@ -7254,18 +7643,28 @@ contract_config_semantic_for (unsigned kind, location_t loc, tree ctrl,
 	}
       if (e.group)
 	{
-	  if (!group_known)
+	  if (!groups_known)
 	    {
-	      group = ctrl ? contract_control_group_name (ctrl) : NULL;
-	      group_known = true;
+	      if (ctrl)
+		contract_control_group_names (ctrl, loc, groups);
+	      groups_known = true;
 	    }
+	  /* The entry's group covers one of the assertion's: the group itself
+	     or one nested in it by a dotted suffix.  */
 	  size_t n = strlen (e.group);
-	  if (!group || strncmp (e.group, group, n)
-	      || (group[n] != '\0' && group[n] != '.'))
+	  bool covered = false;
+	  for (const char *g : groups)
+	    if (!strncmp (e.group, g, n) && (g[n] == '\0' || g[n] == '.'))
+	      covered = true;
+	  if (!covered)
 	    continue;
 	}
+      for (char *g : groups)
+	XDELETEVEC (g);
       return e.semantic;
     }
+  for (char *g : groups)
+    XDELETEVEC (g);
   return 0;
 }
 

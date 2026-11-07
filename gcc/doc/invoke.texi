@@ -3421,9 +3421,13 @@ The namespace of the assertion's function, or one it is nested in.
 source file or a trailing part of its path, and @var{lines} a
 comma-separated list of lines @var{n} and ranges @var{n}-@var{m}.
 @item group
-The group named by the @code{group()} query of the assertion's control
-object (@option{-fcontract-control-objects}), or a group it is nested in
-by a dotted suffix: @samp{lib} matches @samp{lib} and @samp{lib.io}.
+A group named in the @code{group_names} of the assertion's control object
+(@option{-fcontract-control-objects}), or a group one is nested in by a
+dotted suffix: @samp{lib} matches @samp{lib} and @samp{lib.io}.
+@code{group_names} is a range of names, as P3400 has it, which the
+compiler walks at compile time; a name is read through its
+@code{data()}, which must return @code{const char *}, and @code{size()}
+if it has them, and as a @code{const char *} otherwise.
 @end table
 
 The first entry, in the order the options are given, that matches an
