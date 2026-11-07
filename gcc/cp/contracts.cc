@@ -10181,6 +10181,19 @@ oa_float_range_divide (const oa_float_range_fact &a,
    way, but merged by full agreement only (oa_env::predicate_fact_merge_with),
    not by combining partial information.  */
 
+/* A symbolic fact relating several arguments (oa_relation_conjunct_
+   shape): the predicate, the identity of each argument (an object, or a
+   variable holding a value, or a constant), and as oa_predicate_fact.  */
+
+struct oa_relation_fact
+{
+  tree pred_fn;
+  tree args[OA_RELATION_MAX_ARGS];
+  unsigned n;
+  bool polarity;
+  bool conveyor_established;
+};
+
 struct oa_predicate_fact
 {
   tree pred_fn;
@@ -10758,9 +10771,118 @@ public:
     fact.conveyor_established = conveyor_established;
     m_predicate_fact_map.put (decl, fact);
   }
-  void predicate_fact_invalidate (tree decl) { m_predicate_fact_map.remove (decl); }
+  /* A relation's key: the same for the same predicate and argument
+     identities, in order, so that equal facts share an entry and a join
+     can match them.  An identifier, interned and never collected.  */
+  static tree relation_key (tree pred_fn, const tree *ids, unsigned n)
+  {
+    char buf[24 * (OA_RELATION_MAX_ARGS + 2)];
+    int len = sprintf (buf, "%p", (void *) pred_fn);
+    for (unsigned i = 0; i < n; ++i)
+      len += sprintf (buf + len, ":%p", (void *) ids[i]);
+    return get_identifier (buf);
+  }
+  bool relation_get (tree pred_fn, const tree *ids, unsigned n,
+		     oa_relation_fact *out)
+  {
+    const oa_relation_fact *v
+      = m_relation_map.get (relation_key (pred_fn, ids, n));
+    if (!v)
+      return false;
+    *out = *v;
+    return true;
+  }
+  void relation_set (tree pred_fn, const tree *ids, unsigned n, bool polarity,
+		     bool conveyor_established)
+  {
+    oa_relation_fact f;
+    f.pred_fn = pred_fn;
+    f.n = n;
+    for (unsigned i = 0; i < OA_RELATION_MAX_ARGS; ++i)
+      f.args[i] = i < n ? ids[i] : NULL_TREE;
+    f.polarity = polarity;
+    f.conveyor_established = conveyor_established;
+    m_relation_map.put (relation_key (pred_fn, ids, n), f);
+  }
+  /* TO, a copy of the value FROM holds: the relations FROM takes part in
+     as a value hold for TO in its place (a copy of an object has none of
+     its relations).  */
+  void relation_copy_value (tree from, tree to)
+  {
+    if (!m_relation_map.elements () || !from || from == to
+	|| !(VAR_P (from) || TREE_CODE (from) == PARM_DECL))
+      return;
+    auto_vec<oa_relation_fact> add;
+    for (auto it : m_relation_map)
+      {
+	oa_relation_fact f = it.second;
+	bool hit = false;
+	for (unsigned i = 0; i < f.n; ++i)
+	  if (f.args[i] == from
+	      && oa_relation_arg_kind_of (f.pred_fn, i) == OA_RELATION_VALUE)
+	    {
+	      f.args[i] = to;
+	      hit = true;
+	    }
+	if (hit)
+	  add.safe_push (f);
+      }
+    for (const oa_relation_fact &f : add)
+      relation_set (f.pred_fn, f.args, f.n, f.polarity,
+		    f.conveyor_established);
+  }
+  /* Every relation ID takes part in ends with ID's facts.  */
+  void relation_invalidate (tree id)
+  {
+    if (!m_relation_map.elements ())
+      return;
+    auto_vec<tree> drop;
+    for (auto it : m_relation_map)
+      for (unsigned i = 0; i < it.second.n; ++i)
+	if (it.second.args[i] == id)
+	  {
+	    drop.safe_push (it.first);
+	    break;
+	  }
+    for (tree k : drop)
+      m_relation_map.remove (k);
+  }
+  void predicate_fact_invalidate (tree decl)
+  {
+    m_predicate_fact_map.remove (decl);
+    relation_invalidate (decl);
+  }
+  /* Agreement-based, as predicate_fact_merge_with: a relation holds after
+     a join only if both sides have it, with the same polarity.  */
+  void relation_merge_with (oa_env &other)
+  {
+    if (m_relation_map.same_p (other.m_relation_map))
+      return;
+    auto_vec<tree> drop;
+    auto_vec<tree> keep;
+    auto_vec<oa_relation_fact> kept;
+    for (auto it : m_relation_map)
+      {
+	const oa_relation_fact *ov = other.m_relation_map.get (it.first);
+	if (!ov || ov->polarity != it.second.polarity)
+	  {
+	    drop.safe_push (it.first);
+	    continue;
+	  }
+	oa_relation_fact merged = it.second;
+	merged.conveyor_established
+	  = it.second.conveyor_established && ov->conveyor_established;
+	keep.safe_push (it.first);
+	kept.safe_push (merged);
+      }
+    for (tree k : drop)
+      m_relation_map.remove (k);
+    for (unsigned i = 0; i < keep.length (); ++i)
+      m_relation_map.put (keep[i], kept[i]);
+  }
   void predicate_fact_merge_with (oa_env &other)
   {
+    relation_merge_with (other);
     if (m_predicate_fact_map.same_p (other.m_predicate_fact_map))
       return;
     auto_vec<tree> to_remove;
@@ -11086,6 +11208,7 @@ public:
     for (auto it : m_type_bound_map)
       n += 1 + it.second.has_upper_witness + it.second.has_lower_witness;
     n += m_predicate_fact_map.elements ();
+    n += m_relation_map.elements ();
     n += m_relational_map.elements ();
     n += m_call_relational_map.elements ();
     n += m_call_call_relational_map.elements ();
@@ -11105,6 +11228,7 @@ public:
   void invalidate_all_object_state ()
   {
     m_predicate_fact_map.empty ();
+    m_relation_map.empty ();
     m_contract_field_range_map.empty ();
     m_contract_float_field_range_map.empty ();
     m_contract_call_range_map.empty ();
@@ -11265,6 +11389,10 @@ public:
     for (auto it : m_float_range_map) add (it.first);
     for (auto it : m_deriv_map) add (it.first);
     for (auto it : m_predicate_fact_map) add (it.first);
+    for (auto it : m_relation_map)
+      for (unsigned i = 0; i < it.second.n; ++i)
+	if (DECL_P (it.second.args[i]))
+	  add (it.second.args[i]);
     for (auto it : m_relational_map)
       add (it.first), add (it.second.rhs);
     for (auto it : m_linear_sum_map)
@@ -12550,6 +12678,7 @@ public:
     r.m_float_range_map = m_float_range_map;
     r.m_deriv_map = m_deriv_map;
     r.m_predicate_fact_map = m_predicate_fact_map;
+    r.m_relation_map = m_relation_map;
     r.m_relational_map = m_relational_map;
     r.m_linear_sum_map = m_linear_sum_map;
     r.m_linear_diff_map = m_linear_diff_map;
@@ -12590,6 +12719,7 @@ public:
     m_float_range_map = other.m_float_range_map;
     m_deriv_map = other.m_deriv_map;
     m_predicate_fact_map = other.m_predicate_fact_map;
+    m_relation_map = other.m_relation_map;
     m_relational_map = other.m_relational_map;
     m_linear_sum_map = other.m_linear_sum_map;
     m_linear_diff_map = other.m_linear_diff_map;
@@ -12788,6 +12918,8 @@ private:
   oa_cow_map<tree, oa_float_range_fact> m_float_range_map;
   oa_cow_map<tree, oa_derivation *> m_deriv_map;
   oa_cow_map<tree, oa_predicate_fact> m_predicate_fact_map;
+  /* Relations (oa_relation_fact), keyed by relation_key.  */
+  oa_cow_map<tree, oa_relation_fact> m_relation_map;
   oa_cow_map<tree, oa_relational_fact> m_relational_map;
   /* Bounds on 'A + B' (key (A, B), A's DECL_UID the smaller) and on
      'A - B' (key (A, B)), from a comparison such as the overflow guard
@@ -12875,6 +13007,11 @@ public:
   }
   /* DECL's value was obtained from the objects in SOURCES, a TREE_LIST,
      or from none of them when SOURCES is null.  */
+  tree derived_get (tree decl)
+  {
+    const tree *t = m_derived_from.get (decl);
+    return t ? *t : NULL_TREE;
+  }
   void derived_set (tree decl, tree sources)
   {
     if (sources)
@@ -12914,6 +13051,13 @@ public:
 		ends.safe_push (it.first);
 	    for (tree d : ends)
 	      {
+		/* A value obtained from it: its relations end (the
+		   derived-value rule).  */
+		relation_invalidate (d);
+		/* An aggregate value (oa_relation_value_derived_set) is an
+		   object of its own, which doesn't end with them.  */
+		if (DECL_P (d) && AGGREGATE_TYPE_P (TREE_TYPE (d)))
+		  continue;
 		invalidate (d);
 		range_invalidate (d);
 		symbolic_object_address_invalidate (d);
@@ -22332,6 +22476,288 @@ oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
   return true;
 }
 
+/* D4324: symbolic facts relating several arguments, each an object or a
+   value (~/plans/symbolic-relations-design.md): 'is_linked (a, b)',
+   'belongs_to (it, c)', 'is_reachable (first, last)'.  A parameter of
+   pointer or reference type takes an object, and the fact is about its
+   identity; a by-value parameter of a type with unique object
+   representations takes a value, and the fact is about the value, so a
+   copy of the value has it too.  Any other parameter type isn't
+   supported.  A one-object fact ('is_open (f)') stays the business of
+   oa_predicate_conjunct_shape and the one-object fact map.  */
+
+/* The kind of argument a symbolic predicate's parameter of TYPE takes.  */
+
+oa_relation_arg_kind
+oa_relation_param_kind (tree type)
+{
+  if (type == NULL_TREE || type == error_mark_node)
+    return OA_RELATION_UNSUPPORTED;
+  if (TYPE_REF_P (type) || TYPE_PTR_P (type))
+    return OA_RELATION_OBJECT;
+  if (COMPLETE_TYPE_P (complete_type (type))
+      && type_has_unique_obj_representations (type))
+    return OA_RELATION_VALUE;
+  return OA_RELATION_UNSUPPORTED;
+}
+
+/* The kind of FN's parameter I, counting a member function's object
+   parameter as 0.  */
+
+oa_relation_arg_kind
+oa_relation_arg_kind_of (tree fn, unsigned i)
+{
+  unsigned k = 0;
+  for (tree t = TYPE_ARG_TYPES (TREE_TYPE (fn)); t && t != void_list_node;
+       t = TREE_CHAIN (t), ++k)
+    if (k == i)
+      return oa_relation_param_kind (TREE_VALUE (t));
+  return OA_RELATION_UNSUPPORTED;
+}
+
+/* If CONJUNCT is a call of a symbolic function relating 2 to
+   OA_RELATION_MAX_ARGS arguments, possibly negated, its predicate into
+   *PRED_FN_OUT, its arguments into ARGS_OUT and whether it is negated
+   into *NEGATED_OUT.  False for a one-object fact, and for a predicate
+   with a parameter of an unsupported type.  */
+
+bool
+oa_relation_conjunct_shape (tree conjunct, tree *pred_fn_out,
+			    vec<tree> *args_out, bool *negated_out)
+{
+  tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  bool negated = false;
+  if (TREE_CODE (c) == TRUTH_NOT_EXPR)
+    {
+      negated = true;
+      c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+      while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+	c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+    }
+  if (TREE_CODE (c) != CALL_EXPR)
+    return false;
+  tree fn = cp_get_callee_fndecl_nofold (c);
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL
+      || !DECL_LANG_SPECIFIC (fn) || !DECL_DECLARED_SYMBOLIC_P (fn))
+    return false;
+  unsigned n = call_expr_nargs (c);
+  if (n < 2 || n > OA_RELATION_MAX_ARGS)
+    return false;
+  tree t1, t2;
+  bool n1;
+  if (oa_predicate_conjunct_shape (conjunct, &t1, &t2, &n1))
+    return false;
+  for (unsigned i = 0; i < n; ++i)
+    if (oa_relation_arg_kind_of (fn, i) == OA_RELATION_UNSUPPORTED)
+      return false;
+  *pred_fn_out = fn;
+  *negated_out = negated;
+  args_out->truncate (0);
+  for (unsigned i = 0; i < n; ++i)
+    args_out->safe_push (CALL_EXPR_ARG (c, i));
+  return true;
+}
+
+/* ARG, an argument of a relation conjunct, stripped of the conversions
+   and wrappers around what it names: a decl, the address of one, the
+   indirection of a reference, or a constant.  */
+
+tree
+oa_relation_strip_arg (tree arg)
+{
+  for (int i = 0; i < 16; ++i)
+    {
+      arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+      if (TREE_CODE (arg) == NOP_EXPR || TREE_CODE (arg) == CONVERT_EXPR
+	  || TREE_CODE (arg) == NON_LVALUE_EXPR
+	  || TREE_CODE (arg) == VIEW_CONVERT_EXPR
+	  || TREE_CODE (arg) == CLEANUP_POINT_EXPR)
+	arg = TREE_OPERAND (arg, 0);
+      /* A value passed by value: a trivial copy of an object is that
+	 object's value.  */
+      else if (TREE_CODE (arg) == TARGET_EXPR
+	       && TARGET_EXPR_INITIAL (arg)
+	       && TREE_CODE (TARGET_EXPR_INITIAL (arg)) != AGGR_INIT_EXPR
+	       && TREE_CODE (TARGET_EXPR_INITIAL (arg)) != CALL_EXPR)
+	arg = TARGET_EXPR_INITIAL (arg);
+      else
+	break;
+    }
+  return arg;
+}
+
+/* The identity, in ENV, of ARG, an argument of KIND: for an object, the
+   object it designates (as for a one-object fact); for a value, the
+   variable holding it, or the constant.  NULL_TREE if it has none the
+   analysis can key a fact by.  */
+
+static tree
+oa_relation_arg_identity (tree arg, oa_relation_arg_kind kind, oa_env &env)
+{
+  if (kind == OA_RELATION_VALUE)
+    {
+      tree v = oa_relation_strip_arg (arg);
+      if (TREE_CODE (v) == INTEGER_CST)
+	return v;
+      if (VAR_P (v) || TREE_CODE (v) == PARM_DECL
+	  || TREE_CODE (v) == RESULT_DECL)
+	return v;
+      return NULL_TREE;
+    }
+  tree a = oa_relation_strip_arg (arg);
+  if (INDIRECT_REF_P (a))
+    {
+      tree r = oa_relation_strip_arg (TREE_OPERAND (a, 0));
+      if ((TREE_CODE (r) == PARM_DECL || VAR_P (r)) && TYPE_REF_P (TREE_TYPE (r)))
+	a = r;
+    }
+  tree identity;
+  if (!oa_object_identity_decl (a, &identity)
+      && !oa_field_slot_identity (a, env, &identity)
+      && !oa_array_slot_identity (a, env, &identity)
+      && !oa_field_object_identity (a, env, &identity))
+    return NULL_TREE;
+  return env.alias_find (identity);
+}
+
+/* The identities, in ENV, of the arguments ARGS of a relation of PRED_FN,
+   into IDS; false if one has none.  */
+
+static bool
+oa_relation_identities (tree pred_fn, const vec<tree> &args, oa_env &env,
+			tree *ids)
+{
+  for (unsigned i = 0; i < args.length (); ++i)
+    {
+      ids[i] = oa_relation_arg_identity (args[i],
+					 oa_relation_arg_kind_of (pred_fn, i),
+					 env);
+      if (!ids[i])
+	return false;
+    }
+  return true;
+}
+
+static bool oa_relation_substitute_args (tree, tree, const vec<tree> &, tree,
+					 tree,
+					 auto_vec<tree, OA_RELATION_MAX_ARGS> &);
+static tree oa_value_sources (tree, oa_env &);
+
+/* DECL, a variable holding an aggregate value, is initialized or
+   assigned from INIT: the objects its value was obtained from are
+   those of a call given routes to them, or those of the value it
+   copies, so a call that may end them ends its relations
+   (oa_env::derived_end, the derived-value rule).  */
+
+static void
+oa_relation_value_derived_set (tree decl, tree init, oa_env &env)
+{
+  if (!(VAR_P (decl) || TREE_CODE (decl) == PARM_DECL)
+      || !AGGREGATE_TYPE_P (TREE_TYPE (decl)) || !init)
+    return;
+  tree s = oa_relation_strip_arg (init);
+  if ((VAR_P (s) || TREE_CODE (s) == PARM_DECL) && s != decl)
+    env.derived_set (decl, env.derived_get (s));
+  else
+    env.derived_set (decl, oa_value_sources (init, env));
+}
+
+/* Establish in ENV the relations that the postconditions of CALL's
+   callee establish, for the arguments CALL passes.  RESULT is what CALL's
+   result initializes (a variable), for a relation naming the
+   postcondition's result; NULL_TREE skips those.  */
+
+static void
+oa_establish_call_relations (tree call, oa_env &env, tree result)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return;
+  for (tree contract : fn_contracts (callee))
+    {
+      if (!POSTCONDITION_P (contract)
+	  || !oa_contract_fact_tracking_active_p (contract, callee)
+	  || !contract_failure_terminates_p (contract, callee))
+	continue;
+      bool conveyor_established = oa_contract_conveyor_active_p (contract,
+								   callee);
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree pred_fn;
+	  bool negated;
+	  auto_vec<tree> args;
+	  if (!oa_relation_conjunct_shape (*conjuncts[i], &pred_fn, &args,
+					   &negated))
+	    continue;
+	  auto_vec<tree, OA_RELATION_MAX_ARGS> subs;
+	  if (!oa_relation_substitute_args (callee, call, args,
+					    POSTCONDITION_IDENTIFIER (contract),
+					    result, subs))
+	    continue;
+	  tree ids[OA_RELATION_MAX_ARGS];
+	  if (oa_relation_identities (pred_fn, subs, env, ids))
+	    env.relation_set (pred_fn, ids, subs.length (), !negated,
+			      conveyor_established);
+	}
+    }
+}
+
+/* The argument expressions, in the caller's terms, of CALLEE's relation
+   conjunct ARGS (in CALLEE's terms) at CALL: a parameter becomes the
+   argument CALL passes, the postcondition's result RESULT_NAME becomes
+   RESULT (NULL_TREE: none), a constant stays.  False if one has no
+   counterpart.  */
+
+static bool
+oa_relation_substitute_args (tree callee, tree call, const vec<tree> &args,
+			     tree result_name, tree result,
+			     auto_vec<tree, OA_RELATION_MAX_ARGS> &out)
+{
+  out.truncate (0);
+  for (tree a : args)
+    {
+      tree s = oa_relation_strip_arg (a);
+
+      tree base = s;
+      if (TREE_CODE (base) == ADDR_EXPR || INDIRECT_REF_P (base))
+	base = oa_relation_strip_arg (TREE_OPERAND (base, 0));
+      if (TREE_CODE (s) == INTEGER_CST)
+	out.safe_push (s);
+      else if (result_name && base == result_name)
+	{
+	  if (!result)
+	    return false;
+	  out.safe_push (result);
+	}
+      else if (TREE_CODE (base) == PARM_DECL)
+	{
+	  tree sub = oa_substitute_call_arg (callee, call, base);
+	  if (!sub)
+	    return false;
+	  /* The callee reads through its reference parameter: the
+	     relation is about what the caller's argument designates.  */
+	  if (INDIRECT_REF_P (s) && TYPE_REF_P (TREE_TYPE (base)))
+	    {
+	      tree p = oa_relation_strip_arg (sub);
+	      sub = (TREE_CODE (p) == ADDR_EXPR ? TREE_OPERAND (p, 0)
+		     : cp_build_fold_indirect_ref (sub));
+	    }
+	  out.safe_push (sub);
+	}
+      else
+	return false;
+    }
+  return true;
+}
+
+
 /* ARG, a predicate call's argument, as the decl it names: see
    oa_predicate_conjunct_shape.  */
 
@@ -24902,6 +25328,9 @@ oa_handle_call_symbolic_postcondition_establishment (tree call, oa_env &env)
   tree callee = cp_get_callee_fndecl_nofold (call);
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
+  /* Relations about the call's arguments; one naming the result is
+     established where the result is stored.  */
+  oa_establish_call_relations (call, env, NULL_TREE);
 
   for (tree contract : fn_contracts (callee))
     {
@@ -25254,6 +25683,7 @@ oa_symbolic_conjunct_covered_p (tree conjunct, oa_env &env)
   tree_code code;
   widest_int offset;
   bool negated;
+  auto_vec<tree> rel_args;
   return (is_object_address_call_p (conjunct, &t1)
 	  || oa_nonzero_conjunct_p (conjunct, &t1)
 	  || oa_match_simple_comparison (conjunct, &t1, &code, &t2)
@@ -25267,6 +25697,7 @@ oa_symbolic_conjunct_covered_p (tree conjunct, oa_env &env)
 	  || oa_match_call_against_call (conjunct, &t1, &t2, &code, &t3, &t4,
 					 /*allow_symbolic_accessor=*/true)
 	  || oa_predicate_conjunct_shape (conjunct, &t1, &t2, &negated)
+	  || oa_relation_conjunct_shape (conjunct, &t1, &rel_args, &negated)
 	  || oa_unsupported_symbolic_predicate_p (conjunct, &t1));
 }
 
@@ -25281,6 +25712,46 @@ oa_symbolic_conjunct_covered_p (tree conjunct, oa_env &env)
    conveyor has already established (the allowed direction) before
    consulting its own symbolic-only maps -- see the comment on that
    loop, further below.  */
+
+/* The check, at CALL, of the relation PRED_FN (ARGS), possibly NEGATED,
+   that a precondition of CALLEE requires: proven by a fact in ENV
+   (oa_relation_fact), refuted by one of the other polarity, or else
+   reported as unverified, an error if STRICT.  */
+
+const char *oa_unprovable_reason_text (oa_unprovable_reason);
+
+static void
+oa_check_call_relation (tree call, tree callee, tree pred_fn,
+			const vec<tree> &args, bool negated, oa_env &env,
+			bool strict)
+{
+  auto_vec<tree, OA_RELATION_MAX_ARGS> subs;
+  tree ids[OA_RELATION_MAX_ARGS];
+  oa_relation_fact fact;
+  bool have = (oa_relation_substitute_args (callee, call, args, NULL_TREE,
+					    NULL_TREE, subs)
+	       && oa_relation_identities (pred_fn, subs, env, ids)
+	       && env.relation_get (pred_fn, ids, subs.length (), &fact));
+  bool required = !negated;
+  if (have && fact.polarity == required)
+    return;
+  if (have)
+    oa_error_at (EXPR_LOCATION (call),
+		 "%qD provably fails the precondition of %qD: the relation "
+		 "is established %s, but the precondition requires it to be "
+		 "%s", pred_fn, callee, fact.polarity ? "true" : "false",
+		 required ? "true" : "false");
+  else if (strict)
+    oa_error_at (EXPR_LOCATION (call), "cannot prove that %qD holds, as "
+		 "required by the precondition of %qD", pred_fn, callee);
+  else
+    oa_warning_at (EXPR_LOCATION (call), 0, "cannot verify that %qD holds, "
+		   "as required by the precondition of %qD", pred_fn, callee);
+  if (!have)
+    if (const char *why = oa_unprovable_reason_text (OA_UNPROVABLE_NO_FACT))
+      oa_inform (EXPR_LOCATION (call), "%s", _(why));
+  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+}
 
 static void
 oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
@@ -25337,6 +25808,14 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	{
 	  tree pred_fn, arg_decl;
 	  bool negated;
+	  auto_vec<tree> rel_args;
+	  if (oa_relation_conjunct_shape (*conjuncts[i], &pred_fn, &rel_args,
+					  &negated))
+	    {
+	      oa_check_call_relation (call, callee, pred_fn, rel_args, negated,
+				      env, strict);
+	      continue;
+	    }
 	  if (!oa_predicate_conjunct_shape (*conjuncts[i], &pred_fn, &arg_decl,
 					    &negated))
 	    {
@@ -28288,6 +28767,9 @@ oa_unsupported_symbolic_predicate_p (tree conjunct, tree *pred_fn_out)
   bool negated;
   if (oa_predicate_conjunct_shape (conjunct, &pred_fn, &arg_decl, &negated))
     return false;
+  auto_vec<tree> args;
+  if (oa_relation_conjunct_shape (conjunct, &pred_fn, &args, &negated))
+    return false;
   *pred_fn_out = fn;
   return true;
 }
@@ -30154,6 +30636,19 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
 	  || oa_array_slot_identity (arg_decl, env, &identity))
 	env.predicate_fact_set (env.alias_find (identity), pred_fn, !negated,
 				 conveyor_ok);
+    }
+
+  /* Relations (oa_relation_conjunct_shape), the same way.  */
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree pred_fn;
+      bool negated;
+      auto_vec<tree> args;
+      tree ids[OA_RELATION_MAX_ARGS];
+      if (oa_relation_conjunct_shape (*conjuncts[i], &pred_fn, &args,
+				      &negated)
+	  && oa_relation_identities (pred_fn, args, env, ids))
+	env.relation_set (pred_fn, ids, args.length (), !negated, conveyor_ok);
     }
 
   /* A relational conjunct against another of the SAME function's own
@@ -33909,6 +34404,14 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 						  &polarity, &pred_conveyor_established))
 	      env.predicate_fact_set (env.alias_find (decl), pred_fn, polarity,
 				       pred_conveyor_established);
+	    /* And relations naming the result: about DECL; or, DECL a copy
+	       of a value, the relations that value takes part in.  */
+	    if (tree rc = oa_elided_result_call (stripped_init_pred))
+	      oa_establish_call_relations (rc, env, decl);
+	    else
+	      env.relation_copy_value (oa_relation_strip_arg (DECL_INITIAL (decl)),
+				       decl);
+	    oa_relation_value_derived_set (decl, DECL_INITIAL (decl), env);
 	  }
 	/* D4324/P2680: POINTER_TYPE_P also matches REFERENCE_TYPE (see its
 	   own definition in tree.h) -- so a lambda's own by-reference
@@ -34860,6 +35363,13 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 						  &polarity, &pred_conveyor_established))
 	      env.predicate_fact_set (env.alias_find (lhs), pred_fn, polarity,
 				       pred_conveyor_established);
+	    /* Relations naming the result, about LHS; or, LHS a copy of a
+	       value, the relations that value takes part in.  */
+	    if (tree rc = oa_elided_result_call (stripped_rhs_pred))
+	      oa_establish_call_relations (rc, env, lhs);
+	    else
+	      env.relation_copy_value (oa_relation_strip_arg (rhs), lhs);
+	    oa_relation_value_derived_set (lhs, rhs, env);
 	  }
 	if (VAR_P (lhs) && TYPE_REF_P (TREE_TYPE (lhs)))
 	  oa_note_reference_binding (lhs, rhs);
@@ -35850,6 +36360,13 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
 						    &arg_decl, &negated)
 		      && DECL_DECLARED_SYMBOLIC_P (pred_fn))
 		    continue;
+		  /* A relation (oa_relation_conjunct_shape): likewise.  */
+		  {
+		    auto_vec<tree> rel_args;
+		    if (oa_relation_conjunct_shape (*conjuncts[i], &pred_fn,
+						    &rel_args, &negated))
+		      continue;
+		  }
 		  /* D4324: see the conveyor pass's own identical guard just
 		     above -- oa_resolve_condition below is the correct,
 		     dedicated handler for a bare is_object_address(E)
@@ -40140,6 +40657,31 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
       return oa_env_check_call_call_relational_fact_1
 	(env, lhs_receiver, lhs_callee, code, rhs_receiver, rhs_callee,
 	 require_conveyor, reason_out, established_out, established_out_size);
+  }
+
+  {
+    tree pred_fn;
+    bool negated;
+    auto_vec<tree> args;
+    tree ids[OA_RELATION_MAX_ARGS];
+    if (oa_relation_conjunct_shape (conjunct, &pred_fn, &args, &negated))
+      {
+	oa_relation_fact fact;
+	if (!oa_relation_identities (pred_fn, args, env, ids)
+	    || !env.relation_get (pred_fn, ids, args.length (), &fact)
+	    || (require_conveyor && !fact.conveyor_established))
+	  {
+	    if (reason_out)
+	      *reason_out = OA_UNPROVABLE_NO_FACT;
+	    return OA_UNKNOWN;
+	  }
+	if (fact.polarity == !negated)
+	  return OA_PROVEN_TRUE;
+	if (established_out)
+	  snprintf (established_out, established_out_size, "%s",
+		    fact.polarity ? "true" : "false");
+	return OA_PROVEN_FALSE;
+      }
   }
 
   {

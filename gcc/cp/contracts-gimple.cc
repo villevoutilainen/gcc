@@ -7746,6 +7746,11 @@ cg_conjunct_covered_p (tree conjunct, tree callee, bool require_conveyor)
       || oa_unsupported_symbolic_predicate_p (conjunct, &t1)
       || oa_isfinite_bounds_public (conjunct, &t1, &t2))
     return true;
+  {
+    auto_vec<tree> rel_args;
+    if (oa_relation_conjunct_shape (conjunct, &t1, &rel_args, &negated))
+      return true;
+  }
   if (oa_match_field_range_comparison (conjunct, &t1, &t2, &code, &t3)
       && TREE_CODE (oa_strip_symbolic_ptr_expr_public (t2)) == PARM_DECL)
     return true;
@@ -8750,9 +8755,39 @@ cg_field_fact_float_equal (const cg_field_fact &a, const cg_field_fact &b)
 /* cg_field_key_hash itself is defined earlier in this file (alongside
    cg_call_call_rel_fact), which needs it before this point.  */
 
+/* A relation (oa_relation_conjunct_shape): PRED_FN of the identities
+   IDS, in order -- an object's (cg_gimple_object_identity's), or a
+   value's: a constant, the SSA value a scalar is (cg_scalar_value_
+   origin), or the variable holding an aggregate.  As the AST engine's
+   oa_relation_fact.  */
+
+struct cg_relt_fact
+{
+  tree pred_fn;
+  tree ids[OA_RELATION_MAX_ARGS];
+  unsigned n;
+  bool polarity;
+  bool conveyor_established;
+};
+
 struct cg_dom_fact_state
 {
   hash_map<tree, cg_pred_fact> pred;
+  /* The relations, keyed by cg_relt_key.  */
+  hash_map<tree, cg_relt_fact> relt;
+  /* For a variable holding an aggregate value a relation may be about,
+     the objects that value was obtained from, a TREE_LIST of route
+     objects (cg_route_object): returned by a call given a route to
+     them, or copied from a value that was.  A call that may end one of
+     them ends the facts of the value (the derived-value rule, P4445
+     caller9).  None: not known, so any call that may end lifetimes and
+     is given a route does.  Their union at joins, none if either path
+     has none.  */
+  hash_map<tree, tree> val_src;
+  /* The variables holding such a value whose address was given to a
+     call: any later call that may end lifetimes may have written them.
+     On any path, so a union at joins.  */
+  hash_set<tree> val_escaped;
   hash_map<cg_field_key_hash, cg_field_fact> field;
   /* Stage 4d: the GIMPLE analogue of contracts.cc's own m_field_alias_
      target -- "the tracked pointer identity this pointer/reference-
@@ -8800,6 +8835,55 @@ struct cg_dom_fact_state
      every path, so an intersection at joins.  */
   hash_set<tree> oa_renewed;
 };
+
+/* The key of relation PRED_FN (IDS[0..N)).  */
+
+static tree
+cg_relt_key (tree pred_fn, const tree *ids, unsigned n)
+{
+  char buf[24 * (OA_RELATION_MAX_ARGS + 1)];
+  int len = snprintf (buf, sizeof buf, "%p", (void *) pred_fn);
+  for (unsigned i = 0; i < n; ++i)
+    len += snprintf (buf + len, sizeof buf - len, ":%p", (void *) ids[i]);
+  return get_identifier (buf);
+}
+
+/* STATE's relations with ID among their arguments end.  */
+
+static void
+cg_relt_drop (cg_dom_fact_state &state, tree id)
+{
+  if (!id || !state.relt.elements ())
+    return;
+  auto_vec<tree, 8> keys;
+  for (auto it : state.relt)
+    for (unsigned i = 0; i < it.second.n; ++i)
+      if (it.second.ids[i] == id)
+	{
+	  keys.safe_push (it.first);
+	  break;
+	}
+  for (tree k : keys)
+    state.relt.remove (k);
+}
+
+/* What STATE knows of ID's predicates, one-object or relations, ends.  */
+
+static void
+cg_pred_remove (cg_dom_fact_state &state, tree id)
+{
+  state.pred.remove (id);
+  cg_relt_drop (state, id);
+}
+
+/* What STATE knows of every object's predicates ends.  */
+
+static void
+cg_pred_empty (cg_dom_fact_state &state)
+{
+  state.pred.empty ();
+  state.relt.empty ();
+}
 
 /* An SSA_NAME's own identity is itself; '&decl' resolves to DECL
    directly; a bare VAR_DECL/PARM_DECL used directly is its own
@@ -9099,7 +9183,7 @@ cg_field_object_predicate_invalidate_all (tree base,
 {
   if (vec<tree> *keys = cache.keys_of (base))
     for (tree key : *keys)
-      state.pred.remove (key);
+      cg_pred_remove (state, key);
 }
 
 /* The key under which cg_dom_fact_state::field holds the facts about
@@ -9157,10 +9241,35 @@ cg_process_scalar_write (tree lhs, cg_dom_fact_state &state)
     cg_end_referent_facts (state);
 }
 
+static void cg_relt_process_assign (tree, tree, cg_dom_fact_state &);
+static void cg_relt_store (tree, cg_dom_fact_state &);
+
+static void
+cg_process_field_write_1 (tree lhs, tree rhs, function *fun,
+			   cg_field_object_cache &field_object_cache,
+			   cg_dom_fact_state &state);
+
+/* A store of RHS (NULL_TREE: a call's result) to LHS: what it changes in
+   STATE's facts, then the relations of the values it writes or copies
+   (cg_relt_process_assign), last, so the facts a copy gets aren't then
+   taken for those of the value overwritten.  */
+
 static void
 cg_process_field_write (tree lhs, tree rhs, function *fun,
 			 cg_field_object_cache &field_object_cache,
 			 cg_dom_fact_state &state)
+{
+  cg_process_field_write_1 (lhs, rhs, fun, field_object_cache, state);
+  if (rhs)
+    cg_relt_process_assign (lhs, rhs, state);
+  else
+    cg_relt_store (lhs, state);
+}
+
+static void
+cg_process_field_write_1 (tree lhs, tree rhs, function *fun,
+			   cg_field_object_cache &field_object_cache,
+			   cg_dom_fact_state &state)
 {
   /* A pointer stored to an array slot 'arr[k]': what the slot now
      aliases, keyed {array, K} in state.field_alias -- K a (shared)
@@ -9176,7 +9285,7 @@ cg_process_field_write (tree lhs, tree rhs, function *fun,
 	  if (tree whole = cg_gimple_object_identity
 			     (TREE_CODE (arr) == MEM_REF
 			      ? TREE_OPERAND (arr, 0) : arr))
-	    state.pred.remove (whole);
+	    cg_pred_remove (state, whole);
       tree arr_identity = cg_array_slot_base_identity (lhs);
       if (!arr_identity)
 	return;
@@ -9215,7 +9324,7 @@ cg_process_field_write (tree lhs, tree rhs, function *fun,
 						 : lhs);
       if (!identity)
 	return;
-      state.pred.remove (identity);
+      cg_pred_remove (state, identity);
       auto_vec<std::pair<tree, tree>> drop;
       for (auto it : state.field)
 	if (it.first.first == identity)
@@ -9231,7 +9340,7 @@ cg_process_field_write (tree lhs, tree rhs, function *fun,
       cg_call_rel_invalidate_receiver (state, identity);
       if (vec<tree> *keys = field_object_cache.keys_of (identity))
 	for (tree key : *keys)
-	  state.pred.remove (key);
+	  cg_pred_remove (state, key);
       return;
     }
   if (TREE_CODE (lhs) != COMPONENT_REF)
@@ -9248,7 +9357,7 @@ cg_process_field_write (tree lhs, tree rhs, function *fun,
      COMPONENT_REF block exactly, including this plan's own Stage 4a
      fix (a named predicate is opaque, could depend on any field, so
      ANY field write invalidates it wholesale).  */
-  state.pred.remove (identity);
+  cg_pred_remove (state, identity);
   state.field.remove ({identity, field});
   cg_call_rel_invalidate_receiver (state, identity);
   /* Stage 5: this replaces the FIELD sub-object of IDENTITY directly,
@@ -9260,7 +9369,7 @@ cg_process_field_write (tree lhs, tree rhs, function *fun,
      COMPONENT_REF LHS, the narrower shape).  */
   tree *fo_key = field_object_cache.get ({identity, field});
   if (fo_key)
-    state.pred.remove (*fo_key);
+    cg_pred_remove (state, *fo_key);
   /* Stage 4e: a parameter-alias-group sweep for this same whole-object
      effect only -- explicitly NOT extended to sweep siblings' own
      field-slot facts (field_alias, just below), matching the AST
@@ -9704,6 +9813,532 @@ cg_collect_call_range_groups_parametric (tree cond, tree callee, gcall *call,
     }
 }
 
+/* Symbolic relations (symbolic-relations-design.md): the GIMPLE
+   counterpart of the AST engine's oa_relation_fact handling.  */
+
+static tree cg_route_object (tree, tree *, bool);
+static tree cg_contract_check_object_identity (gcall *, tree, tree, tree);
+
+/* The identity of VAL, a GIMPLE operand that is argument I of relation
+   PRED_FN: see cg_relt_fact.  NULL_TREE if it has none.  */
+
+static tree
+cg_relt_operand_identity (tree pred_fn, unsigned i, tree val,
+			  cg_field_object_cache &field_object_cache,
+			  cg_dom_fact_state &state)
+{
+  if (!val)
+    return NULL_TREE;
+  if (oa_relation_arg_kind_of (pred_fn, i) == OA_RELATION_VALUE)
+    {
+      if (TREE_CODE (val) == INTEGER_CST)
+	return val;
+      if (TREE_CODE (val) == SSA_NAME)
+	return cg_scalar_value_origin (val);
+      if ((VAR_P (val) || TREE_CODE (val) == PARM_DECL)
+	  && AGGREGATE_TYPE_P (TREE_TYPE (val)))
+	return val;
+      return NULL_TREE;
+    }
+  tree identity = cg_field_slot_identity (val, state);
+  if (!identity)
+    identity = cg_field_object_identity (val, field_object_cache);
+  if (!identity)
+    identity = cg_gimple_object_identity (val);
+  return identity;
+}
+
+/* The GIMPLE operand at CALL, to CALLEE, that ARG, an argument of a
+   relation conjunct of CALLEE's contract, stands for: a constant, the
+   argument CALL passes for a parameter -- for a value read through a
+   reference parameter, the variable it is bound to -- or the object or
+   value CALL's result initializes for the postcondition's result
+   RESULT_NAME.  NULL_TREE if none.  */
+
+static tree
+cg_relt_call_operand (gcall *call, tree callee, tree arg, tree result_name)
+{
+  tree s = oa_relation_strip_arg (arg);
+  if (TREE_CODE (s) == INTEGER_CST)
+    return s;
+  tree base = s;
+  bool deref = false;
+  if (INDIRECT_REF_P (base))
+    {
+      base = oa_relation_strip_arg (TREE_OPERAND (base, 0));
+      deref = true;
+    }
+  if (result_name && base == result_name)
+    {
+      tree lhs = gimple_call_lhs (call);
+      if (lhs && (TREE_CODE (lhs) == SSA_NAME || VAR_P (lhs)
+		  || TREE_CODE (lhs) == PARM_DECL))
+	return lhs;
+      return NULL_TREE;
+    }
+  unsigned argno;
+  if (TREE_CODE (base) != PARM_DECL
+      || !cg_find_param_position (callee, base, &argno)
+      || argno >= gimple_call_num_args (call))
+    return NULL_TREE;
+  tree a = gimple_call_arg (call, argno);
+  /* A value the callee reads through its reference parameter: the
+     variable the caller bound it to.  */
+  if (deref && TYPE_REF_P (TREE_TYPE (base))
+      && !POINTER_TYPE_P (TREE_TYPE (s)))
+    {
+      if (TREE_CODE (a) == ADDR_EXPR
+	  && (VAR_P (TREE_OPERAND (a, 0))
+	      || TREE_CODE (TREE_OPERAND (a, 0)) == PARM_DECL))
+	return TREE_OPERAND (a, 0);
+      return NULL_TREE;
+    }
+  return a;
+}
+
+/* Record in STATE relation PRED_FN (IDS[0..N)), POLARITY.  */
+
+static void
+cg_relt_put (cg_dom_fact_state &state, tree pred_fn, const tree *ids,
+	     unsigned n, bool polarity, bool conveyor_established)
+{
+  cg_relt_fact f;
+  f.pred_fn = pred_fn;
+  f.n = n;
+  for (unsigned i = 0; i < n; ++i)
+    f.ids[i] = ids[i];
+  f.polarity = polarity;
+  f.conveyor_established = conveyor_established;
+  state.relt.put (cg_relt_key (pred_fn, ids, n), f);
+}
+
+/* The identities, at CALL to CALLEE, of the arguments ARGS of relation
+   PRED_FN, into IDS; false if one has none.  */
+
+static bool
+cg_relt_call_identities (gcall *call, tree callee, tree pred_fn,
+			 const vec<tree> &args, tree result_name,
+			 cg_field_object_cache &field_object_cache,
+			 cg_dom_fact_state &state, tree *ids)
+{
+  for (unsigned i = 0; i < args.length (); ++i)
+    {
+      tree op = cg_relt_call_operand (call, callee, args[i], result_name);
+      ids[i] = cg_relt_operand_identity (pred_fn, i, op, field_object_cache,
+					 state);
+      if (!ids[i])
+	return false;
+    }
+  return true;
+}
+
+/* The relations CALL's callee's postconditions establish, into STATE.  */
+
+static void
+cg_relt_establish_for_call (gcall *call,
+			    cg_field_object_cache &field_object_cache,
+			    cg_dom_fact_state &state)
+{
+  tree callee = gimple_call_fndecl (call);
+  if (!callee)
+    return;
+  for (tree contract : fn_contracts (callee))
+    {
+      if (!POSTCONDITION_P (contract)
+	  || !oa_contract_failure_terminates_cached_p (contract))
+	continue;
+      bool conveyor_enabled = (oa_contract_conveyor_active_cached_p (contract)
+			       && flag_contract_conveyor_proofs_gimple);
+      bool symbolic_enabled = (oa_contract_symbolic_active_cached_p (contract)
+			       && flag_contract_symbolic_proofs_gimple);
+      if (!conveyor_enabled && !symbolic_enabled)
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree pred_fn;
+	  bool negated;
+	  auto_vec<tree> args;
+	  tree ids[OA_RELATION_MAX_ARGS];
+	  if (oa_relation_conjunct_shape (*conjuncts[i], &pred_fn, &args,
+					  &negated)
+	      && cg_relt_call_identities (call, callee, pred_fn, args,
+					  POSTCONDITION_IDENTIFIER (contract),
+					  field_object_cache, state, ids))
+	    cg_relt_put (state, pred_fn, ids, args.length (), !negated,
+			 conveyor_enabled);
+	}
+    }
+}
+
+/* The identity, at contract check CALL (STRUCT_VAR and DECLS as from
+   cg_contract_check_call_p), of ARG, argument I of relation PRED_FN in
+   the check's condition.  */
+
+static tree
+cg_relt_check_identity (gcall *call, tree struct_var, tree decls,
+			tree pred_fn, unsigned i, tree arg)
+{
+  tree s = oa_relation_strip_arg (arg);
+  if (TREE_CODE (s) == INTEGER_CST)
+    return s;
+  if (oa_relation_arg_kind_of (pred_fn, i) == OA_RELATION_VALUE)
+    {
+      if (INDIRECT_REF_P (s))
+	return NULL_TREE;
+      if (!VAR_P (s) && TREE_CODE (s) != PARM_DECL)
+	return NULL_TREE;
+      if (AGGREGATE_TYPE_P (TREE_TYPE (s)))
+	return cg_contract_check_object_identity (call, struct_var, decls, s);
+      tree v = cg_contract_check_decl_value (call, struct_var, decls, s);
+      if (v && TREE_CODE (v) == INTEGER_CST)
+	return v;
+      return v && TREE_CODE (v) == SSA_NAME ? cg_scalar_value_origin (v)
+					    : NULL_TREE;
+    }
+  if (INDIRECT_REF_P (s))
+    s = oa_relation_strip_arg (TREE_OPERAND (s, 0));
+  if (!VAR_P (s) && TREE_CODE (s) != PARM_DECL)
+    return NULL_TREE;
+  return cg_contract_check_object_identity (call, struct_var, decls, s);
+}
+
+/* The relation fact STATE has for conjunct shape PRED_FN (ARGS) at
+   contract check CALL, or null.  */
+
+static const cg_relt_fact *
+cg_relt_check_fact (gcall *call, tree struct_var, tree decls, tree pred_fn,
+		    const vec<tree> &args, cg_dom_fact_state &state,
+		    tree *ids)
+{
+  for (unsigned i = 0; i < args.length (); ++i)
+    if (!(ids[i] = cg_relt_check_identity (call, struct_var, decls, pred_fn,
+					   i, args[i])))
+      return NULL;
+  return state.relt.get (cg_relt_key (pred_fn, ids, args.length ()));
+}
+
+/* VALUE, a variable holding a value, is written: its relations end, and
+   what it was obtained from is no longer known.  */
+
+static void
+cg_relt_value_written (cg_dom_fact_state &state, tree value)
+{
+  cg_relt_drop (state, value);
+  state.val_src.remove (value);
+}
+
+/* A store to LHS: the relations of the value it writes end.  */
+
+static void
+cg_relt_store (tree lhs, cg_dom_fact_state &state)
+{
+  tree base = lhs ? get_base_address (lhs) : NULL_TREE;
+  if (!base)
+    return;
+  if (DECL_P (base))
+    {
+      cg_relt_value_written (state, base);
+      return;
+    }
+  if (TREE_CODE (base) != MEM_REF)
+    return;
+  tree id = cg_gimple_object_identity (TREE_OPERAND (base, 0));
+  if (id && DECL_P (id))
+    {
+      cg_relt_value_written (state, id);
+      return;
+    }
+  /* Through a pointer to an object no fact names: it may be any whose
+     address was handed out.  */
+  auto_vec<tree, 8> escaped;
+  for (tree t : state.val_escaped)
+    escaped.safe_push (t);
+  for (tree t : escaped)
+    cg_relt_value_written (state, t);
+}
+
+/* The relations of the values a store of RHS to LHS writes or copies:
+   a whole copy of a value has its relations and sources.  */
+
+static void
+cg_relt_process_assign (tree lhs, tree rhs, cg_dom_fact_state &state)
+{
+  cg_relt_store (lhs, state);
+  if (!(VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
+      || !(VAR_P (rhs) || TREE_CODE (rhs) == PARM_DECL)
+      || lhs == rhs || !AGGREGATE_TYPE_P (TREE_TYPE (lhs)))
+    return;
+  if (const tree *src = state.val_src.get (rhs))
+    state.val_src.put (lhs, *src);
+  if (!state.relt.elements ())
+    return;
+  auto_vec<cg_relt_fact, 4> copies;
+  for (auto it : state.relt)
+    {
+      cg_relt_fact f = it.second;
+      bool hit = false;
+      for (unsigned i = 0; i < f.n; ++i)
+	if (f.ids[i] == rhs
+	    && oa_relation_arg_kind_of (f.pred_fn, i) == OA_RELATION_VALUE)
+	  {
+	    f.ids[i] = lhs;
+	    hit = true;
+	  }
+      if (hit)
+	copies.safe_push (f);
+    }
+  for (auto &f : copies)
+    cg_relt_put (state, f.pred_fn, f.ids, f.n, f.polarity,
+		 f.conveyor_established);
+}
+
+/* Does CALL, which may end lifetimes and is given the route objects
+   ROUTES (any route if ANY_ROUTE), end the facts of value identity ID
+   (the derived-value rule)?  */
+
+static void cg_value_sources (tree, vec<std::pair<tree, tree>> &, int);
+
+/* Does a call given the route objects ROUTES (any route if ANY_ROUTE)
+   end the objects SOURCE, an object a value was obtained from, may own:
+   one of ROUTES, a pointer value obtained from one of them
+   (cg_value_sources), transitively -- or, a parameter's incoming pointer
+   value (it may designate anything the call is given), any.  */
+
+static bool
+cg_relt_source_ended_p (tree source, const vec<tree> &routes, bool any_route,
+			cg_dom_fact_state &state, int depth = 0)
+{
+  if (!source || depth > 4)
+    return false;
+  for (tree r : routes)
+    if (r == source || operand_equal_p (r, source, 0))
+      return true;
+  /* A local whose address was handed out: any call may reach it.  */
+  if (DECL_P (source) && state.val_escaped.contains (source))
+    return true;
+  if (TREE_CODE (source) != SSA_NAME || !POINTER_TYPE_P (TREE_TYPE (source)))
+    return false;
+  if (SSA_NAME_IS_DEFAULT_DEF (source))
+    return false;
+  tree root = cg_pointer_root (source);
+  if (root && root != source)
+    return cg_relt_source_ended_p (root, routes, any_route, state, depth + 1);
+  auto_vec<std::pair<tree, tree>, 4> sources;
+  cg_value_sources (source, sources, 0);
+  /* Obtained from nothing this function can name: from anything.  */
+  if (sources.is_empty ())
+    return any_route;
+  for (auto &s : sources)
+    if (cg_relt_source_ended_p (s.first, routes, any_route, state,
+				depth + 1))
+      return true;
+  return false;
+}
+
+static bool
+cg_relt_value_ended_p (tree id, const vec<tree> &routes, bool any_route,
+		       cg_dom_fact_state &state)
+{
+  if (TREE_CODE (id) == INTEGER_CST)
+    return false;
+  if (TREE_CODE (id) == SSA_NAME)
+    {
+      if (!POINTER_TYPE_P (TREE_TYPE (id)))
+	return false;
+      if (SSA_NAME_IS_DEFAULT_DEF (id))
+	return any_route;
+      return cg_relt_source_ended_p (id, routes, any_route, state);
+    }
+  if (state.val_escaped.contains (id))
+    return true;
+  const tree *src = state.val_src.get (id);
+  if (!src)
+    return any_route;
+  for (tree l = *src; l; l = TREE_CHAIN (l))
+    if (cg_relt_source_ended_p (TREE_PURPOSE (l), routes, any_route, state))
+      return true;
+  return false;
+}
+
+/* The relations and value sources CALL changes, before its own
+   postconditions establish any: the values it writes (its result, and
+   through the addresses it is given) and those a call that may end
+   lifetimes may have ended (cg_relt_value_ended_p).  After
+   cg_end_object_addresses_for_call, whose ended pointer values it
+   consults.  */
+
+static void
+cg_relt_process_call (gcall *call, function *fun, cg_dom_fact_state &state)
+{
+  tree lhs = gimple_call_lhs (call);
+  if (gimple_call_internal_p (call))
+    {
+      if (lhs)
+	cg_relt_store (lhs, state);
+      return;
+    }
+  auto_vec<tree, 8> routes;
+  bool any_route = false;
+  for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+    {
+      tree arg = gimple_call_arg (call, i);
+      if (!POINTER_TYPE_P (TREE_TYPE (arg)) || TREE_CODE (arg) == INTEGER_CST)
+	continue;
+      any_route = true;
+      if (TREE_CODE (arg) == SSA_NAME)
+	routes.safe_push (arg);
+      tree member;
+      tree root = cg_route_object (arg, &member, true);
+      if (root)
+	routes.safe_push (root);
+      /* And the parameters that may alias a parameter it reaches.  */
+      tree parm = (root && TREE_CODE (root) == SSA_NAME
+		   && SSA_NAME_IS_DEFAULT_DEF (root)
+		   ? SSA_NAME_VAR (root) : NULL_TREE);
+      if (parm && TREE_CODE (parm) == PARM_DECL
+	  && DECL_CONTEXT (parm) == fun->decl)
+	for (tree sib = DECL_ARGUMENTS (fun->decl); sib;
+	     sib = DECL_CHAIN (sib))
+	  if (sib != parm && oa_could_alias_as_parameters_public (parm, sib))
+	    if (tree ssa = ssa_default_def (fun, sib))
+	      routes.safe_push (ssa);
+    }
+  if (cg_function_statics && !cg_function_statics->is_empty ())
+    any_route = true;
+  if (cg_call_ends_lifetimes_p (call) && state.relt.elements ())
+    {
+      auto_vec<tree, 4> ended;
+      for (auto it : state.relt)
+	for (unsigned i = 0; i < it.second.n; ++i)
+	  if (oa_relation_arg_kind_of (it.second.pred_fn, i)
+		== OA_RELATION_VALUE
+	      && cg_relt_value_ended_p (it.second.ids[i], routes, any_route,
+					state))
+	    {
+	      ended.safe_push (it.first);
+	      break;
+	    }
+      for (tree k : ended)
+	state.relt.remove (k);
+    }
+  /* The values whose address CALL is given: written, if through a
+     pointer to non-const, and handed out.  */
+  for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+    {
+      tree arg = gimple_call_arg (call, i);
+      if (TREE_CODE (arg) != ADDR_EXPR)
+	continue;
+      tree base = get_base_address (TREE_OPERAND (arg, 0));
+      if (!base || !(VAR_P (base) || TREE_CODE (base) == PARM_DECL)
+	  || is_global_var (base))
+	continue;
+      if (!TYPE_READONLY (TREE_TYPE (TREE_TYPE (arg))))
+	cg_relt_value_written (state, base);
+      state.val_escaped.add (base);
+    }
+  if (lhs)
+    {
+      cg_relt_store (lhs, state);
+      tree base = get_base_address (lhs);
+      if (base && (VAR_P (base) || TREE_CODE (base) == PARM_DECL)
+	  && base == lhs && !routes.is_empty ())
+	{
+	  tree list = NULL_TREE;
+	  for (tree r : routes)
+	    if (!purpose_member (r, list))
+	      list = tree_cons (r, NULL_TREE, list);
+	  state.val_src.put (base, list);
+	}
+    }
+}
+
+/* The verdict STATE gives relation conjunct PRED_FN (ARGS), NEGATED, at
+   contract check CALL, for each flavor (0: conveyor, 1: symbolic),
+   into VERDICT; false if C isn't a relation.  */
+
+static bool
+cg_relt_assert_verdicts (tree c, gcall *call, tree struct_var, tree decls,
+			 cg_dom_fact_state &state, cg_verdict *verdict,
+			 char *text, size_t text_size)
+{
+  tree pred_fn;
+  bool negated;
+  auto_vec<tree> args;
+  if (!oa_relation_conjunct_shape (c, &pred_fn, &args, &negated))
+    return false;
+  tree ids[OA_RELATION_MAX_ARGS];
+  const cg_relt_fact *f = cg_relt_check_fact (call, struct_var, decls,
+					      pred_fn, args, state, ids);
+  for (int flavor = 0; flavor < 2; ++flavor)
+    verdict[flavor] = (!f || (flavor == 0 && !f->conveyor_established)
+		       ? CG_VERDICT_UNKNOWN
+		       : f->polarity == !negated ? CG_VERDICT_TRUE
+		       : CG_VERDICT_FALSE);
+  snprintf (text, text_size, "%s",
+	    negated ? "the relation holds" : "the relation doesn't hold");
+  return true;
+}
+
+/* The relations a contract_assert check CALL establishes, into STATE.  */
+
+static void
+cg_relt_establish_assert (gcall *call, tree contract, tree struct_var,
+			  tree cond, tree decls, bool conveyor_enabled,
+			  cg_dom_fact_state &state)
+{
+  (void) contract;
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree pred_fn;
+      bool negated;
+      auto_vec<tree> args;
+      if (!oa_relation_conjunct_shape (*conjuncts[i], &pred_fn, &args,
+				       &negated))
+	continue;
+      tree ids[OA_RELATION_MAX_ARGS];
+      bool all = true;
+      for (unsigned j = 0; j < args.length () && all; ++j)
+	all = (ids[j] = cg_relt_check_identity (call, struct_var, decls,
+						pred_fn, j, args[j]));
+      if (all)
+	cg_relt_put (state, pred_fn, ids, args.length (), !negated,
+		     conveyor_enabled);
+    }
+}
+
+/* The identity of parameter PARM of FUN, argument I of relation PRED_FN,
+   as the function sees it on entry.  */
+
+static tree
+cg_relt_parm_identity (function *fun, tree pred_fn, unsigned i, tree arg)
+{
+  tree s = oa_relation_strip_arg (arg);
+  if (TREE_CODE (s) == INTEGER_CST)
+    return s;
+  bool value = oa_relation_arg_kind_of (pred_fn, i) == OA_RELATION_VALUE;
+  if (INDIRECT_REF_P (s))
+    {
+      if (value)
+	return NULL_TREE;
+      s = oa_relation_strip_arg (TREE_OPERAND (s, 0));
+    }
+  if (TREE_CODE (s) != PARM_DECL)
+    return NULL_TREE;
+  if (value && AGGREGATE_TYPE_P (TREE_TYPE (s)))
+    return s;
+  tree ssa = ssa_default_def (fun, s);
+  if (!ssa)
+    return NULL_TREE;
+  return value ? ssa : cg_gimple_object_identity (ssa);
+}
+
 /* Seed SEED from FNDECL's own declared precondition -- self-trust, the
    persistent-fact analogue of cg_seed_self_trust.  */
 
@@ -9783,6 +10418,20 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
 	{
 	  tree pred_fn, arg_decl;
 	  bool negated;
+	  auto_vec<tree> rel_args;
+	  if (oa_relation_conjunct_shape (*conjuncts[i], &pred_fn, &rel_args,
+					  &negated))
+	    {
+	      tree ids[OA_RELATION_MAX_ARGS];
+	      bool all = true;
+	      for (unsigned j = 0; j < rel_args.length () && all; ++j)
+		all = (ids[j] = cg_relt_parm_identity (fun, pred_fn, j,
+						       rel_args[j]));
+	      if (all)
+		cg_relt_put (seed, pred_fn, ids, rel_args.length (), !negated,
+			     conveyor_enabled);
+	      continue;
+	    }
 	  if (!oa_match_predicate_conjunct (*conjuncts[i], &pred_fn, &arg_decl,
 					     &negated))
 	    continue;
@@ -10399,6 +11048,44 @@ cg_check_compound_requirement (tree conjunct, gcall *call, tree callee,
 				: OA_UNPROVABLE_NO_FACT)));
 }
 
+/* Relation PRED_FN (ARGS), NEGATED, that a precondition of CALLEE
+   requires at CALL: proven by a fact in STATE, refuted by one of the
+   other polarity, or reported as unverified -- an error if STRICT.  As
+   the AST engine's oa_check_call_relation.  */
+
+static void
+cg_relt_consult (gcall *call, tree callee, tree pred_fn,
+		 const vec<tree> &args, bool negated, bool require_conveyor,
+		 bool strict, cg_field_object_cache &field_object_cache,
+		 cg_dom_fact_state &state)
+{
+  tree ids[OA_RELATION_MAX_ARGS];
+  const cg_relt_fact *f = NULL;
+  if (cg_relt_call_identities (call, callee, pred_fn, args, NULL_TREE,
+			       field_object_cache, state, ids))
+    f = state.relt.get (cg_relt_key (pred_fn, ids, args.length ()));
+  if (f && require_conveyor && !f->conveyor_established)
+    f = NULL;
+  bool required = !negated;
+  if (f && f->polarity == required)
+    return;
+  location_t loc = gimple_location (call);
+  if (f)
+    cg_obligation_error_at (loc, "%qD provably fails the precondition of "
+			    "%qD: the relation is established %s, but the "
+			    "precondition requires it to be %s", pred_fn,
+			    callee, f->polarity ? "true" : "false",
+			    required ? "true" : "false");
+  else if (strict)
+    cg_obligation_error_at (loc, "cannot prove that %qD holds, as required "
+			    "by the precondition of %qD", pred_fn, callee);
+  else
+    warning_at (loc, 0, "cannot verify that %qD holds, as required by the "
+		"precondition of %qD", pred_fn, callee);
+  if (!f)
+    inform (loc, "%s", _(oa_unprovable_reason_text (OA_UNPROVABLE_NO_FACT)));
+}
+
 /* CALL's own callee's declared precondition, checked against STATE as
    it stands right before CALL -- the consult side, for both facts,
    the persistent-fact analogue of cg_check_call.  */
@@ -10464,6 +11151,15 @@ cg_consult_persistent_facts (gcall *call,
 	{
 	  tree pred_fn, arg_decl;
 	  bool negated;
+	  auto_vec<tree> rel_args;
+	  if (oa_relation_conjunct_shape (*conjuncts[i], &pred_fn, &rel_args,
+					  &negated))
+	    {
+	      cg_relt_consult (call, callee, pred_fn, rel_args, negated,
+			       require_conveyor, strict, field_object_cache,
+			       state);
+	      continue;
+	    }
 	  if (!oa_match_predicate_conjunct (*conjuncts[i], &pred_fn, &arg_decl,
 					     &negated))
 	    {
@@ -10893,7 +11589,7 @@ cg_invalidate_parameter_alias_group (tree identity, function *fun,
       tree sib_identity = ssa_default_def (fun, sib);
       if (!sib_identity)
 	sib_identity = sib;
-      state.pred.remove (sib_identity);
+      cg_pred_remove (state, sib_identity);
       /* PARM's own are its caller's to end.  */
       if (sib != parm)
 	cg_call_rel_invalidate_receiver (state, sib_identity);
@@ -11055,7 +11751,7 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
 	    identity = cg_gimple_object_identity (arg);
 	  if (cg_unnamed_pointer_identity_p (arg, identity))
 	    {
-	      state.pred.empty ();
+	      cg_pred_empty (state);
 	      /* A non-mutable lambda's closure is not its body's to change,
 		 and the body doesn't name it to the callee: its captures
 		 stay what they were, as the AST engine keeps them.  */
@@ -11116,10 +11812,10 @@ cg_invalidate_persistent_facts_for_call_arg (tree arg, function *fun,
       /* A scalar handed to a call (a file descriptor to 'close'): a
 	 predicate about it may no longer hold, as in the AST engine.  */
       if (TREE_CODE (arg) == SSA_NAME)
-	state.pred.remove (cg_scalar_value_origin (arg));
+	cg_pred_remove (state, cg_scalar_value_origin (arg));
       return;
     }
-  state.pred.remove (identity);
+  cg_pred_remove (state, identity);
   cg_field_object_predicate_invalidate_all (identity, field_object_cache, state);
 
   auto_vec<std::pair<tree, tree>> to_remove;
@@ -11230,9 +11926,9 @@ cg_referent_comparison_p (tree conjunct, tree callee, unsigned *argno,
 }
 
 static void
-cg_establish_persistent_facts_for_call (gcall *call,
-					 cg_field_object_cache &field_object_cache,
-					 cg_dom_fact_state &state)
+cg_establish_persistent_facts_for_call_1 (gcall *call,
+					   cg_field_object_cache &field_object_cache,
+					   cg_dom_fact_state &state)
 {
   tree callee = gimple_call_fndecl (call);
   if (!callee)
@@ -11387,6 +12083,19 @@ cg_establish_persistent_facts_for_call (gcall *call,
 			     { call_groups[g].range, conveyor_enabled });
 	}
     }
+}
+
+/* The facts CALL's postconditions establish in STATE, after what CALL
+   changes of its relations and value sources (cg_relt_process_call).  */
+
+static void
+cg_establish_persistent_facts_for_call (gcall *call,
+					 cg_field_object_cache &field_object_cache,
+					 cg_dom_fact_state &state)
+{
+  cg_relt_process_call (call, cfun, state);
+  cg_establish_persistent_facts_for_call_1 (call, field_object_cache, state);
+  cg_relt_establish_for_call (call, field_object_cache, state);
 }
 
 static tree cg_contract_check_call_p (gcall *, tree *, tree *, tree *);
@@ -11720,6 +12429,8 @@ cg_establish_assert_facts (gcall *call, cg_dom_fact_state &state)
       return cg_contract_check_object_identity (call, struct_var, decls,
 						 decl);
     };
+  cg_relt_establish_assert (call, contract, struct_var, cond, decls,
+			    conveyor_enabled, state);
 
   auto_vec<tree *> conjuncts;
   oa_collect_conjuncts_public (&cond, &conjuncts);
@@ -12053,6 +12764,10 @@ cg_compute_assert_memory_verdicts (gcall *call, cg_dom_fact_state &state,
 	    }
 	  continue;
 	}
+      if (cg_relt_assert_verdicts (c, call, struct_var, decls, state,
+				   v->verdict[i], v->text[i],
+				   sizeof v->text[i]))
+	continue;
       if (oa_match_predicate_conjunct (c, &pred_fn, &arg_decl, &negated))
 	{
 	  tree identity = cg_contract_check_object_identity (call, struct_var,
@@ -12530,6 +13245,15 @@ cg_dom_fact_state_assign (cg_dom_fact_state *dst, const cg_dom_fact_state &src)
   dst->pred.empty ();
   for (auto it : src.pred)
     dst->pred.put (it.first, it.second);
+  dst->relt.empty ();
+  for (auto it : src.relt)
+    dst->relt.put (it.first, it.second);
+  dst->val_src.empty ();
+  for (auto it : src.val_src)
+    dst->val_src.put (it.first, it.second);
+  dst->val_escaped.empty ();
+  for (tree t : src.val_escaped)
+    dst->val_escaped.add (t);
   dst->field.empty ();
   for (auto it : src.field)
     dst->field.put (it.first, it.second);
@@ -12581,6 +13305,43 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src,
     }
   for (tree t : pred_remove)
     dst->pred.remove (t);
+
+  /* Relations: by agreement.  */
+  auto_vec<tree> relt_remove;
+  for (auto it : dst->relt)
+    {
+      const cg_relt_fact *ov = src.relt.get (it.first);
+      if (!ov || ov->polarity != it.second.polarity
+	  || ov->conveyor_established != it.second.conveyor_established)
+	relt_remove.safe_push (it.first);
+    }
+  for (tree t : relt_remove)
+    dst->relt.remove (t);
+  /* A value's sources: those of either path; none known if either path
+     knows none.  */
+  auto_vec<std::pair<tree, tree>> src_put;
+  auto_vec<tree> src_remove;
+  for (auto it : dst->val_src)
+    {
+      const tree *ov = src.val_src.get (it.first);
+      if (!ov)
+	{
+	  src_remove.safe_push (it.first);
+	  continue;
+	}
+      tree merged = it.second;
+      for (tree l = *ov; l; l = TREE_CHAIN (l))
+	if (!purpose_member (TREE_PURPOSE (l), merged))
+	  merged = tree_cons (TREE_PURPOSE (l), NULL_TREE, merged);
+      if (merged != it.second)
+	src_put.safe_push ({it.first, merged});
+    }
+  for (tree t : src_remove)
+    dst->val_src.remove (t);
+  for (auto &p : src_put)
+    dst->val_src.put (p.first, p.second);
+  for (tree t : src.val_escaped)
+    dst->val_escaped.add (t);
 
   auto_vec<std::pair<tree, tree>> field_remove;
   /* At a join no loop runs back into (UNITE_FIELDS), a field's facts are
@@ -12726,6 +13487,9 @@ static bool
 cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
 {
   if (a.pred.elements () != b.pred.elements ()
+      || a.relt.elements () != b.relt.elements ()
+      || a.val_src.elements () != b.val_src.elements ()
+      || a.val_escaped.elements () != b.val_escaped.elements ()
       || a.field.elements () != b.field.elements ()
       || a.field_alias.elements () != b.field_alias.elements ()
       || a.call.elements () != b.call.elements ()
@@ -12741,6 +13505,25 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
   for (tree t : a.oa_renewed)
     if (!b.oa_renewed.contains (t))
       return false;
+  for (auto it : a.relt)
+    {
+      const cg_relt_fact *ov = b.relt.get (it.first);
+      if (!ov || ov->polarity != it.second.polarity
+	  || ov->conveyor_established != it.second.conveyor_established)
+	return false;
+    }
+  for (tree t : a.val_escaped)
+    if (!b.val_escaped.contains (t))
+      return false;
+  for (auto it : a.val_src)
+    {
+      const tree *ov = b.val_src.get (it.first);
+      if (!ov || list_length (*ov) != list_length (it.second))
+	return false;
+      for (tree l = it.second; l; l = TREE_CHAIN (l))
+	if (!purpose_member (TREE_PURPOSE (l), *ov))
+	  return false;
+    }
   for (tree t : a.oa_live)
     if (!b.oa_live.contains (t))
       return false;
@@ -17320,6 +18103,11 @@ cg_check_contract_assert (gcall *call, hash_map<tree, cg_fact> &established,
 		&& oa_match_predicate_conjunct (c, &pred_fn, &pred_arg,
 						&pred_negated)
 		&& DECL_DECLARED_SYMBOLIC_P (pred_fn))
+	      continue;
+	    auto_vec<tree> rel_args;
+	    if (is_post && !require_conveyor
+		&& oa_relation_conjunct_shape (c, &pred_fn, &rel_args,
+					       &pred_negated))
 	      continue;
 	  }
 	  cg_verdict verdict = CG_VERDICT_NONE;

@@ -1571,6 +1571,19 @@ contract_terminating_p (const_tree contract)
 
 extern tree contract_symbolic_call_value (tree);
 
+/* D4324: symbolic facts relating several arguments (contracts.cc).  */
+#define OA_RELATION_MAX_ARGS 4
+enum oa_relation_arg_kind
+{
+  OA_RELATION_OBJECT,		/* By pointer or reference: an object.  */
+  OA_RELATION_VALUE,		/* By value, unique object representations.  */
+  OA_RELATION_UNSUPPORTED
+};
+extern oa_relation_arg_kind oa_relation_param_kind (tree);
+extern oa_relation_arg_kind oa_relation_arg_kind_of (tree, unsigned);
+extern bool oa_relation_conjunct_shape (tree, tree *, vec<tree> *, bool *);
+extern tree oa_relation_strip_arg (tree);
+
 /* D4324, QoI: P3595 contract configuration (contracts.cc).  */
 extern unsigned contract_config_override;
 extern int contract_config_consteval;
