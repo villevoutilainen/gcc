@@ -8848,7 +8848,8 @@ cg_relt_key (tree pred_fn, const tree *ids, unsigned n)
   return get_identifier (buf);
 }
 
-/* STATE's relations with ID among their arguments end.  */
+/* STATE's relations with ID, or a member of ID's value
+   (oa_relation_member_slot), among their arguments end.  */
 
 static void
 cg_relt_drop (cg_dom_fact_state &state, tree id)
@@ -8858,7 +8859,8 @@ cg_relt_drop (cg_dom_fact_state &state, tree id)
   auto_vec<tree, 8> keys;
   for (auto it : state.relt)
     for (unsigned i = 0; i < it.second.n; ++i)
-      if (it.second.ids[i] == id)
+      if (it.second.ids[i] == id
+	  || oa_relation_member_slot_base (it.second.ids[i]) == id)
 	{
 	  keys.safe_push (it.first);
 	  break;
@@ -9838,6 +9840,9 @@ cg_relt_operand_identity (tree pred_fn, unsigned i, tree val,
       if ((VAR_P (val) || TREE_CODE (val) == PARM_DECL)
 	  && AGGREGATE_TYPE_P (TREE_TYPE (val)))
 	return val;
+      /* A member of a variable ('p.first').  */
+      if (TREE_CODE (val) == COMPONENT_REF)
+	return oa_relation_member_slot (val);
       return NULL_TREE;
     }
   tree identity = cg_field_slot_identity (val, state);
@@ -9861,6 +9866,49 @@ cg_relt_call_operand (gcall *call, tree callee, tree arg, tree result_name)
   tree s = oa_relation_strip_arg (arg);
   if (TREE_CODE (s) == INTEGER_CST)
     return s;
+  /* A member of a parameter or of the result ('r.first'): that member of
+     what it stands for.  */
+  if (TREE_CODE (s) == COMPONENT_REF
+      && TREE_CODE (TREE_OPERAND (s, 1)) == FIELD_DECL)
+    {
+      auto_vec<tree, 4> fields;
+      while (TREE_CODE (s) == COMPONENT_REF
+	     && TREE_CODE (TREE_OPERAND (s, 1)) == FIELD_DECL)
+	{
+	  fields.safe_push (TREE_OPERAND (s, 1));
+	  s = oa_relation_strip_arg (TREE_OPERAND (s, 0));
+	}
+      tree b = s;
+      bool deref = INDIRECT_REF_P (b);
+      if (deref)
+	b = oa_relation_strip_arg (TREE_OPERAND (b, 0));
+      tree r = NULL_TREE;
+      if (result_name && b == result_name)
+	{
+	  tree lhs = gimple_call_lhs (call);
+	  if (lhs && (VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL))
+	    r = lhs;
+	}
+      else if (TREE_CODE (b) == PARM_DECL)
+	{
+	  unsigned argno;
+	  if (cg_find_param_position (callee, b, &argno)
+	      && argno < gimple_call_num_args (call))
+	    {
+	      tree a = gimple_call_arg (call, argno);
+	      if (!deref)
+		r = a;
+	      else if (TREE_CODE (a) == ADDR_EXPR)
+		r = TREE_OPERAND (a, 0);
+	    }
+	}
+      if (!r || !(VAR_P (r) || TREE_CODE (r) == PARM_DECL))
+	return NULL_TREE;
+      for (unsigned i = fields.length (); i-- > 0; )
+	r = build3 (COMPONENT_REF, TREE_TYPE (fields[i]), r, fields[i],
+		    NULL_TREE);
+      return r;
+    }
   tree base = s;
   bool deref = false;
   if (INDIRECT_REF_P (base))
@@ -9988,6 +10036,22 @@ cg_relt_check_identity (gcall *call, tree struct_var, tree decls,
     return s;
   if (oa_relation_arg_kind_of (pred_fn, i) == OA_RELATION_VALUE)
     {
+      if (VAR_P (s) && DECL_HAS_VALUE_EXPR_P (s))
+	s = oa_relation_strip_arg (DECL_VALUE_EXPR (s));
+      /* A member of a variable ('p.first'): its slot, the variable as
+	 the current function has it.  */
+      if (TREE_CODE (s) == COMPONENT_REF)
+	{
+	  tree slot = oa_relation_member_slot (s);
+	  tree base = oa_relation_member_slot_base (slot);
+	  if (!base || TYPE_REF_P (TREE_TYPE (base)))
+	    return NULL_TREE;
+	  tree own = cg_contract_check_object_identity (call, struct_var,
+							 decls, base);
+	  return (own == base ? slot
+		  : own ? oa_relation_member_slot_rebase (slot, own)
+		  : NULL_TREE);
+	}
       if (INDIRECT_REF_P (s))
 	return NULL_TREE;
       if (!VAR_P (s) && TREE_CODE (s) != PARM_DECL)
@@ -10070,10 +10134,25 @@ cg_relt_process_assign (tree lhs, tree rhs, cg_dom_fact_state &state)
 {
   cg_relt_store (lhs, state);
   if (!(VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
-      || !(VAR_P (rhs) || TREE_CODE (rhs) == PARM_DECL)
       || lhs == rhs || !AGGREGATE_TYPE_P (TREE_TYPE (lhs)))
     return;
-  if (const tree *src = state.val_src.get (rhs))
+  /* A copy of a member's value ('a = p.first'): the member's slot.  */
+  if (TREE_CODE (rhs) == COMPONENT_REF)
+    {
+      tree slot = oa_relation_member_slot (rhs);
+      if (!slot)
+	return;
+      rhs = slot;
+    }
+  else if (!(VAR_P (rhs) || TREE_CODE (rhs) == PARM_DECL))
+    return;
+  /* What it was obtained from: a member's, from what its variable was.  */
+  tree src_of = rhs;
+  if (tree base = oa_relation_member_slot_base (rhs))
+    src_of = base;
+  if (state.val_escaped.contains (src_of))
+    state.val_escaped.add (lhs);
+  if (const tree *src = state.val_src.get (src_of))
     state.val_src.put (lhs, *src);
   if (!state.relt.elements ())
     return;
@@ -10083,12 +10162,19 @@ cg_relt_process_assign (tree lhs, tree rhs, cg_dom_fact_state &state)
       cg_relt_fact f = it.second;
       bool hit = false;
       for (unsigned i = 0; i < f.n; ++i)
-	if (f.ids[i] == rhs
-	    && oa_relation_arg_kind_of (f.pred_fn, i) == OA_RELATION_VALUE)
+	if (oa_relation_arg_kind_of (f.pred_fn, i) != OA_RELATION_VALUE)
+	  continue;
+	else if (f.ids[i] == rhs)
 	  {
 	    f.ids[i] = lhs;
 	    hit = true;
 	  }
+	else if (oa_relation_member_slot_base (f.ids[i]) == rhs)
+	  if (tree t = oa_relation_member_slot_rebase (f.ids[i], lhs))
+	    {
+	      f.ids[i] = t;
+	      hit = true;
+	    }
       if (hit)
 	copies.safe_push (f);
     }
@@ -10146,6 +10232,9 @@ cg_relt_value_ended_p (tree id, const vec<tree> &routes, bool any_route,
 {
   if (TREE_CODE (id) == INTEGER_CST)
     return false;
+  /* A member's value: as its variable's.  */
+  if (tree base = oa_relation_member_slot_base (id))
+    id = base;
   if (TREE_CODE (id) == SSA_NAME)
     {
       if (!POINTER_TYPE_P (TREE_TYPE (id)))
@@ -10323,6 +10412,13 @@ cg_relt_parm_identity (function *fun, tree pred_fn, unsigned i, tree arg)
   if (TREE_CODE (s) == INTEGER_CST)
     return s;
   bool value = oa_relation_arg_kind_of (pred_fn, i) == OA_RELATION_VALUE;
+  if (value && TREE_CODE (s) == COMPONENT_REF)
+    {
+      tree slot = oa_relation_member_slot (s);
+      tree base = oa_relation_member_slot_base (slot);
+      return (base && TREE_CODE (base) == PARM_DECL
+	      && !TYPE_REF_P (TREE_TYPE (base)) ? slot : NULL_TREE);
+    }
   if (INDIRECT_REF_P (s))
     {
       if (value)

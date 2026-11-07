@@ -6241,8 +6241,11 @@ symbolic_call_relations_p (tree call)
    can use it (symbolic relations, the design note's stage 3).  The
    arguments are evaluated once, before the call, and the relations
    read what the call left: through a reference parameter, its referent;
-   the result, its value.  NULL_TREE if they can't be recorded (a class
-   result that isn't trivially copyable, which a temporary would copy).  */
+   the result, its value; any of these, or a member of one ('r.first').
+   NULL_TREE if they can't be recorded: a class result passed by
+   invisible reference, for which the language allows no temporary (one
+   with trivial copy and move constructors and destructor may be copied
+   to one, [class.temporary], as calls in registers do).  */
 
 tree
 build_symbolic_call_relations (tree call, tree scope_addr)
@@ -6250,7 +6253,7 @@ build_symbolic_call_relations (tree call, tree scope_addr)
   tree callee = cp_get_callee_fndecl_nofold (call);
   location_t loc = cp_expr_loc_or_input_loc (call);
   tree rtype = TREE_TYPE (call);
-  if (CLASS_TYPE_P (rtype) && !trivially_copyable_p (rtype))
+  if (CLASS_TYPE_P (rtype) && TREE_ADDRESSABLE (rtype))
     return NULL_TREE;
   for (int i = 0; i < call_expr_nargs (call); ++i)
     if (TREE_CODE (CALL_EXPR_ARG (call, i)) != TARGET_EXPR)
@@ -6268,16 +6271,28 @@ build_symbolic_call_relations (tree call, tree scope_addr)
   else
     head = result = save_expr (call);
 
-  /* What callee argument expression A stands for at CALL.  */
-  auto operand = [&] (tree a, bool value) -> tree
+  /* What callee argument expression A stands for at CALL, RESULT_NAME
+     the postcondition's result.  */
+  auto operand = [&] (tree a, bool value, tree result_name) -> tree
     {
       tree s = oa_relation_strip_arg (a);
       if (TREE_CODE (s) == INTEGER_CST)
 	return s;
+      /* A member of a parameter or of the result ('r.first'): that
+	 member of what it stands for.  */
+      auto_vec<tree, 4> fields;
+      while (TREE_CODE (s) == COMPONENT_REF
+	     && TREE_CODE (TREE_OPERAND (s, 1)) == FIELD_DECL)
+	{
+	  fields.safe_push (TREE_OPERAND (s, 1));
+	  s = oa_relation_strip_arg (TREE_OPERAND (s, 0));
+	}
       bool deref = INDIRECT_REF_P (s);
       tree base = deref ? oa_relation_strip_arg (TREE_OPERAND (s, 0)) : s;
       tree op = NULL_TREE;
-      if (TREE_CODE (base) == PARM_DECL)
+      if (result_name && base == result_name)
+	op = result;
+      else if (TREE_CODE (base) == PARM_DECL)
 	{
 	  int k = 0;
 	  for (tree p = DECL_ARGUMENTS (callee); p; p = DECL_CHAIN (p), ++k)
@@ -6292,10 +6307,19 @@ build_symbolic_call_relations (tree call, tree scope_addr)
 	}
       if (!op)
 	return NULL_TREE;
-      /* A value the callee reads through its reference parameter.  */
-      if (value && deref && INDIRECT_TYPE_P (TREE_TYPE (op)))
+      /* A value, or a member, the callee reads through its reference
+	 or pointer parameter.  */
+      if ((value || !fields.is_empty ()) && deref
+	  && INDIRECT_TYPE_P (TREE_TYPE (op)))
 	op = (TYPE_REF_P (TREE_TYPE (op)) ? convert_from_reference (op)
 	      : build_fold_indirect_ref (op));
+      for (unsigned i = fields.length (); i-- > 0; )
+	{
+	  if (!CLASS_TYPE_P (TREE_TYPE (op)))
+	    return NULL_TREE;
+	  op = build3 (COMPONENT_REF, TREE_TYPE (fields[i]), op, fields[i],
+		       NULL_TREE);
+	}
       return op;
     };
 
@@ -6310,11 +6334,7 @@ build_symbolic_call_relations (tree call, tree scope_addr)
 	 {
 	   bool value = (oa_relation_arg_kind_of (pred_fn, i)
 			 == OA_RELATION_VALUE);
-	   tree s = oa_relation_strip_arg (args[i]);
-	   tree base = (INDIRECT_REF_P (s)
-			? oa_relation_strip_arg (TREE_OPERAND (s, 0)) : s);
-	   ops[i] = (result_name && base == result_name ? result
-		     : operand (args[i], value));
+	   ops[i] = operand (args[i], value, result_name);
 	   if (!ops[i])
 	     {
 	       failed = true;
@@ -11117,12 +11137,19 @@ public:
 	oa_relation_fact f = it.second;
 	bool hit = false;
 	for (unsigned i = 0; i < f.n; ++i)
-	  if (f.args[i] == from
-	      && oa_relation_arg_kind_of (f.pred_fn, i) == OA_RELATION_VALUE)
+	  if (oa_relation_arg_kind_of (f.pred_fn, i) != OA_RELATION_VALUE)
+	    continue;
+	  else if (f.args[i] == from)
 	    {
 	      f.args[i] = to;
 	      hit = true;
 	    }
+	  else if (oa_relation_member_slot_base (f.args[i]) == from)
+	    if (tree t = oa_relation_member_slot_rebase (f.args[i], to))
+	      {
+		f.args[i] = t;
+		hit = true;
+	      }
 	if (hit)
 	  add.safe_push (f);
       }
@@ -11130,7 +11157,8 @@ public:
       relation_set (f.pred_fn, f.args, f.n, f.polarity,
 		    f.conveyor_established);
   }
-  /* Every relation ID takes part in ends with ID's facts.  */
+  /* Every relation ID, or a member of ID's value, takes part in ends
+     with ID's facts.  */
   void relation_invalidate (tree id)
   {
     if (!m_relation_map.elements ())
@@ -11138,7 +11166,8 @@ public:
     auto_vec<tree> drop;
     for (auto it : m_relation_map)
       for (unsigned i = 0; i < it.second.n; ++i)
-	if (it.second.args[i] == id)
+	if (it.second.args[i] == id
+	    || oa_relation_member_slot_base (it.second.args[i]) == id)
 	  {
 	    drop.safe_push (it.first);
 	    break;
@@ -22913,6 +22942,116 @@ oa_relation_strip_arg (tree arg)
   return arg;
 }
 
+/* Relations about a member of a variable holding a value ('p.first',
+   a value argument): each (variable, member path) has one canonical
+   slot, a decl the analysis keys the member's facts by, in both
+   engines.  Its facts end whenever the variable's do.  */
+
+static GTY(()) hash_map<tree, tree> *oa_member_slots;
+static GTY(()) hash_map<tree, tree> *oa_member_slot_refs;
+
+/* The variable REF, a member access, is a member of, through
+   COMPONENT_REFs (and a reference's indirection), or NULL_TREE.  */
+
+static tree
+oa_member_ref_base (tree ref)
+{
+  tree b = ref;
+  while (TREE_CODE (b) == COMPONENT_REF
+	 && TREE_CODE (TREE_OPERAND (b, 1)) == FIELD_DECL)
+    b = oa_relation_strip_arg (TREE_OPERAND (b, 0));
+  if (b == ref)
+    return NULL_TREE;
+  if (INDIRECT_REF_P (b))
+    {
+      tree r = oa_relation_strip_arg (TREE_OPERAND (b, 0));
+      if (!((VAR_P (r) || TREE_CODE (r) == PARM_DECL)
+	    && TYPE_REF_P (TREE_TYPE (r))))
+	return NULL_TREE;
+      b = r;
+    }
+  return (VAR_P (b) || TREE_CODE (b) == PARM_DECL
+	  || TREE_CODE (b) == RESULT_DECL) ? b : NULL_TREE;
+}
+
+/* The canonical slot of member access REF of a variable
+   (oa_member_ref_base), or NULL_TREE.  */
+
+tree
+oa_relation_member_slot (tree ref)
+{
+  ref = oa_relation_strip_arg (ref);
+  if (VAR_P (ref) && DECL_HAS_VALUE_EXPR_P (ref))
+    ref = oa_relation_strip_arg (DECL_VALUE_EXPR (ref));
+  tree base = oa_member_ref_base (ref);
+  if (!base)
+    return NULL_TREE;
+  char buf[256];
+  int len = snprintf (buf, sizeof buf, "%p", (void *) base);
+  for (tree b = ref; TREE_CODE (b) == COMPONENT_REF && len < 220;
+       b = oa_relation_strip_arg (TREE_OPERAND (b, 0)))
+    len += snprintf (buf + len, sizeof buf - len, ":%p",
+		     (void *) TREE_OPERAND (b, 1));
+  tree key = get_identifier (buf);
+  if (!oa_member_slots)
+    {
+      oa_member_slots = hash_map<tree, tree>::create_ggc (16);
+      oa_member_slot_refs = hash_map<tree, tree>::create_ggc (16);
+    }
+  if (tree *slot = oa_member_slots->get (key))
+    return *slot;
+  tree slot = build_decl (EXPR_LOCATION (ref), VAR_DECL, NULL_TREE,
+			  TREE_TYPE (ref));
+  DECL_ARTIFICIAL (slot) = 1;
+  DECL_IGNORED_P (slot) = 1;
+  oa_member_slots->put (key, slot);
+  oa_member_slot_refs->put (slot, ref);
+  return slot;
+}
+
+/* The variable SLOT (oa_relation_member_slot) is a member of, or
+   NULL_TREE if it isn't a slot.  */
+
+tree
+oa_relation_member_slot_base (tree slot)
+{
+  if (!oa_member_slot_refs || !slot || !VAR_P (slot))
+    return NULL_TREE;
+  tree *ref = oa_member_slot_refs->get (slot);
+  return ref ? oa_member_ref_base (*ref) : NULL_TREE;
+}
+
+/* The slot of the same member of NEW_BASE as SLOT is of its variable.  */
+
+tree
+oa_relation_member_slot_rebase (tree slot, tree new_base)
+{
+  tree *ref = oa_member_slot_refs ? oa_member_slot_refs->get (slot) : NULL;
+  if (!ref)
+    return NULL_TREE;
+  auto_vec<tree, 4> fields;
+  for (tree b = *ref; TREE_CODE (b) == COMPONENT_REF;
+       b = oa_relation_strip_arg (TREE_OPERAND (b, 0)))
+    fields.safe_push (TREE_OPERAND (b, 1));
+  tree r = new_base;
+  for (unsigned i = fields.length (); i-- > 0; )
+    r = build3 (COMPONENT_REF, TREE_TYPE (fields[i]), r, fields[i],
+		NULL_TREE);
+  return oa_relation_member_slot (r);
+}
+
+/* What a copy from E copies the relations of: the variable it names, or
+   a member's slot ('p.first').  */
+
+static tree
+oa_relation_value_key (tree e)
+{
+  tree s = oa_relation_strip_arg (e);
+  if (tree slot = oa_relation_member_slot (s))
+    return slot;
+  return s;
+}
+
 /* The identity, in ENV, of ARG, an argument of KIND: for an object, the
    object it designates (as for a one-object fact); for a value, the
    variable holding it, or the constant.  NULL_TREE if it has none the
@@ -22932,6 +23071,9 @@ oa_relation_arg_identity (tree arg, oa_relation_arg_kind kind, oa_env &env)
       tree v = oa_relation_strip_arg (arg);
       if (TREE_CODE (v) == INTEGER_CST)
 	return v;
+      /* A member of a variable ('p.first'), or a structured binding.  */
+      if (tree slot = oa_relation_member_slot (v))
+	return slot;
       if (VAR_P (v) || TREE_CODE (v) == PARM_DECL
 	  || TREE_CODE (v) == RESULT_DECL)
 	return v;
@@ -22989,7 +23131,10 @@ oa_relation_value_derived_set (tree decl, tree init, oa_env &env)
       || !AGGREGATE_TYPE_P (TREE_TYPE (decl)) || !init)
     return;
   tree s = oa_relation_strip_arg (init);
-  if ((VAR_P (s) || TREE_CODE (s) == PARM_DECL) && s != decl)
+  /* A member's value ('p.first'): obtained from what P was.  */
+  if (tree slot = oa_relation_member_slot (s))
+    s = oa_relation_member_slot_base (slot);
+  if (s && (VAR_P (s) || TREE_CODE (s) == PARM_DECL) && s != decl)
     env.derived_set (decl, env.derived_get (s));
   else
     env.derived_set (decl, oa_value_sources (init, env));
@@ -23055,6 +23200,36 @@ oa_relation_substitute_args (tree callee, tree call, const vec<tree> &args,
   for (tree a : args)
     {
       tree s = oa_relation_strip_arg (a);
+      /* A member of a parameter or of the result ('r.first'): that member
+	 of what it stands for.  */
+      auto_vec<tree, 4> fields;
+      while (TREE_CODE (s) == COMPONENT_REF
+	     && TREE_CODE (TREE_OPERAND (s, 1)) == FIELD_DECL)
+	{
+	  fields.safe_push (TREE_OPERAND (s, 1));
+	  s = oa_relation_strip_arg (TREE_OPERAND (s, 0));
+	}
+      if (!fields.is_empty ())
+	{
+	  auto_vec<tree, OA_RELATION_MAX_ARGS> sub;
+	  auto_vec<tree> one;
+	  one.safe_push (s);
+	  if (!oa_relation_substitute_args (callee, call, one, result_name,
+					    result, sub))
+	    return false;
+	  tree r = sub[0];
+	  if (INDIRECT_TYPE_P (TREE_TYPE (r)))
+	    r = cp_build_fold_indirect_ref (r);
+	  for (unsigned i = fields.length (); i-- > 0; )
+	    {
+	      if (!CLASS_TYPE_P (TREE_TYPE (r)))
+		return false;
+	      r = build3 (COMPONENT_REF, TREE_TYPE (fields[i]), r, fields[i],
+			  NULL_TREE);
+	    }
+	  out.safe_push (r);
+	  continue;
+	}
 
       tree base = s;
       if (TREE_CODE (base) == ADDR_EXPR || INDIRECT_REF_P (base))
@@ -34747,8 +34922,8 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	    if (tree rc = oa_elided_result_call (stripped_init_pred))
 	      oa_establish_call_relations (rc, env, decl);
 	    else
-	      env.relation_copy_value (oa_relation_strip_arg (DECL_INITIAL (decl)),
-				       decl);
+	      env.relation_copy_value (oa_relation_value_key
+				         (DECL_INITIAL (decl)), decl);
 	    oa_relation_value_derived_set (decl, DECL_INITIAL (decl), env);
 	  }
 	/* D4324/P2680: POINTER_TYPE_P also matches REFERENCE_TYPE (see its
@@ -35706,7 +35881,7 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	    if (tree rc = oa_elided_result_call (stripped_rhs_pred))
 	      oa_establish_call_relations (rc, env, lhs);
 	    else
-	      env.relation_copy_value (oa_relation_strip_arg (rhs), lhs);
+	      env.relation_copy_value (oa_relation_value_key (rhs), lhs);
 	    oa_relation_value_derived_set (lhs, rhs, env);
 	  }
 	if (VAR_P (lhs) && TYPE_REF_P (TREE_TYPE (lhs)))
