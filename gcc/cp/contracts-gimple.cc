@@ -15417,6 +15417,29 @@ cg_trust_computed_values (gcall *call, tree arg, tree struct_var, tree decls)
   return v;
 }
 
+/* The SSA value pointer value P is a copy or conversion of, through
+   any number of them: P itself if it is neither.  Unlike cg_pointer_root,
+   not through pointer arithmetic: the result is the same address.  */
+
+static tree
+cg_pointer_copy_source (tree p)
+{
+  for (int i = 0; i < 16 && TREE_CODE (p) == SSA_NAME
+		  && !SSA_NAME_IS_DEFAULT_DEF (p); ++i)
+    {
+      gimple *def = SSA_NAME_DEF_STMT (p);
+      if (!is_gimple_assign (def))
+	break;
+      tree rhs = gimple_assign_rhs1 (def);
+      if (TREE_CODE (rhs) != SSA_NAME
+	  || !(gimple_assign_single_p (def)
+	       || CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def))))
+	break;
+      p = rhs;
+    }
+  return p;
+}
+
 /* The parameters CALL makes object addresses again: STATE.oa_live gains
    them, from the callee's conveyor postcondition
    'is_object_address (this)' or 'is_object_address (&r)', or from a
@@ -15501,7 +15524,23 @@ cg_establish_object_addresses_for_call (gcall *call, function *fun,
 	  if (TYPE_REF_P (TREE_TYPE (arg)) || POINTER_TYPE_P (TREE_TYPE (arg)))
 	    if (tree v = cg_contract_check_decl_value (call, struct_var, decls,
 						       arg))
-	      cg_restore_decl_object (v, state);
+	      {
+		cg_restore_decl_object (v, state);
+		/* The pointer value checked, and its copies: the same
+		   address, an object's again ('Vec& lvalue = g ()', which a
+		   call given LVALUE ended).  */
+		if (TREE_CODE (v) == SSA_NAME)
+		  {
+		    tree src = cg_pointer_copy_source (v);
+		    auto_vec<tree> same;
+		    for (tree e : state.oa_ended)
+		      if (TREE_CODE (e) == SSA_NAME
+			  && cg_pointer_copy_source (e) == src)
+			same.safe_push (e);
+		    for (tree e : same)
+		      state.oa_ended.remove (e);
+		  }
+	      }
 	  if (identity)
 	    {
 	      tree root = cg_pointer_root (identity);
@@ -15520,6 +15559,14 @@ cg_establish_object_addresses_for_call (gcall *call, function *fun,
 		    if (base && TREE_CODE (base) == MEM_REF)
 		      base = cg_pointer_root (TREE_OPERAND (base, 0));
 		    if (base && (base == identity || base == root))
+		      drop.safe_push (e);
+		  }
+		/* A copy of the trusted pointer value ('lvalue_6 = _5'):
+		   the same address.  */
+		else if (TREE_CODE (e) == SSA_NAME)
+		  {
+		    tree c = cg_pointer_copy_source (e);
+		    if (c != e && (c == identity || (root && c == root)))
 		      drop.safe_push (e);
 		  }
 	      for (tree e : drop)
