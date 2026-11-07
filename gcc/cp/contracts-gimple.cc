@@ -10504,16 +10504,33 @@ cg_consult_persistent_facts (gcall *call,
 	     for_call/cg_invalidate_persistent_facts_for_call_args
 	     deliberately do NOT do this.  */
 	  tree substituted = cg_resolve_value_argument (call, argno);
+	  /* A by-value class parameter is a new object: the temporary the
+	     gimplifier made for an argument that is another call's result
+	     ('read (make ())', guaranteed elision: the parameter is that
+	     result, whose facts the call records on the temporary), or a
+	     copy of a variable, which has none of its facts.  */
+	  bool by_value_class = (TREE_CODE (arg_decl) == PARM_DECL
+				 && CLASS_TYPE_P (TREE_TYPE (arg_decl)));
+	  tree identity = NULL_TREE;
+	  if (by_value_class)
+	    {
+	      tree a = gimple_call_arg (call, argno);
+	      if (TREE_CODE (a) == ADDR_EXPR)
+		a = TREE_OPERAND (a, 0);
+	      if (VAR_P (a) && DECL_ARTIFICIAL (a))
+		identity = a;
+	    }
 	  /* Ordering matters, same reason cg_field_slot_identity must be
 	     tried before cg_gimple_object_identity: that resolver always
 	     "succeeds" for a pointer-typed SSA value with an unrecognized
 	     def-stmt, falling back to the value itself (confirmed this
 	     includes an ADDR_EXPR def-stmt, e.g. '_1 = &h->f;'), which
 	     would silently pre-empt this resolver if tried after it.  */
-	  tree identity = cg_field_slot_identity (substituted, state);
-	  if (!identity)
+	  if (!by_value_class)
+	    identity = cg_field_slot_identity (substituted, state);
+	  if (!identity && !by_value_class)
 	    identity = cg_field_object_identity (substituted, field_object_cache);
-	  if (!identity)
+	  if (!identity && !by_value_class)
 	    identity = cg_gimple_object_identity (substituted);
 	  /* A scalar value: the predicate's fact about it, e.g. from the
 	     postcondition of the call that returned it.  */
@@ -11248,12 +11265,20 @@ cg_establish_persistent_facts_for_call (gcall *call,
 					     &negated))
 	    continue;
 
-	  /* 'post (r: check_it (r))': about the value CALL returns.  */
+	  /* 'post (r: check_it (r))': about the value CALL returns -- or,
+	     for a class, about the object it initializes: a variable or a
+	     temporary ('s = make ();'), or the one a returned-by-invisible-
+	     reference result is constructed in.  */
 	  if (arg_decl == POSTCONDITION_IDENTIFIER (contract))
 	    {
 	      tree lhs = gimple_call_lhs (call);
 	      if (lhs && TREE_CODE (lhs) == SSA_NAME)
 		state.pred.put (lhs, { pred_fn, !negated, conveyor_enabled });
+	      else if (lhs && (VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL))
+		state.pred.put (lhs, { pred_fn, !negated, conveyor_enabled });
+	      else if (lhs && TREE_CODE (lhs) == MEM_REF)
+		if (tree id = cg_gimple_object_identity (TREE_OPERAND (lhs, 0)))
+		  state.pred.put (id, { pred_fn, !negated, conveyor_enabled });
 	      continue;
 	    }
 	  unsigned argno;

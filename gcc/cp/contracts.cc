@@ -6050,15 +6050,22 @@ get_symbolic_predicate_key (tree fn)
    pointer or reference argument is the fact recorded for that object
    ("the gem").  */
 
+static bool oa_symbolic_runtime_unkeyable_p (tree);
+
 tree
 contract_symbolic_call_value (tree call)
 {
   tree type = TREE_TYPE (call);
   tree fn = cp_get_callee_fndecl_nofold (call);
   location_t loc = cp_expr_loc_or_input_loc (call);
+  tree obj0 = (call_expr_nargs (call) == 1
+	       ? STRIP_NOPS (CALL_EXPR_ARG (call, 0)) : NULL_TREE);
+  if (obj0 && TREE_CODE (obj0) == ADDR_EXPR)
+    obj0 = TREE_OPERAND (obj0, 0);
   if (flag_contract_symbolic_runtime_checks && fn
       && call_expr_nargs (call) == 1
-      && POINTER_TYPE_P (TREE_TYPE (CALL_EXPR_ARG (call, 0))))
+      && POINTER_TYPE_P (TREE_TYPE (CALL_EXPR_ARG (call, 0)))
+      && !(obj0 && DECL_P (obj0) && oa_symbolic_runtime_unkeyable_p (obj0)))
     {
       tree check = get_symbolic_check_bool_fn (loc);
       if (check != error_mark_node)
@@ -22488,6 +22495,70 @@ oa_call_symbolic_predicate_p (tree call, tree *pred_fn_out, bool *polarity_out,
   return false;
 }
 
+/* Whether one of the postconditions of CALL's callee establishes
+   PRED_FN, with POLARITY, about its result.  Unlike oa_call_symbolic_
+   predicate_p, which gives the first, any of them.  */
+
+static bool
+oa_call_result_predicate_p (tree call, tree pred_fn, bool polarity)
+{
+  tree callee = cp_get_callee_fndecl_nofold (call);
+  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
+    return false;
+  for (tree contract : fn_contracts (callee))
+    {
+      if (!POSTCONDITION_P (contract)
+	  || !oa_contract_fact_tracking_active_p (contract, callee)
+	  || !contract_failure_terminates_p (contract, callee))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree fn, arg_decl;
+	  bool negated;
+	  if (oa_predicate_conjunct_shape (*conjuncts[i], &fn, &arg_decl,
+					   &negated)
+	      && arg_decl == POSTCONDITION_IDENTIFIER (contract)
+	      && fn == pred_fn && !negated == polarity)
+	    return true;
+	}
+    }
+  return false;
+}
+
+/* If ARG, an argument expression, is the result object of a call -- the
+   call itself (a prvalue initializing the parameter), the temporary it
+   materializes, or the address of that temporary (bound to a reference
+   parameter) -- that call (not a constructor's); else NULL_TREE.  */
+
+static tree
+oa_elided_result_call (tree arg)
+{
+  for (int i = 0; i < 8; ++i)
+    {
+      arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+      if (TREE_CODE (arg) == NOP_EXPR || TREE_CODE (arg) == CONVERT_EXPR
+	  || TREE_CODE (arg) == NON_LVALUE_EXPR
+	  || TREE_CODE (arg) == VIEW_CONVERT_EXPR
+	  || TREE_CODE (arg) == ADDR_EXPR)
+	arg = TREE_OPERAND (arg, 0);
+      else if (TREE_CODE (arg) == TARGET_EXPR)
+	arg = TARGET_EXPR_INITIAL (arg);
+      else
+	break;
+    }
+  if (TREE_CODE (arg) != CALL_EXPR && TREE_CODE (arg) != AGGR_INIT_EXPR)
+    return NULL_TREE;
+  tree fn = cp_get_callee_fndecl_nofold (arg);
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL || DECL_CONSTRUCTOR_P (fn))
+    return NULL_TREE;
+  return arg;
+}
+
 /* -fdump-contract-proofs: a lazily-opened dump file, one SMT-LIB2
    verification-condition certificate per concluded conveyor-proof
    obligation (OA_PROVEN_TRUE or OA_PROVEN_FALSE only -- there is no
@@ -25290,17 +25361,22 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	  tree substituted = oa_substitute_call_arg (callee, call, arg_decl);
 	  if (!substituted)
 	    continue;
-	  /* Consult-only: also look through a by-value copy-construction
-	     materialization (oa_object_identity_decl's own internal strip
-	     only ever handles the always-safe conversion-operator case) --
-	     sound here specifically because this is checking a REQUIREMENT
-	     against an already-established fact, and a copy has the same
-	     state as its source at the moment of copying.  See this file's
-	     own plan notes on why establish/invalidate must not do this.  */
-	  substituted = oa_strip_conversion_call (substituted);
+	  /* The argument is another call's result, the object that call
+	     initializes ('read (make ())': guaranteed elision makes it the
+	     parameter itself; or a temporary bound to a reference): the facts
+	     that callee's postconditions establish about its result.  */
+	  if (tree rc = oa_elided_result_call (substituted))
+	    if (oa_call_result_predicate_p (rc, pred_fn, !negated))
+	      continue;
+	  /* A by-value class parameter initialized from an object is a copy,
+	     a new object: it has none of the original's facts.  */
+	  bool copy_param = (TREE_CODE (arg_decl) == PARM_DECL
+			     && CLASS_TYPE_P (TREE_TYPE (arg_decl)));
 
 	  tree identity;
-	  if (!oa_object_identity_decl (substituted, &identity)
+	  if (copy_param)
+	    identity = NULL_TREE;
+	  else if (!oa_object_identity_decl (substituted, &identity)
 	      && !oa_field_slot_identity (substituted, env, &identity)
 	      && !oa_array_slot_identity (substituted, env, &identity)
 	      && !oa_field_object_identity (substituted, env, &identity))
@@ -40322,6 +40398,19 @@ struct oa_symbolic_action
   long long lo, hi;
 };
 
+/* -fcontract-symbolic-runtime-checks: whether the object DECL, the
+   argument of a symbolic predicate, has no stable address the runtime
+   records could be keyed by: a class parameter passed by value, or a
+   function's class result, which the call may copy.  */
+
+static bool
+oa_symbolic_runtime_unkeyable_p (tree decl)
+{
+  if (TREE_CODE (decl) != PARM_DECL && TREE_CODE (decl) != RESULT_DECL)
+    return false;
+  return CLASS_TYPE_P (non_reference (TREE_TYPE (decl)));
+}
+
 /* Break CONDITION into conjuncts (oa_collect_conjuncts) and classify
    each as a predicate-call or comparison action (above), combining
    multiple comparison conjuncts on the same (field, ptr_expr) pair into
@@ -40343,6 +40432,12 @@ oa_collect_symbolic_actions (location_t loc, tree condition,
       if (oa_predicate_conjunct_shape (*conjuncts[i], &pred_fn, &arg_decl,
 					&negated))
 	{
+	  /* A fact about a class object passed by value, or about a
+	     function's class result: the call may copy it (in registers, or
+	     into the argument area), so no address keys it.  Proven
+	     statically only: nothing recorded, the check passes.  */
+	  if (oa_symbolic_runtime_unkeyable_p (arg_decl))
+	    continue;
 	  oa_symbolic_action act = {};
 	  act.is_range = false;
 	  act.pred_fn = pred_fn;
